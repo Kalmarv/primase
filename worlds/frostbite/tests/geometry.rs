@@ -41,7 +41,8 @@ fn decl(elements: &[(u8, u8, u8)], strides: &[u8]) -> Decl {
 }
 
 /// A one-section LOD of 3 vertices and a triangle, 16-bit indices: Half4 positions, Half2 texture coordinates, UByte4N
-/// colour and a tangent space (usage 52) left raw. The chunk holds the three streams then the index buffer.
+/// colour, blend indices (four u16, one over 255) and weights, and a tangent space (usage 52) left raw. The chunk holds
+/// the streams then the index buffer.
 fn fixture() -> (Vec<u8>, Lod, Section) {
     let mut chunk = Vec::new();
     for p in [[0.0f32, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 2.0, 0.5]] {
@@ -60,8 +61,16 @@ fn fixture() -> (Vec<u8>, Lod, Section) {
     for t in [[1u8, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]] {
         chunk.extend(t);
     }
-    // 24 + 12 + 12 + 12 = 60 vertex bytes, padded to 64; then the three indices
-    chunk.resize(64, 0);
+    for j in [[101u16, 101, 101, 107], [0, 1, 2, 3], [300, 0, 0, 0]] {
+        for lane in j {
+            chunk.extend(lane.to_le_bytes());
+        }
+    }
+    for w in [[0u8, 0, 0, 255], [10, 20, 30, 195], [255, 0, 0, 0]] {
+        chunk.extend(w);
+    }
+    // 24 + 12 + 12 + 12 + 24 + 12 = 96 vertex bytes; then the three indices
+    chunk.resize(96, 0);
     for i in [0u16, 1, 2] {
         chunk.extend(i.to_le_bytes());
     }
@@ -74,8 +83,10 @@ fn fixture() -> (Vec<u8>, Lod, Section) {
                 (usage::TEXCOORD0, format::HALF2, 1),
                 (usage::COLOR0, format::UBYTE4N, 2),
                 (usage::TANGENT_SPACE, format::UBYTE4N, 3),
+                (usage::BLEND_INDICES, format::USHORT4, 4),
+                (usage::BLEND_WEIGHTS, format::UBYTE4N, 5),
             ],
-            &[8, 4, 4, 4],
+            &[8, 4, 4, 4, 8, 4],
         ),
         draw_decl: decl(&[], &[]),
         flags: 0xe,
@@ -90,7 +101,7 @@ fn fixture() -> (Vec<u8>, Lod, Section) {
         chunk: [0; 16],
         index_size: 2,
         index_bytes: 6,
-        vertex_bytes: 64,
+        vertex_bytes: 96,
         sections: vec![section.clone()],
     };
     (chunk, lod, section)
@@ -113,8 +124,21 @@ fn a_section_decodes_to_streams_raw_elements_and_triangles() {
         Stream::U8x4(vec![[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 128]])
     );
     assert_eq!(d.indices, [0, 1, 2]);
-    assert_eq!(d.raw.len(), 1);
+    assert_eq!(d.raw.len(), 3);
     assert_eq!((d.raw[0].usage, d.raw[0].size), (usage::TANGENT_SPACE, 4));
+    // the blend indices and weights stay raw, and read as four little-endian u16 and four bytes a vertex
+    assert!(!d.streams.contains_key(&Semantic::Joints(0)) && !d.streams.contains_key(&Semantic::Weights(0)));
+    assert_eq!(
+        d.raw[1].joints().unwrap(),
+        [[101, 101, 101, 107], [0, 1, 2, 3], [300, 0, 0, 0]]
+    );
+    assert_eq!(d.raw[1].weights(), None);
+    assert_eq!(
+        d.raw[2].weights().unwrap(),
+        [[0, 0, 0, 255], [10, 20, 30, 195], [255, 0, 0, 0]]
+    );
+    assert_eq!(d.raw[2].joints(), None);
+    assert_eq!(d.raw[0].joints(), None);
     assert_eq!(d.raw[0].data, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     // the raw data follows the vertices a pass reorders
     assert_eq!(
@@ -136,11 +160,11 @@ fn a_section_that_does_not_fit_is_refused() {
     assert!(err(&bad, &lod, &section).contains("position w"));
     // an index outside the section's vertices
     let mut bad = chunk.clone();
-    bad[64 + 4..64 + 6].copy_from_slice(&3u16.to_le_bytes());
+    bad[96 + 4..96 + 6].copy_from_slice(&3u16.to_le_bytes());
     assert!(err(&bad, &lod, &section).contains("index 2 is vertex 3 of 3"));
     // a chunk without the whole vertex stream, without the indices
     assert!(err(&chunk[..20], &lod, &section).contains("a vertex stream"));
-    assert!(err(&chunk[..68], &lod, &section).contains("the index buffer"));
+    assert!(err(&chunk[..100], &lod, &section).contains("the index buffer"));
     // a usage stored in a format that is not one the decoder reads
     let mut odd = section.clone();
     odd.decl = decl(&[(usage::POSITION, format::HALF2, 0)], &[4]);

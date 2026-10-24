@@ -15,8 +15,8 @@
 //!   reach a permutation is not kept here: the tree is on the program entity ([`crate::selector::Selector`]), walked
 //!   for it. A permutation whose stages the world does not hold is left out, counted.
 //! - **Inputs.** A vertex input is the element of the permutation's input layout its semantic index and name find
-//!   ([`InputLayout::resolve`]); the element's usage names the stream: 1 the position, 33 and 34 the texture coordinate
-//!   sets, 30 and 31 the colour sets (the usages [`crate::geometry`] decodes); any other usage, an element wider in the
+//!   ([`InputLayout::resolve`]); the element's usage names the stream: 1 the position, 2 and 4 the blend indices and
+//!   weights, 33 and 34 the texture coordinate sets, 30 and 31 the colour sets (the usages [`crate::geometry`] decodes); any other usage, an element wider in the
 //!   program than in its format, and an input without an element are `Unknown` with the reason. A pixel input is the
 //!   vertex stage's output.
 //! - **Constants.** A constant buffer at b0, b1 or b4 is the first group of the permutation's set 1, set 0 and pass
@@ -47,6 +47,12 @@
 //!   A slot with no such link is `Missing`, and the log counts the slots by why: the sets name no entry for the slot,
 //!   the block holds no reference for the name, the reference was not resolved (the reader step did not run), the
 //!   link states why it leads nowhere, or the texture is not what the slot reads.
+//! - **Skinned meshes.** A vertex input that is the blend indices or weights (usages 2 and 4) is
+//!   `Stream(Joints(0))` or `Stream(Weights(0))`, but the mesh holds no such stream: core takes joint and weight
+//!   streams with a `core.skin`, which names the skeleton, and the skeleton the indices address is not read, so the
+//!   elements stay raw ([`crate::geometry`], [`Raw::joints`]). Each mesh with them is approximated on, counted by the
+//!   range of the joints its vertices are weighted to: `skinned by joints N-M of a skeleton this source does not read:
+//!   drawn at their bind pose`.
 //! - **Outputs.** The pixel stage's render targets are `Unknown` by index.
 //! - **State.** Not decoded: the default (nothing stated).
 
@@ -66,9 +72,10 @@ use super::clip_position::{ClipRows, cut_out, shader_clip_rows, state_clip_roles
 use crate::binding::{Bindings, Group};
 use crate::components::{
     FrostbiteBindings, FrostbiteInputLayout, FrostbiteMaterial, FrostbitePermutation, FrostbiteProgram,
-    MaterialDepot, MaterialTexture, TextureLink,
+    FrostbiteVertexElements, MaterialDepot, MaterialTexture, TextureLink,
 };
 use crate::depot;
+use crate::geometry::Raw;
 use crate::inputlayout::{Found, InputLayout, dxgi_components};
 use crate::permutation::Kind;
 
@@ -113,8 +120,49 @@ impl Pass for ResolveFrostbiteShaders {
                 Err(why) => log.count(&format!("materials left unbound: {why}"), 1),
             }
         }
+        // a mesh the programs skin by joints of a skeleton this source does not read
+        let meshes: Vec<(Entity, Option<(u16, u16)>)> = world
+            .iter::<FrostbiteVertexElements>()
+            .map(|(e, v)| (e, joints_used(&v.primitives)))
+            .collect();
+        for (mesh, joints) in meshes {
+            if let Some((first, last)) = joints {
+                log.approximate_on(
+                    mesh,
+                    &format!(
+                        "meshes skinned by joints {first}-{last} of a skeleton this source does not read: drawn at their bind pose"
+                    ),
+                    1,
+                );
+            }
+        }
         Ok(())
     }
+}
+
+/// The least and greatest joint index a mesh's vertices are weighted to (a joint at a weight of zero is padding), over
+/// its sections' blend elements ([`Raw::joints`], [`Raw::weights`]); `None` for a mesh with none. A section with
+/// indices and no weights counts all four of its indices.
+fn joints_used(sections: &[Vec<Raw>]) -> Option<(u16, u16)> {
+    let mut range: Option<(u16, u16)> = None;
+    for raw in sections {
+        let Some(joints) = raw.iter().find_map(Raw::joints) else {
+            continue;
+        };
+        let weights = raw.iter().find_map(Raw::weights);
+        for (v, lanes) in joints.iter().enumerate() {
+            for (k, &joint) in lanes.iter().enumerate() {
+                if weights
+                    .as_ref()
+                    .is_some_and(|w| w.get(v).is_none_or(|w| w[k] == 0))
+                {
+                    continue;
+                }
+                range = Some(range.map_or((joint, joint), |(a, b)| (a.min(joint), b.max(joint))));
+            }
+        }
+    }
+    range
 }
 
 /// The key field of a binding's variants.
@@ -553,6 +601,8 @@ pub fn element_role(layout: &InputLayout, i: usize, width: u32, log: &mut PassLo
     let usage = layout.usages[i];
     let semantic = match usage {
         1 => Semantic::Position,
+        2 => Semantic::Joints(0),
+        4 => Semantic::Weights(0),
         33 => Semantic::TexCoord(0),
         34 => Semantic::TexCoord(1),
         30 => Semantic::Color(0),
@@ -1053,11 +1103,12 @@ mod tests {
             words: [0, 0],
             format: dxgi << 8,
         };
-        // a position as R32G32B32_FLOAT (6), a texture coordinate as R16G16_FLOAT (34), a tangent space (52)
+        // a position as R32G32B32_FLOAT (6), a texture coordinate as R16G16_FLOAT (34), a tangent space (52), blend
+        // indices as R16G16B16A16_UINT (12) and weights as R8G8B8A8_UNORM (28)
         let layout = InputLayout {
             id: 1,
-            elements: vec![element(6), element(34), element(10)],
-            usages: vec![1, 33, 52],
+            elements: vec![element(6), element(34), element(10), element(12), element(28)],
+            usages: vec![1, 33, 52, 2, 4],
         };
         let mut log = PassLog::default();
         assert_eq!(
@@ -1074,6 +1125,49 @@ mod tests {
         assert!(
             matches!(element_role(&layout, 2, 4, &mut log), InputRole::Unknown { why } if why.contains("usage 52"))
         );
+        assert_eq!(
+            element_role(&layout, 3, 4, &mut log),
+            InputRole::Stream(Semantic::Joints(0))
+        );
+        assert_eq!(
+            element_role(&layout, 4, 4, &mut log),
+            InputRole::Stream(Semantic::Weights(0))
+        );
+    }
+
+    #[test]
+    fn a_mesh_skinned_by_joints_is_noted_by_the_range_of_joints_it_is_weighted_to() {
+        use crate::meshset::{format, usage};
+        let joints = |lanes: &[[u16; 4]]| Raw {
+            usage: usage::BLEND_INDICES,
+            format: format::USHORT4,
+            size: 8,
+            data: lanes.iter().flatten().flat_map(|j| j.to_le_bytes()).collect(),
+        };
+        let weights = |lanes: &[[u8; 4]]| Raw {
+            usage: usage::BLEND_WEIGHTS,
+            format: format::UBYTE4N,
+            size: 4,
+            data: lanes.iter().flatten().copied().collect(),
+        };
+        // the zero-weight lanes' indices (3 and 900) are padding
+        let a = vec![
+            joints(&[[3, 101, 3, 107], [3, 3, 900, 102]]),
+            weights(&[[0, 255, 0, 0], [0, 0, 0, 255]]),
+        ];
+        assert_eq!(joints_used(std::slice::from_ref(&a)), Some((101, 102)));
+        // a second section widens the range; one with indices and no weights counts all four of its indices
+        let b = vec![joints(&[[5, 6, 7, 8]])];
+        assert_eq!(joints_used(&[a.clone(), b.clone()]), Some((5, 102)));
+        // a mesh with no blend element is not skinned
+        let c = vec![Raw {
+            usage: usage::TANGENT_SPACE,
+            format: format::UBYTE4N,
+            size: 4,
+            data: vec![0; 4],
+        }];
+        assert_eq!(joints_used(&[c]), None);
+        assert_eq!(joints_used(&[]), None);
     }
 
     #[test]

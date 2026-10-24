@@ -29,6 +29,8 @@ pub const MAX_LODS: usize = (0xb4 - 0x30) / 8;
 /// Element usages seen in skate.'s declarations (Frostbite's VertexElementUsage).
 pub mod usage {
     pub const POSITION: u8 = 1;
+    pub const BLEND_INDICES: u8 = 2;
+    pub const BLEND_WEIGHTS: u8 = 4;
     pub const COLOR0: u8 = 30;
     pub const COLOR1: u8 = 31;
     pub const TEXCOORD0: u8 = 33;
@@ -47,6 +49,7 @@ pub mod format {
     pub const HALF4: u8 = 0x08;
     pub const UBYTE4: u8 = 0x0c;
     pub const UBYTE4N: u8 = 0x0d;
+    pub const USHORT4: u8 = 0x17;
     pub fn size(f: u8) -> Option<usize> {
         Some(match f {
             0x32 => 1,               // UByteN

@@ -13,9 +13,18 @@
 //! - **Colour** (usages 30 and 31, `Color(0)` and `Color(1)`): UByte4N as its four bytes, or Float4, as stored (the
 //!   channel order is not verified).
 //!
-//! Every other element (blend weights and indices, the sub-material index of usage 51, the tangent space of usage 52,
-//! the radiosity of usage 42) is kept as stored bytes ([`Raw`]): what the bytes mean is not established here. A
-//! declaration or element the decoder does not know is refused naming what it is.
+//! - **Blend indices and weights** (usages 2 and 4): four little-endian u16 ([`format::USHORT4`]) and four
+//!   unsigned-normalised bytes ([`format::UBYTE4N`]), read from their [`Raw`] elements by [`Raw::joints`] and
+//!   [`Raw::weights`], not decoded into streams: core takes joint and weight streams only with a `core.skin`, which
+//!   names the skeleton, and the skeleton the indices address is not read. Evidence (the hat bucket of skate., 5 meshes
+//!   of 84 to 1,150 vertices): the vertex programs read the two as `TEXCOORD0` `uint4` and `TEXCOORD1` `float4`, take
+//!   three palette rows at three times the first and sum the palette words by the second; the input layouts of the 30
+//!   permutations of the bucket give DXGI 12 (`R16G16B16A16_UINT`) for usage 2 and 28 (`R8G8B8A8_UNORM`) for usage 4;
+//!   the indices run to 107 and the weights are 255 on one lane (lane 3) with at most 2 on the others.
+//!
+//! Every other element (the sub-material index of usage 51, the tangent space of usage 52, the radiosity of usage 42,
+//! and the blend indices and weights above) is kept as stored bytes ([`Raw`]): what the bytes of the rest mean is not
+//! established here. A declaration or element the decoder does not know is refused naming what it is.
 
 use std::collections::BTreeMap;
 
@@ -50,6 +59,28 @@ impl Raw {
             data.extend_from_slice(&self.data[at..at + self.size]);
         }
         Ok(Raw { data, ..self.clone() })
+    }
+}
+
+impl Raw {
+    /// The blend indices of a usage 2 element stored as four u16 ([`format::USHORT4`]), one list of four a vertex;
+    /// `None` for any other element.
+    pub fn joints(&self) -> Option<Vec<[u16; 4]>> {
+        (self.usage == usage::BLEND_INDICES && self.format == format::USHORT4 && self.size == 8).then(|| {
+            self.data
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .map(|v| std::array::from_fn(|k| u16::from_le_bytes([v[2 * k], v[2 * k + 1]])))
+                .collect()
+        })
+    }
+
+    /// The blend weights of a usage 4 element stored as four unsigned-normalised bytes ([`format::UBYTE4N`]) as
+    /// stored (each over 255), one list of four a vertex; `None` for any other element.
+    pub fn weights(&self) -> Option<Vec<[u8; 4]>> {
+        (self.usage == usage::BLEND_WEIGHTS && self.format == format::UBYTE4N && self.size == 4)
+            .then(|| self.data.as_chunks::<4>().0.to_vec())
     }
 }
 
