@@ -359,8 +359,12 @@ pub struct FrozenFrame {
     pub matrix_base: u32,
     /// `Object(ClipPlane)`: zero, which clips nothing.
     pub clip_plane: [f32; 4],
-    /// `View(View)`, `Projection`, `ViewProjection`, `InverseView` and `InverseProjection`: the identity, so a vertex
-    /// program's clip position is its camera-relative position.
+    /// `View(View)`, `Projection`, `ViewProjection`, `CameraRelativeViewProjection`, `InverseView` and
+    /// `InverseProjection`: the identity. The clip position this gives a vertex program (a plain view-projection
+    /// program's world position, a camera-relative one's world position minus `camera_position`) decides nothing: the
+    /// bake reads the program's other outputs (`VertexStage::pixel_inputs_from`), and the pixel program's `SV_Position`
+    /// is the constant zero ([`Prepared::pipeline_state`]). A value the program computes through these matrices for
+    /// the pixel program is its value at the identity.
     pub view_matrix: [f32; 16],
     /// `View(ViewportSize)`: one by one pixel (`View(InverseViewportSize)` is its reciprocals).
     pub viewport_size: [f32; 2],
