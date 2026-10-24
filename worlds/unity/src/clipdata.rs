@@ -201,7 +201,8 @@ fn convert(property: Property, v: &[f32]) -> Vec<f32> {
 
 impl Track {
     /// This transform track as a joint channel on `target`, in the world's frame: its curves sampled at the union of
-    /// their key times, as a Hermite spline (exact: each curve is a cubic between its keys), as a Linear channel when
+    /// their key times, as a Hermite spline (each curve is a cubic between its keys, which the Hermite form with the curve's own
+    /// values and slopes at the keys states exactly; the tangents are per second), as a Linear channel when
     /// every curve is dense or constant, and as a one-key channel when every curve is constant. `None` for a
     /// binding that is not position, rotation or scale of a Transform. An error for steps mixed with smooth segments.
     pub fn channel(
@@ -252,7 +253,7 @@ impl Track {
             times.truncate(1);
         }
         let mut values = Vec::new();
-        for (n, &t) in times.iter().enumerate() {
+        for &t in &times {
             let samples: Vec<(f32, f32, f32)> = self.curves.iter().map(|c| c.sample(t)).collect();
             let mut value: Vec<f32> = samples.iter().map(|s| s.0).collect();
             if property == Property::Rotation {
@@ -263,14 +264,9 @@ impl Track {
                 }
             }
             if interpolation == Interpolation::Hermite {
-                let before = if n > 0 { t - times[n - 1] } else { 0.0 };
-                let after = if n + 1 < times.len() {
-                    times[n + 1] - t
-                } else {
-                    0.0
-                };
-                let in_tangent: Vec<f32> = samples.iter().map(|s| s.1 * before).collect();
-                let out_tangent: Vec<f32> = samples.iter().map(|s| s.2 * after).collect();
+                // core.clip's tangents are per second (the evaluator scales them by the segment's length)
+                let in_tangent: Vec<f32> = samples.iter().map(|s| s.1).collect();
+                let out_tangent: Vec<f32> = samples.iter().map(|s| s.2).collect();
                 values.extend(convert(property, &in_tangent));
                 values.extend(convert(property, &value));
                 values.extend(convert(property, &out_tangent));
@@ -414,5 +410,55 @@ impl ClipData {
             },
             report,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(time: f32, value: f32, in_slope: f32, out_slope: f32) -> Key {
+        Key {
+            time,
+            value,
+            in_slope,
+            out_slope,
+        }
+    }
+
+    /// Hand-worked: a position whose three curves have two keys 0.5 s apart, the first leaving at 2 per second, the second
+    /// arriving at -4 per second. The channel's tangents are those slopes, per second (core.clip's evaluator scales them
+    /// by the segment's length: 0.5), not slopes times a segment length already. (The z curve is negated into core's frame.)
+    #[test]
+    fn a_hermite_channel_holds_per_second_tangents() {
+        let curve = Curve {
+            storage: Storage::Streamed,
+            keys: vec![key(0.0, 0.0, 0.0, 2.0), key(0.5, 1.0, -4.0, 0.0)],
+        };
+        let track = Track {
+            binding: GenericBinding {
+                path: 0,
+                attribute: 1,
+                type_id: 4,
+                is_pptr: false,
+            },
+            curves: vec![curve.clone(), curve.clone(), curve],
+        };
+        let mut world = primase_core::World::new();
+        let target = ClipTarget::Joint {
+            skeleton: world.spawn(),
+            joint: JointId(0),
+        };
+        let channel = track
+            .channel(target, 0.5, &mut 0)
+            .expect("lowers")
+            .expect("a position");
+        assert_eq!(channel.interpolation, Interpolation::Hermite);
+        assert_eq!(channel.times, [0.0, 0.5]);
+        // per key: in-tangent, value, out-tangent, each x y z (z negated)
+        let x: Vec<f32> = (0..6).map(|k| channel.values[k * 3]).collect();
+        assert_eq!(x, [0.0, 0.0, 2.0, -4.0, 1.0, 0.0]);
+        let z: Vec<f32> = (0..6).map(|k| channel.values[k * 3 + 2]).collect();
+        assert_eq!(z, [-0.0, -0.0, -2.0, 4.0, -1.0, -0.0]);
     }
 }
