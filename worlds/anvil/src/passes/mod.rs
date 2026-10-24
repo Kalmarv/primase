@@ -3036,6 +3036,52 @@ pub fn register(reg: &mut PassRegistry) {
 mod tests {
     use super::*;
 
+    const LOWER_TEXT: &str = "lower-anvil-material{normal-green=up,alpha=prelude,unset=white,shader-uv=texcoord,                              emissive-exposure=1,underground-view=0.5,fake-river-s=0,decals1-cutout=decal}";
+
+    /// `lower-anvil-material` after a full `bake-anvil-material`: the bake takes `anvil.material` from every Material it
+    /// baked, so a world it baked whole holds none and the lowering is skipped, as a run skips a pass that may lack its
+    /// inputs and finds none, instead of failing with "requires anvil.material".
+    #[test]
+    fn a_world_with_no_anvil_material_skips_the_lowering() {
+        use primase_core::pass::{PassManager, RunReport, SKIPPED};
+        let mut reg = PassRegistry::new();
+        register(&mut reg);
+        let pipeline = reg.parse(LOWER_TEXT).expect("parses");
+        let mut w = primase_core::World::new();
+        let e = w.spawn();
+        w.insert(e, primase_core::Mesh::new(Vec::new()));
+        let mut report = RunReport::default();
+        PassManager::new(reg)
+            .run(&mut w, &pipeline, &mut report)
+            .expect("a full bake leaves nothing to lower, which is not a failure");
+        assert_eq!(report.steps.len(), 1);
+        assert_eq!(
+            report.steps[0].log.counts.get(SKIPPED),
+            Some(&1),
+            "{:?}",
+            report.steps[0].log
+        );
+    }
+
+    /// The declarations agree: with the component absent the pass is not unfed (it is skipped and provides nothing), and
+    /// with it present the pass can run and provides the lowered material.
+    #[test]
+    fn the_pipeline_check_sees_the_skip() {
+        let mut reg = PassRegistry::new();
+        register(&mut reg);
+        let pipeline = reg.parse(LOWER_TEXT).expect("parses");
+        let none = pipeline.unfed(&std::collections::BTreeSet::new());
+        assert!(none.passes.is_empty(), "{:?}", none.passes);
+        assert!(
+            none.held.is_empty(),
+            "a skipped pass provides nothing: {:?}",
+            none.held
+        );
+        let some = pipeline.unfed(&std::collections::BTreeSet::from(["anvil.material".to_owned()]));
+        assert!(some.passes.is_empty(), "{:?}", some.passes);
+        assert!(some.held.contains("pbr.material"), "{:?}", some.held);
+    }
+
     /// The crate registers exactly these passes by their declarations: those with required options are made only with
     /// them, and every one says what it takes.
     #[test]

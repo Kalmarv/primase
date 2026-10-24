@@ -1217,6 +1217,12 @@ impl Pass for LowerAnvilMaterial {
         }
         o
     }
+    /// A world whose materials were all baked (`bake-anvil-material` takes `anvil.material` from a Material it baked, so a
+    /// full bake leaves none) has nothing left to lower: the pass is skipped there, as a run skips a pass that finds none
+    /// of its inputs. A partial bake keeps the component on the Materials it left, and the pass lowers those.
+    fn may_lack_inputs(&self) -> bool {
+        true
+    }
     fn requires(&self) -> &[&'static str] {
         &[AnvilMaterial::NAME]
     }
