@@ -64,6 +64,9 @@ pub struct CharacterReport {
     pub missing_shader_bundles: Vec<String>,
     /// Shader bundles its materials bind whose metaparam is of a version the reader does not read.
     pub unread_metaparams: Vec<String>,
+    /// Metaparam default textures the engine binds to slots a material leaves unbound that the install's catalog does
+    /// not hold (their stems): such a slot falls to the bake's unbound policy.
+    pub missing_default_textures: Vec<String>,
     /// What reading the character's animation binder found, when it was asked for ([`CharacterOptions::animations`]).
     pub animations: Option<AnimationReport>,
 }
@@ -84,6 +87,10 @@ impl CharacterReport {
             (
                 &self.unread_metaparams,
                 "shader bundles whose metaparam is of a version not read (programs kept, parameters not)",
+            ),
+            (
+                &self.missing_default_textures,
+                "metaparam default named but not in the catalog",
             ),
         ] {
             if !items.is_empty() {
@@ -559,11 +566,18 @@ impl<'a> Reading<'a> {
         self.bundles.read(archive, decoder, self.game, &wanted_shaders)?;
         // the bound textures, and those the engine binds to the slots a material binds nothing to (Elden Ring's
         // metaparam defaults)
+        // (a default the catalog lacks is named in the report, not dropped silently)
+        let (defaults, missing_defaults): (BTreeSet<String>, BTreeSet<String>) = self
+            .bundles
+            .default_textures(self.game, &resolved)
+            .into_iter()
+            .partition(|t| catalog.entries.contains_key(t));
+        report.missing_default_textures = missing_defaults.into_iter().collect();
         let wanted: BTreeSet<String> = resolved
             .iter()
             .flat_map(|m| m.bindings.values().map(|b| b.texture.clone()))
-            .chain(self.bundles.default_textures(self.game, &resolved))
             .filter(|t| catalog.entries.contains_key(t))
+            .chain(defaults)
             .collect();
         let payloads = catalog.load(archive, decoder, &wanted)?;
         let programs = self

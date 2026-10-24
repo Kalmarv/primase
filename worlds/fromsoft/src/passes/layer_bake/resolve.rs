@@ -95,16 +95,20 @@ pub const ENGINE_SCENE_DEPTH_TEXTURE: &str = "g_DepthTexture";
 /// DX10 `*_SRGB` textures and the 57 DX10 `GSBlendMap_NormalMap` ones at linear textures, as the plain albedo and normal
 /// maps do; in Sekiro's m11_01 no binding changes role. No runtime capture confirms it yet (the Sekiro D3D11 capture
 /// records render-target and depth formats only, not the views a program samples).
+///
+/// The index is [`crate::metaparam::texture_number`]'s, the one parse of a binding key's slot the reader's unbound rule
+/// ([`crate::metaparam::unbound_slots`]) also uses, so a key binds the same slot on both sides.
 pub(crate) fn slot_name(kind: &str) -> Option<(u32, &str)> {
-    let rest = kind.rsplit_once("Texture2D_")?.1;
-    let (slot, roles) = rest.split_once('_')?;
+    let slot = crate::metaparam::texture_number(kind)?;
+    let rest = kind.split_once("Texture2D_")?.1;
+    let roles = rest.trim_start_matches(|c: char| c.is_ascii_digit());
     let mut segments = roles.split('_').filter(|s| !s.is_empty());
     let role = match segments.next() {
         Some(blend @ "GSBlendMap") => segments.next().unwrap_or(blend),
         Some(role) => role,
         None => "",
     };
-    Some((slot.parse().ok()?, role))
+    Some((slot, role))
 }
 
 /// The role a slot's declared texture has in the MTD, `?` if it declares none; two declarations that disagree are an
@@ -361,8 +365,18 @@ pub fn resolve(
         let found = match binding {
             Some(b) => texture(&b.texture, role == "AlbedoMap")?,
             None if game == crate::Game::EldenRing => {
-                let found = match default_texture(metaparam, resource) {
-                    Some(d) => texture(&d, role == "AlbedoMap")?,
+                let found = match default_texture(material, metaparam, resource) {
+                    Some(d) => {
+                        let found = texture(&d, role == "AlbedoMap")?;
+                        // the engine binds this default; a read that did not keep it is a different fact from a slot
+                        // with no default, counted before the unbound policy below applies
+                        if found.is_none() {
+                            *policies
+                                .entry(format!("metaparam default named but not loaded: {d}"))
+                                .or_default() += 1;
+                        }
+                        found
+                    }
                     None => None,
                 };
                 if found.is_some() {
@@ -1152,16 +1166,19 @@ fn elden_tiling(material: &MaterialView<'_>, metaparam: Option<&Metaparam>, reso
 }
 
 /// The texture Elden Ring binds when the material leaves `resource` unbound: the shader metaparam's default for
-/// the same `Texture2D_N`, by its stem. The reader retains the authored texture payload, so its stored texels and
-/// the slot's colour transfer determine the value. The Stormveil capture (ercap3) ties the empty DetailBlend slots'
-/// uploaded mip hashes to these system textures. An explicit binding still takes precedence if its payload is missing.
-fn default_texture(metaparam: Option<&Metaparam>, resource: &Resource) -> Option<String> {
+/// the same `Texture2D_N`, by its stem, where [`crate::metaparam::unbound_slots`] (the reader's rule too) takes the slot
+/// as unbound. The reader retains the authored texture payload, so its stored texels and the slot's colour transfer
+/// determine the value. The Stormveil capture (ercap3) ties the empty DetailBlend slots' uploaded mip hashes to these
+/// system textures. An explicit binding still takes precedence if its payload is missing.
+fn default_texture(
+    material: &MaterialView<'_>,
+    metaparam: Option<&Metaparam>,
+    resource: &Resource,
+) -> Option<String> {
     let n = texture_slot(resource).ok()?;
-    metaparam?
-        .textures
-        .iter()
-        .find(|t| crate::metaparam::texture_number(&t.name) == Some(n) && !t.default_texture.is_empty())
-        .map(|t| crate::materials::stem(&t.default_texture))
+    crate::metaparam::unbound_slots(material.bindings.keys(), metaparam?)
+        .find(|(slot, _)| *slot == n)
+        .map(|(_, stem)| stem)
 }
 
 /// A tiling scale as Elden Ring writes it: each axis scaled about the texture's centre, `(u, v, (1 - u) / 2,
@@ -1306,6 +1323,8 @@ mod tests {
             ("g_Water_Texture2D_2__DistortionDepth", 2, "DistortionDepth"),
             ("g_DetailBlend_Texture2D_0_AlbedoMap_0", 0, "AlbedoMap"),
             ("g_Detail_Texture2D_3_", 3, ""),
+            // a key naming no role, without the trailing separator: still its slot, as the reader's rule takes it
+            ("g_Detail_Texture2D_3", 3, ""),
         ] {
             assert_eq!(slot_name(kind), Some((slot, role)), "{kind}");
         }

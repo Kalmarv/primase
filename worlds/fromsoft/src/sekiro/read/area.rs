@@ -81,6 +81,9 @@ pub struct Report {
     pub missing_shader_bundles: Vec<String>,
     /// Bundles kept without their parameter definition: its metaparam is of a version the reader does not read.
     pub unread_metaparams: Vec<String>,
+    /// Metaparam default textures the engine binds to slots a material leaves unbound that the install's catalog does
+    /// not hold (their stems): such a slot falls to the bake's unbound policy.
+    pub missing_default_textures: Vec<String>,
     /// Distinct placed models (`obj/<model>`, `asset/<model>`, `<map>/<model>`) the archive does not hold.
     pub missing_models: Vec<String>,
     /// Each prototype's box as the region rule took it ([`world_bounds`]; `None` for a model that uses no vertex), by
@@ -133,6 +136,12 @@ impl Report {
             out.push(listed(
                 "shader bundles whose metaparam is of a version not read (programs kept, parameters not)",
                 &self.unread_metaparams,
+            ));
+        }
+        if !self.missing_default_textures.is_empty() {
+            out.push(listed(
+                "metaparam default named but not in the catalog",
+                &self.missing_default_textures,
             ));
         }
         if !self.collision.missing_files.is_empty() {
@@ -692,13 +701,14 @@ pub fn read_game_area(
     }
     let mut bundles = shaders::Bundles::default();
     bundles.read(&archive, decoder, game, &wanted_shaders)?;
-    // the textures the engine binds to the slots a material binds nothing to (Elden Ring's metaparam defaults)
-    wanted.extend(
-        bundles
-            .default_textures(game, prototypes.values().flat_map(|p| &p.materials))
-            .into_iter()
-            .filter(|t| catalog.entries.contains_key(t)),
-    );
+    // the textures the engine binds to the slots a material binds nothing to (Elden Ring's metaparam defaults); one
+    // the catalog lacks is named in the report, not dropped silently
+    let (held, missing): (Vec<String>, Vec<String>) = bundles
+        .default_textures(game, prototypes.values().flat_map(|p| &p.materials))
+        .into_iter()
+        .partition(|t| catalog.entries.contains_key(t));
+    wanted.extend(held);
+    report.missing_default_textures = missing;
     let payloads = catalog.load(&archive, decoder, &wanted)?;
     let programs = bundles.layered_programs(layered.into_iter())?;
     report.textures = payloads.len();

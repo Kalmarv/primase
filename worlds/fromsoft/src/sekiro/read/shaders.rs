@@ -30,29 +30,18 @@ pub(super) struct Bundles {
 
 /// The default textures (stems) of the slots `material` binds nothing to, as its shader's metaparam `meta` states them
 /// (a slot's `default_texture`: `SYSTEX_Dummy_a`, `_n`, `_m`, `SYSTEX_Dummy_BlackAlpha_a`), where `game`'s engine binds
-/// them there: Elden Ring's ([`crate::layer_bake::resolve::resolve`] binds what a read keeps of them). A slot is the
-/// material's when one of its bindings names the slot's `Texture2D_N`. Empty for another game and for a material
-/// without a definition.
+/// them there: Elden Ring's ([`crate::layer_bake::resolve::resolve`] binds what a read keeps of them, by the same rule:
+/// [`crate::metaparam::unbound_slots`]). Empty for another game and for a material without a definition.
 pub(crate) fn unbound_defaults(
     game: Game,
     material: &crate::materials::Material,
     meta: &Metaparam,
 ) -> Vec<String> {
-    use crate::metaparam::texture_number;
     if game != Game::EldenRing || material.definition.is_none() {
         return Vec::new();
     }
-    let bound: BTreeSet<u32> = material
-        .bindings
-        .keys()
-        .filter_map(|k| texture_number(k))
-        .collect();
-    meta.textures
-        .iter()
-        .filter(|t| {
-            !t.default_texture.is_empty() && texture_number(&t.name).is_some_and(|n| !bound.contains(&n))
-        })
-        .map(|t| crate::materials::stem(&t.default_texture))
+    crate::metaparam::unbound_slots(material.bindings.keys(), meta)
+        .map(|(_, stem)| stem)
         .collect()
 }
 

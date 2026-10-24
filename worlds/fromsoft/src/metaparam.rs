@@ -21,6 +21,25 @@ pub fn texture_number(name: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
+/// The slots of `meta` a material leaves unbound, with each one's default texture (its stem), where the metaparam
+/// states one: the `Texture2D_N` of a declared slot that none of the material's binding keys `bound` names
+/// ([`texture_number`] of each). Elden Ring's engine binds the default there. The reader loads these defaults and the
+/// layer bake's resolve binds them, both by this one rule.
+pub(crate) fn unbound_slots<K: AsRef<str>>(
+    bound: impl IntoIterator<Item = K>,
+    meta: &Metaparam,
+) -> impl Iterator<Item = (u32, String)> + '_ {
+    let bound: std::collections::BTreeSet<u32> = bound
+        .into_iter()
+        .filter_map(|k| texture_number(k.as_ref()))
+        .collect();
+    meta.textures.iter().filter_map(move |t| {
+        let n = texture_number(&t.name)?;
+        (!t.default_texture.is_empty() && !bound.contains(&n))
+            .then(|| (n, crate::materials::stem(&t.default_texture)))
+    })
+}
+
 /// A texture slot the shader declares.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Texture {
@@ -388,6 +407,35 @@ mod tests {
         b.resize(mtd_at + 0x50, 0);
         b.extend(strings);
         b
+    }
+
+    #[test]
+    fn the_unbound_slots_are_those_no_binding_key_names() {
+        let slot = |n: u32, default: &str| Texture {
+            name: format!("C_DetailBlend__snp_Texture2D_{n}_AlbedoMap"),
+            default_texture: default.into(),
+            uv_group: String::new(),
+            slot: n as u8,
+            kind: 1,
+            unknown_08: 0,
+            unknown_0c: -1,
+            unknown_20: 0,
+        };
+        let mut meta = Metaparam::read(&fixture()).unwrap();
+        meta.textures = vec![
+            slot(0, r"N:\SYSTEX_Dummy_a.tif"),
+            slot(1, r"N:\SYSTEX_Dummy_n.tif"),
+            slot(2, r"N:\SYSTEX_Dummy_m.tif"),
+            // no default: never an unbound default, bound or not
+            slot(3, ""),
+        ];
+        // slot 2's key names no role and has no separator after its number: still slot 2's binding
+        let bound = [
+            "C_DetailBlend__snp_Texture2D_0_AlbedoMap",
+            "C_DetailBlend__snp_Texture2D_2",
+        ];
+        let unbound: Vec<(u32, String)> = unbound_slots(bound, &meta).collect();
+        assert_eq!(unbound, [(1, "systex_dummy_n".to_owned())]);
     }
 
     #[test]
