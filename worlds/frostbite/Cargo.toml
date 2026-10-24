@@ -14,6 +14,7 @@ primase-compress.workspace = true
 primase-core.workspace = true
 half.workspace = true
 primase-dxil.workspace = true
+primase-shader.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha1.workspace = true
@@ -21,7 +22,6 @@ thiserror.workspace = true
 
 [dev-dependencies]
 primase-compress = { workspace = true, features = ["reference-decoder"] }
-primase-shader.workspace = true
 primase-testdata.workspace = true
 primase-texcodec.workspace = true
 

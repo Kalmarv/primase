@@ -1,5 +1,6 @@
 //! Frostbite's lowerings: its dialect to core meanings, each choice the program's.
 
+pub mod clip_position;
 mod resolve_shaders;
 
 pub use resolve_shaders::{RESOLVE_FROSTBITE_SHADERS, ResolveFrostbiteShaders};

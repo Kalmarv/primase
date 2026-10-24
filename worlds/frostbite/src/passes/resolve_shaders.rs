@@ -29,6 +29,12 @@
 //!   to the extent the shader declares for the buffer. Adjacent `Unknown` constants of one reason are one constant
 //!   over their bytes, the parameter names dropped (the group on the permutation entity names every parameter): on the
 //!   census sample the engine's lists were 205,208 constants in 1,916 stages and are 3,248 runs.
+//!   Of a vertex stage's pass binding (b4) the words its clip position is placed with are stated when the program has
+//!   the camera-relative form ([`super::clip_position`]): its sixteen row words are
+//!   [`ViewParameter::CameraRelativeViewProjection`](primase_core::shader::ViewParameter::CameraRelativeViewProjection)
+//!   and its three camera words [`ViewParameter::CameraPosition`](primase_core::shader::ViewParameter::CameraPosition), cut
+//!   out of the `Unknown` constants over them; a program that has not that form keeps them `Unknown`. The words differ by
+//!   pass, so they come from the program, not from a fixed offset.
 //! - **Textures.** A slot the binding sets name is the depot block's parameter of that name, and the parameter's link
 //!   ([`FrostbiteMaterial::textures`], made by [`Source::resolve_textures`](crate::folder::Source::resolve_textures))
 //!   gives the texture entity: `Texture` with the default sampler state (the sampler is not decoded). The texture is a
@@ -40,7 +46,7 @@
 //! - **Outputs.** The pixel stage's render targets are `Unknown` by index.
 //! - **State.** Not decoded: the default (nothing stated).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::shader::{
@@ -50,6 +56,7 @@ use primase_core::shader::{
 };
 use primase_core::{Component, Entity, Semantic, Texture, TextureLayers, World};
 
+use super::clip_position::{ClipRows, shader_clip_rows, state_clip_roles};
 use crate::binding::{Bindings, Group};
 use crate::components::{
     FrostbiteBindings, FrostbiteInputLayout, FrostbiteMaterial, FrostbitePermutation, FrostbiteProgram,
@@ -90,8 +97,9 @@ impl Pass for ResolveFrostbiteShaders {
             .iter::<FrostbiteMaterial>()
             .map(|(e, m)| (e, m.clone()))
             .collect();
+        let mut clips = ClipCache::new();
         for (material, m) in materials {
-            match bind_material(world, &m, log) {
+            match bind_material(world, &m, &mut clips, log) {
                 Ok(binding) => {
                     world.insert(material, binding);
                     log.count("materials bound", 1);
@@ -124,7 +132,12 @@ fn variant_key(index: u32, program: usize, outputs: usize, permutation: u64) -> 
     }
 }
 
-fn bind_material(world: &World, m: &FrostbiteMaterial, log: &mut PassLog) -> Result<ShaderBinding, String> {
+fn bind_material(
+    world: &World,
+    m: &FrostbiteMaterial,
+    clips: &mut ClipCache,
+    log: &mut PassLog,
+) -> Result<ShaderBinding, String> {
     if m.programs.is_empty() {
         return Err("it has no program row".into());
     }
@@ -170,6 +183,9 @@ fn bind_material(world: &World, m: &FrostbiteMaterial, log: &mut PassLog) -> Res
             }
             let bindings = sets.map(FrostbiteBindings::bindings);
             for (i, (stage, shader, program)) in shaders.iter().enumerate() {
+                let clip = (*stage == Stage::Vertex)
+                    .then(|| clip_of(clips, *shader, program, log))
+                    .flatten();
                 let mut bound = stage_binding(
                     *stage,
                     *shader,
@@ -180,6 +196,7 @@ fn bind_material(world: &World, m: &FrostbiteMaterial, log: &mut PassLog) -> Res
                     &m.textures,
                     &|t| texture_dimension(world, t),
                     i > 0,
+                    clip,
                     log,
                 );
                 bound.variant = Some(key.clone());
@@ -209,6 +226,7 @@ fn stage_binding(
     links: &[MaterialTexture],
     dimension: &dyn Fn(Entity) -> Option<(TextureDim, bool)>,
     vertex_bound: bool,
+    clip: Option<(ResourceId, ClipRows)>,
     log: &mut PassLog,
 ) -> StageBinding {
     let inputs = match stage {
@@ -262,6 +280,19 @@ fn stage_binding(
             _ => {}
         }
     }
+    if let Some((buffer, rows)) = clip {
+        if state_clip_roles(&mut constants, buffer, rows) {
+            log.count(
+                "vertex stages whose clip position rows and camera position are stated",
+                1,
+            );
+        } else {
+            log.count(
+                "vertex stages whose clip position words are not all unknown constants, left as they are",
+                1,
+            );
+        }
+    }
     let outputs = if stage == Stage::Pixel {
         interface
             .outputs
@@ -292,6 +323,38 @@ fn stage_binding(
         buffers: Vec::new(),
         outputs,
     }
+}
+
+/// What each vertex program's clip position is (see [`super::clip_position`]), by its shader entity: a program is read
+/// once however many materials and permutations use it.
+type ClipCache = BTreeMap<Entity, Option<(ResourceId, ClipRows)>>;
+
+/// The rows and camera words the vertex program `shader` places its clip position with, when it has the
+/// camera-relative form; the log counts each program once, by whether it has it.
+fn clip_of(
+    cache: &mut ClipCache,
+    entity: Entity,
+    shader: &Shader,
+    log: &mut PassLog,
+) -> Option<(ResourceId, ClipRows)> {
+    *cache
+        .entry(entity)
+        .or_insert_with(|| match shader_clip_rows(shader) {
+            Ok(found) => {
+                log.count(
+                    "vertex programs whose clip position is a camera-relative view-projection",
+                    1,
+                );
+                Some(found)
+            }
+            Err(_) => {
+                log.count(
+                    "vertex programs whose clip position has no camera-relative form, left unknown",
+                    1,
+                );
+                None
+            }
+        })
 }
 
 /// The dimension a shader reads texture `t` as and whether it is arrayed: a 2D map is a plain 2D texture, a texture of
