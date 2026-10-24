@@ -9,6 +9,7 @@ use primase_fromsoft::{
 /// One bone and one static mesh whose layout stores a normal with a W (`UByte4`), so NORMAL.w names each vertex's bone.
 fn model() -> Model {
     Model {
+        dummies: vec![],
         version: 0x2001a,
         speedtree: false,
         layouts: vec![vec![Member {

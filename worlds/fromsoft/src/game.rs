@@ -309,6 +309,14 @@ impl Game {
         }
     }
 
+    /// Where the game's NPC param keeps the fields of [`crate::param::NpcStats`].
+    pub fn npc_stats(self) -> crate::param::NpcStatLayout {
+        match self {
+            Game::Sekiro => crate::sekiro::NPC_STATS,
+            Game::EldenRing => crate::elden::NPC_STATS,
+        }
+    }
+
     /// Where the game's NPC param keeps the 32 `modelDispMask` bits ([`crate::param::NpcParam`]).
     pub fn npc_param(self) -> crate::param::NpcLayout {
         match self {

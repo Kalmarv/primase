@@ -265,6 +265,126 @@ impl NpcParam {
     }
 }
 
+/// Where a game's NPC param keeps the first fields of a row ([`NpcStats`]): the layout revision and row size the offsets
+/// are for, and the byte of each field in [`NpcStats::NAMES`] order (Paramdex's `NpcParam.xml` as Smithbox ships it: the
+/// fields are four bytes each from the start of the row, Sekiro's after `deadMoveForceRate`, Elden Ring's after a
+/// four-byte header of `disableParam_NT` and its reserved bytes and `resistCorrectId_poison`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NpcStatLayout {
+    pub data_version: u16,
+    pub row_size: usize,
+    pub offsets: [usize; 10],
+}
+
+/// The fields of an NPC param row that describe the character (its body and standing), not its fights: what
+/// `NpcParam.xml` calls `behaviorVariationId`, `nameId`, `turnVellocity` (sic), `hitHeight`, `hitRadius`, `weight`,
+/// `hitYOffset`, `hp`, `mp` and `getSoul`, with the units the definition's display names give. The row's other fields
+/// (several hundred: resistances, attack rates, special effects, drops) are not read.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+pub struct NpcStats {
+    pub id: i32,
+    pub behavior_variation_id: i32,
+    pub name_id: i32,
+    /// Degrees a second.
+    pub turn_velocity: f32,
+    /// The collision capsule's height, metres.
+    pub hit_height: f32,
+    /// The collision capsule's radius, metres.
+    pub hit_radius: f32,
+    /// Kilograms.
+    pub weight: u32,
+    /// How far the model is drawn above the capsule's position, metres.
+    pub hit_y_offset: f32,
+    pub hp: u32,
+    pub mp: u32,
+    pub get_soul: u32,
+}
+
+impl NpcStats {
+    /// The definition's names of the fields, in the order of [`NpcStatLayout::offsets`] and [`NpcStats::fields`].
+    pub const NAMES: [&'static str; 10] = [
+        "behaviorVariationId",
+        "nameId",
+        "turnVellocity",
+        "hitHeight",
+        "hitRadius",
+        "weight",
+        "hitYOffset",
+        "hp",
+        "mp",
+        "getSoul",
+    ];
+
+    /// Each field as the definition names it, its value and its unit (empty where the definition's display name states
+    /// none), in the order of [`NpcStats::NAMES`].
+    pub fn fields(&self) -> [(&'static str, f64, &'static str); 10] {
+        let values = [
+            f64::from(self.behavior_variation_id),
+            f64::from(self.name_id),
+            f64::from(self.turn_velocity),
+            f64::from(self.hit_height),
+            f64::from(self.hit_radius),
+            f64::from(self.weight),
+            f64::from(self.hit_y_offset),
+            f64::from(self.hp),
+            f64::from(self.mp),
+            f64::from(self.get_soul),
+        ];
+        let units = ["", "", "deg/sec", "m", "m", "kg", "m", "", "", ""];
+        std::array::from_fn(|i| (Self::NAMES[i], values[i], units[i]))
+    }
+
+    /// The stats of every row of `param`, which must be `NPC_PARAM_ST` of `layout`'s data version and row size. A row
+    /// whose float fields are not finite is refused, naming it.
+    pub fn from_param(param: &Param, layout: &NpcStatLayout) -> Result<Vec<NpcStats>> {
+        if param.param_type != NPC_PARAM_TYPE
+            || param.data_version != layout.data_version
+            || param.row_size != layout.row_size
+        {
+            return Err(invalid(
+                FORMAT,
+                0,
+                format!(
+                    "{} version {} with rows of {} bytes, the NPC stats read are {NPC_PARAM_TYPE} version {} with rows of {}",
+                    param.param_type, param.data_version, param.row_size, layout.data_version, layout.row_size
+                ),
+            ));
+        }
+        let [behavior, name, turn, height, radius, weight, y_offset, hp, mp, soul] = layout.offsets;
+        let mut out = Vec::with_capacity(param.rows.len());
+        for r in &param.rows {
+            let word = |at: usize| -> Result<[u8; 4]> {
+                r.data
+                    .get(at..at + 4)
+                    .and_then(|b| <[u8; 4]>::try_from(b).ok())
+                    .ok_or_else(|| invalid(FORMAT, at, format!("row {} ends before byte {at}", r.id)))
+            };
+            let float = |at: usize| -> Result<f32> {
+                let n = f32::from_le_bytes(word(at)?);
+                if n.is_finite() {
+                    Ok(n)
+                } else {
+                    Err(invalid(FORMAT, at, format!("row {}: a field that is not finite", r.id)))
+                }
+            };
+            out.push(NpcStats {
+                id: r.id,
+                behavior_variation_id: i32::from_le_bytes(word(behavior)?),
+                name_id: i32::from_le_bytes(word(name)?),
+                turn_velocity: float(turn)?,
+                hit_height: float(height)?,
+                hit_radius: float(radius)?,
+                weight: u32::from_le_bytes(word(weight)?),
+                hit_y_offset: float(y_offset)?,
+                hp: u32::from_le_bytes(word(hp)?),
+                mp: u32::from_le_bytes(word(mp)?),
+                get_soul: u32::from_le_bytes(word(soul)?),
+            });
+        }
+        Ok(out)
+    }
+}
+
 /// The param type [`GrassParam::from_param`] reads.
 pub const GRASS_PARAM_TYPE: &str = "GRASS_TYPE_PARAM_ST";
 

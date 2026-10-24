@@ -42,6 +42,15 @@ pub(crate) const NPC_PARAM: crate::param::NpcLayout = crate::param::NpcLayout {
     mask_bytes: [334, 335, 338, 339],
 };
 
+/// Where Sekiro's NPC param keeps the fields [`crate::param::NpcStats`] reads: four bytes each from the start of the row,
+/// `behaviorVariationId` at 0, then after `deadMoveForceRate` (4) `nameId`, `turnVellocity`, `hitHeight`, `hitRadius`,
+/// `weight`, `hitYOffset`, `hp`, `mp` and `getSoul` (Paramdex's `SDT/Defs/NpcParam.xml`, data version 14).
+pub(crate) const NPC_STATS: crate::param::NpcStatLayout = crate::param::NpcStatLayout {
+    data_version: 14,
+    row_size: 896,
+    offsets: [0, 8, 12, 16, 20, 24, 28, 32, 36, 40],
+};
+
 /// Data1 to Data5 with base-37 u32 path hashes and Sekiro's (Dark Souls III's) file records; the keys the community
 /// unpackers publish.
 pub(crate) const ARCHIVES: crate::game::ArchiveSet = crate::game::ArchiveSet {

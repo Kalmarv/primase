@@ -63,6 +63,7 @@ mod tests {
     fn a_model_states_the_bytes_its_meshes_hold() {
         let model = Model {
             bones: Vec::new(),
+            dummies: Vec::new(),
             version: 0x2001a,
             speedtree: false,
             layouts: Vec::new(),

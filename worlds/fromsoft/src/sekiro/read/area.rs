@@ -69,6 +69,9 @@ pub struct GrassTypes {
     pub types: BTreeMap<i32, crate::param::GrassType>,
     /// Named rows the param does not hold.
     pub missing: Vec<i32>,
+    /// Slots (a part names six) that name id 0 where the param holds no row 0: a slot that names none, not a row
+    /// missing (Elden Ring's `m10_00` has 48217 of them).
+    pub unset: usize,
     /// Why the param was not read, if it was not (no key, another layout).
     pub unresolved: Option<String>,
     /// The param's data version and row size as stored, when it was read.
@@ -465,6 +468,12 @@ fn grass_types(
         Err(why) => out.unresolved = Some(why.to_string()),
         Ok(param) => {
             out.layout = Some((param.data_version, param.row_size));
+            // id 0 is the slot that names none, unless the param does hold a row 0
+            if param.row(0).is_none()
+                && let Some(slots) = out.named.remove(&0)
+            {
+                out.unset = slots;
+            }
             for &id in out.named.keys() {
                 match param.row(id) {
                     Some(row) => {
@@ -794,7 +803,7 @@ pub fn read_game_area(
         }
         // the object's animation binder, held as bytes until the model is known to be kept
         let animation = if is_object && options.object_animations {
-            animation::object_binder(&archive, decoder, &path, &binder)?
+            animation::object_binder(decoder, &binder)?
         } else {
             None
         };

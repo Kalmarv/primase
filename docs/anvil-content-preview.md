@@ -112,8 +112,8 @@ static clip. It does not use Cliffs' COLOR0. t75–t80 resolve through the templ
 remain the template/material values. cb1[0].xyz is the caller-stated static camera above the primitive centre
 (`camera-distance=1000000` in the lab). The own program computes DetailBlendRange; no cb3 value is overridden
 to suppress the distance term. This is static detail blending, not the viewing camera changing every frame.
-The registry shading class is 1. Unknown engine constants/resources still refuse by name. MAD_OutBorder and
-RawTerrainBlend's engine virtual textures remain unsupported; their full input/output contracts are not established.
+The registry shading class is 1. Unknown engine constants/resources still refuse by name. The next round's
+OutBorder contract and Raw_TerrainBlend's missing engine-resource requirements are detailed below.
 These are written contracts, not new successful draws or a new material census.
 
 `AnvilFarTerrain` holds coarse nodes separately from near `AnvilTerrain`. The lab reads levels 5/4/3 for its
@@ -155,3 +155,127 @@ Additional written fixtures cover controller first-key times/interpolation, sour
 interpolation, surface chart derivatives/class decoding, zipper boundary coverage, coarse height scaling and
 colour clipping. The lab adds preparation-order, generic-environment Before-generation and three-falloff/exposure fixtures. All remain
 unrun under write-only mode; no new successful material count, image comparison or memory reduction is claimed.
+
+## Next round: border ground, runtime exposure and the sun-vector producer
+
+This round only reads files and writes source/docs. All new fixtures remain unrun. The map denominator reused
+from material-spec §27.11/27.14 is OutBorder **one distinct material / four draws**, Raw_TerrainBlend **one / twenty**;
+it is historical evidence, not a new census or successful-render count.
+
+### OutBorder
+
+Evidence: `scratch/riders-republic/rr-materials/audit/mat17/MAD_OutBorder.txt`,
+`rr-materials/recipes/MAD_OutBorder/ps_400000.dxbc.asm`, and material-spec §27.0's default-texture correction.
+The own G-buffer program is now a surface-executor contract (class 1), not a substitute colour formula.
+
+| Input | Program meaning / binding |
+|---|---|
+| TEXCOORD0.xy | original mesh UV; the program samples its base at UV/16 |
+| TEXCOORD1.xyz | source world position, used by the sediment lookup |
+| TEXCOORD2.xyz | authored tangent in source world axes |
+| TEXCOORD3.xyzw | authored normal and tangent handedness |
+| TEXCOORD4.xyw | static clip stand-in, velocity is not baked |
+| cb3[1..3].x | Sand, Sedimentary, Rock tilings; material/template values retained (75, 3, 3 in the audited material) |
+| t75..t80 | template-bound maps: rock detail normal, base diffuse, blend mask, sand detail normal, object normal, sedimentary detail normal |
+
+The old audit listed only the material's explicit DiffuseMap record. That does not mean the other five maps are
+absent. The template supplies OutBorder_Details_02A/03A/01A normals at t75/t78/t80 (channel 2), a set-slot mask
+at t77 (channel 1, slot 7), and t79 is the material/set normal. The reader's existing selector/default resolution
+remains authoritative; unresolved maps still refuse by t slot/property, and are never filled with guessed normals.
+
+Like the existing Cliffs preview, this contract explicitly selects no terrain sediments: t16's sediment-ID view
+is zero, so the own program's optional t20/t22 branch is not taken. This approximation is in both pass and material
+notices; it is not a claim to supply the running terrain cache. The base, tilings, detail blending and packed
+world-normal output still come from the source program. The derived atlas uses UV1; UV0 and the original tangent
+stream survive, and the baked normal is rebased into that same authored tangent frame. This matters to the retained
+Game binding as well as PBR. Missing tangents, mixed triangle handedness and unknown varyings refuse by name.
+No OutBorder image or new success count has been collected in write-only mode.
+
+### Raw_TerrainBlend: established contract, unresolved producer
+
+Evidence: the matching `audit/mat17/MAD_Raw_TerrainBlend.txt` and
+`recipes/MAD_Raw_TerrainBlend/ps_400000.dxbc.asm` (7,648-byte G-buffer permutation). The exact template spelling
+is `MAD_Raw_TerrainBlend`. Inputs are TEXCOORD0.xyz normal, TEXCOORD1.xyz source world position,
+TEXCOORD5.xyw static clip; class 1 outputs. cb3[1..3].x are **ContourBlendOffset, ContourBlendHardness,
+TerrainNormalInfluence**, audited values 0, 1, 0. There are no material texture slots.
+
+The surface pass recognizes this template but deliberately produces a detailed named refusal, not a coloured
+material: t13/t14 address/level lookup, t15 height, t16 sediment IDs, t17 colour, t19 AO, t20 sediment layers,
+t22 sediment records; t45/t46 virtual detail caches; uint3D t50/t51 page tables and u5 feedback. cb0[47..50]
+states terrain mapping/height/detail transition, cb0[146,148,149] the virtual layout; cb1[3..5].w supplies camera
+position. The branch before t50 runs when `sat((distance - cb0[50].z) / cb0[50].w) < 1`. The far branch still
+needs t15/t17 height/colour data. Turning TerrainNormalInfluence to zero does **not** remove the colour/height
+lookups. AnvilTerrain's decoded TNL samples and the lab splat bake are not these runtime GPU views. A UV tile,
+zero cache, or the nearest unrelated terrain texture would fabricate the program's inputs.
+
+To execute it, the next producer must rebuild those cache/page views from the terrain reader at the mesh's
+actual world positions, or provide a fully identified offline frame's views/constants. Cached engine programs
+`cache/riders-republic/rr-terrain-sonnet/shaders/1987..2004.txt` (virtual atlas/render-tile/used-tile families)
+are the next offline comparison, alongside `docs/terrain.md`'s TNL-to-page mapping. Required observation: the
+same frame's t13–t22, t45/t46, t50/t51 and cb0 rows, including their formats/dimensions; a physical RAM dump
+alone cannot supply GPU-only image contents. RawTerrainBlend is still **not decoded/rendered** by this round.
+
+### Exposure: separate the three quantities
+
+Reused identities are in `scratch/riders-republic/rr-rras-oracle/regtest/a/shaders.tsv`, whose header identifies
+the unpacked menu image SHA256 `73cd846f39b26c314248c392bca1b761ae82a192245ef188ea5465b1e66e72d8`.
+Cached disassemblies are `cache/riders-republic/rr-terrain-sonnet/shaders/0026.txt`, `0027.txt`, `0028.txt`,
+`0070.txt`, and `scratch/riders-republic/rr-materials/warp-run/sky1815.dxbc.asm`; ambient consumer is
+`rr-materials/sky/448.txt`. Unlike the old note's unresolved shader search, the registry names 26 AnalyseHistogram,
+27 ComputeHistogram, 28 UpdateExposure, 70 ACESLUTACESTonemapperHDROutput, and 1815 SunSkyModel.
+
+* **Lighting cb1[39].x is a linear multiplier**, proven by sky 1815's `mul radiance, cb1[39].x` and the ambient
+  consumer. A resolved positive value `s` converts to `Exposure { stops: log2(s) }`, implemented by
+  `read::sky::exposure_from_lighting_scale`. Zero/negative/nonfinite values refuse. This is not an EV conversion.
+* **t23.x is a linear divisor** in G-buffer emissive storage, `E/t23`; ambient adds albedo-tinted emissive and
+  multiplies by cb1[39].x. Equality of those two resources is not established just by their names.
+* **Controller ColorGradingControllables/Parameters/Exposure** (0.8 at the stated Clear_Day noon look) has no
+  proven mapping to either multiplier. Program 70 multiplies RGB by cb5[0].rgb and cb5[0].w, so `.w` is a scale
+  at that program boundary; the CPU conversion from the authored Exposure track to that lane is still missing.
+  Do not assign 0.8 stops or log2(0.8) by guessing which side performs the conversion.
+
+The adaptation program 27 converts weighted luminance to base-2 log bins (128 bins, approximately -23..9).
+26 averages accepted log bins then applies `exp2(mean_log + cb4[36].x)`. Program 28 takes `log2(value*5464)`,
+clamps it by cb4[0].zw, exponentiates and multiplies by a literal printed `0.000183`, then takes the reciprocal.
+It optionally adapts in log space using cb4[0].x and cb4[1].xy, and exponentiates an interpolated cb4[2..33].x
+curve before writing a 1x1 UAV. Printed DXBC literals are rounded: the exact binary multiplier must be read
+before identifying it as precisely 1/5464. This proves log-space adaptation and an exposure-curve contribution;
+it does not identify the CPU bindings of MinEV/MaxEV/EmissiveCurve or connect this UAV to t23/cb1[39].x.
+
+Decisive existing captures: `cache/riders-republic/rr-materials/mem/cb1-world.tsv` records validated 954x582
+frame candidates with row39=(1,1,1,1), e.g. physical offset 535692192 in `rr-3-world.raw`. These are one session,
+not the Clear_Day noon default. Need its same-frame cb4 for shader 28 (rows 0,1,2..33, buffer/u4 identities)
+and cb5[0] for shader 70, then trace the CPU writers back to the authored controller's Exposure. GPU t23/UAV
+contents are not recovered by that CPU RAM dump. The pass now reports the sampled grading Exposure, MinEV,
+MaxEV and EmissiveCurve with their full paths and an unresolved-mapping notice, leaving core exposure None.
+The conversion helper is ready for a resolved frame multiplier; no current archive reader produces one.
+
+### Automatic sun position: exact boundary of the proof
+
+`Controller::at` already implements the proven formula: `tick=120*hour`, then linear interpolation between
+the bracketing u16 tick keys (held values for byte tracks). The source manual preview computes ENU direction
+`(cos(e)*sin(a), cos(e)*cos(a), sin(e))` from the stated azimuth and authored manual elevation in radians,
+then applies the ENU-to-core frame. This formula is **not** the automatic-mode formula.
+
+PS_SunSkyModel/1815 consumes the evaluated sun direction at **cb4[9].xyz** (uses z for LUT sun elevation and
+dot-products with the view ray); cb4[7].xyz is the moon, cb4[23] is Mie. Its interface has no hour, tilt, mode or
+raw elevation track. Therefore the missing conversion is upstream CPU code, not arithmetic to invent inside
+the scattering-table sampler. The registry records LayeredSky class 24D32CF8 controllable fields 7F2FE2D2 at
+runtime store 0x940 (azimuth), 4BB6DB5D at 0x950 (tilt), 2997D8D7 at 0x960 (elevation parameter). Those are
+field stores, not a decoded function address or proof of the nested controllable's active-value offset.
+
+Existing evidence is `cache/riders-republic/lighting/report3.txt`: evaluated control blocks in `rr-3-world.raw`
+at physical 0x2782357c and 0x27823d6c (the report's occlusion-pattern anchors, with leading fields at negative
+offsets), inferred tick1045/08:42:30, azimuth111.55, tilt45.7, computed third parameter51.29 versus track0.317.
+Four nearby unit vectors exist; none has that elevation, and their sun/moon/star roles are not settled. That
+single observation cannot identify the formula. `rr-1-start` has no 64-bit game state, and `rr-2-menu` has no
+matching world control blocks: they are not additional sun observations.
+
+The decisive offline observation is the native writer that reads those LayeredSky fields plus time and fills
+cb4[9].xyz. Its code is in the already unpacked menu PE
+`cache/riders-republic/dump-work/ghidra/RidersRepublic-menu-rebased-0x140000000.pe.bin` (same SHA above;
+REPORT.txt says all .text pages present). Follow that writer to resolve the mode enum and any latitude/orbit
+calculation, then compare its output vector against the already-on-disk world snapshot at tick1045. No native
+writer address or exported disassembly for it was found in the text evidence read this round. A second world
+time, if an offline capture later exists, must include the same controller identity and the actual cb4[9]
+vector, not only a third scalar named elevation. No Riders Republic launch is requested or authorized.

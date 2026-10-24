@@ -1,7 +1,7 @@
 //! A census of what the install's placed-object binders hold besides their model: Sekiro's `/obj/*.objbnd.dcx`,
-//! Elden Ring's `/asset/aeg/*/*.geombnd.dcx`. The area read's `object_animations` option looks for an animation binder
-//! as a `.anibnd` member of the model's binder or as a binder beside it (`o001010.anibnd.dcx`); the dictionaries of
-//! UXM list no such binder beside an object, so this prints what is there instead of assuming:
+//! Elden Ring's `/asset/aeg/*/*.geombnd.dcx`. The area read's `object_animations` option reads the animation binder as
+//! a `.anibnd` member of the model's binder (Sekiro: 233 of 1395, none beside the binder as a file of its own, which
+//! this census still checks for Elden Ring), so this prints what is there instead of assuming:
 //!
 //! - `members <game> <extension> <count>`: the extensions of every member of every object binder, so an animation
 //!   stored under another name shows;
@@ -27,9 +27,22 @@ fn leaf(name: &str) -> String {
     name.rsplit(['/', '\\']).next().unwrap_or(name).to_ascii_lowercase()
 }
 
-fn census(game: Game, label: &str, is_object_binder: impl Fn(&str) -> Option<&'static str>) -> Result<()> {
+fn census(
+    game: Game,
+    kind: primase_fromsoft::Game,
+    label: &str,
+    is_object_binder: impl Fn(&str) -> Option<&'static str>,
+) -> Result<()> {
     let Some(dir) = install(game) else {
         return Ok(());
+    };
+    // each game opens with its own keys: Sekiro's are published, Elden Ring's are the install owner's folder
+    let keys = match (kind, primase_testdata::keys(game)) {
+        (primase_fromsoft::Game::Sekiro, _) => {
+            primase_fromsoft::Keys::published(kind).ok_or("Sekiro's keys")?
+        }
+        (_, Some(folder)) => primase_fromsoft::Keys::from_folder(folder, kind)?,
+        (_, None) => return Ok(()),
     };
     let Some(names) = oracle(OracleSet::Uxm, game, "dictionary.txt") else {
         return Ok(());
@@ -42,8 +55,8 @@ fn census(game: Game, label: &str, is_object_binder: impl Fn(&str) -> Option<&'s
         oodle: Some(&oodle),
         max_output: 1024 * 1024 * 1024,
     };
-    let archive = Archive::open(dir)?;
-    let names = NameDictionary::read(names)?;
+    let archive = Archive::open_game(dir, kind, &keys)?;
+    let names = NameDictionary::read_for(names, kind)?;
     let mut members: BTreeMap<String, usize> = BTreeMap::new();
     let (mut binders, mut nested, mut beside, mut samples) = (0, 0, 0, 0);
     let mut failures = Vec::new();
@@ -108,10 +121,10 @@ fn census(game: Game, label: &str, is_object_binder: impl Fn(&str) -> Option<&'s
 
 #[test]
 fn what_the_object_binders_hold() -> Result<()> {
-    census(Game::Sekiro, "sekiro", |p| {
+    census(Game::Sekiro, primase_fromsoft::Game::Sekiro, "sekiro", |p| {
         (p.starts_with("/obj/") && p.ends_with(".objbnd.dcx")).then_some(".objbnd.dcx")
     })?;
-    census(Game::Elden, "elden", |p| {
+    census(Game::Elden, primase_fromsoft::Game::EldenRing, "elden", |p| {
         (p.starts_with("/asset/aeg/") && p.ends_with(".geombnd.dcx")).then_some(".geombnd.dcx")
     })?;
     Ok(())

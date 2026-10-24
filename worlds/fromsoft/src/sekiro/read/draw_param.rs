@@ -68,6 +68,15 @@ pub struct Report {
     /// Groups with no value set chosen (several sets and no ID 0, or the named ID absent), and their fields.
     pub unchosen_groups: Vec<String>,
     pub unchosen_fields: usize,
+    /// The unchosen groups that store fields, by key: the value IDs they store and how many fields they hold, so a
+    /// rule that leaves a group can be read against the IDs it left. (A group that stores no field is in
+    /// [`Report::unchosen_groups`] and [`Report::empty_groups`], not here.)
+    pub unchosen_sets: BTreeMap<String, (Vec<i32>, usize)>,
+    /// Groups of the file that store no field at all: a file's list of groups is the same shells whatever it holds, and
+    /// a file that stores nothing (Sekiro's `m20_00_0010`) has every one of them empty.
+    pub empty_groups: usize,
+    /// The size of the decoded file, bytes.
+    pub bytes: usize,
     /// Fields of a kept group that store nothing for the chosen ID.
     pub fields_without_set: usize,
     /// Further values stored for a chosen ID, at other times of day: not read.
@@ -172,9 +181,17 @@ pub(super) fn select(gparam: &Gparam, stem: &str, configs: &[PartGparam], report
             }
             None => None,
         };
+        if group.fields.is_empty() {
+            report.empty_groups += 1;
+        }
         let Some((id, chosen)) = pick else {
             report.unchosen_groups.push(group.key.clone());
             report.unchosen_fields += group.fields.len();
+            if !group.fields.is_empty() {
+                report
+                    .unchosen_sets
+                    .insert(group.key.clone(), (ids.clone(), group.fields.len()));
+            }
             continue;
         };
         let mut fields = Vec::new();
@@ -243,6 +260,7 @@ pub(super) fn read(
         return Ok((None, report));
     }
     let bytes = archive.read(&path(stem), decoder)?;
+    report.bytes = bytes.len();
     let gparam = match Gparam::read(&bytes) {
         Ok(gparam) => gparam,
         Err(e) => {
@@ -342,16 +360,34 @@ impl Report {
                 self.zero_id_groups.clone(),
             ));
         }
-        if !self.unchosen_groups.is_empty() {
-            // counted in fields, named by group
-            out.push(self.unchosen_groups.iter().take(8).fold(
-                Notice::new(
-                    stage,
-                    NoticeKind::Unsupported,
-                    "draw-param groups with no value set to read, their fields not read",
-                    self.unchosen_fields as u64,
-                ),
-                |n, group| n.example(group.clone()),
+        if self.unchosen_fields > 0 {
+            // counted in fields, named by group (a group that stores no field has none to leave: counted below)
+            out.push(
+                self.unchosen_groups
+                    .iter()
+                    .filter(|g| self.unchosen_sets.contains_key(*g))
+                    .take(8)
+                    .fold(
+                        Notice::new(
+                            stage,
+                            NoticeKind::Unsupported,
+                            "draw-param groups with no value set to read, their fields not read",
+                            self.unchosen_fields as u64,
+                        ),
+                        |n, group| n.example(group.clone()),
+                    ),
+            );
+        }
+        if self.empty_groups > 0 {
+            out.push(Notice::new(
+                stage,
+                NoticeKind::Selection,
+                if self.groups == 0 && self.fields == 0 {
+                    "draw-param groups the file stores no field in: the file stores no value at all (an overlay with nothing in it, not a read that chose nothing)"
+                } else {
+                    "draw-param groups the file stores no field in (nothing to read in them)"
+                },
+                self.empty_groups as u64,
             ));
         }
         for (count, reason) in [
@@ -513,6 +549,34 @@ mod tests {
         let source = select(&g, "x", &[config(1, -1, -1)], &mut report);
         assert_eq!(source.group(LIGHT_SET).unwrap().fields.len(), 1);
         assert_eq!(report.fields_without_set, 1);
+    }
+
+    #[test]
+    fn a_file_whose_groups_store_nothing_is_empty_not_unchosen() {
+        let shells = Gparam {
+            version: 5,
+            groups: vec![group(LIGHT_SET, vec![]), group("Tone Map[Yebis]", vec![]), group(FOG, vec![])],
+            unread: Unread::default(),
+        };
+        let mut report = Report {
+            asked: true,
+            ..Report::default()
+        };
+        let source = select(&shells, "m20_00_0010", &[config(7, 0, 9)], &mut report);
+        assert!(source.groups.is_empty());
+        assert_eq!((report.groups, report.fields, report.empty_groups), (0, 0, 3));
+        // the groups are left, but no field of them is: nothing is unchosen
+        assert_eq!((report.unchosen_groups.len(), report.unchosen_fields), (3, 0));
+        assert!(report.unchosen_sets.is_empty());
+        let notices = report.notices();
+        assert!(notices.iter().all(|n| !n.reason.starts_with("draw-param groups with no value set")));
+        let n = notices.iter().find(|n| n.reason.contains("stores no value at all")).unwrap();
+        assert_eq!(n.count, 3);
+        // a group with fields it leaves is told apart, with the IDs it stores
+        let mut mixed = Report::default();
+        select(&file(), "x", &[config(7, 0, 9)], &mut mixed);
+        assert_eq!(mixed.unchosen_sets["Bloom"], (vec![2, 5], 1));
+        assert_eq!(mixed.empty_groups, 0);
     }
 
     #[test]

@@ -50,7 +50,7 @@ fn the_grass_the_maps_name() -> Result<()> {
             (None, Some(why)) => println!("unresolved {map} {why}"),
             (None, None) => {}
         }
-        println!("parts {map} {}", grass.parts);
+        println!("parts {map} {} unset_slots {}", grass.parts, grass.unset);
         assert_eq!(grass.parts, report.grass_parts);
         for (id, parts) in &grass.named {
             match grass.types.get(id) {

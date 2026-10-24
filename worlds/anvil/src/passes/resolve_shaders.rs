@@ -213,6 +213,8 @@ pub fn shading_class(template: &str) -> Option<u8> {
         | "MAD_Tex1_Emissive"
         | "MAD_Tex1_UGE"
         | "MAD_Cliffs_TriPlanar"
+        | "MAD_OutBorder"
+        | "MAD_Raw_TerrainBlend"
         | "MAD_Tex1_UniqueNormal"
         | "MAD_Tex1_UniqueNormalGrad_Triplanar"
         | "MAD_Tex1_UniqueNormal_DiffuseBlend"

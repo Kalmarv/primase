@@ -45,6 +45,16 @@ pub(crate) const NPC_PARAM: crate::param::NpcLayout = crate::param::NpcLayout {
     mask_bytes: [330, 331, 334, 335],
 };
 
+/// Where Elden Ring's NPC param keeps the fields [`crate::param::NpcStats`] reads: after the four bytes of
+/// `disableParam_NT` and its reserved bits and bytes, `behaviorVariationId` at 4, then after `resistCorrectId_poison` (8)
+/// `nameId`, `turnVellocity`, `hitHeight`, `hitRadius`, `weight`, `hitYOffset`, `hp`, `mp` and `getSoul` (Paramdex's
+/// `ER/Defs/NpcParam.xml`, data version 9).
+pub(crate) const NPC_STATS: crate::param::NpcStatLayout = crate::param::NpcStatLayout {
+    data_version: 9,
+    row_size: 736,
+    offsets: [4, 12, 16, 20, 24, 28, 32, 36, 40, 44],
+};
+
 /// An asset model `AEGnnn_mmm`: its binder `/asset/aeg/aegnnn/aegnnn_mmm.geombnd.dcx` and FLVER member; its collision is
 /// in binders of its own, `aegnnn_mmm_h.geomhkxbnd.dcx` (high resolution, member `aegnnn_mmm_h.hkx`, a subset of the
 /// assets) and `aegnnn_mmm_l.geomhkxbnd.dcx` (low, `aegnnn_mmm_l.hkx`, every collidable asset).

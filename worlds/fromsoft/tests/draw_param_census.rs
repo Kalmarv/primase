@@ -63,6 +63,19 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>, map: &str) -> Re
             r.zero_id_groups,
             r.unread,
         );
+        // what the rule left, against the IDs it left: a group with fields and no set chosen, with the IDs it stores;
+        // and how much the file holds at all (a file whose groups are all empty stores nothing)
+        println!(
+            "{} {file} SETS bytes {} empty_groups {} other_ids {:?} absent_ids {:?}",
+            game.name(),
+            r.bytes,
+            r.empty_groups,
+            r.other_ids,
+            r.absent_ids,
+        );
+        for (group, (ids, fields)) in &r.unchosen_sets {
+            println!("{} {file} UNCHOSEN [{group}] fields {fields} ids {ids:?}", game.name());
+        }
         let draw = world
             .resource::<DrawParam>()
             .ok_or_else(|| format!("{file}: no draw param read"))?;

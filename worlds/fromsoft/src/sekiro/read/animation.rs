@@ -263,32 +263,18 @@ pub(super) fn read_member(
 }
 
 /// The animation binder of a placed object's model (Sekiro's `obj/o001010`, Elden Ring's `aeg007_310`), decoded, if it
-/// has one: a `.anibnd` member of the model's own binder (`model_binder`, `binder`), else a binder beside it
-/// (`/obj/o001010.anibnd.dcx` for `/obj/o001010.objbnd.dcx`). Which of the two the install uses, if either, is what
-/// `tests/object_animation_census.rs` prints; a model with neither is static.
-pub(super) fn object_binder(
-    archive: &Archive,
-    decoder: &Decoder<'_>,
-    model_binder: &str,
-    binder: &Binder,
-) -> Result<Option<Vec<u8>>> {
+/// has one: a `.anibnd` member of the model's own binder. In Sekiro's install that is where they are (233 of its 1395
+/// object binders hold one, and no object has a binder of its own beside it: `tests/object_animation_census.rs`); a
+/// model without the member is static. The member holds `skeleton.hkx`, the animations (`a000_000500.hkx`), their
+/// compendium and the object's event file (`o252050.tae`), which [`read_member`] reads as a character's binder.
+pub(super) fn object_binder(decoder: &Decoder<'_>, binder: &Binder) -> Result<Option<Vec<u8>>> {
     let member = binder.files.iter().find(|f| {
         f.name.as_deref().is_some_and(|n| {
             let file = file_name(n);
             file.ends_with(".anibnd") || file.ends_with(".anibnd.dcx")
         })
     });
-    if let Some(f) = member {
-        return decoder.decode_if_dcx(&f.bytes).map(Some);
-    }
-    let beside = [".objbnd.dcx", ".geombnd.dcx"]
-        .iter()
-        .find_map(|ext| model_binder.strip_suffix(ext))
-        .map(|stem| format!("{stem}.anibnd.dcx"));
-    match beside {
-        Some(path) if archive.contains(&path) => Ok(Some(archive.read(&path, decoder)?)),
-        _ => Ok(None),
-    }
+    member.map(|f| decoder.decode_if_dcx(&f.bytes)).transpose()
 }
 
 /// Put what the binders `held` (in read order) hold into `w`: the skeletons, each once by name (`<id> havok

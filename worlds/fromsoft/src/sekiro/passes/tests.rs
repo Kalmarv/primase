@@ -740,6 +740,7 @@ fn static_arm(normal_kind: u32, palette: Vec<u32>, normal_w: i32, node: i32) -> 
         ..Default::default()
     };
     Model {
+        dummies: vec![],
         version: 0x2001a,
         speedtree: false,
         layouts: vec![vec![member(0, 2, 0), member(3, normal_kind, 12)]],

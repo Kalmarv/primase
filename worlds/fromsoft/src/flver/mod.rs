@@ -145,9 +145,39 @@ pub struct Bone {
     pub scale: [f32; 3],
     pub parent: i16,
 }
+/// A dummy polygon (SoulsFormatsNEXT: "used for hit detection, particle effect locations, and much more"): a named-by-number
+/// point with a direction, in the model, that the game attaches things to (a weapon to a hand, an effect to a muzzle).
+/// All as stored; nothing here says which number is which (the game's, not the file's).
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct Dummy {
+    /// The point. In the space of the parent bone where there is one ([`Dummy::parent_bone`]), else in the model's; the
+    /// file's frame.
+    pub position: [f32; 3],
+    pub forward: [f32; 3],
+    /// Meaningful only where [`Dummy::use_upward_vector`] is set.
+    pub upward: [f32; 3],
+    /// "Indicates the type of dummy point this is (hitbox, sfx, etc)" (SoulsFormatsNEXT): the number the game's scripts
+    /// and events name the point by.
+    pub reference_id: i16,
+    /// "Index of a bone that the dummy point is initially transformed to before binding to the attach bone"; -1 for none.
+    pub parent_bone: i16,
+    /// "Index of the bone that the dummy point follows physically"; -1 for none.
+    pub attach_bone: i16,
+    /// The four colour bytes in the file's order (alpha, red, green, blue; SoulsFormatsNEXT: "not certain about the
+    /// ordering").
+    pub color: [u8; 4],
+    pub flag1: bool,
+    pub use_upward_vector: bool,
+    /// Two words SoulsFormatsNEXT calls unknown ("only used in Sekiro").
+    pub unk30: i32,
+    pub unk34: i32,
+}
+
 #[derive(Clone, Debug)]
 pub struct Model {
     pub bones: Vec<Bone>,
+    /// The model's dummy polygons, in file order.
+    pub dummies: Vec<Dummy>,
     pub version: u32,
     /// A SpeedTree model ([`is_speedtree`]): its vertices carry their stored members in [`Vertex::speedtree`], and
     /// the attributes its programs read from them ([`speedtree_layout`]).
@@ -298,11 +328,29 @@ impl Model {
         if pos > data_start {
             return Err(invalid(v.format, pos, "tables overlap data"));
         }
+        let mut dummies = Vec::new();
         for i in 0..dummy_count {
             let o = dummy + i * 64;
-            v.boolean(o + 46)?;
-            v.boolean(o + 47)?;
+            let flag1 = v.boolean(o + 46)?;
+            let use_upward_vector = v.boolean(o + 47)?;
             v.expect(o + 56, &[0; 8])?;
+            let bytes = v.slice(o + 12, 4)?;
+            // as stored: a dummy is data the model's meshes do not depend on, so a value that is not finite does not
+            // refuse the model (the pass that places the dummy refuses it)
+            let raw = |at: usize| -> Result<f32> { Ok(f32::from_bits(v.u32(at)?)) };
+            dummies.push(Dummy {
+                position: [raw(o)?, raw(o + 4)?, raw(o + 8)?],
+                color: [bytes[0], bytes[1], bytes[2], bytes[3]],
+                forward: [raw(o + 16)?, raw(o + 20)?, raw(o + 24)?],
+                reference_id: v.u16(o + 28)? as i16,
+                parent_bone: v.u16(o + 30)? as i16,
+                upward: [raw(o + 32)?, raw(o + 36)?, raw(o + 40)?],
+                attach_bone: v.u16(o + 44)? as i16,
+                flag1,
+                use_upward_vector,
+                unk30: v.u32(o + 48)? as i32,
+                unk34: v.u32(o + 52)? as i32,
+            });
         }
         let mut bones = Vec::new();
         for i in 0..bone_count {
@@ -634,6 +682,7 @@ impl Model {
         }
         Ok(Self {
             bones,
+            dummies,
             version,
             speedtree,
             layouts,

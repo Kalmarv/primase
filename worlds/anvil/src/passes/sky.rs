@@ -47,7 +47,15 @@ impl LowerAnvilSky {
         let tilt=scalar("SunTiltAngle",sky.sun_tilt)?;
         let parameter=scalar("SunLightElevation",sky.sun_elevation)?;
         let elevation=sky.sun_elevation;
-        notices.push(format!("SunPositionMode {} elevation(hour) is unknown: authored manual elevation {elevation} degrees retained; controller azimuth {azimuth}, tilt {tilt}, elevation parameter {parameter}",sky.sun_position_mode));
+        notices.push(format!("SunPositionMode {} at hour {} (controller tick {time}): automatic direction unresolved; PS_SunSkyModel/1815 consumes already evaluated cb4[9].xyz, not hour/tilt/elevation tracks. Authored manual elevation {elevation} degrees retained; controller azimuth {azimuth}, tilt {tilt}, elevation parameter {parameter}. Need the CPU writer of cb4[9], not a guessed astronomical formula",sky.sun_position_mode,self.hour));
+        for path in [vec!["ColorGradingControllables","Parameters","Exposure"],
+            vec!["HDRLightingSettings","MinEV"],vec!["HDRLightingSettings","MaxEV"],
+            vec!["HDRLightingSettings","EmissiveCurve"]] {
+            if let Some(v)=value(&path)? {
+                notices.push(format!("{} = {} at controller tick {time}: source parameter retained; mapping to evaluated cb1[39].x is unresolved. cb1[39].x is a linear radiance multiplier (core stops = log2(scale)); grading Exposure is not assumed to be stops, MinEV/MaxEV are adaptation bounds, t23 is an emissive divisor",path.join("/"),v[0]));
+            }
+        }
+        notices.push("core.atmosphere exposure unstated: the selected look has no resolved cb1[39].x frame multiplier; one historical unity snapshot does not establish this hour's exposure".into());
         let (az,el)=(azimuth.to_radians(),elevation.to_radians());
         let sun=[el.cos()*az.sin(),el.cos()*az.cos(),el.sin()];
         let colour=value(&["LayeredSky","SunlightColor"])?.unwrap_or(sky.sun_color);
@@ -114,6 +122,8 @@ impl LowerAnvilSky {
         let controls=AnvilSkyControllers{look:"fixture".into(),weather:None,time_of_day:Controller{tracks:vec![
             track(&["LayeredSky","SunlightColor"],[1.0,0.5,0.25,1.0]),
             track(&["LayeredSky","SunLightElevation"],[0.317,0.0,0.0,0.0]),
+            track(&["ColorGradingControllables","Parameters","Exposure"],[0.8,0.0,0.0,0.0]),
+            track(&["HDRLightingSettings","MinEV"],[-7.909,0.0,0.0,0.0]),
             track(&["Fog","VolumetricFog","Albedo"],[0.6,0.8,1.0,1.0]),
             track(&["Fog","VolumetricFog","Density"],[0.001,0.0,0.0,0.0]),
             track(&["Fog","VolumetricFog","Bottom"],[10.0,0.0,0.0,0.0]),
@@ -126,6 +136,8 @@ impl LowerAnvilSky {
         assert!(env.ambient.iter().all(|v|v.is_finite() && *v>0.0));
         assert!((env.towards_sun[1]-0.5).abs()<1e-6,"0.317 is a controller parameter, not elevation");
         assert!(env.notices.iter().any(|s|s.contains("SunPositionMode")));
+        assert!(env.notices.iter().any(|s|s.contains("Parameters/Exposure = 0.8") && s.contains("not assumed to be stops")));
+        assert!(env.notices.iter().any(|s|s.contains("PS_SunSkyModel/1815") && s.contains("cb4[9].xyz")));
         let mut world=World::new();let e=world.spawn();world.insert(e,source());world.insert(e,controls);
         pass.run(&mut world,&mut PassLog::default()).unwrap();
         let environment=world.resource::<primase_core::Environment>().unwrap();

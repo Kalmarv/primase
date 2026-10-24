@@ -22,6 +22,7 @@ fn semantic_indices_are_not_uv_storage_slots() {
     };
     let model = Model {
         bones: vec![],
+        dummies: vec![],
         version: 0x2001a,
         speedtree: false,
         materials: vec![],
@@ -73,6 +74,7 @@ fn a_layered_mesh_keeps_its_second_uv_set_and_second_colour() {
     };
     let model = |layouts| Model {
         bones: vec![],
+        dummies: vec![],
         version: 0x2001a,
         speedtree: false,
         materials: vec![],

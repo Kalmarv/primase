@@ -3,7 +3,7 @@
 //! shared prototypes nor unrelated material variants acquire another placement's baked pixels.
 //!
 //! Input contracts: MAD_Cliffs_TriPlanar (material-spec §27.4 and verify_m17.py), and
-//! MAD_Tex1_UniqueNormalGrad_Triplanar (§27.14.10, its own ps_400000 disassembly).
+//! MAD_Tex1_UniqueNormalGrad_Triplanar and MAD_OutBorder (their own ps_400000 disassemblies).
 //! Texture/constant roles come from the template's registry bindings, not a second hand-written colour formula.
 //! The shader performs the three projections and normal blending. Unknown varying/constant/resource roles refuse
 //! that primitive by name. G-buffer class is decoded from the program's output, not inferred from its template name.
@@ -92,19 +92,36 @@ struct Prepared {
 }
 
 /// These are input *meanings*, not material formulas. Their texture rows and arithmetic remain in the template's
-/// own program. Keep the two contracts distinct: the gradient variant's masks use original mesh UVs, not COLOR0.
+/// own program. Keep contracts distinct: gradient masks use original UVs, OutBorder also needs its authored tangent
+/// frame, and RawTerrain is entirely dependent on the engine's terrain caches (a named refusal until supplied).
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-enum Contract {Cliffs,UniqueGradient}
+enum Contract {Cliffs,UniqueGradient,OutBorder,RawTerrain}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-enum VaryingRole {Screen,Normal,WorldPosition,Clip,Colour,Uv}
+enum VaryingRole {Screen,Normal,WorldPosition,Clip,Colour,Uv,Tangent,NormalSign}
 impl Contract {
     fn of(material:&AnvilMaterial)->Option<Self>{Self::named(material.template_name.as_deref()?)}
     fn named(template:&str)->Option<Self>{match template{
         "MAD_Cliffs_TriPlanar"=>Some(Self::Cliffs),
         "MAD_Tex1_UniqueNormalGrad_Triplanar"=>Some(Self::UniqueGradient),
+        "MAD_OutBorder"=>Some(Self::OutBorder),
+        "MAD_Raw_TerrainBlend"=>Some(Self::RawTerrain),
         _=>None,
     }}
-    fn varying(self,name:&str,index:u32)->Option<VaryingRole>{match(name,index){
+    fn varying(self,name:&str,index:u32)->Option<VaryingRole>{
+        if name=="SV_Position" && index==0{return Some(VaryingRole::Screen);}
+        if self==Self::OutBorder{return match(name,index){
+            ("TEXCOORD",0)=>Some(VaryingRole::Uv),
+            ("TEXCOORD",1)=>Some(VaryingRole::WorldPosition),
+            ("TEXCOORD",2)=>Some(VaryingRole::Tangent),
+            ("TEXCOORD",3)=>Some(VaryingRole::NormalSign),
+            ("TEXCOORD",4)=>Some(VaryingRole::Clip),_=>None,
+        };}
+        if self==Self::RawTerrain{return match(name,index){
+            ("TEXCOORD",0)=>Some(VaryingRole::Normal),
+            ("TEXCOORD",1)=>Some(VaryingRole::WorldPosition),
+            ("TEXCOORD",5)=>Some(VaryingRole::Clip),_=>None,
+        };}
+        match(name,index){
         ("SV_Position",0)=>Some(VaryingRole::Screen),
         ("TEXCOORD",1)=>Some(VaryingRole::Normal),
         ("TEXCOORD",2)=>Some(VaryingRole::WorldPosition),
@@ -113,10 +130,15 @@ impl Contract {
         ("TEXCOORD",0) if self==Self::UniqueGradient=>Some(VaryingRole::Uv),
         _=>None,
     }}
+
+    fn terrain_requirements(self)->Option<&'static str>{
+        (self==Self::RawTerrain).then_some("MAD_Raw_TerrainBlend surface inputs unresolved: t13 page addresses, t14 page levels, t15 terrain height atlas, t16 sediment IDs, t17 terrain colour atlas, t19 terrain AO, t20 sediment array, t22 sediment records; t45/t46 detail colour/normal caches, uint3D t50/t51 page tables, u5 feedback; cb0[47..50] terrain mapping/height/detail transition and cb0[146,148,149] virtual-cache layout; cb1[3..5].w camera position. AnvilTerrain's stored tiles are not these runtime GPU resources; no zero or unrelated texture substituted")
+    }
 }
 impl BakeAnvilSurface {
     fn prepare(&self, world: &World, material: &AnvilMaterial,camera:[f32;3],side:u32) -> Result<Prepared, String> {
         let contract=Contract::of(material).ok_or("template has no established surface input contract")?;
+        if let Some(reason)=contract.terrain_requirements(){return Err(reason.into());}
         if material.flags.blend_mode != 0 { return Err("blended surface: G-buffer alpha is not roughness".into()); }
         if material.flags.booleans.get(crate::components::MaterialFlags::ALPHA_TEST_ENABLED)==Some(&1) {
             return Err("alpha-tested surface requires a coverage-aware chart contract".into());
@@ -153,8 +175,8 @@ impl BakeAnvilSurface {
                     (1,37,0|1) => 1.0 / side as f32,
                     (1,37,2|3) => side as f32,
                     // Virtual-terrain coordinates are irrelevant with the explicit uniform engine textures below.
-                    (0,47,0) | (0,48,0|1) if contract==Contract::Cliffs => 1.0,
-                    (0,47,1..=3) | (0,48,2|3) if contract==Contract::Cliffs => 0.0,
+                    (0,47,0) | (0,48,0|1) if matches!(contract,Contract::Cliffs|Contract::OutBorder) => 1.0,
+                    (0,47,1..=3) | (0,48,2|3) if matches!(contract,Contract::Cliffs|Contract::OutBorder) => 0.0,
                     _ => return Err(format!("unknown engine constant cb{slot}[{row}].{}", ["x","y","z","w"][lane as usize])),
                 };
                 let target = buffer.get_mut(row as usize).ok_or("constant row outside declaration")?;
@@ -165,7 +187,7 @@ impl BakeAnvilSurface {
         let mut views = BTreeMap::new();
         for &slot in shader.textures() {
             let view = match slot {
-                13|14|16|20|22 if contract==Contract::Cliffs => View::Constant([0.0;4]), // no virtual terrain sediments
+                13|14|16|20|22 if matches!(contract,Contract::Cliffs|Contract::OutBorder) => View::Constant([0.0;4]), // explicit no-sediment preview
                 19 if contract==Contract::Cliffs => View::Constant([self.terrain_ao;4]),
                 75.. => {
                     let binding = material.textures.iter().find(|v| v.shader_slot == slot-75)
@@ -225,11 +247,18 @@ impl BakeAnvilSurface {
     fn bake_primitive(&self, world: &World, primitive: &Primitive, material: &AnvilMaterial,
         transform: Transform,remaining_texels:u64) -> Result<(Primitive,Images,u32),String> {
         let contract=Contract::of(material).ok_or("template has no surface input contract")?;
+        if let Some(reason)=contract.terrain_requirements(){return Err(reason.into());}
         if primitive.topology!=Topology::Triangles {return Err("surface is not a triangle list".into());}
         let permitted=BTreeSet::from([Semantic::Position,Semantic::Normal,Semantic::Tangent,Semantic::TexCoord(0),Semantic::Color(0)]);
         if primitive.streams.keys().any(|s| !permitted.contains(s)) {return Err("surface has extra UV/skin/blend streams whose chart remap is not established".into());}
         let p=primitive.positions().ok_or("surface has no positions")?;
         let normals=match primitive.streams.get(&Semantic::Normal) {Some(Stream::F32x3(n)) if n.len()==p.len()=>n,_=>return Err("surface has no matching normal stream".into())};
+        let source_tangents=if contract==Contract::OutBorder {
+            match primitive.streams.get(&Semantic::Tangent){
+                Some(Stream::F32x4(t)) if t.len()==p.len() && t.iter().all(|v|v.iter().all(|x|x.is_finite()) && v[3].abs()==1.0)=>Some(t),
+                _=>return Err("MAD_OutBorder requires the original tangent and bitangent sign; no chart tangent is substituted for its source varying".into()),
+            }
+        }else{None};
         let colours=match primitive.streams.get(&Semantic::Color(0)) {
             Some(Stream::F32x4(c)) if c.len()==p.len()=>Some(c),
             None if contract!=Contract::Cliffs=>None,
@@ -237,8 +266,8 @@ impl BakeAnvilSurface {
         };
         let source_uv=match primitive.streams.get(&Semantic::TexCoord(0)) {
             Some(Stream::F32x2(uv)) if uv.len()==p.len()=>Some(uv),
-            None if contract!=Contract::UniqueGradient=>None,
-            _=>return Err("UniqueNormalGrad_Triplanar requires matching original TEXCOORD0 for its mask maps".into()),
+            None if !matches!(contract,Contract::UniqueGradient|Contract::OutBorder)=>None,
+            _=>return Err("surface requires matching original TEXCOORD0 for its template textures".into()),
         };
         let ids=primitive.indices.clone().unwrap_or_else(||(0..p.len() as u32).collect());
         if ids.is_empty(){return Err("surface has no triangle indices".into());}
@@ -288,6 +317,15 @@ impl BakeAnvilSurface {
                 .into_iter().collect::<Result<Vec<_>,_>>()?;
             let colour=colours.map(|c|vertices.map(|i|c[i]));
             let mesh_uv=source_uv.map(|uv|vertices.map(|i|uv[i]));
+            if let Some(ts)=source_tangents {
+                if vertices.iter().any(|i|ts[*i][3]!=ts[vertices[0]][3]) {
+                    return Err("surface triangle crosses authored tangent handedness; a split frame is required".into());
+                }
+            }
+            let authored_tangents=source_tangents.map(|ts|vertices.map(|i|{
+                let t=ts[i];let direction=sub(transform.apply([t[0],t[1],t[2]]),transform.apply([0.0;3]));
+                [direction[0],direction[1],direction[2],t[3]]
+            }));
             let tangent=unit(sub(points[1],points[0]))?;
             let extent=(chart-5) as f32;
             let mut valid=vec![false;(chart*chart) as usize];
@@ -298,16 +336,23 @@ impl BakeAnvilSurface {
                 let mut bases=[[[0.0;3];3];4];
                 for lane in 0..4 {
                     let pos=mix(points,bc[lane]); let n=unit(mix([nn[0],nn[1],nn[2]],bc[lane]))?;
-                    let t=unit(sub(tangent,n.map(|v|v*dot(tangent,n))))?; let b=cross(n,t);
+                    let authored=authored_tangents.map(|ts|mix(ts,bc[lane]));
+                    let direction=authored.map_or(tangent,|t|[t[0],t[1],t[2]]);
+                    let sign=authored.map_or(1.0,|t|t[3].signum());
+                    if sign==0.0{return Err("source tangent sign crosses zero inside a surface triangle".into());}
+                    let t=unit(sub(direction,n.map(|v|v*dot(direction,n))))?; let b=cross(n,t).map(|v|v*sign);
                     bases[lane]=[t,b,n];
                     let source_pos=material.frame.point_to_source(pos);
                     let source_n=material.frame.direction_to_source(n);
+                    let source_sign=if material.frame.flips_winding(){-sign}else{sign};
                     for varying in prepared.shader.interface().inputs.iter().filter(|v|v.used) {
                         let role=contract.varying(&varying.label.name,varying.label.index).ok_or("unvalidated varying")?;
                         let value=match role {
                             VaryingRole::Screen=>[(cx+x+lane as u32%2) as f32+0.5,(cy+y+lane as u32/2) as f32+0.5,0.0,1.0],
                             VaryingRole::Colour=>mix(colour.ok_or("source COLOR0 missing")?,bc[lane]),
                             VaryingRole::Normal=>[source_n[0],source_n[1],source_n[2],1.0],
+                            VaryingRole::NormalSign=>[source_n[0],source_n[1],source_n[2],source_sign],
+                            VaryingRole::Tangent=>{let t=material.frame.direction_to_source(t);[t[0],t[1],t[2],0.0]},
                             VaryingRole::WorldPosition=>[source_pos[0],source_pos[1],source_pos[2],0.0],
                             VaryingRole::Clip=>[0.0,0.0,0.0,1.0],
                             VaryingRole::Uv=>{let uv=mix(mesh_uv.ok_or("source TEXCOORD0 missing")?,bc[lane]);[uv[0],uv[1],0.0,0.0]},
@@ -341,9 +386,14 @@ impl BakeAnvilSurface {
                 positions.push(p[vertices[k]]);output_normals.push(normals[vertices[k]]);
                 if let Some(c)=colours {output_colours.push(c[vertices[k]]);}
                 if let Some(uv)=source_uv {original_uvs.push(uv[vertices[k]]);}
-                let local_t=unit(sub(p[vertices[1]],p[vertices[0]]))?;
-                let n=unit(normals[vertices[k]])?;let t=unit(sub(local_t,n.map(|v|v*dot(local_t,n))))?;
-                tangents.push([t[0],t[1],t[2],1.0]);
+                if let Some(ts)=source_tangents {
+                    // Keep the authored frame for both the retained Game vertex program and the baked normal.
+                    tangents.push(ts[vertices[k]]);
+                } else {
+                    let local_t=unit(sub(p[vertices[1]],p[vertices[0]]))?;
+                    let n=unit(normals[vertices[k]])?;let t=unit(sub(local_t,n.map(|v|v*dot(local_t,n))))?;
+                    tangents.push([t[0],t[1],t[2],1.0]);
+                }
                 let a=[[2.0,2.0],[2.0+extent,2.0],[2.0,2.0+extent]][k];
                 uvs.push([(cx as f32+a[0])/side as f32,(cy as f32+a[1])/side as f32]);
             }
@@ -423,8 +473,11 @@ impl Pass for BakeAnvilSurface {
                             world.insert(m,binding);
                         }
                         world.insert(m,Name(format!("Material {:#x}: placement {} surface bake",material.index_id,entity.index())));
+                        let terrain_notice=if matches!(Contract::of(&material),Some(Contract::Cliffs|Contract::OutBorder)){
+                            "; preview omits terrain sediments via the stated zero sediment-ID view"
+                        }else{""};
                         world.insert(m,AnvilRenderStatus{source:"bake-anvil-surface".into(),template:material.template_name.clone(),
-                            reason:format!("bake-anvil-surface: {template} own G-buffer program, placement world position/normal and original mesh inputs; {size}px TEXCOORD1 atlas at {} texels/m; static camera {} m above primitive centre",self.texels_per_metre,self.camera_distance),unsupported:false});
+                            reason:format!("bake-anvil-surface: {template} own G-buffer program, placement world position/normal and original mesh inputs; {size}px TEXCOORD1 atlas at {} texels/m; static camera {} m above primitive centre{terrain_notice}",self.texels_per_metre,self.camera_distance),unsupported:false});
                         primitive.material=Some(m);*p=primitive;changed=true;
                         log.count("placement primitives surface-baked with their own program",1);
                     }
@@ -450,7 +503,13 @@ impl Pass for BakeAnvilSurface {
         assert_eq!(Contract::Cliffs.varying("TEXCOORD",0),None);
         assert_eq!(Contract::UniqueGradient.varying("TEXCOORD",7),None);
         assert_eq!(Contract::named("MAD_RawTerrainBlend"),None);
-        assert_eq!(Contract::named("MAD_OutBorder"),None);
+        assert_eq!(Contract::named("MAD_Raw_TerrainBlend"),Some(Contract::RawTerrain));
+        assert_eq!(Contract::named("MAD_OutBorder"),Some(Contract::OutBorder));
+        assert_eq!(Contract::OutBorder.varying("TEXCOORD",2),Some(VaryingRole::Tangent));
+        assert_eq!(Contract::OutBorder.varying("TEXCOORD",3),Some(VaryingRole::NormalSign));
+        assert_eq!(Contract::RawTerrain.varying("TEXCOORD",1),Some(VaryingRole::WorldPosition));
+        let missing=Contract::RawTerrain.terrain_requirements().unwrap();
+        assert!(missing.contains("t50/t51") && missing.contains("u5 feedback") && missing.contains("cb0[146,148,149]"));
     }
     #[test]fn gradient_requires_mask_uv_and_checks_capacity_before_shader_inputs(){
         let pass=BakeAnvilSurface{texels_per_metre:8.0,max_size:2048,max_chart:256,max_texels:1024,
@@ -469,6 +528,26 @@ impl Pass for BakeAnvilSurface {
         primitive.streams.insert(Semantic::TexCoord(0),Stream::F32x2(vec![[0.0,0.0],[0.5,0.0],[0.0,0.5]]));
         assert!(failure(&primitive).contains("surface capacity"));
         assert!(!failure(&primitive).contains("programs were not read"));
+    }
+    #[test]fn outborder_refuses_a_missing_authored_frame_and_raw_terrain_names_its_engine_resources(){
+        let pass=BakeAnvilSurface{texels_per_metre:8.0,max_size:2048,max_chart:256,max_texels:1024,
+            terrain_ao:0.5,mip_bias:0.0,camera_distance:1000000.0,address:UnstatedAddress::Wrap};
+        let mut material=AnvilMaterial{index_id:18,template:None,template_name:Some("MAD_OutBorder".into()),
+            bindings:vec![],values:vec![],texture_set:vec![],textures:vec![],defaults:vec![],
+            frame:primase_core::frame::SourceFrame::WORLD,shaders:None,
+            flags:crate::components::MaterialFlags{blend_mode:0,alpha_display_mode:0,alpha_test_value:0,booleans:[0;35]}};
+        let primitive=Primitive{topology:Topology::Triangles,indices:None,material:None,streams:BTreeMap::from([
+            (Semantic::Position,Stream::F32x3(vec![[0.0,0.0,0.0],[1.0,0.0,0.0],[0.0,1.0,0.0]])),
+            (Semantic::Normal,Stream::F32x3(vec![[0.0,0.0,1.0];3])),
+            (Semantic::TexCoord(0),Stream::F32x2(vec![[0.0,0.0];3]))])};
+        let world=World::new();
+        let reason=match pass.bake_primitive(&world,&primitive,&material,Transform::IDENTITY,0){
+            Err(reason)=>reason,Ok(_)=>panic!("OutBorder cannot invent a tangent")};
+        assert!(reason.contains("original tangent and bitangent sign"));
+        material.template_name=Some("MAD_Raw_TerrainBlend".into());
+        let reason=match pass.bake_primitive(&world,&primitive,&material,Transform::IDENTITY,0){
+            Err(reason)=>reason,Ok(_)=>panic!("terrain shader cannot invent engine caches")};
+        assert!(reason.contains("t15 terrain height atlas") && reason.contains("t45/t46") && reason.contains("u5 feedback"));
     }
     #[test] fn chart_helper_lanes_stay_affine_beyond_the_triangle() {
         let a=barycentric(2.5,2.5,16.0);let b=barycentric(3.5,2.5,16.0);
