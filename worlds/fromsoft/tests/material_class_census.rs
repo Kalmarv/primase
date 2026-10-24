@@ -77,7 +77,7 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>, map: &str) -> Re
 
 #[test]
 fn the_shader_families_the_maps_use() -> Result<()> {
-    let Some(dll) = primase_testdata::tool(primase_testdata::Tool::Oodle6) else {
+    let Some(dll) = primase_testdata::oodle(primase_testdata::Tool::Oodle6) else {
         return Ok(());
     };
     let dll = common::oodle(dll)?;
