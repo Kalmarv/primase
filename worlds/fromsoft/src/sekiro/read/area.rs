@@ -284,10 +284,9 @@ fn inside(bounds: &[[f32; 3]; 2], t: &Transform, o: &Options) -> bool {
     let mut min = [f32::INFINITY; 3];
     let mut max = [f32::NEG_INFINITY; 3];
     for mask in 0..8 {
-        let p = crate::pose::point(
-            t,
-            std::array::from_fn(|i| bounds[usize::from(mask & (1 << i) != 0)][i]),
-        );
+        let p = t.apply(std::array::from_fn(|i| {
+            bounds[usize::from(mask & (1 << i) != 0)][i]
+        }));
         let p = [p[0], p[1], -p[2]];
         for i in 0..3 {
             min[i] = min[i].min(p[i]);

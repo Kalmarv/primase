@@ -27,22 +27,6 @@ pub struct Report {
     /// The map layout's generation does not say which regions are spawn points: none read.
     pub spawn_points_not_read: bool,
 }
-/// `parent` then `child`.
-fn compose(parent: &Transform, child: &Transform) -> Transform {
-    let direction = |v: [f32; 3]| -> [f32; 3] {
-        std::array::from_fn(|i| {
-            parent.cols[0][i] * v[0] + parent.cols[1][i] * v[1] + parent.cols[2][i] * v[2]
-        })
-    };
-    Transform {
-        cols: [
-            direction(child.cols[0]),
-            direction(child.cols[1]),
-            direction(child.cols[2]),
-            crate::pose::point(parent, child.cols[3]),
-        ],
-    }
-}
 fn unit(v: [f32; 3]) -> Result<[f32; 3]> {
     let n = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     if n > 0. && n.is_finite() {
@@ -54,7 +38,7 @@ fn unit(v: [f32; 3]) -> Result<[f32; 3]> {
 /// A BTL light where it stands: its stored position and rotation through the map offset `map` (world frame), and
 /// its record.
 pub fn light_record(light: &crate::btl::Light, map: &Transform) -> Result<(Transform, LightSource)> {
-    let transform = compose(map, &euler_transform(light.position, light.rotation, [1.; 3], 0)?);
+    let transform = map.compose(&euler_transform(light.position, light.rotation, [1.; 3], 0)?);
     let record = LightSource {
         name: light.name.clone(),
         kind: match light.kind {
@@ -150,8 +134,8 @@ pub fn assemble(
                         hang_segments.push(HangSegment {
                             file: name.clone(),
                             points: [
-                                crate::pose::point(&map, reflect(edge.points[0])),
-                                crate::pose::point(&map, reflect(edge.points[1])),
+                                map.apply(reflect(edge.points[0])),
+                                map.apply(reflect(edge.points[1])),
                             ],
                         });
                     }

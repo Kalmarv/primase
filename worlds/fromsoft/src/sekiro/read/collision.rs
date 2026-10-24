@@ -134,7 +134,7 @@ pub fn read(
                 triangles: raw
                     .triangles
                     .into_iter()
-                    .map(|t| t.map(|v| crate::pose::point(&transform, FRAME.point(v))))
+                    .map(|t| t.map(|v| transform.apply(FRAME.point(v))))
                     .collect(),
                 materials: raw.materials,
                 invalid_material_keys: raw.invalid_material_keys,

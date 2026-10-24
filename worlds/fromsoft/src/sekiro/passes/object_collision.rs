@@ -388,7 +388,7 @@ impl Pass for LowerFromSoftObjectCollision {
                     1,
                 );
                 for (tri, material) in triangles.into_iter().zip(materials) {
-                    let v = tri.map(|p| crate::pose::point(transform, p));
+                    let v = tri.map(|p| transform.apply(p));
                     if crop.is_some_and(|c| beyond(&v, c)) {
                         log.count("triangles beyond the reach around the read region, left out", 1);
                         continue;
