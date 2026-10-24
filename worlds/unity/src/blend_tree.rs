@@ -8,13 +8,18 @@
 //!   below the first threshold the first child plays alone, at or above the last the last child; between two the two
 //!   neighbouring children play with weights that are linear in the value (Unity's manual, "1D Blending").
 //! - direct (`blend_type` 4): child `i`'s weight is the value of its own parameter (`direct_events[i]`); with
-//!   `normalized_blend_values` they are divided by their sum (Unity's manual, "Direct Blending"; the manual's wording
-//!   is the only source of this rule, no engine number checks it yet).
+//!   `normalized_blend_values` they are divided by their sum only where the sum is above 1 (a sum of 1 or less stays as
+//!   it is, so 0.2 and 0.1 play at 0.2 and 0.1, and all zeros play nothing). The manual says they are divided by their
+//!   sum; Unity 6000.6.4f1's editor does it only above 1 (`primase-oracles/unity/blendtree`, 8 points).
+//! - freeform cartesian 2D (`blend_type` 3): the gradient bands of Johansen's thesis (eq. 6.6): child `i`'s weight is
+//!   `h_i = min over j != i of (1 - (p - p_i) . (p_j - p_i) / |p_j - p_i|^2)`, clamped at 0, then divided by their sum
+//!   (all 0 where the sum is: nothing plays). The editor matches it to 1e-7 on 49 points of the bird's Idling positions
+//!   and on an uneven 6-child set, outside the hull too (`primase-oracles/unity/blendtree`).
 //! - a child that is itself an inner node splits its weight among its own children (weights multiply).
 //!
-//! The 2D types (simple directional 1, freeform directional 2, freeform cartesian 3) are refused by name: their weights
-//! are Unity's gradient-band algorithms (Johansen's thesis, chapters 6.3 and 6.3.1, for the freeform ones) and are not
-//! written here until an engine's own numbers can check them.
+//! The other 2D types (simple directional 1, freeform directional 2) are refused by name: their weights are Unity's
+//! polar gradient bands (Johansen's thesis, chapter 6.3.1, for the freeform one) and are not written here until a model
+//! matches an engine's numbers.
 
 use std::collections::BTreeMap;
 
@@ -126,7 +131,7 @@ fn node_weights(
         4 => direct(node, parameters)?,
         1 => return Err(Error::Unsupported("a simple directional 2D blend tree".into())),
         2 => return Err(Error::Unsupported("a freeform directional 2D blend tree".into())),
-        3 => return Err(Error::Unsupported("a freeform cartesian 2D blend tree".into())),
+        3 => freeform_cartesian(node, parameters)?,
         k => return Err(Error::Unsupported(format!("a blend tree of type {k}"))),
     };
     for (child, share) in node.children.iter().zip(shares) {
@@ -195,14 +200,55 @@ fn direct(node: &BlendNode, parameters: &Parameters) -> Result<Vec<f64>> {
     }
     if node.normalized_blend_values {
         let sum: f64 = out.iter().sum();
-        if sum <= 0.0 {
-            return Err(invalid("a normalised direct blend tree whose weights are all 0"));
-        }
-        for w in &mut out {
-            *w /= sum;
+        if sum > 1.0 {
+            for w in &mut out {
+                *w /= sum;
+            }
         }
     }
     Ok(out)
+}
+
+/// The children's shares of a freeform cartesian node: see the module documentation.
+fn freeform_cartesian(node: &BlendNode, parameters: &Parameters) -> Result<Vec<f64>> {
+    let n = node.children.len();
+    if node.positions.len() != n {
+        return Err(invalid(format!(
+            "a freeform cartesian blend tree of {n} children with {} positions",
+            node.positions.len()
+        )));
+    }
+    if n == 1 {
+        return Ok(vec![1.0]);
+    }
+    let p = [
+        f64::from(parameters.get(node.event_id)?),
+        f64::from(parameters.get(node.event_y_id)?),
+    ];
+    let at = |i: usize| node.positions[i].map(f64::from);
+    let mut h = Vec::with_capacity(n);
+    for i in 0..n {
+        let (pi, mut least) = (at(i), f64::INFINITY);
+        for j in (0..n).filter(|&j| j != i) {
+            let d = [at(j)[0] - pi[0], at(j)[1] - pi[1]];
+            let length_squared = d[0] * d[0] + d[1] * d[1];
+            if length_squared == 0.0 {
+                return Err(invalid(format!(
+                    "a freeform cartesian blend tree whose children {i} and {j} are at one position"
+                )));
+            }
+            let r = [p[0] - pi[0], p[1] - pi[1]];
+            least = least.min(1.0 - (r[0] * d[0] + r[1] * d[1]) / length_squared);
+        }
+        h.push(least.max(0.0));
+    }
+    let sum: f64 = h.iter().sum();
+    if sum > 0.0 {
+        for w in &mut h {
+            *w /= sum;
+        }
+    }
+    Ok(h)
 }
 
 #[cfg(test)]
@@ -286,9 +332,9 @@ mod tests {
         assert!(child_weights(&unsorted, &p).is_err());
         assert!(child_weights(&tree, &parameters(&[("x", 0.5)])).is_err());
         let mut twod = tree.clone();
-        twod[0].blend_type = 3;
+        twod[0].blend_type = 2;
         let e = child_weights(&twod, &p).unwrap_err().to_string();
-        assert!(e.contains("freeform cartesian"), "{e}");
+        assert!(e.contains("freeform directional"), "{e}");
     }
 
     /// A direct tree takes the parameters as the weights, or their shares of their sum when it states them normalised.
@@ -301,8 +347,73 @@ mod tests {
         assert_eq!(child_weights(&tree, &p).unwrap(), [(1, 1.0), (2, 3.0)]);
         tree[0].normalized_blend_values = true;
         assert_eq!(child_weights(&tree, &p).unwrap(), [(1, 0.25), (2, 0.75)]);
-        assert!(child_weights(&tree, &parameters(&[("a", 0.0), ("b", 0.0)])).is_err());
+        // normalised only where the sum is above 1 (Unity's editor): a sum of 0.3 plays as it is, all zeros play nothing
+        let weights = |a: f32, b: f32| child_weights(&tree, &parameters(&[("a", a), ("b", b)])).unwrap();
+        assert_eq!(weights(1.0, 1.0), [(1, 0.5), (2, 0.5)]);
+        let small = weights(0.2, 0.1);
+        assert!(
+            (small[0].1 - 0.2).abs() < 1e-7 && (small[1].1 - 0.1).abs() < 1e-7,
+            "{small:?}"
+        );
+        assert!(weights(0.0, 0.0).is_empty());
         assert!(child_weights(&tree, &parameters(&[("a", -1.0), ("b", 2.0)])).is_err());
+    }
+
+    /// A freeform cartesian node: two children at (0, 0) and (1, 0) share a point a quarter of the way as 0.75 and 0.25
+    /// (worked by hand from eq. 6.6), and six children at the positions of the editor's "uneven" case give the clip weights
+    /// Unity 6000.6.4f1 gave at four of its points (`primase-oracles/unity/blendtree`, the oracle's printed to 9 digits).
+    #[test]
+    fn a_freeform_cartesian_tree_weights_by_the_gradient_bands() {
+        let mut root = node(3, name_hash("x"), &[1, 2], &[], NONE);
+        root.event_y_id = name_hash("y");
+        root.positions = vec![[0.0, 0.0], [1.0, 0.0]];
+        let mut tree = vec![root, leaf(0), leaf(1)];
+        let at = |tree: &[BlendNode], x: f32, y: f32| {
+            child_weights(tree, &parameters(&[("x", x), ("y", y)])).unwrap()
+        };
+        assert_eq!(at(&tree, 0.25, 0.0), [(0, 0.75), (1, 0.25)]);
+        // a point past a child plays that child alone
+        assert_eq!(at(&tree, 3.0, 0.0), [(1, 1.0)]);
+        assert_eq!(at(&tree, -2.0, 5.0), [(0, 1.0)]);
+        // the editor's uneven set
+        let positions = [
+            [0.0, 0.0],
+            [0.0, 1.0],
+            [2.0, 0.0],
+            [0.0, -0.5],
+            [-1.0, 1.0],
+            [1.0, -1.0],
+        ];
+        let mut uneven = node(3, name_hash("x"), &[1, 2, 3, 4, 5, 6], &[], NONE);
+        uneven.event_y_id = name_hash("y");
+        uneven.positions = positions.to_vec();
+        let mut six = vec![uneven];
+        six.extend((0..6).map(leaf));
+        for (x, y, want) in [
+            (-1.5, -0.5, vec![(3, 0.538_461_6), (4, 0.461_538_5)]),
+            (-0.75, 0.0, vec![(0, 0.625), (4, 0.375)]),
+            (-0.75, -0.5, vec![(3, 0.860_215), (4, 0.139_784_95)]),
+            (-0.75, 0.5, vec![(0, 0.3), (1, 0.2), (4, 0.5)]),
+        ] {
+            let got = at(&six, x, y);
+            assert_eq!(got.len(), want.len(), "({x}, {y}): {got:?}");
+            for ((clip, weight), (want_clip, want_weight)) in got.iter().zip(&want) {
+                assert_eq!(clip, want_clip, "({x}, {y}): {got:?}");
+                assert!((weight - want_weight).abs() < 1e-6, "({x}, {y}): {got:?}");
+            }
+        }
+        // children at one position, positions that do not match the children, and a missing parameter are errors
+        tree[0].positions = vec![[0.0, 0.0], [0.0, 0.0]];
+        assert!(child_weights(&tree, &parameters(&[("x", 0.0), ("y", 0.0)])).is_err());
+        tree[0].positions = vec![[0.0, 0.0]];
+        assert!(child_weights(&tree, &parameters(&[("x", 0.0), ("y", 0.0)])).is_err());
+        tree[0].positions = vec![[0.0, 0.0], [1.0, 0.0]];
+        assert!(child_weights(&tree, &parameters(&[("x", 0.0)])).is_err());
+        // a single child plays alone wherever the point is
+        let mut one = vec![node(3, name_hash("x"), &[1], &[], NONE), leaf(9)];
+        one[0].event_y_id = name_hash("y");
+        one[0].positions = vec![[4.0, 4.0]];
+        assert_eq!(at(&one, -7.0, 2.0), [(9, 1.0)]);
     }
 
     /// A NaN or an infinity is not a parameter value: refused where it is set and where the controller's defaults hold it, and
