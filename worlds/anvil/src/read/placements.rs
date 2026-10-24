@@ -1860,6 +1860,8 @@ impl<'a> Placer<'a> {
     /// object it shows or a shape its RigidBody names that can't be read is recorded in [`Placed::refused`] instead,
     /// and only what needs it is left out.
     pub fn place(&mut self, at: At, placed: &mut Placed) -> Result<(), Error> {
+        let starts = [placed.placements.len(), placed.collisions.len(), placed.lakes.len(),
+            placed.deferred_decals.len(), placed.grass.len()];
         let r = self.archive.resource(at)?;
         let (e, group) = match r.type_id {
             ENTITY => (
@@ -2388,6 +2390,41 @@ impl<'a> Placer<'a> {
                     placed.collisions.push(p);
                 }
             }
+        }
+        // Preserve bounded opaque component bodies once per source owner, not once per mesh instance.
+        // Water/decal Raw bodies already have typed readers above; other Raw bodies only had length rules.
+        let components: Vec<_> = e.components.iter().filter_map(|c| {
+            let (bytes, status) = match &c.body {
+                ComponentBody::Raw(bytes) if !matches!(c.kind, WATER_COMPONENT | HOUDINI_DECAL_INSTANCER | STATIC_DDECAL) =>
+                    (bytes, "length-rule-only; semantic fields not decoded".to_owned()),
+                ComponentBody::Unread(bytes) => (bytes, "unread; extent delimited by component headers".to_owned()),
+                ComponentBody::Refused { bytes, why } => (bytes, format!("refused: {}", why.reason())),
+                _ => return None,
+            };
+            Some(crate::components::SourceComponent { type_id: c.kind, id: c.id, status, bytes: bytes.clone() })
+        }).collect();
+        if !components.is_empty() {
+            let lists = [&placed.placements, &placed.collisions, &placed.lakes, &placed.deferred_decals, &placed.grass];
+            let occurrences: Vec<_> = lists.into_iter().zip(starts)
+                .flat_map(|(list, start)| list.iter().skip(start).copied()).collect();
+            let target = self.world.spawn();
+            self.world.insert(target, Name(format!("{name} source components")));
+            self.world.insert(target, self.frame.transform(&transform(&e.matrix, e.scale)));
+            self.world.insert(target, bounds);
+            if let Some(layers) = &layers { self.world.insert(target, layers.clone()); }
+            if let Some(state) = state { self.world.insert(target, state); }
+            if occurrences.is_empty() {
+                self.world.insert(target, crate::components::AnvilRenderStatus {
+                    source: format!("Entity {:#x}", r.class_id), template: None, unsupported: true,
+                    reason: "source components retained in anvil.source_components; no static visual decoded for this owner".into(),
+                });
+            }
+            // Include the source record in listed/state selection, and retain it through each occurrence's closure.
+            placed.placements.push(target);
+            for occurrence in occurrences {
+                self.world.insert(occurrence, crate::components::AnvilSourceOwner { source: target });
+            }
+            self.world.insert(target, crate::components::AnvilSourceComponents { owner: r.class_id, components });
         }
         Ok(())
     }

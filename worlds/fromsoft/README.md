@@ -538,9 +538,12 @@ both games (Elden Ring's with its own keys), checking Elden Ring's assets for a 
 them too.
 `tests/draw_param_census.rs` (install-gated) prints every draw-param field the chosen
 maps store, group, key and value. Core states fog and exposure (`core.atmosphere`:
-`Atmosphere`, `Fog`, `FogFalloff`, `Exposure`); `lower-fromsoft-environment` does not
-fill them yet, since the fog and tone keys, and the units of their values, are known only
-from that census. Until then the fog, tone and exposure fields are read and counted.
+`Atmosphere`, `Fog`, `FogFalloff`, `Exposure`, `VolumetricFog`); `lower-fromsoft-environment`
+keeps the `VolumetricFog ParamEditor` fields the census shows in `Atmosphere::volumetric`
+with the file's own names and values, unconverted (the densities are in a unit the group's
+`GameScale` sets and no source establishes, so the pass counts them as not drawn). It
+fills no `Fog` or `Exposure`: the tone keys and the distance-fog meaning of the values are
+not established, so those fields are read and counted.
 
 A character's or part's files are kept beyond the model and its clips:
 

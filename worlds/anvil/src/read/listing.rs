@@ -52,10 +52,13 @@ pub enum Kind {
     Impostor,
     LayeredSky,
     WorldAmbiance,
+    GiDynResource,
+    AmbiancePreset,
+    ForecastPreset,
 }
 
 /// Every kind, in declaration order.
-pub const KINDS: [Kind; 27] = [
+pub const KINDS: [Kind; 30] = [
     Kind::Mesh,
     Kind::Material,
     Kind::MaterialTemplate,
@@ -83,6 +86,9 @@ pub const KINDS: [Kind; 27] = [
     Kind::Impostor,
     Kind::LayeredSky,
     Kind::WorldAmbiance,
+    Kind::GiDynResource,
+    Kind::AmbiancePreset,
+    Kind::ForecastPreset,
 ];
 
 impl Kind {
@@ -121,6 +127,9 @@ impl Kind {
             Kind::Impostor => crate::read::impostor::IMPOSTOR,
             Kind::LayeredSky => crate::read::sky::LAYERED_SKY,
             Kind::WorldAmbiance => crate::read::sky::WORLD_AMBIANCE,
+            Kind::GiDynResource => crate::read::gidyn::GI_DYN_RESOURCE,
+            Kind::AmbiancePreset => crate::read::look::AMBIANCE_PRESET,
+            Kind::ForecastPreset => crate::read::look::FORECAST_PRESET,
         }
     }
 
@@ -154,6 +163,9 @@ impl Kind {
             Kind::Impostor => "Impostor",
             Kind::LayeredSky => "LayeredSky",
             Kind::WorldAmbiance => "WorldAmbiance",
+            Kind::GiDynResource => "GIDynResource",
+            Kind::AmbiancePreset => "AmbianceAndTimeOfDayPreset",
+            Kind::ForecastPreset => "ForecastPreset",
         }
     }
 }

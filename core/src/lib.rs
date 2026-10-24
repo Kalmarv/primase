@@ -5,7 +5,7 @@
 
 pub mod asset;
 mod atmosphere;
-pub use atmosphere::{Atmosphere, Exposure, Fog, FogFalloff};
+pub use atmosphere::{Atmosphere, Exposure, Fog, FogFalloff, VolumetricFog};
 pub mod clip;
 pub mod components;
 pub mod convert;

@@ -3,6 +3,8 @@
 use primase_core::{Component, Entity, World};
 
 mod impostor;
+mod coverage;
+pub use coverage::{AnvilGiDyn, AnvilLookPreset, AnvilSourceComponents, AnvilSourceOwner, SourceComponent};
 pub use impostor::{AnvilImpostor, AnvilRenderStatus, AnvilSpotLight, AnvilSky, AnvilFarClass, AnvilFarSelected, AnvilFarTerrain, AnvilSkyControllers, AnvilSurfaceBake};
 
 /// A MeshShape's triangle geometry ([`crate::read::mesh_shape::Geometry`]) on its prototype: positions converted into

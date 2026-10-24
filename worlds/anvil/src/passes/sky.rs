@@ -186,7 +186,7 @@ impl Pass for LowerAnvilSky{
             world.insert_resource(primase_core::Environment{sun:Some(sun),ambient:Some(primase_core::Ambient{
                 intensity:1.0,light:primase_core::AmbientLight::Flat(environment.ambient)})});
             // No exposure track's units have been established for Anvil: leave exposure unstated, not guessed.
-            world.insert_resource(primase_core::Atmosphere{fog:environment.fog.clone(),exposure:None});
+            world.insert_resource(primase_core::Atmosphere{fog:environment.fog.clone(),exposure:None,volumetric:None});
             if self.sphere{
                 let material=world.spawn();world.insert(material,PbrMaterial{base_color:[1.0;4],metallic:0.0,roughness:1.0,
                     double_sided:true,shading:Shading::Unlit,..Default::default()});

@@ -10,7 +10,13 @@
 //!   diffuse colour. The census (`tests/draw_param_census.rs`, m11_01 and m20_00) shows the angle in radians (-0.349066
 //!   and -1.570796 are -20 and -90 degrees); its axis convention is not established. It is read as the X and Y Euler
 //!   rotations of a light that shines along its local -Z, placed as the map's other FromSoft rotations are
-//!   (`msb::euler_transform`; BTL spot lights are placed so): a stated approximation, counted. A colour is taken as
+//!   (`msb::euler_transform`; BTL spot lights are placed so): a stated approximation, counted.
+//!
+//! The `VolumetricFog ParamEditor` group's fields the census shows (`VolumetricFog Global FixedDensity`, the height
+//! density keys, `SkyLight SkyColor`, `DirLight DirectColor`, `GameScale` ...) are kept in `core.atmosphere`'s
+//! `volumetric` with the file's own names and values, unconverted: the densities are in a unit the group's `GameScale`
+//! sets and no source establishes, so the omission is counted and the renderer draws nothing from it. This is the
+//! faithful carrying of the values, not a distance-fog approximation. A colour is taken as
 //!   linear RGB and its fourth float as the light's intensity multiplier (2.0 on m11_01's main light, 0 to 0.3 on its
 //!   fills: counted), times the program's calibration (`lux-per-unit`). A sun whose colour is black or whose multiplier
 //!   is 0 (or not finite, or negative) is none, counted. The census files store no `Hemi Color` field at all, so a
@@ -22,13 +28,66 @@
 use super::settings::Factor;
 use crate::sekiro::source::DrawParam;
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
-use primase_core::{Ambient, AmbientLight, Component, Environment, Light, LightKind, Name, Resource, Source, World};
+use primase_core::{
+    Ambient, AmbientLight, Atmosphere, Component, Environment, Light, LightKind, Name, Resource, Source, VolumetricFog,
+    World,
+};
 
 const LIGHT_SET: &str = "LightSet ParamEditor";
 const ANGLE: &str = "Directional Light Angle0";
 const DIFFUSE: &str = "Directional Light DiffColor0";
 const HEMI_UP: &str = "Directional Light Hemi Color Up";
 const HEMI_DOWN: &str = "Directional Light Hemi Color Down";
+const VOLUMETRIC: &str = "VolumetricFog ParamEditor";
+
+/// What the lab and the notices say of a volumetric fog this pass keeps: the one place the statement is made.
+const VOLUMETRIC_NOT_DRAWN: &str = "volumetric fog kept in core.atmosphere's volumetric fog with the file's own names and values, unconverted: a froxel volume whose densities are in a unit the group's GameScale sets and no source establishes, so no fog is drawn from it until a capture of the game establishes the unit";
+
+fn float(group: &crate::sekiro::source::DrawGroup, key: &str) -> Option<f32> {
+    match group.value(key) {
+        Some(crate::gparam::Value::Float(x)) if (*x as f32).is_finite() => Some(*x as f32),
+        _ => None,
+    }
+}
+
+fn vec4(group: &crate::sekiro::source::DrawGroup, key: &str) -> Option<[f32; 4]> {
+    match group.value(key) {
+        Some(crate::gparam::Value::Vec4(c)) if c.iter().all(|x| x.is_finite()) => Some(*c),
+        _ => None,
+    }
+}
+
+/// The group's volumetric fog fields the census shows, as stored, and how many of the group's fields they are.
+fn volumetric(group: &crate::sekiro::source::DrawGroup) -> (VolumetricFog, usize) {
+    let v = VolumetricFog {
+        enabled: match group.value("VolumetricFog Enable") {
+            Some(crate::gparam::Value::Bool(b)) => Some(*b),
+            _ => None,
+        },
+        game_scale: float(group, "VolumetricFog GameScale"),
+        near_depth: float(group, "VolumetricFog NearDepth"),
+        far_depth: float(group, "VolumetricFog FarDepth"),
+        near_offset: float(group, "VolumetricFog NearOffset"),
+        fixed_density: float(group, "VolumetricFog Global FixedDensity"),
+        scattering_g: float(group, "VolumetricFog Global ScatteringG"),
+        local_light_scale: float(group, "VolumetricFog Global LocalLightScale"),
+        local_light_dist_scale: float(group, "VolumetricFog Global LocalLightDistScale"),
+        height_fog_distribution: float(group, "VolumetricFog Global HeightFogDistribution"),
+        height_fog_offset: float(group, "VolumetricFog Global HeightFogOffset"),
+        height_fog_density_scale: float(group, "VolumetricFog Global HeightFogDensity Scale"),
+        sky_colour: vec4(group, "VolumetricFog SkyLight SkyColor"),
+        sky_start_dist: float(group, "VolumetricFog SkyLight StartDist"),
+        directional_light_bank: match group.value("VolumetricFog DirLight LightBankId") {
+            Some(crate::gparam::Value::Uint(b)) => u32::try_from(*b).ok(),
+            _ => None,
+        },
+        directional_direct_colour: vec4(group, "VolumetricFog DirLight DirectColor"),
+        directional_opposite_colour: vec4(group, "VolumetricFog DirLight OppositeColor"),
+        directional_start_dist: float(group, "VolumetricFog DirLight StartDist"),
+    };
+    let kept = v.fields().len();
+    (v, kept)
+}
 
 /// `lower-fromsoft-environment{lux-per-unit}`: see the module documentation.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -74,9 +133,7 @@ fn colour(value: Option<&crate::gparam::Value>) -> Option<([f32; 3], f32)> {
 fn why_not_lowered(group: &str) -> &'static str {
     match group {
         LIGHT_SET => "specular, sharpness, occlusion, second directional and local lights: no core.light fields",
-        "VolumetricFog ParamEditor" => {
-            "volumetric fog (a froxel volume: a fixed and a height density, sky and directional in-scatter colours with a phase): core.atmosphere's distance fog is a different model, and the density's unit (the group's GameScale) is not established"
-        }
+        VOLUMETRIC => "a volumetric fog key this pass does not know: only the keys of the census are kept in core.atmosphere's volumetric fog",
         "FogParamEditor" | "Fog Volume" => {
             "fog: core.atmosphere states fog, but no census file stores this group, so its keys and units are not established"
         }
@@ -106,7 +163,7 @@ impl Pass for LowerFromSoftEnvironment {
         true
     }
     fn provides(&self) -> &[&'static str] {
-        &[Light::NAME, Environment::NAME]
+        &[Light::NAME, Environment::NAME, Atmosphere::NAME]
     }
     fn approximates(&self) -> &'static str {
         "the sun's angle (radians) read as Euler rotations of a light shining along -Z; stored colours as linear; intensity the colour's fourth float by the calibration; the ambient's equator the mean of its hemispheres"
@@ -207,6 +264,17 @@ impl Pass for LowerFromSoftEnvironment {
                 environment.ambient = ambient;
             }
             world.insert_resource(environment);
+        }
+        if let Some(group) = env.group(VOLUMETRIC) {
+            let (fog, kept) = volumetric(group);
+            if kept > 0 {
+                let mut atmosphere = world.resource::<Atmosphere>().cloned().unwrap_or_default();
+                atmosphere.volumetric = Some(fog);
+                world.insert_resource(atmosphere);
+                *lowered.entry(VOLUMETRIC).or_default() += kept;
+                log.count("volumetric fogs kept in the source's units", 1);
+                log.omit(VOLUMETRIC_NOT_DRAWN, 1);
+            }
         }
         // every field read and not lowered, by group and why
         for group in &env.groups {
@@ -420,6 +488,51 @@ mod tests {
         let log = run(&mut bare, 1.0);
         assert_eq!(log.counts["areas with no draw-param environment"], 1);
         assert!(bare.resource::<Environment>().is_none());
+    }
+
+    #[test]
+    fn a_volumetric_fog_group_is_kept_in_the_files_units_and_counted_as_not_drawn() {
+        // m11_01_0000's values (tests/draw_param_census.rs): GameScale 12, FixedDensity 0, height fog 0.075
+        let mut w = world_with(vec![group(
+            VOLUMETRIC,
+            0,
+            vec![
+                field("VolumetricFog Enable", Value::Bool(true)),
+                field("VolumetricFog GameScale", Value::Float(12.0)),
+                field("VolumetricFog Global FixedDensity", Value::Float(0.0)),
+                field("VolumetricFog Global HeightFogDensity Scale", Value::Float(0.07500000298023224)),
+                field("VolumetricFog SkyLight SkyColor", Value::Vec4([0.062745, 0.070588, 0.078431, 0.0])),
+                field("VolumetricFog DirLight LightBankId", Value::Uint(111010000)),
+                field("VolumetricFog Something Unknown", Value::Float(1.0)),
+            ],
+        )]);
+        let log = run(&mut w, 1.0);
+        let atmosphere = w.resource::<Atmosphere>().unwrap();
+        assert_eq!((atmosphere.fog.clone(), atmosphere.exposure.clone()), (None, None));
+        let v = atmosphere.volumetric.as_ref().unwrap();
+        assert_eq!(
+            (v.enabled, v.game_scale, v.fixed_density, v.height_fog_density_scale, v.directional_light_bank),
+            (Some(true), Some(12.0), Some(0.0), Some(0.075), Some(111010000))
+        );
+        assert_eq!(v.sky_colour, Some([0.062745, 0.070588, 0.078431, 0.0]));
+        assert_eq!(v.far_depth, None);
+        assert_eq!(log.counts["volumetric fogs kept in the source's units"], 1);
+        assert_eq!(log.omitted[VOLUMETRIC_NOT_DRAWN], 1);
+        // the one key the pass does not know is still counted as read and not lowered
+        assert_eq!(
+            log.omitted[&format!(
+                "draw-param fields of {VOLUMETRIC} read, not lowered ({})",
+                why_not_lowered(VOLUMETRIC)
+            )],
+            1
+        );
+    }
+
+    #[test]
+    fn a_volumetric_group_that_stores_nothing_leaves_the_atmosphere_alone() {
+        let mut w = world_with(vec![group(VOLUMETRIC, 0, vec![])]);
+        run(&mut w, 1.0);
+        assert!(w.resource::<Atmosphere>().is_none());
     }
 
     #[test]
