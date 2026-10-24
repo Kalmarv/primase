@@ -262,6 +262,88 @@ pub fn flat_normals(mesh: &Mesh) -> Result<Mesh> {
     }
     Ok(out)
 }
+/// What a vertex takes whose area-weighted normal has no direction ([`smooth_normals`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum NoDirection {
+    /// Refused, naming the vertex.
+    Refuse,
+    /// This normal, the caller's stated stand-in (made unit), the vertex listed in [`SmoothNormals::stand_ins`].
+    StandIn([f32; 3]),
+}
+
+/// A triangle list's smooth normals ([`smooth_normals`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SmoothNormals {
+    /// One unit normal per position.
+    pub normals: Vec<[f32; 3]>,
+    /// The vertices that took the stand-in, in order.
+    pub stand_ins: Vec<u32>,
+}
+
+/// The shortest summed face normal that has a direction: [`flat_normals`]' threshold (a squared length of 1e-20).
+const SHORTEST_NORMAL: f64 = 1e-10;
+
+/// Area-weighted smooth normals of a triangle list: each vertex's normal is the sum of `cross(b - a, c - a)` (the
+/// triangle's unit normal times twice its area) of every triangle that uses it, in f64 in triangle order
+/// (`primase_core::vector`), made unit and rounded to f32. A vertex whose sum is no longer than 1e-10 ([`flat_normals`]'
+/// threshold: no triangle uses it, its triangles have no area, or their normals cancel) takes `none`. A triangle index
+/// past the positions, a position that isn't finite, or a stand-in with no direction is refused.
+pub fn smooth_normals(positions: &[V], triangles: &[[u32; 3]], none: NoDirection) -> Result<SmoothNormals> {
+    use primase_core::vector::{add, cross, sub, unit, unit_beyond};
+    for p in positions {
+        finite(p)?;
+    }
+    let stand_in = match none {
+        NoDirection::Refuse => None,
+        NoDirection::StandIn(n) => {
+            finite(&n)?;
+            Some(
+                unit(n.map(f64::from))
+                    .ok_or_else(|| Error("a stand-in normal with no direction".into()))?
+                    .map(|x| x as f32),
+            )
+        }
+    };
+    let at = |i: u32| -> Result<[f64; 3]> {
+        positions
+            .get(i as usize)
+            .map(|p| p.map(f64::from))
+            .ok_or_else(|| {
+                Error(format!(
+                    "triangle index {i} past the {} positions",
+                    positions.len()
+                ))
+            })
+    };
+    let mut sums = vec![[0.0f64; 3]; positions.len()];
+    for tri in triangles {
+        let [a, b, c] = [at(tri[0])?, at(tri[1])?, at(tri[2])?];
+        let face = cross(sub(b, a), sub(c, a));
+        for &i in tri {
+            sums[i as usize] = add(sums[i as usize], face);
+        }
+    }
+    let mut out = SmoothNormals {
+        normals: Vec::with_capacity(positions.len()),
+        stand_ins: Vec::new(),
+    };
+    for (i, sum) in sums.into_iter().enumerate() {
+        let n = match (unit_beyond(sum, SHORTEST_NORMAL), stand_in) {
+            (Some(n), _) => n.map(|x| x as f32),
+            (None, Some(n)) => {
+                out.stand_ins.push(i as u32);
+                n
+            }
+            (None, None) => {
+                return Err(Error(format!(
+                    "vertex {i}: its triangles' normals sum to no direction (none uses it, they have no area, or they cancel)"
+                )));
+            }
+        };
+        out.normals.push(n);
+    }
+    Ok(out)
+}
 /// Transform using column basis and translation. Classification uses f32 dot
 /// products and the shared length, with the thresholds of `primase_core::Transform::classify`. Orthogonal normal axes divide by max(length²,1e-12);
 /// sheared axes use cofactors times determinant sign. Normalize above length 1e-8,
@@ -424,6 +506,7 @@ pub use primitives::{box_mesh, capsule, cylinder, disc, sphere};
 
 #[cfg(test)]
 mod tests {
+    use super::{NoDirection, smooth_normals};
     use primase_core::pass::{Options, PassRegistry};
 
     /// The crate registers exactly these passes by their declarations: those with required options are made only with
@@ -470,5 +553,40 @@ mod tests {
                 .unwrap()
                 .starts_with("partition-grid{cell*,origin,halo,region,tile}\n")
         );
+    }
+
+    /// A unit square of two triangles in z = 0 and a vertex no triangle uses: the square's vertices face +z, the corner
+    /// two triangles share weighs both; a vertex with no triangle, and one whose triangles cancel, takes the stand-in
+    /// (listed) or is refused by number.
+    #[test]
+    fn smooth_normals_are_area_weighted_with_a_stated_stand_in() {
+        let square = [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [5.0, 5.0, 5.0],
+        ];
+        let tris = [[0, 1, 2], [0, 2, 3]];
+        let up = NoDirection::StandIn([0.0, 2.0, 0.0]);
+        let s = smooth_normals(&square, &tris, up).unwrap();
+        assert_eq!(&s.normals[..4], &[[0.0, 0.0, 1.0]; 4]);
+        assert_eq!(s.normals[4], [0.0, 1.0, 0.0], "the stand-in, made unit");
+        assert_eq!(s.stand_ins, [4]);
+        let refused = smooth_normals(&square, &tris, NoDirection::Refuse).unwrap_err();
+        assert!(refused.0.contains("vertex 4"), "{refused}");
+        // a large triangle and a small one at right angles share vertex 0: the sum leans to the larger
+        let bent = [[0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [0.0, 4.0, 0.0], [0.0, 0.0, 1.0]];
+        let s = smooth_normals(&bent, &[[0, 1, 2], [0, 3, 1]], NoDirection::Refuse).unwrap();
+        // faces: (0, 0, 16) and (0, 4, 0); their sum (0, 4, 16) made unit
+        let l = (16.0f64 * 16.0 + 4.0 * 4.0).sqrt();
+        assert_eq!(s.normals[0], [0.0, (4.0 / l) as f32, (16.0 / l) as f32]);
+        // two faces wound against each other cancel
+        let both = smooth_normals(&square[..3], &[[0, 1, 2], [0, 2, 1]], up).unwrap();
+        assert_eq!(both.stand_ins, [0, 1, 2]);
+        // an index past the positions, a position that isn't finite, a stand-in with no direction
+        assert!(smooth_normals(&square, &[[0, 1, 9]], up).is_err());
+        assert!(smooth_normals(&[[f32::NAN, 0.0, 0.0]], &[], up).is_err());
+        assert!(smooth_normals(&square, &tris, NoDirection::StandIn([0.0; 3])).is_err());
     }
 }
