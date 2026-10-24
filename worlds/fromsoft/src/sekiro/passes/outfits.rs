@@ -175,7 +175,10 @@ impl Pass for RaiseFromSoftDisplayMasks {
     }
 }
 
-/// `select-fromsoft-outfit{chr=<id>, npc=<row id>, drop-masks=<k>+<k>}`: the display masks of NPC row `npc` as the
+/// `select-fromsoft-outfit{chr=<id>, npc=<row id>, drop-masks=<k>+<k>}`, or `{chr=<id>, masks=hidden}` for a character
+/// shown with no NPC row: every display mask hidden, the unmarked meshes (the body) shown. That is a statement the
+/// program makes, not a default row: neither `npc` nor `masks=hidden` is assumed, and giving both is an error. The display
+/// masks of NPC row `npc` as the
 /// state assignment of character `chr`'s axes: mask `k` on when the row's bit `k` is set and `k` is not in
 /// `drop-masks`, off otherwise, each mask traced in the log to the row's bit and the primitives it governs
 /// (`NpcParam 10100000 modelDispMask27=0 -> #27# hidden (primitives)`). Which character a row dresses is the program's
@@ -194,8 +197,27 @@ impl Pass for RaiseFromSoftDisplayMasks {
 #[derive(Clone, Debug)]
 pub struct SelectFromSoftOutfit {
     chr: String,
-    npc: i32,
+    outfit: Outfit,
     drop_masks: BTreeSet<u32>,
+}
+
+/// What dresses the character.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Outfit {
+    /// The display masks of this NPC param row.
+    Row(i32),
+    /// No row: every display mask hidden.
+    Hidden,
+}
+
+impl Outfit {
+    /// How the log and the errors name it.
+    fn subject(self) -> String {
+        match self {
+            Outfit::Row(npc) => format!("NpcParam {npc}"),
+            Outfit::Hidden => "no NPC row".to_owned(),
+        }
+    }
 }
 
 impl SelectFromSoftOutfit {
@@ -215,16 +237,35 @@ impl SelectFromSoftOutfit {
         }
         Ok(SelectFromSoftOutfit {
             chr: chr.to_owned(),
-            npc,
+            outfit: Outfit::Row(npc),
             drop_masks,
         })
     }
 
+    /// The character with no NPC row: every display mask hidden (`masks=hidden`).
+    pub fn hidden(chr: &str, drop_masks: impl IntoIterator<Item = u32>) -> Result<Self, String> {
+        let mut pass = SelectFromSoftOutfit::new(chr, 0, drop_masks)?;
+        pass.outfit = Outfit::Hidden;
+        Ok(pass)
+    }
+
     fn from_given(g: &Given) -> Result<Self, String> {
-        let npc = g.required("npc");
-        let npc = npc
-            .parse::<i32>()
-            .map_err(|_| format!("npc={npc} is not a row id"))?;
+        let outfit = match (g.optional("npc"), g.optional("masks")) {
+            (Some(_), Some(_)) => {
+                return Err("give npc=<row id> or masks=hidden, not both".to_owned());
+            }
+            (None, None) => {
+                return Err("npc=<row id> or masks=hidden is required: no row is a default".to_owned());
+            }
+            (Some(npc), None) => Some(
+                npc.parse::<i32>()
+                    .map_err(|_| format!("npc={npc} is not a row id"))?,
+            ),
+            (None, Some("hidden")) => None,
+            (None, Some(other)) => {
+                return Err(format!("masks={other}: hidden is the only form"));
+            }
+        };
         let mut drop = Vec::new();
         for item in g
             .optional("drop-masks")
@@ -237,7 +278,10 @@ impl SelectFromSoftOutfit {
                     .map_err(|_| format!("drop-masks item {item:?} is not a mask number"))?,
             );
         }
-        SelectFromSoftOutfit::new(g.required("chr"), npc, drop)
+        match outfit {
+            Some(npc) => SelectFromSoftOutfit::new(g.required("chr"), npc, drop),
+            None => SelectFromSoftOutfit::hidden(g.required("chr"), drop),
+        }
     }
 }
 
@@ -257,11 +301,18 @@ pub const SELECT_FROMSOFT_OUTFIT: PassSpec = PassSpec {
             "c1010",
             "the character the row dresses (c and four digits): the program's statement, never derived from the row id",
         ),
-        OptionSpec::required(
+        OptionSpec::optional(
             "npc",
             "10100000",
             "the NPC param row whose display masks to show (one of the rows the map parts of the character name: \
-             npc_placements lists them)",
+             npc_placements lists them); exactly one of npc and masks is given: no row is a default",
+            "none: masks=hidden, or an error",
+        ),
+        OptionSpec::optional(
+            "masks",
+            "hidden",
+            "`hidden`: no NPC row, every display mask hidden (the unmarked meshes are shown); given instead of npc",
+            "none: npc names the row",
         ),
         OptionSpec::optional(
             "drop-masks",
@@ -280,7 +331,10 @@ impl Pass for SelectFromSoftOutfit {
     fn options(&self) -> Options {
         let mut o = Options::new();
         o.insert("chr".to_owned(), self.chr.clone());
-        o.insert("npc".to_owned(), self.npc.to_string());
+        match self.outfit {
+            Outfit::Row(npc) => o.insert("npc".to_owned(), npc.to_string()),
+            Outfit::Hidden => o.insert("masks".to_owned(), "hidden".to_owned()),
+        };
         if !self.drop_masks.is_empty() {
             let items: Vec<String> = self.drop_masks.iter().map(u32::to_string).collect();
             o.insert("drop-masks".to_owned(), items.join("+"));
@@ -288,7 +342,10 @@ impl Pass for SelectFromSoftOutfit {
         o
     }
     fn requires(&self) -> &[&'static str] {
-        &[StateAxis::NAME, NpcRows::NAME]
+        match self.outfit {
+            Outfit::Row(_) => &[StateAxis::NAME, NpcRows::NAME],
+            Outfit::Hidden => &[StateAxis::NAME],
+        }
     }
     fn provides(&self) -> &[&'static str] {
         &[StateAssignment::NAME]
@@ -297,19 +354,30 @@ impl Pass for SelectFromSoftOutfit {
         &[StateAssignment::NAME]
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
-        let row = *world
-            .resource::<NpcRows>()
-            .ok_or("no NPC rows in the world")?
-            .0
-            .iter()
-            .find(|r| r.id == self.npc)
-            .ok_or_else(|| format!("NPC row {} is not in the NPC param", self.npc))?;
         let chr = &self.chr;
+        let subject = self.outfit.subject();
+        // the row's bits; no row has none set
+        let display_mask = match self.outfit {
+            Outfit::Row(npc) => {
+                let row = *world
+                    .resource::<NpcRows>()
+                    .ok_or("no NPC rows in the world")?
+                    .0
+                    .iter()
+                    .find(|r| r.id == npc)
+                    .ok_or_else(|| format!("NPC row {npc} is not in the NPC param"))?;
+                log.count(&format!("outfit of NPC row {npc} on {chr}"), 1);
+                if format!("c{:04}", npc / 10000) != *chr {
+                    log.count("npc row ids not following the character number", 1);
+                }
+                row.display_mask
+            }
+            Outfit::Hidden => {
+                log.count(&format!("outfit of no NPC row on {chr}: every mask hidden"), 1);
+                0
+            }
+        };
         let prefix = format!("fromsoft.mask.{chr}.");
-        log.count(&format!("outfit of NPC row {} on {chr}", self.npc), 1);
-        if format!("c{:04}", self.npc / 10000) != *chr {
-            log.count("npc row ids not following the character number", 1);
-        }
         let mut chosen: BTreeMap<String, u32> = BTreeMap::new();
         let mut marked = BTreeSet::new();
         let mut axis_of: BTreeMap<Entity, u32> = BTreeMap::new();
@@ -319,7 +387,7 @@ impl Pass for SelectFromSoftOutfit {
             };
             marked.insert(k);
             axis_of.insert(e, k);
-            let on = row.display_mask >> k & 1 == 1 && !self.drop_masks.contains(&k);
+            let on = display_mask >> k & 1 == 1 && !self.drop_masks.contains(&k);
             chosen.insert(axis.key.clone(), u32::from(on));
         }
         // each mask traced to the row's bit, with the primitives of the character's prototype it governs
@@ -342,12 +410,11 @@ impl Pass for SelectFromSoftOutfit {
             }
         }
         for &k in &marked {
-            let bit = row.display_mask >> k & 1;
+            let bit = display_mask >> k & 1;
             let dropped = bit == 1 && self.drop_masks.contains(&k);
             log.count(
                 &format!(
-                    "NpcParam {} modelDispMask{k}={bit}{} -> #{k:02}# {} (primitives)",
-                    self.npc,
+                    "{subject} modelDispMask{k}={bit}{} -> #{k:02}# {} (primitives)",
                     if dropped { ", dropped by the program" } else { "" },
                     if bit == 1 && !dropped { "shown" } else { "hidden" },
                 ),
@@ -356,13 +423,12 @@ impl Pass for SelectFromSoftOutfit {
         }
         if chosen.is_empty() {
             return Err(format!(
-                "NPC row {} is for {chr}, which has no display mask axes in the world (raise-fromsoft-display-masks \
-                 on it first)",
-                self.npc
+                "{subject} is for {chr}, which has no display mask axes in the world (raise-fromsoft-display-masks \
+                 on it first)"
             ));
         }
         let unmarked_bits = (0..MASKS)
-            .filter(|k| row.display_mask >> k & 1 == 1 && !marked.contains(k))
+            .filter(|k| display_mask >> k & 1 == 1 && !marked.contains(k))
             .count();
         log.count("set row bits that no mesh is marked with", unmarked_bits as u64);
         let unmarked_drops = self.drop_masks.iter().filter(|k| !marked.contains(k)).count();
@@ -377,8 +443,7 @@ impl Pass for SelectFromSoftOutfit {
                 && before != value
             {
                 return Err(format!(
-                    "{key} is already assigned {before}, the outfit of row {} gives {value}",
-                    self.npc
+                    "{key} is already assigned {before}, the outfit of {subject} gives {value}"
                 ));
             }
             log.count(
@@ -544,6 +609,64 @@ mod tests {
         }
         let resolve = &report.steps[2].log.counts;
         assert_eq!(resolve["primitives dropped by their condition"], 2);
+    }
+
+    /// `masks=hidden` is a character with no NPC row: every mask off, the unmarked meshes shown, the same as a row that sets
+    /// no bit, with no NPC rows in the world needed and the log saying no row chose it.
+    #[test]
+    fn no_row_hides_every_mask_and_shows_the_unmarked_meshes() {
+        let (mut w, p, form) = c1010();
+        let hidden =
+            "raise-fromsoft-display-masks, select-fromsoft-outfit{chr=c1010,masks=hidden}, resolve-state";
+        let report = run(&mut w, hidden).unwrap();
+        assert_eq!(drawn(&w, p), [0]);
+        assert_eq!(drawn(&w, form), [0]);
+        let select = &report.steps[1].log.counts;
+        assert_eq!(select.get("axes assigned on"), None);
+        assert_eq!(select["axes assigned off"], 3);
+        assert_eq!(select["outfit of no NPC row on c1010: every mask hidden"], 1);
+        assert_eq!(
+            select["no NPC row modelDispMask27=0 -> #27# hidden (primitives)"],
+            1
+        );
+        assert!(!select.keys().any(|k| k.starts_with("NpcParam")), "{select:?}");
+        // the same primitives as the row that sets no bit
+        let (mut w2, p2, _) = c1010();
+        run(&mut w2, &CHOOSE.replace("NPC", "10100005")).unwrap();
+        assert_eq!(drawn(&w2, p2), drawn(&w, p));
+        // no rows needed
+        let (mut w3, p3, _) = c1010();
+        w3.remove_resource::<NpcRows>();
+        run(&mut w3, hidden).unwrap();
+        assert_eq!(drawn(&w3, p3), [0]);
+        // a drop-mask that is marked changes nothing, and is counted
+        let (mut w4, _, _) = c1010();
+        let report = run(
+            &mut w4,
+            "raise-fromsoft-display-masks, select-fromsoft-outfit{chr=c1010,masks=hidden,drop-masks=14}, resolve-state",
+        )
+        .unwrap();
+        assert_eq!(report.steps[1].log.counts["masks dropped by the program"], 1);
+    }
+
+    /// A row or `masks=hidden`, one of them: neither is assumed, both is an error, and `hidden` is the only form.
+    #[test]
+    fn a_row_or_hidden_masks_is_required_and_only_one() {
+        for (options, why) in [
+            ("chr=c1010", "no row is a default"),
+            ("chr=c1010,npc=10100000,masks=hidden", "not both"),
+            ("chr=c1010,masks=all", "hidden is the only form"),
+            ("chr=c1010,npc=abc", "not a row id"),
+        ] {
+            let (mut w, _, _) = c1010();
+            let error = run(
+                &mut w,
+                &format!("raise-fromsoft-display-masks, select-fromsoft-outfit{{{options}}}, resolve-state"),
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains(why), "{options}: {error}");
+        }
     }
 
     #[test]
