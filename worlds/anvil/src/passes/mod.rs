@@ -2524,11 +2524,10 @@ impl LowerAnvilTerrain {
                 let mut far = 0.0f64;
                 let corners = lookup.corners(x_of(gx), y_of(gy))?;
                 if layers.occlusion {
-                    occlusion.push(
-                        corners
-                            .as_ref()
-                            .map_or(1.0, |c| lookup.occlusion(c.gx, c.gy) as f32),
-                    );
+                    occlusion.push(match &corners {
+                        Some(c) => lookup.occlusion(c.gx, c.gy)? as f32,
+                        None => 1.0,
+                    });
                 }
                 match corners {
                     None => outside += 1,

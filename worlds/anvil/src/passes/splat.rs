@@ -19,7 +19,9 @@
 //! 6. encoded sRGB.
 //!
 //! A pixel whose material has no detail diffuse takes the far colour tile there (bilinear, decoded in the colour space
-//! the pass states), counted. A tile's texel i covers [i, i + 1) of the node's texel coordinate, as the material
+//! the pass states), counted. A node whose colour tile or block 8 is needed and isn't decoded (not 33 x 33 blocks: the
+//! reader's are, `tnl_code::tile` decompresses exactly) is an error naming it, never read as 0; a node outside the read
+//! ones counts as 0 where the bilinear blend reaches it. A tile's texel i covers [i, i + 1) of the node's texel coordinate, as the material
 //! raster's integer lookup has it, for block 8 and the colour tile alike (where the engine samples those two isn't
 //! read). Left out (the notes': not read, or not reproducible here): the altitude colour ramps, the
 //! detail normals, heights and masks, the steep-slope normal, the per-cell uv rotation, the cell-hash term, the
@@ -127,46 +129,62 @@ fn detail(
 }
 
 /// The bilinear value at global texel coordinate `(gx, gy)` (texel `i` covering `[i, i + 1)`) of the texels `fetch`
-/// gives, each from its own node, so a node's edge blends with its neighbour's texels; a texel `fetch` has none of
-/// counts as 0.
-fn across(gx: f64, gy: f64, fetch: impl Fn(i64, i64) -> Option<f64>) -> f64 {
+/// gives, each from its own node, so a node's edge blends with its neighbour's texels; a texel of a node that isn't
+/// read (`fetch` gives none) counts as 0, and a texel `fetch` can't give (its node's tile not decoded) is an error.
+fn across(gx: f64, gy: f64, fetch: impl Fn(i64, i64) -> Result<Option<f64>, String>) -> Result<f64, String> {
     let (x, y) = (gx - 0.5, gy - 0.5);
     let (fx, fy) = (x.floor(), y.floor());
     let (tx, ty) = (x - fx, y - fy);
     let (ix, iy) = (fx as i64, fy as i64);
-    [
+    let mut terms = [0.0; 4];
+    for (term, (dx, dy, w)) in terms.iter_mut().zip([
         (0, 0, (1.0 - tx) * (1.0 - ty)),
         (1, 0, tx * (1.0 - ty)),
         (0, 1, (1.0 - tx) * ty),
         (1, 1, tx * ty),
-    ]
-    .into_iter()
-    .map(|(dx, dy, w)| w * fetch(ix + dx, iy + dy).unwrap_or(0.0))
-    .sum()
+    ]) {
+        *term = w * fetch(ix + dx, iy + dy)?.unwrap_or(0.0);
+    }
+    // summed as before (`Iterator::sum`, in order)
+    Ok(terms.into_iter().sum())
 }
 
-/// One node's tile as images: its far colour (BC1) and block 8 (BC4), 132 x 132 each.
+/// One node's tile as images: its far colour (BC1) and block 8 (BC4), 132 x 132 each, or why a tile isn't one (read
+/// only where a bake needs it: [`Node::tile`]).
 struct Node<'t> {
     tile: &'t TerrainTile,
-    colour: Option<Levels>,
-    block_8: Option<Levels>,
+    colour: Result<Levels, String>,
+    block_8: Result<Levels, String>,
 }
 
-fn tile_image(format: TexFormat, blocks: &[u8], colour: ColorSpace) -> Option<Levels> {
-    (blocks.len() == 33 * 33 * 8)
-        .then(|| {
-            Levels::of(&Texture {
-                width: 132,
-                height: 132,
-                format,
-                levels: vec![blocks.to_vec()],
-                color_space: colour,
-                role: TexRole::Other,
-                normal: None,
-            })
-            .ok()
+impl Node<'_> {
+    /// Its `which` tile (`colour` or `block_8`), or an error naming the node and why the tile isn't decoded.
+    fn tile<'a>(&self, which: &'a Result<Levels, String>, name: &str) -> Result<&'a Levels, String> {
+        which.as_ref().map_err(|why| {
+            format!(
+                "terrain node (row {}, column {}): its {name} tile isn't decoded: {why}",
+                self.tile.row, self.tile.column
+            )
         })
-        .flatten()
+    }
+}
+
+/// A node's stored tile as an image: 33 x 33 blocks of 8 bytes, 132 x 132 texels; anything else (a node read without
+/// the tile, a tile of another size, blocks that don't decode) is the reason it isn't one.
+fn tile_image(format: TexFormat, blocks: &[u8], colour: ColorSpace) -> Result<Levels, String> {
+    if blocks.len() != 33 * 33 * 8 {
+        return Err(format!("{} bytes, not 33 x 33 blocks of 8", blocks.len()));
+    }
+    Levels::of(&Texture {
+        width: 132,
+        height: 132,
+        format,
+        levels: vec![blocks.to_vec()],
+        color_space: colour,
+        role: TexRole::Other,
+        normal: None,
+    })
+    .map_err(|e| e.to_string())
 }
 
 /// The near ground's material lookup (steps 1 to 3 of the module documentation): the nodes' rasters, the noise and
@@ -263,17 +281,19 @@ impl<'t> Lookup<'t> {
         n.tile.material.get(i * 132 + j).copied()
     }
 
-    /// The occlusion factor at global texel coordinate `(gx, gy)`: `0.5 + b`, `b` block 8 bilinear there (step 5).
-    pub fn occlusion(&self, gx: f64, gy: f64) -> f64 {
+    /// The occlusion factor at global texel coordinate `(gx, gy)`: `0.5 + b`, `b` block 8 bilinear there (step 5); a
+    /// node whose block 8 isn't decoded is an error.
+    pub fn occlusion(&self, gx: f64, gy: f64) -> Result<f64, String> {
         let b = across(gx, gy, |tx, ty| {
-            let (n, i, j) = self.locate(tx, ty)?;
-            Some(unorm(
-                n.block_8
-                    .as_ref()?
-                    .texel(0, j as i64, i as i64, [Address::Wrap; 2])[0],
-            ))
-        });
-        0.5 + b
+            let Some((n, i, j)) = self.locate(tx, ty) else {
+                return Ok(None);
+            };
+            let image = n.tile(&n.block_8, "block 8")?;
+            Ok(Some(unorm(
+                image.texel(0, j as i64, i as i64, [Address::Wrap; 2])[0],
+            )))
+        })?;
+        Ok(0.5 + b)
     }
 
     /// The four material texels about `(x, y)` (source units) and their blend; `None` where the point's own node
@@ -458,7 +478,7 @@ impl<'a> Baker<'a> {
         let lerp = |a: [f64; 3], b: [f64; 3], t: f64| [0, 1, 2].map(|k| a[k] + (b[k] - a[k]) * t);
         let mut c = lerp(lerp(c00, c10, wx), lerp(c01, c11, wx), wy);
         if self.s.occlusion {
-            let o = self.lookup.occlusion(gx, gy);
+            let o = self.lookup.occlusion(gx, gy)?;
             c = c.map(|v| v * o);
         }
         Ok(Texel {
@@ -505,16 +525,19 @@ impl<'a> Baker<'a> {
                     ColorSpace::Srgb => srgb8_to_linear(c),
                     _ => unorm(c),
                 };
-                Ok([0, 1, 2].map(|k| {
-                    across(gx, gy, |tx, ty| {
-                        let (n, i, j) = self.lookup.locate(tx, ty)?;
-                        Some(decode(
-                            n.colour
-                                .as_ref()?
-                                .texel(0, j as i64, i as i64, [Address::Wrap; 2])[k],
-                        ))
-                    })
-                }))
+                let mut c = [0.0; 3];
+                for (k, c) in c.iter_mut().enumerate() {
+                    *c = across(gx, gy, |tx, ty| {
+                        let Some((n, i, j)) = self.lookup.locate(tx, ty) else {
+                            return Ok(None);
+                        };
+                        let image = n.tile(&n.colour, "colour")?;
+                        Ok(Some(decode(
+                            image.texel(0, j as i64, i as i64, [Address::Wrap; 2])[k],
+                        )))
+                    })?;
+                }
+                Ok(c)
             }
         }
     }
