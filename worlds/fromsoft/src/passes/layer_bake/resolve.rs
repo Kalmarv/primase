@@ -982,9 +982,8 @@ fn intensity(
     intensity
 }
 
-/// Sekiro's captured material colours only distinguish the encoding at unit intensity. A nonunit value is not a
-/// basis for choosing between `pow(c, 2.2) * i` and `pow(c * i, 2.2)`.
-const SEKIRO_COLOUR_ORDER_UNKNOWN: &str = "Sekiro sRGB colour with nonunit intensity: power/intensity ordering unproven (0 candidate-invariant observations)";
+const SEKIRO_COLOUR_DOMAIN_UNKNOWN: &str =
+    "Sekiro sRGB colour outside the observed finite nonnegative RGB/intensity domain";
 
 /// The named-field and SAT paths share this colour conversion. Alpha is unchanged (1 for a three-lane colour).
 ///
@@ -993,8 +992,22 @@ const SEKIRO_COLOUR_ORDER_UNKNOWN: &str = "Sekiro sRGB colour with nonunit inten
 /// All have intensity 1. Six observations (three head colour lanes in two buffers) distinguish pow(2.2) from plain;
 /// 63 match both and 15 remain unattributed. Candidates were selected by PS and cb1 tiling, never cb3 fit. RDEF
 /// member offsets and Values::reached_from of outputs/discards select live words. The metaparam marks this colour
-/// sRGB. No nonunit ordering is established: 273 further reached lane contexts have nonunit candidates, but every
-/// one also has unit-intensity candidates and none has invariant predictions. This is not a census of all materials.
+/// sRGB. The earlier 273 ambiguous nonunit contexts do not establish an ordering.
+///
+/// The saved Wolf programs supply reflection missing from that census. PS hashes e7df7bdee77e672f and
+/// 7c1a30fd7bf346ec read cb1 rows 0..6 and cb3 RGB words 96..98, 104..106, 108..110 (Values::reached_from of
+/// outputs/discards). Selecting candidates only by those live cb1 rows gives 11 contexts / 121 recorded draws
+/// containing only the Court MTD pairs, whose values agree. Five distinct cb3 blobs independently show the rule:
+/// e7df7bdee77e672f: 66fa849424a9b2c0, 434665e308ad2cc5;
+/// 7c1a30fd7bf346ec: eb02e7ebe89f7cd5, 473fa6a5c4de33f0, eac709d04a2ed85c.
+/// A sixth, e7df7bdee77e672f / c30913ef12c05dd1, has identical colour words but is not independently attributed.
+/// `Character_AN_Blend_AMSN__Fresnel__snp_0_color_0` at byte 384: (1,1,0.86274517), intensity 10,
+/// captured (10,10,7.22672558); `color_2` at byte 416: (0.78039223,0.64705884,0.56862748), intensity 0.5,
+/// captured (0.289773375,0.191887334,0.144408002); `color_3` at byte 432: (1,1,1), intensity 0.6,
+/// captured (0.600000024,0.600000024,0.600000024). These separate pow(c)*i from both c*i and pow(c*i).
+/// These are CPU-uploaded material words: the conversion belongs to the declared sRGB parameter type, not to
+/// a particular program or material name. Both named and SAT paths use this rule for finite nonnegative values;
+/// other unresolved roles remain unknown. This is not a census of all materials.
 fn folded_colour(
     game: crate::Game,
     declared: Option<&crate::metaparam::MtdParam>,
@@ -1002,8 +1015,13 @@ fn folded_colour(
     intensity: f32,
 ) -> std::result::Result<Vec<f32>, &'static str> {
     let srgb = declared.is_some_and(|p| p.srgb);
-    if game == crate::Game::Sekiro && srgb && intensity != 1. {
-        return Err(SEKIRO_COLOUR_ORDER_UNKNOWN);
+    if game == crate::Game::Sekiro
+        && srgb
+        && (!intensity.is_finite()
+            || intensity < 0.
+            || value.iter().take(3).any(|v| !v.is_finite() || *v < 0.))
+    {
+        return Err(SEKIRO_COLOUR_DOMAIN_UNKNOWN);
     }
     let mut lanes = value.to_vec();
     lanes.resize(4, 1.);
@@ -1613,10 +1631,36 @@ mod tests {
             ),
             &[0.573_159, 0.487_765_22, 0.487_765_22, 0.75],
         );
-        assert_eq!(
-            sat_words(Game::Sekiro, &param(12, true), &[0.5, 0.25, 1., 0.75], 2.),
-            Err(super::SEKIRO_COLOUR_ORDER_UNKNOWN),
+        // Nonunit CPU-uploaded coat words. Alpha is arbitrary here to check it is preserved.
+        close(
+            sat_words(Game::Sekiro, &param(12, true), &[1., 1., 0.862_745_17, 0.75], 10.),
+            &[10., 10., 7.226_725_6, 0.75],
         );
+        close(
+            sat_words(
+                Game::Sekiro,
+                &param(12, true),
+                &[0.780_392_2, 0.647_058_84, 0.568_627_5, 0.75],
+                0.5,
+            ),
+            &[0.289_773_37, 0.191_887_33, 0.144_408, 0.75],
+        );
+        close(
+            sat_words(Game::Sekiro, &param(12, true), &[1., 1., 1., 0.75], 0.6),
+            &[0.6, 0.6, 0.6, 0.75],
+        );
+        for intensity in [-1., f32::INFINITY, f32::NAN] {
+            assert_eq!(
+                sat_words(Game::Sekiro, &param(12, true), &[1.; 4], intensity),
+                Err(super::SEKIRO_COLOUR_DOMAIN_UNKNOWN),
+            );
+        }
+        for value in [-1., f32::INFINITY, f32::NAN] {
+            assert_eq!(
+                sat_words(Game::Sekiro, &param(12, true), &[value, 1., 1., 1.], 1.),
+                Err(super::SEKIRO_COLOUR_DOMAIN_UNKNOWN),
+            );
+        }
         close(
             sat_words(Game::Sekiro, &param(12, false), &[0.5, 0.25, 1., 0.75], 2.),
             &[1., 0.5, 2., 0.75],

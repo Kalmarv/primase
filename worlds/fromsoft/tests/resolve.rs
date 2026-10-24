@@ -1876,8 +1876,8 @@ fn a_colour_stated_without_its_intensity_takes_the_defaults_counted() {
         resolution.policies
     );
 
-    // A stated sRGB flag changes the encoding, not the source of the intensity. Nonunit ordering has no
-    // candidate-invariant Sekiro capture observation, so it must remain a named Unknown instead of guessed words.
+    // A stated sRGB flag changes the encoding, not the source of the intensity. The independently attributed
+    // coat cb3 words establish power before intensity; the named path uses the same rule as SAT.
     let mut srgb = metaparam.clone();
     srgb.mtd_params[0].srgb = true;
     for intensity in [1., 3.] {
@@ -1898,16 +1898,15 @@ fn a_colour_stated_without_its_intensity_takes_the_defaults_counted() {
             .iter()
             .find(|c| c.name.as_deref() == Some("M_Multiple__snp_tint_color_0"))
             .unwrap();
-        if intensity == 1. {
-            assert_eq!(
-                binding.role,
-                bits(&[0.2_f32.powf(2.2), 0.4_f32.powf(2.2), 0.6_f32.powf(2.2), 1.])
-            );
-        } else {
-            assert!(
-                matches!(&binding.role, ConstantRole::Unknown { why } if why.contains("ordering unproven"))
-            );
-        }
+        assert_eq!(
+            binding.role,
+            bits(&[
+                0.2_f32.powf(2.2) * intensity,
+                0.4_f32.powf(2.2) * intensity,
+                0.6_f32.powf(2.2) * intensity,
+                1.,
+            ])
+        );
     }
 }
 
