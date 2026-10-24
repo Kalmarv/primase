@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{
-    Channel, Clip, ClipBinding, ClipTarget, Component, Entity, Interpolation, JointId, JointMap, Property,
-    Rest, RigInstance, Skeleton, World,
+    AdditiveReference, Channel, Clip, ClipBinding, ClipTarget, Component, Entity, Interpolation, JointId,
+    JointMap, Property, Rest, RigInstance, Skeleton, World,
 };
 
 use crate::pose::{Affine, Trs, affine, compose, evaluate, inverse, locals, model_transforms};
@@ -39,7 +39,11 @@ pub enum Translation {
 /// R_t,ref`), its bone keeping the target's length; joints the map does not list keep their rests; the root moves as
 /// `translation` says. The result is keyed at the clip's key times (a rotation channel a mapped joint, a translation
 /// channel for the root), linear between keys. Both skeletons must face the same way in the model's space (a program
-/// turns one first). Additive clips are refused; a clip's root motion and its morph and control channels are kept.
+/// turns one first). A clip of deltas ([`AdditiveReference::Identity`]) is retargeted by its effect on the rest pose (the
+/// source posed at its rest plus the deltas, transferred as above) and keeps the target's joints as deltas from the target's
+/// rest: `reference=rest` only (`aligned` builds a reference that is not the rest the deltas are added to); a clip additive
+/// to a pose or a frame of a clip is refused, as its reference is not retargeted. A clip's root motion and its morph and
+/// control channels are kept.
 ///
 /// Approximations, reported: the transfer itself (a body of other proportions does not make the same motion: hands
 /// meet where the source's do only if the arms are alike), the resampling (between keys the result is slerped, which
@@ -266,8 +270,15 @@ impl Pass for RetargetClip {
             if skeletons.len() > 1 {
                 return Err(format!("clip {c:?} drives several skeletons"));
             }
-            if clip.additive.is_some() {
+            let deltas = clip.additive == Some(AdditiveReference::Identity);
+            if clip.additive.is_some() && !deltas {
                 return Err(format!("clip {c:?} is additive: not retargeted"));
+            }
+            if deltas && self.reference == Reference::Aligned {
+                return Err(format!(
+                    "clip {c:?} is additive: its deltas are added to the target's rest, which reference=aligned does not \
+                     measure from: use reference=rest"
+                ));
             }
             if bound.iter().any(|(clip, rig)| {
                 *clip == c && w.get::<RigInstance>(*rig).is_some_and(|r| r.skeleton == map.from)
@@ -378,10 +389,22 @@ impl Pass for RetargetClip {
                     };
                     let trs = Trs::of(&Rest::Affine(crate::pose::transform(&l)))
                         .map_err(|e| format!("joint {:?} ({}): {}", j.id, j.name, e.0))?;
+                    // a clip of deltas keeps the joint's turn and the root's move from the target's rest (the reference)
+                    let (turned, moved) = if deltas {
+                        let at_rest =
+                            Trs::of(&Rest::Affine(crate::pose::transform(&target_ref_local[&j.id])))
+                                .map_err(|e| format!("joint {:?} ({}): {}", j.id, j.name, e.0))?;
+                        (
+                            quat::mul(quat::inverse(at_rest.rotation), trs.rotation),
+                            std::array::from_fn(|k| trs.translation[k] - at_rest.translation[k]),
+                        )
+                    } else {
+                        (trs.rotation, trs.translation)
+                    };
                     let keys = rotations.entry(j.id).or_default();
                     // q and -q turn alike: keep each key on the side of the one before, for a reader that does not
                     // take the shorter arc between keys
-                    let mut q = trs.rotation.map(|x| x as f32);
+                    let mut q = turned.map(|x| x as f32);
                     if let Some(p) = keys.last_chunk::<4>()
                         && p.iter().zip(&q).map(|(a, b)| a * b).sum::<f32>() < 0.0
                     {
@@ -389,7 +412,7 @@ impl Pass for RetargetClip {
                     }
                     keys.extend(q);
                     if Some(j.id) == root && self.translation == Translation::Root {
-                        root_translation.extend(trs.translation.map(|x| x as f32));
+                        root_translation.extend(moved.map(|x| x as f32));
                     }
                     model.insert(j.id, m);
                 }
@@ -429,6 +452,12 @@ impl Pass for RetargetClip {
             out.channels = channels;
             w.insert(c, out);
             log.approximate("clips retargeted onto a skeleton of other proportions", 1);
+            if deltas {
+                log.approximate(
+                    "additive clips retargeted by their effect on the rest pose, kept as deltas from the target's rest",
+                    1,
+                );
+            }
             log.approximate(
                 "retargeted joint keys, slerped between the clip's key times",
                 mapped_joints * times.len() as u64,
@@ -700,6 +729,76 @@ mod tests {
         };
         let err = run(&mut w, "retarget-clip{reference=rest,translation=none}").unwrap_err();
         assert!(err.contains("JointId(20)") && err.contains("j20"), "{err}");
+    }
+
+    /// A clip of deltas, retargeted with both rests alike (the target's arm unturned): the arm's quarter turn about z and the
+    /// root's one unit along z become the target's, as deltas from its rest (the root twice as far, it stands twice as
+    /// high), the clip still additive; added to the target's rest it raises the arm to straight up and moves the root
+    /// two along z. Aligned references are refused, as are deltas to a pose or a frame of a clip.
+    #[test]
+    fn a_clip_of_deltas_is_retargeted_as_deltas_from_the_targets_rest() {
+        let (mut w, target, clip) = world();
+        w.get_mut::<Skeleton>(target).unwrap().joints[1].rest = trs([0.3, 0.6, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        {
+            let c = w.get_mut::<Clip>(clip).unwrap();
+            c.additive = Some(AdditiveReference::Identity);
+            // the root's channel is a delta now: nothing at 0, one along z at 1
+            c.channels[1].values = vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+        }
+        let report = run(&mut w, "retarget-clip{reference=rest,translation=root}").unwrap();
+        let out = w.get::<Clip>(clip).unwrap();
+        assert_eq!(out.additive, Some(AdditiveReference::Identity));
+        let arm = out
+            .channels
+            .iter()
+            .find(|c| {
+                matches!(c.target, ClipTarget::Joint { joint, .. } if joint == JointId(20))
+                    && c.property == Property::Rotation
+            })
+            .unwrap();
+        assert!(
+            arm.values
+                .iter()
+                .zip([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, S, S])
+                .all(|(a, b)| (a - b).abs() < 1e-6),
+            "{:?}",
+            arm.values
+        );
+        let root = out
+            .channels
+            .iter()
+            .find(|c| {
+                matches!(c.target, ClipTarget::Joint { joint, .. } if joint == JointId(10))
+                    && c.property == Property::Translation
+            })
+            .unwrap();
+        assert!(
+            root.values
+                .iter()
+                .zip([0.0, 0.0, 0.0, 0.0, 0.0, 2.0])
+                .all(|(a, b)| (a - b).abs() < 1e-6),
+            "{:?}",
+            root.values
+        );
+        // added to the target's rest
+        let s = w.get::<Skeleton>(target).unwrap();
+        let e = evaluate(out, target, s, None, 1.0).unwrap();
+        let m = model_transforms(s, &locals(s, Some(&e.pose))).unwrap();
+        assert!(near(m[&JointId(10)][3], [0.0, 2.0, 2.0]), "{:?}", m[&JointId(10)]);
+        let d: [f64; 3] = std::array::from_fn(|k| m[&JointId(30)][3][k] - m[&JointId(20)][3][k]);
+        assert!(near(d.map(|x| x / 0.6), [0.0, 1.0, 0.0]), "{d:?}");
+        assert!(
+            report.steps[0]
+                .log
+                .approximations
+                .keys()
+                .any(|k| k.contains("additive clips retargeted"))
+        );
+        // reference=aligned builds a pose that is not the rest the deltas are added to
+        let (mut w, _, clip) = world();
+        w.get_mut::<Clip>(clip).unwrap().additive = Some(AdditiveReference::Identity);
+        let err = run(&mut w, "retarget-clip{reference=aligned,translation=root}").unwrap_err();
+        assert!(err.contains("use reference=rest"), "{err}");
     }
 
     #[test]
