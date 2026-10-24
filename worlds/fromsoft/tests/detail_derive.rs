@@ -606,7 +606,7 @@ fn the_pass_on_the_wolfs_outfits() -> TestResult {
         println!("{outfit}: {c:#?}");
         census.insert(outfit, c);
     }
-    // the counts of the desktop run on adbd9051 (the Wolf's default outfit; the Ashina costume), which the pass
+    // the counts of the full-install run on adbd9051 (the Wolf's default outfit; the Ashina costume), which the pass
     // then counted by the reasons it has now
     let expected = BTreeMap::from([
         (
