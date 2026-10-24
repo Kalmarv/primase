@@ -41,32 +41,6 @@ fn local(b: &Bone) -> Matrix {
     m[3] = b.translation.map(f64::from);
     m
 }
-fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
-    a.into_iter().zip(b).map(|(x, y)| x * y).sum()
-}
-pub(crate) fn normal_matrix(m: &Matrix) -> Result<(Matrix, f64), String> {
-    let cols = [cross(m[1], m[2]), cross(m[2], m[0]), cross(m[0], m[1])];
-    let det = dot(m[0], cols[0]);
-    if det == 0. || !det.is_finite() {
-        return Err("singular rigid bone transform".into());
-    }
-    Ok((
-        [
-            cols[0].map(|x| x / det),
-            cols[1].map(|x| x / det),
-            cols[2].map(|x| x / det),
-            [0.; 3],
-        ],
-        det,
-    ))
-}
 /// A FLVER's bones as a `core.skeleton` in the world frame: joint `i` is bone `i` with its stored name and parent
 /// (a negative parent: a root), its rest the bone's local transform as [`bone_matrices`] composes it (scale, then
 /// rotation about X, Z, Y in that order, then translation), converted from the file's frame exactly

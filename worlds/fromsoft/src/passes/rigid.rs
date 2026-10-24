@@ -4,10 +4,10 @@
 //! meshes are animated at runtime: their model-space bind pose is preserved and
 //! counted, not submitted to this rigid-only transformation.
 use crate::flver::Model;
-use crate::pose::{ID, affine_point, affine_vector, bone_matrices, normal_matrix};
+use crate::pose::{ID, affine_point, bone_matrices};
 pub use crate::pose::{posed_bounds, posed_positions};
 use primase_core::{
-    Component, World,
+    Component, Linear, World,
     pass::{Pass, PassLog, PassSpec},
 };
 
@@ -91,17 +91,16 @@ pub fn lower_model(source: &Model, log: &mut PassLog) -> Result<Model, String> {
                 mirrored.push(false);
                 continue;
             }
-            let (nm, det) = normal_matrix(matrix)?;
+            // normals by the inverse transpose and tangents by the bone's 3x3 part, of unit length, as core turns
+            // local space
+            let l = Linear::of_f64([matrix[0], matrix[1], matrix[2]]);
+            if l.singular() {
+                return Err("singular rigid bone transform".into());
+            }
             v.position = affine_point(matrix, v.position.map(f64::from)).map(|x| x as f32);
-            v.normal = affine_vector(&nm, v.normal.map(f64::from)).map(|x| x as f32);
+            v.normal = l.normal(v.normal).expect("not singular");
             for t in &mut v.tangents {
-                let xyz = affine_vector(matrix, [t[0] as f64, t[1] as f64, t[2] as f64]);
-                for i in 0..3 {
-                    t[i] = xyz[i] as f32;
-                }
-                if det < 0. {
-                    t[3] = -t[3];
-                }
+                *t = l.tangent(*t).expect("not singular");
             }
             if v.position
                 .iter()
@@ -111,7 +110,7 @@ pub fn lower_model(source: &Model, log: &mut PassLog) -> Result<Model, String> {
             {
                 return Err("nonfinite rigid result".into());
             }
-            mirrored.push(det < 0.);
+            mirrored.push(l.mirrors());
             log.count("rigid vertices transformed", 1);
         }
         for f in &mut m.faces {
