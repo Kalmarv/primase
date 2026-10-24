@@ -103,7 +103,15 @@ fn two_prototypes_under_one_key_are_refused_naming_both() {
 fn parts_that_do_not_follow_the_primitives_are_refused() {
     let mut w = raised(&["alpha"]);
     let proto = w.iter::<SkateParts>().next().map(|(e, _)| e).unwrap();
+    // parts of another count: skate.parts itself refuses them, before the scene is read
     w.insert(proto, SkateParts(Vec::new()));
+    let e = refusal(&w);
+    assert!(
+        e.contains("skate.parts") && e.contains("0 parts for 1 core.mesh's primitives"),
+        "{e}"
+    );
+    // no parts at all, which no component's check sees: the scene refuses the prototype by its name
+    w.remove::<SkateParts>(proto);
     let e = refusal(&w);
     assert!(
         e.contains("alpha") && e.contains("0 skate.parts for 1 primitives"),

@@ -255,11 +255,18 @@ fn the_calibration_is_stated() {
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
             .collect()
     };
-    let e = RAISE_SKATE.instance(&o(&[("name", "n")])).err().unwrap();
+    let e = RAISE_SKATE
+        .instance(&o(&[("name", "n"), ("unclassified", "leave-out")]))
+        .err()
+        .unwrap();
     assert!(e.contains("light_scale is required"), "{e}");
     assert!(
         RAISE_SKATE
-            .instance(&o(&[("name", "n"), ("light_scale", "bright")]))
+            .instance(&o(&[
+                ("name", "n"),
+                ("light_scale", "bright"),
+                ("unclassified", "leave-out")
+            ]))
             .is_err()
     );
     for (given, calibration) in [
@@ -267,7 +274,11 @@ fn the_calibration_is_stated() {
         ("0.0003007", LightCalibration::Scale(3.007e-4)),
     ] {
         let made = RAISE_SKATE
-            .instance(&o(&[("name", "n"), ("light_scale", given)]))
+            .instance(&o(&[
+                ("name", "n"),
+                ("light_scale", given),
+                ("unclassified", "leave-out"),
+            ]))
             .unwrap();
         let r = RaiseOptions::new("n", calibration, primase_reskate::passes::Unclassified::LeaveOut).unwrap();
         assert_eq!(made.options(), r.options());
