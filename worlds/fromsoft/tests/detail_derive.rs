@@ -513,6 +513,18 @@ struct DetailCensus {
     wraps: BTreeMap<String, u64>,
 }
 
+/// The reason of a program whose alpha test the probe cannot take (the dithered fade).
+const DISCARDED: &str = "the program discarded the pixel";
+
+/// The reason a slot the equation reads has no texture: the binding reads a constant, the preview colour of a
+/// missing `binding` map.
+fn unbound(slot: u32, role: &str, binding: &str) -> String {
+    format!(
+        "slot t{slot}, the {role} the equation reads, has no texture: the binding reads a constant (preview default \
+         for missing {binding} binding)"
+    )
+}
+
 /// The wrap counts of `n` slots at each share past 0 to 1 (`percent`), and `within` slots inside it.
 fn wrap_counts(within: u64, beyond: &[(u32, u64)]) -> BTreeMap<String, u64> {
     let mut out = BTreeMap::new();
@@ -602,6 +614,11 @@ fn the_pass_on_the_wolfs_outfits() -> TestResult {
             (
                 9,
                 vec!["P_AM_M_9000_artificialarm", "P_LG_M_9000_bottoms1"],
+                BTreeMap::from([
+                    (unbound(0, "detail 0 colour", "AlbedoMap"), 1),
+                    (unbound(8, "base mask", "MetallicMap"), 3),
+                    (DISCARDED.to_owned(), 3),
+                ]),
                 wrap_counts(5, &[(11, 7), (23, 7), (51, 3), (98, 1), (99, 1), (100, 3)]),
             ),
         ),
@@ -610,12 +627,17 @@ fn the_pass_on_the_wolfs_outfits() -> TestResult {
             (
                 8,
                 vec!["P_AM_M_9120_artificialarm", "P_BD_M_9120_haori"],
+                BTreeMap::from([
+                    (unbound(0, "detail 0 colour", "AlbedoMap"), 4),
+                    (unbound(8, "base mask", "MetallicMap"), 1),
+                    (DISCARDED.to_owned(), 1),
+                ]),
                 wrap_counts(0, &[(11, 9), (27, 7), (70, 3), (100, 1)]),
             ),
         ),
     ]);
     for (outfit, c) in &census {
-        let (candidates, given, wraps) = &expected[outfit];
+        let (candidates, given, refused, wraps) = &expected[outfit];
         assert_eq!(c.candidates, *candidates, "{outfit}");
         assert_eq!(
             c.given
@@ -628,6 +650,7 @@ fn the_pass_on_the_wolfs_outfits() -> TestResult {
         assert_eq!(&c.wraps, wraps, "{outfit}");
         // every material not given one is counted once, by a reason that is complete text: no Debug of a type, no
         // value of the material
+        assert_eq!(&c.refused, refused, "{outfit}");
         assert_eq!(
             c.refused.values().sum::<u64>(),
             (c.candidates - c.given.len()) as u64,
