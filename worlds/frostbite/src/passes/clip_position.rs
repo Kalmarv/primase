@@ -275,7 +275,7 @@ pub fn state_clip_roles(constants: &mut Vec<ConstantBinding>, resource: Resource
 
 /// Replaces the bytes `offset..offset + size` of the buffer `resource` in `constants` by one constant of `role`, the
 /// `Unknown` constants that cover them cut to what lies outside (a piece keeps the reason, not the parameter's name).
-fn cut_out(
+pub(crate) fn cut_out(
     constants: &mut Vec<ConstantBinding>,
     resource: ResourceId,
     offset: u32,

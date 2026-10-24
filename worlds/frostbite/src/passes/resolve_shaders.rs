@@ -55,14 +55,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::shader::{
     BufferBinding, BufferSource, BufferTable, ConstantBinding, ConstantRole, D3dClass, InputBinding,
-    InputRole, Interface, KeyPart, OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind,
-    SamplerState, Shader, ShaderBinding, Stage, StageBinding, SystemValue, TextureBinding, TextureDim,
-    TextureSource, VariantKey,
+    InputRole, Interface, KeyPart, ObjectParameter, OutputBinding, OutputRole, RenderState, ResourceId,
+    ResourceKind, SamplerState, Shader, ShaderBinding, Stage, StageBinding, SystemValue, TextureBinding,
+    TextureDim, TextureSource, VariantKey,
 };
 use primase_core::{Component, Entity, Semantic, Texture, TextureLayers, World};
 
 use super::buffer_tables::{TableRoles, probe_tables};
-use super::clip_position::{ClipRows, shader_clip_rows, state_clip_roles};
+use super::clip_position::{ClipRows, cut_out, shader_clip_rows, state_clip_roles};
 use crate::binding::{Bindings, Group};
 use crate::components::{
     FrostbiteBindings, FrostbiteInputLayout, FrostbiteMaterial, FrostbitePermutation, FrostbiteProgram,
@@ -293,6 +293,17 @@ fn stage_binding(
         } else {
             log.count(
                 "vertex stages whose clip position words are not all unknown constants, left as they are",
+                1,
+            );
+        }
+    }
+    if let Some(base) = vertex.and_then(|v| v.tables.as_ref().ok()).and_then(|t| t.base) {
+        let role = ConstantRole::Object(ObjectParameter::InstanceBase);
+        if cut_out(&mut constants, base.buffer, base.offset, 4, role) {
+            log.count("vertex stages whose first instance record word is stated", 1);
+        } else {
+            log.count(
+                "vertex stages whose first instance record word is not an unknown constant, left as it is",
                 1,
             );
         }

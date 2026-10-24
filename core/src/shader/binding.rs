@@ -123,6 +123,11 @@ pub enum ObjectParameter {
     /// The index of the instance's first matrix in the object-matrix palette, which the vertex program adds to the
     /// index it takes (the joint indices of a skinned vertex, the instance's own for a rigid one).
     MatrixBase,
+    /// The index of the draw's first record in the instance table ([`BufferTable::Instances`]), an unsigned integer word:
+    /// the vertex program adds the instance number to it and reads that record. It counts records of the instance table,
+    /// where [`ObjectParameter::MatrixBase`] counts matrices of the palette. A draw of one instance that starts the table
+    /// has 0.
+    InstanceBase,
     /// The instance's user clip plane (the vertex program's clip distance against it).
     ClipPlane,
     /// Row `n` (0 or 1) of an animated affine transform of the first texture coordinate set, three values each:

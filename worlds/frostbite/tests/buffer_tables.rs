@@ -5,7 +5,7 @@
 #![allow(clippy::unwrap_used)]
 
 use primase_core::shader::{D3dClass, ResourceId, ResourceKind, Shader, ShaderFormat};
-use primase_frostbite::passes::buffer_tables::{TableRoles, probe_tables};
+use primase_frostbite::passes::buffer_tables::{InstanceBase, TableRoles, probe_tables};
 use primase_frostbite::passes::clip_position::shader_clip_rows;
 
 const ONE_WORD: &[u8] = include_bytes!("fixtures/tables_vs.dxil");
@@ -20,6 +20,21 @@ fn shader(bytes: &[u8]) -> Shader {
         bytecode: bytes.to_vec(),
         interface: program.interface,
     }
+}
+
+/// The constant buffer of the shader bound at shader register `register`.
+fn constants_at(s: &Shader, register: u32) -> ResourceId {
+    s.interface
+        .resources
+        .iter()
+        .find(|r| {
+            matches!(r.kind, ResourceKind::ConstantBuffer { .. })
+                && r.provenance
+                    .d3d
+                    .is_some_and(|d| d.class == D3dClass::ConstantBuffer && d.register == register)
+        })
+        .expect("the fixture has the constant buffer")
+        .id
 }
 
 /// The buffer of the shader bound at shader register `register`.
@@ -53,6 +68,10 @@ fn the_instance_and_matrix_tables_are_found_by_running_the_program() {
             stride: 1,
             matrix_start: 0,
             matrices: buffer_at(&s, 67),
+            base: Some(InstanceBase {
+                buffer: constants_at(&s, 0),
+                offset: 0,
+            }),
         })
     );
     // two words a record, the matrix in the last
@@ -64,6 +83,10 @@ fn the_instance_and_matrix_tables_are_found_by_running_the_program() {
             stride: 2,
             matrix_start: 1,
             matrices: buffer_at(&s, 67),
+            base: Some(InstanceBase {
+                buffer: constants_at(&s, 0),
+                offset: 0,
+            }),
         })
     );
 }

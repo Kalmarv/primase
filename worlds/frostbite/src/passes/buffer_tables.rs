@@ -16,6 +16,9 @@
 //! table), the layout holds for it, and the two instances' first read addresses give the record's size. Which word of the
 //! record names the header is read from a third run in which each word of the record names a different element: the
 //! header element the program then reads is the one its word names.
+//! The instance number is added to a word of a constant buffer before the record is read (the draw's first record). That
+//! word is found in the value graph (the constants the index of an instance table read is made of) and proved by a run: set to
+//! 3, the first record read moves by three records ([`InstanceBase`]).
 //! That a zero header means the rows follow it is what the programs gave; the header's bits (a flag with a 16-bit offset in
 //! bits 1 to 16, a flag at bit 18) move the rows by what the programs read from them and are not otherwise documented.
 //!
@@ -25,9 +28,12 @@
 //! back at instances 0 and 3 exactly. A program that does not do this (another header layout, a third buffer, a record
 //! word that is not the last, rows not directly after a zero header) fails the probe and its buffers stay unknown.
 
+use std::collections::BTreeSet;
+
 use primase_core::shader::{
     BufferKind, ResourceId, ResourceKind, ScalarType, Shader, ShaderFormat, Stage, SystemValue,
 };
+use primase_shader::flow::{At, Node, NodeId, Values};
 use primase_shader_exec::{Backend, Element, Executable, ImageSample, Resources, Runner};
 
 use super::clip_position::{ClipRows, pass_buffer};
@@ -50,7 +56,21 @@ pub struct TableRoles {
     pub matrix_start: u8,
     /// The matrix table: headers and three rows each.
     pub matrices: ResourceId,
+    /// The word the instance number is added to before a record is read, when the program has one.
+    pub base: Option<InstanceBase>,
 }
+
+/// The constant word that holds the index of the draw's first record in the instance table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InstanceBase {
+    /// The constant buffer, as an id of the shader's own interface.
+    pub buffer: ResourceId,
+    /// The word's byte offset in it.
+    pub offset: u32,
+}
+
+/// What a probe gives the instance base word to see that the first record read moves by that many records.
+const BASE_PROBE: u32 = 3;
 
 /// A backend that answers every buffer read and logs which buffers were read first.
 struct Tables {
@@ -146,7 +166,7 @@ pub fn probe_tables(shader: &Shader, clip: ClipRows) -> Result<TableRoles, Strin
     let pass = pass_buffer(iface).ok_or("the lifted program has no constant buffer at register 4")?;
     let exe =
         Executable::new(&program).map_err(|e| format!("the executor does not take the program: {e}"))?;
-    let run = |instance: u32, marked: Option<u32>| -> Result<Run, String> {
+    let run = |instance: u32, marked: Option<u32>, base: Option<(ResourceId, u32)>| -> Result<Run, String> {
         let mut resources = Resources::default();
         for r in &iface.resources {
             if let ResourceKind::ConstantBuffer { layout } = &r.kind {
@@ -157,6 +177,11 @@ pub fn probe_tables(shader: &Shader, clip: ClipRows) -> Result<TableRoles, Strin
                         let at = clip.rows as usize + 4 * k + k;
                         rows[at / 4][at % 4] = 1.0f32.to_bits();
                     }
+                }
+                if let Some((buffer, word)) = base
+                    && r.id == buffer
+                {
+                    rows[word as usize / 4][word as usize % 4] = BASE_PROBE;
                 }
                 resources.constants.insert(r.id, rows);
             }
@@ -189,7 +214,7 @@ pub fn probe_tables(shader: &Shader, clip: ClipRows) -> Result<TableRoles, Strin
         let clip = out.values[position].map(f32::from_bits);
         Ok(Run { clip, backend })
     };
-    let (a, b) = (run(0, None)?, run(3, None)?);
+    let (a, b) = (run(0, None, None)?, run(3, None, None)?);
     for r in [&a, &b] {
         if !is_position(&r.clip) {
             return Err(format!(
@@ -217,7 +242,7 @@ pub fn probe_tables(shader: &Shader, clip: ClipRows) -> Result<TableRoles, Strin
         ));
     };
     // which word of the record the program takes: each word names another header element, and the one read says which
-    let c = run(0, Some(u32::from(stride)))?;
+    let c = run(0, Some(u32::from(stride)), None)?;
     let Some(header) = c.backend.header else {
         return Err("the program reads no matrix header".into());
     };
@@ -255,10 +280,81 @@ pub fn probe_tables(shader: &Shader, clip: ClipRows) -> Result<TableRoles, Strin
         }
         Ok(found.id)
     };
+    // the word the instance number is added to: a constant the index of an instance table read is made of, which when it
+    // is 3 moves the first record read by three records
+    let values = Values::of_program(&program).map_err(|e| format!("the value graph: {e}"))?;
+    let mut proved = Vec::new();
+    for (buffer, word) in index_constants(&values, instances) {
+        let moved = run(0, None, Some((buffer, word)))?;
+        if is_position(&moved.clip) && moved.backend.first_word == Some(at0 + BASE_PROBE * u32::from(stride))
+        {
+            proved.push((buffer, word));
+        }
+    }
+    let base = match proved.as_slice() {
+        [(buffer, word)] => {
+            let d3d = iface
+                .resource(*buffer)
+                .and_then(|r| r.provenance.d3d)
+                .ok_or("a constant buffer without a binding")?;
+            shader
+                .interface
+                .resources
+                .iter()
+                .find(|r| {
+                    matches!(r.kind, ResourceKind::ConstantBuffer { .. }) && r.provenance.d3d == Some(d3d)
+                })
+                .map(|r| InstanceBase {
+                    buffer: r.id,
+                    offset: word * 4,
+                })
+        }
+        _ => None,
+    };
     Ok(TableRoles {
         instances: own(instances, u32::from(stride) * 4)?,
         stride,
         matrix_start,
         matrices: own(matrices, 16)?,
+        base,
     })
+}
+
+/// The constant-buffer words (buffer of the lifted interface, word) that the index of a read of the buffer `table` is made
+/// of, over the nodes the outputs reach.
+fn index_constants(values: &Values, table: ResourceId) -> BTreeSet<(ResourceId, u32)> {
+    let mut indexes: Vec<NodeId> = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut pending: Vec<NodeId> = values.outputs().values().copied().collect();
+    pending.extend(values.discards().iter().flatten().copied());
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        if let Node::Global {
+            resource: Some(resource),
+            at: At::Indexed { index, .. },
+        } = values.node(id)
+            && *resource == table
+        {
+            indexes.extend(index);
+        }
+        pending.extend(values.operands(id));
+    }
+    let mut words = BTreeSet::new();
+    let mut seen = BTreeSet::new();
+    while let Some(id) = indexes.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        if let Node::Global {
+            resource: Some(resource),
+            at: At::Component(word),
+        } = values.node(id)
+        {
+            words.insert((*resource, *word));
+        }
+        indexes.extend(values.operands(id));
+    }
+    words
 }
