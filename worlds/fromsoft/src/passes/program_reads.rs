@@ -32,8 +32,8 @@
 //! a fade) is not a material slot's coverage.
 use crate::metaparam::{Metaparam, Texture, texture_number};
 use primase_core::shader::{Resource, ResourceId, ResourceKind, ShaderFormat};
-use primase_shader::{BoundSizes, Program};
 use primase_shader::flow::{BinaryOperator, Node, NodeId, Op, Read, UnaryOperator, Values};
+use primase_shader::{BoundSizes, Program};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// The render target the programs write the albedo to.

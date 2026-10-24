@@ -8,10 +8,10 @@ use crate::metaparam::Metaparam;
 use crate::{Result, invalid};
 use primase_core::Entity;
 use primase_core::shader::{
-    Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantBufferBinding, ConstantRole,
-    DepthState, FrameParameter, FrameTexture, InputBinding, InputRole, LaneStream, MatrixLines, ObjectParameter,
-    OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Shader, Stage, StageBinding,
-    TargetState, TextureBinding, TextureSource, ViewParameter,
+    Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantBufferBinding,
+    ConstantRole, DepthState, FrameParameter, FrameTexture, InputBinding, InputRole, LaneStream, MatrixLines,
+    ObjectParameter, OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Shader,
+    Stage, StageBinding, TargetState, TextureBinding, TextureSource, ViewParameter,
 };
 use primase_shader::matrix::{Unshown, state_lines};
 use primase_shader::{D3dClass, Interface, Program, Resource, ScalarType, SystemValue};
