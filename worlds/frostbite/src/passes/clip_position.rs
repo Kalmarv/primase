@@ -213,7 +213,7 @@ pub fn clip_rows(values: &Values, interface: &Interface, buffer: ResourceId) -> 
 }
 
 /// The constant buffer at register 4, space 0 of an interface.
-fn pass_buffer(interface: &Interface) -> Option<ResourceId> {
+pub(crate) fn pass_buffer(interface: &Interface) -> Option<ResourceId> {
     interface
         .resources
         .iter()

@@ -35,6 +35,10 @@
 //!   and its three camera words [`ViewParameter::CameraPosition`](primase_core::shader::ViewParameter::CameraPosition), cut
 //!   out of the `Unknown` constants over them; a program that has not that form keeps them `Unknown`. The words differ by
 //!   pass, so they come from the program, not from a fixed offset.
+//!   Its buffers are stated by running the program ([`super::buffer_tables`]): when it reads an instance table and a matrix
+//!   table the way the probe documents, they are [`BufferTable::Instances`] and [`BufferTable::HeaderedMatrices`] (three
+//!   rows); every other buffer of a vertex stage, and every buffer of a program the probe finds nothing in, is `Unknown`
+//!   with the reason.
 //! - **Textures.** A slot the binding sets name is the depot block's parameter of that name, and the parameter's link
 //!   ([`FrostbiteMaterial::textures`], made by [`Source::resolve_textures`](crate::folder::Source::resolve_textures))
 //!   gives the texture entity: `Texture` with the default sampler state (the sampler is not decoded). The texture is a
@@ -50,12 +54,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::shader::{
-    ConstantBinding, ConstantRole, D3dClass, InputBinding, InputRole, Interface, KeyPart, OutputBinding,
-    OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Shader, ShaderBinding, Stage,
-    StageBinding, SystemValue, TextureBinding, TextureDim, TextureSource, VariantKey,
+    BufferBinding, BufferSource, BufferTable, ConstantBinding, ConstantRole, D3dClass, InputBinding,
+    InputRole, Interface, KeyPart, OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind,
+    SamplerState, Shader, ShaderBinding, Stage, StageBinding, SystemValue, TextureBinding, TextureDim,
+    TextureSource, VariantKey,
 };
 use primase_core::{Component, Entity, Semantic, Texture, TextureLayers, World};
 
+use super::buffer_tables::{TableRoles, probe_tables};
 use super::clip_position::{ClipRows, shader_clip_rows, state_clip_roles};
 use crate::binding::{Bindings, Group};
 use crate::components::{
@@ -183,9 +189,7 @@ fn bind_material(
             }
             let bindings = sets.map(FrostbiteBindings::bindings);
             for (i, (stage, shader, program)) in shaders.iter().enumerate() {
-                let clip = (*stage == Stage::Vertex)
-                    .then(|| clip_of(clips, *shader, program, log))
-                    .flatten();
+                let vertex = (*stage == Stage::Vertex).then(|| vertex_roles_of(clips, *shader, program, log));
                 let mut bound = stage_binding(
                     *stage,
                     *shader,
@@ -196,7 +200,7 @@ fn bind_material(
                     &m.textures,
                     &|t| texture_dimension(world, t),
                     i > 0,
-                    clip,
+                    vertex.as_ref(),
                     log,
                 );
                 bound.variant = Some(key.clone());
@@ -226,7 +230,7 @@ fn stage_binding(
     links: &[MaterialTexture],
     dimension: &dyn Fn(Entity) -> Option<(TextureDim, bool)>,
     vertex_bound: bool,
-    clip: Option<(ResourceId, ClipRows)>,
+    vertex: Option<&VertexRoles>,
     log: &mut PassLog,
 ) -> StageBinding {
     let inputs = match stage {
@@ -280,7 +284,7 @@ fn stage_binding(
             _ => {}
         }
     }
-    if let Some((buffer, rows)) = clip {
+    if let Some((buffer, rows)) = vertex.and_then(|v| v.clip) {
         if state_clip_roles(&mut constants, buffer, rows) {
             log.count(
                 "vertex stages whose clip position rows and camera position are stated",
@@ -293,6 +297,7 @@ fn stage_binding(
             );
         }
     }
+    let buffers = vertex.map_or_else(Vec::new, |v| buffer_bindings(interface, &v.tables));
     let outputs = if stage == Stage::Pixel {
         interface
             .outputs
@@ -320,41 +325,86 @@ fn stage_binding(
         inputs,
         constants,
         textures,
-        buffers: Vec::new(),
+        buffers,
         outputs,
     }
 }
 
-/// What each vertex program's clip position is (see [`super::clip_position`]), by its shader entity: a program is read
-/// once however many materials and permutations use it.
-type ClipCache = BTreeMap<Entity, Option<(ResourceId, ClipRows)>>;
+/// What the pass reads out of a vertex program by walking or running it: where its clip position takes its rows and
+/// camera from ([`super::clip_position`]) and which buffers are its instance and matrix tables ([`super::buffer_tables`]).
+#[derive(Clone, Debug)]
+struct VertexRoles {
+    clip: Option<(ResourceId, ClipRows)>,
+    /// The tables, or why the program's buffers are left unknown.
+    tables: Result<TableRoles, String>,
+}
 
-/// The rows and camera words the vertex program `shader` places its clip position with, when it has the
-/// camera-relative form; the log counts each program once, by whether it has it.
-fn clip_of(
-    cache: &mut ClipCache,
-    entity: Entity,
-    shader: &Shader,
-    log: &mut PassLog,
-) -> Option<(ResourceId, ClipRows)> {
-    *cache
+/// [`VertexRoles`] by shader entity: a program is read once however many materials and permutations use it.
+type ClipCache = BTreeMap<Entity, VertexRoles>;
+
+/// The roles of the vertex program `shader`; the log counts each program once, by what was found.
+fn vertex_roles_of(cache: &mut ClipCache, entity: Entity, shader: &Shader, log: &mut PassLog) -> VertexRoles {
+    cache
         .entry(entity)
-        .or_insert_with(|| match shader_clip_rows(shader) {
-            Ok(found) => {
-                log.count(
-                    "vertex programs whose clip position is a camera-relative view-projection",
-                    1,
-                );
-                Some(found)
-            }
-            Err(_) => {
-                log.count(
-                    "vertex programs whose clip position has no camera-relative form, left unknown",
-                    1,
-                );
-                None
-            }
+        .or_insert_with(|| {
+            let clip = shader_clip_rows(shader).ok();
+            log.count(
+                if clip.is_some() {
+                    "vertex programs whose clip position is a camera-relative view-projection"
+                } else {
+                    "vertex programs whose clip position has no camera-relative form, left unknown"
+                },
+                1,
+            );
+            let tables = match clip {
+                Some((_, rows)) => probe_tables(shader, rows),
+                None => Err("the clip position is not the camera-relative form the table probe needs".to_owned()),
+            };
+            log.count(
+                if tables.is_ok() {
+                    "vertex programs whose instance and matrix tables the probe found"
+                } else {
+                    "vertex programs whose buffers are left unknown: the probe found no instance and matrix tables"
+                },
+                1,
+            );
+            VertexRoles { clip, tables }
         })
+        .clone()
+}
+
+/// The buffer slots of a vertex stage: the instance and matrix tables the probe found, as the roles [`BufferTable`] gives
+/// them; every other buffer of the program, and every buffer of a program the probe found nothing in, is `Unknown` with the
+/// reason.
+fn buffer_bindings(interface: &Interface, tables: &Result<TableRoles, String>) -> Vec<BufferBinding> {
+    let mut buffers = Vec::new();
+    if let Ok(t) = tables {
+        buffers.push(BufferBinding {
+            resource: t.matrices,
+            source: BufferSource::Table(BufferTable::HeaderedMatrices { rows: 3 }),
+        });
+        buffers.push(BufferBinding {
+            resource: t.instances,
+            source: BufferSource::Table(BufferTable::Instances {
+                stride: t.stride,
+                matrix_start: t.matrix_start,
+                matrices: t.matrices,
+            }),
+        });
+    }
+    for r in &interface.resources {
+        if matches!(r.kind, ResourceKind::Buffer(_)) && !buffers.iter().any(|b| b.resource == r.id) {
+            let why = match tables {
+                Ok(_) => "the table probe reads two buffers, the instance table and the matrix table; this is neither".to_owned(),
+                Err(why) => format!("not read by the table probe: {why}"),
+            };
+            buffers.push(BufferBinding {
+                resource: r.id,
+                source: BufferSource::Unknown { why },
+            });
+        }
+    }
+    buffers
 }
 
 /// The dimension a shader reads texture `t` as and whether it is arrayed: a 2D map is a plain 2D texture, a texture of

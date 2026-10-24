@@ -1,5 +1,6 @@
 //! Frostbite's lowerings: its dialect to core meanings, each choice the program's.
 
+pub mod buffer_tables;
 pub mod clip_position;
 mod resolve_shaders;
 
