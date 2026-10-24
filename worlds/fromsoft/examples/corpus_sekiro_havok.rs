@@ -27,7 +27,8 @@ fn main() -> Result<(), BoxError> {
     }
     let [install, dll, out] = paths.as_slice() else {
         return Err(
-            "usage: corpus_sekiro_havok <Sekiro install> <oo2core_6_win64.dll> <out> [--area m11_00_00_00]".into(),
+            "usage: corpus_sekiro_havok <Sekiro install> <oo2core_6_win64.dll> <out> [--area m11_00_00_00]"
+                .into(),
         );
     };
     let suffix = area
