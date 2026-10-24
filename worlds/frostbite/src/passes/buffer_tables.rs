@@ -28,14 +28,14 @@
 //! back at instances 0 and 3 exactly. A program that does not do this (another header layout, a third buffer, a record
 //! word that is not the last, rows not directly after a zero header) fails the probe and its buffers stay unknown.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::shader::{
     BufferKind, Interface, ResourceId, ResourceKind, ScalarType, Shader, ShaderFormat, Stage, SystemValue,
 };
 use primase_shader::WordsRead;
 use primase_shader::flow::{At, Node, Values};
-use primase_shader_exec::{Backend, Element, Executable, ImageSample, Resources, Runner};
+use primase_shader_exec::probe::{BufferReads, ProbeRun, VertexProbe};
 
 use super::clip_position::{ClipRows, pass_buffer};
 
@@ -107,11 +107,8 @@ fn matrix_word(header: u32, word: u32) -> u32 {
     }
 }
 
-impl Backend for Tables {
-    fn sample(&mut self, _request: ImageSample<Element>) -> Result<[f32; 4], String> {
-        Ok([0.5; 4])
-    }
-    fn read_buffer(&mut self, view: ResourceId, word: u32, count: u8) -> Result<[u32; 4], String> {
+impl BufferReads for Tables {
+    fn read(&mut self, view: ResourceId, word: u32, count: u8) -> Result<[u32; 4], String> {
         match (self.first, self.second) {
             (None, _) => {
                 self.first = Some(view);
@@ -136,15 +133,6 @@ impl Backend for Tables {
         }
         Ok(out)
     }
-    fn buffer_words(&mut self, _view: ResourceId) -> Result<u32, String> {
-        Ok(1 << 20)
-    }
-}
-
-/// One run of the program at `instance`: the clip position and what the backend saw.
-struct Run {
-    clip: [f32; 4],
-    backend: Tables,
 }
 
 /// The tables `shader` (a vertex program with the camera-relative clip form `clip`) reads its matrices through, in the
@@ -158,17 +146,15 @@ pub fn probe_tables(shader: &Shader, clip: ClipRows) -> Result<TableRoles, Strin
     }
     let program =
         primase_dxil::lift(&shader.bytecode).map_err(|e| format!("the program does not lift: {e}"))?;
+    let probe = VertexProbe::new(program)?;
+    let program = probe.program();
     let iface = &program.interface;
-    let position = iface
-        .outputs
-        .iter()
-        .position(|o| o.system == Some(SystemValue::ClipPosition))
-        .ok_or("the program writes no clip position")?;
     let pass = pass_buffer(iface).ok_or("the lifted program has no constant buffer at register 4")?;
-    let exe =
-        Executable::new(&program).map_err(|e| format!("the executor does not take the program: {e}"))?;
-    let run = |instance: u32, marked: Option<u32>, base: Option<(ResourceId, u32)>| -> Result<Run, String> {
-        let mut resources = Resources::default();
+    let run = |instance: u32,
+               marked: Option<u32>,
+               base: Option<(ResourceId, u32)>|
+     -> Result<ProbeRun<Tables>, String> {
+        let mut constants = BTreeMap::new();
         for r in &iface.resources {
             if let ResourceKind::ConstantBuffer { layout } = &r.kind {
                 let mut rows = vec![[0u32; 4]; layout.size.div_ceil(16).max(1) as usize];
@@ -184,12 +170,9 @@ pub fn probe_tables(shader: &Shader, clip: ClipRows) -> Result<TableRoles, Strin
                 {
                     rows[word as usize / 4][word as usize % 4] = BASE_PROBE;
                 }
-                resources.constants.insert(r.id, rows);
+                constants.insert(r.id, rows);
             }
         }
-        let bound = exe
-            .bind_resources(&resources)
-            .map_err(|e| format!("the constants do not bind: {e}"))?;
         let args: Vec<[u32; 4]> = iface
             .inputs
             .iter()
@@ -200,7 +183,7 @@ pub fn probe_tables(shader: &Shader, clip: ClipRows) -> Result<TableRoles, Strin
                 (None, _) => [0; 4],
             })
             .collect();
-        let mut backend = Tables {
+        let tables = Tables {
             first: None,
             second: None,
             first_word: None,
@@ -208,32 +191,27 @@ pub fn probe_tables(shader: &Shader, clip: ClipRows) -> Result<TableRoles, Strin
             marked,
             header: None,
         };
-        let mut runner = Runner::<1>::new(&exe, &bound, &mut backend, None);
-        let [out] = runner
-            .run([&args])
-            .map_err(|e| format!("the program does not run: {e}"))?;
-        let clip = out.values[position].map(f32::from_bits);
-        Ok(Run { clip, backend })
+        probe.run(constants, &args, tables)
     };
     let (a, b) = (run(0, None, None)?, run(3, None, None)?);
     for r in [&a, &b] {
         if !is_position(&r.clip) {
-            return Err(format!(
+            return Err(r.textures.reason(format!(
                 "with a zero header and identity rows its clip position is {:?}, not the position given",
                 r.clip
-            ));
+            )));
         }
-        if r.backend.more {
+        if r.buffers.more {
             return Err("the program reads more than two buffers".into());
         }
     }
-    let (Some(instances), Some(matrices)) = (a.backend.first, a.backend.second) else {
+    let (Some(instances), Some(matrices)) = (a.buffers.first, a.buffers.second) else {
         return Err("the program reads one buffer, not an instance table and a matrix table".into());
     };
-    if (b.backend.first, b.backend.second) != (Some(instances), Some(matrices)) {
+    if (b.buffers.first, b.buffers.second) != (Some(instances), Some(matrices)) {
         return Err("the instances read other buffers".into());
     }
-    let (Some(at0), Some(at3)) = (a.backend.first_word, b.backend.first_word) else {
+    let (Some(at0), Some(at3)) = (a.buffers.first_word, b.buffers.first_word) else {
         return Err("the program reads no instance record".into());
     };
     let step = at3.checked_sub(at0).filter(|s| s % 3 == 0 && *s > 0);
@@ -244,7 +222,7 @@ pub fn probe_tables(shader: &Shader, clip: ClipRows) -> Result<TableRoles, Strin
     };
     // which word of the record the program takes: each word names another header element, and the one read says which
     let c = run(0, Some(u32::from(stride)), None)?;
-    let Some(header) = c.backend.header else {
+    let Some(header) = c.buffers.header else {
         return Err("the program reads no matrix header".into());
     };
     let named = header.wrapping_sub(RECORD);
@@ -254,10 +232,10 @@ pub fn probe_tables(shader: &Shader, clip: ClipRows) -> Result<TableRoles, Strin
         ));
     }
     if !is_position(&c.clip) {
-        return Err(format!(
+        return Err(c.textures.reason(format!(
             "with the record word it takes its clip position is {:?}, not the position given",
             c.clip
-        ));
+        )));
     }
     let matrix_start = (named / 8) as u8;
     // the same bindings in the shader's own interface, with the element sizes the roles need
@@ -283,11 +261,11 @@ pub fn probe_tables(shader: &Shader, clip: ClipRows) -> Result<TableRoles, Strin
     };
     // the word the instance number is added to: a constant the index of an instance table read is made of, which when it
     // is 3 moves the first record read by three records
-    let values = Values::of_program(&program).map_err(|e| format!("the value graph: {e}"))?;
+    let values = Values::of_program(program).map_err(|e| format!("the value graph: {e}"))?;
     let mut proved = Vec::new();
     for (buffer, word) in index_constants(&values, iface, instances) {
         let moved = run(0, None, Some((buffer, word)))?;
-        if is_position(&moved.clip) && moved.backend.first_word == Some(at0 + BASE_PROBE * u32::from(stride))
+        if is_position(&moved.clip) && moved.buffers.first_word == Some(at0 + BASE_PROBE * u32::from(stride))
         {
             proved.push((buffer, word));
         }

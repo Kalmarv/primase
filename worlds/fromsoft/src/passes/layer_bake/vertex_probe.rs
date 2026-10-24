@@ -15,15 +15,11 @@
 //! [`palette_indexed_by_vertex`] reads in the value graph whether a constant buffer is indexed by a vertex stream, as a
 //! joint palette is, or only by the instance, as the object matrices of an unskinned draw are.
 
-use primase_core::shader::{
-    BufferLayout, ResourceId, ResourceKind, ScalarType, Shader, ShaderFormat, Stage, SystemValue,
-};
+use primase_core::shader::{BufferLayout, ResourceId, ResourceKind, ScalarType, Shader, ShaderFormat, Stage};
 use primase_shader::Program;
 use primase_shader::flow::{At, Node, NodeId, Values};
-use primase_shader_exec::{
-    Backend, Element, Executable, ImageLoad, ImageQuery, ImageSample, Resources, Runner,
-};
-use std::collections::BTreeSet;
+use primase_shader_exec::probe::{ProbeRun, VertexProbe, Zeros};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The position the probe gives the program, and the camera it moves to.
 const POSITION: [f32; 3] = [0.3, 0.4, 0.5];
@@ -37,28 +33,6 @@ pub enum CameraForm {
     Relative,
     /// The program multiplies the world position as it is.
     Plain,
-}
-
-/// A backend that answers every read with zero: no instance table, no texture (a texture is one texel).
-struct Zeros;
-
-impl Backend for Zeros {
-    fn sample(&mut self, _request: ImageSample<Element>) -> Result<[f32; 4], String> {
-        Ok([0.5; 4])
-    }
-    fn read_buffer(&mut self, _view: ResourceId, _word: u32, _count: u8) -> Result<[u32; 4], String> {
-        Ok([0; 4])
-    }
-    // a texture the program loads from or asks the size of (a vertex texture of its own): one texel of zeros
-    fn load(&mut self, _request: ImageLoad<Element>) -> Result<[u32; 4], String> {
-        Ok([0; 4])
-    }
-    fn query(&mut self, _request: ImageQuery<Element>) -> Result<[u32; 4], String> {
-        Ok([1; 4])
-    }
-    fn buffer_words(&mut self, _view: ResourceId) -> Result<u32, String> {
-        Ok(1 << 20)
-    }
 }
 
 /// The program of a shader, lifted from its bytecode.
@@ -88,22 +62,35 @@ pub(crate) fn flat_constants(layout: &BufferLayout) -> Vec<(String, u32, Option<
 }
 
 /// Whether the clip position of the vertex program `shader` is of a world with the camera at its origin, by running it with
-/// the matrix, the palettes and the camera at the values of the module documentation.
+/// the matrix, the palettes and the camera at the values of the module documentation ([`VertexProbe`]).
 pub fn camera_form(shader: &Shader) -> Result<CameraForm, String> {
     if shader.interface.stage != Stage::Vertex {
         return Err("the shader is not a vertex program".into());
     }
     let program = lift(shader).map_err(|e| format!("the program does not lift: {e}"))?;
-    let iface = &program.interface;
-    let position = iface
-        .outputs
+    let probe = VertexProbe::new(program)?;
+    let iface = &probe.program().interface;
+    let inputs: Vec<[u32; 4]> = iface
+        .inputs
         .iter()
-        .position(|o| o.system == Some(SystemValue::ClipPosition))
-        .ok_or("the program writes no clip position")?;
-    let exe =
-        Executable::new(&program).map_err(|e| format!("the executor does not take the program: {e}"))?;
-    let run = |camera: [f32; 3]| -> Result<[f32; 4], String> {
-        let mut resources = Resources::default();
+        .map(|i| {
+            let name = i.label.name.to_ascii_uppercase();
+            match (i.system, i.value.scalar, name.as_str()) {
+                (Some(_), _, _) => [0; 4],
+                (None, ScalarType::Float, "POSITION") => [
+                    POSITION[0].to_bits(),
+                    POSITION[1].to_bits(),
+                    POSITION[2].to_bits(),
+                    1.0f32.to_bits(),
+                ],
+                // the whole weight on the first joint
+                (None, ScalarType::Float, "BLENDWEIGHT") => [1.0f32.to_bits(), 0, 0, 0],
+                _ => [0; 4],
+            }
+        })
+        .collect();
+    let run = |camera: [f32; 3]| -> Result<ProbeRun<Zeros>, String> {
+        let mut constants = BTreeMap::new();
         for r in &iface.resources {
             let ResourceKind::ConstantBuffer { layout } = &r.kind else {
                 continue;
@@ -134,54 +121,29 @@ pub fn camera_form(shader: &Shader) -> Result<CameraForm, String> {
                     _ => {}
                 }
             }
-            resources.constants.insert(r.id, rows);
+            constants.insert(r.id, rows);
         }
-        let bound = exe
-            .bind_resources(&resources)
-            .map_err(|e| format!("the constants do not bind: {e}"))?;
-        let args: Vec<[u32; 4]> = iface
-            .inputs
-            .iter()
-            .map(|i| {
-                let name = i.label.name.to_ascii_uppercase();
-                match (i.system, i.value.scalar, name.as_str()) {
-                    (Some(_), _, _) => [0; 4],
-                    (None, ScalarType::Float, "POSITION") => [
-                        POSITION[0].to_bits(),
-                        POSITION[1].to_bits(),
-                        POSITION[2].to_bits(),
-                        1.0f32.to_bits(),
-                    ],
-                    // the whole weight on the first joint
-                    (None, ScalarType::Float, "BLENDWEIGHT") => [1.0f32.to_bits(), 0, 0, 0],
-                    _ => [0; 4],
-                }
-            })
-            .collect();
-        let mut backend = Zeros;
-        let mut runner = Runner::<1>::new(&exe, &bound, &mut backend, None);
-        let [out] = runner
-            .run([&args])
-            .map_err(|e| format!("the program does not run: {e}"))?;
-        Ok(out.values[position].map(f32::from_bits))
+        probe.run(constants, &inputs, Zeros)
     };
     let near = |got: [f32; 4], want: [f32; 4]| got.iter().zip(want).all(|(g, w)| (g - w).abs() <= 1e-4);
     let (x, y, z) = (POSITION[0], POSITION[1], POSITION[2]);
     let at_origin = run([0.0; 3])?;
-    if !near(at_origin, [x, y, z, 1.0]) {
-        return Err(format!(
-            "at the identity matrix and palettes its clip position is {at_origin:?}, not the position given"
-        ));
+    if !near(at_origin.clip, [x, y, z, 1.0]) {
+        return Err(at_origin.textures.reason(format!(
+            "at the identity matrix and palettes its clip position is {:?}, not the position given",
+            at_origin.clip
+        )));
     }
     let moved = run(CAMERA)?;
-    if near(moved, at_origin) {
+    if near(moved.clip, at_origin.clip) {
         Ok(CameraForm::Plain)
-    } else if near(moved, [x - CAMERA[0], y - CAMERA[1], z - CAMERA[2], 1.0]) {
+    } else if near(moved.clip, [x - CAMERA[0], y - CAMERA[1], z - CAMERA[2], 1.0]) {
         Ok(CameraForm::Relative)
     } else {
-        Err(format!(
-            "with the camera moved its clip position is {moved:?}, neither the same nor the position minus the camera"
-        ))
+        Err(moved.textures.reason(format!(
+            "with the camera moved its clip position is {:?}, neither the same nor the position minus the camera",
+            moved.clip
+        )))
     }
 }
 

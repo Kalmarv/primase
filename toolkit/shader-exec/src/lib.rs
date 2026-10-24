@@ -37,6 +37,7 @@ mod mask;
 pub mod mesh;
 mod pipeline;
 mod pixel;
+pub mod probe;
 mod rayquery;
 mod request;
 mod run;
