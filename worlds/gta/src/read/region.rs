@@ -388,20 +388,6 @@ struct Placed {
     online: bool,
 }
 
-/// `a` then `b`: `a * b`, in f64, rounded once.
-fn compose(a: &Transform, b: &Transform) -> Transform {
-    let lin = |m: &Transform, v: [f32; 3]| -> [f64; 3] {
-        std::array::from_fn(|i| (0..3).map(|j| f64::from(m.cols[j][i]) * f64::from(v[j])).sum())
-    };
-    let mut cols = [[0f32; 3]; 4];
-    for (c, col) in cols.iter_mut().take(3).enumerate() {
-        *col = lin(a, b.cols[c]).map(|v| v as f32);
-    }
-    let t = lin(a, b.cols[3]);
-    cols[3] = std::array::from_fn(|i| (t[i] + f64::from(a.cols[3][i])) as f32);
-    Transform { cols }
-}
-
 /// The condition of a placement that exists when all of `literals` hold: none without literals, and the condition
 /// that never holds when a literal names no value (core refuses an empty literal; an hour mask can be empty).
 fn condition(literals: Vec<Literal>) -> Option<Condition> {
@@ -635,7 +621,7 @@ fn place<'a, 'l>(
             };
             report.interior_entity_sets += interior.entity_sets;
             for (ci, ce) in interior.entities.iter().enumerate() {
-                let t = compose(&frame, &entity_transform(ce));
+                let t = frame.compose(&entity_transform(ce));
                 all.push(Placed {
                     ymap: ymap.clone(),
                     ipl: ipl.clone(),

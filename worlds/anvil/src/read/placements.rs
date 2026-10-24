@@ -286,18 +286,6 @@ fn transform(m: &[f32; 16], s: f32) -> Transform {
     }
 }
 
-/// `outer` after `inner` (`world = outer (inner v)`), computed in f64 and rounded once.
-fn compose(outer: &Transform, inner: &Transform) -> Transform {
-    let o = outer.cols.map(|c| c.map(f64::from));
-    let i = inner.cols.map(|c| c.map(f64::from));
-    let apply = |v: [f64; 3]| [0, 1, 2].map(|r| o[0][r] * v[0] + o[1][r] * v[1] + o[2][r] * v[2]);
-    let lin = |c: usize| apply(i[c]).map(|x| x as f32);
-    let t = apply(i[3]);
-    Transform {
-        cols: [lin(0), lin(1), lin(2), [0, 1, 2].map(|r| (t[r] + o[3][r]) as f32)],
-    }
-}
-
 /// A generic `Texture` binding's key: the CRC-32 of its label.
 const GENERIC_TEXTURE: u32 = 0x4DDB_34EE;
 
@@ -709,7 +697,7 @@ impl<'a> Placer<'a> {
                             }
                             parts.extend(
                                 child_parts.into_iter().map(|(e, local)| {
-                                    (e, Some(local.map_or(within, |l| compose(&within, &l))))
+                                    (e, Some(local.map_or(within, |l| within.compose(&l))))
                                 }),
                             );
                         }
@@ -1988,7 +1976,7 @@ impl<'a> Placer<'a> {
                     let entity = transform(&e.matrix, 1.0);
                     let transforms = instances
                         .iter()
-                        .map(|i| compose(&entity, &transform(i, 1.0)))
+                        .map(|i| entity.compose(&transform(i, 1.0)))
                         .collect();
                     (prototype, transforms, overrides)
                 }
@@ -2238,7 +2226,7 @@ impl<'a> Placer<'a> {
             let owners: Vec<Transform> = match &instances {
                 Some(instances) => instances
                     .iter()
-                    .map(|i| compose(&owner, &transform(i, 1.0)))
+                    .map(|i| owner.compose(&transform(i, 1.0)))
                     .collect(),
                 None => vec![owner],
             };
@@ -2256,7 +2244,7 @@ impl<'a> Placer<'a> {
                             variant: 0,
                         },
                     );
-                    let t = local.map_or(owner, |l| compose(&owner, &l));
+                    let t = local.map_or(owner, |l| owner.compose(&l));
                     self.world.insert(p, self.frame.transform(&t));
                     if let Some(layers) = &layers {
                         self.world.insert(p, layers.clone());

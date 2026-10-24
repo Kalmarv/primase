@@ -144,6 +144,26 @@ impl Transform {
         })
     }
 
+    /// `self` after `inner` (`world = self (inner local)`): the transform of an entity placed by `inner` in a space
+    /// `self` places, computed in f64 from the stored values and each entry rounded once to f32. A chain of several
+    /// rounds at each link; a chain whose intermediate rounding matters is composed in f64 by its owner.
+    pub fn compose(&self, inner: &Transform) -> Transform {
+        let o = self.cols.map(|c| c.map(f64::from));
+        let linear = |v: [f32; 3]| -> [f64; 3] {
+            let v = v.map(f64::from);
+            std::array::from_fn(|r| o[0][r] * v[0] + o[1][r] * v[1] + o[2][r] * v[2])
+        };
+        let [x, y, z, t] = inner.cols.map(linear);
+        Transform {
+            cols: [
+                x.map(|v| v as f32),
+                y.map(|v| v as f32),
+                z.map(|v| v as f32),
+                std::array::from_fn(|r| (t[r] + o[3][r]) as f32),
+            ],
+        }
+    }
+
     /// What the basis does besides rotating, scaling and translating, the one meaning every reader, writer and mesh operation
     /// that classifies a placement shares: with `u_i = c_i / |c_i|`, degenerate when some `|c_i| <` [`DEGENERATE_BASIS`] or
     /// `|det| <=` [`DEGENERATE_BASIS`] `|c0||c1||c2|`; sheared when some `|u_i . u_j| >` [`SHEAR_TOLERANCE`]; mirrored when
@@ -1634,6 +1654,30 @@ mod tests {
             TransformKind::Degenerate
         );
     }
+    /// Composition is `outer (inner v)`, each entry rounded once: 1 + 2^-24 + 2^-24 is 1 + 2^-23 (an f32), where
+    /// summing in f32 would round to 1 at each step.
+    #[test]
+    fn composition_rounds_each_entry_once() {
+        let outer = Transform {
+            cols: [[1., 0., 0.], [1., 0., -1.], [1., 1., 0.], [10., 20., 30.]],
+        };
+        let tiny = 2f32.powi(-24);
+        let inner = Transform {
+            cols: [[1., tiny, tiny], [0., 1., 0.], [0., 0., 2.], [1., 2., 3.]],
+        };
+        let c = outer.compose(&inner);
+        assert_eq!(c.cols[0], [1. + 2. * tiny, tiny, -tiny]);
+        assert_eq!(c.cols[1], [1., 0., -1.]);
+        assert_eq!(c.cols[2], [2., 2., 0.]);
+        assert_eq!(c.cols[3], [16., 23., 28.]);
+        // a point through the composition is the point through inner, then outer
+        let p = [0., 1., 1.];
+        assert_eq!(c.apply(p), [19., 25., 27.]);
+        assert_eq!(c.apply(p), outer.apply(inner.apply(p)));
+        assert_eq!(Transform::IDENTITY.compose(&inner), inner);
+        assert_eq!(inner.compose(&Transform::IDENTITY), inner);
+    }
+
     #[test]
     fn normal_basis_has_explicit_json_and_default() {
         assert_eq!(NormalBasis::default(), NormalConvention::GLTF.basis);
