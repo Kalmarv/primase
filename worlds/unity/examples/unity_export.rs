@@ -90,7 +90,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Box::new(primase_unity::lower::LowerUnityPbr),
         Box::new(primase_unity::lower_terrain::LowerUnityTerrain),
         Box::new(primase_unity::lower_collision::LowerUnityCollision),
-        Box::new(primase_unity::lower_lights::LowerUnityLights),
+        // URP's intensity has no unit: taken at face value as candela (lux), the calibration this program states
+        Box::new(primase_unity::lower_lights::LowerUnityLights {
+            candela_per_unit: 1.0,
+        }),
         Box::new(primase_image::NormalizeNormals),
         // what the scene does not state, this program's choices: zeros for a texture coordinate set a primitive lacks,
         // light grey, dielectric and rough for a material without PBR factors

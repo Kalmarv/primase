@@ -101,7 +101,7 @@ fn lights_lower_to_core() {
     .unwrap();
     let mut w = World::new();
     read_level(&player, scan["level"].as_str().unwrap(), &mut w).unwrap();
-    let log = lower_unity_lights(&mut w).unwrap();
+    let log = lower_unity_lights(&mut w, 1.0).unwrap();
     println!("light lowering: {:?}; {:?}", log.counts, log.approximations);
     assert_eq!(w.verify_components(), Vec::new());
     let scene = Scene::read(&player, scan["level"].as_str().unwrap()).unwrap();
@@ -230,7 +230,7 @@ fn the_sun_matches_the_independent_reader() {
     let mut w = World::new();
     let report = read_level(&player, level, &mut w).unwrap();
     assert_eq!(report.sun_named, path_id != 0);
-    let log = lower_unity_lights(&mut w).unwrap();
+    let log = lower_unity_lights(&mut w, 1.0).unwrap();
     let sun = w.resource::<Environment>().and_then(|e| e.sun);
     let main = &oracle["main_light"];
     let expected = match main["rule"].as_str().unwrap() {

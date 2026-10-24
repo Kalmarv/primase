@@ -16,9 +16,12 @@
 //! match them (SkateBIRD 2019.4's trilight levels store one probe for different colours).
 //!
 //! Colours: stored gamma-encoded, so linear by `srgb_to_linear` (as `lower-unity-lights` takes the lights' colours);
-//! alpha is not light. Intensity: `m_AmbientIntensity` as stored. Unity's ambient is in the units of its lights'
-//! intensity, relative to nothing physical, and is taken at the scale of a directional `core.light`'s (as
-//! `lower-unity-lights` takes a directional light's intensity as lux): an approximation, reported. Unity's editor shows
+//! alpha is not light. Intensity: `m_AmbientIntensity` as stored, times `candela-per-unit`, the same required
+//! calibration `lower-unity-lights` states (finite and above 0): Unity's ambient is in the units of its lights'
+//! intensity, relative to nothing physical, so ambient and sun keep Unity's proportion only when one number scales both,
+//! and the ambient is taken at the scale of a directional `core.light`'s: an approximation, reported. An ambient
+//! intensity that is negative or not finite (or not finite at the calibration) is no ambient `core.environment` can
+//! hold: the ambient is left out and counted. Unity's editor shows
 //! the intensity multiplier for skybox ambient alone; that it scales trilight and flat colours too is not verified
 //! against the engine, so a multiplier other than 1 in those modes is reported as an approximation. A skybox probe is
 //! taken to hold the multiplier already (intensity 1 here; a stored multiplier other than 1 is reported).
@@ -26,6 +29,8 @@
 //! The pass keeps the environment's sun (`lower-unity-lights`') and replaces its ambient.
 
 use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
+
+use super::lower_lights::parse_candela_per_unit;
 use primase_core::{Ambient, AmbientLight, Environment, World};
 use primase_image::srgb_to_linear_f32;
 
@@ -51,23 +56,33 @@ impl Choice for UnityAmbientProbe {
     ];
 }
 
-/// `lower-unity-ambient{probe=omit|stored-gradient|probe-average}`: see the module documentation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// `lower-unity-ambient{probe=omit|stored-gradient|probe-average,candela-per-unit}`: see the module documentation.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LowerUnityAmbient {
     pub probe: UnityAmbientProbe,
+    /// Candela (lux) per unit of Unity's intensity: the calibration `lower-unity-lights` is given, finite and above 0.
+    pub candela_per_unit: f32,
 }
 
 /// `lower-unity-ambient`'s declaration ([`primase_core::pass::PassRegistry::add`]): what an ambient whose probe is
-/// not read becomes is the program's, no default.
+/// not read becomes, and the calibration of Unity's intensity, are the program's, no default.
 pub const LOWER_UNITY_AMBIENT: PassSpec = PassSpec {
     name: "lower-unity-ambient",
-    options: &[OptionSpec::choice::<UnityAmbientProbe>(
-        "probe",
-        "what a skybox or custom ambient becomes: omitted, the stored gradient, or the stored probe's average",
-    )],
+    options: &[
+        OptionSpec::choice::<UnityAmbientProbe>(
+            "probe",
+            "what a skybox or custom ambient becomes: omitted, the stored gradient, or the stored probe's average",
+        ),
+        OptionSpec::required(
+            "candela-per-unit",
+            "1",
+            "candela (lux) per unit of Unity's light intensity, finite and above 0: the calibration the lights are given",
+        ),
+    ],
     make: |g| {
         Ok(Box::new(LowerUnityAmbient {
             probe: g.choice("probe"),
+            candela_per_unit: parse_candela_per_unit(g.required("candela-per-unit"))?,
         }))
     },
 };
@@ -103,8 +118,17 @@ pub fn probe_average(probe: &[f32; 27]) -> [f32; 3] {
     [probe[0], probe[9], probe[18]].map(|u| u * PROBE_AVERAGE_PER_L0)
 }
 
-/// The ambient `a` lowers to under `probe`, each outcome reported; `None` when there is none.
-pub fn lower_unity_ambient(a: &UnityAmbient, probe: UnityAmbientProbe, log: &mut PassLog) -> Option<Ambient> {
+/// The ambient `a` lowers to under `probe` at `candela_per_unit`, each outcome reported; `None` when there is none.
+pub fn lower_unity_ambient(
+    a: &UnityAmbient,
+    probe: UnityAmbientProbe,
+    candela_per_unit: f32,
+    log: &mut PassLog,
+) -> Option<Ambient> {
+    if !a.intensity.is_finite() || a.intensity < 0.0 {
+        log.omit("ambient intensity negative or not finite, left out", 1);
+        return None;
+    }
     let gradient = || AmbientLight::Gradient {
         sky: linear(a.sky),
         equator: linear(a.equator),
@@ -179,7 +203,7 @@ pub fn lower_unity_ambient(a: &UnityAmbient, probe: UnityAmbientProbe, log: &mut
         );
     }
     log.approximate(
-        "Unity ambient intensity taken at the scale of a directional light's (lux)",
+        "Unity ambient intensity at the caller's candela-per-unit, the scale of a directional light's (lux)",
         1,
     );
     log.count(
@@ -189,6 +213,11 @@ pub fn lower_unity_ambient(a: &UnityAmbient, probe: UnityAmbientProbe, log: &mut
         },
         1,
     );
+    let intensity = intensity * candela_per_unit;
+    if !intensity.is_finite() {
+        log.omit("ambient intensity not finite at the calibration, left out", 1);
+        return None;
+    }
     Some(Ambient { intensity, light })
 }
 
@@ -197,7 +226,10 @@ impl Pass for LowerUnityAmbient {
         "lower-unity-ambient"
     }
     fn options(&self) -> Options {
-        Options::from([("probe".to_owned(), self.probe.text().to_owned())])
+        Options::from([
+            ("probe".to_owned(), self.probe.text().to_owned()),
+            ("candela-per-unit".to_owned(), self.candela_per_unit.to_string()),
+        ])
     }
     fn requires(&self) -> &[&'static str] {
         &["unity.render_settings"]
@@ -207,7 +239,7 @@ impl Pass for LowerUnityAmbient {
         &["core.environment"]
     }
     fn approximates(&self) -> &'static str {
-        "Unity ambient intensity taken as lux; a skybox or custom ambient omitted or approximated by its stored colours"
+        "Unity ambient intensity as lux at the caller's candela-per-unit; a skybox or custom ambient omitted or approximated by its stored colours"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let Some(stored) = w
@@ -217,7 +249,7 @@ impl Pass for LowerUnityAmbient {
             log.count("scenes storing no ambient", 1);
             return Ok(());
         };
-        let ambient = lower_unity_ambient(&stored, self.probe, log);
+        let ambient = lower_unity_ambient(&stored, self.probe, self.candela_per_unit, log);
         let mut env = w.resource::<Environment>().cloned().unwrap_or_default();
         env.ambient = ambient;
         w.insert_resource(env);
@@ -286,7 +318,12 @@ mod tests {
             ..Default::default()
         });
         let mut log = PassLog::default();
-        LowerUnityAmbient { probe }.run(&mut w, &mut log).unwrap();
+        LowerUnityAmbient {
+            probe,
+            candela_per_unit: 1.0,
+        }
+        .run(&mut w, &mut log)
+        .unwrap();
         assert!(w.verify_resources().is_empty());
         (w, log)
     }
@@ -319,7 +356,9 @@ mod tests {
             assert_eq!(log.counts["gradient ambient"], 1);
             assert_eq!(
                 log.approximations.keys().collect::<Vec<_>>(),
-                ["Unity ambient intensity taken at the scale of a directional light's (lux)"]
+                [
+                    "Unity ambient intensity at the caller's candela-per-unit, the scale of a directional light's (lux)"
+                ]
             );
             let (w, log) = lowered(3, 1.0, probe);
             assert_eq!(
@@ -404,6 +443,7 @@ mod tests {
         });
         let pass = LowerUnityAmbient {
             probe: UnityAmbientProbe::Omit,
+            candela_per_unit: 1.0,
         };
         pass.run(&mut w, &mut PassLog::default()).unwrap();
         let env = w.resource::<Environment>().unwrap();
@@ -419,22 +459,84 @@ mod tests {
     }
 
     #[test]
-    fn options_name_the_choice_and_have_no_default() {
+    fn options_name_the_choice_and_the_calibration_and_have_no_default() {
         let o = |kv: &[(&str, &str)]| -> Options {
             kv.iter()
                 .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
                 .collect()
         };
         assert!(LOWER_UNITY_AMBIENT.instance(&o(&[])).is_err());
-        assert!(LOWER_UNITY_AMBIENT.instance(&o(&[("probe", "sky")])).is_err());
+        // each option alone is not enough
+        assert!(LOWER_UNITY_AMBIENT.instance(&o(&[("probe", "omit")])).is_err());
         assert!(
             LOWER_UNITY_AMBIENT
-                .instance(&o(&[("probe", "omit"), ("x", "1")]))
+                .instance(&o(&[("candela-per-unit", "1")]))
                 .is_err()
         );
+        assert!(
+            LOWER_UNITY_AMBIENT
+                .instance(&o(&[("probe", "sky"), ("candela-per-unit", "1")]))
+                .is_err()
+        );
+        assert!(
+            LOWER_UNITY_AMBIENT
+                .instance(&o(&[("probe", "omit"), ("candela-per-unit", "1"), ("x", "1")]))
+                .is_err()
+        );
+        for bad in ["0", "-1", "nan", "inf", "x", ""] {
+            let err = LOWER_UNITY_AMBIENT
+                .instance(&o(&[("probe", "omit"), ("candela-per-unit", bad)]))
+                .err()
+                .unwrap();
+            assert!(
+                err.to_string().contains("not a finite number above 0"),
+                "{bad}: {err}"
+            );
+        }
         for p in ["omit", "stored-gradient", "probe-average"] {
-            let pass = LOWER_UNITY_AMBIENT.instance(&o(&[("probe", p)])).unwrap();
-            assert_eq!(pass.options(), o(&[("probe", p)]));
+            let both = o(&[("probe", p), ("candela-per-unit", "1771")]);
+            let pass = LOWER_UNITY_AMBIENT.instance(&both).unwrap();
+            assert_eq!(pass.options(), both);
+        }
+    }
+
+    #[test]
+    fn the_calibration_scales_the_ambient_and_a_bad_intensity_leaves_it_out() {
+        let calibrated = |intensity: f32, c: f32| {
+            let mut w = World::new();
+            w.insert_resource(UnityRenderSettings {
+                sun: None,
+                pipeline: None,
+                ambient: Some(stored(3, intensity)),
+                ..Default::default()
+            });
+            let mut log = PassLog::default();
+            LowerUnityAmbient {
+                probe: UnityAmbientProbe::Omit,
+                candela_per_unit: c,
+            }
+            .run(&mut w, &mut log)
+            .unwrap();
+            (ambient(&w), log)
+        };
+        let (a, _) = calibrated(2.0, 1771.0);
+        assert_eq!(a.unwrap().intensity, 2.0 * 1771.0);
+        for (bad, c, why) in [
+            (-1.0, 1.0, "ambient intensity negative or not finite, left out"),
+            (
+                f32::NAN,
+                1.0,
+                "ambient intensity negative or not finite, left out",
+            ),
+            (
+                f32::MAX,
+                2.0,
+                "ambient intensity not finite at the calibration, left out",
+            ),
+        ] {
+            let (a, log) = calibrated(bad, c);
+            assert!(a.is_none(), "{bad}");
+            assert_eq!(log.omitted[why], 1, "{:?}", log.omitted);
         }
     }
 
@@ -538,6 +640,7 @@ mod tests {
             let mut log = PassLog::default();
             LowerUnityAmbient {
                 probe: UnityAmbientProbe::ProbeAverage,
+                candela_per_unit: 1.0,
             }
             .run(&mut w, &mut log)
             .unwrap();
@@ -565,6 +668,7 @@ mod tests {
         let mut log = PassLog::default();
         LowerUnityAmbient {
             probe: UnityAmbientProbe::StoredGradient,
+            candela_per_unit: 1.0,
         }
         .run(&mut w, &mut log)
         .unwrap();

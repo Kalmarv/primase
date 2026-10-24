@@ -315,7 +315,10 @@ fn promoted(w: &mut World, probe: UnityAmbientProbe, lo: [f64; 3], hi: [f64; 3])
             w,
             &Pipeline {
                 passes: vec![
-                    Box::new(LowerUnityAmbient { probe }),
+                    Box::new(LowerUnityAmbient {
+                        probe,
+                        candela_per_unit: 1.0,
+                    }),
                     Box::new(FillAmbientLights::new(grid)),
                 ],
             },

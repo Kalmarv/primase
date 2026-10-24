@@ -86,7 +86,12 @@ fn the_lodges_ambient_lowers_by_its_stored_mode() {
             ..Default::default()
         });
         let mut log = PassLog::default();
-        LowerUnityAmbient { probe }.run(&mut w, &mut log).unwrap();
+        LowerUnityAmbient {
+            probe,
+            candela_per_unit: 1.0,
+        }
+        .run(&mut w, &mut log)
+        .unwrap();
         assert!(w.verify_resources().is_empty());
         let ambient = w.resource::<Environment>().unwrap().ambient.clone();
         (ambient, log)

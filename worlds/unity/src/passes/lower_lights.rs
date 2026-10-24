@@ -4,15 +4,21 @@
 //! - colour: URP shades with the colour property in linear space (the stored value is gamma-encoded), so
 //!   `color = srgb_to_linear(stored rgb)`; a colour temperature, when the light uses one, is not applied (counted);
 //! - intensity: URP lights a surface with `colour x intensity / d^2` for point and spot lights (within its range) and
-//!   `colour x intensity` for a directional one, which is what candela and lux mean to a renderer that takes
-//!   `KHR_lights_punctual` at face value: `intensity = URP intensity`, unchanged (URP's light unit field is not used by
-//!   URP's shading);
+//!   `colour x intensity` for a directional one, which is the form candela and lux take in `KHR_lights_punctual`. The
+//!   number is URP's own and has no unit (URP's light unit field is not used by its shading), so
+//!   `intensity = URP intensity x candela-per-unit`, the caller's required calibration (finite and above 0; `1` takes URP's
+//!   number as the candela or lux of a renderer that reads `KHR_lights_punctual` at face value). A light whose intensity
+//!   is negative (URP has no light that darkens a surface in `core.light`'s terms) or not finite, or that is not finite
+//!   at the calibration, has no punctual form: it is left out and counted, each by which;
 //! - range: URP's range, where its attenuation reaches zero; a directional light has none;
 //! - a spot's cone: URP's spot angles are full cone angles in degrees, so `outer = spot_angle / 2` and
 //!   `inner = inner_spot_angle / 2`, in radians (outer clamped to pi / 2, inner to outer);
 //! - shadows: `m_Shadows.m_Type` none (0) does not cast, hard (1) and soft (2) do; softness is a renderer setting;
 //! - direction: a Unity light shines along its local +Z, which the frame conversion makes the world's local -Z, as
 //!   `core.light` wants: the transform is used as it is.
+//!
+//! `lower-unity-ambient` takes the same calibration: Unity's ambient is in the units of its lights' intensity, so the
+//! ambient and the sun stay in the proportion Unity renders them in only when both are scaled by one number.
 //!
 //! Under another pipeline (built-in) the same conversion is applied and counted as an approximation: built-in
 //! attenuates point and spot lights by its own falloff, not the inverse square, and in a linear-colour project
@@ -36,7 +42,7 @@
 //! Lights with a state condition (`core.condition`: off as stored) are not visible as stored, so neither named nor
 //! candidates; `resolve-state` before this pass leaves the same choice.
 
-use primase_core::pass::{Pass, PassLog, PassSpec};
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::state::Condition;
 use primase_core::{Entity, Light, LightKind, World};
 use primase_image::srgb_to_linear;
@@ -45,8 +51,17 @@ use crate::Result;
 use crate::components::RenderPipeline;
 use crate::components::{UnityLight, UnityRenderSettings};
 
-/// Lower every `unity.light` (see the module documentation).
-pub fn lower_unity_lights(w: &mut World) -> Result<PassLog> {
+/// The calibration option's value (`candela-per-unit`): finite and above 0. Shared with `lower-unity-ambient`.
+pub(crate) fn parse_candela_per_unit(v: &str) -> std::result::Result<f32, String> {
+    v.parse::<f32>()
+        .ok()
+        .filter(|c| c.is_finite() && *c > 0.0)
+        .ok_or_else(|| format!("candela-per-unit: {v} is not a finite number above 0"))
+}
+
+/// Lower every `unity.light` (see the module documentation) with `candela_per_unit` candela (lux for a directional
+/// light) per unit of URP intensity, which is finite and above 0.
+pub fn lower_unity_lights(w: &mut World, candela_per_unit: f32) -> Result<PassLog> {
     let mut log = PassLog::default();
     let lights: Vec<(Entity, UnityLight)> = w.iter::<UnityLight>().map(|(e, l)| (e, l.clone())).collect();
     for (e, l) in lights {
@@ -66,6 +81,26 @@ pub fn lower_unity_lights(w: &mut World) -> Result<PassLog> {
                 continue;
             }
         };
+        // an intensity `core.light` cannot hold is left out and said so, not clamped to a light that is not there
+        if !l.intensity.is_finite() {
+            log.count("lights with an intensity that is not finite left out", 1);
+            continue;
+        }
+        if l.intensity < 0.0 {
+            log.count(
+                "lights with a negative intensity left out (core.light has no light that takes light away)",
+                1,
+            );
+            continue;
+        }
+        let intensity = l.intensity * candela_per_unit;
+        if !intensity.is_finite() {
+            log.count(
+                "lights whose intensity at the calibration is not finite left out",
+                1,
+            );
+            continue;
+        }
         if l.color_temperature.is_some() {
             log.approximate("light colour temperature not applied", 1);
         }
@@ -75,7 +110,7 @@ pub fn lower_unity_lights(w: &mut World) -> Result<PassLog> {
             Light {
                 kind,
                 color: [0, 1, 2].map(|k| srgb_to_linear(f64::from(l.color[k])) as f32),
-                intensity: l.intensity.max(0.0),
+                intensity,
                 range,
                 cast_shadows: match l.shadows {
                     0 => Some(false),
@@ -101,10 +136,10 @@ pub fn lower_unity_lights(w: &mut World) -> Result<PassLog> {
         .is_some_and(|s| s.pipeline == Some(RenderPipeline::Universal));
     log.approximate(
         if urp {
-            "URP intensity taken as candela (lux for directional lights)"
+            "URP intensity as candela (lux for directional lights) at the caller's candela-per-unit (URP states no unit)"
         } else {
-            "intensity of a pipeline other than URP taken as URP's (built-in's attenuation and gamma-space intensity \
-             not modelled)"
+            "intensity of a pipeline other than URP taken as URP's, at the caller's candela-per-unit (built-in's \
+             attenuation and gamma-space intensity not modelled)"
         },
         1,
     );
@@ -164,20 +199,40 @@ fn sun(w: &World, log: &mut PassLog) -> Option<Entity> {
     None
 }
 
-/// [`lower_unity_lights`] as a pass.
-#[derive(Debug, Clone, Copy)]
-pub struct LowerUnityLights;
+/// [`lower_unity_lights`] as a pass: `lower-unity-lights{candela-per-unit}`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LowerUnityLights {
+    /// Candela (lux for a directional light) per unit of URP intensity: the caller's calibration, finite and above 0.
+    pub candela_per_unit: f32,
+}
 
-/// `lower-unity-lights`' declaration ([`primase_core::pass::PassRegistry::add`]): no options, it lowers by Unity's own rules.
+impl LowerUnityLights {
+    /// From its declared options.
+    fn from_given(g: &Given) -> std::result::Result<LowerUnityLights, String> {
+        Ok(LowerUnityLights {
+            candela_per_unit: parse_candela_per_unit(g.required("candela-per-unit"))?,
+        })
+    }
+}
+
+/// `lower-unity-lights`' declaration ([`primase_core::pass::PassRegistry::add`]): URP's intensity has no unit, so the
+/// calibration is the caller's, no default.
 pub const LOWER_UNITY_LIGHTS: PassSpec = PassSpec {
     name: "lower-unity-lights",
-    options: &[],
-    make: |_| Ok(Box::new(LowerUnityLights)),
+    options: &[OptionSpec::required(
+        "candela-per-unit",
+        "1",
+        "candela (lux for a directional light) per unit of URP light intensity, finite and above 0: the caller's calibration",
+    )],
+    make: |g| Ok(Box::new(LowerUnityLights::from_given(g)?)),
 };
 
 impl Pass for LowerUnityLights {
     fn name(&self) -> &'static str {
         "lower-unity-lights"
+    }
+    fn options(&self) -> Options {
+        Options::from([("candela-per-unit".to_owned(), self.candela_per_unit.to_string())])
     }
     fn requires(&self) -> &[&'static str] {
         &["unity.light"]
@@ -191,10 +246,10 @@ impl Pass for LowerUnityLights {
         &["unity.light"]
     }
     fn approximates(&self) -> &'static str {
-        "URP intensity taken as candela or lux; colour temperature not applied; area lights left out"
+        "URP intensity as candela or lux at the caller's candela-per-unit; colour temperature not applied; area lights left out"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
-        let r = lower_unity_lights(w).map_err(|e| e.to_string())?;
+        let r = lower_unity_lights(w, self.candela_per_unit).map_err(|e| e.to_string())?;
         log.absorb(r);
         Ok(())
     }
@@ -246,7 +301,7 @@ mod tests {
     }
 
     fn environment_sun(w: &mut World) -> (Option<Entity>, PassLog) {
-        let log = lower_unity_lights(w).unwrap();
+        let log = lower_unity_lights(w, 1.0).unwrap();
         assert!(w.verify_resources().is_empty());
         (w.resource::<primase_core::Environment>().and_then(|e| e.sun), log)
     }
@@ -360,5 +415,87 @@ mod tests {
             log.counts["no sun: URP's brightest directional light is fully baked"],
             1
         );
+    }
+
+    #[test]
+    fn the_calibration_scales_every_lowered_intensity() {
+        let mut w = World::new();
+        let point = light(&mut w, 2);
+        let sun = light(&mut w, 1);
+        set_intensity(&mut w, sun, 3.0);
+        let log = lower_unity_lights(&mut w, 1771.0).unwrap();
+        assert_eq!(w.get::<Light>(point).unwrap().intensity, 2.0 * 1771.0);
+        assert_eq!(w.get::<Light>(sun).unwrap().intensity, 3.0 * 1771.0);
+        assert_eq!(log.counts["point lights"], 1);
+        assert!(
+            log.approximations
+                .keys()
+                .any(|k| k.contains("at the caller's candela-per-unit")),
+            "{:?}",
+            log.approximations
+        );
+    }
+
+    #[test]
+    fn an_intensity_a_light_cannot_hold_leaves_the_light_out_and_is_counted() {
+        let mut w = World::new();
+        let good = light(&mut w, 2);
+        let negative = light(&mut w, 2);
+        set_intensity(&mut w, negative, -1.0);
+        let nan = light(&mut w, 2);
+        set_intensity(&mut w, nan, f32::NAN);
+        let infinite = light(&mut w, 1);
+        set_intensity(&mut w, infinite, f32::INFINITY);
+        let huge = light(&mut w, 1);
+        set_intensity(&mut w, huge, f32::MAX);
+        let log = lower_unity_lights(&mut w, 2.0).unwrap();
+        assert!(w.has::<Light>(good));
+        for left_out in [negative, nan, infinite, huge] {
+            assert!(!w.has::<Light>(left_out), "{left_out:?}");
+        }
+        assert_eq!(
+            log.counts["lights with a negative intensity left out (core.light has no light that takes light away)"],
+            1
+        );
+        assert_eq!(
+            log.counts["lights with an intensity that is not finite left out"],
+            2
+        );
+        assert_eq!(
+            log.counts["lights whose intensity at the calibration is not finite left out"],
+            1
+        );
+        assert_eq!(log.counts["point lights"], 1);
+        // a light left out is no candidate for the sun
+        w.insert_resource(settings(None, Some(RenderPipeline::Universal)));
+        let log = lower_unity_lights(&mut w, 2.0).unwrap();
+        assert_eq!(
+            log.counts["no sun: no directional light brighter than 0 (URP)"],
+            1
+        );
+    }
+
+    #[test]
+    fn the_calibration_is_required_finite_and_above_zero() {
+        let o = |kv: &[(&str, &str)]| -> Options {
+            kv.iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect()
+        };
+        assert!(LOWER_UNITY_LIGHTS.instance(&o(&[])).is_err());
+        for bad in ["0", "-1", "nan", "inf", "x", ""] {
+            let err = LOWER_UNITY_LIGHTS
+                .instance(&o(&[("candela-per-unit", bad)]))
+                .err()
+                .unwrap();
+            assert!(
+                err.to_string().contains("not a finite number above 0"),
+                "{bad}: {err}"
+            );
+        }
+        let pass = LOWER_UNITY_LIGHTS
+            .instance(&o(&[("candela-per-unit", "1771")]))
+            .unwrap();
+        assert_eq!(pass.options(), o(&[("candela-per-unit", "1771")]));
     }
 }

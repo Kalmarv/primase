@@ -63,10 +63,11 @@ pub use read::{
 };
 
 /// Registers the Unity passes by their declarations: `unity-drawn`, `lower-unity-pbr`, `lower-unity-terrain`,
-/// `lower-unity-collision`, `lower-unity-lights`, `resolve-unity-shaders` and `lower-unity-ambient`. The first five
+/// `lower-unity-collision`, `lower-unity-lights`, `resolve-unity-shaders` and `lower-unity-ambient`. The first four
 /// take no option: each lowers by Unity's own rules (its module says which), not by a choice a program makes.
-/// `resolve-unity-shaders` requires the variant and colour space; `lower-unity-ambient` the program's choice for an
-/// ambient whose probe is not read (`probe`, no default).
+/// `resolve-unity-shaders` requires the variant and colour space; `lower-unity-lights` the calibration of URP's unitless
+/// intensity (`candela-per-unit`, no default); `lower-unity-ambient` that same calibration and the program's choice for
+/// an ambient whose probe is not read (`probe`, no default).
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     for spec in [
         &drawn::UNITY_DRAWN,
@@ -120,7 +121,11 @@ mod tests {
             "unity-drawn",
         ];
         assert_eq!(format!("{reg:?}"), format!("{names:?}"));
-        let required = ["lower-unity-ambient", "resolve-unity-shaders"];
+        let required = [
+            "lower-unity-ambient",
+            "lower-unity-lights",
+            "resolve-unity-shaders",
+        ];
         for name in names {
             assert_eq!(reg.requires_options(name), required.contains(&name), "{name}");
             assert!(reg.describe(name).is_some_and(|d| d.starts_with(name)), "{name}");
