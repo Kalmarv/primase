@@ -57,6 +57,17 @@ impl Parameters {
         }
     }
 
+    /// Set the parameter whose name hashes to `id`.
+    pub fn set_by_id(&mut self, id: u32, value: f32) -> Result<()> {
+        match self.0.get_mut(&id) {
+            Some(v) => {
+                *v = value;
+                Ok(())
+            }
+            None => Err(invalid(format!("the controller has no parameter {id}"))),
+        }
+    }
+
     /// The value of the parameter with this hash.
     pub fn get(&self, id: u32) -> Result<f32> {
         self.0.get(&id).copied().ok_or_else(|| {

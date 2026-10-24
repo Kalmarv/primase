@@ -1,4 +1,4 @@
-//! A controller's state as a pose: the clip a state of one clip plays, at a time since the state was entered, on a rig the
+//! A controller's state as a motion ([`StateMotion`]: the clip and how its time runs) and as a pose ([`state_pose`]): the clip a state of one clip plays, at a time since the state was entered, on a rig the
 //! reader built for that controller's Animator. This is one state of one layer alone: no transitions (nothing leaves the
 //! state), no other layer, no layer weight or mask, no previous pose, no IK; the rig's rests are the base the clip's
 //! channels replace.
@@ -18,6 +18,109 @@ use crate::blend_tree::Parameters;
 use crate::components::UnityObject;
 use crate::{Error, Result, invalid};
 
+/// What a state of one clip plays: the clip, and how the state's time maps to the clip's. Made from the controller alone (no
+/// world), so a program can list a controller's states and which of them it can play.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StateMotion {
+    /// The clip, as the controller's clip list names it.
+    pub clip: UnityObject,
+    /// Clip seconds per state second: the state's speed times its speed parameter's value, when it names one.
+    pub speed: f64,
+    /// The fraction of the clip's length the state starts in (the state's, or its parameter's value).
+    pub cycle_offset: f32,
+}
+
+impl StateMotion {
+    /// Layer `layer`'s state `state` of `controller` at these parameter values; `Unsupported` (naming the state and why) for
+    /// one this does not play, an error for an index that is not there.
+    pub fn of(
+        controller: &UnityAnimatorController,
+        layer: usize,
+        state: usize,
+        parameters: &Parameters,
+    ) -> Result<StateMotion> {
+        let l = controller
+            .layers
+            .get(layer)
+            .ok_or_else(|| invalid(format!("layer {layer} of {}", controller.layers.len())))?;
+        let machine = usize::try_from(l.state_machine)
+            .ok()
+            .and_then(|m| controller.state_machines.get(m))
+            .ok_or_else(|| invalid(format!("layer {layer} runs state machine {}", l.state_machine)))?;
+        let s = machine.states.get(state).ok_or_else(|| {
+            invalid(format!(
+                "state {state} of {} in layer {layer}",
+                machine.states.len()
+            ))
+        })?;
+        let name = || {
+            controller
+                .name_of(s.name_id)
+                .map_or_else(|| format!("state {state}"), |n| format!("state {n:?}"))
+        };
+        if s.time_param != 0 {
+            return Err(Error::Unsupported(format!(
+                "{}: its time is set by a parameter",
+                name()
+            )));
+        }
+        if s.mirror || s.mirror_param != 0 {
+            return Err(Error::Unsupported(format!("{}: mirrored", name())));
+        }
+        let tree = match s.blend_tree_index.as_slice() {
+            [i] => usize::try_from(*i)
+                .ok()
+                .and_then(|i| s.blend_trees.get(i))
+                .ok_or_else(|| invalid(format!("{}: blend tree {i} of {}", name(), s.blend_trees.len())))?,
+            sets => {
+                return Err(Error::Unsupported(format!(
+                    "{}: {} motion sets (a synchronised layer's overrides)",
+                    name(),
+                    sets.len()
+                )));
+            }
+        };
+        let leaf = match tree.first() {
+            Some(n) if n.children.is_empty() => n,
+            Some(_) => {
+                return Err(Error::Unsupported(format!(
+                    "{}: a blend tree (the time of a weighted blend is not stated here)",
+                    name()
+                )));
+            }
+            None => return Err(Error::Unsupported(format!("{}: no motion", name()))),
+        };
+        let clip = controller
+            .clips
+            .get(leaf.clip as usize)
+            .ok_or_else(|| Error::Unsupported(format!("{}: no clip", name())))?
+            .clone()
+            .ok_or_else(|| Error::Unsupported(format!("{}: its clip is an empty slot", name())))?;
+        let speed = f64::from(s.speed)
+            * if s.speed_param == 0 {
+                1.0
+            } else {
+                f64::from(parameters.get(s.speed_param)?)
+            };
+        let cycle_offset = if s.cycle_offset_param == 0 {
+            s.cycle_offset
+        } else {
+            parameters.get(s.cycle_offset_param)?
+        };
+        Ok(StateMotion {
+            clip,
+            speed,
+            cycle_offset,
+        })
+    }
+
+    /// The time in the clip, in seconds (before the clip's own looping), at `state_time` seconds after the state was entered,
+    /// for a clip of this length.
+    pub fn clip_time(&self, state_time: f64, clip_duration: f32) -> f64 {
+        state_time * self.speed + f64::from(self.cycle_offset) * f64::from(clip_duration)
+    }
+}
+
 /// Layer `layer`'s state `state` of `controller` at `time` seconds after it was entered, on `rig` (an entity holding a
 /// `core.rig_instance`): the clip's pose over the skeleton's rests, with its morphs, controls and root motion (see
 /// [`primase_animation::pose::Evaluated`]). The clip must be one the reader bound to this rig (a clip that drives no joint
@@ -31,74 +134,7 @@ pub fn state_pose(
     parameters: &Parameters,
     time: f64,
 ) -> Result<Evaluated> {
-    let l = controller
-        .layers
-        .get(layer)
-        .ok_or_else(|| invalid(format!("layer {layer} of {}", controller.layers.len())))?;
-    let machine = usize::try_from(l.state_machine)
-        .ok()
-        .and_then(|m| controller.state_machines.get(m))
-        .ok_or_else(|| invalid(format!("layer {layer} runs state machine {}", l.state_machine)))?;
-    let s = machine.states.get(state).ok_or_else(|| {
-        invalid(format!(
-            "state {state} of {} in layer {layer}",
-            machine.states.len()
-        ))
-    })?;
-    let name = || {
-        controller
-            .name_of(s.name_id)
-            .map_or_else(|| format!("state {state}"), |n| format!("state {n:?}"))
-    };
-    if s.time_param != 0 {
-        return Err(Error::Unsupported(format!(
-            "{}: its time is set by a parameter",
-            name()
-        )));
-    }
-    if s.mirror || s.mirror_param != 0 {
-        return Err(Error::Unsupported(format!("{}: mirrored", name())));
-    }
-    let tree = match s.blend_tree_index.as_slice() {
-        [i] => usize::try_from(*i)
-            .ok()
-            .and_then(|i| s.blend_trees.get(i))
-            .ok_or_else(|| invalid(format!("{}: blend tree {i} of {}", name(), s.blend_trees.len())))?,
-        sets => {
-            return Err(Error::Unsupported(format!(
-                "{}: {} motion sets (a synchronised layer's overrides)",
-                name(),
-                sets.len()
-            )));
-        }
-    };
-    let leaf = match tree.first() {
-        Some(n) if n.children.is_empty() => n,
-        Some(_) => {
-            return Err(Error::Unsupported(format!(
-                "{}: a blend tree (the time of a weighted blend is not stated here)",
-                name()
-            )));
-        }
-        None => return Err(Error::Unsupported(format!("{}: no motion", name()))),
-    };
-    let clip_object = controller
-        .clips
-        .get(leaf.clip as usize)
-        .ok_or_else(|| Error::Unsupported(format!("{}: no clip", name())))?
-        .as_ref()
-        .ok_or_else(|| Error::Unsupported(format!("{}: its clip is an empty slot", name())))?;
-    let speed = f64::from(s.speed)
-        * if s.speed_param == 0 {
-            1.0
-        } else {
-            f64::from(parameters.get(s.speed_param)?)
-        };
-    let cycle = if s.cycle_offset_param == 0 {
-        s.cycle_offset
-    } else {
-        parameters.get(s.cycle_offset_param)?
-    };
+    let motion = StateMotion::of(controller, layer, state, parameters)?;
     let skeleton_entity = world
         .get::<RigInstance>(rig)
         .ok_or_else(|| invalid(format!("{rig:?} is not a rig")))?
@@ -110,20 +146,24 @@ pub fn state_pose(
         .iter::<ClipBinding>()
         .filter(|(_, b)| b.rig == Some(rig))
         .map(|(_, b)| b.clip)
-        .find(|c| world.get::<UnityObject>(*c) == Some(clip_object))
+        .find(|c| world.get::<UnityObject>(*c) == Some(&motion.clip))
         .ok_or_else(|| {
             invalid(format!(
-                "{}: the rig has no clip {}/{} bound (a clip that drives none of its joints is not made)",
-                name(),
-                clip_object.file,
-                clip_object.path_id
+                "state {state} of layer {layer}: the rig has no clip {}/{} bound (a clip that drives none of its joints is not made)",
+                motion.clip.file, motion.clip.path_id
             ))
         })?;
     let clip: &Clip = world
         .get::<Clip>(clip_entity)
         .ok_or_else(|| invalid("a bound clip is gone"))?;
-    let at = time * speed + f64::from(cycle) * f64::from(clip.duration);
-    evaluate(clip, skeleton_entity, skeleton, None, at).map_err(|e| invalid(format!("{}: {}", name(), e.0)))
+    evaluate(
+        clip,
+        skeleton_entity,
+        skeleton,
+        None,
+        motion.clip_time(time, clip.duration),
+    )
+    .map_err(|e| invalid(format!("state {state} of layer {layer}: {}", e.0)))
 }
 
 #[cfg(test)]
@@ -304,6 +344,26 @@ mod tests {
         assert!((at(2.0, 0.25, 0.25) - half).abs() < 1e-6);
         assert!((at(2.0, 0.0, 0.25) - half / 2.0).abs() < 1e-6);
         assert!((at(2.0, 0.0, 4.25) - half / 2.0).abs() < 1e-6);
+    }
+
+    /// The motion of a state is its clip (by object), its speed and its cycle offset, and says where in the clip a state time
+    /// is: 0.25 s at speed 2 is 0.5 s, plus a quarter of a 2 s clip.
+    #[test]
+    fn a_state_motion_maps_state_time_to_clip_time() {
+        let p = Parameters::defaults(&controller(vec![])).unwrap();
+        let m = StateMotion::of(&controller(vec![state(2.0, 0.25)]), 0, 0, &p).unwrap();
+        assert_eq!(
+            m,
+            StateMotion {
+                clip: UnityObject {
+                    file: "f".into(),
+                    path_id: 9
+                },
+                speed: 2.0,
+                cycle_offset: 0.25
+            }
+        );
+        assert_eq!(m.clip_time(0.25, 2.0), 1.0);
     }
 
     /// What the state cannot be played as is refused by name, never posed as if it could: a blend tree, a time or mirror
