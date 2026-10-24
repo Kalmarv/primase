@@ -46,6 +46,7 @@ use primase_core::{
     ColorSpace, Component, Entity, Instance, Light, LightKind, Mesh, Name, Semantic, Stream, Texture,
     Topology, Transform, World,
 };
+use primase_image::sampling::{Address, Levels, Transfer};
 use primase_texcodec::{Decoder, TexDecoder};
 
 /// Rec. 709 luminance weights.
@@ -324,46 +325,27 @@ struct Sites {
     strips: u64,
 }
 
-/// A decoded emissive texture.
+/// A decoded emissive texture: its base level, sampled at the texel a coordinate falls in, and its mean.
 struct Decoded {
-    width: u32,
-    height: u32,
-    rgba: Vec<u8>,
-    srgb: bool,
+    levels: Levels,
+    transfer: Transfer,
     mean: [f64; 3],
 }
 
 impl Decoded {
-    /// The texel at `(u, v)` as linear RGB, wrapped as `wrap` says, nearest.
-    fn sample(&self, uv: [f32; 2], wrap: [Wrap; 2]) -> [f64; 3] {
-        let axis = |x: f32, n: u32, w: Wrap| -> usize {
-            let x = f64::from(x);
-            let t = match w {
-                Wrap::Repeat => x - x.floor(),
-                Wrap::Clamp => x.clamp(0.0, 1.0),
-                Wrap::Mirror => {
-                    let m = x.rem_euclid(2.0);
-                    if m > 1.0 { 2.0 - m } else { m }
-                }
-            };
-            ((t * f64::from(n)).floor().max(0.0) as usize).min(n as usize - 1)
-        };
-        let (x, y) = (
-            axis(uv[0], self.width, wrap[0]),
-            axis(uv[1], self.height, wrap[1]),
-        );
-        // x < width and y < height (`axis` keeps them below n), and `decode` checked that `rgba` holds width x height texels
-        let o = (y * self.width as usize + x) * 4;
-        let px = &self.rgba[o..o + 4];
-        std::array::from_fn(|c| self.texel(px[c]))
-    }
-
-    fn texel(&self, b: u8) -> f64 {
-        if self.srgb {
-            primase_image::srgb8_to_linear(b)
-        } else {
-            f64::from(b) / 255.0
-        }
+    /// The texel `uv` falls in as linear RGB, addressed as `wrap` says ([`Levels::point`]); a coordinate that isn't
+    /// finite is refused.
+    fn sample(&self, uv: [f32; 2], wrap: [Wrap; 2]) -> Result<[f64; 3], String> {
+        let address = wrap.map(|w| match w {
+            Wrap::Repeat => Address::Wrap,
+            Wrap::Clamp => Address::Clamp,
+            Wrap::Mirror => Address::Mirror,
+        });
+        let v = self
+            .levels
+            .point(0, uv.map(f64::from), address, self.transfer)
+            .map_err(|err| format!("emissive-lights: sampling at {uv:?}: {err}"))?;
+        Ok([v[0], v[1], v[2]])
     }
 
     fn decode(t: &Texture, e: Entity) -> Result<Decoded, String> {
@@ -382,22 +364,24 @@ impl Decoded {
                 t.height
             ));
         }
-        let mut d = Decoded {
-            width: t.width,
-            height: t.height,
-            rgba,
-            srgb: t.color_space == ColorSpace::Srgb,
-            mean: [0.0; 3],
+        let transfer = match t.color_space {
+            ColorSpace::Srgb => Transfer::SrgbColour,
+            ColorSpace::Linear => Transfer::Stored,
         };
-        let n = (d.rgba.len() / 4) as f64;
+        let n = (rgba.len() / 4) as f64;
         let mut sum = [0.0f64; 3];
-        for px in d.rgba.as_chunks::<4>().0 {
-            for (s, b) in sum.iter_mut().zip(px) {
-                *s += d.texel(*b);
+        for px in rgba.as_chunks::<4>().0 {
+            for (c, s) in sum.iter_mut().enumerate() {
+                *s += transfer.channel(c, px[c]);
             }
         }
-        d.mean = sum.map(|s| s / n);
-        Ok(d)
+        let levels = Levels::one(t.width, t.height, rgba)
+            .map_err(|err| format!("emissive-lights: texture {e:?}: {err}"))?;
+        Ok(Decoded {
+            levels,
+            transfer,
+            mean: sum.map(|s| s / n),
+        })
     }
 }
 
@@ -606,7 +590,7 @@ impl EmissiveLights {
                             (uv[1] / seen.len() as f64) as f32,
                         ];
                         let at = r.transform.map_or(at, |t| t.apply(at));
-                        d.sample(at, r.wrap)
+                        d.sample(at, r.wrap)?
                     };
                     colour = std::array::from_fn(|c| factor[c] * texel[c]);
                 }

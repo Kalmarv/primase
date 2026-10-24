@@ -48,6 +48,16 @@ pub enum Transfer {
     SrgbColour,
 }
 
+impl Transfer {
+    /// Channel `c` (0-3: red, green, blue, alpha) of a texel stored as `byte`, before filtering, in f64.
+    pub fn channel(self, c: usize, byte: u8) -> f64 {
+        match self {
+            Transfer::SrgbColour if c < 3 => srgb8_to_linear(byte),
+            _ => f64::from(byte) / 255.0,
+        }
+    }
+}
+
 /// An RGBA8 texture's stored levels, decoded once, row by row.
 #[derive(Clone, Debug)]
 pub struct Levels {
@@ -148,11 +158,7 @@ impl Levels {
         ] {
             let t = self.texel(level, ix + dx, iy + dy, address);
             for c in 0..4 {
-                out[c] += wt
-                    * match transfer {
-                        Transfer::SrgbColour if c < 3 => srgb8_to_linear(t[c]),
-                        _ => f64::from(t[c]) / 255.0,
-                    };
+                out[c] += wt * transfer.channel(c, t[c]);
             }
         }
         Ok(out)
@@ -170,10 +176,7 @@ impl Levels {
         let (w, h) = self.size(level);
         let (x, y) = texel_coordinate([uv[0] * f64::from(w), uv[1] * f64::from(h)])?;
         let t = self.texel(level, x.floor() as i64, y.floor() as i64, address);
-        Ok(std::array::from_fn(|c| match transfer {
-            Transfer::SrgbColour if c < 3 => srgb8_to_linear(t[c]),
-            _ => f64::from(t[c]) / 255.0,
-        }))
+        Ok(std::array::from_fn(|c| transfer.channel(c, t[c])))
     }
 
     /// Level `level` decoded once to f32 by `transfer`, for [`Decoded::bilinear`].
