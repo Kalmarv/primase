@@ -37,6 +37,8 @@ members = [
     "worlds/monogame",
     "worlds/anvil",
 ]
+# a patched copy of a crate, built through [patch.crates-io] below (README there); not one of our crates
+exclude = ["third_party/oozextract"]
 
 [workspace.package]
 version = "0.1.0"
@@ -116,11 +118,14 @@ zune-core = { version = "=0.5.3", default-features = false, features = ["std"] }
 bcdec_rs = { version = "=0.2.0", default-features = false }
 block_compression = { version = "=0.10.1", default-features = false, features = ["bc7"] }
 
+# oozextract 0.5.6 with the fixes in third_party/oozextract (README there): Oodle off Windows is decoded by it.
+#
 # naga 30.0.1 plus three changes it lacks (branch naga-30.0.1-primase of github.com/Kalmarv/wgpu, from the v30.0.1 tag, nothing
 # else): the WGSL writer writes ray queries, `Statement::ImageAtomic` has an optional result (the texel's previous value), and
 # accepts `Exchange` on 32-bit images. Not yet proposed upstream.
 [patch.crates-io]
 naga = { git = "https://github.com/Kalmarv/wgpu", rev = "546ce02f49d9da8f7118b0a8257e210f3b7b1d02" }
+oozextract = { path = "third_party/oozextract" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"
