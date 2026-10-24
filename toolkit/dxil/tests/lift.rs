@@ -11,6 +11,10 @@ fn fixture(name: &str) -> Vec<u8> {
     .unwrap()
 }
 
+/// Fixtures whose program computes with a double (a 64-bit float made from or split into two 32-bit words): WGSL has no 64-bit
+/// float, so the lifter refuses each by name. The refusal is the outcome asserted, not a skipped file.
+const DOUBLE_FIXTURES: [&str; 1] = ["structured_tail.dxil"];
+
 /// Fixtures that are a library of several programs, whose programs are the per-export fixtures beside them.
 const WHOLE_LIBRARIES: [&str; 1] = ["ray_subobjects.dxil"];
 
@@ -35,6 +39,15 @@ fn every_fixture_lifts() {
                 Err(e) if e.to_string().contains("not exactly one entry point") => {}
                 other => failures.push(format!(
                     "{name}: expected the refusal of a whole library, got {other:?}"
+                )),
+            }
+            continue;
+        }
+        if DOUBLE_FIXTURES.contains(&name.as_str()) {
+            match lift(&fixture(name)) {
+                Err(e) if e.to_string().contains("double-precision floats are not lifted") => {}
+                other => failures.push(format!(
+                    "{name}: expected the refusal of double-precision floats, got {other:?}"
                 )),
             }
             continue;

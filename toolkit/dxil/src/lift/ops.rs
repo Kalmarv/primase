@@ -329,6 +329,11 @@ impl Lift<'_> {
                 };
                 scalar!(r)
             }
+            // MakeDouble and SplitDouble join and split the two 32-bit halves of a double: WGSL has no 64-bit float to carry it
+            101 | 102 => {
+                let name = self.m.name(function).unwrap_or("dx.op");
+                self.refuse(format!("double-precision floats are not lifted ({name})"))
+            }
             other => {
                 let name = self.m.name(function).unwrap_or("dx.op");
                 self.refuse(format!("{name}: dx.op {other} is not lifted"))
