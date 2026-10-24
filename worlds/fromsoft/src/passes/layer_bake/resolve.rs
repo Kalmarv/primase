@@ -39,11 +39,38 @@ impl primase_core::pass::Choice for Unbound {
         &[("preview", Unbound::Preview), ("leave", Unbound::Leave)];
 }
 
-/// Whether the material names a texture kind exactly as a program resource: the fixed-function (`GXFlver_*`) programs
-/// call their textures `g_DiffuseTexture`, `g_SpecularTexture`, `g_BumpmapTexture`, as the material's own kinds, not by
-/// numbered slot.
-pub(crate) fn named_by_material(material: &MaterialView<'_>, name: &str) -> bool {
-    material.bindings.contains_key(name) || material.definition.declares(name)
+/// What a program's texture resource is to its material: the one rule by which the resolve, the bake's executor and the
+/// repeat ([`super::sampled_period`]) tell a material's texture from the engine's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProgramTexture<'r> {
+    /// A texture the material binds or declares.
+    Material(MaterialTexture<'r>),
+    /// The engine's own texture, neither numbered nor named by the material, which binds nothing to it: the dither noise
+    /// the alpha-tested permutations read for the dithered fade, a depth or scene texture of a program that reads one, the
+    /// volumes and cube maps of a forward program's lighting.
+    Engine(&'r str),
+}
+
+/// How a program names a material's texture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MaterialTexture<'r> {
+    /// A numbered slot, `Texture2D_<n>`.
+    Slot(u32),
+    /// A texture kind the material names exactly: the fixed-function (`GXFlver_*`) programs call their textures
+    /// `g_DiffuseTexture`, `g_SpecularTexture`, `g_BumpmapTexture`, as the material's own kinds, not by numbered slot.
+    Kind(&'r str),
+}
+
+/// What the texture `resource` is to `material` ([`ProgramTexture`]).
+pub(crate) fn program_texture<'r>(material: &MaterialView<'_>, resource: &'r Resource) -> ProgramTexture<'r> {
+    let name = resource.provenance.name.as_str();
+    match texture_slot(resource) {
+        Some(slot) => ProgramTexture::Material(MaterialTexture::Slot(slot)),
+        None if material.bindings.contains_key(name) || material.definition.declares(name) => {
+            ProgramTexture::Material(MaterialTexture::Kind(name))
+        }
+        None => ProgramTexture::Engine(name),
+    }
 }
 
 /// The role a texture kind named without a slot number has, from its name: a diffuse texture is the albedo, a bump map the
@@ -58,26 +85,35 @@ fn kind_role(name: &str) -> &'static str {
     }
 }
 
-/// A program texture's role and the material's binding for it: for a numbered slot (`Texture2D_<n>`) by the slot's number
-/// (a declared slot retains its role even without a path: an unbound normal gets the flat normal, not the zero of an
-/// unknown resource), for a fixed-function texture by the kind's own name.
+/// A material texture's role and the material's binding for it: for a numbered slot by the slot's number (a declared slot
+/// retains its role even without a path: an unbound normal gets the flat normal, not the zero of an unknown resource),
+/// for a fixed-function texture by the kind's own name.
 pub(crate) fn role_and_binding<'a>(
     material: &MaterialView<'a>,
     slots: &BTreeMap<u32, (&'a str, &'a Binding)>,
-    resource: &Resource,
+    texture: MaterialTexture<'_>,
 ) -> Result<(&'a str, Option<&'a Binding>)> {
-    Ok(match texture_slot(resource) {
-        Ok(slot) => {
+    let binding = material_binding(material, slots, texture);
+    Ok(match texture {
+        MaterialTexture::Slot(slot) => {
             let fallback_role = declared_role(material, slot)?;
-            slots
-                .get(&slot)
-                .map_or((fallback_role, None), |(role, b)| (*role, Some(*b)))
+            (slots.get(&slot).map_or(fallback_role, |(role, _)| *role), binding)
         }
-        Err(_) => {
-            let name = resource.provenance.name.as_str();
-            (kind_role(name), material.bindings.get(name))
-        }
+        MaterialTexture::Kind(name) => (kind_role(name), binding),
     })
+}
+
+/// The material's binding for a material texture: a numbered slot's by [`slots`], a fixed-function texture's by the kind's
+/// own name.
+pub(crate) fn material_binding<'a>(
+    material: &MaterialView<'a>,
+    slots: &BTreeMap<u32, (&'a str, &'a Binding)>,
+    texture: MaterialTexture<'_>,
+) -> Option<&'a Binding> {
+    match texture {
+        MaterialTexture::Slot(slot) => slots.get(&slot).map(|(_, b)| *b),
+        MaterialTexture::Kind(name) => material.bindings.get(name),
+    }
 }
 
 /// The count of a program whose material fields (`_snp_`) none of the material's parameters reach, by name or through
@@ -161,19 +197,12 @@ pub(crate) fn textures_of(interface: &Interface) -> impl Iterator<Item = &Resour
 }
 
 /// A resource's `Texture2D_<slot>` number.
-pub(crate) fn texture_slot(resource: &Resource) -> Result<u32> {
+fn texture_slot(resource: &Resource) -> Option<u32> {
     resource
         .provenance
         .name
         .rsplit_once("Texture2D_")
         .and_then(|(_, s)| s.parse::<u32>().ok())
-        .ok_or_else(|| {
-            invalid(
-                "layer binding",
-                0,
-                format!("unrecognized texture binding {}", resource.provenance.name),
-            )
-        })
 }
 
 /// A resource's D3D register.
@@ -327,34 +356,34 @@ pub fn resolve(
         let individual_2d =
             resource.count == 1 && dim == primase_core::shader::TextureDim::D2 && !arrayed && !multisampled;
         let register = register(resource)?;
-        // a texture that is not a material slot (no `Texture2D_<n>` in its name) is the engine's own: the dither noise the
-        // alpha-tested permutations read for the dithered fade (a neutral grey: the fade is off), a depth or scene texture
-        // of a program that reads one, the volumes and cube maps of a forward program's lighting (zero). The material binds
-        // nothing to it; each is counted by name.
-        if texture_slot(resource).is_err() && !named_by_material(material, &resource.provenance.name) {
-            let name = &resource.provenance.name;
-            if name == ENGINE_SCENE_DEPTH_TEXTURE {
+        // the engine's own texture: the dither noise a neutral grey (the fade is off), the scene depth the frame's, any
+        // other zero; each is counted by name
+        let named = match program_texture(material, resource) {
+            ProgramTexture::Material(named) => named,
+            ProgramTexture::Engine(name) => {
+                if name == ENGINE_SCENE_DEPTH_TEXTURE {
+                    bindings.push(TextureBinding {
+                        resource: resource.id,
+                        sampler: None,
+                        source: TextureSource::Frame(FrameTexture::SceneDepth),
+                    });
+                    continue;
+                }
+                let (value, what) = if name == ENGINE_DITHER_TEXTURE {
+                    ([0.5; 4], "read only by the dithered alpha fade, which is off")
+                } else {
+                    ([0.; 4], "not a material slot, left at zero")
+                };
+                let why = format!("engine texture {name}: {what}");
+                *policies.entry(why.clone()).or_default() += 1;
                 bindings.push(TextureBinding {
                     resource: resource.id,
                     sampler: None,
-                    source: TextureSource::Frame(FrameTexture::SceneDepth),
+                    source: TextureSource::Default { value, why },
                 });
                 continue;
             }
-            let (value, what) = if name == ENGINE_DITHER_TEXTURE {
-                ([0.5; 4], "read only by the dithered alpha fade, which is off")
-            } else {
-                ([0.; 4], "not a material slot, left at zero")
-            };
-            let why = format!("engine texture {name}: {what}");
-            *policies.entry(why.clone()).or_default() += 1;
-            bindings.push(TextureBinding {
-                resource: resource.id,
-                sampler: None,
-                source: TextureSource::Default { value, why },
-            });
-            continue;
-        }
+        };
         if !individual_2d {
             return Err(invalid(
                 "layer binding",
@@ -365,7 +394,7 @@ pub fn resolve(
                 ),
             ));
         }
-        let (role, binding) = role_and_binding(material, &slots, resource)?;
+        let (role, binding) = role_and_binding(material, &slots, named)?;
         let found = match binding {
             Some(b) => texture(&b.texture, role == "AlbedoMap")?,
             None if game == crate::Game::EldenRing => {
@@ -1220,7 +1249,7 @@ fn normalised(reason: &str) -> String {
 /// metaparam records `Texture2D_7_AlbedoMap` (the base albedo, register 1) in group_1 and `Texture2D_2_AlbedoMap` (a
 /// detail fabric, register 7) in group_3, and finding the record by its slot swapped their tilings.
 fn uv_group<'a>(metaparam: Option<&'a Metaparam>, resource: &Resource) -> Option<&'a str> {
-    let n = texture_slot(resource).ok()?;
+    let n = texture_slot(resource)?;
     metaparam?
         .textures
         .iter()
@@ -1229,7 +1258,7 @@ fn uv_group<'a>(metaparam: Option<&'a Metaparam>, resource: &Resource) -> Option
 }
 
 fn elden_tiling(material: &MaterialView<'_>, metaparam: Option<&Metaparam>, resource: &Resource) -> [f32; 4] {
-    let n = texture_slot(resource).ok();
+    let n = texture_slot(resource);
     let number = crate::metaparam::texture_number;
     let sampler = match material.definition {
         crate::materials::DefinitionRef::Matbin(m) => m
@@ -1265,7 +1294,7 @@ fn default_texture(
     metaparam: Option<&Metaparam>,
     resource: &Resource,
 ) -> Option<String> {
-    let n = texture_slot(resource).ok()?;
+    let n = texture_slot(resource)?;
     crate::metaparam::unbound_slots(material.bindings.keys(), metaparam?)
         .find(|(slot, _)| *slot == n)
         .map(|(_, stem)| stem)

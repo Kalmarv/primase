@@ -35,7 +35,6 @@ impl<'a> AreaBake<'a> {
             let repeat = crate::layer_bake::sampled_period(PixelShader::interface(&shader), material)?;
             group.period = repeat.period;
             group.period_exact = repeat.exact;
-            group.period_omissions = repeat.omissions;
         }
         Ok(Self { groups, payloads })
     }
@@ -156,8 +155,6 @@ pub struct MaterialGroups {
     pub parts: Vec<PartGroups>,
     pub period: [f32; 2],
     pub period_exact: bool,
-    /// Texture resources omitted from the repeat calculation, with their mapping errors and counts.
-    pub period_omissions: BTreeMap<String, u64>,
 }
 #[derive(Debug, serde::Serialize)]
 pub struct PartGroups {
@@ -290,7 +287,6 @@ pub fn groups(world: &World) -> Result<Vec<MaterialGroups>> {
             centers: groups.centers,
             period: [1.; 2],
             period_exact: false,
-            period_omissions: BTreeMap::new(),
             parts: spans
                 .into_iter()
                 .map(|(id, part, span)| PartGroups {

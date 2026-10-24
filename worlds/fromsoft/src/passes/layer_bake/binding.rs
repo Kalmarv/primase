@@ -387,35 +387,26 @@ impl FrozenFrame {
     }
 }
 
-/// The repeat of the recognized material slots, with every resource left out of that calculation.
+/// The repeat of the material textures a program samples.
 #[derive(Debug)]
 pub(crate) struct SampledPeriod {
     pub period: [f32; 2],
-    /// False if a scale was omitted, even when the recognized slots have an exact common repeat.
+    /// Whether every sampled scale repeats within the bound ([`super::period::common_period`]).
     pub exact: bool,
-    pub omissions: BTreeMap<String, u64>,
 }
 
-/// The program's common repeat over the texture slots its interface names and the material binds.
-/// An unrecognized slot retains its name and parsing error; its scale is not invented.
+/// The program's common repeat over the stored scales of the material textures its interface names and the material
+/// binds, each found as the resolve binds it ([`resolve::program_texture`], [`resolve::material_binding`]). The engine's
+/// own textures carry no material scale and take no part.
 pub(crate) fn sampled_period(interface: &Interface, material: &LayeredMaterial) -> Result<SampledPeriod> {
-    let slots = resolve::slots(&material.view())?;
+    let view = material.view();
+    let slots = resolve::slots(&view)?;
     let mut sampled_scales = Vec::new();
-    let mut omissions = BTreeMap::new();
     for resource in textures_of(interface) {
-        match resolve::texture_slot(resource) {
-            Ok(slot) => {
-                if let Some((_, binding)) = slots.get(&slot) {
-                    sampled_scales.push(binding.scale);
-                }
-            }
-            Err(error) => {
-                let why = format!(
-                    "repeat calculation omits texture {}: {error}",
-                    resource.provenance.name,
-                );
-                *omissions.entry(why).or_default() += 1;
-            }
+        if let resolve::ProgramTexture::Material(texture) = resolve::program_texture(&view, resource)
+            && let Some(binding) = resolve::material_binding(&view, &slots, texture)
+        {
+            sampled_scales.push(binding.scale);
         }
     }
     let main_scale = slots
@@ -424,11 +415,7 @@ pub(crate) fn sampled_period(interface: &Interface, material: &LayeredMaterial) 
         .or_else(|| sampled_scales.first().copied())
         .unwrap_or([1.; 2]);
     let (period, exact) = super::period::common_period(&sampled_scales, main_scale)?;
-    Ok(SampledPeriod {
-        period,
-        exact: exact && omissions.is_empty(),
-        omissions,
-    })
+    Ok(SampledPeriod { period, exact })
 }
 
 impl Prepared {
@@ -601,7 +588,6 @@ impl Prepared {
         let slots = resolve::slots(&material.view())?;
         let repeat = sampled_period(interface, material)?;
         let (period, period_exact) = (repeat.period, repeat.exact);
-        policies.extend(repeat.omissions);
         let mut textures = BTreeMap::new();
         let mut cache = BTreeMap::<(Entity, bool, [Option<AddressMode>; 2]), Arc<SampledTexture>>::new();
         let mut largest_colour_dimension = 0;
@@ -610,11 +596,10 @@ impl Prepared {
                 .resource(bound.resource)
                 .ok_or_else(|| invalid("layer binding", 0, "a texture the shader lacks"))?;
             let register = resolve::register(resource)?;
-            // an engine texture (no material slot in its name) is a constant, as the binding states it Default
-            if resolve::texture_slot(resource).is_err()
-                && !resolve::named_by_material(&material.view(), &resource.provenance.name)
-            {
-                match &bound.source {
+            // an engine texture is a constant, as the binding states it Default
+            let named = match resolve::program_texture(&material.view(), resource) {
+                resolve::ProgramTexture::Material(named) => named,
+                resolve::ProgramTexture::Engine(_) => match &bound.source {
                     TextureSource::Default { value, why } => {
                         *policies.entry(why.clone()).or_default() += 1;
                         textures.insert(register, SlotTexture::Constant(*value));
@@ -635,9 +620,9 @@ impl Prepared {
                             "an engine texture is bound to a texture",
                         ));
                     }
-                }
-            }
-            let (role, _) = resolve::role_and_binding(&material.view(), &slots, resource)?;
+                },
+            };
+            let (role, _) = resolve::role_and_binding(&material.view(), &slots, named)?;
             let source = match &bound.source {
                 TextureSource::Texture {
                     texture: entity,
@@ -1088,12 +1073,15 @@ impl PipelineState {
 mod tests {
     use super::*;
 
+    /// The repeat takes the stored scale of each material texture as the resolve finds its binding, a numbered slot's and
+    /// a kind's the material names alike; the engine's own textures carry no material scale and leave it exact.
     #[test]
-    fn omitted_texture_names_make_the_period_inexact_and_keep_the_error() {
+    fn the_repeat_takes_the_material_textures_and_not_the_engines() {
         use crate::materials::Binding;
         use primase_core::shader::{
             Resource, ResourceId, ResourceKind, ResourceProvenance, SampleType, TextureDim,
         };
+        use resolve::{MaterialTexture, ProgramTexture};
         let mut interface = prepared(false).shader.interface().clone();
         let texture = |id, name: &str| Resource {
             id: ResourceId(id),
@@ -1109,6 +1097,13 @@ mod tests {
                 ..Default::default()
             },
         };
+        let binding = |scale| Binding {
+            texture: "base".into(),
+            scale,
+            uv_number: 1,
+            address: [None; 2],
+            available: true,
+        };
         interface.resources = vec![texture(0, "material_Texture2D_8")];
         let material = LayeredMaterial {
             mtd: "period fixture".into(),
@@ -1119,34 +1114,34 @@ mod tests {
                 textures: vec![],
                 block_lengths: vec![],
             },
-            bindings: BTreeMap::from([(
-                "Texture2D_8_AlbedoMap".into(),
-                Binding {
-                    texture: "base".into(),
-                    scale: [0.5, 0.25],
-                    uv_number: 1,
-                    address: [None; 2],
-                    available: true,
-                },
-            )]),
+            bindings: BTreeMap::from([
+                ("Texture2D_8_AlbedoMap".into(), binding([0.5, 0.25])),
+                ("g_DiffuseTexture".into(), binding([0.25, 0.25])),
+            ]),
         };
-        let known = sampled_period(&interface, &material).unwrap();
-        assert_eq!(known.period, [2., 4.]);
-        assert!(known.exact);
-        assert!(known.omissions.is_empty());
+        let slot = sampled_period(&interface, &material).unwrap();
+        assert_eq!((slot.period, slot.exact), ([2., 4.], true));
         interface
             .resources
-            .extend([texture(1, "engine_detail"), texture(2, "material_Texture2D_bad")]);
-        let omitted = sampled_period(&interface, &material).unwrap();
-        assert_eq!(omitted.period, known.period);
-        assert!(!omitted.exact);
-        assert_eq!(omitted.omissions.len(), 2);
-        for resource in &interface.resources[1..] {
-            let error = resolve::texture_slot(resource).unwrap_err().to_string();
-            assert!(omitted.omissions.iter().any(|(reason, count)| {
-                reason.contains(&resource.provenance.name) && reason.contains(&error) && *count == 1
-            }));
-        }
+            .push(texture(1, resolve::ENGINE_DITHER_TEXTURE));
+        let with_engine = sampled_period(&interface, &material).unwrap();
+        assert_eq!((with_engine.period, with_engine.exact), ([2., 4.], true));
+        interface.resources.push(texture(2, "g_DiffuseTexture"));
+        let with_kind = sampled_period(&interface, &material).unwrap();
+        assert_eq!((with_kind.period, with_kind.exact), ([4., 4.], true));
+        let classes: Vec<_> = interface
+            .resources
+            .iter()
+            .map(|r| resolve::program_texture(&material.view(), r))
+            .collect();
+        assert_eq!(
+            classes,
+            [
+                ProgramTexture::Material(MaterialTexture::Slot(8)),
+                ProgramTexture::Engine(resolve::ENGINE_DITHER_TEXTURE),
+                ProgramTexture::Material(MaterialTexture::Kind("g_DiffuseTexture")),
+            ]
+        );
     }
 
     /// The dither and camera-fade fields freeze to zero (both fades off), counted once as [`FADE_POLICY`].
