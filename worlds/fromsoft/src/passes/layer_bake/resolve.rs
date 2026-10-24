@@ -24,6 +24,12 @@ use std::collections::{BTreeMap, BTreeSet};
 /// are the Byte4C members, so the second colour is kept apart from both. Float values as decoded, four lanes.
 pub const SECOND_COLOUR: primase_core::Semantic = primase_core::Semantic::Color(9);
 
+/// The Limgrave capture's eye group matches three MATBINs with identical defaults, not a uniquely identified
+/// character. Its 17 draws with available cb3 blobs all have colour 100/255 and scalar 0.024705887. Those values do
+/// not establish a material encoding or a universal runtime override; retain the definition and count the scope.
+const EYE_COLOUR_DEFAULT_POLICY: &str = "eye colour lanes: the MATBIN default; the one capture shows 100/255 on every lane (perhaps character creation), not established";
+const EYE_SCALAR_DEFAULT_POLICY: &str = "eye scalar input: the MATBIN default; the one capture shows 0.024705887 instead of 0 (perhaps character creation), not established";
+
 /// What becomes of a texture slot the material binds no texture to, or whose texture file the reader does not hold.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unbound {
@@ -827,6 +833,16 @@ pub fn resolve(
                 ));
             }
             value.truncate(fit as usize / 4);
+            if game == crate::Game::EldenRing {
+                let policy = match p.name.as_str() {
+                    "P_ChrCustomize__Eye__snp_0_float3_2" => Some(EYE_COLOUR_DEFAULT_POLICY),
+                    "P_ChrCustomize__Eye__snp_0_float_0" => Some(EYE_SCALAR_DEFAULT_POLICY),
+                    _ => None,
+                };
+                if let Some(policy) = policy {
+                    *policies.entry(policy.to_owned()).or_default() += value.len() as u64;
+                }
+            }
             constants.push(ConstantBinding {
                 resource,
                 offset: start as u32,
