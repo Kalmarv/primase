@@ -307,3 +307,76 @@ fn a_sampler_heap_is_one_sampler() {
             .any(|(_, g)| matches!(module.types[g.ty].inner, TypeInner::Sampler { .. }))
     );
 }
+
+/// The type of the result member `name` (as the writer spells it).
+fn member_type(module: &naga::Module, name: &str) -> TypeInner {
+    let result = module.entry_points[0].function.result.as_ref().expect("a result");
+    let TypeInner::Struct { members, .. } = &module.types[result.ty].inner else {
+        panic!("a result structure")
+    };
+    let m = members
+        .iter()
+        .find(|m| m.name.as_deref().is_some_and(|n| n.trim_end_matches('_') == name))
+        .unwrap_or_else(|| panic!("{name}"));
+    module.types[m.ty].inner.clone()
+}
+
+#[test]
+fn an_output_takes_the_type_its_consumer_reads_it_as() {
+    let vec = |size, scalar| TypeInner::Vector { size, scalar };
+    // the vertex program writes TEXCOORD0 as two floats, the pixel program reads four: padded with zeros, noted
+    let consumer = pixel().interface;
+    let written = wgsl_for(
+        &vertex(),
+        &Pipeline {
+            feeds: Some(&consumer),
+            ..Pipeline::default()
+        },
+    )
+    .expect("written");
+    let module = parsed(&written.text);
+    assert_eq!(
+        member_type(&module, "TEXCOORD0"),
+        vec(naga::VectorSize::Quad, naga::Scalar::F32)
+    );
+    assert_eq!(
+        member_type(&module, "COLOR0"),
+        vec(naga::VectorSize::Quad, naga::Scalar::F32)
+    );
+    assert!(
+        written
+            .notes
+            .iter()
+            .any(|n| n.starts_with("1 output read by the consumer with more lanes")),
+        "{:?}",
+        written.notes
+    );
+    // a consumer that reads COLOR0 as two unsigned integers: its first two lanes, the same bits, flat
+    let mut narrow = pixel().interface;
+    let colour = narrow
+        .inputs
+        .iter_mut()
+        .find(|v| v.label.name.eq_ignore_ascii_case("COLOR"))
+        .expect("COLOR0");
+    colour.value.width = 2;
+    colour.value.scalar = primase_shader::ScalarType::Uint;
+    let written = wgsl_for(
+        &vertex(),
+        &Pipeline {
+            feeds: Some(&narrow),
+            ..Pipeline::default()
+        },
+    )
+    .expect("written");
+    let module = parsed(&written.text);
+    assert_eq!(
+        member_type(&module, "COLOR0"),
+        vec(naga::VectorSize::Bi, naga::Scalar::U32)
+    );
+    assert!(written.text.contains("bitcast<vec2<u32>>"), "{}", written.text);
+    let members = results(&module);
+    assert_eq!(
+        location(member(&members, "COLOR0")),
+        Some((1, Some(Interpolation::Flat)))
+    );
+}

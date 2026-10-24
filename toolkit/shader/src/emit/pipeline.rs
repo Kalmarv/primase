@@ -10,7 +10,10 @@ use naga::{
 };
 
 use crate::program::module_info;
-use crate::{EntryIo, Interface, IoType, Label, Program, ProgramError as Error, ResourceId, Stage, entry_io};
+use crate::{
+    EntryIo, Interface, IoType, Label, Program, ProgramError as Error, ResourceId, ScalarType, Stage, Value,
+    entry_io,
+};
 
 /// Clip distances carried as plain varyings: `count` scalars at the locations from `first`, interpolated
 /// perspective-correct.
@@ -28,8 +31,10 @@ pub struct Pipeline<'a> {
     /// The program a vertex program's outputs feed. Each output the consumer reads, matched as Direct3D links stages
     /// (by semantic: the label's name without case, and its index), takes the consumer's location and interpolation
     /// for it ([`entry_io`]); the others take the locations after the consumer's. A consumer input no output carries
-    /// is an error. The value types are each program's own: a consumer that reads fewer lanes than its producer
-    /// writes is the pipeline's to accept or refuse.
+    /// is an error. WebGPU links a location only between values of one type, where Direct3D links register lanes: an
+    /// output the consumer reads as another value takes the consumer's type. Fewer lanes are the output's first
+    /// ones; more lanes are the output's followed by zeros, which Direct3D leaves undefined (noted); another scalar
+    /// kind is the same bits (Direct3D links bits). A boolean or 64-bit value of another type is refused.
     pub feeds: Option<&'a Interface>,
     /// A vertex program's clip distances as plain varyings ([`ClipVaryings`], after every other output), for a
     /// pipeline without WebGPU's `clip-distances` feature. A consumer discards where one is negative
@@ -92,7 +97,7 @@ pub fn wgsl_for(program: &Program, pipeline: &Pipeline) -> Result<Written, Error
         )));
     }
     let (clip, next_location) = if vertex {
-        outputs(program, &io, &mut module, pipeline)?
+        outputs(program, &io, &mut module, pipeline, &mut notes)?
     } else {
         let next = next_after(io.arguments.iter().map(|a| &a.binding));
         match pipeline.clip_discard {
@@ -297,10 +302,25 @@ fn outputs(
     io: &EntryIo,
     module: &mut naga::Module,
     pipeline: &Pipeline,
+    notes: &mut Vec<String>,
 ) -> Result<(Option<ClipVaryings>, u32), Error> {
     let mut bindings: Vec<Binding> = io.results.iter().map(|r| r.binding.clone()).collect();
-    if let Some(consumer) = pipeline.feeds {
-        link(program, io, consumer, &mut bindings)?;
+    // the output's own value and the one its consumer reads it as, where they differ
+    let retyped: Vec<Option<(Value, Value)>> = match pipeline.feeds {
+        Some(consumer) => link(program, io, consumer, &mut bindings)?,
+        None => vec![None; bindings.len()],
+    };
+    let padded = retyped
+        .iter()
+        .flatten()
+        .filter(|(from, to)| to.width > from.width)
+        .count();
+    if padded > 0 {
+        notes.push(format!(
+            "{padded} output{} read by the consumer with more lanes than written: the lanes past them are 0 (Direct3D \
+             leaves them undefined)",
+            if padded == 1 { "" } else { "s" }
+        ));
     }
     let mut next = next_after(bindings.iter());
     let clip_member = io
@@ -316,7 +336,9 @@ fn outputs(
         next += count;
         clips
     });
-    let unchanged = clip.is_none() && bindings.iter().zip(&io.results).all(|(b, r)| *b == r.binding);
+    let unchanged = clip.is_none()
+        && retyped.iter().all(Option::is_none)
+        && bindings.iter().zip(&io.results).all(|(b, r)| *b == r.binding);
     if unchanged {
         return Ok((None, next));
     }
@@ -349,6 +371,49 @@ fn outputs(
         },
         Span::UNDEFINED,
     );
+    // the types and zeros a retyped output is made with: its new type, and a vector of its own scalar at the new
+    // width where it is padded (a literal is no emitted expression: made here, outside the returns' emit ranges)
+    let mut conversions: Vec<Option<Conversion>> = Vec::with_capacity(retyped.len());
+    for change in &retyped {
+        conversions.push(match change {
+            None => None,
+            Some((from, to)) => {
+                let (from_scalar, to_scalar) = (naga_scalar(from.scalar)?, naga_scalar(to.scalar)?);
+                let ty = value_type(module, to_scalar, to.width);
+                let padded = (to.width > from.width).then(|| value_type(module, from_scalar, to.width));
+                Some(Conversion {
+                    from: *from,
+                    to: *to,
+                    ty,
+                    padded,
+                    to_kind: to_scalar.kind,
+                    zero: None,
+                })
+            }
+        });
+    }
+    {
+        let entry = module
+            .entry_points
+            .first_mut()
+            .ok_or_else(|| Error::Invalid("no entry point".into()))?;
+        for c in conversions.iter_mut().flatten() {
+            if c.padded.is_some() {
+                let literal = match c.from.scalar {
+                    ScalarType::Float => naga::Literal::F32(0.0),
+                    ScalarType::Uint => naga::Literal::U32(0),
+                    ScalarType::Sint => naga::Literal::I32(0),
+                    ScalarType::Bool | ScalarType::Double => unreachable!("refused by naga_scalar"),
+                };
+                c.zero = Some(
+                    entry
+                        .function
+                        .expressions
+                        .append(Expression::Literal(literal), Span::UNDEFINED),
+                );
+            }
+        }
+    }
     let member_count = members.len();
     let mut new_members = Vec::with_capacity(member_count);
     for (k, (member, binding)) in members.into_iter().zip(bindings).enumerate() {
@@ -372,6 +437,7 @@ fn outputs(
             }
             _ => new_members.push(StructMember {
                 binding: Some(binding),
+                ty: conversions[k].as_ref().map_or(member.ty, |c| c.ty),
                 ..member
             }),
         }
@@ -425,7 +491,7 @@ fn outputs(
         };
         let start = expressions.len();
         let mut components = Vec::new();
-        for k in 0..member_count {
+        for (k, conversion) in conversions.iter().enumerate() {
             let part = expressions.append(
                 Expression::AccessIndex {
                     base: value,
@@ -442,7 +508,10 @@ fn outputs(
                         );
                     }
                 }
-                _ => components.push(part),
+                _ => components.push(match conversion {
+                    Some(c) => c.apply(part, expressions),
+                    None => part,
+                }),
             }
         }
         let compose = expressions.append(Expression::Compose { ty: new, components }, Span::UNDEFINED);
@@ -452,13 +521,120 @@ fn outputs(
     Ok((clip, next))
 }
 
-/// Link a vertex program's result `bindings` to `consumer`'s inputs (see [`Pipeline::feeds`]).
+/// How an output becomes the value its consumer reads (see [`Pipeline::feeds`]).
+#[derive(Clone, Copy, Debug)]
+struct Conversion {
+    from: Value,
+    to: Value,
+    /// The consumer's type.
+    ty: Handle<Type>,
+    /// A vector of the output's scalar at the consumer's width, where that is wider.
+    padded: Option<Handle<Type>>,
+    to_kind: naga::ScalarKind,
+    /// The zero of the output's scalar, where it is padded.
+    zero: Option<Handle<Expression>>,
+}
+
+impl Conversion {
+    /// `part` (the output's value) as the consumer's: its first lanes, or padded with zeros, then the same bits as the
+    /// consumer's scalar.
+    fn apply(
+        &self,
+        part: Handle<Expression>,
+        expressions: &mut naga::Arena<Expression>,
+    ) -> Handle<Expression> {
+        let mut add = |e: Expression| expressions.append(e, Span::UNDEFINED);
+        let (from, to) = (self.from.width, self.to.width);
+        let mut value = part;
+        if to < from {
+            value = if to == 1 {
+                add(Expression::AccessIndex {
+                    base: value,
+                    index: 0,
+                })
+            } else {
+                add(Expression::Swizzle {
+                    size: vector_size(to),
+                    vector: value,
+                    pattern: [
+                        naga::SwizzleComponent::X,
+                        naga::SwizzleComponent::Y,
+                        naga::SwizzleComponent::Z,
+                        naga::SwizzleComponent::W,
+                    ],
+                })
+            };
+        } else if to > from
+            && let (Some(ty), Some(zero)) = (self.padded, self.zero)
+        {
+            let mut components: Vec<Handle<Expression>> = if from == 1 {
+                vec![value]
+            } else {
+                (0..u32::from(from))
+                    .map(|i| {
+                        add(Expression::AccessIndex {
+                            base: value,
+                            index: i,
+                        })
+                    })
+                    .collect()
+            };
+            components.resize(usize::from(to), zero);
+            value = add(Expression::Compose { ty, components });
+        }
+        if self.from.scalar != self.to.scalar {
+            value = add(Expression::As {
+                expr: value,
+                kind: self.to_kind,
+                convert: None,
+            });
+        }
+        value
+    }
+}
+
+/// The naga scalar of a linked value; a boolean or 64-bit one is refused (its bits are not one 32-bit lane).
+fn naga_scalar(s: ScalarType) -> Result<naga::Scalar, Error> {
+    match s {
+        ScalarType::Float => Ok(naga::Scalar::F32),
+        ScalarType::Uint => Ok(naga::Scalar::U32),
+        ScalarType::Sint => Ok(naga::Scalar::I32),
+        ScalarType::Bool | ScalarType::Double => Err(Error::Pipeline(format!(
+            "a {s:?} output read as another value: its bits are not a 32-bit lane"
+        ))),
+    }
+}
+
+fn vector_size(width: u8) -> naga::VectorSize {
+    match width {
+        2 => naga::VectorSize::Bi,
+        3 => naga::VectorSize::Tri,
+        _ => naga::VectorSize::Quad,
+    }
+}
+
+/// The type of `width` lanes of `scalar`: the scalar itself for one.
+fn value_type(module: &mut naga::Module, scalar: naga::Scalar, width: u8) -> Handle<Type> {
+    let inner = if width == 1 {
+        TypeInner::Scalar(scalar)
+    } else {
+        TypeInner::Vector {
+            size: vector_size(width),
+            scalar,
+        }
+    };
+    module.types.insert(Type { name: None, inner }, Span::UNDEFINED)
+}
+
+/// Link a vertex program's result `bindings` to `consumer`'s inputs (see [`Pipeline::feeds`]). Returns, per result
+/// member, its value and the one the consumer reads it as, where they differ.
 fn link(
     program: &Program,
     io: &EntryIo,
     consumer: &Interface,
     bindings: &mut [Binding],
-) -> Result<(), Error> {
+) -> Result<Vec<Option<(Value, Value)>>, Error> {
+    let mut retyped = vec![None; bindings.len()];
     let wanted = entry_io(consumer).map_err(|e| Error::Pipeline(format!("the consumer: {e}")))?;
     let mut consumed = vec![false; bindings.len()];
     let mut next = 0;
@@ -491,6 +667,15 @@ fn link(
             })?;
         bindings[k] = argument.binding.clone();
         consumed[k] = true;
+        if let (IoType::Value(from), IoType::Value(to)) = (io.results[k].ty, argument.ty)
+            && from != to
+        {
+            if from.scalar != to.scalar {
+                naga_scalar(from.scalar)?;
+                naga_scalar(to.scalar)?;
+            }
+            retyped[k] = Some((from, to));
+        }
     }
     for (binding, consumed) in bindings.iter_mut().zip(consumed) {
         if let (Binding::Location { location, .. }, false) = (binding, consumed) {
@@ -498,7 +683,7 @@ fn link(
             next += 1;
         }
     }
-    Ok(())
+    Ok(retyped)
 }
 
 /// A pixel program's inputs for `clips` and a discard before each return where one is negative. `next` is the first
