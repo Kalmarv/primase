@@ -3,11 +3,25 @@
 use std::collections::BTreeMap;
 
 mod bake;
+mod surface;
+pub use surface::{BakeAnvilSurface, BAKE_ANVIL_SURFACE};
 mod charts;
 mod clips;
 mod decals;
 pub mod formulas;
 mod grass;
+mod impostor;
+mod preview;
+mod far;
+mod far_terrain;
+pub use far_terrain::{LowerAnvilFarTerrain, LOWER_ANVIL_FAR_TERRAIN};
+pub use far::{SelectAnvilFarView, SELECT_ANVIL_FAR_VIEW};
+mod lights;
+mod sky;
+pub use sky::{LowerAnvilSky, LOWER_ANVIL_SKY};
+pub use lights::{LowerAnvilLights, LOWER_ANVIL_LIGHTS};
+pub use preview::{SelectAnvilPreviewLod, SELECT_ANVIL_PREVIEW_LOD};
+pub use impostor::{LowerAnvilImpostor, LOWER_ANVIL_IMPOSTOR};
 mod listed;
 mod material;
 mod resolve_shaders;
@@ -3015,6 +3029,7 @@ pub fn register(reg: &mut PassRegistry) {
         &SELECT_ANVIL_ENTITIES,
         &LOWER_ANVIL_MATERIAL,
         &BAKE_ANVIL_MATERIAL,
+        &BAKE_ANVIL_SURFACE,
         &LOWER_ANVIL_WATER,
         &LOWER_ANVIL_DECALS,
         &LOWER_ANVIL_GRASS,
@@ -3026,7 +3041,13 @@ pub fn register(reg: &mut PassRegistry) {
         &LOWER_ANVIL_DATA_LAYERS,
         &LOWER_ANVIL_FLOOR,
         &LOWER_ANVIL_TERRAIN,
+        &LOWER_ANVIL_FAR_TERRAIN,
         &LOWER_ANVIL_MESH,
+          &LOWER_ANVIL_IMPOSTOR,
+          &LOWER_ANVIL_LIGHTS,
+          &LOWER_ANVIL_SKY,
+          &SELECT_ANVIL_PREVIEW_LOD,
+          &SELECT_ANVIL_FAR_VIEW,
     ] {
         reg.add(spec);
     }
@@ -3090,12 +3111,16 @@ mod tests {
         register(&mut reg);
         let names = [
             "bake-anvil-material",
+            "bake-anvil-surface",
             "lower-anvil-clips",
             "lower-anvil-collision",
             "lower-anvil-data-layers",
             "lower-anvil-decals",
+            "lower-anvil-far-terrain",
             "lower-anvil-floor",
             "lower-anvil-grass",
+            "lower-anvil-impostor",
+            "lower-anvil-lights",
             "lower-anvil-lods",
             "lower-anvil-material",
             "lower-anvil-mesh",
@@ -3103,16 +3128,19 @@ mod tests {
             "lower-anvil-shapes",
             "lower-anvil-skeleton",
             "lower-anvil-skin",
+            "lower-anvil-sky",
             "lower-anvil-terrain",
             "lower-anvil-water",
             "lower-anvil-world-uv",
             "resolve-anvil-shaders",
             "select-anvil-clips",
             "select-anvil-entities",
+            "select-anvil-far-view",
             "select-anvil-listed",
+            "select-anvil-preview-lod",
         ];
         assert_eq!(format!("{reg:?}"), format!("{names:?}"));
-        let free = ["lower-anvil-lods", "lower-anvil-skin", "lower-anvil-world-uv"];
+        let free = ["lower-anvil-lods", "lower-anvil-skin", "lower-anvil-world-uv", "select-anvil-preview-lod"];
         for name in names {
             assert_eq!(reg.requires_options(name), !free.contains(&name), "{name}");
             assert!(reg.describe(name).is_some_and(|d| d.starts_with(name)), "{name}");

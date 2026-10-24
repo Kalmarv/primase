@@ -1,0 +1,410 @@
+//! Surface-domain execution of a material's own pixel program. Unlike a repeating UV-square bake, this evaluates
+//! the placement's real world positions, normals and vertex colours. Each triangle owns an atlas chart; neither
+//! shared prototypes nor unrelated material variants acquire another placement's baked pixels.
+//!
+//! The established first input contract is MAD_Cliffs_TriPlanar (material-spec §27.4 and verify_m17.py).
+//! Texture/constant roles come from the template's registry bindings, not a second hand-written colour formula.
+//! The shader performs the three projections and normal blending. Unknown varying/constant/resource roles refuse
+//! that primitive by name. G-buffer class is decoded from the program's output, not inferred from its template name.
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::Arc;
+
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
+use primase_core::pbr::{PbrMaterial, TextureRef, Wrap};
+use primase_core::shader::{NormalEncoding, SamplerState};
+use primase_core::{ColorSpace, Component, Instance, Linear, MaterialVariants, Mesh, Name,
+    NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, Primitive, Semantic, Stream,
+    TexFormat, TexRole, Texture, Topology, Transform, VertexColor, World};
+use primase_image::sampling::{Levels, Transfer};
+use primase_shader_exec::{Execution, Filtering, PixelShader, ProgramShader, SampledTexture, SamplerUse, View, Views};
+use crate::components::{AnvilMaterial, AnvilRenderStatus, AnvilShaders, AnvilTextureMap};
+use super::bake::{UnstatedAddress, material_rows};
+
+#[derive(Clone, Debug)]
+pub struct BakeAnvilSurface {
+    pub texels_per_metre: f32,
+    pub max_size: u32,
+    pub max_chart: u32,
+    pub max_texels:u64,
+    pub terrain_ao: f32,
+    pub mip_bias: f32,
+    pub address: UnstatedAddress,
+}
+pub const BAKE_ANVIL_SURFACE: PassSpec = PassSpec {
+    name: "bake-anvil-surface",
+    options: &[
+        OptionSpec::required("texels-per-metre", "8", "surface chart density in world metres; refused rather than silently downsized"),
+        OptionSpec::required("max-size", "2048", "maximum atlas side per primitive, power of two, 32 to 8192"),
+        OptionSpec::required("max-chart", "256", "maximum triangle chart side including gutters, even, 8 to 2048"),
+        OptionSpec::required("max-texels", "16777216", "total atlas texels per pass; four RGBA8 output maps, refused on capacity exhaustion"),
+        OptionSpec::required("terrain-ao", "0.5", "stated terrain AO stand-in, 0 to 1"),
+        OptionSpec::required("mip-bias", "0", "engine cb1[41].y at the chart's own footprint"),
+        OptionSpec::choice::<UnstatedAddress>("unstated-address", "explicit sampler assumption or refuse"),
+    ],
+    make: |g: &Given| {
+        let number = |key: &str| g.required(key).parse::<f32>().map_err(|_| format!("{key}: expected number"));
+        let out = BakeAnvilSurface { texels_per_metre: number("texels-per-metre")?,
+            max_size: g.required("max-size").parse().map_err(|_| "max-size: expected integer")?,
+            max_chart: g.required("max-chart").parse().map_err(|_| "max-chart: expected integer")?,
+            max_texels:g.required("max-texels").parse().map_err(|_|"max-texels: expected integer")?,
+            terrain_ao: number("terrain-ao")?, mip_bias: number("mip-bias")?, address: g.choice("unstated-address") };
+        if !out.texels_per_metre.is_finite() || out.texels_per_metre <= 0.0
+            || !(32..=8192).contains(&out.max_size) || !out.max_size.is_power_of_two()
+            || !(8..=2048).contains(&out.max_chart) || out.max_chart % 2 != 0
+            || !out.terrain_ao.is_finite() || !(0.0..=1.0).contains(&out.terrain_ao)
+            || !out.mip_bias.is_finite() || out.max_texels==0 { return Err("invalid surface bake density/budget/engine choices".into()); }
+        Ok(Box::new(out))
+    },
+};
+
+fn dot(a: [f32; 3], b: [f32; 3]) -> f32 { a.into_iter().zip(b).map(|(a,b)| a*b).sum() }
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]
+}
+fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] { std::array::from_fn(|k| a[k]-b[k]) }
+fn unit(a: [f32; 3]) -> Result<[f32; 3], String> {
+    let l = dot(a,a).sqrt();
+    if !l.is_finite() || l < 1e-8 { Err("surface has a zero/non-finite normal or edge".into()) }
+    else { Ok(a.map(|v| v/l)) }
+}
+fn mix<const N: usize>(v: [[f32; N]; 3], b: [f32; 3]) -> [f32; N] {
+    std::array::from_fn(|k| (0..3).map(|i| v[i][k]*b[i]).sum())
+}
+fn byte(v: f32) -> u8 { (v.clamp(0.0,1.0)*255.0).round_ties_even() as u8 }
+
+/// Chart coordinates are affine barycentrics even for helper lanes outside the triangle. Keeping those helpers
+/// on the same plane is essential for the pixel program's implicit LOD and derivative instructions.
+fn barycentric(x: f32, y: f32, extent: f32) -> [f32; 3] {
+    let u = (x-2.0)/extent;
+    let v = (y-2.0)/extent;
+    [1.0-u-v,u,v]
+}
+fn inside(b: [f32; 3]) -> bool { b.iter().all(|v| *v >= 0.0) }
+
+struct Prepared {
+    shader: ProgramShader,
+    buffers: Vec<(u32, Vec<[u32;4]>)>,
+    views: Views,
+}
+impl BakeAnvilSurface {
+    fn prepare(&self, world: &World, material: &AnvilMaterial) -> Result<Prepared, String> {
+        if material.flags.blend_mode != 0 { return Err("blended surface: G-buffer alpha is not roughness".into()); }
+        if material.flags.booleans.get(crate::components::MaterialFlags::ALPHA_TEST_ENABLED)==Some(&1) {
+            return Err("alpha-tested surface requires a coverage-aware chart contract".into());
+        }
+        let programs = material.shaders.and_then(|e| world.get::<AnvilShaders>(e))
+            .ok_or("template programs were not read")?;
+        let key = super::resolve_shaders::gbuffer_key(&material.flags, programs)?;
+        let bytes = programs.pixel(key).ok_or_else(|| format!("missing G-buffer pixel permutation {key:#x}"))?;
+        let program = primase_dxbc::lift(bytes).map_err(|e| e.to_string())?;
+        let reads = program.constant_reads()?;
+        let shader = ProgramShader::new(program).map_err(|e| e.to_string())?;
+        for input in shader.interface().inputs.iter().filter(|v| v.used) {
+            match (input.label.name.as_str(), input.label.index) {
+                ("SV_Position",0) | ("COLOR",0) | ("TEXCOORD",1|2|6) => {},
+                _ => return Err(format!("unknown surface varying {}{}", input.label.name,input.label.index)),
+            }
+            if input.provenance.d3d.is_none() { return Err("surface varying has no register provenance".into()); }
+        }
+        let rows = material_rows(material)?;
+        let mut buffers = Vec::new();
+        for &(slot, count) in shader.constant_buffers() {
+            let mut buffer = vec![[0u32;4]; count as usize];
+            let id = reads.buffer_at(0,slot).ok_or_else(|| format!("cb{slot}: no constant read provenance"))?;
+            if reads.indexed(id) { return Err(format!("cb{slot}: dynamic engine/material indexing has no established surface binding")); }
+            for word in reads.words(id) {
+                let (row,lane) = (word/4,word%4);
+                let value = match (slot,row,lane) {
+                    (3,row,_) => *rows.get(&row).ok_or_else(|| format!("cb3[{row}]: template binds no property"))?
+                        .get(lane as usize).ok_or("material lane")?,
+                    // Normal already transformed into world/source axes: the three normal rows are identity.
+                    (2,0..=2,0..=2) => if row==lane { 1.0 } else { 0.0 },
+                    (2,0..=2,3) => 0.0,
+                    (1,41,1) => self.mip_bias,
+                    (1,37,0|1) => 1.0 / self.max_size as f32,
+                    (1,37,2|3) => self.max_size as f32,
+                    // Virtual-terrain coordinates are irrelevant with the explicit uniform engine textures below.
+                    (0,47,0) | (0,48,0|1) => 1.0,
+                    (0,47,1..=3) | (0,48,2|3) => 0.0,
+                    _ => return Err(format!("unknown engine constant cb{slot}[{row}].{}", ["x","y","z","w"][lane as usize])),
+                };
+                let target = buffer.get_mut(row as usize).ok_or("constant row outside declaration")?;
+                target[lane as usize] = value.to_bits();
+            }
+            buffers.push((slot,buffer));
+        }
+        let mut views = BTreeMap::new();
+        for &slot in shader.textures() {
+            let view = match slot {
+                13|14|16|20|22 => View::Constant([0.0;4]), // no virtual terrain sediments
+                19 => View::Constant([self.terrain_ao;4]),
+                75.. => {
+                    let binding = material.textures.iter().find(|v| v.shader_slot == slot-75)
+                        .ok_or_else(|| format!("t{slot}: template texture role is unknown"))?;
+                    let entity = binding.texture.ok_or_else(|| format!("t{slot}, property {:08x}: unresolved texture",binding.key))?;
+                    let texture = world.get::<Texture>(entity).ok_or_else(|| format!("t{slot}: resolved resource has no texture payload"))?;
+                    let srgb = world.get::<AnvilTextureMap>(entity).map_or(texture.color_space==ColorSpace::Srgb, |t| t.field_25==1);
+                    View::Image(Arc::new(SampledTexture::new(Levels::of(texture).map_err(|e| e.to_string())?,
+                        if srgb {Transfer::SrgbColour} else {Transfer::Stored},
+                        SamplerUse::of(&SamplerState::default(), self.address.unstated())?, Filtering::Trilinear)?))
+                },
+                _ => return Err(format!("unknown engine resource t{slot}")),
+            };
+            views.insert(slot,view);
+        }
+        Ok(Prepared {shader,buffers,views:Views::refusing(views)})
+    }
+}
+
+struct Images { base: Vec<u8>, normal: Vec<u8>, orm: Vec<u8>, ao: Vec<u8> }
+impl Images {
+    fn new(size: usize) -> Self { Self {base:vec![0;size*size*4],normal:vec![0;size*size*4],
+        orm:vec![0;size*size*4],ao:vec![0;size*size*4]} }
+    fn put(&mut self, at: usize, output: &Execution, tbn: [[f32;3];3], frame: primase_core::frame::SourceFrame) -> Result<(),String> {
+        if output.discarded { return Err("surface permutation discards pixels; opaque chart contract does not cover it".into()); }
+        let mut o = [[0.0;4];4];
+        for (target,dst) in o.iter_mut().enumerate() {
+            if output.output_masks.get(target).copied()!=Some(15) { return Err(format!("G-buffer o{target} is not fully written")); }
+            *dst = output.outputs[target].map(f32::from_bits);
+            if dst.iter().any(|v| !v.is_finite()) {return Err(format!("non-finite G-buffer o{target}"));}
+        }
+        let (n,class)=NormalEncoding::decode_octahedral_diamond([o[1][0],o[1][1],o[1][2]]);
+        if class!=1 {return Err(format!("surface program writes shading class {class}; established TriPlanar contract is class 1"));}
+        if o[3][2]!=1.0 || o[3][3]!=0.0 || o[2][2]!=0.0 {
+            return Err("surface program writes specular occlusion/translucency/emission outside the established outputs".into());
+        }
+        let n = frame.direction(n.map(|v| v as f32));
+        let normal = tbn.map(|axis| dot(n,axis));
+        self.base[at..at+4].copy_from_slice(&[
+            byte(primase_image::linear_to_srgb(f64::from(o[0][0].clamp(0.0,1.0))) as f32),
+            byte(primase_image::linear_to_srgb(f64::from(o[0][1].clamp(0.0,1.0))) as f32),
+            byte(primase_image::linear_to_srgb(f64::from(o[0][2].clamp(0.0,1.0))) as f32),255]);
+        self.normal[at..at+4].copy_from_slice(&[byte(normal[0]*0.5+0.5),byte(normal[1]*0.5+0.5),byte(normal[2]*0.5+0.5),255]);
+        self.orm[at..at+4].copy_from_slice(&[255,byte(o[0][3]),byte(o[1][3]),255]);
+        let ao=byte(o[3][0]); self.ao[at..at+4].copy_from_slice(&[ao,ao,ao,255]);
+        Ok(())
+    }
+    fn copy(&mut self, from: usize, to: usize) {
+        for pixels in [&mut self.base,&mut self.normal,&mut self.orm,&mut self.ao] {
+            let p:[u8;4]=pixels[from..from+4].try_into().expect("RGBA pixel");
+            pixels[to..to+4].copy_from_slice(&p);
+        }
+    }
+}
+
+impl BakeAnvilSurface {
+    fn bake_primitive(&self, world: &World, primitive: &Primitive, material: &AnvilMaterial,
+        transform: Transform) -> Result<(Primitive,Images,u32),String> {
+        if primitive.topology!=Topology::Triangles {return Err("surface is not a triangle list".into());}
+        let permitted=BTreeSet::from([Semantic::Position,Semantic::Normal,Semantic::Tangent,Semantic::TexCoord(0),Semantic::Color(0)]);
+        if primitive.streams.keys().any(|s| !permitted.contains(s)) {return Err("surface has extra UV/skin/blend streams whose chart remap is not established".into());}
+        let p=primitive.positions().ok_or("surface has no positions")?;
+        let normals=match primitive.streams.get(&Semantic::Normal) {Some(Stream::F32x3(n)) if n.len()==p.len()=>n,_=>return Err("surface has no matching normal stream".into())};
+        let colours=match primitive.streams.get(&Semantic::Color(0)) {Some(Stream::F32x4(c)) if c.len()==p.len()=>c,_=>return Err("TriPlanar requires the mesh's COLOR0; no constant colour is invented".into())};
+        let ids=primitive.indices.clone().unwrap_or_else(||(0..p.len() as u32).collect());
+        if ids.is_empty(){return Err("surface has no triangle indices".into());}
+        if ids.len()%3!=0 || ids.iter().any(|i| *i as usize>=p.len()) {return Err("surface indices outside triangle positions".into());}
+        let linear=Linear::new([transform.cols[0],transform.cols[1],transform.cols[2]]);
+        if linear.similarity().is_none() || linear.mirrors() {return Err("TriPlanar placement is mirrored/sheared/nonuniform; normal-frame contract not established".into());}
+        let prepared=self.prepare(world,material)?;
+        let buffers:Vec<_>=prepared.buffers.iter().map(|(s,b)|(*s,b.as_slice())).collect();
+        let mut charts=Vec::new();
+        let mut side=32;
+        // Shelf pack the actual requested densities. Capacity failures retain the original primitive/material.
+        for triangle in ids.chunks_exact(3) {
+            let v:[usize;3]=[triangle[0] as usize,triangle[1] as usize,triangle[2] as usize];
+            let positions=v.map(|i|transform.apply(p[i]));
+            let edge=(0..3).map(|i| dot(sub(positions[(i+1)%3],positions[i]),sub(positions[(i+1)%3],positions[i])).sqrt()).fold(0.0f32,f32::max);
+            let chart=((edge*self.texels_per_metre).ceil() as u32+5).max(8).next_multiple_of(2);
+            if chart>self.max_chart {return Err(format!("surface chart needs {chart}px at {} texels/m, exceeds max-chart {}",self.texels_per_metre,self.max_chart));}
+            charts.push((v,positions,chart)); side=side.max(chart.next_power_of_two());
+        }
+        let placements=loop {
+            if side>self.max_size {return Err(format!("surface atlas exceeds {}px budget at {} texels/m",self.max_size,self.texels_per_metre));}
+            let (mut x,mut y,mut row)=(0,0,0);
+            let mut packed=Vec::new();
+            for (_,_,chart) in &charts {
+                if x+chart>side {x=0;y+=row;row=0;}
+                if y+chart>side {break;}
+                packed.push((x,y)); x+=chart;row=row.max(*chart);
+            }
+            if packed.len()==charts.len() {break packed;} side*=2;
+        };
+        let mut images=Images::new(side as usize);
+        let (mut positions,mut output_normals,mut tangents,mut uvs,mut output_colours)=(Vec::new(),Vec::new(),Vec::new(),Vec::new(),Vec::new());
+        for ((vertices,points,chart),(cx,cy)) in charts.into_iter().zip(placements) {
+            let nn=vertices.map(|i|linear.normal(normals[i]).ok_or("singular normal transform"))
+                .into_iter().collect::<Result<Vec<_>,_>>()?;
+            let colour=vertices.map(|i|colours[i]);
+            let tangent=unit(sub(points[1],points[0]))?;
+            let extent=(chart-5) as f32;
+            let mut valid=vec![false;(chart*chart) as usize];
+            for y in (0..chart).step_by(2) {for x in (0..chart).step_by(2) {
+                let bc=std::array::from_fn::<_,4,_>(|lane|barycentric((x+lane as u32%2) as f32+0.5,(y+lane as u32/2) as f32+0.5,extent));
+                if bc.iter().all(|b|!inside(*b)) {continue;}
+                let mut inputs:[Vec<[u32;4]>;4]=std::array::from_fn(|_|vec![[0;4];prepared.shader.input_count()]);
+                let mut bases=[[[0.0;3];3];4];
+                for lane in 0..4 {
+                    let pos=mix(points,bc[lane]); let n=unit(mix([nn[0],nn[1],nn[2]],bc[lane]))?;
+                    let t=unit(sub(tangent,n.map(|v|v*dot(tangent,n))))?; let b=cross(n,t);
+                    bases[lane]=[t,b,n];
+                    let source_pos=material.frame.point_to_source(pos);
+                    let source_n=material.frame.direction_to_source(n);
+                    for varying in prepared.shader.interface().inputs.iter().filter(|v|v.used) {
+                        let value=match(varying.label.name.as_str(),varying.label.index) {
+                            ("SV_Position",0)=>[(cx+x+lane as u32%2) as f32+0.5,(cy+y+lane as u32/2) as f32+0.5,0.0,1.0],
+                            ("COLOR",0)=>mix(colour,bc[lane]),
+                            ("TEXCOORD",1)=>[source_n[0],source_n[1],source_n[2],1.0],
+                            ("TEXCOORD",2)=>[source_pos[0],source_pos[1],source_pos[2],0.0],
+                            ("TEXCOORD",6)=>[0.0,0.0,0.0,1.0],
+                            _=>return Err("unvalidated varying".into()),
+                        };
+                        let reg=varying.provenance.d3d.ok_or("missing input register")?.register as usize;
+                        *inputs[lane].get_mut(reg).ok_or("input register beyond shader input count")?=value.map(f32::to_bits);
+                    }
+                }
+                let output=prepared.shader.execute_quad(inputs.each_ref().map(|v|v.as_slice()),&buffers,&mut &prepared.views).map_err(|e|e.to_string())?;
+                for lane in 0..4 {if inside(bc[lane]) {
+                    let(px,py)=(x+lane as u32%2,y+lane as u32/2);
+                    images.put((((cy+py)*side+cx+px)*4) as usize,&output[lane],bases[lane],material.frame)?;
+                    valid[(py*chart+px) as usize]=true;
+                }}
+            }}
+            // Dilate the gutter and unused chart half from the closest point in this chart, never another face.
+            let mut queue:VecDeque<_>=valid.iter().enumerate().filter_map(|(i,v)|v.then_some(i)).collect();
+            if queue.is_empty(){return Err("surface triangle has no raster coverage".into());}
+            while let Some(from)=queue.pop_front() {
+                let (x,y)=(from as u32%chart,from as u32/chart);
+                for (nx,ny) in [(x.wrapping_sub(1),y),(x+1,y),(x,y.wrapping_sub(1)),(x,y+1)] {
+                    if nx>=chart || ny>=chart {continue;}
+                    let to=(ny*chart+nx) as usize;
+                    if valid[to] {continue;}
+                    images.copy((((cy+y)*side+cx+x)*4) as usize,(((cy+ny)*side+cx+nx)*4) as usize);
+                    valid[to]=true;queue.push_back(to);
+                }
+            }
+            for k in 0..3 {
+                // Keep geometry local: normals are converted back so the same authored instance transform applies.
+                positions.push(p[vertices[k]]);output_normals.push(normals[vertices[k]]);output_colours.push(colours[vertices[k]]);
+                let local_t=unit(sub(p[vertices[1]],p[vertices[0]]))?;
+                let n=unit(normals[vertices[k]])?;let t=unit(sub(local_t,n.map(|v|v*dot(local_t,n))))?;
+                tangents.push([t[0],t[1],t[2],1.0]);
+                let a=[[2.0,2.0],[2.0+extent,2.0],[2.0,2.0+extent]][k];
+                uvs.push([(cx as f32+a[0])/side as f32,(cy as f32+a[1])/side as f32]);
+            }
+        }
+        Ok((Primitive{topology:Topology::Triangles,streams:BTreeMap::from([
+            (Semantic::Position,Stream::F32x3(positions)),(Semantic::Normal,Stream::F32x3(output_normals)),
+            (Semantic::Tangent,Stream::F32x4(tangents)),(Semantic::TexCoord(0),Stream::F32x2(uvs)),
+            (Semantic::Color(0),Stream::F32x4(output_colours))]),indices:None,material:None},images,side))
+    }
+}
+
+impl Pass for BakeAnvilSurface {
+    fn name(&self)-> &'static str {"bake-anvil-surface"}
+    fn options(&self)->Options {Options::from([("texels-per-metre".into(),self.texels_per_metre.to_string()),
+        ("max-size".into(),self.max_size.to_string()),("max-chart".into(),self.max_chart.to_string()),
+        ("max-texels".into(),self.max_texels.to_string()),
+        ("terrain-ao".into(),self.terrain_ao.to_string()),("mip-bias".into(),self.mip_bias.to_string()),
+        ("unstated-address".into(),self.address.text().into())])}
+    fn may_lack_inputs(&self)->bool {true}
+    fn requires(&self)->&[&'static str] {&[Mesh::NAME,AnvilMaterial::NAME,AnvilShaders::NAME]}
+    fn provides(&self)->&[&'static str] {&[Mesh::NAME,Texture::NAME,PbrMaterial::NAME,VertexColor::NAME,AnvilRenderStatus::NAME,
+        crate::components::AnvilSurfaceBake::NAME,Name::NAME,primase_core::shader::ShaderBinding::NAME]}
+    fn modifies(&self)->&[&'static str] {&[Mesh::NAME,Instance::NAME,AnvilRenderStatus::NAME]}
+    fn approximates(&self)-> &'static str {"surface atlas at caller density/budget; uniform stated terrain AO, no sediments, stated sampler addressing; static draw without motion"}
+    fn run(&self,world:&mut World,log:&mut PassLog)->Result<(),String> {
+        let instances:Vec<_>=world.iter::<Instance>().map(|(e,i)|(e,i.prototype)).collect();
+        let mut texels=0u64;
+        for (entity,prototype) in instances {
+            let Some(mesh)=world.get::<Mesh>(prototype).cloned() else {continue;};
+            if !mesh.primitives().iter().any(|p|p.material.and_then(|m|world.get::<AnvilMaterial>(m))
+                .is_some_and(|m|m.template_name.as_deref()==Some("MAD_Cliffs_TriPlanar"))) {continue;}
+            let Some(transform)=world.get::<Transform>(entity).copied() else {continue;};
+            if world.has::<MaterialVariants>(prototype) {
+                log.omit("TriPlanar surface bake: material variants require separate chart sets",1);continue;
+            }
+            let mut primitives=mesh.primitives().to_vec();let mut changed=false;
+            for p in &mut primitives {
+                let Some(material_id)=p.material else {continue;};
+                let Some(material)=world.get::<AnvilMaterial>(material_id).cloned() else {continue;};
+                if material.template_name.as_deref()!=Some("MAD_Cliffs_TriPlanar") {continue;}
+                match self.bake_primitive(world,p,&material,transform) {
+                    Err(reason)=>{
+                        let reason=format!("MAD_Cliffs_TriPlanar surface bake: {reason}");
+                        world.insert(material_id,AnvilRenderStatus{source:format!("Material {:#x}",material.index_id),
+                            template:material.template_name.clone(),reason:reason.clone(),unsupported:true});log.omit(&reason,1);
+                    },
+                    Ok((mut primitive,images,size))=>{
+                        let needed=u64::from(size)*u64::from(size);
+                        if texels.saturating_add(needed)>self.max_texels {
+                            let reason=format!("MAD_Cliffs_TriPlanar surface capacity: {texels}+{needed} texels exceeds caller max-texels {}",self.max_texels);
+                            world.insert(material_id,AnvilRenderStatus{source:format!("Material {:#x}",material.index_id),
+                                template:material.template_name.clone(),reason:reason.clone(),unsupported:true});
+                            log.omit(&reason,1);continue;
+                        }
+                        texels+=needed;
+                        let spawn=|world:&mut World,pixels,space,role,normal| {
+                            let e=world.spawn();world.insert(e,Texture{width:size,height:size,format:TexFormat::Rgba8Unorm,
+                                levels:vec![pixels],color_space:space,role,normal});e
+                        };
+                        let normal=NormalConvention{green:NormalGreen::Up,z:NormalZ::Stored,x:NormalX::Red,basis:NormalBasis::TangentBitangent};
+                        let base=spawn(world,images.base,ColorSpace::Srgb,TexRole::Color,None);
+                        let normals=spawn(world,images.normal,ColorSpace::Linear,TexRole::Normal,Some(normal));
+                        let orm=spawn(world,images.orm,ColorSpace::Linear,TexRole::Mask,None);
+                        let ao=spawn(world,images.ao,ColorSpace::Linear,TexRole::Mask,None);
+                        let sampled=|e|TextureRef{wrap:[Wrap::Clamp;2],..TextureRef::new(e)};
+                        let m=world.spawn();world.insert(m,PbrMaterial{base_color_texture:Some(sampled(base)),
+                            normal_texture:Some(sampled(normals)),metallic:1.0,roughness:1.0,
+                            metallic_roughness_texture:Some(sampled(orm)),occlusion_texture:Some(sampled(ao)),..Default::default()});
+                        world.insert(m,VertexColor::Ignored);
+                        world.insert(m,crate::components::AnvilSurfaceBake{material:material_id,atlas_size:size,
+                            texels_per_metre:self.texels_per_metre});
+                        if let Some(binding)=world.get::<primase_core::shader::ShaderBinding>(material_id).cloned() {
+                            world.insert(m,binding);
+                        }
+                        world.insert(m,Name(format!("Material {:#x}: placement {} surface bake",material.index_id,entity.index())));
+                        world.insert(m,AnvilRenderStatus{source:"bake-anvil-surface".into(),template:material.template_name.clone(),
+                            reason:format!("bake-anvil-surface: own G-buffer program, world position/normal and COLOR0; {size}px chart atlas at {} texels/m",self.texels_per_metre),unsupported:false});
+                        primitive.material=Some(m);*p=primitive;changed=true;
+                        log.count("placement primitives surface-baked with their own program",1);
+                    }
+                }
+            }
+            if changed {
+                let copy=world.duplicate(prototype).ok_or("surface prototype vanished")?;
+                world.insert(copy,Mesh::new(primitives));
+                world.get_mut::<Instance>(entity).ok_or("surface placement vanished")?.prototype=copy;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)] mod tests {
+    use super::*;
+    #[test] fn chart_helper_lanes_stay_affine_beyond_the_triangle() {
+        let a=barycentric(2.5,2.5,16.0);let b=barycentric(3.5,2.5,16.0);
+        assert_eq!(b[1]-a[1],1.0/16.0);
+        assert!(!inside(barycentric(22.5,22.5,16.0)));
+        assert_eq!(barycentric(22.5,22.5,16.0).iter().sum::<f32>(),1.0);
+    }
+    #[test] fn a_uniform_scale_is_accepted_but_a_shear_is_not() {
+        assert!(Linear::new([[2.0,0.0,0.0],[0.0,2.0,0.0],[0.0,0.0,2.0]]).similarity().is_some());
+        assert!(Linear::new([[1.0,0.0,0.0],[1.0,1.0,0.0],[0.0,0.0,1.0]]).similarity().is_none());
+    }
+    #[test]fn layout_is_read_from_the_programs_encoded_class_and_world_normal_is_rebased(){
+        let mut images=Images::new(1);
+        let mut output=Execution{outputs:vec![
+            [0.25f32,0.5,0.75,0.6].map(f32::to_bits),
+            [1.0f32,1.0,9.0/255.0,0.3].map(f32::to_bits),
+            [0.0f32;4].map(f32::to_bits),[1.0f32,0.0,1.0,0.0].map(f32::to_bits)],
+            output_masks:vec![15;4],..Default::default()};
+        images.put(0,&output,[[1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,1.0]],
+            primase_core::frame::SourceFrame::WORLD).unwrap();
+        assert_eq!(images.normal,[128,128,255,255]);assert_eq!(images.orm,[255,153,76,255]);
+        output.outputs[1][2]=(41.0f32/255.0).to_bits();
+        assert!(images.put(0,&output,[[1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,1.0]],
+            primase_core::frame::SourceFrame::WORLD).unwrap_err().contains("class 5"));
+    }
+}

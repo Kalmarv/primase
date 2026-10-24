@@ -128,7 +128,7 @@ impl Pass for SelectAnvilListed {
         &[AnvilListed::NAME]
     }
     fn removes(&self) -> &[&'static str] {
-        &[AnvilListed::NAME]
+        &[AnvilListed::NAME, crate::components::AnvilFarSelected::NAME]
     }
     fn approximates(&self) -> &'static str {
         "coarse=overlap tests the owners' stored bounding boxes (an instanced group's placements by their positions), \
@@ -153,7 +153,7 @@ impl Pass for SelectAnvilListed {
                 );
                 continue;
             }
-            let go = match self.coarse {
+            let mut go = match self.coarse {
                 Coarse::Keep => Vec::new(),
                 Coarse::Drop => group.iter().map(|(e, _)| *e).collect(),
                 Coarse::Overlap(rect) => {
@@ -161,6 +161,7 @@ impl Pass for SelectAnvilListed {
                     overlapping(w, group, rect)
                 }
             };
+            go.retain(|entity| !w.has::<crate::components::AnvilFarSelected>(*entity));
             log.count(
                 "placements of owners only a coarser level reaches kept",
                 (group.len() - go.len()) as u64,
@@ -182,6 +183,7 @@ impl Pass for SelectAnvilListed {
         let marked: Vec<Entity> = w.iter::<AnvilListed>().map(|(e, _)| e).collect();
         for e in marked {
             w.remove::<AnvilListed>(e);
+            w.remove::<crate::components::AnvilFarSelected>(e);
         }
         if tested > 0 {
             log.approximate(

@@ -608,12 +608,24 @@ impl Textures {
     /// TextureMap states, else a copy in that colour space. `None` where `e` holds no `core.texture`.
     fn entity(&mut self, world: &mut World, e: Entity) -> Option<Entity> {
         let srgb = world.get::<AnvilTextureMap>(e).is_some_and(|t| t.field_25 == 1);
-        let have = world.get::<Texture>(e)?;
         let wanted = if srgb {
             ColorSpace::Srgb
         } else {
             ColorSpace::Linear
         };
+        if let Some(have) = world.get::<primase_core::TextureLayers>(e) {
+            if have.color_space == wanted { return Some(e); }
+            if let Some(&copy) = self.spawned.get(&(e, srgb)) { return Some(copy); }
+            let mut copy = have.clone();
+            copy.color_space = wanted;
+            let name = world.get::<Name>(e).map_or_else(String::new, |n| n.0.clone());
+            let entity = world.spawn();
+            world.insert(entity, Name(format!("{name}@{wanted:?}")));
+            world.insert(entity, copy);
+            self.spawned.insert((e, srgb), entity);
+            return Some(entity);
+        }
+        let have = world.get::<Texture>(e)?;
         if have.color_space == wanted {
             return Some(e);
         }
@@ -642,7 +654,7 @@ impl Pass for ResolveAnvilShaders {
         &[AnvilMaterial::NAME, AnvilShaders::NAME]
     }
     fn provides(&self) -> &[&'static str] {
-        &[Shader::NAME, ShaderBinding::NAME, Texture::NAME, Name::NAME]
+        &[Shader::NAME, ShaderBinding::NAME, Texture::NAME, primase_core::TextureLayers::NAME, Name::NAME]
     }
     fn approximates(&self) -> &'static str {
         "a texture binding with no texture reads white (unset-textures=white)"
