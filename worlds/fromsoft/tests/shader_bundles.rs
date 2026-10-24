@@ -132,7 +132,9 @@ fn elden_ring_materials_link_their_shader_model_6_bundles() {
                         .eq_ignore_ascii_case(&m.shader)
                 );
             }
-            None if report.missing_shader_bundles.contains(&m.shader) => {}
+            None if report
+                .missing_shader_bundles
+                .contains(&m.shader.to_ascii_lowercase()) => {}
             None => failures.push(format!("{} ({}): not linked", m.mtd, m.shader)),
         }
     }

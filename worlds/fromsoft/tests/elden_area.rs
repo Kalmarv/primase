@@ -62,8 +62,13 @@ fn every_placed_part_is_accounted_for() -> Result<()> {
         let mut world = World::default();
         let report = sekiro::read_game_area(&install, map, &decoder, &options, &mut world)?;
         // every material its material binary defines is linked to its shader's bundle, unless the install holds none
+        // (the report names those by the folded, ASCII-lowercase shader name)
         for (e, m) in world.iter::<primase_fromsoft::materials::Material>() {
-            if m.definition.is_some() && !report.missing_shader_bundles.contains(&m.shader) {
+            if m.definition.is_some()
+                && !report
+                    .missing_shader_bundles
+                    .contains(&m.shader.to_ascii_lowercase())
+            {
                 assert!(
                     world.has::<primase_fromsoft::sekiro::source::MaterialShader>(e),
                     "{map}: material {} (shader {}) has no fromsoft.material_shader",
