@@ -80,8 +80,14 @@
 //!   a vertex colour of red 0, green 1, the first zone and no vertex occlusion, which is exact where the Material's
 //!   second and third zone are off (rows 24 and 25 zero) and otherwise counted. Its specular occlusion (`o2.z`: the
 //!   camera's distance and the eye's angle), translucency (`o2.w`) and the strand direction its anisotropic highlight
-//!   reads (`o1.w`, `o3.x`, `o3.z`) have no place in a Material: left out, counted. Opaque: the cut-out of a hair card
-//!   (`AlphaTestEnabled`) is not in this permutation, its program has no alpha, and is not baked.
+//!   reads (`o1.w`, `o3.x`, `o3.z`) have no place in a Material: left out, counted. The plain permutation has no
+//!   coverage: its strands' cut-out is in the permutations with key bit `0x4000` (the depth pass's and the G-buffer's),
+//!   which discard where `Mask1`'s alpha (t75.w) is below the Material's alpha reference (`AlphaTestValue / 255`, `cb2[18].y`) and,
+//!   by a screen-position dither (`cb2[16]`), while the LOD fades. The bake states that coverage: the base colour's alpha
+//!   is `Mask1`'s alpha at the texel's footprint and the Material a mask at `AlphaTestValue / 255`, where the Material
+//!   tests alpha (`AlphaTestEnabled`, a value above 0, blend mode 0). That the engine draws these Materials with the
+//!   `0x4000` permutations is inferred (no other permutation of the template cuts), not read from the engine's key
+//!   composer; the dither is left out.
 //!
 //! A recipe whose paint is a pattern its shader computes (Road's lane lines) is baked over one period of the pattern in
 //! the shader's own UV, its Material's UV transform set to the identity, and that transform scaled by the period put
@@ -249,6 +255,9 @@ struct Recipe {
     skin: bool,
     /// The vertex colour (`COLOR0`) the program reads, which a flat surface has one value of.
     vertex_colour: Option<VertexColour>,
+    /// The texture slot whose alpha the template's alpha-tested permutations discard by, where the Material tests
+    /// alpha.
+    coverage: Option<u32>,
 }
 
 /// What a recipe states of the vertex colour its program reads: the one value every texel has, and the `cb3` rows whose
@@ -285,6 +294,7 @@ const ROCKS: Recipe = Recipe {
     zones: false,
     skin: false,
     vertex_colour: None,
+    coverage: None,
 };
 
 /// MAD_Tex1_UniqueNormalGradient (§27.3; its G-buffer program read): `Dirt tiling` 1, `Base tiling` 2, the zones'
@@ -309,6 +319,7 @@ const UNIQUE_NORMAL_GRADIENT: Recipe = Recipe {
     zones: false,
     skin: false,
     vertex_colour: None,
+    coverage: None,
 };
 
 /// MAD_Road (§27.4; its G-buffer program read): `2.Metalness` 1, `4.Emissive Scale` 2, `Hue` 3, `Saturate` 4,
@@ -335,6 +346,7 @@ const ROAD: Recipe = Recipe {
     zones: false,
     skin: false,
     vertex_colour: None,
+    coverage: None,
 };
 
 /// MAD_Tex1_UniqueNormal_DiffuseBlend (§27.8; its G-buffer program read): `Use AO` 1, `3 - DETAILS -Tiling` 2 and
@@ -356,6 +368,7 @@ const UNIQUE_NORMAL_DIFFUSE_BLEND: Recipe = Recipe {
     zones: false,
     skin: false,
     vertex_colour: None,
+    coverage: None,
 };
 
 /// MAD_Tex1_Graffiti_Monster (§27.14.2; its G-buffer program read): `Use AO` 1, `EmissivePower` 2, `FresnelOffset` 3,
@@ -378,6 +391,7 @@ const GRAFFITI_MONSTER: Recipe = Recipe {
     zones: false,
     skin: false,
     vertex_colour: None,
+    coverage: None,
 };
 
 /// MAD_Hero_Ice (§27.2; its G-buffer program read): `TilingGlobal` 1, `FresnelFalloff` 2, `LightDirectionFalloff` 3,
@@ -404,6 +418,7 @@ const HERO_ICE: Recipe = Recipe {
     zones: false,
     skin: false,
     vertex_colour: None,
+    coverage: None,
 };
 
 /// MAD_IceBrick (§27.6; its G-buffer program read): Hero_Ice's albedo without its object normal or parallax, rows 1
@@ -424,6 +439,7 @@ const ICE_BRICK: Recipe = Recipe {
     zones: false,
     skin: false,
     vertex_colour: None,
+    coverage: None,
 };
 
 /// MAD_CHR_5Zones_* (§18.2, §19; the G-buffer programs of the 17 templates read): its interpolants after the UV are the
@@ -444,6 +460,7 @@ const FIVE_ZONES: Recipe = Recipe {
     zones: true,
     skin: false,
     vertex_colour: None,
+    coverage: None,
 };
 
 /// MAD_CHR_Skin (§18.3; its per-instance-data G-buffer program read): `TEXCOORD1` the normal, 2 the tangent with its
@@ -474,6 +491,7 @@ const SKIN: Recipe = Recipe {
         switches: &[],
         picked: "",
     }),
+    coverage: None,
 };
 
 /// MAD_CHR_Hair_Anisotropic (§18.5; its G-buffer program read): `TEXCOORD1` the world position, 2 the tangent, 3 the
@@ -483,7 +501,8 @@ const SKIN: Recipe = Recipe {
 /// translucency scalars); `Mask1` t75 (its blue the zones' ID tint), `Diffuse` t76 (its green the position along the
 /// strand the colours blend by, its blue the occlusion) and `Normal` t77 (shading class 2). The specular
 /// occlusion (`o2.z`, the camera's distance and the eye's angle), the translucency (`o2.w`) and the strand direction
-/// the anisotropic highlight reads (`o1.w`, `o3.x`, `o3.z`) have no place in a Material and are left out.
+/// the anisotropic highlight reads (`o1.w`, `o3.x`, `o3.z`) have no place in a Material and are left out. Its cut-out is
+/// `Mask1`'s alpha (slot 0), tested in the `0x4000` permutations.
 const HAIR_ANISOTROPIC: Recipe = Recipe {
     template: "MAD_CHR_Hair_Anisotropic",
     interpolants: WORLD_TANGENT_NORMAL,
@@ -507,6 +526,7 @@ const HAIR_ANISOTROPIC: Recipe = Recipe {
         switches: &[24, 25],
         picked: "the hair zones the mesh's vertex colour (its red) picks: their second or third zone is on, baked as the                  first (red 0)",
     }),
+    coverage: Some(0),
 };
 
 /// The key bit of the permutations with per-instance data (`t70`).
@@ -803,6 +823,8 @@ struct Baked {
     sediment: bool,
     /// Whether the Material has a switch on that its mesh's vertex colour would pick from ([`VertexColour`]).
     vertex_picked: bool,
+    /// The alpha the base colour's alpha channel is cut at (the coverage texture's, tested by the Material).
+    cutoff: Option<f32>,
     /// A pattern's: the transform from the mesh's UV to its texture.
     transform: Option<UvTransform>,
 }
@@ -940,6 +962,7 @@ impl BakeAnvilMaterial {
                 .map_err(|e| e.to_string())?;
         }
         let mut textures = BTreeMap::new();
+        let mut coverage_image: Option<Arc<Footprinted>> = None;
         for &(slot, value) in recipe.engine {
             let ao = recipe.terrain.is_some_and(|t| t.ao_texture == slot);
             let value = if ao { self.terrain_ao } else { value };
@@ -1004,8 +1027,23 @@ impl BakeAnvilMaterial {
                     Transfer::Stored
                 },
             };
-            textures.insert(75 + slot, primase_shader_exec::Texture::Image(Arc::new(image)));
+            let image = Arc::new(image);
+            if recipe.coverage == Some(slot) {
+                coverage_image = Some(image.clone());
+            }
+            textures.insert(75 + slot, primase_shader_exec::Texture::Image(image));
         }
+        // the cut-out: the coverage texture's alpha against the Material's `AlphaTestValue`, where it tests alpha
+        // (the discard of the alpha-tested permutations: `alpha - reference < 0`)
+        let cutoff = recipe
+            .coverage
+            .and(coverage_image.as_ref())
+            .filter(|_| {
+                m.flags.blend_mode == 0
+                    && m.flags.alpha_test_value > 0
+                    && m.flags.booleans.get(MaterialFlags::ALPHA_TEST_ENABLED) == Some(&1)
+            })
+            .map(|_| f32::from(m.flags.alpha_test_value) / 255.0);
         if recipe.skin {
             let tone = self.skin_tone.ok_or("no skin-tone")?;
             textures.insert(70, primase_shader_exec::Texture::Buffer(skin_record(tone)));
@@ -1045,6 +1083,7 @@ impl BakeAnvilMaterial {
             metal: false,
             terrain_ao,
             sediment,
+            cutoff,
             vertex_picked: recipe
                 .vertex_colour
                 .is_some_and(|c| c.switches.iter().any(|r| switched(*r))),
@@ -1103,7 +1142,16 @@ impl BakeAnvilMaterial {
                         (primase_image::linear_to_srgb(f64::from(c.clamp(0.0, 1.0))) * 255.0).round() as u8,
                     );
                 }
-                baked.base.push(255);
+                baked.base.push(match (&coverage_image, cutoff) {
+                    (Some(image), Some(_)) => {
+                        let n = self.size as f32;
+                        let step = 1.0 / n;
+                        let at = [(x as f32 + 0.5) / n, (row as f32 + 0.5) / n];
+                        let lod = Lod::GradientsBias([[step, 0.0], [0.0, step]], self.mip_bias);
+                        unorm8(primase_shader_exec::Image::sample(&**image, at, lod)?[3])
+                    }
+                    _ => 255,
+                });
                 let metal = unorm8(metal);
                 baked.metal |= metal != 0;
                 baked.roughness.extend([255, unorm8(o0[3]), metal, 255]);
@@ -1288,13 +1336,18 @@ impl Pass for BakeAnvilMaterial {
                     occlusion_texture: occlusion.map(sampled),
                     occlusion_strength: 1.0,
                     normal_texture: Some(sampled(normal_map)),
-                    alpha_mode: AlphaMode::Opaque,
+                    alpha_mode: baked
+                        .cutoff
+                        .map_or(AlphaMode::Opaque, |cutoff| AlphaMode::Mask { cutoff }),
                     double_sided: false,
                     ..PbrMaterial::default()
                 },
             );
             w.insert(e, VertexColor::Ignored);
             log.count(&format!("{} Materials baked", template), 1);
+            if baked.cutoff.is_some() {
+                log.count(&format!("{template} Materials baked with their alpha cut-out"), 1);
+            }
             if recipe.zones {
                 log.approximate(
                     "MAD_CHR_5Zones Materials baked with the mud layer left out (HideDirt 1, a runtime dirt state), the engine-bound detail array flat and no decal where the Material binds none",

@@ -308,6 +308,7 @@ pub enum Invocation {
 #[derive(Default)]
 struct Kept {
     pixels: Vec<usize>,
+    discarded: Vec<bool>,
     values: Vec<([u32; 4], u8)>,
     instructions: u64,
     samples: u64,
@@ -319,6 +320,8 @@ pub struct Raw {
     /// Per requested target, size * size pixels in row-major order: the output register's bits and the lanes the
     /// program wrote of it (within the target's mask).
     pub pixels: Vec<Vec<([u32; 4], u8)>>,
+    /// Per pixel, in the same order, whether the program discarded it (its outputs are then those written before).
+    pub discarded: Vec<bool>,
     pub instructions: u64,
     pub samples: u64,
 }
@@ -440,6 +443,7 @@ pub fn evaluate_raw_with(
             out.instructions += result.instructions as u64;
             out.samples += result.samples as u64;
             out.pixels.push(pixel);
+            out.discarded.push(result.discarded);
             for &(register, mask) in targets {
                 let written = result.output_masks.get(register as usize).copied().unwrap_or(0) & mask;
                 let bits = result.outputs.get(register as usize).copied().unwrap_or([0; 4]);
@@ -499,12 +503,14 @@ pub fn evaluate_raw_with(
         .map_err(|p| error(0, format!("row {}: {}", rows[p.item], p.message)))?;
     let mut pixels: Vec<Vec<([u32; 4], u8)>> =
         targets.iter().map(|_| vec![([0; 4], 0); size * size]).collect();
+    let mut discarded = vec![false; size * size];
     let (mut instructions, mut samples) = (0u64, 0u64);
     for r in done {
         let kept = r?;
         instructions += kept.instructions;
         samples += kept.samples;
         for (k, &pixel) in kept.pixels.iter().enumerate() {
+            discarded[pixel] = kept.discarded[k];
             for (t, target) in pixels.iter_mut().enumerate() {
                 target[pixel] = kept.values[k * targets.len() + t];
             }
@@ -512,6 +518,7 @@ pub fn evaluate_raw_with(
     }
     Ok(Raw {
         pixels,
+        discarded,
         instructions,
         samples,
     })

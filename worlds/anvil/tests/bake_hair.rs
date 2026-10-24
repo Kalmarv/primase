@@ -4,7 +4,7 @@
 //! apart as the names say, and the Materials that need what the bake states of the vertex colour counted.
 use std::collections::BTreeMap;
 
-use primase_anvil::components::{AnvilMaterial, MaterialBinding, MaterialValue};
+use primase_anvil::components::{AnvilMaterial, AnvilShaders, MaterialBinding, MaterialValue};
 use primase_anvil::passes::BAKE_ANVIL_MATERIAL;
 use primase_anvil::read::archive::Archive;
 use primase_anvil::read::build_table::BUILD_TABLE;
@@ -15,9 +15,12 @@ use primase_anvil::read::rider::{HAIR_COLOURS, colours};
 use primase_anvil::read::skeleton::SKELETON;
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassLog};
-use primase_core::pbr::PbrMaterial;
+use primase_core::pbr::{AlphaMode, PbrMaterial};
 use primase_core::{Entity, Name, Texture, World};
-use primase_image::sampling::{Address, Levels};
+use primase_image::sampling::{Address, Levels, Transfer, footprint_lod};
+use primase_shader_exec::{
+    Grid, Input, Invocation, Layout, Lod, PixelShader, ProgramShader, evaluate::Constants, evaluate_raw_with,
+};
 use primase_testdata::{Game, install};
 
 fn open() -> Option<Archive> {
@@ -248,6 +251,97 @@ fn compare(w: &World, entity: Entity, m: &AnvilMaterial, size: u32) -> (f64, [u6
     )
 }
 
+/// A texture the executor samples trilinear and wrapped at a quad's footprint.
+#[derive(Debug)]
+struct Atlas(Levels);
+
+impl primase_shader_exec::Image for Atlas {
+    fn sample(&self, uv: [f32; 2], lod: Lod) -> Result<[f32; 4], String> {
+        let (w, h) = (self.0.width, self.0.height);
+        let grad = |g: [[f32; 2]; 2]| g.map(|d| d.map(f64::from));
+        let lod = match lod {
+            Lod::Gradients(g) => footprint_lod(w, h, grad(g), 0.0),
+            Lod::GradientsBias(g, b) => footprint_lod(w, h, grad(g), f64::from(b.clamp(-16.0, 15.99))),
+            Lod::Level(l) => f64::from(l),
+            Lod::Implicit | Lod::Bias(_) => return Err("an implicit level without a quad".into()),
+        };
+        let v = self
+            .0
+            .trilinear(
+                [f64::from(uv[0]), f64::from(uv[1])],
+                lod,
+                [Address::Wrap; 2],
+                Transfer::Stored,
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(v.map(|c| c as f32))
+    }
+}
+
+/// The texels the template's alpha-tested G-buffer permutation (`0x404000`) keeps over the Material's texture square: that
+/// program run as the game's own, its Mask1 at t75, the Material's alpha reference at `cb2[18].y`, the dither's constants
+/// 0.
+fn kept_by_the_alpha_tested_program(w: &World, m: &AnvilMaterial, size: u32) -> Vec<bool> {
+    let shaders = m
+        .shaders
+        .and_then(|s| w.get::<AnvilShaders>(s))
+        .expect("the template's shaders");
+    let program = shaders.pixel(0x40_4000).expect("the alpha-tested permutation");
+    let shader = ProgramShader::new(primase_dxbc::lift(program).expect("lift")).expect("shader");
+    let buffers: Vec<(u32, u32)> = PixelShader::constant_buffers(&shader)
+        .iter()
+        .map(|&(slot, n)| (slot, n.saturating_mul(4)))
+        .collect();
+    let mut constants = Constants::new(&Layout {
+        buffers,
+        fields: BTreeMap::new(),
+    });
+    let reference = f32::from(m.flags.alpha_test_value) / 255.0;
+    constants
+        .set_words(2, 18 * 4 + 1, &[reference.to_bits()])
+        .expect("cb2");
+    let mask1 = m
+        .textures
+        .iter()
+        .find(|t| t.shader_slot == 0)
+        .and_then(|t| t.texture)
+        .expect("Mask1");
+    let image = Levels::of(w.get::<Texture>(mask1).expect("texture")).expect("levels");
+    let mut textures = BTreeMap::new();
+    textures.insert(
+        75,
+        primase_shader_exec::Texture::Image(std::sync::Arc::new(Atlas(image))),
+    );
+    for slot in [76, 77] {
+        textures.insert(slot, primase_shader_exec::Texture::Constant([1.0; 4]));
+    }
+    let constant = |v: [f32; 4]| Input::Constant(v);
+    let inputs = BTreeMap::from([
+        (("SV_Position".to_owned(), 0), constant([0.0, 0.0, 0.0, 1.0])),
+        (("TEXCOORD".to_owned(), 0), Input::GridUv),
+        (("TEXCOORD".to_owned(), 1), constant([0.0; 4])),
+        (("TEXCOORD".to_owned(), 2), constant([1.0, 0.0, 0.0, 0.0])),
+        (("TEXCOORD".to_owned(), 3), constant([0.0, 0.0, 1.0, 1.0])),
+        (("TEXCOORD".to_owned(), 4), constant([0.0, 0.0, 0.0, 1.0])),
+        (("COLOR".to_owned(), 0), constant([0.0, 1.0, 1.0, 1.0])),
+    ]);
+    let raw = evaluate_raw_with(
+        primase_core::parallel::Threads::of(w),
+        &shader,
+        &constants,
+        &textures,
+        &inputs,
+        Grid {
+            size,
+            period: [1.0; 2],
+        },
+        &[(0, 15)],
+        Invocation::Quads,
+    )
+    .expect("the alpha-tested permutation runs");
+    raw.discarded.iter().map(|discarded| !discarded).collect()
+}
+
 /// The Materials of a hair in two colours, baked at their maps' size: the colour, roughness, normal and occlusion are the
 /// program's arithmetic of the maps and rows, the blond is the lighter, the cost of what the bake leaves out is counted.
 #[test]
@@ -306,6 +400,39 @@ fn a_hair_material_bakes_to_the_programs_arithmetic() {
             (0, 0, 0, 0),
             "{name}"
         );
+        // the cut-out: a mask at the Material's AlphaTestValue, the base colour's alpha Mask1's, and the texels it keeps
+        // the ones the game's own alpha-tested program keeps
+        let pbr = w.get::<PbrMaterial>(entity).expect("baked");
+        assert_eq!(
+            pbr.alpha_mode,
+            AlphaMode::Mask {
+                cutoff: f32::from(m.flags.alpha_test_value) / 255.0
+            }
+        );
+        assert_eq!(
+            log.counts
+                .get("MAD_CHR_Hair_Anisotropic Materials baked with their alpha cut-out"),
+            Some(&1)
+        );
+        let base = &w
+            .get::<Texture>(pbr.base_color_texture.as_ref().expect("base").texture)
+            .expect("texture")
+            .levels[0];
+        let kept = kept_by_the_alpha_tested_program(&w, &m, size);
+        let n = size as usize;
+        let cut = m.flags.alpha_test_value;
+        let (mut kept_n, mut disagree) = (0u64, 0u64);
+        for p in 0..n * n {
+            let ours = base[p * 4 + 3] >= cut;
+            kept_n += u64::from(kept[p]);
+            disagree += u64::from(ours != kept[p]);
+        }
+        println!(
+            "{name}: the alpha-tested program keeps {kept_n} of {} texels; the baked alpha disagrees at {disagree}",
+            n * n
+        );
+        assert!(kept_n > (n * n) as u64 / 10 && kept_n < (n * n) as u64 * 9 / 10);
+        assert_eq!(disagree, 0, "{name}");
         means.insert(name, green);
     }
     // blond is lighter than chestnut
