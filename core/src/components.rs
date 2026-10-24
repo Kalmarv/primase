@@ -1719,9 +1719,10 @@ mod tests {
         assert_eq!(inner.compose(&Transform::IDENTITY), inner);
     }
 
-    /// One singular rule: a map is singular when a transform with its part classifies as degenerate. It then turns no
-    /// normal or tangent and has no inverse, and a mesh with normals cannot follow it; an invertible map's normals and
-    /// tangents come out of unit length, the tangent's w flipped under a mirror.
+    /// One singular rule: a map is singular when a transform with its part classifies as degenerate (relative to its
+    /// axes' lengths, so a small uniform scale is not). It then turns no normal or tangent and has no inverse, and a
+    /// mesh with normals cannot follow it; an invertible map's normals and tangents come out of unit length, the
+    /// tangent's w flipped under a mirror.
     #[test]
     fn a_singular_map_turns_no_normal_or_tangent() {
         let near_flat = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 1e-7]];
@@ -1754,6 +1755,16 @@ mod tests {
             mesh.apply_linear(&flat),
             crate::world::Linearity::Unsupported
         ));
+        // the rule is relative: a small uniform scale (a FromSoft bone of scale 0.00937, det about 8.2e-7) is not
+        // singular, and turns normals and tangents to unit length; one axis squashed to 1e-7 of the others is
+        let s = 0.00937f32;
+        let small = Linear::new([[s, 0.0, 0.0], [0.0, s, 0.0], [0.0, 0.0, s]]);
+        assert!(!small.singular());
+        assert_eq!(small.normal([0.0, 1.0, 0.0]), Some([0.0, 1.0, 0.0]));
+        assert_eq!(small.tangent([1.0, 0.0, 0.0, 1.0]), Some([1.0, 0.0, 0.0, 1.0]));
+        assert!(small.inverse_columns().is_some());
+        let squashed = Linear::new([[s, 0.0, 0.0], [0.0, s, 0.0], [0.0, 0.0, s * 1e-7]]);
+        assert!(squashed.singular());
         // scaled by 2 and mirrored in x: unit normals and tangents, w flipped
         let l = Linear::of_f64([[-2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 2.0]]);
         assert!(!l.singular() && l.mirrors());
