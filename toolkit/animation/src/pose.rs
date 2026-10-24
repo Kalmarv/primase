@@ -4,7 +4,8 @@
 use std::collections::BTreeMap;
 
 use primase_core::{
-    Clip, ClipTarget, Entity, Extrapolation, JointId, MorphId, Property, Rest, RigPose, Skeleton, Transform,
+    AdditiveReference, Clip, ClipTarget, Entity, Extrapolation, JointId, MorphId, Property, Rest, RigPose,
+    Skeleton, Transform,
 };
 
 use crate::curve::sample;
@@ -178,8 +179,13 @@ fn clip_time(clip: &Clip, t: f64) -> f64 {
 }
 
 /// `clip` at `t` seconds on the skeleton held by `skeleton_entity`, over `base` (else the rests): each joint channel
-/// replaces its joint's translation, rotation or scale (a joint it drives must have a TRS form, [`Trs::of`]). An
-/// additive clip is not evaluated here (an error, never a silent rest pose).
+/// replaces its joint's translation, rotation or scale (a joint it drives must have a TRS form, [`Trs::of`]).
+///
+/// An additive clip ([`AdditiveReference::Identity`]: values that are deltas) is composed onto `base` joint by joint, as
+/// `core.clip` states: `T = T_base + T_clip`, `R = R_base * R_clip` (normalised), `S = S_base * S_clip`; a joint or a
+/// property the clip does not drive keeps the base. One whose reference is a pose or a frame of a clip is evaluated by
+/// [`evaluate_relative`], which is given that reference; here it is an error (never a silent rest pose), as is an additive
+/// clip's morph or control channel, which has no base to add to.
 pub fn evaluate(
     clip: &Clip,
     skeleton_entity: Entity,
@@ -187,9 +193,83 @@ pub fn evaluate(
     base: Option<&RigPose>,
     t: f64,
 ) -> Result<Evaluated> {
-    if clip.additive.is_some() {
-        return Err(Error(format!("clip {:?} is additive: not evaluated", clip.name)));
+    evaluate_over(clip, skeleton_entity, skeleton, base, None, t)
+}
+
+/// [`evaluate`] for an additive clip whose reference is a pose or a frame of a clip ([`AdditiveReference::Pose`],
+/// [`AdditiveReference::ClipFrame`]): `reference` is that pose, or that clip evaluated at the frame's time (the evaluator
+/// holds no world, so the caller resolves it). Composed as `core.clip` states: `T = T_base + (T_clip - T_ref)`,
+/// `R = R_base * R_ref^-1 * R_clip`, `S = S_base * S_clip / S_ref`.
+pub fn evaluate_relative(
+    clip: &Clip,
+    skeleton_entity: Entity,
+    skeleton: &Skeleton,
+    base: Option<&RigPose>,
+    reference: &RigPose,
+    t: f64,
+) -> Result<Evaluated> {
+    evaluate_over(clip, skeleton_entity, skeleton, base, Some(reference), t)
+}
+
+/// One property of a joint of an additive clip composed onto `current`: `T_base + (T_clip - T_ref)`,
+/// `R_base * R_ref^-1 * R_clip`, `S_base * S_clip / S_ref`, the reference zero, the identity and one for a delta clip.
+fn compose_additive(property: Property, current: &mut Trs, reference: Option<&Trs>, v: &[f64]) -> Result<()> {
+    match property {
+        Property::Translation => {
+            let r = reference.map_or([0.0; 3], |r| r.translation);
+            current.translation = std::array::from_fn(|i| current.translation[i] + (v[i] - r[i]));
+        }
+        Property::Rotation => {
+            let r = reference.map_or([0.0, 0.0, 0.0, 1.0], |r| r.rotation);
+            let q = quat::mul(
+                quat::mul(current.rotation, quat::inverse(r)),
+                [v[0], v[1], v[2], v[3]],
+            );
+            current.rotation = quat::normalize(q)
+                .ok_or_else(|| Error("an additive rotation composes to a zero one".into()))?;
+        }
+        Property::Scale => {
+            let r = reference.map_or([1.0; 3], |r| r.scale);
+            if r.contains(&0.0) {
+                return Err(Error(
+                    "an additive scale is relative to a reference scale of zero".into(),
+                ));
+            }
+            current.scale = std::array::from_fn(|i| current.scale[i] * v[i] / r[i]);
+        }
+        Property::Scalar => return Err(Error("a scalar channel on a joint".into())),
     }
+    Ok(())
+}
+
+fn evaluate_over(
+    clip: &Clip,
+    skeleton_entity: Entity,
+    skeleton: &Skeleton,
+    base: Option<&RigPose>,
+    reference: Option<&RigPose>,
+    t: f64,
+) -> Result<Evaluated> {
+    // the reference's joints, where the clip is relative to a pose
+    let reference_locals = match (clip.additive, reference) {
+        (None, None) | (Some(AdditiveReference::Identity), None) => None,
+        (Some(AdditiveReference::Pose(_) | AdditiveReference::ClipFrame { .. }), Some(r)) => {
+            Some(locals(skeleton, Some(r)))
+        }
+        (Some(AdditiveReference::Pose(_) | AdditiveReference::ClipFrame { .. }), None) => {
+            return Err(Error(format!(
+                "clip {:?} is additive to a pose or a frame of a clip: evaluate_relative takes that reference",
+                clip.name
+            )));
+        }
+        (_, Some(_)) => {
+            return Err(Error(format!(
+                "clip {:?} is not additive to a pose or a frame of a clip: it has no reference to be given",
+                clip.name
+            )));
+        }
+    };
+    let additive = clip.additive.is_some();
     let t = clip_time(clip, t);
     let mut locals = locals(skeleton, base);
     let mut driven: BTreeMap<JointId, Trs> = BTreeMap::new();
@@ -227,15 +307,33 @@ pub fn evaluate(
                     None => Trs::of(base).map_err(|e| Error(format!("joint {joint:?}: {e}")))?,
                 };
                 let mut trs = trs;
-                match c.property {
-                    Property::Translation => trs.translation = [v[0], v[1], v[2]],
-                    Property::Rotation => trs.rotation = [v[0], v[1], v[2], v[3]],
-                    Property::Scale => trs.scale = [v[0], v[1], v[2]],
-                    Property::Scalar => return Err(Error("a scalar channel on a joint".into())),
+                if additive {
+                    let reference = match &reference_locals {
+                        Some(r) => Some(
+                            Trs::of(&r[joint])
+                                .map_err(|e| Error(format!("joint {joint:?}'s reference: {e}")))?,
+                        ),
+                        None => None,
+                    };
+                    compose_additive(c.property, &mut trs, reference.as_ref(), &v)
+                        .map_err(|e| Error(format!("joint {joint:?}: {}", e.0)))?;
+                } else {
+                    match c.property {
+                        Property::Translation => trs.translation = [v[0], v[1], v[2]],
+                        Property::Rotation => trs.rotation = [v[0], v[1], v[2], v[3]],
+                        Property::Scale => trs.scale = [v[0], v[1], v[2]],
+                        Property::Scalar => return Err(Error("a scalar channel on a joint".into())),
+                    }
                 }
                 driven.insert(*joint, trs);
             }
             ClipTarget::Joint { .. } => out.other_skeletons += 1,
+            ClipTarget::Morph { .. } | ClipTarget::Control { .. } if additive => {
+                return Err(Error(format!(
+                    "clip {:?} is additive and drives a morph or control: there is no base to add to",
+                    clip.name
+                )));
+            }
             ClipTarget::Morph { geometry, morph } => out.morphs.push((*geometry, *morph, v[0] as f32)),
             ClipTarget::Control { name } => out.controls.push((name.clone(), v[0] as f32)),
         }
@@ -596,6 +694,162 @@ mod tests {
         let mut additive = clip;
         additive.additive = Some(primase_core::AdditiveReference::Pose(Entity::from_index(1)));
         assert!(evaluate(&additive, skel, &s, None, 1.0).is_err());
+    }
+
+    fn joint_clip(
+        skel: Entity,
+        additive: Option<AdditiveReference>,
+        channels: &[(Property, &[f32])],
+    ) -> Clip {
+        Clip {
+            name: "add".into(),
+            duration: 1.0,
+            extrapolation: Extrapolation::Hold,
+            channels: channels
+                .iter()
+                .map(|(property, values)| Channel {
+                    target: ClipTarget::Joint {
+                        skeleton: skel,
+                        joint: JointId(1),
+                    },
+                    property: *property,
+                    interpolation: Interpolation::Step,
+                    times: vec![0.0],
+                    values: values.to_vec(),
+                })
+                .collect(),
+            root_motion: None,
+            additive,
+        }
+    }
+
+    fn root_of(e: &Evaluated) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+        let Rest::Trs {
+            translation,
+            rotation,
+            scale,
+        } = e.pose.joints.iter().find(|(j, _)| *j == JointId(1)).unwrap().1
+        else {
+            panic!("a driven joint is TRS")
+        };
+        (
+            translation.map(f64::from).to_vec(),
+            rotation.map(f64::from).to_vec(),
+            scale.map(f64::from).to_vec(),
+        )
+    }
+
+    /// Hand-worked, a clip of deltas (`AdditiveReference::Identity`) on the root, whose rest is (0, 1, 0), a quarter turn
+    /// about z, scale 1: a translation delta (0.5, 0, 0) gives (0.5, 1, 0); a quarter turn about x composes on the right,
+    /// `R_base * R_clip` = (0.5, 0.5, 0.5, 0.5) (the left product is (0.5, -0.5, 0.5, 0.5)); a scale delta of 3 gives 3. The
+    /// child, which the clip does not drive, keeps its base, and so does the root's other property when one is left out.
+    #[test]
+    fn a_clip_of_deltas_composes_onto_the_base() {
+        let s = skeleton();
+        let skel = Entity::from_index(5);
+        let all = joint_clip(
+            skel,
+            Some(AdditiveReference::Identity),
+            &[
+                (Property::Translation, &[0.5, 0.0, 0.0]),
+                (Property::Rotation, &[S, 0.0, 0.0, S]),
+                (Property::Scale, &[3.0, 3.0, 3.0]),
+            ],
+        );
+        let e = evaluate(&all, skel, &s, None, 0.0).unwrap();
+        let (t, r, sc) = root_of(&e);
+        assert!(near(&t, &[0.5, 1.0, 0.0]), "{t:?}");
+        assert!(near(&r, &[0.5, 0.5, 0.5, 0.5]), "{r:?}");
+        assert!(near(&sc, &[3.0, 3.0, 3.0]), "{sc:?}");
+        let child = e.pose.joints.iter().find(|(j, _)| *j == JointId(2)).unwrap().1;
+        assert_eq!(
+            child, s.joints[0].rest,
+            "a joint the clip does not drive keeps its base"
+        );
+        // only the translation driven: the rotation and the scale are the base's
+        let only = joint_clip(
+            skel,
+            Some(AdditiveReference::Identity),
+            &[(Property::Translation, &[0.5, 0.0, 0.0])],
+        );
+        let (t, r, sc) = root_of(&evaluate(&only, skel, &s, None, 0.0).unwrap());
+        assert!(near(&t, &[0.5, 1.0, 0.0]));
+        assert!(near(&r, &[0.0, 0.0, f64::from(S), f64::from(S)]), "{r:?}");
+        assert!(near(&sc, &[1.0, 1.0, 1.0]));
+        // over a given base pose instead of the rests: the root at the origin, unturned
+        let base = RigPose {
+            joints: vec![(JointId(1), trs([0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]))],
+            root_applied: None,
+        };
+        let (t, r, _) = root_of(&evaluate(&all, skel, &s, Some(&base), 0.0).unwrap());
+        assert!(near(&t, &[0.5, 0.0, 0.0]), "{t:?}");
+        assert!(near(&r, &[f64::from(S), 0.0, 0.0, f64::from(S)]), "{r:?}");
+    }
+
+    /// Hand-worked, a clip relative to a pose: the base root at the origin and unturned; the reference root at (0, 3, 0),
+    /// turned a quarter about z, scale 2; the clip's root at (2, 3, 0), (0.5, 0.5, 0.5, 0.5), scale 4. `T = T_base +
+    /// (T_clip - T_ref)` = (2, 0, 0); `R = R_base * R_ref^-1 * R_clip` = a quarter turn about x, `(S, 0, 0, S)`; `S = S_base *
+    /// S_clip / S_ref` = 2.
+    #[test]
+    fn a_clip_relative_to_a_pose_composes_by_the_stated_rule_and_needs_its_reference() {
+        let s = skeleton();
+        let skel = Entity::from_index(5);
+        let clip = joint_clip(
+            skel,
+            Some(AdditiveReference::Pose(Entity::from_index(8))),
+            &[
+                (Property::Translation, &[2.0, 3.0, 0.0]),
+                (Property::Rotation, &[0.5, 0.5, 0.5, 0.5]),
+                (Property::Scale, &[4.0, 4.0, 4.0]),
+            ],
+        );
+        let base = RigPose {
+            joints: vec![(JointId(1), trs([0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]))],
+            root_applied: None,
+        };
+        let reference = RigPose {
+            joints: vec![(
+                JointId(1),
+                Rest::Trs {
+                    translation: [0.0, 3.0, 0.0],
+                    rotation: [0.0, 0.0, S, S],
+                    scale: [2.0; 3],
+                },
+            )],
+            root_applied: None,
+        };
+        let e = evaluate_relative(&clip, skel, &s, Some(&base), &reference, 0.0).unwrap();
+        let (t, r, sc) = root_of(&e);
+        assert!(near(&t, &[2.0, 0.0, 0.0]), "{t:?}");
+        assert!(near(&r, &[f64::from(S), 0.0, 0.0, f64::from(S)]), "{r:?}");
+        assert!(near(&sc, &[2.0, 2.0, 2.0]), "{sc:?}");
+        // the reference is the caller's to give: without it, or given to a clip with none, it is an error
+        let err = evaluate(&clip, skel, &s, Some(&base), 0.0).unwrap_err();
+        assert!(err.0.contains("evaluate_relative"), "{}", err.0);
+        let mut plain = clip.clone();
+        plain.additive = None;
+        let err = evaluate_relative(&plain, skel, &s, Some(&base), &reference, 0.0).unwrap_err();
+        assert!(err.0.contains("no reference to be given"), "{}", err.0);
+        let mut delta = clip;
+        delta.additive = Some(AdditiveReference::Identity);
+        assert!(evaluate_relative(&delta, skel, &s, Some(&base), &reference, 0.0).is_err());
+    }
+
+    /// A morph or a control of an additive clip has no base to add to: an error, not a silent pass.
+    #[test]
+    fn an_additive_clip_with_a_morph_or_control_is_refused() {
+        let s = skeleton();
+        let skel = Entity::from_index(5);
+        let mut clip = joint_clip(skel, Some(AdditiveReference::Identity), &[]);
+        clip.channels.push(Channel {
+            target: ClipTarget::Control { name: "flip".into() },
+            property: Property::Scalar,
+            interpolation: Interpolation::Step,
+            times: vec![0.0],
+            values: vec![1.0],
+        });
+        let err = evaluate(&clip, skel, &s, None, 0.0).unwrap_err();
+        assert!(err.0.contains("no base to add to"), "{}", err.0);
     }
 
     fn evaluated(joints: Vec<(JointId, Rest)>) -> Evaluated {

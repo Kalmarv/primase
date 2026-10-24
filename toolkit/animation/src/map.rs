@@ -4,8 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{
-    Channel, Clip, ClipBinding, ClipTarget, Component, Entity, Interpolation, JointId, JointMap, Property,
-    Rest, RigInstance, Skeleton, World,
+    AdditiveReference, Channel, Clip, ClipBinding, ClipTarget, Component, Entity, Interpolation, JointId,
+    JointMap, Property, Rest, RigInstance, Skeleton, World,
 };
 
 use crate::pose::{Affine, Trs, affine, compose, evaluate, inverse, model_transforms, transform};
@@ -52,7 +52,11 @@ pub enum Reparented {
 /// and the hierarchy is checked for every pair; with `rests=target` the target's rests stand and only the driven
 /// joints' hierarchy is checked. Channels on joints the map does not list are refused or left out (`unmapped`). Morph
 /// and control channels are kept. Two maps from one skeleton are refused (which one is meant is not stated), and so is
-/// a clip bound (`core.clip_binding`) to a rig of the source skeleton: map, then bind. A pair whose hierarchy differs
+/// a clip bound (`core.clip_binding`) to a rig of the source skeleton: map, then bind. A clip of deltas
+/// ([`AdditiveReference::Identity`]) is mapped like any other (its values are unchanged, so it adds the same deltas to the
+/// target's joints), holds no source rest for the joints it does not drive (it adds nothing there), and is refused where a
+/// pair's hierarchy differs and `reparented=model-space` would re-key it (a delta has no model-space pose); a clip additive
+/// to a pose or a frame of a clip is refused, as its reference is not remapped. A pair whose hierarchy differs
 /// is refused with `reparented=refuse` (the joints a clip drives) and moved by its model-space pose with
 /// `reparented=model-space` (every such pair, driven or not: the joint takes the source joint's model-space pose at
 /// each of the clip's key times, as local keys from its target parent's pose; see [`Reparented`]). A map's
@@ -222,8 +226,10 @@ impl Pass for MapClip {
             if skeletons.len() > 1 {
                 return Err(format!("clip {c:?} drives several skeletons"));
             }
-            // an additive clip's reference is a pose or a frame of a clip of the source skeleton: not remapped here
-            if clip.additive.is_some() {
+            // an additive clip's reference is a pose or a frame of a clip of the source skeleton: not remapped here; a clip
+            // of deltas ([`AdditiveReference::Identity`]) has none
+            let deltas = clip.additive == Some(AdditiveReference::Identity);
+            if clip.additive.is_some() && !deltas {
                 return Err(format!("clip {c:?} is additive: not mapped"));
             }
             if let Some(&(_, rig)) = bound.iter().find(|(clip, rig)| {
@@ -249,6 +255,11 @@ impl Pass for MapClip {
                     .map(|(a, _)| *a)
                     .collect(),
             };
+            if deltas && !baked.is_empty() {
+                return Err(format!(
+                    "clip {c:?} is additive: its deltas are not re-keyed by a model-space pose (reparented=model-space)"
+                ));
+            }
             let clip_for_keys = clip.clone();
             let mut mapped = clip.clone();
             let mut dropped = 0u64;
@@ -310,7 +321,8 @@ impl Pass for MapClip {
             }
             // the target follows the source: undriven mapped joints held at the source's rests
             let mut held = 0u64;
-            if self.rests == Rests::Source {
+            // a clip of deltas adds nothing where it has no channel: no rest is held for it
+            if self.rests == Rests::Source && !deltas {
                 for (&a, &b) in &map.pairs {
                     let src = Trs::of(&map.from_rest[&a]).map_err(|e| format!("joint {a:?}: {e}"))?;
                     // a target rest with no TRS form (a bone scaled to nothing) differs from every source rest
@@ -693,6 +705,40 @@ mod tests {
             report.steps[0].log.omitted["clip channels on joints the map does not list (unmapped=drop)"],
             1
         );
+        // a clip of deltas is mapped with its values unchanged, holds no source rest for the joints it does not drive, and
+        // is refused where model-space re-keying would apply
+        let (mut w, _, b, clip) = world(&[(1, 10), (2, 20), (3, 30)]);
+        w.get_mut::<Clip>(clip).unwrap().additive = Some(AdditiveReference::Identity);
+        let before = w.get::<Clip>(clip).unwrap().channels.clone();
+        let report = run(&mut w, "map-clip{unmapped=refuse,rests=source,reparented=refuse}").unwrap();
+        assert!(
+            !report.steps[0]
+                .log
+                .counts
+                .contains_key("undriven joints held at the source skeleton's rest")
+        );
+        let mapped = w.get::<Clip>(clip).unwrap();
+        assert_eq!(mapped.additive, Some(AdditiveReference::Identity));
+        assert_eq!(
+            mapped.channels.len(),
+            before.len(),
+            "no rest channels are added to a clip of deltas"
+        );
+        for (m, s) in mapped.channels.iter().zip(&before) {
+            assert_eq!(
+                (m.property, &m.times, &m.values),
+                (s.property, &s.times, &s.values)
+            );
+            assert!(matches!(m.target, ClipTarget::Joint { skeleton, .. } if skeleton == b));
+        }
+        let (mut w, _, _, clip) = world(&[(1, 10), (2, 20), (3, 40)]);
+        w.get_mut::<Clip>(clip).unwrap().additive = Some(AdditiveReference::Identity);
+        let err = run(
+            &mut w,
+            "map-clip{unmapped=refuse,rests=target,reparented=model-space}",
+        )
+        .unwrap_err();
+        assert!(err.contains("not re-keyed by a model-space pose"), "{err}");
         // an additive clip's reference is not remapped: refused, as retarget-clip does
         let (mut w, _, _, clip) = world(&[(1, 10), (2, 20), (3, 30)]);
         w.get_mut::<Clip>(clip).unwrap().additive = Some(AdditiveReference::ClipFrame { clip, time: 0.0 });
