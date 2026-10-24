@@ -112,7 +112,12 @@ fn the_masks_on_any_thread_count_are_the_serial_ones() {
         let mut w = world(threads);
         let log = raise_skate(
             &mut w,
-            &RaiseOptions::new("threads", LightCalibration::Standard).unwrap(),
+            &RaiseOptions::new(
+                "threads",
+                LightCalibration::Standard,
+                primase_reskate::passes::Unclassified::LeaveOut,
+            )
+            .unwrap(),
         )
         .unwrap();
         let textures: Vec<(Entity, Texture)> = w.iter::<Texture>().map(|(e, t)| (e, t.clone())).collect();

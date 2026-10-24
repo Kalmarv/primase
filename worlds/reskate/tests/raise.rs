@@ -153,10 +153,14 @@ fn world() -> World {
 }
 
 fn options() -> RaiseOptions {
-    RaiseOptions::new("raised", primase_reskate::passes::LightCalibration::Standard)
-        .unwrap()
-        .with_surfaces(BTreeMap::from([("Snow".to_owned(), "asphalt".to_owned())]))
-        .unwrap()
+    RaiseOptions::new(
+        "raised",
+        primase_reskate::passes::LightCalibration::Standard,
+        primase_reskate::passes::Unclassified::LeaveOut,
+    )
+    .unwrap()
+    .with_surfaces(BTreeMap::from([("Snow".to_owned(), "asphalt".to_owned())]))
+    .unwrap()
 }
 
 #[test]
@@ -297,10 +301,14 @@ fn surface_classes_map_onto_skate_surfaces_unless_the_caller_maps_the_name() {
         w.resource_mut::<Surfaces>().unwrap().0[0].class = class;
         let r = passes::raise_skate(
             &mut w,
-            &RaiseOptions::new("x", primase_reskate::passes::LightCalibration::Standard)
-                .unwrap()
-                .with_surfaces(map.iter().map(|&(a, b)| (a.to_owned(), b.to_owned())).collect())
-                .unwrap(),
+            &RaiseOptions::new(
+                "x",
+                primase_reskate::passes::LightCalibration::Standard,
+                primase_reskate::passes::Unclassified::LeaveOut,
+            )
+            .unwrap()
+            .with_surfaces(map.iter().map(|&(a, b)| (a.to_owned(), b.to_owned())).collect())
+            .unwrap(),
         );
         r.map(|_| w.resource::<Surfaces>().unwrap().0[0].name.clone())
             .map_err(|e| e.to_string())
@@ -337,7 +345,12 @@ fn water_collision() {
         // no surface map: the water class decides
         let log = passes::raise_skate(
             &mut w,
-            &RaiseOptions::new("raised", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+            &RaiseOptions::new(
+                "raised",
+                primase_reskate::passes::LightCalibration::Standard,
+                primase_reskate::passes::Unclassified::LeaveOut,
+            )
+            .unwrap(),
         )
         .unwrap();
         let p = w.get::<SkatePrototype>(proto).unwrap();
@@ -438,16 +451,25 @@ fn a_material_the_source_draws_as_a_decal_is_raised_as_skates_decal() {
 #[test]
 fn what_skate_cannot_take_is_refused() {
     // a scene without a name: refused before anything runs
-    let err = RaiseOptions::new("", primase_reskate::passes::LightCalibration::Standard).unwrap_err();
+    let err = RaiseOptions::new(
+        "",
+        primase_reskate::passes::LightCalibration::Standard,
+        primase_reskate::passes::Unclassified::LeaveOut,
+    )
+    .unwrap_err();
     assert!(err.contains("scene name"), "{err}");
     // a surface map naming a surface skate does not have
     let mut w = world();
     let err = passes::raise_skate(
         &mut w,
-        &RaiseOptions::new("x", primase_reskate::passes::LightCalibration::Standard)
-            .unwrap()
-            .with_surfaces(BTreeMap::from([("Snow".to_owned(), "lava".to_owned())]))
-            .unwrap(),
+        &RaiseOptions::new(
+            "x",
+            primase_reskate::passes::LightCalibration::Standard,
+            primase_reskate::passes::Unclassified::LeaveOut,
+        )
+        .unwrap()
+        .with_surfaces(BTreeMap::from([("Snow".to_owned(), "lava".to_owned())]))
+        .unwrap(),
     )
     .unwrap_err()
     .to_string();
@@ -868,7 +890,12 @@ fn markers_are_raised_from_core_markers() {
     let waypoint = marker(&mut w, "waypoint", Some([0.0, 0.0]), None);
     let log = passes::raise_skate(
         &mut w,
-        &RaiseOptions::new("m", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+        &RaiseOptions::new(
+            "m",
+            primase_reskate::passes::LightCalibration::Standard,
+            primase_reskate::passes::Unclassified::LeaveOut,
+        )
+        .unwrap(),
     )
     .unwrap();
     let s = w.get::<components::SkateMarker>(spawn).unwrap();
@@ -915,10 +942,12 @@ fn unclassified_surfaces_and_prototype_collision() {
     );
     let log = passes::raise_skate(
         &mut w,
-        &RaiseOptions::new("x", primase_reskate::passes::LightCalibration::Standard)
-            .unwrap()
-            .with_unclassified("concrete")
-            .unwrap(),
+        &RaiseOptions::new(
+            "x",
+            primase_reskate::passes::LightCalibration::Standard,
+            primase_reskate::passes::Unclassified::Surface("concrete".into()),
+        )
+        .unwrap(),
     )
     .unwrap();
     assert_eq!(log.counts["unclassified surfaces made concrete: Snow"], 1);
@@ -930,10 +959,12 @@ fn unclassified_surfaces_and_prototype_collision() {
     // an unclassified surface that is no skate surface is refused
     let e = passes::raise_skate(
         &mut world(),
-        &RaiseOptions::new("x", primase_reskate::passes::LightCalibration::Standard)
-            .unwrap()
-            .with_unclassified("lava")
-            .unwrap(),
+        &RaiseOptions::new(
+            "x",
+            primase_reskate::passes::LightCalibration::Standard,
+            primase_reskate::passes::Unclassified::Surface("lava".into()),
+        )
+        .unwrap(),
     )
     .unwrap_err()
     .to_string();

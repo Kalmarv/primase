@@ -55,8 +55,8 @@ pub mod prepare {
         PrepareReskateBlendOrder, PrepareReskateFloor, PrepareReskateGrinds, PrepareReskateOverlays,
         PrepareReskatePauseMap, PrepareReskateTextures, PrepareReskateWater, RAISE_SKATE, RaiseOptions,
         RaiseSkate, ReskateSpawnAt, SELECT_RESKATE_LIGHTS, SKATE_LIGHT_SCALE, SNAP_RESKATE_MARKERS,
-        SelectReskateLights, SkatePauseImage, SkatePausePicture, SnapReskateMarkers, WaterExtent,
-        class_to_skate, raise_skate, studio_watts, tint_pixels,
+        SelectReskateLights, SkatePauseImage, SkatePausePicture, SnapReskateMarkers, Unclassified,
+        WaterExtent, class_to_skate, raise_skate, studio_watts, tint_pixels,
     };
 }
 

@@ -109,7 +109,12 @@ fn world(corners: [[f32; 3]; 4], at: [f32; 3]) -> World {
     w.insert(placed, t);
     primase_reskate::passes::raise_skate(
         &mut w,
-        &RaiseOptions::new("chains", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+        &RaiseOptions::new(
+            "chains",
+            primase_reskate::passes::LightCalibration::Standard,
+            primase_reskate::passes::Unclassified::LeaveOut,
+        )
+        .unwrap(),
     )
     .unwrap();
     LowerLayeredReskate::new(OverlayLimit::All)

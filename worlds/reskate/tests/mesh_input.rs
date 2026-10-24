@@ -158,7 +158,12 @@ fn a_loaded_scene_writes_what_its_world_writes() {
     spawn_at(&mut w, [0.0, 0.0]);
     primase_reskate::passes::raise_skate(
         &mut w,
-        &RaiseOptions::new("mesh_input", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+        &RaiseOptions::new(
+            "mesh_input",
+            primase_reskate::passes::LightCalibration::Standard,
+            primase_reskate::passes::Unclassified::LeaveOut,
+        )
+        .unwrap(),
     )
     .unwrap();
     // the markers snapped before the writer, which snaps nothing
@@ -244,7 +249,12 @@ fn a_spawn_over_no_ground_is_refused() {
         );
         primase_reskate::passes::raise_skate(
             &mut w,
-            &RaiseOptions::new("spawned", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+            &RaiseOptions::new(
+                "spawned",
+                primase_reskate::passes::LightCalibration::Standard,
+                primase_reskate::passes::Unclassified::LeaveOut,
+            )
+            .unwrap(),
         )
         .unwrap();
         let scene = tmp(&format!("{tag}-scene"));
@@ -307,7 +317,12 @@ fn a_prototype_that_collides_without_drawing_is_written_as_collision() {
     w.insert(at, t);
     primase_reskate::passes::raise_skate(
         &mut w,
-        &RaiseOptions::new("collides", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+        &RaiseOptions::new(
+            "collides",
+            primase_reskate::passes::LightCalibration::Standard,
+            primase_reskate::passes::Unclassified::LeaveOut,
+        )
+        .unwrap(),
     )
     .unwrap();
     let scene = tmp("collides-scene");
@@ -378,7 +393,12 @@ fn the_write_needs_no_scene_file_after_the_load() {
     }
     primase_reskate::passes::raise_skate(
         &mut w,
-        &RaiseOptions::new("once", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+        &RaiseOptions::new(
+            "once",
+            primase_reskate::passes::LightCalibration::Standard,
+            primase_reskate::passes::Unclassified::LeaveOut,
+        )
+        .unwrap(),
     )
     .unwrap();
     SnapReskateMarkers::for_default_encoding()

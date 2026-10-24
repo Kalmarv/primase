@@ -3,12 +3,14 @@
 #![allow(clippy::unwrap_used)]
 use std::collections::BTreeMap;
 
-use primase_core::pass::{Mode, PassManager, PassOptions, PassRegistry, Pipeline, RunReport, Target};
+use primase_core::pass::{
+    Mode, Options, PassManager, PassOptions, PassRegistry, Pipeline, RunReport, Target,
+};
 use primase_core::{
     Collision, Instance, Light, LightKind, LodForm, Lods, Mesh, MeshFile, Name, Opaque, OpaqueData,
     Primitive, Semantic, Stream, Surface, Surfaces, Topology, Transform, TransformKind, World,
 };
-use primase_meshops::{BakeNonrigid, bake_nonrigid};
+use primase_meshops::{BakeNonrigid, Mirrors, bake_nonrigid};
 
 /// 1 / sqrt 2 as f32.
 const H: f32 = std::f32::consts::FRAC_1_SQRT_2;
@@ -115,7 +117,12 @@ fn a_mirror_moves_into_a_shared_twin() {
         [10.0, 0.0, 5.0],
     ]);
     let (a, b) = (place(&mut w, p, m), place(&mut w, p, m));
-    let log = bake_nonrigid(&mut w, &BakeNonrigid::default());
+    let log = bake_nonrigid(
+        &mut w,
+        &BakeNonrigid {
+            mirrors: Mirrors::Bake,
+        },
+    );
     let kept = t([
         [2.0, 0.0, 0.0],
         [0.0, 1.0, 0.0],
@@ -192,7 +199,12 @@ fn a_shear_moves_into_a_copy_per_placement() {
             [4.0, 0.0, 0.0],
         ]),
     );
-    let log = bake_nonrigid(&mut w, &BakeNonrigid::default());
+    let log = bake_nonrigid(
+        &mut w,
+        &BakeNonrigid {
+            mirrors: Mirrors::Bake,
+        },
+    );
     let mut only = Transform::IDENTITY;
     only.cols[3] = [0.0, 0.0, -7.0];
     assert_eq!(w.get::<Transform>(s), Some(&only));
@@ -297,13 +309,18 @@ fn own_geometry_soups_lights_and_kept_mirrors() {
     let log = bake_nonrigid(
         &mut w,
         &BakeNonrigid {
-            mirrors: primase_meshops::Mirrors::Keep,
+            mirrors: Mirrors::Keep,
         },
     );
     assert!(log.counts.is_empty(), "{:?}", log.counts);
     assert_eq!(w.get::<Transform>(kept), snapshot.get::<Transform>(kept));
     // mirrors baked
-    bake_nonrigid(&mut w, &BakeNonrigid::default());
+    bake_nonrigid(
+        &mut w,
+        &BakeNonrigid {
+            mirrors: Mirrors::Bake,
+        },
+    );
     let mut at = Transform::IDENTITY;
     at.cols[3] = [0.0, 2.0, 0.0];
     assert_eq!(w.get::<Transform>(own), Some(&at));
@@ -339,24 +356,24 @@ fn a_target_taking_rigid_transforms_is_planned_with_the_pass() {
     let mut w = World::new();
     let p = proto(&mut w, "roof");
     let e = place(&mut w, p, Transform::IDENTITY);
-    let plan = |w: &World| {
+    let given = PassOptions::from([(
+        "bake-nonrigid".to_owned(),
+        Options::from([("mirrors".to_owned(), "bake".to_owned())]),
+    )]);
+    let plan = |w: &World, options: &PassOptions| {
         manager
-            .plan(
-                w,
-                &target,
-                Mode::Partial,
-                &PassOptions::new(),
-                &mut RunReport::default(),
-            )
-            .unwrap()
-            .to_string()
+            .plan(w, &target, Mode::Partial, options, &mut RunReport::default())
+            .map(|p| p.to_string())
     };
-    assert_eq!(plan(&w), "", "rigid already: nothing to do");
+    assert_eq!(plan(&w, &given).unwrap(), "", "rigid already: nothing to do");
     w.insert(
         e,
         t([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0; 3]]),
     );
-    assert_eq!(plan(&w), "bake-nonrigid");
+    assert_eq!(plan(&w, &given).unwrap(), "bake-nonrigid{mirrors=bake}");
+    // whether a mirror becomes geometry is the caller's: the plan needs the option given
+    let e = plan(&w, &PassOptions::new()).unwrap_err().to_string();
+    assert!(e.contains("bake-nonrigid"), "{e}");
 }
 
 /// A component a mapping drops is counted and recorded, so a name whose only holder was mapped may vanish under the
@@ -383,7 +400,9 @@ fn a_dropped_name_with_its_only_holder_mapped_is_a_recorded_removal() {
         .run(
             &mut w,
             &Pipeline {
-                passes: vec![Box::new(BakeNonrigid::default())],
+                passes: vec![Box::new(BakeNonrigid {
+                    mirrors: Mirrors::Bake,
+                })],
             },
             &mut report,
         )
@@ -414,7 +433,12 @@ fn a_prototype_that_cannot_follow_keeps_its_placements_as_they_were() {
     let mirrored = t([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0; 3]]);
     let e = place(&mut w, p, mirrored);
     let entities = w.entity_count();
-    let log = bake_nonrigid(&mut w, &BakeNonrigid::default());
+    let log = bake_nonrigid(
+        &mut w,
+        &BakeNonrigid {
+            mirrors: Mirrors::Bake,
+        },
+    );
     assert_eq!(w.get::<Transform>(e), Some(&mirrored));
     assert_eq!(w.get::<Instance>(e).unwrap().prototype, p);
     assert_eq!(w.entity_count(), entities, "no copy left behind");

@@ -264,7 +264,12 @@ fn world(order: Order) -> World {
     );
     primase_reskate::passes::raise_skate(
         &mut w,
-        &RaiseOptions::new("orders", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+        &RaiseOptions::new(
+            "orders",
+            primase_reskate::passes::LightCalibration::Standard,
+            primase_reskate::passes::Unclassified::LeaveOut,
+        )
+        .unwrap(),
     )
     .unwrap();
     // two rails 1 m up, along east (scene x), in the first and second cells

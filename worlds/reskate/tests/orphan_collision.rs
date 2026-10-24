@@ -91,7 +91,12 @@ fn map() -> World {
     prop(&mut w, "orphan", concrete);
     primase_reskate::passes::raise_skate(
         &mut w,
-        &RaiseOptions::new("orphan", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+        &RaiseOptions::new(
+            "orphan",
+            primase_reskate::passes::LightCalibration::Standard,
+            primase_reskate::passes::Unclassified::LeaveOut,
+        )
+        .unwrap(),
     )
     .unwrap();
     let spawn = w.spawn();

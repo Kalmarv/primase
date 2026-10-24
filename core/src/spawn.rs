@@ -1,6 +1,6 @@
 //! `place-spawn`: a spawn marker the caller asks for, placed on the read world before a writer plans.
 
-use crate::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
+use crate::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use crate::{Instance, Marker, Name, Transform, World};
 
 /// Where [`PlaceSpawn`] puts the spawn.
@@ -13,7 +13,7 @@ pub enum SpawnAt {
     Ground([f32; 2]),
 }
 
-/// `place-spawn{at=centre (the default) | east=E,north=N}[,yaw=DEGREES]}`: a `core.marker` of kind `spawn` at a ground position
+/// `place-spawn{at=centre | east=E,north=N}[,yaw=DEGREES]}`: a `core.marker` of kind `spawn` at a ground position
 /// (its height left to the consumer, which snaps it), facing `yaw` ([`Marker::yaw`]). The caller states where; a
 /// world whose source already places a spawn is refused (the source's own stands). It runs as a selection pass, on
 /// the world a writer plans from, so one spawn serves every part of a conversion; the marker is content of its own
@@ -69,16 +69,11 @@ impl PlaceSpawn {
                 .map(|v| v.parse::<f32>().map_err(|_| format!("{k}={v} is not a number")))
                 .transpose()
         };
-        let centre = match g.optional("at") {
-            Some("centre") => true,
-            Some(v) => return Err(format!("at={v}: only at=centre (or east, north)")),
-            None => false,
-        };
         let (east, north, yaw) = (number("east")?, number("north")?, number("yaw")?);
-        let pass = match (centre, east, north) {
-            (_, None, None) => PlaceSpawn::centre(),
-            (false, Some(e), Some(n)) => PlaceSpawn::at_ground(e, n)?,
-            (true, _, _) => return Err("at=centre or east, north: not both".into()),
+        let pass = match (g.optional_choice::<At>("at"), east, north) {
+            (Some(At::Centre), None, None) => PlaceSpawn::centre(),
+            (Some(At::Centre), _, Some(_)) => return Err("at=centre or east, north: not both".into()),
+            (None, Some(e), Some(n)) => PlaceSpawn::at_ground(e, n)?,
             _ => return Err("east and north go together".into()),
         };
         match yaw {
@@ -88,27 +83,37 @@ impl PlaceSpawn {
     }
 }
 
-/// `place-spawn`'s declaration ([`crate::pass::PassRegistry::add`]).
+/// `place-spawn`'s `at`: the one place it names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum At {
+    Centre,
+}
+
+impl Choice for At {
+    const VALUES: &'static [(&'static str, Self)] = &[("centre", At::Centre)];
+}
+
+/// `place-spawn`'s declaration ([`crate::pass::PassRegistry::add`]): where the spawn goes is the program's, no
+/// default.
 pub const PLACE_SPAWN: PassSpec = PassSpec {
     name: "place-spawn",
     options: &[
-        OptionSpec::optional(
+        OptionSpec::one_of_choice::<At>(
+            "place",
             "at",
-            "centre",
-            "centre, the median of the placements' ground positions",
-            "east and north where given, else centre",
+            "centre: the median of the placements' ground positions",
         ),
-        OptionSpec::optional(
+        OptionSpec::one_of(
+            "place",
             "east",
             "0",
-            "metres, with north: the spawn's ground position, in place of at",
-            "the position at gives",
+            "metres, with north: the spawn's ground position",
         ),
         OptionSpec::optional(
             "north",
             "0",
-            "metres, with east: the spawn's ground position, in place of at",
-            "the position at gives",
+            "metres, with east: the spawn's ground position",
+            "required with east, not taken with at",
         ),
         OptionSpec::optional("yaw", "90", "degrees: the spawn's heading", "no heading"),
     ],
@@ -260,7 +265,7 @@ mod tests {
                 variant: 0,
             },
         );
-        let err = run(&mut w, "place-spawn").unwrap_err();
+        let err = run(&mut w, "place-spawn{at=centre}").unwrap_err();
         assert!(
             err.contains("has no core.transform") && err.contains(&format!("{bare:?}")),
             "{err}"
@@ -290,8 +295,16 @@ mod tests {
                 .unwrap_err()
                 .contains("no placement")
         );
+        // where it goes is the program's: no option is refused, naming the choice
+        assert!(
+            run(&mut World::new(), "place-spawn")
+                .unwrap_err()
+                .contains("one of at or east is required"),
+        );
         for bad in [
             "place-spawn{east=3}",
+            "place-spawn{north=3}",
+            "place-spawn{yaw=90}",
             "place-spawn{at=centre,east=1,north=2}",
             "place-spawn{at=middle}",
             "place-spawn{yaw=nan,at=centre}",

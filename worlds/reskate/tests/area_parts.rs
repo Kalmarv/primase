@@ -98,7 +98,12 @@ fn map() -> World {
     place(&mut w, rock, 2500.0, 0.0);
     primase_reskate::passes::raise_skate(
         &mut w,
-        &RaiseOptions::new("area", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+        &RaiseOptions::new(
+            "area",
+            primase_reskate::passes::LightCalibration::Standard,
+            primase_reskate::passes::Unclassified::LeaveOut,
+        )
+        .unwrap(),
     )
     .unwrap();
     let m = w.spawn();

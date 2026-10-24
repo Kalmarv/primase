@@ -1309,7 +1309,12 @@ mod tests {
         w.insert(ground, c);
         crate::passes::raise_skate(
             &mut w,
-            &crate::passes::RaiseOptions::new("slabs", crate::passes::LightCalibration::Standard).unwrap(),
+            &crate::passes::RaiseOptions::new(
+                "slabs",
+                crate::passes::LightCalibration::Standard,
+                crate::passes::Unclassified::LeaveOut,
+            )
+            .unwrap(),
         )
         .unwrap();
         w
@@ -1393,7 +1398,12 @@ mod tests {
         }
         crate::passes::raise_skate(
             &mut w,
-            &crate::passes::RaiseOptions::new("textured", crate::passes::LightCalibration::Standard).unwrap(),
+            &crate::passes::RaiseOptions::new(
+                "textured",
+                crate::passes::LightCalibration::Standard,
+                crate::passes::Unclassified::LeaveOut,
+            )
+            .unwrap(),
         )
         .unwrap();
         w

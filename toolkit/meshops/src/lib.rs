@@ -451,7 +451,6 @@ mod tests {
         assert_eq!(format!("{reg:?}"), format!("{names:?}"));
         let free = [
             "add-back-faces",
-            "bake-nonrigid",
             "bake-texture-transforms",
             "draw-collision",
             "omit-materialless-primitives",

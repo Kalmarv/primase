@@ -498,7 +498,12 @@ mod tests {
         w.insert(ground, c);
         crate::passes::raise_skate(
             &mut w,
-            &crate::passes::RaiseOptions::new("content", crate::passes::LightCalibration::Standard).unwrap(),
+            &crate::passes::RaiseOptions::new(
+                "content",
+                crate::passes::LightCalibration::Standard,
+                crate::passes::Unclassified::LeaveOut,
+            )
+            .unwrap(),
         )
         .unwrap();
         assert!(w.resource::<SkateScene>().unwrap().region.is_none());

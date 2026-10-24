@@ -20,7 +20,7 @@ use primase_fromsoft::sekiro::passes::{
     LowerFromSoftMaterials, Pose, ResolveFromSoftShaders, SpeedTreeFrame, Tiling, Unbound, Winding,
 };
 use primase_fromsoft::sekiro::settings::{Factor, Fraction, HitClass, HitFilters, Metres, PixelCap, Seconds};
-use primase_image::{CapMode, CapTextures, NormalDownscale, NormalizeNormals};
+use primase_image::{Beyond, CapMode, CapTextures, NormalDownscale, NormalizeNormals};
 use primase_reskate::compile::{CompileChoices, Streaming, Studio, TimeOfDay, compile_map};
 use primase_reskate::components::{CollisionSurfaces, CollisionWeld};
 use primase_reskate::passes::{
@@ -28,7 +28,7 @@ use primase_reskate::passes::{
     PauseSource, PlaceReskateSpawn, PlanReskateBlendBudget, PrepareReskateBlendOrder, PrepareReskateCollision,
     PrepareReskateFloor, PrepareReskateGrinds, PrepareReskateOverlays, PrepareReskatePauseMap, PrepareReskateTextures,
     PrepareReskateUvRepeats, PrepareReskateWater, RaiseOptions, RaiseSkate, RepeatBlended, RepeatDecals,
-    SnapReskateMarkers, SummarizeReskateMap, WaterExtent,
+    SnapReskateMarkers, SummarizeReskateMap, Unclassified, WaterExtent,
 };
 use primase_reskate::{EncodingOptions, MapSink};
 
@@ -76,7 +76,7 @@ fn main() -> Result<()> {
         passes: vec![
             Box::new(NormalizeNormals),
             Box::new(DropFromSoftTextureTransforms::new()),
-            Box::new(RaiseSkate::new(RaiseOptions::new("ashina", LightCalibration::Standard)?)),
+            Box::new(RaiseSkate::new(RaiseOptions::new("ashina", LightCalibration::Standard, Unclassified::LeaveOut)?)),
             Box::new(ClipReskateRegion::new(region, 30.0)?),
             Box::new(PrepareReskateFloor::new(100.0, 250.0)?),
             Box::new(PrepareReskateGrinds::studio()),
@@ -88,7 +88,7 @@ fn main() -> Result<()> {
                 extent: PauseExtent::Region,
                 drawing: PauseDrawing { leave_out: PauseLeaveOut::Nothing, colour: PauseColour::Mean },
             })?),
-            Box::new(CapTextures::new(256)?.with_mode(CapMode { normals: NormalDownscale::Box, ..CapMode::default() })),
+            Box::new(CapTextures::new(256, CapMode { beyond: Beyond::Filter, normals: NormalDownscale::Box })?),
             Box::new(PrepareReskateTextures),
             Box::new(PrepareReskateUvRepeats::new(RepeatDecals::Omit, RepeatBlended::Cutout)),
             Box::new(PrepareReskateOverlays::new(0.004)?.for_encoding(&e)?),

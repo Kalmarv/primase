@@ -104,7 +104,12 @@ fn map() -> World {
     }
     primase_reskate::passes::raise_skate(
         &mut w,
-        &RaiseOptions::new("snap_parts", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+        &RaiseOptions::new(
+            "snap_parts",
+            primase_reskate::passes::LightCalibration::Standard,
+            primase_reskate::passes::Unclassified::LeaveOut,
+        )
+        .unwrap(),
     )
     .unwrap();
     for x in DECKS {

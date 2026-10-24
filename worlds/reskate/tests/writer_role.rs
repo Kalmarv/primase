@@ -127,7 +127,12 @@ fn world() -> World {
     );
     primase_reskate::passes::raise_skate(
         &mut w,
-        &RaiseOptions::new("role", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+        &RaiseOptions::new(
+            "role",
+            primase_reskate::passes::LightCalibration::Standard,
+            primase_reskate::passes::Unclassified::LeaveOut,
+        )
+        .unwrap(),
     )
     .unwrap();
     w.resource_mut::<SkateScene>().unwrap().region = Some([0.0, 0.0, 100.0, 100.0]);

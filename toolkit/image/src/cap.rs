@@ -1,4 +1,4 @@
-//! `cap-textures{max=N}`: textures no larger than the size a program asks for, taken from the stored mip levels.
+//! `cap-textures`: textures no larger than the size a program asks for, taken from the stored mip levels.
 
 use std::collections::BTreeMap;
 
@@ -32,28 +32,26 @@ pub enum Capped {
 }
 
 /// What [`cap_texture`] does with a texture none of whose stored levels is within the cap.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Beyond {
     /// Decode the smallest stored level and box-filter it down to the cap (an approximation, reported).
-    #[default]
     Filter,
     /// Keep the smallest stored level, larger than the cap (exact; reported).
     Keep,
 }
 
 /// How a normal map is filtered down when it is ([`Beyond::Filter`]).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NormalDownscale {
     /// Each vector decoded, averaged and renormalized ([`resize_normals`]); a normal map whose RGB is not X, Y, Z is
     /// left at its smallest stored level.
-    #[default]
     Renormalize,
     /// The 2 x 2 box in stored values, as for colour (the vectors' mean, not renormalized; any convention).
     Box,
 }
 
-/// How [`cap_texture`] reaches the cap; the defaults filter beyond the stored levels and renormalize normal maps.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// How [`cap_texture`] reaches the cap: both are the program's, as each changes the pixels written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CapMode {
     pub beyond: Beyond,
     pub normals: NormalDownscale,
@@ -127,14 +125,14 @@ pub enum CapRole {
     Mask,
 }
 
-/// `cap-textures{max=N[,color=N][,normal=N][,mask=N][,names=NAME:N;...][,beyond=filter|keep][,normals=renormalize|box]}`
-/// (N > 0; `max` required): every texture no larger than its cap on its larger side, so passes that derive textures
+/// `cap-textures{max=N,beyond=filter|keep,normals=renormalize|box[,color=N][,normal=N][,mask=N][,names=NAME:N;...]}`
+/// (N > 0; `max`, `beyond` and `normals` required): every texture no larger than its cap on its larger side, so passes that derive textures
 /// from it (PBR maps, normal maps) work at that size. The composing program chooses the caps; readers read every
 /// stored level. A texture's cap is its name's (`names`, its `core.name` in any case), else its role's (`color`,
 /// `normal`, `mask`), else `max`.
 /// - A stored mip level no larger than the cap: that level and the smaller ones are kept, exactly; the larger ones
 ///   dropped.
-/// - None: by default (`beyond=filter`) the smallest stored level is decoded to RGBA8 and box-filtered down (an
+/// - None: with `beyond=filter` the smallest stored level is decoded to RGBA8 and box-filtered down (an
 ///   approximation, named per texture); normal maps are renormalized (`normals=renormalize`, and a normal map whose
 ///   RGB does not hold X, Y, Z is left at its smallest level instead, counted) or box-filtered as colour is
 ///   (`normals=box`). With `beyond=keep` the smallest stored level is kept as it is, counted.
@@ -168,15 +166,15 @@ fn pixels(k: &str, v: &str) -> std::result::Result<u32, String> {
 }
 
 impl CapTextures {
-    /// Every texture no larger than `max` pixels on its larger side (positive), by the default mode.
-    pub fn new(max: u32) -> std::result::Result<CapTextures, String> {
+    /// Every texture no larger than `max` pixels on its larger side (positive), the caps reached as `mode` says.
+    pub fn new(max: u32, mode: CapMode) -> std::result::Result<CapTextures, String> {
         Ok(CapTextures {
             max: positive("max", max)?,
             color: None,
             normal: None,
             mask: None,
             names: BTreeMap::new(),
-            mode: CapMode::default(),
+            mode,
         })
     }
 
@@ -198,12 +196,6 @@ impl CapTextures {
         Ok(self)
     }
 
-    /// How the caps are reached.
-    pub fn with_mode(mut self, mode: CapMode) -> CapTextures {
-        self.mode = mode;
-        self
-    }
-
     pub fn max(&self) -> u32 {
         self.max
     }
@@ -219,7 +211,11 @@ impl CapTextures {
 
     /// From the options [`CAP_TEXTURES`] declares, through [`CapTextures::new`] and the same setters.
     fn from_given(g: &Given) -> std::result::Result<CapTextures, String> {
-        let mut pass = CapTextures::new(pixels("max", g.required("max"))?)?;
+        let mode = CapMode {
+            beyond: g.choice("beyond"),
+            normals: g.choice("normals"),
+        };
+        let mut pass = CapTextures::new(pixels("max", g.required("max"))?, mode)?;
         for (k, role) in [
             ("color", CapRole::Color),
             ("normal", CapRole::Normal),
@@ -237,14 +233,7 @@ impl CapTextures {
                 pass = pass.with_name_cap(name, pixels("names", cap)?)?;
             }
         }
-        let mut mode = CapMode::default();
-        if let Some(beyond) = g.optional_choice::<Beyond>("beyond") {
-            mode.beyond = beyond;
-        }
-        if let Some(normals) = g.optional_choice::<NormalDownscale>("normals") {
-            mode.normals = normals;
-        }
-        Ok(pass.with_mode(mode))
+        Ok(pass)
     }
 
     /// The cap of texture `t` named `name` (lower case).
@@ -287,16 +276,14 @@ pub const CAP_TEXTURES: PassSpec = PassSpec {
             "NAME:N entries, `;` between: the cap of the textures so named (lower case), before their role's",
             "no texture capped by its name",
         ),
-        OptionSpec::optional_choice::<Beyond>(
+        OptionSpec::choice::<Beyond>(
             "beyond",
             "a texture whose smallest stored level is over its cap: that level box-filtered down to the cap, or \
              kept",
-            "filter",
         ),
-        OptionSpec::optional_choice::<NormalDownscale>(
+        OptionSpec::choice::<NormalDownscale>(
             "normals",
-            "how a normal map is filtered down: each vector renormalized, or the stored values boxed",
-            "renormalize",
+            "how a normal map is filtered down (beyond=filter): each vector renormalized, or the stored values boxed",
         ),
     ],
     make: |g| Ok(Box::new(CapTextures::from_given(g)?)),
@@ -322,12 +309,8 @@ impl Pass for CapTextures {
             let names: Vec<String> = self.names.iter().map(|(n, c)| format!("{n}:{c}")).collect();
             o.insert("names".to_owned(), names.join(";"));
         }
-        if self.mode.beyond == Beyond::Keep {
-            o.insert("beyond".to_owned(), Beyond::Keep.text().to_owned());
-        }
-        if self.mode.normals == NormalDownscale::Box {
-            o.insert("normals".to_owned(), NormalDownscale::Box.text().to_owned());
-        }
+        o.insert("beyond".to_owned(), self.mode.beyond.text().to_owned());
+        o.insert("normals".to_owned(), self.mode.normals.text().to_owned());
         o
     }
     fn modifies(&self) -> &[&'static str] {
@@ -404,6 +387,12 @@ mod tests {
     use primase_core::pass::{PassManager, PassRegistry, RunReport};
     use primase_core::{ColorSpace, NormalConvention};
 
+    /// Filtered beyond the stored levels, normal maps renormalized.
+    const FILTER: CapMode = CapMode {
+        beyond: Beyond::Filter,
+        normals: NormalDownscale::Renormalize,
+    };
+
     fn rgba8(width: u32, height: u32, levels: Vec<Vec<u8>>, role: TexRole) -> Texture {
         Texture {
             width,
@@ -432,7 +421,7 @@ mod tests {
         for e in [changed, within] {
             w.insert(e, TextureFile { path: "a.png".into() });
         }
-        CapTextures::new(4)
+        CapTextures::new(4, FILTER)
             .unwrap()
             .run(&mut w, &mut PassLog::default())
             .unwrap();
@@ -443,7 +432,7 @@ mod tests {
     #[test]
     fn a_stored_level_within_the_cap_is_kept_exactly() {
         let mut t = chain();
-        let got = cap_texture(&mut t, 2, CapMode::default()).unwrap();
+        let got = cap_texture(&mut t, 2, FILTER).unwrap();
         assert_eq!(
             got,
             Capped::Level {
@@ -462,7 +451,7 @@ mod tests {
             TexRole::Mask,
         );
         assert_eq!(
-            cap_texture(&mut wide, 4, CapMode::default()).unwrap(),
+            cap_texture(&mut wide, 4, FILTER).unwrap(),
             Capped::Level {
                 level: 1,
                 width: 4,
@@ -472,10 +461,7 @@ mod tests {
         assert_eq!(wide.levels, vec![vec![1; 32], vec![2; 8], vec![3; 4]]);
         // within the cap already: untouched
         let mut t = chain();
-        assert_eq!(
-            cap_texture(&mut t, 8, CapMode::default()).unwrap(),
-            Capped::Within
-        );
+        assert_eq!(cap_texture(&mut t, 8, FILTER).unwrap(), Capped::Within);
         assert_eq!(t, chain());
     }
 
@@ -487,7 +473,7 @@ mod tests {
         let pixels: Vec<u8> = red.iter().flatten().flat_map(|&r| [r, 7, 9, 255]).collect();
         let mut t = rgba8(4, 4, vec![pixels], TexRole::Color);
         assert_eq!(
-            cap_texture(&mut t, 2, CapMode::default()).unwrap(),
+            cap_texture(&mut t, 2, FILTER).unwrap(),
             Capped::Downscaled { width: 2, height: 2 }
         );
         let expected: Vec<u8> = [25, 0, 255, 3].iter().flat_map(|&r| [r, 7, 9, 255]).collect();
@@ -502,7 +488,7 @@ mod tests {
     fn data_textures_and_unfilterable_normal_maps_are_left_as_they_are() {
         let data = rgba8(8, 8, vec![vec![5; 256]], TexRole::Data);
         let mut t = data.clone();
-        assert_eq!(cap_texture(&mut t, 2, CapMode::default()).unwrap(), Capped::Data);
+        assert_eq!(cap_texture(&mut t, 2, FILTER).unwrap(), Capped::Data);
         assert_eq!(t, data);
         // X in alpha (DXT5nm): averaging RGB would be wrong; its one level stays
         let mut normal = rgba8(4, 4, vec![vec![128; 64]], TexRole::Normal);
@@ -512,7 +498,7 @@ mod tests {
         });
         let before = normal.clone();
         assert_eq!(
-            cap_texture(&mut normal, 2, CapMode::default()).unwrap(),
+            cap_texture(&mut normal, 2, FILTER).unwrap(),
             Capped::LeftLarge {
                 level: 0,
                 width: 4,
@@ -535,7 +521,9 @@ mod tests {
         let mut report = RunReport::default();
         m.run(
             &mut w,
-            &m.registry.parse("cap-textures{max=2}").unwrap(),
+            &m.registry
+                .parse("cap-textures{max=2,beyond=filter,normals=renormalize}")
+                .unwrap(),
             &mut report,
         )
         .unwrap();
@@ -546,18 +534,25 @@ mod tests {
             log.approximations.keys().collect::<Vec<_>>(),
             ["e2: 4x4, no stored level within 2, box-filtered to 2x2"]
         );
-        assert_eq!(report.steps[0].pass, "cap-textures{max=2}");
+        assert_eq!(
+            report.steps[0].pass,
+            "cap-textures{beyond=filter,max=2,normals=renormalize}"
+        );
         // max has no default: a pipeline without it does not parse, nor does a struct with none exist
         let err = m.registry.parse("cap-textures").unwrap_err();
         assert!(err.to_string().contains("max is required: "), "{err}");
-        assert!(CapTextures::new(0).is_err());
+        assert!(CapTextures::new(0, FILTER).is_err());
         assert!(
-            CapTextures::new(4)
+            CapTextures::new(4, FILTER)
                 .unwrap()
                 .with_role_cap(CapRole::Normal, 0)
                 .is_err()
         );
-        assert!(m.registry.parse("cap-textures{max=0}").is_err());
+        assert!(
+            m.registry
+                .parse("cap-textures{max=0,beyond=filter,normals=renormalize}")
+                .is_err()
+        );
     }
 
     /// `beyond=keep`: a texture with no stored level within the cap keeps its smallest, exactly; one with such a level
@@ -566,7 +561,7 @@ mod tests {
     fn keep_leaves_the_smallest_stored_level() {
         let keep = CapMode {
             beyond: Beyond::Keep,
-            ..CapMode::default()
+            ..FILTER
         };
         // two stored levels, 8 and 4 px, capped to 2
         let mut t = rgba8(8, 8, vec![vec![1; 256], vec![2; 64]], TexRole::Color);
@@ -603,7 +598,7 @@ mod tests {
         });
         let boxed = CapMode {
             normals: NormalDownscale::Box,
-            ..CapMode::default()
+            ..FILTER
         };
         let mut b = normal.clone();
         assert_eq!(
@@ -614,13 +609,13 @@ mod tests {
         // the same map with X in alpha cannot be renormalized: left at its level by default
         let mut r = normal.clone();
         assert!(matches!(
-            cap_texture(&mut r, 1, CapMode::default()).unwrap(),
+            cap_texture(&mut r, 1, FILTER).unwrap(),
             Capped::LeftLarge { .. }
         ));
         // in glTF's convention it is renormalized, not boxed
         let mut g = normal;
         g.normal = Some(NormalConvention::GLTF);
-        cap_texture(&mut g, 1, CapMode::default()).unwrap();
+        cap_texture(&mut g, 1, FILTER).unwrap();
         assert_ne!(g.levels, vec![vec![192, 192, 128, 255]]);
     }
 
@@ -648,11 +643,20 @@ mod tests {
         let side = |e| w.get::<Texture>(e).unwrap().width;
         assert_eq!((side(colour), side(normal), side(named)), (4, 2, 1));
         for bad in [
-            "cap-textures{max=4,names=wall}",
-            "cap-textures{max=4,beyond=crop}",
-            "cap-textures{max=4,normal=0}",
+            "cap-textures{max=4,names=wall,beyond=filter,normals=box}",
+            "cap-textures{max=4,beyond=crop,normals=box}",
+            "cap-textures{max=4,normal=0,beyond=filter,normals=box}",
         ] {
             assert!(m.registry.parse(bad).is_err(), "{bad}");
+        }
+        // how a cap is reached changes the pixels written: both are the program's to say
+        for (missing, given) in [("beyond", "normals=box"), ("normals", "beyond=keep")] {
+            let err = m
+                .registry
+                .parse(&format!("cap-textures{{max=4,{given}}}"))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains(&format!("{missing} is required: ")), "{err}");
         }
     }
 }

@@ -107,7 +107,12 @@ fn source_mask_channels_match_independent_pixels() -> Result<(), Box<dyn std::er
         );
         let log = raise_skate(
             &mut world,
-            &RaiseOptions::new("mask-census", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+            &RaiseOptions::new(
+                "mask-census",
+                primase_reskate::passes::LightCalibration::Standard,
+                primase_reskate::passes::Unclassified::LeaveOut,
+            )
+            .unwrap(),
         )?;
         let mask = world
             .get::<SkateMaterial>(material)

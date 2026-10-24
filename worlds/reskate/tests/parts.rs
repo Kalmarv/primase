@@ -133,7 +133,12 @@ fn map() -> World {
     );
     primase_reskate::passes::raise_skate(
         &mut w,
-        &RaiseOptions::new("parts", LightCalibration::Standard).unwrap(),
+        &RaiseOptions::new(
+            "parts",
+            LightCalibration::Standard,
+            primase_reskate::passes::Unclassified::LeaveOut,
+        )
+        .unwrap(),
     )
     .unwrap();
     // water: one inside the content, one across its east edge, one far beyond it

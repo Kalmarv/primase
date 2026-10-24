@@ -47,7 +47,12 @@ fn map() -> World {
     w.insert(p, Transform::IDENTITY);
     primase_reskate::passes::raise_skate(
         &mut w,
-        &RaiseOptions::new("owned", LightCalibration::Standard).unwrap(),
+        &RaiseOptions::new(
+            "owned",
+            LightCalibration::Standard,
+            primase_reskate::passes::Unclassified::LeaveOut,
+        )
+        .unwrap(),
     )
     .unwrap();
     let spawn = w.spawn();

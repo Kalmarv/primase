@@ -157,10 +157,13 @@ fn main() -> Result<(), BoxError> {
         )?));
     }
     // the writer's old cap: stored levels, else the 2 x 2 box down to the cap, normal maps alike
-    let mut cap = primase_image::CapTextures::new(tex_cap)?.with_mode(primase_image::CapMode {
-        normals: primase_image::NormalDownscale::Box,
-        ..Default::default()
-    });
+    let mut cap = primase_image::CapTextures::new(
+        tex_cap,
+        primase_image::CapMode {
+            beyond: primase_image::Beyond::Filter,
+            normals: primase_image::NormalDownscale::Box,
+        },
+    )?;
     for (name, c) in name_caps {
         cap = cap.with_name_cap(&name, c)?;
     }

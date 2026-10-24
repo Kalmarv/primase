@@ -112,8 +112,8 @@ pub use pause_map::{
     PrepareReskatePauseMap, SkatePauseImage, SkatePausePicture,
 };
 pub use raise::{
-    LightCalibration, RAISE_SKATE, RaiseOptions, RaiseSkate, SKATE_LIGHT_SCALE, class_to_skate, raise_skate,
-    studio_watts,
+    LightCalibration, RAISE_SKATE, RaiseOptions, RaiseSkate, SKATE_LIGHT_SCALE, Unclassified, class_to_skate,
+    raise_skate, studio_watts,
 };
 pub use region::{CLIP_RESKATE_REGION, ClipReskateRegion};
 pub use sampling::{

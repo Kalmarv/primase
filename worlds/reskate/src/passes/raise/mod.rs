@@ -26,12 +26,12 @@
 //!   a `skate.prototype` that collides without drawing (no GLB, no parts), counted; every placement a default
 //!   `skate.placement`;
 //! - collision: `core.collision` as it is, its surfaces renamed onto skate surfaces: by the map the caller gives
-//!   (a source name onto a standard surface), else by the surface's class ([`class_to_skate`]), else onto the
-//!   caller's surface for unclassified ones (`unclassified`); a surface with none of these, whose name is no skate
-//!   surface, is never guessed: its triangles are left out, reported by surface name ([`PassLog::omit`]), and a
-//!   collision left with no triangle is removed; a water class has no solid skate surface: a prototype whose
-//!   collision is all water gets skate's water collision (Studio's water mode); water triangles in a solid soup or
-//!   the world's collision stay solid, counted;
+//!   (a source name onto a standard surface), else by the surface's class ([`class_to_skate`]), else kept when its
+//!   name is a skate surface's, else as the caller says for unclassified ones (`unclassified`, required: a skate
+//!   surface, or `leave-out`); a surface left without a skate surface is never guessed: its triangles are left out,
+//!   reported by surface name ([`PassLog::omit`]), and a collision left with no triangle is removed; a water class
+//!   has no solid skate surface: a prototype whose collision is all water gets skate's water collision (Studio's
+//!   water mode); water triangles in a solid soup or the world's collision stay solid, counted;
 //! - what the source says a material's surfaces are (`core.material_usage`): water is skate's water class (Studio's
 //!   ocean); foliage is skate's leaves class in the foliage domain, except a material the source draws over the
 //!   surface beneath (`core.draw_order` decal), which stays a decal (counted);
@@ -97,20 +97,44 @@ impl LightCalibration {
     }
 }
 
-/// What [`raise_skate`] needs from the caller: the scene's name and the lights' calibration ([`RaiseOptions::new`]),
-/// and optionally the world's surface names onto skate surfaces and the skate surface of an unclassified one.
+/// What [`raise_skate`] does with a surface that has no class, no entry in the caller's map and no skate surface's
+/// name (`unclassified`): a policy on collision content, so the caller's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Unclassified {
+    /// Its triangles are left out, reported by surface name (`unclassified=leave-out`).
+    LeaveOut,
+    /// It becomes this skate surface, counted per name (`unclassified=<surface>`).
+    Surface(String),
+}
+
+impl Unclassified {
+    /// `unclassified`'s text: `leave-out`, or a skate surface's name.
+    fn text(&self) -> &str {
+        match self {
+            Unclassified::LeaveOut => "leave-out",
+            Unclassified::Surface(s) => s,
+        }
+    }
+}
+
+/// What [`raise_skate`] needs from the caller: the scene's name, the lights' calibration and what an unclassified
+/// surface becomes ([`RaiseOptions::new`]), and optionally the world's surface names onto skate surfaces.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RaiseOptions {
     name: String,
     surfaces: BTreeMap<String, String>,
-    unclassified: Option<String>,
+    unclassified: Unclassified,
     lights: LightCalibration,
 }
 
 impl RaiseOptions {
     /// For a scene named `name` (`[A-Za-z0-9_-]+`), lights calibrated by `lights` (a scale of the caller's finite and
-    /// above 0): no surface mapped, an unclassified surface's triangles left out (reported).
-    pub fn new(name: &str, lights: LightCalibration) -> std::result::Result<RaiseOptions, String> {
+    /// above 0), an unclassified surface as `unclassified` says (a surface named): no surface mapped.
+    pub fn new(
+        name: &str,
+        lights: LightCalibration,
+        unclassified: Unclassified,
+    ) -> std::result::Result<RaiseOptions, String> {
         if !valid_name(name) {
             return Err(format!("the scene name {name:?} is not [A-Za-z0-9_-]+"));
         }
@@ -119,10 +143,13 @@ impl RaiseOptions {
         {
             return Err(format!("light_scale={scale} is not a finite number above 0"));
         }
+        if unclassified == Unclassified::Surface(String::new()) {
+            return Err("unclassified: a skate surface name".into());
+        }
         Ok(RaiseOptions {
             name: name.to_owned(),
             surfaces: BTreeMap::new(),
-            unclassified: None,
+            unclassified,
             lights,
         })
     }
@@ -142,23 +169,14 @@ impl RaiseOptions {
         Ok(self)
     }
 
-    /// The skate surface for a surface with no class and no entry in the surfaces (counted per name).
-    pub fn with_unclassified(mut self, surface: &str) -> std::result::Result<RaiseOptions, String> {
-        if surface.is_empty() {
-            return Err("unclassified: a skate surface name".into());
-        }
-        self.unclassified = Some(surface.to_owned());
-        Ok(self)
-    }
-
     pub fn name(&self) -> &str {
         &self.name
     }
     pub fn surfaces(&self) -> &BTreeMap<String, String> {
         &self.surfaces
     }
-    pub fn unclassified(&self) -> Option<&str> {
-        self.unclassified.as_deref()
+    pub fn unclassified(&self) -> &Unclassified {
+        &self.unclassified
     }
     pub fn lights(&self) -> LightCalibration {
         self.lights
@@ -174,10 +192,11 @@ impl RaiseOptions {
                     .map_err(|_| format!("light_scale={v} is not standard or a number"))?,
             ),
         };
-        let mut options = RaiseOptions::new(g.required("name"), lights)?;
-        if let Some(v) = g.optional("unclassified") {
-            options = options.with_unclassified(v)?;
-        }
+        let unclassified = match g.required("unclassified") {
+            "leave-out" => Unclassified::LeaveOut,
+            v => Unclassified::Surface(v.to_owned()),
+        };
+        let mut options = RaiseOptions::new(g.required("name"), lights, unclassified)?;
         // the caller's map of source surface names onto skate surfaces: `map=NAME:skate;NAME:skate`
         if let Some(v) = g.optional("map") {
             let mut surfaces = BTreeMap::new();
@@ -204,9 +223,7 @@ impl RaiseOptions {
                 },
             ),
         ]);
-        if let Some(u) = &self.unclassified {
-            o.insert("unclassified".into(), u.clone());
-        }
+        o.insert("unclassified".into(), self.unclassified.text().to_owned());
         if !self.surfaces.is_empty() {
             let map: Vec<String> = self.surfaces.iter().map(|(a, b)| format!("{a}:{b}")).collect();
             o.insert("map".into(), map.join(";"));
@@ -320,7 +337,7 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
     }
     // surfaces onto skate's: the caller's map, else the class, else a name that is a skate surface already, else the
     // caller's surface for unclassified ones, else none: the surface's triangles are left out
-    if let Some(u) = &options.unclassified
+    if let Unclassified::Surface(u) = &options.unclassified
         && !STANDARD_SURFACES.contains(&u.as_str())
     {
         return Err(bad(format!("unclassified={u} is not a skate surface")));
@@ -352,10 +369,10 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
                 },
                 (None, None) if STANDARD_SURFACES.contains(&s.name.as_str()) => {}
                 (None, None) => match &options.unclassified {
-                    Some(to) => {
+                    Unclassified::Surface(to) => {
                         unclassified.push(std::mem::replace(&mut s.name, to.clone()));
                     }
-                    None => {
+                    Unclassified::LeaveOut => {
                         omitted.insert(index(i)?, s.name.clone());
                     }
                 },
@@ -481,7 +498,7 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
             world_wet as u64,
         );
     }
-    if let Some(to) = &options.unclassified {
+    if let Unclassified::Surface(to) = &options.unclassified {
         for name in &unclassified {
             log.count(&format!("unclassified surfaces made {to}: {name}"), 1);
         }
@@ -937,11 +954,11 @@ pub const RAISE_SKATE: PassSpec = PassSpec {
              surface's class)",
             "each surface's class decides its skate surface",
         ),
-        OptionSpec::optional(
+        OptionSpec::required(
             "unclassified",
-            "default",
-            "the skate surface of a surface with no class and no entry in map",
-            "an unclassified surface's triangles left out (reported)",
+            "leave-out",
+            "a surface with no class, no entry in map and no skate surface's name: leave-out (its triangles left out, \
+             reported), or the skate surface it becomes",
         ),
     ],
     make: |g| Ok(Box::new(RaiseSkate::new(RaiseOptions::from_given(g)?))),

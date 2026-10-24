@@ -67,7 +67,12 @@ fn raised(names: &[&str]) -> World {
     }
     primase_reskate::passes::raise_skate(
         &mut w,
-        &RaiseOptions::new("integrity", LightCalibration::Standard).unwrap(),
+        &RaiseOptions::new(
+            "integrity",
+            LightCalibration::Standard,
+            primase_reskate::passes::Unclassified::LeaveOut,
+        )
+        .unwrap(),
     )
     .unwrap();
     let marker = w.spawn();

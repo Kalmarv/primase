@@ -309,7 +309,12 @@ fn map() -> World {
     }
     primase_reskate::passes::raise_skate(
         &mut w,
-        &RaiseOptions::new("parts", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+        &RaiseOptions::new(
+            "parts",
+            primase_reskate::passes::LightCalibration::Standard,
+            primase_reskate::passes::Unclassified::LeaveOut,
+        )
+        .unwrap(),
     )
     .unwrap();
     LowerLayeredReskate::new(OverlayLimit::All)
@@ -848,7 +853,12 @@ fn pairs(n: usize) -> World {
     }
     primase_reskate::passes::raise_skate(
         &mut w,
-        &RaiseOptions::new("parts", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+        &RaiseOptions::new(
+            "parts",
+            primase_reskate::passes::LightCalibration::Standard,
+            primase_reskate::passes::Unclassified::LeaveOut,
+        )
+        .unwrap(),
     )
     .unwrap();
     let e = w.spawn();

@@ -134,7 +134,12 @@ fn world() -> World {
     );
     primase_reskate::passes::raise_skate(
         &mut w,
-        &RaiseOptions::new("budget", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+        &RaiseOptions::new(
+            "budget",
+            primase_reskate::passes::LightCalibration::Standard,
+            primase_reskate::passes::Unclassified::LeaveOut,
+        )
+        .unwrap(),
     )
     .unwrap();
     LowerLayeredReskate::new(OverlayLimit::All)

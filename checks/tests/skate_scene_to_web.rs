@@ -93,6 +93,7 @@ fn scene(name: &str) -> PathBuf {
         &primase_reskate::prepare::RaiseOptions::new(
             "lights",
             primase_reskate::passes::LightCalibration::Standard,
+            primase_reskate::prepare::Unclassified::LeaveOut,
         )
         .unwrap(),
     )

@@ -207,7 +207,12 @@ fn instancing_trs_and_baked_mirrors_shears() {
     // the writer takes rigid placements: the mirror and the shear are baked first
     let refused = write(&w, &plain()).unwrap_err().to_string();
     assert!(refused.contains("bake-nonrigid"), "{refused}");
-    primase_meshops::bake_nonrigid(&mut w, &primase_meshops::BakeNonrigid::default());
+    primase_meshops::bake_nonrigid(
+        &mut w,
+        &primase_meshops::BakeNonrigid {
+            mirrors: primase_meshops::Mirrors::Bake,
+        },
+    );
     let out = write(&w, &plain()).unwrap();
     let tile = &out.index.tiles[0];
     assert_eq!(tile.placements, 5);
@@ -996,7 +1001,12 @@ fn mirrored_collision_keeps_its_fronts_and_wide_surfaces() {
         t.cols[3] = [if mirror { 5.0 } else { 0.0 }, 0.0, 0.0];
         w.insert(e, t);
     }
-    primase_meshops::bake_nonrigid(&mut w, &primase_meshops::BakeNonrigid::default());
+    primase_meshops::bake_nonrigid(
+        &mut w,
+        &primase_meshops::BakeNonrigid {
+            mirrors: primase_meshops::Mirrors::Bake,
+        },
+    );
     let fronts = collision_fronts(&write(&w, &plain()).unwrap());
     assert_eq!(fronts.len(), 2);
     for (n, s) in fronts {

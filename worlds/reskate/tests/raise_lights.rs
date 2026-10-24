@@ -72,7 +72,12 @@ fn raise_then_lower_restores_core_lights() {
     }
     raise_skate(
         &mut w,
-        &RaiseOptions::new("lights", LightCalibration::Standard).unwrap(),
+        &RaiseOptions::new(
+            "lights",
+            LightCalibration::Standard,
+            primase_reskate::passes::Unclassified::LeaveOut,
+        )
+        .unwrap(),
     )
     .unwrap();
     for (e, (light, t)) in entities.iter().zip(&lights) {
@@ -204,7 +209,16 @@ fn raise_skate_calibrates_light_energy() {
         let scale = calibration.scale();
         let mut w = World::new();
         let e = light(&mut w);
-        let log = raise_skate(&mut w, &RaiseOptions::new("lit", calibration).unwrap()).unwrap();
+        let log = raise_skate(
+            &mut w,
+            &RaiseOptions::new(
+                "lit",
+                calibration,
+                primase_reskate::passes::Unclassified::LeaveOut,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let energy = w.get::<SkateLight>(e).unwrap().energy;
         assert!((energy - watts).abs() < 1e-3, "{energy}");
         // every raised light is an approximation by the calibration's value, the default included
@@ -223,7 +237,12 @@ fn raise_skate_calibrates_light_energy() {
     }
     // refused when the options are made, before anything runs
     for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
-        let e = RaiseOptions::new("bad", LightCalibration::Scale(bad)).unwrap_err();
+        let e = RaiseOptions::new(
+            "bad",
+            LightCalibration::Scale(bad),
+            primase_reskate::passes::Unclassified::LeaveOut,
+        )
+        .unwrap_err();
         assert!(e.contains("light_scale"), "{e}");
     }
 }
@@ -250,7 +269,7 @@ fn the_calibration_is_stated() {
         let made = RAISE_SKATE
             .instance(&o(&[("name", "n"), ("light_scale", given)]))
             .unwrap();
-        let r = RaiseOptions::new("n", calibration).unwrap();
+        let r = RaiseOptions::new("n", calibration, primase_reskate::passes::Unclassified::LeaveOut).unwrap();
         assert_eq!(made.options(), r.options());
         assert_eq!(r.options()["light_scale"], given);
         assert_eq!(RAISE_SKATE.instance(&r.options()).unwrap().options(), r.options());

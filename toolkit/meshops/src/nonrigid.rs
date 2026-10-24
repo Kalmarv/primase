@@ -30,18 +30,18 @@ use primase_core::{
     World,
 };
 
-/// What `bake-nonrigid` does with a mirrored transform (option `mirrors`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// What `bake-nonrigid` does with a mirrored transform (option `mirrors`, required: whether a mirror becomes geometry
+/// or stays a transform is the writer's to say).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mirrors {
-    /// Baked like a sheared one (`mirrors=bake`, the default: a mirror is re-expressed, nothing is lost).
-    #[default]
+    /// Baked like a sheared one (`mirrors=bake`: a mirror is re-expressed, nothing is lost).
     Bake,
     /// Kept as it is; only sheared transforms are baked (`mirrors=keep`).
     Keep,
 }
 
 /// See the module documentation. Every value is valid: the field is public.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BakeNonrigid {
     pub mirrors: Mirrors,
 }
@@ -51,10 +51,10 @@ impl Choice for Mirrors {
 }
 
 impl BakeNonrigid {
-    /// From its declared options: `mirrors`, else baked.
+    /// From its declared options: `mirrors`.
     fn from_given(g: &Given) -> BakeNonrigid {
         BakeNonrigid {
-            mirrors: g.optional_choice("mirrors").unwrap_or_default(),
+            mirrors: g.choice("mirrors"),
         }
     }
 }
@@ -62,10 +62,9 @@ impl BakeNonrigid {
 /// `bake-nonrigid`'s declaration ([`primase_core::pass::PassRegistry::add`]).
 pub const BAKE_NONRIGID: PassSpec = PassSpec {
     name: "bake-nonrigid",
-    options: &[OptionSpec::optional_choice::<Mirrors>(
+    options: &[OptionSpec::choice::<Mirrors>(
         "mirrors",
         "mirrored transforms baked into geometry like sheared ones, or kept for a writer that carries them",
-        "bake",
     )],
     make: |g| Ok(Box::new(BakeNonrigid::from_given(g))),
 };
@@ -75,10 +74,7 @@ impl Pass for BakeNonrigid {
         "bake-nonrigid"
     }
     fn options(&self) -> Options {
-        match self.mirrors {
-            Mirrors::Keep => Options::from([("mirrors".to_owned(), Mirrors::Keep.text().to_owned())]),
-            Mirrors::Bake => Options::new(),
-        }
+        Options::from([("mirrors".to_owned(), self.mirrors.text().to_owned())])
     }
     fn modifies(&self) -> &[&'static str] {
         &[

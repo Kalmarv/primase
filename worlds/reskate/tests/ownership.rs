@@ -297,7 +297,12 @@ fn a_placement_reached_through_a_root_is_measured_and_weighed() {
     placed.push(place(&mut w, other, 30.0, 2.0));
     primase_reskate::passes::raise_skate(
         &mut w,
-        &RaiseOptions::new("own", LightCalibration::Standard).unwrap(),
+        &RaiseOptions::new(
+            "own",
+            LightCalibration::Standard,
+            primase_reskate::passes::Unclassified::LeaveOut,
+        )
+        .unwrap(),
     )
     .unwrap();
     let holder = w.spawn();

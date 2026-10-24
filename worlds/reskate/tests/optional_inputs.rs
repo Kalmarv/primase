@@ -35,7 +35,12 @@ fn a_map_without_the_optional_features_is_prepared_and_written() {
     w.insert(ground, c);
     primase_reskate::passes::raise_skate(
         &mut w,
-        &RaiseOptions::new("bare", primase_reskate::passes::LightCalibration::Standard).unwrap(),
+        &RaiseOptions::new(
+            "bare",
+            primase_reskate::passes::LightCalibration::Standard,
+            primase_reskate::passes::Unclassified::LeaveOut,
+        )
+        .unwrap(),
     )
     .unwrap();
     let spawn = w.spawn();

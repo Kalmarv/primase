@@ -120,6 +120,7 @@ mod tests {
         ];
         assert_eq!(format!("{reg:?}"), format!("{names:?}"));
         let requiring = [
+            "place-spawn",
             "select-assets",
             "select-lod",
             "select-outfit",
@@ -149,6 +150,7 @@ mod tests {
             refused("select-assets").starts_with("pass select-assets: one of keys or names is required (")
         );
         assert!(refused("select-lod").starts_with("pass select-lod: form is required: "));
+        assert!(refused("place-spawn").starts_with("pass place-spawn: one of at or east is required ("));
         assert!(
             reg.describe("select-assets")
                 .unwrap()
