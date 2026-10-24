@@ -285,6 +285,15 @@ fn spawn(world: &mut World, name: String, t: Texture) -> Entity {
     world.insert(e, t);
     e
 }
+/// Whether [`texture`] can produce `name`: the reader already decoded it, or the install's payloads hold it.
+fn held(
+    payloads: &BTreeMap<String, impl AsRef<[u8]>>,
+    cache: &BTreeMap<(String, bool), Entity>,
+    name: &str,
+    normal: bool,
+) -> bool {
+    cache.contains_key(&(name.to_owned(), normal)) || payloads.contains_key(name)
+}
 fn texture(
     world: &mut World,
     payloads: &BTreeMap<String, impl AsRef<[u8]>>,
@@ -565,7 +574,7 @@ fn lower_materials(
                 log.approximate_on(e, why, 1);
             } else if p.base_color_texture.is_none()
                 && let Some(name) = &pv.albedo
-                && payloads.contains_key(name)
+                && held(payloads, &cache, name, false)
             {
                 let mut r = TextureRef::new(texture(world, payloads, &mut cache, name, false)?);
                 match &base {
@@ -596,7 +605,7 @@ fn lower_materials(
             }
             if p.normal_texture.is_none()
                 && let Some(name) = &pv.normal
-                && payloads.contains_key(name)
+                && held(payloads, &cache, name, true)
             {
                 let mut r = TextureRef::new(texture(world, payloads, &mut cache, name, true)?);
                 if let Some(b) = normal_binding(&m, &pv) {
