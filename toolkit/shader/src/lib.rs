@@ -37,7 +37,7 @@ pub use bound::BoundSizes;
 pub use limits::{WEBGPU_BASELINE, compute_limit_notes, interface_notes};
 pub use program::{
     ClipDepth, Conventions, D3dModes, EntryIo, Error as ProgramError, FnItem, FunctionSig, IoItem, IoType,
-    Origin, Problem, Program, Provenance, VERSION as PROGRAM_VERSION, entry_io, mesh_vertex_io,
+    ItemList, Origin, Problem, Program, Provenance, VERSION as PROGRAM_VERSION, entry_io, mesh_vertex_io,
     stage_functions,
 };
 pub use reads::{ProgramGraph, WordsRead};

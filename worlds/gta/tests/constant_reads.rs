@@ -2,7 +2,8 @@
 //! independent reader of the same programs: the lanes each constant-buffer row is taken at in the program's emitted WGSL
 //! (which writes only what the program computes with). Over every distinct program of the shader database that lifts,
 //! every word the value graph reaches is a lane the code takes; the lanes the code takes that nothing the program
-//! outputs, discards or writes is made of are counted, not errors.
+//! outputs, discards or writes is made of are counted, not errors, and the programs left out are printed by where and
+//! why (no WGSL, no lift, the value graph refused).
 //!
 //! Needs `installs.gta` and `keys.gta`.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
@@ -116,6 +117,12 @@ fn the_reads_agree_with_the_emitted_code() {
     source.add_shader_database(&mut world).unwrap();
     let mut seen = BTreeSet::new();
     let (mut programs, mut rows, mut dynamic_buffers, mut unused) = (0usize, 0usize, 0usize, 0usize);
+    // the programs left out of the comparison, by where and why (the message's first words)
+    let mut skipped: BTreeMap<String, usize> = BTreeMap::new();
+    let mut skip = |at: &str, why: &str| {
+        let why: String = why.chars().take(80).collect();
+        *skipped.entry(format!("{at}: {why}")).or_default() += 1;
+    };
     let mut differ: Vec<String> = Vec::new();
     for (_, effect) in world.iter::<GtaEffect>() {
         for p in &effect.programs {
@@ -126,14 +133,26 @@ fn the_reads_agree_with_the_emitted_code() {
             let Some(sh) = world.get::<Shader>(e) else {
                 continue;
             };
-            let Ok((lanes, whole, dynamic)) = reads(&sh.bytecode) else {
-                continue;
+            let (lanes, whole, dynamic) = match reads(&sh.bytecode) {
+                Ok(r) => r,
+                Err(e) => {
+                    skip("no WGSL", &e);
+                    continue;
+                }
             };
-            let Ok(program) = primase_dxil::lift(&sh.bytecode) else {
-                continue;
+            let program = match primase_dxil::lift(&sh.bytecode) {
+                Ok(p) => p,
+                Err(e) => {
+                    skip("no lift", &e.to_string());
+                    continue;
+                }
             };
-            let Ok(mine) = program.constant_reads() else {
-                continue;
+            let mine = match program.constant_reads() {
+                Ok(m) => m,
+                Err(e) => {
+                    skip("value graph refused", &e);
+                    continue;
+                }
             };
             programs += 1;
             dynamic_buffers += dynamic.len();
@@ -182,6 +201,9 @@ fn the_reads_agree_with_the_emitted_code() {
         "{programs} programs, {rows} rows compared, {dynamic_buffers} dynamically indexed buffers, {unused} lanes taken \
          and unused"
     );
+    for (why, n) in &skipped {
+        println!("SKIPPED {n:6} {why}");
+    }
     assert!(programs > 9_000);
     assert!(differ.is_empty(), "{differ:?}");
 }

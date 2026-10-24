@@ -238,8 +238,8 @@ impl<'a> Analysis<'a> {
     }
 
     /// What a value is made of, one step down: a texture component (a sample's slot and lane), a vertex input
-    /// component, or the values it is computed from. A constant's value is the material's or the engine's, not a
-    /// texture's: it is made of none. A merge or a loop value is made of its arms (what decides among them is a
+    /// component, or the values it is computed from. A constant's value is the material's or the engine's, and a value
+    /// the pipeline supplies the pipeline's, not a texture's: each is made of none. A merge or a loop value is made of its arms (what decides among them is a
     /// condition, not a part of the value).
     fn step(&self, id: NodeId) -> Step {
         match self.values.node(id) {
@@ -256,7 +256,9 @@ impl<'a> Analysis<'a> {
                 Some(v) => Step::Input((v.label.name.clone(), v.label.index, *lane)),
                 None => Step::Of(Vec::new()),
             },
-            Node::Global { .. } | Node::Query { .. } | Node::Literal(_) => Step::Of(Vec::new()),
+            Node::Global { .. } | Node::Supplied { .. } | Node::Query { .. } | Node::Literal(_) => {
+                Step::Of(Vec::new())
+            }
             Node::Op { operands, .. } => Step::Of(operands.clone()),
             Node::Merge { arms, .. } | Node::Loop { arms, .. } => Step::Of(arms.clone()),
         }

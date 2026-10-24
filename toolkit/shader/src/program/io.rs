@@ -170,10 +170,25 @@ fn location(stage: Stage, output: bool, v: &Varying, at: u32) -> Binding {
 pub struct FnItem {
     pub name: String,
     pub ty: IoType,
-    /// The varying it carries, by index: into the interface's inputs, outputs or (a hull program's patch-constant
-    /// result and a domain program's patch-constant arguments) the patch constants, as the function says; `None`
-    /// for the ids the pipeline supplies.
+    /// The varying it carries, by index into `list`; `None` for the ids the pipeline supplies.
     pub varying: Option<usize>,
+    /// The list `varying` indexes.
+    pub list: ItemList,
+}
+
+/// What a [`FnItem`] carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ItemList {
+    /// The interface's inputs.
+    Inputs,
+    /// The interface's outputs (a hull program's patch-constant function reads the output control points).
+    Outputs,
+    /// The patch constants: a hull program's patch-constant result, a domain program's patch-constant arguments.
+    PatchConstants,
+    /// A value the pipeline supplies, named by the item (`SV_OutputControlPointID`, `SV_PrimitiveID`,
+    /// `SV_DomainLocation`, `SV_GSInstanceID`, a geometry program's `SV_VertexCount` and `SV_StripStart`), or a ray
+    /// tracing program's payload and attributes.
+    Pipeline,
 }
 
 /// A function of a program that has no entry point: its name, arguments and result members (a structure `Out` when
@@ -206,23 +221,25 @@ pub struct FunctionSig {
 ///   which have no body: they are the pipeline's.
 pub fn stage_functions(interface: &Interface) -> Result<Option<Vec<FunctionSig>>, String> {
     let stage = interface.stage;
-    let values = |list: &[Varying], output: bool| -> Vec<FnItem> {
+    let values = |list: &[Varying], output: bool, of: ItemList| -> Vec<FnItem> {
         list.iter()
             .enumerate()
             .map(|(i, v)| FnItem {
                 name: varying_name(&v.label),
                 ty: IoType::Value(carried(stage, output, v)),
                 varying: Some(i),
+                list: of,
             })
             .collect()
     };
-    let arrays = |list: &[Varying], output: bool, prefix: &str, n: u32| -> Vec<FnItem> {
+    let arrays = |list: &[Varying], output: bool, prefix: &str, n: u32, of: ItemList| -> Vec<FnItem> {
         list.iter()
             .enumerate()
             .map(|(i, v)| FnItem {
                 name: format!("{prefix}{}", varying_name(&v.label)),
                 ty: IoType::Array(carried(stage, output, v), n),
                 varying: Some(i),
+                list: of,
             })
             .collect()
     };
@@ -230,53 +247,67 @@ pub fn stage_functions(interface: &Interface) -> Result<Option<Vec<FunctionSig>>
         name: name.into(),
         ty: IoType::Value(Value { scalar, width }),
         varying: None,
+        list: ItemList::Pipeline,
     };
+    let (inputs, outputs, patch) = (ItemList::Inputs, ItemList::Outputs, ItemList::PatchConstants);
     Ok(match (&interface.stage, &interface.facts) {
         (Stage::Vertex, StageFacts::VertexWithoutPosition) => Some(vec![FunctionSig {
             name: "main",
-            arguments: values(&interface.inputs, false),
-            result: values(&interface.outputs, true),
+            arguments: values(&interface.inputs, false, inputs),
+            result: values(&interface.outputs, true, outputs),
         }]),
         (Stage::Hull, StageFacts::Hull(h)) => {
-            let mut main_args = arrays(&interface.inputs, false, "", h.input_control_points);
+            let mut main_args = arrays(&interface.inputs, false, "", h.input_control_points, inputs);
             main_args.push(scalar("SV_OutputControlPointID", 1, ScalarType::Uint));
-            let mut constant_args = arrays(&interface.inputs, false, "", h.input_control_points);
-            constant_args.extend(arrays(&interface.outputs, true, "out_", h.output_control_points));
+            let mut constant_args = arrays(&interface.inputs, false, "", h.input_control_points, inputs);
+            constant_args.extend(arrays(
+                &interface.outputs,
+                true,
+                "out_",
+                h.output_control_points,
+                outputs,
+            ));
             constant_args.push(scalar("SV_PrimitiveID", 1, ScalarType::Uint));
             Some(vec![
                 FunctionSig {
                     name: "main",
                     arguments: main_args,
-                    result: values(&interface.outputs, true),
+                    result: values(&interface.outputs, true, outputs),
                 },
                 FunctionSig {
                     name: "patch_constant",
                     arguments: constant_args,
-                    result: values(&h.patch_constants, true),
+                    result: values(&h.patch_constants, true, patch),
                 },
             ])
         }
         (Stage::Domain, StageFacts::Domain(d)) => {
-            let mut args = values(&d.patch_constants, false);
-            args.extend(arrays(&interface.inputs, false, "", d.input_control_points));
+            let mut args = values(&d.patch_constants, false, patch);
+            args.extend(arrays(
+                &interface.inputs,
+                false,
+                "",
+                d.input_control_points,
+                inputs,
+            ));
             args.push(scalar("SV_DomainLocation", 3, ScalarType::Float));
             args.push(scalar("SV_PrimitiveID", 1, ScalarType::Uint));
             Some(vec![FunctionSig {
                 name: "main",
                 arguments: args,
-                result: values(&interface.outputs, true),
+                result: values(&interface.outputs, true, outputs),
             }])
         }
         (Stage::Hull | Stage::Domain, _) => {
             return Err(format!("a {stage:?} program without its patch facts"));
         }
         (Stage::Geometry, StageFacts::Geometry(g)) => {
-            let mut args = arrays(&interface.inputs, false, "", g.input.vertices());
+            let mut args = arrays(&interface.inputs, false, "", g.input.vertices(), inputs);
             args.push(scalar("SV_PrimitiveID", 1, ScalarType::Uint));
             args.push(scalar("SV_GSInstanceID", 1, ScalarType::Uint));
             // the emitted vertices: each output varying for every vertex the invocation may emit, how many it did, and
             // whether each starts a new strip (the first, and the first after a cut)
-            let mut result = arrays(&interface.outputs, true, "", g.max_vertices);
+            let mut result = arrays(&interface.outputs, true, "", g.max_vertices, outputs);
             result.push(scalar("SV_VertexCount", 1, ScalarType::Uint));
             result.push(FnItem {
                 name: "SV_StripStart".into(),
@@ -288,6 +319,7 @@ pub fn stage_functions(interface: &Interface) -> Result<Option<Vec<FunctionSig>>
                     g.max_vertices,
                 ),
                 varying: None,
+                list: ItemList::Pipeline,
             });
             Some(vec![FunctionSig {
                 name: "main",
@@ -300,11 +332,12 @@ pub fn stage_functions(interface: &Interface) -> Result<Option<Vec<FunctionSig>>
         // has one, `payload`: what the traced ray carries, or a callable's parameter) and the attributes of the hit
         // (`attributes`, a triangle's barycentrics or what an intersection program reported)
         (stage, StageFacts::None | StageFacts::RayTracing(_)) if stage.is_ray_tracing() => {
-            let mut arguments = values(&interface.inputs, false);
+            let mut arguments = values(&interface.inputs, false, inputs);
             let memory = |name: &str| FnItem {
                 name: name.into(),
                 ty: IoType::Memory,
                 varying: None,
+                list: ItemList::Pipeline,
             };
             if matches!(
                 stage,

@@ -33,7 +33,9 @@ mod io;
 mod text;
 mod validate;
 
-pub use io::{EntryIo, FnItem, FunctionSig, IoItem, IoType, entry_io, mesh_vertex_io, stage_functions};
+pub use io::{
+    EntryIo, FnItem, FunctionSig, IoItem, IoType, ItemList, entry_io, mesh_vertex_io, stage_functions,
+};
 pub(crate) use validate::module_info;
 pub use validate::{Problem, validate};
 

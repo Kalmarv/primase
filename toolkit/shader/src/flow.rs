@@ -26,7 +26,9 @@ pub use naga::{
     UnaryOperator,
 };
 
-use crate::{Interface, Label, Program, ResourceId, Stage, entry_io};
+use crate::{
+    FnItem, Interface, IoType, ItemList, Label, Program, ResourceId, Stage, entry_io, stage_functions,
+};
 
 mod demand;
 pub use demand::VertexDemand;
@@ -88,12 +90,31 @@ pub enum Op {
     Subgroup,
 }
 
+/// A value the pipeline gives a program that is not one of its interface's input varyings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Supplied {
+    /// `SV_OutputControlPointID`: the output control point a hull program's control-point phase computes.
+    OutputControlPoint,
+    /// `SV_PrimitiveID`: the patch a hull or domain program runs for.
+    Primitive,
+    /// `SV_DomainLocation`: where in the patch a domain program's vertex is.
+    DomainLocation,
+    /// A domain program's patch constant, by its index in the domain facts' `patch_constants` (its hull program's
+    /// patch-constant result).
+    PatchConstant(usize),
+}
+
 /// What a value lane is made of.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Node {
     /// A lane of an input varying: its index in `Interface::inputs`.
     Input {
         input: usize,
+        lane: u8,
+    },
+    /// A lane of a value the pipeline supplies ([`Supplied`]): a source of its own, not an input lane.
+    Supplied {
+        value: Supplied,
         lane: u8,
     },
     /// A component of a module global that is not a texture: a constant buffer's word, a buffer's, constant data the
@@ -135,13 +156,18 @@ pub enum Node {
     },
 }
 
-/// The entry point of a program as a value graph ([`Node`]): each output lane's node and each discard's conditions.
+/// The entry point of a program as a value graph ([`Node`]): each output lane's node and each discard's conditions. A
+/// program of a stage naga has no entry point for is its stage functions ([`stage_functions`]): a vertex program
+/// feeding a tessellator, a domain program, and a hull program's control-point phase (its outputs) and patch-constant
+/// phase (its [`Values::patch_constants`], which read the control-point phase's outputs).
 #[derive(Clone, Debug)]
 pub struct Values {
     stage: Stage,
     nodes: Vec<Node>,
     /// (index in `Interface::outputs`, lane) -> its value.
     outputs: BTreeMap<(usize, u8), NodeId>,
+    /// A hull program's patch constants: (index in the hull facts' `patch_constants`, lane) -> its value.
+    patch_constants: BTreeMap<(usize, u8), NodeId>,
     /// The conditions guarding each discard, outermost first; empty for one taken unconditionally.
     discards: Vec<Vec<NodeId>>,
     /// What each write not followed into a later read is made of.
@@ -149,9 +175,82 @@ pub struct Values {
 }
 
 impl Values {
-    /// The value graph of `program`'s entry point. An error names what it cannot follow.
+    /// The value graph of `program`'s entry point, or of its stage functions where it has none. An error names what it
+    /// cannot follow: a geometry program's emitted vertices and a ray tracing program's payload are not followed.
     pub fn of_program(program: &Program) -> Result<Values, String> {
+        if program.module.entry_points.is_empty() {
+            return Values::of_functions(program);
+        }
         Walker::new(program)?.run()
+    }
+
+    /// The value graph of a program made of stage functions ([`stage_functions`]), `main` first: the hull program's
+    /// patch-constant function reads `main`'s outputs as its output control points (each point the same lanes: which
+    /// point is not followed), and its result is the patch constants.
+    fn of_functions(program: &Program) -> Result<Values, String> {
+        let interface = &program.interface;
+        if interface.stage == Stage::Geometry {
+            return Err("a geometry program's emitted vertices are not followed".into());
+        }
+        if interface.stage.is_ray_tracing() {
+            return Err(format!(
+                "a {:?} program's payload is not followed",
+                interface.stage
+            ));
+        }
+        let functions = stage_functions(interface)?.ok_or("the module has no entry point")?;
+        let mut values: Option<Values> = None;
+        for sig in &functions {
+            let function = program
+                .module
+                .functions
+                .iter()
+                .map(|(_, f)| f)
+                .find(|f| f.name.as_deref() == Some(sig.name))
+                .ok_or_else(|| format!("the module has no function {}", sig.name))?;
+            if function.arguments.len() != sig.arguments.len() {
+                return Err(format!(
+                    "function {} has {} arguments, its stage {}",
+                    sig.name,
+                    function.arguments.len(),
+                    sig.arguments.len()
+                ));
+            }
+            let mut walker = Walker::with(program, function);
+            if let Some(main) = &values {
+                walker.adopt(main.nodes.clone());
+            }
+            for item in &sig.arguments {
+                let lanes = walker.item_lanes(item, values.as_ref().map(|v| &v.outputs))?;
+                walker.arguments.push(lanes);
+            }
+            for item in &sig.result {
+                let (width, count) = carried_shape(&item.ty)?;
+                for k in 0..width * count {
+                    walker
+                        .result_lanes
+                        .push(item_lane(interface, item, k % width.max(1))?);
+                }
+            }
+            let walked = walker.run()?;
+            values = Some(match values {
+                None => walked,
+                Some(main) => Values {
+                    stage: main.stage,
+                    nodes: walked.nodes,
+                    outputs: main.outputs,
+                    patch_constants: walked.outputs,
+                    discards: main.discards.into_iter().chain(walked.discards).collect(),
+                    writes: main.writes.into_iter().chain(walked.writes).collect(),
+                },
+            });
+        }
+        values.ok_or_else(|| "the stage has no function".into())
+    }
+
+    /// A hull program's patch constants: (index in the hull facts' `patch_constants`, lane) -> its value.
+    pub fn patch_constants(&self) -> &BTreeMap<(usize, u8), NodeId> {
+        &self.patch_constants
     }
 
     pub fn node(&self, id: NodeId) -> &Node {
@@ -185,12 +284,13 @@ impl Values {
         &self.writes
     }
 
-    /// The nodes the program's results start from: every output lane's, every discard's conditions and what every
-    /// write is made of ([`Values::writes`]).
+    /// The nodes the program's results start from: every output lane's, every patch constant's, every discard's
+    /// conditions and what every write is made of ([`Values::writes`]).
     pub fn roots(&self) -> impl Iterator<Item = NodeId> + '_ {
         self.outputs
             .values()
             .copied()
+            .chain(self.patch_constants.values().copied())
             .chain(self.discards.iter().flatten().copied())
             .chain(self.writes.iter().flatten().copied())
     }
@@ -211,7 +311,7 @@ impl Values {
     /// merge's conditions and arms, a loop's arms and exits.
     pub fn operands(&self, id: NodeId) -> Vec<NodeId> {
         match self.node(id) {
-            Node::Input { .. } | Node::Query { .. } | Node::Literal(_) => Vec::new(),
+            Node::Input { .. } | Node::Supplied { .. } | Node::Query { .. } | Node::Literal(_) => Vec::new(),
             Node::Global { at, .. } => match at {
                 At::Component(_) => Vec::new(),
                 At::Indexed { index, .. } => index.clone(),
@@ -446,7 +546,7 @@ fn reach(values: &Values, roots: &[(NodeId, Via)]) -> Reach {
                     push(&mut best, &mut work, c, via.min(Via::Coordinate));
                 }
             }
-            Node::Query { .. } | Node::Literal(_) => {}
+            Node::Supplied { .. } | Node::Query { .. } | Node::Literal(_) => {}
             Node::Op { operands, .. } => {
                 for &o in operands {
                     push(&mut best, &mut work, o, via);
@@ -545,16 +645,11 @@ struct Walker<'a> {
 }
 
 impl<'a> Walker<'a> {
-    fn new(program: &'a Program) -> Result<Self, String> {
-        let module = &program.module;
-        let entry = module
-            .entry_points
-            .first()
-            .ok_or("the module has no entry point")?;
-        let function = &entry.function;
-        let mut walker = Walker {
+    /// A walker of `function` of `program`, its arguments and result lanes not set.
+    fn with(program: &'a Program, function: &'a naga::Function) -> Self {
+        Walker {
             program,
-            module,
+            module: &program.module,
             function,
             typifier: naga::front::Typifier::new(),
             nodes: Vec::new(),
@@ -568,7 +663,72 @@ impl<'a> Walker<'a> {
             control: Vec::new(),
             targets: Vec::new(),
             resources: program.bindings.iter().map(|(id, g)| (*g, *id)).collect(),
-        };
+        }
+    }
+
+    /// Takes over `nodes`, a graph another function of the program was walked into, so equal nodes stay one.
+    fn adopt(&mut self, nodes: Vec<Node>) {
+        self.interned = nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.clone(), NodeId(i as u32)))
+            .collect();
+        self.nodes = nodes;
+    }
+
+    /// The lanes of a stage function's argument `item`: an input's lanes, an output control point's (the lanes
+    /// `outputs` holds of the function walked before), a patch constant's or a pipeline value's ([`Supplied`]); an
+    /// array's elements each the same lanes (which element is not followed).
+    fn item_lanes(
+        &mut self,
+        item: &FnItem,
+        outputs: Option<&BTreeMap<(usize, u8), NodeId>>,
+    ) -> Result<Vec<NodeId>, String> {
+        let (width, count) = carried_shape(&item.ty)?;
+        let mut lanes = Vec::with_capacity(width * count);
+        for _ in 0..count {
+            for k in 0..width {
+                let lane = k as u8;
+                let node = match (item.list, item.varying) {
+                    (ItemList::Inputs, Some(input)) => self.intern(Node::Input { input, lane }),
+                    (ItemList::Outputs, Some(output)) => match outputs.and_then(|o| o.get(&(output, lane))) {
+                        Some(&node) => node,
+                        None => self.literal(0.),
+                    },
+                    (ItemList::PatchConstants, Some(n)) => self.intern(Node::Supplied {
+                        value: Supplied::PatchConstant(n),
+                        lane,
+                    }),
+                    (ItemList::Pipeline, None) => {
+                        let value = match item.name.as_str() {
+                            "SV_OutputControlPointID" => Supplied::OutputControlPoint,
+                            "SV_PrimitiveID" => Supplied::Primitive,
+                            "SV_DomainLocation" => Supplied::DomainLocation,
+                            other => return Err(format!("argument {other} is no value the walk follows")),
+                        };
+                        self.intern(Node::Supplied { value, lane })
+                    }
+                    (list, varying) => {
+                        return Err(format!(
+                            "argument {} of {list:?} names varying {varying:?}",
+                            item.name
+                        ));
+                    }
+                };
+                lanes.push(node);
+            }
+        }
+        Ok(lanes)
+    }
+
+    fn new(program: &'a Program) -> Result<Self, String> {
+        let module = &program.module;
+        let entry = module
+            .entry_points
+            .first()
+            .ok_or("the module has no entry point")?;
+        let function = &entry.function;
+        let mut walker = Walker::with(program, function);
         let io = entry_io(&program.interface)?;
         // each argument's lanes: the input varying (or varyings) its binding carries
         for (i, argument) in function.arguments.iter().enumerate() {
@@ -660,6 +820,7 @@ impl<'a> Walker<'a> {
             stage: self.program.stage,
             nodes: self.nodes,
             outputs,
+            patch_constants: BTreeMap::new(),
             discards: self.discards,
             writes: self.writes,
         })
@@ -1818,6 +1979,34 @@ fn varying_lane(
             Err(format!("lane {k} past the item's varyings"))
         }
     }
+}
+
+/// The lanes of one element of a stage function's item and how many elements it has (1 for a value).
+fn carried_shape(ty: &IoType) -> Result<(usize, usize), String> {
+    match *ty {
+        IoType::Value(v) => Ok((usize::from(v.width), 1)),
+        IoType::Array(v, n) => Ok((usize::from(v.width), n as usize)),
+        IoType::Memory => Err("a payload in memory is not followed".into()),
+        IoType::ClipDistances(_) => Err("clip distances are no stage function's item".into()),
+    }
+}
+
+/// The (output or patch constant, lane) a stage function's result `item` lane `k` (of one element) is, `None` for a
+/// lane past its varying's or a value the pipeline takes (a geometry program's counts).
+fn item_lane(interface: &Interface, item: &FnItem, k: usize) -> Result<Option<(usize, u8)>, String> {
+    let list = match item.list {
+        ItemList::Outputs => &interface.outputs,
+        ItemList::PatchConstants => match &interface.facts {
+            crate::StageFacts::Hull(h) => &h.patch_constants,
+            facts => return Err(format!("patch constants of a program with {facts:?}")),
+        },
+        ItemList::Inputs | ItemList::Pipeline => return Ok(None),
+    };
+    let Some(v) = item.varying else {
+        return Ok(None);
+    };
+    let width = usize::from(list.get(v).ok_or("a result past the interface")?.value.width);
+    Ok((k < width).then_some((v, k as u8)))
 }
 
 fn is_pointer(ty: &TypeInner) -> bool {

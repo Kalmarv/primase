@@ -65,6 +65,8 @@ fn how_the_programs_use_the_remaining_engine_constants() {
     source.add_shader_database(&mut world).unwrap();
     let mut seen = BTreeSet::new();
     let mut uses: BTreeMap<(String, String), Use> = BTreeMap::new();
+    // the programs whose reads are not known, by stage and why (the message's first words)
+    let mut refused: BTreeMap<String, usize> = BTreeMap::new();
     for (_, effect) in world.iter::<GtaEffect>() {
         for p in &effect.programs {
             let Some(e) = p.shader else { continue };
@@ -77,8 +79,13 @@ fn how_the_programs_use_the_remaining_engine_constants() {
             ) else {
                 continue;
             };
-            let Ok(reads) = constant_reads_of(&sh.bytecode) else {
-                continue;
+            let reads = match constant_reads_of(&sh.bytecode) {
+                Ok(r) => r,
+                Err(e) => {
+                    let why: String = e.chars().take(80).collect();
+                    *refused.entry(format!("{:?}: {why}", p.stage)).or_default() += 1;
+                    continue;
+                }
             };
             let stage = format!("{:?}", p.stage);
             for (i, r) in table.resources.iter().enumerate() {
@@ -122,6 +129,9 @@ fn how_the_programs_use_the_remaining_engine_constants() {
     }
     let dump = primase_testdata::scratch().join("gta-engine-use");
     std::fs::create_dir_all(&dump).unwrap();
+    for (why, n) in &refused {
+        println!("REFUSED {n:6} {why}");
+    }
     for ((name, stage), u) in &uses {
         let mut effects: Vec<_> = u.effects.iter().collect();
         effects.sort_by_key(|(_, n)| std::cmp::Reverse(**n));
