@@ -45,7 +45,17 @@ impl Rest {
                 scale,
             } => {
                 let [x, y, z, w] = rotation.map(f64::from);
-                // the rotation's columns (images of x, y, z) for a unit quaternion
+                // A unit quaternion rounded to f32 is not exactly unit (the f32 nearest 1/sqrt(2) twice has norm squared
+                // 1 - 3.4e-8), and the columns below are those of a unit one: made unit first, so the matrix is the
+                // rotation the quaternion stands for and a scale read back from its columns is the scale stored. A zero
+                // or non-finite quaternion is left as it is (a rest the verifier refuses).
+                let norm = (x * x + y * y + z * z + w * w).sqrt();
+                let [x, y, z, w] = if norm > 0.0 && norm.is_finite() {
+                    [x / norm, y / norm, z / norm, w / norm]
+                } else {
+                    [x, y, z, w]
+                };
+                // the rotation's columns (images of x, y, z)
                 let r = [
                     [
                         1.0 - 2.0 * (y * y + z * z),
@@ -250,6 +260,23 @@ mod tests {
         assert!(near(m.cols[1], [-1.0, 0.0, 0.0]), "{m:?}");
         assert!(near(m.cols[2], [0.0, 0.0, 1.0]), "{m:?}");
         assert_eq!(m.cols[3], [1.0, 2.0, 3.0]);
+    }
+
+    /// A unit quaternion rounded to f32 is not exactly unit: (0, 0, S, S) with S the f32 nearest 1/sqrt(2) has norm squared
+    /// 1 - 3.4e-8. The matrix is that of the rotation the quaternion stands for, so its columns are of length 1 (the matrix of
+    /// the quaternion taken as unit had columns 3.4e-8 short), and a scale stored as 1 is read back from them as 1.
+    #[test]
+    fn the_matrix_of_a_quaternion_rounded_to_f32_has_columns_of_the_scale_stored() {
+        let m = trs([0.0; 3], [0.0, 0.0, S, S], [1.0, 1.0, 1.0]).matrix();
+        for c in &m.cols[..3] {
+            let len = c.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>().sqrt();
+            assert!((len - 1.0).abs() < 1e-9, "{c:?} has length {len}");
+        }
+        let scaled = trs([0.0; 3], [0.0, 0.0, S, S], [2.0, 1.0, 3.0]).matrix();
+        for (c, scale) in scaled.cols[..3].iter().zip([2.0, 1.0, 3.0]) {
+            let len = c.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>().sqrt();
+            assert!((len - scale).abs() < 1e-9, "{c:?} has length {len}, not {scale}");
+        }
     }
 
     /// Hand-worked frame conversions, both of a proper and of a mirroring frame:

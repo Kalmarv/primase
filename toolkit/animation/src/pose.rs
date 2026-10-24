@@ -87,39 +87,43 @@ impl Trs {
                     .ok_or_else(|| Error("a zero rotation".into()))?,
                 scale: scale.map(f64::from),
             }),
-            Rest::Affine(m) => {
-                let c = affine(&m);
-                let len: [f64; 3] = std::array::from_fn(|i| c[i].iter().map(|x| x * x).sum::<f64>().sqrt());
-                if len.iter().any(|&l| l == 0.0 || !l.is_finite()) {
-                    return Err(Error("a degenerate rest has no rotation".into()));
-                }
-                let u: [[f64; 3]; 3] = std::array::from_fn(|i| c[i].map(|x| x / len[i]));
-                let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-                let cross = |a: [f64; 3], b: [f64; 3]| {
-                    [
-                        a[1] * b[2] - a[2] * b[1],
-                        a[2] * b[0] - a[0] * b[2],
-                        a[0] * b[1] - a[1] * b[0],
-                    ]
-                };
-                if [(0, 1), (0, 2), (1, 2)]
-                    .iter()
-                    .any(|&(i, j)| dot(u[i], u[j]).abs() > ORTHO_TOLERANCE)
-                {
-                    return Err(Error(
-                        "a sheared rest has no translation-rotation-scale form".into(),
-                    ));
-                }
-                if dot(cross(u[0], u[1]), u[2]) < 0.0 {
-                    return Err(Error("a mirrored rest has no rotation".into()));
-                }
-                Ok(Trs {
-                    translation: c[3],
-                    rotation: quat::from_columns(u),
-                    scale: len,
-                })
-            }
+            Rest::Affine(m) => Trs::of_affine(&affine(&m)),
         }
+    }
+
+    /// An affine map as TRS, on the conditions [`Trs::of`] states for a [`Rest::Affine`], with no rounding to f32 between
+    /// the map and its parts (a map rounded to f32 has columns whose lengths are not exactly the scale it was made from).
+    pub fn of_affine(c: &Affine) -> Result<Trs> {
+        let c = *c;
+        let len: [f64; 3] = std::array::from_fn(|i| c[i].iter().map(|x| x * x).sum::<f64>().sqrt());
+        if len.iter().any(|&l| l == 0.0 || !l.is_finite()) {
+            return Err(Error("a degenerate rest has no rotation".into()));
+        }
+        let u: [[f64; 3]; 3] = std::array::from_fn(|i| c[i].map(|x| x / len[i]));
+        let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let cross = |a: [f64; 3], b: [f64; 3]| {
+            [
+                a[1] * b[2] - a[2] * b[1],
+                a[2] * b[0] - a[0] * b[2],
+                a[0] * b[1] - a[1] * b[0],
+            ]
+        };
+        if [(0, 1), (0, 2), (1, 2)]
+            .iter()
+            .any(|&(i, j)| dot(u[i], u[j]).abs() > ORTHO_TOLERANCE)
+        {
+            return Err(Error(
+                "a sheared rest has no translation-rotation-scale form".into(),
+            ));
+        }
+        if dot(cross(u[0], u[1]), u[2]) < 0.0 {
+            return Err(Error("a mirrored rest has no rotation".into()));
+        }
+        Ok(Trs {
+            translation: c[3],
+            rotation: quat::from_columns(u),
+            scale: len,
+        })
     }
 
     /// `T * R * S`.
@@ -525,13 +529,22 @@ pub fn model_transforms(
             if out.contains_key(&id) {
                 continue;
             }
-            let local = pose
+            // A [`Rest::Trs`] is composed in f64 from the rotation it stands for, made unit, and not rounded to f32 on
+            // the way: a rotation stored in f32 is not exactly unit (the f32 nearest 1/sqrt(2) twice has norm squared
+            // 1 - 3.4e-8) and a matrix rounded to f32 has columns of length 1 +- 6e-8, either of which a scale read back
+            // from the model-space matrices (Trs::of_affine) would show as a scale the pose does not state.
+            let local = match pose
                 .get(&id)
                 .ok_or_else(|| Error(format!("joint {id:?} has no local transform")))?
-                .matrix();
+            {
+                Rest::Affine(m) => affine(m),
+                rest @ Rest::Trs { .. } => Trs::of(rest)
+                    .map_err(|e| Error(format!("joint {id:?}: {}", e.0)))?
+                    .matrix(),
+            };
             let m = match parent.get(&id).copied().flatten() {
-                Some(p) => compose(&out[&p], &affine(&local)),
-                None => affine(&local),
+                Some(p) => compose(&out[&p], &local),
+                None => local,
             };
             out.insert(id, m);
         }
@@ -586,6 +599,31 @@ mod tests {
         let m = model_transforms(&s, &locals(&s, None)).unwrap();
         assert!(near(&m[&JointId(2)][3], &[0.0, 2.0, 0.0]), "{:?}", m[&JointId(2)]);
         assert!(near(&m[&JointId(1)][3], &[0.0, 1.0, 0.0]));
+    }
+
+    /// The root's rotation is stored in f32 as (0, 0, S, S), S the f32 nearest 1/sqrt(2): its norm squared is 1 - 3.4e-8. The
+    /// model-space matrices are composed from the rotation it stands for, in f64, so the scale `Trs::of_affine` reads back is
+    /// the 1 the pose states to f64 rounding (the matrix of the stored quaternion taken as unit had columns 3.4e-8 short), and
+    /// the rotation is the stored one made unit; the child, listed before its parent, composes through it the same.
+    #[test]
+    fn model_transforms_read_back_the_scale_the_pose_states() {
+        let s = skeleton();
+        let rests = locals(&s, None);
+        let m = model_transforms(&s, &rests).unwrap();
+        let root = Trs::of_affine(&m[&JointId(1)]).unwrap();
+        assert!(
+            root.scale.iter().all(|v| (v - 1.0).abs() < 1e-15),
+            "{:?}",
+            root.scale
+        );
+        assert!(near(&root.rotation, &[0.0, 0.0, f64::from(S), f64::from(S)]));
+        let child = Trs::of_affine(&m[&JointId(2)]).unwrap();
+        assert!(
+            child.scale.iter().all(|v| (v - 1.0).abs() < 1e-15),
+            "{:?}",
+            child.scale
+        );
+        assert!(near(&child.translation, &[0.0, 2.0, 0.0]));
     }
 
     /// Hand-worked: an affine rest decomposes into its TRS (a quarter turn about z scaled 2 along its x: columns (0, 2,
