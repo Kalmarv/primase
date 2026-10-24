@@ -59,7 +59,10 @@ separately, not silently claimed as decoded.
 Synthetic tests use hand-authored section/type/item records, including pointer
 arrays, bad references, oversized items and every truncated fixture prefix.
 `oracles.corpus.sekiro/havok` enables the loose-file container and
-compressed-mesh gate. The folder contains `.hkx` files and their `.compendium`. The FromSoft raw-soup
-gate additionally reads an independent decoder's `<name>.hkx.soup`: little-endian
-u32 triangle count, count*9 f32 positions, then count i32 material IDs. No game
-assets or oracle binaries are distributed.
+compressed-mesh gate: one area's map collision binder written loose by
+`worlds/fromsoft/examples/corpus_sekiro_havok.rs`, its `.hkx` files and their
+`.compendium`. The FromSoft raw-soup gate additionally reads
+`oracles.corpus.sekiro/havok-soup`, an independent decoder's `<name>.hkx.soup` for
+each tagfile: little-endian u32 triangle count, count*9 f32 positions, then count
+i32 material IDs. No decoder independent of this one exists yet, so that set is
+blocked. No game assets or oracle binaries are distributed.

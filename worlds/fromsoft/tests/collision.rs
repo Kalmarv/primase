@@ -1,4 +1,4 @@
-//! Compare raw collision soups with the independent C# decoder. No smoothing,
+//! Compare raw collision soups with an independent decoder's (`havok-soup`, one per `havok` tagfile). No smoothing,
 //! surface selection, or frame lowering is part of this raw-file comparison.
 use primase_fromsoft::collision;
 use primase_havok::Compendium;
@@ -8,6 +8,13 @@ fn castle_raw_soups() -> Result<(), Box<dyn std::error::Error>> {
         primase_testdata::OracleSet::Corpus,
         primase_testdata::Game::Sekiro,
         "havok",
+    ) else {
+        return Ok(());
+    };
+    let Some(soups) = primase_testdata::oracle(
+        primase_testdata::OracleSet::Corpus,
+        primase_testdata::Game::Sekiro,
+        "havok-soup",
     ) else {
         return Ok(());
     };
@@ -27,7 +34,8 @@ fn castle_raw_soups() -> Result<(), Box<dyn std::error::Error>> {
     for path in files.iter().filter(|p| p.extension().is_some_and(|e| e == "hkx")) {
         let soup = collision::read_map(&std::fs::read(path)?, Some(&comp))
             .map_err(|e| format!("{}: {e}", path.display()))?;
-        let oracle = std::fs::read(path.with_extension("hkx.soup"))?;
+        let name = path.file_name().ok_or("tagfile without a name")?;
+        let oracle = std::fs::read(soups.join(name).with_extension("hkx.soup"))?;
         let n = u32::from_le_bytes(oracle[..4].try_into()?) as usize;
         assert_eq!(n, soup.triangles.len(), "{}", path.display());
         assert_eq!(oracle.len(), 4 + n * 40);
