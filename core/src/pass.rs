@@ -2408,7 +2408,8 @@ mod tests {
     }
     const SNEAKY: PassSpec = PassSpec {
         name: "sneaky",
-        options: &[],
+        // an option it never reads, for a plan that gives options to a pass it does not choose
+        options: &[OptionSpec::optional("x", "1", "unread", "nothing")],
         make: |_| Ok(Box::new(Sneaky)),
     };
 
@@ -3410,7 +3411,7 @@ mod tests {
         // options for a pass the plan does not choose are reported
         let mut report = RunReport::default();
         let o = options(&[("bake", "size", "512"), ("sneaky", "x", "1")]);
-        // sneaky takes any option (its factory ignores them)
+        // sneaky takes x, which it never reads
         m.plan(&world(), &gltf(), Mode::Partial, &o, &mut report).unwrap();
         assert_eq!(report.unused_options, ["sneaky"]);
         assert!(
