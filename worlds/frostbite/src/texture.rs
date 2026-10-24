@@ -5,7 +5,8 @@
 //!
 //! ```text
 //! 0x00  8  unknown_00     not read by ReSkate
-//! 0x08  u32 kind          0 a 2D texture
+//! 0x08  u32 kind          0 a 2D texture, 1 a cube (depth and slices 6), 2 a volume (depth and slices its depth),
+//!                         3 an array (depth and slices its layers)
 //! 0x0c  u32 format        Frostbite format ordinal ([`block`])
 //! 0x10  u32 unknown_10    skipped by ReSkate (metadata version >= 12)
 //! 0x14  u16 flags, u16 width, u16 height, u16 depth, u16 slices

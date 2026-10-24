@@ -7,7 +7,7 @@
 #![allow(clippy::unwrap_used)]
 
 use primase_compress::oodle::{Oodle, Version};
-use primase_core::{ColorSpace, Component, Texture, World};
+use primase_core::{ColorSpace, Component, Texture, TextureLayers, TextureShape, World};
 use primase_frostbite::bundle::Kind;
 use primase_frostbite::components::{FrostbiteDepot, FrostbiteEbx, FrostbiteEntry, FrostbiteTexture};
 use primase_frostbite::entry::{format_colour_space, tex_format};
@@ -15,6 +15,7 @@ use primase_frostbite::folder::{Folder, Source};
 use primase_frostbite::listing::resource_type_name;
 use primase_frostbite::{depot, ebx, texture};
 use primase_testdata::{Game, Tool, install_file, tool};
+use primase_texcodec::{Decoder, TexDecoder};
 use serde_json::json;
 
 type R = Result<(), Box<dyn std::error::Error>>;
@@ -337,5 +338,125 @@ fn a_streamed_texture_reads_its_whole_chain_from_the_toc() -> R {
     }
     println!("{streamed} streamed and {whole} whole textures read in full");
     assert!(streamed > 0 && whole > 0);
+    Ok(())
+}
+
+/// Mean absolute difference over the four channels between the 2x2 average of `big` (`w` x `h`) and `small`.
+fn downsample_error(big: &[u8], (w, h): (usize, usize), small: &[u8]) -> f64 {
+    let (sw, sh) = ((w / 2).max(1), (h / 2).max(1));
+    let at = |x: usize, y: usize, c: usize| u32::from(big[(y.min(h - 1) * w + x.min(w - 1)) * 4 + c]);
+    let (mut sum, mut n) = (0u64, 0u64);
+    for y in 0..sh {
+        for x in 0..sw {
+            for c in 0..4 {
+                let avg = (at(2 * x, 2 * y, c)
+                    + at(2 * x + 1, 2 * y, c)
+                    + at(2 * x, 2 * y + 1, c)
+                    + at(2 * x + 1, 2 * y + 1, c)
+                    + 2)
+                    / 4;
+                sum += u64::from(avg.abs_diff(u32::from(small[(y * sw + x) * 4 + c])));
+                n += 1;
+            }
+        }
+    }
+    sum as f64 / n as f64
+}
+
+/// An array (whole, and streamed from level 2), a cube and a volume read as `core.texture_layers` of the shape and
+/// size the header states, and the images of an array lie mip-major: the level 1 image of a layer is the downsample
+/// of its level 0 image (the other order, read as it, is not: the layout probe's measurement, on 559 textures).
+#[test]
+fn arrays_cubes_and_volumes_read_as_layered_textures() -> R {
+    let (Some(data), Some(dll)) = (install_file(Game::Skate, "Data"), tool(Tool::Oodle9)) else {
+        return Ok(());
+    };
+    let folder = Folder::open(data)?;
+    // SAFETY: the configured Oodle 9 library is the game's own.
+    #[allow(unsafe_code)]
+    let oodle = unsafe { Oodle::load(dll, Version::V9) }?;
+    let src = Source {
+        folder: &folder,
+        base: Some(&folder),
+        oodle: Some(&oodle),
+    };
+    let decoder = Decoder::default();
+    // what is wanted: an array whole and streamed, a cube and a volume
+    let mut wanted = ["array", "streamed array", "cube", "volume"].map(Some);
+    let mut found = Vec::new();
+    'tocs: for toc in &folder.tocs {
+        let listing = src.listing(toc)?;
+        for bundle in &listing.bundles {
+            for e in bundle
+                .entries()
+                .filter(|e| e.kind == Kind::Res && e.resource_type == Some(primase_frostbite::TEXTURE))
+            {
+                let h = texture::read(&src.payload(e.file, e.size as usize)?)?;
+                let Some(format) = tex_format(h.format) else {
+                    continue;
+                };
+                let slot = match (h.kind, h.slices > 1, h.first_mip > 0) {
+                    (3, true, false) => 0,
+                    (3, true, true) => 1,
+                    (1, _, _) => 2,
+                    (2, _, _) => 3,
+                    _ => continue,
+                };
+                if wanted[slot].is_none() {
+                    continue;
+                }
+                let mut w = World::new();
+                let t = src
+                    .read_entry(bundle, &e, &mut w)
+                    .map_err(|err| format!("{}: {err}", e.name))?[0];
+                assert!(w.verify_components().is_empty(), "{}", e.name);
+                assert!(!w.has::<Texture>(t), "{}", e.name);
+                let layers = w.get::<TextureLayers>(t).unwrap();
+                let want = match slot {
+                    0 | 1 => TextureShape::Array {
+                        layers: u32::from(h.slices),
+                    },
+                    2 => TextureShape::Cube { cubes: 1 },
+                    _ => TextureShape::Volume {
+                        depth: u32::from(h.depth),
+                    },
+                };
+                assert_eq!(layers.shape, want, "{}", e.name);
+                assert_eq!(layers.format, format);
+                assert_eq!(
+                    (layers.width, layers.height),
+                    (u32::from(h.width), u32::from(h.height))
+                );
+                assert_eq!(layers.levels.len(), usize::from(h.mip_count));
+                assert_eq!(layers.color_space, format_colour_space(h.format).unwrap());
+                if slot < 2 {
+                    let size = (layers.width as usize, layers.height as usize);
+                    let (l0, l1) = (layers.layer(0, 1).unwrap(), layers.layer(1, 1).unwrap());
+                    let a = decoder.decode_rgba8(format, layers.width, layers.height, l0)?;
+                    let b = decoder.decode_rgba8(format, layers.width / 2, layers.height / 2, l1)?;
+                    let error = downsample_error(&a, size, &b);
+                    assert!(
+                        error < 10.0,
+                        "{}: level 1 is no downsample of level 0 (error {error})",
+                        e.name
+                    );
+                }
+                found.push(format!(
+                    "{} {:?} {}x{} {} levels",
+                    e.name,
+                    layers.shape,
+                    layers.width,
+                    layers.height,
+                    layers.levels.len()
+                ));
+                wanted[slot] = None;
+                if wanted.iter().all(Option::is_none) {
+                    break 'tocs;
+                }
+            }
+        }
+    }
+    println!("{found:#?}");
+    assert!(wanted.iter().all(Option::is_none), "not found: {wanted:?}");
     Ok(())
 }

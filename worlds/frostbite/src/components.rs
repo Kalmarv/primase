@@ -74,7 +74,8 @@ impl Component for FrostbiteEbx {
     }
 }
 
-/// A texture resource's header as stored, on the entity that holds its `core.texture`: the Frostbite format ordinal
+/// A texture resource's header as stored, on the entity that holds its `core.texture` (a 2D map) or `core.texture_layers`
+/// (an array, a cube or a volume): the Frostbite format ordinal
 /// (the core texture's colour space is the format's own: [`crate::entry::format_colour_space`]), the fields the
 /// reader does not interpret, and the GUID of the chunk the pixels were read from.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -455,7 +456,8 @@ impl Component for FrostbiteMaterial {
     fn verify(&self, _e: Entity, w: &World) -> Result<(), String> {
         for t in &self.textures {
             if let TextureLink::Texture(e) = t.link
-                && !(w.get::<primase_core::Texture>(e).is_some() && w.get::<FrostbiteTexture>(e).is_some())
+                && !((w.has::<primase_core::Texture>(e) || w.has::<primase_core::TextureLayers>(e))
+                    && w.has::<FrostbiteTexture>(e))
             {
                 return Err(format!(
                     "texture parameter {:#018x} names an entity that is not a frostbite texture",

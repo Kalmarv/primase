@@ -31,10 +31,12 @@
 //!   census sample the engine's lists were 205,208 constants in 1,916 stages and are 3,248 runs.
 //! - **Textures.** A slot the binding sets name is the depot block's parameter of that name, and the parameter's link
 //!   ([`FrostbiteMaterial::textures`], made by [`Source::resolve_textures`](crate::folder::Source::resolve_textures))
-//!   gives the texture entity: `Texture` with the default sampler state (the sampler is not decoded). A slot with no
-//!   such link is `Missing`, and the log counts the slots by why: the sets name no entry for the slot, the block holds
-//!   no reference for the name, the reference was not resolved (the reader step did not run), or the link states why
-//!   it leads nowhere.
+//!   gives the texture entity: `Texture` with the default sampler state (the sampler is not decoded). The texture is a
+//!   2D map (`core.texture`) or an array, a cube or a volume (`core.texture_layers`), as the reader made it, and it
+//!   has to be the dimension the slot reads (a 2D map for a plain 2D slot, an array for an arrayed one, and so on).
+//!   A slot with no such link is `Missing`, and the log counts the slots by why: the sets name no entry for the slot,
+//!   the block holds no reference for the name, the reference was not resolved (the reader step did not run), the
+//!   link states why it leads nowhere, or the texture is not what the slot reads.
 //! - **Outputs.** The pixel stage's render targets are `Unknown` by index.
 //! - **State.** Not decoded: the default (nothing stated).
 
@@ -44,9 +46,9 @@ use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::shader::{
     ConstantBinding, ConstantRole, D3dClass, InputBinding, InputRole, Interface, KeyPart, OutputBinding,
     OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Shader, ShaderBinding, Stage,
-    StageBinding, SystemValue, TextureBinding, TextureSource, VariantKey,
+    StageBinding, SystemValue, TextureBinding, TextureDim, TextureSource, VariantKey,
 };
-use primase_core::{Component, Entity, Semantic, World};
+use primase_core::{Component, Entity, Semantic, Texture, TextureLayers, World};
 
 use crate::binding::{Bindings, Group};
 use crate::components::{
@@ -176,6 +178,7 @@ fn bind_material(world: &World, m: &FrostbiteMaterial, log: &mut PassLog) -> Res
                     layout,
                     m.depot.as_ref(),
                     &m.textures,
+                    &|t| texture_dimension(world, t),
                     i > 0,
                     log,
                 );
@@ -204,6 +207,7 @@ fn stage_binding(
     layout: Option<&InputLayout>,
     depot: Option<&MaterialDepot>,
     links: &[MaterialTexture],
+    dimension: &dyn Fn(Entity) -> Option<(TextureDim, bool)>,
     vertex_bound: bool,
     log: &mut PassLog,
 ) -> StageBinding {
@@ -244,11 +248,11 @@ fn stage_binding(
                     log,
                 ));
             }
-            (ResourceKind::Texture { .. }, D3dClass::ShaderResource) => {
+            (ResourceKind::Texture { dim, arrayed, .. }, D3dClass::ShaderResource) => {
                 let named = (b.space == 0)
                     .then(|| bindings.and_then(|s| s.resource(b.register)))
                     .flatten();
-                let source = texture_source(named, depot, links, log);
+                let source = texture_source(named, depot, links, (*dim, *arrayed), dimension, log);
                 textures.push(TextureBinding {
                     resource: r.id,
                     sampler: None,
@@ -289,12 +293,25 @@ fn stage_binding(
     }
 }
 
+/// The dimension a shader reads texture `t` as and whether it is arrayed: a 2D map is a plain 2D texture, a texture of
+/// several images is the dimension its shape states ([`TextureShape::dimension`](primase_core::TextureShape::dimension)).
+fn texture_dimension(w: &World, t: Entity) -> Option<(TextureDim, bool)> {
+    if w.has::<Texture>(t) {
+        Some((TextureDim::D2, false))
+    } else {
+        w.get::<TextureLayers>(t).map(|l| l.shape.dimension())
+    }
+}
+
 /// What the texture slot the binding sets name as `named` (a group and the index of its parameter) samples: the
-/// texture of the material's link for the parameter's name, else `Missing`, the log counting why.
+/// texture of the material's link for the parameter's name, if it is the `slot` (dimension, arrayed) the shader reads
+/// it as (`dimension` is the one a texture entity has), else `Missing`, the log counting why.
 fn texture_source(
     named: Option<(&Group, usize)>,
     depot: Option<&MaterialDepot>,
     links: &[MaterialTexture],
+    slot: (TextureDim, bool),
+    dimension: &dyn Fn(Entity) -> Option<(TextureDim, bool)>,
     log: &mut PassLog,
 ) -> TextureSource {
     let Some((group, i)) = named else {
@@ -304,6 +321,17 @@ fn texture_source(
     let name = group.params[i].name;
     match links.iter().find(|t| t.name == name).map(|t| &t.link) {
         Some(TextureLink::Texture(texture)) => {
+            if let Some(have) = dimension(*texture).filter(|have| *have != slot) {
+                log.count(
+                    &format!(
+                        "texture slots left Missing, the texture is {} and the slot reads {}",
+                        describe(have),
+                        describe(slot)
+                    ),
+                    1,
+                );
+                return TextureSource::Missing;
+            }
             log.count(
                 "texture slots bound to the texture of the depot block's reference",
                 1,
@@ -337,6 +365,11 @@ fn texture_source(
             TextureSource::Missing
         }
     }
+}
+
+/// A dimension and whether it is arrayed, as the log says it.
+fn describe((dim, arrayed): (TextureDim, bool)) -> String {
+    format!("{}{dim:?}", if arrayed { "an array of " } else { "a " })
 }
 
 /// The vertex inputs of a program as the streams of the permutation's input layout.
@@ -696,7 +729,14 @@ mod tests {
         ];
         let mut log = PassLog::default();
         assert_eq!(
-            texture_source(Some((&g, 0)), Some(&d), &links, &mut log),
+            texture_source(
+                Some((&g, 0)),
+                Some(&d),
+                &links,
+                (TextureDim::D2, false),
+                &|_| None,
+                &mut log
+            ),
             TextureSource::Texture {
                 texture: Entity::from_index(9),
                 sampler: SamplerState::default()
@@ -715,7 +755,14 @@ mod tests {
             (None, "texture slots no binding set entry names, left Missing"),
         ] {
             assert_eq!(
-                texture_source(named, Some(&d), &links, &mut log),
+                texture_source(
+                    named,
+                    Some(&d),
+                    &links,
+                    (TextureDim::D2, false),
+                    &|_| None,
+                    &mut log
+                ),
                 TextureSource::Missing
             );
             assert_eq!(log.counts[why], 1);
@@ -724,6 +771,52 @@ mod tests {
             log.counts["texture slots bound to the texture of the depot block's reference"],
             1
         );
+    }
+
+    #[test]
+    fn a_texture_is_bound_only_to_a_slot_that_reads_its_dimension() {
+        let g = group(&[(0xC1, TEXTURE, 0, 0)]);
+        let d = material();
+        let links = [MaterialTexture {
+            name: 0xC1,
+            guid: [1; 16],
+            link: TextureLink::Texture(Entity::from_index(9)),
+        }];
+        let array = |_: Entity| Some((TextureDim::D2, true));
+        let mut log = PassLog::default();
+        // an array in an arrayed 2D slot is bound; the same array in a plain 2D slot, and a plain map in an arrayed one, are not
+        assert!(matches!(
+            texture_source(
+                Some((&g, 0)),
+                Some(&d),
+                &links,
+                (TextureDim::D2, true),
+                &array,
+                &mut log
+            ),
+            TextureSource::Texture { .. }
+        ));
+        for (slot, have, why) in [
+            (
+                (TextureDim::D2, false),
+                (TextureDim::D2, true),
+                "texture slots left Missing, the texture is an array of D2 and the slot reads a D2",
+            ),
+            (
+                (TextureDim::D2, true),
+                (TextureDim::D2, false),
+                "texture slots left Missing, the texture is a D2 and the slot reads an array of D2",
+            ),
+            (
+                (TextureDim::D3, false),
+                (TextureDim::Cube, false),
+                "texture slots left Missing, the texture is a Cube and the slot reads a D3",
+            ),
+        ] {
+            let source = texture_source(Some((&g, 0)), Some(&d), &links, slot, &|_| Some(have), &mut log);
+            assert_eq!(source, TextureSource::Missing);
+            assert_eq!(log.counts[why], 1);
+        }
     }
 
     #[test]

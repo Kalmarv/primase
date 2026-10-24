@@ -15,7 +15,7 @@ use std::time::Instant;
 use primase_compress::oodle::{Oodle, Version};
 use primase_core::pass::{Pass, PassLog};
 use primase_core::shader::{ShaderBinding, TextureSource};
-use primase_core::{Entity, Texture, World};
+use primase_core::{Entity, Texture, TextureLayers, TextureShape, World};
 use primase_frostbite::MESHSET;
 use primase_frostbite::bundle::Kind;
 use primase_frostbite::components::{FrostbiteMaterial, FrostbiteTexture};
@@ -25,6 +25,15 @@ use primase_frostbite::program::Scope;
 use primase_frostbite::textures::TextureIndex;
 use primase_testdata::{Game, Tool, install_file, tool};
 use primase_texcodec::{Decoder, TexDecoder};
+
+/// The slot kind a texture of this shape is counted under, and its short name.
+fn shape_name(shape: TextureShape) -> (&'static str, &'static str) {
+    match shape {
+        TextureShape::Array { .. } => ("texture, array", "array"),
+        TextureShape::Cube { .. } => ("texture, cube", "cube"),
+        TextureShape::Volume { .. } => ("texture, volume", "volume"),
+    }
+}
 
 fn census(every_toc: bool) {
     let (Some(data), Some(dll)) = (install_file(Game::Skate, "Data"), tool(Tool::Oodle9)) else {
@@ -71,7 +80,7 @@ fn census(every_toc: bool) {
     let mut log = PassLog::default();
     let (mut references, mut linked, mut distinct) = (0usize, 0usize, 0usize);
     let mut missing: BTreeMap<String, usize> = BTreeMap::new();
-    let mut slots: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut slots: BTreeMap<String, usize> = BTreeMap::new();
     let mut decoded: BTreeMap<String, usize> = BTreeMap::new();
     let mut formats: BTreeMap<u32, usize> = BTreeMap::new();
     let (mut pixel_bytes, mut violations) = (0u64, Vec::new());
@@ -116,10 +125,13 @@ fn census(every_toc: bool) {
                     match &t.source {
                         TextureSource::Texture { texture, .. } => {
                             bound.insert(*texture);
-                            *slots.entry("texture").or_default() += 1;
+                            let kind = w
+                                .get::<TextureLayers>(*texture)
+                                .map_or("texture, 2D map", |l| shape_name(l.shape).0);
+                            *slots.entry(kind.to_owned()).or_default() += 1;
                         }
-                        TextureSource::Missing => *slots.entry("missing").or_default() += 1,
-                        _ => *slots.entry("another source").or_default() += 1,
+                        TextureSource::Missing => *slots.entry("missing".to_owned()).or_default() += 1,
+                        _ => *slots.entry("another source".to_owned()).or_default() += 1,
                     }
                 }
             }
@@ -128,9 +140,35 @@ fn census(every_toc: bool) {
             assert!(m.textures.len() <= m.depot.as_ref().map_or(0, |d| d.parameters.len()));
         }
         for e in bound {
-            let tex = w.get::<Texture>(e).unwrap();
             let header = &w.get::<FrostbiteTexture>(e).unwrap().header;
             *formats.entry(header.format).or_default() += 1;
+            if let Some(layers) = w.get::<TextureLayers>(e) {
+                // the texture decoder reads the base level of every image
+                pixel_bytes += layers
+                    .levels
+                    .iter()
+                    .flatten()
+                    .map(|l| l.len() as u64)
+                    .sum::<u64>();
+                let (w0, h0) = (layers.width, layers.height);
+                let ok = layers.levels.first().is_some_and(|images| {
+                    images.iter().all(|l| {
+                        decoder
+                            .decode_rgba8(layers.format, w0, h0, l)
+                            .is_ok_and(|rgba| rgba.len() == w0 as usize * h0 as usize * 4)
+                    })
+                });
+                *decoded
+                    .entry(format!(
+                        "{} {:?} base level of every image {}",
+                        shape_name(layers.shape).1,
+                        layers.format,
+                        if ok { "decodes" } else { "FAILS" }
+                    ))
+                    .or_default() += 1;
+                continue;
+            }
+            let tex = w.get::<Texture>(e).unwrap();
             pixel_bytes += tex.levels.iter().map(|l| l.len() as u64).sum::<u64>();
             let ok = tex.levels.first().is_some_and(|l| {
                 decoder
