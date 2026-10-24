@@ -14,7 +14,7 @@ pub struct Soup {
     pub unmapped: usize,
     pub dead_primitives: usize,
     pub invalid_material_keys: usize,
-    /// Triangle-data rows beyond the shape-key table (Elden Ring stores some tables shorter than their data).
+    /// Triangle-data rows no shape key takes, at the end or among the others.
     pub unkeyed_triangle_data: usize,
     /// The shape classes of bodies [`read_map`] has no decoder for, one per body: listed, not read.
     pub unread_bodies: Vec<String>,
@@ -22,17 +22,25 @@ pub struct Soup {
     pub unread_custom_primitives: usize,
 }
 
-/// Shape key to material, the count of all-ones (invalid) keys, and the count of triangle-data rows beyond the key
-/// table. The key table is indexed like the triangle data and may be shorter; a triangle whose key the table does
-/// not map has no material (-1) and is counted as unmapped.
-fn material_keys(shape: Value<'_, '_>, empty_mesh: bool) -> Result<(BTreeMap<u32, i32>, usize, usize)> {
+/// Shape key to material, the count of all-ones (invalid) keys, and the count of triangle-data rows no key takes.
+///
+/// The key table is indexed like the triangle data, which may hold more rows than it: rows no key takes, at the end
+/// (Elden Ring stores some tables shorter than their data) or among the others (one Sekiro castle mesh has 24 such rows
+/// in its first 8,000). A row's vertex ids are unique within its primitive-data group, so a `(group, id)` names one
+/// position: a key takes the next row whose ids agree with the positions its triangle and the rows taken before gave
+/// them, skipping at most as many rows as the data has beyond the table. A key no such row fits is an error, never a
+/// silent shift. A triangle whose key the table does not map has no material (-1) and is counted as unmapped.
+fn material_keys(
+    shape: Value<'_, '_>,
+    triangles: &[primase_havok::Triangle],
+) -> Result<(BTreeMap<u32, i32>, usize, usize)> {
     let parameter = shape.field("pParam")?.dereference()?;
     let triangle_data = parameter.field("triangleDataArray")?.array()?;
     let primitive_data = parameter.field("primitiveDataArray")?.array()?;
     let keys = shape.field("triangleIndexToShapeKey")?.array()?;
     let bits = shape.field("numShapeKeyBits")?.unsigned()?;
-    // A mesh of no triangles has no key bits: its rows identify nothing, and are counted as beyond the table.
-    if bits == 0 && empty_mesh && keys.len() <= triangle_data.len() {
+    // A mesh of no triangles has no key bits: its rows identify nothing, and are counted as no key's.
+    if bits == 0 && triangles.is_empty() && keys.len() <= triangle_data.len() {
         return Ok((BTreeMap::new(), 0, triangle_data.len()));
     }
     if !(1..=32).contains(&bits) || (!triangle_data.is_empty() && keys.len() > triangle_data.len()) {
@@ -46,9 +54,33 @@ fn material_keys(shape: Value<'_, '_>, empty_mesh: bool) -> Result<(BTreeMap<u32
             ),
         ));
     }
+    let keyed = if triangle_data.is_empty() { 0 } else { keys.len() };
+    let beyond = triangle_data.len() - keyed;
+    let geometry: BTreeMap<u32, [[f32; 3]; 3]> = triangles.iter().map(|t| (t.key, t.vertices)).collect();
+    let row = |i: usize| -> Result<(u64, [u64; 3])> {
+        let r = triangle_data.get(i)?;
+        Ok((
+            r.field("primitiveDataIndex")?.unsigned()?,
+            [
+                r.field("vertexIndexA")?.unsigned()?,
+                r.field("vertexIndexB")?.unsigned()?,
+                r.field("vertexIndexC")?.unsigned()?,
+            ],
+        ))
+    };
+    // The position each (group, vertex id) has been given, as f32 bits.
+    let mut positions: BTreeMap<(u64, u64), [u32; 3]> = BTreeMap::new();
+    let fits =
+        |positions: &BTreeMap<(u64, u64), [u32; 3]>, (group, ids): (u64, [u64; 3]), at: &[[f32; 3]; 3]| {
+            ids.iter().zip(at).all(|(&id, p)| {
+                positions
+                    .get(&(group, id))
+                    .is_none_or(|known| *known == p.map(f32::to_bits))
+            })
+        };
     let mut result = BTreeMap::new();
     let mut invalid_keys = 0;
-    let keyed = if triangle_data.is_empty() { 0 } else { keys.len() };
+    let mut skipped = 0;
     for i in 0..keyed {
         let raw = u32::try_from(keys.get(i)?.unsigned()?)
             .map_err(|_| invalid("collision", shape.offset, "shape key exceeds u32"))?;
@@ -59,19 +91,44 @@ fn material_keys(shape: Value<'_, '_>, empty_mesh: bool) -> Result<(BTreeMap<u32
             continue;
         }
         let key = raw >> (32 - bits);
-        let pi = triangle_data.get(i)?.field("primitiveDataIndex")?.unsigned()? as usize;
-        let material = primitive_data.get(pi)?.field("materialNameData")?.unsigned()?;
+        let mut r = row(i + skipped)?;
+        if let Some(at) = geometry.get(&key) {
+            while !fits(&positions, r, at) {
+                if skipped == beyond {
+                    return Err(invalid(
+                        "collision",
+                        shape.offset,
+                        format!(
+                            "key {key:x}: no triangle-data row from {i} on has vertex ids that agree with its triangle"
+                        ),
+                    ));
+                }
+                skipped += 1;
+                r = row(i + skipped)?;
+            }
+            let (group, ids) = r;
+            for (&id, p) in ids.iter().zip(at) {
+                positions.entry((group, id)).or_insert(p.map(f32::to_bits));
+            }
+        }
+        let material = primitive_data
+            .get(r.0 as usize)?
+            .field("materialNameData")?
+            .unsigned()?;
         let material = i32::try_from(material)
             .map_err(|_| invalid("collision", shape.offset, "material exceeds i32"))?;
         if result.insert(key, material).is_some_and(|m| m != material) {
             return Err(invalid(
                 "collision",
                 shape.offset,
-                format!("conflicting shape-key materials: key {key:x}, row {i}, new {material}"),
+                format!(
+                    "conflicting shape-key materials: key {key:x}, row {}, new {material}",
+                    i + skipped
+                ),
             ));
         }
     }
-    Ok((result, invalid_keys, triangle_data.len() - keyed))
+    Ok((result, invalid_keys, beyond))
 }
 
 /// Decode map compressed meshes. A body of another shape class is not read: its
@@ -110,7 +167,7 @@ pub fn read_map(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Soup> {
                     ));
                 }
                 soup.unread_custom_primitives += mesh.custom.len();
-                let (keys, invalid_keys, unkeyed) = material_keys(shape, mesh.triangles.is_empty())?;
+                let (keys, invalid_keys, unkeyed) = material_keys(shape, &mesh.triangles)?;
                 soup.invalid_material_keys += invalid_keys;
                 soup.unkeyed_triangle_data += unkeyed;
                 soup.dead_primitives += mesh.dead_primitives;
@@ -289,7 +346,7 @@ pub fn read_bodies(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Vec<
                         let instances = primase_havok::extern_shapes(shape, &mesh)?;
                         let (keys, invalid_keys, unkeyed) =
                             if shape.type_name() == "fsnpCustomParamCompressedMeshShape" {
-                                material_keys(shape, mesh.triangles.is_empty())?
+                                material_keys(shape, &mesh.triangles)?
                             } else {
                                 (BTreeMap::new(), 0, 0)
                             };
