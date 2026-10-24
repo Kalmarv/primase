@@ -3,13 +3,15 @@
 //! eight group IDs. Every map file it lists is read; a part count, name or value that differs fails the gate.
 use primase_core::gate::{GateReport, Tolerance};
 use primase_fromsoft::{Archive, dcx::Decoder, msb::MapLayout};
-use primase_testdata::{Game, OracleSet, Tool, install, oracle, tool};
+use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[allow(unsafe_code)]
 mod native {
-    pub fn load(path: std::path::PathBuf) -> primase_compress::Result<primase_compress::oodle::Oodle> {
+    pub fn load(
+        path: primase_testdata::OodleLibrary,
+    ) -> primase_compress::Result<primase_compress::oodle::Oodle> {
         // SAFETY: caller explicitly supplies a trusted version-6 native library.
-        unsafe { primase_compress::oodle::Oodle::load(path, primase_compress::oodle::Version::V6) }
+        unsafe { primase_compress::oodle::Oodle::open(path.path(), primase_compress::oodle::Version::V6) }
     }
 }
 fn ints(v: &serde_json::Value) -> Result<Vec<i32>> {
@@ -24,7 +26,7 @@ fn part_entities_match_an_independent_reader() -> Result<()> {
     let (Some(root), Some(oracle), Some(dll)) = (
         install(Game::Sekiro),
         oracle(OracleSet::Scripts, Game::Sekiro, "state"),
-        tool(Tool::Oodle6),
+        oodle(Tool::Oodle6),
     ) else {
         return Ok(());
     };

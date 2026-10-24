@@ -35,7 +35,7 @@ fn elden_ring_materials_bind_as_their_definitions_state() -> Result<()> {
     let (Some(root), Some(keys), Some(dll)) = (
         primase_testdata::install(primase_testdata::Game::Elden),
         primase_testdata::keys(primase_testdata::Game::Elden),
-        primase_testdata::tool(primase_testdata::Tool::Oodle6),
+        primase_testdata::oodle(primase_testdata::Tool::Oodle6),
     ) else {
         return Ok(());
     };

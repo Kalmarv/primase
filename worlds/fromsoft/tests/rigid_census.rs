@@ -9,7 +9,7 @@
 use primase_core::pass::PassLog;
 use primase_fromsoft::msb::{MapLayout, PartKind};
 use primase_fromsoft::{Archive, Binder, dcx::Decoder, flver::Model, rigid::lower_model};
-use primase_testdata::{Game, OracleSet, Tool, install, oracle, tool};
+use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 use std::collections::BTreeSet;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[test]
@@ -18,14 +18,15 @@ fn full_castle_rigid_vertices() -> Result<()> {
     let Some(root) = install(Game::Sekiro) else {
         return Ok(());
     };
-    let Some(dll) = tool(Tool::Oodle6) else {
+    let Some(dll) = oodle(Tool::Oodle6) else {
         return Ok(());
     };
     let Some(oracle) = oracle(OracleSet::SoulsFormats, Game::Sekiro, "m11_01") else {
         return Ok(());
     };
     // SAFETY: explicitly supplied trusted native decoder.
-    let dll = unsafe { primase_compress::oodle::Oodle::load(dll, primase_compress::oodle::Version::V6) }?;
+    let dll =
+        unsafe { primase_compress::oodle::Oodle::open(dll.path(), primase_compress::oodle::Version::V6) }?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1024 * 1024 * 1024,

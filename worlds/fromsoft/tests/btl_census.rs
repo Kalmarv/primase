@@ -20,7 +20,7 @@ fn every_light_bank_matches_an_independent_reading() -> Result<()> {
         let (Some(archive), Some(oracle), Some(dll)) = (
             common::archive(game)?,
             format,
-            primase_testdata::tool(primase_testdata::Tool::Oodle6),
+            primase_testdata::oodle(primase_testdata::Tool::Oodle6),
         ) else {
             continue;
         };

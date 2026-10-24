@@ -50,7 +50,7 @@ fn forms(reports: &[CharacterReport]) -> Vec<Form<'_>> {
 
 #[test]
 fn a_part_binders_forms_are_assets_of_their_own() -> Result<()> {
-    let Some(dll) = primase_testdata::tool(Tool::Oodle6) else {
+    let Some(dll) = primase_testdata::oodle(Tool::Oodle6) else {
         return Ok(());
     };
     let dll = common::oodle(dll)?;

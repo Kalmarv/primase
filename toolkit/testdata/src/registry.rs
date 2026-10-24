@@ -1018,6 +1018,10 @@ pub const DEBUG: &[(&str, &str)] = &[
         "`1` compares every program the WARP oracle can bind",
     ),
     (
+        "oodle.dump",
+        "a folder under the scratch root: the Oodle gate writes there the payload and the game library's output of each stream oozextract refuses or decodes differently",
+    ),
+    (
         "skatebird.voronoi_level",
         "the SkateBIRD level the Voronoi bake test bakes (default `level1`)",
     ),

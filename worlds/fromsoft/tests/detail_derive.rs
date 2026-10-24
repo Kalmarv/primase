@@ -555,7 +555,7 @@ fn the_pass_on_the_wolfs_outfits() -> TestResult {
     use primase_fromsoft::materials::Material;
     let (Some(root), Some(dll)) = (
         primase_testdata::install(primase_testdata::Game::Sekiro),
-        primase_testdata::tool(primase_testdata::Tool::Oodle6),
+        primase_testdata::oodle(primase_testdata::Tool::Oodle6),
     ) else {
         return Ok(());
     };

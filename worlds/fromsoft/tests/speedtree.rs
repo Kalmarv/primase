@@ -30,9 +30,11 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 mod common;
 #[allow(unsafe_code)]
 mod native {
-    pub fn load(path: std::path::PathBuf) -> primase_compress::Result<primase_compress::oodle::Oodle> {
+    pub fn load(
+        path: primase_testdata::OodleLibrary,
+    ) -> primase_compress::Result<primase_compress::oodle::Oodle> {
         // SAFETY: caller explicitly supplies a trusted version-6 native library.
-        unsafe { primase_compress::oodle::Oodle::load(path, primase_compress::oodle::Version::V6) }
+        unsafe { primase_compress::oodle::Oodle::open(path.path(), primase_compress::oodle::Version::V6) }
     }
 }
 
@@ -187,7 +189,7 @@ struct Counts {
 fn speedtree_models_are_what_their_programs_draw() -> Result<()> {
     let (Some(archive), Some(dll), Some(names)) = (
         common::archive(Game::EldenRing)?,
-        primase_testdata::tool(primase_testdata::Tool::Oodle6),
+        primase_testdata::oodle(primase_testdata::Tool::Oodle6),
         primase_testdata::oracle(
             primase_testdata::OracleSet::Uxm,
             primase_testdata::Game::Elden,

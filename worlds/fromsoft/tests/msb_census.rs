@@ -13,9 +13,11 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 mod common;
 #[allow(unsafe_code)]
 mod native {
-    pub fn load(path: std::path::PathBuf) -> primase_compress::Result<primase_compress::oodle::Oodle> {
+    pub fn load(
+        path: primase_testdata::OodleLibrary,
+    ) -> primase_compress::Result<primase_compress::oodle::Oodle> {
         // SAFETY: caller explicitly supplies a trusted version-6 native library.
-        unsafe { primase_compress::oodle::Oodle::load(path, primase_compress::oodle::Version::V6) }
+        unsafe { primase_compress::oodle::Oodle::open(path.path(), primase_compress::oodle::Version::V6) }
     }
 }
 
@@ -47,7 +49,7 @@ fn stored_parts_match_an_independent_reading() -> Result<()> {
     ) else {
         return Ok(());
     };
-    let Some(dll) = primase_testdata::tool(primase_testdata::Tool::Oodle6) else {
+    let Some(dll) = primase_testdata::oodle(primase_testdata::Tool::Oodle6) else {
         return Ok(());
     };
     let dll = native::load(dll)?;
@@ -129,7 +131,7 @@ fn every_layout_matches_an_independent_reading() -> Result<()> {
         let (Some(archive), Some(oracle), Some(dll)) = (
             common::archive(game)?,
             format,
-            primase_testdata::tool(primase_testdata::Tool::Oodle6),
+            primase_testdata::oodle(primase_testdata::Tool::Oodle6),
         ) else {
             continue;
         };

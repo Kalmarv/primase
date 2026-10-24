@@ -87,7 +87,7 @@ fn tilings(world: &World) -> Vec<String> {
 
 #[test]
 fn every_program_with_material_fields_binds_the_materials_parameters() -> Result<()> {
-    let Some(dll) = primase_testdata::tool(primase_testdata::Tool::Oodle6) else {
+    let Some(dll) = primase_testdata::oodle(primase_testdata::Tool::Oodle6) else {
         return Ok(());
     };
     let dll = common::oodle(dll)?;

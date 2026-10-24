@@ -6,7 +6,7 @@
 //! in `havok_census.rs`.
 use primase_fromsoft::collision::{BodyGeometry, read_bodies};
 use primase_fromsoft::{Binder, Game, dcx::Decoder};
-use primase_testdata::{OracleSet, Query, Tool, expect_found, oracle, tool};
+use primase_testdata::{OracleSet, Query, Tool, expect_found, oodle, oracle};
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 mod common;
@@ -16,7 +16,7 @@ fn every_asset_collision_file_reads_and_tessellates() -> Result<()> {
     let (Some(archive), Some(census), Some(dll)) = (
         common::archive(Game::EldenRing)?,
         oracle(OracleSet::SoulsFormats, primase_testdata::Game::Elden, "census"),
-        tool(Tool::Oodle6),
+        oodle(Tool::Oodle6),
     ) else {
         return Ok(());
     };

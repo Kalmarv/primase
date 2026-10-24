@@ -19,7 +19,7 @@ use primase_core::{Clip, ClipTarget, Entity, JointId, JointMap, Name, Rest, Skel
 use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::sekiro::{CharacterOptions, read_character_with};
 use primase_fromsoft::{Game, Install, Keys};
-use primase_testdata::{Game as Data, Tool, install, keys, tool};
+use primase_testdata::{Game as Data, Tool, install, keys, oodle};
 
 mod common;
 
@@ -128,7 +128,7 @@ fn check(
 
 #[test]
 fn elden_ring_clips_move_onto_the_model_by_the_games_own_rule() -> Result<()> {
-    let (Some(dir), Some(keys), Some(dll)) = (install(Data::Elden), keys(Data::Elden), tool(Tool::Oodle6))
+    let (Some(dir), Some(keys), Some(dll)) = (install(Data::Elden), keys(Data::Elden), oodle(Tool::Oodle6))
     else {
         return Ok(());
     };
@@ -160,7 +160,7 @@ fn elden_ring_clips_move_onto_the_model_by_the_games_own_rule() -> Result<()> {
 /// `R_Egg`, a leaf bone of the held item) is read with those three components absent, named.
 #[test]
 fn elden_ring_divisions_are_read_from_the_blf_markers_and_a_refusal_names_its_bone() -> Result<()> {
-    let (Some(dir), Some(keys), Some(dll)) = (install(Data::Elden), keys(Data::Elden), tool(Tool::Oodle6))
+    let (Some(dir), Some(keys), Some(dll)) = (install(Data::Elden), keys(Data::Elden), oodle(Tool::Oodle6))
     else {
         return Ok(());
     };

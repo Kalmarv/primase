@@ -13,7 +13,7 @@ use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{Asset, Entity, JointMap, Mesh, Name, Role, Skeleton, Skin, WeightRule, World};
 use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::rigid::SourceModel;
-use primase_testdata::{Game, OracleSet, Tool, install, oracle, tool};
+use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -88,14 +88,15 @@ fn read(
     let Some(install) = install(Game::Sekiro) else {
         return Ok(None);
     };
-    let Some(dll) = tool(Tool::Oodle6) else {
+    let Some(dll) = oodle(Tool::Oodle6) else {
         return Ok(None);
     };
     let Some(oracle) = oracle(OracleSet::SoulsFormats, Game::Sekiro, "parts") else {
         return Ok(None);
     };
     // SAFETY: explicitly supplied trusted native decoder.
-    let dll = unsafe { primase_compress::oodle::Oodle::load(dll, primase_compress::oodle::Version::V6) }?;
+    let dll =
+        unsafe { primase_compress::oodle::Oodle::open(dll.path(), primase_compress::oodle::Version::V6) }?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1 << 30,

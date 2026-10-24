@@ -4,15 +4,17 @@ use primase_fromsoft::{
     dcx::Decoder,
     tpf::{Package, TextureKind},
 };
-use primase_testdata::{Game, OracleSet, Tool, install, oracle, tool};
+use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[allow(unsafe_code)]
 mod native {
-    pub fn load(path: std::path::PathBuf) -> primase_compress::Result<primase_compress::oodle::Oodle> {
+    pub fn load(
+        path: primase_testdata::OodleLibrary,
+    ) -> primase_compress::Result<primase_compress::oodle::Oodle> {
         // SAFETY: caller explicitly supplies a trusted version-6 native library.
-        unsafe { primase_compress::oodle::Oodle::load(path, primase_compress::oodle::Version::V6) }
+        unsafe { primase_compress::oodle::Oodle::open(path.path(), primase_compress::oodle::Version::V6) }
     }
 }
 fn sha(bytes: &[u8]) -> String {
@@ -99,7 +101,7 @@ fn all_texture_packages() -> Result<()> {
     let Some(names) = primase_testdata::oracle(OracleSet::Uxm, Game::Sekiro, "dictionary.txt") else {
         return Ok(());
     };
-    let Some(dll) = tool(Tool::Oodle6) else {
+    let Some(dll) = oodle(Tool::Oodle6) else {
         return Ok(());
     };
     let dll = native::load(dll)?;

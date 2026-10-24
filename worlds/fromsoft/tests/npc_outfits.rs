@@ -26,7 +26,7 @@ use primase_fromsoft::sekiro::lowered::SourceMeshes;
 use primase_fromsoft::sekiro::source::{MeshMasks, NpcRows};
 use primase_fromsoft::sekiro::{self, CharacterOptions};
 use primase_fromsoft::{Game, Install, Keys, NameDictionary};
-use primase_testdata::{Game as Data, OracleSet, Tool, install, keys, oracle, tool};
+use primase_testdata::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use serde_json::Value;
 
 mod common;
@@ -52,8 +52,8 @@ fn oracle_mask(fields: &Value) -> Result<u32> {
 }
 
 /// A configured install of `game` with the decoder's library, or `None` when the configuration lacks one.
-fn configured(game: Game) -> Result<Option<(Install, std::path::PathBuf)>> {
-    let Some(dll) = tool(Tool::Oodle6) else {
+fn configured(game: Game) -> Result<Option<(Install, primase_testdata::OodleLibrary)>> {
+    let Some(dll) = oodle(Tool::Oodle6) else {
         return Ok(None);
     };
     Ok(match game {

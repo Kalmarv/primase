@@ -27,7 +27,7 @@ use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::materials::Material;
 use primase_fromsoft::sekiro::{CharacterOptions, read_character_with};
 use primase_fromsoft::{Game, Install, Keys};
-use primase_testdata::{Game as Data, Tool, install, keys, tool};
+use primase_testdata::{Game as Data, Tool, install, keys, oodle};
 
 mod common;
 
@@ -35,7 +35,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 #[test]
 fn an_elden_ring_character_reads_through_the_one_character_reader() -> Result<()> {
-    let (Some(dir), Some(keys), Some(dll)) = (install(Data::Elden), keys(Data::Elden), tool(Tool::Oodle6))
+    let (Some(dir), Some(keys), Some(dll)) = (install(Data::Elden), keys(Data::Elden), oodle(Tool::Oodle6))
     else {
         return Ok(());
     };
@@ -89,7 +89,7 @@ fn an_elden_ring_character_reads_through_the_one_character_reader() -> Result<()
 /// with the identity held as their inverse bind, counted.
 #[test]
 fn joints_scaled_to_nothing_hold_the_identity_when_no_vertex_weights_them() -> Result<()> {
-    let (Some(dir), Some(keys), Some(dll)) = (install(Data::Elden), keys(Data::Elden), tool(Tool::Oodle6))
+    let (Some(dir), Some(keys), Some(dll)) = (install(Data::Elden), keys(Data::Elden), oodle(Tool::Oodle6))
     else {
         return Ok(());
     };
@@ -117,7 +117,7 @@ fn joints_scaled_to_nothing_hold_the_identity_when_no_vertex_weights_them() -> R
 /// nothing, the prototype is dropped with the asset's mention of it, and the world still verifies.
 #[test]
 fn a_character_with_no_model_lowers_to_nothing_and_its_asset_stays_whole() -> Result<()> {
-    let (Some(dir), Some(keys), Some(dll)) = (install(Data::Elden), keys(Data::Elden), tool(Tool::Oodle6))
+    let (Some(dir), Some(keys), Some(dll)) = (install(Data::Elden), keys(Data::Elden), oodle(Tool::Oodle6))
     else {
         return Ok(());
     };
@@ -145,7 +145,7 @@ fn a_character_with_no_model_lowers_to_nothing_and_its_asset_stays_whole() -> Re
 /// E3: the parts folder's textures a character's materials bind are found.
 #[test]
 fn the_parts_folder_textures_of_a_character_are_found_in_the_common_body_package() -> Result<()> {
-    let (Some(dir), Some(keys), Some(dll)) = (install(Data::Elden), keys(Data::Elden), tool(Tool::Oodle6))
+    let (Some(dir), Some(keys), Some(dll)) = (install(Data::Elden), keys(Data::Elden), oodle(Tool::Oodle6))
     else {
         return Ok(());
     };
@@ -179,7 +179,7 @@ fn the_parts_folder_textures_of_a_character_are_found_in_the_common_body_package
 /// E4: a texture named for an asset is read from that asset's package.
 #[test]
 fn the_asset_textures_a_character_binds_are_read_from_their_packages() -> Result<()> {
-    let (Some(dir), Some(keys), Some(dll)) = (install(Data::Elden), keys(Data::Elden), tool(Tool::Oodle6))
+    let (Some(dir), Some(keys), Some(dll)) = (install(Data::Elden), keys(Data::Elden), oodle(Tool::Oodle6))
     else {
         return Ok(());
     };
@@ -219,7 +219,7 @@ fn the_asset_textures_a_character_binds_are_read_from_their_packages() -> Result
 fn an_alpha_tested_card_is_drawn_with_the_slot_its_program_tests() -> Result<()> {
     use primase_core::pbr::{AlphaMode, PbrMaterial};
     use primase_core::{Mesh, Name, Semantic, VertexColor};
-    let (Some(dir), Some(keys), Some(dll)) = (install(Data::Elden), keys(Data::Elden), tool(Tool::Oodle6))
+    let (Some(dir), Some(keys), Some(dll)) = (install(Data::Elden), keys(Data::Elden), oodle(Tool::Oodle6))
     else {
         return Ok(());
     };

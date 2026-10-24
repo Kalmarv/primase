@@ -2,7 +2,7 @@
 //! then joined by part name to the placements an installed-area read selects.
 use primase_core::{ShadowCast, Shadows, Source, World};
 use primase_fromsoft::{dcx::Decoder, msb::MapLayout, msb::ShadowFlags, sekiro};
-use primase_testdata::{Game, OracleSet, Tool, install, oracle, tool};
+use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
@@ -78,9 +78,9 @@ fn source_shadow_flags() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[allow(unsafe_code)]
-fn native(path: std::path::PathBuf) -> primase_compress::Result<primase_compress::oodle::Oodle> {
+fn native(path: primase_testdata::OodleLibrary) -> primase_compress::Result<primase_compress::oodle::Oodle> {
     // SAFETY: the caller explicitly supplies a trusted native version-6 library.
-    unsafe { primase_compress::oodle::Oodle::load(path, primase_compress::oodle::Version::V6) }
+    unsafe { primase_compress::oodle::Oodle::open(path.path(), primase_compress::oodle::Version::V6) }
 }
 
 /// The oracle map is m11_01. Every selected placement must name an oracle part;
@@ -94,7 +94,7 @@ fn selected_placement_shadows() -> Result<(), Box<dyn std::error::Error>> {
     let Some(install) = install(Game::Sekiro) else {
         return Ok(());
     };
-    let Some(dll) = tool(Tool::Oodle6) else {
+    let Some(dll) = oodle(Tool::Oodle6) else {
         return Ok(());
     };
     let Some(scene) = oracle(OracleSet::Baseline, Game::Sekiro, "scene") else {

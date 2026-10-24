@@ -41,11 +41,13 @@ pub fn threads() -> primase_core::parallel::Threads {
     primase_core::parallel::Threads::new(primase_testdata::threads().get()).expect("at least one thread")
 }
 
-/// The caller's trusted version-6 Oodle library.
+/// The version-6 Oodle codec: the configured game library on Windows, oozextract elsewhere.
 #[allow(unsafe_code)]
-pub fn oodle(path: std::path::PathBuf) -> primase_compress::Result<primase_compress::oodle::Oodle> {
+pub fn oodle(
+    library: primase_testdata::OodleLibrary,
+) -> primase_compress::Result<primase_compress::oodle::Oodle> {
     // SAFETY: the test configuration names a trusted native library.
-    unsafe { primase_compress::oodle::Oodle::load(path, primase_compress::oodle::Version::V6) }
+    unsafe { primase_compress::oodle::Oodle::open(library.path(), primase_compress::oodle::Version::V6) }
 }
 
 /// One quad on the ground, u along +x and v along +z, with Sekiro's stored frame for its most common class: the

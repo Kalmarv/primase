@@ -26,14 +26,16 @@ use std::collections::BTreeMap;
 use primase_fromsoft::flver::Model;
 use primase_fromsoft::geometry::MaterialGeometry;
 use primase_fromsoft::{Archive, Binder, dcx::Decoder};
-use primase_testdata::{Game, OracleSet, Tool, install, oracle, tool};
+use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 use serde_json::Value as Json;
 
 #[allow(unsafe_code)]
 mod native {
-    pub fn load(path: std::path::PathBuf) -> primase_compress::Result<primase_compress::oodle::Oodle> {
+    pub fn load(
+        path: primase_testdata::OodleLibrary,
+    ) -> primase_compress::Result<primase_compress::oodle::Oodle> {
         // SAFETY: caller explicitly supplies a trusted version-6 native library.
-        unsafe { primase_compress::oodle::Oodle::load(path, primase_compress::oodle::Version::V6) }
+        unsafe { primase_compress::oodle::Oodle::open(path.path(), primase_compress::oodle::Version::V6) }
     }
 }
 
@@ -92,7 +94,7 @@ struct Corner {
 fn mirror_is_undone_in_the_geometry() {
     let (Some(root), Some(dll), Some(frames)) = (
         install(Game::Sekiro),
-        tool(Tool::Oodle6),
+        oodle(Tool::Oodle6),
         oracle(OracleSet::SoulsFormats, Game::Sekiro, "frames"),
     ) else {
         return;

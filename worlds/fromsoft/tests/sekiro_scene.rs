@@ -6,7 +6,7 @@ use primase_core::frame::{Axis, SourceFrame};
 use primase_core::{Instance, Mesh, Source, Transform, World};
 use primase_fromsoft::materials::Material;
 use primase_fromsoft::{dcx::Decoder, sekiro, sekiro::source::PrototypeSource};
-use primase_testdata::{Game, OracleSet, Tool, install, oracle, tool};
+use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -113,7 +113,7 @@ fn whole_area_placements_in_both_directions() -> Result<()> {
     let Some(root) = install(Game::Sekiro) else {
         return Ok(());
     };
-    let Some(dll) = tool(Tool::Oodle6) else {
+    let Some(dll) = oodle(Tool::Oodle6) else {
         return Ok(());
     };
     let Some(dump) = oracle(OracleSet::SoulsFormats, Game::Sekiro, "m11_01") else {
@@ -217,7 +217,7 @@ fn installed_area_against_soulsformats() -> Result<()> {
     let Some(root) = install(Game::Sekiro) else {
         return Ok(());
     };
-    let Some(dll) = tool(Tool::Oodle6) else {
+    let Some(dll) = oodle(Tool::Oodle6) else {
         return Ok(());
     };
     let Some(dump) = oracle(OracleSet::SoulsFormats, Game::Sekiro, "m11_01") else {

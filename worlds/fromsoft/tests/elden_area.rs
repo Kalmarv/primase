@@ -41,7 +41,7 @@ fn every_placed_part_is_accounted_for() -> Result<()> {
             primase_testdata::Game::Elden,
             "format",
         ),
-        primase_testdata::tool(primase_testdata::Tool::Oodle6),
+        primase_testdata::oodle(primase_testdata::Tool::Oodle6),
     ) else {
         return Ok(());
     };

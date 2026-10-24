@@ -7,14 +7,16 @@ use std::collections::BTreeMap;
 
 use primase_core::gate::{GateReport, Tolerance};
 use primase_fromsoft::{Archive, dcx::Decoder, emevd::Script};
-use primase_testdata::{Game, OracleSet, Tool, install, oracle, tool};
+use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 use sha2::{Digest, Sha256};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[allow(unsafe_code)]
 mod native {
-    pub fn load(path: std::path::PathBuf) -> primase_compress::Result<primase_compress::oodle::Oodle> {
+    pub fn load(
+        path: primase_testdata::OodleLibrary,
+    ) -> primase_compress::Result<primase_compress::oodle::Oodle> {
         // SAFETY: caller explicitly supplies a trusted version-6 native library.
-        unsafe { primase_compress::oodle::Oodle::load(path, primase_compress::oodle::Version::V6) }
+        unsafe { primase_compress::oodle::Oodle::open(path.path(), primase_compress::oodle::Version::V6) }
     }
 }
 
@@ -39,7 +41,7 @@ fn scripts(archive: &Archive) -> Vec<String> {
 
 #[test]
 fn every_script_reads_and_matches_an_independent_reader() -> Result<()> {
-    let (Some(root), Some(dll)) = (install(Game::Sekiro), tool(Tool::Oodle6)) else {
+    let (Some(root), Some(dll)) = (install(Game::Sekiro), oodle(Tool::Oodle6)) else {
         return Ok(());
     };
     let dll = native::load(dll)?;

@@ -7,7 +7,7 @@ use primase_fromsoft::{
     dcx::Decoder,
     matbin::{Material, Value},
 };
-use primase_testdata::{OracleSet, Query, Tool, expect_found, oracle, tool};
+use primase_testdata::{OracleSet, Query, Tool, expect_found, oodle, oracle};
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 /// A binder's members: name and decoded bytes.
@@ -51,7 +51,7 @@ fn material_binaries_match_an_independent_reading() -> Result<()> {
     let (Some(archive), Some(oracle), Some(dll)) = (
         common::archive(Game::EldenRing)?,
         oracle(OracleSet::SoulsFormats, primase_testdata::Game::Elden, "format"),
-        tool(Tool::Oodle6),
+        oodle(Tool::Oodle6),
     ) else {
         return Ok(());
     };

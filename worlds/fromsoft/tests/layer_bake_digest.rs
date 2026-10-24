@@ -10,7 +10,7 @@
 
 use primase_core::{Name, Texture, World};
 use primase_fromsoft::{dcx::Decoder, sekiro};
-use primase_testdata::{Game, OracleSet, Tool, install, oracle, tool};
+use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 use sha2::{Digest, Sha256};
 mod common;
 
@@ -100,7 +100,7 @@ fn baked_digest(
 fn the_baked_textures_of_m11_01() {
     let (Some(install), Some(dll), Some(reference)) = (
         install(Game::Sekiro),
-        tool(Tool::Oodle6),
+        oodle(Tool::Oodle6),
         oracle(OracleSet::Baseline, Game::Sekiro, "scene"),
     ) else {
         return;

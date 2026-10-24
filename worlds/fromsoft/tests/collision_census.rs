@@ -3,13 +3,13 @@
 //! binders are counted as outside the map/object reader's scope.
 use primase_fromsoft::{Archive, Binder, NameDictionary, dcx::Decoder};
 use primase_havok::{Compendium, Tagfile};
-use primase_testdata::{Game, OracleSet, Tool, install, oracle, tool};
+use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[allow(unsafe_code)]
-fn native(path: &std::path::Path) -> primase_compress::Result<primase_compress::oodle::Oodle> {
+fn native(path: &primase_testdata::OodleLibrary) -> primase_compress::Result<primase_compress::oodle::Oodle> {
     // SAFETY: caller explicitly supplies a trusted native version-6 decoder.
-    unsafe { primase_compress::oodle::Oodle::load(path, primase_compress::oodle::Version::V6) }
+    unsafe { primase_compress::oodle::Oodle::open(path.path(), primase_compress::oodle::Version::V6) }
 }
 #[test]
 fn installed_collision_types() -> Result<()> {
@@ -19,7 +19,7 @@ fn installed_collision_types() -> Result<()> {
     let Some(names) = oracle(OracleSet::Uxm, Game::Sekiro, "dictionary.txt") else {
         return Ok(());
     };
-    let Some(dll) = tool(Tool::Oodle6) else {
+    let Some(dll) = oodle(Tool::Oodle6) else {
         return Ok(());
     };
     let oodle = native(&dll)?;

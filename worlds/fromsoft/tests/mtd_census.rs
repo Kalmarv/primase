@@ -4,14 +4,14 @@ use primase_fromsoft::{
     dcx::Decoder,
     mtd::{MaterialDefinition, Value},
 };
-use primase_testdata::{Game, OracleSet, Tool, install, oracle, tool};
+use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[allow(unsafe_code)]
-fn native(path: std::path::PathBuf) -> primase_compress::Result<primase_compress::oodle::Oodle> {
+fn native(path: primase_testdata::OodleLibrary) -> primase_compress::Result<primase_compress::oodle::Oodle> {
     // SAFETY: caller explicitly supplies a trusted version-6 native library.
-    unsafe { primase_compress::oodle::Oodle::load(path, primase_compress::oodle::Version::V6) }
+    unsafe { primase_compress::oodle::Oodle::open(path.path(), primase_compress::oodle::Version::V6) }
 }
 #[test]
 fn all_material_definitions() -> Result<()> {
@@ -21,7 +21,7 @@ fn all_material_definitions() -> Result<()> {
     let Some(oracle) = oracle(OracleSet::SoulsFormats, Game::Sekiro, "materials") else {
         return Ok(());
     };
-    let Some(dll) = tool(Tool::Oodle6) else {
+    let Some(dll) = oodle(Tool::Oodle6) else {
         return Ok(());
     };
     let dll = native(dll)?;

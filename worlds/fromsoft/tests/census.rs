@@ -156,16 +156,16 @@ fn headers_of(install: &Install) -> Result<(), Box<dyn std::error::Error>> {
 #[allow(unsafe_code)]
 mod native {
     use primase_compress::oodle::{Oodle, Version};
-    pub fn load(path: std::path::PathBuf) -> primase_compress::Result<Oodle> {
+    pub fn load(path: primase_testdata::OodleLibrary) -> primase_compress::Result<Oodle> {
         // SAFETY: the gate requires an explicitly supplied, trusted version-6 DLL.
-        unsafe { Oodle::load(path, Version::V6) }
+        unsafe { Oodle::open(path.path(), Version::V6) }
     }
 }
 /// Whole-install differential against the reference archive/binder decoder, for each game configured.
 /// Every indexed entry is attempted; corrupt entries remain explicit failures.
 #[test]
 fn whole_install() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(dll) = primase_testdata::tool(primase_testdata::Tool::Oodle6) else {
+    let Some(dll) = primase_testdata::oodle(primase_testdata::Tool::Oodle6) else {
         return Ok(());
     };
     let oodle = native::load(dll)?;

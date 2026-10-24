@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use primase_fromsoft::{Archive, Binder, dcx::Decoder};
 use primase_havok::animation::{Tracks, container};
 use primase_havok::{Compendium, Tagfile};
-use primase_testdata::{Game, Tool, install, tool};
+use primase_testdata::{Game, Tool, install, oodle};
 
 /// The files the census expects not to read cleanly, by file name, and why.
 const KNOWN: [(&str, &str); 1] = [(r"c1090\hkx\a000_205000.hkx", "unsupported SDK version")];
@@ -27,14 +27,14 @@ const KNOWN: [(&str, &str); 1] = [(r"c1090\hkx\a000_205000.hkx", "unsupported SD
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 #[allow(unsafe_code)]
-fn native(path: &std::path::Path) -> primase_compress::Result<primase_compress::oodle::Oodle> {
+fn native(path: &primase_testdata::OodleLibrary) -> primase_compress::Result<primase_compress::oodle::Oodle> {
     // SAFETY: caller explicitly supplies a trusted native version-6 decoder.
-    unsafe { primase_compress::oodle::Oodle::load(path, primase_compress::oodle::Version::V6) }
+    unsafe { primase_compress::oodle::Oodle::open(path.path(), primase_compress::oodle::Version::V6) }
 }
 
 #[test]
 fn h1_every_character_animation_file_reads() -> Result<()> {
-    let (Some(dir), Some(dll)) = (install(Game::Sekiro), tool(Tool::Oodle6)) else {
+    let (Some(dir), Some(dll)) = (install(Game::Sekiro), oodle(Tool::Oodle6)) else {
         return Ok(());
     };
     let oodle = native(&dll)?;
@@ -188,7 +188,7 @@ fn h2_every_spline_animation_decodes() -> Result<()> {
     /// What the statistics below say an absent component is: zero, the identity, one.
     const ABSENT: Absent = Absent::NEUTRAL;
 
-    let (Some(dir), Some(dll)) = (install(Game::Sekiro), tool(Tool::Oodle6)) else {
+    let (Some(dir), Some(dll)) = (install(Game::Sekiro), oodle(Tool::Oodle6)) else {
         return Ok(());
     };
     let oodle = native(&dll)?;

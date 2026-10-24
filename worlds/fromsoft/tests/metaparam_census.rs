@@ -10,13 +10,13 @@
 use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::metaparam::Metaparam;
 use primase_fromsoft::{Archive, Binder};
-use primase_testdata::{Game, Tool, install, tool};
+use primase_testdata::{Game, Tool, install, oodle};
 use std::collections::BTreeMap;
 mod common;
 
 #[test]
 fn every_metaparam_of_the_install() {
-    let (Some(root), Some(dll)) = (install(Game::Sekiro), tool(Tool::Oodle6)) else {
+    let (Some(root), Some(dll)) = (install(Game::Sekiro), oodle(Tool::Oodle6)) else {
         return;
     };
     let dll = common::oodle(dll).unwrap();
@@ -106,7 +106,7 @@ fn every_elden_ring_metaparam_matches_an_independent_reading() {
     let (Some(archive), Some(format), Some(dll)) = (
         common::archive(primase_fromsoft::Game::EldenRing).unwrap(),
         oracle(OracleSet::SoulsFormats, Game::Elden, "format"),
-        tool(Tool::Oodle6),
+        oodle(Tool::Oodle6),
     ) else {
         return;
     };

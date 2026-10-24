@@ -10,7 +10,7 @@ use primase_core::frame::{Axis, SourceFrame};
 use primase_core::{Skeleton, World};
 use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::rigid::SourceModel;
-use primase_testdata::{Game, OracleSet, Tool, install, oracle, tool};
+use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -20,14 +20,15 @@ fn characters_read_as_soulsformats_reads_them() -> Result<()> {
     let Some(install) = install(Game::Sekiro) else {
         return Ok(());
     };
-    let Some(dll) = tool(Tool::Oodle6) else {
+    let Some(dll) = oodle(Tool::Oodle6) else {
         return Ok(());
     };
     let Some(oracle) = oracle(OracleSet::SoulsFormats, Game::Sekiro, "skin") else {
         return Ok(());
     };
     // SAFETY: explicitly supplied trusted native decoder.
-    let dll = unsafe { primase_compress::oodle::Oodle::load(dll, primase_compress::oodle::Version::V6) }?;
+    let dll =
+        unsafe { primase_compress::oodle::Oodle::open(dll.path(), primase_compress::oodle::Version::V6) }?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1 << 30,
@@ -188,11 +189,12 @@ fn a_character_converts_as_one_part_per_asset() -> Result<()> {
     let Some(install) = install(Game::Sekiro) else {
         return Ok(());
     };
-    let Some(dll) = tool(Tool::Oodle6) else {
+    let Some(dll) = oodle(Tool::Oodle6) else {
         return Ok(());
     };
     // SAFETY: explicitly supplied trusted native decoder.
-    let dll = unsafe { primase_compress::oodle::Oodle::load(dll, primase_compress::oodle::Version::V6) }?;
+    let dll =
+        unsafe { primase_compress::oodle::Oodle::open(dll.path(), primase_compress::oodle::Version::V6) }?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1 << 30,
@@ -239,14 +241,15 @@ fn the_finest_face_set_and_the_stored_normals_survive_lowering() -> Result<()> {
     let Some(install) = install(Game::Sekiro) else {
         return Ok(());
     };
-    let Some(dll) = tool(Tool::Oodle6) else {
+    let Some(dll) = oodle(Tool::Oodle6) else {
         return Ok(());
     };
     let Some(oracle) = oracle(OracleSet::SoulsFormats, Game::Sekiro, "skin") else {
         return Ok(());
     };
     // SAFETY: explicitly supplied trusted native decoder.
-    let dll = unsafe { primase_compress::oodle::Oodle::load(dll, primase_compress::oodle::Version::V6) }?;
+    let dll =
+        unsafe { primase_compress::oodle::Oodle::open(dll.path(), primase_compress::oodle::Version::V6) }?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1 << 30,

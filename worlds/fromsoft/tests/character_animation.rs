@@ -20,7 +20,7 @@ use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::sekiro::{CharacterOptions, read_character_with, read_parts_with};
 use primase_havok::spline::{Absent, Fallback};
 use primase_havok::world::HavokAnimation;
-use primase_testdata::{Game, Tool, install, tool};
+use primase_testdata::{Game, Tool, install, oodle};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -29,11 +29,12 @@ const CLIPS: [&str; 3] = ["a000_003000", "a200_000200", "a100_000220"];
 #[allow(unsafe_code)]
 #[test]
 fn a_characters_animations_read_lower_and_map_onto_its_model() -> Result<()> {
-    let (Some(install), Some(dll)) = (install(Game::Sekiro), tool(Tool::Oodle6)) else {
+    let (Some(install), Some(dll)) = (install(Game::Sekiro), oodle(Tool::Oodle6)) else {
         return Ok(());
     };
     // SAFETY: explicitly supplied trusted native decoder.
-    let dll = unsafe { primase_compress::oodle::Oodle::load(dll, primase_compress::oodle::Version::V6) }?;
+    let dll =
+        unsafe { primase_compress::oodle::Oodle::open(dll.path(), primase_compress::oodle::Version::V6) }?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1 << 30,
@@ -231,11 +232,12 @@ fn a_characters_animations_read_lower_and_map_onto_its_model() -> Result<()> {
 #[allow(unsafe_code)]
 #[test]
 fn the_players_animations_come_from_the_binders_its_markers_name() -> Result<()> {
-    let (Some(install), Some(dll)) = (install(Game::Sekiro), tool(Tool::Oodle6)) else {
+    let (Some(install), Some(dll)) = (install(Game::Sekiro), oodle(Tool::Oodle6)) else {
         return Ok(());
     };
     // SAFETY: explicitly supplied trusted native decoder.
-    let dll = unsafe { primase_compress::oodle::Oodle::load(dll, primase_compress::oodle::Version::V6) }?;
+    let dll =
+        unsafe { primase_compress::oodle::Oodle::open(dll.path(), primase_compress::oodle::Version::V6) }?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1 << 30,

@@ -140,7 +140,7 @@ fn compressed_meshes_match_an_independent_reading() -> Result<()> {
             primase_testdata::Game::Elden,
             "format",
         ),
-        primase_testdata::tool(primase_testdata::Tool::Oodle6),
+        primase_testdata::oodle(primase_testdata::Tool::Oodle6),
     ) else {
         return Ok(());
     };

@@ -252,7 +252,7 @@ fn parse(text: &str) -> BTreeMap<String, u64> {
 
 #[test]
 fn what_the_readers_and_passes_make_of_the_characters_is_the_baseline() -> Result<()> {
-    let Some(dll) = primase_testdata::tool(primase_testdata::Tool::Oodle6) else {
+    let Some(dll) = primase_testdata::oodle(primase_testdata::Tool::Oodle6) else {
         return Ok(());
     };
     let dll = common::oodle(dll)?;

@@ -492,6 +492,7 @@ produced by something other than the code it checks.
 | `allow_live` | `1` lets a real-data gate report input folders that changed during the run and continue |
 | `shader.diff_limit` | how many programs of a corpus the WARP comparison runs |
 | `shader.warp_all` | `1` compares every program the WARP oracle can bind |
+| `oodle.dump` | a folder under the scratch root: the Oodle gate writes there the payload and the game library's output of each stream oozextract refuses or decodes differently |
 | `skatebird.voronoi_level` | the SkateBIRD level the Voronoi bake test bakes (default `level1`) |
 | `skatebird.voronoi_digest` | the digest the Voronoi bake test's maps must have |
 | `fromsoft.bake_digest` | the digest the baked layer textures of Sekiro's m11_01 must have (printed by an earlier run) |
