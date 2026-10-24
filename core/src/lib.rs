@@ -4,6 +4,8 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod asset;
+mod atmosphere;
+pub use atmosphere::{Atmosphere, Exposure, Fog, FogFalloff};
 pub mod clip;
 pub mod components;
 pub mod convert;

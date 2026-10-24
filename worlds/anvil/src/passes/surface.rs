@@ -2,7 +2,8 @@
 //! the placement's real world positions, normals and vertex colours. Each triangle owns an atlas chart; neither
 //! shared prototypes nor unrelated material variants acquire another placement's baked pixels.
 //!
-//! The established first input contract is MAD_Cliffs_TriPlanar (material-spec §27.4 and verify_m17.py).
+//! Input contracts: MAD_Cliffs_TriPlanar (material-spec §27.4 and verify_m17.py), and
+//! MAD_Tex1_UniqueNormalGrad_Triplanar (§27.14.10, its own ps_400000 disassembly).
 //! Texture/constant roles come from the template's registry bindings, not a second hand-written colour formula.
 //! The shader performs the three projections and normal blending. Unknown varying/constant/resource roles refuse
 //! that primitive by name. G-buffer class is decoded from the program's output, not inferred from its template name.
@@ -28,6 +29,7 @@ pub struct BakeAnvilSurface {
     pub max_texels:u64,
     pub terrain_ao: f32,
     pub mip_bias: f32,
+    pub camera_distance:f32,
     pub address: UnstatedAddress,
 }
 pub const BAKE_ANVIL_SURFACE: PassSpec = PassSpec {
@@ -39,6 +41,7 @@ pub const BAKE_ANVIL_SURFACE: PassSpec = PassSpec {
         OptionSpec::required("max-texels", "16777216", "total atlas texels per pass; four RGBA8 output maps, refused on capacity exhaustion"),
         OptionSpec::required("terrain-ao", "0.5", "stated terrain AO stand-in, 0 to 1"),
         OptionSpec::required("mip-bias", "0", "engine cb1[41].y at the chart's own footprint"),
+        OptionSpec::required("camera-distance", "1000000", "static camera above the primitive centre in source metres; states the distance-dependent detail blend"),
         OptionSpec::choice::<UnstatedAddress>("unstated-address", "explicit sampler assumption or refuse"),
     ],
     make: |g: &Given| {
@@ -47,12 +50,13 @@ pub const BAKE_ANVIL_SURFACE: PassSpec = PassSpec {
             max_size: g.required("max-size").parse().map_err(|_| "max-size: expected integer")?,
             max_chart: g.required("max-chart").parse().map_err(|_| "max-chart: expected integer")?,
             max_texels:g.required("max-texels").parse().map_err(|_|"max-texels: expected integer")?,
-            terrain_ao: number("terrain-ao")?, mip_bias: number("mip-bias")?, address: g.choice("unstated-address") };
+            terrain_ao: number("terrain-ao")?, mip_bias: number("mip-bias")?,camera_distance:number("camera-distance")?, address: g.choice("unstated-address") };
         if !out.texels_per_metre.is_finite() || out.texels_per_metre <= 0.0
             || !(32..=8192).contains(&out.max_size) || !out.max_size.is_power_of_two()
             || !(8..=2048).contains(&out.max_chart) || out.max_chart % 2 != 0
             || !out.terrain_ao.is_finite() || !(0.0..=1.0).contains(&out.terrain_ao)
-            || !out.mip_bias.is_finite() || out.max_texels==0 { return Err("invalid surface bake density/budget/engine choices".into()); }
+            || !out.mip_bias.is_finite() || !out.camera_distance.is_finite() || out.camera_distance<0.0
+            || out.max_texels==0 { return Err("invalid surface bake density/budget/engine choices".into()); }
         Ok(Box::new(out))
     },
 };
@@ -86,8 +90,33 @@ struct Prepared {
     buffers: Vec<(u32, Vec<[u32;4]>)>,
     views: Views,
 }
+
+/// These are input *meanings*, not material formulas. Their texture rows and arithmetic remain in the template's
+/// own program. Keep the two contracts distinct: the gradient variant's masks use original mesh UVs, not COLOR0.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+enum Contract {Cliffs,UniqueGradient}
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+enum VaryingRole {Screen,Normal,WorldPosition,Clip,Colour,Uv}
+impl Contract {
+    fn of(material:&AnvilMaterial)->Option<Self>{Self::named(material.template_name.as_deref()?)}
+    fn named(template:&str)->Option<Self>{match template{
+        "MAD_Cliffs_TriPlanar"=>Some(Self::Cliffs),
+        "MAD_Tex1_UniqueNormalGrad_Triplanar"=>Some(Self::UniqueGradient),
+        _=>None,
+    }}
+    fn varying(self,name:&str,index:u32)->Option<VaryingRole>{match(name,index){
+        ("SV_Position",0)=>Some(VaryingRole::Screen),
+        ("TEXCOORD",1)=>Some(VaryingRole::Normal),
+        ("TEXCOORD",2)=>Some(VaryingRole::WorldPosition),
+        ("TEXCOORD",6)=>Some(VaryingRole::Clip),
+        ("COLOR",0) if self==Self::Cliffs=>Some(VaryingRole::Colour),
+        ("TEXCOORD",0) if self==Self::UniqueGradient=>Some(VaryingRole::Uv),
+        _=>None,
+    }}
+}
 impl BakeAnvilSurface {
-    fn prepare(&self, world: &World, material: &AnvilMaterial) -> Result<Prepared, String> {
+    fn prepare(&self, world: &World, material: &AnvilMaterial,camera:[f32;3]) -> Result<Prepared, String> {
+        let contract=Contract::of(material).ok_or("template has no established surface input contract")?;
         if material.flags.blend_mode != 0 { return Err("blended surface: G-buffer alpha is not roughness".into()); }
         if material.flags.booleans.get(crate::components::MaterialFlags::ALPHA_TEST_ENABLED)==Some(&1) {
             return Err("alpha-tested surface requires a coverage-aware chart contract".into());
@@ -100,9 +129,8 @@ impl BakeAnvilSurface {
         let reads = program.constant_reads()?;
         let shader = ProgramShader::new(program).map_err(|e| e.to_string())?;
         for input in shader.interface().inputs.iter().filter(|v| v.used) {
-            match (input.label.name.as_str(), input.label.index) {
-                ("SV_Position",0) | ("COLOR",0) | ("TEXCOORD",1|2|6) => {},
-                _ => return Err(format!("unknown surface varying {}{}", input.label.name,input.label.index)),
+            if contract.varying(&input.label.name,input.label.index).is_none() {
+                return Err(format!("unknown surface varying {}{}", input.label.name,input.label.index));
             }
             if input.provenance.d3d.is_none() { return Err("surface varying has no register provenance".into()); }
         }
@@ -121,6 +149,7 @@ impl BakeAnvilSurface {
                     (2,0..=2,0..=2) => if row==lane { 1.0 } else { 0.0 },
                     (2,0..=2,3) => 0.0,
                     (1,41,1) => self.mip_bias,
+                    (1,0,0..=2) if contract==Contract::UniqueGradient=>camera[lane as usize],
                     (1,37,0|1) => 1.0 / self.max_size as f32,
                     (1,37,2|3) => self.max_size as f32,
                     // Virtual-terrain coordinates are irrelevant with the explicit uniform engine textures below.

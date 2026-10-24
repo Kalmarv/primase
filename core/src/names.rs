@@ -3,6 +3,7 @@
 //! are listed once here; an architecture test holds the list to every `Component` and `Resource` core implements.
 
 use crate::asset::Asset;
+use crate::atmosphere::Atmosphere;
 use crate::clip::{Clip, ClipBinding};
 use crate::collider::{Collider, Heightfield};
 use crate::components::{
@@ -63,7 +64,7 @@ declared! {
         PbrMaterial, DetailedMaterial, Priority, Provenance, StateAxis, Condition, PrimitiveCondition, StateOverride, VertexColor, Skeleton, Skin, Morphs, RigInstance,
         RigPose, SkinInstance, MorphWeights, Sockets, Attachment, JointMap, JointPlacement, Clip, ClipBinding, Asset, Shader, ShaderBinding,
         TextureLayers;
-    resources: PartScope, PartitionPlan, Environment, StateAssignment, Surfaces, Threads, Memo,
+    resources: PartScope, PartitionPlan, Environment, Atmosphere, StateAssignment, Surfaces, Threads, Memo,
 }
 
 #[cfg(test)]

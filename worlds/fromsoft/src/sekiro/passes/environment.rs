@@ -1,8 +1,9 @@
 //! `lower-fromsoft-environment`: the area's draw-param environment (`fromsoft.draw_param`, the groups at the value sets
 //! its parts name) as the core environment: the light set's first directional light a directional `core.light` named as
 //! the sun by `core.environment`, and its hemisphere colours the environment's gradient ambient. Every other field read
-//! is counted as not lowered, by group and the reason: core states no fog, sky or tone, and a field's meaning or unit
-//! that no source establishes is not guessed into one.
+//! is counted as not lowered, by group and the reason: core states fog and exposure (`core.atmosphere`) but no sky or tone
+//! curve, and a field's meaning or unit that no source establishes (the fog and tone keys wait for
+//! `tests/draw_param_census.rs`) is not guessed into one.
 //!
 //! The light set's fields (`LightSet ParamEditor`; the keys are the files' own):
 //! - `Directional Light Angle0` (two floats) and `Directional Light DiffColor0` (four): the sun's direction and its
@@ -70,10 +71,10 @@ fn why_not_lowered(group: &str) -> &'static str {
     match group {
         LIGHT_SET => "specular, sharpness, occlusion, second directional and local lights: no core.light fields",
         "FogParamEditor" | "VolumetricFog ParamEditor" | "Fog Volume" => {
-            "fog: core.environment has no fog, its units are not established"
+            "fog: core.atmosphere states fog, but which keys carry it and their units are not established (tests/draw_param_census.rs)"
         }
         "Tone Map[Yebis]" | "Color Grading" | "HDR Color Correction" => {
-            "tone, exposure and colour grading: core states none"
+            "tone, exposure and colour grading: core.atmosphere states exposure in stops, but the key and its unit are not established (tests/draw_param_census.rs); core states no tone curve"
         }
         "LightScattering : ParamEditor" | "Env Map:Editor" | "EnvironmentConfig ParamEditor" | "SeaWave:Editor" => {
             "sky, scattering and environment-map references: core has no sky"

@@ -516,6 +516,11 @@ rest pose (their animations are not read); and Elden Ring's parts that store a g
 config (the grass is not read). `tests/material_class_census.rs` and
 `tests/hit_class_census.rs` (install-gated) list every shader family by class and
 every HitMtrl class by triangles, for the tables to be checked against the install.
+`tests/draw_param_census.rs` (install-gated) prints every draw-param field the chosen
+maps store, group, key and value. Core states fog and exposure (`core.atmosphere`:
+`Atmosphere`, `Fog`, `FogFalloff`, `Exposure`); `lower-fromsoft-environment` does not
+fill them yet, since the fog and tone keys, and the units of their values, are known only
+from that census. Until then the fog, tone and exposure fields are read and counted.
 
 Passes (`sekiro::passes::register`), each choosing explicitly:
 
