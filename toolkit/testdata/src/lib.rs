@@ -6,17 +6,12 @@
 //! whose path is gone always fails, and so does a file the registry does not declare. CONTRIBUTING.md's tables are
 //! made from the registry ([`doc`]).
 //!
-//! For this release the older `PRIMASE_*` names still configure ([`legacy`]): set in the environment or in the older
-//! flat file, each stands for its key and says once that it is deprecated; the next release removes them. Add this
-//! crate only in dev-dependencies. It has no dependency on core.
-use std::collections::BTreeSet;
+//! Add this crate only in dev-dependencies. It has no dependency on core.
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 pub mod config;
 pub mod doc;
-pub mod legacy;
 mod query;
 pub mod registry;
 pub use query::Query;
@@ -55,7 +50,7 @@ fn gate_of(query: Query) -> bool {
         Query::Install(g, None) => format!("installs.{}", g.key()),
         Query::Keys(g) => format!("keys.{}", g.key()),
         Query::Tool(t) => format!("tools.{}", t.key()),
-        Query::Scratch(_) | Query::Debug(_) | Query::Retired => return false,
+        Query::Scratch(_) | Query::Debug(_) => return false,
     };
     registry::INSTALLS
         .iter()
@@ -64,21 +59,8 @@ fn gate_of(query: Query) -> bool {
         .any(|e| e.key == key && e.gate)
 }
 
-/// The older names already said to be deprecated in this process.
-static WARNED: Mutex<BTreeSet<&'static str>> = Mutex::new(BTreeSet::new());
-
-/// Where `query` points, if configured: what an older name gave it (said once), else its configuration key's path
-/// with the query's relative path below it.
+/// Where `query` points, if configured: its configuration key's path with the query's relative path below it.
 fn configured(config: &Config, query: Query) -> Option<PathBuf> {
-    if let Some((value, old)) = config.legacy.get(&query.key()) {
-        if WARNED.lock().is_ok_and(|mut w| w.insert(old)) {
-            eprintln!(
-                "primase-testdata: DEPRECATED {old}: configure {} instead",
-                query.key()
-            );
-        }
-        return Some(PathBuf::from(value));
-    }
     let (key, rel) = query.root()?;
     // an install, a tool or keys configured as a file is that file: joining an empty path would add a separator
     config.roots.get(&key).map(|root| {
@@ -97,8 +79,6 @@ enum Decision {
     /// Not configured on this machine (and not required): the reason the SKIP line gives.
     Skip(String),
     Fail(String),
-    /// A retired name: never set, nothing said.
-    Retired,
 }
 
 /// The decision for `query` under `config`: a configured path that exists is found and one that does not fails, except
@@ -122,9 +102,6 @@ fn decide(config: &Config, query: Query, gate: bool) -> Decision {
         Some("gate") => gate,
         _ => false,
     };
-    if query == Query::Retired {
-        return Decision::Retired;
-    }
     let file = || {
         config
             .file
@@ -133,7 +110,7 @@ fn decide(config: &Config, query: Query, gate: bool) -> Decision {
     };
     let unset = match (query, configured(config, query)) {
         (_, None) => format!("{} not configured in {}", query.key(), file()),
-        (Query::Oracle(set, ..), Some(path)) if !config.legacy.contains_key(&query.key()) => {
+        (Query::Oracle(set, ..), Some(path)) => {
             let root = config.roots.get("oracles.root");
             if let Some(root) = root.filter(|r| !r.exists()) {
                 return Decision::Fail(format!(
@@ -184,7 +161,6 @@ pub fn resolve(query: Query) -> Option<PathBuf> {
     match decide(&load(), query, gate) {
         Decision::Found(path) => Some(path),
         Decision::Fail(why) => panic!("{why}"),
-        Decision::Retired => None,
         Decision::Skip(why) => {
             let test = std::thread::current().name().unwrap_or("?").to_owned();
             eprintln!("primase-testdata: SKIP {test} ({why})");
@@ -330,7 +306,7 @@ pub fn warp_exclusive() -> WarpLock {
 /// A debug key's value (`PRIMASE_DEBUG=key=value;key=value`, [`registry::DEBUG`]); `None` when unset.
 #[track_caller]
 pub fn debug(key: &str) -> Option<String> {
-    load().debug(&environment, key)
+    config::debug(&environment, key)
 }
 
 /// How much a heavy real-data test covers (`[run] gate`): a smoke sample on every batch, or everything (the overnight
@@ -550,86 +526,37 @@ mod tests {
         assert_eq!((unset.gate, unset.seed, unset.threads), (None, None, None));
     }
 
+    /// The older flat file is refused, naming the sections to write, when loaded and when validated; a variable other
+    /// than `PRIMASE_DATA` and `PRIMASE_DEBUG` configures nothing.
     #[test]
-    fn the_older_flat_file_and_environment_names_set_what_they_stand_for() {
-        let c = config(
-            &[("PRIMASE_GTA_DIR", "env/gta")],
-            Some(
-                "PRIMASE_GTA_DIR = 'file/gta'\nPRIMASE_GTA_LISTING = 'cw/listing.jsonl'\n\
-                 PRIMASE_ANVIL_FORGE_USNAT = 'rr/usnat.forge'\nPRIMASE_SHADER_DIFF_LIMIT = '7'\n\
-                 PRIMASE_REQUIRE_REAL_DATA = '1'\n",
-            ),
+    fn the_older_flat_file_is_refused_and_other_variables_configure_nothing() {
+        let flat = "PRIMASE_GTA_DIR = 'file/gta'\nPRIMASE_SHADER_DIFF_LIMIT = '7'\n";
+        let e = config(&[], Some(flat)).unwrap_err().to_string();
+        assert!(e.contains("data.toml") && e.contains("structured sections"), "{e}");
+        let e = config::validate(flat).unwrap_err().to_string();
+        assert!(e.contains("structured sections"), "{e}");
+        // every variable set, PRIMASE_DATA aside: the configuration is empty
+        let everything = Config::load(
+            &|name| (name != "PRIMASE_DATA").then(|| OsString::from("set")),
+            |_| unreachable!("no file is named"),
         )
         .unwrap();
-        assert_eq!(c.require.as_deref(), Some("all"));
-        // the older switch in the environment, over a structured file
-        let gate = config(
-            &[("PRIMASE_REQUIRE_REAL_DATA", "gate")],
-            Some("[run]\nrequire = 'all'\n"),
-        )
-        .unwrap();
-        assert_eq!(gate.require.as_deref(), Some("gate"));
-        // the environment wins over the file, as it did
-        assert_eq!(
-            configured(&c, Query::Install(Game::Gta, None)),
-            Some(PathBuf::from("env/gta"))
-        );
-        assert_eq!(
-            configured(
-                &c,
-                Query::Oracle(OracleSet::CodeWalker, Game::Gta, "listing.jsonl")
-            ),
-            Some(PathBuf::from("cw/listing.jsonl"))
-        );
-        assert_eq!(
-            configured(&c, Query::Install(Game::Riders, Some("DataPC_MAD_USNAT.forge"))),
-            Some(PathBuf::from("rr/usnat.forge"))
-        );
-        assert_eq!(c.debug(&|_| None, "shader.diff_limit").as_deref(), Some("7"));
-        // a name this build does not declare (work not merged yet) is passed over in the older format
-        let other = config(
-            &[],
-            Some("PRIMASE_NOT_MERGED_YET = 'x'\nPRIMASE_SEKIRO_DIR = 's'\n"),
-        )
-        .unwrap();
-        assert_eq!(
-            configured(&other, Query::Install(Game::Sekiro, None)),
-            Some(PathBuf::from("s"))
-        );
-        // PRIMASE_DEBUG wins over an older switch
-        let env = |n: &str| {
-            (n == "PRIMASE_DEBUG").then(|| OsString::from("shader.diff_limit=9; gta.region=legion"))
-        };
-        assert_eq!(c.debug(&env, "shader.diff_limit").as_deref(), Some("9"));
-        assert_eq!(c.debug(&env, "gta.region").as_deref(), Some("legion"));
+        assert_eq!(everything, Config::default());
     }
 
     #[test]
-    fn every_older_name_stands_for_a_declared_entry() {
-        let mut names: Vec<&str> = legacy::OLDER.iter().map(|(n, _)| *n).collect();
-        let n = names.len();
-        names.sort_unstable();
-        names.dedup();
-        assert_eq!(names.len(), n, "an older name twice");
-        for (name, q) in legacy::OLDER {
-            assert!(name.starts_with("PRIMASE_") && *name != config::REQUIRE, "{name}");
-            match *q {
-                Query::Retired => {}
-                Query::Debug(key) => assert!(
-                    registry::DEBUG.iter().any(|(k, _)| *k == key),
-                    "{name}: debug key {key} undeclared"
-                ),
-                Query::Install(_, Some(_)) | Query::Oracle(..) => {
-                    assert!(
-                        registry::declaration(*q).is_some(),
-                        "{name}: {} is not declared",
-                        q.key()
-                    );
-                }
-                q => assert!(!about_of(q).is_empty(), "{name}: {q:?} has no registry entry"),
-            }
-        }
-        // the registry's own rules: unique keys, something to say for each
+    fn debug_keys_are_read_from_primase_debug() {
+        let env = |n: &str| {
+            (n == "PRIMASE_DEBUG").then(|| OsString::from("shader.diff_limit=9; gta.region=legion"))
+        };
+        assert_eq!(config::debug(&env, "shader.diff_limit").as_deref(), Some("9"));
+        assert_eq!(config::debug(&env, "gta.region").as_deref(), Some("legion"));
+        assert_eq!(config::debug(&env, "scene.filter"), None);
+        assert_eq!(config::debug(&|_| None, "gta.region"), None);
+    }
+
+    #[test]
+    fn the_registry_keys_are_unique_and_each_says_what_it_is() {
         let mut keys: Vec<&str> = registry::INSTALLS
             .iter()
             .chain(registry::KEYS)
@@ -660,10 +587,6 @@ mod tests {
             assert!(
                 !d.about.is_empty() && !d.source.is_empty(),
                 "{key}: say what it is and where it comes from"
-            );
-            assert!(
-                d.status != Status::Retired,
-                "{key}: a retired obligation is removed, not declared"
             );
             // a blocked file is a landing-gate input: a gate run without it fails, it never passes by skipping
             assert!(

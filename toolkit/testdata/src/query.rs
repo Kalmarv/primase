@@ -17,8 +17,6 @@ pub enum Query {
     Scratch(Option<&'static str>),
     /// A debug key ([`crate::registry::DEBUG`]).
     Debug(&'static str),
-    /// A name whose obligation its owners retired: never set.
-    Retired,
 }
 
 impl Query {
@@ -34,7 +32,6 @@ impl Query {
             Query::Scratch(None) => "scratch.root".to_owned(),
             Query::Scratch(Some(rel)) => format!("scratch.root/{rel}"),
             Query::Debug(k) => format!("debug.{k}"),
-            Query::Retired => "retired".to_owned(),
         }
     }
 
@@ -51,7 +48,7 @@ impl Query {
             Query::Tool(t) => Some((format!("tools.{}", t.key()), PathBuf::new())),
             Query::Oracle(s, g, r) => Some(("oracles.root".to_owned(), rel(&[s.key(), g.key(), r]))),
             Query::Scratch(r) => Some(("scratch.root".to_owned(), rel(&r.into_iter().collect::<Vec<_>>()))),
-            Query::Debug(_) | Query::Retired => None,
+            Query::Debug(_) => None,
         }
     }
 }

@@ -1848,4 +1848,107 @@ mod tests {
         );
         assert_eq!(p.options()["technique"], "deferred_drawskinned");
     }
+
+    /// A pixel program's interface with `count` colour targets of four float lanes (`SV_Target0` on).
+    fn targets(count: u32) -> Interface {
+        use primase_core::shader::{Label, ScalarType, StageFacts, Value, Varying, VaryingProvenance};
+        Interface {
+            stage: Stage::Pixel,
+            inputs: Vec::new(),
+            outputs: (0..count)
+                .map(|n| Varying {
+                    label: Label {
+                        name: "SV_Target".into(),
+                        index: n,
+                    },
+                    system: Some(SystemValue::Target(n)),
+                    value: Value {
+                        scalar: ScalarType::Float,
+                        width: 4,
+                    },
+                    interp: None,
+                    used: true,
+                    provenance: VaryingProvenance::default(),
+                })
+                .collect(),
+            resources: Vec::new(),
+            facts: StageFacts::None,
+        }
+    }
+
+    /// The family's G-buffer read as a surface (`primase_core::shader::surface`), the one reading a viewer's composite
+    /// takes: the albedo in target 0, the world normal `n * 0.5 + 0.5` in target 1, the roughness from target 2's
+    /// specular falloff (`sqrt(n / 512)`, Blinn-Phong) and the specular strength from its x, target 3's z the emission
+    /// over 16 as a scale of the albedo and its x the natural ambient's occlusion, which scales the ambient light alone;
+    /// no metalness and no reflectance. A forward program's one target is its finished colour, the surface's base.
+    #[test]
+    fn the_gbuffer_is_read_as_a_surface() {
+        use primase_core::shader::surface::{Base, Emission, Place, Roughness, Surface};
+        let writes: Result<GBufferWrites, String> = Ok(GBufferWrites {
+            normal_biased: true,
+            normal_zero: false,
+            normal_floored: false,
+            specular_intensity_encoded: true,
+            specular_exponent_encoded: true,
+            fresnel_written: true,
+            emission_written: true,
+            motion_written: true,
+        });
+        let interface = targets(5);
+        let outputs = output_bindings(&interface, Some(&writes), false, &mut Counts::default());
+        let s = Surface::read(outputs.iter().map(|o| (o.lanes, &o.role)));
+        assert!(s.refused.is_empty(), "{:?}", s.refused);
+        // each place as the target (the label's index) and lanes
+        let at = |place: Place| (outputs[place.output].label.index, place.lanes);
+        let Some(Base::Albedo(albedo)) = s.base else {
+            panic!("an albedo: {:?}", s.base)
+        };
+        assert_eq!(at(albedo), (0, 0b0111));
+        let normal = s.normal.unwrap();
+        assert_eq!(
+            (at(normal.place), normal.encoding, normal.space),
+            ((1, 0b0111), NormalEncoding::XyzUnorm, NormalSpace::World)
+        );
+        let Some(Roughness::Exponent(exponent)) = s.roughness else {
+            panic!("a specular exponent: {:?}", s.roughness)
+        };
+        assert_eq!(
+            (at(exponent.place), exponent.encoding),
+            ((2, 0b0010), ScalarEncoding::square_root_of(512.0))
+        );
+        let specular = s.specular.unwrap();
+        assert_eq!(
+            (at(specular.place), specular.encoding),
+            ((2, 0b0001), ScalarEncoding::square_root_of(1.0))
+        );
+        let Some(Emission::OfAlbedo(emission)) = s.emission else {
+            panic!("one lane of emission: {:?}", s.emission)
+        };
+        assert_eq!(
+            (at(emission.place), emission.encoding),
+            ((3, 0b0100), ScalarEncoding::linear_over(16.0))
+        );
+        let ambient = s.ambient_occlusion.unwrap();
+        assert_eq!((at(ambient.place), ambient.encoding), ((3, 0b0001), AMBIENT_OCCLUSION));
+        assert_eq!((s.metallic, s.reflectance, s.occlusion), (None, None, None));
+        // decoded: a falloff of 510 stored as sqrt(510 / 512) is roughness 1/4, an emission of 0.5 is 8 times the albedo
+        let stored = (510.0f32 / 512.0).sqrt();
+        let roughness = s.roughness.unwrap().decode([0.0, stored, 0.0, 0.0]);
+        assert!((roughness - 0.25).abs() < 1e-4, "{roughness}");
+        assert_eq!(
+            s.emission.unwrap().decode([0.0, 0.0, 0.5, 0.0], [0.25, 0.5, 0.125]),
+            [2.0, 4.0, 1.0]
+        );
+
+        let forward = output_bindings(&targets(1), None, true, &mut Counts::default());
+        let s = Surface::read(forward.iter().map(|o| (o.lanes, &o.role)));
+        assert_eq!(
+            s.base,
+            Some(Base::Colour(Place {
+                output: 0,
+                lanes: 0b1111
+            }))
+        );
+        assert_eq!((s.normal, s.roughness), (None, None));
+    }
 }

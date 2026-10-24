@@ -5,7 +5,8 @@
 //! (`primase-dxbc`, `primase-dxil`, `primase-mojoshader`) share, [`gate`] is their version gate and [`flow`] says what a
 //! program's outputs are made of, [`matrix`] how it holds a matrix constant, [`output_uses`] what its discards and blend
 //! show an unroled output lane is used for, [`output_stores`] what its entry point stores into each output lane and
-//! how a stored value is made. The vocabulary is
+//! how a stored value is made, [`surface`] the reading of a program's outputs as a surface packed for a GPU composite,
+//! with the WGSL that decodes it. The vocabulary is
 //! [`primase_core::shader`], re-exported here: varyings by label, resources with explicit constant layouts, D3D's
 //! registers kept in provenance. The [`d3d`] module is where D3D's enum numbers and
 //! packing rules are mapped into it, for the readers of every bytecode.
@@ -26,6 +27,7 @@ pub mod output_uses;
 mod program;
 mod reads;
 pub mod rt;
+pub mod surface;
 pub use primase_core::shader::{
     Access, BufferKind, BufferLayout, Constant, ConstantType, D3dBinding, D3dClass, D3dSignature,
     DomainFacts, GeometryFacts, GsInput, GsOutput, HitGroup, HitGroupKind, HullFacts, Interface, InterpMode,

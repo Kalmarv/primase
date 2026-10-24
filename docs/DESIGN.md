@@ -138,6 +138,16 @@ DirectX normals -> OpenGL; left- to right-handed mirror + winding; decal overlay
 opaque-first across); collision roof smoothing (crest surface per face); weld; long-edge split; texture caps with box
 filter; tiling into 200 m cells; level rules (one name -> one payload) as a validator pass.
 
+**A program's outputs as a surface.** A game crate states what each lane of a pixel program's outputs holds
+(`OutputRole` on the binding's `OutputBinding`s: an albedo, a normal and its encoding, a gloss and its scalar encoding,
+an occlusion of which light). What a lighting pass takes from those roles is read in one place,
+`primase_core::shader::surface`: which output and lanes hold the albedo, the normal, the roughness (stored, one minus a
+gloss, or from a Blinn-Phong exponent), the metallic, the reflectance, the specular strength, the emission and the
+occlusion, and how each stored value decodes. Every consumer takes it from there: a material bake decoding a program it
+evaluated on the CPU (`bake-fromsoft-materials`), and a viewer's composite decoding a G-buffer on the GPU, which packs
+the reading with `primase_shader::surface::rows` and decodes it with that module's WGSL. A game's layout is tested as a
+surface in its own crate (the fromsoft `gbuffer_surface` tests, the anvil and gta `resolve_shaders` tests).
+
 ## 5. Crates
 
 ```

@@ -330,10 +330,10 @@ The resolver lives in `toolkit/testdata` (`primase-testdata`), which must only a
 afresh when needed, without mutating the environment. Ignored private names are `primase-data.toml` and
 `primase-data.*.toml`; only the placeholder example is tracked.
 
-For this release the older configuration still works: each `PRIMASE_*` variable, in the environment or in a flat
-file of them, stands for what the last table gives and says once that it is deprecated. The next release removes
-them. Tests ask by query only; a `PRIMASE_*` name in a source file is the configuration's, read by `primase-testdata`,
-or a test's handoff to its own child process (the architecture check lists both).
+The configuration is the structured file alone: the older `PRIMASE_*` variables and their flat file are gone, and a
+flat file is refused, naming the sections to write. Tests ask by query only; a `PRIMASE_*` name in a source file is the
+configuration's (`PRIMASE_DATA`, `PRIMASE_DEBUG`), read by `primase-testdata`, or a test's handoff to its own child
+process (the architecture check lists both).
 
 A declared file's `status`: `live`, the obligation stands and the input it names is acceptable; `blocked`, the
 obligation stands but no acceptable input exists yet (the existing data is not independent of what it checks, or its
@@ -499,120 +499,6 @@ produced by something other than the code it checks.
 | `fromsoft.bake_digest` | the digest the baked layer textures of Sekiro's m11_01 must have (printed by an earlier run) |
 | `anvil.bake_digest` | the digest the baked Riders Republic Materials must have |
 | `dxil.fuzz_runs` | how many mutated fixtures the DXIL fuzz test runs (default 3000) |
-
-#### Older names (this release only)
-
-| name | stands for |
-| --- | --- |
-| `PRIMASE_SCENES_GTA` | retired |
-| `PRIMASE_SCENES_SEKIRO` | retired |
-| `PRIMASE_MAPS_GTA` | retired |
-| `PRIMASE_GTA_DIR` | `installs.gta` |
-| `PRIMASE_GTA_KEYS` | `keys.gta` |
-| `PRIMASE_GTA_LISTING` | `oracles.codewalker.gta/listing.jsonl` |
-| `PRIMASE_GTA_ACTIVE` | `oracles.codewalker.gta/active.json` |
-| `PRIMASE_GTA_RESOURCES` | `oracles.codewalker.gta/resources` |
-| `PRIMASE_GTA_PARITY` | `oracles.codewalker.gta/parity` |
-| `PRIMASE_GTA_GTXD` | `oracles.codewalker.gta/gtxd.json` |
-| `PRIMASE_GTA_FRAMES` | `oracles.codewalker.gta/frames.json` |
-| `PRIMASE_GTA_BOUNDS` | `oracles.codewalker.gta/bounds` |
-| `PRIMASE_GTA_SHADER_CONVERSION` | `oracles.codewalker.gta/ShadersGen9Conversion.xml` |
-| `PRIMASE_GTA_SHADERS` | `oracles.corpus.gta/legacy-effects` |
-| `PRIMASE_GTA_SHADER_DB` | `oracles.corpus.gta/shader-database.awc` |
-| `PRIMASE_GTA_FILTER` | debug key `gta.archive_filter` |
-| `PRIMASE_GTA_REGION` | debug key `gta.region` |
-| `PRIMASE_SCENE_FILTER` | debug key `scene.filter` |
-| `PRIMASE_RESKATE_PATCH` | `oracles.studio.gta/legion/patch` |
-| `PRIMASE_RESKATE_BLEND_PATCH` | `oracles.studio.gta/legion/patch` |
-| `PRIMASE_RESKATE_BLEND_MAP` | `oracles.baseline.gta/legion/map` |
-| `PRIMASE_RESKATE_BLEND_SPEC` | `oracles.baseline.gta/legion/blend-spec.json` |
-| `PRIMASE_SKATE_DATA` | `installs.skate/Data` |
-| `PRIMASE_UNITY_V21_DATA` | `installs.skatebird/SkateBIRD_Data` |
-| `PRIMASE_UNITY_V21_CENSUS` | `oracles.unitypy.skatebird/census.json` |
-| `PRIMASE_UNITY_V21_LISTING` | `oracles.unitypy.skatebird/listing.json` |
-| `PRIMASE_UNITY_DATA` | `installs.sledding/Sledding Game_Data` |
-| `PRIMASE_UNITY_TPK` | `tools.unity_tpk` |
-| `PRIMASE_UNITY_LISTING` | `oracles.unitypy.sledding/listing.json` |
-| `PRIMASE_UNITY_ORACLE` | `oracles.unitypy.sledding/samples.json` |
-| `PRIMASE_UNITY_SCAN` | `oracles.unitypy.sledding/scan.json` |
-| `PRIMASE_UNITY_MESHES` | `oracles.unitypy.sledding/meshes.json` |
-| `PRIMASE_UNITY_TEXTURES` | `oracles.unitypy.sledding/textures` |
-| `PRIMASE_UNITY_MATERIALS` | `oracles.unitypy.sledding/materials.json` |
-| `PRIMASE_UNITY_SUN` | `oracles.unitypy.sledding/sun.json` |
-| `PRIMASE_UNITY_SHADERS` | `oracles.unitypy.sledding/shader-state.json` |
-| `PRIMASE_UNITY_PROGRAMS` | `oracles.unitypy.sledding/shader-programs.json` |
-| `PRIMASE_UNITY_FRAMES` | `oracles.unitypy.sledding/frames.json` |
-| `PRIMASE_UNITY_PORT` | `oracles.port.sledding/level1` |
-| `PRIMASE_UNITY_PORT_MATERIALS` | `oracles.port.sledding/materials.json` |
-| `PRIMASE_UNITY_PORT_TERRAIN` | `oracles.port.sledding/terrain` |
-| `PRIMASE_STUNTBOOST_DIR` | `installs.stuntboost` |
-| `PRIMASE_STUNTBOOST_ORACLE` | `oracles.game-code.stuntboost/levels` |
-| `PRIMASE_ANVIL_DIR` | `installs.riders` |
-| `PRIMASE_ANVIL_FORGE` | `installs.riders/DataPC_MAD_WhiteRoom_patch_01.forge` |
-| `PRIMASE_ANVIL_FORGE_BASE` | `installs.riders/DataPC_MAD_WhiteRoom.forge` |
-| `PRIMASE_ANVIL_FORGE_USNAT` | `installs.riders/DataPC_MAD_USNAT.forge` |
-| `PRIMASE_ANVIL_FORGE_USNAT_PATCH` | `installs.riders/DataPC_MAD_USNAT_patch_01.forge` |
-| `PRIMASE_ANVIL_RRAS_MESHES` | `oracles.rrassetstudio.riders/meshes` |
-| `PRIMASE_OUT` | `scratch.root` |
-| `PRIMASE_WARP_SCRATCH` | `scratch.root/warp` |
-| `PRIMASE_ALLOW_LIVE` | debug key `allow_live` |
-| `PRIMASE_SCENE_SKATE` | `tools.scene_skate` |
-| `PRIMASE_GLTF_VALIDATOR` | `tools.gltf_validator` |
-| `PRIMASE_KHRONOS_GLTF` | `oracles.khronos.general/sample-assets` |
-| `PRIMASE_OODLE5` | `tools.oodle5` |
-| `PRIMASE_OODLE6` | `tools.oodle6` |
-| `PRIMASE_OODLE9` | `tools.oodle9` |
-| `PRIMASE_DCX` | `oracles.corpus.sekiro/dcx` |
-| `PRIMASE_CAS_SAMPLES` | `oracles.corpus.skate/cas` |
-| `PRIMASE_CODEC_CORPUS` | `oracles.corpus.general/codecs.tsv` |
-| `PRIMASE_SEKIRO_DIR` | `installs.sekiro` |
-| `PRIMASE_ELDEN_DIR` | `installs.elden` |
-| `PRIMASE_ELDEN_KEYS` | `keys.elden` |
-| `PRIMASE_ELDEN_NAMES` | `oracles.uxm.elden/dictionary.txt` |
-| `PRIMASE_ELDEN_BHD_ORACLE` | `oracles.soulsformats.elden/census` |
-| `PRIMASE_ELDEN_FORMAT_ORACLE` | `oracles.soulsformats.elden/format` |
-| `PRIMASE_FROMSOFT_NAMES` | `oracles.uxm.sekiro/dictionary.txt` |
-| `PRIMASE_FROMSOFT_RIGID_ORACLE` | `oracles.soulsformats.sekiro/m11_01` |
-| `PRIMASE_FROMSOFT_SKIN_ORACLE` | `oracles.soulsformats.sekiro/skin` |
-| `PRIMASE_FROMSOFT_PART_ORACLE` | `oracles.soulsformats.sekiro/parts` |
-| `PRIMASE_FROMSOFT_BHD_ORACLE` | `oracles.soulsformats.sekiro/census` |
-| `PRIMASE_FROMSOFT_FRAMES` | `oracles.soulsformats.sekiro/frames` |
-| `PRIMASE_FROMSOFT_MATERIAL_ORACLE` | `oracles.soulsformats.sekiro/materials` |
-| `PRIMASE_FROMSOFT_TPF_ORACLE` | `oracles.soulsformats.sekiro/tpf` |
-| `PRIMASE_FROMSOFT_OBJECT_ORACLE` | `oracles.soulsformats.sekiro/objects` |
-| `PRIMASE_FROMSOFT_SHADOW_ORACLE` | `oracles.scripts.sekiro/shadow` |
-| `PRIMASE_FROMSOFT_STATE_ORACLE` | `oracles.scripts.sekiro/state` |
-| `PRIMASE_FROMSOFT_PBR_ORACLE` | `oracles.scripts.sekiro/pbr` |
-| `PRIMASE_FROMSOFT_REFLECTANCE_ORACLE` | `oracles.scripts.sekiro/reflectance` |
-| `PRIMASE_FROMSOFT_NORMAL_CURL` | `oracles.scripts.sekiro/normal-curl.json` |
-| `PRIMASE_FROMSOFT_DDS_ORACLE` | `oracles.scripts.sekiro/dds` |
-| `PRIMASE_FROMSOFT_LAYER_PILOT` | `oracles.baseline.sekiro/layer-pilot` |
-| `PRIMASE_FROMSOFT_SCENE` | `oracles.baseline.sekiro/scene` |
-| `PRIMASE_WEB_KTX2_TILES` | `oracles.baseline.sekiro/ktx2-tiles` |
-| `PRIMASE_HAVOK_CORPUS` | `oracles.corpus.sekiro/havok` |
-| `PRIMASE_HAVOK_OBJECT_CORPUS` | `oracles.corpus.sekiro/object-hkx` |
-| `PRIMASE_SKATE_SKELETON_ORACLE` | `oracles.reskate.skate/renderskeleton.json` |
-| `PRIMASE_SKATE_ECLIPSE_REFERENCE` | `oracles.scripts.skate/eclipse` |
-| `PRIMASE_SKATE_MASK_ORACLE` | `oracles.pillow.sekiro/skate-mask` |
-| `PRIMASE_FROSTBITE_EBX` | `oracles.corpus.skate/ebx` |
-| `PRIMASE_RESKATE_CLI` | `tools.reskate_cli` |
-| `PRIMASE_RESKATE_FBMOD` | `oracles.baseline.skate/fbmod` |
-| `PRIMASE_DXBC_SHADERS` | `oracles.corpus.general/dxbc` |
-| `PRIMASE_DXBC_PACK_DISASSEMBLY` | `oracles.d3d-disassembler.riders/shader-pack` |
-| `PRIMASE_SHADER_CORPUS_SEKIRO` | `oracles.corpus.sekiro/shaders` |
-| `PRIMASE_SHADER_CORPUS_RR` | `oracles.corpus.riders/shaders` |
-| `PRIMASE_SHADER_CORPUS_UNITY` | `oracles.corpus.sledding/shaders` |
-| `PRIMASE_SHADER_DIFF_LIMIT` | debug key `shader.diff_limit` |
-| `PRIMASE_SHADER_WARP_ALL` | debug key `shader.warp_all` |
-| `PRIMASE_SKATEBIRD_VORONOI_LEVEL` | debug key `skatebird.voronoi_level` |
-| `PRIMASE_SKATEBIRD_VORONOI_DIGEST` | debug key `skatebird.voronoi_digest` |
-| `PRIMASE_ANVIL_BAKE_DIGEST` | debug key `anvil.bake_digest` |
-| `PRIMASE_FROMSOFT_BAKE_DIGEST` | debug key `fromsoft.bake_digest` |
-| `PRIMASE_DXIL_FUZZ_RUNS` | debug key `dxil.fuzz_runs` |
-| `PRIMASE_DXC` | `tools.dxc` |
-| `PRIMASE_FXC` | `tools.fxc` |
-| `PRIMASE_WARP` | `tools.warp` |
-| `PRIMASE_REQUIRE_REAL_DATA` | `[run] require` (`1`: `all`) |
 
 <!-- end of real-data tables -->
 
