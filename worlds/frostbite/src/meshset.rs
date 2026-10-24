@@ -12,7 +12,9 @@
 //!   bytes each: 16 elements of usage, format, offset, stream; 16 stream strides of two bytes; element count; stream
 //!   count): the stored one at +0x70 and the draw one at +0xd4 (usually equal; see `check_draw` for how it may
 //!   differ: unbound elements, aliases into stored streams, streams filled at run time); material
-//!   key (u64) +0x138. A section's stored streams lie one after another from its vertex offset, each
+//!   key (u64) +0x138; the section's bone count (u16) at +0x18 and, when it is not zero, the pointer to its bone list at
+//!   +0x10: one u16 a bone, the skeleton bone the section's vertices name by that index (the identity 0..n for the
+//!   CAS hat bucket's sections, 386 bones each). A section's stored streams lie one after another from its vertex offset, each
 //!   `stride * vertex count` bytes.
 
 use crate::{Rd, Result, bad, capacity};
@@ -135,6 +137,8 @@ pub struct Section {
     pub start_index: u32,
     pub vertex_offset: u32,
     pub vertices: u32,
+    /// The bone list ([`Section::bones`] of the module documentation): empty for a section with no bones.
+    pub bones: Vec<u16>,
 }
 
 impl Section {
@@ -248,6 +252,17 @@ pub fn read(d: &[u8]) -> Result<MeshSet> {
                 start_index: r.u32le(o + 0x24)?,
                 vertex_offset: r.u32le(o + 0x28)?,
                 vertices: r.u32le(o + 0x2c)?,
+                bones: {
+                    let count = r.u16le(o + 0x18)? as usize;
+                    if count == 0 {
+                        Vec::new()
+                    } else {
+                        let list = ptr(&r, o + 0x10)?;
+                        (0..count)
+                            .map(|b| r.u16le(list + 2 * b))
+                            .collect::<Result<Vec<_>>>()?
+                    }
+                },
             };
             if sec.stride as usize != sec.decl.stride() {
                 return Err(bad(

@@ -168,6 +168,11 @@ impl Source<'_> {
         let entities = match read {
             Read::Ebx(c) => {
                 let e = spawn(w, entry.name.clone());
+                if let Some((name, joints)) =
+                    crate::skeleton::read(&c.document).map_err(|err| unsupported(entry, err))?
+                {
+                    w.insert(e, crate::components::FrostbiteSkeleton { name, joints });
+                }
                 w.insert(e, *c);
                 vec![e]
             }

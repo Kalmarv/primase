@@ -28,6 +28,7 @@ pub mod passes;
 pub mod permutation;
 mod read;
 pub mod selector;
+pub mod skeleton;
 pub mod texture;
 pub mod toc;
 

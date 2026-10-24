@@ -49,10 +49,14 @@
 //!   link states why it leads nowhere, or the texture is not what the slot reads.
 //! - **Skinned meshes.** A vertex input that is the blend indices or weights (usages 2 and 4) is
 //!   `Stream(Joints(0))` or `Stream(Weights(0))`, but the mesh holds no such stream: core takes joint and weight
-//!   streams with a `core.skin`, which names the skeleton, and the skeleton the indices address is not read, so the
-//!   elements stay raw ([`crate::geometry`], [`Raw::joints`]). Each mesh with them is approximated on, counted by the
-//!   range of the joints its vertices are weighted to: `skinned by joints N-M of a skeleton this source does not read:
-//!   drawn at their bind pose`.
+//!   streams with a `core.skin`, which needs rest transforms of the skeleton, and the skeleton asset states none (the
+//!   rig's default pose holds them under degree-of-freedom ids that are not mapped to joints), so the elements stay
+//!   raw ([`crate::geometry`], [`Raw::joints`]). The bone lists of the mesh's sections (`MeshSet` sections, the
+//!   identity 0..n for the CAS hat bucket) name skeleton joints by index and no document of the mesh names the
+//!   skeleton: [`SKELETON_POLICY`] takes the one skeleton asset read with as many joints as the lists need, links it
+//!   (`frostbite.skeleton_link`), and each such mesh is approximated on, counted by the range of joints its vertices
+//!   are weighted to and their names, as drawn at the bind pose. No skeleton with enough joints, or several, is
+//!   counted in the same note and not linked.
 //! - **Outputs.** The pixel stage's render targets are `Unknown` by index.
 //! - **State.** Not decoded: the default (nothing stated).
 
@@ -65,14 +69,15 @@ use primase_core::shader::{
     ResourceKind, SamplerState, Shader, ShaderBinding, Stage, StageBinding, SystemValue, TextureBinding,
     TextureDim, TextureSource, VariantKey,
 };
-use primase_core::{Component, Entity, Semantic, Texture, TextureLayers, World};
+use primase_core::{Component, Entity, Lods, Semantic, Texture, TextureLayers, World};
 
 use super::buffer_tables::{TableRoles, probe_tables};
 use super::clip_position::{ClipRows, cut_out, shader_clip_rows, state_clip_roles};
 use crate::binding::{Bindings, Group};
 use crate::components::{
-    FrostbiteBindings, FrostbiteInputLayout, FrostbiteMaterial, FrostbitePermutation, FrostbiteProgram,
-    FrostbiteVertexElements, MaterialDepot, MaterialTexture, TextureLink,
+    FrostbiteBindings, FrostbiteInputLayout, FrostbiteMaterial, FrostbiteMeshSet, FrostbitePermutation,
+    FrostbiteProgram, FrostbiteSkeleton, FrostbiteSkeletonLink, FrostbiteVertexElements, MaterialDepot,
+    MaterialTexture, TextureLink,
 };
 use crate::depot;
 use crate::geometry::Raw;
@@ -103,7 +108,7 @@ impl Pass for ResolveFrostbiteShaders {
         ]
     }
     fn provides(&self) -> &[&'static str] {
-        &[ShaderBinding::NAME]
+        &[ShaderBinding::NAME, FrostbiteSkeletonLink::NAME]
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         let materials: Vec<(Entity, FrostbiteMaterial)> = world
@@ -120,23 +125,117 @@ impl Pass for ResolveFrostbiteShaders {
                 Err(why) => log.count(&format!("materials left unbound: {why}"), 1),
             }
         }
-        // a mesh the programs skin by joints of a skeleton this source does not read
-        let meshes: Vec<(Entity, Option<(u16, u16)>)> = world
-            .iter::<FrostbiteVertexElements>()
-            .map(|(e, v)| (e, joints_used(&v.primitives)))
-            .collect();
-        for (mesh, joints) in meshes {
-            if let Some((first, last)) = joints {
+        link_skinned_meshes(world, log);
+        Ok(())
+    }
+}
+
+/// The policy that links a skinned mesh to a skeleton ([`choose_skeleton`]).
+pub const SKELETON_POLICY: &str =
+    "the only skeleton asset read with as many joints as the mesh's bone lists need";
+
+/// The bones each mesh entity's sections need, by entity: the longest bone list of the level of detail the entity holds
+/// (the MeshSet's entity holds level 0, the entities of its `core.lods` the others by their detail).
+fn bones_needed(world: &World) -> BTreeMap<Entity, u32> {
+    let mut needed = BTreeMap::new();
+    for (root, set) in world.iter::<FrostbiteMeshSet>() {
+        let mut levels = vec![(0usize, root)];
+        if let Some(lods) = world.get::<Lods>(root) {
+            levels.extend(lods.forms.iter().map(|f| (usize::from(f.detail), f.form)));
+        }
+        for (level, entity) in levels {
+            let longest = set
+                .meshset
+                .lods
+                .get(level)
+                .into_iter()
+                .flat_map(|l| &l.sections)
+                .map(|s| s.bones.len() as u32)
+                .max()
+                .unwrap_or(0);
+            needed.insert(entity, longest);
+        }
+    }
+    needed
+}
+
+/// The skeleton whose joints the bone lists of a mesh address, when no document of the mesh names it: the one of
+/// `skeletons` with at least `bones` joints ([`SKELETON_POLICY`]). `Err` says why there is none: fewer joints in every
+/// skeleton read than the lists need (the lists are refused, not clipped), or several that have enough.
+fn choose_skeleton<'a>(
+    skeletons: &[(Entity, &'a FrostbiteSkeleton)],
+    bones: u32,
+) -> Result<(Entity, &'a FrostbiteSkeleton), String> {
+    let enough: Vec<_> = skeletons
+        .iter()
+        .filter(|(_, s)| s.joints.len() as u32 >= bones)
+        .collect();
+    match enough.as_slice() {
+        [one] => Ok(**one),
+        [] => Err(format!(
+            "none of the {} skeletons read has the {bones} joints the bone lists need",
+            skeletons.len()
+        )),
+        several => Err(format!(
+            "{} skeletons read have the {bones} joints the bone lists need",
+            several.len()
+        )),
+    }
+}
+
+/// Links each mesh the programs skin by joints to its skeleton, noting it: the range of joints its vertices are
+/// weighted to, by name, and that it is drawn at its bind pose (the skeleton states no rest transforms, so the
+/// palette is the bind pose's own). A mesh whose skeleton is not found is noted as such, and not linked.
+fn link_skinned_meshes(world: &mut World, log: &mut PassLog) {
+    let skeletons: Vec<(Entity, FrostbiteSkeleton)> = world
+        .iter::<FrostbiteSkeleton>()
+        .map(|(e, s)| (e, s.clone()))
+        .collect();
+    let candidates: Vec<(Entity, &FrostbiteSkeleton)> = skeletons.iter().map(|(e, s)| (*e, s)).collect();
+    let needed = bones_needed(world);
+    let meshes: Vec<(Entity, Option<(u16, u16)>)> = world
+        .iter::<FrostbiteVertexElements>()
+        .map(|(e, v)| (e, joints_used(&v.primitives)))
+        .collect();
+    let mut links = Vec::new();
+    for (mesh, joints) in meshes {
+        let Some((first, last)) = joints else {
+            continue;
+        };
+        let bones = needed.get(&mesh).copied().unwrap_or(0).max(u32::from(last) + 1);
+        match choose_skeleton(&candidates, bones) {
+            Ok((skeleton, s)) => {
+                let name = |j: u16| s.joints.get(usize::from(j)).map_or("?", |j| j.name.as_str());
                 log.approximate_on(
                     mesh,
                     &format!(
-                        "meshes skinned by joints {first}-{last} of a skeleton this source does not read: drawn at their bind pose"
+                        "meshes skinned by joints {first}-{last} ({}..{}) of {}, {SKELETON_POLICY} ({bones} joints): drawn at their bind pose",
+                        name(first),
+                        name(last),
+                        s.name
                     ),
                     1,
                 );
+                links.push((
+                    mesh,
+                    FrostbiteSkeletonLink {
+                        skeleton,
+                        bones,
+                        policy: SKELETON_POLICY.to_owned(),
+                    },
+                ));
             }
+            Err(why) => log.approximate_on(
+                mesh,
+                &format!(
+                    "meshes skinned by joints {first}-{last} of a skeleton not found ({why}): drawn at their bind pose"
+                ),
+                1,
+            ),
         }
-        Ok(())
+    }
+    for (mesh, link) in links {
+        world.insert(mesh, link);
     }
 }
 
@@ -1168,6 +1267,44 @@ mod tests {
         }];
         assert_eq!(joints_used(&[c]), None);
         assert_eq!(joints_used(&[]), None);
+    }
+
+    #[test]
+    fn a_skeleton_is_chosen_by_the_joints_the_bone_lists_need_and_never_clipped() {
+        use crate::skeleton::{SkeletonJoint, name_hash};
+        let skeleton = |n: usize| FrostbiteSkeleton {
+            name: format!("s{n}"),
+            joints: (0..n)
+                .map(|i| SkeletonJoint {
+                    name: format!("j{i}"),
+                    name_hash: name_hash(&format!("j{i}")),
+                    parent: None,
+                    child: None,
+                    sibling: None,
+                    kind: 1,
+                })
+                .collect(),
+        };
+        let (a, b, c) = (skeleton(27), skeleton(246), skeleton(395));
+        let mut w = World::new();
+        let ids: Vec<Entity> = (0..3).map(|_| w.spawn()).collect();
+        let all = [(ids[0], &a), (ids[1], &b), (ids[2], &c)];
+        // one has enough
+        let (e, s) = choose_skeleton(&all, 386).unwrap();
+        assert_eq!((e, s.joints.len()), (ids[2], 395));
+        // none has enough: refused, not clipped to the largest
+        assert!(
+            choose_skeleton(&all, 396)
+                .unwrap_err()
+                .contains("none of the 3 skeletons")
+        );
+        // two have enough: ambiguous
+        assert!(
+            choose_skeleton(&all, 200)
+                .unwrap_err()
+                .contains("2 skeletons read have the 200")
+        );
+        assert!(choose_skeleton(&[], 1).is_err());
     }
 
     #[test]

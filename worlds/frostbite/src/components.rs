@@ -658,6 +658,89 @@ impl Component for FrostbiteInputLayout {
     }
 }
 
+/// A skeleton asset's joints ([`crate::skeleton`]), as stored, on the entity of its EBX document: names, hashes and the
+/// hierarchy. It has no rest transforms.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FrostbiteSkeleton {
+    /// The asset's `Name`.
+    pub name: String,
+    pub joints: Vec<crate::skeleton::SkeletonJoint>,
+}
+
+impl Component for FrostbiteSkeleton {
+    const NAME: &'static str = "frostbite.skeleton";
+    const GEOMETRY: Geometry = Geometry::None;
+    fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
+        for (i, j) in self.joints.iter().enumerate() {
+            if j.name_hash != crate::skeleton::name_hash(&j.name) {
+                return Err(format!("joint {i} {:?}: hash {:#x}", j.name, j.name_hash));
+            }
+            let count = self.joints.len() as u32;
+            if [j.parent, j.child, j.sibling]
+                .into_iter()
+                .flatten()
+                .any(|l| l >= count)
+            {
+                return Err(format!("joint {i} {:?}: a link past the {count} joints", j.name));
+            }
+        }
+        crate::skeleton::verify_hierarchy(&self.joints)
+    }
+    fn to_json(&self) -> Result<Option<Value>, primase_core::JsonError> {
+        Ok(Some(json!({
+            "name": self.name,
+            "joints": self.joints.iter().map(|j| json!({
+                "name": j.name,
+                "name_hash": j.name_hash,
+                "parent": j.parent,
+                "child": j.child,
+                "sibling": j.sibling,
+                "type": j.kind,
+            })).collect::<Vec<_>>(),
+        })))
+    }
+}
+
+/// The skeleton the bone lists of a mesh's sections address, on the mesh's entity, and how it was chosen: the lists name
+/// bones by index and no document of the mesh names the skeleton ([`crate::passes`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FrostbiteSkeletonLink {
+    /// The entity holding the `frostbite.skeleton`.
+    pub skeleton: Entity,
+    /// The joints the bone lists need: the longest list of the mesh's sections.
+    pub bones: u32,
+    /// The rule that chose the skeleton.
+    pub policy: String,
+}
+
+impl Component for FrostbiteSkeletonLink {
+    const NAME: &'static str = "frostbite.skeleton_link";
+    const GEOMETRY: Geometry = Geometry::None;
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.push(self.skeleton);
+    }
+    fn verify(&self, _e: Entity, w: &World) -> Result<(), String> {
+        let s = w
+            .get::<FrostbiteSkeleton>(self.skeleton)
+            .ok_or("the linked entity has no frostbite.skeleton")?;
+        if (s.joints.len() as u32) < self.bones {
+            return Err(format!(
+                "the skeleton has {} joints, the bone lists need {}",
+                s.joints.len(),
+                self.bones
+            ));
+        }
+        Ok(())
+    }
+    fn to_json(&self) -> Result<Option<Value>, primase_core::JsonError> {
+        Ok(Some(json!({
+            "skeleton": format!("{:?}", self.skeleton),
+            "bones": self.bones,
+            "policy": self.policy,
+        })))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

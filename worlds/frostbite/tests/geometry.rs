@@ -95,6 +95,7 @@ fn fixture() -> (Vec<u8>, Lod, Section) {
         start_index: 0,
         vertex_offset: 0,
         vertices: 3,
+        bones: Vec::new(),
     };
     let lod = Lod {
         at: 0,
