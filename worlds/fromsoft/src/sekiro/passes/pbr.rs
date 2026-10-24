@@ -565,6 +565,7 @@ fn lower_materials(
                 log.approximate_on(e, why, 1);
             } else if p.base_color_texture.is_none()
                 && let Some(name) = &pv.albedo
+                && payloads.contains_key(name)
             {
                 let mut r = TextureRef::new(texture(world, payloads, &mut cache, name, false)?);
                 match &base {
@@ -588,12 +589,14 @@ fn lower_materials(
                     _ => {}
                 }
                 p.base_color_texture = Some(r);
-            } else if fresh && pv.albedo.is_none() && p.base_color_texture.is_none() {
+            } else if fresh && p.base_color_texture.is_none() {
+                // no base texture named, or one the install does not hold (an authoring placeholder such as `3dsmax`)
                 p.base_color = fallback_base_color(&m, water_colour);
                 log.approximate_on(e, "missing base texture: preview fallback colour", 1);
             }
             if p.normal_texture.is_none()
                 && let Some(name) = &pv.normal
+                && payloads.contains_key(name)
             {
                 let mut r = TextureRef::new(texture(world, payloads, &mut cache, name, true)?);
                 if let Some(b) = normal_binding(&m, &pv) {
@@ -614,9 +617,10 @@ fn lower_materials(
                 // Existing channels (including this pass's output) are authoritative.
                 // Repacking would apply the already-normalized factors a second time.
                 log.count("existing ORM textures preserved", 1);
-            } else if let Some(name) = &pv.normal {
+            } else if let Some(name) = pv.normal.as_ref().filter(|name| payloads.contains_key(*name)) {
                 let normal = read(payloads, name)?;
-                let metal = binding(&m, "MetallicMap");
+                // a metallic map the install does not hold is as absent as one the material does not bind
+                let metal = binding(&m, "MetallicMap").filter(|b| payloads.contains_key(&b.texture));
                 let mut metal_sampler = None;
                 if let Some(b) = metal {
                     let t = read(payloads, &b.texture)?;
