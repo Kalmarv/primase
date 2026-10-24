@@ -123,24 +123,7 @@ impl Trs {
 
     /// `T * R * S`.
     pub fn matrix(&self) -> Affine {
-        let [x, y, z, w] = self.rotation;
-        let r = [
-            [
-                1.0 - 2.0 * (y * y + z * z),
-                2.0 * (x * y + z * w),
-                2.0 * (x * z - y * w),
-            ],
-            [
-                2.0 * (x * y - z * w),
-                1.0 - 2.0 * (x * x + z * z),
-                2.0 * (y * z + x * w),
-            ],
-            [
-                2.0 * (x * z + y * w),
-                2.0 * (y * z - x * w),
-                1.0 - 2.0 * (x * x + y * y),
-            ],
-        ];
+        let r = quat::to_columns(self.rotation);
         [
             r[0].map(|v| v * self.scale[0]),
             r[1].map(|v| v * self.scale[1]),

@@ -93,23 +93,6 @@ pub(crate) fn rotation(m: &Affine) -> [f64; 4] {
     quat::from_columns(u)
 }
 
-/// The rotation matrix of a unit quaternion, as an affine map's linear part.
-fn rotation_matrix(q: [f64; 4]) -> [[f64; 3]; 3] {
-    let m = Trs {
-        translation: [0.0; 3],
-        rotation: q,
-        scale: [1.0; 3],
-    }
-    .matrix();
-    [m[0], m[1], m[2]]
-}
-
-/// `q` applied to `v`.
-pub(crate) fn rotate(q: [f64; 4], v: [f64; 3]) -> [f64; 3] {
-    let m = rotation_matrix(q);
-    std::array::from_fn(|r| (0..3).map(|c| m[c][r] * v[c]).sum())
-}
-
 /// The least rotation taking direction `a` to direction `b` (none when either is zero).
 pub(crate) fn between(a: [f64; 3], b: [f64; 3]) -> [f64; 4] {
     let n = |v: [f64; 3]| {
@@ -141,7 +124,7 @@ pub(crate) fn between(a: [f64; 3], b: [f64; 3]) -> [f64; 4] {
 /// An affine map from a translation, a rotation and the scale columns of `scale_of`.
 pub(crate) fn with_rotation(translation: [f64; 3], q: [f64; 4], scale_of: &Affine) -> Affine {
     let len = |c: &[f64; 3]| c.iter().map(|x| x * x).sum::<f64>().sqrt();
-    let r = rotation_matrix(q);
+    let r = quat::to_columns(q);
     let mut m: Affine = [[0.0; 3]; 4];
     for (i, col) in r.iter().enumerate() {
         let s = len(&scale_of[i]);
@@ -217,7 +200,7 @@ fn reference_locals(
                 chain = compose(&local[&at], &chain);
                 at = parent[&at].ok_or("a mapped joint below another is not under it")?;
             }
-            let offset = rotate(rotation(&m), chain[3]);
+            let offset = quat::rotate(rotation(&m), chain[3]);
             let src_child = back[child];
             let want: [f64; 3] =
                 std::array::from_fn(|k| source_ref[&src_child][3][k] - source_ref[&src][3][k]);

@@ -1,4 +1,5 @@
-//! Unit quaternions `[x, y, z, w]` in f64: products, spherical interpolation, and the rotation of a matrix.
+//! Unit quaternions `[x, y, z, w]` in f64: products, spherical interpolation, the rotation of a matrix and the matrix
+//! of a rotation, and a vector rotated.
 
 /// `a * b` (apply `b`, then `a`).
 pub fn mul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
@@ -42,6 +43,34 @@ pub fn slerp(a: [f64; 4], b: [f64; 4], s: f64) -> [f64; 4] {
     };
     let q: [f64; 4] = std::array::from_fn(|i| wa * a[i] + wb * b[i]);
     normalize(q).unwrap_or(a)
+}
+
+/// The columns of the rotation matrix of unit quaternion `q` (the images of x, y and z).
+pub fn to_columns(q: [f64; 4]) -> [[f64; 3]; 3] {
+    let [x, y, z, w] = q;
+    [
+        [
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y + z * w),
+            2.0 * (x * z - y * w),
+        ],
+        [
+            2.0 * (x * y - z * w),
+            1.0 - 2.0 * (x * x + z * z),
+            2.0 * (y * z + x * w),
+        ],
+        [
+            2.0 * (x * z + y * w),
+            2.0 * (y * z - x * w),
+            1.0 - 2.0 * (x * x + y * y),
+        ],
+    ]
+}
+
+/// `v` rotated by unit quaternion `q`, through its matrix ([`to_columns`]).
+pub fn rotate(q: [f64; 4], v: [f64; 3]) -> [f64; 3] {
+    let m = to_columns(q);
+    std::array::from_fn(|r| (0..3).map(|c| m[c][r] * v[c]).sum())
 }
 
 /// The rotation whose matrix has these columns (orthonormal, determinant +1), by the largest of the diagonal's

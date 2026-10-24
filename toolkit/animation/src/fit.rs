@@ -13,7 +13,8 @@ use primase_core::{JointId, Primitive, Skeleton, Topology};
 
 use crate::pose::{Affine, compose};
 use crate::quat;
-use crate::retarget::{between, parents_first, rotate, rotation, with_rotation};
+use crate::quat::rotate;
+use crate::retarget::{between, parents_first, rotation, with_rotation};
 
 type V3 = [f64; 3];
 

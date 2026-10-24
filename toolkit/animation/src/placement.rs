@@ -26,7 +26,8 @@ use primase_core::{JointId, JointOffset, Skeleton, Transform};
 
 use crate::pose::{Affine, Trs, affine, compose, inverse, locals};
 use crate::quat;
-use crate::retarget::{between, parents_first, rotate, rotation, with_rotation};
+use crate::quat::rotate;
+use crate::retarget::{between, parents_first, rotation, with_rotation};
 
 /// The source skeleton posed onto the target's proportions (see [`RetargetSkin`](crate::RetargetSkin), step 1): each
 /// source joint's model transform, `pairs` being source joint to target joint.
