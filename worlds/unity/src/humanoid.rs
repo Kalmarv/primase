@@ -17,7 +17,11 @@
 //! - The twist of a limb is shared with the bone below it (upper arm to forearm to hand, upper leg to lower leg to
 //!   foot): a bone keeps the share its `HumanDescription` states (arm, forearm, upper leg and leg twist) of its own x
 //!   angle, and passes the rest to the child, which applies it as `post_parent * Rx(rest) * post_parent^-1` before its
-//!   own rotation.
+//!   own rotation. The twist is the limb's total angle wrapped into (-pi, pi] first (the pose is periodic in the twist
+//!   muscle, 360 degrees of total twist apart; at exactly 180 degrees Unity's sign is float noise): an upper arm's
+//!   muscle at 2 and -2 turns it by +-90 degrees, not +-180 (the frog's upper arm in Unity 6000.6.4f1, muscle values -3
+//!   to 3 read back through `HumanPoseHandler`: continuous, period 4, the sign flipping at +-2). The same wrap is applied
+//!   to the forearm and the legs, whose twist is shared the same way; only the upper arm's is measured.
 //!
 //! **The hips** are placed by the clip's `RootT` and `RootQ`, the body's centre of mass (in units of the avatar's human
 //! scale) and orientation (relative to the avatar's rest orientation, `m_RootX.q`), which the muscles' pose moves the
@@ -140,6 +144,12 @@ fn f64q(q: [f32; 4]) -> Quat {
     quat::normalize(q.map(f64::from)).expect("the reader refuses a rotation of no length")
 }
 
+/// `angle` wrapped into (-pi, pi]: the shortest arc to the same rotation about an axis.
+fn wrap_pi(angle: f64) -> f64 {
+    use std::f64::consts::{PI, TAU};
+    angle - TAU * ((angle - PI) / TAU).ceil()
+}
+
 fn rotation_x(angle: f64) -> Quat {
     [(angle / 2.0).sin(), 0.0, 0.0, (angle / 2.0).cos()]
 }
@@ -186,8 +196,10 @@ pub fn bone_rotation(human: &AvatarHuman, bone: usize, muscles: &[f64; MUSCLES])
             m => angle(axes, d, muscles[usize::from(m)]),
         })
     };
-    let a = degrees(axes, bone);
-    let share = if TWIST_CHILD.iter().any(|(p, _)| *p == bone) {
+    let mut a = degrees(axes, bone);
+    let shares_twist = TWIST_CHILD.iter().any(|(p, _)| *p == bone);
+    let share = if shares_twist {
+        a[0] = wrap_pi(a[0]);
         twist_share(human, bone)
     } else {
         1.0
@@ -198,7 +210,7 @@ pub fn bone_rotation(human: &AvatarHuman, bone: usize, muscles: &[f64; MUSCLES])
     if let Some(&(parent, _)) = TWIST_CHILD.iter().find(|(_, c)| *c == bone)
         && let Some(parent_axes) = axes_of(human, parent)
     {
-        let rest = degrees(parent_axes, parent)[0] * (1.0 - twist_share(human, parent));
+        let rest = wrap_pi(degrees(parent_axes, parent)[0]) * (1.0 - twist_share(human, parent));
         let post = f64q(parent_axes.post_q);
         q = mul(mul(mul(post, rotation_x(rest)), inverse(post)), q);
     }
@@ -842,6 +854,37 @@ mod tests {
         // it is unit length and differs from the exponential map of the vector (0, 0.8, 0.6)
         assert!((q.iter().map(|x| x * x).sum::<f64>() - 1.0).abs() < 1e-12);
         assert!((q[1] - (0.5f64).sin() * 0.8).abs() > 1e-3);
+    }
+
+    /// The twist of a limb is its total angle wrapped into (-pi, pi]: the upper arm and the forearm after it turn the same
+    /// at a muscle value 4 apart (360 degrees of total twist), and a total of 270 degrees is -90.
+    #[test]
+    fn the_total_twist_of_a_limb_is_wrapped_before_it_is_shared() {
+        use std::f64::consts::PI;
+        assert_eq!(wrap_pi(0.0), 0.0);
+        assert!((wrap_pi(1.5 * PI) + 0.5 * PI).abs() < 1e-12);
+        assert!((wrap_pi(-1.5 * PI) - 0.5 * PI).abs() < 1e-12);
+        assert!((wrap_pi(PI) - PI).abs() < 1e-12 && (wrap_pi(-PI) - PI).abs() < 1e-12);
+        assert!((wrap_pi(5.0 * PI + 0.25) - (-PI + 0.25)).abs() < 1e-9);
+        // the left upper arm (bone 14) and its forearm (16) on the one-bone fixture's axes: limit pi/2 either way, so a
+        // muscle value of 4 is a total of 2 pi
+        // (limits are stored as f32, so the periods agree to ~1e-5 degrees, not to f64)
+        let mut h = human(-(PI as f32) / 2.0, PI as f32 / 2.0, [1.0; 3]);
+        h.bone_index[14] = 1;
+        h.bone_index[16] = 1;
+        for (bone, muscle) in [(14, 41), (16, 43)] {
+            let at = |v: f64| bone_rotation(&h, bone, &muscles(&[(muscle, v)])).unwrap();
+            assert!(between(at(1.0), at(5.0)) < 1e-4, "{bone}: v and v + 4");
+            assert!(between(at(-1.5), at(2.5)) < 1e-4, "{bone}: -1.5 and 2.5");
+            // 3 (a total of 270 degrees) is -90 degrees; the share keeps half
+            assert!(between(at(3.0), at(-1.0)) < 1e-4, "{bone}: 3 and -1");
+        }
+        // the share of the forearm below: the upper arm's rest rotates it, wrapped the same
+        let forearm = |v: f64| bone_rotation(&h, 16, &muscles(&[(41, v)])).unwrap();
+        assert!(between(forearm(1.0), forearm(5.0)) < 1e-4);
+        // a bone with no shared twist is not wrapped: the shoulder's swing at 4 is not its swing at 0
+        let shoulder = |v: f64| bone_rotation(&h, 12, &muscles(&[(38, v)])).unwrap();
+        assert!(between(shoulder(0.0), shoulder(1.0)) > 1e-3);
     }
 
     /// A slerp at the ends and the angle between rotations.
