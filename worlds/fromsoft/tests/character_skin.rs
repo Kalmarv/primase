@@ -229,20 +229,20 @@ fn angle(a: [f32; 3], b: [f32; 3]) -> f64 {
     (dot / (la * lb)).clamp(-1.0, 1.0).acos()
 }
 
-/// A character's finest geometry against SoulsFormats' reading (`PRIMASE_FROMSOFT_SKIN_ORACLE`): the face set each
+/// A character's finest geometry against SoulsFormats' reading (`oracles.soulsformats.sekiro/skin`): the face set each
 /// mesh is lowered from is the one SoulsFormats flags as level 0 without motion blur, with as many triangles as its
 /// index list holds, and every lowered vertex keeps its stored normal (mirrored to the world frame) to within f32
 /// rounding, through `lower-fromsoft-geometry` and `select-lod{form=finest}`.
 #[test]
 #[allow(unsafe_code)]
 fn the_finest_face_set_and_the_stored_normals_survive_lowering() -> Result<()> {
-    let Some(install) = real_data("PRIMASE_SEKIRO_DIR") else {
+    let Some(install) = install(Game::Sekiro) else {
         return Ok(());
     };
-    let Some(dll) = real_data("PRIMASE_OODLE6") else {
+    let Some(dll) = tool(Tool::Oodle6) else {
         return Ok(());
     };
-    let Some(oracle) = real_data("PRIMASE_FROMSOFT_SKIN_ORACLE") else {
+    let Some(oracle) = oracle(OracleSet::SoulsFormats, Game::Sekiro, "skin") else {
         return Ok(());
     };
     // SAFETY: explicitly supplied trusted native decoder.
