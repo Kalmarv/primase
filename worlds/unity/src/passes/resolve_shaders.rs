@@ -19,7 +19,9 @@
 //!   [`builtin`]; its vectors that pack several values (the screen size, the projection's flip and planes, the time) part
 //!   by part ([`builtin_parts`]: each part's own role, the derived ones `Unknown`); anything else `Unknown` with the
 //!   reason, struct (instancing) fields included. Only the bytes the program reads are bound
-//!   ([`primase_shader::ConstantReads`] of the lifted program): a field or part it does not read is left out, counted,
+//!   ([`primase_shader::WordsRead`] of the lifted program: the words its outputs, discards and writes are made of; a
+//!   program whose value graph cannot be followed has every byte bound, counted): a field or part it does not read is
+//!   left out, counted,
 //!   and the bytes between the fields it reads are `Unknown` ("the player stores no field for them"). A buffer the player
 //!   gives no binding slot (the Universal pipeline's `UnityPerMaterial`, which holds the material's own properties, and
 //!   `LightShadows`) is not placed: the DXBC names no buffer and its sizes are not Unity's (a buffer's size there is
@@ -57,7 +59,7 @@ use primase_core::shader::{
     ViewParameter,
 };
 use primase_core::{Component, Entity, Name, Semantic, Texture, World};
-use primase_shader::ConstantReads;
+use primase_shader::WordsRead;
 
 use crate::components::{Parameters, Shape, UnityMaterial, UnityProgramVariant, UnityPrograms, UnityTexEnv};
 use crate::passes::draw_keywords::{SceneKeywords, receivers};
@@ -321,7 +323,7 @@ pub fn buffer_constants(
     size: u32,
     m: &UnityMaterial,
     linear: bool,
-    reads: Option<&ConstantReads>,
+    reads: Option<&WordsRead>,
     counts: &mut BTreeMap<String, u64>,
 ) -> Vec<ConstantBinding> {
     let mut bump = |what: &str| *counts.entry(what.to_owned()).or_default() += 1;
@@ -393,7 +395,7 @@ pub fn buffer_constants(
         }
     }
     // whether the program reads the bytes (every byte, where its reads are not known)
-    let read = |offset: u32, bytes: u32| reads.is_none_or(|r| r.reads(0, slot, offset, bytes));
+    let read = |offset: u32, bytes: u32| reads.is_none_or(|r| r.reads_at(0, slot, offset, bytes));
     let mut out = Vec::new();
     let mut unread = 0u64;
     let mut at = 0;
@@ -790,7 +792,7 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
         );
         let mut shaders: BTreeMap<std::sync::Arc<[u8]>, Result<Entity, String>> = BTreeMap::new();
         // the constants each program reads, taken when it is lifted
-        let mut reads_of: BTreeMap<Entity, ConstantReads> = BTreeMap::new();
+        let mut reads_of: BTreeMap<Entity, WordsRead> = BTreeMap::new();
         let scene = self.scene.then(|| SceneKeywords::read(world));
         if scene.as_ref().is_some_and(|s| !s.known()) {
             log.approximate(
@@ -858,10 +860,19 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
                         Err(e) => Err(format!("a program the lifter refuses: {}", e.group())),
                         Ok(program) => {
                             let e = world.spawn();
-                            reads_of.insert(
-                                e,
-                                ConstantReads::of_module(program.module.clone(), |b| (b.group, b.binding)),
-                            );
+                            match program.constant_reads() {
+                                Ok(reads) => {
+                                    reads_of.insert(e, reads);
+                                }
+                                Err(why) => {
+                                    *counts
+                                        .entry(format!(
+                                            "programs whose constant reads could not be taken ({why}): every byte of \
+                                             their buffers bound"
+                                        ))
+                                        .or_default() += 1;
+                                }
+                            }
                             world.insert(e, Name(format!("{}-{:?}", programs.shader, stage)));
                             world.insert(
                                 e,
@@ -958,7 +969,7 @@ impl ResolveUnityShaders {
         stage: Stage,
         shader: Entity,
         interface: &Interface,
-        reads: Option<&ConstantReads>,
+        reads: Option<&WordsRead>,
         vertex_bound: bool,
         counts: &mut BTreeMap<String, u64>,
     ) -> StageBinding {
@@ -1415,7 +1426,7 @@ mod tests {
             "../../../../toolkit/dxbc/tests/fixtures/modes.dxbc"
         ))
         .unwrap();
-        let reads = ConstantReads::of_module(program.module, |b| (b.group, b.binding));
+        let reads = program.constant_reads().unwrap();
         let parameters = Parameters {
             constant_buffers: vec![ConstantBuffer {
                 name: "UnityPerCamera".into(),
