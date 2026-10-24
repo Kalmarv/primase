@@ -3,9 +3,10 @@
 //! shader bundles' metaparams and the programs' own interfaces:
 //! - every parameter the metaparam declares as a shader input sits at its start word, inside the program's own
 //!   `SAT_MtdParam` array, and holds the material binary's value (else the metaparam's default; a colour's first
-//!   three lanes times its intensity);
-//! - each texture slot's tiling is its uv group's `<group>_CommonUV-UVParam` where the material binary states it, the
-//!   binding's stored scale otherwise;
+//!   three lanes raised to 2.2 when the metaparam states sRGB, then times its intensity; bools as integer words);
+//! - each texture's tiling takes the nonzero MATBIN sampler scale, else its UV group's CommonUV parameter (authored,
+//!   else metaparam default), else 1. The group is matched by Texture2D_N, not metaparam slot index. Both axes are
+//!   centred with offset (1 - scale) / 2, in the row indexed by the program's texture register;
 //! - no texture the material binary declares is bound as an engine texture (a program resource without a
 //!   `Texture2D_<n>` name falls to that branch: they are listed by name);
 //! - the outputs carry Elden Ring's G-buffer roles only ([`Game::gbuffer`]).
@@ -14,6 +15,7 @@
 use primase_core::World;
 use primase_core::shader::{ConstantRole, Shader, ShaderBinding, TextureSource};
 use primase_fromsoft::materials::{Definition, Material, ParameterValue};
+use primase_fromsoft::metaparam::texture_number;
 use primase_fromsoft::sekiro::source::{MaterialShader, ShaderBundle};
 use primase_fromsoft::{Game, Install, Keys, dcx::Decoder, sekiro};
 use std::collections::{BTreeMap, BTreeSet};
@@ -149,6 +151,9 @@ fn elden_ring_materials_bind_as_their_definitions_state() -> Result<()> {
                         let intensity = if want.len() >= 5 { want[4] } else { p.default[4] };
                         want.resize(4, 1.);
                         for v in &mut want[..3] {
+                            if p.srgb {
+                                *v = v.powf(2.2);
+                            }
                             *v *= intensity;
                         }
                     }
@@ -156,35 +161,72 @@ fn elden_ring_materials_bind_as_their_definitions_state() -> Result<()> {
                         failures.push(what(format!("{} is not the material's", p.name)));
                         continue;
                     };
-                    let got: Vec<f32> = words.iter().map(|w| f32::from_bits(*w)).collect();
-                    if got[..] != want[..got.len().min(want.len())] {
-                        failures.push(what(format!("{} = {got:?}, the definition's {want:?}", p.name)));
+                    // SAT bools hold integer 0/1, not the float encoding of 0/1. The remaining types are floats.
+                    let expected: Vec<u32> = want
+                        .iter()
+                        .map(|&v| {
+                            if p.value_type == 0 {
+                                (v as i32) as u32
+                            } else {
+                                v.to_bits()
+                            }
+                        })
+                        .collect();
+                    if expected.get(..words.len()) != Some(words.as_slice()) {
+                        let got: Vec<f32> = words.iter().map(|w| f32::from_bits(*w)).collect();
+                        failures.push(what(format!(
+                            "{}: words {words:?} (floats {got:?}), expected encoded definition {expected:?} \
+                             (type {}, srgb {})",
+                            p.name, p.value_type, p.srgb
+                        )));
                     }
                 }
-                // tiling by uv group
+                // The verified ER tiling convention; derive the expectation from the definition and metaparam,
+                // without calling the production tiling resolver. The array may start after other buffer fields.
+                let tiling_array = shader.interface.resources.iter().find_map(|r| match &r.kind {
+                    primase_core::shader::ResourceKind::ConstantBuffer { layout } => layout
+                        .constants
+                        .iter()
+                        .find(|c| c.name == "FC_TextureTilingScale")
+                        .map(|c| (r.id, c.offset)),
+                    _ => None,
+                });
                 for t in &pixel.textures {
                     let Some(name) = name_of(t.resource) else { continue };
-                    let Some(slot) = name
-                        .rsplit_once("Texture2D_")
-                        .and_then(|(_, s)| s.parse::<u8>().ok())
-                    else {
+                    let Some(number) = texture_number(&name) else {
                         continue;
                     };
-                    let Some(group) = metaparam
+                    let Some((buffer, start)) = tiling_array else {
+                        continue;
+                    };
+                    let sampler = definition
+                        .samplers
+                        .iter()
+                        .find(|s| texture_number(&s.kind) == Some(number))
+                        .map(|s| s.unknown)
+                        .filter(|s| *s != [0.; 2]);
+                    let group = metaparam
                         .textures
                         .iter()
-                        .find(|x| x.slot == slot && !x.uv_group.is_empty())
-                        .map(|x| &x.uv_group)
-                    else {
-                        continue;
+                        .find(|x| texture_number(&x.name) == Some(number) && !x.uv_group.is_empty())
+                        .map(|x| format!("{}_CommonUV-UVParam", x.uv_group));
+                    let group_scale = group.as_ref().and_then(|name| {
+                        match m.definition.as_ref()?.as_ref().parameter(name) {
+                            Some(ParameterValue::Float(uv)) if uv.len() >= 2 => {
+                                Some(([uv[0], uv[1]], "authored CommonUV"))
+                            }
+                            _ => metaparam
+                                .mtd_params
+                                .iter()
+                                .find(|p| p.name == *name)
+                                .map(|p| ([p.default[0], p.default[1]], "default CommonUV")),
+                        }
+                    });
+                    let ([u, v], source) = match sampler {
+                        Some(scale) => (scale, "MATBIN sampler"),
+                        None => group_scale.unwrap_or(([1.; 2], "identity")),
                     };
-                    let Some(ParameterValue::Float(uv)) = m
-                        .definition
-                        .as_ref()
-                        .and_then(|d| d.as_ref().parameter(&format!("{group}_CommonUV-UVParam")))
-                    else {
-                        continue;
-                    };
+                    let expected = [u, v, (1. - u) / 2., (1. - v) / 2.];
                     let register = shader
                         .interface
                         .resources
@@ -193,12 +235,26 @@ fn elden_ring_materials_bind_as_their_definitions_state() -> Result<()> {
                         .and_then(|r| r.provenance.d3d)
                         .map(|b| b.register)
                         .ok_or("texture register")?;
-                    if let Some(c) = pixel.constants.iter().find(|c| {
-                        c.name.as_deref() == Some("FC_TextureTilingScale") && c.offset == register * 16
-                    }) && let ConstantRole::Material(words) = &c.role
-                        && [f32::from_bits(words[0]), f32::from_bits(words[1])] != [uv[0], uv[1]]
-                    {
-                        failures.push(what(format!("{name}: tiling {words:?}, uv group {group} {uv:?}")));
+                    let offset = start + register * 16;
+                    let Some(c) = pixel.constants.iter().find(|c| {
+                        c.name.as_deref() == Some("FC_TextureTilingScale")
+                            && c.resource == buffer
+                            && c.offset == offset
+                    }) else {
+                        failures.push(what(format!(
+                            "{name}: no tiling row at byte {offset} of {buffer:?}"
+                        )));
+                        continue;
+                    };
+                    let ConstantRole::Material(words) = &c.role else {
+                        failures.push(what(format!("{name}: tiling row is not the material's")));
+                        continue;
+                    };
+                    let got: Vec<f32> = words.iter().map(|&w| f32::from_bits(w)).collect();
+                    if got.as_slice() != expected {
+                        failures.push(what(format!(
+                            "{name}: tiling {got:?}, expected {expected:?} from {source}, CommonUV {group:?}"
+                        )));
                     }
                 }
             }
