@@ -290,8 +290,9 @@ pub struct UnityAnimatorController {
     pub default_floats: Vec<f32>,
     pub default_ints: Vec<i64>,
     pub default_bools: Vec<bool>,
-    /// The clips the blend trees' leaves index (`m_AnimationClips`).
-    pub clips: Vec<UnityObject>,
+    /// The clips the blend trees' leaves index (`m_AnimationClips`): one slot per entry, `None` for a null pointer (a leaf's
+    /// index counts it).
+    pub clips: Vec<Option<UnityObject>>,
     /// The scripts of the state machine behaviours (`m_StateMachineBehaviours`), by object.
     pub behaviours: Vec<UnityObject>,
     /// The CRC-32 of a name (a state, path, layer or parameter) and the name (`m_TOS`).

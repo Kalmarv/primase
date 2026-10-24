@@ -606,7 +606,11 @@ impl UnityAnimatorController {
             default_floats: f.floats(defaults, "m_FloatValues")?,
             default_ints: f.ints(defaults, "m_IntValues")?,
             default_bools: f.bools(defaults, "m_BoolValues")?,
-            clips: pointers("m_AnimationClips")?,
+            clips: f
+                .list(&v, "m_AnimationClips")?
+                .iter()
+                .map(|p| Ok(player.resolve(&r.file, p)?.map(|o| UnityObject::from(&o))))
+                .collect::<Result<_>>()?,
             behaviours: pointers("m_StateMachineBehaviours")?,
             tos: f.tos(&v, "m_TOS")?,
         };
@@ -910,17 +914,22 @@ mod tests {
             default_floats: vec![0.0],
             default_ints: vec![],
             default_bools: vec![],
-            clips: vec![UnityObject {
-                file: "f".into(),
-                path_id: 2,
-            }],
+            // the second slot is a null pointer: it still counts as a clip index
+            clips: vec![
+                Some(UnityObject {
+                    file: "f".into(),
+                    path_id: 2,
+                }),
+                None,
+            ],
             behaviours: vec![],
             tos: vec![(5, "Base Layer".into())],
         };
         assert!(controller(0, 0, 0, 0).check("c").is_ok());
+        assert!(controller(1, 0, 0, 0).check("c").is_ok());
         assert!(controller(0, 0, 0, 0).name_of(5) == Some("Base Layer"));
         let e = |c: UnityAnimatorController| c.check("c").unwrap_err().to_string();
-        assert!(e(controller(3, 0, 0, 0)).contains("plays clip 3 of 1"));
+        assert!(e(controller(3, 0, 0, 0)).contains("plays clip 3 of 2"));
         assert!(e(controller(0, 4, 0, 0)).contains("a transition to 4"));
         // a selector destination is SELECTOR_BASE plus its index: with none, 30000 is no destination
         assert!(e(controller(0, 30000, 0, 0)).contains("a transition to 30000"));
