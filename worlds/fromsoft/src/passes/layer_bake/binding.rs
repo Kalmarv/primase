@@ -191,6 +191,45 @@ pub const FADE_POLICY: &str = "dither and camera fades off in the bake (the flag
 pub const ALPHA_TEST_POLICY: &str =
     "alpha test off in the bake (FC_AlphaRef.x frozen to -100): the cutout is the albedo's alpha";
 
+/// The constant buffers of a resolved pixel stage as the program bake freezes them: each constant's words by its role
+/// ([`frozen_words`]) at its place, inside the rows the program reads (it reads no others), and `FC_AlphaRef` frozen to
+/// [`ALPHA_TEST_OFF`] wherever the stage binds it ([`ALPHA_TEST_POLICY`]). `interface` is the stage's program's, whose
+/// resources the binding names.
+pub(crate) fn program_constants(
+    shader: &ProgramShader,
+    interface: &primase_core::shader::Interface,
+    stage: &primase_core::shader::StageBinding,
+    frame: &FrozenFrame,
+    policies: &mut BTreeMap<String, u64>,
+) -> Result<Constants> {
+    let layout = Layout::of(shader).map_err(|e| invalid("layer binding", e.at, e.detail))?;
+    let mut constants = Constants::new(&layout);
+    for c in &stage.constants {
+        let resource = interface
+            .resource(c.resource)
+            .ok_or_else(|| invalid("layer binding", 0, "constant resource absent"))?;
+        let slot = resolve::register(resource)?;
+        let Some(mut words) = frozen_words(&c.role, c.lines.as_ref(), frame, policies)? else {
+            continue;
+        };
+        if c.name.as_deref() == Some("FC_AlphaRef") && !words.is_empty() {
+            words[0] = ALPHA_TEST_OFF.to_bits();
+            policies.insert(ALPHA_TEST_POLICY.into(), 1);
+        }
+        let Some(&(_, rows)) = shader.constant_buffers().iter().find(|(s, _)| *s == slot) else {
+            continue;
+        };
+        let start = c.offset / 4;
+        words.truncate((c.size / 4).min((rows * 4).saturating_sub(start)) as usize);
+        if !words.is_empty() {
+            constants
+                .set_words(slot, start, &words)
+                .map_err(|e| invalid("layer binding", e.at, e.detail))?;
+        }
+    }
+    Ok(constants)
+}
+
 /// The policy a consumer counts when it runs a skinning program: the pose is the bind pose, every joint's matrix the
 /// identity, so a vertex at weight one on any joint is where it is stored. What the layered pixel program is given
 /// (coordinates, layer weights, tint) does not depend on the pose.

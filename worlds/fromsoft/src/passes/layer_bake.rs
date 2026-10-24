@@ -3,7 +3,7 @@ mod sampler;
 pub use sampler::{FILTERING, base_texture, sample, srgb, stored, wrapped_texture};
 mod binding;
 pub(crate) use binding::OutputRgb;
-pub(crate) use binding::frozen_words;
+pub(crate) use binding::program_constants;
 pub use binding::{
     ALPHA_TEST_POLICY, BIND_POSE_POLICY, Bake, FrozenFrame, INSTANCE_DATA_POLICY, Inputs, Prepared, Programs,
     SECOND_UV_APPROXIMATION, TEXTURE_SCROLL_POLICY,

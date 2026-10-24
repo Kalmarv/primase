@@ -8,8 +8,7 @@ use primase_core::shader::{
 use primase_core::{ColorSpace, Texture, World};
 use primase_image::sampling::{Address, Levels, Transfer};
 use primase_shader_exec::{
-    Grid, Input, Invocation, Lane, Layout, PixelShader, Raw, SampledTexture, SamplerUse, Unstated,
-    evaluate::Constants, evaluate_raw_with,
+    Grid, Input, Invocation, Lane, PixelShader, Raw, SampledTexture, SamplerUse, Unstated, evaluate_raw_with,
 };
 use primase_texcodec::TexDecoder;
 use std::{collections::BTreeMap, sync::Arc};
@@ -140,35 +139,9 @@ pub(super) fn bake(
     }
     let emission = index(|r| matches!(r, OutputRole::Emission { .. }));
     let mut policies = BTreeMap::new();
-    let layout = Layout::of(&shader).map_err(|e| e.to_string())?;
-    let mut constants = Constants::new(&layout);
     let frame = FrozenFrame::static_bake(time);
-    for c in &stage.constants {
-        let resource = core
-            .interface
-            .resource(c.resource)
-            .ok_or("constant resource absent")?;
-        let slot = layer_bake::resolve::register(resource).map_err(|e| e.to_string())?;
-        let Some(mut words) = layer_bake::frozen_words(&c.role, c.lines.as_ref(), &frame, &mut policies)
-            .map_err(|e| e.to_string())?
-        else {
-            continue;
-        };
-        if c.name.as_deref() == Some("FC_AlphaRef") && !words.is_empty() {
-            words[0] = (-100f32).to_bits();
-            policies.insert(layer_bake::ALPHA_TEST_POLICY.into(), 1);
-        }
-        let Some(&(_, rows)) = shader.constant_buffers().iter().find(|(s, _)| *s == slot) else {
-            continue;
-        };
-        let start = c.offset / 4;
-        words.truncate((c.size / 4).min((rows * 4).saturating_sub(start)) as usize);
-        if !words.is_empty() {
-            constants
-                .set_words(slot, start, &words)
-                .map_err(|e| e.to_string())?;
-        }
-    }
+    let constants = layer_bake::program_constants(&shader, &core.interface, stage, &frame, &mut policies)
+        .map_err(|e| e.to_string())?;
     let mut textures = BTreeMap::new();
     let mut source_size = [0; 2];
     for t in &stage.textures {

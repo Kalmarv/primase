@@ -24,7 +24,7 @@ pub use archive::{Archive, Install, Keys, NameDictionary};
 pub use binder::{Binder, BinderFile};
 pub use game::Game;
 mod components;
-pub use passes::{geometry, layer_bake, preview, rigid};
+pub use passes::{detail_probe, geometry, layer_bake, preview, rigid};
 pub use read::{archive, binder, dcx};
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
