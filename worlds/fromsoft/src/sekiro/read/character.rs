@@ -920,6 +920,39 @@ pub fn part_forms(archive: &Archive, decoder: &Decoder<'_>, part: &str) -> Resul
     Ok(item.forms(&binder)?.into_iter().map(|f| f.name).collect())
 }
 
+/// The textures a part binder holds as images (`fc_m_0000`: `FC_M_0000.tpf`), by name in binder order, each as the
+/// `core.texture` its DDS stores: what a part with no model is made of (a face's textures, which the parts that wear
+/// them bind). Empty where the binder holds no `.tpf` member; a part not in the archives is refused. Nothing else of the
+/// binder is read.
+pub fn part_textures(
+    archive: &Archive,
+    decoder: &Decoder<'_>,
+    part: &str,
+) -> Result<Vec<(String, primase_core::Texture)>> {
+    let item = Item::Part(part_name(part)?);
+    let path = item.binder_path();
+    if !textures::has(archive, &path) {
+        return Err(invalid(
+            "FromSoftware part",
+            0,
+            format!("{path} is not in the archives"),
+        ));
+    }
+    let binder = Binder::read(&archive.read(&path, decoder)?, decoder)?;
+    let mut out = Vec::new();
+    for f in &binder.files {
+        let name = f.name.as_deref().unwrap_or("");
+        if !crate::names::fold(name).ends_with(".tpf") {
+            continue;
+        }
+        let package = crate::tpf::Package::read(&decoder.decode_if_dcx(&f.bytes)?)?;
+        for t in &package.textures {
+            out.push((t.name.clone(), t.image()?));
+        }
+    }
+    Ok(out)
+}
+
 /// Read the parts `parts` (`bd_m_9120_l`, each from `parts/<name>.partsbnd`) of the install at `install` into
 /// `destination`, which must be empty. Each form of a part (each FLVER its binder holds, see the module documentation)
 /// is an asset of its own, read as [`read_character`] reads a character: its own skeleton (its FLVER's bones, as
