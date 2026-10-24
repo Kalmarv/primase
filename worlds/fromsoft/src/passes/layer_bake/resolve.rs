@@ -1187,13 +1187,12 @@ pub const PALETTE_ROWS_RULE: &str = "joints' palette read but not applied as a m
 /// place their translations. A palette the program does not read, or applies both ways, is left as it shows.
 /// Returns whether a palette was so stated.
 fn palette_rows_by_rule(constants: &mut [ConstantBinding]) -> bool {
-    let not_applied = Unshown::NotApplied.to_string();
     let mut ruled = false;
     for c in constants
         .iter_mut()
         .filter(|c| c.role == ConstantRole::Object(ObjectParameter::BonePalette))
     {
-        if matches!(&c.lines, Some(MatrixLines::Unshown { why }) if *why == not_applied) {
+        if c.lines == Some(MatrixLines::Unshown(Unshown::NotApplied)) {
             c.lines = Some(MatrixLines::Rows);
             ruled = true;
         }

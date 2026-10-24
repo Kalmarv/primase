@@ -197,7 +197,7 @@ fn a_stage_states_the_lines_of_its_matrices() {
     assert_eq!(lines[0], Some(MatrixLines::Columns));
     assert_eq!(lines[1], Some(MatrixLines::Rows));
     assert!(
-        matches!(&lines[2], Some(MatrixLines::Unshown { why }) if why.contains("sums no product")),
+        lines[2] == Some(MatrixLines::Unshown(Unshown::NotApplied)),
         "{:?}",
         lines[2]
     );
@@ -209,5 +209,10 @@ fn a_stage_states_the_lines_of_its_matrices() {
         ConstantRole::View(ViewParameter::ViewProjection),
     )];
     assert_eq!(state_lines(Err("a call"), &skin.interface, &mut again), 1);
-    assert!(matches!(&again[0].lines, Some(MatrixLines::Unshown { why }) if why.contains("a call")));
+    assert_eq!(
+        again[0].lines,
+        Some(MatrixLines::Unshown(Unshown::Unexamined {
+            why: "the value graph: a call".into()
+        }))
+    );
 }

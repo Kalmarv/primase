@@ -236,9 +236,42 @@ pub enum MatrixLines {
     Rows,
     /// Each line is one of its columns.
     Columns,
-    /// The program does not show which, and why. The role stands; a consumer that writes a matrix unequal to its
-    /// transpose (a camera's) cannot bind it, one that writes the identity can.
-    Unshown { why: String },
+    /// The program does not show which, and why ([`Unshown`]). The role stands; a consumer that writes a matrix unequal
+    /// to its transpose (a camera's) cannot bind it, one that writes the identity can.
+    Unshown(Unshown),
+}
+
+/// Why a program does not show a matrix's lines ([`MatrixLines::Unshown`]): the kind a consumer branches on, its text
+/// ([`std::fmt::Display`]) the reason.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Unshown {
+    /// Its results are made of none of the matrix's words.
+    NotRead,
+    /// It reads them but sums no product of them with other values: it does not apply the matrix.
+    NotApplied,
+    /// It applies the matrix both ways: `along` sums of one line's words, `across` of one lane's.
+    BothWays { along: usize, across: usize },
+    /// The program could not be examined for it, and `why`: its value graph could not be built, or the matrix's buffer
+    /// could not be found in it.
+    Unexamined { why: String },
+}
+
+impl std::fmt::Display for Unshown {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Unshown::NotRead => f.write_str("the program's results are made of none of the matrix's words"),
+            Unshown::NotApplied => f.write_str(
+                "the program sums no product of the matrix's words with other values: it does not show how it \
+                 applies the matrix",
+            ),
+            Unshown::BothWays { along, across } => write!(
+                f,
+                "the program applies the matrix both ways: {along} sums of one line's words and {across} of one lane's"
+            ),
+            Unshown::Unexamined { why } => f.write_str(why),
+        }
+    }
 }
 
 impl ConstantRole {
@@ -1042,7 +1075,7 @@ impl StageBinding {
                         c.offset, c.role
                     )));
                 }
-                (true, Some(MatrixLines::Unshown { why })) if why.trim().is_empty() => {
+                (true, Some(MatrixLines::Unshown(Unshown::Unexamined { why }))) if why.trim().is_empty() => {
                     return Err(at(format!(
                         "constant {named}at {} is a matrix whose lines are unshown with no reason",
                         c.offset
@@ -1848,11 +1881,16 @@ mod tests {
             err.contains("constant tint at 0 is a matrix") && err.contains("lines are not stated"),
             "{err}"
         );
-        let unshown = |why: &str| MatrixLines::Unshown { why: why.into() };
-        for lines in [MatrixLines::Rows, MatrixLines::Columns, unshown("not applied")] {
+        let unexamined = |why: &str| MatrixLines::Unshown(Unshown::Unexamined { why: why.into() });
+        for lines in [
+            MatrixLines::Rows,
+            MatrixLines::Columns,
+            MatrixLines::Unshown(Unshown::NotApplied),
+            unexamined("no value graph"),
+        ] {
             assert_eq!(verify(&mut w, view_projection.clone(), Some(lines)), Ok(()));
         }
-        let err = verify(&mut w, view_projection.clone(), Some(unshown(" "))).unwrap_err();
+        let err = verify(&mut w, view_projection.clone(), Some(unexamined(" "))).unwrap_err();
         assert!(err.contains("unshown with no reason"), "{err}");
         assert_eq!(
             verify(

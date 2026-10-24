@@ -240,7 +240,7 @@ pub(crate) fn frozen_words(
             let element: Vec<u32> = match lines {
                 Some(MatrixLines::Rows) => bits(&frame.world),
                 Some(MatrixLines::Columns) => bits(&frame.world).into_iter().chain([0; 4]).collect(),
-                Some(MatrixLines::Unshown { why }) => {
+                Some(MatrixLines::Unshown(why)) => {
                     *policies
                         .entry(format!(
                             "a palette whose lines the program does not show, left at frozen zero: {why}"

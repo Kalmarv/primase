@@ -13,6 +13,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use naga::{BinaryOperator, MathFunction, UnaryOperator};
+pub use primase_core::shader::Unshown;
 use primase_core::shader::{ConstantBinding, MatrixLines};
 
 use crate::flow::{At, Literal, Node, NodeId, Op, Values};
@@ -187,41 +188,14 @@ pub fn lines(values: &Values, resource: ResourceId, words: &Words) -> Result<Maj
     }
 }
 
-/// Why a program does not show a matrix's lines ([`lines`]).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Unshown {
-    /// Its results are made of none of the matrix's words.
-    NotRead,
-    /// It reads them but sums no product of them with other values: it does not apply the matrix.
-    NotApplied,
-    /// It applies the matrix both ways: `along` sums of one line's words, `across` of one lane's.
-    BothWays { along: usize, across: usize },
-}
-
-impl std::fmt::Display for Unshown {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Unshown::NotRead => f.write_str("the program's results are made of none of the matrix's words"),
-            Unshown::NotApplied => f.write_str(
-                "the program sums no product of the matrix's words with other values: it does not show how it \
-                 applies the matrix",
-            ),
-            Unshown::BothWays { along, across } => write!(
-                f,
-                "the program applies the matrix both ways: {along} sums of one line's words and {across} of one lane's"
-            ),
-        }
-    }
-}
-
 /// States the lines ([`ConstantBinding::lines`]) of each matrix role among `constants`, bindings over the resources of
 /// `interface`, from the program's value graph and its own interface ([`ProgramGraph`]; a program lifted again may
 /// number its resources otherwise, so a buffer is found by its D3D binding): [`lines`] of the matrix's words at their
 /// places, or, where the program's results are made of none of them there, of the words of its buffer the program
 /// reads by an index, when the program's layout shows the matrix is its buffer's one array (a palette; the indexed
-/// reads of a buffer holding other arrays could be theirs). A matrix whose lines the program does not show, or every
-/// matrix where the graph could not be built (`graph` is why), keeps its role with [`MatrixLines::Unshown`] and the
-/// reason. Returns how many are unshown.
+/// reads of a buffer holding other arrays could be theirs). A matrix whose lines the program does not show keeps its
+/// role with [`MatrixLines::Unshown`] and the kind [`lines`] gives; every matrix where the graph could not be built
+/// (`graph` is why), or whose buffer is not found in it, with [`Unshown::Unexamined`]. Returns how many are unshown.
 pub fn state_lines(
     graph: Result<&ProgramGraph, &str>,
     interface: &Interface,
@@ -229,13 +203,16 @@ pub fn state_lines(
 ) -> usize {
     let mut unshown = 0;
     for c in constants.iter_mut().filter(|c| c.role.is_matrix()) {
+        let unexamined = |why: String| Unshown::Unexamined { why };
         let found = graph
-            .map_err(|why| format!("the value graph: {why}"))
+            .map_err(|why| unexamined(format!("the value graph: {why}")))
             .and_then(|graph| {
                 let d3d = interface
                     .resource(c.resource)
                     .and_then(|r| r.provenance.d3d)
-                    .ok_or("its buffer has no D3D binding to find it in the program by")?;
+                    .ok_or_else(|| {
+                        unexamined("its buffer has no D3D binding to find it in the program by".into())
+                    })?;
                 let (buffer, layout) = graph
                     .interface
                     .resources
@@ -250,7 +227,9 @@ pub fn state_lines(
                         }
                         _ => None,
                     })
-                    .ok_or("the program has no constant buffer at its D3D binding")?;
+                    .ok_or_else(|| {
+                        unexamined("the program has no constant buffer at its D3D binding".into())
+                    })?;
                 let at = Words::At(c.offset / 4..(c.offset + c.size).div_ceil(4));
                 match lines(&graph.values, buffer, &at) {
                     Err(Unshown::NotRead) => {
@@ -265,20 +244,19 @@ pub fn state_lines(
                             });
                         if !alone {
                             // the buffer's indexed reads, if any, may be another array's
-                            return Err(Unshown::NotRead.to_string());
+                            return Err(Unshown::NotRead);
                         }
                         lines(&graph.values, buffer, &Words::Indexed)
                     }
                     other => other,
                 }
-                .map_err(|why| why.to_string())
             });
         c.lines = Some(match found {
             Ok(Majorness::Row) => MatrixLines::Rows,
             Ok(Majorness::Column) => MatrixLines::Columns,
             Err(why) => {
                 unshown += 1;
-                MatrixLines::Unshown { why }
+                MatrixLines::Unshown(why)
             }
         });
     }
