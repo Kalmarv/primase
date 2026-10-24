@@ -37,23 +37,13 @@ use crate::components::{AnvilPalette, AnvilRigOccurrence, AnvilSkinned};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LowerAnvilSkin;
 
-/// A mesh's stored inverse bind (four rows of x, y, z, w) as the affine map it is: the rows are the columns. Refused
-/// where the last column isn't (0, 0, 0, 1).
+/// How far a stored inverse bind's last row may be from 0 0 0 1: the files store it to float noise.
+const AFFINE_TOLERANCE: f32 = 1e-4;
+
+/// A mesh's stored inverse bind (four rows of x, y, z, w: the rows are the matrix's columns) as the affine map it is
+/// ([`Transform::from_columns4`], within [`AFFINE_TOLERANCE`]).
 fn affine(m: &[[f32; 4]; 4]) -> Result<Transform, String> {
-    let [r0, r1, r2, r3] = *m;
-    if [r0[3], r1[3], r2[3]].iter().any(|v| v.abs() > 1e-4) || (r3[3] - 1.0).abs() > 1e-4 {
-        return Err(format!(
-            "an inverse bind {m:?} isn't affine (its last column isn't 0, 0, 0, 1)"
-        ));
-    }
-    Ok(Transform {
-        cols: [
-            [r0[0], r0[1], r0[2]],
-            [r1[0], r1[1], r1[2]],
-            [r2[0], r2[1], r2[2]],
-            [r3[0], r3[1], r3[2]],
-        ],
-    })
+    Transform::from_columns4(*m, AFFINE_TOLERANCE).map_err(|e| format!("an inverse bind: {e}"))
 }
 
 /// Each slot of the palette that some vertex gives a weight.

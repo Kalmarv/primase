@@ -154,21 +154,16 @@ fn numbers<const N: usize>(o: &Obj<'_>, key: &str) -> Result<Option<[f32; N]>> {
         .transpose()
 }
 
-/// A column-major 4x4 matrix's first three rows, refused unless its last row is `0 0 0 1`.
+/// A column-major 4x4 matrix's first three rows ([`primase_core::Transform::from_columns4`]), refused unless its last
+/// row is exactly `0 0 0 1`: glTF states a node's and an inverse bind's matrices affine.
 fn affine(m: &[f32], path: &str) -> Result<[[f32; 3]; 4]> {
-    if m.len() != 16 {
-        return Err(invalid(path, &format!("a matrix of {} values, not 16", m.len())));
-    }
-    if [m[3], m[7], m[11], m[15]] != [0.0, 0.0, 0.0, 1.0] {
-        return Err(invalid(
-            path,
-            &format!(
-                "a matrix whose last row is {:?}, not 0 0 0 1 (not affine)",
-                [m[3], m[7], m[11], m[15]]
-            ),
-        ));
-    }
-    Ok(std::array::from_fn(|c| [m[4 * c], m[4 * c + 1], m[4 * c + 2]]))
+    let m: &[f32; 16] = m
+        .try_into()
+        .map_err(|_| invalid(path, &format!("a matrix of {} values, not 16", m.len())))?;
+    let cols = std::array::from_fn(|c| [m[4 * c], m[4 * c + 1], m[4 * c + 2], m[4 * c + 3]]);
+    primase_core::Transform::from_columns4(cols, 0.0)
+        .map(|t| t.cols)
+        .map_err(|e| invalid(path, &e))
 }
 
 impl Gltf {

@@ -144,6 +144,26 @@ impl Transform {
         })
     }
 
+    /// A 4x4 matrix given column by column (each column x, y, z, w) as the affine transform it is: refused unless its
+    /// last row (the columns' w) is 0, 0, 0, 1, each within `tolerance`, the one a format states (0: exactly). The
+    /// one rule every reader of a 4x4 matrix holds it to; a format that stores three rows is affine by its storage.
+    pub fn from_columns4(cols: [[f32; 4]; 4], tolerance: f32) -> Result<Transform, String> {
+        let last = cols.map(|c| c[3]);
+        // written so that a NaN entry is refused
+        if !last
+            .iter()
+            .zip([0.0, 0.0, 0.0, 1.0])
+            .all(|(&w, want)| (w - want).abs() <= tolerance)
+        {
+            return Err(format!(
+                "a matrix whose last row is {last:?}, not 0 0 0 1 (not affine)"
+            ));
+        }
+        Ok(Transform {
+            cols: cols.map(|c| [c[0], c[1], c[2]]),
+        })
+    }
+
     /// `self` after `inner` (`world = self (inner local)`): the transform of an entity placed by `inner` in a space
     /// `self` places, computed in f64 from the stored values and each entry rounded once to f32. A chain of several
     /// rounds at each link; a chain whose intermediate rounding matters is composed in f64 by its owner.
@@ -1695,6 +1715,31 @@ mod tests {
             TransformKind::Degenerate
         );
     }
+    /// A 4x4 matrix is affine when its last row is 0 0 0 1 within the format's tolerance (0: exactly); a NaN there
+    /// is refused whatever the tolerance.
+    #[test]
+    fn a_four_by_four_is_affine_by_its_last_row() {
+        let m = [
+            [1., 0., 0., 0.],
+            [0., 2., 0., 0.],
+            [0., 0., 3., 0.],
+            [4., 5., 6., 1.],
+        ];
+        let t = Transform::from_columns4(m, 0.0).unwrap();
+        assert_eq!(t.cols, [[1., 0., 0.], [0., 2., 0.], [0., 0., 3.], [4., 5., 6.]]);
+        let mut noisy = m;
+        noisy[0][3] = 5e-5;
+        assert!(Transform::from_columns4(noisy, 0.0).is_err());
+        assert!(Transform::from_columns4(noisy, 1e-4).is_ok());
+        let mut projective = m;
+        projective[3][3] = 2.0;
+        let e = Transform::from_columns4(projective, 1e-4).unwrap_err();
+        assert!(e.contains("not affine"), "{e}");
+        let mut nan = m;
+        nan[2][3] = f32::NAN;
+        assert!(Transform::from_columns4(nan, f32::INFINITY).is_err());
+    }
+
     /// Composition is `outer (inner v)`, each entry rounded once: 1 + 2^-24 + 2^-24 is 1 + 2^-23 (an f32), where
     /// summing in f32 would round to 1 at each step.
     #[test]

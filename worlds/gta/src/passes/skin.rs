@@ -29,7 +29,8 @@ use primase_core::{Entity, Lods, Mesh, Semantic, Stream, Transform, World};
 
 use crate::components::{BlendStreams, GTA, GtaBlendStreams, GtaSkeleton, GtaSkeletonRef};
 
-/// A transform of the form `[x, y, z, translation]` rows (`p' = A (p, 1)`) as core's columns.
+/// A transform of the form `[x, y, z, translation]` rows (`p' = A (p, 1)`) as core's columns. The format stores these
+/// three rows only (48 bytes a bone), so the matrix is affine by its storage: there is no last row to check.
 fn affine(rows: &[[f32; 4]; 3]) -> Transform {
     Transform {
         cols: std::array::from_fn(|c| std::array::from_fn(|r| rows[r][c])),
