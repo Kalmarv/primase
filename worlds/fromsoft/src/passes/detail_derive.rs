@@ -20,6 +20,8 @@ use primase_shader_exec::ImageSample;
 use primase_shader_exec::probe::AnsweredReads;
 
 use crate::detail_probe::ProgramProbe;
+pub use crate::probe_accept::BOUND_UNITS;
+use crate::probe_accept::{Seeded, moved, units, word_sources};
 
 /// How many random sample sets a proof runs.
 pub const PROOF_SETS: usize = 256;
@@ -50,12 +52,6 @@ pub struct TwoDetailConstants {
     /// The binding's gloss encoding: the gloss is solved as stored and decoded by it.
     pub gloss_encoding: primase_core::shader::ScalarEncoding,
 }
-
-/// How far a decoded role of the program may be from the equation's, in units of `f32::EPSILON` of the larger
-/// magnitude (of one, below it): the equation's f32 order (the tint fold, the lerp's form) and the G-buffer's encodings
-/// decoded back (a square root of a gloss, a square of a reflectance) are each a few roundings; 64 covers them with
-/// room, and is far below any difference of form (a wrong constant or term moves a lane by orders more).
-pub const BOUND_UNITS: f32 = 64.;
 
 /// A proof's result: the largest difference seen per role.
 #[derive(Clone, Debug, PartialEq)]
@@ -436,23 +432,8 @@ fn solve_at(program: &Program<'_>, scale: f32) -> Result<Option<(TwoDetailConsta
     )))
 }
 
-/// A seeded sequence of floats from 0 to 1 (xorshift32), the same for the same seed.
-struct Unit(u32);
-
-impl Unit {
-    fn next(&mut self) -> f32 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 17;
-        self.0 ^= self.0 << 5;
-        (self.0 >> 8) as f32 / (1u32 << 24) as f32
-    }
-    fn lanes(&mut self) -> [f32; 4] {
-        [self.next(), self.next(), self.next(), self.next()]
-    }
-}
-
 /// One random sample set.
-fn random_samples(random: &mut Unit) -> Samples {
+fn random_samples(random: &mut Seeded) -> Samples {
     Samples {
         a: random.lanes(),
         n: random.lanes(),
@@ -484,20 +465,15 @@ fn equation(c: &TwoDetailConstants, gain: f32, s: &Samples) -> DetailSurface {
     mix.evaluate(&s.as_core(), &[mask_value([0., 0., 0., -1.], 1., s.n)])
 }
 
-/// Units of `f32::EPSILON` `a` is from `b`, of the larger magnitude (or of one, near zero).
-fn units(a: f32, b: f32) -> f32 {
-    (a - b).abs() / (f32::EPSILON * a.abs().max(b.abs()).max(1.))
-}
-
 /// `program` against the equation of `c` on [`PROOF_SETS`] random sample sets at random coordinates: the largest
 /// difference per role, or the first set past [`BOUND_UNITS`] (or with an emission).
 fn prove(program: &Program<'_>, c: &TwoDetailConstants, frame: &Frame, seed: u32) -> Result<Proof, String> {
-    let mut random = Unit(seed | 1);
+    let mut random = Seeded::new(seed);
     let mut largest: BTreeMap<&'static str, f32> = BTreeMap::new();
     let limit = BOUND_UNITS;
     for set in 0..PROOF_SETS {
         let s = random_samples(&mut random);
-        let uv = [random.next(), random.next()];
+        let uv = [random.unit(), random.unit()];
         let seen = program.observe(&s, uv)?;
         let want = equation(c, 1., &s);
         // the equation's tangent normal through the program's frame, unit length
@@ -646,70 +622,39 @@ fn constant_lanes(c: &TwoDetailConstants) -> Vec<(String, f32)> {
     out
 }
 
-/// A material word changed by enough to move what reads it far past [`BOUND_UNITS`] (one part in 32), and to something
-/// where it is zero.
-fn perturbed(v: f32) -> f32 {
-    if v == 0. { 1. / 32. } else { v * (1. + 1. / 32.) }
-}
-
-/// Each solved constant of `program` beside the material word it reads: each word of the material changed alone and the
-/// constants solved again, a constant moved past [`BOUND_UNITS`] reading the word. The words are restored.
+/// Each constant of `probe`'s program, as solved, beside the material word it reads ([`word_sources`]: each word
+/// changed alone and the constants solved again).
 fn compare_fields(
     probe: &mut ProgramProbe,
     outputs: Outputs,
     roles: SlotRoles,
-    constants: &TwoDetailConstants,
 ) -> Result<Vec<FieldComparison>, String> {
-    let lanes = constant_lanes(constants);
-    let mut fields: Vec<Vec<(String, u32, f32)>> = vec![Vec::new(); lanes.len()];
-    let limit = BOUND_UNITS;
-    for m in probe.material.clone() {
-        for k in 0..m.words {
-            let word = m.word + k;
-            let [bits] = probe
-                .words(m.buffer, word, 1)
-                .ok_or_else(|| format!("{} word {k} is past its buffer", m.name))?[..]
-            else {
-                unreachable!("one word read")
-            };
-            let value = f32::from_bits(bits);
-            probe
-                .set_words(m.buffer, word, &[perturbed(value).to_bits()])
-                .map_err(|e| e.to_string())?;
-            let moved = solve(&Program {
-                probe,
-                outputs,
-                roles,
-            });
-            probe
-                .set_words(m.buffer, word, &[bits])
-                .map_err(|e| e.to_string())?;
-            let (moved, _, _) = moved.map_err(|e| format!("{} word {k} changed: {e}", m.name))?;
-            for (i, ((_, before), (_, after))) in lanes.iter().zip(constant_lanes(&moved)).enumerate() {
-                if units(*before, after) > limit {
-                    fields[i].push((m.name.clone(), k, value));
-                }
-            }
-        }
-    }
+    let read = |probe: &ProgramProbe| {
+        solve(&Program {
+            probe,
+            outputs,
+            roles,
+        })
+        .map(|(c, _, _)| constant_lanes(&c))
+    };
+    let lanes = word_sources(probe, read)?;
     // the gain: the first tint lane over its word, where it reads one
-    let gain = match fields[0].as_slice() {
-        [(_, _, word)] if *word != 0. => Some(lanes[0].1 / word),
+    let gain = match lanes[0].2.as_slice() {
+        [w] if w.value != 0. => Some(lanes[0].1 / w.value),
         _ => None,
     };
     Ok(lanes
         .into_iter()
-        .zip(fields)
-        .map(|((constant, solved), fields)| {
-            let expected = match fields.as_slice() {
-                [(_, _, word)] if constant.starts_with("tint") => gain.map(|g| g * word),
-                [(_, _, word)] => Some(*word),
+        .map(|(constant, solved, sources)| {
+            let expected = match sources.as_slice() {
+                [w] if constant.starts_with("tint") => gain.map(|g| g * w.value),
+                [w] => Some(w.value),
                 _ => None,
             };
             FieldComparison {
                 constant,
                 solved,
-                fields: fields.into_iter().map(|(name, k, _)| (name, k)).collect(),
+                fields: sources.into_iter().map(|w| (w.field, w.word)).collect(),
                 expected,
             }
         })
@@ -719,12 +664,12 @@ fn compare_fields(
 /// The fold's cost: the equation of `c` against the one with `gain` and the tints `gain` divides out of them, on the
 /// proof's random sets ([`prove`]'s sequence for `seed`); an error past [`BOUND_UNITS`].
 fn fold_cost(c: &TwoDetailConstants, gain: f32, words: [[f32; 3]; 2], seed: u32) -> Result<FoldCost, String> {
-    let mut random = Unit(seed | 1);
+    let mut random = Seeded::new(seed);
     let limit = BOUND_UNITS;
     let mut largest = 0f32;
     for _ in 0..PROOF_SETS {
         let s = random_samples(&mut random);
-        let _uv = [random.next(), random.next()];
+        let _uv = [random.unit(), random.unit()];
         let folded = equation(c, 1., &s);
         let unfolded = equation(&TwoDetailConstants { tint: words, ..*c }, gain, &s);
         for i in 0..3 {
@@ -756,7 +701,7 @@ fn derive_with(
     let (constants, frame, design_scale) = solve(&program)?;
     let proof = prove(&program, &constants, &frame, seed)
         .map_err(|e| format!("{constants:?} frame {frame:?}: {e}"))?;
-    let fields = compare_fields(probe, outputs, roles, &constants)?;
+    let fields = compare_fields(probe, outputs, roles)?;
     let tint_words: Option<Vec<f32>> = fields[..6]
         .iter()
         .map(|f| match f.fields.as_slice() {
@@ -798,12 +743,6 @@ fn slots(t: &[u32]) -> String {
         return "none".into();
     }
     t.iter().map(|t| format!("t{t}")).collect::<Vec<_>>().join(", ")
-}
-
-/// Whether two lanes differ past [`BOUND_UNITS`]: by more than the roundings of a term that only rounds through them (a lerp
-/// at either end, `w * (x - y) + y`, carries `y`'s rounding at `w = 1`).
-fn moved(x: f32, y: f32) -> bool {
-    units(x, y) > BOUND_UNITS
 }
 
 /// Whether any decoded role differs between two runs past [`BOUND_UNITS`].
