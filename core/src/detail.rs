@@ -14,7 +14,7 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::layered::{Channel, Source, check_source};
+use crate::layered::{Source, check_source, mask_value};
 use crate::pbr::TextureRef;
 use crate::shader::ScalarEncoding;
 use crate::{Component, Entity, JsonError, World};
@@ -50,9 +50,10 @@ pub const DETAIL_LIMIT: usize = 3;
 /// - albedo `(1 - f) * C * colour`, reflectance (F0) `lerp(dielectric_f0, C, f)`
 /// - normal: `xy = 2 * N.xy - 1`, `z = sqrt(1 - min(dot(xy, xy), 1))` of the base's `xy`, then `xy += normal_strength *
 ///   (2 * chain(K_i.xy) - 1)`: tangent space, unnormalised
-/// - gloss: `saturate(2 * N.z * chain(K_i.z + gloss_bias_i))` as the program stores it, decoded by `gloss_encoding` (the
-///   smoothness the lighting reads)
-/// - alpha `saturate(D_0.a * A.a)`
+/// - gloss: `saturate(2 * chain(s_i) * chain(K_i.z + gloss_bias_i))` as the program stores it, each detail's scale `s_i`
+///   as it states ([`GlossScale`]), decoded by `gloss_encoding` (the smoothness the lighting reads)
+/// - alpha `saturate(D_alpha.a * A.a)` of the detail `alpha` states, where the program's alpha has a role; 1 where it
+///   has none
 ///
 /// One detail is no lerp at all. The operations are [`DetailLerp::evaluate`]'s, in its order.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -62,9 +63,8 @@ pub struct DetailLerp {
     pub base_mask: TextureRef,
     /// One to [`DETAIL_LIMIT`], in the chain's order.
     pub details: Vec<Detail>,
-    /// The weight each detail after the first is lerped in by, per pixel, from the base's samples (as `1 - N.a` or
-    /// `N.a` to the eighth: a [`Channel::Power`]): one fewer than the details.
-    pub weights: Vec<Channel>,
+    /// The weight each detail after the first is lerped in by, per pixel ([`Weight`]): one fewer than the details.
+    pub weights: Vec<Weight>,
     pub gain: f32,
     pub normal_strength: f32,
     /// The reflectance (F0) of the dielectric part, where `f` is 0.
@@ -73,6 +73,107 @@ pub struct DetailLerp {
     pub colour: [f32; 3],
     /// How the program stores the gloss in its G-buffer (the binding's `Gloss` encoding).
     pub gloss_encoding: ScalarEncoding,
+    /// The detail whose colour's alpha, times the base colour's, is the surface's alpha: where the program writes its
+    /// alpha to a lane with a role (the binding's `Coverage` or `Opacity`). `None` where that lane has no role (no blend
+    /// weighs by it, no discard tests it): the surface is opaque.
+    pub alpha: Option<usize>,
+}
+
+/// The largest exponent of a [`WeightStep::Power`].
+pub const WEIGHT_POWER_LIMIT: u16 = 512;
+
+/// A detail's weight per pixel: its source's value, then each step in turn.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Weight {
+    pub source: Source,
+    pub steps: Vec<WeightStep>,
+}
+
+/// One step of a [`Weight`]: a closed set, each a form a program is shown to compute.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WeightStep {
+    /// `x^exponent`, 1 to [`WEIGHT_POWER_LIMIT`], as [`weight_power`] takes it.
+    Power(u16),
+    /// `min(x, bound)`, the bound where `x` is NaN (D3D's `min`).
+    Min(f32),
+}
+
+/// `x^exponent` by squaring, as a program writes a power: `x`, `x^2`, `x^4`, ... each the square of the one before, and
+/// the powers of the exponent's set bits multiplied in from the lowest (`x^260 = x^4 * x^256`; a power of two is its
+/// squarings alone).
+pub fn weight_power(x: f32, exponent: u16) -> f32 {
+    let mut square = x;
+    let mut out: Option<f32> = None;
+    for bit in 0..16 {
+        if exponent >> bit == 0 {
+            break;
+        }
+        if exponent & (1 << bit) != 0 {
+            out = Some(out.map_or(square, |acc| acc * square));
+        }
+        square *= square;
+    }
+    out.unwrap_or(1.0)
+}
+
+/// `steps` of `v`, in turn.
+pub fn weight_steps(v: f32, steps: &[WeightStep]) -> f32 {
+    steps.iter().fold(v, |x, step| match *step {
+        WeightStep::Power(exponent) => weight_power(x, exponent),
+        WeightStep::Min(bound) => x.min(bound),
+    })
+}
+
+impl Weight {
+    /// Its value for its source's value `v`.
+    pub fn evaluate(&self, v: f32) -> f32 {
+        weight_steps(v, &self.steps)
+    }
+
+    /// Its value for the samples of the base normal, where its source is a mask of it.
+    pub fn of_sample(&self, sample: [f32; 4]) -> Option<f32> {
+        match self.source {
+            Source::Mask { channels, bias, .. } => Some(self.evaluate(mask_value(channels, bias, sample))),
+            Source::Vertex { .. } => None,
+        }
+    }
+
+    /// Its own checks (its source's apart): each power's exponent 1 to [`WEIGHT_POWER_LIMIT`], each bound finite.
+    pub fn check(&self) -> Result<(), String> {
+        for step in &self.steps {
+            match *step {
+                WeightStep::Power(e) if !(1..=WEIGHT_POWER_LIMIT).contains(&e) => {
+                    return Err(format!("power exponent {e} is not 1 to {WEIGHT_POWER_LIMIT}"));
+                }
+                WeightStep::Min(bound) if !bound.is_finite() => {
+                    return Err(format!("min bound {bound} is not finite"));
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+/// What a detail's gloss term is scaled by before the doubling: a closed set, each a form a program is shown to compute.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GlossScale {
+    /// The base normal's z sample.
+    BaseNormalZ,
+    /// A constant.
+    Constant(f32),
+}
+
+impl GlossScale {
+    /// Its value for the base normal sample `normal`.
+    pub fn value(self, normal: [f32; 4]) -> f32 {
+        match self {
+            GlossScale::BaseNormalZ => normal[2],
+            GlossScale::Constant(c) => c,
+        }
+    }
 }
 
 /// One detail of a [`DetailLerp`]: its textures and constants.
@@ -84,6 +185,8 @@ pub struct Detail {
     pub tint: [f32; 3],
     /// Added to its normal's z in the gloss.
     pub gloss_bias: f32,
+    /// What its gloss term is scaled by.
+    pub gloss_scale: GlossScale,
     /// Its term of the reflectance mix `f`.
     pub reflectance: ReflectanceTerm,
 }
@@ -194,24 +297,19 @@ impl DetailLerp {
         for d in &self.details {
             out.extend([&d.colour, &d.normal]);
         }
-        out.extend(
-            self.weights
-                .iter()
-                .flat_map(Channel::sources)
-                .filter_map(|s| match s {
-                    Source::Mask { texture, .. } => Some(texture),
-                    Source::Vertex { .. } => None,
-                }),
-        );
+        out.extend(self.weights.iter().filter_map(|w| match &w.source {
+            Source::Mask { texture, .. } => Some(texture),
+            Source::Vertex { .. } => None,
+        }));
         out
     }
 
-    /// The weights' values for the values of their sources (each weight's in [`Channel::sources`] order).
-    pub fn weight_values(&self, sources: &[&[f32]]) -> Vec<f32> {
+    /// The weights' values for the values of their sources.
+    pub fn weight_values(&self, sources: &[f32]) -> Vec<f32> {
         self.weights
             .iter()
             .zip(sources)
-            .map(|(w, values)| w.evaluate(values))
+            .map(|(w, &v)| w.evaluate(v))
             .collect()
     }
 
@@ -234,11 +332,14 @@ impl DetailLerp {
             base[1] + self.normal_strength * detail(1),
             z,
         ];
+        let scale = chain(self.details.iter().map(|d| d.gloss_scale.value(n)), weights);
         let stored =
-            (2.0 * n[2] * chain(pairs().map(|(d, x)| x.normal[2] + d.gloss_bias), weights)).clamp(0.0, 1.0);
+            (2.0 * scale * chain(pairs().map(|(d, x)| x.normal[2] + d.gloss_bias), weights)).clamp(0.0, 1.0);
         let gloss = self.gloss_encoding.decode(stored);
-        let first = s.details.first().map_or(1.0, |x| x.colour[3]);
-        let alpha = (first * a[3]).clamp(0.0, 1.0);
+        let alpha = self
+            .alpha
+            .and_then(|j| s.details.get(j))
+            .map_or(1.0, |x| (x.colour[3] * a[3]).clamp(0.0, 1.0));
         DetailSurface {
             albedo,
             alpha,
@@ -250,16 +351,24 @@ impl DetailLerp {
 
     /// Its constants all finite.
     fn constants_finite(&self) -> bool {
+        let scale = |d: &Detail| match d.gloss_scale {
+            GlossScale::Constant(c) => c,
+            GlossScale::BaseNormalZ => 0.0,
+        };
         self.details
             .iter()
-            .flat_map(|d| d.tint.into_iter().chain([d.gloss_bias, d.reflectance.bias()]))
+            .flat_map(|d| {
+                d.tint
+                    .into_iter()
+                    .chain([d.gloss_bias, d.reflectance.bias(), scale(d)])
+            })
             .chain(self.colour)
             .chain([self.gain, self.normal_strength, self.dielectric_f0])
             .all(f32::is_finite)
     }
 
-    /// One to [`DETAIL_LIMIT`] details, one weight fewer, each weight bounded, the constants finite and the gloss encoding
-    /// sound.
+    /// One to [`DETAIL_LIMIT`] details, one weight fewer, each weight bounded, the constants finite, the alpha's detail
+    /// one of them and the gloss encoding sound.
     fn check(&self) -> Result<(), String> {
         if !(1..=DETAIL_LIMIT).contains(&self.details.len()) {
             return Err(format!(
@@ -279,6 +388,14 @@ impl DetailLerp {
         }
         for w in &self.weights {
             w.check().map_err(|e| format!("weight: {e}"))?;
+        }
+        if let Some(j) = self.alpha
+            && j >= self.details.len()
+        {
+            return Err(format!(
+                "the alpha is detail {j}'s, of {} details",
+                self.details.len()
+            ));
         }
         self.gloss_encoding
             .check()
@@ -318,7 +435,7 @@ impl SurfaceLowering {
 impl Component for DetailedMaterial {
     const NAME: &'static str = "pbr.detail";
     const GEOMETRY: crate::Geometry = crate::Geometry::None;
-    const VERSION: u32 = 1;
+    const VERSION: u32 = 2;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
@@ -328,8 +445,8 @@ impl Component for DetailedMaterial {
         match &self.mix {
             DetailMix::DetailLerp(mix) => {
                 mix.check()?;
-                for s in mix.weights.iter().flat_map(Channel::sources) {
-                    check_source(world, "weight", s)?;
+                for w in &mix.weights {
+                    check_source(world, "weight", &w.source)?;
                 }
             }
         }
@@ -358,17 +475,17 @@ impl Component for DetailedMaterial {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layered::power;
+    use crate::layered::{Channel, power};
 
     /// `(1 - N.a)^8` (`flip`: `N.a^8`) of the base normal `texture`.
-    fn weight(texture: TextureRef, flip: bool) -> Channel {
-        Channel::Power {
-            v: Source::Mask {
+    fn weight(texture: TextureRef, flip: bool) -> Weight {
+        Weight {
+            source: Source::Mask {
                 texture,
                 channels: [0., 0., 0., if flip { 1. } else { -1. }],
                 bias: if flip { 0. } else { 1. },
             },
-            exponent: 8,
+            steps: vec![WeightStep::Power(8)],
         }
     }
 
@@ -389,6 +506,7 @@ mod tests {
                 normal: t(),
                 tint: tints[i],
                 gloss_bias: [0.25, -0.25, 0.5][i],
+                gloss_scale: GlossScale::BaseNormalZ,
                 reflectance: reflectance[i],
             })
             .collect();
@@ -403,6 +521,7 @@ mod tests {
             dielectric_f0: 0.03,
             colour: [1., 1., 0.5],
             gloss_encoding: ScalarEncoding::LINEAR,
+            alpha: Some(0),
         }
     }
 
@@ -432,7 +551,7 @@ mod tests {
             let mix = mix(&mut world, n);
             let s = samples(n);
             let a = s.base_normal[3];
-            let sources: [&[f32]; 2] = [&[1. - a], &[a]];
+            let sources = [1. - a, a];
             let weights = mix.weight_values(&sources[..n - 1]);
             if n >= 2 {
                 assert_eq!(weights[0].to_bits(), power(1. - a, 8).to_bits());
@@ -506,7 +625,7 @@ mod tests {
         let mut s = samples(2);
         s.base_normal = [0.5, 0.5, 0.25, 0.75];
         s.details[1].normal = [0.5, 0.5, 0.5, 0.];
-        let weights = linear.weight_values(&[&[1. - s.base_normal[3]]]);
+        let weights = linear.weight_values(&[1. - s.base_normal[3]]);
         let stored = linear.evaluate(&s, &weights).gloss;
         assert!(stored > 0. && stored < 1.);
         let gloss = encoded.evaluate(&s, &weights).gloss;
@@ -547,6 +666,92 @@ mod tests {
         assert!(channel(crate::layered::POWER_LIMIT + 1).check().is_err());
         assert!(channel(16).check().is_ok());
         assert_eq!(channel(2).evaluate(&[0.5]), 0.25);
+    }
+
+    /// A weight's power is taken by squaring, the powers of the exponent's set bits multiplied in from the lowest, as
+    /// Sekiro's switch 1 writes `(22 N.z)^260` (`x^4 * x^256`) and switches 13 and 6 `(1 - N.a)^8` (three squarings, the
+    /// layered [`power`]'s bits); a min takes its bound where the value is NaN.
+    #[test]
+    fn a_weights_steps_are_taken_in_the_programs_order() {
+        let x = 0.987_654_3_f32;
+        let squares: Vec<f32> = std::iter::successors(Some(x), |s| Some(s * s)).take(9).collect();
+        assert_eq!(
+            weight_power(x, 260).to_bits(),
+            (squares[2] * squares[8]).to_bits()
+        );
+        assert_eq!(weight_power(x, 8).to_bits(), power(x, 8).to_bits());
+        assert_eq!(weight_power(x, 1), x);
+        assert_eq!(
+            weight_power(x, 7).to_bits(),
+            ((squares[0] * squares[1]) * squares[2]).to_bits()
+        );
+        let mut world = World::new();
+        let switch_one = Weight {
+            source: Source::Mask {
+                texture: TextureRef::new(world.spawn()),
+                channels: [0., 0., 22., 0.],
+                bias: 0.,
+            },
+            steps: vec![WeightStep::Power(260), WeightStep::Min(1.)],
+        };
+        assert_eq!(switch_one.check(), Ok(()));
+        // a base normal z of 0 takes the first detail alone, one of 1/11 (22 z = 2, past 1 before the power) the second
+        assert_eq!(switch_one.of_sample([0.5, 0.5, 0., 0.5]), Some(0.));
+        assert_eq!(switch_one.of_sample([0.5, 0.5, 1. / 11., 0.5]), Some(1.));
+        let z = 0.045_f32;
+        let v = 22. * z;
+        let squares: Vec<f32> = std::iter::successors(Some(v), |s| Some(s * s)).take(9).collect();
+        assert_eq!(
+            switch_one.of_sample([0.5, 0.5, z, 0.5]).unwrap().to_bits(),
+            (squares[2] * squares[8]).min(1.).to_bits()
+        );
+        assert_eq!(switch_one.evaluate(f32::NAN), 1.);
+        // the old channel's eighth power and the weight's are the same bits
+        let old = Channel::Power {
+            v: Source::Vertex {
+                semantic: crate::Semantic::Color(0),
+                channel: 0,
+            },
+            exponent: 8,
+        };
+        let new = weight(TextureRef::new(world.spawn()), true);
+        for a in [0.1_f32, 0.37, 0.5, 0.93] {
+            assert_eq!(old.evaluate(&[a]).to_bits(), new.evaluate(a).to_bits());
+        }
+    }
+
+    /// A detail's gloss term is scaled as it states: switch 1's first detail by 0.5, its second by the base normal's z,
+    /// lerped by the weight like any other term; a scale every detail takes from the base normal's z is that z.
+    #[test]
+    fn each_detail_scales_its_gloss_as_it_states() {
+        let mut world = World::new();
+        let mut two = mix(&mut world, 2);
+        let s = samples(2);
+        let n = s.base_normal;
+        let w = 0.25_f32;
+        let base = two.evaluate(&s, &[w]).gloss;
+        let terms: Vec<f32> = (0..2)
+            .map(|j| s.details[j].normal[2] + two.details[j].gloss_bias)
+            .collect();
+        let g = terms[0] + (terms[1] - terms[0]) * w;
+        assert_eq!(base, (2. * n[2] * g).clamp(0., 1.));
+        two.details[0].gloss_scale = GlossScale::Constant(0.5);
+        let scale = 0.5 + (n[2] - 0.5) * w;
+        assert_eq!(two.evaluate(&s, &[w]).gloss, (2. * scale * g).clamp(0., 1.));
+    }
+
+    /// The alpha is the stated detail's colour alpha times the base colour's, and 1 where none is stated.
+    #[test]
+    fn the_alpha_is_the_stated_details() {
+        let mut world = World::new();
+        let mut two = mix(&mut world, 2);
+        let s = samples(2);
+        two.alpha = Some(1);
+        assert_eq!(two.evaluate(&s, &[0.5]).alpha, 0.);
+        two.alpha = Some(0);
+        assert_eq!(two.evaluate(&s, &[0.5]).alpha, 0.5);
+        two.alpha = None;
+        assert_eq!(two.evaluate(&s, &[0.5]).alpha, 1.);
     }
 
     /// Gloss and reflectance lower as Sekiro's bake lowers them: roughness 1 - gloss, metallic 0, the F0 as the
@@ -593,16 +798,16 @@ mod tests {
         assert!(bad.verify(e, &world).unwrap_err().contains("not finite"));
         let bad = edit(&|m| m.details[1].reflectance = ReflectanceTerm::Bias(f32::INFINITY));
         assert!(bad.verify(e, &world).unwrap_err().contains("not finite"));
-        let bad = edit(&|m| {
-            m.weights[0] = Channel::Power {
-                v: Source::Vertex {
-                    semantic: crate::Semantic::Color(0),
-                    channel: 0,
-                },
-                exponent: 0,
-            }
-        });
+        let bad = edit(&|m| m.weights[0].steps = vec![WeightStep::Power(0)]);
         assert!(bad.verify(e, &world).unwrap_err().contains("exponent"));
+        let bad = edit(&|m| m.weights[0].steps = vec![WeightStep::Power(WEIGHT_POWER_LIMIT + 1)]);
+        assert!(bad.verify(e, &world).unwrap_err().contains("exponent"));
+        let bad = edit(&|m| m.weights[0].steps.push(WeightStep::Min(f32::NAN)));
+        assert!(bad.verify(e, &world).unwrap_err().contains("min bound"));
+        let bad = edit(&|m| m.alpha = Some(2));
+        assert!(bad.verify(e, &world).unwrap_err().contains("detail 2's, of 2"));
+        let bad = edit(&|m| m.details[0].gloss_scale = GlossScale::Constant(f32::INFINITY));
+        assert!(bad.verify(e, &world).unwrap_err().contains("not finite"));
         let bad = edit(&|m| m.weights.clear());
         assert!(bad.verify(e, &world).unwrap_err().contains("one fewer"));
         let bad = edit(&|m| {

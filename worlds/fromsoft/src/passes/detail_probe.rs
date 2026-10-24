@@ -13,10 +13,13 @@ use std::collections::BTreeMap;
 
 use primase_core::World;
 use primase_core::shader::{ConstantRole, OutputBinding, ShaderFormat, TextureSource};
+use primase_shader::output_uses::bind_output_uses;
 use primase_shader_exec::evaluate::Constants;
 use primase_shader_exec::{Layout, PixelShader, ProgramShader, Sampler};
 
-use crate::layer_bake::resolve::{ProgramTexture, Unbound, program_texture, register, resolve, textures_of};
+use crate::layer_bake::resolve::{
+    ProgramTexture, Unbound, program_texture, register, render_state, resolve, textures_of,
+};
 use crate::layer_bake::{self, FrozenFrame};
 use crate::materials::LayeredMaterial;
 use crate::{Result, invalid};
@@ -137,6 +140,15 @@ impl ProgramProbe {
         )?;
         let mut policies = resolution.policies;
         let interface = PixelShader::interface(&shader).clone();
+        // the outputs as the resolve pass binds them: a lane left Unknown is Coverage where the program's discard tests it,
+        // Opacity where the material's blend weighs by it
+        let mut outputs = resolution.stage.outputs.clone();
+        bind_output_uses(
+            &mut outputs,
+            &interface,
+            shader.program().graph().ok().as_ref(),
+            &render_state(material),
+        );
         let constants = layer_bake::program_constants(
             &shader,
             &interface,
@@ -268,7 +280,7 @@ impl ProgramProbe {
             form,
             material: words,
             engine_fields,
-            outputs: resolution.stage.outputs,
+            outputs,
             engine,
             frozen,
             policies,

@@ -1,6 +1,7 @@
 //! Each of Sekiro's detail-blend G-buffer pixel programs' equation ([`derive`]), its material's words given (seeded, the
-//! same each run): the texture roles, the constants solved, the proof's largest difference per role, each constant
-//! beside the material word it reads (and those that disagree), and the tint fold's cost.
+//! same each run): the texture roles, the constants solved, the proof's largest difference per role (and on the sets
+//! where the weights mix), the weights, gloss scales and alpha, each constant beside the material word it reads (and
+//! those that disagree), and the tint fold's cost.
 //!
 //! `cargo run --release -p primase-fromsoft --example detail_derive -- <folder of Sekiro .ppo> [name filter]`: the
 //! shader corpus's `programs/sekiro-ps` (`PRIMASE_SHADER_CORPUS_SEKIRO`), the filter `DetailBlend` by default. A block a
@@ -9,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use primase_fromsoft::detail_derive::derive;
+use primase_fromsoft::detail_derive::{WEIGHT_SETS, derive};
 use primase_fromsoft::detail_probe::ProgramProbe;
 
 type BoxError = Box<dyn std::error::Error>;
@@ -51,6 +52,7 @@ fn main() -> Result<(), BoxError> {
     files.sort();
     let mut totals: BTreeMap<String, u64> = BTreeMap::new();
     let mut largest: BTreeMap<&'static str, f32> = BTreeMap::new();
+    let mut transition: BTreeMap<&'static str, f32> = BTreeMap::new();
     let mut fold = 0f32;
     for path in &files {
         let name = path
@@ -74,7 +76,11 @@ fn main() -> Result<(), BoxError> {
             }
         };
         *totals.entry("proved".into()).or_default() += 1;
-        println!("  roles {:?}", d.roles);
+        let r = &d.roles;
+        println!(
+            "  roles SlotRoles {{ base_colour: {}, base_normal: {}, base_mask: {}, details: {:?} }}",
+            r.base_colour, r.base_normal, r.base_mask, r.details
+        );
         println!("  frame {:?}", d.frame);
         println!(
             "  proof {} sets, largest units {:?}",
@@ -84,6 +90,31 @@ fn main() -> Result<(), BoxError> {
             let e = largest.entry(role).or_default();
             *e = e.max(*u);
         }
+        println!("  weights {:?}", WEIGHT_SETS[d.constants.weight_set]);
+        let scales: Vec<_> = d.constants.details.iter().map(|t| t.gloss_scale).collect();
+        println!("  gloss scales {scales:?}");
+        if let Some((sets, t)) = &d.proof.transition {
+            println!("  transition {sets} sets, largest units {t:?}");
+            for (role, u) in t {
+                let e = transition.entry(role).or_default();
+                *e = e.max(*u);
+            }
+        }
+        let alpha = match d.constants.alpha {
+            Some(j) => format!("detail {j}'s, proven through its lane"),
+            None => "its lane has no role: opaque".into(),
+        };
+        println!("  alpha {alpha}");
+        *totals
+            .entry(format!(
+                "alpha {}",
+                if d.constants.alpha.is_some() {
+                    "proven through its lane"
+                } else {
+                    "lane with no role"
+                }
+            ))
+            .or_default() += 1;
         match d.fold {
             Some(f) => {
                 println!("  fold gain {} costs {} units", f.gain, f.largest);
@@ -125,5 +156,6 @@ fn main() -> Result<(), BoxError> {
         println!("{n:6} {k}");
     }
     println!("largest proof units per role {largest:?}; largest fold cost {fold} units");
+    println!("largest transition units per role {transition:?}");
     Ok(())
 }
