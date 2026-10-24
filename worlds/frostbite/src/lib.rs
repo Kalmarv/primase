@@ -84,24 +84,29 @@ pub fn bad(what: &'static str, offset: usize, detail: impl Into<String>) -> Erro
     }
 }
 
-/// A read past the data ([`primase_bytes`]): `what`'s error at the read's offset, naming how many bytes there are.
-pub(crate) fn past_end(what: &'static str, e: primase_bytes::BoundsError) -> Error {
+/// A read past the data ([`primase_bytes`]): `what`'s error at the read's offset, naming how many bytes it wanted and
+/// the `total` there are (a span whose end overflows the address space wants all it names).
+pub(crate) fn past_end(what: &'static str, e: primase_bytes::BoundsError, total: usize) -> Error {
     let at = usize::try_from(e.absolute()).unwrap_or(usize::MAX);
-    match e {
-        primase_bytes::BoundsError::OutOfBounds { length, total, .. } => {
-            bad(what, at, format!("{length} bytes past the end ({total} bytes)"))
-        }
-        primase_bytes::BoundsError::LengthOverflow { count, stride, .. } => {
-            bad(what, at, format!("{count} entries of {stride} bytes overflow"))
-        }
-    }
+    let length = match e {
+        primase_bytes::BoundsError::OutOfBounds { length, .. } => length,
+        primase_bytes::BoundsError::LengthOverflow { count, stride, .. } => count.saturating_mul(stride),
+    };
+    bad(what, at, format!("{length} bytes past the end ({total} bytes)"))
 }
 
 /// A read past a document's bytes through [`primase_bytes::Cursor`] (the EBX decoder's): its error at the read's
 /// offset.
 impl From<primase_bytes::BoundsError> for Error {
     fn from(e: primase_bytes::BoundsError) -> Self {
-        past_end("read", e)
+        match e {
+            primase_bytes::BoundsError::OutOfBounds { total, .. } => past_end("read", e, total),
+            primase_bytes::BoundsError::LengthOverflow { count, stride, .. } => bad(
+                "read",
+                usize::try_from(e.absolute()).unwrap_or(usize::MAX),
+                format!("{count} entries of {stride} bytes overflow"),
+            ),
+        }
     }
 }
 
@@ -120,19 +125,19 @@ impl<'a> Rd<'a> {
     pub fn bytes(&self, at: usize, n: usize) -> Result<&'a [u8]> {
         primase_bytes::View::new(self.data)
             .slice(at, n)
-            .map_err(|e| past_end(self.what, e))
+            .map_err(|e| past_end(self.what, e, self.data.len()))
     }
 
     pub fn arr<const N: usize>(&self, at: usize) -> Result<[u8; N]> {
         primase_bytes::View::new(self.data)
             .array(at)
-            .map_err(|e| past_end(self.what, e))
+            .map_err(|e| past_end(self.what, e, self.data.len()))
     }
 
     pub fn u8(&self, at: usize) -> Result<u8> {
         primase_bytes::View::new(self.data)
             .u8(at)
-            .map_err(|e| past_end(self.what, e))
+            .map_err(|e| past_end(self.what, e, self.data.len()))
     }
     pub fn u16le(&self, at: usize) -> Result<u16> {
         self.number(at, Endian::Little, primase_bytes::View::u16)
@@ -163,7 +168,8 @@ impl<'a> Rd<'a> {
             Endian,
         ) -> std::result::Result<T, primase_bytes::BoundsError>,
     ) -> Result<T> {
-        read(&primase_bytes::View::new(self.data), at, e).map_err(|err| past_end(self.what, err))
+        read(&primase_bytes::View::new(self.data), at, e)
+            .map_err(|err| past_end(self.what, err, self.data.len()))
     }
     /// A zero-terminated Latin-1 string starting at `at`.
     pub fn cstr(&self, at: usize) -> Result<String> {

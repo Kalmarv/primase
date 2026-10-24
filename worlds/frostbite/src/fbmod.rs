@@ -149,22 +149,28 @@ struct Cur<'a> {
 
 impl<'a> Cur<'a> {
     fn take(&mut self, n: usize) -> Result<&'a [u8]> {
-        self.c.take(n).map_err(|e| past_end(W, e))
+        self.c.take(n).map_err(|e| past_end(W, e, self.c.bytes().len()))
     }
     fn arr<const N: usize>(&mut self) -> Result<[u8; N]> {
-        self.c.array().map_err(|e| past_end(W, e))
+        self.c.array().map_err(|e| past_end(W, e, self.c.bytes().len()))
     }
     fn u8(&mut self) -> Result<u8> {
-        self.c.u8().map_err(|e| past_end(W, e))
+        self.c.u8().map_err(|e| past_end(W, e, self.c.bytes().len()))
     }
     fn u32(&mut self) -> Result<u32> {
-        self.c.u32(Endian::Little).map_err(|e| past_end(W, e))
+        self.c
+            .u32(Endian::Little)
+            .map_err(|e| past_end(W, e, self.c.bytes().len()))
     }
     fn i32(&mut self) -> Result<i32> {
-        self.c.i32(Endian::Little).map_err(|e| past_end(W, e))
+        self.c
+            .i32(Endian::Little)
+            .map_err(|e| past_end(W, e, self.c.bytes().len()))
     }
     fn u64(&mut self) -> Result<u64> {
-        self.c.u64(Endian::Little).map_err(|e| past_end(W, e))
+        self.c
+            .u64(Endian::Little)
+            .map_err(|e| past_end(W, e, self.c.bytes().len()))
     }
     fn position(&self) -> usize {
         self.c.position()
