@@ -25,9 +25,44 @@ pub struct DetailedMaterial {
     pub mix: DetailMix,
     /// How the mix's outputs become the PBR model.
     pub lowering: SurfaceLowering,
-    /// Each input the equation reads as a constant rather than per draw, as the source's bake freezes it (the vertex
-    /// colour white, the instance colour, decals and wear off): what a consumer shows beside it.
-    pub frozen: Vec<String>,
+    /// What the equation holds constant that the source varies per draw, each at the value the source's bake freezes
+    /// it to (the surface front-facing, decals and wear off): what a consumer shows beside it, and what holds for the
+    /// equation to be the program's.
+    pub frozen: Vec<Frozen>,
+}
+
+/// One thing a [`DetailedMaterial`]'s equation holds constant ([`DetailedMaterial::frozen`]): a closed set, each with
+/// its value.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Frozen {
+    /// The surface drawn front-facing: the program's facing input true.
+    FrontFacing,
+    /// A vertex input the program reads, held at `value` (lanes past the input's own 0), by its semantic name and
+    /// index.
+    VertexInput {
+        semantic: String,
+        index: u32,
+        value: [f32; 4],
+    },
+    /// A constant the source's engine sets per draw, held at `value` (its words as floats), by its name in the
+    /// program.
+    EngineConstant { name: String, value: Vec<f32> },
+    /// A texture the source's engine binds per draw, read as the constant `value`, by its name in the program.
+    EngineTexture { name: String, value: [f32; 4] },
+}
+
+impl Frozen {
+    /// Its values all finite.
+    fn finite(&self) -> bool {
+        match self {
+            Frozen::FrontFacing => true,
+            Frozen::VertexInput { value, .. } | Frozen::EngineTexture { value, .. } => {
+                value.iter().all(|v| v.is_finite())
+            }
+            Frozen::EngineConstant { value, .. } => value.iter().all(|v| v.is_finite()),
+        }
+    }
 }
 
 /// The equations a detail material is drawn by.
@@ -435,13 +470,16 @@ impl SurfaceLowering {
 impl Component for DetailedMaterial {
     const NAME: &'static str = "pbr.detail";
     const GEOMETRY: crate::Geometry = crate::Geometry::None;
-    const VERSION: u32 = 2;
+    const VERSION: u32 = 3;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
     /// Its constants and texture transforms finite, its textures alive, its details 1 to [`DETAIL_LIMIT`] and its weights
     /// bounded channels of sources that are, one fewer.
     fn verify(&self, _e: Entity, world: &World) -> Result<(), String> {
+        if let Some(f) = self.frozen.iter().find(|f| !f.finite()) {
+            return Err(format!("frozen {f:?} is not finite"));
+        }
         match &self.mix {
             DetailMix::DetailLerp(mix) => {
                 mix.check()?;
@@ -781,7 +819,13 @@ mod tests {
         let good = DetailedMaterial {
             mix: DetailMix::DetailLerp(mix(&mut world, 2)),
             lowering: SurfaceLowering::GlossReflectance,
-            frozen: vec!["vertex colour white".into()],
+            frozen: vec![
+                Frozen::FrontFacing,
+                Frozen::EngineConstant {
+                    name: "FC_BloodAmount".into(),
+                    value: vec![0.],
+                },
+            ],
         };
         let e = world.spawn();
         assert_eq!(good.verify(e, &world), Ok(()));
@@ -796,6 +840,12 @@ mod tests {
         };
         let bad = edit(&|m| m.gain = f32::NAN);
         assert!(bad.verify(e, &world).unwrap_err().contains("not finite"));
+        let mut bad = good.clone();
+        bad.frozen.push(Frozen::EngineTexture {
+            name: "g_DecalTexture".into(),
+            value: [f32::INFINITY; 4],
+        });
+        assert!(bad.verify(e, &world).unwrap_err().contains("frozen"));
         let bad = edit(&|m| m.details[1].reflectance = ReflectanceTerm::Bias(f32::INFINITY));
         assert!(bad.verify(e, &world).unwrap_err().contains("not finite"));
         let bad = edit(&|m| m.weights[0].steps = vec![WeightStep::Power(0)]);

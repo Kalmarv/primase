@@ -53,6 +53,15 @@ struct UvLane {
     axis: usize,
 }
 
+/// An input the probe freezes ([`ProgramProbe::frozen_inputs`]): its semantic name and index, and the value it is
+/// frozen to (the lanes the program takes of it first).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrozenInput {
+    pub name: String,
+    pub index: u32,
+    pub value: [f32; 4],
+}
+
 /// A pixel program bound for probing ([`ProgramProbe::new`]).
 #[derive(Debug)]
 pub struct ProgramProbe {
@@ -78,6 +87,8 @@ pub struct ProgramProbe {
     pub engine: BTreeMap<u32, [f32; 4]>,
     /// Each input frozen, and the value it is frozen to: what a result shown from these runs holds constant.
     pub frozen: Vec<String>,
+    /// The same inputs, by semantic name and index, with the value each is frozen to.
+    pub frozen_inputs: Vec<FrozenInput>,
     /// What the binding counted.
     pub policies: BTreeMap<String, u64>,
 }
@@ -242,6 +253,7 @@ impl ProgramProbe {
         let mut registers = vec![[0u32; 4]; shader.input_count()];
         let mut uv = Vec::new();
         let mut frozen = Vec::new();
+        let mut frozen_inputs = Vec::new();
         for v in interface.inputs.iter().filter(|v| v.used) {
             let d3d = v.provenance.d3d.ok_or_else(|| {
                 invalid(
@@ -267,6 +279,11 @@ impl ProgramProbe {
                         registers[register][c] = value[k].to_bits();
                     }
                     frozen.push(what);
+                    frozen_inputs.push(FrozenInput {
+                        name: v.label.name.clone(),
+                        index: v.label.index,
+                        value,
+                    });
                 }
                 None => uv.extend(components.iter().enumerate().map(|(k, &component)| UvLane {
                     register,
@@ -291,8 +308,27 @@ impl ProgramProbe {
             outputs,
             engine,
             frozen,
+            frozen_inputs,
             policies,
         })
+    }
+
+    /// The coordinate sets the probe's coordinate drives: the index of each `TEXCOORD` input it sets, in order.
+    pub fn coordinate_sets(&self) -> Vec<u32> {
+        let mut sets: Vec<u32> = self
+            .interface()
+            .inputs
+            .iter()
+            .filter(|v| {
+                v.used
+                    && v.provenance
+                        .d3d
+                        .is_some_and(|d| self.uv.iter().any(|lane| lane.register == d.register as usize))
+            })
+            .map(|v| v.label.index)
+            .collect();
+        sets.dedup();
+        sets
     }
 
     /// The program's interface.

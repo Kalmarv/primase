@@ -811,6 +811,22 @@ its layered materials (`fromsoft.shader_programs`);
   it fails. Only the layer inputs of the primitives it baked are consumed, after
   it succeeded; an unplaced prototype's stay, and a level-of-detail form carrying
   inputs is refused before anything changes (`select-lod` first).
+- `derive-fromsoft-detail` (`DeriveFromSoftDetail`), after
+  `resolve-fromsoft-shaders`, gives each material of Sekiro's
+  `Character_AMSN_[DetailBlend]` whose program's equation proves on the
+  material's own words a `pbr.detail` (`primase_core::detail::DetailedMaterial`)
+  beside its baked `pbr.material`: the detail blend's chain of one to three
+  tiled details, each slot the bound texture at the tiling the program samples
+  it with (relative to a tiling `lower-fromsoft-geometry{uv-tiling=apply}`
+  multiplied the coordinates by), and what the equation holds constant (the
+  facing, the engine constants and textures that move a role). The equation is
+  solved from runs of the program and proven on random samples and where its
+  weights mix (`detail_derive::derive_equation`); a material that does not prove
+  gets none, counted by reason, as is one no primitive draws. A slot whose
+  addressing the source does not state repeats, counted by whether the
+  material's mesh coordinates, through the slot's tiling, stay within 0 to 1
+  (where the addressing decides only edge filtering) or reach past it (with the
+  share past it, where clamping would hold the texture constant).
 - `lower-fromsoft-materials{water-colour=R,G,B,A,layers=preserve|preview}`
   (`LowerFromSoftMaterials`) lowers every source material to core PBR, texture
   transforms relative to the applied tiling. A material without a base texture

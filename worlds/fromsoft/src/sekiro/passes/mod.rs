@@ -9,6 +9,7 @@ pub(super) mod bake_assembly;
 pub mod bake_materials;
 pub mod blockers;
 pub mod collision;
+pub mod detail;
 pub mod extras;
 pub mod far;
 pub mod geometry;
@@ -25,6 +26,7 @@ pub mod settings;
 pub use crate::layer_bake::resolve::Unbound;
 pub use crate::sekiro::components::lowered::UvTiling;
 pub use bake::BakeFromSoftLayers;
+pub use detail::DeriveFromSoftDetail;
 pub use far::DropFromSoftFar;
 pub use geometry::{Cards, Degenerates, LowerFromSoftGeometry, Pose, SpeedTreeFrame, Tiling, Winding};
 pub use materials::{DropFromSoftTextureTransforms, LowerFromSoftMaterials};
@@ -69,6 +71,7 @@ pub fn register(registry: &mut PassRegistry) {
         &outfits::SELECT_FROMSOFT_OUTFIT,
         &far::DROP_FROMSOFT_FAR,
         &resolve_shaders::RESOLVE_FROMSOFT_SHADERS,
+        &detail::DERIVE_FROMSOFT_DETAIL,
         &bake::BAKE_FROMSOFT_LAYERS,
         &bake_materials::BAKE_FROMSOFT_MATERIALS,
         &materials::DROP_FROMSOFT_TEXTURE_TRANSFORMS,

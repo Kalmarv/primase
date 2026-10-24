@@ -76,39 +76,46 @@ fn main() -> Result<(), BoxError> {
             }
         };
         *totals.entry("proved".into()).or_default() += 1;
-        let r = &d.roles;
+        let r = &d.equation.roles;
         println!(
             "  roles SlotRoles {{ base_colour: {}, base_normal: {}, base_mask: {}, details: {:?} }}",
             r.base_colour, r.base_normal, r.base_mask, r.details
         );
-        println!("  frame {:?}", d.frame);
+        println!("  frame {:?}", d.equation.frame);
         println!(
             "  proof {} sets, largest units {:?}",
-            d.proof.sets, d.proof.largest
+            d.equation.proof.sets, d.equation.proof.largest
         );
-        for (role, u) in &d.proof.largest {
+        for (role, u) in &d.equation.proof.largest {
             let e = largest.entry(role).or_default();
             *e = e.max(*u);
         }
-        println!("  weights {:?}", WEIGHT_SETS[d.constants.weight_set]);
-        let scales: Vec<_> = d.constants.details.iter().map(|t| t.gloss_scale).collect();
+        println!("  weights {:?}", WEIGHT_SETS[d.equation.constants.weight_set]);
+        let scales: Vec<_> = d
+            .equation
+            .constants
+            .details
+            .iter()
+            .map(|t| t.gloss_scale)
+            .collect();
         println!("  gloss scales {scales:?}");
-        if let Some((sets, t)) = &d.proof.transition {
+        if let Some((sets, t)) = &d.equation.proof.transition {
             println!("  transition {sets} sets, largest units {t:?}");
             for (role, u) in t {
                 let e = transition.entry(role).or_default();
                 *e = e.max(*u);
             }
         }
-        let alpha = match d.constants.alpha {
+        let alpha = match d.equation.constants.alpha {
             Some(j) => format!("detail {j}'s, proven through its lane"),
             None => "its lane has no role: opaque".into(),
         };
         println!("  alpha {alpha}");
+        println!("  frozen {:?}", d.equation.frozen);
         *totals
             .entry(format!(
                 "alpha {}",
-                if d.constants.alpha.is_some() {
+                if d.equation.constants.alpha.is_some() {
                     "proven through its lane"
                 } else {
                     "lane with no role"

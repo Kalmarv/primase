@@ -18,11 +18,12 @@
 use std::collections::BTreeMap;
 
 use primase_core::detail::{
-    DETAIL_LIMIT, Detail, DetailLerp, DetailSample, DetailSamples, DetailSurface, GlossScale,
-    ReflectanceTerm, Weight, WeightStep, chain, weight_steps,
+    DETAIL_LIMIT, Detail, DetailLerp, DetailMix, DetailSample, DetailSamples, DetailSurface,
+    DetailedMaterial, Frozen, GlossScale, ReflectanceTerm, SurfaceLowering, Weight, WeightStep, chain,
+    weight_steps,
 };
 use primase_core::layered::{Source, mask_value};
-use primase_core::pbr::TextureRef;
+use primase_core::pbr::{TextureRef, UvTransform};
 use primase_core::shader::{NormalEncoding, OutputBinding, OutputRole, ScalarEncoding};
 use primase_shader::ResourceKind;
 use primase_shader_exec::ImageSample;
@@ -1154,9 +1155,10 @@ pub struct FoldCost {
     pub largest: f32,
 }
 
-/// A detail program's equation: its roles, constants and proof.
+/// A detail program's equation, solved and proven ([`derive_equation`]): what a consumer draws
+/// ([`Equation::detailed_material`]).
 #[derive(Clone, Debug, PartialEq)]
-pub struct Derived {
+pub struct Equation {
     pub roles: SlotRoles,
     pub constants: DetailConstants,
     pub proof: Proof,
@@ -1165,6 +1167,16 @@ pub struct Derived {
     /// The scale of the designed base colour the constants were read at: 1, or halved until the material's tints and
     /// gain leave the designed colours unsaturated ([`solve`]). No word of the material is clamped.
     pub design_scale: f32,
+    /// What the probe holds constant that, changed, moves a role the equation computes ([`frozen`]): the equation is
+    /// the program's at these values.
+    pub frozen: Vec<Frozen>,
+}
+
+/// A detail program's equation with the evidence the census audits it by ([`derive`]): each constant beside the word
+/// it reads and the tint fold's cost. A consumer needs the equation alone ([`derive_equation`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Derived {
+    pub equation: Equation,
     /// Each solved constant's lane beside the word it reads ([`FieldComparison`]).
     pub fields: Vec<FieldComparison>,
     /// The fold's cost, where every tint lane reads one word.
@@ -1175,6 +1187,18 @@ impl Derived {
     /// The comparisons whose solved value is not the word's.
     pub fn disagreements(&self) -> impl Iterator<Item = &FieldComparison> {
         self.fields.iter().filter(|f| f.agrees() == Some(false))
+    }
+}
+
+impl Equation {
+    /// The equation as a [`DetailedMaterial`]: its [`DetailLerp`] ([`Equation::detail_lerp`]), lowered as Sekiro's
+    /// bake lowers gloss and reflectance, with what it holds constant.
+    pub fn detailed_material(&self, texture: impl Fn(u32) -> TextureRef) -> DetailedMaterial {
+        DetailedMaterial {
+            mix: DetailMix::DetailLerp(self.detail_lerp(texture)),
+            lowering: SurfaceLowering::GlossReflectance,
+            frozen: self.frozen.clone(),
+        }
     }
 
     /// The equation as a [`DetailLerp`], each texture slot's reference `texture(slot)`.
@@ -1326,13 +1350,14 @@ fn fold_cost(c: &DetailConstants, gain: f32, words: &[[f32; 3]], seed: u32) -> R
     Ok(FoldCost { gain, largest })
 }
 
-/// The constants, proof and comparisons of `probe`'s program with its textures assigned as `roles`.
-fn derive_with(
+/// The equation of `probe`'s program with its textures assigned as `roles`: its constants solved and proven, and what
+/// it holds constant.
+fn equation_with(
     probe: &mut ProgramProbe,
     outputs: Outputs,
     roles: SlotRoles,
     seed: u32,
-) -> Result<Derived, String> {
+) -> Result<Equation, String> {
     let program = Program {
         probe,
         outputs,
@@ -1341,7 +1366,175 @@ fn derive_with(
     let (constants, frame, design_scale) = solve(&program)?;
     let proof = prove(&program, &constants, &frame, seed)
         .map_err(|e| format!("{constants:?} frame {frame:?}: {e}"))?;
-    let fields = compare_fields(probe, outputs, &roles)?;
+    let frozen = frozen(probe, outputs, &roles, seed)?;
+    Ok(Equation {
+        roles,
+        constants,
+        proof,
+        frame,
+        design_scale,
+        frozen,
+    })
+}
+
+/// What the probe holds constant that moves a role the equation computes when changed, tried one at a time on designed
+/// samples at each end of the weights and on random ones: the facing ([`Frozen::FrontFacing`]), each frozen vertex
+/// input but the tangent frame and position (the space the equation is in), each engine constant and each engine
+/// texture, each held at the value the bake freezes it to. A change that makes the program discard moves it.
+fn frozen(
+    probe: &mut ProgramProbe,
+    outputs: Outputs,
+    roles: &SlotRoles,
+    seed: u32,
+) -> Result<Vec<Frozen>, String> {
+    let weights = Weights::of(roles.weight_set);
+    let mut samples: Vec<Samples> = weights
+        .ends()
+        .into_iter()
+        .map(|x| design(weights, 1., x, 0.))
+        .collect();
+    let mut random = Seeded::new(seed.wrapping_add(2));
+    samples.extend((0..4).map(|_| random_samples(&mut random, roles.details.len())));
+    let observe = |probe: &ProgramProbe| -> Result<Vec<Observed>, String> {
+        let program = Program {
+            probe,
+            outputs,
+            roles,
+        };
+        samples.iter().map(|s| program.observe(s, UV)).collect()
+    };
+    let reference = observe(probe)?;
+    let moves = |probe: &ProgramProbe| -> Result<bool, String> {
+        let Ok(now) = observe(probe) else {
+            return Ok(true);
+        };
+        for (a, b) in reference.iter().zip(&now) {
+            let alpha = match (a.alpha, b.alpha) {
+                (Some(x), Some(y)) => moved(x, y)?,
+                _ => false,
+            };
+            if differ(a, b)? || alpha {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    };
+    let mut out = Vec::new();
+    for input in probe.frozen_inputs.clone() {
+        let name = input.name.to_ascii_uppercase();
+        if matches!(name.as_str(), "NORMAL" | "TANGENT" | "POSITION" | "SV_POSITION") {
+            continue;
+        }
+        let facing = name == "SV_ISFRONTFACE";
+        let changed = if facing {
+            [0.; 4]
+        } else {
+            input.value.map(|v| v + 0.25)
+        };
+        probe
+            .set_input(&input.name, input.index, changed)
+            .map_err(|e| e.to_string())?;
+        let moved = moves(probe);
+        probe
+            .set_input(&input.name, input.index, input.value)
+            .map_err(|e| e.to_string())?;
+        if moved? {
+            out.push(if facing {
+                Frozen::FrontFacing
+            } else {
+                Frozen::VertexInput {
+                    semantic: input.name,
+                    index: input.index,
+                    value: input.value,
+                }
+            });
+        }
+    }
+    for f in probe.engine_fields.clone() {
+        let Some(saved) = probe.words(f.buffer, f.word, f.words) else {
+            continue;
+        };
+        let changed: Vec<u32> = saved
+            .iter()
+            .map(|&w| (f32::from_bits(w) + 0.25).to_bits())
+            .collect();
+        probe
+            .set_words(f.buffer, f.word, &changed)
+            .map_err(|e| e.to_string())?;
+        let moved = moves(probe);
+        probe
+            .set_words(f.buffer, f.word, &saved)
+            .map_err(|e| e.to_string())?;
+        if moved? {
+            out.push(Frozen::EngineConstant {
+                name: f.name,
+                value: saved.iter().map(|&w| f32::from_bits(w)).collect(),
+            });
+        }
+    }
+    for (slot, value) in probe.engine.clone() {
+        probe.engine.insert(slot, value.map(|v| v + 0.25));
+        let moved = moves(probe);
+        probe.engine.insert(slot, value);
+        if moved? {
+            let name = probe
+                .interface()
+                .resources
+                .iter()
+                .find(|r| r.provenance.d3d.is_some_and(|d| d.register == slot) && texture_slot(r))
+                .map_or_else(|| format!("t{slot}"), |r| r.provenance.name.clone());
+            out.push(Frozen::EngineTexture { name, value });
+        }
+    }
+    Ok(out)
+}
+
+/// Whether `resource` is a texture (a texture slot's register is its own, apart from the buffers' and samplers').
+fn texture_slot(resource: &primase_shader::Resource) -> bool {
+    matches!(resource.kind, ResourceKind::Texture { .. })
+}
+
+/// The map from the probe's coordinate to the one the program samples texture `slot` at, as a texture transform: the
+/// scale and offset [`affine_uv`] fits to runs at the corners of the unit square and its middle (the offset exact, as
+/// the coordinate 0 gives it).
+pub fn slot_transform(probe: &ProgramProbe, slot: u32) -> Result<UvTransform, String> {
+    let mut points = Vec::new();
+    for uv in [[0., 0.], [1., 0.], [0., 1.], [1., 1.], [0.5, 0.25]] {
+        let mut reads = AnsweredReads::new(|_: &ImageSample<u32>| Ok([0.5; 4]));
+        probe.pixel(uv, &mut reads).map_err(|e| e.to_string())?;
+        let sample = reads
+            .samples
+            .iter()
+            .find(|r| r.texture == slot)
+            .ok_or_else(|| format!("t{slot} is not sampled"))?;
+        points.push((uv, [sample.coord[0], sample.coord[1]]));
+    }
+    let map = affine_uv(&points).map_err(|e| format!("t{slot}'s coordinate: {e}"))?;
+    Ok(UvTransform {
+        offset: map.offset.map(|v| v as f32),
+        scale: map.scale.map(|v| v as f32),
+        rotation: 0.,
+    })
+}
+
+/// The equation of `probe`'s program, as a consumer draws it: its textures' parts read from what moves which output
+/// ([`identify`]), its constants solved, proven on [`PROOF_SETS`] random sample sets and [`TRANSITION_SETS`] where the
+/// weights mix (every role within [`BOUND_UNITS`]), and what it holds constant ([`frozen`]); an error naming what
+/// differs from the equation. The constants are not compared with the material's words here ([`derive`] does, for the
+/// census): a consumer takes the equation the proof holds.
+pub fn derive_equation(probe: &mut ProgramProbe, seed: u32) -> Result<Equation, String> {
+    let outputs = outputs(probe)?;
+    let roles = roles_of(probe, outputs)?;
+    equation_with(probe, outputs, roles, seed)
+}
+
+/// [`derive_equation`], with each constant beside the material word it reads ([`FieldComparison`]) and the tint fold's
+/// cost ([`FoldCost`]): the evidence the census audits the equation by.
+pub fn derive(probe: &mut ProgramProbe, seed: u32) -> Result<Derived, String> {
+    let equation = derive_equation(probe, seed)?;
+    let outputs = outputs(probe)?;
+    let fields = compare_fields(probe, outputs, &equation.roles)?;
+    let constants = &equation.constants;
     let tint_lanes = 3 * constants.details.len();
     let word_of = |f: &FieldComparison| match f.fields.as_slice() {
         [(name, k)] => probe
@@ -1357,16 +1550,12 @@ fn derive_with(
         Some(w) if fields[..tint_lanes].iter().all(|f| f.agrees() == Some(true)) => {
             let gain = constants.details[0].tint[0] / w[0];
             let words: Vec<[f32; 3]> = w.chunks(3).map(|t| [t[0], t[1], t[2]]).collect();
-            Some(fold_cost(&constants, gain, &words, seed)?)
+            Some(fold_cost(constants, gain, &words, seed)?)
         }
         _ => None,
     };
     Ok(Derived {
-        roles,
-        constants,
-        proof,
-        frame,
-        design_scale,
+        equation,
         fields,
         fold,
     })
@@ -1734,13 +1923,11 @@ fn frozen_factors(
     Ok(found)
 }
 
-/// The [`DetailLerp`](primase_core::detail::DetailLerp) `probe`'s program computes: its textures' parts read from what
-/// moves which output ([`identify`]), its constants solved, proven and compared with the words they read; an error
-/// naming what differs from the equation.
-pub fn derive(probe: &mut ProgramProbe, seed: u32) -> Result<Derived, String> {
-    let outputs = outputs(probe)?;
-    let roles = match identify(probe, outputs) {
-        Ok(roles) => roles,
+/// The textures of `probe`'s program by their part in the equation ([`identify`]); where no colour texture moves the
+/// colour, the error names the engine constants the bake freezes that multiply it.
+fn roles_of(probe: &mut ProgramProbe, outputs: Outputs) -> Result<SlotRoles, String> {
+    match identify(probe, outputs) {
+        Ok(roles) => Ok(roles),
         Err(Unidentified::ColourUnmoved(e)) => {
             // name what multiplies the colour by zero: an engine constant the bake freezes
             let groups = sampler_groups(probe)?;
@@ -1750,14 +1937,13 @@ pub fn derive(probe: &mut ProgramProbe, seed: u32) -> Result<Derived, String> {
                 .map(|&t| (t, [0.05, 0.05, 0.05, 0.5]))
                 .collect();
             let factors = frozen_factors(probe, outputs, &answers)?;
-            return Err(format!(
+            Err(format!(
                 "{e}: the colour is multiplied by engine constants the bake freezes ({}), set per draw",
                 factors.join(", ")
-            ));
+            ))
         }
-        Err(Unidentified::Differs(e)) => return Err(e),
-    };
-    derive_with(probe, outputs, roles, seed)
+        Err(Unidentified::Differs(e)) => Err(e),
+    }
 }
 
 #[cfg(test)]
