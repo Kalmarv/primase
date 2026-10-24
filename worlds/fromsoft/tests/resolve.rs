@@ -314,7 +314,7 @@ fn a_layered_program_is_bound_by_sekiros_rules() {
             192,
             4,
             Unknown {
-                why: "missing SAT parameter left at frozen zero".into(),
+                why: "missing material field left at frozen zero".into(),
             },
         ),
     ];
@@ -662,7 +662,7 @@ fn the_bake_binds_a_frozen_frame_to_the_roles() {
         ("global time at the program's sample time", 1),
         ("unit pre-exposure for static material bake", 1),
         ("time of day left at frozen zero", 1),
-        ("missing SAT parameter left at frozen zero", 1),
+        ("missing material field left at frozen zero", 1),
         ("preview default for missing NormalMap binding", 1),
         ("opaque alpha because main albedo is missing", 1),
         (
@@ -1556,7 +1556,7 @@ fn a_textures_tiling_is_the_flvers_then_the_stored_then_the_uv_groups() {
     );
 }
 
-/// A SAT parameter the material does not state takes the default its shader bundle's metaparam states, counted; one the
+/// A material field the material does not state takes the default its shader bundle's metaparam states, counted; one the
 /// metaparam does not declare is still Unknown.
 #[test]
 fn a_missing_sat_parameter_takes_the_bundles_metaparam_default() {
@@ -1606,7 +1606,7 @@ fn a_missing_sat_parameter_takes_the_bundles_metaparam_default() {
     assert_eq!(
         resolution
             .policies
-            .get("missing SAT parameter taken from the shader bundle's metaparam default"),
+            .get("missing material field taken from the shader bundle's metaparam default"),
         Some(&1)
     );
     // a bundle that declares it as a CAParam (one component per record, by the program's own field name) gives its default
@@ -1641,8 +1641,103 @@ fn a_missing_sat_parameter_takes_the_bundles_metaparam_default() {
     assert_eq!(
         resolution
             .policies
-            .get("missing SAT parameter taken from the shader bundle's CAParam default"),
+            .get("missing material field taken from the shader bundle's CAParam default"),
         Some(&1)
+    );
+}
+
+/// A colour's intensity is the material's where it states one (Sekiro's `<name>-Intensity`); a colour stated without
+/// it takes the metaparam default's, else 1, counted under the path that writes it.
+#[test]
+fn a_colour_stated_without_its_intensity_takes_the_defaults_counted() {
+    use primase_fromsoft::metaparam::{Metaparam, MtdParam};
+    let shader = executor(PROGRAM);
+    let program = World::default().spawn();
+    let mut layered = material();
+    layered
+        .definition
+        .parameters
+        .retain(|p| p.name != "M_Multiple__snp_tint_color_0-Intensity");
+    let metaparam = Metaparam {
+        constant_buffer_size: 0,
+        shader_id: 0,
+        flags: 0,
+        gxmd_key: 0,
+        ca_param_block_size: 0,
+        ca_param_components: 0,
+        unknown_30: 0,
+        unknown_40: 0,
+        unknown_50: 0,
+        textures: Vec::new(),
+        passes: Vec::new(),
+        ca_params: Vec::new(),
+        mtd_params: vec![MtdParam {
+            name: "M_Multiple__snp_tint_color_0".into(),
+            start: 0,
+            sequence_index: 0,
+            value_type: 12,
+            not_shader_input: false,
+            srgb: false,
+            colour: true,
+            key: 0,
+            default: [1., 1., 1., 1., 3.],
+        }],
+    };
+    for (metaparam, intensity, why) in [
+        (
+            Some(&metaparam),
+            3.,
+            "material field colour stated without its intensity: the metaparam default's",
+        ),
+        (
+            None,
+            1.,
+            "material field colour stated without its intensity: 1, as no metaparam declares it",
+        ),
+    ] {
+        let resolution = resolve(
+            &shader,
+            program,
+            &layered.view(),
+            primase_fromsoft::Game::Sekiro,
+            metaparam,
+            Unbound::Preview,
+            &mut |_, _| Ok(None),
+        )
+        .unwrap();
+        let colour = constants(&resolution.stage, &shader)
+            .into_iter()
+            .find(|c| c.1 == "M_Multiple__snp_tint_color_0")
+            .unwrap();
+        assert_eq!(
+            colour.4,
+            bits(&[0.2 * intensity, 0.4 * intensity, 0.6 * intensity, 1.])
+        );
+        assert_eq!(
+            resolution.policies.get(why),
+            Some(&1),
+            "{:?}",
+            resolution.policies
+        );
+    }
+    // stated, it is the material's and not counted
+    let resolution = resolve(
+        &shader,
+        program,
+        &material().view(),
+        primase_fromsoft::Game::Sekiro,
+        Some(&metaparam),
+        Unbound::Preview,
+        &mut |_, _| Ok(None),
+    )
+    .unwrap();
+    assert!(
+        !resolution
+            .policies
+            .keys()
+            .any(|k| k.contains("without its intensity")),
+        "{:?}",
+        resolution.policies
     );
 }
 

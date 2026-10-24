@@ -665,24 +665,27 @@ pub fn resolve(
     let mut sat_bound = 0;
     for name in names {
         let field = layout.fields[name];
+        let declared = metaparam.and_then(|m| m.mtd_params.iter().find(|p| p.name == *name));
         let Some(param) = material.definition.parameter(name) else {
             // the shader bundle's metaparam states a default for every parameter it declares: the value of one the
-            // material does not state. A colour's default is its four lanes and its intensity (the fifth), folded as
-            // a stated colour's is: the first three times the intensity
-            let default = metaparam.and_then(|m| m.mtd_params.iter().find(|p| p.name == *name));
-            if let Some(p) = default {
-                let mut value = p.default;
-                if p.is_colour() {
-                    for v in &mut value[..3] {
-                        *v *= p.default[4];
-                    }
-                }
-                let lanes = if p.is_colour() { 4 } else { value.len() };
-                let n = (field.words as usize).min(lanes);
+            // material does not state, a colour's with the default's own intensity
+            if let Some(p) = declared {
+                let value = if is_colour(name, declared) {
+                    let intensity = intensity(
+                        material,
+                        name,
+                        &p.default,
+                        declared,
+                        ParameterPath::Field,
+                        &mut policies,
+                    );
+                    folded_colour(&p.default, intensity)
+                } else {
+                    p.default.to_vec()
+                };
+                let n = (field.words as usize).min(value.len());
                 *policies
-                    .entry(
-                        "missing SAT parameter taken from the shader bundle's metaparam default".to_owned(),
-                    )
+                    .entry(ParameterPath::Field.counted("taken from the shader bundle's metaparam default"))
                     .or_default() += 1;
                 constant(name, 0, field.words * 4, words(&value[..n]))?;
             } else if let Some(p) = metaparam
@@ -693,7 +696,7 @@ pub fn resolve(
                 // parameter the engine sets per draw by the program's own field name, with the value it has when none
                 // is set
                 *policies
-                    .entry("missing SAT parameter taken from the shader bundle's CAParam default".to_owned())
+                    .entry(ParameterPath::Field.counted("taken from the shader bundle's CAParam default"))
                     .or_default() += 1;
                 constant(name, 0, 4, words(&[p.default]))?;
             } else {
@@ -702,32 +705,30 @@ pub fn resolve(
                     0,
                     field.words * 4,
                     ConstantRole::Unknown {
-                        why: "missing SAT parameter left at frozen zero".into(),
+                        why: ParameterPath::Field.counted("left at frozen zero"),
                     },
                 )?;
             }
             continue;
         };
         let mut values = floats(&param);
-        if name.contains("_color_") {
-            let intensity = match material.definition.parameter(&format!("{name}-Intensity")) {
-                Some(ParameterValue::Float(v)) => v.first().copied(),
-                _ => None,
-            }
-            .unwrap_or(1.);
-            for v in values.iter_mut().take(3) {
-                *v *= intensity;
-            }
-            if values.len() == 3 {
-                values.push(1.);
-            }
+        if is_colour(name, declared) {
+            let intensity = intensity(
+                material,
+                name,
+                &values,
+                declared,
+                ParameterPath::Field,
+                &mut policies,
+            );
+            values = folded_colour(&values, intensity);
         }
         constant(name, 0, values.len() as u32 * 4, words(&values))?;
     }
     // a program that reads its parameters from `SAT_MtdParam`: each the metaparam declares as a shader input and the
     // program reads (its start word a member's), at that word, the material's value (else the metaparam's default,
-    // counted), as many lanes as the program reads from there, written as the engine writes it ([`sat_words`]). A
-    // colour's intensity is its fifth lane: a stated one where it states five lanes, the default's otherwise (counted)
+    // counted), as many lanes as the program reads from there, written as the engine writes it ([`sat_words`]), a
+    // colour's with its intensity ([`intensity`])
     if let (Some((resource, buffer_size, read)), Some(metaparam)) = (&sat, metaparam) {
         let (resource, buffer_size) = (*resource, *buffer_size);
         for p in metaparam.mtd_params.iter().filter(|p| !p.not_shader_input) {
@@ -754,27 +755,25 @@ pub fn resolve(
                 Some(v) => floats(&v),
                 None => {
                     *policies
-                        .entry(
-                            "missing SAT parameter taken from the shader bundle's metaparam default"
-                                .to_owned(),
-                        )
+                        .entry(ParameterPath::Sat.counted("taken from the shader bundle's metaparam default"))
                         .or_default() += 1;
                     p.default.to_vec()
                 }
             };
-            let intensity = if !p.is_colour() {
-                1.
-            } else if value.len() >= 5 {
-                value[4]
+            let colour = is_colour(&p.name, Some(p));
+            let intensity = if colour {
+                intensity(
+                    material,
+                    &p.name,
+                    &value,
+                    Some(p),
+                    ParameterPath::Sat,
+                    &mut policies,
+                )
             } else {
-                *policies
-                    .entry(
-                        "colour parameter stated without its intensity: the metaparam default's".to_owned(),
-                    )
-                    .or_default() += 1;
-                p.default[4]
+                1.
             };
-            if p.is_colour() {
+            if colour {
                 value.resize(4, 1.);
             }
             let mut value = sat_words(game, p, &value, intensity);
@@ -886,6 +885,79 @@ fn output_bindings(interface: &Interface, forward: bool, game: crate::Game) -> V
         }
     }
     out
+}
+
+/// The resolve's two ways a program reads a material's parameters, named in what it counts: a field per parameter
+/// (Sekiro's programs), or the `SAT_MtdParam` array (Elden Ring's).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ParameterPath {
+    Field,
+    Sat,
+}
+
+impl ParameterPath {
+    fn name(self) -> &'static str {
+        match self {
+            ParameterPath::Field => "material field",
+            ParameterPath::Sat => "SAT parameter",
+        }
+    }
+
+    /// The count of a parameter the material does not state, which this path writes as `what` says.
+    fn counted(self, what: &str) -> String {
+        format!("missing {} {what}", self.name())
+    }
+}
+
+/// Whether the parameter `name` is a colour, four lanes and an intensity: by the metaparam's type where it declares the
+/// parameter ([`crate::metaparam::MtdParam::is_colour`]), else by its name (`_color_`). The two agree on every colour of
+/// Elden Ring's metaparams (3,028) and material binaries (46,000).
+fn is_colour(name: &str, declared: Option<&crate::metaparam::MtdParam>) -> bool {
+    declared.map_or_else(|| name.contains("_color_"), crate::metaparam::MtdParam::is_colour)
+}
+
+/// A colour's intensity, both paths' one rule: where the material states it, its fifth lane where `value` has five (Elden
+/// Ring's material binaries state each of their 46,000 colours so; a metaparam default always has five), else its
+/// `<name>-Intensity` parameter (Sekiro's MTDs state colours in four lanes, 7,884 of their 7,892 with that parameter).
+/// One the material does not state is the metaparam default's fifth lane, else 1, each counted under `path`.
+fn intensity(
+    material: &MaterialView<'_>,
+    name: &str,
+    value: &[f32],
+    declared: Option<&crate::metaparam::MtdParam>,
+    path: ParameterPath,
+    policies: &mut BTreeMap<String, u64>,
+) -> f32 {
+    if let Some(&stated) = value.get(4) {
+        return stated;
+    }
+    if let Some(ParameterValue::Float(v)) = material.definition.parameter(&format!("{name}-Intensity"))
+        && let Some(&stated) = v.first()
+    {
+        return stated;
+    }
+    let (intensity, taken) = match declared {
+        Some(p) => (p.default[4], "the metaparam default's"),
+        None => (1., "1, as no metaparam declares it"),
+    };
+    *policies
+        .entry(format!(
+            "{} colour stated without its intensity: {taken}",
+            path.name()
+        ))
+        .or_default() += 1;
+    intensity
+}
+
+/// A colour as a program's field holds it: red, green and blue times its `intensity`, alpha as stated (1 where three lanes
+/// are), as Sekiro's [`sat_words`] writes one too.
+fn folded_colour(value: &[f32], intensity: f32) -> Vec<f32> {
+    let mut lanes = value.to_vec();
+    lanes.resize(4, 1.);
+    for v in &mut lanes[..3] {
+        *v *= intensity;
+    }
+    lanes
 }
 
 /// A parameter's value as the floats a constant holds: a boolean 0 or 1, integers as floats.
