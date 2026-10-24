@@ -19,7 +19,7 @@ use primase_core::detail::{
 };
 use primase_core::layered::{Channel, Source, mask_value};
 use primase_core::pbr::TextureRef;
-use primase_core::shader::{NormalEncoding, OutputRole, ScalarEncoding};
+use primase_core::shader::{NormalEncoding, OutputBinding, OutputRole, ScalarEncoding};
 use primase_shader::ResourceKind;
 use primase_shader_exec::ImageSample;
 use primase_shader_exec::probe::{AnsweredReads, affine_uv};
@@ -96,7 +96,7 @@ struct Observed {
 }
 
 /// The output registers and encodings of the roles a detail-blend program writes.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Outputs {
     normal: (usize, f32),
     gloss: (usize, ScalarEncoding),
@@ -106,10 +106,15 @@ struct Outputs {
 }
 
 fn outputs(probe: &ProgramProbe) -> Result<Outputs, String> {
+    outputs_of(&probe.interface().outputs, &probe.outputs)
+}
+
+/// [`outputs`] from the program's output `varyings` and the binding's `bindings` of them: each role the equation reads
+/// on the lanes it reads them; a lane with no role (`Unknown`) and the alpha's (`Coverage` or `Opacity`: not one of the
+/// roles the equation is proven on) are left out, any other role refused.
+fn outputs_of(varyings: &[primase_shader::Varying], bindings: &[OutputBinding]) -> Result<Outputs, String> {
     let register = |label: &primase_shader::Label| -> Result<usize, String> {
-        probe
-            .interface()
-            .outputs
+        varyings
             .iter()
             .find(|v| v.label == *label)
             .and_then(|v| v.provenance.d3d)
@@ -117,9 +122,10 @@ fn outputs(probe: &ProgramProbe) -> Result<Outputs, String> {
             .ok_or_else(|| format!("no output register for {}{}", label.name, label.index))
     };
     let (mut normal, mut gloss, mut albedo, mut reflectance, mut emission) = (None, None, None, None, None);
-    for o in &probe.outputs {
+    for o in bindings {
         let r = register(&o.label)?;
         match o.role {
+            OutputRole::Unknown { .. } | OutputRole::Coverage | OutputRole::Opacity => {}
             OutputRole::Normal {
                 encoding: NormalEncoding::XyzBiased { bias_bits },
                 ..
@@ -1391,4 +1397,92 @@ pub fn derive(probe: &mut ProgramProbe, seed: u32) -> Result<Derived, String> {
         Err(Unidentified::Differs(e)) => return Err(e),
     };
     derive_with(probe, outputs, roles, seed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use primase_core::shader::{D3dSignature, ScalarType, SystemValue, Value, Varying, VaryingProvenance};
+    use primase_shader::Label;
+
+    fn target(n: u32) -> Label {
+        Label {
+            name: "SV_Target".into(),
+            index: n,
+        }
+    }
+
+    /// Sekiro's five G-buffer targets as a lifted program declares them, target `n` in register `n`.
+    fn varyings() -> Vec<Varying> {
+        (0..5)
+            .map(|n| Varying {
+                label: target(n),
+                system: Some(SystemValue::Target(n)),
+                value: Value {
+                    scalar: ScalarType::Float,
+                    width: 4,
+                },
+                interp: None,
+                used: true,
+                provenance: VaryingProvenance {
+                    d3d: Some(D3dSignature {
+                        register: n,
+                        mask: 0b1111,
+                        read_write_mask: 0,
+                    }),
+                },
+            })
+            .collect()
+    }
+
+    /// The binding of Sekiro's G-buffer layout, every lane of the five targets (`Unknown` where it has no role).
+    fn bindings() -> Vec<OutputBinding> {
+        crate::Game::Sekiro
+            .gbuffer()
+            .into_iter()
+            .map(|(n, lanes, role)| OutputBinding {
+                label: target(n),
+                lanes,
+                role,
+            })
+            .collect()
+    }
+
+    /// The roles the equation reads are found among a binding's lanes with no role and its alpha's, which are left out;
+    /// a role the equation does not read is refused.
+    #[test]
+    fn the_equations_roles_are_read_beside_unroled_and_alpha_lanes() {
+        let all = bindings();
+        assert!(all.iter().any(|o| matches!(o.role, OutputRole::Unknown { .. })));
+        let expected = Outputs {
+            normal: (0, f32::from_bits(0x3f00_2008)),
+            gloss: (1, ScalarEncoding::square_of(0.95)),
+            albedo: 2,
+            reflectance: (3, ScalarEncoding::square_root_of(1.0)),
+            emission: Some((4, ScalarEncoding::LINEAR)),
+        };
+        assert_eq!(outputs_of(&varyings(), &all), Ok(expected));
+        // the roles alone, as before the layout stated every lane
+        let roled: Vec<OutputBinding> = all
+            .iter()
+            .filter(|o| !matches!(o.role, OutputRole::Unknown { .. }))
+            .cloned()
+            .collect();
+        assert_eq!(outputs_of(&varyings(), &roled), Ok(expected));
+        // target 2's w bound as the alpha a discard tests, or a blend weighs by
+        let mut alpha = all.clone();
+        let w = alpha
+            .iter()
+            .position(|o| o.label == target(2) && o.lanes == 0b1000)
+            .unwrap();
+        for role in [OutputRole::Coverage, OutputRole::Opacity] {
+            alpha[w].role = role;
+            assert_eq!(outputs_of(&varyings(), &alpha), Ok(expected));
+        }
+        // a role the equation does not read
+        let mut metallic = all;
+        metallic[1].role = OutputRole::Metallic;
+        let err = outputs_of(&varyings(), &metallic).unwrap_err();
+        assert!(err.contains("is not a detail blend's"), "{err}");
+    }
 }
