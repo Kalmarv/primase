@@ -100,7 +100,16 @@ pub struct UnityTexture {
     pub filter: i64,
     /// `m_MipBias`: added to the level of detail it is sampled at.
     pub mip_bias: f32,
+    /// `m_Aniso`: the anisotropic filtering level ([`UnityTexture::anisotropic`] above 1).
+    pub aniso: i64,
     pub not_decoded: Option<String>,
+}
+
+impl UnityTexture {
+    /// Whether Unity filters it anisotropically (`m_Aniso` above 1): what an isotropic sampler does not honour.
+    pub fn anisotropic(&self) -> bool {
+        self.aniso > 1
+    }
 }
 
 impl Component for UnityTexture {

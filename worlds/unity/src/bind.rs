@@ -173,7 +173,9 @@ pub fn directional_light(c: &mut Constants, towards: [f32; 3], color: [f32; 3]) 
 /// row 0 at v = 0, where the world stores the top row first), each axis addressed by its `TextureWrapMode` (0 repeat, 1
 /// clamp, 2 mirror, 3 mirror once), filtered by its `FilterMode` (0 point and 1 bilinear at the nearest level, 2
 /// trilinear between levels), its `m_MipBias` added to the level of detail, an sRGB texture's colour decoded before
-/// filtering. A wrap or filter mode Unity does not define is refused by its number. A sample at an implicit level
+/// filtering. Anisotropic filtering is not modelled: a texture Unity filters anisotropically
+/// ([`UnityTexture::anisotropic`]) is sampled isotropically, for the caller to report. A wrap or filter mode Unity
+/// does not define is refused by its number. A sample at an implicit level
 /// without a quad footprint is refused unless the caller states the level it takes
 /// ([`SampledTexture::with_footprintless_level`]).
 pub fn sampled_texture(t: &Texture, unity: &UnityTexture) -> Result<SampledTexture> {
@@ -251,6 +253,7 @@ mod tests {
             wrap,
             filter,
             mip_bias,
+            aniso: 1,
             not_decoded: None,
         }
     }

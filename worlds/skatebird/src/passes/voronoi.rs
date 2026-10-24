@@ -16,8 +16,10 @@
 //! The bake (approximated, counted): [`primase_shader_exec::evaluate_periodic`] over a block of K x K cells of the map's
 //! coordinate at the map's own texel density (up to `max-texels`), its first cell cross-faded so the block tiles. Each
 //! texture is sampled as Unity samples it ([`primase_unity::bind::sampled_texture`]); the grid is evaluated one pixel at
-//! a time, so a sample at an implicit level has no quad footprint and takes the finest level plus its bias. The
-//! program's output is lit, so the surface comes out of five evaluations, each with one white directional light (x,
+//! a time, so a sample at an implicit level has no quad footprint and takes the finest level plus its bias (counted).
+//! The faithful level, not yet taken, is the bake's own density: a footprint of size / texels texels, level
+//! log2(size / texels), above 0 where `max-texels` caps the bake. Anisotropic filtering is sampled isotropically
+//! (counted). The program's output is lit, so the surface comes out of five evaluations, each with one white directional light (x,
 //! -x, y, -y, z) and nothing else ([`primase_unity::bind::directional_light`]: ambient, light probes and shadows off),
 //! the tangent frame the identity and the world position zero, `_Color` white: each is max(0, n.l) x albedo, so per
 //! colour channel the vector (P[x] - P[-x], P[y] - P[-y], P[z]) is the albedo times the unit normal: its length the
@@ -357,11 +359,21 @@ impl LowerSkatebirdVoronoi {
                 )));
             };
             let texture = match source(w, m, property) {
-                Source::Pixels(t, u) => primase_shader_exec::Texture::Image(Arc::new(
-                    sampled_texture(t, u)
-                        .map_err(|err| format!("{property}: {err}"))?
-                        .with_footprintless_level(FOOTPRINTLESS_LEVEL)?,
-                )),
+                Source::Pixels(t, u) => {
+                    if u.anisotropic() {
+                        log.approximate(
+                            &format!(
+                                "{VORONOI}: textures Unity filters anisotropically, sampled isotropically"
+                            ),
+                            1,
+                        );
+                    }
+                    primase_shader_exec::Texture::Image(Arc::new(
+                        sampled_texture(t, u)
+                            .map_err(|err| format!("{property}: {err}"))?
+                            .with_footprintless_level(FOOTPRINTLESS_LEVEL)?,
+                    ))
+                }
                 Source::Missing(why) => return Ok(Err(format!("{property} {why}"))),
                 Source::Unset => {
                     let declared = programs

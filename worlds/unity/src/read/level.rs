@@ -1159,6 +1159,7 @@ impl Builder<'_> {
                 wrap: t.wrap,
                 filter: t.filter,
                 mip_bias: t.mip_bias,
+                aniso: t.aniso,
                 not_decoded,
             },
         );

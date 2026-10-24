@@ -1483,6 +1483,7 @@ mod tests {
                 wrap: [0, 0],
                 filter: 1,
                 mip_bias: 0.0,
+                aniso: 1,
                 not_decoded: None,
             },
         );

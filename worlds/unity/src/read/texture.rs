@@ -40,6 +40,8 @@ pub struct UnityTexture {
     pub filter: i64,
     /// `m_MipBias`: added to the level of detail the texture is sampled at.
     pub mip_bias: f32,
+    /// `m_Aniso`: the anisotropic filtering level (above 1: anisotropic).
+    pub aniso: i64,
     /// All levels, largest first, bottom row first.
     pub data: Vec<u8>,
 }
@@ -129,6 +131,7 @@ impl UnityTexture {
             wrap: [int(settings, "m_WrapU")?, int(settings, "m_WrapV")?],
             filter: int(settings, "m_FilterMode")?,
             mip_bias: float(settings, "m_MipBias")?,
+            aniso: int(settings, "m_Aniso")?,
             data,
         })
     }
@@ -250,6 +253,7 @@ mod tests {
             wrap: [0, 0],
             filter: 1,
             mip_bias: 0.0,
+            aniso: 1,
             data,
         }
     }
