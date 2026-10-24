@@ -1230,15 +1230,6 @@ fn normalised(reason: &str) -> String {
     out
 }
 
-/// The row of `FC_TextureTilingScale` Elden Ring writes for the material texture `resource`, as a capture of the
-/// running game shows it (the 578 rows the programs of 160 G-buffer draw groups read, the groups tied to their
-/// material binaries by shader and bound textures): the scale the material binary's sampler of the slot stores (the two
-/// floats after its path) where it is not zero (153 rows), else the uv group's `<group>_CommonUV-UVParam` of the
-/// metaparam texture that shares the resource's `Texture2D_N` (425 rows; the metaparam's default where the material
-/// states none), else 1, each axis scaled about the texture's centre ([`centred`]). Every character's row matched;
-/// nine rows of one map material binary, AEG099_324_ID001, did not (19, 55 and 24 captured where it states 10, 35 and
-/// 10): the draw is likely of another material with the same textures, not established. The metaparam's slot index is
-/// not the `N` of `Texture2D_N` (both name the texture: its slot is the register), so the group is found by the name.
 /// The uv group of the metaparam's record for program texture `resource`, where it names one: the record of the same
 /// `Texture2D_N` ([`crate::metaparam::texture_number`] of its name), both games' rule. A record's
 /// [`crate::metaparam::Texture::slot`] is its register, not that number: Sekiro's `Character_AMSN_[DetailBlend]`
@@ -1253,6 +1244,14 @@ fn uv_group<'a>(metaparam: Option<&'a Metaparam>, resource: &Resource) -> Option
         .map(|t| t.uv_group.as_str())
 }
 
+/// The row of `FC_TextureTilingScale` Elden Ring writes for the material texture `resource`, as a capture of the
+/// running game shows it (the 578 rows the programs of 160 G-buffer draw groups read, the groups tied to their material
+/// binaries by shader and bound textures): the scale the material binary's sampler of the slot stores (the two floats
+/// after its path) where it is not zero (153 rows), else the uv group's `<group>_CommonUV-UVParam` of the metaparam
+/// texture that shares the resource's `Texture2D_N` ([`uv_group`]; 425 rows; the metaparam's default where the material
+/// states none), else 1, each axis scaled about the texture's centre ([`centred`]). Every character's row matched; nine
+/// rows of one map material binary, AEG099_324_ID001, did not (19, 55 and 24 captured where it states 10, 35 and 10):
+/// the draw is likely of another material with the same textures, not established.
 fn elden_tiling(material: &MaterialView<'_>, metaparam: Option<&Metaparam>, resource: &Resource) -> [f32; 4] {
     let n = texture_slot(resource);
     let number = crate::metaparam::texture_number;
