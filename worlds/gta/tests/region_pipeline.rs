@@ -33,8 +33,8 @@ fn select([x0, y0, x1, y1]: [f32; 4]) -> String {
 /// Every GTA pass over a loaded world: the finest level of detail, embedded collision with its surfaces, fragments
 /// posed, shaders lowered for day, winding, tints, terrain layers, vertex colours, water meshes, normal maps.
 const PART: &str = "select-lod{form=finest}, lower-gta-embedded-collision{foliage=leave-out,river=leave-out}, \
-                    lower-gta-surfaces, gta-pose-fragments, lower-gta-pbr{night=false}, gta-winding, gta-tint, \
-                    gta-terrain-layers, gta-vertex-colours, lower-gta-water, normalize-normals";
+                    lower-gta-surfaces, gta-pose-fragments, lower-gta-pbr{night=false,water-colour=48,98,122,190}, gta-winding, gta-tint, \
+                    gta-terrain-layers, gta-vertex-colours, lower-gta-water{water-colour=48,98,122,190}, normalize-normals";
 
 #[test]
 fn every_named_region_through_the_gta_passes() {

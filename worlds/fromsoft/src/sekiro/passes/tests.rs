@@ -8,6 +8,9 @@ use primase_core::{
 };
 use std::collections::BTreeMap;
 
+/// The water colour the tests state (the earlier skate exporter's).
+const WATER: primase_image::Srgba8 = primase_image::Srgba8([48, 98, 122, 190]);
+
 /// The distant backdrop's placements are dropped by name, so the conservation check (enforced) sees every
 /// placement it removes declared; its prototypes, which hold no core content yet, declare nothing.
 #[test]
@@ -250,7 +253,7 @@ fn a_preview_drops_only_the_inputs_of_the_materials_it_previewed() {
         },
     );
     let mut log = PassLog::default();
-    LowerFromSoftMaterials::new(Some(super::pbr::Layers::Preview))
+    LowerFromSoftMaterials::new(Some(super::pbr::Layers::Preview), WATER)
         .run(&mut world, &mut log)
         .unwrap();
     assert_eq!(
@@ -324,7 +327,7 @@ fn a_lowered_material_carries_what_its_source_class_states_about_its_surfaces() 
         .run(
             &mut world,
             &Pipeline {
-                passes: vec![Box::new(LowerFromSoftMaterials::new(None))],
+                passes: vec![Box::new(LowerFromSoftMaterials::new(None, WATER))],
             },
             &mut report,
         )
@@ -411,7 +414,7 @@ fn an_additive_blend_is_a_light_volume_in_sekiro_and_an_additive_surface_in_elde
         .run(
             &mut world,
             &Pipeline {
-                passes: vec![Box::new(LowerFromSoftMaterials::new(None))],
+                passes: vec![Box::new(LowerFromSoftMaterials::new(None, WATER))],
             },
             &mut report,
         )
@@ -467,7 +470,7 @@ fn a_lowered_material_is_as_sided_as_the_face_sets_drawing_it_and_split_when_the
         .run(
             &mut world,
             &Pipeline {
-                passes: vec![Box::new(LowerFromSoftMaterials::new(None))],
+                passes: vec![Box::new(LowerFromSoftMaterials::new(None, WATER))],
             },
             &mut report,
         )
@@ -509,7 +512,7 @@ fn a_lowered_material_is_as_sided_as_the_face_sets_drawing_it_and_split_when_the
     let m = material(&mut world, "unknown");
     let mesh = world.spawn();
     world.insert(mesh, Mesh::new(vec![primitive(m)]));
-    let err = LowerFromSoftMaterials::new(None)
+    let err = LowerFromSoftMaterials::new(None, WATER)
         .run(&mut world, &mut PassLog::default())
         .unwrap_err();
     assert!(err.contains("without fromsoft.face_cull"), "{err}");
@@ -622,7 +625,6 @@ fn the_fromsoft_passes_register_by_name() {
         "drop-fromsoft-texture-transforms",
         "fromsoft-apply-rigid-skinning",
         "lower-fromsoft-extras",
-        "lower-fromsoft-materials",
         "raise-fromsoft-display-masks",
     ];
     for name in names {

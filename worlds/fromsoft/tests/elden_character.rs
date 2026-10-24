@@ -233,7 +233,7 @@ fn an_alpha_tested_card_is_drawn_with_the_slot_its_program_tests() -> Result<()>
     read_character_with(&install, "c5840", &decoder, CharacterOptions::default(), &mut w)?;
     common::run(
         &mut w,
-        "lower-fromsoft-geometry{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw,speedtree-frame=program},lower-fromsoft-materials{layers=preserve}",
+        "lower-fromsoft-geometry{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw,speedtree-frame=program},lower-fromsoft-materials{layers=preserve,water-colour=48,98,122,190}",
     )?;
     let wing: Vec<_> = w
         .iter::<PbrMaterial>()

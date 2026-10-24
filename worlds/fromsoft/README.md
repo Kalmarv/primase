@@ -811,9 +811,12 @@ its layered materials (`fromsoft.shader_programs`);
   it fails. Only the layer inputs of the primitives it baked are consumed, after
   it succeeded; an unplaced prototype's stay, and a level-of-detail form carrying
   inputs is refused before anything changes (`select-lod` first).
-- `lower-fromsoft-materials{layers=preserve|preview}` (`LowerFromSoftMaterials`)
-  lowers every source material to core PBR, texture transforms relative to the
-  applied tiling. A layered material no pass baked needs the program's choice:
+- `lower-fromsoft-materials{water-colour=R,G,B,A,layers=preserve|preview}`
+  (`LowerFromSoftMaterials`) lowers every source material to core PBR, texture
+  transforms relative to the applied tiling. A material without a base texture
+  is drawn mid grey, or for water the required `water-colour` (sRGB bytes and a
+  linear alpha byte: the destination's look, which the program states), counted.
+  A layered material no pass baked needs the program's choice:
   `preserve` keeps it as source data (layer inputs included), counted; `preview`
   lowers it from its main-layer preview, counted, and drops the layer inputs of
   the primitives drawing a material it previewed (shader inputs, not vertex
@@ -846,7 +849,7 @@ its layered materials (`fromsoft.shader_programs`);
   dialect refuses them), after `lower-fromsoft-materials`.
 
 The earlier skate route's materials are `bake-fromsoft-layers{max-size=512,sample-time=0}` then
-`lower-fromsoft-materials{layers=preview}`, after the legacy geometry above.
+`lower-fromsoft-materials{layers=preview,water-colour=48,98,122,190}`, after the legacy geometry above.
 
 Generated texture names begin with `bake_`, including colour, normal, ORM and
 emission, so downstream web caps remain a separate policy. Generated names follow

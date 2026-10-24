@@ -5,12 +5,15 @@ use crate::sekiro::source::LayerInputs;
 use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial, UvTransform};
 use primase_core::{Component, DrawOrder, Entity, MaterialUsage, Mesh, VertexColor, World};
+use primase_image::Srgba8;
 use std::collections::BTreeMap;
 
-/// `lower-fromsoft-materials{layers=preserve|preview}`: source materials as core PBR from their bindings and the
+/// `lower-fromsoft-materials{water-colour=R,G,B,A,layers=preserve|preview}`: source materials as core PBR from their bindings and the
 /// texture files the reader kept (decoded here, named `<stem>` and `<stem>@normal`): base and normal maps in the
 /// source normal convention (`normalize-normals` converts), gloss to roughness, traced metallic constants and maps
-/// (unevidenced metallic is dielectric 0, counted), the preview fallback colour without a base texture (counted),
+/// (unevidenced metallic is dielectric 0, counted), the preview fallback colour without a base texture (counted:
+/// mid grey, or for water the colour `water-colour` states, sRGB bytes and a linear alpha byte, which is the
+/// destination's choice and has no default),
 /// texture transforms relative to the tiling a geometry pass applied. Baked materials keep their bindings. What a
 /// lowered material's source class states about its surfaces is set with it ([`super::pbr::class_usage`]): water
 /// and leaves as their `core.material_usage`, decals as their `core.draw_order`. A material is two-sided exactly where
@@ -24,28 +27,47 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LowerFromSoftMaterials {
     layers: Option<super::pbr::Layers>,
+    water_colour: Srgba8,
 }
 
 impl LowerFromSoftMaterials {
     /// `layers`: what becomes of a layered material no pass baked; `None`: such a material is an error.
-    pub fn new(layers: Option<super::pbr::Layers>) -> Self {
-        LowerFromSoftMaterials { layers }
+    /// `water_colour`: a water material's colour where it has no base texture.
+    pub fn new(layers: Option<super::pbr::Layers>, water_colour: Srgba8) -> Self {
+        LowerFromSoftMaterials { layers, water_colour }
     }
     pub fn layers(&self) -> Option<super::pbr::Layers> {
         self.layers
+    }
+    pub fn water_colour(&self) -> Srgba8 {
+        self.water_colour
     }
 }
 
 /// `lower-fromsoft-materials`' declaration ([`primase_core::pass::PassRegistry::add`]).
 pub const LOWER_FROMSOFT_MATERIALS: PassSpec = PassSpec {
     name: "lower-fromsoft-materials",
-    options: &[OptionSpec::optional_choice::<super::pbr::Layers>(
-        "layers",
-        "a layered material no pass baked left as source data for a later bake, or lowered from its main layer's \
-         preview textures",
-        "a layered material no pass baked is refused",
-    )],
-    make: |g| Ok(Box::new(LowerFromSoftMaterials::new(g.optional_choice("layers")))),
+    options: &[
+        OptionSpec::optional_choice::<super::pbr::Layers>(
+            "layers",
+            "a layered material no pass baked left as source data for a later bake, or lowered from its main layer's \
+             preview textures",
+            "a layered material no pass baked is refused",
+        ),
+        OptionSpec::required(
+            "water-colour",
+            "48,98,122,190",
+            "a water material's colour where it has no base texture (sRGB R,G,B and a linear alpha, bytes): the \
+             destination's choice, the water shader not being drawn",
+        ),
+    ],
+    make: |g| {
+        let water = Srgba8::parse(g.required("water-colour")).map_err(|e| format!("water-colour={e}"))?;
+        Ok(Box::new(LowerFromSoftMaterials::new(
+            g.optional_choice("layers"),
+            water,
+        )))
+    },
 };
 
 impl Pass for LowerFromSoftMaterials {
@@ -53,10 +75,11 @@ impl Pass for LowerFromSoftMaterials {
         "lower-fromsoft-materials"
     }
     fn options(&self) -> Options {
-        match self.layers {
-            None => Options::new(),
-            Some(l) => Options::from([("layers".to_owned(), l.text().to_owned())]),
+        let mut o = Options::from([("water-colour".to_owned(), self.water_colour.to_string())]);
+        if let Some(l) = self.layers {
+            o.insert("layers".to_owned(), l.text().to_owned());
         }
+        o
     }
     fn requires(&self) -> &[&'static str] {
         &[Material::NAME]
@@ -89,7 +112,12 @@ impl Pass for LowerFromSoftMaterials {
         use crate::sekiro::source::TexturePayloads;
         // lent read-only (a world without the reader's payloads has no texture file to decode): borrowed, not written
         let lowered = world.resource_scope::<TexturePayloads, _>(|world, payloads| {
-            super::pbr::lower_drawn(world, payloads.map_or(&BTreeMap::new(), |p| &p.0), self.layers)
+            super::pbr::lower_drawn(
+                world,
+                payloads.map_or(&BTreeMap::new(), |p| &p.0),
+                self.layers,
+                self.water_colour,
+            )
         });
         let (lowered, previewed) = lowered.map_err(|e| e.to_string())?;
         // the inputs of the layers a preview stands for: not vertex colours, so they go with the layers; the inputs of

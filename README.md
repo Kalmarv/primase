@@ -96,7 +96,7 @@ fn main() -> Result<()> {
     let region = [-170.0, 180.0, -50.0, 300.0];
     let oodle = load_oodle(Path::new("C:/Games/Sekiro/oo2core_6_win64.dll"))?;
     let decoder = Decoder { oodle: Some(&oodle), max_output: 1 << 30 };
-    let options = sekiro::Options { region: Some(region), region_margin: 30.0, ..Default::default() };
+    let options = sekiro::Options { region: Some(sekiro::Region { rect: region, margin: 30.0 }), ..Default::default() };
     let mut reader = AreaReader::new("C:/Games/Sekiro", "m11_01", decoder, options);
     let e = EncodingOptions {
         out_root: "out".into(),
@@ -113,7 +113,7 @@ fn main() -> Result<()> {
     let lower = Pipeline {
         passes: vec![
             Box::new(LowerFromSoftCollision { hit_filters, water: water.clone(), leave_out: leave_out.clone(), reach }),
-            Box::new(LowerFromSoftObjectCollision { convex: ConvexBodies::Tessellate, leave_out: &water | &leave_out,
+            Box::new(LowerFromSoftObjectCollision { resolution: ResolutionChoice::High, convex: ConvexBodies::Tessellate, leave_out: &water | &leave_out,
                 leave_out_motion: [2].into(), convex_surface: ConvexSurface::Render, reach }),
             Box::new(DropFromSoftFar),
             Box::new(ApplyRigidSkinning),
@@ -123,7 +123,8 @@ fn main() -> Result<()> {
             Box::new(SelectLod { choice: LodChoice::Finest }),
             Box::new(ResolveFromSoftShaders::new(Unbound::Preview)),
             Box::new(BakeFromSoftLayers::new(PixelCap::new(512)?, Seconds::new(0.0)?)),
-            Box::new(LowerFromSoftMaterials::new(None)),
+            // water without a base texture: the skate look's flat blue-grey (the destination's choice)
+            Box::new(LowerFromSoftMaterials::new(None, primase_image::Srgba8([48, 98, 122, 190]))),
             Box::new(LowerFromSoftLights::new(Factor::new(1.0)?, Fraction::new(0.15)?).with_min_range(Metres::new(0.5)?)),
             Box::new(LowerFromSoftExtras),
         ],
@@ -141,7 +142,11 @@ fn main() -> Result<()> {
             Box::new(PlaceReskateSpawn::centre()),
             Box::new(SnapReskateMarkers::for_encoding(&e)?),
             Box::new(PrepareReskateWater::new(WaterExtent::Region { margin: 400.0 }, OceanMaterials::Stated)?),
-            Box::new(PrepareReskatePauseMap::new(PauseSource::Geometry { height: 2160, extent: PauseExtent::Region })?),
+            Box::new(PrepareReskatePauseMap::new(PauseSource::Geometry {
+                height: 2160,
+                extent: PauseExtent::Region,
+                drawing: PauseDrawing { leave_out: PauseLeaveOut::Nothing, colour: PauseColour::Mean },
+            })?),
             Box::new(CapTextures::new(256)?.with_mode(CapMode { normals: NormalDownscale::Box, ..CapMode::default() })),
             Box::new(PrepareReskateTextures),
             Box::new(PrepareReskateUvRepeats::new(RepeatDecals::Omit, RepeatBlended::Cutout)),

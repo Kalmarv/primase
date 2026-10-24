@@ -10,8 +10,9 @@
 //! Every placed surface is counted once, kept or outside; surfaces whose placement another state left out go too,
 //! counted. It removes `gta.water`, counting the calming and wave quads of every file read (they are not placed).
 //!
-//! `lower-gta-water` (after loading): each `gta.water_surface` a flat upward mesh in the core frame with one water
-//! material: the earlier exporter's blended colour ([`crate::passes::lower::WATER`], as water shaders get), roughness from the
+//! `lower-gta-water{water-colour=R,G,B,A}` (after loading): each `gta.water_surface` a flat upward mesh in the core frame
+//! with one water material: blended, the flat colour `water-colour` states (as `lower-gta-pbr` gives water shaders;
+//! [`crate::passes::lower::WATER_COLOUR`]), roughness from the
 //! tuning's specular falloff taken as the Blinn-Phong exponent (the water shader is not read: approximated), marked
 //! `core.material_usage` water (what the water file states), and
 //! its `core.collision`: the same outline as triangles at the water's height, every one on surface `WATER` (class
@@ -26,6 +27,7 @@ use primase_core::{
     Collision, Entity, Instance, MaterialUsage, Mesh, Name, Primitive, Resource, Semantic, Stream, Surfaces,
     Topology, World,
 };
+use primase_image::Srgba8;
 
 use crate::components::GTA;
 use crate::components::water::{GtaWater, GtaWaterSurface, area};
@@ -235,15 +237,16 @@ impl Pass for SelectGtaWater {
 }
 
 /// `lower-gta-water` (see the module documentation).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct LowerGtaWater;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LowerGtaWater {
+    /// The water's flat colour (`water-colour`).
+    pub water_colour: Srgba8,
+}
 
-/// The water surface material (see the module documentation).
-pub fn water_material(specular_falloff: Option<f32>) -> PbrMaterial {
-    let srgb = |b: u8| primase_image::srgb_to_linear(f64::from(b) / 255.0) as f32;
-    let w = crate::passes::lower::WATER;
+/// The water surface material (see the module documentation): `colour`, and the roughness of `specular_falloff`.
+pub fn water_material(colour: Srgba8, specular_falloff: Option<f32>) -> PbrMaterial {
     PbrMaterial {
-        base_color: [srgb(w[0]), srgb(w[1]), srgb(w[2]), f32::from(w[3]) / 255.0],
+        base_color: colour.linear(),
         metallic: 0.0,
         // a Blinn-Phong exponent n as GGX: alpha = sqrt(2 / (n + 2)), roughness sqrt(alpha)
         roughness: specular_falloff.map_or(1.0, |n| (2.0 / (n.max(0.0) + 2.0)).powf(0.25)),
@@ -252,16 +255,24 @@ pub fn water_material(specular_falloff: Option<f32>) -> PbrMaterial {
     }
 }
 
-/// `lower-gta-water`'s declaration ([`primase_core::pass::PassRegistry::add`]): no options, it lowers by the game's own rule.
+/// `lower-gta-water`'s declaration ([`primase_core::pass::PassRegistry::add`]): the water's flat colour is the
+/// caller's choice, no default.
 pub const LOWER_GTA_WATER: PassSpec = PassSpec {
     name: "lower-gta-water",
-    options: &[],
-    make: |_| Ok(Box::new(LowerGtaWater)),
+    options: &[crate::passes::lower::WATER_COLOUR],
+    make: |g| {
+        Ok(Box::new(LowerGtaWater {
+            water_colour: crate::passes::lower::water_colour(g)?,
+        }))
+    },
 };
 
 impl Pass for LowerGtaWater {
     fn name(&self) -> &'static str {
         "lower-gta-water"
+    }
+    fn options(&self) -> Options {
+        Options::from([("water-colour".to_owned(), self.water_colour.to_string())])
     }
     // no `requires`: it runs on every loaded part and leaves one without its input (a part holding only a water
     // surface, a cell whose shaders all draw nothing) as it is
@@ -284,7 +295,7 @@ impl Pass for LowerGtaWater {
         &["core.surfaces"]
     }
     fn approximates(&self) -> &'static str {
-        "the water shader as the earlier exporter's blended flat colour, its roughness from the tuning's specular \
+        "the water shader as a stated blended flat colour, its roughness from the tuning's specular \
          falloff; waves, calming, corner values and depth and stencil flags not drawn"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
@@ -311,7 +322,7 @@ impl Pass for LowerGtaWater {
                 .entry(s.specular_falloff.map(f32::to_bits))
                 .or_insert_with(|| {
                     let m = w.spawn();
-                    w.insert(m, water_material(s.specular_falloff));
+                    w.insert(m, water_material(self.water_colour, s.specular_falloff));
                     w.insert(m, MaterialUsage::Water);
                     w.insert(m, Name("gta_water".into()));
                     log.approximate("water drawn as a blended flat colour", 1);
@@ -409,6 +420,12 @@ mod tests {
         }
         o.insert("clip".into(), clip.into());
         GTA_SELECT_WATER.instance(&o).unwrap()
+    }
+
+    /// `lower-gta-water` with the colour the tests state (the earlier skate exporter's).
+    fn lower() -> Box<dyn Pass> {
+        let o = Options::from([("water-colour".to_owned(), "48,98,122,190".to_owned())]);
+        LOWER_GTA_WATER.instance(&o).unwrap()
     }
 
     fn surfaces(w: &World) -> Vec<GtaWaterSurface> {
@@ -537,7 +554,7 @@ mod tests {
         let json = s[0].to_json().unwrap().unwrap();
         assert_eq!(json["quad"]["corners"][0], 26.0);
         let mut log = PassLog::default();
-        LowerGtaWater.run(&mut w, &mut log).unwrap();
+        lower().run(&mut w, &mut log).unwrap();
         assert_eq!(
             log.counts.get("invisible water quads: no mesh, no collision"),
             Some(&1)
@@ -571,7 +588,7 @@ mod tests {
         let protos: Vec<Entity> = w.iter::<Instance>().map(|(_, i)| i.prototype).collect();
         assert_eq!(protos.len(), 1);
         assert!(w.get::<Mesh>(protos[0]).is_none());
-        LowerGtaWater.run(&mut w, &mut log).unwrap();
+        lower().run(&mut w, &mut log).unwrap();
         assert!(w.get::<GtaWaterSurface>(protos[0]).is_none());
         let mesh = w.get::<Mesh>(protos[0]).unwrap();
         let p = mesh.primitives()[0].positions().unwrap();
@@ -581,6 +598,15 @@ mod tests {
             .get::<PbrMaterial>(mesh.primitives()[0].material.unwrap())
             .unwrap();
         assert_eq!(m.alpha_mode, AlphaMode::Blend);
+        // the stated colour, and none without one
+        assert_eq!(m.base_color, Srgba8([48, 98, 122, 190]).linear());
+        assert!(
+            LOWER_GTA_WATER
+                .instance(&Options::new())
+                .err()
+                .unwrap()
+                .starts_with("water-colour is required: ")
+        );
         assert!((m.roughness - (2.0f32 / 1120.0).powf(0.25)).abs() < 1e-6);
         assert_eq!(
             w.get::<MaterialUsage>(mesh.primitives()[0].material.unwrap()),

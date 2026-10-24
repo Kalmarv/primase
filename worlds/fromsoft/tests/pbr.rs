@@ -9,6 +9,9 @@ use primase_fromsoft::{
 };
 use std::collections::BTreeMap;
 
+/// The water colour the tests state (the earlier skate exporter's).
+const WATER: primase_image::Srgba8 = primase_image::Srgba8([48, 98, 122, 190]);
+
 fn source(shader: &str) -> materials::Material {
     let slots = [
         ("Texture2D_0_AlbedoMap", "a"),
@@ -93,7 +96,7 @@ fn evidenced_gx_scalar_is_exact_and_other_families_keep_raw_values() {
             ("a".into(), payload(&[80, 90, 100, 255])),
             ("n".into(), payload(&[128, 128, 255, 255])),
         ]);
-        let log = pbr::lower(&mut world, &bytes, None).unwrap();
+        let log = pbr::lower(&mut world, &bytes, None, WATER).unwrap();
         let p = world.get::<PbrMaterial>(e).unwrap().clone();
         assert_eq!(world.get::<materials::Material>(e).unwrap().gx, raw);
         assert_eq!(
@@ -106,7 +109,7 @@ fn evidenced_gx_scalar_is_exact_and_other_families_keep_raw_values() {
                 .get::<Texture>(p.metallic_roughness_texture.unwrap().texture)
                 .unwrap();
             assert_eq!(t.levels[0][2], 255);
-            pbr::lower(&mut world, &no_payloads(), None).unwrap();
+            pbr::lower(&mut world, &no_payloads(), None, WATER).unwrap();
             assert_eq!(world.get::<PbrMaterial>(e).unwrap(), &p);
         } else {
             // No evidenced consumer for this family: dielectric, not glTF's 1.
@@ -136,7 +139,10 @@ fn gx_scalar_rejects_ambiguous_or_invalid_records_and_retains_flagged_values() {
         unavailable(&mut m, "Texture2D_1_NormalMap");
         m.gx = vec![gx(&words)];
         world.insert(e, m);
-        assert!(pbr::lower(&mut world, &no_payloads(), None).is_err(), "{words:?}");
+        assert!(
+            pbr::lower(&mut world, &no_payloads(), None, WATER).is_err(),
+            "{words:?}"
+        );
     }
     {
         let mut world = World::new();
@@ -146,7 +152,7 @@ fn gx_scalar_rejects_ambiguous_or_invalid_records_and_retains_flagged_values() {
         unavailable(&mut m, "Texture2D_1_NormalMap");
         m.gx = vec![gx(&[1, 237, 1, half]); 2];
         world.insert(e, m);
-        assert!(pbr::lower(&mut world, &no_payloads(), None).is_err());
+        assert!(pbr::lower(&mut world, &no_payloads(), None, WATER).is_err());
     }
     for records in [
         vec![gx(&[2, 237, 1, half, 237, 0, 1])],
@@ -159,7 +165,7 @@ fn gx_scalar_rejects_ambiguous_or_invalid_records_and_retains_flagged_values() {
         unavailable(&mut m, "Texture2D_1_NormalMap");
         m.gx = records.clone();
         world.insert(e, m);
-        let log = pbr::lower(&mut world, &no_payloads(), None).unwrap();
+        let log = pbr::lower(&mut world, &no_payloads(), None, WATER).unwrap();
         assert_eq!(world.get::<PbrMaterial>(e).unwrap().metallic, 0.);
         assert_eq!(log.approximations[UNKNOWN], 1);
         assert_eq!(world.get::<materials::Material>(e).unwrap().gx, records);
@@ -176,7 +182,7 @@ fn source_blue_gloss_and_red_metal_survive_as_distinct_orm_channels() {
         ("m".into(), payload(&[0, 200, 210, 255, 255, 100, 120, 255])),
     ]);
     assert_eq!(pbr::required_textures(&world).unwrap().len(), 3);
-    let log = pbr::lower(&mut world, &bytes, None).unwrap();
+    let log = pbr::lower(&mut world, &bytes, None, WATER).unwrap();
     let mat = world.get::<PbrMaterial>(e).unwrap();
     let orm = world
         .get::<Texture>(mat.metallic_roughness_texture.unwrap().texture)
@@ -215,7 +221,7 @@ fn orm_selects_only_base_mip_and_assigns_linear_mask_metadata() {
         ("n".into(), primase_dds::write_dx10(&normal).unwrap()),
         ("m".into(), payload(&[0, 0, 0, 255])),
     ]);
-    pbr::lower(&mut world, &bytes, None).unwrap();
+    pbr::lower(&mut world, &bytes, None, WATER).unwrap();
     let p = world.get::<PbrMaterial>(e).unwrap();
     let t = world
         .get::<Texture>(p.metallic_roughness_texture.unwrap().texture)
@@ -231,7 +237,7 @@ fn orm_selects_only_base_mip_and_assigns_linear_mask_metadata() {
     let mut world = World::new();
     let e = world.spawn();
     world.insert(e, source("MetallicTex"));
-    assert!(pbr::lower(&mut world, &missing, None).is_err());
+    assert!(pbr::lower(&mut world, &missing, None, WATER).is_err());
 }
 
 #[test]
@@ -258,7 +264,7 @@ fn baked_bindings_and_factors_are_authoritative() {
     };
     world.insert(e, expected.clone());
     assert!(pbr::required_textures(&world).unwrap().is_empty());
-    pbr::lower(&mut world, &no_payloads(), None).unwrap();
+    pbr::lower(&mut world, &no_payloads(), None, WATER).unwrap();
     assert_eq!(world.get::<PbrMaterial>(e).unwrap(), &expected);
 }
 #[test]
@@ -266,7 +272,7 @@ fn missing_source_data_is_not_a_silent_default() {
     let mut world = World::new();
     let e = world.spawn();
     world.insert(e, source("MetallicTex"));
-    assert!(pbr::lower(&mut world, &no_payloads(), None).is_err());
+    assert!(pbr::lower(&mut world, &no_payloads(), None, WATER).is_err());
 }
 
 #[test]
@@ -301,7 +307,7 @@ fn baked_emission_presence_controls_missing_radiance_diagnostic() {
             expected.emissive_strength = 4.;
         }
         world.insert(e, expected.clone());
-        let log = pbr::lower(&mut world, &no_payloads(), None).unwrap();
+        let log = pbr::lower(&mut world, &no_payloads(), None, WATER).unwrap();
         assert_eq!(world.get::<PbrMaterial>(e).unwrap(), &expected);
         assert_eq!(
             log.approximations
@@ -352,7 +358,7 @@ fn selected_normal_identity_controls_both_transforms() {
         ),
         ("m".into(), payload(&[0, 0, 0, 255, 255, 0, 0, 255])),
     ]);
-    pbr::lower(&mut world, &bytes, None).unwrap();
+    pbr::lower(&mut world, &bytes, None, WATER).unwrap();
     let p = world.get::<PbrMaterial>(e).unwrap();
     let normal = p.normal_texture.unwrap();
     let orm = p.metallic_roughness_texture.unwrap();
@@ -383,7 +389,7 @@ fn repeated_lowering_preserves_channels_factors_and_entity_count() {
         ("a".into(), payload(&[80, 90, 100, 255])),
         ("n".into(), payload(&[128, 128, 255, 255])),
     ]);
-    pbr::lower(&mut world, &bytes, None).unwrap();
+    pbr::lower(&mut world, &bytes, None, WATER).unwrap();
     let expected = world.get::<PbrMaterial>(e).unwrap().clone();
     let texture = expected.metallic_roughness_texture.unwrap().texture;
     assert_eq!(
@@ -391,7 +397,7 @@ fn repeated_lowering_preserves_channels_factors_and_entity_count() {
         [255, 13, 51, 255]
     );
     let entities = world.entities().count();
-    pbr::lower(&mut world, &no_payloads(), None).unwrap();
+    pbr::lower(&mut world, &no_payloads(), None, WATER).unwrap();
     assert_eq!(world.get::<PbrMaterial>(e).unwrap(), &expected);
     assert_eq!(world.entities().count(), entities);
     assert_eq!(
@@ -422,7 +428,7 @@ fn metallic_without_source_evidence_is_counted_dielectric() {
             unavailable(&mut m, "Texture2D_1_NormalMap");
         }
         world.insert(e, m);
-        let log = pbr::lower(&mut world, &bytes, None).unwrap();
+        let log = pbr::lower(&mut world, &bytes, None, WATER).unwrap();
         let p = world.get::<PbrMaterial>(e).unwrap();
         let effective = match p.metallic_roughness_texture {
             Some(r) => p.metallic * f32::from(world.get::<Texture>(r.texture).unwrap().levels[0][2]) / 255.,
@@ -437,7 +443,7 @@ fn metallic_without_source_evidence_is_counted_dielectric() {
     world.insert(e, source("MetallicTex"));
     let mut traced = bytes.clone();
     traced.insert("m".into(), payload(&[0, 0, 0, 255]));
-    let log = pbr::lower(&mut world, &traced, None).unwrap();
+    let log = pbr::lower(&mut world, &traced, None, WATER).unwrap();
     assert!(!log.approximations.contains_key(UNKNOWN));
     assert_eq!(log.counts["metallic textures"], 1);
 }

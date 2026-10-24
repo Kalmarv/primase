@@ -145,8 +145,10 @@ mod tests {
                         .collect(),
                 )
             } else {
-                let required: [(&str, &[(&str, &str)]); 4] = [
-                    ("lower-gta-pbr", &[("night", "false")]),
+                let water = ("water-colour", "48,98,122,190");
+                let required: [(&str, &[(&str, &str)]); 5] = [
+                    ("lower-gta-pbr", &[("night", "false"), water]),
+                    ("lower-gta-water", &[water]),
                     ("gta-select-water", &[("clip", "region")]),
                     (
                         "lower-gta-lights",
@@ -215,11 +217,12 @@ mod tests {
                 lower-gta-collision{{{rect},{leave}}}, lower-gta-surfaces, gta-select-water{{{rect},clip=kept}}"
             )
         };
+        let water = "water-colour=48,98,122,190";
         let part = |form: &str, night: &str| {
             format!(
                 "select-lod{{form={form}}}, lower-gta-embedded-collision{{{leave}}}, lower-gta-surfaces, \
-                gta-pose-fragments, lower-gta-pbr{{night={night}}}, gta-winding, gta-tint, gta-terrain-layers, \
-                gta-vertex-colours, lower-gta-water, normalize-normals"
+                gta-pose-fragments, lower-gta-pbr{{night={night},{water}}}, gta-winding, gta-tint, \
+                gta-terrain-layers, gta-vertex-colours, lower-gta-water{{{water}}}, normalize-normals"
             )
         };
         let pipelines = [

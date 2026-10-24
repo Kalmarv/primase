@@ -45,8 +45,8 @@ const GRID: f32 = 200.0;
 /// The GTA lowering of `reskate_assembly.rs`'s recipe, the layer channels baked to vertex weights, before the
 /// ReSkate passes.
 const LOWERED: &str = "select-lod{form=1}, lower-gta-embedded-collision{foliage=leave-out,river=leave-out}, \
-     lower-gta-surfaces, gta-pose-fragments, lower-gta-pbr{night=false}, gta-winding, gta-tint, gta-terrain-layers, \
-     bake-layer-channels, gta-vertex-colours, lower-gta-water, normalize-normals, bake-normal-scale";
+     lower-gta-surfaces, gta-pose-fragments, lower-gta-pbr{night=false,water-colour=48,98,122,190}, gta-winding, gta-tint, gta-terrain-layers, \
+     bake-layer-channels, gta-vertex-colours, lower-gta-water{water-colour=48,98,122,190}, normalize-normals, bake-normal-scale";
 /// What the ReSkate writer needs after the layered lowering, as the recipe prepares it.
 const PREPARE: &str = "lower-tint-reskate, lower-vertex-alpha-reskate, cap-textures{max=256,normals=box}, \
      prepare-reskate-textures, prepare-reskate-water{extent=all}, prepare-reskate-overlays{step=0.004}, \

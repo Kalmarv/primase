@@ -294,3 +294,31 @@ fn f32_byte_table_gives_the_curves_result_on_every_input() {
     });
     assert_eq!(wrong, 0);
 }
+
+/// A stated colour (`R,G,B,A`) prints as it parses, refuses anything but four bytes, and decodes its colour bytes as
+/// `srgb_to_linear(byte / 255)` rounded to f32 and its alpha as `byte / 255`: the bits the lowerings that held a
+/// flat colour of their own computed.
+#[test]
+fn a_stated_colour_parses_prints_and_decodes() {
+    let c = primase_image::Srgba8::parse("48,98,122,190").unwrap();
+    assert_eq!(c.0, [48, 98, 122, 190]);
+    assert_eq!(c.to_string(), "48,98,122,190");
+    for bad in [
+        "",
+        "48,98,122",
+        "48,98,122,190,1",
+        "48,98,122,256",
+        "48,98,-1,190",
+        "a,b,c,d",
+    ] {
+        assert!(primase_image::Srgba8::parse(bad).is_err(), "{bad}");
+    }
+    for byte in 0..=255u8 {
+        let [r, _, _, a] = primase_image::Srgba8([byte, 0, 0, byte]).linear();
+        assert_eq!(
+            r.to_bits(),
+            (srgb_to_linear(f64::from(byte) / 255.0) as f32).to_bits()
+        );
+        assert_eq!(a.to_bits(), ((f64::from(byte) / 255.0) as f32).to_bits());
+    }
+}

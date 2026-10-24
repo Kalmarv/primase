@@ -58,7 +58,8 @@ fn main() -> Result<()> {
             Box::new(SelectLod { choice: LodChoice::Finest }),
             Box::new(ResolveFromSoftShaders::new(Unbound::Preview)),
             Box::new(BakeFromSoftLayers::new(PixelCap::new(512)?, Seconds::new(0.0)?)),
-            Box::new(LowerFromSoftMaterials::new(None)),
+            // water without a base texture: the skate look's flat blue-grey (the destination's choice)
+            Box::new(LowerFromSoftMaterials::new(None, primase_image::Srgba8([48, 98, 122, 190]))),
         ],
     };
     // run on each cell before it is written: the glTF materials and the web textures both sets carry

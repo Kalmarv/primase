@@ -42,7 +42,7 @@ fn bake(
     let run = common::run(
         &mut world,
         &format!(
-            "{}, resolve-fromsoft-shaders{{unbound-textures=preview}}, bake-fromsoft-layers{{max-size={max_size},sample-time=0}}, lower-fromsoft-materials{{layers=preview}}",
+            "{}, resolve-fromsoft-shaders{{unbound-textures=preview}}, bake-fromsoft-layers{{max-size={max_size},sample-time=0}}, lower-fromsoft-materials{{layers=preview,water-colour=48,98,122,190}}",
             common::LEGACY_GEOMETRY
         ),
     )?;

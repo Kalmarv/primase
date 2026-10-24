@@ -23,7 +23,7 @@ fn vespucci(m: &PassManager, source: &GtaSource) -> Result<World> {
     m.run(&mut read, &select, &mut RunReport::default())?;
     let (mut w, _) = source.load_all(&read)?;
     let part = m.registry.parse(
-        "select-lod{form=finest}, gta-pose-fragments, lower-gta-pbr{night=false}, gta-winding, gta-tint, gta-terrain-layers, \
+        "select-lod{form=finest}, gta-pose-fragments, lower-gta-pbr{night=false,water-colour=48,98,122,190}, gta-winding, gta-tint, gta-terrain-layers, \
          gta-vertex-colours, normalize-normals, fill-missing-texcoords",
     )?;
     m.run(&mut w, &part, &mut RunReport::default())?;

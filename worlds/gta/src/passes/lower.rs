@@ -28,12 +28,13 @@
 //!   before normalising: glTF's normal texture with that scale, in [`GTA_NORMALS`] (`normalize-normals` converts it).
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode, PbrMaterial, Specular, TextureRef, UvTransform};
 use primase_core::{
     ColorSpace, DrawLayer, DrawOrder, Entity, Lods, Mesh, Name, NormalBasis, NormalConvention, NormalGreen,
     NormalX, NormalZ, Primitive, Semantic, Stream, TexFormat, TexRole, Texture, World,
 };
+use primase_image::Srgba8;
 use primase_texcodec::{Decoder, TexDecoder};
 
 use crate::components::{GtaDrawable, GtaParam, GtaShader, GtaSources};
@@ -63,8 +64,20 @@ pub const DECAL_QUEUE: i32 = 2500;
 
 /// The alpha-test reference cutouts and foliage are given.
 pub const CUTOFF: f32 = 0.5;
-/// Water's base colour, sRGB bytes with alpha: the earlier skate exporter's.
-pub const WATER: [u8; 4] = [0x30, 0x62, 0x7A, 190];
+/// `water-colour=R,G,B,A` (`lower-gta-pbr`, `lower-gta-water`): the flat colour water is drawn with, sRGB bytes and a
+/// linear alpha byte ([`Srgba8`]). The water shader is not drawn, so the colour standing in for it is the program's
+/// choice (the destination's look), not GTA's: required, no default.
+pub const WATER_COLOUR: OptionSpec = OptionSpec::required(
+    "water-colour",
+    "48,98,122,190",
+    "the flat colour water is drawn with (sRGB R,G,B and a linear alpha, bytes): the destination's choice, the water \
+     shader not being drawn",
+);
+
+/// `water-colour`'s value ([`WATER_COLOUR`]).
+pub fn water_colour(g: &Given) -> Result<Srgba8, String> {
+    Srgba8::parse(g.required("water-colour")).map_err(|e| format!("water-colour={e}"))
+}
 /// The base colour of a surface with no base texture, or whose texture the lookup did not find (sRGB grey 128).
 pub const GREY: u8 = 128;
 /// The Fresnel value of a shader without a `Fresnel` parameter: what `default`'s pixel shader writes.
@@ -509,7 +522,7 @@ pub fn for_each_mesh(
 /// `lower-gta-pbr` (see the module documentation). A material:
 ///
 /// - base colour texture: `DiffuseTex` (else `PlateBgTex`, else `DiffuseTexture_layer0`), sRGB; without one, or when
-///   the lookup did not find it, grey [`GREY`]; water: the flat colour [`WATER`]; `distance_map` (sign text): its
+///   the lookup did not find it, grey [`GREY`]; water: the flat colour `water-colour` states ([`WATER_COLOUR`]); `distance_map` (sign text): its
 ///   `fillColor` with the distance field's red as alpha, cut at half ([`distance_texture`]);
 /// - alpha: opaque for opaque surfaces, tested at [`CUTOFF`] for cutouts and foliage, blended for alpha, decals, glass
 ///   and water;
@@ -527,6 +540,8 @@ pub fn for_each_mesh(
 pub struct LowerGtaPbr {
     /// Day, night, or both as state.
     pub night: Night,
+    /// Water's flat colour (`water-colour`).
+    pub water_colour: Srgba8,
 }
 
 /// Which of GTA's times `lower-gta-pbr` lowers for: its required `night` option (no default: each changes what is
@@ -552,17 +567,21 @@ impl Choice for Night {
     ];
 }
 
-/// `lower-gta-pbr`'s declaration ([`primase_core::pass::PassRegistry::add`]): which of GTA's times is drawn is the
-/// caller's choice, no default.
+/// `lower-gta-pbr`'s declaration ([`primase_core::pass::PassRegistry::add`]): which of GTA's times is drawn, and
+/// water's flat colour, are the caller's choices, no default.
 pub const LOWER_GTA_PBR: PassSpec = PassSpec {
     name: "lower-gta-pbr",
-    options: &[OptionSpec::choice::<Night>(
-        "night",
-        "day (night-only geometry dropped), night, or both with the hour kept as state",
-    )],
+    options: &[
+        OptionSpec::choice::<Night>(
+            "night",
+            "day (night-only geometry dropped), night, or both with the hour kept as state",
+        ),
+        WATER_COLOUR,
+    ],
     make: |g| {
         Ok(Box::new(LowerGtaPbr {
             night: g.choice("night"),
+            water_colour: water_colour(g)?,
         }))
     },
 };
@@ -572,7 +591,10 @@ impl Pass for LowerGtaPbr {
         "lower-gta-pbr"
     }
     fn options(&self) -> Options {
-        Options::from([("night".to_owned(), self.night.text().to_owned())])
+        Options::from([
+            ("night".to_owned(), self.night.text().to_owned()),
+            ("water-colour".to_owned(), self.water_colour.to_string()),
+        ])
     }
     // no `requires`: it runs on every loaded part and leaves one without its input (a part holding only a water
     // surface, a cell whose shaders all draw nothing) as it is
@@ -1088,12 +1110,7 @@ impl LowerGtaPbr {
                 _ => log.count("distance maps without their field: filled", 1),
             }
         } else if c.class == Class::Water {
-            m.base_color = [
-                srgb(WATER[0]),
-                srgb(WATER[1]),
-                srgb(WATER[2]),
-                f32::from(WATER[3]) / 255.0,
-            ];
+            m.base_color = self.water_colour.linear();
             log.approximate("water drawn as a blended flat colour", 1);
         } else {
             let base = ["DiffuseTex", "PlateBgTex", "DiffuseTexture_layer0"]
@@ -1197,6 +1214,9 @@ impl LowerGtaPbr {
 #[cfg(test)]
 mod tests {
     use super::{exponent, roughness, specular_texture};
+
+    /// The water colour the tests state (the earlier skate exporter's).
+    const WATER: primase_image::Srgba8 = primase_image::Srgba8([48, 98, 122, 190]);
     use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
 
     /// A mesh drawing one triangle with each of `materials`.
@@ -1277,6 +1297,7 @@ mod tests {
         let m = bumped(d, n, &mut w);
         super::LowerGtaPbr {
             night: super::Night::Day,
+            water_colour: WATER,
         }
         .run(&mut w, &mut primase_core::pass::PassLog::default())
         .unwrap();
@@ -1332,6 +1353,7 @@ mod tests {
         let mut log = PassLog::default();
         super::LowerGtaPbr {
             night: super::Night::Day,
+            water_colour: WATER,
         }
         .run(&mut w, &mut log)
         .unwrap();
@@ -1400,6 +1422,7 @@ mod tests {
         let mut log = PassLog::default();
         super::LowerGtaPbr {
             night: super::Night::Day,
+            water_colour: WATER,
         }
         .run(&mut w, &mut log)
         .unwrap();
@@ -1422,6 +1445,7 @@ mod tests {
         let m = bumped(t, t, &mut w);
         super::LowerGtaPbr {
             night: super::Night::Day,
+            water_colour: WATER,
         }
         .run(&mut w, &mut primase_core::pass::PassLog::default())
         .unwrap();
@@ -1479,6 +1503,7 @@ mod tests {
         );
         super::LowerGtaPbr {
             night: super::Night::Day,
+            water_colour: WATER,
         }
         .run(&mut w, &mut primase_core::pass::PassLog::default())
         .unwrap();
@@ -1651,6 +1676,7 @@ mod tests {
         );
         super::LowerGtaPbr {
             night: super::Night::State,
+            water_colour: WATER,
         }
         .run(&mut w, &mut primase_core::pass::PassLog::default())
         .unwrap();
@@ -1770,6 +1796,7 @@ mod tests {
         w.insert(proto, PerVertex(vec![vec![10, 11, 12, 13, 14, 15]]));
         super::LowerGtaPbr {
             night: super::Night::Day,
+            water_colour: WATER,
         }
         .run(&mut w, &mut primase_core::pass::PassLog::default())
         .unwrap();
@@ -1867,27 +1894,51 @@ mod tests {
         assert_eq!(s.levels[0][5], 255);
     }
 
-    /// `night` is required and names the time drawn; the options a pass gives read back as the same pass.
+    /// `night` and `water-colour` are required: the time drawn and water's flat colour; a colour that isn't four bytes
+    /// is refused; the options a pass gives read back as the same pass.
     #[test]
-    fn the_night_option_is_required() {
+    fn the_night_and_water_colour_options_are_required() {
         use super::{LOWER_GTA_PBR, LowerGtaPbr, Night};
         use primase_core::pass::{Options, Pass};
-        let pbr = |v: Option<&str>| {
+        let pbr = |night: Option<&str>, colour: Option<&str>| {
             let mut o = Options::new();
-            if let Some(v) = v {
+            if let Some(v) = night {
                 o.insert("night".into(), v.into());
+            }
+            if let Some(v) = colour {
+                o.insert("water-colour".into(), v.into());
             }
             LOWER_GTA_PBR.instance(&o)
         };
-        assert!(pbr(None).err().unwrap().starts_with("night is required: "));
-        assert!(pbr(Some("dusk")).is_err());
+        let colour = Some("48,98,122,190");
+        assert!(
+            pbr(None, colour)
+                .err()
+                .unwrap()
+                .starts_with("night is required: ")
+        );
+        assert!(
+            pbr(Some("false"), None)
+                .err()
+                .unwrap()
+                .starts_with("water-colour is required: ")
+        );
+        assert!(pbr(Some("dusk"), colour).is_err());
+        assert_eq!(
+            pbr(Some("false"), Some("48,98,122")).err().unwrap(),
+            "water-colour=48,98,122: four bytes R,G,B,A (0 to 255)"
+        );
         for (v, night) in [
             ("false", Night::Day),
             ("true", Night::Night),
             ("state", Night::State),
         ] {
-            let pass = pbr(Some(v)).unwrap();
-            assert_eq!(pass.options(), LowerGtaPbr { night }.options(), "{v}");
+            let pass = pbr(Some(v), colour).unwrap();
+            let stated = LowerGtaPbr {
+                night,
+                water_colour: WATER,
+            };
+            assert_eq!(pass.options(), stated.options(), "{v}");
             assert_eq!(
                 LOWER_GTA_PBR.instance(&pass.options()).unwrap().options(),
                 pass.options(),

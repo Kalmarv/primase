@@ -361,6 +361,45 @@ pub fn srgb8_to_linear(byte: u8) -> f64 {
     TABLE[usize::from(byte)]
 }
 
+/// A colour a caller states, as an option's `R,G,B,A`: sRGB bytes and a linear alpha byte, each 0 to 255 (a flat colour
+/// standing in for a shader a lowering does not draw, which is the program's choice, not the source's).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Srgba8(pub [u8; 4]);
+
+impl Srgba8 {
+    /// `R,G,B,A`, four bytes.
+    pub fn parse(text: &str) -> std::result::Result<Srgba8, String> {
+        let bytes: Vec<u8> = text
+            .split(',')
+            .map(|v| v.trim().parse::<u8>())
+            .collect::<std::result::Result<_, _>>()
+            .map_err(|_| format!("{text}: four bytes R,G,B,A (0 to 255)"))?;
+        let bytes: [u8; 4] = bytes
+            .try_into()
+            .map_err(|_| format!("{text}: four bytes R,G,B,A (0 to 255)"))?;
+        Ok(Srgba8(bytes))
+    }
+
+    /// As a linear colour factor: the colour bytes decoded from sRGB ([`srgb8_to_linear`], to f32), alpha divided by
+    /// 255.
+    pub fn linear(self) -> [f32; 4] {
+        let [r, g, b, a] = self.0;
+        [
+            srgb8_to_linear(r) as f32,
+            srgb8_to_linear(g) as f32,
+            srgb8_to_linear(b) as f32,
+            f32::from(a) / 255.0,
+        ]
+    }
+}
+
+impl std::fmt::Display for Srgba8 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let [r, g, b, a] = self.0;
+        write!(f, "{r},{g},{b},{a}")
+    }
+}
+
 /// A stored sRGB byte to linear light, `srgb_to_linear_f32(byte / 255)` in f32: the same bits, from a 256-entry table.
 pub fn srgb8_to_linear_f32(byte: u8) -> f32 {
     static TABLE: LazyLock<[f32; 256]> =

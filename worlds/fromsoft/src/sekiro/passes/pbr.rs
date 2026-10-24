@@ -16,6 +16,7 @@ use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform};
 use primase_core::{
     ColorSpace, DrawLayer, DrawOrder, Entity, MaterialUsage, Name, TexFormat, TexRole, Texture, World,
 };
+use primase_image::Srgba8;
 use primase_texcodec::TexDecoder;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -334,20 +335,14 @@ fn existing_textures(world: &World) -> BTreeMap<(String, bool), Entity> {
     }
     found
 }
-/// The preview colour for a material with no base texture, as sRGB bytes: water's translucent blue-grey, else
-/// mid grey. A named approximation, not a source value.
-fn fallback_base_color(m: &Material) -> [f32; 4] {
-    let bytes: [u8; 4] = if m.class == "water" {
-        [48, 98, 122, 190]
+/// The preview colour for a material with no base texture: water's the colour the program states (`water`, the
+/// destination's choice: no source value), else mid grey. A named approximation, not a source value.
+fn fallback_base_color(m: &Material, water: Srgba8) -> [f32; 4] {
+    if m.class == "water" {
+        water.linear()
     } else {
-        [128, 128, 128, 255]
-    };
-    let mut c = [0.; 4];
-    for i in 0..3 {
-        c[i] = primase_image::srgb_to_linear(f64::from(bytes[i]) / 255.) as f32;
+        Srgba8([128, 128, 128, 255]).linear()
     }
-    c[3] = (f64::from(bytes[3]) / 255.) as f32;
-    c
 }
 /// A binding's texture transform for coordinates already multiplied by `applied` (the material's tiling a geometry
 /// pass applied, `[1, 1]` when none was).
@@ -385,14 +380,16 @@ impl primase_core::pass::Choice for Layers {
 /// Approximation units are material entities unless a counter says pixels.
 ///
 /// `layers` says what happens to a layered material no pass baked; `None` refuses one (the program must choose).
+/// `water_colour` is a water material's colour where it has no base texture (the program's choice).
 /// Materials of a skipped source class ([`Material::skip`]) are not lowered, counted. Every normal map's shader
 /// basis is checked against [`super::normals::consumer_basis`]; an assumed or unclassified basis is counted.
 pub fn lower(
     world: &mut World,
     payloads: &BTreeMap<String, impl AsRef<[u8]>>,
     layers: Option<Layers>,
+    water_colour: Srgba8,
 ) -> Result<PassLog> {
-    lower_materials(world, payloads, layers, None).map(|(log, _)| log)
+    lower_materials(world, payloads, layers, water_colour, None).map(|(log, _)| log)
 }
 
 /// [`lower`] for the source materials some mesh primitive draws; the others (the slots of meshes a geometry pass
@@ -402,6 +399,7 @@ pub fn lower_drawn(
     world: &mut World,
     payloads: &BTreeMap<String, impl AsRef<[u8]>>,
     layers: Option<Layers>,
+    water_colour: Srgba8,
 ) -> Result<(PassLog, BTreeSet<Entity>)> {
     let drawn: BTreeSet<Entity> = world
         .iter::<primase_core::Mesh>()
@@ -411,7 +409,7 @@ pub fn lower_drawn(
         .iter::<Material>()
         .filter(|(e, _)| !drawn.contains(e))
         .count();
-    let (mut log, previewed) = lower_materials(world, payloads, layers, Some(&drawn))?;
+    let (mut log, previewed) = lower_materials(world, payloads, layers, water_colour, Some(&drawn))?;
     if undrawn > 0 {
         log.count("source materials no primitive draws, not lowered", undrawn as u64);
     }
@@ -422,6 +420,7 @@ fn lower_materials(
     world: &mut World,
     payloads: &BTreeMap<String, impl AsRef<[u8]>>,
     layers: Option<Layers>,
+    water_colour: Srgba8,
     only: Option<&BTreeSet<Entity>>,
 ) -> Result<(PassLog, BTreeSet<Entity>)> {
     let sources: Vec<_> = world
@@ -555,7 +554,7 @@ fn lower_materials(
                 && let Some(why) = &unread
             {
                 if fresh {
-                    p.base_color = fallback_base_color(&m);
+                    p.base_color = fallback_base_color(&m, water_colour);
                 }
                 log.approximate_on(e, why, 1);
             } else if p.base_color_texture.is_none()
@@ -584,7 +583,7 @@ fn lower_materials(
                 }
                 p.base_color_texture = Some(r);
             } else if fresh && pv.albedo.is_none() && p.base_color_texture.is_none() {
-                p.base_color = fallback_base_color(&m);
+                p.base_color = fallback_base_color(&m, water_colour);
                 log.approximate_on(e, "missing base texture: preview fallback colour", 1);
             }
             if p.normal_texture.is_none()
@@ -755,6 +754,10 @@ fn lower_materials(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The water colour the tests state (the earlier skate exporter's).
+    const WATER: Srgba8 = Srgba8([48, 98, 122, 190]);
+
     #[test]
     fn emission_preserves_hdr_and_counts_dim_texels_lost_to_quantization() {
         let (t, strength, zeroed) =
@@ -839,12 +842,21 @@ mod tests {
         );
         let e = world.spawn();
         world.insert(e, m);
-        assert!(lower(&mut world.clone(), &BTreeMap::<String, Vec<u8>>::new(), None).is_err());
+        assert!(
+            lower(
+                &mut world.clone(),
+                &BTreeMap::<String, Vec<u8>>::new(),
+                None,
+                WATER
+            )
+            .is_err()
+        );
         let mut preserved = world.clone();
         let log = lower(
             &mut preserved,
             &BTreeMap::<String, Vec<u8>>::new(),
             Some(Layers::Preserve),
+            WATER,
         )
         .unwrap();
         assert!(preserved.get::<PbrMaterial>(e).is_none());
@@ -857,6 +869,7 @@ mod tests {
             &mut world,
             &BTreeMap::<String, Vec<u8>>::new(),
             Some(Layers::Preview),
+            WATER,
         )
         .unwrap();
         let p = world.get::<PbrMaterial>(e).unwrap();
@@ -891,7 +904,7 @@ mod tests {
         };
         let bare = world.spawn();
         world.insert(bare, material("bare"));
-        let log = lower(&mut world, &BTreeMap::<String, Vec<u8>>::new(), None).unwrap();
+        let log = lower(&mut world, &BTreeMap::<String, Vec<u8>>::new(), None, WATER).unwrap();
         assert_eq!(
             log.approximations["missing base texture: preview fallback colour"],
             1
