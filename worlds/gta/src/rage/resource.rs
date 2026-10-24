@@ -136,22 +136,34 @@ impl Resource {
         Ok(())
     }
 
-    /// The system pages, then the graphics pages (`data` holds exactly both, as [`inflate`] makes it).
-    fn pages(&self) -> (&[u8], &[u8]) {
-        usize::try_from(self.system.size())
+    /// The system pages, then the graphics pages: `data` holds exactly both, as [`inflate`] makes it; a resource
+    /// whose data is another size (one built by hand) is an error, never read as all system pages.
+    fn pages(&self) -> Result<(&[u8], &[u8])> {
+        let (system, graphics) = (self.system.size(), self.graphics.size());
+        let split = usize::try_from(system)
             .ok()
-            .and_then(|n| self.data.split_at_checked(n))
-            .unwrap_or((&self.data, &[]))
+            .filter(|_| u64::try_from(self.data.len()).ok() == system.checked_add(graphics))
+            .and_then(|n| self.data.split_at_checked(n));
+        split.ok_or_else(|| {
+            invalid(
+                "RSC7",
+                0,
+                format!(
+                    "{} bytes of pages, not the {system} system and {graphics} graphics bytes its flags state",
+                    self.data.len()
+                ),
+            )
+        })
     }
 
     /// The system (virtual) pages.
-    pub fn system_data(&self) -> &[u8] {
-        self.pages().0
+    pub fn system_data(&self) -> Result<&[u8]> {
+        Ok(self.pages()?.0)
     }
 
     /// The graphics (physical) pages.
-    pub fn graphics_data(&self) -> &[u8] {
-        self.pages().1
+    pub fn graphics_data(&self) -> Result<&[u8]> {
+        Ok(self.pages()?.1)
     }
 
     /// The `len` bytes a pointer points at (`0x5000_0000 + offset` in the system pages, `0x6000_0000 + offset` in
@@ -159,8 +171,8 @@ impl Resource {
     /// neither kind or the bytes run past its pages.
     pub fn at(&self, pointer: u64, len: usize) -> Result<&[u8]> {
         let (pages, offset) = match pointer {
-            0x5000_0000..0x6000_0000 => (self.system_data(), pointer.wrapping_sub(0x5000_0000)),
-            0x6000_0000.. => (self.graphics_data(), pointer.wrapping_sub(0x6000_0000)),
+            0x5000_0000..0x6000_0000 => (self.system_data()?, pointer.wrapping_sub(0x5000_0000)),
+            0x6000_0000.. => (self.graphics_data()?, pointer.wrapping_sub(0x6000_0000)),
             _ => return Err(invalid("RSC7", pointer, "not a resource pointer")),
         };
         usize::try_from(offset)
@@ -286,5 +298,30 @@ mod tests {
         assert_eq!(PageFlags(1 << 4).size(), 0x200 << 8);
         // 127 pages of base << 4
         assert_eq!(PageFlags(0x7F << 17).size(), 127 * (0x200 << 4));
+    }
+
+    /// A pointer reads the pages its flags state; data of another size is an error, not all system pages.
+    #[test]
+    fn the_pages_are_the_data_the_flags_state() {
+        let resource = |len: usize| Resource {
+            version: 0,
+            // one system page of 0x2000 bytes, one graphics page of 0x1000
+            system: PageFlags(4 | 1 << 27),
+            graphics: PageFlags(3 | 1 << 27),
+            data: (0..len).map(|i| (i / 0x1000) as u8).collect(),
+            zero_filled: 0,
+            spent: Spent::default(),
+        };
+        let r = resource(0x3000);
+        assert_eq!(r.at(0x5000_1FFF, 1).unwrap(), [1]);
+        assert_eq!(r.at(0x6000_0000, 1).unwrap(), [2]);
+        assert!(r.at(0x6000_1000, 1).is_err());
+        for len in [0x2000, 0x3001] {
+            let e = resource(len).at(0x5000_0000, 1).unwrap_err().to_string();
+            assert!(
+                e.contains("system and 4096 graphics bytes its flags state"),
+                "{e}"
+            );
+        }
     }
 }

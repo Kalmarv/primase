@@ -218,8 +218,8 @@ fn reads_tree_binaries_resources_and_nested_archives() {
     assert_eq!(a.binary(&mut f, 4, &keys).unwrap(), text);
     let r = a.resource(&mut f, 5, &keys).unwrap();
     assert!(matches!(a.entries[5].kind, EntryKind::Resource { .. }));
-    assert_eq!(r.system_data(), &page[..]);
-    assert!(r.graphics_data().is_empty());
+    assert_eq!(r.system_data().unwrap(), &page[..]);
+    assert!(r.graphics_data().unwrap().is_empty());
     let n = a.nested(&mut f, 3, &keys).unwrap();
     assert_eq!(n.entries[1].path, "test.rpf\\nested.rpf\\inner.txt");
     assert_eq!(n.binary(&mut f, 1, &keys).unwrap(), b"inside");
