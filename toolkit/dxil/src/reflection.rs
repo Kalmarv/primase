@@ -498,7 +498,13 @@ pub fn ranges(m: &Module) -> Result<Vec<(Range, String, Option<TypeId>)>> {
 }
 
 /// The constant type of an LLVM type, with struct members from the type annotations and D3D's packing.
-fn constant_type(m: &Module, t: TypeId, hint: Hint, depth: usize) -> Result<ConstantType> {
+fn constant_type(
+    m: &Module,
+    t: TypeId,
+    hint: Hint,
+    depth: usize,
+    packing: d3d::Packing,
+) -> Result<ConstantType> {
     let component = hint.component;
     if depth > 16 {
         return Err(error(0, "type nesting"));
@@ -554,29 +560,50 @@ fn constant_type(m: &Module, t: TypeId, hint: Hint, depth: usize) -> Result<Cons
                 return Err(error(0, "a matrix annotation disagrees with its type"));
             }
             let scalar = scalar(&m.types[*inner])?.ok_or_else(|| error(0, "a matrix of a non-scalar"))?;
-            d3d::matrix(scalar, rows, columns, major).map_err(wrap)?
+            packing.matrix(scalar, rows, columns, major).map_err(wrap)?
         }
-        Type::Array(n, e) => d3d::array(
-            constant_type(m, *e, hint, depth + 1)?,
-            u32::try_from(*n).map_err(|_| error(0, "array length"))?,
-        )
-        .map_err(wrap)?,
+        Type::Array(n, e) => packing
+            .array(
+                constant_type(m, *e, hint, depth + 1, packing)?,
+                u32::try_from(*n).map_err(|_| error(0, "array length"))?,
+            )
+            .map_err(wrap)?,
         Type::Struct { elements, .. } => {
             // HLSL vectors are structs of one LLVM vector in some reflection modules.
             if let [single] = elements.as_slice()
                 && matches!(m.types.get(*single), Some(Type::Vector(..)))
                 && fields(m, t)?.is_empty()
             {
-                return constant_type(m, *single, hint, depth + 1);
+                return constant_type(m, *single, hint, depth + 1, packing);
             }
-            let members = fields(m, t)?
+            let notes = fields(m, t)?;
+            if packing == d3d::Packing::Structured && notes.len() < elements.len() {
+                return Err(error(0, "structured element has no complete member annotations"));
+            }
+            let mut end = 0u32;
+            let members = notes
                 .into_iter()
                 .zip(elements)
                 .map(|(note, &e)| {
+                    let ty = constant_type(m, e, note.hint(), depth + 1, packing)?;
+                    // STAT annotation offsets describe constant registers even for host-layout storage types.
+                    // Storage member order comes from LLVM; its alignment comes from scalar components.
+                    let offset = if packing == d3d::Packing::Structured {
+                        let offset = end
+                            .checked_next_multiple_of(packing.alignment(&ty))
+                            .ok_or_else(|| error(0, "structured member alignment overflow"))?;
+                        end = offset
+                            .checked_add(ty.size().ok_or_else(|| error(0, "structured member size"))?)
+                            .and_then(|n| n.checked_next_multiple_of(packing.alignment(&ty)))
+                            .ok_or_else(|| error(0, "structured member extent overflow"))?;
+                        offset
+                    } else {
+                        note.offset
+                    };
                     Ok(Member {
-                        ty: constant_type(m, e, note.hint(), depth + 1)?,
+                        ty,
                         name: note.name,
-                        offset: note.offset,
+                        offset,
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -921,7 +948,7 @@ pub(crate) fn resource_of(
                         .zip(elements)
                         .map(|(note, e)| {
                             Ok(BufferConstant {
-                                ty: constant_type(source, e, note.hint(), 0)?,
+                                ty: constant_type(source, e, note.hint(), 0, d3d::Packing::Constant)?,
                                 name: note.name,
                                 offset: note.offset,
                                 default: None,
@@ -957,6 +984,14 @@ pub(crate) fn resource_of(
     if range.count == 0 {
         return Err(error(0, format!("{name}: a range of no bindings")));
     }
+    let layout = match &kind {
+        ResourceKind::Buffer(BufferKind::Structured { stride })
+        | ResourceKind::Storage {
+            target: StorageTarget::Buffer(BufferKind::Structured { stride }),
+            ..
+        } => structured_layout(source, ty, *stride)?,
+        _ => None,
+    };
     Ok(Resource {
         id,
         kind,
@@ -969,9 +1004,45 @@ pub(crate) fn resource_of(
                 space: range.space,
             }),
             counter_of: None,
-            layout: None,
+            layout,
         },
     })
+}
+
+/// A structured resource's wrapper has one element field. Names and orientation come from STAT annotations;
+/// its storage offsets do not: annotation tag 3 contains the cbuffer layout even for host-layout LLVM types.
+fn structured_layout(source: &Module, ty: Option<TypeId>, stride: u32) -> Result<Option<BufferLayout>> {
+    let Some(t) = ty else { return Ok(None) };
+    let notes = fields(source, t)?;
+    if notes.is_empty() {
+        return Ok(None);
+    }
+    let Some(Type::Struct { elements, .. }) = source.types.get(t) else {
+        return Err(error(0, "structured resource has no element wrapper"));
+    };
+    let [element] = elements.as_slice() else {
+        return Err(error(0, "structured resource wrapper has more than one element"));
+    };
+    let ty = constant_type(source, *element, notes[0].hint(), 0, d3d::Packing::Structured)?;
+    let size = ty
+        .size()
+        .and_then(|n| n.checked_next_multiple_of(d3d::Packing::Structured.alignment(&ty)))
+        .ok_or_else(|| error(0, "structured element extent overflow"))?;
+    if size != stride {
+        return Err(error(
+            0,
+            format!("structured layout size {size} disagrees with stride {stride}"),
+        ));
+    }
+    Ok(Some(BufferLayout {
+        size: stride,
+        constants: vec![BufferConstant {
+            name: "$Element".into(),
+            offset: 0,
+            ty,
+            default: None,
+        }],
+    }))
 }
 
 /// The interface of a container: stage, signatures, resources, and each pixel input's interpolation from the entry
@@ -1117,4 +1188,132 @@ pub fn reflection(chunks: &[Chunk<'_>], program: &Module, named: Option<&Module>
             .unwrap_or_default(),
         resources,
     })
+}
+
+#[cfg(test)]
+mod structured_tests {
+    use primase_shader::{ConstantType, Majorness, ScalarType};
+    const BYTES: &[u8] = include_bytes!("../tests/fixtures/structured_layout.dxil");
+    // SDK 10.0.26100.0 compiler dumps: entries stride 96, indices 4, lookup 12.
+    // The fixture distinguishes cbuffer offsets (values 16, rows 64) from storage offsets (4, 16).
+    #[test]
+    fn structured_layout_survives_reflection_and_lifting() {
+        check(&super::interface(BYTES).expect("reflection"));
+        check(&crate::lift(BYTES).expect("lift").interface);
+    }
+
+    fn check(interface: &primase_shader::Interface) {
+        let layout = |name: &str| {
+            interface
+                .resources
+                .iter()
+                .find(|r| r.provenance.name == name)
+                .expect("named resource")
+                .provenance
+                .layout
+                .as_ref()
+                .expect("element layout")
+        };
+        let entry = layout("entries");
+        assert_eq!(entry.size, 96);
+        let members = entry.constants[0].ty.members();
+        assert_eq!(
+            members
+                .iter()
+                .map(|m| (m.name.as_str(), m.offset))
+                .collect::<Vec<_>>(),
+            [
+                ("scalar", 0),
+                ("values", 4),
+                ("rows", 16),
+                ("columns", 40),
+                ("nested", 64)
+            ]
+        );
+        assert!(matches!(
+            members[1].ty,
+            ConstantType::Array {
+                count: 3,
+                stride: 4,
+                ..
+            }
+        ));
+        assert!(matches!(
+            members[2].ty,
+            ConstantType::Matrix {
+                stride: 12,
+                major: Majorness::Row,
+                ..
+            }
+        ));
+        assert!(matches!(
+            members[3].ty,
+            ConstantType::Matrix {
+                stride: 8,
+                major: Majorness::Column,
+                ..
+            }
+        ));
+        assert!(matches!(
+            members[4].ty,
+            ConstantType::Array {
+                count: 2,
+                stride: 16,
+                ..
+            }
+        ));
+        let nested = members[4].ty.members();
+        assert_eq!(
+            (nested[0].name.as_str(), nested[0].offset, nested[1].offset),
+            ("direction", 0, 12)
+        );
+        assert_eq!(layout("indices").size, 4);
+        assert_eq!(
+            layout("indices").constants[0].ty,
+            ConstantType::Scalar(ScalarType::Uint)
+        );
+        assert_eq!(layout("lookup").size, 12);
+        assert_eq!(
+            layout("lookup").constants[0].ty,
+            ConstantType::Vector(primase_shader::Value {
+                scalar: ScalarType::Uint,
+                width: 3
+            })
+        );
+    }
+
+    #[test]
+    fn stripped_annotations_do_not_invent_element_members() {
+        let mut bytes = BYTES.to_vec();
+        let count = u32::from_le_bytes(bytes[28..32].try_into().expect("count")) as usize;
+        for i in 0..count {
+            let p = 32 + i * 4;
+            let at = u32::from_le_bytes(bytes[p..p + 4].try_into().expect("offset")) as usize;
+            if &bytes[at..at + 4] == b"STAT" {
+                bytes[at..at + 4].copy_from_slice(b"PRIV");
+            }
+        }
+        let reflected = super::interface(&bytes).expect("stripped reflection");
+        assert!(reflected.resources.iter().all(|r| r.provenance.layout.is_none()));
+    }
+    #[test]
+    fn structured_tail_padding_is_kept_in_the_element_stride() {
+        // Both compiler dumps give 16 bytes although the last data member ends at byte 12.
+        let bytes = include_bytes!("../tests/fixtures/structured_tail.dxil");
+        let reflected = super::interface(bytes).expect("tail reflection");
+        let layout = reflected
+            .resources
+            .iter()
+            .find(|r| r.provenance.name == "entries")
+            .expect("entries")
+            .provenance
+            .layout
+            .as_ref()
+            .expect("layout");
+        assert_eq!(layout.size, 16);
+        assert_eq!(layout.constants[0].ty.size(), Some(12));
+        let members = layout.constants[0].ty.members();
+        assert_eq!(members[0].ty, ConstantType::Scalar(ScalarType::Double));
+        assert_eq!((members[0].offset, members[1].offset), (0, 8));
+    }
 }

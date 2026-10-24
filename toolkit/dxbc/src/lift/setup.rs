@@ -1167,6 +1167,19 @@ impl Setup {
             let mut name = default_name;
             if let Some(r) = reflected {
                 name = r.provenance.name.clone();
+                if let Some(layout) = &r.provenance.layout
+                    && let ResourceKind::Buffer(BufferKind::Structured { stride })
+                    | ResourceKind::Storage {
+                        target: StorageTarget::Buffer(BufferKind::Structured { stride }),
+                        ..
+                    } = &kind
+                    && layout.size != *stride
+                {
+                    return Err(refuse(format!(
+                        "{name}: reflected element size {} disagrees with declared stride {stride}",
+                        layout.size
+                    )));
+                }
                 if let (
                     ResourceKind::ConstantBuffer { layout },
                     ResourceKind::ConstantBuffer { layout: stated },
@@ -1192,7 +1205,7 @@ impl Setup {
                         space: 0,
                     }),
                     counter_of: None,
-                    layout: None,
+                    layout: reflected.and_then(|r| r.provenance.layout.clone()),
                 },
             });
         }

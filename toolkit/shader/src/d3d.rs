@@ -249,6 +249,70 @@ pub fn scalar_type(code: u32) -> Result<ScalarType, String> {
 /// Bytes of one D3D constant register.
 const REGISTER: u32 = 16;
 
+/// The two D3D buffer layouts. Structured elements align to their scalar components, not constant registers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Packing {
+    Constant,
+    Structured,
+}
+
+impl Packing {
+    /// Alignment of a structured value (including the tail padding of a structure in an array).
+    pub fn alignment(self, ty: &ConstantType) -> u32 {
+        match (self, ty) {
+            (Self::Constant, _) => REGISTER,
+            (_, ConstantType::Scalar(s)) => s.bytes(),
+            (_, ConstantType::Vector(v)) => v.scalar.bytes(),
+            (_, ConstantType::Matrix { scalar, .. }) => scalar.bytes(),
+            (_, ConstantType::Array { element, .. }) => self.alignment(element),
+            (_, ConstantType::Struct { members }) => {
+                members.iter().map(|m| self.alignment(&m.ty)).max().unwrap_or(1)
+            }
+        }
+    }
+
+    /// A matrix's stored lines, with the packing of its containing buffer.
+    pub fn matrix(
+        self,
+        scalar: ScalarType,
+        rows: u32,
+        columns: u32,
+        major: Majorness,
+    ) -> Result<ConstantType, String> {
+        let mut ty = matrix(scalar, rows, columns, major)?;
+        if self == Self::Structured
+            && let ConstantType::Matrix { stride, .. } = &mut ty
+        {
+            *stride = scalar.bytes()
+                * match major {
+                    Majorness::Row => columns,
+                    Majorness::Column => rows,
+                };
+        }
+        Ok(ty)
+    }
+
+    /// An array with a checked stride; structured arrays do not acquire constant-register padding.
+    pub fn array(self, element: ConstantType, count: u32) -> Result<ConstantType, String> {
+        if count == 0 {
+            return Err("an array of no elements".to_owned());
+        }
+        let alignment = self.alignment(&element);
+        let stride = element
+            .size()
+            .ok_or("array element size overflow")?
+            .checked_next_multiple_of(alignment)
+            .ok_or("array element size overflow")?;
+        let ty = ConstantType::Array {
+            element: Box::new(element),
+            count,
+            stride,
+        };
+        ty.size().ok_or("array size overflow")?;
+        Ok(ty)
+    }
+}
+
 fn lanes(what: &str, n: u32) -> Result<u8, String> {
     u8::try_from(n)
         .ok()
@@ -277,21 +341,7 @@ pub fn matrix(scalar: ScalarType, rows: u32, columns: u32, major: Majorness) -> 
 
 /// An array under D3D packing: each element starts a 16-byte register, and the last takes only its own bytes.
 pub fn array(element: ConstantType, count: u32) -> Result<ConstantType, String> {
-    if count == 0 {
-        return Err("an array of no elements".to_owned());
-    }
-    let size = element.size().ok_or("array element size overflow")?;
-    let stride = size
-        .checked_add(REGISTER - 1)
-        .map(|s| s & !(REGISTER - 1))
-        .ok_or("array element size overflow")?;
-    let array = ConstantType::Array {
-        element: Box::new(element),
-        count,
-        stride,
-    };
-    array.size().ok_or("array size overflow")?;
-    Ok(array)
+    Packing::Constant.array(element, count)
 }
 
 #[cfg(test)]

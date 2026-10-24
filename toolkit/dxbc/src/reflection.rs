@@ -56,7 +56,13 @@ impl View<'_> {
         )?;
         Ok(0..count)
     }
-    fn ty(&self, at: usize, stack: &mut Vec<usize>, budget: &mut usize) -> Result<ConstantType> {
+    fn ty(
+        &self,
+        at: usize,
+        stack: &mut Vec<usize>,
+        budget: &mut usize,
+        packing: d3d::Packing,
+    ) -> Result<ConstantType> {
         if stack.len() >= 32 || stack.contains(&at) || *budget == 0 {
             return Err(error(at / 4, "cyclic or excessive reflection types"));
         }
@@ -71,7 +77,7 @@ impl View<'_> {
             members.push(Member {
                 name: self.string(self.u32(p)? as usize)?,
                 offset: self.u32(p + 8)?,
-                ty: self.ty(self.u32(p + 4)? as usize, stack, budget)?,
+                ty: self.ty(self.u32(p + 4)? as usize, stack, budget, packing)?,
             });
         }
         stack.pop();
@@ -84,8 +90,12 @@ impl View<'_> {
                 match class {
                     0 if (rows, columns) == (1, 1) => ConstantType::Scalar(scalar),
                     1 if rows == 1 => d3d::vector(scalar, columns).map_err(fail)?,
-                    2 => d3d::matrix(scalar, rows, columns, Majorness::Row).map_err(fail)?,
-                    3 => d3d::matrix(scalar, rows, columns, Majorness::Column).map_err(fail)?,
+                    2 => packing
+                        .matrix(scalar, rows, columns, Majorness::Row)
+                        .map_err(fail)?,
+                    3 => packing
+                        .matrix(scalar, rows, columns, Majorness::Column)
+                        .map_err(fail)?,
                     _ => return Err(fail(format!("a {rows} by {columns} variable of class {class}"))),
                 }
             }
@@ -99,7 +109,7 @@ impl View<'_> {
         };
         match self.u16(at + 8)? {
             0 => Ok(element),
-            n => d3d::array(element, u32::from(n)).map_err(fail),
+            n => packing.array(element, u32::from(n)).map_err(fail),
         }
     }
 }
@@ -494,20 +504,16 @@ pub fn reflection(bytes: &[u8]) -> Result<Interface> {
         }
         bindings.push((p, binding));
     }
-    // the constant-buffer table: the layouts of cbuffers (type 0) and of tbuffers (type 1: constants the program reads
-    // through a shader-resource register, as a typed buffer) by name, a tbuffer's kept as its resource's own layout; a
-    // structured buffer's element layout (type 3) is not retained, the vocabulary names it by its stride
-    // (name, layout, claimed by a binding, a tbuffer's)
-    let mut layouts: Vec<(String, BufferLayout, bool, bool)> = Vec::new();
+    // RDEF buffer types: cbuffer (0), tbuffer (1), structured element (3).
+    // The last uses storage packing; the other two use constant registers.
+    let mut layouts: Vec<(String, BufferLayout, bool, u32)> = Vec::new();
     let offset = v.u32(4)? as usize;
     let mut budget = 65536;
     for i in v.table(offset, v.u32(0)? as usize, 24)? {
         let p = offset + i * 24;
         let name = v.string(v.u32(p)? as usize)?;
         let table = match v.u32(p + 20)? {
-            0 => false,
-            1 => true,
-            3 => continue,
+            kind @ (0 | 1 | 3) => kind,
             kind => {
                 return Err(error(
                     p / 4,
@@ -535,14 +541,29 @@ pub fn reflection(bytes: &[u8]) -> Result<Interface> {
                 return Err(error(q / 4, "variable exceeds constant buffer"));
             }
             let default = v.u32(q + 20)? as usize;
-            let ty = v.ty(v.u32(q + 16)? as usize, &mut Vec::new(), &mut budget)?;
+            let ty = v.ty(
+                v.u32(q + 16)? as usize,
+                &mut Vec::new(),
+                &mut budget,
+                if table == 3 {
+                    d3d::Packing::Structured
+                } else {
+                    d3d::Packing::Constant
+                },
+            )?;
             let variable = v.string(v.u32(q)? as usize)?;
-            if ty.size() != Some(len) {
+            let packed_size = if table == 3 {
+                ty.size()
+                    .and_then(|n| n.checked_next_multiple_of(d3d::Packing::Structured.alignment(&ty)))
+            } else {
+                ty.size()
+            };
+            if packed_size != Some(len) {
                 return Err(error(
                     q / 4,
                     format!(
                         "variable {variable} is {len} bytes, its type packs to {:?}",
-                        ty.size()
+                        packed_size
                     ),
                 ));
             }
@@ -571,7 +592,7 @@ pub fn reflection(bytes: &[u8]) -> Result<Interface> {
             let tbuffer = binding.kind == 1;
             let (_, layout, claimed, _) = layouts
                 .iter_mut()
-                .find(|(name, _, _, table)| *name == binding.name && *table == tbuffer)
+                .find(|(name, _, _, table)| *name == binding.name && *table == u32::from(tbuffer))
                 .ok_or_else(|| {
                     fail(format!(
                         "{}: a {} without its layout",
@@ -597,7 +618,27 @@ pub fn reflection(bytes: &[u8]) -> Result<Interface> {
                 )
             }
         } else {
-            binding.kind().map_err(fail)?
+            let kind = binding.kind().map_err(fail)?;
+            if matches!(binding.kind, 5 | 6 | 9 | 10 | 11)
+                && let Some((_, layout, claimed, _)) = layouts
+                    .iter_mut()
+                    .find(|(name, _, _, table)| *name == binding.name && *table == 3)
+            {
+                if std::mem::replace(claimed, true) {
+                    return Err(fail(format!(
+                        "{}: two bindings of one structured layout",
+                        binding.name
+                    )));
+                }
+                if layout.size != binding.samples {
+                    return Err(fail(format!(
+                        "{}: element layout {} disagrees with stride {}",
+                        binding.name, layout.size, binding.samples
+                    )));
+                }
+                table_layout = Some(layout.clone());
+            }
+            kind
         };
         resources.push(Resource {
             id: ResourceId(i as u32),
@@ -628,4 +669,117 @@ pub fn reflection(bytes: &[u8]) -> Result<Interface> {
         resources,
         facts: Default::default(),
     })
+}
+
+#[cfg(test)]
+mod structured_tests {
+    use primase_shader::{ConstantType, Majorness, ScalarType};
+    const BYTES: &[u8] = include_bytes!("../tests/fixtures/structured_layout.dxbc");
+    // SDK 10.0.26100.0 compiler dumps: entries stride 96, indices 4, lookup 12.
+    // The fixture distinguishes cbuffer offsets (values 16, rows 64) from storage offsets (4, 16).
+    #[test]
+    fn structured_layout_survives_reflection_and_lifting() {
+        check(&super::reflection(BYTES).expect("reflection"));
+        check(&crate::lift(BYTES).expect("lift").interface);
+    }
+
+    fn check(interface: &primase_shader::Interface) {
+        let layout = |name: &str| {
+            interface
+                .resources
+                .iter()
+                .find(|r| r.provenance.name == name)
+                .expect("named resource")
+                .provenance
+                .layout
+                .as_ref()
+                .expect("element layout")
+        };
+        let entry = layout("entries");
+        assert_eq!(entry.size, 96);
+        let members = entry.constants[0].ty.members();
+        assert_eq!(
+            members
+                .iter()
+                .map(|m| (m.name.as_str(), m.offset))
+                .collect::<Vec<_>>(),
+            [
+                ("scalar", 0),
+                ("values", 4),
+                ("rows", 16),
+                ("columns", 40),
+                ("nested", 64)
+            ]
+        );
+        assert!(matches!(
+            members[1].ty,
+            ConstantType::Array {
+                count: 3,
+                stride: 4,
+                ..
+            }
+        ));
+        assert!(matches!(
+            members[2].ty,
+            ConstantType::Matrix {
+                stride: 12,
+                major: Majorness::Row,
+                ..
+            }
+        ));
+        assert!(matches!(
+            members[3].ty,
+            ConstantType::Matrix {
+                stride: 8,
+                major: Majorness::Column,
+                ..
+            }
+        ));
+        assert!(matches!(
+            members[4].ty,
+            ConstantType::Array {
+                count: 2,
+                stride: 16,
+                ..
+            }
+        ));
+        let nested = members[4].ty.members();
+        assert_eq!(
+            (nested[0].name.as_str(), nested[0].offset, nested[1].offset),
+            ("direction", 0, 12)
+        );
+        assert_eq!(layout("indices").size, 4);
+        assert_eq!(
+            layout("indices").constants[0].ty,
+            ConstantType::Scalar(ScalarType::Uint)
+        );
+        assert_eq!(layout("lookup").size, 12);
+        assert_eq!(
+            layout("lookup").constants[0].ty,
+            ConstantType::Vector(primase_shader::Value {
+                scalar: ScalarType::Uint,
+                width: 3
+            })
+        );
+    }
+    #[test]
+    fn structured_tail_padding_is_kept_in_the_element_stride() {
+        // Both compiler dumps give 16 bytes although the last data member ends at byte 12.
+        let bytes = include_bytes!("../tests/fixtures/structured_tail.dxbc");
+        let reflected = super::reflection(bytes).expect("tail reflection");
+        let layout = reflected
+            .resources
+            .iter()
+            .find(|r| r.provenance.name == "entries")
+            .expect("entries")
+            .provenance
+            .layout
+            .as_ref()
+            .expect("layout");
+        assert_eq!(layout.size, 16);
+        assert_eq!(layout.constants[0].ty.size(), Some(12));
+        let members = layout.constants[0].ty.members();
+        assert_eq!(members[0].ty, ConstantType::Scalar(ScalarType::Double));
+        assert_eq!((members[0].offset, members[1].offset), (0, 8));
+    }
 }
