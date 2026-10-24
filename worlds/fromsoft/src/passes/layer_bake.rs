@@ -15,3 +15,4 @@ pub mod resolve;
 mod state;
 pub use state::{AlphaState, Encoded, PipelineState, PixelState, SCHEMA, SlotTexture, TARGETS, VertexState};
 mod vertex;
+pub mod vertex_probe;

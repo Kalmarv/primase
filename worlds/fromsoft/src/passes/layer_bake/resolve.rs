@@ -10,8 +10,8 @@ use primase_core::Entity;
 use primase_core::shader::{
     Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantRole, DepthState,
     FrameParameter, FrameTexture, InputBinding, InputRole, LaneStream, ObjectParameter, OutputBinding,
-    OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Stage, StageBinding, TargetState,
-    TextureBinding, TextureSource, ViewParameter,
+    OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Shader, Stage, StageBinding,
+    TargetState, TextureBinding, TextureSource, ViewParameter,
 };
 use primase_shader::{D3dClass, Interface, Resource, SystemValue};
 use primase_shader_exec::ProgramShader;
@@ -894,8 +894,10 @@ fn texture_scroll_set(name: &str) -> Option<u8> {
 ///   the engine's per-model value, observed as the identity on every layered draw of a running game: see
 ///   [`super::TEXTURE_SCROLL_POLICY`]); constants the table does not name are not bound;
 /// - no output roles: its outputs reach the pixel stage by label.
-pub fn resolve_vertex(interface: &Interface, entity: Entity) -> Result<StageBinding> {
+pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<StageBinding> {
+    use super::vertex_probe::{CameraForm, camera_form, flat_constants, lifted, palette_indexed_by_vertex};
     use primase_core::Semantic;
+    let interface = &shader.interface;
     let inputs = interface
         .inputs
         .iter()
@@ -939,10 +941,10 @@ pub fn resolve_vertex(interface: &Interface, entity: Entity) -> Result<StageBind
             }
         })
         .collect();
-    let skinned = interface
-        .inputs
-        .iter()
-        .any(|v| v.label.name.eq_ignore_ascii_case("BLENDINDICES"));
+    // what the program shows of itself: its value graph (which buffers a vertex stream indexes) and a run (whether it takes
+    // the camera away from the world position); an error stays as the reason of the constants that need it
+    let program = lifted(shader);
+    let camera = camera_form(shader);
     let mut constants = Vec::new();
     for resource in &interface.resources {
         let ResourceKind::ConstantBuffer { layout } = &resource.kind else {
@@ -950,17 +952,21 @@ pub fn resolve_vertex(interface: &Interface, entity: Entity) -> Result<StageBind
         };
         // every constant of the buffer, the members of a structure (the instance record, an array of them) by their own
         // names at their own offsets in the first element, as the layout the evaluators use names them
-        let mut flat: Vec<(String, u32, Option<u32>)> = Vec::new();
-        for c in &layout.constants {
-            match c.ty.members() {
-                [] => flat.push((c.name.clone(), c.offset, c.ty.size())),
-                members => flat.extend(
-                    members
-                        .iter()
-                        .map(|m| (m.name.clone(), c.offset + m.offset, m.ty.size())),
-                ),
-            }
-        }
+        let flat = flat_constants(layout);
+        // a palette is a buffer the program indexes by a vertex stream (a joint), not by the instance alone
+        let palette = || -> std::result::Result<bool, String> {
+            let program = program.as_ref().map_err(Clone::clone)?;
+            let own = program
+                .interface
+                .resources
+                .iter()
+                .find(|r| {
+                    r.provenance.d3d == resource.provenance.d3d
+                        && matches!(r.kind, ResourceKind::ConstantBuffer { .. })
+                })
+                .ok_or("the lifted program has not this constant buffer")?;
+            palette_indexed_by_vertex(program, own.id)
+        };
         for (name, offset, size) in flat {
             // the screen size is the target's size in pixels, then its reciprocals: two pairs, a role each (the order
             // the vocabulary's old four-value size had; no program of the corpus was checked for it)
@@ -985,19 +991,33 @@ pub fn resolve_vertex(interface: &Interface, entity: Entity) -> Result<StageBind
                 "matricesData" => ConstantRole::Object(ObjectParameter::MatrixBase),
                 "userClipPlane" => ConstantRole::Object(ObjectParameter::ClipPlane),
                 "FC_MatrixProj" => ConstantRole::View(ViewParameter::Projection),
-                "VC_MatrixViewProj" => ConstantRole::View(ViewParameter::ViewProjection),
+                // the matrix of a world with the camera at its origin, or of the world itself, as the program's run shows
+                "VC_MatrixViewProj" => match &camera {
+                    Ok(CameraForm::Relative) => {
+                        ConstantRole::View(ViewParameter::CameraRelativeViewProjection)
+                    }
+                    Ok(CameraForm::Plain) => ConstantRole::View(ViewParameter::ViewProjection),
+                    Err(why) => ConstantRole::Unknown { why: why.clone() },
+                },
                 "FC_MatrixInvView" => ConstantRole::View(ViewParameter::InverseView),
                 "FC_MatrixInvProj" => ConstantRole::View(ViewParameter::InverseProjection),
                 "FC_MatrixInvViewProj" => ConstantRole::View(ViewParameter::InverseViewProjection),
                 "SC_CameraPos" => ConstantRole::View(ViewParameter::CameraPosition),
-                // the object matrices: one per object, or the joints' palette in the skinned permutation (the program
-                // that takes joint indices)
-                "VC_aObjMatrix" if skinned => ConstantRole::Object(ObjectParameter::BonePalette),
+                // the object matrices: one per object, or the joints' palette when a vertex stream (a joint index)
+                // indexes them, as the program's value graph shows
+                "VC_aObjMatrix" => match palette() {
+                    Ok(true) => ConstantRole::Object(ObjectParameter::BonePalette),
+                    Ok(false) => ConstantRole::Object(ObjectParameter::World),
+                    Err(why) => ConstantRole::Unknown { why },
+                },
                 // the second palette the skinned programs of Elden Ring apply first, by its constant's own name
-                "VC_aClothCancelObjMatrix" if skinned => {
-                    ConstantRole::Object(ObjectParameter::ClothCancelPalette)
-                }
-                "VC_aObjMatrix" => ConstantRole::Object(ObjectParameter::World),
+                "VC_aClothCancelObjMatrix" => match palette() {
+                    Ok(true) => ConstantRole::Object(ObjectParameter::ClothCancelPalette),
+                    Ok(false) => ConstantRole::Unknown {
+                        why: "no vertex stream indexes it".into(),
+                    },
+                    Err(why) => ConstantRole::Unknown { why },
+                },
                 // `_n` for texture coordinate set n: the program multiplies the set by `xy` (a scale) and adds `zw` (a scroll
                 // offset)
                 name => match texture_scroll_set(name) {

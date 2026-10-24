@@ -375,12 +375,12 @@ mod tests {
     fn stage(frame: &FrozenFrame) -> Result<VertexStage> {
         let interface = primase_dxbc::reflection(VERTEX).unwrap();
         let entity = World::default().spawn();
-        let binding = resolve_vertex(&interface, entity).unwrap();
         let shader = CoreShader {
             format: ShaderFormat::Dxbc,
             bytecode: VERTEX.to_vec(),
             interface,
         };
+        let binding = resolve_vertex(&shader, entity).unwrap();
         VertexStage::new(&shader, &binding, false, frame)
     }
 
@@ -425,12 +425,12 @@ mod tests {
         const SKIN: &[u8] = include_bytes!("../../../tests/fixtures/layered_skin_vs.dxbc");
         let interface = primase_dxbc::reflection(SKIN).unwrap();
         let entity = World::default().spawn();
-        let binding = resolve_vertex(&interface, entity).unwrap();
         let shader = CoreShader {
             format: ShaderFormat::Dxbc,
             bytecode: SKIN.to_vec(),
             interface,
         };
+        let binding = resolve_vertex(&shader, entity).unwrap();
         let skinned = VertexStage::new(&shader, &binding, false, &FrozenFrame::static_bake(0.)).unwrap();
         assert!(skinned.policies.contains_key(super::super::BIND_POSE_POLICY));
         let pixel = primase_dxbc::reflection(PIXEL).unwrap();

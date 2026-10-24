@@ -4,6 +4,8 @@
 // inputs by label) and the engine's constants by their own names (the texture scroll read as the real program does:
 // each set times `xy` over 2048, plus `zw`; the third and fourth unused). It computes nothing meaningful.
 //   fxc /T vs_5_0 /E main /Fo layered_vs.dxbc layered_vs.hlsl
+//   fxc /T vs_5_0 /E main /D RELATIVE /Fo layered_rel_vs.dxbc layered_vs.hlsl
+// With RELATIVE the clip position takes the camera away from the world position first, as most programs of Elden Ring do.
 struct Instance
 {
     float4 mWorld[3];
@@ -67,7 +69,11 @@ Output main(Input i)
     uint k = (i.instance + VC_InstanceData[0].matricesData.x) * 3;
     float4 p = float4(i.position, 1);
     float4 w = float4(dot(VC_aObjMatrix[k], p), dot(VC_aObjMatrix[k + 1], p), dot(VC_aObjMatrix[k + 2], p), 1);
+#ifdef RELATIVE
+    o.clip = mul(VC_MatrixViewProj, float4(w.xyz - SC_CameraPos.xyz, 1));
+#else
     o.clip = mul(VC_MatrixViewProj, w);
+#endif
     o.world = w + SC_CameraPos * FC_ScreenSize + mul(FC_MatrixView, w) * FC_ShadowColor + VC_InstanceData[i.instance & 1].userClipPlane;
     // the stored bytes as the real program decodes them: (byte - 127) / 127
     o.normal = float4((float3(i.normal.xyz) - 127.0) * 0.007874016, 0);

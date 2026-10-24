@@ -32,6 +32,17 @@ const PROGRAM: &[u8] = include_bytes!("fixtures/layered.dxbc");
 const SAT_PROGRAM: &[u8] = include_bytes!("fixtures/layered_sat.dxbc");
 const VERTEX_PROGRAM: &[u8] = include_bytes!("fixtures/layered_vs.dxbc");
 const SKIN_PROGRAM: &[u8] = include_bytes!("fixtures/layered_skin_vs.dxbc");
+/// layered_vs.dxbc with the camera taken from the world position before the matrix (tests/fixtures/layered_vs.hlsl, RELATIVE).
+const RELATIVE_PROGRAM: &[u8] = include_bytes!("fixtures/layered_rel_vs.dxbc");
+
+/// A DXBC vertex program as the pass holds it.
+fn dxbc_shader(bytes: &[u8], interface: primase_core::shader::Interface) -> Shader {
+    Shader {
+        format: ShaderFormat::Dxbc,
+        bytecode: bytes.to_vec(),
+        interface,
+    }
+}
 
 fn texture_kind(kind: &str) -> mtd::Texture {
     mtd::Texture {
@@ -597,7 +608,11 @@ fn a_vertex_program_is_bound_to_streams_and_engine_roles() {
     assert_eq!(interface.stage, Stage::Vertex);
     let mut world = World::default();
     let program = world.spawn();
-    let stage = primase_fromsoft::layer_bake::resolve::resolve_vertex(&interface, program).unwrap();
+    let stage = primase_fromsoft::layer_bake::resolve::resolve_vertex(
+        &dxbc_shader(VERTEX_PROGRAM, interface.clone()),
+        program,
+    )
+    .unwrap();
     assert_eq!((stage.stage, stage.shader), (Stage::Vertex, program));
     let inputs: Vec<_> = stage
         .inputs
@@ -712,13 +727,49 @@ fn a_vertex_program_is_bound_to_streams_and_engine_roles() {
     assert!(stage.outputs.is_empty() && stage.textures.is_empty());
 }
 
+/// The role of the view-projection matrix is what the program shows by running it: a program that takes the camera
+/// position from the world position first has the camera-relative matrix, one that multiplies the world position as it is
+/// has the plain one.
+#[test]
+fn the_view_projection_is_camera_relative_where_the_program_subtracts_the_camera() {
+    let role_of = |bytes: &[u8]| {
+        let interface = primase_dxbc::reflection(bytes).unwrap();
+        let entity = World::default().spawn();
+        let stage =
+            primase_fromsoft::layer_bake::resolve::resolve_vertex(&dxbc_shader(bytes, interface), entity)
+                .unwrap();
+        stage
+            .constants
+            .iter()
+            .find(|c| c.name.as_deref() == Some("VC_MatrixViewProj"))
+            .unwrap()
+            .role
+            .clone()
+    };
+    assert_eq!(
+        role_of(RELATIVE_PROGRAM),
+        ConstantRole::View(ViewParameter::CameraRelativeViewProjection)
+    );
+    assert_eq!(
+        role_of(VERTEX_PROGRAM),
+        ConstantRole::View(ViewParameter::ViewProjection)
+    );
+    // the skinned program multiplies the blended world position as it is
+    assert_eq!(
+        role_of(SKIN_PROGRAM),
+        ConstantRole::View(ViewParameter::ViewProjection)
+    );
+}
+
 /// The skinned permutation: its joint indices and weights are the mesh's `Joints(0)` and `Weights(0)`, and the array the
 /// unskinned program reads as object matrices is, in this one, the joints' palette.
 #[test]
 fn a_skinned_vertex_program_is_bound_to_joint_streams_and_a_palette() {
     let interface = primase_dxbc::reflection(SKIN_PROGRAM).unwrap();
     let entity = World::default().spawn();
-    let stage = primase_fromsoft::layer_bake::resolve::resolve_vertex(&interface, entity).unwrap();
+    let stage =
+        primase_fromsoft::layer_bake::resolve::resolve_vertex(&dxbc_shader(SKIN_PROGRAM, interface), entity)
+            .unwrap();
     let role = |name: &str| {
         stage
             .inputs
@@ -1204,7 +1255,9 @@ fn a_one_set_vertex_program_binds_its_coordinates_as_the_first_set() {
     const SINGLE: &[u8] = include_bytes!("fixtures/single_uv_vs.dxbc");
     let interface = primase_dxbc::reflection(SINGLE).unwrap();
     let entity = World::default().spawn();
-    let stage = primase_fromsoft::layer_bake::resolve::resolve_vertex(&interface, entity).unwrap();
+    let stage =
+        primase_fromsoft::layer_bake::resolve::resolve_vertex(&dxbc_shader(SINGLE, interface), entity)
+            .unwrap();
     let uv = stage
         .inputs
         .iter()

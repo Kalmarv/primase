@@ -5,7 +5,7 @@ use crate::materials::Material;
 use crate::metaparam::Metaparam;
 use crate::sekiro::source::{MaterialShader, Payloads, ShaderBundle, ShaderPrograms, TexturePayloads};
 use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
-use primase_core::shader::{Interface, Shader, ShaderBinding, ShaderFormat};
+use primase_core::shader::{Shader, ShaderBinding, ShaderFormat};
 use primase_core::{ColorSpace, Component, Entity, Mesh, Name, Semantic, TexRole, Texture, World};
 use primase_shader_exec::PixelShader;
 use primase_shader_exec::ProgramShader;
@@ -197,7 +197,7 @@ fn run(
     // the textures spawned, by stem and colour space
     let mut textures: BTreeMap<(String, bool), Entity> = BTreeMap::new();
     // the vertex programs, each its own entity with the interface read once, by file name
-    let mut vertex_shaders: BTreeMap<String, (Entity, Interface)> = BTreeMap::new();
+    let mut vertex_shaders: BTreeMap<String, (Entity, Shader)> = BTreeMap::new();
     // each bundle's parameter definition, taken once per bundle entity
     let mut parameters: BTreeMap<Entity, Option<Metaparam>> = BTreeMap::new();
     let draws = draws(world);
@@ -329,18 +329,16 @@ fn run(
                     };
                     let entity = world.spawn();
                     world.insert(entity, Name(vertex_name.clone()));
-                    world.insert(
-                        entity,
-                        Shader {
-                            format,
-                            bytecode: code.to_vec(),
-                            interface: interface.clone(),
-                        },
-                    );
-                    vertex_shaders.insert(vertex_name.clone(), (entity, interface));
+                    let shader = Shader {
+                        format,
+                        bytecode: code.to_vec(),
+                        interface,
+                    };
+                    world.insert(entity, shader.clone());
+                    vertex_shaders.insert(vertex_name.clone(), (entity, shader));
                 }
-                let (entity, interface) = &vertex_shaders[&vertex_name];
-                stages.push(resolve_vertex(interface, *entity).map_err(|e| format!("{vertex_name}: {e}"))?);
+                let (entity, shader) = &vertex_shaders[&vertex_name];
+                stages.push(resolve_vertex(shader, *entity).map_err(|e| format!("{vertex_name}: {e}"))?);
             }
             None => t.without_vertex += 1,
         }
