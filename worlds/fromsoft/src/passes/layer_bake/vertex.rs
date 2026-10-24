@@ -562,6 +562,7 @@ mod tests {
     }
 
     const CLOTH: &[u8] = include_bytes!("../../../tests/fixtures/layered_cloth_vs.dxbc");
+    const SIGN_PIXEL: &[u8] = include_bytes!("../../../tests/fixtures/layered_sign_ps.dxbc");
 
     /// The cloth permutation's one-byte BINORMAL0 is the tangent's w, fed as a sign byte: not a texture coordinate, which
     /// the lanes of the packed pair are. A lane of another component, or of another attribute, is refused by name.
@@ -576,25 +577,30 @@ mod tests {
         let entity = World::default().spawn();
         let mut binding = resolve_vertex(&shader, entity).unwrap().stage;
         let frame = FrozenFrame::static_bake(0.);
-        let planned = VertexStage::new(
-            &shader,
-            &binding,
-            &primase_dxbc::lift(PIXEL).unwrap(),
-            false,
-            &frame,
-        )
-        .unwrap();
+        // Unlike PIXEL, this program consumes TANGENT0.w and TEXCOORD7.w: both the sign and COLOR1.x are live.
+        let pixel = primase_dxbc::lift(SIGN_PIXEL).unwrap();
+        let planned = VertexStage::new(&shader, &binding, &pixel, false, &frame).unwrap();
         let sign: Vec<_> = planned
             .attributes
             .iter()
             .filter(|a| matches!(a.feed, Feed::TangentSign))
             .collect();
         assert_eq!(sign.len(), 1);
+        assert!(planned.policies.contains_key(COLOUR1_POLICY));
         let params = Inputs::default();
         for registers in planned.corners(&params) {
             // the byte of a positive sign in the lane the input has, whatever corner of the cell the run is at
             assert_eq!(registers[sign[0].register][0], 254);
         }
+        let inputs = planned.pixel_inputs(&pixel.interface, &params).unwrap();
+        assert_eq!(
+            lanes(&inputs[&("TANGENT".into(), 0)])[3],
+            Lane::Bits(1f32.to_bits())
+        );
+        assert_eq!(
+            lanes(&inputs[&("TEXCOORD".into(), 7)])[3],
+            Lane::Bits(1f32.to_bits())
+        );
         // the same input with a lane of the tangent's z is a value the bake does not know
         let label = binding
             .inputs
@@ -607,14 +613,7 @@ mod tests {
             count: 1,
             component: 2,
         }]);
-        let refused = VertexStage::new(
-            &shader,
-            &binding,
-            &primase_dxbc::lift(PIXEL).unwrap(),
-            false,
-            &frame,
-        )
-        .expect_err("refused");
+        let refused = VertexStage::new(&shader, &binding, &pixel, false, &frame).expect_err("refused");
         assert!(
             refused.to_string().contains("lanes the bake cannot feed"),
             "{refused}"
@@ -651,7 +650,13 @@ mod tests {
         assert_eq!(find("TEXCOORD", 5), bits([0.125, 0.25, 0.5, 0.75]));
         // SV_Position is the pipeline's, not a varying the program writes
         assert!(inputs.keys().all(|(n, _)| !n.eq_ignore_ascii_case("SV_Position")));
-        assert!(vertex.policies.contains_key(COLOUR1_POLICY));
+        // PIXEL reads only position, UVs and weights; the VS's COLOR1.x -> TEXCOORD7.w is not linked to a read.
+        assert!(!vertex.policies.contains_key(COLOUR1_POLICY));
+        assert!(
+            vertex
+                .policies
+                .contains_key("COLOR1 fed nothing: no pixel output reads them")
+        );
         assert!(vertex.policies.contains_key(TEXTURE_SCROLL_POLICY));
     }
 
