@@ -680,8 +680,8 @@ pub fn resolve(
     }
     // a program that reads its parameters from `SAT_MtdParam`: each the metaparam declares as a shader input and the
     // program reads (its start word a member's), at that word, the material's value (else the metaparam's default,
-    // counted), as many lanes as the program reads from there. A colour ([`Metaparam`]'s type 12 or 13) is its four lanes with the first three
-    // times its intensity, the fifth: a stated one where it states five lanes, the default's otherwise (counted)
+    // counted), as many lanes as the program reads from there, written as the engine writes it ([`sat_words`]). A
+    // colour's intensity is its fifth lane: a stated one where it states five lanes, the default's otherwise (counted)
     if let (Some((resource, buffer_size, read)), Some(metaparam)) = (&sat, metaparam) {
         let (resource, buffer_size) = (*resource, *buffer_size);
         for p in metaparam.mtd_params.iter().filter(|p| !p.not_shader_input) {
@@ -716,23 +716,22 @@ pub fn resolve(
                     p.default.to_vec()
                 }
             };
+            let intensity = if !p.is_colour() {
+                1.
+            } else if value.len() >= 5 {
+                value[4]
+            } else {
+                *policies
+                    .entry(
+                        "colour parameter stated without its intensity: the metaparam default's".to_owned(),
+                    )
+                    .or_default() += 1;
+                p.default[4]
+            };
             if p.is_colour() {
-                let intensity = if value.len() >= 5 {
-                    value[4]
-                } else {
-                    *policies
-                        .entry(
-                            "colour parameter stated without its intensity: the metaparam default's"
-                                .to_owned(),
-                        )
-                        .or_default() += 1;
-                    p.default[4]
-                };
                 value.resize(4, 1.);
-                for v in &mut value[..3] {
-                    *v *= intensity;
-                }
             }
+            let mut value = sat_words(game, p, &value, intensity);
             let lanes = (0..lanes).take_while(|k| read.contains(&(p.start + k))).count();
             value.truncate(lanes);
             let start = u64::from(p.start) * 4;
@@ -752,7 +751,7 @@ pub fn resolve(
                 offset: start as u32,
                 size: fit,
                 name: Some(p.name.clone()),
-                role: words(&value),
+                role: ConstantRole::Material(value),
             });
         }
     }
@@ -996,9 +995,120 @@ pub fn resolve_vertex(interface: &Interface, entity: Entity) -> Result<StageBind
     })
 }
 
+/// The words the engine writes into `SAT_MtdParam` for the parameter `p` of `value` (a colour's four lanes, its
+/// `intensity` apart; `intensity` is 1 for any other type), as a capture of Elden Ring running shows it: the 260
+/// G-buffer draw groups of a session in Limgrave whose programs read SAT parameters, 97 of them tied to their material
+/// binaries by shader and bound textures, every lane the programs read compared with the material's stated value:
+///
+/// - a colour (type 12 or 13) whose metaparam sets its srgb flag: red, green and blue raised to 2.2, then times the
+///   intensity (124 lanes; the intensities seen, 1 to 20, tell this from the power of the product), alpha as stated;
+/// - a colour whose flag is clear (the M[AMSN_V] ice and cheap map shaders' among the 197 of them): times the intensity
+///   only (8 lanes, none raised);
+/// - a bool (type 0): the integer's bit pattern, 1 and not 1.0 (3 lanes; 4 more were 0);
+/// - every other value as stated (float, float2 and float3: 267 lanes that are not 0 or 1).
+///
+/// Four lanes of `P[ChrCustomize][Eye]` differ from what the material states (100 / 255 for a stated 0.8): the
+/// character's own colours, set per draw, is likely and not established.
+///
+/// Sekiro's programs mostly name their parameters as fields; one that reads this array has its values as stated, a
+/// colour's times its intensity: no capture of Sekiro's SAT constants settles their encoding, so the rule above is not
+/// applied to them.
+fn sat_words(game: crate::Game, p: &crate::metaparam::MtdParam, value: &[f32], intensity: f32) -> Vec<u32> {
+    let colour = |lane: usize| p.is_colour() && lane < 3;
+    if game != crate::Game::EldenRing {
+        return value
+            .iter()
+            .enumerate()
+            .map(|(lane, &v)| if colour(lane) { v * intensity } else { v }.to_bits())
+            .collect();
+    }
+    if p.value_type == 0 {
+        return value.iter().map(|&v| (v as i32) as u32).collect();
+    }
+    value
+        .iter()
+        .enumerate()
+        .map(|(lane, &v)| {
+            let v = if colour(lane) {
+                if p.srgb {
+                    v.powf(2.2) * intensity
+                } else {
+                    v * intensity
+                }
+            } else {
+                v
+            };
+            v.to_bits()
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::slot_name;
+    use super::{sat_words, slot_name};
+    use crate::Game;
+    use crate::metaparam::MtdParam;
+
+    fn param(value_type: u8, srgb: bool) -> MtdParam {
+        MtdParam {
+            name: "C_DetailBlend__snp_0_color_1".into(),
+            start: 36,
+            sequence_index: 0,
+            value_type,
+            not_shader_input: false,
+            srgb,
+            colour: matches!(value_type, 12 | 13),
+            key: 0,
+            default: [1.; 5],
+        }
+    }
+
+    /// Captured words of Elden Ring's SAT parameters from the material binaries' values: an srgb colour raised to 2.2
+    /// before its intensity (`C[c3251]_BD_Cloth`'s colour 4 at intensity 1, `P[BD_M_1360]_fabric`'s colour 1 at 3.5),
+    /// a colour without the flag times its intensity only, a bool as the integer's bits.
+    #[test]
+    fn sat_parameters_are_written_as_the_capture_shows() {
+        let close = |words: Vec<u32>, want: &[f32]| {
+            for (w, &e) in words.iter().zip(want) {
+                let got = f32::from_bits(*w);
+                assert!((got - e).abs() <= 2e-6 * e.abs().max(1.), "{got} for {e}");
+            }
+        };
+        close(
+            sat_words(
+                Game::EldenRing,
+                &param(13, true),
+                &[0.824_385, 0.713_067, 0.581_919, 1.],
+                1.,
+            ),
+            &[0.653_862_1, 0.475_211_26, 0.303_876_85, 1.],
+        );
+        let fabric = sat_words(
+            Game::EldenRing,
+            &param(13, true),
+            &[1., 0.967_288, 0.952_941, 1.],
+            3.5,
+        );
+        close(fabric[1..3].to_vec(), &[3.253_050_8, 3.147_844_6]);
+        close(
+            sat_words(Game::EldenRing, &param(13, false), &[0.5, 0.25, 1., 0.75], 3.),
+            &[1.5, 0.75, 3., 0.75],
+        );
+        assert_eq!(sat_words(Game::EldenRing, &param(0, false), &[1.], 1.), vec![1]);
+        assert_eq!(
+            sat_words(Game::EldenRing, &param(1, false), &[0.35], 1.),
+            vec![0.35f32.to_bits()]
+        );
+        // Sekiro's: as stated, a colour's times its intensity (not established by a capture)
+        close(
+            sat_words(Game::Sekiro, &param(13, true), &[0.5, 0.25, 1., 0.75], 2.),
+            &[1., 0.5, 2., 0.75],
+        );
+        assert_eq!(
+            sat_words(Game::Sekiro, &param(0, false), &[1.], 1.),
+            vec![1f32.to_bits()]
+        );
+    }
 
     /// Roles past a blend shader's `GSBlendMap` prefix and past empty segments; a slot named only `GSBlendMap` keeps it,
     /// and a slot naming no role is still a slot.
