@@ -42,7 +42,8 @@
 //!   intensity above 0 and a fully baked winner (whether URP's culling keeps it is not modelled), each counted. URP
 //!   does this only when its asset's main light mode is per-pixel; the asset is a script object without a type tree,
 //!   not decoded, so that is assumed (counted as an approximation);
-//! - else (another pipeline, or none known) none, counted.
+//! - else (another pipeline, or one the settings do not know) none, counted as which; with no render settings read (`unity.render_settings` absent: neither a
+//!   named sun nor the pipeline is known) none, counted as that.
 //!
 //! Lights with a state condition (`core.condition`: off as stored) are not visible as stored, so neither named nor
 //! candidates; `resolve-state` before this pass leaves the same choice.
@@ -165,15 +166,21 @@ pub fn lower_unity_lights(w: &mut World, candela_per_unit: f32) -> Result<PassLo
             1,
         );
     }
-    let urp = w
-        .resource::<UnityRenderSettings>()
-        .is_some_and(|s| s.pipeline == Some(RenderPipeline::Universal));
+    let pipeline = w.resource::<UnityRenderSettings>().map(|s| s.pipeline.clone());
     log.approximate(
-        if urp {
-            "URP intensity as candela (lux for directional lights) at the caller's candela-per-unit (URP states no unit)"
-        } else {
-            "intensity of a pipeline other than URP taken as URP's, at the caller's candela-per-unit (built-in's \
-             attenuation and gamma-space intensity not modelled)"
+        match pipeline {
+            Some(Some(RenderPipeline::Universal)) => {
+                "URP intensity as candela (lux for directional lights) at the caller's candela-per-unit (URP states no \
+                 unit)"
+            }
+            Some(Some(_)) => {
+                "intensity of a pipeline other than URP taken as URP's, at the caller's candela-per-unit (built-in's \
+                 attenuation and gamma-space intensity not modelled)"
+            }
+            Some(None) | None => {
+                "intensity of a pipeline not known (no render settings read, or none they state) taken as URP's, at \
+                 the caller's candela-per-unit"
+            }
         },
         1,
     );
@@ -191,7 +198,13 @@ pub fn lower_unity_lights(w: &mut World, candela_per_unit: f32) -> Result<PassLo
 
 /// The sun (see the module documentation), each outcome counted.
 fn sun(w: &World, log: &mut PassLog) -> Option<Entity> {
-    let settings = w.resource::<UnityRenderSettings>().cloned().unwrap_or_default();
+    let Some(settings) = w.resource::<UnityRenderSettings>().cloned() else {
+        log.count(
+            "no sun: no render settings read (neither a named sun nor the pipeline is known)",
+            1,
+        );
+        return None;
+    };
     let directional = |e: Entity| {
         w.get::<Light>(e)
             .is_some_and(|l| l.kind == LightKind::Directional)
@@ -206,9 +219,16 @@ fn sun(w: &World, log: &mut PassLog) -> Option<Entity> {
         Some(_) => log.count("RenderSettings sun not a directional light", 1),
         None => {}
     }
-    if settings.pipeline != Some(RenderPipeline::Universal) {
-        log.count("no sun: none named and the pipeline is not URP", 1);
-        return None;
+    match &settings.pipeline {
+        Some(RenderPipeline::Universal) => {}
+        Some(_) => {
+            log.count("no sun: none named and the pipeline is not URP", 1);
+            return None;
+        }
+        None => {
+            log.count("no sun: none named and the pipeline is not known", 1);
+            return None;
+        }
     }
     let lights: Vec<(Entity, &UnityLight)> =
         w.iter::<UnityLight>().filter(|&(e, _)| directional(e)).collect();
@@ -389,8 +409,18 @@ mod tests {
         let brighter = light(&mut w, 1);
         set_intensity(&mut w, brighter, 3.0);
         let lamp = light(&mut w, 2);
-        // no settings read: no environment
-        assert_eq!(environment_sun(&mut w.clone()).0, None);
+        // no settings read: no environment, said as that
+        let (found, log) = environment_sun(&mut w.clone());
+        assert_eq!(found, None);
+        assert_eq!(
+            log.counts["no sun: no render settings read (neither a named sun nor the pipeline is known)"],
+            1
+        );
+        assert_eq!(
+            log.approximations["intensity of a pipeline not known (no render settings read, or none they state) \
+                                taken as URP's, at the caller's candela-per-unit"],
+            1
+        );
         // named, whatever the pipeline and however bright the others
         for pipeline in [
             None,
@@ -431,20 +461,26 @@ mod tests {
             log.approximations["URP main light mode taken as per-pixel (pipeline asset not decoded)"],
             1
         );
-        // other pipelines, or none known: no fallback
-        for pipeline in [
-            None,
-            Some(RenderPipeline::BuiltIn),
-            Some(RenderPipeline::Other(vec![
-                "built-in".into(),
-                crate::components::URP_ASSET.into(),
-            ])),
+        // other pipelines, or none known: no fallback, each said as which
+        for (pipeline, why) in [
+            (None, "no sun: none named and the pipeline is not known"),
+            (
+                Some(RenderPipeline::BuiltIn),
+                "no sun: none named and the pipeline is not URP",
+            ),
+            (
+                Some(RenderPipeline::Other(vec![
+                    "built-in".into(),
+                    crate::components::URP_ASSET.into(),
+                ])),
+                "no sun: none named and the pipeline is not URP",
+            ),
         ] {
             let mut other = w.clone();
             other.insert_resource(settings(None, pipeline));
             let (found, log) = environment_sun(&mut other);
             assert_eq!(found, None);
-            assert_eq!(log.counts["no sun: none named and the pipeline is not URP"], 1);
+            assert_eq!(log.counts[why], 1);
         }
         // a tie for brightest
         let mut tie = w.clone();
