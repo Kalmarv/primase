@@ -11,6 +11,7 @@ use primase_shader::{
     Provenance, Resource, ResourceId, ResourceKind, ResourceProvenance, SampleType, ScalarType, ShaderFormat,
     Stage, TextureDim, Value, Varying, VaryingProvenance,
 };
+use primase_shader_exec::probe::AnsweredReads;
 use primase_shader_exec::{Dim, ImageLod, ImageSample, ProgramShader};
 use primase_shader_exec::{PixelShader, Sampler};
 
@@ -367,20 +368,6 @@ fn a_quad_takes_its_own_derivatives_from_its_four_lanes() {
     }
 }
 
-#[derive(Default)]
-struct Recording {
-    requests: Vec<ImageSample<u32>>,
-}
-impl Sampler for Recording {
-    fn sample(&mut self, _: primase_shader_exec::Sample) -> Result<[f32; 4], String> {
-        Err("a plain 2D sample was not expected".into())
-    }
-    fn sample_image(&mut self, request: ImageSample<u32>) -> Result<[f32; 4], String> {
-        self.requests.push(request);
-        Ok([0.5, 0.25, 0.125, 1.0])
-    }
-}
-
 #[test]
 fn a_volume_sample_reaches_a_sampler_that_answers_it_and_is_refused_by_one_that_does_not() {
     let shader = ProgramShader::new(volume_program()).unwrap();
@@ -388,12 +375,12 @@ fn a_volume_sample_reaches_a_sampler_that_answers_it_and_is_refused_by_one_that_
     assert_eq!(shader.textures(), &[] as &[u32]);
     assert_eq!(shader.samplers(), &[1]);
     let inputs = [bits([0.1, 0.2, 0.3, 0.0])];
-    let mut sampler = Recording::default();
+    let mut sampler = AnsweredReads::new(|_: &ImageSample<u32>| Ok([0.5, 0.25, 0.125, 1.0]));
     let e = shader.execute(&inputs, &[], &mut sampler).unwrap();
     assert_eq!(lanes(e.outputs[0]), [0.5, 0.25, 0.125, 1.0]);
     assert_eq!(e.samples, 1);
-    let [r] = sampler.requests.as_slice() else {
-        panic!("{:?}", sampler.requests)
+    let [r] = sampler.samples.as_slice() else {
+        panic!("{:?}", sampler.samples)
     };
     assert_eq!((r.texture, r.sampler, r.dim), (2, 1, Dim::D3));
     assert_eq!(r.coord, [0.1, 0.2, 0.3]);

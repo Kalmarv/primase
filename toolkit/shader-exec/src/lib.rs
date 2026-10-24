@@ -218,6 +218,20 @@ impl From<ImageLod> for Lod {
     }
 }
 
+impl From<Lod> for ImageLod {
+    /// A 2D sample's level of detail as an image request states it (its gradients' third lane 0).
+    fn from(lod: Lod) -> Self {
+        let lift = |g: [[f32; 2]; 2]| [[g[0][0], g[0][1], 0.], [g[1][0], g[1][1], 0.]];
+        match lod {
+            Lod::Implicit => ImageLod::Implicit,
+            Lod::Bias(bias) => ImageLod::Bias(bias),
+            Lod::Level(level) => ImageLod::Level(level),
+            Lod::Gradients(g) => ImageLod::Gradients(lift(g)),
+            Lod::GradientsBias(g, bias) => ImageLod::GradientsBias(lift(g), bias),
+        }
+    }
+}
+
 /// A sample request of a 2D texture (or a 2D array's layer).
 #[derive(Clone, Copy, Debug)]
 pub struct Sample {
