@@ -365,20 +365,48 @@ impl FrozenFrame {
     }
 }
 
-/// The program's common repeat over the UV scales of the texture slots it samples that the material binds, and
-/// whether it is exact ([`super::period::common_period`]).
-pub(crate) fn sampled_period(interface: &Interface, material: &LayeredMaterial) -> Result<([f32; 2], bool)> {
+/// The repeat of the recognized material slots, with every resource left out of that calculation.
+#[derive(Debug)]
+pub(crate) struct SampledPeriod {
+    pub period: [f32; 2],
+    /// False if a scale was omitted, even when the recognized slots have an exact common repeat.
+    pub exact: bool,
+    pub omissions: BTreeMap<String, u64>,
+}
+
+/// The program's common repeat over the texture slots its interface names and the material binds.
+/// An unrecognized slot retains its name and parsing error; its scale is not invented.
+pub(crate) fn sampled_period(interface: &Interface, material: &LayeredMaterial) -> Result<SampledPeriod> {
     let slots = resolve::slots(&material.view())?;
-    let sampled_scales: Vec<_> = textures_of(interface)
-        .filter_map(|r| resolve::texture_slot(r).ok())
-        .filter_map(|slot| slots.get(&slot).map(|(_, b)| b.scale))
-        .collect();
+    let mut sampled_scales = Vec::new();
+    let mut omissions = BTreeMap::new();
+    for resource in textures_of(interface) {
+        match resolve::texture_slot(resource) {
+            Ok(slot) => {
+                if let Some((_, binding)) = slots.get(&slot) {
+                    sampled_scales.push(binding.scale);
+                }
+            }
+            Err(error) => {
+                let why = format!(
+                    "repeat calculation omits texture {}: {error}",
+                    resource.provenance.name,
+                );
+                *omissions.entry(why).or_default() += 1;
+            }
+        }
+    }
     let main_scale = slots
         .get(&8)
         .map(|(_, b)| b.scale)
         .or_else(|| sampled_scales.first().copied())
         .unwrap_or([1.; 2]);
-    super::period::common_period(&sampled_scales, main_scale)
+    let (period, exact) = super::period::common_period(&sampled_scales, main_scale)?;
+    Ok(SampledPeriod {
+        period,
+        exact: exact && omissions.is_empty(),
+        omissions,
+    })
 }
 
 impl Prepared {
@@ -549,7 +577,9 @@ impl Prepared {
             }
         }
         let slots = resolve::slots(&material.view())?;
-        let (period, period_exact) = sampled_period(interface, material)?;
+        let repeat = sampled_period(interface, material)?;
+        let (period, period_exact) = (repeat.period, repeat.exact);
+        policies.extend(repeat.omissions);
         let mut textures = BTreeMap::new();
         let mut cache = BTreeMap::<(Entity, bool, [Option<AddressMode>; 2]), Arc<SampledTexture>>::new();
         let mut largest_colour_dimension = 0;
@@ -1035,6 +1065,67 @@ impl PipelineState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn omitted_texture_names_make_the_period_inexact_and_keep_the_error() {
+        use crate::materials::Binding;
+        use primase_core::shader::{
+            Resource, ResourceId, ResourceKind, ResourceProvenance, SampleType, TextureDim,
+        };
+        let mut interface = prepared(false).shader.interface().clone();
+        let texture = |id, name: &str| Resource {
+            id: ResourceId(id),
+            kind: ResourceKind::Texture {
+                dim: TextureDim::D2,
+                arrayed: false,
+                multisampled: false,
+                sample: SampleType::Float,
+            },
+            count: 1,
+            provenance: ResourceProvenance {
+                name: name.into(),
+                ..Default::default()
+            },
+        };
+        interface.resources = vec![texture(0, "material_Texture2D_8")];
+        let material = LayeredMaterial {
+            mtd: "period fixture".into(),
+            definition: crate::mtd::MaterialDefinition {
+                shader: String::new(),
+                description: String::new(),
+                parameters: vec![],
+                textures: vec![],
+                block_lengths: vec![],
+            },
+            bindings: BTreeMap::from([(
+                "Texture2D_8_AlbedoMap".into(),
+                Binding {
+                    texture: "base".into(),
+                    scale: [0.5, 0.25],
+                    uv_number: 1,
+                    address: [None; 2],
+                    available: true,
+                },
+            )]),
+        };
+        let known = sampled_period(&interface, &material).unwrap();
+        assert_eq!(known.period, [2., 4.]);
+        assert!(known.exact);
+        assert!(known.omissions.is_empty());
+        interface
+            .resources
+            .extend([texture(1, "engine_detail"), texture(2, "material_Texture2D_bad")]);
+        let omitted = sampled_period(&interface, &material).unwrap();
+        assert_eq!(omitted.period, known.period);
+        assert!(!omitted.exact);
+        assert_eq!(omitted.omissions.len(), 2);
+        for resource in &interface.resources[1..] {
+            let error = resolve::texture_slot(resource).unwrap_err().to_string();
+            assert!(omitted.omissions.iter().any(|(reason, count)| {
+                reason.contains(&resource.provenance.name) && reason.contains(&error) && *count == 1
+            }));
+        }
+    }
 
     /// The dither and camera-fade fields freeze to zero (both fades off), counted once as [`FADE_POLICY`].
     #[test]
