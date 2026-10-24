@@ -200,6 +200,33 @@ fn refs(v: &View<'_>, o: usize, n: usize, limit: usize, budget: &Budget) -> Resu
         .collect()
 }
 impl Model {
+    /// The bytes the model's meshes hold: each vertex as it sits in memory with the lengths of its channels, and each
+    /// face set's indices. A copy of the model costs about this much (the bones, layouts and materials are small beside
+    /// it), which is what a component's `payload_bytes` states.
+    pub fn resident_bytes(&self) -> u64 {
+        let channel = std::mem::size_of::<[f32; 4]>();
+        self.meshes
+            .iter()
+            .map(|mesh| {
+                let vertices: usize = mesh
+                    .vertices
+                    .iter()
+                    .map(|v| {
+                        std::mem::size_of::<Vertex>()
+                            + (v.uvs.len() + v.tangents.len() + v.colors.len() + v.speedtree.len()) * channel
+                            + v.layer_bytes.len() * std::mem::size_of::<(usize, [u8; 4])>()
+                    })
+                    .sum();
+                let indices: usize = mesh
+                    .faces
+                    .iter()
+                    .map(|f| f.indices.len() * std::mem::size_of::<u32>())
+                    .sum();
+                (vertices + indices) as u64
+            })
+            .sum()
+    }
+
     pub fn read(data: &[u8]) -> Result<Self> {
         let v = View {
             data,

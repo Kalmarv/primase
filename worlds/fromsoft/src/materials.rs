@@ -89,11 +89,10 @@ const SEKIRO_CLASSES: &ClassTable = &[
         Pattern::Prefix("M[Shadow]"),
         Class::Skip(SkipClass::Shadow),
     ),
-    (
-        Target::Shader,
-        Pattern::Contains("Tessellation_Water"),
-        Class::Water,
-    ),
+    // water by the family's name, as Elden Ring's table has it: the tessellated sea and ponds
+    // (`M[Interaction]_Tessellation_Water`), and the rivers and waterfalls whose shaders the scroll policy names
+    // (`M[ARSN]_Water_3normaltet` on m25_00's `川` and `滝`, `M[Flow]_Water`)
+    (Target::Shader, Pattern::Contains("Water"), Class::Water),
     (Target::Shader, Pattern::Contains("MeshDecal"), Class::Decal),
     (Target::Material, Pattern::Suffix("_md"), Class::Decal),
     (Target::Shader, Pattern::Prefix("M[Translucency]"), Class::Leaves),

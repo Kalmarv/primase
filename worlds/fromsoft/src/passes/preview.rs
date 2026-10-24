@@ -91,6 +91,15 @@ pub fn preview_with(m: &Material, albedo_key: Option<&str>) -> Preview {
             .or_else(|| normal.iter().find(|n| n.0 == 0))
             .or(normal.first());
         p.normal = n.map(|n| n.1.clone());
+    } else if m.class == "water" {
+        // water binds no albedo (its colour is the program's) but a normal map of its own (the waves): that map is the
+        // water's one texture, chosen as the policy does where no base colour names a family
+        p.normal = normal
+            .iter()
+            .find(|n| n.0 == 3)
+            .or_else(|| normal.iter().find(|n| n.0 == 0))
+            .or(normal.first())
+            .map(|n| n.1.clone());
     }
     p.metallic = metallic;
     p.emissive = emissive;

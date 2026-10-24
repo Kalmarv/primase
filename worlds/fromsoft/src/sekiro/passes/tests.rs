@@ -360,6 +360,43 @@ fn a_lowered_material_carries_what_its_source_class_states_about_its_surfaces() 
     assert_eq!(log.counts["materials of class decal given their draw order"], 1);
 }
 
+/// Sekiro's water is a family by name, not only the tessellated sea: the river and waterfall shaders the layer bake's
+/// scroll policy names (`M[ARSN]_Water_3normaltet`, `M[Flow]_Water`) are water too, and a shader whose name only
+/// resembles one is not.
+#[test]
+fn sekiros_rivers_and_waterfalls_are_water_by_their_shader_family() {
+    let class = |shader: &str| {
+        materials::resolve(
+            &crate::flver::Material {
+                name: "fixture".into(),
+                mtd: "fixture.mtd".into(),
+                gx: vec![],
+                textures: vec![],
+            },
+            Some(&crate::mtd::MaterialDefinition {
+                shader: shader.into(),
+                description: String::new(),
+                parameters: vec![],
+                textures: vec![],
+                block_lengths: vec![],
+            }),
+            |_| false,
+        )
+        .class
+    };
+    for shader in [
+        "GXFlver_Tessellation_Water.spx",
+        "M[Interaction]_Tessellation_Water.spx",
+        "M[ARSN]_Water_3normaltet.spx",
+        "M[Flow]_Water.spx",
+    ] {
+        assert_eq!(class(shader), "water", "{shader}");
+    }
+    for shader in ["M[ARSN].spx", "M[AMSN].spx", "GXFlver_MeshDecal.spx"] {
+        assert_ne!(class(shader), "water", "{shader}");
+    }
+}
+
 /// `g_BlendMode` 4 is a light volume in Sekiro's table and, in Elden Ring's, a surface drawn added to what is behind it
 /// (c2200's emissive body and wing overlays); lowered, it glows with its own colour and is blended, counted.
 #[test]
@@ -658,6 +695,7 @@ fn the_fromsoft_passes_register_by_name() {
         "drop-fromsoft-texture-transforms",
         "fromsoft-apply-rigid-skinning",
         "lower-fromsoft-collision",
+        "lower-fromsoft-environment",
         "lower-fromsoft-extras",
         "lower-fromsoft-geometry",
         "lower-fromsoft-lights",

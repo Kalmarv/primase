@@ -2,6 +2,7 @@
 //! HitMtrl class becomes and how far around the read region to keep are `lower-fromsoft-collision`'s options. Raw
 //! collision is never roof-smoothed here.
 use super::settings::{HitClass, HitFilters, Metres, joined};
+use crate::Game;
 use crate::sekiro::source::{CollisionSource, MapCollision, ReadScope};
 use primase_core::convert::PartScope;
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
@@ -9,9 +10,26 @@ use primase_core::state::{Clause, Condition};
 use primase_core::{Collision, Component, Entity, Name, Surfaces, Transform, World, world::Resource};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// The core surface a HitMtrl class (an ID's base value, modulo 100) stands for, where its class is known to stand
-/// for one; `None` for the other classes.
-pub fn known_surface(class: i32) -> Option<&'static str> {
+/// The game whose HitMtrl classes the world's collision uses: the one its read states (`fromsoft.read_scope`); a world
+/// without a scope (one a test builds by hand) reads them as Sekiro's, the table the passes began with.
+pub(super) fn game_of(world: &World) -> Game {
+    world.resource::<ReadScope>().map_or(Game::Sekiro, |scope| scope.game)
+}
+
+/// The core surface a HitMtrl class (an ID's base value, modulo 100) of `game` stands for, where its class is known to
+/// stand for one; `None` for the other classes.
+pub fn known_surface(game: Game, class: i32) -> Option<&'static str> {
+    match game {
+        Game::Sekiro => sekiro_surface(class),
+        Game::EldenRing => elden_surface(class),
+    }
+}
+
+/// Sekiro's classes by the names of its HitMtrlParam rows (Paramdex, as Smithbox carries it): Stone and Underwater
+/// Stone concrete; Dirt, Ash, Dead Leaves, Mud, Snow, Autumn Leaves and Underwater Dirt earth; Wood, Bamboo, Tree,
+/// Tatami, Wood Indoors and Underwater Wood wood; Grass, Straw, Bush and the grasses in water grass; Gravel; Iron and
+/// Bell metal; Sand; Tiles roofing; Ice marble.
+fn sekiro_surface(class: i32) -> Option<&'static str> {
     Some(match class {
         1 | 46 => "concrete",
         3 | 15 | 18 | 27 | 30 | 33 | 45 => "earth",
@@ -26,9 +44,92 @@ pub fn known_surface(class: i32) -> Option<&'static str> {
     })
 }
 
-/// The surface a triangle of HitMtrl ID `material` is lowered with: its class's known surface, else `default`,
-/// counted as approximations in `log`.
-pub(super) fn surface_of(material: i32, log: &mut PassLog) -> &'static str {
+/// Elden Ring's classes by the names of its HitMtrlParam rows (the game's param names as Smithbox carries them, row IDs
+/// 0 to 62; its numbering is not Sekiro's: 3 is Sand here and Dirt there). A class is mapped where its name says a
+/// surface of the core table: Rock the nearest, concrete; Sand; Wood and the Scarlet Tree wood; Dirt and Rain Dirt
+/// earth; Iron Grate metal. Not mapped, because the name is not a surface of the table or there is none: Stock (1), Ore
+/// (6), Lava (7), Scarlet Mushroom (12), Bone (14), the swamps and the Lake of Rot (23, 24, 46, 49), and every row the
+/// names leave blank. Water (21) is not a surface: the water classes are the program's (`water=`).
+fn elden_surface(class: i32) -> Option<&'static str> {
+    Some(match class {
+        2 => "concrete",
+        3 => "sand",
+        4 | 8 => "wood",
+        5 | 44 => "earth",
+        11 => "metal",
+        _ => return None,
+    })
+}
+
+/// The name of a HitMtrl class's row in `game`'s HitMtrlParam (Smithbox's English names; Paramdex's for Sekiro), where
+/// it has one: what a counted class is called.
+pub fn class_name(game: Game, class: i32) -> Option<&'static str> {
+    Some(match (game, class) {
+        (Game::Sekiro, 1) => "Stone",
+        (Game::Sekiro, 3) => "Dirt",
+        (Game::Sekiro, 4) => "Wood",
+        (Game::Sekiro, 5) => "Grass",
+        (Game::Sekiro, 6) => "Gravel",
+        (Game::Sekiro, 7) => "Bamboo",
+        (Game::Sekiro, 8) => "Tree",
+        (Game::Sekiro, 9 | 10) => "Straw",
+        (Game::Sekiro, 11) => "Iron",
+        (Game::Sekiro, 12) => "Flesh",
+        (Game::Sekiro, 13) => "Sand",
+        (Game::Sekiro, 14) => "Bone",
+        (Game::Sekiro, 15) => "Ash",
+        (Game::Sekiro, 16) => "Tiles",
+        (Game::Sekiro, 17) => "Cloth",
+        (Game::Sekiro, 18) => "Dead Leaves",
+        (Game::Sekiro, 19) => "Bell",
+        (Game::Sekiro, 20) => "Water Puddle",
+        (Game::Sekiro, 21) => "Water (Walkable)",
+        (Game::Sekiro, 22) => "Water (Diveable)",
+        (Game::Sekiro, 23) => "Poison Swamp",
+        (Game::Sekiro, 24) => "Poison Swamp (with slowing)",
+        (Game::Sekiro, 27) => "Mud",
+        (Game::Sekiro, 28) => "Tatami",
+        (Game::Sekiro, 29) => "None",
+        (Game::Sekiro, 30) => "Snow",
+        (Game::Sekiro, 31) => "Bush",
+        (Game::Sekiro, 32) => "Wood Indoors",
+        (Game::Sekiro, 33) => "Autumn Leaves",
+        (Game::Sekiro, 34) => "Ice",
+        (Game::Sekiro, 35) => "Water Slope",
+        (Game::Sekiro, 36) => "Water Slope (swimming)",
+        (Game::Sekiro, 37) => "Grass In Water",
+        (Game::Sekiro, 38) => "Grass In Water (swimming)",
+        (Game::Sekiro, 40) => "Cloud",
+        (Game::Sekiro, 45) => "Underwater Dirt",
+        (Game::Sekiro, 46) => "Underwater Stone",
+        (Game::Sekiro, 47) => "Underwater Wood",
+        (Game::Sekiro, 80) => "Miasma",
+        (Game::EldenRing, 0) => "None",
+        (Game::EldenRing, 1) => "Stock",
+        (Game::EldenRing, 2) => "Rock",
+        (Game::EldenRing, 3) => "Sand",
+        (Game::EldenRing, 4) => "Wood",
+        (Game::EldenRing, 5) => "Dirt",
+        (Game::EldenRing, 6) => "Ore",
+        (Game::EldenRing, 7) => "Lava",
+        (Game::EldenRing, 8) => "Scarlet Tree",
+        (Game::EldenRing, 11) => "Iron Grate",
+        (Game::EldenRing, 12) => "Scarlet Mushroom",
+        (Game::EldenRing, 14) => "Bone",
+        (Game::EldenRing, 21) => "Water",
+        (Game::EldenRing, 23) => "Shallow Poison Swamp",
+        (Game::EldenRing, 24) => "Poison Swamp",
+        (Game::EldenRing, 44) => "Rain Dirt",
+        (Game::EldenRing, 46) => "Scarlet Swamp",
+        (Game::EldenRing, 49) => "Lake of Rot",
+        _ => return None,
+    })
+}
+
+/// The surface a triangle of HitMtrl ID `material` is lowered with in `game`: its class's known surface, else `default`,
+/// counted as approximations in `log`; a class without a known surface is also counted by itself and its name
+/// (`triangles of HitMtrl class 12 (Scarlet Mushroom) without a known surface`), never given the default unseen.
+pub(super) fn surface_of(game: Game, material: i32, log: &mut PassLog) -> &'static str {
     if material < 0 {
         log.approximate(
             "triangles whose shape key binds no HitMtrl, given the default surface",
@@ -36,9 +137,17 @@ pub(super) fn surface_of(material: i32, log: &mut PassLog) -> &'static str {
         );
         return "default";
     }
-    known_surface(material % 100).unwrap_or_else(|| {
+    let class = material % 100;
+    known_surface(game, class).unwrap_or_else(|| {
         log.approximate(
             "triangles of HitMtrl classes without a known surface, given the default surface",
+            1,
+        );
+        log.count(
+            &match class_name(game, class) {
+                Some(name) => format!("triangles of HitMtrl class {class} ({name}) without a known surface"),
+                None => format!("triangles of HitMtrl class {class} (no name) without a known surface"),
+            },
             1,
         );
         "default"
@@ -246,6 +355,7 @@ impl Pass for LowerFromSoftCollision {
     fn run(&self, world: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         let crop = crop(world, self.reach)?;
         let classes = self.classes()?;
+        let game = game_of(world);
         let owned = owned(world);
         let mut records: Vec<(Entity, &MapCollision)> = world
             .iter::<MapCollision>()
@@ -272,11 +382,18 @@ impl Pass for LowerFromSoftCollision {
                 .filter(|p| self.hit_filters.contains(p.hit_filter))
                 .map(|p| p.condition.clone())
                 .collect();
-            if !clauses.is_empty() && !record.unread_bodies.is_empty() {
-                return Err(format!(
-                    "{}, of a chosen hit filter, has bodies of shapes the reader does not decode: {:?}",
-                    record.file, record.unread_bodies
-                ));
+            if !clauses.is_empty() {
+                // a body of another shape class (a convex polytope) stores no HitMtrl material and has no triangles
+                // here: it is left out, each class counted, while the file's mesh bodies are lowered; never taken for
+                // an empty body, and never a reason to refuse the file's other bodies
+                for shape in &record.unread_bodies {
+                    log.omit(
+                        &format!(
+                            "collision bodies of {shape}, a shape the reader does not decode, in a chosen hit filter's file"
+                        ),
+                        1,
+                    );
+                }
             }
             if clauses.is_empty() {
                 log.count(
@@ -306,7 +423,7 @@ impl Pass for LowerFromSoftCollision {
                     }
                     Some(ClassChoice::LeaveOut) => log.count("triangles of left-out HitMtrl classes", 1),
                     None => {
-                        push(solid, *vertices, index(surface_of(material, log))?)?;
+                        push(solid, *vertices, index(surface_of(game, material, log))?)?;
                         log.count("ground triangles", 1);
                     }
                 }
@@ -383,6 +500,7 @@ mod tests {
         let b = w.spawn();
         w.insert(b, record("b.hkx", 15, vec![NEAR], vec![1]));
         w.insert_resource(ReadScope {
+            game: Game::Sekiro,
             area: "m00_00_00_00".into(),
             region: Some(crate::sekiro::source::Region {
                 rect: [-10., -10., 10., 10.],
@@ -531,8 +649,65 @@ mod tests {
         assert_eq!(game.triangles.len(), 2);
     }
 
+    /// Elden Ring's classes are its own rows, not Sekiro's: 3 is Sand where Sekiro's is Dirt, 5 Dirt where Sekiro's is
+    /// Grass, 21 Water. The world's read scope says which game's table a lowering reads; a class with no known
+    /// surface is counted by itself, with its row's name where there is one.
     #[test]
-    fn a_chosen_file_with_bodies_the_reader_could_not_decode_is_refused() {
+    fn a_games_classes_are_its_own_and_an_unmapped_class_is_counted_by_name() {
+        let materials = vec![3, 5, 21, 12, 2, 57, 1103];
+        let triangles = vec![NEAR; materials.len()];
+        let surfaces_of = |game: Game| {
+            let mut w = World::new();
+            let e = w.spawn();
+            w.insert(e, record("a.hkx", 8, triangles.clone(), materials.clone()));
+            w.insert_resource(ReadScope {
+                game,
+                area: "m10_00_00_00".into(),
+                region: None,
+                states: false,
+            });
+            let pass = LowerFromSoftCollision {
+                hit_filters: HitFilters::new([8]).unwrap(),
+                water: HitClass::set([21]).unwrap(),
+                leave_out: BTreeSet::new(),
+                reach: None,
+            };
+            let mut log = PassLog::default();
+            pass.run(&mut w, &mut log).unwrap();
+            (soups(&w), log)
+        };
+        // 21 is the water class the program chose, in either game; 1103 is class 3: the ID modulo 100
+        let (elden, log) = surfaces_of(Game::EldenRing);
+        assert_eq!(
+            elden["game"],
+            ["sand", "earth", "default", "concrete", "default", "sand"],
+            "3 Sand, 5 Dirt, 12 Scarlet Mushroom and 57 unmapped, 2 Rock, 1103 Sand"
+        );
+        assert_eq!(elden["water"], ["default"]);
+        assert_eq!(log.counts["water triangles"], 1);
+        assert_eq!(
+            log.counts["triangles of HitMtrl class 12 (Scarlet Mushroom) without a known surface"],
+            1
+        );
+        assert_eq!(
+            log.counts["triangles of HitMtrl class 57 (no name) without a known surface"],
+            1
+        );
+        // the same IDs in Sekiro: 3 Dirt, 5 Grass, 12 Flesh and 2 (Unused) unmapped, 1103 Dirt
+        let (sekiro, _) = surfaces_of(Game::Sekiro);
+        assert_eq!(
+            sekiro["game"],
+            ["earth", "grass", "default", "default", "default", "earth"]
+        );
+        assert_eq!(known_surface(Game::EldenRing, 11), Some("metal"));
+        assert_eq!(known_surface(Game::Sekiro, 11), Some("metal"));
+        assert_eq!(known_surface(Game::EldenRing, 21), None, "water is not a surface");
+        assert_eq!(class_name(Game::EldenRing, 49), Some("Lake of Rot"));
+        assert_eq!(class_name(Game::Sekiro, 22), Some("Water (Diveable)"));
+    }
+
+    #[test]
+    fn a_chosen_file_with_bodies_the_reader_could_not_decode_is_lowered_without_them_and_says_so() {
         let mut w = world();
         let (b, _) = w.iter::<MapCollision>().find(|(_, m)| m.file == "b.hkx").unwrap();
         w.get_mut::<MapCollision>(b).unwrap().unread_bodies = vec!["hknpConvexShape".into()];
@@ -542,14 +717,22 @@ mod tests {
             leave_out: BTreeSet::new(),
             reach: None,
         };
-        only_8.run(&mut w.clone(), &mut PassLog::default()).unwrap();
+        let mut quiet = PassLog::default();
+        only_8.run(&mut w.clone(), &mut quiet).unwrap();
+        assert!(quiet.omitted.is_empty(), "{:?}", quiet.omitted);
         let with_15 = LowerFromSoftCollision {
             hit_filters: HitFilters::new([8, 15]).unwrap(),
             water: BTreeSet::new(),
             leave_out: BTreeSet::new(),
             reach: None,
         };
-        let err = with_15.run(&mut w, &mut PassLog::default()).unwrap_err();
-        assert!(err.contains("b.hkx") && err.contains("hknpConvexShape"), "{err}");
+        let mut log = PassLog::default();
+        with_15.run(&mut w, &mut log).unwrap();
+        assert_eq!(
+            log.omitted["collision bodies of hknpConvexShape, a shape the reader does not decode, in a chosen hit filter's file"],
+            1
+        );
+        // the file's own triangles are lowered all the same
+        assert_eq!(log.counts["collision files lowered"], 2);
     }
 }

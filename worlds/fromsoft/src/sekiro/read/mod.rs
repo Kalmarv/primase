@@ -5,6 +5,7 @@ pub mod area;
 pub mod character;
 pub mod collision;
 pub mod convert;
+pub mod draw_param;
 pub mod extras;
 pub mod objects;
 pub mod params;

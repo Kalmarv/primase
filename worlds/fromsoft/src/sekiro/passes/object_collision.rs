@@ -1,7 +1,7 @@
 //! `lower-fromsoft-object-collision`: object prototypes' collision bodies (`fromsoft.object_collision`) as collision.
 //! How convex shapes become triangles, which motion types and HitMtrl classes become collision, the surface of
 //! convex bodies (which store none) and the crop are its options.
-use super::collision::{attach, beyond, crop, owned, push, surface_of};
+use super::collision::{attach, beyond, crop, game_of, owned, push, surface_of};
 use super::settings::{HitClass, Metres, joined};
 use crate::pose::FRAME;
 use crate::pose::posed;
@@ -333,6 +333,7 @@ impl Pass for LowerFromSoftObjectCollision {
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         let crop = crop(world, self.reach)?;
+        let game = game_of(world);
         let owned = owned(world);
         let mut surfaces = world.resource::<Surfaces>().cloned().unwrap_or_default();
         let mut soup = Collision::default();
@@ -412,7 +413,7 @@ impl Pass for LowerFromSoftObjectCollision {
                         log.approximate("convex body triangles given the largest render surface", 1);
                         surface
                     } else {
-                        surface_of(material, log)
+                        surface_of(game, material, log)
                     };
                     push(soup, v, surfaces.index(surface).map_err(|e| e.to_string())?)?;
                     log.count("object collision triangles", 1);

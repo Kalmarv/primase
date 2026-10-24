@@ -36,6 +36,10 @@ pub(super) struct Base {
     pub blended: bool,
     /// The pixel program it was read from.
     pub program: String,
+    /// The program's albedo is several layers and no one of them is its base (a blend of two or three layers whose
+    /// weights are made of vertex colours, Elden Ring's `Mb2` and `Mb3` programs): the slot is the lowest of the layers,
+    /// the first the program lists, drawn alone.
+    pub lowest_layer: bool,
 }
 
 /// Why a material binary's programs could not say what they read: the pixel program the material draws with (the
@@ -143,16 +147,23 @@ impl Reader {
         else {
             return Ok(None);
         };
-        let Some(slot) = reads.base.as_ref() else {
-            return Err(Unread {
-                program: name,
-                why: "no one slot is the albedo's base".into(),
-            });
+        // no one slot is the base where the program blends layers by weights of its own making: the layers are listed
+        // by slot, and the lowest is drawn, a counted approximation, rather than none
+        let (slot, lowest_layer) = match (reads.base.as_ref(), reads.colour.first()) {
+            (Some(slot), _) => (slot, false),
+            (None, Some(lowest)) => (lowest, true),
+            (None, None) => {
+                return Err(Unread {
+                    program: name,
+                    why: "no slot's colour reaches the albedo".into(),
+                });
+            }
         };
         Ok(Some(Base {
             slot: sampled(&name, slot, &uv_inputs, "base")?,
             blended: reads.colour.len() > 1,
             program: name,
+            lowest_layer,
         }))
     }
 }

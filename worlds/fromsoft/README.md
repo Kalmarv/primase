@@ -466,8 +466,29 @@ converts frames; it does not lower:
   prototype's; convex shapes store no material);
 - lights are `fromsoft.light` records where they stand (stored colours, powers,
   cone, radius and tangent); hang-edge segments and spawn points are the
-  `fromsoft.area_extras` resource; what the read covered (area, region, margin,
-  states) is `fromsoft.read_scope`.
+  `fromsoft.area_extras` resource; what the read covered (game, area, region,
+  margin, states) is `fromsoft.read_scope`;
+- with `Options::draw_param = DrawParams::File(<stem>)`, the area's graphics
+  environment is the `fromsoft.draw_param` resource: the draw-param file
+  (`/param/drawparam/<mNN_NN>_<id>.gparam.dcx`, a GPARAM, `gparam::Gparam`; the
+  stems the archive holds for the area's map are `sekiro::draw_params_available`)
+  at the value sets the area's parts name. Both games keep a map's files under
+  its first two blocks and a four-digit id (Sekiro `m11_01_0720`, Elden Ring
+  `m10_00_0100`; its open-world tiles share `m60_00_*` and `m61_00_*`). The MSB
+  does not name a file: a part's graphics config (`msb::PartGparam`, the part
+  header's slot at +112: four value ids) names the value set inside the groups
+  of the file in force (`LightSet ParamEditor`, `FogParamEditor`,
+  `LightScattering : ParamEditor`, `Env Map:Editor`), and a collision part's
+  scene config (+120: four signed bytes, which Elden Ring's SoulsFormats names
+  the hundreds digits of the files to use) is counted, not used. How the engine
+  picks one file from those, the weather and the events is not established, so
+  the file is the caller's. The id most of the area's kept placements and its
+  collision parts name is read per group; a group no part names an id for is read
+  at its one set, else at id 0, else not (counted). Every group and field of the
+  file is read, in `gparam.rs`'s versions 3, 5 (Sekiro, Elden Ring) and 6; the
+  file's comment tables, opaque block and extras are counted, not read. Elden
+  Ring's `_weatherbase`, `_weatheroutdoor`, `_commonevent` layers are not read.
+  What the read counts is in `Report::draw_param` and its notices.
 
 The read is eager: it decodes every kept model,
 texture, program and collision file before any part is planned, and through
@@ -487,7 +508,14 @@ region. `Report::notices` returns what the read left out or could not find:
 missing models (distinct models) and their placements, placements of models with
 no used vertex, missing and unnamed collision files, EDGE kinds other than hang
 edges, region exclusions, event states not requested, parts left at their
-default presence, and the shadow controls' interpretation.
+default presence, and the shadow controls' interpretation. Also counted: the water and
+decal material slots kept (the shader families the class tables name: Sekiro's and
+Elden Ring's `Water` shaders, `MeshDecal`), which `lower-fromsoft-materials` lowers
+as a water usage and the decal draw layer; the placed objects, drawn at their model's
+rest pose (their animations are not read); and Elden Ring's parts that store a grass
+config (the grass is not read). `tests/material_class_census.rs` and
+`tests/hit_class_census.rs` (install-gated) list every shader family by class and
+every HitMtrl class by triangles, for the tables to be checked against the install.
 
 Passes (`sekiro::passes::register`), each choosing explicitly:
 
@@ -510,10 +538,25 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
   default), range the stored radius (at least `min-range`), a spot's cone from the
   stored angle with an inner cone at `1 - spot-blend` (no default: the cone falloff
   is not established). The records stay.
+- `lower-fromsoft-environment{lux-per-unit=...}` lowers `fromsoft.draw_param` to
+  the core environment: the light set's first directional light (`Directional
+  Light Angle0`, `DiffColor0`) a directional `core.light` named as the sun by
+  `core.environment`, its angle read as the X and Y Euler rotations of a light
+  shining along -Z as BTL lights are placed (the light set's convention is not
+  established; counted), its colour as linear RGB at the program's calibration
+  (`lux-per-unit`, no default); the hemisphere colours (`Hemi Color Up`, `Down`)
+  the gradient ambient, its equator their mean (counted), at the same
+  calibration. A black or unusable light is no sun, counted. Every other field
+  read is counted by group and why it is not lowered (core states no fog, sky or
+  tone; the light set's specular, occlusion, second and local lights have no
+  `core.light` field). The record stays.
 - `lower-fromsoft-collision{hit-filters=...}` lowers the map collision files that
   parts of the chosen hit filters name (required) into `core.collision` soups
   (`game`, `water`, `game_state<n>` with the file's condition), each triangle with
-  its HitMtrl class's surface (`default` without one, counted); `water=` and
+  its HitMtrl class's surface in the read's game (`known_surface`; Sekiro's and
+  Elden Ring's HitMtrlParam rows are numbered differently, the pass reads the game
+  from `fromsoft.read_scope`; `default` without one, counted, and a class without
+  a surface counted by itself with its row's name, `class_name`); `water=` and
   `leave-out=` take HitMtrl classes (an ID modulo 100), `reach=N` crops N metres
   around the read region (every option required: empty classes for none, `reach=none`). The records it lowered are consumed; files only other
   filters' parts name stay as source.

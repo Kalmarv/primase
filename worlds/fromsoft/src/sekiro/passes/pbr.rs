@@ -587,7 +587,13 @@ fn lower_materials(
                                 ..UvTransform::IDENTITY
                             });
                         }
-                        if b.blended {
+                        if b.lowest_layer {
+                            log.approximate_on(
+                                e,
+                                "material binary whose albedo blends layers with no one base: drawn with the lowest layer's slot alone",
+                                1,
+                            );
+                        } else if b.blended {
                             log.approximate(
                                 "material binary drawn with its base albedo alone: the slots its program blends over it are left out",
                                 1,
@@ -977,6 +983,7 @@ mod tests {
             description: String::new(),
             parameters: vec![],
             textures: vec![
+                declared("Texture2D_0_AlbedoMap"),
                 declared("Texture2D_3_NormalMap"),
                 declared("Texture2D_4_MetallicMap"),
             ],
@@ -988,6 +995,7 @@ mod tests {
                 mtd: "named.mtd".into(),
                 gx: vec![],
                 textures: vec![
+                    slot("Texture2D_0_AlbedoMap", "n_a.tga"),
                     slot("Texture2D_3_NormalMap", "n_n.tga"),
                     slot("Texture2D_4_MetallicMap", "n_m.tga"),
                 ],
@@ -1013,6 +1021,7 @@ mod tests {
                 mtd: "metal.mtd".into(),
                 gx: vec![],
                 textures: vec![
+                    slot("Texture2D_0_AlbedoMap", "n_a.tga"),
                     slot("Texture2D_3_NormalMap", "n_n.tga"),
                     slot("Texture2D_4_MetallicMap", "n_m.tga"),
                 ],

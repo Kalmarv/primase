@@ -21,6 +21,7 @@ pub use read::character::{
     read_character, read_character_with, read_parts, read_parts_with,
 };
 pub use read::collision::Report as CollisionReport;
+pub use read::draw_param::{DrawParams, Report as DrawParamReport, available as draw_params_available};
 pub use read::extras::{Report as ExtrasReport, light_record};
 pub use read::objects::Report as ObjectCollisionReport;
 pub use read::params::{NpcPlacement, npc_placements, read_npc_param, read_param};

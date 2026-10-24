@@ -10,6 +10,7 @@ pub mod bake_materials;
 pub mod blockers;
 pub mod collision;
 pub mod detail;
+pub mod environment;
 pub mod extras;
 pub mod far;
 pub mod geometry;
@@ -79,6 +80,7 @@ pub fn register(registry: &mut PassRegistry) {
         &collision::LOWER_FROMSOFT_COLLISION,
         &object_collision::LOWER_FROMSOFT_OBJECT_COLLISION,
         &extras::LOWER_FROMSOFT_EXTRAS,
+        &environment::LOWER_FROMSOFT_ENVIRONMENT,
         &lights::LOWER_FROMSOFT_LIGHTS,
     ] {
         registry.add(spec);

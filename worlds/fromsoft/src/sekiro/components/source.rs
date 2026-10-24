@@ -291,19 +291,20 @@ pub struct Region {
     pub margin: f32,
 }
 
-/// What a read covered (`fromsoft.read_scope`): the area, the region it was bounded to with its placement margin, and
-/// whether event-flag world states were read. Passes that crop to the read region read it here, so a program need not
-/// restate it.
+/// What a read covered (`fromsoft.read_scope`): the game, the area, the region it was bounded to with its placement
+/// margin, and whether event-flag world states were read. Passes that crop to the read region, or that read a game's
+/// own tables (its HitMtrl classes), read it here, so a program need not restate it.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ReadScope {
+    pub game: crate::Game,
     pub area: String,
     pub region: Option<Region>,
     pub states: bool,
 }
 impl Resource for ReadScope {
     const NAME: &'static str = "fromsoft.read_scope";
-    /// 2: the region's margin is the region's (`region.margin`), absent with it.
-    const VERSION: u32 = 2;
+    /// 2: the region's margin is the region's (`region.margin`), absent with it. 3: the game.
+    const VERSION: u32 = 3;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         to_value(self).map(Some)
     }
@@ -391,6 +392,71 @@ impl Resource for AreaExtras {
     const NAME: &'static str = "fromsoft.area_extras";
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         to_value(self).map(Some)
+    }
+}
+
+/// How one draw-param group's value set was chosen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum SetChosen {
+    /// The value ID most of the area's parts name for the group (their graphics config; the lowest on a tie).
+    ByParts,
+    /// The group stores one value set only.
+    OnlySet,
+    /// No part names an ID for the group and it stores several: the set of value ID 0.
+    ZeroId,
+}
+
+/// One field of a draw-param group at the chosen value set, as stored: its key and name, the value, and the time of day
+/// stored with it (version 5 files).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DrawField {
+    pub key: String,
+    pub name: String,
+    pub value: crate::gparam::Value,
+    pub time: Option<f32>,
+}
+
+/// One draw-param group (`LightSet ParamEditor`, `FogParamEditor`, `Tone Map[Yebis]`) at the value set the area's parts
+/// name.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DrawGroup {
+    pub key: String,
+    pub name: String,
+    /// The value ID of the set read, and why it was the one.
+    pub id: i32,
+    pub chosen: SetChosen,
+    pub fields: Vec<DrawField>,
+}
+
+impl DrawGroup {
+    /// The value of the field with key `key`.
+    pub fn value(&self, key: &str) -> Option<&crate::gparam::Value> {
+        self.fields.iter().find(|f| f.key == key).map(|f| &f.value)
+    }
+}
+
+/// The area's graphics environment as its draw-param file stores it (`fromsoft.draw_param`, a resource): the groups at
+/// the value sets the area's parts name. The file is the caller's choice ([`crate::sekiro::DrawParams`]); which sets
+/// are read, and what is not, is in the read's notices. The meaning of the fields (units, the sun's angle convention)
+/// is `lower-fromsoft-environment`'s.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DrawParam {
+    /// The file's stem (`m11_01_0720`).
+    pub file: String,
+    /// The file's GPARAM version.
+    pub version: u32,
+    pub groups: Vec<DrawGroup>,
+}
+impl Resource for DrawParam {
+    const NAME: &'static str = "fromsoft.draw_param";
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        to_value(self).map(Some)
+    }
+}
+impl DrawParam {
+    /// The group with key `key`.
+    pub fn group(&self, key: &str) -> Option<&DrawGroup> {
+        self.groups.iter().find(|g| g.key == key)
     }
 }
 

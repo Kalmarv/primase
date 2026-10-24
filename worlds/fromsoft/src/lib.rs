@@ -8,6 +8,7 @@ mod elden;
 pub mod emevd;
 pub mod flver;
 pub mod game;
+pub mod gparam;
 mod keys;
 pub mod matbin;
 pub mod materials;

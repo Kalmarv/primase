@@ -1,12 +1,15 @@
 use crate::{Archive, Binder, Result, dcx::Decoder, invalid, materials::stem, tpf::Package};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 fn package_stem(path: &str) -> String {
     let lower = crate::names::fold(path);
     stem(lower.strip_suffix(".dcx").unwrap_or(&lower))
 }
 pub(super) enum Location {
     Split(String),
-    Inline(Vec<u8>),
+    /// The DDS as the package stored it, shared with the payloads a load takes from it (the catalog outlives the
+    /// load, so a copy made there is held twice until the read ends).
+    Inline(Arc<[u8]>),
 }
 #[derive(Default)]
 pub(super) struct Catalog {
@@ -55,7 +58,7 @@ impl Catalog {
         for t in Package::read(bytes)?.textures {
             self.entries
                 .entry(crate::names::fold(&t.name))
-                .or_insert(Location::Inline(t.dds));
+                .or_insert_with(|| Location::Inline(t.dds.into()));
         }
         Ok(())
     }
@@ -70,7 +73,7 @@ impl Catalog {
         for name in wanted {
             match self.entries.get(name) {
                 Some(Location::Inline(bytes)) => {
-                    out.insert(name.clone(), bytes.as_slice().into());
+                    out.insert(name.clone(), Arc::clone(bytes));
                 }
                 Some(Location::Split(path)) => {
                     groups.entry(path).or_default().insert(name);
