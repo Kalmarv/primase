@@ -105,7 +105,7 @@ fn what_is_not_established_is_refused() {
     let mut under = body(1, 0, None, one, b"");
     under[13..17].copy_from_slice(&4i32.to_le_bytes());
     assert!(matches!(MeshShape::parse(&under), Err(Error::Size { .. })));
-    assert!(matches!(MeshShape::parse(&[1, 0, 0]), Err(Error::Short { .. })));
+    assert!(matches!(MeshShape::parse(&[1, 0, 0]), Err(Error::Short(_))));
 }
 
 /// Two real MeshShapes of the large forge (Riders Republic build 25394987): the Board's and VansPark's. Same ten

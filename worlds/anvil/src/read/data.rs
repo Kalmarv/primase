@@ -20,7 +20,10 @@
     clippy::cast_possible_truncation
 )]
 
+use primase_bytes::{Field, FieldError, View};
 use primase_compress::{Decompressor, Zstd};
+
+use crate::read::fields::LE;
 
 /// A data block's first bytes.
 pub const BLOCK_MAGIC: u64 = 0x1004_FA99_57FB_AA33;
@@ -69,12 +72,10 @@ pub enum Error {
         #[source]
         source: primase_compress::Error,
     },
-    #[error("{what}: shorter than its layout ({have} of {need} bytes)")]
-    Short {
-        what: &'static str,
-        have: usize,
-        need: usize,
-    },
+    #[error("{0}")]
+    Short(#[from] FieldError),
+    #[error("{0}: sizes past the address space")]
+    Overflow(&'static str),
     #[error("the entry has {0} bytes after its two blocks")]
     Trailing(usize),
     #[error("resource: {0}")]
@@ -135,74 +136,29 @@ pub struct Resource {
     pub body: Vec<u8>,
 }
 
-fn take<'a>(bytes: &'a [u8], at: usize, n: usize, what: &'static str) -> Result<&'a [u8], Error> {
-    let end = at.checked_add(n).ok_or(Error::Short {
-        what,
-        have: bytes.len(),
-        need: usize::MAX,
-    })?;
-    bytes.get(at..end).ok_or(Error::Short {
-        what,
-        have: bytes.len(),
-        need: end,
-    })
-}
-fn u16_at(b: &[u8], at: usize, what: &'static str) -> Result<u16, Error> {
-    Ok(u16::from_le_bytes(take(b, at, 2, what)?.try_into().map_err(
-        |_| Error::Short {
-            what,
-            have: 0,
-            need: 2,
-        },
-    )?))
-}
-fn u32_at(b: &[u8], at: usize, what: &'static str) -> Result<u32, Error> {
-    Ok(u32::from_le_bytes(take(b, at, 4, what)?.try_into().map_err(
-        |_| Error::Short {
-            what,
-            have: 0,
-            need: 4,
-        },
-    )?))
-}
-fn u64_at(b: &[u8], at: usize, what: &'static str) -> Result<u64, Error> {
-    Ok(u64::from_le_bytes(take(b, at, 8, what)?.try_into().map_err(
-        |_| Error::Short {
-            what,
-            have: 0,
-            need: 8,
-        },
-    )?))
-}
-
 /// The block at `at` in `bytes`, checked and decoded, and where the next one starts. `max_decoded` bounds the decoded
 /// size its chunks may declare in all.
 pub fn read_block(bytes: &[u8], at: usize, max_decoded: usize) -> Result<(Block, usize), Error> {
-    let magic = u64_at(bytes, at, "block magic")?;
+    let magic = View::new(bytes).u64(at, LE).field("block magic")?;
     if magic != BLOCK_MAGIC {
         return Err(Error::Magic { at, found: magic });
     }
-    let short = |what| Error::Short {
-        what,
-        have: bytes.len(),
-        need: usize::MAX,
-    };
-    let info = |off: usize| at.checked_add(off).ok_or(short("block"));
-    let version = u16_at(bytes, info(8)?, "compression version")?;
+    // an offset past the address space is past the data: its read is refused
+    let info = |off: usize| at.saturating_add(off);
+    let overflow = Error::Overflow;
+    let version = View::new(bytes).u16(info(8), LE).field("compression version")?;
     if version != VERSION {
         return Err(Error::Version { at, version });
     }
-    let algorithm = *take(bytes, info(10)?, 1, "compression algorithm")?
-        .first()
-        .ok_or(short("compression algorithm"))?;
+    let algorithm = View::new(bytes).u8(info(10)).field("compression algorithm")?;
     if algorithm != ALGORITHM_ZSTD {
         return Err(Error::Algorithm { at, algorithm });
     }
     let unknown = [
-        u16_at(bytes, info(11)?, "compression info")?,
-        u16_at(bytes, info(13)?, "compression info")?,
+        View::new(bytes).u16(info(11), LE).field("compression info")?,
+        View::new(bytes).u16(info(13), LE).field("compression info")?,
     ];
-    let count = u32_at(bytes, info(15)?, "chunk count")?;
+    let count = View::new(bytes).u32(info(15), LE).field("chunk count")?;
     let n = usize::try_from(count).map_err(|_| Error::Chunks {
         at,
         count,
@@ -216,7 +172,7 @@ pub fn read_block(bytes: &[u8], at: usize, max_decoded: usize) -> Result<(Block,
         });
     }
     // every chunk needs 8 bytes of sizes and 4 of checksum: a count the bytes can't hold is refused before allocating
-    let tables = n.checked_mul(12).ok_or(short("chunk table"))?;
+    let tables = n.checked_mul(12).ok_or(overflow("chunk table"))?;
     if tables > bytes.len().saturating_sub(at) {
         return Err(Error::Chunks {
             at,
@@ -227,15 +183,13 @@ pub fn read_block(bytes: &[u8], at: usize, max_decoded: usize) -> Result<(Block,
     let mut chunks = Vec::with_capacity(n);
     let mut total = 0usize;
     for k in 0..n {
-        let pair = info(19)?
-            .checked_add(k.checked_mul(8).ok_or(short("chunk table"))?)
-            .ok_or(short("chunk table"))?;
-        let decoded_size = u32_at(bytes, pair, "chunk decoded size")?;
-        let stored_size = u32_at(
-            bytes,
-            pair.checked_add(4).ok_or(short("chunk table"))?,
-            "chunk stored size",
-        )?;
+        let pair = info(19)
+            .checked_add(k.checked_mul(8).ok_or(overflow("chunk table"))?)
+            .ok_or(overflow("chunk table"))?;
+        let decoded_size = View::new(bytes).u32(pair, LE).field("chunk decoded size")?;
+        let stored_size = View::new(bytes)
+            .u32(pair.checked_add(4).ok_or(overflow("chunk table"))?, LE)
+            .field("chunk stored size")?;
         let decoded = usize::try_from(decoded_size).map_err(|_| Error::Size {
             at,
             chunk: k,
@@ -243,7 +197,7 @@ pub fn read_block(bytes: &[u8], at: usize, max_decoded: usize) -> Result<(Block,
             decoded: decoded_size,
             why: "decoded size past this machine",
         })?;
-        total = total.checked_add(decoded).ok_or(short("decoded sizes"))?;
+        total = total.checked_add(decoded).ok_or(overflow("decoded sizes"))?;
         if total > max_decoded {
             return Err(Error::Size {
                 at,
@@ -261,10 +215,10 @@ pub fn read_block(bytes: &[u8], at: usize, max_decoded: usize) -> Result<(Block,
     }
     let mut data = Vec::new();
     data.try_reserve_exact(total)
-        .map_err(|_| short("decoded bytes"))?;
-    let mut cursor = info(19)?
-        .checked_add(n.checked_mul(8).ok_or(short("chunk table"))?)
-        .ok_or(short("chunk table"))?;
+        .map_err(|_| overflow("decoded bytes"))?;
+    let mut cursor = info(19)
+        .checked_add(n.checked_mul(8).ok_or(overflow("chunk table"))?)
+        .ok_or(overflow("chunk table"))?;
     for (k, chunk) in chunks.iter_mut().enumerate() {
         let size = |why| Error::Size {
             at,
@@ -273,13 +227,15 @@ pub fn read_block(bytes: &[u8], at: usize, max_decoded: usize) -> Result<(Block,
             decoded: chunk.decoded_size,
             why,
         };
-        chunk.checksum = u32_at(bytes, cursor, "chunk checksum")?;
-        let from = cursor.checked_add(4).ok_or(short("chunk"))?;
+        chunk.checksum = View::new(bytes).u32(cursor, LE).field("chunk checksum")?;
+        let from = cursor.checked_add(4).ok_or(overflow("chunk"))?;
         let stored_len =
             usize::try_from(chunk.stored_size).map_err(|_| size("stored size past this machine"))?;
         let decoded =
             usize::try_from(chunk.decoded_size).map_err(|_| size("decoded size past this machine"))?;
-        let stored = take(bytes, from, stored_len, "chunk stored bytes")?;
+        let stored = View::new(bytes)
+            .slice(from, stored_len)
+            .field("chunk stored bytes")?;
         let computed = primase_hash::adler32(CHECKSUM_INIT, stored);
         if computed != chunk.checksum {
             return Err(Error::Checksum {
@@ -316,11 +272,8 @@ pub fn read_block(bytes: &[u8], at: usize, max_decoded: usize) -> Result<(Block,
 pub fn read_entry(payload: &[u8], max_decoded: usize) -> Result<Entry, Error> {
     let (metadata, next) = read_block(payload, 0, max_decoded)?;
     let (resource, end) = read_block(payload, next, max_decoded)?;
-    let rest = payload.len().checked_sub(end).ok_or(Error::Short {
-        what: "entry",
-        have: payload.len(),
-        need: end,
-    })?;
+    primase_bytes::checked_span(end, 0, 1, payload.len()).field("entry")?;
+    let rest = payload.len().saturating_sub(end);
     if rest != 0 {
         return Err(Error::Trailing(rest));
     }
@@ -333,30 +286,40 @@ impl Resource {
     /// extension u32, the body), which must end the block exactly.
     pub fn parse(data: &[u8]) -> Result<Resource, Error> {
         let bad = |m: String| Error::Resource(m);
-        let type_id = u32_at(data, 0, "resource type")?;
-        let payload_len = u32_at(data, 4, "resource payload length")?;
-        let name_len = u32_at(data, 8, "resource name length")?;
+        let type_id = View::new(data).u32(0, LE).field("resource type")?;
+        let payload_len = View::new(data).u32(4, LE).field("resource payload length")?;
+        let name_len = View::new(data).u32(8, LE).field("resource name length")?;
         let name_len = usize::try_from(name_len).map_err(|_| bad("name length past this machine".into()))?;
-        let name = take(data, 12, name_len, "resource name")?;
+        let name = View::new(data).slice(12, name_len).field("resource name")?;
         let name = String::from_utf8(name.to_vec()).map_err(|_| bad("name is not UTF-8".into()))?;
         let header_at = 12usize
             .checked_add(name_len)
             .ok_or(bad("name length overflows".into()))?;
-        let file_header = *take(data, header_at, 1, "resource file header")?
+        let file_header = *View::new(data)
+            .slice(header_at, 1)
+            .field("resource file header")?
             .first()
             .ok_or(bad("no file header byte".into()))?;
         let mut payload_at = header_at.checked_add(1).ok_or(bad("offset overflows".into()))?;
         let mut header_rows = Vec::new();
         if file_header == 1 {
-            if take(data, payload_at, 3, "resource header table")? != [2, 0, 0] {
+            if View::new(data)
+                .slice(payload_at, 3)
+                .field("resource header table")?
+                != [2, 0, 0]
+            {
                 return Err(bad("file header 1 without the table's bytes 02 00 00".into()));
             }
             let count_at = payload_at.checked_add(3).ok_or(bad("offset overflows".into()))?;
-            let rows = usize::try_from(u32_at(data, count_at, "resource header table rows")?)
-                .map_err(|_| bad("row count past this machine".into()))?;
+            let rows = usize::try_from(
+                View::new(data)
+                    .u32(count_at, LE)
+                    .field("resource header table rows")?,
+            )
+            .map_err(|_| bad("row count past this machine".into()))?;
             let mut at = count_at.checked_add(4).ok_or(bad("offset overflows".into()))?;
             for _ in 0..rows.min(data.len()) {
-                let row = take(data, at, 12, "resource header table row")?;
+                let row = View::new(data).slice(at, 12).field("resource header table row")?;
                 header_rows.push(<[u8; 12]>::try_from(row).map_err(|_| bad("a row of 12 bytes".into()))?);
                 at = at.checked_add(12).ok_or(bad("offset overflows".into()))?;
             }
@@ -379,12 +342,13 @@ impl Resource {
                 data.len()
             )));
         }
-        let class_id = u64_at(data, payload_at, "resource class id")?;
-        let extension = u32_at(
-            data,
-            payload_at.checked_add(8).ok_or(bad("offset overflows".into()))?,
-            "resource extension",
-        )?;
+        let class_id = View::new(data).u64(payload_at, LE).field("resource class id")?;
+        let extension = View::new(data)
+            .u32(
+                payload_at.checked_add(8).ok_or(bad("offset overflows".into()))?,
+                LE,
+            )
+            .field("resource extension")?;
         let body_at = payload_at.checked_add(12).ok_or(bad("offset overflows".into()))?;
         let body = data
             .get(body_at..)

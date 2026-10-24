@@ -23,7 +23,9 @@
     clippy::cast_possible_truncation
 )]
 
+use crate::read::fields::LE;
 use crate::read::reference;
+use primase_bytes::{Field, FieldError, View};
 
 /// A record type: equals the CRC-32 of the ASCII string `MeshShape` (the name a label).
 pub const MESH_SHAPE: u32 = 0xB22B_3E61;
@@ -39,12 +41,8 @@ pub const SECTION_HEADER: usize = 8;
 /// Why a MeshShape body can't be read.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("MeshShape body: {have} bytes, shorter than its {need}-byte {what}")]
-    Short {
-        what: &'static str,
-        have: usize,
-        need: usize,
-    },
+    #[error("MeshShape body: {0}")]
+    Short(#[from] FieldError),
     #[error("MeshShape prefix: byte {found} at {at}, not {read}")]
     Prefix {
         at: usize,
@@ -137,22 +135,10 @@ pub struct Surfaces {
     pub floats: [f32; 8],
 }
 
-fn field<const N: usize>(body: &[u8], at: usize, what: &'static str) -> Result<[u8; N], Error> {
-    let short = || Error::Short {
-        what,
-        have: body.len(),
-        need: at.saturating_add(N),
-    };
-    body.get(at..at.checked_add(N).ok_or_else(short)?)
-        .ok_or_else(short)?
-        .try_into()
-        .map_err(|_| short())
-}
-
 impl MeshShape {
     /// A MeshShape resource's body (its [`crate::read::data::Resource::body`]).
     pub fn parse(body: &[u8]) -> Result<MeshShape, Error> {
-        let [first, second, z0, z1, z2] = field::<5>(body, 0, "prefix")?;
+        let [first, second, z0, z1, z2] = View::new(body).array::<5>(0).field("prefix")?;
         if first != 1 {
             return Err(Error::Prefix {
                 at: 0,
@@ -174,7 +160,7 @@ impl MeshShape {
                 read: "0",
             });
         }
-        let run_length = u32::from_le_bytes(field(body, 5, "prefix")?);
+        let run_length = View::new(body).u32(5, LE).field("prefix")?;
         let past = || Error::Run {
             length: run_length,
             body: body.len(),
@@ -188,7 +174,7 @@ impl MeshShape {
         let mut at = PREFIX;
         while at < run_end {
             let index = sections.len();
-            let header: [u8; SECTION_HEADER] = field(body, at, "section header")?;
+            let header: [u8; SECTION_HEADER] = View::new(body).array(at).field("section header")?;
             let [k0, k1, m0, m1, s0, s1, s2, s3] = header;
             let kind = u16::from_le_bytes([k0, k1]);
             let marker = u16::from_le_bytes([m0, m1]);

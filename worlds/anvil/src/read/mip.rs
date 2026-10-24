@@ -13,6 +13,9 @@
     clippy::cast_possible_truncation
 )]
 
+use crate::read::fields::LE;
+use primase_bytes::{Cursor, Field, FieldError};
+
 /// A record type: equals the CRC-32 of the ASCII string `CompiledMip` (the name a label).
 pub const COMPILED_MIP: u32 = 0x1D4B_87A3;
 /// The bytes around the image: the flag and length before it, the zero byte, parent and level after.
@@ -21,8 +24,8 @@ const ENVELOPE: usize = 5 + 13;
 /// Why a CompiledMip body can't be read.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("CompiledMip body: {have} bytes, shorter than its {what}")]
-    Short { what: &'static str, have: usize },
+    #[error("CompiledMip body: {0}")]
+    Short(#[from] FieldError),
     #[error("CompiledMip {what}: {found}, only {read} is read (another value isn't established)")]
     Value { what: &'static str, found: u8, read: u8 },
     #[error("CompiledMip body: {have} bytes, but its image of {image} bytes closes it at {closes}")]
@@ -48,20 +51,16 @@ impl StoredMip {
     /// The body parsed.
     pub fn parse(body: &[u8]) -> Result<StoredMip, Error> {
         let have = body.len();
-        let [flag, a, b, c, d, rest @ ..] = body else {
-            return Err(Error::Short {
-                what: "flag and image length",
-                have,
-            });
-        };
-        if *flag != 1 {
+        let mut c = Cursor::new(body);
+        let flag = c.u8().field("flag and image length")?;
+        if flag != 1 {
             return Err(Error::Value {
                 what: "flag",
-                found: *flag,
+                found: flag,
                 read: 1,
             });
         }
-        let length = u32::from_le_bytes([*a, *b, *c, *d]);
+        let length = c.u32(LE).field("flag and image length")?;
         let image = usize::try_from(length).unwrap_or(usize::MAX);
         let closes = image.saturating_add(ENVELOPE);
         if closes != have {
@@ -71,32 +70,21 @@ impl StoredMip {
                 have,
             });
         }
-        let (image, after) = rest
-            .split_at_checked(image)
-            .ok_or(Error::Short { what: "image", have })?;
-        let [zero, after @ ..] = after else {
-            return Err(Error::Short {
-                what: "zero byte",
-                have,
-            });
-        };
-        if *zero != 0 {
+        let image = c.take(image).field("image")?;
+        let zero = c.u8().field("zero byte")?;
+        if zero != 0 {
             return Err(Error::Value {
                 what: "byte after the image",
-                found: *zero,
+                found: zero,
                 read: 0,
             });
         }
-        let (parent, level) = after
-            .split_first_chunk::<8>()
-            .ok_or(Error::Short { what: "parent", have })?;
-        let level: &[u8; 4] = level
-            .try_into()
-            .map_err(|_| Error::Short { what: "level", have })?;
+        let parent = c.u64(LE).field("parent")?;
+        let level = c.u32(LE).field("level")?;
         Ok(StoredMip {
             image: image.to_vec(),
-            parent: u64::from_le_bytes(*parent),
-            level: u32::from_le_bytes(*level),
+            parent,
+            level,
         })
     }
 }
@@ -145,6 +133,6 @@ mod tests {
             StoredMip::parse(long.get(..10).expect("ten")),
             Err(Error::Closure { .. })
         ));
-        assert!(matches!(StoredMip::parse(&[1, 0]), Err(Error::Short { .. })));
+        assert!(matches!(StoredMip::parse(&[1, 0]), Err(Error::Short(_))));
     }
 }

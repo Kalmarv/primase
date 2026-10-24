@@ -26,6 +26,8 @@
 use primase_core::frame::SourceFrame;
 
 use crate::components::{AnvilFloorHeight, FloorBlock};
+use crate::read::fields::LE;
+use primase_bytes::{Field, FieldError, View};
 
 /// A record type: the CRC-32 of `FloorHeightData`.
 pub const FLOOR_HEIGHT_DATA: u32 = 0x92AD_A771;
@@ -40,6 +42,8 @@ const TRAILER: usize = 51;
 pub enum Error {
     #[error("FloorHeightData body: {0} bytes, fewer than its header and trailer")]
     Short(usize),
+    #[error("FloorHeightData {0}")]
+    Read(#[from] FieldError),
     #[error("FloorHeightData {what}: {found:#x}, not {read}")]
     Value {
         what: &'static str,
@@ -80,18 +84,6 @@ pub struct StoredFloorHeight {
     pub trailer: Trailer,
 }
 
-fn f32_at(b: &[u8], at: usize) -> f32 {
-    let mut w = [0u8; 4];
-    if let Some(s) = at.checked_add(4).and_then(|end| b.get(at..end)) {
-        w.copy_from_slice(s);
-    }
-    f32::from_le_bytes(w)
-}
-
-fn u32_at(b: &[u8], at: usize) -> u32 {
-    f32_at(b, at).to_bits()
-}
-
 impl StoredFloorHeight {
     pub fn parse(body: &[u8]) -> Result<StoredFloorHeight, Error> {
         let data = body
@@ -106,18 +98,45 @@ impl StoredFloorHeight {
                 Err(Error::Value { what, found, read })
             }
         };
-        value("head", u64::from(u32_at(body, 0)), 1, "01 00 00 00")?;
-        value("byte 8", u64::from(*body.get(8).unwrap_or(&0)), 0, "0")?;
+        value(
+            "head",
+            u64::from(View::new(body).u32(0, LE).field("head")?),
+            1,
+            "01 00 00 00",
+        )?;
+        value(
+            "byte 8",
+            u64::from(View::new(body).u8(8).field("byte 8")?),
+            0,
+            "0",
+        )?;
         let t = &body.get(HEAD.saturating_add(data)..).unwrap_or_default();
-        value("trailer word 0", u64::from(u32_at(t, 0)), 0, "0")?;
-        value("trailer word 24", u64::from(u32_at(t, 24)), 0, "0")?;
-        let cells = [u32_at(t, 28), u32_at(t, 32)];
+        value(
+            "trailer word 0",
+            u64::from(View::new(t).u32(0, LE).field("trailer word 0")?),
+            0,
+            "0",
+        )?;
+        value(
+            "trailer word 24",
+            u64::from(View::new(t).u32(24, LE).field("trailer word 24")?),
+            0,
+            "0",
+        )?;
+        let cells = [
+            View::new(t).u32(28, LE).field("trailer cells")?,
+            View::new(t).u32(32, LE).field("trailer cells")?,
+        ];
         let mut rest = [0u8; 15];
         rest.copy_from_slice(t.get(36..).unwrap_or_default());
         let trailer = Trailer {
-            scale: f32_at(t, 4),
-            unknown: f32_at(t, 8),
-            origin: [f32_at(t, 12), f32_at(t, 16), f32_at(t, 20)],
+            scale: View::new(t).f32(4, LE).field("trailer scale")?,
+            unknown: View::new(t).f32(8, LE).field("trailer word 8")?,
+            origin: [
+                View::new(t).f32(12, LE).field("trailer origin")?,
+                View::new(t).f32(16, LE).field("trailer origin")?,
+                View::new(t).f32(20, LE).field("trailer origin")?,
+            ],
             cells,
             rest,
         };
@@ -149,7 +168,7 @@ impl StoredFloorHeight {
             })
             .collect();
         Ok(StoredFloorHeight {
-            cell: f32_at(body, 4),
+            cell: View::new(body).f32(4, LE).field("cell side")?,
             blocks,
             trailer,
         })
