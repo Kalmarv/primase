@@ -8,11 +8,11 @@
 //! ([`ProgramProbe::material`]) are as the binding writes them, and the caller may set them ([`ProgramProbe::set_words`]):
 //! the program reads them as named fields or through `SAT_MtdParam` ([`MaterialForm`]). The engine's own textures read as
 //! the bake reads them ([`ProgramProbe::engine`]). The inputs are frozen as stated in [`ProgramProbe::frozen`], the
-//! texture coordinate sets all the probe's coordinate.
+//! texture coordinate sets take the probe's coordinate unless explicitly overridden by ProgramProbe::set_input.
 use std::collections::BTreeMap;
 
 use primase_core::World;
-use primase_core::shader::{ConstantRole, OutputBinding, ShaderFormat, TextureSource};
+use primase_core::shader::{ConstantRole, OutputBinding, ShaderFormat, StageBinding, TextureSource};
 use primase_shader::output_uses::bind_output_uses;
 use primase_shader_exec::evaluate::Constants;
 use primase_shader_exec::{Layout, PixelShader, ProgramShader, Sampler};
@@ -69,6 +69,9 @@ pub struct ProgramProbe {
     pub engine_fields: Vec<MaterialWords>,
     /// The binding's outputs, by role and target.
     pub outputs: Vec<OutputBinding>,
+    /// The resolved roles, including Unknown reasons. A word in `material` is not by itself evidence that
+    /// the engine supplies it from the material; callers designing scene controls must inspect this binding.
+    pub binding: StageBinding,
     /// The engine's own textures ([`ProgramTexture::Engine`]: the decal textures of the `_Paint` programs), by register,
     /// each the value the bake reads it as (the binding's default, its reason counted in [`ProgramProbe::policies`]):
     /// the answer a caller gives them, the rest of the program's textures being the material's.
@@ -280,6 +283,11 @@ impl ProgramProbe {
             form,
             material: words,
             engine_fields,
+            // the binding as resolved, with the output uses the discard and the blend show bound as the probe reads them
+            binding: StageBinding {
+                outputs: outputs.clone(),
+                ..resolution.stage
+            },
             outputs,
             engine,
             frozen,
@@ -311,8 +319,9 @@ impl ProgramProbe {
             .collect()
     }
 
-    /// Freezes the used input `name``index` to `value` instead (a single-lane coordinate a vertex stage passes, to see
-    /// whether the program reads it).
+    /// Freezes the used input `name``index` to `value` instead. This explicitly overrides the coordinate supplied
+    /// to `pixel` for these lanes; other coordinate inputs still take the probe coordinate. Values are in semantic
+    /// lane order, including when two semantics occupy different lanes of one register.
     pub fn set_input(&mut self, name: &str, index: u32, value: [f32; 4]) -> Result<()> {
         let v = self
             .interface()
@@ -325,11 +334,13 @@ impl ProgramProbe {
         for (k, c) in components.into_iter().enumerate() {
             self.registers[d3d.register as usize][c] = value[k].to_bits();
         }
+        self.uv
+            .retain(|lane| lane.register != d3d.register as usize || d3d.mask & (1 << lane.component) == 0);
         Ok(())
     }
 
-    /// One pixel at the coordinate `uv` (every coordinate set), its texture reads answered by `sampler`: each output
-    /// register's four lanes, and whether the program discarded the pixel.
+    /// One pixel at the coordinate `uv` (every coordinate set except explicit `set_input` overrides), its texture
+    /// reads answered by `sampler`: each output register's four lanes, and whether the program discarded the pixel.
     pub fn pixel(&self, uv: [f32; 2], sampler: &mut dyn Sampler) -> Result<(Vec<[f32; 4]>, bool)> {
         let mut registers = self.registers.clone();
         for lane in &self.uv {
@@ -349,5 +360,55 @@ impl ProgramProbe {
             run.outputs.iter().map(|o| o.map(f32::from_bits)).collect(),
             run.discarded,
         ))
+    }
+}
+
+#[cfg(test)]
+mod control_tests {
+    use super::*;
+
+    // Original SDK 10.0.26100.0 fxc ps_5_0 fixture, SHA256:
+    // 25ce41923b1fa1e04dca67777c454ed3eed6e516bac79e1c7ae186177090e959
+    const INPUTS: &[u8] = include_bytes!("../../tests/fixtures/probe_inputs.dxbc");
+
+    fn pixel(probe: &ProgramProbe, uv: [f32; 2]) -> [f32; 4] {
+        let mut no_textures = |_: primase_shader_exec::Sample| Err("fixture has no texture".to_owned());
+        let (outputs, discarded) = probe.pixel(uv, &mut no_textures).expect("pixel");
+        assert!(!discarded);
+        outputs[0]
+    }
+
+    #[test]
+    fn explicit_coordinates_survive_pixel_without_overriding_other_semantics() {
+        let mut probe = ProgramProbe::new(INPUTS).expect("probe");
+        assert_eq!(pixel(&probe, [0.25, 0.5]), [0.25, 0.5, 0.25, 0.5]);
+        probe
+            .set_input("texcoord", 1, [0.75, 1., 0., 0.])
+            .expect("override");
+        assert_eq!(pixel(&probe, [0.125, 0.25]), [0.125, 0.25, 0.75, 1.]);
+        assert_eq!(pixel(&probe, [0.5, 0.125]), [0.5, 0.125, 0.75, 1.]);
+        probe
+            .set_input("TEXCOORD", 1, [0.25, 0.5, 0., 0.])
+            .expect("replace");
+        assert_eq!(pixel(&probe, [0.5, 0.125]), [0.5, 0.125, 0.25, 0.5]);
+        assert!(probe.set_input("TEXCOORD", 9, [0.; 4]).is_err());
+    }
+
+    #[test]
+    fn setting_a_probe_word_does_not_claim_a_material_role() {
+        let mut probe = ProgramProbe::new(INPUTS).expect("probe");
+        let binding = probe.binding.clone();
+        let role = &binding
+            .constants
+            .iter()
+            .find(|c| c.name.as_deref() == Some("FC_GlowScale"))
+            .expect("field")
+            .role;
+        assert!(matches!(role, ConstantRole::Unknown { why } if !why.is_empty()));
+        probe
+            .set_words(0, 0, &[1f32.to_bits(); 4])
+            .expect("designed answer");
+        assert_eq!(pixel(&probe, [0.25, 0.5]), [1.25, 1.5, 1.25, 1.5]);
+        assert_eq!(probe.binding, binding);
     }
 }
