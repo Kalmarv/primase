@@ -155,10 +155,13 @@ mod tests {
             assert!(e.to_string().contains("not finite"), "{e}");
             assert!(moved(a, b).is_err());
         }
-        assert_eq!(units(1., 1. + f32::EPSILON), Ok(1.));
+        // below one in magnitude a difference is in units of one; above, of the larger magnitude (powers of two, so
+        // each quotient is exact)
+        assert_eq!(units(0.5, 0.5 + f32::EPSILON), Ok(1.));
         assert_eq!(units(0., 0.), Ok(0.));
-        assert_eq!(units(4., 4. + 4. * f32::EPSILON), Ok(1.));
-        assert_eq!(moved(1., 1. + 64. * f32::EPSILON), Ok(false));
-        assert_eq!(moved(1., 1. + 65. * f32::EPSILON), Ok(true));
+        assert_eq!(units(-2., 2.), Ok(2. / f32::EPSILON));
+        assert_eq!(units(0.25, 0.25 + 64. * f32::EPSILON), Ok(64.));
+        assert_eq!(moved(0.25, 0.25 + 64. * f32::EPSILON), Ok(false));
+        assert_eq!(moved(0.25, 0.25 + 65. * f32::EPSILON), Ok(true));
     }
 }
