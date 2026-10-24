@@ -22,9 +22,20 @@ use crate::animator::{BlendNode, UnityAnimatorController, name_hash};
 use crate::{Error, Result, invalid};
 
 /// The values of a controller's parameters, by the CRC-32 of the parameter's name, as the controller's blend trees and
-/// transitions name them.
+/// transitions name them. A value is finite: a NaN or an infinity is refused where it is set or read from the controller,
+/// so a blend tree never compares against one.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Parameters(BTreeMap<u32, f32>);
+
+fn finite(what: impl std::fmt::Display, value: f32) -> Result<f32> {
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(invalid(format!(
+            "parameter {what} set to {value}, which is not a finite number"
+        )))
+    }
+}
 
 impl Parameters {
     /// Every parameter at its default (a bool or a trigger as 0 or 1, an int as its value).
@@ -40,7 +51,7 @@ impl Parameters {
                 k => return Err(Error::Unsupported(format!("a parameter of kind {k}"))),
             }
             .ok_or_else(|| invalid(format!("a parameter's default {at} is missing")))?;
-            out.insert(p.id, v);
+            out.insert(p.id, finite(p.id, v)?);
         }
         Ok(Parameters(out))
     }
@@ -50,7 +61,7 @@ impl Parameters {
         let id = name_hash(name);
         match self.0.get_mut(&id) {
             Some(v) => {
-                *v = value;
+                *v = finite(format!("{name:?}"), value)?;
                 Ok(())
             }
             None => Err(invalid(format!("the controller has no parameter {name:?}"))),
@@ -61,7 +72,7 @@ impl Parameters {
     pub fn set_by_id(&mut self, id: u32, value: f32) -> Result<()> {
         match self.0.get_mut(&id) {
             Some(v) => {
-                *v = value;
+                *v = finite(id, value)?;
                 Ok(())
             }
             None => Err(invalid(format!("the controller has no parameter {id}"))),
@@ -130,6 +141,9 @@ fn node_weights(
 fn one_dimensional(node: &BlendNode, parameters: &Parameters) -> Result<Vec<f64>> {
     let n = node.children.len();
     let t = &node.thresholds;
+    if n == 0 {
+        return Err(invalid("a 1D blend tree of no children"));
+    }
     if t.len() != n {
         return Err(invalid(format!(
             "a 1D blend tree of {n} children with {} thresholds",
@@ -150,10 +164,11 @@ fn one_dimensional(node: &BlendNode, parameters: &Parameters) -> Result<Vec<f64>
     } else {
         // the last child whose threshold is at or below the value, then the next one (a larger threshold, else the value
         // was at or past the last)
-        let i = t
-            .iter()
-            .rposition(|&x| x <= v)
-            .expect("above the first threshold");
+        let i = t.iter().rposition(|&x| x <= v).ok_or_else(|| {
+            invalid(format!(
+                "a 1D blend tree value {v} that is neither at, below nor above its thresholds"
+            ))
+        })?;
         let u = f64::from(v - t[i]) / f64::from(t[i + 1] - t[i]);
         out[i] = 1.0 - u;
         out[i + 1] = u;
@@ -288,6 +303,59 @@ mod tests {
         assert_eq!(child_weights(&tree, &p).unwrap(), [(1, 0.25), (2, 0.75)]);
         assert!(child_weights(&tree, &parameters(&[("a", 0.0), ("b", 0.0)])).is_err());
         assert!(child_weights(&tree, &parameters(&[("a", -1.0), ("b", 2.0)])).is_err());
+    }
+
+    /// A NaN or an infinity is not a parameter value: refused where it is set and where the controller's defaults hold it, and
+    /// a tree handed one anyway (a map made by hand) is an error, not a panic. A tree of no nodes and a 1D node of no
+    /// children are errors too.
+    #[test]
+    fn a_parameter_that_is_not_finite_and_a_tree_with_no_children_are_refused() {
+        let tree = vec![
+            node(0, name_hash("x"), &[1, 2], &[0.0, 1.0], NONE),
+            leaf(5),
+            leaf(6),
+        ];
+        let mut p = parameters(&[("x", 0.5)]);
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert!(p.set("x", bad).is_err() && p.set_by_id(name_hash("x"), bad).is_err());
+            assert_eq!(p.get(name_hash("x")).unwrap(), 0.5);
+        }
+        assert!(child_weights(&tree, &parameters(&[("x", f32::NAN)])).is_err());
+        // the ends hold an infinite value, so the tree itself reads one; it is the parameter that refuses it
+        assert_eq!(
+            child_weights(&tree, &parameters(&[("x", f32::INFINITY)])).unwrap(),
+            [(6, 1.0)]
+        );
+
+        let controller = |default: f32| UnityAnimatorController {
+            controller: crate::components::UnityObject {
+                file: "f".into(),
+                path_id: 1,
+            },
+            name: "c".into(),
+            layers: vec![],
+            state_machines: vec![],
+            parameters: vec![crate::animator::Parameter {
+                id: name_hash("x"),
+                kind: 1,
+                index: 0,
+            }],
+            default_floats: vec![default],
+            default_ints: vec![],
+            default_bools: vec![],
+            clips: vec![],
+            behaviours: vec![],
+            tos: vec![],
+        };
+        assert_eq!(
+            Parameters::defaults(&controller(0.25)).unwrap(),
+            parameters(&[("x", 0.25)])
+        );
+        assert!(Parameters::defaults(&controller(f32::NAN)).is_err());
+        assert!(Parameters::defaults(&controller(f32::INFINITY)).is_err());
+
+        assert!(child_weights(&[], &p).is_err());
+        assert!(one_dimensional(&node(0, name_hash("x"), &[], &[], NONE), &p).is_err());
     }
 
     /// A state of one clip is a tree of one leaf; a leaf with no clip is refused, not played as nothing.
