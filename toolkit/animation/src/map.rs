@@ -25,7 +25,10 @@ pub enum Rests {
     /// The target skeleton's own: the clip plays on the target as on any skeleton.
     Target,
     /// The source skeleton's, as constant channels where they differ: the mapped joints compose to the source's
-    /// model-space pose exactly (the target follows the source).
+    /// model-space pose exactly (the target follows the source). The source's stored rest scales are carried as
+    /// stored, not snapped to 1: Elden Ring's c3000 Havok skeleton holds rest scales off 1 by up to 1.19e-6 (f32
+    /// noise in its reference pose), so a joint keyed from the source's model-space pose, over a chain a clip leaves
+    /// undriven, has scale keys off 1 by up to 1.7e-6 where the clip states none: the source's own data.
     Source,
 }
 
