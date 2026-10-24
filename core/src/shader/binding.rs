@@ -47,6 +47,11 @@ pub enum ViewParameter {
     View,
     Projection,
     ViewProjection,
+    /// The view-projection of a world with the camera at its origin: a program multiplies a world position minus the
+    /// camera's ([`ViewParameter::CameraPosition`]) by it, so it is [`ViewParameter::ViewProjection`] without the camera's
+    /// translation. The program takes the camera position from its own constant, so the two roles are bound together; a
+    /// consumer that feeds the plain matrix here puts the geometry in the wrong place.
+    CameraRelativeViewProjection,
     InverseView,
     InverseProjection,
     InverseViewProjection,
@@ -1060,6 +1065,19 @@ mod tests {
         );
         // a power of 0 is no power
         assert_eq!(ScalarEncoding::power_of(0, 2.0), ScalarEncoding::linear_over(2.0));
+    }
+
+    /// The camera-relative view-projection is a role of its own: a source that states it is not read as the plain matrix.
+    #[test]
+    fn a_camera_relative_view_projection_is_not_the_plain_one() {
+        assert_ne!(
+            ConstantRole::View(ViewParameter::CameraRelativeViewProjection),
+            ConstantRole::View(ViewParameter::ViewProjection)
+        );
+        assert_eq!(
+            serde_json::to_value(ViewParameter::CameraRelativeViewProjection).unwrap(),
+            serde_json::json!("camera_relative_view_projection")
+        );
     }
 
     #[test]
