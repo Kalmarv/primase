@@ -946,8 +946,9 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> 
                     },
                 ]),
                 ("COLOR", 1, _) => InputRole::Stream(SECOND_COLOUR),
-                // the Byte4C members of the layered programs, four floats each; a coordinate pair of integers is another input
-                ("TEXCOORD", n @ 1..=6, _) if v.value.scalar == ScalarType::Float => {
+                // the Byte4C members of the layered programs, four floats each; a coordinate pair of integers, or an effect
+                // program's one or two floats, is another input
+                ("TEXCOORD", n @ 1..=6, _) if v.value.scalar == ScalarType::Float && v.value.width == 4 => {
                     InputRole::Stream(Semantic::Color(n as u8))
                 }
                 // the skinned permutation's joint indices and weights
