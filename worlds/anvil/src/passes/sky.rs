@@ -144,7 +144,7 @@ impl LowerAnvilSky {
         assert_eq!(world.get::<Light>(environment.sun.unwrap()).unwrap().color,[1.0,0.5,0.25]);
         let atmosphere=world.resource::<primase_core::Atmosphere>().unwrap();
         assert_eq!(atmosphere.fog,env.fog);
-        assert!(atmosphere.exposure.is_none(),"no Anvil exposure-unit contract has been established");
+        assert!(atmosphere.exposure.is_none(),"no resolved frame multiplier is available for this look");
     }
     #[test]fn scattering_interpolation_wraps_midnight(){
         let mut source=source();let bright=source.stored.keyframes[0].clone();

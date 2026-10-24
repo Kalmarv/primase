@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 mod bake;
 mod surface;
-pub use surface::{BakeAnvilSurface, BAKE_ANVIL_SURFACE};
+pub use surface::{BakeAnvilSurface, SurfaceSediments, BAKE_ANVIL_SURFACE};
 mod charts;
 mod clips;
 mod decals;

@@ -5,7 +5,7 @@
 //! Input contracts: MAD_Cliffs_TriPlanar (material-spec §27.4 and verify_m17.py), and
 //! MAD_Tex1_UniqueNormalGrad_Triplanar and MAD_OutBorder (their own ps_400000 disassemblies).
 //! Texture/constant roles come from the template's registry bindings, not a second hand-written colour formula.
-//! The shader performs the three projections and normal blending. Unknown varying/constant/resource roles refuse
+//! The shader performs its own mapping and normal blending. Unknown varying/constant/resource roles refuse
 //! that primitive by name. G-buffer class is decoded from the program's output, not inferred from its template name.
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
@@ -21,6 +21,12 @@ use primase_shader_exec::{Execution, Filtering, PixelShader, ProgramShader, Samp
 use crate::components::{AnvilMaterial, AnvilRenderStatus, AnvilShaders, AnvilTextureMap};
 use super::bake::{UnstatedAddress, material_rows};
 
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub enum SurfaceSediments { Omit, Refuse }
+impl Choice for SurfaceSediments {
+    const VALUES:&'static [(&'static str,Self)]=&[("omit",Self::Omit),("refuse",Self::Refuse)];
+}
+
 #[derive(Clone, Debug)]
 pub struct BakeAnvilSurface {
     pub texels_per_metre: f32,
@@ -28,6 +34,7 @@ pub struct BakeAnvilSurface {
     pub max_chart: u32,
     pub max_texels:u64,
     pub terrain_ao: f32,
+    pub sediments: SurfaceSediments,
     pub mip_bias: f32,
     pub camera_distance:f32,
     pub address: UnstatedAddress,
@@ -40,6 +47,7 @@ pub const BAKE_ANVIL_SURFACE: PassSpec = PassSpec {
         OptionSpec::required("max-chart", "256", "maximum triangle chart side including gutters, even, 8 to 2048"),
         OptionSpec::required("max-texels", "16777216", "total atlas texels per pass; four RGBA8 output maps, refused on capacity exhaustion"),
         OptionSpec::required("terrain-ao", "0.5", "stated terrain AO stand-in, 0 to 1"),
+        OptionSpec::choice::<SurfaceSediments>("sediments", "omit terrain sediment blending explicitly, or refuse its unresolved engine views"),
         OptionSpec::required("mip-bias", "0", "engine cb1[41].y at the chart's own footprint"),
         OptionSpec::required("camera-distance", "1000000", "static camera above the primitive centre in source metres; states the distance-dependent detail blend"),
         OptionSpec::choice::<UnstatedAddress>("unstated-address", "explicit sampler assumption or refuse"),
@@ -50,7 +58,7 @@ pub const BAKE_ANVIL_SURFACE: PassSpec = PassSpec {
             max_size: g.required("max-size").parse().map_err(|_| "max-size: expected integer")?,
             max_chart: g.required("max-chart").parse().map_err(|_| "max-chart: expected integer")?,
             max_texels:g.required("max-texels").parse().map_err(|_|"max-texels: expected integer")?,
-            terrain_ao: number("terrain-ao")?, mip_bias: number("mip-bias")?,camera_distance:number("camera-distance")?, address: g.choice("unstated-address") };
+            terrain_ao: number("terrain-ao")?, sediments:g.choice("sediments"), mip_bias: number("mip-bias")?,camera_distance:number("camera-distance")?, address: g.choice("unstated-address") };
         if !out.texels_per_metre.is_finite() || out.texels_per_metre <= 0.0
             || !(32..=8192).contains(&out.max_size) || !out.max_size.is_power_of_two()
             || !(8..=2048).contains(&out.max_chart) || out.max_chart % 2 != 0
@@ -150,6 +158,9 @@ impl BakeAnvilSurface {
         let program = primase_dxbc::lift(bytes).map_err(|e| e.to_string())?;
         let reads = program.constant_reads()?;
         let shader = ProgramShader::new(program).map_err(|e| e.to_string())?;
+        if self.sediments==SurfaceSediments::Refuse && shader.textures().iter().any(|slot|matches!(*slot,13|14|16|20|22)) {
+            return Err("terrain sediment engine views t13/t14/t16/t20/t22 unresolved; caller chose sediments=refuse".into());
+        }
         for input in shader.interface().inputs.iter().filter(|v| v.used) {
             if contract.varying(&input.label.name,input.label.index).is_none() {
                 return Err(format!("unknown surface varying {}{}", input.label.name,input.label.index));
@@ -413,6 +424,7 @@ impl Pass for BakeAnvilSurface {
         ("max-size".into(),self.max_size.to_string()),("max-chart".into(),self.max_chart.to_string()),
         ("max-texels".into(),self.max_texels.to_string()),
         ("terrain-ao".into(),self.terrain_ao.to_string()),("mip-bias".into(),self.mip_bias.to_string()),
+        ("sediments".into(),self.sediments.text().into()),
         ("camera-distance".into(),self.camera_distance.to_string()),
         ("unstated-address".into(),self.address.text().into())])}
     fn may_lack_inputs(&self)->bool {true}
@@ -420,7 +432,7 @@ impl Pass for BakeAnvilSurface {
     fn provides(&self)->&[&'static str] {&[Mesh::NAME,Texture::NAME,PbrMaterial::NAME,VertexColor::NAME,AnvilRenderStatus::NAME,
         crate::components::AnvilSurfaceBake::NAME,Name::NAME,primase_core::shader::ShaderBinding::NAME]}
     fn modifies(&self)->&[&'static str] {&[Mesh::NAME,Instance::NAME,AnvilRenderStatus::NAME]}
-    fn approximates(&self)-> &'static str {"surface atlas at caller density/budget; stated static camera for detail blending; uniform terrain AO, no sediments, stated sampler addressing; static draw without motion"}
+    fn approximates(&self)-> &'static str {"surface atlas at caller density/budget; stated static camera for detail blending; uniform terrain AO, caller-stated sediment omission or refusal, stated sampler addressing; static draw without motion"}
     fn run(&self,world:&mut World,log:&mut PassLog)->Result<(),String> {
         let instances:Vec<_>=world.iter::<Instance>().map(|(e,i)|(e,i.prototype)).collect();
         let mut texels=0u64;
@@ -473,7 +485,7 @@ impl Pass for BakeAnvilSurface {
                             world.insert(m,binding);
                         }
                         world.insert(m,Name(format!("Material {:#x}: placement {} surface bake",material.index_id,entity.index())));
-                        let terrain_notice=if matches!(Contract::of(&material),Some(Contract::Cliffs|Contract::OutBorder)){
+                        let terrain_notice=if self.sediments==SurfaceSediments::Omit && matches!(Contract::of(&material),Some(Contract::Cliffs|Contract::OutBorder)){
                             "; preview omits terrain sediments via the stated zero sediment-ID view"
                         }else{""};
                         world.insert(m,AnvilRenderStatus{source:"bake-anvil-surface".into(),template:material.template_name.clone(),
@@ -495,7 +507,7 @@ impl Pass for BakeAnvilSurface {
 
 #[cfg(test)] mod tests {
     use super::*;
-    #[test]fn gradient_and_cliffs_keep_distinct_mesh_input_contracts(){
+    #[test]fn surface_templates_keep_distinct_mesh_input_contracts(){
         assert_eq!(Contract::named("MAD_Tex1_UniqueNormalGrad_Triplanar"),Some(Contract::UniqueGradient));
         assert_eq!(Contract::UniqueGradient.varying("TEXCOORD",0),Some(VaryingRole::Uv));
         assert_eq!(Contract::UniqueGradient.varying("COLOR",0),None);
@@ -513,7 +525,7 @@ impl Pass for BakeAnvilSurface {
     }
     #[test]fn gradient_requires_mask_uv_and_checks_capacity_before_shader_inputs(){
         let pass=BakeAnvilSurface{texels_per_metre:8.0,max_size:2048,max_chart:256,max_texels:1024,
-            terrain_ao:0.5,mip_bias:0.0,camera_distance:1000000.0,address:UnstatedAddress::Wrap};
+            terrain_ao:0.5,sediments:SurfaceSediments::Omit,mip_bias:0.0,camera_distance:1000000.0,address:UnstatedAddress::Wrap};
         let material=AnvilMaterial{index_id:17,template:None,template_name:Some("MAD_Tex1_UniqueNormalGrad_Triplanar".into()),
             bindings:vec![],values:vec![],texture_set:vec![],textures:vec![],defaults:vec![],
             frame:primase_core::frame::SourceFrame::WORLD,shaders:None,
@@ -531,7 +543,7 @@ impl Pass for BakeAnvilSurface {
     }
     #[test]fn outborder_refuses_a_missing_authored_frame_and_raw_terrain_names_its_engine_resources(){
         let pass=BakeAnvilSurface{texels_per_metre:8.0,max_size:2048,max_chart:256,max_texels:1024,
-            terrain_ao:0.5,mip_bias:0.0,camera_distance:1000000.0,address:UnstatedAddress::Wrap};
+            terrain_ao:0.5,sediments:SurfaceSediments::Omit,mip_bias:0.0,camera_distance:1000000.0,address:UnstatedAddress::Wrap};
         let mut material=AnvilMaterial{index_id:18,template:None,template_name:Some("MAD_OutBorder".into()),
             bindings:vec![],values:vec![],texture_set:vec![],textures:vec![],defaults:vec![],
             frame:primase_core::frame::SourceFrame::WORLD,shaders:None,

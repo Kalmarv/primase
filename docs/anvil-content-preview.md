@@ -183,13 +183,19 @@ absent. The template supplies OutBorder_Details_02A/03A/01A normals at t75/t78/t
 at t77 (channel 1, slot 7), and t79 is the material/set normal. The reader's existing selector/default resolution
 remains authoritative; unresolved maps still refuse by t slot/property, and are never filled with guessed normals.
 
-Like the existing Cliffs preview, this contract explicitly selects no terrain sediments: t16's sediment-ID view
+Like the existing Cliffs preview, the lab explicitly selects `sediments=omit`: t16's sediment-ID view
 is zero, so the own program's optional t20/t22 branch is not taken. This approximation is in both pass and material
 notices; it is not a claim to supply the running terrain cache. The base, tilings, detail blending and packed
 world-normal output still come from the source program. The derived atlas uses UV1; UV0 and the original tangent
 stream survive, and the baked normal is rebased into that same authored tangent frame. This matters to the retained
 Game binding as well as PBR. Missing tangents, mixed triangle handedness and unknown varyings refuse by name.
 No OutBorder image or new success count has been collected in write-only mode.
+
+`bake-anvil-surface` now requires the enumerable `sediments=omit|refuse` caller choice, exported as
+`SurfaceSediments`. With `refuse`, a program reading the unresolved sediment views is refused by name. The lab's
+preparation explicitly states `omit`; the library does not silently choose that approximation for another program.
+Callers replaying older pass strings must state the choice. RawTerrainBlend still refuses with either choice,
+because its base terrain inputs are missing too.
 
 ### Raw_TerrainBlend: established contract, unresolved producer
 
