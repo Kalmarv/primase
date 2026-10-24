@@ -15,6 +15,9 @@
 //! [`affine_uv`] reads from its records the map a program applies to a texture's coordinate.
 use std::collections::BTreeMap;
 
+mod buffers;
+pub use buffers::{AnsweredBuffers, BufferExtent, BufferRead};
+
 use primase_shader::{Program, ResourceId, Stage, SystemValue};
 
 use crate::{
