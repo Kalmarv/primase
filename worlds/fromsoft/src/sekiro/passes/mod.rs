@@ -6,6 +6,7 @@
 //! through the same calls.
 pub mod bake;
 pub(super) mod bake_assembly;
+pub mod bake_materials;
 pub mod blockers;
 pub mod collision;
 pub mod extras;
@@ -69,6 +70,7 @@ pub fn register(registry: &mut PassRegistry) {
         &far::DROP_FROMSOFT_FAR,
         &resolve_shaders::RESOLVE_FROMSOFT_SHADERS,
         &bake::BAKE_FROMSOFT_LAYERS,
+        &bake_materials::BAKE_FROMSOFT_MATERIALS,
         &materials::DROP_FROMSOFT_TEXTURE_TRANSFORMS,
         &materials::LOWER_FROMSOFT_MATERIALS,
         &collision::LOWER_FROMSOFT_COLLISION,

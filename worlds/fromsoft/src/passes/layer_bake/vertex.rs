@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 /// The policy for the second vertex colour of a mesh: the layered vertex program hands `COLOR1.x` on as the tint's alpha,
 /// and the bake does not group by it.
-pub const COLOUR1_POLICY: &str = "COLOR1.x frozen to 1: no stored second colour has x != 1 (m10_00, m11_01); the default of a mesh with none is unknown";
+pub const COLOUR1_POLICY: &str = "COLOR1.x frozen to 1: observed in Sekiro m10_00/m11_01 and ercap3 RB5-12 c3000 weapon VBs (gap/colour-ercap3-colour1.json SHA256 cb54bc8e8a8b06e82d01320d1c5b110e54f4f9726f7c3fd1ccfcb29561f17190); other meshes and absent streams remain an approximation";
 
 /// What feeds one vertex attribute of the program, by the role the binding gives its input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -97,10 +97,7 @@ impl VertexStage {
     /// the roles say and `frame` freezes them, and plan what feeds each of its inputs. `ground`: the material is of the
     /// ground family, whose second layer weight is read from another lane.
     pub fn new(vertex: &CoreShader, stage: &StageBinding, ground: bool, frame: &FrozenFrame) -> Result<Self> {
-        let lifted = ProgramShader::new(
-            primase_dxbc::lift(&vertex.bytecode).map_err(|e| invalid("vertex lift", e.at * 4, e.detail))?,
-        )
-        .map_err(|e| invalid("vertex program", e.at, e.detail))?;
+        let lifted = super::binding::program_executor(vertex.format, &vertex.bytecode)?;
         let mut policies = BTreeMap::new();
         // the constants: every buffer the program reads, zero where nothing states a value
         let mut constants: Vec<(u32, Vec<[u32; 4]>)> = lifted
@@ -175,6 +172,20 @@ impl VertexStage {
                 }
                 InputRole::Lanes(_) => Feed::TexCoords,
                 InputRole::System => Feed::Instance,
+                InputRole::Unknown { why }
+                    if matches!((label.0.as_str(), label.1), ("BINORMAL", 0) | ("TANGENT", 2)) =>
+                {
+                    // These are the first missing inputs of the observed cloth vertex sets. Keep the
+                    // refusal: this diagnosis supplies neither a role nor a duplicate rest-pose stream.
+                    return Err(invalid(
+                        "vertex binding",
+                        0,
+                        format!(
+                            "input {}{}: no producer: cloth vertex set not read ({why})",
+                            label.0, label.1
+                        ),
+                    ));
+                }
                 other => {
                     return Err(invalid(
                         "vertex binding",
@@ -287,8 +298,11 @@ impl VertexStage {
 
     /// What the pixel program `pixel` is given by the vertex program, per pixel input the program writes (the label, the
     /// lanes): from four runs at the cell's corners, each lane a constant, the grid's U or V, or an error.
-    #[cfg(test)]
-    fn pixel_inputs(&self, pixel: &Interface, params: &Inputs) -> Result<BTreeMap<(String, u32), Input>> {
+    pub(crate) fn pixel_inputs(
+        &self,
+        pixel: &Interface,
+        params: &Inputs,
+    ) -> Result<BTreeMap<(String, u32), Input>> {
         self.pixel_inputs_from(pixel, &self.outputs(&self.corners(params))?)
     }
 

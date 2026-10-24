@@ -191,7 +191,7 @@ pub const BIND_POSE_POLICY: &str =
 /// The words a role's constant is frozen to by `frame`, counting the policy the freezing is (`policies`); `None` for a
 /// role the bake gives no value (the time of day, and an unknown one, counted by its reason): the words stay zero. A
 /// material's own words are the role's own. A role the bake has no value for is an error.
-pub(super) fn frozen_words(
+pub(crate) fn frozen_words(
     role: &ConstantRole,
     frame: &FrozenFrame,
     policies: &mut BTreeMap<String, u64>,

@@ -606,6 +606,7 @@ fn the_fromsoft_passes_register_by_name() {
     super::register(&mut reg);
     let names = [
         "bake-fromsoft-layers",
+        "bake-fromsoft-materials",
         "drop-fromsoft-far",
         "drop-fromsoft-texture-transforms",
         "fromsoft-apply-rigid-skinning",
