@@ -115,6 +115,22 @@ fn cases() -> Vec<DrawCase> {
         v(at(8.25, 14.0, 0.5, 1.0), green, [1.0, 0.0], 1.0),
         v([1e3, 2e2, 0.0, 1e-7], blue, [0.5, 1.0], 1.0),
     ];
+    // a vertical left edge and a horizontal top edge exactly halfway between two 16.8 fixed-point steps (x * 256 =
+    // 1152.5, y * 256 = 896.5; the values are dyadic, so the clip coordinates are exact in f32): rounded half away from
+    // zero the edge is 1/256 past the centres of column 4 (row 3) and leaves them out; rounded to even it passes
+    // through them, and the top-left rule draws them. Which rounding the snap takes (3.2.4.1's reference is
+    // ties-to-even, 0.6 ULP allowed) is what these two settle
+    let tie = 4.5 + 1.0 / 512.0;
+    let tie_x = vec![
+        v(at(tie, 2.25, 0.5, 1.0), red, [0.0, 0.0], 1.0),
+        v(at(12.25, 8.25, 0.5, 1.0), green, [1.0, 0.0], 1.0),
+        v(at(tie, 13.75, 0.5, 1.0), blue, [0.0, 1.0], 1.0),
+    ];
+    let tie_y = vec![
+        v(at(2.25, tie - 1.0, 0.5, 1.0), red, [0.0, 0.0], 1.0),
+        v(at(13.75, tie - 1.0, 0.5, 1.0), green, [1.0, 0.0], 1.0),
+        v(at(8.25, 13.25, 0.5, 1.0), blue, [0.0, 1.0], 1.0),
+    ];
     let one = |name, ps, vertices: &Vec<Vertex>, targets: Vec<u32>| DrawCase {
         name,
         ps,
@@ -146,6 +162,8 @@ fn cases() -> Vec<DrawCase> {
         one("discard", "discard", &perspective, vec![0]),
         one("near", "colour", &near, vec![0, 1]),
         one("near_w", "colour", &near_w, vec![0, 1]),
+        one("tie_x", "colour", &tie_x, vec![0, 1]),
+        one("tie_y", "colour", &tie_y, vec![0, 1]),
         one("derivatives", "derivatives", &perspective, vec![0, 1]),
         one("texture", "texture", &perspective, vec![0]),
     ]
