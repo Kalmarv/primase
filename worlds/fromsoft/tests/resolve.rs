@@ -514,7 +514,7 @@ fn the_unbound_textures_option_is_required_and_named() {
 /// zero) + 1 (unit exposure).
 #[test]
 fn the_bake_binds_a_frozen_frame_to_the_roles() {
-    use primase_fromsoft::layer_bake::{BaseMipBilinearWrap, FrozenFrame, Inputs, Prepared, Programs};
+    use primase_fromsoft::layer_bake::{FrozenFrame, Inputs, Prepared, Programs, wrapped_texture};
     let shader = executor(PROGRAM);
     let mut world = World::default();
     let (program, grass) = (world.spawn(), world.spawn());
@@ -531,9 +531,7 @@ fn the_bake_binds_a_frozen_frame_to_the_roles() {
     .unwrap()
     .stage;
     let view = || -> primase_fromsoft::Result<_> {
-        Ok(std::sync::Arc::new(BaseMipBilinearWrap::new(
-            2, 2, &[200; 16], true,
-        )?))
+        Ok(std::sync::Arc::new(wrapped_texture(2, 2, &[200; 16], true)?))
     };
     let prepared = Prepared::from_binding(
         Programs {

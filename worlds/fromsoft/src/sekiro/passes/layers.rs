@@ -106,7 +106,7 @@ impl<'a> AreaBake<'a> {
         let view = |t: &Texture,
                     srgb: bool,
                     address: [primase_image::sampling::Address; 2]|
-         -> Result<Arc<crate::layer_bake::BaseMipBilinearWrap>> {
+         -> Result<Arc<primase_shader_exec::SampledTexture>> {
             let level = t
                 .levels
                 .first()
@@ -114,7 +114,7 @@ impl<'a> AreaBake<'a> {
             let pixels = primase_texcodec::Decoder::default()
                 .decode_rgba8(t.format, t.width, t.height, level)
                 .map_err(|e| invalid("area bake pixels", 0, e))?;
-            Ok(Arc::new(crate::layer_bake::BaseMipBilinearWrap::addressed(
+            Ok(Arc::new(crate::layer_bake::base_texture(
                 t.width, t.height, &pixels, srgb, address,
             )?))
         };

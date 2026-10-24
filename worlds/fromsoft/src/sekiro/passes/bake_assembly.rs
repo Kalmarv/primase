@@ -372,7 +372,7 @@ mod tests {
     use super::*;
     #[test]
     fn real_jar_reflectance_and_unchanged_channels() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        use crate::layer_bake::{BaseMipBilinearWrap, Prepared};
+        use crate::layer_bake::{Prepared, wrapped_texture};
         use primase_texcodec::TexDecoder;
         use sha2::{Digest, Sha256};
         use std::sync::Arc;
@@ -502,7 +502,7 @@ mod tests {
         }
         let prepared = Prepared::new(&shader, source.layered.as_ref().unwrap(), 0., |name, srgb| {
             let (w, h, rgba) = images.get(name).expect("complete jar source texture closure");
-            Ok(Some(Arc::new(BaseMipBilinearWrap::new(*w, *h, rgba, srgb)?)))
+            Ok(Some(Arc::new(wrapped_texture(*w, *h, rgba, srgb)?)))
         })?;
         for inputs in [
             Inputs::default(),

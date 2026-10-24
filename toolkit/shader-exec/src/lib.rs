@@ -23,6 +23,8 @@ pub use evaluate::{
     evaluate_raw_with, evaluate_with,
 };
 pub use periodic::{evaluate_periodic, evaluate_periodic_with};
+pub mod texture;
+pub use texture::{Filtering, SampledTexture, SamplerUse, Unstated};
 
 use primase_shader::Interface;
 

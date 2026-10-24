@@ -10,6 +10,7 @@ publish.workspace = true
 
 [dependencies]
 primase-core.workspace = true
+primase-image.workspace = true
 primase-shader.workspace = true
 thiserror.workspace = true
 naga.workspace = true

@@ -96,6 +96,7 @@ fn options(size: u32) -> Options {
         ("sun-elevation", "51.29"),
         ("view-cosine", "0.7"),
         ("camera-distance", "1000000"),
+        ("unstated-address", "wrap"),
         ("unset", "white"),
     ]
     .map(|(k, v)| (k.to_owned(), v.to_owned()))

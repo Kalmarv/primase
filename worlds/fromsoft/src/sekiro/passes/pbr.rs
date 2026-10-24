@@ -614,7 +614,7 @@ fn lower_materials(
                 let mut metal_sampler = None;
                 if let Some(b) = metal {
                     let t = read(payloads, &b.texture)?;
-                    metal_sampler = Some(crate::layer_bake::BaseMipBilinearWrap::new(
+                    metal_sampler = Some(crate::layer_bake::wrapped_texture(
                         t.width,
                         t.height,
                         &pixels(&t)?,
@@ -642,8 +642,11 @@ fn lower_materials(
                             (px.y as f32 + 0.5) / px.height as f32,
                         ];
                         let metallic = if let (Some(s), Some(mt)) = (&metal_sampler, mt) {
-                            s.sample(std::array::from_fn(|j| uv[j] * mt.scale[j] / nt.scale[j]))
-                                .map_err(|e| primase_image::Error::Invalid(e.to_string()))?[0]
+                            crate::layer_bake::sample(
+                                s,
+                                std::array::from_fn(|j| uv[j] * mt.scale[j] / nt.scale[j]),
+                            )
+                            .map_err(|e| primase_image::Error::Invalid(e.to_string()))?[0]
                         } else if scalar.is_some() {
                             1. // Preserve the source scalar exactly in the material factor.
                         } else {

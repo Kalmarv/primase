@@ -91,6 +91,7 @@ fn options() -> Options {
         ("sun-elevation", "51.29"),
         ("view-cosine", "0.7"),
         ("camera-distance", "1000000"),
+        ("unstated-address", "wrap"),
         ("unset", "white"),
     ]
     .map(|(k, v)| (k.to_owned(), v.to_owned()))
@@ -304,7 +305,7 @@ fn a_rider_lowers_with_its_zones_baked_and_its_skin_left_to_the_placeholder() {
         .parse(
             "lower-anvil-mesh{static16-normal=p}, lower-anvil-rig{own-transform=replace}, lower-anvil-skin, \
              bake-anvil-material{size=256,normal-green=up,shader-uv=texcoord,mip-bias=0,terrain-ao=0.5,sun-elevation=51.29,\
-             view-cosine=0.7,camera-distance=1000000,unset=white}, \
+             view-cosine=0.7,camera-distance=1000000,unset=white,unstated-address=wrap}, \
              lower-anvil-material{normal-green=up,alpha=prelude,unset=white,shader-uv=texcoord,emissive-exposure=1,\
              underground-view=0.5,fake-river-s=0,decals1-cutout=decal}",
         )

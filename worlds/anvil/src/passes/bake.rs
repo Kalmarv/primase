@@ -1,5 +1,6 @@
 //! `bake-anvil-material{size=N,normal-green=up|down,shader-uv=texcoord|one-minus-v,mip-bias=X,terrain-ao=X,
-//! sun-elevation=DEG,view-cosine=X,camera-distance=M,unset=white}`: Anvil Materials
+//! sun-elevation=DEG,view-cosine=X,camera-distance=M,unset=white,
+//! unstated-address=refuse|wrap|clamp|mirror|mirror-once}`: Anvil Materials
 //! whose templates the lowering can't express as texture lookups ([`AnvilMaterial`]; MAD_Tex1_Rocks and
 //! MAD_Tex1_UniqueNormalGradient and MAD_Tex1_UniqueNormal_DiffuseBlend, which combine maps at several UV sets per
 //! pixel, MAD_Hero_Ice and MAD_IceBrick, whose colour depends on the sun and the eye, MAD_Road, whose paint its
@@ -97,22 +98,25 @@
 //! The texture covers the shader's UV square (`shader-uv` relating it to the mesh's `TexCoord(0)` as for
 //! `lower-anvil-material`), repeating: exact on a mesh whose UV leaves the square only where the Material's
 //! function repeats with period 1, which the recipe requires of its UV transforms (integer coefficients). What isn't
-//! the game's: the sampler (trilinear, wrap: the engine's sampler states aren't read), the draw (no per-instance data,
-//! no LOD fade, not reduced), the 8-bit encodings of the outputs.
+//! the game's: the sampler (trilinear by the quad's footprint, [`primase_shader_exec::Filtering::Trilinear`]; its
+//! addressing as `unstated-address` states, reported, since resolve-anvil-shaders does not read the engine's sampler
+//! states: reading them is the open item that retires the option), the draw (no per-instance data, no LOD fade, not
+//! reduced), the 8-bit encodings of the outputs.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform};
-use primase_core::shader::NormalEncoding;
+use primase_core::shader::{NormalEncoding, SamplerState};
 use primase_core::{
     ColorSpace, Component, Entity, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat,
     TexRole, Texture, VertexColor, World,
 };
-use primase_image::sampling::{Address, Levels, Transfer, footprint_lod};
+use primase_image::sampling::{Address, Levels, Transfer};
 use primase_shader_exec::{
-    Grid, Input, Invocation, Layout, Lod, PixelShader, evaluate::Constants, evaluate_raw_with,
+    Filtering, Grid, Input, Invocation, Layout, Lod, PixelShader, SampledTexture, SamplerUse, Unstated,
+    evaluate::Constants, evaluate_raw_with,
 };
 
 use super::material::{Green, NORMAL_GREEN, SHADER_UV, ShaderUv, UNSET, Unset, uv_transform};
@@ -598,6 +602,43 @@ pub struct BakeAnvilMaterial {
     /// The skin colour (`skin-tone=R,G,B`), where the caller chooses one: without it `MAD_CHR_Skin` Materials are not
     /// baked.
     pub skin_tone: Option<[u8; 3]>,
+    /// What a texture's addressing is taken to be: the engine's sampler states aren't read (`unstated-address`).
+    pub unstated_address: UnstatedAddress,
+}
+
+/// `unstated-address`: what `bake-anvil-material` takes a texture's addressing to be. resolve-anvil-shaders does not
+/// read the engine's sampler states, so every binding leaves its addressing unstated; the program states the
+/// assumption (reported), or refuses to bake without it. Reading the sampler states is the open item that retires
+/// this option.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnstatedAddress {
+    Refuse,
+    Wrap,
+    Clamp,
+    Mirror,
+    MirrorOnce,
+}
+
+impl Choice for UnstatedAddress {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("refuse", UnstatedAddress::Refuse),
+        ("wrap", UnstatedAddress::Wrap),
+        ("clamp", UnstatedAddress::Clamp),
+        ("mirror", UnstatedAddress::Mirror),
+        ("mirror-once", UnstatedAddress::MirrorOnce),
+    ];
+}
+
+impl UnstatedAddress {
+    fn unstated(self) -> Unstated {
+        match self {
+            UnstatedAddress::Refuse => Unstated::Refuse,
+            UnstatedAddress::Wrap => Unstated::Assume(Address::Wrap),
+            UnstatedAddress::Clamp => Unstated::Assume(Address::Clamp),
+            UnstatedAddress::Mirror => Unstated::Assume(Address::Mirror),
+            UnstatedAddress::MirrorOnce => Unstated::Assume(Address::MirrorOnce),
+        }
+    }
 }
 
 impl BakeAnvilMaterial {
@@ -663,6 +704,7 @@ impl BakeAnvilMaterial {
         };
         Ok(BakeAnvilMaterial {
             skin_tone,
+            unstated_address: g.choice("unstated-address"),
             size,
             normal_green: g.choice::<Green>("normal-green").normal_green(),
             shader_uv: g.choice("shader-uv"),
@@ -709,6 +751,11 @@ pub const BAKE_ANVIL_MATERIAL: PassSpec = PassSpec {
             "finite and above 0: the camera distance the bake stands in for",
         ),
         UNSET,
+        OptionSpec::choice::<UnstatedAddress>(
+            "unstated-address",
+            "what a texture's addressing is taken to be, the engine's sampler states not being read: refused, or \
+             wrap, clamp, mirror or mirror-once (reported)",
+        ),
         OptionSpec::optional(
             "skin-tone",
             "200,160,130",
@@ -777,37 +824,6 @@ fn material_rows(m: &AnvilMaterial) -> Result<BTreeMap<u32, [f32; 4]>, String> {
     Ok(rows)
 }
 
-/// A texture's stored levels sampled trilinear and wrapped, by the footprint a quad gives
-/// ([`primase_image::sampling`]).
-#[derive(Debug)]
-struct Footprinted {
-    levels: Levels,
-    transfer: Transfer,
-}
-
-impl primase_shader_exec::Image for Footprinted {
-    fn sample(&self, uv: [f32; 2], lod: Lod) -> Result<[f32; 4], String> {
-        let (w, h) = (self.levels.width, self.levels.height);
-        let grad = |g: [[f32; 2]; 2]| g.map(|d| d.map(f64::from));
-        let lod = match lod {
-            Lod::Gradients(g) => footprint_lod(w, h, grad(g), 0.0),
-            Lod::GradientsBias(g, b) => footprint_lod(w, h, grad(g), f64::from(b.clamp(-16.0, 15.99))),
-            Lod::Level(l) => f64::from(l),
-            Lod::Implicit | Lod::Bias(_) => return Err("an implicit level without a quad's footprint".into()),
-        };
-        let v = self
-            .levels
-            .trilinear(
-                [f64::from(uv[0]), f64::from(uv[1])],
-                lod,
-                [Address::Wrap; 2],
-                self.transfer,
-            )
-            .map_err(|e| e.to_string())?;
-        Ok(v.map(|c| c as f32))
-    }
-}
-
 /// What a bake gives, per texel in the texture's row order.
 struct Baked {
     base: Vec<u8>,
@@ -827,6 +843,8 @@ struct Baked {
     cutoff: Option<f32>,
     /// A pattern's: the transform from the mesh's UV to its texture.
     transform: Option<UvTransform>,
+    /// The textures sampled with the assumed addressing (`unstated-address`).
+    assumed_addressing: u64,
 }
 
 /// An 8-bit UNORM store of `x` (what the G-buffer target holds).
@@ -962,7 +980,8 @@ impl BakeAnvilMaterial {
                 .map_err(|e| e.to_string())?;
         }
         let mut textures = BTreeMap::new();
-        let mut coverage_image: Option<Arc<Footprinted>> = None;
+        let mut coverage_image: Option<Arc<SampledTexture>> = None;
+        let mut assumed_addressing = 0u64;
         for &(slot, value) in recipe.engine {
             let ao = recipe.terrain.is_some_and(|t| t.ao_texture == slot);
             let value = if ao { self.terrain_ao } else { value };
@@ -1019,14 +1038,19 @@ impl BakeAnvilMaterial {
                 .get::<Texture>(e)
                 .ok_or("a bound texture holds no core texture")?;
             let srgb = w.get::<AnvilTextureMap>(e).is_some_and(|t| t.field_25 == 1);
-            let image = Footprinted {
-                levels: Levels::of(t).map_err(|e| e.to_string())?,
-                transfer: if srgb {
+            // the binding states no addressing: the program's assumption, or a refusal
+            let unread = SamplerState::default();
+            let image = SampledTexture::new(
+                Levels::of(t).map_err(|e| e.to_string())?,
+                if srgb {
                     Transfer::SrgbColour
                 } else {
                     Transfer::Stored
                 },
-            };
+                SamplerUse::of(&unread, self.unstated_address.unstated())?,
+                Filtering::Trilinear,
+            )?;
+            assumed_addressing += u64::from(SamplerUse::assumed(&unread));
             let image = Arc::new(image);
             if recipe.coverage == Some(slot) {
                 coverage_image = Some(image.clone());
@@ -1088,6 +1112,7 @@ impl BakeAnvilMaterial {
                 .vertex_colour
                 .is_some_and(|c| c.switches.iter().any(|r| switched(*r))),
             transform: None,
+            assumed_addressing,
         };
         if let Some((_, q, f)) = &period {
             // the Material's scales and translations over the period: the texture is one period
@@ -1208,6 +1233,10 @@ impl Pass for BakeAnvilMaterial {
             ("view-cosine".to_owned(), self.view_cosine.to_string()),
             ("camera-distance".to_owned(), self.camera_distance.to_string()),
             ("unset".to_owned(), Unset::White.text().to_owned()),
+            (
+                "unstated-address".to_owned(),
+                self.unstated_address.text().to_owned(),
+            ),
         ]);
         if let Some([r, g, b]) = self.skin_tone {
             o.insert("skin-tone".to_owned(), format!("{r},{g},{b}"));
@@ -1221,8 +1250,8 @@ impl Pass for BakeAnvilMaterial {
         &[AnvilMaterial::NAME]
     }
     fn approximates(&self) -> &'static str {
-        "Materials baked from their G-buffer shader at a stated size: the bake's own trilinear wrapped sampling, a plain \
-         draw, 8-bit outputs"
+        "Materials baked from their G-buffer shader at a stated size: the bake's own trilinear sampling at the stated \
+         addressing, a plain draw, 8-bit outputs"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let materials: Vec<Entity> = w
@@ -1294,6 +1323,17 @@ impl Pass for BakeAnvilMaterial {
             let occlusion = baked
                 .occlusion
                 .map(|o| spawn(w, texture(s, o, ColorSpace::Linear, TexRole::Mask, None)));
+            if baked.assumed_addressing > 0 {
+                log.approximate(
+                    &format!(
+                        "{} Materials' textures addressed as unstated-address={} states (the engine's sampler \
+                         states are not read)",
+                        template,
+                        self.unstated_address.text()
+                    ),
+                    baked.assumed_addressing,
+                );
+            }
             if baked.terrain_ao {
                 log.approximate(
                     &format!(

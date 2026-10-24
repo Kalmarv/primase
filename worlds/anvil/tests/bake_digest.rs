@@ -69,6 +69,7 @@ fn the_baked_materials_of_the_usnat_forge() {
                 ("sun-elevation", "30"),
                 ("view-cosine", "0.7"),
                 ("camera-distance", "1000000"),
+                ("unstated-address", "wrap"),
                 ("unset", "white"),
             ]
             .map(|(k, v)| (k.to_owned(), v.to_owned())),

@@ -1,6 +1,5 @@
-use super::BaseMipBilinearWrap;
 use super::resolve::{self, Unbound, resolve, textures_of};
-use super::sampler::address;
+use super::sampler::addressing;
 use super::state::{AlphaState, PipelineState, PixelState, SlotTexture, TARGETS, VertexState};
 use super::vertex::VertexStage;
 use crate::{Result, invalid, materials::LayeredMaterial};
@@ -12,6 +11,7 @@ use primase_core::shader::{
 use primase_image::sampling::Address;
 use primase_shader::Interface;
 use primase_shader_exec::ProgramShader;
+use primase_shader_exec::SampledTexture;
 use primase_shader_exec::{
     Grid, Input, Invocation, Lane, Layout, PixelShader, Raw, evaluate::Constants, evaluate_raw_with,
 };
@@ -55,7 +55,7 @@ pub struct Prepared {
     shader: ProgramShader,
     constants: Constants,
     textures: BTreeMap<u32, SlotTexture>,
-    alpha: Option<(Arc<BaseMipBilinearWrap>, [f32; 2])>,
+    alpha: Option<(Arc<SampledTexture>, [f32; 2])>,
     /// The material's vertex program, which gives the pixel program what it reads of a vertex; `None` where the
     /// material has none, and a fixed table does.
     vertex: Option<VertexStage>,
@@ -379,13 +379,13 @@ impl Prepared {
         bytes: &[u8],
         material: &LayeredMaterial,
         sample_time: f32,
-        mut image: impl FnMut(&str, bool) -> Result<Option<Arc<BaseMipBilinearWrap>>>,
+        mut image: impl FnMut(&str, bool) -> Result<Option<Arc<SampledTexture>>>,
     ) -> Result<Self> {
         let shader = executor(bytes)?;
         // the textures stand as entities of a scratch world, each with the view the caller decoded
         let mut scratch = primase_core::World::default();
         let program = scratch.spawn();
-        let mut views: BTreeMap<Entity, Arc<BaseMipBilinearWrap>> = BTreeMap::new();
+        let mut views: BTreeMap<Entity, Arc<SampledTexture>> = BTreeMap::new();
         let mut known: BTreeMap<(String, bool), Option<Entity>> = BTreeMap::new();
         // the layer bake's materials are Sekiro's layered ones
         let resolution = resolve(
@@ -440,8 +440,8 @@ impl Prepared {
         programs: Programs<'_>,
         material: &LayeredMaterial,
         frame: &FrozenFrame,
-        mut texture: impl FnMut(Entity, bool, [Address; 2]) -> Result<Arc<BaseMipBilinearWrap>>,
-        mut stem: impl FnMut(&str, bool, [Address; 2]) -> Result<Option<Arc<BaseMipBilinearWrap>>>,
+        mut texture: impl FnMut(Entity, bool, [Address; 2]) -> Result<Arc<SampledTexture>>,
+        mut stem: impl FnMut(&str, bool, [Address; 2]) -> Result<Option<Arc<SampledTexture>>>,
     ) -> Result<Self> {
         let Programs {
             shader,
@@ -540,7 +540,7 @@ impl Prepared {
         let slots = resolve::slots(&material.view())?;
         let (period, period_exact) = sampled_period(interface, material)?;
         let mut textures = BTreeMap::new();
-        let mut cache = BTreeMap::<(Entity, bool, [Option<AddressMode>; 2]), Arc<BaseMipBilinearWrap>>::new();
+        let mut cache = BTreeMap::<(Entity, bool, [Option<AddressMode>; 2]), Arc<SampledTexture>>::new();
         let mut largest_colour_dimension = 0;
         for bound in &stage.textures {
             let resource = interface
@@ -590,7 +590,7 @@ impl Prepared {
                     let image = match cache.entry(key) {
                         std::collections::btree_map::Entry::Occupied(found) => found.into_mut(),
                         std::collections::btree_map::Entry::Vacant(slot) => {
-                            slot.insert(texture(key.0, key.1, [address(stated[0])?, address(stated[1])?])?)
+                            slot.insert(texture(key.0, key.1, addressing(stated)?)?)
                         }
                     };
                     if key.1 {
@@ -637,7 +637,7 @@ impl Prepared {
             && let Some(t) = stem(
                 &binding.texture,
                 true,
-                [address(binding.address[0])?, address(binding.address[1])?],
+                addressing([binding.address[0], binding.address[1]])?,
             )?
         {
             alpha_bytes = t.decoded_bytes();
@@ -934,7 +934,7 @@ fn channels(
             );
         }
         albedo.push(if let Some(AlphaState { image, scale }) = &state.alpha {
-            byte(image.sample([uv[0] * scale[0], uv[1] * scale[1]])?[3])
+            byte(super::sample(image, [uv[0] * scale[0], uv[1] * scale[1]])?[3])
         } else {
             255
         });
@@ -1306,8 +1306,7 @@ mod tests {
             .unwrap();
         let texels: Vec<u8> = (0..2 * 3 * 4).map(|i| (i * 37 % 251) as u8).collect();
         let image = Arc::new(
-            BaseMipBilinearWrap::addressed(2, 3, &texels, true, [Address::Clamp, Address::MirrorOnce])
-                .unwrap(),
+            super::super::base_texture(2, 3, &texels, true, [Address::Clamp, Address::MirrorOnce]).unwrap(),
         );
         state.pixel.textures.insert(4, SlotTexture::Image(image.clone()));
         state

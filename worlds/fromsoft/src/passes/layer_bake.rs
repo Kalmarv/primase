@@ -1,6 +1,6 @@
 //! Static layered-material bake policy. This is not runtime sampler state.
 mod sampler;
-pub use sampler::BaseMipBilinearWrap;
+pub use sampler::{FILTERING, base_texture, sample, srgb, stored, wrapped_texture};
 mod binding;
 pub(crate) use binding::OutputRgb;
 pub use binding::{

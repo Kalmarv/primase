@@ -14,8 +14,8 @@ use primase_image::sampling::Address;
 use primase_shader_exec::{Input, Lane, Texture, evaluate::Constants};
 use serde_json::json;
 
-use super::BaseMipBilinearWrap;
 use crate::{Result, invalid};
+use primase_shader_exec::SampledTexture;
 
 /// The pixel program's outputs a bake reads, as (output register, component mask): the G-buffer normal, the second
 /// output's x, the albedo, the reflectance and the emission.
@@ -24,8 +24,8 @@ pub const TARGETS: [(u32, u8); 5] = [(0, 7), (1, 1), (2, 7), (3, 7), (4, 7)];
 /// A texture slot's content.
 #[derive(Clone, Debug)]
 pub enum SlotTexture {
-    /// A texture's base mip, sampled bilinearly with its addressing ([`BaseMipBilinearWrap`]).
-    Image(Arc<BaseMipBilinearWrap>),
+    /// A texture's base mip, sampled bilinearly with its addressing ([`SampledTexture`]).
+    Image(Arc<SampledTexture>),
     /// One value everywhere: an unbound slot's preview colour, or the engine's dither texture.
     Constant([f32; 4]),
 }
@@ -64,7 +64,7 @@ pub struct VertexState {
 /// albedo at `scale` times the grid's coordinate.
 #[derive(Clone, Debug)]
 pub struct AlphaState {
-    pub image: Arc<BaseMipBilinearWrap>,
+    pub image: Arc<SampledTexture>,
     pub scale: [f32; 2],
 }
 
@@ -225,14 +225,14 @@ impl PipelineState {
     /// bits in hex, so nothing is rounded; a lane is `"U"`, `"V"` or its bits.
     pub fn encode(&self) -> Encoded {
         let mut files = BTreeMap::new();
-        let mut image = |name: String, image: &BaseMipBilinearWrap| {
+        let mut image = |name: String, image: &SampledTexture| {
             let [width, height] = image.dimensions();
-            files.insert(name.clone(), image.rgba().to_vec());
+            files.insert(name.clone(), super::stored(image).to_vec());
             json!({
                 "file": name,
                 "width": width,
                 "height": height,
-                "srgb": image.srgb(),
+                "srgb": super::srgb(image),
                 "address": image.address().map(address_name),
             })
         };
@@ -306,7 +306,7 @@ impl PipelineState {
                 .and_then(|n| encoded.files.get(n))
                 .ok_or_else(|| invalid("layer bake state", 0, format!("no file {name}")))
         };
-        let image = |i: &serde_json::Value| -> Result<Arc<BaseMipBilinearWrap>> {
+        let image = |i: &serde_json::Value| -> Result<Arc<SampledTexture>> {
             let address = array(&i["address"])?;
             let [u, v] = address.as_slice() else {
                 return Err(invalid(
@@ -315,7 +315,7 @@ impl PipelineState {
                     "addressing of other than two axes",
                 ));
             };
-            Ok(Arc::new(BaseMipBilinearWrap::addressed(
+            Ok(Arc::new(super::base_texture(
                 number(&i["width"])?,
                 number(&i["height"])?,
                 file(&i["file"])?,
