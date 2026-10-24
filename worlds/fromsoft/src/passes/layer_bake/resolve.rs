@@ -1053,7 +1053,8 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> 
                 .ok_or("the lifted program has not this constant buffer")?;
             palette_indexed_by_vertex(program, own.id)
         };
-        for (name, offset, size) in flat {
+        for (name, offset, ty) in flat {
+            let size = ty.size();
             // the screen size is the target's size in pixels, then its reciprocals: two pairs, a role each (the order
             // the vocabulary's old four-value size had; no program of the corpus was checked for it)
             if name == "FC_ScreenSize" && size == Some(16) {

@@ -15,7 +15,7 @@
 //! [`palette_indexed_by_vertex`] reads in the value graph whether a constant buffer is indexed by a vertex stream, as a
 //! joint palette is, or only by the instance, as the object matrices of an unskinned draw are.
 
-use primase_core::shader::{BufferLayout, ResourceId, ResourceKind, ScalarType};
+use primase_core::shader::{BufferLayout, ConstantType, ResourceId, ResourceKind, ScalarType};
 use primase_shader::Program;
 use primase_shader::flow::{At, Node, NodeId, Values};
 use primase_shader_exec::probe::{ProbeRun, VertexProbe, Zeros};
@@ -36,20 +36,60 @@ pub enum CameraForm {
 }
 
 /// Every constant of a buffer's layout, the members of a structure (the instance record, an array of them) by their own
-/// names at their own offsets in the first element: name, byte offset, size.
-pub(crate) fn flat_constants(layout: &BufferLayout) -> Vec<(String, u32, Option<u32>)> {
+/// names at their own offsets in the first element: name, byte offset, type.
+pub(crate) fn flat_constants(layout: &BufferLayout) -> Vec<(String, u32, &ConstantType)> {
     let mut flat = Vec::new();
     for c in &layout.constants {
         match c.ty.members() {
-            [] => flat.push((c.name.clone(), c.offset, c.ty.size())),
+            [] => flat.push((c.name.clone(), c.offset, &c.ty)),
             members => flat.extend(
                 members
                     .iter()
-                    .map(|m| (m.name.clone(), c.offset + m.offset, m.ty.size())),
+                    .map(|m| (m.name.clone(), c.offset + m.offset, &m.ty)),
             ),
         }
     }
     flat
+}
+
+/// The bytes from a constant's start that hold a 1 in the identity of its type `ty`: a matrix's diagonal (line k's
+/// lane k, whichever way its lines hold it), each of an array of matrices', or each matrix's of an array of `float4`
+/// rows three to a matrix (FromSoftware's palettes and object matrices: three rows of four per matrix, as the programs
+/// that apply them read them). Any other type is refused: the probe would not know where the identity's words are.
+fn identity(ty: &ConstantType) -> Result<Vec<u32>, String> {
+    let refused = |ty: &ConstantType| {
+        format!(
+            "a {ty:?}, not a matrix, an array of them or an array of float4 rows three to a matrix: the probe does not \
+             know where its identity is"
+        )
+    };
+    match ty {
+        ConstantType::Matrix {
+            rows,
+            columns,
+            stride,
+            ..
+        } => Ok((0..u32::from(*rows.min(columns)))
+            .map(|k| k * stride + 4 * k)
+            .collect()),
+        ConstantType::Array {
+            element,
+            count,
+            stride,
+        } => match element.as_ref() {
+            ConstantType::Matrix { .. } => {
+                let one = identity(element)?;
+                Ok((0..*count)
+                    .flat_map(|e| one.iter().map(move |byte| e * stride + byte))
+                    .collect())
+            }
+            ConstantType::Vector(v) if v.width == 4 && v.scalar == ScalarType::Float && count % 3 == 0 => {
+                Ok((0..*count).map(|row| row * stride + 4 * (row % 3)).collect())
+            }
+            _ => Err(refused(ty)),
+        },
+        _ => Err(refused(ty)),
+    }
 }
 
 /// Whether the clip position of the vertex program `program` is of a world with the camera at its origin, by running it
@@ -89,14 +129,12 @@ pub fn camera_form(program: &Program) -> Result<CameraForm, String> {
                     row[word % 4] = value.to_bits();
                 }
             };
-            for (name, offset, size) in flat_constants(layout) {
+            for (name, offset, ty) in flat_constants(layout) {
                 match name.as_str() {
-                    // the identity
-                    "VC_MatrixViewProj" => (0..4).for_each(|i| set(offset + 20 * i, 1.0)),
-                    // matrices of three rows of four, each the identity
-                    "VC_aObjMatrix" | "VC_aClothCancelObjMatrix" | "mWorld" => {
-                        for row in 0..size.unwrap_or(0) / 16 {
-                            set(offset + 16 * row + 4 * (row % 3), 1.0);
+                    // the identity, each matrix of it
+                    "VC_MatrixViewProj" | "VC_aObjMatrix" | "VC_aClothCancelObjMatrix" | "mWorld" => {
+                        for byte in identity(ty).map_err(|why| format!("{name} is {why}"))? {
+                            set(offset + byte, 1.0);
                         }
                     }
                     "SC_CameraPos" => {
@@ -168,4 +206,51 @@ pub fn inputs_read(program: &Program) -> Result<BTreeSet<(String, u32)>, String>
             _ => None,
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use primase_core::shader::{Majorness, Value};
+
+    fn matrix(rows: u8, columns: u8, major: Majorness) -> ConstantType {
+        ConstantType::Matrix {
+            scalar: ScalarType::Float,
+            rows,
+            columns,
+            major,
+            stride: 16,
+        }
+    }
+
+    /// The identity is the diagonal of each matrix, line k's lane k, however its lines hold it: a `row_major float4x3`
+    /// is four lines, its last (the translation) all zero, where a `column_major` one is three; a palette of `float4`
+    /// rows is three rows to a matrix; anything else is refused by type.
+    #[test]
+    fn the_identity_is_placed_by_the_constants_type() {
+        assert_eq!(
+            identity(&matrix(4, 4, Majorness::Column)),
+            Ok(vec![0, 20, 40, 60])
+        );
+        assert_eq!(identity(&matrix(4, 3, Majorness::Row)), Ok(vec![0, 20, 40]));
+        assert_eq!(identity(&matrix(4, 3, Majorness::Column)), Ok(vec![0, 20, 40]));
+        let palette = ConstantType::Array {
+            element: Box::new(matrix(4, 3, Majorness::Row)),
+            count: 2,
+            stride: 64,
+        };
+        assert_eq!(identity(&palette), Ok(vec![0, 20, 40, 64, 84, 104]));
+        let rows = |count, width| ConstantType::Array {
+            element: Box::new(ConstantType::Vector(Value {
+                scalar: ScalarType::Float,
+                width,
+            })),
+            count,
+            stride: 16,
+        };
+        assert_eq!(identity(&rows(6, 4)), Ok(vec![0, 20, 40, 48, 68, 88]));
+        assert!(identity(&rows(4, 4)).is_err(), "not three rows to a matrix");
+        assert!(identity(&rows(6, 3)).is_err(), "not rows of four");
+        assert!(identity(&ConstantType::Scalar(ScalarType::Float)).is_err());
+    }
 }
