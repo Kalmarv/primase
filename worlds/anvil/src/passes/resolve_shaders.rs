@@ -5,7 +5,9 @@
 //!
 //! - **Program.** The Material's template permutation ([`AnvilShaders`], read with `Placer::with_shaders`) for the
 //!   G-buffer pass of a plain draw: the pixel key [`gbuffer_key`] composes from the Material's flags (a
-//!   Material that sets a flag the template's feature word gates is left unbound, naming it), and a vertex key for each
+//!   Material that sets a flag the template's feature word gates is left unbound, naming it), with the discard variant
+//!   (`0x4000`, [`alpha_tested_key`]) where the Material tests alpha and the template has it (inferred, counted: the
+//!   program then discards by its own alpha test, `cb2[18].y` the Material's reference), and a vertex key for each
 //!   vertex layout number (bits 17 to 21 of the key: the mesh's, not the Material's) of the meshes drawn with the
 //!   Material, read from the data: the `kind` of every `anvil.mesh` that lists the Material among its ranges' Materials, or of
 //!   every lowered mesh's primitive that draws it (its Material, or one of its variants'; `anvil.layout`), so the pass
@@ -166,6 +168,24 @@ pub fn gbuffer_key(f: &MaterialFlags, tables: &AnvilShaders) -> Result<u32, Stri
         key |= 0x10;
     }
     Ok(key)
+}
+
+/// The variant bit of the permutations that discard (`0x4000`; docs/shaders.md §6.2): a screen-position dither for the LOD
+/// cross-fade and, in a template that has them, the alpha test (`alpha - cb2[18].y < 0`).
+const DISCARD_VARIANT: u32 = 0x4000;
+
+/// The pixel key a Material that tests alpha is drawn with: `key` with the discard variant, where the Material
+/// states an alpha test (`AlphaTestEnabled`, an `AlphaTestValue` above 0, blend mode 0: the rule `lower-anvil-material`
+/// follows) and the template has that permutation. **Inferred, not read**: the engine's key composer does not set bits 14
+/// to 16 (they are chosen at draw time), and the permutations with the bit are the only ones of an alpha-tested template
+/// that discard by alpha (MAD_CHR_Hair_Anisotropic: no other of its 528 pixel keys has a discard), so a Material that
+/// tests alpha can only be cut by them. `None` where it does not apply.
+pub fn alpha_tested_key(f: &MaterialFlags, tables: &AnvilShaders, key: u32) -> Option<u32> {
+    let tests = f.blend_mode == 0
+        && f.alpha_test_value > 0
+        && f.booleans.get(MaterialFlags::ALPHA_TEST_ENABLED) == Some(&1);
+    let variant = key | DISCARD_VARIANT;
+    (tests && tables.pixel(variant).is_some()).then_some(variant)
 }
 
 /// The vertex key of the pair a pixel key `pixel` belongs to, for vertex layout `layout`: the Material-flag bits (1 to
@@ -664,9 +684,17 @@ impl Pass for ResolveAnvilShaders {
             let template = m.template_name.clone().unwrap_or_default();
             let pixel_key = match world.get::<AnvilShaders>(tables).map_or_else(
                 || Err("the template's shader tables are gone".to_owned()),
-                |t| gbuffer_key(&m.flags, t),
+                |t| gbuffer_key(&m.flags, t).map(|k| (k, alpha_tested_key(&m.flags, t, k))),
             ) {
-                Ok(k) => k,
+                Ok((k, None)) => k,
+                Ok((_, Some(k))) => {
+                    bump(
+                        "materials bound to their template's alpha-tested permutation (key bit 0x4000, which the engine draws an AlphaTestEnabled Material with: inferred, not read)",
+                        1,
+                        &mut counts,
+                    );
+                    k
+                }
                 Err(why) => {
                     bump(&format!("materials left unbound: {why}"), 1, &mut counts);
                     continue;
@@ -700,7 +728,19 @@ impl Pass for ResolveAnvilShaders {
                     );
                     continue;
                 }
+                // the vertex stage of the pair; a template with no vertex permutation for the discard variant draws the
+                // plain one (a vertex program does not discard)
                 let key = gbuffer_vertex_key(pixel_key, u32::from(kind));
+                let has = |k: u32| {
+                    world
+                        .get::<AnvilShaders>(tables)
+                        .is_some_and(|t| t.vertex(k).is_some())
+                };
+                let key = if has(key) {
+                    key
+                } else {
+                    gbuffer_vertex_key(pixel_key & !DISCARD_VARIANT, u32::from(kind))
+                };
                 match program(world, &mut programs, &template, tables, true, key) {
                     Ok(e) => stages.push((
                         Stage::Vertex,
@@ -1251,6 +1291,38 @@ mod key_tests {
             vertex: Vec::new(),
             programs: Vec::new(),
             feature_node: node,
+        }
+    }
+
+    /// A Material that tests alpha (AlphaTestEnabled, a value above 0, blend mode 0) is drawn with its template's discard
+    /// variant (`0x4000`) where the template has it, and with the plain key otherwise; one that tests no alpha never.
+    #[test]
+    fn a_material_that_tests_alpha_takes_the_discard_variant_where_there_is_one() {
+        let plain = 1 << 22;
+        let mut t = template(&[]);
+        t.programs = vec![Vec::new(); 2];
+        t.pixel = vec![(plain, 0)];
+        let mut tests = flags(&[MaterialFlags::ALPHA_TEST_ENABLED], 0, 0);
+        tests.alpha_test_value = 32;
+        assert_eq!(
+            alpha_tested_key(&tests, &t, plain),
+            None,
+            "the template has no such permutation"
+        );
+        t.pixel = vec![(plain, 0), (plain | 0x4000, 1)];
+        assert_eq!(alpha_tested_key(&tests, &t, plain), Some(plain | 0x4000));
+        assert_eq!(
+            alpha_tested_key(&tests, &t, plain | 0x40),
+            None,
+            "the pair of another key is not there"
+        );
+        let mut no_value = tests;
+        no_value.alpha_test_value = 0;
+        let off = flags(&[], 0, 0);
+        let mut blended = tests;
+        blended.blend_mode = 4;
+        for f in [no_value, off, blended] {
+            assert_eq!(alpha_tested_key(&f, &t, plain), None, "{f:?}");
         }
     }
 

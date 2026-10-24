@@ -12,13 +12,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use primase_anvil::components::{AnvilMaterial, AnvilMesh};
 use primase_anvil::passes::{MESH_LAYOUT_FIELD, RESOLVE_ANVIL_SHADERS};
 use primase_anvil::read::archive::{Archive, At};
+use primase_anvil::read::build_table::BUILD_TABLE;
 use primase_anvil::read::material::{MATERIAL, StoredMaterial};
 use primase_anvil::read::mesh::MESH;
-use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
+use primase_anvil::read::placements::{
+    Gender, InstancedLevels, Placed, Placer, RiderPartChoice, RiderSpec, Variant,
+};
+use primase_anvil::read::rider::{HAIR_COLOURS, colours};
+use primase_anvil::read::skeleton::SKELETON;
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassLog};
 use primase_core::shader::{ShaderBinding, Stage};
-use primase_core::{Component, Entity, World};
+use primase_core::{Component, Entity, Name, World};
 use primase_testdata::{Game, install};
 
 const PER_TEMPLATE: usize = 4;
@@ -211,4 +216,98 @@ fn a_sample_of_every_template_is_bound_or_left_with_a_reason() {
     println!("{bound} bound with the pixel stage only");
     print(&log);
     assert!(bound > 0);
+}
+
+/// A rider's hair Material tests alpha (AlphaTestEnabled, value 32): its pixel stage is the template's alpha-tested
+/// permutation (key `0x404000`), the one that discards by Mask1's alpha, with the vertex stage of each layout drawn; the
+/// pass counts it as inferred.
+#[test]
+fn a_hair_material_is_bound_to_the_alpha_tested_permutation() {
+    let Some(dir) = install(Game::Riders) else {
+        return;
+    };
+    let mut archive = Archive::open(&ORDER.map(|f| dir.join(f))).expect("archive");
+    let id_of = |a: &Archive, type_id: u32, name: &str| -> u64 {
+        (0..ORDER.len())
+            .find_map(|f| {
+                a.forge(f)?
+                    .entries()
+                    .find(|(_, n)| n.type_id == type_id && n.name == name)
+                    .map(|(i, _)| i.id)
+            })
+            .unwrap_or_else(|| panic!("no {name}"))
+    };
+    let list = colours(&mut archive, HAIR_COLOURS).expect("hair colours");
+    let colour = list
+        .iter()
+        .find(|c| c.name == "MAD_CHR_HairCut_V001_Blond")
+        .expect("a hair colour");
+    let spec = RiderSpec {
+        name: "rider".to_owned(),
+        skeletons: ["MAD_CHR_Skel_U", "MAD_CHR_SkelAddon_U", "MAD_CHR_SkelAddon_M"]
+            .iter()
+            .map(|n| id_of(&archive, SKELETON, n))
+            .collect(),
+        gender: Gender::Male,
+        parts: vec![
+            RiderPartChoice {
+                table: id_of(&archive, BUILD_TABLE, "MAD_CHR_HEAD_000_U"),
+                variant: Variant::Stated,
+            },
+            RiderPartChoice {
+                table: id_of(&archive, BUILD_TABLE, "MAD_CHR_Hair_005_U_Full"),
+                variant: Variant::Row {
+                    table: colour.table,
+                    condition: colour.condition,
+                },
+            },
+        ],
+    };
+    let mut w = World::new();
+    let mut placed = Placed::default();
+    Placer::new(
+        &mut archive,
+        &mut w,
+        SourceFrame::WORLD,
+        InstancedLevels::Selector,
+    )
+    .with_materials()
+    .with_shaders()
+    .place_rider(&spec, &mut placed);
+    let mut log = PassLog::default();
+    RESOLVE_ANVIL_SHADERS
+        .instance(&options())
+        .expect("options")
+        .run(&mut w, &mut log)
+        .expect("run");
+    print(&log);
+    let hair = w
+        .iter::<AnvilMaterial>()
+        .find(|(e, _)| {
+            w.get::<Name>(*e)
+                .is_some_and(|n| n.0 == "MAD_CHR_HairCut_V001_Blond")
+        })
+        .map(|(e, _)| e)
+        .expect("the hair Material");
+    verify(&w, hair);
+    let binding = w.get::<ShaderBinding>(hair).expect("bound");
+    let name = |e: Entity| w.get::<Name>(e).map(|n| n.0.clone()).unwrap_or_default();
+    let pixel: Vec<String> = binding
+        .stages
+        .iter()
+        .filter(|s| s.stage == Stage::Pixel)
+        .map(|s| name(s.shader))
+        .collect();
+    assert_eq!(pixel, ["MAD_CHR_Hair_Anisotropic-404000.ps"]);
+    assert!(
+        binding.stages.iter().any(|s| s.stage == Stage::Vertex),
+        "no vertex stage bound"
+    );
+    assert!(
+        log.counts
+            .keys()
+            .any(|k| k.contains("bound to their template's alpha-tested permutation")),
+        "{:?}",
+        log.counts
+    );
 }

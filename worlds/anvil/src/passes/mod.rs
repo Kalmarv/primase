@@ -28,8 +28,8 @@ pub use material::{
     fake_river_albedo, world_uv_rows,
 };
 pub use resolve_shaders::{
-    MESH_LAYOUT_FIELD, RESOLVE_ANVIL_SHADERS, ResolveAnvilShaders, UnsetTexture, gbuffer_key,
-    gbuffer_vertex_key, material_constants, render_state, shading_class,
+    MESH_LAYOUT_FIELD, RESOLVE_ANVIL_SHADERS, ResolveAnvilShaders, UnsetTexture, alpha_tested_key,
+    gbuffer_key, gbuffer_vertex_key, material_constants, render_state, shading_class,
 };
 pub use select::{CollisionOnly, Keep, Overlap, SELECT_ANVIL_ENTITIES, SelectAnvilEntities};
 pub use select_clips::{SELECT_ANVIL_CLIPS, SelectAnvilClips};
