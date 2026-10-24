@@ -1,6 +1,6 @@
 //! `resolve-fromsoft-shaders`: the layered materials' G-buffer programs as `core.shader` entities and each material's
 //! `core.shader_binding`.
-use crate::layer_bake::resolve::{Unbound, render_state, resolve, resolve_vertex};
+use crate::layer_bake::resolve::{PALETTE_ROWS_RULE, Unbound, render_state, resolve, resolve_vertex};
 use crate::materials::Material;
 use crate::metaparam::Metaparam;
 use crate::sekiro::source::{MaterialShader, Payloads, ShaderBundle, ShaderPrograms, TexturePayloads};
@@ -342,6 +342,9 @@ fn run(
                             "vertex program's view-projection undecided by the probe ({why}): taken as camera-relative"
                         ))
                         .or_default() += 1;
+                }
+                if vertex.palette_rows {
+                    *policies.entry(PALETTE_ROWS_RULE.to_owned()).or_default() += 1;
                 }
                 stages.push(vertex.stage);
             }

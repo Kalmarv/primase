@@ -9,11 +9,11 @@ use crate::{Result, invalid};
 use primase_core::Entity;
 use primase_core::shader::{
     Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantRole, DepthState,
-    FrameParameter, FrameTexture, InputBinding, InputRole, LaneStream, ObjectParameter, OutputBinding,
-    OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Shader, Stage, StageBinding,
-    TargetState, TextureBinding, TextureSource, ViewParameter,
+    FrameParameter, FrameTexture, InputBinding, InputRole, LaneStream, MatrixLines, ObjectParameter,
+    OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Shader, Stage,
+    StageBinding, TargetState, TextureBinding, TextureSource, ViewParameter,
 };
-use primase_shader::matrix::state_lines;
+use primase_shader::matrix::{Unshown, state_lines};
 use primase_shader::{D3dClass, Interface, Program, Resource, ScalarType, SystemValue};
 use primase_shader_exec::ProgramShader;
 use primase_shader_exec::{Layout, PixelShader};
@@ -1129,6 +1129,7 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> 
     // a matrix's lines as the program applies it, or why it does not show them
     let graph = program.as_ref().map_err(Clone::clone).and_then(Program::graph);
     state_lines(graph.as_ref().map_err(String::as_str), interface, &mut constants);
+    let palette_rows = palette_rows_by_rule(&mut constants);
     Ok(VertexBinding {
         stage: StageBinding {
             stage: Stage::Vertex,
@@ -1141,7 +1142,32 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> 
             outputs: Vec::new(),
         },
         undecided,
+        palette_rows,
     })
+}
+
+/// How the engine holds its joints' palette, `VC_aObjMatrix`: by rows (three lines of four per joint, each a row of the
+/// joint's matrix). Every vertex program that applies the palette reads it so, and none by columns: 17,455 of Elden
+/// Ring's (the one other reads only the joints' translations) and 42 of 42 of Sekiro's ([`state_lines`] on each).
+pub const PALETTE_ROWS_RULE: &str = "joints' palette read but not applied as a matrix (the program takes only the joints' translations): its lines are rows, as every program that applies VC_aObjMatrix reads them (Elden Ring 17,455 of 17,455, Sekiro 42 of 42)";
+
+/// States the lines of a joints' palette the program reads but does not apply ([`Unshown::NotApplied`]) by
+/// [`PALETTE_ROWS_RULE`]: the program shows nothing of them, and a consumer that writes the joints' matrices must still
+/// place their translations. A palette the program does not read, or applies both ways, is left as it shows.
+/// Returns whether a palette was so stated.
+fn palette_rows_by_rule(constants: &mut [ConstantBinding]) -> bool {
+    let not_applied = Unshown::NotApplied.to_string();
+    let mut ruled = false;
+    for c in constants
+        .iter_mut()
+        .filter(|c| c.role == ConstantRole::Object(ObjectParameter::BonePalette))
+    {
+        if matches!(&c.lines, Some(MatrixLines::Unshown { why }) if *why == not_applied) {
+            c.lines = Some(MatrixLines::Rows);
+            ruled = true;
+        }
+    }
+    ruled
 }
 
 /// A vertex program's binding ([`resolve_vertex`]) and what the caller must count.
@@ -1151,6 +1177,8 @@ pub struct VertexBinding {
     /// Why the probe left the view-projection matrix undecided, its numbers as `N`, when it did: the matrix is then taken as
     /// camera-relative by policy, which the caller reports with this reason.
     pub undecided: Option<String>,
+    /// Whether the joints' palette's lines are stated by [`PALETTE_ROWS_RULE`], which the caller counts.
+    pub palette_rows: bool,
 }
 
 /// A reason with its numbers as `N` (offsets and counts differ program to program; the reason does not).

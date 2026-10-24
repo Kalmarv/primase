@@ -48,6 +48,10 @@ const LINING_PROGRAM: &[u8] = include_bytes!("fixtures/layered_lining_vs.dxbc");
 /// Sekiro's cloth programs' shape, each palette row chosen by the flag (tests/fixtures/layered_cloth_rows_vs.hlsl).
 const CLOTH_ROWS_PROGRAM: &[u8] = include_bytes!("fixtures/layered_cloth_rows_vs.dxbc");
 
+/// Elden Ring's LOD billboards' shape, the palette read for the joint's translation alone
+/// (tests/fixtures/layered_billboard_vs.hlsl).
+const BILLBOARD_PROGRAM: &[u8] = include_bytes!("fixtures/layered_billboard_vs.dxbc");
+
 /// A DXBC vertex program as the pass holds it.
 fn dxbc_shader(bytes: &[u8], interface: primase_core::shader::Interface) -> Shader {
     Shader {
@@ -1033,6 +1037,37 @@ fn a_cloth_programs_palette_is_read_through_its_flag() {
         .unwrap();
     assert_eq!(palette.role, ConstantRole::Object(ObjectParameter::BonePalette));
     assert_eq!(palette.lines, Some(MatrixLines::Rows));
+}
+
+/// Elden Ring's LOD billboards read only the joint's translation of the palette and never apply its matrix, so the program
+/// shows nothing of its lines: they are stated by the engine's rule (rows), and the binding says so for the caller to
+/// count.
+#[test]
+fn a_palette_read_only_for_its_translations_is_held_by_rows_by_the_rule() {
+    let interface = primase_dxbc::reflection(BILLBOARD_PROGRAM).unwrap();
+    let entity = World::default().spawn();
+    let vertex = primase_fromsoft::layer_bake::resolve::resolve_vertex(
+        &dxbc_shader(BILLBOARD_PROGRAM, interface),
+        entity,
+    )
+    .unwrap();
+    assert!(vertex.palette_rows);
+    let palette = vertex
+        .stage
+        .constants
+        .iter()
+        .find(|c| c.name.as_deref() == Some("VC_aObjMatrix"))
+        .unwrap();
+    assert_eq!(palette.role, ConstantRole::Object(ObjectParameter::BonePalette));
+    assert_eq!(palette.lines, Some(MatrixLines::Rows));
+    // a palette the program applies shows its lines itself
+    let interface = primase_dxbc::reflection(CLOTH_ROWS_PROGRAM).unwrap();
+    let applied = primase_fromsoft::layer_bake::resolve::resolve_vertex(
+        &dxbc_shader(CLOTH_ROWS_PROGRAM, interface),
+        entity,
+    )
+    .unwrap();
+    assert!(!applied.palette_rows);
 }
 
 /// A material's vertex program follows the data of the primitives that draw it: the skinned permutation when all of them

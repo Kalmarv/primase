@@ -100,6 +100,19 @@ fn a_palette_blended_then_chosen_by_a_flag_is_read_by_rows() {
     }
 }
 
+/// A program that reads a palette's translations alone (Elden Ring's LOD billboards add them to an offset) applies none
+/// of its matrices: it shows no arrangement.
+#[test]
+fn a_palette_read_only_for_its_translations_shows_no_arrangement() {
+    let billboard = dxbc(include_bytes!(
+        "../../../worlds/fromsoft/tests/fixtures/layered_billboard_vs.dxbc"
+    ));
+    assert_eq!(
+        palette_lines_of(&billboard, "VC_aObjMatrix"),
+        Err(Unshown::NotApplied)
+    );
+}
+
 /// `mul(v, M)` of a `column_major` matrix dots the vector with each line: they are the rows of the matrix applied to
 /// column vectors (`M` transposed).
 #[test]
