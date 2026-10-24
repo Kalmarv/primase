@@ -316,6 +316,20 @@ pub fn resolve(
     };
     let mut policies = BTreeMap::new();
     let mut constants = Vec::new();
+    // the program's value graph, read once: what states a matrix's lines and an alpha test's reference
+    let graph = shader.program().graph();
+    // whether the program's discard compares a value it writes with the field `name`'s first word
+    let discard_compares = |name: &str| -> bool {
+        let (Some(field), Ok(graph)) = (layout.fields.get(name), &graph) else {
+            return false;
+        };
+        let bind_point = buffer_of(field.buffer)
+            .and_then(|(id, _)| interface.resource(id))
+            .and_then(|r| r.provenance.d3d);
+        bind_point
+            .and_then(|d| graph.reads.buffer_at(d.space, d.register))
+            .is_some_and(|buffer| primase_shader::output_uses::discard_compares(graph, buffer, field.offset))
+    };
     // a constant of the layout, at `word` words into it, `size` bytes (cut where its buffer ends), by name
     let mut constant = |name: &str, word: usize, size: u32, mut role: ConstantRole| -> Result<()> {
         let Some(&primase_shader_exec::Field { buffer, offset, .. }) = layout.fields.get(name) else {
@@ -500,18 +514,18 @@ pub fn resolve(
         )?,
     }
     let reference = |word: usize| match definition_param("g_AlphaRef") {
-        Some(ParameterValue::Int(v)) => v.get(word).copied().filter(|&r| r > 0),
+        Some(ParameterValue::Int(v)) => v.get(word).copied().and_then(crate::materials::alpha_reference),
         _ => None,
     };
-    constant(
-        "FC_AlphaRef",
-        0,
-        8,
-        words(&[
-            reference(0).map_or(-100., |r| r as f32 / 255.),
-            reference(1).map_or(0., |r| r as f32 / 255.),
-        ]),
-    )?;
+    // its x the alpha test's reference where the program's discard compares a value it writes with it (the material's,
+    // or the engine's -100 where it states none); otherwise both words the material's
+    let (x, y) = (reference(0).unwrap_or(-100.), reference(1).unwrap_or(0.));
+    if discard_compares("FC_AlphaRef") {
+        constant("FC_AlphaRef", 0, 4, ConstantRole::AlphaReference(x))?;
+        constant("FC_AlphaRef", 1, 4, words(&[y]))?;
+    } else {
+        constant("FC_AlphaRef", 0, 8, words(&[x, y]))?;
+    }
     // the glow scale: read only in its w, into the emission target's alpha (all 34 programs that read it), which no bake
     // reads; the material's g_GlowScale where it states one (a four-float parameter), Unknown, by name, where it does not
     match definition_param("g_GlowScale") {
@@ -843,11 +857,7 @@ pub fn resolve(
         })
         .collect();
     // a matrix's lines as the program applies it, or why it does not show them
-    state_lines(
-        shader.program().graph().as_ref().map_err(String::as_str),
-        interface,
-        &mut constants,
-    );
+    state_lines(graph.as_ref().map_err(String::as_str), interface, &mut constants);
     Ok(Resolution {
         stage: StageBinding {
             stage: Stage::Pixel,

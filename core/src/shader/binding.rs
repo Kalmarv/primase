@@ -202,6 +202,11 @@ pub enum ConstantRole {
     View(ViewParameter),
     Object(ObjectParameter),
     Frame(FrameParameter),
+    /// The reference a discard of the program compares the alpha it writes against, the fragment kept where the alpha
+    /// is at least it: the material's value (a 32-bit float). The source states it only where the program's value
+    /// graph shows the discard making that comparison. A consumer that keeps every texel freezes it below any alpha; one
+    /// that carries the cut takes a reference above 0 as its cutoff.
+    AlphaReference(f32),
     /// Not resolved to a role, and why.
     Unknown {
         why: String,
@@ -302,7 +307,10 @@ impl ConstantRole {
                     | ObjectParameter::BonePalette
                     | ObjectParameter::ClothCancelPalette
             ),
-            ConstantRole::Material(_) | ConstantRole::Frame(_) | ConstantRole::Unknown { .. } => false,
+            ConstantRole::Material(_)
+            | ConstantRole::Frame(_)
+            | ConstantRole::AlphaReference(_)
+            | ConstantRole::Unknown { .. } => false,
         }
     }
 }
@@ -1208,6 +1216,14 @@ impl StageBinding {
                     )));
                 }
                 _ => {}
+            }
+            if let ConstantRole::AlphaReference(r) = c.role
+                && (!r.is_finite() || c.size != 4)
+            {
+                return Err(at(format!(
+                    "the alpha reference {r} at {} is not one finite float ({} bytes)",
+                    c.offset, c.size
+                )));
             }
             if let ConstantRole::Material(words) = &c.role
                 && words.len() as u64 * 4 > u64::from(c.size)

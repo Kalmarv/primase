@@ -42,7 +42,7 @@ fn rgba(size: u32, pixels: Vec<u8>, normal: bool) -> Texture {
 fn channel_material(
     world: &mut World,
     name: &str,
-    source: &crate::materials::Material,
+    alpha_mode: AlphaMode,
     image: crate::layer_bake::Bake,
     reflectance: Reflectance,
     log: &mut primase_core::pass::PassLog,
@@ -53,13 +53,7 @@ fn channel_material(
     let mut material = PbrMaterial {
         base_color_texture: Some(TextureRef::new(base)),
         normal_texture: Some(TextureRef::new(normal)),
-        alpha_mode: match source.class.as_str() {
-            "cutout" | "leaves" => AlphaMode::Mask {
-                cutoff: source.cutoff,
-            },
-            "alpha" | "decal" | "water" => AlphaMode::Blend,
-            _ => AlphaMode::Opaque,
-        },
+        alpha_mode,
         // sidedness is each variant's: the face-set cull of the parts it draws
         double_sided: false,
         ..Default::default()
@@ -175,14 +169,13 @@ pub(super) fn assemble(
             report.variants += 1;
             report.nonunit_uv_variants += usize::from(group.period != [1.; 2]);
             let name = format!("bake_{group_index:04}_{level}");
-            let material = channel_material(
-                world,
-                &name,
+            let alpha_mode = crate::materials::alpha_mode(
                 &group.material,
-                image,
-                reflectance,
+                world.get::<primase_core::shader::ShaderBinding>(group.entity),
                 &mut report.policies,
-            )?;
+            );
+            let material =
+                channel_material(world, &name, alpha_mode, image, reflectance, &mut report.policies)?;
             templates.push((material, reflectance));
         }
         for source in &group.parts {
@@ -540,22 +533,16 @@ mod tests {
             let mut before = World::default();
             let mut after = World::default();
             let mut log = primase_core::pass::PassLog::default();
+            let mode = crate::materials::alpha_mode(&source, None, &mut Default::default());
             let old = channel_material(
                 &mut before,
                 "jar",
-                &source,
+                mode,
                 public,
                 Reflectance::Unsupported,
                 &mut Default::default(),
             )?;
-            let new = channel_material(
-                &mut after,
-                "jar",
-                &source,
-                captured.image,
-                classification,
-                &mut log,
-            )?;
+            let new = channel_material(&mut after, "jar", mode, captured.image, classification, &mut log)?;
             // Both are dielectric now; tracing changes only which loss is named.
             assert_eq!((old.metallic, new.metallic), (0., 0.));
             assert_eq!(old, new, "traced reflectance changes no lowered value");
@@ -662,7 +649,7 @@ mod tests {
         let template = channel_material(
             &mut world,
             "bake_shared",
-            &source,
+            crate::materials::alpha_mode(&source, None, &mut Default::default()),
             image,
             Reflectance::Unsupported,
             &mut Default::default(),
@@ -747,7 +734,7 @@ mod tests {
             let material = channel_material(
                 &mut world,
                 "bake_fixture",
-                &source,
+                crate::materials::alpha_mode(&source, None, &mut Default::default()),
                 image,
                 Reflectance::Unsupported,
                 &mut log,

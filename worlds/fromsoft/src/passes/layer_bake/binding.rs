@@ -186,15 +186,15 @@ const ALPHA_TEST_OFF: f32 = -100.;
 /// never set in 10,244 of the draws (NaN or infinity) and other numbers in the rest, read only under the flag.
 pub const FADE_POLICY: &str = "dither and camera fades off in the bake (the flags and their parameters frozen to zero): the engine sets them per draw";
 
-/// The policy a bake counts for an alpha-tested material (its `_Gbuf_[A]` program discards against `FC_AlphaRef`): the test
-/// is off, every texel is kept, and the cutout is the albedo's alpha, sampled beside the program.
-pub const ALPHA_TEST_POLICY: &str =
-    "alpha test off in the bake (FC_AlphaRef.x frozen to -100): the cutout is the albedo's alpha";
+/// The policy a bake counts for an alpha-tested material (its `_Gbuf_[A]` program discards against `FC_AlphaRef`, bound as
+/// the [`ConstantRole::AlphaReference`] role): the test is off in the bake, every texel kept, and the cut carried as the
+/// material's mask at its reference (`crate::materials::alpha_cut`), the albedo's alpha sampled beside the program.
+pub const ALPHA_TEST_POLICY: &str = "alpha test off in the bake (FC_AlphaRef.x frozen to -100): every texel kept, the cut \
+     carried as the material's mask at its reference";
 
 /// The constant buffers of a resolved pixel stage as the program bake freezes them: each constant's words by its role
-/// ([`frozen_words`]) at its place, inside the rows the program reads (it reads no others), and `FC_AlphaRef` frozen to
-/// [`ALPHA_TEST_OFF`] wherever the stage binds it ([`ALPHA_TEST_POLICY`]). `interface` is the stage's program's, whose
-/// resources the binding names.
+/// ([`frozen_words`]: the alpha reference frozen to [`ALPHA_TEST_OFF`]) at its place, inside the rows the program reads
+/// (it reads no others). `interface` is the stage's program's, whose resources the binding names.
 pub(crate) fn program_constants(
     shader: &ProgramShader,
     interface: &primase_core::shader::Interface,
@@ -212,10 +212,6 @@ pub(crate) fn program_constants(
         let Some(mut words) = frozen_words(&c.role, c.lines.as_ref(), frame, policies)? else {
             continue;
         };
-        if c.name.as_deref() == Some("FC_AlphaRef") && !words.is_empty() {
-            words[0] = ALPHA_TEST_OFF.to_bits();
-            policies.insert(ALPHA_TEST_POLICY.into(), 1);
-        }
         let Some(&(_, rows)) = shader.constant_buffers().iter().find(|(s, _)| *s == slot) else {
             continue;
         };
@@ -253,6 +249,14 @@ pub(crate) fn frozen_words(
     let bits = |values: &[f32]| -> Vec<u32> { values.iter().map(|v| v.to_bits()).collect() };
     Ok(Some(match role {
         ConstantRole::Material(words) => words.clone(),
+        // the alpha test off, every texel kept ([`ALPHA_TEST_POLICY`]): zero, negative and above-zero references alike,
+        // counted where the reference would cut
+        ConstantRole::AlphaReference(reference) => {
+            if *reference > 0. {
+                policies.insert(ALPHA_TEST_POLICY.into(), 1);
+            }
+            vec![ALPHA_TEST_OFF.to_bits()]
+        }
         ConstantRole::View(ViewParameter::CameraPosition) => bits(&frame.camera_position),
         ConstantRole::View(ViewParameter::InverseViewProjection) => bits(&frame.inverse_view_projection),
         ConstantRole::View(
@@ -624,15 +628,6 @@ impl Prepared {
             let Some(mut values) = frozen_words(&c.role, c.lines.as_ref(), frame, &mut policies)? else {
                 continue;
             };
-            // the alpha test is off in a bake: a discarded texel has no G-buffer, and the cutout is the albedo's own alpha,
-            // sampled beside the program
-            if c.name.as_deref() == Some("FC_AlphaRef")
-                && matches!(c.role, ConstantRole::Material(_))
-                && values.first().is_some_and(|w| f32::from_bits(*w) > 0.)
-            {
-                values[0] = ALPHA_TEST_OFF.to_bits();
-                policies.insert(ALPHA_TEST_POLICY.into(), 1);
-            }
             // the words inside a buffer the program reads (it reads no others)
             let Some(&n) = words.get(&slot) else {
                 continue;
@@ -1132,6 +1127,31 @@ impl PipelineState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An alpha reference is frozen below any alpha whatever it is, so a bake keeps every texel, and counted only where
+    /// it would cut (above 0): one rule for both bakes.
+    #[test]
+    fn an_alpha_reference_is_frozen_off_and_counted_where_it_would_cut() {
+        let frame = FrozenFrame::static_bake(0.);
+        for (reference, counted) in [
+            (128. / 255., true),
+            (0., false),
+            (-5. / 255., false),
+            (-100., false),
+        ] {
+            let mut policies = BTreeMap::new();
+            let words = frozen_words(
+                &ConstantRole::AlphaReference(reference),
+                None,
+                &frame,
+                &mut policies,
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(words, [ALPHA_TEST_OFF.to_bits()], "{reference}");
+            assert_eq!(policies.contains_key(ALPHA_TEST_POLICY), counted, "{reference}");
+        }
+    }
 
     /// The repeat takes the stored scale of each material texture as the resolve finds its binding, a numbered slot's and
     /// a kind's the material names alike; the engine's own textures carry no material scale and leave it exact.

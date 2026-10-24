@@ -91,6 +91,46 @@ pub fn bind_output_uses(
     uses
 }
 
+/// Whether a discard of the program compares a value it writes to an output with word `word` of constant buffer `buffer`
+/// (as `graph` numbers its resources): among what a discard's conditions are made of, a comparison (`<`, `<=`, `>`,
+/// `>=`) of the word itself and an output lane's value, either directly (`alpha < reference`) or as their difference
+/// against zero (`clip(alpha - reference)`). What makes a constant an alpha test's reference
+/// ([`primase_core::shader::ConstantRole::AlphaReference`]).
+pub fn discard_compares(graph: &ProgramGraph, buffer: primase_core::shader::ResourceId, word: u32) -> bool {
+    use crate::flow::{At, BinaryOperator, Op};
+    let values = &graph.values;
+    let written: std::collections::BTreeSet<_> = values.outputs().values().copied().collect();
+    let is_word = |n| matches!(values.node(n), Node::Global { resource: Some(r), at: At::Component(w) } if *r == buffer && *w == word);
+    let pair = |a, b| (is_word(a) && written.contains(&b)) || (is_word(b) && written.contains(&a));
+    let zero = |n| matches!(values.node(n), Node::Literal(l) if l.0 == 0.);
+    let difference = |n| match values.node(n) {
+        Node::Op {
+            op: Op::Binary(BinaryOperator::Subtract),
+            operands,
+        } if operands.len() == 2 => pair(operands[0], operands[1]),
+        _ => false,
+    };
+    values
+        .reached_from(values.discards().iter().flatten().copied())
+        .into_iter()
+        .any(|id| match values.node(id) {
+            Node::Op {
+                op:
+                    Op::Binary(
+                        BinaryOperator::Less
+                        | BinaryOperator::LessEqual
+                        | BinaryOperator::Greater
+                        | BinaryOperator::GreaterEqual,
+                    ),
+                operands,
+            } if operands.len() == 2 => {
+                let (a, b) = (operands[0], operands[1]);
+                pair(a, b) || (zero(b) && difference(a)) || (zero(a) && difference(b))
+            }
+            _ => false,
+        })
+}
+
 /// Whether target `target`'s stated blend weighs the colour by the source alpha: the state's blend for that target
 /// (render target 0's is also the state's own `blend`).
 fn weighs_by_source_alpha(state: &RenderState, target: u32) -> bool {

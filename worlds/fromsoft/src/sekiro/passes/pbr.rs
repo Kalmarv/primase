@@ -12,7 +12,7 @@ use crate::{
     mtd::Value,
 };
 use primase_core::pass::PassLog;
-use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform};
+use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform};
 use primase_core::{
     ColorSpace, DrawLayer, DrawOrder, Entity, MaterialUsage, Name, TexFormat, TexRole, Texture, World,
 };
@@ -601,11 +601,11 @@ fn lower_materials(
                 }
                 p.normal_texture = Some(r);
             }
-            p.alpha_mode = match m.class.as_str() {
-                "leaves" | "cutout" => AlphaMode::Mask { cutoff: m.cutoff },
-                "alpha" | "additive" | "decal" | "water" => AlphaMode::Blend,
-                _ => AlphaMode::Opaque,
-            };
+            p.alpha_mode = crate::materials::alpha_mode(
+                &m,
+                world.get::<primase_core::shader::ShaderBinding>(e),
+                &mut log,
+            );
         }
         if baked {
             log.approximate("layered PBR channels require shader bake outputs", 1);

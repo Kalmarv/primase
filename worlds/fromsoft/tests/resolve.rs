@@ -1369,44 +1369,153 @@ fn the_material_buffers_engine_named_fields_come_from_the_definition() {
     assert_eq!(plain.program_name().unwrap(), "M[Multiple]_27_Gbuf.ppo");
 }
 
-/// The bake keeps every texel of an alpha-tested material: the test is frozen off (-100) and counted, since a discarded
-/// texel has no G-buffer and the cutout is the albedo's own alpha.
+/// The alpha-tested fixture (`fixtures/alpha_ref.hlsl`): `tested` discards where the alpha it writes to target 2's w is
+/// below FC_AlphaRef.x, `unrelated` by FC_AlphaRef.x against a value it writes to no target; each as fxc and dxc compile it.
+const ALPHA_TESTED: [(&str, &[u8], &[u8]); 2] = [
+    (
+        "tested",
+        include_bytes!("fixtures/alpha_ref_tested.dxbc"),
+        include_bytes!("fixtures/alpha_ref_tested.dxil"),
+    ),
+    (
+        "unrelated",
+        include_bytes!("fixtures/alpha_ref_unrelated.dxbc"),
+        include_bytes!("fixtures/alpha_ref_unrelated.dxil"),
+    ),
+];
+
+/// The entry `entry` of the alpha-tested fixture, lifted from each bytecode, with the bytecode's name.
+fn alpha_programs(entry: &str) -> Vec<(&'static str, ProgramShader)> {
+    let (_, dxbc, dxil) = ALPHA_TESTED.iter().find(|f| f.0 == entry).unwrap();
+    vec![
+        ("dxbc", executor(dxbc)),
+        (
+            "dxil",
+            ProgramShader::new(primase_dxil::lift(dxil).unwrap()).unwrap(),
+        ),
+    ]
+}
+
+/// A material stating `g_AlphaRef` as `aref` (none where `None`).
+fn alpha_material(aref: Option<[i32; 2]>) -> LayeredMaterial {
+    let mut m = with_params(&[("g_DiffuseMapColor", Value::Float(vec![1., 1., 1.]))]);
+    m.definition.parameters.retain(|p| p.name != "g_AlphaRef");
+    if let Some(a) = aref {
+        m.definition.parameters.push(Parameter {
+            name: "g_AlphaRef".into(),
+            value: Value::Int(a.to_vec()),
+        });
+    }
+    m
+}
+
+/// FC_AlphaRef.x is the alpha test's reference where the program's discard compares the alpha it writes with it: the
+/// material's `g_AlphaRef` over 255 where above 0, the engine's -100 where 0, negative or not stated; the y beside it the
+/// material's. Where the discard compares it with a value written nowhere, both words stay the material's.
 #[test]
-fn the_bake_freezes_the_alpha_test_off() {
-    use primase_fromsoft::layer_bake::{ALPHA_TEST_POLICY, FrozenFrame, Prepared, Programs};
-    let shader = executor(MTD_PROGRAM);
+fn an_alpha_tested_programs_discard_makes_fc_alpha_refs_x_its_reference() {
     let program = World::default().spawn();
-    let tested = with_params(&[
-        ("g_DiffuseMapColor", Value::Float(vec![1., 1., 1.])),
-        ("g_AlphaRef", Value::Int(vec![128, 0])),
-    ]);
-    let stage = resolve(
-        &shader,
-        program,
-        &tested.view(),
-        primase_fromsoft::Game::Sekiro,
-        None,
-        Unbound::Preview,
-        &mut |_, _| Ok(None),
-    )
-    .unwrap()
-    .stage;
-    let prepared = Prepared::from_binding(
-        Programs {
-            shader: &shader,
-            bytecode: MTD_PROGRAM,
-            stage: &stage,
-            vertex: None,
-        },
-        &tested,
-        &FrozenFrame::static_bake(0.),
-        |_, _, _| unreachable!("no texture is bound"),
-        |_, _, _| Ok(None),
-    )
-    .unwrap();
-    assert_eq!(prepared.policies.get(ALPHA_TEST_POLICY), Some(&1));
-    // a material without a reference is not counted
-    let plain = with_params(&[("g_AlphaRef", Value::Int(vec![0, 0]))]);
+    let fc_alpha_ref = |shader: &ProgramShader, material: &LayeredMaterial| {
+        let stage = resolve(
+            shader,
+            program,
+            &material.view(),
+            primase_fromsoft::Game::Sekiro,
+            None,
+            Unbound::Preview,
+            &mut |_, _| Ok(None),
+        )
+        .unwrap()
+        .stage;
+        constants(&stage, shader)
+            .into_iter()
+            .filter(|c| c.1 == "FC_AlphaRef" && c.2 < 88)
+            .map(|c| (c.2, c.3, c.4))
+            .collect::<Vec<_>>()
+    };
+    for (bytecode, shader) in alpha_programs("tested") {
+        for (aref, x) in [
+            (Some([128, 64]), 128. / 255.),
+            (Some([0, 0]), -100.),
+            (Some([-5, 0]), -100.),
+            (None, -100.),
+        ] {
+            let y = if aref == Some([128, 64]) { 64. / 255. } else { 0. };
+            assert_eq!(
+                fc_alpha_ref(&shader, &alpha_material(aref)),
+                [(80, 4, ConstantRole::AlphaReference(x)), (84, 4, bits(&[y]))],
+                "{bytecode} {aref:?}"
+            );
+        }
+    }
+    for (bytecode, shader) in alpha_programs("unrelated") {
+        assert_eq!(
+            fc_alpha_ref(&shader, &alpha_material(Some([128, 64]))),
+            [(80, 8, bits(&[128. / 255., 64. / 255.]))],
+            "{bytecode}"
+        );
+    }
+}
+
+/// Both bakes keep every texel of an alpha-tested material by the one rule its binding states: the reference frozen
+/// off (-100), counted where it would cut (above 0), and neither counts a material whose program tests nothing.
+#[test]
+fn both_bakes_freeze_the_alpha_test_off_by_the_binding() {
+    use primase_fromsoft::detail_probe::ProgramProbe;
+    use primase_fromsoft::layer_bake::{ALPHA_TEST_POLICY, FrozenFrame, Prepared, Programs};
+    let (_, tested, _) = ALPHA_TESTED[0];
+    let shader = executor(tested);
+    let program = World::default().spawn();
+    for (aref, counted) in [
+        (Some([128, 0]), true),
+        (Some([0, 0]), false),
+        (Some([-5, 0]), false),
+        (None, false),
+    ] {
+        let material = alpha_material(aref);
+        let stage = resolve(
+            &shader,
+            program,
+            &material.view(),
+            primase_fromsoft::Game::Sekiro,
+            None,
+            Unbound::Preview,
+            &mut |_, _| Ok(None),
+        )
+        .unwrap()
+        .stage;
+        // the layered bake
+        let prepared = Prepared::from_binding(
+            Programs {
+                shader: &shader,
+                bytecode: tested,
+                stage: &stage,
+                vertex: None,
+            },
+            &material,
+            &FrozenFrame::static_bake(0.),
+            |_, _, _| unreachable!("no texture is bound"),
+            |_, _, _| Ok(None),
+        )
+        .unwrap();
+        // the program bake, as the detail probe freezes a program
+        let probe = ProgramProbe::with_material(tested, &material).unwrap();
+        assert_eq!(
+            prepared.policies.contains_key(ALPHA_TEST_POLICY),
+            counted,
+            "{aref:?}"
+        );
+        assert_eq!(
+            probe.policies.contains_key(ALPHA_TEST_POLICY),
+            counted,
+            "{aref:?}"
+        );
+        // FC_AlphaRef.x, cbMtdParam (b3) word 20, as the program bake runs it
+        assert_eq!(probe.words(3, 20, 1), Some(vec![(-100f32).to_bits()]), "{aref:?}");
+    }
+    // the plain program's FC_AlphaRef is read into a colour, not tested: neither bake freezes or counts it
+    let plain = with_params(&[("g_AlphaRef", Value::Int(vec![128, 0]))]);
+    let shader = executor(MTD_PROGRAM);
     let stage = resolve(
         &shader,
         program,
@@ -1432,6 +1541,9 @@ fn the_bake_freezes_the_alpha_test_off() {
     )
     .unwrap();
     assert_eq!(prepared.policies.get(ALPHA_TEST_POLICY), None);
+    let probe = ProgramProbe::with_material(MTD_PROGRAM, &plain).unwrap();
+    assert_eq!(probe.policies.get(ALPHA_TEST_POLICY), None);
+    assert_eq!(probe.words(3, 20, 1), Some(vec![(128f32 / 255.).to_bits()]));
 }
 
 /// A texture's tiling is its uv group's, the group the metaparam records for the same `Texture2D_N`, whatever the

@@ -241,14 +241,14 @@ pub fn resolve_definition(
         Some(Class::Decal) => m.class = "decal".into(),
         Some(Class::Leaves) => {
             m.class = "leaves".into();
-            if aref > 0 {
-                m.cutoff = aref as f32 / 255.;
+            if let Some(reference) = alpha_reference(aref) {
+                m.cutoff = reference;
             }
         }
         None if blend == 2 => m.class = "alpha".into(),
         None if aref > 0 => {
             m.class = "cutout".into();
-            m.cutoff = aref as f32 / 255.;
+            m.cutoff = alpha_reference(aref).unwrap_or(m.cutoff);
         }
         None => {}
     }
@@ -267,4 +267,188 @@ pub fn resolve_definition(
         });
     }
     m
+}
+
+/// The alpha test's reference a material states, from the first word of its `g_AlphaRef` (`raw`): the word over 255
+/// where it is above 0, none where it is 0 or below (the game's plain program, which tests nothing). The one rule the
+/// material's class, its binding's [`primase_core::shader::ConstantRole::AlphaReference`] and the bakes take it by.
+pub fn alpha_reference(raw: i32) -> Option<f32> {
+    (raw > 0).then(|| raw as f32 / 255.)
+}
+
+/// What a lowering counts where a material's alpha cut is not its bound program's own ([`alpha_cut`]).
+pub const UNBOUND_ALPHA_CUT: &str = "alpha cut from the material's g_AlphaRef: its program is not bound";
+
+/// What a lowering counts where a material states an alpha reference its bound program's discard does not compare
+/// against ([`alpha_cut`]): the program decides, and the surface is not cut.
+pub const UNTESTED_ALPHA_REFERENCE: &str = "material states an alpha reference its program does not test";
+
+/// A material's alpha cut: the cutoff its mask takes, none where it is not cut, and the count a lowering takes where
+/// the cut is not the bound program's own.
+///
+/// With a binding (`resolve-fromsoft-shaders` run), the cut is the pixel stage's
+/// [`primase_core::shader::ConstantRole::AlphaReference`]: a reference above 0 its cutoff, none at 0 or below or where
+/// the binding states no reference (its program's discard compares against none), the last counted
+/// ([`UNTESTED_ALPHA_REFERENCE`]) where the material states one. Without, the material's class: `cutout` and `leaves`
+/// at its cutoff, counted ([`UNBOUND_ALPHA_CUT`]).
+pub fn alpha_cut(
+    binding: Option<&primase_core::shader::ShaderBinding>,
+    material: &Material,
+) -> (Option<f32>, Option<&'static str>) {
+    use primase_core::shader::{ConstantRole, Stage};
+    match binding {
+        Some(b) => {
+            let stated = b.stage(Stage::Pixel).and_then(|s| {
+                s.constants.iter().find_map(|c| match c.role {
+                    ConstantRole::AlphaReference(r) => Some(r),
+                    _ => None,
+                })
+            });
+            let states = material
+                .view()
+                .is_some_and(|v| alpha_reference(v.alpha_reference()).is_some());
+            match stated {
+                Some(r) => ((r > 0.).then_some(r), None),
+                None if states => (None, Some(UNTESTED_ALPHA_REFERENCE)),
+                None => (None, None),
+            }
+        }
+        None => match material.class.as_str() {
+            "cutout" | "leaves" => (Some(material.cutoff), Some(UNBOUND_ALPHA_CUT)),
+            _ => (None, None),
+        },
+    }
+}
+
+/// A material's alpha mode: blended for the blended classes (`alpha`, `additive`, `decal`, `water`), otherwise a mask at
+/// its alpha cut ([`alpha_cut`]) or opaque, the cut's count taken in `log`.
+pub fn alpha_mode(
+    material: &Material,
+    binding: Option<&primase_core::shader::ShaderBinding>,
+    log: &mut primase_core::pass::PassLog,
+) -> primase_core::pbr::AlphaMode {
+    use primase_core::pbr::AlphaMode;
+    if matches!(material.class.as_str(), "alpha" | "additive" | "decal" | "water") {
+        return AlphaMode::Blend;
+    }
+    let (cut, count) = alpha_cut(binding, material);
+    if let Some(count) = count {
+        log.count(count, 1);
+    }
+    cut.map_or(AlphaMode::Opaque, |cutoff| AlphaMode::Mask { cutoff })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use primase_core::pbr::AlphaMode;
+    use primase_core::shader::{
+        ConstantBinding, ConstantRole, RenderState, ResourceId, ShaderBinding, Stage, StageBinding,
+    };
+
+    /// A material of `class` stating `g_AlphaRef` as `aref` (none where `None`), cut at `cutoff` by the read-time rule.
+    fn material(class: &str, aref: Option<i32>, cutoff: f32) -> Material {
+        let parameters = aref
+            .map(|a| crate::mtd::Parameter {
+                name: "g_AlphaRef".into(),
+                value: crate::mtd::Value::Int(vec![a, 0]),
+            })
+            .into_iter()
+            .collect();
+        Material {
+            mtd: "m".into(),
+            definition: Some(Definition::Mtd(MaterialDefinition {
+                shader: String::new(),
+                description: String::new(),
+                parameters,
+                textures: Vec::new(),
+                block_lengths: Vec::new(),
+            })),
+            gx: Vec::new(),
+            shader: String::new(),
+            class: class.into(),
+            skip: None,
+            cutoff,
+            bindings: BTreeMap::new(),
+            layered: None,
+        }
+    }
+
+    /// A binding whose pixel stage states the alpha reference `reference` (none where `None`).
+    fn binding(reference: Option<f32>) -> ShaderBinding {
+        let shader = primase_core::World::default().spawn();
+        ShaderBinding {
+            stages: vec![StageBinding {
+                stage: Stage::Pixel,
+                variant: None,
+                shader,
+                inputs: Vec::new(),
+                constants: reference
+                    .map(|r| ConstantBinding {
+                        resource: ResourceId(0),
+                        offset: 80,
+                        size: 4,
+                        name: Some("FC_AlphaRef".into()),
+                        role: ConstantRole::AlphaReference(r),
+                        lines: None,
+                    })
+                    .into_iter()
+                    .collect(),
+                textures: Vec::new(),
+                buffers: Vec::new(),
+                constant_buffers: Vec::new(),
+                outputs: Vec::new(),
+            }],
+            state: RenderState::default(),
+        }
+    }
+
+    /// With a binding the cut is its alpha reference's: a reference above 0 the mask's cutoff, 0, a negative one or none
+    /// no mask, the last counted where the material states a reference. Without, the read-time class, counted. A
+    /// blended class is blended either way.
+    #[test]
+    fn the_alpha_cut_is_the_bound_programs_reference_and_the_material_class_without_one() {
+        let mode = |m: &Material, b: Option<&ShaderBinding>| {
+            let mut log = primase_core::pass::PassLog::default();
+            let mode = alpha_mode(m, b, &mut log);
+            (mode, log.counts.keys().cloned().collect::<Vec<_>>())
+        };
+        let cutout = material("cutout", Some(128), 128. / 255.);
+        let reference = alpha_reference(128).unwrap();
+        assert_eq!(reference, 128. / 255.);
+        assert_eq!(
+            mode(&cutout, Some(&binding(Some(reference)))),
+            (AlphaMode::Mask { cutoff: reference }, vec![])
+        );
+        for r in [0., -5. / 255., -100.] {
+            assert_eq!(
+                mode(&cutout, Some(&binding(Some(r)))),
+                (AlphaMode::Opaque, vec![]),
+                "{r}"
+            );
+        }
+        assert_eq!(
+            mode(&cutout, Some(&binding(None))),
+            (AlphaMode::Opaque, vec![UNTESTED_ALPHA_REFERENCE.to_owned()])
+        );
+        let plain = material("opaque", Some(0), 0.5);
+        assert_eq!(mode(&plain, Some(&binding(None))), (AlphaMode::Opaque, vec![]));
+        assert_eq!(
+            mode(&cutout, None),
+            (
+                AlphaMode::Mask { cutoff: reference },
+                vec![UNBOUND_ALPHA_CUT.to_owned()]
+            )
+        );
+        assert_eq!(mode(&plain, None), (AlphaMode::Opaque, vec![]));
+        assert_eq!(
+            mode(
+                &material("alpha", Some(128), 0.5),
+                Some(&binding(Some(reference)))
+            )
+            .0,
+            AlphaMode::Blend
+        );
+        assert_eq!([alpha_reference(0), alpha_reference(-5)], [None, None]);
+    }
 }
