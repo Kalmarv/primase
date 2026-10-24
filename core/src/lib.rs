@@ -116,7 +116,7 @@ mod tests {
             "translate-world",
         ];
         assert_eq!(format!("{reg:?}"), format!("{names:?}"));
-        let requiring = ["select-assets", "select-outfit", "translate-world"];
+        let requiring = ["select-assets", "select-lod", "select-outfit", "translate-world"];
         for name in names {
             assert_eq!(reg.requires_options(name), requiring.contains(&name), "{name}");
             let described = reg
@@ -139,6 +139,7 @@ mod tests {
         assert!(
             refused("select-assets").starts_with("pass select-assets: one of keys or names is required (")
         );
+        assert!(refused("select-lod").starts_with("pass select-lod: form is required: "));
         assert!(
             reg.describe("select-assets")
                 .unwrap()

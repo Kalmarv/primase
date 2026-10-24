@@ -117,8 +117,8 @@ pub enum LodChoice {
     AtMost(u8),
 }
 
-/// `select-lod{form=finest|default|N}` (no options: `default`): every prototype with [`Lods`] is left with the one
-/// form [`Lods::choose`] takes (with `default`, the finest where the source authored no default, counted as an
+/// `select-lod{form=finest|default|N}` (`form` required: which level of detail is drawn is the program's choice):
+/// every prototype with [`Lods`] is left with the one form [`Lods::choose`] takes (with `default`, the finest where the source authored no default, counted as an
 /// approximation). Another form than its own takes the prototype's own geometry away with everything that describes
 /// it ([`World::remove_mesh`]: `core.mesh`, `core.mesh_file` and every per-primitive component, dialect data
 /// included, so nothing describing the discarded form stays behind when the chosen form lacks it), then every
@@ -133,39 +133,28 @@ pub struct SelectLod {
     pub choice: LodChoice,
 }
 
-impl Default for SelectLod {
-    fn default() -> Self {
-        SelectLod {
-            choice: LodChoice::Default,
-        }
-    }
-}
-
 /// `select-lod`'s declaration ([`crate::pass::PassRegistry::add`]).
 pub const SELECT_LOD: PassSpec = PassSpec {
     name: "select-lod",
-    options: &[OptionSpec::optional(
+    options: &[OptionSpec::required(
         "form",
         "finest",
-        "finest, default or a level 0-255: the form each prototype keeps (LodChoice)",
-        "default: the form the source names, else the finest",
+        "finest, default (the form the source names, else the finest) or a level 0-255: the form each prototype \
+         keeps (LodChoice)",
     )],
     make: select_lod,
 };
 
 fn select_lod(g: &Given) -> Result<Box<dyn Pass>, String> {
-    let mut pass = SelectLod::default();
-    if let Some(v) = g.optional("form") {
-        pass.choice = match v {
-            "finest" => LodChoice::Finest,
-            "default" => LodChoice::Default,
-            n => LodChoice::AtMost(
-                n.parse()
-                    .map_err(|_| format!("form={n} is not finest, default or a level 0-255"))?,
-            ),
-        }
-    }
-    Ok(Box::new(pass))
+    let choice = match g.required("form") {
+        "finest" => LodChoice::Finest,
+        "default" => LodChoice::Default,
+        n => LodChoice::AtMost(
+            n.parse()
+                .map_err(|_| format!("form={n} is not finest, default or a level 0-255"))?,
+        ),
+    };
+    Ok(Box::new(SelectLod { choice }))
 }
 
 impl Pass for SelectLod {
@@ -175,7 +164,7 @@ impl Pass for SelectLod {
     fn options(&self) -> Options {
         let form = match self.choice {
             LodChoice::Finest => "finest".to_owned(),
-            LodChoice::Default => return Options::new(),
+            LodChoice::Default => "default".to_owned(),
             LodChoice::AtMost(n) => n.to_string(),
         };
         Options::from([("form".to_owned(), form)])
@@ -366,7 +355,7 @@ mod tests {
         let err = m
             .run(
                 &mut w,
-                &m.registry.parse("select-lod").unwrap(),
+                &m.registry.parse("select-lod{form=default}").unwrap(),
                 &mut RunReport::default(),
             )
             .unwrap_err();
@@ -395,8 +384,12 @@ mod tests {
         assert_eq!(w.verify_components(), vec![]);
         let m = manager().with_pass_checks(true);
         let mut report = RunReport::default();
-        m.run(&mut w, &m.registry.parse("select-lod").unwrap(), &mut report)
-            .unwrap();
+        m.run(
+            &mut w,
+            &m.registry.parse("select-lod{form=default}").unwrap(),
+            &mut report,
+        )
+        .unwrap();
         assert_eq!(w.get::<Tag>(proto).unwrap().0, "coarse");
         assert_eq!(w.get::<Name>(proto).unwrap().0, "the prototype");
         assert_eq!(w.get::<Source>(proto).unwrap().0, "proto");
@@ -446,8 +439,12 @@ mod tests {
         assert_eq!(w.verify_components(), vec![]);
         let m = manager();
         let mut report = RunReport::default();
-        m.run(&mut w, &m.registry.parse("select-lod").unwrap(), &mut report)
-            .unwrap();
+        m.run(
+            &mut w,
+            &m.registry.parse("select-lod{form=default}").unwrap(),
+            &mut report,
+        )
+        .unwrap();
         assert_eq!(w.get::<Tag>(proto).unwrap().0, "finest");
         assert!(forms.iter().all(|f| !w.is_alive(*f)));
         let step = &report.steps[0];
@@ -466,8 +463,12 @@ mod tests {
         // an authored default is no approximation; neither are the other choices
         let (mut w, _, _) = world();
         let mut report = RunReport::default();
-        m.run(&mut w, &m.registry.parse("select-lod").unwrap(), &mut report)
-            .unwrap();
+        m.run(
+            &mut w,
+            &m.registry.parse("select-lod{form=default}").unwrap(),
+            &mut report,
+        )
+        .unwrap();
         assert!(report.steps[0].log.approximations.is_empty());
         assert_eq!(
             SelectLod {
@@ -482,7 +483,7 @@ mod tests {
     fn select_lod_takes_one_form_with_everything_it_holds() {
         for (pipeline, name, mesh, file, opaque) in [
             ("select-lod{form=finest}", "finest", true, false, false),
-            ("select-lod", "coarse", false, true, true),
+            ("select-lod{form=default}", "coarse", false, true, true),
             ("select-lod{form=2}", "coarse", false, true, true),
             ("select-lod{form=3}", "nothing", false, false, false),
         ] {
@@ -523,7 +524,12 @@ mod tests {
                 .options()["form"],
             "2"
         );
-        assert!(SELECT_LOD.instance(&Options::new()).unwrap().options().is_empty());
+        // no form is refused; every form prints back as it was given
+        assert!(SELECT_LOD.instance(&Options::new()).is_err());
+        for form in ["finest", "default", "0", "255"] {
+            let given = Options::from([("form".into(), form.into())]);
+            assert_eq!(SELECT_LOD.instance(&given).unwrap().options(), given, "{form}");
+        }
         assert!(
             SELECT_LOD
                 .instance(&Options::from([("form".into(), "high".into())]))
@@ -569,8 +575,12 @@ mod tests {
             w.insert(proto, MaterialVariants(vec![]));
             let m = manager().with_pass_checks(true);
             let mut report = RunReport::default();
-            m.run(&mut w, &m.registry.parse("select-lod").unwrap(), &mut report)
-                .unwrap();
+            m.run(
+                &mut w,
+                &m.registry.parse("select-lod{form=default}").unwrap(),
+                &mut report,
+            )
+            .unwrap();
             assert_eq!(w.get::<Tag>(proto).unwrap().0, "coarse");
             assert!(
                 !w.has::<PerPrimitive>(proto) && !w.has::<MaterialVariants>(proto),
@@ -612,7 +622,7 @@ mod tests {
         let err = m
             .run(
                 &mut w,
-                &m.registry.parse("select-lod").unwrap(),
+                &m.registry.parse("select-lod{form=default}").unwrap(),
                 &mut RunReport::default(),
             )
             .unwrap_err();
@@ -643,17 +653,21 @@ mod tests {
                 default: Some(99),
             },
         );
-        let err = SelectLod::default()
-            .run(&mut w, &mut PassLog::default())
-            .unwrap_err();
+        let err = SelectLod {
+            choice: LodChoice::Default,
+        }
+        .run(&mut w, &mut PassLog::default())
+        .unwrap_err();
         assert!(err.contains("default form 99 of 1"), "{err}");
         assert_eq!(w.get::<Tag>(proto).unwrap().0, "finest");
         assert!(forms.iter().all(|e| w.is_alive(*e)) && w.has::<Lods>(second));
         // a form shared by two prototypes
         w.insert(second, w.get::<Lods>(proto).unwrap().clone());
-        let err = SelectLod::default()
-            .run(&mut w, &mut PassLog::default())
-            .unwrap_err();
+        let err = SelectLod {
+            choice: LodChoice::Default,
+        }
+        .run(&mut w, &mut PassLog::default())
+        .unwrap_err();
         assert!(err.contains("more than one prototype"), "{err}");
         // a form something else refers to
         w.remove::<Lods>(second);
@@ -665,9 +679,11 @@ mod tests {
                 variant: 0,
             },
         );
-        let err = SelectLod::default()
-            .run(&mut w, &mut PassLog::default())
-            .unwrap_err();
+        let err = SelectLod {
+            choice: LodChoice::Default,
+        }
+        .run(&mut w, &mut PassLog::default())
+        .unwrap_err();
         assert!(
             err.contains("core.instance") && err.contains("refers to form"),
             "{err}"

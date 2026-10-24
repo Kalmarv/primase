@@ -1589,7 +1589,11 @@ fn a_selected_form_is_written_as_the_prototype() {
     let src = fixture_with("lods_select", &lods_manifest().to_string(), |_| {});
     let (mut w, _) = read_loaded(&src);
     let mut log = PassLog::default();
-    primase_core::SelectLod::default().run(&mut w, &mut log).unwrap();
+    primase_core::SelectLod {
+        choice: primase_core::LodChoice::Default,
+    }
+    .run(&mut w, &mut log)
+    .unwrap();
     assert_eq!(log.counts["prototypes drawn with another form"], 1);
     assert_eq!(log.counts["prototypes drawn with their own form"], 1);
     assert_eq!(log.counts["forms left out"], 1);
