@@ -181,6 +181,28 @@ impl Values {
         &self.writes
     }
 
+    /// The nodes the program's results start from: every output lane's, every discard's conditions and what every
+    /// write is made of ([`Values::writes`]).
+    pub fn roots(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.outputs
+            .values()
+            .copied()
+            .chain(self.discards.iter().flatten().copied())
+            .chain(self.writes.iter().flatten().copied())
+    }
+
+    /// Every node `roots` are made of, the roots included: the nodes reached through [`Values::operands`].
+    pub fn reached_from(&self, roots: impl IntoIterator<Item = NodeId>) -> BTreeSet<NodeId> {
+        let mut seen = BTreeSet::new();
+        let mut pending: Vec<NodeId> = roots.into_iter().collect();
+        while let Some(id) = pending.pop() {
+            if seen.insert(id) {
+                pending.extend(self.operands(id));
+            }
+        }
+        seen
+    }
+
     /// The nodes `id` is made of, as [`Node`] lists them: operands, a texel's coordinate and controls, an index, a
     /// merge's conditions and arms, a loop's arms and exits.
     pub fn operands(&self, id: NodeId) -> Vec<NodeId> {

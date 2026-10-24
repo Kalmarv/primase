@@ -28,8 +28,15 @@ pub struct WordsRead {
 }
 
 impl WordsRead {
-    /// The words `values` reads of the constant buffers of `interface` (the program's).
+    /// The words `values` reads of the constant buffers of `interface` (the program's): those of the nodes its results
+    /// are made of ([`Values::roots`]).
     pub fn of_values(values: &Values, interface: &Interface) -> WordsRead {
+        WordsRead::of_nodes(values, interface, &values.reached_from(values.roots()))
+    }
+
+    /// The constant-buffer words among `nodes` of `values` (a set [`Values::reached_from`] gives: what one value, such
+    /// as an index, is made of).
+    pub fn of_nodes(values: &Values, interface: &Interface, nodes: &BTreeSet<NodeId>) -> WordsRead {
         let buffers: BTreeSet<ResourceId> = interface
             .resources
             .iter()
@@ -45,18 +52,7 @@ impl WordsRead {
                 .collect(),
             ..WordsRead::default()
         };
-        let mut seen = BTreeSet::new();
-        let mut stack: Vec<NodeId> = values
-            .outputs()
-            .values()
-            .copied()
-            .chain(values.discards().iter().flatten().copied())
-            .chain(values.writes().iter().flatten().copied())
-            .collect();
-        while let Some(id) = stack.pop() {
-            if !seen.insert(id) {
-                continue;
-            }
+        for &id in nodes {
             if let Node::Global {
                 resource: Some(r),
                 at,
@@ -72,9 +68,13 @@ impl WordsRead {
                     }
                 }
             }
-            stack.extend(values.operands(id));
         }
         out
+    }
+
+    /// The constant buffers with a word read, in order.
+    pub fn buffers(&self) -> impl Iterator<Item = ResourceId> + '_ {
+        self.words.keys().copied()
     }
 
     /// The words of `buffer` read at places the program states, in order (none when it reads none).

@@ -31,9 +31,10 @@
 use std::collections::BTreeSet;
 
 use primase_core::shader::{
-    BufferKind, ResourceId, ResourceKind, ScalarType, Shader, ShaderFormat, Stage, SystemValue,
+    BufferKind, Interface, ResourceId, ResourceKind, ScalarType, Shader, ShaderFormat, Stage, SystemValue,
 };
-use primase_shader::flow::{At, Node, NodeId, Values};
+use primase_shader::WordsRead;
+use primase_shader::flow::{At, Node, Values};
 use primase_shader_exec::{Backend, Element, Executable, ImageSample, Resources, Runner};
 
 use super::clip_position::{ClipRows, pass_buffer};
@@ -284,7 +285,7 @@ pub fn probe_tables(shader: &Shader, clip: ClipRows) -> Result<TableRoles, Strin
     // is 3 moves the first record read by three records
     let values = Values::of_program(&program).map_err(|e| format!("the value graph: {e}"))?;
     let mut proved = Vec::new();
-    for (buffer, word) in index_constants(&values, instances) {
+    for (buffer, word) in index_constants(&values, iface, instances) {
         let moved = run(0, None, Some((buffer, word)))?;
         if is_position(&moved.clip) && moved.backend.first_word == Some(at0 + BASE_PROBE * u32::from(stride))
         {
@@ -321,40 +322,22 @@ pub fn probe_tables(shader: &Shader, clip: ClipRows) -> Result<TableRoles, Strin
 }
 
 /// The constant-buffer words (buffer of the lifted interface, word) that the index of a read of the buffer `table` is made
-/// of, over the nodes the outputs reach.
-fn index_constants(values: &Values, table: ResourceId) -> BTreeSet<(ResourceId, u32)> {
-    let mut indexes: Vec<NodeId> = Vec::new();
-    let mut seen = BTreeSet::new();
-    let mut pending: Vec<NodeId> = values.outputs().values().copied().collect();
-    pending.extend(values.discards().iter().flatten().copied());
-    while let Some(id) = pending.pop() {
-        if !seen.insert(id) {
-            continue;
-        }
-        if let Node::Global {
-            resource: Some(resource),
-            at: At::Indexed { index, .. },
-        } = values.node(id)
-            && *resource == table
-        {
-            indexes.extend(index);
-        }
-        pending.extend(values.operands(id));
-    }
-    let mut words = BTreeSet::new();
-    let mut seen = BTreeSet::new();
-    while let Some(id) = indexes.pop() {
-        if !seen.insert(id) {
-            continue;
-        }
-        if let Node::Global {
-            resource: Some(resource),
-            at: At::Component(word),
-        } = values.node(id)
-        {
-            words.insert((*resource, *word));
-        }
-        indexes.extend(values.operands(id));
-    }
+/// of, over the nodes the program's results reach ([`Values::roots`]).
+fn index_constants(values: &Values, iface: &Interface, table: ResourceId) -> BTreeSet<(ResourceId, u32)> {
+    let indexes = values
+        .reached_from(values.roots())
+        .into_iter()
+        .filter_map(|id| match values.node(id) {
+            Node::Global {
+                resource: Some(resource),
+                at: At::Indexed { index, .. },
+            } if *resource == table => Some(index.clone()),
+            _ => None,
+        })
+        .flatten();
+    let words = WordsRead::of_nodes(values, iface, &values.reached_from(indexes));
     words
+        .buffers()
+        .flat_map(|buffer| words.words(buffer).map(move |word| (buffer, word)))
+        .collect()
 }
