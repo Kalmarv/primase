@@ -536,6 +536,16 @@ pub enum NormalEncoding {
     /// may keep a class in). `x = (u + v) / 2`, `y = (u - v) / 2`, `|z| = 1 - |x| - |y|`, normalised
     /// ([`NormalEncoding::decode_octahedral_diamond`]).
     OctahedralDiamond,
+    /// The normal by its major axis, over four lanes. The face is D3D's cube-map face of the axis whose component is
+    /// largest in magnitude (`2 * axis + 1` where that component is negative: +x 0, -x 1, +y 2, -y 3, +z 4, -z 5), and
+    /// lanes 0 and 1 are that face's `sc` and `tc` components of the normal, not divided by the major component (+x
+    /// `(-z, -y)`, -x `(z, -y)`, +y `(x, z)`, -y `(x, -z)`, +z `(x, -y)`, -z `(-x, -y)`), each stored as `e *
+    /// minor.scale + minor.bias`. Lane 2 is the major component's sign by its side of one half (below for a positive
+    /// face, above for a negative one) and a payload `p` in 0 to 1 by its distance from one half, `p * payload.scale +
+    /// payload.bias`; the payload is not part of the normal (a value an engine keeps beside it). Lane 3 is the axis
+    /// over three (x 0, y 1/3, z 2/3). The major component's magnitude is the unit length's remainder
+    /// ([`NormalEncoding::decode_cube_face`]).
+    CubeFace { minor: LaneAffine, payload: LaneAffine },
 }
 
 /// One lane's affine map, `v * scale + bias`, by the f32 bits of each so that it compares and hashes exactly; it is written
@@ -590,7 +600,82 @@ impl LaneAffine {
     }
 }
 
+/// The cube-map faces of [`NormalEncoding::CubeFace`] by face index: the axis of the major component and, for lanes 0
+/// and 1, the axis and sign of the normal's component each holds.
+const CUBE_FACES: [(usize, [(usize, f64); 2]); 6] = [
+    (0, [(2, -1.0), (1, -1.0)]),
+    (0, [(2, 1.0), (1, -1.0)]),
+    (1, [(0, 1.0), (2, 1.0)]),
+    (1, [(0, 1.0), (2, -1.0)]),
+    (2, [(0, 1.0), (1, -1.0)]),
+    (2, [(0, -1.0), (1, -1.0)]),
+];
+
 impl NormalEncoding {
+    /// The unit normal and the payload of four lanes stored as [`NormalEncoding::CubeFace`] with `minor` and
+    /// `payload`; `steps` is each lane's quantisation step in the target's format (1/1023 for a 10-bit UNORM lane,
+    /// 1/3 for a 2-bit one). Lane 3 is read as the nearest of 0, 1/3 and 2/3, and lane 2's side of one half as the
+    /// major component's sign; a lane 3 not within half its step of one of them, or a lane 2 within one of its steps of
+    /// one half, cannot be placed and is refused.
+    pub fn decode_cube_face(
+        minor: LaneAffine,
+        payload: LaneAffine,
+        lanes: [f32; 4],
+        steps: [f32; 4],
+    ) -> Result<([f64; 3], f32), String> {
+        let [a, b, side, axis] = lanes;
+        let thirds = f64::from(axis) * 3.0;
+        let nearest = thirds.round();
+        if !(0.0..=2.0).contains(&nearest) || (thirds - nearest).abs() / 3.0 >= f64::from(steps[3]) / 2.0 {
+            return Err(format!(
+                "a cube-face lane 3 of {axis} is not an axis (0, 1/3 or 2/3 within half a step of {})",
+                steps[3]
+            ));
+        }
+        let from_half = f64::from(side) - 0.5;
+        if from_half.abs() < f64::from(steps[2]) {
+            return Err(format!(
+                "a cube-face lane 2 of {side} is within a step ({}) of one half: its sign cannot be read",
+                steps[2]
+            ));
+        }
+        let face = nearest as usize * 2 + usize::from(from_half > 0.0);
+        let (major, components) = CUBE_FACES[face];
+        let unmap = |v: f32| (f64::from(v) - f64::from(minor.bias())) / f64::from(minor.scale());
+        let (sc, tc) = (unmap(a), unmap(b));
+        let mut n = [0.0f64; 3];
+        n[components[0].0] = sc * components[0].1;
+        n[components[1].0] = tc * components[1].1;
+        n[major] = (1.0 - sc * sc - tc * tc).max(0.0).sqrt() * if face % 2 == 1 { -1.0 } else { 1.0 };
+        let length = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        let p = ((from_half.abs() as f32 - payload.bias()) / payload.scale()).clamp(0.0, 1.0);
+        Ok((n.map(|c| c / length), p))
+    }
+
+    /// The four lanes [`NormalEncoding::CubeFace`] with `minor` and `payload` stores the unit normal `normal` and the
+    /// payload `p` (0 to 1) as, unquantised. The major axis is z where its magnitude is at least x's and y's, else y
+    /// where it is at least x's, else x (on an edge between faces either face decodes to the normal).
+    pub fn encode_cube_face(minor: LaneAffine, payload: LaneAffine, normal: [f32; 3], p: f32) -> [f32; 4] {
+        let [x, y, z] = normal;
+        let axis = if z.abs() >= x.abs() && z.abs() >= y.abs() {
+            2
+        } else if y.abs() >= x.abs() {
+            1
+        } else {
+            0
+        };
+        let face = axis * 2 + usize::from(normal[axis] < 0.0);
+        let (_, components) = CUBE_FACES[face];
+        let lane = |(c, sign): (usize, f64)| minor.apply(if sign < 0.0 { -normal[c] } else { normal[c] });
+        let offset = p * payload.scale() + payload.bias();
+        [
+            lane(components[0]),
+            lane(components[1]),
+            if face % 2 == 0 { 0.5 - offset } else { 0.5 + offset },
+            axis as f32 / 3.0,
+        ]
+    }
+
     /// The normal and the payload byte of three UNORM lanes stored as [`NormalEncoding::OctahedralDiamond`]: each lane
     /// is taken as the 8-bit value it rounds to.
     pub fn decode_octahedral_diamond(lanes: [f32; 3]) -> ([f64; 3], u8) {
@@ -1625,6 +1710,115 @@ mod tests {
                 "read": {"scale": 2.0, "bias": -1.0},
             }})
         );
+    }
+
+    /// The cube-face store as a Frostbite G-buffer program writes it (`minor` 511/1023 both, `payload` 0.49804688 and
+    /// 0.0014662757, the program's literals) gives the program's own output for the ten normals it was evaluated at
+    /// with a payload of 0, and decodes back to them; every face, the edges and corners between faces and a grid of
+    /// normals round-trip through 10-bit lanes and a 2-bit lane 3; a lane 3 that is not an axis, and a lane 2 within a
+    /// step of one half, are refused.
+    #[test]
+    fn the_cube_face_decode_inverts_its_encoding_and_the_measured_lanes() {
+        let k = 511.0f32 / 1023.0;
+        let minor = LaneAffine::new(k, k);
+        assert_eq!(minor.scale_bits, 0x3EFF_BFF0);
+        let payload = LaneAffine::new(0.498_046_88, 0.001_466_275_7);
+        let steps = [1.0 / 1023.0, 1.0 / 1023.0, 1.0 / 1023.0, 1.0 / 3.0];
+        let encoding = NormalEncoding::CubeFace { minor, payload };
+        assert_eq!(
+            serde_json::to_value(encoding).unwrap()["cube_face"]["minor"]["scale"],
+            serde_json::json!(k)
+        );
+        // the program's T0 for each normal (its TEXCOORD2), as the evaluation printed it
+        let measured: [([f32; 3], [f32; 4]); 10] = [
+            ([0.36, 0.48, 0.8], [0.679335, 0.259746, 0.498534, 0.666667]),
+            ([0.36, 0.48, -0.8], [0.319687, 0.259746, 0.501466, 0.666667]),
+            ([-0.48, 0.36, -0.8], [0.739277, 0.319687, 0.501466, 0.666667]),
+            ([0.8, 0.36, 0.48], [0.259746, 0.319687, 0.498534, 0.0]),
+            ([-0.8, 0.36, -0.48], [0.259746, 0.319687, 0.501466, 0.0]),
+            ([0.36, 0.8, -0.48], [0.679335, 0.259746, 0.498534, 0.333333]),
+            ([-0.48, -0.8, 0.36], [0.259746, 0.319687, 0.501466, 0.333333]),
+            ([0.0, 0.0, -1.0], [0.499511, 0.499511, 0.501466, 0.666667]),
+            ([0.0, 0.0, 1.0], [0.499511, 0.499511, 0.498534, 0.666667]),
+            ([-0.6, 0.0, -0.8], [0.799218, 0.499511, 0.501466, 0.666667]),
+        ];
+        for (n, t0) in measured {
+            let lanes = NormalEncoding::encode_cube_face(minor, payload, n, 0.0);
+            assert!(
+                lanes.iter().zip(&t0).all(|(a, b)| (a - b).abs() < 1e-6),
+                "{n:?}: {lanes:?} against {t0:?}"
+            );
+            let (back, p) = NormalEncoding::decode_cube_face(minor, payload, t0, steps).unwrap();
+            let dot: f64 = back.iter().zip(&n).map(|(a, b)| a * f64::from(*b)).sum();
+            assert!(dot > 1.0 - 1e-6 && p < 1e-3, "{n:?}: {back:?} payload {p}");
+        }
+        let quantise = |lanes: [f32; 4]| {
+            let q = |v: f32, levels: f32| (v * levels).round() / levels;
+            [
+                q(lanes[0], 1023.0),
+                q(lanes[1], 1023.0),
+                q(lanes[2], 1023.0),
+                q(lanes[3], 3.0),
+            ]
+        };
+        let round_trip = |n: [f64; 3], p: f32| {
+            let length = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            let n = n.map(|c| (c / length) as f32);
+            let lanes = quantise(NormalEncoding::encode_cube_face(minor, payload, n, p));
+            let (back, read) = NormalEncoding::decode_cube_face(minor, payload, lanes, steps).unwrap();
+            let dot: f64 = back.iter().zip(&n).map(|(a, b)| a * f64::from(*b)).sum();
+            (dot, (read - p).abs())
+        };
+        // the six faces, the twelve edges and the eight corners between them, with payloads 0, 1/2 and 1
+        let mut worst = (1.0f64, 0.0f32);
+        for x in [-1.0, 0.0, 1.0] {
+            for y in [-1.0, 0.0, 1.0] {
+                for z in [-1.0, 0.0, 1.0] {
+                    if [x, y, z] == [0.0; 3] {
+                        continue;
+                    }
+                    for p in [0.0, 0.5, 1.0] {
+                        let (dot, off) = round_trip([x, y, z], p);
+                        worst = (worst.0.min(dot), worst.1.max(off));
+                    }
+                }
+            }
+        }
+        // and a grid over the sphere
+        for i in 0..40 {
+            for j in 0..80 {
+                let (theta, phi) = (
+                    std::f64::consts::PI * (f64::from(i) + 0.5) / 40.0,
+                    std::f64::consts::TAU * f64::from(j) / 80.0,
+                );
+                let (dot, off) = round_trip(
+                    [theta.sin() * phi.cos(), theta.sin() * phi.sin(), theta.cos()],
+                    0.25,
+                );
+                worst = (worst.0.min(dot), worst.1.max(off));
+            }
+        }
+        // a 10-bit step of a minor component is about 2/1023: the direction is within a few of them
+        assert!(
+            worst.0 > 1.0 - 2e-5 && worst.1 < 2.0 / 1023.0,
+            "worst dot {}, payload off {}",
+            worst.0,
+            worst.1
+        );
+        let refused =
+            |lanes: [f32; 4]| NormalEncoding::decode_cube_face(minor, payload, lanes, steps).unwrap_err();
+        assert!(refused([0.5, 0.5, 0.49, 1.0]).contains("is not an axis"));
+        // between two thirds in a lane finer than 2 bits (a 10-bit lane 3)
+        let fine = [steps[0], steps[1], steps[2], 1.0 / 1023.0];
+        assert!(
+            NormalEncoding::decode_cube_face(minor, payload, [0.5, 0.5, 0.49, 0.5], fine)
+                .unwrap_err()
+                .contains("is not an axis")
+        );
+        assert!(
+            NormalEncoding::decode_cube_face(minor, payload, [0.5, 0.5, 0.49, 341.0 / 1023.0], fine).is_ok()
+        );
+        assert!(refused([0.5, 0.5, 0.5 + 0.5 / 1023.0, 0.0]).contains("its sign cannot be read"));
     }
 
     /// The diamond octahedral store round-trips: the hand-worked axes (+z stores x = y = 255 and the sign bit; +x
