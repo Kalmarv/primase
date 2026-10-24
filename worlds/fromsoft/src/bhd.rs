@@ -116,8 +116,112 @@ pub struct Header {
     pub bucket_count: usize,
     pub rsa_padding: usize,
 }
+/// Limbs of a 2048-bit number, least significant first.
+const LIMBS: usize = 32;
+type Limbs = [u64; LIMBS];
+
+/// The modulus' Montgomery context with 64-bit limbs, made once per key: `-n^-1 mod 2^64` and `R^2 mod n` with
+/// `R = 2^2048`.
+struct Montgomery {
+    n: Limbs,
+    n0: u64,
+    r2: Limbs,
+}
+
+fn limbs_of(bytes: &[u8]) -> Limbs {
+    let mut out = [0; LIMBS];
+    for (limb, chunk) in out.iter_mut().zip(bytes.rchunks(8)) {
+        *limb = chunk.iter().fold(0, |v, b| (v << 8) | u64::from(*b));
+    }
+    out
+}
+
+/// `a >= b`.
+fn at_least(a: &Limbs, b: &Limbs) -> bool {
+    for (x, y) in a.iter().zip(b).rev() {
+        if x != y {
+            return x > y;
+        }
+    }
+    true
+}
+
+impl Montgomery {
+    /// The context of the odd 256-byte modulus `n`.
+    fn new(modulus: &[u8], n: &BigUint) -> Self {
+        let n_limbs = limbs_of(modulus);
+        // Newton's iteration for the inverse of the odd low limb modulo 2^64: each step doubles the correct bits
+        let mut inverse = n_limbs[0];
+        for _ in 0..6 {
+            inverse = inverse.wrapping_mul(2u64.wrapping_sub(n_limbs[0].wrapping_mul(inverse)));
+        }
+        let r2 = (BigUint::from(1u8) << (64 * LIMBS * 2)) % n;
+        Montgomery {
+            n: n_limbs,
+            n0: inverse.wrapping_neg(),
+            r2: limbs_of(&r2.to_bytes_be()),
+        }
+    }
+
+    /// `a * b / R mod n` for `a`, `b` below `n` (the CIOS method).
+    fn multiply(&self, a: &Limbs, b: &Limbs) -> Limbs {
+        let mut t = [0u64; LIMBS + 2];
+        for &bi in b {
+            let mut carry = 0u128;
+            for (tj, aj) in t.iter_mut().zip(a) {
+                let s = u128::from(*tj) + u128::from(*aj) * u128::from(bi) + carry;
+                *tj = s as u64;
+                carry = s >> 64;
+            }
+            let s = u128::from(t[LIMBS]) + carry;
+            t[LIMBS] = s as u64;
+            t[LIMBS + 1] = (s >> 64) as u64;
+            let m = t[0].wrapping_mul(self.n0);
+            let s = u128::from(t[0]) + u128::from(m) * u128::from(self.n[0]);
+            let mut carry = s >> 64;
+            for j in 1..LIMBS {
+                let s = u128::from(t[j]) + u128::from(m) * u128::from(self.n[j]) + carry;
+                t[j - 1] = s as u64;
+                carry = s >> 64;
+            }
+            let s = u128::from(t[LIMBS]) + carry;
+            t[LIMBS - 1] = s as u64;
+            t[LIMBS] = t[LIMBS + 1] + (s >> 64) as u64;
+            t[LIMBS + 1] = 0;
+        }
+        let mut out = [0; LIMBS];
+        out.copy_from_slice(&t[..LIMBS]);
+        if t[LIMBS] != 0 || at_least(&out, &self.n) {
+            let mut borrow = false;
+            for (o, n) in out.iter_mut().zip(&self.n) {
+                let (d, b1) = o.overflowing_sub(*n);
+                let (d, b2) = d.overflowing_sub(u64::from(borrow));
+                *o = d;
+                borrow = b1 || b2;
+            }
+        }
+        out
+    }
+
+    /// `x^e mod n` for `x` below `n`, `e` nonzero, by left-to-right square and multiply.
+    fn power(&self, x: &Limbs, exponent: &BigUint) -> Limbs {
+        let base = self.multiply(x, &self.r2);
+        let mut result = base;
+        for bit in (0..exponent.bits().saturating_sub(1)).rev() {
+            result = self.multiply(&result, &result);
+            if exponent.bit(bit) {
+                result = self.multiply(&result, &base);
+            }
+        }
+        let mut one = [0; LIMBS];
+        one[0] = 1;
+        self.multiply(&result, &one)
+    }
+}
+
 /// Raw 2048-bit RSA public operation, 256 ciphertext bytes to 255 plaintext
-/// bytes. This is the archive signature envelope, not PKCS#1 encryption.
+/// bytes. This is the archive signature envelope, not PKCS#1 encryption. The modulus' Montgomery context is made
+/// once for all the blocks; an even modulus (no key has one) is computed by `BigUint::modpow`.
 pub fn unwrap_rsa(input: &[u8], modulus: &[u8], exponent: &[u8]) -> Result<Vec<u8>> {
     if input.is_empty() || !input.len().is_multiple_of(256) || modulus.len() != 256 {
         return Err(invalid("RSA", 0, "expected 256-byte blocks and modulus"));
@@ -127,13 +231,28 @@ pub fn unwrap_rsa(input: &[u8], modulus: &[u8], exponent: &[u8]) -> Result<Vec<u
     if n == BigUint::from(0u8) || e == BigUint::from(0u8) {
         return Err(invalid("RSA", 0, "zero public key"));
     }
+    let context = n.bit(0).then(|| Montgomery::new(modulus, &n));
     let mut out = vec![0; input.len() / 256 * 255];
     for (i, b) in input.as_chunks::<256>().0.iter().enumerate() {
-        let x = BigUint::from_bytes_be(b);
-        if x >= n {
-            return Err(invalid("RSA", i * 256, "ciphertext exceeds modulus"));
-        }
-        let p = x.modpow(&e, &n).to_bytes_be();
+        let p = match &context {
+            Some(context) => {
+                let x = limbs_of(b);
+                if at_least(&x, &context.n) {
+                    return Err(invalid("RSA", i * 256, "ciphertext exceeds modulus"));
+                }
+                let power = context.power(&x, &e);
+                let bytes: Vec<u8> = power.iter().rev().flat_map(|l| l.to_be_bytes()).collect();
+                let first = bytes.iter().position(|b| *b != 0).unwrap_or(bytes.len());
+                bytes[first..].to_vec()
+            }
+            None => {
+                let x = BigUint::from_bytes_be(b);
+                if x >= n {
+                    return Err(invalid("RSA", i * 256, "ciphertext exceeds modulus"));
+                }
+                x.modpow(&e, &n).to_bytes_be()
+            }
+        };
         if p.len() > 255 {
             return Err(invalid("RSA", i * 256, "plaintext exceeds 255 bytes"));
         }
@@ -305,5 +424,119 @@ impl Entry {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The square-and-multiply of the `num-bigint` crate, the reference the Montgomery product is held to.
+    fn reference(input: &[u8], modulus: &[u8], exponent: &[u8]) -> Vec<u8> {
+        let (n, e) = (BigUint::from_bytes_be(modulus), BigUint::from_bytes_be(exponent));
+        let mut out = vec![0; input.len() / 256 * 255];
+        for (i, b) in input.as_chunks::<256>().0.iter().enumerate() {
+            let p = BigUint::from_bytes_be(b).modpow(&e, &n).to_bytes_be();
+            out[(i + 1) * 255 - p.len()..(i + 1) * 255].copy_from_slice(&p);
+        }
+        out
+    }
+
+    /// 256-byte blocks below `modulus`: 0, 1, 2, n - 1 and `random` of a xorshift stream reduced modulo `n`.
+    fn blocks(modulus: &[u8], random: usize) -> Vec<u8> {
+        let n = BigUint::from_bytes_be(modulus);
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut values = vec![
+            BigUint::from(0u8),
+            BigUint::from(1u8),
+            BigUint::from(2u8),
+            &n - 1u8,
+        ];
+        for _ in 0..random {
+            let bytes: Vec<u8> = (0..256).map(|_| next() as u8).collect();
+            values.push(BigUint::from_bytes_be(&bytes) % &n);
+        }
+        values
+            .iter()
+            .flat_map(|v| {
+                let b = v.to_bytes_be();
+                let mut block = vec![0; 256 - b.len()];
+                block.extend(b);
+                block
+            })
+            .collect()
+    }
+
+    /// Every published Sekiro key, with its exponent and others (1, 3, 65537, a wide one), on the edge blocks and
+    /// random ones: `x^e mod n` is `BigUint::modpow`'s, bit for bit.
+    #[test]
+    fn the_montgomery_power_is_biguint_modpow() {
+        let wide: Vec<u8> = (1..=32).collect();
+        for (key, (modulus, exponent)) in crate::keys::SEKIRO.iter().enumerate() {
+            let n = BigUint::from_bytes_be(modulus);
+            let context = Montgomery::new(modulus, &n);
+            for block in blocks(modulus, 24).chunks(256) {
+                let x = BigUint::from_bytes_be(block);
+                for e in [*exponent, &[1][..], &[3], &[1, 0, 1], &wide] {
+                    let e = BigUint::from_bytes_be(e);
+                    let got: Vec<u8> = context
+                        .power(&limbs_of(block), &e)
+                        .iter()
+                        .rev()
+                        .flat_map(|l| l.to_be_bytes())
+                        .collect();
+                    assert_eq!(
+                        BigUint::from_bytes_be(&got),
+                        x.modpow(&e, &n),
+                        "key {key}, exponent {e}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// `unwrap_rsa` end to end where the plaintext fits (blocks of 100 bytes, exponents 1 and 3): the bytes are the
+    /// reference's for an odd modulus (Montgomery) and an even one (`BigUint::modpow`); a block at or above the modulus
+    /// is refused on both paths, and so is a plaintext of the full 256 bytes.
+    #[test]
+    fn unwrap_rsa_matches_the_reference_and_refuses_the_same_blocks() {
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let mut small = Vec::new();
+        for _ in 0..16 {
+            let mut block = vec![0u8; 156];
+            block.extend((0..100).map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state as u8
+            }));
+            small.extend(block);
+        }
+        for odd in [0xffu8, 0xfe] {
+            let mut modulus = [0xffu8; 256];
+            modulus[255] = odd;
+            for e in [&[1u8][..], &[3]] {
+                assert_eq!(
+                    unwrap_rsa(&small, &modulus, e).unwrap(),
+                    reference(&small, &modulus, e),
+                    "modulus ending {odd:x}, exponent {e:?}"
+                );
+            }
+            assert!(unwrap_rsa(&modulus, &modulus, &[3]).is_err(), "n itself");
+            let mut above = modulus;
+            above[0] = 0xff;
+            assert!(unwrap_rsa(&above, &modulus, &[1]).is_err());
+            // 2 to the 2040 + 1 is below n and its plaintext (e = 1) is 256 bytes
+            let mut full = [0u8; 256];
+            full[0] = 1;
+            full[255] = 1;
+            assert!(unwrap_rsa(&full, &modulus, &[1]).is_err(), "a 256-byte plaintext");
+        }
     }
 }
