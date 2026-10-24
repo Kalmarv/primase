@@ -88,13 +88,20 @@ impl Game {
     /// read by no lighting program and has no role. The world normal is `n * 0.5 + 0.50048876` (`0x3f002008`) in both games'
     /// writers, decoded `x * 2 - 1` and normalised.
     ///
-    /// - Sekiro: target 0 the world normal (`xyz`), 1 the gloss (`x`), 2 the albedo (`rgb`), 3 the reflectance (`rgb`) and
-    ///   4 the emission (`rgb`), in the lanes the layered programs write them.
+    /// Both games' directional light (`GXLightAcc_DDirLight1.ppo`) takes the gloss `g` to the roughness
+    /// `1 - 0.95 sqrt(k g)` and squares that for its GGX distribution, with `k = 1 - 0.75 * 0.1 / w` for `w` the light's
+    /// direction's w in `cbLight` (a property of the light, not of the surface, and not read back yet): the gloss is
+    /// stored as the square of the smoothness over 0.95.
+    ///
+    /// - Sekiro, from its `GXLightAcc_DDirLight1.ppo` (Shader Model 5): `g_GBuffer0Texture.xyz` the world normal (target
+    ///   0); `g_GBuffer1Texture.x` the gloss (target 1); target 2 the albedo (`rgb`); `g_GBuffer3Texture.rgb` the
+    ///   reflectance stored as its square root (`F0 = rgb * rgb`, in Schlick's `F0 + (1 - F0)(1 - l.h)^5`; its `w` times
+    ///   255 picks the light group); target 4 the emission (`rgb`), in the lanes the layered programs write them.
     /// - Elden Ring, from `GXLightAcc_DDirLight1.ppo` (the directional light, `gxrenderershader`): `g_GBuffer0Texture.xyz`
     ///   the world normal; `g_GBuffer1Texture.x` the metallic (`F0 = lerp(0.04, albedo, x)`, the albedo
-    ///   `g_GBuffer2Texture.rgb`), `.y` the gloss (roughness `1 - 0.95 sqrt(k y)`, squared); `g_GBuffer2Texture.rgb` the
-    ///   albedo. `g_GBuffer1Texture.z` (read times 10) and `g_GBuffer2Texture.w` (read times 255, as an integer) are read
-    ///   for what is not established, and targets 3 and 4 by no lighting program.
+    ///   `g_GBuffer2Texture.rgb`), `.y` the gloss; `g_GBuffer2Texture.rgb` the albedo. `g_GBuffer1Texture.z` (read times
+    ///   10) and `g_GBuffer2Texture.w` (read times 255, as an integer) are read for what is not established, and targets
+    ///   3 and 4 by no lighting program.
     pub fn gbuffer(self) -> Vec<(u32, u8, primase_core::shader::OutputRole)> {
         use primase_core::shader::{NormalEncoding, NormalSpace, OutputRole, ScalarEncoding};
         let normal = OutputRole::Normal {
@@ -103,12 +110,21 @@ impl Game {
             },
             space: NormalSpace::World,
         };
+        let gloss = OutputRole::Gloss {
+            encoding: ScalarEncoding::square_of(0.95),
+        };
         match self {
             Game::Sekiro => vec![
                 (0, 0b0111, normal),
-                (1, 0b0001, OutputRole::Gloss),
+                (1, 0b0001, gloss),
                 (2, 0b0111, OutputRole::Albedo),
-                (3, 0b0111, OutputRole::Reflectance),
+                (
+                    3,
+                    0b0111,
+                    OutputRole::Reflectance {
+                        encoding: ScalarEncoding::square_root_of(1.0),
+                    },
+                ),
                 (
                     4,
                     0b0111,
@@ -120,7 +136,7 @@ impl Game {
             Game::EldenRing => vec![
                 (0, 0b0111, normal),
                 (1, 0b0001, OutputRole::Metallic),
-                (1, 0b0010, OutputRole::Gloss),
+                (1, 0b0010, gloss),
                 (2, 0b0111, OutputRole::Albedo),
             ],
         }

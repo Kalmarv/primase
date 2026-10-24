@@ -272,7 +272,8 @@ fn a_layered_program_is_bound_by_sekiros_rules() {
         BTreeMap::from([("preview default for missing NormalMap binding".to_owned(), 1)])
     );
 
-    // the G-buffer: normal, gloss in x, albedo, reflectance, emission
+    // the G-buffer: normal, gloss in x (the smoothness over 0.95, squared), albedo, reflectance (its square root),
+    // emission
     let outputs: Vec<_> = stage
         .outputs
         .iter()
@@ -291,9 +292,21 @@ fn a_layered_program_is_bound_by_sekiros_rules() {
                     space: NormalSpace::World
                 }
             ),
-            (1, 0b0001, OutputRole::Gloss),
+            (
+                1,
+                0b0001,
+                OutputRole::Gloss {
+                    encoding: ScalarEncoding::square_of(0.95)
+                }
+            ),
             (2, 0b0111, OutputRole::Albedo),
-            (3, 0b0111, OutputRole::Reflectance),
+            (
+                3,
+                0b0111,
+                OutputRole::Reflectance {
+                    encoding: ScalarEncoding::square_root_of(1.0)
+                }
+            ),
             (
                 4,
                 0b0111,

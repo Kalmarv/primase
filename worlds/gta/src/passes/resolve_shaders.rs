@@ -90,6 +90,7 @@ const GBUFFER_FAMILY: &str = "PS_DeferredTextured";
 /// `2 * stored^2` and squares it, the factor it scales the ambient by, so the factor is `4 * stored^4`.
 const AMBIENT_OCCLUSION: ScalarEncoding = ScalarEncoding {
     power: 4,
+    root: 1,
     scale_bits: 0x4080_0000,
 };
 

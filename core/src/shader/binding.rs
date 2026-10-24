@@ -412,14 +412,17 @@ impl NormalEncoding {
     }
 }
 
-/// How a scalar is stored in the lanes of an output: `stored = (value / scale)^(1 / power)`, so the value is
-/// `stored^power * scale` (the scale given by its f32 bits). Power 1 is linear, 2 a square root (a value kept in a
-/// perceptual range), 4 a fourth root.
+/// How a scalar is stored in the lanes of an output: `stored = (value / scale)^(root / power)`, so the value is
+/// `stored^(power / root) * scale` (the scale given by its f32 bits). Power and root 1 are linear; power 2 a square root
+/// stored (a value kept in a perceptual range), 4 a fourth root; root 2 a square stored (a value the lighting takes the
+/// square root of).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ScalarEncoding {
     /// The power the stored value is raised to, to give the value over the scale: 1 for none, 2 for the square root
     /// stored, 4 for the fourth root. Never 0.
     pub power: u8,
+    /// The root taken of the stored value raised to `power`: 1 for none, 2 for the square stored. Never 0.
+    pub root: u8,
     /// The scale's f32 bits (1.0 for none): bits so the encoding compares and hashes exactly; it is written as the
     /// number `scale`.
     pub scale_bits: u32,
@@ -428,8 +431,14 @@ pub struct ScalarEncoding {
 impl Serialize for ScalarEncoding {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut out = serializer.serialize_struct("ScalarEncoding", 2)?;
+        // `root` is written only where it is not 1, so an encoding without one reads as it always has
+        let mut out = serializer.serialize_struct("ScalarEncoding", 2 + usize::from(self.root != 1))?;
         out.serialize_field("power", &self.power)?;
+        if self.root != 1 {
+            out.serialize_field("root", &self.root)?;
+        } else {
+            out.skip_field("root")?;
+        }
         out.serialize_field("scale", &f32::from_bits(self.scale_bits))?;
         out.end()
     }
@@ -439,6 +448,7 @@ impl ScalarEncoding {
     /// The value as it is (scale 1).
     pub const LINEAR: Self = Self {
         power: 1,
+        root: 1,
         scale_bits: 0x3F80_0000,
     };
 
@@ -456,13 +466,29 @@ impl ScalarEncoding {
     pub fn power_of(power: u8, scale: f32) -> Self {
         Self {
             power: power.max(1),
+            root: 1,
             scale_bits: scale.to_bits(),
         }
     }
 
-    /// The value for a stored one.
+    /// Stored as the square of the value over `scale`: the value is the stored one's square root times `scale`.
+    pub fn square_of(scale: f32) -> Self {
+        Self {
+            power: 1,
+            root: 2,
+            scale_bits: scale.to_bits(),
+        }
+    }
+
+    /// The value for a stored one (a root of a negative stored value is taken of 0).
     pub fn decode(&self, stored: f32) -> f32 {
-        stored.powi(i32::from(self.power)) * f32::from_bits(self.scale_bits)
+        let raised = stored.powi(i32::from(self.power));
+        let value = match self.root {
+            0 | 1 => raised,
+            2 => raised.max(0.0).sqrt(),
+            root => raised.max(0.0).powf(1.0 / f32::from(root)),
+        };
+        value * f32::from_bits(self.scale_bits)
     }
 }
 
@@ -491,8 +517,10 @@ pub enum OutputRole {
         encoding: NormalEncoding,
         space: NormalSpace,
     },
-    /// Smoothness, 1 - roughness.
-    Gloss,
+    /// Smoothness, 1 - perceptual roughness: the value decoded by `encoding`.
+    Gloss {
+        encoding: ScalarEncoding,
+    },
     Roughness,
     Metallic,
     /// The factor the light `of` is scaled by where the surface is shadowed from it (1 unoccluded, 0 fully): the value
@@ -508,8 +536,10 @@ pub enum OutputRole {
     /// How much light passes through the surface (a leaf, a petal): a lighting pass tints the albedo by it and adds it
     /// to the lit colour, 0 for an opaque surface.
     Translucency,
-    /// Specular reflectance at normal incidence.
-    Reflectance,
+    /// Specular reflectance at normal incidence (F0), the value decoded by `encoding`.
+    Reflectance {
+        encoding: ScalarEncoding,
+    },
     /// The strength of the specular term, how much light the surface reflects as a highlight (0 to 1 once decoded).
     SpecularIntensity {
         encoding: ScalarEncoding,
@@ -1202,6 +1232,14 @@ mod tests {
         );
         // a power of 0 is no power
         assert_eq!(ScalarEncoding::power_of(0, 2.0), ScalarEncoding::linear_over(2.0));
+        // a square stored over 0.95: the value is the square root of the stored one, times 0.95; written with its root
+        let square = ScalarEncoding::square_of(0.95);
+        assert_eq!(square.decode(0.25), 0.475);
+        assert_eq!(square.decode(-0.25), 0.0);
+        assert_eq!(
+            serde_json::to_value(square).unwrap(),
+            serde_json::json!({"power": 1, "root": 2, "scale": 0.95f32})
+        );
     }
 
     /// The camera-relative view-projection is a role of its own: a source that states it is not read as the plain matrix.
