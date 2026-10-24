@@ -627,6 +627,13 @@ pub const DECLARED: &[Declared] = &[
         source: r#"the game's own files from the user's install: worlds/fromsoft/examples/corpus_sekiro_dcx.rs (KRAK envelopes as stored, the first 256 in hash order up to 4 MiB)"#,
     },
     Declared {
+        query: Query::Oracle(OracleSet::Corpus, Game::Sekiro, "lznib"),
+        status: Status::Live,
+        gate: true,
+        about: r#"a folder of Sekiro's LZNIB streams (Oodle decoder type 2, `8C 02`): `<hash>.payload`, the stream as the archive stores it in its DCX envelope from the block header on, and `<hash>.decoded`, the game's Oodle library's output for it; worlds/fromsoft/tests/lznib_gate.rs"#,
+        source: r#"the game's own library's output for the game's own streams: worlds/fromsoft/tests/krak_archive.rs with the debug key `oodle.dump` on a machine with the Oodle 6 library, the files it keeps for the streams oozextract cannot decode or decodes differently"#,
+    },
+    Declared {
         query: Query::Oracle(OracleSet::Corpus, Game::Sekiro, "havok"),
         status: Status::Live,
         gate: true,

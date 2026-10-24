@@ -175,8 +175,19 @@ impl Decompressor for Oodle {
         Ok(out)
     }
 }
-impl Compressor for Oodle {
-    fn compress(&self, input: &[u8]) -> Result<Vec<u8>> {
+/// The Oodle compressors this crate asks the game's library for, by the library's compressor number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Codec {
+    /// `OodleLZ_Compressor_LZNIB`: the older byte-aligned codec of decoder type 2.
+    Lznib = 2,
+    /// `OodleLZ_Compressor_Kraken`: what [`Compressor::compress`] uses.
+    Kraken = 8,
+}
+
+impl Oodle {
+    /// Compress with `codec` at level 4, through the game's library: the portable decoder has no encoder, and the
+    /// gates need streams of every codec the decoders read.
+    pub fn compress_as(&self, codec: Codec, input: &[u8]) -> Result<Vec<u8>> {
         if input.is_empty() {
             return Ok(Vec::new());
         }
@@ -191,12 +202,13 @@ impl Compressor for Oodle {
                 ));
             }
         };
+        let compressor = codec as i32;
         let n = isize::try_from(input.len()).map_err(|_| crate::Error::Limit)?;
-        // SAFETY: pure size query with Kraken enum 8 and validated positive length.
+        // SAFETY: pure size query with the codec's enum and validated positive length.
         let cap = unsafe {
             match library.capacity {
                 Capacity::Legacy(f) => f(n),
-                Capacity::Modern(f) => f(8, n),
+                Capacity::Modern(f) => f(compressor, n),
             }
         };
         if cap < n {
@@ -207,7 +219,7 @@ impl Compressor for Oodle {
         // default options, no dictionary, long-range matcher or external scratch.
         let got = unsafe {
             (library.encode)(
-                8,
+                compressor,
                 input.as_ptr(),
                 n,
                 out.as_mut_ptr(),
@@ -228,6 +240,11 @@ impl Compressor for Oodle {
         }
         out.truncate(got as usize);
         Ok(out)
+    }
+}
+impl Compressor for Oodle {
+    fn compress(&self, input: &[u8]) -> Result<Vec<u8>> {
+        self.compress_as(Codec::Kraken, input)
     }
 }
 
@@ -271,6 +288,91 @@ mod tests {
             println!("{report}");
             report.assert_passed();
         }
+        Ok(())
+    }
+
+    /// Streams the game's library compresses with LZNIB (decoder type 2), from inputs of the shapes game files have (UTF-16
+    /// names, long zero runs, repeated structures, incompressible bytes) at sizes around the block and header spans:
+    /// oozextract must give the input back, as the library does. A stream either decoder gets wrong is kept under the
+    /// debug key `oodle.dump`'s folder, and every failure is reported, not the first.
+    #[test]
+    fn lznib_cross_check() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let Some(path) = tool(Tool::Oodle6) else {
+            return Ok(());
+        };
+        // SAFETY: gate configuration explicitly identifies the user's trusted game DLL.
+        let dll = unsafe { Oodle::load(path, Version::V6)? };
+        let mut state = 0x2545_F491_4F6C_DD1D_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let words = [
+            "Parts",
+            "Group",
+            "model",
+            "FAR_MODEL_PARAM_ST",
+            "N:\\NTC\\data\\Target",
+            "c0000",
+            "o110000",
+        ];
+        let mut failures = Vec::new();
+        let dump = primase_testdata::debug("oodle.dump").map(|name| primase_testdata::scratch().join(name));
+        for n in [
+            1, 9, 100, 5000, 16383, 16384, 16385, 40000, 65535, 65536, 65537, 262143, 262144, 262145, 600000,
+        ] {
+            for shape in ["utf16-names", "zeros-and-structs", "random", "long-runs"] {
+                let mut src = Vec::with_capacity(n);
+                while src.len() < n {
+                    let r = next();
+                    match shape {
+                        "utf16-names" => {
+                            for c in words[(r % 7) as usize].bytes() {
+                                src.extend_from_slice(&[c, 0]);
+                            }
+                            src.extend_from_slice(&[0, 0]);
+                        }
+                        "zeros-and-structs" => {
+                            src.extend((0..(r % 40) as usize).map(|_| 0));
+                            src.extend_from_slice(&(r as u32).to_le_bytes());
+                        }
+                        "random" => src.extend_from_slice(&r.to_le_bytes()),
+                        _ => src.extend((0..(r % 3000) as usize).map(|_| (r >> 40) as u8)),
+                    }
+                }
+                src.truncate(n);
+                let compressed = dll.compress_as(Codec::Lznib, &src)?;
+                let item = format!("{shape}/{n}");
+                let from_dll = dll.decompress(&compressed, n);
+                let from_ooz = crate::reference::decode(&compressed, n);
+                let problem = match (&from_dll, &from_ooz) {
+                    (Ok(a), _) if *a != src => Some("the library does not give the input back".to_owned()),
+                    (Err(e), _) => Some(format!("the library: {e}")),
+                    (_, Ok(b)) if *b != src => Some("oozextract decodes other bytes".to_owned()),
+                    (_, Err(e)) => Some(e.to_string().lines().next().unwrap_or_default().to_owned()),
+                    _ => None,
+                };
+                if let Some(problem) = problem {
+                    if let Some(dir) = &dump {
+                        std::fs::create_dir_all(dir)?;
+                        let stem = item.replace('/', "-");
+                        std::fs::write(dir.join(format!("lznib-{stem}.compressed")), &compressed)?;
+                        std::fs::write(dir.join(format!("lznib-{stem}.source")), &src)?;
+                    }
+                    failures.push(format!(
+                        "{item} ({} compressed bytes): {problem}",
+                        compressed.len()
+                    ));
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "LZNIB streams oozextract does not read as the library does:\n{}",
+            failures.join("\n")
+        );
         Ok(())
     }
 

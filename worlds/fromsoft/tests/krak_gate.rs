@@ -10,18 +10,13 @@
 )]
 
 use primase_compress::oodle::{Oodle, Version};
-use primase_compress::reference::{self, Failure};
+use primase_compress::reference;
 use primase_compress::{Compressor, Decompressor};
 use primase_core::gate::{GateReport, Tolerance};
 use primase_fromsoft::dcx::{Compression, Envelope};
 use primase_testdata::{Game, OracleSet, Tool, oracle, tool};
 
 type BoxError = Box<dyn std::error::Error>;
-
-/// The quanta oozextract 0.5.6 refuses in `corpus.sekiro/dcx`, by file and quantum: its single-symbol Huffman
-/// defect ([`oozextract_056_single_symbol_huffman_chunk_reports_no_bytes_used`]). The gate accepts a refusal there, of the quantum
-/// and of its file's whole stream, and nowhere else.
-const SINGLE_SYMBOL_HUFFMAN: &[(&str, usize)] = &[("0000000001b70e4e.dcx", 13)];
 
 /// Kraken's output quantum: each starts a fresh decoder.
 const QUANTUM: usize = 262144;
@@ -111,13 +106,7 @@ fn loose_krak_dcx() -> std::result::Result<(), BoxError> {
     let mut quantums = GateReport::new("independent KRAK quantums vs oozextract", Tolerance::Exact);
     let mut stored = GateReport::new("stored KRAK quantums vs their bytes", Tolerance::Exact);
     let mut roundtrips = GateReport::new("DCX decoded bytes DLL compression roundtrips", Tolerance::Exact);
-    let mut pinned = Vec::new();
     for file in files {
-        let name = file
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default()
-            .to_owned();
         let b = std::fs::read(&file)?;
         let (expected, src) = krak_payload(&b).map_err(|e| format!("{}: {e}", file.display()))?;
         let got = dll.decompress(src, expected)?;
@@ -134,17 +123,11 @@ fn loose_krak_dcx() -> std::result::Result<(), BoxError> {
                 Ok(decoded) => {
                     quantums.compare_bytes(format!("{}/quantum/{i}", file.display()), &decoded, reference)
                 }
-                Err(Failure::Refused(_)) if SINGLE_SYMBOL_HUFFMAN.contains(&(&name, i)) => {
-                    pinned.push(format!("{name}/quantum/{i}"))
-                }
                 Err(e) => return Err(format!("{}/quantum/{i}: {e}", file.display()).into()),
             }
         }
         match reference::decode(src, expected) {
             Ok(other) => report.compare_bytes(file.display().to_string(), &got, &other),
-            Err(Failure::Refused(_)) if SINGLE_SYMBOL_HUFFMAN.iter().any(|(pin, _)| *pin == name) => {
-                pinned.push(name.clone())
-            }
             Err(e) => return Err(format!("{}: {e}", file.display()).into()),
         }
         let encoded = dll.compress(&got)?;
@@ -154,58 +137,11 @@ fn loose_krak_dcx() -> std::result::Result<(), BoxError> {
             &dll.decompress(&encoded, expected)?,
         );
     }
-    println!(
-        "{quantums}\n{stored}\n{roundtrips}\nDLL only, oozextract's pinned single-symbol Huffman defect: {pinned:?}"
-    );
+    println!("{quantums}\n{stored}\n{roundtrips}");
     quantums.assert_passed();
     stored.assert_passed();
     roundtrips.assert_passed();
     println!("{report}");
     report.assert_passed();
-    Ok(())
-}
-
-/// oozextract 0.5.6 refuses a Huffman byte chunk (chunk type 2 or 4) whose code lengths name a single symbol: having
-/// filled the output with that symbol, `decode_bytes_type12` returns `src - src_end`, 0 when the code-length
-/// header ends the chunk, where its caller requires the chunk's size ("Expected 0 == 3 for chunk type 4"). The C
-/// ooz it ports has the same return (kraken.cpp, Kraken_DecodeBytes_Type12). The game's Oodle 6 decodes the
-/// chunk; with that return made the chunk's size, oozextract equals the DLL on every file of `corpus.sekiro/dcx`,
-/// whole and per quantum. A fix upstream fails the final assertion: then empty
-/// [`SINGLE_SYMBOL_HUFFMAN`] and remove this test.
-#[test]
-fn oozextract_056_single_symbol_huffman_chunk_reports_no_bytes_used()
--> std::result::Result<(), Box<dyn std::error::Error>> {
-    let Some(root) = oracle(OracleSet::Corpus, Game::Sekiro, "dcx") else {
-        return Ok(());
-    };
-    let Some(path) = tool(Tool::Oodle6) else {
-        return Ok(());
-    };
-    // SAFETY: explicitly configured trusted version-6 game library.
-    #[allow(unsafe_code)]
-    let dll = unsafe { Oodle::load(path, Version::V6)? };
-    for &(name, i) in SINGLE_SYMBOL_HUFFMAN {
-        let bytes = std::fs::read(root.join(name))?;
-        let (expected, src) = krak_payload(&bytes)?;
-        let reference = dll.decompress(src, expected)?;
-        let quantum = quanta(src, expected)?
-            .into_iter()
-            .nth(i)
-            .ok_or("no such quantum")?;
-        let reference = &reference[i * QUANTUM..i * QUANTUM + quantum.size];
-        assert_eq!(
-            dll.decompress(quantum.bytes, quantum.size)?,
-            reference,
-            "{name}/quantum/{i}: the DLL alone"
-        );
-        match reference::decode(quantum.bytes, quantum.size) {
-            Err(e) if e.refuses_for("Expected 0 == 3 for chunk type 4") => {}
-            Err(other) => return Err(format!("{name}/quantum/{i}: a different failure: {other}").into()),
-            Ok(decoded) => {
-                assert_eq!(decoded, reference, "{name}/quantum/{i}");
-                panic!("upstream defect fixed: empty SINGLE_SYMBOL_HUFFMAN and remove this test");
-            }
-        }
-    }
     Ok(())
 }
