@@ -35,6 +35,11 @@ impl Pass for ApplyRigidSkinning {
     fn name(&self) -> &'static str {
         "fromsoft-apply-rigid-skinning"
     }
+    /// A world with no FLVER model has no static mesh to pose: an area of collision alone, or whose only models were
+    /// the distant backdrop `drop-fromsoft-far` left out.
+    fn may_lack_inputs(&self) -> bool {
+        true
+    }
     fn requires(&self) -> &[&'static str] {
         &[SourceModel::NAME]
     }

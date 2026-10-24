@@ -598,6 +598,52 @@ fn object_collision_is_skipped_where_no_placed_model_has_collision() {
     assert_eq!(report.steps[0].skipped, ["fromsoft.object_collision"]);
 }
 
+/// A world with no FLVER model (an area of collision alone, or whose only models were the distant backdrop
+/// `drop-fromsoft-far` left out) has no static mesh to pose: the rigid skinning is recorded skipped, not failed.
+#[test]
+fn rigid_skinning_is_skipped_where_the_world_holds_no_model() {
+    use primase_core::pass::{PassManager, Pipeline, RunReport};
+    let pass = crate::rigid::FROMSOFT_APPLY_RIGID_SKINNING
+        .instance(&Default::default())
+        .unwrap();
+    let mut world = World::new();
+    let mut report = RunReport::default();
+    PassManager::new(PassRegistry::new())
+        .run_part(&mut world, &Pipeline { passes: vec![pass] }, &mut report)
+        .unwrap();
+    assert_eq!(report.steps[0].skipped, ["fromsoft.flver"]);
+}
+
+/// A material whose program the reader does not hold has no `core.shader_binding`, and a read none of whose materials
+/// has one (a weapon part) has nothing to bake: the bake runs, counts each material it found unbound and changes none.
+#[test]
+fn the_material_bake_runs_where_no_material_has_a_binding() {
+    use primase_core::pass::{PassManager, Pipeline, RunReport};
+    use primase_core::pbr::PbrMaterial;
+    let pass = super::bake_materials::BAKE_FROMSOFT_MATERIALS
+        .instance(
+            &[("max-size", "4"), ("sample-time", "0")]
+                .into_iter()
+                .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                .collect(),
+        )
+        .unwrap();
+    let mut world = World::new();
+    let material = world.spawn();
+    let mut source = layered(None);
+    source.layered = None;
+    world.insert(material, source);
+    world.insert(material, PbrMaterial::default());
+    let mesh = world.spawn();
+    world.insert(mesh, Mesh::new(vec![primitive(material)]));
+    let mut report = RunReport::default();
+    PassManager::new(PassRegistry::new())
+        .run_part(&mut world, &Pipeline { passes: vec![pass] }, &mut report)
+        .expect("a bake with no binding anywhere is not refused");
+    assert!(report.steps[0].skipped.is_empty(), "it ran");
+    assert!(world.get::<PbrMaterial>(material).is_some());
+}
+
 /// The crate registers exactly these passes by their declarations: those with required options are made only with
 /// them, and every one says what it takes.
 #[test]
