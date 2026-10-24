@@ -1326,6 +1326,71 @@ fn the_bake_freezes_the_alpha_test_off() {
     assert_eq!(prepared.policies.get(ALPHA_TEST_POLICY), None);
 }
 
+/// A texture's tiling is its uv group's, the group the metaparam records for the same `Texture2D_N`, whatever the
+/// record's slot (its register, which need not be that number: Sekiro's `Character_AMSN_[DetailBlend]` records its base
+/// albedo `Texture2D_7` at slot 1 and a detail fabric `Texture2D_2`, tiled 51 by 17, at slot 7).
+#[test]
+fn a_textures_tiling_is_the_uv_group_of_its_own_texture_number() {
+    use primase_fromsoft::metaparam::{Metaparam, Texture as MetaTexture};
+    let shader = executor(PROGRAM);
+    let record = |name: &str, slot: u8, uv_group: &str| MetaTexture {
+        name: name.into(),
+        default_texture: String::new(),
+        uv_group: uv_group.into(),
+        slot,
+        kind: 1,
+        unknown_08: 0,
+        unknown_0c: -1,
+        unknown_20: 0,
+    };
+    // the fixture program's Texture2D_8 is at register t8 and its Texture2D_2 at t2: each record's slot is the other's
+    let metaparam = Metaparam {
+        constant_buffer_size: 0,
+        shader_id: 0,
+        flags: 0,
+        gxmd_key: 0,
+        ca_param_block_size: 0,
+        ca_param_components: 0,
+        unknown_30: 0,
+        unknown_40: 0,
+        unknown_50: 0,
+        textures: vec![
+            record("M_Multiple__snp_Texture2D_8_AlbedoMap", 2, "group_3"),
+            record("M_Multiple__snp_Texture2D_2_NormalMap", 8, "group_9"),
+        ],
+        passes: Vec::new(),
+        ca_params: Vec::new(),
+        mtd_params: Vec::new(),
+    };
+    let mut m = material();
+    for (group, scale) in [("group_3", [51., 17.]), ("group_9", [5., 5.])] {
+        m.definition.parameters.push(Parameter {
+            name: format!("{group}_CommonUV-UVParam"),
+            value: Value::Float(scale.to_vec()),
+        });
+    }
+    let resolution = resolve(
+        &shader,
+        World::default().spawn(),
+        &m.view(),
+        primase_fromsoft::Game::Sekiro,
+        Some(&metaparam),
+        Unbound::Preview,
+        &mut |_, _| Ok(None),
+    )
+    .unwrap();
+    let tiling: Vec<(u32, ConstantRole)> = constants(&resolution.stage, &shader)
+        .into_iter()
+        .filter(|c| c.1 == "FC_TextureTilingScale")
+        .map(|c| (c.2, c.4))
+        .collect();
+    // rows 2 and 8, sixteen bytes each
+    assert_eq!(
+        tiling,
+        [(32, bits(&[5., 5., 0., 0.])), (128, bits(&[51., 17., 0., 0.]))]
+    );
+}
+
 /// A SAT parameter the material does not state takes the default its shader bundle's metaparam states, counted; one the
 /// metaparam does not declare is still Unknown.
 #[test]

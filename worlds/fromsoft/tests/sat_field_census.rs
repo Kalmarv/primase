@@ -5,7 +5,9 @@
 //! parameters' names, Sekiro's `_cloth` shaders' programs bound none (their material and program name the parameters
 //! after the base family, not after the `_cloth` shader).
 //!
-//! It prints, per read, how many bound programs have material fields and how many of those bind none, by program.
+//! It prints, per read, how many bound programs have material fields and how many of those bind none, by program;
+//! and each bound material's texture tiling (`FC_TextureTilingScale` rows by register), one `tiling` line a material,
+//! for comparing two revisions' reads.
 use primase_core::World;
 use primase_core::shader::{ConstantRole, ResourceKind, Shader, ShaderBinding};
 use primase_fromsoft::dcx::Decoder;
@@ -55,6 +57,32 @@ fn census(world: &World) -> Result<(usize, BTreeMap<String, usize>)> {
     Ok((with_fields, none))
 }
 
+/// Each bound material's `FC_TextureTilingScale` rows (byte offset, first two lanes), by material entity and MTD.
+fn tilings(world: &World) -> Vec<String> {
+    let mut out = Vec::new();
+    for (e, m) in world.iter::<Material>() {
+        let Some(pixel) = world.get::<ShaderBinding>(e).and_then(|b| b.stages.last()) else {
+            continue;
+        };
+        let rows: Vec<String> = pixel
+            .constants
+            .iter()
+            .filter(|c| c.name.as_deref() == Some("FC_TextureTilingScale"))
+            .filter_map(|c| match &c.role {
+                ConstantRole::Material(w) if w.len() >= 2 => Some(format!(
+                    "{}:{}x{}",
+                    c.offset / 16,
+                    f32::from_bits(w[0]),
+                    f32::from_bits(w[1])
+                )),
+                _ => None,
+            })
+            .collect();
+        out.push(format!("e{} {} {}", e.index(), m.mtd, rows.join(" ")));
+    }
+    out
+}
+
 #[test]
 fn every_program_with_material_fields_binds_the_materials_parameters() -> Result<()> {
     let Some(dll) = primase_testdata::tool(primase_testdata::Tool::Oodle6) else {
@@ -90,6 +118,9 @@ fn every_program_with_material_fields_binds_the_materials_parameters() -> Result
     for (what, mut world) in reads {
         let report = common::run(&mut world, "resolve-fromsoft-shaders{unbound-textures=preview}")?;
         println!("{what}: {:?}", report.steps[0].log);
+        for line in tilings(&world) {
+            println!("tiling {what}: {line}");
+        }
         let (with_fields, none) = census(&world)?;
         println!(
             "{what}: {with_fields} bound programs with material fields, {} binding none: {none:?}",

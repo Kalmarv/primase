@@ -407,12 +407,7 @@ pub fn resolve(
         } else {
             // the uv group's `<group>_CommonUV-UVParam` where the metaparam gives the slot a uv group and the definition
             // states that parameter, else the binding's own stored scale
-            let group_scale = texture_slot(resource).ok().and_then(|slot| {
-                let group = &metaparam?
-                    .textures
-                    .iter()
-                    .find(|t| u32::from(t.slot) == slot && !t.uv_group.is_empty())?
-                    .uv_group;
+            let group_scale = uv_group(metaparam, resource).and_then(|group| {
                 match material
                     .definition
                     .parameter(&format!("{group}_CommonUV-UVParam"))?
@@ -1185,6 +1180,20 @@ fn normalised(reason: &str) -> String {
 /// nine rows of one map material binary, AEG099_324_ID001, did not (19, 55 and 24 captured where it states 10, 35 and
 /// 10): the draw is likely of another material with the same textures, not established. The metaparam's slot index is
 /// not the `N` of `Texture2D_N` (both name the texture: its slot is the register), so the group is found by the name.
+/// The uv group of the metaparam's record for program texture `resource`, where it names one: the record of the same
+/// `Texture2D_N` ([`crate::metaparam::texture_number`] of its name), both games' rule. A record's
+/// [`crate::metaparam::Texture::slot`] is its register, not that number: Sekiro's `Character_AMSN_[DetailBlend]`
+/// metaparam records `Texture2D_7_AlbedoMap` (the base albedo, register 1) in group_1 and `Texture2D_2_AlbedoMap` (a
+/// detail fabric, register 7) in group_3, and finding the record by its slot swapped their tilings.
+fn uv_group<'a>(metaparam: Option<&'a Metaparam>, resource: &Resource) -> Option<&'a str> {
+    let n = texture_slot(resource).ok()?;
+    metaparam?
+        .textures
+        .iter()
+        .find(|t| crate::metaparam::texture_number(&t.name) == Some(n) && !t.uv_group.is_empty())
+        .map(|t| t.uv_group.as_str())
+}
+
 fn elden_tiling(material: &MaterialView<'_>, metaparam: Option<&Metaparam>, resource: &Resource) -> [f32; 4] {
     let n = texture_slot(resource).ok();
     let number = crate::metaparam::texture_number;
@@ -1199,12 +1208,7 @@ fn elden_tiling(material: &MaterialView<'_>, metaparam: Option<&Metaparam>, reso
     };
     let group = || {
         let meta = metaparam?;
-        let group = &meta
-            .textures
-            .iter()
-            .find(|t| n.is_some() && number(&t.name) == n && !t.uv_group.is_empty())?
-            .uv_group;
-        let name = format!("{group}_CommonUV-UVParam");
+        let name = format!("{}_CommonUV-UVParam", uv_group(metaparam, resource)?);
         match material.definition.parameter(&name) {
             Some(ParameterValue::Float(v)) if v.len() >= 2 => Some([v[0], v[1]]),
             _ => meta
