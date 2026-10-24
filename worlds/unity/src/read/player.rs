@@ -372,7 +372,7 @@ impl Player {
 
     /// The quality levels of `globalgamemanagers`' QualitySettings, in order, each with its name and the skin weights
     /// it allows; none when the player has no QualitySettings. Which level is current at run time is not data a
-    /// consumer can read (see [`Player::default_quality`]), so a consumer states the level it wants where levels differ.
+    /// consumer can read (see [`Player::build_quality`]), so a consumer states the level it wants where levels differ.
     pub fn quality_levels(&self) -> Result<Vec<QualityLevel>> {
         match self.quality_settings()? {
             Some(settings) => levels_of(&settings),
@@ -385,7 +385,7 @@ impl Player {
     /// game runs at: a game may change its quality level at run time. `None` when the player has no QualitySettings or
     /// states no `m_CurrentQuality`; an index outside the levels is an error. (The per-platform default
     /// `m_PerPlatformDefaultQuality` is not in a player: SkateBIRD, Sledding Game and PEAK carry none.)
-    pub fn default_quality(&self) -> Result<Option<String>> {
+    pub fn build_quality(&self) -> Result<Option<String>> {
         let Some(settings) = self.quality_settings()? else {
             return Ok(None);
         };
@@ -542,7 +542,7 @@ mod tests {
     /// The level the build was made with is the one `m_CurrentQuality` indexes; a player that states none has none, and
     /// an index outside the levels is refused, not clamped.
     #[test]
-    fn the_default_quality_is_the_level_m_current_quality_indexes() {
+    fn the_build_quality_is_the_level_m_current_quality_indexes() {
         let levels = [level("Low"), level("Mid"), level("High")];
         let name = |v| current_level(&settings(Some(v)), &levels);
         assert_eq!(name(Value::Int(2)).unwrap().as_deref(), Some("High"));
