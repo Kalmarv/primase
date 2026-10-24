@@ -45,6 +45,7 @@
 
 use crate::animation::{Animation, Tracks};
 use crate::{Error, Result, invalid};
+use primase_bytes::Endian;
 
 /// The knots and degree a spline track's control points are evaluated with.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -190,47 +191,32 @@ struct Mask {
 const STATIC: [u8; 4] = [0x01, 0x02, 0x04, 0x08];
 const SPLINE: [u8; 4] = [0x10, 0x20, 0x40, 0x80];
 
-/// A bounds-checked reader of the block data.
-struct Reader<'a> {
-    bytes: &'a [u8],
-    at: usize,
+/// The block data's cursor ([`primase_bytes::Cursor`], little-endian), with its floats and padding as methods.
+struct Reader<'a>(primase_bytes::Cursor<'a>);
+
+impl<'a> std::ops::Deref for Reader<'a> {
+    type Target = primase_bytes::Cursor<'a>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
-impl Reader<'_> {
-    fn take(&mut self, n: usize) -> Result<&[u8]> {
-        let end = self
-            .at
-            .checked_add(n)
-            .filter(|&end| end <= self.bytes.len())
-            .ok_or_else(|| invalid(self.at, "the block runs past the animation data"))?;
-        let out = self.bytes.get(self.at..end).unwrap_or_default();
-        self.at = end;
-        Ok(out)
+impl std::ops::DerefMut for Reader<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
+}
 
-    fn u8(&mut self) -> Result<u8> {
-        Ok(self.take(1)?.first().copied().unwrap_or_default())
-    }
-
-    fn array<const N: usize>(&mut self) -> Result<[u8; N]> {
-        let at = self.at;
-        self.take(N)?.try_into().map_err(|_| invalid(at, "short read"))
-    }
-
-    fn u16(&mut self) -> Result<u16> {
-        Ok(u16::from_le_bytes(self.array()?))
-    }
-
-    fn i16(&mut self) -> Result<i16> {
-        Ok(i16::from_le_bytes(self.array()?))
-    }
-
-    fn u32(&mut self) -> Result<u32> {
-        Ok(u32::from_le_bytes(self.array()?))
+impl<'a> Reader<'a> {
+    /// A reader of `bytes` at `at`.
+    fn at(bytes: &'a [u8], at: usize) -> Result<Self> {
+        let mut c = primase_bytes::Cursor::new(bytes);
+        c.seek(at)?;
+        Ok(Reader(c))
     }
 
     fn f32(&mut self) -> Result<f32> {
-        let at = self.at;
+        let at = self.position();
         let v = self.raw_f32()?;
         if v.is_finite() {
             Ok(v)
@@ -242,22 +228,22 @@ impl Reader<'_> {
     /// A float as stored, finite or not (a vector component's value or range, where a non-finite one is that
     /// component's own: see [`Unreadable`]).
     fn raw_f32(&mut self) -> Result<f32> {
-        Ok(f32::from_le_bytes(self.array()?))
+        Ok(self.0.f32(Endian::Little)?)
     }
 
     /// Skip to the next multiple of `align` (a position in the whole data).
     fn pad(&mut self, align: usize) -> Result<()> {
-        let to = self.at.next_multiple_of(align);
-        if to > self.bytes.len() {
-            return Err(invalid(self.at, "padding runs past the animation data"));
+        let to = self.position().next_multiple_of(align);
+        if to > self.bytes().len() {
+            return Err(invalid(self.position(), "padding runs past the animation data"));
         }
-        self.at = to;
+        self.seek(to)?;
         Ok(())
     }
 }
 
 fn mask(r: &mut Reader) -> Result<Mask> {
-    let at = r.at;
+    let at = r.position();
     let [quantization, position, rotation, scale] = r.array::<4>()?;
     Ok(Mask {
         position: Scalar::of(quantization & 3, at)?,
@@ -271,8 +257,8 @@ fn mask(r: &mut Reader) -> Result<Mask> {
 
 /// A spline track's head: the point count, the degree and the knots.
 fn knots(r: &mut Reader) -> Result<(usize, Knots)> {
-    let at = r.at;
-    let items = r.i16()?;
+    let at = r.position();
+    let items = r.i16(Endian::Little)?;
     let degree = r.u8()?;
     let points = usize::try_from(items)
         .ok()
@@ -299,7 +285,7 @@ fn knots(r: &mut Reader) -> Result<(usize, Knots)> {
 fn quantized(r: &mut Reader, scalar: Scalar, min: f32, max: f32) -> Result<f32> {
     let ratio = match scalar {
         Scalar::Bits8 => f64::from(r.u8()?) / 255.0,
-        Scalar::Bits16 => f64::from(r.u16()?) / 65535.0,
+        Scalar::Bits16 => f64::from(r.u16(Endian::Little)?) / 65535.0,
     };
     Ok(round_f32(
         f64::from(min) + (f64::from(max) - f64::from(min)) * ratio,
@@ -417,7 +403,11 @@ fn quaternion(r: &mut Reader, how: RotationQuantization) -> Result<[f32; 4]> {
         RotationQuantization::Uncompressed => [r.f32()?, r.f32()?, r.f32()?, r.f32()?],
         RotationQuantization::ThreeComp48 => {
             // 15 bits each, the top bit of each a part of the index and the sign
-            let (x, y, z) = (r.i16()?, r.i16()?, r.i16()?);
+            let (x, y, z) = (
+                r.i16(Endian::Little)?,
+                r.i16(Endian::Little)?,
+                r.i16(Endian::Little)?,
+            );
             // the index: y's top bit, then x's
             let shift = match (y < 0, x < 0) {
                 (false, false) => 0,
@@ -438,7 +428,7 @@ fn quaternion(r: &mut Reader, how: RotationQuantization) -> Result<[f32; 4]> {
             three_components([v(0), v(12), v(24)], ((c >> 36) & 3) as usize, (c >> 38) & 1 != 0)
         }
         RotationQuantization::Polar32 => {
-            let c = r.u32()?;
+            let c = r.u32(Endian::Little)?;
             let radius = f64::from((c >> 18) & 0x3FF) / 1023.0;
             let w = 1.0 - radius * radius;
             let phi_theta = f64::from(c & 0x3FFFF);
@@ -466,7 +456,7 @@ fn quaternion(r: &mut Reader, how: RotationQuantization) -> Result<[f32; 4]> {
 }
 
 fn rotation(r: &mut Reader, flags: u8, code: u8) -> Result<Rotation> {
-    let at = r.at;
+    let at = r.position();
     let how = RotationQuantization::of(code, at)?;
     if SPLINE.iter().any(|f| flags & f != 0) {
         let (points, knots) = knots(r)?;
@@ -559,10 +549,7 @@ impl SplineAnimation {
             let float_start = start
                 .checked_add(float as usize)
                 .ok_or_else(|| invalid(start, format!("block {b}'s float data offset overflows")))?;
-            let mut r = Reader {
-                bytes: &s.data,
-                at: start,
-            };
+            let mut r = Reader::at(&s.data, start)?;
             let ends = Ends { float_start, next };
             out.push(block(
                 &mut r,
@@ -648,31 +635,34 @@ fn block(
         });
     }
     let Ends { float_start, next } = ends;
-    if r.at != float_start {
+    if r.position() != float_start {
         return Err(invalid(
-            r.at,
+            r.position(),
             format!(
                 "block {index} ends at {}, the float data begins at {float_start}",
-                r.at
+                r.position()
             ),
         ));
     }
-    let on_boundary = r.at.is_multiple_of(16);
+    let on_boundary = r.position().is_multiple_of(16);
     r.pad(16)?;
-    if r.at != next {
+    if r.position() != next {
         // The 2018.1 files the install holds pad a block whose float data begins on a 16-byte boundary by 16 more
         // zero bytes in some cases (711 of 1,568 such blocks; the other 857 and every block of the 2016.2 files have
         // none, with the same trailing bytes: the encoder's rule is its own, not the data's). Those 16 zero bytes are
         // accepted, nothing else.
         let extra = on_boundary
-            && r.at.checked_add(16) == Some(next)
-            && r.bytes
-                .get(r.at..next)
+            && r.position().checked_add(16) == Some(next)
+            && r.bytes()
+                .get(r.position()..next)
                 .is_some_and(|pad| pad.iter().all(|&b| b == 0));
         if !extra {
             return Err(invalid(
-                r.at,
-                format!("block {index} ends at {}, the next begins at {next}", r.at),
+                r.position(),
+                format!(
+                    "block {index} ends at {}, the next begins at {next}",
+                    r.position()
+                ),
             ));
         }
     }
@@ -906,10 +896,7 @@ mod tests {
     fn the_quantized_quaternions_decode_by_their_bit_layouts() {
         let c: u64 = 0x7FF | (0x7FF << 12) | (0x7FF << 24) | (3 << 36);
         let bytes = c.to_le_bytes();
-        let mut r = Reader {
-            bytes: &bytes[..5],
-            at: 0,
-        };
+        let mut r = Reader::at(&bytes[..5], 0).unwrap();
         assert_eq!(
             quaternion(&mut r, RotationQuantization::ThreeComp40).unwrap(),
             [0.0, 0.0, 0.0, 1.0]
@@ -917,10 +904,7 @@ mod tests {
         // the sign bit makes w -1
         let c = c | (1 << 38);
         let bytes = c.to_le_bytes();
-        let mut r = Reader {
-            bytes: &bytes[..5],
-            at: 0,
-        };
+        let mut r = Reader::at(&bytes[..5], 0).unwrap();
         assert_eq!(
             quaternion(&mut r, RotationQuantization::ThreeComp40).unwrap(),
             [0.0, 0.0, 0.0, -1.0]
@@ -928,7 +912,7 @@ mod tests {
         // 15-bit components at 0x3FFF are zero: the index is bit 15 of x and of y (x low, y high); index 0 is x
         let words = [0x3FFFu16, 0x3FFF, 0x3FFF];
         let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
-        let mut r = Reader { bytes: &bytes, at: 0 };
+        let mut r = Reader::at(&bytes, 0).unwrap();
         assert_eq!(
             quaternion(&mut r, RotationQuantization::ThreeComp48).unwrap(),
             [1.0, 0.0, 0.0, 0.0]
@@ -936,13 +920,13 @@ mod tests {
         // both bits set is index 3 (w); the sign bit of z negates it
         let words = [0xBFFFu16, 0xBFFF, 0xBFFF];
         let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
-        let mut r = Reader { bytes: &bytes, at: 0 };
+        let mut r = Reader::at(&bytes, 0).unwrap();
         assert_eq!(
             quaternion(&mut r, RotationQuantization::ThreeComp48).unwrap(),
             [0.0, 0.0, 0.0, -1.0]
         );
         let bytes = (1023u32 << 18).to_le_bytes();
-        let mut r = Reader { bytes: &bytes, at: 0 };
+        let mut r = Reader::at(&bytes, 0).unwrap();
         let q = quaternion(&mut r, RotationQuantization::Polar32).unwrap();
         assert_eq!(q, [0.0, 0.0, 1.0, 0.0]);
     }
