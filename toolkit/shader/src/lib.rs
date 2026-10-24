@@ -4,7 +4,8 @@
 //! cannot say; [`Program::validate`] checks it, [`emit`] writes it as WGSL, [`build::Builder`] is the typed builder the lifters
 //! (`primase-dxbc`, `primase-dxil`, `primase-mojoshader`) share, [`gate`] is their version gate and [`flow`] says what a
 //! program's outputs are made of, [`matrix`] how it holds a matrix constant, [`output_uses`] what its discards and blend
-//! show an unroled output lane is used for. The vocabulary is
+//! show an unroled output lane is used for, [`output_stores`] what its entry point stores into each output lane and
+//! how a stored value is made. The vocabulary is
 //! [`primase_core::shader`], re-exported here: varyings by label, resources with explicit constant layouts, D3D's
 //! registers kept in provenance. The [`d3d`] module is where D3D's enum numbers and
 //! packing rules are mapped into it, for the readers of every bytecode.
@@ -20,6 +21,7 @@ pub mod flow;
 pub mod gate;
 mod limits;
 pub mod matrix;
+pub mod output_stores;
 pub mod output_uses;
 mod program;
 mod reads;
