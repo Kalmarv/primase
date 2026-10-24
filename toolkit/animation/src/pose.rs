@@ -616,8 +616,9 @@ mod tests {
     }
 
     /// Hand-worked: weights 1 and 3 put a joint a quarter of the way from (0, 0, 0) to (4, 0, 0) and from scale 1 to 5; a
-    /// half turn and no turn about z at weights 1 and 1 are a quarter turn (`q` and `-q` the same rotation); weights are
-    /// relative (2 and 2 are 1 and 1); a joint both parts state alike is kept as stated; a part alone is itself.
+    /// quarter turn and no turn about z at weights 1 and 1 are an eighth of a turn (and the same with the quarter turn's
+    /// quaternion negated: `q` and `-q` are one rotation); weights are relative (2 and 2 are 1 and 1); a joint both parts
+    /// state alike is kept as stated; a part alone is itself.
     #[test]
     fn weighted_poses_blend_joint_by_joint() {
         let same = trs([5.0, 6.0, 7.0], [0.0, 0.0, 0.0, 1.0]);
@@ -630,23 +631,25 @@ mod tests {
             rotation,
             scale: [5.0, 5.0, 5.0],
         };
-        let b = evaluated(vec![
-            (JointId(1), turned([0.0, 0.0, 1.0, 0.0])),
-            (JointId(2), same),
-        ]);
+        let b = evaluated(vec![(JointId(1), turned([0.0, 0.0, S, S])), (JointId(2), same)]);
         let at = |wa: f64, wb: f64| blend(&[(&a, wa), (&b, wb)]).unwrap();
         let t = joint_trs(&at(1.0, 3.0), 1);
         assert!(
             near(&t.translation, &[3.0, 0.0, 0.0]) && near(&t.scale, &[4.0; 3]),
             "{t:?}"
         );
-        let quarter = [0.0, 0.0, f64::from(S), f64::from(S)];
-        assert!(near(&joint_trs(&at(1.0, 1.0), 1).rotation, &quarter));
+        let eighth = [
+            0.0,
+            0.0,
+            (std::f64::consts::PI / 8.0).sin(),
+            (std::f64::consts::PI / 8.0).cos(),
+        ];
+        assert!(near(&joint_trs(&at(1.0, 1.0), 1).rotation, &eighth));
         // the second rotation negated: the same rotation, the same blend
         let mut negated = b.clone();
-        negated.pose.joints[0].1 = turned([0.0, 0.0, -1.0, 0.0]);
+        negated.pose.joints[0].1 = turned([0.0, 0.0, -S, -S]);
         let n = blend(&[(&a, 1.0), (&negated, 1.0)]).unwrap();
-        assert!(near(&joint_trs(&n, 1).rotation, &quarter));
+        assert!(near(&joint_trs(&n, 1).rotation, &eighth));
         assert_eq!(at(2.0, 2.0), at(1.0, 1.0));
         assert_eq!(at(1.0, 1.0).pose.joints[1], a.pose.joints[1]);
         assert_eq!(at(0.0, 2.0), b);
