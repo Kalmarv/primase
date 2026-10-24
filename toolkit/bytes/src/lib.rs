@@ -222,12 +222,24 @@ impl<'a> Cursor<'a> {
     pub fn position(&self) -> usize {
         self.position
     }
+    /// All the bytes it reads, from its start (a parser that looks back or ahead by offset).
+    pub fn bytes(&self) -> &'a [u8] {
+        self.view.data
+    }
     pub fn remaining(&self) -> usize {
         self.view.data.len() - self.position
     }
     pub fn take(&mut self, length: usize) -> Result<&'a [u8], BoundsError> {
         let bytes = self.view.slice(self.position, length)?;
         self.position += length;
+        Ok(bytes)
+    }
+    /// The bytes from the position up to `end` (an offset in the view), the cursor left at `end`: refused when `end`
+    /// is before the position or past the view.
+    pub fn take_to(&mut self, end: usize) -> Result<&'a [u8], BoundsError> {
+        let within = View::with_origin(self.view.slice(0, end)?, self.view.origin);
+        let bytes = within.slice(self.position, end.saturating_sub(self.position))?;
+        self.position = end;
         Ok(bytes)
     }
     pub fn seek(&mut self, offset: usize) -> Result<(), BoundsError> {
@@ -337,6 +349,14 @@ mod tests {
             "a header's size at 0x103: 8 bytes run past the end of 8"
         );
         assert_eq!(c.array::<5>(), Ok([0x04, 0x00, 0x00, 0x80, 0x3f]));
+        // up to an end: not before the position, not past the view
+        let mut c = Cursor::new(&bytes);
+        c.seek(2).unwrap();
+        assert_eq!(c.take_to(4), Ok(&[0x03, 0x04][..]));
+        assert_eq!(c.position(), 4);
+        assert!(c.take_to(3).is_err());
+        assert!(c.take_to(9).is_err());
+        assert_eq!(c.position(), 4);
     }
 
     /// A count the rest of the view holds is read; one it can't (or whose bytes overflow) is refused without
