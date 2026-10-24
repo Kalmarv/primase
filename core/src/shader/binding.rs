@@ -626,8 +626,10 @@ pub struct StageBinding {
     pub inputs: Vec<InputBinding>,
     pub constants: Vec<ConstantBinding>,
     pub textures: Vec<TextureBinding>,
-    /// The buffers the program indexes at run time (tables of the draw's matrices and instances), for a source that
-    /// states them; empty for a source that does not, and a buffer no entry names is one nothing is known of.
+    /// The buffers the program indexes at run time (tables of the draw's matrices and instances). A stage that states
+    /// any states every buffer resource of its program (a table, or [`BufferSource::Unknown`] with why); empty for a
+    /// source that states none, whose buffers a consumer takes as [`StageBinding::buffer`] says: unknown, with the
+    /// reason it prints.
     pub buffers: Vec<BufferBinding>,
     pub outputs: Vec<OutputBinding>,
 }
@@ -1006,8 +1008,21 @@ impl StageBinding {
         self.verify_buffers(interface).map_err(at)
     }
 
+    /// What buffer `resource` of the program holds: its entry, or, where the source states no buffers for the stage,
+    /// unknown with that reason (never zeros without saying so).
+    pub fn buffer(&self, resource: ResourceId) -> BufferSource {
+        self.buffers
+            .iter()
+            .find(|b| b.resource == resource)
+            .map(|b| b.source.clone())
+            .unwrap_or_else(|| BufferSource::Unknown {
+                why: "the source states no buffers for this stage".into(),
+            })
+    }
+
     /// The buffer slots: each a buffer of the shader, bound once, a matrix table of 16-byte elements, and an instance
-    /// table whose records fit its stride and name a matrix table of this stage.
+    /// table whose records fit its stride and name a matrix table of this stage; a stage that states any buffer states
+    /// every buffer of its program.
     fn verify_buffers(&self, interface: &Interface) -> Result<(), String> {
         let kind = |id: ResourceId| match interface.resource(id).map(|r| &r.kind) {
             Some(ResourceKind::Buffer(kind)) => Some(*kind),
@@ -1085,6 +1100,17 @@ impl StageBinding {
                     }
                 }
             }
+        }
+        if !self.buffers.is_empty()
+            && let Some(r) = interface.resources.iter().find(|r| {
+                matches!(r.kind, ResourceKind::Buffer(_)) && !self.buffers.iter().any(|b| b.resource == r.id)
+            })
+        {
+            return Err(format!(
+                "buffer slot {} has no entry: a stage that states buffers states every one (a table, or unknown with \
+                 why)",
+                r.id.0
+            ));
         }
         Ok(())
     }
@@ -1518,7 +1544,14 @@ mod tests {
         let mut w = World::new();
         let (s, m) = (w.spawn(), w.spawn());
         w.insert(s, buffer_shader());
-        let good = vec![matrices(10, 3), instances(11, 2, 0, 10)];
+        // every buffer named: 12 is unknown with a reason
+        let rest = || BufferBinding {
+            resource: ResourceId(12),
+            source: BufferSource::Unknown {
+                why: "not read here".into(),
+            },
+        };
+        let good = vec![matrices(10, 3), instances(11, 2, 0, 10), rest()];
         w.insert(m, buffer_binding(s, good.clone()));
         assert_eq!(w.get::<ShaderBinding>(m).unwrap().verify(m, &w), Ok(()));
         let json = w.get::<ShaderBinding>(m).unwrap().to_json().unwrap().unwrap();
@@ -1565,19 +1598,47 @@ mod tests {
         // an unknown buffer with a reason, beside a table, is a binding
         w.insert(
             m,
-            buffer_binding(s, vec![matrices(10, 4), unknown("the engine fills it")]),
+            buffer_binding(
+                s,
+                vec![
+                    matrices(10, 4),
+                    instances(11, 2, 0, 10),
+                    unknown("the engine fills it"),
+                ],
+            ),
         );
         assert_eq!(w.get::<ShaderBinding>(m).unwrap().verify(m, &w), Ok(()));
         // a headered table is a matrix table: records may name it, and it has the same rows and element rules
         w.insert(
             m,
-            buffer_binding(s, vec![headered(10, 3), instances(11, 2, 1, 10)]),
+            buffer_binding(s, vec![headered(10, 3), instances(11, 2, 1, 10), rest()]),
         );
         assert_eq!(w.get::<ShaderBinding>(m).unwrap().verify(m, &w), Ok(()));
         let json = w.get::<ShaderBinding>(m).unwrap().to_json().unwrap().unwrap();
         assert_eq!(
             json["stages"][0]["buffers"][0]["source"],
             serde_json::json!({"table": {"headered_matrices": {"rows": 3}}})
+        );
+        // a stage that states buffers states every one; one that states none leaves each unknown with that reason
+        w.insert(
+            m,
+            buffer_binding(s, vec![matrices(10, 3), instances(11, 2, 0, 10)]),
+        );
+        let err = w.get::<ShaderBinding>(m).unwrap().verify(m, &w).unwrap_err();
+        assert!(err.contains("buffer slot 12 has no entry"), "{err}");
+        w.insert(m, buffer_binding(s, Vec::new()));
+        let binding = w.get::<ShaderBinding>(m).unwrap();
+        assert_eq!(binding.verify(m, &w), Ok(()));
+        assert_eq!(
+            binding.stages[0].buffer(ResourceId(10)),
+            BufferSource::Unknown {
+                why: "the source states no buffers for this stage".into()
+            }
+        );
+        w.insert(m, buffer_binding(s, good.clone()));
+        assert_eq!(
+            w.get::<ShaderBinding>(m).unwrap().stages[0].buffer(ResourceId(10)),
+            BufferSource::Table(BufferTable::ObjectMatrices { rows: 3 })
         );
         for (buffers, message) in [
             (vec![headered(10, 5)], "not 3 or 4"),
