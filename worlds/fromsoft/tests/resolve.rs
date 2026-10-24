@@ -35,6 +35,10 @@ const SKIN_PROGRAM: &[u8] = include_bytes!("fixtures/layered_skin_vs.dxbc");
 /// layered_vs.dxbc with the camera taken from the world position before the matrix (tests/fixtures/layered_vs.hlsl, RELATIVE).
 const RELATIVE_PROGRAM: &[u8] = include_bytes!("fixtures/layered_rel_vs.dxbc");
 
+/// layered_vs.dxbc with a constant added to the clip position (tests/fixtures/layered_vs.hlsl, OFFSET): the identity matrix no
+/// longer gives the position back.
+const OFFSET_PROGRAM: &[u8] = include_bytes!("fixtures/layered_off_vs.dxbc");
+
 /// A DXBC vertex program as the pass holds it.
 fn dxbc_shader(bytes: &[u8], interface: primase_core::shader::Interface) -> Shader {
     Shader {
@@ -737,7 +741,8 @@ fn the_view_projection_is_camera_relative_where_the_program_subtracts_the_camera
         let entity = World::default().spawn();
         let stage =
             primase_fromsoft::layer_bake::resolve::resolve_vertex(&dxbc_shader(bytes, interface), entity)
-                .unwrap();
+                .unwrap()
+                .stage;
         stage
             .constants
             .iter()
@@ -769,7 +774,8 @@ fn a_skinned_vertex_program_is_bound_to_joint_streams_and_a_palette() {
     let entity = World::default().spawn();
     let stage =
         primase_fromsoft::layer_bake::resolve::resolve_vertex(&dxbc_shader(SKIN_PROGRAM, interface), entity)
-            .unwrap();
+            .unwrap()
+            .stage;
     let role = |name: &str| {
         stage
             .inputs
@@ -1257,7 +1263,8 @@ fn a_one_set_vertex_program_binds_its_coordinates_as_the_first_set() {
     let entity = World::default().spawn();
     let stage =
         primase_fromsoft::layer_bake::resolve::resolve_vertex(&dxbc_shader(SINGLE, interface), entity)
-            .unwrap();
+            .unwrap()
+            .stage;
     let uv = stage
         .inputs
         .iter()

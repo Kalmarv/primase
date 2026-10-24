@@ -894,7 +894,7 @@ fn texture_scroll_set(name: &str) -> Option<u8> {
 ///   the engine's per-model value, observed as the identity on every layered draw of a running game: see
 ///   [`super::TEXTURE_SCROLL_POLICY`]); constants the table does not name are not bound;
 /// - no output roles: its outputs reach the pixel stage by label.
-pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<StageBinding> {
+pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> {
     use super::vertex_probe::{CameraForm, camera_form, flat_constants, lifted, palette_indexed_by_vertex};
     use primase_core::Semantic;
     let interface = &shader.interface;
@@ -945,6 +945,7 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<StageBinding> {
     // the camera away from the world position); an error stays as the reason of the constants that need it
     let program = lifted(shader);
     let camera = camera_form(shader);
+    let mut undecided = None;
     let mut constants = Vec::new();
     for resource in &interface.resources {
         let ResourceKind::ConstantBuffer { layout } = &resource.kind else {
@@ -997,7 +998,13 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<StageBinding> {
                         ConstantRole::View(ViewParameter::CameraRelativeViewProjection)
                     }
                     Ok(CameraForm::Plain) => ConstantRole::View(ViewParameter::ViewProjection),
-                    Err(why) => ConstantRole::Unknown { why: why.clone() },
+                    // a run that does not decide is not a finding: 15,483 of the 15,707 matrix-times-world programs of
+                    // Elden Ring's corpus are camera-relative (224 plain), so the matrix is taken as camera-relative,
+                    // as a policy the caller counts with the reason
+                    Err(why) => {
+                        undecided = Some(normalised(why));
+                        ConstantRole::View(ViewParameter::CameraRelativeViewProjection)
+                    }
                 },
                 "FC_MatrixInvView" => ConstantRole::View(ViewParameter::InverseView),
                 "FC_MatrixInvProj" => ConstantRole::View(ViewParameter::InverseProjection),
@@ -1035,16 +1042,46 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<StageBinding> {
             });
         }
     }
-    Ok(StageBinding {
-        stage: Stage::Vertex,
-        variant: None,
-        shader: entity,
-        inputs,
-        constants,
-        textures: Vec::new(),
-        buffers: Vec::new(),
-        outputs: Vec::new(),
+    Ok(VertexBinding {
+        stage: StageBinding {
+            stage: Stage::Vertex,
+            variant: None,
+            shader: entity,
+            inputs,
+            constants,
+            textures: Vec::new(),
+            buffers: Vec::new(),
+            outputs: Vec::new(),
+        },
+        undecided,
     })
+}
+
+/// A vertex program's binding ([`resolve_vertex`]) and what the caller must count.
+#[derive(Clone, Debug)]
+pub struct VertexBinding {
+    pub stage: StageBinding,
+    /// Why the probe left the view-projection matrix undecided, its numbers as `N`, when it did: the matrix is then taken as
+    /// camera-relative by policy, which the caller reports with this reason.
+    pub undecided: Option<String>,
+}
+
+/// A reason with its numbers as `N` (offsets and counts differ program to program; the reason does not).
+fn normalised(reason: &str) -> String {
+    let mut out = String::new();
+    let mut digits = false;
+    for c in reason.chars() {
+        if c.is_ascii_digit() || (digits && c == '.') {
+            if !digits {
+                out.push('N');
+            }
+            digits = true;
+        } else {
+            digits = false;
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// The row of `FC_TextureTilingScale` Elden Ring writes for the material texture `resource`, as a capture of the

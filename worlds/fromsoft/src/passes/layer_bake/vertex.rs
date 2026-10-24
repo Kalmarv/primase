@@ -394,7 +394,7 @@ mod tests {
             bytecode: VERTEX.to_vec(),
             interface,
         };
-        let binding = resolve_vertex(&shader, entity).unwrap();
+        let binding = resolve_vertex(&shader, entity).unwrap().stage;
         VertexStage::new(&shader, &binding, false, frame)
     }
 
@@ -444,7 +444,7 @@ mod tests {
             bytecode: SKIN.to_vec(),
             interface,
         };
-        let binding = resolve_vertex(&shader, entity).unwrap();
+        let binding = resolve_vertex(&shader, entity).unwrap().stage;
         let skinned = VertexStage::new(&shader, &binding, false, &FrozenFrame::static_bake(0.)).unwrap();
         assert!(skinned.policies.contains_key(super::super::BIND_POSE_POLICY));
         let pixel = primase_dxbc::reflection(PIXEL).unwrap();

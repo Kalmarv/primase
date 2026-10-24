@@ -5,6 +5,9 @@
 // each set times `xy` over 2048, plus `zw`; the third and fourth unused). It computes nothing meaningful.
 //   fxc /T vs_5_0 /E main /Fo layered_vs.dxbc layered_vs.hlsl
 //   fxc /T vs_5_0 /E main /D RELATIVE /Fo layered_rel_vs.dxbc layered_vs.hlsl
+//   fxc /T vs_5_0 /E main /D OFFSET /Fo layered_off_vs.dxbc layered_vs.hlsl
+// With OFFSET a constant is added to the clip position, so the identity matrix does not give the position back (a program
+// the camera probe cannot decide).
 // With RELATIVE the clip position takes the camera away from the world position first, as most programs of Elden Ring do.
 struct Instance
 {
@@ -71,6 +74,8 @@ Output main(Input i)
     float4 w = float4(dot(VC_aObjMatrix[k], p), dot(VC_aObjMatrix[k + 1], p), dot(VC_aObjMatrix[k + 2], p), 1);
 #ifdef RELATIVE
     o.clip = mul(VC_MatrixViewProj, float4(w.xyz - SC_CameraPos.xyz, 1));
+#elif defined(OFFSET)
+    o.clip = mul(VC_MatrixViewProj, w) + float4(0.5, 0, 0, 0);
 #else
     o.clip = mul(VC_MatrixViewProj, w);
 #endif

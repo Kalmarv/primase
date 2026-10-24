@@ -338,7 +338,16 @@ fn run(
                     vertex_shaders.insert(vertex_name.clone(), (entity, shader));
                 }
                 let (entity, shader) = &vertex_shaders[&vertex_name];
-                stages.push(resolve_vertex(shader, *entity).map_err(|e| format!("{vertex_name}: {e}"))?);
+                let vertex = resolve_vertex(shader, *entity).map_err(|e| format!("{vertex_name}: {e}"))?;
+                if let Some(why) = vertex.undecided {
+                    // not a finding: the matrix is taken as camera-relative, as most programs of the corpus are
+                    *policies
+                        .entry(format!(
+                            "vertex program's view-projection undecided by the probe ({why}): taken as camera-relative"
+                        ))
+                        .or_default() += 1;
+                }
+                stages.push(vertex.stage);
             }
             None => t.without_vertex += 1,
         }
