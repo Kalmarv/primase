@@ -847,8 +847,8 @@ pub fn resolve(
 }
 
 /// The outputs' roles: of a G-buffer program the game's G-buffer layout ([`crate::Game::gbuffer`]), the lanes of each
-/// target the program declares; a forward program's render target 0 is the finished colour (its target 1, drawn to a
-/// target the capture does not name, has no role).
+/// target the program declares; a forward program's render target 0 is the finished colour, and its others (target 1,
+/// drawn to a target the capture does not name) Unknown with that.
 fn output_bindings(interface: &Interface, forward: bool, game: crate::Game) -> Vec<OutputBinding> {
     let layout = game.gbuffer();
     let mut out = Vec::new();
@@ -861,16 +861,21 @@ fn output_bindings(interface: &Interface, forward: bool, game: crate::Game) -> V
             continue;
         }
         let lanes: Vec<(u8, OutputRole)> = if forward {
-            if n == 0 {
-                vec![(0b1111, OutputRole::Colour)]
-            } else {
-                Vec::new()
-            }
+            vec![(
+                0b1111,
+                if n == 0 {
+                    OutputRole::Colour
+                } else {
+                    OutputRole::unknown(format!(
+                        "a forward program's target {n}, drawn to a target the capture does not name"
+                    ))
+                },
+            )]
         } else {
             layout
                 .iter()
                 .filter(|(target, ..)| *target == n)
-                .map(|(_, lanes, role)| (*lanes, *role))
+                .map(|(_, lanes, role)| (*lanes, role.clone()))
                 .collect()
         };
         for (lanes, role) in lanes {

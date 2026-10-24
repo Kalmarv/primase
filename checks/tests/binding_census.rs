@@ -3,8 +3,9 @@
 //!
 //! - the materials, the bound (a `core.shader_binding`), and the pass's own counts and approximations (the unbound by
 //!   named reason are among them);
-//! - the stages, by stage, with the inputs, constants and outputs left Unknown by reason, and the texture slots by what
-//!   they hold (a texture, a stated default, nothing);
+//! - the stages, by stage, with the inputs, constants and outputs left Unknown by reason, the output lanes a program
+//!   writes that no output binding states (its D3D signature's written lanes), and the texture slots by what they hold
+//!   (a texture, a stated default, nothing);
 //! - the render state stated (which parts) against the default.
 //!
 //! A game with no resolve pass is a line with its materials and programs only. Needs the installs it names; a scene
@@ -58,6 +59,7 @@ fn tally(world: &World, game: &str, scene: &str, materials: usize, log: &PassLog
     let mut constants_total = 0u64;
     let mut outputs: BTreeMap<String, u64> = BTreeMap::new();
     let mut outputs_total = 0u64;
+    let mut unbound_written: BTreeMap<String, u64> = BTreeMap::new();
     let mut textures: BTreeMap<String, u64> = BTreeMap::new();
     let mut state_fields: BTreeMap<String, u64> = BTreeMap::new();
     let (mut bound, mut state_default, mut state_stated) = (0u64, 0u64, 0u64);
@@ -101,8 +103,26 @@ fn tally(world: &World, game: &str, scene: &str, materials: usize, log: &PassLog
             }
             for o in &s.outputs {
                 outputs_total += 1;
-                if let OutputRole::Unknown(n) = &o.role {
-                    bump(&mut outputs, format!("{name}: target {n} lanes {:04b}", o.lanes));
+                if let OutputRole::Unknown { why } = &o.role {
+                    bump(
+                        &mut outputs,
+                        format!(
+                            "{name}: {}{} lanes {:04b}: {}",
+                            o.label.name,
+                            o.label.index,
+                            o.lanes,
+                            reason(why)
+                        ),
+                    );
+                }
+            }
+            // the lanes the program writes that no output binding states
+            if let Some(shader) = world.get::<primase_core::shader::Shader>(s.shader) {
+                for (label, lanes) in s.unbound_written_lanes(&shader.interface) {
+                    bump(
+                        &mut unbound_written,
+                        format!("{name}: {}{} lanes {lanes:04b}", label.name, label.index),
+                    );
                 }
             }
             for t in &s.textures {
@@ -145,7 +165,7 @@ fn tally(world: &World, game: &str, scene: &str, materials: usize, log: &PassLog
         "stages": stages, "stages_with_unknown_inputs": stages_unknown_inputs,
         "unknown_inputs": inputs,
         "constants_total": constants_total, "unknown_constants": constants,
-        "outputs_total": outputs_total, "unknown_outputs": outputs,
+        "outputs_total": outputs_total, "unknown_outputs": outputs, "unbound_written_lanes": unbound_written,
         "textures": textures,
         "state_default": state_default, "state_stated": state_stated, "state_fields": state_fields,
         "pass_counts": log.counts, "pass_approximations": log.approximations,

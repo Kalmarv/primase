@@ -58,7 +58,8 @@
 //!   (`frostbite.skeleton_link`), and each such mesh is approximated on, counted by the range of joints its vertices
 //!   are weighted to and their names, as drawn at the bind pose. No skeleton with enough joints, or several, is
 //!   counted in the same note and not linked.
-//! - **Outputs.** The pixel stage's render targets are `Unknown` by index.
+//! - **Outputs.** The pixel stage's render targets are `Unknown`: which pass a program is is not decoded, so no layout
+//!   names a target's lanes.
 //! - **State.** Not decoded: the default (nothing stated).
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -473,7 +474,9 @@ fn stage_binding(
                 Some(OutputBinding {
                     label: v.label.clone(),
                     lanes: ((1u16 << v.value.width) - 1) as u8,
-                    role: OutputRole::Unknown(target),
+                    role: OutputRole::unknown(format!(
+                        "render target {target} of a pass that is not decoded (no record word tells the main pass from the others), so no layout names its lanes"
+                    )),
                 })
             })
             .collect()

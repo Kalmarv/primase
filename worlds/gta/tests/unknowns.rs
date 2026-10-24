@@ -164,10 +164,10 @@ fn what_is_left_unknown_on_a_region() {
                     .and_then(|r| r.provenance.d3d)
             };
             for o in &stage.outputs {
-                if matches!(o.role, OutputRole::Unknown(_)) {
+                if let OutputRole::Unknown { why } = &o.role {
                     *outputs
                         .entry(format!(
-                            "{:?} {}{} lanes {:04b}",
+                            "{:?} {}{} lanes {:04b}: {why}",
                             stage.stage, o.label.name, o.label.index, o.lanes
                         ))
                         .or_default() += 1;

@@ -56,9 +56,9 @@
 //!   x and y the occlusion of the natural and of the artificial ambient (`Occlusion`, a fourth power over 4: the
 //!   ambient lighting pass scales by the square of twice the stored square) and z the emission (read times 16), and
 //!   target 4 the motion vector; every other lane, and every
-//!   output of another family or of a program that writes fewer targets, is `Unknown` by its index (the lanes'
-//!   contents are in [`gbuffer`]'s table), but for the one target of a forward-lit `PS_Textured_Zero|Four|Eight`
-//!   program, the finished `Colour`.
+//!   output of another family or of a program that writes fewer targets, is `Unknown` with why (what [`gbuffer`]'s
+//!   table shows of the lane, or that the program is outside the layout), but for the one target of a forward-lit
+//!   `PS_Textured_Zero|Four|Eight` program, the finished `Colour`.
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
@@ -710,7 +710,7 @@ impl ResolveGtaShaders {
 }
 
 /// The outputs of a pixel program with their roles: the G-buffer's where the program is of the family and writes its
-/// four targets, `Unknown` by index otherwise.
+/// four targets (the layout's lanes as `passes::gbuffer` reads them), `Unknown` with why otherwise.
 fn output_bindings(
     interface: &primase_core::shader::Interface,
     writes: Option<&Result<GBufferWrites, String>>,
@@ -728,7 +728,7 @@ fn output_bindings(
         None => None,
         Some(Err(why)) => {
             counts.add(&format!(
-                "pixel stages whose output stores could not be read (outputs Unknown by index): {why}"
+                "pixel stages whose output stores could not be read (outputs Unknown with why): {why}"
             ));
             None
         }
@@ -737,7 +737,7 @@ fn output_bindings(
             Some(w)
         }
         Some(Ok(_)) => {
-            counts.add("pixel stages of the family writing fewer than four targets of four lanes (outputs Unknown by index)");
+            counts.add("pixel stages of the family writing fewer than four targets of four lanes (outputs Unknown with why)");
             None
         }
     };
@@ -758,7 +758,12 @@ fn output_bindings(
         match (layout, v.label.index) {
             (Some(_), 0) => {
                 lanes(0b0111, OutputRole::Albedo);
-                lanes(0b1000, OutputRole::Unknown(0));
+                lanes(
+                    0b1000,
+                    OutputRole::unknown(
+                        "G-buffer target 0's w: a byte of the draw's state, from the engine's constants",
+                    ),
+                );
             }
             (Some(w), 1) if w.normal_biased => {
                 lanes(
@@ -768,7 +773,12 @@ fn output_bindings(
                         space: NormalSpace::World,
                     },
                 );
-                lanes(0b1000, OutputRole::Unknown(1));
+                lanes(
+                    0b1000,
+                    OutputRole::unknown(
+                        "G-buffer target 1's w: the normal's sub-step bits for the lighting passes (tests/gbuffer_normal_w.rs)",
+                    ),
+                );
             }
             (Some(w), 2) => {
                 lanes(
@@ -778,7 +788,9 @@ fn output_bindings(
                             encoding: ScalarEncoding::square_root_of(1.0),
                         }
                     } else {
-                        OutputRole::Unknown(2)
+                        OutputRole::unknown(
+                            "G-buffer target 2's x, stored as neither a square root nor 0: not the family's specular intensity",
+                        )
                     },
                 );
                 lanes(
@@ -788,7 +800,9 @@ fn output_bindings(
                             encoding: ScalarEncoding::square_root_of(512.0),
                         }
                     } else {
-                        OutputRole::Unknown(2)
+                        OutputRole::unknown(
+                            "G-buffer target 2's y, stored as neither a square root nor 0: not the family's specular falloff",
+                        )
                     },
                 );
                 lanes(
@@ -796,10 +810,13 @@ fn output_bindings(
                     if w.fresnel_written {
                         OutputRole::Fresnel
                     } else {
-                        OutputRole::Unknown(2)
+                        OutputRole::unknown("G-buffer target 2's z, not written: no Fresnel term")
                     },
                 );
-                lanes(0b1000, OutputRole::Unknown(2));
+                lanes(
+                    0b1000,
+                    OutputRole::unknown("G-buffer target 2's w: the family's layout states nothing of it"),
+                );
             }
             (Some(w), 4) if w.motion_written => lanes(0b0011, OutputRole::MotionVector),
             // target 3 as the ambient lighting pass reads it (`PS_lightTile_ambient`, `tests/gbuffer_encodings.rs`): x and y
@@ -827,10 +844,40 @@ fn output_bindings(
                         encoding: ScalarEncoding::linear_over(16.0),
                     },
                 );
-                lanes(0b1000, OutputRole::Unknown(3));
+                lanes(
+                    0b1000,
+                    OutputRole::unknown(
+                        "G-buffer target 3's w: a flag, where above one half the ambient pass multiplies both occlusions by deferredLightTexture2.x",
+                    ),
+                );
             }
             (None, 0) if forward && one_colour => lanes(0b1111, OutputRole::Colour),
-            (_, n) => lanes(0b1111, OutputRole::Unknown(n)),
+            (Some(w), 1) => lanes(
+                0b1111,
+                OutputRole::unknown(if w.normal_floored {
+                    "G-buffer target 1, the world normal stored as floor(n * 128 + 128) / 256 with its fractional bits in w: no normal encoding states it"
+                } else if w.normal_zero {
+                    "G-buffer target 1, the constant 0 in x, y and z: the pass writes no normal"
+                } else {
+                    "G-buffer target 1, stored as none of the family's normal encodings"
+                }),
+            ),
+            (Some(_), 4) => lanes(
+                0b1111,
+                OutputRole::unknown("G-buffer target 4, whose x and y are not written: no motion vector"),
+            ),
+            (Some(_), n) => lanes(
+                0b1111,
+                OutputRole::unknown(format!(
+                    "target {n} of a G-buffer program, past the five targets of the family's layout"
+                )),
+            ),
+            (None, n) => lanes(
+                0b1111,
+                OutputRole::unknown(format!(
+                    "target {n} of a program outside the G-buffer family's layout and not a single-target forward colour"
+                )),
+            ),
         }
     }
     if forward && one_colour {

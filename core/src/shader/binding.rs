@@ -5,7 +5,7 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{BufferKind, Interface, Label, ResourceId, ResourceKind, Shader, Stage};
+use super::{BufferKind, Interface, Label, ResourceId, ResourceKind, Shader, Stage, SystemValue};
 use crate::TextureLayers;
 use crate::components::{Semantic, Texture, TextureFile};
 use crate::json::JsonError;
@@ -654,7 +654,7 @@ pub enum Occluded {
 }
 
 /// What lanes of an output stand for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum OutputRole {
@@ -708,11 +708,19 @@ pub enum OutputRole {
     },
     /// The finished colour of a forward pass.
     Colour,
-    /// Something the source writes that is not resolved to a role: the output's index.
-    Unknown(u32),
+    /// Lanes the program writes that no role is established for, with why: what the source's evidence shows of them
+    /// (what reads them, or that nothing examined does). Never empty.
+    Unknown {
+        why: String,
+    },
 }
 
 impl OutputRole {
+    /// [`OutputRole::Unknown`] with `why`.
+    pub fn unknown(why: impl Into<String>) -> OutputRole {
+        OutputRole::Unknown { why: why.into() }
+    }
+
     /// The encoding a role's value is stored in, for the roles that state one.
     pub fn scalar_encoding(&self) -> Option<ScalarEncoding> {
         match *self {
@@ -1057,6 +1065,37 @@ impl StageBinding {
         })
     }
 
+    /// The lanes the program writes that no output binding states, per output of `interface` (the stage's program's):
+    /// written as its source states it, the D3D signature's lanes less those it never writes (DXBC's `OSGN`, DXIL's
+    /// `OSG1`), in the output's own lanes (bit k its lane k). An output whose source states no written lanes (no D3D
+    /// signature: MojoShader's, SPIR-V's and GLSL's programs) has none here, nor a system value other than a render
+    /// target (a depth, a coverage mask), which states what it is itself.
+    pub fn unbound_written_lanes<'i>(&self, interface: &'i Interface) -> Vec<(&'i Label, u8)> {
+        let mut out = Vec::new();
+        for v in &interface.outputs {
+            if v.system.is_some_and(|s| !matches!(s, SystemValue::Target(_))) {
+                continue;
+            }
+            let Some(d3d) = v.provenance.d3d else {
+                continue;
+            };
+            // the element's own lanes: the register's from its first, as many as it is wide
+            let first = d3d.mask.trailing_zeros();
+            let width = u32::from(v.value.width).min(4);
+            let written = ((d3d.mask & !d3d.read_write_mask) >> first) & ((1u8 << width) - 1);
+            let bound = self
+                .outputs
+                .iter()
+                .filter(|o| o.label == v.label)
+                .fold(0u8, |acc, o| acc | o.lanes);
+            let unbound = written & !bound;
+            if unbound != 0 {
+                out.push((&v.label, unbound));
+            }
+        }
+        out
+    }
+
     fn verify(&self, w: &crate::World) -> Result<(), String> {
         let shader = w
             .get::<Shader>(self.shader)
@@ -1096,6 +1135,14 @@ impl StageBinding {
             if let Some(Err(why)) = o.role.scalar_encoding().map(|e| e.check()) {
                 return Err(at(format!("output {}{}: {why}", o.label.name, o.label.index)));
             }
+            if let OutputRole::Unknown { why } = &o.role
+                && why.trim().is_empty()
+            {
+                return Err(at(format!(
+                    "output {}{} is Unknown with no why",
+                    o.label.name, o.label.index
+                )));
+            }
             // one label may carry several roles, each on its own lanes
             if let Some(before) = self.outputs[..n]
                 .iter()
@@ -1108,6 +1155,16 @@ impl StageBinding {
                     before.lanes & o.lanes
                 )));
             }
+        }
+        // a pixel program's outputs are the draw's targets: each lane it writes has a role, or is Unknown with why. Any
+        // other stage's outputs are the next stage's inputs, bound there.
+        if self.stage == Stage::Pixel
+            && let Some((label, lanes)) = self.unbound_written_lanes(interface).first()
+        {
+            return Err(at(format!(
+                "output {}{} lanes {lanes:#06b} are written and have no binding",
+                label.name, label.index
+            )));
         }
         for c in &self.constants {
             let Some(ResourceKind::ConstantBuffer { layout }) =
@@ -2224,6 +2281,63 @@ mod tests {
             *texture = m;
         }
         assert!(b.verify(m, &w).unwrap_err().contains("neither core.texture"));
+    }
+
+    /// A pixel program's written lanes each have a binding: lanes its D3D signature writes and no binding states are
+    /// refused, but not the lanes it never writes, nor a system value other than a target, nor a vertex program's
+    /// outputs (the next stage's inputs); an Unknown output states why.
+    #[test]
+    fn a_pixel_programs_written_lanes_each_have_a_binding() {
+        let (mut w, s, _, m) = world();
+        let signature = |w: &mut World, read_write_mask: u8, system: Option<SystemValue>, stage: Stage| {
+            let mut shader = w.get::<Shader>(s).unwrap().clone();
+            shader.interface.stage = stage;
+            let out = &mut shader.interface.outputs[0];
+            out.system = system;
+            out.provenance.d3d = Some(crate::shader::D3dSignature {
+                register: 0,
+                mask: 0b1111,
+                read_write_mask,
+            });
+            w.insert(s, shader);
+        };
+        let verify = |w: &World, b: &ShaderBinding| b.verify(m, w);
+        let good = w.get::<ShaderBinding>(m).unwrap().clone();
+        // the fixture binds lanes 0b0111 and 0b1000 of SV_Target0, all four written
+        signature(&mut w, 0, None, Stage::Pixel);
+        assert_eq!(verify(&w, &good), Ok(()));
+        let mut rgb = good.clone();
+        rgb.stages[0].outputs.truncate(1);
+        assert_eq!(
+            rgb.stages[0].unbound_written_lanes(&w.get::<Shader>(s).unwrap().interface),
+            [(&good.stages[0].outputs[0].label, 0b1000)]
+        );
+        let err = verify(&w, &rgb).unwrap_err();
+        assert!(
+            err.contains("output SV_Target0 lanes 0b1000 are written and have no binding"),
+            "{err}"
+        );
+        // the program never writes w
+        signature(&mut w, 0b1000, None, Stage::Pixel);
+        assert_eq!(verify(&w, &rgb), Ok(()));
+        // a target stated as a system value is held the same; a depth is not a target
+        signature(&mut w, 0, Some(SystemValue::Target(0)), Stage::Pixel);
+        assert!(verify(&w, &rgb).is_err());
+        signature(&mut w, 0, Some(SystemValue::Depth), Stage::Pixel);
+        assert_eq!(verify(&w, &rgb), Ok(()));
+        // a vertex program's outputs are bound as the pixel program's inputs
+        signature(&mut w, 0, None, Stage::Vertex);
+        let mut vertex = rgb.clone();
+        vertex.stages[0].stage = Stage::Vertex;
+        assert_eq!(verify(&w, &vertex), Ok(()));
+        // the w lane Unknown, with why and without
+        signature(&mut w, 0, None, Stage::Pixel);
+        let mut unknown = good;
+        unknown.stages[0].outputs[1].role = OutputRole::unknown("read by nothing examined");
+        assert_eq!(verify(&w, &unknown), Ok(()));
+        unknown.stages[0].outputs[1].role = OutputRole::unknown(" ");
+        let err = verify(&w, &unknown).unwrap_err();
+        assert!(err.contains("output SV_Target0 is Unknown with no why"), "{err}");
     }
 
     /// A frame image on a slot of its own dimension, and a constant colour on any, verify.

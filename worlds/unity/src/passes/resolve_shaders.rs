@@ -37,7 +37,8 @@
 //!   `Missing` (a 2021.2 player stores a variant's textures in its parameter blob, which
 //!   [`crate::program::parameter_blob`] reads: the pass's common parameters name none). The sampler state is Unity's
 //!   packed value ([`crate::components::Parameters::samplers`]): not decoded.
-//! - **Outputs.** The fragment stage's first target is the finished colour of a forward pass; the others `Unknown`.
+//! - **Outputs.** The fragment stage's first target is the finished colour of a forward pass; the others `Unknown`
+//!   (what the render pipeline binds past the first target, and what reads it, is the project's and not read).
 //! - **State.** The pass's stored render state (`m_State`), each value the material's property where the pass binds
 //!   it to one: every render target's blend (colour and alpha equations: factors and operation; `Blend One Zero` is no
 //!   blending; the pass blends each target itself only when it says so, otherwise every target takes the first's, whose
@@ -1069,7 +1070,7 @@ impl ResolveUnityShaders {
     }
 }
 
-/// The roles of a pixel program's colour outputs: target 0 is the colour, any other target Unknown by its number. A
+/// The roles of a pixel program's colour outputs: target 0 is the colour, any other target Unknown with why. A
 /// lifted program states a target as the system value `SV_Target<n>`, a program described by semantic as the label's
 /// index; any other system value is not a colour output.
 fn output_bindings(interface: &Interface) -> Vec<OutputBinding> {
@@ -1088,7 +1089,9 @@ fn output_bindings(interface: &Interface) -> Vec<OutputBinding> {
                 role: if target == 0 {
                     OutputRole::Colour
                 } else {
-                    OutputRole::Unknown(target)
+                    OutputRole::unknown(format!(
+                        "target {target} of a forward pass: what the render pipeline binds past the first target, and what reads it, is the project's and not read"
+                    ))
                 },
             })
         })
@@ -1818,7 +1821,7 @@ mod tests {
     const LIFTED: &[u8] = include_bytes!("../../../../toolkit/dxbc/tests/fixtures/modes.dxbc");
 
     /// A lifted pixel program's outputs are system values, and each has its role all the same: target 0 the colour,
-    /// the others Unknown by their number; a depth output is none.
+    /// the others Unknown with why; a depth output is none.
     #[test]
     fn a_lifted_pixel_programs_targets_have_roles() {
         let program = primase_dxbc::lift(LIFTED).unwrap();
@@ -1826,16 +1829,14 @@ mod tests {
             .into_iter()
             .map(|o| o.role)
             .collect();
-        assert_eq!(
-            roles,
-            [
-                OutputRole::Colour,
-                OutputRole::Unknown(1),
-                OutputRole::Unknown(2),
-                OutputRole::Unknown(3),
-                OutputRole::Unknown(4),
-            ]
-        );
+        assert_eq!(roles[0], OutputRole::Colour);
+        assert_eq!(roles.len(), 5);
+        for (n, role) in roles.iter().enumerate().skip(1) {
+            let OutputRole::Unknown { why } = role else {
+                panic!("target {n} is {role:?}");
+            };
+            assert!(why.starts_with(&format!("target {n} of a forward pass")));
+        }
         let mut with_depth = program.interface.clone();
         with_depth.outputs[0].system = Some(SystemValue::Depth);
         assert_eq!(output_bindings(&with_depth).len(), 4);

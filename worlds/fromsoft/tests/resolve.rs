@@ -365,11 +365,35 @@ fn a_layered_program_is_bound_by_sekiros_rules() {
     );
 
     // the G-buffer: normal, gloss in x (the smoothness over 0.95, squared), albedo, reflectance (its square root),
-    // emission
+    // emission; every other lane Unknown with what the lighting programs show of it
+    let unknown: Vec<_> = stage
+        .outputs
+        .iter()
+        .filter_map(|o| match &o.role {
+            OutputRole::Unknown { why } => Some((o.label.index, o.lanes, why.as_str())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        unknown
+            .iter()
+            .map(|(n, lanes, _)| (*n, *lanes))
+            .collect::<Vec<_>>(),
+        [
+            (0, 0b1000),
+            (1, 0b0010),
+            (1, 0b1100),
+            (2, 0b1000),
+            (3, 0b1000),
+            (4, 0b1000)
+        ]
+    );
+    assert!(unknown[4].2.contains("the light group"));
     let outputs: Vec<_> = stage
         .outputs
         .iter()
-        .map(|o| (o.label.index, o.lanes, o.role))
+        .filter(|o| !matches!(o.role, OutputRole::Unknown { .. }))
+        .map(|o| (o.label.index, o.lanes, o.role.clone()))
         .collect();
     assert_eq!(
         outputs,

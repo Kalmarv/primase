@@ -42,10 +42,11 @@
 //!   in the lane's upper five bits: `NormalEncoding::decode_octahedral_diamond`, material-spec §15.4; the class byte is
 //!   not part of the normal); `o1.w` the metalness (shading class 1) or the occlusion
 //!   (classes 3 to 5) by the class its template writes ([`shading_class`], the notes' table of the templates it covers;
-//!   a template it does not cover leaves `o1.w` `Unknown(1)`); `o2` and `o3` by the class the lighting pass reads them
+//!   a template it does not cover leaves `o1.w` `Unknown`); `o2` and `o3` by the class the lighting pass reads them
 //!   with (§15.4): the velocity `MotionVector` in `o2.xy`; class 1 the `Emission` in `o2.z` and in `o3` the `Occlusion`
 //!   (x), the `SpecularOcclusion` (z) and the `Translucency` (w); classes 3 to 5 the `SpecularOcclusion` in `o2.z` and the
-//!   `Translucency` in `o2.w`; every other lane, and every target of a template the table does not cover, `Unknown`.
+//!   `Translucency` in `o2.w`; every other lane, and every target of a template the table does not cover, `Unknown`
+//!   with what the notes show of it.
 //! - **State.** `TwoSided` is no culling; `ZTestDisabled` an always-passing depth test, with the write the Material's
 //!   `ZWriteDisabledOpaque` (blend mode 0) or `ZWriteDisabledAlpha` states; `AlphaTestEnabled` an alpha test, a pixel
 //!   kept where `alpha >= AlphaTestValue / 255` (the engine's division). What the Material does not state stays `None`.
@@ -1217,7 +1218,8 @@ fn target_of(v: &Varying) -> Option<u32> {
 }
 
 /// The G-buffer roles of a pixel program's targets: target 0 is albedo (rgb) and roughness (a, opaque materials
-/// only), target 1 the unnamed rgb and the metallic or occlusion lane of the shading class; any other lane is Unknown.
+/// only), target 1 the unnamed rgb and the metallic or occlusion lane of the shading class; any other lane is Unknown
+/// with what the notes (material-spec §3, §15.4) show of it.
 fn output_bindings(interface: &Interface, class: Option<u8>, opaque: bool) -> Vec<OutputBinding> {
     let mut outputs = Vec::new();
     for (v, target) in interface.outputs.iter().filter_map(|v| Some((v, target_of(v)?))) {
@@ -1240,7 +1242,9 @@ fn output_bindings(interface: &Interface, class: Option<u8>, opaque: bool) -> Ve
                     if opaque {
                         OutputRole::Roughness
                     } else {
-                        OutputRole::Unknown(0)
+                        OutputRole::unknown(
+                            "target 0's w of a blended Material: its alpha (material-spec §3), and the blend that would read it is not stated",
+                        )
                     },
                 );
             }
@@ -1260,7 +1264,9 @@ fn output_bindings(interface: &Interface, class: Option<u8>, opaque: bool) -> Ve
                             of: Occluded::AllLight,
                             encoding: ScalarEncoding::LINEAR,
                         },
-                        _ => OutputRole::Unknown(1),
+                        _ => OutputRole::unknown(
+                            "target 1's w of a template whose shading class is not in the notes' table: the metalness (class 1) or the occlusion (3 to 5) by the class",
+                        ),
                     },
                 );
             }
@@ -1280,7 +1286,12 @@ fn output_bindings(interface: &Interface, class: Option<u8>, opaque: bool) -> Ve
                                 encoding: ScalarEncoding::LINEAR,
                             },
                         );
-                        role(0b1000, OutputRole::Unknown(2));
+                        role(
+                            0b1000,
+                            OutputRole::unknown(
+                                "target 2's w in layout A (class 1): the albedo alpha of the blended permutations, not among the lanes the lighting pass reads for the class (material-spec §15.4)",
+                            ),
+                        );
                     }
                     _ => {
                         role(0b0100, OutputRole::SpecularOcclusion);
@@ -1296,11 +1307,33 @@ fn output_bindings(interface: &Interface, class: Option<u8>, opaque: bool) -> Ve
                         encoding: ScalarEncoding::LINEAR,
                     },
                 );
-                role(0b0010, OutputRole::Unknown(3));
+                role(
+                    0b0010,
+                    OutputRole::unknown(
+                        "target 3's y in layout A (class 1): a 6-bit per-pixel value the lighting pass reads, its meaning not established (material-spec §15.4)",
+                    ),
+                );
                 role(0b0100, OutputRole::SpecularOcclusion);
                 role(0b1000, OutputRole::Translucency);
             }
-            n => role(0b1111, OutputRole::Unknown(n)),
+            2 | 3 if class.is_none() => role(
+                0b1111,
+                OutputRole::unknown(format!(
+                    "target {target} of a template whose shading class is not in the notes' table: the lighting pass reads its lanes by the class"
+                )),
+            ),
+            3 => role(
+                0b1111,
+                OutputRole::unknown(
+                    "target 3 in layout B (classes 3 to 5): read by nothing (material-spec §15.4)",
+                ),
+            ),
+            n => role(
+                0b1111,
+                OutputRole::unknown(format!(
+                    "target {n}, past the four the lighting pass reads (material-spec §15.4)"
+                )),
+            ),
         }
     }
     outputs
@@ -1466,9 +1499,20 @@ mod key_tests {
     /// program states as the system values `SV_Target0..4` (not as semantics), as every program this pass binds.
     const LIFTED: &[u8] = include_bytes!("../../../../toolkit/dxbc/tests/fixtures/modes.dxbc");
 
+    /// An output role with any why as `UNKNOWN`'s, where it has one: the tests below hold which lanes are Unknown.
+    fn unknown_as_one(role: OutputRole) -> OutputRole {
+        match role {
+            OutputRole::Unknown { why } => {
+                assert!(!why.trim().is_empty());
+                OutputRole::unknown("…")
+            }
+            role => role,
+        }
+    }
+
     /// A lifted pixel program's outputs are system values, and the roles come all the same: target 0 is albedo and
     /// roughness, target 1 the unnamed rgb and the lane its shading class names, targets 2 and 3 the lanes the lighting
-    /// pass reads for the class, the rest Unknown by number.
+    /// pass reads for the class, the rest Unknown with why.
     #[test]
     fn a_lifted_pixel_programs_targets_have_the_gbuffer_roles() {
         let program = primase_dxbc::lift(LIFTED).unwrap();
@@ -1488,7 +1532,7 @@ mod key_tests {
                     .iter()
                     .position(|v| v.label == o.label)
                     .unwrap();
-                (u32::try_from(target).unwrap(), o.lanes, o.role)
+                (u32::try_from(target).unwrap(), o.lanes, unknown_as_one(o.role))
             })
             .collect();
         assert_eq!(
@@ -1513,7 +1557,7 @@ mod key_tests {
                         encoding: ScalarEncoding::LINEAR
                     }
                 ),
-                (2, 0b1000, OutputRole::Unknown(2)),
+                (2, 0b1000, OutputRole::unknown("…")),
                 (
                     3,
                     0b0001,
@@ -1522,10 +1566,10 @@ mod key_tests {
                         encoding: ScalarEncoding::LINEAR
                     }
                 ),
-                (3, 0b0010, OutputRole::Unknown(3)),
+                (3, 0b0010, OutputRole::unknown("…")),
                 (3, 0b0100, OutputRole::SpecularOcclusion),
                 (3, 0b1000, OutputRole::Translucency),
-                (4, 0b1111, OutputRole::Unknown(4)),
+                (4, 0b1111, OutputRole::unknown("…")),
             ]
         );
         // a depth output is not a colour target
@@ -1547,7 +1591,7 @@ mod key_tests {
                     program.interface.outputs.iter().position(|v| v.label == o.label)
                         == Some(usize::try_from(target).unwrap())
                 })
-                .map(|o| (o.lanes, o.role))
+                .map(|o| (o.lanes, unknown_as_one(o.role)))
                 .collect()
         };
         assert_eq!(
@@ -1558,9 +1602,9 @@ mod key_tests {
                 (0b1000, OutputRole::Translucency),
             ]
         );
-        assert_eq!(of(Some(5), 3), [(0b1111, OutputRole::Unknown(3))]);
-        assert_eq!(of(None, 2), [(0b1111, OutputRole::Unknown(2))]);
-        assert_eq!(of(None, 3), [(0b1111, OutputRole::Unknown(3))]);
+        assert_eq!(of(Some(5), 3), [(0b1111, OutputRole::unknown("…"))]);
+        assert_eq!(of(None, 2), [(0b1111, OutputRole::unknown("…"))]);
+        assert_eq!(of(None, 3), [(0b1111, OutputRole::unknown("…"))]);
     }
 
     /// Only the lanes a program reads of the engine's buffers are bound, each with the role the notes establish or an
