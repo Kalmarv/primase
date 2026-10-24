@@ -42,18 +42,6 @@ fn bad(msg: impl Into<String>) -> Error {
     Error::Scene(msg.into())
 }
 
-/// FNV-1a 32 of a string's UTF-16 code units, low byte then high byte (the default prototype `key`).
-pub fn fnv32(s: &str) -> u32 {
-    let mut h: u32 = 2_166_136_261;
-    for c in s.encode_utf16() {
-        h ^= u32::from(c as u8);
-        h = h.wrapping_mul(16_777_619);
-        h ^= u32::from(c >> 8);
-        h = h.wrapping_mul(16_777_619);
-    }
-    h
-}
-
 /// What a JSON value is, for messages.
 fn kind(v: &Value) -> &'static str {
     match v {
@@ -888,7 +876,7 @@ impl Reader<'_> {
                 Some(k) => Some(int_of::<u32>(k, &what)?),
                 None => None,
             };
-            let eff_key = key.unwrap_or_else(|| fnv32(&id));
+            let eff_key = key.unwrap_or_else(|| crate::hash::prototype_key(&id));
             if let Some(other) = keys.get(&eff_key) {
                 return Err(bad(format!(
                     "prototypes '{other}' and '{id}' have the same key {eff_key}"

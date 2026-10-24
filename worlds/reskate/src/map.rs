@@ -1579,13 +1579,13 @@ impl MapWriter {
         ex: Vec3,
         ey: Vec3,
         ez: Vec3,
-    ) {
+    ) -> Result<()> {
         let tris = (idx.len() / 3) as i64;
         let paint = match pick {
-            PausePick::Hidden => return,
+            PausePick::Hidden => return Ok(()),
             PausePick::Shadowless => {
                 self.r.pause_shadowless += tris;
-                return;
+                return Ok(());
             }
             PausePick::Flat(c) => Paint::Flat(c),
             PausePick::Untextured(c) => {
@@ -1604,8 +1604,10 @@ impl MapWriter {
             },
         };
         if let Some(pm) = &mut self.pm {
-            pm.draw(pos, idx, origin, ex, ey, ez, &paint);
+            pm.draw(pos, idx, origin, ex, ey, ez, &paint)
+                .map_err(Error::Scene)?;
         }
+        Ok(())
     }
 
     /// One placement's prototype collision: a hull written whole, else its triangles into the tile's solid or water
@@ -1968,7 +1970,7 @@ impl MapWriter {
                                     s.ex,
                                     s.ey,
                                     s.ez,
-                                );
+                                )?;
                             }
                         }
                         let pr = &self.protos[&key];
@@ -2080,7 +2082,7 @@ impl MapWriter {
                                 Vec3::UNIT_X,
                                 Vec3::UNIT_Y,
                                 Vec3::UNIT_Z,
-                            );
+                            )?;
                         }
                     }
                     let lim = o.limit;

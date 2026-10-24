@@ -8,9 +8,27 @@ pub fn skate_fnv_string(state: u64, s: &str) -> u64 {
         .fold(state, |h, c| (h ^ c).wrapping_mul(0x100000001b3))
 }
 
+/// A prototype's key when its description gives none: FNV-1a 32 (seed 0x811C9DC5, multiplier 0x01000193) over the id's
+/// UTF-16LE bytes (each code unit's low byte, then its high byte), without a terminator, as the reference scene writer
+/// computes it.
+pub fn prototype_key(id: &str) -> u32 {
+    id.encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .fold(0x811c_9dc5u32, |h, c| {
+            (h ^ u32::from(c)).wrapping_mul(0x0100_0193)
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Values from the reference scene writer's C# method.
+    #[test]
+    fn a_prototype_key_is_fnv1a_over_utf16le() {
+        assert_eq!(prototype_key("A😀é"), 0x5ed8_3406);
+        assert_eq!(prototype_key("hello"), 0xc345_7ef7);
+    }
     #[test]
     fn utf16_units_and_sentinel_match_reference() {
         // The reference writer's hash of "A😀é" followed by the u64 0x12345678 is 0xd8cb5178e4163d1d (the byte-wise FNV step

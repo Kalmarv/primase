@@ -130,12 +130,8 @@ impl<'a> Painter<'a> {
             pyramid, uv: coords, ..
         } = paint
         {
-            uv = v.map(|i| {
-                [
-                    coords.get(i * 2).copied().unwrap_or(0.0),
-                    coords.get(i * 2 + 1).copied().unwrap_or(0.0),
-                ]
-            });
+            // [`PauseMap::draw`] checked that the coordinates cover every vertex
+            uv = v.map(|i| [coords[i * 2], coords[i * 2 + 1]]);
             if area.abs() >= 1e-6 {
                 // the barycentric weights' screen gradients, and so the coordinates'
                 let [(x0, y0), (x1, y1), (x2, y2)] = s;
@@ -247,7 +243,8 @@ impl PauseMap {
         }
     }
 
-    /// Triangles whose vertex i is at basis * pos[i] + origin (map coordinates), painted with `paint`.
+    /// Triangles whose vertex i is at basis * pos[i] + origin (map coordinates), painted with `paint`. Refused: an
+    /// index past the vertices, or texture coordinates that don't cover every vertex a textured paint samples.
     #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
@@ -258,7 +255,19 @@ impl PauseMap {
         ey: Vec3,
         ez: Vec3,
         paint: &Paint<'_>,
-    ) {
+    ) -> Result<(), String> {
+        let vertices = pos.len() / 3;
+        if let Some(i) = idx.iter().find(|&&i| i as usize >= vertices) {
+            return Err(format!("pause map: index {i} past the {vertices} vertices"));
+        }
+        if let Paint::Texture { uv, .. } = paint
+            && uv.len() / 2 < vertices
+        {
+            return Err(format!(
+                "pause map: {} texture coordinates for {vertices} vertices of a textured material",
+                uv.len() / 2
+            ));
+        }
         let (w, h) = (self.w as i32, self.h as i32);
         for t in (0..idx.len().saturating_sub(2)).step_by(3) {
             let v = [idx[t] as usize, idx[t + 1] as usize, idx[t + 2] as usize];
@@ -316,6 +325,7 @@ impl PauseMap {
                 }
             }
         }
+        Ok(())
     }
 
     /// Pixel `o` takes `col` at height `z` when it is the highest there (ties: the larger colour, for a stable order).
@@ -536,7 +546,8 @@ mod tests {
             Vec3::UNIT_Y,
             Vec3::UNIT_Z,
             &paint,
-        );
+        )
+        .unwrap();
         let at = |pm: &PauseMap, x: usize| pm.rgba[(pm.h / 2) * pm.w + x];
         let (left, right) = (at(&pm, 0), at(&pm, pm.w - 1));
         // the left edge samples u ~0.3, between the texel centres: mostly red; the right edge is past the blue
@@ -553,7 +564,8 @@ mod tests {
             Vec3::UNIT_Y,
             Vec3::UNIT_Z,
             &Paint::Flat(0x102030),
-        );
+        )
+        .unwrap();
         assert_eq!(at(&pm, 0), 0xFF30_2010);
     }
 }
