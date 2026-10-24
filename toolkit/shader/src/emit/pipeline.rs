@@ -128,6 +128,17 @@ pub fn wgsl_for(program: &Program, pipeline: &Pipeline) -> Result<Written, Error
     })
 }
 
+/// A scalar kind as a note names it.
+fn scalar_word(scalar: ScalarType) -> &'static str {
+    match scalar {
+        ScalarType::Float => "float",
+        ScalarType::Uint => "uint",
+        ScalarType::Sint => "int",
+        ScalarType::Bool => "bool",
+        ScalarType::Double => "double",
+    }
+}
+
 /// The first location after the ones `bindings` use (0 when they use none).
 fn next_after<'b>(bindings: impl Iterator<Item = &'b Binding>) -> u32 {
     bindings
@@ -320,6 +331,33 @@ fn outputs(
             "{padded} output{} read by the consumer with more lanes than written: the lanes past them are 0 (Direct3D \
              leaves them undefined)",
             if padded == 1 { "" } else { "s" }
+        ));
+    }
+    // the other retypes: fewer lanes than written (the output's first ones are passed on), and another scalar kind (the
+    // same bits)
+    let narrowed = retyped
+        .iter()
+        .flatten()
+        .filter(|(from, to)| to.width < from.width)
+        .count();
+    if narrowed > 0 {
+        notes.push(format!(
+            "{narrowed} output{} read by the consumer with fewer lanes than written: only the first lanes are passed on",
+            if narrowed == 1 { "" } else { "s" }
+        ));
+    }
+    let mut kinds: BTreeMap<(ScalarType, ScalarType), usize> = BTreeMap::new();
+    for (from, to) in retyped.iter().flatten() {
+        if from.scalar != to.scalar {
+            *kinds.entry((from.scalar, to.scalar)).or_default() += 1;
+        }
+    }
+    for ((from, to), n) in kinds {
+        notes.push(format!(
+            "{n} output{} written as {} and read by the consumer as {}: the same bits, reinterpreted (Direct3D links bits)",
+            if n == 1 { "" } else { "s" },
+            scalar_word(from),
+            scalar_word(to)
         ));
     }
     let mut next = next_after(bindings.iter());

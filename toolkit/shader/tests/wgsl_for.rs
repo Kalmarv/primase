@@ -380,3 +380,81 @@ fn an_output_takes_the_type_its_consumer_reads_it_as() {
         Some((1, Some(Interpolation::Flat)))
     );
 }
+
+/// What a consumer reads an output as that is not what is written, each retype `wgsl_for` applies is a note with its count:
+/// fewer lanes than written, and another scalar kind (the same bits), apart from the padding noted above.
+#[test]
+fn every_retype_of_an_output_is_a_note_with_its_count_and_kind() {
+    // dxc's vertex program writes COLOR0 as four floats; the consumer reads it as `width` lanes of `scalar`
+    let notes = |width: u8, scalar: primase_shader::ScalarType| {
+        let mut consumer = pixel().interface;
+        let colour = consumer
+            .inputs
+            .iter_mut()
+            .find(|v| v.label.name.eq_ignore_ascii_case("COLOR"))
+            .expect("COLOR0");
+        colour.value.width = width;
+        colour.value.scalar = scalar;
+        wgsl_for(
+            &vertex(),
+            &Pipeline {
+                feeds: Some(&consumer),
+                ..Pipeline::default()
+            },
+        )
+        .expect("written")
+        .notes
+    };
+    let has = |notes: &[String], text: &str| notes.iter().any(|n| n == text);
+    use primase_shader::ScalarType::{Float, Sint, Uint};
+    // fewer lanes, the same kind: only the lanes note (the padding note is for TEXCOORD0, which the consumer widens)
+    let narrower = notes(2, Float);
+    assert!(
+        has(
+            &narrower,
+            "1 output read by the consumer with fewer lanes than written: only the first lanes are passed on"
+        ),
+        "{narrower:?}"
+    );
+    assert!(
+        !narrower.iter().any(|n| n.contains("reinterpreted")),
+        "{narrower:?}"
+    );
+    // the same lanes, floats read as unsigned integers, and as signed ones
+    let as_uint = notes(4, Uint);
+    assert!(
+        has(
+            &as_uint,
+            "1 output written as float and read by the consumer as uint: the same bits, reinterpreted (Direct3D links bits)"
+        ),
+        "{as_uint:?}"
+    );
+    assert!(!as_uint.iter().any(|n| n.contains("fewer lanes")), "{as_uint:?}");
+    let as_int = notes(4, Sint);
+    assert!(
+        has(
+            &as_int,
+            "1 output written as float and read by the consumer as int: the same bits, reinterpreted (Direct3D links bits)"
+        ),
+        "{as_int:?}"
+    );
+    // both at once: two notes, one each
+    let both = notes(2, Uint);
+    assert!(
+        both.iter().any(|n| n.contains("fewer lanes than written")),
+        "{both:?}"
+    );
+    assert!(
+        both.iter()
+            .any(|n| n.contains("as float and read by the consumer as uint")),
+        "{both:?}"
+    );
+    // a consumer that reads the output as written has neither
+    let same = notes(4, Float);
+    assert!(
+        !same
+            .iter()
+            .any(|n| n.contains("fewer lanes") || n.contains("reinterpreted")),
+        "{same:?}"
+    );
+}
