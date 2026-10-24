@@ -69,14 +69,19 @@ impl Fields<'_> {
         Ok([self.float(x, "x")?, self.float(x, "y")?])
     }
 
+    /// A stored rotation, kept as stored; one of no length or not finite is no rotation and refused.
     fn quat(&self, v: &Value, k: &str) -> Result<[f32; 4]> {
         let x = self.get(v, k)?;
-        Ok([
+        let q = [
             self.float(x, "x")?,
             self.float(x, "y")?,
             self.float(x, "z")?,
             self.float(x, "w")?,
-        ])
+        ];
+        if primase_animation::quat::normalize(q.map(f64::from)).is_none() {
+            return Err(invalid(format!("{}: {k} {q:?} is no rotation", self.what)));
+        }
+        Ok(q)
     }
 
     /// The elements of a list of structs; an empty list of any element type is empty.

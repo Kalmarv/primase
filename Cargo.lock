@@ -1420,6 +1420,7 @@ name = "primase-unity"
 version = "0.1.0"
 dependencies = [
  "half",
+ "primase-animation",
  "primase-compress",
  "primase-core",
  "primase-dxbc",

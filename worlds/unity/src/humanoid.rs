@@ -50,6 +50,7 @@
 //! **What is not evaluated**: the IK goals and the fingers' muscles (no avatar read here has finger bones, so the
 //! formula for them, the same, has no oracle). Each is counted by the lowering.
 
+use primase_animation::quat::{self, from_columns, inverse, mul, normalize, rotate, slerp};
 use primase_core::{Channel, ClipTarget, Entity, Interpolation, JointId, Property, Rest};
 
 use crate::animator::{AvatarAxes, AvatarHuman, UnityAvatar, Xform};
@@ -133,23 +134,9 @@ pub const BONE_NAMES: [&str; BONES] = [
 
 type Quat = [f64; 4];
 
-fn mul(a: Quat, b: Quat) -> Quat {
-    let ([x1, y1, z1, w1], [x2, y2, z2, w2]) = (a, b);
-    [
-        w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
-        w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
-        w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
-        w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
-    ]
-}
-
-fn inverse(q: Quat) -> Quat {
-    let n = q.iter().map(|x| x * x).sum::<f64>();
-    [-q[0] / n, -q[1] / n, -q[2] / n, q[3] / n]
-}
-
+/// A stored rotation as a unit quaternion (the reader refuses one of no length).
 fn f64q(q: [f32; 4]) -> Quat {
-    q.map(f64::from)
+    quat::normalize(q.map(f64::from)).expect("the reader refuses a rotation of no length")
 }
 
 fn rotation_x(angle: f64) -> Quat {
@@ -224,26 +211,6 @@ fn between(a: Quat, b: Quat) -> f64 {
     (2.0 * s.atan2(d[3].abs())).to_degrees()
 }
 
-/// Spherical interpolation along the shorter arc.
-fn slerp(a: Quat, mut b: Quat, t: f64) -> Quat {
-    let mut dot: f64 = a.iter().zip(&b).map(|(x, y)| x * y).sum();
-    if dot < 0.0 {
-        b = b.map(|x| -x);
-        dot = -dot;
-    }
-    if dot > 0.999_999 {
-        let q: Quat = std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t);
-        let n = q.iter().map(|x| x * x).sum::<f64>().sqrt();
-        return q.map(|x| x / n);
-    }
-    let theta = dot.acos();
-    let (wa, wb) = (
-        ((1.0 - t) * theta).sin() / theta.sin(),
-        (t * theta).sin() / theta.sin(),
-    );
-    std::array::from_fn(|i| a[i] * wa + b[i] * wb)
-}
-
 type Vec3 = [f64; 3];
 
 fn add(a: Vec3, b: Vec3) -> Vec3 {
@@ -277,54 +244,6 @@ fn cross(a: Vec3, b: Vec3) -> Vec3 {
 fn unit(a: Vec3) -> Option<Vec3> {
     let n = dot(a, a).sqrt();
     (n > 1e-12).then(|| scaled(a, 1.0 / n))
-}
-
-/// `v` rotated by the unit quaternion `q`.
-fn rotate(q: Quat, v: Vec3) -> Vec3 {
-    let u = [q[0], q[1], q[2]];
-    let t = scaled(cross(u, v), 2.0);
-    add(add(v, scaled(t, q[3])), cross(u, t))
-}
-
-/// The unit quaternion of the rotation whose images of x, y and z are `axes`.
-fn rotation_of_axes(axes: [Vec3; 3]) -> Quat {
-    let m = |row: usize, col: usize| axes[col][row];
-    let trace = m(0, 0) + m(1, 1) + m(2, 2);
-    let q = if trace > 0.0 {
-        let s = 2.0 * (trace + 1.0).sqrt();
-        [
-            (m(2, 1) - m(1, 2)) / s,
-            (m(0, 2) - m(2, 0)) / s,
-            (m(1, 0) - m(0, 1)) / s,
-            0.25 * s,
-        ]
-    } else if m(0, 0) > m(1, 1) && m(0, 0) > m(2, 2) {
-        let s = 2.0 * (1.0 + m(0, 0) - m(1, 1) - m(2, 2)).sqrt();
-        [
-            0.25 * s,
-            (m(0, 1) + m(1, 0)) / s,
-            (m(0, 2) + m(2, 0)) / s,
-            (m(2, 1) - m(1, 2)) / s,
-        ]
-    } else if m(1, 1) > m(2, 2) {
-        let s = 2.0 * (1.0 + m(1, 1) - m(0, 0) - m(2, 2)).sqrt();
-        [
-            (m(0, 1) + m(1, 0)) / s,
-            0.25 * s,
-            (m(1, 2) + m(2, 1)) / s,
-            (m(0, 2) - m(2, 0)) / s,
-        ]
-    } else {
-        let s = 2.0 * (1.0 + m(2, 2) - m(0, 0) - m(1, 1)).sqrt();
-        [
-            (m(0, 2) + m(2, 0)) / s,
-            (m(1, 2) + m(2, 1)) / s,
-            0.25 * s,
-            (m(1, 0) - m(0, 1)) / s,
-        ]
-    };
-    let n = q.iter().map(|x| x * x).sum::<f64>().sqrt();
-    q.map(|x| x / n)
 }
 
 /// A node of the human skeleton placed in the avatar's space: its rotation, its scale (per axis, as the xform stores it)
@@ -541,7 +460,7 @@ impl<'a> Hips<'a> {
         });
         Some(Hips {
             human,
-            rest: unit_quat(f64q(human.root.q))?,
+            rest: f64q(human.root.q),
             parent,
         })
     }
@@ -564,9 +483,9 @@ impl<'a> Hips<'a> {
     ) -> Option<(Quat, Vec3)> {
         let human = self.human;
         let origins = posed_origins(human, muscles)?;
-        let local = rotation_of_axes(body_axes(&origins)?);
+        let local = from_columns(body_axes(&origins)?);
         // the body frame the pose must have: the stated rotation of the rest one
-        let wanted = mul(unit_quat(body_rotation)?, self.rest);
+        let wanted = mul(normalize(body_rotation)?, self.rest);
         let rotation = mul(wanted, inverse(local));
         let centre = centre_of_mass(human, &origins)?;
         let origin = sub(
@@ -579,11 +498,6 @@ impl<'a> Hips<'a> {
         let translation = [0, 1, 2].map(|i| translation[i] / self.parent.scale[i]);
         Some((mul(back, rotation), translation))
     }
-}
-
-fn unit_quat(q: Quat) -> Option<Quat> {
-    let n = q.iter().map(|x| x * x).sum::<f64>().sqrt();
-    (n > 1e-12).then(|| q.map(|x| x / n))
 }
 
 /// How far a lowered bone channel may be from the muscles' rotation between its keys, in degrees, and the shortest gap
@@ -825,7 +739,7 @@ impl ClipData {
                         };
                         let position = [value(0, at_rest[0]), value(1, at_rest[1]), value(2, at_rest[2])];
                         let rotation =
-                            unit_quat([value(3, 0.0), value(4, 0.0), value(5, 0.0), value(6, 1.0)])
+                            normalize([value(3, 0.0), value(4, 0.0), value(5, 0.0), value(6, 1.0)])
                                 .unwrap_or([0.0, 0.0, 0.0, 1.0]);
                         hips.place(&muscles_at(t), position, rotation)
                     };
@@ -974,12 +888,12 @@ mod tests {
             [0.0, 0.0, 0.0, 1.0],
             rotation_x(1.0),
             rotation_x(3.0),
-            unit_quat([0.3, -0.5, 0.2, 0.7]).unwrap(),
-            unit_quat([0.9, 0.1, -0.3, 0.05]).unwrap(),
-            unit_quat([-0.1, 0.8, 0.2, 0.0]).unwrap(),
+            normalize([0.3, -0.5, 0.2, 0.7]).unwrap(),
+            normalize([0.9, 0.1, -0.3, 0.05]).unwrap(),
+            normalize([-0.1, 0.8, 0.2, 0.0]).unwrap(),
         ] {
             let axes = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]].map(|v| rotate(q, v));
-            assert!(between(rotation_of_axes(axes), q) < 1e-9, "{q:?}");
+            assert!(between(from_columns(axes), q) < 1e-9, "{q:?}");
         }
         // x turned a quarter about y is -z
         let r = rotate([0.0, 0.5f64.sqrt(), 0.0, 0.5f64.sqrt()], [1.0, 0.0, 0.0]);
@@ -1075,9 +989,9 @@ mod tests {
     #[test]
     fn the_hips_are_placed_by_the_body_position_and_rotation() {
         let h = trunk();
-        let rest = unit_quat([0.03, 0.0, 0.0, 1.0]).unwrap();
+        let rest = normalize([0.03, 0.0, 0.0, 1.0]).unwrap();
         let parent = Placed {
-            rotation: unit_quat([0.5, -0.5, 0.5, 0.5]).unwrap(),
+            rotation: normalize([0.5, -0.5, 0.5, 0.5]).unwrap(),
             scale: [1.0, 2.0, 1.0],
             origin: [0.3, -0.2, 0.1],
         };
@@ -1086,12 +1000,12 @@ mod tests {
             rest,
             parent,
         };
-        let (body, turn) = ([0.1, 1.2, -0.3], unit_quat([0.2, -0.4, 0.1, 0.8]).unwrap());
+        let (body, turn) = ([0.1, 1.2, -0.3], normalize([0.2, -0.4, 0.1, 0.8]).unwrap());
         let (local_rotation, local_translation) = hips.place(&[0.0; MUSCLES], body, turn).unwrap();
         // back to the avatar's space
         let at = parent.child(local_translation, local_rotation, [1.0; 3]);
         let o = posed_origins(&h, &[0.0; MUSCLES]).unwrap();
-        let frame = rotation_of_axes(body_axes(&o).unwrap());
+        let frame = from_columns(body_axes(&o).unwrap());
         assert!(between(mul(at.rotation, frame), mul(turn, rest)) < 1e-7);
         let centre = add(at.origin, rotate(at.rotation, centre_of_mass(&h, &o).unwrap()));
         let want = scaled(body, 2.0);
