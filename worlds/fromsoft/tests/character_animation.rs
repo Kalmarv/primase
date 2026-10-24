@@ -45,6 +45,7 @@ fn a_characters_animations_read_lower_and_map_onto_its_model() -> Result<()> {
         &decoder,
         CharacterOptions {
             animations: Some("c1010".into()),
+            ..CharacterOptions::default()
         },
         &mut w,
     )?;
@@ -221,6 +222,7 @@ fn the_players_animations_come_from_the_binders_its_markers_name() -> Result<()>
         &decoder,
         &CharacterOptions {
             animations: Some("c0000".into()),
+            ..CharacterOptions::default()
         },
         &mut w,
     )?;

@@ -57,6 +57,7 @@ fn check(
         decoder,
         CharacterOptions {
             animations: Some(id.to_owned()),
+            ..CharacterOptions::default()
         },
         &mut w,
     )?;
@@ -176,6 +177,7 @@ fn elden_ring_divisions_are_read_from_the_blf_markers_and_a_refusal_names_its_bo
         &decoder,
         CharacterOptions {
             animations: Some("c2010".into()),
+            ..CharacterOptions::default()
         },
         &mut w,
     )?;
@@ -190,6 +192,7 @@ fn elden_ring_divisions_are_read_from_the_blf_markers_and_a_refusal_names_its_bo
         &decoder,
         CharacterOptions {
             animations: Some("c2030".into()),
+            ..CharacterOptions::default()
         },
         &mut w,
     )?;

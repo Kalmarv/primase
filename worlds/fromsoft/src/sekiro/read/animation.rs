@@ -1,6 +1,8 @@
 //! A character's animation binder (`chr/<id>.anibnd`) read into the world beside its model: the Havok skeleton
 //! (`skeleton.hkx`) as a `core.skeleton` of its own and each animation as a `havok.animation` (the spline compressed
 //! tracks as stored, the binding that says which bone each drives), one entity each, named by the file (`a000_003000`).
+//! A part binder holds such a binder for a form of its own ([`read_member`]: Sekiro's `parts/wp_a_0761_l.partsbnd`
+//! holds `wp_a_0761.anibnd` and `wp_a_0761_1.anibnd`, the closed and the open umbrella's), which is read the same way.
 //!
 //! A binder can name more binders its animations are in: Sekiro's player (`c0000.anibnd`) holds a skeleton, event files
 //! and a load-order marker (`c0000_a000_hi.txt`) for each of the binders that hold the animations (`c0000_a000_hi.anibnd`,
@@ -182,13 +184,38 @@ pub(super) fn read(
     }
     let main = Binder::read(&archive.read(&path, decoder)?, decoder)?;
     let named = companions(archive, id, &main);
-    let mut out = Animations::default();
-    let mut held = vec![hold(&main, decoder, &named, &mut out.report)?];
+    let mut report = AnimationReport::default();
+    let mut held = vec![hold(&main, decoder, &named, &mut report)?];
     for set in &named {
         let binder = Binder::read(&archive.read(&binder_path(set), decoder)?, decoder)?;
-        held.push(hold(&binder, decoder, &[], &mut out.report)?);
-        out.report.companions.push(set.clone());
+        held.push(hold(&binder, decoder, &[], &mut report)?);
+        report.companions.push(set.clone());
     }
+    insert(held, id, report, w).map(Some)
+}
+
+/// Read an animation binder another binder holds (a part form's own: `wp_a_0761_1.anibnd` in
+/// `parts/wp_a_0761_l.partsbnd`) into `w` as [`read`] reads a character's, its skeleton named after `name` (the form):
+/// it names no companion binders (a marker member is unread).
+pub(super) fn read_member(
+    bytes: &[u8],
+    decoder: &Decoder<'_>,
+    name: &str,
+    w: &mut World,
+) -> Result<Animations> {
+    let binder = Binder::read(bytes, decoder)?;
+    let mut report = AnimationReport::default();
+    let held = vec![hold(&binder, decoder, &[], &mut report)?];
+    insert(held, name, report, w)
+}
+
+/// Put what the binders `held` (in read order) hold into `w`: the skeletons, each once by name (`<id> havok
+/// skeleton`), and the animations binding them, what is refused named in `report`.
+fn insert(held: Vec<Held>, id: &str, report: AnimationReport, w: &mut World) -> Result<Animations> {
+    let mut out = Animations {
+        report,
+        ..Animations::default()
+    };
     let mut skeletons: BTreeMap<String, (Entity, Skeleton)> = BTreeMap::new();
     for s in held.iter().flat_map(|h| &h.skeletons) {
         if skeletons.contains_key(&s.name) {
@@ -260,7 +287,7 @@ pub(super) fn read(
             ),
         }
     }
-    Ok(Some(out))
+    Ok(out)
 }
 
 #[cfg(test)]

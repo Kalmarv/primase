@@ -17,7 +17,7 @@ pub use passes::{blockers, layers, lights, normals, pbr, settings};
 pub use read::animation::{AnimationReport, Animations};
 pub use read::area::{Options, Parents, Report, StateClasses, read_area, read_game_area, world_bounds};
 pub use read::character::{
-    CharacterOptions, CharacterReader, CharacterReport, animation_notices, read_character,
+    CharacterOptions, CharacterReader, CharacterReport, animation_notices, part_forms, read_character,
     read_character_with, read_parts, read_parts_with,
 };
 pub use read::collision::Report as CollisionReport;
