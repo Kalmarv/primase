@@ -439,15 +439,22 @@ fn dependencies() {
     let mut found = BTreeSet::new();
     for m in &members {
         let man = manifest(&root().join(&m.path).join("Cargo.toml"));
+        // the plain tables and those of each `[target.'cfg(..)'.*]`, which count as the same section
+        let targets: Vec<&toml::Table> = man
+            .get("target")
+            .and_then(|t| t.as_table())
+            .map(|t| t.values().filter_map(|v| v.as_table()).collect())
+            .unwrap_or_default();
         for (section, dev) in [
             ("dependencies", false),
             ("build-dependencies", false),
             ("dev-dependencies", true),
         ] {
-            let Some(deps) = man.get(section).and_then(|d| d.as_table()) else {
-                continue;
-            };
-            for (key, spec) in deps {
+            let tables: Vec<&toml::Table> = std::iter::once(&man)
+                .chain(targets.iter().copied())
+                .filter_map(|t| t.get(section).and_then(|d| d.as_table()))
+                .collect();
+            for (key, spec) in tables.into_iter().flatten() {
                 let package = spec.get("package").and_then(|p| p.as_str()).unwrap_or(key);
                 let Some(to) = by_name.get(package) else { continue };
                 assert!(
@@ -473,11 +480,6 @@ fn dependencies() {
                 }
             }
         }
-        assert!(
-            man.get("target").is_none(),
-            "{}: target-specific dependencies are not checked yet; extend this test",
-            m.path
-        );
     }
     let excused = entries("dependency")
         .iter()

@@ -173,8 +173,10 @@ trait (`TexDecoder`, `Compressor`, ...), so swapping it is local, and each is he
 Versions are pinned and default features off.
 - **In (by role):** BCn decode `bcdec_rs`, BCn encode `block_compression` (CPU path, default features off, no `wgpu`) or `texpresso`, both pure Rust (`intel_tex_2` is out: its prebuilt C++/ISPC kernels need a native runtime to link and dispatch per CPU), DDS header `ddsfile`, PNG `png`,
   LZ4 `lz4_flex`, deflate/zlib `flate2`, binary layouts `binrw`, casts `bytemuck`, f16 `half`, mesh optimisation
-  `meshopt`, bindings `pyo3` and `csbindgen`. Oodle is never bundled: the game's own `oo2core` DLL is loaded at run time
-  from the install the user points at, with `oozextract` only as a gate's second decoder. ETC/ASTC via
+  `meshopt`, bindings `pyo3` and `csbindgen`. Oodle is never bundled: on Windows the game's own `oo2core` DLL is loaded at run
+  time from the install the user points at; off Windows (no game library to load) `oozextract` is the decoder, a
+  target-specific dependency of `primase-compress` that refuses by name what it cannot decode, and the gates hold
+  it equal to the DLL on Windows. ETC/ASTC via
   `texture2ddecoder` only behind a gate.
 - **Out:** umbrella libraries that pull in a whole domain for one function (`image`, `image_dds`), engine frameworks
   such as `bevy_ecs`.

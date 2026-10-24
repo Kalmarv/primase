@@ -9,7 +9,9 @@ integrity.
 
 Frostbite's CAS block streams (`primase_frostbite::cas`) are a container of these codecs and live in the Frostbite world.
 
-With the `reference-decoder` feature, `reference::decode` is oozextract as a second Kraken decoder, for the gates that hold the
+Off Windows `oodle::Oodle::open(None, version)` (`Oodle::portable`) decodes with oozextract, which refuses by name a stream
+it cannot decode and cannot compress; on Windows the game's library is the codec. With the `reference-decoder` feature
+(always there off Windows), `reference::decode` is oozextract as a second Kraken decoder, for the gates that hold the
 game's Oodle library to it (a dev-dependency turns it on).
 
 `oodle::Oodle::load(path, version)` loads exactly the supplied trusted native

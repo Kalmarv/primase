@@ -1,6 +1,6 @@
 [package]
 name = "primase-compress"
-description = "Compression codecs: LZ4, deflate/zlib, zstd, Oodle via the game's own DLL"
+description = "Compression codecs: LZ4, deflate/zlib, zstd, Oodle via the game's own DLL (Windows) or oozextract (elsewhere)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -16,9 +16,14 @@ ruzstd.workspace = true
 libloading.workspace = true
 oozextract = { workspace = true, optional = true }
 
+# Off Windows there is no game library to load: oozextract is the Oodle decoder, always linked.
+[target.'cfg(not(windows))'.dependencies]
+oozextract = { workspace = true }
+
 [features]
-# oozextract as a second Kraken decoder (`reference`), for the gates that hold the game's Oodle library to it. Only a
-# [dev-dependencies] entry may enable it, so no production crate links it (checks/tests/architecture.rs `dependencies`).
+# oozextract as a second Kraken decoder (`reference`) on Windows, for the gates that hold the game's Oodle library to
+# it (off Windows it is always there, and is the decoder). Only a [dev-dependencies] entry may enable it, so no
+# production crate on Windows links it (checks/tests/architecture.rs `dependencies`).
 reference-decoder = ["dep:oozextract"]
 
 [dev-dependencies]

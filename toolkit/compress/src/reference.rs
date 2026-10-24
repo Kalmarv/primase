@@ -1,6 +1,7 @@
 //! oozextract, a second Kraken decoder to hold the game's Oodle library to, behind one boundary: its refusals and its panics
 //! (its decoder asserts where it should refuse) both come back as a [`Failure`], so a corrupt or unsupported stream is a named
-//! error and never a panic inside a gate. A test aid: enable the `reference-decoder` feature from a dev-dependency.
+//! error and never a panic inside a gate. Off Windows it is Oodle's decoder ([`crate::oodle::Oodle::portable`]); on Windows it is
+//! a test aid: enable the `reference-decoder` feature from a dev-dependency.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 

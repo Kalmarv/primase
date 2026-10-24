@@ -366,9 +366,9 @@ produced by something other than the code it checks.
 | `tools.fxc` | - | Microsoft's `fxc` shader compiler executable | third-party: Microsoft's fxc |
 | `tools.reskate_cli` | - | ReSkate Studio's CLI executable (`reskate_cli`), an independent EBX reader and reference writer | third-party: ReSkate Studio's CLI (20261012) |
 | `tools.gltf_validator` | yes | the Khronos glTF-Validator executable (2.0.0-dev.3.10 release build) | third-party: Khronos glTF-Validator 2.0.0-dev.3.10 |
-| `tools.oodle5` | yes | an Oodle version-5 DLL (`oo2core_5_win64.dll`) | the game's own DLL from the user's install |
-| `tools.oodle6` | yes | an Oodle version-6 DLL (`oo2core_6_win64.dll`) | the game's own DLL from the user's install |
-| `tools.oodle9` | yes | an Oodle version-9 DLL (`oo2core_9_win64.dll`) | the game's own DLL from the user's install |
+| `tools.oodle5` | yes | an Oodle version-5 DLL (`oo2core_5_win64.dll`); on Windows only: elsewhere oozextract decodes and nothing is configured | the game's own DLL from the user's install |
+| `tools.oodle6` | yes | an Oodle version-6 DLL (`oo2core_6_win64.dll`); on Windows only: elsewhere oozextract decodes and nothing is configured | the game's own DLL from the user's install |
+| `tools.oodle9` | yes | an Oodle version-9 DLL (`oo2core_9_win64.dll`); on Windows only: elsewhere oozextract decodes and nothing is configured | the game's own DLL from the user's install |
 | `tools.scene_skate` | yes | our own skate-scene validator (`scene-skate.dll`, run through `tools.dotnet`, or its executable) | our own C# validator, rebuilt from its last source (commit d78228a): it refuses what its checks refuse, it is not an oracle |
 | `tools.unity_tpk` | yes | a type tree package (TPK, uncompressed or LZ4) with the class layouts for the Unity players read | input data: class layouts for the player's Unity version (repacked with a script kept with the private oracle tools) |
 | `tools.dotnet` | yes | the .NET host (`dotnet`, with the .NET 8 runtime) that runs the C# programs given as assemblies: `scripts.sekiro/dds`'s DdsWorker.dll and a `tools.scene_skate` that is a .dll | third-party: Microsoft's .NET 8 runtime |
@@ -646,7 +646,7 @@ same gates as our code. Pinned in the root `Cargo.toml` `[workspace.dependencies
 off) and used with `workspace = true`. **No umbrella crates** (`image`, `image_dds`, engine frameworks like
 `bevy_ecs`). In use or approved: bcdec_rs, block_compression (CPU path only, no wgpu: pure-Rust BC7 encode) / texpresso (pure Rust), ddsfile, png, zune-jpeg (with zune-core: pure-Rust JPEG decoding, MIT OR Apache-2.0 OR Zlib; no unsafe without its `x86`/`neon` features, which stay off; approved 2026-10-23: png's counterpart for the glTF samples' JPEGs), lz4_flex, flate2, binrw, bytemuck,
 half, meshopt, ruzstd (pure-Rust zstd decoding, MIT), pyo3, csbindgen, libloading (a game's own Oodle DLL, loaded at run time from the install, never
-bundled), oozextract (only as a gate's second decoder), thiserror, serde/serde_json, indexmap, sha2, aes (AES-128 block operations), num-bigint (raw RSA public operations), encoding_rs (strict Shift-JIS), sha1 (key material checks), quick-xml (pull parser for game XML data files), naga (the shader IR `primase_shader::Program` wraps, with its validator and WGSL writer; SPIR-V and GLSL front ends later: our own IR would need every one of those written by us; approved 2026-10-22), criterion
+bundled), oozextract (Oodle's decoder off Windows, where there is no game library to load, a target-specific dependency of `primase-compress`; on Windows only as a gate's second decoder, held equal to the game's DLL), thiserror, serde/serde_json, indexmap, sha2, aes (AES-128 block operations), num-bigint (raw RSA public operations), encoding_rs (strict Shift-JIS), sha1 (key material checks), quick-xml (pull parser for game XML data files), naga (the shader IR `primase_shader::Program` wraps, with its validator and WGSL writer; SPIR-V and GLSL front ends later: our own IR would need every one of those written by us; approved 2026-10-22), criterion
 (benches), toml (standards-compliant local gate configuration; a handwritten subset would mishandle escaping,
 duplicate keys and typed values). Propose anything else in the pull request, with what it does and why our own would be worse.
 

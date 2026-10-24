@@ -247,19 +247,19 @@ pub const TOOLS: &[Entry] = &[
     },
     Entry {
         key: "tools.oodle5",
-        about: "an Oodle version-5 DLL (`oo2core_5_win64.dll`)",
+        about: "an Oodle version-5 DLL (`oo2core_5_win64.dll`); on Windows only: elsewhere oozextract decodes and nothing is configured",
         source: "the game's own DLL from the user's install",
         gate: true,
     },
     Entry {
         key: "tools.oodle6",
-        about: "an Oodle version-6 DLL (`oo2core_6_win64.dll`)",
+        about: "an Oodle version-6 DLL (`oo2core_6_win64.dll`); on Windows only: elsewhere oozextract decodes and nothing is configured",
         source: "the game's own DLL from the user's install",
         gate: true,
     },
     Entry {
         key: "tools.oodle9",
-        about: "an Oodle version-9 DLL (`oo2core_9_win64.dll`)",
+        about: "an Oodle version-9 DLL (`oo2core_9_win64.dll`); on Windows only: elsewhere oozextract decodes and nothing is configured",
         source: "the game's own DLL from the user's install",
         gate: true,
     },

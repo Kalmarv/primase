@@ -1,6 +1,6 @@
 //! Dev-only real-data configuration: where a test finds the games' installs, keys, the tools it runs, the oracle sets
 //! it compares against and where it may write. `PRIMASE_DATA` names one TOML file ([`config`] shows its layout);
-//! tests ask through typed queries ([`install`], [`install_file`], [`keys`], [`tool`], [`oracle`], [`scratch`],
+//! tests ask through typed queries ([`install`], [`install_file`], [`keys`], [`tool`], [`oodle`], [`oracle`], [`scratch`],
 //! [`debug`]) declared in [`registry`], every file of an install or an oracle set one by one. An unset entry skips the
 //! test with one line naming its configuration key, unless `[run] require` says the gate must have it; a set entry
 //! whose path is gone always fails, and so does a file the registry does not declare. CONTRIBUTING.md's tables are
@@ -216,6 +216,30 @@ pub fn keys(game: Game) -> Option<PathBuf> {
 #[track_caller]
 pub fn tool(tool: Tool) -> Option<PathBuf> {
     resolve(Query::Tool(tool))
+}
+
+/// Where a test gets its Oodle codec: the game's library where the platform loads one, else nothing to configure.
+#[derive(Clone, Debug)]
+pub struct OodleLibrary(Option<PathBuf>);
+
+impl OodleLibrary {
+    /// The configured game library: `Some` on Windows, where it is the codec; `None` elsewhere, where oozextract is
+    /// (`primase_compress::oodle::Oodle::open` takes it as it is).
+    pub fn path(&self) -> Option<&Path> {
+        self.0.as_deref()
+    }
+}
+
+/// The Oodle codec for a game's data (`version`: `Tool::Oodle5`, `Oodle6` or `Oodle9`): on Windows the game's library,
+/// which `tools.oodleN` names (a test skips, or fails under `[run] require`, where it is not configured); elsewhere
+/// oozextract decodes, so there is nothing to configure and nothing to skip for.
+#[track_caller]
+pub fn oodle(version: Tool) -> Option<OodleLibrary> {
+    if cfg!(windows) {
+        tool(version).map(|path| OodleLibrary(Some(path)))
+    } else {
+        Some(OodleLibrary(None))
+    }
 }
 
 /// A file or folder of an oracle set for a game: `<oracles.root>/<set>/<game>/<rel>` (`rel` relative,

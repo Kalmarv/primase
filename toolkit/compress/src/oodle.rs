@@ -1,4 +1,6 @@
-//! Runtime binding to a caller-selected, trusted Oodle library. No DLL discovery.
+//! Oodle, from a caller-selected, trusted game library (no discovery) where the game ships one for the platform
+//! (Windows), else from oozextract: [`Oodle::open`] picks. The game's library stays the reference; the gates hold
+//! oozextract to it (`reference`).
 use crate::{Compressor, Decompressor, Result, buffer, check_size, invalid};
 use std::{ffi::c_void, path::Path};
 type Decode = unsafe extern "C" fn(
@@ -44,13 +46,51 @@ enum Capacity {
 /// the entire lifetime of the copied function pointers. Compression is Kraken,
 /// level 4.
 #[derive(Debug)]
-pub struct Oodle {
+struct Library {
     _library: libloading::Library,
     decode: Decode,
     encode: Encode,
     capacity: Capacity,
 }
+/// An Oodle codec: the game's library, or off Windows oozextract (which decodes and cannot compress).
+#[derive(Debug)]
+pub struct Oodle {
+    backend: Backend,
+}
+#[derive(Debug)]
+enum Backend {
+    Library(Library),
+    #[cfg(not(windows))]
+    Portable,
+}
 impl Oodle {
+    /// The codec for this platform: the game's library `path` where one is given, else (off Windows) oozextract.
+    /// Windows has no built-in decoder, so no path is an error there.
+    ///
+    /// # Safety
+    /// As [`Oodle::load`] when `path` is given.
+    pub unsafe fn open(path: Option<&Path>, version: Version) -> Result<Self> {
+        match path {
+            // SAFETY: the caller's contract is `load`'s.
+            Some(path) => unsafe { Self::load(path, version) },
+            #[cfg(not(windows))]
+            None => Ok(Self::portable()),
+            #[cfg(windows)]
+            None => Err(invalid(
+                "oodle",
+                0,
+                "no game library given, and Windows has no built-in decoder",
+            )),
+        }
+    }
+    /// oozextract as the codec: decodes every format it supports (Kraken, Mermaid, Selkie, Leviathan) and refuses a
+    /// stream it cannot decode, naming why; it cannot compress.
+    #[cfg(not(windows))]
+    pub fn portable() -> Self {
+        Self {
+            backend: Backend::Portable,
+        }
+    }
     /// Load exactly `path` (canonicalized, never searched by basename).
     ///
     /// # Safety
@@ -76,10 +116,12 @@ impl Oodle {
                 Version::V9 => Capacity::Modern(*library.get(b"OodleLZ_GetCompressedBufferSizeNeeded\0")?),
             };
             Ok(Self {
-                _library: library,
-                decode,
-                encode,
-                capacity,
+                backend: Backend::Library(Library {
+                    _library: library,
+                    decode,
+                    encode,
+                    capacity,
+                }),
             })
         }
     }
@@ -96,13 +138,20 @@ impl Decompressor for Oodle {
                 Err(invalid("oodle", 0, "nonempty payload for empty output"))
             };
         }
+        let library = match &self.backend {
+            Backend::Library(library) => library,
+            #[cfg(not(windows))]
+            Backend::Portable => {
+                return crate::reference::decode(input, expected).map_err(|e| invalid("oodle", 0, e));
+            }
+        };
         let src_len = isize::try_from(input.len()).map_err(|_| crate::Error::Limit)?;
         let dst_len = isize::try_from(expected).map_err(|_| crate::Error::Limit)?;
         let mut out = buffer(expected)?;
         // SAFETY: slices are live, non-overlapping and sized as passed; fuzz-safe
         // decode enabled, no callbacks or external dictionary, synchronous phases.
         let got = unsafe {
-            (self.decode)(
+            (library.decode)(
                 input.as_ptr(),
                 src_len,
                 out.as_mut_ptr(),
@@ -131,10 +180,21 @@ impl Compressor for Oodle {
         if input.is_empty() {
             return Ok(Vec::new());
         }
+        let library = match &self.backend {
+            Backend::Library(library) => library,
+            #[cfg(not(windows))]
+            Backend::Portable => {
+                return Err(invalid(
+                    "oodle",
+                    0,
+                    "compressing needs the game's library; oozextract only decodes",
+                ));
+            }
+        };
         let n = isize::try_from(input.len()).map_err(|_| crate::Error::Limit)?;
         // SAFETY: pure size query with Kraken enum 8 and validated positive length.
         let cap = unsafe {
-            match self.capacity {
+            match library.capacity {
                 Capacity::Legacy(f) => f(n),
                 Capacity::Modern(f) => f(8, n),
             }
@@ -146,7 +206,7 @@ impl Compressor for Oodle {
         // SAFETY: output has the DLL-reported capacity; input is live and disjoint;
         // default options, no dictionary, long-range matcher or external scratch.
         let got = unsafe {
-            (self.encode)(
+            (library.encode)(
                 8,
                 input.as_ptr(),
                 n,

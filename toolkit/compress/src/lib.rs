@@ -5,7 +5,7 @@ use std::io::Write;
 
 #[allow(unsafe_code)]
 pub mod oodle;
-#[cfg(feature = "reference-decoder")]
+#[cfg(any(feature = "reference-decoder", not(windows)))]
 pub mod reference;
 
 #[derive(Debug, thiserror::Error)]
