@@ -212,23 +212,7 @@ pub const LOWER_ANVIL_DECALS: PassSpec = PassSpec {
 /// A point in the source frame, f64.
 type P = [f64; 3];
 
-fn sub(a: P, b: P) -> P {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-fn dot(a: P, b: P) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-fn cross(a: P, b: P) -> P {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-fn unit(a: P) -> P {
-    let l = dot(a, a).sqrt();
-    a.map(|x| x / l)
-}
+use primase_core::vector::{cross, dot, sub, unit};
 
 /// `polygon` cut to where `f` is at least 0 (`f` linear), in order ([`primase_meshops::clip_half_plane`]).
 fn clip(polygon: &[P], f: impl Fn(P) -> f64) -> Vec<P> {
@@ -300,7 +284,9 @@ fn drape(d: &DeferredDecal, g: &GroundGrid<'_>) -> Result<Vec<([P; 3], P)>, Stri
             ];
             // the ground's two triangles of the square, counter-clockwise seen from up
             for tri in [[a, b, f], [a, f, dd]] {
-                let normal = unit(cross(sub(tri[1], tri[0]), sub(tri[2], tri[0])));
+                // the grid's squares have extent, so its triangles have area
+                let normal = unit(cross(sub(tri[1], tri[0]), sub(tri[2], tri[0])))
+                    .ok_or("a ground triangle with no area")?;
                 let mut polygon = tri.to_vec();
                 for plane in &planes {
                     polygon = clip(&polygon, plane);
@@ -657,6 +643,10 @@ impl LowerAnvilDecals {
                     log.omit("deferred decals off the ground grid", 1);
                     continue;
                 };
+                if d.axis_x == [0.0; 3] || d.axis_y == [0.0; 3] {
+                    log.omit("deferred decals with a zero half-axis", 1);
+                    continue;
+                }
                 let triangles = drape(d, g)?;
                 if triangles.is_empty() {
                     log.omit("deferred decals with no ground in their box", 1);
@@ -783,7 +773,8 @@ impl LowerAnvilDecals {
                     let [offset, width] = d.window;
                     let lo = f64::from(((offset + width / 2.0) * 65535.0).trunc());
                     let hi = f64::from((width / 2.0 * 65535.0).trunc());
-                    let tangent = unit(x).map(|v| -v);
+                    // decals with a zero half-axis were left out above
+                    let tangent = unit(x).ok_or("a deferred decal with no x half-axis")?.map(|v| -v);
                     let alpha = match key {
                         DrawKey::Box => (piece.alpha / k) as f32,
                         DrawKey::Terrain(_) => 1.0,

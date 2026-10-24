@@ -21,6 +21,7 @@ use serde_json::{Value, json};
 
 use crate::json::JsonError;
 use crate::texformat::TexFormat;
+use crate::vector::{cross, dot};
 use crate::world::{Component, Entity};
 
 /// Display name.
@@ -228,18 +229,6 @@ fn finite(values: impl Iterator<Item = f32>, what: &str) -> Result<(), String> {
     }
 }
 
-fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-
 /// A linear map of an entity's local space (a transform's 3x3 part), computed in f64 from the f32 entries and rounded
 /// once per value: what [`crate::Component::apply_linear`] maps local-space geometry by.
 ///
@@ -365,12 +354,9 @@ impl Linear {
     }
 }
 
+/// `v` of unit length as f32 ([`crate::vector::unit`]); a vector with no direction stays zero.
 fn unit(v: [f64; 3]) -> [f32; 3] {
-    let len = dot(v, v).sqrt();
-    if len == 0.0 {
-        return [0.0; 3];
-    }
-    v.map(|x| (x / len) as f32)
+    crate::vector::unit(v).map_or([0.0; 3], |u| u.map(|x| x as f32))
 }
 
 /// A placement of a prototype.

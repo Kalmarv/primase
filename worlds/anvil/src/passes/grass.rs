@@ -252,31 +252,12 @@ impl Rng {
     }
 }
 
-type V3 = [f64; 3];
+use primase_core::vector::{V3, add, cross, dot, scale as mul, unit};
 
-fn dot(a: V3, b: V3) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-fn cross(a: V3, b: V3) -> V3 {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
+/// `a` of unit length; a vector with no direction (a plant's axes lined up with its reference) reads as up, z: the
+/// plant stands upright rather than be dropped.
 fn norm(a: V3) -> V3 {
-    let l = dot(a, a).sqrt();
-    if l > 0.0 {
-        a.map(|x| x / l)
-    } else {
-        [0.0, 0.0, 1.0]
-    }
-}
-fn add(a: V3, b: V3) -> V3 {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
-fn mul(a: V3, k: f64) -> V3 {
-    a.map(|x| x * k)
+    unit(a).unwrap_or([0.0, 0.0, 1.0])
 }
 
 /// A node's ground, the heights its 132 x 132 samples hold (the core from index 2) in the terrain's source units.

@@ -51,6 +51,7 @@
 //! formula for them, the same, has no oracle). Each is counted by the lowering.
 
 use primase_animation::quat::{self, from_columns, inverse, mul, normalize, rotate, slerp};
+use primase_core::vector::{V3 as Vec3, add, cross, dot, scale as scaled, sub, unit_beyond};
 use primase_core::{Channel, ClipTarget, Entity, Interpolation, JointId, Property, Rest};
 
 use crate::animator::{AvatarAxes, AvatarHuman, UnityAvatar, Xform};
@@ -211,39 +212,13 @@ fn between(a: Quat, b: Quat) -> f64 {
     (2.0 * s.atan2(d[3].abs())).to_degrees()
 }
 
-type Vec3 = [f64; 3];
-
-fn add(a: Vec3, b: Vec3) -> Vec3 {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
-
-fn sub(a: Vec3, b: Vec3) -> Vec3 {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-
-fn scaled(a: Vec3, s: f64) -> Vec3 {
-    a.map(|x| x * s)
-}
-
 fn each(a: Vec3, b: Vec3) -> Vec3 {
     [a[0] * b[0], a[1] * b[1], a[2] * b[2]]
 }
 
-fn dot(a: Vec3, b: Vec3) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-fn cross(a: Vec3, b: Vec3) -> Vec3 {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-
+/// `a` of unit length where it is longer than 1e-12 (shorter, its direction is noise).
 fn unit(a: Vec3) -> Option<Vec3> {
-    let n = dot(a, a).sqrt();
-    (n > 1e-12).then(|| scaled(a, 1.0 / n))
+    unit_beyond(a, 1e-12)
 }
 
 /// A node of the human skeleton placed in the avatar's space: its rotation, its scale (per axis, as the xform stores it)

@@ -1,4 +1,5 @@
 use crate::{Result, Value, invalid};
+use primase_core::vector::{cross, dot, sub, unit};
 
 /// The most vertices a convex core may hold. Every stage of the tessellation is superlinear in the count (the plane
 /// intersections cubic, the hull and the flat-shape test not far from it), and a file states it freely; Sekiro's own
@@ -519,8 +520,9 @@ fn sphere_directions(radius: f64, max_error: f64) -> Result<Vec<[f64; 3]>> {
         [-t, 0., -1.],
         [-t, 0., 1.],
     ]
-    .map(unit)
-    .to_vec();
+    .into_iter()
+    .map(|p| unit(p).ok_or_else(|| invalid(0, "an icosahedron vertex at the centre")))
+    .collect::<Result<_>>()?;
     let mut faces: Vec<[usize; 3]> = vec![
         [0, 11, 5],
         [0, 5, 1],
@@ -545,16 +547,15 @@ fn sphere_directions(radius: f64, max_error: f64) -> Result<Vec<[f64; 3]>> {
     ];
     for level in 0..=MAX_SPHERE_LEVEL {
         // the deepest face: its plane's distance from the centre is the cosine of its vertices' angle to its normal
-        let depth = faces
-            .iter()
-            .map(|f| {
-                let n = unit(cross(
-                    sub(points[f[1]], points[f[0]]),
-                    sub(points[f[2]], points[f[0]]),
-                ));
-                radius * (1. - dot(n, points[f[0]]).abs())
-            })
-            .fold(0f64, f64::max);
+        let mut depth = 0f64;
+        for f in &faces {
+            let n = unit(cross(
+                sub(points[f[1]], points[f[0]]),
+                sub(points[f[2]], points[f[0]]),
+            ))
+            .ok_or_else(|| invalid(0, "a sphere polyhedron's face with no area"))?;
+            depth = depth.max(radius * (1. - dot(n, points[f[0]]).abs()));
+        }
         if depth <= max_error {
             return Ok(points);
         }
@@ -562,18 +563,22 @@ fn sphere_directions(radius: f64, max_error: f64) -> Result<Vec<[f64; 3]>> {
             break;
         }
         let mut midpoints = std::collections::BTreeMap::<(usize, usize), usize>::new();
-        let mut midpoint = |a: usize, b: usize, points: &mut Vec<[f64; 3]>| {
-            *midpoints.entry((a.min(b), a.max(b))).or_insert_with(|| {
-                points.push(unit(std::array::from_fn(|k| points[a][k] + points[b][k])));
-                points.len() - 1
-            })
+        let mut midpoint = |a: usize, b: usize, points: &mut Vec<[f64; 3]>| -> Result<usize> {
+            if let Some(&i) = midpoints.get(&(a.min(b), a.max(b))) {
+                return Ok(i);
+            }
+            let direction = unit(primase_core::vector::add(points[a], points[b]))
+                .ok_or_else(|| invalid(0, "a sphere polyhedron's edge between opposite directions"))?;
+            points.push(direction);
+            midpoints.insert((a.min(b), a.max(b)), points.len() - 1);
+            Ok(points.len() - 1)
         };
         let mut next = Vec::with_capacity(faces.len() * 4);
         for [a, b, c] in faces {
             let (ab, bc, ca) = (
-                midpoint(a, b, &mut points),
-                midpoint(b, c, &mut points),
-                midpoint(c, a, &mut points),
+                midpoint(a, b, &mut points)?,
+                midpoint(b, c, &mut points)?,
+                midpoint(c, a, &mut points)?,
             );
             next.extend([[a, ab, ca], [b, bc, ab], [c, ca, bc], [ab, bc, ca]]);
         }
@@ -586,28 +591,11 @@ fn sphere_directions(radius: f64, max_error: f64) -> Result<Vec<[f64; 3]>> {
         ),
     ))
 }
-fn unit(v: [f64; 3]) -> [f64; 3] {
-    let length = dot(v, v).sqrt();
-    v.map(|x| x / length)
-}
 /// 0.01 mm, or four f32 units in the last place at the vertex's magnitude when that is coarser (shapes far from their
 /// body's origin cannot be rounded to f32 more closely).
 fn plane_bound(p: [f64; 3]) -> f64 {
     let magnitude = p.iter().fold(0f64, |m, x| m.max(x.abs()));
     1e-5f64.max(magnitude * 4. * f64::from(f32::EPSILON))
-}
-fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    std::array::from_fn(|i| a[i] - b[i])
-}
-fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
 }
 fn distance(p: [f64; 4], v: [f64; 3]) -> f64 {
     p[0] * v[0] + p[1] * v[1] + p[2] * v[2] - p[3]

@@ -266,13 +266,10 @@ pub(crate) struct Texels {
     pub overlaps: u64,
 }
 
+/// `n` of unit length ([`primase_core::vector::unit`]); a normal with no direction (a triangle with no area) reads
+/// as up, z.
 fn unit(n: [f64; 3]) -> [f64; 3] {
-    let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
-    if l > 0.0 {
-        n.map(|c| c / l)
-    } else {
-        [0.0, 0.0, 1.0]
-    }
+    primase_core::vector::unit(n).unwrap_or([0.0, 0.0, 1.0])
 }
 
 /// The barycentric coordinates of the point of triangle `(a, b, c)` nearest `p` (Ericson, real-time collision detection).

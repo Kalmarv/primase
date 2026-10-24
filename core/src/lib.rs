@@ -64,6 +64,7 @@ pub mod texformat;
 mod texture_layers;
 pub use texture_layers::{TextureLayers, TextureShape};
 pub mod translate;
+pub mod vector;
 pub mod world;
 
 pub use components::*;

@@ -16,44 +16,15 @@ use crate::quat;
 use crate::quat::rotate;
 use crate::retarget::{between, parents_first, rotation, with_rotation};
 
-type V3 = [f64; 3];
-
-fn sub(a: V3, b: V3) -> V3 {
-    std::array::from_fn(|i| a[i] - b[i])
-}
-
-fn add(a: V3, b: V3) -> V3 {
-    std::array::from_fn(|i| a[i] + b[i])
-}
-
-fn scale(a: V3, s: f64) -> V3 {
-    a.map(|x| x * s)
-}
-
-fn dot(a: V3, b: V3) -> f64 {
-    a.iter().zip(b).map(|(x, y)| x * y).sum()
-}
-
-fn cross(a: V3, b: V3) -> V3 {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-
-fn norm(a: V3) -> f64 {
-    dot(a, a).sqrt()
-}
+use primase_core::vector::{V3, add, cross, dot, length, scale, sub, unit_beyond};
 
 fn dist(a: V3, b: V3) -> f64 {
-    norm(sub(a, b))
+    length(sub(a, b))
 }
 
 /// `a` of unit length; `None` for one shorter than a nanometre.
 fn unit(a: V3) -> Option<V3> {
-    let l = norm(a);
-    (l > 1e-9).then(|| scale(a, 1.0 / l))
+    unit_beyond(a, 1e-9)
 }
 
 const IDENTITY: [f64; 4] = [0.0, 0.0, 0.0, 1.0];
@@ -232,7 +203,7 @@ pub(crate) fn fit_lengths(
             [c] => {
                 let want = unit(sub(tpos(*c), tpos(id)));
                 let child = *place.entry(*c).or_insert_with(|| match want {
-                    Some(d) => add(pos, scale(d, norm(offs[0]))),
+                    Some(d) => add(pos, scale(d, length(offs[0]))),
                     None => add(pos, rotate(t_in, offs[0])),
                 });
                 quat::mul(between(rotate(t_in, offs[0]), sub(child, pos)), t_in)
@@ -242,7 +213,7 @@ pub(crate) fn fit_lengths(
                 let to: Vec<V3> = kids.iter().map(|&c| sub(tpos(c), tpos(id))).collect();
                 let t = best_turn(&from, &to).unwrap_or_else(|| {
                     // all children in one line: the least rotation of the first child that has a direction
-                    let k = (0..kids.len()).find(|&k| norm(from[k]) > 1e-9 && norm(to[k]) > 1e-9);
+                    let k = (0..kids.len()).find(|&k| length(from[k]) > 1e-9 && length(to[k]) > 1e-9);
                     k.map_or(t_in, |k| quat::mul(between(rotate(t_in, from[k]), to[k]), t_in))
                 });
                 for (&c, &o) in kids.iter().zip(&offs) {
@@ -269,7 +240,7 @@ pub(crate) fn two_bone(root: V3, a: f64, b: f64, effector: V3, pole: V3, fallbac
     let u = unit(d)
         .or_else(|| unit(sub(pole, root)))
         .unwrap_or([0.0, 1.0, 0.0]);
-    let reach = norm(d).clamp((a - b).abs(), a + b);
+    let reach = length(d).clamp((a - b).abs(), a + b);
     let x = if reach > 1e-9 {
         (a * a - b * b + reach * reach) / (2.0 * reach)
     } else {
@@ -306,7 +277,7 @@ pub(crate) fn best_turn(from: &[V3], to: &[V3]) -> Option<[f64; 4]> {
     let spread = |side: &dyn Fn(&(V3, V3)) -> V3| {
         pairs
             .iter()
-            .flat_map(|p| pairs.iter().map(move |q| norm(cross(side(p), side(q)))))
+            .flat_map(|p| pairs.iter().map(move |q| length(cross(side(p), side(q)))))
             .fold(0.0, f64::max)
     };
     if pairs.len() < 2 || spread(&|p| p.0) < 1e-4 || spread(&|p| p.1) < 1e-4 {

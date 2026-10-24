@@ -1,18 +1,7 @@
 //! Closest points on closed triangles, with explicit segment/point degeneracy.
+use primase_core::vector::{cross, dot, sub};
+
 type Point = [f64; 3];
-fn sub(a: Point, b: Point) -> Point {
-    std::array::from_fn(|i| a[i] - b[i])
-}
-fn dot(a: Point, b: Point) -> f64 {
-    a.into_iter().zip(b).map(|(a, b)| a * b).sum()
-}
-fn cross(a: Point, b: Point) -> Point {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
 fn squared(a: Point, b: Point) -> f64 {
     let d = sub(a, b);
     dot(d, d)
