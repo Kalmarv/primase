@@ -185,64 +185,41 @@ pub fn camera_form(shader: &Shader) -> Result<CameraForm, String> {
     }
 }
 
-/// Whether a read of the constant buffer `buffer` that the outputs of `program` are made of is indexed by a vertex
-/// stream (a joint index), not by the instance alone: the buffer is a palette of the vertex, not the object's matrices.
-/// `Err` when the value graph cannot be built.
+/// Whether a read of the constant buffer `buffer` that the results of `program` are made of ([`Values::roots`]: its
+/// outputs, discards and writes) is indexed by a vertex stream (a joint index), not by the instance alone: the buffer
+/// is a palette of the vertex, not the object's matrices. `Err` when the value graph cannot be built.
 pub fn palette_indexed_by_vertex(program: &Program, buffer: ResourceId) -> Result<bool, String> {
     let values = Values::of_program(program).map_err(|e| format!("the value graph: {e}"))?;
-    let mut pending: Vec<NodeId> = values.outputs().values().copied().collect();
-    pending.extend(values.discards().iter().flatten().copied());
-    let mut seen = BTreeSet::new();
-    let mut indexes: Vec<NodeId> = Vec::new();
-    while let Some(id) = pending.pop() {
-        if !seen.insert(id) {
-            continue;
-        }
-        if let Node::Global {
-            resource: Some(resource),
-            at: At::Indexed { index, .. },
-        } = values.node(id)
-            && *resource == buffer
-        {
-            indexes.extend(index);
-        }
-        pending.extend(values.operands(id));
-    }
-    let mut seen = BTreeSet::new();
-    while let Some(id) = indexes.pop() {
-        if !seen.insert(id) {
-            continue;
-        }
-        if let Node::Input { input, .. } = values.node(id)
-            && program.interface.inputs[*input].system.is_none()
-        {
-            return Ok(true);
-        }
-        indexes.extend(values.operands(id));
-    }
-    Ok(false)
+    let by_vertex = |index: &[NodeId]| {
+        values.reached_from(index.iter().copied()).into_iter().any(|id| {
+            matches!(values.node(id), Node::Input { input, .. } if program.interface.inputs[*input].system.is_none())
+        })
+    };
+    Ok(values.reached_from(values.roots()).into_iter().any(|id| {
+        matches!(
+            values.node(id),
+            Node::Global { resource: Some(resource), at: At::Indexed { index, .. } }
+                if *resource == buffer && by_vertex(index)
+        )
+    }))
 }
 
-/// The inputs of `shader` its value graph reads, by label (the name in capitals and the index): an input declared and
-/// never read is not in it. `Err` when the graph cannot be built.
+/// The inputs of `shader` its results are made of ([`Values::roots`]), by label (the name in capitals and the index):
+/// an input declared and never read is not in it. `Err` when the graph cannot be built.
 pub fn inputs_read(shader: &Shader) -> Result<BTreeSet<(String, u32)>, String> {
     let program = lift(shader)?;
     let values = Values::of_program(&program).map_err(|e| format!("the value graph: {e}"))?;
-    let mut pending: Vec<NodeId> = values.outputs().values().copied().collect();
-    pending.extend(values.discards().iter().flatten().copied());
-    let mut seen = BTreeSet::new();
-    let mut read = BTreeSet::new();
-    while let Some(id) = pending.pop() {
-        if !seen.insert(id) {
-            continue;
-        }
-        if let Node::Input { input, .. } = values.node(id) {
-            let label = &program.interface.inputs[*input].label;
-            read.insert((label.name.to_ascii_uppercase(), label.index));
-        }
-        pending.extend(values.operands(id));
-    }
-    Ok(read)
+    Ok(values
+        .reached_from(values.roots())
+        .into_iter()
+        .filter_map(|id| match values.node(id) {
+            Node::Input { input, .. } => {
+                let label = &program.interface.inputs[*input].label;
+                Some((label.name.to_ascii_uppercase(), label.index))
+            }
+            _ => None,
+        })
+        .collect())
 }
 
 /// The lifted program of `shader` (for callers that read its value graph beside the run).
