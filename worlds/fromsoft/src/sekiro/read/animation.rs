@@ -1,6 +1,7 @@
 //! A character's animation binder (`chr/<id>.anibnd`) read into the world beside its model: the Havok skeleton
 //! (`skeleton.hkx`) as a `core.skeleton` of its own and each animation as a `havok.animation` (the spline compressed
-//! tracks as stored, the binding that says which bone each drives), one entity each, named by the file (`a000_003000`).
+//! tracks as stored, the binding that says which bone each drives), one entity each, named by the file (`a000_003000`)
+//! and stating the binder and the member it was read from ([`ClipOrigin`], `fromsoft.clip_origin`).
 //! A part binder holds such a binder for a form of its own ([`read_member`]: Sekiro's `parts/wp_a_0761_l.partsbnd`
 //! holds `wp_a_0761.anibnd` and `wp_a_0761_1.anibnd`, the closed and the open umbrella's), which is read the same way.
 //!
@@ -30,6 +31,7 @@ use primase_havok::animation::{Container, Skeleton, container};
 use primase_havok::world::{HavokAnimation, insert_animation, insert_skeleton};
 use primase_havok::{Compendium, Tagfile};
 
+use crate::components::clips::ClipOrigin;
 use crate::{Archive, Binder, Result, dcx::Decoder};
 
 /// What reading a character's animation binders found.
@@ -99,15 +101,16 @@ fn companions(archive: &Archive, id: &str, binder: &Binder) -> Vec<String> {
     out
 }
 
-/// What one binder holds: its skeletons and animation containers by file stem, and the members it does not read.
+/// What one binder holds: its skeletons, and its animation containers by file stem, each with where it was read from.
 struct Held {
     skeletons: Vec<Skeleton>,
-    animations: Vec<(String, Container)>,
+    animations: Vec<(String, ClipOrigin, Container)>,
 }
 
 /// Read the tagfiles of `binder` (one that names a marker for a binder in `markers` is not unread).
 fn hold(
     binder: &Binder,
+    binder_name: &str,
     decoder: &Decoder<'_>,
     markers: &[String],
     report: &mut AnimationReport,
@@ -163,7 +166,11 @@ fn hold(
         if let Some(s) = c.skeletons.first() {
             held.skeletons.push(s.clone());
         } else {
-            held.animations.push((file, c));
+            let origin = ClipOrigin {
+                binder: binder_name.to_owned(),
+                member: name.to_owned(),
+            };
+            held.animations.push((file, origin, c));
         }
     }
     Ok(held)
@@ -185,10 +192,22 @@ pub(super) fn read(
     let main = Binder::read(&archive.read(&path, decoder)?, decoder)?;
     let named = companions(archive, id, &main);
     let mut report = AnimationReport::default();
-    let mut held = vec![hold(&main, decoder, &named, &mut report)?];
+    let mut held = vec![hold(
+        &main,
+        &format!("{id}.anibnd"),
+        decoder,
+        &named,
+        &mut report,
+    )?];
     for set in &named {
         let binder = Binder::read(&archive.read(&binder_path(set), decoder)?, decoder)?;
-        held.push(hold(&binder, decoder, &[], &mut report)?);
+        held.push(hold(
+            &binder,
+            &format!("{set}.anibnd"),
+            decoder,
+            &[],
+            &mut report,
+        )?);
         report.companions.push(set.clone());
     }
     insert(held, id, report, w).map(Some)
@@ -205,7 +224,13 @@ pub(super) fn read_member(
 ) -> Result<Animations> {
     let binder = Binder::read(bytes, decoder)?;
     let mut report = AnimationReport::default();
-    let held = vec![hold(&binder, decoder, &[], &mut report)?];
+    let held = vec![hold(
+        &binder,
+        &format!("{name}.anibnd"),
+        decoder,
+        &[],
+        &mut report,
+    )?];
     insert(held, name, report, w)
 }
 
@@ -228,7 +253,7 @@ fn insert(held: Vec<Held>, id: &str, report: AnimationReport, w: &mut World) -> 
         skeletons.insert(s.name.clone(), (entity, s.clone()));
     }
     let mut read_names: BTreeMap<String, usize> = BTreeMap::new();
-    for (set, (file, c)) in held
+    for (set, (file, origin, c)) in held
         .into_iter()
         .enumerate()
         .flat_map(|(set, h)| h.animations.into_iter().map(move |a| (set, a)))
@@ -257,6 +282,7 @@ fn insert(held: Vec<Held>, id: &str, report: AnimationReport, w: &mut World) -> 
         }
         match insert_animation(w, &file, &c, *skeleton, havok, &crate::pose::FRAME) {
             Ok(Some(e)) => {
+                w.insert(e, origin);
                 if let Some(h) = w.get::<HavokAnimation>(e) {
                     let unreadable = h.spline.unreadable.clone();
                     let bones = h.track_to_bone.clone();
