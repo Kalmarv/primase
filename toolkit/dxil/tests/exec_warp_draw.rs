@@ -8,7 +8,7 @@
 //! `oracles/warp-draw`) and the scratch folder. Without them the test does nothing.
 use primase_shader_exec::draw::{Compare, Cull, DepthState, DrawShader, Rasterizer, Surface, Viewport};
 use primase_shader_exec::{PixelShader, ProgramShader, Sample};
-use primase_testdata::{Tool, scratch, tool};
+use primase_testdata::{Tool, own_scratch, tool};
 use std::path::Path;
 
 const SIZE: u32 = 16;
@@ -330,12 +330,14 @@ fn draws_agree_with_warp() {
         return;
     };
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
-    let work = scratch().join("warp").join("draw");
+    let own = own_scratch("warp");
+    let work = own.join("draw");
     std::fs::create_dir_all(&work).unwrap();
     let cases = cases();
     let text: String = cases.iter().map(|c| case_text(c, &dir)).collect();
     let (input, output) = (work.join("cases.txt"), work.join("results.jsonl"));
     std::fs::write(&input, text).unwrap();
+    let _oracle = primase_testdata::warp_exclusive();
     let status = std::process::Command::new(&warp)
         .arg(&input)
         .arg(&output)

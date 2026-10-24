@@ -12,7 +12,7 @@ use primase_shader_exec::{
     Geometry, Instance, InstanceFlags, Pipeline, PipelineResources, Scene, ShaderTable,
 };
 use primase_shader_exec::{Sample, Sampler, Store};
-use primase_testdata::{Tool, scratch, tool};
+use primase_testdata::{Tool, own_scratch, tool};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -293,8 +293,7 @@ fn pipelines_agree_with_warp() {
     let Some(warp) = tool(Tool::Warp) else {
         return;
     };
-    let scratch = scratch().join("warp");
-    std::fs::create_dir_all(&scratch).unwrap();
+    let scratch = own_scratch("warp");
     let (mut compared, mut hits, mut mismatches) = (0, 0, Vec::new());
     for variant in ["", ".od"] {
         let pipeline = pipeline(variant);
@@ -316,6 +315,7 @@ fn pipelines_agree_with_warp() {
         let cases = scratch.join(format!("pipeline{}.cases.txt", variant.replace('.', "_")));
         let out = scratch.join(format!("pipeline{}.warp.jsonl", variant.replace('.', "_")));
         std::fs::write(&cases, text).unwrap();
+        let _oracle = primase_testdata::warp_exclusive();
         let run = std::process::Command::new(&warp)
             .arg(&cases)
             .arg(&out)

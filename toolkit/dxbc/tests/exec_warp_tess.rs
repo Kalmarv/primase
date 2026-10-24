@@ -18,7 +18,7 @@ use primase_shader::TessTopology;
 use primase_shader_exec::Constants;
 use primase_shader_exec::tessellation::TessellationShader;
 use primase_shader_exec::{Sample, Sampler};
-use primase_testdata::{Tool, scratch, tool};
+use primase_testdata::{Tool, own_scratch, tool};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -258,7 +258,8 @@ fn tessellated_patches_are_the_ones_warp_makes() {
         eprintln!("skipped: needs tools.fxc and tools.warp");
         return;
     };
-    let dir = scratch().join("warp").join("tess");
+    let own = own_scratch("warp");
+    let dir = own.join("tess");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("tess.hlsl"), HLSL).unwrap();
     let vs = fxc_compile(&fxc, &dir, "vs", "vs_5_0", "vs", &[]);
@@ -356,6 +357,7 @@ fn tessellated_patches_are_the_ones_warp_makes() {
                 let cases_path = dir.join(format!("{tag}.cases.txt"));
                 let results_path = dir.join(format!("{tag}.results.jsonl"));
                 std::fs::write(&cases_path, text).unwrap();
+                let _oracle = primase_testdata::warp_exclusive();
                 let run = std::process::Command::new(&warp)
                     .arg(&cases_path)
                     .arg(&results_path)

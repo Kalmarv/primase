@@ -12,7 +12,7 @@ use primase_shader::D3dClass;
 use primase_shader_exec::{
     Backend, Element, Executable, Geometry, ImageSample, Instance, InstanceFlags, Resources, Scene,
 };
-use primase_testdata::{Tool, scratch, tool};
+use primase_testdata::{Tool, own_scratch, tool};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -198,8 +198,7 @@ fn gate(fixture_name: &str, procedural: bool) {
     let Some(warp) = tool(Tool::Warp) else {
         return;
     };
-    let scratch = scratch().join("warp");
-    std::fs::create_dir_all(&scratch).unwrap();
+    let scratch = own_scratch("warp");
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/{fixture_name}.dxil"));
     let bytes = std::fs::read(&fixture).unwrap();
     let program = lift(&bytes).unwrap();
@@ -328,6 +327,7 @@ fn gate(fixture_name: &str, procedural: bool) {
     let cases_file = scratch.join(format!("{fixture_name}.cases.txt"));
     let out_file = scratch.join(format!("{fixture_name}.warp.jsonl"));
     std::fs::write(&cases_file, text).unwrap();
+    let _oracle = primase_testdata::warp_exclusive();
     let run = std::process::Command::new(&warp)
         .arg(&cases_file)
         .arg(&out_file)

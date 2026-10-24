@@ -6,7 +6,7 @@
 //! The fixtures are the sampled and integer ones (blend, ops), the control-flow and memory ones (flow, loops, switch,
 //! arrays, bits; default and -Od builds), the resource arrays (textures of different sizes in space 1, samplers in space 2) and the
 //! pixel operations a texture load at an offset and the half conversions need. Needs `tools.warp` (the oracle program)
-//! and `tools.dxc` (for the oracle's vertex shader); it works in `warp` under the scratch folder. The vertex shader is
+//! and `tools.dxc` (for the oracle's vertex shader); it works in a folder `warp/p<pid>` of its own under the scratch folder (two runs at once do not share files). The vertex shader is
 //! generated from the container's interface ([`primase_dxil::interface`]): every input varying read from
 //! `cbuffer Case : register(b0, space1) { uint4 r[32]; }`, row by register.
 use primase_shader::{
@@ -17,7 +17,7 @@ use primase_shader_exec::{
     Runner,
 };
 use primase_shader_exec::{PixelShader, Sample};
-use primase_testdata::{Tool, scratch, tool};
+use primase_testdata::{OwnScratch, Tool, own_scratch, tool};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -270,6 +270,7 @@ fn compare(
     let cases_file = scratch.join(format!("{stem}.lifted.cases.txt"));
     let results = scratch.join(format!("{stem}.lifted.warp.jsonl"));
     std::fs::write(&cases_file, text).unwrap();
+    let _oracle = primase_testdata::warp_exclusive();
     let run = std::process::Command::new(warp)
         .arg(&cases_file)
         .arg(&results)
@@ -332,10 +333,9 @@ fn compare(
 
 /// `tools.dxc` and `tools.warp`, and the WARP comparison's folder under the scratch folder; `None` unless both tools
 /// are configured.
-fn tools() -> Option<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf)> {
+fn tools() -> Option<(std::path::PathBuf, std::path::PathBuf, OwnScratch)> {
     let (dxc, warp) = (tool(Tool::Dxc)?, tool(Tool::Warp)?);
-    let scratch = scratch().join("warp");
-    std::fs::create_dir_all(&scratch).unwrap();
+    let scratch = own_scratch("warp");
     Some((dxc, warp, scratch))
 }
 

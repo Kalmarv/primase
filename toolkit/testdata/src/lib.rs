@@ -232,6 +232,77 @@ pub fn scratch() -> PathBuf {
     configured(&config, Query::Scratch(None)).unwrap_or_else(std::env::temp_dir)
 }
 
+/// A folder `name` of [`scratch`] that only this process uses ([`own_scratch`]), removed when it is dropped unless the test
+/// is failing (what it wrote stays to be looked at).
+#[derive(Debug)]
+pub struct OwnScratch(PathBuf);
+
+impl std::ops::Deref for OwnScratch {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for OwnScratch {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            // best effort: a folder another process still holds open is left for the next sweep of the scratch root
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+}
+
+/// A folder `name` under [`scratch`] this call alone writes to (`<scratch>/<name>/p<pid>-<call>`, made): a test that
+/// exchanges files with an external program (WARP, a compiler) under fixed names writes them here, so two runs of it at
+/// once (a gate beside a developer's run, two checkouts) cannot overwrite or truncate each other's files while the program
+/// reads them.
+#[track_caller]
+pub fn own_scratch(name: &str) -> OwnScratch {
+    // one folder a call: two tests of one process each own theirs, and one's drop does not take the other's files
+    static CALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = scratch()
+        .join(name)
+        .join(format!("p{}-{call}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+    OwnScratch(dir)
+}
+
+/// The machine-wide lock on the WARP oracle ([`warp_exclusive`]), released when it is dropped.
+#[derive(Debug)]
+pub struct WarpLock(std::fs::File);
+
+impl Drop for WarpLock {
+    fn drop(&mut self) {
+        // closing the file would release it too; this says so
+        let _ = self.0.unlock();
+    }
+}
+
+/// Takes the lock on the WARP oracle, waiting for whoever holds it: a test runs `warp.exe` only while it holds it.
+///
+/// Several `warp.exe` runs at once (two test binaries, a gate beside a developer's run, an agent's run beside another's)
+/// do not give each their own results: four copies of `exec_warp_rq` started together failed their comparison against
+/// the executor in most rounds (the gate's `hits > 0 && mismatches.is_empty()`, a read of an empty results file, a
+/// parse of a cut line), where one copy alone passed 28 of 28 runs, under heavy CPU load too. The lock is a file in the
+/// scratch root held with the operating system's own file lock, so it is released if the holder dies.
+#[track_caller]
+pub fn warp_exclusive() -> WarpLock {
+    let dir = scratch().join("warp");
+    std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+    let path = dir.join(".oracle.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    file.lock()
+        .unwrap_or_else(|e| panic!("locking {}: {e}", path.display()));
+    WarpLock(file)
+}
+
 /// A debug key's value (`PRIMASE_DEBUG=key=value;key=value`, [`registry::DEBUG`]); `None` when unset.
 #[track_caller]
 pub fn debug(key: &str) -> Option<String> {

@@ -394,7 +394,7 @@ fn run_program(
     bytes: &[u8],
     cases: u32,
     all: bool,
-    tools: &(PathBuf, PathBuf, PathBuf),
+    tools: &(PathBuf, PathBuf, primase_testdata::OwnScratch),
     t: &mut Tally,
 ) {
     let (fxc, warp, scratch) = tools;
@@ -535,6 +535,7 @@ fn run_program(
     let cases_path = scratch.join(format!("{tag}.cases.txt"));
     let results_path = scratch.join(format!("{tag}.warp.jsonl"));
     std::fs::write(&cases_path, text).unwrap();
+    let _oracle = primase_testdata::warp_exclusive();
     let run = std::process::Command::new(warp)
         .arg(&cases_path)
         .arg(&results_path)
@@ -644,8 +645,7 @@ fn corpus(game: Game) {
     else {
         return;
     };
-    let scratch = primase_testdata::scratch().join("warp");
-    std::fs::create_dir_all(&scratch).unwrap();
+    let scratch = primase_testdata::own_scratch("warp");
     let all = debug("shader.warp_all").is_some_and(|v| v == "1");
     let tools = (fxc, warp, scratch);
     let mut t = Tally::default();
