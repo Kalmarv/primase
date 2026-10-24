@@ -263,6 +263,143 @@ pub fn evaluate(
     Ok(out)
 }
 
+/// Poses blended: every part's joints, morph weights, controls and root motion, each weighted by the part's share of the
+/// weights (relative: divided by their sum). A part of weight 0 is left out whatever its shape; the others must share
+/// the skeleton (the same joints in the same order, the same `root_applied`), the same morphs and controls, and all have
+/// root motion or none, since a blend of something and nothing has no stated meaning here (an error, not a guess).
+///
+/// A joint every part states alike stays as stated. Else translations and scales are the weighted sum, and rotations the
+/// weighted sum of the unit quaternions, each flipped to the hemisphere of the first part's (`q` and `-q` are one
+/// rotation), normalised. That sum-and-normalise form is this crate's reading of how weighted poses combine; it is the
+/// weighted mean of the rotations for small differences and is not checked against an engine here.
+pub fn blend(parts: &[(&Evaluated, f64)]) -> Result<Evaluated> {
+    let mut total = 0.0;
+    for (_, w) in parts {
+        if !w.is_finite() || *w < 0.0 {
+            return Err(Error(format!("a blend weight of {w}")));
+        }
+        total += w;
+    }
+    if total <= 0.0 {
+        return Err(Error("a blend of no weight".into()));
+    }
+    let used: Vec<(&Evaluated, f64)> = parts
+        .iter()
+        .filter(|(_, w)| *w > 0.0)
+        .map(|(e, w)| (*e, w / total))
+        .collect();
+    let (first, _) = used[0];
+    if used.len() == 1 {
+        return Ok(first.clone());
+    }
+    for (e, _) in &used[1..] {
+        if e.pose.root_applied != first.pose.root_applied {
+            return Err(Error("blended poses differ in root_applied".into()));
+        }
+        if e.pose.joints.len() != first.pose.joints.len()
+            || e.pose
+                .joints
+                .iter()
+                .zip(&first.pose.joints)
+                .any(|(a, b)| a.0 != b.0)
+        {
+            return Err(Error("blended poses are of different joints".into()));
+        }
+        if e.root.is_some() != first.root.is_some() {
+            return Err(Error(
+                "some of the blended poses have root motion and some do not".into(),
+            ));
+        }
+    }
+    let mut joints = Vec::with_capacity(first.pose.joints.len());
+    for (k, (id, rest)) in first.pose.joints.iter().enumerate() {
+        if used.iter().all(|(e, _)| e.pose.joints[k].1 == *rest) {
+            joints.push((*id, *rest));
+            continue;
+        }
+        let blended = used
+            .iter()
+            .map(|(e, w)| Trs::of(&e.pose.joints[k].1).map(|t| (t, *w)))
+            .collect::<Result<Vec<_>>>()
+            .and_then(|trs| blend_trs(&trs))
+            .map_err(|e| Error(format!("joint {id:?}: {}", e.0)))?;
+        joints.push((*id, blended.rest()));
+    }
+    let root = if first.root.is_some() {
+        let blended = used
+            .iter()
+            .filter_map(|(e, w)| e.root.map(|r| (r, *w)))
+            .map(|(r, w)| Trs::of(&Rest::Affine(r)).map(|t| (t, w)))
+            .collect::<Result<Vec<_>>>()
+            .and_then(|trs| blend_trs(&trs))
+            .map_err(|e| Error(format!("root motion: {}", e.0)))?;
+        Some(transform(&blended.matrix()))
+    } else {
+        None
+    };
+    // morph weights and controls: the same keys in each, summed by weight
+    let mut morphs = first.morphs.clone();
+    let mut controls = first.controls.clone();
+    for m in &mut morphs {
+        m.2 = 0.0;
+    }
+    for c in &mut controls {
+        c.1 = 0.0;
+    }
+    for (e, w) in &used {
+        if e.morphs.len() != morphs.len() || e.controls.len() != controls.len() {
+            return Err(Error("blended poses drive different morphs or controls".into()));
+        }
+        for (geometry, morph, v) in &e.morphs {
+            let at = morphs
+                .iter_mut()
+                .find(|m| m.0 == *geometry && m.1 == *morph)
+                .ok_or_else(|| Error(format!("blended poses drive different morphs ({morph:?})")))?;
+            at.2 += (f64::from(*v) * w) as f32;
+        }
+        for (name, v) in &e.controls {
+            let at = controls
+                .iter_mut()
+                .find(|c| c.0 == *name)
+                .ok_or_else(|| Error(format!("blended poses drive different controls ({name:?})")))?;
+            at.1 += (f64::from(*v) * w) as f32;
+        }
+    }
+    Ok(Evaluated {
+        pose: RigPose {
+            joints,
+            root_applied: first.pose.root_applied,
+        },
+        morphs,
+        controls,
+        root,
+        other_skeletons: used.iter().map(|(e, _)| e.other_skeletons).max().unwrap_or(0),
+    })
+}
+
+/// Weighted transforms (weights summing to 1) as one: see [`blend`].
+fn blend_trs(parts: &[(Trs, f64)]) -> Result<Trs> {
+    let anchor = parts[0].0.rotation;
+    let mut out = Trs {
+        translation: [0.0; 3],
+        rotation: [0.0; 4],
+        scale: [0.0; 3],
+    };
+    for (t, w) in parts {
+        for i in 0..3 {
+            out.translation[i] += t.translation[i] * w;
+            out.scale[i] += t.scale[i] * w;
+        }
+        let dot: f64 = t.rotation.iter().zip(&anchor).map(|(a, b)| a * b).sum();
+        let side = if dot < 0.0 { -1.0 } else { 1.0 };
+        for i in 0..4 {
+            out.rotation[i] += t.rotation[i] * w * side;
+        }
+    }
+    out.rotation = quat::normalize(out.rotation).ok_or_else(|| Error("blended rotations cancel".into()))?;
+    Ok(out)
+}
+
 /// Each joint's transform into the skeleton's space under `pose` (every joint's local; a [`RigPose`] or the rests
 /// from [`locals`]): its local composed with its parents' up to its root, in f64.
 pub fn model_transforms(
@@ -459,5 +596,117 @@ mod tests {
         let mut additive = clip;
         additive.additive = Some(primase_core::AdditiveReference::Pose(Entity::from_index(1)));
         assert!(evaluate(&additive, skel, &s, None, 1.0).is_err());
+    }
+
+    fn evaluated(joints: Vec<(JointId, Rest)>) -> Evaluated {
+        Evaluated {
+            pose: RigPose {
+                joints,
+                root_applied: None,
+            },
+            morphs: vec![],
+            controls: vec![],
+            root: None,
+            other_skeletons: 0,
+        }
+    }
+
+    fn joint_trs(e: &Evaluated, id: u32) -> Trs {
+        Trs::of(&e.pose.joints.iter().find(|(j, _)| *j == JointId(id)).unwrap().1).unwrap()
+    }
+
+    /// Hand-worked: weights 1 and 3 put a joint a quarter of the way from (0, 0, 0) to (4, 0, 0) and from scale 1 to 5; a
+    /// half turn and no turn about z at weights 1 and 1 are a quarter turn (`q` and `-q` the same rotation); weights are
+    /// relative (2 and 2 are 1 and 1); a joint both parts state alike is kept as stated; a part alone is itself.
+    #[test]
+    fn weighted_poses_blend_joint_by_joint() {
+        let same = trs([5.0, 6.0, 7.0], [0.0, 0.0, 0.0, 1.0]);
+        let a = evaluated(vec![
+            (JointId(1), trs([0.0; 3], [0.0, 0.0, 0.0, 1.0])),
+            (JointId(2), same),
+        ]);
+        let turned = |rotation: [f32; 4]| Rest::Trs {
+            translation: [4.0, 0.0, 0.0],
+            rotation,
+            scale: [5.0, 5.0, 5.0],
+        };
+        let b = evaluated(vec![
+            (JointId(1), turned([0.0, 0.0, 1.0, 0.0])),
+            (JointId(2), same),
+        ]);
+        let at = |wa: f64, wb: f64| blend(&[(&a, wa), (&b, wb)]).unwrap();
+        let t = joint_trs(&at(1.0, 3.0), 1);
+        assert!(
+            near(&t.translation, &[3.0, 0.0, 0.0]) && near(&t.scale, &[4.0; 3]),
+            "{t:?}"
+        );
+        let quarter = [0.0, 0.0, f64::from(S), f64::from(S)];
+        assert!(near(&joint_trs(&at(1.0, 1.0), 1).rotation, &quarter));
+        // the second rotation negated: the same rotation, the same blend
+        let mut negated = b.clone();
+        negated.pose.joints[0].1 = turned([0.0, 0.0, -1.0, 0.0]);
+        let n = blend(&[(&a, 1.0), (&negated, 1.0)]).unwrap();
+        assert!(near(&joint_trs(&n, 1).rotation, &quarter));
+        assert_eq!(at(2.0, 2.0), at(1.0, 1.0));
+        assert_eq!(at(1.0, 1.0).pose.joints[1], a.pose.joints[1]);
+        assert_eq!(at(0.0, 2.0), b);
+    }
+
+    /// Morphs, controls and root motion are weighted too; poses of different shapes or of weights that mean nothing are
+    /// refused; a part of weight 0 is not asked to match.
+    #[test]
+    fn blends_weight_morphs_and_refuse_what_does_not_match() {
+        let g = Entity::from_index(9);
+        let still = trs([0.0; 3], [0.0, 0.0, 0.0, 1.0]);
+        let mut a = evaluated(vec![(JointId(1), still)]);
+        let mut b = a.clone();
+        a.morphs = vec![(g, MorphId(3), 0.0)];
+        b.morphs = vec![(g, MorphId(3), 1.0)];
+        a.controls = vec![("flip".into(), 2.0)];
+        b.controls = vec![("flip".into(), 4.0)];
+        let root = |z: f64| {
+            transform(
+                &Trs {
+                    translation: [0.0, 0.0, z],
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                    scale: [1.0; 3],
+                }
+                .matrix(),
+            )
+        };
+        a.root = Some(root(0.0));
+        b.root = Some(root(-2.0));
+        let m = blend(&[(&a, 1.0), (&b, 1.0)]).unwrap();
+        assert_eq!(m.morphs, [(g, MorphId(3), 0.5)]);
+        assert_eq!(m.controls, [("flip".to_owned(), 3.0)]);
+        assert!(near(&affine(&m.root.unwrap())[3], &[0.0, 0.0, -1.0]));
+        assert!(blend(&[]).is_err());
+        assert!(blend(&[(&a, 0.0)]).is_err());
+        assert!(blend(&[(&a, -1.0), (&b, 2.0)]).is_err());
+        assert!(blend(&[(&a, f64::NAN)]).is_err());
+        let mut other = b.clone();
+        other.pose.joints[0].0 = JointId(2);
+        assert!(blend(&[(&a, 1.0), (&other, 1.0)]).is_err());
+        assert_eq!(blend(&[(&a, 1.0), (&other, 0.0)]).unwrap(), a);
+        let mut no_root = b.clone();
+        no_root.root = None;
+        assert!(blend(&[(&a, 1.0), (&no_root, 1.0)]).is_err());
+        let mut other_morph = b.clone();
+        other_morph.morphs = vec![(g, MorphId(4), 1.0)];
+        assert!(blend(&[(&a, 1.0), (&other_morph, 1.0)]).is_err());
+        // two opposite quaternions are one rotation: their blend is that rotation (the sum would otherwise cancel)
+        let x = |q: [f32; 4]| {
+            evaluated(vec![(
+                JointId(1),
+                Rest::Trs {
+                    translation: [0.0; 3],
+                    rotation: q,
+                    scale: [1.0; 3],
+                },
+            )])
+        };
+        let (p, q) = (x([1.0, 0.0, 0.0, 0.0]), x([-1.0, 0.0, 0.0, 0.0]));
+        let r = joint_trs(&blend(&[(&p, 1.0), (&q, 1.0)]).unwrap(), 1).rotation;
+        assert!(near(&r, &[1.0, 0.0, 0.0, 0.0]), "{r:?}");
     }
 }
