@@ -68,10 +68,10 @@ VO main(float3 position : POSITION0,
     float3 w = float3(0, 0, 0);
 #ifdef SECOND_BLOCK
     // the 6848-byte hat program also reads the elements the offset flag would have put the block at, the translation and
-    // the first joint's rows, and no output moved when they were filled: read here, and added at a weight of zero
+    // the first joint's rows, and no output moved when they were filled: read here, and used only by a select no fill takes
     float4 second_translation = matrices[rec + 1];
-    float4 second_row = matrices[rec + 4];
-    w += (second_translation.xyz + second_row.xyz) * 0.0;
+    float4 second_row = matrices[rec + 4 + ((header >> 18) & 1)];
+    w.x += (second_translation.x > 1e30 || second_row.x > 1e30) ? 1.0 : 0.0;
 #endif
     [unroll] for (uint k = 0; k < 4; k++) {
         uint at = first + JOINT_STRIDE * joints[k];
