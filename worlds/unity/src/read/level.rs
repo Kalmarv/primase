@@ -1018,6 +1018,7 @@ impl Builder<'_> {
                                 self.report.clip_channels += report.channels;
                                 w.insert(e, Name(d.name.clone()));
                                 w.insert(e, Source(format!("unity clip {}/{}", clip.file, clip.path_id)));
+                                w.insert(e, UnityObject::from(clip));
                                 w.insert(e, lowered);
                                 Some(e)
                             };
