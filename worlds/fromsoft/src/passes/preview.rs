@@ -112,7 +112,7 @@ pub fn surface(mtd: &str, albedo: &str, class: &str) -> (String, bool) {
     if matches!(class, "leaves" | "decal" | "alpha" | "additive" | "water") {
         return ("default".into(), false);
     }
-    let text = format!("{mtd} {albedo}").to_lowercase();
+    let text = crate::names::fold(&format!("{mtd} {albedo}"));
     for (words, surface, natural) in [
         (&["roof", "tile_", "kawara"][..], "roofing", false),
         (&["rock", "cliff", "mountain", "landscape"][..], "concrete", true),

@@ -220,7 +220,7 @@ fn part_name(name: &str) -> Result<&str> {
 /// The character ids `text` names, lowercased: `c` and four digits, not inside a longer word or number (`c1019` in
 /// `c1019_body_merge_SSS.mtd` and in `N:/NTC/data/Model/chr/c1019/tex/c1019_body_merge_a.tif`).
 fn named_characters(text: &str) -> Vec<String> {
-    let lower = text.to_ascii_lowercase();
+    let lower = crate::names::fold(text);
     let b = lower.as_bytes();
     (0..b.len())
         .filter(|&i| {
@@ -235,7 +235,7 @@ fn named_characters(text: &str) -> Vec<String> {
 /// The part ids `text` names, lowercased: two letters, a letter and four digits joined by underscores, not inside a
 /// longer word or number (`fc_m_0200` in `N:/NTC/data/Model/parts/Face/FC_M_0200/tex/FC_M_0200_Skin_A_a.tif`).
 fn named_parts(text: &str) -> Vec<String> {
-    let lower = text.to_ascii_lowercase();
+    let lower = crate::names::fold(text);
     let b = lower.as_bytes();
     let shape = |w: &[u8]| {
         w.len() == 9
@@ -288,7 +288,7 @@ fn member<'b>(binder: &'b Binder, leaf: &str) -> Option<&'b crate::BinderFile> {
             .unwrap_or("")
             .rsplit(['/', '\\'])
             .next()
-            .is_some_and(|s| s.eq_ignore_ascii_case(leaf))
+            .is_some_and(|s| crate::names::fold(s) == crate::names::fold(leaf))
     })
 }
 
@@ -407,7 +407,7 @@ impl Item<'_> {
                     .filter(|f| {
                         f.name
                             .as_deref()
-                            .is_some_and(|n| n.to_ascii_lowercase().ends_with(".flver"))
+                            .is_some_and(|n| crate::names::fold(n).ends_with(".flver"))
                     })
                     .map(|f| {
                         let name = member_stem(f.name.as_deref().unwrap_or(""));
@@ -767,12 +767,17 @@ impl<'a> Reading<'a> {
             .layered_programs(resolved.iter().filter_map(|m| m.layered.as_ref()))?;
         report.missing_shader_bundles = wanted_shaders
             .iter()
-            .filter(|s| self.bundles.missing.contains(*s))
-            .cloned()
+            .map(|s| crate::names::fold(s))
+            .filter(|s| self.bundles.missing.contains(s))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
             .collect();
-        report.unread_metaparams = wanted_shaders
+        let wanted_keys: BTreeSet<_> = wanted_shaders.iter().map(|s| crate::names::fold(s)).collect();
+        report.unread_metaparams = self
+            .bundles
+            .unread_metaparams
             .iter()
-            .filter(|s| self.bundles.unread_metaparams.contains(*s))
+            .filter(|s| wanted_keys.contains(&crate::names::fold(s)))
             .cloned()
             .collect();
         report.textures = payloads.len();

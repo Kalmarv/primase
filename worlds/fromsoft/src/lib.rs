@@ -14,6 +14,7 @@ pub mod materials;
 pub mod metaparam;
 pub mod msb;
 pub mod mtd;
+mod names;
 pub mod param;
 mod passes;
 mod pose;

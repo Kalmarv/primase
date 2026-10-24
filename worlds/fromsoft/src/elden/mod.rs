@@ -49,7 +49,7 @@ pub(crate) const NPC_PARAM: crate::param::NpcLayout = crate::param::NpcLayout {
 /// in binders of its own, `aegnnn_mmm_h.geomhkxbnd.dcx` (high resolution, member `aegnnn_mmm_h.hkx`, a subset of the
 /// assets) and `aegnnn_mmm_l.geomhkxbnd.dcx` (low, `aegnnn_mmm_l.hkx`, every collidable asset).
 pub(crate) fn asset_model(model: &str) -> Result<ObjectModel> {
-    let lower = model.to_ascii_lowercase();
+    let lower = crate::names::fold(model);
     let group = lower
         .get(..6)
         .filter(|g| g.starts_with("aeg") && g[3..].bytes().all(|b| b.is_ascii_digit()))

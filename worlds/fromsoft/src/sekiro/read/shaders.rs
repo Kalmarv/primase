@@ -8,6 +8,7 @@
 use super::super::source::{self, ShaderBundle, ShaderProgram, ShaderStage};
 use crate::materials::LayeredMaterial;
 use crate::metaparam::Metaparam;
+use crate::names::fold;
 use crate::{Archive, Binder, Game, Result, dcx::Decoder, invalid};
 use primase_core::shader::ShaderFormat;
 use primase_core::{Entity, World};
@@ -21,8 +22,9 @@ fn leaf(name: Option<&str>) -> &str {
 /// The bundles the install holds of some shaders, and what it did not.
 #[derive(Debug, Default)]
 pub(super) struct Bundles {
+    /// Keyed by folded shader name; each bundle keeps its stored spelling.
     pub bundles: BTreeMap<String, ShaderBundle>,
-    /// Shaders a material names whose bundle the install does not hold.
+    /// Folded names of shaders whose bundle the install does not hold, listed once across spellings.
     pub missing: BTreeSet<String>,
     /// Bundles whose metaparam is of a version this reader does not read (their `parameters` are `None`).
     pub unread_metaparams: BTreeSet<String>,
@@ -46,12 +48,17 @@ pub(crate) fn unbound_defaults(
 }
 
 impl Bundles {
+    fn wanted(&self, shaders: &BTreeSet<String>) -> BTreeSet<String> {
+        shaders
+            .iter()
+            .map(|s| fold(s))
+            .filter(|s| !self.bundles.contains_key(s) && !self.missing.contains(s))
+            .collect()
+    }
+
     /// Binder member paths follow the archive's case-insensitive naming rule. Keep the stored spelling in the record.
     fn get(&self, shader: &str) -> Option<&ShaderBundle> {
-        self.bundles
-            .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case(shader))
-            .map(|(_, bundle)| bundle)
+        self.bundles.get(&fold(shader))
     }
 
     /// The default textures of the slots `materials` bind nothing to ([`unbound_defaults`]), by their shaders'
@@ -77,10 +84,7 @@ impl Bundles {
         game: Game,
         shaders: &BTreeSet<String>,
     ) -> Result<()> {
-        let mut wanted: BTreeSet<&String> = shaders
-            .iter()
-            .filter(|s| self.get(s).is_none() && !self.missing.contains(*s))
-            .collect();
+        let mut wanted = self.wanted(shaders);
         for path in game.shader_binders() {
             if wanted.is_empty() {
                 break;
@@ -90,15 +94,17 @@ impl Bundles {
             }
             for file in Binder::read(&archive.read(path, decoder)?, decoder)?.files {
                 let name = leaf(file.name.as_deref());
-                let Some(shader) = name.strip_suffix(".shaderbdle") else {
+                let key = fold(name);
+                let Some(shader_key) = key.strip_suffix(".shaderbdle") else {
                     continue;
                 };
-                if !wanted.iter().any(|w| w.eq_ignore_ascii_case(shader)) {
+                if !wanted.contains(shader_key) {
                     continue;
                 }
+                let shader = &name[..name.len() - ".shaderbdle".len()];
                 let bundle = bundle(game, shader, &file.bytes, decoder, &mut self.unread_metaparams)?;
-                self.bundles.insert(shader.to_owned(), bundle);
-                wanted.retain(|w| !w.eq_ignore_ascii_case(shader));
+                self.bundles.insert(shader_key.to_owned(), bundle);
+                wanted.remove(shader_key);
             }
         }
         // a shader without a bundle may be a fixed-function one, whose programs are in one binder by name
@@ -110,25 +116,25 @@ impl Bundles {
             for shader in wanted
                 .iter()
                 .filter(|w| fixed_function(w))
-                .copied()
+                .cloned()
                 .collect::<Vec<_>>()
             {
-                let programs = fixed_function_programs(game, shader, &binder)?;
+                let programs = fixed_function_programs(game, &shader, &binder)?;
                 if !programs.is_empty() {
                     self.bundles.insert(
                         shader.clone(),
                         ShaderBundle {
-                            name: shader.clone(),
+                            name: programs[0].name[..shader.len()].to_owned(),
                             game,
                             programs,
                             parameters: None,
                         },
                     );
-                    wanted.remove(shader);
+                    wanted.remove(&shader);
                 }
             }
         }
-        self.missing.extend(wanted.into_iter().cloned());
+        self.missing.extend(wanted);
         Ok(())
     }
 
@@ -140,12 +146,15 @@ impl Bundles {
     ) -> Result<source::Payloads> {
         let wanted = layered
             .map(LayeredMaterial::program_name)
-            .collect::<Result<BTreeSet<_>>>()?;
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .map(|name| fold(&name))
+            .collect::<BTreeSet<_>>();
         let mut programs = BTreeMap::new();
         for family in ["M[Multiple]", "M[MultipleGround]", "M[Multiple]_Emissive"] {
             for p in self.get(family).into_iter().flat_map(|b| &b.programs) {
-                for name in wanted.iter().filter(|n| n.eq_ignore_ascii_case(&p.name)) {
-                    programs.insert(name.clone(), p.code.clone());
+                if wanted.contains(&fold(&p.name)) {
+                    programs.insert(p.name.clone(), p.code.clone());
                 }
             }
         }
@@ -158,15 +167,12 @@ impl Bundles {
         let mut entities = BTreeMap::new();
         for (shader, bundle) in &self.bundles {
             let e = world.spawn();
-            world.insert(e, primase_core::Name(shader.clone()));
+            world.insert(e, primase_core::Name(bundle.name.clone()));
             world.insert(e, bundle.clone());
-            entities.insert(shader, e);
+            entities.insert(shader.clone(), e);
         }
         for (material, shader) in materials {
-            if let Some((_, &bundle)) = entities
-                .iter()
-                .find(|(name, _)| name.eq_ignore_ascii_case(shader))
-            {
+            if let Some(&bundle) = entities.get(&fold(shader)) {
                 world.insert(*material, source::MaterialShader(bundle));
             }
         }
@@ -175,9 +181,7 @@ impl Bundles {
 
 /// Whether a shader is of the fixed-function family: the `GXFlver_` shaders have programs but no bundle.
 fn fixed_function(shader: &str) -> bool {
-    shader
-        .get(..8)
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("GXFlver_"))
+    fold(shader).starts_with("gxflver_")
 }
 
 /// The G-buffer and forward programs of a fixed-function shader in its binder, by case-insensitive file name: the pixel programs
@@ -203,12 +207,12 @@ fn fixed_function_programs(game: Game, shader: &str, binder: &Binder) -> Result<
         (format!("{shader}_Fwd_Skin@[cl].vpo"), ShaderStage::Vertex, 1),
     ];
     let mut programs = Vec::new();
+    let mut files = BTreeMap::new();
+    for file in &binder.files {
+        files.entry(fold(leaf(file.name.as_deref()))).or_insert(file);
+    }
     for (name, stage, kind) in names {
-        let Some(file) = binder
-            .files
-            .iter()
-            .find(|f| leaf(f.name.as_deref()).eq_ignore_ascii_case(&name))
-        else {
+        let Some(file) = files.get(&fold(&name)) else {
             continue;
         };
         let found = shader_kind(format, &file.bytes)
@@ -263,7 +267,7 @@ fn bundle(
     let mut metaparams = 0;
     for file in Binder::read(bytes, decoder)?.files {
         let name = leaf(file.name.as_deref()).to_owned();
-        let extension = name.rsplit_once('.').map_or("", |x| x.1);
+        let extension = fold(name.rsplit_once('.').map_or("", |x| x.1));
         if extension == "metaparam" {
             metaparams += 1;
             match Metaparam::read(&file.bytes) {
@@ -274,7 +278,7 @@ fn bundle(
             }
             continue;
         }
-        let stage = ShaderStage::from_extension(extension).ok_or_else(|| {
+        let stage = ShaderStage::from_extension(&extension).ok_or_else(|| {
             what(format!(
                 "{name}: a file that is neither a program nor a metaparam"
             ))
@@ -314,6 +318,58 @@ mod tests {
     use super::*;
     use crate::materials::{Definition, Material};
 
+    #[test]
+    fn missing_shader_spellings_share_one_request_and_one_missing_record() {
+        let mut bundles = Bundles::default();
+        let requested = BTreeSet::from(["Absent_Shader".into(), "ABSENT_SHADER".into()]);
+        let missing = bundles.wanted(&requested);
+        assert_eq!(missing, BTreeSet::from(["absent_shader".into()]));
+        bundles.missing.extend(missing);
+        assert!(
+            bundles
+                .wanted(&BTreeSet::from(["absent_Shader".into()]))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn layered_payload_keeps_one_stored_spelling_for_two_requested_spellings() {
+        let material = |shader: &str| LayeredMaterial {
+            mtd: "layered.mtd".into(),
+            definition: crate::mtd::MaterialDefinition {
+                shader: format!("{shader}.spx"),
+                description: String::new(),
+                parameters: vec![crate::mtd::Parameter {
+                    name: "GXFT_SATStaticSwitch".into(),
+                    value: crate::mtd::Value::Int(vec![0]),
+                }],
+                textures: Vec::new(),
+                block_lengths: Vec::new(),
+            },
+            bindings: BTreeMap::new(),
+        };
+        let lower = material("m[multiple]");
+        let upper = material("M[Multiple]");
+        let stored = ShaderBundle {
+            name: "M[Multiple]".into(),
+            game: Game::Sekiro,
+            parameters: None,
+            programs: vec![ShaderProgram {
+                name: "M[Multiple]_0_Gbuf.ppo".into(),
+                stage: ShaderStage::Pixel,
+                format: ShaderFormat::Dxbc,
+                code: vec![1, 2, 3].into(),
+            }],
+        };
+        let bundles = Bundles {
+            bundles: BTreeMap::from([(fold(&stored.name), stored)]),
+            ..Default::default()
+        };
+        let payloads = bundles.layered_programs([&lower, &upper].into_iter()).unwrap();
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(&*payloads["M[Multiple]_0_Gbuf.ppo"], &[1, 2, 3]);
+    }
+
     /// Wolf's MTDs name character_AMSN.spx, while the binder stores Character_AMSN.shaderbdle and its programs.
     #[test]
     fn a_lowercase_mtd_shader_links_to_the_stored_bundle_and_program_spelling() {
@@ -346,7 +402,7 @@ mod tests {
             }],
         };
         let bundles = Bundles {
-            bundles: BTreeMap::from([(stored.name.clone(), stored)]),
+            bundles: BTreeMap::from([(fold(&stored.name), stored)]),
             ..Default::default()
         };
         assert_eq!(bundles.get(&material.shader).unwrap().name, "Character_AMSN");

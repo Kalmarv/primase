@@ -364,7 +364,7 @@ pub(super) fn material_definitions(
     let mut definitions = BTreeMap::new();
     for f in Binder::read(&archive.read("/mtd/allmaterialbnd.mtdbnd.dcx", decoder)?, decoder)?.files {
         let name = f.name.as_deref().unwrap_or("");
-        if name.to_lowercase().ends_with(".mtd") {
+        if crate::names::fold(name).ends_with(".mtd") {
             definitions.insert(
                 materials::stem(name),
                 MaterialDefinition::read(&decoder.decode_if_dcx(&f.bytes)?)?,
@@ -404,7 +404,7 @@ fn material_binaries(
         }
         for f in Binder::read(&archive.read(path, decoder)?, decoder)?.files {
             let name = f.name.as_deref().unwrap_or("");
-            if !name.to_ascii_lowercase().ends_with(".matbin") {
+            if !crate::names::fold(name).ends_with(".matbin") {
                 continue;
             }
             let material = crate::matbin::Material::read(&decoder.decode_if_dcx(&f.bytes)?)
@@ -577,10 +577,10 @@ pub fn read_game_area(
                     .rsplit(['/', '\\'])
                     .next()
                     .is_some_and(|s| {
-                        s.eq_ignore_ascii_case(leaf)
+                        crate::names::fold(s) == crate::names::fold(leaf)
                             || dcx
                                 && s.strip_suffix(".dcx")
-                                    .is_some_and(|s| s.eq_ignore_ascii_case(leaf))
+                                    .is_some_and(|s| crate::names::fold(s) == crate::names::fold(leaf))
                     })
             })
         };
@@ -602,7 +602,7 @@ pub fn read_game_area(
                         let name = f.name.as_deref().unwrap_or("");
                         let leaf = name.rsplit(['/', '\\']).next().unwrap_or(name);
                         let leaf = leaf.strip_suffix(".dcx").unwrap_or(leaf);
-                        leaf.eq_ignore_ascii_case(&source.member)
+                        crate::names::fold(leaf) == crate::names::fold(&source.member)
                     })
                     .map(|f| decoder.decode_if_dcx(&f.bytes))
                     .transpose()?,

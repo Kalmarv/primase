@@ -81,7 +81,7 @@ pub fn read_param(install: &Install, archive: &Archive, decoder: &Decoder<'_>, l
             f.name
                 .as_deref()
                 .and_then(|n| n.rsplit(['/', '\\']).next())
-                .is_some_and(|n| n.eq_ignore_ascii_case(leaf))
+                .is_some_and(|n| crate::names::fold(n) == crate::names::fold(leaf))
         })
         .ok_or_else(|| invalid(FORMAT, 0, format!("the param binder holds no {leaf}")))?;
     Param::read(&file.bytes)

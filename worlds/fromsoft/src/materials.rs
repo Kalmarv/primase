@@ -26,7 +26,7 @@ pub fn address(tiling: flver::Tiling) -> Option<primase_core::shader::AddressMod
 
 pub fn stem(path: &str) -> String {
     let leaf = path.rsplit(['/', '\\']).next().unwrap_or(path);
-    leaf.rsplit_once('.').map_or(leaf, |x| x.0).to_lowercase()
+    crate::names::fold(leaf.rsplit_once('.').map_or(leaf, |x| x.0))
 }
 fn leaf_stem(path: &str) -> String {
     let leaf = path.rsplit(['/', '\\']).next().unwrap_or(path);

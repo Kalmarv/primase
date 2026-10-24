@@ -47,7 +47,7 @@ impl NameDictionary {
             if !s.is_ascii() {
                 return Err(invalid("dictionary", i, "non-ASCII archive path unsupported"));
             }
-            let mut s = s.replace('\\', "/").to_ascii_lowercase();
+            let mut s = crate::names::fold(s).replace('\\', "/");
             if !s.starts_with('/') {
                 s.insert(0, '/');
             }

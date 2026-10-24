@@ -45,7 +45,7 @@ impl PathHash {
 }
 /// The UTF-16 units of `path` as the hashes read it: lowercase, slashes, a leading slash.
 fn hashed_units(path: &str) -> impl Iterator<Item = u16> {
-    let path = path.to_lowercase().replace('\\', "/");
+    let path = crate::names::fold(path).replace('\\', "/");
     let lead = (!path.starts_with('/')).then_some(u16::from(b'/'));
     lead.into_iter().chain(path.encode_utf16().collect::<Vec<_>>())
 }

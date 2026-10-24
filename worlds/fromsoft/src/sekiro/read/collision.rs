@@ -36,23 +36,22 @@ pub struct Report {
 }
 
 fn leaf(name: &str) -> String {
+    let name = crate::names::fold(name);
     name.rsplit(['/', '\\'])
         .next()
-        .unwrap_or(name)
+        .unwrap_or(&name)
         .trim_end_matches(".dcx")
-        .to_ascii_lowercase()
+        .to_owned()
 }
 
 /// The file of the area's collision binder that collision model `model` names (`h533700` in `m60_53_37_00`:
 /// `h60_53_37_00_533700.hkx`, lowercase as [`leaf`] compares the binder's names), `None` for a model not named `h<n>`.
 /// The `h` is matched in either case, as the game's names are not case-sensitive: Elden Ring's m60_53_37_00 names one
-/// of its six collision models `H533700`. (FromSoftware names are to be folded by one shared rule, round 8's R8-C;
-/// this match is the one this reader makes.)
+/// of its six collision models `H533700`.
 fn collision_file(area: &str, model: &str) -> Option<String> {
-    let (first, suffix) = model.split_at_checked(1)?;
-    first
-        .eq_ignore_ascii_case("h")
-        .then(|| format!("h{}_{suffix}.hkx", &area[1..]).to_ascii_lowercase())
+    let model = crate::names::fold(model);
+    let suffix = model.strip_prefix('h')?;
+    Some(crate::names::fold(&format!("h{}_{suffix}.hkx", &area[1..])))
 }
 
 /// Read every collision file the area's MSB collision parts name, of every hit filter, as `fromsoft.map_collision`

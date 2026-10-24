@@ -1,7 +1,7 @@
 use crate::{Archive, Binder, Result, dcx::Decoder, invalid, materials::stem, tpf::Package};
 use std::collections::{BTreeMap, BTreeSet};
 fn package_stem(path: &str) -> String {
-    let lower = path.to_lowercase();
+    let lower = crate::names::fold(path);
     stem(lower.strip_suffix(".dcx").unwrap_or(&lower))
 }
 pub(super) enum Location {
@@ -54,7 +54,7 @@ impl Catalog {
     pub fn add(&mut self, bytes: &[u8]) -> Result<()> {
         for t in Package::read(bytes)?.textures {
             self.entries
-                .entry(t.name.to_lowercase())
+                .entry(crate::names::fold(&t.name))
                 .or_insert(Location::Inline(t.dds));
         }
         Ok(())
@@ -94,7 +94,7 @@ impl Catalog {
                 let t = package
                     .textures
                     .iter()
-                    .find(|t| t.name.eq_ignore_ascii_case(&name))
+                    .find(|t| crate::names::fold(&t.name) == name)
                     .or_else(|| {
                         if package.textures.len() == 1 {
                             package.textures.first()

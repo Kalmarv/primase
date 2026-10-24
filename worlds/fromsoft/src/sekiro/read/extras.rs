@@ -116,7 +116,7 @@ pub fn assemble(
             )?;
             for file in binder.files {
                 let Some(name) = file.name.as_deref().filter(|s| {
-                    let lower = s.to_ascii_lowercase();
+                    let lower = crate::names::fold(s);
                     lower.strip_suffix(".dcx").unwrap_or(&lower).ends_with(".edge")
                 }) else {
                     continue;

@@ -61,7 +61,7 @@ pub struct Animations {
 
 /// The file's name after its last separator, lowercased.
 fn file_name(name: &str) -> String {
-    name.rsplit(['/', '\\']).next().unwrap_or(name).to_lowercase()
+    crate::names::fold(name.rsplit(['/', '\\']).next().unwrap_or(name))
 }
 
 /// The file's name after its last separator, lowercased, without its extension.
@@ -115,7 +115,7 @@ fn hold(
     let compendium = match binder.files.iter().find(|f| {
         f.name
             .as_deref()
-            .is_some_and(|n| n.to_lowercase().ends_with(".compendium"))
+            .is_some_and(|n| crate::names::fold(n).ends_with(".compendium"))
     }) {
         Some(f) => Some(Compendium::read(&decoder.decode_if_dcx(&f.bytes)?)?),
         None => None,
@@ -126,7 +126,7 @@ fn hold(
     };
     for f in &binder.files {
         let name = f.name.as_deref().unwrap_or("");
-        let lower = name.to_lowercase();
+        let lower = crate::names::fold(name);
         if lower.ends_with(".compendium") {
             continue;
         }

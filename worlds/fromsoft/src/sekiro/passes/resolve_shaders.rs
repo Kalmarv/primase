@@ -203,6 +203,12 @@ fn run(
     let draws = draws(world);
     let mut tally: BTreeMap<&'static str, Tally> = BTreeMap::new();
     let mut policies: BTreeMap<String, u64> = BTreeMap::new();
+    let mut program_names = BTreeMap::new();
+    for (name, code) in programs {
+        program_names
+            .entry(crate::names::fold(name))
+            .or_insert((name, code));
+    }
     for (material_entity, source, kind) in candidates {
         let t = tally.entry(kind.word()).or_default();
         let material = match (&source.layered, source.view()) {
@@ -218,10 +224,9 @@ fn run(
         let game = bundle.map_or(crate::Game::Sekiro, |b| b.game);
         let requested = material.pass_program();
         // the layered programs the reader kept (DXBC), else the one the shader's bundle holds under that name
-        let found = programs
-            .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case(&requested))
-            .map(|(name, code)| (name.clone(), ShaderFormat::Dxbc, code.clone()))
+        let found = program_names
+            .get(&crate::names::fold(&requested))
+            .map(|&(name, code)| (name.clone(), ShaderFormat::Dxbc, code.clone()))
             .or_else(|| {
                 bundle
                     .and_then(|b| b.program(&requested))
