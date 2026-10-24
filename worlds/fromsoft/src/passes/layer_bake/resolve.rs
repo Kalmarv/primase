@@ -782,6 +782,7 @@ pub fn resolve(
             inputs,
             constants,
             textures: bindings,
+            buffers: Vec::new(),
             outputs,
         },
         policies,
@@ -1001,6 +1002,7 @@ pub fn resolve_vertex(interface: &Interface, entity: Entity) -> Result<StageBind
         inputs,
         constants,
         textures: Vec::new(),
+        buffers: Vec::new(),
         outputs: Vec::new(),
     })
 }

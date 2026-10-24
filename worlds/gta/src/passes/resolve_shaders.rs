@@ -675,6 +675,7 @@ impl ResolveGtaShaders {
             inputs: in_roles,
             constants,
             textures,
+            buffers: Vec::new(),
             outputs,
         })
     }

@@ -173,6 +173,7 @@ mod tests {
             inputs: Vec::new(),
             constants: Vec::new(),
             textures: Vec::new(),
+            buffers: Vec::new(),
             outputs: Vec::new(),
         }
     }

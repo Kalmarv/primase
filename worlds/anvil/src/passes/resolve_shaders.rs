@@ -1003,6 +1003,7 @@ impl ResolveAnvilShaders {
             inputs,
             constants,
             textures: bindings,
+            buffers: Vec::new(),
             outputs,
         }
     }

@@ -289,6 +289,7 @@ fn stage_binding(
         inputs,
         constants,
         textures,
+        buffers: Vec::new(),
         outputs,
     }
 }

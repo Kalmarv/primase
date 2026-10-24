@@ -5,7 +5,7 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{Interface, Label, ResourceId, ResourceKind, Shader, Stage};
+use super::{BufferKind, Interface, Label, ResourceId, ResourceKind, Shader, Stage};
 use crate::TextureLayers;
 use crate::components::{Semantic, Texture, TextureFile};
 use crate::json::JsonError;
@@ -296,6 +296,47 @@ pub struct TextureBinding {
     pub source: TextureSource,
 }
 
+/// One buffer slot: a buffer resource of the shader (a structured, raw or typed buffer a program indexes at run time) and
+/// what the source binds to it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct BufferBinding {
+    pub resource: ResourceId,
+    pub source: BufferSource,
+}
+
+/// What a buffer slot holds.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BufferSource {
+    /// A table of the draw's own data, by what it holds: the consumer fills it from the draw it makes.
+    Table(BufferTable),
+    /// Nothing is known of the contents and the source says why: a consumer states the stand-in it uses, and never
+    /// reads the buffer as zeros without saying so (as [`TextureSource::Missing`] for a texture, or an unknown
+    /// constant).
+    Unknown { why: String },
+}
+
+/// A table of the draw's data a program reads from a buffer.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum BufferTable {
+    /// The matrices of the draw: the same content as [`ObjectParameter::BonePalette`] (the object-to-world transforms,
+    /// in the engine's own order, each `rows` rows of four floats: three for an affine transform without its last row,
+    /// four for a full matrix) in a buffer instead of constants, and with that role's row convention. They lie one
+    /// matrix after another, so element `i` of the buffer is row `i % rows` of matrix `i / rows`; the elements are
+    /// four floats, 16 bytes.
+    ObjectMatrices { rows: u8 },
+    /// One record per instance drawn, `stride` 32-bit words each, in instance order: word `matrix_start` of a record is
+    /// the index, in elements of the table `matrices` (a [`BufferTable::ObjectMatrices`] of the same stage), of the
+    /// instance's first row. The program adds the indices of the matrices it takes (a joint's, a model's own) to it.
+    Instances {
+        stride: u8,
+        matrix_start: u8,
+        matrices: ResourceId,
+    },
+}
+
 /// Where a normal vector is expressed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -540,6 +581,9 @@ pub struct StageBinding {
     pub inputs: Vec<InputBinding>,
     pub constants: Vec<ConstantBinding>,
     pub textures: Vec<TextureBinding>,
+    /// The buffers the program indexes at run time (tables of the draw's matrices and instances), for a source that
+    /// states them; empty for a source that does not, and a buffer no entry names is one nothing is known of.
+    pub buffers: Vec<BufferBinding>,
     pub outputs: Vec<OutputBinding>,
 }
 
@@ -914,6 +958,85 @@ impl StageBinding {
                 }
             }
         }
+        self.verify_buffers(interface).map_err(at)
+    }
+
+    /// The buffer slots: each a buffer of the shader, bound once, a matrix table of 16-byte elements, and an instance
+    /// table whose records fit its stride and name a matrix table of this stage.
+    fn verify_buffers(&self, interface: &Interface) -> Result<(), String> {
+        let kind = |id: ResourceId| match interface.resource(id).map(|r| &r.kind) {
+            Some(ResourceKind::Buffer(kind)) => Some(*kind),
+            _ => None,
+        };
+        for (n, b) in self.buffers.iter().enumerate() {
+            let Some(buffer) = kind(b.resource) else {
+                return Err(format!("resource {} is not a buffer", b.resource.0));
+            };
+            if self.buffers[..n]
+                .iter()
+                .any(|before| before.resource == b.resource)
+            {
+                return Err(format!("buffer slot {} is bound twice", b.resource.0));
+            }
+            match &b.source {
+                BufferSource::Unknown { why } if why.is_empty() => {
+                    return Err(format!(
+                        "buffer slot {} is unknown and says not why",
+                        b.resource.0
+                    ));
+                }
+                BufferSource::Unknown { .. } => {}
+                BufferSource::Table(BufferTable::ObjectMatrices { rows }) => {
+                    if !(3..=4).contains(rows) {
+                        return Err(format!(
+                            "buffer slot {} holds matrices of {rows} rows, not 3 or 4",
+                            b.resource.0
+                        ));
+                    }
+                    if let BufferKind::Structured { stride } = buffer
+                        && stride != 16
+                    {
+                        return Err(format!(
+                            "buffer slot {} holds matrix rows of 16 bytes and has elements of {stride}",
+                            b.resource.0
+                        ));
+                    }
+                }
+                BufferSource::Table(BufferTable::Instances {
+                    stride,
+                    matrix_start,
+                    matrices,
+                }) => {
+                    if *stride == 0 || matrix_start >= stride {
+                        return Err(format!(
+                            "buffer slot {} holds instance records of {stride} words and names word {matrix_start}",
+                            b.resource.0
+                        ));
+                    }
+                    if let BufferKind::Structured { stride: bytes } = buffer
+                        && bytes != u32::from(*stride) * 4
+                    {
+                        return Err(format!(
+                            "buffer slot {} holds instance records of {stride} words and has elements of {bytes} bytes",
+                            b.resource.0
+                        ));
+                    }
+                    let is_matrices = |other: &BufferBinding| {
+                        other.resource == *matrices
+                            && matches!(
+                                other.source,
+                                BufferSource::Table(BufferTable::ObjectMatrices { .. })
+                            )
+                    };
+                    if !self.buffers.iter().any(is_matrices) {
+                        return Err(format!(
+                            "buffer slot {} names slot {} for its matrices, which is no matrix table of this stage",
+                            b.resource.0, matrices.0
+                        ));
+                    }
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -1238,6 +1361,7 @@ mod tests {
                         },
                     },
                 }],
+                buffers: Vec::new(),
                 outputs: vec![
                     OutputBinding {
                         label: Label {
@@ -1263,6 +1387,126 @@ mod tests {
             state: RenderState::default(),
         }
     }
+    /// A vertex shader with a constant buffer (0) and structured buffers of 16 (10), 8 (11) and 12 (12) bytes an element.
+    fn buffer_shader() -> Shader {
+        let structured =
+            |id, stride| resource(id, Kind::Buffer(crate::shader::BufferKind::Structured { stride }));
+        Shader {
+            format: ShaderFormat::Dxbc,
+            bytecode: vec![0; 8],
+            interface: Interface {
+                stage: Stage::Vertex,
+                inputs: Vec::new(),
+                outputs: Vec::new(),
+                resources: vec![
+                    resource(
+                        0,
+                        Kind::ConstantBuffer {
+                            layout: BufferLayout {
+                                size: 16,
+                                constants: Vec::new(),
+                            },
+                        },
+                    ),
+                    structured(10, 16),
+                    structured(11, 8),
+                    structured(12, 12),
+                ],
+                facts: Default::default(),
+            },
+        }
+    }
+    fn buffer_binding(shader: Entity, buffers: Vec<BufferBinding>) -> ShaderBinding {
+        ShaderBinding {
+            stages: vec![StageBinding {
+                stage: Stage::Vertex,
+                variant: None,
+                shader,
+                inputs: Vec::new(),
+                constants: Vec::new(),
+                textures: Vec::new(),
+                buffers,
+                outputs: Vec::new(),
+            }],
+            state: RenderState::default(),
+        }
+    }
+    fn matrices(resource: u32, rows: u8) -> BufferBinding {
+        BufferBinding {
+            resource: ResourceId(resource),
+            source: BufferSource::Table(BufferTable::ObjectMatrices { rows }),
+        }
+    }
+    fn instances(resource: u32, stride: u8, matrix_start: u8, table: u32) -> BufferBinding {
+        BufferBinding {
+            resource: ResourceId(resource),
+            source: BufferSource::Table(BufferTable::Instances {
+                stride,
+                matrix_start,
+                matrices: ResourceId(table),
+            }),
+        }
+    }
+
+    /// The buffer slots: a matrix table and the instance records that index it verify, each rule broken once is named,
+    /// and the roles serialize under their own names.
+    #[test]
+    fn buffer_slots_name_the_tables_the_program_indexes() {
+        let mut w = World::new();
+        let (s, m) = (w.spawn(), w.spawn());
+        w.insert(s, buffer_shader());
+        let good = vec![matrices(10, 3), instances(11, 2, 0, 10)];
+        w.insert(m, buffer_binding(s, good.clone()));
+        assert_eq!(w.get::<ShaderBinding>(m).unwrap().verify(m, &w), Ok(()));
+        let json = w.get::<ShaderBinding>(m).unwrap().to_json().unwrap().unwrap();
+        assert_eq!(
+            json["stages"][0]["buffers"][0]["source"],
+            serde_json::json!({"table": {"object_matrices": {"rows": 3}}})
+        );
+        assert_eq!(
+            json["stages"][0]["buffers"][1]["source"],
+            serde_json::json!({"table": {"instances": {"stride": 2, "matrix_start": 0, "matrices": 10}}})
+        );
+        let unknown = |why: &str| BufferBinding {
+            resource: ResourceId(12),
+            source: BufferSource::Unknown { why: why.into() },
+        };
+        let cases: Vec<(Vec<BufferBinding>, &str)> = vec![
+            (vec![matrices(0, 3)], "is not a buffer"),
+            (vec![matrices(99, 3)], "is not a buffer"),
+            (vec![matrices(10, 3), matrices(10, 4)], "bound twice"),
+            (vec![matrices(10, 5)], "not 3 or 4"),
+            (vec![matrices(11, 3)], "has elements of 8"),
+            (vec![matrices(10, 3), instances(11, 2, 2, 10)], "names word 2"),
+            (vec![matrices(10, 3), instances(11, 0, 0, 10)], "names word 0"),
+            (
+                vec![matrices(10, 3), instances(11, 3, 0, 10)],
+                "has elements of 8 bytes",
+            ),
+            (
+                vec![matrices(10, 3), instances(11, 2, 0, 12)],
+                "no matrix table of this stage",
+            ),
+            (vec![instances(11, 2, 0, 10)], "no matrix table of this stage"),
+            (
+                vec![matrices(10, 3), instances(11, 2, 0, 11)],
+                "no matrix table of this stage",
+            ),
+            (vec![unknown("")], "says not why"),
+        ];
+        for (buffers, message) in cases {
+            w.insert(m, buffer_binding(s, buffers.clone()));
+            let err = w.get::<ShaderBinding>(m).unwrap().verify(m, &w).unwrap_err();
+            assert!(err.contains(message), "{buffers:?}: {err}");
+        }
+        // an unknown buffer with a reason, beside a table, is a binding
+        w.insert(
+            m,
+            buffer_binding(s, vec![matrices(10, 4), unknown("the engine fills it")]),
+        );
+        assert_eq!(w.get::<ShaderBinding>(m).unwrap().verify(m, &w), Ok(()));
+    }
+
     /// A world with a shader, a texture and a material carrying the binding built from them.
     fn world() -> (World, Entity, Entity, Entity) {
         let mut w = World::new();
