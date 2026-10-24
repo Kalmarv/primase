@@ -196,13 +196,9 @@ pub(crate) fn textures_of(interface: &Interface) -> impl Iterator<Item = &Resour
         .filter(|r| matches!(r.kind, ResourceKind::Texture { .. }))
 }
 
-/// A resource's `Texture2D_<slot>` number.
+/// A program resource's `Texture2D_<n>` number, by the one parse of it ([`crate::metaparam::texture_number`]).
 fn texture_slot(resource: &Resource) -> Option<u32> {
-    resource
-        .provenance
-        .name
-        .rsplit_once("Texture2D_")
-        .and_then(|(_, s)| s.parse::<u32>().ok())
+    crate::metaparam::texture_number(&resource.provenance.name)
 }
 
 /// A resource's D3D register.
@@ -1356,7 +1352,7 @@ fn sat_words(game: crate::Game, p: &crate::metaparam::MtdParam, value: &[f32], i
 
 #[cfg(test)]
 mod tests {
-    use super::{centred, sat_words, slot_name};
+    use super::{centred, sat_words, slot_name, texture_slot};
     use crate::Game;
     use crate::metaparam::MtdParam;
 
@@ -1371,6 +1367,37 @@ mod tests {
             colour: matches!(value_type, 12 | 13),
             key: 0,
             default: [1.; 5],
+        }
+    }
+
+    /// A program's texture is numbered as a material key is: the digits after its first `Texture2D_`, whatever follows
+    /// them.
+    #[test]
+    fn a_program_texture_is_numbered_as_a_material_key_is() {
+        use primase_core::shader::{
+            Resource, ResourceId, ResourceKind, ResourceProvenance, SampleType, TextureDim,
+        };
+        let resource = |name: &str| Resource {
+            id: ResourceId(0),
+            kind: ResourceKind::Texture {
+                dim: TextureDim::D2,
+                arrayed: false,
+                multisampled: false,
+                sample: SampleType::Float,
+            },
+            count: 1,
+            provenance: ResourceProvenance {
+                name: name.into(),
+                ..Default::default()
+            },
+        };
+        for (name, number) in [
+            ("C_DetailBlend_snp_0_Texture2D_7", Some(7)),
+            ("C_DetailBlend_snp_0_Texture2D_7_A", Some(7)),
+            ("g_Texture2D_x", None),
+            ("g_DitherTexture", None),
+        ] {
+            assert_eq!(texture_slot(&resource(name)), number, "{name}");
         }
     }
 
