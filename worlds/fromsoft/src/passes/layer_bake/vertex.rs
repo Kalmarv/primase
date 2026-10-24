@@ -12,7 +12,7 @@ use super::binding::{FrozenFrame, Inputs, TEXTURE_SCROLL_POLICY, frozen_words};
 use super::resolve::{layer_channels, register};
 use crate::{Result, invalid};
 use primase_core::Semantic;
-use primase_core::shader::{ConstantRole, InputRole, Shader as CoreShader, StageBinding};
+use primase_core::shader::{ConstantRole, InputRole, LaneStream, Shader as CoreShader, StageBinding};
 use primase_shader::{Interface, Varying};
 use primase_shader_exec::ProgramShader;
 use primase_shader_exec::{Input, Lane, PixelShader, Sampler};
@@ -32,6 +32,8 @@ enum Feed {
     Normal,
     /// The stored tangent bytes of the x axis, positive handedness.
     Tangent,
+    /// The tangent's w byte alone (its sign), positive handedness: the input of its own the cloth permutations read.
+    TangentSign,
     /// The packed texture coordinates: both sets the grid's.
     TexCoords,
     /// The Byte4C layer member of that index, its lanes the level's bake inputs.
@@ -170,7 +172,42 @@ impl VertexStage {
                     policies.insert(COLOUR1_POLICY.into(), 1);
                     Feed::Colour1
                 }
-                InputRole::Lanes(_) => Feed::TexCoords,
+                InputRole::Lanes(lanes) => match lanes.as_slice() {
+                    // the packed pair of coordinate sets
+                    [
+                        LaneStream {
+                            semantic: Semantic::TexCoord(0),
+                            first: 0,
+                            count: 2,
+                            component: 0,
+                        },
+                        LaneStream {
+                            semantic: Semantic::TexCoord(1),
+                            first: 2,
+                            count: 2,
+                            component: 0,
+                        },
+                    ] => Feed::TexCoords,
+                    // the tangent's w as an input of its own
+                    [
+                        LaneStream {
+                            semantic: Semantic::Tangent,
+                            first: 0,
+                            count: 1,
+                            component: 3,
+                        },
+                    ] => Feed::TangentSign,
+                    other => {
+                        return Err(invalid(
+                            "vertex binding",
+                            0,
+                            format!(
+                                "input {}{} has lanes the bake cannot feed: {other:?}",
+                                label.0, label.1
+                            ),
+                        ));
+                    }
+                },
                 InputRole::System => Feed::Instance,
                 InputRole::Unknown { why }
                     if matches!((label.0.as_str(), label.1), ("BINORMAL", 0) | ("TANGENT", 2)) =>
@@ -249,6 +286,7 @@ impl VertexStage {
                 Feed::Position | Feed::Instance => [0; 4],
                 Feed::Normal => [127, 254, 127, 0],
                 Feed::Tangent => [254, 127, 127, 254],
+                Feed::TangentSign => [254, 0, 0, 0],
                 Feed::TexCoords => {
                     let raw = |u: u32| (u * 2048) as i32 as u32;
                     [raw(uv[0]), raw(uv[1]), raw(uv[0]), raw(uv[1])]
@@ -399,6 +437,54 @@ mod tests {
         };
         let binding = resolve_vertex(&shader, entity).unwrap().stage;
         VertexStage::new(&shader, &binding, false, frame)
+    }
+
+    const CLOTH: &[u8] = include_bytes!("../../../tests/fixtures/layered_cloth_vs.dxbc");
+
+    /// The cloth permutation's one-byte BINORMAL0 is the tangent's w, fed as a sign byte: not a texture coordinate, which
+    /// the lanes of the packed pair are. A lane of another component, or of another attribute, is refused by name.
+    #[test]
+    fn a_tangent_component_lane_is_fed_the_tangent_sign_and_no_coordinate() {
+        let interface = primase_dxbc::reflection(CLOTH).unwrap();
+        let shader = CoreShader {
+            format: ShaderFormat::Dxbc,
+            bytecode: CLOTH.to_vec(),
+            interface,
+        };
+        let entity = World::default().spawn();
+        let mut binding = resolve_vertex(&shader, entity).unwrap().stage;
+        let frame = FrozenFrame::static_bake(0.);
+        let planned = VertexStage::new(&shader, &binding, false, &frame).unwrap();
+        let sign: Vec<_> = planned
+            .attributes
+            .iter()
+            .filter(|a| matches!(a.feed, Feed::TangentSign))
+            .collect();
+        assert_eq!(sign.len(), 1);
+        let params = Inputs::default();
+        for registers in planned.corners(&params) {
+            // the byte of a positive sign in the lane the input has, whatever corner of the cell the run is at
+            assert_eq!(registers[sign[0].register][0], 254);
+        }
+        // the same input with a lane of the tangent's z is a value the bake does not know
+        let label = binding
+            .inputs
+            .iter()
+            .position(|i| i.label.name.eq_ignore_ascii_case("BINORMAL"))
+            .unwrap();
+        binding.inputs[label].role = InputRole::Lanes(vec![LaneStream {
+            semantic: Semantic::Tangent,
+            first: 0,
+            count: 1,
+            component: 2,
+        }]);
+        let refused = VertexStage::new(&shader, &binding, false, &frame)
+            .err()
+            .expect("refused");
+        assert!(
+            refused.to_string().contains("lanes the bake cannot feed"),
+            "{refused}"
+        );
     }
 
     fn lanes(input: &Input) -> [Lane; 4] {

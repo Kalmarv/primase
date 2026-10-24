@@ -39,6 +39,9 @@ const RELATIVE_PROGRAM: &[u8] = include_bytes!("fixtures/layered_rel_vs.dxbc");
 /// longer gives the position back.
 const OFFSET_PROGRAM: &[u8] = include_bytes!("fixtures/layered_off_vs.dxbc");
 
+/// layered_vs.dxbc with the cloth permutation's shape (tests/fixtures/layered_vs.hlsl, CLOTH).
+const CLOTH_PROGRAM: &[u8] = include_bytes!("fixtures/layered_cloth_vs.dxbc");
+
 /// A DXBC vertex program as the pass holds it.
 fn dxbc_shader(bytes: &[u8], interface: primase_core::shader::Interface) -> Shader {
     Shader {
@@ -638,12 +641,14 @@ fn a_vertex_program_is_bound_to_streams_and_engine_roles() {
                     LaneStream {
                         semantic: Semantic::TexCoord(0),
                         first: 0,
-                        count: 2
+                        count: 2,
+                        component: 0
                     },
                     LaneStream {
                         semantic: Semantic::TexCoord(1),
                         first: 2,
-                        count: 2
+                        count: 2,
+                        component: 0
                     }
                 ])
             ),
@@ -764,6 +769,52 @@ fn the_view_projection_is_camera_relative_where_the_program_subtracts_the_camera
     assert_eq!(
         role_of(SKIN_PROGRAM),
         ConstantRole::View(ViewParameter::ViewProjection)
+    );
+}
+
+/// The cloth permutation's inputs and switch: BINORMAL0 is the tangent's w as a byte of an input of its own, POSITION1 is
+/// declared and never read (a value-graph fact), and the switch constant is the cloth simulation role.
+#[test]
+fn the_cloth_permutations_inputs_and_switch_are_stated() {
+    let interface = primase_dxbc::reflection(CLOTH_PROGRAM).unwrap();
+    let entity = World::default().spawn();
+    let stage =
+        primase_fromsoft::layer_bake::resolve::resolve_vertex(&dxbc_shader(CLOTH_PROGRAM, interface), entity)
+            .unwrap()
+            .stage;
+    let role = |name: &str| {
+        stage
+            .inputs
+            .iter()
+            .find(|i| format!("{}{}", i.label.name, i.label.index) == name)
+            .map(|i| i.role.clone())
+            .unwrap()
+    };
+    assert_eq!(
+        role("BINORMAL0"),
+        InputRole::Lanes(vec![LaneStream {
+            semantic: Semantic::Tangent,
+            first: 0,
+            count: 1,
+            component: 3,
+        }])
+    );
+    assert_eq!(
+        role("POSITION1"),
+        InputRole::Unknown {
+            why: "declared by the program and never read".into()
+        }
+    );
+    // the streams the program does read keep theirs
+    assert_eq!(role("POSITION0"), InputRole::Stream(Semantic::Position));
+    let switch = stage
+        .constants
+        .iter()
+        .find(|c| c.name.as_deref() == Some("VC_isEnableCloth"))
+        .unwrap();
+    assert_eq!(
+        switch.role,
+        ConstantRole::Object(ObjectParameter::ClothSimulation)
     );
 }
 

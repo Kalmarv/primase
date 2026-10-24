@@ -223,6 +223,28 @@ pub fn palette_indexed_by_vertex(program: &Program, buffer: ResourceId) -> Resul
     Ok(false)
 }
 
+/// The inputs of `shader` its value graph reads, by label (the name in capitals and the index): an input declared and
+/// never read is not in it. `Err` when the graph cannot be built.
+pub fn inputs_read(shader: &Shader) -> Result<BTreeSet<(String, u32)>, String> {
+    let program = lift(shader)?;
+    let values = Values::of_program(&program).map_err(|e| format!("the value graph: {e}"))?;
+    let mut pending: Vec<NodeId> = values.outputs().values().copied().collect();
+    pending.extend(values.discards().iter().flatten().copied());
+    let mut seen = BTreeSet::new();
+    let mut read = BTreeSet::new();
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        if let Node::Input { input, .. } = values.node(id) {
+            let label = &program.interface.inputs[*input].label;
+            read.insert((label.name.to_ascii_uppercase(), label.index));
+        }
+        pending.extend(values.operands(id));
+    }
+    Ok(read)
+}
+
 /// The lifted program of `shader` (for callers that read its value graph beside the run).
 pub fn lifted(shader: &Shader) -> Result<Program, String> {
     lift(shader)

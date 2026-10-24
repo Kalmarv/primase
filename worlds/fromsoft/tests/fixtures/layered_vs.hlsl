@@ -6,6 +6,10 @@
 //   fxc /T vs_5_0 /E main /Fo layered_vs.dxbc layered_vs.hlsl
 //   fxc /T vs_5_0 /E main /D RELATIVE /Fo layered_rel_vs.dxbc layered_vs.hlsl
 //   fxc /T vs_5_0 /E main /D OFFSET /Fo layered_off_vs.dxbc layered_vs.hlsl
+//   fxc /T vs_5_0 /E main /D CLOTH /Fo layered_cloth_vs.dxbc layered_vs.hlsl
+// With CLOTH the program has the cloth permutation's shape: the switch VC_isEnableCloth (cbMatDynParam) chooses between the
+// palette and the instance's world rows, the tangent's w comes from a one-byte BINORMAL0 input, and POSITION1 is declared
+// and never read.
 // With OFFSET a constant is added to the clip position, so the identity matrix does not give the position back (a program
 // the camera probe cannot decide).
 // With RELATIVE the clip position takes the camera away from the world position first, as most programs of Elden Ring do.
@@ -19,6 +23,13 @@ cbuffer cbInstanceData : register(b4)
 {
     Instance VC_InstanceData[2];
 };
+#ifdef CLOTH
+cbuffer cbMatDynParam : register(b2)
+{
+    float4 VC_pad;
+    bool VC_isEnableCloth;
+};
+#endif
 cbuffer cbObjMatrix : register(b5)
 {
     float4 VC_aObjMatrix[12];
@@ -52,6 +63,10 @@ struct Input
     float4 m4 : TEXCOORD4;
     float4 m5 : TEXCOORD5;
     float4 m6 : TEXCOORD6;
+#ifdef CLOTH
+    uint binormal : BINORMAL0;
+    float3 position1 : POSITION1;
+#endif
     uint instance : SV_InstanceID;
 };
 struct Output
@@ -71,7 +86,13 @@ Output main(Input i)
     Output o;
     uint k = (i.instance + VC_InstanceData[0].matricesData.x) * 3;
     float4 p = float4(i.position, 1);
+#ifdef CLOTH
+    float4 w = VC_isEnableCloth
+        ? float4(dot(VC_InstanceData[0].mWorld[0], p), dot(VC_InstanceData[0].mWorld[1], p), dot(VC_InstanceData[0].mWorld[2], p), 1)
+        : float4(dot(VC_aObjMatrix[k], p), dot(VC_aObjMatrix[k + 1], p), dot(VC_aObjMatrix[k + 2], p), 1);
+#else
     float4 w = float4(dot(VC_aObjMatrix[k], p), dot(VC_aObjMatrix[k + 1], p), dot(VC_aObjMatrix[k + 2], p), 1);
+#endif
 #ifdef RELATIVE
     o.clip = mul(VC_MatrixViewProj, float4(w.xyz - SC_CameraPos.xyz, 1));
 #elif defined(OFFSET)
@@ -82,7 +103,11 @@ Output main(Input i)
     o.world = w + SC_CameraPos * FC_ScreenSize + mul(FC_MatrixView, w) * FC_ShadowColor + VC_InstanceData[i.instance & 1].userClipPlane;
     // the stored bytes as the real program decodes them: (byte - 127) / 127
     o.normal = float4((float3(i.normal.xyz) - 127.0) * 0.007874016, 0);
+#ifdef CLOTH
+    o.tangent = float4((float3(i.tangent.xyz) - 127.0) * 0.007874016, (float(i.binormal) - 127.0) * 0.007874016);
+#else
     o.tangent = float4((float3(i.tangent.xyz) - 127.0) * 0.007874016, (float(i.tangent.w) - 127.0) * 0.007874016);
+#endif
     o.uv = float4(float2(i.uv.xy) * VC_TexScroll_0.xy / 2048.0 + VC_TexScroll_0.zw,
                   float2(i.uv.zw) * VC_TexScroll_1.xy / 2048.0 + VC_TexScroll_1.zw);
     o.weights = float4(i.m1.x, i.m2.z, i.m4.x, i.m5.y);

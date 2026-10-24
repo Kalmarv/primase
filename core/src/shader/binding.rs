@@ -19,7 +19,8 @@ pub enum InputRole {
     /// A vertex attribute of the drawn mesh.
     Stream(Semantic),
     /// An input whose lanes are different vertex attributes the source packed into one register (two texture
-    /// coordinate sets in one four-lane input): each entry is the attribute and the lanes it fills.
+    /// coordinate sets in one four-lane input), or one component of an attribute the source feeds as an input of its own
+    /// (a tangent's sign as a byte): each entry is the attribute, the components it takes and the lanes it fills.
     Lanes(Vec<LaneStream>),
     /// The value the previous stage wrote under the same label.
     Previous,
@@ -29,13 +30,20 @@ pub enum InputRole {
     Unknown { why: String },
 }
 
-/// The lanes `first..first + count` of an input: the first `count` components of the vertex attribute `semantic`.
+/// The lanes `first..first + count` of an input: `count` components of the vertex attribute `semantic`, from component
+/// `component` (the attribute's own components: x 0, y 1, z 2, w 3), each in the encoding the input's scalar type has, as
+/// the other packed inputs take theirs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 pub struct LaneStream {
     pub semantic: Semantic,
     /// The first lane (0 for x).
     pub first: u8,
     pub count: u8,
+    /// The first component of the attribute lane `first` takes (0 for all but the programs that take one component of an
+    /// attribute apart: Sekiro's and Elden Ring's cloth programs read the tangent's w, the bitangent sign, as the one
+    /// byte of an input named BINORMAL0, as `(byte - 127) / 127` where the other permutations read TANGENT0.w; inferred
+    /// from the program's decode of it, not captured from the game).
+    pub component: u8,
 }
 
 /// A camera or view-wide value.
@@ -134,6 +142,9 @@ pub enum ObjectParameter {
     /// where [`ObjectParameter::MatrixBase`] counts matrices of the palette. A draw of one instance that starts the table
     /// has 0.
     InstanceBase,
+    /// Whether the draw simulates cloth: a nonzero word where the vertex program takes the cloth's matrix instead of the
+    /// palette's. A consumer that draws a static or rest pose states 0, which runs the palette arm.
+    ClothSimulation,
     /// The instance's user clip plane (the vertex program's clip distance against it).
     ClipPlane,
     /// Row `n` (0 or 1) of an animated affine transform of the first texture coordinate set, three values each:

@@ -13,7 +13,7 @@ use primase_core::shader::{
     OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Shader, Stage, StageBinding,
     TargetState, TextureBinding, TextureSource, ViewParameter,
 };
-use primase_shader::{D3dClass, Interface, Resource, SystemValue};
+use primase_shader::{D3dClass, Interface, Resource, ScalarType, SystemValue};
 use primase_shader_exec::ProgramShader;
 use primase_shader_exec::{Layout, PixelShader};
 use std::collections::{BTreeMap, BTreeSet};
@@ -895,9 +895,12 @@ fn texture_scroll_set(name: &str) -> Option<u8> {
 ///   [`super::TEXTURE_SCROLL_POLICY`]); constants the table does not name are not bound;
 /// - no output roles: its outputs reach the pixel stage by label.
 pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> {
-    use super::vertex_probe::{CameraForm, camera_form, flat_constants, lifted, palette_indexed_by_vertex};
+    use super::vertex_probe::{
+        CameraForm, camera_form, flat_constants, inputs_read, lifted, palette_indexed_by_vertex,
+    };
     use primase_core::Semantic;
     let interface = &shader.interface;
+    let read = inputs_read(shader);
     let inputs = interface
         .inputs
         .iter()
@@ -919,11 +922,13 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> 
                         semantic: Semantic::TexCoord(0),
                         first: 0,
                         count: 2,
+                        component: 0,
                     },
                     LaneStream {
                         semantic: Semantic::TexCoord(1),
                         first: 2,
                         count: 2,
+                        component: 0,
                     },
                 ]),
                 ("COLOR", 1, _) => InputRole::Stream(SECOND_COLOUR),
@@ -931,6 +936,25 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> 
                 // the skinned permutation's joint indices and weights
                 ("BLENDINDICES", 0, _) => InputRole::Stream(Semantic::Joints(0)),
                 ("BLENDWEIGHT", 0, _) => InputRole::Stream(Semantic::Weights(0)),
+                // the cloth permutations take the tangent's w, the bitangent sign, as the byte of an input of its own: the
+                // program decodes it, `(byte - 127) / 127`, into the w of the tangent it passes on
+                ("BINORMAL", 0, _) if v.value.width == 1 && v.value.scalar == ScalarType::Uint => {
+                    InputRole::Lanes(vec![LaneStream {
+                        semantic: Semantic::Tangent,
+                        first: 0,
+                        count: 1,
+                        component: 3,
+                    }])
+                }
+                // an input the program declares and the value graph never reads needs no stream
+                _ if read.as_ref().is_ok_and(|read| {
+                    !read.contains(&(v.label.name.to_ascii_uppercase(), v.label.index))
+                }) =>
+                {
+                    InputRole::Unknown {
+                        why: "declared by the program and never read".into(),
+                    }
+                }
                 _ => InputRole::Unknown {
                     why: "no stream of the lowered geometry carries it".into(),
                 },
@@ -991,6 +1015,8 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> 
                 // the instance record's own fields the vertex program reads
                 "matricesData" => ConstantRole::Object(ObjectParameter::MatrixBase),
                 "userClipPlane" => ConstantRole::Object(ObjectParameter::ClipPlane),
+                // the cloth switch of the programs that have a cloth permutation
+                "VC_isEnableCloth" => ConstantRole::Object(ObjectParameter::ClothSimulation),
                 "FC_MatrixProj" => ConstantRole::View(ViewParameter::Projection),
                 // the matrix of a world with the camera at its origin, or of the world itself, as the program's run shows
                 "VC_MatrixViewProj" => match &camera {

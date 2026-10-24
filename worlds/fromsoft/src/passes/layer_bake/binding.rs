@@ -188,6 +188,11 @@ pub const ALPHA_TEST_POLICY: &str =
 pub const BIND_POSE_POLICY: &str =
     "skinning palette frozen to the identity (bind pose); the pixel inputs do not depend on the pose";
 
+/// The policy a consumer counts when it runs a program with a cloth permutation: no cloth is simulated, so the program takes
+/// the position through the palette (the pose of the draw), not through the cloth's matrix.
+pub const CLOTH_OFF_POLICY: &str =
+    "cloth simulation off in the bake: the position goes through the palette, not the cloth's matrix";
+
 /// The words a role's constant is frozen to by `frame`, counting the policy the freezing is (`policies`); `None` for a
 /// role the bake gives no value (the time of day, and an unknown one, counted by its reason): the words stay zero. A
 /// material's own words are the role's own. A role the bake has no value for is an error.
@@ -221,6 +226,10 @@ pub(crate) fn frozen_words(
         ConstantRole::Object(ObjectParameter::MatrixBase) => {
             policies.insert(INSTANCE_DATA_POLICY.into(), 1);
             vec![frame.matrix_base, 0, 0, 0]
+        }
+        ConstantRole::Object(ObjectParameter::ClothSimulation) => {
+            policies.insert(CLOTH_OFF_POLICY.into(), 1);
+            vec![0]
         }
         ConstantRole::Object(ObjectParameter::ClipPlane) => {
             policies.insert(INSTANCE_DATA_POLICY.into(), 1);
