@@ -32,6 +32,7 @@ fn every_asset_collision_file_reads_and_tessellates() -> Result<()> {
         .map(str::to_owned)
         .collect();
     let (mut files, mut externs, mut unread_custom) = (0usize, 0usize, 0usize);
+    let (mut unkeyed_rows, mut placement_dependent) = (0usize, 0usize);
     let mut shapes: BTreeMap<String, usize> = BTreeMap::new();
     let mut failures = Vec::new();
     for path in &paths {
@@ -52,7 +53,11 @@ fn every_asset_collision_file_reads_and_tessellates() -> Result<()> {
             for body in bodies {
                 *shapes.entry(body.shape.clone()).or_default() += 1;
                 match &body.geometry {
-                    BodyGeometry::Mesh(soup) => unread_custom += soup.unread_custom_primitives,
+                    BodyGeometry::Mesh(soup) => {
+                        unread_custom += soup.unread_custom_primitives;
+                        unkeyed_rows += soup.unkeyed_triangle_data;
+                        placement_dependent += soup.placement_dependent_keys;
+                    }
                     BodyGeometry::Convex { instance, .. } => externs += usize::from(instance.is_some()),
                 }
                 match body.geometry.triangles() {
@@ -70,7 +75,7 @@ fn every_asset_collision_file_reads_and_tessellates() -> Result<()> {
     }
     println!(
         "files {files}, bodies by shape {shapes:?}, extern shape instances {externs}, custom primitives of an unknown \
-         kind {unread_custom}, failures {}",
+         kind {unread_custom}, triangle-data rows no key takes {unkeyed_rows}, keys whose material depends on their place {placement_dependent}, failures {}",
         failures.len()
     );
     for f in failures.iter().take(40) {

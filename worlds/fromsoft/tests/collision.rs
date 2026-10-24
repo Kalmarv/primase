@@ -1,7 +1,11 @@
 //! Compare raw collision soups with an independent decoder's (`havok-soup`, one per `havok` tagfile). No smoothing,
 //! surface selection, or frame lowering is part of this raw-file comparison.
 //!
-//! Triangle count, order and material are compared exactly. A position is compared within a bound, because the two
+//! Triangle count and order are compared exactly, and so is every material this reader determines. Where a mesh holds
+//! triangle-data rows no key takes, the oracle places them by vertex-id agreement, which does not determine their place
+//! (a row of new ids agrees with any triangle); this reader gives a key whose candidate rows name different materials
+//! none. Such a triangle must be -1 here and a material in the oracle, and their number must be the soup's count of
+//! placement-dependent keys. A position is compared within a bound, because the two
 //! decoders do the dequantization's arithmetic differently: this one in f32 as the stored values are (a shared vertex's
 //! `min + q * (max - min) / (2^21 - 1)`, three roundings over the domain's extent and one over the result; a packed vertex's
 //! `q * scale + offset`, two), the oracle in f64 rounded once to f32. Neither is shown to be the engine's arithmetic. Over a
@@ -47,6 +51,7 @@ fn castle_raw_soups() -> Result<(), Box<dyn std::error::Error>> {
     let mut count = 0;
     let mut triangles = 0;
     let mut unmapped = 0;
+    let mut placement_dependent = 0;
     let (mut positions, mut inexact, mut widest) = (0, 0, 0f32);
     for path in files.iter().filter(|p| p.extension().is_some_and(|e| e == "hkx")) {
         let soup = collision::read_map(&std::fs::read(path)?, Some(&comp))
@@ -82,11 +87,18 @@ fn castle_raw_soups() -> Result<(), Box<dyn std::error::Error>> {
             widest = widest.max(apart);
         }
         positions += expected.len();
+        let mut undetermined = 0;
         for (i, &actual) in soup.materials.iter().enumerate() {
             let start = 4 + n * 36 + i * 4;
             let expected = i32::from_le_bytes(oracle[start..start + 4].try_into()?);
-            assert_eq!(actual, expected, "{} material {i}", path.display());
+            if actual == -1 && expected != -1 {
+                undetermined += 1;
+            } else {
+                assert_eq!(actual, expected, "{} material {i}", path.display());
+            }
         }
+        assert_eq!(undetermined, soup.placement_dependent_keys, "{}", path.display());
+        placement_dependent += undetermined;
         invalid_keys += soup.invalid_material_keys;
         count += 1;
         triangles += n;
@@ -94,7 +106,7 @@ fn castle_raw_soups() -> Result<(), Box<dyn std::error::Error>> {
     }
     assert!(count > 0);
     eprintln!(
-        "collision files {count}, triangles {triangles}, unmapped {unmapped}, invalid material keys {invalid_keys}: counts, order and materials exact; positions {positions}, {inexact} not exact, widest {widest} * EPSILON * m (bound {BOUND})"
+        "collision files {count}, triangles {triangles}, unmapped {unmapped} ({placement_dependent} of them placement-dependent), invalid material keys {invalid_keys}: counts, order and determined materials exact; positions {positions}, {inexact} not exact, widest {widest} * EPSILON * m (bound {BOUND})"
     );
     Ok(())
 }
