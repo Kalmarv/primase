@@ -679,15 +679,18 @@ pub fn resolve(
                         ParameterPath::Field,
                         &mut policies,
                     );
-                    folded_colour(&p.default, intensity)
+                    folded_colour(game, declared, &p.default, intensity)
                 } else {
-                    p.default.to_vec()
+                    Ok(p.default.to_vec())
                 };
-                let n = (field.words as usize).min(value.len());
                 *policies
                     .entry(ParameterPath::Field.counted("taken from the shader bundle's metaparam default"))
                     .or_default() += 1;
-                constant(name, 0, field.words * 4, words(&value[..n]))?;
+                let role = match value {
+                    Ok(value) => words(&value[..(field.words as usize).min(value.len())]),
+                    Err(why) => ConstantRole::Unknown { why: why.into() },
+                };
+                constant(name, 0, field.words * 4, role)?;
             } else if let Some(p) = metaparam
                 .and_then(|m| m.ca_params.iter().find(|p| p.name == *name))
                 .filter(|_| field.words == 1)
@@ -721,7 +724,18 @@ pub fn resolve(
                 ParameterPath::Field,
                 &mut policies,
             );
-            values = folded_colour(&values, intensity);
+            match folded_colour(game, declared, &values, intensity) {
+                Ok(colour) => values = colour,
+                Err(why) => {
+                    constant(
+                        name,
+                        0,
+                        field.words * 4,
+                        ConstantRole::Unknown { why: why.into() },
+                    )?;
+                    continue;
+                }
+            }
         }
         constant(name, 0, values.len() as u32 * 4, words(&values))?;
     }
@@ -776,13 +790,11 @@ pub fn resolve(
             if colour {
                 value.resize(4, 1.);
             }
-            let mut value = sat_words(game, p, &value, intensity);
+            let value = sat_words(game, p, &value, intensity);
             let lanes = (0..lanes).take_while(|k| read.contains(&(p.start + k))).count();
-            value.truncate(lanes);
+            let lanes = value.as_ref().map_or(lanes, |value| lanes.min(value.len()));
             let start = u64::from(p.start) * 4;
-            let fit = u64::from(buffer_size)
-                .saturating_sub(start)
-                .min(value.len() as u64 * 4) as u32;
+            let fit = u64::from(buffer_size).saturating_sub(start).min(lanes as u64 * 4) as u32;
             if fit == 0 {
                 return Err(invalid(
                     "layer binding",
@@ -790,23 +802,29 @@ pub fn resolve(
                     format!("{}: start word {} beyond its buffer", p.name, p.start),
                 ));
             }
-            value.truncate(fit as usize / 4);
-            if game == crate::Game::EldenRing {
-                let policy = match p.name.as_str() {
-                    "P_ChrCustomize__Eye__snp_0_float3_2" => Some(EYE_COLOUR_DEFAULT_POLICY),
-                    "P_ChrCustomize__Eye__snp_0_float_0" => Some(EYE_SCALAR_DEFAULT_POLICY),
-                    _ => None,
-                };
-                if let Some(policy) = policy {
-                    *policies.entry(policy.to_owned()).or_default() += value.len() as u64;
+            let role = match value {
+                Ok(mut value) => {
+                    value.truncate(fit as usize / 4);
+                    if game == crate::Game::EldenRing {
+                        let policy = match p.name.as_str() {
+                            "P_ChrCustomize__Eye__snp_0_float3_2" => Some(EYE_COLOUR_DEFAULT_POLICY),
+                            "P_ChrCustomize__Eye__snp_0_float_0" => Some(EYE_SCALAR_DEFAULT_POLICY),
+                            _ => None,
+                        };
+                        if let Some(policy) = policy {
+                            *policies.entry(policy.to_owned()).or_default() += value.len() as u64;
+                        }
+                    }
+                    ConstantRole::Material(value)
                 }
-            }
+                Err(why) => ConstantRole::Unknown { why: why.into() },
+            };
             constants.push(ConstantBinding {
                 resource,
                 offset: start as u32,
                 size: fit,
                 name: Some(p.name.clone()),
-                role: ConstantRole::Material(value),
+                role,
                 lines: None,
             });
             sat_bound += 1;
@@ -954,15 +972,38 @@ fn intensity(
     intensity
 }
 
-/// A colour as a program's field holds it: red, green and blue times its `intensity`, alpha as stated (1 where three lanes
-/// are), as Sekiro's [`sat_words`] writes one too.
-fn folded_colour(value: &[f32], intensity: f32) -> Vec<f32> {
+/// Sekiro's captured material colours only distinguish the encoding at unit intensity. A nonunit value is not a
+/// basis for choosing between `pow(c, 2.2) * i` and `pow(c * i, 2.2)`.
+const SEKIRO_COLOUR_ORDER_UNKNOWN: &str = "Sekiro sRGB colour with nonunit intensity: power/intensity ordering unproven (0 candidate-invariant observations)";
+
+/// The named-field and SAT paths share this colour conversion. Alpha is unchanged (1 for a three-lane colour).
+///
+/// Sekiro 1.06 cb11-capture (capture SHA256 3cda409b7013ac8dce24577ae9506dd31ef18e1229961f62e8fab78fa246225c):
+/// query `sekiro-constants-v2/lanes.json`, filter `class == colour_rgb`, count distinct (PS, cb3, field, lane): 84.
+/// All have intensity 1. Six observations (three head colour lanes in two buffers) distinguish pow(2.2) from plain;
+/// 63 match both and 15 remain unattributed. Candidates were selected by PS and cb1 tiling, never cb3 fit. RDEF
+/// member offsets and Values::reached_from of outputs/discards select live words. The metaparam marks this colour
+/// sRGB. No nonunit ordering is established: 273 further reached lane contexts have nonunit candidates, but every
+/// one also has unit-intensity candidates and none has invariant predictions. This is not a census of all materials.
+fn folded_colour(
+    game: crate::Game,
+    declared: Option<&crate::metaparam::MtdParam>,
+    value: &[f32],
+    intensity: f32,
+) -> std::result::Result<Vec<f32>, &'static str> {
+    let srgb = declared.is_some_and(|p| p.srgb);
+    if game == crate::Game::Sekiro && srgb && intensity != 1. {
+        return Err(SEKIRO_COLOUR_ORDER_UNKNOWN);
+    }
     let mut lanes = value.to_vec();
     lanes.resize(4, 1.);
     for v in &mut lanes[..3] {
+        if srgb {
+            *v = v.powf(2.2);
+        }
         *v *= intensity;
     }
-    lanes
+    Ok(lanes)
 }
 
 /// A parameter's value as the floats a constant holds: a boolean 0 or 1, integers as floats.
@@ -1432,37 +1473,21 @@ fn centred([u, v]: [f32; 2]) -> [f32; 4] {
 /// Four lanes of `P[ChrCustomize][Eye]` differ from what the material states (100 / 255 for a stated 0.8): the
 /// character's own colours, set per draw, is likely and not established.
 ///
-/// Sekiro's programs mostly name their parameters as fields; one that reads this array has its values as stated, a
-/// colour's times its intensity: no capture of Sekiro's SAT constants settles their encoding, so the rule above is not
-/// applied to them.
-fn sat_words(game: crate::Game, p: &crate::metaparam::MtdParam, value: &[f32], intensity: f32) -> Vec<u32> {
-    let colour = |lane: usize| p.is_colour() && lane < 3;
-    if game != crate::Game::EldenRing {
-        return value
-            .iter()
-            .enumerate()
-            .map(|(lane, &v)| if colour(lane) { v * intensity } else { v }.to_bits())
-            .collect();
+/// Sekiro's named fields and this path use the same scoped encoding ([`folded_colour`]).
+fn sat_words(
+    game: crate::Game,
+    p: &crate::metaparam::MtdParam,
+    value: &[f32],
+    intensity: f32,
+) -> std::result::Result<Vec<u32>, &'static str> {
+    if p.is_colour() {
+        return folded_colour(game, Some(p), value, intensity)
+            .map(|lanes| lanes.into_iter().map(f32::to_bits).collect());
     }
-    if p.value_type == 0 {
-        return value.iter().map(|&v| (v as i32) as u32).collect();
+    if game == crate::Game::EldenRing && p.value_type == 0 {
+        return Ok(value.iter().map(|&v| (v as i32) as u32).collect());
     }
-    value
-        .iter()
-        .enumerate()
-        .map(|(lane, &v)| {
-            let v = if colour(lane) {
-                if p.srgb {
-                    v.powf(2.2) * intensity
-                } else {
-                    v * intensity
-                }
-            } else {
-                v
-            };
-            v.to_bits()
-        })
-        .collect()
+    Ok(value.iter().map(|v| v.to_bits()).collect())
 }
 
 #[cfg(test)]
@@ -1532,7 +1557,9 @@ mod tests {
     /// a colour without the flag times its intensity only, a bool as the integer's bits.
     #[test]
     fn sat_parameters_are_written_as_the_capture_shows() {
-        let close = |words: Vec<u32>, want: &[f32]| {
+        let close = |words: std::result::Result<Vec<u32>, &str>, want: &[f32]| {
+            let words = words.unwrap();
+            assert_eq!(words.len(), want.len());
             for (w, &e) in words.iter().zip(want) {
                 let got = f32::from_bits(*w);
                 assert!((got - e).abs() <= 2e-6 * e.abs().max(1.), "{got} for {e}");
@@ -1553,24 +1580,40 @@ mod tests {
             &[1., 0.967_288, 0.952_941, 1.],
             3.5,
         );
-        close(fabric[1..3].to_vec(), &[3.253_050_8, 3.147_844_6]);
+        close(Ok(fabric.unwrap()[1..3].to_vec()), &[3.253_050_8, 3.147_844_6]);
         close(
             sat_words(Game::EldenRing, &param(13, false), &[0.5, 0.25, 1., 0.75], 3.),
             &[1.5, 0.75, 3., 0.75],
         );
-        assert_eq!(sat_words(Game::EldenRing, &param(0, false), &[1.], 1.), vec![1]);
+        assert_eq!(
+            sat_words(Game::EldenRing, &param(0, false), &[1.], 1.),
+            Ok(vec![1])
+        );
         assert_eq!(
             sat_words(Game::EldenRing, &param(1, false), &[0.35], 1.),
-            vec![0.35f32.to_bits()]
+            Ok(vec![0.35f32.to_bits()])
         );
-        // Sekiro's: as stated, a colour's times its intensity (not established by a capture)
+        // Sekiro's captured head colour, plus an arbitrary alpha to ensure only RGB is encoded.
         close(
-            sat_words(Game::Sekiro, &param(13, true), &[0.5, 0.25, 1., 0.75], 2.),
+            sat_words(
+                Game::Sekiro,
+                &param(12, true),
+                &[0.776_470_66, 0.721_568_64, 0.721_568_64, 0.75],
+                1.,
+            ),
+            &[0.573_159, 0.487_765_22, 0.487_765_22, 0.75],
+        );
+        assert_eq!(
+            sat_words(Game::Sekiro, &param(12, true), &[0.5, 0.25, 1., 0.75], 2.),
+            Err(super::SEKIRO_COLOUR_ORDER_UNKNOWN),
+        );
+        close(
+            sat_words(Game::Sekiro, &param(12, false), &[0.5, 0.25, 1., 0.75], 2.),
             &[1., 0.5, 2., 0.75],
         );
         assert_eq!(
             sat_words(Game::Sekiro, &param(0, false), &[1.], 1.),
-            vec![1f32.to_bits()]
+            Ok(vec![1f32.to_bits()])
         );
     }
 
