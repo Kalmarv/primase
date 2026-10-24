@@ -486,7 +486,10 @@ fn lower_materials(
                 Ok(false) => {
                     log.approximate("normal maps of shaders whose basis is assumed, not observed", 1)
                 }
-                Err(_) => log.approximate("normal maps of unclassified shaders: basis assumed", 1),
+                Err(why) => log.approximate(
+                    &format!("normal maps of unclassified shaders, basis assumed: {why}"),
+                    1,
+                ),
             }
         }
         // Only a fresh material lacks evidence; an existing factor came from a prior pass.
@@ -542,9 +545,12 @@ fn lower_materials(
                     }
                 }
                 Ok(None) => {}
-                Err(_) => log.approximate_on(
+                Err(u) => log.approximate_on(
                     e,
-                    "alpha-tested material whose programs' alpha test could not be read: the base albedo's alpha tested",
+                    &format!(
+                        "alpha-tested material whose programs' alpha test could not be read, the base albedo's alpha tested: {}: {}",
+                        u.program, u.why
+                    ),
                     1,
                 ),
             }
