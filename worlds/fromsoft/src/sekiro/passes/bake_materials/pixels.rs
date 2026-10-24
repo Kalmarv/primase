@@ -1,7 +1,7 @@
 //! Execute the resolved pixel stage and decode only the roles its binding declares.
 use crate::layer_bake::{self, FrozenFrame};
 use primase_core::parallel::Threads;
-use primase_core::pbr::{PbrMaterial, Wrap};
+use primase_core::pbr::{PbrMaterial, UvTransform, Wrap};
 use primase_core::shader::{
     NormalEncoding, NormalSpace, OutputBinding, OutputRole, Shader, StageBinding, TextureSource,
 };
@@ -59,19 +59,23 @@ fn target(shader: &dyn PixelShader, output: &OutputBinding) -> Result<(u32, u8),
     let d3d = varying.provenance.d3d.ok_or("output has no register")?;
     Ok((d3d.register, output.lanes))
 }
-fn lanes(raw: &Raw, output: usize, pixel: usize, mask: u8) -> Result<Vec<f32>, String> {
+/// The lanes of `output` that `mask` names at `pixel`, in lane order, and how many: written and finite, else an error.
+fn lanes(raw: &Raw, output: usize, pixel: usize, mask: u8) -> Result<([f32; 4], usize), String> {
     let (words, written) = raw.pixels[output][pixel];
     if written & mask != mask {
         return Err(format!("output {output} lacks lanes {mask:x} at texel {pixel}"));
     }
-    let values: Vec<_> = (0..4)
-        .filter(|c| mask & (1 << c) != 0)
-        .map(|c| f32::from_bits(words[c]))
-        .collect();
-    if values.iter().any(|x| !x.is_finite()) {
-        return Err("nonfinite G-buffer output".into());
+    let mut values = [0.; 4];
+    let mut count = 0;
+    for c in (0..4).filter(|c| mask & (1 << c) != 0) {
+        let v = f32::from_bits(words[c]);
+        if !v.is_finite() {
+            return Err("nonfinite G-buffer output".into());
+        }
+        values[count] = v;
+        count += 1;
     }
-    Ok(values)
+    Ok((values, count))
 }
 fn normal(encoded: &[f32], encoding: NormalEncoding, space: NormalSpace) -> Result<[u8; 4], String> {
     if encoded.len() != 3 || !matches!(space, NormalSpace::World | NormalSpace::View) {
@@ -258,15 +262,28 @@ pub(super) fn bake(
             Ok((image(t, SamplerUse::addressed(address))?, r.transform))
         })
         .transpose()?;
+    let surfaces = Decode {
+        outputs: &outputs,
+        albedo,
+        normal: normal_index,
+        rough,
+        metal,
+        specular,
+        emission,
+        alpha: alpha.as_ref(),
+        base_alpha: previous.base_color[3],
+        size,
+    }
+    .surfaces(&raw, Threads::of(world))?;
     let mut result = Baked {
         size,
         requested_size,
         source_size,
-        albedo: Vec::new(),
-        normal: Vec::new(),
-        orm: Vec::new(),
-        specular: specular.map(|_| Vec::new()),
-        emission: emission.map(|_| Vec::new()),
+        albedo: surfaces.albedo,
+        normal: surfaces.normal,
+        orm: surfaces.orm,
+        specular: surfaces.specular,
+        emission: surfaces.emission,
         policies,
     };
     if specular.is_some() && metal.is_none() {
@@ -276,38 +293,113 @@ pub(super) fn bake(
             1,
         );
     }
-    for p in 0..size as usize * size as usize {
-        let value = |i: usize| lanes(&raw, i, p, outputs[i].lanes);
-        let a = value(albedo)?;
-        if a.len() != 3 {
+    result
+        .policies
+        .insert("baked surface channels quantized to UNORM8".into(), 1);
+    Ok(result)
+}
+
+/// The surface channels a bake decodes from its evaluation, texel by texel in row-major order.
+#[derive(Debug, Default, PartialEq)]
+struct Surfaces {
+    albedo: Vec<u8>,
+    normal: Vec<u8>,
+    orm: Vec<u8>,
+    specular: Option<Vec<u8>>,
+    emission: Option<Vec<[f32; 3]>>,
+}
+
+/// How a bake's evaluated targets decode into its surface channels: which target holds which role, the texture whose
+/// alpha (times `base_alpha`) is the albedo's, and the grid's side.
+struct Decode<'a> {
+    /// The evaluated targets, in the order the evaluation keeps them.
+    outputs: &'a [&'a OutputBinding],
+    albedo: usize,
+    normal: usize,
+    rough: usize,
+    metal: Option<usize>,
+    specular: Option<usize>,
+    emission: Option<usize>,
+    alpha: Option<&'a (Arc<SampledTexture>, Option<UvTransform>)>,
+    base_alpha: f32,
+    size: u32,
+}
+
+impl Decode<'_> {
+    /// Every texel of `raw`, its rows decoded on `threads` and joined in order: the same bytes on any count, and the
+    /// first failing texel's error, as one thread meets it.
+    fn surfaces(&self, raw: &Raw, threads: Threads) -> Result<Surfaces, String> {
+        let rows: Vec<u32> = (0..self.size).collect();
+        let decoded = primase_core::parallel::map(threads, &rows, |_, &y| self.row(raw, y))
+            .map_err(|p| format!("decoding row {}: {}", rows[p.item], p.message))?;
+        let mut all = Surfaces {
+            specular: self.specular.map(|_| Vec::new()),
+            emission: self.emission.map(|_| Vec::new()),
+            ..Surfaces::default()
+        };
+        for row in decoded {
+            let row = row?;
+            all.albedo.extend(row.albedo);
+            all.normal.extend(row.normal);
+            all.orm.extend(row.orm);
+            if let (Some(all), Some(row)) = (&mut all.specular, row.specular) {
+                all.extend(row);
+            }
+            if let (Some(all), Some(row)) = (&mut all.emission, row.emission) {
+                all.extend(row);
+            }
+        }
+        Ok(all)
+    }
+
+    /// Row `y`'s texels.
+    fn row(&self, raw: &Raw, y: u32) -> Result<Surfaces, String> {
+        let n = self.size as usize;
+        let mut out = Surfaces {
+            albedo: Vec::with_capacity(4 * n),
+            normal: Vec::with_capacity(4 * n),
+            orm: Vec::with_capacity(4 * n),
+            specular: self.specular.map(|_| Vec::with_capacity(4 * n)),
+            emission: self.emission.map(|_| Vec::with_capacity(n)),
+        };
+        for x in 0..n {
+            self.texel(raw, y as usize * n + x, &mut out)?;
+        }
+        Ok(out)
+    }
+
+    /// Texel `p`'s channels, appended to `out`.
+    fn texel(&self, raw: &Raw, p: usize, out: &mut Surfaces) -> Result<(), String> {
+        let size = self.size as usize;
+        let value = |i: usize| lanes(raw, i, p, self.outputs[i].lanes);
+        let (a, count) = value(self.albedo)?;
+        if count != 3 {
             return Err("albedo role is not RGB".into());
         }
-        result.albedo.extend(a.iter().copied().map(colour));
-        let uv =
-            [(p % size as usize) as f32 + 0.5, (p / size as usize) as f32 + 0.5].map(|x| x / size as f32);
-        let opacity = if let Some((t, transform)) = &alpha {
+        out.albedo.extend(a[..3].iter().copied().map(colour));
+        let uv = [(p % size) as f32 + 0.5, (p / size) as f32 + 0.5].map(|x| x / size as f32);
+        let opacity = if let Some((t, transform)) = self.alpha {
             layer_bake::sample(t, transform.map_or(uv, |t| t.apply(uv))).map_err(|e| e.to_string())?[3]
         } else {
             1.
         };
-        result.albedo.push(byte(opacity * previous.base_color[3]));
-        let OutputRole::Normal { encoding, space } = outputs[normal_index].role else {
+        out.albedo.push(byte(opacity * self.base_alpha));
+        let OutputRole::Normal { encoding, space } = self.outputs[self.normal].role else {
             unreachable!()
         };
-        result
-            .normal
-            .extend(normal(&value(normal_index)?, encoding, space)?);
-        let r = value(rough)?;
-        if r.len() != 1 {
+        let (n, count) = value(self.normal)?;
+        out.normal.extend(normal(&n[..count], encoding, space)?);
+        let (r, count) = value(self.rough)?;
+        if count != 1 {
             return Err("roughness/gloss role is not scalar".into());
         }
-        let r = match outputs[rough].role {
+        let r = match self.outputs[self.rough].role {
             OutputRole::Gloss { encoding } => 1. - encoding.decode(r[0]),
             _ => r[0],
         };
-        let m = if let Some(i) = metal {
-            let m = value(i)?;
-            if m.len() != 1 {
+        let m = if let Some(i) = self.metal {
+            let (m, count) = value(i)?;
+            if count != 1 {
                 return Err("metallic role is not scalar".into());
             }
             m[0]
@@ -317,42 +409,169 @@ pub(super) fn bake(
         if !r.is_finite() || !m.is_finite() {
             return Err("nonfinite decoded surface channel".into());
         }
-        result.orm.extend([255, byte(r), byte(m), 255]);
-        if let Some(i) = specular {
-            let OutputRole::Reflectance { encoding } = outputs[i].role else {
+        out.orm.extend([255, byte(r), byte(m), 255]);
+        if let Some(i) = self.specular {
+            let OutputRole::Reflectance { encoding } = self.outputs[i].role else {
                 unreachable!()
             };
-            let f0 = value(i)?;
-            if f0.len() != 3 {
+            let (f0, count) = value(i)?;
+            if count != 3 {
                 return Err("reflectance role is not RGB".into());
             }
-            let out = result.specular.as_mut().expect("allocated reflectance");
-            for v in f0 {
-                let v = encoding.decode(v);
+            let specular = out.specular.as_mut().expect("allocated reflectance");
+            for v in &f0[..3] {
+                let v = encoding.decode(*v);
                 if !v.is_finite() {
                     return Err("nonfinite reflectance".into());
                 }
-                out.push(colour(v));
+                specular.push(colour(v));
             }
-            out.push(255);
+            specular.push(255);
         }
-        if let Some(i) = emission {
-            let OutputRole::Emission { encoding } = outputs[i].role else {
+        if let Some(i) = self.emission {
+            let OutputRole::Emission { encoding } = self.outputs[i].role else {
                 unreachable!()
             };
-            let e = value(i)?;
-            if e.len() != 3 {
+            let (e, count) = value(i)?;
+            if count != 3 {
                 return Err("emission role is not RGB".into());
             }
-            result.emission.as_mut().expect("allocated emission").push([
+            out.emission.as_mut().expect("allocated emission").push([
                 encoding.decode(e[0]),
                 encoding.decode(e[1]),
                 encoding.decode(e[2]),
             ]);
         }
+        Ok(())
     }
-    result
-        .policies
-        .insert("baked surface channels quantized to UNORM8".into(), 1);
-    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use primase_core::shader::{Label, ScalarEncoding};
+
+    fn target(name: &str, lanes: u8, role: OutputRole) -> OutputBinding {
+        OutputBinding {
+            label: Label {
+                name: name.into(),
+                index: 0,
+            },
+            lanes,
+            role,
+        }
+    }
+
+    /// The targets of a G-buffer program with every role the bake decodes: albedo, a biased normal, gloss, metallic,
+    /// reflectance and emission, each read linearly.
+    fn targets() -> Vec<OutputBinding> {
+        let linear = ScalarEncoding::LINEAR;
+        vec![
+            target("SV_Target", 0b0111, OutputRole::Albedo),
+            target(
+                "SV_Target",
+                0b0111,
+                OutputRole::Normal {
+                    encoding: NormalEncoding::XyzUnorm,
+                    space: NormalSpace::World,
+                },
+            ),
+            target("SV_Target", 0b0001, OutputRole::Gloss { encoding: linear }),
+            target("SV_Target", 0b0001, OutputRole::Metallic),
+            target("SV_Target", 0b0111, OutputRole::Reflectance { encoding: linear }),
+            target("SV_Target", 0b0111, OutputRole::Emission { encoding: linear }),
+        ]
+    }
+
+    /// An evaluation of `size` by `size` texels: texel 0 the designed values the test works by hand, every other its
+    /// own; `written(p, target)` the lanes written.
+    fn raw(size: usize, written: impl Fn(usize, usize) -> u8) -> Raw {
+        let value = |p: usize, t: usize| -> [f32; 4] {
+            if p == 0 {
+                return [
+                    [0.5, 0.25, 1., 0.],
+                    [0.5, 1., 0.5, 0.],
+                    [0.75, 0., 0., 0.],
+                    [1., 0., 0., 0.],
+                    [0.04, 0.04, 0.04, 0.],
+                    [2., 0., 0.5, 0.],
+                ][t];
+            }
+            let x = (p * 7 + t * 3) as f32;
+            [(x % 11.) / 11., (x % 5.) / 5. * 0.5 + 0.25, (x % 3.) / 3., 0.]
+        };
+        Raw {
+            pixels: (0..6)
+                .map(|t| {
+                    (0..size * size)
+                        .map(|p| (value(p, t).map(f32::to_bits), written(p, t)))
+                        .collect()
+                })
+                .collect(),
+            discarded: vec![false; size * size],
+            instructions: 0,
+            samples: 0,
+        }
+    }
+
+    fn decode<'a>(outputs: &'a [&'a OutputBinding], size: u32) -> Decode<'a> {
+        Decode {
+            outputs,
+            albedo: 0,
+            normal: 1,
+            rough: 2,
+            metal: Some(3),
+            specular: Some(4),
+            emission: Some(5),
+            alpha: None,
+            base_alpha: 0.5,
+            size,
+        }
+    }
+
+    /// The decoded channels are the same bytes on one thread and on four (rows of an odd grid, so the threads' shares
+    /// differ), and the designed texel is what the channels' encodings give by hand: albedo (0.5, 0.25, 1) in sRGB
+    /// 188, 137, 255 with the base alpha 0.5 as 128; the normal (0.5, 1, 0.5) unbiased (0, 1, 0), in the source's
+    /// convention 128, 128, 255; gloss 0.75 as roughness 0.25, 64, metallic 255; the reflectance 0.04 in sRGB 56; the
+    /// emission as written.
+    #[test]
+    fn the_decode_is_the_same_on_any_thread_count() {
+        let targets = targets();
+        let outputs: Vec<&OutputBinding> = targets.iter().collect();
+        let size = 9;
+        let raw = raw(size, |_, t| targets[t].lanes);
+        let one = decode(&outputs, size as u32)
+            .surfaces(&raw, Threads::ONE)
+            .unwrap();
+        let four = decode(&outputs, size as u32)
+            .surfaces(&raw, Threads::new(4).unwrap())
+            .unwrap();
+        assert_eq!(one, four);
+        assert_eq!(one.albedo.len(), 4 * size * size);
+        assert_eq!(one.albedo[..4], [188, 137, 255, 128]);
+        assert_eq!(one.normal[..4], [128, 128, 255, 255]);
+        assert_eq!(one.orm[..4], [255, 64, 255, 255]);
+        assert_eq!(one.specular.as_ref().unwrap()[..4], [56, 56, 56, 255]);
+        assert_eq!(one.emission.as_ref().unwrap()[0], [2., 0., 0.5]);
+    }
+
+    /// Where texels fail, the error is the first one's in row-major order, whatever the threads: a texel of row 2
+    /// whose albedo lacks a lane, before one of row 5 whose normal lacks one.
+    #[test]
+    fn the_first_failing_texel_is_the_error_on_any_thread_count() {
+        let targets = targets();
+        let outputs: Vec<&OutputBinding> = targets.iter().collect();
+        let size = 9;
+        let raw = raw(size, |p, t| match (p, t) {
+            (20, 0) => 0b0011,
+            (47, 1) => 0b0001,
+            _ => targets[t].lanes,
+        });
+        for threads in [Threads::ONE, Threads::new(4).unwrap()] {
+            assert_eq!(
+                decode(&outputs, size as u32).surfaces(&raw, threads),
+                Err("output 0 lacks lanes 7 at texel 20".into())
+            );
+        }
+    }
 }
