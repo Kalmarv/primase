@@ -14,8 +14,10 @@
 //!   wider range if implementation uses a guard band"); WARP uses none (a triangle cut 16.25 pixels past the viewport
 //!   instead of at it puts the pixels it draws up to 1e-4 off WARP's), so a vertex clipping makes on a side of the
 //!   viewport is snapped like any other. A vertex near the camera plane, whose screen position is far outside, is
-//!   snapped only after clipping brings it in. A plane `w >= 1e-6` keeps a division by `w` finite where the others meet
-//!   at the camera. A vertex clipping makes holds its weights on the triangle's three vertices in clip space, and its
+//!   snapped only after clipping brings it in. Those planes leave every vertex `w >= |x|, |y|, z >= 0`, so a division
+//!   by `w` is finite but at the clip-space origin, which a clipped polygon reaches only when its triangle's vertices
+//!   are linearly dependent: its plane holds the camera and it has no area on screen, so it draws nothing. A vertex
+//!   clipping makes holds its weights on the triangle's three vertices in clip space, and its
 //!   outputs are the triangle's by the interpolation of the input they feed: perspective-correct ones by those weights,
 //!   the screen-linear ones (`noperspective`) by the weights of its screen position (a clip-space weight times the
 //!   vertex's w, normalised), and flat ones the provoking vertex's. A triangle with a NaN position after clipping draws
@@ -638,16 +640,18 @@ impl Setup {
     }
 }
 
-/// Clip a triangle to `0 <= z <= w`, `w >= 1e-6` and the viewport (`-w <= x, y <= w`): the polygon left, as
-/// clip-space vertices with their weights on the triangle's (an empty list when nothing is left).
+/// Clip a triangle to `0 <= z <= w` and the viewport (`-w <= x, y <= w`): the polygon left, as clip-space vertices with
+/// their weights on the triangle's (an empty list when nothing is left). A polygon with a vertex at the clip-space
+/// origin (w = 0, so x, y and z are 0 too: the planes keep `w >= |x|, |y|` and `w >= z >= 0`) is empty: a point of a
+/// triangle is the zero vector only when its vertices are linearly dependent, so the triangle's plane holds the camera
+/// and it has no area on screen; it has no screen position to divide out there.
 fn clip(triangle: Vec<ClipVertex>) -> Vec<ClipVertex> {
     let w = |c: &[f32; 4]| f64::from(c[3]);
     // each plane as the signed distance of a vertex: kept where >= 0
     type Plane<'a> = &'a dyn Fn(&[f32; 4]) -> f64;
-    let planes: [Plane; 7] = [
+    let planes: [Plane; 6] = [
         &|c| f64::from(c[2]),
         &|c| w(c) - f64::from(c[2]),
-        &|c| w(c) - 1e-6,
         &|c| w(c) + f64::from(c[0]),
         &|c| w(c) - f64::from(c[0]),
         &|c| w(c) + f64::from(c[1]),
@@ -675,6 +679,9 @@ fn clip(triangle: Vec<ClipVertex>) -> Vec<ClipVertex> {
         if polygon.len() < 3 {
             return polygon;
         }
+    }
+    if polygon.iter().any(|v| v.clip[3] == 0.) {
+        return Vec::new();
     }
     polygon
 }
@@ -822,6 +829,27 @@ mod tests {
             }
         }
         assert_eq!(cut, 2, "{polygon:?}");
+    }
+
+    /// A vertex inside the viewport nearer than any fixed w is kept, as Direct3D's clip volume keeps it: its screen
+    /// position is a division by its w, which the viewport's planes keep within the target.
+    #[test]
+    fn a_vertex_at_a_tiny_w_inside_the_viewport_is_kept() {
+        let near = [1e-8, -1e-8, 0., 1e-7];
+        let polygon = clipped([at(2., 2., 0.5, 1.), at(14., 3., 0.5, 1.), near]);
+        let kept: Vec<[u32; 4]> = polygon.iter().map(|v| v.clip.map(f32::to_bits)).collect();
+        assert!(kept.contains(&near.map(f32::to_bits)), "{polygon:?}");
+        assert!(coverage(&polygon).iter().any(|&n| n > 0));
+    }
+
+    /// A triangle through the clip-space origin (its vertices linearly dependent: `c = -(a + b) / 2` here) is a line on
+    /// screen; clipping leaves the origin a vertex of it, and it draws nothing.
+    #[test]
+    fn a_triangle_through_the_clip_space_origin_draws_nothing() {
+        let a = at(4., 4., 0.5, 1.);
+        let b = at(12., 6., 0.5, 1.);
+        let c = [0, 1, 2, 3].map(|k| -(a[k] + b[k]) / 2.);
+        assert!(clipped([a, b, c]).is_empty());
     }
 
     #[test]
