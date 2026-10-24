@@ -13,7 +13,7 @@
 use primase_core::frame::{Axis, SourceFrame};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{
-    Asset, Clip, ClipTarget, JointMap, Name, Property, Rest, Role, RootSpace, Skeleton, World,
+    Asset, Clip, ClipTarget, JointMap, Name, Property, Provenance, Rest, Role, RootSpace, Skeleton, World,
 };
 use primase_fromsoft::Install;
 use primase_fromsoft::dcx::Decoder;
@@ -71,6 +71,31 @@ fn a_characters_animations_read_lower_and_map_onto_its_model() -> Result<()> {
         .count();
     assert_eq!(clip_members, animations.animations);
     assert_eq!(w.iter::<HavokAnimation>().count(), animations.animations);
+    // each clip states the binder and the member it was read from (`core.provenance`: the archive and the file)
+    for (e, _) in w.iter::<HavokAnimation>() {
+        let name = &w.get::<Name>(e).unwrap().0;
+        let origins = &w
+            .get::<Provenance>(e)
+            .expect("a clip states where it was read from")
+            .origins;
+        let [origin] = origins.as_slice() else {
+            panic!("{name}: {} origins", origins.len());
+        };
+        let binder = origin.archive.as_deref().unwrap();
+        assert!(
+            binder == "c1010.anibnd"
+                || animations
+                    .companions
+                    .iter()
+                    .any(|c| binder == format!("{c}.anibnd")),
+            "{name} read from {binder}"
+        );
+        assert!(
+            origin.file.to_ascii_lowercase().ends_with(&format!("{name}.hkx")),
+            "{name} is member {}",
+            origin.file
+        );
+    }
     assert!(
         animations.unread.iter().any(|f| f.ends_with(".tae")),
         "{:?}",

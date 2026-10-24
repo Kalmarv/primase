@@ -1,7 +1,7 @@
 //! A character's animation binder (`chr/<id>.anibnd`) read into the world beside its model: the Havok skeleton
 //! (`skeleton.hkx`) as a `core.skeleton` of its own and each animation as a `havok.animation` (the spline compressed
 //! tracks as stored, the binding that says which bone each drives), one entity each, named by the file (`a000_003000`)
-//! and stating the binder and the member it was read from ([`ClipOrigin`], `fromsoft.clip_origin`).
+//! and stating where it was read from (`core.provenance`: the binder, as the archive, and the member, as the file).
 //! A part binder holds such a binder for a form of its own ([`read_member`]: Sekiro's `parts/wp_a_0761_l.partsbnd`
 //! holds `wp_a_0761.anibnd` and `wp_a_0761_1.anibnd`, the closed and the open umbrella's), which is read the same way.
 //!
@@ -26,12 +26,11 @@
 
 use std::collections::BTreeMap;
 
-use primase_core::{Entity, Name, World};
+use primase_core::{Entity, Name, Origin, Provenance, World};
 use primase_havok::animation::{Container, Skeleton, container};
 use primase_havok::world::{HavokAnimation, insert_animation, insert_skeleton};
 use primase_havok::{Compendium, Tagfile};
 
-use crate::components::clips::ClipOrigin;
 use crate::{Archive, Binder, Result, dcx::Decoder};
 
 /// What reading a character's animation binders found.
@@ -104,7 +103,7 @@ fn companions(archive: &Archive, id: &str, binder: &Binder) -> Vec<String> {
 /// What one binder holds: its skeletons, and its animation containers by file stem, each with where it was read from.
 struct Held {
     skeletons: Vec<Skeleton>,
-    animations: Vec<(String, ClipOrigin, Container)>,
+    animations: Vec<(String, Origin, Container)>,
 }
 
 /// Read the tagfiles of `binder` (one that names a marker for a binder in `markers` is not unread).
@@ -166,10 +165,7 @@ fn hold(
         if let Some(s) = c.skeletons.first() {
             held.skeletons.push(s.clone());
         } else {
-            let origin = ClipOrigin {
-                binder: binder_name.to_owned(),
-                member: name.to_owned(),
-            };
+            let origin = Origin::new(Some(binder_name), name, None);
             held.animations.push((file, origin, c));
         }
     }
@@ -282,7 +278,7 @@ fn insert(held: Vec<Held>, id: &str, report: AnimationReport, w: &mut World) -> 
         }
         match insert_animation(w, &file, &c, *skeleton, havok, &crate::pose::FRAME) {
             Ok(Some(e)) => {
-                w.insert(e, origin);
+                w.insert(e, Provenance::new(origin));
                 if let Some(h) = w.get::<HavokAnimation>(e) {
                     let unreadable = h.spline.unreadable.clone();
                     let bones = h.track_to_bone.clone();
