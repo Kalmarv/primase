@@ -57,11 +57,16 @@ impl Pass for BakeFromSoftMaterials {
             ("sample-time".into(), self.sample_time.to_string()),
         ])
     }
-    /// `core.shader_binding` is not required: a material whose program the reader does not hold stays unbound
-    /// (`resolve-fromsoft-shaders` counts it), and a read none of whose materials has one (a weapon part) has nothing
-    /// to bake, which `run` counts per material (`materials without a resolved pixel program`).
+    /// Neither `core.shader_binding` nor `pbr.material` is required: a material whose program the reader does not hold
+    /// stays unbound (`resolve-fromsoft-shaders` counts it), a read none of whose materials has one (a weapon part) has
+    /// nothing to bake, and one with no material that is drawn (an area whose models were all left out) has no lowered
+    /// material either; `run` counts each material it finds without either and bakes the rest. A read with no
+    /// `fromsoft.material` at all skips the step.
+    fn may_lack_inputs(&self) -> bool {
+        true
+    }
     fn requires(&self) -> &[&'static str] {
-        &[Material::NAME, PbrMaterial::NAME]
+        &[Material::NAME]
     }
     fn provides(&self) -> &[&'static str] {
         &[Texture::NAME, Name::NAME]
