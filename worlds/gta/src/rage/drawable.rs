@@ -27,10 +27,12 @@
 )]
 use crate::rage::bounds::Bound;
 use crate::rage::le;
+use crate::rage::le::LE;
 use crate::rage::resource::Resource;
 use crate::rage::sga::BufferFormat;
 use crate::rage::texture::{Texture, TextureDictionary};
 use crate::{Result, invalid};
+use primase_bytes::View;
 
 fn err(at: u64, detail: impl ToString) -> crate::Error {
     invalid("drawable", at, detail)
@@ -264,45 +266,45 @@ pub struct LightAttr {
 impl LightAttr {
     /// The record at the start of `d` (168 bytes).
     fn read(d: &[u8]) -> Result<LightAttr> {
-        let b = |o: usize| le::u8(d, o);
+        let b = |o: usize| View::new(d).u8(o);
         Ok(LightAttr {
-            position: le::vec3(d, 0x08)?,
+            position: le::vec3_of(&View::new(d).array::<12>(0x08)?),
             colour: [b(0x18)?, b(0x19)?, b(0x1A)?],
             flashiness: b(0x1B)?,
-            intensity: le::f32(d, 0x1C)?,
-            flags: le::u32(d, 0x20)?,
-            bone_id: le::u16(d, 0x24)?,
+            intensity: View::new(d).f32(0x1C, LE)?,
+            flags: View::new(d).u32(0x20, LE)?,
+            bone_id: View::new(d).u16(0x24, LE)?,
             kind: b(0x26)?,
             group_id: b(0x27)?,
-            time_flags: le::u32(d, 0x28)?,
-            falloff: le::f32(d, 0x2C)?,
-            falloff_exponent: le::f32(d, 0x30)?,
-            culling_plane: le::vec4(d, 0x34)?,
+            time_flags: View::new(d).u32(0x28, LE)?,
+            falloff: View::new(d).f32(0x2C, LE)?,
+            falloff_exponent: View::new(d).f32(0x30, LE)?,
+            culling_plane: le::vec4_of(&View::new(d).array::<16>(0x34)?),
             shadow_blur: b(0x44)?,
-            volume_intensity: le::f32(d, 0x4C)?,
-            volume_size_scale: le::f32(d, 0x50)?,
+            volume_intensity: View::new(d).f32(0x4C, LE)?,
+            volume_size_scale: View::new(d).f32(0x50, LE)?,
             volume_outer_colour: [b(0x54)?, b(0x55)?, b(0x56)?],
             light_hash: b(0x57)?,
-            volume_outer_intensity: le::f32(d, 0x58)?,
-            corona_size: le::f32(d, 0x5C)?,
-            volume_outer_exponent: le::f32(d, 0x60)?,
+            volume_outer_intensity: View::new(d).f32(0x58, LE)?,
+            corona_size: View::new(d).f32(0x5C, LE)?,
+            volume_outer_exponent: View::new(d).f32(0x60, LE)?,
             fade_distances: [b(0x64)?, b(0x65)?, b(0x66)?, b(0x67)?],
-            shadow_near_clip: le::f32(d, 0x68)?,
-            corona_intensity: le::f32(d, 0x6C)?,
-            corona_z_bias: le::f32(d, 0x70)?,
-            direction: le::vec3(d, 0x74)?,
-            tangent: le::vec3(d, 0x80)?,
-            cone_inner_angle: le::f32(d, 0x8C)?,
-            cone_outer_angle: le::f32(d, 0x90)?,
-            extent: le::vec3(d, 0x94)?,
-            projected_texture_hash: le::u32(d, 0xA0)?,
+            shadow_near_clip: View::new(d).f32(0x68, LE)?,
+            corona_intensity: View::new(d).f32(0x6C, LE)?,
+            corona_z_bias: View::new(d).f32(0x70, LE)?,
+            direction: le::vec3_of(&View::new(d).array::<12>(0x74)?),
+            tangent: le::vec3_of(&View::new(d).array::<12>(0x80)?),
+            cone_inner_angle: View::new(d).f32(0x8C, LE)?,
+            cone_outer_angle: View::new(d).f32(0x90, LE)?,
+            extent: le::vec3_of(&View::new(d).array::<12>(0x94)?),
+            projected_texture_hash: View::new(d).u32(0xA0, LE)?,
             reserved: [
-                le::u32(d, 0x00)?,
-                le::u32(d, 0x04)?,
-                le::u32(d, 0x14)?,
-                u32::from(b(0x45)?) | u32::from(le::u16(d, 0x46)?) << 8,
-                le::u32(d, 0x48)?,
-                le::u32(d, 0xA4)?,
+                View::new(d).u32(0x00, LE)?,
+                View::new(d).u32(0x04, LE)?,
+                View::new(d).u32(0x14, LE)?,
+                u32::from(b(0x45)?) | u32::from(View::new(d).u16(0x46, LE)?) << 8,
+                View::new(d).u32(0x48, LE)?,
+                View::new(d).u32(0xA4, LE)?,
             ],
         })
     }
@@ -351,7 +353,7 @@ fn on_bones(
 
 /// The skeleton of the drawable at `pointer`, if it has one.
 fn skeleton_at(r: &Resource, pointer: u64) -> Result<Option<Skeleton>> {
-    match le::u64(r.at(pointer, 0x20)?, 0x18)? {
+    match View::new(r.at(pointer, 0x20)?).u64(0x18, LE)? {
         0 => Ok(None),
         p => Skeleton::read(r, p).map(Some),
     }
@@ -359,7 +361,7 @@ fn skeleton_at(r: &Resource, pointer: u64) -> Result<Option<Skeleton>> {
 
 /// A fragment's bone pose (its header at 0x5000_0000: the list at 0xA8), by bone index.
 fn fragment_pose(r: &Resource, h: &[u8]) -> Result<Vec<[[f32; 4]; 3]>> {
-    Ok(match le::u64(h, 0xA8)? {
+    Ok(match View::new(h).u64(0xA8, LE)? {
         0 => Vec::new(),
         p => {
             let n = usize::from(r.block::<0x20>(p)?[0x10]);
@@ -398,7 +400,7 @@ pub fn resource_lights(r: &Resource, kind: &str, entry: u32) -> Result<(Vec<Ligh
             let h = r.at(0x5000_0000, 0x130)?;
             on_bones(read_lights(r, 0x5000_0110)?, || {
                 Ok(Bones {
-                    skeleton: match le::u64(h, 0x30)? {
+                    skeleton: match View::new(h).u64(0x30, LE)? {
                         0 => None,
                         d => skeleton_at(r, d)?,
                     },
@@ -432,7 +434,7 @@ pub fn resource_lights(r: &Resource, kind: &str, entry: u32) -> Result<(Vec<Ligh
 /// The light records of a list (pointer, count, capacity) at `at`.
 fn read_lights(r: &Resource, at: u64) -> Result<Vec<LightAttr>> {
     let h = r.at(at, 16)?;
-    let (count, cap) = (le::u16(h, 8)?, le::u16(h, 10)?);
+    let (count, cap) = (View::new(h).u16(8, LE)?, View::new(h).u16(10, LE)?);
     if cap < count {
         return Err(err(at, format!("light list count {count} over capacity {cap}")));
     }
@@ -441,7 +443,7 @@ fn read_lights(r: &Resource, at: u64) -> Result<Vec<LightAttr>> {
         return Ok(Vec::new());
     }
     r.charge(n.saturating_mul(168), at)?;
-    let d = r.records(le::u64(h, 0)?, n, 168)?;
+    let d = r.records(View::new(h).u64(0, LE)?, n, 168)?;
     d.chunks(168).map(LightAttr::read).collect()
 }
 
@@ -462,17 +464,17 @@ pub struct Skeleton {
 impl Skeleton {
     fn read(r: &Resource, pointer: u64) -> Result<Skeleton> {
         let s = r.at(pointer, 0x70)?;
-        let count = usize::from(le::u16(s, 0x5E)?);
+        let count = usize::from(View::new(s).u16(0x5E, LE)?);
         // per bone: its transform and inverse (48 bytes each), parent and tag
         r.charge(
             count.saturating_mul(48 + 48 + 2 + 2).saturating_add(0x70),
             pointer,
         )?;
-        let transforms = match le::u64(s, 0x30)? {
+        let transforms = match View::new(s).u64(0x30, LE)? {
             0 => return Err(err(pointer, "a skeleton without bone transforms")),
             p => r.records(p, count, 64)?,
         };
-        let parents = match le::u64(s, 0x38)? {
+        let parents = match View::new(s).u64(0x38, LE)? {
             0 => vec![-1; count],
             p => r
                 .records(p, count, 2)?
@@ -482,14 +484,14 @@ impl Skeleton {
                 .map(|b| i16::from_le_bytes(*b))
                 .collect(),
         };
-        let tags = match le::u64(s, 0x20)? {
+        let tags = match View::new(s).u64(0x20, LE)? {
             0 => None,
             p => Some(
                 r.records(p, count, 80)?
                     .as_chunks::<80>()
                     .0
                     .iter()
-                    .map(|b| le::u16(b, 0x44))
+                    .map(|b| Ok(View::new(b).u16(0x44, LE)?))
                     .collect::<Result<Vec<_>>>()?,
             ),
         };
@@ -510,7 +512,7 @@ impl Skeleton {
                 .collect()
         };
         let local = matrices(transforms)?;
-        let inverse = match le::u64(s, 0x28)? {
+        let inverse = match View::new(s).u64(0x28, LE)? {
             0 => None,
             p => Some(matrices(r.records(p, count, 64)?)?),
         };
@@ -597,38 +599,38 @@ impl Drawable {
         r.charge(0xA8, pointer)?;
         let mut lods: [Vec<Model>; 4] = Default::default();
         for (lod, at) in lods.iter_mut().zip([0x50, 0x58, 0x60, 0x68]) {
-            let p = le::u64(d, at)?;
+            let p = View::new(d).u64(at, LE)?;
             if p != 0 {
                 *lod = read_models(r, p)?;
             }
         }
-        let group = le::u64(d, 0x10)?;
+        let group = View::new(d).u64(0x10, LE)?;
         let (shaders, textures) = read_shader_group(r, group)?;
         // a drawable without a shader group (a fragment's extra drawables) uses its owner's shaders
         if group != 0 {
             check_shaders(pointer, &lods, shaders.len())?;
         }
         Ok(Drawable {
-            bounding_centre: le::vec3(d, 0x20)?,
-            bounding_radius: le::f32(d, 0x2C)?,
-            bbox_min: le::vec3(d, 0x30)?,
-            bbox_max: le::vec3(d, 0x40)?,
+            bounding_centre: le::vec3_of(&View::new(d).array::<12>(0x20)?),
+            bounding_radius: View::new(d).f32(0x2C, LE)?,
+            bbox_min: le::vec3_of(&View::new(d).array::<12>(0x30)?),
+            bbox_max: le::vec3_of(&View::new(d).array::<12>(0x40)?),
             lod_dist: [
-                le::f32(d, 0x70)?,
-                le::f32(d, 0x74)?,
-                le::f32(d, 0x78)?,
-                le::f32(d, 0x7C)?,
+                View::new(d).f32(0x70, LE)?,
+                View::new(d).f32(0x74, LE)?,
+                View::new(d).f32(0x78, LE)?,
+                View::new(d).f32(0x7C, LE)?,
             ],
             render_masks: [
-                le::u32(d, 0x80)?,
-                le::u32(d, 0x84)?,
-                le::u32(d, 0x88)?,
-                le::u32(d, 0x8C)?,
+                View::new(d).u32(0x80, LE)?,
+                View::new(d).u32(0x84, LE)?,
+                View::new(d).u32(0x88, LE)?,
+                View::new(d).u32(0x8C, LE)?,
             ],
             lods,
             shaders,
             textures,
-            skeleton: match le::u64(d, 0x18)? {
+            skeleton: match View::new(d).u64(0x18, LE)? {
                 0 => None,
                 p => Some(Skeleton::read(r, p)?),
             },
@@ -641,7 +643,7 @@ impl Drawable {
     fn read_gta(r: &Resource, pointer: u64) -> Result<Drawable> {
         let mut d = Self::read(r, pointer)?;
         d.lights = read_lights(r, offset(pointer, 0xB0)?)?;
-        d.bound = read_bound(r, le::u64(r.at(pointer, 0xD0)?, 0xC8)?)?;
+        d.bound = read_bound(r, View::new(r.at(pointer, 0xD0)?).u64(0xC8, LE)?)?;
         Ok(d)
     }
 }
@@ -710,7 +712,7 @@ fn check_shaders(at: u64, lods: &[Vec<Model>; 4], shaders: usize) -> Result<()> 
 /// A pointer list: pointer, count, capacity; the `count` pointers it holds.
 fn pointer_list(r: &Resource, at: u64) -> Result<Vec<u64>> {
     let h = r.at(at, 16)?;
-    let (count, cap) = (le::u16(h, 8)?, le::u16(h, 10)?);
+    let (count, cap) = (View::new(h).u16(8, LE)?, View::new(h).u16(10, LE)?);
     if cap < count {
         return Err(err(at, format!("list count {count} over capacity {cap}")));
     }
@@ -719,7 +721,7 @@ fn pointer_list(r: &Resource, at: u64) -> Result<Vec<u64>> {
         return Ok(Vec::new());
     }
     r.charge(n.saturating_mul(8), at)?;
-    let p = r.records(le::u64(h, 0)?, n, 8)?;
+    let p = r.records(View::new(h).u64(0, LE)?, n, 8)?;
     Ok(p.as_chunks::<8>()
         .0
         .iter()
@@ -732,28 +734,30 @@ fn read_models(r: &Resource, list: u64) -> Result<Vec<Model>> {
         .into_iter()
         .map(|p| {
             let m = r.at(p, 0x30)?;
-            let n = usize::from(le::u16(m, 0x10)?);
+            let n = usize::from(View::new(m).u16(0x10, LE)?);
             // the model's pointers, mapping and boxes, and what each geometry takes is charged by it
             r.charge(n.saturating_mul(8 + 2 + 32).saturating_add(0x30), p)?;
-            if le::u16(m, 0x12)? != le::u16(m, 0x10)? || le::u16(m, 0x2E)? != le::u16(m, 0x10)? {
+            if View::new(m).u16(0x12, LE)? != View::new(m).u16(0x10, LE)?
+                || View::new(m).u16(0x2E, LE)? != View::new(m).u16(0x10, LE)?
+            {
                 return Err(err(p, "model geometry counts differ"));
             }
             let geoms = if n == 0 {
                 &[][..]
             } else {
-                r.records(le::u64(m, 0x08)?, n, 8)?
+                r.records(View::new(m).u64(0x08, LE)?, n, 8)?
             };
             let mapping = if n == 0 {
                 &[][..]
             } else {
-                r.records(le::u64(m, 0x20)?, n, 2)?
+                r.records(View::new(m).u64(0x20, LE)?, n, 2)?
             };
             // one box for one geometry; for more, the whole model's box first, then one per geometry
             let first = usize::from(n > 1);
             let bounds = if n == 0 {
                 &[][..]
             } else {
-                r.records(le::u64(m, 0x18)?, n.saturating_add(first), 32)?
+                r.records(View::new(m).u64(0x18, LE)?, n.saturating_add(first), 32)?
             };
             let geometries = geoms
                 .as_chunks::<8>()
@@ -766,13 +770,16 @@ fn read_models(r: &Resource, list: u64) -> Result<Vec<Model>> {
                         r,
                         u64::from_le_bytes(*g),
                         u16::from_le_bytes(*s),
-                        [le::vec4(b, 0)?, le::vec4(b, 16)?],
+                        [
+                            le::vec4_of(&View::new(b).array::<16>(0)?),
+                            le::vec4_of(&View::new(b).array::<16>(16)?),
+                        ],
                     )
                 })
                 .collect::<Result<_>>()?;
             Ok(Model {
-                skeleton_binding: le::u32(m, 0x28)?,
-                render_mask: le::u16(m, 0x2C)?,
+                skeleton_binding: View::new(m).u32(0x28, LE)?,
+                render_mask: View::new(m).u16(0x2C, LE)?,
                 geometries,
             })
         })
@@ -781,25 +788,29 @@ fn read_models(r: &Resource, list: u64) -> Result<Vec<Model>> {
 
 fn read_geometry(r: &Resource, p: u64, shader: u16, bounds: [[f32; 4]; 2]) -> Result<Geometry> {
     let g = r.at(p, 0x98)?;
-    let index_count = le::u32(g, 0x58)?;
-    if u64::from(le::u32(g, 0x5C)?).checked_mul(3) != Some(u64::from(index_count)) || le::u16(g, 0x62)? != 3 {
+    let index_count = View::new(g).u32(0x58, LE)?;
+    if u64::from(View::new(g).u32(0x5C, LE)?).checked_mul(3) != Some(u64::from(index_count))
+        || View::new(g).u16(0x62, LE)? != 3
+    {
         return Err(err(
             p,
-            format!("{index_count} indices, {} triangles", le::u32(g, 0x5C)?),
+            format!("{index_count} indices, {} triangles", View::new(g).u32(0x5C, LE)?),
         ));
     }
     // vertex buffer
-    let vb_ptr = le::u64(g, 0x18)?;
+    let vb_ptr = View::new(g).u64(0x18, LE)?;
     let vb = r.at(vb_ptr, 0x40)?;
-    let vertex_count = le::u32(vb, 0x08)?;
-    let stride = le::u16(vb, 0x0C)?;
-    if u32::from(le::u16(g, 0x60)?) != vertex_count & 0xFFFF || le::u16(g, 0x70)? != stride {
+    let vertex_count = View::new(vb).u32(0x08, LE)?;
+    let stride = View::new(vb).u16(0x0C, LE)?;
+    if u32::from(View::new(g).u16(0x60, LE)?) != vertex_count & 0xFFFF
+        || View::new(g).u16(0x70, LE)? != stride
+    {
         return Err(err(
             p,
             "geometry and vertex buffer disagree on vertex count or stride",
         ));
     }
-    let decl_ptr = le::u64(vb, 0x38)?;
+    let decl_ptr = View::new(vb).u64(0x38, LE)?;
     let decl = r.at(decl_ptr, 320)?;
     // per slot: its offset (52 words), its stride (52 bytes), its format (52 bytes)
     let table = |at: usize, len: usize| {
@@ -834,7 +845,7 @@ fn read_geometry(r: &Resource, p: u64, shader: u16, bounds: [[f32; 4]; 2]) -> Re
         }
         elements.push(Element { slot, format, offset });
     }
-    let packed = le::u64(decl, 312)?;
+    let packed = View::new(decl).u64(312, LE)?;
     if (packed >> 2) & 0xFF != u64::from(stride) || packed & 1 != 0 {
         return Err(err(
             decl_ptr,
@@ -847,27 +858,27 @@ fn read_geometry(r: &Resource, p: u64, shader: u16, bounds: [[f32; 4]; 2]) -> Re
         n_vertices
             .saturating_mul(usize::from(stride))
             .saturating_add(index_count as usize * 2)
-            .saturating_add(usize::from(le::u16(g, 0x72)?) * 2)
+            .saturating_add(usize::from(View::new(g).u16(0x72, LE)?) * 2)
             .saturating_add(0x98),
         p,
     )?;
     let vertices = r
-        .records(le::u64(vb, 0x18)?, n_vertices, usize::from(stride))?
+        .records(View::new(vb).u64(0x18, LE)?, n_vertices, usize::from(stride))?
         .to_vec();
     // index buffer
-    let ib_ptr = le::u64(g, 0x38)?;
+    let ib_ptr = View::new(g).u64(0x38, LE)?;
     let ib = r.at(ib_ptr, 0x40)?;
-    if le::u32(ib, 0x08)? != index_count || le::u16(ib, 0x0C)? != 2 {
+    if View::new(ib).u32(0x08, LE)? != index_count || View::new(ib).u16(0x0C, LE)? != 2 {
         return Err(err(
             ib_ptr,
             format!(
                 "index buffer of {} indices of {} bytes",
-                le::u32(ib, 8)?,
-                le::u16(ib, 0x0C)?
+                View::new(ib).u32(8, LE)?,
+                View::new(ib).u16(0x0C, LE)?
             ),
         ));
     }
-    let raw = r.at(le::u64(ib, 0x18)?, 2 * index_count as usize)?;
+    let raw = r.at(View::new(ib).u64(0x18, LE)?, 2 * index_count as usize)?;
     let indices: Vec<u16> = raw
         .as_chunks::<2>()
         .0
@@ -878,7 +889,10 @@ fn read_geometry(r: &Resource, p: u64, shader: u16, bounds: [[f32; 4]; 2]) -> Re
         return Err(err(ib_ptr, "an index past the vertices"));
     }
     // the bone palette: a pointer (0x68) and a count (0x72), both or neither; a blend index is one byte
-    let (palette, palette_count) = (le::u64(g, 0x68)?, usize::from(le::u16(g, 0x72)?));
+    let (palette, palette_count) = (
+        View::new(g).u64(0x68, LE)?,
+        usize::from(View::new(g).u16(0x72, LE)?),
+    );
     if (palette == 0) != (palette_count == 0) || palette_count > 256 {
         return Err(err(
             p,
@@ -912,18 +926,18 @@ fn read_shader_group(r: &Resource, p: u64) -> Result<(Vec<Shader>, Option<Textur
         return Ok((Vec::new(), None));
     }
     let g = r.at(p, 0x40)?;
-    let textures = match le::u64(g, 0x08)? {
+    let textures = match View::new(g).u64(0x08, LE)? {
         0 => None,
         t => Some(TextureDictionary::read(r, t)?),
     };
-    let n = usize::from(le::u16(g, 0x18)?);
-    if le::u16(g, 0x1A)? < le::u16(g, 0x18)? {
+    let n = usize::from(View::new(g).u16(0x18, LE)?);
+    if View::new(g).u16(0x1A, LE)? < View::new(g).u16(0x18, LE)? {
         return Err(err(p, "shader count over capacity"));
     }
     let ptrs = if n == 0 {
         &[][..]
     } else {
-        r.records(le::u64(g, 0x10)?, n, 8)?
+        r.records(View::new(g).u64(0x10, LE)?, n, 8)?
     };
     r.charge(n.saturating_mul(8), p)?;
     let shaders = ptrs
@@ -937,7 +951,7 @@ fn read_shader_group(r: &Resource, p: u64) -> Result<(Vec<Shader>, Option<Textur
 
 fn read_shader(r: &Resource, p: u64) -> Result<Shader> {
     let s = r.block::<0x40>(p)?;
-    let infos_ptr = le::u64(s, 0x20)?;
+    let infos_ptr = View::new(s).u64(0x20, LE)?;
     let h = r.block::<8>(infos_ptr)?;
     let (n_buffers, n_textures, n_other, _n_samplers, n_params, copies) = (
         usize::from(h[0]),
@@ -958,7 +972,7 @@ fn read_shader(r: &Resource, p: u64) -> Result<Shader> {
         Vec::new()
     } else {
         let n = n_buffers.saturating_add(1).min(n_buffers.saturating_mul(copies));
-        let b = r.records(le::u64(s, 0x08)?, n, 8)?;
+        let b = r.records(View::new(s).u64(0x08, LE)?, n, 8)?;
         b.as_chunks::<8>()
             .0
             .iter()
@@ -968,7 +982,7 @@ fn read_shader(r: &Resource, p: u64) -> Result<Shader> {
     let texture_refs: Vec<u64> = if n_textures == 0 {
         Vec::new()
     } else {
-        let t = r.records(le::u64(s, 0x10)?, n_textures, 8)?;
+        let t = r.records(View::new(s).u64(0x10, LE)?, n_textures, 8)?;
         t.as_chunks::<8>()
             .0
             .iter()
@@ -1035,10 +1049,10 @@ fn read_shader(r: &Resource, p: u64) -> Result<Shader> {
         });
     }
     Ok(Shader {
-        name: le::u32(s, 0x00)?,
-        preset: le::u32(s, 0x04)?,
+        name: View::new(s).u32(0x00, LE)?,
+        preset: View::new(s).u32(0x04, LE)?,
         render_bucket: s[0x39],
-        bucket_mask: le::u32(s, 0x3C)?,
+        bucket_mask: View::new(s).u32(0x3C, LE)?,
         params,
     })
 }
@@ -1086,11 +1100,11 @@ impl Fragment {
                 p => Drawable::read(r, p).map(Some),
             }
         };
-        let n = usize::try_from(le::u32(h, 0x48)?).map_err(|_| err(0x48, "drawable count"))?;
+        let n = usize::try_from(View::new(h).u32(0x48, LE)?).map_err(|_| err(0x48, "drawable count"))?;
         let mut extra = Vec::new();
         if n > 0 {
-            let ptrs = r.records(le::u64(h, 0x38)?, n, 8)?.as_chunks::<8>().0;
-            let names = r.records(le::u64(h, 0x40)?, n, 8)?.as_chunks::<8>().0;
+            let ptrs = r.records(View::new(h).u64(0x38, LE)?, n, 8)?.as_chunks::<8>().0;
+            let names = r.records(View::new(h).u64(0x40, LE)?, n, 8)?.as_chunks::<8>().0;
             for (p, name) in ptrs.iter().zip(names) {
                 let name = match u64::from_le_bytes(*name) {
                     0 => String::new(),
@@ -1102,10 +1116,10 @@ impl Fragment {
             }
         }
         // extra and cloth drawables without their own shaders use the main drawable's
-        let owner = le::u64(h, 0x30)?;
+        let owner = View::new(h).u64(0x30, LE)?;
         let mut drawable = opt(owner)?;
         if let Some(d) = &mut drawable {
-            d.bound = read_bound(r, le::u64(r.at(owner, 0xF8)?, 0xF0)?)?;
+            d.bound = read_bound(r, View::new(r.at(owner, 0xF8)?).u64(0xF0, LE)?)?;
         }
         let main_shaders = drawable.as_ref().map_or(0, |d| d.shaders.len());
         for (_, d) in &extra {
@@ -1114,22 +1128,22 @@ impl Fragment {
             }
         }
         let pose = fragment_pose(r, h)?;
-        let physics = match le::u64(h, 0xF0)? {
+        let physics = match View::new(h).u64(0xF0, LE)? {
             0 => None,
-            group => match le::u64(r.at(group, 0x18)?, 0x10)? {
+            group => match View::new(r.at(group, 0x18)?).u64(0x10, LE)? {
                 0 => None,
-                lod => read_bound(r, le::u64(r.at(lod, 0xF0)?, 0xE8)?)?,
+                lod => read_bound(r, View::new(r.at(lod, 0xF0)?).u64(0xE8, LE)?)?,
             },
         };
         Ok(Fragment {
             pose,
-            name: match le::u64(h, 0x58)? {
+            name: match View::new(h).u64(0x58, LE)? {
                 0 => String::new(),
                 p => crate::rage::texture::c_string(r, p)?,
             },
             drawable,
             extra,
-            cloth: opt(le::u64(h, 0xF8)?)?,
+            cloth: opt(View::new(h).u64(0xF8, LE)?)?,
             lights: read_lights(r, 0x5000_0110)?,
             physics,
         })
@@ -1194,7 +1208,7 @@ impl DrawableDictionary {
 /// A simple list of u32 (pointer, count, capacity) whose 16-byte header is at `at`.
 fn pointer_list_u32(r: &Resource, at: u64) -> Result<Vec<u32>> {
     let h = r.block::<16>(at)?;
-    let (count, cap) = (le::u16(h, 8)?, le::u16(h, 10)?);
+    let (count, cap) = (View::new(h).u16(8, LE)?, View::new(h).u16(10, LE)?);
     if cap < count {
         return Err(err(0, format!("list count {count} over capacity {cap}")));
     }
@@ -1203,7 +1217,7 @@ fn pointer_list_u32(r: &Resource, at: u64) -> Result<Vec<u32>> {
         return Ok(Vec::new());
     }
     r.charge(n.saturating_mul(4), at)?;
-    let d = r.records(le::u64(h, 0)?, n, 4)?;
+    let d = r.records(View::new(h).u64(0, LE)?, n, 4)?;
     Ok(d.as_chunks::<4>()
         .0
         .iter()

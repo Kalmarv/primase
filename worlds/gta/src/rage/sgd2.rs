@@ -42,7 +42,9 @@
     clippy::cast_possible_truncation
 )]
 use crate::rage::fxc::ProgramStage;
+use crate::rage::le::LE;
 use crate::{Result, invalid};
+use primase_bytes::Field;
 
 /// The magic `SGD2`.
 pub const MAGIC: [u8; 4] = *b"SGD2";
@@ -110,43 +112,43 @@ impl<'a> Sgd2<'a> {
     }
 }
 
-struct Cursor<'a> {
-    data: &'a [u8],
-    at: usize,
+/// The file's cursor ([`primase_bytes::Cursor`]), with this format's grammar as methods.
+struct Cursor<'a>(primase_bytes::Cursor<'a>);
+
+impl<'a> Cursor<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Cursor(primase_bytes::Cursor::new(data))
+    }
+}
+
+impl<'a> std::ops::Deref for Cursor<'a> {
+    type Target = primase_bytes::Cursor<'a>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Cursor<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
 
 impl<'a> Cursor<'a> {
     fn fail<T>(&self, detail: impl ToString) -> Result<T> {
-        Err(invalid("sgd2", self.at as u64, detail))
-    }
-    fn take(&mut self, n: usize) -> Result<&'a [u8]> {
-        let end = self.at.checked_add(n);
-        match end.and_then(|e| self.data.get(self.at..e).map(|s| (e, s))) {
-            Some((e, s)) => {
-                self.at = e;
-                Ok(s)
-            }
-            None => self.fail(format!("{n} bytes past the {} there are", self.data.len())),
-        }
-    }
-    fn u8(&mut self) -> Result<u8> {
-        Ok(self.take(1)?.first().copied().unwrap_or(0))
-    }
-    fn u32(&mut self) -> Result<u32> {
-        let b: [u8; 4] = self.take(4)?.try_into().unwrap_or([0; 4]);
-        Ok(u32::from_le_bytes(b))
+        Err(invalid("sgd2", self.position() as u64, detail))
     }
     /// A length byte, then that many bytes of name whose last is a NUL.
     fn name(&mut self) -> Result<&'a str> {
-        let start = self.at;
-        let length = usize::from(self.u8()?);
-        let bytes = self.take(length)?;
+        let start = self.position();
+        let length = usize::from(self.u8().field("sgd2")?);
+        let bytes = self.take(length).field("sgd2")?;
         let Some((0, text)) = bytes.split_last().map(|(l, t)| (*l, t)) else {
-            self.at = start;
+            self.seek(start).field("sgd2")?;
             return self.fail("a name that does not end in a NUL");
         };
         if text.is_empty() || !text.iter().all(|b| b.is_ascii_graphic()) {
-            self.at = start;
+            self.seek(start).field("sgd2")?;
             return self.fail("a name that is not printable ASCII");
         }
         std::str::from_utf8(text).or_else(|_| self.fail("a name that is not ASCII"))
@@ -155,12 +157,12 @@ impl<'a> Cursor<'a> {
 
 fn program<'a>(c: &mut Cursor<'a>, group: usize) -> Result<Program<'a>> {
     let name = c.name()?;
-    let tag = c.u8()?;
+    let tag = c.u8().field("sgd2")?;
     if !TAGS.contains(&tag) {
         return c.fail(format!("{name}: tag {tag:#04x}, not one of {TAGS:02x?}"));
     }
-    let size = c.u32()? as usize;
-    let container = c.take(size)?;
+    let size = c.u32(LE).field("sgd2")? as usize;
+    let container = c.take(size).field("sgd2")?;
     let magic = container.get(..4);
     let stored = container
         .get(24..28)
@@ -171,9 +173,9 @@ fn program<'a>(c: &mut Cursor<'a>, group: usize) -> Result<Program<'a>> {
             "{name} (group {group}): not a container of its stated size"
         ));
     }
-    let table = c.take(FIXED_TABLE)?;
-    let n = c.u32()? as usize;
-    let tables = c.take(n)?;
+    let table = c.take(FIXED_TABLE).field("sgd2")?;
+    let n = c.u32(LE).field("sgd2")? as usize;
+    let tables = c.take(n).field("sgd2")?;
     Ok(Program {
         name,
         tag,
@@ -189,24 +191,24 @@ const ROOT_SIGNATURES: &[u8] = b"proplst\0";
 /// One effect record, from its name to the end of its name block (see the module documentation).
 fn effect<'a>(c: &mut Cursor<'a>, groups: &[Vec<Program<'a>>; 8]) -> Result<Effect<'a>> {
     let name = c.name()?;
-    let word = c.u32()?;
+    let word = c.u32(LE).field("sgd2")?;
     let mut programs: [Vec<u32>; 6] = Default::default();
     for (list, &g) in programs.iter_mut().zip(EFFECT_LISTS.iter()) {
-        let n = c.u32()? as usize;
-        if n > c.data.len().saturating_sub(c.at).saturating_div(4) {
+        let n = c.u32(LE).field("sgd2")? as usize;
+        if n > c.remaining().saturating_div(4) {
             return c.fail(format!("{name}: a list of {n} programs"));
         }
         let available = groups.get(g).map_or(0, Vec::len);
         for _ in 0..n {
-            let index = c.u32()?;
+            let index = c.u32(LE).field("sgd2")?;
             if index as usize >= available {
                 return c.fail(format!("{name}: program {index} of a group of {available}"));
             }
             list.push(index);
         }
     }
-    let rest_start = c.at;
-    let tail = c.data.get(rest_start..).unwrap_or_default();
+    let rest_start = c.position();
+    let tail = c.bytes().get(rest_start..).unwrap_or_default();
     let marker = tail
         .windows(ROOT_SIGNATURES.len())
         .position(|w| w == ROOT_SIGNATURES)
@@ -217,28 +219,31 @@ fn effect<'a>(c: &mut Cursor<'a>, groups: &[Vec<Program<'a>>; 8]) -> Result<Effe
                 format!("{name}: no root signature table"),
             )
         })?;
-    c.at = rest_start
-        .saturating_add(marker)
-        .saturating_add(ROOT_SIGNATURES.len());
-    let sections = c.u32()? as usize;
+    c.seek(
+        rest_start
+            .saturating_add(marker)
+            .saturating_add(ROOT_SIGNATURES.len()),
+    )
+    .field("sgd2")?;
+    let sections = c.u32(LE).field("sgd2")? as usize;
     // each section takes at least its size word
-    if sections > c.data.len().saturating_sub(c.at).saturating_div(4) {
+    if sections > c.remaining().saturating_div(4) {
         return c.fail(format!("{name}: {sections} root signature sections"));
     }
     for _ in 0..sections {
-        let size = c.u32()? as usize;
-        c.take(size)?;
+        let size = c.u32(LE).field("sgd2")? as usize;
+        c.take(size).field("sgd2")?;
     }
-    let size = c.u32()? as usize;
-    let names = c.take(size)?;
+    let size = c.u32(LE).field("sgd2")? as usize;
+    let names = c.take(size).field("sgd2")?;
     if names.first() != Some(&0) || names.last() != Some(&0) {
         return c.fail(format!(
             "{name}: a name block that does not start and end with a NUL"
         ));
     }
     let rest = c
-        .data
-        .get(rest_start..c.at)
+        .bytes()
+        .get(rest_start..c.position())
         .ok_or_else(|| invalid("sgd2", rest_start as u64, "an effect without its rest"))?;
     Ok(Effect {
         name,
@@ -250,13 +255,13 @@ fn effect<'a>(c: &mut Cursor<'a>, groups: &[Vec<Program<'a>>; 8]) -> Result<Effe
 
 /// Read a shader database. The whole file is consumed.
 pub fn parse(data: &[u8]) -> Result<Sgd2<'_>> {
-    let mut c = Cursor { data, at: 0 };
-    if c.take(4)? != MAGIC {
+    let mut c = Cursor::new(data);
+    if c.take(4).field("sgd2")? != MAGIC {
         return invalid_magic(data);
     }
     let mut groups: Vec<Vec<Program<'_>>> = Vec::with_capacity(8);
     for (g, stage) in GROUP_STAGES.iter().enumerate() {
-        let count = c.u32()? as usize;
+        let count = c.u32(LE).field("sgd2")? as usize;
         if stage.is_none() && count != 0 {
             return c.fail(format!("group {g} has {count} programs: its stage is not known"));
         }
@@ -272,21 +277,21 @@ pub fn parse(data: &[u8]) -> Result<Sgd2<'_>> {
     }
     let groups: [Vec<Program<'_>>; 8] = groups
         .try_into()
-        .map_err(|_| invalid("sgd2", c.at as u64, "eight groups"))?;
+        .map_err(|_| invalid("sgd2", c.position() as u64, "eight groups"))?;
 
-    let declared = c.u32()? as usize;
+    let declared = c.u32(LE).field("sgd2")? as usize;
     // each record takes more than a name, a word and six counts
-    if declared > data.len().saturating_sub(c.at).saturating_div(40) {
+    if declared > data.len().saturating_sub(c.position()).saturating_div(40) {
         return c.fail(format!("{declared} effects in {} bytes", data.len()));
     }
     let mut effects = Vec::with_capacity(declared);
     for _ in 0..declared {
         effects.push(effect(&mut c, &groups)?);
     }
-    if c.at != data.len() {
+    if c.position() != data.len() {
         return c.fail(format!(
             "{} bytes after the last of {declared} effects",
-            data.len().saturating_sub(c.at)
+            data.len().saturating_sub(c.position())
         ));
     }
     Ok(Sgd2 { groups, effects })

@@ -1223,6 +1223,7 @@ dependencies = [
  "aes",
  "indexmap",
  "naga",
+ "primase-bytes",
  "primase-compress",
  "primase-core",
  "primase-dxbc",

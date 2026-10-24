@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 [dependencies]
+primase-bytes.workspace = true
 primase-core.workspace = true
 primase-compress.workspace = true
 primase-dxil.workspace = true

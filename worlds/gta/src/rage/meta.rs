@@ -205,7 +205,8 @@ fn err(offset: u64, detail: impl ToString) -> crate::Error {
     invalid("META", offset, detail)
 }
 
-use crate::rage::le::{f32 as f32_at, u8 as u8_at, u16 as u16_at, u32 as u32_at, u64 as u64_at};
+use crate::rage::le::LE;
+use primase_bytes::View;
 
 /// `len` bytes of `d` at `offset`, if it holds them.
 fn span(d: &[u8], offset: usize, len: usize) -> Option<&[u8]> {
@@ -225,40 +226,49 @@ impl Meta {
     /// Reads the container: header, structure and enum descriptions, data blocks.
     pub fn read(r: &Resource) -> Result<Meta> {
         let h = r.block::<0x70>(0x5000_0000)?;
-        if u32_at(h, 0x10)? != HEADER_MAGIC || u16_at(h, 0x14)? != HEADER_VERSION {
+        if View::new(h).u32(0x10, LE)? != HEADER_MAGIC || View::new(h).u16(0x14, LE)? != HEADER_VERSION {
             return Err(err(
                 0x10,
-                format!("header {:#x} {:#x}", u32_at(h, 0x10)?, u16_at(h, 0x14)?),
+                format!(
+                    "header {:#x} {:#x}",
+                    View::new(h).u32(0x10, LE)?,
+                    View::new(h).u16(0x14, LE)?
+                ),
             ));
         }
         let reserved = h.get(0x4E..).unwrap_or_default();
-        if h[0x16] > 1 || h[0x17] != 0 || u32_at(h, 0x18)? != 0 || reserved.iter().any(|&b| b != 0) {
+        if h[0x16] > 1 || h[0x17] != 0 || View::new(h).u32(0x18, LE)? != 0 || reserved.iter().any(|&b| b != 0)
+        {
             return Err(err(0x16, "reserved header bytes are not zero"));
         }
-        let root = usize::try_from(u32_at(h, 0x1C)?).map_err(|_| err(0x1C, "root block id"))?;
+        let root = usize::try_from(View::new(h).u32(0x1C, LE)?).map_err(|_| err(0x1C, "root block id"))?;
         let (struct_ptr, enum_ptr, block_ptr, name_ptr) = (
-            u64_at(h, 0x20)?,
-            u64_at(h, 0x28)?,
-            u64_at(h, 0x30)?,
-            u64_at(h, 0x38)?,
+            View::new(h).u64(0x20, LE)?,
+            View::new(h).u64(0x28, LE)?,
+            View::new(h).u64(0x30, LE)?,
+            View::new(h).u64(0x38, LE)?,
         );
         let (n_structs, n_enums, n_blocks) = (
-            usize::from(u16_at(h, 0x48)?),
-            usize::from(u16_at(h, 0x4A)?),
-            usize::from(u16_at(h, 0x4C)?),
+            usize::from(View::new(h).u16(0x48, LE)?),
+            usize::from(View::new(h).u16(0x4A, LE)?),
+            usize::from(View::new(h).u16(0x4C, LE)?),
         );
 
         let mut structs = BTreeMap::new();
         if n_structs > 0 {
             let s = r.records(struct_ptr, n_structs, 32)?;
             for d in s.as_chunks::<32>().0 {
-                let (name, key, size) = (u32_at(d, 0)?, u32_at(d, 4)?, u32_at(d, 0x18)?);
-                let n = usize::from(u16_at(d, 0x1E)?);
-                if u32_at(d, 0xC)? != 0 || u16_at(d, 0x1C)? != 0 {
+                let (name, key, size) = (
+                    View::new(d).u32(0, LE)?,
+                    View::new(d).u32(4, LE)?,
+                    View::new(d).u32(0x18, LE)?,
+                );
+                let n = usize::from(View::new(d).u16(0x1E, LE)?);
+                if View::new(d).u32(0xC, LE)? != 0 || View::new(d).u16(0x1C, LE)? != 0 {
                     return Err(err(struct_ptr, format!("structure {name:#010x}: reserved bytes")));
                 }
                 let e = if n > 0 {
-                    r.records(u64_at(d, 0x10)?, n, 16)?
+                    r.records(View::new(d).u64(0x10, LE)?, n, 16)?
                 } else {
                     &[][..]
                 };
@@ -271,12 +281,12 @@ impl Meta {
                         )
                     })?;
                     fields.push(Field {
-                        name: u32_at(f, 0)?,
-                        offset: u32_at(f, 4)?,
+                        name: View::new(f).u32(0, LE)?,
+                        offset: View::new(f).u32(4, LE)?,
                         kind,
                         byte9: f[9],
-                        ref_index: i16::from_le_bytes(u16_at(f, 10)?.to_le_bytes()),
-                        ref_key: u32_at(f, 12)?,
+                        ref_index: View::new(f).i16(10, LE)?,
+                        ref_key: View::new(f).u32(12, LE)?,
                     });
                 }
                 if structs
@@ -300,13 +310,14 @@ impl Meta {
         if n_enums > 0 {
             let s = r.records(enum_ptr, n_enums, 24)?;
             for d in s.as_chunks::<24>().0 {
-                let n = usize::try_from(u32_at(d, 0x10)?).map_err(|_| err(enum_ptr, "enum value count"))?;
-                let (name, key) = (u32_at(d, 0)?, u32_at(d, 4)?);
-                if u32_at(d, 0x14)? != 0 {
+                let n = usize::try_from(View::new(d).u32(0x10, LE)?)
+                    .map_err(|_| err(enum_ptr, "enum value count"))?;
+                let (name, key) = (View::new(d).u32(0, LE)?, View::new(d).u32(4, LE)?);
+                if View::new(d).u32(0x14, LE)? != 0 {
                     return Err(err(enum_ptr, format!("enum {name:#010x}: reserved bytes")));
                 }
                 let e = if n > 0 {
-                    r.records(u64_at(d, 8)?, n, 8)?
+                    r.records(View::new(d).u64(8, LE)?, n, 8)?
                 } else {
                     &[][..]
                 };
@@ -328,14 +339,15 @@ impl Meta {
         let s = r.records(block_ptr, n_blocks, 16)?;
         let mut blocks = Vec::with_capacity(n_blocks);
         for d in s.as_chunks::<16>().0 {
-            let len = usize::try_from(u32_at(d, 4)?).map_err(|_| err(block_ptr, "block length"))?;
+            let len =
+                usize::try_from(View::new(d).u32(4, LE)?).map_err(|_| err(block_ptr, "block length"))?;
             let data = if len > 0 {
-                r.at(u64_at(d, 8)?, len)?.to_vec()
+                r.at(View::new(d).u64(8, LE)?, len)?.to_vec()
             } else {
                 Vec::new()
             };
             blocks.push(Block {
-                name: u32_at(d, 0)?,
+                name: View::new(d).u32(0, LE)?,
                 data,
             });
         }
@@ -521,32 +533,41 @@ impl Meta {
                 )
             })?;
             let value = match f.kind {
-                Kind::Bool => match u8_at(v, 0)? {
+                Kind::Bool => match View::new(v).u8(0)? {
                     0 => Value::Bool(false),
                     1 => Value::Bool(true),
                     b => return Err(err(here, format!("bool {b}"))),
                 },
-                Kind::I8 => Value::I8(i8::from_le_bytes([u8_at(v, 0)?])),
-                Kind::U8 => Value::U8(u8_at(v, 0)?),
-                Kind::I16 => Value::I16(i16::from_le_bytes(u16_at(v, 0)?.to_le_bytes())),
-                Kind::U16 => Value::U16(u16_at(v, 0)?),
-                Kind::I32 => Value::I32(i32::from_le_bytes(u32_at(v, 0)?.to_le_bytes())),
-                Kind::U32 => Value::U32(u32_at(v, 0)?),
-                Kind::F32 => Value::F32(f32_at(v, 0)?),
-                Kind::Vec3 => Value::Vec3([f32_at(v, 0)?, f32_at(v, 4)?, f32_at(v, 8)?]),
-                Kind::Vec4 => Value::Vec4([f32_at(v, 0)?, f32_at(v, 4)?, f32_at(v, 8)?, f32_at(v, 12)?]),
-                Kind::Hash => Value::Hash(u32_at(v, 0)?),
+                Kind::I8 => Value::I8(View::new(v).i8(0)?),
+                Kind::U8 => Value::U8(View::new(v).u8(0)?),
+                Kind::I16 => Value::I16(View::new(v).i16(0, LE)?),
+                Kind::U16 => Value::U16(View::new(v).u16(0, LE)?),
+                Kind::I32 => Value::I32(View::new(v).i32(0, LE)?),
+                Kind::U32 => Value::U32(View::new(v).u32(0, LE)?),
+                Kind::F32 => Value::F32(View::new(v).f32(0, LE)?),
+                Kind::Vec3 => Value::Vec3([
+                    View::new(v).f32(0, LE)?,
+                    View::new(v).f32(4, LE)?,
+                    View::new(v).f32(8, LE)?,
+                ]),
+                Kind::Vec4 => Value::Vec4([
+                    View::new(v).f32(0, LE)?,
+                    View::new(v).f32(4, LE)?,
+                    View::new(v).f32(8, LE)?,
+                    View::new(v).f32(12, LE)?,
+                ]),
+                Kind::Hash => Value::Hash(View::new(v).u32(0, LE)?),
                 Kind::ByteEnum => Value::Enum {
                     enum_name: f.ref_key,
-                    value: i32::from(u8_at(v, 0)?),
+                    value: i32::from(View::new(v).u8(0)?),
                 },
                 Kind::ShortFlags => Value::Enum {
                     enum_name: f.ref_key,
-                    value: i32::from(u16_at(v, 0)?),
+                    value: i32::from(View::new(v).u16(0, LE)?),
                 },
                 Kind::IntEnum | Kind::IntFlags1 | Kind::IntFlags2 => Value::Enum {
                     enum_name: f.ref_key,
-                    value: i32::from_le_bytes(u32_at(v, 0)?.to_le_bytes()),
+                    value: View::new(v).i32(0, LE)?,
                 },
                 Kind::Chars if keep == Keep::Nothing => Value::Chars(Vec::new()),
                 Kind::Chars => Value::Chars(v.iter().copied().take_while(|&b| b != 0).collect()),
@@ -563,7 +584,7 @@ impl Meta {
                     }
                     Value::Array(items)
                 }
-                Kind::DataBlock => match Self::unpack(u64_at(v, 0)?)? {
+                Kind::DataBlock => match Self::unpack(View::new(v).u64(0, LE)?)? {
                     None => Value::Data(Vec::new()),
                     Some((id, 0)) => {
                         let data = &self.block(id)?.data;
@@ -579,11 +600,14 @@ impl Meta {
                     }
                 },
                 Kind::CharPointer => {
-                    let (len, cap) = (usize::from(u16_at(v, 8)?), usize::from(u16_at(v, 10)?));
-                    if u32_at(v, 12)? != 0 || cap < len {
+                    let (len, cap) = (
+                        usize::from(View::new(v).u16(8, LE)?),
+                        usize::from(View::new(v).u16(10, LE)?),
+                    );
+                    if View::new(v).u32(12, LE)? != 0 || cap < len {
                         return Err(err(here, "string length, capacity"));
                     }
-                    match Self::unpack(u64_at(v, 0)?)? {
+                    match Self::unpack(View::new(v).u64(0, LE)?)? {
                         None if len == 0 => Value::Str(None),
                         None => return Err(err(here, "null string with a length")),
                         Some((id, off)) => {
@@ -604,7 +628,9 @@ impl Meta {
                         }
                     }
                 }
-                Kind::StructurePointer => Value::Pointer(self.follow(u64_at(v, 0)?, depth, inner, walk)?),
+                Kind::StructurePointer => {
+                    Value::Pointer(self.follow(View::new(v).u64(0, LE)?, depth, inner, walk)?)
+                }
                 Kind::Structure => {
                     let si = self.struct_info(f.ref_key)?;
                     Value::Struct(self.decode_struct(
@@ -618,8 +644,11 @@ impl Meta {
                 }
                 Kind::Array => {
                     let el = self.array_info(info, f)?;
-                    let (count, cap) = (usize::from(u16_at(v, 8)?), usize::from(u16_at(v, 10)?));
-                    if u32_at(v, 12)? != 0 || cap < count {
+                    let (count, cap) = (
+                        usize::from(View::new(v).u16(8, LE)?),
+                        usize::from(View::new(v).u16(10, LE)?),
+                    );
+                    if View::new(v).u32(12, LE)? != 0 || cap < count {
                         return Err(err(here, format!("array count {count}, capacity {cap}")));
                     }
                     if depth == 0 {
@@ -627,7 +656,14 @@ impl Meta {
                             .get_or_insert_with(BTreeMap::new)
                             .insert(f.name, count);
                     }
-                    Value::Array(self.decode_array(el, u64_at(v, 0)?, count, depth, inner, walk)?)
+                    Value::Array(self.decode_array(
+                        el,
+                        View::new(v).u64(0, LE)?,
+                        count,
+                        depth,
+                        inner,
+                        walk,
+                    )?)
                 }
             };
             let kept = match keep {
@@ -686,16 +722,25 @@ impl Meta {
     /// One element of an inline array.
     fn decode_inline(&self, el: &Field, v: &[u8]) -> Result<Value> {
         Ok(match el.kind {
-            Kind::U8 => Value::U8(u8_at(v, 0)?),
-            Kind::I8 => Value::I8(i8::from_le_bytes([u8_at(v, 0)?])),
-            Kind::U16 => Value::U16(u16_at(v, 0)?),
-            Kind::I16 => Value::I16(i16::from_le_bytes(u16_at(v, 0)?.to_le_bytes())),
-            Kind::U32 => Value::U32(u32_at(v, 0)?),
-            Kind::I32 => Value::I32(i32::from_le_bytes(u32_at(v, 0)?.to_le_bytes())),
-            Kind::F32 => Value::F32(f32_at(v, 0)?),
-            Kind::Hash => Value::Hash(u32_at(v, 0)?),
-            Kind::Vec3 => Value::Vec3([f32_at(v, 0)?, f32_at(v, 4)?, f32_at(v, 8)?]),
-            Kind::Vec4 => Value::Vec4([f32_at(v, 0)?, f32_at(v, 4)?, f32_at(v, 8)?, f32_at(v, 12)?]),
+            Kind::U8 => Value::U8(View::new(v).u8(0)?),
+            Kind::I8 => Value::I8(View::new(v).i8(0)?),
+            Kind::U16 => Value::U16(View::new(v).u16(0, LE)?),
+            Kind::I16 => Value::I16(View::new(v).i16(0, LE)?),
+            Kind::U32 => Value::U32(View::new(v).u32(0, LE)?),
+            Kind::I32 => Value::I32(View::new(v).i32(0, LE)?),
+            Kind::F32 => Value::F32(View::new(v).f32(0, LE)?),
+            Kind::Hash => Value::Hash(View::new(v).u32(0, LE)?),
+            Kind::Vec3 => Value::Vec3([
+                View::new(v).f32(0, LE)?,
+                View::new(v).f32(4, LE)?,
+                View::new(v).f32(8, LE)?,
+            ]),
+            Kind::Vec4 => Value::Vec4([
+                View::new(v).f32(0, LE)?,
+                View::new(v).f32(4, LE)?,
+                View::new(v).f32(8, LE)?,
+                View::new(v).f32(12, LE)?,
+            ]),
             k => return Err(err(0, format!("inline array of {k:?}"))),
         })
     }
@@ -794,7 +839,7 @@ impl Meta {
                         )?)
                     }
                     Kind::StructurePointer => {
-                        Value::Pointer(self.follow(u64_at(v, 0)?, depth, keep, walk)?)
+                        Value::Pointer(self.follow(View::new(v).u64(0, LE)?, depth, keep, walk)?)
                     }
                     _ => self.decode_inline(el, v)?,
                 };

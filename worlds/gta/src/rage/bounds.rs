@@ -15,8 +15,10 @@
     clippy::cast_possible_truncation
 )]
 use crate::rage::le;
+use crate::rage::le::LE;
 use crate::rage::resource::Resource;
 use crate::{Result, invalid};
+use primase_bytes::View;
 
 fn err(at: u64, detail: impl ToString) -> crate::Error {
     invalid("phBound", at, detail)
@@ -126,14 +128,14 @@ pub fn read(r: &Resource, p: u64, depth: usize) -> Result<Bound> {
     let h = r.block::<0x70>(p)?;
     let header = BoundHeader {
         kind: h[0x10],
-        sphere_radius: le::f32(h, 0x14)?,
-        box_max: le::vec3(h, 0x20)?,
-        margin: le::f32(h, 0x2C)?,
-        box_min: le::vec3(h, 0x30)?,
-        box_centre: le::vec3(h, 0x40)?,
+        sphere_radius: View::new(h).f32(0x14, LE)?,
+        box_max: le::vec3_of(&View::new(h).array::<12>(0x20)?),
+        margin: View::new(h).f32(0x2C, LE)?,
+        box_min: le::vec3_of(&View::new(h).array::<12>(0x30)?),
+        box_centre: le::vec3_of(&View::new(h).array::<12>(0x40)?),
         material: [h[0x4C], h[0x4D], h[0x4E], h[0x4F]],
-        sphere_centre: le::vec3(h, 0x50)?,
-        volume: le::f32(h, 0x6C)?,
+        sphere_centre: le::vec3_of(&View::new(h).array::<12>(0x50)?),
+        volume: View::new(h).f32(0x6C, LE)?,
     };
     let contents = match header.kind {
         0 | 1 | 3 | 12 | 13 => Contents::Primitive,
@@ -147,7 +149,10 @@ pub fn read(r: &Resource, p: u64, depth: usize) -> Result<Bound> {
 
 fn geometry(r: &Resource, p: u64) -> Result<Geometry> {
     let g = r.block::<0x130>(p)?;
-    let (n_vertices, n_polygons) = (le::u32(g, 0xD0)? as usize, le::u32(g, 0xD4)? as usize);
+    let (n_vertices, n_polygons) = (
+        View::new(g).u32(0xD0, LE)? as usize,
+        View::new(g).u32(0xD4, LE)? as usize,
+    );
     // what it copies: vertices (6 bytes, 4 more of colour), polygons (16, one material byte), materials (8 each)
     r.charge(
         n_vertices
@@ -157,12 +162,12 @@ fn geometry(r: &Resource, p: u64) -> Result<Geometry> {
             .saturating_add(0x130),
         p,
     )?;
-    let quantum = le::vec3(g, 0x90)?;
-    let centre = le::vec3(g, 0xA0)?;
+    let quantum = le::vec3_of(&View::new(g).array::<12>(0x90)?);
+    let centre = le::vec3_of(&View::new(g).array::<12>(0xA0)?);
     let vertices = if n_vertices == 0 {
         Vec::new()
     } else {
-        let v = r.records(le::u64(g, 0xB0)?, n_vertices, 6)?;
+        let v = r.records(View::new(g).u64(0xB0, LE)?, n_vertices, 6)?;
         let ([qx, qy, qz], [cx, cy, cz]) = (quantum, centre);
         v.as_chunks::<6>()
             .0
@@ -173,7 +178,7 @@ fn geometry(r: &Resource, p: u64) -> Result<Geometry> {
             })
             .collect()
     };
-    let vertex_colours = match le::u64(g, 0xB8)? {
+    let vertex_colours = match View::new(g).u64(0xB8, LE)? {
         0 => None,
         vp if n_vertices > 0 => Some(r.records(vp, n_vertices, 4)?.as_chunks::<4>().0.to_vec()),
         _ => None,
@@ -181,7 +186,7 @@ fn geometry(r: &Resource, p: u64) -> Result<Geometry> {
     let polygons = if n_polygons == 0 {
         Vec::new()
     } else {
-        let d = r.records(le::u64(g, 0x88)?, n_polygons, 16)?;
+        let d = r.records(View::new(g).u64(0x88, LE)?, n_polygons, 16)?;
         d.as_chunks::<16>()
             .0
             .iter()
@@ -190,7 +195,7 @@ fn geometry(r: &Resource, p: u64) -> Result<Geometry> {
             .collect::<Result<_>>()?
     };
     let n_materials = usize::from(g[0x120]);
-    let materials = match le::u64(g, 0xF0)? {
+    let materials = match View::new(g).u64(0xF0, LE)? {
         0 => Vec::new(),
         mp => r
             .records(mp, n_materials, 8)?
@@ -200,7 +205,7 @@ fn geometry(r: &Resource, p: u64) -> Result<Geometry> {
             .map(le::u32x2_of)
             .collect(),
     };
-    let polygon_materials = match le::u64(g, 0x118)? {
+    let polygon_materials = match View::new(g).u64(0x118, LE)? {
         0 => vec![0; n_polygons],
         ip if n_polygons > 0 => r.at(ip, n_polygons)?.to_vec(),
         _ => Vec::new(),
@@ -271,14 +276,14 @@ fn polygon(c: &[u8; 16], n_vertices: usize) -> std::result::Result<Polygon, Stri
 
 fn composite(r: &Resource, p: u64, depth: usize) -> Result<Vec<Child>> {
     let h = r.block::<0xB0>(p)?;
-    let n = usize::from(le::u16(h, 0xA0)?);
+    let n = usize::from(View::new(h).u16(0xA0, LE)?);
     if n == 0 {
         return Ok(Vec::new());
     }
     // each child: its pointer, transform and two flag words
     r.charge(n.saturating_mul(8 + 64 + 8 + 8), p)?;
-    let children = r.records(le::u64(h, 0x70)?, n, 8)?.as_chunks::<8>().0;
-    let transforms = r.records(le::u64(h, 0x78)?, n, 64)?.as_chunks::<64>().0;
+    let children = r.records(View::new(h).u64(0x70, LE)?, n, 8)?.as_chunks::<8>().0;
+    let transforms = r.records(View::new(h).u64(0x78, LE)?, n, 64)?.as_chunks::<64>().0;
     // per child its flag words, as stored, or none
     let words = |pointer: u64| -> Result<Vec<[u32; 2]>> {
         Ok(match pointer {
@@ -292,8 +297,8 @@ fn composite(r: &Resource, p: u64, depth: usize) -> Result<Vec<Child>> {
                 .collect(),
         })
     };
-    let flags = words(le::u64(h, 0x90)?)?;
-    let flags_2 = words(le::u64(h, 0x98)?)?;
+    let flags = words(View::new(h).u64(0x90, LE)?)?;
+    let flags_2 = words(View::new(h).u64(0x98, LE)?)?;
     let mut out = Vec::with_capacity(n);
     for (((child, t), &flags), &flags_2) in children.iter().zip(transforms).zip(&flags).zip(&flags_2) {
         let cp = u64::from_le_bytes(*child);

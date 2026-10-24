@@ -12,8 +12,10 @@
     clippy::indexing_slicing,
     clippy::cast_possible_truncation
 )]
+use crate::rage::le::LE;
 use crate::read::xml::Element;
 use crate::{Result, invalid};
+use primase_bytes::{Cursor, Field};
 
 const MAGIC: &[u8; 4] = b"RBF0";
 
@@ -21,45 +23,10 @@ fn err(at: usize, detail: impl ToString) -> crate::Error {
     invalid("RBF", at as u64, detail)
 }
 
-struct Cursor<'a> {
-    d: &'a [u8],
-    at: usize,
-}
-
-impl Cursor<'_> {
-    fn take(&mut self, n: usize) -> Result<&[u8]> {
-        let end = self
-            .at
-            .checked_add(n)
-            .ok_or_else(|| err(self.at, "a length past the address space"))?;
-        let s = self
-            .d
-            .get(self.at..end)
-            .ok_or_else(|| err(self.at, "ends early"))?;
-        self.at = end;
-        Ok(s)
-    }
-    /// The next `N` bytes, as an array.
-    fn array<const N: usize>(&mut self) -> Result<[u8; N]> {
-        let at = self.at;
-        <[u8; N]>::try_from(self.take(N)?).map_err(|_| err(at, "ends early"))
-    }
-    fn u8(&mut self) -> Result<u8> {
-        self.array().map(u8::from_le_bytes)
-    }
-    fn u16(&mut self) -> Result<u16> {
-        self.array().map(u16::from_le_bytes)
-    }
-    fn u32(&mut self) -> Result<u32> {
-        self.array().map(u32::from_le_bytes)
-    }
-    fn f32(&mut self) -> Result<f32> {
-        self.u32().map(f32::from_bits)
-    }
-    fn text(&mut self, n: usize) -> Result<String> {
-        let at = self.at;
-        String::from_utf8(self.take(n)?.to_vec()).map_err(|e| err(at, e))
-    }
+/// `n` bytes of UTF-8 text.
+fn text(c: &mut Cursor, n: usize) -> Result<String> {
+    let at = c.position();
+    String::from_utf8(c.take(n).field("RBF")?.to_vec()).map_err(|e| err(at, e))
 }
 
 /// An element being read: the element and how many attributes it still expects.
@@ -73,15 +40,16 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Element> {
     if bytes.get(..4) != Some(MAGIC) {
         return Err(err(0, "not RBF0"));
     }
-    let mut c = Cursor { d: bytes, at: 4 };
+    let mut c = Cursor::new(bytes);
+    c.seek(4).field("RBF")?;
     let mut names: Vec<(String, u8)> = Vec::new();
     let mut stack: Vec<Open> = Vec::new();
     loop {
-        let at = c.at;
-        let index = c.u8()?;
+        let at = c.position();
+        let index = c.u8().field("RBF")?;
         match index {
             0xFF => {
-                if c.u8()? != 0xFF {
+                if c.u8().field("RBF")? != 0xFF {
                     return Err(err(at, "close tag not FF FF"));
                 }
                 let done = stack
@@ -96,19 +64,19 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Element> {
                 match stack.last_mut() {
                     Some(parent) => parent.el.children.push(done.el),
                     None => {
-                        if c.at != bytes.len() {
-                            return Err(err(c.at, "data after the root closes"));
+                        if c.position() != bytes.len() {
+                            return Err(err(c.position(), "data after the root closes"));
                         }
                         return Ok(done.el);
                     }
                 }
             }
             0xFD => {
-                if c.u8()? != 0xFF {
+                if c.u8().field("RBF")? != 0xFF {
                     return Err(err(at, "text tag not FD FF"));
                 }
-                let n = c.u32()? as usize;
-                let raw = c.take(n)?;
+                let n = c.u32(LE).field("RBF")? as usize;
+                let raw = c.take(n).field("RBF")?;
                 let text = String::from_utf8(raw.iter().copied().take_while(|&b| b != 0).collect())
                     .map_err(|e| err(at, e))?;
                 if raw.iter().skip_while(|&&b| b != 0).any(|&b| b != 0) {
@@ -122,11 +90,11 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Element> {
                     .push_str(&text);
             }
             _ => {
-                let kind = c.u8()?;
+                let kind = c.u8().field("RBF")?;
                 let i = usize::from(index);
                 if i == names.len() {
-                    let n = usize::from(c.u16()?);
-                    names.push((c.text(n)?, kind));
+                    let n = usize::from(c.u16(LE).field("RBF")?);
+                    names.push((text(&mut c, n)?, kind));
                 } else if i > names.len() {
                     return Err(err(at, format!("descriptor {i} of {}", names.len())));
                 }
@@ -139,7 +107,11 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Element> {
                 }
                 let value = match kind {
                     0x00 => {
-                        let (_, _, attrs) = (c.u16()?, c.u16()?, c.u16()?);
+                        let (_, _, attrs) = (
+                            c.u16(LE).field("RBF")?,
+                            c.u16(LE).field("RBF")?,
+                            c.u16(LE).field("RBF")?,
+                        );
                         if stack.is_empty() && at != 4 {
                             return Err(err(at, "a second root element"));
                         }
@@ -158,18 +130,18 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Element> {
                         });
                         continue;
                     }
-                    0x10 => vec![("value".to_string(), c.u32()?.to_string())],
+                    0x10 => vec![("value".to_string(), c.u32(LE).field("RBF")?.to_string())],
                     0x20 => vec![("value".to_string(), "true".to_string())],
                     0x30 => vec![("value".to_string(), "false".to_string())],
-                    0x40 => vec![("value".to_string(), c.f32()?.to_string())],
+                    0x40 => vec![("value".to_string(), c.f32(LE).field("RBF")?.to_string())],
                     0x50 => vec![
-                        ("x".to_string(), c.f32()?.to_string()),
-                        ("y".to_string(), c.f32()?.to_string()),
-                        ("z".to_string(), c.f32()?.to_string()),
+                        ("x".to_string(), c.f32(LE).field("RBF")?.to_string()),
+                        ("y".to_string(), c.f32(LE).field("RBF")?.to_string()),
+                        ("z".to_string(), c.f32(LE).field("RBF")?.to_string()),
                     ],
                     0x60 => {
-                        let n = usize::from(c.u16()?);
-                        vec![("value".to_string(), c.text(n)?)]
+                        let n = usize::from(c.u16(LE).field("RBF")?);
+                        vec![("value".to_string(), text(&mut c, n)?)]
                     }
                     k => return Err(err(at, format!("{name}: type {k:#x}"))),
                 };

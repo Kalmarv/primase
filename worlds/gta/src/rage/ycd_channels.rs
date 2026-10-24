@@ -47,8 +47,10 @@
     clippy::cast_possible_truncation
 )]
 use crate::rage::le;
+use crate::rage::le::LE;
 use crate::rage::ycd::{Animation, Sequence};
 use crate::{Result, invalid};
+use primase_bytes::View;
 
 fn err(at: usize, detail: impl ToString) -> crate::Error {
     invalid("ycd channels", u64::try_from(at).unwrap_or(u64::MAX), detail)
@@ -326,7 +328,7 @@ impl Pending {
 }
 
 fn i32_at(data: &[u8], at: usize) -> Result<i32> {
-    Ok(i32::from_le_bytes(le::u32(data, at)?.to_le_bytes()))
+    Ok(i32::from_le_bytes(View::new(data).u32(at, LE)?.to_le_bytes()))
 }
 
 /// A bit count a file stores as an `i32`: within `1..=32`.
@@ -349,33 +351,33 @@ impl Sequence {
         let mut at = 0usize;
         let mut pending: Vec<Pending> = Vec::new();
         for (type_index, kind) in KINDS.iter().copied().enumerate() {
-            let count = usize::from(le::u16(data, add(list_at, mul(type_index, 2)?)?)?);
+            let count = usize::from(View::new(data).u16(add(list_at, mul(type_index, 2)?)?, LE)?);
             for _ in 0..count {
-                let word = le::u16(data, info_at)?;
+                let word = View::new(data).u16(info_at, LE)?;
                 info_at = add(info_at, 2)?;
                 let track = usize::from(word >> 2);
                 let mut index = usize::from(word & 3);
                 let body = match kind {
                     ChannelKind::StaticQuaternion => {
-                        let v = le::vec3(data, at)?;
+                        let v = le::vec3_of(&View::new(data).array::<12>(at)?);
                         at = add(at, 12)?;
                         Body::Done(Channel::StaticQuaternion(v))
                     }
                     ChannelKind::StaticVector3 => {
-                        let v = le::vec3(data, at)?;
+                        let v = le::vec3_of(&View::new(data).array::<12>(at)?);
                         at = add(at, 12)?;
                         Body::Done(Channel::StaticVector3(v))
                     }
                     ChannelKind::StaticFloat => {
-                        let v = le::f32(data, at)?;
+                        let v = View::new(data).f32(at, LE)?;
                         at = add(at, 4)?;
                         Body::Done(Channel::StaticFloat(v))
                     }
                     ChannelKind::RawFloat => Body::Raw,
                     ChannelKind::QuantizeFloat => {
                         let b = count_bits(i32_at(data, at)?, at, "a quantised channel")?;
-                        let quantum = le::f32(data, add(at, 4)?)?;
-                        let offset = le::f32(data, add(at, 8)?)?;
+                        let quantum = View::new(data).f32(add(at, 4)?, LE)?;
+                        let offset = View::new(data).f32(add(at, 8)?, LE)?;
                         at = add(at, 12)?;
                         Body::Quantize {
                             bits: b,
@@ -540,8 +542,8 @@ impl Sequence {
         let value_bits = count_bits(i32_at(data, add(at, 4)?)?, at, "an indirect channel's values")?;
         let ints =
             usize::try_from(i32_at(data, add(at, 8)?)?).map_err(|_| err(at, "a negative table length"))?;
-        let quantum = le::f32(data, add(at, 12)?)?;
-        let offset = le::f32(data, add(at, 16)?)?;
+        let quantum = View::new(data).f32(add(at, 12)?, LE)?;
+        let offset = View::new(data).f32(add(at, 16)?, LE)?;
         let table_at = add(at, 20)?;
         let used = add(20, mul(ints, 4)?)?;
         if add(at, used)? > self.frame_offset_usize()? {
@@ -565,10 +567,10 @@ impl Sequence {
     /// A linear channel's frame values at parameter byte `at`: the values and the parameter bytes it takes.
     fn linear(&self, at: usize) -> Result<(Vec<f32>, usize)> {
         let data = self.data.as_slice();
-        let ints = as_usize(le::u32(data, at)?)?;
-        let counts = le::u32(data, add(at, 4)?)?;
-        let quantum = le::f32(data, add(at, 8)?)?;
-        let offset = le::f32(data, add(at, 12)?)?;
+        let ints = as_usize(View::new(data).u32(at, LE)?)?;
+        let counts = View::new(data).u32(add(at, 4)?, LE)?;
+        let quantum = View::new(data).f32(add(at, 8)?, LE)?;
+        let offset = View::new(data).f32(add(at, 12)?, LE)?;
         let used = mul(ints, 4)?;
         if used < 16 || add(at, used)? > self.frame_offset_usize()? {
             return Err(err(at, format!("a linear channel of {ints} words")));

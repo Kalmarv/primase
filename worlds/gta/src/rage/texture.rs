@@ -10,10 +10,11 @@
     clippy::indexing_slicing,
     clippy::cast_possible_truncation
 )]
-use crate::rage::le;
+use crate::rage::le::LE;
 use crate::rage::resource::Resource;
 use crate::rage::sga::BufferFormat;
 use crate::{Result, invalid};
+use primase_bytes::View;
 
 /// A texture as stored.
 #[derive(Clone, Debug, PartialEq)]
@@ -60,25 +61,30 @@ impl Texture {
     /// The 80-byte base at `pointer`: everything but the data.
     pub(crate) fn read_base(r: &Resource, pointer: u64) -> Result<(Texture, u64, u32, u32)> {
         let d = r.block::<0x50>(pointer)?;
-        let name_ptr = le::u64(d, 0x28)?;
+        let name_ptr = View::new(d).u64(0x28, LE)?;
         let t = Texture {
             name: if name_ptr == 0 {
                 String::new()
             } else {
                 c_string(r, name_ptr)?
             },
-            width: le::u16(d, 0x18)?,
-            height: le::u16(d, 0x1A)?,
-            depth: le::u16(d, 0x1C)?,
+            width: View::new(d).u16(0x18, LE)?,
+            height: View::new(d).u16(0x1A, LE)?,
+            depth: View::new(d).u16(0x1C, LE)?,
             dimension: d[0x1E],
             format: BufferFormat(d[0x1F]),
             tile_mode: d[0x20],
             levels: d[0x22],
-            flags: le::u32(d, 0x10)?,
-            usage: le::u32(d, 0x40)?,
+            flags: View::new(d).u32(0x10, LE)?,
+            usage: View::new(d).u32(0x40, LE)?,
             data: Vec::new(),
         };
-        Ok((t, le::u64(d, 0x38)?, le::u32(d, 0x08)?, le::u32(d, 0x0C)?))
+        Ok((
+            t,
+            View::new(d).u64(0x38, LE)?,
+            View::new(d).u32(0x08, LE)?,
+            View::new(d).u32(0x0C, LE)?,
+        ))
     }
 
     /// The sides of level `level`: each halved per level, at least 1. `level` is below [`Texture::levels`], which
@@ -164,11 +170,11 @@ impl TextureDictionary {
         let d = r.block::<0x40>(pointer)?;
         // a pointer list's header: pointer, count, capacity
         let list = |(at, count, cap): (usize, usize, usize)| -> Result<(u64, usize)> {
-            let (count, cap) = (le::u16(d, count)?, le::u16(d, cap)?);
+            let (count, cap) = (View::new(d).u16(count, LE)?, View::new(d).u16(cap, LE)?);
             if cap < count {
                 return Err(err(pointer, format!("list count {count} over capacity {cap}")));
             }
-            Ok((le::u64(d, at)?, usize::from(count)))
+            Ok((View::new(d).u64(at, LE)?, usize::from(count)))
         };
         let (hash_ptr, n) = list((0x20, 0x28, 0x2A))?;
         let (tex_ptr, m) = list((0x30, 0x38, 0x3A))?;

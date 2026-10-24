@@ -46,6 +46,33 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// A read past the bytes there are ([`primase_bytes::View`], [`primase_bytes::Cursor`]): the format's error at its
+/// offset.
+impl From<primase_bytes::BoundsError> for Error {
+    fn from(e: primase_bytes::BoundsError) -> Self {
+        Error::from(primase_bytes::FieldError {
+            what: "bytes",
+            bounds: e,
+        })
+    }
+}
+
+/// A read past the bytes there are, of a named format (`c.u32(LE).field("RBF")`).
+impl From<primase_bytes::FieldError> for Error {
+    fn from(e: primase_bytes::FieldError) -> Self {
+        let offset = u64::try_from(e.bounds.absolute()).unwrap_or(u64::MAX);
+        let detail = match e.bounds {
+            primase_bytes::BoundsError::OutOfBounds { length, total, .. } => {
+                format!("{length} bytes past the {total} there are")
+            }
+            primase_bytes::BoundsError::LengthOverflow { count, stride, .. } => {
+                format!("{count} entries of {stride} bytes overflow")
+            }
+        };
+        invalid(e.what, offset, detail)
+    }
+}
+
 pub(crate) fn invalid(format: &'static str, offset: u64, detail: impl ToString) -> Error {
     Error::Invalid {
         format,

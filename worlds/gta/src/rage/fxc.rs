@@ -15,7 +15,9 @@
     clippy::indexing_slicing,
     clippy::cast_possible_truncation
 )]
+use crate::rage::le::LE;
 use crate::{Result, invalid};
+use primase_bytes::Field;
 
 /// The magic: `rgxe`, as the first four bytes.
 pub const MAGIC: u32 = 0x6578_6772;
@@ -154,54 +156,36 @@ impl Fxc {
     }
 }
 
-struct Cursor<'a> {
-    data: &'a [u8],
-    at: usize,
+/// The file's cursor ([`primase_bytes::Cursor`]), with this format's grammar as methods.
+struct Cursor<'a>(primase_bytes::Cursor<'a>);
+
+impl<'a> Cursor<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Cursor(primase_bytes::Cursor::new(data))
+    }
+}
+
+impl<'a> std::ops::Deref for Cursor<'a> {
+    type Target = primase_bytes::Cursor<'a>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Cursor<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
 
 impl Cursor<'_> {
-    fn take(&mut self, n: usize) -> Result<&[u8]> {
-        let end = self
-            .at
-            .checked_add(n)
-            .ok_or_else(|| invalid("fxc", self.at as u64, "length overflow"))?;
-        let s = self.data.get(self.at..end).ok_or_else(|| {
-            invalid(
-                "fxc",
-                self.at as u64,
-                format!("{n} bytes past the {} there are", self.data.len()),
-            )
-        })?;
-        self.at = end;
-        Ok(s)
-    }
-    fn u8(&mut self) -> Result<u8> {
-        self.take(1)?
-            .first()
-            .copied()
-            .ok_or_else(|| invalid("fxc", self.at as u64, "a byte"))
-    }
-    fn u16(&mut self) -> Result<u16> {
-        let b: [u8; 2] = self
-            .take(2)?
-            .try_into()
-            .map_err(|_| invalid("fxc", self.at as u64, "two bytes"))?;
-        Ok(u16::from_le_bytes(b))
-    }
-    fn u32(&mut self) -> Result<u32> {
-        let b: [u8; 4] = self
-            .take(4)?
-            .try_into()
-            .map_err(|_| invalid("fxc", self.at as u64, "four bytes"))?;
-        Ok(u32::from_le_bytes(b))
-    }
     fn string(&mut self) -> Result<String> {
-        let start = self.at;
-        let length = usize::from(self.u8()?);
+        let start = self.position();
+        let length = usize::from(self.u8().field("fxc")?);
         if length == 0 {
             return Ok(String::new());
         }
-        let bytes = self.take(length)?;
+        let bytes = self.take(length).field("fxc")?;
         let (text, last) = bytes.split_at(length.saturating_sub(1));
         if last != [0] {
             return Err(invalid("fxc", start as u64, "a string without its terminator"));
@@ -212,7 +196,7 @@ impl Cursor<'_> {
         Ok(String::from_utf8_lossy(text).into_owned())
     }
     fn strings(&mut self) -> Result<Vec<String>> {
-        let n = self.u8()?;
+        let n = self.u8().field("fxc")?;
         (0..n).map(|_| self.string()).collect()
     }
 }
@@ -221,24 +205,24 @@ fn shader(c: &mut Cursor<'_>, stage: ProgramStage) -> Result<Shader> {
     let name = c.string()?;
     let second_name = if name.is_empty() { Some(c.string()?) } else { None };
     let variables = c.strings()?;
-    let buffer_count = c.u8()?;
+    let buffer_count = c.u8().field("fxc")?;
     let mut buffers = Vec::new();
     for _ in 0..buffer_count {
         let n = c.string()?;
-        buffers.push((n, c.u16()?));
+        buffers.push((n, c.u16(LE).field("fxc")?));
     }
     let geometry_byte = if stage == ProgramStage::Geometry {
-        Some(c.u8()?)
+        Some(c.u8().field("fxc")?)
     } else {
         None
     };
-    let length = c.u32()? as usize;
-    let at = c.at;
+    let length = c.u32(LE).field("fxc")? as usize;
+    let at = c.position();
     let bytecode = if length == 0 {
         Vec::new()
     } else {
         // the container, whose own first word is its magic
-        let bytes = c.take(length)?;
+        let bytes = c.take(length).field("fxc")?;
         let magic = bytes
             .get(..4)
             .and_then(|b| <[u8; 4]>::try_from(b).ok())
@@ -256,8 +240,8 @@ fn shader(c: &mut Cursor<'_>, stage: ProgramStage) -> Result<Shader> {
         stage,
         ProgramStage::Vertex | ProgramStage::Pixel | ProgramStage::Geometry
     ) {
-        let major = c.u8()?;
-        Some((major, c.u8()?))
+        let major = c.u8().field("fxc")?;
+        Some((major, c.u8().field("fxc")?))
     } else {
         None
     };
@@ -273,14 +257,14 @@ fn shader(c: &mut Cursor<'_>, stage: ProgramStage) -> Result<Shader> {
 }
 
 fn group(c: &mut Cursor<'_>, stage: ProgramStage) -> Result<Group> {
-    let mut count = c.u8()?;
+    let mut count = c.u8().field("fxc")?;
     let extra_count_byte = count == 0;
     if extra_count_byte {
-        count = c.u8()?;
+        count = c.u8().field("fxc")?;
     }
     let name = c.string()?;
-    let unknown_bytes = [c.u8()?, c.u8()?];
-    let unknown_word = c.u32()?;
+    let unknown_bytes = [c.u8().field("fxc")?, c.u8().field("fxc")?];
+    let unknown_word = c.u32(LE).field("fxc")?;
     // the stored count is one more than the number of programs
     let n = count.saturating_sub(1);
     let shaders = (0..n).map(|_| shader(c, stage)).collect::<Result<Vec<_>>>()?;
@@ -294,13 +278,13 @@ fn group(c: &mut Cursor<'_>, stage: ProgramStage) -> Result<Group> {
 }
 
 fn constant_buffers(c: &mut Cursor<'_>) -> Result<Vec<ConstantBuffer>> {
-    let n = c.u8()?;
+    let n = c.u8().field("fxc")?;
     let mut out = Vec::new();
     for _ in 0..n {
-        let size = c.u32()?;
+        let size = c.u32(LE).field("fxc")?;
         let mut registers = [0u16; 6];
         for r in &mut registers {
-            *r = c.u16()?;
+            *r = c.u16(LE).field("fxc")?;
         }
         out.push(ConstantBuffer {
             size,
@@ -314,35 +298,42 @@ fn constant_buffers(c: &mut Cursor<'_>) -> Result<Vec<ConstantBuffer>> {
 /// Variable kinds whose values are integers: Int, Int4, Boolean, Texture, Buffer and the unordered-access ones are
 /// stored as words; no reading of what a word means is made here, so the words are kept raw whatever the kind.
 fn variables(c: &mut Cursor<'_>) -> Result<Vec<Variable>> {
-    let n = c.u8()?;
+    let n = c.u8().field("fxc")?;
     let mut out = Vec::new();
     for _ in 0..n {
-        let (kind, count, slot, group) = (c.u8()?, c.u8()?, c.u8()?, c.u8()?);
+        let (kind, count, slot, group) = (
+            c.u8().field("fxc")?,
+            c.u8().field("fxc")?,
+            c.u8().field("fxc")?,
+            c.u8().field("fxc")?,
+        );
         let name = c.string()?;
         let name2 = c.string()?;
-        let (offset, variant) = (c.u8()?, c.u8()?);
-        let unused = [c.u8()?, c.u8()?];
-        let constant_buffer = c.u32()?;
-        let param_count = c.u8()?;
+        let (offset, variant) = (c.u8().field("fxc")?, c.u8().field("fxc")?);
+        let unused = [c.u8().field("fxc")?, c.u8().field("fxc")?];
+        let constant_buffer = c.u32(LE).field("fxc")?;
+        let param_count = c.u8().field("fxc")?;
         let mut params = Vec::new();
         for _ in 0..param_count {
             let pname = c.string()?;
-            let value = match c.u8()? {
-                0 => ParamValue::Int(i32::from_le_bytes(c.u32()?.to_le_bytes())),
-                1 => ParamValue::Float(f32::from_bits(c.u32()?)),
+            let value = match c.u8().field("fxc")? {
+                0 => ParamValue::Int(i32::from_le_bytes(c.u32(LE).field("fxc")?.to_le_bytes())),
+                1 => ParamValue::Float(f32::from_bits(c.u32(LE).field("fxc")?)),
                 2 => ParamValue::Text(c.string()?),
                 other => {
                     return Err(invalid(
                         "fxc",
-                        c.at as u64,
+                        c.position() as u64,
                         format!("variable parameter type {other}"),
                     ));
                 }
             };
             params.push(VariableParam { name: pname, value });
         }
-        let value_count = c.u8()?;
-        let values = (0..value_count).map(|_| c.u32()).collect::<Result<Vec<_>>>()?;
+        let value_count = c.u8().field("fxc")?;
+        let values = (0..value_count)
+            .map(|_| Ok(c.u32(LE).field("fxc")?))
+            .collect::<Result<Vec<_>>>()?;
         out.push(Variable {
             kind,
             count,
@@ -362,22 +353,22 @@ fn variables(c: &mut Cursor<'_>) -> Result<Vec<Variable>> {
 }
 
 fn techniques(c: &mut Cursor<'_>) -> Result<Vec<Technique>> {
-    let n = c.u8()?;
+    let n = c.u8().field("fxc")?;
     let mut out = Vec::new();
     for _ in 0..n {
         let name = c.string()?;
-        let passes = c.u8()?;
+        let passes = c.u8().field("fxc")?;
         let mut list = Vec::new();
         for _ in 0..passes {
             let mut programs = [0u8; 6];
             for p in &mut programs {
-                *p = c.u8()?;
+                *p = c.u8().field("fxc")?;
             }
-            let count = c.u8()?;
+            let count = c.u8().field("fxc")?;
             let mut params = Vec::new();
             for _ in 0..count {
-                let kind = c.u32()?;
-                params.push((kind, c.u32()?));
+                let kind = c.u32(LE).field("fxc")?;
+                params.push((kind, c.u32(LE).field("fxc")?));
             }
             list.push(Pass { programs, params });
         }
@@ -388,21 +379,21 @@ fn techniques(c: &mut Cursor<'_>) -> Result<Vec<Technique>> {
 
 /// Read a compiled effect. The whole file is consumed: anything after the techniques is an error.
 pub fn parse(data: &[u8]) -> Result<Fxc> {
-    let mut c = Cursor { data, at: 0 };
-    let magic = c.u32()?;
+    let mut c = Cursor::new(data);
+    let magic = c.u32(LE).field("fxc")?;
     if magic != MAGIC {
         return Err(invalid("fxc", 0, format!("magic {magic:#010x}, not rgxe")));
     }
-    let vertex_type = c.u32()?;
-    let preset_count = c.u8()?;
+    let vertex_type = c.u32(LE).field("fxc")?;
+    let preset_count = c.u8().field("fxc")?;
     let mut presets = Vec::new();
     for _ in 0..preset_count {
         let name = c.string()?;
-        let unused = c.u8()?;
+        let unused = c.u8().field("fxc")?;
         presets.push(PresetParam {
             name,
             unused,
-            value: c.u32()?,
+            value: c.u32(LE).field("fxc")?,
         });
     }
     let mut groups = Vec::new();
@@ -411,19 +402,19 @@ pub fn parse(data: &[u8]) -> Result<Fxc> {
     }
     let groups: [Group; 6] = groups
         .try_into()
-        .map_err(|_| invalid("fxc", c.at as u64, "six stage groups"))?;
+        .map_err(|_| invalid("fxc", c.position() as u64, "six stage groups"))?;
     let cbuffers1 = constant_buffers(&mut c)?;
     let variables1 = variables(&mut c)?;
     let cbuffers2 = constant_buffers(&mut c)?;
     let variables2 = variables(&mut c)?;
     let techniques = techniques(&mut c)?;
-    if c.at != data.len() {
+    if c.position() != data.len() {
         return Err(invalid(
             "fxc",
-            c.at as u64,
+            c.position() as u64,
             format!(
                 "{} bytes after the last technique",
-                data.len().saturating_sub(c.at)
+                data.len().saturating_sub(c.position())
             ),
         ));
     }

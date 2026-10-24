@@ -15,9 +15,10 @@
 )]
 use std::collections::BTreeMap;
 
-use crate::rage::le;
+use crate::rage::le::LE;
 use crate::rage::resource::Resource;
 use crate::{Result, invalid};
+use primase_bytes::View;
 
 /// The resource version of Enhanced's clip dictionaries (ycd).
 pub const VERSION: u32 = 46;
@@ -121,8 +122,8 @@ fn chains(r: &Resource, table: u64, capacity: usize, entries: usize) -> Result<V
                 ));
             }
             let e = r.at(at, 32)?;
-            out.push((le::u32(e, 0)?, le::u64(e, 8)?));
-            at = le::u64(e, 0x10)?;
+            out.push((View::new(e).u32(0, LE)?, View::new(e).u64(8, LE)?));
+            at = View::new(e).u64(0x10, LE)?;
         }
     }
     if out.len() != entries {
@@ -152,7 +153,7 @@ fn name_at(r: &Resource, pointer: u64, len: usize, capacity: usize) -> Result<St
 
 fn sequence(r: &Resource, pointer: u64) -> Result<Sequence> {
     let h = r.at(pointer, 0x20)?;
-    let len = usize::try_from(le::u32(h, 4)?).map_err(|_| err(pointer, "a sequence length"))?;
+    let len = usize::try_from(View::new(h).u32(4, LE)?).map_err(|_| err(pointer, "a sequence length"))?;
     // the data is copied: a list naming one sequence over and over copies it every time
     r.charge(len.saturating_add(0x20), pointer)?;
     let data = r
@@ -164,18 +165,18 @@ fn sequence(r: &Resource, pointer: u64) -> Result<Sequence> {
         )?
         .to_vec();
     let s = Sequence {
-        id: le::u32(h, 0)?,
-        frame_offset: le::u32(h, 0x0C)?,
-        root_motion_refs_offset: le::u32(h, 0x10)?,
-        frames: le::u16(h, 0x16)?,
-        frame_length: le::u16(h, 0x18)?,
-        indirect_quantize_ints: le::u16(h, 0x1A)?,
-        quantize_value_bits: le::u16(h, 0x1C)?,
-        chunk_size: le::u8(h, 0x1E)?,
-        root_motion_ref_counts: le::u8(h, 0x1F)?,
+        id: View::new(h).u32(0, LE)?,
+        frame_offset: View::new(h).u32(0x0C, LE)?,
+        root_motion_refs_offset: View::new(h).u32(0x10, LE)?,
+        frames: View::new(h).u16(0x16, LE)?,
+        frame_length: View::new(h).u16(0x18, LE)?,
+        indirect_quantize_ints: View::new(h).u16(0x1A, LE)?,
+        quantize_value_bits: View::new(h).u16(0x1C, LE)?,
+        chunk_size: View::new(h).u8(0x1E)?,
+        root_motion_ref_counts: View::new(h).u8(0x1F)?,
         data,
     };
-    if le::u32(h, 8)? != 0 || le::u16(h, 0x14)? != 0 {
+    if View::new(h).u32(8, LE)? != 0 || View::new(h).u16(0x14, LE)? != 0 {
         return Err(err(pointer, "a sequence's reserved words are not zero"));
     }
     // the root motion offset counts from 32 bytes before the data (the header's length), and is the data's length plus
@@ -197,9 +198,9 @@ fn animation(r: &Resource, pointer: u64) -> Result<Animation> {
     let a = r.at(pointer, 96)?;
     let list = |at: usize| -> Result<(u64, usize, usize)> {
         Ok((
-            le::u64(a, at)?,
-            usize::from(le::u16(a, at.saturating_add(8))?),
-            usize::from(le::u16(a, at.saturating_add(10))?),
+            View::new(a).u64(at, LE)?,
+            usize::from(View::new(a).u16(at.saturating_add(8), LE)?),
+            usize::from(View::new(a).u16(at.saturating_add(10), LE)?),
         ))
     };
     let (seq_ptr, seq_count, seq_capacity) = list(0x40)?;
@@ -234,13 +235,13 @@ fn animation(r: &Resource, pointer: u64) -> Result<Animation> {
         })
         .collect();
     Ok(Animation {
-        flags: [le::u8(a, 0x10)?, le::u8(a, 0x11)?],
-        unknown_1c: le::u32(a, 0x1C)?,
-        frames: le::u16(a, 0x14)?,
-        sequence_frame_limit: le::u16(a, 0x16)?,
-        duration: le::f32(a, 0x18)?,
-        max_sequence_block: le::u32(a, 0x38)?,
-        usage_count: le::u32(a, 0x3C)?,
+        flags: [View::new(a).u8(0x10)?, View::new(a).u8(0x11)?],
+        unknown_1c: View::new(a).u32(0x1C, LE)?,
+        frames: View::new(a).u16(0x14, LE)?,
+        sequence_frame_limit: View::new(a).u16(0x16, LE)?,
+        duration: View::new(a).f32(0x18, LE)?,
+        max_sequence_block: View::new(a).u32(0x38, LE)?,
+        usage_count: View::new(a).u32(0x3C, LE)?,
         sequences,
         bone_ids,
     })
@@ -260,11 +261,11 @@ impl ClipDictionary {
         }
         let d = r.at(ROOT, 0x40)?;
         // the animations: a map block holding the table
-        let map = r.at(le::u64(d, 0x18)?, 48)?;
+        let map = r.at(View::new(d).u64(0x18, LE)?, 48)?;
         let (table, capacity, entries) = (
-            le::u64(map, 0x18)?,
-            usize::from(le::u16(map, 0x20)?),
-            usize::from(le::u16(map, 0x22)?),
+            View::new(map).u64(0x18, LE)?,
+            usize::from(View::new(map).u16(0x20, LE)?),
+            usize::from(View::new(map).u16(0x22, LE)?),
         );
         let mut by_pointer: BTreeMap<u64, u32> = BTreeMap::new();
         let mut animations = Vec::new();
@@ -277,18 +278,18 @@ impl ClipDictionary {
         }
         // the clips
         let (clips_table, clips_capacity, clips_entries) = (
-            le::u64(d, 0x28)?,
-            usize::from(le::u16(d, 0x30)?),
-            usize::from(le::u16(d, 0x32)?),
+            View::new(d).u64(0x28, LE)?,
+            usize::from(View::new(d).u16(0x30, LE)?),
+            usize::from(View::new(d).u16(0x32, LE)?),
         );
         let mut clips = Vec::new();
         for (hash, pointer) in chains(r, clips_table, clips_capacity, clips_entries)? {
             let c = r.at(pointer, 112)?;
             let name = name_at(
                 r,
-                le::u64(c, 0x18)?,
-                usize::from(le::u16(c, 0x20)?),
-                usize::from(le::u16(c, 0x22)?),
+                View::new(c).u64(0x18, LE)?,
+                usize::from(View::new(c).u16(0x20, LE)?),
+                usize::from(View::new(c).u16(0x22, LE)?),
             )?;
             let play = |start: usize, animation: u64| -> Result<ClipPlay> {
                 Ok(ClipPlay {
@@ -298,28 +299,28 @@ impl ClipDictionary {
                             format!("clip {name} plays an animation that is not the dictionary's"),
                         )
                     })?,
-                    start: le::f32(c, start)?,
-                    end: le::f32(c, start.saturating_add(4))?,
-                    rate: le::f32(c, start.saturating_add(8))?,
+                    start: View::new(c).f32(start, LE)?,
+                    end: View::new(c).f32(start.saturating_add(4), LE)?,
+                    rate: View::new(c).f32(start.saturating_add(8), LE)?,
                 })
             };
-            let (plays, list_duration) = match le::u32(c, 0x10)? {
-                1 => (vec![play(0x54, le::u64(c, 0x50)?)?], None),
+            let (plays, list_duration) = match View::new(c).u32(0x10, LE)? {
+                1 => (vec![play(0x54, View::new(c).u64(0x50, LE)?)?], None),
                 2 => {
-                    let count = usize::from(le::u16(c, 0x58)?);
-                    if le::u16(c, 0x5A)? != le::u16(c, 0x58)? {
+                    let count = usize::from(View::new(c).u16(0x58, LE)?);
+                    if View::new(c).u16(0x5A, LE)? != View::new(c).u16(0x58, LE)? {
                         return Err(err(
                             pointer,
                             format!("clip {name}: two different counts of its animations"),
                         ));
                     }
-                    let list = r.records(le::u64(c, 0x50)?, count, 24)?;
+                    let list = r.records(View::new(c).u64(0x50, LE)?, count, 24)?;
                     let plays = list
                         .as_chunks::<24>()
                         .0
                         .iter()
                         .map(|e| {
-                            let animation = le::u64(e, 0x10)?;
+                            let animation = View::new(e).u64(0x10, LE)?;
                             Ok(ClipPlay {
                                 animation: *by_pointer.get(&animation).ok_or_else(|| {
                                     err(
@@ -329,13 +330,13 @@ impl ClipDictionary {
                                         ),
                                     )
                                 })?,
-                                start: le::f32(e, 0)?,
-                                end: le::f32(e, 4)?,
-                                rate: le::f32(e, 8)?,
+                                start: View::new(e).f32(0, LE)?,
+                                end: View::new(e).f32(4, LE)?,
+                                rate: View::new(e).f32(8, LE)?,
                             })
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    (plays, Some(le::f32(c, 0x60)?))
+                    (plays, Some(View::new(c).f32(0x60, LE)?))
                 }
                 t => return Err(err(pointer, format!("clip {name} of type {t}"))),
             };
@@ -344,8 +345,8 @@ impl ClipDictionary {
                 name,
                 plays,
                 list_duration,
-                has_tags: le::u64(c, 0x38)? != 0,
-                has_properties: le::u64(c, 0x40)? != 0,
+                has_tags: View::new(c).u64(0x38, LE)? != 0,
+                has_properties: View::new(c).u64(0x40, LE)? != 0,
             });
         }
         Ok(ClipDictionary { animations, clips })
