@@ -116,7 +116,7 @@ impl VertexStage {
             let Some((_, rows)) = constants.iter_mut().find(|(s, _)| *s == slot) else {
                 continue;
             };
-            let Some(words) = frozen_words(&c.role, frame, &mut policies)? else {
+            let Some(words) = frozen_words(&c.role, c.lines.as_ref(), frame, &mut policies)? else {
                 if let ConstantRole::Unknown { why } = &c.role {
                     return Err(invalid(
                         "vertex binding",

@@ -6,7 +6,8 @@ use crate::{Result, invalid, materials::LayeredMaterial};
 use primase_core::Entity;
 use primase_core::parallel::Threads;
 use primase_core::shader::{
-    AddressMode, ConstantRole, FrameParameter, ObjectParameter, StageBinding, TextureSource, ViewParameter,
+    AddressMode, ConstantRole, FrameParameter, MatrixLines, ObjectParameter, StageBinding, TextureSource,
+    ViewParameter,
 };
 use primase_image::sampling::Address;
 use primase_shader::Interface;
@@ -198,6 +199,7 @@ pub const CLOTH_OFF_POLICY: &str =
 /// material's own words are the role's own. A role the bake has no value for is an error.
 pub(crate) fn frozen_words(
     role: &ConstantRole,
+    lines: Option<&MatrixLines>,
     frame: &FrozenFrame,
     policies: &mut BTreeMap<String, u64>,
 ) -> Result<Option<Vec<u32>>> {
@@ -236,10 +238,31 @@ pub(crate) fn frozen_words(
             bits(&frame.clip_plane)
         }
         // the joints' palette, and the cloth-cancel matrices a skinned program applies before it: at the bind pose every
-        // matrix is the identity, the palette's words as many as any buffer holds
+        // matrix is the identity, the palette's words as many as any buffer holds. A 3 x 4 matrix is three lines held as
+        // rows and four (the translation's last, zero) held as columns, so the palette's stride is its lines'; one whose
+        // lines the program does not show has no stride to repeat by
         ConstantRole::Object(ObjectParameter::BonePalette | ObjectParameter::ClothCancelPalette) => {
+            let element: Vec<u32> = match lines {
+                Some(MatrixLines::Rows) => bits(&frame.world),
+                Some(MatrixLines::Columns) => bits(&frame.world).into_iter().chain([0; 4]).collect(),
+                Some(MatrixLines::Unshown { why }) => {
+                    *policies
+                        .entry(format!(
+                            "a palette whose lines the program does not show, left at frozen zero: {why}"
+                        ))
+                        .or_default() += 1;
+                    return Ok(None);
+                }
+                None => {
+                    return Err(invalid(
+                        "layer binding",
+                        0,
+                        "a palette whose lines are not stated",
+                    ));
+                }
+            };
             policies.insert(BIND_POSE_POLICY.into(), 1);
-            (0..64).flat_map(|_| bits(&frame.world)).collect()
+            (0..64).flat_map(|_| element.iter().copied()).collect()
         }
         ConstantRole::Object(ObjectParameter::InstanceColour) => bits(&frame.instance_colour),
         ConstantRole::Object(
@@ -552,7 +575,7 @@ impl Prepared {
                 resolve::register(interface.resource(c.resource).ok_or_else(|| {
                     invalid("layer binding", 0, "a constant of a resource the shader lacks")
                 })?)?;
-            let Some(mut values) = frozen_words(&c.role, frame, &mut policies)? else {
+            let Some(mut values) = frozen_words(&c.role, c.lines.as_ref(), frame, &mut policies)? else {
                 continue;
             };
             // the alpha test is off in a bake: a discarded texel has no G-buffer, and the cutout is the albedo's own alpha,
@@ -1140,6 +1163,7 @@ mod tests {
         ] {
             let words = frozen_words(
                 &ConstantRole::Object(parameter),
+                None,
                 &FrozenFrame::static_bake(0.),
                 &mut policies,
             )

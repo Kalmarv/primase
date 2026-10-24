@@ -4,8 +4,8 @@
 //! layered material's binding holds, worked out from the HLSL, fxc's listing of its buffers and the material.
 use primase_core::shader::{
     AddressMode, BlendFactor, BlendOp, Compare, ConstantRole, FrameParameter, FrameTexture, InputRole,
-    LaneStream, NormalEncoding, NormalSpace, ObjectParameter, OutputRole, ResourceId, SamplerState,
-    ScalarEncoding, Shader, ShaderBinding, ShaderFormat, Stage, TextureSource, ViewParameter,
+    LaneStream, MatrixLines, NormalEncoding, NormalSpace, ObjectParameter, OutputRole, ResourceId,
+    SamplerState, ScalarEncoding, Shader, ShaderBinding, ShaderFormat, Stage, TextureSource, ViewParameter,
 };
 use primase_core::{
     BindingId, ColorSpace, Deformation, Entity, Influences, Joint, JointId, Mesh, Name, Primitive, Rest,
@@ -44,6 +44,9 @@ const OFFSET_PROGRAM: &[u8] = include_bytes!("fixtures/layered_off_vs.dxbc");
 /// layered_vs.dxbc with the cloth permutation's shape (tests/fixtures/layered_vs.hlsl, CLOTH).
 const CLOTH_PROGRAM: &[u8] = include_bytes!("fixtures/layered_cloth_vs.dxbc");
 const LINING_PROGRAM: &[u8] = include_bytes!("fixtures/layered_lining_vs.dxbc");
+
+/// Sekiro's cloth programs' shape, each palette row chosen by the flag (tests/fixtures/layered_cloth_rows_vs.hlsl).
+const CLOTH_ROWS_PROGRAM: &[u8] = include_bytes!("fixtures/layered_cloth_rows_vs.dxbc");
 
 /// A DXBC vertex program as the pass holds it.
 fn dxbc_shader(bytes: &[u8], interface: primase_core::shader::Interface) -> Shader {
@@ -997,7 +1000,39 @@ fn a_skinned_vertex_program_is_bound_to_joint_streams_and_a_palette() {
         cancel.role,
         ConstantRole::Object(ObjectParameter::ClothCancelPalette)
     );
+    // both palettes are held by rows, as the program applies them (an unshown palette would bake at zero and collapse
+    // the vertices); the clip matrix, applied as `mul(M, v)`, by columns
+    assert_eq!(palette.lines, Some(MatrixLines::Rows));
+    assert_eq!(cancel.lines, Some(MatrixLines::Rows));
+    let clip = stage
+        .constants
+        .iter()
+        .find(|c| c.name.as_deref() == Some("VC_MatrixViewProj"))
+        .unwrap();
+    assert_eq!(clip.lines, Some(MatrixLines::Columns));
     assert_eq!(stage.unknown_constants().count(), 0);
+}
+
+/// Sekiro's cloth permutation chooses each palette row by a flag, the joint's row or the model's VC_World: the palette is
+/// still the joints', held by rows as the program applies it on the path that takes it (an unshown palette would bake at
+/// zero and collapse the vertices).
+#[test]
+fn a_cloth_programs_palette_is_read_through_its_flag() {
+    let interface = primase_dxbc::reflection(CLOTH_ROWS_PROGRAM).unwrap();
+    let entity = World::default().spawn();
+    let stage = primase_fromsoft::layer_bake::resolve::resolve_vertex(
+        &dxbc_shader(CLOTH_ROWS_PROGRAM, interface),
+        entity,
+    )
+    .unwrap()
+    .stage;
+    let palette = stage
+        .constants
+        .iter()
+        .find(|c| c.name.as_deref() == Some("VC_aObjMatrix"))
+        .unwrap();
+    assert_eq!(palette.role, ConstantRole::Object(ObjectParameter::BonePalette));
+    assert_eq!(palette.lines, Some(MatrixLines::Rows));
 }
 
 /// A material's vertex program follows the data of the primitives that draw it: the skinned permutation when all of them

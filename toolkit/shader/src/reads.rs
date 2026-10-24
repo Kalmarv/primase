@@ -128,7 +128,28 @@ impl WordsRead {
     }
 }
 
+/// What a binding takes from a lifted program: its value graph, the interface the graph names resources by (a program
+/// lifted again may number them otherwise than a stored interface), and the constant words its results are made of.
+#[derive(Clone, Debug)]
+pub struct ProgramGraph {
+    pub values: Values,
+    pub interface: Interface,
+    pub reads: WordsRead,
+}
+
 impl Program {
+    /// The program's value graph with its interface and the constant words it reads ([`ProgramGraph`]). An error is
+    /// the value graph's: what it cannot follow ([`Values::of_program`]).
+    pub fn graph(&self) -> Result<ProgramGraph, String> {
+        let values = Values::of_program(self)?;
+        let reads = WordsRead::of_values(&values, &self.interface);
+        Ok(ProgramGraph {
+            values,
+            interface: self.interface.clone(),
+            reads,
+        })
+    }
+
     /// The constant-buffer words the program reads ([`WordsRead`]). An error is the value graph's: what it cannot
     /// follow ([`Values::of_program`]); a caller that must not leave out a word the program reads then takes every
     /// word as read.

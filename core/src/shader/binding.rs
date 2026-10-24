@@ -121,13 +121,14 @@ pub enum ObjectParameter {
     /// The scale (`xy`) and offset (`zw`) a model's texture coordinate set `n` is drawn with: the engine feeds one
     /// value per model for each set, a scroll that animates some models (water, flags).
     TextureScroll(u8),
-    /// The matrices of a skinned draw's joints, each three rows of four (the object-to-world transform of the joint
-    /// the pose gives, in the engine's own palette order): what a skinning program blends by the vertex's joint indices
-    /// and weights.
+    /// The matrices of a skinned draw's joints, each a 3 x 4 transform (the object-to-world transform of the joint
+    /// the pose gives, in the engine's own palette order), its lines as the binding states ([`MatrixLines`]): what a
+    /// skinning program blends by the vertex's joint indices and weights.
     BonePalette,
     /// The matrices of a second, short palette a skinned program takes the position through before
-    /// [`ObjectParameter::BonePalette`] (the engine's name for it is the cloth-cancel matrices): each three rows
-    /// of four, chosen by the same joint index plus the instance's matrix base ([`ObjectParameter::MatrixBase`]).
+    /// [`ObjectParameter::BonePalette`] (the engine's name for it is the cloth-cancel matrices): each a 3 x 4
+    /// transform held as the binding states ([`MatrixLines`]), chosen by the same joint index plus the instance's
+    /// matrix base ([`ObjectParameter::MatrixBase`]).
     /// What it holds when the draw simulates no cloth is not established; a consumer that feeds the identity makes
     /// the first step leave the position as it is.
     ClothCancelPalette,
@@ -218,6 +219,59 @@ pub struct ConstantBinding {
     pub size: u32,
     pub name: Option<String>,
     pub role: ConstantRole,
+    /// For a matrix role ([`ConstantRole::is_matrix`]), how its 16-byte lines hold the role's matrix
+    /// ([`MatrixLines`]); `None` for every other role.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lines: Option<MatrixLines>,
+}
+
+/// How a matrix constant's 16-byte lines hold its role's matrix, the one that maps column vectors (a view-projection's
+/// clip position is `M * p`). Neither the layout's packing (`row_major`, `column_major`) nor the role decides it, since
+/// a program may multiply on either side (`mul(M, v)`, `mul(v, M)`): the source states it from what the program does
+/// (`primase_shader::matrix::lines`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MatrixLines {
+    /// Each line is one of the matrix's rows.
+    Rows,
+    /// Each line is one of its columns.
+    Columns,
+    /// The program does not show which, and why. The role stands; a consumer that writes a matrix unequal to its
+    /// transpose (a camera's) cannot bind it, one that writes the identity can.
+    Unshown { why: String },
+}
+
+impl ConstantRole {
+    /// Whether the role is a matrix, whose binding states its lines ([`ConstantBinding::lines`]): the view's and the
+    /// object's transforms, their inverses and previous-frame and camera-relative forms, and the palettes.
+    pub fn is_matrix(&self) -> bool {
+        match self {
+            ConstantRole::View(v) => matches!(
+                v,
+                ViewParameter::View
+                    | ViewParameter::Projection
+                    | ViewParameter::ViewProjection
+                    | ViewParameter::CameraRelativeViewProjection
+                    | ViewParameter::InverseView
+                    | ViewParameter::InverseProjection
+                    | ViewParameter::InverseViewProjection
+                    | ViewParameter::PreviousViewProjection
+            ),
+            ConstantRole::Object(o) => matches!(
+                o,
+                ObjectParameter::World
+                    | ObjectParameter::InverseWorld
+                    | ObjectParameter::WorldViewProjection
+                    | ObjectParameter::WorldView
+                    | ObjectParameter::PreviousFrame(_)
+                    | ObjectParameter::CameraRelative(_)
+                    | ObjectParameter::CameraRelativePreviousFrame(_)
+                    | ObjectParameter::BonePalette
+                    | ObjectParameter::ClothCancelPalette
+            ),
+            ConstantRole::Material(_) | ConstantRole::Frame(_) | ConstantRole::Unknown { .. } => false,
+        }
+    }
 }
 
 /// What a texture coordinate outside 0 to 1 reads, along one axis.
@@ -980,6 +1034,28 @@ impl StageBinding {
                     c.size, c.offset, c.resource.0, layout.size
                 )));
             }
+            let named = c.name.as_deref().map_or(String::new(), |n| format!("{n} "));
+            match (c.role.is_matrix(), &c.lines) {
+                (true, None) => {
+                    return Err(at(format!(
+                        "constant {named}at {} is a matrix ({:?}) whose lines are not stated",
+                        c.offset, c.role
+                    )));
+                }
+                (true, Some(MatrixLines::Unshown { why })) if why.trim().is_empty() => {
+                    return Err(at(format!(
+                        "constant {named}at {} is a matrix whose lines are unshown with no reason",
+                        c.offset
+                    )));
+                }
+                (false, Some(lines)) => {
+                    return Err(at(format!(
+                        "constant {named}at {} states lines ({lines:?}) for a role that is no matrix ({:?})",
+                        c.offset, c.role
+                    )));
+                }
+                _ => {}
+            }
             if let ConstantRole::Material(words) = &c.role
                 && words.len() as u64 * 4 > u64::from(c.size)
             {
@@ -1471,6 +1547,7 @@ mod tests {
                         size: 16,
                         name: Some("tint".into()),
                         role: ConstantRole::Material(vec![1.0f32.to_bits(); 4]),
+                        lines: None,
                     },
                     ConstantBinding {
                         resource: ResourceId(0),
@@ -1480,6 +1557,7 @@ mod tests {
                         role: ConstantRole::Unknown {
                             why: "cb0[1] is not in the recipe".into(),
                         },
+                        lines: None,
                     },
                 ],
                 textures: vec![TextureBinding {
@@ -1750,6 +1828,51 @@ mod tests {
         }
         assert_eq!(ScalarEncoding::square_of(0.95).check(), Ok(()));
         assert_eq!(ScalarEncoding::LINEAR.check(), Ok(()));
+    }
+
+    /// A matrix role's binding states how its lines hold the matrix, and no other role's does: either missing or
+    /// misplaced is refused, naming the constant.
+    #[test]
+    fn a_matrix_role_states_its_lines_and_no_other_role_does() {
+        let (mut w, _, _, m) = world();
+        let verify = |w: &mut World, role: ConstantRole, lines: Option<MatrixLines>| {
+            let mut b = w.get::<ShaderBinding>(m).unwrap().clone();
+            b.stages[0].constants[0].role = role;
+            b.stages[0].constants[0].lines = lines;
+            w.insert(m, b);
+            w.get::<ShaderBinding>(m).unwrap().verify(m, w)
+        };
+        let view_projection = ConstantRole::View(ViewParameter::ViewProjection);
+        let err = verify(&mut w, view_projection.clone(), None).unwrap_err();
+        assert!(
+            err.contains("constant tint at 0 is a matrix") && err.contains("lines are not stated"),
+            "{err}"
+        );
+        let unshown = |why: &str| MatrixLines::Unshown { why: why.into() };
+        for lines in [MatrixLines::Rows, MatrixLines::Columns, unshown("not applied")] {
+            assert_eq!(verify(&mut w, view_projection.clone(), Some(lines)), Ok(()));
+        }
+        let err = verify(&mut w, view_projection.clone(), Some(unshown(" "))).unwrap_err();
+        assert!(err.contains("unshown with no reason"), "{err}");
+        assert_eq!(
+            verify(
+                &mut w,
+                ConstantRole::Object(ObjectParameter::BonePalette),
+                Some(MatrixLines::Rows)
+            ),
+            Ok(())
+        );
+        let err = verify(
+            &mut w,
+            ConstantRole::Material(vec![0; 4]),
+            Some(MatrixLines::Rows),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("states lines (Rows) for a role that is no matrix"),
+            "{err}"
+        );
+        assert!(!ConstantRole::Object(ObjectParameter::TextureTransformRow(0)).is_matrix());
     }
 
     #[test]

@@ -24,8 +24,8 @@
 use std::collections::BTreeSet;
 
 use primase_core::shader::{
-    ConstantBinding, ConstantRole, D3dClass, Interface, ResourceId, ResourceKind, Shader, ShaderFormat,
-    Stage, SystemValue, ViewParameter,
+    ConstantBinding, ConstantRole, D3dClass, Interface, MatrixLines, ResourceId, ResourceKind, Shader,
+    ShaderFormat, Stage, SystemValue, ViewParameter,
 };
 use primase_shader::flow::{At, BinaryOperator, Node, NodeId, Op, Values};
 
@@ -246,25 +246,34 @@ pub fn shader_clip_rows(shader: &Shader) -> Result<(ResourceId, ClipRows), Strin
 }
 
 /// States the roles of `rows` over the constants of the buffer `resource`: the sixteen row words
-/// ([`ViewParameter::CameraRelativeViewProjection`]) and the three camera words ([`ViewParameter::CameraPosition`]), each
-/// cut out of the `Unknown` constants that cover those bytes. `false` when a byte of either is not covered by `Unknown`
-/// constants alone (nothing is changed then).
+/// ([`ViewParameter::CameraRelativeViewProjection`], its lines its rows, as [`clip_rows`] found each lane of the clip
+/// position to be one line's four words times the position) and the three camera words
+/// ([`ViewParameter::CameraPosition`]), each cut out of the `Unknown` constants that cover those bytes. `false` when a
+/// byte of either is not covered by `Unknown` constants alone (nothing is changed then).
 pub fn state_clip_roles(constants: &mut Vec<ConstantBinding>, resource: ResourceId, rows: ClipRows) -> bool {
     let wanted = [
         (
             rows.rows * 4,
             ClipRows::ROWS_BYTES,
             ViewParameter::CameraRelativeViewProjection,
+            Some(MatrixLines::Rows),
         ),
         (
             rows.camera * 4,
             ClipRows::CAMERA_BYTES,
             ViewParameter::CameraPosition,
+            None,
         ),
     ];
     let mut cut = constants.clone();
-    for (offset, size, role) in wanted {
-        if !cut_out(&mut cut, resource, offset, size, ConstantRole::View(role)) {
+    for (offset, size, role, lines) in wanted {
+        if !cut_out(
+            &mut cut,
+            resource,
+            (offset, size),
+            ConstantRole::View(role),
+            lines,
+        ) {
             return false;
         }
     }
@@ -273,14 +282,15 @@ pub fn state_clip_roles(constants: &mut Vec<ConstantBinding>, resource: Resource
     true
 }
 
-/// Replaces the bytes `offset..offset + size` of the buffer `resource` in `constants` by one constant of `role`, the
-/// `Unknown` constants that cover them cut to what lies outside (a piece keeps the reason, not the parameter's name).
+/// Replaces the bytes `offset..offset + size` (`at`) of the buffer `resource` in `constants` by one constant of `role`
+/// (a matrix with its `lines`), the `Unknown` constants that cover them cut to what lies outside (a piece keeps the
+/// reason, not the parameter's name).
 pub(crate) fn cut_out(
     constants: &mut Vec<ConstantBinding>,
     resource: ResourceId,
-    offset: u32,
-    size: u32,
+    (offset, size): (u32, u32),
     role: ConstantRole,
+    lines: Option<MatrixLines>,
 ) -> bool {
     let end = offset + size;
     constants.sort_by_key(|c| (c.resource.0, c.offset));
@@ -315,6 +325,7 @@ pub(crate) fn cut_out(
             size: to - from,
             name: None,
             role: c.role.clone(),
+            lines: None,
         };
         if c.offset < offset {
             pieces.push(piece(c.offset, offset));
@@ -333,6 +344,7 @@ pub(crate) fn cut_out(
         size,
         name: None,
         role,
+        lines,
     });
     true
 }

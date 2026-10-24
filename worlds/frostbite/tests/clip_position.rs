@@ -5,7 +5,8 @@
 #![allow(clippy::unwrap_used)]
 
 use primase_core::shader::{
-    ConstantBinding, ConstantRole, D3dClass, ResourceId, ResourceKind, Shader, ShaderFormat, ViewParameter,
+    ConstantBinding, ConstantRole, D3dClass, MatrixLines, ResourceId, ResourceKind, Shader, ShaderFormat,
+    ViewParameter,
 };
 use primase_frostbite::passes::clip_position::{ClipRows, shader_clip_rows, state_clip_roles};
 
@@ -87,12 +88,15 @@ fn the_roles_are_cut_out_of_the_unknown_constants_over_the_words() {
         role: ConstantRole::Unknown {
             why: "the engine fills the pass binding's constants (b4): no role resolved".into(),
         },
+        lines: None,
     };
+    // the matrix's lines are its rows: each lane of the clip position is one line's words times the position
     let role = |offset: u32, size: u32, role: ViewParameter| ConstantBinding {
         resource: buffer,
         offset,
         size,
         name: None,
+        lines: (role == ViewParameter::CameraRelativeViewProjection).then_some(MatrixLines::Rows),
         role: ConstantRole::View(role),
     };
     // one unknown constant over the whole buffer: cut into five

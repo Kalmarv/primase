@@ -13,7 +13,8 @@ use primase_core::shader::{
     OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Shader, Stage, StageBinding,
     TargetState, TextureBinding, TextureSource, ViewParameter,
 };
-use primase_shader::{D3dClass, Interface, Resource, ScalarType, SystemValue};
+use primase_shader::matrix::state_lines;
+use primase_shader::{D3dClass, Interface, Program, Resource, ScalarType, SystemValue};
 use primase_shader_exec::ProgramShader;
 use primase_shader_exec::{Layout, PixelShader};
 use std::collections::{BTreeMap, BTreeSet};
@@ -306,6 +307,7 @@ pub fn resolve(
             size: fit,
             name: Some(name.to_owned()),
             role,
+            lines: None,
         });
         Ok(())
     };
@@ -811,6 +813,7 @@ pub fn resolve(
                 size: fit,
                 name: Some(p.name.clone()),
                 role: ConstantRole::Material(value),
+                lines: None,
             });
             sat_bound += 1;
         }
@@ -827,6 +830,12 @@ pub fn resolve(
             role: InputRole::Previous,
         })
         .collect();
+    // a matrix's lines as the program applies it, or why it does not show them
+    state_lines(
+        shader.program().graph().as_ref().map_err(String::as_str),
+        interface,
+        &mut constants,
+    );
     Ok(Resolution {
         stage: StageBinding {
             stage: Stage::Pixel,
@@ -1058,6 +1067,7 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> 
                         size: 8,
                         name: Some(name.clone()),
                         role,
+                        lines: None,
                     });
                 }
                 continue;
@@ -1117,9 +1127,13 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> 
                 size,
                 name: Some(name),
                 role,
+                lines: None,
             });
         }
     }
+    // a matrix's lines as the program applies it, or why it does not show them
+    let graph = program.as_ref().map_err(Clone::clone).and_then(Program::graph);
+    state_lines(graph.as_ref().map_err(String::as_str), interface, &mut constants);
     Ok(VertexBinding {
         stage: StageBinding {
             stage: Stage::Vertex,

@@ -80,7 +80,8 @@ use crate::components::{
 };
 use crate::rage::sgd2_effect::SamplerDesc;
 use crate::rage::sgd2_table::{ProgramTable, TableConstant, TableResource};
-use primase_shader::WordsRead;
+use primase_shader::matrix::state_lines;
+use primase_shader::{ProgramGraph, WordsRead};
 
 /// The pixel program family whose targets the pass names roles for (`PS_DeferredTextured` and its alpha-clipped and
 /// sub-sample variants: [`gbuffer`] has the layout and how it was checked).
@@ -121,9 +122,13 @@ pub(super) fn compare(f: u8) -> Option<Compare> {
 /// The constant words a program reads ([`WordsRead`]), its DXIL container lifted again, or why it cannot be lifted or
 /// followed.
 pub fn constant_reads_of(bytecode: &[u8]) -> Result<WordsRead, String> {
-    primase_dxil::lift(bytecode)
-        .map_err(|e| e.to_string())?
-        .constant_reads()
+    graph_of(bytecode).map(|graph| graph.reads)
+}
+
+/// A program's value graph and the constant words it reads ([`ProgramGraph`]), its DXIL container lifted again, or why
+/// it cannot be lifted or followed.
+fn graph_of(bytecode: &[u8]) -> Result<ProgramGraph, String> {
+    primase_dxil::lift(bytecode).map_err(|e| e.to_string())?.graph()
 }
 
 fn stencil_op(o: u8) -> Option<StencilOp> {
@@ -526,7 +531,12 @@ struct Counts(BTreeMap<String, u64>);
 
 impl Counts {
     fn add(&mut self, what: &str) {
-        *self.0.entry(what.to_owned()).or_default() += 1;
+        self.add_by(what, 1);
+    }
+    fn add_by(&mut self, what: &str, n: u64) {
+        if n > 0 {
+            *self.0.entry(what.to_owned()).or_default() += n;
+        }
     }
 }
 
@@ -542,7 +552,7 @@ impl ResolveGtaShaders {
         writes: Option<&Result<GBufferWrites, String>>,
         forward: bool,
         sample_uses: &mut BTreeMap<Entity, Result<SamplerUses, String>>,
-        constant_reads: &mut BTreeMap<Entity, Result<WordsRead, String>>,
+        graphs: &mut BTreeMap<Entity, Result<ProgramGraph, String>>,
         counts: &mut Counts,
     ) -> Result<StageBinding, String> {
         let program = world
@@ -559,9 +569,10 @@ impl ResolveGtaShaders {
             .entry(shader)
             .or_insert_with(|| sampler_use::uses(&program.bytecode));
         // the constants the program reads: a buffer declares far more than a program uses
-        let reads = constant_reads
+        let graph = graphs
             .entry(shader)
-            .or_insert_with(|| constant_reads_of(&program.bytecode));
+            .or_insert_with(|| graph_of(&program.bytecode));
+        let reads = graph.as_ref().map(|graph| &graph.reads);
         for r in &interface.resources {
             let Some(bind) = r.provenance.d3d else { continue };
             match (&r.kind, bind.class) {
@@ -607,6 +618,7 @@ impl ResolveGtaShaders {
                                     size,
                                     name: name.clone(),
                                     role,
+                                    lines: None,
                                 });
                             }
                             continue;
@@ -618,6 +630,7 @@ impl ResolveGtaShaders {
                             size: bytes,
                             name,
                             role,
+                            lines: None,
                         });
                     }
                 }
@@ -672,6 +685,11 @@ impl ResolveGtaShaders {
                 },
             })
             .collect();
+        let unshown = state_lines(graph.as_ref().map_err(String::as_str), interface, &mut constants);
+        counts.add_by(
+            "matrices whose lines the program does not show (a consumer writing a non-symmetric matrix cannot bind them)",
+            unshown as u64,
+        );
         let outputs = if stage == Stage::Pixel {
             output_bindings(interface, writes, forward, counts)
         } else {
@@ -1162,8 +1180,8 @@ impl Pass for ResolveGtaShaders {
         let mut bound: Vec<(Entity, ShaderBinding)> = Vec::new();
         // per program: the samplers its samples read through (lifting the program is the cost)
         let mut sample_uses: BTreeMap<Entity, Result<SamplerUses, String>> = BTreeMap::new();
-        // per program: the constant-buffer words it reads
-        let mut constant_reads: BTreeMap<Entity, Result<WordsRead, String>> = BTreeMap::new();
+        // per program: its value graph and the constant-buffer words it reads
+        let mut graphs: BTreeMap<Entity, Result<ProgramGraph, String>> = BTreeMap::new();
         for (material, shader, effect_entity) in materials {
             // the technique asked for, or where the effect has none of that name the one its material is drawn with
             let (technique, fallback) = match world.get::<GtaEffectTechniques>(effect_entity) {
@@ -1266,7 +1284,7 @@ impl Pass for ResolveGtaShaders {
                     writes.as_ref(),
                     forward,
                     &mut sample_uses,
-                    &mut constant_reads,
+                    &mut graphs,
                     &mut counts,
                 ) {
                     Ok(s) => stages.push(s),

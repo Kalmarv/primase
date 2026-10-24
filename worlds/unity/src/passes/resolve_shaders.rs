@@ -59,7 +59,8 @@ use primase_core::shader::{
     ViewParameter,
 };
 use primase_core::{Component, Entity, Name, Semantic, Texture, World};
-use primase_shader::WordsRead;
+use primase_shader::matrix::state_lines;
+use primase_shader::{ProgramGraph, WordsRead};
 
 use crate::components::{Parameters, Shape, UnityMaterial, UnityProgramVariant, UnityPrograms, UnityTexEnv};
 use crate::passes::draw_keywords::{SceneKeywords, receivers};
@@ -413,6 +414,7 @@ pub fn buffer_constants(
                     size: *bytes,
                     name: Some(c.name.clone()),
                     role: role.clone(),
+                    lines: None,
                 });
             } else {
                 unread += 1;
@@ -445,6 +447,7 @@ pub fn buffer_constants(
                 role: ConstantRole::Unknown {
                     why: "the program reads these bytes and the player stores no field for them".into(),
                 },
+                lines: None,
             });
         }
     }
@@ -791,8 +794,8 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
             without,
         );
         let mut shaders: BTreeMap<std::sync::Arc<[u8]>, Result<Entity, String>> = BTreeMap::new();
-        // the constants each program reads, taken when it is lifted
-        let mut reads_of: BTreeMap<Entity, WordsRead> = BTreeMap::new();
+        // each program's value graph and the constants it reads, taken when it is lifted, or why the graph could not be
+        let mut graph_of: BTreeMap<Entity, Result<ProgramGraph, String>> = BTreeMap::new();
         let scene = self.scene.then(|| SceneKeywords::read(world));
         if scene.as_ref().is_some_and(|s| !s.known()) {
             log.approximate(
@@ -860,19 +863,16 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
                         Err(e) => Err(format!("a program the lifter refuses: {}", e.group())),
                         Ok(program) => {
                             let e = world.spawn();
-                            match program.constant_reads() {
-                                Ok(reads) => {
-                                    reads_of.insert(e, reads);
-                                }
-                                Err(why) => {
-                                    *counts
-                                        .entry(format!(
-                                            "programs whose constant reads could not be taken ({why}): every byte of \
-                                             their buffers bound"
-                                        ))
-                                        .or_default() += 1;
-                                }
+                            let graph = program.graph();
+                            if let Err(why) = &graph {
+                                *counts
+                                    .entry(format!(
+                                        "programs whose constant reads could not be taken ({why}): every byte of \
+                                         their buffers bound"
+                                    ))
+                                    .or_default() += 1;
                             }
+                            graph_of.insert(e, graph);
                             world.insert(e, Name(format!("{}-{:?}", programs.shader, stage)));
                             world.insert(
                                 e,
@@ -901,7 +901,11 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
                             stage,
                             shader,
                             &interface,
-                            reads_of.get(&shader),
+                            match graph_of.get(&shader) {
+                                Some(Ok(graph)) => Ok(graph),
+                                Some(Err(why)) => Err(why.as_str()),
+                                None => Err("the program was not lifted"),
+                            },
                             chosen.vertex.is_some(),
                             &mut counts,
                         ));
@@ -969,10 +973,11 @@ impl ResolveUnityShaders {
         stage: Stage,
         shader: Entity,
         interface: &Interface,
-        reads: Option<&WordsRead>,
+        graph: Result<&ProgramGraph, &str>,
         vertex_bound: bool,
         counts: &mut BTreeMap<String, u64>,
     ) -> StageBinding {
+        let reads = graph.ok().map(|g| &g.reads);
         let inputs = interface
             .inputs
             .iter()
@@ -1038,6 +1043,12 @@ impl ResolveUnityShaders {
                 }
                 _ => {}
             }
+        }
+        let unshown = state_lines(graph, interface, &mut constants);
+        if unshown > 0 {
+            *counts
+                .entry("matrices whose lines the program does not show (a consumer writing a non-symmetric matrix cannot bind them)".into())
+                .or_default() += unshown as u64;
         }
         let outputs = if stage == Stage::Pixel {
             output_bindings(interface)

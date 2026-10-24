@@ -77,7 +77,8 @@ use primase_core::shader::{
     VariantKey, Varying, ViewParameter,
 };
 use primase_core::{ColorSpace, Component, Entity, MaterialVariants, Mesh, Name, Semantic, Texture, World};
-use primase_shader::WordsRead;
+use primase_shader::matrix::state_lines;
+use primase_shader::{ProgramGraph, WordsRead};
 
 use crate::components::{
     AnvilLayout, AnvilMaterial, AnvilMesh, AnvilShaders, AnvilTextureMap, MaterialBinding, MaterialFlags,
@@ -278,6 +279,7 @@ pub fn material_constants(
                 size: bytes,
                 name: Some(format!("{key:08X}")),
                 role,
+                lines: None,
             });
         }
     };
@@ -360,6 +362,7 @@ pub fn material_constants(
             role: ConstantRole::Unknown {
                 why: "no template binding at these rows of cb3 (the engine's or unresolved)".into(),
             },
+            lines: None,
         });
     }
     out.sort_by_key(|c| c.offset);
@@ -450,6 +453,7 @@ fn engine_constants(
             size,
             name: None,
             role: ConstantRole::Unknown { why },
+            lines: None,
         }]
     };
     let reads = match reads {
@@ -500,6 +504,7 @@ fn engine_constants(
                     size: 64,
                     name: None,
                     role: ConstantRole::Object(parameter),
+                    lines: None,
                 });
             }
             continue;
@@ -520,6 +525,7 @@ fn engine_constants(
                 size: count * 4,
                 name: None,
                 role,
+                lines: None,
             });
         }
         // the other lanes it reads, in runs of one reason
@@ -552,6 +558,7 @@ fn engine_constants(
                         ),
                     },
                 },
+                lines: None,
             });
         }
     }
@@ -645,8 +652,8 @@ impl Pass for ResolveAnvilShaders {
             .map(|(e, m)| (e, m.clone()))
             .collect();
         let mut programs: BTreeMap<(Entity, bool, u32), Result<Entity, String>> = BTreeMap::new();
-        // each program's constant reads, or why they could not be taken (the lift's or the value graph's error)
-        let mut reads_of: BTreeMap<Entity, Result<WordsRead, String>> = BTreeMap::new();
+        // each program's value graph and constant reads, or why they could not be taken (the lift's or the graph's error)
+        let mut graphs: BTreeMap<Entity, Result<ProgramGraph, String>> = BTreeMap::new();
         // the vertex layout number (`anvil.layout.kind`) of every mesh drawn with each Material
         let mut layouts_of: BTreeMap<Entity, std::collections::BTreeSet<u8>> = BTreeMap::new();
         for (_, mesh) in world.iter::<AnvilMesh>() {
@@ -782,19 +789,17 @@ impl Pass for ResolveAnvilShaders {
                     .get::<Shader>(shader)
                     .map(|s| s.interface.clone())
                     .ok_or("a resolved shader entity without its shader")?;
-                // the constants the program reads (lifting it again is the cost; a program is lifted once per run)
-                let reads = reads_of
-                    .entry(shader)
-                    .or_insert_with(|| {
-                        let s = world
-                            .get::<Shader>(shader)
-                            .ok_or_else(|| "a resolved shader entity without its shader".to_owned())?;
-                        primase_dxbc::lift(&s.bytecode)
-                            .map_err(|e| format!("the lift: {e}"))?
-                            .constant_reads()
-                            .map_err(|e| format!("the value graph: {e}"))
-                    })
-                    .clone();
+                // the program's value graph and the constants it reads (lifting it again is the cost; a program is
+                // lifted once per run)
+                let graph = graphs.entry(shader).or_insert_with(|| {
+                    let s = world
+                        .get::<Shader>(shader)
+                        .ok_or_else(|| "a resolved shader entity without its shader".to_owned())?;
+                    primase_dxbc::lift(&s.bytecode)
+                        .map_err(|e| format!("the lift: {e}"))?
+                        .graph()
+                        .map_err(|e| format!("the value graph: {e}"))
+                });
                 bound.push(self.stage_binding(
                     world,
                     &mut textures,
@@ -805,7 +810,7 @@ impl Pass for ResolveAnvilShaders {
                     shader,
                     &interface,
                     vertex_bound,
-                    reads.as_ref().map_err(String::as_str),
+                    graph.as_ref().map_err(String::as_str),
                     &mut counts,
                 ));
             }
@@ -898,9 +903,10 @@ impl ResolveAnvilShaders {
         shader: Entity,
         interface: &Interface,
         vertex_bound: bool,
-        reads: Result<&WordsRead, &str>,
+        graph: Result<&ProgramGraph, &str>,
         counts: &mut BTreeMap<String, u64>,
     ) -> StageBinding {
+        let reads = graph.map(|graph| &graph.reads);
         let bump = |what: &str, counts: &mut BTreeMap<String, u64>| {
             *counts.entry(what.to_owned()).or_default() += 1;
         };
@@ -1006,6 +1012,12 @@ impl ResolveAnvilShaders {
                     counts,
                 );
             }
+        }
+        let unshown = state_lines(graph, interface, &mut constants);
+        if unshown > 0 {
+            *counts
+                .entry("matrices whose lines the program does not show (a consumer writing a non-symmetric matrix cannot bind them)".into())
+                .or_default() += unshown as u64;
         }
         StageBinding {
             stage,

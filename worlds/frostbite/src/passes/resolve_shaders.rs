@@ -299,7 +299,7 @@ fn stage_binding(
     }
     if let Some(base) = vertex.and_then(|v| v.tables.as_ref().ok()).and_then(|t| t.base) {
         let role = ConstantRole::Object(ObjectParameter::InstanceBase);
-        if cut_out(&mut constants, base.buffer, base.offset, 4, role) {
+        if cut_out(&mut constants, base.buffer, (base.offset, 4), role, None) {
             log.count("vertex stages whose first instance record word is stated", 1);
         } else {
             log.count(
@@ -605,6 +605,7 @@ fn buffer_constants(
             size,
             name: None,
             role: ConstantRole::Unknown { why },
+            lines: None,
         }]
     };
     let Some(group) = group else {
@@ -666,6 +667,7 @@ fn buffer_constants(
             size: bytes,
             name: Some(format!("{:#018x}", param.name)),
             role,
+            lines: None,
         });
     }
     placed.sort_by_key(|c| (c.offset, c.size));
@@ -699,6 +701,7 @@ fn buffer_constants(
                     "bytes of b{register} no placed parameter of its group covers (a parameter whose entry states no offset, or a read past the last placed one)"
                 ),
             },
+            lines: None,
         });
     }
     kept.sort_by_key(|c| c.offset);

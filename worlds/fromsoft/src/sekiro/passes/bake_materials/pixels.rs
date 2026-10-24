@@ -148,8 +148,8 @@ pub(super) fn bake(
             .resource(c.resource)
             .ok_or("constant resource absent")?;
         let slot = layer_bake::resolve::register(resource).map_err(|e| e.to_string())?;
-        let Some(mut words) =
-            layer_bake::frozen_words(&c.role, &frame, &mut policies).map_err(|e| e.to_string())?
+        let Some(mut words) = layer_bake::frozen_words(&c.role, c.lines.as_ref(), &frame, &mut policies)
+            .map_err(|e| e.to_string())?
         else {
             continue;
         };
