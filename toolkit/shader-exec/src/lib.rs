@@ -25,6 +25,7 @@ pub use evaluate::{
 };
 pub use periodic::{evaluate_periodic, evaluate_periodic_with};
 pub mod texture;
+pub mod views;
 pub use texture::{Filtering, SampledTexture, SamplerUse, Unstated};
 
 use primase_shader::Interface;
