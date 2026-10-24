@@ -9,6 +9,7 @@ pub mod correspond;
 pub mod curve;
 pub mod deform;
 pub mod fit;
+pub mod game_skin;
 pub mod joint_table;
 pub mod map;
 pub mod passes;

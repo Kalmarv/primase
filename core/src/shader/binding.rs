@@ -1492,6 +1492,22 @@ impl StageBinding {
             .and_then(|c| c.bound_size)
     }
 
+    /// How many matrices the joint palette constant holds as the program reads it: the stage's
+    /// [`ObjectParameter::BonePalette`] constant held as rows (three 16-byte lines a matrix, 48 bytes), at its size or, where
+    /// the source binds its buffer larger than the program declares ([`Self::bound_size`]), the bytes from its offset to the
+    /// bound size, whichever is more. `None` where the stage has no such constant, or holds it as columns or does not show
+    /// which (the lab and the census fill rows only).
+    pub fn bone_palette_matrices(&self) -> Option<u32> {
+        let c = self.constants.iter().find(|c| {
+            matches!(c.role, ConstantRole::Object(ObjectParameter::BonePalette))
+                && matches!(c.lines, Some(MatrixLines::Rows))
+        })?;
+        let bound = self
+            .bound_size(c.resource)
+            .map_or(0, |b| b.saturating_sub(c.offset));
+        Some(c.size.max(bound) / 48)
+    }
+
     /// The buffer slots: each a buffer of the shader, bound once, a matrix table of 16-byte elements, and an instance
     /// table whose records fit its stride and name a matrix table of this stage; a stage that states any buffer states
     /// every buffer of its program.
@@ -2356,6 +2372,25 @@ mod tests {
             json["stages"][0]["constant_buffers"][0],
             serde_json::json!({"resource": 0, "bound_size": 12288})
         );
+        // the joint palette constant's matrices: its size, or the bound size where the source states one; none when it is
+        // held as columns
+        let palette = |lines| ConstantBinding {
+            resource: ResourceId(0),
+            offset: 0,
+            size: 96,
+            name: None,
+            role: ConstantRole::Object(ObjectParameter::BonePalette),
+            lines,
+        };
+        let mut stage = binding.stages[0].clone();
+        stage.constants = vec![palette(Some(MatrixLines::Rows))];
+        assert_eq!(stage.bone_palette_matrices(), Some(256));
+        stage.constant_buffers.clear();
+        assert_eq!(stage.bone_palette_matrices(), Some(2));
+        stage.constants = vec![palette(Some(MatrixLines::Columns))];
+        assert_eq!(stage.bone_palette_matrices(), None);
+        stage.constants.clear();
+        assert_eq!(stage.bone_palette_matrices(), None);
         // the declared size, and a buffer with no entry
         w.insert(m, with(vec![bound(0, None)]));
         let binding = w.get::<ShaderBinding>(m).unwrap();
