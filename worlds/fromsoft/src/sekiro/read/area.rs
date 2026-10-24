@@ -3,7 +3,7 @@
 //! selected and in the world frame, as source records. What differs between the games and is not stated by their files
 //! (where a map keeps its files, how objects are found, tile parents) is [`crate::Game`]'s; what Elden Ring's read does
 //! not cover yet (world states, materials without a definition) is in its notices.
-use super::{collision, extras, objects, shaders, shadows, states, textures};
+use super::{collision, draw_param, extras, objects, shaders, shadows, states, textures};
 use crate::sekiro::source::{self, Region};
 use crate::{
     Archive, Binder, Game, Install, Result,
@@ -32,6 +32,9 @@ pub struct Options {
     /// Whether the larger maps above the map (Elden Ring's open-world tiles: [`crate::Game::parent_maps`]) also place
     /// their parts that belong to it: none (default: the map's own layout only) or included, moved into the map's frame.
     pub parents: Parents,
+    /// The area's draw-param file ([`draw_param`]): none (default: the graphics environment is not read) or the file
+    /// of this stem, one of [`draw_param::available`].
+    pub draw_param: draw_param::DrawParams,
 }
 /// Whether a read brings in the parts the larger maps above it place for it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -92,6 +95,12 @@ pub struct Report {
     /// The larger maps whose parts for this map were read (`parents: include`), and those parts.
     pub parent_maps: Vec<String>,
     pub parent_placements: usize,
+    /// Parts of the layout of a kind the read does not place (enemies, players, dummy objects and assets, connect
+    /// collisions), by the word for the kind: they stand in the MSB and in no world. The collision parts are read as
+    /// the collision files they name ([`collision`]).
+    pub unplaced_parts: BTreeMap<&'static str, usize>,
+    /// The draw-param file and what the read chose and left of it (`fromsoft.draw_param`; empty unless asked for).
+    pub draw_param: draw_param::Report,
     /// Materials whose definitions the read does not resolve yet (Elden Ring's material binaries): they keep their
     /// FLVER bindings only, and no texture is read for them.
     pub undefined_materials: usize,
@@ -107,6 +116,15 @@ pub struct Report {
     pub skipped_outside: usize,
     /// Material slots of the kept prototypes, by source shader.
     pub shader_parts: BTreeMap<String, usize>,
+    /// Material slots of the kept prototypes drawn as surfaces, by the class their shader family states (`opaque`,
+    /// `cutout`, `alpha`, `additive`, `leaves`, `decal`, `water`): the classes `lower-fromsoft-materials` turns into a
+    /// material usage or a draw order. A slot of a class the game draws as something else (sky, a light volume, a
+    /// shadow proxy) is in no count here.
+    pub material_classes: BTreeMap<String, usize>,
+    /// Placements of objects (`obj/<model>`, `asset/<model>`): drawn at their model's rest pose.
+    pub object_placements: usize,
+    /// Parts of the layout that store a grass config (Elden Ring's): the grass the game grows on them is not read.
+    pub grass_parts: usize,
 }
 impl Report {
     /// What the read left out or could not find, as notices for a conversion's report.
@@ -124,6 +142,17 @@ impl Report {
             out.push(listed(
                 "placed models not found in the archive",
                 &self.missing_models,
+            ));
+        }
+        if !self.unplaced_parts.is_empty() {
+            out.push(self.unplaced_parts.iter().fold(
+                Notice::new(
+                    stage,
+                    NoticeKind::Unsupported,
+                    "map parts of kinds the read does not place (enemies, players, dummies, connect collisions)",
+                    self.unplaced_parts.values().sum::<usize>() as u64,
+                ),
+                |n, (kind, count)| n.example(format!("{count} {kind}")),
             ));
         }
         if !self.missing_shader_bundles.is_empty() {
@@ -193,6 +222,29 @@ impl Report {
                 "materials whose definition (material binary) is not read yet: FLVER bindings only, no textures",
             ),
             (
+                self.material_classes.get("water").copied().unwrap_or(0),
+                NoticeKind::Approximation,
+                "water material slots (the shader family's name), drawn with the program's water colour and the source's \
+                 normal map: the game's water program (depth colour, refraction, foam, flow) is not evaluated",
+            ),
+            (
+                self.material_classes.get("decal").copied().unwrap_or(0),
+                NoticeKind::Approximation,
+                "decal material slots (`MeshDecal`), drawn over the surface beneath them on the decal layer, its queue a \
+                 convention: the engine's decal pass order is not read",
+            ),
+            (
+                self.object_placements,
+                NoticeKind::Unsupported,
+                "placed objects are drawn at their model's rest pose: their animations (doors, lifts, any object's own \
+                 animation binder) are not read",
+            ),
+            (
+                self.grass_parts,
+                NoticeKind::Unsupported,
+                "parts storing a grass config: the grass the game grows on them is not read",
+            ),
+            (
                 self.collision.unread_custom_primitives + self.object_collision.unread_custom_primitives,
                 NoticeKind::Unsupported,
                 "collision mesh custom primitives of an unknown kind (records whose first word ends in 0x52), not read",
@@ -247,6 +299,7 @@ impl Report {
                 out.push(Notice::new(stage, kind, reason, count as u64));
             }
         }
+        out.extend(self.draw_param.notices());
         // the shadow controls' interpretation, as the read counted it
         for (reason, &count) in &self.shadows.approximations {
             out.push(Notice::new(
@@ -265,6 +318,19 @@ impl Report {
             ));
         }
         out
+    }
+}
+
+/// The word a notice uses for a part kind the read does not place.
+fn unplaced_word(kind: PartKind) -> &'static str {
+    match kind {
+        PartKind::Enemy => "enemies",
+        PartKind::Player => "player starts",
+        PartKind::DummyObject => "dummy objects",
+        PartKind::DummyAsset => "dummy assets",
+        PartKind::DummyEnemy => "dummy enemies",
+        PartKind::ConnectCollision => "connect collisions",
+        PartKind::MapPiece | PartKind::Object | PartKind::Asset | PartKind::Collision => "placed or read parts",
     }
 }
 
@@ -508,17 +574,29 @@ pub fn read_game_area(
     for objects in [false, true] {
         for (map, map_layout, offset, prefix) in &maps {
             for p in &map_layout.parts {
-                let kind = match p.kind {
-                    PartKind::MapPiece if !objects => map.as_str(),
-                    PartKind::Object | PartKind::Asset if objects => object,
-                    _ => continue,
-                };
                 if prefix
                     .as_ref()
                     .is_some_and(|prefix| !p.name.starts_with(prefix.as_str()))
                 {
                     continue;
                 }
+                let kind = match p.kind {
+                    PartKind::MapPiece if !objects => map.as_str(),
+                    PartKind::Object | PartKind::Asset if objects => object,
+                    // counted once, on the first of the two passes; the collision parts are the collision files'
+                    PartKind::Enemy
+                    | PartKind::Player
+                    | PartKind::DummyObject
+                    | PartKind::DummyEnemy
+                    | PartKind::DummyAsset
+                    | PartKind::ConnectCollision
+                        if !objects =>
+                    {
+                        *report.unplaced_parts.entry(unplaced_word(p.kind)).or_default() += 1;
+                        continue;
+                    }
+                    _ => continue,
+                };
                 let Some(model) = p.model.map(|i| map_layout.models[i].name.as_str()) else {
                     continue;
                 };
@@ -686,6 +764,9 @@ pub fn read_game_area(
     for proto in prototypes.values() {
         for m in &proto.materials {
             *report.shader_parts.entry(m.shader.clone()).or_default() += 1;
+            if m.skip.is_none() {
+                *report.material_classes.entry(m.class.clone()).or_default() += 1;
+            }
             report.undefined_materials += usize::from(game != Game::Sekiro && m.definition.is_none());
             for b in m.bindings.values() {
                 if catalog.entries.contains_key(&b.texture) {
@@ -790,6 +871,21 @@ pub fn read_game_area(
     }
     report.missing_shader_bundles = bundles.missing.iter().cloned().collect();
     report.unread_metaparams = bundles.unread_metaparams.iter().cloned().collect();
+    // the parts whose graphics config says which value sets of the draw-param file apply here: the kept placements of
+    // the map's own layout, and its collision parts (read whole, whatever the region)
+    let environment_parts: BTreeSet<usize> = selected
+        .iter()
+        .map(|(_, index, _)| &placements[*index])
+        .filter(|p| p.map == area)
+        .map(|p| p.part.index)
+        .chain(
+            layout
+                .parts
+                .iter()
+                .filter(|p| p.kind == PartKind::Collision)
+                .map(|p| p.index),
+        )
+        .collect();
     for (key, index, transform) in selected {
         let Placed { part, map, .. } = &placements[index];
         let (prototype, far) = proto_entities[&key];
@@ -811,7 +907,9 @@ pub fn read_game_area(
         shadows::attach(&mut world, e, part.shadows, &mut report.shadows);
         report.placements += 1;
         report.far_placements += usize::from(far);
+        report.object_placements += usize::from(key.starts_with(&format!("{object}/")));
     }
+    report.grass_parts = layout.grass_parts()?;
     let folder = game.map_folder(&area)?;
     report.collision = collision::read(
         &archive,
@@ -831,7 +929,23 @@ pub fn read_game_area(
         options.region.map(|r| r.rect),
         &mut world,
     )?;
+    let configs: Vec<_> = if options.draw_param == draw_param::DrawParams::None {
+        Vec::new()
+    } else {
+        layout
+            .gparam_configs()?
+            .into_iter()
+            .filter(|c| environment_parts.contains(&c.part))
+            .collect()
+    };
+    let (environment, draw_param_report) =
+        draw_param::read(&archive, decoder, game, &area, &options.draw_param, &configs)?;
+    if let Some(environment) = environment {
+        world.insert_resource(environment);
+    }
+    report.draw_param = draw_param_report;
     world.insert_resource(source::ReadScope {
+        game,
         area: area.clone(),
         region: options.region,
         states: states.is_some(),

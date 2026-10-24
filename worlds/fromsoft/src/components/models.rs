@@ -9,6 +9,11 @@ pub struct SourceModel(pub Model);
 impl Component for SourceModel {
     const NAME: &'static str = "fromsoft.flver";
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    /// The meshes' vertices and indices ([`Model::resident_bytes`]): the largest thing an area read holds, which a
+    /// world's size estimate (the lab's reset point) must count or it takes a multi-gigabyte area for a small one.
+    fn payload_bytes(&self) -> u64 {
+        self.0.resident_bytes()
+    }
 }
 /// The same model statically posed by [`lower_model`] (`fromsoft.rigid_model`), beside the source it came from.
 #[derive(Clone, Debug)]
@@ -16,6 +21,10 @@ pub struct RigidModel(pub Model);
 impl Component for RigidModel {
     const NAME: &'static str = "fromsoft.rigid_model";
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    /// As [`SourceModel`]'s: the posed copy beside the source.
+    fn payload_bytes(&self) -> u64 {
+        self.0.resident_bytes()
+    }
 }
 
 /// The skeleton a prototype's model is bound to (`fromsoft.skeleton`, on the prototype): the entity holding the
@@ -41,5 +50,40 @@ impl Component for SkeletonOf {
         } else {
             Err(format!("{:?} holds no core.skeleton", self.0))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::flver::{FaceSet, Mesh};
+
+    /// The world size estimate counts a model's indices (a model with no vertices is its faces alone).
+    #[test]
+    fn a_model_states_the_bytes_its_meshes_hold() {
+        let model = Model {
+            bones: Vec::new(),
+            version: 0x2001a,
+            speedtree: false,
+            layouts: Vec::new(),
+            materials: Vec::new(),
+            meshes: vec![Mesh {
+                dynamic: false,
+                material: 0,
+                node: -1,
+                palette: Vec::new(),
+                layouts: Vec::new(),
+                vertices: Vec::new(),
+                faces: vec![FaceSet {
+                    flags: 0,
+                    strip: false,
+                    cull: true,
+                    indices: vec![0, 1, 2, 2, 1, 3],
+                }],
+            }],
+        };
+        assert_eq!(model.resident_bytes(), 24);
+        assert_eq!(SourceModel(model.clone()).payload_bytes(), 24);
+        assert_eq!(RigidModel(model).payload_bytes(), 24);
     }
 }

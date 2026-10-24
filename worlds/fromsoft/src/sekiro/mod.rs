@@ -17,10 +17,11 @@ pub use passes::{blockers, layers, lights, normals, pbr, settings};
 pub use read::animation::{AnimationReport, Animations, clip_names};
 pub use read::area::{Options, Parents, Report, StateClasses, read_area, read_game_area, world_bounds};
 pub use read::character::{
-    CharacterOptions, CharacterReader, CharacterReport, animation_notices, part_forms, read_character,
-    read_character_with, read_parts, read_parts_with,
+    CharacterOptions, CharacterReader, CharacterReport, animation_notices, part_forms, part_textures,
+    read_character, read_character_with, read_parts, read_parts_with,
 };
 pub use read::collision::Report as CollisionReport;
+pub use read::draw_param::{DrawParams, Report as DrawParamReport, available as draw_params_available};
 pub use read::extras::{Report as ExtrasReport, light_record};
 pub use read::objects::Report as ObjectCollisionReport;
 pub use read::params::{NpcPlacement, npc_placements, read_npc_param, read_param};

@@ -40,6 +40,13 @@ pub trait Reader {
     /// The subset of `world` that `roots` reach, with everything a writer needs loaded (meshes, textures); entity ids
     /// stay `world`'s, and what loading spawns is reached through the roots.
     fn load(&mut self, world: &World, roots: &BTreeSet<Entity>) -> Result<(World, Report)>;
+    /// [`Reader::load`] of every entity of `world`, which it takes: the loaded world of a program that wants the whole
+    /// source. The default is that load, so `world` and the world it returns are alive together; a reader whose load
+    /// copies what it keeps overrides this to load `world` in place, and the source is held once.
+    fn load_all(&mut self, world: World) -> Result<(World, Report)> {
+        let roots: BTreeSet<Entity> = world.entities().collect();
+        self.load(&world, &roots)
+    }
     /// The component namespaces it may put in a world (`core`, its own dialect): a reader reads, it lowers nothing
     /// (no `pbr.*` unless its source format is PBR). [`check_emits`] holds it to that after reading, and
     /// [`check_load_emits`] holds what each load adds to it.

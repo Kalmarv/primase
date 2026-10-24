@@ -123,6 +123,97 @@ fn agree(a: &Trs, b: &Trs, tolerance: f64, rotation_tolerance: f64) -> bool {
         && 2.0 * dot.abs().min(1.0).acos() <= rotation_tolerance
 }
 
+/// The joint pairs of `from` onto `to` that [`CorrespondSkeletons`] makes under `parents`, each left-out joint counted
+/// by its reason in `log` when one is given. A caller that only needs to know whether the two skeletons agree (the lab
+/// chooses how a character's clips move across from it) passes none.
+pub fn pair_joints(
+    from: &Skeleton,
+    to: &Skeleton,
+    tolerance: f64,
+    rotation_tolerance: f64,
+    parents: Parents,
+    mut log: Option<&mut PassLog>,
+) -> BTreeMap<JointId, JointId> {
+    let mut count = |what: &str, n: u64| {
+        if let Some(log) = log.as_deref_mut() {
+            log.count(what, n);
+        }
+    };
+    let mut by_name: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (i, j) in to.joints.iter().enumerate() {
+        by_name.entry(j.name.as_str()).or_default().push(i);
+    }
+    let mut from_names: BTreeMap<&str, usize> = BTreeMap::new();
+    for j in &from.joints {
+        *from_names.entry(j.name.as_str()).or_default() += 1;
+    }
+    // candidates: the one joint of the name on each side whose rest agrees
+    let mut candidate: BTreeMap<JointId, JointId> = BTreeMap::new();
+    for j in &from.joints {
+        let others = by_name.get(j.name.as_str()).map_or(&[][..], Vec::as_slice);
+        match others {
+            [] => count("joints left out: no joint of the name in the target", 1),
+            [t] if from_names[j.name.as_str()] == 1 && parents == Parents::Any => {
+                candidate.insert(j.id, to.joints[*t].id);
+            }
+            [t] if from_names[j.name.as_str()] == 1 => {
+                let t = &to.joints[*t];
+                match (Trs::of(&j.rest), Trs::of(&t.rest)) {
+                    (Ok(x), Ok(y)) if agree(&x, &y, tolerance, rotation_tolerance) => {
+                        candidate.insert(j.id, t.id);
+                    }
+                    _ => count("joints left out: the rests differ", 1),
+                }
+            }
+            _ => count("joints left out: the name is not unique", 1),
+        }
+    }
+    // the parents must correspond: drop candidates whose parent is not paired with the target's parent, until none
+    // (nothing to drop with parents=any)
+    while parents == Parents::Same {
+        let target_parents: BTreeMap<JointId, Option<JointId>> =
+            to.joints.iter().map(|j| (j.id, j.parent)).collect();
+        let doomed: Vec<JointId> = from
+            .joints
+            .iter()
+            .filter(|j| candidate.contains_key(&j.id))
+            .filter(|j| {
+                let target_parent = target_parents[&candidate[&j.id]];
+                match j.parent {
+                    None => target_parent.is_some(),
+                    Some(p) => candidate.get(&p).copied() != target_parent,
+                }
+            })
+            .map(|j| j.id)
+            .collect();
+        if doomed.is_empty() {
+            break;
+        }
+        count(
+            "joints left out: the parents do not correspond",
+            doomed.len() as u64,
+        );
+        for d in doomed {
+            candidate.remove(&d);
+        }
+    }
+    candidate
+}
+
+/// How many joints of `from` pair with one of `to` where their rests agree within `tolerance` and their parents
+/// correspond (`parents=same`): none says the two skeletons are not one hierarchy, and a clip of the first moves to the
+/// second by `parents=any` and `reparented=model-space` or not at all.
+pub fn same_hierarchy_pairs(from: &Skeleton, to: &Skeleton, tolerance: f64) -> usize {
+    pair_joints(from, to, tolerance, tolerance, Parents::Same, None).len()
+}
+
+/// How many joints of `from` have a name that is the name of exactly one joint of `to` and of no other joint of `from`:
+/// the joints `parents=any` pairs. Next to [`same_hierarchy_pairs`] it says why a hierarchy disagrees: joints that share
+/// a name and still do not pair by `parents=same` are left out by their rests or by the chain above them.
+pub fn shared_names(from: &Skeleton, to: &Skeleton) -> usize {
+    pair_joints(from, to, f64::INFINITY, f64::INFINITY, Parents::Any, None).len()
+}
+
 impl Pass for CorrespondSkeletons {
     fn name(&self) -> &'static str {
         "correspond-skeletons"
@@ -151,67 +242,14 @@ impl Pass for CorrespondSkeletons {
             (Some(f), Some(t)) => (f.clone(), t.clone()),
             _ => return Err("a skeleton is gone".into()),
         };
-        let mut by_name: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
-        for (i, j) in to.joints.iter().enumerate() {
-            by_name.entry(j.name.as_str()).or_default().push(i);
-        }
-        let mut from_names: BTreeMap<&str, usize> = BTreeMap::new();
-        for j in &from.joints {
-            *from_names.entry(j.name.as_str()).or_default() += 1;
-        }
-        // candidates: the one joint of the name on each side whose rest agrees
-        let mut candidate: BTreeMap<JointId, JointId> = BTreeMap::new();
-        for j in &from.joints {
-            let others = by_name.get(j.name.as_str()).map_or(&[][..], Vec::as_slice);
-            match others {
-                [] => log.count("joints left out: no joint of the name in the target", 1),
-                [t] if from_names[j.name.as_str()] == 1 && self.parents == Parents::Any => {
-                    candidate.insert(j.id, to.joints[*t].id);
-                }
-                [t] if from_names[j.name.as_str()] == 1 => {
-                    let t = &to.joints[*t];
-                    match (Trs::of(&j.rest), Trs::of(&t.rest)) {
-                        (Ok(x), Ok(y)) if agree(&x, &y, self.tolerance, self.rotation_tolerance) => {
-                            candidate.insert(j.id, t.id);
-                        }
-                        _ => log.count("joints left out: the rests differ", 1),
-                    }
-                }
-                _ => log.count("joints left out: the name is not unique", 1),
-            }
-        }
-        // the parents must correspond: drop candidates whose parent is not paired with the target's parent, until none
-        // (nothing to drop with parents=any)
-        loop {
-            if self.parents == Parents::Any {
-                break;
-            }
-            let parents: BTreeMap<JointId, Option<JointId>> =
-                to.joints.iter().map(|j| (j.id, j.parent)).collect();
-            let doomed: Vec<JointId> = from
-                .joints
-                .iter()
-                .filter(|j| candidate.contains_key(&j.id))
-                .filter(|j| {
-                    let target_parent = parents[&candidate[&j.id]];
-                    match j.parent {
-                        None => target_parent.is_some(),
-                        Some(p) => candidate.get(&p).copied() != target_parent,
-                    }
-                })
-                .map(|j| j.id)
-                .collect();
-            if doomed.is_empty() {
-                break;
-            }
-            log.count(
-                "joints left out: the parents do not correspond",
-                doomed.len() as u64,
-            );
-            for d in doomed {
-                candidate.remove(&d);
-            }
-        }
+        let candidate = pair_joints(
+            &from,
+            &to,
+            self.tolerance,
+            self.rotation_tolerance,
+            self.parents,
+            Some(&mut *log),
+        );
         if candidate.is_empty() {
             return Err(format!(
                 "no joint of {} corresponds to one of {} (names, rests within {} and parents)",
@@ -353,6 +391,49 @@ mod tests {
         assert_eq!(log.counts["joints paired"], 4);
         assert_eq!(log.counts["joints left out: the rests differ"], 1);
         assert_eq!(log.counts["joints left out: the parents do not correspond"], 1);
+    }
+
+    /// The question the lab asks of a character's two skeletons before choosing how its clips move across: do any
+    /// joints pair where the rests agree and the parents correspond. A model whose root hangs under a joint the Havok
+    /// skeleton lacks pairs none (the root's parent must be paired too), and one of the same hierarchy pairs all.
+    #[test]
+    fn same_hierarchy_pairs_counts_the_joints_the_parents_rule_keeps() {
+        let havok = Skeleton {
+            joints: vec![
+                joint(0, "Master", None, 0.0),
+                joint(1, "Spine", Some(0), 1.0),
+                joint(2, "Head", Some(1), 2.0),
+            ],
+        };
+        let alike = Skeleton {
+            joints: vec![
+                joint(10, "Master", None, 0.0),
+                joint(11, "Spine", Some(10), 1.0),
+                joint(12, "Head", Some(11), 2.0),
+            ],
+        };
+        // the model hangs the whole chain under a joint the Havok skeleton does not have
+        let under_a_root = Skeleton {
+            joints: vec![
+                joint(20, "World", None, 0.0),
+                joint(21, "Master", Some(20), 0.0),
+                joint(22, "Spine", Some(21), 1.0),
+                joint(23, "Head", Some(22), 2.0),
+            ],
+        };
+        assert_eq!(same_hierarchy_pairs(&havok, &alike, 0.001), 3);
+        assert_eq!(same_hierarchy_pairs(&havok, &under_a_root, 0.001), 0);
+        assert_eq!(shared_names(&havok, &under_a_root), 3);
+        // by name alone every joint pairs, which is what parents=any does for such a model
+        assert_eq!(
+            pair_joints(&havok, &under_a_root, 0.001, 0.001, Parents::Any, None).len(),
+            3
+        );
+        // the pass counts its reasons through the same function
+        let mut log = PassLog::default();
+        let paired = pair_joints(&havok, &under_a_root, 0.001, 0.001, Parents::Same, Some(&mut log));
+        assert!(paired.is_empty());
+        assert_eq!(log.counts["joints left out: the parents do not correspond"], 3);
     }
 
     fn turned(id: u32, name: &str, parent: Option<u32>, x: f32, angle: f32) -> Joint {

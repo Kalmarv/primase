@@ -549,6 +549,99 @@ impl MapOffset {
         euler_transform(self.position, [0., self.degrees, 0.], [1.; 3], 0)
     }
 }
+/// The graphics config a part stores (SoulsFormats' `GparamConfig`, the part header's slot at +112): the value IDs it
+/// takes from the groups of the draw-param file in force there. `light_set` selects the value set of the `LightSet
+/// ParamEditor` group, `fog` of `FogParamEditor`, `light_scattering` of `LightScattering : ParamEditor` and `env_map` of
+/// `Env Map:Editor` ([`crate::gparam`]). A collision part also stores a scene config (the slot at +120): four signed
+/// bytes `scene` that choose draw-param files by the hundreds digit of their ID in Elden Ring (SoulsFormats'
+/// `GparamSubID_Base` and three overrides) and that Sekiro's SoulsFormats names `EventIDs` and does not explain; they
+/// are kept as stored, -1 meaning none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PartGparam {
+    /// The part's index in the layout's parts ([`Part::index`]).
+    pub part: usize,
+    pub light_set: i32,
+    pub fog: i32,
+    pub light_scattering: i32,
+    pub env_map: i32,
+    pub scene: Option<[i8; 4]>,
+}
+
+impl Generation {
+    /// Where the four scene bytes sit in a part's scene config: Sekiro's block is 0x3c zero bytes, the four, a float and
+    /// three zero words; Elden Ring's is 24 bytes (zeros, a transition time, a zero word), the four, and the rest.
+    fn scene_ids_at(&self) -> usize {
+        if self.name == Self::SEKIRO.name { 60 } else { 24 }
+    }
+}
+
+impl MapLayout {
+    /// The graphics config of every part that stores one, in part order. Slots are read where the generation puts them
+    /// (the header's +112 and +120 in both), bounds-checked.
+    pub fn gparam_configs(&self) -> Result<Vec<PartGparam>> {
+        let mut out = Vec::new();
+        let scene_ids = self.generation.scene_ids_at();
+        for part in &self.parts {
+            let data = self
+                .sections
+                .get(5)
+                .and_then(|s| s.records.get(part.index))
+                .ok_or_else(|| invalid("MSB part", part.index, "no record"))?;
+            let r = View {
+                data,
+                format: "MSB part",
+                be: false,
+            };
+            let config = r.size(112)?;
+            if config == 0 {
+                continue;
+            }
+            let word = |o: usize| r.u32(o).map(|v| v as i32);
+            let scene = r.size(120)?;
+            out.push(PartGparam {
+                part: part.index,
+                light_set: word(config)?,
+                fog: word(config + 4)?,
+                light_scattering: word(config + 8)?,
+                env_map: word(config + 12)?,
+                scene: if scene == 0 {
+                    None
+                } else {
+                    let b = r.slice(scene + scene_ids, 4)?;
+                    Some([b[0] as i8, b[1] as i8, b[2] as i8, b[3] as i8])
+                },
+            });
+        }
+        Ok(out)
+    }
+}
+
+impl MapLayout {
+    /// How many parts store a grass config: Elden Ring's header slot at +128 (SoulsFormats' `GrassConfig`, which its
+    /// map pieces and assets may carry); Sekiro's layout has no such slot (its +128 slot is another record), so none.
+    /// Only whether a part stores one is read; what the config names is not.
+    pub fn grass_parts(&self) -> Result<usize> {
+        if self.generation.name != Generation::ELDEN_RING.name {
+            return Ok(0);
+        }
+        let mut count = 0;
+        for part in &self.parts {
+            let data = self
+                .sections
+                .get(5)
+                .and_then(|s| s.records.get(part.index))
+                .ok_or_else(|| invalid("MSB part", part.index, "no record"))?;
+            let r = View {
+                data,
+                format: "MSB part",
+                be: false,
+            };
+            count += usize::from(r.size(128)? != 0);
+        }
+        Ok(count)
+    }
+}
+
 /// Checkpoint/warp spawn region stored in the common world frame. Its facing
 /// convention and human-readable labels are lowering policy.
 #[derive(Clone, Debug)]

@@ -32,6 +32,7 @@ pub const EMITTED_NAMES: &[&str] = &[
     "core.state_axis",
     "core.transform",
     "fromsoft.area_extras",
+    "fromsoft.draw_param",
     "fromsoft.flver",
     "fromsoft.layered_material",
     "fromsoft.light",
@@ -111,6 +112,9 @@ impl<'a> AreaReader<'a> {
             format!("{:?}", r.object_collision),
         ));
         report.push(("sekiro extras".into(), format!("{:?}", r.extras)));
+        if r.draw_param.asked {
+            report.push(("sekiro draw param".into(), format!("{:?}", r.draw_param)));
+        }
         if let Some(states) = &r.states {
             report.push(("sekiro states".into(), format!("{states:?}")));
         }
@@ -138,13 +142,14 @@ impl Reader for AreaReader<'_> {
     fn load(&mut self, world: &World, roots: &BTreeSet<Entity>) -> Result<(World, Report)> {
         let mut part = world.subset(&world.closure(roots.iter().copied()));
         let (textures, programs) = scope_sources(&mut part)?;
-        Ok((
-            part,
-            vec![(
-                "sekiro part".into(),
-                format!("{textures} texture files and {programs} layered-shader programs its materials bind"),
-            )],
-        ))
+        Ok((part, vec![scoped(textures, programs)]))
+    }
+    /// The whole area is its own closure, so the loaded world is the read world itself with its source files scoped:
+    /// no second copy of every model, collision body and material beside the one the read made (the copy was the
+    /// load's peak, about as large as the read world, and shared only the texture and program payloads).
+    fn load_all(&mut self, mut world: World) -> Result<(World, Report)> {
+        let (textures, programs) = scope_sources(&mut world)?;
+        Ok((world, vec![scoped(textures, programs)]))
     }
     fn emits(&self) -> &'static [&'static str] {
         &["core", "fromsoft"]
@@ -156,6 +161,14 @@ impl Reader for AreaReader<'_> {
     fn prototype_box(&self, _world: &World, prototype: Entity) -> Option<[[f64; 3]; 2]> {
         self.boxes.get(&prototype).copied().flatten()
     }
+}
+
+/// The load's report line.
+fn scoped(textures: usize, programs: usize) -> (String, String) {
+    (
+        "sekiro part".into(),
+        format!("{textures} texture files and {programs} layered-shader programs its materials bind"),
+    )
 }
 
 /// Keep in `part` only the source files its materials bind: their bindings' texture files, the default textures the

@@ -113,6 +113,55 @@ fn foliage_cutoff_and_missing_albedo() {
     assert!(m.layered.is_none());
 }
 
+/// Water binds no base colour (its colour is the program's) and a normal map of its own: that map is its preview's
+/// normal, where any other material with no base colour keeps none.
+#[test]
+fn water_previews_its_own_normal_map_without_a_base_colour() {
+    let mut d = definition();
+    d.shader = "Tessellation_Water_a.sps".into();
+    d.textures = vec![
+        Texture {
+            kind: "Texture2D_3_NormalMap".into(),
+            uv_number: 1,
+            shader_data_index: 3,
+            path: "m99_water_n.dds".into(),
+            extra: vec![],
+        },
+        Texture {
+            kind: "Texture2D_0_MaskMap".into(),
+            uv_number: 1,
+            shader_data_index: 0,
+            path: "m10_waterformmask_3m.dds".into(),
+            extra: vec![],
+        },
+    ];
+    let mut s = source();
+    s.textures = vec![
+        flver::Texture {
+            kind: "Texture2D_3_NormalMap".into(),
+            path: "m99_water_n.dds".into(),
+            scale: [1.; 2],
+            ..Default::default()
+        },
+        flver::Texture {
+            kind: "Texture2D_0_MaskMap".into(),
+            path: "m10_waterformmask_3m.dds".into(),
+            scale: [1.; 2],
+            ..Default::default()
+        },
+    ];
+    let water = materials::resolve(&s, Some(&d), |_| true);
+    assert_eq!(water.class, "water");
+    let p = preview(&water);
+    assert!(p.albedo.is_none());
+    assert_eq!(p.normal.as_deref(), Some("m99_water_n"));
+    // the same textures on a material that is not water: no base colour, no normal map
+    d.shader = "M[Multiple].sps".into();
+    let other = materials::resolve(&s, Some(&d), |_| true);
+    assert_ne!(other.class, "water");
+    assert!(preview(&other).normal.is_none());
+}
+
 #[test]
 fn graph_qualified_slot_names_select_the_main_layer() {
     let mut d = definition();

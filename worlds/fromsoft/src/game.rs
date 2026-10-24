@@ -7,7 +7,7 @@ pub use crate::sekiro::source::Resolution;
 use primase_core::shader::OutputRole;
 
 /// A FromSoftware game.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub enum Game {
     Sekiro,
     EldenRing,

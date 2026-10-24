@@ -178,6 +178,57 @@ fn entity_ids_and_groups_as_stored() {
     assert_eq!(map.parts[0].entity_ids().collect::<Vec<_>>(), [1110432]);
 }
 #[test]
+fn part_graphics_config_and_scene_ids_as_stored() {
+    use primase_fromsoft::msb::{MapLayout, PartGparam};
+    let plain = part_record(1, [-1; 8], [0; 16]);
+    let mut with = part_record(2, [-1; 8], [0; 16]);
+    // the config at +112: four value IDs and sixteen zero bytes; the scene config at +120: sixty zero bytes, the four
+    // signed bytes, and the rest of its eighty
+    let config = with.len();
+    put64(&mut with, 112, config);
+    for v in [7i32, -1, 12, 3] {
+        with.extend(v.to_le_bytes());
+    }
+    with.resize(with.len() + 16, 0);
+    let scene = with.len();
+    put64(&mut with, 120, scene);
+    with.resize(scene + 80, 0);
+    with[scene + 60..scene + 64].copy_from_slice(&[2, 0xff, 4, 0]);
+    let map = MapLayout::read(&map_with_parts(&[plain, with.clone()])).unwrap();
+    assert_eq!(
+        map.gparam_configs().unwrap(),
+        [PartGparam {
+            part: 1,
+            light_set: 7,
+            fog: -1,
+            light_scattering: 12,
+            env_map: 3,
+            scene: Some([2, -1, 4, 0]),
+        }],
+        "a part without the slot stores none; the other as stored, -1 kept"
+    );
+    // a part without a scene config has none; one whose scene block runs past its record is an error
+    let mut no_scene = with.clone();
+    put64(&mut no_scene, 120, 0);
+    let map = MapLayout::read(&map_with_parts(&[no_scene])).unwrap();
+    assert_eq!(map.gparam_configs().unwrap()[0].scene, None);
+    let mut short = with.clone();
+    let near_end = short.len() - 20;
+    put64(&mut short, 120, near_end);
+    let map = MapLayout::read(&map_with_parts(&[short])).unwrap();
+    assert!(map.gparam_configs().is_err());
+}
+#[test]
+fn only_elden_rings_layout_has_a_grass_slot() {
+    // Sekiro's header has another record at +128: not a grass config, so none are counted whatever it holds
+    let mut record = part_record(1, [-1; 8], [0; 16]);
+    let extra = record.len();
+    put64(&mut record, 128, extra);
+    record.resize(extra + 8, 0);
+    let map = primase_fromsoft::msb::MapLayout::read(&map_with_parts(&[record])).unwrap();
+    assert_eq!(map.grass_parts().unwrap(), 0);
+}
+#[test]
 fn entity_block_tail_must_be_zero() {
     let mut tail = [0u8; 16];
     tail[15] = 1;
