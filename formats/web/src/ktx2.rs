@@ -123,6 +123,40 @@ type Prepared = Option<([u32; 2], u32, u64)>;
 
 type CacheKey = ([u8; 32], Role, AlphaPolicy, Prepared);
 
+/// The textures a material's `PRIMASE_materials_detail_blend` binds (`primase_gltf::detail`): each slot's index
+/// pointer, its role by the slot's stated `colorSpace` (`srgb` a colour; `linear` data, the packed normal, gloss and
+/// weight lanes included, so never `Normal`), and, for the colour textures whose alpha is the surface's (the base's and
+/// that of the detail `alphaDetail` names: the equation's alpha is their product), a factor of 1.
+fn detail_textures(material: &Value) -> Vec<(String, Role, Option<f32>)> {
+    let root = format!("/extensions/{}", primase_gltf::detail::NAME);
+    let Some(x) = material.pointer(&root) else {
+        return Vec::new();
+    };
+    let alpha = x.get("alphaDetail").and_then(Value::as_u64);
+    let mut slots = vec![
+        ("/baseColorTexture".to_owned(), alpha.is_some()),
+        ("/baseNormalTexture".to_owned(), false),
+        ("/baseMaskTexture".to_owned(), false),
+    ];
+    let count = |key: &str| x.get(key).and_then(Value::as_array).map_or(0, Vec::len);
+    for i in 0..count("details") {
+        slots.push((format!("/details/{i}/colorTexture"), alpha == Some(i as u64)));
+        slots.push((format!("/details/{i}/normalTexture"), false));
+    }
+    slots.extend((0..count("weights")).map(|i| (format!("/weights/{i}/source/mask/texture"), false)));
+    slots
+        .into_iter()
+        .filter_map(|(slot, reads_alpha)| {
+            let info = x.pointer(&slot)?;
+            let role = match info.get("colorSpace").and_then(Value::as_str) {
+                Some("srgb") => Role::Colour,
+                _ => Role::Mask,
+            };
+            Some((format!("{root}{slot}/index"), role, reads_alpha.then_some(1.)))
+        })
+        .collect()
+}
+
 fn invalid(message: impl ToString) -> Error {
     Error::Invalid(message.to_string())
 }
@@ -305,28 +339,41 @@ impl TextureEncoder {
                     .and_then(Value::as_array)
                     .map_or(0, Vec::len);
                 masks.extend((0..slots).map(|i| format!("{heights}/{i}/mask/texture/index")));
-                for (pointer, role) in [
-                    ("/pbrMetallicRoughness/baseColorTexture/index", Role::Colour),
-                    ("/emissiveTexture/index", Role::Colour),
-                    ("/normalTexture/index", Role::Normal),
-                    ("/pbrMetallicRoughness/metallicRoughnessTexture/index", Role::Mask),
-                    ("/occlusionTexture/index", Role::Mask),
+                // each texture the material binds: its role, and (where the texture's alpha is the material's alpha,
+                // times a factor) that factor, which its alpha policy follows
+                let mut bound: Vec<(String, Role, Option<f32>)> = [
+                    (
+                        "/pbrMetallicRoughness/baseColorTexture/index",
+                        Role::Colour,
+                        Some(factor),
+                    ),
+                    ("/emissiveTexture/index", Role::Colour, None),
+                    ("/normalTexture/index", Role::Normal, None),
+                    (
+                        "/pbrMetallicRoughness/metallicRoughnessTexture/index",
+                        Role::Mask,
+                        None,
+                    ),
+                    ("/occlusionTexture/index", Role::Mask, None),
                     // KHR_materials_specular: the strength in A (linear), the colour sRGB
                     (
                         "/extensions/KHR_materials_specular/specularTexture/index",
                         Role::Mask,
+                        None,
                     ),
                     (
                         "/extensions/KHR_materials_specular/specularColorTexture/index",
                         Role::Colour,
+                        None,
                     ),
                 ]
-                .map(|(p, r)| (p.to_owned(), r))
+                .map(|(p, r, a)| (p.to_owned(), r, a))
                 .into_iter()
-                .chain(masks.into_iter().map(|p| (p, Role::Mask)))
-                {
-                    let pointer = pointer.as_str();
-                    if let Some(binding) = material.pointer_mut(pointer) {
+                .chain(masks.into_iter().map(|p| (p, Role::Mask, None)))
+                .collect();
+                bound.extend(detail_textures(material));
+                for (pointer, role, alpha) in bound {
+                    if let Some(binding) = material.pointer_mut(&pointer) {
                         let original = binding.as_u64().ok_or_else(|| invalid("texture index"))? as usize;
                         let index = *texture_variants.entry((original, role)).or_insert_with(|| {
                             let n = new_textures.len();
@@ -334,7 +381,7 @@ impl TextureEncoder {
                             roles.insert(n, role);
                             n
                         });
-                        if pointer == "/pbrMetallicRoughness/baseColorTexture/index" {
+                        if let Some(factor) = alpha {
                             let policy = alpha_policies.entry(index).or_default();
                             policy.blend |= alpha_mode == "BLEND";
                             if alpha_mode == "MASK" && factor > 0. {
@@ -1178,6 +1225,102 @@ mod tests {
             role(&format!("{channels}/1/threshold/m/mask/texture/index")),
             "mask"
         );
+    }
+
+    /// A detail blend's slots (`PRIMASE_materials_detail_blend`) each keep pointing at the texture they sampled,
+    /// renumbered: three images of three sizes (4, 8 and 12 texels square) bound in turn as sRGB colour and linear data,
+    /// each slot's new texture the image of its size, a `colour` (KTX2 transfer function sRGB) where the slot states
+    /// `srgb` and a `mask` (linear) where `linear`, the packed normals included; the alpha the surface's alpha reads (the
+    /// base colour's and the `alphaDetail` detail's) checked against the material's cutoff, the other colour's not.
+    #[test]
+    fn detail_blend_slots_keep_their_textures_and_transfer_functions() {
+        let png = |side: u32| {
+            primase_image::write_png(&primase_image::Image {
+                width: side,
+                height: side,
+                samples: primase_image::Samples::U8([200, 180, 160, 255].repeat((side * side) as usize)),
+            })
+            .unwrap()
+        };
+        let (a, b, c) = (png(4), png(8), png(12));
+        let bin = [a.clone(), b.clone(), c.clone()].concat();
+        let view = |offset: usize, png: &[u8]| json!({"buffer":0,"byteOffset":offset,"byteLength":png.len()});
+        let info = |index: u32, space: &str| json!({"index":index,"colorSpace":space});
+        let doc = json!({"asset":{"version":"2.0"},"buffers":[{"byteLength":bin.len()}],
+            "bufferViews":[view(0, &a), view(a.len(), &b), view(a.len() + b.len(), &c)],
+            "images":[{"bufferView":0,"mimeType":"image/png"},{"bufferView":1,"mimeType":"image/png"},
+                {"bufferView":2,"mimeType":"image/png"}],
+            "textures":[{"source":0},{"source":1},{"source":2}],
+            "materials":[{"alphaMode":"MASK","alphaCutoff":0.5,
+                "pbrMetallicRoughness":{"baseColorTexture":{"index":2}},
+                "extensions":{"PRIMASE_materials_detail_blend":{
+                    "baseColorTexture":info(0, "srgb"),"baseNormalTexture":info(1, "linear"),
+                    "baseMaskTexture":info(2, "linear"),
+                    "details":[{"colorTexture":info(1, "srgb"),"normalTexture":info(0, "linear")},
+                               {"colorTexture":info(2, "srgb"),"normalTexture":info(1, "linear")}],
+                    "weights":[{"source":{"mask":{"texture":info(1, "linear"),"channels":[0,0,0,1],"bias":0}}}],
+                    "alphaDetail":1}}}]});
+        let bytes = primase_glb::assemble(&serde_json::to_vec(&doc).unwrap(), &bin).unwrap();
+        let output = glb(&mut TextureEncoder::default(), bytes).unwrap();
+        let chunks = primase_glb::parse(&output).unwrap();
+        let doc: Value = serde_json::from_slice(chunks.json).unwrap();
+        let out = chunks.bin.unwrap();
+        // the slot's texture: its image's source side, role, KTX2 transfer function and whether its alpha was checked
+        let slot = |pointer: &str| {
+            let t = doc["materials"][0].pointer(pointer).unwrap().as_u64().unwrap() as usize;
+            let image = doc["textures"][t]["extensions"]["KHR_texture_basisu"]["source"]
+                .as_u64()
+                .unwrap() as usize;
+            let meta = &doc["images"][image]["extras"]["primase.web_texture"];
+            let view = &doc["bufferViews"][doc["images"][image]["bufferView"].as_u64().unwrap() as usize];
+            let start = view["byteOffset"].as_u64().unwrap() as usize;
+            let ktx2 = &out[start..];
+            let dfd = u32::from_le_bytes(ktx2[48..52].try_into().unwrap()) as usize;
+            (
+                meta["source_dimensions"][0].as_u64().unwrap(),
+                meta["role"].as_str().unwrap().to_owned(),
+                ktx2[dfd + 14],
+                !meta["alpha_quality"].is_null(),
+            )
+        };
+        let x = "/extensions/PRIMASE_materials_detail_blend";
+        let (srgb, linear) = (2, 1);
+        for (pointer, expected) in [
+            (
+                "/pbrMetallicRoughness/baseColorTexture/index".to_owned(),
+                (12, "colour", srgb, true),
+            ),
+            (format!("{x}/baseColorTexture/index"), (4, "colour", srgb, true)),
+            (format!("{x}/baseNormalTexture/index"), (8, "mask", linear, false)),
+            (format!("{x}/baseMaskTexture/index"), (12, "mask", linear, false)),
+            (
+                format!("{x}/details/0/colorTexture/index"),
+                (8, "colour", srgb, false),
+            ),
+            (
+                format!("{x}/details/0/normalTexture/index"),
+                (4, "mask", linear, false),
+            ),
+            (
+                format!("{x}/details/1/colorTexture/index"),
+                (12, "colour", srgb, true),
+            ),
+            (
+                format!("{x}/details/1/normalTexture/index"),
+                (8, "mask", linear, false),
+            ),
+            (
+                format!("{x}/weights/0/source/mask/texture/index"),
+                (8, "mask", linear, false),
+            ),
+        ] {
+            let (side, role, transfer, checked) = expected;
+            assert_eq!(
+                slot(&pointer),
+                (side, role.to_owned(), transfer, checked),
+                "{pointer}"
+            );
+        }
     }
 
     /// The box filter, hand-worked: black and white averaged in linear light is 0.5, which sRGB encodes as

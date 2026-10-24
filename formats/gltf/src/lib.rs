@@ -13,6 +13,7 @@
 //! Frames: the world frame is glTF's (metres, right-handed, +Y up, -Z forward), so nothing is converted.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+pub mod detail;
 pub mod lower;
 pub mod parts;
 pub mod prepare;
@@ -29,7 +30,9 @@ use primase_core::Entity;
 pub use parts::{GlbParts, preview_target, target};
 pub use preview::{Manifest, PreviewParts, Recipe};
 pub use read::{ReadReport, read_glb, read_with_images};
-pub use textures::{GltfMaterialTextures, GltfSlot, ImageResolver, SlotTexture};
+pub use textures::{
+    DetailSlot, GltfDetailTextures, GltfMaterialTextures, GltfSlot, ImageResolver, SlotTexture,
+};
 pub use write::{
     Drawn, GroupBy, ImageMemo, Layout, Piece, RigNodes, Selected, Selection, WriteOptions, WriteReport,
     write, write_document, write_file,

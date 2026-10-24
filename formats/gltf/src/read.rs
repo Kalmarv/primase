@@ -13,8 +13,9 @@
 //! - **Meshes** each glTF mesh a scene node draws becomes a prototype (`core.mesh`, its name), its primitives drawing
 //!   the material entities. **Materials** are read as their glTF JSON (`gltf.material`, with `core.name`), and the
 //!   images their core texture slots sample as `core.texture`s with a `gltf.material_textures` component ([`crate::textures`]:
-//!   PNG decoded, other formats refused by name and counted); `lower-gltf-materials` ([`crate::lower`]) turns the two
-//!   into `pbr.material`. A mesh drawn with a skin gets `core.skin`: per primitive with joint
+//!   PNG decoded, other formats refused by name and counted), and those of `PRIMASE_materials_detail_blend`'s slots
+//!   with `gltf.detail_textures`; `lower-gltf-materials` ([`crate::lower`]) turns them into `pbr.material` and
+//!   `pbr.detail` ([`crate::detail`]). A mesh drawn with a skin gets `core.skin`: per primitive with joint
 //!   streams, `Streams` influences of its `JOINTS_n`/`WEIGHTS_n` sets as stored; one binding per glTF skin it is
 //!   drawn with (`BindingId` the skin's index), its palette the skin's joints in order with their inverse bind
 //!   matrices as stored (identity where the skin gives none), deformation linear (glTF's). The weight rule is

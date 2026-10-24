@@ -3,12 +3,15 @@
 //! the sampler it states). [`crate::lower`] turns the two into `pbr.material`.
 //!
 //! - **Which images.** Those a core material slot (`baseColorTexture`, `metallicRoughnessTexture`, `normalTexture`,
-//!   `occlusionTexture`, `emissiveTexture`) samples through `textures[i].source`; the others are counted
+//!   `occlusionTexture`, `emissiveTexture`) or a slot of `PRIMASE_materials_detail_blend` ([`DetailSlot`],
+//!   `gltf.detail_textures`) samples through `textures[i].source`; the others are counted
 //!   ([`ReadReport::images_unused`]). An image is read once however many slots sample it.
 //! - **Usage.** glTF gives an image no colour space or role of its own: its use does (§3.9.4 and §3.9.1). A slot's
 //!   texture entity is the image read for that use: sRGB `Color` for base colour and emissive, linear `Mask` for the
 //!   metallic-roughness and occlusion slots (one entity when a packed map serves both), linear `Normal` in glTF's
-//!   convention for the normal slot. An image used in two ways is two entities.
+//!   convention for the normal slot. A detail slot states its use as its `colorSpace`: `srgb` is read as `Color`,
+//!   `linear` as `Mask` (the lanes as stored, which the detail equation reads as it states). An image used in two ways
+//!   is two entities.
 //! - **Formats.** Told by the bytes, not the declared MIME type: PNG is decoded (`primase_image::read_png`, 8 and 16
 //!   bits, to RGBA) and so is JPEG (`primase_image::read_jpeg`, 8 bits, to RGBA with alpha 255); KTX2/Basis, WebP, a
 //!   JPEG the decoder refuses (CMYK, 12-bit, arithmetic-coded) and anything else is refused by name, counted in
@@ -73,6 +76,104 @@ impl GltfSlot {
     }
 }
 
+/// A texture slot of a material's `PRIMASE_materials_detail_blend` ([`crate::detail`]), its key in
+/// `gltf.detail_textures` written as its path in the extension (`details[1].colorTexture`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DetailSlot {
+    BaseColor,
+    BaseNormal,
+    BaseMask,
+    /// Detail `i`'s colour texture.
+    Color(u8),
+    /// Detail `i`'s normal texture.
+    Normal(u8),
+    /// The mask texture of weight `i`'s source.
+    WeightMask(u8),
+}
+
+impl DetailSlot {
+    /// The slots `material`'s extension states, in its order: the base's three, each detail's two, each weight's mask.
+    pub fn of(material: &Value) -> Vec<DetailSlot> {
+        let Some(x) = crate::detail::extension(material) else {
+            return Vec::new();
+        };
+        let count = |key: &str| {
+            let n = x.get(key).and_then(Value::as_array).map_or(0, Vec::len);
+            0..u8::try_from(n).unwrap_or(u8::MAX)
+        };
+        let mut slots = vec![
+            DetailSlot::BaseColor,
+            DetailSlot::BaseNormal,
+            DetailSlot::BaseMask,
+        ];
+        slots.extend(count("details").flat_map(|i| [DetailSlot::Color(i), DetailSlot::Normal(i)]));
+        slots.extend(count("weights").map(DetailSlot::WeightMask));
+        slots
+    }
+
+    /// The slot's texture info object in `material`'s extension, if it has one.
+    pub fn info(self, material: &Value) -> Option<&Value> {
+        let x = crate::detail::extension(material)?;
+        match self {
+            DetailSlot::BaseColor => x.get("baseColorTexture"),
+            DetailSlot::BaseNormal => x.get("baseNormalTexture"),
+            DetailSlot::BaseMask => x.get("baseMaskTexture"),
+            DetailSlot::Color(i) => x.get("details")?.get(usize::from(i))?.get("colorTexture"),
+            DetailSlot::Normal(i) => x.get("details")?.get(usize::from(i))?.get("normalTexture"),
+            DetailSlot::WeightMask(i) => x
+                .get("weights")?
+                .get(usize::from(i))?
+                .get("source")?
+                .get("mask")?
+                .get("texture"),
+        }
+    }
+
+    /// The use the slot's texture info states (`colorSpace`): `srgb` a colour, anything else data (the strict reading
+    /// of the extension refuses a `colorSpace` that is not `linear`).
+    fn usage(info: &Value) -> Usage {
+        match info.get("colorSpace").and_then(Value::as_str) {
+            Some("srgb") => Usage::Colour,
+            _ => Usage::Mask,
+        }
+    }
+}
+
+impl std::fmt::Display for DetailSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DetailSlot::BaseColor => write!(f, "baseColorTexture"),
+            DetailSlot::BaseNormal => write!(f, "baseNormalTexture"),
+            DetailSlot::BaseMask => write!(f, "baseMaskTexture"),
+            DetailSlot::Color(i) => write!(f, "details[{i}].colorTexture"),
+            DetailSlot::Normal(i) => write!(f, "details[{i}].normalTexture"),
+            DetailSlot::WeightMask(i) => write!(f, "weights[{i}].source.mask.texture"),
+        }
+    }
+}
+
+impl Serialize for DetailSlot {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+/// The textures of a material's `PRIMASE_materials_detail_blend` slots that were read (a slot whose image was refused
+/// has no entry).
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct GltfDetailTextures(pub BTreeMap<DetailSlot, SlotTexture>);
+
+impl Component for GltfDetailTextures {
+    const NAME: &'static str = "gltf.detail_textures";
+    const GEOMETRY: Geometry = Geometry::None;
+    fn to_json(&self) -> Result<Option<Value>, primase_core::json::JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend(self.0.values().map(|t| t.texture));
+    }
+}
+
 /// How an image is used: its colour space and role.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Usage {
@@ -121,7 +222,8 @@ struct Decoded {
     bytes: Vec<u8>,
 }
 
-/// Read the images the materials' slots sample and attach `gltf.material_textures` to each material that has any.
+/// Read the images the materials' slots sample and attach `gltf.material_textures` (and `gltf.detail_textures`) to each
+/// material that has any.
 pub(crate) fn read_textures(
     gltf: &Gltf,
     source: &str,
@@ -136,116 +238,55 @@ pub(crate) fn read_textures(
             .map(Vec::as_slice)
             .unwrap_or(&[])
     };
-    let (materials_json, textures, images, samplers) = (
-        list("materials"),
-        list("textures"),
-        list("images"),
-        list("samplers"),
-    );
-    let mut counts = ImageCounts::default();
-    // images by index: decoded once, or the reason it was refused
-    let mut decoded: BTreeMap<usize, Result<Decoded, String>> = BTreeMap::new();
-    let mut entities: BTreeMap<(usize, Usage), Entity> = BTreeMap::new();
-    let mut sampled = std::collections::BTreeSet::new();
+    let materials_json = list("materials");
+    let mut reader = SlotReader {
+        gltf,
+        source,
+        textures: list("textures"),
+        images: list("images"),
+        samplers: list("samplers"),
+        resolve,
+        counts: ImageCounts::default(),
+        decoded: BTreeMap::new(),
+        entities: BTreeMap::new(),
+        sampled: std::collections::BTreeSet::new(),
+    };
     for (&m, &material) in materials {
+        let json = &materials_json[m];
         let mut slots = BTreeMap::new();
         for slot in GltfSlot::ALL {
-            let Some(info) = slot.info(&materials_json[m]) else {
+            let Some(info) = slot.info(json) else {
                 continue;
             };
             let at = format!("materials[{m}].{slot:?}");
-            let index = info
-                .get("index")
-                .and_then(Value::as_u64)
-                .and_then(|i| usize::try_from(i).ok())
-                .ok_or_else(|| invalid(&at, "the texture info has no texture index"))?;
-            let t = textures.get(index).ok_or_else(|| {
-                invalid(
-                    &at,
-                    format!("texture {index} does not exist ({} textures)", textures.len()),
-                )
-            })?;
-            // the image: `source`, else an extension's (KHR_texture_basisu, EXT_texture_webp, ...), refused by name
-            let Some(i) = t.get("source").and_then(Value::as_u64).map(|i| i as usize) else {
-                let by = t
-                    .get("extensions")
-                    .and_then(Value::as_object)
-                    .map(|x| x.keys().cloned().collect::<Vec<_>>().join("+"))
-                    .filter(|x| !x.is_empty())
-                    .unwrap_or_else(|| "no source".to_owned());
-                *counts
-                    .refused
-                    .entry(format!("texture whose image is not `source` ({by})"))
-                    .or_default() += 1;
-                continue;
-            };
-            let image = images.get(i).ok_or_else(|| {
-                invalid(
-                    &format!("textures[{index}]"),
-                    format!("image {i} does not exist ({} images)", images.len()),
-                )
-            })?;
-            sampled.insert(i);
-            // no `sampler` is glTF's default (an unfiltered, repeating sampler); one that is named must exist and be understood
-            let (filters, wrap) = match t.get("sampler") {
-                None => (Filters::default(), [Wrap::Repeat; 2]),
-                Some(s) => {
-                    let s = s
-                        .as_u64()
-                        .and_then(|s| usize::try_from(s).ok())
-                        .ok_or_else(|| invalid(&format!("textures[{index}]"), "sampler is not an index"))?;
-                    let sampler = samplers.get(s).ok_or_else(|| {
-                        invalid(
-                            &format!("textures[{index}]"),
-                            format!("sampler {s} does not exist ({} samplers)", samplers.len()),
-                        )
-                    })?;
-                    sampler_filters(sampler).map_err(|e| invalid(&format!("samplers[{s}]"), e.to_string()))?
-                }
-            };
-            let pixels = decoded.entry(i).or_insert_with(|| decode(gltf, image, resolve));
-            let Ok(pixels) = pixels else { continue };
-            let usage = slot.usage();
-            let texture = *entities.entry((i, usage)).or_insert_with(|| {
-                let e = w.spawn();
-                let (color_space, role, normal) = match usage {
-                    Usage::Colour => (ColorSpace::Srgb, TexRole::Color, None),
-                    Usage::Mask => (ColorSpace::Linear, TexRole::Mask, None),
-                    Usage::Normal => (ColorSpace::Linear, TexRole::Normal, Some(NormalConvention::GLTF)),
-                };
-                w.insert(
-                    e,
-                    Texture {
-                        width: pixels.width,
-                        height: pixels.height,
-                        format: pixels.format,
-                        levels: vec![pixels.bytes.clone()],
-                        color_space,
-                        role,
-                        normal,
-                    },
-                );
-                let name = image
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .map_or_else(|| format!("image {i}"), str::to_owned);
-                w.insert(e, Name(name));
-                w.insert(e, Source(format!("{source}#/images/{i}")));
-                e
-            });
-            slots.insert(
-                slot,
-                SlotTexture {
-                    texture,
-                    filters,
-                    wrap,
-                },
-            );
+            if let Some(t) = reader.slot(w, info, &at, slot.usage())? {
+                slots.insert(slot, t);
+            }
         }
         if !slots.is_empty() {
             w.insert(material, GltfMaterialTextures(slots));
         }
+        let mut details = BTreeMap::new();
+        for slot in DetailSlot::of(json) {
+            let Some(info) = slot.info(json) else {
+                continue;
+            };
+            let at = format!("materials[{m}].{}.{slot}", crate::detail::NAME);
+            if let Some(t) = reader.slot(w, info, &at, DetailSlot::usage(info))? {
+                details.insert(slot, t);
+            }
+        }
+        if !details.is_empty() {
+            w.insert(material, GltfDetailTextures(details));
+        }
     }
+    let SlotReader {
+        mut counts,
+        decoded,
+        sampled,
+        images,
+        ..
+    } = reader;
     for d in decoded.values() {
         match d {
             Ok(_) => counts.read += 1,
@@ -254,6 +295,125 @@ pub(crate) fn read_textures(
     }
     counts.unused = images.len().saturating_sub(sampled.len());
     Ok(counts)
+}
+
+/// The document's textures, images and samplers as the slots read them: each image decoded once, and one texture
+/// entity per image and use.
+struct SlotReader<'a, 'r> {
+    gltf: &'a Gltf,
+    source: &'a str,
+    textures: &'a [Value],
+    images: &'a [Value],
+    samplers: &'a [Value],
+    resolve: &'a mut ImageResolver<'r>,
+    counts: ImageCounts,
+    /// Images by index: decoded once, or the reason it was refused.
+    decoded: BTreeMap<usize, Result<Decoded, String>>,
+    entities: BTreeMap<(usize, Usage), Entity>,
+    sampled: std::collections::BTreeSet<usize>,
+}
+
+impl SlotReader<'_, '_> {
+    /// The texture the slot whose texture info is `info` (named `at` in errors) samples, read for `usage`, with the
+    /// sampler it states; `None` where its image is not read (refused, counted).
+    fn slot(
+        &mut self,
+        w: &mut World,
+        info: &Value,
+        at: &str,
+        usage: Usage,
+    ) -> crate::Result<Option<SlotTexture>> {
+        let (textures, images, samplers) = (self.textures, self.images, self.samplers);
+        let index = info
+            .get("index")
+            .and_then(Value::as_u64)
+            .and_then(|i| usize::try_from(i).ok())
+            .ok_or_else(|| invalid(at, "the texture info has no texture index"))?;
+        let t = textures.get(index).ok_or_else(|| {
+            invalid(
+                at,
+                format!("texture {index} does not exist ({} textures)", textures.len()),
+            )
+        })?;
+        // the image: `source`, else an extension's (KHR_texture_basisu, EXT_texture_webp, ...), refused by name
+        let Some(i) = t.get("source").and_then(Value::as_u64).map(|i| i as usize) else {
+            let by = t
+                .get("extensions")
+                .and_then(Value::as_object)
+                .map(|x| x.keys().cloned().collect::<Vec<_>>().join("+"))
+                .filter(|x| !x.is_empty())
+                .unwrap_or_else(|| "no source".to_owned());
+            *self
+                .counts
+                .refused
+                .entry(format!("texture whose image is not `source` ({by})"))
+                .or_default() += 1;
+            return Ok(None);
+        };
+        let image = images.get(i).ok_or_else(|| {
+            invalid(
+                &format!("textures[{index}]"),
+                format!("image {i} does not exist ({} images)", images.len()),
+            )
+        })?;
+        self.sampled.insert(i);
+        // no `sampler` is glTF's default (an unfiltered, repeating sampler); one that is named must exist and be understood
+        let (filters, wrap) = match t.get("sampler") {
+            None => (Filters::default(), [Wrap::Repeat; 2]),
+            Some(s) => {
+                let s = s
+                    .as_u64()
+                    .and_then(|s| usize::try_from(s).ok())
+                    .ok_or_else(|| invalid(&format!("textures[{index}]"), "sampler is not an index"))?;
+                let sampler = samplers.get(s).ok_or_else(|| {
+                    invalid(
+                        &format!("textures[{index}]"),
+                        format!("sampler {s} does not exist ({} samplers)", samplers.len()),
+                    )
+                })?;
+                sampler_filters(sampler).map_err(|e| invalid(&format!("samplers[{s}]"), e.to_string()))?
+            }
+        };
+        let (gltf, resolve) = (self.gltf, &mut *self.resolve);
+        let pixels = self
+            .decoded
+            .entry(i)
+            .or_insert_with(|| decode(gltf, image, resolve));
+        let Ok(pixels) = pixels else { return Ok(None) };
+        let source = self.source;
+        let texture = *self.entities.entry((i, usage)).or_insert_with(|| {
+            let e = w.spawn();
+            let (color_space, role, normal) = match usage {
+                Usage::Colour => (ColorSpace::Srgb, TexRole::Color, None),
+                Usage::Mask => (ColorSpace::Linear, TexRole::Mask, None),
+                Usage::Normal => (ColorSpace::Linear, TexRole::Normal, Some(NormalConvention::GLTF)),
+            };
+            w.insert(
+                e,
+                Texture {
+                    width: pixels.width,
+                    height: pixels.height,
+                    format: pixels.format,
+                    levels: vec![pixels.bytes.clone()],
+                    color_space,
+                    role,
+                    normal,
+                },
+            );
+            let name = image
+                .get("name")
+                .and_then(Value::as_str)
+                .map_or_else(|| format!("image {i}"), str::to_owned);
+            w.insert(e, Name(name));
+            w.insert(e, Source(format!("{source}#/images/{i}")));
+            e
+        });
+        Ok(Some(SlotTexture {
+            texture,
+            filters,
+            wrap,
+        }))
+    }
 }
 
 fn invalid(item: &str, detail: impl Into<String>) -> crate::Error {

@@ -4,7 +4,9 @@
 //! scale, the occlusion texture and its strength, emissive and its texture, alpha mode and cutoff, double-sidedness,
 //! each slot's `texCoord`, sampler and `KHR_texture_transform` (offset, rotation, scale, `texCoord`), and the two
 //! extensions `pbr.material` states exactly: `KHR_materials_emissive_strength` and `KHR_materials_unlit`. Every default
-//! is the specification's. The pass takes no option: the document states everything.
+//! is the specification's. The pass takes no option: the document states everything. A material carrying
+//! `PRIMASE_materials_detail_blend` also gets its `pbr.detail`, read strictly ([`crate::detail`]); one whose detail
+//! textures were not all read is drawn by its `pbr.material` alone, counted.
 //!
 //! What it leaves out it names, counted ([`PassLog::omit`]): any other material extension (`KHR_materials_clearcoat`,
 //! `KHR_materials_transmission`, ...) and any other extension of a texture info. A slot whose texture the reader did
@@ -12,13 +14,14 @@
 //! approximation. A malformed material (a factor that is not a number or outside its range, an unknown alpha mode) is
 //! an error naming the material.
 
+use primase_core::detail::DetailedMaterial;
 use primase_core::pass::{Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode, PbrMaterial, Shading, TextureRef, UvTransform};
 use primase_core::{Component, Entity, OpaqueData, World};
 use serde_json::{Map, Value};
 
 use crate::read::MATERIAL;
-use crate::textures::{GltfMaterialTextures, GltfSlot};
+use crate::textures::{GltfDetailTextures, GltfMaterialTextures, GltfSlot};
 
 /// See the module documentation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -40,7 +43,7 @@ impl Pass for LowerGltfMaterials {
     }
     // a world without glTF materials has nothing to lower: no requirement
     fn provides(&self) -> &[&'static str] {
-        &[PbrMaterial::NAME]
+        &[PbrMaterial::NAME, DetailedMaterial::NAME]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let materials: Vec<(Entity, Value)> = w
@@ -61,20 +64,28 @@ impl Pass for LowerGltfMaterials {
                 .map_err(|detail| format!("material {name}: {detail}"))?;
             w.insert(e, m);
             log.count("materials lowered", 1);
+            let detail = crate::detail::read(&json, w.get::<GltfDetailTextures>(e), log)
+                .map_err(|detail| format!("material {name}: {detail}"))?;
+            if let Some(d) = detail {
+                d.verify(e, w)
+                    .map_err(|why| format!("material {name}: {}: {why}", crate::detail::NAME))?;
+                w.insert(e, d);
+                log.count("detail-blend materials read as pbr.detail", 1);
+            }
         }
         Ok(())
     }
 }
 
 /// The key of `o` that is not one of `known`, as an error.
-fn only(o: &Map<String, Value>, known: &[&str], what: &str) -> Result<(), String> {
+pub(crate) fn only(o: &Map<String, Value>, known: &[&str], what: &str) -> Result<(), String> {
     match o.keys().find(|k| !known.contains(&k.as_str())) {
         Some(k) => Err(format!("{what}: unknown key {k}")),
         None => Ok(()),
     }
 }
 
-fn object<'a>(v: &'a Value, what: &str) -> Result<&'a Map<String, Value>, String> {
+pub(crate) fn object<'a>(v: &'a Value, what: &str) -> Result<&'a Map<String, Value>, String> {
     v.as_object().ok_or_else(|| format!("{what} is not an object"))
 }
 
@@ -229,6 +240,8 @@ fn lower(
                     only(e, &["emissiveStrength", "extras"], name)?;
                     out.emissive_strength = number(e, "emissiveStrength", 1.0, 0.0..=f32::MAX)?;
                 }
+                // read as the material's `pbr.detail` ([`crate::detail::read`])
+                crate::detail::NAME => {}
                 other => log.omit(&format!("material extension {other}, not lowered"), 1),
             }
         }
@@ -239,7 +252,7 @@ fn lower(
 /// A texture info's `KHR_texture_transform` as core's transform (`None` when absent or the identity) and the texture
 /// coordinate set the slot samples (the extension's `texCoord` overrides the info's). Any other extension of the info
 /// is left out, named.
-fn texture_transform(
+pub(crate) fn texture_transform(
     info: &Map<String, Value>,
     log: &mut PassLog,
 ) -> Result<(Option<UvTransform>, u8), String> {

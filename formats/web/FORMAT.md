@@ -446,6 +446,23 @@ that only implements versions 1 and 2 must not evaluate it as either; it draws t
   (primase-image) evaluates the weights at the vertices into a colour stream and writes the material as version 1, an
   approximation it reports.
 
+## Detail-blend materials
+
+A material whose surface a source program computes from a base and tiled detail textures (a character's cloth and
+armour in Sekiro) carries the vendor extension `PRIMASE_materials_detail_blend`, listed in `extensionsUsed` and never
+in `extensionsRequired`, beside its ordinary `pbrMetallicRoughness` (and `KHR_materials_specular`), which is the same
+surface baked at a capped size: a consumer that ignores the extension draws that and loses only the detail's resolution.
+The extension is optional and its addition is a minor change. Its fields, the equation a conforming consumer
+evaluates, what it holds constant and how a reader takes it strictly are specified in
+[`docs/extensions/PRIMASE_materials_detail_blend.md`](../../docs/extensions/PRIMASE_materials_detail_blend.md).
+
+In a tile set the textures it binds are written as the other slots' are, by the role each states: a slot with
+`colorSpace` `srgb` is a colour texture (KTX2 with the sRGB transfer function; its alpha is checked for the material's
+alpha policy where the alpha is the surface's, that is the base colour's and the `alphaDetail` detail's), and a slot with
+`linear` is data (KTX2 with unspecified primaries and the linear transfer function; the packed normals of the base and the
+details are data, not `Normal` maps, because their z carries a gloss and their alpha a weight). Every slot's `index`
+follows its texture through the renumbering, so a consumer reads the same texels with or without KTX2.
+
 ## Synthetic conformance fixture
 
 `cargo run -p primase-web --features ktx2 --example synthetic_tiles -- <output>`

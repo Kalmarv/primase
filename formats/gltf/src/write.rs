@@ -93,6 +93,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
 
+use primase_core::detail::{
+    DetailMix, DetailedMaterial, Frozen, GlossScale, ReflectanceTerm, SurfaceLowering, WeightStep,
+};
 use primase_core::layered::{Channel, Composition, Source};
 use primase_core::pbr::{
     AlphaMode, Filter, Filters, MipFilter, PbrMaterial, Shading, TextureRef, UvTransform, Wrap,
@@ -102,12 +105,12 @@ use primase_core::{
     BindingId, Clip, ClipBinding, ClipTarget, Extrapolation, Interpolation, JointId, MorphWeights, Morphs,
     Property, Rest, RigInstance, RigPose, Skeleton, Skin, SkinInstance,
 };
+use primase_core::{ColorSpace, LayeredMaterial, WeightMapping};
 use primase_core::{
     Component, ComponentJson, Entity, Instance, Light, LightKind, Lods, MaterialVariants, Mesh, MeshFile,
     Name, Semantic, ShadowCast, Shadows, Texture, TextureFile, Tile, Topology, Transform, TransformKind,
     World,
 };
-use primase_core::{LayeredMaterial, WeightMapping};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
@@ -306,6 +309,10 @@ pub struct WriteReport {
     pub primitives_without_material: u64,
     /// `core.layered` materials written with `PRIMASE_layered_material`.
     pub layered_materials: u64,
+    /// `pbr.detail` materials written with `PRIMASE_materials_detail_blend` beside their `pbr.material`.
+    pub detail_materials: u64,
+    /// `pbr.detail` materials written without the extension (their `pbr.material` alone), by reason.
+    pub detail_materials_dropped: BTreeMap<String, u64>,
     /// Primitives drawn with a layered material but lacking its weight attribute (they render as the host).
     pub primitives_layered_without_weights: u64,
     /// Written primitives with a `COLOR_0` stream drawn without it: their material is `core.vertex_color` `ignored`.
@@ -474,6 +481,8 @@ impl fmt::Display for WriteReport {
 const TEXTURE_TRANSFORM: &str = "KHR_texture_transform";
 const EMISSIVE_STRENGTH: &str = "KHR_materials_emissive_strength";
 const SPECULAR: &str = "KHR_materials_specular";
+/// The detail blend's vendor extension ([`crate::detail`]).
+const DETAIL: &str = crate::detail::NAME;
 const UNLIT: &str = "KHR_materials_unlit";
 /// The extension lights are written as.
 const LIGHTS: &str = "KHR_lights_punctual";
@@ -548,6 +557,7 @@ pub fn write_document(world: &World, options: &WriteOptions) -> Result<(Document
         texture_transform_used: false,
         emissive_strength_used: false,
         specular_used: false,
+        detail_used: false,
         unlit_used: false,
         layered_weights: BTreeMap::new(),
         handled: BTreeSet::new(),
@@ -694,6 +704,8 @@ struct Writer<'w> {
     /// A written material has an emissive strength other than 1 (`KHR_materials_emissive_strength` is used).
     emissive_strength_used: bool,
     specular_used: bool,
+    /// A material carries `PRIMASE_materials_detail_blend`.
+    detail_used: bool,
     unlit_used: bool,
     /// Layered material entity -> the glTF attribute carrying its weights.
     layered_weights: BTreeMap<Entity, String>,
@@ -889,6 +901,9 @@ impl Writer<'_> {
         }
         if self.unlit_used {
             used.push(UNLIT);
+        }
+        if self.detail_used {
+            used.push(DETAIL);
         }
         if !self.layered_weights.is_empty() {
             used.push(LAYERED);
@@ -1497,6 +1512,16 @@ impl Writer<'_> {
             extensions.insert(SPECULAR.into(), Value::Object(k));
             self.specular_used = true;
         }
+        if let Some(detail) = self.world.get::<DetailedMaterial>(e).cloned() {
+            match self.detail_blend(e, &detail, &mut sets)? {
+                Ok(x) => {
+                    extensions.insert(DETAIL.into(), x);
+                    self.detail_used = true;
+                    self.report.detail_materials += 1;
+                }
+                Err(why) => *self.report.detail_materials_dropped.entry(why).or_default() += 1,
+            }
+        }
         if pbr.shading == Shading::Unlit {
             extensions.insert(UNLIT.into(), json!({}));
             self.unlit_used = true;
@@ -1716,6 +1741,156 @@ impl Writer<'_> {
         self.material_index.insert(e, Some((i, sets.clone())));
         self.layered_weights.insert(e, attribute);
         Ok((i, sets))
+    }
+
+    /// A texture slot of `PRIMASE_materials_detail_blend`: its texture info and `colorSpace` (the texture's own, else
+    /// sRGB for a colour slot), or `None` where its texture could not be written; adds its set to `sets`.
+    fn detail_slot(&mut self, r: TextureRef, colour: bool, sets: &mut BTreeSet<u8>) -> Result<Option<Value>> {
+        let Some(Value::Object(mut info)) = self.texture_info(Some(r), sets)? else {
+            return Ok(None);
+        };
+        let srgb = self
+            .world
+            .get::<Texture>(r.texture)
+            .map_or(colour, |t| t.color_space == ColorSpace::Srgb);
+        info.insert("colorSpace".into(), json!(if srgb { "srgb" } else { "linear" }));
+        Ok(Some(Value::Object(info)))
+    }
+
+    /// A `pbr.detail` as `PRIMASE_materials_detail_blend` ([`crate::detail`]); `Err` with why where a texture of it
+    /// could not be written (the material is then written without it, its `pbr.material` alone).
+    fn detail_blend(
+        &mut self,
+        e: Entity,
+        d: &DetailedMaterial,
+        sets: &mut BTreeSet<u8>,
+    ) -> Result<std::result::Result<Value, String>> {
+        let DetailMix::DetailLerp(m) = &d.mix;
+        let mut written = BTreeSet::new();
+        // the slots in the order they are written, each a texture and whether it is a colour
+        let mut textures = vec![
+            (m.base_colour, true),
+            (m.base_normal, false),
+            (m.base_mask, false),
+        ];
+        for detail in &m.details {
+            textures.extend([(detail.colour, true), (detail.normal, false)]);
+        }
+        for w in &m.weights {
+            if let Source::Mask { texture, .. } = w.source {
+                textures.push((texture, false));
+            }
+        }
+        let mut infos = Vec::with_capacity(textures.len());
+        for (r, colour) in textures {
+            match self.detail_slot(r, colour, &mut written)? {
+                Some(info) => infos.push(info),
+                None => return Ok(Err(format!("texture {:?} could not be written", r.texture))),
+            }
+        }
+        let mut infos = infos.into_iter();
+        let mut next = || infos.next().expect("one info a slot");
+        let mut x = Map::new();
+        x.insert("equation".into(), json!("detail_lerp"));
+        x.insert(
+            "lowering".into(),
+            json!(match d.lowering {
+                SurfaceLowering::GlossReflectance => "gloss_reflectance",
+            }),
+        );
+        x.insert("baseColorTexture".into(), next());
+        x.insert("baseNormalTexture".into(), next());
+        x.insert("baseMaskTexture".into(), next());
+        let mut details = Vec::new();
+        for detail in &m.details {
+            let (colour, normal) = (next(), next());
+            let gloss_scale = match detail.gloss_scale {
+                GlossScale::BaseNormalZ => json!({"baseNormalZ": {}}),
+                GlossScale::Constant(c) => json!({"constant": self.factors(e, &[c])?[0].clone()}),
+            };
+            let reflectance = match detail.reflectance {
+                ReflectanceTerm::MaskPlusBias(b) => {
+                    json!({"maskPlusBias": self.factors(e, &[b])?[0].clone()})
+                }
+                ReflectanceTerm::Bias(b) => json!({"bias": self.factors(e, &[b])?[0].clone()}),
+            };
+            let mut o = Map::new();
+            o.insert("colorTexture".into(), colour);
+            o.insert("normalTexture".into(), normal);
+            o.insert("tint".into(), self.factors(e, &detail.tint)?);
+            o.insert(
+                "glossBias".into(),
+                self.factors(e, &[detail.gloss_bias])?[0].clone(),
+            );
+            o.insert("glossScale".into(), gloss_scale);
+            o.insert("reflectance".into(), reflectance);
+            details.push(Value::Object(o));
+        }
+        x.insert("details".into(), Value::Array(details));
+        let mut weights = Vec::new();
+        for w in &m.weights {
+            let source = match &w.source {
+                Source::Mask { channels, bias, .. } => json!({"mask": {
+                    "texture": next(),
+                    "channels": self.factors(e, channels)?,
+                    "bias": self.factors(e, &[*bias])?[0].clone(),
+                }}),
+                vertex @ Source::Vertex { .. } => self.layer_source(e, vertex, &mut written)?,
+            };
+            let mut steps = Vec::new();
+            for step in &w.steps {
+                steps.push(match *step {
+                    WeightStep::Power(n) => json!({"power": n}),
+                    WeightStep::Min(b) => json!({"min": self.factors(e, &[b])?[0].clone()}),
+                });
+            }
+            weights.push(json!({"source": source, "steps": steps}));
+        }
+        x.insert("weights".into(), Value::Array(weights));
+        x.insert("gain".into(), self.factors(e, &[m.gain])?[0].clone());
+        x.insert(
+            "normalStrength".into(),
+            self.factors(e, &[m.normal_strength])?[0].clone(),
+        );
+        x.insert(
+            "dielectricF0".into(),
+            self.factors(e, &[m.dielectric_f0])?[0].clone(),
+        );
+        x.insert("color".into(), self.factors(e, &m.colour)?);
+        let encoding = m.gloss_encoding;
+        x.insert(
+            "glossEncoding".into(),
+            json!({
+                "power": encoding.power,
+                "root": encoding.root,
+                "scale": self.factors(e, &[f32::from_bits(encoding.scale_bits)])?[0].clone(),
+            }),
+        );
+        if let Some(j) = m.alpha {
+            x.insert("alphaDetail".into(), json!(j));
+        }
+        let mut frozen = Vec::new();
+        for f in &d.frozen {
+            frozen.push(match f {
+                Frozen::FrontFacing => json!({"frontFacing": {}}),
+                Frozen::VertexInput {
+                    semantic,
+                    index,
+                    value,
+                } => json!({"vertexInput": {
+                    "semantic": semantic, "index": index, "value": self.factors(e, value)?,
+                }}),
+                Frozen::EngineConstant { name, value } => json!({"engineConstant": {
+                    "name": name, "value": self.factors(e, value)?,
+                }}),
+                Frozen::EngineTexture { name, value } => json!({"engineTexture": {
+                    "name": name, "value": self.factors(e, value)?,
+                }}),
+            });
+        }
+        x.insert("frozen".into(), Value::Array(frozen));
+        sets.extend(written);
+        Ok(Ok(Value::Object(x)))
     }
 
     /// A weight or height source as `PRIMASE_layered_material` writes it.
