@@ -26,7 +26,7 @@ use primase_shader_exec::probe::{AnsweredReads, affine_uv};
 
 use crate::detail_probe::ProgramProbe;
 pub use crate::probe_accept::BOUND_UNITS;
-use crate::probe_accept::{Seeded, moved, units, word_sources};
+use crate::probe_accept::{NonFinite, Seeded, moved, units, word_sources};
 
 /// How many random sample sets a proof runs.
 pub const PROOF_SETS: usize = 256;
@@ -398,7 +398,7 @@ fn masked_detail(program: &Program<'_>, scale: f32) -> Result<usize, String> {
             program.observe(&design(n, scale, alpha, 100.), UV)?,
             program.observe(&design(n, scale, alpha, -100.), UV)?,
         );
-        Ok(colour_differs(&high, &low))
+        Ok(colour_differs(&high, &low)?)
     };
     let mut reading = Vec::new();
     for j in (0..n).filter(|&j| isolating(n, j).is_some()) {
@@ -717,7 +717,7 @@ fn prove(program: &Program<'_>, c: &DetailConstants, frame: &Frame, seed: u32) -
         let world: [f32; 3] = std::array::from_fn(|i| (0..3).map(|axis| frame[axis][i] * n[axis]).sum());
         let length = (world[0] * world[0] + world[1] * world[1] + world[2] * world[2]).sqrt();
         let mut check = |role: &'static str, got: f32, wanted: f32| -> Result<(), String> {
-            let u = units(got, wanted);
+            let u = units(got, wanted).map_err(|e| format!("set {set}: {role}: {e}"))?;
             let e = largest.entry(role).or_default();
             *e = e.max(u);
             if u > limit {
@@ -805,7 +805,8 @@ pub struct FieldComparison {
 impl FieldComparison {
     /// Whether the solved value is the expected one, within [`BOUND_UNITS`]; `None` where there is no one word to compare.
     pub fn agrees(&self) -> Option<bool> {
-        self.expected.map(|e| units(self.solved, e) <= BOUND_UNITS)
+        self.expected
+            .map(|e| units(self.solved, e).is_ok_and(|u| u <= BOUND_UNITS))
     }
 }
 
@@ -969,8 +970,8 @@ fn fold_cost(c: &DetailConstants, gain: f32, words: &[[f32; 3]], seed: u32) -> R
         let unfolded = equation(&unfolded_constants, gain, &s);
         for i in 0..3 {
             largest = largest
-                .max(units(folded.albedo[i], unfolded.albedo[i]))
-                .max(units(folded.reflectance[i], unfolded.reflectance[i]));
+                .max(units(folded.albedo[i], unfolded.albedo[i])?)
+                .max(units(folded.reflectance[i], unfolded.reflectance[i])?);
         }
     }
     if largest > BOUND_UNITS {
@@ -1035,8 +1036,18 @@ fn slots(t: &[u32]) -> String {
     t.iter().map(|t| format!("t{t}")).collect::<Vec<_>>().join(", ")
 }
 
-/// Whether any decoded role differs between two runs past [`BOUND_UNITS`].
-fn differ(a: &Observed, b: &Observed) -> bool {
+/// Whether any pair of lanes differs past [`BOUND_UNITS`]; refused at the first lane that is not finite.
+fn any_moved(pairs: impl IntoIterator<Item = (f32, f32)>) -> Result<bool, NonFinite> {
+    for (x, y) in pairs {
+        if moved(x, y)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Whether any decoded role differs between two runs past [`BOUND_UNITS`]; refused where a lane is not finite.
+fn differ(a: &Observed, b: &Observed) -> Result<bool, NonFinite> {
     let lanes = |o: &Observed| {
         let mut v = Vec::with_capacity(13);
         v.extend(o.albedo);
@@ -1046,21 +1057,23 @@ fn differ(a: &Observed, b: &Observed) -> bool {
         v.push(o.gloss_stored);
         v
     };
-    lanes(a).iter().zip(lanes(b)).any(|(x, y)| moved(*x, y))
+    any_moved(lanes(a).into_iter().zip(lanes(b)))
 }
 
-/// Whether the colour (albedo or reflectance) differs between two runs past [`BOUND_UNITS`].
-fn colour_differs(a: &Observed, b: &Observed) -> bool {
-    a.albedo
-        .iter()
-        .chain(&a.reflectance)
-        .zip(b.albedo.iter().chain(&b.reflectance))
-        .any(|(x, y)| moved(*x, *y))
+/// Whether the colour (albedo or reflectance) differs between two runs past [`BOUND_UNITS`]; refused where a lane is
+/// not finite.
+fn colour_differs(a: &Observed, b: &Observed) -> Result<bool, NonFinite> {
+    any_moved(
+        a.albedo
+            .into_iter()
+            .chain(a.reflectance)
+            .zip(b.albedo.into_iter().chain(b.reflectance)),
+    )
 }
 
-/// Whether the normal differs between two runs past [`BOUND_UNITS`].
-fn normal_differs(a: &Observed, b: &Observed) -> bool {
-    a.normal.iter().zip(b.normal).any(|(x, y)| moved(*x, y))
+/// Whether the normal differs between two runs past [`BOUND_UNITS`]; refused where a lane is not finite.
+fn normal_differs(a: &Observed, b: &Observed) -> Result<bool, NonFinite> {
+    any_moved(a.normal.into_iter().zip(b.normal))
 }
 
 /// Why a program's textures are not told apart ([`identify`]).
@@ -1075,6 +1088,12 @@ enum Unidentified {
 impl From<String> for Unidentified {
     fn from(why: String) -> Self {
         Unidentified::Differs(why)
+    }
+}
+
+impl From<NonFinite> for Unidentified {
+    fn from(e: NonFinite) -> Self {
+        Unidentified::Differs(e.to_string())
     }
 }
 
@@ -1143,7 +1162,7 @@ fn identify(probe: &ProgramProbe, outputs: Outputs) -> Result<SlotRoles, Unident
         }))?
         .normal;
         let cosine: f32 = flat.iter().zip(tipped).map(|(a, b)| a * b).sum();
-        if !moved(cosine, 0.) {
+        if !moved(cosine, 0.)? {
             right_angle.push(t);
         }
     }
@@ -1158,7 +1177,7 @@ fn identify(probe: &ProgramProbe, outputs: Outputs) -> Result<SlotRoles, Unident
     let alpha_moves = differ(
         &run(&with(&mid, *base_normal, &|v| v[3] = 1.))?,
         &run(&with(&mid, *base_normal, &|v| v[3] = 0.))?,
-    );
+    )?;
     match (n, alpha_moves) {
         (1, true) => {
             return Err("the base normal's alpha moves the outputs of a program with one detail".into());
@@ -1176,7 +1195,7 @@ fn identify(probe: &ProgramProbe, outputs: Outputs) -> Result<SlotRoles, Unident
         let reference = run(answers)?;
         let mut moving = Vec::new();
         for &c in &colours {
-            if colour_differs(&reference, &run(&with(answers, c, &|v| v[..3].fill(0.025)))?) {
+            if colour_differs(&reference, &run(&with(answers, c, &|v| v[..3].fill(0.025)))?)? {
                 moving.push(c);
             }
         }
@@ -1217,7 +1236,7 @@ fn identify(probe: &ProgramProbe, outputs: Outputs) -> Result<SlotRoles, Unident
         let moving_colour = moving_colour(&end)?;
         let mut moving_normal = Vec::new();
         for &t in normals.iter().filter(|&&t| t != *base_normal) {
-            if normal_differs(&reference, &run(&with(&end, t, &|v| v[0] = 0.75))?) {
+            if normal_differs(&reference, &run(&with(&end, t, &|v| v[0] = 0.75))?)? {
                 moving_normal.push(t);
             }
         }
@@ -1339,7 +1358,9 @@ fn frozen_factors(
         probe
             .set_words(f.buffer, f.word, &saved)
             .map_err(|e| e.to_string())?;
-        if changed.is_ok_and(|c| colour_differs(&reference, &c)) {
+        if let Ok(c) = changed
+            && colour_differs(&reference, &c)?
+        {
             found.push(f.name);
         }
     }

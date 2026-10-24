@@ -9,15 +9,45 @@ use crate::detail_probe::ProgramProbe;
 /// of form (a wrong constant or term moves a lane by orders more).
 pub const BOUND_UNITS: f32 = 64.;
 
-/// Units of `f32::EPSILON` `a` is from `b`, of the larger magnitude (or of one, near zero).
-pub fn units(a: f32, b: f32) -> f32 {
-    (a - b).abs() / (f32::EPSILON * a.abs().max(b.abs()).max(1.))
+/// A comparison refused: one of the values is not finite (NaN or infinite), so no difference of it is a measure. A NaN
+/// would otherwise pass every bound unseen (`NaN > bound` is false) and drop out of every largest (`f32::max` skips it).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NonFinite {
+    pub a: f32,
+    pub b: f32,
+}
+
+impl std::fmt::Display for NonFinite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} compared with {}: a value that is not finite is no measure",
+            self.a, self.b
+        )
+    }
+}
+
+impl std::error::Error for NonFinite {}
+
+impl From<NonFinite> for String {
+    fn from(e: NonFinite) -> Self {
+        e.to_string()
+    }
+}
+
+/// Units of `f32::EPSILON` `a` is from `b`, of the larger magnitude (or of one, near zero); refused where either is not
+/// finite.
+pub fn units(a: f32, b: f32) -> Result<f32, NonFinite> {
+    if !(a.is_finite() && b.is_finite()) {
+        return Err(NonFinite { a, b });
+    }
+    Ok((a - b).abs() / (f32::EPSILON * a.abs().max(b.abs()).max(1.)))
 }
 
 /// Whether two values differ past [`BOUND_UNITS`]: by more than the roundings of a term that only rounds through them (a
-/// lerp at either end, `w * (x - y) + y`, carries `y`'s rounding at `w = 1`).
-pub fn moved(a: f32, b: f32) -> bool {
-    units(a, b) > BOUND_UNITS
+/// lerp at either end, `w * (x - y) + y`, carries `y`'s rounding at `w = 1`); refused where either is not finite.
+pub fn moved(a: f32, b: f32) -> Result<bool, NonFinite> {
+    Ok(units(a, b)? > BOUND_UNITS)
 }
 
 /// A seeded sequence of floats from 0 to 1 (xorshift32), the same for the same seed: a proof's random samples.
@@ -87,7 +117,9 @@ pub fn word_sources(
                 .map_err(|e| e.to_string())?;
             let changed = changed.map_err(|e| format!("{} word {k} changed: {e}", m.name))?;
             for (i, ((_, before), (_, after))) in values.iter().zip(changed).enumerate() {
-                if moved(*before, after) {
+                if moved(*before, after)
+                    .map_err(|e| format!("{} read with {} word {k} changed: {e}", values[i].0, m.name))?
+                {
                     sources[i].push(WordSource {
                         field: m.name.clone(),
                         word: k,
@@ -102,4 +134,31 @@ pub fn word_sources(
         .zip(sources)
         .map(|((name, value), sources)| (name, value, sources))
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A value that is not finite, on either side, is refused with its reason; finite ones are measured in units of the
+    /// larger magnitude, and moved past the bound only beyond it.
+    #[test]
+    fn a_value_that_is_not_finite_is_no_measure() {
+        for (a, b) in [
+            (f32::NAN, 1.),
+            (1., f32::NAN),
+            (f32::INFINITY, 1.),
+            (1., f32::NEG_INFINITY),
+            (f32::NAN, f32::NAN),
+        ] {
+            let e = units(a, b).unwrap_err();
+            assert!(e.to_string().contains("not finite"), "{e}");
+            assert!(moved(a, b).is_err());
+        }
+        assert_eq!(units(1., 1. + f32::EPSILON), Ok(1.));
+        assert_eq!(units(0., 0.), Ok(0.));
+        assert_eq!(units(4., 4. + 4. * f32::EPSILON), Ok(1.));
+        assert_eq!(moved(1., 1. + 64. * f32::EPSILON), Ok(false));
+        assert_eq!(moved(1., 1. + 65. * f32::EPSILON), Ok(true));
+    }
 }
