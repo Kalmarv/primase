@@ -1794,6 +1794,9 @@ impl Pass for LowerAnvilMaterial {
                             None
                         };
                         set_normal(w, n, normal);
+                        if occlusion.is_some() {
+                            log.approximate(&format!("{name} layer {which}: {}", super::gbuffer::OCCLUSION_APPROXIMATION), 1);
+                        }
                         let layer = w.spawn();
                         if let Some(Name(material)) = w.get::<Name>(e).cloned() {
                             w.insert(layer, Name(format!("{material} layer {which}")));
@@ -2132,10 +2135,10 @@ impl Pass for LowerAnvilMaterial {
                 if !placeholder_used && pbr.occlusion_texture.is_some() {
                     log.approximate(&format!("{name}: {}", super::gbuffer::OCCLUSION_APPROXIMATION), 1);
                 }
-                if !placeholder_used && super::resolve_shaders::shading_class(&name).is_none() {
-                    log.approximate(&format!("{name}: formula recipe exists but the resolver's output-class table has no entry; class-dependent Game surface lanes remain Unknown until the program's encoded class is established"), 1);
-                }
                 w.insert(e, pbr);
+            }
+            if (!placeholder_used || layered) && super::resolve_shaders::shading_class(&name).is_none() {
+                log.approximate(&format!("{name}: formula recipe exists but the resolver's output-class table has no entry; class-dependent Game surface lanes remain Unknown until the program's encoded class is established"), 1);
             }
             if !takes_colour {
                 w.insert(e, VertexColor::Ignored);
@@ -2718,6 +2721,7 @@ fn set_normal(w: &mut World, e: Entity, n: NormalConvention) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use primase_shader_exec::PixelShader;
 
     #[test]
     fn fake_without_texturemap_keeps_the_programs_declared_srgb_transfer() {
