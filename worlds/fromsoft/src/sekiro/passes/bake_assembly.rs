@@ -123,6 +123,9 @@ pub(super) fn assemble(
     prototypes: &BTreeMap<String, Entity>,
     max_size: u32,
     sample_time: f32,
+    /// What the bake itself approximates, as the pass's declaration puts it for this run: recorded once on every
+    /// material the bake makes ([`primase_core::pass::PassLog::approximate_on`], DESIGN-core-lowering.md 2.8).
+    baked_text: &str,
     world: &mut World,
 ) -> Result<(BakeReport, BTreeSet<(Entity, usize)>)> {
     let mut report = BakeReport::default();
@@ -130,8 +133,15 @@ pub(super) fn assemble(
     let mut replacements = BTreeMap::<(Entity, usize), Vec<(Primitive, Option<Vec<u32>>)>>::new();
     let mut replaced_materials = BTreeSet::new();
     let mut variants = BTreeMap::new();
+    // Each group's reasons and the materials it made, applied once the bake has removed the materials nothing kept:
+    // an attributed material has to be alive after the pass (`PassLog::approximated_on`).
+    let mut records: Vec<(Vec<Entity>, primase_core::pass::PassLog)> = Vec::new();
     let threads = primase_core::parallel::Threads::of(world);
     for (group_index, group) in bake.groups.iter().enumerate() {
+        // What this group's bake approximates, and the materials it makes: merged into the report at the group's end,
+        // each reason on the materials it concerns.
+        let mut group_log = primase_core::pass::PassLog::default();
+        let mut made: Vec<Entity> = Vec::new();
         let prepared = bake.prepare(world, group_index, sample_time)?;
         let size = prepared.bake_size(max_size)?;
         let mut templates = Vec::new();
@@ -156,15 +166,13 @@ pub(super) fn assemble(
                 report.missing_emissive_materials += usize::from(image.emissive.is_none());
                 for (policy, count) in &image.policies {
                     if policy != "constant layer weights, tint and detail" {
-                        report.policies.approximate(policy, *count);
+                        group_log.approximate(policy, *count);
                     }
                 }
             }
             // This policy counts output texels, unlike source-group policies.
             if let Some(&texels) = image.policies.get("constant layer weights, tint and detail") {
-                report
-                    .policies
-                    .approximate("constant layer weights, tint and detail", texels);
+                group_log.approximate("constant layer weights, tint and detail", texels);
             }
             report.variants += 1;
             report.nonunit_uv_variants += usize::from(group.period != [1.; 2]);
@@ -173,10 +181,10 @@ pub(super) fn assemble(
                 &group.material,
                 world.get::<primase_core::shader::ShaderBinding>(group.entity),
                 false,
-                &mut report.policies,
+                &mut group_log,
             );
             let material =
-                channel_material(world, &name, alpha_mode, image, reflectance, &mut report.policies)?;
+                channel_material(world, &name, alpha_mode, image, reflectance, &mut group_log)?;
             templates.push((material, reflectance));
         }
         for source in &group.parts {
@@ -216,12 +224,8 @@ pub(super) fn assemble(
                     )
                 };
                 if meshes > 0 {
-                    report
-                        .policies
-                        .approximate(&by("parts whose stored UV1 differs from UV0"), meshes);
-                    report
-                        .policies
-                        .approximate(&by("vertices whose stored UV1 differs from UV0"), vertices);
+                    group_log.approximate(&by("parts whose stored UV1 differs from UV0"), meshes);
+                    group_log.approximate(&by("vertices whose stored UV1 differs from UV0"), vertices);
                 }
             }
             replaced_materials.insert(original);
@@ -247,8 +251,9 @@ pub(super) fn assemble(
                         cull,
                         format!("bake_{group_index:04}_{level}_source_{digest}{sided}"),
                     )?;
-                    templates[level].1.record_material(&mut report.policies);
+                    templates[level].1.record_material(&mut group_log);
                     variants.insert(key, e);
+                    made.push(e);
                     e
                 };
                 materials[level] = material;
@@ -258,6 +263,7 @@ pub(super) fn assemble(
                 return Err(invalid("area bake", source.part, "source part grouped twice"));
             }
         }
+        records.push((made, group_log));
     }
     report.source_materials = replaced_materials.len();
     let candidates = world.closure(replaced_materials);
@@ -302,6 +308,22 @@ pub(super) fn assemble(
     let retained = world.closure(world.entities().filter(|e| !candidates.contains(e)));
     for entity in candidates.difference(&retained) {
         world.despawn(*entity);
+    }
+    // What each group's bake approximated belongs to every material it made that the bake kept: a bake is reported on
+    // the material, not as a provenance record (DESIGN-core-lowering.md 2.8). The bake itself is one record per
+    // material, its text the pass's; the group's other reasons keep their counts and gain the materials they concern.
+    for (made, mut group_log) in records {
+        let made: Vec<Entity> = made.into_iter().filter(|e| world.is_alive(*e)).collect();
+        let reasons: Vec<String> = group_log.approximations.keys().cloned().collect();
+        for &e in &made {
+            group_log.approximate_on(e, baked_text, 1);
+        }
+        for &e in &made {
+            for reason in &reasons {
+                group_log.approximated_on.entry(reason.clone()).or_default().insert(e);
+            }
+        }
+        report.policies.absorb(group_log);
     }
     Ok((report, baked))
 }

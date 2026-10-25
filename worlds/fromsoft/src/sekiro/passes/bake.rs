@@ -130,6 +130,13 @@ impl Pass for BakeFromSoftLayers {
         if unplaced > 0 {
             log.count("unplaced meshes whose layer inputs stay", unplaced);
         }
+        // What the bake approximates, recorded once on each material it makes (DESIGN-core-lowering.md 2.8): the pass's
+        // own declaration, made specific to this run's size.
+        let baked_text = format!(
+            "layer materials baked per weight level at up to {} px: layer inputs as constant per-triangle levels; \
+             base-mip bilinear-wrap sampling; static frame at the sample time",
+            self.max_size.get()
+        );
         // lent read-only while the world changes, then put back as they were: borrowed, not written
         let none = BTreeMap::new();
         let result = world.resource_scope::<TexturePayloads, _>(|world, payloads| {
@@ -143,6 +150,7 @@ impl Pass for BakeFromSoftLayers {
                 &prototypes,
                 self.max_size.get(),
                 self.sample_time.get(),
+                &baked_text,
                 world,
             )
         });
@@ -164,12 +172,8 @@ impl Pass for BakeFromSoftLayers {
         ] {
             log.count(k, v as u64);
         }
-        for (k, v) in report.policies.counts {
-            log.count(&k, v);
-        }
-        for (k, v) in report.policies.approximations {
-            log.approximate(&k, v);
-        }
+        // its counts, its approximations and the materials each was made for, as the assembly recorded them
+        log.absorb(report.policies);
         Ok(())
     }
 }

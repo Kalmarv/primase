@@ -243,12 +243,14 @@ impl Product {
             approximations: log.approximations,
         })
     }
-    pub(super) fn report(&self, log: &mut PassLog) {
+    /// Replay the bake's counts, and its approximations on the material they were made for: the card shows them as
+    /// that material's recorded bake (DESIGN-core-lowering.md 2.8). A cache hit replays exactly what the miss recorded.
+    pub(super) fn report(&self, log: &mut PassLog, e: primase_core::Entity) {
         for (k, n) in &self.counts {
             log.count(k, *n);
         }
         for (k, n) in &self.approximations {
-            log.approximate(k, *n);
+            log.approximate_on(e, k, *n);
         }
     }
 }

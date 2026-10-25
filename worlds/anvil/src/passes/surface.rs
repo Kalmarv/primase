@@ -476,9 +476,7 @@ impl Pass for BakeAnvilSurface {
                                 levels:vec![pixels],color_space:space,role,normal});e
                         };
                         let normal=NormalConvention{green:NormalGreen::Up,z:NormalZ::Stored,x:NormalX::Red,basis:NormalBasis::TangentBitangent};
-                        if images.ao.as_chunks::<4>().0.iter().any(|v|v[0]!=255) {
-                            log.approximate(&format!("{template}: {}", super::gbuffer::OCCLUSION_APPROXIMATION),1);
-                        }
+                        let ao_mixed=images.ao.as_chunks::<4>().0.iter().any(|v|v[0]!=255);
                         let base=spawn(world,images.base,ColorSpace::Srgb,TexRole::Color,None);
                         let normals=spawn(world,images.normal,ColorSpace::Linear,TexRole::Normal,Some(normal));
                         let orm=spawn(world,images.orm,ColorSpace::Linear,TexRole::Mask,None);
@@ -500,6 +498,13 @@ impl Pass for BakeAnvilSurface {
                         world.insert(m,AnvilRenderStatus{source:"bake-anvil-surface".into(),template:material.template_name.clone(),
                             reason:format!("bake-anvil-surface: {template} own G-buffer program, placement world position/normal and original mesh inputs; {size}px TEXCOORD1 atlas at {} texels/m; static camera {} m above primitive centre{terrain_notice}",self.texels_per_metre,self.camera_distance),unsupported:false});
                         primitive.material=Some(m);*p=primitive;changed=true;
+                        // The bake is the approximation a viewer must show for the material it made, its text the
+                        // pass's own declaration made specific to this run's density and budget; the AO it mixed in is
+                        // the same material's (DESIGN-core-lowering.md 2.8: reported on the material).
+                        log.approximate_on(m,&format!("{template}: surface baked at {} texels per metre, up to {} px: surface atlas at caller density/budget; stated static camera for detail blending; uniform terrain AO, caller-stated sediment omission or refusal, stated sampler addressing; static draw without motion",self.texels_per_metre,self.max_size),1);
+                        if ao_mixed {
+                            log.approximate_on(m,&format!("{template}: {}", super::gbuffer::OCCLUSION_APPROXIMATION),1);
+                        }
                         log.count("placement primitives surface-baked with their own program",1);
                     }
                 }

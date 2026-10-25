@@ -1383,15 +1383,15 @@ impl Pass for BakeAnvilMaterial {
                 .occlusion
                 .map(|o| spawn(w, texture(s, o, ColorSpace::Linear, TexRole::Mask, None)));
             if occlusion.is_some() {
-                log.approximate(&format!("{template}: {}", super::gbuffer::OCCLUSION_APPROXIMATION), 1);
+                log.approximate_on(e, &format!("{template}: {}", super::gbuffer::OCCLUSION_APPROXIMATION), 1);
             }
             if baked.clipped_base {
-                log.approximate(&format!("{template}: program albedo outside 0 to 1 clipped by RGBA8 PBR base colour; HDR emission is retained separately"), 1);
+                log.approximate_on(e, &format!("{template}: program albedo outside 0 to 1 clipped by RGBA8 PBR base colour; HDR emission is retained separately"), 1);
             }
             let emissive = baked.emission
                 .map(|o| spawn(w, texture(s, o, ColorSpace::Srgb, TexRole::Color, None)));
             if baked.assumed_addressing > 0 {
-                log.approximate(
+                log.approximate_on(e,
                     &format!(
                         "{} Materials' textures addressed as unstated-address={} states (the engine's sampler \
                          states are not read)",
@@ -1402,7 +1402,7 @@ impl Pass for BakeAnvilMaterial {
                 );
             }
             if baked.terrain_ao {
-                log.approximate(
+                log.approximate_on(e,
                     &format!(
                         "{} Materials mixing in the terrain's ambient occlusion: the stated terrain-ao",
                         template
@@ -1411,7 +1411,7 @@ impl Pass for BakeAnvilMaterial {
                 );
             }
             if baked.sediment {
-                log.approximate(
+                log.approximate_on(e,
                     &format!(
                         "{} Materials mixing in the terrain's sediments: none (sediment layer 0)",
                         template
@@ -1420,7 +1420,7 @@ impl Pass for BakeAnvilMaterial {
                 );
             }
             if !baked.plain {
-                log.approximate(
+                log.approximate_on(e,
                     &format!(
                         "{} Materials' G-buffer specular occlusion or translucency is non-neutral; core.pbr has no separate terms: left out",
                         template
@@ -1458,18 +1458,29 @@ impl Pass for BakeAnvilMaterial {
                 source: "bake-anvil-material".into(), template: Some(template.clone()), unsupported: false,
                 reason: format!("{template}: own G-buffer program baked at {} x {}; engine inputs and sampling choices are recorded in the pass options and approximation log", self.size, self.size),
             });
+            // The bake is itself the approximation a viewer must show for this material, its text the pass's own
+            // declaration made specific to this run's size (DESIGN-core-lowering.md 2.8: reported on the material).
+            log.approximate_on(
+                e,
+                &format!(
+                    "{template}: program baked from its G-buffer shader at {} px: trilinear sampling at the stated \
+                     addressing, a plain draw, 8-bit outputs",
+                    self.size
+                ),
+                1,
+            );
             log.count(&format!("{} Materials baked", template), 1);
             if baked.cutoff.is_some() {
                 log.count(&format!("{template} Materials baked with their alpha cut-out"), 1);
             }
             if recipe.zones {
-                log.approximate(
+                log.approximate_on(e,
                     "MAD_CHR_5Zones Materials baked with the mud layer left out (HideDirt 1, a runtime dirt state), the engine-bound detail array flat and no decal where the Material binds none",
                     1,
                 );
             }
             if recipe.skin {
-                log.approximate(
+                log.approximate_on(e,
                     "MAD_CHR_Skin Materials baked with the chosen skin-tone as the tint where the tone mask is high and the engine's record otherwise stated (white where it is low, the facial hair the tone, exponent 1, no metalness or translucency byte, no vertex occlusion): the engine's own conversion from a tone to the record is not read",
                     1,
                 );
@@ -1477,10 +1488,10 @@ impl Pass for BakeAnvilMaterial {
             if baked.vertex_picked
                 && let Some(colour) = recipe.vertex_colour
             {
-                log.approximate(&format!("{template} Materials with {}", colour.picked), 1);
+                log.approximate_on(e, &format!("{template} Materials with {}", colour.picked), 1);
             }
             if recipe.camera {
-                log.approximate(
+                log.approximate_on(e,
                     &format!(
                         "Materials baked with the camera at the stated camera-distance {} m (their mix by distance)",
                         self.camera_distance
