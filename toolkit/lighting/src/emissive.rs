@@ -7,11 +7,13 @@
 //! prototypes' triangle primitives of such materials, splits each into **pieces** (triangles joined by vertices at one
 //! position, within `weld` metres: a bulb, a lamp's panel, a strip), and makes lights of the pieces:
 //!
-//! - **Colour.** The material's factor times the emissive texture at the piece's texture-coordinate centroid (nearest
-//!   texel, the texture's wrap and transform applied; the texture's colour space undone), or, for a material whose name
-//!   starts with a prefix of `animated`, the texture's mean (a texture the source scrolls, so any piece shows any texel
-//!   in time). A piece whose colour has a luminance (Rec. 709 weights) under `min_luminance` is left out, counted: it
-//!   glows no more than the floor says; so is a piece with no area (degenerate triangles) or no radiance.
+//! - **Colour.** The material's factor times the emissive texture's mean over the piece: each triangle's texel at its
+//!   texture-coordinate centroid (nearest texel, the texture's wrap and transform applied; the texture's colour space
+//!   undone), weighted by its area, so a piece whose coordinates cross a wrap seam takes the colour it draws with, not
+//!   the texel at the mean of its coordinates; or, for a material whose name starts with a prefix of `animated`, the
+//!   texture's mean (a texture the source scrolls, so any piece shows any texel in time). A piece whose colour has a
+//!   luminance (Rec. 709 weights) under `min_luminance` is left out, counted: it glows no more than the floor says; so
+//!   is a piece with no area (degenerate triangles) or no radiance.
 //! - **Intensity.** The piece's radiance is its colour times `emissive_strength` times `nits_per_strength` (the program's
 //!   statement of how bright a unit of strength is, in cd/m2); a light is a point, so its intensity is the radiance's
 //!   largest channel times the piece's area times `area_factor` (the part of the surface that faces a viewer: 1 is a
@@ -35,6 +37,13 @@
 //!   statement that a fixture focuses its light (a floodlight's reflector), which its glowing surface does not show. Its
 //!   points stay points, and the on-axis intensity is unchanged. A prefix no prototype's name starts with is counted.
 //!   `cones=none` states none.
+//! - **Down.** `down=PREFIX;...` makes each placement of a prototype whose name starts with a prefix one spot shining
+//!   straight down (the world's -Y): its lights folded into one at their intensity-weighted mean position, with their
+//!   total intensity, their intensity-weighted colour and the radius of their total area, its cones the prototype's
+//!   `cones` or else `spots`'. A program's statement that a fixture with one head lights the ground under it (a street
+//!   lamp whose panels face sideways under a shade), which its glowing surface does not show. A prototype it names with
+//!   no cone (`spots=none` and no `cones` of its own) is an error; a prefix no prototype's name starts with is counted.
+//!   `down=none` states none.
 //! - **Scale.** `scale=PREFIX:FACTOR;...` multiplies the intensity of the lights of every prototype whose name starts
 //!   with a prefix (the longest that matches) by its factor, before the range: a program's statement that a fixture
 //!   lights more than its surface's emission says (a floodlight drawn with a sign's material). A prefix no prototype's
@@ -102,6 +111,8 @@ pub struct EmissivePolicy {
     pub spots: Option<Spots>,
     /// Prototype name prefixes and the cones of their spots (each as [`Spots`]' inner and outer).
     pub cones: BTreeMap<String, Cone>,
+    /// Prototype name prefixes whose placements each give one spot shining straight down.
+    pub down: BTreeSet<String>,
     /// Prototype name prefixes and their intensity factors (each finite and above 0).
     pub scale: BTreeMap<String, f64>,
 }
@@ -191,6 +202,9 @@ impl EmissivePolicy {
             }
             positive(&format!("scale {prefix}"), *factor)?;
         }
+        if self.down.iter().any(|p| p.is_empty() || p.contains(';')) {
+            return Err("emissive-lights: a down prefix is empty or holds ';'".into());
+        }
         for (prefix, cone) in &self.cones {
             if prefix.is_empty() || prefix.contains([';', ':']) {
                 return Err(format!(
@@ -267,6 +281,10 @@ impl EmissivePolicy {
                 })
                 .collect::<Result<_, String>>()?,
         };
+        let down = match g.required("down") {
+            "none" => BTreeSet::new(),
+            v => v.split(';').map(str::to_owned).collect(),
+        };
         let p = EmissivePolicy {
             weld: number("weld")?,
             big: number("big")?,
@@ -283,6 +301,7 @@ impl EmissivePolicy {
             animated,
             spots,
             cones,
+            down,
             scale,
         };
         p.check()?;
@@ -340,6 +359,14 @@ impl EmissivePolicy {
                     .map(|(k, c)| format!("{k}:{},{}", c.inner, c.outer))
                     .collect::<Vec<_>>()
                     .join(";")
+            },
+        );
+        put(
+            "down",
+            if self.down.is_empty() {
+                "none".to_owned()
+            } else {
+                self.down.iter().cloned().collect::<Vec<_>>().join(";")
             },
         );
         put(
@@ -461,6 +488,11 @@ pub const EMISSIVE_LIGHTS: PassSpec = PassSpec {
              from the axis) instead of spots'; or none",
         ),
         OptionSpec::required(
+            "down",
+            "none",
+            "PREFIX;...: each placement of a prototype whose name starts with a prefix gives one spot shining straight              down (its lights folded into one, its cones the prototype's cones or else spots'); or none",
+        ),
+        OptionSpec::required(
             "scale",
             "none",
             "PREFIX:FACTOR;...: intensity factors for prototypes whose names start with a prefix; or none",
@@ -503,6 +535,31 @@ struct Sites {
     dark: u64,
     thinned: u64,
     strips: u64,
+}
+
+/// `sites` (at least one) as one light: at their intensity-weighted mean position, with their total intensity, their
+/// intensity-weighted colour (largest channel 1) and the radius of a disc of their total area; no facing (the caller
+/// aims it).
+fn fold(sites: &[Site]) -> Site {
+    let total: f64 = sites.iter().map(|s| s.intensity).sum();
+    let weight = |s: &Site| {
+        if total > 0.0 {
+            s.intensity / total
+        } else {
+            1.0 / sites.len() as f64
+        }
+    };
+    let at = std::array::from_fn(|a| sites.iter().map(|s| weight(s) * s.at[a]).sum());
+    let mix: [f64; 3] =
+        std::array::from_fn(|c| sites.iter().map(|s| weight(s) * f64::from(s.colour[c])).sum());
+    let top = mix.iter().copied().fold(0.0, f64::max);
+    Site {
+        at,
+        intensity: total,
+        colour: mix.map(|c| if top > 0.0 { (c / top) as f32 } else { 0.0 }),
+        radius: sites.iter().map(|s| s.radius * s.radius).sum::<f64>().sqrt(),
+        facing: None,
+    }
 }
 
 /// A decoded emissive texture: its base level, sampled at the texel a coordinate falls in, and its mean.
@@ -740,7 +797,6 @@ impl EmissiveLights {
                 groups.entry(root).or_default().push(t);
             }
             for tris in groups.values() {
-                let mut seen: BTreeSet<usize> = BTreeSet::new();
                 let mut welded: BTreeSet<usize> = BTreeSet::new();
                 let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
                 let mut sum = [0.0f64; 3];
@@ -762,7 +818,6 @@ impl EmissiveLights {
                         normal[a] += 0.5 * cross[a];
                     }
                     for k in t {
-                        seen.insert(*k);
                         if welded.insert(weld_of[*k]) {
                             let q = pos[*k].map(f64::from);
                             for a in 0..3 {
@@ -784,18 +839,46 @@ impl EmissiveLights {
                     let texel = if animated.is_some() {
                         d.mean
                     } else {
-                        let mut uv = [0.0f64; 2];
-                        for k in &seen {
-                            let t = uvs[*k];
-                            uv[0] += f64::from(t[0]);
-                            uv[1] += f64::from(t[1]);
+                        // each triangle's texel at its own coordinates' centroid, weighted by its area: a piece's
+                        // coordinates may cross a wrap seam (u 0.09 and 1.09 on one welded piece), where their mean
+                        // falls on another part of the texture
+                        let mut sum = [0.0f64; 3];
+                        let mut weight = 0.0f64;
+                        for t in tris {
+                            let v: [[f64; 3]; 3] = t.map(|k| pos[k].map(f64::from));
+                            let (e1, e2): ([f64; 3], [f64; 3]) = (
+                                std::array::from_fn(|a| v[1][a] - v[0][a]),
+                                std::array::from_fn(|a| v[2][a] - v[0][a]),
+                            );
+                            let a = 0.5
+                                * [
+                                    e1[1] * e2[2] - e1[2] * e2[1],
+                                    e1[2] * e2[0] - e1[0] * e2[2],
+                                    e1[0] * e2[1] - e1[1] * e2[0],
+                                ]
+                                .iter()
+                                .map(|x| x * x)
+                                .sum::<f64>()
+                                .sqrt();
+                            if a <= 0.0 {
+                                continue;
+                            }
+                            let at: [f32; 2] = std::array::from_fn(|c| {
+                                (t.iter().map(|&k| f64::from(uvs[k][c])).sum::<f64>() / 3.0) as f32
+                            });
+                            let at = r.transform.map_or(at, |t| t.apply(at));
+                            let texel = d.sample(at, r.wrap)?;
+                            for c in 0..3 {
+                                sum[c] += a * texel[c];
+                            }
+                            weight += a;
                         }
-                        let at = [
-                            (uv[0] / seen.len() as f64) as f32,
-                            (uv[1] / seen.len() as f64) as f32,
-                        ];
-                        let at = r.transform.map_or(at, |t| t.apply(at));
-                        d.sample(at, r.wrap)?
+                        // a piece with no area is left out below; its colour is not read
+                        if weight > 0.0 {
+                            sum.map(|s| s / weight)
+                        } else {
+                            [0.0; 3]
+                        }
                     };
                     colour = std::array::from_fn(|c| factor[c] * texel[c]);
                 }
@@ -938,6 +1021,8 @@ impl Pass for EmissiveLights {
         let mut textures: BTreeMap<Entity, Decoded> = BTreeMap::new();
         let mut animated_used: BTreeSet<String> = BTreeSet::new();
         let mut read: BTreeMap<Entity, Sites> = BTreeMap::new();
+        let mut down_used: BTreeSet<&str> = BTreeSet::new();
+        let mut downward: BTreeSet<Entity> = BTreeSet::new();
         for &(_, holder) in &placements {
             if read.contains_key(&holder) {
                 continue;
@@ -949,7 +1034,19 @@ impl Pass for EmissiveLights {
                 .get::<Name>(holder)
                 .map(|n| n.0.clone())
                 .unwrap_or_else(|| format!("{holder:?}"));
-            let sites = self.read_mesh(w, mesh, &name, &mut textures, &mut animated_used)?;
+            let mut sites = self.read_mesh(w, mesh, &name, &mut textures, &mut animated_used)?;
+            // a fixture `down` names: its lights as one, aimed below
+            if let Some(prefix) = p.down.iter().find(|d| name.starts_with(d.as_str()))
+                && !sites.sites.is_empty()
+            {
+                down_used.insert(prefix.as_str());
+                log.count(
+                    "lights folded into one spot aimed down (down)",
+                    sites.sites.len() as u64 - 1,
+                );
+                sites.sites = vec![fold(&sites.sites)];
+                downward.insert(holder);
+            }
             if sites.pieces > 0 {
                 log.count("prototypes with emissive pieces", 1);
                 log.count("emissive pieces seen", sites.pieces);
@@ -1025,13 +1122,24 @@ impl Pass for EmissiveLights {
                 if !(intensity.is_finite() && at.iter().all(|v| v.is_finite())) {
                     return Err(format!("emissive-lights: {name} light {k} is not finite"));
                 }
-                // a spot shines along its pieces' normal as the placement turns it ([`normal_through`])
-                let aimed = match (s.facing, spot_kind) {
-                    (Some(n), Some(kind)) => {
-                        let d = normal_through(t, n);
-                        Transform::facing(at, d.map(|x| x as f32)).map(|f| (f, cone.unwrap_or(kind)))
+                // a fixture `down` names shines straight down, with its prototype's cones or else spots'; any other
+                // spot along its pieces' normal as the placement turns it ([`normal_through`])
+                let aimed = if downward.contains(holder) {
+                    let kind = cone.or(spot_kind).ok_or_else(|| {
+                        format!(
+                            "emissive-lights: down names {name}, which has no cone: state spots or a cones prefix for it"
+                        )
+                    })?;
+                    log.count("spots aimed straight down (down)", 1);
+                    Transform::facing(at, [0.0, -1.0, 0.0]).map(|f| (f, kind))
+                } else {
+                    match (s.facing, spot_kind) {
+                        (Some(n), Some(kind)) => {
+                            let d = normal_through(t, n);
+                            Transform::facing(at, d.map(|x| x as f32)).map(|f| (f, cone.unwrap_or(kind)))
+                        }
+                        _ => None,
                     }
-                    _ => None,
                 };
                 if aimed.is_some() && cone.is_some() {
                     log.count("spots given their prototype's cones", 1);
@@ -1082,6 +1190,10 @@ impl Pass for EmissiveLights {
                 .keys()
                 .filter(|k| !cones_used.contains(k.as_str()))
                 .count() as u64,
+        );
+        log.count(
+            "down prefixes that no prototype's name starts with",
+            p.down.iter().filter(|k| !down_used.contains(k.as_str())).count() as u64,
         );
         log.count("emissive lights made", made.len() as u64);
         log.approximate(

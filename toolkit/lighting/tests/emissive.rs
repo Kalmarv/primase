@@ -36,6 +36,7 @@ fn policy() -> EmissivePolicy {
         animated: BTreeSet::new(),
         spots: None,
         cones: BTreeMap::new(),
+        down: BTreeSet::new(),
         scale: BTreeMap::new(),
     }
 }
@@ -245,6 +246,7 @@ fn a_string_is_thinned_and_its_power_is_kept() {
         animated: BTreeSet::new(),
         spots: None,
         cones: BTreeMap::new(),
+        down: BTreeSet::new(),
         scale: BTreeMap::new(),
     };
     let log = run(&mut w, p).unwrap();
@@ -359,6 +361,42 @@ fn a_piece_is_coloured_by_the_texel_under_its_texture_coordinates() {
     assert_eq!(lights(&w).len(), 1);
 }
 
+/// A piece across a wrap seam (The Deck's bollards): two quads welded at their shared edge into one piece, the left
+/// one's coordinates about u 0.1, the right one's about u 1.1, which repeat samples at the same texel of a 4 x 1 texture
+/// (red). Their mean, about u 0.6, falls on the third texel (green): the light is red, the colour it draws with.
+#[test]
+fn a_piece_across_a_wrap_seam_takes_the_colour_it_draws_with() {
+    let mut w = World::new();
+    let tex = w.spawn();
+    w.insert(
+        tex,
+        Texture {
+            width: 4,
+            height: 1,
+            format: TexFormat::Rgba8Unorm,
+            levels: vec![vec![255, 0, 0, 255, 0, 0, 0, 255, 0, 255, 0, 255, 0, 0, 0, 255]],
+            color_space: ColorSpace::Linear,
+            role: TexRole::Color,
+            normal: None,
+        },
+    );
+    let m = textured(&mut w, "bollard", tex, 10.0);
+    let uv = |u: f32| vec![[u, 0.5], [u + 0.1, 0.5], [u + 0.1, 0.6], [u, 0.6]];
+    let uvs = [uv(0.05), uv(1.05)].concat();
+    place(
+        &mut w,
+        &[quad(0.0, 0.0, 0.1, 0.1), quad(0.1, 0.0, 0.1, 0.1)],
+        Some(uvs),
+        m,
+        at([0.0; 3]),
+    );
+    let log = run(&mut w, policy()).unwrap();
+    let made = lights(&w);
+    assert_eq!(log.counts["emissive pieces seen"], 1);
+    assert_eq!(made.len(), 1);
+    assert_eq!(made[0].1.color, [1.0, 0.0, 0.0], "{:?}", made[0]);
+}
+
 /// The texture's colour space is undone: an sRGB byte 188 is linear 0.5029 (the sRGB curve), so the light's radiance
 /// is 0.5029 x 10 x 100 = 502.9 cd/m2 and its intensity 502.9 x 0.02 = 10.06 cd; a linear texture's byte 188 would be
 /// 0.7373.
@@ -400,6 +438,7 @@ fn an_animated_material_takes_the_textures_mean() {
         animated: BTreeSet::from([prefix.to_owned()]),
         spots: None,
         cones: BTreeMap::new(),
+        down: BTreeSet::new(),
         scale: BTreeMap::new(),
     };
     let log = run(&mut w, animated("Nothing_")).unwrap();
@@ -561,6 +600,7 @@ fn a_prototype_scale_multiplies_its_lights() {
     );
     let p = EmissivePolicy {
         cones: BTreeMap::new(),
+        down: BTreeSet::new(),
         scale: BTreeMap::from([
             ("Flood_".to_owned(), 10.0),
             ("Flood_Big".to_owned(), 4.0),
@@ -667,6 +707,83 @@ fn a_prototype_cone_focuses_its_spots() {
     );
 }
 
+/// `down=Lamp_;Nothing` makes a lamp's two 20 cd panels (pieces 1 m apart, facing +z) one spot at their mean position
+/// with 40 cd, shining straight down (its transform's -Z is the world's -Y) with the lamp's cones (20 and 65 degrees);
+/// another prototype's panel stays a spot along its normal; the unused prefix is counted. A lamp `down` names with
+/// no cone (spots=none, no cones prefix) is an error naming it.
+#[test]
+fn a_down_fixture_is_one_spot_shining_below() {
+    let build = || {
+        let mut w = World::new();
+        let m = material(&mut w, "glass", emissive([1.0, 0.5, 0.0], 10.0));
+        let (lamp, _) = place(
+            &mut w,
+            &[quad(0.0, 0.0, 0.2, 0.1), quad(1.0, 0.0, 0.2, 0.1)],
+            None,
+            m,
+            at([10.0, 5.0, 0.0]),
+        );
+        w.insert(lamp, Name("Lamp_A".into()));
+        place(&mut w, &[quad(0.0, 0.0, 0.2, 0.1)], None, m, at([0.0; 3]));
+        w
+    };
+    let mut w = build();
+    let p = EmissivePolicy {
+        spots: Some(Spots {
+            flat: 0.9,
+            inner: 0.0,
+            outer: 90.0,
+        }),
+        cones: BTreeMap::from([(
+            "Lamp_".to_owned(),
+            Cone {
+                inner: 20.0,
+                outer: 65.0,
+            },
+        )]),
+        down: BTreeSet::from(["Lamp_".to_owned(), "Nothing".to_owned()]),
+        ..policy()
+    };
+    let log = run(&mut w, p.clone()).unwrap();
+    let made = aimed(&w);
+    assert_eq!(made.len(), 2, "{made:?}");
+    let (t, l) = made
+        .iter()
+        .find(|(_, l)| near(l.intensity, 40.0))
+        .expect("the lamp's one light");
+    assert!(near3(t.cols[3], [10.6, 5.05, 0.0]), "{t:?}");
+    assert!(near3(t.cols[2], [0.0, 1.0, 0.0]), "{t:?}");
+    assert_eq!(
+        l.kind,
+        LightKind::Spot {
+            inner_cone: 20f64.to_radians() as f32,
+            outer_cone: 65f64.to_radians() as f32,
+        }
+    );
+    assert_eq!(l.color, [1.0, 0.5, 0.0]);
+    let (t, l) = made.iter().find(|(_, l)| near(l.intensity, 20.0)).unwrap();
+    assert!(
+        near3(t.cols[2], [0.0, 0.0, -1.0]) || near3(t.cols[2], [0.0, 0.0, 1.0]),
+        "{t:?}"
+    );
+    assert!(matches!(l.kind, LightKind::Spot { .. }));
+    assert_eq!(log.counts["lights folded into one spot aimed down (down)"], 1);
+    assert_eq!(log.counts["spots aimed straight down (down)"], 1);
+    assert_eq!(
+        log.counts["down prefixes that no prototype's name starts with"],
+        1
+    );
+    // no cone for it: an error naming it
+    let mut w = build();
+    let p = EmissivePolicy {
+        spots: None,
+        cones: BTreeMap::new(),
+        ..p
+    };
+    let err = run(&mut w, p).unwrap_err();
+    assert!(err.contains("Lamp_A") && err.contains("no cone"), "{err}");
+}
+
 /// The range is kept within its options: a 0.05 cd light would reach 0.16 m and is raised to 3; a 10,000 cd one would reach
 /// 70.7 m and is cut at 30.
 #[test]
@@ -718,6 +835,7 @@ fn more_lights_than_the_total_is_refused_not_dropped() {
         animated: BTreeSet::new(),
         spots: None,
         cones: BTreeMap::new(),
+        down: BTreeSet::new(),
         scale: BTreeMap::new(),
     };
     let err = run(&mut w, p).unwrap_err();
@@ -800,6 +918,7 @@ fn options_are_required_and_round_trip() {
         ("cones", "Stadium:30,20"),
         ("cones", "Stadium:0,95"),
         ("cones", ":10,20"),
+        ("down", "Lamp;"),
     ] {
         let mut o = full.clone();
         o.insert(k.into(), v.into());
@@ -810,7 +929,9 @@ fn options_are_required_and_round_trip() {
     o.insert("spots".into(), "0.9,0,90".into());
     o.insert("scale".into(), "Flood_:10;Stadium:2.5".into());
     o.insert("cones".into(), "Flood_:10,20;Stadium:0,45".into());
+    o.insert("down".into(), "Lamp_;Pole_".into());
     let made = make(&o).unwrap().options();
+    assert_eq!(made["down"], "Lamp_;Pole_");
     assert_eq!(made["cones"], "Flood_:10,20;Stadium:0,45");
     assert_eq!(made["animated"], "A_;B_");
     assert_eq!(made["spots"], "0.9,0,90");
@@ -835,6 +956,7 @@ fn policy_options() -> Options {
         ("animated", "none"),
         ("spots", "none"),
         ("cones", "none"),
+        ("down", "none"),
         ("scale", "none"),
     ]
     .iter()

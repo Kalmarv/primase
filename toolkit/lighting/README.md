@@ -22,8 +22,9 @@ Approximations that stand core lights in for light a destination cannot draw.
 - `emissive-lights` (`EmissiveLights`, `EmissivePolicy`): emissive surfaces as point lights, for a source that draws
   lamps, bulbs and signs with emissive materials and has no lights of its own. A placed prototype's triangle
   primitives of materials that emit (`pbr.material` `emissive` times its texture times `emissive_strength`) are split
-  into pieces (triangles joined at one position within `weld`); a piece's colour is the texture under its coordinates
-  (or, for a material the source animates, the texture's mean) and a piece under `min_luminance` is left out;
+  into pieces (triangles joined at one position within `weld`); a piece's colour is the texture's area-weighted mean
+  over its triangles (each at its own coordinates, so a piece across a wrap seam keeps its colour; for a material the
+  source animates, the texture's mean) and a piece under `min_luminance` is left out;
   its intensity is the radiance's largest channel (colour x strength x `nits_per_strength`) times its area times
   `area_factor` and the placement's scale squared, in candela, its range `sqrt(intensity / e_min)` kept within the
   range options. A piece up to `big` metres is a bulb or fixture, one light each, except that a prototype with `string` or
@@ -33,8 +34,9 @@ Approximations that stand core lights in for light a destination cannot draw.
   cd/m2), the thinning and the thresholds are the program's. Reported: pieces seen, left out, folded, strips split,
   lights made, as an approximation. A world is read whole or in parts (a light is made from, and kept with, its
   placement). With `spots`, a light whose pieces are flat is a spot along their normal with `spots`' cones, or with
-  `cones`' for a prototype whose name starts with one of its prefixes (a fixture that focuses its light); `scale`
-  multiplies the intensity of named prototypes. Not read: a surface's two sides, an animation's timing, a time-of-day
+  `cones`' for a prototype whose name starts with one of its prefixes (a fixture that focuses its light); `down` makes
+  each placement of a named prototype one spot straight down (its lights folded into one: a street lamp whose panels
+  face sideways under a shade); `scale` multiplies the intensity of named prototypes. Not read: a surface's two sides, an animation's timing, a time-of-day
   switch of the emission (a light is always on; a destination's own time-of-day mask applies).
 - `SurfaceGrid`: the world's placed triangles (`placed_triangles`) bucketed in
   cubic cells within a box of interest, for "is a surface nearer than `d`" queries,
