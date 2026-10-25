@@ -713,6 +713,21 @@ pub fn read_game_area(
     options: &Options,
     destination: &mut World,
 ) -> Result<Report> {
+    read_game_area_staged(install, area, decoder, options, destination, &mut |_| {})
+}
+
+/// [`read_game_area`], telling `stage` the name of each stage as it starts, in order: `definitions and texture
+/// catalog`, `models of every placement`, `select placements`, `wanted textures and shader bundles`, `load textures`,
+/// `spawn prototypes`, `spawn placements`, `collision`, `extras`, `environment`, and `done` when the read returns. A
+/// caller can bracket the stages with it (a memory census, a progress display); it changes nothing in the read.
+pub fn read_game_area_staged(
+    install: &Install,
+    area: &str,
+    decoder: &Decoder<'_>,
+    options: &Options,
+    destination: &mut World,
+    stage: &mut dyn FnMut(&str),
+) -> Result<Report> {
     let game = install.game;
     if destination.entities().next().is_some() {
         return Err(invalid("FromSoftware map", 0, "destination must be empty"));
@@ -736,6 +751,7 @@ pub fn read_game_area(
     let archive = install.open()?;
     let layout = MapLayout::read(&archive.read(&format!("/map/mapstudio/{area}.msb.dcx"), decoder)?)?;
     let mut report = Report::default();
+    stage("definitions and texture catalog");
     // the definitions materials resolve against (Sekiro's MTDs, or the game's material binaries), and the texture
     // catalog: Sekiro's area discovery, or the game's common packages, then the packages its materials name
     let definitions = game_material_definitions(&archive, decoder, game)?;
@@ -808,6 +824,7 @@ pub fn read_game_area(
             }
         }
     }
+    stage("models of every placement");
     let mut prototypes = BTreeMap::new();
     for key in requests {
         let (kind, model) = key.split_once('/').expect("constructed key");
@@ -943,6 +960,7 @@ pub fn read_game_area(
             },
         );
     }
+    stage("select placements");
     // a larger map's part moves into the read map's frame by its centre's offset there, in f64 rounded once
     let placed = placements
         .iter()
@@ -961,6 +979,7 @@ pub fn read_game_area(
     let used: BTreeSet<&String> = selected.iter().map(|(key, _, _)| key).collect();
     prototypes.retain(|key, _| used.contains(key));
 
+    stage("wanted textures and shader bundles");
     let mut wanted = BTreeSet::new();
     let mut wanted_shaders = BTreeSet::new();
     let mut layered = Vec::new();
@@ -993,11 +1012,13 @@ pub fn read_game_area(
         .partition(|t| catalog.entries.contains_key(t));
     wanted.extend(held);
     report.missing_default_textures = missing;
+    stage("load textures");
     let payloads = catalog.load(&archive, decoder, &wanted)?;
     let programs = bundles.layered_programs(layered.into_iter())?;
     report.textures = payloads.len();
     report.shader_programs = programs.len();
 
+    stage("spawn prototypes");
     let mut world = World::default();
     let mut states = match options.states {
         StateClasses::None => None,
@@ -1111,6 +1132,7 @@ pub fn read_game_area(
                 .map(|p| p.index),
         )
         .collect();
+    stage("spawn placements");
     for (key, index, transform) in selected {
         let Placed { part, map, .. } = &placements[index];
         let (prototype, far) = proto_entities[&key];
@@ -1139,6 +1161,7 @@ pub fn read_game_area(
     if !grass.is_empty() {
         report.grass = grass_types(install, &archive, decoder, &grass);
     }
+    stage("collision");
     let folder = game.map_folder(&area)?;
     report.collision = collision::read(
         &archive,
@@ -1149,6 +1172,7 @@ pub fn read_game_area(
         states.as_mut(),
         &mut world,
     )?;
+    stage("extras");
     report.extras = extras::assemble(
         &archive,
         decoder,
@@ -1161,6 +1185,7 @@ pub fn read_game_area(
     if options.map_records {
         extras::records(&layout, options.region.map(|r| r.rect), &mut report.extras, &mut world)?;
     }
+    stage("environment");
     let configs: Vec<_> = if options.draw_param == draw_param::DrawParams::None {
         Vec::new()
     } else {
@@ -1185,6 +1210,7 @@ pub fn read_game_area(
     report.states = states.map(|s| s.report);
     report.area = area;
     *destination = world;
+    stage("done");
     Ok(report)
 }
 
