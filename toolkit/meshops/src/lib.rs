@@ -2,6 +2,8 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 mod back_faces;
+mod covered;
+pub use covered::{DROP_COVERED_SURFACES, DropCoveredSurfaces};
 mod clip;
 pub use clip::{clip_convex_to_rect, clip_half_plane, twice_signed_area};
 pub mod collision_query;
@@ -41,6 +43,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         &FLATTEN_CURVES,
         &SPLIT_UV_TILES,
         &ADD_BACK_FACES,
+        &DROP_COVERED_SURFACES,
         &DRAW_COLLISION,
         &GROUP_PRIMITIVES,
         &OMIT_MATERIALLESS_PRIMITIVES,
@@ -522,6 +525,7 @@ mod tests {
             "bake-nonrigid",
             "bake-texture-transforms",
             "draw-collision",
+            "drop-covered-surfaces",
             "flatten-curves",
             "group-primitives",
             "omit-materialless-primitives",
