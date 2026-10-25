@@ -33,6 +33,7 @@ fn parts_without_meshes_materials_or_textures_are_prepared() {
             intensity: 1.,
             range: None,
             cast_shadows: None,
+            radius: None,
         },
     );
     light.insert(e, Transform::IDENTITY);

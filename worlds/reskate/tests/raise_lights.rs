@@ -42,6 +42,7 @@ fn raise_then_lower_restores_core_lights() {
                 intensity: 12.0,
                 range: Some(20.0),
                 cast_shadows: None,
+                radius: Some(0.15),
             },
             spot_transform(),
         ),
@@ -52,6 +53,7 @@ fn raise_then_lower_restores_core_lights() {
                 intensity: 3.0,
                 range: None,
                 cast_shadows: None,
+                radius: None,
             },
             Transform {
                 cols: [
@@ -90,6 +92,11 @@ fn raise_then_lower_restores_core_lights() {
         );
         assert_eq!(lowered.color, light.color);
         assert_eq!(lowered.range, light.range);
+        // the emitter's size survives (an unscaled placement); a point stays a point
+        match (lowered.radius, light.radius) {
+            (Some(a), Some(b)) => assert!(close(a, b), "{a} vs {b}"),
+            (a, b) => assert_eq!(a, b),
+        }
         match (lowered.kind, light.kind) {
             (
                 LightKind::Spot {
@@ -197,6 +204,7 @@ fn raise_skate_calibrates_light_energy() {
                 intensity: 1000.0,
                 range: None,
                 cast_shadows: None,
+                radius: None,
             },
         );
         w.insert(e, Transform::IDENTITY);

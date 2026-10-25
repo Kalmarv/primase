@@ -342,6 +342,7 @@ impl Pass for FillAmbientLights {
                     intensity,
                     range: Some(g.reach as f32),
                     cast_shadows: Some(false),
+                    radius: None,
                 },
             );
             log.place(e);

@@ -173,13 +173,20 @@ fn drawn(w: &World) -> Vec<(Entity, Entity, f64)> {
 }
 
 /// What each placement `owned` owns adds to each texture's weight, by (texture key, owned placement key): every placed
-/// primitive's area for its material's base texture, `aux_weight` of it for its normal map and mask, summed exactly.
+/// primitive's area for its material's base texture, `aux_weight` of it for its normal map, mask and emission texture,
+/// summed exactly.
 fn contributions(w: &World, aux_weight: f64, owned: &Owned) -> BTreeMap<(String, u64), ExactSum> {
     let mut out: BTreeMap<(String, u64), ExactSum> = BTreeMap::new();
     for (e, m, a) in drawn(w) {
         let Some(k) = owned.key(e) else { continue };
         let mat = w.get::<SkateMaterial>(m).expect("drawn");
-        for (t, f) in [(mat.base, 1.0), (mat.normal, aux_weight), (mat.mask, aux_weight)] {
+        let emission = mat.emission.as_ref().and_then(|e| e.texture);
+        for (t, f) in [
+            (mat.base, 1.0),
+            (mat.normal, aux_weight),
+            (mat.mask, aux_weight),
+            (emission, aux_weight),
+        ] {
             if let Some(t) = t {
                 out.entry((texture_key(w, t), k)).or_default().add(a * f);
             }
@@ -278,11 +285,7 @@ impl Pass for BudgetReskateTextures {
         let materials: BTreeSet<Entity> = drawn(w).into_iter().map(|(_, m, _)| m).collect();
         let keep: BTreeSet<Entity> = materials
             .iter()
-            .flat_map(|&m| {
-                let mat = w.get::<SkateMaterial>(m).expect("drawn");
-                [mat.base, mat.normal, mat.mask]
-            })
-            .flatten()
+            .flat_map(|&m| w.get::<SkateMaterial>(m).expect("drawn").textures())
             .filter(|&t| keep_keys.contains(&texture_key(w, t)))
             .collect();
         // every change prepared before the first
@@ -292,6 +295,18 @@ impl Pass for BudgetReskateTextures {
             let mut factor = None;
             mat.normal = mat.normal.filter(|t| keep.contains(t));
             mat.mask = mat.mask.filter(|t| keep.contains(t));
+            // an emission texture past the budget: its mean colour into the emission's colour
+            if let Some(em) = mat.emission.as_mut()
+                && let Some(t) = em.texture.filter(|t| !keep.contains(t))
+            {
+                let mean = mean_factor(w, t)?;
+                em.color = std::array::from_fn(|c| em.color[c] * mean[c]);
+                em.texture = None;
+                log.approximate(
+                    &format!("emission textures past a budget of {max} drawn as their mean colour"),
+                    1,
+                );
+            }
             if let Some(base) = mat.base.filter(|t| !keep.contains(t)) {
                 if !(w.has::<Texture>(base) && w.has::<SkateTexture>(base)) {
                     // no pixels to take a mean of: mid-grey, said so

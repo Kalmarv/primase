@@ -45,7 +45,7 @@ impl Pass for LowerAnvilLights {
             if !intensity.is_finite() { return Err(format!("{entity:?}: calibrated intensity overflow")); }
             let light = Light { kind: LightKind::Spot { inner_cone: inner, outer_cone: outer },
                 color: [source.stored.color[0], source.stored.color[1], source.stored.color[2]].map(decode),
-                intensity, range: Some(source.stored.range), cast_shadows: None };
+                intensity, range: Some(source.stored.range), cast_shadows: None, radius: None };
             world.insert(entity, light);
             world.remove::<AnvilSpotLight>(entity);
             log.count("authored spot lights lowered", 1);

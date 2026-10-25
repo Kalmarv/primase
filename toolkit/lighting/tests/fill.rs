@@ -162,6 +162,7 @@ fn lights_near_a_surface_are_left_out_and_the_rest_carry_the_ambient() {
             intensity: 4.0,
             range: Some(6.0),
             cast_shadows: Some(false),
+            radius: None,
         }
     );
     // a gradient: its mean, reported

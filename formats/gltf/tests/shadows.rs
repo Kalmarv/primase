@@ -65,6 +65,7 @@ fn world() -> World {
             intensity: 10.0,
             range: None,
             cast_shadows: Some(true),
+            radius: None,
         },
     );
     w.insert(light, Transform::IDENTITY);

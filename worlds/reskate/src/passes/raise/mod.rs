@@ -15,8 +15,11 @@
 //!   packing uses one image, UV0 and one shared wrap across base/normal/mask; other sampling is refused.
 //!   Occlusion is never inferred from an unbound channel. Fractional mask-byte quantization is counted per
 //!   material, independently of derived texture counts;
-//! - emission texture bindings and nonzero emissive radiance have no established target representation and
-//!   are named, counted losses in the returned log (per material, overlapping categories). Source PBR is retained;
+//! - emission, where the caller states its calibration (`emission`, cd/m2 per unit of emissive strength): Studio's
+//!   `emission_*` (its texture on the base texture's coordinates, its factor, a strength of emissive strength x that x
+//!   pi x the lights' calibration, so emission and lights share one scale), an approximation reported with its
+//!   values; without the option, or with an emission texture on other coordinates, it is left out, counted. Source PBR
+//!   is retained;
 //! - specular reflectance (`KHR_materials_specular`): skate's MSK has no reflectance channel, so every dielectric
 //!   reflects at F0 0.04 ([`SKATE_F0`]); a dielectric reflecting less (0.04 x colour x factor, x the strength texture's
 //!   A per texel when it is the mask source) is folded into roughness so its highlight peaks no higher
@@ -69,8 +72,8 @@ use primase_core::{
 
 use crate::components::{
     AlphaMode, CollisionMode, Domain, FileRef, MarkerKind, MaterialClass, Other, Part, STANDARD_SURFACES,
-    SkateLight, SkateMarker, SkateMaterial, SkateParts, SkatePlacement, SkatePrototype, SkateRock,
-    SkateScene, SkateTexture, Snap, SnapMode, SoupRef, TableRef, Wrap,
+    SkateEmission, SkateLight, SkateMarker, SkateMaterial, SkateParts, SkatePlacement, SkatePrototype,
+    SkateRock, SkateScene, SkateTexture, Snap, SnapMode, SoupRef, TableRef, Wrap,
 };
 use crate::{Error, Result};
 
@@ -125,6 +128,9 @@ pub struct RaiseOptions {
     surfaces: BTreeMap<String, String>,
     unclassified: Unclassified,
     lights: LightCalibration,
+    /// cd/m2 per unit of a material's `emissive_strength` (white factor and texel): emission raised to Studio's;
+    /// `None`: left out, counted.
+    emission: Option<f64>,
 }
 
 impl RaiseOptions {
@@ -151,7 +157,29 @@ impl RaiseOptions {
             surfaces: BTreeMap::new(),
             unclassified,
             lights,
+            emission: None,
         })
+    }
+
+    /// Materials' emission raised to Studio's, `nits_per_strength` (finite, above 0) cd/m2 per unit of
+    /// `emissive_strength`: Studio's strength is `emissive_strength x nits_per_strength x pi x the lights'
+    /// calibration`, so emission and lights share one scale. Reason: a light of `I` cd is `4 pi I` lm; Studio writes
+    /// it as `683 x 4 pi^2 I x scale` lm, so skate's lights are `683 pi scale` of the source's (0.645 at
+    /// [`SKATE_LIGHT_SCALE`]); Studio writes `683 x strength` as the surface's `EmissiveIntensity`, taken as cd/m2
+    /// (Frostbite's published emissive unit; an inferred Studio strength of ~0.03 drew ~20 cd/m2), so a surface of `L`
+    /// cd/m2 at the lights' ratio is `683 pi scale L` cd/m2, a strength of `pi scale L`. Not measured in game.
+    pub fn with_emission(mut self, nits_per_strength: f64) -> std::result::Result<RaiseOptions, String> {
+        if !(nits_per_strength.is_finite() && nits_per_strength > 0.0) {
+            return Err(format!(
+                "emission={nits_per_strength} is not a finite number above 0"
+            ));
+        }
+        self.emission = Some(nits_per_strength);
+        Ok(self)
+    }
+
+    pub fn emission(&self) -> Option<f64> {
+        self.emission
     }
 
     /// The world's surface names onto skate surfaces (`"Snow"` -> `"asphalt"`), both named.
@@ -208,6 +236,12 @@ impl RaiseOptions {
             }
             options = options.with_surfaces(surfaces)?;
         }
+        if let Some(v) = g.optional("emission") {
+            let nits = v
+                .parse::<f64>()
+                .map_err(|_| format!("emission={v} is not a number"))?;
+            options = options.with_emission(nits)?;
+        }
         Ok(options)
     }
 
@@ -227,6 +261,9 @@ impl RaiseOptions {
         if !self.surfaces.is_empty() {
             let map: Vec<String> = self.surfaces.iter().map(|(a, b)| format!("{a}:{b}")).collect();
             o.insert("map".into(), map.join(";"));
+        }
+        if let Some(nits) = self.emission {
+            o.insert("emission".into(), nits.to_string());
         }
         o
     }
@@ -271,6 +308,46 @@ pub fn class_to_skate(class: SurfaceClass) -> Option<&'static str> {
 
 /// Studio watts for a light of `candela`: the Blender power `P` whose Cycles shading of a Lambertian surface,
 /// `albedo / pi x P / (4 pi d^2)`, equals glTF's `albedo x I / d^2`: `P = 4 pi^2 I`.
+/// What `m` emits as Studio draws it, where `options` states the calibration (see [`RaiseOptions::with_emission`]):
+/// `None` for a material that emits nothing (no strength or a black factor), and for one whose emission skate's map
+/// cannot take as it is, left out and counted by reason: no calibration stated; an emission texture on other texture
+/// coordinates than the base texture's (Studio samples it on the base's).
+fn raised_emission(m: &PbrMaterial, options: &RaiseOptions, log: &mut PassLog) -> Option<SkateEmission> {
+    if !(m.emissive_strength > 0.0 && m.emissive.iter().any(|c| *c > 0.0)) {
+        return None;
+    }
+    let Some(nits) = options.emission else {
+        log.omit("emission left out (raise-skate's emission not stated)", 1);
+        return None;
+    };
+    if let Some(t) = m.emissive_texture {
+        let base = m.base_color_texture.map_or(0, |b| b.texcoord);
+        if t.texcoord != base {
+            log.omit(
+                "emission left out: its texture on other texture coordinates than the base texture's",
+                1,
+            );
+            return None;
+        }
+        if m.base_color_texture.is_some_and(|b| b.wrap != t.wrap) {
+            log.approximate("emission textures wrapped as their material's base texture", 1);
+        }
+    }
+    let strength = f64::from(m.emissive_strength) * nits * std::f64::consts::PI * options.lights.scale();
+    log.approximate(
+        &format!(
+            "emission as Studio's: strength = emissive strength x {nits} cd/m2 x pi x light_scale {}",
+            options.lights.scale()
+        ),
+        1,
+    );
+    Some(SkateEmission {
+        texture: m.emissive_texture.map(|t| t.texture),
+        color: m.emissive,
+        strength: strength as f32,
+    })
+}
+
 pub fn studio_watts(candela: f32) -> f32 {
     (4.0 * std::f64::consts::PI * std::f64::consts::PI * f64::from(candela)) as f32
 }
@@ -507,11 +584,19 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
         "materials no placed primitive is drawn with, not raised",
         (world.iter::<PbrMaterial>().count() - materials.len()) as u64,
     );
+    // what each material emits, as Studio's emission (where the caller states its calibration)
+    let mut emissions: BTreeMap<Entity, SkateEmission> = BTreeMap::new();
+    for (e, m) in &materials {
+        if let Some(em) = raised_emission(m, options, &mut log) {
+            emissions.insert(*e, em);
+        }
+    }
     let mut used: BTreeSet<Entity> = BTreeSet::new();
-    for (_, m) in &materials {
+    for (e, m) in &materials {
         for r in [m.base_color_texture, m.normal_texture].into_iter().flatten() {
             used.insert(r.texture);
         }
+        used.extend(emissions.get(e).and_then(|em| em.texture));
     }
     let mut taken = BTreeSet::new();
     let mut textures = Vec::new();
@@ -686,6 +771,7 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
                 // stated per drawn entity in core (core.shadows): not a material's
                 cast_shadows: None,
                 emissive: None,
+                emission: emissions.remove(&e),
                 vertex_alpha: None,
                 other: Other::new(),
             },
@@ -715,6 +801,7 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
                 ocean: None,
                 cast_shadows: None,
                 emissive: None,
+                emission: None,
                 vertex_alpha: None,
                 other: Other::new(),
             },
@@ -826,7 +913,10 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
                 color: l.color,
                 energy: studio_watts((f64::from(l.intensity) * options.lights.scale()) as f32),
                 range: l.range.unwrap_or(0.0),
-                radius: 0.0,
+                // the emitter's size in the world: its radius times the placement's (uniform) scale; a point is 0
+                radius: l
+                    .radius
+                    .map_or(0.0, |r| (f64::from(r) * t.determinant().abs().cbrt()) as f32),
                 spot_size: size,
                 spot_blend: blend,
                 time_of_day: 0x7F,
@@ -960,6 +1050,13 @@ pub const RAISE_SKATE: PassSpec = PassSpec {
             "a surface with no class, no entry in map and no skate surface's name: leave-out (its triangles left out, \
              reported), or the skate surface it becomes",
         ),
+        OptionSpec::optional(
+            "emission",
+            "558.5",
+            "cd/m2 per unit of a material's emissive strength, finite and above 0: emission raised to Studio's \
+             (strength x this x the lights' calibration / 683)",
+            "emission is left out, counted",
+        ),
     ],
     make: |g| Ok(Box::new(RaiseSkate::new(RaiseOptions::from_given(g)?))),
 };
@@ -997,7 +1094,7 @@ impl primase_core::pass::Pass for RaiseSkate {
         &[]
     }
     fn approximates(&self) -> &'static str {
-        "light energy as Studio watts (4 pi^2 candela x the calibration); base colour alpha factors with a texture not kept; emission not represented (all counted)"
+        "light energy as Studio watts (4 pi^2 candela x the calibration); emission as Studio's by the same calibration; base colour alpha factors with a texture not kept (all counted)"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         let l = raise_skate(w, &self.options).map_err(|e| e.to_string())?;

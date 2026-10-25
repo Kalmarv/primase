@@ -86,6 +86,7 @@ fn material(w: &mut World, key: &str, base: Option<Entity>, tint: Option<[u8; 3]
             ocean: None,
             cast_shadows: None,
             emissive: None,
+            emission: None,
             vertex_alpha: None,
             other: Other::new(),
         },

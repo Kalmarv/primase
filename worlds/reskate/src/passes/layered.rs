@@ -336,6 +336,7 @@ fn black(key: String, class: crate::components::MaterialClass) -> crate::compone
         ocean: None,
         cast_shadows: None,
         emissive: None,
+        emission: None,
         vertex_alpha: None,
         other: Default::default(),
     }

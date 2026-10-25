@@ -130,6 +130,7 @@ fn world() -> World {
             intensity: 10.0,
             range: Some(8.0),
             cast_shadows: None,
+            radius: None,
         },
     );
     let mut t = Transform::IDENTITY;
@@ -147,6 +148,7 @@ fn world() -> World {
             intensity: 3.0,
             range: None,
             cast_shadows: None,
+            radius: None,
         },
     );
     w
@@ -696,24 +698,36 @@ fn unsupported_masks_refuse_without_partial_surface_or_entity_changes() {
 }
 
 #[test]
-fn emission_losses_are_per_material_and_do_not_claim_radiance_transport() {
-    let (mut w, first, source) = masked_world();
-    let m = w.get_mut::<PbrMaterial>(first).unwrap();
-    m.emissive = [0.25, 0.5, 1.0];
-    m.emissive_strength = 10.0;
-    m.emissive_texture = Some(TextureRef::new(source));
-    let other = w.iter::<PbrMaterial>().find(|(e, _)| *e != first).unwrap().0;
-    w.get_mut::<PbrMaterial>(other).unwrap().emissive_texture = Some(TextureRef::new(source));
+fn emission_is_counted_per_material_and_raised_only_where_stated() {
+    // the first material emits (a texture under a coloured factor); the other has a texture under the default black
+    // factor, which emits nothing: neither raised nor counted
+    let emitting = || {
+        let (mut w, first, source) = masked_world();
+        let m = w.get_mut::<PbrMaterial>(first).unwrap();
+        m.emissive = [0.25, 0.5, 1.0];
+        m.emissive_strength = 10.0;
+        m.emissive_texture = Some(TextureRef::new(source));
+        let other = w.iter::<PbrMaterial>().find(|(e, _)| *e != first).unwrap().0;
+        w.get_mut::<PbrMaterial>(other).unwrap().emissive_texture = Some(TextureRef::new(source));
+        (w, first, other, source)
+    };
+    let (mut w, ..) = emitting();
     let log = passes::raise_skate(&mut w, &options()).unwrap();
     assert_eq!(
-        log.approximations["PBR emission texture binding not representable in skate-scene"],
-        2
-    );
-    assert_eq!(
-        log.approximations["PBR emissive radiance not representable in skate-scene"],
+        log.omitted["emission left out (raise-skate's emission not stated)"],
         1
     );
-    assert_eq!(w.get::<SkateMaterial>(first).unwrap().emissive, None);
+    assert!(w.iter::<SkateMaterial>().all(|(_, m)| m.emission.is_none()));
+    let (mut w, first, other, source) = emitting();
+    let log = passes::raise_skate(&mut w, &options().with_emission(100.0).unwrap()).unwrap();
+    assert!(
+        !log.omitted.keys().any(|k| k.starts_with("emission")),
+        "{:?}",
+        log.omitted
+    );
+    let raised = w.get::<SkateMaterial>(first).unwrap().emission.as_ref().unwrap();
+    assert_eq!((raised.texture, raised.color), (Some(source), [0.25, 0.5, 1.0]));
+    assert_eq!(w.get::<SkateMaterial>(other).unwrap().emission, None);
     assert_eq!(w.get::<PbrMaterial>(first).unwrap().emissive_strength, 10.0);
 }
 
@@ -762,6 +776,7 @@ fn explicit_raise_uses_pbr_and_counts_shared_quantization_per_material() {
             ocean: None,
             cast_shadows: None,
             emissive: Some(true),
+            emission: None,
             vertex_alpha: None,
             other: Default::default(),
         },

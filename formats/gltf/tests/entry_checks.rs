@@ -30,6 +30,7 @@ fn light(kind: LightKind) -> Light {
         intensity: 1.0,
         range: None,
         cast_shadows: None,
+        radius: None,
     }
 }
 

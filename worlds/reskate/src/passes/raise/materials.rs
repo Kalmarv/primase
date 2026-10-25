@@ -165,7 +165,10 @@ pub(super) fn prepare(world: &World, materials: &[(Entity, PbrMaterial)]) -> Res
                 ));
             }
         }
-        for r in [m.base_color_texture, m.normal_texture].into_iter().flatten() {
+        for r in [m.base_color_texture, m.normal_texture, m.emissive_texture]
+            .into_iter()
+            .flatten()
+        {
             if r.transform.is_some() {
                 return Err(bad(
                     entity,
@@ -207,14 +210,6 @@ pub(super) fn prepare(world: &World, materials: &[(Entity, PbrMaterial)]) -> Res
                 ),
                 1,
             );
-        }
-        if m.emissive_texture.is_some() {
-            plan.log
-                .approximate("PBR emission texture binding not representable in skate-scene", 1);
-        }
-        if m.emissive_strength > 0.0 && m.emissive.iter().any(|v| *v > 0.0) {
-            plan.log
-                .approximate("PBR emissive radiance not representable in skate-scene", 1);
         }
         let f0 = specular_f0(m);
         match (m.specular, f0) {

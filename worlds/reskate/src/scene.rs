@@ -18,7 +18,7 @@ use primase_core::{
     Tile, Transform, TransformKind, World,
 };
 
-use crate::material::{MatLib, MaterialSpec, VClass};
+use crate::material::{Emission, MatLib, MaterialSpec, VClass};
 use crate::model::{CollisionMode, SrcMesh, SrcPart};
 use crate::passes::layered::{BlendOpacity, VertexBlend};
 use crate::texture::{MASK_TAG, NORMAL_TAG, TexLib, TexRef, TexSource};
@@ -741,7 +741,7 @@ impl<'a> Scene<'a> {
         let mut proto_index = HashMap::new();
         let mut notes = SceneNotes::default();
         for (e, m) in world.iter::<SkateMaterial>() {
-            for t in [m.base, m.normal, m.mask].into_iter().flatten() {
+            for t in m.textures() {
                 if let Some(key) = unloaded.get(&t) {
                     return Err(Error::Scene(format!(
                         "texture '{key}' has no pixels: the writer takes textures loaded (core.texture) and prepared \
@@ -1303,6 +1303,23 @@ impl<'a> Materializer<'a> {
         if let Some(mk) = key_of(e.mask) {
             spec.mask = self.derived(scene, tex, &mk, MASK_TAG)?;
         }
+        if let Some(em) = &e.emission {
+            // the emission texture as a colour texture of the map (Studio samples it on the base's coordinates)
+            let texture = match key_of(em.texture) {
+                Some(k) => {
+                    let t = &scene.textures[&k];
+                    let r = self.tex_ref(t);
+                    Some((tex.register(&r, false)?, !t.linear))
+                }
+                None => None,
+            };
+            spec.emission = Some(Emission {
+                tex: texture.map_or(-1, |t| t.0),
+                srgb: texture.is_none_or(|t| t.1),
+                color: em.color,
+                strength: em.strength,
+            });
+        }
         spec.base = base_ref.as_deref();
         mats.resolve(tex, &spec)
     }
@@ -1665,6 +1682,7 @@ mod tests {
                 ocean: None,
                 cast_shadows: None,
                 emissive: None,
+                emission: None,
                 vertex_alpha: None,
                 other: Default::default(),
             },

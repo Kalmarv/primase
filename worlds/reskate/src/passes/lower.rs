@@ -202,7 +202,7 @@ impl Pass for LowerSkatePbr {
 /// `spot_size` and the inner `outer x (1 - spot_blend)`; range 0 unlimited. The entity gets a `core.transform` at
 /// `position` whose local -Z is `direction` and whose +Y is as near world +Y as possible (+Z when the light points
 /// straight up or down): a point light and a round spot cone look the same under any roll, so `tangent` is not
-/// used. Time-of-day mask, radius, shadows, priority and group stay in the dialect. Lights that already have a
+/// used. Time-of-day mask, shadows, priority and group stay in the dialect. Lights that already have a
 /// `core.light` are left as they are; one it cannot lower (a non-finite or zero direction) gets none, counted as
 /// omitted (a conversion's unsupported notice).
 #[derive(Debug, Default)]
@@ -227,7 +227,7 @@ impl Pass for LowerSkateLights {
         &["skate.light"]
     }
     fn approximates(&self) -> &'static str {
-        "light energy as candela (Studio watts / 4 pi^2); time of day, radius, priority and group not lowered"
+        "light energy as candela (Studio watts / 4 pi^2); time of day, priority and group not lowered"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let lights: Vec<(Entity, SkateLight)> = w
@@ -278,6 +278,8 @@ pub fn lower_light(l: &SkateLight) -> Result<(Light, Transform), String> {
         intensity,
         range: (l.range > 0.0).then_some(l.range),
         cast_shadows: Some(l.cast_shadow),
+        // the emitter's size, metres (a light placed at identity: no scale to undo); 0 is a point
+        radius: (l.radius > 0.0).then_some(l.radius),
     };
     let transform =
         Transform::facing(l.position, l.direction).ok_or("a light direction that is zero or not finite")?;

@@ -301,6 +301,7 @@ fn map() -> World {
                 intensity: 100.0 * (i + 1) as f32,
                 range: Some(20.0),
                 cast_shadows: None,
+                radius: None,
             },
         );
         let mut t = Transform::IDENTITY;

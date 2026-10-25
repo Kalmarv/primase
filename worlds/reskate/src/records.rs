@@ -104,6 +104,16 @@ pub struct SurfaceMaterial {
     /// Studio's per-vertex blend; written only when set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vertex_blend: Option<bool>,
+    /// Studio's emission (its stock LED material's): a texture on the base texture's coordinates, its colour space,
+    /// a linear colour and a strength (683 x strength cd/m2 of white); written only when the material emits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emission_texture: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emission_srgb: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emission_color: Option<[f32; 3]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emission_strength: Option<f32>,
 }
 
 /// One object record: a rendered mesh, or collision only (`render: false`).

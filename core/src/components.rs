@@ -944,7 +944,9 @@ pub enum LightKind {
 /// A punctual light, exactly `KHR_lights_punctual`'s: placed by its entity's [`Transform`] and shining along that
 /// transform's local -Z (a point light shines everywhere); `color` linear RGB; `intensity` in candela for point and spot
 /// lights, in lux for a directional one; `range` the distance where it stops (`None`: unlimited, an inverse-square
-/// falloff to infinity). A game's own light model stays in its dialect; this is what a writer emits.
+/// falloff to infinity); `radius` the size of the emitter, the radius of the sphere (or disc, for a spot) the light
+/// leaves from, in metres (`None`: a point, glTF's punctual light, which has no size). A game's own light model stays
+/// in its dialect; this is what a writer emits.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Light {
     pub kind: LightKind,
@@ -953,18 +955,20 @@ pub struct Light {
     pub range: Option<f32>,
     /// Casts shadows; `None`: unknown (the renderer's default).
     pub cast_shadows: Option<bool>,
+    /// The emitter's radius, metres; `None`: a point.
+    pub radius: Option<f32>,
 }
 
 impl Component for Light {
     const NAME: &'static str = "core.light";
     const GEOMETRY: crate::Geometry = crate::Geometry::None;
-    /// 2: `cast_shadows`.
-    const VERSION: u32 = 2;
+    /// 2: `cast_shadows`; 3: `radius`.
+    const VERSION: u32 = 3;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
-    /// Finite, non-negative colour and intensity, a positive range, and a spot's cones within 0 <= inner <= outer <=
-    /// pi / 2.
+    /// Finite, non-negative colour and intensity, a positive range, a finite non-negative radius, and a spot's cones
+    /// within 0 <= inner <= outer <= pi / 2.
     fn verify(&self, _e: Entity, _w: &crate::World) -> Result<(), String> {
         finite(self.color.iter().copied().chain([self.intensity]), "light")?;
         if self.color.iter().any(|&c| c < 0.0) || self.intensity < 0.0 {
@@ -972,6 +976,9 @@ impl Component for Light {
         }
         if self.range.is_some_and(|r| !(r.is_finite() && r > 0.0)) {
             return Err("a range that is not positive".into());
+        }
+        if self.radius.is_some_and(|r| !(r.is_finite() && r >= 0.0)) {
+            return Err("a radius that is not finite and non-negative".into());
         }
         if let LightKind::Spot {
             inner_cone,
@@ -1894,8 +1901,20 @@ mod tests {
             intensity: 10.0,
             range: Some(5.0),
             cast_shadows: None,
+            radius: None,
         };
         assert_eq!(spot(0.2, 0.6).verify(e, &w), Ok(()));
+        let sized = |r: f32| Light {
+            radius: Some(r),
+            ..spot(0.2, 0.6)
+        };
+        assert_eq!(sized(0.0).verify(e, &w), Ok(()), "a radius of 0 is a point");
+        assert_eq!(sized(0.25).verify(e, &w), Ok(()));
+        assert!(sized(-0.1).verify(e, &w).is_err(), "a negative radius");
+        assert!(
+            sized(f32::NAN).verify(e, &w).is_err(),
+            "a radius that is not finite"
+        );
         assert!(spot(0.7, 0.6).verify(e, &w).is_err(), "inner past outer");
         assert!(spot(0.2, 2.0).verify(e, &w).is_err(), "outer past pi / 2");
         let mut l = spot(0.2, 0.6);

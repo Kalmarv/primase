@@ -127,7 +127,7 @@ impl Pass for LowerAnvilSky{
             world.insert(sun,Name("LayeredSky static source sun (authored manual elevation)".into()));
             world.insert(sun,primase_core::Source(environment.description.clone()));
             world.insert(sun,Light{kind:LightKind::Directional,color:environment.sunlight,intensity:1.0,
-                range:None,cast_shadows:None});
+                range:None,cast_shadows:None,radius:None});
             world.insert(sun,Transform::facing([0.0;3],environment.towards_sun.map(|v|-v))
                 .ok_or("sky: invalid authored sun direction")?);
             world.insert_resource(primase_core::Environment{sun:Some(sun),ambient:Some(primase_core::Ambient{

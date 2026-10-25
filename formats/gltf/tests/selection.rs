@@ -103,6 +103,7 @@ fn a_selection_writes_its_placements_pieces_and_lights() {
                     intensity: 1.,
                     range: None,
                     cast_shadows: None,
+                    radius: None,
                 },
             );
             w.insert(e, Name(format!("light_{k}")));

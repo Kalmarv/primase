@@ -830,6 +830,7 @@ impl Reader<'_> {
                         ocean,
                         cast_shadows,
                         emissive,
+                        emission: None,
                         vertex_alpha,
                         other: o.other()?,
                     },

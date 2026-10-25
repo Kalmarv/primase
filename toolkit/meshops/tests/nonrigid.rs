@@ -287,6 +287,7 @@ fn own_geometry_soups_lights_and_kept_mirrors() {
             intensity: 1.0,
             range: None,
             cast_shadows: None,
+            radius: None,
         },
     );
     w.insert(

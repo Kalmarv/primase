@@ -224,6 +224,7 @@ impl Pass for LowerFromSoftEnvironment {
                             intensity: lux * weight,
                             range: None,
                             cast_shadows: None,
+                            radius: None,
                         },
                     );
                     world.insert(e, transform);
@@ -580,6 +581,7 @@ mod tests {
                 intensity: 1.0,
                 range: None,
                 cast_shadows: None,
+                radius: None,
             },
         );
         w.insert_resource(Environment {

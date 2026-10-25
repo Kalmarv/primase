@@ -606,7 +606,7 @@ impl SceneWarnings {
         use crate::components::{SkateMaterial, SkateTexture};
         let mut used: HashSet<primase_core::Entity> = HashSet::new();
         for (_, m) in world.iter::<SkateMaterial>() {
-            used.extend(m.base.iter().chain(&m.normal).chain(&m.mask).copied());
+            used.extend(m.textures());
         }
         let mut w = SceneWarnings::default();
         for (e, t) in world.iter::<SkateTexture>() {

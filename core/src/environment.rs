@@ -117,6 +117,7 @@ mod tests {
                 intensity: 3.0,
                 range: None,
                 cast_shadows: Some(true),
+                radius: None,
             },
         );
         w.insert(sun, Transform::IDENTITY);
@@ -129,6 +130,7 @@ mod tests {
                 intensity: 10.0,
                 range: Some(5.0),
                 cast_shadows: None,
+                radius: None,
             },
         );
         w.insert_resource(Environment {

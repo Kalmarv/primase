@@ -242,6 +242,7 @@ fn lights_follow_their_subcell() {
                 intensity: 5.0,
                 range: None,
                 cast_shadows: None,
+                radius: None,
             },
         );
         let mut t = Transform::IDENTITY;

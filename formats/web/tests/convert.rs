@@ -127,6 +127,7 @@ impl Pass for LightPlacements {
                     intensity: 10.,
                     range: None,
                     cast_shadows: None,
+                    radius: None,
                 },
             );
             let mut at = Transform::IDENTITY;

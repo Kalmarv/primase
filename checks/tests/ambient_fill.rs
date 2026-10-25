@@ -108,6 +108,7 @@ mod program {
                             intensity,
                             range: Some((spacing * 1.5) as f32),
                             cast_shadows: Some(false),
+                            radius: None,
                         },
                     );
                     log.count("ambient fill lights", 1);

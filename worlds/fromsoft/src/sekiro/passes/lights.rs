@@ -159,6 +159,7 @@ impl Pass for LowerFromSoftLights {
                     intensity: intensity as f32,
                     range: Some(source.radius.max(self.min_range.get())),
                     cast_shadows: Some(source.cast_shadows),
+                    radius: None,
                 },
             ));
         }

@@ -1075,7 +1075,7 @@ impl MapWriter {
             .iter()
             .flat_map(|&id| {
                 let m = self.ctx.mats.by_id(id);
-                [m.tex, m.normal, m.mask]
+                [m.tex, m.normal, m.mask, m.emission.map_or(-1, |e| e.tex)]
             })
             .filter(|t| *t >= 0)
             .collect()
@@ -2534,6 +2534,10 @@ impl MapWriter {
             mask_texture: file(m.mask),
             mask_srgb: (m.mask >= 0).then_some(false),
             vertex_blend: m.vertex_blend.is_some().then_some(true),
+            emission_texture: m.emission.and_then(|e| file(e.tex)),
+            emission_srgb: m.emission.filter(|e| e.tex >= 0).map(|e| e.srgb),
+            emission_color: m.emission.map(|e| e.color),
+            emission_strength: m.emission.map(|e| e.strength),
         }))
     }
 

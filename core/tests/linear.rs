@@ -204,6 +204,7 @@ fn a_component_that_cannot_follow_leaves_the_entity_unchanged() {
             intensity: 1.0,
             range: None,
             cast_shadows: None,
+            radius: None,
         },
     );
     w.insert_opaque(

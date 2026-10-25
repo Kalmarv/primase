@@ -317,9 +317,36 @@ pub struct SkateMaterial {
     pub ocean: Option<bool>,
     pub cast_shadows: Option<bool>,
     pub emissive: Option<bool>,
+    /// What the surface emits, as Studio draws it (its `emission_*` keys); `None`: nothing.
+    pub emission: Option<SkateEmission>,
     /// Parts fade by their COLOR_0 alpha: drawn blended even when `alpha` says otherwise.
     pub vertex_alpha: Option<bool>,
     pub other: Other,
+}
+
+/// A material's emission as Studio's map takes it: `emission_texture` (on the base texture's coordinates and wrap)
+/// times `emission_color` (linear RGB) times `emission_strength` (Studio's units: it writes
+/// `RadiosityMaterial.EmissiveIntensity = 683 x strength`, so one unit is 683 cd/m2 of a white texel). Not part of
+/// scene-interchange v1 (its writer leaves it out).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SkateEmission {
+    pub texture: Option<Entity>,
+    pub color: [f32; 3],
+    pub strength: f32,
+}
+
+impl SkateMaterial {
+    /// Every texture the material draws, each slot once: base, normal, mask, emission.
+    pub fn textures(&self) -> impl Iterator<Item = Entity> + '_ {
+        [
+            self.base,
+            self.normal,
+            self.mask,
+            self.emission.as_ref().and_then(|e| e.texture),
+        ]
+        .into_iter()
+        .flatten()
+    }
 }
 
 /// A collision soup reference (a world `collision[i]` entry or a prototype's `collision`).
@@ -567,13 +594,24 @@ macro_rules! shown {
 impl Component for SkateMaterial {
     const NAME: &'static str = "skate.material";
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
-    /// 2: `vertex_alpha` is a field of its own (in 1 it was carried in `other`).
-    const VERSION: u32 = 2;
+    /// 2: `vertex_alpha` is a field of its own (in 1 it was carried in `other`); 3: `emission`.
+    const VERSION: u32 = 3;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
     fn references(&self, out: &mut Vec<Entity>) {
-        out.extend([self.base, self.normal, self.mask].into_iter().flatten());
+        out.extend(self.textures());
+    }
+    /// An emission is finite and not negative.
+    fn verify(&self, _e: Entity, _w: &primase_core::World) -> Result<(), String> {
+        if let Some(em) = &self.emission
+            && !(em.strength.is_finite()
+                && em.strength >= 0.0
+                && em.color.iter().all(|c| c.is_finite() && *c >= 0.0))
+        {
+            return Err(format!("an emission that is not finite and non-negative: {em:?}"));
+        }
+        Ok(())
     }
 }
 

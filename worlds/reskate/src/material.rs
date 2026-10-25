@@ -49,6 +49,18 @@ pub struct Material {
     pub base_factor: Option<[f32; 4]>,
     /// Studio's per-vertex blend (`vertex_blend`; what it draws): its parts carry a weight per vertex.
     pub vertex_blend: Option<VertexBlend>,
+    /// What it emits (Studio's `emission_*`).
+    pub emission: Option<Emission>,
+}
+
+/// A material's emission as the writer writes it: Studio's `emission_texture` (output texture `tex`, -1 none; its
+/// colour space `srgb`), `emission_color` (linear RGB) and `emission_strength` (Studio's units).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Emission {
+    pub tex: i32,
+    pub srgb: bool,
+    pub color: [f32; 3],
+    pub strength: f32,
 }
 
 /// What a front end says a material is.
@@ -75,6 +87,8 @@ pub struct MaterialSpec<'a> {
     pub vertex_blend: Option<VertexBlend>,
     /// Studio's base colour factor (linear RGBA), as a budget left the material (`skate.base_factor`).
     pub base_factor: Option<[f32; 4]>,
+    /// What it emits.
+    pub emission: Option<Emission>,
 }
 
 impl<'a> MaterialSpec<'a> {
@@ -101,6 +115,7 @@ impl<'a> MaterialSpec<'a> {
             cast_shadows: None,
             vertex_blend: None,
             base_factor: None,
+            emission: None,
         };
         match class {
             VClass::Cutout => {
@@ -205,6 +220,17 @@ impl MatLib {
                 f[3].to_bits()
             );
         }
+        if let Some(e) = s.emission {
+            extra += &format!(
+                "|e{}{}{:08x}{:08x}{:08x}{:08x}",
+                e.tex,
+                i32::from(e.srgb),
+                e.color[0].to_bits(),
+                e.color[1].to_bits(),
+                e.color[2].to_bits(),
+                e.strength.to_bits()
+            );
+        }
         // a chain overlay's rank is part of its identity: two overlays alike in everything else (two black layers)
         // stay two materials, each drawn at its own place in the chain
         match s.vertex_blend.map(VertexBlend::chain_rank) {
@@ -274,6 +300,7 @@ impl MatLib {
             cast_shadows: s.cast_shadows,
             base_factor: s.base_factor,
             vertex_blend: s.vertex_blend,
+            emission: s.emission,
         });
         self.map.insert(key, id);
         id

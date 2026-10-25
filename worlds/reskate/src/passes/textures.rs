@@ -205,8 +205,7 @@ impl Pass for PrepareReskateTextures {
         let drawn: std::collections::BTreeSet<Entity> = drawn_materials
             .iter()
             .filter_map(|&m| w.get::<SkateMaterial>(m))
-            .flat_map(|m| [m.base, m.normal, m.mask])
-            .flatten()
+            .flat_map(SkateMaterial::textures)
             .collect();
         for base in made
             .keys()

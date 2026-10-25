@@ -380,6 +380,7 @@ mod tests {
                 ocean: None,
                 cast_shadows: None,
                 emissive: None,
+                emission: None,
                 vertex_alpha: None,
                 other: Default::default(),
             },

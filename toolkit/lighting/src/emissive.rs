@@ -1,4 +1,4 @@
-//! Emissive surfaces as point lights (pass `emissive-lights`): a source that has no lights of its own but draws lamps,
+//! Emissive surfaces as lights (pass `emissive-lights`): a source that has no lights of its own but draws lamps,
 //! bulbs and signs with emissive materials gets `core.light`s where they glow, so a destination that has lights shows the
 //! glow as light.
 //!
@@ -23,6 +23,17 @@
 //!   its pieces' mean position carrying their total intensity, in their intensity-weighted colour, so the string's
 //!   power is kept by fewer lights. Fewer than `string` pieces: one light each. A longer piece (a strip, a sheet) gets
 //!   one light per `strip` metres of its longest bounding axis (at least one), spaced along it, sharing its intensity.
+//! - **Size.** A light's radius is that of the disc with the area it stands for (one piece's, a string group's mean
+//!   piece's, a strip's share): `sqrt(area / pi)`, times `|det|^(1/3)` of the placement.
+//! - **Facing.** With `spots=FLAT,INNER,OUTER`, a light whose pieces' area-weighted normals agree (the length of their
+//!   sum over their area at least `FLAT`, 1 a plane) is a spot shining along that normal (the triangles' front, by
+//!   their winding), cones `INNER` and `OUTER` degrees from its axis: a lamp's panel lights what it faces, not the wall
+//!   behind it or the sky above. The others (a bulb, a lantern, a curved sheet) and every light with `spots=none` are
+//!   points. The on-axis intensity is the same either way.
+//! - **Scale.** `scale=PREFIX:FACTOR;...` multiplies the intensity of the lights of every prototype whose name starts
+//!   with a prefix (the longest that matches) by its factor, before the range: a program's statement that a fixture
+//!   lights more than its surface's emission says (a floodlight drawn with a sign's material). A prefix no prototype's
+//!   name starts with is counted. `scale=none` states none.
 //! - **Range.** `sqrt(intensity / e_min)` metres (the distance where a surface gets `e_min` lux), kept within
 //!   `range_min` and `range_max`.
 //! - **Shadows.** `shadows=on|off` states `cast_shadows` on every light made.
@@ -33,8 +44,8 @@
 //! is counted (a program states one list for every world it converts). `animated=none` states none.
 //!
 //! Reports (counted): the prototypes with emissive pieces, the pieces seen, those left out for their luminance, the
-//! small pieces dropped into fewer lights, the strips split, and the lights made (by placement), as an approximation: a
-//! point has no size and no facing. Placements are `core.instance`s with a `core.transform`, or an entity that holds a
+//! small pieces dropped into fewer lights, the strips split, the spots and points made, the lights scaled, and the lights
+//! made (by placement), as an approximation: a lamp's emitting surface as a sphere or a spot's disc. Placements are `core.instance`s with a `core.transform`, or an entity that holds a
 //! mesh and a transform and is no prototype. An emissive texture the pass cannot read (no `core.texture`, a format the
 //! codec lacks, no texture-coordinate stream) is an error naming it, never a guess.
 
@@ -52,45 +63,54 @@ use primase_texcodec::{Decoder, TexDecoder};
 /// Rec. 709 luminance weights.
 const LUMA: [f64; 3] = [0.2126, 0.7152, 0.0722];
 
-/// How `emissive-lights` makes lights: see the module documentation. Every value is the caller's.
+/// How `emissive-lights` makes lights: see the module documentation. Every value is the caller's, checked by
+/// [`EmissivePolicy::check`] when the pass is made.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EmissivePolicy {
-    weld: f64,
-    big: f64,
-    string: usize,
-    per_string: usize,
-    strip: f64,
-    nits_per_strength: f64,
-    area_factor: f64,
-    min_luminance: f64,
-    e_min: f64,
-    range: [f64; 2],
-    max_total: usize,
-    shadows: Option<bool>,
-    animated: BTreeSet<String>,
+    /// Metres, above 0: vertices this near join triangles into one piece.
+    pub weld: f64,
+    /// Metres, above 0: a piece no longer is a bulb or fixture, a longer one a strip.
+    pub big: f64,
+    /// At least 2: a prototype with this many small pieces or more is a string.
+    pub string: usize,
+    /// At least 1 and below `string`: the lights a string becomes.
+    pub per_string: usize,
+    /// Metres, above 0: a strip gets one light per this length.
+    pub strip: f64,
+    /// Above 0: cd/m2 per unit of emissive strength.
+    pub nits_per_strength: f64,
+    /// Above 0: the part of a piece's area that faces a viewer.
+    pub area_factor: f64,
+    /// Not below 0: a darker piece is left out.
+    pub min_luminance: f64,
+    /// Lux, above 0: a light's range is where a surface gets this much.
+    pub e_min: f64,
+    /// Metres: the least and the most range, above 0, the least not above the most.
+    pub range: [f64; 2],
+    /// The most lights: more is an error.
+    pub max_total: usize,
+    /// `Some(cast)`, or `None`: the renderer's default.
+    pub shadows: Option<bool>,
+    /// Name prefixes of materials whose texture the source scrolls.
+    pub animated: BTreeSet<String>,
+    /// Which lights are spots, and their cones; `None`: every light a point.
+    pub spots: Option<Spots>,
+    /// Prototype name prefixes and their intensity factors (each finite and above 0).
+    pub scale: BTreeMap<String, f64>,
+}
+
+/// `spots=FLAT,INNER,OUTER`: a light whose normals agree by at least `flat` (above 0, at most 1) is a spot with cones
+/// `inner` and `outer` degrees from its axis (0 <= inner <= outer <= 90, outer above 0).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Spots {
+    pub flat: f64,
+    pub inner: f64,
+    pub outer: f64,
 }
 
 impl EmissivePolicy {
-    /// A policy from its values, each finite where a number: `weld`, `big`, `strip`, `nits_per_strength`, `area_factor`
-    /// and `e_min` above 0, `min_luminance` not below 0, `string` at least 2, `per_string` at least 1 and below
-    /// `string`, `range_min` above 0 and not above `range_max`; `shadows` is `Some(cast)` or `None` (the renderer's
-    /// default); `animated` the name prefixes of materials whose texture the source scrolls (none: an empty set).
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        weld: f64,
-        big: f64,
-        string: usize,
-        per_string: usize,
-        strip: f64,
-        nits_per_strength: f64,
-        area_factor: f64,
-        min_luminance: f64,
-        e_min: f64,
-        range: [f64; 2],
-        max_total: usize,
-        shadows: Option<bool>,
-        animated: BTreeSet<String>,
-    ) -> Result<EmissivePolicy, String> {
+    /// Each value within what its field states.
+    pub fn check(&self) -> Result<(), String> {
         let positive = |what: &str, x: f64| {
             if x.is_finite() && x > 0.0 {
                 Ok(())
@@ -98,49 +118,53 @@ impl EmissivePolicy {
                 Err(format!("emissive-lights: {what} {x} is not a number above 0"))
             }
         };
-        positive("weld", weld)?;
-        positive("big", big)?;
-        positive("strip", strip)?;
-        positive("nits_per_strength", nits_per_strength)?;
-        positive("area_factor", area_factor)?;
-        positive("e_min", e_min)?;
-        positive("range_min", range[0])?;
-        positive("range_max", range[1])?;
-        if !(min_luminance.is_finite() && min_luminance >= 0.0) {
+        positive("weld", self.weld)?;
+        positive("big", self.big)?;
+        positive("strip", self.strip)?;
+        positive("nits_per_strength", self.nits_per_strength)?;
+        positive("area_factor", self.area_factor)?;
+        positive("e_min", self.e_min)?;
+        positive("range_min", self.range[0])?;
+        positive("range_max", self.range[1])?;
+        if !(self.min_luminance.is_finite() && self.min_luminance >= 0.0) {
             return Err(format!(
-                "emissive-lights: min_luminance {min_luminance} is not a number from 0"
+                "emissive-lights: min_luminance {} is not a number from 0",
+                self.min_luminance
             ));
         }
-        if string < 2 || per_string < 1 || per_string >= string {
+        if self.string < 2 || self.per_string < 1 || self.per_string >= self.string {
             return Err(format!(
-                "emissive-lights: string {string} and per_string {per_string}: a string is at least 2 pieces and \
-                 keeps at least 1 and fewer than it has"
+                "emissive-lights: string {} and per_string {}: a string is at least 2 pieces and keeps at least 1 and \
+                 fewer than it has",
+                self.string, self.per_string
             ));
         }
-        if range[0] > range[1] {
+        if self.range[0] > self.range[1] {
             return Err(format!(
                 "emissive-lights: range_min {} above range_max {}",
-                range[0], range[1]
+                self.range[0], self.range[1]
             ));
         }
-        if animated.iter().any(|p| p.is_empty() || p.contains(';')) {
+        if self.animated.iter().any(|p| p.is_empty() || p.contains(';')) {
             return Err("emissive-lights: an animated prefix is empty or holds ';'".into());
         }
-        Ok(EmissivePolicy {
-            weld,
-            big,
-            string,
-            per_string,
-            strip,
-            nits_per_strength,
-            area_factor,
-            min_luminance,
-            e_min,
-            range,
-            max_total,
-            shadows,
-            animated,
-        })
+        if let Some(Spots { flat, inner, outer }) = self.spots
+            && !(flat > 0.0 && flat <= 1.0 && 0.0 <= inner && inner <= outer && outer > 0.0 && outer <= 90.0)
+        {
+            return Err(format!(
+                "emissive-lights: spots={flat},{inner},{outer}: flat above 0 and at most 1, 0 <= inner <= outer <= 90 \
+                 degrees, outer above 0"
+            ));
+        }
+        for (prefix, factor) in &self.scale {
+            if prefix.is_empty() || prefix.contains([';', ':']) {
+                return Err(format!(
+                    "emissive-lights: a scale prefix {prefix:?} is empty or holds ';' or ':'"
+                ));
+            }
+            positive(&format!("scale {prefix}"), *factor)?;
+        }
+        Ok(())
     }
 
     /// From the options [`EMISSIVE_LIGHTS`] declares: numbers as text, `animated=<prefix>;<prefix>...` or `none`.
@@ -158,21 +182,56 @@ impl EmissivePolicy {
             "none" => BTreeSet::new(),
             v => v.split(';').map(str::to_owned).collect(),
         };
-        EmissivePolicy::new(
-            number("weld")?,
-            number("big")?,
-            count("string")?,
-            count("per_string")?,
-            number("strip")?,
-            number("nits_per_strength")?,
-            number("area_factor")?,
-            number("min_luminance")?,
-            number("e_min")?,
-            [number("range_min")?, number("range_max")?],
-            count("max_total")?,
+        let spots = match g.required("spots") {
+            "none" => None,
+            v => {
+                let n: Vec<f64> = v
+                    .split(',')
+                    .map(|x| {
+                        x.parse::<f64>()
+                            .map_err(|_| format!("spots={v}: FLAT,INNER,OUTER or none"))
+                    })
+                    .collect::<Result<_, _>>()?;
+                let [flat, inner, outer] = n[..] else {
+                    return Err(format!("spots={v}: FLAT,INNER,OUTER or none"));
+                };
+                Some(Spots { flat, inner, outer })
+            }
+        };
+        let scale = match g.required("scale") {
+            "none" => BTreeMap::new(),
+            v => v
+                .split(';')
+                .map(|item| {
+                    let (prefix, factor) = item
+                        .split_once(':')
+                        .ok_or_else(|| format!("scale={v}: PREFIX:FACTOR;... or none"))?;
+                    let factor = factor
+                        .parse::<f64>()
+                        .map_err(|_| format!("scale={v}: {factor} is not a number"))?;
+                    Ok((prefix.to_owned(), factor))
+                })
+                .collect::<Result<_, String>>()?,
+        };
+        let p = EmissivePolicy {
+            weld: number("weld")?,
+            big: number("big")?,
+            string: count("string")?,
+            per_string: count("per_string")?,
+            strip: number("strip")?,
+            nits_per_strength: number("nits_per_strength")?,
+            area_factor: number("area_factor")?,
+            min_luminance: number("min_luminance")?,
+            e_min: number("e_min")?,
+            range: [number("range_min")?, number("range_max")?],
+            max_total: count("max_total")?,
             shadows,
             animated,
-        )
+            spots,
+            scale,
+        };
+        p.check()?;
+        Ok(p)
     }
 
     fn to_options(&self) -> Options {
@@ -210,13 +269,43 @@ impl EmissivePolicy {
                 self.animated.iter().cloned().collect::<Vec<_>>().join(";")
             },
         );
+        put(
+            "spots",
+            self.spots.map_or("none".to_owned(), |s| {
+                format!("{},{},{}", s.flat, s.inner, s.outer)
+            }),
+        );
+        put(
+            "scale",
+            if self.scale.is_empty() {
+                "none".to_owned()
+            } else {
+                self.scale
+                    .iter()
+                    .map(|(k, v)| format!("{k}:{v}"))
+                    .collect::<Vec<_>>()
+                    .join(";")
+            },
+        );
         o
     }
 }
 
-/// `emissive-lights` (see the module documentation).
+/// `emissive-lights` (see the module documentation). Made by [`EmissiveLights::new`].
 #[derive(Clone, Debug, PartialEq)]
-pub struct EmissiveLights(pub EmissivePolicy);
+pub struct EmissiveLights(EmissivePolicy);
+
+impl EmissiveLights {
+    /// The pass with policy `p`, checked ([`EmissivePolicy::check`]).
+    pub fn new(p: EmissivePolicy) -> Result<EmissiveLights, String> {
+        p.check()?;
+        Ok(EmissiveLights(p))
+    }
+
+    pub fn policy(&self) -> &EmissivePolicy {
+        &self.0
+    }
+}
 
 /// Whether every light made casts shadows (option `shadows`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -292,6 +381,17 @@ pub const EMISSIVE_LIGHTS: PassSpec = PassSpec {
             "none",
             "name prefixes of materials whose texture the source scrolls, `;` between, or none",
         ),
+        OptionSpec::required(
+            "spots",
+            "none",
+            "FLAT,INNER,OUTER (normals agreeing by at least FLAT, cones in degrees): spots along a flat piece's \
+             normal; or none: every light a point",
+        ),
+        OptionSpec::required(
+            "scale",
+            "none",
+            "PREFIX:FACTOR;...: intensity factors for prototypes whose names start with a prefix; or none",
+        ),
     ],
     make: |g| Ok(Box::new(EmissiveLights(EmissivePolicy::from_given(g)?))),
 };
@@ -301,6 +401,9 @@ pub const EMISSIVE_LIGHTS: PassSpec = PassSpec {
 struct Piece {
     centroid: [f64; 3],
     extent: [f64; 3],
+    area: f64,
+    /// The sum of its triangles' area vectors (normal times area, by their winding).
+    normal: [f64; 3],
     /// The radiance's largest channel times the area times the area factor: candela at scale 1.
     intensity: f64,
     /// Radiance over its largest channel.
@@ -313,6 +416,10 @@ struct Site {
     at: [f64; 3],
     intensity: f64,
     colour: [f32; 3],
+    /// The disc radius of the area it stands for, mesh units.
+    radius: f64,
+    /// The unit normal it shines along, where its pieces are flat enough to be a spot.
+    facing: Option<[f64; 3]>,
 }
 
 /// What reading one prototype's mesh found.
@@ -391,6 +498,27 @@ fn luminance(c: [f64; 3]) -> f64 {
 
 /// The principal axis of `points` (unit), by power iteration on their covariance from a fixed start, so the same points
 /// give the same axis.
+/// The direction normal `n` (mesh space) faces under the placement `t`: its linear part's inverse transpose times `n`
+/// (`(n.x c1 x c2 + n.y c2 x c0 + n.z c0 x c1) / det` over the columns `c`), so a scaled placement keeps it normal to
+/// the surface and a mirroring one keeps it on the front side, which a renderer keeps by flipping the winding. Not
+/// unit length; zero for a singular placement (no direction: the light stays a point).
+fn normal_through(t: &Transform, n: [f64; 3]) -> [f64; 3] {
+    let c = [0, 1, 2].map(|i| t.cols[i].map(f64::from));
+    let cross = |a: [f64; 3], b: [f64; 3]| {
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
+    };
+    let (a, b, d) = (cross(c[1], c[2]), cross(c[2], c[0]), cross(c[0], c[1]));
+    let det = t.determinant();
+    if det == 0.0 {
+        return [0.0; 3];
+    }
+    std::array::from_fn(|i| (n[0] * a[i] + n[1] * b[i] + n[2] * d[i]) / det)
+}
+
 fn principal_axis(points: &[[f64; 3]]) -> [f64; 3] {
     let n = points.len() as f64;
     let mean: [f64; 3] = std::array::from_fn(|a| points.iter().map(|p| p[a]).sum::<f64>() / n);
@@ -544,6 +672,7 @@ impl EmissiveLights {
                 let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
                 let mut sum = [0.0f64; 3];
                 let mut area = 0.0f64;
+                let mut normal = [0.0f64; 3];
                 for t in tris {
                     let v: [[f64; 3]; 3] = t.map(|k| pos[k].map(f64::from));
                     let (e1, e2): ([f64; 3], [f64; 3]) = (
@@ -556,6 +685,9 @@ impl EmissiveLights {
                         e1[0] * e2[1] - e1[1] * e2[0],
                     ];
                     area += 0.5 * cross.iter().map(|x| x * x).sum::<f64>().sqrt();
+                    for a in 0..3 {
+                        normal[a] += 0.5 * cross[a];
+                    }
                     for k in t {
                         seen.insert(*k);
                         if welded.insert(weld_of[*k]) {
@@ -608,6 +740,8 @@ impl EmissiveLights {
                 pieces.push(Piece {
                     centroid,
                     extent: std::array::from_fn(|a| hi[a] - lo[a]),
+                    area,
+                    normal,
                     intensity: peak * area * p.area_factor,
                     colour: radiance.map(|c| c / peak),
                 });
@@ -617,6 +751,15 @@ impl EmissiveLights {
             .into_iter()
             .partition(|q| q.extent.iter().copied().fold(0.0, f64::max) <= p.big);
         let shown = |c: [f64; 3]| c.map(|x| x as f32);
+        // the radius of a disc of `area`; the direction a light of these pieces shines along, where they are flat
+        let disc = |area: f64| (area / std::f64::consts::PI).sqrt();
+        let facing = |pieces: &[&Piece]| -> Option<[f64; 3]> {
+            let spots = p.spots?;
+            let area: f64 = pieces.iter().map(|q| q.area).sum();
+            let n: [f64; 3] = std::array::from_fn(|a| pieces.iter().map(|q| q.normal[a]).sum::<f64>());
+            let len = n.iter().map(|x| x * x).sum::<f64>().sqrt();
+            (area > 0.0 && len >= spots.flat * area).then(|| n.map(|x| x / len))
+        };
         if small.len() >= p.string {
             let axis = principal_axis(&small.iter().map(|q| q.centroid).collect::<Vec<_>>());
             let mut order: Vec<usize> = (0..small.len()).collect();
@@ -635,10 +778,13 @@ impl EmissiveLights {
                     group.iter().map(|q| q.colour[c] * q.intensity).sum::<f64>() / total
                 });
                 let top = mix.iter().copied().fold(0.0, f64::max);
+                let area: f64 = group.iter().map(|q| q.area).sum();
                 found.sites.push(Site {
                     at,
                     intensity: total,
                     colour: shown(mix.map(|c| c / top)),
+                    radius: disc(area / group.len() as f64),
+                    facing: facing(&group),
                 });
             }
             found.thinned += (n - p.per_string) as u64;
@@ -648,6 +794,8 @@ impl EmissiveLights {
                     at: q.centroid,
                     intensity: q.intensity,
                     colour: shown(q.colour),
+                    radius: disc(q.area),
+                    facing: facing(&[q]),
                 });
             }
         }
@@ -668,6 +816,8 @@ impl EmissiveLights {
                     at,
                     intensity: q.intensity / k as f64,
                     colour: shown(q.colour),
+                    radius: disc(q.area / k as f64),
+                    facing: facing(&[q]),
                 });
             }
             found.strips += 1;
@@ -758,41 +908,90 @@ impl Pass for EmissiveLights {
                 p.max_total
             ));
         }
+        let spot_kind = p.spots.map(|s| LightKind::Spot {
+            inner_cone: s.inner.to_radians() as f32,
+            outer_cone: s.outer.to_radians() as f32,
+        });
+        let mut scale_used: BTreeSet<&str> = BTreeSet::new();
         let mut made: Vec<(Entity, Transform, Light, String)> = Vec::new();
         for (placement, holder) in &placements {
             let (Some(sites), Some(t)) = (read.get(holder), w.get::<Transform>(*placement)) else {
                 continue;
             };
             let name = w.get::<Name>(*holder).map(|n| n.0.clone()).unwrap_or_default();
-            let scale2 = t.determinant().abs().powf(2.0 / 3.0);
+            // the longest prefix of `scale` the prototype's name starts with
+            let factor = p
+                .scale
+                .iter()
+                .filter(|(prefix, _)| name.starts_with(prefix.as_str()))
+                .max_by_key(|(prefix, _)| prefix.len())
+                .map_or(1.0, |(prefix, factor)| {
+                    scale_used.insert(prefix.as_str());
+                    *factor
+                });
+            let det = t.determinant();
+            let scale2 = det.abs().powf(2.0 / 3.0);
+            let scale1 = det.abs().cbrt();
             for (k, s) in sites.sites.iter().enumerate() {
                 let at = t.apply(s.at.map(|x| x as f32));
-                let intensity = (s.intensity * scale2) as f32;
+                let intensity = (s.intensity * scale2 * factor) as f32;
                 let range = (f64::from(intensity) / p.e_min)
                     .sqrt()
                     .clamp(p.range[0], p.range[1]) as f32;
                 if !(intensity.is_finite() && at.iter().all(|v| v.is_finite())) {
                     return Err(format!("emissive-lights: {name} light {k} is not finite"));
                 }
+                // a spot shines along its pieces' normal as the placement turns it ([`normal_through`])
+                let aimed = match (s.facing, spot_kind) {
+                    (Some(n), Some(kind)) => {
+                        let d = normal_through(t, n);
+                        Transform::facing(at, d.map(|x| x as f32)).map(|f| (f, kind))
+                    }
+                    _ => None,
+                };
+                if factor != 1.0 {
+                    log.count("lights scaled by their prototype's factor", 1);
+                }
+                let (transform, kind) = match aimed {
+                    Some(aimed) => {
+                        log.count("spots along their pieces' normal", 1);
+                        aimed
+                    }
+                    None => {
+                        log.count("points", 1);
+                        (
+                            Transform {
+                                cols: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], at],
+                            },
+                            LightKind::Point,
+                        )
+                    }
+                };
                 made.push((
                     *placement,
-                    Transform {
-                        cols: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], at],
-                    },
+                    transform,
                     Light {
-                        kind: LightKind::Point,
+                        kind,
                         color: s.colour,
                         intensity,
                         range: Some(range),
                         cast_shadows: p.shadows,
+                        radius: Some((s.radius * scale1) as f32),
                     },
                     format!("{name} light {k}"),
                 ));
             }
         }
+        log.count(
+            "scale prefixes that no prototype's name starts with",
+            p.scale
+                .keys()
+                .filter(|k| !scale_used.contains(k.as_str()))
+                .count() as u64,
+        );
         log.count("emissive lights made", made.len() as u64);
         log.approximate(
-            "emissive surfaces as point lights (radiance times area as intensity)",
+            "emissive surfaces as lights (radiance times area as intensity; the surface as a sphere, or a disc's spot)",
             made.len() as u64,
         );
         for (placement, t, l, n) in made {

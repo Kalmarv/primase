@@ -26,6 +26,7 @@ fn light(w: &mut World, x: f32) -> primase_core::Entity {
             intensity: 100.0,
             range: Some(5.0),
             cast_shadows: None,
+            radius: None,
         },
     );
     let mut t = Transform::IDENTITY;

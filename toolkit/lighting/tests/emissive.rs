@@ -14,28 +14,29 @@ use primase_core::{
     ColorSpace, Entity, Instance, Light, LightKind, Mesh, Name, Primitive, Semantic, Stream, TexFormat,
     TexRole, Texture, Topology, Transform, World,
 };
-use primase_lighting::{EMISSIVE_LIGHTS, EmissiveLights, EmissivePolicy};
+use primase_lighting::{EMISSIVE_LIGHTS, EmissiveLights, EmissivePolicy, Spots};
 
 /// The options every case starts from (weld 1 mm, a bulb up to 2.5 m, a string from 4 pieces kept as 2 lights, a strip
 /// light per 8 m, 100 nits per strength, area counted whole, luminance floor 0.05, 2 lux at the range, range 3 to 30 m,
 /// at most 100 lights, no shadows, no animated material).
 fn policy() -> EmissivePolicy {
-    EmissivePolicy::new(
-        0.001,
-        2.5,
-        4,
-        2,
-        8.0,
-        100.0,
-        1.0,
-        0.05,
-        2.0,
-        [3.0, 30.0],
-        100,
-        Some(false),
-        BTreeSet::new(),
-    )
-    .unwrap()
+    EmissivePolicy {
+        weld: 0.001,
+        big: 2.5,
+        string: 4,
+        per_string: 2,
+        strip: 8.0,
+        nits_per_strength: 100.0,
+        area_factor: 1.0,
+        min_luminance: 0.05,
+        e_min: 2.0,
+        range: [3.0, 30.0],
+        max_total: 100,
+        shadows: Some(false),
+        animated: BTreeSet::new(),
+        spots: None,
+        scale: BTreeMap::new(),
+    }
 }
 
 type Quad = [[f32; 3]; 4];
@@ -116,7 +117,7 @@ fn run(w: &mut World, p: EmissivePolicy) -> Result<PassLog, String> {
         .run(
             w,
             &Pipeline {
-                passes: vec![Box::new(EmissiveLights(p))],
+                passes: vec![Box::new(EmissiveLights::new(p)?)],
             },
             &mut report,
         )
@@ -139,8 +140,8 @@ fn near(a: f32, b: f32) -> bool {
 }
 
 /// A quad 0.2 x 0.1 m (area 0.02) of colour (1, 0.5, 0) and strength 10: radiance (1000, 500, 0) cd/m2, intensity
-/// 1000 x 0.02 = 20 cd, colour (1, 0.5, 0), range sqrt(20 / 2) = 3.162 m (inside 3 to 30), at its centre (0.1, 0.05, 0)
-/// moved by the placement to (10.1, 0.05, 0).
+/// 1000 x 0.02 = 20 cd, colour (1, 0.5, 0), range sqrt(20 / 2) = 3.162 m (inside 3 to 30), radius sqrt(0.02 / pi) =
+/// 0.0798 m, at its centre (0.1, 0.05, 0) moved by the placement to (10.1, 0.05, 0); a point (no `spots`).
 #[test]
 fn one_emissive_quad_is_one_light_by_the_formula() {
     let mut w = World::new();
@@ -155,12 +156,11 @@ fn one_emissive_quad_is_one_light_by_the_formula() {
     assert!(near(l.intensity, 20.0), "{}", l.intensity);
     assert_eq!(l.color, [1.0, 0.5, 0.0]);
     assert!(near(l.range.unwrap(), 3.1623), "{:?}", l.range);
+    assert!(near(l.radius.unwrap(), 0.079_788), "{:?}", l.radius);
     assert_eq!(l.cast_shadows, Some(false));
     assert_eq!(log.counts["emissive lights made"], 1);
-    assert_eq!(
-        log.approximations["emissive surfaces as point lights (radiance times area as intensity)"],
-        1
-    );
+    assert_eq!(log.counts["points"], 1);
+    assert_eq!(log.approximations[APPROXIMATION], 1);
     // made from its placement: a conversion in parts keeps it with the owner
     assert_eq!(
         log.placed_from.values().copied().collect::<Vec<_>>(),
@@ -228,22 +228,23 @@ fn a_string_is_thinned_and_its_power_is_kept() {
     let m = material(&mut w, "bulbs", emissive([1.0, 1.0, 1.0], 10.0));
     let quads: Vec<Quad> = (0..10).map(|i| quad(i as f32, 0.0, 0.1, 0.1)).collect();
     place(&mut w, &quads, None, m, at([0.0; 3]));
-    let p = EmissivePolicy::new(
-        0.001,
-        2.5,
-        5,
-        4,
-        8.0,
-        100.0,
-        1.0,
-        0.05,
-        2.0,
-        [3.0, 30.0],
-        100,
-        Some(false),
-        BTreeSet::new(),
-    )
-    .unwrap();
+    let p = EmissivePolicy {
+        weld: 0.001,
+        big: 2.5,
+        string: 5,
+        per_string: 4,
+        strip: 8.0,
+        nits_per_strength: 100.0,
+        area_factor: 1.0,
+        min_luminance: 0.05,
+        e_min: 2.0,
+        range: [3.0, 30.0],
+        max_total: 100,
+        shadows: Some(false),
+        animated: BTreeSet::new(),
+        spots: None,
+        scale: BTreeMap::new(),
+    };
     let log = run(&mut w, p).unwrap();
     let made = lights(&w);
     assert_eq!(made.len(), 4);
@@ -381,23 +382,22 @@ fn an_animated_material_takes_the_textures_mean() {
     let m = textured(&mut w, "Anim_blinker", tex, 10.0);
     let left = vec![[0.1, 0.5], [0.4, 0.5], [0.4, 0.6], [0.1, 0.6]];
     place(&mut w, &[quad(0.0, 0.0, 0.2, 0.1)], Some(left), m, at([0.0; 3]));
-    let animated = |prefix: &str| {
-        EmissivePolicy::new(
-            0.001,
-            2.5,
-            4,
-            2,
-            8.0,
-            100.0,
-            1.0,
-            0.05,
-            2.0,
-            [3.0, 30.0],
-            100,
-            Some(false),
-            BTreeSet::from([prefix.to_owned()]),
-        )
-        .unwrap()
+    let animated = |prefix: &str| EmissivePolicy {
+        weld: 0.001,
+        big: 2.5,
+        string: 4,
+        per_string: 2,
+        strip: 8.0,
+        nits_per_strength: 100.0,
+        area_factor: 1.0,
+        min_luminance: 0.05,
+        e_min: 2.0,
+        range: [3.0, 30.0],
+        max_total: 100,
+        shadows: Some(false),
+        animated: BTreeSet::from([prefix.to_owned()]),
+        spots: None,
+        scale: BTreeMap::new(),
     };
     let log = run(&mut w, animated("Nothing_")).unwrap();
     assert_eq!(
@@ -445,6 +445,145 @@ fn a_scaled_placement_scales_the_area_and_the_position() {
     assert!(near(made[0].1.range.unwrap(), 6.3246), "{:?}", made[0].1.range);
 }
 
+/// The emissive lights' approximation, as the pass logs it.
+const APPROXIMATION: &str = "emissive surfaces as lights (radiance times area as intensity; the surface as a sphere, or a disc's spot)";
+
+/// Each light made with its transform, sorted by position.
+fn aimed(w: &World) -> Vec<(Transform, Light)> {
+    let mut v: Vec<_> = w
+        .iter::<Light>()
+        .map(|(e, l)| (*w.get::<Transform>(e).unwrap(), l.clone()))
+        .collect();
+    v.sort_by(|a, b| {
+        a.0.cols[3]
+            .iter()
+            .zip(&b.0.cols[3])
+            .map(|(x, y)| x.total_cmp(y))
+            .find(|o| o.is_ne())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    v
+}
+
+fn near3(a: [f32; 3], b: [f32; 3]) -> bool {
+    a.iter().zip(&b).all(|(x, y)| near(*x, *y))
+}
+
+/// With `spots=0.9,10,90` a flat quad (counter-clockwise from +z: its front faces +z) is a spot shining along +z (its
+/// transform's local -Z is +z), cones 10 and 90 degrees in radians; turned 90 degrees about x by its placement it shines
+/// along -y; mirrored in z (its winding flipped, so its drawn front faces -z) along -z. A closed box's normals cancel: a
+/// point, whatever `spots` says. The on-axis intensity is the point's (20 cd).
+#[test]
+fn a_flat_piece_is_a_spot_along_its_normal() {
+    let spots = || EmissivePolicy {
+        spots: Some(Spots {
+            flat: 0.9,
+            inner: 10.0,
+            outer: 90.0,
+        }),
+        ..policy()
+    };
+    let shines = |placement: Transform| -> (Transform, Light) {
+        let mut w = World::new();
+        let m = material(&mut w, "panel", emissive([1.0, 0.5, 0.0], 10.0));
+        place(&mut w, &[quad(0.0, 0.0, 0.2, 0.1)], None, m, placement);
+        let log = run(&mut w, spots()).unwrap();
+        assert_eq!(log.counts["spots along their pieces' normal"], 1);
+        aimed(&w).remove(0)
+    };
+    let (t, l) = shines(at([0.0; 3]));
+    assert_eq!(
+        l.kind,
+        LightKind::Spot {
+            inner_cone: 10f64.to_radians() as f32,
+            outer_cone: 90f64.to_radians() as f32,
+        }
+    );
+    assert!(near3(t.cols[2], [0.0, 0.0, -1.0]), "{:?}", t.cols[2]);
+    assert!(near(l.intensity, 20.0), "{}", l.intensity);
+    assert!(near3(t.cols[3], [0.1, 0.05, 0.0]), "{:?}", t.cols[3]);
+    // about x by 90 degrees: y onto z, z onto -y
+    let (t, _) = shines(Transform {
+        cols: [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0], [0.0; 3]],
+    });
+    assert!(near3(t.cols[2], [0.0, 1.0, 0.0]), "{:?}", t.cols[2]);
+    // mirrored in z
+    let (t, _) = shines(Transform {
+        cols: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, -1.0], [0.0; 3]],
+    });
+    assert!(near3(t.cols[2], [0.0, 0.0, 1.0]), "{:?}", t.cols[2]);
+    // a closed unit box, its faces out: its normals sum to nothing
+    let mut w = World::new();
+    let m = material(&mut w, "bulb", emissive([1.0, 1.0, 1.0], 10.0));
+    let v = |x: f32, y: f32, z: f32| [x, y, z];
+    let faces: Vec<Quad> = vec![
+        [v(0., 0., 1.), v(1., 0., 1.), v(1., 1., 1.), v(0., 1., 1.)],
+        [v(0., 1., 0.), v(1., 1., 0.), v(1., 0., 0.), v(0., 0., 0.)],
+        [v(0., 0., 0.), v(1., 0., 0.), v(1., 0., 1.), v(0., 0., 1.)],
+        [v(0., 1., 1.), v(1., 1., 1.), v(1., 1., 0.), v(0., 1., 0.)],
+        [v(1., 0., 0.), v(1., 1., 0.), v(1., 1., 1.), v(1., 0., 1.)],
+        [v(0., 0., 1.), v(0., 1., 1.), v(0., 1., 0.), v(0., 0., 0.)],
+    ];
+    place(&mut w, &faces, None, m, at([0.0; 3]));
+    let log = run(&mut w, spots()).unwrap();
+    assert_eq!(log.counts["points"], 1);
+    assert_eq!(aimed(&w)[0].1.kind, LightKind::Point);
+}
+
+/// `scale=Flood_:10;Flood_Big:4` multiplies the lights of a prototype named `Flood_Big_A` by 4 (the longest prefix
+/// that matches) and of `Flood_A` by 10, before the range (200 cd reaches sqrt(200 / 2) = 10 m); `lamp` keeps 20 cd;
+/// an unused prefix is counted. A placement scaled by 2 doubles the radius (0.1596 m).
+#[test]
+fn a_prototype_scale_multiplies_its_lights() {
+    let mut w = World::new();
+    let m = material(&mut w, "glass", emissive([1.0, 0.5, 0.0], 10.0));
+    place(&mut w, &[quad(0.0, 0.0, 0.2, 0.1)], None, m, at([0.0; 3]));
+    let (flood, _) = place(&mut w, &[quad(0.0, 0.0, 0.2, 0.1)], None, m, at([10.0, 0.0, 0.0]));
+    w.insert(flood, Name("Flood_A".into()));
+    let (big, _) = place(&mut w, &[quad(0.0, 0.0, 0.2, 0.1)], None, m, at([20.0, 0.0, 0.0]));
+    w.insert(big, Name("Flood_Big_A".into()));
+    let (_, _) = place(
+        &mut w,
+        &[quad(0.0, 0.0, 0.2, 0.1)],
+        None,
+        m,
+        Transform {
+            cols: [
+                [2.0, 0.0, 0.0],
+                [0.0, 2.0, 0.0],
+                [0.0, 0.0, 2.0],
+                [30.0, 0.0, 0.0],
+            ],
+        },
+    );
+    let p = EmissivePolicy {
+        scale: BTreeMap::from([
+            ("Flood_".to_owned(), 10.0),
+            ("Flood_Big".to_owned(), 4.0),
+            ("Nothing".to_owned(), 3.0),
+        ]),
+        ..policy()
+    };
+    let log = run(&mut w, p).unwrap();
+    let made = lights(&w);
+    let cd: Vec<f32> = made.iter().map(|(_, l)| l.intensity).collect();
+    assert!(
+        near(cd[0], 20.0) && near(cd[1], 200.0) && near(cd[2], 80.0) && near(cd[3], 80.0),
+        "{cd:?}"
+    );
+    assert!(near(made[1].1.range.unwrap(), 10.0), "{:?}", made[1].1.range);
+    assert!(
+        near(made[3].1.radius.unwrap(), 2.0 * 0.079_788),
+        "{:?}",
+        made[3].1.radius
+    );
+    assert_eq!(log.counts["lights scaled by their prototype's factor"], 2);
+    assert_eq!(
+        log.counts["scale prefixes that no prototype's name starts with"],
+        1
+    );
+}
+
 /// The range is kept within its options: a 0.05 cd light would reach 0.16 m and is raised to 3; a 10,000 cd one would reach
 /// 70.7 m and is cut at 30.
 #[test]
@@ -480,22 +619,23 @@ fn more_lights_than_the_total_is_refused_not_dropped() {
             at([i as f32, 0.0, 0.0]),
         );
     }
-    let p = EmissivePolicy::new(
-        0.001,
-        2.5,
-        4,
-        2,
-        8.0,
-        100.0,
-        1.0,
-        0.05,
-        2.0,
-        [3.0, 30.0],
-        4,
-        Some(false),
-        BTreeSet::new(),
-    )
-    .unwrap();
+    let p = EmissivePolicy {
+        weld: 0.001,
+        big: 2.5,
+        string: 4,
+        per_string: 2,
+        strip: 8.0,
+        nits_per_strength: 100.0,
+        area_factor: 1.0,
+        min_luminance: 0.05,
+        e_min: 2.0,
+        range: [3.0, 30.0],
+        max_total: 4,
+        shadows: Some(false),
+        animated: BTreeSet::new(),
+        spots: None,
+        scale: BTreeMap::new(),
+    };
     let err = run(&mut w, p).unwrap_err();
     assert!(err.contains("5 lights") && err.contains("max_total 4"), "{err}");
     assert_eq!(w.iter::<Light>().count(), 0);
@@ -564,6 +704,13 @@ fn options_are_required_and_round_trip() {
         ("range_min", "40"),
         ("weld", "0"),
         ("shadows", "maybe"),
+        ("spots", "0.9,0"),
+        ("spots", "0,0,90"),
+        ("spots", "0.9,60,30"),
+        ("spots", "0.9,0,120"),
+        ("scale", "Stadium"),
+        ("scale", "Stadium:0"),
+        ("scale", ":2"),
     ] {
         let mut o = full.clone();
         o.insert(k.into(), v.into());
@@ -571,7 +718,12 @@ fn options_are_required_and_round_trip() {
     }
     let mut o = full;
     o.insert("animated".into(), "A_;B_".into());
-    assert_eq!(make(&o).unwrap().options()["animated"], "A_;B_");
+    o.insert("spots".into(), "0.9,0,90".into());
+    o.insert("scale".into(), "Flood_:10;Stadium:2.5".into());
+    let made = make(&o).unwrap().options();
+    assert_eq!(made["animated"], "A_;B_");
+    assert_eq!(made["spots"], "0.9,0,90");
+    assert_eq!(made["scale"], "Flood_:10;Stadium:2.5");
 }
 
 fn policy_options() -> Options {
@@ -590,6 +742,8 @@ fn policy_options() -> Options {
         ("max_total", "3500"),
         ("shadows", "off"),
         ("animated", "none"),
+        ("spots", "none"),
+        ("scale", "none"),
     ]
     .iter()
     .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
@@ -601,7 +755,11 @@ fn policy_options() -> Options {
 /// Run directly, without the manager that verifies the world first.
 #[test]
 fn a_malformed_primitive_is_an_error_not_a_guess() {
-    let direct = |w: &mut World| EmissiveLights(policy()).run(w, &mut PassLog::default());
+    let direct = |w: &mut World| {
+        EmissiveLights::new(policy())
+            .unwrap()
+            .run(w, &mut PassLog::default())
+    };
     // texture coordinates for 3 of the quad's 4 vertices
     let mut w = World::new();
     let tex = texture(&mut w, [255; 8], ColorSpace::Linear);

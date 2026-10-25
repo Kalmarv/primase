@@ -46,6 +46,7 @@ fn material(key: &str) -> SkateMaterial {
         ocean: None,
         cast_shadows: None,
         emissive: None,
+        emission: None,
         vertex_alpha: None,
         other: Default::default(),
     }
