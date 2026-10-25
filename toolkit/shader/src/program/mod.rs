@@ -129,6 +129,8 @@ pub struct Provenance {
     /// The hash of the bytes the lifter was given (`sha256:` and the digits, [`crate::source_hash`]), which the lifter
     /// computes: a program a lifter made has it, one built by hand may not.
     pub source_hash: Option<String>,
+    /// Source instruction records counted while decoding, before lowering expands them into IR.
+    pub instruction_count: Option<primase_core::shader::InstructionCount>,
 }
 
 /// A shader program: the module, and what the module cannot say.
@@ -147,6 +149,19 @@ pub struct Program {
     /// What the lifter approximated or could not state exactly, each once and sorted (`min-precision operands computed
     /// at 32 bits`): the program means what its body says, and a consumer shows these beside it.
     pub notes: Vec<String>,
+}
+
+impl Program {
+    /// Reuse this lift's facts; no parsing, lifting, graph building or GPU work. Material resolvers add output roles
+    /// with ProgramFacts::bound once they have resolved the stage binding.
+    pub fn facts(&self, name: impl Into<String>) -> primase_core::shader::ProgramFacts {
+        primase_core::shader::ProgramFacts {name:name.into(),hash:self.provenance.source_hash.clone(),stage:self.stage,
+            shader:None,instruction_count:self.provenance.instruction_count,
+            inputs:self.interface.inputs.iter().filter(|input|input.used).cloned().collect(),
+            resources:self.interface.resources.iter().map(|resource|primase_core::shader::ProgramResourceFacts {
+                id:resource.id,name:resource.provenance.name.clone(),d3d:resource.provenance.d3d,
+            }).collect(),outputs:Vec::new(),surface:Default::default(),not_lifted:None}
+    }
 }
 
 /// What can go wrong building, checking or writing a program.

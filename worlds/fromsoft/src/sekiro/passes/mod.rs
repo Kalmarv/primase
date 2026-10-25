@@ -21,6 +21,7 @@ pub mod normals;
 pub mod object_collision;
 pub mod outfits;
 pub mod pbr;
+pub mod records;
 pub(super) mod reflectance;
 pub mod resolve_shaders;
 pub mod settings;
@@ -81,6 +82,7 @@ pub fn register(registry: &mut PassRegistry) {
         &object_collision::LOWER_FROMSOFT_OBJECT_COLLISION,
         &object_collision::LOWER_FROMSOFT_PART_COLLISION,
         &extras::LOWER_FROMSOFT_EXTRAS,
+        &records::LOWER_FROMSOFT_MAP_RECORDS,
         &environment::LOWER_FROMSOFT_ENVIRONMENT,
         &lights::LOWER_FROMSOFT_LIGHTS,
     ] {

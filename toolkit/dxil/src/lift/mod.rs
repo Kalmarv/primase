@@ -483,6 +483,10 @@ impl<'m> Lift<'m> {
                 lifter_version: LIFTER_VERSION,
                 // the hash of the bytes, which `lift` sets
                 source_hash: None,
+                instruction_count: Some(primase_shader::InstructionCount {
+                    count:self.functions.iter().map(|function|function.instructions.len() as u64).sum(),
+                    unit:primase_shader::InstructionUnit::DxilInstructions,
+                }),
             },
             notes: self.notes.into_iter().chain(limit_notes).collect(),
         })
@@ -525,6 +529,10 @@ impl<'m> Lift<'m> {
                 lifter_version: LIFTER_VERSION,
                 // the hash of the bytes, which `lift` sets
                 source_hash: None,
+                instruction_count: Some(primase_shader::InstructionCount {
+                    count:self.functions.iter().map(|function|function.instructions.len() as u64).sum(),
+                    unit:primase_shader::InstructionUnit::DxilInstructions,
+                }),
             },
             notes: self.notes.into_iter().chain(limit_notes).collect(),
         })

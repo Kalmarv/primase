@@ -395,6 +395,26 @@ impl Resource for AreaExtras {
     }
 }
 
+/// The map layout's regions and events as stored (`fromsoft.map_records`, a resource; read only with
+/// [`crate::sekiro::Options::map_records`]): every region of every type with its shape (sounds, effects, wind,
+/// environment-map points and boxes, messages, weather overrides and the rest) and every event of every type, with the
+/// bytes of each type's own data. `lower-fromsoft-map-records` lowers them. Regions whose position lies outside the
+/// read region are not kept (counted); events have no place of their own and are all kept.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct MapRecords {
+    pub regions: Vec<crate::msb::Region>,
+    pub events: Vec<crate::msb::Event>,
+    /// The region type code of spawn points in the layout's generation, which `lower-fromsoft-extras` makes markers
+    /// of: the records pass leaves those regions to it.
+    pub spawn_region: Option<u32>,
+}
+impl Resource for MapRecords {
+    const NAME: &'static str = "fromsoft.map_records";
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        to_value(self).map(Some)
+    }
+}
+
 /// How one draw-param group's value set was chosen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum SetChosen {

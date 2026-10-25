@@ -13,6 +13,7 @@
 //! serializes, so the vocabulary can be shown, stored and compared.
 
 mod binding;
+mod facts;
 mod interface;
 mod program;
 mod resource;
@@ -37,6 +38,7 @@ pub use interface::{
     Varying, VaryingProvenance,
 };
 pub use program::Shader;
+pub use facts::{InstructionCount, InstructionUnit, MaterialPrograms, ProgramFacts, ProgramResourceFacts};
 pub use resource::{
     Access, BufferKind, BufferLayout, Constant, ConstantType, D3dBinding, D3dClass, Majorness, Member,
     Resource, ResourceId, ResourceKind, ResourceProvenance, SampleType, StorageTarget, TextureDim,

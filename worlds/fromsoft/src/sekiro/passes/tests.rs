@@ -699,6 +699,7 @@ fn the_fromsoft_passes_register_by_name() {
         "lower-fromsoft-extras",
         "lower-fromsoft-geometry",
         "lower-fromsoft-lights",
+        "lower-fromsoft-map-records",
         "lower-fromsoft-materials",
         "lower-fromsoft-object-collision",
         "lower-fromsoft-part-collision",

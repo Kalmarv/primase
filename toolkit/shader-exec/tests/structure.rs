@@ -252,6 +252,7 @@ fn program(cfg: &Cfg, seed: u32) -> Result<Program, structure::Error> {
             lifter: "test".into(),
             lifter_version: 0,
             source_hash: None,
+            instruction_count: None,
         },
         notes: vec![],
     })

@@ -39,6 +39,10 @@ pub struct Options {
     /// read into the world beside the model: its Havok skeleton and clips, named after the model. Off by default: the
     /// binders are more to hold in memory, and the clips are not lowered onto the placements by the read.
     pub object_animations: bool,
+    /// Whether the layout's regions and events of every type are read into the world as `fromsoft.map_records`
+    /// ([`crate::sekiro::source::MapRecords`]): off by default (the read keeps the parts, the collision, the lights
+    /// and the spawn points, and counts the rest in its notices); `lower-fromsoft-map-records` lowers them.
+    pub map_records: bool,
 }
 /// What a read of the object models' animation binders found.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -347,6 +351,18 @@ impl Report {
                 undecided,
                 NoticeKind::Approximation,
                 "parts an uninterpreted script instruction names, kept at their default presence",
+            ),
+            (
+                self.extras.regions_dropped_outside,
+                NoticeKind::Selection,
+                "map regions outside the read region",
+            ),
+            (
+                self.extras.region_types.values().sum::<usize>() + self.extras.event_types.values().sum::<usize>(),
+                NoticeKind::Unsupported,
+                "map regions and events kept with their type's data as bytes (fromsoft.map_records): what a type's data \
+                 holds (a sound's id, an effect, a message, a treasure's item lot) is not decoded, only the header, \
+                 the shape and the references to a part and a region",
             ),
         ] {
             if count > 0 {
@@ -1136,6 +1152,9 @@ pub fn read_game_area(
         options.region.map(|r| r.rect),
         &mut world,
     )?;
+    if options.map_records {
+        extras::records(&layout, options.region.map(|r| r.rect), &mut report.extras, &mut world)?;
+    }
     let configs: Vec<_> = if options.draw_param == draw_param::DrawParams::None {
         Vec::new()
     } else {

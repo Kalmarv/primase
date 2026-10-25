@@ -530,13 +530,14 @@ fn run(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used,reason = "owned fixture programs")]
 mod program_facts_tests {
     #[test]
     fn sekiro_and_elden_fixture_lifts_keep_source_counts_hash_and_register_inputs() {
         use primase_core::shader::{InstructionUnit,ShaderFormat,Stage};
         for (name,format,bytes,unit) in [
             ("Sekiro alpha reference fixture",ShaderFormat::Dxbc,
-                include_bytes!("../../../tests/fixtures/alpha_ref_tested.dxbc").as_slice(),InstructionUnit::DxbcTokenRecords),
+                include_bytes!("../../../tests/fixtures/alpha_ref_tested.dxbc").as_slice(),InstructionUnit::DxbcInstructions),
             ("Elden alpha reference fixture",ShaderFormat::Dxil,
                 include_bytes!("../../../tests/fixtures/alpha_ref_tested.dxil").as_slice(),InstructionUnit::DxilInstructions),
         ] {

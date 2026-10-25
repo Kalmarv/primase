@@ -34,7 +34,7 @@ pub use primase_core::shader::{
     InterpSampling, Interpolation, Label, Majorness, Member, MeshFacts, MeshTopology, Partitioning,
     RayTracingFacts, Resource, ResourceId, ResourceKind, ResourceProvenance, SampleType, ScalarType,
     ShaderFormat, Stage, StageFacts, StorageTarget, Subobject, SystemValue, TessDomain, TessTopology,
-    TextureDim, Value, Varying, VaryingProvenance,
+    TextureDim, Value, Varying, VaryingProvenance, InstructionCount, InstructionUnit,
 };
 mod refusal;
 pub use bound::BoundSizes;

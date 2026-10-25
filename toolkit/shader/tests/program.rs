@@ -175,6 +175,7 @@ fn program() -> Program {
             lifter: "test".into(),
             lifter_version: 0,
             source_hash: None,
+            instruction_count: None,
         },
         notes: vec![],
     }

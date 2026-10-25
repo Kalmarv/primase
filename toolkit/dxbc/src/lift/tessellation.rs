@@ -551,6 +551,10 @@ impl Lift<'_> {
                 lifter_version: super::LIFTER_VERSION,
                 // the hash of the bytes, which `lift` sets
                 source_hash: None,
+                instruction_count: Some(primase_shader::InstructionCount {
+                    count:self.decoded.instructions.len() as u64,
+                    unit:primase_shader::InstructionUnit::DxbcInstructions,
+                }),
             },
             notes: self.notes.into_iter().chain(limit_notes).collect(),
         })

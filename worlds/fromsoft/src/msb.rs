@@ -732,3 +732,485 @@ impl MapLayout {
         Ok(points)
     }
 }
+
+/// The shape a region marks out, in the region's own space (SoulsFormats' `MSB.Shape`: the shape code at the record's
+/// +16 and the shape's floats at the offset in +72, in both generations). The dimensions are metres as stored.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(tag = "shape", rename_all = "snake_case")]
+pub enum RegionShape {
+    /// Code 0xFFFFFFFF: the region has no shape.
+    None,
+    Point,
+    Circle {
+        radius: f32,
+    },
+    Sphere {
+        radius: f32,
+    },
+    Cylinder {
+        radius: f32,
+        height: f32,
+    },
+    Rectangle {
+        width: f32,
+        depth: f32,
+    },
+    Box {
+        width: f32,
+        depth: f32,
+        height: f32,
+    },
+    /// Eight references to other regions, by their index in the section and the second word of each as stored.
+    Composite {
+        children: Vec<(i32, i32)>,
+    },
+    /// A shape code SoulsFormats does not name; its data is not read.
+    Unknown {
+        code: u32,
+    },
+}
+
+/// One region of the layout as stored (`POINT_PARAM_ST`, `fromsoft.region` once read into a world): what every type
+/// shares, and the type's own data as bytes. SoulsFormats' `MSBS`/`MSBE` `Region` read the header alike: name offset at
+/// +0, type at +8, the index at +12, the shape at +16, position at +20, rotation (degrees) at +32, the shape data
+/// offset at +72, the entity block offset at +80 (an activation part index, then the entity ID) and the type data
+/// offset at +88. What a type's data holds (a sound's id, an effect, a message) is per type and is not read: the
+/// bytes are kept, from the type data offset to the record's end (a record that stores more after it, which Elden
+/// Ring's does, keeps those bytes here too).
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct Region {
+    /// Its index in the layout's regions, in file order.
+    pub index: usize,
+    pub name: String,
+    /// The type code as stored, and its name where SoulsFormats names it ([`Generation::region_type`]).
+    pub type_code: u32,
+    pub type_name: Option<&'static str>,
+    #[serde(flatten)]
+    pub shape: RegionShape,
+    /// In the map's frame, as stored: the transform of `euler_transform` places it in the world frame.
+    pub position: [f32; 3],
+    pub rotation_degrees: [f32; 3],
+    /// The region's own entity ID as stored (event scripts address it; 0 or -1: none).
+    pub entity_id: i32,
+    #[serde(serialize_with = "hex")]
+    pub type_data: Vec<u8>,
+}
+
+/// One event of the layout as stored (`EVENT_PARAM_ST`, `fromsoft.event` once read into a world): what every type
+/// shares, and the type's own data as bytes. SoulsFormats' `MSBS`/`MSBE` `Event` read the header alike: the event ID at
+/// +8, the type at +12, the index at +16, the base data offset at +24 (a part index, a region index, the entity ID) and
+/// the type data offset at +32. The part and region an event names are resolved to their names where the index is in
+/// range (-1: none).
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct Event {
+    /// Its index in the layout's events, in file order.
+    pub index: usize,
+    pub name: String,
+    /// The event ID as stored (`EventID`).
+    pub event_id: i32,
+    pub type_code: u32,
+    pub type_name: Option<&'static str>,
+    pub part: Option<String>,
+    pub region: Option<String>,
+    pub entity_id: i32,
+    #[serde(serialize_with = "hex")]
+    pub type_data: Vec<u8>,
+}
+
+impl primase_core::Component for Region {
+    const NAME: &'static str = "fromsoft.region";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    /// The stored place is the map's frame as stored: the entity's transform places the region in the world.
+    fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
+        primase_core::world::Linearity::Invariant
+    }
+    fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, primase_core::json::JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+}
+impl primase_core::Component for Event {
+    const NAME: &'static str = "fromsoft.event";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
+        primase_core::world::Linearity::Invariant
+    }
+    fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, primase_core::json::JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+}
+
+fn hex<S: serde::Serializer>(bytes: &[u8], s: S) -> std::result::Result<S::Ok, S::Error> {
+    use std::fmt::Write;
+    let mut text = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(text, "{b:02x}");
+    }
+    s.serialize_str(&text)
+}
+
+impl Generation {
+    /// The word for a region type code, where SoulsFormats' `RegionType` names it (a lower-case word of `a-z`, `0-9` and
+    /// `_`, as a marker's kind is). Sekiro's and Elden Ring's codes differ: 21 is Sekiro's muffling portal and Elden
+    /// Ring's connection.
+    pub fn region_type(&self, code: u32) -> Option<&'static str> {
+        if self.name == Self::SEKIRO.name {
+            Some(match code {
+                0 => "logic",
+                1 => "invasion_point",
+                2 => "environment_map_point",
+                4 => "sound",
+                5 => "sfx",
+                6 => "wind_sfx",
+                8 => "spawn_point",
+                11 => "patrol_route",
+                13 => "warp_point",
+                14 => "activation_area",
+                15 => "event",
+                17 => "environment_map_effect_box",
+                18 => "wind_area",
+                20 => "muffling_box",
+                21 => "muffling_portal",
+                23 => "sound_space_override",
+                24 => "muffling_plane",
+                25 => "parts_group_area",
+                26 => "auto_draw_group_point",
+                _ => return None,
+            })
+        } else {
+            Some(match code {
+                1 => "invasion_point",
+                2 => "environment_map_point",
+                4 => "sound",
+                5 => "sfx",
+                6 => "wind_sfx",
+                8 => "spawn_point",
+                9 => "message",
+                17 => "environment_map_effect_box",
+                18 => "wind_area",
+                21 => "connection",
+                22 => "patrol_route_22",
+                26 => "buddy_summon_point",
+                27 => "disable_tumbleweed",
+                28 => "muffling_box",
+                29 => "muffling_portal",
+                30 => "sound_region",
+                31 => "muffling_plane",
+                32 => "patrol_route",
+                33 => "map_point",
+                35 => "weather_override",
+                36 => "auto_draw_group_point",
+                37 => "group_defeat_reward",
+                38 => "map_point_discovery_override",
+                39 => "map_point_participation_override",
+                40 => "hitset",
+                41 => "fast_travel_restriction",
+                42 => "weather_create_asset_point",
+                43 => "play_area",
+                44 => "environment_map_output",
+                46 => "mount_jump",
+                48 => "dummy",
+                49 => "fall_prevention_removal",
+                50 => "navmesh_cutting",
+                51 => "map_name_override",
+                52 => "mount_jump_fall",
+                53 => "horse_ride_override",
+                54 => "locked_mount_jump",
+                55 => "locked_mount_jump_fall",
+                _ => return None,
+            })
+        }
+    }
+
+    /// The word for an event type code, where SoulsFormats' `EventType` names it (as [`Generation::region_type`]).
+    pub fn event_type(&self, code: u32) -> Option<&'static str> {
+        if self.name == Self::SEKIRO.name {
+            Some(match code {
+                4 => "treasure",
+                5 => "generator",
+                7 => "obj_act",
+                9 => "map_offset",
+                14 => "patrol_info",
+                15 => "platoon_info",
+                17 => "resource_item_info",
+                18 => "grass_lod_param",
+                20 => "skit_info",
+                21 => "placement_group",
+                22 => "parts_group",
+                23 => "talk",
+                24 => "auto_draw_group_collision",
+                _ => return None,
+            })
+        } else {
+            Some(match code {
+                4 => "treasure",
+                5 => "generator",
+                7 => "obj_act",
+                10 => "navmesh",
+                12 => "pseudo_multiplayer",
+                15 => "platoon_info",
+                20 => "patrol_info",
+                21 => "mount",
+                23 => "sign_pool",
+                24 => "retry_point",
+                25 => "area_team",
+                _ => return None,
+            })
+        }
+    }
+}
+
+impl MapLayout {
+    /// Every region of the layout, of every type, in file order, with its shape and the bytes of its type data. A
+    /// record that does not fit the layout above is an error naming it.
+    pub fn map_regions(&self) -> Result<Vec<Region>> {
+        let mut out = Vec::new();
+        for (index, data) in self.regions()?.records.iter().enumerate() {
+            let r = View {
+                data,
+                format: "MSB region",
+                be: false,
+            };
+            r.slice(0, 96)?;
+            let name = text(&r, pointer(&r, 0, 96)?)?;
+            let type_code = r.u32(8)?;
+            let shape_code = r.u32(16)?;
+            let shape_data = r.size(72)?;
+            let floats = |n: usize| -> Result<Vec<f32>> {
+                if shape_data < 96 {
+                    return Err(invalid(r.format, 72, "a shape without data"));
+                }
+                (0..n).map(|i| f32_at(&r, shape_data + 4 * i)).collect()
+            };
+            let shape = match shape_code {
+                0xFFFF_FFFF => RegionShape::None,
+                0 => RegionShape::Point,
+                1 => RegionShape::Circle { radius: floats(1)?[0] },
+                2 => RegionShape::Sphere { radius: floats(1)?[0] },
+                3 => {
+                    let f = floats(2)?;
+                    RegionShape::Cylinder {
+                        radius: f[0],
+                        height: f[1],
+                    }
+                }
+                4 => {
+                    let f = floats(2)?;
+                    RegionShape::Rectangle {
+                        width: f[0],
+                        depth: f[1],
+                    }
+                }
+                5 => {
+                    let f = floats(3)?;
+                    RegionShape::Box {
+                        width: f[0],
+                        depth: f[1],
+                        height: f[2],
+                    }
+                }
+                6 => {
+                    if shape_data < 96 {
+                        return Err(invalid(r.format, 72, "a shape without data"));
+                    }
+                    RegionShape::Composite {
+                        children: (0..8)
+                            .map(|i| Ok((r.u32(shape_data + 8 * i)? as i32, r.u32(shape_data + 8 * i + 4)? as i32)))
+                            .collect::<Result<_>>()?,
+                    }
+                }
+                code => RegionShape::Unknown { code },
+            };
+            let entity = r.size(80)?;
+            if entity < 96 {
+                return Err(invalid(r.format, 80, "no entity block"));
+            }
+            let type_data = match r.size(88)? {
+                0 => Vec::new(),
+                at if at >= 96 => r.slice(at, r.data.len() - at.min(r.data.len()))?.to_vec(),
+                _ => return Err(invalid(r.format, 88, "type data inside the header")),
+            };
+            out.push(Region {
+                index,
+                name,
+                type_code,
+                type_name: self.generation.region_type(type_code),
+                shape,
+                position: vector(&r, 20)?,
+                rotation_degrees: vector(&r, 32)?,
+                entity_id: r.u32(entity + 4)? as i32,
+                type_data,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Every event of the layout, of every type, in file order, with the bytes of its type data (a MapOffset event's
+    /// among them: [`MapLayout::map_offsets`] reads those).
+    pub fn map_events(&self) -> Result<Vec<Event>> {
+        let regions = self.region_names()?;
+        let mut out = Vec::new();
+        for (index, data) in self.sections[1].records.iter().enumerate() {
+            let r = View {
+                data,
+                format: "MSB event",
+                be: false,
+            };
+            r.slice(0, 40)?;
+            let name = text(&r, pointer(&r, 0, 40)?)?;
+            let type_code = r.u32(12)?;
+            let base = pointer(&r, 24, 40)?;
+            let type_data = match r.size(32)? {
+                0 => Vec::new(),
+                at if at >= 40 => r.slice(at, r.data.len() - at.min(r.data.len()))?.to_vec(),
+                _ => return Err(invalid(r.format, 32, "type data inside the header")),
+            };
+            let named = |i: i32, names: &dyn Fn(usize) -> Option<String>| usize::try_from(i).ok().and_then(names);
+            out.push(Event {
+                index,
+                name,
+                event_id: r.u32(8)? as i32,
+                type_code,
+                type_name: self.generation.event_type(type_code),
+                part: named(r.u32(base)? as i32, &|i| self.parts.get(i).map(|p| p.name.clone())),
+                region: named(r.u32(base + 4)? as i32, &|i| regions.get(i).cloned()),
+                entity_id: r.u32(base + 8)? as i32,
+                type_data,
+            });
+        }
+        Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod region_tests {
+    use super::*;
+
+    fn utf16(s: &str) -> Vec<u8> {
+        s.encode_utf16().chain([0]).flat_map(u16::to_le_bytes).collect()
+    }
+
+    /// A region record: a 96-byte header, then the name, the entity block, the shape data and the type data.
+    fn region(name: &str, type_code: u32, shape: u32, floats: &[f32], entity: u32, type_data: &[u8]) -> Vec<u8> {
+        let mut tail = utf16(name);
+        let entity_at = 96 + tail.len();
+        tail.extend([0u8; 4]);
+        tail.extend(entity.to_le_bytes());
+        let shape_at = 96 + tail.len();
+        tail.extend(floats.iter().flat_map(|f| f.to_le_bytes()));
+        let type_at = 96 + tail.len();
+        tail.extend(type_data);
+        let mut r = vec![0u8; 96];
+        r[0..8].copy_from_slice(&96u64.to_le_bytes());
+        r[8..12].copy_from_slice(&type_code.to_le_bytes());
+        r[16..20].copy_from_slice(&shape.to_le_bytes());
+        for (i, v) in [1.0f32, 2.0, 3.0, 10.0, 20.0, 30.0].iter().enumerate() {
+            r[20 + 4 * i..24 + 4 * i].copy_from_slice(&v.to_le_bytes());
+        }
+        let slot = |r: &mut [u8], at: usize, v: usize| r[at..at + 8].copy_from_slice(&(v as u64).to_le_bytes());
+        slot(&mut r, 72, if floats.is_empty() { 0 } else { shape_at });
+        slot(&mut r, 80, entity_at);
+        slot(&mut r, 88, if type_data.is_empty() { 0 } else { type_at });
+        r.extend(tail);
+        r
+    }
+
+    fn layout(generation: &'static Generation, records: Vec<Vec<u8>>) -> MapLayout {
+        let mut sections = generation
+            .sections
+            .iter()
+            .map(|name| Section {
+                name: (*name).to_owned(),
+                version: 0,
+                records: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        sections[2].records = records;
+        MapLayout {
+            generation,
+            models: Vec::new(),
+            parts: Vec::new(),
+            map_offsets: Vec::new(),
+            sections,
+        }
+    }
+
+    /// A region of any type is read with its shape's dimensions, its stored place and entity, and its type's bytes; the
+    /// type is named by the generation that reads it.
+    #[test]
+    fn a_regions_shape_place_and_type_data_are_read_as_stored() {
+        let layout = layout(
+            &Generation::ELDEN_RING,
+            vec![
+                region("Wind", 6, 5, &[4.0, 5.0, 6.0], 1042, &[7, 8, 9]),
+                region("Spot", 21, 0, &[], 0, &[]),
+                region("Odd", 77, 3, &[2.0, 9.0], 5, &[]),
+            ],
+        );
+        let regions = layout.map_regions().unwrap();
+        assert_eq!(regions.len(), 3);
+        assert_eq!(regions[0].name, "Wind");
+        assert_eq!(regions[0].type_name, Some("wind_sfx"));
+        assert_eq!(
+            regions[0].shape,
+            RegionShape::Box {
+                width: 4.0,
+                depth: 5.0,
+                height: 6.0
+            }
+        );
+        assert_eq!(regions[0].position, [1.0, 2.0, 3.0]);
+        assert_eq!(regions[0].rotation_degrees, [10.0, 20.0, 30.0]);
+        assert_eq!((regions[0].entity_id, regions[0].type_data.clone()), (1042, vec![7, 8, 9]));
+        assert_eq!((regions[1].shape.clone(), regions[1].type_name), (RegionShape::Point, Some("connection")));
+        assert!(regions[1].type_data.is_empty());
+        // a type the generation does not name keeps its code
+        assert_eq!((regions[2].type_code, regions[2].type_name), (77, None));
+        assert_eq!(
+            regions[2].shape,
+            RegionShape::Cylinder {
+                radius: 2.0,
+                height: 9.0
+            }
+        );
+    }
+
+    /// The same code names another type in the other generation.
+    #[test]
+    fn a_type_code_is_named_by_the_generation_that_reads_it() {
+        assert_eq!(Generation::SEKIRO.region_type(21), Some("muffling_portal"));
+        assert_eq!(Generation::ELDEN_RING.region_type(21), Some("connection"));
+        assert_eq!(Generation::SEKIRO.event_type(9), Some("map_offset"));
+        assert_eq!(Generation::ELDEN_RING.event_type(9), None);
+        // every word is a valid marker kind
+        for generation in Generation::ALL {
+            for code in 0..64 {
+                for word in [generation.region_type(code), generation.event_type(code)].into_iter().flatten() {
+                    assert!(
+                        word.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'),
+                        "{word}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A shape that needs data and has none is an error naming the field; a record shorter than its header is one too.
+    #[test]
+    fn a_region_that_does_not_fit_is_an_error() {
+        let mut bad = region("Wind", 6, 5, &[4.0, 5.0, 6.0], 1, &[]);
+        bad[72..80].copy_from_slice(&0u64.to_le_bytes());
+        assert!(layout(&Generation::ELDEN_RING, vec![bad]).map_regions().is_err());
+        assert!(layout(&Generation::ELDEN_RING, vec![vec![0; 40]]).map_regions().is_err());
+    }
+
+    /// Type data is serialised as hexadecimal text, not a list of numbers.
+    #[test]
+    fn type_data_serialises_as_hex() {
+        let layout = layout(&Generation::SEKIRO, vec![region("Snd", 4, 2, &[3.0], 9, &[0xab, 0x01])]);
+        let json = serde_json::to_value(&layout.map_regions().unwrap()[0]).unwrap();
+        assert_eq!(json["type_data"], "ab01");
+        assert_eq!(json["shape"], "sphere");
+        assert_eq!(json["radius"], 3.0);
+        assert_eq!(json["type_name"], "sound");
+    }
+}

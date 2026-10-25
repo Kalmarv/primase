@@ -10,7 +10,7 @@ use primase_core::shader::surface::{Base, Emission, Place, Roughness, Surface, T
 
 /// The WGSL functions: `primase_base`, `primase_normal`, `primase_roughness`, `primase_scalar`, `primase_colour` and
 /// `primase_emission` decode a term, `primase_stored` shows its lanes as the program wrote them; each takes a row and
-/// its target's four values. With the row constants `PRIMASE_SURFACE_*`; module scope, no bindings: a consumer puts it
+/// its target's four values. With the row constants `primase_surface_*`; module scope, no bindings: a consumer puts it
 /// beside its own shader.
 pub const WGSL: &str = include_str!("surface.wgsl");
 

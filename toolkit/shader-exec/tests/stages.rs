@@ -35,6 +35,7 @@ fn provenance(target: &str) -> Provenance {
         lifter: "test".into(),
         lifter_version: 0,
         source_hash: None,
+        instruction_count: None,
     }
 }
 

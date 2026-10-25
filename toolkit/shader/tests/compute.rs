@@ -157,6 +157,7 @@ fn program(size: [u32; 3]) -> Program {
             lifter: "test".into(),
             lifter_version: 0,
             source_hash: None,
+            instruction_count: None,
         },
         notes: Vec::new(),
     }

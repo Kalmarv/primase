@@ -233,6 +233,11 @@ fn variant(function: &Function, at: Handle<Expression>) -> String {
 /// The samples of a DXIL container's program, or why it cannot be lifted.
 pub fn uses(container: &[u8]) -> Result<SamplerUses, String> {
     let program = primase_dxil::lift(container).map_err(|e| e.to_string())?;
+    uses_program(&program)
+}
+
+/// The resolve pass already has this program lifted for constants, outputs and inspection facts.
+pub(super) fn uses_program(program: &primase_shader::Program) -> Result<SamplerUses,String> {
     let function = &program
         .module
         .entry_points

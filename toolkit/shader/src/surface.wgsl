@@ -1,5 +1,5 @@
 // primase's reading of a pixel program's outputs as a surface (`primase_core::shader::surface`), for a composite that
-// decodes a G-buffer on the GPU as the CPU reading does. A program's surface is `PRIMASE_SURFACE_ROWS` rows of four
+// decodes a G-buffer on the GPU as the CPU reading does. A program's surface is `primase_surface_rows` rows of four
 // words (`primase_shader::surface::rows`), one per term at the index its constant below names:
 //
 //   x  the render target the term is in, plus one; 0 where no output has a role for the term (the caller takes its
@@ -12,18 +12,18 @@
 //
 // Each function takes the row and the four values of the target it names (the caller reads them, at `row.x - 1`).
 
-const PRIMASE_SURFACE_ROWS: u32 = 9u;
-const PRIMASE_SURFACE_BASE: u32 = 0u;
-const PRIMASE_SURFACE_NORMAL: u32 = 1u;
-const PRIMASE_SURFACE_ROUGHNESS: u32 = 2u;
-const PRIMASE_SURFACE_METALLIC: u32 = 3u;
-const PRIMASE_SURFACE_REFLECTANCE: u32 = 4u;
-const PRIMASE_SURFACE_SPECULAR: u32 = 5u;
-const PRIMASE_SURFACE_EMISSION: u32 = 6u;
-const PRIMASE_SURFACE_OCCLUSION: u32 = 7u;
+const primase_surface_rows: u32 = 9u;
+const primase_surface_base: u32 = 0u;
+const primase_surface_normal: u32 = 1u;
+const primase_surface_roughness: u32 = 2u;
+const primase_surface_metallic: u32 = 3u;
+const primase_surface_reflectance: u32 = 4u;
+const primase_surface_specular: u32 = 5u;
+const primase_surface_emission: u32 = 6u;
+const primase_surface_occlusion: u32 = 7u;
 // The occlusion of the environment's ambient light alone (`Surface::ambient_occlusion`): it scales the ambient light,
 // not the other lights; a surface has this row or the occlusion row, not both.
-const PRIMASE_SURFACE_AMBIENT_OCCLUSION: u32 = 8u;
+const primase_surface_ambient_occlusion: u32 = 8u;
 
 fn primase_kind(row: vec4<u32>) -> u32 {
     return (row.y >> 8u) & 0xffu;

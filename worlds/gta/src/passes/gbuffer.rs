@@ -53,7 +53,12 @@ pub struct GBufferWrites {
 /// found (the lifted program is not shaped as this reading expects).
 pub fn writes(container: &[u8]) -> Result<GBufferWrites, String> {
     let program = primase_dxil::lift(container).map_err(|e| e.to_string())?;
-    let stores = OutputStores::of(&program)?;
+    writes_program(&program)
+}
+
+/// Reuse a resolve pass's existing lift rather than lifting again for the output-store query.
+pub(super) fn writes_program(program: &primase_shader::Program) -> Result<GBufferWrites,String> {
+    let stores = OutputStores::of(program)?;
     // the stored values of a lane of target n
     let lane = |target: u32, lane: u32| -> Vec<Handle<Expression>> { stores.lane(target, lane) };
     let found: usize = (0..5u32)

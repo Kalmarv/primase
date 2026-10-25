@@ -1431,6 +1431,7 @@ impl Lower<'_> {
                 lifter_version: LIFTER_VERSION,
                 // the hash of the text, which `lift` sets
                 source_hash: None,
+                instruction_count: None,
             },
             notes,
         })
