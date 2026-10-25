@@ -1,23 +1,8 @@
 //! The repairs a geometry lowering may choose for a decoded FLVER part (its UV tiling applied, degenerate triangles
-//! dropped, its winding inferred from the stored normals), and the legacy composition that makes them all.
-use crate::flver::{Model, Part};
+//! dropped, its winding inferred from the stored normals). `lower-fromsoft-geometry` makes each choice explicit.
+use crate::flver::Part;
 use crate::{Result, invalid};
 use primase_meshops::vector::Vec3;
-
-/// Geometry-affecting material decisions of the legacy composition ([`Model::geometry`]).
-#[derive(Clone, Copy, Debug)]
-pub struct MaterialGeometry {
-    pub skip: bool,
-    pub uv_scale: [f32; 2],
-}
-impl Default for MaterialGeometry {
-    fn default() -> Self {
-        Self {
-            skip: false,
-            uv_scale: [1.; 2],
-        }
-    }
-}
 
 impl Part {
     /// Multiply UV0 by `scale` (a material's tiling, applied to the coordinates instead of the texture binding).
@@ -95,45 +80,5 @@ impl Part {
             self.winding_flipped = true;
         }
         Ok(self.winding_flipped)
-    }
-}
-
-impl Model {
-    /// The legacy composition: each mesh's first level-0 face set, meshes whose material is skipped left out, the
-    /// material's UV scale applied, degenerate triangles dropped, winding repaired from the stored normals, parts
-    /// left without triangles omitted. The `lower-fromsoft-geometry` pass makes each of these choices explicit.
-    pub fn geometry(&self, materials: &[MaterialGeometry]) -> Result<Vec<Part>> {
-        if materials.len() != self.materials.len() {
-            return Err(invalid("FLVER geometry", 0, "material count"));
-        }
-        let mut parts = Vec::new();
-        for (source_mesh, m) in self.meshes.iter().enumerate() {
-            let mat = materials
-                .get(m.material)
-                .ok_or_else(|| invalid("FLVER geometry", source_mesh, "material index"))?;
-            if mat.skip {
-                continue;
-            }
-            if !mat.uv_scale.iter().all(|f| f.is_finite()) {
-                return Err(invalid("FLVER geometry", source_mesh, "non-finite UV scale"));
-            }
-            let Some(face_set) = m.faces.iter().position(|f| f.is_lod0()) else {
-                continue;
-            };
-            let Some(mut part) = self.decode(source_mesh, face_set)? else {
-                continue;
-            };
-            part.apply_uv_scale(mat.uv_scale)?;
-            part.repair_winding()?;
-            part.drop_degenerates()?;
-            if part.mesh.indices.is_empty() {
-                continue;
-            }
-            part.mesh
-                .validate()
-                .map_err(|e| invalid("FLVER geometry", source_mesh, e))?;
-            parts.push(part);
-        }
-        Ok(parts)
     }
 }

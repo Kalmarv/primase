@@ -181,7 +181,6 @@ fn source_blue_gloss_and_red_metal_survive_as_distinct_orm_channels() {
         ("n".into(), payload(&[128, 128, 0, 255, 128, 128, 255, 255])),
         ("m".into(), payload(&[0, 200, 210, 255, 255, 100, 120, 255])),
     ]);
-    assert_eq!(pbr::required_textures(&world).unwrap().len(), 3);
     let log = pbr::lower(&mut world, &bytes, None, WATER).unwrap();
     let mat = world.get::<PbrMaterial>(e).unwrap();
     let orm = world
@@ -263,7 +262,6 @@ fn baked_bindings_and_factors_are_authoritative() {
         ..Default::default()
     };
     world.insert(e, expected.clone());
-    assert!(pbr::required_textures(&world).unwrap().is_empty());
     pbr::lower(&mut world, &no_payloads(), None, WATER).unwrap();
     assert_eq!(world.get::<PbrMaterial>(e).unwrap(), &expected);
 }

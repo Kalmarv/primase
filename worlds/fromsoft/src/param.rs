@@ -427,8 +427,8 @@ fn fixed_string(row: &[u8], at: usize, chars: usize) -> Result<String> {
         .get(at..at + 2 * chars)
         .ok_or_else(|| invalid(FORMAT, at, "string beyond the row"))?;
     let mut text = String::new();
-    for pair in bytes.chunks_exact(2) {
-        let c = u16::from_le_bytes([pair[0], pair[1]]);
+    for pair in bytes.as_chunks::<2>().0 {
+        let c = u16::from_le_bytes(*pair);
         if c == 0 {
             break;
         }

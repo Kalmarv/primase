@@ -24,7 +24,6 @@
 use std::collections::BTreeMap;
 
 use primase_fromsoft::flver::Model;
-use primase_fromsoft::geometry::MaterialGeometry;
 use primase_fromsoft::{Archive, Binder, dcx::Decoder};
 use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 use serde_json::Value as Json;
@@ -132,9 +131,22 @@ fn mirror_is_undone_in_the_geometry() {
             0,
             "{k}: choose a model whose meshes are not bone-bound (the dump is before bones)"
         );
-        let parts = lowered
-            .geometry(&vec![MaterialGeometry::default(); lowered.materials.len()])
-            .unwrap();
+        // each mesh's first level-0 face set, its winding repaired from the stored normals and its degenerate
+        // triangles dropped (the choices `lower-fromsoft-geometry{winding=normals,degenerates=drop}` states)
+        let mut parts = Vec::new();
+        for (source_mesh, m) in lowered.meshes.iter().enumerate() {
+            let Some(face_set) = m.faces.iter().position(|f| f.is_lod0()) else {
+                continue;
+            };
+            let Some(mut part) = lowered.decode(source_mesh, face_set).unwrap() else {
+                continue;
+            };
+            part.repair_winding().unwrap();
+            part.drop_degenerates().unwrap();
+            if !part.mesh.indices.is_empty() {
+                parts.push(part);
+            }
+        }
         let meshes = o["meshes"].as_array().unwrap();
         for part in &parts {
             let m = &meshes[part.source_mesh];

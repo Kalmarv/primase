@@ -1190,12 +1190,6 @@ impl<'a> CharacterReader<'a> {
         self
     }
 
-    /// Also read each part form's own animation binder ([`CharacterOptions::form_animations`]).
-    pub fn with_form_animations(mut self) -> Self {
-        self.options.form_animations = true;
-        self
-    }
-
     /// The parts `parts` (`bd_m_9120_l`) of the install at `install`, each an asset of its own ([`read_parts`]).
     pub fn parts(install: Install, parts: &[&str], decoder: Decoder<'a>) -> CharacterReader<'a> {
         CharacterReader {

@@ -179,12 +179,11 @@ collision of the same assets checks the frame: the position as stored lies neare
 own collision (101 of the 106 with collision; for the other five the best of the 48
 signed axis permutations is within 0.02 m of it), mirrored in z farther (median 0.165 m against 0.064 m).
 
-`Model::geometry(materials)` selects the first LOD0 face set per mesh, compacts
-vertices in first-use order, converts through the core frame, normalizes stored
-normals, and chooses winding from the summed geometric/stored-normal agreement.
-Caller-supplied material decisions control mesh exclusion and main-layer UV
-scale. It retains vertices referenced by faces that later fail the area check.
-It does not bake layered materials or split parts into baked weight levels.
+`Model::decode(mesh, face_set)` compacts one face set's vertices in first-use order, converts through the
+core frame and normalizes stored normals; `Part::repair_winding` chooses the winding from the summed
+geometric/stored-normal agreement, `Part::drop_degenerates` retains the vertices of faces that fail the area check,
+and `Part::apply_uv_scale` applies a material's main-layer UV scale. `lower-fromsoft-geometry` makes each of these
+choices explicit. None of them bakes layered materials or splits parts into baked weight levels.
 
 The archive oracle directory (`oracles.soulsformats.sekiro/census`, `oracles.soulsformats.elden/census`; `tests/flver_census.rs`
 runs one body for each game) adds `flver/models.jsonl`, one record per FLVER2

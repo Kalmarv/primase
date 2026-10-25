@@ -302,10 +302,3 @@ impl Archive {
         self.read_hash(self.hash(path), decoder)
     }
 }
-/// Public key parameters for one Sekiro shard (1 through 5).
-pub fn public_key(shard: u8) -> Result<(&'static [u8], &'static [u8])> {
-    crate::keys::SEKIRO
-        .get(usize::from(shard).wrapping_sub(1))
-        .copied()
-        .ok_or_else(|| invalid("RSA", 0, "shard must be 1..5"))
-}

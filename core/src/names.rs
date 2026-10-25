@@ -27,7 +27,7 @@ use crate::provenance::Provenance;
 use crate::rig::{
     Attachment, JointMap, JointPlacement, MorphWeights, RigInstance, RigPose, SkinInstance, Sockets,
 };
-use crate::shader::{Shader, ShaderBinding};
+use crate::shader::{MaterialPrograms, ProgramFacts, Shader, ShaderBinding};
 use crate::skeleton::Skeleton;
 use crate::skin::Skin;
 use crate::state::{Condition, PrimitiveCondition, StateAssignment, StateAxis, StateOverride};
@@ -63,7 +63,7 @@ declared! {
         TextureFile, MeshFile, MaterialVariants, Tile, DrawOrder, LayeredMaterial, Lods, Marker, Curve, MaterialUsage,
         PbrMaterial, DetailedMaterial, Priority, Provenance, StateAxis, Condition, PrimitiveCondition, StateOverride, VertexColor, Skeleton, Skin, Morphs, RigInstance,
         RigPose, SkinInstance, MorphWeights, Sockets, Attachment, JointMap, JointPlacement, Clip, ClipBinding, Asset, Shader, ShaderBinding,
-        TextureLayers;
+        TextureLayers, MaterialPrograms, ProgramFacts;
     resources: PartScope, PartitionPlan, Environment, Atmosphere, StateAssignment, Surfaces, Threads, Memo,
 }
 

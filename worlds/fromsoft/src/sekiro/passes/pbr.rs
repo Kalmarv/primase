@@ -114,6 +114,13 @@ pub fn apply_face_cull(world: &mut World, log: &mut PassLog) -> Result<()> {
     Ok(())
 }
 
+/// The two approximations of a gloss plane packed as the ORM's roughness, stated by the lowering of an unbaked
+/// material and by the assembly of a baked one.
+pub(crate) fn note_gloss_packing(log: &mut PassLog) {
+    log.approximate("per-light gloss correction omitted", 1);
+    log.approximate("roughness quantized to UNORM8", 1);
+}
+
 /// Pack a baked linear gloss plane as glTF ORM. R/B are neutral multipliers;
 /// this function does not claim to have measured AO or metallic content.
 pub(crate) fn orm_from_gloss(width: u32, height: u32, gloss: &[f32]) -> Result<Texture> {
@@ -220,9 +227,6 @@ fn keyed_binding<'a>(m: &'a Material, role: &str) -> Option<(&'a str, &'a Bindin
         .filter(|t| t.0.contains(role))
         .find_map(|t| m.bindings.get(t.0).map(|b| (t.0, b)))
 }
-fn binding<'a>(m: &'a Material, role: &str) -> Option<&'a Binding> {
-    keyed_binding(m, role).map(|(_, b)| b)
-}
 
 /// The normal map binding the preview chose, with its slot's key.
 fn keyed_normal_binding<'a>(m: &'a Material, preview: &Preview) -> Option<(&'a str, &'a Binding)> {
@@ -234,35 +238,6 @@ fn keyed_normal_binding<'a>(m: &'a Material, preview: &Preview) -> Option<(&'a s
         .filter(|t| t.0.contains("NormalMap"))
         .filter_map(|t| m.bindings.get(t.0).map(|b| (t.0, b)))
         .find(|(_, b)| &b.texture == name)
-}
-
-/// Names required by the evidenced static policies, for one batched DDS read.
-/// Layered base/normal textures must already be baked and bound by assembly.
-pub fn required_textures(world: &World) -> Result<BTreeSet<String>> {
-    let mut names = BTreeSet::new();
-    let mut reader = coverage::Reader::default();
-    for (e, m) in world.iter::<Material>() {
-        if m.skip.is_some() || m.layered.is_some() {
-            continue;
-        }
-        let base = reader.base(world, e, m);
-        let key = base
-            .as_ref()
-            .ok()
-            .and_then(Option::as_ref)
-            .map(|b| b.slot.binding.as_str());
-        let preview = preview_with(m, key);
-        if base_unread(&base, &preview).is_none() {
-            names.extend(preview.albedo);
-        }
-        names.extend(preview.normal);
-        if simple(&m.shader)
-            && let Some(b) = binding(m, "MetallicMap")
-        {
-            names.insert(b.texture.clone());
-        }
-    }
-    Ok(names)
 }
 
 /// A material binary drawn without a base texture, and why: its program names no base albedo, or names one the source
@@ -763,8 +738,7 @@ fn lower_materials(
                 p.roughness = 1.;
                 p.metallic = if metal.is_none() { scalar.unwrap_or(1.) } else { 1. };
                 log.count("roughness textures", 1);
-                log.approximate("per-light gloss correction omitted", 1);
-                log.approximate("roughness quantized to UNORM8", 1);
+                note_gloss_packing(&mut log);
                 if metal.is_some() {
                     metal_map_used = true;
                     log.count("metallic textures", 1);
@@ -835,10 +809,10 @@ fn lower_materials(
                 "vertex colours of material binary materials ignored: their use is not read from the programs",
                 1,
             );
-        }
-        if !baked && !colour_varyings(world, e).is_empty() {
+        } else if !baked && !colour_varyings(world, e).is_empty() {
             // core states only whether `COLOR_0` is ignored ([`primase_core::VertexColor`]), not how a program multiplies
-            // its albedo or another output by it: the use is stated, not dropped
+            // its albedo or another output by it: the use is stated, not dropped (a material binary's, which the
+            // notice above covers, is not stated twice)
             log.approximate_on(
                 e,
                 "pixel program reads a vertex colour (a COLOR varying): how it enters its outputs is not lowered; the material takes the vertex colour as its vertex colour notice says",

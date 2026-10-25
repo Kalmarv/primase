@@ -810,7 +810,7 @@ pub(super) fn material_rows(m: &AnvilMaterial) -> Result<BTreeMap<u32, [f32; 4]>
             MaterialBinding::UvTransform { vec4 } => match value(key, binding) {
                 Some(MaterialValue::Floats(f)) => {
                     let [u, v] = super::material::static_uv_rows(f)
-                        .map_err(|why| format!("UV transform {key:08X}: {why}"))?;
+                        .map_err(|why| format!("UV transform {key:08X}: {}", super::material::uv_motion_notice(f).unwrap_or_else(||why.to_owned())))?;
                     rows.insert(vec4, u);
                     rows.insert(vec4.saturating_add(1), v);
                     rows.insert(vec4.saturating_add(2), [0.0, 0.0, 1.0, 0.0]);
@@ -1182,6 +1182,11 @@ impl BakeAnvilMaterial {
                     return Err("the program writes a value that isn't finite".into());
                 }
                 let (normal, class) = decode_normal([o1[0], o1[1], o1[2]]);
+                if let Some(expected)=super::resolve_shaders::shading_class(recipe.template)
+                    .filter(|_|!recipe.template.starts_with("MAD_CHR_"))
+                    && class!=expected {
+                    return Err(format!("{} program writes shading class {class}, output contract states {expected}",recipe.template));
+                }
                 let texel = match class {
                     1 | 3..=5 => {
                         if let std::collections::btree_map::Entry::Vacant(entry) = readings.entry(class) {

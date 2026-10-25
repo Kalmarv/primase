@@ -180,6 +180,10 @@ use crate::components::{
     AnvilMaterial, AnvilTextureMap, AnvilWorldUv, MaterialBinding, MaterialFlags, MaterialValue,
 };
 
+mod terms;
+
+pub(super) fn uv_motion_notice(f: &[f32]) -> Option<String> { terms::uv_motion(f) }
+
 /// How the alpha channel is drawn: the program's statement.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AlphaChoice {
@@ -1163,7 +1167,8 @@ pub(super) fn uv_transform(f: &[f32], shader_uv: ShaderUv) -> Result<Option<UvTr
 /// The same transfer as the program binding: the TextureMap's u32 at 25 where present, otherwise the core texture's.
 pub(super) fn srgb(w: &World, e: Entity) -> bool {
     w.get::<AnvilTextureMap>(e).map_or_else(
-        || w.get::<Texture>(e).is_some_and(|t| t.color_space == ColorSpace::Srgb),
+        || w.get::<Texture>(e).map(|t| t.color_space)
+            .or_else(|| w.get::<primase_core::TextureLayers>(e).map(|t| t.color_space)) == Some(ColorSpace::Srgb),
         |t| t.field_25 == 1,
     )
 }
@@ -1277,6 +1282,7 @@ impl Pass for LowerAnvilMaterial {
             let earlier_refusal = w.get::<crate::components::AnvilRenderStatus>(e)
                 .filter(|status| status.unsupported).map(|status| status.reason.clone());
             let i = Inputs { m: &m };
+            let surface_notices = terms::notices(&i);
             let mut placeholder_used = false;
             let mut placeholder = || {
                 placeholder_used = true;
@@ -1510,7 +1516,7 @@ impl Pass for LowerAnvilMaterial {
                     log.count(&format!("{name} Materials lowered"), 1);
                     PbrMaterial {
                         base_color_texture: base.map(sampled_by),
-                        metallic: 1.0,
+                        metallic: 0.0,
                         roughness: 1.0,
                         metallic_roughness_texture: mr.map(sampled_by),
                         occlusion_texture: occlusion.map(sampled_by),
@@ -1928,7 +1934,7 @@ impl Pass for LowerAnvilMaterial {
                     log.count("MAD_Clutters_Grass Materials lowered", 1);
                     PbrMaterial {
                         base_color_texture: base.map(TextureRef::new),
-                        metallic: 1.0,
+                        metallic: 0.0,
                         roughness: 1.0,
                         metallic_roughness_texture: mr.map(TextureRef::new),
                         occlusion_texture: occlusion.map(TextureRef::new),
@@ -2088,18 +2094,19 @@ impl Pass for LowerAnvilMaterial {
                     placeholder()
                 }
             };
+            for notice in &surface_notices { log.approximate(notice, 1); }
             w.insert(e, crate::components::AnvilRenderStatus {
                 source: format!("Material {:#x}", m.index_id),
                 template: Some(name.clone()),
                 unsupported: placeholder_used && !layered,
-                reason: if placeholder_used && !layered {
+                reason: (if placeholder_used && !layered {
                     format!("{name}: material recipe refused or unavailable; see this pass's named omissions{}",
                         earlier_refusal.map_or_else(String::new, |why| format!("; {why}")))
                 } else if name == "MAD_FakeForest" {
                     "authored untextured canopy/proxy; COLOR_0 decoded with pow(saturate(c), 2.2); a triangle-only form is an authored near-distance stand-in".into()
                 } else {
                     format!("{name}: source material lowered{}", if layered { " as a layered blend" } else { " as PBR" })
-                },
+                }) + &surface_notices.iter().map(|n| format!("; {n}")).collect::<String>(),
             });
             if !layered {
                 if matches!(name.as_str(), "MAD_Decals1" | "MAD_Decals1_Graffiti")
@@ -2439,7 +2446,8 @@ fn lowered_uv(
                 t
             }
             Err(why) => {
-                log.omit(&format!("{what} UV transforms {why}: untransformed"), 1);
+                let reason=uv_motion_notice(f).unwrap_or_else(||why.to_owned());
+                log.approximate(&format!("{what} UV transforms {reason}: untransformed"), 1);
                 None
             }
         },
@@ -2724,6 +2732,36 @@ mod tests {
     use primase_shader_exec::PixelShader;
 
     #[test]
+    fn foliage_without_a_normal_map_is_still_the_programs_dielectric_surface() {
+        use primase_core::shader::surface::Surface;
+        use super::super::{gbuffer::fixture,resolve_shaders::{output_bindings,shading_class}};
+        for (template,reads) in [("MAD_Bark",&BARK),("MAD_Tex1_Leaves",&LEAVES),("MAD_Clutters_Grass",&GRASS)] {
+            let Some(program)=fixture::program(template) else {return;};
+            let program=primase_dxbc::lift(&program).unwrap();
+            let roles=output_bindings(&program.interface,shading_class(template),true);
+            let surface=Surface::read(roles.iter().map(|r|(r.lanes,&r.role)));
+            assert!(surface.metallic.is_none(),"{template}: layout B has no metallic term");
+            let mut w=World::new();let e=w.spawn();
+            w.insert(e,AnvilMaterial {index_id:1,template:None,template_name:Some(template.into()),
+                bindings:reads.textures.iter().map(|&(slot,key)|(key,MaterialBinding::Texture{slot}))
+                    .chain(reads.constants.iter().map(|&(row,key)|(key,MaterialBinding::Scalar{vec4:row}))).collect(),
+                values:reads.constants.iter().map(|&(_,key)|(key,MaterialValue::Float(0.0))).collect(),
+                texture_set:Vec::new(),textures:Vec::new(),defaults:Vec::new(),
+                frame:primase_core::frame::SourceFrame::WORLD,flags:MaterialFlags{blend_mode:0,
+                    alpha_display_mode:0,alpha_test_value:0,booleans:[0;35]},shaders:None});
+            let mut log=PassLog::default();
+            LowerAnvilMaterial {normal_green:NormalGreen::Up,alpha:AlphaChoice::Opaque,shader_uv:ShaderUv::TexCoord,
+                emissive_exposure:1.0,underground_view:0.5,fake_river_s:0.0,decals1_cutout:Decals1Cutout::Decal}
+                .run(&mut w,&mut log).unwrap();
+            let pbr=w.get::<PbrMaterial>(e).unwrap();
+            assert_eq!(pbr.metallic,0.0,"{template}: no map must not become metallic; {log:?}");
+            let status=w.get::<crate::components::AnvilRenderStatus>(e).unwrap();
+            assert!(!status.unsupported,"{template}: {status:?}");
+            assert!(status.reason.contains("layout B") && status.reason.contains("specular occlusion"));
+        }
+    }
+
+    #[test]
     fn fake_without_texturemap_keeps_the_programs_declared_srgb_transfer() {
         use crate::components::{BoundTexture, TextureFrom};
         use super::super::gbuffer::{Reading, fixture};
@@ -2746,7 +2784,7 @@ mod tests {
             flags: MaterialFlags { blend_mode: 0, alpha_display_mode: 0, alpha_test_value: 0, booleans: [0;35] }, shaders: None });
         let sampled = rgba.map(|pixel| sampled(pixel, true).map(|v| v as f32));
         let output = fixture::execute(&shader, &[], &[(75, sampled[0]), (76, sampled[1])]);
-        let expected = Reading::new(shader.interface(), 1).unwrap().read(|target| {
+        let expected = Reading::new(PixelShader::interface(&shader), 1).unwrap().read(|target| {
             output.outputs.get(target).zip(output.output_masks.get(target)).map(|(v, m)| (v.map(f32::from_bits), *m))
         }).unwrap();
         let pass = LowerAnvilMaterial { normal_green: NormalGreen::Up, alpha: AlphaChoice::Opaque,
@@ -2804,7 +2842,7 @@ mod tests {
             }
         }
         let output=fixture::execute_with(&shader,&rows,&mut Coordinates);
-        let expected=Reading::new(shader.interface(),1).unwrap().read(|target|output.outputs.get(target)
+        let expected=Reading::new(PixelShader::interface(&shader),1).unwrap().read(|target|output.outputs.get(target)
             .zip(output.output_masks.get(target)).map(|(v,m)|(v.map(f32::from_bits),*m))).unwrap();
         let e=w.spawn();w.insert(e,material);
         LowerAnvilMaterial { normal_green:NormalGreen::Up,alpha:AlphaChoice::Opaque,shader_uv:ShaderUv::TexCoord,

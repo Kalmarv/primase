@@ -11,13 +11,6 @@ pub const LEGACY_GEOMETRY: &str = "drop-fromsoft-far, fromsoft-apply-rigid-skinn
     lower-fromsoft-geometry{pose=rigid,uv-tiling=apply,winding=normals,degenerates=drop,leave-out=sky+light-volume+shadow+billboard,blocker-cards=record,speedtree-frame=program}, \
     select-lod{form=finest}";
 
-/// The collision the earlier reader produced by itself, as explicit choices: map collision parts of hit filters 8 and
-/// 27, HitMtrl classes 22 and 36 as water, blockers (29) and class 40 left out; object bodies of motion type 2 and
-/// those classes left out, convex bodies tessellated as their offset planes and given the surface of their
-/// prototype's largest render area; both cropped 50 m around the read region. It runs before the geometry passes, which may despawn placements.
-pub const LEGACY_COLLISION: &str = "lower-fromsoft-collision{hit-filters=8+27,water=22+36,leave-out=29+40,reach=50}, \
-    lower-fromsoft-object-collision{resolution=high,convex=tessellate,leave-out=22+29+36+40,leave-out-motion=2,convex-surface=render,reach=50}";
-
 /// The FromSoft passes and `select-lod`.
 pub fn manager() -> PassManager {
     let mut registry = PassRegistry::new();

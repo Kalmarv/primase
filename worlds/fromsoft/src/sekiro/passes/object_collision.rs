@@ -15,6 +15,9 @@ use primase_core::{
 use primase_meshops::vector::Vec3;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// The approximation both collision lowerings state for a body of any motion type they lower.
+const STORED_POSE: &str = "bodies placed at their stored pose, their motion type not interpreted";
+
 /// The surface of the largest colliding render area of a prototype's model: the first level-0 face set of each mesh
 /// whose material is drawn as opaque or cutout (not a skipped class, not a blocker card), its triangles posed as the
 /// rigid lowering poses them, degenerate ones (doubled area squared at most 1e-14) not counted; `default` when that
@@ -384,10 +387,7 @@ impl Pass for LowerFromSoftObjectCollision {
                 let Some((triangles, materials)) = self.triangles(body, log)? else {
                     continue;
                 };
-                log.approximate(
-                    "bodies placed at their stored pose, their motion type not interpreted",
-                    1,
-                );
+                log.approximate(STORED_POSE, 1);
                 for (tri, material) in triangles.into_iter().zip(materials) {
                     let v = tri.map(|p| transform.apply(p));
                     if crop.is_some_and(|c| beyond(&v, c)) {
@@ -553,7 +553,7 @@ impl Pass for LowerFromSoftPartCollision {
                 let Some((triangles, materials)) = object.triangles(body, log)? else {
                     continue;
                 };
-                log.approximate("bodies placed at their stored pose, their motion type not interpreted", 1);
+                log.approximate(STORED_POSE, 1);
                 for (tri, material) in triangles.into_iter().zip(materials) {
                     let surface = surface_of(game, material, log);
                     push(&mut soup, tri, surfaces.index(surface).map_err(|e| e.to_string())?)?;

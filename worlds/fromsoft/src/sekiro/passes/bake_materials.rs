@@ -45,24 +45,36 @@ impl BakeFromSoftMaterials {
         self
     }
 }
+/// Whether `bake-fromsoft-materials` uses the caller's memo store (`cache=`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cache {
+    /// No storage is used and no filesystem work is done.
+    Off,
+    /// Each material's bake is looked up in, and stored to, the caller's `core.pass_memo` service.
+    On,
+}
+
+impl primase_core::pass::Choice for Cache {
+    const VALUES: &'static [(&'static str, Self)] = &[("off", Cache::Off), ("on", Cache::On)];
+}
+
 pub const BAKE_FROMSOFT_MATERIALS: PassSpec = PassSpec {
     name: "bake-fromsoft-materials",
     options: &[
         OptionSpec::required("max-size", "512", "pixels, 1 to 4096: largest baked edge"),
         OptionSpec::required("sample-time", "0", "seconds: static material frame"),
-        OptionSpec::optional("cache", "off", "on or off: use the caller's memo store", "off"),
+        OptionSpec::optional_choice::<Cache>(
+            "cache",
+            "use the caller's memo store for each material's bake",
+            "off: no storage is used",
+        ),
     ],
     make: |g| {
-        let mut pass = BakeFromSoftMaterials::new(
+        let pass = BakeFromSoftMaterials::new(
             PixelCap::parse("max-size", g.required("max-size"))?,
             Seconds::parse("sample-time", g.required("sample-time"))?,
         );
-        pass = pass.with_cache(match g.optional("cache").unwrap_or("off") {
-            "off" => false,
-            "on" => true,
-            value => return Err(format!("cache={value}: expected on or off")),
-        });
-        Ok(Box::new(pass))
+        Ok(Box::new(pass.with_cache(g.optional_choice::<Cache>("cache") == Some(Cache::On))))
     },
 };
 

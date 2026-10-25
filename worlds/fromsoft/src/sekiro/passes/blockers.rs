@@ -4,8 +4,7 @@ use crate::{flver, materials::Material};
 use primase_core::{Transform, world::Resource};
 use std::collections::BTreeMap;
 
-pub const RULE: &str = "non-skipped GXFlver_Col* shader with main albedo m[0-9][0-9]_black_a";
-
+/// An interior blocker card: a non-skipped `GXFlver_Col*` shader with main albedo `m[0-9][0-9]_black_a`.
 pub fn is_card(material: &Material) -> bool {
     material.skip.is_none()
         && matches_binding(

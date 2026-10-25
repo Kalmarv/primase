@@ -16,14 +16,6 @@ pub struct SkinVertex {
     pub weights: [f32; 4],
 }
 
-impl SkinVertex {
-    /// The rest pose: the whole weight on joint 0, whose palette matrix is the identity.
-    pub const REST: SkinVertex = SkinVertex {
-        joints: [0; 4],
-        weights: [1.0, 0.0, 0.0, 0.0],
-    };
-}
-
 /// Why a primitive is not skinned by its game program.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Refusal {

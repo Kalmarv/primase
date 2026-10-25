@@ -189,6 +189,14 @@ fn rgb(t: [f64; 4]) -> [f64; 3] {
     [t[0], t[1], t[2]]
 }
 
+/// Read the class actually packed by the unmodified existing program, not the class a test supplies as a role.
+fn assert_surface_class(template: &str, out: &[[f64; 4]]) {
+    let normal=out.get(1).expect("fixture G-buffer normal target");
+    let (_, class)=primase_core::shader::NormalEncoding::decode_octahedral_diamond(
+        [normal[0] as f32,normal[1] as f32,normal[2] as f32]);
+    assert_eq!(primase_anvil::passes::shading_class(template),Some(class),"{template}: program class {class}");
+}
+
 /// MAD_Tex1 (DataPC 61047, at 0x0B8247): t75 normal map, t76 diffuse, t77 mask; cb3[1..7] Metalness, Hue,
 /// Saturation, Luminosity, Roughness Offset, On Off AO, Vertex Color Intensity (0 or 1, the values the pass lowers);
 /// cb3[8..9] the UV rows. o0 = (albedo, roughness), o1.w metalness, o3.x AO.
@@ -215,6 +223,7 @@ fn mad_tex1() {
         let out = run(&s, &[(75, normal), (76, diffuse), (77, mask)], &cb3, colour);
         let albedo = tinted(rgb(diffuse), mask[0], hsl);
         let factor = |k: usize| if vci == 1.0 { colour[k] } else { 1.0 };
+        assert_surface_class("MAD_Tex1", &out);
         worst.rgb("albedo", out[0], [0, 1, 2].map(|k| albedo[k] * factor(k)));
         worst.see(
             "roughness",
@@ -239,6 +248,7 @@ fn mad_fake() {
     for _ in 0..40 {
         let (albedo, normal) = (r.texel(), r.texel());
         let out = run(&s, &[(75, albedo), (76, normal)], &[], r.texel());
+        assert_surface_class("MAD_Fake", &out);
         worst.rgb("albedo", out[0], rgb(albedo));
         worst.see("roughness", out[0][3], roughness(normal[3], Rough::Raw));
         worst.see("metalness", out[1][3], metalness(normal[2], None));
@@ -265,6 +275,7 @@ fn mad_decals1() {
             set(&mut cb3, row + 1, v);
         }
         let out = run(&s, &[(75, normal), (76, diffuse)], &cb3, r.texel());
+        assert_surface_class("MAD_Decals1", &out);
         worst.rgb("albedo", out[0], tinted(rgb(diffuse), 1.0, hsl));
         worst.see(
             "roughness",
@@ -296,6 +307,8 @@ fn mad_tex1_wind() {
         }
         uv_rows(&mut cb3, 19);
         let out = run(&s, &[(75, normal), (76, diffuse), (77, mask)], &cb3, r.texel());
+        assert_surface_class("MAD_Tex1_Wind", &out);
+        worst.see("translucency, not coverage",out[3][3],cb3[18][0]);
         worst.rgb("albedo", out[0], tinted(rgb(diffuse), mask[0], hsl));
         worst.see("roughness", out[0][3], roughness(normal[3], Rough::Raw));
         worst.see("metalness", out[1][3], metalness(normal[2], None));
@@ -306,7 +319,7 @@ fn mad_tex1_wind() {
 
 /// MAD_Bark (USNAT 16714, at 0x052F93; layout B): t75 wind noise, t76 normal map, t77 diffuse, t78 mask; cb3[15]
 /// Metalness (read by no pixel shader), [16] On Off AO, [17] Wind Debug (0), [18..19] the UV rows. o0 = (albedo,
-/// the normal map's alpha), o1.w AO times the vertex alpha: 1 here, the factor the pass leaves out.
+/// the normal map's alpha), o1.w AO times the random vertex alpha, o2.zw=(1,0).
 #[test]
 fn mad_bark() {
     let Some(s) = shader("DataPC_MAD_USNAT.forge", 16714, 0x05_2F93) else {
@@ -321,24 +334,27 @@ fn mad_bark() {
         set(&mut cb3, 16, ao_on);
         cb3[17] = [0.0; 4];
         uv_rows(&mut cb3, 18);
-        let colour = [r.next(), r.next(), r.next(), 1.0];
+        let colour = r.texel();
         let out = run(
             &s,
             &[(75, noise), (76, normal), (77, diffuse), (78, mask)],
             &cb3,
             colour,
         );
+        assert_surface_class("MAD_Bark", &out);
         worst.rgb("albedo", out[0], rgb(diffuse));
         worst.see("roughness", out[0][3], roughness(normal[3], Rough::Raw));
-        worst.see("occlusion", out[1][3], occlusion(mask[2], ao_on));
+        worst.see("occlusion including vertex alpha", out[1][3], occlusion(mask[2], ao_on)*colour[3]);
+        worst.see("specular occlusion",out[2][2],1.0);
+        worst.see("translucency",out[2][3],0.0);
     }
     worst.check("MAD_Bark");
 }
 
 /// MAD_Tex1_Leaves (USNAT 16742, at 0x08E817; layout B): t75 wind noise, t76 normal map, t77 diffuse, t78 Mask 1;
 /// cb3[22] Saturate, [23] Hue, [25] Vertex AO, [26] Color Tint Debug (0: the tint everywhere), [27] On Off AO, [28]
-/// Luminosity, [32] Wind Debug (0), [33..34] the UV rows. Vertex AO at least 1, so `sat(COLOR0.a + Vertex AO)` is 1
-/// whatever the vertex alpha (the pass's claim); o1.w's vertex-alpha factor, which the pass leaves out, at alpha 1.
+/// Luminosity, [32] Wind Debug (0), [33..34] the UV rows. Vary Vertex AO across the saturation threshold and check
+/// vertex-alpha AO, mask-blue specular occlusion and mask-red translucency as well as the base colour.
 #[test]
 fn mad_tex1_leaves() {
     let Some(s) = shader("DataPC_MAD_USNAT.forge", 16742, 0x08_E817) else {
@@ -349,7 +365,7 @@ fn mad_tex1_leaves() {
     for case in 0..40 {
         let (noise, normal, diffuse, mask) = (r.texel(), r.texel(), r.texel(), r.texel());
         let (saturation, hue, luminosity) = (r.range(-0.5, 0.5), r.range(-0.5, 0.5), r.range(-0.5, 0.5));
-        let (vertex_ao, ao_on) = (r.range(1.0, 2.0), r.next());
+        let (vertex_ao, ao_on) = (r.range(-0.5, 1.5), r.next());
         let mut cb3 = r.decoys(35);
         for (row, v) in [
             (22, saturation),
@@ -371,11 +387,13 @@ fn mad_tex1_leaves() {
             &cb3,
             [0.0, 0.0, 0.0, alpha],
         );
-        worst.rgb("albedo", out[0], tint(rgb(diffuse), hue, saturation, luminosity));
+        assert_surface_class("MAD_Tex1_Leaves", &out);
+        worst.rgb("albedo including vertex AO", out[0], tint(rgb(diffuse), hue, saturation, luminosity)
+            .map(|v|v*sat(alpha+vertex_ao)));
         worst.see("roughness (mask green)", out[0][3], mask[1]);
-        if alpha == 1.0 {
-            worst.see("occlusion", out[1][3], occlusion(mask[2], ao_on));
-        }
+        worst.see("occlusion including vertex alpha", out[1][3], occlusion(mask[2], ao_on)*alpha);
+        worst.see("specular occlusion",out[2][2],mask[2]*cb3[21][0]);
+        worst.see("translucency",out[2][3],mask[0]*cb3[31][0]);
     }
     worst.check("MAD_Tex1_Leaves");
 }
@@ -390,10 +408,11 @@ fn mad_clutters_grass() {
     };
     let mut r = Random(0x0025_6868_0005_4B67);
     let mut worst = Worst::default();
-    for _ in 0..40 {
+    for case in 0..40 {
         let (mask, alpha, diffuse, normal, noise) = (r.texel(), r.texel(), r.texel(), r.texel(), r.texel());
         let ao_on = r.next();
         let mut cb3 = r.decoys(18);
+        if case%2==0 {set(&mut cb3,11,0.0);}
         set(&mut cb3, 15, 0.0);
         set(&mut cb3, 16, ao_on);
         let out = run(
@@ -402,9 +421,12 @@ fn mad_clutters_grass() {
             &cb3,
             r.texel(),
         );
+        assert_surface_class("MAD_Clutters_Grass", &out);
         worst.rgb("albedo", out[0], rgb(diffuse));
         worst.see("roughness", out[0][3], roughness(normal[3], Rough::Raw));
         worst.see("occlusion", out[1][3], occlusion(mask[2], ao_on));
+        worst.see("specular occlusion including zero",out[2][2],cb3[11][0]);
+        worst.see("translucency",out[2][3],mask[0]*cb3[10][0]);
     }
     worst.check("MAD_Clutters_Grass");
 }
@@ -450,6 +472,7 @@ fn mad_tex2() {
         let heights = [d_a[3], d_b[3], 0.0, 0.0].map(|x| x as f32);
         let k = height_blend(mapped, heights, 2, contrast as f32).map(f64::from);
         let (a, b) = (tinted(rgb(d_a), m_a[0], hsl_a), tinted(rgb(d_b), m_b[0], hsl_b));
+        assert_surface_class("MAD_Tex2", &out);
         worst.rgb("albedo", out[0], [0, 1, 2].map(|i| k[0] * a[i] + k[1] * b[i]));
         let (ra, rb) = (
             roughness(n_a[3], Rough::Tex2(off_a)),
@@ -482,6 +505,7 @@ fn mad_fake_sediment() {
         cb3[1] = [0.0; 4];
         cb3[2] = [0.0; 4];
         let out = run(&s, &[(75, albedo), (76, normal)], &cb3, r.texel());
+        assert_surface_class("MAD_Fake_Sediment", &out);
         worst.rgb("albedo", out[0], rgb(albedo));
         worst.see("roughness", out[0][3], roughness(normal[3], Rough::Raw));
         worst.see("metalness", out[1][3], metalness(normal[2], None));
@@ -532,6 +556,7 @@ fn mad_tex1_terrain_blend() {
         );
         let albedo = tinted(rgb(diffuse), mask[0], hsl);
         let factor = |k: usize| if vci == 1.0 { colour[k] } else { 1.0 };
+        assert_surface_class("MAD_Tex1_TerrainBlend", &out);
         worst.rgb("albedo", out[0], [0, 1, 2].map(|k| albedo[k] * factor(k)));
         worst.see(
             "roughness",
@@ -577,6 +602,7 @@ fn emissive(s: &ProgramShader, seed: u64, uv: usize, lane: usize, template: &str
             colour,
         );
         let tinted = tinted(rgb(albedo), 1.0, hsl);
+        assert_surface_class(template,&out);
         let factor = |k: usize| if vci == 1.0 { colour[k] } else { 1.0 };
         worst.rgb("albedo", out[0], [0, 1, 2].map(|k| tinted[k] * factor(k)));
         worst.see("roughness", out[0][3], roughness(normal[3], Rough::Raw));
@@ -584,6 +610,11 @@ fn emissive(s: &ProgramShader, seed: u64, uv: usize, lane: usize, template: &str
         let e = emission(mask[lane], scale, exposure);
         // relative: the emission reaches 200
         worst.see("emission (relative)", out[2][2] / e.max(1.0), e / e.max(1.0));
+        for k in 0..3 {
+            // Surface::Emission::OfAlbedo uses B including RGB vertex colour; no alpha term enters emitted light.
+            worst.see("emitted colour including vertex RGB (relative)",out[0][k]*out[2][2]/e.max(1.0),
+                tinted[k]*factor(k)*e/e.max(1.0));
+        }
     }
     worst.check(template);
 }
@@ -632,6 +663,7 @@ fn mad_tex1_graffiti_mode() {
         cb3[8][3] = 0.0;
         uv_rows(&mut cb3, 11);
         let out = run(&s, &[(75, mask), (76, normal), (77, diffuse)], &cb3, r.texel());
+        assert_surface_class("MAD_Tex1_Graffiti_Mode", &out);
         worst.rgb("albedo", out[0], tinted(rgb(diffuse), mask[0], hsl));
         worst.see("roughness", out[0][3], roughness(normal[3], Rough::Raw));
         worst.see("metalness", out[1][3], metalness(normal[2], None));
@@ -687,6 +719,7 @@ fn mad_tex1_team_coloured() {
         let out = run(&s, &[(75, normal), (76, diffuse), (77, mask)], &cb3, colour);
         let albedo = tinted(rgb(diffuse), mask[0], hsl);
         let factor = |k: usize| if vci == 1.0 { colour[k] } else { 1.0 };
+        assert_surface_class("MAD_Tex1_TeamColoured", &out);
         worst.rgb("albedo", out[0], [0, 1, 2].map(|k| albedo[k] * factor(k)));
         worst.see(
             "roughness",
@@ -737,6 +770,7 @@ fn mad_tex2_tint_b() {
         let heights = [d_a[3], d_b[3], 0.0, 0.0].map(|x| x as f32);
         let k = height_blend(mapped, heights, 2, contrast as f32).map(f64::from);
         let (a, b) = (tinted(rgb(d_a), m_a[0], hsl_a), tinted(rgb(d_b), m_b[0], neutral));
+        assert_surface_class("MAD_Tex2_TintBFromShaderConstants", &out);
         worst.rgb("albedo", out[0], [0, 1, 2].map(|i| k[0] * a[i] + k[1] * b[i]));
         let (ra, rb) = (
             roughness(n_a[3], Rough::Tex2(off_a)),
@@ -794,6 +828,7 @@ fn mad_grounds() {
             (80, blend_mask),
         ];
         let out = run(&s, &textures, &cb3, [1.0; 4]);
+        assert_surface_class("MAD_Grounds", &out);
         worst.rgb("albedo", out[0], tinted(rgb(d_a), 1.0, hsl));
         worst.see("roughness", out[0][3], roughness(n_a[3], Rough::Raw));
         worst.see("metalness", out[1][3], metalness(n_a[2], None));
@@ -841,6 +876,7 @@ fn mad_tex1_graffiti_mode_decal_fx() {
             r.texel(),
             &engine,
         );
+        assert_surface_class("MAD_Tex1_Graffiti_Mode_DecalFX", &out);
         worst.rgb("albedo", out[0], [0, 1, 2].map(|c| team[c].powf(2.2)));
         // the lowering's emission: EmissiveMult (cb3[7]) g^2, the exposure t23 at 1, the team colour's alpha 1
         worst.see("emission", out[2][2], cb3[7][0] * mask[1] * mask[1]);
@@ -921,6 +957,7 @@ fn mad_tex1_skinning_supported() {
         let out = run(&s, &[(75, normal), (76, diffuse), (77, mask)], &cb3, colour);
         let albedo = tinted(rgb(diffuse), mask[0], hsl);
         let factor = |k: usize| if vci == 1.0 { colour[k] } else { 1.0 };
+        assert_surface_class("MAD_Tex1_SkinningSupported", &out);
         worst.rgb("albedo", out[0], [0, 1, 2].map(|k| albedo[k] * factor(k)));
         worst.see(
             "roughness",
@@ -959,6 +996,7 @@ fn mad_decals1_graffiti() {
             (2, 11, [0.0, 0.0, 0.0, 1.0]),
         ];
         let out = run_with(&s, &[(75, normal), (76, diffuse)], &cb3, r.texel(), &engine);
+        assert_surface_class("MAD_Decals1_Graffiti", &out);
         worst.rgb("albedo", out[0], tinted(rgb(diffuse), 1.0, hsl));
         worst.see(
             "roughness",
@@ -1015,6 +1053,7 @@ fn mad_tex2_graffiti_mode() {
         let heights = [d_a[3], d_b[3], 0.0, 0.0].map(|x| x as f32);
         let k = height_blend(mapped, heights, 2, contrast as f32).map(f64::from);
         let (a, b) = (tinted(rgb(d_a), m_a[0], hsl_a), tinted(rgb(d_b), m_b[0], hsl_b));
+        assert_surface_class("MAD_Tex2_Graffiti_Mode", &out);
         worst.rgb("albedo", out[0], [0, 1, 2].map(|i| k[0] * a[i] + k[1] * b[i]));
         worst.see(
             "roughness",
@@ -1044,6 +1083,7 @@ fn mad_tex1_screen() {
     for _ in 0..40 {
         let screen = r.texel();
         let out = run(&s, &[(75, screen), (23, [1.0; 4])], &r.decoys(4), r.texel());
+        assert_surface_class("MAD_Tex1_Screen", &out);
         worst.rgb(
             "albedo",
             out[0],
@@ -1083,6 +1123,7 @@ fn mad_screens_black() {
         let engine = [(0, 0, [r.range(0.0, 1000.0), 0.0, 0.0, 0.0])];
         let textures = [(75, r.texel()), (76, r.texel()), (77, r.texel()), (23, [1.0; 4])];
         let out = run_with(&s, &textures, &cb3, r.texel(), &engine);
+        assert_surface_class("MAD_Screens", &out);
         worst.rgb("albedo", out[0], [0.0; 3]);
         worst.see("roughness", out[0][3], 1.0);
         worst.see("metalness", out[1][3], 0.0);
@@ -1109,6 +1150,7 @@ fn mad_tex1_fake_river() {
         let colour = r.texel();
         let out = run(&s, &[(75, normal), (76, foam)], &cb3, colour);
         let albedo = primase_anvil::passes::fake_river_albedo(foam[3], colour[0]);
+        assert_surface_class("MAD_Tex1_FakeRiver", &out);
         worst.rgb("albedo", out[0], albedo);
         worst.see("roughness", out[0][3], value);
         worst.see("metalness", out[1][3], value);
@@ -1202,6 +1244,8 @@ fn mad_outskirt_maps_by_the_world_position() {
             .collect();
         let views: Vec<(u32, &[[u32; 4]])> = buffers.iter().map(|(s, v)| (*s, v.as_slice())).collect();
         let out = s.execute(&inputs, &views, &mut Coordinates).expect("runs");
+        let values=out.outputs.iter().map(|v|v.map(float)).collect::<Vec<_>>();
+        assert_surface_class("MAD_Outskirt",&values);
         let albedo = float(out.outputs[0][0]);
         let albedo_v = float(out.outputs[0][1]);
         // the point through the placement (source frame), in core's frame, through the lowering's rows

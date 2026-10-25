@@ -204,8 +204,8 @@ pub fn gbuffer_vertex_key(pixel: u32, layout: u32) -> u32 {
 /// name; `None` for any other.
 pub fn shading_class(template: &str) -> Option<u8> {
     match template {
-        "MAD_Tex1_TerrainBlend" => Some(3),
-        "MAD_Clutters_Grass" => Some(4),
+        "MAD_Tex1_TerrainBlend" | "MAD_Outskirt" => Some(3),
+        "MAD_Clutters_Grass" | "SHD_Nat_Veg_Grass_AO" => Some(4),
         "MAD_Tex1_Leaves" | "MAD_Bark" | "MAD_Tex1_Rocks" | "MAD_FakeForest" => Some(5),
         "MAD_Fake"
         | "MAD_Fake_Sediment"
@@ -221,7 +221,28 @@ pub fn shading_class(template: &str) -> Option<u8> {
         | "MAD_Tex1_UniqueNormalGrad_Triplanar"
         | "MAD_Tex1_UniqueNormal_DiffuseBlend"
         | "MAD_Tex1_Graffiti_Monster"
-        | "MAD_Tex1_Graffiti_Mode" => Some(1),
+        | "MAD_Tex1_Graffiti_Mode"
+        // Saved ps_400000 disassemblies: bfi inserts the sign into bit 0 of literal 8, then the
+        // two normal high bits add only 2 and 4 before utof and the o1.xyz UNORM store. This is
+        // class 1 regardless of material constants (material-spec §27 and the drift evidence table).
+        | "MAD_Tex1_SkinningSupported"
+        | "MAD_Tex1_TeamColoured"
+        | "MAD_Tex2"
+        | "MAD_Tex2_TintBFromShaderConstants"
+        | "MAD_Tex2_Graffiti_Mode"
+        | "MAD_Grounds"
+        | "MAD_Road"
+        | "MAD_Hero_Ice"
+        | "MAD_IceBrick"
+        | "MAD_Tex1_UniqueNormalGradient"
+        | "MAD_Tex1_Screen"
+        | "MAD_Screens"
+        | "MAD_Screens_Simple"
+        | "MAD_SHD_UNLIT_UndergroundBox"
+        | "MAD_Tex1_FakeRiver"
+        // Same pack in the saved cut-out permutations ps_404004 / ps_404000 respectively.
+        | "MAD_Decals1_Graffiti"
+        | "MAD_Tex1_Graffiti_Mode_DecalFX" => Some(1),
         t if t.starts_with("MAD_CHR_") => Some(1),
         _ => None,
     }
@@ -322,7 +343,7 @@ pub fn material_constants(
                         f if f.len() == 8 => {
                             match super::material::static_uv_rows(f) {
                                 Ok(rows) => ConstantRole::Material(bits(rows.as_flattened())),
-                                Err(why) => unknown(why, counts),
+                                Err(why) => unknown(&super::material::uv_motion_notice(f).unwrap_or_else(||why.to_owned()), counts),
                             }
                         }
                         _ => unknown("a UV transform property that is not eight floats", counts),
@@ -603,7 +624,7 @@ impl Textures {
     /// The entity to bind for the TextureMap entity `e`: itself where its colour space is the sRGB-ness its
     /// TextureMap states, else a copy in that colour space. `None` where `e` holds no `core.texture`.
     fn entity(&mut self, world: &mut World, e: Entity) -> Option<Entity> {
-        let srgb = world.get::<AnvilTextureMap>(e).is_some_and(|t| t.field_25 == 1);
+        let srgb = super::material::srgb(world, e);
         let wanted = if srgb {
             ColorSpace::Srgb
         } else {
@@ -1054,6 +1075,18 @@ mod tests {
     use super::*;
     use primase_core::frame::SourceFrame;
 
+    #[test]
+    fn program_texture_binding_without_texturemap_keeps_the_declared_transfer() {
+        use primase_core::{TexFormat,TexRole};
+        let mut world=World::new();let e=world.spawn();
+        world.insert(e,Texture{width:1,height:1,format:TexFormat::Rgba8Unorm,levels:vec![vec![128,64,32,255]],
+            color_space:ColorSpace::Srgb,role:TexRole::Color,normal:None});
+        let mut bindings=Textures{spawned:BTreeMap::new()};
+        assert_eq!(bindings.entity(&mut world,e),Some(e));
+        assert_eq!(world.get::<Texture>(e).unwrap().color_space,ColorSpace::Srgb);
+        assert!(bindings.spawned.is_empty(),"no linear duplicate of an already stated sRGB texture");
+    }
+
     pub(super) fn material(
         bindings: Vec<(u32, MaterialBinding)>,
         values: Vec<(u32, MaterialValue)>,
@@ -1153,6 +1186,10 @@ mod tests {
         ] {
             assert!(matches!(transform(moving), ConstantRole::Unknown { .. }));
         }
+        let ConstantRole::Unknown{why}=transform(vec![1.0,1.0,0.0,0.0,0.25,-0.5,0.0,0.125]) else {
+            panic!("a moving property must retain its rate-bearing refusal");
+        };
+        assert!(why.contains("TranslationSpeedU=0.25") && why.contains("RotationSpeed=0.125"),"{why}");
     }
 
     #[test]
@@ -1308,7 +1345,9 @@ pub(super) fn output_bindings(interface: &Interface, class: Option<u8>, opaque: 
                     }
                     _ => {
                         role(0b0100, OutputRole::SpecularOcclusion);
-                        role(0b1000, OutputRole::Translucency);
+                        role(0b1000, if opaque { OutputRole::Translucency } else {
+                            OutputRole::unknown("blended layout-B target 2.w: coverage replaces the opaque translucency (Clutters_Grass writes opacity); no transmission inferred")
+                        });
                     }
                 }
             }
@@ -1702,6 +1741,9 @@ mod key_tests {
 
         let (blended, _) = read(Some(5), false);
         assert_eq!(blended.roughness, None);
+        let roles=output_bindings(&program.interface,Some(4),false);
+        assert!(!roles.iter().any(|o|o.role==OutputRole::Translucency),
+            "blended foliage coverage must not be lit as opaque transmission");
     }
 
     /// Only the lanes a program reads of the engine's buffers are bound, each with the role the notes establish or an

@@ -66,8 +66,7 @@ fn channel_material(
         );
         material.metallic_roughness_texture = Some(TextureRef::new(orm));
         material.roughness = 1.;
-        log.approximate("per-light gloss correction omitted", 1);
-        log.approximate("roughness quantized to UNORM8", 1);
+        pbr::note_gloss_packing(log);
     }
     if let Some(emission) = &image.emissive {
         let (pixels, strength, zeroed) = pbr::emissive_from_linear(size, size, emission)?;
