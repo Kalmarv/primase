@@ -244,7 +244,7 @@ pub fn influences(p: &Primitive, how: Influences, rule: WeightRule) -> Result<Ve
 
 /// `v` (primitive `p`'s vertices, perhaps already morphed) skinned by `palette` under a pose giving each joint's
 /// transform in the skeleton's space (`model`, from [`crate::pose::model_transforms`]). A vertex with no weight has the
-/// zero matrix and lands at the origin, as its weights state (Elden Ring's vertex programs do the same with the four
+/// zero matrix and lands at the origin, as its weights state (the source's vertex programs do the same with the four
 /// zero weights of its few such meshes: their sum is floored at 0.001 before it divides the weights, so none is left
 /// to blend); [`skin_counted`] says how many.
 pub fn skin(
@@ -643,7 +643,7 @@ mod tests {
     }
 
     /// A NaN weight is refused by name (it compares false against every bound), under every rule; a vertex with no
-    /// weight is skinned by its weights as stored, the zero matrix, and counted (Elden Ring's c3000 holds 743 such
+    /// weight is skinned by its weights as stored, the zero matrix, and counted (the source's c3000 holds 743 such
     /// vertices in one mesh, whose vertex programs collapse them the same way); under `EngineNormalizes` its sum has
     /// nothing to divide by and stays refused.
     #[test]

@@ -14,7 +14,7 @@ use crate::{
 };
 
 /// A prototype's levels of detail (`core.lods`), on the prototype. Its own mesh is one form, at level `detail` (0 the
-/// finest, larger coarser: GTA's 0 high to 3 very low); `forms` are its other forms, as the source lists them
+/// finest, larger coarser, 0 high to 3 very low in one source); `forms` are its other forms, as the source lists them
 /// (finest first by convention; nothing depends on it).
 ///
 /// A form is an entity of its own that holds everything the prototype holds for its mesh: `core.mesh_file` or
@@ -25,7 +25,7 @@ use crate::{
 /// or source too, and [`SelectLod`] leaves those behind.
 ///
 /// `default` is the form the source itself takes: 0 the prototype's own mesh, `k` `forms[k - 1]`; `None` when the
-/// source authors none (GTA switches between its levels by distance).
+/// source authors none (a source switches between its levels by distance).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Lods {
     pub detail: u8,
@@ -46,8 +46,8 @@ impl Lods {
         std::iter::once(self.detail).chain(self.forms.iter().map(|f| f.detail))
     }
 
-    /// The form `choice` takes, as an index into [own mesh, forms...] (the reference skate writer's rule for
-    /// [`LodChoice::AtMost`]); [`LodChoice::Default`] without an authored default takes the finest.
+    /// The form `choice` takes, as an index into [own mesh, forms...] ([`LodChoice::AtMost`] takes the coarsest form
+    /// whose level is `n` or finer); [`LodChoice::Default`] without an authored default takes the finest.
     pub fn choose(&self, choice: LodChoice) -> usize {
         match choice {
             LodChoice::Finest => 0,

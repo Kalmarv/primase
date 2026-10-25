@@ -42,46 +42,30 @@ use crate::sekiro::character_data::ClipEvents;
 use crate::tae::{self, Tae};
 use crate::{Archive, Binder, Result, dcx::Decoder};
 
-/// A deferred animation member. Duration is not in a BND member header: absent here until HKX is inspected.
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
-pub struct ClipSource {
-    pub key: String,
-    pub name: String,
-    pub binder: String,
-    pub member: String,
-    pub duration: Option<f64>,
-}
-
-/// Complete name-only listing, in the same first-name-wins binder order as the full animation reader.
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
-pub struct ClipListing {
-    pub character: String,
-    pub clips: Vec<ClipSource>,
-    pub companions: Vec<String>,
-}
-impl primase_core::Resource for ClipListing {
-    const NAME: &'static str = "fromsoft.clip_listing";
-    fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, primase_core::json::JsonError> {
-        primase_core::json::to_value(self).map(Some)
-    }
-}
+pub use crate::components::clip_source::{ClipListing, ClipSource};
 
 fn list_members(out: &mut ClipListing, set: &str, binder: &Binder) {
-    for file in &binder.files {
+    for (member_index,file) in binder.files.iter().enumerate() {
         let Some(member) = &file.name else { continue; };
         let name = stem(member);
-        if file_name(member).ends_with(".hkx") && name != "skeleton"
-            && !out.clips.iter().any(|c| c.name == name)
-        {
-            out.clips.push(ClipSource { key: format!("{}/{set}/{name}", out.character), name,
-                binder: binder_path(set), member: member.clone(), duration: None });
+        if file_name(member).ends_with(".hkx") && name != "skeleton" {
+            let binder=binder_path(set);
+            let key=serde_json::json!({"character":out.character,"binder":binder,"member":member,"index":member_index}).to_string();
+            out.clips.push(ClipSource { character:out.character.clone(), key, name,
+                binder, member: member.clone(), member_index, duration: None });
         }
     }
 }
 
 /// List all clip identities without parsing any HKX container or spline. Companion binders are visited
 /// sequentially rather than retained together. Unsupported animation encodings remain listed until chosen.
+/// Transitional API: list_clips_into_world replaces it; this wrapper is removed in phase 3
+/// when the lab consumes clip plan entities instead of fromsoft.clip_listing.
 pub fn list_clips(archive: &Archive, decoder: &Decoder<'_>, id: &str) -> Result<Option<ClipListing>> {
+    discover_clips(archive,decoder,id)
+}
+
+fn discover_clips(archive: &Archive, decoder: &Decoder<'_>, id: &str) -> Result<Option<ClipListing>> {
     let path = binder_path(id);
     if !archive.contains(&path) { return Ok(None); }
     let main = Binder::read(&archive.read(&path, decoder)?, decoder)?;
@@ -96,13 +80,117 @@ pub fn list_clips(archive: &Archive, decoder: &Decoder<'_>, id: &str) -> Result<
     Ok(Some(out))
 }
 
-/// Preserve only the requested clip and its metadata dependencies. Other HKX payloads never reach hold/container.
-fn keep_clip_members(binder: &mut Binder, clip: Option<&str>) {
-    binder.files.retain(|f| f.name.as_deref().is_some_and(|name| {
-        let file = file_name(name);
-        file.ends_with(".compendium") || file.ends_with(".tae")
-            || (file.ends_with(".hkx") && (stem(name) == "skeleton" || clip.is_some_and(|clip| stem(name) == clip)))
-    }));
+/// Publish one plan entity per listed clip, referenced by an animations asset.
+/// No HKX tracks are decoded. The entity, key and descriptor survive Reader::load.
+pub fn list_clips_into_world(archive:&Archive,decoder:&Decoder<'_>,id:&str,world:&mut World)->Result<Option<Entity>> {
+    let Some(listing)=discover_clips(archive,decoder,id)? else {return Ok(None)};
+    publish_listing(&listing,world).map(Some)
+}
+
+fn publish_listing(listing:&ClipListing,world:&mut World)->Result<Entity> {
+    // Validate all known lengths before spawning any entity.
+    for clip in &listing.clips {
+        if clip.duration.is_some_and(|d|!d.is_finite() || d<0. || !(d as f32).is_finite()) {
+            return Err(crate::invalid("FromSoftware clip listing",0,format!("{}: unrepresentable length",clip.key)));
+        }
+    }
+    let mut members=Vec::new();
+    for clip in &listing.clips {
+        let entity=world.spawn();
+        world.insert(entity,primase_core::ClipKey(clip.key.clone()));
+        world.insert(entity,Name(clip.name.clone()));
+        world.insert(entity,clip.clone());
+        world.insert(entity,Provenance::new(Origin::new(Some(&clip.binder),&clip.member,None)));
+        if let Some(duration)=clip.duration {world.insert(entity,primase_core::ClipLength(duration as f32));}
+        members.push((entity,primase_core::Role::Clip));
+    }
+    let root=world.spawn();world.insert(root,Name(format!("{} animations",listing.character)));
+    world.insert(root,primase_core::Asset{members});Ok(root)
+}
+
+/// Reader-private archive/binder state. Neither bytes nor executable decoder text enter
+/// the World. A listed binder is opened once for this reader session; load parses only
+/// the chosen clip and the skeleton, compendium and event members it needs.
+#[derive(Debug, Default)]
+pub(super) struct ClipReader {
+    archive: Option<Archive>,
+    binders: BTreeMap<String, Binder>,
+    listings: BTreeMap<String, ClipListing>,
+}
+impl ClipReader {
+    fn binder(&mut self,install:&crate::Install,decoder:&Decoder<'_>,path:&str)->Result<()> {
+        if self.binders.contains_key(path) {return Ok(())}
+        if self.archive.is_none() {self.archive=Some(install.open()?);}
+        let archive=self.archive.as_ref().expect("archive opened above");
+        let binder=Binder::read(&archive.read(path,decoder)?,decoder)?;
+        self.binders.insert(path.into(),binder);Ok(())
+    }
+    pub(super) fn listing(&mut self,install:&crate::Install,decoder:&Decoder<'_>,id:&str)->Result<Option<ClipListing>> {
+        if let Some(listing)=self.listings.get(id) {return Ok(Some(listing.clone()))}
+        if self.archive.is_none() {self.archive=Some(install.open()?);}
+        let path=binder_path(id);
+        if !self.archive.as_ref().expect("archive opened above").contains(&path) {return Ok(None)}
+        self.binder(install,decoder,&path)?;
+        let main=&self.binders[&path];
+        let named=companions(self.archive.as_ref().expect("archive opened above"),id,main);
+        let mut listing=ClipListing{character:id.into(),clips:vec![],companions:named.clone()};
+        list_members(&mut listing,id,main);
+        for set in named {
+            let path=binder_path(&set);self.binder(install,decoder,&path)?;
+            list_members(&mut listing,&set,&self.binders[&path]);
+        }
+        self.listings.insert(id.into(),listing.clone());Ok(Some(listing))
+    }
+    pub(super) fn plan(&mut self,install:&crate::Install,decoder:&Decoder<'_>,id:&str,
+        chosen:Option<&[String]>,world:&mut World)->Result<Option<Entity>> {
+        let Some(mut listing)=self.listing(install,decoder,id)? else {return Ok(None)};
+        if let Some(chosen)=chosen {
+            for name in chosen {
+                select_source(&listing,name)?;
+            }
+            listing.clips.retain(|clip|chosen.iter().any(|name|clip.name==*name || clip.key==*name));
+        }
+        publish_listing(&listing,world).map(Some)
+    }
+    pub(super) fn load(&mut self,install:&crate::Install,decoder:&Decoder<'_>,source:&ClipSource,
+        target:Entity,world:&mut World)->Result<AnimationReport> {
+        let listing=self.listing(install,decoder,&source.character)?
+            .ok_or_else(||crate::invalid("FromSoftware animation",0,"listed animation binder is absent"))?;
+        if !listing.clips.contains(source) {
+            return Err(crate::invalid("FromSoftware animation",0,format!("{}: descriptor differs from the authored listing",source.key)));
+        }
+        let main_path=binder_path(&source.character);
+        let selected=|binder:&Binder,clip:Option<usize>| {
+            Binder{version:binder.version,format:binder.format,files:binder.files.iter()
+                .enumerate().filter(|(index,file)|file.name.as_deref().is_some_and(|name| {
+                    let leaf=file_name(name);
+                    leaf.ends_with(".compendium") || leaf.ends_with(".tae") ||
+                        (leaf.ends_with(".hkx") && (stem(name)=="skeleton" || clip==Some(*index)))
+                })).map(|(_,file)|file.clone()).collect()}
+        };
+        let mut report=AnimationReport::default();
+        let main=selected(&self.binders[&main_path],(source.binder==main_path).then_some(source.member_index));
+        let mut held=vec![hold(&main,&format!("{}.anibnd",source.character),decoder,&[],&mut report)?];
+        if source.binder!=main_path {
+            let binder=selected(&self.binders[&source.binder],Some(source.member_index));
+            held.push(hold(&binder,&source.binder,decoder,&[],&mut report)?);
+            report.companions.push(source.binder.clone());
+        }
+        let result=insert(held,&source.character,report,install.game,world)?;
+        let [decoded]=result.animations.as_slice() else {
+            return Err(crate::invalid("FromSoftware animation",0,format!("{}: expected one readable clip, got {}; {:?}",
+                source.key,result.animations.len(),result.report.refused)));
+        };
+        // Clip dependencies refer to the skeleton, never to their own animation entity.
+        // Moving the raw components preserves the plan's key and source descriptor.
+        if !world.move_components(*decoded,target).map_err(|why|crate::invalid("FromSoftware animation",0,why))? {
+            return Err(crate::invalid("FromSoftware animation",0,"clip plan entity disappeared during load"));
+        }
+        // Keep the same fully qualified binder/member provenance used by the listing,
+        // including companions; grouping never needs to parse an opaque key.
+        world.insert(target,Provenance::new(Origin::new(Some(&source.binder),&source.member,None)));
+        Ok(result.report)
+    }
 }
 
 /// Read the main binder's skeleton and compendium only, for a light animation source. No model, texture, TAE or
@@ -117,47 +205,50 @@ pub fn read_clip_skeleton(archive: &Archive, decoder: &Decoder<'_>, id: &str, w:
     let held = hold(&binder, &format!("{id}.anibnd"), decoder, &[], &mut report)?;
     if held.skeletons.is_empty() { return Err(crate::invalid("FromSoftware animation skeleton", 0,
         format!("{id} main binder has no readable skeleton: {:?}", report.refused))); }
-    insert(vec![held], id, report, w).map(Some)
+    insert(vec![held], id, report, archive.game(), w).map(Some)
 }
 
 /// Decode only one listed key plus skeleton/compendium/events. The key must name the main binder or an authored
 /// companion; it cannot open an arbitrary archive path. No model, texture or unrelated animation is decoded.
 pub fn decode_clip(archive: &Archive, decoder: &Decoder<'_>, id: &str, key: &str, w: &mut World) -> Result<Option<Animations>> {
-    let Some((prefix, name)) = key.rsplit_once('/') else {
-        return Err(crate::invalid("FromSoftware animation", 0, "expected a listed character/binder/clip key"));
+    let Some(listing)=discover_clips(archive,decoder,id)? else {return Ok(None)};
+    let source=select_source(&listing,key)?;
+    let path=binder_path(id);
+    let mut main=Binder::read(&archive.read(&path,decoder)?,decoder)?;
+    let mut selected=if source.binder==path {None} else {
+        Some(Binder::read(&archive.read(&source.binder,decoder)?,decoder)?)
     };
-    let Some((character, set)) = prefix.split_once('/') else {
-        return Err(crate::invalid("FromSoftware animation", 0, "expected a listed character/binder/clip key"));
-    };
-    if character != id || set.contains('/') || name.is_empty() {
-        return Err(crate::invalid("FromSoftware animation", 0, "clip key belongs to another character or binder"));
+    keep_exact_member(&mut main,(source.binder==path).then_some(source.member_index));
+    let mut report=AnimationReport::default();
+    let mut held=vec![hold(&main,&format!("{id}.anibnd"),decoder,&[],&mut report)?];
+    if let Some(binder)=&mut selected {
+        keep_exact_member(binder,Some(source.member_index));
+        held.push(hold(binder,&source.binder,decoder,&[],&mut report)?);
+        report.companions.push(source.binder.clone());
     }
-    let path = binder_path(id);
-    if !archive.contains(&path) { return Ok(None); }
-    let mut main = Binder::read(&archive.read(&path, decoder)?, decoder)?;
-    let named = companions(archive, id, &main);
-    if set != id && !named.iter().any(|n| n == set) {
-        return Err(crate::invalid("FromSoftware animation", 0, "clip key does not name an authored companion"));
+    insert(held,id,report,archive.game(),w).map(Some)
+}
+
+fn select_source<'a>(listing:&'a ClipListing,key_or_name:&str)->Result<&'a ClipSource> {
+    if let Some(source)=listing.clips.iter().find(|clip|clip.key==key_or_name) {return Ok(source)}
+    let matches:Vec<_>=listing.clips.iter().filter(|clip|clip.name==key_or_name).collect();
+    match matches.as_slice() {
+        [source]=>Ok(*source),
+        []=>Err(crate::invalid("FromSoftware animation",0,format!("unknown clip {key_or_name}"))),
+        _=>Err(crate::invalid("FromSoftware animation",0,format!("ambiguous clip name {key_or_name}; use one of the binder/member keys: {:?}",
+            matches.iter().map(|source|&source.key).collect::<Vec<_>>()))),
     }
-    let mut selected = if set == id { None } else {
-        Some(Binder::read(&archive.read(&binder_path(set), decoder)?, decoder)?)
-    };
-    let chosen = selected.as_ref().unwrap_or(&main);
-    if !chosen.files.iter().any(|f| f.name.as_deref().is_some_and(|n|
-        file_name(n).ends_with(".hkx") && stem(n) == name && name != "skeleton"))
-    {
-        return Err(crate::invalid("FromSoftware animation", 0, "listed clip member is absent"));
-    }
-    keep_clip_members(&mut main, (set == id).then_some(name));
-    let mut report = AnimationReport::default();
-    let mut held = vec![hold(&main, &format!("{id}.anibnd"), decoder, &[], &mut report)?];
-    drop(main);
-    if let Some(binder) = &mut selected {
-        keep_clip_members(binder, Some(name));
-        held.push(hold(binder, &format!("{set}.anibnd"), decoder, &[], &mut report)?);
-        report.companions.push(set.to_owned());
-    }
-    insert(held, id, report, w).map(Some)
+}
+fn keep_exact_member(binder:&mut Binder,member:Option<usize>) {
+    let mut index=0;
+    binder.files.retain(|file| {
+        let at=index;index+=1;
+        file.name.as_deref().is_some_and(|name| {
+            let leaf=file_name(name);
+            leaf.ends_with(".compendium") || leaf.ends_with(".tae") ||
+                (leaf.ends_with(".hkx") && (stem(name)=="skeleton" || Some(at)==member))
+        })
+    });
 }
 
 /// What reading a character's animation binders found.
@@ -328,8 +419,7 @@ pub(super) fn read_selected(archive: &Archive, decoder: &Decoder<'_>, id: &str, 
     let Some(listing) = list_clips(archive, decoder, id)? else { return Ok(None); };
     let mut out = Animations::default();
     for name in names {
-        let descriptor = listing.clips.iter().find(|c| c.name == *name || c.key == *name)
-            .ok_or_else(|| crate::invalid("FromSoftware animation", 0, format!("unknown clip {name}")))?;
+        let descriptor = select_source(&listing,name)?;
         let Some(mut read) = decode_clip(archive, decoder, id, &descriptor.key, w)? else { continue; };
         out.skeleton = out.skeleton.or(read.skeleton);
         out.animations.append(&mut read.animations);
@@ -390,13 +480,14 @@ pub(super) fn read(
         )?);
         report.companions.push(set.clone());
     }
-    insert(held, id, report, w).map(Some)
+    insert(held, id, report, archive.game(), w).map(Some)
 }
 
 /// Read an animation binder another binder holds (a part form's own: `wp_a_0761_1.anibnd` in
 /// `parts/wp_a_0761_l.partsbnd`) into `w` as [`read`] reads a character's, its skeleton named after `name` (the form):
 /// it names no companion binders (a marker member is unread).
 pub(super) fn read_member(
+    game: crate::Game,
     bytes: &[u8],
     decoder: &Decoder<'_>,
     name: &str,
@@ -411,7 +502,7 @@ pub(super) fn read_member(
         &[],
         &mut report,
     )?];
-    insert(held, name, report, w)
+    insert(held, name, report, game, w)
 }
 
 /// The animation binder of a placed object's model (Sekiro's `obj/o001010`, Elden Ring's `aeg007_310`), decoded, if it
@@ -431,7 +522,7 @@ pub(super) fn object_binder(decoder: &Decoder<'_>, binder: &Binder) -> Result<Op
 
 /// Put what the binders `held` (in read order) hold into `w`: the skeletons, each once by name (`<id> havok
 /// skeleton`), and the animations binding them, what is refused named in `report`.
-fn insert(mut held: Vec<Held>, id: &str, report: AnimationReport, w: &mut World) -> Result<Animations> {
+fn insert(mut held: Vec<Held>, id: &str, report: AnimationReport, game:crate::Game, w: &mut World) -> Result<Animations> {
     let mut out = Animations {
         report,
         ..Animations::default()
@@ -520,7 +611,7 @@ fn insert(mut held: Vec<Held>, id: &str, report: AnimationReport, w: &mut World)
                         let inherited=records[i].1.resolved_animation(a.id)?.ok_or_else(||crate::invalid("TAE",0,"matched event record disappeared"))?;
                         out.report.events += inherited.events.len();
                         matched.insert((i, a.id));
-                        w.insert(e,tae::visibility::ClipVisibility::decode(id,&inherited.events));
+                        w.insert(e,super::visibility::decode(id,&inherited.events));
                         w.insert(
                             e,
                             ClipEvents {
@@ -528,6 +619,8 @@ fn insert(mut held: Vec<Held>, id: &str, report: AnimationReport, w: &mut World)
                                 animation: a.id,
                                 header: a.header.clone(),
                                 file_name: a.file_name.clone(),
+                                authored_events: a.events.clone(),
+                                typed: super::clip_events::decode(game,&inherited.events),
                                 events: inherited.events.clone(),
                             },
                         );
@@ -571,12 +664,26 @@ mod tests {
         list_members(&mut listing, "c1010", &binder);
         assert_eq!(listing.clips.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["a000_000001", "a000_000002"]);
         assert!(listing.clips.iter().all(|c| c.duration.is_none()));
-        assert_eq!(listing.clips[1].key, "c1010/c1010/a000_000002");
-        keep_clip_members(&mut binder, Some("a000_000002"));
+        assert_ne!(listing.clips[0].key,listing.clips[1].key);
+        keep_exact_member(&mut binder, Some(2));
         assert_eq!(binder.files.iter().filter_map(|f| f.name.as_deref()).collect::<Vec<_>>(),
             ["skeleton.hkx", "A000_000002.hkx", "c1010.compendium", "c1010.tae"]);
         list_members(&mut listing, "c1010_div00", &binder);
-        assert_eq!(listing.clips.len(), 2, "same first-name-wins rule as the full reader");
+        assert_eq!(listing.clips.len(), 3, "duplicate stems in another binder retain distinct identities");
+        assert!(select_source(&listing,"a000_000002").unwrap_err().to_string().contains("ambiguous"));
+        assert_ne!(listing.clips[1].key,listing.clips[2].key);
+        let mut world=World::new();let root=publish_listing(&listing,&mut world).unwrap();
+        assert_eq!(world.get::<primase_core::Asset>(root).unwrap().members.len(),3);
+        assert_eq!(world.iter::<primase_core::Clip>().count(),0);
+        assert!(world.verify_components().is_empty());
+        for (_,asset) in world.iter::<primase_core::Asset>() {
+            for &(entity,_) in &asset.members {
+                let source=world.get::<ClipSource>(entity).unwrap();
+                let provenance=world.get::<Provenance>(entity).unwrap();
+                assert_eq!(provenance.origins[0].archive.as_deref(),Some(source.binder.as_str()));
+                assert_eq!(provenance.origins[0].file.as_ref(),source.member);
+            }
+        }
     }
 
     #[test]
@@ -588,6 +695,45 @@ mod tests {
         assert_eq!(stem("skeleton.HKX"), "skeleton");
         assert_eq!(stem("noextension"), "noextension");
         assert_eq!(file_name(r"x\C1010.TAE"), "c1010.tae");
+    }
+
+    #[test]
+    fn plan_lengths_are_optional_and_invalid_lengths_do_not_mutate_the_world() {
+        let binder=Binder{version:[0;8],format:0,files:vec![crate::BinderFile{id:None,
+            name:Some("walk.hkx".into()),flags:0,bytes:vec![0xff]}]};
+        let mut listing=ClipListing{character:"c1010".into(),..Default::default()};
+        list_members(&mut listing,"c1010",&binder);
+        listing.clips[0].duration=Some(2.5);
+        let mut world=World::new();let root=publish_listing(&listing,&mut world).unwrap();
+        let entity=world.get::<primase_core::Asset>(root).unwrap().members[0].0;
+        assert_eq!(world.get::<primase_core::ClipLength>(entity),Some(&primase_core::ClipLength(2.5)));
+        let next=world.next_index();listing.clips[0].duration=Some(f64::INFINITY);
+        assert!(publish_listing(&listing,&mut world).is_err());assert_eq!(world.next_index(),next);
+        listing.clips[0].duration=None;
+        let root=publish_listing(&listing,&mut world).unwrap();
+        let entity=world.get::<primase_core::Asset>(root).unwrap().members[0].0;
+        assert!(!world.has::<primase_core::ClipLength>(entity));
+    }
+
+    #[test]
+    fn a_cached_listed_member_refuses_unsupported_hkx_by_name_without_core_lowering() {
+        let binder=Binder{version:[0;8],format:0,files:vec![crate::BinderFile{id:None,
+            name:Some("walk.hkx".into()),flags:0,bytes:vec![0xff]}]};
+        let mut listing=ClipListing{character:"c1010".into(),..Default::default()};
+        list_members(&mut listing,"c1010",&binder);
+        let source=listing.clips[0].clone();let mut world=World::new();
+        let root=publish_listing(&listing,&mut world).unwrap();
+        let entity=world.get::<primase_core::Asset>(root).unwrap().members[0].0;
+        let mut reader=ClipReader{archive:Some(Archive::empty(crate::Game::Sekiro)),
+            binders:BTreeMap::from([(source.binder.clone(),binder)]),
+            listings:BTreeMap::from([("c1010".into(),listing)])};
+        let decoder=Decoder{oodle:None,max_output:1024};
+        let why=reader.load(&crate::Install::sekiro("unused"),&decoder,&source,entity,&mut world)
+            .unwrap_err().to_string();
+        assert!(why.contains("walk") && why.contains("Havok tagfile not read"),"{why}");
+        assert_eq!(world.get::<ClipSource>(entity),Some(&source));
+        assert_eq!(world.iter::<primase_core::Clip>().count(),0);
+        assert!(world.verify_components().is_empty());
     }
 
     #[test]

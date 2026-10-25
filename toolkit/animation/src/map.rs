@@ -26,14 +26,14 @@ pub enum Rests {
     Target,
     /// The source skeleton's, as constant channels where they differ: the mapped joints compose to the source's
     /// model-space pose exactly (the target follows the source). The source's stored rest scales are carried as
-    /// stored, not snapped to 1: Elden Ring's c3000 Havok skeleton holds rest scales off 1 by up to 1.19e-6 (f32
+    /// stored, not snapped to 1: one source's c3000 Havok skeleton holds rest scales off 1 by up to 1.19e-6 (f32
     /// noise in its reference pose), so a joint keyed from the source's model-space pose, over a chain a clip leaves
     /// undriven, has scale keys off 1 by up to 1.7e-6 where the clip states none: the source's own data.
     Source,
 }
 
 /// What `map-clip` does with a pair whose target's parent is not the target of its source's parent (a hierarchy that
-/// differs: Elden Ring's model parents its IK targets nowhere where its Havok skeleton parents them under the root).
+/// differs: one source's model parents its IK targets nowhere where its Havok skeleton parents them under the root).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Reparented {
     /// Refuse the clip, naming the pair.

@@ -34,6 +34,34 @@ impl serde::Serialize for Entity {
     }
 }
 
+/// An index is meaningful only in the World it came from. Deserializing does not create
+/// an entity or relocate references: an importer must preserve or remap that identity
+/// before absorbing data into another World.
+impl<'de> serde::Deserialize<'de> for Entity {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        <u32 as serde::Deserialize>::deserialize(d).map(Entity::from_index)
+    }
+}
+
+#[cfg(test)]
+mod entity_json_tests {
+    use super::Entity;
+
+    #[test]
+    fn entity_index_roundtrips_without_accepting_other_json_shapes() {
+        for index in [0,u32::MAX] {
+            let entity = Entity::from_index(index);
+            let value = serde_json::to_value(entity).unwrap();
+            assert_eq!(value,serde_json::json!(index));
+            assert_eq!(serde_json::from_value::<Entity>(value).unwrap(),entity);
+        }
+        for value in [serde_json::json!(-1),serde_json::json!(4294967296u64),
+            serde_json::json!(1.5),serde_json::json!("1"),serde_json::Value::Null] {
+            assert!(serde_json::from_value::<Entity>(value).is_err());
+        }
+    }
+}
+
 impl fmt::Debug for Entity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "e{}", self.0)
@@ -62,8 +90,8 @@ pub enum IdError {
     Alive(Entity),
 }
 
-/// A typed component. `NAME` is namespaced and stable (`core.transform`, `skate.material`, `fromsoft.layered_material`):
-/// serialisation, pass declarations and reports use it, so renaming one is a format change.
+/// A typed component. `NAME` is namespaced and stable (`core.transform`, a destination's `material`, a source's
+/// `layered_material`): serialisation, pass declarations and reports use it, so renaming one is a format change.
 pub trait Component: Any + Clone + fmt::Debug + Send + Sync {
     const NAME: &'static str;
     /// Schema version of the component's content. Bump it when the meaning or layout of a field changes.

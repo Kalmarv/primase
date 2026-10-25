@@ -252,6 +252,17 @@ pub struct MapLayout {
     pub map_offsets: Vec<MapOffset>,
     pub sections: Vec<Section>,
 }
+
+/// Ground-plane points for the model parts the area reader draws: map pieces, objects
+/// and assets, in source x/z metres (core z negated). Enemy/player/collision/placeholder
+/// records are excluded. Uses each part's own transform, never the map-offset event,
+/// which places map-local resources rather than the already-positioned MSB parts.
+pub fn drawn_part_points(layout: &MapLayout) -> Result<Vec<[f32; 2]>> {
+    layout.parts.iter().filter(|part| matches!(part.kind,
+        PartKind::MapPiece | PartKind::Object | PartKind::Asset))
+        .map(|part| part.transform().map(|t| [t.cols[3][0], -t.cols[3][2]]))
+        .collect()
+}
 fn text(v: &View<'_>, mut o: usize) -> Result<String> {
     let start = o;
     let mut units = Vec::new();
@@ -1227,6 +1238,19 @@ mod region_tests {
             map_offsets: Vec::new(),
             sections,
         }
+    }
+
+    #[test]
+    fn drawn_points_use_the_same_part_kinds_and_ground_frame_as_the_area_opener() {
+        let mut layout=layout(&Generation::SEKIRO,vec![]);
+        let part=|index,kind|Part {index,name:format!("part{index}"),kind,model:None,hit_filter:None,npc_param:None,
+            position:[index as f32,2.0,3.0],rotation_degrees:[0.0;3],scale:[1.0;3],entity_id:0,
+            entity_group_ids:[0;8],shadows:ShadowFlags::default()};
+        layout.parts=vec![part(0,PartKind::MapPiece),part(1,PartKind::Object),part(2,PartKind::Asset),
+            part(3,PartKind::Enemy),part(4,PartKind::Collision),part(5,PartKind::Player)];
+        assert_eq!(drawn_part_points(&layout).unwrap(),vec![[0.0,3.0],[1.0,3.0],[2.0,3.0]]);
+        layout.parts[0].position[0]=f32::NAN;
+        assert!(drawn_part_points(&layout).is_err());
     }
 
     /// A region of any type is read with its shape's dimensions, its stored place and entity, and its type's bytes; the

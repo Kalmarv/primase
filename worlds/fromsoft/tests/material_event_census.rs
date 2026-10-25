@@ -48,7 +48,7 @@ fn every_elden_character_material_event198_payload() -> Result<()> {
     for row in &table.rows {
         let name: Vec<_> = row.data[..64].as_chunks::<2>().0.iter().map(|pair|u16::from_le_bytes(*pair))
             .take_while(|unit| *unit != 0).collect();
-        let values = (0..5).map(|i| word(&row.data,68+i*4).map(|bits|units(bits)))
+        let values = (0..5).map(|i| word(&row.data,68+i*4).map(units))
             .collect::<Result<Vec<_>>>()?;
         material_rows.insert(row.id,json!({"id":row.id,"parameter":String::from_utf16(&name)?,
             "material_id":word(&row.data,64)? as i32,"rgba_i":values}));
@@ -91,12 +91,11 @@ fn every_elden_character_material_event198_payload() -> Result<()> {
         for file in &binder.files {
             let member = file.name.as_deref().unwrap_or("");
             let leaf = member.rsplit(['/', '\\']).next().unwrap_or(member).to_ascii_lowercase();
-            if let Some(set) = leaf.strip_suffix(".txt").or_else(||leaf.strip_suffix(".blf")) {
-                if set.starts_with(&format!("{character}_")) {
-                    let companion = format!("/chr/{set}.anibnd.dcx");
-                    if archive.contains(&companion) && !visited.contains(&companion) && todo.insert(companion) {
-                        marker_binders += 1;
-                    }
+            if let Some(set) = leaf.strip_suffix(".txt").or_else(||leaf.strip_suffix(".blf"))
+                && set.starts_with(&format!("{character}_")) {
+                let companion = format!("/chr/{set}.anibnd.dcx");
+                if archive.contains(&companion) && !visited.contains(&companion) && todo.insert(companion) {
+                    marker_binders += 1;
                 }
             }
             if !leaf.ends_with(".tae") { continue; }

@@ -82,8 +82,8 @@ fn compiled(entry: &str) -> Vec<(&'static str, primase_shader::Program)> {
         std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e} (compile alpha_reference.hlsl's `{entry}`)"))
     };
     vec![
-        ("fxc", primase_dxbc::lift(&read("dxbc")).unwrap()),
-        ("dxc", primase_dxil::lift(&read("dxil")).unwrap()),
+        ("fxc", primase_dxbc::lift(&read("dxbc")).unwrap_or_else(|e| panic!("{entry}.dxbc: {e}"))),
+        ("dxc", primase_dxil::lift(&read("dxil")).unwrap_or_else(|e| panic!("{entry}.dxil: {e}"))),
     ]
 }
 

@@ -18,7 +18,7 @@ pub use channels::{Rgba8Texel, TextureMetadata, map_rgba8_levels, map_rgba8_leve
 pub use frames::{Bitangent, UV_FRAME_NORMALS, UvFrameNormals};
 pub use jpeg::{Jpeg, JpegColor, read_jpeg};
 mod layers;
-pub use layers::{BAKE_LAYER_CHANNELS, BAKE_NORMAL_SCALE, BakeLayerChannels, NORMALIZE_NORMALS, register};
+pub use layers::{BAKE_LAYER_CHANNELS, BakeLayerChannels};
 mod modes;
 pub use modes::{SET_MATERIAL_MODES, SetMaterialModes};
 mod normals;
@@ -35,8 +35,9 @@ pub use normals::{NormalFilter, normal_mip_chain, rebuild_normal_z, resize_norma
 use std::io::Cursor;
 use std::sync::LazyLock;
 pub use texture::{
-    BakeNormalScale, NormalizeNormals, TextureLoadReport, bake_normal_scale, decode_texture_file,
-    load_textures, normalize_normals, texture_level_png, texture_level_rgba8, texture_level_rgba8_with,
+    BAKE_NORMAL_SCALE, BakeNormalScale, NORMALIZE_NORMALS, NormalizeNormals, TextureLoadReport, bake_normal_scale,
+    decode_texture_file, load_textures, normalize_normals, texture_level_png, texture_level_rgba8,
+    texture_level_rgba8_with,
 };
 pub use upscale::{MAX_UPSCALED, UPSCALE_NEAREST, UpscaleBy, UpscaleNearest, enlarge_nearest};
 
@@ -64,6 +65,26 @@ pub const CACHE_SOURCES: &[(&str, &[u8])] = &[
     ("image/texture.rs", include_bytes!("texture.rs")),
     ("image/upscale.rs", include_bytes!("upscale.rs")),
 ];
+
+/// Register this crate's passes by their declarations.
+pub fn register(reg: &mut primase_core::pass::PassRegistry) {
+    for spec in [
+        &PACK_TEXTURE_ATLAS,
+        &modes::SET_MATERIAL_MODES,
+        &BLEED_ALPHA_COLORS,
+        &CAP_TEXTURES,
+        &CLIP_ALPHA_CUTOUTS,
+        &BAKE_LAYER_CHANNELS,
+        &rgba8::LOWER_TEXTURES_RGBA8,
+        &NORMALIZE_NORMALS,
+        &frames::UV_FRAME_NORMALS,
+        &orm::PACK_ORM,
+        &BAKE_NORMAL_SCALE,
+        &upscale::UPSCALE_NEAREST,
+    ] {
+        reg.add(spec);
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -590,4 +611,51 @@ pub fn write_png_rgb(width: u32, height: u32, rgb: &[u8]) -> Result<Vec<u8>> {
         writer.finish()?;
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod registration_tests {
+    use super::*;
+    use primase_core::pass::PassRegistry;
+
+    /// The crate registers exactly these passes by their declarations: those with required options are made only with
+    /// them, and every one says what it takes.
+    #[test]
+    fn the_image_passes_register_by_name() {
+        let mut reg = PassRegistry::new();
+        register(&mut reg);
+        let names = [
+            "bake-layer-channels",
+            "bake-normal-scale",
+            "bleed-alpha-colors",
+            "cap-textures",
+            "clip-alpha-cutouts",
+            "lower-textures-rgba8",
+            "normalize-normals",
+            "pack-orm",
+            "pack-texture-atlas",
+            "set-material-modes",
+            "upscale-nearest",
+            "uv-frame-normals",
+        ];
+        assert_eq!(format!("{reg:?}"), format!("{names:?}"));
+        let free = [
+            "bake-layer-channels",
+            "bake-normal-scale",
+            "bleed-alpha-colors",
+            "lower-textures-rgba8",
+            "normalize-normals",
+        ];
+        for name in names {
+            assert_eq!(reg.requires_options(name), !free.contains(&name), "{name}");
+            assert!(reg.describe(name).is_some_and(|d| d.starts_with(name)), "{name}");
+            let bare = reg.make(name, &primase_core::pass::Options::new());
+            assert_eq!(bare.is_err(), !free.contains(&name), "{name}");
+        }
+        assert!(
+            reg.describe("upscale-nearest")
+                .unwrap()
+                .starts_with("upscale-nearest{(factor|size)*,textures*}\n")
+        );
+    }
 }

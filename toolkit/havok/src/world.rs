@@ -5,10 +5,11 @@
 //! Reading takes no choice: the skeleton is the file's, each animation keeps its decoded blocks and its binding. The
 //! source's frame is the caller's (a reader knows its game's), given to both, so the skeleton and the clips that drive
 //! it are in the world's frame. Lowering states what the format leaves open: what stands in for a component a track
-//! does not state (`absent`, from [`crate::spline::Absent`]; Sekiro's files say neutral, see [`crate::spline`]), how many
-//! keys a clip has for each frame the animation was authored at (`rate`), and which animations (`clips`). The spline an
-//! animation is evaluated as continuously is sampled into keys, and between keys `core.clip` interpolates, not the
-//! spline: the pass reports that as an approximation. A channel whose values are one value all along is one key.
+//! does not state (`absent`, from [`crate::spline::Absent`]; the source's files say neutral, see [`crate::spline`]),
+//! how many keys a clip has for each frame the animation was authored at (`rate`), and which animations (`clips`).
+//! The spline an animation is evaluated as continuously is sampled into keys, and between keys `core.clip`
+//! interpolates, not the spline: the pass reports that as an approximation. A channel whose values are one value all
+//! along is one key.
 //!
 //! An animation's extracted motion (`hkaDefaultAnimatedReferenceFrame`: one sample a frame, `x y z` and an angle about
 //! the stored `up` axis, each the frame's whole motion from the start) is the clip's root motion when the program
@@ -254,7 +255,7 @@ pub enum RootMotionUse {
 /// the clip interpolates (linearly, rotations by slerp), the spline is evaluated at the keys only.
 ///
 /// An animation whose blend hint is 1 (additive) is lowered with `additive: Identity`: its tracks' values are deltas, not
-/// absolute transforms. Measured on Elden Ring's c3000 (146 such animations, 3,950 tracks, 721 animations as control): of
+/// absolute transforms. Measured on the source's c3000 (146 such animations, 3,950 tracks, 721 animations as control): of
 /// the stated positions that differ by more than 2 cm between the reference pose and zero, all 1,524 are nearer zero; of
 /// the stated rotations that differ by more than 10 degrees between the reference and the identity, 900 of 918 are nearer
 /// the identity (the 575 normal animations: 9,017 of 10,424 positions and 12,696 of 13,323 rotations nearer the reference).
@@ -1120,7 +1121,7 @@ mod tests {
         assert_eq!(w.verify_components(), vec![]);
     }
 
-    /// A refusal that names a track names the bone it drives (the one refused Elden Ring animation: block 0 track 119
+    /// A refusal that names a track names the bone it drives (the one refused animation: block 0 track 119
     /// scale of `c2030/a001_009000`, a leaf bone `R_Egg`, stored with NaN bounds).
     #[test]
     fn a_refused_track_names_the_bone_it_drives() {

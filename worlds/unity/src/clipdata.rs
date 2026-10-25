@@ -169,7 +169,7 @@ pub struct ClipLowering {
 
 /// A channel value or tangent of `property` in the world's frame.
 fn convert(property: Property, v: &[f32]) -> Vec<f32> {
-    if property == Property::Scalar {
+    if matches!(property, Property::Scalar | Property::Visibility | Property::Values(_)) {
         return v.to_vec();
     }
     let rest = match property {
@@ -183,11 +183,12 @@ fn convert(property: Property, v: &[f32]) -> Vec<f32> {
             rotation: [v[0], v[1], v[2], v[3]],
             scale: [1.0; 3],
         },
-        _ => Rest::Trs {
+        Property::Scale => Rest::Trs {
             translation: [0.0; 3],
             rotation: [0.0, 0.0, 0.0, 1.0],
             scale: [v[0], v[1], v[2]],
         },
+        Property::Scalar | Property::Visibility | Property::Values(_) => unreachable!("non-spatial values returned above"),
     };
     match rest.converted(&UNITY) {
         Rest::Trs {
@@ -197,7 +198,8 @@ fn convert(property: Property, v: &[f32]) -> Vec<f32> {
         } => match property {
             Property::Translation => translation.to_vec(),
             Property::Rotation => rotation.to_vec(),
-            _ => scale.to_vec(),
+            Property::Scale => scale.to_vec(),
+            Property::Scalar | Property::Visibility | Property::Values(_) => unreachable!("non-spatial values returned above"),
         },
         Rest::Affine(_) => unreachable!("a TRS converts to a TRS"),
     }
@@ -278,14 +280,7 @@ impl Track {
                 values.extend(convert(property, &value));
             }
         }
-        debug_assert_eq!(
-            width,
-            match property {
-                Property::Rotation => 4,
-                Property::Scalar => 1,
-                _ => 3,
-            }
-        );
+        debug_assert_eq!(width, property.width());
         Ok(Some(Channel {
             target,
             property,

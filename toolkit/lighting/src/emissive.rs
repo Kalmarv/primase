@@ -16,7 +16,7 @@
 //!   statement of how bright a unit of strength is, in cd/m2); a light is a point, so its intensity is the radiance's
 //!   largest channel times the piece's area times `area_factor` (the part of the surface that faces a viewer: 1 is a
 //!   face seen whole), in candela, and the light's colour is the radiance over that channel (largest channel 1), the
-//!   way a GTA light is a colour times an intensity. A placement's scale multiplies the area: `|det|^(2/3)`.
+//!   way a lamp's light is a colour times an intensity. A placement's scale multiplies the area: `|det|^(2/3)`.
 //! - **Which pieces, how many lights.** A piece no longer than `big` metres (its largest bounding extent) is a bulb or a
 //!   fixture. A prototype holding `string` or more of them is a string: its pieces are ordered along their principal
 //!   axis and divided into `per_string` consecutive groups of equal count (rounded down), and each group is one light at

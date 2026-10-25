@@ -120,8 +120,10 @@ fn utf16_at(data: &[u8], at: usize) -> Result<String> {
         .get(at..)
         .ok_or_else(|| invalid(FORMAT, at, "a string offset past the end of the file"))?;
     let units: Vec<u16> = rest
-        .chunks_exact(2)
-        .map(|b| u16::from_le_bytes([b[0], b[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&b| u16::from_le_bytes(b))
         .take_while(|&unit| unit != 0)
         .collect();
     // a string that runs to the end of the file with no terminator is cut off, not a string

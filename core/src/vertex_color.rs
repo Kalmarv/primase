@@ -9,7 +9,7 @@ use crate::{Component, Entity, JsonError, MaterialVariants, Mesh, Semantic, Worl
 
 /// `core.vertex_color`: what a material does with `COLOR_0` as a colour. Core's convention is glTF's: a material
 /// multiplies its base colour by `COLOR_0`, and a material without this component does. A reader whose source
-/// shaders do not (Unity's Standard, URP Lit and Legacy diffuse) marks their materials [`VertexColor::Ignored`]
+/// shaders do not (one engine's opaque shaders) marks their materials [`VertexColor::Ignored`]
 /// from a named shader table in its lowering, counting what the table does not map; it is never guessed from names.
 /// The stream itself stays on the mesh: one prototype can be drawn with several materials
 /// ([`MaterialVariants`]), and a consumer drops `COLOR_0` per drawn primitive. Only `COLOR_0` as a colour: a layered

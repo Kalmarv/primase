@@ -155,7 +155,7 @@ impl Reader {
         world: &World,
         entity: Entity,
         material: &Material,
-        default_alpha: &mut dyn FnMut(&str) -> Option<f64>,
+        default_alpha: &mut dyn FnMut(&str) -> Result<Option<f64>, String>,
     ) -> Result<Option<Coverage>, Unread> {
         let Some(Programs {
             name,
@@ -322,7 +322,7 @@ fn solve(
     texels: &BTreeMap<ResourceId, Texel>,
     slots: &BTreeMap<String, SlotFacts>,
     material: &Material,
-    default_alpha: &mut dyn FnMut(&str) -> Option<f64>,
+    default_alpha: &mut dyn FnMut(&str) -> Result<Option<f64>, String>,
 ) -> Result<Option<(String, Option<f32>, bool)>, String> {
     let slot_alpha = |t: &AlphaTest| {
         t.tested.leaves().iter().any(
@@ -358,6 +358,8 @@ fn solve(
     };
     // the dither noise's answer: its neutral value, then once another, to see whether the test depends on it
     let dither = std::cell::Cell::new(ENGINE_DITHER_NEUTRAL);
+    // a default texture that could not be read is `Unknown` to the evaluation, and its reason is kept for the error
+    let unread = std::cell::RefCell::new(Vec::<String>::new());
     let mut known = |leaf: &AlphaExpr| match leaf {
         AlphaExpr::Word { buffer: b, word: w } if *b == buffer && *w == word => Known::Value(f64::from(reference)),
         AlphaExpr::Word { buffer: b, word: w } if *b == buffer && *w == word + 1 => Known::Value(f64::from(scale)),
@@ -367,7 +369,13 @@ fn solve(
             Some(Texel::Slot(slot)) if *lane == 3 => slots
                 .get(slot)
                 .and_then(|s| s.default_stem.as_deref())
-                .and_then(&mut *default_alpha)
+                .and_then(|stem| match default_alpha(stem) {
+                    Ok(alpha) => alpha,
+                    Err(why) => {
+                        unread.borrow_mut().push(format!("default texture {stem} could not be read: {why}"));
+                        None
+                    }
+                })
                 .map_or(Known::Unknown, Known::Value),
             Some(Texel::Engine(name)) if name == ENGINE_DITHER_TEXTURE && *lane == 3 => {
                 Known::Value(dither.get())
@@ -390,7 +398,10 @@ fn solve(
                 _ => None,
             })
             .collect();
-        format!("{why} (the test is {} < reference; {})", test.tested, named.join(", "))
+        let mut unread = unread.borrow().clone();
+        unread.dedup();
+        let unread = if unread.is_empty() { String::new() } else { format!("; {}", unread.join("; ")) };
+        format!("{why} (the test is {} < reference; {}){unread}", test.tested, named.join(", "))
     })?;
     let Some((_, resource, lane)) = linear.sample else {
         return Err(format!("no sample varies in {}", test.tested));

@@ -1,12 +1,30 @@
 //! primase core: the world store, the core components, the frame, the pass manager and gates.
 //!
 //! See `docs/DESIGN.md` §3-4 and CONTRIBUTING.md for the conventions every crate follows.
+//! Game-independent animation descriptions (events, draw groups, material parameters and
+//! controllers) are data only. Readers retain source facts; programs select lowering passes,
+//! and toolkit evaluators supply time-dependent behavior. JSON contracts are in `docs/FORMAT.md`.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod asset;
 mod atmosphere;
 pub use atmosphere::{Atmosphere, Exposure, Fog, FogFalloff, VolumetricFog};
 pub mod clip;
+mod clip_identity;
+pub use clip_identity::{ClipKey, ClipLength};
+mod clip_events;
+pub use clip_events::{ClipEvent, ClipEvents, EventValue, EventValueData};
+mod content;
+pub use content::{ContentNote, DisplayName, NameOrigin, Record};
+mod controller;
+pub use controller::{Controller, ControllerBinding, ControllerLayer, ControllerParameter,
+    ControllerParameterKind, ControllerState, LayerBlending, Motion};
+mod draw_groups;
+pub use draw_groups::{DrawGroupDefaults, DrawGroups};
+mod material_parameters;
+pub use material_parameters::MaterialParameters;
+mod primitive_keys;
+pub use primitive_keys::PrimitiveKeys;
 pub mod components;
 pub mod convert;
 pub mod detail;

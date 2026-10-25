@@ -1,6 +1,6 @@
 //! `omit-placements{prefixes=P;P...,collision=keep|omit}`: every placement (an entity with `core.instance`) whose
-//! `core.name` starts with one of the prefixes (names as the reader wrote them: a Unity GameObject path joined by `/`,
-//! a GTA entity's name) stops drawing. A program states the prefixes, joined by `;` (paths hold `/`), and whether
+//! `core.name` starts with one of the prefixes (names as the reader wrote them: a GameObject path joined by `/`, an
+//! entity's name) stops drawing. A program states the prefixes, joined by `;` (paths hold `/`), and whether
 //! their collision stays; every option is required.
 //!
 //! - `collision=keep`: the placement keeps colliding. Its own collision (`core.collision` on the placement) stays and

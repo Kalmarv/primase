@@ -62,8 +62,7 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>, map: &str) -> Re
                     let samples:Vec<_>=indices.iter().map(|&index|serde_json::json!({
                         "hour":field.times.get(index),"value":field.values.get(index)})).collect();
                     println!("GPARAM_HOUR={}",serde_json::json!({"game":game.name(),"file":stem,
-                        "group":group.key,"field":field.key,"id":id,"samples":samples,
-                        "sample_at_12":field.sample_at_hour(id,12.0)}));
+                        "group":group.key,"field":field.key,"id":id,"samples":samples}));
                 }
             }
         }

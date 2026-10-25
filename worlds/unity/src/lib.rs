@@ -36,6 +36,7 @@
 //! - [`lower_collision`]: colliders and terrain colliders lowered to collision geometry.
 //! - [`lower_lights`]: lights lowered to `core.light`.
 //! - [`lower_ambient`]: the scene's ambient lighting lowered to `core.environment`'s ambient.
+//! - [`lower_animator`]: Animator controllers lowered to `core.controller` and `core.controller_binding`.
 //! - [`resolve_shaders`]: a material's programs and what they read, as `core.shader` and `core.shader_binding`.
 //! - [`register`]: the passes by name.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
@@ -52,7 +53,8 @@ pub mod shader;
 pub mod state_pose;
 
 pub use passes::{
-    draw_keywords, drawn, lower, lower_ambient, lower_collision, lower_lights, lower_terrain, resolve_shaders,
+    draw_keywords, drawn, lower, lower_ambient, lower_animator, lower_collision, lower_lights,
+    lower_terrain, resolve_shaders,
 };
 pub use read::serialized::{ObjectInfo, SerializedFile};
 pub use read::tpk::TypeTreePackage;
@@ -65,8 +67,9 @@ pub use read::{
 };
 
 /// Registers the Unity passes by their declarations: `unity-drawn`, `lower-unity-pbr`, `lower-unity-terrain`,
-/// `lower-unity-collision`, `lower-unity-lights`, `resolve-unity-shaders` and `lower-unity-ambient`. The first four
-/// take no option: each lowers by Unity's own rules (its module says which), not by a choice a program makes.
+/// `lower-unity-collision`, `lower-unity-lights`, `lower-unity-animator`, `resolve-unity-shaders` and
+/// `lower-unity-ambient`. All but `resolve-unity-shaders`, `lower-unity-lights` and `lower-unity-ambient` take no
+/// option: each lowers by Unity's own rules (its module says which), not by a choice a program makes.
 /// `resolve-unity-shaders` requires the variant and colour space; `lower-unity-lights` the calibration of URP's unitless
 /// intensity (`candela-per-unit`, no default); `lower-unity-ambient` that same calibration and the program's choice for
 /// an ambient whose probe is not read (`probe`, no default).
@@ -77,6 +80,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         &lower_terrain::LOWER_UNITY_TERRAIN,
         &lower_collision::LOWER_UNITY_COLLISION,
         &lower_lights::LOWER_UNITY_LIGHTS,
+        &lower_animator::LOWER_UNITY_ANIMATOR,
         &resolve_shaders::RESOLVE_UNITY_SHADERS,
         &lower_ambient::LOWER_UNITY_AMBIENT,
     ] {
@@ -115,6 +119,7 @@ mod tests {
         super::register(&mut reg);
         let names = [
             "lower-unity-ambient",
+            "lower-unity-animator",
             "lower-unity-collision",
             "lower-unity-lights",
             "lower-unity-pbr",

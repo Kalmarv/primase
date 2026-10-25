@@ -9,8 +9,9 @@
 //!   per-vertex data). The joint a vertex names is a slot of the primitive's palette, not a joint itself.
 //! - **Bindings**: each gives the bound primitives a palette, slot by slot a joint of a skeleton and its inverse bind
 //!   (mesh space to that joint's space at bind time), and says how the mesh deforms. One geometry may have several
-//!   bindings (Unity: renderers sharing one mesh, each binding its bone slots to other bones); an occurrence names the
-//!   binding it draws with. Inverse binds belong to the binding: two meshes on one skeleton may bind differently.
+//!   bindings (a source: renderers sharing one mesh, each binding its bone slots to other bones); an occurrence
+//!   names the binding it draws with. Inverse binds belong to the binding: two meshes on one skeleton may bind
+//!   differently.
 //!
 //! The only deformation core states is linear blend skinning ([`Deformation::Linear`]); a source deforming otherwise
 //! keeps its data in its namespace until a pass lowers it. Weights are as the source stores them ([`WeightRule`]); no
@@ -37,7 +38,7 @@ pub enum Influences {
     /// set `k` below `sets`: four influences a set. Unused influences are zero-weight padding; their slot indices are
     /// still in range.
     Streams { sets: u8 },
-    /// `Joints(0)` alone: each vertex bound wholly to the slot in its first index (FromSoft's static meshes).
+    /// `Joints(0)` alone: each vertex bound wholly to the slot in its first index (one source's static meshes).
     SingleIndex,
     /// Every vertex bound wholly to palette slot `slot`, with no per-vertex data (a model on a bone).
     Whole { slot: u32 },
@@ -51,7 +52,7 @@ pub enum WeightRule {
     /// The engine divides each weight by `max(sum, floor)` when it draws: a vertex whose weights sum to `floor` or
     /// more is normalised to sum 1, one that sums to less keeps a total below 1 (all four weights zero leave the
     /// zero matrix). `floor` is the divisor's lower bound, finite and zero or more; zero is the plain sum (a vertex
-    /// with no weight has nothing to divide, and a pass using the rule refuses it). FromSoft's skinning programs
+    /// with no weight has nothing to divide, and a pass using the rule refuses it). The source's skinning programs
     /// use a floor of 0.001.
     EngineNormalizes { floor: f32 },
     /// The source states nothing of their sum: used as stored.

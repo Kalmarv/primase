@@ -85,7 +85,7 @@ pub fn lines(values: &Values, resource: ResourceId, words: &Words) -> Result<Maj
     // the word of the matrix a node is, and the node that reads it: a read, or a choice (a select, a branch's merge)
     // whose ways that are the matrix's are that one word and whose other ways are made of none of the matrix (the
     // lifter's guard of an index out of range, `select(in range, word, 0)`; a program that takes another matrix's word
-    // on a path where it does not apply this one, as Sekiro's cloth programs do by a flag)
+    // on a path where it does not apply this one, as the source's cloth programs do by a flag)
     let mut words: HashMap<NodeId, (NodeId, Word)> = HashMap::new();
     // the reads of the matrix's words a node is made of
     let mut made_of: HashMap<NodeId, BTreeSet<NodeId>> = HashMap::new();
@@ -140,7 +140,7 @@ pub fn lines(values: &Values, resource: ResourceId, words: &Words) -> Result<Maj
             }
         };
         // a choice's terms: those of its ways made of the matrix, where they all sum the same words (and the ways made
-        // of none of it sum none). Elden Ring's cloth programs blend the joints' matrices line by line and choose each
+        // of none of it sum none). The source's cloth programs blend the joints' matrices line by line and choose each
         // blended word, by a flag, against VC_World's before dotting the position with them.
         let chosen_terms = || -> BTreeSet<Word> {
             let mut matrix = ways.iter().filter(|&&w| !reads_of(w).is_empty()).map(|&w| of(w));

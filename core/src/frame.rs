@@ -1,4 +1,4 @@
-//! The world frame: metres, right-handed, +Y up, -Z north (glTF's frame, and skate-scene v1's); +X is east.
+//! The world frame: metres, right-handed, +Y up, -Z north (glTF's frame, and one consumer's); +X is east.
 //!
 //! The world is always in this frame. A reader converts from its game's frame on the way in and a writer to its
 //! target's on the way out, with a [`SourceFrame`]: a signed axis permutation plus a unit scale. Handedness follows
@@ -72,7 +72,7 @@ impl SourceFrame {
     /// The world frame itself.
     pub const WORLD: SourceFrame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::PosZ], 1.0);
 
-    /// East, north, up, metres (right-handed, z up): GTA's own frame, the skate writer's internal frame, and
+    /// East, north, up, metres (right-handed, z up): a source's own frame, one writer's internal frame, and
     /// Blender's. `world = (east, up, -north)`; back out, `(east, north, up) = (x, -z, y)`.
     pub const ENU: SourceFrame = SourceFrame::new([Axis::PosX, Axis::PosZ, Axis::NegY], 1.0);
 
@@ -215,10 +215,10 @@ mod tests {
         })
     }
 
-    /// FromSoft: left-handed, Y up, metres; scene = (x, y, -z),
+    /// A left-handed source, Y up, metres; scene = (x, y, -z),
     /// transforms mirrored as `C M C` with C = diag(1, 1, -1).
     const FROMSOFT: SourceFrame = SourceFrame::new([PosX, PosY, NegZ], 1.0);
-    /// Unity: left-handed, Y up -> (x, y, -z).
+    /// A left-handed source, Y up -> (x, y, -z).
     const UNITY: SourceFrame = SourceFrame::new([PosX, PosY, NegZ], 1.0);
     /// ForzaTech: left-handed, Y up, metres; Blender =
     /// (-x, -z, y). Blender is ENU, so world = (-x, y, z).
@@ -317,7 +317,7 @@ mod tests {
             ground([0.0, 0.0, 0.0]).map(f32::to_bits),
             [0.0f32.to_bits(), (-0.0f32).to_bits()]
         );
-        // and GTA's (east, north, up) to the world
+        // and the ENU source's (east, north, up) to the world
         assert_eq!(SourceFrame::ENU.point([10.0, 20.0, 30.0]), [10.0, 30.0, -20.0]);
     }
 

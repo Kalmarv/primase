@@ -55,7 +55,7 @@ float4 coordinate_only(Input i) : SV_Target0 {
     if (b.a < reference) discard;
     return float4(b.rgb, detail_map.Sample(sampler0, float2(b.a, i.uv.y)).a);
 }
-// The tested value reaches no target: the alpha written is a constant (an Elden Ring G-buffer program writes none).
+// The tested value reaches no target: the alpha written is a constant (the source program writes no target's alpha).
 // discard where base.a * detail.a < reference.
 float4 unwritten(Input i) : SV_Target0 {
     float4 b = base_map.Sample(sampler0, i.uv);

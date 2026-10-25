@@ -2,6 +2,10 @@
 //! layered-shader bake ([`layer_bake`]).
 pub mod detail_derive;
 pub mod detail_probe;
+pub mod clip_events;
+pub mod entity_names;
+pub mod display_masks;
+pub mod material_events;
 pub mod geometry;
 pub mod layer_bake;
 pub mod preview;

@@ -205,7 +205,9 @@ fn clips_lower_onto_a_peds_skeleton() {
                     direct.push(a);
                     inverse.push(b);
                 }
-                _ => {}
+                Property::Scale => {}
+                Property::Scalar | Property::Visibility | Property::Values(_) =>
+                    panic!("a non-transform property on a GTA joint: {:?}", c.property),
             }
         }
     }

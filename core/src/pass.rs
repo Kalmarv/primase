@@ -19,7 +19,7 @@
 //!   depth of what it provides and of what it requires that the world lacks), ties broken by priority, then by name.
 //!   Which passes may lower a name depends on its rule: an illegal name must be removed, a dynamic one's failing values
 //!   removed or rewritten in place, a carried-and-lowered one only lowered ([`Legality`]). No greedy rewriting and no
-//!   rollback: the plan is an explicit textual pipeline (`load-meshes, lower-skate-pbr{normals=rebuild}`), made with
+//!   rollback: the plan is an explicit textual pipeline (`load-meshes, lower-pbr{normals=rebuild}`), made with
 //!   the caller's [`PassOptions`], recorded in the [`RunReport`], and runs as written.
 //! - The verifier ([`Component::verify`] on every component, [`crate::Resource::verify`] on every resource, plus the
 //!   manager's world [`Validator`]s) runs on a conversion's reader output and before its writer in every build, and
@@ -61,7 +61,7 @@ pub struct PassLog {
     /// names none. The ids are the world's the pass ran on; the manager refuses one that is not alive after the pass.
     pub approximated_on: BTreeMap<String, BTreeSet<Entity>>,
     /// What the pass left out because what it makes has no form for it, by reason (`collision triangles on a surface
-    /// with no skate surface, left out: PHYS_CASTER`). A conversion reports each as an unsupported notice.
+    /// of another kind, left out: PHYS_CASTER`). A conversion reports each as an unsupported notice.
     pub omitted: BTreeMap<String, u64>,
     /// Component names the pass removed from some entity without declaring them in [`Pass::removes`] (a component a
     /// hook dropped, as [`World::apply_linear`] reports): accepted as removals only for a pass that opts in with
@@ -172,7 +172,7 @@ impl PassLog {
     }
 }
 
-/// A transformation of the world. Declarations are component names (`core.mesh`, `skate.material`).
+/// A transformation of the world. Declarations are component names (`core.mesh`, a destination's `material`).
 pub trait Pass: Send + Sync {
     /// Stable name, used in pipelines and reports (`load-meshes`).
     fn name(&self) -> &'static str;
@@ -551,7 +551,7 @@ pub enum Legality {
     /// Legal for the entities the predicate accepts; the others must be lowered.
     Dynamic(LegalityCheck),
     /// Written through another component: legal on the entities the check accepts (a `core.light` with the
-    /// `skate.light` it was raised to); on the rest as an unlisted name (kept and reported as not written in
+    /// destination's `light` it was raised to); on the rest as an unlisted name (kept and reported as not written in
     /// [`Mode::Partial`], illegal in [`Mode::Full`], unless the target carries unknown names). See
     /// [`Target::covered`].
     Covered(fn(&World, Entity) -> bool),
@@ -666,7 +666,7 @@ impl Target {
     }
 
     /// A name the writer writes through another component: legal on the entities `check` accepts, `what` naming the
-    /// cover (`"covered by skate.light"`); the rest are reported as `<name> not <what>` ([`Legality::Covered`]).
+    /// cover (`"covered by <dialect>.light"`); the rest are reported as `<name> not <what>` ([`Legality::Covered`]).
     pub fn covered(mut self, name: &str, what: &str, check: fn(&World, Entity) -> bool) -> Self {
         self.rule_words.insert(name.to_owned(), what.to_owned());
         self.rule(name, Legality::Covered(check))
@@ -862,7 +862,7 @@ impl Target {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Prepared {
     /// Names the writer doesn't write, with how many entities hold them; a covered name ([`Target::covered`]) as
-    /// `<name> not <its cover>` (`core.light not covered by skate.light`), for its uncovered entities.
+    /// `<name> not <its cover>` (`core.light not covered by the destination's light`), for its uncovered entities.
     pub unsupported: Vec<(String, u64)>,
     /// Names it writes whose values its rule refuses: the name, the rule's words, the entities.
     pub invalid: Vec<(String, String, Vec<Entity>)>,
@@ -1241,7 +1241,7 @@ impl PassManager {
     /// [`Pass::modifies`]), then the verifier ([`Component::verify`], [`crate::Resource::verify`], the validators) on
     /// what it leaves. On in debug builds (the test suites); off by default in release builds, for speed, so a pass
     /// that leaves an invalid component is not named there unless the program opts in with `true`. Measured on a
-    /// Unity level (16,000 placements, 12 passes, release): the verifier 0.26 s and the declaration diff another
+    /// level of 16,000 placements (12 passes, release): the verifier 0.26 s and the declaration diff another
     /// 0.46 s, against 1.6 s of passes. What a pass's names do across the whole world is checked either way, and a
     /// conversion ([`PassManager::convert`]) verifies the reader's output and the world before its writer either way.
     /// The in-place edits of values on entities that keep the name are not in the declaration diff in any build

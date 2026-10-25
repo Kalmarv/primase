@@ -1,4 +1,4 @@
-//! World state: variables a level can be in (a game's event flags, a door's open state, a GTA IPL group, a Unity
+//! World state: variables a level can be in (a game's event flags, a door's open state, a level's instance group, an
 //! object's active flag) and what depends on them, resolved to one concrete world by [`ResolveState`].
 //!
 //! - An **axis** ([`StateAxis`]) is an entity: a stable `key`, a small domain (bool, or up to 64 named values), a
@@ -92,8 +92,8 @@ pub enum Scope {
 /// A state variable, on its own entity.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct StateAxis {
-    /// Stable and unique in the world (`fromsoft.flag.8302`, `gta.ipl.<name>`): assignments, reports and the text
-    /// form name axes by it.
+    /// Stable and unique in the world (`<dialect>.flag.8302`, `<dialect>.ipl.<name>`): assignments, reports and
+    /// the text form name axes by it.
     pub key: String,
     pub domain: Domain,
     /// The value without an assignment: the game's own start state, where the source states it (an authored flag, a
@@ -1102,7 +1102,7 @@ mod tests {
         e
     }
 
-    /// The Sekiro castle: intact walls (entity group 1117201: disabled while 8306 or 8302 is on), the same walls
+    /// A source's castle: intact walls (entity group 1117201: disabled while 8306 or 8302 is on), the same walls
     /// with charcoal (1117204: disabled while 8302 is off), and a piece shown only with 8301 on (1117203).
     struct Castle {
         w: World,

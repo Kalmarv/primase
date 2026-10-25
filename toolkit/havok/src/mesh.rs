@@ -30,10 +30,10 @@ pub struct CustomPrimitive {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CustomKind {
     /// `[146, w, index low, index high]` with indices `[k, k, 4, k]`: the extern shape at `index` of the shape's
-    /// `externShapes` (the second word is not read). Elden Ring's asset collision.
+    /// `externShapes` (the second word is not read). The source's asset collision.
     Extern(usize),
     /// Records whose first word's low byte is 0x52 (`[0x2252, 8, 0x3d4d]`: a word, what may be a vertex index and what
-    /// may be a half float; Sekiro's and Elden Ring's): their meaning is not known, so they are not read.
+    /// may be a half float; both sources'): their meaning is not known, so they are not read.
     Unread,
 }
 

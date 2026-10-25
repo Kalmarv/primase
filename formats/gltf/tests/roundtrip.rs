@@ -81,8 +81,9 @@ fn round_trip_geometry_and_transforms() {
     let regular = node_by_source(doc, "plac:0").unwrap();
     let attributes = &doc["meshes"][regular["mesh"].as_u64().unwrap() as usize]["primitives"][0]["attributes"];
     assert!(attributes.get("TANGENT").is_some());
-    assert!(attributes.get("_TANGENT1").is_some());
+    assert!(attributes.get("_PRIMASE_TANGENT1").is_some());
     assert!(attributes.get("TANGENT1").is_none());
+    assert!(attributes.get("_TANGENT1").is_none());
     let mirrored = node_by_source(doc, "plac:1").unwrap();
     assert_eq!(bits(&f32s(&regular["matrix"])), bits(&matrix_of(&b, b.regular)));
     assert_eq!(bits(&f32s(&mirrored["matrix"])), bits(&matrix_of(&b, b.mirrored)));

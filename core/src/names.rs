@@ -5,24 +5,31 @@
 use crate::asset::Asset;
 use crate::atmosphere::Atmosphere;
 use crate::clip::{Clip, ClipBinding};
+use crate::clip_identity::{ClipKey, ClipLength};
+use crate::clip_events::ClipEvents;
 use crate::collider::{Collider, Heightfield};
 use crate::components::{
     Collision, Instance, Light, MaterialVariants, Mesh, MeshFile, Name, Shadows, Source, Surfaces, Texture,
     TextureFile, Tile, Transform,
 };
 use crate::convert::{PartScope, PartitionPlan};
+use crate::content::{ContentNote, DisplayName, Record};
+use crate::controller::{Controller, ControllerBinding};
 use crate::detail::DetailedMaterial;
 use crate::draw_order::DrawOrder;
+use crate::draw_groups::{DrawGroupDefaults, DrawGroups};
 use crate::environment::Environment;
 use crate::layered::LayeredMaterial;
 use crate::lod::Lods;
 use crate::marker::{Curve, Marker};
 use crate::material_usage::MaterialUsage;
+use crate::material_parameters::MaterialParameters;
 use crate::morphs::Morphs;
 use crate::parallel::Threads;
 use crate::pass::memo::Memo;
 use crate::pbr::PbrMaterial;
 use crate::priority::Priority;
+use crate::primitive_keys::PrimitiveKeys;
 use crate::provenance::Provenance;
 use crate::rig::{
     Attachment, JointMap, JointPlacement, MorphWeights, RigInstance, RigPose, SkinInstance, Sockets,
@@ -63,7 +70,8 @@ declared! {
         TextureFile, MeshFile, MaterialVariants, Tile, DrawOrder, LayeredMaterial, Lods, Marker, Curve, MaterialUsage,
         PbrMaterial, DetailedMaterial, Priority, Provenance, StateAxis, Condition, PrimitiveCondition, StateOverride, VertexColor, Skeleton, Skin, Morphs, RigInstance,
         RigPose, SkinInstance, MorphWeights, Sockets, Attachment, JointMap, JointPlacement, Clip, ClipBinding, Asset, Shader, ShaderBinding,
-        TextureLayers, MaterialPrograms, ProgramFacts;
+        TextureLayers, MaterialPrograms, ProgramFacts, ClipKey, ClipLength, ClipEvents, Controller, ControllerBinding,
+        DrawGroups, DrawGroupDefaults, ContentNote, Record, DisplayName, PrimitiveKeys, MaterialParameters;
     resources: PartScope, PartitionPlan, Environment, Atmosphere, StateAssignment, Surfaces, Threads, Memo,
 }
 
@@ -81,5 +89,16 @@ mod tests {
         assert!(
             set.contains("core.mesh") && set.contains("pbr.material") && set.contains("core.environment")
         );
+    }
+
+    #[test]
+    fn animation_and_content_types_are_listed_with_their_storage_kind() {
+        let names = names();
+        for name in ["core.clip_key", "core.clip_length", "core.clip_events", "core.controller", "core.controller_binding",
+            "core.draw_groups", "core.draw_group_defaults", "core.content_note", "core.record",
+            "core.display_name", "core.primitive_keys", "core.material_parameters"] {
+            assert!(names.contains(&(name,Declared::Component)),"{name}");
+        }
+        assert!(!names.iter().any(|(name,_)|*name=="core.clip_catalog"));
     }
 }

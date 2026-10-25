@@ -7,9 +7,9 @@
 //! {
 //!   "version": 2,
 //!   "from": "Quaternius UAL (Rigify DEF bones)",
-//!   "to": "Sekiro c1010",
+//!   "to": "c1010",
 //!   "pairs": [["DEF-hips", "Root"], ["DEF-spine.001", "Spine"]],
-//!   "notes": {"DEF-hips": "the hips carry both the pelvis and the spine, as Sekiro's Root does"},
+//!   "notes": {"DEF-hips": "the hips carry both the pelvis and the spine, as the source's Root does"},
 //!   "placements": {"Spine": {"t": [0.0, 0.02, 0.0], "r": [0.0, 0.0, 0.0, 1.0]}}
 //! }
 //! ```

@@ -313,7 +313,7 @@ fn mean_colour_of(
         .map_err(|e| invalid("Sekiro PBR pixels", 0, e))?;
     let mut sum = [0f64; 3];
     let mut count = 0u32;
-    for px in rgba.chunks_exact(4) {
+    for px in rgba.as_chunks::<4>().0 {
         let linear = Srgba8([px[0], px[1], px[2], 255]).linear();
         for (total, value) in sum.iter_mut().zip(linear) {
             *total += f64::from(value);
@@ -327,25 +327,25 @@ fn mean_colour_of(
 }
 /// The alpha of the colour texture `name` where it is one value over every texel of its base level (a default texture
 /// the engine binds where a material binds none: `SYSTEX_Dummy_a`), as the sampler returns it (0 to 1); `None` where it
-/// varies or cannot be read. Alpha is stored linear in every format, so no colour space applies.
+/// varies (`Ok(None)`); `Err` with the read's own text where it cannot be read. Alpha is stored linear in every format, so no colour space applies.
 fn uniform_alpha(
     world: &World,
     payloads: &BTreeMap<String, impl AsRef<[u8]>>,
     cache: &BTreeMap<(String, bool), Entity>,
     name: &str,
-) -> Option<f64> {
+) -> std::result::Result<Option<f64>, String> {
     let read_copy;
     let t = match cache.get(&(name.to_owned(), false)).and_then(|e| world.get::<Texture>(*e)) {
         Some(t) => t,
         None => {
-            read_copy = read(payloads, name).ok()?;
+            read_copy = read(payloads, name).map_err(|e| e.to_string())?;
             &read_copy
         }
     };
-    let rgba = pixels(t).ok()?;
-    let mut alphas = rgba.chunks_exact(4).map(|px| px[3]);
-    let first = alphas.next()?;
-    alphas.all(|a| a == first).then(|| f64::from(first) / 255.)
+    let rgba = pixels(t).map_err(|e| e.to_string())?;
+    let mut alphas = rgba.as_chunks::<4>().0.iter().map(|px| px[3]);
+    let first = alphas.next().ok_or_else(|| "a texture of no texels".to_owned())?;
+    Ok(alphas.all(|a| a == first).then(|| f64::from(first) / 255.))
 }
 fn spawn(world: &mut World, name: String, t: Texture) -> Entity {
     let e = world.spawn();

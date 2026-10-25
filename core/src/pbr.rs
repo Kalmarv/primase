@@ -1,6 +1,6 @@
 //! The `pbr.*` dialect: a baked metal-rough material, glTF 2.0's material model. The common lowering target for the
-//! glTF, USD and skate writers: a pass lowers a game's material (`skate.material`, `fromsoft.layered_material`,
-//! `gta.*`) to a [`PbrMaterial`] on the same material entity, which keeps its dialect components.
+//! glTF and USD writers and a destination's: a pass lowers a source's material (`layered_material`, ...) to a
+//! [`PbrMaterial`] on the same material entity, which keeps its dialect components.
 //!
 //! Meanings follow glTF 2.0 §3.9 exactly, so the glTF writer is a direct mapping: factors are linear, colour textures
 //! sRGB, packed maps linear, and [`Default`] is glTF's default material.
@@ -52,8 +52,8 @@ impl UvTransform {
         [u + self.offset[0], v + self.offset[1]]
     }
 
-    /// A tiling and offset given with the texture origin bottom-left (`uv * scale + offset`, v up: Unity's
-    /// `_MainTex_ST`), for a reader that stores v as 1 - v and flips the texture's rows.
+    /// A tiling and offset given with the texture origin bottom-left (`uv * scale + offset`, v up: one source's
+    /// `_MainTex_ST`-style uniform), for a reader that stores v as 1 - v and flips the texture's rows.
     ///
     /// The source samples its texture at v_s = v * scale_v + offset_v. In the world both the coordinate and the image
     /// are flipped, so a world coordinate w = 1 - v must sample at 1 - v_s = 1 - (1 - w) * scale_v - offset_v =

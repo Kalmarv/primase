@@ -1,5 +1,5 @@
-//! The Havok animation container of a tagfile (`hkaAnimationContainer`, the class Sekiro's skeleton and animation files
-//! hold as their one named variant), as typed values: skeletons, animations (their headers and, for a spline
+//! The Havok animation container of a tagfile (`hkaAnimationContainer`, the class the source's skeleton and animation
+//! files hold as their one named variant), as typed values: skeletons, animations (their headers and, for a spline
 //! compressed one, the compressed data as stored) and the bindings that name which bone each track drives.
 //!
 //! This is reading: every number is the file's. How a spline compressed animation decodes to bone transforms at a time

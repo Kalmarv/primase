@@ -31,15 +31,15 @@ fn explicit_pair_moves_both_directions_and_carries_separate_root_motion() -> Res
         additive: None };
     let original = clip.clone();
     let policy = RetargetClip { reference: Reference::Rest, translation: Translation::Root };
-    let (forward, log) = pair::retarget_one(&clip, &a, &b, target, &table, policy)?;
+    let pair::Transfer { clip: forward, approximations, .. } = pair::retarget_one(&clip, &a, &b, target, &table, policy)?;
     assert_eq!(clip, original);
     assert_eq!(forward.root_motion, original.root_motion);
     assert_eq!(forward.extrapolation, original.extrapolation);
-    assert!(!log.approximations.is_empty());
+    assert!(!approximations.is_empty());
     assert!(forward.channels.iter().all(|c| matches!(c.target, ClipTarget::Joint { skeleton, .. } if skeleton == target)));
     let movement = forward.channels.iter().find(|c| c.property == Property::Translation).ok_or("root translation")?;
     assert_eq!(movement.values, [0.0, 2.0, 0.0, 2.0, 2.0, 0.0]);
-    let (back, _) = pair::retarget_one(&forward, &b, &a, source, &pair::reversed(&table)?, policy)?;
+    let back = pair::retarget_one(&forward, &b, &a, source, &pair::reversed(&table)?, policy)?.clip;
     let movement = back.channels.iter().find(|c| c.property == Property::Translation).ok_or("returned root translation")?;
     assert_eq!(movement.values, original.channels[0].values);
     assert_eq!(back.root_motion, original.root_motion);
@@ -55,8 +55,39 @@ fn missing_pairs_stay_in_the_report_and_never_become_automatic_matches() -> Resu
     assert_eq!(report.pairs.iter().filter(|p| p.refusal.is_some()).count(), 1);
     assert_eq!(report.unmapped_source, ["Head"]);
     assert_eq!(report.unmapped_target, ["Head"]);
-    let stored = JointTable::parse(pair::SEKIRO_SKATE_TABLE)?;
+    // a table with a note, in invented bone names: reversal is its own inverse
+    let stored = JointTable::parse(
+        r#"{"version":1,"from":"short rig","to":"tall rig","pairs":[["Root","Hips"],["Head","Top"]],
+            "notes":{"Root":"Root carries what Hips carries"}}"#,
+    )?;
+    assert_eq!(pair::reversed(&stored)?.notes["Hips"], "Root carries what Hips carries");
     assert_eq!(pair::reversed(&pair::reversed(&stored)?)?, stored);
+    Ok(())
+}
+
+#[test]
+fn display_channels_need_explicit_destination_correspondences() -> Result<(), Box<dyn std::error::Error>> {
+    let from = skeleton("Root", "Head", 1.0);
+    let to = skeleton("Hips", "Top", 2.0);
+    let table = JointTable::parse(r#"{"version":1,"from":"a","to":"b","pairs":[["Root","Hips"],["Head","Top"]]}"#)?;
+    let source = primase_core::Entity::from_index(20);
+    let target = primase_core::Entity::from_index(30);
+    for (target_channel, property, reason) in [
+        (ClipTarget::DrawGroup { scope: "source-character".into(), group: 3 }, Property::Visibility, "draw-group scope"),
+        (ClipTarget::MaterialParameter { materials: vec![source], name: "tint".into() }, Property::Values(1), "material"),
+    ] {
+        let clip = Clip { name: "walk".into(), duration: 1.0, extrapolation: Extrapolation::Hold,
+            additive: None, root_motion: None, channels: vec![
+                Channel { target: ClipTarget::Joint { skeleton: source, joint: JointId(0) },
+                    property: Property::Translation, interpolation: Interpolation::Linear,
+                    times: vec![0.0], values: vec![0.0, 1.0, 0.0] },
+                Channel { target: target_channel, property, interpolation: Interpolation::Step,
+                    times: vec![0.0], values: vec![1.0] },
+            ] };
+        let error = pair::retarget_one(&clip, &from, &to, target, &table,
+            RetargetClip { reference: Reference::Rest, translation: Translation::Root }).unwrap_err().0;
+        assert!(error.contains(reason) && error.contains("correspondence"), "{error}");
+    }
     Ok(())
 }
 

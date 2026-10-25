@@ -584,7 +584,7 @@ impl Notice {
 }
 
 impl std::fmt::Display for Notice {
-    /// `approximation lower-gta-pbr: specular folded into roughness x 12 (part 0, part 3)`
+    /// `approximation lower-<dialect>-pbr: specular folded into roughness x 12 (part 0, part 3)`
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let kind = match self.kind {
             NoticeKind::Unsupported => "unsupported",

@@ -1,7 +1,7 @@
 //! The strict glTF reader: meshes into [`primase_core::Mesh`], plus checked access to the rest of the document for
 //! round-trip tests and for readers that take materials, nodes and images from the JSON themselves.
 //!
-//! What it reads (a superset of skate-scene v1's prototype GLB rules): a GLB with one buffer held in the BIN chunk
+//! What it reads (a superset of one consumer's prototype GLB rules): a GLB with one buffer held in the BIN chunk
 //! ([`Gltf::from_glb`]), or a `.gltf` JSON document whose buffers, each named by a `uri`, the caller supplies
 //! ([`Gltf::from_gltf`]: where the bytes come from, a file beside it or a game's container, is the caller's);
 //! primitives of mode points, lines or triangles; `indices` unsigned byte, short or int (or none: sequential);
@@ -375,7 +375,8 @@ impl Gltf {
                 .as_u64()
                 .and_then(|a| usize::try_from(a).ok())
                 .ok_or_else(|| invalid(&apath, &format!("{name} is not an accessor index")))?;
-            // A semantic first: primase's further tangent sets are custom-named (`_TANGENT<n>`) but read as streams.
+            // A semantic first: primase's further tangent sets are custom-named (`_PRIMASE_TANGENT<n>`) but read as
+            // streams. Every other `_`-prefixed name, a foreign `_TANGENT<n>` included, stays a custom attribute.
             let Some(semantic) = semantic(name) else {
                 if !name.starts_with('_') {
                     return Err(invalid(&apath, &format!("unsupported attribute {name}")));
@@ -925,7 +926,9 @@ fn document_buffers(json: &Value) -> Result<&[Value]> {
     }
 }
 
-/// glTF attribute name -> semantic, for the attributes the reader takes.
+/// glTF attribute name -> semantic, for the attributes the reader takes. The further tangent sets carry primase's own
+/// `_PRIMASE_TANGENT<n>` name (the writer's, `encode.rs`): `_TANGENT<n>` is another application's to define, and a
+/// document that has one keeps it as a custom attribute rather than being read as our tangent set.
 fn semantic(name: &str) -> Option<Semantic> {
     // Only the canonical spelling: `TEXCOORD_01` would alias `TEXCOORD_1`.
     let set = |prefix: &str| {
@@ -939,7 +942,7 @@ fn semantic(name: &str) -> Option<Semantic> {
         "TANGENT" => Some(Semantic::Tangent(0)),
         _ => set("TEXCOORD_")
             .map(Semantic::TexCoord)
-            .or_else(|| set("_TANGENT").and_then(|n| (n > 0).then_some(Semantic::Tangent(n))))
+            .or_else(|| set("_PRIMASE_TANGENT").and_then(|n| (n > 0).then_some(Semantic::Tangent(n))))
             .or_else(|| set("COLOR_").map(Semantic::Color))
             .or_else(|| set("JOINTS_").map(Semantic::Joints))
             .or_else(|| set("WEIGHTS_").map(Semantic::Weights)),

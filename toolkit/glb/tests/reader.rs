@@ -80,9 +80,22 @@ fn indexed_tangents_round_trip_through_standard_and_custom_attributes() {
     let bytes = primase_glb::encode_mesh("indexed tangents", &mesh).unwrap();
     let gltf = Gltf::from_glb(&bytes).unwrap();
     let attributes = &gltf.json()["meshes"][0]["primitives"][0]["attributes"];
-    for name in ["TANGENT", "_TANGENT1", "_TANGENT4"] { assert!(attributes.get(name).is_some(), "{name}"); }
+    for name in ["TANGENT", "_PRIMASE_TANGENT1", "_PRIMASE_TANGENT4"] { assert!(attributes.get(name).is_some(), "{name}"); }
     assert!(attributes.get("TANGENT1").is_none());
+    // `_TANGENT<n>` is a foreign application's name: we never write it, and a document that has one keeps it custom.
+    assert!(attributes.get("_TANGENT1").is_none());
     assert_eq!(gltf.read_mesh(0).unwrap().primitives[0].primitive.streams, streams);
+}
+
+/// `_TANGENT<n>` is another application's attribute: a document that has one keeps it in `custom`, and it is not read
+/// as our tangent set.
+#[test]
+fn a_foreign_tangent_attribute_stays_custom() {
+    let mut d = doc();
+    d["meshes"][0]["primitives"][0]["attributes"]["_TANGENT1"] = json!(2);
+    let p = read(&d).unwrap().primitives.into_iter().next().unwrap();
+    assert!(p.custom.contains_key("_TANGENT1"));
+    assert!(!p.primitive.streams.contains_key(&Semantic::Tangent(1)));
 }
 
 /// Each mutation of the base document, and the text its error must contain.

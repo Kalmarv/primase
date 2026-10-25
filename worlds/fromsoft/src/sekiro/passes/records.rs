@@ -11,7 +11,7 @@
 use crate::msb::{Event, Region, UnplacedPart, euler_transform};
 use crate::sekiro::source::{MapRecords, ReadScope};
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
-use primase_core::{Component, Marker, Name, Resource, Source, Transform, World};
+use primase_core::{Component, Marker, Name, Record, Resource, Source, Transform, World};
 use std::collections::BTreeSet;
 
 /// `lower-fromsoft-map-records`: the choice of region kinds to leave out is the program's, stated (empty for none).
@@ -77,6 +77,7 @@ impl Pass for LowerFromSoftMapRecords {
             Region::NAME,
             Event::NAME,
             UnplacedPart::NAME,
+            Record::NAME,
         ]
     }
     fn removes(&self) -> &[&'static str] {
@@ -116,6 +117,7 @@ impl Pass for LowerFromSoftMapRecords {
             world.insert(e, transform);
             world.insert(e, Name(region.name.clone()));
             world.insert(e, Source(label(&region.name)));
+            world.insert(e, Record {category:"region".into(),kind:word.clone()});
             world.insert(e, region);
             log.place(e);
             log.count(&format!("{word} regions"), 1);
@@ -143,6 +145,7 @@ impl Pass for LowerFromSoftMapRecords {
             world.insert(e, transform);
             world.insert(e, Name(part.name.clone()));
             world.insert(e, Source(label(&part.name)));
+            world.insert(e, Record {category:"part".into(),kind:part.kind.into()});
             log.count(&format!("{} parts", part.kind), 1);
             world.insert(e, part);
             log.place(e);
@@ -154,6 +157,7 @@ impl Pass for LowerFromSoftMapRecords {
                 .map_or_else(|| format!("type_{}", event.type_code), str::to_owned);
             world.insert(e, Name(event.name.clone()));
             world.insert(e, Source(label(&event.name)));
+            world.insert(e, Record {category:"event".into(),kind:word.clone()});
             world.insert(e, event);
             log.place(e);
             log.count(&format!("{word} events"), 1);
@@ -248,6 +252,9 @@ mod tests {
         assert_eq!((event.type_name, event.part.as_deref()), (Some("treasure"), Some("o1")));
         assert!(!w.has::<Transform>(chest) && !w.has::<Marker>(chest));
         assert_eq!(w.get::<Name>(chest).unwrap().0, "Chest");
+        assert_eq!(w.get::<Record>(chest),Some(&Record {category:"event".into(),kind:"treasure".into()}));
+        assert_eq!(w.get::<Record>(enemy),Some(&Record {category:"part".into(),kind:"enemy".into()}));
+        assert_eq!(w.get::<Record>(e),Some(&Record {category:"region".into(),kind:"sound".into()}));
         assert_eq!(log.counts["treasure events"], 1);
     }
 

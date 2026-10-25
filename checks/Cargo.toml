@@ -10,10 +10,13 @@ publish.workspace = true
 
 [dev-dependencies]
 primase-anvil.workspace = true
+primase-animation.workspace = true
 primase-core.workspace = true
 primase-fromsoft.workspace = true
+primase-frostbite.workspace = true
 primase-gltf.workspace = true
 primase-gta.workspace = true
+primase-havok.workspace = true
 primase-image.workspace = true
 primase-lighting.workspace = true
 primase-meshops.workspace = true
@@ -22,7 +25,7 @@ primase-stuntboost.workspace = true
 primase-monogame.workspace = true
 primase-unity.workspace = true
 primase-web = { workspace = true, features = ["fixture"] }
-primase-compress.workspace = true
+primase-compress = { workspace = true, features = ["reference-decoder"] }
 primase-testdata.workspace = true
 toml.workspace = true
 meshopt.workspace = true

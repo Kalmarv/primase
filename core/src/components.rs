@@ -1,10 +1,10 @@
 //! The core components: what every reader, pass and writer agrees on. Small and versioned; everything game- or
-//! target-specific is a dialect component owned by its crate (`fromsoft.*`, `gta.*`, `skate.*`, `pbr.*`).
+//! target-specific is a dialect component owned by its crate (`<dialect>.*`, `pbr.*`).
 //!
 //! Entity roles (by convention, not enforced by the store):
 //! - a **prototype** has a [`Mesh`] in its own local space (plus [`Name`], [`Source`]);
 //! - a **placement** has a [`Transform`] and an [`Instance`] pointing at its prototype;
-//! - a **material** has the material components of some dialect (`pbr.material`, `skate.material`, ...);
+//! - a **material** has the material components of some dialect (`pbr.material`, a destination's `material`, ...);
 //!   a [`Primitive`] refers to it by entity;
 //! - a **texture** has a [`Texture`] (or only a [`TextureFile`] until a pass loads it);
 //! - a prototype whose geometry is still in a file has a [`MeshFile`] (a pass loads it into a [`Mesh`]), and
@@ -39,7 +39,7 @@ impl Component for Name {
     }
 }
 
-/// Provenance: a stable key into the source game's data (GTA archetype hash, Sekiro MSB part, asset path), for
+/// Provenance: a stable key into the source game's data (an archetype hash, a map part's name, an asset path), for
 /// debugging, reports and review links.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Source(pub String);
@@ -363,7 +363,7 @@ fn unit(v: [f64; 3]) -> [f32; 3] {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct Instance {
     pub prototype: Entity,
-    /// Selects per-placement material variants of the prototype's primitives (GTA tint rows, see
+    /// Selects per-placement material variants of the prototype's primitives (one source's tint rows, see
     /// [`MaterialVariants`]); 0 when it has none.
     pub variant: u32,
 }
@@ -1234,7 +1234,7 @@ pub struct MeshFile {
     pub path: PathBuf,
     /// Which mesh of the file (glTF `meshes[mesh]`).
     pub mesh: u32,
-    /// One entry per primitive of that mesh, in order: the material the reader already knows for it (skate-scene:
+    /// One entry per primitive of that mesh, in order: the material the reader already knows for it (a consumer's
     /// `parts[i].material`). The load pass checks the primitive count against it and fills [`Primitive::material`].
     pub materials: Vec<Option<Entity>>,
 }
@@ -1254,7 +1254,7 @@ impl Component for MeshFile {
 }
 
 /// Per-placement material choices of a prototype: one map per primitive, variant -> material, overriding the
-/// primitive's material for placements whose [`Instance::variant`] matches (GTA tint rows).
+/// primitive's material for placements whose [`Instance::variant`] matches (one source's tint rows).
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize)]
 pub struct MaterialVariants(pub Vec<BTreeMap<u32, Entity>>);
 impl Component for MaterialVariants {
@@ -1788,7 +1788,7 @@ mod tests {
             mesh.apply_linear(&flat),
             crate::world::Linearity::Unsupported
         ));
-        // the rule is relative: a small uniform scale (a FromSoft bone of scale 0.00937, det about 8.2e-7) is not
+        // the rule is relative: a small uniform scale (one source's bone of scale 0.00937, det about 8.2e-7) is not
         // singular, and turns normals and tangents to unit length; one axis squashed to 1e-7 of the others is
         let s = 0.00937f32;
         let small = Linear::new([[s, 0.0, 0.0], [0.0, s, 0.0], [0.0, 0.0, s]]);

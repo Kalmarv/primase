@@ -24,17 +24,18 @@
 //!   quaternion at that alignment;
 //! - padding to 16.
 //!
-//! A component with neither flag is absent, and the caller states what stands in for it ([`Absent`]). In Sekiro's
-//! character animations (1,122,267 tracks of 8,888 animations) the neutral value is what the data says: an absent
-//! rotation is on a bone whose reference rotation is not the identity in 34% of the cases against 77% of all tracks,
-//! and an absent position component on a bone whose reference component is not zero in 41%, 4% and 9% of the cases
-//! (x, y, z) against 93%, 36% and 44% of all, so an encoder that left them out was leaving out zero and the identity,
-//! not the reference. The game agrees: its live pose of the idle animation (read from the running game's memory) equals
-//! the neutral decoding on the bones where the two fallbacks differ (12 of 12 closer to neutral, 0 to the reference,
-//! 1e-6 to 1e-5 against 5e-5 to 3e-4; knowledge base note 447729a8). Elden Ring's files (611,903 tracks of 5,843 animations) show
-//! the same direction, more weakly, and cannot be compared in the game (it is not launched here): of its absent components, the share
-//! on a bone whose reference is not neutral is 51.6% (rotation), 59.9%, 6.5% and 19.7% (position x, y, z) against 85.6%, 93.1%, 33.6% and
-//! 47.2% of all tracks, so the encoder drops what is neutral, not what equals the reference (which would leave the two shares alike).
+//! A component with neither flag is absent, and the caller states what stands in for it ([`Absent`]). In one
+//! source's character animations (1,122,267 tracks of 8,888 animations) the neutral value is what the data says: an
+//! absent rotation is on a bone whose reference rotation is not the identity in 34% of the cases against 77% of all
+//! tracks, and an absent position component on a bone whose reference component is not zero in 41%, 4% and 9% of the
+//! cases (x, y, z) against 93%, 36% and 44% of all, so an encoder that left them out was leaving out zero and the
+//! identity, not the reference. Its live pose of the idle animation (read from the running game's memory) equals the
+//! neutral decoding on the bones where the two fallbacks differ (12 of 12 closer to neutral, 0 to the reference, 1e-6
+//! to 1e-5 against 5e-5 to 3e-4; knowledge base note 447729a8). A second source's files (611,903 tracks of 5,843
+//! animations) show the same direction, more weakly, and cannot be compared in the game (it is not launched here): of
+//! its absent components, the share on a bone whose reference is not neutral is 51.6% (rotation), 59.9%, 6.5% and
+//! 19.7% (position x, y, z) against 85.6%, 93.1%, 33.6% and 47.2% of all tracks, so the encoder drops what is
+//! neutral, not what equals the reference (which would leave the two shares alike).
 //! Float tracks are not read: an animation with some is refused. A track bound to a negative bone
 //! index drives no bone.
 #![deny(
@@ -96,7 +97,7 @@ pub enum Fallback {
     Reference,
 }
 
-/// The fallback for each kind of component; the caller states it (see the module documentation for what Sekiro's
+/// The fallback for each kind of component; the caller states it (see the module documentation for what the source's
 /// files say).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Absent {
@@ -474,7 +475,7 @@ fn rotation(r: &mut Reader, flags: u8, code: u8) -> Result<Rotation> {
 }
 
 /// A vector component (a position or scale axis) of a track whose stored value, or the range its quantised control
-/// points are scaled between, is NaN or infinite: no value can be decoded from it (Elden Ring's `c2030/a001_009000` has
+/// points are scaled between, is NaN or infinite: no value can be decoded from it (the source's `c2030/a001_009000` has
 /// one, the scale of the leaf bone `R_Egg`, all six stored bounds NaN). Its control points are still skipped, and the
 /// component is [`Component::Absent`], so the caller's `absent` stands for it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -762,7 +763,7 @@ mod tests {
     }
 
     /// A stored value that is NaN is that component's own: it reads as absent (the caller's `absent` stands for it) and
-    /// is named in `unreadable`, where it used to refuse the whole animation (Elden Ring's `c2030/a001_009000`).
+    /// is named in `unreadable`, where it used to refuse the whole animation (the source's `c2030/a001_009000`).
     #[test]
     fn a_nan_component_is_read_as_absent_and_named() {
         let mut d = static_block(f32::NAN, 5.0);

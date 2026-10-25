@@ -4,6 +4,7 @@ pub mod draw_keywords;
 pub mod drawn;
 pub mod lower;
 pub mod lower_ambient;
+pub mod lower_animator;
 pub mod lower_collision;
 pub mod lower_lights;
 pub mod lower_terrain;

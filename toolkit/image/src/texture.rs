@@ -1,6 +1,6 @@
 use crate::{Error, Image, Result, Samples, read_png, write_png};
 use primase_core::parallel::Threads;
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::{
     ColorSpace, Entity, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat, TexRole,
     Texture, TextureFile, World,
@@ -313,6 +313,13 @@ pub fn bake_normal_scale(world: &mut World) -> Result<PassLog> {
     Ok(log)
 }
 
+/// `bake-normal-scale`'s declaration: no options.
+pub const BAKE_NORMAL_SCALE: PassSpec = PassSpec {
+    name: "bake-normal-scale",
+    options: &[],
+    make: |_| Ok(Box::new(BakeNormalScale)),
+};
+
 /// `bake-normal-scale`: [`bake_normal_scale`] as a pass.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BakeNormalScale;
@@ -339,6 +346,13 @@ impl Pass for BakeNormalScale {
         Ok(())
     }
 }
+
+/// `normalize-normals`' declaration: no options.
+pub const NORMALIZE_NORMALS: PassSpec = PassSpec {
+    name: "normalize-normals",
+    options: &[],
+    make: |_| Ok(Box::new(NormalizeNormals)),
+};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NormalizeNormals;

@@ -1,7 +1,7 @@
 //! Source visibility coverage for every dictionary-named character in both games. No HKX tracks,
 //! meshes, textures or shaders are decoded. A zero counts events, not a claim about bone-scale animation.
 use std::collections::BTreeSet;
-use primase_fromsoft::{Binder, Game, Install, Keys, NameDictionary, dcx::Decoder, sekiro, tae::{Tae,clip_animation_id,visibility::ClipVisibility}};
+use primase_fromsoft::{Binder, Game, Install, Keys, NameDictionary, dcx::Decoder, sekiro, tae::{Tae,clip_animation_id}};
 use primase_testdata::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use serde_json::json;
 mod common;
@@ -33,7 +33,7 @@ fn every_sekiro_and_elden_character_reports_its_clip_visibility_event_coverage()
                     let tae=Tae::read(&decoder.decode_if_dcx(&file.bytes)?)?;
                     for animation in &tae.animations {
                         if let Some(inherited)=tae.resolved_animation(animation.id)? {
-                            records.entry(animation.id).or_insert_with(||ClipVisibility::decode(character,&inherited.events));
+                            records.entry(animation.id).or_insert_with(||sekiro::decode_visibility(character,&inherited.events));
                         }
                     }
                 }

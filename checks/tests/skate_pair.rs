@@ -9,8 +9,18 @@ use primase_frostbite::folder::{Folder, Source};
 use primase_reskate::{game::{clip::LowerSkateClips, rig::render_map}, read::animation};
 use primase_testdata::{Game, OracleSet, Tool, install, install_file, oodle, oracle, tool};
 use serde_json::json;
-mod common;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+/// The authored joint table (bone names and correspondence only). It names two games, so it lives with the checks (the
+/// toolkit names none), not in the animation toolkit.
+const SEKIRO_SKATE_TABLE: &str = include_str!("fixtures/sekiro-human__skate-render.json");
+
+/// The version-6 Oodle codec: the configured game library on Windows, oozextract elsewhere.
+#[allow(unsafe_code)]
+fn fromsoft_oodle(library: primase_testdata::OodleLibrary) -> primase_compress::Result<primase_compress::oodle::Oodle> {
+    // SAFETY: the test configuration names a trusted native library.
+    unsafe { primase_compress::oodle::Oodle::open(library.path(), primase_compress::oodle::Version::V6) }
+}
 
 const LOWER: &str = "lower-fromsoft-geometry{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw,speedtree-frame=program},select-lod{form=finest}";
 
@@ -65,7 +75,7 @@ fn existing_soldier_and_skate_idle_transfer_both_ways_and_skin_rebinds() -> Resu
         (install(Game::Sekiro), oodle(Tool::Oodle6), install_file(Game::Skate, "Data"), tool(Tool::Oodle9)) else {
             return Err("explicit pair proof needs Sekiro/skate installs and Oodle6/Oodle9; no game data was measured".into());
         };
-    let codec = common::oodle(fs_dll)?;
+    let codec = fromsoft_oodle(fs_dll)?;
     let decoder = Decoder { oodle: Some(&codec), max_output: 1 << 30 };
     let install = Install::sekiro(root);
     let mut w = World::new();
@@ -90,11 +100,12 @@ fn existing_soldier_and_skate_idle_transfer_both_ways_and_skin_rebinds() -> Resu
     let skate_clip = w.get::<Clip>(skate_clip).ok_or("lowered idle")?.clone();
     let a = w.get::<Skeleton>(human).ok_or("human")?;
     let b = w.get::<Skeleton>(skeletons.render).ok_or("render")?;
-    let (table, report) = pair::available_table(a, b, &JointTable::parse(pair::SEKIRO_SKATE_TABLE)?)?;
+    let (table, report) = pair::available_table(a, b, &JointTable::parse(SEKIRO_SKATE_TABLE)?)?;
     let policy = RetargetClip { reference: Reference::Aligned, translation: Translation::Root };
-    let (on_skate, fs_log) = pair::retarget_one(&fs_clip, a, b, skeletons.render, &table, policy)?;
-    let (on_soldier, skate_log) = pair::retarget_one(&skate_clip, b, a, human, &pair::reversed(&table)?, policy)?;
-    for (clip, destination) in [(&on_skate, skeletons.render), (&on_soldier, human)] {
+    let to_skate = pair::retarget_one(&fs_clip, a, b, skeletons.render, &table, policy)?;
+    let to_soldier = pair::retarget_one(&skate_clip, b, a, human, &pair::reversed(&table)?, policy)?;
+    let (on_skate, on_soldier) = (&to_skate.clip, &to_soldier.clip);
+    for (clip, destination) in [(on_skate, skeletons.render), (on_soldier, human)] {
         assert!(clip.channels.iter().any(|c| matches!(c.target, ClipTarget::Joint { skeleton, .. } if skeleton == destination)));
         assert!(clip.channels.iter().all(|c| !matches!(c.target, ClipTarget::Joint { skeleton, .. } if skeleton != destination)));
     }
@@ -102,7 +113,7 @@ fn existing_soldier_and_skate_idle_transfer_both_ways_and_skin_rebinds() -> Resu
     run(&mut w, LOWER)?;
     let fit = fit_skin(&mut w, human, skeletons.render, &table)?;
     println!("SEKIRO_SKATE_PAIR={}", json!({"character":"c1010","table":report,"skin":fit,
-        "sekiro_to_skate":fs_log.approximations,"skate_to_sekiro":skate_log.approximations,"skate_key":entry.key}));
+        "sekiro_to_skate":to_skate.approximations,"skate_to_sekiro":to_soldier.approximations,"skate_key":entry.key}));
     Ok(())
 }
 
@@ -116,7 +127,7 @@ fn every_sekiro_human_candidate_reports_pairs_ratios_and_skin_fit() -> Result<()
             install_file(Game::Skate, "Data"), tool(Tool::Oodle9)) else {
                 return Err("explicit census needs Sekiro/skate installs, Sekiro dictionary and Oodle6/Oodle9; nothing was measured".into());
             };
-    let codec = common::oodle(fs_dll)?;
+    let codec = fromsoft_oodle(fs_dll)?;
     let decoder = Decoder { oodle: Some(&codec), max_output: 1 << 30 };
     let install = Install::sekiro(root); let archive = install.open()?;
     let dictionary = NameDictionary::read_for(names, primase_fromsoft::Game::Sekiro)?;
@@ -127,7 +138,7 @@ fn every_sekiro_human_candidate_reports_pairs_ratios_and_skin_fit() -> Result<()
     let src = Source { folder: &folder, base: Some(&folder), oodle: Some(&skate_codec) };
     let mut light = World::new(); let rig = animation::read_skeletons(&src, &mut light)?;
     let render = light.get::<Skeleton>(rig.render).ok_or("render skeleton")?;
-    let table = JointTable::parse(pair::SEKIRO_SKATE_TABLE)?;
+    let table = JointTable::parse(SEKIRO_SKATE_TABLE)?;
     let ids: BTreeSet<_> = dictionary.names.values().flatten().filter_map(|n| {
         let id = n.strip_prefix("/chr/")?.strip_suffix(".chrbnd.dcx")?;
         (id.len() == 5 && id.starts_with('c') && id[1..].bytes().all(|b| b.is_ascii_digit()) && archive.contains(n)).then(|| id.to_owned())
@@ -177,10 +188,15 @@ fn every_sekiro_human_candidate_reports_pairs_ratios_and_skin_fit() -> Result<()
     let mut part_sets = BTreeSet::new();
     part_sets.insert(vec!["fc_m_0200_l".to_owned(), "bd_m_9040_l".to_owned(), "am_m_9000_l".to_owned(), "lg_m_9000_l".to_owned()]);
     match sekiro::npc_outfit_catalog(&install, &archive, &decoder, &dictionary) {
-        Ok(outfits) => for outfit in outfits {
-            println!("SEKIRO_SKATE_OUTFIT={}", json!({"authored":outfit}));
-            if !outfit.parts.is_empty() { part_sets.insert(outfit.parts); }
-        },
+        Ok(outfits) => {
+            for notice in sekiro::outfit_notices("npc-outfit-catalog", &outfits) {
+                println!("SEKIRO_SKATE_OUTFIT_CHOICE {} x{} {:?}", notice.reason, notice.count, notice.examples);
+            }
+            for outfit in outfits {
+                println!("SEKIRO_SKATE_OUTFIT={}", json!({"authored":outfit}));
+                if !outfit.parts.is_empty() { part_sets.insert(outfit.parts); }
+            }
+        }
         Err(e) => println!("SEKIRO_SKATE_OUTFIT={}", json!({"status":"authored equipment census unresolved","reason":e.to_string()})),
     }
     let distinct_part_sets = part_sets.len();

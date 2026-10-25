@@ -5,6 +5,7 @@ mod back_faces;
 mod clip;
 pub use clip::{clip_convex_to_rect, clip_half_plane, twice_signed_area};
 pub mod collision_query;
+pub mod select;
 pub use back_faces::{ADD_BACK_FACES, AddBackFaces};
 mod curves;
 mod distance;

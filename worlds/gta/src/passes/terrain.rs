@@ -19,9 +19,9 @@
 //! ([`layer_weights`]): `rgb_product_4` of r = COLOR_1's red, and g, b = the lookup's green and blue (a mask at
 //! TEXCOORD1), each `lerp(lookup, COLOR_1, COLOR_0's alpha)` for `*_2tex_blend*`. GTA's shaders read the lookup
 //! filtered; the reader keeps no sampler state, so the mask is the lookup as every GTA texture is referenced
-//! (`TextureRef::new`: repeat, its filters unstated, untransformed). A destination that blends by vertex weights runs
-//! `bake-layer-channels` (primase-image) after this pass. A lookup-blended effect whose lookup texture was not found is
-//! weighed by vertex colour 1 alone, counted. A terrain primitive without vertex colour 1 gets one of (0, 0, 0, 255)
+//! (`TextureRef::new`: repeat, its filters unstated, untransformed). A consumer that blends by vertex weights only has
+//! a program run `bake-layer-channels` (primase-image) after this pass. A lookup-blended effect whose lookup texture
+//! was not found is weighed by vertex colour 1 alone, counted. A terrain primitive without vertex colour 1 gets one of (0, 0, 0, 255)
 //! (layer 0 alone, as the shader's saturate of a missing input gives). Tinted terrain (`*_tnt`) is layered without its
 //! tint, counted.
 use std::collections::BTreeMap;

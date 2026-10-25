@@ -162,8 +162,8 @@ pub struct Deflate;
 /// RFC1950 zlib: header, DEFLATE, Adler32 trailer. Requires StreamEnd and exact consumption.
 #[derive(Debug, Clone, Copy)]
 pub struct Zlib;
-/// Sunset TOC compatibility: accepts a zlib stream with missing final marker or
-/// checksum ONLY if all input is consumed, no decoder error occurs, and exactly
+/// TOC compatibility: some sources' TOCs store a zlib stream with a missing final marker or
+/// checksum; that is accepted ONLY if all input is consumed, no decoder error occurs, and exactly
 /// the expected bytes are produced. Incomplete streams cannot authenticate Adler32;
 /// this is a size check, not an integrity check. Complete streams are also accepted.
 #[derive(Debug, Clone, Copy)]

@@ -4,11 +4,14 @@
 //! not occurrences: a joint of a skeleton ([`ClipTarget::Joint`]), a morph target of a geometry's morph set
 //! ([`ClipTarget::Morph`], named by the prototype that holds the set, so it holds whichever level-of-detail form is
 //! drawn), or a source's control ([`ClipTarget::Control`]: a scalar whose meaning stays in its source's namespace,
-//! kept so it is not lost). One clip may drive a skeleton and several morph sets together. A [`ClipBinding`] says
+//! kept so it is not lost), a source-scoped draw group ([`ClipTarget::DrawGroup`]), or a named material
+//! parameter ([`ClipTarget::MaterialParameter`]). Draw groups use Step visibility (-1 inherits,
+//! 0 hides, 1 shows); material vectors replace same-width defaults in `core.material_parameters`.
+//! One clip may drive a skeleton and several morph sets together. A [`ClipBinding`] says
 //! which rig and which mesh occurrences a clip drives, so occurrences sharing a clip still animate apart.
 //!
-//! Meaning (core's evaluation rule; a source's curves that evaluate otherwise, as Havok's compressed splines, Unity's
-//! weighted tangents or Euler curves, stay in its namespace until a pass lowers them):
+//! Meaning (core's evaluation rule; a source's curves that evaluate otherwise, as Havok's compressed splines or one
+//! engine's weighted tangents or Euler curves, stay in its namespace until a pass lowers them):
 //! - [`Interpolation::Step`] holds a key's value until the next key; [`Interpolation::Linear`] interpolates
 //!   linearly, rotations by spherical linear interpolation (the shorter arc); [`Interpolation::Hermite`] is a cubic
 //!   Hermite spline through the keys with each key's in and out tangents (glTF's `CUBICSPLINE`: values stored as
@@ -26,7 +29,7 @@
 
 use std::collections::BTreeSet;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::morphs::{MorphId, Morphs};
@@ -35,18 +38,31 @@ use crate::skeleton::{JointId, Skeleton};
 use crate::{Component, Entity, Instance, JsonError, World};
 
 /// What a channel drives.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ClipTarget {
     /// A joint of the skeleton held by `skeleton`.
-    Joint { skeleton: Entity, joint: JointId },
+    Joint { skeleton: Entity, #[serde(deserialize_with="joint_id")] joint: JointId },
     /// A morph target of the morph set held by `geometry` (a prototype's `core.morphs`).
-    Morph { geometry: Entity, morph: MorphId },
+    Morph { geometry: Entity, #[serde(deserialize_with="morph_id")] morph: MorphId },
     /// A source's scalar control by its name (its meaning is its source's).
     Control { name: String },
+    /// A draw group in a source-defined scope. Core supports groups 0..64:
+    /// sources with more groups must refuse by name rather than truncate.
+    DrawGroup { scope: String, group: u32 },
+    /// A named parameter on resolved material entities. Each target must carry
+    /// the same-width named default in core.material_parameters.
+    MaterialParameter { materials: Vec<Entity>, name: String },
+}
+
+fn joint_id<'de,D:serde::Deserializer<'de>>(d:D)->Result<JointId,D::Error> {
+    u32::deserialize(d).map(JointId)
+}
+fn morph_id<'de,D:serde::Deserializer<'de>>(d:D)->Result<MorphId,D::Error> {
+    u32::deserialize(d).map(MorphId)
 }
 
 /// Which property of its target a channel drives, with the values it takes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Property {
     /// A joint's local translation (three values).
     Translation,
@@ -56,20 +72,28 @@ pub enum Property {
     Scale,
     /// A morph target's weight, or a control's value (one value).
     Scalar,
+    /// DrawGroup only: one Step value per key, -1 inherit the occurrence's
+    /// default, 0 hidden, 1 shown. No interpolation between visibility states.
+    Visibility,
+    /// MaterialParameter only: 1..=4 finite floats per key, Step or Linear.
+    Values(u8),
 }
 
 impl Property {
-    fn width(self) -> usize {
+    /// Number of floats per key value (Hermite adds in/out tangent records).
+    /// Values(0) and Values(5..) are invalid, rejected by the clip verifier.
+    pub fn width(self) -> usize {
         match self {
             Property::Translation | Property::Scale => 3,
             Property::Rotation => 4,
-            Property::Scalar => 1,
+            Property::Scalar | Property::Visibility => 1,
+            Property::Values(n) => usize::from(n),
         }
     }
 }
 
 /// How a channel's values are interpolated between keys (see the module documentation).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Interpolation {
     Step,
     Linear,
@@ -78,7 +102,7 @@ pub enum Interpolation {
 
 /// One channel: key times in seconds, strictly increasing, and its values: per key [`Property`]'s width of values,
 /// three times that for [`Interpolation::Hermite`] (in-tangent, value, out-tangent), flattened.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Channel {
     pub target: ClipTarget,
     pub property: Property,
@@ -88,14 +112,14 @@ pub struct Channel {
 }
 
 /// What a channel does outside its keys.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Extrapolation {
     Hold,
     Loop,
 }
 
 /// The space root motion is stated in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RootSpace {
     /// The rig's own space (`core.rig_instance`'s placement).
     Rig,
@@ -103,7 +127,7 @@ pub enum RootSpace {
 
 /// A clip's root motion: how the whole rig moves, in `space`, apart from its joints. Translation (three values a key)
 /// and rotation (four), each a channel without a target of its own.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RootMotion {
     pub space: RootSpace,
     pub translation: Option<(Interpolation, Vec<f32>, Vec<f32>)>,
@@ -111,7 +135,7 @@ pub struct RootMotion {
 }
 
 /// What an additive clip is relative to.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum AdditiveReference {
     /// Nothing: the clip's values are deltas, relative to zero, the identity and one (the module documentation states
     /// the composition). A source that stores additive animation as deltas lowers to this; no entity stands for the
@@ -124,7 +148,7 @@ pub enum AdditiveReference {
 }
 
 /// `core.clip` (see the module documentation).
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Clip {
     /// The source's name: provenance.
     pub name: String,
@@ -139,7 +163,7 @@ pub struct Clip {
 /// `core.clip_binding`: a clip driving a rig (its joint channels, on the rig's skeleton) and mesh occurrences (its
 /// morph channels, on the morph sets they draw). On its own entity: several bindings may drive one occurrence (a
 /// pass layering them states how).
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ClipBinding {
     pub clip: Entity,
     pub rig: Option<Entity>,
@@ -203,6 +227,8 @@ fn verify_keys(
 
 impl Component for Clip {
     const NAME: &'static str = "core.clip";
+    /// 2: draw-group visibility and named material-parameter targets/properties.
+    const VERSION: u32 = 2;
     const GEOMETRY: crate::Geometry = crate::Geometry::None;
     /// Name, duration, targets and key counts, not the values.
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
@@ -229,10 +255,11 @@ impl Component for Clip {
     }
     fn references(&self, out: &mut Vec<Entity>) {
         for c in &self.channels {
-            match c.target {
-                ClipTarget::Joint { skeleton, .. } => out.push(skeleton),
-                ClipTarget::Morph { geometry, .. } => out.push(geometry),
-                ClipTarget::Control { .. } => {}
+            match &c.target {
+                ClipTarget::Joint { skeleton, .. } => out.push(*skeleton),
+                ClipTarget::Morph { geometry, .. } => out.push(*geometry),
+                ClipTarget::MaterialParameter { materials, .. } => out.extend(materials),
+                ClipTarget::DrawGroup { .. } | ClipTarget::Control { .. } => {}
             }
         }
         match self.additive {
@@ -242,7 +269,8 @@ impl Component for Clip {
         }
     }
     /// Duration finite and non-negative; each channel's property fits its target (joints take translation, rotation
-    /// or scale; morphs and controls a scalar), its target exists in the definition it names, one channel per target
+    /// or scale; morphs and controls a scalar; scoped draw groups Step visibility; named material parameters
+    /// Values(1..=4) matching every target's default), its target exists in the definition it names, one channel per target
     /// and property; keys and values as [`Channel`] says, rotations unit quaternions (within 1e-3); root motion's
     /// likewise; an additive reference a `core.rig_pose` or a `core.clip` with the frame's time within its duration.
     fn verify(&self, e: Entity, w: &World) -> Result<(), String> {
@@ -250,6 +278,7 @@ impl Component for Clip {
             return Err(format!("duration {} not finite and non-negative", self.duration));
         }
         let mut seen = BTreeSet::new();
+        let mut material_channels = BTreeSet::new();
         for (k, c) in self.channels.iter().enumerate() {
             let what = format!("channel {k}");
             match (&c.target, c.property) {
@@ -273,6 +302,41 @@ impl Component for Clip {
                     }
                 }
                 (ClipTarget::Control { .. }, Property::Scalar) => {}
+                (ClipTarget::DrawGroup {scope,group},Property::Visibility) => {
+                    if scope.trim().is_empty() || *group >= 64 {
+                        return Err(format!("{what}: draw-group scope must be nonempty and group below core's limit of 64"));
+                    }
+                    if c.interpolation != Interpolation::Step {
+                        return Err(format!("{what}: visibility requires Step interpolation"));
+                    }
+                    if c.values.iter().any(|v| ![-1.0,0.0,1.0].contains(v)) {
+                        return Err(format!("{what}: visibility values must be -1 (default), 0 (hidden) or 1 (shown)"));
+                    }
+                }
+                (ClipTarget::MaterialParameter {materials,name},Property::Values(width)) => {
+                    if !(1..=4).contains(&width) || name.trim().is_empty() || materials.is_empty() {
+                        return Err(format!("{what}: material parameter needs a name, targets and Values(1..=4)"));
+                    }
+                    if c.interpolation == Interpolation::Hermite {
+                        return Err(format!("{what}: material values require Step or Linear interpolation"));
+                    }
+                    let mut targets = BTreeSet::new();
+                    for &material in materials {
+                        if !targets.insert(material) {
+                            return Err(format!("{what}: repeated material target {material:?}"));
+                        }
+                        let defaults = w.get::<crate::MaterialParameters>(material)
+                            .ok_or_else(|| format!("{what}: {material:?} holds no core.material_parameters default"))?;
+                        let value = defaults.0.get(name)
+                            .ok_or_else(|| format!("{what}: {material:?} has no default for material parameter {name:?}"))?;
+                        if value.len() != usize::from(width) || !value.iter().all(|v| v.is_finite()) {
+                            return Err(format!("{what}: {material:?} default for {name:?} is not {width} finite values"));
+                        }
+                        if !material_channels.insert((material,name)) {
+                            return Err(format!("{what}: a second channel for material {material:?} parameter {name:?}"));
+                        }
+                    }
+                }
                 (t, p) => return Err(format!("{what}: {p:?} does not fit {t:?}")),
             }
             if !seen.insert((&c.target, c.property)) {
@@ -373,7 +437,8 @@ impl Component for ClipBinding {
                 ClipTarget::Morph { geometry, .. } => {
                     driven.insert(geometry);
                 }
-                _ => {}
+                ClipTarget::Joint { .. } | ClipTarget::Control { .. }
+                    | ClipTarget::DrawGroup { .. } | ClipTarget::MaterialParameter { .. } => {}
             }
         }
         for &m in &self.meshes {
@@ -544,6 +609,78 @@ mod tests {
         assert_eq!(errors(&w), Vec::<String>::new());
         assert_eq!(w.closure([clip]), [clip, skeleton, proto].into());
         assert!(w.closure([binding]).contains(&rig));
+    }
+
+    fn with_display_channels() -> (World,Entity,Entity) {
+        let (mut w,clip, ..)=world();
+        let material=w.spawn();
+        w.insert(material,crate::MaterialParameters(std::collections::BTreeMap::from([("tint".into(),vec![0.25,0.5])])));
+        w.get_mut::<Clip>(clip).unwrap().channels.extend([
+            Channel { target:ClipTarget::DrawGroup {scope:"character".into(),group:63},
+                property:Property::Visibility,interpolation:Interpolation::Step,
+                times:vec![0.0,0.5,1.0],values:vec![-1.0,0.0,1.0] },
+            Channel { target:ClipTarget::MaterialParameter {materials:vec![material],name:"tint".into()},
+                property:Property::Values(2),interpolation:Interpolation::Linear,
+                times:vec![0.0,1.0],values:vec![0.25,0.5,0.75,1.0] },
+        ]);
+        (w,clip,material)
+    }
+
+    #[test]
+    fn display_channels_roundtrip_and_keep_material_references_in_the_closure() {
+        let (w,clip,material)=with_display_channels();
+        assert!(errors(&w).is_empty(),"{:?}",errors(&w));
+        let c=w.get::<Clip>(clip).unwrap();
+        let copy:Clip=serde_json::from_value(serde_json::to_value(c).unwrap()).unwrap();
+        assert_eq!(&copy,c,"includes old joint/morph ids and new targets/properties");
+        assert_eq!(copy.channels.last().unwrap().property.width(),2);
+        let closure=w.closure([clip]);
+        assert!(closure.contains(&material));
+        let part=w.subset(&closure);
+        assert_eq!(part.get::<Clip>(clip),Some(c));
+        assert!(c.remap_primitives(&[1,0]).is_none(),"clip channels are not mesh-primitive arrays");
+        assert!(errors(&part).is_empty());
+    }
+
+    #[test]
+    fn visibility_is_step_only_three_valued_and_scope_bounded() {
+        for interpolation in [Interpolation::Linear,Interpolation::Hermite] {
+            let (mut w,c,_)=with_display_channels();
+            w.get_mut::<Clip>(c).unwrap().channels[4].interpolation=interpolation;
+            assert!(errors(&w).iter().any(|e|e.contains("visibility requires Step")));
+        }
+        for value in [-2.0,0.5,2.0,f32::NAN] {
+            let (mut w,c,_)=with_display_channels();
+            w.get_mut::<Clip>(c).unwrap().channels[4].values[1]=value;
+            assert!(errors(&w).iter().any(|e|e.contains("visibility values")));
+        }
+        for (scope,group) in [(" ",0),("character",64)] {
+            let (mut w,c,_)=with_display_channels();
+            w.get_mut::<Clip>(c).unwrap().channels[4].target=ClipTarget::DrawGroup{scope:scope.into(),group};
+            assert!(errors(&w).iter().any(|e|e.contains("scope")));
+        }
+    }
+
+    #[test]
+    fn material_channels_require_defaults_widths_unique_targets_and_no_overlap() {
+        for width in [0,1,3,4,5] {
+            let (mut w,c,_)=with_display_channels();
+            w.get_mut::<Clip>(c).unwrap().channels[5].property=Property::Values(width);
+            assert!(!errors(&w).is_empty(),"default width 2 does not match {width}");
+        }
+        let (mut w,_c,m)=with_display_channels();
+        w.remove::<crate::MaterialParameters>(m);
+        assert!(errors(&w).iter().any(|e|e.contains("no core.material_parameters")));
+        let (mut w,c,m)=with_display_channels();
+        w.get_mut::<Clip>(c).unwrap().channels[5].target=ClipTarget::MaterialParameter{materials:vec![m,m],name:"tint".into()};
+        assert!(errors(&w).iter().any(|e|e.contains("repeated material")));
+        let (mut w,c,_)=with_display_channels();
+        let duplicate=w.get::<Clip>(c).unwrap().channels[5].clone();
+        w.get_mut::<Clip>(c).unwrap().channels.push(duplicate);
+        assert!(errors(&w).iter().any(|e|e.contains("second channel")));
+        let (mut w,c,_)=with_display_channels();
+        w.get_mut::<Clip>(c).unwrap().channels[5].interpolation=Interpolation::Hermite;
+        assert!(errors(&w).iter().any(|e|e.contains("Step or Linear")));
     }
 
     #[test]

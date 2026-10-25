@@ -177,6 +177,25 @@ impl Pass for LowerFromSoftEnvironment {
             log.count("areas with no draw-param environment", 1);
             return Ok(());
         };
+        // a field stored at several hours has one value here, its first stored sample, unless the program sampled an hour
+        let several = env
+            .groups
+            .iter()
+            .filter(|g| g.chosen != crate::sekiro::source::SetChosen::Unresolved)
+            .map(|g| {
+                let mut samples = std::collections::BTreeMap::<&str, usize>::new();
+                for f in &g.fields {
+                    *samples.entry(f.key.as_str()).or_default() += 1;
+                }
+                samples.values().filter(|n| **n > 1).count() as u64
+            })
+            .sum::<u64>();
+        if several > 0 {
+            log.approximate(
+                "draw-param fields stored at several hours of the day lowered at their first stored sample (`sample-fromsoft-draw-params` chooses an hour)",
+                several,
+            );
+        }
         let lux = self.lux_per_unit.get() as f32;
         let mut sun = None;
         let mut ambient = None;

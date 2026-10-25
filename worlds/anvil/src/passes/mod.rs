@@ -25,6 +25,7 @@ pub use preview::{SelectAnvilPreviewLod, SELECT_ANVIL_PREVIEW_LOD};
 pub use impostor::{LowerAnvilImpostor, LOWER_ANVIL_IMPOSTOR};
 mod listed;
 mod material;
+mod notes;
 mod resolve_shaders;
 mod select;
 mod select_clips;
@@ -42,6 +43,7 @@ pub use material::{
     AlphaChoice, Decals1Cutout, Emission, LOWER_ANVIL_MATERIAL, LowerAnvilMaterial, ShaderUv,
     fake_river_albedo, world_uv_rows,
 };
+pub use notes::{NOTE_ANVIL_CONTENT, NoteAnvilContent};
 pub use resolve_shaders::{
     MESH_LAYOUT_FIELD, RESOLVE_ANVIL_SHADERS, ResolveAnvilShaders, UnsetTexture, alpha_tested_key,
     gbuffer_key, gbuffer_vertex_key, material_constants, render_state, shading_class,
@@ -62,8 +64,8 @@ use primase_core::world::Resource;
 use primase_core::{Collider, Shape};
 use primase_core::{
     Collision, ColorSpace, Component, Entity, Instance, LodForm, Lods, Mesh, NormalBasis, NormalConvention,
-    NormalGreen, NormalX, NormalZ, Primitive, Semantic, Stream, Surfaces, TexFormat, TexRole, Texture,
-    Topology, Transform, World,
+    NormalGreen, NormalX, NormalZ, Primitive, PrimitiveKeys, Semantic, Stream, Surfaces, TexFormat,
+    TexRole, Texture, Topology, Transform, World,
 };
 
 use crate::components::{
@@ -467,7 +469,7 @@ impl Pass for LowerAnvilMesh {
         &[AnvilMesh::NAME]
     }
     fn provides(&self) -> &[&'static str] {
-        &[Mesh::NAME, AnvilPalette::NAME, AnvilLayout::NAME]
+        &[Mesh::NAME, AnvilPalette::NAME, AnvilLayout::NAME, PrimitiveKeys::NAME]
     }
     fn removes(&self) -> &[&'static str] {
         &[AnvilMesh::NAME]
@@ -628,12 +630,19 @@ impl Pass for LowerAnvilMesh {
                 );
             }
             log.count("primitives lowered", primitives.len() as u64);
+            // the layout number each primitive draws with: the value a vertex stage's variant key names
+            // ([`MESH_LAYOUT_FIELD`]), beside the dialect's own copy of it, for any consumer
+            let layout = AnvilLayout {
+                kind: vec![m.kind; primitives.len()],
+            };
             w.insert(
                 e,
-                AnvilLayout {
-                    kind: vec![m.kind; primitives.len()],
-                },
+                PrimitiveKeys(BTreeMap::from([(
+                    MESH_LAYOUT_FIELD.to_owned(),
+                    layout.kind.iter().map(|&kind| u32::from(kind)).collect(),
+                )])),
             );
+            w.insert(e, layout);
             w.insert(e, Mesh::new(primitives));
             log.count("Meshes lowered", 1);
             log.count("triangles lowered", triangles);
@@ -3047,7 +3056,8 @@ pub fn register(reg: &mut PassRegistry) {
           &LOWER_ANVIL_IMPOSTOR,
           &LOWER_ANVIL_LIGHTS,
           &LOWER_ANVIL_SKY,
-          &SELECT_ANVIL_PREVIEW_LOD,
+        &NOTE_ANVIL_CONTENT,
+        &SELECT_ANVIL_PREVIEW_LOD,
           &SELECT_ANVIL_FAR_VIEW,
     ] {
         reg.add(spec);
@@ -3104,6 +3114,52 @@ mod tests {
         assert!(some.held.contains("pbr.material"), "{:?}", some.held);
     }
 
+    /// `lower-anvil-mesh` states each primitive's layout number a second time, as `core.primitive_keys` beside the
+    /// dialect's `AnvilLayout`, so a consumer reads it for any game.
+    #[test]
+    fn the_mesh_lowering_states_each_primitives_layout_kind() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(
+            e,
+            AnvilMesh {
+                entry: 0,
+                index_id: 0,
+                frame: primase_core::frame::SourceFrame::WORLD,
+                positions: vec![
+                    [0.0; 3],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [2.0; 3],
+                    [3.0; 3],
+                    [4.0; 3],
+                ],
+                triangles: vec![[0, 1, 2], [3, 4, 5]],
+                ranges: vec![0, 1],
+                materials: vec![0, 0],
+                material_entities: vec![None, None],
+                kind: 7,
+                stride: 0,
+                vertex_records: Vec::new(),
+                attributes: crate::components::VertexAttributes::default(),
+                skin: None,
+            },
+        );
+        let mut log = PassLog::default();
+        LowerAnvilMesh {
+            static16_normal: Static16Normal::Omit,
+        }
+        .run(&mut w, &mut log)
+        .unwrap();
+        assert_eq!(w.get::<Mesh>(e).map(|m| m.primitives().len()), Some(2));
+        let layout = w.get::<AnvilLayout>(e).expect("the dialect's layout numbers");
+        assert_eq!(layout.kind, vec![7, 7]);
+        let keys = w.get::<PrimitiveKeys>(e).expect("the core keys");
+        assert_eq!(keys.0.get(MESH_LAYOUT_FIELD), Some(&vec![7, 7]));
+        assert_eq!(keys.0.len(), 1);
+        keys.verify(e, &w).expect("the keys match the lowered mesh");
+    }
+
     /// The crate registers exactly these passes by their declarations: those with required options are made only with
     /// them, and every one says what it takes.
     #[test]
@@ -3133,6 +3189,7 @@ mod tests {
             "lower-anvil-terrain",
             "lower-anvil-water",
             "lower-anvil-world-uv",
+            "note-anvil-content",
             "resolve-anvil-shaders",
             "select-anvil-clips",
             "select-anvil-entities",
@@ -3141,7 +3198,13 @@ mod tests {
             "select-anvil-preview-lod",
         ];
         assert_eq!(format!("{reg:?}"), format!("{names:?}"));
-        let free = ["lower-anvil-lods", "lower-anvil-skin", "lower-anvil-world-uv", "select-anvil-preview-lod"];
+        let free = [
+            "lower-anvil-lods",
+            "lower-anvil-skin",
+            "lower-anvil-world-uv",
+            "note-anvil-content",
+            "select-anvil-preview-lod",
+        ];
         for name in names {
             assert_eq!(reg.requires_options(name), !free.contains(&name), "{name}");
             assert!(reg.describe(name).is_some_and(|d| d.starts_with(name)), "{name}");

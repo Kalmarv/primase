@@ -2,12 +2,12 @@ use crate::{Result, Value, invalid};
 use primase_core::vector::{cross, dot, sub, unit};
 
 /// The most vertices a convex core may hold. Every stage of the tessellation is superlinear in the count (the plane
-/// intersections cubic, the hull and the flat-shape test not far from it), and a file states it freely; Sekiro's own
-/// shapes have at most 152 of them (177 convex shapes of its objects), and Havok's polytope indices are bytes. This is
+/// intersections cubic, the hull and the flat-shape test not far from it), and a file states it freely; the source's
+/// own shapes have at most 152 of them (177 convex shapes of its objects), and Havok's polytope indices are bytes. This is
 /// twice a byte's range: a judgement, not a limit the format states.
 pub const MAX_VERTICES: usize = 512;
 /// The most planes a convex core may hold (a polytope of [`MAX_VERTICES`] vertices has at most twice that many faces;
-/// Sekiro's objects have at most 150). The intersection of half-spaces takes 2.4 s at this many, 27.8 s at twice.
+/// the source's objects have at most 150). The intersection of half-spaces takes 2.4 s at this many, 27.8 s at twice.
 pub const MAX_PLANES: usize = 512;
 
 /// Stored polytope core. Radius expansion is a tessellation policy, not the

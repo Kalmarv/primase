@@ -1,12 +1,9 @@
 //! Explicit per-pair animation transfer. No hub skeleton, implicit name mapping or mutation of the source World.
 use std::collections::{BTreeMap, BTreeSet};
 use primase_core::{Clip, ClipTarget, Entity, JointId, JointMap, Skeleton, World};
-use primase_core::pass::{Pass, PassLog};
+use primase_core::pass::{Pass, PassManager, PassRegistry, RunReport};
 use serde::Serialize;
 use crate::{Error, Result, RetargetClip, joint_table::JointTable, pose::{locals, model_transforms}};
-
-/// Bone names and authored correspondence only; no extracted transforms, vertices or game payloads.
-pub const SEKIRO_SKATE_TABLE: &str = include_str!("../tables/sekiro-human__skate-render.json");
 
 /// A table can be used backwards for clip transfer, but a skin placement belongs to its original target frame.
 /// Refuse such reversal rather than silently applying its offset in another frame.
@@ -106,19 +103,39 @@ pub fn available_table(from: &Skeleton, to: &Skeleton, table: &JointTable) -> Re
     Ok((selected, report))
 }
 
+/// A clip carried to another skeleton by [`retarget_one`], with what the retarget pass said about it. The pass's log is
+/// not returned whole: `retarget_one` is a function over one clip (it runs the `retarget-clip` pass through the pass
+/// manager in a scratch World), not a lowering of the caller's World, and it hands back the two reason tables the pass
+/// filled in.
+#[derive(Clone, Debug)]
+pub struct Transfer {
+    pub clip: Clip,
+    /// What the pass approximated, by reason, with how many times (`PassLog::approximations`).
+    pub approximations: BTreeMap<String, u64>,
+    /// What the pass left out, by reason, with how many times (`PassLog::omitted`).
+    pub omitted: BTreeMap<String, u64>,
+}
+
 /// Transfer one core clip through the strict table. Runs the existing retarget-clip arithmetic on two skeleton
 /// copies and this clip only. Refused/unchanged output is an error with the pass's actual reasons. The returned
 /// joint channels name `target`, suitable for insertion in another World without importing source meshes/images.
-/// RootMotion and control channels stay as the existing pass states; morph channels require an explicit mesh map.
+/// RootMotion and control channels stay as the existing pass states; morph, draw-group and material channels
+/// require explicit destination mesh, scope and material correspondences respectively.
 pub fn retarget_one(clip: &Clip, from: &Skeleton, to: &Skeleton, target: Entity, table: &JointTable,
-    options: RetargetClip) -> Result<(Clip, PassLog)> {
+    options: RetargetClip) -> Result<Transfer> {
     table.to_json()?;
     let pairs = table.resolve(from, to)?;
     if pairs.is_empty() { return Err(Error("retarget needs at least one stated joint pair".into())); }
     let drives: BTreeSet<_> = clip.channels.iter().filter_map(|c| match c.target { ClipTarget::Joint { skeleton, .. } => Some(skeleton), _ => None }).collect();
     if drives.len() != 1 { return Err(Error("retarget-one requires a clip driving exactly one source skeleton".into())); }
-    if clip.channels.iter().any(|c| matches!(c.target, ClipTarget::Morph { .. })) {
-        return Err(Error("retarget-one cannot copy morph channels without a stated mesh correspondence".into()));
+    for channel in &clip.channels {
+        let missing = match &channel.target {
+            ClipTarget::Joint { .. } | ClipTarget::Control { .. } => continue,
+            ClipTarget::Morph { .. } => "mesh",
+            ClipTarget::DrawGroup { .. } => "draw-group scope",
+            ClipTarget::MaterialParameter { .. } => "material",
+        };
+        return Err(Error(format!("retarget-one cannot copy {:?} without a stated {missing} correspondence", channel.target)));
     }
     let mut world = World::new();
     let source = world.spawn(); let destination = world.spawn(); let entity = world.spawn(); let map = world.spawn();
@@ -128,8 +145,16 @@ pub fn retarget_one(clip: &Clip, from: &Skeleton, to: &Skeleton, target: Entity,
     world.insert(entity, staged); world.insert(map, JointMap { from: source, to: destination, pairs });
     let failures = world.verify_components();
     if !failures.is_empty() { return Err(Error(format!("retarget input components: {failures:?}"))); }
-    let mut log = PassLog::default();
-    options.run(&mut world, &mut log).map_err(Error)?;
+    // run as a program does: the pass manager, a registry and a pipeline, so the pass's declarations and the verifier apply
+    let mut registry = PassRegistry::new();
+    registry.add(&crate::retarget::RETARGET_CLIP);
+    let manager = PassManager::new(registry).with_pass_checks(true);
+    let settings = options.options().into_iter().map(|(key, value)| format!("{key}={value}")).collect::<Vec<_>>().join(",");
+    let pipeline = manager.registry.parse(&format!("retarget-clip{{{settings}}}")).map_err(|e| Error(e.to_string()))?;
+    let mut run = RunReport::default();
+    let ran = manager.run(&mut world, &pipeline, &mut run);
+    let log = run.steps.into_iter().next().map(|step| step.log).unwrap_or_default();
+    ran.map_err(|e| Error(format!("{e}; omitted: {:?}", log.omitted)))?;
     let failures = world.verify_components();
     if !failures.is_empty() { return Err(Error(format!("retarget output components: {failures:?}"))); }
     let mut out = world.get::<Clip>(entity).ok_or_else(|| Error("retarget produced no clip".into()))?.clone();
@@ -138,5 +163,5 @@ pub fn retarget_one(clip: &Clip, from: &Skeleton, to: &Skeleton, target: Entity,
         return Err(Error(format!("retarget left clip on its source: {:?}", log.omitted)));
     }
     for ch in &mut out.channels { if let ClipTarget::Joint { skeleton, .. } = &mut ch.target { *skeleton = target; } }
-    Ok((out, log))
+    Ok(Transfer { clip: out, approximations: log.approximations, omitted: log.omitted })
 }

@@ -344,11 +344,13 @@ pub struct WriteReport {
     /// Animations and channels written.
     pub animations: u64,
     pub animation_channels: u64,
-    /// Left out, with no glTF form: additive clips, clips' root motion, source control channels, and morph channels
+    /// Left out, with no glTF form: additive clips, clips' root motion, source control, draw-group and material channels, and morph channels
     /// of one occurrence that do not share key times and interpolation.
     pub clips_additive: u64,
     pub root_motions: u64,
     pub control_channels: u64,
+    pub draw_group_channels: u64,
+    pub material_parameter_channels: u64,
     pub morph_channels_unaligned: u64,
     /// `core.environment`'s ambient, 1 when the world has one: glTF has no ambient light, so nothing is lit by it
     /// (the scene's extras still carry it as data, unless the selection omits the environment).
@@ -453,7 +455,7 @@ impl fmt::Display for WriteReport {
             f,
             "rigs {} ({} joint nodes), skins {}, skinned placements without a rig (bind pose) {}, morph targets {} \
              (meshes with in-between frames, not written {}), animations {} ({} channels); left out: additive clips \
-             {}, root motions {}, control channels {}, unaligned morph channels {}",
+             {}, root motions {}, control channels {}, draw-group channels {}, material-parameter channels {}, unaligned morph channels {}",
             self.rigs,
             self.joint_nodes,
             self.skins,
@@ -465,6 +467,8 @@ impl fmt::Display for WriteReport {
             self.clips_additive,
             self.root_motions,
             self.control_channels,
+            self.draw_group_channels,
+            self.material_parameter_channels,
             self.morph_channels_unaligned
         )?;
         writeln!(f, "ambient not lit (no glTF form) {}", self.ambient_unlit)?;
@@ -2485,7 +2489,8 @@ impl Writer<'_> {
                             Property::Translation => ("translation", ElementType::Vec3),
                             Property::Rotation => ("rotation", ElementType::Vec4),
                             Property::Scale => ("scale", ElementType::Vec3),
-                            Property::Scalar => return Err(failed("a scalar channel on a joint".into())),
+                            Property::Scalar | Property::Visibility | Property::Values(_) =>
+                                return Err(failed(format!("a {:?} channel on a joint", c.property))),
                         };
                         samplers.push(self.sampler(&c.times, &c.values, kind, c.interpolation)?);
                         channels.push(
@@ -2493,6 +2498,8 @@ impl Writer<'_> {
                         );
                     }
                     ClipTarget::Control { .. } => self.report.control_channels += 1,
+                    ClipTarget::DrawGroup { .. } => self.report.draw_group_channels += 1,
+                    ClipTarget::MaterialParameter { .. } => self.report.material_parameter_channels += 1,
                     ClipTarget::Morph { .. } => {}
                 }
             }

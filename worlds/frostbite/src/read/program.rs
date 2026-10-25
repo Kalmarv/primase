@@ -23,6 +23,23 @@ use crate::inputlayout::{self, InputLayout};
 use crate::permutation::{self, Permutation};
 use crate::{Error, Result, binding, bytecode, depot, lookup};
 
+/// Why a Frostbite material has no derived `pbr.material`: no G-buffer target a material's programs write has an
+/// established role. The binding of the producers' targets to the lighting programs that read them is set up by the
+/// engine's frame graph, in code, not in any data read; the material's slot names are undecoded hashes. A PBR material
+/// mapped by slot name, texture format or colour space would be a guess, so the material stays the diagnostic. The
+/// wording is the program's own and is the same for every material this reader makes.
+pub const GBUFFER_ROLES_UNKNOWN: &str = "no PBR material derived: no G-buffer target of a Frostbite program has an established role (the frame graph binding the producers' targets to the lighting programs is engine code, not data; slot names are undecoded hashes), so none is mapped by slot name, format or colour space";
+
+/// The `core.content_note` every `frostbite.material` carries for [`GBUFFER_ROLES_UNKNOWN`]: something is not drawn.
+pub fn gbuffer_roles_unknown() -> primase_core::ContentNote {
+    primase_core::ContentNote {
+        key: "frostbite.gbuffer_roles_unknown".to_owned(),
+        reason: GBUFFER_ROLES_UNKNOWN.to_owned(),
+        unsupported: true,
+        at: None,
+    }
+}
+
 /// Bundles that ids and names are looked up in, with the index of what they hold built once: the permutations by type
 /// and id, the CompiledBytecode resources by name. Where two bundles hold the same id or name, the earlier wins.
 #[derive(Debug)]
@@ -466,6 +483,7 @@ impl Source<'_> {
         }
         let e = w.spawn();
         w.insert(e, Name(format!("material {key:#018x}")));
+        w.insert(e, gbuffer_roles_unknown());
         w.insert(
             e,
             FrostbiteMaterial {
@@ -526,5 +544,27 @@ impl Materials {
     /// How many material keys have a depot block, a program row and a texture lookup row.
     pub fn counts(&self) -> (usize, usize, usize) {
         (self.depot_keys.len(), self.rows.len(), self.texture_sets.len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use primase_core::Component;
+
+    /// Every material this reader makes carries the program's own refusal as a content note: the key the lab counts it
+    /// under, its full wording, unsupported, and no position (a material has none of its own).
+    #[test]
+    fn a_material_carries_its_unknown_gbuffer_roles_note() {
+        let mut w = primase_core::World::new();
+        let e = w.spawn();
+        let note = super::gbuffer_roles_unknown();
+        assert_eq!(note.key, "frostbite.gbuffer_roles_unknown");
+        assert_eq!(note.reason, super::GBUFFER_ROLES_UNKNOWN);
+        assert_eq!(note.reason.as_str(), "no PBR material derived: no G-buffer target of a Frostbite program has an established role (the frame graph binding the producers' targets to the lighting programs is engine code, not data; slot names are undecoded hashes), so none is mapped by slot name, format or colour space");
+        assert!(note.unsupported);
+        assert_eq!(note.at, None);
+        w.insert(e, note.clone());
+        note.verify(e, &w).expect("a valid content note");
+        assert_eq!(w.get::<primase_core::ContentNote>(e), Some(&note));
     }
 }

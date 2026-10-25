@@ -35,10 +35,6 @@ pub struct Options {
     /// The area's draw-param file ([`draw_param`]): none (default: the graphics environment is not read) or the file
     /// of this stem, one of [`draw_param::available`].
     pub draw_param: draw_param::DrawParams,
-    /// Optional static preview hour, 0..=24; None preserves each field's first stored value.
-    /// Continuous GPARAM fields interpolate linearly with a 24-hour wrap; discrete fields hold
-    /// the previous key. The policy is reported, not claimed to reproduce the engine's interpolation.
-    pub hour: Option<f32>,
     /// Whether the animation binder of each kept object model (Sekiro's objects, Elden Ring's assets: doors, lifts) is
     /// read into the world beside the model: its Havok skeleton and clips, named after the model. Off by default: the
     /// binders are more to hold in memory, and the clips are not lowered onto the placements by the read.
@@ -1078,7 +1074,7 @@ pub fn read_game_area_staged(
                     None => report.object_animation.still += 1,
                     Some(bytes) => {
                         report.object_animation.animated += 1;
-                        match animation::read_member(&bytes, decoder, model, &mut world) {
+                        match animation::read_member(install.game, &bytes, decoder, model, &mut world) {
                             Ok(read) => {
                                 report.object_animation.bones += read.report.bones;
                                 report.object_animation.clips += read.report.animations;
@@ -1200,7 +1196,7 @@ pub fn read_game_area_staged(
             .collect()
     };
     let (environment, draw_param_report) =
-        draw_param::read(&archive, decoder, game, &area, &options.draw_param, &configs, options.hour)?;
+        draw_param::read(&archive, decoder, game, &area, &options.draw_param, &configs)?;
     if let Some(environment) = environment {
         world.insert_resource(environment);
     }

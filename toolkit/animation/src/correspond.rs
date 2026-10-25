@@ -10,7 +10,7 @@
 //! are then dropped or refused by `map-clip`, as its option says.
 //!
 //! `parents=any` pairs by the unique name alone, for two skeletons of one character whose hierarchies and rests are
-//! not alike (Elden Ring's Havok skeletons parent their IK targets under the root and a creature's chains otherwise
+//! not alike (one source's Havok skeletons parent their IK targets under the root and a creature's chains otherwise
 //! than its model does, and the model's bind pose is not the Havok reference pose): nothing but the name is checked,
 //! and the pairs whose model-space rests differ by more than the tolerances (the translation in metres, the rotation and
 //! scale entries against `rotation-tolerance`) are counted, not refused, since the game
@@ -23,6 +23,53 @@ use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, Pass
 use primase_core::{Component, Entity, JointId, JointMap, Name, Rest, Skeleton, World};
 
 use crate::pose::{Trs, model_transforms};
+
+/// A skeleton with this exact core name, as used by correspondence pass recipes.
+/// Ambiguous names return None rather than choosing an unrelated definition.
+pub fn skeleton_named<'a>(world: &'a World, name: &str) -> Option<&'a Skeleton> {
+    let mut found = world.iter::<Skeleton>()
+        .filter(|(entity, _)| world.get::<Name>(*entity).is_some_and(|n| n.0 == name));
+    let (_, skeleton) = found.next()?;
+    found.next().is_none().then_some(skeleton)
+}
+
+/// Evidence for choosing correspondence: unique shared names and same-hierarchy pairs,
+/// using the same rest/parent tests as correspond-skeletons.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HierarchyCounts {
+    pub joints: usize,
+    pub named: usize,
+    pub paired: usize,
+}
+
+/// Counts for two named skeletons. None means a missing/ambiguous name or an invalid
+/// tolerance; this does not choose a mapping policy for the caller.
+pub fn hierarchy_counts(world: &World, from: &str, to: &str, tolerance: f64) -> Option<HierarchyCounts> {
+    if !tolerance.is_finite() || tolerance < 0.0 { return None; }
+    let (source, target) = (skeleton_named(world, from)?, skeleton_named(world, to)?);
+    Some(HierarchyCounts { joints: source.joints.len(), named: shared_names(source, target),
+        paired: same_hierarchy_pairs(source, target, tolerance) })
+}
+
+#[cfg(test)]
+mod named_tests {
+    use super::*;
+    #[test]
+    fn named_counts_use_the_correspondence_rules_and_refuse_ambiguous_names() {
+        let mut world = World::new();
+        let skeleton = Skeleton { joints: vec![primase_core::Joint { id: JointId(0), name: "Root".into(),
+            parent: None, rest: Rest::Affine(primase_core::Transform::IDENTITY) }] };
+        for name in ["source", "target"] {
+            let e=world.spawn(); world.insert(e, Name(name.into())); world.insert(e,skeleton.clone());
+        }
+        assert_eq!(hierarchy_counts(&world,"source","target",0.001),
+            Some(HierarchyCounts {joints:1,named:1,paired:1}));
+        assert!(hierarchy_counts(&world,"source","missing",0.001).is_none());
+        assert!(hierarchy_counts(&world,"source","target",f64::NAN).is_none());
+        let e=world.spawn(); world.insert(e,Name("source".into())); world.insert(e,skeleton);
+        assert!(skeleton_named(&world,"source").is_none());
+    }
+}
 
 /// What a pair must have besides its name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

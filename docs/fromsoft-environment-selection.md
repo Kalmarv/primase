@@ -25,13 +25,12 @@ remains available for that comparison; no distance fog is invented from these fi
 
 | Source | Existing evidence | Hour path / remaining work |
 |---|---|---|
-| Sekiro | GPARAM v5 stores an id and time per value. The recorded m11_01_0000 report counts 200 further values for chosen ids; this counts variants, not distinct hours. | `sekiro::Options::hour` samples only the selected ids, before environment lowering. Default None keeps the first stored sample. |
+| Sekiro | GPARAM v5 stores an id and time per value. The recorded m11_01_0000 report counts 200 further values for chosen ids; this counts variants, not distinct hours. | The read keeps every stored sample of the selected ids, in stored order. `sample-fromsoft-draw-params{hour}` (a pass, the program's choice of hour) samples them before environment lowering and counts the linear interpolation by name; without it `lower-fromsoft-environment` takes each field's first sample and counts that. |
 | Elden Ring | Same GPARAM v5 representation; m10_00_0000 counts 126 further chosen-id values. Weather/event files are separate layers, reported unread by the area environment reader. | Base-file hour sampling is implemented; it does not choose weather, event state or layer precedence. |
 | Riders Republic | `AnvilSkyControllers.time_of_day` retains source path keys and ticks. `lower-anvil-sky` already has an explicit hour and samples controller ticks at hour × 120 plus authored scattering tables. | Unify the program's hour control with this existing pass; retain weather as a separate choice. Automatic sun direction and exposure still need the named CPU/global producers in `anvil-content-preview.md`; changing hour cannot invent them. |
 
 The new `GPARAM_HOUR_FILE` and `GPARAM_HOUR` census lines read the original fields before
-first-value selection, recording each multi-sample id's exact times and values plus the noon
-sampling result or named ambiguity. `GPARAM_LAYER` tests known weather/event layer path
+first-value selection, recording each multi-sample id's exact times and values. `GPARAM_LAYER` tests known weather/event layer path
 candidates. The existing four-map, first-eight-base-files bound is explicit; this is not an
 all-map census, and no new measurement is claimed until it runs. Existing counts above are
 from `tests-a0b6470ed/draw_param_census.log`, not estimates of complete coverage.

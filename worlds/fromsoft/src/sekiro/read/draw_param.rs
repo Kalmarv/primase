@@ -18,7 +18,9 @@
 //! of four groups (`LightSet ParamEditor`, `FogParamEditor`, `LightScattering : ParamEditor`, `Env Map:Editor`): the ID
 //! most of them name is read. Every other group has no part-level ID: its one value set, else the set of ID 0, is read,
 //! and a group with several sets and no ID 0 is not selected. FogVolume sets are all retained as unresolved
-//! local-volume source data; they are never selected through the part's FogParamEditor slot.
+//! local-volume source data; they are never selected through the part's FogParamEditor slot. A field stored at several
+//! times of day is kept as every one of its samples, in stored order; a program that wants one hour runs
+//! `sample-fromsoft-draw-params`.
 use super::super::source::{DrawField, DrawGroup, DrawParam, SetChosen};
 use crate::{
     Archive, Game, Result,
@@ -58,7 +60,8 @@ pub struct Report {
     pub asked: bool,
     /// The stems the archive holds for the area's map: what a caller may ask for.
     pub available: Vec<String>,
-    /// The file read, its GPARAM version, the groups kept and the fields in them.
+    /// The file read, its GPARAM version, the groups kept and the field values in them: one for each stored time sample,
+    /// so a field stored at two hours counts twice (see [`Report::time_variants`]).
     pub file: Option<String>,
     pub version: u32,
     pub groups: usize,
@@ -87,7 +90,8 @@ pub struct Report {
     pub bytes: usize,
     /// Fields of a kept group that store nothing for the chosen ID.
     pub fields_without_set: usize,
-    /// Further values stored for a chosen ID, at other times of day: not read.
+    /// Further values stored for a chosen ID, at other times of day: kept beside the first, in stored order (the count
+    /// of samples after each field's first), for `sample-fromsoft-draw-params` to choose among.
     pub time_variants: usize,
     /// What the file stores that the GPARAM reader does not interpret.
     pub unread: Unread,
@@ -98,8 +102,6 @@ pub struct Report {
     pub slots: BTreeMap<String, usize>,
     /// The game's layered files (`_weatherbase` ...) exist and are not read.
     pub layers_not_read: bool,
-    /// The explicit static preview hour, if requested. None keeps the first stored value.
-    pub hour: Option<f32>,
 }
 
 /// The stem the files of an area's map share: `m11_01` for `m11_01_00_00`; Elden Ring's open-world tiles share
@@ -220,11 +222,9 @@ pub(super) fn select(gparam: &Gparam, stem: &str, configs: &[PartGparam], report
                 report.fields_without_set += 1;
                 continue;
             }
-            if chosen != SetChosen::Unresolved {
-                report.time_variants += at.len().saturating_sub(1);
-            }
-            let keep = if chosen == SetChosen::Unresolved { at.len() } else { 1 };
-            for index in at.into_iter().take(keep) {
+            // every stored sample is kept, in stored order: choosing an hour is `sample-fromsoft-draw-params`'s
+            report.time_variants += at.len().saturating_sub(1);
+            for index in at {
             let Some(value) = field.values.get(index) else {
                 report.fields_without_set += 1;
                 continue;
@@ -258,23 +258,6 @@ pub(super) fn select(gparam: &Gparam, stem: &str, configs: &[PartGparam], report
     }
 }
 
-/// Evaluate already selected groups at the caller's hour; unselected local-volume sets stay as source samples.
-fn sample_hour(gparam: &Gparam, source: &mut DrawParam, hour: f32) -> std::result::Result<(), String> {
-    if !hour.is_finite() || !(0.0..=24.0).contains(&hour) { return Err("hour must be finite and in 0..=24".into()); }
-    for group in &mut source.groups {
-        if group.chosen == SetChosen::Unresolved { continue; }
-        let stored = gparam.groups.iter().find(|stored| stored.key == group.key)
-            .ok_or_else(|| format!("{}: source group missing while sampling hour",group.key))?;
-        for field in &mut group.fields {
-            let stored = stored.field(&field.key).ok_or_else(|| format!("{}: source field missing",field.key))?;
-            field.value = stored.sample_at_hour(group.id,hour)?
-                .ok_or_else(|| format!("{}: selected value id {} missing",field.key,group.id))?;
-            field.time = Some(hour.rem_euclid(24.0));
-        }
-    }
-    Ok(())
-}
-
 /// Read what `choice` asks for. `configs` are the graphics configs of the parts the read keeps and of the area's
 /// collision parts.
 pub(super) fn read(
@@ -284,11 +267,7 @@ pub(super) fn read(
     area: &str,
     choice: &DrawParams,
     configs: &[PartGparam],
-    hour: Option<f32>,
 ) -> Result<(Option<DrawParam>, Report)> {
-    if hour.is_some_and(|hour| !hour.is_finite() || !(0.0..=24.0).contains(&hour) || *choice == DrawParams::None) {
-        return Err(crate::invalid("GPARAM",0,"hour requires a draw-param file and a finite value in 0..=24"));
-    }
     let DrawParams::File(stem) = choice else {
         return Ok((None, Report::default()));
     };
@@ -296,7 +275,6 @@ pub(super) fn read(
         asked: true,
         available: available(archive, game, area),
         layers_not_read: game == Game::EldenRing,
-        hour,
         ..Report::default()
     };
     for scene in configs.iter().filter_map(|c| c.scene) {
@@ -325,14 +303,7 @@ pub(super) fn read(
             return Ok((None, report));
         }
     };
-    let mut source = select(&gparam, stem, configs, &mut report);
-    if let Some(hour) = hour {
-        if let Err(why) = sample_hour(&gparam,&mut source,hour) {
-            report.unreadable = Some(why);
-            return Ok((None,report));
-        }
-        report.time_variants = 0;
-    }
+    let source = select(&gparam, stem, configs, &mut report);
     Ok((Some(source), report))
 }
 
@@ -376,11 +347,6 @@ impl Report {
         let Some(file) = &self.file else {
             return out;
         };
-        if let Some(hour) = self.hour {
-            out.push(Notice::new(stage,NoticeKind::Approximation,
-                "explicit hour preview: GPARAM floats/vectors linearly interpolated in stored units over a 24-hour wrap; discrete fields hold the preceding key; this interpolation and raw angle interpolation are preview policies, not a measured engine curve",
-                1).example(format!("{file}, hour {hour}")));
-        }
         let others: Vec<String> = self.available.iter().filter(|s| *s != file).cloned().collect();
         if !others.is_empty() {
             out.push(listed(
@@ -472,10 +438,6 @@ impl Report {
                 "draw-param fields of a read group that store nothing for its value set",
             ),
             (
-                self.time_variants,
-                "draw-param values stored for a chosen value ID at other times of day, not read",
-            ),
-            (
                 self.unread.extras,
                 "draw-param extras (records tying value IDs of groups together), not interpreted",
             ),
@@ -502,14 +464,23 @@ mod tests {
     use crate::gparam::{Field, Group, Value, Values};
 
     #[test]
-    fn selected_environment_fields_sample_the_requested_hour() {
-        let gparam=Gparam {version:5,unread:Unread::default(),groups:vec![group(LIGHT_SET,vec![
-            Field {times:vec![6.0,18.0],..field("Brightness",&[7,7],Values::F32(vec![2.0,8.0]))}]) ]};
-        let mut source=select(&gparam,"fixture",&[config(7,-1,-1)],&mut Report::default());
-        sample_hour(&gparam,&mut source,12.0).unwrap();
-        let light=source.group(LIGHT_SET).unwrap();
-        assert_eq!(light.value("Brightness"),Some(&Value::Float(5.0)));
-        assert_eq!(light.fields[0].time,Some(12.0));
+    fn every_stored_time_sample_of_a_chosen_set_is_kept_in_stored_order() {
+        let gparam = Gparam {
+            version: 5,
+            unread: Unread::default(),
+            groups: vec![group(
+                LIGHT_SET,
+                vec![Field { times: vec![6.0, 12.0, 18.0], ..field("Brightness", &[7, 9, 7], Values::F32(vec![2.0, 99.0, 8.0])) }],
+            )],
+        };
+        let mut report = Report::default();
+        let source = select(&gparam, "fixture", &[config(7, -1, -1)], &mut report);
+        let light = source.group(LIGHT_SET).unwrap();
+        assert_eq!(
+            light.fields.iter().map(|f| (&f.value, f.time)).collect::<Vec<_>>(),
+            [(&Value::Float(2.0), Some(6.0)), (&Value::Float(8.0), Some(18.0))]
+        );
+        assert_eq!(report.time_variants, 1);
     }
 
     fn field(key: &str, ids: &[i32], values: Values) -> Field {
@@ -597,7 +568,8 @@ mod tests {
         assert!(source.group("Bloom").is_none());
         assert_eq!(report.unchosen_groups, [ENV_MAP, "Bloom"]);
         assert_eq!(report.unchosen_fields, 2);
-        assert_eq!((report.groups, report.fields), (3, 4));
+        // Sharpness stores two samples for set 7 (kept, both), Colour one, Dist one, Exposure one
+        assert_eq!((report.groups, report.fields), (3, 5));
         assert_eq!(report.unread, Unread { extras: 2, data_bytes: 8 });
         assert_eq!(report.file.as_deref(), Some("m11_01_0000"));
     }

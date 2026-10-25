@@ -102,9 +102,9 @@ impl Levels {
         })
     }
 
-    /// Each level's rows in reverse order: the texture as a source whose v runs up holds it, row 0 at v = 0 (Unity's
-    /// textures, stored bottom row first, which the world stores top row first). Addressing then applies about the
-    /// source's own origin, as its sampler does. A level that isn't its size's whole rows is refused.
+    /// Each level's rows in reverse order: the texture as a source whose v runs up holds it, row 0 at v = 0 (one
+    /// source's textures, stored bottom row first, which the world stores top row first). Addressing then applies about
+    /// the source's own origin, as its sampler does. A level that isn't its size's whole rows is refused.
     pub fn rows_reversed(mut self) -> Result<Levels> {
         for i in 0..self.levels.len() {
             let (w, h) = self.size(i);
@@ -274,8 +274,7 @@ pub enum Subtexel {
     /// bits, 256 subdivisions of a texel, before the weights are taken. The D3D11.3 functional specification requires
     /// at least 8 bits of sub-texel precision (7.18.16.1, Texture Addressing and LOD Precision;
     /// `D3D11_SUBTEXEL_FRACTIONAL_BIT_COUNT` = 8). Microsoft's WARP rasterizer truncates at 8, as measured against
-    /// it on the layer bake's states (`worlds/fromsoft/tests/layer_pilot.rs`), and the game's GPU pixels come from
-    /// such a filter.
+    /// it on the layer bake's states, and the source's GPU pixels come from such a filter.
     D3d11,
 }
 

@@ -75,14 +75,16 @@ fn converted(property: Property, v: &[f32]) -> Vec<f32> {
             Property::Translation => *translation = [at(0), at(1), at(2)],
             Property::Rotation => *rotation = [at(0), at(1), at(2), at(3)],
             Property::Scale => *scale = [at(0), at(1), at(2)],
-            Property::Scalar => {}
+            Property::Scalar | Property::Visibility | Property::Values(_) => {}
         }
     }
     match (property, trs.converted(&GTA)) {
         (Property::Translation, Rest::Trs { translation: t, .. }) => t.to_vec(),
         (Property::Rotation, Rest::Trs { rotation: r, .. }) => r.to_vec(),
         (Property::Scale, Rest::Trs { scale: s, .. }) => s.to_vec(),
-        _ => v.to_vec(),
+        (Property::Scalar | Property::Visibility | Property::Values(_), _) => v.to_vec(),
+        (Property::Translation | Property::Rotation | Property::Scale, Rest::Affine(_)) =>
+            unreachable!("GTA signed axis permutation preserves TRS"),
     }
 }
 

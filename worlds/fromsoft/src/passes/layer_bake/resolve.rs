@@ -1166,7 +1166,6 @@ pub fn resolve_vertex_for_geometry(shader: &Shader, entity: Entity, world: &prim
 ///   the engine's per-model value, observed as the identity on every layered draw of a running game: see
 ///   [`super::TEXTURE_SCROLL_POLICY`]); constants the table does not name are not bound;
 /// - no output roles: its outputs reach the pixel stage by label.
-
 pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> {
     use super::vertex_probe::{
         CameraForm, camera_form, flat_constants, inputs_read, palette_indexed_by_vertex,

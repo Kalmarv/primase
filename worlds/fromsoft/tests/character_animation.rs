@@ -187,10 +187,7 @@ fn a_characters_animations_read_lower_and_map_onto_its_model() -> Result<()> {
                 .position(|&b| b as u32 == havok_joint.0)
                 .unwrap();
             let reference = &havok.reference_pose[havok_joint.0 as usize];
-            let width = match channel.property {
-                Property::Rotation => 4,
-                _ => 3,
-            };
+            let width = channel.property.width();
             for (k, &t) in channel.times.iter().enumerate() {
                 let sample = havok.spline.sample(track, t, reference, absent)?;
                 let Rest::Trs {
@@ -213,7 +210,9 @@ fn a_characters_animations_read_lower_and_map_onto_its_model() -> Result<()> {
                 let expected: Vec<f32> = match channel.property {
                     Property::Translation => translation.to_vec(),
                     Property::Scale => scale.to_vec(),
-                    _ => rotation.to_vec(),
+                    Property::Rotation => rotation.to_vec(),
+                    Property::Scalar | Property::Visibility | Property::Values(_) =>
+                        panic!("a non-transform property on a Havok joint: {:?}", channel.property),
                 };
                 let got = &channel.values[k * width..(k + 1) * width];
                 // a rotation's sign is the clip's (continuity), the rotation the same

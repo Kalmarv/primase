@@ -38,7 +38,7 @@ pub fn joaat(bytes: &[u8]) -> u32 {
     h.wrapping_add(h << 15)
 }
 /// Jenkins one-at-a-time over bytes as given (no case folding), wrapping u32 at every step: the hash of the
-/// structure and field names in RAGE's META descriptions (`CMapData`, `archetypeName`).
+/// structure and field names in one archive format's metadata descriptions (`CMapData`, `archetypeName`).
 pub fn joaat_exact(bytes: &[u8]) -> u32 {
     let mut h = 0u32;
     for &b in bytes {
@@ -54,7 +54,7 @@ pub fn joaat_exact(bytes: &[u8]) -> u32 {
 mod tests {
     use super::*;
     /// Known values from independent reference C# name hash methods,
-    /// Python TOC hashing, documented CRC32 parameter IDs and GTA model IDs.
+    /// Python TOC hashing, documented CRC32 parameter IDs and model IDs.
     #[test]
     fn reference_values() {
         assert_eq!(crc32(b"NormalTiling"), 0x730f2086);
@@ -63,7 +63,7 @@ mod tests {
         assert_eq!(joaat(b"adder"), 0xb779a091);
         assert_eq!(joaat(b"ADDER"), 0xb779a091);
         assert_eq!(joaat_exact(b"adder"), 0xb779a091);
-        // a structure name as GTA V's META descriptions store it
+        // a structure name as one archive format's metadata descriptions store it
         assert_eq!(joaat_exact(b"CMapData"), 0xd3593fa6);
         assert_ne!(joaat_exact(b"CMapData"), joaat(b"CMapData"));
     }

@@ -29,7 +29,9 @@ pub enum Role {
     Part,
     /// A skeleton its parts bind to (`core.skeleton`).
     Rig,
-    /// A clip it comes with (`core.clip`).
+    /// A clip it comes with. A member without `core.clip` is listed, not yet loaded/lowered:
+    /// `core.clip_key` identifies it, `core.name` labels it and optional `core.clip_length`
+    /// states a known length. Its reader descriptor remains on the same entity through load.
     Clip,
     /// A part drawn instead of another or not at all (an outfit's alternative), as the source's state says.
     Alternative,

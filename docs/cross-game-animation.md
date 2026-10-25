@@ -33,9 +33,11 @@ the same named skeleton only when its actual stored definition agrees.
 
 ## Pair tables and one-clip transfer
 
-`primase_animation::pair::SEKIRO_SKATE_TABLE` embeds the established human FLVER-to-render correspondence as
-reviewable bone names in `toolkit/animation/tables/sekiro-human__skate-render.json`. This copies the previously
-authored pair table; it adds no game transforms or mesh payloads and does not declare the table valid on all humans.
+The established human FLVER-to-render correspondence is kept as reviewable bone names in
+`checks/tests/fixtures/sekiro-human__skate-render.json`. It names two games, so it lives with the checks (core, toolkit
+and formats name no game) and only `checks/tests/skate_pair.rs` reads it; `toolkit/animation/tests/pair.rs` uses small
+tables of invented bone names. This copies the previously authored pair table; it adds no game transforms or mesh payloads
+and does not declare the table valid on all humans.
 `reversed(&JointTable)` reverses clip correspondence and notes. Tables with skin placements refuse reversal,
 because those offsets belong to the original target frame.
 
@@ -45,7 +47,7 @@ ancestor. Unmapped joints on both sides remain named. A missing name never becom
 `available_table` is an explicit projection onto uniquely present pairs and returns the complete observation
 report alongside it. The program must show what it projected out; this is not automatic confirmation of a mapping.
 
-`retarget_one(&Clip, &Skeleton, &Skeleton, target: Entity, &JointTable, RetargetClip)` returns `(Clip, PassLog)`.
+`retarget_one(&Clip, &Skeleton, &Skeleton, target: Entity, &JointTable, RetargetClip)` returns a `Transfer` (the `Clip`, and the pass's approximation and omission reasons by count).
 It runs the existing rotation-transfer pass in a small isolated World holding two skeleton copies and one clip.
 The input clip/World are untouched. Returned joint channels name the caller's target entity. A refused or unchanged
 result is an error with the pass's omission reasons. The table is strict; projection, when wanted, is a separate
@@ -67,7 +69,7 @@ No builds or runs were performed during the write-only round. These are test def
   The same file's default synthetic rig/DOF/track fixture checks stored frame times, linear lowering, render-joint
   identity and unchanged root translations without opening an archive or native decoder.
 - `primase-fromsoft/tests/deferred_clips.rs`: existing c1010 skeleton-only read then decode-one, skeleton reused.
-- Ignored `primase-fromsoft/tests/skate_pair.rs` real-data proof: c1010 / the existing skate idle in both directions, then the character skin
+- Ignored `primase-checks/tests/skate_pair.rs` (a test across two games lives in `checks/`) real-data proof: c1010 / the existing skate idle in both directions, then the character skin
   fitted and rebound to render. Choices are `reference=aligned,translation=root`; skin uses
   `fit=positions,unmapped=nearest,placement=automatic`, with all pass approximations reported.
 - The ignored full `every_sekiro_human_candidate_reports_pairs_ratios_and_skin_fit` census considers every

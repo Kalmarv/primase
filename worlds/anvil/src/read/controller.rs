@@ -3,6 +3,11 @@
 //! coincidental ClassIDs: each nested header, path node, key vector and trailer is consumed in order.
 #![deny(clippy::arithmetic_side_effects, clippy::indexing_slicing, clippy::cast_possible_truncation)]
 pub use crate::components::stored::{Controller, Track};
+
+use primase_core::World;
+
+use crate::read::archive::{Archive, At};
+
 pub const TIME_OF_DAY:u32=0xF0C8_5018;
 pub const WEATHER:u32=0x8870_04DC;
 const ENTRY:u32=0x050A_3620;
@@ -103,6 +108,68 @@ impl Controller {
         Ok(value)
     }
 }
+
+/// The name of a look's controller resource in the forges: `TOD_<look>` for the time of day, `WEA_<look>` for the
+/// weather; `None` for a class that is no controller.
+fn controller_name(class: u32, look: &str) -> Option<String> {
+    match class {
+        TIME_OF_DAY => Some(format!("TOD_{look}")),
+        WEATHER => Some(format!("WEA_{look}")),
+        _ => None,
+    }
+}
+
+/// The plan's forge files that hold `name`, in search order, as the first entry of that name: nothing is decoded.
+pub fn named_resource(archive: &Archive, name: &str) -> Option<At> {
+    archive
+        .listing()
+        .find(|(_, entry)| entry.name == name)
+        .map(|(forge, entry)| At {
+            forge,
+            entry: entry.entry,
+        })
+}
+
+/// Attach the look's authored controllers to the sky entity `entity` as `anvil.sky_controllers`: the time-of-day one
+/// (`TOD_<look>`, which the atmosphere has) and the weather one (`WEA_<look>`, when a forge holds it). Reading the
+/// look's controllers is reading: only the class of each resource is checked, and the controller's own parse states
+/// what it can hold. The error is the reason (the caller states it as a notice beside the sky's own defaults); an
+/// absent time-of-day controller is one, an absent weather controller is not.
+pub fn attach_sky_controllers(
+    archive: &mut Archive,
+    world: &mut World,
+    entity: primase_core::Entity,
+    look: &str,
+) -> Result<(), String> {
+    let read = |archive: &mut Archive, class: u32| -> Result<Option<Controller>, String> {
+        let Some(name) = controller_name(class, look) else {
+            return Err(format!("{class:#x}: not a look controller class"));
+        };
+        let Some(at) = named_resource(archive, &name) else {
+            return Ok(None);
+        };
+        let resource = archive.resource(at).map_err(|error| error.to_string())?;
+        if resource.type_id != class {
+            return Err(format!(
+                "{name}: expected controller {class:#x}, found {:#x}",
+                resource.type_id
+            ));
+        }
+        Controller::parse(&resource.body).map(Some)
+    };
+    let time_of_day = read(archive, TIME_OF_DAY)?
+        .ok_or_else(|| format!("TOD_{look}: time-of-day controller absent"))?;
+    let weather = read(archive, WEATHER)?;
+    world.insert(
+        entity,
+        crate::components::AnvilSkyControllers {
+            look: look.to_owned(),
+            time_of_day,
+            weather,
+        },
+    );
+    Ok(())
+}
 #[cfg(test)]
 #[allow(clippy::arithmetic_side_effects,clippy::indexing_slicing,clippy::cast_possible_truncation,reason="fixtures")]
 mod tests{
@@ -118,5 +185,11 @@ mod tests{
         let c=Controller::parse(&b).unwrap();assert_eq!(c.tracks[0].times,[1200,1680]);
         assert_eq!(c.value(&["Density"],1440.0).unwrap().unwrap()[0],3.0);
         b.push(0);assert!(Controller::parse(&b).is_err());
+    }
+    #[test]
+    fn a_look_names_its_time_of_day_and_weather_controllers(){
+        assert_eq!(controller_name(TIME_OF_DAY,"MAD_EVENTS_Clear_Day").as_deref(),Some("TOD_MAD_EVENTS_Clear_Day"));
+        assert_eq!(controller_name(WEATHER,"MAD_EVENTS_Clear_Day").as_deref(),Some("WEA_MAD_EVENTS_Clear_Day"));
+        assert_eq!(controller_name(0x1234_5678,"look"),None);
     }
 }

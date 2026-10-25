@@ -40,7 +40,7 @@ pub struct LaneStream {
     pub first: u8,
     pub count: u8,
     /// The first component of the attribute lane `first` takes (0 for all but the programs that take one component of an
-    /// attribute apart: Sekiro's and Elden Ring's cloth programs read the tangent's w, the bitangent sign, as the one
+    /// attribute apart: a source game's cloth programs read the tangent's w, the bitangent sign, as the one
     /// byte of an input named BINORMAL0, as `(byte - 127) / 127` where the other permutations read TANGENT0.w; inferred
     /// from the program's decode of it, not captured from the game).
     pub component: u8,
@@ -226,8 +226,8 @@ pub enum AlphaComparison {
     /// A pre-transform alpha plus `(dither.a - 0.5) * scale`. `scale_word` is a word offset in the reference's own
     /// buffer. A hard cutoff on output alpha approximates the game's stochastic, pre-transform test.
     Dithered { scale_word: u32 },
-    /// The discard compares a value made of texture samples and constants that reaches no target's alpha (an Elden Ring
-    /// G-buffer program writes none: `t1.w * t0.w + scale * (noise - 0.5) < reference`). A bake freezes the reference
+    /// The discard compares a value made of texture samples and constants that reaches no target's alpha (a G-buffer
+    /// program writes none: `t1.w * t0.w + scale * (noise - 0.5) < reference`). A bake freezes the reference
     /// below the range as for the others. The test is the program's own expression, read exactly from its graph
     /// (`primase_shader::output_uses::alpha_tests`); a cutoff on any output alpha is not it, and a consumer that cuts
     /// evaluates that expression with the values its binding states, or does not cut.
@@ -942,14 +942,14 @@ pub struct InputBinding {
     pub role: InputRole,
 }
 
-/// What picks one of several stages of one kind in a binding: the mesh-side field a consumer reads, named by the dialect
-/// component and field that holds it (`anvil.layout.kind`), and the value that picks this stage. A consumer draws a mesh
-/// with the stage whose key names a field it has and whose value that field equals; a mesh whose value matches no stage
-/// is refused by name, not drawn with a first or default stage.
+/// What picks one of several stages of one kind in a binding: the mesh-side field a consumer reads, named by the
+/// dialect's component and field that holds it (`<component>.<field>`), and the value that picks this stage. A
+/// consumer draws a mesh with the stage whose key names a field it has and whose value that field equals; a mesh whose
+/// value matches no stage is refused by name, not drawn with a first or default stage.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct VariantKey {
-    /// The component and field the mesh carries the key in, as `component.field` (`anvil.layout.kind`), or the name
-    /// the source gives its keys where no mesh field holds them (`frostbite.variant`).
+    /// The component and field the mesh carries the key in, as `component.field` (`<dialect>.<component>.<field>`), or
+    /// the name the source gives its keys where no mesh field holds them (a name in the source's own terms).
     pub field: String,
     pub value: u32,
     /// What the key stands for, in the source's terms. A description only: it never identifies a variant (a binding's
@@ -1749,7 +1749,7 @@ mod tests {
         );
     }
 
-    /// The cube-face store as a Frostbite G-buffer program writes it (`minor` 511/1023 both, `payload` 0.49804688 and
+    /// The cube-face store as the source's G-buffer program writes it (`minor` 511/1023 both, `payload` 0.49804688 and
     /// 0.0014662757, the program's literals) gives the program's own output for the ten normals it was evaluated at
     /// with a payload of 0, and decodes back to them; every face, the edges and corners between faces and a grid of
     /// normals round-trip through 10-bit lanes and a 2-bit lane 3; a lane 3 that is not an axis, and a lane 2 within a

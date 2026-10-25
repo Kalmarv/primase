@@ -3,7 +3,7 @@
 use primase_core::{Component, World};
 use primase_core::pass::{OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::state::{PrimitiveCondition, StateAssignment, StateAxis};
-use crate::tae::visibility::PrimitiveDisplayMasks;
+use crate::components::visibility::PrimitiveDisplayMasks;
 
 #[derive(Debug)]
 pub struct PreserveDisplayMasks { show_unassigned:bool }
@@ -70,6 +70,12 @@ mod tests {
     use std::collections::BTreeMap;
     use primase_core::{Entity, Mesh, Primitive};
     use primase_core::state::{Clause, Condition, Domain, Literal, Scope};
+    fn preserve(world:&mut World,show_unassigned:bool)->Result<(),String> {
+        use primase_core::pass::{PassManager,PassRegistry,Pipeline,RunReport};
+        PassManager::new(PassRegistry::new()).with_pass_checks(true).run(world,
+            &Pipeline {passes:vec![Box::new(PreserveDisplayMasks {show_unassigned})]},&mut RunReport::default())
+            .map_err(|error|error.to_string())
+    }
     fn fixture()->(World,Entity,Entity) {
         let mut world=World::new();let axis=world.spawn();let mesh=world.spawn();
         world.insert(axis,StateAxis {key:"fromsoft.mask.c1010.3".into(),domain:Domain::Bool,default:None,
@@ -84,7 +90,7 @@ mod tests {
     #[test]
     fn a_statically_hidden_primitive_stays_available_and_remaps_with_the_mesh() {
         let (mut world,mesh,_)=fixture();
-        PreserveDisplayMasks {show_unassigned:false}.run(&mut world,&mut PassLog::default()).expect("preserve");
+        preserve(&mut world,false).expect("preserve");
         assert!(!world.has::<PrimitiveCondition>(mesh));
         let masks=world.get::<PrimitiveDisplayMasks>(mesh).expect("mask metadata");
         assert_eq!(masks.default,0);assert_eq!(masks.groups,vec![None,Some(3)]);
@@ -108,9 +114,9 @@ mod tests {
     #[test]
     fn no_selected_default_refuses_before_changing_the_world() {
         let (mut world,mesh,_)=fixture();world.remove_resource::<StateAssignment>();
-        assert!(PreserveDisplayMasks {show_unassigned:false}.run(&mut world,&mut PassLog::default()).is_err());
+        assert!(preserve(&mut world,false).is_err());
         assert!(world.has::<PrimitiveCondition>(mesh));assert!(!world.has::<PrimitiveDisplayMasks>(mesh));
-        PreserveDisplayMasks {show_unassigned:true}.run(&mut world,&mut PassLog::default()).expect("explicit show");
+        preserve(&mut world,true).expect("explicit show");
         assert_eq!(world.get::<PrimitiveDisplayMasks>(mesh).expect("metadata").default,1<<3);
     }
 }

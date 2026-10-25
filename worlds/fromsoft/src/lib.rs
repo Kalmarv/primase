@@ -28,7 +28,8 @@ pub use archive::{Archive, Install, Keys, NameDictionary};
 pub use binder::{Binder, BinderFile};
 pub use game::Game;
 mod components;
-pub use passes::{detail_derive, detail_probe, geometry, layer_bake, preview, probe_accept, rigid};
+pub use components::clip_source;
+pub use passes::{clip_events, entity_names, display_masks, material_events, detail_derive, detail_probe, geometry, layer_bake, preview, probe_accept, rigid};
 pub use read::{archive, binder, dcx};
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

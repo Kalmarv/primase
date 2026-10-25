@@ -694,18 +694,23 @@ fn the_fromsoft_passes_register_by_name() {
         "drop-fromsoft-far",
         "drop-fromsoft-texture-transforms",
         "fromsoft-apply-rigid-skinning",
+        "lower-fromsoft-clip-events",
         "lower-fromsoft-collision",
+        "lower-fromsoft-display-masks",
         "lower-fromsoft-environment",
         "lower-fromsoft-extras",
         "lower-fromsoft-geometry",
         "lower-fromsoft-lights",
         "lower-fromsoft-map-records",
+        "lower-fromsoft-material-events",
         "lower-fromsoft-materials",
         "lower-fromsoft-object-collision",
         "lower-fromsoft-part-collision",
+        "name-fromsoft-entities",
         "preserve-fromsoft-display-masks",
         "raise-fromsoft-display-masks",
         "resolve-fromsoft-shaders",
+        "sample-fromsoft-draw-params",
         "select-fromsoft-outfit",
     ];
     assert_eq!(format!("{reg:?}"), format!("{names:?}"));
@@ -715,6 +720,7 @@ fn the_fromsoft_passes_register_by_name() {
         "drop-fromsoft-texture-transforms",
         "fromsoft-apply-rigid-skinning",
         "lower-fromsoft-extras",
+        "lower-fromsoft-display-masks",
         "raise-fromsoft-display-masks",
     ];
     for name in names {

@@ -432,9 +432,9 @@ pub enum SetChosen {
     Unresolved,
 }
 
-/// One field of a draw-param group at the chosen value set: its key, name, value and stored time
-/// (version 5). With an explicit preview hour the selected value is sampled and `time` states that
-/// hour; the read notice records its interpolation policy. Unresolved sets keep original samples.
+/// One sample of a field of a draw-param group at the chosen value set: its key, name, value and stored time of day
+/// (version 5). A field stored at several hours is several samples of one key, in stored order; after
+/// `sample-fromsoft-draw-params` it is one, with the hour sampled as its `time`.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DrawField {
     pub key: String,
@@ -456,7 +456,7 @@ pub struct DrawGroup {
 }
 
 impl DrawGroup {
-    /// The value of the field with key `key`.
+    /// The value of the field with key `key`: its first stored sample.
     pub fn value(&self, key: &str) -> Option<&crate::gparam::Value> {
         self.fields.iter().find(|f| f.key == key).map(|f| &f.value)
     }

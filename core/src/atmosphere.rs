@@ -38,7 +38,7 @@ pub struct VolumetricFog {
     pub height_fog_distribution: Option<f32>,
     pub height_fog_offset: Option<f32>,
     pub height_fog_density_scale: Option<f32>,
-    /// Four floats as stored; the fourth is 0 in every Sekiro census file.
+    /// Four floats as stored; the fourth is 0 in every census file of the source we measured.
     pub sky_colour: Option<[f32; 4]>,
     pub sky_start_dist: Option<f32>,
     pub directional_light_bank: Option<u32>,

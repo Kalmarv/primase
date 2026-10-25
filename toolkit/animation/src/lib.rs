@@ -6,6 +6,7 @@
 
 pub mod assemble;
 pub mod correspond;
+pub mod controller;
 pub mod curve;
 pub mod deform;
 pub mod fit;

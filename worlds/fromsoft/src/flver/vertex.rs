@@ -60,24 +60,6 @@ pub(super) fn size(kind: u32) -> Result<usize> {
     })
 }
 
-#[cfg(test)]
-mod tangent_tests {
-    use super::*;
-
-    #[test]
-    fn tangent_members_retain_the_layouts_sparse_semantic_indices() {
-        let members: Vec<_> = [0, 1, 4].into_iter().enumerate().map(|(i, index)| Member {
-            unknown: 0, stored: true, offset: i * 16, kind: 3, semantic: 6, index,
-        }).collect();
-        let tangents = [[1.0f32, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0], [0.0, 0.0, -1.0, -1.0]];
-        let bytes: Vec<_> = tangents.iter().flatten().flat_map(|v| v.to_le_bytes()).collect();
-        let mut vertex = Vertex::default();
-        vertex.read(&bytes, &members, 2048.0).unwrap();
-        assert_eq!(vertex.tangents, tangents);
-        assert_eq!(vertex.tangent_indices, [0, 1, 4]);
-    }
-}
-
 impl Vertex {
     /// A SpeedTree vertex's stored members ([`Vertex::speedtree`]): `Float4` (3), `Float2` (1), `Half4` (0x2e),
     /// `Half2` (0x2d) and `UByte4Norm` (0x13), the formats Elden Ring's SpeedTree layouts store; others are refused.
@@ -283,5 +265,23 @@ impl Vertex {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tangent_tests {
+    use super::*;
+
+    #[test]
+    fn tangent_members_retain_the_layouts_sparse_semantic_indices() {
+        let members: Vec<_> = [0, 1, 4].into_iter().enumerate().map(|(i, index)| Member {
+            unknown: 0, stored: true, offset: i * 16, kind: 3, semantic: 6, index,
+        }).collect();
+        let tangents = [[1.0f32, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0], [0.0, 0.0, -1.0, -1.0]];
+        let bytes: Vec<_> = tangents.iter().flatten().flat_map(|v| v.to_le_bytes()).collect();
+        let mut vertex = Vertex::default();
+        vertex.read(&bytes, &members, 2048.0).unwrap();
+        assert_eq!(vertex.tangents, tangents);
+        assert_eq!(vertex.tangent_indices, [0, 1, 4]);
     }
 }

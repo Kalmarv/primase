@@ -10,6 +10,7 @@ pub mod bake_materials;
 pub mod blockers;
 pub mod collision;
 pub mod detail;
+pub mod draw_params;
 pub mod environment;
 pub mod extras;
 pub mod far;
@@ -68,6 +69,10 @@ pub(crate) fn condition_key(c: &primase_core::state::Condition) -> String {
 /// Register the FromSoft area passes by their declarations.
 pub fn register(registry: &mut PassRegistry) {
     for spec in [
+        &crate::clip_events::LOWER_FROMSOFT_CLIP_EVENTS,
+        &crate::entity_names::NAME_FROMSOFT_ENTITIES,
+        &crate::display_masks::LOWER_FROMSOFT_DISPLAY_MASKS,
+        &crate::material_events::LOWER_FROMSOFT_MATERIAL_EVENTS,
         &crate::rigid::FROMSOFT_APPLY_RIGID_SKINNING,
         &geometry::LOWER_FROMSOFT_GEOMETRY,
         &outfits::RAISE_FROMSOFT_DISPLAY_MASKS,
@@ -85,6 +90,7 @@ pub fn register(registry: &mut PassRegistry) {
         &object_collision::LOWER_FROMSOFT_PART_COLLISION,
         &extras::LOWER_FROMSOFT_EXTRAS,
         &records::LOWER_FROMSOFT_MAP_RECORDS,
+        &draw_params::SAMPLE_FROMSOFT_DRAW_PARAMS,
         &environment::LOWER_FROMSOFT_ENVIRONMENT,
         &lights::LOWER_FROMSOFT_LIGHTS,
     ] {
