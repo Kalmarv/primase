@@ -449,7 +449,7 @@ that only implements versions 1 and 2 must not evaluate it as either; it draws t
 ## Detail-blend materials
 
 A material whose surface a source program computes from a base and tiled detail textures (a character's cloth and
-armour in Sekiro) carries the vendor extension `PRIMASE_materials_detail_blend`, listed in `extensionsUsed` and never
+armour in a source) carries the vendor extension `PRIMASE_materials_detail_blend`, listed in `extensionsUsed` and never
 in `extensionsRequired`, beside its ordinary `pbrMetallicRoughness` (and `KHR_materials_specular`), which is the same
 surface baked at a capped size: a consumer that ignores the extension draws that and loses only the detail's resolution.
 The extension is optional and its addition is a minor change. Its fields, the equation a conforming consumer

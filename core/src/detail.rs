@@ -72,10 +72,11 @@ pub enum DetailMix {
     DetailLerp(DetailLerp),
 }
 
-/// The most details a [`DetailLerp`] chains (Sekiro's DetailBlend programs read one to three).
+/// The most details a [`DetailLerp`] chains: this model's own bound, the largest chain an evaluator is built for. The
+/// sources it was derived from read one to three.
 pub const DETAIL_LIMIT: usize = 3;
 
-/// Tinted details lerped in turn over a base, as Sekiro's `Character_AMSN_[DetailBlend]` programs compute them. With
+/// Tinted details lerped in turn over a base, as the detail-blend programs this model was derived from compute them. With
 /// `A`, `N`, `M` the base colour, normal and mask samples, `D_i`, `K_i` the detail colour and normal samples,
 /// `lerp(a, b, t) = a + (b - a) * t` (lane by lane) and `chain(x)` the details' values `x_0, x_1, ...` lerped in turn by
 /// the weights (`x_0`, then `lerp(.., x_1, w_1)`, then `lerp(.., x_2, w_2)`):
@@ -290,7 +291,7 @@ pub struct DetailSurface {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SurfaceLowering {
-    /// Gloss and an F0 reflectance, as Sekiro's G-buffer holds them and its bake lowers them: the base colour the
+    /// Gloss and an F0 reflectance, as a G-buffer that stores them holds them and a bake lowers them: the base colour the
     /// albedo, roughness `1 - gloss`, metallic 0 (the reflectance carries the metal), and the F0 as the specular colour
     /// glTF's `KHR_materials_specular` states with a colour factor of 25 (its F0 is `0.04 * factor * colour`).
     GlossReflectance,
@@ -528,7 +529,7 @@ mod tests {
     }
 
     /// A detail lerp of `n` details with distinct constants; the second detail's weight `(1 - N.a)^8`, the third's
-    /// `N.a^8`, as Sekiro's switch 13 and 6 programs.
+    /// `N.a^8`, as a source program that squares three times.
     fn mix(world: &mut World, n: usize) -> DetailLerp {
         let mut t = || TextureRef::new(world.spawn());
         let (base_colour, base_normal, base_mask) = (t(), t(), t());
@@ -645,7 +646,7 @@ mod tests {
         assert_eq!(out.reflectance[0], 0.03 + ((4.55 * 0.1 * (1. * 0.5)) - 0.03) * f);
     }
 
-    /// The gloss is computed as the program stores it and decoded by the stated encoding (Sekiro's: the square root of
+    /// The gloss is computed as the program stores it and decoded by the stated encoding (for example the square root of
     /// the stored value, times 0.95); an encoding of power 0 is refused.
     #[test]
     fn the_gloss_is_decoded_by_its_encoding() {
@@ -707,7 +708,7 @@ mod tests {
     }
 
     /// A weight's power is taken by squaring, the powers of the exponent's set bits multiplied in from the lowest, as
-    /// Sekiro's switch 1 writes `(22 N.z)^260` (`x^4 * x^256`) and switches 13 and 6 `(1 - N.a)^8` (three squarings, the
+    /// One source program writes `(22 N.z)^260` (`x^4 * x^256`) and others `(1 - N.a)^8` (three squarings, the
     /// layered [`power`]'s bits); a min takes its bound where the value is NaN.
     #[test]
     fn a_weights_steps_are_taken_in_the_programs_order() {
@@ -792,7 +793,7 @@ mod tests {
         assert_eq!(two.evaluate(&s, &[0.5]).alpha, 1.);
     }
 
-    /// Gloss and reflectance lower as Sekiro's bake lowers them: roughness 1 - gloss, metallic 0, the F0 as the
+    /// Gloss and reflectance lower as a bake of a stored-gloss G-buffer lowers them: roughness 1 - gloss, metallic 0, the F0 as the
     /// specular colour; the normal made unit length.
     #[test]
     fn gloss_and_reflectance_lower_to_roughness_and_specular_colour() {
@@ -822,7 +823,7 @@ mod tests {
             frozen: vec![
                 Frozen::FrontFacing,
                 Frozen::EngineConstant {
-                    name: "FC_BloodAmount".into(),
+                    name: "SomeEngineConstant".into(),
                     value: vec![0.],
                 },
             ],

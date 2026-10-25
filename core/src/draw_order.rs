@@ -22,13 +22,15 @@ pub enum DrawLayer {
     Transparent,
 }
 
-/// `core.draw_order`: where a material's surfaces come in the source's draw sequence. `queue` is the source's own
-/// sequence across every layer, lower first, on the conventional render-queue scale (opaque 2000, alpha tested
-/// 2450, transparent 3000; a source's own values where it has them, as Unity's render queue). Within one queue,
-/// surfaces draw in entity order, then primitive order: the source order readers keep.
+/// `core.draw_order`: where a material's surfaces come in the source's draw sequence. `queue` is that sequence across
+/// every layer, lower first, on core's own scale: [`DrawOrder::OPAQUE`] 2000, [`DrawOrder::CUTOUT`] 2450 and
+/// [`DrawOrder::TRANSPARENT`] 3000 are where a layer's surfaces come by default, and a lowering places a source's
+/// own sequence on this scale (a source whose numbers are already on it keeps them). One scale for every layer, so a
+/// source can order a surface of one layer among another's. Within one queue, surfaces draw in entity order, then
+/// primitive order: the source order readers keep.
 ///
-/// `depth_write`: whether the source draws the surface writing depth (a blended surface may: Unity's ZWrite on in
-/// the opaque queues), so a consumer orders and composites it as the source does.
+/// `depth_write`: whether the source draws the surface writing depth (a blended surface may, where the source draws it
+/// among opaque ones), so a consumer orders and composites it as the source does.
 ///
 /// A material without it draws by its alpha mode ([`DrawOrder::of`]), and is never a decal: that is a fact the
 /// source states.
@@ -40,7 +42,7 @@ pub struct DrawOrder {
 }
 
 impl DrawOrder {
-    /// The conventional queues of the layers a material's alpha mode implies.
+    /// Core's default queues of the layers, which a material's alpha mode implies where the source states no order.
     pub const OPAQUE: i32 = 2000;
     pub const CUTOUT: i32 = 2450;
     pub const TRANSPARENT: i32 = 3000;

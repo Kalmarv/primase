@@ -31,7 +31,7 @@ draws that, and loses only the detail's resolution.
   "gain": 1, "normalStrength": 0.5, "dielectricF0": 0.03, "color": [0.9, 0.85, 0.8],
   "glossEncoding": {"power": 1, "root": 2, "scale": 0.95},
   "alphaDetail": 1,
-  "frozen": [{"frontFacing": {}}, {"engineConstant": {"name": "FC_BloodAmount", "value": [0]}}]
+  "frozen": [{"frontFacing": {}}, {"engineConstant": {"name": "SomeEngineConstant", "value": [0]}}]
 }}
 ```
 
