@@ -20,7 +20,8 @@
 //! one shows is the source's draw order): counted and kept. What a cover covers of a triangle is a convex polygon in
 //! the triangle's own coordinates: the cover projected along the normal onto the triangle's plane, cut to the
 //! triangle and to where the cover's distance (affine over the plane) lies in that range. A triangle of a prototype
-//! loses what is covered in every placement of it (the intersection of each placement's covered polygons); one
+//! loses what is covered in every placement of it (the intersection of each placement's covered polygons, each
+//! placement's made disjoint first so overlapping covers, a surface drawn twice, do not multiply the pieces); one
 //! covered in some placements only keeps that part. Covered pieces under [`MIN_AREA`] are not counted as covering.
 //! Double-sided triangles cover others but keep everything (seen from behind they are in front), counted.
 //!
@@ -28,7 +29,7 @@
 //! polygons are subtracted one by one, each subtraction leaving the convex pieces outside the polygon's edges
 //! (clipped as `split-uv-tiles` clips, [`crate::point_blend`]), and the pieces fanned back into triangles in the
 //! triangle's own winding. Pieces under [`MIN_AREA`] (in every placement) go: slivers along a cover's edge. A triangle
-//! that would become more than [`MAX_PIECES`] pieces is kept whole, counted. A cut leaves no crack: a vertex on an
+//! whose covered part or cut would be more than [`MAX_PIECES`] pieces is kept whole, counted. A cut leaves no crack: a vertex on an
 //! edge two triangles of the primitive share is computed from the edge alone ([`crate::point_blend::Corner::cut_at`]) and
 //! welded, one vertex.
 //!
@@ -276,12 +277,56 @@ fn subtract(p: Vec<Corner>, c: &[Uv], min: f64, out: &mut Vec<Vec<Corner>>) {
     // what is left is inside `c`: covered
 }
 
-/// What a stored triangle's placements cover of it so far.
+/// `p` less the convex polygon `c`, in coordinates only (a covered piece less another): as [`subtract`].
+fn subtract_uv(p: Poly, c: &[Uv], min: f64, out: &mut Vec<Poly>) {
+    if clip_all(&p, edges(c), min).is_none() {
+        out.push(p);
+        return;
+    }
+    let mut rest = Some(p);
+    for f in edges(c) {
+        let Some(r) = rest.take() else { break };
+        out.extend(clip_all(&r, [[-f[0], -f[1], -f[2]]], min));
+        let inside = clip(&r, f);
+        rest = (inside.len() >= 3).then_some(inside);
+    }
+}
+
+/// `pieces` as disjoint convex polygons with the same union (each less the ones before it), so intersecting two
+/// placements' pieces makes no piece twice; `None` past [`MAX_PIECES`].
+fn disjoint(pieces: Vec<Poly>, min: f64) -> Option<Vec<Poly>> {
+    let mut out: Vec<Poly> = Vec::new();
+    for p in pieces {
+        let mut frags = vec![p];
+        for q in &out {
+            let mut next = Vec::with_capacity(frags.len());
+            for f in frags {
+                subtract_uv(f, q, min, &mut next);
+            }
+            frags = next;
+            if frags.is_empty() {
+                break;
+            }
+        }
+        out.extend(frags);
+        if out.len() > MAX_PIECES {
+            return None;
+        }
+    }
+    Some(out)
+}
+
+/// What the placements covering a stored triangle cover of it so far (kept only for a triangle some placement
+/// covers).
 #[derive(Default)]
 struct Hidden {
-    /// The part covered in every placement seen: `None` before the first.
-    covered: Option<Vec<Poly>>,
-    /// The largest scale from the triangle's coordinates to square metres over its placements.
+    /// How many of its placements cover some of it.
+    placements: usize,
+    /// The part every one of those covers, as disjoint pieces.
+    covered: Vec<Poly>,
+    /// More pieces than [`MAX_PIECES`] on the way: kept whole.
+    intricate: bool,
+    /// The largest scale from the triangle's coordinates to square metres over those placements.
     scale: f64,
 }
 
@@ -325,6 +370,10 @@ impl Pass for DropCoveredSurfaces {
             if !taken.contains(&e) {
                 placements.push((e, w.get::<Transform>(e).copied().unwrap_or(Transform::IDENTITY)));
             }
+        }
+        let mut placed: BTreeMap<Entity, usize> = BTreeMap::new();
+        for &(mesh, _) in &placements {
+            *placed.entry(mesh).or_default() += 1;
         }
         let mut covers: BTreeMap<Entity, Cover> = BTreeMap::new();
         let mut tris: Vec<Placed> = Vec::new();
@@ -486,25 +535,34 @@ impl Pass for DropCoveredSurfaces {
                         double += 1;
                     }
                 }
-                Cover::Covering => {
+                Cover::Covering if !covered.is_empty() => {
                     let h = hidden.entry((t.mesh, t.primitive, t.triangle)).or_default();
+                    let first = h.placements == 0;
+                    h.placements += 1;
                     h.scale = h.scale.max(scale);
-                    h.covered = Some(match h.covered.take() {
-                        None => covered,
-                        Some(before) if before.is_empty() || covered.is_empty() => Vec::new(),
-                        // covered in every placement: the pairwise overlaps
-                        Some(before) => {
+                    if h.intricate || (!first && h.covered.is_empty()) {
+                        continue;
+                    }
+                    match disjoint(covered, min) {
+                        None => h.intricate = true,
+                        Some(here) if first => h.covered = here,
+                        // covered in every placement: the overlaps of the two disjoint sets, disjoint
+                        Some(here) => {
                             let mut both = Vec::new();
-                            for a in &before {
-                                for b in &covered {
+                            for a in &h.covered {
+                                for b in &here {
                                     both.extend(clip_all(a, edges(b), min));
                                 }
                             }
-                            both
+                            if both.len() > MAX_PIECES {
+                                h.intricate = true;
+                            } else {
+                                h.covered = both;
+                            }
                         }
-                    });
+                    }
                 }
-                Cover::No => {}
+                Cover::Covering | Cover::No => {}
             }
         }
         drop(grid);
@@ -512,9 +570,15 @@ impl Pass for DropCoveredSurfaces {
         let mut fates: BTreeMap<(Entity, usize), BTreeMap<usize, Fate>> = BTreeMap::new();
         let mut too_many = 0u64;
         for ((mesh, k, ti), h) in hidden {
-            let Some(cover) = h.covered.filter(|c| !c.is_empty()) else {
+            // a placement that covers none of it keeps all of it
+            if h.placements < placed[&mesh] || h.covered.is_empty() {
                 continue;
-            };
+            }
+            if h.intricate {
+                too_many += 1;
+                continue;
+            }
+            let cover = h.covered;
             let min = MIN_AREA / h.scale;
             // the corners as the primitive's vertices, so a cut point is a combination of those
             let p = &w.get::<Mesh>(mesh).expect("a mesh").primitives()[k];

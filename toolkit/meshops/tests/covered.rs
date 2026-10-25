@@ -343,6 +343,35 @@ fn a_shared_prototype_loses_only_what_every_placement_covers() {
     }
 }
 
+/// A floor prototype placed 40 times, each placement under two identical decks over half of it (a deck drawn twice,
+/// coincident copies being common): what every placement covers is still that half, found at once (each
+/// placement's covered pieces made disjoint before the placements are intersected, so their count does not double
+/// per placement), and the floor keeps the other half.
+#[test]
+fn many_placements_under_doubled_decks_lose_the_half_they_all_cover() {
+    let mut w = World::new();
+    let concrete = material(&mut w, "concrete", AlphaMode::Opaque, false);
+    let boards = material(&mut w, "boards", AlphaMode::Opaque, false);
+    let at: Vec<[f32; 3]> = (0..40).map(|i| [100.0 * i as f32, 0.0, 0.0]).collect();
+    let floor = place(&mut w, "plaza", vec![square(concrete, 0.0, 0.0, 10.0, 0.0)], &at);
+    for a in &at {
+        for copy in ["bowl", "bowl again"] {
+            place(
+                &mut w,
+                copy,
+                vec![square(boards, a[0] + 5.0, -1.0, 12.0, 0.0037)],
+                &[[0.0; 3]],
+            );
+        }
+    }
+    let started = std::time::Instant::now();
+    run(&mut w, 0.01);
+    assert!(started.elapsed().as_secs() < 10, "{:?}", started.elapsed());
+    let tris = drawn(&w, floor);
+    let area: f64 = tris.iter().map(|t| t.1).sum();
+    assert!((area - 50.0).abs() < 1e-3, "{area} m2 left: {tris:?}");
+}
+
 /// A mesh still linked to its file loses the link once changed (the pass declares the removal); one left as it was
 /// keeps it.
 #[test]
