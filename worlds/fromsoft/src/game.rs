@@ -107,7 +107,16 @@ impl Game {
     ///   the world normal; `g_GBuffer1Texture.x` the metallic (`F0 = lerp(0.04, albedo, x)`, the albedo
     ///   `g_GBuffer2Texture.rgb`), `.y` the gloss; `g_GBuffer2Texture.rgb` the albedo. `g_GBuffer1Texture.z` (read times
     ///   10) and `g_GBuffer2Texture.w` (read times 255, as an integer) are read for what is not established, and targets
-    ///   3 and 4 by no lighting program.
+    ///   3 and 4 by no lighting program. Target 4 is the emission (`rgb`), as Sekiro's is, by what the programs write
+    ///   there, since no lighting program reads it. The programs that write it write a radiance: a material colour
+    ///   (`color_1`) times its intensity, times the material's emissive map (the `_em` texture), times the frame's
+    ///   `SC_PreExposure`. This is so in `C[c2120]_Arts_Petal_Gbuf` (Malenia's flower, whose emissive map is the pattern
+    ///   it shows in game), `C[AMSN]_Glow[Int]_Gbuf`, `C[c2050]_Ghost_Gbuf` and the map programs `M[Crystal]`,
+    ///   `M[AMSN_V]_Emissive_Glow`, `M[AMSN_V]_Vesitation_Emissive_Glow`, `M[WorldTree_Trunk2]` and
+    ///   `M[WorldTree_Twig]_Emissive_Glow`. Of the 100 G-buffer programs dumped from c2010, c2050, c2120 and Liurnia, the
+    ///   rest write zero there, and none writes another quantity (a mask, a velocity) in its `rgb`. Its `w` is the
+    ///   value those programs also write to target 3's `w`; the emissive ones choose by a constant between a computed
+    ///   value and a constant's `w` (`FC_GlowScale.w` in the flower's). What it holds is not established.
     pub fn gbuffer(self) -> Vec<(u32, u8, OutputRole)> {
         use primase_core::shader::{NormalEncoding, NormalSpace, ScalarEncoding};
         let normal = OutputRole::Normal {
@@ -222,8 +231,17 @@ impl Game {
                 ),
                 (
                     4,
-                    0b1111,
-                    unknown("Elden Ring's G-buffer target 4: read by no lighting program"),
+                    0b0111,
+                    OutputRole::Emission {
+                        encoding: ScalarEncoding::LINEAR,
+                    },
+                ),
+                (
+                    4,
+                    0b1000,
+                    unknown(
+                        "Elden Ring's G-buffer target 4's w: the value the programs also write to target 3's w (or a constant's w), read by no lighting program, for what is not established",
+                    ),
                 ),
             ],
         }

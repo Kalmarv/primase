@@ -108,7 +108,7 @@ fn source_bytes_wait_for_the_programs_choice() {
     assert!(log.approximations.is_empty(), "{log:?}");
     let Some(Stream::F32x4(tangents)) = world.get::<Mesh>(mesh).unwrap().primitives()[0]
         .streams
-        .get(&Semantic::Tangent)
+        .get(&Semantic::Tangent(0))
     else {
         panic!("tangents")
     };

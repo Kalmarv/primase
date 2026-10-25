@@ -16,6 +16,8 @@
 use crate::bytes::{Budget, View};
 use crate::{Result, invalid};
 
+pub mod visibility;
+
 const FORMAT: &str = "TAE";
 
 /// The only version read: Sekiro's and Elden Ring's.
@@ -180,6 +182,18 @@ impl Tae {
     /// The animation numbered `id`.
     pub fn animation(&self, id: i64) -> Option<&Animation> {
         self.animations.iter().find(|a| a.id == id)
+    }
+
+    /// Follow a TAE import's event record, detecting missing targets and cycles. Motion-only imports
+    /// keep their own events; only ImportOther inherits events as well as motion.
+    pub fn resolved_animation(&self,id:i64)->Result<Option<&Animation>> {
+        let Some(mut record)=self.animation(id) else {return Ok(None);};
+        let mut seen=std::collections::BTreeSet::new();
+        while let Header::ImportOther {from,..}=&record.header {
+            if !seen.insert(record.id) {return Err(invalid(FORMAT,0,format!("animation {id}: cyclic event import")));}
+            record=self.animation(i64::from(*from)).ok_or_else(||invalid(FORMAT,0,format!("animation {id}: event import {from} absent")))?;
+        }
+        Ok(Some(record))
     }
 }
 

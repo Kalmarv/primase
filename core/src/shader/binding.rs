@@ -226,6 +226,12 @@ pub enum AlphaComparison {
     /// A pre-transform alpha plus `(dither.a - 0.5) * scale`. `scale_word` is a word offset in the reference's own
     /// buffer. A hard cutoff on output alpha approximates the game's stochastic, pre-transform test.
     Dithered { scale_word: u32 },
+    /// The discard compares a value made of texture samples and constants that reaches no target's alpha (an Elden Ring
+    /// G-buffer program writes none: `t1.w * t0.w + scale * (noise - 0.5) < reference`). A bake freezes the reference
+    /// below the range as for the others. The test is the program's own expression, read exactly from its graph
+    /// (`primase_shader::output_uses::alpha_tests`); a cutoff on any output alpha is not it, and a consumer that cuts
+    /// evaluates that expression with the values its binding states, or does not cut.
+    Unwritten,
 }
 
 /// One constant: the bytes `offset..offset + size` of a constant buffer resource of the shader, named when the

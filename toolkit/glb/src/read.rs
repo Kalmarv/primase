@@ -375,15 +375,17 @@ impl Gltf {
                 .as_u64()
                 .and_then(|a| usize::try_from(a).ok())
                 .ok_or_else(|| invalid(&apath, &format!("{name} is not an accessor index")))?;
-            if name.starts_with('_') {
+            // A semantic first: primase's further tangent sets are custom-named (`_TANGENT<n>`) but read as streams.
+            let Some(semantic) = semantic(name) else {
+                if !name.starts_with('_') {
+                    return Err(invalid(&apath, &format!("unsupported attribute {name}")));
+                }
                 let data = self
                     .accessor_data(acc)
                     .map_err(|e| e.context(&format!("{apath}.{name}")))?;
                 custom.insert(name.clone(), data);
                 continue;
-            }
-            let semantic =
-                semantic(name).ok_or_else(|| invalid(&apath, &format!("unsupported attribute {name}")))?;
+            };
             let stream = self
                 .read_attribute(semantic, acc)
                 .map_err(|e| e.context(&format!("{apath}.{name}")))?;
@@ -624,7 +626,7 @@ impl Gltf {
         let unorm = acc.normalized && matches!(acc.component, UNSIGNED_BYTE | UNSIGNED_SHORT);
         let stream = match (semantic, acc.kind) {
             (Semantic::Position | Semantic::Normal, "VEC3") if float => Stream::F32x3(acc.floats()?),
-            (Semantic::Tangent, "VEC4") if float => Stream::F32x4(acc.floats()?),
+            (Semantic::Tangent(_), "VEC4") if float => Stream::F32x4(acc.floats()?),
             (Semantic::TexCoord(_), "VEC2") if float => Stream::F32x2(acc.floats()?),
             (Semantic::TexCoord(_), "VEC2") if unorm => Stream::F32x2(acc.unorm_as_f32()?),
             (Semantic::Color(_), "VEC3") if float => Stream::F32x3(acc.floats()?),
@@ -934,9 +936,10 @@ fn semantic(name: &str) -> Option<Semantic> {
     match name {
         "POSITION" => Some(Semantic::Position),
         "NORMAL" => Some(Semantic::Normal),
-        "TANGENT" => Some(Semantic::Tangent),
+        "TANGENT" => Some(Semantic::Tangent(0)),
         _ => set("TEXCOORD_")
             .map(Semantic::TexCoord)
+            .or_else(|| set("_TANGENT").and_then(|n| (n > 0).then_some(Semantic::Tangent(n))))
             .or_else(|| set("COLOR_").map(Semantic::Color))
             .or_else(|| set("JOINTS_").map(Semantic::Joints))
             .or_else(|| set("WEIGHTS_").map(Semantic::Weights)),

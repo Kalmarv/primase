@@ -364,6 +364,10 @@ impl RetargetClip {
             if drives != BTreeSet::from([map.from]) {
                 continue;
             }
+            // These are authored keys, including the terminal key of a looping clip.
+            // Playback wrapping would replace that terminal pose with the first one.
+            let mut key_clip = clip.clone();
+            key_clip.extrapolation = primase_core::Extrapolation::Hold;
             let mut times: Vec<f32> = clip
                 .channels
                 .iter()
@@ -375,7 +379,7 @@ impl RetargetClip {
                 if animated.len() == roots.len() {
                     break 'clips;
                 }
-                let Ok(posed) = evaluate(clip, map.from, source, None, f64::from(t)) else {
+                let Ok(posed) = evaluate(&key_clip, map.from, source, None, f64::from(t)) else {
                     continue 'clips;
                 };
                 let Ok(src) = model_transforms(source, &locals(source, Some(&posed.pose))) else {
@@ -561,8 +565,10 @@ impl Pass for RetargetClip {
                 times.dedup();
                 let mut rotations: BTreeMap<JointId, Vec<f32>> = BTreeMap::new();
                 let mut root_translation: BTreeMap<JointId, Vec<f32>> = BTreeMap::new();
+                let mut key_clip = clip.clone();
+                key_clip.extrapolation = primase_core::Extrapolation::Hold;
                 for &t in &times {
-                    let posed = evaluate(&clip, map.from, source, None, f64::from(t)).map_err(|e| e.0)?;
+                    let posed = evaluate(&key_clip, map.from, source, None, f64::from(t)).map_err(|e| e.0)?;
                     let src =
                         model_transforms(source, &locals(source, Some(&posed.pose))).map_err(|e| e.0)?;
                     let mut model: BTreeMap<JointId, Affine> = BTreeMap::new();

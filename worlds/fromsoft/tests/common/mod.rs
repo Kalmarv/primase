@@ -73,7 +73,7 @@ pub fn quad(
                     Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0., 0., 1.], [1., 0., 1.]]),
                 ),
                 (Semantic::Normal, Stream::F32x3(vec![[0., 1., 0.]; 4])),
-                (Semantic::Tangent, Stream::F32x4(vec![[0., 0., 1., 1.]; 4])),
+                (Semantic::Tangent(0), Stream::F32x4(vec![[0., 0., 1., 1.]; 4])),
                 (
                     Semantic::TexCoord(0),
                     Stream::F32x2(vec![[0., 0.], [1., 0.], [0., 1.], [1., 1.]]),

@@ -66,7 +66,7 @@ fn triangle_selection_omits_darkening_preserves_streams_and_counts_null_slots() 
                     [1., 1., 1., 1.],
                 ]),
             ),
-            (Semantic::Tangent, Stream::F32x4(vec![[1., 0., 0., -1.]; 4])),
+            (Semantic::Tangent(0), Stream::F32x4(vec![[1., 0., 0., -1.]; 4])),
         ]),
         indices: Some(vec![0, 1, 2, 1, 2, 3]),
         material: None,

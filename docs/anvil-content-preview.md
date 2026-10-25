@@ -568,3 +568,42 @@ so the parameter equations remain inspectable after `anvil.material` is consumed
 channels. Existing program oracles now check encoded classes; Bark/Leaves AO with non-neutral vertex alpha,
 Leaves' saturation threshold and foliage outputs, Clutters' zero specular-occlusion case, Wind translucency,
 and emitted colour including vertex RGB are also written as regressions. No new shader fixture binary was added.
+
+## Entity content: the next semantic-reader decision
+
+The measured resource inventory above ranks Entity first by stored occurrences: **615,110 entries,
+1,006,714,992 stored payload bytes**. EntityGroup follows at **56,837 / 48,078,950**. Those are whole-type
+denominators from `tests-2b90202/resource_coverage.log`, not counts of missing map objects. They include
+patch copies, UI, characters and gameplay logic. The current reader already lowers the established visual,
+collision, water, decal and grass subsets, and preserves remaining component bodies in
+`anvil.source_components`. Retaining a body is not decoding its fields.
+
+Reused older evidence: `cache/riders-republic/rr-placement/census-all.json` and `final-census.txt` name
+VisualQuadComponent as the dominant Entity refusal in that older parser. The conversion's `docs/effects.md`
+§3–4 identifies VisualQuad chiefly as UI icons, and AmbientEffectGenerator mostly as sound. Its §4.4 also
+records that the FX graph reader stops before the complete spawned-entity offset/remaining elements.
+An FX resource's name or the existence of a static beam mesh therefore does not establish where or when
+that mesh is spawned. These older numbers are not acceptance counts for the current reader. A component's
+registry length rule establishes its byte extent, not all its semantic fields or activation rules.
+
+The new `worlds/anvil/tests/entity_content_census.rs` closes the missing observation before choosing another
+reader. It reads every stored Entity/EntityGroup plus the lists needed to distinguish likely map content;
+it does not run the game or a renderer. It runs with the configured Riders install under the ordinary
+test-data policy. Output is `anvil-entity-content/report.json` under the configured scratch directory,
+with bounded complete component-body samples beside it. No result from this new census has been measured here.
+
+| Census line / artifact | What it decides | Boundary that stays open |
+|---|---|---|
+| `ANVIL_ENTITY_GRAPH` | Success/refusal counts and stored bytes for GridCellDataBlock and EntityGroup; whether the membership cohort has missing graph records. | Membership is the union of all stored lists and group-member edges, including patch copies; it does not resolve World ownership, state or active layers. Entity links and arbitrary opaque words are never treated as placement edges. |
+| `ANVIL_ENTITY_OWNER` | Current whole-owner parser success/refusal counts, bytes and exact example errors, separately for Entity and EntityGroup. Totals reconcile against the entries visited. | A parsed owner does not imply every component is understood; a refused owner cannot contribute embedded-component measurements. |
+| `ANVIL_ENTITY_COMPONENT` with `grid_listed=true` | Occurrences, owner counts, retained component-body bytes and full length histogram per class/status in the stored-list cohort. Rank missing semantic readers by these measured rows. | A listed owner is a map candidate, not an enabled or visible placement. Animated-map-prop co-occurrence is recorded, not excluded by a name heuristic. |
+| The same line with `grid_listed=false` | Separates unlisted/UI/other owners from the map-candidate ranking rather than treating their volume as absent scenery. | Unlisted does not prove UI or non-map: runtime spawns and graph refusals remain possible. |
+| `length-rule-only`, `header-delimited-unread`, `component-refused` rows and sample bodies | Distinguish absent semantic fields, an absent length grammar, and a failed known grammar. Full bodies, SHA-256, owner/entry/component identities, stored transform and layer actions give the exact next registry/grammar comparison. | At most three examples per row; a body over 256 KiB or the 32 MiB total sample budget is explicitly not saved, never silently truncated. Size histograms include all parsed bodies, not only samples. |
+| `downstream-reader` versus `typed-subset` | Water and deferred-decal Raw bodies are not falsely ranked as missing readers: placements has separate typed readers for them. Other typed components are identified as retained subsets. | Downstream parsing/lowering success is not asserted. Typed-body byte lengths are unmeasured, explicitly distinguished from a measured zero; these cannot be ranked as byte-complete semantic coverage. |
+
+The immediate implementation decision stays open until those lines exist: choose the largest **grid-listed**
+opaque class whose complete format is established, then add its reader and a synthetic fixture. For FX-spawned
+props the missing observation is the complete element/property grammar including SourceEntity's reference
+encoding and OffsetMatrix, followed by authored activation/offset composition. For ambient generators it is
+the typed Params targets and full instance grammar; existing evidence says most targets add sound, not visual
+content. No speculative spawn transforms, particle simulation or character/animation work is added by this census.

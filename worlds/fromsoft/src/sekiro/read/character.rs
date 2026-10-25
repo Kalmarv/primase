@@ -239,6 +239,8 @@ pub struct CharacterOptions {
     /// For a character read the animations are members of its asset; for parts (the player is `c0000`'s animations on
     /// parts worn together) they are the members of an asset of their own, `<id> animations`.
     pub animations: Option<String>,
+    /// Decode only these listed names/keys. None preserves the existing explicit full-binder read API.
+    pub animation_clips: Option<Vec<String>>,
     /// For parts, also read each form's own animation binder (the part binder's member named after the form without
     /// the part's level suffix: `wp_a_0761_1.anibnd` for `wp_a_0761_1_l` of `wp_a_0761_l`): its Havok skeleton as a
     /// skeleton of its own and each animation as `havok.animation`, the members (clips) of the form's asset. Otherwise
@@ -529,6 +531,7 @@ struct Reading<'a> {
     npc_stats: Option<std::result::Result<Vec<crate::param::NpcStats>, String>>,
     /// Each form read so far and the binder it is of: two of one name are refused.
     forms: BTreeMap<String, String>,
+    animation_clips: Option<Vec<String>>,
 }
 
 impl<'a> Reading<'a> {
@@ -549,6 +552,7 @@ impl<'a> Reading<'a> {
             npc_rows: None,
             npc_stats: None,
             forms: BTreeMap::new(),
+            animation_clips: None,
         })
     }
 
@@ -965,7 +969,11 @@ impl<'a> Reading<'a> {
     /// a character without an animation binder).
     fn read_animations(&self, of: &str, w: &mut World) -> Result<(Vec<Entity>, AnimationReport)> {
         let of = character_id(of)?;
-        Ok(match animation::read(&self.archive, self.decoder, of, w)? {
+        let read = match &self.animation_clips {
+            Some(clips) => animation::read_selected(&self.archive, self.decoder, of, clips, w)?,
+            None => animation::read(&self.archive, self.decoder, of, w)?,
+        };
+        Ok(match read {
             Some(read) => (read.animations, read.report),
             None => (Vec::new(), AnimationReport::default()),
         })
@@ -1016,6 +1024,7 @@ pub fn read_character_with(
     }
     let id = character_id(id)?;
     let mut reading = Reading::open(install, decoder)?;
+    reading.animation_clips = options.animation_clips.clone();
     let report = reading
         .read(
             Item::Character(id),
@@ -1129,6 +1138,7 @@ pub fn read_parts_with(
         }
     }
     let mut reading = Reading::open(install, decoder)?;
+    reading.animation_clips = options.animation_clips.clone();
     let mut reports = Vec::new();
     for p in parts {
         reports.extend(reading.read(Item::Part(p), None, options.form_animations, destination)?);
@@ -1189,6 +1199,13 @@ impl<'a> CharacterReader<'a> {
     /// Also read the animation binders of character `of` ([`CharacterOptions::animations`]).
     pub fn with_animations(mut self, of: &str) -> Self {
         self.options.animations = Some(of.to_owned());
+        self
+    }
+
+    /// Read explicitly selected clips without decoding unrelated HKX tracks.
+    pub fn with_animation_clips(mut self, of: &str, clips: Vec<String>) -> Self {
+        self.options.animations = Some(of.to_owned());
+        self.options.animation_clips = Some(clips);
         self
     }
 

@@ -44,6 +44,7 @@ fn model() -> Model {
                 normal: [0., 1., 0.],
                 normal_w: 0,
                 tangents: vec![[1., 0., 0., 1.]],
+                tangent_indices: vec![0],
                 ..Default::default()
             }],
             faces: vec![],

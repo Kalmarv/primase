@@ -505,6 +505,23 @@ impl Part {
     }
 }
 
+impl MapLayout {
+    /// A human enemy's equipment selector, distinct from NPCParamID. SoulsFormats MSBS/MSBE
+    /// EnemyBase.ReadTypeData both read CharaInitID at type-data +0x18, after think/NPC/talk and platoon.
+    /// A negative stored ID means no initializer; non-enemies have no such field.
+    pub fn character_init(&self, index: usize) -> Result<Option<i32>> {
+        let part = self.parts.get(index).ok_or_else(|| invalid("MSB part", index, "no part"))?;
+        if !matches!(part.kind, PartKind::Enemy | PartKind::DummyEnemy) { return Ok(None); }
+        let data = self.sections.get(5).and_then(|s| s.records.get(index))
+            .ok_or_else(|| invalid("MSB part", index, "no source record"))?;
+        let r = View { data, format: "MSB character initializer", be: false };
+        let at = r.size(104)?;
+        r.expect(at, &[0; 8])?;
+        let id = r.u32(at + 0x18)? as i32;
+        Ok((id >= 0).then_some(id))
+    }
+}
+
 /// Scale, X-Z-Y Euler rotation, translation in the source frame, then the
 /// core's handedness conversion. Trigonometry/matrix products use f64 and
 /// round once to each stored f32 basis component; translations remain exact.
@@ -1250,6 +1267,26 @@ mod region_tests {
                 height: 9.0
             }
         );
+    }
+
+    #[test]
+    fn enemy_initializer_is_separate_from_the_npc_row_in_both_generations() {
+        for generation in [&Generation::SEKIRO, &Generation::ELDEN_RING] {
+            let mut layout = layout(generation, Vec::new());
+            let mut record = vec![0u8; 160];
+            record[104..112].copy_from_slice(&128u64.to_le_bytes());
+            record[140..144].copy_from_slice(&10002020i32.to_le_bytes());
+            record[152..156].copy_from_slice(&9000i32.to_le_bytes());
+            layout.sections[5].records.push(record);
+            layout.parts.push(Part { index: 0, name: "human".into(), kind: PartKind::Enemy, model: None,
+                hit_filter: None, npc_param: Some(10002020), position: [0.; 3], rotation_degrees: [0.; 3],
+                scale: [1.; 3], entity_id: -1, entity_group_ids: [-1; 8], shadows: Default::default() });
+            assert_eq!(layout.character_init(0).unwrap(), Some(9000));
+            layout.sections[5].records[0][152..156].copy_from_slice(&(-1i32).to_le_bytes());
+            assert_eq!(layout.character_init(0).unwrap(), None);
+            layout.parts[0].kind = PartKind::MapPiece;
+            assert_eq!(layout.character_init(0).unwrap(), None);
+        }
     }
 
     /// The same code names another type in the other generation.

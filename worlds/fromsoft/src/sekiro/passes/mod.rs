@@ -25,6 +25,7 @@ pub mod records;
 pub(super) mod reflectance;
 pub mod resolve_shaders;
 pub mod settings;
+pub mod visibility;
 pub use crate::layer_bake::resolve::Unbound;
 pub use crate::sekiro::components::lowered::UvTiling;
 pub use bake::BakeFromSoftLayers;
@@ -71,6 +72,7 @@ pub fn register(registry: &mut PassRegistry) {
         &geometry::LOWER_FROMSOFT_GEOMETRY,
         &outfits::RAISE_FROMSOFT_DISPLAY_MASKS,
         &outfits::SELECT_FROMSOFT_OUTFIT,
+        &visibility::PRESERVE_FROMSOFT_DISPLAY_MASKS,
         &far::DROP_FROMSOFT_FAR,
         &resolve_shaders::RESOLVE_FROMSOFT_SHADERS,
         &detail::DERIVE_FROMSOFT_DETAIL,

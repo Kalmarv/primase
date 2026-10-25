@@ -79,6 +79,10 @@ fn round_trip_geometry_and_transforms() {
     // Regular and mirrored: the transform exactly, the prototype's mesh shared, geometry bit-exact (glTF reverses
     // the winding of a negative-determinant node itself).
     let regular = node_by_source(doc, "plac:0").unwrap();
+    let attributes = &doc["meshes"][regular["mesh"].as_u64().unwrap() as usize]["primitives"][0]["attributes"];
+    assert!(attributes.get("TANGENT").is_some());
+    assert!(attributes.get("_TANGENT1").is_some());
+    assert!(attributes.get("TANGENT1").is_none());
     let mirrored = node_by_source(doc, "plac:1").unwrap();
     assert_eq!(bits(&f32s(&regular["matrix"])), bits(&matrix_of(&b, b.regular)));
     assert_eq!(bits(&f32s(&mirrored["matrix"])), bits(&matrix_of(&b, b.mirrored)));
@@ -285,8 +289,8 @@ fn check_baked(baked: &Mesh, proto: &Mesh, tr: [[f32; 3]; 4], mirrored: bool) {
             assert!(dot(l(*src), g) > 0.0, "normal on the side of L n");
         }
         let (Some(Stream::F32x4(bt)), Some(Stream::F32x4(pt))) = (
-            bp.streams.get(&Semantic::Tangent),
-            pp.streams.get(&Semantic::Tangent),
+            bp.streams.get(&Semantic::Tangent(0)),
+            pp.streams.get(&Semantic::Tangent(0)),
         ) else {
             panic!("tangents")
         };

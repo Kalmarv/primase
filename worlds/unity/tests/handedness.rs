@@ -116,7 +116,7 @@ fn mirror_is_undone_in_the_geometry() {
             let Some(Stream::F32x3(nor)) = p.streams.get(&Semantic::Normal) else {
                 panic!("{name}: no normals")
             };
-            let Some(Stream::F32x4(tan)) = p.streams.get(&Semantic::Tangent) else {
+            let Some(Stream::F32x4(tan)) = p.streams.get(&Semantic::Tangent(0)) else {
                 panic!("{name}: no tangents")
             };
             let Some(Stream::F32x2(uvs)) = p.streams.get(&Semantic::TexCoord(0)) else {

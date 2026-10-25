@@ -819,7 +819,7 @@ impl LowerAnvilDecals {
                 let mut streams = BTreeMap::new();
                 streams.insert(Semantic::Position, Stream::F32x3(positions));
                 streams.insert(Semantic::Normal, Stream::F32x3(normals));
-                streams.insert(Semantic::Tangent, Stream::F32x4(tangents));
+                streams.insert(Semantic::Tangent(0), Stream::F32x4(tangents));
                 streams.insert(Semantic::TexCoord(0), Stream::F32x2(uvs));
                 if colours.iter().any(|c| c[3] != 1.0) {
                     streams.insert(Semantic::Color(0), Stream::F32x4(colours));

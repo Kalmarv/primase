@@ -427,10 +427,14 @@ pub enum SetChosen {
     OnlySet,
     /// No part names an ID for the group and it stores several: the set of value ID 0.
     ZeroId,
+    /// Source values retained for inspection; the owner/activation selector is unresolved.
+    /// These sets must not be used as the active scene environment.
+    Unresolved,
 }
 
-/// One field of a draw-param group at the chosen value set, as stored: its key and name, the value, and the time of day
-/// stored with it (version 5 files).
+/// One field of a draw-param group at the chosen value set: its key, name, value and stored time
+/// (version 5). With an explicit preview hour the selected value is sampled and `time` states that
+/// hour; the read notice records its interpolation policy. Unresolved sets keep original samples.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DrawField {
     pub key: String,
@@ -477,9 +481,9 @@ impl Resource for DrawParam {
     }
 }
 impl DrawParam {
-    /// The group with key `key`.
+    /// The selected group with key `key`; unresolved source sets are inspection data only.
     pub fn group(&self, key: &str) -> Option<&DrawGroup> {
-        self.groups.iter().find(|g| g.key == key)
+        self.groups.iter().find(|g| g.key == key && g.chosen != SetChosen::Unresolved)
     }
 }
 

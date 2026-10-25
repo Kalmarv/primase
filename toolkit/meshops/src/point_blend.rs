@@ -176,7 +176,7 @@ fn blend_stream(
                 } else {
                     sum.map(|x| x as f32)
                 };
-                if !single && matches!(sem, Semantic::Normal | Semantic::Tangent) {
+                if !single && matches!(sem, Semantic::Normal | Semantic::Tangent(_)) {
                     if let (Some(xyz), Some(dst)) = (sum.get(..3), value.get_mut(..3)) {
                         match unit3(xyz) {
                             Some(u) => dst.iter_mut().zip(u).for_each(|(d, u)| *d = u as f32),
@@ -199,7 +199,7 @@ fn blend_stream(
             Stream::$kind(out)
         }};
     }
-    if sem == Semantic::Tangent
+    if matches!(sem, Semantic::Tangent(_))
         && let Stream::F32x4(v) = stream
     {
         for b in blends {
@@ -217,7 +217,7 @@ fn blend_stream(
         Stream::F32x3(v) => floats!(v, 3, F32x3),
         Stream::F32x4(v) => {
             let mut s = floats!(v, 4, F32x4);
-            if sem == Semantic::Tangent
+            if matches!(sem, Semantic::Tangent(_))
                 && let Stream::F32x4(o) = &mut s
             {
                 for (o, b) in o.iter_mut().zip(blends) {

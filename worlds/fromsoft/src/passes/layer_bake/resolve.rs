@@ -130,6 +130,10 @@ pub const UNBOUND_MATERIAL_FIELDS: &str =
 /// The name of the engine's dither noise texture in the alpha-tested permutations (`<shader>_<switch>_Gbuf_[A].ppo`).
 pub const ENGINE_DITHER_TEXTURE: &str = "g_DitherTexture";
 
+/// What the dither noise answers where it is bound as the layer bind binds it: a neutral grey (the fade is off), so the
+/// perturbation `(noise - 0.5) * scale` is exactly zero.
+pub const ENGINE_DITHER_NEUTRAL: f64 = 0.5;
+
 /// The name of the scene depth texture the forward programs of fog, foam and water read (`t56`: the hardware depth in x,
 /// linearised with `FC_DepthComputeParam`: view depth `-z / (x - depth)`): the frame's, bound as one.
 pub const ENGINE_SCENE_DEPTH_TEXTURE: &str = "g_DepthTexture";
@@ -392,7 +396,7 @@ pub fn resolve(
                     continue;
                 }
                 let (value, what) = if name == ENGINE_DITHER_TEXTURE {
-                    ([0.5; 4], "read only by the dithered alpha fade, which is off")
+                    ([ENGINE_DITHER_NEUTRAL as f32; 4], "read only by the dithered alpha fade, which is off")
                 } else {
                     ([0.; 4], "not a material slot, left at zero")
                 };
@@ -1081,6 +1085,67 @@ fn texture_scroll_set(name: &str) -> Option<u8> {
         .filter(|n| *n < 4)
 }
 
+/// The lanes of a vertex program's further packed coordinate input `input` (`TEXCOORD<index>`, `index` above 0, of
+/// integers: the engine's 16-bit UV pairs) as UV sets of the lowered geometry, a pair a set: the sets of the
+/// `TEXCOORD` inputs of lower index come first, `columns / 2` (rounded up) each, as the FLVER's UV members hold them and
+/// [`crate::passes::program_reads::uv_set`] numbers a slot's coordinates. `None` for an input of floats, or one after a
+/// `TEXCOORD` of floats (a Byte4C member is one stored member of four lanes, which this numbering does not count).
+fn further_uv_sets(
+    interface: &Interface,
+    index: u32,
+    input: &primase_core::shader::Varying,
+) -> Option<Vec<LaneStream>> {
+    let packed = |v: &primase_core::shader::Varying| v.value.scalar != ScalarType::Float;
+    if !packed(input) {
+        return None;
+    }
+    let mut first = 0u32;
+    for v in &interface.inputs {
+        if !v.label.name.eq_ignore_ascii_case("TEXCOORD") || v.label.index >= index {
+            continue;
+        }
+        if !packed(v) {
+            return None;
+        }
+        first += u32::from(v.value.width).div_ceil(2);
+    }
+    (0..u32::from(input.value.width).div_ceil(2))
+        .map(|pair| {
+            Some(LaneStream {
+                semantic: primase_core::Semantic::TexCoord(u8::try_from(first + pair).ok()?),
+                first: u8::try_from(pair * 2).ok()?,
+                count: 2,
+                component: 0,
+            })
+        })
+        .collect()
+}
+
+/// A unique signature label names the same semantic index the FLVER layout stores.
+/// The decoder carries Member.index through compaction: sparse labels never collapse to ordinals.
+fn tangent_set(interface: &Interface, index: u32) -> Option<u8> {
+    let count = interface.inputs.iter().filter(|v| v.label.name.eq_ignore_ascii_case("TANGENT") && v.label.index == index).count();
+    (count == 1).then(|| u8::try_from(index).ok()).flatten()
+}
+
+/// Bind then validate further tangent sets against every primitive drawing this material. A shared material
+/// cannot silently use a vector absent from one of its layouts, including set 0.
+pub fn resolve_vertex_for_geometry(shader: &Shader, entity: Entity, world: &primase_core::World, material: Entity) -> Result<VertexBinding> {
+    let mut binding = resolve_vertex(shader, entity)?;
+    let primitives: Vec<_> = world.iter::<primase_core::Mesh>().flat_map(|(_, m)| m.primitives())
+        .filter(|p| p.material == Some(material)).collect();
+    for input in &mut binding.stage.inputs {
+        let InputRole::Stream(primase_core::Semantic::Tangent(set)) = &input.role else { continue; };
+        let set = *set;
+        if primitives.is_empty() || primitives.iter().any(|p| !matches!(p.streams.get(&primase_core::Semantic::Tangent(set)),
+            Some(primase_core::Stream::F32x4(v)) if v.len() == p.vertex_count())) {
+            input.role = InputRole::Unknown { why: format!("{}{} needs layout semantic Tangent({set}), absent or incomplete on a primitive drawing this material",
+                input.label.name, input.label.index) };
+        }
+    }
+    Ok(binding)
+}
+
 /// Bind a layered shader's vertex program (`<shader>_Gbuf.vpo`, the G-buffer pass of an unskinned draw, or `<shader>_Gbuf_Skin.vpo`
 /// of a skinned one; the `@[cl]` permutations differ only in having no clip-distance outputs) from its
 /// interface (`primase_dxbc::reflection`) as `core.shader_binding` states it:
@@ -1088,9 +1153,12 @@ fn texture_scroll_set(name: &str) -> Option<u8> {
 ///   tangent (and of the skinned permutation `BLENDINDICES0` and `BLENDWEIGHT0` as `Joints(0)` and `Weights(0)`); the
 ///   packed `TEXCOORD0` as lanes (`xy` the first UV set, `zw` the second: `TexCoord(1)`); `COLOR1` as the
 ///   second vertex colour ([`SECOND_COLOUR`]); `TEXCOORD1` to `TEXCOORD6` as the FLVER Byte4C members the layered
-///   programs read as layer weights, tint and detail (the geometry lowering's `Color(n)` streams); the pipeline's
+///   programs read as layer weights, tint and detail (the geometry lowering's `Color(n)` streams); a further
+///   `TEXCOORD<n>` of integers as lanes of the UV sets after those of the packed inputs before it ([`further_uv_sets`]:
+///   `C[Fur]`'s `TEXCOORD1` is the third set, `TexCoord(2)`, which its strand card is sampled with); the pipeline's
 ///   instance index as itself; anything else `Unknown` with the reason. A mesh that stores no second UV set or colour
-///   has no such stream, and what the engine then feeds is not known;
+///   has no such stream, and what the engine then feeds is not known; nor has a mesh whose lowering keeps no further
+///   sets (Sekiro's: only a material binary's mesh keeps every set);
 /// - the engine's scene and object constants it names as roles (a named table of the shader family's own constant names
 ///   to the vocabulary: the view, projection and their inverses, the camera position and the screen size, and the
 ///   object matrices, the skinned permutation's the joints' palette: `Object(BonePalette)`, and the cloth-cancel matrices
@@ -1098,6 +1166,7 @@ fn texture_scroll_set(name: &str) -> Option<u8> {
 ///   the engine's per-model value, observed as the identity on every layered draw of a running game: see
 ///   [`super::TEXTURE_SCROLL_POLICY`]); constants the table does not name are not bound;
 /// - no output roles: its outputs reach the pixel stage by label.
+
 pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> {
     use super::vertex_probe::{
         CameraForm, camera_form, flat_constants, inputs_read, palette_indexed_by_vertex,
@@ -1120,7 +1189,7 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> 
                 (_, _, Some(SystemValue::InstanceIndex)) => InputRole::System,
                 ("POSITION", 0, _) => InputRole::Stream(Semantic::Position),
                 ("NORMAL", 0, _) => InputRole::Stream(Semantic::Normal),
-                ("TANGENT", 0, _) => InputRole::Stream(Semantic::Tangent),
+                ("TANGENT", 0, _) => InputRole::Stream(Semantic::Tangent(0)),
                 // a program that reads one coordinate set takes its two lanes alone
                 ("TEXCOORD", 0, _) if v.value.width <= 2 => InputRole::Stream(Semantic::TexCoord(0)),
                 // the packed pair of texture coordinate sets: uv0 in `xy`, uv1 in `zw`
@@ -1153,12 +1222,17 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> 
                 // program decodes it, `(byte - 127) / 127`, into the w of the tangent it passes on
                 ("BINORMAL", 0, _) if v.value.width == 1 && v.value.scalar == ScalarType::Uint => {
                     InputRole::Lanes(vec![LaneStream {
-                        semantic: Semantic::Tangent,
+                        semantic: Semantic::Tangent(0),
                         first: 0,
                         count: 1,
                         component: 3,
                     }])
                 }
+                // Like TANGENT0, a tangent label has a layout-defined stream identity.
+                ("TANGENT", n @ 1.., _) => match tangent_set(interface, n) {
+                    Some(set) => InputRole::Stream(Semantic::Tangent(set)),
+                    None => InputRole::Unknown { why: "tangent semantic index is duplicated or exceeds core's set range".into() },
+                },
                 // an input the program declares and the value graph never reads needs no stream
                 _ if read.as_ref().is_ok_and(|read| {
                     !read.contains(&(v.label.name.to_ascii_uppercase(), v.label.index))
@@ -1168,15 +1242,15 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> 
                         why: "declared by the program and never read".into(),
                     }
                 }
-                // the lowered geometry keeps one tangent set and two coordinate sets (the packed pair of TEXCOORD0)
-                ("TANGENT", 1.., _) => InputRole::Unknown {
-                    why: "a further tangent set (bytes decoded like TANGENT0's); the lowered geometry keeps one".into(),
-                },
-                ("TEXCOORD", 1.., _) => InputRole::Unknown {
-                    why: format!(
-                        "a further coordinate set ({:?} x{}); the lowered geometry keeps two",
-                        v.value.scalar, v.value.width
-                    ),
+                // a further set of packed coordinates, numbered after the sets of the packed inputs before it
+                ("TEXCOORD", n @ 1.., _) => match further_uv_sets(interface, n, v) {
+                    Some(lanes) => InputRole::Lanes(lanes),
+                    None => InputRole::Unknown {
+                        why: format!(
+                            "a further coordinate set ({:?} x{}) after an input that is not packed coordinates: its UV set is not numbered",
+                            v.value.scalar, v.value.width
+                        ),
+                    },
                 },
                 _ => InputRole::Unknown {
                     why: "no stream of the lowered geometry carries it".into(),
@@ -1552,6 +1626,19 @@ mod tests {
     use super::{centred, sat_words, slot_name, texture_slot};
     use crate::Game;
     use crate::metaparam::MtdParam;
+
+    #[test]
+    fn sparse_tangent_labels_keep_their_layout_semantic_indices() {
+        let mut interface = primase_dxbc::reflection(include_bytes!("../../../tests/fixtures/layered_lining_vs.dxbc")).unwrap();
+        for input in &mut interface.inputs {
+            if input.label.name.eq_ignore_ascii_case("TANGENT") && input.label.index == 2 { input.label.index = 4; }
+        }
+        assert_eq!(super::tangent_set(&interface, 0), Some(0));
+        assert_eq!(super::tangent_set(&interface, 4), Some(4));
+        assert_eq!(super::tangent_set(&interface, 1), None);
+        interface.inputs.retain(|v| !(v.label.name.eq_ignore_ascii_case("TANGENT") && v.label.index == 0));
+        assert_eq!(super::tangent_set(&interface, 4), Some(4), "unused lower members do not renumber the input");
+    }
 
     fn param(value_type: u8, srgb: bool) -> MtdParam {
         MtdParam {

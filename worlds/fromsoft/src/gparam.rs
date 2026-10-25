@@ -31,6 +31,7 @@ use crate::{
 use serde::Serialize;
 
 const FORMAT: &str = "GPARAM";
+mod time;
 /// The wide magic; the narrow `filt` of version 2 is refused.
 const MAGIC: &[u8] = b"f\0i\0l\0t\0";
 

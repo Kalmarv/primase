@@ -20,7 +20,7 @@ use crate::dcx::Decoder;
 use crate::materials::Material;
 use crate::sekiro::source::{ShaderPrograms, TexturePayloads};
 
-/// Every component and resource an area's read and load put in a world, by name (the names in the namespaces
+/// Every component and resource an area's read and load can put in a world across its options, by name (the names in the namespaces
 /// [`Reader::emits`] states): what a coverage report lists of this reader. The reader's honesty test (real data:
 /// `installs.sekiro`, `tools.oodle6`) reads slice A of m11_01 and checks that its world holds no other name.
 pub const EMITTED_NAMES: &[&str] = &[
@@ -48,6 +48,15 @@ pub const EMITTED_NAMES: &[&str] = &[
     "fromsoft.shadow_flags",
     "fromsoft.texture_payloads",
 ];
+
+/// Coverage declaration for the requested read. A draw-param resource is optional:
+/// `DrawParams::None` deliberately reads no GPARAM, even if the area stores one.
+/// A requested but missing/unreadable file is still declared and explained by the read's notices.
+pub fn emitted_names(options: &Options) -> Vec<&'static str> {
+    EMITTED_NAMES.iter().copied().filter(|name|
+        *name != "fromsoft.draw_param" || options.draw_param != super::draw_param::DrawParams::None
+    ).collect()
+}
 
 /// See the module documentation.
 #[derive(Debug)]
@@ -214,6 +223,15 @@ pub(super) fn scope_sources(part: &mut World) -> Result<(usize, usize)> {
 mod tests {
     use super::*;
     use primase_core::convert::NoticeKind;
+
+    #[test]
+    fn draw_param_is_declared_only_when_requested() {
+        let mut options = Options::default();
+        assert!(!emitted_names(&options).contains(&"fromsoft.draw_param"));
+        options.draw_param = super::super::draw_param::DrawParams::File("m11_01_0720".into());
+        assert!(emitted_names(&options).contains(&"fromsoft.draw_param"));
+        assert!(EMITTED_NAMES.contains(&"fromsoft.draw_param"));
+    }
 
     #[test]
     fn a_read_missing_a_model_gives_the_conversion_its_notices_once() {

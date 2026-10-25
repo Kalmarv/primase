@@ -2293,7 +2293,7 @@ impl Writer<'_> {
                             )?;
                             target.insert("NORMAL".into(), json!(index));
                         }
-                        if prim.streams.contains_key(&Semantic::Tangent)
+                        if prim.streams.contains_key(&Semantic::Tangent(0))
                             && let Some(td) = dense(&d.tangents)
                         {
                             let index = self.buffers.float_accessor(

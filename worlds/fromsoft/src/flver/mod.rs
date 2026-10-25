@@ -244,6 +244,7 @@ impl Model {
                     .map(|v| {
                         std::mem::size_of::<Vertex>()
                             + (v.uvs.len() + v.tangents.len() + v.colors.len() + v.speedtree.len()) * channel
+                            + v.tangent_indices.len()
                             + v.layer_bytes.len() * std::mem::size_of::<(usize, [u8; 4])>()
                     })
                     .sum();

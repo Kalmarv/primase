@@ -14,7 +14,7 @@ pub use passes::collision;
 pub use passes::extras;
 pub use passes::object_collision as objects;
 pub use passes::{blockers, layers, lights, normals, pbr, settings};
-pub use read::animation::{AnimationReport, Animations, clip_names};
+pub use read::animation::{AnimationReport, Animations, ClipListing, ClipSource, clip_names, list_clips, decode_clip, read_clip_skeleton};
 pub use read::area::{
     GrassTypes, ObjectAnimations, Options, Parents, Report, StateClasses, read_area, read_game_area,
     read_game_area_staged, world_bounds,
@@ -26,8 +26,10 @@ pub use read::character::{
 pub use read::collision::Report as CollisionReport;
 pub use read::draw_param::{DrawParams, Report as DrawParamReport, available as draw_params_available};
 pub use read::extras::{Report as ExtrasReport, light_record, records as read_map_records};
+pub use read::messages::{npc_names, npc_row_names};
 pub use read::objects::Report as ObjectCollisionReport;
 pub use read::params::{NpcPlacement, npc_placements, read_npc_param, read_param};
+pub use read::equipment::{NpcOutfit, npc_outfits, npc_outfit_catalog, character_mesh_count, character_skeletons, empty_character_reason};
 pub use read::{convert, states};
 
 /// Sekiro's params: the binder `param/gameparam/gameparam.parambnd.dcx` of its archives.

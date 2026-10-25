@@ -623,13 +623,13 @@ mod tests {
         assert_eq!(prints.keys().collect::<Vec<_>>(), ["00-input", "01-edit"]);
         let input = "input
 entities 3
-component core.mesh@1 2
+component core.mesh@2 2
 component core.name@1 2
 component core.source@1 1
 component game.lamp@2 1
 dump 1
 e0
-  core.mesh@1 {\"primitives\":[{\"topology\":\"Triangles\",\"vertices\":3,\"indices\":null,\"streams\":[\"Position\"],\"material\":null}]}
+  core.mesh@2 {\"primitives\":[{\"topology\":\"Triangles\",\"vertices\":3,\"indices\":null,\"streams\":[\"Position\"],\"material\":null}]}
   core.name@1 \"wall\"
   core.source@1 \"m11:wall\"
 ";
@@ -637,7 +637,7 @@ e0
         // the meshes' JSON views did not change; their vertices did
         let after = "after step 1: edit
 entities 3 spawned 1 despawned 1
-component core.mesh@1 2 gained 0 lost 0 changed 2
+component core.mesh@2 2 gained 0 lost 0 changed 2
 component core.name@1 2 gained 1 lost 1 changed 1
 component core.source@1 1 gained 0 lost 0 changed 0
 component game.lamp@2 0 gained 0 lost 1 changed 0
@@ -651,7 +651,7 @@ despawned 1
   e1 core.name game.lamp
 dump 1
 e0
-  core.mesh@1 {\"primitives\":[{\"topology\":\"Triangles\",\"vertices\":3,\"indices\":null,\"streams\":[\"Position\"],\"material\":null}]}
+  core.mesh@2 {\"primitives\":[{\"topology\":\"Triangles\",\"vertices\":3,\"indices\":null,\"streams\":[\"Position\"],\"material\":null}]}
   core.name@1 \"wall2\"
   core.source@1 \"m11:wall\"
 ";
@@ -679,7 +679,7 @@ e0
             "step 2 failed: break
 error: pass break failed: broke on purpose
 entities 3 spawned 0 despawned 0
-component core.mesh@1 1 gained 0 lost 1 changed 0
+component core.mesh@2 1 gained 0 lost 1 changed 0
 component core.name@1 2 gained 0 lost 0 changed 0
 component core.source@1 1 gained 0 lost 0 changed 0
 changed 1

@@ -172,6 +172,7 @@ pub(super) fn assemble(
             let alpha_mode = crate::materials::alpha_mode(
                 &group.material,
                 world.get::<primase_core::shader::ShaderBinding>(group.entity),
+                false,
                 &mut report.policies,
             );
             let material =
@@ -533,7 +534,7 @@ mod tests {
             let mut before = World::default();
             let mut after = World::default();
             let mut log = primase_core::pass::PassLog::default();
-            let mode = crate::materials::alpha_mode(&source, None, &mut Default::default());
+            let mode = crate::materials::alpha_mode(&source, None, false, &mut Default::default());
             let old = channel_material(
                 &mut before,
                 "jar",
@@ -655,7 +656,7 @@ mod tests {
         let template = channel_material(
             &mut world,
             "bake_shared",
-            crate::materials::alpha_mode(&source, None, &mut Default::default()),
+            crate::materials::alpha_mode(&source, None, false, &mut Default::default()),
             image,
             Reflectance::Unsupported,
             &mut Default::default(),
@@ -740,7 +741,7 @@ mod tests {
             let material = channel_material(
                 &mut world,
                 "bake_fixture",
-                crate::materials::alpha_mode(&source, None, &mut Default::default()),
+                crate::materials::alpha_mode(&source, None, false, &mut Default::default()),
                 image,
                 Reflectance::Unsupported,
                 &mut log,

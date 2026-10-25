@@ -55,6 +55,20 @@ float4 coordinate_only(Input i) : SV_Target0 {
     if (b.a < reference) discard;
     return float4(b.rgb, detail_map.Sample(sampler0, float2(b.a, i.uv.y)).a);
 }
+// The tested value reaches no target: the alpha written is a constant (an Elden Ring G-buffer program writes none).
+// discard where base.a * detail.a < reference.
+float4 unwritten(Input i) : SV_Target0 {
+    float4 b = base_map.Sample(sampler0, i.uv);
+    if (b.a * detail_map.Sample(sampler0, i.uv).a < reference) discard;
+    return float4(b.rgb, 1.0);
+}
+// discard where base.a + (dither.a - 0.5) * scale < reference, the alpha written a constant.
+float4 unwritten_dither(Input i) : SV_Target0 {
+    float4 b = base_map.Sample(sampler0, i.uv);
+    precise float p = (dither_map.Sample(sampler0, i.uv).a - 0.5) * scale;
+    if (b.a + p < reference) discard;
+    return float4(b.rgb, 1.0);
+}
 float4 unrelated(Input i) : SV_Target0 {
     float4 b = base_map.Sample(sampler0, i.uv);
     if (i.colour.a < reference) discard;

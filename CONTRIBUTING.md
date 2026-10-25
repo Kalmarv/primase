@@ -482,6 +482,7 @@ produced by something other than the code it checks.
 | `oracles.unitypy.sledding/textures` | live | yes | optional: an independent reader's decoded textures of that folder (a folder of PNGs and `index.json`; schema in `worlds/unity/tests/texture.rs`) | independent: UnityPy, through dump scripts kept with the private oracle tools |
 | `oracles.uxm.elden/dictionary.txt` | live | - | caller-provided UTF-8 Elden Ring path dictionary | third-party: UXM's Elden Ring path dictionary |
 | `oracles.uxm.sekiro/dictionary.txt` | live | yes | caller-provided UTF-8 Sekiro path dictionary | third-party: UXM's Sekiro path dictionary |
+| `oracles.baseline.elden/malenia-binding-report.json` | live | - | the lab's report of a read of Elden Ring's c2120 (Malenia) with game shaders (its `views[*].game_shader.bound` rows: per bound program the material constants as the lab bound them); worlds/fromsoft/tests/malenia_visibility.rs executes the petal program on those constants | regression baseline: the primase-lab smoke report of an earlier run of our own lab, frozen; not an independent oracle |
 
 #### Debug keys (`PRIMASE_DEBUG`)
 
@@ -499,6 +500,8 @@ produced by something other than the code it checks.
 | `fromsoft.bake_digest` | the digest the baked layer textures of Sekiro's m11_01 must have (printed by an earlier run) |
 | `anvil.bake_digest` | the digest the baked Riders Republic Materials must have |
 | `dxil.fuzz_runs` | how many mutated fixtures the DXIL fuzz test runs (default 3000) |
+| `fromsoft.memory_cap_gb` | the most GiB the FromSoft memory census lets a read hold before it aborts naming the stage (default 10; worlds/fromsoft/tests/memory_census.rs) |
+| `fromsoft.census_areas` | which areas the FromSoft memory census reads: a comma list of `<game>/<area>` or `<area>` (default every area it lists; one to a process so an abort loses no other) |
 
 <!-- end of real-data tables -->
 

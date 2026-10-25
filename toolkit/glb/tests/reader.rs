@@ -66,6 +66,25 @@ fn reads_the_base_document() {
     );
 }
 
+#[test]
+fn indexed_tangents_round_trip_through_standard_and_custom_attributes() {
+    use primase_core::{Mesh, Primitive};
+    use std::collections::BTreeMap;
+    let streams = BTreeMap::from([
+        (Semantic::Position, Stream::F32x3(vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])),
+        (Semantic::Tangent(0), Stream::F32x4(vec![[1.0, 0.0, 0.0, 1.0]; 3])),
+        (Semantic::Tangent(1), Stream::F32x4(vec![[0.0, 1.0, 0.0, -1.0]; 3])),
+        (Semantic::Tangent(4), Stream::F32x4(vec![[0.0, 0.0, 1.0, 1.0]; 3])),
+    ]);
+    let mesh = Mesh::new(vec![Primitive { topology: Topology::Triangles, streams: streams.clone(), indices: Some(vec![0, 1, 2]), material: None }]);
+    let bytes = primase_glb::encode_mesh("indexed tangents", &mesh).unwrap();
+    let gltf = Gltf::from_glb(&bytes).unwrap();
+    let attributes = &gltf.json()["meshes"][0]["primitives"][0]["attributes"];
+    for name in ["TANGENT", "_TANGENT1", "_TANGENT4"] { assert!(attributes.get(name).is_some(), "{name}"); }
+    assert!(attributes.get("TANGENT1").is_none());
+    assert_eq!(gltf.read_mesh(0).unwrap().primitives[0].primitive.streams, streams);
+}
+
 /// Each mutation of the base document, and the text its error must contain.
 #[test]
 fn rejects_what_it_does_not_read() {

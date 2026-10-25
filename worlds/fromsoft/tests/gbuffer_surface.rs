@@ -88,5 +88,14 @@ fn elden_rings_gbuffer_is_a_metallic_workflow_surface() {
     assert_eq!(gloss.encoding, ScalarEncoding::square_of(0.95));
     // the gloss in lane 1 of target 1
     assert!(close(s.roughness.unwrap().decode([0.3, 0.64, 0.0, 0.0]), 0.24));
-    assert_eq!((s.reflectance, s.emission, s.specular, s.occlusion), (None, None, None, None));
+    // the emission in target 4's rgb, as stored (the programs write the emissive map's radiance there)
+    let Some(Emission::Colour(emission)) = s.emission else {
+        panic!("an emission colour: {:?}", s.emission)
+    };
+    assert_eq!(at(&targets, emission.place), (4, 0b0111));
+    assert_eq!(
+        s.emission.unwrap().decode([0.5, 1.5, 0.0, 0.0], [1.0; 3]),
+        [0.5, 1.5, 0.0]
+    );
+    assert_eq!((s.reflectance, s.specular, s.occlusion), (None, None, None));
 }

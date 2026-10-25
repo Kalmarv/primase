@@ -607,7 +607,7 @@ fn stream(name: &str, index: u32) -> Option<Semantic> {
     match name.to_ascii_uppercase().as_str() {
         "POSITION" => Some(Semantic::Position),
         "NORMAL" => Some(Semantic::Normal),
-        "TANGENT" => Some(Semantic::Tangent),
+        "TANGENT" => Some(Semantic::Tangent(0)),
         "COLOR" => Some(Semantic::Color(n)),
         "TEXCOORD" => Some(Semantic::TexCoord(n)),
         _ => None,

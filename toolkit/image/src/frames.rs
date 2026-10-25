@@ -167,7 +167,7 @@ fn run(world: &mut World, bitangent: Bitangent, log: &mut PassLog) -> Result<()>
             let (Some(positions), Some(normals), Some(Stream::F32x4(supplied)), Some(Stream::F32x2(uv))) = (
                 stream3(p, Semantic::Position),
                 stream3(p, Semantic::Normal),
-                p.streams.get(&Semantic::Tangent),
+                p.streams.get(&Semantic::Tangent(0)),
                 p.streams.get(&Semantic::TexCoord(r.texcoord)),
             ) else {
                 log.count("primitives without a tangent frame left as they are", 1);
@@ -330,7 +330,7 @@ fn run(world: &mut World, bitangent: Bitangent, log: &mut PassLog) -> Result<()>
         mesh.primitive_mut(index)
             .expect("a listed primitive")
             .streams_mut()
-            .insert(Semantic::Tangent, Stream::F32x4(derived));
+            .insert(Semantic::Tangent(0), Stream::F32x4(derived));
         log.count("primitives given the derived tangent frame", 1);
     }
     Ok(())

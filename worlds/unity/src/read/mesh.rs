@@ -1109,7 +1109,7 @@ fn make_finite(p: &mut Primitive, used: &BTreeSet<u32>, notices: &mut MeshNotice
             "primitives' normal streams with non-finite values left out",
         ),
         (
-            Semantic::Tangent,
+            Semantic::Tangent(0),
             "primitives' tangent streams with non-finite values left out",
         ),
     ] {
@@ -1217,7 +1217,7 @@ impl UnityMeshData {
                     Stream::F32x3((0..n).map(|i| UNITY.direction(xyz(i))).collect()),
                 ),
                 (2, 4) => (
-                    Semantic::Tangent,
+                    Semantic::Tangent(0),
                     Stream::F32x4(
                         (0..n)
                             .map(|i| {
@@ -1516,7 +1516,7 @@ mod tests {
             Stream::F32x3(vec![[0.0, 0.0, -1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
         );
         assert_eq!(
-            p.streams[&Semantic::Tangent],
+            p.streams[&Semantic::Tangent(0)],
             Stream::F32x4(vec![
                 [1.0, 0.0, 0.0, -1.0],
                 [0.0, 0.0, -1.0, -1.0],
@@ -1912,7 +1912,7 @@ mod tests {
         );
         let (prims, notices) = mesh(channels, vec![0, 1, 2], 0).primitives(0..1).unwrap();
         let p = &prims[0].1;
-        assert!(!p.streams.contains_key(&Semantic::Tangent));
+        assert!(!p.streams.contains_key(&Semantic::Tangent(0)));
         assert!(p.streams.contains_key(&Semantic::Normal));
         assert_eq!(
             notices,

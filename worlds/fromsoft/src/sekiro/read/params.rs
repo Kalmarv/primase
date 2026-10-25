@@ -106,6 +106,8 @@ pub struct NpcPlacement {
     pub dummy: bool,
     /// The row it names, as stored (0 or -1 where it names none).
     pub row: i32,
+    /// Equipment/appearance row, independently stored by the MSB enemy, never inferred from `row`.
+    pub character_init: Option<i32>,
 }
 
 /// Every Enemy and DummyEnemy part of the maps `dictionary` names that the archives hold
@@ -146,6 +148,7 @@ pub fn npc_placements(
                 model: p.model.map(|m| layout.models[m].name.clone()).unwrap_or_default(),
                 dummy,
                 row: p.npc_param.unwrap_or(-1),
+                character_init: layout.character_init(p.index)?,
             });
         }
     }

@@ -2,6 +2,7 @@
 //! ([`scene::SceneReader`]).
 
 pub mod game;
+pub mod animation;
 pub mod interchange;
 pub(crate) mod scene;
 pub use scene::EMITTED_NAMES;

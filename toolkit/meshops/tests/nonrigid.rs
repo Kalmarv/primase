@@ -24,7 +24,7 @@ fn tri(y: f32) -> Mesh {
     );
     streams.insert(Semantic::Normal, Stream::F32x3(vec![[0.0, 1.0, 0.0]; 3]));
     streams.insert(
-        Semantic::Tangent,
+        Semantic::Tangent(0),
         Stream::F32x4(vec![
             [1.0, 0.0, 0.0, 1.0],
             [1.0, 0.0, 0.0, 1.0],
@@ -51,7 +51,7 @@ fn streams(m: &Mesh) -> Streams {
     let (Some(Stream::F32x3(pos)), Some(Stream::F32x3(nor)), Some(Stream::F32x4(tan))) = (
         p.streams.get(&Semantic::Position),
         p.streams.get(&Semantic::Normal),
-        p.streams.get(&Semantic::Tangent),
+        p.streams.get(&Semantic::Tangent(0)),
     ) else {
         panic!("streams")
     };

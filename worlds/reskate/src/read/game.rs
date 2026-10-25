@@ -12,7 +12,7 @@ use crate::game::clip::{clip_from, insert_clip};
 use crate::game::rig::{AnimRig, rig_from};
 
 /// The document an external pointer `v` of `doc` names, from `index` (its bundle's documents by file GUID).
-fn import(
+pub(super) fn import(
     src: &Source,
     index: &BTreeMap<[u8; 16], EbxEntry>,
     doc: &Document,

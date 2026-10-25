@@ -39,6 +39,8 @@ pub struct Vertex {
     /// weights (the same values as that attribute's lanes before the `/ 255`).
     pub layer_bytes: Vec<(usize, [u8; 4])>,
     pub tangents: Vec<[f32; 4]>,
+    /// Source semantic-6 member indices, parallel to tangents. Sparse indices stay sparse.
+    pub tangent_indices: Vec<u8>,
     pub bitangent: [f32; 4],
     pub colors: Vec<[f32; 4]>,
     /// A SpeedTree vertex's stored members in layout order, each as its format gives it to a vertex program (four
@@ -56,6 +58,24 @@ pub(super) fn size(kind: u32) -> Result<usize> {
         3 => 16,
         _ => return Err(invalid("FLVER", 0, format!("unsupported element {kind:#x}"))),
     })
+}
+
+#[cfg(test)]
+mod tangent_tests {
+    use super::*;
+
+    #[test]
+    fn tangent_members_retain_the_layouts_sparse_semantic_indices() {
+        let members: Vec<_> = [0, 1, 4].into_iter().enumerate().map(|(i, index)| Member {
+            unknown: 0, stored: true, offset: i * 16, kind: 3, semantic: 6, index,
+        }).collect();
+        let tangents = [[1.0f32, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0], [0.0, 0.0, -1.0, -1.0]];
+        let bytes: Vec<_> = tangents.iter().flatten().flat_map(|v| v.to_le_bytes()).collect();
+        let mut vertex = Vertex::default();
+        vertex.read(&bytes, &members, 2048.0).unwrap();
+        assert_eq!(vertex.tangents, tangents);
+        assert_eq!(vertex.tangent_indices, [0, 1, 4]);
+    }
 }
 
 impl Vertex {
@@ -129,6 +149,17 @@ impl Vertex {
             s[0] * n[1] - s[1] * n[0],
             1.,
         ]];
+        self.tangent_indices = vec![0];
+    }
+
+    fn push_tangent(&mut self, index: u32, tangent: [f32; 4]) -> Result<()> {
+        let index = u8::try_from(index).map_err(|_| invalid("FLVER vertex", 0, format!("tangent semantic index {index} exceeds 255")))?;
+        if self.tangent_indices.contains(&index) {
+            return Err(invalid("FLVER vertex", 0, format!("duplicate tangent semantic index {index}")));
+        }
+        self.tangent_indices.push(index);
+        self.tangents.push(tangent);
+        Ok(())
     }
 
     pub(super) fn read(&mut self, data: &[u8], members: &[Member], uv_factor: f32) -> Result<()> {
@@ -236,9 +267,9 @@ impl Vertex {
                     }
                     self.uvs.push(lanes);
                 }
-                (6, 3) => self.tangents.push(decode(Format::Float4)?),
-                (6, 0x10 | 0x11 | 0x13 | 0x2f) => self.tangents.push(byte_norm()),
-                (6, 0x1a) => self.tangents.push(short_norm()?),
+                (6, 3) => self.push_tangent(m.index, decode(Format::Float4)?)?,
+                (6, 0x10 | 0x11 | 0x13 | 0x2f) => self.push_tangent(m.index, byte_norm())?,
+                (6, 0x1a) => self.push_tangent(m.index, short_norm()?)?,
                 (7, 0x10 | 0x11 | 0x13 | 0x2f) => self.bitangent = byte_norm(),
                 (10, 3) => self.colors.push(decode(Format::Float4)?),
                 (10, 0x10 | 0x13) => self.colors.push(decode(Format::Unorm8x4)?),

@@ -302,7 +302,7 @@ fn quantized_streams_decode_exactly_and_validate() {
     m.primitive_mut(0)
         .expect("a listed primitive")
         .streams_mut()
-        .insert(Semantic::Tangent, Stream::F32x4(vec![[1., 0., 0., -1.]; 3]));
+        .insert(Semantic::Tangent(0), Stream::F32x4(vec![[1., 0., 0., -1.]; 3]));
     m.primitive_mut(0)
         .expect("a listed primitive")
         .streams_mut()

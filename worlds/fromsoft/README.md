@@ -777,9 +777,9 @@ counts, is what to take), most frequent first, and what each needs:
 |---|---|---|
 | `input COLOR0 has no value to run on ... no stream of the lowered geometry carries it` | `resolve_vertex` bound `COLOR0` to nothing | **fixed**: bound as `Color(0)`, fed white, counted (`COLOUR0_POLICY`) |
 | `input TEXCOORD0 has no value to run on: Stream(TexCoord(0))` | one-set programs (Sekiro's non-layered SAT shaders) had no feed | **fixed**: `Feed::TexCoord0` |
-| `input TANGENT4` / `TANGENT2: additional tangent input has no source role` | a further tangent set; the lowered geometry keeps one | open: which value the program expects is not established |
+| `input TANGENT4` / `TANGENT2` | tangent set number is the layout member's own semantic index: indices 0,1,4 remain Tangent(0), Tangent(1), Tangent(4), even if the program reads only 0 and 4 | every decoded member keeps its index through compaction; a missing/incomplete primitive set remains Unknown with its semantic index and reason |
 | `the program reads COLOR1 lanes beyond x` | only `COLOR1.x` is observed (`COLOUR1_POLICY`) | open: needs a capture of `y`..`w` |
-| `input TEXCOORD1`/`TEXCOORD7 ... a further coordinate set` | the lowered geometry keeps two sets | open |
+| `input TEXCOORD1 has lanes the bake cannot feed` (was `... a further coordinate set`) | a further packed set is bound as the next UV sets (`C[Fur]`'s `TEXCOORD1` is `TexCoord(2)`, which an Elden Ring mesh keeps); the bake feeds sets 0 and 1 only | open: the bake's feed of further sets |
 | `no albedo output role` / `scene-dependent Colour` | forward programs write a finished colour | open (model, see forward row) |
 | `program still discards texels with alpha test disabled` | a discard besides the alpha test (dither, clip) | open: `bind_output_uses` shows which lanes decide it |
 | `frame texture SceneDepth cannot be baked as a material` | the program reads the scene's depth | open: not a material term |

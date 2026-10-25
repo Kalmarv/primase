@@ -15,7 +15,7 @@ fn fixture() -> Primitive {
                 Stream::F32x2(vec![[0.; 2], [1.; 2], [2.; 2], [3.; 2]]),
             ),
             (
-                Semantic::Tangent,
+                Semantic::Tangent(0),
                 Stream::F32x4(vec![
                     [1., 0., 0., -1.],
                     [0., 1., 0., 1.],
@@ -117,7 +117,7 @@ fn malformed_streams_and_indices_fail() {
     assert!(compact_primitive(&p).is_err());
     p = fixture();
     p.streams
-        .insert(Semantic::Tangent, Stream::F32x4(vec![[f32::NAN; 4]; 4]));
+        .insert(Semantic::Tangent(0), Stream::F32x4(vec![[f32::NAN; 4]; 4]));
     assert!(compact_primitive(&p).is_err());
 }
 

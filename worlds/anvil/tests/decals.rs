@@ -190,7 +190,7 @@ fn drawn(w: &World, set: Entity) -> Drawn {
     let Some(Stream::F32x3(normals)) = stream(Semantic::Normal) else {
         panic!("normals")
     };
-    let Some(Stream::F32x4(tangents)) = stream(Semantic::Tangent) else {
+    let Some(Stream::F32x4(tangents)) = stream(Semantic::Tangent(0)) else {
         panic!("tangents")
     };
     let Some(Stream::F32x2(uvs)) = stream(Semantic::TexCoord(0)) else {

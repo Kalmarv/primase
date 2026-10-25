@@ -988,6 +988,13 @@ pub const DECLARED: &[Declared] = &[
         about: r#"caller-provided UTF-8 Sekiro path dictionary"#,
         source: r#"third-party: UXM's Sekiro path dictionary"#,
     },
+    Declared {
+        query: Query::Oracle(OracleSet::Baseline, Game::Elden, "malenia-binding-report.json"),
+        status: Status::Live,
+        gate: false,
+        about: r#"the lab's report of a read of Elden Ring's c2120 (Malenia) with game shaders (its `views[*].game_shader.bound` rows: per bound program the material constants as the lab bound them); worlds/fromsoft/tests/malenia_visibility.rs executes the petal program on those constants"#,
+        source: r#"regression baseline: the primase-lab smoke report of an earlier run of our own lab, frozen; not an independent oracle"#,
+    },
 ];
 
 /// The scratch root: where real-data tests write what they keep (`[scratch] root`); the OS temporary folder when unset.
@@ -1045,5 +1052,13 @@ pub const DEBUG: &[(&str, &str)] = &[
     (
         "dxil.fuzz_runs",
         "how many mutated fixtures the DXIL fuzz test runs (default 3000)",
+    ),
+    (
+        "fromsoft.memory_cap_gb",
+        "the most GiB the FromSoft memory census lets a read hold before it aborts naming the stage (default 10; worlds/fromsoft/tests/memory_census.rs)",
+    ),
+    (
+        "fromsoft.census_areas",
+        "which areas the FromSoft memory census reads: a comma list of `<game>/<area>` or `<area>` (default every area it lists; one to a process so an abort loses no other)",
     ),
 ];

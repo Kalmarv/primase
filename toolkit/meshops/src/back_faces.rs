@@ -166,14 +166,15 @@ fn back_faces(p: &Primitive, what: &str) -> Result<Backed, String> {
             "{what}: {n} vertices cannot be doubled in 32-bit indices"
         ));
     }
-    for (sem, want) in [
-        (Semantic::Normal, "three floats"),
-        (Semantic::Tangent, "four floats"),
-    ] {
+    for (sem, want) in p.streams.keys().filter_map(|s| match s {
+        Semantic::Normal => Some((*s, "three floats")),
+        Semantic::Tangent(_) => Some((*s, "four floats")),
+        _ => None,
+    }) {
         if let Some(s) = p.streams.get(&sem)
             && !matches!(
                 (sem, s),
-                (Semantic::Normal, Stream::F32x3(_)) | (Semantic::Tangent, Stream::F32x4(_))
+                (Semantic::Normal, Stream::F32x3(_)) | (Semantic::Tangent(_), Stream::F32x4(_))
             )
         {
             return Err(format!("{what}: {sem:?} is not {want}"));
@@ -227,7 +228,7 @@ fn back_faces(p: &Primitive, what: &str) -> Result<Backed, String> {
     for (sem, s) in &mut streams {
         let negate = match sem {
             Semantic::Normal => Negate::Normal,
-            Semantic::Tangent => Negate::Tangent,
+            Semantic::Tangent(_) => Negate::Tangent,
             _ => Negate::No,
         };
         append(s, &gather, negate);

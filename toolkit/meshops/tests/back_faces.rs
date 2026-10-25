@@ -60,7 +60,7 @@ fn quad(material: Option<Entity>) -> Primitive {
         streams: BTreeMap::from([
             (Semantic::Position, Stream::F32x3(p.to_vec())),
             (Semantic::Normal, Stream::F32x3(vec![[0.0, 0.0, 1.0]; 4])),
-            (Semantic::Tangent, Stream::F32x4(vec![[1.0, 0.0, 0.0, 1.0]; 4])),
+            (Semantic::Tangent(0), Stream::F32x4(vec![[1.0, 0.0, 0.0, 1.0]; 4])),
             (
                 Semantic::TexCoord(0),
                 Stream::F32x2(p.iter().map(|p| [p[0], p[1]]).collect()),
@@ -219,7 +219,7 @@ fn a_double_sided_quad_gets_back_faces_that_face_their_normals() {
     );
     // the tangent: xyz and w negated
     assert!(
-        f32x4(p, Semantic::Tangent)[4..]
+        f32x4(p, Semantic::Tangent(0))[4..]
             .iter()
             .all(|t| *t == [-1.0, 0.0, 0.0, -1.0])
     );
@@ -239,7 +239,7 @@ fn the_normal_map_reads_as_the_reversed_surface_normal_on_the_back() {
     run(&mut w).unwrap();
     let p = &w.get::<Mesh>(e).unwrap().primitives()[0];
     let n = f32x3(p, Semantic::Normal);
-    let t = f32x4(p, Semantic::Tangent);
+    let t = f32x4(p, Semantic::Tangent(0));
     let len = (0.25f32 + 1.0).sqrt();
     let texel = [-0.5 / len, 0.0, 1.0 / len];
     let shade = |v: usize| -> V {
@@ -536,8 +536,8 @@ fn unusable_inputs_are_refused() {
     let m = material(&mut w, true);
     let mut p = quad(Some(m));
     p.streams
-        .insert(Semantic::Tangent, Stream::F32x3(vec![[1.0, 0.0, 0.0]; 4]));
+        .insert(Semantic::Tangent(0), Stream::F32x3(vec![[1.0, 0.0, 0.0]; 4]));
     mesh_of(&mut w, vec![p]);
     let err = run(&mut w).unwrap_err();
-    assert!(err.contains("Tangent is not four floats"), "{err}");
+    assert!(err.contains("Tangent(0) is not four floats"), "{err}");
 }

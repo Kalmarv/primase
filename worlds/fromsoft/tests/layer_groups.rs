@@ -28,7 +28,7 @@ fn splitting_preserves_triangle_order_and_vertex_payloads() {
                 Semantic::Position,
                 Stream::F32x3(vec![[0.; 3], [1.; 3], [2.; 3], [3.; 3]]),
             ),
-            (Semantic::Tangent, Stream::F32x4(vec![[1., 0., 0., -1.]; 4])),
+            (Semantic::Tangent(0), Stream::F32x4(vec![[1., 0., 0., -1.]; 4])),
             (
                 Semantic::Color(0),
                 Stream::U8x4(vec![[0; 4], [1; 4], [2; 4], [3; 4]]),
@@ -51,7 +51,7 @@ fn splitting_preserves_triangle_order_and_vertex_payloads() {
     assert_eq!(parts[1].2, [2, 0, 1, 3]);
     for (_, p, _) in &parts {
         assert_eq!(
-            p.streams[&Semantic::Tangent],
+            p.streams[&Semantic::Tangent(0)],
             Stream::F32x4(vec![[1., 0., 0., -1.]; p.positions().unwrap().len()])
         );
     }

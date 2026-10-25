@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "from": "Sekiro human FLVER skeleton (authored correspondence checked on c1010; revalidate for each character)",
+  "to": "skate render skeleton: animbase_default_renderskeleton",
+  "pairs": [
+    ["Root", "Hips"], ["Spine", "Spine"], ["Spine1", "Spine2"], ["Spine2", "Spine3"],
+    ["Neck", "Neck"], ["Head", "Head"],
+    ["L_Clavicle", "LeftShoulder"], ["L_UpperArm", "LeftArm"], ["L_Forearm", "LeftForeArm"], ["L_Hand", "LeftHand"],
+    ["L_Thigh", "LeftUpLeg"], ["L_Calf", "LeftLeg"], ["L_Foot", "LeftFoot"], ["L_Toe0", "LeftToeBase"],
+    ["L_Finger0[omit]", "LeftHandThumb1"], ["L_Finger01[omit]", "LeftHandThumb2"], ["L_Finger02[omit]", "LeftHandThumb3"],
+    ["L_Finger1[omit]", "LeftHandIndex1"], ["L_Finger11[omit]", "LeftHandIndex2"], ["L_Finger12[omit]", "LeftHandIndex3"],
+    ["L_Finger2[omit]", "LeftHandMiddle1"], ["L_Finger21[omit]", "LeftHandMiddle2"], ["L_Finger22[omit]", "LeftHandMiddle3"],
+    ["L_Finger3[omit]", "LeftHandRing1"], ["L_Finger31[omit]", "LeftHandRing2"], ["L_Finger32[omit]", "LeftHandRing3"],
+    ["L_Finger4[omit]", "LeftHandPinky1"], ["L_Finger41[omit]", "LeftHandPinky2"], ["L_Finger42[omit]", "LeftHandPinky3"],
+    ["R_Clavicle", "RightShoulder"], ["R_UpperArm", "RightArm"], ["R_Forearm", "RightForeArm"], ["R_Hand", "RightHand"],
+    ["R_Thigh", "RightUpLeg"], ["R_Calf", "RightLeg"], ["R_Foot", "RightFoot"], ["R_Toe0", "RightToeBase"],
+    ["R_Finger0[omit]", "RightHandThumb1"], ["R_Finger01[omit]", "RightHandThumb2"], ["R_Finger02[omit]", "RightHandThumb3"],
+    ["R_Finger1[omit]", "RightHandIndex1"], ["R_Finger11[omit]", "RightHandIndex2"], ["R_Finger12[omit]", "RightHandIndex3"],
+    ["R_Finger2[omit]", "RightHandMiddle1"], ["R_Finger21[omit]", "RightHandMiddle2"], ["R_Finger22[omit]", "RightHandMiddle3"],
+    ["R_Finger3[omit]", "RightHandRing1"], ["R_Finger31[omit]", "RightHandRing2"], ["R_Finger32[omit]", "RightHandRing3"],
+    ["R_Finger4[omit]", "RightHandPinky1"], ["R_Finger41[omit]", "RightHandPinky2"], ["R_Finger42[omit]", "RightHandPinky3"]
+  ],
+  "notes": {
+    "Root": "Root carries Pelvis and Spine, as Hips does; Pelvis follows Root",
+    "Spine1": "Four skate spine joints against three Sekiro joints: leave skate Spine1 unmapped",
+    "L_Calf": "L_Knee is a thigh helper, not the shin; retain the stated unmapped-weight policy",
+    "R_Calf": "R_Knee is a thigh helper, not the shin; retain the stated unmapped-weight policy"
+  }
+}

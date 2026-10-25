@@ -354,7 +354,7 @@ fn world_meshes(player: &Player, w: &World) -> GateReport {
                     .map(|&c| match c {
                         0 => Semantic::Position,
                         1 => Semantic::Normal,
-                        2 => Semantic::Tangent,
+                        2 => Semantic::Tangent(0),
                         3 => Semantic::Color(0),
                         c => Semantic::TexCoord(c as u8 - 4),
                     })
@@ -380,7 +380,7 @@ fn world_meshes(player: &Player, w: &World) -> GateReport {
                     let (ch, back): (usize, Vec<f32>) = match (sem, st) {
                         (Semantic::Position, Stream::F32x3(x)) => (0, UNITY.point_to_source(x[v]).to_vec()),
                         (Semantic::Normal, Stream::F32x3(x)) => (1, UNITY.direction_to_source(x[v]).to_vec()),
-                        (Semantic::Tangent, Stream::F32x4(x)) => {
+                        (Semantic::Tangent(0), Stream::F32x4(x)) => {
                             let [a, b, c, d] = x[v];
                             let [a, b, c] = UNITY.direction_to_source([a, b, c]);
                             (2, vec![a, b, c, -d])

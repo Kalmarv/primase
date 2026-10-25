@@ -275,6 +275,17 @@ pub fn alpha_reference(raw: i32) -> Option<f32> {
     (raw > 0).then(|| raw as f32 / 255.)
 }
 
+/// The two words of the alpha test's constant as the engine fills them from the material's `g_AlphaRef`: each over 255, the
+/// first -100 (never discards) where the material states none above 0, the second 0 where it states none. The values the
+/// layer bind freezes ([`crate::passes::layer_bake::resolve::resolve`] states `FC_AlphaRef.xy` by the same rule).
+pub fn engine_alpha_reference(material: &Material) -> [f32; 2] {
+    let word = |n: usize| match material.view()?.definition.parameter("g_AlphaRef")? {
+        ParameterValue::Int(v) => v.get(n).copied().and_then(alpha_reference),
+        _ => None,
+    };
+    [word(0).unwrap_or(-100.), word(1).unwrap_or(0.)]
+}
+
 /// What a lowering counts where a material's alpha cut is not its bound program's own ([`alpha_cut`]).
 pub const UNBOUND_ALPHA_CUT: &str = "alpha cut from the material's g_AlphaRef: its program is not bound";
 
@@ -286,6 +297,54 @@ pub const UNTESTED_ALPHA_REFERENCE: &str = "material states an alpha reference i
 pub const DITHERED_ALPHA_CUT: &str = "dithered alpha test lowered as a hard cutoff";
 /// The tested scalar reaches alpha through arithmetic, so cutting the output is not the original test.
 pub const TRANSFORMED_ALPHA_CUT: &str = "pre-transform alpha test lowered as a hard cutoff";
+/// What a lowering counts where the binding states no reference because the program's discard compares a value it never
+/// writes (an Elden Ring G-buffer program writes no target's alpha: `C[Fur]` discards where its strand card's alpha
+/// times the vertex colour's is below `FC_AlphaRef.x`), and the lowering read the tested slot from the program's
+/// dataflow and made the base colour of it ([`crate::passes::program_reads::Reads::coverage`]): the base colour's
+/// alpha is the tested value, cut at the material's `g_AlphaRef`.
+pub const COVERAGE_ALPHA_CUT: &str =
+    "alpha test of an unwritten value lowered as a hard cutoff of its coverage slot at the material's g_AlphaRef";
+
+/// What a lowering counts where the binding states the program's alpha test as a comparison of a value the program
+/// writes nowhere ([`primase_core::shader::AlphaComparison::Unwritten`]) and the lowering could not evaluate that
+/// expression with the values the binding states (it names why in its own notice): no cut is made, because none would be
+/// the program's.
+pub const UNSOLVED_ALPHA_TEST: &str =
+    "alpha test of an unwritten value not evaluated (the expression is not one varying texture alpha with stated constants): not cut";
+
+/// How far a lowering read what a program's alpha test compares, where the binding states no reference for it or
+/// states one for a value the program writes nowhere.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AlphaTestRead {
+    /// Not read, or the program has no alpha test: the material's reference is one its program does not test.
+    Unread,
+    /// The tested slot was read from the program's dataflow and the surface is coloured with it, the rest of the test
+    /// (a vertex colour's alpha it is multiplied by) left out ([`COVERAGE_ALPHA_CUT`]).
+    Coverage,
+    /// The program's own expression for the test was evaluated with the values its binding states, to one varying
+    /// texture alpha, and the surface is coloured with that texture: the exact cutoff of its alpha, `None` where the test
+    /// discards nothing. Not counted where `dithered` is false: nothing is approximated. `dithered`: the expression holds
+    /// the engine's dither noise with a nonzero coefficient, so the cut at the noise mean replaces a stochastic test
+    /// ([`DITHERED_ALPHA_CUT`], counted).
+    Solved { cut: Option<f32>, dithered: bool },
+}
+
+/// [`alpha_cut_read`] where the tested slot was read (`coverage_read`) or not.
+pub fn alpha_cut(
+    binding: Option<&primase_core::shader::ShaderBinding>,
+    material: &Material,
+    coverage_read: bool,
+) -> (Option<f32>, Option<&'static str>) {
+    alpha_cut_read(
+        binding,
+        material,
+        if coverage_read {
+            AlphaTestRead::Coverage
+        } else {
+            AlphaTestRead::Unread
+        },
+    )
+}
 
 /// A material's alpha cut: the cutoff its mask takes, none where it is not cut, and the count a lowering takes where
 /// the cut is not the bound program's own.
@@ -293,11 +352,17 @@ pub const TRANSFORMED_ALPHA_CUT: &str = "pre-transform alpha test lowered as a h
 /// With a binding (`resolve-fromsoft-shaders` run), the cut is the pixel stage's
 /// [`primase_core::shader::ConstantRole::AlphaReference`]: a reference above 0 its cutoff, none at 0 or below or where
 /// the binding states no reference (its program's discard compares against none), the last counted
-/// ([`UNTESTED_ALPHA_REFERENCE`]) where the material states one. Without, the material's class: `cutout` and `leaves`
-/// at its cutoff, counted ([`UNBOUND_ALPHA_CUT`]).
-pub fn alpha_cut(
+/// ([`UNTESTED_ALPHA_REFERENCE`]) where the material states one; but where the lowering read the slot the discard tests
+/// and colours the surface with it ([`AlphaTestRead::Coverage`]), the material's reference, counted
+/// ([`COVERAGE_ALPHA_CUT`]). Where the binding states a test of a value the program writes nowhere
+/// ([`primase_core::shader::AlphaComparison::Unwritten`]) the cut is the program's own expression solved
+/// ([`AlphaTestRead::Solved`]), uncounted, or none, counted ([`UNSOLVED_ALPHA_TEST`]).
+/// Without, the material's class: `cutout` and `leaves` at its cutoff, counted ([`UNBOUND_ALPHA_CUT`]); a solved test
+/// is the cut either way.
+pub fn alpha_cut_read(
     binding: Option<&primase_core::shader::ShaderBinding>,
     material: &Material,
+    read: AlphaTestRead,
 ) -> (Option<f32>, Option<&'static str>) {
     use primase_core::shader::{AlphaComparison, ConstantRole, Stage};
     match binding {
@@ -308,10 +373,16 @@ pub fn alpha_cut(
                     _ => None,
                 })
             });
-            let states = material
+            let reference = material
                 .view()
-                .is_some_and(|v| alpha_reference(v.alpha_reference()).is_some());
+                .and_then(|v| alpha_reference(v.alpha_reference()));
+            let states = reference.is_some();
             match stated {
+                // the program's test is of a value it writes nowhere: its own expression, evaluated, or no cut
+                Some((r, AlphaComparison::Unwritten)) => match read {
+                    AlphaTestRead::Solved { cut, dithered } => (cut, dithered.then_some(DITHERED_ALPHA_CUT)),
+                    _ => (None, (r > 0.).then_some(UNSOLVED_ALPHA_TEST)),
+                },
                 Some((r, compared)) => (
                     (r > 0.).then_some(r),
                     if r > 0. {
@@ -319,34 +390,59 @@ pub fn alpha_cut(
                             AlphaComparison::Output => None,
                             AlphaComparison::Transformed => Some(TRANSFORMED_ALPHA_CUT),
                             AlphaComparison::Dithered { .. } => Some(DITHERED_ALPHA_CUT),
+                            AlphaComparison::Unwritten => Some(UNSOLVED_ALPHA_TEST),
                         }
                     } else {
                         None
                     },
                 ),
+                None if states && read == AlphaTestRead::Coverage => {
+                    (reference, Some(COVERAGE_ALPHA_CUT))
+                }
                 None if states => (None, Some(UNTESTED_ALPHA_REFERENCE)),
                 None => (None, None),
             }
         }
-        None => match material.class.as_str() {
-            "cutout" | "leaves" => (Some(material.cutoff), Some(UNBOUND_ALPHA_CUT)),
+        None => match (read, material.class.as_str()) {
+            (AlphaTestRead::Solved { cut, dithered }, _) => (cut, dithered.then_some(DITHERED_ALPHA_CUT)),
+            (_, "cutout" | "leaves") => (Some(material.cutoff), Some(UNBOUND_ALPHA_CUT)),
             _ => (None, None),
         },
     }
 }
 
-/// A material's alpha mode: blended for the blended classes (`alpha`, `additive`, `decal`, `water`), otherwise a mask at
-/// its alpha cut ([`alpha_cut`]) or opaque, the cut's count taken in `log`.
+/// [`alpha_mode_read`] where the tested slot was read (`coverage_read`) or not.
 pub fn alpha_mode(
     material: &Material,
     binding: Option<&primase_core::shader::ShaderBinding>,
+    coverage_read: bool,
+    log: &mut primase_core::pass::PassLog,
+) -> primase_core::pbr::AlphaMode {
+    alpha_mode_read(
+        material,
+        binding,
+        if coverage_read {
+            AlphaTestRead::Coverage
+        } else {
+            AlphaTestRead::Unread
+        },
+        log,
+    )
+}
+
+/// A material's alpha mode: blended for the blended classes (`alpha`, `additive`, `decal`, `water`), otherwise a mask at
+/// its alpha cut ([`alpha_cut_read`], `read` its) or opaque, the cut's count taken in `log`.
+pub fn alpha_mode_read(
+    material: &Material,
+    binding: Option<&primase_core::shader::ShaderBinding>,
+    read: AlphaTestRead,
     log: &mut primase_core::pass::PassLog,
 ) -> primase_core::pbr::AlphaMode {
     use primase_core::pbr::AlphaMode;
     if matches!(material.class.as_str(), "alpha" | "additive" | "decal" | "water") {
         return AlphaMode::Blend;
     }
-    let (cut, count) = alpha_cut(binding, material);
+    let (cut, count) = alpha_cut_read(binding, material, read);
     if let Some(count) = count {
         log.count(count, 1);
     }
@@ -426,11 +522,12 @@ mod tests {
     /// blended class is blended either way.
     #[test]
     fn the_alpha_cut_is_the_bound_programs_reference_and_the_material_class_without_one() {
-        let mode = |m: &Material, b: Option<&ShaderBinding>| {
+        let mode_read = |m: &Material, b: Option<&ShaderBinding>, coverage_read: bool| {
             let mut log = primase_core::pass::PassLog::default();
-            let mode = alpha_mode(m, b, &mut log);
+            let mode = alpha_mode(m, b, coverage_read, &mut log);
             (mode, log.counts.keys().cloned().collect::<Vec<_>>())
         };
+        let mode = |m: &Material, b: Option<&ShaderBinding>| mode_read(m, b, false);
         let cutout = material("cutout", Some(128), 128. / 255.);
         let reference = alpha_reference(128).unwrap();
         assert_eq!(reference, 128. / 255.);
@@ -468,6 +565,67 @@ mod tests {
         assert_eq!(
             mode(&cutout, Some(&binding(None))),
             (AlphaMode::Opaque, vec![UNTESTED_ALPHA_REFERENCE.to_owned()])
+        );
+        // the program compares a value it never writes (no reference stated), and the lowering colours the surface with
+        // the slot it read as the tested one: the material's reference cuts it, counted
+        assert_eq!(
+            mode_read(&cutout, Some(&binding(None)), true),
+            (
+                AlphaMode::Mask { cutoff: reference },
+                vec![COVERAGE_ALPHA_CUT.to_owned()]
+            )
+        );
+        // a program whose discard compares a value it writes nowhere: the binding says so (`Unwritten`), and the cut is the
+        // program's own expression solved by the lowering (`Solved`), uncounted, `None` where it discards nothing; where
+        // the lowering did not solve it nothing is cut and the count says so
+        let unwritten = |m: &Material, b: Option<&ShaderBinding>, read: AlphaTestRead| {
+            let mut log = primase_core::pass::PassLog::default();
+            let mode = alpha_mode_read(m, b, read, &mut log);
+            (mode, log.counts.keys().cloned().collect::<Vec<_>>())
+        };
+        let mut unwritten_binding = binding(Some(reference));
+        unwritten_binding.stages[0].constants[0].role = ConstantRole::AlphaReference {
+            value: reference,
+            compared: primase_core::shader::AlphaComparison::Unwritten,
+        };
+        let solved = |cut, dithered| AlphaTestRead::Solved { cut, dithered };
+        // scale 0: the dither term vanished and the cut is exact, uncounted; a nonzero scale (0.5) counts DITHERED
+        assert_eq!(
+            unwritten(&cutout, Some(&unwritten_binding), solved(Some(0.25), false)),
+            (AlphaMode::Mask { cutoff: 0.25 }, vec![])
+        );
+        assert_eq!(
+            unwritten(&cutout, Some(&unwritten_binding), solved(Some(0.25), true)),
+            (AlphaMode::Mask { cutoff: 0.25 }, vec![DITHERED_ALPHA_CUT.to_owned()])
+        );
+        assert_eq!(
+            unwritten(&cutout, Some(&unwritten_binding), solved(None, false)),
+            (AlphaMode::Opaque, vec![])
+        );
+        for read in [AlphaTestRead::Unread, AlphaTestRead::Coverage] {
+            assert_eq!(
+                unwritten(&cutout, Some(&unwritten_binding), read),
+                (AlphaMode::Opaque, vec![UNSOLVED_ALPHA_TEST.to_owned()]),
+                "{read:?}"
+            );
+        }
+        // a solved test is the cut with no binding too
+        assert_eq!(
+            unwritten(&cutout, None, solved(Some(0.25), false)),
+            (AlphaMode::Mask { cutoff: 0.25 }, vec![])
+        );
+        // the engine's two words of the alpha constant: the material's over 255, -100 and 0 where it states none
+        assert_eq!(engine_alpha_reference(&cutout), [reference, 0.]);
+        assert_eq!(engine_alpha_reference(&material("cutout", None, 0.5)), [-100., 0.]);
+        assert_eq!(engine_alpha_reference(&material("cutout", Some(0), 0.5)), [-100., 0.]);
+        // a reference the binding states, or none the material states, is decided as before
+        assert_eq!(
+            mode_read(&cutout, Some(&binding(Some(reference))), true),
+            (AlphaMode::Mask { cutoff: reference }, vec![])
+        );
+        assert_eq!(
+            mode_read(&material("cutout", Some(0), 0.5), Some(&binding(None)), true),
+            (AlphaMode::Opaque, vec![])
         );
         let plain = material("opaque", Some(0), 0.5);
         assert_eq!(mode(&plain, Some(&binding(None))), (AlphaMode::Opaque, vec![]));

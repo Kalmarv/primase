@@ -551,8 +551,9 @@ impl LowerFromSoftGeometry {
                     (Semantic::TexCoord(0), Stream::F32x2(part.mesh.uv)),
                 ]);
                 if !part.tangents.is_empty() {
-                    streams.insert(Semantic::Tangent, Stream::F32x4(part.tangents));
+                    streams.insert(Semantic::Tangent(0), Stream::F32x4(part.tangents));
                 }
+                streams.extend(part.further_tangents.into_iter().map(|(set, values)| (Semantic::Tangent(set), Stream::F32x4(values))));
                 let members = layer.iter().map(|(semantic, _)| *semantic).collect();
                 streams.extend(layer);
                 if source_streams_kept {

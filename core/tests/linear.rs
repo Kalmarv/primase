@@ -16,13 +16,21 @@ fn triangle() -> Mesh {
         Stream::F32x3(vec![[0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]]),
     );
     streams.insert(Semantic::Normal, Stream::F32x3(vec![[0.0, 1.0, 0.0]; 3]));
-    streams.insert(Semantic::Tangent, Stream::F32x4(vec![[1.0, 0.0, 0.0, 1.0]; 3]));
+    streams.insert(Semantic::Tangent(0), Stream::F32x4(vec![[1.0, 0.0, 0.0, 1.0]; 3]));
+    streams.insert(Semantic::Tangent(1), Stream::F32x4(vec![[0.0, 0.0, 1.0, -1.0]; 3]));
     Mesh::new(vec![Primitive {
         topology: Topology::Triangles,
         streams,
         indices: Some(vec![0, 1, 2]),
         material: None,
     }])
+}
+
+#[test]
+fn indexed_tangents_use_the_same_json_shape_as_indexed_coordinates() {
+    assert_eq!(serde_json::to_value(Semantic::Tangent(0)).unwrap(), serde_json::json!({"Tangent": 0}));
+    assert_eq!(serde_json::to_value(Semantic::Tangent(1)).unwrap(), serde_json::json!({"Tangent": 1}));
+    assert_eq!(<Mesh as primase_core::Component>::VERSION, 2);
 }
 
 fn f3(m: &Mesh, s: Semantic) -> Vec<[f32; 3]> {
@@ -57,7 +65,7 @@ fn fronts_and_bitangent(m: &Mesh) -> (Vec<f32>, [f32; 3]) {
     let (p, n, t) = (
         f3(m, Semantic::Position),
         f3(m, Semantic::Normal),
-        f4(m, Semantic::Tangent),
+        f4(m, Semantic::Tangent(0)),
     );
     let idx = m.primitives()[0].indices.clone().unwrap();
     let fronts = idx
@@ -140,7 +148,8 @@ fn a_mirror_moves_into_the_geometry_with_fronts_and_bitangents_kept() {
         [[-0.0, 0.0, 0.0], [-0.0, 0.0, 1.0], [-1.0, 0.0, 0.0]]
     );
     assert_eq!(f3(&m, Semantic::Normal), [[0.0, 1.0, 0.0]; 3].to_vec());
-    assert_eq!(f4(&m, Semantic::Tangent), [[-1.0, 0.0, 0.0, -1.0]; 3].to_vec());
+    assert_eq!(f4(&m, Semantic::Tangent(0)), [[-1.0, 0.0, 0.0, -1.0]; 3].to_vec());
+    assert_eq!(f4(&m, Semantic::Tangent(1)), [[0.0, 0.0, 1.0, 1.0]; 3].to_vec());
     // the triangle reversed, so its front still faces its normal; the bitangent is the mirrored one (x negated)
     assert_eq!(m.primitives()[0].indices.as_deref(), Some(&[0, 2, 1][..]));
     let after = fronts_and_bitangent(&m);

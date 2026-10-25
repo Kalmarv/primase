@@ -17,7 +17,8 @@
 //! Which values. A file holds, for each field, one value per value ID (and time of day). The area's parts name the ID
 //! of four groups (`LightSet ParamEditor`, `FogParamEditor`, `LightScattering : ParamEditor`, `Env Map:Editor`): the ID
 //! most of them name is read. Every other group has no part-level ID: its one value set, else the set of ID 0, is read,
-//! and a group with several sets and no ID 0 is not.
+//! and a group with several sets and no ID 0 is not selected. FogVolume sets are all retained as unresolved
+//! local-volume source data; they are never selected through the part's FogParamEditor slot.
 use super::super::source::{DrawField, DrawGroup, DrawParam, SetChosen};
 use crate::{
     Archive, Game, Result,
@@ -30,14 +31,12 @@ use std::collections::BTreeMap;
 
 const LIGHT_SET: &str = "LightSet ParamEditor";
 const FOG: &str = "FogParamEditor";
-/// Elden Ring's fog group (its files store this and no `FogParamEditor`). The part's fog slot (`FogParamID` in
-/// SoulsFormats' `GparamConfig`) is taken to select its sets, where a part names one: a hypothesis from the slot's name
-/// and from the ids the census found in it (100 and 101, 77 to 94: the same kind of hundreds ids as the light set's).
-/// The census `draw_param_census` found it not to hold where it matters: on `m10_00_0000`, `m10_00_0100` and
-/// `m12_02_0000` the group stays unchosen (ids [100, 101] and [77..94]) with `other_ids {}` and `absent_ids {}`, so no
-/// part names a non-negative fog id there (an id of 0 or more is counted in one of the two), and the group is chosen
-/// only where it stores a single set. What selects the set is not established: `PARTSLOTS` (the four slots every part
-/// names, as stored) and `SCENES` of that census say what the parts do name, and a selector is read against them.
+/// Local injected-volume parameters, not the part's `FogParamEditor` selector. The recorded
+/// `tests-a0b6470ed/draw_param_census.log` has m10_00 sets 100/101 without a nonnegative part fog id;
+/// m12_02 has sets 77..94. SoulsFormats MSBS/MSBE region/event definitions establish no replacement
+/// selector, and Smithbox's Fog Volume annotations describe local volume injection. No stored join
+/// from a placed volume to one of these sets is established. Retain every set and time sample as
+/// `SetChosen::Unresolved`; neither an equal numeric part id nor the presence of id 0 proves selection.
 const FOG_VOLUME: &str = "FogVolume ParamEditor";
 const LIGHT_SCATTERING: &str = "LightScattering : ParamEditor";
 const ENV_MAP: &str = "Env Map:Editor";
@@ -99,6 +98,8 @@ pub struct Report {
     pub slots: BTreeMap<String, usize>,
     /// The game's layered files (`_weatherbase` ...) exist and are not read.
     pub layers_not_read: bool,
+    /// The explicit static preview hour, if requested. None keeps the first stored value.
+    pub hour: Option<f32>,
 }
 
 /// The stem the files of an area's map share: `m11_01` for `m11_01_00_00`; Elden Ring's open-world tiles share
@@ -131,7 +132,7 @@ pub fn available(archive: &Archive, game: Game, area: &str) -> Vec<String> {
 fn part_id(group: &str) -> Option<fn(&PartGparam) -> i32> {
     match group {
         LIGHT_SET => Some(|c| c.light_set),
-        FOG | FOG_VOLUME => Some(|c| c.fog),
+        FOG => Some(|c| c.fog),
         LIGHT_SCATTERING => Some(|c| c.light_scattering),
         ENV_MAP => Some(|c| c.env_map),
         _ => None,
@@ -186,6 +187,7 @@ pub(super) fn select(gparam: &Gparam, stem: &str, configs: &[PartGparam], report
                     None
                 }
             }
+            None if group.key == FOG_VOLUME => None,
             None if ids.len() == 1 => Some((ids[0], SetChosen::OnlySet)),
             None if ids.contains(&0) => {
                 report.zero_id_groups.push(group.key.clone());
@@ -196,7 +198,7 @@ pub(super) fn select(gparam: &Gparam, stem: &str, configs: &[PartGparam], report
         if group.fields.is_empty() {
             report.empty_groups += 1;
         }
-        let Some((id, chosen)) = pick else {
+        if pick.is_none() {
             report.unchosen_groups.push(group.key.clone());
             report.unchosen_fields += group.fields.len();
             if !group.fields.is_empty() {
@@ -204,17 +206,26 @@ pub(super) fn select(gparam: &Gparam, stem: &str, configs: &[PartGparam], report
                     .unchosen_sets
                     .insert(group.key.clone(), (ids.clone(), group.fields.len()));
             }
-            continue;
+        }
+        let picks: Vec<_> = match pick {
+            Some(pick) => vec![pick],
+            None if group.key == FOG_VOLUME => ids.iter().map(|&id| (id, SetChosen::Unresolved)).collect(),
+            None => Vec::new(),
         };
+        for (id, chosen) in picks {
         let mut fields = Vec::new();
         for field in &group.fields {
-            let mut at = field.indices_of(id);
-            let Some(first) = at.next() else {
+            let at: Vec<_> = field.indices_of(id).collect();
+            if at.is_empty() {
                 report.fields_without_set += 1;
                 continue;
-            };
-            report.time_variants += at.count();
-            let Some(value) = field.values.get(first) else {
+            }
+            if chosen != SetChosen::Unresolved {
+                report.time_variants += at.len().saturating_sub(1);
+            }
+            let keep = if chosen == SetChosen::Unresolved { at.len() } else { 1 };
+            for index in at.into_iter().take(keep) {
+            let Some(value) = field.values.get(index) else {
                 report.fields_without_set += 1;
                 continue;
             };
@@ -222,8 +233,9 @@ pub(super) fn select(gparam: &Gparam, stem: &str, configs: &[PartGparam], report
                 key: field.key.clone(),
                 name: field.name.clone(),
                 value,
-                time: field.times.get(first).copied(),
+                time: field.times.get(index).copied(),
             });
+            }
         }
         report.groups += 1;
         report.fields += fields.len();
@@ -234,6 +246,7 @@ pub(super) fn select(gparam: &Gparam, stem: &str, configs: &[PartGparam], report
             chosen,
             fields,
         });
+        }
     }
     report.file = Some(stem.to_owned());
     report.version = gparam.version;
@@ -245,6 +258,23 @@ pub(super) fn select(gparam: &Gparam, stem: &str, configs: &[PartGparam], report
     }
 }
 
+/// Evaluate already selected groups at the caller's hour; unselected local-volume sets stay as source samples.
+fn sample_hour(gparam: &Gparam, source: &mut DrawParam, hour: f32) -> std::result::Result<(), String> {
+    if !hour.is_finite() || !(0.0..=24.0).contains(&hour) { return Err("hour must be finite and in 0..=24".into()); }
+    for group in &mut source.groups {
+        if group.chosen == SetChosen::Unresolved { continue; }
+        let stored = gparam.groups.iter().find(|stored| stored.key == group.key)
+            .ok_or_else(|| format!("{}: source group missing while sampling hour",group.key))?;
+        for field in &mut group.fields {
+            let stored = stored.field(&field.key).ok_or_else(|| format!("{}: source field missing",field.key))?;
+            field.value = stored.sample_at_hour(group.id,hour)?
+                .ok_or_else(|| format!("{}: selected value id {} missing",field.key,group.id))?;
+            field.time = Some(hour.rem_euclid(24.0));
+        }
+    }
+    Ok(())
+}
+
 /// Read what `choice` asks for. `configs` are the graphics configs of the parts the read keeps and of the area's
 /// collision parts.
 pub(super) fn read(
@@ -254,7 +284,11 @@ pub(super) fn read(
     area: &str,
     choice: &DrawParams,
     configs: &[PartGparam],
+    hour: Option<f32>,
 ) -> Result<(Option<DrawParam>, Report)> {
+    if hour.is_some_and(|hour| !hour.is_finite() || !(0.0..=24.0).contains(&hour) || *choice == DrawParams::None) {
+        return Err(crate::invalid("GPARAM",0,"hour requires a draw-param file and a finite value in 0..=24"));
+    }
     let DrawParams::File(stem) = choice else {
         return Ok((None, Report::default()));
     };
@@ -262,6 +296,7 @@ pub(super) fn read(
         asked: true,
         available: available(archive, game, area),
         layers_not_read: game == Game::EldenRing,
+        hour,
         ..Report::default()
     };
     for scene in configs.iter().filter_map(|c| c.scene) {
@@ -290,7 +325,14 @@ pub(super) fn read(
             return Ok((None, report));
         }
     };
-    let source = select(&gparam, stem, configs, &mut report);
+    let mut source = select(&gparam, stem, configs, &mut report);
+    if let Some(hour) = hour {
+        if let Err(why) = sample_hour(&gparam,&mut source,hour) {
+            report.unreadable = Some(why);
+            return Ok((None,report));
+        }
+        report.time_variants = 0;
+    }
     Ok((Some(source), report))
 }
 
@@ -334,6 +376,11 @@ impl Report {
         let Some(file) = &self.file else {
             return out;
         };
+        if let Some(hour) = self.hour {
+            out.push(Notice::new(stage,NoticeKind::Approximation,
+                "explicit hour preview: GPARAM floats/vectors linearly interpolated in stored units over a 24-hour wrap; discrete fields hold the preceding key; this interpolation and raw angle interpolation are preview policies, not a measured engine curve",
+                1).example(format!("{file}, hour {hour}")));
+        }
         let others: Vec<String> = self.available.iter().filter(|s| *s != file).cloned().collect();
         if !others.is_empty() {
             out.push(listed(
@@ -382,19 +429,26 @@ impl Report {
                 self.zero_id_groups.clone(),
             ));
         }
-        if self.unchosen_fields > 0 {
+        let fog_sets = self.unchosen_sets.get(FOG_VOLUME);
+        if let Some((ids, _)) = fog_sets {
+            out.push(Notice::new(stage, NoticeKind::Unsupported,
+                "FogVolume source sets and every time sample retained in fromsoft.draw_param with selection Unresolved; no established placed-volume selector, so none is applied to the scene",
+                ids.len() as u64).example(format!("{FOG_VOLUME}: {ids:?}")));
+        }
+        let unread_fields = self.unchosen_fields.saturating_sub(fog_sets.map_or(0, |(_, fields)| *fields));
+        if unread_fields > 0 {
             // counted in fields, named by group (a group that stores no field has none to leave: counted below)
             out.push(
                 self.unchosen_groups
                     .iter()
-                    .filter(|g| self.unchosen_sets.contains_key(*g))
+                    .filter(|g| g.as_str() != FOG_VOLUME && self.unchosen_sets.contains_key(*g))
                     .take(8)
                     .fold(
                         Notice::new(
                             stage,
                             NoticeKind::Unsupported,
                             "draw-param groups with no value set to read, their fields not read",
-                            self.unchosen_fields as u64,
+                            unread_fields as u64,
                         ),
                         |n, group| n.example(group.clone()),
                     ),
@@ -446,6 +500,17 @@ impl Report {
 mod tests {
     use super::*;
     use crate::gparam::{Field, Group, Value, Values};
+
+    #[test]
+    fn selected_environment_fields_sample_the_requested_hour() {
+        let gparam=Gparam {version:5,unread:Unread::default(),groups:vec![group(LIGHT_SET,vec![
+            Field {times:vec![6.0,18.0],..field("Brightness",&[7,7],Values::F32(vec![2.0,8.0]))}]) ]};
+        let mut source=select(&gparam,"fixture",&[config(7,-1,-1)],&mut Report::default());
+        sample_hour(&gparam,&mut source,12.0).unwrap();
+        let light=source.group(LIGHT_SET).unwrap();
+        assert_eq!(light.value("Brightness"),Some(&Value::Float(5.0)));
+        assert_eq!(light.fields[0].time,Some(12.0));
+    }
 
     fn field(key: &str, ids: &[i32], values: Values) -> Field {
         Field {
@@ -555,31 +620,30 @@ mod tests {
     }
 
     #[test]
-    fn elden_rings_fog_volume_takes_the_parts_fog_id_and_is_left_with_its_ids_counted_when_none_is_stored() {
+    fn fog_volume_keeps_every_set_and_time_without_inventing_a_part_selector() {
         // Elden m10_00_0000: the fog volume stores sets 100 and 101 and no ID 0
         let fog_volume = Gparam {
             version: 5,
             groups: vec![group(
                 FOG_VOLUME,
-                vec![field("Density", &[100, 101], Values::F32(vec![1.0, 2.0]))],
+                vec![Field { times: vec![0.0,12.0,0.0],
+                    ..field("Density", &[100, 100, 101], Values::F32(vec![1.0, 2.0, 3.0])) }],
             )],
             unread: Unread::default(),
         };
-        let mut report = Report::default();
-        let source = select(&fog_volume, "m10_00_0000", &[config(-1, 101, -1), config(-1, 101, -1)], &mut report);
-        let g = source.group(FOG_VOLUME).unwrap();
-        assert_eq!((g.id, g.chosen), (101, SetChosen::ByParts));
-        assert_eq!(g.value("Density"), Some(&Value::Float(2.0)));
-        assert!(report.unchosen_sets.is_empty());
-        // parts naming a set the group does not store leave it, and say which
-        let mut report = Report::default();
-        let source = select(&fog_volume, "m10_00_0000", &[config(-1, 90, -1)], &mut report);
-        assert!(source.group(FOG_VOLUME).is_none());
-        assert_eq!(report.absent_ids, BTreeMap::from([(format!("{FOG_VOLUME} 90"), 1)]));
-        assert_eq!(report.unchosen_sets[FOG_VOLUME], (vec![100, 101], 1));
-        // parts naming none leave a group of several sets and no ID 0, as before
-        let mut report = Report::default();
-        assert!(select(&fog_volume, "m10_00_0000", &[config(-1, -1, -1)], &mut report).group(FOG_VOLUME).is_none());
+        for fog in [-1,90,101] {
+            let mut report = Report { asked:true,..Default::default() };
+            let source = select(&fog_volume,"m10_00_0000",&[config(-1,fog,-1)],&mut report);
+            assert!(source.group(FOG_VOLUME).is_none());
+            assert_eq!(source.groups.iter().map(|g|(g.id,g.chosen)).collect::<Vec<_>>(),
+                [(100,SetChosen::Unresolved),(101,SetChosen::Unresolved)]);
+            assert_eq!(source.groups[0].fields.iter().map(|f|(&f.value,f.time)).collect::<Vec<_>>(),
+                [(&Value::Float(1.0),Some(0.0)),(&Value::Float(2.0),Some(12.0))]);
+            assert_eq!(source.groups[1].value("Density"),Some(&Value::Float(3.0)));
+            assert!(report.other_ids.is_empty() && report.absent_ids.is_empty());
+            assert_eq!(report.unchosen_sets[FOG_VOLUME],(vec![100,101],1));
+            assert!(report.notices().iter().any(|n|n.reason.contains("selection Unresolved")));
+        }
     }
 
     #[test]

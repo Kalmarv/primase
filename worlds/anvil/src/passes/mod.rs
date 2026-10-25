@@ -536,7 +536,7 @@ impl Pass for LowerAnvilMesh {
                             [t[0], t[1], t[2], if flip { -sign } else { sign }]
                         })
                         .collect();
-                    streams.insert(Semantic::Tangent, Stream::F32x4(tangents));
+                    streams.insert(Semantic::Tangent(0), Stream::F32x4(tangents));
                     if zero > 0 {
                         log.omit("vertices with a zero tangent: +x", zero);
                     }

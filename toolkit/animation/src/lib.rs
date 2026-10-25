@@ -12,6 +12,7 @@ pub mod fit;
 pub mod game_skin;
 pub mod joint_table;
 pub mod map;
+pub mod pair;
 pub mod passes;
 pub mod placement;
 pub mod pose;

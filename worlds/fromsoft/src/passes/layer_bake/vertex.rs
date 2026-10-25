@@ -205,7 +205,7 @@ impl VertexStage {
             let feed = match role {
                 InputRole::Stream(Semantic::Position) => Feed::Position,
                 InputRole::Stream(Semantic::Normal) => Feed::Normal,
-                InputRole::Stream(Semantic::Tangent) => Feed::Tangent,
+                InputRole::Stream(Semantic::Tangent(0)) => Feed::Tangent,
                 InputRole::Stream(Semantic::Joints(0)) => Feed::Joints,
                 InputRole::Stream(Semantic::Weights(0)) => Feed::Weights,
                 InputRole::Stream(Semantic::TexCoord(0)) => Feed::TexCoord0,
@@ -245,7 +245,7 @@ impl VertexStage {
                     // the tangent's w as an input of its own
                     [
                         LaneStream {
-                            semantic: Semantic::Tangent,
+                            semantic: Semantic::Tangent(0),
                             first: 0,
                             count: 1,
                             component: 3,
@@ -638,7 +638,7 @@ mod tests {
             .position(|i| i.label.name.eq_ignore_ascii_case("BINORMAL"))
             .unwrap();
         binding.inputs[label].role = InputRole::Lanes(vec![LaneStream {
-            semantic: Semantic::Tangent,
+            semantic: Semantic::Tangent(0),
             first: 0,
             count: 1,
             component: 2,

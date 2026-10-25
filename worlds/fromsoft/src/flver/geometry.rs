@@ -2,7 +2,7 @@ use super::Model;
 use crate::{Result, invalid};
 use primase_core::{Primitive, Semantic, Stream, Topology};
 use primase_meshops::{Mesh, compact_primitive, vector::Vec3};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::pose::FRAME;
 
@@ -37,6 +37,8 @@ pub struct Part {
     pub mesh: Mesh,
     /// Stored tangent frame after coordinate conversion, in compacted vertex order; empty without tangents.
     pub tangents: Vec<[f32; 4]>,
+    /// Further tangent members, keyed by their layout's semantic index.
+    pub further_tangents: BTreeMap<u8, Vec<[f32; 4]>>,
     /// Original vertex indices in compacted order, for retained source attributes.
     pub source_vertices: Vec<u32>,
     /// Whether [`Part::repair_winding`] reversed it.
@@ -91,18 +93,22 @@ impl Model {
                 ),
             ),
         ]);
-        if m.vertices.iter().any(|v| !v.tangents.is_empty()) {
+        if m.vertices.iter().any(|v| v.tangent_indices.len() != v.tangents.len()) {
+            return Err(invalid("FLVER geometry", source_mesh, "tangent values and semantic indices have different counts"));
+        }
+        let tangent_sets: BTreeSet<_> = m.vertices.iter().flat_map(|v| v.tangent_indices.iter().copied()).collect();
+        for set in tangent_sets {
+            let semantic = Semantic::Tangent(set);
             let tangents = m
                 .vertices
                 .iter()
                 .map(|v| {
-                    v.tangents
-                        .first()
+                    v.tangent_indices.iter().position(|&index| index == set).and_then(|at| v.tangents.get(at))
                         .copied()
-                        .ok_or_else(|| invalid("FLVER geometry", source_mesh, "partial tangent stream"))
+                        .ok_or_else(|| invalid("FLVER geometry", source_mesh, format!("partial tangent stream set {set}")))
                 })
                 .collect::<Result<Vec<_>>>()?;
-            streams.insert(Semantic::Tangent, Stream::F32x4(tangents));
+            streams.insert(semantic, Stream::F32x4(tangents));
         }
         let compacted = compact_primitive(&Primitive {
             topology: Topology::Triangles,
@@ -121,7 +127,7 @@ impl Model {
         let Some(Stream::F32x2(uv)) = streams.remove(&Semantic::TexCoord(0)) else {
             unreachable!()
         };
-        let mut tangents = match streams.remove(&Semantic::Tangent) {
+        let mut tangents = match streams.remove(&Semantic::Tangent(0)) {
             Some(Stream::F32x4(v)) => v,
             None => Vec::new(),
             _ => unreachable!(),
@@ -129,6 +135,13 @@ impl Model {
         for t in &mut tangents {
             *t = tangent_to_scene(*t);
         }
+        let further_tangents = streams.into_iter().filter_map(|(semantic, stream)| match (semantic, stream) {
+            (Semantic::Tangent(set), Stream::F32x4(mut tangents)) => {
+                for t in &mut tangents { *t = tangent_to_scene(*t); }
+                Some((set, tangents))
+            }
+            _ => None,
+        }).collect();
         let mut mesh = Mesh {
             positions,
             normals,
@@ -148,6 +161,7 @@ impl Model {
             material: m.material,
             mesh,
             tangents,
+            further_tangents,
             source_vertices: compacted.gather,
             winding_flipped: false,
         }))
@@ -159,4 +173,45 @@ impl Model {
 pub fn tangent_to_scene(t: [f32; 4]) -> [f32; 4] {
     let direction: [f32; 3] = Vec3::from(FRAME.direction([t[0], t[1], t[2]])).normalize().into();
     [direction[0], direction[1], direction[2], -t[3]]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::flver::{FaceSet, Mesh as SourceMesh, Vertex};
+
+    fn two_tangent_model() -> Model {
+        Model {
+            bones: Vec::new(), dummies: Vec::new(), version: 0x2001a, speedtree: false,
+            layouts: Vec::new(), materials: Vec::new(),
+            meshes: vec![SourceMesh {
+                dynamic: false, material: 0, node: -1, palette: Vec::new(), layouts: Vec::new(),
+                vertices: (0..3).map(|i| Vertex {
+                    position: [i as f32, (i == 1) as u8 as f32, 0.0], normal: [0.0, 1.0, 0.0],
+                    tangents: vec![[1.0, 0.0, 0.0, 1.0], [0.0,1.0,0.0,1.0], [0.0, 0.0, 1.0, if i == 1 { -1.0 } else { 1.0 }]],
+                    tangent_indices: vec![0, 1, 4],
+                    ..Vertex::default()
+                }).collect(),
+                faces: vec![FaceSet { flags: 0, strip: false, cull: true, indices: vec![2, 0, 1] }],
+            }],
+        }
+    }
+
+    #[test]
+    fn every_tangent_set_follows_compaction_and_scene_handedness() {
+        let model = two_tangent_model();
+        let part = model.decode(0, 0).unwrap().unwrap();
+        assert_eq!(part.source_vertices, [2, 0, 1]);
+        assert_eq!(part.tangents, vec![tangent_to_scene([1.0, 0.0, 0.0, 1.0]); 3]);
+        assert_eq!(part.further_tangents[&4], [2, 0, 1].map(|i| tangent_to_scene(model.meshes[0].vertices[i].tangents[2])));
+        assert_eq!(part.further_tangents[&1], vec![tangent_to_scene([0.0,1.0,0.0,1.0]);3]);
+    }
+
+    #[test]
+    fn a_partial_further_tangent_stream_names_its_set() {
+        let mut model = two_tangent_model();
+        model.meshes[0].vertices[1].tangents.pop();
+        model.meshes[0].vertices[1].tangent_indices.pop();
+        assert!(model.decode(0, 0).unwrap_err().to_string().contains("partial tangent stream set 4"));
+    }
 }

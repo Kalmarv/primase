@@ -124,7 +124,7 @@ impl Pass for PoseFragments {
                 }
                 if t.singular() {
                     p.streams_mut().remove(&Semantic::Normal);
-                    p.streams_mut().remove(&Semantic::Tangent);
+                    p.streams_mut().remove(&Semantic::Tangent(0));
                     continue;
                 }
                 if let Some(Stream::F32x3(v)) = p.streams_mut().get_mut(&Semantic::Normal) {
@@ -132,7 +132,7 @@ impl Pass for PoseFragments {
                         *x = GTA.direction(t.normal(GTA.direction_to_source(*x)).expect("not singular"));
                     }
                 }
-                if let Some(Stream::F32x4(v)) = p.streams_mut().get_mut(&Semantic::Tangent) {
+                if let Some(Stream::F32x4(v)) = p.streams_mut().get_mut(&Semantic::Tangent(0)) {
                     for x in v.iter_mut() {
                         let s = GTA.direction_to_source([x[0], x[1], x[2]]);
                         let u = t.tangent([s[0], s[1], s[2], x[3]]).expect("not singular");

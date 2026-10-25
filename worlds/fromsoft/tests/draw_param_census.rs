@@ -37,6 +37,38 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>, map: &str) -> Re
         return Ok(());
     }
     files.truncate(8);
+    // Inspect original time tracks before the area reader selects one value. Known weather/event
+    // layer names are observed only, never silently merged into the active environment.
+    let archive=install.open()?;
+    let mut time_files:std::collections::BTreeSet<_>=files.iter().cloned().collect();
+    for prefix in std::iter::once(map[..6].to_owned()).chain(files.iter().cloned()) {
+        for layer in ["weatherbase","weatheroutdoor","commonevent","capturemap"] {
+            let stem=format!("{prefix}_{layer}");
+            let present=archive.contains(&format!("/param/drawparam/{stem}.gparam.dcx"));
+            println!("GPARAM_LAYER {} {stem} present={present}",game.name());
+            if present {time_files.insert(stem);}
+        }
+    }
+    for stem in time_files {
+        let bytes=archive.read(&format!("/param/drawparam/{stem}.gparam.dcx"),decoder)?;
+        let data=primase_fromsoft::gparam::Gparam::read(&bytes)?;
+        let mut tracks=0;
+        for group in &data.groups {
+            for field in &group.fields {
+                for id in field.ids.iter().copied().collect::<std::collections::BTreeSet<_>>() {
+                    let indices:Vec<_>=field.indices_of(id).collect();
+                    if indices.len()<2 {continue;}
+                    tracks+=1;
+                    let samples:Vec<_>=indices.iter().map(|&index|serde_json::json!({
+                        "hour":field.times.get(index),"value":field.values.get(index)})).collect();
+                    println!("GPARAM_HOUR={}",serde_json::json!({"game":game.name(),"file":stem,
+                        "group":group.key,"field":field.key,"id":id,"samples":samples,
+                        "sample_at_12":field.sample_at_hour(id,12.0)}));
+                }
+            }
+        }
+        println!("GPARAM_HOUR_FILE {} {stem} version={} multi_sample_tracks={tracks}",game.name(),data.version);
+    }
     for file in files {
         let mut world = World::default();
         let options = sekiro::Options {

@@ -4,7 +4,7 @@
 //! Linear blend skinning: each vertex's matrix is `sum_i w_i J_i B_i` (`J_i` its slot's joint in the skeleton's space
 //! under the pose, `B_i` the slot's inverse bind); its position goes through that matrix, its normal through the
 //! inverse transpose of its linear part and its tangent through the linear part, both then of unit length (a tangent's
-//! w kept). Weights are used as stored, except under [`WeightRule::EngineNormalizes`], where each is divided by the
+//! w negated under a mirror). Weights are used as stored, except under [`WeightRule::EngineNormalizes`], where each is divided by the
 //! larger of their sum and the rule's floor (a floor of zero: the sum, and a vertex with no weight is refused).
 
 use std::collections::BTreeMap;
@@ -22,6 +22,8 @@ pub struct Vertices {
     pub positions: Vec<[f32; 3]>,
     pub normals: Option<Vec<[f32; 3]>>,
     pub tangents: Option<Vec<[f32; 4]>>,
+    /// Further tangent sets; morph tangent deltas address set 0, while skinning turns every set alike.
+    pub further_tangents: BTreeMap<u8, Vec<[f32; 4]>>,
 }
 
 impl Vertices {
@@ -35,11 +37,18 @@ impl Vertices {
         Ok(Vertices {
             positions: f3(Semantic::Position)?.ok_or_else(|| Error("no positions".into()))?,
             normals: f3(Semantic::Normal)?,
-            tangents: match p.streams.get(&Semantic::Tangent) {
+            tangents: match p.streams.get(&Semantic::Tangent(0)) {
                 Some(Stream::F32x4(v)) => Some(v.clone()),
                 None => None,
                 Some(_) => return Err(Error("Tangent is not four floats".into())),
             },
+            further_tangents: p.streams.iter().filter_map(|(semantic, stream)| match semantic {
+                Semantic::Tangent(set @ 1..) => Some(match stream {
+                    Stream::F32x4(values) if values.len() == p.vertex_count() => Ok((*set, values.clone())),
+                    _ => Err(Error(format!("Tangent({set}) is not a complete four-float stream"))),
+                }),
+                _ => None,
+            }).collect::<Result<_>>()?,
         })
     }
 }
@@ -148,6 +157,7 @@ pub fn apply_morphs(
     }
     Ok(Vertices {
         positions: pos.iter().map(|p| p.map(|x| x as f32)).collect(),
+        further_tangents: v.further_tangents.clone(),
         normals: nor.map(|x| {
             x.iter()
                 .zip(&normals_moved)
@@ -277,6 +287,7 @@ pub fn skin_counted(
         positions: Vec::with_capacity(v.positions.len()),
         normals: v.normals.as_ref().map(|_| Vec::new()),
         tangents: v.tangents.as_ref().map(|_| Vec::new()),
+        further_tangents: v.further_tangents.keys().map(|&set| (set, Vec::with_capacity(v.positions.len()))).collect(),
     };
     for (i, inf) in per_vertex.iter().enumerate() {
         let mut m = [[0.0f64; 3]; 4];
@@ -314,10 +325,16 @@ pub fn skin_counted(
                 std::array::from_fn(|r| (0..3).map(|k| cof[k][r] * n[k]).sum::<f64>() * det.signum());
             dst.push(unit(turned).map(|x| x as f32));
         }
+        let handedness = if primase_core::Linear::of_f64([m[0],m[1],m[2]]).mirrors() { -1.0 } else { 1.0 };
         if let (Some(src), Some(dst)) = (&v.tangents, out.tangents.as_mut()) {
             let t = src[i];
             let d = unit(apply([t[0], t[1], t[2]].map(f64::from), 0.0));
-            dst.push([d[0] as f32, d[1] as f32, d[2] as f32, t[3]]);
+            dst.push([d[0] as f32, d[1] as f32, d[2] as f32, t[3] * handedness]);
+        }
+        for (set, src) in &v.further_tangents {
+            let t = *src.get(i).ok_or_else(|| Error(format!("Tangent({set}) has no vertex {i}")))?;
+            let d = unit(apply([t[0], t[1], t[2]].map(f64::from), 0.0));
+            out.further_tangents.get_mut(set).expect("output tangent set").push([d[0] as f32, d[1] as f32, d[2] as f32, t[3] * handedness]);
         }
     }
     Ok((out, unweighted))
@@ -493,7 +510,8 @@ mod tests {
         let p = primitive(vec![
             (Semantic::Position, Stream::F32x3(vec![[0.0; 3]])),
             (Semantic::Normal, Stream::F32x3(vec![[1.0, 0.0, 0.0]])),
-            (Semantic::Tangent, Stream::F32x4(vec![[0.0, 1.0, 0.0, -1.0]])),
+            (Semantic::Tangent(0), Stream::F32x4(vec![[0.0, 1.0, 0.0, -1.0]])),
+            (Semantic::Tangent(1), Stream::F32x4(vec![[0.0, 1.0, 0.0, -1.0]])),
         ]);
         let v = Vertices::of(&p).unwrap();
         let turn = BTreeMap::from([(
@@ -512,6 +530,13 @@ mod tests {
         .unwrap();
         assert!(near(s.normals.as_ref().unwrap()[0], [0.0, 1.0, 0.0]));
         assert_eq!(s.tangents.as_ref().unwrap()[0][3], -1.0);
+        assert_eq!(s.further_tangents[&1], *s.tangents.as_ref().unwrap());
+        assert!(near(s.further_tangents[&1][0][..3].try_into().unwrap(), [-1.0, 0.0, 0.0]));
+        let mirror = BTreeMap::from([(JointId(1), [[-1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,1.0],[0.0;3]])]);
+        let mirrored = skin(&v,&p,Influences::Whole { slot:0 },WeightRule::AsStored,Deformation::Linear,&palette,&mirror).unwrap();
+        let expected = primase_core::Linear::mirror_x().tangent([0.0,1.0,0.0,-1.0]).unwrap();
+        assert_eq!(mirrored.tangents.as_ref().unwrap()[0],expected);
+        assert_eq!(mirrored.further_tangents[&1][0],expected);
         let r = std::f32::consts::FRAC_1_SQRT_2;
         let q = primitive(vec![
             (Semantic::Position, Stream::F32x3(vec![[0.0; 3]])),
@@ -560,6 +585,7 @@ mod tests {
             positions: vec![[0.0; 3]; 2],
             normals: None,
             tangents: None,
+            further_tangents: BTreeMap::new(),
         };
         let inbetween = Morphs {
             targets: vec![target(1, vec![(0.5, 1.0), (1.0, 3.0)], None)],
@@ -588,6 +614,7 @@ mod tests {
             positions: vec![[0.0; 3]; 2],
             normals: Some(vec![[2.0, 0.0, 0.0], [0.0, 0.0, 1.0]]),
             tangents: Some(vec![[0.0, 3.0, 0.0, 1.0], [1.0, 0.0, 0.0, -1.0]]),
+            further_tangents: BTreeMap::new(),
         };
         let morphs = Morphs {
             targets: vec![MorphTarget {

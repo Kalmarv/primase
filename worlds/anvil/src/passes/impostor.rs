@@ -151,7 +151,7 @@ impl Pass for LowerAnvilImpostor {
                     streams: BTreeMap::from([
                         (Semantic::Position, Stream::F32x3(positions)),
                         (Semantic::Normal, Stream::F32x3(vec![normal; 4])),
-                        (Semantic::Tangent, Stream::F32x4(vec![[tangent[0], tangent[1], tangent[2], sign]; 4])),
+                        (Semantic::Tangent(0), Stream::F32x4(vec![[tangent[0], tangent[1], tangent[2], sign]; 4])),
                         (Semantic::TexCoord(0), Stream::F32x2(uv.to_vec())),
                     ]), indices: Some(indices), material: Some(material) });
             }

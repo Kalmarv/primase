@@ -52,7 +52,7 @@ fn fixture() -> (World, primase_core::Entity) {
                     [0., 1., 0., 0.],
                 ]),
             ),
-            (Semantic::Tangent, Stream::F32x4(vec![[1., 0., 0., -1.]; 6])),
+            (Semantic::Tangent(0), Stream::F32x4(vec![[1., 0., 0., -1.]; 6])),
             (Semantic::TexCoord(4), Stream::F32x2(vec![[0.25, 0.75]; 6])),
         ]),
         indices: Some(vec![0, 1, 2, 3, 4, 5]),

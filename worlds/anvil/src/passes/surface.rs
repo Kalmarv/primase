@@ -267,12 +267,12 @@ impl BakeAnvilSurface {
         let contract=Contract::of(material).ok_or("template has no surface input contract")?;
         if let Some(reason)=contract.terrain_requirements(){return Err(reason.into());}
         if primitive.topology!=Topology::Triangles {return Err("surface is not a triangle list".into());}
-        let permitted=BTreeSet::from([Semantic::Position,Semantic::Normal,Semantic::Tangent,Semantic::TexCoord(0),Semantic::Color(0)]);
+        let permitted=BTreeSet::from([Semantic::Position,Semantic::Normal,Semantic::Tangent(0),Semantic::TexCoord(0),Semantic::Color(0)]);
         if primitive.streams.keys().any(|s| !permitted.contains(s)) {return Err("surface has extra UV/skin/blend streams whose chart remap is not established".into());}
         let p=primitive.positions().ok_or("surface has no positions")?;
         let normals=match primitive.streams.get(&Semantic::Normal) {Some(Stream::F32x3(n)) if n.len()==p.len()=>n,_=>return Err("surface has no matching normal stream".into())};
         let source_tangents=if contract==Contract::OutBorder {
-            match primitive.streams.get(&Semantic::Tangent){
+            match primitive.streams.get(&Semantic::Tangent(0)){
                 Some(Stream::F32x4(t)) if t.len()==p.len() && t.iter().all(|v|v.iter().all(|x|x.is_finite()) && v[3].abs()==1.0)=>Some(t),
                 _=>return Err("MAD_OutBorder requires the original tangent and bitangent sign; no chart tangent is substituted for its source varying".into()),
             }
@@ -417,7 +417,7 @@ impl BakeAnvilSurface {
         }
         let mut streams=BTreeMap::from([
             (Semantic::Position,Stream::F32x3(positions)),(Semantic::Normal,Stream::F32x3(output_normals)),
-            (Semantic::Tangent,Stream::F32x4(tangents)),(Semantic::TexCoord(1),Stream::F32x2(uvs))]);
+            (Semantic::Tangent(0),Stream::F32x4(tangents)),(Semantic::TexCoord(1),Stream::F32x2(uvs))]);
         if source_uv.is_some(){streams.insert(Semantic::TexCoord(0),Stream::F32x2(original_uvs));}
         if colours.is_some(){streams.insert(Semantic::Color(0),Stream::F32x4(output_colours));}
         Ok((Primitive{topology:Topology::Triangles,streams,indices:None,material:None},images,side))

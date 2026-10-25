@@ -92,7 +92,7 @@ pub fn bind_output_uses(
 }
 
 mod alpha;
-pub use alpha::{AlphaDither, discard_compares};
+pub use alpha::{AlphaDither, AlphaExpr, AlphaTest, Known, Linear, alpha_tests, discard_compares};
 
 /// Whether target `target`'s stated blend weighs the colour by the source alpha: the state's blend for that target
 /// (render target 0's is also the state's own `blend`).

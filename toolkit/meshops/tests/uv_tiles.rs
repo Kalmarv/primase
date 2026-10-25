@@ -505,7 +505,7 @@ fn tangents_are_renormalised_and_keep_w() {
     let m = material(&mut w, 0, [Wrap::Repeat; 2]);
     let mut p = quad(Some(m));
     p.streams.insert(
-        Semantic::Tangent,
+        Semantic::Tangent(0),
         Stream::F32x4(vec![
             [1.0, 0.0, 0.0, -1.0],
             [0.0, 1.0, 0.0, -1.0],
@@ -516,7 +516,7 @@ fn tangents_are_renormalised_and_keep_w() {
     let e = mesh_of(&mut w, vec![p]);
     run(&mut w, 0).unwrap();
     let p = &w.get::<Mesh>(e).unwrap().primitives()[0];
-    let Stream::F32x4(t) = &p.streams[&Semantic::Tangent] else {
+    let Stream::F32x4(t) = &p.streams[&Semantic::Tangent(0)] else {
         panic!()
     };
     for t in t {
@@ -574,7 +574,7 @@ fn refusals_name_the_cause_and_leave_the_world_as_it_was() {
     let m = material(&mut w, 0, [Wrap::Repeat; 2]);
     let mut p = quad(Some(m));
     p.streams.insert(
-        Semantic::Tangent,
+        Semantic::Tangent(0),
         Stream::F32x4(vec![
             [1.0, 0.0, 0.0, 1.0],
             [1.0, 0.0, 0.0, 1.0],

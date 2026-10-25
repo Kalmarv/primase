@@ -118,8 +118,8 @@ impl Buffers {
                     self.floats(bytemuck::cast_slice(v), count, ElementType::Vec3, None)
                         .map_err(number)?,
                 ),
-                (Semantic::Tangent, Stream::F32x4(v)) => (
-                    "TANGENT".to_owned(),
+                (Semantic::Tangent(n), Stream::F32x4(v)) => (
+                    if *n == 0 { "TANGENT".to_owned() } else { format!("_TANGENT{n}") },
                     self.floats(bytemuck::cast_slice(v), count, ElementType::Vec4, None)
                         .map_err(number)?,
                 ),

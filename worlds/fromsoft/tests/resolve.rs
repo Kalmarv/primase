@@ -747,7 +747,7 @@ fn a_vertex_program_is_bound_to_streams_and_engine_roles() {
         [
             stream("POSITION0", Semantic::Position),
             stream("NORMAL0", Semantic::Normal),
-            stream("TANGENT0", Semantic::Tangent),
+            stream("TANGENT0", Semantic::Tangent(0)),
             stream("COLOR1", SECOND_COLOUR),
             (
                 "TEXCOORD0".to_owned(),
@@ -907,7 +907,7 @@ fn the_cloth_permutations_inputs_and_switch_are_stated() {
     assert_eq!(
         role("BINORMAL0"),
         InputRole::Lanes(vec![LaneStream {
-            semantic: Semantic::Tangent,
+            semantic: Semantic::Tangent(0),
             first: 0,
             count: 1,
             component: 3,
@@ -932,11 +932,12 @@ fn the_cloth_permutations_inputs_and_switch_are_stated() {
     );
 }
 
-/// The Lining_S2 family's inputs the lowered geometry cannot feed: a third coordinate set of integers (TEXCOORD1, which
-/// the layered programs read as four floats, a Byte4C member) and a second tangent set (TANGENT2) are unknown, each with
-/// the reason, and are not taken for the layered members.
+/// The Lining_S2 family's further inputs: a third coordinate set of integers (TEXCOORD1, which the layered programs read
+/// as four floats, a Byte4C member) is the UV set after TEXCOORD0's packed pair, `TexCoord(2)`, a pair a set (a mesh
+/// whose lowering keeps no such set has no such stream); TANGENT2 retains its layout semantic index, Tangent(2).
+/// Neither is taken for the layered members.
 #[test]
-fn a_further_coordinate_set_and_tangent_set_are_unknown_not_layer_members() {
+fn further_coordinates_follow_member_order_and_tangents_keep_semantic_indices() {
     let interface = primase_dxbc::reflection(LINING_PROGRAM).unwrap();
     let entity = World::default().spawn();
     let stage = primase_fromsoft::layer_bake::resolve::resolve_vertex(
@@ -953,20 +954,23 @@ fn a_further_coordinate_set_and_tangent_set_are_unknown_not_layer_members() {
             .map(|i| i.role.clone())
             .unwrap()
     };
-    let why = |name: &str| match role(name) {
-        InputRole::Unknown { why } => why,
-        other => panic!("{name} is {other:?}, not unknown"),
+    // TEXCOORD0's two pairs are sets 0 and 1: TEXCOORD1's pairs are set 2 onward, one pair each from its x
+    let InputRole::Lanes(lanes) = role("TEXCOORD1") else {
+        panic!("TEXCOORD1 is {:?}, not lanes of UV sets", role("TEXCOORD1"));
     };
-    assert!(
-        why("TEXCOORD1").contains("further coordinate set"),
-        "{}",
-        why("TEXCOORD1")
-    );
-    assert!(
-        why("TANGENT2").contains("further tangent set"),
-        "{}",
-        why("TANGENT2")
-    );
+    assert!(!lanes.is_empty());
+    for (k, lane) in lanes.iter().enumerate() {
+        assert_eq!(
+            *lane,
+            LaneStream {
+                semantic: Semantic::TexCoord(2 + k as u8),
+                first: 2 * k as u8,
+                count: 2,
+                component: 0,
+            }
+        );
+    }
+    assert_eq!(role("TANGENT2"), InputRole::Stream(Semantic::Tangent(2)));
     // the layered programs' float members keep their streams
     let layered = primase_dxbc::reflection(VERTEX_PROGRAM).unwrap();
     let layered =
@@ -979,6 +983,65 @@ fn a_further_coordinate_set_and_tangent_set_are_unknown_not_layer_members() {
         .find(|i| i.label.name.eq_ignore_ascii_case("TEXCOORD") && i.label.index == 1)
         .unwrap();
     assert_eq!(member.role, InputRole::Stream(Semantic::Color(1)));
+}
+
+#[test]
+fn a_further_tangent_binding_requires_the_materials_primitive_to_store_it() {
+    let shader = dxbc_shader(LINING_PROGRAM, primase_dxbc::reflection(LINING_PROGRAM).unwrap());
+    let mut world = World::default();
+    let shader_entity = world.spawn();
+    let material = world.spawn();
+    let mesh = world.spawn();
+    let mut primitive = Primitive {
+        topology: Topology::Triangles,
+        streams: BTreeMap::from([
+            (Semantic::Position, Stream::F32x3(vec![[0.0; 3]; 3])),
+            (Semantic::Tangent(0), Stream::F32x4(vec![[1.0, 0.0, 0.0, 1.0]; 3])),
+        ]),
+        indices: Some(vec![0, 1, 2]), material: Some(material),
+    };
+    let role = |world: &World| {
+        primase_fromsoft::layer_bake::resolve::resolve_vertex_for_geometry(&shader, shader_entity, world, material)
+            .unwrap().stage.inputs.into_iter().find(|i| i.label.name.eq_ignore_ascii_case("TANGENT") && i.label.index == 2).unwrap().role
+    };
+    world.insert(mesh, Mesh::new(vec![primitive.clone()]));
+    assert!(matches!(role(&world), InputRole::Unknown { why } if why.contains("Tangent(2)") && why.contains("absent or incomplete")));
+    primitive.streams.insert(Semantic::Tangent(2), Stream::F32x4(vec![[0.0, 1.0, 0.0, -1.0]; 3]));
+    world.insert(mesh, Mesh::new(vec![primitive.clone()]));
+    assert_eq!(role(&world), InputRole::Stream(Semantic::Tangent(2)));
+    primitive.streams.insert(Semantic::Tangent(2), Stream::F32x4(vec![[0.0; 4]; 2]));
+    world.insert(mesh, Mesh::new(vec![primitive]));
+    assert!(matches!(role(&world), InputRole::Unknown { .. }));
+}
+
+/// The joints' palette and the cloth-cancel palette of an Elden Ring (DXIL) skinned program are bound at 256 matrices of
+/// three rows. See the following palette test for the captured buffer contract.
+#[test]
+fn layout_indices_zero_one_four_are_not_compacted_by_a_program_reading_zero_and_four() {
+    // Reuse the fixture's complete reflected interface; only the sparse tangent label differs.
+    let mut interface = primase_dxbc::reflection(LINING_PROGRAM).unwrap();
+    for input in &mut interface.inputs {
+        if input.label.name.eq_ignore_ascii_case("TANGENT") && input.label.index == 2 { input.label.index = 4; }
+    }
+    let shader = dxbc_shader(LINING_PROGRAM,interface);
+    let mut world = World::new();
+    let program = world.spawn(); let material = world.spawn(); let mesh = world.spawn();
+    let mut streams = BTreeMap::from([(Semantic::Position,Stream::F32x3(vec![[0.0;3];3]))]);
+    for set in [0,1,4] { streams.insert(Semantic::Tangent(set),Stream::F32x4(vec![[1.0,0.0,0.0,1.0];3])); }
+    let primitive = Primitive { topology:Topology::Triangles,streams,indices:Some(vec![0,1,2]),material:Some(material) };
+    world.insert(mesh,Mesh::new(vec![primitive.clone()]));
+    let bind = |world:&World| primase_fromsoft::layer_bake::resolve::resolve_vertex_for_geometry(&shader,program,world,material).unwrap().stage;
+    let stage = bind(&world);
+    for set in [0,4] {
+        let input = stage.inputs.iter().find(|i| i.label.name.eq_ignore_ascii_case("TANGENT") && i.label.index == set).unwrap();
+        assert_eq!(input.role,InputRole::Stream(Semantic::Tangent(set as u8)));
+    }
+    let mut absent = primitive;
+    absent.streams.remove(&Semantic::Tangent(4));
+    world.insert(mesh,Mesh::new(vec![absent]));
+    let stage = bind(&world);
+    let input = stage.inputs.iter().find(|i| i.label.name.eq_ignore_ascii_case("TANGENT") && i.label.index == 4).unwrap();
+    assert!(matches!(&input.role,InputRole::Unknown { why } if why.contains("Tangent(4)") && why.contains("absent")));
 }
 
 /// The joints' palette and the cloth-cancel palette of an Elden Ring (DXIL) skinned program are bound at 256 matrices of

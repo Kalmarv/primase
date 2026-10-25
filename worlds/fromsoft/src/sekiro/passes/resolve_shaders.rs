@@ -1,6 +1,6 @@
 //! `resolve-fromsoft-shaders`: the layered materials' G-buffer programs as `core.shader` entities and each material's
 //! `core.shader_binding`.
-use crate::layer_bake::resolve::{PALETTE_ROWS_RULE, Unbound, render_state, resolve, resolve_vertex};
+use crate::layer_bake::resolve::{PALETTE_ROWS_RULE, Unbound, render_state, resolve, resolve_vertex_for_geometry};
 use crate::materials::Material;
 use crate::metaparam::Metaparam;
 use crate::sekiro::source::{MaterialShader, Payloads, ShaderBundle, ShaderPrograms, TexturePayloads};
@@ -376,7 +376,7 @@ fn run(
                     vertex_shaders.insert(vertex_name.clone(), (entity, shader));
                 }
                 let (entity, shader) = &vertex_shaders[&vertex_name];
-                let vertex = resolve_vertex(shader, *entity).map_err(|e| format!("{vertex_name}: {e}"))?;
+                let vertex = resolve_vertex_for_geometry(shader, *entity, world, material_entity).map_err(|e| format!("{vertex_name}: {e}"))?;
                 if let Some(why) = vertex.undecided {
                     // not a finding: the matrix is taken as camera-relative, as most programs of the corpus are
                     *policies

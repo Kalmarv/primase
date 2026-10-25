@@ -113,7 +113,7 @@ fn black_box_and_reversed_sphere_read_and_lower() {
         // the engine's declarations worked by hand on the first and last vertices (static24: the frame the
         // diagnostic one, so directions as stored): the normal (b - 127) / 127 at unit length, the tangent likewise
         // with the position word's sign, the colour bytes 16..19, the coordinates two snorm16 words times 16
-        let Some(Stream::F32x4(tangents)) = p.streams.get(&Semantic::Tangent) else {
+        let Some(Stream::F32x4(tangents)) = p.streams.get(&Semantic::Tangent(0)) else {
             panic!("tangents");
         };
         let Some(Stream::U8x4(colours)) = p.streams.get(&Semantic::Color(0)) else {

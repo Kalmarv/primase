@@ -275,6 +275,78 @@ fn pixels(t: &Texture) -> Result<Vec<u8>> {
         .decode_rgba8(t.format, t.width, t.height, level)
         .map_err(|e| invalid("Sekiro PBR pixels", 0, e))
 }
+/// What a lowering counts where an alpha-tested material is coloured with its coverage texture and its program's colour
+/// slot, on another UV set, is the base colour's factor as its mean ([`mean_colour_of`]).
+pub const COVERAGE_COLOUR_FACTOR: &str = "alpha-tested material drawn with its coverage texture: its colour slot's mean colour is the base colour factor (the colour slot is on its own UV set)";
+
+/// The mean colour of the colour texture `name`, linear RGB: of the reader's copy where it already decoded it, else the
+/// install's ([`read`]); from its smallest stored level of at least 4 x 4 texels (each level holds the means of the
+/// texels above it), its bytes sRGB as a colour texture's are ([`texture`]).
+fn mean_colour_of(
+    world: &World,
+    payloads: &BTreeMap<String, impl AsRef<[u8]>>,
+    cache: &BTreeMap<(String, bool), Entity>,
+    name: &str,
+) -> Result<[f32; 3]> {
+    let read_copy;
+    let t = match cache.get(&(name.to_owned(), false)).and_then(|e| world.get::<Texture>(*e)) {
+        Some(t) => t,
+        None => {
+            read_copy = read(payloads, name)?;
+            &read_copy
+        }
+    };
+    let (shift, level) = t
+        .levels
+        .iter()
+        .enumerate()
+        .filter_map(|(n, level)| Some((u32::try_from(n).ok()?, level)))
+        .rev()
+        .find(|(n, _)| {
+            t.width.checked_shr(*n).is_some_and(|w| w >= 4) && t.height.checked_shr(*n).is_some_and(|h| h >= 4)
+        })
+        .or_else(|| t.levels.first().map(|level| (0, level)))
+        .ok_or_else(|| invalid("Sekiro PBR", 0, "missing base mip"))?;
+    let (width, height) = ((t.width >> shift).max(1), (t.height >> shift).max(1));
+    let rgba = primase_texcodec::Decoder::default()
+        .decode_rgba8(t.format, width, height, level)
+        .map_err(|e| invalid("Sekiro PBR pixels", 0, e))?;
+    let mut sum = [0f64; 3];
+    let mut count = 0u32;
+    for px in rgba.chunks_exact(4) {
+        let linear = Srgba8([px[0], px[1], px[2], 255]).linear();
+        for (total, value) in sum.iter_mut().zip(linear) {
+            *total += f64::from(value);
+        }
+        count += 1;
+    }
+    if count == 0 {
+        return Err(invalid("Sekiro PBR", 0, "a texture of no texels"));
+    }
+    Ok(sum.map(|total| (total / f64::from(count)) as f32))
+}
+/// The alpha of the colour texture `name` where it is one value over every texel of its base level (a default texture
+/// the engine binds where a material binds none: `SYSTEX_Dummy_a`), as the sampler returns it (0 to 1); `None` where it
+/// varies or cannot be read. Alpha is stored linear in every format, so no colour space applies.
+fn uniform_alpha(
+    world: &World,
+    payloads: &BTreeMap<String, impl AsRef<[u8]>>,
+    cache: &BTreeMap<(String, bool), Entity>,
+    name: &str,
+) -> Option<f64> {
+    let read_copy;
+    let t = match cache.get(&(name.to_owned(), false)).and_then(|e| world.get::<Texture>(*e)) {
+        Some(t) => t,
+        None => {
+            read_copy = read(payloads, name).ok()?;
+            &read_copy
+        }
+    };
+    let rgba = pixels(t).ok()?;
+    let mut alphas = rgba.chunks_exact(4).map(|px| px[3]);
+    let first = alphas.next()?;
+    alphas.all(|a| a == first).then(|| f64::from(first) / 255.)
+}
 fn spawn(world: &mut World, name: String, t: Texture) -> Entity {
     let e = world.spawn();
     world.insert(e, Name(name));
@@ -538,8 +610,12 @@ fn lower_materials(
         // An alpha-tested Elden Ring material is coloured with the slot its programs test, on the UV set they sample it
         // with, not the preview's slot: the cut-out is in that slot's alpha (`coverage`)
         let mut coverage_vertex_alpha = false;
+        // the base colour is the slot the discard tests: its alpha is the tested value, cut where the program's test cuts it
+        let mut alpha_read = crate::materials::AlphaTestRead::Unread;
         if !baked && m.class == "cutout" && p.base_color_texture.is_none() {
-            match reader.coverage(world, e, &m) {
+            // a slot the material binds nothing to is its default texture: its alpha, where it is one value everywhere
+            let mut default_alpha = |stem: &str| uniform_alpha(world, payloads, &cache, stem);
+            match reader.coverage(world, e, &m, &mut default_alpha) {
                 Ok(Some(c)) => {
                     let binding = m.bindings.get(&c.slot.binding).filter(|b| {
                         b.available
@@ -555,31 +631,69 @@ fn lower_materials(
                         ));
                         p.base_color_texture = Some(r);
                         coverage_vertex_alpha = c.vertex_alpha;
-                        log.approximate_on(
-                            e,
-                            "alpha-tested material drawn with its coverage texture alone: the colour slots its program blends in are left out",
-                            1,
-                        );
+                        alpha_read = match c.solved {
+                            Some(s) => crate::materials::AlphaTestRead::Solved {
+                                cut: s.cut,
+                                dithered: s.dithered,
+                            },
+                            None => crate::materials::AlphaTestRead::Coverage,
+                        };
+                        // the colour the program multiplies the coverage by is its base slot, on a UV set of its own
+                        // (`C[Fur]`'s strand card on set 2 times its colour on set 0): one texture cannot carry both
+                        // texel by texel, so the base slot's mean colour is the factor
+                        let colour = match &base {
+                            Ok(Some(b)) if b.slot.binding != c.slot.binding => m
+                                .bindings
+                                .get(&b.slot.binding)
+                                .filter(|b| b.available && held(payloads, &cache, &b.texture, false))
+                                .map(|b| b.texture.clone()),
+                            _ => None,
+                        };
+                        match colour {
+                            Some(name) if fresh => match mean_colour_of(world, payloads, &cache, &name) {
+                                Ok([red, green, blue]) => {
+                                    p.base_color = [red, green, blue, p.base_color[3]];
+                                    log.approximate_on(e, COVERAGE_COLOUR_FACTOR, 1);
+                                }
+                                Err(error) => log.approximate_on(
+                                    e,
+                                    &format!(
+                                        "alpha-tested material drawn with its coverage texture alone: its colour slot's texture could not be read ({error})"
+                                    ),
+                                    1,
+                                ),
+                            },
+                            _ => log.approximate_on(
+                                e,
+                                "alpha-tested material drawn with its coverage texture alone: the colour slots its program blends in are left out",
+                                1,
+                            ),
+                        }
                         for what in c.left_out {
                             log.approximate_on(e, &format!("alpha test: {what} left out"), 1);
                         }
                     } else {
+                        // the test's slot is not in the install: nothing to cut, and the material says so
                         log.approximate_on(
                             e,
-                            "alpha-tested material whose coverage texture is not held: the base albedo's alpha tested",
+                            "alpha-tested material whose coverage texture is not held: not cut",
                             1,
                         );
                     }
                 }
                 Ok(None) => {}
-                Err(u) => log.approximate_on(
-                    e,
-                    &format!(
-                        "alpha-tested material whose programs' alpha test could not be read, the base albedo's alpha tested: {}: {}",
-                        u.program, u.why
-                    ),
-                    1,
-                ),
+                Err(u) => {
+                    // the program's test is not one the lowering follows (several slots, or an expression that is not one
+                    // varying alpha with stated constants): not cut, the reason named
+                    log.approximate_on(
+                        e,
+                        &format!(
+                            "alpha-tested material whose programs' alpha test is not lowered, not cut: {}: {}",
+                            u.program, u.why
+                        ),
+                        1,
+                    );
+                }
             }
         }
         if !baked {
@@ -645,9 +759,10 @@ fn lower_materials(
                 // a normal map the material names and the install does not hold: drawn with the surface normal alone
                 log.approximate_on(e, "named normal texture not in the install: flat normal", 1);
             }
-            p.alpha_mode = crate::materials::alpha_mode(
+            p.alpha_mode = crate::materials::alpha_mode_read(
                 &m,
                 world.get::<primase_core::shader::ShaderBinding>(e),
+                alpha_read,
                 &mut log,
             );
         }
@@ -1100,5 +1215,34 @@ mod tests {
         for bad in [-0.01, 1.01, f32::NAN, f32::INFINITY] {
             assert!(roughness(bad).is_err());
         }
+    }
+
+    /// A coverage-drawn material's colour factor is its colour slot's mean, linear, of the smallest stored level of at
+    /// least 4 x 4 texels (here the second, a grey of sRGB 128 under a white first level): the reader's copy, not the
+    /// install's, where it holds one; a texture neither holds is an error the caller counts.
+    #[test]
+    fn a_colour_slots_mean_is_its_small_levels_linear_mean() {
+        let mut world = World::default();
+        let t = Texture {
+            width: 8,
+            height: 8,
+            format: TexFormat::Rgba8Unorm,
+            levels: vec![
+                vec![255; 8 * 8 * 4],
+                [128, 128, 128, 255].repeat(4 * 4),
+                [0, 0, 0, 255].repeat(2 * 2),
+                vec![0, 0, 0, 255],
+            ],
+            color_space: ColorSpace::Srgb,
+            role: TexRole::Color,
+            normal: None,
+        };
+        let e = spawn(&mut world, "colour".into(), t);
+        let cache = BTreeMap::from([(("colour".to_owned(), false), e)]);
+        let payloads: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+        let mean = mean_colour_of(&world, &payloads, &cache, "colour").unwrap();
+        let grey = Srgba8([128, 128, 128, 255]).linear()[0];
+        assert!(mean.iter().all(|v| (v - grey).abs() < 1e-6), "{mean:?}");
+        assert!(mean_colour_of(&world, &payloads, &cache, "absent").is_err());
     }
 }

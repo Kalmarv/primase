@@ -436,8 +436,8 @@ impl Component for Shadows {
 pub enum Semantic {
     Position,
     Normal,
-    /// xyz tangent, w the bitangent sign (glTF).
-    Tangent,
+    /// Tangent set: xyz tangent, w the bitangent sign. Set 0 is glTF's standard TANGENT.
+    Tangent(u8),
     /// u right, v down: (0, 0) is the image's top-left corner (glTF). Readers of bottom-left conventions store 1 - v.
     TexCoord(u8),
     Color(u8),
@@ -651,6 +651,8 @@ impl std::fmt::Debug for Mesh {
 }
 impl Component for Mesh {
     const NAME: &'static str = "core.mesh";
+    /// Version 2 gives tangent streams a set index, serialized like TexCoord(n).
+    const VERSION: u32 = 2;
     const GEOMETRY: crate::Geometry = crate::Geometry::None;
     /// Positions, normals and tangents mapped ([`crate::Linear`]); triangles reversed under a mirror. A mesh with
     /// normals or tangents cannot follow a singular map ([`crate::Linear::singular`]): unsupported.
@@ -661,18 +663,18 @@ impl Component for Mesh {
                 match (sem, st) {
                     (Semantic::Position, Stream::F32x3(v)) => v.iter_mut().for_each(|x| *x = l.point(*x)),
                     // a singular map turns no normal or tangent: the mesh cannot follow it
-                    (Semantic::Normal | Semantic::Tangent, _) if l.singular() => {
+                    (Semantic::Normal | Semantic::Tangent(_), _) if l.singular() => {
                         return crate::world::Linearity::Unsupported;
                     }
                     (Semantic::Normal, Stream::F32x3(v)) => {
                         v.iter_mut()
                             .for_each(|x| *x = l.normal(*x).expect("not singular"));
                     }
-                    (Semantic::Tangent, Stream::F32x4(v)) => {
+                    (Semantic::Tangent(_), Stream::F32x4(v)) => {
                         v.iter_mut()
                             .for_each(|x| *x = l.tangent(*x).expect("not singular"));
                     }
-                    (Semantic::Position | Semantic::Normal | Semantic::Tangent, _) => {
+                    (Semantic::Position | Semantic::Normal | Semantic::Tangent(_), _) => {
                         return crate::world::Linearity::Unsupported;
                     }
                     _ => {}

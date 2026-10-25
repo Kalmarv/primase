@@ -127,6 +127,41 @@ fn number(o: &Object, field: &str) -> Result<f64, String> {
     }
 }
 
+/// Timing from the controller and its embedded animation, without fetching an ECLP resource or channel map.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct ClipTiming {
+    pub fps: f32,
+    pub end_frame: u32,
+    pub looping: bool,
+}
+
+impl ClipTiming {
+    pub fn duration(self) -> f64 { f64::from(self.end_frame) / f64::from(self.fps) }
+}
+
+/// Read only EBX timing. Unknown codecs remain errors with their actual codec value; no track decode occurs here.
+pub fn timing_from(doc: &primase_frostbite::ebx::Document) -> Result<ClipTiming, String> {
+    if doc.root_type != "ClipControllerAsset" { return Err(format!("{} is not a ClipControllerAsset", doc.root_type)); }
+    let controller = object(doc, 0)?;
+    let Some(Value::Pointer(Pointer::Internal(k))) = controller.field("Anim") else {
+        return Err("clip Anim is not in its document".into());
+    };
+    if doc.type_name(*k) != Some("EclipseAnimationAsset") { return Err(format!("clip Anim is a {:?}", doc.type_name(*k))); }
+    let anim = object(doc, *k)?;
+    if number(anim, "CodecType")? != ECLP_CODEC as f64 { return Err(format!("clip codec {} is not ECLP", number(anim, "CodecType")?)); }
+    let fps = number(controller, "FPS")? as f32;
+    let end = number(anim, "EndFrame")?;
+    checked_timing(fps, end, matches!(controller.field("IsLooping"), Some(Value::Bool(true))))
+}
+
+fn checked_timing(fps: f32, end: f64, looping: bool) -> Result<ClipTiming, String> {
+    if !fps.is_finite() || fps <= 0.0 { return Err(format!("clip FPS {fps} is not finite and positive")); }
+    if !end.is_finite() || end < 0.0 || end > f64::from(u32::MAX) || end.fract() != 0.0 {
+        return Err(format!("clip EndFrame {end} is not a nonnegative 32-bit frame index"));
+    }
+    Ok(ClipTiming { fps, end_frame: end as u32, looping })
+}
+
 /// The clip the `ClipControllerAsset` document `doc` (named `name`) states, a clip of the animation skeleton `skeleton`
 /// (an entity [`super::rig::insert_rig`] made): its resources fetched by `resource` (by id: type and bytes) and the
 /// documents it imports by `imported` (the reader's I/O, [`crate::read::game`]).
@@ -137,6 +172,7 @@ pub fn clip_from(
     imported: &Imports<'_>,
     skeleton: Entity,
 ) -> Result<SkateClip, String> {
+    let timing = timing_from(doc).map_err(|why| format!("{name}: {why}"))?;
     if doc.root_type != "ClipControllerAsset" {
         return Err(format!(
             "{name} is a {}, not a ClipControllerAsset",
@@ -212,15 +248,27 @@ pub fn clip_from(
             values: t.values.clone(),
         });
     }
-    let end_frame = number(anim, "EndFrame")?;
     Ok(SkateClip {
         name: name.to_owned(),
         skeleton,
-        fps: number(controller, "FPS")? as f32,
-        end_frame: end_frame as u32,
-        looping: matches!(controller.field("IsLooping"), Some(Value::Bool(true))),
+        fps: timing.fps,
+        end_frame: timing.end_frame,
+        looping: timing.looping,
         tracks: out,
     })
+}
+
+#[cfg(test)]
+mod timing_tests {
+    use super::*;
+    #[test]
+    fn listing_timing_is_seconds_and_refuses_lossy_frame_casts() {
+        assert_eq!(checked_timing(60.0, 720.0, true).expect("timing").duration(), 12.0);
+        for end in [-1.0, 1.5, f64::NAN, f64::from(u32::MAX) + 1.0] {
+            assert!(checked_timing(60.0, end, false).is_err());
+        }
+        for fps in [0.0, -1.0, f32::INFINITY] { assert!(checked_timing(fps, 720.0, false).is_err()); }
+    }
 }
 
 /// `clip` into `world` as one entity, with `core.name` its name.

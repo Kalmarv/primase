@@ -158,7 +158,7 @@ fn frame_change_keeps_fronts_and_bitangents() {
         let Some(src_t) = g["tangents"].as_array() else {
             continue;
         };
-        let Some(Stream::F32x4(tan)) = prim.streams.get(&Semantic::Tangent) else {
+        let Some(Stream::F32x4(tan)) = prim.streams.get(&Semantic::Tangent(0)) else {
             panic!("{stem} geometry {i}: stored tangents not read")
         };
         for (k, (t, s)) in tan.iter().zip(src_t).enumerate() {

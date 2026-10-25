@@ -89,7 +89,7 @@ fn slice_a_reads_through_the_convert_loop() {
 }
 
 /// The reader declares every name its read and load put in a world (`sekiro::convert::EMITTED_NAMES`, what a coverage
-/// report lists): slice A, read and loaded whole, holds no other name, and every declared name.
+/// report lists): slice A, read and loaded whole, holds no other name, and every name declared for the requested options.
 #[test]
 fn the_reader_declares_every_name_it_emits() {
     let (Some(root), Some(dll)) = (install(Game::Sekiro), oodle(Tool::Oodle6)) else {
@@ -102,6 +102,7 @@ fn the_reader_declares_every_name_it_emits() {
     };
     // read without states and with the event-flag states (the only read that emits conditions and state axes)
     let mut seen = BTreeSet::new();
+    let mut declared = BTreeSet::new();
     for states in [sekiro::StateClasses::None, sekiro::StateClasses::Event] {
         let options = sekiro::Options {
             region: Some(sekiro::Region {
@@ -111,6 +112,7 @@ fn the_reader_declares_every_name_it_emits() {
             states,
             ..Default::default()
         };
+        declared.extend(primase_fromsoft::sekiro::convert::emitted_names(&options));
         let mut reader = AreaReader::new(&root, "m11_01", decoder, options);
         let (world, _) = reader.read().unwrap();
         let all: BTreeSet<_> = world.iter::<Instance>().map(|(e, _)| e).collect();
@@ -121,10 +123,6 @@ fn the_reader_declares_every_name_it_emits() {
             }
         }
     }
-    let declared: BTreeSet<&str> = primase_fromsoft::sekiro::convert::EMITTED_NAMES
-        .iter()
-        .copied()
-        .collect();
     let undeclared: Vec<&String> = seen.iter().filter(|n| !declared.contains(n.as_str())).collect();
     assert!(undeclared.is_empty(), "emitted but not declared: {undeclared:?}");
     let unseen: Vec<&&str> = declared.iter().filter(|n| !seen.contains(**n)).collect();

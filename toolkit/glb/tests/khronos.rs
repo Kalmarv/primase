@@ -43,7 +43,7 @@ fn semantic(name: &str) -> Option<Semantic> {
     match name {
         "POSITION" => Some(Semantic::Position),
         "NORMAL" => Some(Semantic::Normal),
-        "TANGENT" => Some(Semantic::Tangent),
+        "TANGENT" => Some(Semantic::Tangent(0)),
         _ => n("TEXCOORD_")
             .map(Semantic::TexCoord)
             .or_else(|| n("COLOR_").map(Semantic::Color))

@@ -102,7 +102,8 @@ pub struct MtdParam {
     pub srgb: bool,
     /// The byte at 0x2f of the record: 1 on the colours.
     pub colour: bool,
-    /// CRC-32 of the UTF-16 bytes of the parameter's name in the material definition.
+    /// MaterialEx override key: CRC-32 of the UTF-16LE logical parameter name, zero for no override.
+    /// This need not equal `name`: C[PixelKill]_Int addresses the petal shader's opaque `_float_2` name.
     pub key: u32,
     pub default: [f32; 5],
 }

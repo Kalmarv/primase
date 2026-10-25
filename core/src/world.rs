@@ -1329,6 +1329,13 @@ impl World {
         self.next
     }
 
+    /// Reserve every index below `next` without creating entities. A freshly re-read subset that will be absorbed
+    /// into a newer World uses that World's `next_index`, so passes cannot reuse its other entities' ids.
+    /// Never rewinds the allocator or changes which entities are alive.
+    pub fn reserve_indices_before(&mut self, next: u32) {
+        self.next = self.next.max(next);
+    }
+
     /// The entities `e`'s components refer to (not its resources'), in no particular order, repeats possible.
     pub fn references(&self, e: Entity) -> Vec<Entity> {
         let mut out = Vec::new();
@@ -2664,6 +2671,18 @@ mod tests {
         assert_eq!(w.spawn_at(last), Err(IdError::Exhausted(last)));
         assert!(!w.is_alive(last));
         assert_eq!(w.spawn(), Entity::from_index(7));
+    }
+
+    #[test]
+    fn reserving_indices_for_a_reloaded_part_never_rewinds_or_spawns_entities() {
+        let mut world = World::new();
+        let first = world.spawn();
+        world.reserve_indices_before(100);
+        assert_eq!(world.entity_count(),1);
+        assert!(world.is_alive(first));
+        assert_eq!(world.spawn().index(),100);
+        world.reserve_indices_before(5);
+        assert_eq!(world.spawn().index(),101);
     }
 
     /// A part with an entity alive in the world it is absorbed into is an error that changes nothing.

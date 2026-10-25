@@ -289,7 +289,7 @@ fn stream(g: &Geometry, e: crate::rage::drawable::Element) -> Result<Element> {
         // GTA's vertex shaders take the binormal as cross(T, N) * w (VS_TransformD_81053d2c); glTF's bitangent is
         // cross(N, T) * w, and the frame change is a rotation: w negated
         (8, 0x02) => (
-            Semantic::Tangent,
+            Semantic::Tangent(0),
             Stream::F32x4(
                 bytes
                     .as_chunks::<16>()
@@ -1039,7 +1039,7 @@ mod tests {
         let super::Element::Core(semantic, s) = stream(&g, e).unwrap() else {
             panic!("a tangent is a core stream")
         };
-        assert_eq!(semantic, Semantic::Tangent);
+        assert_eq!(semantic, Semantic::Tangent(0));
         let d = crate::components::GTA.direction([1.0, 0.0, 0.0]);
         assert_eq!(s, Stream::F32x4(vec![[d[0], d[1], d[2], -1.0]]));
     }

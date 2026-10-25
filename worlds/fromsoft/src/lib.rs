@@ -8,6 +8,7 @@ pub mod collision;
 mod elden;
 pub mod emevd;
 pub mod flver;
+pub mod fmg;
 pub mod game;
 pub mod gparam;
 mod keys;

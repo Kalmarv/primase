@@ -62,7 +62,7 @@ fn quad(
         (Semantic::TexCoord(0), Stream::F32x2(uv.to_vec())),
     ]);
     if let Some(t) = tangent {
-        streams.insert(Semantic::Tangent, Stream::F32x4(vec![t; 4]));
+        streams.insert(Semantic::Tangent(0), Stream::F32x4(vec![t; 4]));
     }
     let e = world.spawn();
     world.insert(
@@ -97,7 +97,7 @@ fn run(world: &mut World, pipeline: &str) -> Result<RunReport, String> {
 fn tangents(world: &World, mesh: Entity) -> Vec<[f32; 4]> {
     match world.get::<Mesh>(mesh).unwrap().primitives()[0]
         .streams
-        .get(&Semantic::Tangent)
+        .get(&Semantic::Tangent(0))
     {
         Some(Stream::F32x4(t)) => t.clone(),
         _ => panic!("no tangents"),
@@ -231,7 +231,7 @@ fn needs_the_targets_choice_and_gltf_maps_and_leaves_what_has_no_frame() {
     assert!(
         !world.get::<Mesh>(mesh).unwrap().primitives()[0]
             .streams
-            .contains_key(&Semantic::Tangent)
+            .contains_key(&Semantic::Tangent(0))
     );
     // a map in another convention: normalize-normals first
     let mut world = World::new();
