@@ -286,13 +286,16 @@ writer address or exported disassembly for it was found in the text evidence rea
 time, if an offline capture later exists, must include the same controller identity and the actual cb4[9]
 vector, not only a third scalar named elevation. No Riders Republic launch is requested or authorized.
 
-## Archive coverage and the World boundary (write-only census round)
+## Archive coverage and the World boundary
 
-This is a code audit and newly written code, **not a run result**. No build, test, archive scan or image run was
-performed in this round. The counts below are the older build-25394987 inventory in the conversion's
-`docs/type-names.md` (six forges, 1,301,684 stored entries, 905 type IDs); they include base/patch copies, not
-active map placements or distinct resources after patch resolution. A dash means no applicable entry count.
-The new census must supply current counts and bytes before these figures are used for prioritization.
+Measured source: `scratch/primase-reset/tests-2b90202/resource_coverage.log`, recorded for primase
+`7c13e7c49`. Its `ANVIL_RESOURCE_TYPE` lines sum to **1,301,684 stored entries**,
+**24,547,897,056 stored payload bytes**, across **905 type IDs**. The census tests report
+3 passed, 0 failed. This is an index inventory, not a parser-success or rendering measurement. Counts include
+base/patch copies, not active map placements or distinct resources after patch resolution. Bytes exclude
+archive tables and padding and are not decompressed or resident image bytes. All archive-type rows below
+have measurements in this log; a missing measurement would be labelled **unmeasured**, never estimated.
+Read/drop/unread statuses and display ownership below remain the code audit's stated capabilities.
 
 Reused format evidence: the conversion's `docs/lighting.md` §4 and §8 (29-byte event presets, 49-byte forecasts,
 and GI's 418 checked one-volume/one-box bodies); `docs/effects.md` §3–4, `docs/entity-grammar.md`,
@@ -306,55 +309,55 @@ sky-undecoded statements are superseded by the readers already in this tree.
 instance or engine effect is supported. `read-but-dropped-before-World` identifies consumed structural data,
 which is not automatically a defect. A resource may be a dependency rather than a standalone catalog preview.
 
-| Type | Type ID | Older stored entries | Status and retained subset / open boundary | Owner / lab display |
-|---|---|---:|---|---|
-| Entity | `0984415E` | 615,110 | read: placed visuals, collision, water, decals, state; remaining bounded components retained once per owner this round | primase reader; geometry/overlays, Outliner and Properties Data |
-| EntityGroup | `3F742D26` | 56,837 | read: own Entity and expanded members; original full membership/hierarchy not retained as a group component | primase reader; occurrence rows, source component Data |
-| World | `FBB63E47` | 4 | read-but-dropped-before-World in region composition: GridDescriptions consumed; other World fields, including baked sky-transfer maps, not semantically decoded | primase reader; overview plus new standalone layout Data row; unread World tail remains explicit |
-| GridPartition | `0E2F4444` | 8 | read-but-dropped-before-World in region composition: cell selection/layout consumed | primase reader; overview/region controls plus new standalone cell-reference Data row; not a drawable object |
-| GridCellDataBlock | `AC2BBF68` | 66,359 | read: reached owner/cell/level in AnvilListed; complete original list not copied | primase reader; placement source data, overview |
-| Mesh | `415D9568` | 147,289 | read: compiled vertex/index/range data and material links | primase reader; meshes, Outliner, Mesh/Material Properties |
-| LODSelector | `51DC6B80` | 48,862 | read: meshes/impostors and authored distance metadata | primase reader; LOD forms and bounds overlay |
-| Impostor | `DFCD6E51` | 117 | read: cards and owned atlases; static-card approximation explicit | primase reader; geometry and material Data |
-| Material | `85C817C3` | 13,579 | read: parameters/texture/shader links; unsupported programs keep named failures | primase reader; swatches, Material Properties, notices/sentinels |
-| MaterialTemplate | `BCFB3C7A` | 432 | read: parameter roles, G-buffer stages/permutations; not every runtime binding is established | primase reader; bound material/shader inspection, no standalone template renderer |
-| TextureMap | `A2B7E917` | 46,365 | read: established stored formats, mips/layers; unknown storage profiles refuse | primase reader; Image editor/contact sheets and texture Data |
-| TextureSet | `D70E6670` | 10,027 | read: referenced texture slots retained through material/terrain owners | primase reader; owner texture rows; no standalone set composition |
-| CompiledMip | `1D4B87A3` | 25,031 | read: external image level attached to parent map | primase reader; parent Image editor's mip selection |
-| TerrainNodeLayer | `DCE0537E` | 1 | read: selected TNL nodes in AnvilTerrain | primase reader; near splat, explicit far tile/ring, collision overlay |
-| TNLChunk | `4A054F51` | 87,381 | read: decoded selected height/material nodes; not the runtime virtual cache views | primase reader; terrain geometry, layered materials |
-| TerrainMaterialBank | `4BE94285` | 1 | read: bank's material/detail ownership | primase reader; terrain material/layer rows |
-| TerrainMaterial | `01724188` | 195 | read: established detail parameters and TextureSet links | primase reader; terrain layers/material Data |
-| FloorHeightData | `92ADA771` | 2 | read: StoredFloorHeight::component retains coarse blocks; regular area composition uses TNL instead | new standalone floor catalog/Data row; vertical lowering remains caller-controlled, with a notice |
-| MeshShape | `B22B3E61` | 25,162 | read: triangles/material indices | primase reader; collision outlines/fill, Data |
-| SphereShape | `FA3F7A18` | 241 | read: analytic source shape | primase reader; lowered collision overlay |
-| CapsuleShape | `B8599052` | 290 | read: analytic source shape | primase reader; lowered collision overlay |
-| BoxShape | `4EC68E98` | 29 | read: analytic source shape | primase reader; lowered collision overlay |
-| ReferenceListShape | `2D675BA2` | 3,731 | read: bounded nested shape placements | primase reader; collision overlay; cycles/limits named |
-| CollisionMaterial | `74F7311D` | 263 | read **identity/name only**: physical material body remains unread | primase reader for physical fields; lab collision surface/name rows |
-| DDecalModel | `50563D58` | 70 | read: model textures/parameters via deferred-decal owners | primase reader; projected geometry/materials, unsupported family notice |
-| GrassPatternLibrary | `463CC1B8` | 1 | read: patterns/models retained in AnvilGrass | primase reader; lowered grass geometry/materials; simulation excluded |
-| SpotLight | `80320FB8` | 32 | read: stored spotlight via LightInstance; units require caller calibration | primase reader; core lights, light overlay and Properties |
-| LayeredSky | `24D32CF8` | 48 | read: established scattering/keyframe profiles | primase reader; scene Environment/Atmosphere, sky and source Data |
-| WorldAmbiance | `21C2D472` | 110 | read: owned sky/cube; lens flares and particle/weather simulation omitted | primase reader; sky/cube preview and named omissions |
-| TimeOfDayPropertyControllerData | `F0C85018` | 140 | read: established path/key profiles in AnvilSkyControllers | primase reader; evaluated scene lighting; source tracks in Data |
-| WeatherPropertyControllerData | `887004DC` | 63 | read: established scalar-path profiles in AnvilSkyControllers | primase reader; selected static state, unsupported paths named |
-| GIDynResource | `BAE98B30` | 16,956 | new read: one-volume/one-box grammar, bounded V1/V2/V3 RLE, V4 probe positions; **irradiance unresolved** | primase reader; new `gi` catalog, blue position markers, source Data; not added wholesale to area reads |
-| AmbianceAndTimeOfDayPreset | `E8ECCA01` | 290 | new read: season/forecast refs, hour, angle and flag kept separately; angle's role unresolved | primase reader; new `preset` catalog, metadata/notice, no invented placement |
-| ForecastPreset | `79B0E782` | 248 | new read: twelve finite stored lanes; lane meanings not inferred from names | primase reader; new `forecast` catalog, metadata/notice |
-| Season | `F7485E9F` | 75 | unread: names/reference targets known; complete 306/313-byte grammar and event selection not established here | primase reader |
-| WeatherRegionCellData | `F2BB7836` | 7 | unread: region weather ownership/overlap not decoded | primase reader |
-| TerrainSediments | `29191D7B` | 5 | unread: sediment/runtime cache producer missing | primase reader |
-| TerrainProceduralSet | `2F45393E` | 132 | unread: procedural ownership/cache recipe | primase reader |
-| TerrainProceduralMaterial | `4323218D` | 479 | unread: detail-cache material producer | primase reader |
-| TerrainProceduralSetBank | `65C3C7D0` | 1 | unread: bank grammar not established here | primase reader |
-| RiverWorldComponentData | `11BF3F3A` | 1 | unread: separate from already read/rendered river meshes/materials | primase reader |
-| SplashFX | `755ACE14` | 395 | unread: placed Visual has named unsupported status, no particle simulation | primase reader for stored action graph; simulation excluded |
-| FX | `824A23BA` | 800 | unread: component bytes now retained; referenced command graph not decoded | primase reader; source Data/unsupported owner marker |
-| WorldParticlesDescriptor | `8F3D5BB6` | 14 | unread: complete descriptor grammar not established | primase reader; simulation excluded |
-| SpawnPointSettings | `53903478` | 492 | unread: settings are not a world transform; do not invent spawn points | primase reader |
-| SpawnEntityBuilderDescriptor | `AC8AF394` | 329 | unread: builder/activation grammar | primase reader |
-| Animation / Skeleton / BuildTable | `0FA3067F` / `24AECB7C` / `22ECBE63` | 9,111 / 1,138 / 10,741 | existing read paths counted; characters and animations excluded from this round's implementation | existing reader/display owners |
+| Type | Type ID | Measured stored entries | Measured stored payload bytes | Status and retained subset / open boundary | Owner / lab display |
+|---|---|---:|---:|---|---|
+| Entity | `0984415E` | 615,110 | 1,006,714,992 | read: placed visuals, collision, water, decals, state; remaining bounded components retained once per owner this round | primase reader; geometry/overlays, Outliner and Properties Data |
+| EntityGroup | `3F742D26` | 56,837 | 48,078,950 | read: own Entity and expanded members; original full membership/hierarchy not retained as a group component | primase reader; occurrence rows, source component Data |
+| World | `FBB63E47` | 4 | 9,422,433 | read-but-dropped-before-World in region composition: GridDescriptions consumed; other World fields, including baked sky-transfer maps, not semantically decoded | primase reader; overview plus new standalone layout Data row; unread World tail remains explicit |
+| GridPartition | `0E2F4444` | 8 | 96,882 | read-but-dropped-before-World in region composition: cell selection/layout consumed | primase reader; overview/region controls plus new standalone cell-reference Data row; not a drawable object |
+| GridCellDataBlock | `AC2BBF68` | 66,359 | 13,748,693 | read: reached owner/cell/level in AnvilListed; complete original list not copied | primase reader; placement source data, overview |
+| Mesh | `415D9568` | 147,289 | 2,297,319,771 | read: compiled vertex/index/range data and material links | primase reader; meshes, Outliner, Mesh/Material Properties |
+| LODSelector | `51DC6B80` | 48,862 | 12,496,254 | read: meshes/impostors and authored distance metadata | primase reader; LOD forms and bounds overlay |
+| Impostor | `DFCD6E51` | 117 | 58,475 | read: cards and owned atlases; static-card approximation explicit | primase reader; geometry and material Data |
+| Material | `85C817C3` | 13,579 | 5,906,721 | read: parameters/texture/shader links; unsupported programs keep named failures | primase reader; swatches, Material Properties, notices/sentinels |
+| MaterialTemplate | `BCFB3C7A` | 432 | 27,812,678 | read: parameter roles, G-buffer stages/permutations; not every runtime binding is established | primase reader; bound material/shader inspection, no standalone template renderer |
+| TextureMap | `A2B7E917` | 46,365 | 5,389,325,071 | read: established stored formats, mips/layers; unknown storage profiles refuse | primase reader; Image editor/contact sheets and texture Data |
+| TextureSet | `D70E6670` | 10,027 | 1,893,106 | read: referenced texture slots retained through material/terrain owners | primase reader; owner texture rows; no standalone set composition |
+| CompiledMip | `1D4B87A3` | 25,031 | 6,769,346,733 | read: external image level attached to parent map | primase reader; parent Image editor's mip selection |
+| TerrainNodeLayer | `DCE0537E` | 1 | 734,128 | read: selected TNL nodes in AnvilTerrain | primase reader; near splat, explicit far tile/ring, collision overlay |
+| TNLChunk | `4A054F51` | 87,381 | 2,323,508,464 | read: decoded selected height/material nodes; not the runtime virtual cache views | primase reader; terrain geometry, layered materials |
+| TerrainMaterialBank | `4BE94285` | 1 | 536 | read: bank's material/detail ownership | primase reader; terrain material/layer rows |
+| TerrainMaterial | `01724188` | 195 | 50,573 | read: established detail parameters and TextureSet links | primase reader; terrain layers/material Data |
+| FloorHeightData | `92ADA771` | 2 | 23,960,653 | read: StoredFloorHeight::component retains coarse blocks; regular area composition uses TNL instead | new standalone floor catalog/Data row; vertical lowering remains caller-controlled, with a notice |
+| MeshShape | `B22B3E61` | 25,162 | 755,427,364 | read: triangles/material indices | primase reader; collision outlines/fill, Data |
+| SphereShape | `FA3F7A18` | 241 | 41,332 | read: analytic source shape | primase reader; lowered collision overlay |
+| CapsuleShape | `B8599052` | 290 | 53,107 | read: analytic source shape | primase reader; lowered collision overlay |
+| BoxShape | `4EC68E98` | 29 | 5,279 | read: analytic source shape | primase reader; lowered collision overlay |
+| ReferenceListShape | `2D675BA2` | 3,731 | 904,530 | read: bounded nested shape placements | primase reader; collision overlay; cycles/limits named |
+| CollisionMaterial | `74F7311D` | 263 | 74,701 | read **identity/name only**: physical material body remains unread | primase reader for physical fields; lab collision surface/name rows |
+| DDecalModel | `50563D58` | 70 | 14,954 | read: model textures/parameters via deferred-decal owners | primase reader; projected geometry/materials, unsupported family notice |
+| GrassPatternLibrary | `463CC1B8` | 1 | 4,595 | read: patterns/models retained in AnvilGrass | primase reader; lowered grass geometry/materials; simulation excluded |
+| SpotLight | `80320FB8` | 32 | 9,264 | read: stored spotlight via LightInstance; units require caller calibration | primase reader; core lights, light overlay and Properties |
+| LayeredSky | `24D32CF8` | 48 | 126,600,642 | read: established scattering/keyframe profiles | primase reader; scene Environment/Atmosphere, sky and source Data |
+| WorldAmbiance | `21C2D472` | 110 | 208,700 | read: owned sky/cube; lens flares and particle/weather simulation omitted | primase reader; sky/cube preview and named omissions |
+| TimeOfDayPropertyControllerData | `F0C85018` | 140 | 518,990 | read: established path/key profiles in AnvilSkyControllers | primase reader; evaluated scene lighting; source tracks in Data |
+| WeatherPropertyControllerData | `887004DC` | 63 | 19,150 | read: established scalar-path profiles in AnvilSkyControllers | primase reader; selected static state, unsupported paths named |
+| GIDynResource | `BAE98B30` | 16,956 | 4,454,954,016 | new read: one-volume/one-box grammar, bounded V1/V2/V3 RLE, V4 probe positions; **irradiance unresolved** | primase reader; new `gi` catalog, blue position markers, source Data; not added wholesale to area reads |
+| AmbianceAndTimeOfDayPreset | `E8ECCA01` | 290 | 56,909 | new read: season/forecast refs, hour, angle and flag kept separately; angle's role unresolved | primase reader; new `preset` catalog, metadata/notice, no invented placement |
+| ForecastPreset | `79B0E782` | 248 | 41,852 | new read: twelve finite stored lanes; lane meanings not inferred from names | primase reader; new `forecast` catalog, metadata/notice |
+| Season | `F7485E9F` | 75 | 23,163 | unread: names/reference targets known; complete 306/313-byte grammar and event selection not established here | primase reader |
+| WeatherRegionCellData | `F2BB7836` | 7 | 1,046 | unread: region weather ownership/overlap not decoded | primase reader |
+| TerrainSediments | `29191D7B` | 5 | 649 | unread: sediment/runtime cache producer missing | primase reader |
+| TerrainProceduralSet | `2F45393E` | 132 | 21,566 | unread: procedural ownership/cache recipe | primase reader |
+| TerrainProceduralMaterial | `4323218D` | 479 | 148,020 | unread: detail-cache material producer | primase reader |
+| TerrainProceduralSetBank | `65C3C7D0` | 1 | 431 | unread: bank grammar not established here | primase reader |
+| RiverWorldComponentData | `11BF3F3A` | 1 | 2,120,205 | unread: separate from already read/rendered river meshes/materials | primase reader |
+| SplashFX | `755ACE14` | 395 | 1,558,676 | unread: placed Visual has named unsupported status, no particle simulation | primase reader for stored action graph; simulation excluded |
+| FX | `824A23BA` | 800 | 670,463 | unread: component bytes now retained; referenced command graph not decoded | primase reader; source Data/unsupported owner marker |
+| WorldParticlesDescriptor | `8F3D5BB6` | 14 | 3,442 | unread: complete descriptor grammar not established | primase reader; simulation excluded |
+| SpawnPointSettings | `53903478` | 492 | 266,002 | unread: settings are not a world transform; do not invent spawn points | primase reader |
+| SpawnEntityBuilderDescriptor | `AC8AF394` | 329 | 103,454 | unread: builder/activation grammar | primase reader |
+| Animation / Skeleton / BuildTable | `0FA3067F` / `24AECB7C` / `22ECBE63` | 9,111 / 1,138 / 10,741 | 198,186,586 / 21,792,737 / 3,906,753 | existing read paths counted; characters and animations excluded from this round's implementation | existing reader/display owners |
 
 ### Embedded components are a different census
 
@@ -362,6 +365,7 @@ which is not automatically a defect. A resource may be a dependency rather than 
 `HoudiniDecalInstancerComponent` (`4148CD56`), `StaticDDecalComponent` (`5B413085`),
 `RigidBodyComponent` (`C177D702`), `GrassComponent` (`CB28F06D`), `GrassVisual` (`8FA80D8D`),
 `LightInstance` (`554C614C`) and the far-view instance flags are embedded objects, **not extra forge entries**.
+Their occurrence counts and payload bytes are **unmeasured by this log**; archive type totals cannot supply them.
 They already reach typed water/decal/collision/grass/light components or mesh instances. FarFake, FakeForest,
 IsNearFake and LongRange are placement classifications/list policy, not four newly discovered archive types.
 `WaterComponent`'s lake atlases and geometry, river material lowering, and far-ring selection have different
@@ -377,10 +381,10 @@ refusal (retaining every original successfully typed water/decal body again is n
 
 The notable still-opaque map component families are `FXComponent` (`D2BF93A6`),
 `AmbientEffectGeneratorComponent` (`713F0C7D`), `WildlifeSpawnerComponent` (`A8ABFC79`),
-`SpawnerComponent` (`E2791E7F`) and `PlayerSpawnActivatorComponent` (`A7033693`). Their counts cannot be taken
-from the forge table. Existing `tests/census.rs`'s Entity outcomes remain the full embedded-body census.
-The effects note's 226,918 ambient-generator owners / 227,389 instances are an older, narrower observation,
-not today's result. Most are sound generators; treating that count as missing particle visuals is wrong.
+`SpawnerComponent` (`E2791E7F`) and `PlayerSpawnActivatorComponent` (`A7033693`). Their occurrence counts and
+payload bytes are **unmeasured by this log**. Existing `tests/census.rs`'s Entity outcomes are the separate
+embedded-body census; no count from it or from older effects notes is substituted here. Ambient generators
+include sound sources, so an occurrence count would not by itself measure missing particle visuals.
 The registry establishes many length rules, but the polymorphic action/reference semantics and activation
 conditions need their own complete body contracts before a visual/spawn reader is written.
 
