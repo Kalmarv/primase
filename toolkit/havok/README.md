@@ -68,3 +68,10 @@ i32 material IDs, written by the clean-room decoder of the primase-oracles harne
 `dumps/havok-soup`. Counts, triangle order and materials compare exactly; positions
 within a bound derived from the two decoders' different dequantization arithmetic
 (the test states it). No game assets or oracle binaries are distributed.
+
+`cloth` reads the cloth and ragdoll objects of a tagfile by class among its items: `hclClothData` with its
+`hclSimClothData` (particles, fixed particles, rest poses, and the link, bend-link, compressible-link and local-range
+constraint sets; any other constraint set is kept by its class name), `hknpRagdollData` (its skeleton, bone-to-body map and
+body tags) and `hknpConstraintCinfo` (bodies, flags, ids and the class of its constraint data; atoms are not read). A field the
+file lacks is an error naming it. The field names are those `worlds/fromsoft/tests/havok_census.rs` printed (`CLASS`); its
+`PHYSICS` lines are the reader's check against the install.

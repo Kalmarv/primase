@@ -136,6 +136,37 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>) -> Result<()> {
                             }
                         }
                     }
+                    // the cloth and ragdoll reader on every file that holds either: what it read, or why not
+                    if classes.keys().any(|c| c.starts_with("hclClothData") || c.starts_with("hknpRagdollData")) {
+                        match primase_havok::cloth::read(&tag) {
+                            Ok(physics) => {
+                                let sims: Vec<_> = physics.cloths.iter().flat_map(|c| &c.sim_cloths).collect();
+                                let unread: BTreeSet<&str> = sims
+                                    .iter()
+                                    .flat_map(|s| &s.constraint_sets)
+                                    .filter_map(|s| match s {
+                                        primase_havok::cloth::ConstraintSet::Unread { class } => Some(class.as_str()),
+                                        _ => None,
+                                    })
+                                    .collect();
+                                println!(
+                                    "PHYSICS {} {id} {leaf} cloths {} sim_cloths {} particles {} fixed {} poses {} sets {} \
+                                     unread_sets {unread:?} ragdolls {} ragdoll_bones {} constraints {}",
+                                    game.name(),
+                                    physics.cloths.len(),
+                                    sims.len(),
+                                    sims.iter().map(|s| s.particles.len()).sum::<usize>(),
+                                    sims.iter().map(|s| s.fixed_particles.len()).sum::<usize>(),
+                                    sims.iter().map(|s| s.poses.len()).sum::<usize>(),
+                                    sims.iter().map(|s| s.constraint_sets.len()).sum::<usize>(),
+                                    physics.ragdolls.len(),
+                                    physics.ragdolls.iter().map(|r| r.skeleton.bones.len()).sum::<usize>(),
+                                    physics.constraints.len(),
+                                );
+                            }
+                            Err(e) => println!("PHYSICSERR {} {id} {leaf} {}", game.name(), e.detail),
+                        }
+                    }
                     let key = classes
                         .iter()
                         .map(|(c, n)| format!("{c}: {n}"))

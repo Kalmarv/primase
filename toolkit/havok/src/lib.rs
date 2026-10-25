@@ -3,6 +3,7 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod animation;
+pub mod cloth;
 mod convex;
 mod mesh;
 pub use convex::{ConvexCore, MAX_PLANES, MAX_VERTICES};

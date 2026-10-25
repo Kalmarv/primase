@@ -576,7 +576,7 @@ A character's or part's files are kept beyond the model and its clips:
 - `tests/havok_census.rs` (install-gated) prints, for twenty characters of each game, the classes of every Havok member of
   their chrbnd, anibnd, behbnd and texbnd binders (`HAVOK`, `CLASS` with the stored field names of the cloth, ragdoll,
   rigid body, constraint and physics classes, `HAVOKERR`) and every binder member by kind, extension and whether a
-  reader keeps it (`EXT`). A reader for cloth or ragdoll classes is written from those lines, not before.
+  reader keeps it (`EXT`). `primase_havok::cloth::read` (cloth data, ragdoll data, constraint infos) is written from those lines and the census prints what it reads of every such file (`PHYSICS`, or `PHYSICSERR` with the reason); the character reader does not keep its output yet.
 - `tests/character_census.rs` also prints `DUMMYDIR`: whether the dummies' stored forward and upward directions are unit
   vectors and perpendicular where the flag says upward is used. A direction is lowered only once that and the axes agree.
 - Not read: the Havok physics and ragdoll files of a character binder beyond what `unread` names, and what the TAE

@@ -192,7 +192,7 @@ fn small(v: Value<'_, '_>) -> Result<u32> {
     u32::try_from(v.signed()?).map_err(|_| invalid(v.offset, "value outside u32"))
 }
 
-fn skeleton(v: Value<'_, '_>) -> Result<Skeleton> {
+pub(crate) fn skeleton(v: Value<'_, '_>) -> Result<Skeleton> {
     let parents = i16s(v.field("parentIndices")?)?;
     let bones = list(v.field("bones")?, |b| {
         Ok(Bone {
