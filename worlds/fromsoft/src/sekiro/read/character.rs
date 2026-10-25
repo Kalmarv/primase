@@ -1404,23 +1404,33 @@ impl Reader for CharacterReader<'_> {
     }
     fn load(&mut self, world: &World, roots: &BTreeSet<Entity>) -> ConvertResult<(World, ConvertReport)> {
         self.last_load_reports.clear();
-        let mut part = world.subset(&world.closure(roots.iter().copied()));
+        let mut keep = world.closure(roots.iter().copied());
+        // A previous root may already have loaded this source skeleton. Preserve
+        // its existing identity in the subset: spawn_at cannot recreate an older
+        // id below the world's allocator, and a new id would duplicate the rig.
+        for (entity, source) in world.iter::<animation::ClipSource>() {
+            if !keep.contains(&entity)
+                || world.has::<primase_havok::world::HavokAnimation>(entity)
+                || world.has::<primase_core::Clip>(entity)
+            { continue; }
+            let label = format!("{} havok skeleton", source.character);
+            let existing: Vec<_> = world.iter::<primase_core::Skeleton>()
+                .filter(|(e, _)| world.get::<Name>(*e).is_some_and(|name| name.0 == label))
+                .map(|(e, _)| e).collect();
+            if existing.len() > 1 {
+                return Err(format!("clip {}: ambiguous source skeleton {label:?}", source.key).into());
+            }
+            if let Some(&skeleton) = existing.first() {
+                keep.extend(world.closure([skeleton]));
+            }
+        }
+        let mut part = world.subset(&keep);
         let selected:Vec<_>=part.iter::<animation::ClipSource>().map(|(entity,source)|(entity,source.clone())).collect();
         let mut report=Vec::new();
         for (entity,source) in selected {
             use primase_core::Component;
             source.verify(entity,&part)?;
             if part.has::<primase_havok::world::HavokAnimation>(entity) || part.has::<primase_core::Clip>(entity) {continue}
-            // A previous root may already have loaded this exact source skeleton.
-            // Borrow its identity while parsing this root, so a sequence of loads
-            // shares one skeleton just as a batched load does.
-            let label=format!("{} havok skeleton",source.character);
-            let existing:Vec<_>=world.iter::<primase_core::Skeleton>().filter(|(e,_)|
-                world.get::<Name>(*e).is_some_and(|name|name.0==label)).collect();
-            if existing.len()>1 {return Err(format!("clip {}: ambiguous source skeleton {label:?}",source.key).into());}
-            if let Some(&(e,skeleton))=existing.first() && !part.is_alive(e) {
-                part.spawn_at(e)?;part.insert(e,skeleton.clone());part.insert(e,Name(label));
-            }
             let read=self.clips.load(&self.install,&self.decoder,&source,entity,&mut part)?;
             self.pending.extend(animation_notices(&read));
             report.push(("fromsoft clip load".into(),format!("{}: raw havok.animation, {} bones, {} events; no lowering or map policy applied",
@@ -1484,6 +1494,32 @@ mod tests {
     }
 
     #[test]
+    fn later_clip_roots_borrow_an_old_skeleton_id_before_decoding() {
+        let mut reader = unread_clip_reader();
+        let (mut plans, _) = reader.read().unwrap();
+        let skeleton = plans.spawn();
+        plans.insert(skeleton, primase_core::Skeleton::default());
+        plans.insert(skeleton, Name("c1010 havok skeleton".into()));
+        plans.spawn();
+        let next = plans.next_index();
+        let count = plans.entity_count();
+        let roots: Vec<_> = plans.iter::<animation::ClipSource>()
+            .map(|(entity, source)| (entity, source.name.clone())).collect();
+        assert_eq!(roots.len(), 2);
+        for (entity, name) in roots {
+            // Deliberately unreadable HKX must reach the decoder even when an
+            // earlier root's source skeleton is below the allocator. Previously
+            // this failed first with spawn_at's NotAscending error.
+            let error = reader.load(&plans, &[entity].into()).unwrap_err().to_string();
+            assert!(error.contains(&name) && error.contains("Havok tagfile not read"), "{error}");
+            assert_eq!(plans.next_index(), next);
+            assert_eq!(plans.entity_count(), count);
+            assert!(plans.has::<primase_core::Skeleton>(skeleton));
+            assert!(!plans.has::<primase_havok::world::HavokAnimation>(entity));
+        }
+    }
+
+    #[test]
     fn eager_helper_reports_every_bad_root_and_preserves_the_existing_destination() {
         let mut reader=unread_clip_reader();let mut destination=World::new();
         let existing=destination.spawn();destination.insert(existing,Name("existing model".into()));
@@ -1505,7 +1541,7 @@ mod tests {
         let rows=character_display_masks(&world);
         assert_eq!(rows.len(),2);
         assert_eq!(rows.iter().find(|(entity,_)|*entity==first).unwrap().1,groups);
-        assert_eq!(rows.iter().find(|(entity,_)|*entity==second).unwrap().1,vec![vec![]]);
+        assert_eq!(rows.iter().find(|(entity,_)|*entity==second).unwrap().1,vec![Vec::<u32>::new()]);
         assert!(!world.component_names().contains(&"core.draw_groups"));
         assert!(world.resource::<source::NpcRows>().is_none());
     }

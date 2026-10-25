@@ -72,7 +72,8 @@ fn a_characters_animations_read_lower_and_map_onto_its_model() -> Result<()> {
         .count();
     assert_eq!(clip_members, animations.animations);
     assert_eq!(w.iter::<HavokAnimation>().count(), animations.animations);
-    // each clip states the binder and the member it was read from (`core.provenance`: the archive and the file)
+    // Plan and loaded clips retain the same canonical archive path, including
+    // companion binders, so viewers can group clips without decoding their key.
     for (e, _) in w.iter::<HavokAnimation>() {
         let name = &w.get::<Name>(e).unwrap().0;
         let origins = &w
@@ -84,11 +85,11 @@ fn a_characters_animations_read_lower_and_map_onto_its_model() -> Result<()> {
         };
         let binder = origin.archive.as_deref().unwrap();
         assert!(
-            binder == "c1010.anibnd"
+            binder == "/chr/c1010.anibnd.dcx"
                 || animations
                     .companions
                     .iter()
-                    .any(|c| binder == format!("{c}.anibnd")),
+                    .any(|c| binder == format!("/chr/{c}.anibnd.dcx")),
             "{name} read from {binder}"
         );
         assert!(
