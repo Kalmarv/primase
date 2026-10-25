@@ -3,9 +3,12 @@
 //! travel markers) is a `core.marker` whose kind is the word for its type (`sound`, `sfx`, `environment_map_point`,
 //! `weather_override` ..., `type_<n>` for a code SoulsFormats does not name) at the region's stored place, with the stored
 //! record (`fromsoft.region`: type, shape and its dimensions, entity ID, the type's data as hexadecimal bytes) on the
-//! same entity. Each event is an entity of its own named as stored with its record (`fromsoft.event`: type, event ID,
-//! the part and region it names, entity ID, the type's data as bytes). Nothing in a type's data is decoded.
-use crate::msb::{Event, Region, euler_transform};
+//! same entity. Each part of a kind the area read does not place as a model (an enemy, a player start, a dummy object,
+//! asset or enemy, a connect collision) is a `core.marker` of the part's kind word (`enemy`, `player_start`, ...) at its
+//! stored place with its record (`fromsoft.unplaced_part`). Each event is an entity of its own named as stored with its
+//! record (`fromsoft.event`: type, event ID, the part and region it names, entity ID, the type's data as bytes).
+//! Nothing in a type's data is decoded. `leave-out` takes region type words and part kind words.
+use crate::msb::{Event, Region, UnplacedPart, euler_transform};
 use crate::sekiro::source::{MapRecords, ReadScope};
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Component, Marker, Name, Resource, Source, Transform, World};
@@ -73,6 +76,7 @@ impl Pass for LowerFromSoftMapRecords {
             Source::NAME,
             Region::NAME,
             Event::NAME,
+            UnplacedPart::NAME,
         ]
     }
     fn removes(&self) -> &[&'static str] {
@@ -119,6 +123,29 @@ impl Pass for LowerFromSoftMapRecords {
                 "region rotations read as a part's Euler angles; shapes not drawn",
                 1,
             );
+        }
+        for part in records.parts {
+            if self.leave_out.contains(part.kind) {
+                log.count(&format!("{} parts left out", part.kind), 1);
+                continue;
+            }
+            let transform = euler_transform(part.position, part.rotation_degrees, [1.; 3], part.index)
+                .map_err(|e| e.to_string())?;
+            let e = world.spawn();
+            world.insert(
+                e,
+                Marker {
+                    kind: part.kind.to_owned(),
+                    ground: None,
+                    yaw: None,
+                },
+            );
+            world.insert(e, transform);
+            world.insert(e, Name(part.name.clone()));
+            world.insert(e, Source(label(&part.name)));
+            log.count(&format!("{} parts", part.kind), 1);
+            world.insert(e, part);
+            log.place(e);
         }
         for event in records.events {
             let e = world.spawn();
@@ -174,6 +201,18 @@ mod tests {
                 entity_id: 9,
                 type_data: vec![3],
             }],
+            parts: vec![UnplacedPart {
+                index: 4,
+                name: "c1000_0000".to_owned(),
+                kind: "enemy",
+                model: Some("c1000".to_owned()),
+                npc_param: Some(100),
+                position: [5., 6., 7.],
+                rotation_degrees: [0.; 3],
+                scale: [1.; 3],
+                entity_id: 3,
+                entity_group_ids: [0; 8],
+            }],
             spawn_region: Some(8),
         });
         w
@@ -194,7 +233,11 @@ mod tests {
         pass("").run(&mut w, &mut log).unwrap();
         assert!(w.resource::<MapRecords>().is_none());
         let kinds: Vec<_> = w.iter::<Marker>().map(|(_, m)| m.kind.clone()).collect();
-        assert_eq!(kinds, ["sound", "wind_sfx", "type_77"]);
+        assert_eq!(kinds, ["sound", "wind_sfx", "type_77", "enemy"]);
+        assert_eq!(log.counts["enemy parts"], 1);
+        let (enemy, part) = w.iter::<UnplacedPart>().next().unwrap();
+        assert_eq!((part.npc_param, part.model.as_deref()), (Some(100), Some("c1000")));
+        assert_eq!(w.get::<Transform>(enemy).unwrap().cols[3], [5., 6., -7.]);
         assert_eq!(log.counts["spawn regions left to lower-fromsoft-extras"], 1);
         let (e, _) = w.iter::<Marker>().next().unwrap();
         assert_eq!(w.get::<Name>(e).unwrap().0, "Birds");
@@ -213,8 +256,9 @@ mod tests {
     fn a_kind_left_out_is_counted_and_a_bad_word_is_refused() {
         let mut w = world();
         let mut log = PassLog::default();
-        pass("wind_sfx+sound").run(&mut w, &mut log).unwrap();
+        pass("wind_sfx+sound+enemy").run(&mut w, &mut log).unwrap();
         assert_eq!(w.iter::<Marker>().count(), 1);
+        assert_eq!(log.counts["enemy parts left out"], 1);
         assert_eq!(log.counts["wind_sfx regions left out"], 1);
         assert_eq!(log.counts["sound regions left out"], 1);
         let o = pass("sound+wind_sfx").options();

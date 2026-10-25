@@ -364,6 +364,12 @@ impl Report {
                  holds (a sound's id, an effect, a message, a treasure's item lot) is not decoded, only the header, \
                  the shape and the references to a part and a region",
             ),
+            (
+                self.extras.part_kinds.values().sum::<usize>(),
+                NoticeKind::Selection,
+                "enemies, player starts, dummies and connect collisions kept as records at their stored place \
+                 (fromsoft.map_records): their think, patrol and talk data is not read",
+            ),
         ] {
             if count > 0 {
                 out.push(Notice::new(stage, kind, reason, count as u64));

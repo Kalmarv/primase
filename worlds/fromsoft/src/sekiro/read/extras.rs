@@ -30,6 +30,9 @@ pub struct Report {
     /// for a code SoulsFormats does not name), and the regions outside the read region.
     pub region_types: std::collections::BTreeMap<String, usize>,
     pub event_types: std::collections::BTreeMap<String, usize>,
+    /// The parts of kinds the read does not place as models, kept as records, by the word for their kind.
+    pub part_kinds: std::collections::BTreeMap<String, usize>,
+    /// Regions and unplaced parts outside the read region: not kept.
     pub regions_dropped_outside: usize,
 }
 fn unit(v: [f32; 3]) -> Result<[f32; 3]> {
@@ -176,9 +179,10 @@ pub fn assemble(
     Ok(report)
 }
 
-/// Every region (inside the read region by its position, as spawn points are) and every event of the layout as the
-/// `fromsoft.map_records` resource, counted by type into `report`. The spawn regions are among them: the extras make
-/// markers of those, and the records pass leaves them to it.
+/// Every region and every part of a kind the read does not place as a model (each inside the read region by its
+/// position, as spawn points are) and every event of the layout as the `fromsoft.map_records` resource, counted by type
+/// into `report`. The spawn regions are among them: the extras make markers of those, and the records pass leaves them
+/// to it.
 pub fn records(layout: &MapLayout, region: Option<[f32; 4]>, report: &mut Report, world: &mut World) -> Result<()> {
     let inside = |p: [f32; 3]| region.is_none_or(|r| p[0] >= r[0] && p[0] < r[2] && -p[2] >= r[1] && -p[2] < r[3]);
     let word = |name: Option<&str>, code: u32| name.map_or_else(|| format!("type_{code}"), str::to_owned);
@@ -195,9 +199,19 @@ pub fn records(layout: &MapLayout, region: Option<[f32; 4]>, report: &mut Report
     for e in &events {
         *report.event_types.entry(word(e.type_name, e.type_code)).or_default() += 1;
     }
+    let mut parts = Vec::new();
+    for p in layout.unplaced_parts() {
+        if !inside(p.position) {
+            report.regions_dropped_outside += 1;
+            continue;
+        }
+        *report.part_kinds.entry(p.kind.to_owned()).or_default() += 1;
+        parts.push(p);
+    }
     world.insert_resource(crate::sekiro::source::MapRecords {
         regions,
         events,
+        parts,
         spawn_region: layout.generation.spawn_region,
     });
     Ok(())

@@ -404,6 +404,9 @@ impl Resource for AreaExtras {
 pub struct MapRecords {
     pub regions: Vec<crate::msb::Region>,
     pub events: Vec<crate::msb::Event>,
+    /// The parts of the kinds the read does not place as models (enemies, player starts, dummies, connect
+    /// collisions) whose position lies inside the read region.
+    pub parts: Vec<crate::msb::UnplacedPart>,
     /// The region type code of spawn points in the layout's generation, which `lower-fromsoft-extras` makes markers
     /// of: the records pass leaves those regions to it.
     pub spawn_region: Option<u32>,

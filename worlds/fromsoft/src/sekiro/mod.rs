@@ -24,7 +24,7 @@ pub use read::character::{
 };
 pub use read::collision::Report as CollisionReport;
 pub use read::draw_param::{DrawParams, Report as DrawParamReport, available as draw_params_available};
-pub use read::extras::{Report as ExtrasReport, light_record};
+pub use read::extras::{Report as ExtrasReport, light_record, records as read_map_records};
 pub use read::objects::Report as ObjectCollisionReport;
 pub use read::params::{NpcPlacement, npc_placements, read_npc_param, read_param};
 pub use read::{convert, states};

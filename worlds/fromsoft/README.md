@@ -650,6 +650,15 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
   named as stored. Joining ledges (`primase_meshops::chain`), the surface under
   them (`primase_meshops::SurfaceIndex`), choosing a spawn and naming markers are
   a program's.
+- `lower-fromsoft-map-records{leave-out=...}` lowers `fromsoft.map_records` (read with `Options::map_records`, off by
+  default): each region of a type but the spawn point a `core.marker` of the type's word at its stored place
+  (`msb::euler_transform`, the parts' Euler convention, a stated approximation; the shape is not drawn) with the stored
+  record on the entity (`fromsoft.region`: type code and name, shape and dimensions, entity ID, the type's data as
+  hexadecimal bytes); each enemy, player start, dummy and connect collision a marker of its kind word with
+  `fromsoft.unplaced_part`; each event a named entity with `fromsoft.event` and no place. The type words are
+  SoulsFormatsNEXT's `RegionType`/`EventType` names for each generation (`Generation::region_type`, `event_type`); a
+  code it does not name is `type_<n>`. `leave-out` takes those words (empty for none). Nothing in a type's data is
+  decoded.
 
 The collision and geometry the earlier reader produced by itself are this explicit
 composition: `lower-fromsoft-collision{hit-filters=8+27,water=22+36,leave-out=29+40,reach=50},
@@ -676,6 +685,52 @@ baseline, read through the ReSkate interchange tables): all non-roof triangles a
 the water table agree exactly. The light, ledge and marker passes are checked by
 hand-worked cases (`tests/extras_policy.rs`, primase-meshops' curve tests); the
 earlier exporter's extras and object scenes they were once compared with are retired.
+
+## Map coverage
+
+What a Sekiro or Elden Ring map stores, and whether primase keeps it. Written from the code (`read/area.rs`,
+`read/collision.rs`, `read/extras.rs`, `msb.rs`, `passes/`) and the lab's views; counts are given only where a census
+has printed them, and every other count is a line of `tests/map_coverage_census.rs` (install-gated: `FILES` the area's
+archive paths by pattern, `MEMBERS` the members of its binders, `PARTS`, `REGIONS` and `EVENTS` the MSB's types, `WORLD`
+what the read keeps) for three areas of each game. Status: **read** (a reader keeps it and a pass or the lab shows it),
+**read-header** (header and shape read, the type's own data kept as bytes), **dropped** (read, then not in the world
+unless an option asks), **unread** (no reader opens it). A row's owner is the primase reader, then the lab's display.
+
+| Type | Count | Status | Owner (reader / display) |
+|---|---|---|---|
+| Map pieces (MSB part kind 0, `<mapbnd>` FLVER) | `PARTS map_piece` | read | `read/area.rs`, `lower-fromsoft-geometry` / Objects, viewport |
+| Objects (Sekiro kind 1) and assets (Elden Ring kind 13) | Sekiro 1395 objbnds, Elden Ring 12657 geombnds (object census) | read; animations `object_animations` only, not lowered onto placements | `read/area.rs`, `read/animation.rs` / Objects; clips listed under Clips |
+| Enemies, player starts, dummy objects/assets/enemies, connect collisions (parts) | `PARTS` kinds | **dropped** without `Options::map_records`; with it, read as markers (kind = the part's word) with `fromsoft.unplaced_part` | `msb::MapLayout::unplaced_parts`, `lower-fromsoft-map-records` / Markers, Properties. An enemy's NPC row is read; its think/patrol/talk data is not |
+| Map collision, high resolution (`h<area>.hkxbhd`) | `FILES h<area>` | read | `read/collision.rs`, `lower-fromsoft-collision` / Collision |
+| Map collision, low resolution (`l<area>.hkxbhd`) | `FILES l<area>` | unread (no option selects it) | none. Decided by the `FILES`/`MEMBERS` lines: the same Havok layout as the high file, if its members are `.hkx` |
+| Object and asset collision | Elden Ring: `object_animation_census`/collision census | read (high; Elden Ring's low where no high) | `read/objects.rs`, `lower-fromsoft-object-collision` / Collision |
+| Part collision (a character form's `_collidable.hkx`) | character census | read | `read/character.rs`, `lower-fromsoft-part-collision` / Collision |
+| Navmesh (`n<area>…nvmhktbnd`) and other navigation binders | `FILES` patterns with `nvm`, `MEMBERS` | unread | none. Decided by `MEMBERS` (the extensions inside) and a tagfile read of one member |
+| Decals | material slots of class `decal` (`Report::material_classes`) | read as materials (`MeshDecal`), drawn on the decal layer, queue order a convention (approximation, noticed). Decal *placements* beyond the material slots: none known in the MSB | `lower-fromsoft-materials` / Shaded view |
+| Water | slots of class `water`; collision class soup `water` | read as a material (the program's water colour and normal map; depth, refraction and flow not evaluated) and as a collision soup | `lower-fromsoft-materials`, `lower-fromsoft-collision` / Shaded, Collision |
+| Lights, bank 0 (`<area>_0000.btl.dcx`) | `FILES _NNNN.btl` | read | `read/extras.rs`, `lower-fromsoft-lights` / Lights |
+| Light banks other than 0 | `FILES _NNNN.btl` | unread (the reader opens `_0000` only) | none. `FILES` says how many banks exist per area |
+| Light probes / global illumination data | no pattern the code names; `FILES` lists the unread patterns | unread | none. Decided by the largest unread `FILES` pattern with a name that says probe or GI |
+| Environment-map points and boxes (regions `environment_map_point`, `environment_map_effect_box`, `environment_map_output`) | `REGIONS` | read-header | `lower-fromsoft-map-records` / Markers. The part's `env_map` id and the draw-param `Env Map:Editor` group are read (`msb::PartGparam`) |
+| Environment cubemap textures | `FILES` patterns of texture binders | unread unless a material binds them | none |
+| Sound and effect regions (`sound`, `sfx`, `wind_sfx`, `wind_area`, `muffling_*`, `sound_region`, `sound_space_override`) | `REGIONS` | read-header: shape, place, entity ID read; sound id and effect id are in the type data, kept as bytes | `lower-fromsoft-map-records` / Markers. The `data_lengths` of a type decide whether a fixed record can be decoded |
+| Weather and map-name regions (Elden Ring `weather_override`, `weather_create_asset_point`, `map_name_override`, `play_area`, `hitset`, …) | `REGIONS` | read-header | same |
+| Spawn points (region 8) | `REGIONS spawn_point` | read | `read/extras.rs`, `lower-fromsoft-extras` (`travel` markers; the facing convention is not established) / Markers |
+| Other regions (invasion points, messages, patrol routes, warp points, connections, auto-draw groups, …) | `REGIONS` | read-header | `lower-fromsoft-map-records` / Markers |
+| Hang edges (`<area>.edgebhd`) | `FILES edgebhd` | read (hang edges; grapple and hug kinds counted, not read) | `read/extras.rs`, `lower-fromsoft-extras` / Curves |
+| SpeedTree trees | assets `aeg801_*` | read as assets with their LOD levels; billboard cards left out (`leave-out=billboard`: the program places them from the camera, core has no camera-facing primitive) | `read/area.rs`, `lower-fromsoft-geometry` / Objects |
+| Grass | `Report::grass_parts`, `Report::grass` | grass config ids and `GrassTypeParam` rows read (Elden Ring); no blade is placed (the game scatters by density) | `read/area.rs`, `param::GrassParam` / notices only |
+| Far view (Sekiro `m9xxxxx` backdrops) | `Report::far_prototypes`, `far_placements` | read, then left out by `drop-fromsoft-far` unless the program keeps them | `read/area.rs`, `drop-fromsoft-far` / Objects |
+| Far view (Elden Ring LOD tiles) | `Parents::Include` parts, `FILES` | the larger tiles' parts for the small tile are read (`Options::parents`); distant-terrain files beyond them: unread | `read/area.rs` / Objects. `FILES` lists the unread patterns |
+| Events (`EVENT_PARAM_ST`) of every type (treasure, generator, obj_act, navmesh, patrol_info, …) | `EVENTS` | read-header: type, event ID, the part and region named, entity ID read; the type's data kept as bytes. `map_offset` (Sekiro) is decoded and used | `msb::MapLayout::map_events`, `lower-fromsoft-map-records` / Other world data rows, Properties (no place of their own) |
+| Event scripts (`.emevd`) | one per area | Sekiro: read and interpreted for part presence (`states=event`); Elden Ring: unread (refused) | `emevd.rs`, `read/states.rs` / State axes |
+| Draw-param environment | `draw_param_census` | read for the file the caller names; the file choice from the weather and events, and Elden Ring's `_weatherbase`/`_weatheroutdoor`/`_commonevent` layers: unread | `read/draw_param.rs`, `lower-fromsoft-environment` / Environment, Properties |
+| Textures (`.tpf`, Sekiro's `.tpfbhd`), shader bundles, materials | per area | read | `read/textures.rs`, `read/shaders.rs` / Shaded and Game shader views |
+
+Open rows, in the order the census can close them: the `l<area>` low-resolution collision, the navmesh binders, light
+banks other than 0, the light-probe pattern (if `FILES` names one), the decoding of the sound/effect/environment-map
+regions' type data (`data_lengths`), the Elden Ring far tiles, the Elden Ring event scripts, and object clips lowered
+onto placements.
 
 ## Consumer normal-map frame
 

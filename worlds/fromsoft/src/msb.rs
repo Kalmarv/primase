@@ -839,6 +839,84 @@ impl primase_core::Component for Event {
     }
 }
 
+impl PartKind {
+    /// The word for the kind (a lower-case word, as a marker's kind is).
+    pub fn word(self) -> &'static str {
+        match self {
+            PartKind::MapPiece => "map_piece",
+            PartKind::Object => "object",
+            PartKind::Enemy => "enemy",
+            PartKind::Player => "player_start",
+            PartKind::Collision => "collision",
+            PartKind::DummyObject => "dummy_object",
+            PartKind::DummyEnemy => "dummy_enemy",
+            PartKind::ConnectCollision => "connect_collision",
+            PartKind::Asset => "asset",
+            PartKind::DummyAsset => "dummy_asset",
+        }
+    }
+}
+
+/// A part of a kind the area read does not place as a model (`fromsoft.unplaced_part`): an enemy, a player start, a
+/// dummy object, asset or enemy, a connect collision. What the layout stores of it, as stored: its place in the map's
+/// frame, its model's name, its entity ID and groups, and an enemy's NPC param row. What an enemy does (its think
+/// param, patrol, talk) lives in other parts of the record and in the event scripts and is not read.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct UnplacedPart {
+    /// Its index in the layout's parts ([`Part::index`]).
+    pub index: usize,
+    pub name: String,
+    pub kind: &'static str,
+    pub model: Option<String>,
+    pub npc_param: Option<i32>,
+    pub position: [f32; 3],
+    pub rotation_degrees: [f32; 3],
+    pub scale: [f32; 3],
+    pub entity_id: i32,
+    pub entity_group_ids: [i32; 8],
+}
+impl primase_core::Component for UnplacedPart {
+    const NAME: &'static str = "fromsoft.unplaced_part";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
+        primase_core::world::Linearity::Invariant
+    }
+    fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, primase_core::json::JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+}
+impl MapLayout {
+    /// The parts of the kinds the area read does not place as models, in part order.
+    pub fn unplaced_parts(&self) -> Vec<UnplacedPart> {
+        self.parts
+            .iter()
+            .filter(|p| {
+                matches!(
+                    p.kind,
+                    PartKind::Enemy
+                        | PartKind::Player
+                        | PartKind::DummyObject
+                        | PartKind::DummyAsset
+                        | PartKind::DummyEnemy
+                        | PartKind::ConnectCollision
+                )
+            })
+            .map(|p| UnplacedPart {
+                index: p.index,
+                name: p.name.clone(),
+                kind: p.kind.word(),
+                model: p.model.and_then(|i| self.models.get(i)).map(|m| m.name.clone()),
+                npc_param: p.npc_param,
+                position: p.position,
+                rotation_degrees: p.rotation_degrees,
+                scale: p.scale,
+                entity_id: p.entity_id,
+                entity_group_ids: p.entity_group_ids,
+            })
+            .collect()
+    }
+}
+
 fn hex<S: serde::Serializer>(bytes: &[u8], s: S) -> std::result::Result<S::Ok, S::Error> {
     use std::fmt::Write;
     let mut text = String::with_capacity(bytes.len() * 2);
