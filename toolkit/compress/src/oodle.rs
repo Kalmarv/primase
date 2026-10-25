@@ -138,9 +138,12 @@ impl Decompressor for Oodle {
                 Err(invalid("oodle", 0, "nonempty payload for empty output"))
             };
         }
+        // Windows has the library alone: the portable decoder is the fallback elsewhere
+        #[cfg(windows)]
+        let Backend::Library(library) = &self.backend;
+        #[cfg(not(windows))]
         let library = match &self.backend {
             Backend::Library(library) => library,
-            #[cfg(not(windows))]
             Backend::Portable => {
                 return crate::reference::decode(input, expected).map_err(|e| invalid("oodle", 0, e));
             }
@@ -192,9 +195,11 @@ impl Oodle {
         if input.is_empty() {
             return Ok(Vec::new());
         }
+        #[cfg(windows)]
+        let Backend::Library(library) = &self.backend;
+        #[cfg(not(windows))]
         let library = match &self.backend {
             Backend::Library(library) => library,
-            #[cfg(not(windows))]
             Backend::Portable => {
                 return Err(invalid(
                     "oodle",

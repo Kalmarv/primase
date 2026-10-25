@@ -37,7 +37,7 @@ disallowed-methods = [
     { path = "std::fs::hard_link", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
     { path = "std::fs::set_permissions", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
     { path = "std::fs::soft_link", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
-    { path = "std::os::unix::fs::symlink", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
+    { path = "std::os::unix::fs::symlink", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)", allow-invalid = true },
     { path = "std::path::Path::read_link", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
     { path = "std::path::Path::is_symlink", reason = "file access: readers and writers only (CONTRIBUTING.md, Roles)" },
     { path = "std::env::args", reason = "hidden options: the caller passes them (CONTRIBUTING.md, Roles)" },
