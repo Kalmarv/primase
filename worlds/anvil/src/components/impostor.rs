@@ -1,5 +1,6 @@
 //! Stored impostor geometry and the render explanations that survive lowering.
 use primase_core::{Component, Entity};
+use super::stored::{Controller, StoredImpostor, StoredSky, StoredSpotLight};
 
 #[derive(Clone,Debug,PartialEq)]
 pub struct AnvilSurfaceBake {pub material:Entity,pub atlas_size:u32,pub texels_per_metre:f32}
@@ -12,15 +13,23 @@ impl Component for AnvilSurfaceBake{
 #[derive(Clone,Debug,PartialEq)]
 pub struct AnvilSkyControllers {
     pub look:String,
-    pub time_of_day:crate::read::controller::Controller,
-    pub weather:Option<crate::read::controller::Controller>,
+    pub time_of_day:Controller,
+    pub weather:Option<Controller>,
 }
 impl Component for AnvilSkyControllers {
     const NAME:&'static str="anvil.sky_controllers";
     const GEOMETRY:primase_core::Geometry=primase_core::Geometry::None;
     fn payload_bytes(&self)->u64{
-        let bytes=|c:&crate::read::controller::Controller|c.tracks.iter().map(|t|t.path.len()*4+t.times.len()*2+t.values.len()*16).sum::<usize>();
+        let bytes=|c:&Controller|c.tracks.iter().map(|t|t.path.len()*4+t.times.len()*2+t.values.len()*16).sum::<usize>();
         (bytes(&self.time_of_day)+self.weather.as_ref().map_or(0,bytes)) as u64
+    }
+    fn to_json(&self)->Result<Option<serde_json::Value>,primase_core::JsonError>{
+        let tracks=|controller:&Controller|controller.tracks.iter().map(|track|
+            serde_json::json!({"path":track.path.iter().map(|p|format!("{p:#010x}")).collect::<Vec<_>>(),
+                "kind":format!("{:#010x}",track.kind),"times":track.times,"values":track.values,
+                "path_flags":track.path_flags,"binding":track.binding,"trailer":track.trailer})).collect::<Vec<_>>();
+        Ok(Some(serde_json::json!({"look":self.look,"time_of_day":tracks(&self.time_of_day),
+            "weather":self.weather.as_ref().map(tracks)})))
     }
 }
 /// Coarse terrain held separately so the near-terrain lowering cannot accidentally lower full coarse rectangles.
@@ -58,7 +67,7 @@ impl Component for AnvilFarSelected {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnvilSky {
     pub index_id: u64,
-    pub stored: crate::read::sky::StoredSky,
+    pub stored: StoredSky,
 }
 impl Component for AnvilSky {
     const NAME: &'static str = "anvil.sky";
@@ -78,7 +87,7 @@ impl Component for AnvilSky {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnvilSpotLight {
     pub index_id: u64,
-    pub stored: crate::read::light::StoredSpotLight,
+    pub stored: StoredSpotLight,
 }
 impl Component for AnvilSpotLight {
     const NAME: &'static str = "anvil.spot_light";
@@ -96,7 +105,7 @@ impl Component for AnvilSpotLight {
 pub struct AnvilImpostor {
     pub index_id: u64,
     pub frame: primase_core::frame::SourceFrame,
-    pub stored: crate::read::impostor::StoredImpostor,
+    pub stored: StoredImpostor,
     pub textures: [Option<Entity>; 4],
 }
 

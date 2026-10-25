@@ -26,7 +26,7 @@
 use primase_bytes::{Cursor, Field};
 
 use crate::read::fields::{BodyError, LE, body_error, count, end, expect, object, reference};
-use crate::read::reference::{self, Reference};
+use crate::read::reference;
 
 /// A record type: the CRC-32 of `World`.
 pub const WORLD: u32 = 0xFBB6_3E47;
@@ -50,27 +50,10 @@ pub enum Error {
 body_error!(Error, Error::Body);
 
 /// A GridLayout as stored.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GridLayout {
-    /// The u16 run before the five i32, as stored.
-    pub words: Vec<u16>,
-    /// The first i32 (CellSize in the AC schemas): a level-0 cell's side.
-    pub cell_size: i32,
-    /// The next three (BottomLeftX, Y, Z): the grid's corner.
-    pub bottom_left: [i32; 3],
-    /// The fifth (GridDimensionLevel0): level 0's cells along a side.
-    pub dimension: i32,
-    /// The 3 bytes after them, as stored.
-    pub after: [u8; 3],
-}
+pub use crate::components::stored::GridLayout;
 
 /// One of a World's GridDescriptions.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GridDescription {
-    pub id: u64,
-    pub layout: GridLayout,
-    pub partition: Option<Reference>,
-}
+pub use crate::components::stored::GridDescription;
 
 /// A World's GridDescriptions, from the start of its body; `words` is the stated length of each GridLayout's u16 run.
 pub fn grid_descriptions(body: &[u8], words: usize) -> Result<Vec<GridDescription>, Error> {
@@ -110,13 +93,7 @@ pub fn grid_descriptions(body: &[u8], words: usize) -> Result<Vec<GridDescriptio
 }
 
 /// A GridPartition as stored.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StoredGridPartition {
-    pub levels: u32,
-    /// Each cell's u64: the ClassID of its GridCellDataBlock, or 0. A cell's number is its position here (the notes:
-    /// each block's key equals its position on all 44,318 USNAT and 6 of 6 WhiteRoom cells holding one).
-    pub cells: Vec<u64>,
-}
+pub use crate::components::stored::StoredGridPartition;
 
 impl StoredGridPartition {
     pub fn parse(body: &[u8]) -> Result<StoredGridPartition, Error> {
@@ -138,15 +115,7 @@ impl StoredGridPartition {
 }
 
 /// A GridCellDataBlock as stored.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StoredGridCellDataBlock {
-    /// What it lists (Entities, EntityGroups, GIDynResources and others), in stored order.
-    pub objects: Vec<Reference>,
-    /// The u32 after them, as stored.
-    pub word: u32,
-    /// The u64 ending it: its cell's number, or a DataLayer's ClassID.
-    pub key: u64,
-}
+pub use crate::components::stored::StoredGridCellDataBlock;
 
 impl StoredGridCellDataBlock {
     pub fn parse(body: &[u8]) -> Result<StoredGridCellDataBlock, Error> {

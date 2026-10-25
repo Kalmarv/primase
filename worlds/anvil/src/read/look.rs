@@ -1,19 +1,17 @@
 //! Event look presets (lighting.md §4). Decode stored values; the second preset scalar and forecast lane roles
 //! are not proven sun/wind/fog inputs. Do not apply them to core.environment by a name-based guess.
+#![deny(clippy::arithmetic_side_effects, clippy::indexing_slicing, clippy::cast_possible_truncation)]
+pub use crate::components::stored::StoredLook;
 use crate::read::reference;
 pub const AMBIANCE_PRESET: u32 = 0xE8EC_CA01;
 pub const FORECAST_PRESET: u32 = 0x79B0_E782;
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum StoredLook {
-    Ambiance { season: u64, forecast: Option<reference::Reference>, hour: f32, angle: f32, flag: u8 },
-    Forecast { values: [f32; 12] },
-}
 impl StoredLook {
     pub fn parse(type_id: u32, body: &[u8]) -> Result<Self, String> {
         if body.first() != Some(&1) { return Err("look preset: unknown managed header".into()); }
         let float = |at: usize| -> Result<f32, String> {
-            let value = f32::from_le_bytes(body.get(at..at + 4).and_then(|b| b.try_into().ok()).ok_or("look preset: truncated scalar")?);
+            let end=at.checked_add(4).ok_or("look preset: scalar offset overflow")?;
+            let value = f32::from_le_bytes(body.get(at..end).and_then(|b| b.try_into().ok()).ok_or("look preset: truncated scalar")?);
             if !value.is_finite() { return Err(format!("look preset: nonfinite scalar at {at}")); }
             Ok(value)
         };
@@ -25,11 +23,14 @@ impl StoredLook {
                 let angle = float(24)?;
                 if !(0.0..24.0).contains(&hour) { return Err(format!("look preset hour {hour} outside [0,24)")); }
                 if !(0.0..=360.0).contains(&angle) { return Err(format!("look preset angle {angle} outside [0,360]")); }
-                Ok(Self::Ambiance { season, forecast, hour, angle, flag: body[28] })
+                Ok(Self::Ambiance { season, forecast, hour, angle, flag: *body.get(28).ok_or("look preset: missing flag")? })
             }
             (FORECAST_PRESET, 49) => {
                 let mut values = [0.; 12];
-                for (index, value) in values.iter_mut().enumerate() { *value = float(1 + index * 4)?; }
+                for (index, value) in values.iter_mut().enumerate() {
+                    let at=index.checked_mul(4).and_then(|n|n.checked_add(1)).ok_or("look preset: lane offset overflow")?;
+                    *value = float(at)?;
+                }
                 Ok(Self::Forecast { values })
             }
             _ => Err(format!("look preset: unsupported type {type_id:#010x}, {}-byte profile", body.len())),
@@ -38,6 +39,7 @@ impl StoredLook {
 }
 
 #[cfg(test)]
+#[allow(clippy::arithmetic_side_effects,clippy::indexing_slicing,clippy::cast_possible_truncation,reason="fixtures")]
 mod tests {
     use super::*;
     #[test]

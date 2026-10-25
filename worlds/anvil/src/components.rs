@@ -4,7 +4,9 @@ use primase_core::{Component, Entity, World};
 
 mod impostor;
 mod coverage;
-pub use coverage::{AnvilGiDyn, AnvilLookPreset, AnvilSourceComponents, AnvilSourceOwner, SourceComponent};
+pub mod stored;
+pub mod component_types;
+pub use coverage::{AnvilGiDyn, AnvilGridMetadata, AnvilLookPreset, AnvilSourceComponents, AnvilSourceOwner, SourceComponent};
 pub use impostor::{AnvilImpostor, AnvilRenderStatus, AnvilSpotLight, AnvilSky, AnvilFarClass, AnvilFarSelected, AnvilFarTerrain, AnvilSkyControllers, AnvilSurfaceBake};
 
 /// A MeshShape's triangle geometry ([`crate::read::mesh_shape::Geometry`]) on its prototype: positions converted into
@@ -841,6 +843,11 @@ impl Component for AnvilFloorHeight {
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn payload_bytes(&self) -> u64 {
         u64::try_from(self.blocks.len() * 8).unwrap_or(u64::MAX)
+    }
+    fn to_json(&self) -> Result<Option<serde_json::Value>, primase_core::JsonError> {
+        Ok(Some(serde_json::json!({"cell_side": self.cell, "height_word_scale": self.scale,
+            "origin_xy": self.origin, "cells": self.cells, "blocks": self.blocks.len(),
+            "height_origin": "not inferred from the trailer; lowering requires caller's stated vertical policy"})))
     }
 }
 

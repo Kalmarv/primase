@@ -1,5 +1,7 @@
 //! LayeredSky's authored scattering keyframes. The two resource profiles are from the registry-based read in
 //! riders-republic/docs/sky.md §2; unknown profiles fail rather than using guessed offsets.
+#![deny(clippy::arithmetic_side_effects, clippy::indexing_slicing, clippy::cast_possible_truncation)]
+pub use crate::components::stored::{SkyKeyframe, StoredSky};
 pub const LAYERED_SKY: u32 = 0x24D3_2CF8;
 pub const WORLD_AMBIANCE: u32 = 0x21C2_D472;
 const KEYFRAME: u32 = 0x5CDF_6DE9;
@@ -16,47 +18,27 @@ pub fn exposure_from_lighting_scale(scale:f32)->Result<primase_core::Exposure,St
     Ok(primase_core::Exposure{stops:scale.log2()})
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct SkyKeyframe {
-    pub hour: f32,
-    pub crc: u32,
-    pub inscatter: Vec<u8>,
-    pub optical_depth: Vec<u8>,
-    pub irradiance: Vec<u8>,
-    pub sun_depth: Vec<u8>,
-    pub sun_irradiance: Vec<u8>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct StoredSky {
-    pub sun_position_mode: u32,
-    pub sun_azimuth: f32,
-    pub sun_tilt: f32,
-    pub sun_elevation: f32,
-    pub sun_color: [f32; 4],
-    pub sun_intensity: f32,
-    pub mie: [f32; 3],
-    pub keyframes: Vec<SkyKeyframe>,
-}
 
 fn word(body: &[u8], at: usize) -> Result<u32, String> {
-    body.get(at..at + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes)
+    let end=at.checked_add(4).ok_or("sky: word offset overflow")?;
+    body.get(at..end).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes)
         .ok_or_else(|| format!("sky: missing word at {at}"))
 }
 impl StoredSky {
     pub fn parse(body: &[u8]) -> Result<Self, String> {
-        let (start, count) = match body.len() {
+        let (start, count): (usize,usize) = match body.len() {
             3_442_710 => (582, 24),
             143_994 => (572, 1),
             length => return Err(format!("LayeredSky: unsupported {length}-byte profile")),
         };
-        if word(body, start - 4)? as usize != count {
+        if usize::try_from(word(body, start.checked_sub(4).ok_or("sky: frame count offset")?)?).map_err(|_|"sky: frame count overflow")? != count {
             return Err("LayeredSky: keyframe count differs from the established profile".into());
         }
         let mut keyframes = Vec::with_capacity(count);
         for index in 0..count {
-            let begin = start + index * FRAME_BYTES;
-            let frame = body.get(begin..begin + FRAME_BYTES).ok_or("LayeredSky: short keyframe")?;
+            let begin = index.checked_mul(FRAME_BYTES).and_then(|n|start.checked_add(n)).ok_or("sky: keyframe offset overflow")?;
+            let end=begin.checked_add(FRAME_BYTES).ok_or("sky: keyframe end overflow")?;
+            let frame = body.get(begin..end).ok_or("LayeredSky: short keyframe")?;
             if word(frame, 8)? != KEYFRAME {
                 return Err(format!("LayeredSky: keyframe {index} has another class"));
             }
@@ -65,16 +47,16 @@ impl StoredSky {
             if !hour.is_finite() || !(0.0..24.0).contains(&hour) {
                 return Err(format!("LayeredSky: invalid keyframe hour {hour}"));
             }
-            let dimensions: Vec<_> = (0..5).map(|k| word(frame, 21 + k * 4)).collect::<Result<_, _>>()?;
+            let dimensions: Vec<_> = [21,25,29,33,37].map(|at| word(frame,at)).into_iter().collect::<Result<_, _>>()?;
             if dimensions != [256, 64, 32, 32, 16] {
                 return Err(format!("LayeredSky: unknown keyframe dimensions {dimensions:?}"));
             }
             if frame.get(41) != Some(&1) { return Err("LayeredSky: scattering data is not generated".into()); }
-            let mut at = 42;
+            let mut at = 42usize;
             let mut buffer = |elements: usize, stride: usize| -> Result<Vec<u8>, String> {
-                if word(frame, at)? as usize != elements { return Err(format!("LayeredSky: buffer count at {at}")); }
-                at += 4;
-                let end = at + elements * stride;
+                if usize::try_from(word(frame, at)?).map_err(|_|"sky: buffer count overflow")? != elements { return Err(format!("LayeredSky: buffer count at {at}")); }
+                at=at.checked_add(4).ok_or("sky: buffer offset overflow")?;
+                let end = elements.checked_mul(stride).and_then(|n|at.checked_add(n)).ok_or("sky: buffer end overflow")?;
                 let bytes = frame.get(at..end).ok_or("LayeredSky: buffer runs past its keyframe")?.to_vec();
                 at = end;
                 Ok(bytes)
@@ -85,31 +67,36 @@ impl StoredSky {
             if at != frame.len() { return Err("LayeredSky: trailing keyframe bytes".into()); }
             keyframes.push(key);
         }
-        let mie_at = if start==582 {350}else{340};
+        let mie_at = if start==582 {[350,354,358]}else{[340,344,348]};
         Ok(Self { sun_position_mode:word(body,12)?, sun_azimuth:f32::from_bits(word(body,16)?),
             sun_tilt:f32::from_bits(word(body,20)?),sun_elevation: f32::from_bits(word(body, 24)?),
             sun_intensity:f32::from_bits(word(body,64)?),
-            mie:[0,4,8].map(|i|word(body,mie_at+i).map(f32::from_bits)).into_iter()
+            mie:mie_at.map(|at|word(body,at).map(f32::from_bits)).into_iter()
                 .collect::<Result<Vec<_>,_>>()?.try_into().map_err(|_|"LayeredSky: Mie length")?,
             sun_color: [48, 52, 56, 60].map(|at| word(body, at).map(f32::from_bits)).into_iter()
                 .collect::<Result<Vec<_>, _>>()?.try_into().map_err(|_| "LayeredSky: color length")?, keyframes })
     }
 
     /// Static temporal interpolation between authored scattering tables, including the 23:00→00:00 interval.
+    #[allow(clippy::arithmetic_side_effects, reason="finite floating point interpolation of authored tables, not byte addressing")]
     pub fn radiance(&self,hour:f32,direction:[f32;3],sun:[f32;3],mie:[f32;3])->Result<[f32;3],String>{
         if !hour.is_finite() || self.keyframes.is_empty(){return Err("sky: no finite hour/generated keyframes".into());}
         let hour=hour.rem_euclid(24.0);
         let mut keys:Vec<_>=self.keyframes.iter().collect();keys.sort_by(|a,b|a.hour.total_cmp(&b.hour));
-        let i=keys.iter().rposition(|k|k.hour<=hour).unwrap_or(keys.len()-1);let j=(i+1)%keys.len();
-        let a=keys[i].radiance(direction,sun,mie)?;if i==j{return Ok(a);}
-        let start=keys[i].hour;let end=keys[j].hour+if j==0{24.0}else{0.0};
+        let last=keys.len().checked_sub(1).ok_or("sky: no keyframes")?;
+        let i=keys.iter().rposition(|k|k.hour<=hour).unwrap_or(last);
+        let j=if i==last{0}else{i.checked_add(1).ok_or("sky: key index overflow")?};
+        let left=keys.get(i).ok_or("sky: missing left key")?;let right=keys.get(j).ok_or("sky: missing right key")?;
+        let a=left.radiance(direction,sun,mie)?;if i==j{return Ok(a);}
+        let start=left.hour;let end=right.hour+if j==0{24.0}else{0.0};
         let at=hour+if hour<start{24.0}else{0.0};let f=(at-start)/(end-start);
-        let b=keys[j].radiance(direction,sun,mie)?;
-        Ok(std::array::from_fn(|k|a[k]+(b[k]-a[k])*f))
+        let b=right.radiance(direction,sun,mie)?;
+        let mut out=[0.0;3];for ((v,a),b) in out.iter_mut().zip(a).zip(b){*v=a+(b-a)*f;}Ok(out)
     }
 }
 
 /// IEEE-754 half to f32. No clamping to LDR: the scattering tables carry scene radiance.
+#[allow(clippy::arithmetic_side_effects, reason="IEEE-754 half conversion uses bounded exponent and floating point arithmetic")]
 fn half(bits: u16) -> f32 {
     let sign = if bits & 0x8000 != 0 { -1.0 } else { 1.0 };
     let exponent = (bits >> 10) & 31;
@@ -124,6 +111,8 @@ fn half(bits: u16) -> f32 {
 impl SkyKeyframe {
     /// Static clear-sky slice of the stored single-scattering model (sky.md §6). Caller supplies the sun and Mie
     /// values; the weather/time controllers, clouds, moon, Milky Way, exposure and stars are separate engine inputs.
+    #[allow(clippy::arithmetic_side_effects,clippy::indexing_slicing,clippy::cast_possible_truncation,
+        reason="numeric 32x32x16 sampling stencil: coordinates clamped to fixed arrays; byte accesses use checked ranges below")]
     pub fn radiance(&self, direction: [f32; 3], sun: [f32; 3], mie: [f32; 3]) -> Result<[f32; 3], String> {
         let normalize = |v: [f32; 3]| -> Result<[f32; 3], String> {
             let length = v.iter().map(|v| v * v).sum::<f32>().sqrt();
@@ -177,14 +166,17 @@ impl SkyKeyframe {
 pub fn ambiance(body: &[u8]) -> Result<(u64, u64), String> {
     if body.len() != 5277 { return Err(format!("WorldAmbiance: unsupported {}-byte profile", body.len())); }
     let reference = |at: usize| -> Result<u64, String> {
-        let bytes = body.get(at..at + 10).ok_or("WorldAmbiance: missing reference")?;
-        if !matches!(bytes[0], 1 | 3) || bytes[1] != 1 { return Err(format!("WorldAmbiance: unsupported reference at {at}")); }
-        Ok(u64::from_le_bytes(bytes[2..].try_into().map_err(|_| "WorldAmbiance: missing reference id")?))
+        let end=at.checked_add(10).ok_or("WorldAmbiance: reference offset overflow")?;
+        let bytes: [u8;10] = body.get(at..end).and_then(|b|b.try_into().ok()).ok_or("WorldAmbiance: missing reference")?;
+        let [tag,mode,a,b,c,d,e,f,g,h]=bytes;
+        if !matches!(tag, 1 | 3) || mode != 1 { return Err(format!("WorldAmbiance: unsupported reference at {at}")); }
+        Ok(u64::from_le_bytes([a,b,c,d,e,f,g,h]))
     };
     Ok((reference(3)?, reference(4108)?))
 }
 
 #[cfg(test)]
+#[allow(clippy::arithmetic_side_effects,clippy::indexing_slicing,clippy::cast_possible_truncation,reason="fixtures")]
 mod tests {
     use super::*;
     #[test]

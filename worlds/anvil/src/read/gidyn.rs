@@ -1,6 +1,8 @@
 //! GIDynResource's established one-volume/one-box profile (RR lighting.md §8, 418 offline bodies).
 //! Preserve all four encoded streams. Probe positions are established; irradiance, visibility bit semantics,
 //! sample origin and the GPU GIDynData texture construction are not. Nothing here invents probe colours.
+#![deny(clippy::arithmetic_side_effects, clippy::indexing_slicing, clippy::cast_possible_truncation)]
+pub use crate::components::stored::StoredGiDyn;
 use super::archive::{Archive, At};
 use primase_core::{Entity, Name, World, frame::SourceFrame};
 
@@ -10,20 +12,6 @@ const DESC: u32 = 0xCE0C_489A;
 const SUB: u32 = 0xACC1_B118;
 const BOX: u32 = 0xE96B_B4A2;
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct StoredGiDyn {
-    pub world_id: u64,
-    pub cell_id: u32,
-    pub position: [f32; 3],
-    pub samples: u32,
-    pub probes: u32,
-    pub indoor: bool,
-    /// Integer voxel bounds, not metres. Voxel size must be supplied by the program's grid, never guessed here.
-    pub voxel_bounds: [[i32; 3]; 2],
-    pub subvolume_word: u32,
-    pub streams: [Vec<u8>; 4],
-    pub decoded_bytes: [u32; 3],
-}
 
 struct Cursor<'a> { data: &'a [u8], at: usize }
 impl<'a> Cursor<'a> {
@@ -69,6 +57,7 @@ fn rle(data: &[u8], width: usize, expected: u64, probes: Option<u32>) -> Result<
     Ok(())
 }
 
+#[allow(clippy::arithmetic_side_effects, reason="IEEE-754 half conversion has bounded exponent and floating point arithmetic")]
 fn half(bits: u16) -> f32 {
     let sign = if bits & 0x8000 == 0 { 1.0 } else { -1.0 };
     let exponent = (bits >> 10) & 31;
@@ -102,10 +91,11 @@ impl StoredGiDyn {
         let mut voxel_bounds = [[0; 3]; 2];
         for corner in &mut voxel_bounds { for axis in corner { *axis = i32::from_le_bytes(c.take(4)?.try_into().map_err(|_| "GIDynResource box")?); } }
         let mut voxels = 1u64;
-        for axis in 0..3 {
-            let extent = i64::from(voxel_bounds[1][axis]) - i64::from(voxel_bounds[0][axis]);
+        let [lo,hi]=voxel_bounds;
+        for (lo,hi) in lo.into_iter().zip(hi) {
+            let extent = i64::from(hi).checked_sub(i64::from(lo)).ok_or("GIDynResource box extent overflow")?;
             if extent <= 0 { return Err("GIDynResource: empty or inverted voxel box".into()); }
-            voxels = voxels.checked_mul(extent as u64).ok_or("GIDynResource voxel count overflow")?;
+            voxels = voxels.checked_mul(u64::try_from(extent).map_err(|_|"GIDynResource negative extent")?).ok_or("GIDynResource voxel count overflow")?;
         }
         let subvolume_word = c.word()?;
         let mut streams: [Vec<u8>; 4] = std::array::from_fn(|_| Vec::new());
@@ -114,28 +104,36 @@ impl StoredGiDyn {
             *stream = c.take(n)?.to_vec();
         }
         let decoded_bytes = [c.word()?, c.word()?, c.word()?];
-        if c.at != body.len() { return Err(format!("GIDynResource: {} trailing bytes", body.len() - c.at)); }
-        if u64::from(decoded_bytes[0]) != u64::from(samples) * 10 || Some(u64::from(decoded_bytes[2])) != voxels.checked_mul(2) {
+        if c.at != body.len() { return Err(format!("GIDynResource: {} trailing bytes", body.len().saturating_sub(c.at))); }
+        if Some(u64::from(decoded_bytes[0])) != u64::from(samples).checked_mul(10) || Some(u64::from(decoded_bytes[2])) != voxels.checked_mul(2) {
             return Err("GIDynResource: footer sample/grid byte sizes do not match counts".into());
         }
-        rle(&streams[0], 2, u64::from(samples) * 5, None)?;
+        let mask_bytes=u64::from(probes).checked_mul(24).and_then(|n|n.checked_add(8)).ok_or("GIDynResource probe-mask size overflow")?;
+        if u64::from(decoded_bytes[1])<mask_bytes {
+            return Err("GIDynResource: V2 is shorter than its two-word header and per-probe direction masks".into());
+        }
+        rle(&streams[0], 2, u64::from(samples).checked_mul(5).ok_or("GIDynResource sample word count overflow")?, None)?;
         rle(&streams[1], 1, u64::from(decoded_bytes[1]), None)?;
         rle(&streams[2], 2, voxels, Some(probes))?;
-        if streams[3].len() as u64 != u64::from(probes) * 8 { return Err("GIDynResource: probe vector size is not 8 * probes".into()); }
+        if Some(streams[3].len() as u64) != u64::from(probes).checked_mul(8) { return Err("GIDynResource: probe vector size is not 8 * probes".into()); }
         let result = Self { world_id, cell_id, position, samples, probes, indoor, voxel_bounds,
             subvolume_word, streams, decoded_bytes };
-        for bytes in result.streams[3].chunks_exact(8) {
-            if bytes[6..8] != [0, 0] { return Err("GIDynResource: nonzero probe fourth lane, profile not established".into()); }
+        for bytes in result.streams[3].as_chunks::<8>().0 {
+            let [_,_,_,_,_,_,a,b]=*bytes;
+            if [a,b] != [0, 0] { return Err("GIDynResource: nonzero probe fourth lane, profile not established".into()); }
         }
         if result.probe_positions().flatten().any(|x| !x.is_finite()) { return Err("GIDynResource: nonfinite probe position".into()); }
         Ok(result)
     }
 
     /// Source coordinates in metres; the fourth half lane is validated separately. No voxel-to-metre guess.
+    #[allow(clippy::arithmetic_side_effects, reason="floating point probe offsets; exact eight-byte records destructured without index arithmetic")]
     pub fn probe_positions(&self) -> impl Iterator<Item = [f32; 3]> + '_ {
-        self.streams[3].chunks_exact(8).map(|b| std::array::from_fn(|i| {
-            self.position[i] + half(u16::from_le_bytes([b[i * 2], b[i * 2 + 1]]))
-        }))
+        self.streams[3].as_chunks::<8>().0.iter().map(|b| {
+            let [a,b,c,d,e,f,_,_]=*b;
+            let [x,y,z]=self.position;
+            [x+half(u16::from_le_bytes([a,b])),y+half(u16::from_le_bytes([c,d])),z+half(u16::from_le_bytes([e,f]))]
+        })
     }
 }
 

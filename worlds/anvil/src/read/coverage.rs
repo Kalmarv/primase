@@ -70,8 +70,8 @@ pub fn of(type_id: u32) -> Coverage {
     if let Some(row) = EXTRA.iter().find(|row| row.type_id == type_id) { return *row; }
     if let Some(kind) = Kind::of(type_id) {
         let (status, destination) = match kind {
-            Kind::World => (Status::Dropped, "GridDescriptions consumed by read::convert; other World fields not decoded"),
-            Kind::GridPartition => (Status::Dropped, "cell selection consumed by read::convert"),
+            Kind::World => (Status::Dropped, "region reader consumes GridDescriptions; standalone catalog retains AnvilGridMetadata; remaining World fields unread"),
+            Kind::GridPartition => (Status::Dropped, "region reader consumes cell selection; standalone catalog retains AnvilGridMetadata"),
             Kind::GridCellDataBlock => (Status::Read, "AnvilListed stores reached owner/cell/level; original full list not retained"),
             Kind::WorldAmbiance => (Status::Read, "owned AnvilSky and environment cube; flares/particles not decoded"),
             Kind::GiDynResource => (Status::Read, "AnvilGiDyn: one-volume/one-box profile, encoded streams and probe positions; irradiance unresolved"),

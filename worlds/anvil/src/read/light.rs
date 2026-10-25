@@ -1,17 +1,9 @@
 //! WhiteRoom SpotLight records. Offsets established in riders-republic/docs/lighting.md §2. Stored intensity
 //! units and shadow booleans remain source data; a lowering must state its calibration.
+#![deny(clippy::arithmetic_side_effects, clippy::indexing_slicing, clippy::cast_possible_truncation)]
+pub use crate::components::stored::StoredSpotLight;
 pub const SPOT_LIGHT: u32 = 0x8032_0FB8;
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct StoredSpotLight {
-    pub color: [f32; 4],
-    pub intensity: f32,
-    pub luminance: f32,
-    pub inner: f32,
-    pub outer: f32,
-    pub range: f32,
-    pub near: f32,
-}
 impl StoredSpotLight {
     pub fn parse(body: &[u8]) -> Result<Self, String> {
         if body.len() != 328 { return Err(format!("SpotLight: {} bytes, expected 328", body.len())); }
@@ -19,7 +11,8 @@ impl StoredSpotLight {
             return Err("SpotLight: missing LightColor class at 34".into());
         }
         let float = |at: usize| -> Result<f32, String> {
-            let value = f32::from_le_bytes(body.get(at..at + 4).and_then(|b| b.try_into().ok())
+            let end=at.checked_add(4).ok_or("SpotLight: float offset overflow")?;
+            let value = f32::from_le_bytes(body.get(at..end).and_then(|b| b.try_into().ok())
                 .ok_or("SpotLight: missing float")?);
             if value.is_finite() && value >= 0.0 { Ok(value) } else { Err(format!("SpotLight: invalid value at {at}")) }
         };
@@ -41,10 +34,11 @@ pub fn instance_reference(bytes: &[u8]) -> Result<u64, String> {
     }
     let reference = bytes.get(44..54).ok_or("LightInstance: missing light reference")?;
     if reference.get(..2) != Some(&[3, 1]) { return Err("LightInstance: expected managed light reference 03 01".into()); }
-    Ok(u64::from_le_bytes(reference[2..10].try_into().map_err(|_| "LightInstance: missing id")?))
+    Ok(u64::from_le_bytes(reference.get(2..10).and_then(|b|b.try_into().ok()).ok_or("LightInstance: missing id")?))
 }
 
 #[cfg(test)]
+#[allow(clippy::arithmetic_side_effects,clippy::indexing_slicing,clippy::cast_possible_truncation,reason="fixtures")]
 mod tests {
     use super::*;
     #[test]

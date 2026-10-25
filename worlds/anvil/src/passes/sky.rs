@@ -55,7 +55,7 @@ impl LowerAnvilSky {
                 notices.push(format!("{} = {} at controller tick {time}: source parameter retained; mapping to evaluated cb1[39].x is unresolved. cb1[39].x is a linear radiance multiplier (core stops = log2(scale)); grading Exposure is not assumed to be stops, MinEV/MaxEV are adaptation bounds, t23 is an emissive divisor",path.join("/"),v[0]));
             }
         }
-        notices.push("core.atmosphere exposure unstated: the selected look has no resolved cb1[39].x frame multiplier; one historical unity snapshot does not establish this hour's exposure".into());
+        notices.push("core.atmosphere exposure unstated: the selected look has no resolved cb1[39].x frame multiplier; one historical snapshot with a multiplier of one does not establish this hour's exposure".into());
         let (az,el)=(azimuth.to_radians(),elevation.to_radians());
         let sun=[el.cos()*az.sin(),el.cos()*az.cos(),el.sin()];
         let colour=value(&["LayeredSky","SunlightColor"])?.unwrap_or(sky.sun_color);
@@ -101,6 +101,61 @@ impl LowerAnvilSky {
             controllers.map_or("LayeredSky",|c|c.look.as_str()),self.hour),
             width:width as u32,height:height as u32,radiance,
             towards_sun:primase_core::frame::SourceFrame::ENU.direction(sun),sunlight,ambient,fog,notices})
+    }
+}
+
+impl Pass for LowerAnvilSky{
+    fn name(&self)-> &'static str{"lower-anvil-sky"}
+    fn options(&self)->Options{Options::from([("hour".into(),self.hour.to_string()),("weather".into(),self.weather.to_string()),
+        ("sun".into(),"stored".into()),("resolution".into(),self.resolution.to_string()),
+        ("preview".into(),if self.sphere{"sphere"}else{"environment"}.into())])}
+    fn may_lack_inputs(&self)->bool{true}
+    fn requires(&self)->&[&'static str]{&[AnvilSky::NAME]}
+    fn provides(&self)->&[&'static str]{&["core.environment","core.atmosphere",AnvilRenderStatus::NAME,Mesh::NAME,PbrMaterial::NAME,Transform::NAME,Name::NAME,Light::NAME,primase_core::Source::NAME]}
+    fn modifies(&self)->&[&'static str]{&["core.environment","core.atmosphere",AnvilRenderStatus::NAME]}
+    fn approximates(&self)-> &'static str{"static source defaults; authored manual sun elevation (automatic mode unresolved); no clouds, moon, stars, forecast, or volumetric fog simulation"}
+    fn run(&self,world:&mut World,log:&mut PassLog)->Result<(),String>{
+        let ids:Vec<_>=world.iter::<AnvilSky>().map(|(e,_)|e).collect();
+        for entity in ids{
+            let source=world.get::<AnvilSky>(entity).ok_or("sky missing")?;
+            let environment=match self.environment(source,world.get::<AnvilSkyControllers>(entity)){
+                Ok(e)=>e,Err(reason)=>{world.insert(entity,AnvilRenderStatus{source:"LayeredSky".into(),template:None,reason:reason.clone(),unsupported:true});log.omit(&reason,1);continue;}
+            };
+            for notice in &environment.notices{log.approximate(notice,1);}
+            // Publish one set of established meanings for every consumer; the source data stays on AnvilSky.
+            let sun=world.spawn();
+            world.insert(sun,Name("LayeredSky static source sun (authored manual elevation)".into()));
+            world.insert(sun,primase_core::Source(environment.description.clone()));
+            world.insert(sun,Light{kind:LightKind::Directional,color:environment.sunlight,intensity:1.0,
+                range:None,cast_shadows:None});
+            world.insert(sun,Transform::facing([0.0;3],environment.towards_sun.map(|v|-v))
+                .ok_or("sky: invalid authored sun direction")?);
+            world.insert_resource(primase_core::Environment{sun:Some(sun),ambient:Some(primase_core::Ambient{
+                intensity:1.0,light:primase_core::AmbientLight::Flat(environment.ambient)})});
+            // No exposure track's units have been established for Anvil: leave exposure unstated, not guessed.
+            world.insert_resource(primase_core::Atmosphere{fog:environment.fog.clone(),exposure:None,volumetric:None});
+            if self.sphere{
+                let material=world.spawn();world.insert(material,PbrMaterial{base_color:[1.0;4],metallic:0.0,roughness:1.0,
+                    double_sided:true,shading:Shading::Unlit,..Default::default()});
+                let(mut positions,mut normals,mut colours,mut indices)=(Vec::new(),Vec::new(),Vec::new(),Vec::new());
+                for y in 0..=environment.height{for x in 0..=environment.width{
+                    let el=(0.5-y as f32/environment.height as f32)*std::f32::consts::PI;
+                    let az=(x as f32/environment.width as f32-0.5)*std::f32::consts::TAU;
+                    let d=[el.cos()*az.sin(),el.sin(),-el.cos()*az.cos()];positions.push(d.map(|v|v*10.0));normals.push(d);
+                    let px=x.min(environment.width-1);let py=y.min(environment.height-1);
+                    colours.push(environment.radiance[(py*environment.width+px) as usize]);
+                }}
+                for y in 0..environment.height{for x in 0..environment.width{
+                    let a=y*(environment.width+1)+x;let b=a+environment.width+1;indices.extend([a,b,a+1,a+1,b,b+1]);
+                }}
+                world.insert(entity,Mesh::new(vec![Primitive{topology:Topology::Triangles,indices:Some(indices),material:Some(material),
+                    streams:BTreeMap::from([(Semantic::Position,Stream::F32x3(positions)),(Semantic::Normal,Stream::F32x3(normals)),
+                        (Semantic::Color(0),Stream::F32x4(colours))])}]));world.insert(entity,Transform::IDENTITY);
+            }
+            world.insert(entity,AnvilRenderStatus{source:environment.description.clone(),template:None,unsupported:false,reason:environment.notices.join("; ")});
+            log.count("source static sky environments",1);
+        }
+        Ok(())
     }
 }
 
@@ -155,59 +210,5 @@ impl LowerAnvilSky {
         source.stored.keyframes=vec![dark,bright];
         let actual=source.stored.radiance(0.0,d,sun,source.stored.mie).unwrap();
         for k in 0..3{assert!((actual[k]-expected[k]*0.5).abs()<1e-7);}
-    }
-}
-impl Pass for LowerAnvilSky{
-    fn name(&self)-> &'static str{"lower-anvil-sky"}
-    fn options(&self)->Options{Options::from([("hour".into(),self.hour.to_string()),("weather".into(),self.weather.to_string()),
-        ("sun".into(),"stored".into()),("resolution".into(),self.resolution.to_string()),
-        ("preview".into(),if self.sphere{"sphere"}else{"environment"}.into())])}
-    fn may_lack_inputs(&self)->bool{true}
-    fn requires(&self)->&[&'static str]{&[AnvilSky::NAME]}
-    fn provides(&self)->&[&'static str]{&["core.environment","core.atmosphere",AnvilRenderStatus::NAME,Mesh::NAME,PbrMaterial::NAME,Transform::NAME,Name::NAME,Light::NAME,primase_core::Source::NAME]}
-    fn modifies(&self)->&[&'static str]{&["core.environment","core.atmosphere",AnvilRenderStatus::NAME]}
-    fn approximates(&self)-> &'static str{"static source defaults; authored manual sun elevation (automatic mode unresolved); no clouds, moon, stars, forecast, or volumetric fog simulation"}
-    fn run(&self,world:&mut World,log:&mut PassLog)->Result<(),String>{
-        let ids:Vec<_>=world.iter::<AnvilSky>().map(|(e,_)|e).collect();
-        for entity in ids{
-            let source=world.get::<AnvilSky>(entity).ok_or("sky missing")?;
-            let environment=match self.environment(source,world.get::<AnvilSkyControllers>(entity)){
-                Ok(e)=>e,Err(reason)=>{world.insert(entity,AnvilRenderStatus{source:"LayeredSky".into(),template:None,reason:reason.clone(),unsupported:true});log.omit(&reason,1);continue;}
-            };
-            for notice in &environment.notices{log.approximate(notice,1);}
-            // Publish one set of established meanings for every consumer; the source data stays on AnvilSky.
-            let sun=world.spawn();
-            world.insert(sun,Name("LayeredSky static source sun (authored manual elevation)".into()));
-            world.insert(sun,primase_core::Source(environment.description.clone()));
-            world.insert(sun,Light{kind:LightKind::Directional,color:environment.sunlight,intensity:1.0,
-                range:None,cast_shadows:None});
-            world.insert(sun,Transform::facing([0.0;3],environment.towards_sun.map(|v|-v))
-                .ok_or("sky: invalid authored sun direction")?);
-            world.insert_resource(primase_core::Environment{sun:Some(sun),ambient:Some(primase_core::Ambient{
-                intensity:1.0,light:primase_core::AmbientLight::Flat(environment.ambient)})});
-            // No exposure track's units have been established for Anvil: leave exposure unstated, not guessed.
-            world.insert_resource(primase_core::Atmosphere{fog:environment.fog.clone(),exposure:None,volumetric:None});
-            if self.sphere{
-                let material=world.spawn();world.insert(material,PbrMaterial{base_color:[1.0;4],metallic:0.0,roughness:1.0,
-                    double_sided:true,shading:Shading::Unlit,..Default::default()});
-                let(mut positions,mut normals,mut colours,mut indices)=(Vec::new(),Vec::new(),Vec::new(),Vec::new());
-                for y in 0..=environment.height{for x in 0..=environment.width{
-                    let el=(0.5-y as f32/environment.height as f32)*std::f32::consts::PI;
-                    let az=(x as f32/environment.width as f32-0.5)*std::f32::consts::TAU;
-                    let d=[el.cos()*az.sin(),el.sin(),-el.cos()*az.cos()];positions.push(d.map(|v|v*10.0));normals.push(d);
-                    let px=x.min(environment.width-1);let py=y.min(environment.height-1);
-                    colours.push(environment.radiance[(py*environment.width+px) as usize]);
-                }}
-                for y in 0..environment.height{for x in 0..environment.width{
-                    let a=y*(environment.width+1)+x;let b=a+environment.width+1;indices.extend([a,b,a+1,a+1,b,b+1]);
-                }}
-                world.insert(entity,Mesh::new(vec![Primitive{topology:Topology::Triangles,indices:Some(indices),material:Some(material),
-                    streams:BTreeMap::from([(Semantic::Position,Stream::F32x3(positions)),(Semantic::Normal,Stream::F32x3(normals)),
-                        (Semantic::Color(0),Stream::F32x4(colours))])}]));world.insert(entity,Transform::IDENTITY);
-            }
-            world.insert(entity,AnvilRenderStatus{source:environment.description.clone(),template:None,unsupported:false,reason:environment.notices.join("; ")});
-            log.count("source static sky environments",1);
-        }
-        Ok(())
     }
 }

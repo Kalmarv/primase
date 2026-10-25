@@ -80,6 +80,7 @@ use primase_core::shader::{
 use primase_core::{ColorSpace, Component, Entity, MaterialVariants, Mesh, Name, Semantic, Texture, World};
 use primase_shader::matrix::state_lines;
 use primase_shader::{ProgramGraph, WordsRead};
+use primase_core::shader::{MaterialPrograms, ProgramFacts};
 
 use crate::components::{
     AnvilLayout, AnvilMaterial, AnvilMesh, AnvilShaders, AnvilTextureMap, MaterialBinding, MaterialFlags,
@@ -657,7 +658,7 @@ impl Pass for ResolveAnvilShaders {
         &[AnvilMaterial::NAME, AnvilShaders::NAME]
     }
     fn provides(&self) -> &[&'static str] {
-        &[Shader::NAME, ShaderBinding::NAME, Texture::NAME, primase_core::TextureLayers::NAME, Name::NAME]
+        &[Shader::NAME, ShaderBinding::NAME, MaterialPrograms::NAME, ProgramFacts::NAME, Texture::NAME, primase_core::TextureLayers::NAME, Name::NAME]
     }
     fn approximates(&self) -> &'static str {
         "a texture binding with no texture reads white (unset-textures=white)"
@@ -705,6 +706,8 @@ impl Pass for ResolveAnvilShaders {
         };
         'materials: for (material, m) in materials {
             let Some(tables) = m.shaders else {
+                world.insert(material,MaterialPrograms(vec![ProgramFacts::unavailable(m.template_name.as_deref().unwrap_or(""),Stage::Pixel,None,
+                    "the reader does not hold the template's shader permutations")]));
                 bump(
                     "materials without their template's shader permutations read",
                     1,
@@ -727,6 +730,7 @@ impl Pass for ResolveAnvilShaders {
                     k
                 }
                 Err(why) => {
+                    world.insert(material,MaterialPrograms(vec![ProgramFacts::unavailable(&template,Stage::Pixel,None,&why)]));
                     bump(&format!("materials left unbound: {why}"), 1, &mut counts);
                     continue;
                 }
@@ -740,14 +744,17 @@ impl Pass for ResolveAnvilShaders {
                     &mut counts,
                 );
             }
-            let pixel = match program(world, &mut programs, &template, tables, false, pixel_key) {
+            let pixel = match program(world, &mut programs, &mut graphs, &template, tables, false, pixel_key) {
                 Ok(e) => e,
                 Err(why) => {
+                    let hash = world.get::<AnvilShaders>(tables).and_then(|tables|tables.pixel(pixel_key)).map(primase_shader::source_hash);
+                    world.insert(material,MaterialPrograms(vec![ProgramFacts::unavailable(format!("{template}-{pixel_key:06x}.ps"),Stage::Pixel,hash,&why)]));
                     bump(&format!("materials left unbound: {why}"), 1, &mut counts);
                     continue 'materials;
                 }
             };
             let mut stages: Vec<(Stage, Option<VariantKey>, Entity)> = Vec::new();
+            let mut facts = Vec::new();
             for kind in layouts {
                 if kind >= 32 {
                     bump(
@@ -780,7 +787,7 @@ impl Pass for ResolveAnvilShaders {
                     }
                     plain
                 };
-                match program(world, &mut programs, &template, tables, true, key) {
+                match program(world, &mut programs, &mut graphs, &template, tables, true, key) {
                     Ok(e) => stages.push((
                         Stage::Vertex,
                         Some(VariantKey {
@@ -790,11 +797,11 @@ impl Pass for ResolveAnvilShaders {
                         }),
                         e,
                     )),
-                    Err(why) => bump(
-                        &format!("vertex layouts whose vertex stage is left unbound: {why}"),
-                        1,
-                        &mut counts,
-                    ),
+                    Err(why) => {
+                        let hash = world.get::<AnvilShaders>(tables).and_then(|tables|tables.vertex(key)).map(primase_shader::source_hash);
+                        facts.push(ProgramFacts::unavailable(format!("{template}-{key:06x}.vs"),Stage::Vertex,hash,&why));
+                        bump(&format!("vertex layouts whose vertex stage is left unbound: {why}"),1,&mut counts);
+                    }
                 }
             }
             let vertex_bound = !stages.is_empty();
@@ -805,18 +812,9 @@ impl Pass for ResolveAnvilShaders {
                     .get::<Shader>(shader)
                     .map(|s| s.interface.clone())
                     .ok_or("a resolved shader entity without its shader")?;
-                // the program's value graph and the constants it reads (lifting it again is the cost; a program is
-                // lifted once per run)
-                let graph = graphs.entry(shader).or_insert_with(|| {
-                    let s = world
-                        .get::<Shader>(shader)
-                        .ok_or_else(|| "a resolved shader entity without its shader".to_owned())?;
-                    primase_dxbc::lift(&s.bytecode)
-                        .map_err(|e| format!("the lift: {e}"))?
-                        .graph()
-                        .map_err(|e| format!("the value graph: {e}"))
-                });
-                bound.push(self.stage_binding(
+                // program() cached these from the same lift that produced the interface.
+                let graph = graphs.get(&shader).ok_or("a resolved shader entity without its graph result")?;
+                let binding = self.stage_binding(
                     world,
                     &mut textures,
                     &m,
@@ -828,9 +826,13 @@ impl Pass for ResolveAnvilShaders {
                     vertex_bound,
                     graph.as_ref().map_err(String::as_str),
                     &mut counts,
-                ));
+                );
+                facts.push(world.get::<ProgramFacts>(shader).ok_or("a resolved shader entity without its facts")?
+                    .clone().bound(shader,&binding.outputs));
+                bound.push(binding);
             }
             bound.sort_by_key(|s| s.stage);
+            world.insert(material,MaterialPrograms(facts));
             world.insert(
                 material,
                 ShaderBinding {
@@ -863,6 +865,7 @@ pub const MESH_LAYOUT_FIELD: &str = "anvil.layout.kind";
 fn program(
     world: &mut World,
     programs: &mut BTreeMap<(Entity, bool, u32), Result<Entity, String>>,
+    graphs: &mut BTreeMap<Entity, Result<ProgramGraph, String>>,
     template: &str,
     tables: Entity,
     is_vertex: bool,
@@ -880,15 +883,15 @@ fn program(
             "the template has no {stage} permutation for the G-buffer key"
         )),
         Some(bytes) => match primase_dxbc::lift(&bytes) {
-            Err(e) => Err(format!("a {stage} program the lifter refuses: {}", e.group())),
+            Err(e) => Err(format!("a {stage} program the lifter refuses: {e}")),
             Ok(program) => {
                 let e = world.spawn();
+                let name = format!("{template}-{key:06x}.{}",if is_vertex {"vs"} else {"ps"});
+                world.insert(e,program.facts(&name));
+                graphs.insert(e,program.graph().map_err(|why|format!("the value graph: {why}")));
                 world.insert(
                     e,
-                    Name(format!(
-                        "{template}-{key:06x}.{}",
-                        if is_vertex { "vs" } else { "ps" }
-                    )),
+                    Name(name),
                 );
                 world.insert(
                     e,
@@ -1513,6 +1516,26 @@ mod key_tests {
     /// The D3D behaviour fixture of the DXBC lifter (our own HLSL, `ps_5_0`): five colour targets, which a lifted
     /// program states as the system values `SV_Target0..4` (not as semantics), as every program this pass binds.
     const LIFTED: &[u8] = include_bytes!("../../../../toolkit/dxbc/tests/fixtures/modes.dxbc");
+
+    #[test]
+    fn cached_program_records_facts_and_graph_from_its_single_fixture_lift() {
+        let mut world = World::new(); let tables = world.spawn();
+        let mut template = template(&[]);
+        template.pixel = vec![(0,0)]; template.programs = vec![LIFTED.to_vec()];
+        world.insert(tables,template);
+        let mut programs = BTreeMap::new(); let mut graphs = BTreeMap::new();
+        let entity = program(&mut world,&mut programs,&mut graphs,"fixture",tables,false,0).unwrap();
+        assert_eq!(program(&mut world,&mut programs,&mut graphs,"fixture",tables,false,0).unwrap(),entity);
+        assert_eq!(graphs.len(),1); assert!(graphs[&entity].is_ok());
+        let shader = world.get::<Shader>(entity).unwrap();
+        let outputs = output_bindings(&shader.interface,Some(1),true);
+        let facts = world.get::<ProgramFacts>(entity).unwrap().clone().bound(entity,&outputs);
+        assert_eq!(facts.hash,Some(primase_shader::source_hash(LIFTED)));
+        assert_eq!(facts.stage,Stage::Pixel); assert!(facts.instruction_count.unwrap().count > 0);
+        assert_eq!(facts.instruction_count.unwrap().unit,primase_core::shader::InstructionUnit::DxbcInstructions);
+        assert!(facts.inputs.iter().all(|input|input.used && input.provenance.d3d.is_some()));
+        assert_eq!(facts.surface,primase_core::shader::Surface::read(outputs.iter().map(|output|(output.lanes,&output.role))));
+    }
 
     /// An output role with any why as `UNKNOWN`'s, where it has one: the tests below hold which lanes are Unknown.
     fn unknown_as_one(role: OutputRole) -> OutputRole {

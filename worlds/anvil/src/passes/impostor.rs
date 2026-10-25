@@ -25,60 +25,6 @@ fn metadata(role: TexRole, color_space: ColorSpace) -> TextureMetadata {
     TextureMetadata { role, color_space, normal: None }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::read::impostor::StoredImpostor;
-    use primase_core::{TexFormat, frame::SourceFrame};
-
-    fn image(world: &mut World, bytes: Vec<u8>, color_space: ColorSpace) -> Entity {
-        let entity = world.spawn();
-        world.insert(entity, Texture { width: 2, height: 1, format: TexFormat::Rgba8Unorm,
-            levels: vec![bytes], color_space, role: TexRole::Other, normal: None });
-        entity
-    }
-
-    #[test]
-    fn owned_coverage_cuts_the_diffuse_and_derived_atlases_are_shared_between_occurrences() {
-        let mut world = World::new();
-        // Diffuse has no silhouette; the separate world-normal atlas owns coverage.
-        let diffuse = image(&mut world, vec![20, 40, 60, 255, 80, 100, 120, 255], ColorSpace::Srgb);
-        let alpha = image(&mut world, vec![128, 128, 255, 0, 128, 128, 255, 255], ColorSpace::Linear);
-        let misc = image(&mut world, vec![5, 90, 7, 255, 6, 170, 8, 255], ColorSpace::Linear);
-        let mut card = [0.0; 27];
-        card[..12].copy_from_slice(&[-1.0, 0.0, 0.0, 1.0, 0.0, 0.0,
-            -1.0, 0.0, 2.0, 1.0, 0.0, 2.0]);
-        card[13] = -1.0; // normal -Y
-        card[15] = 1.0; // tangent +X
-        card[20] = 1.0; // bitangent +Z
-        card[21] = 1.0;
-        card[22] = 1.0;
-        let mut table = [0; 21];
-        table[1] = 1;
-        table[14] = 0.5f32.to_bits();
-        let source = AnvilImpostor { index_id: 77, frame: SourceFrame::ENU,
-            stored: StoredImpostor { head: [0; 71], maps: [None; 4], table,
-                top: 0, side: 1, cards: vec![card] }, textures: [Some(diffuse), Some(alpha), None, Some(misc)] };
-        let first = world.spawn();
-        let second = world.spawn();
-        world.insert(first, source.clone());
-        world.insert(second, source);
-        LowerAnvilImpostor.run(&mut world, &mut PassLog::default()).unwrap();
-        let mesh = world.get::<Mesh>(first).unwrap();
-        assert_eq!(mesh.primitives()[0].indices.as_ref().unwrap().len(), 6);
-        let material = mesh.primitives()[0].material.unwrap();
-        assert_eq!(world.get::<Mesh>(second).unwrap().primitives()[0].material, Some(material));
-        let pbr = world.get::<PbrMaterial>(material).unwrap();
-        assert_eq!(pbr.alpha_mode, AlphaMode::Mask { cutoff: 0.5 });
-        let base = world.get::<Texture>(pbr.base_color_texture.as_ref().unwrap().texture).unwrap();
-        assert_eq!(base.levels[0], [20, 40, 60, 0, 80, 100, 120, 255]);
-        assert_eq!(base.color_space, ColorSpace::Srgb);
-        let orm = world.get::<Texture>(pbr.metallic_roughness_texture.as_ref().unwrap().texture).unwrap();
-        assert_eq!(orm.levels[0], [255, 90, 0, 255, 255, 170, 0, 255]);
-        assert!(!world.has::<AnvilImpostor>(first));
-    }
-}
-
 fn decoded(world: &World, entity: Entity) -> Result<Texture, String> {
     let texture = world.get::<Texture>(entity).ok_or("Impostor atlas has no core.texture")?;
     map_rgba8_levels(texture, 0..texture.levels.len(), metadata(TexRole::Mask, ColorSpace::Linear),
@@ -190,8 +136,8 @@ impl Pass for LowerAnvilImpostor {
                     made.insert(key, material);
                     material
                 };
-                let positions: Vec<_> = card[..12].chunks_exact(3)
-                    .map(|v| source.frame.point([v[0], v[1], v[2]])).collect();
+                let positions: Vec<_> = card[..12].as_chunks::<3>().0.iter()
+                    .map(|v| source.frame.point(*v)).collect();
                 let normal = source.frame.direction(a);
                 let tangent = source.frame.direction(b);
                 let cross = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
@@ -219,5 +165,59 @@ impl Pass for LowerAnvilImpostor {
             log.approximate("Impostor camera selection replaced by all side cards; self shadow and translucency omitted", 1);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::read::impostor::StoredImpostor;
+    use primase_core::{TexFormat, frame::SourceFrame};
+
+    fn image(world: &mut World, bytes: Vec<u8>, color_space: ColorSpace) -> Entity {
+        let entity = world.spawn();
+        world.insert(entity, Texture { width: 2, height: 1, format: TexFormat::Rgba8Unorm,
+            levels: vec![bytes], color_space, role: TexRole::Other, normal: None });
+        entity
+    }
+
+    #[test]
+    fn owned_coverage_cuts_the_diffuse_and_derived_atlases_are_shared_between_occurrences() {
+        let mut world = World::new();
+        // Diffuse has no silhouette; the separate world-normal atlas owns coverage.
+        let diffuse = image(&mut world, vec![20, 40, 60, 255, 80, 100, 120, 255], ColorSpace::Srgb);
+        let alpha = image(&mut world, vec![128, 128, 255, 0, 128, 128, 255, 255], ColorSpace::Linear);
+        let misc = image(&mut world, vec![5, 90, 7, 255, 6, 170, 8, 255], ColorSpace::Linear);
+        let mut card = [0.0; 27];
+        card[..12].copy_from_slice(&[-1.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+            -1.0, 0.0, 2.0, 1.0, 0.0, 2.0]);
+        card[13] = -1.0; // normal -Y
+        card[15] = 1.0; // tangent +X
+        card[20] = 1.0; // bitangent +Z
+        card[21] = 1.0;
+        card[22] = 1.0;
+        let mut table = [0; 21];
+        table[1] = 1;
+        table[14] = 0.5f32.to_bits();
+        let source = AnvilImpostor { index_id: 77, frame: SourceFrame::ENU,
+            stored: StoredImpostor { head: [0; 71], maps: [None; 4], table,
+                top: 0, side: 1, cards: vec![card] }, textures: [Some(diffuse), Some(alpha), None, Some(misc)] };
+        let first = world.spawn();
+        let second = world.spawn();
+        world.insert(first, source.clone());
+        world.insert(second, source);
+        LowerAnvilImpostor.run(&mut world, &mut PassLog::default()).unwrap();
+        let mesh = world.get::<Mesh>(first).unwrap();
+        assert_eq!(mesh.primitives()[0].indices.as_ref().unwrap().len(), 6);
+        let material = mesh.primitives()[0].material.unwrap();
+        assert_eq!(world.get::<Mesh>(second).unwrap().primitives()[0].material, Some(material));
+        let pbr = world.get::<PbrMaterial>(material).unwrap();
+        assert_eq!(pbr.alpha_mode, AlphaMode::Mask { cutoff: 0.5 });
+        let base = world.get::<Texture>(pbr.base_color_texture.as_ref().unwrap().texture).unwrap();
+        assert_eq!(base.levels[0], [20, 40, 60, 0, 80, 100, 120, 255]);
+        assert_eq!(base.color_space, ColorSpace::Srgb);
+        let orm = world.get::<Texture>(pbr.metallic_roughness_texture.as_ref().unwrap().texture).unwrap();
+        assert_eq!(orm.levels[0], [255, 90, 0, 255, 255, 170, 0, 255]);
+        assert!(!world.has::<AnvilImpostor>(first));
     }
 }

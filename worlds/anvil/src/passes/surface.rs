@@ -61,7 +61,7 @@ pub const BAKE_ANVIL_SURFACE: PassSpec = PassSpec {
             terrain_ao: number("terrain-ao")?, sediments:g.choice("sediments"), mip_bias: number("mip-bias")?,camera_distance:number("camera-distance")?, address: g.choice("unstated-address") };
         if !out.texels_per_metre.is_finite() || out.texels_per_metre <= 0.0
             || !(32..=8192).contains(&out.max_size) || !out.max_size.is_power_of_two()
-            || !(8..=2048).contains(&out.max_chart) || out.max_chart % 2 != 0
+            || !(8..=2048).contains(&out.max_chart) || !out.max_chart.is_multiple_of(2)
             || !out.terrain_ao.is_finite() || !(0.0..=1.0).contains(&out.terrain_ao)
             || !out.mip_bias.is_finite() || !out.camera_distance.is_finite() || out.camera_distance<0.0
             || out.max_texels==0 { return Err("invalid surface bake density/budget/engine choices".into()); }
@@ -282,13 +282,13 @@ impl BakeAnvilSurface {
         };
         let ids=primitive.indices.clone().unwrap_or_else(||(0..p.len() as u32).collect());
         if ids.is_empty(){return Err("surface has no triangle indices".into());}
-        if ids.len()%3!=0 || ids.iter().any(|i| *i as usize>=p.len()) {return Err("surface indices outside triangle positions".into());}
+        if !ids.len().is_multiple_of(3) || ids.iter().any(|i| *i as usize>=p.len()) {return Err("surface indices outside triangle positions".into());}
         let linear=Linear::new([transform.cols[0],transform.cols[1],transform.cols[2]]);
         if linear.similarity().is_none() || linear.mirrors() {return Err("TriPlanar placement is mirrored/sheared/nonuniform; normal-frame contract not established".into());}
         let mut charts=Vec::new();
         let mut side=32;
         // Shelf pack the actual requested densities. Capacity failures retain the original primitive/material.
-        for triangle in ids.chunks_exact(3) {
+        for triangle in ids.as_chunks::<3>().0 {
             let v:[usize;3]=[triangle[0] as usize,triangle[1] as usize,triangle[2] as usize];
             let positions=v.map(|i|transform.apply(p[i]));
             let edge=(0..3).map(|i| dot(sub(positions[(i+1)%3],positions[i]),sub(positions[(i+1)%3],positions[i])).sqrt()).fold(0.0f32,f32::max);
@@ -328,10 +328,9 @@ impl BakeAnvilSurface {
                 .into_iter().collect::<Result<Vec<_>,_>>()?;
             let colour=colours.map(|c|vertices.map(|i|c[i]));
             let mesh_uv=source_uv.map(|uv|vertices.map(|i|uv[i]));
-            if let Some(ts)=source_tangents {
-                if vertices.iter().any(|i|ts[*i][3]!=ts[vertices[0]][3]) {
+            if let Some(ts)=source_tangents
+                && vertices.iter().any(|i|ts[*i][3]!=ts[vertices[0]][3]) {
                     return Err("surface triangle crosses authored tangent handedness; a split frame is required".into());
-                }
             }
             let authored_tangents=source_tangents.map(|ts|vertices.map(|i|{
                 let t=ts[i];let direction=sub(transform.apply([t[0],t[1],t[2]]),transform.apply([0.0;3]));

@@ -132,6 +132,29 @@ fn split_layers(
     }).collect()
 }
 
+
+/// The TextureMap in slot `slot` of the TextureSet `id` names, read as [`read_texture_map`] reads it: `None` where
+/// `id` is in no forge or isn't a TextureSet, or the slot is empty.
+pub fn read_texture_set_slot(
+    archive: &mut Archive,
+    w: &mut World,
+    id: u64,
+    slot: usize,
+) -> Result<Option<Entity>, Error> {
+    let Some(at) = archive.find(id) else {
+        return Ok(None);
+    };
+    let r = archive.resource(at)?;
+    if r.type_id != TEXTURE_SET {
+        return Ok(None);
+    }
+    let set = StoredTextureSet::parse(&r.body).map_err(|source| Error::TextureSet { at, source })?;
+    match set.references.get(slot).copied().flatten() {
+        Some(map) => read_texture_map(archive, w, map.id),
+        None => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,27 +179,5 @@ mod tests {
             &[vec![1; 32], vec![2; 4]]).unwrap();
         assert_eq!(split[0], vec![vec![1; 16], vec![1; 16]]);
         assert_eq!(split[1], vec![vec![2; 4]]);
-    }
-}
-
-/// The TextureMap in slot `slot` of the TextureSet `id` names, read as [`read_texture_map`] reads it: `None` where
-/// `id` is in no forge or isn't a TextureSet, or the slot is empty.
-pub fn read_texture_set_slot(
-    archive: &mut Archive,
-    w: &mut World,
-    id: u64,
-    slot: usize,
-) -> Result<Option<Entity>, Error> {
-    let Some(at) = archive.find(id) else {
-        return Ok(None);
-    };
-    let r = archive.resource(at)?;
-    if r.type_id != TEXTURE_SET {
-        return Ok(None);
-    }
-    let set = StoredTextureSet::parse(&r.body).map_err(|source| Error::TextureSet { at, source })?;
-    match set.references.get(slot).copied().flatten() {
-        Some(map) => read_texture_map(archive, w, map.id),
-        None => Ok(None),
     }
 }

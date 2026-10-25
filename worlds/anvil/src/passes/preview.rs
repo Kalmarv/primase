@@ -14,38 +14,6 @@ fn triangles(mesh: &Mesh) -> usize {
     mesh.primitives().iter().map(|p| p.indices.as_ref().map_or(p.vertex_count(), Vec::len) / 3).sum()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use primase_core::{LodForm, Primitive, Semantic, Stream, Topology};
-    use std::collections::BTreeMap;
-
-    fn mesh(material: primase_core::Entity, triangles: usize) -> Mesh {
-        Mesh::new(vec![Primitive { topology: Topology::Triangles,
-            streams: BTreeMap::from([(Semantic::Position, Stream::F32x3(vec![[0.0; 3]; triangles * 3]))]),
-            indices: None, material: Some(material) }])
-    }
-
-    #[test]
-    fn only_an_identified_canopy_standin_switches_to_its_authored_form() {
-        let mut world = World::new();
-        let canopy = world.spawn();
-        world.insert(canopy, AnvilRenderStatus { source: "Material".into(), template: Some("MAD_FakeForest".into()),
-            unsupported: false, reason: "authored vertex colour".into() });
-        let ordinary = world.spawn();
-        let form = world.spawn();
-        world.insert(form, mesh(canopy, 30));
-        let tiny_canopy = world.spawn();
-        let tiny_sign = world.spawn();
-        for (entity, material) in [(tiny_canopy, canopy), (tiny_sign, ordinary)] {
-            world.insert(entity, mesh(material, 2));
-            world.insert(entity, Lods { detail: 0, forms: vec![LodForm { detail: 1, form }], default: None });
-        }
-        SelectAnvilPreviewLod.run(&mut world, &mut PassLog::default()).unwrap();
-        assert_eq!(world.get::<Lods>(tiny_canopy).unwrap().default, Some(1));
-        assert_eq!(world.get::<Lods>(tiny_sign).unwrap().default, None);
-    }
-}
 fn canopy(world: &World, mesh: &Mesh) -> bool {
     !mesh.primitives().is_empty() && mesh.primitives().iter().all(|p| p.material
         .and_then(|m| world.get::<AnvilRenderStatus>(m))
@@ -80,5 +48,38 @@ impl Pass for SelectAnvilPreviewLod {
             log.approximate("preview authored canopy/impostor instead of its near-distance FakeForest stand-in", 1);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use primase_core::{LodForm, Primitive, Semantic, Stream, Topology};
+    use std::collections::BTreeMap;
+
+    fn mesh(material: primase_core::Entity, triangles: usize) -> Mesh {
+        Mesh::new(vec![Primitive { topology: Topology::Triangles,
+            streams: BTreeMap::from([(Semantic::Position, Stream::F32x3(vec![[0.0; 3]; triangles * 3]))]),
+            indices: None, material: Some(material) }])
+    }
+
+    #[test]
+    fn only_an_identified_canopy_standin_switches_to_its_authored_form() {
+        let mut world = World::new();
+        let canopy = world.spawn();
+        world.insert(canopy, AnvilRenderStatus { source: "Material".into(), template: Some("MAD_FakeForest".into()),
+            unsupported: false, reason: "authored vertex colour".into() });
+        let ordinary = world.spawn();
+        let form = world.spawn();
+        world.insert(form, mesh(canopy, 30));
+        let tiny_canopy = world.spawn();
+        let tiny_sign = world.spawn();
+        for (entity, material) in [(tiny_canopy, canopy), (tiny_sign, ordinary)] {
+            world.insert(entity, mesh(material, 2));
+            world.insert(entity, Lods { detail: 0, forms: vec![LodForm { detail: 1, form }], default: None });
+        }
+        SelectAnvilPreviewLod.run(&mut world, &mut PassLog::default()).unwrap();
+        assert_eq!(world.get::<Lods>(tiny_canopy).unwrap().default, Some(1));
+        assert_eq!(world.get::<Lods>(tiny_sign).unwrap().default, None);
     }
 }

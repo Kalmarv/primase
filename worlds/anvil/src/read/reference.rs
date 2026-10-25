@@ -24,13 +24,7 @@ pub enum Error {
 }
 
 /// A reference to a resource (tag `01`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Reference {
-    /// The byte after the tag, as stored.
-    pub mode: u8,
-    /// The ClassID referred to.
-    pub id: u64,
-}
+pub use crate::components::stored::Reference;
 
 /// The reference these bytes hold: `Some` for `01`, `None` for `03`.
 pub fn parse(bytes: [u8; LENGTH]) -> Result<Option<Reference>, Error> {

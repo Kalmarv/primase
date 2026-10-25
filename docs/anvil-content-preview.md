@@ -285,3 +285,159 @@ calculation, then compare its output vector against the already-on-disk world sn
 writer address or exported disassembly for it was found in the text evidence read this round. A second world
 time, if an offline capture later exists, must include the same controller identity and the actual cb4[9]
 vector, not only a third scalar named elevation. No Riders Republic launch is requested or authorized.
+
+## Archive coverage and the World boundary (write-only census round)
+
+This is a code audit and newly written code, **not a run result**. No build, test, archive scan or image run was
+performed in this round. The counts below are the older build-25394987 inventory in the conversion's
+`docs/type-names.md` (six forges, 1,301,684 stored entries, 905 type IDs); they include base/patch copies, not
+active map placements or distinct resources after patch resolution. A dash means no applicable entry count.
+The new census must supply current counts and bytes before these figures are used for prioritization.
+
+Reused format evidence: the conversion's `docs/lighting.md` §4 and §8 (29-byte event presets, 49-byte forecasts,
+and GI's 418 checked one-volume/one-box bodies); `docs/effects.md` §3–4, `docs/entity-grammar.md`,
+`docs/registry-named-fields.md`, `docs/terrain.md`, `docs/farview.md`, `docs/type-names.md`; and primase's
+`read::{convert,placements,entity,terrain,listing,sky,controller,light}`. These are the local earlier findings
+behind the Riders Republic registry/entity/terrain-effects knowledge pages. Old correlations and names are
+not promoted into physical units or activation rules. The older lighting note's controller-undecoded and
+sky-undecoded statements are superseded by the readers already in this tree.
+
+`read` below means a retained **stated subset** has an audited path; it never means every byte, permutation,
+instance or engine effect is supported. `read-but-dropped-before-World` identifies consumed structural data,
+which is not automatically a defect. A resource may be a dependency rather than a standalone catalog preview.
+
+| Type | Type ID | Older stored entries | Status and retained subset / open boundary | Owner / lab display |
+|---|---|---:|---|---|
+| Entity | `0984415E` | 615,110 | read: placed visuals, collision, water, decals, state; remaining bounded components retained once per owner this round | primase reader; geometry/overlays, Outliner and Properties Data |
+| EntityGroup | `3F742D26` | 56,837 | read: own Entity and expanded members; original full membership/hierarchy not retained as a group component | primase reader; occurrence rows, source component Data |
+| World | `FBB63E47` | 4 | read-but-dropped-before-World in region composition: GridDescriptions consumed; other World fields, including baked sky-transfer maps, not semantically decoded | primase reader; overview plus new standalone layout Data row; unread World tail remains explicit |
+| GridPartition | `0E2F4444` | 8 | read-but-dropped-before-World in region composition: cell selection/layout consumed | primase reader; overview/region controls plus new standalone cell-reference Data row; not a drawable object |
+| GridCellDataBlock | `AC2BBF68` | 66,359 | read: reached owner/cell/level in AnvilListed; complete original list not copied | primase reader; placement source data, overview |
+| Mesh | `415D9568` | 147,289 | read: compiled vertex/index/range data and material links | primase reader; meshes, Outliner, Mesh/Material Properties |
+| LODSelector | `51DC6B80` | 48,862 | read: meshes/impostors and authored distance metadata | primase reader; LOD forms and bounds overlay |
+| Impostor | `DFCD6E51` | 117 | read: cards and owned atlases; static-card approximation explicit | primase reader; geometry and material Data |
+| Material | `85C817C3` | 13,579 | read: parameters/texture/shader links; unsupported programs keep named failures | primase reader; swatches, Material Properties, notices/sentinels |
+| MaterialTemplate | `BCFB3C7A` | 432 | read: parameter roles, G-buffer stages/permutations; not every runtime binding is established | primase reader; bound material/shader inspection, no standalone template renderer |
+| TextureMap | `A2B7E917` | 46,365 | read: established stored formats, mips/layers; unknown storage profiles refuse | primase reader; Image editor/contact sheets and texture Data |
+| TextureSet | `D70E6670` | 10,027 | read: referenced texture slots retained through material/terrain owners | primase reader; owner texture rows; no standalone set composition |
+| CompiledMip | `1D4B87A3` | 25,031 | read: external image level attached to parent map | primase reader; parent Image editor's mip selection |
+| TerrainNodeLayer | `DCE0537E` | 1 | read: selected TNL nodes in AnvilTerrain | primase reader; near splat, explicit far tile/ring, collision overlay |
+| TNLChunk | `4A054F51` | 87,381 | read: decoded selected height/material nodes; not the runtime virtual cache views | primase reader; terrain geometry, layered materials |
+| TerrainMaterialBank | `4BE94285` | 1 | read: bank's material/detail ownership | primase reader; terrain material/layer rows |
+| TerrainMaterial | `01724188` | 195 | read: established detail parameters and TextureSet links | primase reader; terrain layers/material Data |
+| FloorHeightData | `92ADA771` | 2 | read: StoredFloorHeight::component retains coarse blocks; regular area composition uses TNL instead | new standalone floor catalog/Data row; vertical lowering remains caller-controlled, with a notice |
+| MeshShape | `B22B3E61` | 25,162 | read: triangles/material indices | primase reader; collision outlines/fill, Data |
+| SphereShape | `FA3F7A18` | 241 | read: analytic source shape | primase reader; lowered collision overlay |
+| CapsuleShape | `B8599052` | 290 | read: analytic source shape | primase reader; lowered collision overlay |
+| BoxShape | `4EC68E98` | 29 | read: analytic source shape | primase reader; lowered collision overlay |
+| ReferenceListShape | `2D675BA2` | 3,731 | read: bounded nested shape placements | primase reader; collision overlay; cycles/limits named |
+| CollisionMaterial | `74F7311D` | 263 | read **identity/name only**: physical material body remains unread | primase reader for physical fields; lab collision surface/name rows |
+| DDecalModel | `50563D58` | 70 | read: model textures/parameters via deferred-decal owners | primase reader; projected geometry/materials, unsupported family notice |
+| GrassPatternLibrary | `463CC1B8` | 1 | read: patterns/models retained in AnvilGrass | primase reader; lowered grass geometry/materials; simulation excluded |
+| SpotLight | `80320FB8` | 32 | read: stored spotlight via LightInstance; units require caller calibration | primase reader; core lights, light overlay and Properties |
+| LayeredSky | `24D32CF8` | 48 | read: established scattering/keyframe profiles | primase reader; scene Environment/Atmosphere, sky and source Data |
+| WorldAmbiance | `21C2D472` | 110 | read: owned sky/cube; lens flares and particle/weather simulation omitted | primase reader; sky/cube preview and named omissions |
+| TimeOfDayPropertyControllerData | `F0C85018` | 140 | read: established path/key profiles in AnvilSkyControllers | primase reader; evaluated scene lighting; source tracks in Data |
+| WeatherPropertyControllerData | `887004DC` | 63 | read: established scalar-path profiles in AnvilSkyControllers | primase reader; selected static state, unsupported paths named |
+| GIDynResource | `BAE98B30` | 16,956 | new read: one-volume/one-box grammar, bounded V1/V2/V3 RLE, V4 probe positions; **irradiance unresolved** | primase reader; new `gi` catalog, blue position markers, source Data; not added wholesale to area reads |
+| AmbianceAndTimeOfDayPreset | `E8ECCA01` | 290 | new read: season/forecast refs, hour, angle and flag kept separately; angle's role unresolved | primase reader; new `preset` catalog, metadata/notice, no invented placement |
+| ForecastPreset | `79B0E782` | 248 | new read: twelve finite stored lanes; lane meanings not inferred from names | primase reader; new `forecast` catalog, metadata/notice |
+| Season | `F7485E9F` | 75 | unread: names/reference targets known; complete 306/313-byte grammar and event selection not established here | primase reader |
+| WeatherRegionCellData | `F2BB7836` | 7 | unread: region weather ownership/overlap not decoded | primase reader |
+| TerrainSediments | `29191D7B` | 5 | unread: sediment/runtime cache producer missing | primase reader |
+| TerrainProceduralSet | `2F45393E` | 132 | unread: procedural ownership/cache recipe | primase reader |
+| TerrainProceduralMaterial | `4323218D` | 479 | unread: detail-cache material producer | primase reader |
+| TerrainProceduralSetBank | `65C3C7D0` | 1 | unread: bank grammar not established here | primase reader |
+| RiverWorldComponentData | `11BF3F3A` | 1 | unread: separate from already read/rendered river meshes/materials | primase reader |
+| SplashFX | `755ACE14` | 395 | unread: placed Visual has named unsupported status, no particle simulation | primase reader for stored action graph; simulation excluded |
+| FX | `824A23BA` | 800 | unread: component bytes now retained; referenced command graph not decoded | primase reader; source Data/unsupported owner marker |
+| WorldParticlesDescriptor | `8F3D5BB6` | 14 | unread: complete descriptor grammar not established | primase reader; simulation excluded |
+| SpawnPointSettings | `53903478` | 492 | unread: settings are not a world transform; do not invent spawn points | primase reader |
+| SpawnEntityBuilderDescriptor | `AC8AF394` | 329 | unread: builder/activation grammar | primase reader |
+| Animation / Skeleton / BuildTable | `0FA3067F` / `24AECB7C` / `22ECBE63` | 9,111 / 1,138 / 10,741 | existing read paths counted; characters and animations excluded from this round's implementation | existing reader/display owners |
+
+### Embedded components are a different census
+
+`WaterComponent` (`996DF94F`), `StaticDecalComponent` (`2F3A7F6D`),
+`HoudiniDecalInstancerComponent` (`4148CD56`), `StaticDDecalComponent` (`5B413085`),
+`RigidBodyComponent` (`C177D702`), `GrassComponent` (`CB28F06D`), `GrassVisual` (`8FA80D8D`),
+`LightInstance` (`554C614C`) and the far-view instance flags are embedded objects, **not extra forge entries**.
+They already reach typed water/decal/collision/grass/light components or mesh instances. FarFake, FakeForest,
+IsNearFake and LongRange are placement classifications/list policy, not four newly discovered archive types.
+`WaterComponent`'s lake atlases and geometry, river material lowering, and far-ring selection have different
+consumers; an unread RiverWorldComponentData does not mean that all water is unread.
+
+Before this round, `ComponentBody::Raw`, `Unread` and `Refused` could be parsed/delimited and then disappear in
+Placer, except for counters. Unhandled bodies now live in `AnvilSourceComponents`, once per owner.
+`AnvilSourceOwner` links every occurrence to that one payload, so selecting a later instance retains the data
+without retaining an out-of-region first instance. An owner with no static output gets a marker at its actual
+stored transform and a named explanation. Length-rule-only is explicitly **not semantic decoding**.
+Successfully typed water/decal bodies keep their typed path; a failure in those later typed reads remains a named
+refusal (retaining every original successfully typed water/decal body again is not this change).
+
+The notable still-opaque map component families are `FXComponent` (`D2BF93A6`),
+`AmbientEffectGeneratorComponent` (`713F0C7D`), `WildlifeSpawnerComponent` (`A8ABFC79`),
+`SpawnerComponent` (`E2791E7F`) and `PlayerSpawnActivatorComponent` (`A7033693`). Their counts cannot be taken
+from the forge table. Existing `tests/census.rs`'s Entity outcomes remain the full embedded-body census.
+The effects note's 226,918 ambient-generator owners / 227,389 instances are an older, narrower observation,
+not today's result. Most are sound generators; treating that count as missing particle visuals is wrong.
+The registry establishes many length rules, but the polymorphic action/reference semantics and activation
+conditions need their own complete body contracts before a visual/spawn reader is written.
+
+### What the new census lines decide
+
+`tests/resource_coverage.rs` is not ignored. Its ordinary inventory test opens each forge index in turn,
+recursively below `installs.riders`, without decoding payloads. It fails on directory/index errors, counts
+unknown IDs too, and writes `scratch/anvil-resource-coverage.json`. `ANVIL_RESOURCE_TYPE` carries type ID,
+status, exact stored-entry count, stored payload bytes, destination, three example identities and the next
+observation. Global known zero-count rows are included. A configured installation with no forges fails;
+an unconfigured installation uses the existing explicit testdata skip/require policy. Bytes exclude tables
+and padding and are **not decoded bytes**. Nothing deduplicates patch copies or equates them to active content.
+
+The separate ordinary profile test writes `scratch/anvil-map-resource-profiles.json` and
+`ANVIL_MAP_PROFILE` lines for at most three entries per named open map type per forge, plus new GI/look types.
+It records decoded body length, a 96-byte prefix, resource-decode error or named new-parser refusal. This
+is bounded sampling, not a claim to parse every occurrence. A prefix and an entry count alone cannot establish
+a variable-length body grammar.
+
+| Census line / open row | Decision it supports / exact evidence still needed |
+|---|---|
+| Every `ANVIL_RESOURCE_TYPE` | Current breadth and storage rank, patch duplication scope, unknown type IDs and concrete entries to inspect. It does not prove rendering. |
+| `ANVIL_MAP_PROFILE`, GIDynResource | Whether sampled files close the documented one-volume/one-box profile and RLE sizes. Other profiles keep the exact refusal. Irradiance still needs V2 post-mask grammar, sample origin (especially WhiteRoom), grid flag semantics and the GPU GIDynData producer. |
+| `ANVIL_MAP_PROFILE`, look presets | Whether the 29/49-byte profiles and reference forms still close. Season activation and forecast lane mapping require the selected event's Season chain and the actual controller consumer; the angle must not become sun azimuth by guess. |
+| World / GridPartition | Which stored layouts are consumed. Standalone catalog reads now retain layouts/cell references for Data inspection; remaining World fields and baked sky-transfer maps need exact field offsets/dimensions from the existing lighting notes, not a generic reference scan. |
+| TerrainSediments / ProceduralSet / ProceduralMaterial / bank | Which concrete size/profile families and referenced resources exist. Full bodies plus registry ordered fields must establish sediment/cache ownership; t13–t22, t45/t46 and t50/t51 contracts above still decide runtime surface baking. |
+| RiverWorldComponentData | The single resource's exact body/profile, then the typed join to RiverQuadTree instances. Already decoded river mesh/material content is the control. |
+| SplashFX / FX / WorldParticlesDescriptor | Which body-size families to inspect and which state/action classes need full extents. A class/action name is insufficient to parse a polymorphic array, and no simulation is authorized by this inventory. |
+| SpawnPointSettings / SpawnEntityBuilderDescriptor | Which settings/builders are present, then the Entity component that owns transform and event/state activation. Until that join is established, settings rows are not spawn markers. |
+| Season / WeatherRegionCellData | Exact reference-vector/cell-bounds profiles and event/region ownership. Counts do not decide the active look or overlap priority. |
+| Embedded Entity outcomes | Raw/refused class extents and exact owner/component IDs for the missing semantic readers. These counts have a component denominator; never add them to the forge-entry totals. |
+
+### Lab display audit
+
+The existing Outliner `hierarchy` includes every remaining entity under Data; Properties' selected-entity Data
+panel asks the component for its JSON. No changes to `ui/properties.rs` or `ui/outline.rs` are needed for the
+new typed metadata. `AnvilGiDyn` and `AnvilLookPreset` provide structured JSON, and retained source components
+provide type, ID, status and exact body bytes. Source records have their own selectable Data identity; an
+occurrence's `anvil.source_owner` gives that identity. The scene builder adds GI position markers and named
+metadata/unsupported explanations. Markers' blue colour is a diagnostic, never decoded irradiance. Presets
+have no authored position, so they get a notice/Data row and no invented viewport origin.
+
+Standalone coarse FloorHeightData and stored World/GridPartition/GridCellDataBlock layout/reference data now
+have catalog/Data rows and named notices, without inventing placed geometry. Remaining composition rows are
+the additional unread World fields and area-selected GI (rather than loading all ~5.7 GB of GI resources by default).
+Dependency types such as CompiledMip, TextureSet, MaterialTemplate, TerrainMaterial and DDecalModel display
+through their owning texture/material/terrain/decal; this is not a standalone-resource renderer for each.
+Generic raw Data inspection is not a substitute for the still-missing semantic readers in the table.
+
+### First-check failures addressed in the same write-only round
+
+The reported failures were read from the first-check logs; no rerun is claimed here.
+
+| Check | Cause and source change |
+|---|---|
+| `parse_modules_are_checked` | Controller, impostor, light and sky byte decoders lacked checked-parser guards. Added the guards, checked offset/count arithmetic and slice access; applied the same boundary to new GI/look readers. Fixture allowances are confined to tests; numerical curve/stencil helpers state their bounded arithmetic separately. |
+| `worlds_layout` | Component fields named I/O-owned reader modules. Stored records and component class names now live in pure `components::stored` / `components::component_types`; existing `read::*` paths re-export them so callers keep one type identity. |
+| `game_names` | An exposure notice used the word for a multiplier of one that also names another engine. Reworded the notice in `passes/sky.rs`. |
+| Anvil Clippy | Replaced manual divisibility checks and constant chunk iterators; collapsed the tangent check; moved the impostor/preview/sky/texture test modules after their implementation items. No assertions were weakened. |
+| Lab full preparation | The logged binary's surface OptionSpec omitted `sediments`; the current source declares the typed option and the lab states `sediments=omit`. This is a source/pin comparison, not a claim that the test has been rerun. |
