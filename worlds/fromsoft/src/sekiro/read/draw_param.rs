@@ -31,9 +31,13 @@ use std::collections::BTreeMap;
 const LIGHT_SET: &str = "LightSet ParamEditor";
 const FOG: &str = "FogParamEditor";
 /// Elden Ring's fog group (its files store this and no `FogParamEditor`). The part's fog slot (`FogParamID` in
-/// SoulsFormats' `GparamConfig`) is taken to select its sets: a hypothesis from the slot's name and from the ids the
-/// census found in it (100 and 101, 77 to 94: the same kind of hundreds ids as the light set's), decided by whether the
-/// ids parts name are among the ones stored (`absent_ids` and `other_ids` name `FogVolume ParamEditor <id>`).
+/// SoulsFormats' `GparamConfig`) is taken to select its sets, where a part names one: a hypothesis from the slot's name
+/// and from the ids the census found in it (100 and 101, 77 to 94: the same kind of hundreds ids as the light set's).
+/// The census `draw_param_census` found it not to hold where it matters: on `m10_00_0000`, `m10_00_0100` and
+/// `m12_02_0000` the group stays unchosen (ids [100, 101] and [77..94]) with `other_ids {}` and `absent_ids {}`, so no
+/// part names a non-negative fog id there (an id of 0 or more is counted in one of the two), and the group is chosen
+/// only where it stores a single set. What selects the set is not established: `PARTSLOTS` (the four slots every part
+/// names, as stored) and `SCENES` of that census say what the parts do name, and a selector is read against them.
 const FOG_VOLUME: &str = "FogVolume ParamEditor";
 const LIGHT_SCATTERING: &str = "LightScattering : ParamEditor";
 const ENV_MAP: &str = "Env Map:Editor";
@@ -90,6 +94,9 @@ pub struct Report {
     pub unread: Unread,
     /// The scene configs of the collision parts, by their four bytes: parts storing them.
     pub scenes: BTreeMap<String, usize>,
+    /// The four value-set slots every kept or collision part's graphics config stores, as `<slot> <id>` (as stored,
+    /// negative for none): the parts naming it. What a group's selector can be read against.
+    pub slots: BTreeMap<String, usize>,
     /// The game's layered files (`_weatherbase` ...) exist and are not read.
     pub layers_not_read: bool,
 }
@@ -259,6 +266,16 @@ pub(super) fn read(
     };
     for scene in configs.iter().filter_map(|c| c.scene) {
         *report.scenes.entry(format!("{scene:?}")).or_default() += 1;
+    }
+    for c in configs {
+        for (slot, id) in [
+            ("light_set", c.light_set),
+            ("fog", c.fog),
+            ("light_scattering", c.light_scattering),
+            ("env_map", c.env_map),
+        ] {
+            *report.slots.entry(format!("{slot} {id}")).or_default() += 1;
+        }
     }
     if !report.available.contains(stem) {
         report.missing = Some(stem.clone());

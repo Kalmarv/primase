@@ -148,12 +148,45 @@ pub(crate) fn inverse_point(m: &Matrix, p: [f64; 3]) -> Option<[f64; 3]> {
     ])
 }
 
+/// `p` as a direction in the space of the affine map `m` (its translation ignored). `None` where `m` has no inverse.
+fn inverse_vector(m: &Matrix, v: [f64; 3]) -> Option<[f64; 3]> {
+    inverse_point(&[m[0], m[1], m[2], [0.; 3]], v)
+}
+
+fn unit(v: [f64; 3]) -> Option<[f64; 3]> {
+    let length = v.iter().map(|x| x * x).sum::<f64>().sqrt();
+    (length.is_finite() && length > 1e-9).then(|| v.map(|x| x / length))
+}
+
+fn cross3(u: [f64; 3], v: [f64; 3]) -> [f64; 3] {
+    [
+        u[1] * v[2] - u[2] * v[1],
+        u[2] * v[0] - u[0] * v[2],
+        u[0] * v[1] - u[1] * v[0],
+    ]
+}
+
+/// The rotation of a dummy whose stored forward and upward directions are `forward` and `upward`, as the columns of its
+/// local X, Y and Z axes: forward along -Z and upward along +Y (what every sample of the install shows, perpendicular to
+/// within 0.0006), X completing the right-handed set. The stored vectors are not unit length (the censuses found lengths
+/// of 0.057 to 0.3, the dummies' scale), so both are normalised first and the second made exactly perpendicular to the
+/// first. `None` where either has no direction (zero or not finite) or they are parallel.
+pub(crate) fn dummy_axes(forward: [f64; 3], upward: [f64; 3]) -> Option<[[f64; 3]; 3]> {
+    let z = unit(forward)?.map(|x| -x);
+    let u = unit(upward)?;
+    let along = u.iter().zip(z).map(|(a, b)| a * b).sum::<f64>();
+    let y = unit(std::array::from_fn(|i| u[i] - along * z[i]))?;
+    Some([cross3(y, z), y, z])
+}
+
 /// A model's dummy polygons as sockets on its skeleton (`core.sockets`; joint `i` is bone `i`, see [`skeleton`]), each
 /// where the dummy stands in the model at rest and following the bone it is attached to: the dummy's position is taken
 /// in the space of its parent bone where it has one (SoulsFormatsNEXT: "initially transformed to" it) and in the
-/// model's where it has none; the socket's joint is its attach bone, else its parent bone. The socket is the point
-/// alone, in the joint's space; the dummy's forward and upward directions are not lowered (they stay in
-/// `fromsoft.dummies`). Named `dummy <reference id>`; the ids number the sockets in file order.
+/// model's where it has none; the socket's joint is its attach bone, else its parent bone. The socket's rotation is the
+/// dummy's frame ([`dummy_axes`]: forward along -Z, upward along +Y, both normalised) where the dummy uses its upward
+/// vector, the directions taken in the same space as the position and then in the joint's; where it does not, or a
+/// direction has none, the rotation is the identity. The directions' stored lengths are not part of the socket (they
+/// stay in `fromsoft.dummies`, as stored). Named `dummy <reference id>`; the ids number the sockets in file order.
 ///
 /// Also the indices of the dummies that were left out: one that names a bone the model does not have, or no bone at all
 /// to follow, or a bone with no inverse, or a position that is not finite.
@@ -178,14 +211,30 @@ pub(crate) fn dummy_sockets(model: &Model) -> Result<(primase_core::Sockets, Vec
             };
             let joint = attach.or(parent).filter(|&j| j < worlds.len())?;
             let [x, y, z] = inverse_point(&worlds[joint], in_model)?;
-            Some((joint, [x as f32, y as f32, z as f32]))
+            // the directions are in the position's space; into the model's, then the joint's
+            let axes = d
+                .use_upward_vector
+                .then(|| {
+                    let direction = |v: [f32; 3]| {
+                        let v = v.map(f64::from);
+                        let in_model = match parent {
+                            Some(p) => affine_vector(worlds.get(p)?, v),
+                            None => v,
+                        };
+                        inverse_vector(&worlds[joint], in_model)
+                    };
+                    dummy_axes(direction(d.forward)?, direction(d.upward)?)
+                })
+                .flatten();
+            Some((joint, [x as f32, y as f32, z as f32], axes))
         })();
-        let Some((joint, t)) = placed else {
+        let Some((joint, t, axes)) = placed else {
             left_out.push(i);
             continue;
         };
+        let [ax, ay, az] = axes.unwrap_or([[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]]);
         let offset = primase_core::Rest::Affine(Transform {
-            cols: [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], t],
+            cols: [ax.map(|c| c as f32), ay.map(|c| c as f32), az.map(|c| c as f32), t],
         })
         .converted(&FRAME)
         .matrix();
@@ -419,6 +468,74 @@ mod tests {
         // (5, 5, 5) is (4, 3, 5) from the hand in the file's frame, (4, 3, -5) in the world's
         assert_eq!((second.id, second.joint), (primase_core::SocketId(1), primase_core::JointId(1)));
         assert!(near(second.offset.cols[3], [4.0, 3.0, -5.0]), "{:?}", second.offset);
+    }
+
+    /// Directions the file stores at 0.05 to 0.3 of a unit give the same frame as unit ones: forward along -Z, upward
+    /// along +Y, the frame orthonormal; a direction with none (zero, not a number) or parallel ones give none; an
+    /// upward slightly off perpendicular (as the install's are, to 0.0006) is made exactly perpendicular.
+    #[test]
+    fn a_dummys_frame_is_built_from_normalised_directions() {
+        let near = |a: [f64; 3], b: [f64; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-12);
+        // forward along +X at length 0.5, upward along +Y at length 0.3: Z = -forward, X = Y x Z
+        let axes = dummy_axes([0.5, 0.0, 0.0], [0.0, 0.3, 0.0]).unwrap();
+        assert!(near(axes[0], [0., 0., 1.]) && near(axes[1], [0., 1., 0.]) && near(axes[2], [-1., 0., 0.]), "{axes:?}");
+        // the install's own convention, forward -Z and upward +Y at the stored 0.196, is the identity
+        let identity = dummy_axes([0.0, 0.0, -0.196], [0.0, 0.196, 0.0]).unwrap();
+        assert!(near(identity[0], [1., 0., 0.]) && near(identity[1], [0., 1., 0.]) && near(identity[2], [0., 0., 1.]));
+        // 0.0006 off perpendicular, 0.057 long: still orthonormal
+        let off = dummy_axes([0.0, 0.0, -0.057], [0.0, 0.057, 0.000_034]).unwrap();
+        let dot = |a: [f64; 3], b: [f64; 3]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f64>();
+        for i in 0..3 {
+            assert!((dot(off[i], off[i]) - 1.0).abs() < 1e-12, "{off:?}");
+            for j in 0..i {
+                assert!(dot(off[i], off[j]).abs() < 1e-12, "{off:?}");
+            }
+        }
+        assert!(dummy_axes([0.0; 3], [0.0, 1.0, 0.0]).is_none());
+        assert!(dummy_axes([f64::NAN, 0.0, 1.0], [0.0, 1.0, 0.0]).is_none());
+        assert!(dummy_axes([0.0, 0.0, 1.0], [0.0, 0.0, 3.0]).is_none());
+    }
+
+    /// A dummy that uses its upward vector is a socket with the rotation of its frame, from non-unit stored directions;
+    /// one that does not keeps the identity rotation.
+    #[test]
+    fn a_dummy_using_its_upward_vector_has_the_rotation_of_its_frame() {
+        let bone = Bone {
+            name: "root".into(),
+            translation: [0.0; 3],
+            rotation: [0.0; 3],
+            scale: [1.0; 3],
+            parent: -1,
+        };
+        let mut turned = dummy([0.0; 3], -1, 0);
+        turned.forward = [0.5, 0.0, 0.0];
+        turned.upward = [0.0, 0.3, 0.0];
+        turned.use_upward_vector = true;
+        let mut unused = turned.clone();
+        unused.use_upward_vector = false;
+        let model = Model {
+            bones: vec![bone],
+            dummies: vec![turned, unused],
+            version: 0x2001a,
+            speedtree: false,
+            layouts: vec![],
+            materials: vec![],
+            meshes: vec![],
+        };
+        let (sockets, left_out) = dummy_sockets(&model).unwrap();
+        assert!(left_out.is_empty());
+        let cols = |i: usize| sockets.0[i].offset.cols;
+        let length = |v: [f32; 3]| v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let dot = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>();
+        let turned = cols(0);
+        for i in 0..3 {
+            assert!((length(turned[i]) - 1.0).abs() < 1e-5, "{turned:?}");
+            for j in 0..i {
+                assert!(dot(turned[i], turned[j]).abs() < 1e-5, "{turned:?}");
+            }
+        }
+        assert_ne!(turned[..3], [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], "{turned:?}");
+        assert_eq!(cols(1)[..3], [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
     }
 
     /// The point whose image under an affine map is a given point; none where the map is singular.

@@ -73,6 +73,9 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>, map: &str) -> Re
             r.other_ids,
             r.absent_ids,
         );
+        // what the parts name in each slot (id as stored, negative for none), and their scene configs: the evidence for
+        // what selects a group's value set
+        println!("{} {file} PARTSLOTS {:?} SCENES {:?}", game.name(), r.slots, r.scenes);
         for (group, (ids, fields)) in &r.unchosen_sets {
             println!("{} {file} UNCHOSEN [{group}] fields {fields} ids {ids:?}", game.name());
         }
