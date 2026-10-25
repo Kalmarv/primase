@@ -2146,7 +2146,7 @@ impl<'a> Placer<'a> {
             let class = crate::read::component_types::component_name(component.kind).unwrap_or("effect");
             self.world.insert(marker, Name(format!("{name}: {class}")));
             self.world.insert(marker, self.frame.transform(&transform(&e.matrix, e.scale)));
-            self.world.insert(marker, primase_core::Marker { kind: "effect-emitter".into(), ground: None, yaw: None });
+            self.world.insert(marker, primase_core::Marker { kind: "effect_emitter".into(), ground: None, yaw: None });
             self.world.insert(marker, crate::components::AnvilRenderStatus {
                 source: format!("component {:#x}", component.id), template: None, unsupported: true,
                 reason: format!("{class}: runtime emitter/property program; marked at its authored transform; particle simulation and FX property evaluation unavailable"),

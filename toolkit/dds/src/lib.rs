@@ -92,10 +92,14 @@ pub fn to_dxgi(format: TexFormat, color: ColorSpace) -> Result<u32> {
         .map(|(n, _)| *n)
         .ok_or_else(|| Error::Unsupported(format!("DXGI mapping for {format:?} {color:?}")))
 }
+/// The pixel format's FourCC flag: where it is set the FourCC states the format (the masks are not read), as Direct3D's
+/// loaders read a header. Writers also set the RGB flag beside it (`0x44`); a zero FourCC there leaves the masks to say.
+const FOURCC: u32 = 4;
+
 fn legacy(b: &[u8]) -> Result<TexFormat> {
     use TexFormat::*;
     let flags = word(b, 80)?;
-    if flags == 4 {
+    if flags & FOURCC != 0 && b[84..88] != [0; 4] {
         return match &b[84..88] {
             b"DXT1" => Ok(Bc1),
             b"DXT3" => Ok(Bc2),
@@ -114,7 +118,7 @@ fn legacy(b: &[u8]) -> Result<TexFormat> {
         word(b, 100)?,
         word(b, 104)?,
     ];
-    match (flags, masks) {
+    match (flags & !FOURCC, masks) {
         (0x40, [16, 0xf800, 0x7e0, 0x1f, 0]) => Ok(B5g6r5Unorm),
         (0x41, [16, 0x7c00, 0x3e0, 0x1f, 0x8000]) => Ok(B5g5r5a1Unorm),
         (0x41, [16, 0xf00, 0xf0, 0xf, 0xf000]) => Ok(B4g4r4a4Unorm),
@@ -173,7 +177,7 @@ pub fn read(bytes: &[u8]) -> Result<Texture> {
     let h = word(bytes, 12)?;
     let n = word(bytes, 28)?.max(1);
     dimensions(w, h, n)?;
-    let (format, color_space, start) = if word(bytes, 80)? == 4 && &bytes[84..88] == b"DX10" {
+    let (format, color_space, start) = if word(bytes, 80)? & FOURCC != 0 && &bytes[84..88] == b"DX10" {
         let dim = word(bytes, 132)?;
         if dim != 3 {
             return Err(Error::Unsupported(format!(

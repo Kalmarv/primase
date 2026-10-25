@@ -306,6 +306,7 @@ fn run(
         let metaparam = bundle_entity
             .and_then(|e| parameters.get(&e))
             .and_then(Option::as_ref);
+        let mut refused = None;
         let resolution = resolve(
             parsed,
             *shader_entity,
@@ -318,8 +319,15 @@ fn run(
                 if let Some(&e) = textures.get(&key) {
                     return Ok(Some(e));
                 }
-                let Some(t) = texture(payloads, stem, srgb)? else {
-                    return Ok(None);
+                // a texture the DDS reader refuses is one this read does not have: the slot is resolved as an unbound
+                // one is, by the unbound-textures policy, and the refusal counted by its reason
+                let t = match texture(payloads, stem, srgb) {
+                    Ok(Some(t)) => t,
+                    Ok(None) => return Ok(None),
+                    Err(e) => {
+                        refused = Some(e.to_string());
+                        return Ok(None);
+                    }
                 };
                 let e = world.spawn();
                 world.insert(
@@ -336,6 +344,9 @@ fn run(
             },
         )
         .map_err(|e| format!("{name}: {e}"))?;
+        if let Some(why) = refused {
+            log.omit(&format!("layer textures the DDS reader refuses, resolved as unbound ({why})"), 1);
+        }
         for (policy, count) in resolution.policies {
             *policies.entry(policy).or_default() += count;
         }

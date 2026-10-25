@@ -119,8 +119,11 @@ impl Pass for LowerAnvilWorldUv {
     fn options(&self) -> Options {
         Options::new()
     }
+    /// Its input is the world-mapped materials' record alone: lower-anvil-material writes it only where a material is
+    /// world-mapped, so a read whose materials are not (one forge entry, most sections) has meshes and no record, and
+    /// the pass is skipped there. The meshes it rewrites are its modifications, not a second input.
     fn requires(&self) -> &[&'static str] {
-        &[AnvilWorldUv::NAME, Mesh::NAME]
+        &[AnvilWorldUv::NAME]
     }
     fn may_lack_inputs(&self) -> bool {
         true

@@ -149,3 +149,30 @@ fn outskirt_maps_each_placement_by_its_world_position() {
         1
     );
 }
+
+/// A read whose materials are not world-mapped (one forge entry's mesh) has meshes and no `anvil.world_uv`: a pipeline
+/// skips `lower-anvil-world-uv` there rather than refusing the read.
+#[test]
+fn world_uv_is_skipped_where_no_material_is_world_mapped() {
+    use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
+    let mut w = World::new();
+    let mesh = w.spawn();
+    w.insert(
+        mesh,
+        Mesh::new(vec![Primitive {
+            topology: Topology::Triangles,
+            streams: BTreeMap::from([(
+                Semantic::Position,
+                Stream::F32x3(vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+            )]),
+            indices: None,
+            material: None,
+        }]),
+    );
+    let mut report = RunReport::default();
+    PassManager::new(PassRegistry::new())
+        .run(&mut w, &Pipeline { passes: vec![Box::new(LowerAnvilWorldUv)] }, &mut report)
+        .expect("skipped, not refused");
+    assert!(!report.steps[0].skipped.is_empty(), "{:?}", report.steps[0]);
+    assert!(w.get::<Mesh>(mesh).is_some());
+}

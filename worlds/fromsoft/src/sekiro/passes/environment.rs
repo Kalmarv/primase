@@ -29,8 +29,8 @@ use super::settings::Factor;
 use crate::sekiro::source::DrawParam;
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{
-    Ambient, AmbientLight, Atmosphere, Component, Environment, Light, LightKind, Name, Resource, Source, VolumetricFog,
-    World,
+    Ambient, AmbientLight, Atmosphere, Component, Environment, Light, LightKind, Name, Resource, Source, Transform,
+    VolumetricFog, World,
 };
 
 const LIGHT_SET: &str = "LightSet ParamEditor";
@@ -165,8 +165,9 @@ impl Pass for LowerFromSoftEnvironment {
     fn may_lack_inputs(&self) -> bool {
         true
     }
+    /// The sun is an entity: its light, where it stands, its name and the value set it came from.
     fn provides(&self) -> &[&'static str] {
-        &[Light::NAME, Environment::NAME, Atmosphere::NAME]
+        &[Light::NAME, Transform::NAME, Name::NAME, Source::NAME, Environment::NAME, Atmosphere::NAME]
     }
     fn approximates(&self) -> &'static str {
         "the sun's angle (radians) read as Euler rotations of a light shining along -Z; stored colours as linear; intensity the colour's fourth float by the calibration; the ambient's equator the mean of its hemispheres"
@@ -347,13 +348,21 @@ mod tests {
         w
     }
 
+    /// The pass as a pipeline runs it, so what it adds is checked against what it declares.
     fn run(w: &mut World, lux: f64) -> PassLog {
-        let mut log = PassLog::default();
-        LowerFromSoftEnvironment::new(Factor::new(lux).unwrap())
-            .run(w, &mut log)
+        use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
+        let mut report = RunReport::default();
+        PassManager::new(PassRegistry::new())
+            .run(
+                w,
+                &Pipeline {
+                    passes: vec![Box::new(LowerFromSoftEnvironment::new(Factor::new(lux).unwrap()))],
+                },
+                &mut report,
+            )
             .unwrap();
         assert!(w.verify_resources().is_empty());
-        log
+        report.steps.remove(0).log
     }
 
     /// The direction a light shines, its transform's local -Z.
@@ -487,8 +496,10 @@ mod tests {
             log.omitted["the draw-param file has no light set group at a chosen value set: no sun, no ambient"],
             1
         );
+        // a pipeline skips the pass where there is no draw param (it may lack its input); run alone, it says so
         let mut bare = World::new();
-        let log = run(&mut bare, 1.0);
+        let mut log = PassLog::default();
+        LowerFromSoftEnvironment::new(Factor::new(1.0).unwrap()).run(&mut bare, &mut log).unwrap();
         assert_eq!(log.counts["areas with no draw-param environment"], 1);
         assert!(bare.resource::<Environment>().is_none());
     }

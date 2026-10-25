@@ -186,6 +186,25 @@ fn legacy_aliases_and_masks() {
         put(&mut b, 92, 0x12345678);
         assert!(read(&b).is_err());
     }
+    // The FourCC flag beside the RGB flag (0x44, as some writers set both): a FourCC states the format and the masks
+    // are not read; a zero FourCC leaves the masks to say (an Elden Ring layer texture's header: BGRX masks).
+    let t = texture(Bc1, 4, 4, 1);
+    let mut b = write_dx10(&t).unwrap();
+    b.drain(128..148);
+    put(&mut b, 80, 0x44);
+    b[84..88].copy_from_slice(b"DXT1");
+    put(&mut b, 88, 32);
+    put(&mut b, 92, 0xff0000);
+    assert_eq!(read(&b).unwrap(), t);
+    let t = texture(Bgrx8Unorm, 7, 5, 3);
+    let mut b = write_dx10(&t).unwrap();
+    b.drain(128..148);
+    put(&mut b, 80, 0x44);
+    put(&mut b, 84, 0);
+    for (i, v) in [32, 0xff0000, 0xff00, 0xff, 0].into_iter().enumerate() {
+        put(&mut b, 88 + i * 4, v);
+    }
+    assert_eq!(read(&b).unwrap(), t);
 }
 #[test]
 fn malformed_inputs_and_unsupported_shapes() {
