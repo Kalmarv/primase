@@ -155,7 +155,8 @@ impl Pass for SelectReskateLights {
                          cap)"
                     )
                 })?;
-                summarize(w, self.per_cell, self.cell, &Owned::all())
+                // keyed as the lights below are (a part's made entities carry its tag), or none would match
+                summarize(w, self.per_cell, self.cell, &Owned::of(w))
             }
         };
         let kept = summary.kept();
@@ -303,6 +304,35 @@ mod tests {
             .run(&mut w, &mut PassLog::default())
             .unwrap();
         assert_eq!(energies(&w), [3.0, 4.0]);
+    }
+
+    /// A whole map converted as one part (the convert loop's `core.part_scope`, its lights made by its passes, so keyed
+    /// by the part's tag) keeps what the same cap keeps without a scope: the cap's ranking and its keep test use one
+    /// key, else no light matches and every light is left out.
+    #[test]
+    fn a_whole_part_keeps_what_the_cap_keeps() {
+        let mut w = World::new();
+        let lights = [
+            light(&mut w, 10.0, -10.0, 1.0, ""),
+            light(&mut w, 20.0, -10.0, 3.0, ""),
+            light(&mut w, 250.0, -10.0, 4.0, ""),
+        ];
+        w.insert_resource(primase_core::convert::PartScope {
+            roots: lights.into_iter().collect(),
+            shared: Default::default(),
+            context: Default::default(),
+            whole: true,
+            area: None,
+            first_made: Some(0),
+            placed: Default::default(),
+        });
+        let mut log = PassLog::default();
+        SelectReskateLights::new(1, 200.0)
+            .unwrap()
+            .run(&mut w, &mut log)
+            .unwrap();
+        assert_eq!(energies(&w), [3.0, 4.0]);
+        assert_eq!(log.counts["lights kept"], 2);
     }
 
     /// Both options are required and checked; the struct and its options are one.
