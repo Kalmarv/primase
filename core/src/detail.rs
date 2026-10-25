@@ -8,9 +8,11 @@
 //!
 //! The combination is a closed set of equations ([`DetailMix`]), each the one a family of programs computes, added only
 //! where every program said to compute it is shown to on the CPU executor (the equation against the program's decoded
-//! outputs, over random texture samples). Its outputs are the program's own G-buffer roles ([`DetailSurface`]), the
-//! mix happening before any lighting model; a closed set of lowerings ([`SurfaceLowering`]) makes them the PBR model's,
-//! the same lowering the source's bake applies, so every consumer converts through core.
+//! outputs, over random texture samples). Its outputs are the surface the equation yields ([`DetailSurface`]), the mix
+//! happening before any lighting model; a closed set of lowerings ([`SurfaceLowering`]) says how a G-buffer holds that
+//! surface ([`SurfaceLowering::written`]: the roles a program writes, what the proof compares) and makes it the PBR
+//! model's ([`SurfaceLowering::evaluate`]), the same lowering the source's bake applies, so every consumer converts
+//! through core.
 use serde::Serialize;
 use serde_json::Value;
 
@@ -72,18 +74,32 @@ pub enum DetailMix {
     DetailLerp(DetailLerp),
 }
 
-/// The most details a [`DetailLerp`] chains: this model's own bound, the largest chain an evaluator is built for. The
-/// sources it was derived from read one to three.
+/// The model's revision: the version of the component and the revision the glTF extension states
+/// (`PRIMASE_materials_detail_blend`). 4 adds the base colour's desaturation, the `max`, `affine` and `saturate` weight
+/// steps and the `metallic_gloss` lowering, and moves the dielectric reflectance into the `gloss_reflectance` lowering;
+/// 3, the earlier shape, is read as a subset.
+pub const REVISION: u32 = 4;
+
+/// The most details a [`DetailLerp`] chains: this model's own bound, the largest chain an evaluator is built for (the
+/// texture bindings of a detail material grow with it: three for the base and two for each detail). The programs it
+/// was derived from read one to three.
 pub const DETAIL_LIMIT: usize = 3;
+
+/// The weights of the luma a program desaturates the base colour toward ([`DetailLerp::base_saturation`]): the values the
+/// programs write, which sum to 1.
+pub const LUMA: [f32; 3] = [0.29891, 0.58661, 0.11448];
 
 /// Tinted details lerped in turn over a base, as the detail-blend programs this model was derived from compute them. With
 /// `A`, `N`, `M` the base colour, normal and mask samples, `D_i`, `K_i` the detail colour and normal samples,
 /// `lerp(a, b, t) = a + (b - a) * t` (lane by lane) and `chain(x)` the details' values `x_0, x_1, ...` lerped in turn by
 /// the weights (`x_0`, then `lerp(.., x_1, w_1)`, then `lerp(.., x_2, w_2)`):
 ///
-/// - `C = saturate(gain * A.rgb * chain(tint_i * D_i.rgb))`
+/// - `A' = lerp(A.rgb, luma(A.rgb), base_saturation)` with `luma(x) = dot(x, `[`LUMA`]`)`; `A.rgb` where it is 0
+/// - `C = saturate(gain * A'.rgb * chain(tint_i * D_i.rgb))`
 /// - `f = saturate(chain(r_i))`, each detail's reflectance term `r_i` as it states ([`ReflectanceTerm`])
-/// - albedo `(1 - f) * C * colour`, reflectance (F0) `lerp(dielectric_f0, C, f)`
+/// - the surface is `C`, `colour` and `f`; the lowering says what a G-buffer holds of it: albedo `(1 - f) * C * colour`
+///   and reflectance (F0) `lerp(dielectric_f0, C, f)` ([`SurfaceLowering::GlossReflectance`]), or albedo `C * colour` and
+///   metallic `f` ([`SurfaceLowering::MetallicGloss`])
 /// - normal: `xy = 2 * N.xy - 1`, `z = sqrt(1 - min(dot(xy, xy), 1))` of the base's `xy`, then `xy += normal_strength *
 ///   (2 * chain(K_i.xy) - 1)`: tangent space, unnormalised
 /// - gloss: `saturate(2 * chain(s_i) * chain(K_i.z + gloss_bias_i))` as the program stores it, each detail's scale `s_i`
@@ -97,14 +113,15 @@ pub struct DetailLerp {
     pub base_colour: TextureRef,
     pub base_normal: TextureRef,
     pub base_mask: TextureRef,
+    /// How far the base colour is desaturated toward its luma before the details are multiplied over it (0: not at all,
+    /// 1: grey).
+    pub base_saturation: f32,
     /// One to [`DETAIL_LIMIT`], in the chain's order.
     pub details: Vec<Detail>,
     /// The weight each detail after the first is lerped in by, per pixel ([`Weight`]): one fewer than the details.
     pub weights: Vec<Weight>,
     pub gain: f32,
     pub normal_strength: f32,
-    /// The reflectance (F0) of the dielectric part, where `f` is 0.
-    pub dielectric_f0: f32,
     /// Linear RGB the albedo is multiplied by.
     pub colour: [f32; 3],
     /// How the program stores the gloss in its G-buffer (the binding's `Gloss` encoding).
@@ -133,6 +150,13 @@ pub enum WeightStep {
     Power(u16),
     /// `min(x, bound)`, the bound where `x` is NaN (D3D's `min`).
     Min(f32),
+    /// `max(x, bound)`, the bound where `x` is NaN (D3D's `max`): `max(x, 0)` before a power keeps a program's `pow` of a
+    /// negative value (NaN, which its `saturate` makes 0) the same 0 here.
+    Max(f32),
+    /// `x * scale + bias`, the product rounded before the sum.
+    Affine { scale: f32, bias: f32 },
+    /// `clamp(x, 0, 1)`, 0 where `x` is NaN (D3D's `saturate`).
+    Saturate,
 }
 
 /// `x^exponent` by squaring, as a program writes a power: `x`, `x^2`, `x^4`, ... each the square of the one before, and
@@ -158,6 +182,9 @@ pub fn weight_steps(v: f32, steps: &[WeightStep]) -> f32 {
     steps.iter().fold(v, |x, step| match *step {
         WeightStep::Power(exponent) => weight_power(x, exponent),
         WeightStep::Min(bound) => x.min(bound),
+        WeightStep::Max(bound) => x.max(bound),
+        WeightStep::Affine { scale, bias } => x * scale + bias,
+        WeightStep::Saturate => x.max(0.0).min(1.0),
     })
 }
 
@@ -184,6 +211,12 @@ impl Weight {
                 }
                 WeightStep::Min(bound) if !bound.is_finite() => {
                     return Err(format!("min bound {bound} is not finite"));
+                }
+                WeightStep::Max(bound) if !bound.is_finite() => {
+                    return Err(format!("max bound {bound} is not finite"));
+                }
+                WeightStep::Affine { scale, bias } if !(scale.is_finite() && bias.is_finite()) => {
+                    return Err(format!("affine step {scale} * x + {bias} is not finite"));
                 }
                 _ => {}
             }
@@ -272,29 +305,52 @@ pub struct DetailSample {
     pub normal: [f32; 4],
 }
 
-/// One pixel's surface in the program's G-buffer roles, decoded, before the PBR lowering.
+/// One pixel's surface, before any G-buffer or PBR lowering: what the equation yields. A lowering says what a G-buffer
+/// holds of it ([`SurfaceLowering::written`]) and what the PBR model is ([`SurfaceLowering::evaluate`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DetailSurface {
-    /// Linear RGB: the diffuse colour the program writes.
-    pub albedo: [f32; 3],
+    /// Linear RGB: the details' colour `C`, before the material's colour.
+    pub c: [f32; 3],
+    /// Linear RGB the material multiplies the albedo by.
+    pub colour: [f32; 3],
+    /// The mix `f` between the dielectric and the colour, 0 to 1 (the metal).
+    pub mix: f32,
     pub alpha: f32,
     /// Tangent space, unnormalised (the program normalises after its tangent frame).
     pub normal: [f32; 3],
     /// Smoothness, 1 - perceptual roughness.
     pub gloss: f32,
-    /// Linear RGB reflectance at normal incidence (F0).
-    pub reflectance: [f32; 3],
 }
 
-/// How a [`DetailSurface`] becomes the PBR model: a closed set, each the lowering a source's bake applies to the same
-/// roles.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+/// The roles a program's G-buffer holds of a [`DetailSurface`] under a [`SurfaceLowering`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Written {
+    /// Linear RGB: the diffuse colour.
+    pub albedo: [f32; 3],
+    /// Linear RGB reflectance at normal incidence (F0), where the G-buffer stores one.
+    pub reflectance: Option<[f32; 3]>,
+    /// The metal factor, where the G-buffer stores one.
+    pub metallic: Option<f32>,
+}
+
+/// How a [`DetailSurface`] is held by a G-buffer and becomes the PBR model: a closed set, each the lowering a source's
+/// bake applies to the same surface. Both are the same statement (a mix between a dielectric and the colour); they
+/// differ in what the source's G-buffer stores of it.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SurfaceLowering {
-    /// Gloss and an F0 reflectance, as a G-buffer that stores them holds them and a bake lowers them: the base colour the
-    /// albedo, roughness `1 - gloss`, metallic 0 (the reflectance carries the metal), and the F0 as the specular colour
-    /// glTF's `KHR_materials_specular` states with a colour factor of 25 (its F0 is `0.04 * factor * colour`).
-    GlossReflectance,
+    /// A G-buffer that stores an F0 reflectance: albedo `(1 - f) * C * colour` and F0 `lerp(dielectric_f0, C, f)`. The PBR
+    /// model: the base colour the albedo, roughness `1 - gloss`, metallic 0 (the reflectance carries the metal), and the
+    /// F0 as the specular colour glTF's `KHR_materials_specular` states with a colour factor of 25 (its F0 is
+    /// `0.04 * factor * colour`).
+    GlossReflectance {
+        /// The reflectance (F0) of the dielectric part, where `f` is 0.
+        dielectric_f0: f32,
+    },
+    /// A G-buffer that stores a metallic factor: albedo `C * colour` and metallic `f`. The PBR model: the base colour the
+    /// albedo, metallic `f`, roughness `1 - gloss`, and no specular colour (the dielectric reflectance is the consumer's:
+    /// glTF's 0.04, which is a choice the source's lighting may not make, so a writer reports it).
+    MetallicGloss,
 }
 
 /// One pixel of the PBR model ([`SurfaceLowering::evaluate`]).
@@ -353,13 +409,17 @@ impl DetailLerp {
     pub fn evaluate(&self, s: &DetailSamples, weights: &[f32]) -> DetailSurface {
         let (a, n, m) = (s.base_colour, s.base_normal, s.base_mask);
         let pairs = || self.details.iter().zip(&s.details);
+        let base: [f32; 3] = if self.base_saturation == 0.0 {
+            [a[0], a[1], a[2]]
+        } else {
+            let luma = a[0] * LUMA[0] + a[1] * LUMA[1] + a[2] * LUMA[2];
+            std::array::from_fn(|i| lerp(a[i], luma, self.base_saturation))
+        };
         let c: [f32; 3] = std::array::from_fn(|i| {
             let detail = chain(pairs().map(|(d, x)| d.tint[i] * x.colour[i]), weights);
-            (self.gain * a[i] * detail).clamp(0.0, 1.0)
+            (self.gain * base[i] * detail).clamp(0.0, 1.0)
         });
         let f = chain(self.details.iter().map(|d| d.reflectance.value(m)), weights).clamp(0.0, 1.0);
-        let albedo = std::array::from_fn(|i| (1.0 - f) * c[i] * self.colour[i]);
-        let reflectance = c.map(|c| lerp(self.dielectric_f0, c, f));
         let base = [2.0 * n[0] - 1.0, 2.0 * n[1] - 1.0];
         let z = (1.0 - (base[0] * base[0] + base[1] * base[1]).min(1.0)).sqrt();
         let detail = |i: usize| 2.0 * chain(s.details.iter().map(|x| x.normal[i]), weights) - 1.0;
@@ -377,11 +437,12 @@ impl DetailLerp {
             .and_then(|j| s.details.get(j))
             .map_or(1.0, |x| (x.colour[3] * a[3]).clamp(0.0, 1.0));
         DetailSurface {
-            albedo,
+            c,
+            colour: self.colour,
+            mix: f,
             alpha,
             normal,
             gloss,
-            reflectance,
         }
     }
 
@@ -399,7 +460,7 @@ impl DetailLerp {
                     .chain([d.gloss_bias, d.reflectance.bias(), scale(d)])
             })
             .chain(self.colour)
-            .chain([self.gain, self.normal_strength, self.dielectric_f0])
+            .chain([self.gain, self.normal_strength, self.base_saturation])
             .all(f32::is_finite)
     }
 
@@ -449,21 +510,46 @@ impl DetailMix {
 }
 
 impl SurfaceLowering {
+    /// The roles a G-buffer under this lowering holds of `surface`: what a program that writes them writes, and what the
+    /// proof compares with the program's decoded outputs.
+    pub fn written(self, surface: &DetailSurface) -> Written {
+        let (c, f) = (surface.c, surface.mix);
+        match self {
+            SurfaceLowering::GlossReflectance { dielectric_f0 } => Written {
+                albedo: std::array::from_fn(|i| (1.0 - f) * c[i] * surface.colour[i]),
+                reflectance: Some(c.map(|c| lerp(dielectric_f0, c, f))),
+                metallic: None,
+            },
+            SurfaceLowering::MetallicGloss => Written {
+                albedo: std::array::from_fn(|i| c[i] * surface.colour[i]),
+                reflectance: None,
+                metallic: Some(f),
+            },
+        }
+    }
+
     /// The PBR model's pixel for `surface`.
     pub fn evaluate(self, surface: &DetailSurface) -> PbrPixel {
+        let written = self.written(surface);
+        let [r, g, b] = written.albedo;
+        let n = surface.normal;
+        let length = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        PbrPixel {
+            base_color: [r, g, b, surface.alpha],
+            normal: n.map(|x| x / length),
+            roughness: 1.0 - surface.gloss,
+            metallic: written.metallic.unwrap_or(0.0),
+            specular_color: written.reflectance,
+        }
+    }
+
+    /// Its constants finite.
+    fn check(self) -> Result<(), String> {
         match self {
-            SurfaceLowering::GlossReflectance => {
-                let [r, g, b] = surface.albedo;
-                let n = surface.normal;
-                let length = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
-                PbrPixel {
-                    base_color: [r, g, b, surface.alpha],
-                    normal: n.map(|x| x / length),
-                    roughness: 1.0 - surface.gloss,
-                    metallic: 0.0,
-                    specular_color: Some(surface.reflectance),
-                }
+            SurfaceLowering::GlossReflectance { dielectric_f0 } if !dielectric_f0.is_finite() => {
+                Err(format!("dielectric reflectance {dielectric_f0} is not finite"))
             }
+            _ => Ok(()),
         }
     }
 }
@@ -471,7 +557,7 @@ impl SurfaceLowering {
 impl Component for DetailedMaterial {
     const NAME: &'static str = "pbr.detail";
     const GEOMETRY: crate::Geometry = crate::Geometry::None;
-    const VERSION: u32 = 3;
+    const VERSION: u32 = REVISION;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
@@ -481,6 +567,7 @@ impl Component for DetailedMaterial {
         if let Some(f) = self.frozen.iter().find(|f| !f.finite()) {
             return Err(format!("frozen {f:?} is not finite"));
         }
+        self.lowering.check()?;
         match &self.mix {
             DetailMix::DetailLerp(mix) => {
                 mix.check()?;
@@ -554,10 +641,10 @@ mod tests {
             base_colour,
             base_normal,
             base_mask,
+            base_saturation: 0.,
             details,
             gain: 4.55,
             normal_strength: 0.5,
-            dielectric_f0: 0.03,
             colour: [1., 1., 0.5],
             gloss_encoding: ScalarEncoding::LINEAR,
             alpha: Some(0),
@@ -611,6 +698,7 @@ mod tests {
                 acc
             };
             let out = mix.evaluate(&s, &weights);
+            let written = SurfaceLowering::GlossReflectance { dielectric_f0: 0.03 }.written(&out);
             let c: [f32; 3] = std::array::from_fn(|i| {
                 let x: Vec<f32> = (0..n)
                     .map(|j| mix.details[j].tint[i] * s.details[j].colour[i])
@@ -619,9 +707,11 @@ mod tests {
             });
             let terms: Vec<f32> = [0.5 + 0.125, 0.75, 0.375][..n].to_vec();
             let f = by_hand(&terms).clamp(0., 1.);
+            assert_eq!((out.c, out.mix, out.colour), (c, f, mix.colour), "{n} details");
             for (i, c) in c.iter().enumerate() {
-                assert_eq!(out.albedo[i], (1. - f) * c * mix.colour[i], "{n} details");
-                assert_eq!(out.reflectance[i], 0.03 + (c - 0.03) * f, "{n} details");
+                assert_eq!(written.albedo[i], (1. - f) * c * mix.colour[i], "{n} details");
+                assert_eq!(written.reflectance.map(|r| r[i]), Some(0.03 + (c - 0.03) * f), "{n} details");
+                assert_eq!(written.metallic, None);
             }
             let k = |i: usize| {
                 let x: Vec<f32> = s.details.iter().map(|d| d.normal[i]).collect();
@@ -643,7 +733,92 @@ mod tests {
         let s = samples(1);
         let out = one.evaluate(&s, &[]);
         let f = 0.5 + 0.125;
-        assert_eq!(out.reflectance[0], 0.03 + ((4.55 * 0.1 * (1. * 0.5)) - 0.03) * f);
+        let written = SurfaceLowering::GlossReflectance { dielectric_f0: 0.03 }.written(&out);
+        assert_eq!(
+            written.reflectance.map(|r| r[0]),
+            Some(0.03 + ((4.55 * 0.1 * (1. * 0.5)) - 0.03) * f)
+        );
+    }
+
+    /// A base saturation of 0 leaves the base colour as it is (the same bits as before the term existed); otherwise the
+    /// base colour is lerped toward its luma before the details are multiplied over it.
+    #[test]
+    fn the_base_colour_is_desaturated_toward_its_luma() {
+        let mut world = World::new();
+        let mut one = mix(&mut world, 1);
+        let s = samples(1);
+        let plain = one.evaluate(&s, &[]);
+        let a = s.base_colour;
+        let (gain, tint) = (one.gain, one.details[0].tint);
+        let by_hand = |saturation: f32| -> [f32; 3] {
+            let luma = a[0] * LUMA[0] + a[1] * LUMA[1] + a[2] * LUMA[2];
+            std::array::from_fn(|i| {
+                let base = a[i] + (luma - a[i]) * saturation;
+                (gain * base * (tint[i] * s.details[0].colour[i])).clamp(0., 1.)
+            })
+        };
+        let none: [f32; 3] =
+            std::array::from_fn(|i| (gain * a[i] * (tint[i] * s.details[0].colour[i])).clamp(0., 1.));
+        assert_eq!(plain.c, none);
+        for saturation in [0.25, 1.] {
+            one.base_saturation = saturation;
+            assert_eq!(one.evaluate(&s, &[]).c, by_hand(saturation), "{saturation}");
+        }
+        assert!((LUMA.iter().sum::<f32>() - 1.).abs() < 1e-6);
+        // a grey base colour is its own luma
+        let mut grey = samples(1);
+        grey.base_colour = [0.25, 0.25, 0.25, 1.];
+        let desaturated = one.evaluate(&grey, &[]);
+        one.base_saturation = 0.;
+        let kept = one.evaluate(&grey, &[]);
+        for i in 0..3 {
+            assert!((kept.c[i] - desaturated.c[i]).abs() <= 1e-6, "lane {i}");
+        }
+    }
+
+    /// The `max`, `affine` and `saturate` steps are taken as they read, in turn, and a NaN is the bound (`max`) or 0
+    /// (`saturate`) as a D3D program's is.
+    #[test]
+    fn the_ramp_steps_are_taken_in_turn() {
+        let ramp = [
+            WeightStep::Affine { scale: 2., bias: -0.5 },
+            WeightStep::Saturate,
+        ];
+        assert_eq!(weight_steps(0.375, &ramp), 0.25);
+        assert_eq!(weight_steps(0.125, &ramp), 0.);
+        assert_eq!(weight_steps(1., &ramp), 1.);
+        assert_eq!(weight_steps(f32::NAN, &ramp), 0.);
+        assert_eq!(weight_steps(-1., &[WeightStep::Max(0.), WeightStep::Power(8)]), 0.);
+        assert_eq!(weight_steps(f32::NAN, &[WeightStep::Max(0.)]), 0.);
+        assert_eq!(weight_steps(0.5, &[WeightStep::Max(0.75)]), 0.75);
+        // a power after the ramp window: the order matters
+        assert_eq!(
+            weight_steps(0.5, &[WeightStep::Affine { scale: 1., bias: 0.25 }, WeightStep::Power(2)]),
+            0.5625
+        );
+        let mut world = World::new();
+        let weight = |steps| Weight {
+            source: Source::Mask {
+                texture: TextureRef::new(world.spawn()),
+                channels: [0., 0., 0., 1.],
+                bias: 0.,
+            },
+            steps,
+        };
+        assert_eq!(weight(ramp.to_vec()).check(), Ok(()));
+        assert!(
+            weight(vec![WeightStep::Affine { scale: f32::NAN, bias: 0. }])
+                .check()
+                .unwrap_err()
+                .contains("affine")
+        );
+        assert!(
+            weight(vec![WeightStep::Max(f32::INFINITY)])
+                .check()
+                .unwrap_err()
+                .contains("max bound")
+        );
+        assert_eq!(weight(vec![WeightStep::Saturate]).check(), Ok(()));
     }
 
     /// The gloss is computed as the program stores it and decoded by the stated encoding (for example the square root of
@@ -676,7 +851,7 @@ mod tests {
                 gloss_encoding: ScalarEncoding { power: 0, ..encoding },
                 ..linear
             }),
-            lowering: SurfaceLowering::GlossReflectance,
+            lowering: SurfaceLowering::GlossReflectance { dielectric_f0: 0.03 },
             frozen: Vec::new(),
         };
         assert!(bad.verify(e, &world).unwrap_err().contains("gloss encoding"));
@@ -708,7 +883,7 @@ mod tests {
     }
 
     /// A weight's power is taken by squaring, the powers of the exponent's set bits multiplied in from the lowest, as
-    /// One source program writes `(22 N.z)^260` (`x^4 * x^256`) and others `(1 - N.a)^8` (three squarings, the
+    /// one source program writes `(22 N.z)^260` (`x^4 * x^256`) and others `(1 - N.a)^8` (three squarings, the
     /// layered [`power`]'s bits); a min takes its bound where the value is NaN.
     #[test]
     fn a_weights_steps_are_taken_in_the_programs_order() {
@@ -793,23 +968,46 @@ mod tests {
         assert_eq!(two.evaluate(&s, &[0.5]).alpha, 1.);
     }
 
-    /// Gloss and reflectance lower as a bake of a stored-gloss G-buffer lowers them: roughness 1 - gloss, metallic 0, the F0 as the
-    /// specular colour; the normal made unit length.
+    /// Under each lowering the surface is held as a G-buffer holds it: an F0 reflectance (the albedo `(1 - f) C colour`),
+    /// or a metallic factor (the albedo `C colour`); either way roughness `1 - gloss` and the normal made unit length.
     #[test]
-    fn gloss_and_reflectance_lower_to_roughness_and_specular_colour() {
+    fn a_surface_lowers_to_the_pbr_model_as_its_g_buffer_holds_it() {
         let surface = DetailSurface {
-            albedo: [0.25, 0.5, 0.75],
+            c: [0.25, 0.5, 0.75],
+            colour: [1., 1., 0.5],
+            mix: 0.5,
             alpha: 0.5,
             normal: [0., 3., 4.],
             gloss: 0.75,
-            reflectance: [0.03, 0.04, 0.5],
         };
-        let pixel = SurfaceLowering::GlossReflectance.evaluate(&surface);
-        assert_eq!(pixel.base_color, [0.25, 0.5, 0.75, 0.5]);
+        let f0 = SurfaceLowering::GlossReflectance { dielectric_f0: 0. };
+        let written = f0.written(&surface);
+        assert_eq!(written.albedo, [0.125, 0.25, 0.1875]);
+        assert_eq!(written.reflectance, Some([0.125, 0.25, 0.375]));
+        assert_eq!(written.metallic, None);
+        let pixel = f0.evaluate(&surface);
+        assert_eq!(pixel.base_color, [0.125, 0.25, 0.1875, 0.5]);
         assert_eq!(pixel.normal, [0., 0.6, 0.8]);
         assert_eq!((pixel.roughness, pixel.metallic), (0.25, 0.));
-        assert_eq!(pixel.specular_color, Some([0.03, 0.04, 0.5]));
+        assert_eq!(pixel.specular_color, Some([0.125, 0.25, 0.375]));
         assert_eq!(0.04 * SPECULAR_COLOR_FACTOR, 1.);
+        let metal = SurfaceLowering::MetallicGloss;
+        let written = metal.written(&surface);
+        assert_eq!(written.albedo, [0.25, 0.5, 0.375]);
+        assert_eq!((written.reflectance, written.metallic), (None, Some(0.5)));
+        let pixel = metal.evaluate(&surface);
+        assert_eq!(pixel.base_color, [0.25, 0.5, 0.375, 0.5]);
+        assert_eq!(pixel.normal, [0., 0.6, 0.8]);
+        assert_eq!((pixel.roughness, pixel.metallic, pixel.specular_color), (0.25, 0.5, None));
+        // a dielectric reflectance that is not finite is refused
+        let mut world = World::new();
+        let e = world.spawn();
+        let bad = DetailedMaterial {
+            mix: DetailMix::DetailLerp(mix(&mut world, 1)),
+            lowering: SurfaceLowering::GlossReflectance { dielectric_f0: f32::NAN },
+            frozen: Vec::new(),
+        };
+        assert!(bad.verify(e, &world).unwrap_err().contains("dielectric"));
     }
 
     /// A dead texture, a constant that is not finite, an unbounded weight, no or too many details and a weight count other
@@ -819,7 +1017,7 @@ mod tests {
         let mut world = World::new();
         let good = DetailedMaterial {
             mix: DetailMix::DetailLerp(mix(&mut world, 2)),
-            lowering: SurfaceLowering::GlossReflectance,
+            lowering: SurfaceLowering::GlossReflectance { dielectric_f0: 0.03 },
             frozen: vec![
                 Frozen::FrontFacing,
                 Frozen::EngineConstant {
@@ -840,6 +1038,8 @@ mod tests {
             bad
         };
         let bad = edit(&|m| m.gain = f32::NAN);
+        assert!(bad.verify(e, &world).unwrap_err().contains("not finite"));
+        let bad = edit(&|m| m.base_saturation = f32::INFINITY);
         assert!(bad.verify(e, &world).unwrap_err().contains("not finite"));
         let mut bad = good.clone();
         bad.frozen.push(Frozen::EngineTexture {

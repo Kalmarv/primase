@@ -452,8 +452,10 @@ A material whose surface a source program computes from a base and tiled detail 
 armour in a source) carries the vendor extension `PRIMASE_materials_detail_blend`, listed in `extensionsUsed` and never
 in `extensionsRequired`, beside its ordinary `pbrMetallicRoughness` (and `KHR_materials_specular`), which is the same
 surface baked at a capped size: a consumer that ignores the extension draws that and loses only the detail's resolution.
-The extension is optional and its addition is a minor change. Its fields, the equation a conforming consumer
-evaluates, what it holds constant and how a reader takes it strictly are specified in
+The extension is optional and its addition is a minor change; it states its own `revision` (4: the base colour's
+desaturation, three more weight steps and the `metallic_gloss` lowering over revision 3, which a reader of 4 still
+takes). It adds no texture slot of its own, so the tile set below is unchanged. Its fields, the equation a conforming
+consumer evaluates, what it holds constant and how a reader takes it strictly are specified in
 [`docs/extensions/PRIMASE_materials_detail_blend.md`](../../docs/extensions/PRIMASE_materials_detail_blend.md).
 
 In a tile set the textures it binds are written as the other slots' are, by the role each states: a slot with

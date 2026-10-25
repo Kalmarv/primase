@@ -1,19 +1,24 @@
 //! `derive-fromsoft-detail`: each detail-blend material's equation, read from its own program with its own words and
-//! proven, as its `pbr.detail` beside the baked `pbr.material`, which stays the fallback.
+//! proven, as its `pbr.detail` beside the baked `pbr.material`, which stays the fallback. Both games' families: Sekiro's
+//! `Character_AMSN_[DetailBlend]` (DXBC programs holding an F0) and Elden Ring's `C[DetailBlend]` and `C[DetailBlend][Rich]`
+//! (DXIL programs holding a metallic factor); the other Elden Ring families are refused by name ([`family`]).
 use std::collections::BTreeMap;
 
 use primase_core::detail::DetailedMaterial;
 use primase_core::pass::{Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{TextureRef, UvTransform, Wrap};
-use primase_core::shader::{AddressMode, Shader, ShaderBinding, ShaderFormat, Stage, TextureSource};
+use primase_core::detail::SurfaceLowering;
+use primase_core::shader::{AddressMode, Shader, ShaderBinding, Stage, TextureSource};
 use primase_core::{Component, Entity, Mesh, Semantic, Stream, World};
 
 use crate::detail_derive::{derive_equation, slot_transform};
 use crate::detail_probe::ProgramProbe;
 use crate::materials::{Definition, LayeredMaterial, Material};
 use crate::sekiro::components::lowered::UvTiling;
+use crate::Game;
 
-/// `derive-fromsoft-detail`: for each material whose shader is Sekiro's `Character_AMSN_[DetailBlend]` and which a
+/// `derive-fromsoft-detail`: for each material whose shader is Sekiro's `Character_AMSN_[DetailBlend]` or Elden Ring's
+/// `C[DetailBlend]` (plain, `[Rich]`, and their `_cloth` variants, whose pixel programs are the same) and which a
 /// `core.shader_binding` binds (run it after `resolve-fromsoft-shaders`), its pixel program probed with the material's
 /// own words ([`ProgramProbe::with_material`]) and its equation derived and proven ([`derive_equation`]: the random
 /// and transition sets, every role within the bound). Where it proves, the material gets a `pbr.detail`
@@ -30,8 +35,36 @@ pub const DERIVE_FROMSOFT_DETAIL: PassSpec = PassSpec {
     make: |_| Ok(Box::new(DeriveFromSoftDetail)),
 };
 
-/// The shader family whose programs the detail equation is derived from.
+/// The Sekiro shader family whose programs the detail equation is derived from.
 const FAMILY: &str = "Character_AMSN_[DetailBlend]";
+
+/// The Elden Ring shader family: `C[DetailBlend]` and its variants.
+const ELDEN_FAMILY: &str = "C[DetailBlend]";
+
+/// The count of a metallic-factor material: its PBR model states no dielectric reflectance, so the viewer's stands (glTF's
+/// 0.04). The source's lighting reads `F0 = lerp(0.04, albedo, metallic)` ([`crate::Game::gbuffer`]), which agrees, but no
+/// measurement has settled it.
+pub const GLTF_DIELECTRIC: &str = "detail-blend materials whose dielectric reflectance is the viewer's (glTF's 0.04): the source's lighting reads F0 = lerp(0.04, albedo, metallic), which no measurement has settled";
+
+/// Which game's family a shader is of, and whether the model has a term for it: `Ok(game)` for a family derived,
+/// `Err(reason)` for a detail-blend family refused by name (the same text for every material of it); `None` for any other
+/// shader. Elden Ring's `[S2]` family has an overlay layer drawn by its own alpha and a back face, and its `_SSS` family a
+/// subsurface lane, which the model has no term for; the others (`_FurBlur`, `Glow`, `VA_Morph`) are none of the
+/// programs read.
+pub fn family(shader: &str) -> Option<Result<Game, &'static str>> {
+    if shader == FAMILY {
+        return Some(Ok(Game::Sekiro));
+    }
+    let rest = shader.strip_prefix(ELDEN_FAMILY)?;
+    Some(match rest {
+        "" | "[Rich]" | "_cloth" | "[Rich]_cloth" => Ok(Game::EldenRing),
+        r if r.starts_with("[S2]") => {
+            Err("its [S2] family has an overlay layer drawn by its own alpha and a back face, which the model has no term for")
+        }
+        r if r.starts_with("_SSS") => Err("its _SSS family writes a subsurface lane, which the model has no term for"),
+        _ => Err("its family is none the model has a term for"),
+    })
+}
 
 /// The count of a slot whose texture the source states no addressing for and whose coordinates (the material's mesh
 /// coordinates through the slot's tiling) stay within 0 to 1: it repeats, the addressing deciding only the filtering at
@@ -93,15 +126,21 @@ impl Pass for DeriveFromSoftDetail {
         "a detail texture whose addressing the source does not state repeats"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
-        let candidates: Vec<(Entity, Material)> = world
+        let candidates: Vec<(Entity, Material, Result<Game, &'static str>)> = world
             .iter::<Material>()
-            .filter(|(_, m)| m.shader == FAMILY)
-            .map(|(e, m)| (e, m.clone()))
+            .filter_map(|(e, m)| family(&m.shader).map(|f| (e, m.clone(), f)))
             .collect();
         let mut refused: BTreeMap<String, u64> = BTreeMap::new();
         let mut given = 0;
-        for (e, material) in candidates {
-            match detail(world, e, &material, log) {
+        for (e, material, game) in candidates {
+            let game = match game {
+                Ok(game) => game,
+                Err(reason) => {
+                    *refused.entry(reason.to_owned()).or_default() += 1;
+                    continue;
+                }
+            };
+            match detail(world, e, &material, game, log) {
                 Ok(d) => {
                     world.insert(e, d);
                     given += 1;
@@ -129,25 +168,38 @@ fn detail(
     world: &World,
     e: Entity,
     material: &Material,
+    game: Game,
     log: &mut PassLog,
 ) -> Result<DetailedMaterial, String> {
     let binding = world.get::<ShaderBinding>(e).ok_or("no shader binding")?;
     let stage = binding.stage(Stage::Pixel).ok_or("no pixel stage")?;
     let shader = world.get::<Shader>(stage.shader).ok_or("no pixel program")?;
-    if shader.format != ShaderFormat::Dxbc {
-        return Err(format!("a {:?} program: the probe runs DXBC", shader.format));
+    if shader.format != game.shader_format() {
+        return Err(format!(
+            "a {:?} program: the probe runs {:?} for this game",
+            shader.format,
+            game.shader_format()
+        ));
     }
-    let layered = match (&material.layered, &material.definition) {
-        (Some(l), _) => l.clone(),
-        (None, Some(Definition::Mtd(d))) => LayeredMaterial {
-            mtd: material.mtd.clone(),
-            definition: d.clone(),
-            bindings: material.bindings.clone(),
-        },
-        _ => return Err("no MTD definition".into()),
-    };
-    let mut probe = ProgramProbe::with_material(&shader.bytecode, &layered)
-        .map_err(|e| format!("its program cannot be probed: {e}"))?;
+    let mut probe = match game {
+        Game::Sekiro => {
+            let layered = match (&material.layered, &material.definition) {
+                (Some(l), _) => l.clone(),
+                (None, Some(Definition::Mtd(d))) => LayeredMaterial {
+                    mtd: material.mtd.clone(),
+                    definition: d.clone(),
+                    bindings: material.bindings.clone(),
+                },
+                _ => return Err("no MTD definition".into()),
+            };
+            ProgramProbe::with_material(&shader.bytecode, &layered)
+        }
+        Game::EldenRing => {
+            let view = material.view().ok_or("no material definition")?;
+            ProgramProbe::with_view(game, &shader.bytecode, &view)
+        }
+    }
+    .map_err(|e| format!("its program cannot be probed: {e}"))?;
     let equation = derive_equation(&mut probe, proof_seed(&material.mtd)).map_err(|e| e.reason)?;
     let texcoord = match probe.coordinate_sets().as_slice() {
         [set] => u8::try_from(*set).map_err(|_| "a coordinate set past 255")?,
@@ -264,5 +316,38 @@ fn detail(
             },
         );
     }
+    if equation.constants.lowering == SurfaceLowering::MetallicGloss {
+        log.approximate_on(e, GLTF_DIELECTRIC, 1);
+    }
     Ok(equation.detailed_material(|slot| refs[&slot]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Sekiro's family and Elden Ring's plain and `[Rich]` ones (and their cloth variants) are derived; its `[S2]`, `_SSS` and
+    /// other detail-blend families are refused by name; any other shader is none of them.
+    #[test]
+    fn a_shader_is_of_a_derived_family_or_refused_by_name() {
+        assert_eq!(family("Character_AMSN_[DetailBlend]"), Some(Ok(Game::Sekiro)));
+        for shader in ["C[DetailBlend]", "C[DetailBlend][Rich]", "C[DetailBlend]_cloth", "C[DetailBlend][Rich]_cloth"] {
+            assert_eq!(family(shader), Some(Ok(Game::EldenRing)), "{shader}");
+        }
+        for (shader, expected) in [
+            ("C[DetailBlend][S2]", "[S2] family"),
+            ("C[DetailBlend][S2]_cloth", "[S2] family"),
+            ("C[DetailBlend]_SSS", "_SSS family"),
+            ("C[DetailBlend]_SSS_cloth", "_SSS family"),
+            ("C[DetailBlend]_FurBlur", "no term for"),
+            ("C[DetailBlend][1_0_0_0][S2]_Glow[Int]", "no term for"),
+        ] {
+            let Some(Err(reason)) = family(shader) else {
+                panic!("{shader} is not refused by name");
+            };
+            assert!(reason.contains(expected), "{shader}: {reason}");
+        }
+        assert_eq!(family("C[AMSN]"), None);
+        assert_eq!(family("Character_AMSN"), None);
+    }
 }

@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use primase_fromsoft::detail_derive::{WEIGHT_SETS, derive};
+use primase_fromsoft::detail_derive::derive;
 use primase_fromsoft::detail_probe::ProgramProbe;
 
 type BoxError = Box<dyn std::error::Error>;
@@ -90,7 +90,11 @@ fn main() -> Result<(), BoxError> {
             let e = largest.entry(role).or_default();
             *e = e.max(*u);
         }
-        println!("  weights {:?}", WEIGHT_SETS[d.equation.constants.weight_set]);
+        println!("  weights {:?}", d.equation.constants.weights);
+        println!(
+            "  lowering {:?}, base saturation {}",
+            d.equation.constants.lowering, d.equation.constants.base_saturation
+        );
         let scales: Vec<_> = d
             .equation
             .constants

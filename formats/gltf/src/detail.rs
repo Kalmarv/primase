@@ -3,12 +3,14 @@
 //! ([`crate::write`]) writes it for a material carrying a `pbr.detail`; the reader keeps each slot's texture
 //! (`gltf.detail_textures`, [`crate::textures`]) and `lower-gltf-materials` reads the extension back as `pbr.detail`
 //! ([`read`]), strictly: an unknown key, a value outside the closed sets, a number that is not a finite 32-bit float or
-//! a count the equation does not take is an error naming the material. The extension's specification is
+//! a count the equation does not take is an error naming the material. The extension states its `revision`
+//! ([`REVISION`]; absent means 3): a reader takes 3 and 4, a file that states a newer one is told so, and a file of
+//! revision 3 may not use what 4 added. The extension's specification is
 //! `docs/extensions/PRIMASE_materials_detail_blend.md`.
 
 use primase_core::Semantic;
 use primase_core::detail::{
-    DETAIL_LIMIT, Detail, DetailLerp, DetailMix, DetailedMaterial, Frozen, GlossScale, ReflectanceTerm,
+    DETAIL_LIMIT, Detail, DetailLerp, DetailMix, DetailedMaterial, Frozen, GlossScale, REVISION, ReflectanceTerm,
     SurfaceLowering, WEIGHT_POWER_LIMIT, Weight, WeightStep,
 };
 use primase_core::layered::Source;
@@ -78,11 +80,13 @@ fn parse(x: &Value, slots: &mut Slots) -> Result<DetailedMaterial, Refusal> {
     only(
         x,
         &[
+            "revision",
             "equation",
             "lowering",
             "baseColorTexture",
             "baseNormalTexture",
             "baseMaskTexture",
+            "baseSaturation",
             "details",
             "weights",
             "gain",
@@ -96,13 +100,50 @@ fn parse(x: &Value, slots: &mut Slots) -> Result<DetailedMaterial, Refusal> {
         ],
         "the extension",
     )?;
+    let revision = match x.get("revision") {
+        None => 3,
+        Some(v) => v
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .ok_or_else(|| format!("revision {v} is not a whole number"))?,
+    };
+    if revision > REVISION {
+        return Err(format!("revision {revision} is newer than the {REVISION} this reader takes").into());
+    }
+    if revision < 3 {
+        return Err(format!("revision {revision} is older than the 3 this reader takes").into());
+    }
+    let fourth = revision >= 4;
     match text(x, "equation")? {
         "detail_lerp" => {}
         other => return Err(format!("equation {other:?} is not detail_lerp").into()),
     }
     let lowering = match text(x, "lowering")? {
-        "gloss_reflectance" => SurfaceLowering::GlossReflectance,
-        other => return Err(format!("lowering {other:?} is not gloss_reflectance").into()),
+        "gloss_reflectance" => SurfaceLowering::GlossReflectance {
+            dielectric_f0: field(x, "dielectricF0")?,
+        },
+        "metallic_gloss" if fourth => {
+            if x.contains_key("dielectricF0") {
+                return Err("dielectricF0 belongs to the gloss_reflectance lowering, not metallic_gloss".into());
+            }
+            SurfaceLowering::MetallicGloss
+        }
+        other => {
+            return Err(format!(
+                "lowering {other:?} is not {}",
+                if fourth {
+                    "gloss_reflectance or metallic_gloss"
+                } else {
+                    "gloss_reflectance (revision 3)"
+                }
+            )
+            .into());
+        }
+    };
+    let base_saturation = match x.get("baseSaturation") {
+        None => 0.0,
+        Some(_) if !fourth => return Err("baseSaturation needs revision 4".into()),
+        Some(v) => float(v, "baseSaturation")?,
     };
     let base_colour = slots.get(x, "baseColorTexture", DetailSlot::BaseColor)?;
     let base_normal = slots.get(x, "baseNormalTexture", DetailSlot::BaseNormal)?;
@@ -177,20 +218,36 @@ fn parse(x: &Value, slots: &mut Slots) -> Result<DetailedMaterial, Refusal> {
             (_, v) => vertex(object(v, "vertex")?)?,
         };
         let mut steps = Vec::new();
+        let kinds: &[&'static str] = if fourth {
+            &["power", "min", "max", "affine", "saturate"]
+        } else {
+            &["power", "min"]
+        };
         for step in array(w, "steps")? {
-            steps.push(
-                match one_key(object(step, "a step")?, "a step", &["power", "min"])? {
-                    ("power", v) => {
-                        let n = v
-                            .as_u64()
-                            .and_then(|n| u16::try_from(n).ok())
-                            .filter(|n| (1..=WEIGHT_POWER_LIMIT).contains(n))
-                            .ok_or_else(|| format!("power {v} is not 1 to {WEIGHT_POWER_LIMIT}"))?;
-                        WeightStep::Power(n)
+            steps.push(match one_key(object(step, "a step")?, "a step", kinds)? {
+                ("power", v) => {
+                    let n = v
+                        .as_u64()
+                        .and_then(|n| u16::try_from(n).ok())
+                        .filter(|n| (1..=WEIGHT_POWER_LIMIT).contains(n))
+                        .ok_or_else(|| format!("power {v} is not 1 to {WEIGHT_POWER_LIMIT}"))?;
+                    WeightStep::Power(n)
+                }
+                ("min", v) => WeightStep::Min(float(v, "min")?),
+                ("max", v) => WeightStep::Max(float(v, "max")?),
+                ("affine", v) => {
+                    let a = object(v, "affine")?;
+                    only(a, &["scale", "bias", "extras"], "affine")?;
+                    WeightStep::Affine {
+                        scale: field(a, "scale")?,
+                        bias: field(a, "bias")?,
                     }
-                    (_, v) => WeightStep::Min(float(v, "min")?),
-                },
-            );
+                }
+                (_, v) => {
+                    only(object(v, "saturate")?, &[], "saturate")?;
+                    WeightStep::Saturate
+                }
+            });
         }
         weights.push(Weight { source, steps });
     }
@@ -268,11 +325,11 @@ fn parse(x: &Value, slots: &mut Slots) -> Result<DetailedMaterial, Refusal> {
             base_colour,
             base_normal,
             base_mask,
+            base_saturation,
             details,
             weights,
             gain: field(x, "gain")?,
             normal_strength: field(x, "normalStrength")?,
-            dielectric_f0: field(x, "dielectricF0")?,
             colour: floats(x, "color")?,
             gloss_encoding,
             alpha,
@@ -501,6 +558,7 @@ mod tests {
             base_colour: r(texture(&mut w, 1, true), 0, None),
             base_normal,
             base_mask: r(texture(&mut w, 3, false), 0, None),
+            base_saturation: 0.3,
             details: vec![
                 Detail {
                     colour: r(texture(&mut w, 5, true), 0, tiled),
@@ -525,11 +583,19 @@ mod tests {
                     channels: [0., 0., 0., 1.],
                     bias: -0.0,
                 },
-                steps: vec![WeightStep::Power(260), WeightStep::Min(1.)],
+                steps: vec![
+                    WeightStep::Max(0.),
+                    WeightStep::Affine {
+                        scale: 2.05,
+                        bias: -1.05,
+                    },
+                    WeightStep::Saturate,
+                    WeightStep::Power(260),
+                    WeightStep::Min(1.),
+                ],
             }],
             gain: 1.1,
             normal_strength: 0.5,
-            dielectric_f0: 0.03,
             colour: [0.9, 0.85, 0.8],
             gloss_encoding: ScalarEncoding {
                 power: 1,
@@ -540,7 +606,7 @@ mod tests {
         };
         let detail = DetailedMaterial {
             mix: DetailMix::DetailLerp(mix),
-            lowering: SurfaceLowering::GlossReflectance,
+            lowering: SurfaceLowering::GlossReflectance { dielectric_f0: 0.03 },
             frozen: vec![
                 Frozen::FrontFacing,
                 Frozen::VertexInput {
@@ -692,7 +758,7 @@ mod tests {
     /// Each thing the extension may not state is an error naming the material and what it states.
     #[test]
     fn a_malformed_extension_is_an_error_naming_what_it_states() -> Result<(), Box<dyn std::error::Error>> {
-        let cases: [(&str, Edit); 13] = [
+        let cases: [(&str, Edit); 21] = [
             ("unknown key colour", |x| x["colour"] = json!([1, 1, 1])),
             ("equation \"detail_add\"", |x| x["equation"] = json!("detail_add")),
             ("lowering \"metal_rough\"", |x| {
@@ -722,6 +788,26 @@ mod tests {
             ("alphaDetail 2", |x| x["alphaDetail"] = json!(2)),
             ("vertex.attribute NORMAL", |x| {
                 x["weights"][0]["source"] = json!({"vertex": {"attribute": "NORMAL", "channel": 0}})
+            }),
+            ("revision 5 is newer", |x| x["revision"] = json!(5)),
+            ("revision 2 is older", |x| x["revision"] = json!(2)),
+            ("dielectricF0 belongs to the gloss_reflectance lowering", |x| {
+                x["lowering"] = json!("metallic_gloss")
+            }),
+            ("not a finite 32-bit float", |x| x["baseSaturation"] = json!(1e39)),
+            ("a step is not one key", |x| {
+                x["weights"][0]["steps"][2] = json!({"saturate": {}, "min": 1})
+            }),
+            ("a step lerp is not one of", |x| {
+                x["weights"][0]["steps"][0] = json!({"lerp": 1})
+            }),
+            ("affine", |x| {
+                x["weights"][0]["steps"][1] = json!({"affine": {"scale": 2, "offset": 1}})
+            }),
+            ("no dielectricF0", |x| {
+                if let Some(o) = x.as_object_mut() {
+                    o.remove("dielectricF0");
+                }
             }),
         ];
         for (expected, edit) in cases {
@@ -761,6 +847,71 @@ mod tests {
             ),
             Some(&1)
         );
+        Ok(())
+    }
+
+    /// The writer's revision, `metallic_gloss` without a dielectric reflectance and no saturation key where there is none.
+    #[test]
+    fn a_metallic_gloss_material_round_trips_without_what_it_does_not_state() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut w, material, _) = world();
+        let mut d = w.get::<DetailedMaterial>(material).ok_or("the detail")?.clone();
+        d.lowering = SurfaceLowering::MetallicGloss;
+        let DetailMix::DetailLerp(m) = &mut d.mix;
+        m.base_saturation = 0.;
+        w.insert(material, d.clone());
+        let (doc, _) = crate::write::write_document(&w, &crate::write::WriteOptions::default())?;
+        let x = &doc.json["materials"][0]["extensions"][NAME];
+        assert_eq!(x["revision"], json!(REVISION));
+        assert_eq!(x["lowering"], json!("metallic_gloss"));
+        assert!(x.get("dielectricF0").is_none() && x.get("baseSaturation").is_none(), "{x}");
+        let (bytes, _) = crate::write::write(&w, &crate::write::WriteOptions::default())?;
+        let mut back = World::new();
+        crate::read::read_glb(&bytes, "detail.glb", &mut back)?;
+        let mut log = PassLog::default();
+        LowerGltfMaterials.run(&mut back, &mut log)?;
+        let read: Vec<&DetailedMaterial> = back.iter::<DetailedMaterial>().map(|(_, d)| d).collect();
+        let [read] = <[&DetailedMaterial; 1]>::try_from(read).map_err(|r| format!("{} pbr.detail", r.len()))?;
+        assert_eq!(read.lowering, SurfaceLowering::MetallicGloss);
+        let DetailMix::DetailLerp(r) = &read.mix;
+        assert_eq!(r.base_saturation.to_bits(), 0f32.to_bits());
+        Ok(())
+    }
+
+    /// A file of revision 3 (no `revision` key, no 4 keys) reads as before; one of revision 3 using what 4 added is refused.
+    #[test]
+    fn a_revision_3_extension_reads_as_a_subset() -> Result<(), Box<dyn std::error::Error>> {
+        let drop_new = |x: &mut Value| {
+            let o = x.as_object_mut().expect("the extension");
+            o.remove("revision");
+            o.remove("baseSaturation");
+            x["weights"][0]["steps"] = json!([{"power": 260}, {"min": 1}]);
+        };
+        let (mut material, textures, w) = document()?;
+        drop_new(&mut material["extensions"][NAME]);
+        let (run, _, w) = lower(material, textures, w);
+        run?;
+        let read: Vec<&DetailedMaterial> = w.iter::<DetailedMaterial>().map(|(_, d)| d).collect();
+        let [read] = <[&DetailedMaterial; 1]>::try_from(read).map_err(|r| format!("{} pbr.detail", r.len()))?;
+        assert_eq!(read.lowering, SurfaceLowering::GlossReflectance { dielectric_f0: 0.03 });
+        let DetailMix::DetailLerp(r) = &read.mix;
+        assert_eq!(r.base_saturation, 0.);
+        let refused: [(&str, Edit); 3] = [
+            ("baseSaturation needs revision 4", |x| x["baseSaturation"] = json!(0.5)),
+            ("lowering \"metallic_gloss\" is not gloss_reflectance (revision 3)", |x| {
+                x["lowering"] = json!("metallic_gloss")
+            }),
+            ("a step saturate is not one of power, min", |x| {
+                x["weights"][0]["steps"] = json!([{"saturate": {}}])
+            }),
+        ];
+        for (expected, edit) in refused {
+            let (mut material, textures, w) = document()?;
+            drop_new(&mut material["extensions"][NAME]);
+            edit(&mut material["extensions"][NAME]);
+            let (run, _, _) = lower(material, textures, w);
+            let e = run.expect_err(expected);
+            assert!(e.contains(expected), "{expected}: {e}");
+        }
         Ok(())
     }
 }

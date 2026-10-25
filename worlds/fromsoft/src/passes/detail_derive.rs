@@ -1,5 +1,9 @@
 //! A detail-blend program's equation read from runs of it ([`ProgramProbe`]) with designed texture samples, and proven on
-//! random ones: the [`DetailLerp`](primase_core::detail::DetailLerp) a program computes, or what differs.
+//! random ones: the [`DetailLerp`](primase_core::detail::DetailLerp) a program computes, or what differs. Both games'
+//! programs are read the same way: Sekiro's store an F0 reflectance ([`SurfaceLowering::GlossReflectance`]) and Elden
+//! Ring's a metallic factor ([`SurfaceLowering::MetallicGloss`]), the lowering the program's G-buffer roles say
+//! ([`outputs_of`]); a program whose weights are a ramp window of the base normal's alpha has them measured
+//! ([`ramp_weights`]), the others' are the family's stated forms ([`WEIGHT_SETS`]).
 //!
 //! The textures are told apart by the samplers the program reads them through (its colour textures by the diffuse
 //! sampler, its normals by the bump sampler, its mask alone), then by what moves which output ([`identify`]): the base
@@ -19,7 +23,7 @@ use std::collections::BTreeMap;
 
 use primase_core::detail::{
     DETAIL_LIMIT, Detail, DetailLerp, DetailMix, DetailSample, DetailSamples, DetailSurface,
-    DetailedMaterial, Frozen, GlossScale, ReflectanceTerm, SurfaceLowering, Weight, WeightStep, chain,
+    DetailedMaterial, Frozen, GlossScale, LUMA, ReflectanceTerm, SurfaceLowering, Weight, WeightStep, chain,
     weight_steps,
 };
 use primase_core::layered::{Source, mask_value};
@@ -37,10 +41,10 @@ use crate::probe_accept::{NonFinite, Seeded, moved, units, word_sources};
 pub const PROOF_SETS: usize = 256;
 
 /// The texture slots of a detail program, by their part in the equation.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SlotRoles {
-    /// The program's weights: the index of its set in [`WEIGHT_SETS`].
-    pub weight_set: usize,
+    /// The program's weights: a set of [`WEIGHT_SETS`], or ramp windows measured from the program ([`ramp_weights`]).
+    pub weights: Vec<WeightForm>,
     pub base_colour: u32,
     pub base_normal: u32,
     pub base_mask: u32,
@@ -75,12 +79,15 @@ pub struct DetailTerms {
 /// The constants of a detail program's equation, as read from it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DetailConstants {
-    /// The weights the details are chained by: the index of the program's set in [`WEIGHT_SETS`].
-    pub weight_set: usize,
+    /// The weights the details are chained by: a set of [`WEIGHT_SETS`], or ramp windows measured from the program.
+    pub weights: Vec<WeightForm>,
     /// In the chain's order.
     pub details: Vec<DetailTerms>,
     pub normal_strength: f32,
-    pub dielectric_f0: f32,
+    /// How the program's G-buffer holds the surface: an F0 reflectance (its dielectric part read) or a metallic factor.
+    pub lowering: SurfaceLowering,
+    /// How far the program desaturates the base colour toward its luma ([`DetailLerp::base_saturation`]).
+    pub base_saturation: f32,
     pub colour: [f32; 3],
     /// The binding's gloss encoding: the gloss is solved as stored and decoded by it.
     pub gloss_encoding: ScalarEncoding,
@@ -109,19 +116,32 @@ struct Observed {
     gloss: f32,
     gloss_stored: f32,
     albedo: [f32; 3],
+    /// The F0 reflectance, where the program writes one; else zero.
     reflectance: [f32; 3],
+    /// The metallic factor, where the program writes one; else zero.
+    metallic: f32,
     emission: [f32; 3],
     /// Where its lane has a role.
     alpha: Option<f32>,
+}
+
+/// Where a program's G-buffer holds the mix between the dielectric and the colour.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Held {
+    /// An F0 reflectance on the three lanes of a register, decoded by the encoding (Sekiro's).
+    Reflectance(usize, ScalarEncoding),
+    /// A metallic factor on one lane of a register (Elden Ring's).
+    Metallic(usize, usize),
 }
 
 /// The output registers and encodings of the roles a detail-blend program writes.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Outputs {
     normal: (usize, f32),
-    gloss: (usize, ScalarEncoding),
+    /// The register, the lane and the encoding of the gloss.
+    gloss: (usize, usize, ScalarEncoding),
     albedo: usize,
-    reflectance: (usize, ScalarEncoding),
+    held: Held,
     emission: Option<(usize, ScalarEncoding)>,
     /// The alpha's register and lane, where its lane has a role (`Coverage` or `Opacity`).
     alpha: Option<(usize, usize)>,
@@ -144,6 +164,7 @@ fn outputs_of(varyings: &[primase_shader::Varying], bindings: &[OutputBinding]) 
             .ok_or_else(|| format!("no output register for {}{}", label.name, label.index))
     };
     let (mut normal, mut gloss, mut albedo, mut reflectance, mut emission) = (None, None, None, None, None);
+    let mut metallic = None;
     let mut alpha = None;
     for o in bindings {
         let r = register(&o.label)?;
@@ -156,9 +177,14 @@ fn outputs_of(varyings: &[primase_shader::Varying], bindings: &[OutputBinding]) 
                 encoding: NormalEncoding::XyzBiased { bias_bits },
                 ..
             } if o.lanes == 7 => normal = Some((r, f32::from_bits(bias_bits))),
-            OutputRole::Gloss { encoding } if o.lanes == 1 => gloss = Some((r, encoding)),
+            OutputRole::Gloss { encoding } if o.lanes.count_ones() == 1 => {
+                gloss = Some((r, o.lanes.trailing_zeros() as usize, encoding));
+            }
             OutputRole::Albedo if o.lanes == 7 => albedo = Some(r),
             OutputRole::Reflectance { encoding } if o.lanes == 7 => reflectance = Some((r, encoding)),
+            OutputRole::Metallic if o.lanes.count_ones() == 1 => {
+                metallic = Some((r, o.lanes.trailing_zeros() as usize));
+            }
             OutputRole::Emission { encoding } if o.lanes == 7 => emission = Some((r, encoding)),
             _ => {
                 return Err(format!(
@@ -168,11 +194,17 @@ fn outputs_of(varyings: &[primase_shader::Varying], bindings: &[OutputBinding]) 
             }
         }
     }
+    let held = match (reflectance, metallic) {
+        (Some((r, encoding)), None) => Held::Reflectance(r, encoding),
+        (None, Some((r, lane))) => Held::Metallic(r, lane),
+        (Some(_), Some(_)) => return Err("both a reflectance and a metallic factor".into()),
+        (None, None) => return Err("no reflectance and no metallic factor".into()),
+    };
     Ok(Outputs {
         normal: normal.ok_or("no biased world normal")?,
         gloss: gloss.ok_or("no gloss")?,
         albedo: albedo.ok_or("no albedo")?,
-        reflectance: reflectance.ok_or("no reflectance")?,
+        held,
         emission,
         alpha,
     })
@@ -225,15 +257,18 @@ const LANE_NAMES: [&str; 4] = ["x", "y", "z", "alpha"];
 /// switch 6's both ends are smallest (`2^-8` each).
 const MIDDLE: f32 = 0.5;
 
-/// A program's weights: one of [`WEIGHT_SETS`].
+/// A program's weights: one of [`WEIGHT_SETS`], or ramp windows measured from the program ([`ramp_weights`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Weights(pub &'static [WeightForm]);
+pub struct Weights<'a>(pub &'a [WeightForm]);
 
-impl Weights {
+impl Weights<'static> {
     /// The set at `index` of [`WEIGHT_SETS`].
-    fn of(index: usize) -> Weights {
+    pub fn of(index: usize) -> Weights<'static> {
         Weights(WEIGHT_SETS[index])
     }
+}
+
+impl Weights<'_> {
 
     /// The details it weighs: one more than its weights.
     fn details(self) -> usize {
@@ -269,7 +304,8 @@ impl Weights {
         let lane = self.lane();
         let v = form.steps.iter().rev().fold(w, |x, step| match *step {
             WeightStep::Power(p) => x.powf(1. / f32::from(p)),
-            WeightStep::Min(_) => x,
+            WeightStep::Affine { scale, bias } => (x - bias) / scale,
+            WeightStep::Min(_) | WeightStep::Max(_) | WeightStep::Saturate => x,
         });
         // + 0 makes a zero positive
         let mut x = (v - form.bias) / form.channels[lane] + 0.;
@@ -381,6 +417,13 @@ struct Program<'p> {
     roles: &'p SlotRoles,
 }
 
+impl<'p> Program<'p> {
+    /// The program's weights.
+    fn weights(&self) -> Weights<'p> {
+        Weights(&self.roles.weights)
+    }
+}
+
 /// The samples of every role of one run.
 #[derive(Clone, Debug)]
 struct Samples {
@@ -431,12 +474,17 @@ fn observe_slots(
     let lanes3 = |i: usize| [out[i][0], out[i][1], out[i][2]];
     let n = lanes3(o.normal.0).map(|v| (v - o.normal.1) * 2.);
     let length = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+    let (reflectance, metallic) = match o.held {
+        Held::Reflectance(register, encoding) => (lanes3(register).map(|v| encoding.decode(v)), 0.),
+        Held::Metallic(register, lane) => ([0.; 3], out[register][lane]),
+    };
     Ok(Observed {
         normal: n.map(|v| v / length),
-        gloss: o.gloss.1.decode(out[o.gloss.0][0]),
-        gloss_stored: out[o.gloss.0][0],
+        gloss: o.gloss.2.decode(out[o.gloss.0][o.gloss.1]),
+        gloss_stored: out[o.gloss.0][o.gloss.1],
         albedo: lanes3(o.albedo),
-        reflectance: lanes3(o.reflectance.0).map(|v| o.reflectance.1.decode(v)),
+        reflectance,
+        metallic,
         emission: o
             .emission
             .map_or([0.; 3], |(i, e)| lanes3(i).map(|v| e.decode(v))),
@@ -447,10 +495,6 @@ fn observe_slots(
 impl Program<'_> {
     fn details(&self) -> usize {
         self.roles.details.len()
-    }
-
-    fn weights(&self) -> Weights {
-        Weights::of(self.roles.weight_set)
     }
 
     fn observe(&self, s: &Samples, uv: [f32; 2]) -> Result<Observed, String> {
@@ -473,7 +517,7 @@ const DETAIL_COLOURS: [[f32; 4]; DETAIL_LIMIT] =
 
 /// A designed run's samples for the details of `weights`: a mid base colour times `scale`, the base normal flat with the
 /// weights set by its lane at `x`, the details mid.
-fn design(weights: Weights, scale: f32, x: f32, base_mask: f32) -> Samples {
+fn design(weights: Weights<'_>, scale: f32, x: f32, base_mask: f32) -> Samples {
     let n = weights.details();
     let mut normal = [0.5; 4];
     normal[weights.lane()] = x;
@@ -544,9 +588,14 @@ fn solve(program: &Program<'_>) -> Result<Solved, NotDerived> {
     .into())
 }
 
-/// Which detail's reflectance term reads the base mask: the one whose observed colour moves with it where it is taken
-/// alone, or, where none taken alone does, the one no end takes alone.
-fn masked_detail(program: &Program<'_>, scale: f32) -> Result<usize, String> {
+/// Which detail's reflectance term reads the base mask: the one whose observed mix (`differs`: the colour for a program
+/// that holds an F0, the metallic factor for one that holds that) moves with it where it is taken alone, or, where none
+/// taken alone does, the one no end takes alone.
+fn masked_detail(
+    program: &Program<'_>,
+    scale: f32,
+    differs: fn(&Observed, &Observed) -> Result<bool, NonFinite>,
+) -> Result<usize, String> {
     let n = program.details();
     let weights = program.weights();
     let moves = |j: usize| -> Result<bool, String> {
@@ -555,7 +604,7 @@ fn masked_detail(program: &Program<'_>, scale: f32) -> Result<usize, String> {
             program.observe(&design(weights, scale, x, 100.), UV)?,
             program.observe(&design(weights, scale, x, -100.), UV)?,
         );
-        Ok(colour_differs(&high, &low)?)
+        Ok(differs(&high, &low)?)
     };
     let mut reading = Vec::new();
     for j in (0..n).filter(|&j| weights.isolating(j).is_some()) {
@@ -590,11 +639,14 @@ fn masked_detail(program: &Program<'_>, scale: f32) -> Result<usize, String> {
 
 /// [`solve`] with the designed base colour at `scale`: `None` where a designed colour saturates.
 fn solve_at(program: &Program<'_>, scale: f32) -> Result<Option<(DetailConstants, Frame)>, NotDerived> {
+    if let Held::Metallic(..) = program.outputs.held {
+        return solve_metal_at(program, scale);
+    }
     let n = program.details();
     let weights = program.weights();
     let run = |s: &Samples| program.observe(s, UV);
     let design = |x: f32, base_mask: f32| design(weights, scale, x, base_mask);
-    let p = masked_detail(program, scale)?;
+    let p = masked_detail(program, scale, colour_differs)?;
     let at_p = weights.observing(p);
     let p_alone = weights.isolating(p).is_some();
     // the mix f at 1 (the base mask far above any bias) where the masked detail is read: the reflectance is C
@@ -736,6 +788,56 @@ fn solve_at(program: &Program<'_>, scale: f32) -> Result<Option<(DetailConstants
     if !settled {
         return Err(format!("the reflectance biases do not settle in {BIAS_ROUNDS} rounds").into());
     }
+    let SurfaceTerms {
+        frame,
+        normal_strength,
+        gloss_bias,
+        gloss_scale,
+        alpha,
+    } = solve_surface(program, scale)?;
+    let details = (0..n)
+        .map(|j| DetailTerms {
+            tint: tints[j],
+            gloss_bias: gloss_bias[j],
+            gloss_scale: gloss_scale[j],
+            reflectance: if j == p {
+                ReflectanceTerm::MaskPlusBias(bias[j])
+            } else {
+                ReflectanceTerm::Bias(bias[j])
+            },
+        })
+        .collect();
+    Ok(Some((
+        DetailConstants {
+            weights: program.roles.weights.clone(),
+            details,
+            normal_strength,
+            lowering: SurfaceLowering::GlossReflectance { dielectric_f0: f0 },
+            base_saturation: 0.,
+            colour,
+            gloss_encoding: program.outputs.gloss.2,
+            alpha,
+        },
+        frame,
+    )))
+}
+
+/// The terms of a program's surface that do not depend on how its G-buffer holds the mix: its tangent frame, the normal
+/// strength, each detail's gloss bias and scale, and the detail whose colour alpha is the surface's.
+struct SurfaceTerms {
+    frame: Frame,
+    normal_strength: f32,
+    gloss_bias: Vec<f32>,
+    gloss_scale: Vec<GlossScale>,
+    alpha: Option<usize>,
+}
+
+/// [`SurfaceTerms`] of `program`, read with the designed base colour at `scale`.
+fn solve_surface(program: &Program<'_>, scale: f32) -> Result<SurfaceTerms, NotDerived> {
+    let n = program.details();
+    let weights = program.weights();
+    let run = |s: &Samples| program.observe(s, UV);
+    let design = |x: f32, base_mask: f32| design(weights, scale, x, base_mask);
     // the tangent frame, from the base normal alone (the details flat): x, y and z of tangent space
     let first_end = weights.ends()[0];
     let flat = |nx: f32, ny: f32| {
@@ -888,6 +990,156 @@ fn solve_at(program: &Program<'_>, scale: f32) -> Result<Option<(DetailConstants
             Some(*j)
         }
     };
+    Ok(SurfaceTerms {
+        frame,
+        normal_strength,
+        gloss_bias,
+        gloss_scale,
+        alpha,
+    })
+}
+
+/// Whether the metallic factor differs between two runs past [`BOUND_UNITS`].
+fn metallic_differs(a: &Observed, b: &Observed) -> Result<bool, NonFinite> {
+    moved(a.metallic, b.metallic)
+}
+
+/// [`solve_at`] for a program whose G-buffer holds the mix as a metallic factor (Elden Ring's): the colour the material
+/// multiplies the albedo by is the albedo where every detail colour saturates (the base colour huge); the base colour's
+/// desaturation comes from two pure base colours (the green of a red base over the green of a green base, in which the
+/// tints cancel); each detail's tint from the albedo where the weights take it alone, the one no end takes alone
+/// afterwards, as for an F0; the mix's biases from the metallic factor itself, in rounds until they settle.
+fn solve_metal_at(program: &Program<'_>, scale: f32) -> Result<Option<(DetailConstants, Frame)>, NotDerived> {
+    let n = program.details();
+    let weights = program.weights();
+    let run = |s: &Samples| program.observe(s, UV);
+    let design = |x: f32, base_mask: f32| design(weights, scale, x, base_mask);
+    let p = masked_detail(program, scale, metallic_differs)?;
+    let at_p = weights.observing(p);
+    let p_alone = weights.isolating(p).is_some();
+    // the colour the material multiplies the albedo by: every detail colour saturated
+    let first = weights.observing(0);
+    let mut huge = design(first, 0.);
+    huge.a[..3].fill(1.0e4);
+    let colour = run(&huge)?.albedo;
+    // the base colour's desaturation `s`: a red base's green is `s * L0 * a` and a green base's `a * (1 - s * (1 - L1))`
+    let level = BASE_COLOUR[1] * scale;
+    let with_base = |a: [f32; 3]| -> Result<Observed, String> {
+        let mut sample = design(first, 0.);
+        sample.a[..3].copy_from_slice(&a);
+        run(&sample)
+    };
+    let (red, green) = (with_base([level, 0., 0.])?, with_base([0., level, 0.])?);
+    let base_saturation = if red.albedo[1] == 0. {
+        0.
+    } else if green.albedo[1] == 0. {
+        return Err("the base colour's green moves the albedo's green in no run of a green base".into());
+    } else {
+        let ratio = red.albedo[1] / green.albedo[1];
+        ratio / (LUMA[0] + ratio * (1. - LUMA[1]))
+    };
+    let desaturated = |a: [f32; 4]| -> [f32; 3] {
+        if base_saturation == 0. {
+            [a[0], a[1], a[2]]
+        } else {
+            let luma = a[0] * LUMA[0] + a[1] * LUMA[1] + a[2] * LUMA[2];
+            std::array::from_fn(|i| a[i] + (luma - a[i]) * base_saturation)
+        }
+    };
+    // the details' colour `C` from an albedo
+    let unit = |albedo: [f32; 3]| -> [f32; 3] {
+        std::array::from_fn(|i| if colour[i] == 0. { 0. } else { albedo[i] / colour[i] })
+    };
+    let mut tints = vec![[0f32; 3]; n];
+    let mut alone = Vec::new();
+    for j in 0..n {
+        if let Some(x) = weights.isolating(j) {
+            let s = design(x, 0.);
+            let c = unit(run(&s)?.albedo);
+            if c.iter().any(|&c| c >= 1.) {
+                return Ok(None);
+            }
+            let a = desaturated(s.a);
+            tints[j] = std::array::from_fn(|i| c[i] / (a[i] * s.d[j][i]));
+            alone.push(j);
+        }
+    }
+    let unisolated: Vec<usize> = (0..n).filter(|j| !alone.contains(j)).collect();
+    match unisolated.as_slice() {
+        [] => {}
+        &[j] => {
+            let x = weights.observing(j);
+            let s = design(x, 0.);
+            let c = unit(run(&s)?.albedo);
+            if c.iter().any(|&c| c >= 1.) {
+                return Ok(None);
+            }
+            let a = desaturated(s.a);
+            let w = weights.at(x);
+            tints[j] = std::array::from_fn(|i| {
+                let terms: Vec<f32> = (0..n).map(|k| tints[k][i] * s.d[k][i]).collect();
+                unlerp(c[i] / a[i], &terms, &w, j) / s.d[j][i]
+            });
+        }
+        more => {
+            return Err(format!("no end of the weights takes details {more:?} alone").into());
+        }
+    }
+    // the mix's biases: the masked detail's read where it is, every other's half way through its weight; each needs the
+    // others where they weigh in, so in rounds until they settle
+    let metallic_at = |x: f32, m: f32| -> Result<f32, String> { Ok(run(&design(x, m))?.metallic) };
+    let unsaturated = |f: f32| f > 0.01 && f < 0.99;
+    let term = |j: usize, bias: &[f32], m: f32| if j == p { m + bias[j] } else { bias[j] };
+    let mut bias = vec![0f32; n];
+    let mut settled = false;
+    for _ in 0..BIAS_ROUNDS {
+        let before = bias.clone();
+        bias[p] = (|| -> Result<f32, NotDerived> {
+            let w = weights.at(at_p);
+            for m in base_masks() {
+                let f = metallic_at(at_p, m)?;
+                if unsaturated(f) {
+                    if p_alone {
+                        return Ok(f - m);
+                    }
+                    let terms: Vec<f32> = (0..n).map(|k| term(k, &bias, m)).collect();
+                    return Ok(unlerp(f, &terms, &w, p) - m);
+                }
+            }
+            Err(format!("no base mask leaves the metallic factor unsaturated where detail {p} is read").into())
+        })()?;
+        for j in (0..n).filter(|&j| j != p) {
+            let x = weights.half_way(j);
+            let w = weights.at(x);
+            bias[j] = (|| -> Result<f32, NotDerived> {
+                for m in base_masks() {
+                    let f = metallic_at(x, m)?;
+                    if unsaturated(f) {
+                        let terms: Vec<f32> = (0..n).map(|k| term(k, &bias, m)).collect();
+                        return Ok(unlerp(f, &terms, &w, j));
+                    }
+                }
+                Err(format!(
+                    "no base mask leaves the metallic factor unsaturated half way through detail {j}'s weight"
+                )
+                .into())
+            })()?;
+        }
+        if bias.iter().zip(&before).all(|(a, b)| a.to_bits() == b.to_bits()) {
+            settled = true;
+            break;
+        }
+    }
+    if !settled {
+        return Err(format!("the metallic biases do not settle in {BIAS_ROUNDS} rounds").into());
+    }
+    let SurfaceTerms {
+        frame,
+        normal_strength,
+        gloss_bias,
+        gloss_scale,
+        alpha,
+    } = solve_surface(program, scale)?;
     let details = (0..n)
         .map(|j| DetailTerms {
             tint: tints[j],
@@ -902,12 +1154,13 @@ fn solve_at(program: &Program<'_>, scale: f32) -> Result<Option<(DetailConstants
         .collect();
     Ok(Some((
         DetailConstants {
-            weight_set: program.roles.weight_set,
+            weights: program.roles.weights.clone(),
             details,
             normal_strength,
-            dielectric_f0: f0,
+            lowering: SurfaceLowering::MetallicGloss,
+            base_saturation,
             colour,
-            gloss_encoding: program.outputs.gloss.1,
+            gloss_encoding: program.outputs.gloss.2,
             alpha,
         },
         frame,
@@ -961,6 +1214,7 @@ fn detail_lerp(c: &DetailConstants, gain: f32, texture: TextureRef) -> DetailLer
         base_colour: texture,
         base_normal: texture,
         base_mask: texture,
+        base_saturation: c.base_saturation,
         details: c
             .details
             .iter()
@@ -973,10 +1227,9 @@ fn detail_lerp(c: &DetailConstants, gain: f32, texture: TextureRef) -> DetailLer
                 reflectance: d.reflectance,
             })
             .collect(),
-        weights: Weights::of(c.weight_set).equation(texture),
+        weights: Weights(&c.weights).equation(texture),
         gain,
         normal_strength: c.normal_strength,
-        dielectric_f0: c.dielectric_f0,
         colour: c.colour,
         gloss_encoding: c.gloss_encoding,
         alpha: c.alpha,
@@ -986,7 +1239,7 @@ fn detail_lerp(c: &DetailConstants, gain: f32, texture: TextureRef) -> DetailLer
 /// The equation's surface for `s` with `c` and `gain` ([`detail_lerp`]).
 fn equation(c: &DetailConstants, gain: f32, s: &Samples) -> DetailSurface {
     let texture = TextureRef::new(primase_core::World::default().spawn());
-    detail_lerp(c, gain, texture).evaluate(&s.as_core(), &Weights::of(c.weight_set).values(s.n))
+    detail_lerp(c, gain, texture).evaluate(&s.as_core(), &Weights(&c.weights).values(s.n))
 }
 
 /// How many proof sets are drawn where the weights mix ([`prove`]).
@@ -1005,6 +1258,7 @@ fn compare_set(
     let limit = BOUND_UNITS;
     let seen = program.observe(s, uv)?;
     let want = equation(c, 1., s);
+    let written = c.lowering.written(&want);
     // the equation's tangent normal through the program's frame, unit length
     let n = want.normal;
     let world: [f32; 3] = std::array::from_fn(|i| (0..3).map(|axis| frame[axis][i] * n[axis]).sum());
@@ -1029,10 +1283,15 @@ fn compare_set(
         Ok(())
     };
     for (i, w) in world.iter().enumerate() {
-        check("albedo", seen.albedo[i], want.albedo[i])?;
-        check("reflectance", seen.reflectance[i], want.reflectance[i])?;
+        check("albedo", seen.albedo[i], written.albedo[i])?;
+        if let Some(reflectance) = written.reflectance {
+            check("reflectance", seen.reflectance[i], reflectance[i])?;
+        }
         check("normal", seen.normal[i], w / length)?;
         check("emission", seen.emission[i], 0.)?;
+    }
+    if let Some(metallic) = written.metallic {
+        check("metallic", seen.metallic, metallic)?;
     }
     check("gloss", seen.gloss, want.gloss)?;
     match (c.alpha, seen.alpha) {
@@ -1111,6 +1370,17 @@ fn sampler_slot(probe: &ProgramProbe, name: &str) -> Option<u32> {
         (matches!(r.kind, ResourceKind::Sampler { .. }) && r.provenance.name == name)
             .then(|| r.provenance.d3d.map(|d| d.register))
             .flatten()
+    })
+}
+
+/// The sampler slot at register `register`, where the program declares one: the fallback for a program whose samplers
+/// carry no names. Elden Ring's recorded programs read their colour textures through the sampler at register 0 and
+/// their normals through register 2 (the mask through 8), as Sekiro's `SS_DiffuseMap` and `SS_BumpMap` are.
+fn sampler_at(probe: &ProgramProbe, register: u32) -> Option<u32> {
+    probe.interface().resources.iter().find_map(|r| {
+        (matches!(r.kind, ResourceKind::Sampler { .. })
+            && r.provenance.d3d.is_some_and(|d| d.register == register))
+        .then_some(register)
     })
 }
 
@@ -1202,12 +1472,12 @@ impl Derived {
 }
 
 impl Equation {
-    /// The equation as a [`DetailedMaterial`]: its [`DetailLerp`] ([`Equation::detail_lerp`]), lowered as Sekiro's
-    /// bake lowers gloss and reflectance, with what it holds constant.
+    /// The equation as a [`DetailedMaterial`]: its [`DetailLerp`] ([`Equation::detail_lerp`]), lowered as the program's
+    /// G-buffer holds the surface (an F0 reflectance, or a metallic factor), with what it holds constant.
     pub fn detailed_material(&self, texture: impl Fn(u32) -> TextureRef) -> DetailedMaterial {
         DetailedMaterial {
             mix: DetailMix::DetailLerp(self.detail_lerp(texture)),
-            lowering: SurfaceLowering::GlossReflectance,
+            lowering: self.constants.lowering,
             frozen: self.frozen.clone(),
         }
     }
@@ -1220,6 +1490,7 @@ impl Equation {
             base_colour: texture(self.roles.base_colour),
             base_normal,
             base_mask: texture(self.roles.base_mask),
+            base_saturation: c.base_saturation,
             details: self
                 .roles
                 .details
@@ -1234,10 +1505,9 @@ impl Equation {
                     reflectance: d.reflectance,
                 })
                 .collect(),
-            weights: Weights::of(c.weight_set).equation(base_normal),
+            weights: Weights(&c.weights).equation(base_normal),
             gain: 1.,
             normal_strength: c.normal_strength,
-            dielectric_f0: c.dielectric_f0,
             colour: c.colour,
             gloss_encoding: c.gloss_encoding,
             alpha: c.alpha,
@@ -1246,7 +1516,8 @@ impl Equation {
 }
 
 /// The constants' lanes by name, in a fixed order: each detail's tint lanes, the normal strength, each gloss bias, each
-/// reflectance bias, the dielectric reflectance, the colour's lanes, each constant gloss scale.
+/// reflectance bias, the dielectric reflectance (where the program holds an F0), the colour's lanes, each constant gloss
+/// scale, the base colour's desaturation (where the program holds a metallic factor).
 fn constant_lanes(c: &DetailConstants) -> Vec<(String, f32)> {
     let mut out = Vec::new();
     for (j, d) in c.details.iter().enumerate() {
@@ -1270,7 +1541,9 @@ fn constant_lanes(c: &DetailConstants) -> Vec<(String, f32)> {
             .enumerate()
             .map(|(j, d)| (format!("reflectance_bias[{j}]"), d.reflectance.bias())),
     );
-    out.push(("dielectric_f0".into(), c.dielectric_f0));
+    if let SurfaceLowering::GlossReflectance { dielectric_f0 } = c.lowering {
+        out.push(("dielectric_f0".into(), dielectric_f0));
+    }
     out.extend(
         c.colour
             .iter()
@@ -1286,6 +1559,9 @@ fn constant_lanes(c: &DetailConstants) -> Vec<(String, f32)> {
                 GlossScale::BaseNormalZ => None,
             }),
     );
+    if c.lowering == SurfaceLowering::MetallicGloss {
+        out.push(("base_saturation".into(), c.base_saturation));
+    }
     out
 }
 
@@ -1346,12 +1622,13 @@ fn fold_cost(c: &DetailConstants, gain: f32, words: &[[f32; 3]], seed: u32) -> R
     for _ in 0..PROOF_SETS {
         let s = random_samples(&mut random, c.details.len());
         let _uv = [random.unit(), random.unit()];
-        let folded = equation(c, 1., &s);
-        let unfolded = equation(&unfolded_constants, gain, &s);
+        let folded = c.lowering.written(&equation(c, 1., &s));
+        let unfolded = unfolded_constants.lowering.written(&equation(&unfolded_constants, gain, &s));
         for i in 0..3 {
-            largest = largest
-                .max(units(folded.albedo[i], unfolded.albedo[i])?)
-                .max(units(folded.reflectance[i], unfolded.reflectance[i])?);
+            largest = largest.max(units(folded.albedo[i], unfolded.albedo[i])?);
+            if let (Some(a), Some(b)) = (folded.reflectance, unfolded.reflectance) {
+                largest = largest.max(units(a[i], b[i])?);
+            }
         }
     }
     if largest > BOUND_UNITS {
@@ -1403,7 +1680,7 @@ fn frozen(
     roles: &SlotRoles,
     seed: u32,
 ) -> Result<Vec<Frozen>, String> {
-    let weights = Weights::of(roles.weight_set);
+    let weights = Weights(&roles.weights);
     let mut samples: Vec<Samples> = weights
         .ends()
         .into_iter()
@@ -1647,12 +1924,13 @@ fn any_moved(pairs: impl IntoIterator<Item = (f32, f32)>) -> Result<bool, NonFin
 /// Whether any decoded role differs between two runs past [`BOUND_UNITS`]; refused where a lane is not finite.
 fn differ(a: &Observed, b: &Observed) -> Result<bool, NonFinite> {
     let lanes = |o: &Observed| {
-        let mut v = Vec::with_capacity(13);
+        let mut v = Vec::with_capacity(14);
         v.extend(o.albedo);
         v.extend(o.reflectance);
         v.extend(o.normal);
         v.extend(o.emission);
         v.push(o.gloss_stored);
+        v.push(o.metallic);
         v
     };
     any_moved(lanes(a).into_iter().zip(lanes(b)))
@@ -1701,6 +1979,147 @@ impl From<&str> for Unidentified {
     }
 }
 
+/// What [`identify`] has found of a program's textures before it chooses the weights.
+struct Textures<'a> {
+    colours: &'a [u32],
+    normals: &'a [u32],
+    base_normal: u32,
+    mask: u32,
+}
+
+/// The step of a measured ramp: the saturate of `s * x + t`.
+const SATURATE: &[WeightStep] = &[WeightStep::Saturate];
+
+/// How many intervals the base normal's alpha is scanned in ([`ramp_weights`]), and how many consecutive samples of one
+/// output make a plateau of the scan.
+const RAMP_SAMPLES: usize = 256;
+const RAMP_PLATEAU: usize = 8;
+
+/// Whether two colours are the same to a few roundings (a plateau of a scan holds one output to the bit).
+fn near(a: [f32; 3], b: [f32; 3]) -> bool {
+    a.iter()
+        .zip(b)
+        .all(|(x, y)| (x - y).abs() <= 4. * f32::EPSILON * x.abs().max(y.abs()))
+}
+
+/// The weights of a program whose details are weighed by ramp windows of the base normal's alpha (`saturate(s * N.a + t)`,
+/// Elden Ring's `C[DetailBlend]` masks), measured from the albedo as the alpha runs from 0 to 1 with every colour texture
+/// a distinct dim value and the others flat: the output holds still on a plateau where one detail is taken alone (the
+/// first plateau at the alpha 0, the last at 1, one more between them for three details), and moves linearly between
+/// two. Each ramp's `s` and `t` come from where the output leaves the plateau on either side, found by bisection, and the
+/// ramp between them is checked against every scanned sample. With two details the weight rises from the first plateau
+/// to the last; with three the first detail is the middle plateau's, the second's weight falls from it to the first
+/// plateau and the third's rises to the last (the weights never weigh together, so which of the two outer plateaus is
+/// the second detail changes no output). `None` where the scan shows another structure: the stated forms
+/// ([`WEIGHT_SETS`]) are then tried. The alpha lane only; a program that weighs by another lane is read by its stated
+/// form.
+fn ramp_weights(
+    probe: &ProgramProbe,
+    outputs: Outputs,
+    t: &Textures<'_>,
+    n: usize,
+) -> Result<Option<Vec<WeightForm>>, String> {
+    if !(2..=DETAIL_LIMIT).contains(&n) {
+        return Ok(None);
+    }
+    let mut answers: BTreeMap<u32, [f32; 4]> = BTreeMap::new();
+    for (k, &c) in t.colours.iter().enumerate() {
+        let k = k as f32;
+        answers.insert(c, [0.04 + 0.011 * k, 0.05 + 0.013 * k, 0.06 + 0.017 * k, 1.]);
+    }
+    answers.extend(t.normals.iter().map(|&normal| (normal, [0.5; 4])));
+    answers.insert(t.mask, [0.5, 0., 0., 0.]);
+    let at = |x: f32| -> Option<[f32; 3]> {
+        let mut a = answers.clone();
+        a.insert(t.base_normal, [0.5, 0.5, 0.5, x]);
+        observe_slots(probe, outputs, &a, UV).ok().map(|o| o.albedo)
+    };
+    let xs: Vec<f32> = (0..=RAMP_SAMPLES).map(|i| i as f32 / RAMP_SAMPLES as f32).collect();
+    let mut values: Vec<[f32; 3]> = Vec::with_capacity(xs.len());
+    for &x in &xs {
+        match at(x) {
+            Some(v) if v.iter().all(|c| c.is_finite()) => values.push(v),
+            _ => return Ok(None),
+        }
+    }
+    // the plateaus, in order
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    let mut start = 0;
+    for i in 1..=xs.len() {
+        if i == xs.len() || !near(values[start], values[i]) {
+            if i - start >= RAMP_PLATEAU {
+                runs.push((start, i - 1));
+            }
+            start = i;
+        }
+    }
+    if runs.len() != n
+        || runs[0].0 != 0
+        || runs[n - 1].1 != RAMP_SAMPLES
+        || runs.windows(2).any(|w| near(values[w[0].0], values[w[1].0]))
+    {
+        return Ok(None);
+    }
+    // where the output leaves the plateau of colour `plateau`, from the sample `on` it to the next `off` it, by bisection
+    let edge = |mut on: f32, mut off: f32, plateau: [f32; 3]| -> Option<f32> {
+        for _ in 0..40 {
+            let mid = on + (off - on) / 2.;
+            if near(at(mid)?, plateau) {
+                on = mid;
+            } else {
+                off = mid;
+            }
+        }
+        Some(on)
+    };
+    // the ramp from plateau `from` (the weight 0) to plateau `to` (the weight 1)
+    let ramp = |from: usize, to: usize| -> Option<WeightForm> {
+        let (a, b) = (runs[from], runs[to]);
+        let (p, q) = (values[a.0], values[b.0]);
+        let (x0, x1, between) = if a.1 < b.0 {
+            (
+                edge(xs[a.1], xs[a.1 + 1], p)?,
+                edge(xs[b.0], xs[b.0 - 1], q)?,
+                a.1 + 1..b.0,
+            )
+        } else {
+            (
+                edge(xs[a.0], xs[a.0 - 1], p)?,
+                edge(xs[b.1], xs[b.1 + 1], q)?,
+                b.1 + 1..a.0,
+            )
+        };
+        if x0 == x1 {
+            return None;
+        }
+        let slope = 1. / (x1 - x0);
+        let offset = -x0 * slope;
+        let lane = widest([(q[0] - p[0]).abs(), (q[1] - p[1]).abs(), (q[2] - p[2]).abs()]);
+        let mut interior = 0;
+        for i in between {
+            let w = (values[i][lane] - p[lane]) / (q[lane] - p[lane]);
+            let expected = (slope * xs[i] + offset).clamp(0., 1.);
+            if (w - expected).abs() > 5e-5 {
+                return None;
+            }
+            if w > 0.02 && w < 0.98 {
+                interior += 1;
+            }
+        }
+        (interior >= 3).then_some(WeightForm {
+            channels: [0., 0., 0., slope],
+            bias: offset,
+            steps: SATURATE,
+        })
+    };
+    let forms = if n == 2 {
+        vec![ramp(0, 1)]
+    } else {
+        vec![ramp(1, 0), ramp(1, 2)]
+    };
+    Ok(forms.into_iter().collect::<Option<Vec<_>>>())
+}
+
 /// The textures of a detail program by their part in the equation, each read from what moves which output:
 ///
 /// - the base normal: the one normal texture that, at `(1, 0.5)` with the others flat, turns the normal a right angle
@@ -1716,8 +2135,12 @@ impl From<&str> for Unidentified {
 /// An error names the structure that differs.
 fn identify(probe: &ProgramProbe, outputs: Outputs) -> Result<SlotRoles, Unidentified> {
     let groups = sampler_groups(probe)?;
-    let colour_sampler = sampler_slot(probe, "SS_DiffuseMap").ok_or("no SS_DiffuseMap sampler")?;
-    let normal_sampler = sampler_slot(probe, "SS_BumpMap").ok_or("no SS_BumpMap sampler")?;
+    let colour_sampler = sampler_slot(probe, "SS_DiffuseMap")
+        .or_else(|| sampler_at(probe, 0))
+        .ok_or("no SS_DiffuseMap sampler")?;
+    let normal_sampler = sampler_slot(probe, "SS_BumpMap")
+        .or_else(|| sampler_at(probe, 2))
+        .ok_or("no SS_BumpMap sampler")?;
     let colours = groups.get(&colour_sampler).cloned().unwrap_or_default();
     let normals = groups.get(&normal_sampler).cloned().unwrap_or_default();
     let masks: Vec<u32> = groups
@@ -1774,30 +2197,42 @@ fn identify(probe: &ProgramProbe, outputs: Outputs) -> Result<SlotRoles, Unident
     };
     // the weights: the family's set for `n` details whose lane, from one end of its weights to the other, moves the
     // outputs; a single detail's none, its base normal's alpha moving nothing
-    let lane_moves = |weights: Weights| -> Result<bool, Unidentified> {
+    let lane_moves = |weights: Weights<'_>| -> Result<bool, Unidentified> {
         let (lane, ends) = (weights.lane(), weights.ends());
         Ok(differ(
             &run(&with(&mid, *base_normal, &|v| v[lane] = ends[0]))?,
             &run(&with(&mid, *base_normal, &|v| v[lane] = ends[1]))?,
         )?)
     };
-    let mut weight_set = None;
-    for (i, set) in WEIGHT_SETS
-        .iter()
-        .enumerate()
-        .filter(|(_, set)| set.len() + 1 == n)
-    {
-        if n == 1 || lane_moves(Weights(set))? {
-            weight_set = Some(i);
-            break;
-        }
-    }
-    let Some(weight_set) = weight_set else {
-        return Err("no normal texture's alpha moves the outputs: the mask is not the base normal's (1 - N.a)^8, nor \
-                    any other weight of the family"
-            .into());
+    let textures = Textures {
+        colours: &colours,
+        normals: &normals,
+        base_normal: *base_normal,
+        mask: *mask,
     };
-    let weights = Weights::of(weight_set);
+    let measured = match outputs.held {
+        Held::Metallic(..) if n >= 2 => ramp_weights(probe, outputs, &textures, n)?,
+        _ => None,
+    };
+    let forms: Vec<WeightForm> = match measured {
+        Some(forms) => forms,
+        None => {
+            let mut chosen = None;
+            for set in WEIGHT_SETS.iter().filter(|set| set.len() + 1 == n) {
+                if n == 1 || lane_moves(Weights(set))? {
+                    chosen = Some(set.to_vec());
+                    break;
+                }
+            }
+            let Some(chosen) = chosen else {
+                return Err("no normal texture's alpha moves the outputs: the mask is not the base normal's (1 - N.a)^8, \
+                            nor any other weight of the family"
+                    .into());
+            };
+            chosen
+        }
+    };
+    let weights = Weights(&forms);
     if n == 1 && lane_moves(weights)? {
         return Err("the base normal's alpha moves the outputs of a program with one detail".into());
     }
@@ -1831,7 +2266,7 @@ fn identify(probe: &ProgramProbe, outputs: Outputs) -> Result<SlotRoles, Unident
             (first, second)
         };
         return Ok(SlotRoles {
-            weight_set,
+            weights: forms.clone(),
             base_colour: base,
             base_normal: *base_normal,
             base_mask: *mask,
@@ -1950,7 +2385,7 @@ fn identify(probe: &ProgramProbe, outputs: Outputs) -> Result<SlotRoles, Unident
         })
         .collect();
     Ok(SlotRoles {
-        weight_set,
+        weights: forms.clone(),
         base_colour: *base_colour,
         base_normal: *base_normal,
         base_mask: *mask,
@@ -2097,9 +2532,9 @@ mod tests {
         assert!(all.iter().any(|o| matches!(o.role, OutputRole::Unknown { .. })));
         let expected = Outputs {
             normal: (0, f32::from_bits(0x3f00_2008)),
-            gloss: (1, ScalarEncoding::square_of(0.95)),
+            gloss: (1, 0, ScalarEncoding::square_of(0.95)),
             albedo: 2,
-            reflectance: (3, ScalarEncoding::square_root_of(1.0)),
+            held: Held::Reflectance(3, ScalarEncoding::square_root_of(1.0)),
             emission: Some((4, ScalarEncoding::LINEAR)),
             alpha: None,
         };
@@ -2126,10 +2561,81 @@ mod tests {
             assert_eq!(outputs_of(&varyings(), &alpha), Ok(with_alpha));
         }
         // a role the equation does not read
-        let mut metallic = all;
-        metallic[1].role = OutputRole::Metallic;
-        let err = outputs_of(&varyings(), &metallic).unwrap_err();
+        let mut roughness = all.clone();
+        roughness[1].role = OutputRole::Roughness;
+        let err = outputs_of(&varyings(), &roughness).unwrap_err();
         assert!(err.contains("is not a detail blend's"), "{err}");
+        // a program holds the mix as an F0 or as a metallic factor, not both
+        let mut both = all;
+        both[1].role = OutputRole::Metallic;
+        let err = outputs_of(&varyings(), &both).unwrap_err();
+        assert!(err.contains("both a reflectance and a metallic factor"), "{err}");
+    }
+
+    /// Elden Ring's layout holds the mix as a metallic factor on target 1's x and the gloss on its y: the metallic
+    /// register and lane, the gloss's lane, and no reflectance.
+    #[test]
+    fn a_metallic_layout_holds_the_mix_as_a_metallic_factor() {
+        let bindings: Vec<OutputBinding> = crate::Game::EldenRing
+            .gbuffer()
+            .into_iter()
+            .map(|(n, lanes, role)| OutputBinding {
+                label: target(n),
+                lanes,
+                role,
+            })
+            .collect();
+        let expected = Outputs {
+            normal: (0, f32::from_bits(0x3f00_2008)),
+            gloss: (1, 1, ScalarEncoding::square_of(0.95)),
+            albedo: 2,
+            held: Held::Metallic(1, 0),
+            emission: Some((4, ScalarEncoding::LINEAR)),
+            alpha: None,
+        };
+        assert_eq!(outputs_of(&varyings(), &bindings), Ok(expected));
+        // no mix at all is refused
+        let without: Vec<OutputBinding> = bindings
+            .into_iter()
+            .filter(|o| !matches!(o.role, OutputRole::Metallic))
+            .collect();
+        let err = outputs_of(&varyings(), &without).unwrap_err();
+        assert!(err.contains("no reflectance and no metallic factor"), "{err}");
+    }
+
+    /// A ramp window of the base normal's alpha, `saturate(2 a - 0.5)`: its ends are where it is 0 (a quarter) and 1
+    /// (three quarters), it takes the first detail alone below the first and the second above the second, and the
+    /// weights it states are the form's own.
+    #[test]
+    fn a_ramp_windows_ends_and_isolated_details_are_found_from_its_form() {
+        let form = WeightForm {
+            channels: [0., 0., 0., 2.],
+            bias: -0.5,
+            steps: SATURATE,
+        };
+        let forms = [form];
+        let weights = Weights(&forms);
+        assert_eq!(weights.lane(), 3);
+        assert_eq!(weights.ends(), [0.75, 0.25]);
+        assert_eq!(weights.isolating(0), Some(0.25));
+        assert_eq!(weights.isolating(1), Some(0.75));
+        assert_eq!(weights.values([0.5, 0.5, 0.5, 0.5]), [0.5]);
+        assert_eq!(weights.reaching(&form, 0.5, false), 0.5);
+        let stated = weights.equation(TextureRef::new(primase_core::World::default().spawn()));
+        assert_eq!(stated[0].steps, [WeightStep::Saturate]);
+        assert_eq!(stated[0].of_sample([0., 0., 0., 0.375]), Some(0.25));
+        assert_eq!(stated[0].of_sample([0., 0., 0., 0.]), Some(0.));
+        assert_eq!(stated[0].of_sample([0., 0., 0., 1.]), Some(1.));
+    }
+
+    /// Two colours are the same to a few roundings of the larger lane, and a lane off by more is not.
+    #[test]
+    fn a_plateau_holds_one_colour_to_a_few_roundings() {
+        let a = [0.25f32, 0.5, 0.75];
+        assert!(near(a, a));
+        assert!(near(a, [0.25, 0.5, 0.75 + 2. * f32::EPSILON * 0.75]));
+        assert!(!near(a, [0.25, 0.5, 0.75 + 16. * f32::EPSILON * 0.75]));
+        assert!(near([0.; 3], [0.; 3]));
     }
 
     /// A refusal's text is its reason (the same for every program refused alike) and, apart, the values that show it;

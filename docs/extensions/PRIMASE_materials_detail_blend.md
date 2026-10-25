@@ -6,8 +6,13 @@ in `extensionsUsed` and never in `extensionsRequired`. The material's own `pbrMe
 `KHR_materials_specular`) is the source's bake of the same surface at a capped size: a viewer without the extension
 draws that, and loses only the detail's resolution.
 
+`revision` is the model's revision: 4 here. A file without it is revision 3, which a reader of 4 takes (revision 3 is
+the subset without `baseSaturation`, the `max`, `affine` and `saturate` steps and the `metallic_gloss` lowering); a
+reader that finds a revision newer than its own says so and does not guess at the keys it does not know.
+
 ```json
 "extensions": {"PRIMASE_materials_detail_blend": {
+  "revision": 4,
   "equation": "detail_lerp",
   "lowering": "gloss_reflectance",
   "baseColorTexture":  {"index": 0, "colorSpace": "srgb"},
@@ -47,16 +52,23 @@ four lanes as the source reads them; a field reads the lanes its role says.
 `equation` is a closed set; `detail_lerp` is the only value. With `A`, `N`, `M` the base colour, normal and mask
 samples, `D_i`, `K_i` detail `i`'s colour and normal samples, `lerp(a, b, t) = a + (b - a) * t` lane by lane, and
 `chain(x)` the details' values `x_0, x_1, ...` lerped in turn by the weights (`x_0`, then `lerp(.., x_1, w_1)`, then
-`lerp(.., x_2, w_2)`), a conforming viewer computes, in this order and in 32-bit floats:
+`lerp(.., x_2, w_2)`), a conforming viewer computes, in this order and in 32-bit floats (one to three details: the
+model's own bound, the largest chain an evaluator is built for):
 
 1. The weights, one fewer than the details: `w_i` = the source's value, then each step in turn. A `mask` source is
    `dot(sample.rgba, channels) + bias` of its texture; a `vertex` source is channel `channel` of the attribute. `power`
    `n` (1 to 512) is taken by squaring: `x`, `x^2`, `x^4`, ... each the square of the one before, the powers of `n`'s
-   set bits multiplied in from the lowest (`x^260 = x^4 * x^256`). `min` `b` is `min(x, b)`, `b` where `x` is NaN.
-2. `C = saturate(gain * A.rgb * chain(tint_i * D_i.rgb))`.
+   set bits multiplied in from the lowest (`x^260 = x^4 * x^256`). `min` `b` is `min(x, b)` and `max` `b` is `max(x, b)`,
+   `b` where `x` is NaN. `affine` is `x * scale + bias`, the product rounded before the sum. `saturate` is `clamp(x, 0, 1)`,
+   0 where `x` is NaN. A program that raises a value that may be negative to a power (its `pow` gives NaN, which its
+   `saturate` makes 0) is written `max` 0 before the `power`.
+2. `A' = lerp(A.rgb, luma(A.rgb), baseSaturation)` with `luma(x) = 0.29891 x.r + 0.58661 x.g + 0.11448 x.b`, where
+   `baseSaturation` is present and not 0; else `A' = A.rgb`. Then `C = saturate(gain * A' * chain(tint_i * D_i.rgb))`.
 3. `f = saturate(chain(r_i))`, where `r_i` is detail `i`'s reflectance term: `maskPlusBias` `b` is `M.x + b`, `bias`
    `b` is `b`.
-4. Albedo `(1 - f) * C * color`; reflectance (F0) `lerp(dielectricF0, C, f)` per lane.
+4. The surface is `C`, `color` and `f`. What a G-buffer holds of it is the `lowering`'s (below): with
+   `gloss_reflectance`, albedo `(1 - f) * C * color` and reflectance (F0) `lerp(dielectricF0, C, f)` per lane; with
+   `metallic_gloss`, albedo `C * color` and metallic `f`.
 5. Normal, in tangent space and unnormalised: `xy = 2 * N.xy - 1`, `z = sqrt(1 - min(dot(xy, xy), 1))`, then
    `xy += normalStrength * (2 * chain(K_i.xy) - 1)`.
 6. Gloss as stored: `saturate(2 * chain(s_i) * chain(K_i.z + glossBias_i))`, where `s_i` is detail `i`'s gloss scale:
@@ -66,9 +78,15 @@ samples, `D_i`, `K_i` detail `i`'s colour and normal samples, `lerp(a, b, t) = a
 
 One detail is no lerp at all: its values are the chain's.
 
-`lowering` says how the result becomes the PBR model: `gloss_reflectance` is the base colour the albedo (and the alpha),
-roughness `1 - gloss`, metallic 0, and the reflectance the F0 as `KHR_materials_specular`'s `specularColorFactor` 25
-times the specular colour (glTF's F0 is `0.04 * factor * colour`).
+`lowering` says what a source's G-buffer holds of the surface and how it becomes the PBR model; both are the same
+statement, a mix between a dielectric and the colour, and differ in what the source stores:
+
+- `gloss_reflectance` (a G-buffer that stores an F0; `dielectricF0` is required): the base colour the albedo (and the
+  alpha), roughness `1 - gloss`, metallic 0, and the reflectance the F0 as `KHR_materials_specular`'s
+  `specularColorFactor` 25 times the specular colour (glTF's F0 is `0.04 * factor * colour`).
+- `metallic_gloss` (a G-buffer that stores a metallic factor; `dielectricF0` is not written): the base colour the albedo
+  (and the alpha), metallic `f`, roughness `1 - gloss`, and no specular colour. The dielectric reflectance is then the
+  viewer's: glTF's 0.04, which the source's own lighting may not use, so a writer states the approximation.
 
 ## What it holds constant
 
@@ -85,7 +103,9 @@ draws the equation draws the surface under these. Its entries are a closed set:
 primase's reader (`formats/gltf/src/detail.rs`, run by `lower-gltf-materials`) takes the extension as this document
 states it and refuses, with an error naming the material, anything else: a key not listed above (`extras` apart), a
 value outside a closed set (`equation`, `lowering`, a `glossScale`, `reflectance`, `source` or `frozen` form, a step), one
-to three `details` and exactly one fewer `weights`, a `power` outside 1 to 512, a `glossEncoding` `power` or `root` outside
+to three `details` and exactly one fewer `weights`, a `power` outside 1 to 512, a `revision` newer than 4 or older than 3,
+a `baseSaturation`, a `max`, `affine` or `saturate` step or the `metallic_gloss` lowering in a file of revision 3, a
+`dielectricF0` with `metallic_gloss` (or none with `gloss_reflectance`), a `glossEncoding` `power` or `root` outside
 1 to 255, a `vertex` attribute that is not `COLOR_n` or `TEXCOORD_n` (channel 0 to 3), an `alphaDetail` that is not a
 detail, a texture info without `colorSpace` or with one other than `srgb` or `linear`, and a number that is not a finite
 32-bit float. A material whose extension is sound but one of whose images the reader could not decode is read without
@@ -98,8 +118,10 @@ Every number is written as the 32-bit float the source states, so a reader gets 
 
 ## Evidence
 
-primase writes the extension only for a material whose program's equation it has proven (`derive-fromsoft-detail`): solved from runs of the
-program with designed samples and held to it on random samples and on samples where the weights mix, every output
-within 64 units in the last place. The comparison of each constant with the material word it reads, and the cost of
+primase writes the extension only for a material whose program's equation it has proven (`derive-fromsoft-detail`, for
+both games whose programs it reads): solved from runs of the program with designed samples and held to it on random
+samples and on samples where the weights mix, every output within 64 units in the last place (a program that writes a
+power as `exp2(log2 x * n)` is held to a bound measured on its own programs and stated by its report, not to the
+squaring's). The comparison of each constant with the material word it reads, and the cost of
 folding the gain into the tints, are the census's audit of the derivation (`detail_derive`'s example), not part of
 what the extension states.

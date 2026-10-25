@@ -1,5 +1,5 @@
-//! A Sekiro G-buffer pixel program run one pixel at a time as the program bake binds it, every texture read answered by
-//! the caller ([`primase_shader_exec::probe::AnsweredReads`]): what the program does with what it reads, apart from what
+//! A FromSoft G-buffer pixel program (Sekiro's DXBC, Elden Ring's DXIL) run one pixel at a time as the program bake binds
+//! it, every texture read answered by the caller ([`primase_shader_exec::probe::AnsweredReads`]): what the program does with what it reads, apart from what
 //! any texture holds. The detail form of a material ([`primase_core::detail`]) is read and proven from such runs.
 //!
 //! The program is resolved as the bake resolves it ([`resolve`], no metaparam: the engine's constants by their roles,
@@ -12,7 +12,7 @@
 use std::collections::BTreeMap;
 
 use primase_core::World;
-use primase_core::shader::{ConstantRole, OutputBinding, ShaderFormat, StageBinding, TextureSource};
+use primase_core::shader::{ConstantRole, OutputBinding, RenderState, StageBinding, TextureSource};
 use primase_shader::output_uses::bind_output_uses;
 use primase_shader_exec::evaluate::Constants;
 use primase_shader_exec::{Layout, PixelShader, ProgramShader, Sampler};
@@ -21,7 +21,7 @@ use crate::layer_bake::resolve::{
     ProgramTexture, Unbound, program_texture, register, render_state, resolve, textures_of,
 };
 use crate::layer_bake::{self, FrozenFrame};
-use crate::materials::LayeredMaterial;
+use crate::materials::{LayeredMaterial, MaterialView};
 use crate::{Result, invalid};
 
 /// How a program reads its material's parameters.
@@ -119,10 +119,10 @@ fn frozen_input(
 }
 
 impl ProgramProbe {
-    /// Sekiro's DXBC pixel program `bytes`, resolved as the bake resolves it with no material stated, its material's words
-    /// zero until set.
-    pub fn new(bytes: &[u8]) -> Result<Self> {
-        let unstated = LayeredMaterial {
+    /// A material that states nothing: the probe's of a program bound with no material, and the render state of one whose
+    /// definition is not an MTD (opaque, depth written).
+    fn unstated() -> LayeredMaterial {
+        LayeredMaterial {
             mtd: "probe".into(),
             definition: crate::mtd::MaterialDefinition {
                 shader: String::new(),
@@ -132,22 +132,46 @@ impl ProgramProbe {
                 block_lengths: Vec::new(),
             },
             bindings: BTreeMap::new(),
-        };
-        Self::with_material(bytes, &unstated)
+        }
+    }
+
+    /// Sekiro's DXBC pixel program `bytes`, resolved as the bake resolves it with no material stated, its material's words
+    /// zero until set.
+    pub fn new(bytes: &[u8]) -> Result<Self> {
+        Self::with_material(bytes, &Self::unstated())
     }
 
     /// Sekiro's DXBC pixel program `bytes` bound as the bake binds it for `material`: its material's words the
     /// material's, as the one binding writes them (a colour times its intensity), those it states none for zero until
     /// set.
     pub fn with_material(bytes: &[u8], material: &LayeredMaterial) -> Result<Self> {
-        let shader = layer_bake::program_executor(ShaderFormat::Dxbc, bytes)?;
+        Self::bind(crate::Game::Sekiro, bytes, &material.view(), &render_state(material))
+    }
+
+    /// `game`'s pixel program `bytes` (the game's [`crate::Game::shader_format`]: Sekiro's DXBC, Elden Ring's DXIL) bound
+    /// as the bake binds it for `material`, whichever record defines the material (an MTD or a material binary). A
+    /// material drawn forward (blended) has no G-buffer program and is refused; the render state is that of an opaque
+    /// material, which a G-buffer material is.
+    pub fn with_view(game: crate::Game, bytes: &[u8], material: &MaterialView<'_>) -> Result<Self> {
+        if material.is_forward() {
+            return Err(invalid(
+                "detail probe",
+                0,
+                "a material drawn forward has no G-buffer program",
+            ));
+        }
+        Self::bind(game, bytes, material, &render_state(&Self::unstated()))
+    }
+
+    fn bind(game: crate::Game, bytes: &[u8], material: &MaterialView<'_>, state: &RenderState) -> Result<Self> {
+        let shader = layer_bake::program_executor(game.shader_format(), bytes)?;
         let mut world = World::default();
         let program = world.spawn();
         let resolution = resolve(
             &shader,
             program,
-            &material.view(),
-            crate::Game::Sekiro,
+            material,
+            game,
             None,
             Unbound::Preview,
             &mut |_, _| Ok(None),
@@ -161,7 +185,7 @@ impl ProgramProbe {
             &mut outputs,
             &interface,
             shader.program().graph().ok().as_ref(),
-            &render_state(material),
+            state,
         );
         let constants = layer_bake::program_constants(
             &shader,
@@ -230,7 +254,7 @@ impl ProgramProbe {
             .collect();
         let mut engine = BTreeMap::new();
         for resource in textures_of(&interface) {
-            if let ProgramTexture::Engine(name) = program_texture(&material.view(), resource) {
+            if let ProgramTexture::Engine(name) = program_texture(material, resource) {
                 let value = resolution
                     .stage
                     .textures

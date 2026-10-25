@@ -1043,7 +1043,9 @@ its layered materials (`fromsoft.shader_programs`);
   inputs is refused before anything changes (`select-lod` first).
 - `derive-fromsoft-detail` (`DeriveFromSoftDetail`), after
   `resolve-fromsoft-shaders`, gives each material of Sekiro's
-  `Character_AMSN_[DetailBlend]` whose program's equation proves on the
+  `Character_AMSN_[DetailBlend]` and of Elden Ring's plain and `[Rich]`
+  `C[DetailBlend]` families (`[S2]` and `_SSS` are refused by name) whose
+  program's equation proves on the
   material's own words a `pbr.detail` (`primase_core::detail::DetailedMaterial`)
   beside its baked `pbr.material`: the detail blend's chain of one to three
   tiled details, each slot the bound texture at the tiling the program samples

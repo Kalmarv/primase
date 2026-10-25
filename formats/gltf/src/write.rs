@@ -1795,11 +1795,13 @@ impl Writer<'_> {
         let mut infos = infos.into_iter();
         let mut next = || infos.next().expect("one info a slot");
         let mut x = Map::new();
+        x.insert("revision".into(), json!(primase_core::detail::REVISION));
         x.insert("equation".into(), json!("detail_lerp"));
         x.insert(
             "lowering".into(),
             json!(match d.lowering {
-                SurfaceLowering::GlossReflectance => "gloss_reflectance",
+                SurfaceLowering::GlossReflectance { .. } => "gloss_reflectance",
+                SurfaceLowering::MetallicGloss => "metallic_gloss",
             }),
         );
         x.insert("baseColorTexture".into(), next());
@@ -1846,6 +1848,12 @@ impl Writer<'_> {
                 steps.push(match *step {
                     WeightStep::Power(n) => json!({"power": n}),
                     WeightStep::Min(b) => json!({"min": self.factors(e, &[b])?[0].clone()}),
+                    WeightStep::Max(b) => json!({"max": self.factors(e, &[b])?[0].clone()}),
+                    WeightStep::Affine { scale, bias } => json!({"affine": {
+                        "scale": self.factors(e, &[scale])?[0].clone(),
+                        "bias": self.factors(e, &[bias])?[0].clone(),
+                    }}),
+                    WeightStep::Saturate => json!({"saturate": {}}),
                 });
             }
             weights.push(json!({"source": source, "steps": steps}));
@@ -1856,10 +1864,15 @@ impl Writer<'_> {
             "normalStrength".into(),
             self.factors(e, &[m.normal_strength])?[0].clone(),
         );
-        x.insert(
-            "dielectricF0".into(),
-            self.factors(e, &[m.dielectric_f0])?[0].clone(),
-        );
+        if let SurfaceLowering::GlossReflectance { dielectric_f0 } = d.lowering {
+            x.insert("dielectricF0".into(), self.factors(e, &[dielectric_f0])?[0].clone());
+        }
+        if m.base_saturation != 0.0 {
+            x.insert(
+                "baseSaturation".into(),
+                self.factors(e, &[m.base_saturation])?[0].clone(),
+            );
+        }
         x.insert("color".into(), self.factors(e, &m.colour)?);
         let encoding = m.gloss_encoding;
         x.insert(
