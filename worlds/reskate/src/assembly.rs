@@ -524,9 +524,11 @@ pub(crate) fn blend_chains(
     world: &World,
     a: &EncodingOptions,
     grid: f32,
+    order: crate::blend_order::ChainOrder,
 ) -> Result<crate::components::SkateBlendChains> {
     let rec = crate::components::SkateBlendChains {
         grid,
+        order,
         ..Default::default()
     };
     let chains = Chains::Record(Box::new(rec));
@@ -903,7 +905,7 @@ pub(crate) struct RecordsBasis {
     pub plan: Option<crate::components::SkateCollisionPlan>,
     pub budget: Option<crate::components::SkateBlendBudget>,
     pub stack: Option<(f32, Option<crate::components::OverlayGrouping>)>,
-    pub chains: Option<(f32, Option<crate::components::OverlayGrouping>)>,
+    pub chains: Option<(f32, crate::blend_order::ChainOrder, Option<crate::components::OverlayGrouping>)>,
 }
 
 impl Records {
@@ -914,7 +916,7 @@ impl Records {
             plan: self.plan.clone(),
             budget: self.budget.clone(),
             stack: self.stack.as_ref().map(|s| (s.step, s.grouping)),
-            chains: self.chains.as_ref().map(|c| (c.grid, c.grouping)),
+            chains: self.chains.as_ref().map(|c| (c.grid, c.order, c.grouping)),
         }
     }
 

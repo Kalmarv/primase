@@ -16,6 +16,7 @@ use primase_reskate::EncodingOptions;
 use primase_reskate::components::{
     MarkerKind, Other, SkateBlendBudget, SkateBlendChains, SkateLight, SkateMarker,
 };
+use primase_reskate::blend_order::{ChainOrder, STACK_BEHIND, STACK_STEP};
 use primase_reskate::passes::SummarizeReskateMap;
 use primase_reskate::passes::layered::{LowerLayeredReskate, OverlayLimit};
 use primase_reskate::passes::{
@@ -200,7 +201,7 @@ fn a_chain_across_a_cell_border_is_cut_padded_and_lifted() {
         .run(&mut w, &mut PassLog::default())
         .unwrap();
     let mut log = PassLog::default();
-    PrepareReskateBlendOrder::new(200.0)
+    PrepareReskateBlendOrder::new(200.0, primase_reskate::blend_order::ChainOrder::Tie)
         .unwrap()
         .run(&mut w, &mut log)
         .unwrap();
@@ -263,7 +264,7 @@ fn a_chain_across_a_cell_border_is_cut_padded_and_lifted() {
 #[test]
 fn a_record_for_other_tiles_is_refused() {
     let mut w = across_the_border();
-    PrepareReskateBlendOrder::new(200.0)
+    PrepareReskateBlendOrder::new(200.0, primase_reskate::blend_order::ChainOrder::Tie)
         .unwrap()
         .run(&mut w, &mut PassLog::default())
         .unwrap();
@@ -309,7 +310,7 @@ fn an_unliftable_tile_keeps_its_chain_overlays() {
         [1.0e6, 0.0, -50.0],
     );
     let mut log = PassLog::default();
-    PrepareReskateBlendOrder::new(200.0)
+    PrepareReskateBlendOrder::new(200.0, primase_reskate::blend_order::ChainOrder::Tie)
         .unwrap()
         .for_encoding(&far)
         .unwrap()
@@ -331,15 +332,15 @@ fn an_unliftable_tile_keeps_its_chain_overlays() {
     assert_eq!((r.blend.tiles_unliftable, r.blend.objects), (1, 0));
 }
 
-/// The grid is required; every setting prints back and reads back the same; bad values and unknown keys are refused.
+/// The grid and the order are required; every setting prints back and reads back the same; bad values and unknown keys are refused.
 #[test]
 fn the_blend_order_options_round_trip_and_are_checked() {
     let o = |pairs: &[(&str, &str)]| -> Options {
         pairs.iter().map(|(k, v)| ((*k).into(), (*v).into())).collect()
     };
     for given in [
-        o(&[("grid", "200")]),
-        o(&[("grid", "0"), ("tile", "100"), ("limit", "2000")]),
+        o(&[("grid", "200"), ("order", "tie")]),
+        o(&[("grid", "0"), ("order", "stacked"), ("tile", "100"), ("limit", "2000")]),
     ] {
         let pass = PREPARE_RESKATE_BLEND_ORDER.instance(&given).unwrap();
         assert_eq!(
@@ -352,10 +353,12 @@ fn the_blend_order_options_round_trip_and_are_checked() {
     }
     for bad in [
         o(&[]),
-        o(&[("grid", "-1")]),
-        o(&[("grid", "inf")]),
-        o(&[("grid", "200"), ("tile", "0")]),
-        o(&[("grid", "200"), ("step", "0.004")]),
+        o(&[("grid", "200")]),
+        o(&[("grid", "200"), ("order", "lowest")]),
+        o(&[("grid", "-1"), ("order", "tie")]),
+        o(&[("grid", "inf"), ("order", "tie")]),
+        o(&[("grid", "200"), ("order", "tie"), ("tile", "0")]),
+        o(&[("grid", "200"), ("order", "tie"), ("step", "0.004")]),
     ] {
         assert!(PREPARE_RESKATE_BLEND_ORDER.instance(&bad).is_err(), "{bad:?}");
     }
@@ -368,7 +371,7 @@ fn chained() -> World {
         .unwrap()
         .run(&mut w, &mut PassLog::default())
         .unwrap();
-    PrepareReskateBlendOrder::new(200.0)
+    PrepareReskateBlendOrder::new(200.0, primase_reskate::blend_order::ChainOrder::Tie)
         .unwrap()
         .run(&mut w, &mut PassLog::default())
         .unwrap();
@@ -715,7 +718,7 @@ fn overlapping_decals_are_ranked_in_first_use_order() {
         .unwrap()
         .run(&mut w, &mut PassLog::default())
         .unwrap();
-    PrepareReskateBlendOrder::new(200.0)
+    PrepareReskateBlendOrder::new(200.0, ChainOrder::Tie)
         .unwrap()
         .run(&mut w, &mut PassLog::default())
         .unwrap();
@@ -756,4 +759,44 @@ fn overlapping_decals_are_ranked_in_first_use_order() {
     assert!(up(6) > 0.0, "every rank in front of the tile");
     // the overlapping decal over the decal apart: one object each rank, both decals of rank 5 in one
     assert_eq!(tile.groups.len(), 2, "{:?}", tile.groups.keys());
+}
+
+/// `order=stacked`: the same ranks, each object padded to a box of its own, the higher rank's box STACK_STEP further
+/// out along the axis (writer frame, z up) and every box's centre well under the ground; the writer builds what the
+/// pass recorded.
+#[test]
+fn stacked_decal_ranks_get_boxes_metres_apart_under_the_ground() {
+    let mut w = decals();
+    PrepareReskateOverlays::new(0.004)
+        .unwrap()
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
+    PrepareReskateBlendOrder::new(200.0, ChainOrder::Stacked)
+        .unwrap()
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
+    SummarizeReskateMap::for_encoding(&EncodingOptions::default())
+        .unwrap()
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
+    PlanReskateBlendBudget::pool()
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
+    let rec = w.resource::<SkateBlendChains>().unwrap().clone();
+    assert_eq!(rec.order, ChainOrder::Stacked);
+    let tile = rec.tiles.values().next().unwrap();
+    let pad = |rank: u8| {
+        tile.groups
+            .iter()
+            .find(|((_, axis, r), _)| *r == rank && *axis == 4)
+            .and_then(|(_, g)| g.pad)
+            .unwrap_or_else(|| panic!("rank {rank}: {:?}", tile.groups.keys()))
+    };
+    let centre = |rank: u8| (pad(rank).0[2] + pad(rank).1[2]) / 2.0;
+    assert!((centre(6) - centre(5) - STACK_STEP).abs() < 1e-3, "{} {}", centre(6), centre(5));
+    // the decals lie 1 cm over the ground at 0 (the tile's frame, z up): every centre at least STACK_BEHIND / 2 under
+    // them
+    assert!(centre(6) <= 0.01 - STACK_BEHIND / 2.0 + 1e-3, "{}", centre(6));
+    let (r, _) = write(&w, "stacked", &EncodingOptions::default()).unwrap();
+    assert_eq!(r.blend.objects, tile.groups.len());
 }

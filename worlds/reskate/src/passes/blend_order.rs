@@ -1,4 +1,4 @@
-//! `prepare-reskate-blend-order{grid}`: the vertex-blend overlays of the map's render tiles (a lowered blend's chain
+//! `prepare-reskate-blend-order{grid,order}`: the vertex-blend overlays of the map's render tiles (a lowered blend's chain
 //! layers and the vertex-alpha decals) made objects of their own, drawn in rank order, as the writer used to make them
 //! while it wrote.
 //!
@@ -22,24 +22,27 @@ use primase_core::World;
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 
 use crate::assembly::{EncodingOptions, blend_chains};
+use crate::blend_order::ChainOrder;
 use crate::components::SkateBlendChains;
 
 /// See the module documentation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrepareReskateBlendOrder {
     grid: f32,
+    order: ChainOrder,
     encoding: EncodingOptions,
 }
 
 impl PrepareReskateBlendOrder {
-    /// Chain objects cut on a `grid`-metre grid (finite, 0 or more; 0: not cut), for a map written with the writer's
-    /// default encoding ([`EncodingOptions::default`]).
-    pub fn new(grid: f32) -> Result<PrepareReskateBlendOrder, String> {
+    /// Chain objects cut on a `grid`-metre grid (finite, 0 or more; 0: not cut), their ranks told apart by `order`
+    /// ([`ChainOrder`]), for a map written with the writer's default encoding ([`EncodingOptions::default`]).
+    pub fn new(grid: f32, order: ChainOrder) -> Result<PrepareReskateBlendOrder, String> {
         if !(grid.is_finite() && grid >= 0.0) {
             return Err(format!("grid={grid}: finite metres of 0 or more (0: not cut)"));
         }
         Ok(PrepareReskateBlendOrder {
             grid,
+            order,
             encoding: EncodingOptions::default(),
         })
     }
@@ -56,20 +59,31 @@ impl PrepareReskateBlendOrder {
         self.grid
     }
 
-    /// From its options: `grid`, and the encoding's as `prepare-reskate-overlays` takes them.
+    pub fn order(&self) -> ChainOrder {
+        self.order
+    }
+
+    /// From its options: `grid`, `order`, and the encoding's as `prepare-reskate-overlays` takes them.
     fn from_given(g: &Given) -> Result<PrepareReskateBlendOrder, String> {
         let grid = g.required("grid");
         let grid: f32 = grid.parse().map_err(|_| format!("grid={grid} is not a number"))?;
         let e = crate::passes::overlays::encoding_from(g)?;
-        PrepareReskateBlendOrder::new(grid)?.for_encoding(&e)
+        PrepareReskateBlendOrder::new(grid, g.choice("order"))?.for_encoding(&e)
     }
 }
 
-const BLEND_ORDER_OPTIONS: [OptionSpec; 8] = crate::passes::overlays::with_encoding([OptionSpec::required(
-    "grid",
-    "0",
-    "metres, finite and 0 or more: the grid chain objects are cut on (0: not cut)",
-)]);
+const BLEND_ORDER_OPTIONS: [OptionSpec; 9] = crate::passes::overlays::with_encoding([
+    OptionSpec::required(
+        "grid",
+        "0",
+        "metres, finite and 0 or more: the grid chain objects are cut on (0: not cut)",
+    ),
+    OptionSpec::choice::<ChainOrder>(
+        "order",
+        "how a tile's ranks are told apart in skate.'s sort: tie, one box and 0.2 mm lifts (measured on walls), or \
+         stacked, each rank's box its own, metres apart and behind the surfaces",
+    ),
+]);
 
 /// `prepare-reskate-blend-order`'s declaration ([`primase_core::pass::PassRegistry::add`]): the grid is the program's,
 /// no default; the encoding the writer's unless stated.
@@ -86,6 +100,7 @@ impl Pass for PrepareReskateBlendOrder {
     fn options(&self) -> Options {
         let mut o = crate::passes::overlays::encoding_options(&self.encoding);
         o.insert("grid".into(), self.grid.to_string());
+        o.insert("order".into(), primase_core::pass::Choice::text(self.order).into());
         o
     }
     fn requires(&self) -> &[&'static str] {
@@ -101,7 +116,7 @@ impl Pass for PrepareReskateBlendOrder {
                     .into(),
             );
         }
-        let mut rec = blend_chains(w, &self.encoding, self.grid).map_err(|e| e.to_string())?;
+        let mut rec = blend_chains(w, &self.encoding, self.grid, self.order).map_err(|e| e.to_string())?;
         // a part: its own tiles (each held whole by one part)
         let owned = super::Owned::of(w);
         rec.tiles

@@ -300,7 +300,7 @@ const RECIPE: &str = "lower-layered-reskate{overlays=all}, prepare-reskate-textu
                       prepare-reskate-water{extent=content,margin=400}, \
                       prepare-reskate-pause-map{from=geometry,height=256,extent=content,leave-out=nothing,colour=mean}, \
                       select-reskate-lights{per_cell=2,cell=200}, prepare-reskate-overlays{step=0.004}, \
-                      prepare-reskate-blend-order{grid=200}";
+                      prepare-reskate-blend-order{grid=200,order=tie}";
 
 /// Every file of a folder, by its path below it.
 fn files(dir: &Path) -> BTreeMap<String, Vec<u8>> {

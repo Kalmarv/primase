@@ -92,7 +92,7 @@ fn main() -> Result<()> {
             Box::new(PrepareReskateTextures),
             Box::new(PrepareReskateUvRepeats::new(RepeatDecals::Omit, RepeatBlended::Cutout)),
             Box::new(PrepareReskateOverlays::new(0.004)?.for_encoding(&e)?),
-            Box::new(PrepareReskateBlendOrder::new(200.0)?.for_encoding(&e)?),
+            Box::new(PrepareReskateBlendOrder::new(200.0, primase_reskate::blend_order::ChainOrder::Tie)?.for_encoding(&e)?),
             Box::new(PrepareReskateCollision::new(CollisionSurfaces::Coalesce, CollisionWeld::Millimetre, &e)?),
             Box::new(SummarizeReskateMap::for_encoding(&e)?),
             Box::new(PlanReskateBlendBudget::pool()),

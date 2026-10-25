@@ -150,7 +150,7 @@ fn world() -> World {
         .run(&mut w, &mut PassLog::default())
         .unwrap();
     // the chains split before the writer, which splits nothing: Studio's 200 m cells
-    PrepareReskateBlendOrder::new(200.0)
+    PrepareReskateBlendOrder::new(200.0, primase_reskate::blend_order::ChainOrder::Tie)
         .unwrap()
         .run(&mut w, &mut PassLog::default())
         .unwrap();

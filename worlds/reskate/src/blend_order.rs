@@ -39,6 +39,53 @@ const MAX_LIFT_STEP: f32 = 0.0025;
 pub const CHAIN_RANKS: u8 = 4;
 /// The x/z cell, in metres, two decals overlap in when both have a triangle whose bounds meet it ([`decal_ranks`]).
 const DECAL_CELL: f32 = 1.0;
+/// [`ChainOrder::Stacked`]: metres between neighbouring ranks' boxes along the axis.
+pub const STACK_STEP: f32 = 2.0;
+/// [`ChainOrder::Stacked`]: metres every rank's box centre lies at least behind the surfaces of its cell and axis.
+pub const STACK_BEHIND: f32 = 20.0;
+
+/// How the rank objects of a (cell, axis) are told apart in skate.'s sort of transparent objects, which draws objects
+/// back to front by a coarse depth of their bounds (kb skate/engine, "Overlay draw order").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ChainOrder {
+    /// Every rank padded to one box, the ranks [`LIFT_STEP`] apart: they tie in the sort and the engine draws the
+    /// lowest last (measured on GTA's walls, camera 0.5 to 200 m in front).
+    #[default]
+    Tie,
+    /// Each rank its own box ([`stacked_box`]): the cell's box reaching far enough behind its surfaces that its centre
+    /// lies behind every one of them, moved out along the axis by [`STACK_STEP`] a rank. Seen from in front of the
+    /// surfaces a higher rank's box is the nearer by metres, so the sort itself draws it later, from any distance and
+    /// height. Made for The Deck's road decals, which changed places with camera height and view under `Tie` (the
+    /// boxes take in everything of a cell facing the axis, roofs included, so a camera could be below their centre).
+    Stacked,
+}
+
+impl primase_core::pass::Choice for ChainOrder {
+    const VALUES: &'static [(&'static str, Self)] = &[("tie", ChainOrder::Tie), ("stacked", ChainOrder::Stacked)];
+}
+
+/// The box of `rank` (of `ranks`) of a (cell, axis) whose box is `lo`..`hi`, under [`ChainOrder::Stacked`]: reaching
+/// behind (along minus the axis) by the box's own depth, [`STACK_BEHIND`] and room for every rank's step, then moved
+/// out along the axis by `rank` x [`STACK_STEP`]. Its centre is then at least [`STACK_BEHIND`] / 2 behind the box's
+/// surfaces, and a rank's centre is [`STACK_STEP`] further out than the rank below.
+pub fn stacked_box(lo: Vec3, hi: Vec3, axis: u8, rank: u8, ranks: u8) -> (Vec3, Vec3) {
+    let k = usize::from(axis / 2);
+    let get = |v: Vec3| [v.x, v.y, v.z][k];
+    let set = |v: Vec3, x: f32| match k {
+        0 => Vec3::new(x, v.y, v.z),
+        1 => Vec3::new(v.x, x, v.z),
+        _ => Vec3::new(v.x, v.y, x),
+    };
+    let depth = get(hi) - get(lo);
+    let behind = depth + STACK_BEHIND + 2.0 * f32::from(ranks) * STACK_STEP;
+    let shift = f32::from(rank) * STACK_STEP;
+    if axis.is_multiple_of(2) {
+        // the axis is +k: the front face is hi's
+        (set(lo, get(lo) - behind + shift), set(hi, get(hi) + shift))
+    } else {
+        (set(lo, get(lo) - shift), set(hi, get(hi) + behind - shift))
+    }
+}
 /// The padding triangles' legs, in metres (shorter where the box is thinner).
 const PAD: f32 = 0.01;
 
@@ -302,16 +349,21 @@ pub struct ChainPlan {
     pub steps: Option<BTreeMap<u8, f32>>,
     /// The tile's highest rank, at least [`CHAIN_RANKS`]: what its lifts count down from ([`lift`]).
     pub ranks: u8,
+    /// How the ranks are told apart ([`ChainPlan::rank_box`]).
+    pub order: ChainOrder,
     pub tris: usize,
     pub clipped_total: usize,
 }
 
 /// The chain form of a tile translated to `at` whose ranked parts are `parts` (material, rank, first use in the tile,
 /// geometry): each part split by dominant axis, cut on a `grid`-metre grid (0: not cut), each (cell, axis)'s box, the
-/// lift step of each axis. One function for `prepare-reskate-blend-order`, which records it, and the writer,
-/// which checks its record against it.
-pub fn plan(parts: &[(usize, u8, usize, Geometry)], at: Vec3, grid: f32) -> ChainPlan {
-    let mut p = ChainPlan::default();
+/// lift step of each axis, the ranks told apart by `order`. One function for `prepare-reskate-blend-order`, which
+/// records it, and the writer, which checks its record against it.
+pub fn plan(parts: &[(usize, u8, usize, Geometry)], at: Vec3, grid: f32, order: ChainOrder) -> ChainPlan {
+    let mut p = ChainPlan {
+        order,
+        ..ChainPlan::default()
+    };
     for (k, rank, _, g) in parts {
         p.tris += g.idx.len() / 3;
         for (axis, h) in split_by_axis(g) {
@@ -369,17 +421,30 @@ pub fn take_chains(objects: &[usize], budget: usize, hold: bool) -> Vec<bool> {
 }
 
 impl ChainPlan {
-    /// Every rank of a (cell, axis) padded to its box, into the rank's part drawn first (first use): the chain form's
-    /// objects then all have the box as their bounds.
+    /// The box the object `key` is padded to: its (cell, axis)'s box, under [`ChainOrder::Tie`] the same for every
+    /// rank, under [`ChainOrder::Stacked`] the rank's own ([`stacked_box`]). `None`: no such cell and axis.
+    pub fn rank_box(&self, key: ChainKey) -> Option<(Vec3, Vec3)> {
+        let (cell, axis, rank) = key;
+        let &(lo, hi) = self.boxes.get(&(cell, axis))?;
+        Some(match self.order {
+            ChainOrder::Tie => (lo, hi),
+            ChainOrder::Stacked => stacked_box(lo, hi, axis, rank, self.ranks),
+        })
+    }
+
+    /// Every object padded to its box ([`ChainPlan::rank_box`]), into the part it draws first (first use): the chain
+    /// form's objects then have those boxes as their bounds.
     pub fn pad(&mut self) {
-        for (&(cell, axis), &(lo, hi)) in &self.boxes {
-            for (_, g) in self.groups.range_mut((cell, axis, 0)..=(cell, axis, u8::MAX)) {
-                let first = *g
-                    .keys()
-                    .min_by_key(|&k| self.first_use[k])
-                    .expect("a group has a part");
-                pad(g.get_mut(&first).expect("its part"), lo, hi, axis);
-            }
+        let keys: Vec<ChainKey> = self.groups.keys().copied().collect();
+        for key in keys {
+            let Some((lo, hi)) = self.rank_box(key) else { continue };
+            let first_use = &self.first_use;
+            let g = self.groups.get_mut(&key).expect("its key");
+            let first = *g
+                .keys()
+                .min_by_key(|&k| first_use[k])
+                .expect("a group has a part");
+            pad(g.get_mut(&first).expect("its part"), lo, hi, key.1);
         }
     }
 }
@@ -658,6 +723,46 @@ mod tests {
         assert!(lift(ranks, ranks, LIFT_STEP) < lift(CHAIN_RANKS, ranks, LIFT_STEP));
         assert!(lift(1, ranks, LIFT_STEP) > lift(CHAIN_RANKS + 1, ranks, LIFT_STEP));
         assert_eq!(lift_step(Vec3::new(100.0, -900.0, 0.0), 2, ranks), Some(LIFT_STEP));
+    }
+
+    /// Stacked boxes: every rank's centre lies at least STACK_BEHIND / 2 behind the cell's surfaces and STACK_STEP
+    /// beyond the rank below, so from any camera in front of the surfaces (near, far, low, high) a higher rank's box is
+    /// the nearer; for an up axis and a side axis facing minus x.
+    #[test]
+    fn a_higher_stacked_rank_is_nearer_from_anywhere_in_front() {
+        let (lo, hi) = (Vec3::new(0.0, 30.0, 0.0), Vec3::new(100.0, 61.0, 100.0));
+        let ranks = 8;
+        for (axis, back, cameras) in [
+            (
+                2u8,
+                lo,
+                [Vec3::new(50.0, 30.5, 50.0), Vec3::new(-400.0, 31.0, 20.0), Vec3::new(50.0, 300.0, 50.0)],
+            ),
+            (
+                1u8,
+                hi,
+                [Vec3::new(99.0, 40.0, 50.0), Vec3::new(-50.0, 0.0, -300.0), Vec3::new(-500.0, 90.0, 50.0)],
+            ),
+        ] {
+            let n = axis_vector(axis);
+            let centre = |r: u8| {
+                let (a, b) = stacked_box(lo, hi, axis, r, ranks);
+                (a + b) * 0.5
+            };
+            for r in 1..=ranks {
+                // behind the cell's surfaces: the face of the box opposite the axis
+                assert!((centre(r) - back).dot(n) <= -STACK_BEHIND / 2.0, "rank {r} axis {axis}");
+            }
+            for r in 1..ranks {
+                assert!(((centre(r + 1) - centre(r)).dot(n) - STACK_STEP).abs() < 1e-4);
+                for cam in cameras {
+                    assert!(
+                        (cam - centre(r + 1)).length() < (cam - centre(r)).length(),
+                        "axis {axis} rank {r} from {cam:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

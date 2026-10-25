@@ -1257,6 +1257,8 @@ pub struct StackedPiece {
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct SkateBlendChains {
     pub grid: f32,
+    /// How each tile's ranks are told apart in skate.'s sort.
+    pub order: crate::blend_order::ChainOrder,
     pub grouping: Option<OverlayGrouping>,
     pub tiles: BTreeMap<String, ChainTile>,
 }
@@ -1290,6 +1292,7 @@ impl Resource for SkateBlendChains {
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         Ok(Some(serde_json::json!({
             "grid": self.grid,
+            "order": primase_core::pass::Choice::text(self.order),
             "grouping": self.grouping,
             "tiles": self
                 .tiles

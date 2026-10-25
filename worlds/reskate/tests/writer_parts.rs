@@ -965,7 +965,7 @@ fn part_prepared(cull_ids: usize) -> Vec<Box<dyn Pass>> {
                 .unwrap(),
         ),
         Box::new(
-            PrepareReskateBlendOrder::new(200.0)
+            PrepareReskateBlendOrder::new(200.0, primase_reskate::blend_order::ChainOrder::Tie)
                 .unwrap()
                 .for_encoding(&e)
                 .unwrap(),

@@ -192,7 +192,7 @@ fn main() -> Result<(), BoxError> {
     ));
     // and the blend chains split into objects of their own, cut on Studio's 200 m cells, as the writer split them
     passes.push(Box::new(
-        primase_reskate::passes::PrepareReskateBlendOrder::new(200.0)?.for_encoding(&o)?,
+        primase_reskate::passes::PrepareReskateBlendOrder::new(200.0, primase_reskate::blend_order::ChainOrder::Tie)?.for_encoding(&o)?,
     ));
     // the collision as the writer wrote it: a leaf's minor surfaces written as its most common one, its pieces welded
     // at a millimetre

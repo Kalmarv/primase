@@ -259,7 +259,7 @@ fn the_preparation_passes_run_under_the_pass_manager() {
                    place-reskate-spawn{at=centre}, snap-reskate-markers, select-reskate-lights{per_cell=8,cell=200}, \
                    prepare-reskate-water{extent=all}, prepare-reskate-pause-map{from=geometry,height=64,extent=content,leave-out=nothing,colour=mean}, \
                    prepare-reskate-textures, budget-reskate-textures{max=64}, prepare-reskate-uv-repeats{decals=omit,blended=cutout}, prepare-reskate-overlays{step=0.004}, \
-                   prepare-reskate-blend-order{grid=200}, prepare-reskate-collision{surfaces=coalesce,weld=mm},                    summarize-reskate-map, plan-reskate-blend-budget{objects=pool}";
+                   prepare-reskate-blend-order{grid=200,order=tie}, prepare-reskate-collision{surfaces=coalesce,weld=mm},                    summarize-reskate-map, plan-reskate-blend-budget{objects=pool}";
     let pipeline = registry.parse(program).unwrap();
     let n = pipeline.passes.len();
     let mut report = RunReport::default();

@@ -1143,8 +1143,9 @@ impl MapWriter {
                 *left += 1;
                 return Ok(None);
             }
-            Chains::Record(rec) | Chains::Replay(rec) => rec.grid,
+            Chains::Record(rec) | Chains::Replay(rec) => (rec.grid, rec.order),
         };
+        let (grid, order) = grid;
         let input: Vec<(usize, u8, usize, Geometry)> = ranks
             .iter()
             .map(|&(k, rank)| {
@@ -1154,7 +1155,7 @@ impl MapWriter {
                 (k, rank, a.seq, geometry(a))
             })
             .collect();
-        let mut plan = blend_order::plan(&input, at, grid);
+        let mut plan = blend_order::plan(&input, at, grid, order);
         // what this tile's chain form is, as the pass records it and the writer checks it
         let mats = &self.ctx.mats;
         let found = ChainTile {
@@ -1170,15 +1171,13 @@ impl MapWriter {
                 .groups
                 .iter()
                 .map(|(key, g)| {
-                    let (cell, axis, _) = *key;
                     (
                         *key,
                         ChainGroup {
                             members: g.keys().map(|&k| mats.by_id(k).name.clone()).collect(),
                             clipped: plan.clipped.get(key).copied().unwrap_or(0) as u32,
                             pad: plan
-                                .boxes
-                                .get(&(cell, axis))
+                                .rank_box(*key)
                                 .map(|(lo, hi)| ([lo.x, lo.y, lo.z], [hi.x, hi.y, hi.z])),
                         },
                     )
