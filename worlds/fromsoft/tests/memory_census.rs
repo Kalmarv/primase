@@ -156,7 +156,7 @@ fn cap_bytes() -> usize {
 /// The areas to read: the debug key `fromsoft.census_areas` (a comma list of `<game>/<area>` or `<area>`), else every one
 /// of [`AREAS`].
 fn wanted(game: &str, area: &str) -> bool {
-    primase_testdata::debug("fromsoft.census_areas").map_or(true, |list| {
+    primase_testdata::debug("fromsoft.census_areas").is_none_or(|list| {
         list.split(',')
             .map(str::trim)
             .any(|item| item == area || item == format!("{game}/{area}"))
