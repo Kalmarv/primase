@@ -32,8 +32,10 @@ Approximations that stand core lights in for light a destination cannot draw.
   `max_total` is an error, never a silent drop. Every option is required: the units (what a unit of strength is in
   cd/m2), the thinning and the thresholds are the program's. Reported: pieces seen, left out, folded, strips split,
   lights made, as an approximation. A world is read whole or in parts (a light is made from, and kept with, its
-  placement). Not read: the emitter's facing (a point light), a spot cone, a surface's two sides, an animation's
-  timing, a time-of-day switch of the emission (a light is always on; a destination's own time-of-day mask applies).
+  placement). With `spots`, a light whose pieces are flat is a spot along their normal with `spots`' cones, or with
+  `cones`' for a prototype whose name starts with one of its prefixes (a fixture that focuses its light); `scale`
+  multiplies the intensity of named prototypes. Not read: a surface's two sides, an animation's timing, a time-of-day
+  switch of the emission (a light is always on; a destination's own time-of-day mask applies).
 - `SurfaceGrid`: the world's placed triangles (`placed_triangles`) bucketed in
   cubic cells within a box of interest, for "is a surface nearer than `d`" queries,
   by meshops' point-triangle distance.

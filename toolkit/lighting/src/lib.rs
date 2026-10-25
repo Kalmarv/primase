@@ -7,7 +7,7 @@ pub mod emissive;
 pub mod fill;
 pub mod surfaces;
 
-pub use emissive::{EMISSIVE_LIGHTS, EmissiveLights, EmissivePolicy, Spots};
+pub use emissive::{Cone, EMISSIVE_LIGHTS, EmissiveLights, EmissivePolicy, Spots};
 pub use fill::{FILL_AMBIENT_LIGHTS, FillAmbientLights, FillCells, FillGrid, FillPoint};
 pub use surfaces::{SurfaceGrid, Triangle, placed_triangles};
 

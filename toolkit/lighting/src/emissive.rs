@@ -30,6 +30,11 @@
 //!   their winding), cones `INNER` and `OUTER` degrees from its axis: a lamp's panel lights what it faces, not the wall
 //!   behind it or the sky above. The others (a bulb, a lantern, a curved sheet) and every light with `spots=none` are
 //!   points. The on-axis intensity is the same either way.
+//! - **Cones.** `cones=PREFIX:INNER,OUTER;...` gives the spots of every prototype whose name starts with a prefix (the
+//!   longest that matches) that prefix's cones instead of `spots`' (degrees from the axis, as there): a program's
+//!   statement that a fixture focuses its light (a floodlight's reflector), which its glowing surface does not show. Its
+//!   points stay points, and the on-axis intensity is unchanged. A prefix no prototype's name starts with is counted.
+//!   `cones=none` states none.
 //! - **Scale.** `scale=PREFIX:FACTOR;...` multiplies the intensity of the lights of every prototype whose name starts
 //!   with a prefix (the longest that matches) by its factor, before the range: a program's statement that a fixture
 //!   lights more than its surface's emission says (a floodlight drawn with a sign's material). A prefix no prototype's
@@ -95,8 +100,30 @@ pub struct EmissivePolicy {
     pub animated: BTreeSet<String>,
     /// Which lights are spots, and their cones; `None`: every light a point.
     pub spots: Option<Spots>,
+    /// Prototype name prefixes and the cones of their spots (each as [`Spots`]' inner and outer).
+    pub cones: BTreeMap<String, Cone>,
     /// Prototype name prefixes and their intensity factors (each finite and above 0).
     pub scale: BTreeMap<String, f64>,
+}
+
+/// A spot's cones, degrees from its axis: `0 <= inner <= outer <= 90`, `outer` above 0.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Cone {
+    pub inner: f64,
+    pub outer: f64,
+}
+
+impl Cone {
+    fn valid(&self) -> bool {
+        0.0 <= self.inner && self.inner <= self.outer && self.outer > 0.0 && self.outer <= 90.0
+    }
+
+    fn kind(&self) -> LightKind {
+        LightKind::Spot {
+            inner_cone: self.inner.to_radians() as f32,
+            outer_cone: self.outer.to_radians() as f32,
+        }
+    }
 }
 
 /// `spots=FLAT,INNER,OUTER`: a light whose normals agree by at least `flat` (above 0, at most 1) is a spot with cones
@@ -149,7 +176,7 @@ impl EmissivePolicy {
             return Err("emissive-lights: an animated prefix is empty or holds ';'".into());
         }
         if let Some(Spots { flat, inner, outer }) = self.spots
-            && !(flat > 0.0 && flat <= 1.0 && 0.0 <= inner && inner <= outer && outer > 0.0 && outer <= 90.0)
+            && !(flat > 0.0 && flat <= 1.0 && Cone { inner, outer }.valid())
         {
             return Err(format!(
                 "emissive-lights: spots={flat},{inner},{outer}: flat above 0 and at most 1, 0 <= inner <= outer <= 90 \
@@ -163,6 +190,19 @@ impl EmissivePolicy {
                 ));
             }
             positive(&format!("scale {prefix}"), *factor)?;
+        }
+        for (prefix, cone) in &self.cones {
+            if prefix.is_empty() || prefix.contains([';', ':']) {
+                return Err(format!(
+                    "emissive-lights: a cones prefix {prefix:?} is empty or holds ';' or ':'"
+                ));
+            }
+            if !cone.valid() {
+                return Err(format!(
+                    "emissive-lights: cones {prefix}:{},{}: 0 <= inner <= outer <= 90 degrees, outer above 0",
+                    cone.inner, cone.outer
+                ));
+            }
         }
         Ok(())
     }
@@ -213,6 +253,20 @@ impl EmissivePolicy {
                 })
                 .collect::<Result<_, String>>()?,
         };
+        let cones = match g.required("cones") {
+            "none" => BTreeMap::new(),
+            v => v
+                .split(';')
+                .map(|item| {
+                    let bad = || format!("cones={v}: PREFIX:INNER,OUTER;... or none");
+                    let (prefix, angles) = item.split_once(':').ok_or_else(bad)?;
+                    let (inner, outer) = angles.split_once(',').ok_or_else(bad)?;
+                    let inner = inner.parse::<f64>().map_err(|_| bad())?;
+                    let outer = outer.parse::<f64>().map_err(|_| bad())?;
+                    Ok((prefix.to_owned(), Cone { inner, outer }))
+                })
+                .collect::<Result<_, String>>()?,
+        };
         let p = EmissivePolicy {
             weld: number("weld")?,
             big: number("big")?,
@@ -228,6 +282,7 @@ impl EmissivePolicy {
             shadows,
             animated,
             spots,
+            cones,
             scale,
         };
         p.check()?;
@@ -274,6 +329,18 @@ impl EmissivePolicy {
             self.spots.map_or("none".to_owned(), |s| {
                 format!("{},{},{}", s.flat, s.inner, s.outer)
             }),
+        );
+        put(
+            "cones",
+            if self.cones.is_empty() {
+                "none".to_owned()
+            } else {
+                self.cones
+                    .iter()
+                    .map(|(k, c)| format!("{k}:{},{}", c.inner, c.outer))
+                    .collect::<Vec<_>>()
+                    .join(";")
+            },
         );
         put(
             "scale",
@@ -386,6 +453,12 @@ pub const EMISSIVE_LIGHTS: PassSpec = PassSpec {
             "none",
             "FLAT,INNER,OUTER (normals agreeing by at least FLAT, cones in degrees): spots along a flat piece's \
              normal; or none: every light a point",
+        ),
+        OptionSpec::required(
+            "cones",
+            "none",
+            "PREFIX:INNER,OUTER;...: the spots of prototypes whose names start with a prefix get these cones (degrees \
+             from the axis) instead of spots'; or none",
         ),
         OptionSpec::required(
             "scale",
@@ -913,6 +986,7 @@ impl Pass for EmissiveLights {
             outer_cone: s.outer.to_radians() as f32,
         });
         let mut scale_used: BTreeSet<&str> = BTreeSet::new();
+        let mut cones_used: BTreeSet<&str> = BTreeSet::new();
         let mut made: Vec<(Entity, Transform, Light, String)> = Vec::new();
         for (placement, holder) in &placements {
             let (Some(sites), Some(t)) = (read.get(holder), w.get::<Transform>(*placement)) else {
@@ -928,6 +1002,16 @@ impl Pass for EmissiveLights {
                 .map_or(1.0, |(prefix, factor)| {
                     scale_used.insert(prefix.as_str());
                     *factor
+                });
+            // the longest prefix of `cones` the prototype's name starts with
+            let cone = p
+                .cones
+                .iter()
+                .filter(|(prefix, _)| name.starts_with(prefix.as_str()))
+                .max_by_key(|(prefix, _)| prefix.len())
+                .map(|(prefix, cone)| {
+                    cones_used.insert(prefix.as_str());
+                    cone.kind()
                 });
             let det = t.determinant();
             let scale2 = det.abs().powf(2.0 / 3.0);
@@ -945,10 +1029,13 @@ impl Pass for EmissiveLights {
                 let aimed = match (s.facing, spot_kind) {
                     (Some(n), Some(kind)) => {
                         let d = normal_through(t, n);
-                        Transform::facing(at, d.map(|x| x as f32)).map(|f| (f, kind))
+                        Transform::facing(at, d.map(|x| x as f32)).map(|f| (f, cone.unwrap_or(kind)))
                     }
                     _ => None,
                 };
+                if aimed.is_some() && cone.is_some() {
+                    log.count("spots given their prototype's cones", 1);
+                }
                 if factor != 1.0 {
                     log.count("lights scaled by their prototype's factor", 1);
                 }
@@ -987,6 +1074,13 @@ impl Pass for EmissiveLights {
             p.scale
                 .keys()
                 .filter(|k| !scale_used.contains(k.as_str()))
+                .count() as u64,
+        );
+        log.count(
+            "cones prefixes that no prototype's name starts with",
+            p.cones
+                .keys()
+                .filter(|k| !cones_used.contains(k.as_str()))
                 .count() as u64,
         );
         log.count("emissive lights made", made.len() as u64);

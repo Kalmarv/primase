@@ -14,7 +14,7 @@ use primase_core::{
     ColorSpace, Entity, Instance, Light, LightKind, Mesh, Name, Primitive, Semantic, Stream, TexFormat,
     TexRole, Texture, Topology, Transform, World,
 };
-use primase_lighting::{EMISSIVE_LIGHTS, EmissiveLights, EmissivePolicy, Spots};
+use primase_lighting::{Cone, EMISSIVE_LIGHTS, EmissiveLights, EmissivePolicy, Spots};
 
 /// The options every case starts from (weld 1 mm, a bulb up to 2.5 m, a string from 4 pieces kept as 2 lights, a strip
 /// light per 8 m, 100 nits per strength, area counted whole, luminance floor 0.05, 2 lux at the range, range 3 to 30 m,
@@ -35,6 +35,7 @@ fn policy() -> EmissivePolicy {
         shadows: Some(false),
         animated: BTreeSet::new(),
         spots: None,
+        cones: BTreeMap::new(),
         scale: BTreeMap::new(),
     }
 }
@@ -243,6 +244,7 @@ fn a_string_is_thinned_and_its_power_is_kept() {
         shadows: Some(false),
         animated: BTreeSet::new(),
         spots: None,
+        cones: BTreeMap::new(),
         scale: BTreeMap::new(),
     };
     let log = run(&mut w, p).unwrap();
@@ -397,6 +399,7 @@ fn an_animated_material_takes_the_textures_mean() {
         shadows: Some(false),
         animated: BTreeSet::from([prefix.to_owned()]),
         spots: None,
+        cones: BTreeMap::new(),
         scale: BTreeMap::new(),
     };
     let log = run(&mut w, animated("Nothing_")).unwrap();
@@ -557,6 +560,7 @@ fn a_prototype_scale_multiplies_its_lights() {
         },
     );
     let p = EmissivePolicy {
+        cones: BTreeMap::new(),
         scale: BTreeMap::from([
             ("Flood_".to_owned(), 10.0),
             ("Flood_Big".to_owned(), 4.0),
@@ -580,6 +584,85 @@ fn a_prototype_scale_multiplies_its_lights() {
     assert_eq!(log.counts["lights scaled by their prototype's factor"], 2);
     assert_eq!(
         log.counts["scale prefixes that no prototype's name starts with"],
+        1
+    );
+}
+
+/// `cones=Flood_:10,20;Flood_Big:5,15` gives the spot of a prototype named `Flood_Big_A` cones of 5 and 15 degrees (the
+/// longest prefix that matches) and of `Flood_A` 10 and 20, in radians; `lamp` keeps `spots`' 0 and 90; the on-axis
+/// intensity stays 20 cd; a closed box of `Flood_Box` stays a point; an unused prefix is counted.
+#[test]
+fn a_prototype_cone_focuses_its_spots() {
+    let mut w = World::new();
+    let m = material(&mut w, "glass", emissive([1.0, 0.5, 0.0], 10.0));
+    place(&mut w, &[quad(0.0, 0.0, 0.2, 0.1)], None, m, at([0.0; 3]));
+    let (flood, _) = place(&mut w, &[quad(0.0, 0.0, 0.2, 0.1)], None, m, at([10.0, 0.0, 0.0]));
+    w.insert(flood, Name("Flood_A".into()));
+    let (big, _) = place(&mut w, &[quad(0.0, 0.0, 0.2, 0.1)], None, m, at([20.0, 0.0, 0.0]));
+    w.insert(big, Name("Flood_Big_A".into()));
+    let v = |x: f32, y: f32, z: f32| [x, y, z];
+    let faces: Vec<Quad> = vec![
+        [v(0., 0., 1.), v(1., 0., 1.), v(1., 1., 1.), v(0., 1., 1.)],
+        [v(0., 1., 0.), v(1., 1., 0.), v(1., 0., 0.), v(0., 0., 0.)],
+        [v(0., 0., 0.), v(1., 0., 0.), v(1., 0., 1.), v(0., 0., 1.)],
+        [v(0., 1., 1.), v(1., 1., 1.), v(1., 1., 0.), v(0., 1., 0.)],
+        [v(1., 0., 0.), v(1., 1., 0.), v(1., 1., 1.), v(1., 0., 1.)],
+        [v(0., 0., 1.), v(0., 1., 1.), v(0., 1., 0.), v(0., 0., 0.)],
+    ];
+    let (bx, _) = place(&mut w, &faces, None, m, at([30.0, 0.0, 0.0]));
+    w.insert(bx, Name("Flood_Box".into()));
+    let p = EmissivePolicy {
+        spots: Some(Spots {
+            flat: 0.9,
+            inner: 0.0,
+            outer: 90.0,
+        }),
+        cones: BTreeMap::from([
+            (
+                "Flood_".to_owned(),
+                Cone {
+                    inner: 10.0,
+                    outer: 20.0,
+                },
+            ),
+            (
+                "Flood_Big".to_owned(),
+                Cone {
+                    inner: 5.0,
+                    outer: 15.0,
+                },
+            ),
+            (
+                "Nothing".to_owned(),
+                Cone {
+                    inner: 1.0,
+                    outer: 2.0,
+                },
+            ),
+        ]),
+        ..policy()
+    };
+    let log = run(&mut w, p).unwrap();
+    let made = lights(&w);
+    let spot = |inner: f64, outer: f64| LightKind::Spot {
+        inner_cone: inner.to_radians() as f32,
+        outer_cone: outer.to_radians() as f32,
+    };
+    let kinds: Vec<LightKind> = made.iter().map(|(_, l)| l.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            spot(0.0, 90.0),
+            spot(10.0, 20.0),
+            spot(5.0, 15.0),
+            LightKind::Point
+        ],
+        "{kinds:?}"
+    );
+    assert!(made[..3].iter().all(|(_, l)| near(l.intensity, 20.0)), "{made:?}");
+    assert_eq!(log.counts["spots given their prototype's cones"], 2);
+    assert_eq!(
+        log.counts["cones prefixes that no prototype's name starts with"],
         1
     );
 }
@@ -634,6 +717,7 @@ fn more_lights_than_the_total_is_refused_not_dropped() {
         shadows: Some(false),
         animated: BTreeSet::new(),
         spots: None,
+        cones: BTreeMap::new(),
         scale: BTreeMap::new(),
     };
     let err = run(&mut w, p).unwrap_err();
@@ -711,6 +795,11 @@ fn options_are_required_and_round_trip() {
         ("scale", "Stadium"),
         ("scale", "Stadium:0"),
         ("scale", ":2"),
+        ("cones", "Stadium"),
+        ("cones", "Stadium:10"),
+        ("cones", "Stadium:30,20"),
+        ("cones", "Stadium:0,95"),
+        ("cones", ":10,20"),
     ] {
         let mut o = full.clone();
         o.insert(k.into(), v.into());
@@ -720,7 +809,9 @@ fn options_are_required_and_round_trip() {
     o.insert("animated".into(), "A_;B_".into());
     o.insert("spots".into(), "0.9,0,90".into());
     o.insert("scale".into(), "Flood_:10;Stadium:2.5".into());
+    o.insert("cones".into(), "Flood_:10,20;Stadium:0,45".into());
     let made = make(&o).unwrap().options();
+    assert_eq!(made["cones"], "Flood_:10,20;Stadium:0,45");
     assert_eq!(made["animated"], "A_;B_");
     assert_eq!(made["spots"], "0.9,0,90");
     assert_eq!(made["scale"], "Flood_:10;Stadium:2.5");
@@ -743,6 +834,7 @@ fn policy_options() -> Options {
         ("shadows", "off"),
         ("animated", "none"),
         ("spots", "none"),
+        ("cones", "none"),
         ("scale", "none"),
     ]
     .iter()
