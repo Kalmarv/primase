@@ -1097,10 +1097,10 @@ impl MapWriter {
         std::mem::replace(&mut self.chains, Chains::Off { left: 0 })
     }
 
-    /// Take a tile's blend-chain overlays out of its parts and write both forms finish may choose between
-    /// ([`PendingChain`]): objects of their own per grid cell ([`WriterOptions::blend_grid`]), dominant axis and chain
-    /// rank, and one plain object. Leaves them in the tile (counted) when an axis has no lift step at the tile's
-    /// translation `at`; `None` then, or when the tile has none.
+    /// Take a tile's ranked overlays (blend-chain layers and vertex-alpha decals, [`blend_order::decal_ranks`]) out
+    /// of its parts and write both forms finish may choose between ([`PendingChain`]): objects of their own per grid
+    /// cell ([`WriterOptions::blend_grid`]), dominant axis and rank, and one plain object. Leaves them in the tile
+    /// (counted) when an axis has no lift step at the tile's translation `at`; `None` then, or when the tile has none.
     fn chain_candidates(
         &mut self,
         parts: &mut BTreeMap<usize, Acc>,
@@ -1109,14 +1109,31 @@ impl MapWriter {
         tile: &str,
     ) -> Result<Option<PendingChain>> {
         let mut ranks: Vec<(usize, u8)> = Vec::new();
+        let mut decals: Vec<usize> = Vec::new();
         for &k in parts.keys() {
             let m = self.ctx.mats.by_id(k);
             let Some(v) = m.vertex_blend else { continue };
             v.check().map_err(|e| Error::Scene(format!("{}: {e}", m.name)))?;
-            if let Some(rank) = v.chain_rank() {
-                ranks.push((k, rank));
+            match v.chain_rank() {
+                Some(rank) => ranks.push((k, rank)),
+                None => decals.push(k),
             }
         }
+        // the vertex-alpha decals above the chain, each over the decals it overlaps that the tile drew first
+        let geometry = |a: &Acc| Geometry {
+            pos: a.pos.clone(),
+            nrm: a.nrm.clone(),
+            uv: a.uv.clone(),
+            blend: a.blend.clone(),
+            idx: a.idx.clone(),
+        };
+        let decal_input: Vec<(usize, usize, Geometry)> =
+            decals.iter().map(|&k| (k, parts[&k].seq, geometry(&parts[&k]))).collect();
+        let decal_refs: Vec<(usize, usize, &Geometry)> =
+            decal_input.iter().map(|(k, seq, g)| (*k, *seq, g)).collect();
+        let decal_ranks = blend_order::decal_ranks(&decal_refs)
+            .ok_or_else(|| Error::Scene(format!("{tile}: more than 255 ranks of overlapping decals")))?;
+        ranks.extend(decal_ranks);
         if ranks.is_empty() {
             return Ok(None);
         }
@@ -1132,16 +1149,9 @@ impl MapWriter {
             .iter()
             .map(|&(k, rank)| {
                 let a = &parts[&k];
-                // chain overlays are fixed: the overlay stack never lifts them
+                // vertex-blend overlays are fixed: the overlay stack never lifts them
                 debug_assert!(a.lift.iter().all(|&x| x == 0.0));
-                let g = Geometry {
-                    pos: a.pos.clone(),
-                    nrm: a.nrm.clone(),
-                    uv: a.uv.clone(),
-                    blend: a.blend.clone(),
-                    idx: a.idx.clone(),
-                };
-                (k, rank, a.seq, g)
+                (k, rank, a.seq, geometry(a))
             })
             .collect();
         let mut plan = blend_order::plan(&input, at, grid);
@@ -1243,7 +1253,7 @@ impl MapWriter {
             } else {
                 format!("{tile}_v{axis}{rank}")
             };
-            let lifted = at + blend_order::axis_vector(axis) * blend_order::lift(rank, steps[&axis]);
+            let lifted = at + blend_order::axis_vector(axis) * blend_order::lift(rank, plan.ranks, steps[&axis]);
             objects.extend(self.write_mesh(&stem, &pr, lifted)?);
             files.push(format!("{stem}.glb"));
         }
@@ -2148,17 +2158,11 @@ impl MapWriter {
                         origin.y + off.y,
                         if off.z != 0.0 { origin.z + off.z } else { origin.z },
                     );
-                    // the chain overlays' materials and triangles count as the tile's, whichever form finish takes
+                    // the ranked overlays' (chain layers' and vertex-alpha decals') materials and triangles count as
+                    // the tile's, whichever form finish takes
                     let mut chained: BTreeMap<usize, (i64, i64)> = BTreeMap::new();
                     for (&k, a) in &parts {
-                        if self
-                            .ctx
-                            .mats
-                            .by_id(k)
-                            .vertex_blend
-                            .and_then(|v| v.chain_rank())
-                            .is_some()
-                        {
+                        if self.ctx.mats.by_id(k).vertex_blend.is_some() {
                             chained.insert(k, ((a.idx.len() / 3) as i64, (a.pos.len() / 3) as i64));
                         }
                     }

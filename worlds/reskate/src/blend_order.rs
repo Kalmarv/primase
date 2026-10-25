@@ -1,4 +1,7 @@
-//! Draw order of a lowered blend's overlays: each chain rank of a tile's overlays as an object of its own.
+//! Draw order of a tile's vertex-blend overlays: each rank of them an object of its own. The ranks are a lowered
+//! blend's chain ([`crate::components::VertexBlend::chain_rank`]: slots 1..=3, the darkening 4) and, after it, the vertex-alpha decals
+//! ([`decal_ranks`]): a decal is drawn over every chain layer and over the decals it overlaps that the tile drew
+//! first.
 //!
 //! The lerp chain of [`crate::layered`] needs a surface's overlays drawn in chain order where they overlap. skate.
 //! draws the sections of one MeshSet in an order that changes from launch to launch, so overlays left in their
@@ -8,14 +11,20 @@
 //! frame of the distance sweeps, camera 0.5 to 200 m). So the writer gives each (dominant axis, chain rank) of a
 //! tile's overlays its own object:
 //! - the same local geometry as the tile mesh (same vertex positions, so the post-compile stage's half-float
-//!   rounding is unchanged), placed at the tile's translation plus a lift along the axis, `(MAX_RANK + 1 - rank)`
-//!   steps: the top of the chain lowest, so it ties and is drawn last;
+//!   rounding is unchanged), placed at the tile's translation plus a lift along the axis, `(ranks + 1 - rank)`
+//!   steps (`ranks` the tile's highest rank, at least [`CHAIN_RANKS`]): the top rank lowest, so it ties and is drawn
+//!   last;
 //! - every rank of a (tile, axis) padded to the same bounds by two small zero-weight triangles at the corners of
 //!   their common box, so the ranks differ in depth only by their lifts (objects whose bounds differ by more sort
 //!   back to front instead, view-dependent).
 //!
 //! Known risk: the tie order is measured, not explained by any code read. A runtime that changes it reorders the
 //! chain again (the mix stays smooth, as with shared MeshSets).
+//!
+//! The decals' order among themselves is a choice: the source's own (Riders Republic's deferred decals) is not read,
+//! so a decal overlapping another is drawn over the one the tile drew first (its first use, the scene's order).
+//! Without a rank of their own, overlapping decals tie in one MeshSet and change places by launch and by view (The
+//! Deck's road cracks and tyre marks, 2026-10-25).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -23,11 +32,13 @@ use primase_meshops::vector::Vec3;
 
 /// The lift between neighbouring ranks, in metres (validated: 0.2 mm).
 pub const LIFT_STEP: f32 = 0.0002;
-/// The largest step [`lift_step`] widens to: the top of a chain then sits at most `MAX_RANK` x 2.5 mm = 1 cm off its
-/// surface. Past it (or a translation that is not finite) a tile keeps its chain overlays in its mesh.
+/// The largest step [`lift_step`] widens to: the top of a chain then sits at most `ranks` x 2.5 mm off its surface
+/// (1 cm for a chain alone). Past it (or a translation that is not finite) a tile keeps its overlays in its mesh.
 const MAX_LIFT_STEP: f32 = 0.0025;
-/// The highest chain rank ([`crate::passes::layered::VertexBlend::chain_rank`]: slots 1..=3, the darkening 4).
-const MAX_RANK: u8 = 4;
+/// The highest chain rank ([`crate::components::VertexBlend::chain_rank`]: slots 1..=3, the darkening 4); decals rank above it.
+pub const CHAIN_RANKS: u8 = 4;
+/// The x/z cell, in metres, two decals overlap in when both have a triangle whose bounds meet it ([`decal_ranks`]).
+const DECAL_CELL: f32 = 1.0;
 /// The padding triangles' legs, in metres (shorter where the box is thinner).
 const PAD: f32 = 0.01;
 
@@ -289,13 +300,15 @@ pub struct ChainPlan {
     pub clipped: BTreeMap<ChainKey, usize>,
     pub boxes: BTreeMap<((i32, i32), u8), (Vec3, Vec3)>,
     pub steps: Option<BTreeMap<u8, f32>>,
+    /// The tile's highest rank, at least [`CHAIN_RANKS`]: what its lifts count down from ([`lift`]).
+    pub ranks: u8,
     pub tris: usize,
     pub clipped_total: usize,
 }
 
-/// The chain form of a tile translated to `at` whose chain parts are `parts` (material, chain rank, first use in the
-/// tile, geometry): each part split by dominant axis, cut on a `grid`-metre grid (0: not cut), each (cell, axis)'s
-/// box, the lift step of each axis. One function for `prepare-reskate-blend-order`, which records it, and the writer,
+/// The chain form of a tile translated to `at` whose ranked parts are `parts` (material, rank, first use in the tile,
+/// geometry): each part split by dominant axis, cut on a `grid`-metre grid (0: not cut), each (cell, axis)'s box, the
+/// lift step of each axis. One function for `prepare-reskate-blend-order`, which records it, and the writer,
 /// which checks its record against it.
 pub fn plan(parts: &[(usize, u8, usize, Geometry)], at: Vec3, grid: f32) -> ChainPlan {
     let mut p = ChainPlan::default();
@@ -315,10 +328,14 @@ pub fn plan(parts: &[(usize, u8, usize, Geometry)], at: Vec3, grid: f32) -> Chai
             }
         }
     }
+    p.ranks = parts
+        .iter()
+        .map(|&(_, rank, _, _)| rank)
+        .fold(CHAIN_RANKS, u8::max);
     let axes: BTreeSet<u8> = p.groups.keys().map(|&(_, axis, _)| axis).collect();
     p.steps = axes
         .iter()
-        .map(|&axis| lift_step(at, axis).map(|s| (axis, s)))
+        .map(|&axis| lift_step(at, axis, p.ranks).map(|s| (axis, s)))
         .collect::<Option<BTreeMap<u8, f32>>>();
     p.first_use = parts.iter().map(|&(k, _, s, _)| (k, s)).collect();
     let cells: BTreeSet<((i32, i32), u8)> = p.groups.keys().map(|&(cell, axis, _)| (cell, axis)).collect();
@@ -414,19 +431,63 @@ pub fn pad(g: &mut Geometry, lo: Vec3, hi: Vec3, axis: u8) {
     }
 }
 
-/// The lift of `rank` (1..=[`MAX_RANK`]) along the axis in steps of `step`.
-pub fn lift(rank: u8, step: f32) -> f32 {
+/// The lift of `rank` (1..=`ranks`) along the axis in steps of `step`: `ranks + 1 - rank` steps, the top rank lowest.
+pub fn lift(rank: u8, ranks: u8, step: f32) -> f32 {
     assert!(
-        (1..=MAX_RANK).contains(&rank),
-        "chain rank {rank} outside 1..={MAX_RANK}"
+        (1..=ranks).contains(&rank),
+        "rank {rank} outside 1..={ranks}"
     );
-    f32::from(MAX_RANK + 1 - rank) * step
+    f32::from(ranks + 1 - rank) * step
 }
 
-/// The step for objects translated to `t` (writer frame) and lifted along `axis`: [`LIFT_STEP`], doubled until the
-/// lifted translations, as the f32 the map stores, are distinct, in rank order, and in front of `t` (far from the
-/// origin an f32 cannot hold 0.2 mm). `None` when `t` is not finite or the step would pass [`MAX_LIFT_STEP`].
-fn lift_step(t: Vec3, axis: u8) -> Option<f32> {
+/// The ranks of a tile's vertex-alpha decals (material, first use in the tile, geometry), above the chain's: a decal
+/// is drawn over every decal it overlaps that the tile used first, one rank above the highest of them (so a decal
+/// overlapping none is [`CHAIN_RANKS`] + 1). Two decals overlap where both have a triangle whose x/z bounds meet one
+/// [`DECAL_CELL`] (coarser than the triangles: an overlap it finds may not be one, which only costs a rank). `None`
+/// past rank 255.
+pub fn decal_ranks(decals: &[(usize, usize, &Geometry)]) -> Option<BTreeMap<usize, u8>> {
+    let mut order: Vec<&(usize, usize, &Geometry)> = decals.iter().collect();
+    order.sort_by_key(|&&(k, first, _)| (first, k));
+    let cells = |g: &Geometry| {
+        let mut out = BTreeSet::new();
+        for t in g.idx.as_chunks::<3>().0 {
+            let (mut lo, mut hi) = ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]);
+            for &i in t {
+                let i = i as usize * 3;
+                for (d, c) in [(0, 0), (1, 2)] {
+                    lo[d] = lo[d].min(g.pos[i + c]);
+                    hi[d] = hi[d].max(g.pos[i + c]);
+                }
+            }
+            let f = |x: f32| (x / DECAL_CELL).floor() as i64;
+            for cx in f(lo[0])..=f(hi[0]) {
+                for cz in f(lo[1])..=f(hi[1]) {
+                    out.insert((cx, cz));
+                }
+            }
+        }
+        out
+    };
+    // per cell, the highest rank drawn there so far
+    let mut top: BTreeMap<(i64, i64), u8> = BTreeMap::new();
+    let mut ranks = BTreeMap::new();
+    for &&(k, _, g) in &order {
+        let mine = cells(g);
+        let under = mine.iter().filter_map(|c| top.get(c)).copied().max().unwrap_or(CHAIN_RANKS);
+        let rank = under.checked_add(1)?;
+        for c in mine {
+            top.insert(c, rank);
+        }
+        ranks.insert(k, rank);
+    }
+    Some(ranks)
+}
+
+/// The step for objects translated to `t` (writer frame) and lifted along `axis` by ranks 1..=`ranks`: [`LIFT_STEP`],
+/// doubled until the lifted translations, as the f32 the map stores, are distinct, in rank order, and in front of `t`
+/// (far from the origin an f32 cannot hold 0.2 mm). `None` when `t` is not finite or the step would pass
+/// [`MAX_LIFT_STEP`].
+fn lift_step(t: Vec3, axis: u8, ranks: u8) -> Option<f32> {
     if ![t.x, t.y, t.z].iter().all(|x| x.is_finite()) {
         return None;
     }
@@ -434,7 +495,7 @@ fn lift_step(t: Vec3, axis: u8) -> Option<f32> {
     let along = |v: Vec3| v.dot(n);
     let mut step = LIFT_STEP;
     while step <= MAX_LIFT_STEP {
-        let at: Vec<f32> = (1..=MAX_RANK).map(|r| along(t + n * lift(r, step))).collect();
+        let at: Vec<f32> = (1..=ranks).map(|r| along(t + n * lift(r, ranks, step))).collect();
         // rank 1 farthest out, the top rank nearest t but still in front of it
         if at.windows(2).all(|w| w[0] > w[1]) && at[at.len() - 1] > along(t) {
             return Some(step);
@@ -562,33 +623,61 @@ mod tests {
     #[test]
     fn no_lift_for_a_translation_that_is_not_finite_or_too_far_out() {
         for t in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-            assert_eq!(lift_step(Vec3::new(t, 0.0, 0.0), 0), None);
-            assert_eq!(lift_step(Vec3::new(0.0, 0.0, t), 4), None);
+            assert_eq!(lift_step(Vec3::new(t, 0.0, 0.0), 0, CHAIN_RANKS), None);
+            assert_eq!(lift_step(Vec3::new(0.0, 0.0, t), 4, CHAIN_RANKS), None);
         }
         // 1e6 m out an f32 step is 6 cm: no step up to 2.5 mm stays distinct
-        assert_eq!(lift_step(Vec3::new(1.0e6, 0.0, 0.0), 0), None);
+        assert_eq!(lift_step(Vec3::new(1.0e6, 0.0, 0.0), 0, CHAIN_RANKS), None);
         // across the axis the translation's size does not matter
-        assert_eq!(lift_step(Vec3::new(1.0e6, 0.0, 0.0), 4), Some(LIFT_STEP));
+        assert_eq!(lift_step(Vec3::new(1.0e6, 0.0, 0.0), 4, CHAIN_RANKS), Some(LIFT_STEP));
+    }
+
+    /// A square of `side` metres at x `x0`, as a decal's geometry.
+    fn square(x0: f32, side: f32) -> Geometry {
+        Geometry {
+            pos: vec![x0, 0.0, 0.0, x0 + side, 0.0, 0.0, x0, 0.0, side, x0 + side, 0.0, side],
+            idx: vec![0, 1, 2, 2, 1, 3],
+            ..Geometry::default()
+        }
+    }
+
+    /// Decals rank above the chain in first-use order where they overlap: the second over the first, the third (over
+    /// the second only) over it, one apart from all the others at the first decal rank; ranks count from 1 past the
+    /// chain and the lifts put the highest lowest.
+    #[test]
+    fn decals_rank_over_the_ones_they_overlap_in_first_use_order() {
+        let (a, b, c, apart) = (square(0.0, 4.0), square(2.5, 4.0), square(5.5, 4.0), square(40.0, 2.0));
+        // given out of order: the first use decides
+        let r = decal_ranks(&[(7, 3, &c), (4, 0, &a), (9, 9, &apart), (5, 1, &b)]).unwrap();
+        assert_eq!(
+            r,
+            BTreeMap::from([(4, CHAIN_RANKS + 1), (5, CHAIN_RANKS + 2), (7, CHAIN_RANKS + 3), (9, CHAIN_RANKS + 1)])
+        );
+        assert_eq!(decal_ranks(&[]), Some(BTreeMap::new()));
+        let ranks = CHAIN_RANKS + 3;
+        assert!(lift(ranks, ranks, LIFT_STEP) < lift(CHAIN_RANKS, ranks, LIFT_STEP));
+        assert!(lift(1, ranks, LIFT_STEP) > lift(CHAIN_RANKS + 1, ranks, LIFT_STEP));
+        assert_eq!(lift_step(Vec3::new(100.0, -900.0, 0.0), 2, ranks), Some(LIFT_STEP));
     }
 
     #[test]
     #[should_panic(expected = "outside 1..=4")]
     fn a_rank_outside_the_chain_has_no_lift() {
-        lift(0, LIFT_STEP);
+        lift(0, CHAIN_RANKS, LIFT_STEP);
     }
 
     #[test]
     fn lifts_put_the_top_rank_lowest_and_survive_f32() {
-        assert!(lift(MAX_RANK, LIFT_STEP) < lift(1, LIFT_STEP));
-        assert_eq!(lift_step(Vec3::new(100.0, -900.0, 0.0), 4), Some(LIFT_STEP));
+        assert!(lift(CHAIN_RANKS, CHAIN_RANKS, LIFT_STEP) < lift(1, CHAIN_RANKS, LIFT_STEP));
+        assert_eq!(lift_step(Vec3::new(100.0, -900.0, 0.0), 4, CHAIN_RANKS), Some(LIFT_STEP));
         // 3 km out along x a f32 holds steps of 0.24 mm: 0.2 mm would collapse, so the step grows
         let far = Vec3::new(3000.5, 0.0, 0.0);
-        let s = lift_step(far, 0).unwrap();
+        let s = lift_step(far, 0, CHAIN_RANKS).unwrap();
         assert!(s > LIFT_STEP);
-        let at: Vec<f32> = (1..=MAX_RANK).map(|r| far.x + lift(r, s)).collect();
+        let at: Vec<f32> = (1..=CHAIN_RANKS).map(|r| far.x + lift(r, CHAIN_RANKS, s)).collect();
         assert!(at.windows(2).all(|w| w[0] > w[1]) && at[3] > far.x);
-        let s = lift_step(far, 1).unwrap();
-        let at: Vec<f32> = (1..=MAX_RANK).map(|r| far.x - lift(r, s)).collect();
+        let s = lift_step(far, 1, CHAIN_RANKS).unwrap();
+        let at: Vec<f32> = (1..=CHAIN_RANKS).map(|r| far.x - lift(r, CHAIN_RANKS, s)).collect();
         assert!(at.windows(2).all(|w| w[0] < w[1]) && at[3] < far.x);
     }
 }

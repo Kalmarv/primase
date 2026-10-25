@@ -1,5 +1,5 @@
-//! `prepare-reskate-blend-order`: a tile's vertex-blend chain overlays split into objects of their own before the
-//! writer, which builds them from the record and chooses none; worked on hand-made blends.
+//! `prepare-reskate-blend-order`: a tile's vertex-blend chain overlays and faded decals split into objects of their own
+//! before the writer, which builds them from the record and chooses none; worked on hand-made blends and decals.
 
 #![allow(clippy::unwrap_used)]
 
@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{
-    Instance, Layer, LayerWeights, LayeredMaterial, Mesh, Name, Primitive, Semantic, Stream, Topology,
-    Transform, WeightMapping, World,
+    DrawLayer, DrawOrder, Instance, Layer, LayerWeights, LayeredMaterial, Mesh, Name, Primitive, Semantic, Stream,
+    Topology, Transform, WeightMapping, World,
 };
 use primase_reskate::EncodingOptions;
 use primase_reskate::components::{
@@ -590,4 +590,170 @@ fn the_budget_options_round_trip_and_are_checked() {
     ] {
         assert!(PLAN_RESKATE_BLEND_BUDGET.instance(&bad).is_err(), "{bad:?}");
     }
+}
+
+/// A ground square and three faded decals on it (`COLOR_0` alpha, the decal layer), placed in the tile at east 100:
+/// `cracks` (first), `smudge` overlapping it (second) and `apart` overlapping neither, raised and lowered to
+/// vertex-alpha decals.
+fn decals() -> World {
+    let mut w = World::new();
+    let material = |w: &mut World, name: &str, decal: bool| {
+        let m = w.spawn();
+        w.insert(m, Name(name.into()));
+        w.insert(
+            m,
+            PbrMaterial {
+                metallic: 0.0,
+                alpha_mode: if decal {
+                    primase_core::pbr::AlphaMode::Blend
+                } else {
+                    primase_core::pbr::AlphaMode::Opaque
+                },
+                ..PbrMaterial::default()
+            },
+        );
+        if decal {
+            w.insert(m, DrawOrder::conventional(DrawLayer::Decal, 2500));
+        }
+        m
+    };
+    let ground = material(&mut w, "ground", false);
+    let cracks = material(&mut w, "cracks", true);
+    let smudge = material(&mut w, "smudge", true);
+    let apart = material(&mut w, "apart", true);
+    let square = |m, x0: f32, side: f32, y: f32, faded: bool| {
+        let mut streams = BTreeMap::from([
+            (
+                Semantic::Position,
+                Stream::F32x3(vec![
+                    [x0, y, 0.0],
+                    [x0 + side, y, 0.0],
+                    [x0, y, -side],
+                    [x0 + side, y, -side],
+                ]),
+            ),
+            (
+                Semantic::TexCoord(0),
+                Stream::F32x2(vec![[0., 0.], [1., 0.], [0., 1.], [1., 1.]]),
+            ),
+        ]);
+        if faded {
+            streams.insert(
+                Semantic::Color(0),
+                Stream::F32x4(vec![[1., 1., 1., 1.], [1., 1., 1., 0.5], [1., 1., 1., 1.], [1., 1., 1., 0.5]]),
+            );
+        }
+        Primitive {
+            topology: Topology::Triangles,
+            material: Some(m),
+            indices: Some(vec![0, 1, 2, 2, 1, 3]),
+            streams,
+        }
+    };
+    let proto = w.spawn();
+    w.insert(proto, Name("road".into()));
+    w.insert(
+        proto,
+        Mesh::new(vec![
+            square(ground, 0.0, 60.0, 0.0, false),
+            square(cracks, 5.0, 6.0, 0.01, true),
+            square(smudge, 9.0, 6.0, 0.01, true),
+            square(apart, 40.0, 4.0, 0.01, true),
+        ]),
+    );
+    let placed = w.spawn();
+    w.insert(
+        placed,
+        Instance {
+            prototype: proto,
+            variant: 0,
+        },
+    );
+    let mut t = Transform::IDENTITY;
+    t.cols[3] = [70.0, 0.0, -20.0];
+    w.insert(placed, t);
+    primase_reskate::passes::raise_skate(
+        &mut w,
+        &RaiseOptions::new(
+            "chains",
+            primase_reskate::passes::LightCalibration::Standard,
+            primase_reskate::passes::Unclassified::LeaveOut,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    primase_reskate::vertex_alpha::LowerVertexAlphaReskate
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
+    let spawn = w.spawn();
+    w.insert(
+        spawn,
+        SkateMarker {
+            kind: MarkerKind::Spawn,
+            position: Some(([75.0, -25.0], Some(0.0))),
+            yaw: None,
+            m: None,
+            blueprint: None,
+            snap: None,
+            lift: None,
+            shelter: None,
+            trainer: None,
+            other: Other::new(),
+        },
+    );
+    w
+}
+
+/// Faded decals are ranked above the chain: the smudge, overlapping the cracks the tile drew first, one rank over them,
+/// the decal apart from both at the cracks' rank; each rank an object of its own, padded to one box, the higher rank
+/// lifted less (drawn last, on top). Without ranks the two overlapping decals shared the tile's mesh and changed
+/// places by launch and view (The Deck's road cracks and tyre marks).
+#[test]
+fn overlapping_decals_are_ranked_in_first_use_order() {
+    let mut w = decals();
+    PrepareReskateOverlays::new(0.004)
+        .unwrap()
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
+    PrepareReskateBlendOrder::new(200.0)
+        .unwrap()
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
+    SummarizeReskateMap::for_encoding(&EncodingOptions::default())
+        .unwrap()
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
+    PlanReskateBlendBudget::pool()
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
+    let rec = w.resource::<SkateBlendChains>().unwrap().clone();
+    let tile = rec.tiles.values().next().unwrap();
+    let rank_of = |name: &str| -> Vec<u8> {
+        tile.groups
+            .iter()
+            .filter(|(_, g)| g.members.iter().any(|m| m.contains(name)))
+            .map(|(&(_, _, rank), _)| rank)
+            .collect()
+    };
+    assert_eq!(rank_of("cracks"), vec![5], "{:?}", tile.groups);
+    assert_eq!(rank_of("smudge"), vec![6]);
+    assert_eq!(rank_of("apart"), vec![5]);
+    assert!(rank_of("ground").is_empty(), "the ground stays in its tile");
+    let (r, files) = write(&w, "decals", &EncodingOptions::default()).unwrap();
+    assert_eq!(r.blend.objects, tile.groups.len());
+    let map: serde_json::Value = serde_json::from_slice(&files["map.json"]).unwrap();
+    let up = |rank: u8| -> f64 {
+        let o = map["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            // the axis in the writer's frame, z up: an upward face is 4 (+z); map.json's y is up
+            .find(|o| o["name"].as_str().unwrap().contains(&format!("_v4{rank}")))
+            .unwrap_or_else(|| panic!("no rank {rank} object: {}", map["objects"]));
+        o["transform"][10].as_f64().unwrap()
+    };
+    assert!(up(6) < up(5), "the top rank lowest: {} vs {}", up(6), up(5));
+    assert!(up(6) > 0.0, "every rank in front of the tile");
+    // the overlapping decal over the decal apart: one object each rank, both decals of rank 5 in one
+    assert_eq!(tile.groups.len(), 2, "{:?}", tile.groups.keys());
 }

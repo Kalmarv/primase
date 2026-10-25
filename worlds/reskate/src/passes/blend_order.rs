@@ -1,9 +1,11 @@
-//! `prepare-reskate-blend-order{grid}`: the vertex-blend chain overlays of the map's render tiles made objects of their
-//! own, drawn in chain order, as the writer used to make them while it wrote.
+//! `prepare-reskate-blend-order{grid}`: the vertex-blend overlays of the map's render tiles (a lowered blend's chain
+//! layers and the vertex-alpha decals) made objects of their own, drawn in rank order, as the writer used to make them
+//! while it wrote.
 //!
-//! skate. draws a tile's blend layers in an unstable order when they share its mesh. This pass assembles the writer's
-//! tiles with the writer's own code (textures identified but not encoded) and, per tile with chain overlays
-//! ([`crate::blend_order`]), splits them by dominant axis, cuts them on a `grid`-metre grid (Studio's 200 m
+//! skate. draws a tile's blend layers and overlapping decals in an unstable order when they share its mesh. This pass
+//! assembles the writer's tiles with the writer's own code (textures identified but not encoded) and, per tile with
+//! such overlays ([`crate::blend_order`]: the chain's ranks, then each decal over the decals it overlaps that the tile
+//! drew first), splits them by dominant axis, cuts them on a `grid`-metre grid (Studio's 200 m
 //! WorldPartition cell; 0: not cut), pads every rank of a cell and axis to one box and takes each axis's lift step (the
 //! rank's objects lifted apart along it, the step widened where an f32 cannot hold it at the tile; a tile where no step
 //! up to the largest holds is refused, its chain overlays left in its mesh: counted, an approximation). It records the
