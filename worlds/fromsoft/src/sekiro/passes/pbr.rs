@@ -5,7 +5,10 @@
 //! never glTF's fully metallic default of 1, and every such material is counted.
 mod coverage;
 mod gx;
+use crate::layer_bake::resolve::{centred, slot_tiling};
+use crate::metaparam::texture_number;
 use crate::preview::{Preview, is_emissive, preview_with};
+use crate::sekiro::source::{MaterialShader, ShaderBundle};
 use crate::{
     Result, invalid,
     materials::{Binding, Material},
@@ -196,23 +199,28 @@ fn simple(shader: &str) -> bool {
         "MetallicTex" | "MetallicValue" | "MetallicValue_MeshDecal"
     )
 }
-fn binding<'a>(m: &'a Material, role: &str) -> Option<&'a Binding> {
+/// The first binding of the definition's slots named for `role`, with its slot's key.
+fn keyed_binding<'a>(m: &'a Material, role: &str) -> Option<(&'a str, &'a Binding)> {
     let d = m.definition.as_ref()?;
     d.textures()
         .into_iter()
         .filter(|t| t.0.contains(role))
-        .find_map(|t| m.bindings.get(t.0))
+        .find_map(|t| m.bindings.get(t.0).map(|b| (t.0, b)))
+}
+fn binding<'a>(m: &'a Material, role: &str) -> Option<&'a Binding> {
+    keyed_binding(m, role).map(|(_, b)| b)
 }
 
-fn normal_binding<'a>(m: &'a Material, preview: &Preview) -> Option<&'a Binding> {
+/// The normal map binding the preview chose, with its slot's key.
+fn keyed_normal_binding<'a>(m: &'a Material, preview: &Preview) -> Option<(&'a str, &'a Binding)> {
     let name = preview.normal.as_ref()?;
     m.definition
         .as_ref()?
         .textures()
         .into_iter()
         .filter(|t| t.0.contains("NormalMap"))
-        .filter_map(|t| m.bindings.get(t.0))
-        .find(|b| &b.texture == name)
+        .filter_map(|t| m.bindings.get(t.0).map(|b| (t.0, b)))
+        .find(|(_, b)| &b.texture == name)
 }
 
 /// Names required by the evidenced static policies, for one batched DDS read.
@@ -353,19 +361,41 @@ fn fallback_base_color(m: &Material, water: Srgba8) -> [f32; 4] {
         Srgba8([128, 128, 128, 255]).linear()
     }
 }
-/// A binding's texture transform for coordinates already multiplied by `applied` (the material's tiling a geometry
-/// pass applied, `[1, 1]` when none was).
-fn transform(applied: [f32; 2], b: &Binding) -> Result<UvTransform> {
+/// The row of `FC_TextureTilingScale` the engine writes for the binding `kind` of material `e`, as its programs sample
+/// it (`uv * scale + offset`, each axis scaled about the texture's centre): the scale the FLVER stores, else the
+/// definition's, else the metaparam's uv group ([`slot_tiling`], the captures' rule). A material without a definition
+/// has the FLVER's scale alone.
+fn tiling_row(world: &World, e: Entity, m: &Material, kind: &str, b: &Binding) -> [f32; 4] {
+    let Some(view) = m.view() else {
+        return centred(b.scale);
+    };
+    let metaparam = world
+        .get::<MaterialShader>(e)
+        .and_then(|s| world.get::<ShaderBundle>(s.0))
+        .and_then(|bundle| bundle.parameters.as_ref());
+    slot_tiling(&view, metaparam, texture_number(kind), Some(b.scale))
+}
+
+/// The texture transform of a tiling `row` for coordinates already multiplied by `applied` (the material's tiling a
+/// geometry pass applied, `[1, 1]` when none was): the row's scale less what was applied, and its offset.
+fn row_transform(row: [f32; 4], applied: [f32; 2]) -> UvTransform {
+    UvTransform {
+        scale: std::array::from_fn(|i| row[i] / applied[i]),
+        offset: [row[2], row[3]],
+        ..UvTransform::IDENTITY
+    }
+}
+
+/// A binding's texture transform, from its tiling `row` ([`tiling_row`]), for coordinates already multiplied by `applied`.
+fn transform(row: [f32; 4], applied: [f32; 2], b: &Binding) -> Result<UvTransform> {
     if b.uv_number != 1
         || !applied.iter().all(|v| v.is_finite() && *v > 0.)
         || !b.scale.iter().all(|v| v.is_finite())
+        || !row.iter().all(|v| v.is_finite())
     {
         return Err(invalid("Sekiro PBR", 0, "unsupported UV set or invalid scale"));
     }
-    Ok(UvTransform {
-        scale: std::array::from_fn(|i| b.scale[i] / applied[i]),
-        ..UvTransform::IDENTITY
-    })
+    Ok(row_transform(row, applied))
 }
 
 /// What [`lower`] does with a layered material no pass baked (one without PBR bindings).
@@ -531,10 +561,10 @@ fn lower_materials(
                     if let Some(b) = binding {
                         let mut r = TextureRef::new(texture(world, payloads, &mut cache, &b.texture, false)?);
                         r.texcoord = c.slot.texcoord;
-                        r.transform = Some(UvTransform {
-                            scale: b.scale,
-                            ..UvTransform::IDENTITY
-                        });
+                        r.transform = Some(row_transform(
+                            tiling_row(world, e, &m, &c.slot.binding, b),
+                            applied,
+                        ));
                         p.base_color_texture = Some(r);
                         coverage_vertex_alpha = c.vertex_alpha;
                         log.approximate_on(
@@ -580,13 +610,6 @@ fn lower_materials(
                 match &base {
                     Ok(Some(b)) if pv.albedo_binding.as_deref() == Some(b.slot.binding.as_str()) => {
                         r.texcoord = b.slot.texcoord;
-                        let scale = m.bindings[&b.slot.binding].scale;
-                        if scale.iter().all(|v| v.is_finite()) {
-                            r.transform = Some(UvTransform {
-                                scale,
-                                ..UvTransform::IDENTITY
-                            });
-                        }
                         if b.lowest_layer {
                             log.approximate_on(
                                 e,
@@ -603,6 +626,18 @@ fn lower_materials(
                     // the other cases are `unread`, drawn without a base texture above
                     _ => {}
                 }
+                // tiled as its programs tile it: the engine's row, about the texture's centre. An MTD's map on a second
+                // UV set is sampled on the first, so its tiling is not applied (the normal map's rule refuses it)
+                if let Some(kind) = &pv.albedo_binding
+                    && let Some(b) = m.bindings.get(kind)
+                    && (b.uv_number == 1 || matches!(base, Ok(Some(_))))
+                    && b.scale.iter().all(|v| v.is_finite())
+                {
+                    let row = tiling_row(world, e, &m, kind, b);
+                    if row.iter().all(|v| v.is_finite()) && row_transform(row, applied) != UvTransform::IDENTITY {
+                        r.transform = Some(row_transform(row, applied));
+                    }
+                }
                 p.base_color_texture = Some(r);
             } else if fresh && p.base_color_texture.is_none() {
                 // no base texture named, or one the install does not hold (an authoring placeholder such as `3dsmax`)
@@ -614,8 +649,8 @@ fn lower_materials(
                 && held(payloads, &cache, name, true)
             {
                 let mut r = TextureRef::new(texture(world, payloads, &mut cache, name, true)?);
-                if let Some(b) = normal_binding(&m, &pv) {
-                    r.transform = Some(transform(applied, b)?);
+                if let Some((kind, b)) = keyed_normal_binding(&m, &pv) {
+                    r.transform = Some(transform(tiling_row(world, e, &m, kind, b), applied, b)?);
                 }
                 p.normal_texture = Some(r);
             } else if p.normal_texture.is_none() && pv.normal.is_some() {
@@ -638,8 +673,8 @@ fn lower_materials(
             } else if let Some(name) = pv.normal.as_ref().filter(|name| payloads.contains_key(*name)) {
                 let normal = read(payloads, name)?;
                 // a metallic map the install does not hold is as absent as one the material does not bind
-                let metal = binding(&m, "MetallicMap");
-                let metal = if metal.is_some_and(|b| !payloads.contains_key(&b.texture)) {
+                let metal_keyed = keyed_binding(&m, "MetallicMap");
+                let metal_keyed = if metal_keyed.is_some_and(|(_, b)| !payloads.contains_key(&b.texture)) {
                     log.approximate_on(
                         e,
                         "named metallic texture not in the install: the material's metallic factor",
@@ -647,8 +682,9 @@ fn lower_materials(
                     );
                     None
                 } else {
-                    metal
+                    metal_keyed
                 };
+                let metal = metal_keyed.map(|(_, b)| b);
                 let mut metal_sampler = None;
                 if let Some(b) = metal {
                     let t = read(payloads, &b.texture)?;
@@ -659,10 +695,12 @@ fn lower_materials(
                         false,
                     )?);
                 }
-                let normal_binding = normal_binding(&m, &pv)
+                let (normal_kind, normal_binding) = keyed_normal_binding(&m, &pv)
                     .ok_or_else(|| invalid("Sekiro PBR", 0, "normal binding absent"))?;
-                let nt = transform(applied, normal_binding)?;
-                let mt = metal.map(|b| transform(applied, b)).transpose()?;
+                let nt = transform(tiling_row(world, e, &m, normal_kind, normal_binding), applied, normal_binding)?;
+                let mt = metal_keyed
+                    .map(|(kind, b)| transform(tiling_row(world, e, &m, kind, b), applied, b))
+                    .transpose()?;
                 if nt.scale.contains(&0.) {
                     return Err(invalid("Sekiro PBR", 0, "zero normal scale"));
                 }
@@ -680,9 +718,12 @@ fn lower_materials(
                             (px.y as f32 + 0.5) / px.height as f32,
                         ];
                         let metallic = if let (Some(s), Some(mt)) = (&metal_sampler, mt) {
+                            // the normal map's coordinates `uv` back to the mesh's, forward to the metal map's
                             crate::layer_bake::sample(
                                 s,
-                                std::array::from_fn(|j| uv[j] * mt.scale[j] / nt.scale[j]),
+                                std::array::from_fn(|j| {
+                                    (uv[j] - nt.offset[j]) * mt.scale[j] / nt.scale[j] + mt.offset[j]
+                                }),
                             )
                             .map_err(|e| primase_image::Error::Invalid(e.to_string()))?[0]
                         } else if scalar.is_some() {
@@ -727,7 +768,12 @@ fn lower_materials(
                 log.approximate("missing normal gloss; retained target roughness", 1);
             }
         } else {
-            log.approximate("unclassified shader PBR; retained target roughness", 1);
+            // the program's gloss (and, for Elden Ring, metallic) come from the textures and parameters it samples, which
+            // this static lowering does not read: roughness stays the default 1, metallic the counted dielectric 0
+            log.approximate(
+                "unclassified shader PBR; retained target roughness (the default 1: the program's gloss is not read)",
+                1,
+            );
         }
         if !baked && fresh && scalar.is_none() && !metal_map_used {
             log.approximate(UNKNOWN_METALLIC_LOSS, 1);

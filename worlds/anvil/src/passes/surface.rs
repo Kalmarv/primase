@@ -95,6 +95,7 @@ fn inside(b: [f32; 3]) -> bool { b.iter().all(|v| *v >= 0.0) }
 
 struct Prepared {
     shader: ProgramShader,
+    reading: super::gbuffer::Reading,
     buffers: Vec<(u32, Vec<[u32;4]>)>,
     views: Views,
 }
@@ -214,7 +215,8 @@ impl BakeAnvilSurface {
             };
             views.insert(slot,view);
         }
-        Ok(Prepared {shader,buffers,views:Views::refusing(views)})
+        let reading = super::gbuffer::Reading::new(shader.interface(), 1)?;
+        Ok(Prepared {shader,reading,buffers,views:Views::refusing(views)})
     }
 }
 
@@ -222,7 +224,7 @@ struct Images { base: Vec<u8>, normal: Vec<u8>, orm: Vec<u8>, ao: Vec<u8> }
 impl Images {
     fn new(size: usize) -> Self { Self {base:vec![0;size*size*4],normal:vec![0;size*size*4],
         orm:vec![0;size*size*4],ao:vec![0;size*size*4]} }
-    fn put(&mut self, at: usize, output: &Execution, tbn: [[f32;3];3], frame: primase_core::frame::SourceFrame) -> Result<(),String> {
+    fn put(&mut self, at: usize, output: &Execution, reading: &super::gbuffer::Reading, tbn: [[f32;3];3], frame: primase_core::frame::SourceFrame) -> Result<(),String> {
         if output.discarded { return Err("surface permutation discards pixels; opaque chart contract does not cover it".into()); }
         let mut o = [[0.0;4];4];
         for (target,dst) in o.iter_mut().enumerate() {
@@ -230,20 +232,25 @@ impl Images {
             *dst = output.outputs[target].map(f32::from_bits);
             if dst.iter().any(|v| !v.is_finite()) {return Err(format!("non-finite G-buffer o{target}"));}
         }
-        let (n,class)=NormalEncoding::decode_octahedral_diamond([o[1][0],o[1][1],o[1][2]]);
+        let (_,class)=NormalEncoding::decode_octahedral_diamond([o[1][0],o[1][1],o[1][2]]);
         if class!=1 {return Err(format!("surface program writes shading class {class}; established TriPlanar contract is class 1"));}
-        if o[3][2]!=1.0 || o[3][3]!=0.0 || o[2][2]!=0.0 {
-            return Err("surface program writes specular occlusion/translucency/emission outside the established outputs".into());
+        let texel = reading.read(|target| output.outputs.get(target).zip(output.output_masks.get(target))
+            .map(|(v, mask)| (v.map(f32::from_bits), *mask)))?;
+        if texel.specular_occlusion!=1.0 || texel.translucency!=0.0 || texel.emission!=[0.0;3] {
+            return Err("surface chart cannot represent non-neutral specular occlusion/translucency or nonzero emission; original material retained".into());
         }
-        let n = frame.direction(n.map(|v| v as f32));
+        if texel.base.iter().any(|v| !(0.0..=1.0).contains(v)) {
+            return Err("surface chart albedo is outside 0 to 1; RGBA8 PBR would clip the program's output".into());
+        }
+        let n = frame.direction(texel.normal);
         let normal = tbn.map(|axis| dot(n,axis));
         self.base[at..at+4].copy_from_slice(&[
-            byte(primase_image::linear_to_srgb(f64::from(o[0][0].clamp(0.0,1.0))) as f32),
-            byte(primase_image::linear_to_srgb(f64::from(o[0][1].clamp(0.0,1.0))) as f32),
-            byte(primase_image::linear_to_srgb(f64::from(o[0][2].clamp(0.0,1.0))) as f32),255]);
+            byte(primase_image::linear_to_srgb(f64::from(texel.base[0])) as f32),
+            byte(primase_image::linear_to_srgb(f64::from(texel.base[1])) as f32),
+            byte(primase_image::linear_to_srgb(f64::from(texel.base[2])) as f32),255]);
         self.normal[at..at+4].copy_from_slice(&[byte(normal[0]*0.5+0.5),byte(normal[1]*0.5+0.5),byte(normal[2]*0.5+0.5),255]);
-        self.orm[at..at+4].copy_from_slice(&[255,byte(o[0][3]),byte(o[1][3]),255]);
-        let ao=byte(o[3][0]); self.ao[at..at+4].copy_from_slice(&[ao,ao,ao,255]);
+        self.orm[at..at+4].copy_from_slice(&[255,byte(texel.roughness),byte(texel.metallic),255]);
+        let ao=byte(texel.occlusion); self.ao[at..at+4].copy_from_slice(&[ao,ao,ao,255]);
         Ok(())
     }
     fn copy(&mut self, from: usize, to: usize) {
@@ -374,7 +381,7 @@ impl BakeAnvilSurface {
                 let output=prepared.shader.execute_quad(inputs.each_ref().map(|v|v.as_slice()),&buffers,&mut &prepared.views).map_err(|e|e.to_string())?;
                 for lane in 0..4 {if inside(bc[lane]) {
                     let(px,py)=(x+lane as u32%2,y+lane as u32/2);
-                    images.put((((cy+py)*side+cx+px)*4) as usize,&output[lane],bases[lane],material.frame)?;
+                    images.put((((cy+py)*side+cx+px)*4) as usize,&output[lane],&prepared.reading,bases[lane],material.frame)?;
                     valid[(py*chart+px) as usize]=true;
                 }}
             }}
@@ -469,6 +476,9 @@ impl Pass for BakeAnvilSurface {
                                 levels:vec![pixels],color_space:space,role,normal});e
                         };
                         let normal=NormalConvention{green:NormalGreen::Up,z:NormalZ::Stored,x:NormalX::Red,basis:NormalBasis::TangentBitangent};
+                        if images.ao.as_chunks::<4>().0.iter().any(|v|v[0]!=255) {
+                            log.approximate(&format!("{template}: {}", super::gbuffer::OCCLUSION_APPROXIMATION),1);
+                        }
                         let base=spawn(world,images.base,ColorSpace::Srgb,TexRole::Color,None);
                         let normals=spawn(world,images.normal,ColorSpace::Linear,TexRole::Normal,Some(normal));
                         let orm=spawn(world,images.orm,ColorSpace::Linear,TexRole::Mask,None);
@@ -572,16 +582,18 @@ impl Pass for BakeAnvilSurface {
     }
     #[test]fn layout_is_read_from_the_programs_encoded_class_and_world_normal_is_rebased(){
         let mut images=Images::new(1);
+        let fixture = primase_dxbc::lift(include_bytes!("../../../../toolkit/dxbc/tests/fixtures/modes.dxbc")).unwrap();
+        let reading = super::super::gbuffer::Reading::new(&fixture.interface, 1).unwrap();
         let mut output=Execution{outputs:vec![
             [0.25f32,0.5,0.75,0.6].map(f32::to_bits),
             [1.0f32,1.0,9.0/255.0,0.3].map(f32::to_bits),
             [0.0f32;4].map(f32::to_bits),[1.0f32,0.0,1.0,0.0].map(f32::to_bits)],
             output_masks:vec![15;4],..Default::default()};
-        images.put(0,&output,[[1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,1.0]],
+        images.put(0,&output,&reading,[[1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,1.0]],
             primase_core::frame::SourceFrame::WORLD).unwrap();
         assert_eq!(images.normal,[128,128,255,255]);assert_eq!(images.orm,[255,153,76,255]);
         output.outputs[1][2]=(41.0f32/255.0).to_bits();
-        assert!(images.put(0,&output,[[1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,1.0]],
+        assert!(images.put(0,&output,&reading,[[1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,1.0]],
             primase_core::frame::SourceFrame::WORLD).unwrap_err().contains("class 5"));
     }
 }

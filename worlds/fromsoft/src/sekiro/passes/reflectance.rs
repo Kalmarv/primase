@@ -1,10 +1,17 @@
 //! Interpretation of Sekiro's encoded G-buffer3, separate from shader execution.
 use crate::{layer_bake::OutputRgb, materials::Material, mtd::Value};
 use primase_core::pass::PassLog;
+use primase_core::pbr::Specular;
 
 // Literal in M[Multiple]_1_Gbuf.ppo at byte 11208, independently decoded from
 // the original bytes. GXLightAcc_DDirLight1 squares GBuffer3 RGB before Schlick.
 const DIELECTRIC_ENCODED: u32 = 0x3e31_5cac;
+
+/// The traced dielectric's F0, the square of the stored value over glTF's dielectric F0 (`0.04`, the extension's
+/// default index of refraction): the `specularFactor` that makes a metallic-0 material reflect exactly what the program's
+/// G-buffer 3 states (0.03), not 0.04.
+pub(super) const DIELECTRIC_F0_FACTOR: f32 =
+    f32::from_bits(DIELECTRIC_ENCODED) * f32::from_bits(DIELECTRIC_ENCODED) / 0.04;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Reflectance {
@@ -49,13 +56,24 @@ impl Reflectance {
         }
     }
 
+    /// The material's specular reflectance: the traced dielectric's F0 as `specularFactor` (the metallic workflow's
+    /// 0.04 scaled to it); none where the program's reflectance is not traced (the extension's default, 0.04).
+    pub(super) fn specular(self) -> Option<Specular> {
+        match self {
+            Self::Dielectric => Some(Specular {
+                factor: DIELECTRIC_F0_FACTOR,
+                ..Specular::default()
+            }),
+            Self::Unsupported => None,
+        }
+    }
+
     // Called once for each newly instantiated, referenced output material;
     // neither unused bake levels nor repeated primitive uses inflate this count.
     pub(super) fn record_material(self, log: &mut PassLog) {
         match self {
             Self::Dielectric => {
                 log.count("baked output materials with traced dielectric reflectance", 1);
-                log.approximate("source dielectric F0 0.03 mapped to target F0 0.04", 1);
             }
             Self::Unsupported => {
                 log.count("baked output materials with unsupported reflectance", 1);
@@ -124,6 +142,22 @@ mod tests {
                 Reflectance::Unsupported
             );
         }
+    }
+    /// A traced dielectric reflects the program's F0 (0.03 within f32), not glTF's 0.04: the extension's
+    /// `min(0.04 * colour, 1) * factor`; an untraced one states nothing.
+    #[test]
+    fn a_traced_dielectric_states_the_programs_f0_as_the_specular_factor() {
+        let stored = f32::from_bits(DIELECTRIC_ENCODED);
+        // an absent specular reads as the default (factor 1), which fails the checks below
+        let specular = Reflectance::Dielectric.specular().unwrap_or_default();
+        assert!((0.04 * specular.factor - stored * stored).abs() < 1e-9);
+        assert!((0.04 * specular.factor - 0.03).abs() < 1e-5);
+        assert_eq!((specular.color, specular.texture, specular.color_texture), ([1.; 3], None, None));
+        assert!(specular.factor > 0. && specular.factor <= 1.);
+        assert_eq!(Reflectance::Unsupported.specular(), None);
+        let mut log = PassLog::default();
+        Reflectance::Dielectric.record_material(&mut log);
+        assert!(log.approximations.is_empty());
     }
     #[test]
     fn unsupported_programs_cannot_become_dielectric_by_coincidence() {

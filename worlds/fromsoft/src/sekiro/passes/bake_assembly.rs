@@ -82,6 +82,7 @@ fn channel_material(
         Reflectance::Dielectric => 0.,
         Reflectance::Unsupported => pbr::UNKNOWN_METALLIC,
     };
+    material.specular = reflectance.specular();
     Ok(material)
 }
 
@@ -543,9 +544,18 @@ mod tests {
                 &mut Default::default(),
             )?;
             let new = channel_material(&mut after, "jar", mode, captured.image, classification, &mut log)?;
-            // Both are dielectric now; tracing changes only which loss is named.
+            // Both are dielectric; tracing adds the program's F0 (0.03) as the specular factor, and no other value changes
             assert_eq!((old.metallic, new.metallic), (0., 0.));
-            assert_eq!(old, new, "traced reflectance changes no lowered value");
+            assert_eq!(old.specular, None);
+            assert_eq!(new.specular, Reflectance::Dielectric.specular());
+            assert_eq!(
+                old,
+                PbrMaterial {
+                    specular: None,
+                    ..new.clone()
+                },
+                "traced reflectance changes only the specular factor"
+            );
             let pixels = |world: &World| {
                 world
                     .iter::<Texture>()
@@ -554,10 +564,7 @@ mod tests {
             };
             assert_eq!(pixels(&before), pixels(&after));
             classification.record_material(&mut log);
-            assert_eq!(
-                log.approximations["source dielectric F0 0.03 mapped to target F0 0.04"],
-                1
-            );
+            assert!(!log.approximations.contains_key("source dielectric F0 0.03 mapped to target F0 0.04"));
             assert!(!log.approximations.contains_key(pbr::UNKNOWN_METALLIC_LOSS));
         }
         println!(

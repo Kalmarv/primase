@@ -441,3 +441,88 @@ The reported failures were read from the first-check logs; no rerun is claimed h
 | `game_names` | An exposure notice used the word for a multiplier of one that also names another engine. Reworded the notice in `passes/sky.rs`. |
 | Anvil Clippy | Replaced manual divisibility checks and constant chunk iterators; collapsed the tangent check; moved the impostor/preview/sky/texture test modules after their implementation items. No assertions were weakened. |
 | Lab full preparation | The logged binary's surface OptionSpec omitted `sediments`; the current source declares the typed option and the lab states `sediments=omit`. This is a source/pin comparison, not a claim that the test has been rerun. |
+
+## Shaded / Game surface drift (source audit)
+
+This is a source comparison, not measured image drift. It covers the map templates dispatched by
+`lower-anvil-material`, `bake-anvil-material` and `bake-anvil-surface`; character templates are excluded.
+Evidence reused: `tests/shader_oracle.rs`, the existing installed-template bake fixtures, the conversion's
+material-spec sections 12.2, 14–15, 23 and 27, and the resolver's output roles. The output decoder is now
+`core::shader::surface::Surface` in both map bake paths as well as the lab. `passes/gbuffer.rs` only associates
+role ordinals with actual target registers and checks written/finite lanes; it does not define another output layout.
+
+In the table, B/N/R/M/E/O/U mean base colour / normal / roughness / metalness / emission / occlusion / UV.
+`S(x)=x*x*(3-2*x)` and `tint` is the existing HSV adjustment. Each row states the differing source, rather than
+claiming that a shader's remaining lighting, blend state or runtime input is represented by PBR.
+
+| Template | Shaded source versus program source; difference kind | Written fix / open |
+|---|---|---|
+| MAD_Fake | B=t75; N=t76.rg; R=t76.a; M=t76.b; E=0, O=1. Without TextureMap metadata Shaded previously forced linear sampling, while the Game binding uses core.texture's declared transfer (colour space). | Fixed fallback for original and derived maps; installed Fake fixture checks PBR B/R/M against Surface. |
+| MAD_Fake_Sediment | Fake's terms; Shaded omits terrain albedo/sediment inputs when their switches are on (missing terms). | Transfer fixed; terrain views remain named omissions. |
+| MAD_Tex1 | B=tint(t76,t77.r,HSL), R=S(sat(t75.a+offset)), M=t75.b*metal, O=1+AO*(t77.b-1), E=0; same U on all maps. Shader colour factor is RGB-only `1+VCI*(COLOR0.rgb-1)`; Shaded VCI=1 also multiplies vertex alpha, other nonzero VCI is omitted. | Transfer/static U fixed; vertex colour/alpha remains explicitly approximate. |
+| MAD_Tex1_SkinningSupported | Same pixel terms as Tex1; Shaded does not add a new skin formula. | Same fixes/vertex limitation; resolver class-table entry still open. |
+| MAD_Tex1_Wind | Tex1 B/O; raw t75.a/b for R/M. Program also writes translucency, and its vertex program moves geometry. | Transfer/static U fixed; translucency absent from PBR, deformation remains Game's program. |
+| MAD_Tex1_TerrainBlend | Tex1-like B/N/R/O, M=0; program blends terrain colour by position while Shaded omits that term. | Transfer/static U fixed; terrain sampling open, named approximation; O lighting domain differs below. |
+| MAD_Decals1 | B=tint(t76,1,HSL), R=S(sat(t75.a+offset)), M=t75.b*metal; no mask/O term, unchanged TEXCOORD0. Blended program writes alpha where opaque writes roughness. | Transfer fixed; a blended G-buffer has no roughness role: fixed Shaded roughness is an approximation, not an opaque output contract. |
+| MAD_Decals1_Graffiti | Decals1 only where EmissivePower=0; team/Fresnel terms otherwise require runtime inputs. | Same fixes; nonzero case keeps named refusal; class-table entry open. |
+| MAD_Tex1_Emissive | B=tinted diffuse; R=normal.a, M=normal.b*metal; program E=B*(t77.r*scale/t23). Shaded derives tinted diffuse*mask and factors scale/stated exposure separately. VCI affects program E too; Shaded vertex colours multiply base only. | Transfer/static U fixed; exposure t23 and per-vertex E remain named limitations. |
+| MAD_Tex1_UGE | Emissive variant with t77.a and its own U rows; instance override blends emission scale in the program. | Same fixes; instance blend and vertex E open. |
+| MAD_Tex1_Graffiti_Mode | Tex1-shaped B/N/R/M/O with its own rows and raw R/M, only logo/team/custom state off. | Transfer/static U fixed; other states keep named refusal. |
+| MAD_Tex1_TeamColoured | Tex1 with Neutral HSL; negative hue wraps in program, unlike the formula's signed fractional hue. | Nonnegative hue path retained; negative hue refuses. Transfer/static U fixed; class-table entry open. |
+| MAD_Tex2 | Two tinted diffuse/normal/mask sets, U per layer, R=S(sat((a+offset-.1)*1.25)), M=normal.b; heights diffuse.a, weights from COLOR0.a and contrast/offset. Program also multiplies colour by vertex intensity, which Shaded omits. | Transfer/static U fixed; vertex colour and generated-image filtering open; class-table entry open. |
+| MAD_Tex2_TintBFromShaderConstants | Tex2, B-layer tint from Neutral constants; same missing vertex factor. | Same fixes/open terms and class-table entry. |
+| MAD_Tex2_Graffiti_Mode | Tex2 with raw R and own rows, no colour-factor term, only State Value=0. | Transfer/static U fixed; nonzero runtime palette refused; class-table entry open. |
+| MAD_Grounds | Shaded takes layer A tint/N/raw R/M at Base tiling only under the established neutral tire/blend reduction. Program's general branch mixes tire/parquet and another layer/UV. | Reduction retained; other branches refused, not guessed; transfer/static U fixed; class-table entry open. |
+| MAD_Bark | B=diffuse, N=normal.rg, R=normal.a, M=0, O=mask AO. Program further multiplies O by COLOR0.a and writes specular occlusion/translucency. | Transfer/static U fixed; vertex AO and separate lighting terms open. |
+| MAD_Tex1_Leaves | B=HSV-tinted diffuse, alpha=opacity.r, N=normal, R=mask.g, M=0, O=mask AO. Program adds instance tint mix, vertex AO and foliage lighting terms. | Transfer/static U fixed; instance/vertex terms, missing opacity fallback, fade/thinning remain named. |
+| MAD_Clutters_Grass | B=diffuse, alpha=opacity.r, N=normal.rg, R=normal.a, M=0, O=mask AO. Program additionally samples world-space noise tint and writes specular occlusion/translucency/fade. | Transfer fixed; world noise, foliage terms and missing opacity remain named. |
+| MAD_FakeForest | Shaded writes pow(sat(COLOR0.rgb),2.2) to vertex colours; program computes that after interpolation. Nonlinear operation before versus after interpolation differs. Program also writes translucency=.5. | Open: retain original Game inputs and evaluate power after interpolation for equality; named translucency omission retained. |
+| SHD_Nat_Veg_Grass_AO | B=diffuse*(1+AO Mult*(COLOR0.a-1)), R=1, M=0; Shaded rewrites vertex colour to that linear factor, shader also supplies custom normal and specular occlusion=.2. | Transfer fixed; unresolved custom texture operator/normal and specular term remain named; class-table entry open. |
+| MAD_Outskirt | B=t75 at world UV=(source P.xy+offset)*scale; N=t76 at Tiling times U; R=1,M=0. | Existing world-UV lowering required before display; transfer fixed; class-table entry open. |
+| MAD_Tex1_FakeRiver | B=foam-alpha formula with caller's constant s versus program COLOR0.x; N=t75 strength .1, R/M=sat(Metalness). | Transfer/static U fixed; varying s remains approximate; class-table entry open. |
+| MAD_Tex1_Screen | B=.6*sat(sample)^2.2, R=.1,M=0; E=B*(.666667/t23). The shader's explicit pow follows texture sampling; it is not a substitute for the resource's sRGB decode. | Declared transfer fixed before pow; t23 remains caller-stated; class-table entry open. |
+| MAD_Screens | Shaded black/R=1/M=0/E=0 only under reduced logo/video flags; general program reads video/state and another UV. | Reduction retained; other branch refused; class-table entry open. |
+| MAD_SHD_UNLIT_UndergroundBox | B=lerp(ColorB,ColorA,caller view factor), R=1,M=0,E=0 versus program factor from view direction. | View dependence remains named approximation; class-table entry open. |
+| MAD_Tex1_Graffiti_Mode_DecalFX | B=team^2.2 plus atlas alpha, R=1,M=0; E=B*(EmissiveMult*mask.g^2/t23), mask uses its own U. Exact reduction requires opaque team and TeamBlendRatio>=1. | Transfer/static U fixed; unreduced stripes/custom state refused, exposure stated; class-table entry open. |
+| MAD_Tex1_Rocks | Own program B/N/R/O, layout B M=0/E=0, three UV sets. Previous second hand decoder replaced by Surface reading; terrain AO/sediments are stated views. | Shared decode/transfer fixed; terrain, sampler and finite-resolution choices remain approximate. |
+| MAD_Tex1_UniqueNormal | Own program, Rocks input roles but class-1 outputs; R from detail normal alpha. | Shared decode/transfer and HDR E retention fixed; same engine-view limitations. |
+| MAD_Tex1_UniqueNormalGradient | Own program blends micro/medium detail by camera distance; Shaded bakes one distance. | Shared decode/transfer fixed; dynamic camera distance and class-table entry open. |
+| MAD_Tex1_UniqueNormal_DiffuseBlend | Own program B/N/R/M/O, masks at distinct tilings; Shaded previously independently decoded output lanes. | Shared decode/transfer fixed; unset AO maps retain refusal/choice; bake/filtering precision remains. |
+| MAD_Road | Own program stripe paint at one period; R/M from normal and parameter. Program E=B*(mask*scale/t23), previously discarded by Shaded bake. | Fixed HDR E texture/strength; period transform also applies to E. Existing Road program fixture checks actual installed PBR against Surface. Class-table entry open. |
+| MAD_Hero_Ice / MAD_IceBrick | Own program B/N/R/M/E at stated sun/eye; previous bake discarded nonzero E. | HDR E/shared decode/transfer fixed; angle/parallax stand-ins remain named; class-table entries open. |
+| MAD_Tex1_Graffiti_Monster | Own program normal sum/detail tilings; Fresnel E depends on eye. Shaded discarded E even after evaluating it. | HDR E/shared decode/transfer fixed; fixed eye/object origin and sampler assumptions remain; no invented dynamic state. |
+| MAD_Cliffs_TriPlanar / MAD_OutBorder / MAD_Tex1_UniqueNormalGrad_Triplanar | Surface chart evaluates own program at actual world P/N and original UV/tangent/colour inputs; N rebased to chart TBN. Independent B/N/R/M/O lane decode could diverge from Game. | Shared decode fixed; non-neutral specular/translucency, nonzero E or out-of-range albedo refuse chart rather than silently clip. Static camera/terrain choices remain named. |
+| MAD_Raw_TerrainBlend | No lowered output: program requires terrain page/cache/sediment resources not supplied by the surface contract. | Named refusal unchanged (t13–t22, t45/t46, t50/t51); no fake PBR match. |
+
+### Common differences still open
+
+The resolver class table is intentionally not filled by analogy: the rows marked above require reading the
+encoded class of the existing template's actual G-buffer permutation, including non-neutral branches, before
+assigning scalar roles. A formula oracle's agreement on raw o1.w alone does not prove that the composite reads
+it as metalness. Successful formula lowerings with an unlisted class now report that exact missing contract.
+
+Occlusion is another semantic difference: the existing output roles specify **all external light** while
+`core.pbr` stores **ambient** occlusion. Both bake paths and ordinary PBR lowering now report this when they
+retain an O map; no new light multiplier is guessed. Specular occlusion, translucency and layout-A o3.y's
+six-bit payload remain separate terms, never packed into metalness or ordinary AO.
+
+Texture generation evaluates nonlinear HSV/roughness/mask products at stored texels, sometimes resampling a
+second map by nearest texel; Game evaluates after filtering each original texture at its own footprint.
+Those operations do not commute. Exact per-fragment equality for varying textures/mips needs the original
+program/material operation graph, not another sampled-constant recipe. RGBA8 base/ORM/normal quantisation
+and finite bake density are also limits. HDR base colour clipping in the UV bake is now named; HDR emission
+has its own range-preserving strength. Surface charts refuse unrepresentable albedo instead of claiming equality.
+
+Static UV rows now have one implementation (`S R uv + translation`), used by the Game binder and both bake
+preparation and formula lowering. Uniform-scale rotation plus translation is retained rather than silently
+dropped. Unequal-scale rotation cannot fit TextureRef's `R S` and keeps the exact surface-bake reason; moving
+transforms retain the unknown-time notice. Periodic UV-square bakes check all four matrix coefficients, not
+only their diagonal. Sampler addressing, exposure t23, instance overrides, terrain caches and source-to-core
+normal/UV conventions remain choices/refusals already named by the passes.
+
+Written regression coverage uses existing assets only: the existing modes.dxbc signature checks output-target
+reordering, lane masks and non-finite values; installed MAD_Fake checks sRGB fallback against Surface;
+installed MAD_Tex1 encodes sampled UV into the program's albedo and compares the actual lowered TextureRef
+with Surface; installed MAD_Road checks HDR E and ORM from the actual lowering against the same program's
+Surface reading. Installed fixtures use the usual explicit testdata skip/require policy. No new fixture binary,
+run, image comparison, format pass or successful check is claimed in this write-only round.

@@ -15,7 +15,7 @@
 //!   ([`gbuffer_pixel_key`]). A Material that sets a flag the composer gates by the template's feature word (not
 //!   read) is left to `lower-anvil-material`, reported.
 //! - **Inputs**: the program's constants from the Material's bound properties at the rows its template binds them
-//!   ([`material_rows`]; a UV transform's rows only static and unrotated, the form shown exactly), a texture per
+//!   ([`material_rows`]; static UV rows shared with the program binding), a texture per
 //!   bound slot as the reader resolves it ([`crate::components::BoundTexture`]; sRGB where its TextureMap says so; one
 //!   resolved to none sampled white, as `unset=white` states, the same statement as `lower-anvil-material`'s), sampled at the bake texel's own footprint (2 x 2 quads, the
 //!   implicit level from the quad's UV gradients plus `mip-bias`, the engine's `cb1[41].y`: 0 in every frame the notes
@@ -35,8 +35,9 @@
 //!   its metalness in `o1.w`, emission in `o2.z`, occlusion, specular occlusion and translucency in `o3.xzw`; class 2
 //!   (hair) has no metalness (the lighting pass fixes F0), its occlusion in `o3.y`, its specular occlusion and
 //!   translucency as layout B's, in `o2.zw`.
-//!   Occlusion is a texture where it isn't 1 everywhere; specular occlusion, translucency and emission have no place
-//!   here: where they aren't (1, 0, 0) everywhere, reported. Opaque, single-sided, vertex colour ignored (the
+//!   Occlusion is a texture where it isn't 1 everywhere; emission is the shared surface reading's linear colour,
+//!   stored in an sRGB texture with an emissive strength retaining values above 1. Specular occlusion and
+//!   translucency have no PBR place: where they aren't (1, 0) everywhere, reported. Opaque, single-sided, vertex colour ignored (the
 //!   programs read none).
 //! - **The sun and the eye**: a program whose colour mixes by the shaded normal's angle to the sun (`cb0[4]`) and to
 //!   the eye (`cb1[2]`: the ice templates, material-spec §27.2) is run with the sun at `sun-elevation` degrees above
@@ -121,7 +122,7 @@ use primase_shader_exec::{
 
 use super::material::{Green, NORMAL_GREEN, SHADER_UV, ShaderUv, UNSET, Unset, uv_transform};
 use crate::components::{
-    AnvilMaterial, AnvilShaders, AnvilTextureMap, MaterialBinding, MaterialFlags, MaterialValue,
+    AnvilMaterial, AnvilShaders, MaterialBinding, MaterialFlags, MaterialValue,
 };
 
 /// The G-buffer pass's number, in the key's bits 22 to 29.
@@ -329,7 +330,7 @@ const UNIQUE_NORMAL_GRADIENT: Recipe = Recipe {
 /// MAD_Road (§27.4; its G-buffer program read): `2.Metalness` 1, `4.Emissive Scale` 2, `Hue` 3, `Saturate` 4,
 /// `Luminosity` 5, `Line Offset` 7, `Line Width` 8, `Line Gap` 9, `Line Frequency` 10, `Lane Width` 11, `Lane Offset`
 /// 12, `3.Base tiling` 13 and 14 (`Alpha`, 6, not read by its key); `1.Normal Map` t75, `4.Emissive Mask` t76; the
-/// exposure t23, which its emission is divided by (1: the emission isn't baked); the emissive mask reaches only the
+/// exposure t23, which its emission is divided by (stated as 1); the emissive mask reaches only the
 /// emission (its one Material sets none: bound to 0). Its paint's period: one over its
 /// line frequency along u, one over its lane width along v.
 const ROAD: Recipe = Recipe {
@@ -379,7 +380,7 @@ const UNIQUE_NORMAL_DIFFUSE_BLEND: Recipe = Recipe {
 /// `Fresnelfalloff` 4, `Color - Team` 5, `Color - Custom` 6, `TeamBlendRatio` 7, `3 - DETAILS -Tiling` 8 and 9, `3 -
 /// DETAILS - SecondTiling` 11 and 12; `Albedo And Opacity` t75 and `Normal` t76 at the mesh's UV, `Details` (a normal
 /// map) t77 at both tilings, `Mask 1` t78 at the mesh's UV and `Details Mask 1` t79 at the first tiling; the exposure
-/// t23; the eye for its Fresnel emission (no place here), the object's screen origin for its team stripes; layout A.
+/// t23; the stated eye for its Fresnel emission, the object's screen origin for its team stripes; layout A.
 const GRAFFITI_MONSTER: Recipe = Recipe {
     template: "MAD_Tex1_Graffiti_Monster",
     unkept: &[],
@@ -772,8 +773,7 @@ pub const BAKE_ANVIL_MATERIAL: PassSpec = PassSpec {
 /// A Material's property values at the `cb3` rows its template binds them (a row the template binds nothing at
 /// absent): a scalar in `.x`, a vector as stored, a UV transform's 8 floats `su, sv, tu, tv`, speeds, `t`, rotation
 /// speed as the rows `(su cos t, -su sin t, tu, 0)`, `(sv sin t, sv cos t, tv, 0)`, `(0, 0, 1, 0)` (docs/material-spec.md
-/// §12.2) where `t` and the speeds are 0 (`(su, 0, tu, 0)`, `(0, sv, tv, 0)`: a rotation's rows were matched to 5
-/// digits only, and the time term isn't known). A bound property neither the Material nor its template (its
+/// §12.2), with zero speeds (the time term isn't known). A bound property neither the Material nor its template (its
 /// Operator's default) sets, or a UV transform of another form, is an error naming it.
 pub(super) fn material_rows(m: &AnvilMaterial) -> Result<BTreeMap<u32, [f32; 4]>, String> {
     // the Material's property of the binding's key, else the template's default for the binding
@@ -809,14 +809,10 @@ pub(super) fn material_rows(m: &AnvilMaterial) -> Result<BTreeMap<u32, [f32; 4]>
             },
             MaterialBinding::UvTransform { vec4 } => match value(key, binding) {
                 Some(MaterialValue::Floats(f)) => {
-                    let &[su, sv, tu, tv, speed_u, speed_v, t, speed_t] = f.as_slice() else {
-                        return Err(format!("UV transform {key:08X}: not 8 floats"));
-                    };
-                    if (speed_u, speed_v, t, speed_t) != (0.0, 0.0, 0.0, 0.0) {
-                        return Err(format!("UV transform {key:08X}: rotated or moving"));
-                    }
-                    rows.insert(vec4, [su, 0.0, tu, 0.0]);
-                    rows.insert(vec4.saturating_add(1), [0.0, sv, tv, 0.0]);
+                    let [u, v] = super::material::static_uv_rows(f)
+                        .map_err(|why| format!("UV transform {key:08X}: {why}"))?;
+                    rows.insert(vec4, u);
+                    rows.insert(vec4.saturating_add(1), v);
                     rows.insert(vec4.saturating_add(2), [0.0, 0.0, 1.0, 0.0]);
                 }
                 _ => return Err(format!("UV transform {key:08X} (at row {vec4}) not set")),
@@ -833,7 +829,10 @@ struct Baked {
     roughness: Vec<u8>,
     normal: Vec<u8>,
     occlusion: Option<Vec<u8>>,
-    /// Whether specular occlusion, translucency and emission are (1, 0, 0) everywhere.
+    emission: Option<Vec<u8>>,
+    emissive_strength: f32,
+    clipped_base: bool,
+    /// Whether specular occlusion and translucency are (1, 0) everywhere.
     plain: bool,
     /// Whether some texel is metallic (layout A).
     metal: bool,
@@ -853,6 +852,22 @@ struct Baked {
 /// An 8-bit UNORM store of `x` (what the G-buffer target holds).
 fn unorm8(x: f32) -> u8 {
     (x.clamp(0.0, 1.0) * 255.0).round_ties_even() as u8
+}
+
+/// Store the shared surface reading's linear emission without clipping its HDR range. Negative light is not PBR.
+fn encode_emission(pixels: &[[f32; 3]]) -> Result<(Option<Vec<u8>>, f32), String> {
+    if pixels.iter().flatten().any(|v| !v.is_finite() || *v < 0.0) {
+        return Err("G-buffer emission is negative or non-finite; no nonnegative PBR emission represents it".into());
+    }
+    let peak = pixels.iter().flatten().copied().fold(0.0f32, f32::max);
+    if peak == 0.0 { return Ok((None, 1.0)); }
+    let strength = peak.max(1.0);
+    let mut bytes = Vec::with_capacity(pixels.len() * 4);
+    for rgb in pixels {
+        bytes.extend(rgb.map(|v| primase_image::linear_to_srgb8(f64::from(v / strength))));
+        bytes.push(255);
+    }
+    Ok((Some(bytes), strength))
 }
 
 /// The normal the lighting pass decodes from the stored `o1.xyz` (docs/material-spec.md §15.4) and its shading class
@@ -920,10 +935,10 @@ impl BakeAnvilMaterial {
             }
             if let MaterialBinding::UvTransform { vec4 } = binding
                 && let Some(r) = rows.get(vec4).zip(rows.get(&vec4.saturating_add(1)))
-                && ![r.0[0], r.1[1]].iter().all(|s| s.fract() == 0.0)
+                && ![r.0[0], r.0[1], r.1[0], r.1[1]].iter().all(|s| s.fract() == 0.0)
             {
                 return Err(format!(
-                    "UV transform {key:08X}: a scale that isn't whole (not periodic in the square)"
+                    "UV transform {key:08X}: a matrix coefficient that isn't whole (not periodic in the square)"
                 ));
             }
         }
@@ -1049,7 +1064,7 @@ impl BakeAnvilMaterial {
             let t = w
                 .get::<Texture>(e)
                 .ok_or("a bound texture holds no core texture")?;
-            let srgb = w.get::<AnvilTextureMap>(e).is_some_and(|t| t.field_25 == 1);
+            let srgb = super::material::srgb(w, e);
             // the binding states no addressing: the program's assumption, or a refusal
             let unread = SamplerState::default();
             let image = SampledTexture::new(
@@ -1116,6 +1131,9 @@ impl BakeAnvilMaterial {
             roughness: Vec::with_capacity(n * n * 4),
             normal: Vec::with_capacity(n * n * 4),
             occlusion: None,
+            emission: None,
+            emissive_strength: 1.0,
+            clipped_base: false,
             plain: true,
             metal: false,
             terrain_ao,
@@ -1142,6 +1160,9 @@ impl BakeAnvilMaterial {
             );
         }
         let mut occlusion = Vec::with_capacity(n * n * 4);
+        // Most map programs emit nothing: allocate the temporary HDR image only on the first nonzero texel.
+        let mut emission = Vec::new();
+        let mut readings = BTreeMap::new();
         for y in 0..n {
             // the texture's row y is the shader's v = (y + 0.5) / n, or 1 minus it
             // (a pattern's rows are in its own UV, which its transform maps from the mesh's)
@@ -1161,21 +1182,31 @@ impl BakeAnvilMaterial {
                     return Err("the program writes a value that isn't finite".into());
                 }
                 let (normal, class) = decode_normal([o1[0], o1[1], o1[2]]);
-                // (metalness, occlusion, specular occlusion, translucency, emission) by the layout
-                let (metal, ao, specular, translucency, emission) = match class {
-                    3..=5 => (0.0, o1[3], o2[2], o2[3], 0.0),
-                    1 if o3_written => (o1[3], o3[0], o3[2], o3[3], o2[2]),
+                let texel = match class {
+                    1 | 3..=5 => {
+                        if let std::collections::btree_map::Entry::Vacant(entry) = readings.entry(class) {
+                            entry.insert(super::gbuffer::Reading::new(shader.interface(), class)?);
+                        }
+                        readings.get(&class).ok_or("missing surface reading")?.read(|target| {
+                            raw.pixels.get(target).and_then(|t| t.get(p))
+                                .map(|(v, mask)| (v.map(f32::from_bits), *mask))
+                        })?
+                    }
                     // the lighting pass's class 2 (hair): the albedo, roughness and normal as the others, F0 fixed (no
                     // metalness), the occlusion where layout A reads it from `o3.x` read from `o3.y`, the specular
                     // occlusion and translucency of layout B (`o2.z`, `o2.w`)
-                    2 if o3_written => (0.0, o3[1], o2[2], o2[3], 0.0),
+                    2 if o3_written => super::gbuffer::Texel {
+                        base: [o0[0], o0[1], o0[2]], normal: normal.map(|v| v as f32), roughness: o0[3],
+                        metallic: 0.0, occlusion: o3[1], specular_occlusion: o2[2], translucency: o2[3], emission: [0.0; 3],
+                    },
                     _ => {
                         return Err(format!(
                             "shading class {class}, not layout A's (1, four targets), the hair's (2) or B's (3 to 5)"
                         ));
                     }
                 };
-                for c in &o0[..3] {
+                baked.clipped_base |= texel.base.iter().any(|v| !(0.0..=1.0).contains(v));
+                for c in &texel.base {
                     baked.base.push(
                         (primase_image::linear_to_srgb(f64::from(c.clamp(0.0, 1.0))) * 255.0).round() as u8,
                     );
@@ -1190,21 +1221,26 @@ impl BakeAnvilMaterial {
                     }
                     _ => 255,
                 });
-                let metal = unorm8(metal);
+                let metal = unorm8(texel.metallic);
                 baked.metal |= metal != 0;
-                baked.roughness.extend([255, unorm8(o0[3]), metal, 255]);
+                baked.roughness.extend([255, unorm8(texel.roughness), metal, 255]);
                 baked
                     .normal
-                    .extend(normal.map(|c| ((c * 0.5 + 0.5) * 255.0).round() as u8));
+                    .extend(texel.normal.map(|c| ((c * 0.5 + 0.5) * 255.0).round() as u8));
                 baked.normal.push(255);
-                let ao = unorm8(ao);
+                let ao = unorm8(texel.occlusion);
                 occlusion.extend([ao, ao, ao, 255]);
-                baked.plain &= specular == 1.0 && translucency == 0.0 && emission == 0.0;
+                if texel.emission != [0.0; 3] || !emission.is_empty() {
+                    emission.resize(y * n + x, [0.0; 3]);
+                    emission.push(texel.emission);
+                }
+                baked.plain &= texel.specular_occlusion == 1.0 && texel.translucency == 0.0;
             }
         }
         if occlusion.as_chunks::<4>().0.iter().any(|t| t[0] != 255) {
             baked.occlusion = Some(occlusion);
         }
+        (baked.emission, baked.emissive_strength) = encode_emission(&emission)?;
         Ok(baked)
     }
 }
@@ -1341,6 +1377,14 @@ impl Pass for BakeAnvilMaterial {
             let occlusion = baked
                 .occlusion
                 .map(|o| spawn(w, texture(s, o, ColorSpace::Linear, TexRole::Mask, None)));
+            if occlusion.is_some() {
+                log.approximate(&format!("{template}: {}", super::gbuffer::OCCLUSION_APPROXIMATION), 1);
+            }
+            if baked.clipped_base {
+                log.approximate(&format!("{template}: program albedo outside 0 to 1 clipped by RGBA8 PBR base colour; HDR emission is retained separately"), 1);
+            }
+            let emissive = baked.emission
+                .map(|o| spawn(w, texture(s, o, ColorSpace::Srgb, TexRole::Color, None)));
             if baked.assumed_addressing > 0 {
                 log.approximate(
                     &format!(
@@ -1371,9 +1415,9 @@ impl Pass for BakeAnvilMaterial {
                 );
             }
             if !baked.plain {
-                log.omit(
+                log.approximate(
                     &format!(
-                        "{} Materials' specular occlusion, translucency or emission (no place here): left out",
+                        "{} Materials' G-buffer specular occlusion or translucency is non-neutral; core.pbr has no separate terms: left out",
                         template
                     ),
                     1,
@@ -1394,6 +1438,9 @@ impl Pass for BakeAnvilMaterial {
                     occlusion_texture: occlusion.map(sampled),
                     occlusion_strength: 1.0,
                     normal_texture: Some(sampled(normal_map)),
+                    emissive: if emissive.is_some() { [1.0; 3] } else { [0.0; 3] },
+                    emissive_texture: emissive.map(sampled),
+                    emissive_strength: baked.emissive_strength,
                     alpha_mode: baked
                         .cutoff
                         .map_or(AlphaMode::Opaque, |cutoff| AlphaMode::Mask { cutoff }),
@@ -1486,5 +1533,63 @@ mod tests {
     fn the_normal_decode_is_the_octahedral_diamond_decode() {
         let (n, class) = decode_normal([255, 255, 5 << 3 | 1].map(|v| v as f32 / 255.0));
         assert_eq!((n, class), ([0.0, 0.0, 1.0], 5));
+    }
+
+    /// The existing Road program writes HDR emission when its material supplies an emissive mask. Compare the
+    /// material actually installed by the pass with the common surface reading of that same program and inputs.
+    #[test]
+    fn road_lowering_retains_the_surface_readings_hdr_emission() {
+        use crate::components::{BoundTexture, TextureFrom};
+        use super::super::gbuffer::{Reading, fixture};
+        let Some(program) = fixture::program("MAD_Road") else { return; };
+        let shader = primase_shader_exec::ProgramShader::new(primase_dxbc::lift(&program).unwrap()).unwrap();
+        let mut world = World::new();
+        let mut textures = Vec::new();
+        let bytes = [[128, 128, 153, 100], [128, 128, 128, 128]];
+        for (slot, rgba) in bytes.into_iter().enumerate() {
+            let e = world.spawn();
+            world.insert(e, texture(1, rgba.to_vec(), ColorSpace::Linear, TexRole::Mask, None));
+            textures.push(BoundTexture { key: slot as u32, shader_slot: slot as u32, parameter: None,
+                texture: Some(e), from: TextureFrom::Record });
+        }
+        let mut material = AnvilMaterial { index_id: 1, template: None, template_name: Some("MAD_Road".into()),
+            bindings: Vec::new(), values: Vec::new(), texture_set: Vec::new(), textures,
+            defaults: Vec::new(), frame: primase_core::frame::SourceFrame::WORLD, flags: flags(), shaders: None };
+        for &row in ROAD.rows.iter().filter(|&&r| r < 13) {
+            let value = match row { 1 => 0.6, 2 => 8.0, 5 | 10 | 11 => 1.0, 8 => 0.2, 9 => 0.5, _ => 0.0 };
+            material.bindings.push((row, MaterialBinding::Scalar { vec4: row }));
+            material.values.push((row, MaterialValue::Float(value)));
+        }
+        material.bindings.push((13, MaterialBinding::UvTransform { vec4: 13 }));
+        material.values.push((13, MaterialValue::Floats(vec![1.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0])));
+        let mut rows = vec![[0.0; 4]; 16];
+        for (row, value) in material_rows(&material).unwrap() { rows[row as usize] = value; }
+        let sampled = bytes.map(|b| b.map(|v| f32::from(v) / 255.0));
+        let output = fixture::execute(&shader, &rows, &[(75, sampled[0]), (76, sampled[1]), (23, [1.0; 4])]);
+        let expected = Reading::new(shader.interface(), 1).unwrap().read(|target| {
+            output.outputs.get(target).zip(output.output_masks.get(target)).map(|(v, m)| (v.map(f32::from_bits), *m))
+        }).unwrap();
+        assert!(expected.emission.iter().any(|v| *v > 1.0), "fixture must discriminate dropped/clipped emission");
+        let shaders = world.spawn();
+        world.insert(shaders, AnvilShaders { pixel: vec![(0x40_0000, 0)], vertex: Vec::new(), programs: vec![program], feature_node: Vec::new() });
+        material.shaders = Some(shaders);
+        let e = world.spawn(); world.insert(e, material);
+        let pass = BakeAnvilMaterial { size: 2, normal_green: NormalGreen::Up, shader_uv: ShaderUv::TexCoord,
+            mip_bias: 0.0, terrain_ao: 0.5, sun_elevation: 45.0, view_cosine: 0.7,
+            camera_distance: 1_000_000.0, skin_tone: None, unstated_address: UnstatedAddress::Wrap };
+        let mut log = PassLog::default(); pass.run(&mut world, &mut log).unwrap();
+        let pbr = world.get::<PbrMaterial>(e).unwrap_or_else(|| panic!("{log:?}"));
+        let emissive = world.get::<Texture>(pbr.emissive_texture.as_ref().expect("emission map").texture).unwrap();
+        assert_eq!(emissive.color_space, ColorSpace::Srgb);
+        for pixel in emissive.levels[0].as_chunks::<4>().0 {
+            for k in 0..3 {
+                let got = primase_image::srgb8_to_linear(pixel[k]) as f32 * pbr.emissive[k] * pbr.emissive_strength;
+                assert!((got - expected.emission[k]).abs() <= 0.009 * pbr.emissive_strength,
+                    "emission lane {k}: {got}, surface {}", expected.emission[k]);
+            }
+        }
+        let orm = world.get::<Texture>(pbr.metallic_roughness_texture.as_ref().unwrap().texture).unwrap();
+        assert_eq!(orm.levels[0][1], unorm8(expected.roughness));
+        assert_eq!(orm.levels[0][2], unorm8(expected.metallic));
     }
 }

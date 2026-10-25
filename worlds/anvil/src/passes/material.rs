@@ -119,7 +119,7 @@
 //! rows `(su cos t, -su sin t, tu)` and `(sv sin t, sv cos t, tv)` (docs/material-spec.md §12: eleven resident
 //! constant-buffer matrices, each equal to one stored combination). That is `uv' = S R(t) uv + (tu, tv)` on the
 //! shader's own coordinates, `R` core's rotation sense. Lowered only where the notes saw that form: no rotation (any
-//! scales and translation), or a rotation with `su = sv` and no translation, every speed 0. Otherwise the textures are
+//! scales and translation), or a rotation with `su = sv`, every speed 0. Otherwise the textures are
 //! sampled untransformed, each case reported: rotated with unequal scales or with a translation (`S R` against `R S`,
 //! and how a translation joins a rotation, are not shown), a moving UV (the time term is a lead), a binding the
 //! Material leaves unset (its default isn't known), or not 8 floats.
@@ -1119,20 +1119,26 @@ impl Inputs<'_> {
     }
 }
 
-/// A UV property's 8 floats as a transform of the mesh's `TexCoord(0)` (see the module documentation): `None` for
-/// the identity, or why it isn't lowered.
-pub(super) fn uv_transform(f: &[f32], shader_uv: ShaderUv) -> Result<Option<UvTransform>, &'static str> {
-    let &[su, sv, tu, tv, speed_u, speed_v, t, speed_t] = f else {
-        return Err("not 8 floats");
-    };
+/// Static shader rows, shared with the program binding and executor bake: `S R uv + translation` (module §UV).
+pub(super) fn static_uv_rows(f: &[f32]) -> Result<[[f32; 4]; 2], &'static str> {
+    let &[su, sv, tu, tv, speed_u, speed_v, t, speed_t] = f else { return Err("not 8 floats"); };
+    if f.iter().any(|v| !v.is_finite()) { return Err("non-finite UV transform"); }
     if (speed_u, speed_v, speed_t) != (0.0, 0.0, 0.0) {
         return Err("moving (the time term isn't established)");
     }
+    let (sin, cos) = t.sin_cos();
+    Ok([[su * cos, if t == 0.0 { 0.0 } else { -su * sin }, tu, 0.0],
+        [if t == 0.0 { 0.0 } else { sv * sin }, sv * cos, tv, 0.0]])
+}
+
+/// A UV property's eight floats as a transform of the mesh's `TexCoord(0)`: `None` for identity, or a named refusal.
+pub(super) fn uv_transform(f: &[f32], shader_uv: ShaderUv) -> Result<Option<UvTransform>, &'static str> {
+    static_uv_rows(f)?;
+    let &[su, sv, tu, tv, _, _, t, _] = f else {
+        return Err("not 8 floats");
+    };
     if t != 0.0 && su != sv {
-        return Err("rotated with unequal scales (S R against R S not shown)");
-    }
-    if t != 0.0 && (tu, tv) != (0.0, 0.0) {
-        return Err("rotated and translated (not shown)");
+        return Err("rotated with unequal scales: shader S R cannot be represented by core TextureRef's R S; a surface bake is required");
     }
     if (su, sv, tu, tv, t) == (1.0, 1.0, 0.0, 0.0, 0.0) {
         return Ok(None);
@@ -1154,9 +1160,12 @@ pub(super) fn uv_transform(f: &[f32], shader_uv: ShaderUv) -> Result<Option<UvTr
     }))
 }
 
-/// Whether the texture `e`'s TextureMap is sampled as sRGB (its u32 at 25 is 1).
-fn srgb(w: &World, e: Entity) -> bool {
-    w.get::<AnvilTextureMap>(e).is_some_and(|t| t.field_25 == 1)
+/// The same transfer as the program binding: the TextureMap's u32 at 25 where present, otherwise the core texture's.
+pub(super) fn srgb(w: &World, e: Entity) -> bool {
+    w.get::<AnvilTextureMap>(e).map_or_else(
+        || w.get::<Texture>(e).is_some_and(|t| t.color_space == ColorSpace::Srgb),
+        |t| t.field_25 == 1,
+    )
 }
 
 /// A texture made from `source`'s every stored level, each texel by `map` of its sampled channels (that texel's
@@ -1976,27 +1985,27 @@ impl Pass for LowerAnvilMaterial {
                                 1,
                             );
                         }
-                        Some(_) => log.omit(
+                        Some(_) => log.approximate(
                             "Tex1 Materials' vertex-colour factor other than 0 and 1 (1 + f (COLOR0 - 1) isn't a \
                              COLOR_0 product): drawn without it",
                             1,
                         ),
                     }
                     if layout.terrain_blend.is_some_and(|v| i.scalar(v) != 0.0) {
-                        log.omit(
+                        log.approximate(
                             "TerrainBlend Materials' blend toward the terrain's colour near the ground (the engine's \
                              terrain textures): left out",
                             1,
                         );
                     }
                     if layout.translucency.is_some_and(|v| i.scalar(v) != 0.0) {
-                        log.omit(
+                        log.approximate(
                             "Tex1_Wind Materials' translucency (written to the G-buffer as is, not PBR): left out",
                             1,
                         );
                     }
                     if name == "MAD_Tex1_UGE" && i.scalar(8) != 0.0 {
-                        log.omit(
+                        log.approximate(
                             "UGE Materials' Overriden Emissive Scale (read only by the instanced permutations, its \
                              per-instance blend not decoded): left out",
                             1,
@@ -2119,6 +2128,12 @@ impl Pass for LowerAnvilMaterial {
                             1,
                         ),
                     }
+                }
+                if !placeholder_used && pbr.occlusion_texture.is_some() {
+                    log.approximate(&format!("{name}: {}", super::gbuffer::OCCLUSION_APPROXIMATION), 1);
+                }
+                if !placeholder_used && super::resolve_shaders::shading_class(&name).is_none() {
+                    log.approximate(&format!("{name}: formula recipe exists but the resolver's output-class table has no entry; class-dependent Game surface lanes remain Unknown until the program's encoded class is established"), 1);
                 }
                 w.insert(e, pbr);
             }
@@ -2704,6 +2719,98 @@ fn set_normal(w: &mut World, e: Entity, n: NormalConvention) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn fake_without_texturemap_keeps_the_programs_declared_srgb_transfer() {
+        use crate::components::{BoundTexture, TextureFrom};
+        use super::super::gbuffer::{Reading, fixture};
+        let Some(program) = fixture::program("MAD_Fake") else { return; };
+        let shader = primase_shader_exec::ProgramShader::new(primase_dxbc::lift(&program).unwrap()).unwrap();
+        let mut w = World::new();
+        let rgba = [[92, 128, 187, 211], [128, 128, 193, 170]];
+        let mut textures = Vec::new();
+        for (slot, pixel) in rgba.into_iter().enumerate() {
+            let e = w.spawn();
+            w.insert(e, Texture { width: 1, height: 1, format: TexFormat::Rgba8Unorm,
+                levels: vec![pixel.to_vec()], color_space: ColorSpace::Srgb, role: TexRole::Color, normal: None });
+            textures.push(BoundTexture { key: slot as u32, shader_slot: slot as u32, parameter: None,
+                texture: Some(e), from: TextureFrom::Record });
+        }
+        let e = w.spawn();
+        w.insert(e, AnvilMaterial { index_id: 1, template: None, template_name: Some("MAD_Fake".into()),
+            bindings: Vec::new(), values: Vec::new(), texture_set: Vec::new(), textures,
+            defaults: Vec::new(), frame: primase_core::frame::SourceFrame::WORLD,
+            flags: MaterialFlags { blend_mode: 0, alpha_display_mode: 0, alpha_test_value: 0, booleans: [0;35] }, shaders: None });
+        let sampled = rgba.map(|pixel| sampled(pixel, true).map(|v| v as f32));
+        let output = fixture::execute(&shader, &[], &[(75, sampled[0]), (76, sampled[1])]);
+        let expected = Reading::new(shader.interface(), 1).unwrap().read(|target| {
+            output.outputs.get(target).zip(output.output_masks.get(target)).map(|(v, m)| (v.map(f32::from_bits), *m))
+        }).unwrap();
+        let pass = LowerAnvilMaterial { normal_green: NormalGreen::Up, alpha: AlphaChoice::Opaque,
+            shader_uv: ShaderUv::TexCoord, emissive_exposure: 1.0, underground_view: 0.5,
+            fake_river_s: 0.0, decals1_cutout: Decals1Cutout::Decal };
+        pass.run(&mut w, &mut PassLog::default()).unwrap();
+        let pbr = w.get::<PbrMaterial>(e).unwrap();
+        let base = w.get::<Texture>(pbr.base_color_texture.as_ref().unwrap().texture).unwrap();
+        assert_eq!(base.color_space, ColorSpace::Srgb);
+        for k in 0..3 {
+            assert!((srgb8_to_linear(base.levels[0][k]) - f64::from(expected.base[k])).abs() < 1e-6);
+        }
+        let orm = w.get::<Texture>(pbr.metallic_roughness_texture.as_ref().unwrap().texture).unwrap();
+        assert_eq!(orm.levels[0][1], byte(f64::from(expected.roughness)));
+        assert_eq!(orm.levels[0][2], byte(f64::from(expected.metallic)));
+    }
+
+    #[test]
+    fn rotated_translated_tex1_matches_the_fixture_programs_surface_sample() {
+        use crate::components::{BoundTexture, TextureFrom};
+        use primase_core::shader::{ConstantRole, ResourceId};
+        use primase_shader_exec::{Load, Sample, Sampler, Store};
+        use super::super::{gbuffer::{Reading, fixture}, resolve_shaders::material_constants};
+        struct Coordinates;
+        impl Sampler for Coordinates {
+            fn sample(&mut self, r: Sample) -> Result<[f32;4],String> {
+                match r.texture { 75 => Ok([0.5;4]), 76 => Ok([r.uv[0],r.uv[1],0.5,1.0]), 77 => Ok([1.0;4]),
+                    t => Err(format!("unestablished fixture t{t}")) }
+            }
+            fn load(&mut self, _r: Load) -> Result<[u32;4],String> {Err("unexpected load".into())}
+            fn structured(&mut self, _s:u32,_e:u32,_o:u32)->Result<u32,String>{Err("unexpected buffer".into())}
+            fn store(&mut self,_r:Store)->Result<(),String>{Err("unexpected store".into())}
+        }
+        let Some(program) = fixture::program("MAD_Tex1") else { return; };
+        let shader = primase_shader_exec::ProgramShader::new(primase_dxbc::lift(&program).unwrap()).unwrap();
+        let mut w = World::new();
+        let image = white_texture(&mut w);
+        let floats = vec![1.0,1.0,0.1,-0.2,0.0,0.0,0.3,0.0];
+        let material = AnvilMaterial { index_id:1,template:None,template_name:Some("MAD_Tex1".into()),
+            bindings:TEX1.reads.iter().map(|&(r,k)| (k,if r==8 {MaterialBinding::UvTransform{vec4:r}}
+                else {MaterialBinding::Scalar{vec4:r}})).collect(),
+            values:TEX1.reads.iter().map(|&(r,k)|(k,if r==8 {MaterialValue::Floats(floats.clone())}
+                else {MaterialValue::Float(0.0)})).collect(),
+            texture_set:Vec::new(),textures:(0..3).map(|slot|BoundTexture{key:slot,shader_slot:slot,
+                parameter:None,texture:Some(image),from:TextureFrom::Record}).collect(),defaults:Vec::new(),
+            frame:primase_core::frame::SourceFrame::WORLD,flags:MaterialFlags{blend_mode:0,alpha_display_mode:0,
+                alpha_test_value:0,booleans:[0;35]},shaders:None };
+        // Exercise the actual Game binding, rather than supplying the expected UV matrix to the program by hand.
+        let mut rows=vec![[0.0;4];10];
+        for binding in material_constants(&material,ResourceId(0),160,&mut BTreeMap::new()) {
+            if let ConstantRole::Material(words)=binding.role {
+                for (word,bits) in words.into_iter().enumerate(){
+                    let at=binding.offset as usize/4+word;rows[at/4][at%4]=f32::from_bits(bits);
+                }
+            }
+        }
+        let output=fixture::execute_with(&shader,&rows,&mut Coordinates);
+        let expected=Reading::new(shader.interface(),1).unwrap().read(|target|output.outputs.get(target)
+            .zip(output.output_masks.get(target)).map(|(v,m)|(v.map(f32::from_bits),*m))).unwrap();
+        let e=w.spawn();w.insert(e,material);
+        LowerAnvilMaterial { normal_green:NormalGreen::Up,alpha:AlphaChoice::Opaque,shader_uv:ShaderUv::TexCoord,
+            emissive_exposure:1.0,underground_view:0.5,fake_river_s:0.0,decals1_cutout:Decals1Cutout::Decal }
+            .run(&mut w,&mut PassLog::default()).unwrap();
+        let pbr=w.get::<PbrMaterial>(e).unwrap();
+        let uv=pbr.base_color_texture.as_ref().unwrap().transform.expect("static rotated/translated UV").apply([0.25;2]);
+        for k in 0..2 {assert!((uv[k]-expected.base[k]).abs()<1e-6,"{uv:?}, surface {:?}",expected.base);}
+    }
+
     /// Against shader rows the notes read in the world snapshot (docs/material-spec.md §12.2): the translated one as
     /// stored, `(3.25, 0, -1.875 | 0, 1.7, -0.75)`, and a rotated combination (`su = sv = 30`, `t = 2.57`) by the
     /// rows' form. Each lowered transform takes a mesh coordinate to the one whose shader coordinates the rows give.
@@ -2718,6 +2825,10 @@ mod tests {
             (
                 [30.0, 30.0, 0.0, 0.0, 0.0, 0.0, 2.57, 0.0],
                 [[30.0 * c, -30.0 * s, 0.0], [30.0 * s, 30.0 * c, 0.0]],
+            ),
+            (
+                [30.0, 30.0, 0.5, -1.0, 0.0, 0.0, 2.57, 0.0],
+                [[30.0 * c, -30.0 * s, 0.5], [30.0 * s, 30.0 * c, -1.0]],
             ),
         ];
         for (floats, rows) in cases {
@@ -2740,7 +2851,6 @@ mod tests {
         }
         // the forms not seen are refused
         assert!(uv_transform(&[2.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.8727, 0.0], ShaderUv::TexCoord).is_err());
-        assert!(uv_transform(&[1.0, 1.0, 0.5, 0.0, 0.0, 0.0, 0.8727, 0.0], ShaderUv::TexCoord).is_err());
         assert!(uv_transform(&[1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], ShaderUv::TexCoord).is_err());
     }
 

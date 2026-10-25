@@ -1,6 +1,6 @@
 //! Synthetic DDS fixtures assert independent channel values and baked-binding
 //! identity, not merely that lowering ran without an error.
-use primase_core::pbr::{PbrMaterial, TextureRef};
+use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform};
 use primase_core::{ColorSpace, TexFormat, TexRole, Texture, World};
 use primase_fromsoft::{
     flver, materials,
@@ -369,11 +369,62 @@ fn selected_normal_identity_controls_both_transforms() {
     let orm = p.metallic_roughness_texture.unwrap();
     assert_eq!(normal.transform.unwrap().scale, [2., 1.]);
     assert_eq!(orm.transform, normal.transform);
-    // Metal sampled at U=.125/.375: wrapped bilinear values are both .25.
+    // The normal map's scale 2 is about its centre (offset -.5): its texels' centres U=.25/.75 are the mesh's U=.25/.625
+    // less the offset, so the metal (scale 1) is sampled at U=.375/.625: wrapped bilinear values .25 and .75.
+    assert_eq!(normal.transform.unwrap().offset, [-0.5, 0.]);
     assert_eq!(
         world.get::<Texture>(orm.texture).unwrap().levels[0],
-        [255, 255, 64, 255, 255, 13, 64, 255]
+        [255, 255, 64, 255, 255, 13, 191, 255]
     );
+}
+
+/// A map is tiled as the material's programs tile it: the row of the engine's tiling scale, each axis about the
+/// texture's centre (`uv * scale + (1 - scale) / 2`), from the scale the FLVER stores, else the one the MTD states for
+/// the slot. The base map is tiled the same way (it was left untiled), and a geometry pass's applied tiling is taken out
+/// of the scale, not of the offset.
+#[test]
+fn maps_are_tiled_about_their_centre_by_the_flver_scale_else_the_stored_one() {
+    let bytes = BTreeMap::from([
+        ("a".into(), payload(&[80, 90, 100, 255])),
+        ("n".into(), payload(&[128, 128, 255, 255])),
+        ("m".into(), payload(&[0, 0, 0, 255])),
+    ]);
+    let lower = |applied: Option<[f32; 2]>| {
+        let mut world = World::new();
+        let e = world.spawn();
+        let mut m = source("MetallicTex");
+        // the base map: the FLVER stores 4 by 2; the normal map: it stores none, the MTD states 3 by 1
+        m.bindings.get_mut("Texture2D_0_AlbedoMap").unwrap().scale = [4., 2.];
+        m.definition
+            .as_mut()
+            .and_then(|d| d.mtd_mut())
+            .unwrap()
+            .textures[1]
+            .extra = vec![3., 1.];
+        world.insert(e, m);
+        if let Some(applied) = applied {
+            world.insert(e, primase_fromsoft::sekiro::passes::UvTiling(applied));
+        }
+        pbr::lower(&mut world, &bytes, None, WATER).unwrap();
+        world.get::<PbrMaterial>(e).unwrap().clone()
+    };
+    let p = lower(None);
+    assert_eq!(
+        p.base_color_texture.unwrap().transform,
+        Some(UvTransform {
+            scale: [4., 2.],
+            offset: [-1.5, -0.5],
+            ..UvTransform::IDENTITY
+        })
+    );
+    let normal = p.normal_texture.unwrap().transform.unwrap();
+    assert_eq!((normal.scale, normal.offset), ([3., 1.], [-1., 0.]));
+    // the geometry already multiplied the coordinates by the base map's 4 by 2: the scale less that, the offset as it was
+    let p = lower(Some([4., 2.]));
+    let base = p.base_color_texture.unwrap().transform.unwrap();
+    assert_eq!((base.scale, base.offset), ([1., 1.], [-1.5, -0.5]));
+    let normal = p.normal_texture.unwrap().transform.unwrap();
+    assert_eq!((normal.scale, normal.offset), ([0.75, 0.5], [-1., 0.]));
 }
 
 #[test]

@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 mod bake;
+mod gbuffer;
 mod surface;
 pub use surface::{BakeAnvilSurface, SurfaceSediments, BAKE_ANVIL_SURFACE};
 mod charts;

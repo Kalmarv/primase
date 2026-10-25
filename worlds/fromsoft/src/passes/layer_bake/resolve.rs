@@ -1417,8 +1417,8 @@ fn normalised(reason: &str) -> String {
 /// [`crate::metaparam::Texture::slot`] is its register, not that number: Sekiro's `Character_AMSN_[DetailBlend]`
 /// metaparam records `Texture2D_7_AlbedoMap` (the base albedo, register 1) in group_1 and `Texture2D_2_AlbedoMap` (a
 /// detail fabric, register 7) in group_3, and finding the record by its slot swapped their tilings.
-fn uv_group<'a>(metaparam: Option<&'a Metaparam>, resource: &Resource) -> Option<&'a str> {
-    let n = texture_slot(resource)?;
+fn uv_group(metaparam: Option<&Metaparam>, n: Option<u32>) -> Option<&str> {
+    let n = n?;
     metaparam?
         .textures
         .iter()
@@ -1462,11 +1462,23 @@ fn tiling(
     resource: &Resource,
     binding: Option<&Binding>,
 ) -> [f32; 4] {
-    let n = texture_slot(resource);
-    let flver = binding.map(|b| b.scale).filter(|s| *s != [1.; 2]);
+    slot_tiling(material, metaparam, texture_slot(resource), binding.map(|b| b.scale))
+}
+
+/// [`tiling`] for the texture slot `Texture2D_<n>` (`n`: [`crate::metaparam::texture_number`] of the binding's key or
+/// the resource's name) with `flver` the scale the FLVER's texture of the slot stores: the one rule, for a lowering that
+/// draws the material without its program (the texture transform it gives a map is this row's: the program samples
+/// `uv * scale + offset`).
+pub(crate) fn slot_tiling(
+    material: &MaterialView<'_>,
+    metaparam: Option<&Metaparam>,
+    n: Option<u32>,
+    flver: Option<[f32; 2]>,
+) -> [f32; 4] {
+    let flver = flver.filter(|s| *s != [1.; 2]);
     let stored = || material.definition.stored_scale(n?);
     let group = || {
-        let name = format!("{}_CommonUV-UVParam", uv_group(metaparam, resource)?);
+        let name = format!("{}_CommonUV-UVParam", uv_group(metaparam, n)?);
         match material.definition.parameter(&name) {
             Some(ParameterValue::Float(v)) if v.len() >= 2 => Some([v[0], v[1]]),
             _ => metaparam?
@@ -1497,7 +1509,7 @@ fn default_texture(
 
 /// A tiling scale as both games write it: each axis scaled about the texture's centre, `(u, v, (1 - u) / 2,
 /// (1 - v) / 2)` (the program samples `uv * scale + offset`).
-fn centred([u, v]: [f32; 2]) -> [f32; 4] {
+pub(crate) fn centred([u, v]: [f32; 2]) -> [f32; 4] {
     [u, v, (1. - u) / 2., (1. - v) / 2.]
 }
 

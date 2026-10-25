@@ -732,6 +732,47 @@ banks other than 0, the light-probe pattern (if `FILES` names one), the decoding
 regions' type data (`data_lengths`), the Elden Ring far tiles, the Elden Ring event scripts, and object clips lowered
 onto placements.
 
+## Shaded vs Game drift
+
+What the Shaded path takes from a lowered material (`lower-fromsoft-materials`, `pbr.rs`, then `bake-fromsoft-materials` and
+`bake-fromsoft-layers` where the lab runs them) against what the G-buffer program's outputs compute from the same
+parameters and textures (`Game::gbuffer`, read as a `Surface` by `core/src/shader/surface.rs`). Written from the code;
+nothing here was run. **Kind**: *missing* (the program has the term, the lowering none), *arithmetic* (both have it,
+the formula differs), *model* (the two do not share a lighting model), *agree* (same formula, a test holds it), *noticed*
+(an approximation notice names it). The lab's Shaded view runs the program bake first (`surface_bakes`), so the rows
+"unbaked" below are what Shaded shows where the bake refuses a material (its refusal reason is the notice
+`program bake refused; lowered material retained`) and what every non-lab consumer of the lowering gets.
+
+| Family | Output | Shaded's source | The program's source | Kind | Status |
+|---|---|---|---|---|---|
+| Sekiro simple (`MetallicTex`, `MetallicValue`, `MetallicValue_MeshDecal`), unbaked | base colour | the preview's albedo slot (slot 8, else the lowest), sRGB | target 2 `rgb` (the program's blend of its slots and colour constants) | missing: material colour constants and the slots blended over it are not applied | open; the bake closes it where it runs |
+| same | normal | normal map as stored, `normals::SOURCE` (basis observed for the simple families by `consumer_basis`) | target 0 `xyz`, biased world normal (0.50048876) | agree on the basis; normal-intensity parameters are read by neither lowering path | agree; intensity unverified |
+| same | roughness | `1 - 0.95 sqrt(gloss)`, gloss = the normal map's blue (`pbr::roughness`) | `Gloss(square_of(0.95))` of target 1 `x`, the same value | agree (`gloss_matches_deferred_ggx_alpha`, `surface.rs` tests); the per-light factor `k` is omitted | noticed |
+| same | metallic / F0 | metal map R (or GXMD 237 for `MetallicValue*`), else 0 counted | no metallic output; target 3 `rgb` is F0 (specular workflow), stored as its square root | model: metallic workflow against specular workflow; F0 0.03 represented by glTF 0.04 (the 0.03 is traced for `M[Multiple]` only) | open, noticed |
+| same | emission | none (`source emission without proven radiance`) | target 4 `rgb` | missing | open |
+| same | occlusion | none | no output has an occlusion role in either game | agree | closed |
+| same | tiling / UV | **was**: the FLVER's scale about the origin, the base map untiled when `uv-tiling=keep` | the `FC_TextureTilingScale` row: the FLVER's scale, else the MTD's stored one, else the uv group's, each axis about the texture's centre (`layer_bake::resolve::slot_tiling`) | arithmetic (offset `(1 - s) / 2`; stored and uv-group scales absent; base map) | **fixed**: `pbr.rs` takes every map's transform from the row; tests `maps_are_tiled_about_their_centre_by_the_flver_scale_else_the_stored_one`, `selected_normal_identity_controls_both_transforms`. The rule reproduces 301 of 440 captured Sekiro contents (its own doc), so a residual stays |
+| same | alpha cutout | `Mask` at the bound program's `AlphaReference` (`alpha_cut`); a hard cutoff for dithered and transformed tests | the program's discard | agree; dithered and transformed counted (`DITHERED_ALPHA_CUT`, `TRANSFORMED_ALPHA_CUT`) | noticed |
+| same | alpha blend | `Blend` for classes `alpha`, `additive`, `decal`, `water`; additive also as emission | the render state's blend: `g_BlendMode` 2 stated, 4 and the others unstated (`blend_unstated`) | model for additive and the unstated modes | open |
+| Sekiro layered (`M[Multiple]`, `M[MultipleGround]`, `_Emissive`), baked | base, normal, gloss, emission | the program evaluated over UV0 (`bake-fromsoft-layers`) with the same decodings | same | agree; static flat tangent frame, white vertex colour, no per-light gloss factor, UNORM8 | noticed |
+| same | F0 | **was**: metallic 0 with the notice "F0 0.03 mapped to 0.04" | G-buffer 3 `0x3e315cac` squared (0.03), traced per program | arithmetic | **fixed** for traced programs: `specularFactor` = F0 / 0.04 (`Reflectance::specular`; test `a_traced_dielectric_states_the_programs_f0_as_the_specular_factor`). Untraced programs (`M[Multiple]` switch 18, switches outside 0 to 33, a non-uniform output) keep metallic 0, counted |
+| Sekiro other MTD shaders (`GXFlver_*`, `M[Translucency]`, `M[AMSN]`, character, fur, …), unbaked | roughness, metallic | roughness 1 (the default), metallic 0 (`unclassified shader PBR`, now naming the default) | target 1 `x` gloss, target 3 F0 | missing | open; noticed |
+| Elden Ring material binaries, unbaked | base colour | the slot the program makes the albedo of (`coverage::Reader::base`); the slots blended over it left out; the lowest layer when no one is the base | target 2 `rgb` | missing (noticed per program) | open; the bake closes it |
+| same | roughness, metallic | roughness 1, metallic 0 (every Elden shader is `unclassified`) | target 1 `x` metallic, `y` gloss (`Game::gbuffer`) | missing | open; noticed |
+| same | normal | normal map as stored, basis assumed (`consumer_basis` refuses every Elden shader name: counted) | target 0 `xyz` | arithmetic unverified | open; noticed |
+| same | tiling / UV | **was**: `Binding.scale`, which is the FLVER's and is 1 for every Elden map material (`sat_field_census`), so the sampler's stored scale (153 captured rows) and the uv group's (425) were dropped | the same row as Sekiro's (rule 84c6e0f1: FLVER, stored, uv group, centred) | arithmetic | **fixed** with the Sekiro row: the lowering reads the row through the shader bundle's metaparam |
+| same | alpha cutout | the slot whose alpha reaches the discard, on the UV set the program samples it with; the vertex alpha where read | same | agree; the other terms of the discard are left out, one notice per term | noticed |
+| same | emission, occlusion | none | targets 3 and 4 are read by no lighting program: no role | agree | closed |
+| forward materials (`g_BlendMode` 2), both games | all | the lowered material (texture alpha) | the forward program's finished colour (role `Colour`), engine textures bound at zero | model: the bake needs an albedo output and refuses these | open |
+| both games, baked by `bake-fromsoft-materials` | alpha | the previous base texture's alpha at UV0 times the base alpha | the program's discard and blend | arithmetic for a program whose alpha is not that texture's | noticed (`program still discards texels with alpha test disabled` refuses) |
+| both games | vertex colour | Elden Ring material binaries: ignored unless the alpha test reads it; Sekiro: kept only for the layered programs that read it | read by the programs that use it (blend weights, occlusion) | missing for the others | open; noticed |
+
+Open rows after this round: base colour and emission of unbaked Sekiro simple materials; the F0 of the simple shaders and
+the untraced layered programs; roughness and metallic of the unclassified and Elden Ring shaders (unbaked); Elden Ring's
+normal basis; additive and unstated blend modes; forward materials; vertex colours; the tiling rule's own residual (130
+Sekiro contents it does not reproduce); and the bake's static frame. The first four close by running the program, which
+the lab's Shaded view does; they remain for any consumer that takes the lowering alone.
+
 ## Consumer normal-map frame
 
 Representative G-buffer pixel shaders for 20 available scene shader families

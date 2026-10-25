@@ -20,7 +20,8 @@
 //!   properties at the vec4 it states (a scalar its `.x`, a vector its four, a UV transform the two rows
 //!   `(su cos t, -su sin t, tu, 0)` and `(sv sin t, sv cos t, tv, 0)` where the speeds are 0, as the words of the
 //!   Material's property, else the template's default for the binding). A property neither sets, and a UV transform
-//!   that moves or rotates (the time term and the product order are not established), is `Unknown` with the reason.
+//!   that moves (the time term is not established), is `Unknown` with the reason. Static rotation uses the same
+//!   `S R uv + translation` rows as the material lowering (material-spec §12.2).
 //!   The rows of `cb3` no binding covers are `Unknown`. The other constant buffers (`cb0` per frame, `cb1` per view,
 //!   `cb2` per draw) are the engine's: the program is lifted and only the lanes it reads are bound
 //!   ([`primase_shader::WordsRead`]: the words its outputs, discards and writes are made of; a program reads a
@@ -318,19 +319,10 @@ pub fn material_constants(
             MaterialBinding::UvTransform { vec4 } => {
                 let role = match value(key, binding) {
                     Some(MaterialValue::Floats(f)) => match f.as_slice() {
-                        &[su, sv, tu, tv, speed_u, speed_v, t, speed_t] => {
-                            if (speed_u, speed_v, speed_t) != (0.0, 0.0, 0.0) {
-                                unknown(
-                                    "a UV transform that moves: its time term is not established",
-                                    counts,
-                                )
-                            } else if t != 0.0 {
-                                unknown(
-                                    "a UV transform that rotates: its product order is not established",
-                                    counts,
-                                )
-                            } else {
-                                ConstantRole::Material(bits(&[su, 0.0, tu, 0.0, 0.0, sv, tv, 0.0]))
+                        f if f.len() == 8 => {
+                            match super::material::static_uv_rows(f) {
+                                Ok(rows) => ConstantRole::Material(bits(rows.as_flattened())),
+                                Err(why) => unknown(why, counts),
                             }
                         }
                         _ => unknown("a UV transform property that is not eight floats", counts),
@@ -1133,7 +1125,7 @@ mod tests {
         );
     }
 
-    /// A static UV transform's rows, and the two forms whose rows are not established.
+    /// Static translation/rotation use S R; a moving or malformed property retains its named refusal.
     #[test]
     fn uv_transform_rows_are_exact_only_where_the_notes_show_them() {
         let transform = |floats: Vec<f32>| {
@@ -1151,9 +1143,12 @@ mod tests {
             transform(vec![2.0, 3.0, 0.5, -1.0, 0.0, 0.0, 0.0, 0.0]),
             ConstantRole::Material(bits(&[2.0, 0.0, 0.5, 0.0, 0.0, 3.0, -1.0, 0.0]))
         );
+        let (s, c) = 0.3f32.sin_cos();
+        assert_eq!(transform(vec![2.0, 3.0, 0.5, -1.0, 0.0, 0.0, 0.3, 0.0]),
+            ConstantRole::Material(bits(&[2.0*c, -2.0*s, 0.5, 0.0, 3.0*s, 3.0*c, -1.0, 0.0])));
         for moving in [
             vec![1.0, 1.0, 0.0, 0.0, 0.1, 0.0, 0.0, 0.0],
-            vec![1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.3, 0.0],
+            vec![1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.3, 0.1],
             vec![1.0, 1.0, 0.0],
         ] {
             assert!(matches!(transform(moving), ConstantRole::Unknown { .. }));
@@ -1227,7 +1222,7 @@ mod tests {
 
 /// The render target a pixel output writes: a lifted program states it as the system value `SV_Target<n>`, a
 /// program described by semantic as the label's index; any other system value is not a colour output.
-fn target_of(v: &Varying) -> Option<u32> {
+pub(super) fn target_of(v: &Varying) -> Option<u32> {
     match v.system {
         None => Some(v.label.index),
         Some(SystemValue::Target(n)) => Some(n),
@@ -1238,7 +1233,7 @@ fn target_of(v: &Varying) -> Option<u32> {
 /// The G-buffer roles of a pixel program's targets: target 0 is albedo (rgb) and roughness (a, opaque materials
 /// only), target 1 the unnamed rgb and the metallic or occlusion lane of the shading class; any other lane is Unknown
 /// with what the notes (material-spec §3, §15.4) show of it.
-fn output_bindings(interface: &Interface, class: Option<u8>, opaque: bool) -> Vec<OutputBinding> {
+pub(super) fn output_bindings(interface: &Interface, class: Option<u8>, opaque: bool) -> Vec<OutputBinding> {
     let mut outputs = Vec::new();
     for (v, target) in interface.outputs.iter().filter_map(|v| Some((v, target_of(v)?))) {
         let full: u8 = (1u16 << v.value.width).saturating_sub(1) as u8;
