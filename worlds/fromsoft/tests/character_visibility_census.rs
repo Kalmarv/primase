@@ -1,6 +1,7 @@
 //! Source visibility coverage for every dictionary-named character in both games. No HKX tracks,
 //! meshes, textures or shaders are decoded. A zero counts events, not a claim about bone-scale animation.
 use std::collections::BTreeSet;
+use primase_core::convert::Reader;
 use primase_fromsoft::{Binder, Game, Install, Keys, NameDictionary, dcx::Decoder, sekiro, tae::{Tae,clip_animation_id}};
 use primase_testdata::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use serde_json::json;
@@ -15,18 +16,21 @@ fn every_sekiro_and_elden_character_reports_its_clip_visibility_event_coverage()
         let (Some(root),Some(names))=(install(data),oracle(OracleSet::Uxm,data,"dictionary.txt")) else {continue;};
         let key=match game {Game::Sekiro=>Keys::published(game).ok_or("published keys absent")?,
             Game::EldenRing=>{let Some(folder)=keys(data) else {continue;};Keys::from_folder(folder,game)?}};
-        let install=Install::new(root,game,key);let archive=install.open()?;let dictionary=NameDictionary::read_for(names,game)?;
+        let install=Install::new(root,game,key);let archive=std::sync::Arc::new(install.open()?);let dictionary=NameDictionary::read_for(names,game)?;
         let characters:BTreeSet<_>=dictionary.names.values().flatten().filter_map(|name| {
             let id=name.strip_prefix("/chr/")?.strip_suffix(".chrbnd.dcx")?;
             (id.len()==5 && id.starts_with('c') && id[1..].bytes().all(|b|b.is_ascii_digit()) && archive.contains(name)).then(||id.to_owned())
         }).collect();
         for character in &characters {
-            let Some(listing)=sekiro::list_clips(&archive,&decoder,character)? else {
+            let mut reader=sekiro::CharacterReader::animations_in(install.clone(),character,decoder,archive.clone())?;
+            let (plans,_)=reader.read().map_err(|error|error.to_string())?;
+            let clips:Vec<_>=plans.iter::<sekiro::ClipSource>().map(|(_,source)|source).collect();
+            if !archive.contains(&format!("/chr/{character}.anibnd.dcx")) {
                 println!("FS_CHARACTER_VISIBILITY={}",json!({"game":game.name(),"character":character,"clips":0,"visibility_clips":0,"reason":"no animation binder"}));continue;
-            };
+            }
             let mut records=std::collections::BTreeMap::new();
-            for set in std::iter::once(character).chain(listing.companions.iter()) {
-                let binder=Binder::read(&archive.read(&format!("/chr/{set}.anibnd.dcx"),&decoder)?,&decoder)?;
+            for binder in common::clip_binders(&plans) {
+                let binder=Binder::read(&archive.read(&binder,&decoder)?,&decoder)?;
                 for file in &binder.files {
                     let name=file.name.as_deref().unwrap_or("");
                     if !name.to_ascii_lowercase().ends_with(".tae") {continue;}
@@ -39,14 +43,14 @@ fn every_sekiro_and_elden_character_reports_its_clip_visibility_event_coverage()
                 }
             }
             let mut matched=0;let mut visibility=0;let mut events=0;let mut refused=0;let mut kinds=std::collections::BTreeMap::new();
-            for clip in &listing.clips {
+            for clip in &clips {
                 let Some(timeline)=clip_animation_id(&clip.name).and_then(|id|records.get(&id)) else {continue;};
                 matched+=1;
                 if !timeline.changes.is_empty() || !timeline.refusals.is_empty() {visibility+=1;}
                 events+=timeline.changes.len();refused+=timeline.refusals.len();
                 for change in &timeline.changes {*kinds.entry(change.kind).or_insert(0usize)+=1;}
             }
-            println!("FS_CHARACTER_VISIBILITY={}",json!({"game":game.name(),"character":character,"clips":listing.clips.len(),
+            println!("FS_CHARACTER_VISIBILITY={}",json!({"game":game.name(),"character":character,"clips":clips.len(),
                 "clips_with_tae":matched,"visibility_clips":visibility,"visibility_events":events,"by_kind":kinds,"refused_records":refused,
                 "scope":"TAE233 latched assignments and711/713 intervals; bone-scale motion not decoded in this census"}));
         }

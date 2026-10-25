@@ -15,6 +15,7 @@
 //!
 //! Runs where the install, its keys and the Oodle library are configured; otherwise it does nothing.
 use primase_core::{Skeleton, Sockets, World};
+use primase_core::convert::Reader;
 use primase_fromsoft::sekiro::character_data::{Cloth, Dummies, NpcStatRows};
 use primase_fromsoft::sekiro::{self, CharacterOptions};
 use primase_fromsoft::tae::Tae;
@@ -24,8 +25,10 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 mod common;
 
 fn census(game: Game, install: &Install, decoder: &Decoder<'_>, ids: &[&str]) -> Result<()> {
-    let archive = install.open()?;
+    let archive = std::sync::Arc::new(install.open()?);
     for id in ids {
+        let mut reader=sekiro::CharacterReader::animations_in(install.clone(),id,*decoder,archive.clone())?;
+        let (plans,_)=reader.read().map_err(|error|error.to_string())?;
         let mut world = World::default();
         let options = CharacterOptions {
             animations: Some((*id).to_owned()),
@@ -72,9 +75,8 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>, ids: &[&str]) ->
             {
                 if let Ok(tae) = Tae::read(&decoder.decode_if_dcx(&f.bytes)?) {
                     let numbers: Vec<i64> = tae.animations.iter().take(10).map(|a| a.id).collect();
-                    let clips = sekiro::clip_names(&archive, decoder, id)?
-                        .unwrap_or_default()
-                        .into_iter()
+                    let clips = plans.iter::<sekiro::ClipSource>()
+                        .map(|(_,source)|source.name.clone())
                         .take(10)
                         .collect::<Vec<_>>();
                     println!(

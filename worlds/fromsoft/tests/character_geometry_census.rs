@@ -2,6 +2,7 @@
 //! Reads FLVERs only, never textures, shader bakes or animation tracks. This is source geometry coverage,
 //! not a claim that every material will lower or a rendered draw count. Patch/archive lookup uses Install's policy.
 use std::collections::BTreeSet;
+use primase_core::convert::Reader;
 use primase_fromsoft::{Game, Install, Keys, NameDictionary, dcx::Decoder, sekiro};
 use primase_testdata::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use serde_json::json;
@@ -20,7 +21,7 @@ fn every_character_has_source_geometry_or_a_named_empty_reason() -> Result<()> {
             Game::EldenRing => { let Some(folder) = keys(data) else { continue; }; Keys::from_folder(folder, game)? }
         };
         let install = Install::new(root, game, key);
-        let archive = install.open()?;
+        let archive = std::sync::Arc::new(install.open()?);
         let dictionary = NameDictionary::read_for(names, game)?;
         let placements = sekiro::npc_placements(&archive, &decoder, &dictionary)?;
         let models: BTreeSet<_> = dictionary.names.values().flatten().filter_map(|name| {
@@ -30,10 +31,14 @@ fn every_character_has_source_geometry_or_a_named_empty_reason() -> Result<()> {
         }).collect();
         let mut empty = 0usize;
         for model in &models {
-            if let Some(clips) = sekiro::list_clips(&archive, &decoder, model)? {
+            let mut reader=sekiro::CharacterReader::animations_in(install.clone(),model,decoder,archive.clone())?;
+            let (plans,_)=reader.read().map_err(|error|error.to_string())?;
+            let clips:Vec<_>=plans.iter::<sekiro::ClipSource>().map(|(_,source)|source).collect();
+            if archive.contains(&format!("/chr/{model}.anibnd.dcx")) {
                 println!("FS_CHARACTER_CLIPS={}", json!({"game": game.name(), "character": model,
-                    "listed": clips.clips.len(), "decoded": 0, "duration_known": clips.clips.iter().filter(|c| c.duration.is_some()).count(),
-                    "companions": clips.companions, "first_keys": clips.clips.iter().take(3).map(|c| &c.key).collect::<Vec<_>>()}));
+                    "listed": clips.len(), "decoded": 0, "duration_known": clips.iter().filter(|c| c.duration.is_some()).count(),
+                    "animation_binders": common::clip_binders(&plans),
+                    "first_keys": clips.iter().take(3).map(|c| &c.key).collect::<Vec<_>>()}));
             } else {
                 println!("FS_CHARACTER_CLIPS={}", json!({"game": game.name(), "character": model,
                     "listed": 0, "decoded": 0, "reason": "no character animation binder"}));

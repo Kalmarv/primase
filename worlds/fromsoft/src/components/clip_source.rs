@@ -3,20 +3,6 @@ use primase_core::{ClipKey, Component, Entity, Geometry, JsonError, Linear, Worl
 use serde::Serialize;
 use serde_json::Value;
 
-/// Transitional name-only listing for consumers migrating to plan entities. It holds
-/// no decoder recipe and is not published by CharacterReader. Removed with that API
-/// once consumers query Role::Clip asset members directly.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
-pub struct ClipListing {
-    pub character: String,
-    pub clips: Vec<ClipSource>,
-    pub companions: Vec<String>,
-}
-impl primase_core::Resource for ClipListing {
-    const NAME:&'static str="fromsoft.clip_listing";
-    fn to_json(&self)->Result<Option<Value>,JsonError> {primase_core::json::to_value(self).map(Some)}
-}
-
 /// `fromsoft.clip_source` on each clip plan entity. Keys are opaque to consumers;
 /// the reader validates them against the authored binder listing before loading.
 /// BND headers do not state duration, so it normally remains unknown until HKX load.

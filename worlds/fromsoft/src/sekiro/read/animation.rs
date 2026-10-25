@@ -32,6 +32,7 @@
 //! Ring's.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use primase_core::{Entity, Name, Origin, Provenance, World};
 use primase_havok::animation::{Container, Skeleton, container};
@@ -42,7 +43,24 @@ use crate::sekiro::character_data::ClipEvents;
 use crate::tae::{self, Tae};
 use crate::{Archive, Binder, Result, dcx::Decoder};
 
-pub use crate::components::clip_source::{ClipListing, ClipSource};
+pub use crate::components::clip_source::ClipSource;
+
+/// Reader-private binder index. Viewers use the published asset members, never
+/// a parallel World resource or a second public listing/decode interface.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct ClipListing {
+    character: String,
+    clips: Vec<ClipSource>,
+    companions: Vec<String>,
+}
+
+fn metadata_binder(binder:&Binder)->Binder {
+    Binder{version:binder.version,format:binder.format,files:binder.files.iter()
+        .filter(|file|file.name.as_deref().is_none_or(|name| {
+            let leaf=file_name(name);
+            !leaf.ends_with(".hkx") || stem(name)=="skeleton"
+        })).cloned().collect()}
+}
 
 fn list_members(out: &mut ClipListing, set: &str, binder: &Binder) {
     for (member_index,file) in binder.files.iter().enumerate() {
@@ -57,35 +75,6 @@ fn list_members(out: &mut ClipListing, set: &str, binder: &Binder) {
     }
 }
 
-/// List all clip identities without parsing any HKX container or spline. Companion binders are visited
-/// sequentially rather than retained together. Unsupported animation encodings remain listed until chosen.
-/// Transitional API: list_clips_into_world replaces it; this wrapper is removed in phase 3
-/// when the lab consumes clip plan entities instead of fromsoft.clip_listing.
-pub fn list_clips(archive: &Archive, decoder: &Decoder<'_>, id: &str) -> Result<Option<ClipListing>> {
-    discover_clips(archive,decoder,id)
-}
-
-fn discover_clips(archive: &Archive, decoder: &Decoder<'_>, id: &str) -> Result<Option<ClipListing>> {
-    let path = binder_path(id);
-    if !archive.contains(&path) { return Ok(None); }
-    let main = Binder::read(&archive.read(&path, decoder)?, decoder)?;
-    let named = companions(archive, id, &main);
-    let mut out = ClipListing { character: id.into(), companions: named.clone(), clips: Vec::new() };
-    list_members(&mut out, id, &main);
-    drop(main);
-    for set in named {
-        let binder = Binder::read(&archive.read(&binder_path(&set), decoder)?, decoder)?;
-        list_members(&mut out, &set, &binder);
-    }
-    Ok(Some(out))
-}
-
-/// Publish one plan entity per listed clip, referenced by an animations asset.
-/// No HKX tracks are decoded. The entity, key and descriptor survive Reader::load.
-pub fn list_clips_into_world(archive:&Archive,decoder:&Decoder<'_>,id:&str,world:&mut World)->Result<Option<Entity>> {
-    let Some(listing)=discover_clips(archive,decoder,id)? else {return Ok(None)};
-    publish_listing(&listing,world).map(Some)
-}
 
 fn publish_listing(listing:&ClipListing,world:&mut World)->Result<Entity> {
     // Validate all known lengths before spawning any entity.
@@ -105,6 +94,10 @@ fn publish_listing(listing:&ClipListing,world:&mut World)->Result<Entity> {
         members.push((entity,primase_core::Role::Clip));
     }
     let root=world.spawn();world.insert(root,Name(format!("{} animations",listing.character)));
+    // Include binders with no clips: a census must still see their event records.
+    let mut provenance=Provenance::new(Origin::new(None,&binder_path(&listing.character),None));
+    for set in &listing.companions {provenance.merge(&Provenance::new(Origin::new(None,&binder_path(set),None)));}
+    world.insert(root,provenance);
     world.insert(root,primase_core::Asset{members});Ok(root)
 }
 
@@ -113,21 +106,39 @@ fn publish_listing(listing:&ClipListing,world:&mut World)->Result<Entity> {
 /// the chosen clip and the skeleton, compendium and event members it needs.
 #[derive(Debug, Default)]
 pub(super) struct ClipReader {
-    archive: Option<Archive>,
+    archive: Option<Arc<Archive>>,
     binders: BTreeMap<String, Binder>,
     listings: BTreeMap<String, ClipListing>,
+    loaded_binders: std::collections::BTreeSet<String>,
+    event_records: BTreeMap<(String,String),Vec<i64>>,
+    metadata: BTreeMap<String,std::result::Result<CachedMetadata,String>>,
+}
+#[derive(Debug)]
+struct CachedMetadata {
+    compendium:Option<Compendium>,
+    skeletons:Vec<Skeleton>,
+    events:Vec<(String,Arc<Tae>)>,
+    report:AnimationReport,
 }
 impl ClipReader {
+    pub(super) fn with_archive(archive:Arc<Archive>)->Self {Self{archive:Some(archive),..Default::default()}}
+    #[cfg(test)]
+    pub(super) fn test_binder(id:&str,binder:Binder)->Self {
+        let mut listing=ClipListing{character:id.into(),..Default::default()};
+        list_members(&mut listing,id,&binder);
+        Self{archive:Some(Arc::new(Archive::empty(crate::Game::Sekiro))),binders:BTreeMap::from([(binder_path(id),binder)]),
+            listings:BTreeMap::from([(id.into(),listing)]),..Default::default()}
+    }
     fn binder(&mut self,install:&crate::Install,decoder:&Decoder<'_>,path:&str)->Result<()> {
         if self.binders.contains_key(path) {return Ok(())}
-        if self.archive.is_none() {self.archive=Some(install.open()?);}
+        if self.archive.is_none() {self.archive=Some(Arc::new(install.open()?));}
         let archive=self.archive.as_ref().expect("archive opened above");
         let binder=Binder::read(&archive.read(path,decoder)?,decoder)?;
         self.binders.insert(path.into(),binder);Ok(())
     }
     pub(super) fn listing(&mut self,install:&crate::Install,decoder:&Decoder<'_>,id:&str)->Result<Option<ClipListing>> {
         if let Some(listing)=self.listings.get(id) {return Ok(Some(listing.clone()))}
-        if self.archive.is_none() {self.archive=Some(install.open()?);}
+        if self.archive.is_none() {self.archive=Some(Arc::new(install.open()?));}
         let path=binder_path(id);
         if !self.archive.as_ref().expect("archive opened above").contains(&path) {return Ok(None)}
         self.binder(install,decoder,&path)?;
@@ -152,6 +163,41 @@ impl ClipReader {
         }
         publish_listing(&listing,world).map(Some)
     }
+
+    /// Parsed skeleton/TAE/compendium metadata is private to this reader. Roots
+    /// share the parsed event files; only their chosen HKX member is parsed anew.
+    fn held(&mut self,path:&str,binder_name:&str,member:Option<usize>,markers:&[String],
+        decoder:&Decoder<'_>,report:&mut AnimationReport)->Result<Held> {
+        if !self.metadata.contains_key(path) {
+            let parsed=(||->Result<CachedMetadata>{
+                let binder=&self.binders[path];
+                let compendium=read_compendium(binder,decoder)?;
+                let mut metadata_report=AnimationReport::default();
+                let held=hold_with_compendium(&metadata_binder(binder),binder_name,decoder,markers,
+                    &mut metadata_report,compendium.as_ref())?;
+                for unread in &mut metadata_report.unread {*unread=format!("{path}!{unread}");}
+                if !held.animations.is_empty() {
+                    refuse(&mut metadata_report,"skeleton.hkx holds animation data rather than a skeleton","skeleton");
+                }
+                Ok(CachedMetadata{compendium,skeletons:held.skeletons,events:held.events,report:metadata_report})
+            })();
+            self.metadata.insert(path.into(),parsed.map_err(|error|error.to_string()));
+        }
+        let cached=self.metadata[path].as_ref().map_err(|error|crate::invalid("FromSoftware animation metadata",0,
+            format!("{path}: {error}")))?;
+        report.tae_files+=cached.report.tae_files;
+        report.unread.extend(cached.report.unread.iter().cloned());
+        for (reason,files) in &cached.report.refused {report.refused.entry(reason.clone()).or_default().extend(files.iter().cloned());}
+        let mut held=Held{skeletons:cached.skeletons.clone(),events:cached.events.clone(),animations:vec![]};
+        if let Some(index)=member {
+            let file=self.binders[path].files.get(index).ok_or_else(||crate::invalid("FromSoftware clip member",0,
+                format!("{path}: member {index} is absent")))?;
+            let selected=Binder{version:self.binders[path].version,format:self.binders[path].format,files:vec![file.clone()]};
+            let mut clip=hold_with_compendium(&selected,binder_name,decoder,&[],report,cached.compendium.as_ref())?;
+            held.skeletons.append(&mut clip.skeletons);held.animations.append(&mut clip.animations);
+        }
+        Ok(held)
+    }
     pub(super) fn load(&mut self,install:&crate::Install,decoder:&Decoder<'_>,source:&ClipSource,
         target:Entity,world:&mut World)->Result<AnimationReport> {
         let listing=self.listing(install,decoder,&source.character)?
@@ -160,21 +206,20 @@ impl ClipReader {
             return Err(crate::invalid("FromSoftware animation",0,format!("{}: descriptor differs from the authored listing",source.key)));
         }
         let main_path=binder_path(&source.character);
-        let selected=|binder:&Binder,clip:Option<usize>| {
-            Binder{version:binder.version,format:binder.format,files:binder.files.iter()
-                .enumerate().filter(|(index,file)|file.name.as_deref().is_some_and(|name| {
-                    let leaf=file_name(name);
-                    leaf.ends_with(".compendium") || leaf.ends_with(".tae") ||
-                        (leaf.ends_with(".hkx") && (stem(name)=="skeleton" || clip==Some(*index)))
-                })).map(|(_,file)|file.clone()).collect()}
-        };
         let mut report=AnimationReport::default();
-        let main=selected(&self.binders[&main_path],(source.binder==main_path).then_some(source.member_index));
-        let mut held=vec![hold(&main,&format!("{}.anibnd",source.character),decoder,&[],&mut report)?];
+        self.loaded_binders.insert(main_path.clone());
+        let mut held=vec![self.held(&main_path,&format!("{}.anibnd",source.character),
+            (source.binder==main_path).then_some(source.member_index),&listing.companions,decoder,&mut report)?];
         if source.binder!=main_path {
-            let binder=selected(&self.binders[&source.binder],Some(source.member_index));
-            held.push(hold(&binder,&source.binder,decoder,&[],&mut report)?);
+            self.loaded_binders.insert(source.binder.clone());
+            held.push(self.held(&source.binder,&source.binder,Some(source.member_index),&[],decoder,&mut report)?);
             report.companions.push(source.binder.clone());
+        }
+        for (index,held) in held.iter().enumerate() {
+            let binder=if index==0 {&main_path} else {&source.binder};
+            for (file,tae) in &held.events {
+                self.event_records.entry((binder.clone(),file.clone())).or_insert_with(||tae.animations.iter().map(|a|a.id).collect());
+            }
         }
         let result=insert(held,&source.character,report,install.game,world)?;
         let [decoded]=result.animations.as_slice() else {
@@ -191,9 +236,45 @@ impl ClipReader {
         world.insert(target,Provenance::new(Origin::new(Some(&source.binder),&source.member,None)));
         Ok(result.report)
     }
+
+    /// Unique source-file/record counts across strict per-root loads, rather than
+    /// summing the same main TAE once for every animation that uses it.
+    pub(super) fn summarize(&self,world:&World,entities:&[Entity],report:&mut AnimationReport) {
+        let mut skeletons=std::collections::BTreeSet::new();
+        let mut matched=std::collections::BTreeSet::new();
+        report.animations=entities.len();report.events=0;report.clips_without_events=0;
+        for &entity in entities {
+            if let Some(animation)=world.get::<HavokAnimation>(entity) {skeletons.insert(animation.skeleton);}
+            match world.get::<ClipEvents>(entity) {
+                None=>report.clips_without_events+=1,
+                Some(events)=>{
+                    report.events+=events.events.len();
+                    if let Some(source)=world.get::<ClipSource>(entity) {
+                        for binder in [binder_path(&source.character),source.binder.clone()] {
+                            if self.event_records.get(&(binder.clone(),events.file.clone())).is_some_and(|ids|ids.contains(&events.animation)) {
+                                matched.insert((binder,events.file.clone(),events.animation));break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        report.bones=skeletons.into_iter().filter_map(|entity|world.get::<primase_core::Skeleton>(entity)).map(|s|s.joints.len()).sum();
+        report.tae_files=self.event_records.len();
+        report.tae_animations=self.event_records.values().map(|ids|ids.len()).sum();
+        report.tae_unmatched=report.tae_animations-matched.len();
+        report.companions=self.listings.values().flat_map(|listing|listing.companions.iter())
+            .filter(|set|self.loaded_binders.contains(&binder_path(set))).cloned().collect();
+        // Include metadata notices even if every clip in that binder was refused.
+        for cached in self.metadata.values().filter_map(|cached|cached.as_ref().ok()) {
+            for unread in &cached.report.unread {if !report.unread.contains(unread) {report.unread.push(unread.clone());}}
+        }
+        let mut unique=std::collections::BTreeSet::new();report.unread.retain(|name|unique.insert(name.clone()));
+    }
 }
 
-/// Read the main binder's skeleton and compendium only, for a light animation source. No model, texture, TAE or
+/// Light skeleton read for probes that choose no clip. Reads the main binder's
+/// skeleton and compendium only. No model, texture, TAE or
 /// animation tracks are parsed. A present binder without a readable skeleton is a named error, not an empty source.
 pub fn read_clip_skeleton(archive: &Archive, decoder: &Decoder<'_>, id: &str, w: &mut World) -> Result<Option<Animations>> {
     let path = binder_path(id);
@@ -208,26 +289,6 @@ pub fn read_clip_skeleton(archive: &Archive, decoder: &Decoder<'_>, id: &str, w:
     insert(vec![held], id, report, archive.game(), w).map(Some)
 }
 
-/// Decode only one listed key plus skeleton/compendium/events. The key must name the main binder or an authored
-/// companion; it cannot open an arbitrary archive path. No model, texture or unrelated animation is decoded.
-pub fn decode_clip(archive: &Archive, decoder: &Decoder<'_>, id: &str, key: &str, w: &mut World) -> Result<Option<Animations>> {
-    let Some(listing)=discover_clips(archive,decoder,id)? else {return Ok(None)};
-    let source=select_source(&listing,key)?;
-    let path=binder_path(id);
-    let mut main=Binder::read(&archive.read(&path,decoder)?,decoder)?;
-    let mut selected=if source.binder==path {None} else {
-        Some(Binder::read(&archive.read(&source.binder,decoder)?,decoder)?)
-    };
-    keep_exact_member(&mut main,(source.binder==path).then_some(source.member_index));
-    let mut report=AnimationReport::default();
-    let mut held=vec![hold(&main,&format!("{id}.anibnd"),decoder,&[],&mut report)?];
-    if let Some(binder)=&mut selected {
-        keep_exact_member(binder,Some(source.member_index));
-        held.push(hold(binder,&source.binder,decoder,&[],&mut report)?);
-        report.companions.push(source.binder.clone());
-    }
-    insert(held,id,report,archive.game(),w).map(Some)
-}
 
 fn select_source<'a>(listing:&'a ClipListing,key_or_name:&str)->Result<&'a ClipSource> {
     if let Some(source)=listing.clips.iter().find(|clip|clip.key==key_or_name) {return Ok(source)}
@@ -239,22 +300,11 @@ fn select_source<'a>(listing:&'a ClipListing,key_or_name:&str)->Result<&'a ClipS
             matches.iter().map(|source|&source.key).collect::<Vec<_>>()))),
     }
 }
-fn keep_exact_member(binder:&mut Binder,member:Option<usize>) {
-    let mut index=0;
-    binder.files.retain(|file| {
-        let at=index;index+=1;
-        file.name.as_deref().is_some_and(|name| {
-            let leaf=file_name(name);
-            leaf.ends_with(".compendium") || leaf.ends_with(".tae") ||
-                (leaf.ends_with(".hkx") && (stem(name)=="skeleton" || Some(at)==member))
-        })
-    });
-}
 
 /// What reading a character's animation binders found.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AnimationReport {
-    /// The Havok skeleton's bones (0 when the binders hold none).
+    /// Bones in source skeletons retained by this read (0 when none is retained).
     pub bones: usize,
     /// `havok.animation` entities made.
     pub animations: usize,
@@ -334,7 +384,15 @@ fn companions(archive: &Archive, id: &str, binder: &Binder) -> Vec<String> {
 struct Held {
     skeletons: Vec<Skeleton>,
     animations: Vec<(String, Origin, Container)>,
-    events: Vec<(String, Tae)>,
+    events: Vec<(String, Arc<Tae>)>,
+}
+
+fn read_compendium(binder:&Binder,decoder:&Decoder<'_>)->Result<Option<Compendium>> {
+    match binder.files.iter().find(|file|file.name.as_deref().is_some_and(|name|
+        crate::names::fold(name).ends_with(".compendium"))) {
+        Some(file)=>Ok(Some(Compendium::read(&decoder.decode_if_dcx(&file.bytes)?)?)),
+        None=>Ok(None),
+    }
 }
 
 /// Read the tagfiles of `binder` (one that names a marker for a binder in `markers` is not unread).
@@ -345,14 +403,12 @@ fn hold(
     markers: &[String],
     report: &mut AnimationReport,
 ) -> Result<Held> {
-    let compendium = match binder.files.iter().find(|f| {
-        f.name
-            .as_deref()
-            .is_some_and(|n| crate::names::fold(n).ends_with(".compendium"))
-    }) {
-        Some(f) => Some(Compendium::read(&decoder.decode_if_dcx(&f.bytes)?)?),
-        None => None,
-    };
+    let compendium=read_compendium(binder,decoder)?;
+    hold_with_compendium(binder,binder_name,decoder,markers,report,compendium.as_ref())
+}
+
+fn hold_with_compendium(binder:&Binder,binder_name:&str,decoder:&Decoder<'_>,markers:&[String],
+    report:&mut AnimationReport,compendium:Option<&Compendium>)->Result<Held> {
     let mut held = Held {
         skeletons: Vec::new(),
         animations: Vec::new(),
@@ -369,7 +425,7 @@ fn hold(
             match Tae::read(&decoder.decode_if_dcx(&f.bytes)?) {
                 Ok(tae) => {
                     report.tae_files += 1;
-                    held.events.push((file, tae));
+                    held.events.push((file, Arc::new(tae)));
                 }
                 Err(e) => refuse(report, &format!("event file not read: {e}"), &file),
             }
@@ -387,7 +443,7 @@ fn hold(
         }
         let file = stem(name);
         let bytes = decoder.decode_if_dcx(&f.bytes)?;
-        let tag = match Tagfile::read(&bytes, compendium.as_ref()) {
+        let tag = match Tagfile::read(&bytes, compendium) {
             Ok(t) => t,
             Err(e) => {
                 refuse(report, &format!("Havok tagfile not read: {}", e.detail), &file);
@@ -415,76 +471,9 @@ fn hold(
     Ok(held)
 }
 
-pub(super) fn read_selected(archive: &Archive, decoder: &Decoder<'_>, id: &str, names: &[String], w: &mut World) -> Result<Option<Animations>> {
-    let Some(listing) = list_clips(archive, decoder, id)? else { return Ok(None); };
-    let mut out = Animations::default();
-    for name in names {
-        let descriptor = select_source(&listing,name)?;
-        let Some(mut read) = decode_clip(archive, decoder, id, &descriptor.key, w)? else { continue; };
-        out.skeleton = out.skeleton.or(read.skeleton);
-        out.animations.append(&mut read.animations);
-        out.report.bones = out.report.bones.max(read.report.bones);
-        out.report.animations += read.report.animations;
-        out.report.events += read.report.events;
-        out.report.tae_files += read.report.tae_files;
-        out.report.tae_animations += read.report.tae_animations;
-        out.report.tae_unmatched += read.report.tae_unmatched;
-        out.report.clips_without_events += read.report.clips_without_events;
-        out.report.absent_components.append(&mut read.report.absent_components);
-        out.report.unread.append(&mut read.report.unread);
-        for (why, mut files) in read.report.refused { out.report.refused.entry(why).or_default().append(&mut files); }
-        for set in read.report.companions { if !out.report.companions.contains(&set) { out.report.companions.push(set); } }
-    }
-    Ok(Some(out))
-}
-
-/// The names of the animations character `id` has (`a000_003000`), in binder order, as [`read`] would read them,
-/// without reading any: the `.hkx` members of `chr/<id>.anibnd` and of the binders its markers name, except the
-/// skeleton (`skeleton.hkx`). `None` when the archive has no such binder. Whether a file is a tagfile that reads is
-/// `read`'s to say (its report refuses the others by reason): this names what the binders hold.
-pub fn clip_names(archive: &Archive, decoder: &Decoder<'_>, id: &str) -> Result<Option<Vec<String>>> {
-    Ok(list_clips(archive, decoder, id)?.map(|listing| listing.clips.into_iter().map(|c| c.name).collect()))
-}
-
-/// Read `chr/<id>.anibnd` of the archive (and the binders its markers name) into `w`, which holds the character's
-/// model: `None` when the archive has no such binder. The skeleton and animations are in the world's frame by
-/// [`crate::pose`]'s source frame.
-pub(super) fn read(
-    archive: &Archive,
-    decoder: &Decoder<'_>,
-    id: &str,
-    w: &mut World,
-) -> Result<Option<Animations>> {
-    let path = binder_path(id);
-    if !archive.contains(&path) {
-        return Ok(None);
-    }
-    let main = Binder::read(&archive.read(&path, decoder)?, decoder)?;
-    let named = companions(archive, id, &main);
-    let mut report = AnimationReport::default();
-    let mut held = vec![hold(
-        &main,
-        &format!("{id}.anibnd"),
-        decoder,
-        &named,
-        &mut report,
-    )?];
-    for set in &named {
-        let binder = Binder::read(&archive.read(&binder_path(set), decoder)?, decoder)?;
-        held.push(hold(
-            &binder,
-            &format!("{set}.anibnd"),
-            decoder,
-            &[],
-            &mut report,
-        )?);
-        report.companions.push(set.clone());
-    }
-    insert(held, id, report, archive.game(), w).map(Some)
-}
 
 /// Read an animation binder another binder holds (a part form's own: `wp_a_0761_1.anibnd` in
-/// `parts/wp_a_0761_l.partsbnd`) into `w` as [`read`] reads a character's, its skeleton named after `name` (the form):
+/// `parts/wp_a_0761_l.partsbnd`) into `w` with the same raw parsing as the character reader's load, its skeleton named after `name` (the form):
 /// it names no companion binders (a marker member is unread).
 pub(super) fn read_member(
     game: crate::Game,
@@ -549,7 +538,7 @@ fn insert(mut held: Vec<Held>, id: &str, report: AnimationReport, game:crate::Ga
         skeletons.insert(s.name.clone(), (entity, s.clone()));
     }
     // the event files of every binder, in read order, and which of their animations an animation read matched
-    let mut records: Vec<(String, Tae)> = Vec::new();
+    let mut records: Vec<(String, Arc<Tae>)> = Vec::new();
     for h in &mut held {
         records.append(&mut h.events);
     }
@@ -654,10 +643,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn root_loads_reuse_parsed_metadata_and_keep_named_unread_members() {
+        let file=|name:&str|crate::BinderFile{id:None,name:Some(name.into()),flags:0,bytes:vec![0xff]};
+        let mut reader=ClipReader::test_binder("c1010",Binder{version:[0;8],format:0,
+            files:vec![file("walk.hkx"),file("run.hkx"),file("unknown.bin")]});
+        let path=binder_path("c1010");let decoder=Decoder{oodle:None,max_output:1024};
+        let mut first=AnimationReport::default();
+        reader.held(&path,"c1010.anibnd",None,&[],&decoder,&mut first).unwrap();
+        assert_eq!(first.unread,vec![format!("{path}!unknown.bin")]);
+        // A reparse would now fail on this invalid compendium. The second root
+        // must use the metadata already parsed from the reader's original binder.
+        reader.binders.get_mut(&path).unwrap().files.push(file("bad.compendium"));
+        let mut second=AnimationReport::default();
+        reader.held(&path,"c1010.anibnd",None,&[],&decoder,&mut second).unwrap();
+        assert_eq!(reader.metadata.len(),1);assert_eq!(second.unread,first.unread);
+    }
+
+    #[test]
     fn listing_does_not_decode_hkx_and_selected_decode_keeps_only_dependencies() {
         let file = |name: &str| crate::BinderFile { id: None, name: Some(name.into()), flags: 0,
             bytes: vec![0xff, 0x01] }; // deliberately not a readable HKX
-        let mut binder = Binder { version: [0; 8], format: 0, files: vec![
+        let binder = Binder { version: [0; 8], format: 0, files: vec![
             file("skeleton.hkx"), file("A000_000001.hkx"), file("A000_000002.hkx"),
             file("c1010.compendium"), file("c1010.tae"), file("other.txt")] };
         let mut listing = ClipListing { character: "c1010".into(), ..Default::default() };
@@ -665,10 +671,11 @@ mod tests {
         assert_eq!(listing.clips.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["a000_000001", "a000_000002"]);
         assert!(listing.clips.iter().all(|c| c.duration.is_none()));
         assert_ne!(listing.clips[0].key,listing.clips[1].key);
-        keep_exact_member(&mut binder, Some(2));
-        assert_eq!(binder.files.iter().filter_map(|f| f.name.as_deref()).collect::<Vec<_>>(),
-            ["skeleton.hkx", "A000_000002.hkx", "c1010.compendium", "c1010.tae"]);
-        list_members(&mut listing, "c1010_div00", &binder);
+        let metadata=metadata_binder(&binder);
+        assert_eq!(metadata.files.iter().filter_map(|f| f.name.as_deref()).collect::<Vec<_>>(),
+            ["skeleton.hkx", "c1010.compendium", "c1010.tae", "other.txt"]);
+        let companion=Binder{version:binder.version,format:binder.format,files:vec![binder.files[2].clone()]};
+        list_members(&mut listing, "c1010_div00", &companion);
         assert_eq!(listing.clips.len(), 3, "duplicate stems in another binder retain distinct identities");
         assert!(select_source(&listing,"a000_000002").unwrap_err().to_string().contains("ambiguous"));
         assert_ne!(listing.clips[1].key,listing.clips[2].key);
@@ -724,9 +731,9 @@ mod tests {
         let source=listing.clips[0].clone();let mut world=World::new();
         let root=publish_listing(&listing,&mut world).unwrap();
         let entity=world.get::<primase_core::Asset>(root).unwrap().members[0].0;
-        let mut reader=ClipReader{archive:Some(Archive::empty(crate::Game::Sekiro)),
+        let mut reader=ClipReader{archive:Some(Arc::new(Archive::empty(crate::Game::Sekiro))),
             binders:BTreeMap::from([(source.binder.clone(),binder)]),
-            listings:BTreeMap::from([("c1010".into(),listing)])};
+            listings:BTreeMap::from([("c1010".into(),listing)]),..Default::default()};
         let decoder=Decoder{oodle:None,max_output:1024};
         let why=reader.load(&crate::Install::sekiro("unused"),&decoder,&source,entity,&mut world)
             .unwrap_err().to_string();

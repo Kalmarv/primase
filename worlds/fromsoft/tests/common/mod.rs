@@ -3,6 +3,21 @@
 use primase_core::World;
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 
+/// Binder file paths from a clip-only plan's asset provenance, in authored order.
+/// This includes companion binders that have events but no clip members.
+pub fn clip_binders(plans:&World)->Vec<String> {
+    let mut binders=Vec::new();
+    for (entity,_) in plans.iter::<primase_core::Asset>() {
+        if let Some(provenance)=plans.get::<primase_core::Provenance>(entity) {
+            for origin in &provenance.origins {
+                let path=origin.file.to_string();
+                if !binders.contains(&path) {binders.push(path);}
+            }
+        }
+    }
+    binders
+}
+
 /// The geometry the earlier reader produced by itself, as explicit choices: distant backdrops left out, static
 /// meshes posed, the finest level of detail, each material's UV tiling applied, windings repaired from the stored
 /// normals, degenerate triangles dropped, sky cards, light volumes, shadow proxies and billboard cards left out,

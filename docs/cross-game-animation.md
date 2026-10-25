@@ -25,7 +25,10 @@ reported. Build the animation-to-render map with `game::rig::render_map`, then r
 `map-clip{unmapped=drop,rests=source,reparented=refuse}`. The existing render-map fixture compares model-space poses;
 this correspondence is separate from the cross-game table.
 
-FromSoft's light boundary is `sekiro::list_clips`, `read_clip_skeleton`, and `decode_clip`. The skeleton read parses
+FromSoft's light clip boundary is `sekiro::CharacterReader::animations`: `Reader::read` publishes
+`core.asset` clip members with `ClipKey`, `Name`, optional `ClipLength` and binder provenance;
+`Reader::load` decodes the reached plan entities on those same ids. The separate
+`read_clip_skeleton` is for probes that choose no clip. That skeleton read parses
 only the main binder's skeleton/compendium, not events, models, materials or animation tracks. Name listings have
 unknown duration because BND member headers do not store it. A selected clip supplies its duration after decode.
 The caller lowers that one raw Havok animation with explicit `lower-havok-clips` choices. A second decode reuses

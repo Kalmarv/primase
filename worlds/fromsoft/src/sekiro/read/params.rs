@@ -88,11 +88,18 @@ pub fn read_param(install: &Install, archive: &Archive, decoder: &Decoder<'_>, l
 }
 
 /// The NPC param of the install's game params: every row's id and display mask bits.
+/// [`super::character::character_display_masks`] exposes the authored model groups
+/// beside these rows; neither reader query chooses which row dresses a model.
 pub fn read_npc_param(install: &Install, archive: &Archive, decoder: &Decoder<'_>) -> Result<NpcParam> {
     NpcParam::from_param(
         &read_param(install, archive, decoder, "NpcParam.param")?,
         &install.game.npc_param(),
     )
+}
+
+/// The descriptive NPC fields, with the game's explicit layout and no row choice.
+pub fn read_npc_stats(install: &Install, archive: &Archive, decoder: &Decoder<'_>) -> Result<Vec<crate::param::NpcStats>> {
+    crate::param::NpcStats::from_param(&read_param(install, archive, decoder, "NpcParam.param")?, &install.game.npc_stats())
 }
 
 /// A map part that names an NPC param row: an Enemy or DummyEnemy part, its model and its `NPCParamID`.

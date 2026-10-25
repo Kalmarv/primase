@@ -3,6 +3,7 @@
 //! scale samples of the flower's influencing bones (plus their ancestors). Run with --nocapture.
 use std::collections::{BTreeMap, BTreeSet};
 use primase_core::{Clip, ClipTarget, Property, Skeleton, World};
+use primase_core::convert::Reader;
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_fromsoft::{Binder, Game, Install, Keys, dcx::Decoder, flver::Model, sekiro, tae::{Header, Tae}};
 use primase_testdata::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
@@ -333,10 +334,11 @@ fn malenia_draw_flags_material_records_and_all_tae_controls()->Result<()> {
                 "gx":material.gx,"textures":material.textures.iter().map(|texture|json!({"kind":texture.kind,"path":texture.path})).collect::<Vec<_>>()}));
         }
     }
-    let listing=sekiro::list_clips(&archive,&decoder,"c2120")?.ok_or("no c2120 clip listing")?;
+    let mut reader=sekiro::CharacterReader::animations(install.clone(),"c2120",decoder);
+    let (plans,_)=reader.read().map_err(|error|error.to_string())?;
     let mut kinds=BTreeMap::new();
-    for set in std::iter::once("c2120".to_owned()).chain(listing.companions.iter().cloned()) {
-        let binder=Binder::read(&archive.read(&format!("/chr/{set}.anibnd.dcx"),&decoder)?,&decoder)?;
+    for set in common::clip_binders(&plans) {
+        let binder=Binder::read(&archive.read(&set,&decoder)?,&decoder)?;
         for file in &binder.files {
             let member=file.name.as_deref().unwrap_or("");if !leaf(member).to_ascii_lowercase().ends_with(".tae") {continue;}
             let tae=Tae::read(&decoder.decode_if_dcx(&file.bytes)?)?;
@@ -421,7 +423,9 @@ fn malenia_source_mesh_groups_tae233_and_petal_bone_scales() -> Result<()> {
     }
     assert!(petal_meshes>0,"probe did not find the flower material; no visibility conclusion is valid");
     drop(binder);
-    let listing=sekiro::list_clips(&archive,&decoder,"c2120")?.ok_or("no c2120 animation listing")?;
+    let mut reader=sekiro::CharacterReader::animations(install.clone(),"c2120",decoder);
+    let (plans,_)=reader.read().map_err(|error|error.to_string())?;
+    let listing:Vec<_>=plans.iter::<sekiro::ClipSource>().map(|(entity,source)|(entity,source.clone())).collect();
     let mut reference=World::new();
     sekiro::read_clip_skeleton(&archive,&decoder,"c2120",&mut reference)?.ok_or("c2120 skeleton binder absent")?;
     for name in &source_names {
@@ -431,10 +435,10 @@ fn malenia_source_mesh_groups_tae233_and_petal_bone_scales() -> Result<()> {
         println!("MALENIA_REFERENCE={}",json!({"bone":name,"flver_bind":flver_bind.get(name),
             "havok_reference":matches,"missing_from_havok":matches.is_empty()}));
     }
-    let sets=std::iter::once("c2120".to_owned()).chain(listing.companions.iter().cloned());
+    let sets=common::clip_binders(&plans);
     let mut attack_ids=BTreeSet::new();
     for set in sets {
-        let binder=Binder::read(&archive.read(&format!("/chr/{set}.anibnd.dcx"),&decoder)?,&decoder)?;
+        let binder=Binder::read(&archive.read(&set,&decoder)?,&decoder)?;
         for file in &binder.files {
             let member=file.name.as_deref().unwrap_or("");
             if !leaf(member).to_ascii_lowercase().ends_with(".tae") {continue;}
@@ -459,15 +463,13 @@ fn malenia_source_mesh_groups_tae233_and_petal_bone_scales() -> Result<()> {
     let manager=PassManager::new(registry).with_pass_checks(true);
     let pipeline=manager.registry.parse("lower-havok-clips{absent=neutral,rate=1,clips=all,root-motion=leave}")?;
     let mut decoded=0;
-    for entry in &listing.clips {
+    for (entity,entry) in &listing {
         let id=primase_fromsoft::tae::clip_animation_id(&entry.name);
         let control=entry.name=="a000_002000" || entry.name=="a000_003029";
-        let mut world=World::new();
-        let result=sekiro::decode_clip(&archive,&decoder,"c2120",&entry.key,&mut world)?;
-        let Some(read)=result else {return Err("listed c2120 binder disappeared".into());};
-        if read.animations.is_empty() {
-            println!("MALENIA_CLIP_REFUSED={}",json!({"key":entry.key,"report":format!("{:?}",read.report)}));continue;
-        }
+        let mut world=match reader.load(&plans,&[*entity].into()) {
+            Ok((world,_))=>world,
+            Err(error)=>{println!("MALENIA_CLIP_REFUSED={}",json!({"key":entry.key,"report":error.to_string()}));continue;}
+        };
         let mut tracked=BTreeSet::new();let mut duration=None;
         for (_,animation) in world.iter::<primase_havok::world::HavokAnimation>() {
             duration=Some(animation.spline.duration);
@@ -527,7 +529,7 @@ fn malenia_source_mesh_groups_tae233_and_petal_bone_scales() -> Result<()> {
         }
     }
     println!("MALENIA_TOTAL={}",json!({"petal_meshes":petal_meshes,"petal_bones_and_ancestors":petal_bones.len(),
-        "animations_with_233":attack_ids.len(),"clips_sampled":decoded,"listed":listing.clips.len()}));
+        "animations_with_233":attack_ids.len(),"clips_sampled":decoded,"listed":listing.len()}));
     assert!(decoded>=2,"both requested control clips must be decoded; inspect refusals above");
     Ok(())
 }
