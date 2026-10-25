@@ -973,7 +973,7 @@ mod tests {
         };
         let declared = |kind: &str| crate::mtd::Texture {
             kind: kind.into(),
-            uv_number: 0,
+            uv_number: 1,
             shader_data_index: 0,
             path: String::new(),
             extra: vec![],

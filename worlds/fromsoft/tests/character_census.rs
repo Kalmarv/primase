@@ -116,6 +116,33 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>, ids: &[&str]) ->
                 );
             }
         }
+        // the stored directions of the dummies: whether they are unit vectors, whether forward and upward are
+        // perpendicular where the flag says upward is used, and how many have the flag at all
+        let norm = |v: [f32; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let used: Vec<_> = dummies.iter().filter(|d| d.use_upward_vector).collect();
+        let off = |f: &dyn Fn(&primase_fromsoft::flver::Dummy) -> bool| dummies.iter().filter(|d| f(d)).count();
+        println!(
+            "DUMMYDIR {} {id} dummies {} forward_not_unit {} forward_zero {} use_upward {} upward_not_unit {} \
+             not_perpendicular {} max_abs_dot {:.4}",
+            game.name(),
+            dummies.len(),
+            off(&|d| (norm(d.forward) - 1.).abs() > 1e-3 && norm(d.forward) > 0.),
+            off(&|d| norm(d.forward) == 0.),
+            used.len(),
+            used.iter().filter(|d| (norm(d.upward) - 1.).abs() > 1e-3).count(),
+            used.iter().filter(|d| dot(d.forward, d.upward).abs() > 1e-3).count(),
+            used.iter().map(|d| dot(d.forward, d.upward).abs()).fold(0., f32::max)
+        );
+        for d in used.iter().take(3) {
+            println!(
+                "DUMMYDIR {} {id} reference {} forward {:?} upward {:?}",
+                game.name(),
+                d.reference_id,
+                d.forward,
+                d.upward
+            );
+        }
         for (_, cloth) in world.iter::<Cloth>() {
             for file in &cloth.0 {
                 println!(

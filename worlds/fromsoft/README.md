@@ -569,6 +569,17 @@ A character's or part's files are kept beyond the model and its clips:
   `weight`, `hitYOffset`, `hp`, `mp`, `getSoul`, at the offsets `Game::npc_stats` states from Paramdex's
   `NpcParam.xml`) as the resource `fromsoft.npc_stats`; the row's other several hundred fields are not read. A layout
   the offsets are not for leaves them unread, said in `CharacterReport::npc_stats_unread`.
+- A part's collision file (the form's `<form>_collidable.hkx`) is read as an object's is (`objects::bodies`, one high file)
+  and kept as `fromsoft.object_collision` on the prototype (`CharacterReport::collision_files`, `collision_bodies`);
+  `lower-fromsoft-part-collision{convex=...,leave-out-motion=...}` lowers the bodies of a prototype no placement uses
+  (as `lower-fromsoft-object-collision` does the placed ones) into `core.collision` on the prototype itself, in its own space.
+  A file that does not read is named in `unread` with its reason.
+- `tests/havok_census.rs` (install-gated) prints, for twenty characters of each game, the classes of every Havok member of
+  their chrbnd, anibnd, behbnd and texbnd binders (`HAVOK`, `CLASS` with the stored field names of the cloth, ragdoll,
+  rigid body, constraint and physics classes, `HAVOKERR`) and every binder member by kind, extension and whether a
+  reader keeps it (`EXT`). A reader for cloth or ragdoll classes is written from those lines, not before.
+- `tests/character_census.rs` also prints `DUMMYDIR`: whether the dummies' stored forward and upward directions are unit
+  vectors and perpendicular where the flag says upward is used. A direction is lowered only once that and the axes agree.
 - Not read: the Havok physics and ragdoll files of a character binder beyond what `unread` names, and what the TAE
   event types mean.
 

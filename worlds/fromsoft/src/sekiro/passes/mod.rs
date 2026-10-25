@@ -79,6 +79,7 @@ pub fn register(registry: &mut PassRegistry) {
         &materials::LOWER_FROMSOFT_MATERIALS,
         &collision::LOWER_FROMSOFT_COLLISION,
         &object_collision::LOWER_FROMSOFT_OBJECT_COLLISION,
+        &object_collision::LOWER_FROMSOFT_PART_COLLISION,
         &extras::LOWER_FROMSOFT_EXTRAS,
         &environment::LOWER_FROMSOFT_ENVIRONMENT,
         &lights::LOWER_FROMSOFT_LIGHTS,

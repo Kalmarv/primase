@@ -272,7 +272,12 @@ fn missing_source_data_is_not_a_silent_default() {
     let mut world = World::new();
     let e = world.spawn();
     world.insert(e, source("MetallicTex"));
-    assert!(pbr::lower(&mut world, &no_payloads(), None, WATER).is_err());
+    // a texture the material names and the install does not hold is no error (the material is drawn without it), but it
+    // is never silent: the log names it and the entity
+    let log = pbr::lower(&mut world, &no_payloads(), None, WATER).unwrap();
+    let normal = "named normal texture not in the install: flat normal";
+    assert_eq!(log.approximations.get(normal).copied(), Some(1));
+    assert_eq!(log.approximated_on[normal], std::collections::BTreeSet::from([e]));
 }
 
 #[test]

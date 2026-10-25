@@ -601,6 +601,19 @@ fn the_pass_binds_every_layered_material_to_shared_shader_and_texture_entities()
         [(Stage::Vertex, vertex), (Stage::Pixel, shader)]
     );
     assert_eq!(world.get::<ShaderBinding>(b).unwrap().stages.len(), 1);
+    // The same selected pixel program supplies the card's facts, without an inspection-time lift.
+    for entity in [a,b] {
+        let facts = &world.get::<primase_core::shader::MaterialPrograms>(entity).unwrap().0[0];
+        assert_eq!(facts.shader,Some(shader));
+        assert_eq!(facts.hash,Some(primase_shader::source_hash(PROGRAM)));
+        assert_eq!(facts.stage,Stage::Pixel);
+        assert!(facts.instruction_count.unwrap().count > 0);
+        assert_eq!(facts.instruction_count.unwrap().unit,primase_core::shader::InstructionUnit::DxbcTokenRecords);
+        assert!(facts.inputs.iter().all(|input|input.used && input.provenance.d3d.is_some()));
+        assert_eq!(facts.outputs,world.get::<ShaderBinding>(entity).unwrap().stage(Stage::Pixel).unwrap().outputs);
+        assert!(facts.surface.base.is_some());
+    }
+    assert!(world.get::<primase_core::shader::MaterialPrograms>(c).unwrap().0[0].not_lifted.is_some());
     for e in [a, b] {
         let binding = world.get::<ShaderBinding>(e).unwrap();
         assert_eq!(binding.stage(Stage::Pixel).unwrap().shader, shader);

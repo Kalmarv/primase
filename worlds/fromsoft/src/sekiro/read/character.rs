@@ -49,7 +49,9 @@
 //! chooses no level of detail, outfit or pose. A part's bones are stored with the parent they have in that part: a
 //! bone whose parent the part does not hold is a root there. The FLVER's dummy polygons (attach points) are kept as stored
 //! on the prototype (`fromsoft.dummies`) and placed as `core.sockets` on its skeleton; the cloth companion files
-//! (`.clm2`) that go with a form are kept on its prototype (`fromsoft.cloth`); a character whose masks need the NPC param
+//! (`.clm2`) that go with a form are kept on its prototype (`fromsoft.cloth`), and so is a part's collision (the form's
+//! `_collidable.hkx`, read as an object's collision file is: `fromsoft.object_collision`, every body as stored, which
+//! `lower-fromsoft-part-collision` turns into `core.collision` on the prototype); a character whose masks need the NPC param
 //! also reads each row's descriptive fields (`fromsoft.npc_stats`, [`crate::param::NpcStats`]). What the files hold that it
 //! does not read is a notice: the other members of the binders, by name.
 use std::collections::{BTreeMap, BTreeSet};
@@ -89,6 +91,9 @@ pub struct CharacterReport {
     pub dummies_unplaced: usize,
     /// The model's cloth companion files read (`fromsoft.cloth`).
     pub cloth_files: usize,
+    /// The model's collision files read (`fromsoft.object_collision`: a part's `_collidable.hkx`) and the bodies in them.
+    pub collision_files: usize,
+    pub collision_bodies: usize,
     /// Why the NPC param's descriptive fields were not read, where its rows were.
     pub npc_stats_unread: Option<String>,
     /// Shaders its materials name whose bundle the install does not hold.
@@ -776,6 +781,7 @@ impl<'a> Reading<'a> {
         // on the first form's
         let bases: Vec<&str> = forms.iter().map(|f| f.base.as_str()).collect();
         let mut cloth = Vec::new();
+        let mut collision = Vec::new();
         for f in &binder.files {
             let member_name = f.name.as_deref().unwrap_or("");
             let read = forms.iter().any(|g| std::ptr::eq(f, g.flver))
@@ -794,10 +800,28 @@ impl<'a> Reading<'a> {
                     }
                     continue;
                 }
+                // a part's collision is read as an object's is: its bodies as stored, in the part's space
+                if leaf.ends_with("_collidable.hkx") {
+                    let mut found = super::objects::Report::default();
+                    match super::objects::bodies(
+                        &leaf,
+                        source::Resolution::High,
+                        &decoder.decode_if_dcx(&f.bytes)?,
+                        &mut found,
+                    ) {
+                        Ok(file) => {
+                            report.collision_bodies += file.bodies.len();
+                            collision.push(file);
+                        }
+                        Err(e) => report.unread.push(format!("{leaf} ({e})")),
+                    }
+                    continue;
+                }
                 report.unread.push(leaf);
             }
         }
         report.cloth_files = cloth.len();
+        report.collision_files = collision.len();
         if let Item::Character(id) = item
             && animations.is_none()
             && textures::has(archive, &format!("/chr/{id}.anibnd.dcx"))
@@ -905,6 +929,9 @@ impl<'a> Reading<'a> {
         }
         if !cloth.is_empty() {
             w.insert(prototype, character_data::Cloth(cloth));
+        }
+        if !collision.is_empty() {
+            w.insert(prototype, source::ObjectBodies { files: collision });
         }
         w.insert(
             prototype,

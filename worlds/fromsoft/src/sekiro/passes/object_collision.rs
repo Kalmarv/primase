@@ -443,6 +443,145 @@ impl Pass for LowerFromSoftObjectCollision {
     }
 }
 
+/// `lower-fromsoft-part-collision{convex=tessellate|rounded:<metres>|leave-out,leave-out-motion=...}`: the collision a
+/// character's part keeps (`fromsoft.object_collision` on a prototype no placement uses: a weapon's `_collidable.hkx`) as
+/// `core.collision` on that prototype, in the prototype's own space, so a view of the part shows it where the part is. The
+/// bodies are lowered as `lower-fromsoft-object-collision` lowers an object's (stored pose, motion type not
+/// interpreted, convex bodies as the option says, a triangle's HitMtrl class its surface); there is no crop, no
+/// HitMtrl leave-out and no resolution choice (a part stores one file, a high one). The bodies lowered are consumed;
+/// prototypes a placement uses are left to the object pass.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LowerFromSoftPartCollision {
+    pub convex: ConvexBodies,
+    pub leave_out_motion: BTreeSet<u64>,
+}
+
+/// `lower-fromsoft-part-collision`'s declaration: both choices are the program's, stated.
+pub const LOWER_FROMSOFT_PART_COLLISION: PassSpec = PassSpec {
+    name: "lower-fromsoft-part-collision",
+    options: &[
+        OptionSpec::required(
+            "convex",
+            "rounded:0.01",
+            "convex bodies tessellated, rounded:<metres> (within that error, above 0), or leave-out",
+        ),
+        OptionSpec::required(
+            "leave-out-motion",
+            "",
+            "stored motion types whose bodies are not lowered (counted), joined by + (empty for none)",
+        ),
+    ],
+    make: |g| {
+        let leave_out_motion = g
+            .required("leave-out-motion")
+            .split('+')
+            .filter(|m| !m.is_empty())
+            .map(|m| {
+                m.parse::<u64>()
+                    .map_err(|_| format!("leave-out-motion: {m} is not a motion type"))
+            })
+            .collect::<std::result::Result<_, _>>()?;
+        Ok(Box::new(LowerFromSoftPartCollision {
+            convex: ConvexBodies::parse(g.required("convex"))?,
+            leave_out_motion,
+        }))
+    },
+};
+
+impl Pass for LowerFromSoftPartCollision {
+    fn name(&self) -> &'static str {
+        "lower-fromsoft-part-collision"
+    }
+    fn options(&self) -> Options {
+        Options::from([
+            ("convex".to_owned(), self.convex.word()),
+            ("leave-out-motion".to_owned(), joined(&self.leave_out_motion)),
+        ])
+    }
+    fn requires(&self) -> &[&'static str] {
+        &[ObjectBodies::NAME]
+    }
+    /// An area's world holds object collision only under placements: nothing for this pass, the step recorded as skipped.
+    fn may_lack_inputs(&self) -> bool {
+        true
+    }
+    fn provides(&self) -> &[&'static str] {
+        &[
+            Collision::NAME,
+            crate::sekiro::source::CollisionSource::NAME,
+            Surfaces::NAME,
+        ]
+    }
+    fn removes(&self) -> &[&'static str] {
+        &[ObjectBodies::NAME]
+    }
+    fn modifies(&self) -> &[&'static str] {
+        &[Surfaces::NAME]
+    }
+    fn approximates(&self) -> &'static str {
+        "bodies at their stored pose, their motion type not interpreted; convex bodies as the convex option says; triangles without a HitMtrl, and classes without a known surface, as the default surface"
+    }
+    fn run(&self, world: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
+        let placed: BTreeSet<Entity> = world.iter::<Instance>().map(|(_, i)| i.prototype).collect();
+        let parts: Vec<Entity> = world
+            .iter::<ObjectBodies>()
+            .map(|(e, _)| e)
+            .filter(|e| !placed.contains(e))
+            .collect();
+        // the object pass's lowering of a body, with the options this pass has
+        let object = LowerFromSoftObjectCollision {
+            resolution: ResolutionChoice::High,
+            convex: self.convex,
+            leave_out: BTreeSet::new(),
+            leave_out_motion: self.leave_out_motion.clone(),
+            convex_surface: ConvexSurface::Default,
+            reach: None,
+        };
+        let game = game_of(world);
+        let mut surfaces = world.resource::<Surfaces>().cloned().unwrap_or_default();
+        let mut lowered = Vec::new();
+        for part in parts {
+            let Some(bodies) = world.get::<ObjectBodies>(part) else {
+                continue;
+            };
+            let mut soup = Collision::default();
+            for body in bodies.bodies() {
+                if self.leave_out_motion.contains(&body.motion_type) {
+                    log.count(&format!("bodies of motion type {} left out", body.motion_type), 1);
+                    continue;
+                }
+                let Some((triangles, materials)) = object.triangles(body, log)? else {
+                    continue;
+                };
+                log.approximate("bodies placed at their stored pose, their motion type not interpreted", 1);
+                for (tri, material) in triangles.into_iter().zip(materials) {
+                    let surface = surface_of(game, material, log);
+                    push(&mut soup, tri, surfaces.index(surface).map_err(|e| e.to_string())?)?;
+                    log.count("part collision triangles", 1);
+                }
+            }
+            lowered.push((part, soup));
+        }
+        world.insert_resource(surfaces);
+        for (part, soup) in lowered {
+            world.remove::<ObjectBodies>(part);
+            log.count("parts whose collision was lowered", 1);
+            if soup.triangles.is_empty() {
+                continue;
+            }
+            world.insert(part, soup);
+            world.insert(
+                part,
+                crate::sekiro::source::CollisionSource {
+                    group: "parts".to_owned(),
+                    water: false,
+                },
+            );
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -675,5 +814,29 @@ mod tests {
             .run(&mut w, &mut PassLog::default())
             .unwrap_err();
         assert!(err.contains("fromsoft.flver"), "{err}");
+    }
+
+    #[test]
+    fn a_parts_collision_becomes_collision_on_the_part_itself_and_a_placed_prototype_is_left_to_the_object_pass() {
+        let (mut w, placed, unplaced) = world();
+        let mut log = PassLog::default();
+        let options = Options::from(
+            [("convex", "tessellate"), ("leave-out-motion", "2")].map(|(k, v)| (k.to_owned(), v.to_owned())),
+        );
+        let part = LOWER_FROMSOFT_PART_COLLISION.instance(&options).unwrap();
+        assert_eq!(part.options(), options);
+        part.run(&mut w, &mut log).unwrap();
+        // the unplaced prototype (a part) has the collision itself, in its own space (no placement moved it), its
+        // bodies consumed; the placed one keeps its bodies for the object pass
+        let soup = w.get::<Collision>(unplaced).unwrap();
+        assert!(!soup.triangles.is_empty());
+        assert!(soup.positions.iter().all(|p| p[0].abs() <= 0.5 + 1e-5));
+        assert!(!w.has::<ObjectBodies>(unplaced));
+        assert!(w.has::<ObjectBodies>(placed) && !w.has::<Collision>(placed));
+        assert_eq!(w.get::<crate::sekiro::source::CollisionSource>(unplaced).unwrap().group, "parts");
+        assert_eq!(log.counts["parts whose collision was lowered"], 1);
+        assert!(w.verify_resources().is_empty());
+        // the choices are the program's
+        assert!(LOWER_FROMSOFT_PART_COLLISION.instance(&Options::new()).is_err());
     }
 }

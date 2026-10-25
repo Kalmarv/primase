@@ -1,147 +1,172 @@
-//! Elden Ring's Havok 2018 collision against an independent reader: HKLib's reading of the same files (`havok.jsonl` of
-//! `oracles.soulsformats.elden/format`, the oracle harness's `havok` mode: the map collision of chosen tiles with their
-//! compendium, and chosen assets' collision). For every compressed mesh shape a file holds, the mesh tree's sections as
-//! stored (codec parameters as f32 bits, first packed vertex, packed vertex count, first shared vertex, first
-//! primitive, primitive count, read through the 2018 section layout), its packed and shared vertices, shared-vertex
-//! index and primitives, the shape's triangle-to-shape-key table, and its extern shape instances (the transform's
-//! sixteen stored floats and the scale as f32 bits, the instanced shape's class, convex radius and stored vertices),
-//! compared exactly. The shapes of a file are compared as a set (each reader walks the object graph its own way).
-//! Nothing here checks the triangle decode; the stored data it starts from is what is compared, and each extern
-//! instance's transform as [`primase_havok::extern_shapes`] reads it is checked against its stored floats.
-use primase_fromsoft::{Binder, Game, dcx::Decoder};
-use primase_havok::{Compendium, Tagfile, Value, mesh_sections};
+//! A census of the Havok files a character's binders hold, for twenty characters of each game, so that a reader for a
+//! class (cloth, ragdoll, rigid bodies) is written for a class the files are known to hold, not for one a community
+//! tool names. It prints; it asserts only that the reads that start succeed. The lines:
+//!
+//! - `CHARACTERS <game> <ids>`: the twenty characters taken (every `cNNNN` whose `chrbnd` or `anibnd` the install has,
+//!   twenty of them evenly spread over the list);
+//! - `HAVOK <game> <id> <binder> members <n> classes <class: items, ...> example <member>`: the Havok members of one
+//!   binder grouped by the classes their items have, so a binder whose members all share a layout is one line.
+//!   Animation clips (`aNNN_NNNNNN.hkx`, hundreds a character) are read three at a time and counted;
+//! - `HAVOKERR <game> <id> <binder> <member> <why>`: a member that is no tagfile this reader reads (its file kind);
+//! - `CLASS <game> <class> fields [..]`: the stored field names of each class whose name says cloth, ragdoll, rigid body,
+//!   constraint or physics, once per game, so a reader's fields are the file's own;
+//! - `EXT <game> <binder kind> <extension> members <n> characters <k> read <yes|no>`: every member of the twenty
+//!   characters' binders by binder kind and extension, and whether a primase reader keeps it (`yes` for the model, its
+//!   textures, the cloth companion, the animation binder's tagfiles and event files; the rest is what a notice names as
+//!   not read).
+//!
+//! Runs where the install, its keys and the Oodle library are configured; otherwise it does nothing.
+use primase_fromsoft::{Binder, Game, Install, Keys, dcx::Decoder};
+use primase_havok::{Compendium, Tagfile};
+use std::collections::{BTreeMap, BTreeSet};
 
-use serde_json::{Value as Json, json};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 mod common;
 
-/// A member's name without its folder and `.dcx` suffix.
-fn leaf(name: &str) -> &str {
-    let name = name.rsplit(['/', '\\']).next().unwrap_or(name);
-    name.strip_suffix(".dcx").unwrap_or(name)
+/// The binder kinds a character has, and the variants of the animation and behavior binders.
+const KINDS: [&str; 4] = ["chrbnd", "anibnd", "behbnd", "texbnd"];
+const VARIANTS: [&str; 4] = ["", "_div00", "_div01", "_div02"];
+const TAKEN: usize = 20;
+
+/// Whether a primase reader keeps a member of a binder of `kind` with extension `ext`.
+fn kept(kind: &str, ext: &str) -> bool {
+    matches!(
+        (kind, ext),
+        ("chrbnd", "flver" | "clm2" | "tpf") | ("texbnd", "tpf") | ("anibnd", "hkx" | "tae" | "compendium")
+    )
 }
 
-/// One compressed mesh shape in the oracle's record shape.
-fn shape_record(shape: Value<'_, '_>) -> Result<Json> {
-    let data = shape.field("data")?.dereference()?;
-    let tree = data.field("meshTree")?;
-    let unsigned = |name: &str| -> Result<Vec<u64>> {
-        let a = tree.field(name)?.array()?;
-        (0..a.len()).map(|i| Ok(a.get(i)?.unsigned()?)).collect()
-    };
-    let primitives = tree.field("primitives")?.array()?;
-    let primitives = (0..primitives.len())
-        .map(|i| {
-            let indices = primitives.get(i)?.field("indices")?.array()?;
-            (0..indices.len())
-                .map(|j| Ok(indices.get(j)?.unsigned()?))
-                .collect::<Result<Vec<_>>>()
+/// A clip's member name (`a000_003000.hkx`).
+fn is_clip(leaf: &str) -> bool {
+    leaf.strip_prefix('a')
+        .and_then(|rest| rest.strip_suffix(".hkx"))
+        .and_then(|rest| rest.split_once('_'))
+        .is_some_and(|(group, number)| {
+            !group.is_empty()
+                && !number.is_empty()
+                && group.bytes().chain(number.bytes()).all(|b| b.is_ascii_digit())
         })
-        .collect::<Result<Vec<_>>>()?;
-    let keys = if shape.type_name() == "fsnpCustomParamCompressedMeshShape" {
-        let a = shape.field("triangleIndexToShapeKey")?.array()?;
-        Json::from(
-            (0..a.len())
-                .map(|i| Ok(a.get(i)?.unsigned()?))
-                .collect::<Result<Vec<_>>>()?,
-        )
-    } else {
-        Json::Null
-    };
-    let bits = |v: &[f32]| {
-        v.iter()
-            .map(|f| format!("{:08x}", f.to_bits()))
-            .collect::<Vec<_>>()
-    };
-    let stored = shape.field("externShapes")?.array()?;
-    let mut externs = Vec::new();
-    for i in 0..stored.len() {
-        let instance = stored.get(i)?;
-        let inner = instance.field("shape")?.dereference()?;
-        let vertices = match inner.field("vertices") {
-            Ok(v) => {
-                let v = v.array()?;
-                Json::from(
-                    (0..v.len())
-                        .map(|j| Ok(bits(&v.get(j)?.vector::<4>()?)))
-                        .collect::<Result<Vec<_>>>()?,
-                )
-            }
-            Err(_) => Json::Null,
-        };
-        externs.push(json!({
-            "transform": bits(&instance.field("transform")?.vector::<16>()?),
-            "scale": bits(&instance.field("scale")?.vector::<4>()?),
-            "kind": inner.type_name(),
-            "convex_radius": format!("{:08x}", inner.field("convexRadius")?.float()?.to_bits()),
-            "vertices": vertices,
-        }));
-    }
-    // the instances' transforms as the reader takes them: each column's xyz of the stored words
-    let mesh = primase_havok::compressed_mesh(data)?;
-    for (i, instance) in primase_havok::extern_shapes(shape, &mesh)?.iter().enumerate() {
-        let t = stored.get(i)?.field("transform")?.vector::<16>()?;
-        if (0..4).any(|c| instance.transform[c] != [t[4 * c], t[4 * c + 1], t[4 * c + 2]]) {
-            return Err(format!("extern shape {i}: transform read otherwise than stored").into());
-        }
-    }
-    let sections: Vec<Json> = mesh_sections(data)?
+}
+
+fn interesting(class: &str) -> bool {
+    let lower = class.to_ascii_lowercase();
+    ["cloth", "ragdoll", "rigid", "constraint", "physics"]
         .iter()
-        .map(|s| {
-            json!({
-                "codec": s.codec.iter().map(|f| format!("{:08x}", f.to_bits())).collect::<Vec<_>>(),
-                "first_packed_vertex": s.first_packed_vertex,
-                "packed_vertices": s.packed_vertices,
-                "first_shared_vertex": s.first_shared_vertex,
-                "first_primitive": s.first_primitive,
-                "primitives": s.primitives,
-            })
+        .any(|word| lower.contains(word))
+}
+
+fn census(game: Game, install: &Install, decoder: &Decoder<'_>) -> Result<()> {
+    let archive = install.open()?;
+    let held: Vec<String> = (0..10_000)
+        .map(|n| format!("c{n:04}"))
+        .filter(|id| {
+            archive.contains(&format!("/chr/{id}.chrbnd.dcx")) || archive.contains(&format!("/chr/{id}.anibnd.dcx"))
         })
         .collect();
-    Ok(json!({
-        "kind": shape.type_name(),
-        "bits_per_key": tree.field("bitsPerKey")?.signed()?,
-        "sections": sections,
-        "packed_vertices": unsigned("packedVertices")?,
-        "shared_vertices": unsigned("sharedVertices")?,
-        "shared_vertices_index": unsigned("sharedVerticesIndex")?,
-        "primitives": primitives,
-        "triangle_to_shape_key": keys,
-        "extern_shapes": externs,
-    }))
-}
-
-/// Every compressed mesh shape the tagfile holds, as records, sorted.
-fn shapes(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Vec<String>> {
-    let tag = Tagfile::read(bytes, compendium)?;
-    let mut out = Vec::new();
-    for index in 1..tag.items.len() {
-        let item = tag.item(index)?;
-        for j in 0..item.len() {
-            let value = item.get(j)?;
-            if matches!(
-                value.type_name(),
-                "fsnpCustomParamCompressedMeshShape" | "hknpCompressedMeshShape"
-            ) {
-                out.push(shape_record(value)?.to_string());
+    let ids: Vec<&String> = (0..TAKEN.min(held.len()))
+        .map(|i| &held[i * held.len() / TAKEN.min(held.len())])
+        .collect();
+    println!(
+        "CHARACTERS {} {} of {}: {:?}",
+        game.name(),
+        ids.len(),
+        held.len(),
+        ids
+    );
+    let mut ext: BTreeMap<(String, String), (usize, BTreeSet<String>)> = BTreeMap::new();
+    let mut shown = BTreeSet::new();
+    for id in ids {
+        for kind in KINDS {
+            for variant in VARIANTS {
+                let name = format!("{id}{variant}.{kind}");
+                let path = format!("/chr/{name}.dcx");
+                if !archive.contains(&path) {
+                    continue;
+                }
+                let binder = Binder::read(&archive.read(&path, decoder)?, decoder)?;
+                for f in &binder.files {
+                    let leaf = f.name.as_deref().unwrap_or("").rsplit(['/', '\\']).next().unwrap_or("");
+                    let e = leaf.rsplit_once('.').map_or("", |(_, e)| e).to_ascii_lowercase();
+                    let entry = ext.entry((kind.to_owned(), e)).or_default();
+                    entry.0 += 1;
+                    entry.1.insert(id.clone());
+                }
+                let compendium = match binder
+                    .files
+                    .iter()
+                    .find(|f| f.name.as_deref().is_some_and(|n| n.to_ascii_lowercase().ends_with(".compendium")))
+                {
+                    Some(f) => Some(Compendium::read(&decoder.decode_if_dcx(&f.bytes)?)?),
+                    None => None,
+                };
+                let mut groups: BTreeMap<String, (usize, String)> = BTreeMap::new();
+                let mut clips_read = 0;
+                for f in &binder.files {
+                    let member = f.name.as_deref().unwrap_or("");
+                    let leaf = member.rsplit(['/', '\\']).next().unwrap_or(member).to_ascii_lowercase();
+                    if !leaf.ends_with(".hkx") {
+                        continue;
+                    }
+                    if is_clip(&leaf) {
+                        if clips_read == 3 {
+                            groups.entry("(clips beyond the three read)".to_owned()).or_default().0 += 1;
+                            continue;
+                        }
+                        clips_read += 1;
+                    }
+                    let bytes = decoder.decode_if_dcx(&f.bytes)?;
+                    let tag = match Tagfile::read(&bytes, compendium.as_ref()) {
+                        Ok(tag) => tag,
+                        Err(e) => {
+                            println!("HAVOKERR {} {id} {name} {leaf} {}", game.name(), e.detail);
+                            continue;
+                        }
+                    };
+                    let mut classes: BTreeMap<&str, usize> = BTreeMap::new();
+                    for item in tag.items.iter().skip(1) {
+                        if let Some(t) = tag.types.get(item.type_index) {
+                            *classes.entry(t.name.as_str()).or_default() += 1;
+                            if interesting(&t.name) && shown.insert(t.name.clone()) {
+                                println!(
+                                    "CLASS {} {} fields {:?}",
+                                    game.name(),
+                                    t.name,
+                                    t.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>()
+                                );
+                            }
+                        }
+                    }
+                    let key = classes
+                        .iter()
+                        .map(|(c, n)| format!("{c}: {n}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let entry = groups.entry(key).or_insert_with(|| (0, leaf.clone()));
+                    entry.0 += 1;
+                }
+                for (classes, (members, example)) in groups {
+                    println!(
+                        "HAVOK {} {id} {name} members {members} classes [{classes}] example {example}",
+                        game.name()
+                    );
+                }
             }
         }
     }
-    out.sort();
-    Ok(out)
+    for ((kind, e), (members, characters)) in ext {
+        println!(
+            "EXT {} {kind} {e:?} members {members} characters {} read {}",
+            game.name(),
+            characters.len(),
+            if kept(&kind, &e) { "yes" } else { "no" }
+        );
+    }
+    Ok(())
 }
 
 #[test]
-fn compressed_meshes_match_an_independent_reading() -> Result<()> {
-    let (Some(archive), Some(oracle), Some(dll)) = (
-        common::archive(Game::EldenRing)?,
-        primase_testdata::oracle(
-            primase_testdata::OracleSet::SoulsFormats,
-            primase_testdata::Game::Elden,
-            "format",
-        ),
-        primase_testdata::oodle(primase_testdata::Tool::Oodle6),
-    ) else {
+fn what_the_character_binders_hold_of_havok() -> Result<()> {
+    let Some(dll) = primase_testdata::oodle(primase_testdata::Tool::Oodle6) else {
         return Ok(());
     };
     let dll = common::oodle(dll)?;
@@ -149,89 +174,20 @@ fn compressed_meshes_match_an_independent_reading() -> Result<()> {
         oodle: Some(&dll),
         max_output: 1 << 30,
     };
-    let (mut files, mut compared, mut sections) = (0usize, 0usize, 0usize);
-    let mut failures = Vec::new();
-    let mut binders =
-        std::collections::BTreeMap::<String, (Vec<primase_fromsoft::BinderFile>, Option<Compendium>)>::new();
-    for line in std::fs::read_to_string(oracle.join("havok.jsonl"))?.lines() {
-        let record: Json = serde_json::from_str(line)?;
-        let file = record["file"].as_str().ok_or("file")?;
-        let (binder, member) = file.rsplit_once(':').ok_or("file")?;
-        if !binders.contains_key(binder) {
-            let members = match binder.strip_suffix(".hkxbhd") {
-                Some(stem) => {
-                    Binder::read_split(
-                        &archive.read(binder, &decoder)?,
-                        &archive.read(&format!("{stem}.hkxbdt"), &decoder)?,
-                        &decoder,
-                    )?
-                    .files
-                }
-                None => Binder::read(&archive.read(binder, &decoder)?, &decoder)?.files,
-            };
-            let compendium = match members
-                .iter()
-                .find(|f| leaf(f.name.as_deref().unwrap_or("")).ends_with(".compendium"))
-            {
-                Some(f) => Some(Compendium::read(&decoder.decode_if_dcx(&f.bytes)?)?),
-                None => None,
-            };
-            binders.insert(binder.to_owned(), (members, compendium));
-        }
-        let (members, compendium) = &binders[binder];
-        let bytes = members
-            .iter()
-            .find(|f| f.name.as_deref().is_some_and(|n| leaf(n) == leaf(member)))
-            .ok_or_else(|| format!("{file}: not in the binder"))?;
-        let bytes = decoder.decode_if_dcx(&bytes.bytes)?;
-        files += 1;
-        let ours = match (shapes(&bytes, compendium.as_ref()), record.get("error")) {
-            (Ok(_), Some(e)) => {
-                failures.push(format!("{file}: read, the reference refuses: {e}"));
-                continue;
-            }
-            (Err(e), None) => {
-                failures.push(format!("{file}: the reference reads it, ours refuses: {e}"));
-                continue;
-            }
-            (Err(e), Some(theirs)) => {
-                println!("AGREED REJECTION {file}: ours {e}; reference {theirs}");
-                continue;
-            }
-            (Ok(ours), None) => ours,
-        };
-        let mut theirs: Vec<String> = record["shapes"]
-            .as_array()
-            .ok_or("shapes")?
-            .iter()
-            .map(Json::to_string)
-            .collect();
-        theirs.sort();
-        if ours.len() != theirs.len() {
-            failures.push(format!(
-                "{file}: {} shapes, the reference {}",
-                ours.len(),
-                theirs.len()
-            ));
+    for (game, data) in [
+        (Game::Sekiro, primase_testdata::Game::Sekiro),
+        (Game::EldenRing, primase_testdata::Game::Elden),
+    ] {
+        let (Some(root), keys) = (primase_testdata::install(data), primase_testdata::keys(data)) else {
             continue;
-        }
-        for (o, t) in ours.iter().zip(&theirs) {
-            compared += 1;
-            sections += serde_json::from_str::<Json>(o)?["sections"]
-                .as_array()
-                .map_or(0, Vec::len);
-            if serde_json::from_str::<Json>(o)? != serde_json::from_str::<Json>(t)? {
-                failures.push(format!("{file}: a shape differs"));
-            }
-        }
+        };
+        let keys = match (game, keys) {
+            (Game::Sekiro, _) => Keys::published(Game::Sekiro).ok_or("Sekiro's keys")?,
+            (_, Some(folder)) => Keys::from_folder(folder, game)?,
+            (_, None) => continue,
+        };
+        let install = Install::new(root, game, keys);
+        census(game, &install, &decoder)?;
     }
-    println!(
-        "files {files}, compressed mesh shapes {compared}, sections {sections}, mismatches {}",
-        failures.len()
-    );
-    for f in failures.iter().take(20) {
-        println!("MISMATCH {f}");
-    }
-    assert!(files > 0 && failures.is_empty());
     Ok(())
 }

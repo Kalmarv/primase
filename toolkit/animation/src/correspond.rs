@@ -170,7 +170,9 @@ pub fn pair_joints(
     }
     // the parents must correspond: drop candidates whose parent is not paired with the target's parent, until none
     // (nothing to drop with parents=any)
-    while parents == Parents::Same {
+    // (a loop that ends when a round drops nothing, run only when the parents must correspond)
+    if parents == Parents::Same {
+        loop {
         let target_parents: BTreeMap<JointId, Option<JointId>> =
             to.joints.iter().map(|j| (j.id, j.parent)).collect();
         let doomed: Vec<JointId> = from
@@ -195,6 +197,7 @@ pub fn pair_joints(
         );
         for d in doomed {
             candidate.remove(&d);
+        }
         }
     }
     candidate

@@ -5,7 +5,7 @@ use crate::materials::Material;
 use crate::metaparam::Metaparam;
 use crate::sekiro::source::{MaterialShader, Payloads, ShaderBundle, ShaderPrograms, TexturePayloads};
 use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
-use primase_core::shader::{Shader, ShaderBinding, ShaderFormat, Stage};
+use primase_core::shader::{MaterialPrograms, ProgramFacts, Shader, ShaderBinding, ShaderFormat, Stage};
 use primase_core::{ColorSpace, Component, Entity, Mesh, Name, Semantic, TexRole, Texture, World};
 use primase_shader::ProgramGraph;
 use primase_shader::output_uses::bind_output_uses;
@@ -118,7 +118,7 @@ impl Pass for ResolveFromSoftShaders {
         &[Material::NAME]
     }
     fn provides(&self) -> &[&'static str] {
-        &[Shader::NAME, ShaderBinding::NAME, Texture::NAME, Name::NAME]
+        &[Shader::NAME, ShaderBinding::NAME, MaterialPrograms::NAME, ProgramFacts::NAME, Texture::NAME, Name::NAME]
     }
     fn approximates(&self) -> &'static str {
         "a texture slot with no texture gets a preview colour for its role (unbound-textures=preview)"
@@ -240,6 +240,8 @@ fn run(
                     .map(|p| (p.name.clone(), p.format, p.code.clone()))
             });
         let Some((name, format, bytes)) = found else {
+            world.insert(material_entity,MaterialPrograms(vec![ProgramFacts::unavailable(requested,Stage::Pixel,None,
+                "the reader does not hold the requested pixel program")]));
             t.without_program += 1;
             continue;
         };
@@ -269,10 +271,26 @@ fn run(
             }
         }
         if !shaders.contains_key(&name) {
-            let parsed =
-                crate::layer_bake::program_executor(format, &bytes).map_err(|e| format!("{name}: {e}"))?;
+            let lifted = match crate::passes::program_reads::lift(format, &bytes) {
+                Ok(lifted) => lifted,
+                Err(error) => {
+                    world.insert(material_entity,MaterialPrograms(vec![ProgramFacts::unavailable(&name,Stage::Pixel,
+                        Some(primase_shader::source_hash(&bytes)),error.to_string())]));
+                    return Err(format!("{name}: {error}"));
+                }
+            };
+            let facts = lifted.facts(&name);
+            let parsed = match ProgramShader::new(lifted) {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    // This is an executor refusal, not a failed lift: retain the successful source facts.
+                    world.insert(material_entity,MaterialPrograms(vec![facts]));
+                    return Err(format!("{name}: {error}"));
+                }
+            };
             let entity = world.spawn();
             world.insert(entity, Name(name.clone()));
+            world.insert(entity,facts);
             world.insert(
                 entity,
                 Shader {
@@ -418,6 +436,11 @@ fn run(
                 }
             }
         }
+        // Reuse the very lift used to resolve this material, including the material-specific output roles.
+        let facts = world.get::<ProgramFacts>(*shader_entity).ok_or("resolved pixel program has no facts")?
+            .clone().bound(*shader_entity,&stages.iter().find(|stage|stage.stage == Stage::Pixel)
+                .ok_or("resolved material has no pixel stage")?.outputs);
+        world.insert(material_entity,MaterialPrograms(vec![facts]));
         world.insert(material_entity, ShaderBinding { stages, state });
         t.bound += 1;
     }
@@ -504,4 +527,25 @@ fn run(
         log.approximate(&policy, count);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod program_facts_tests {
+    #[test]
+    fn sekiro_and_elden_fixture_lifts_keep_source_counts_hash_and_register_inputs() {
+        use primase_core::shader::{InstructionUnit,ShaderFormat,Stage};
+        for (name,format,bytes,unit) in [
+            ("Sekiro alpha reference fixture",ShaderFormat::Dxbc,
+                include_bytes!("../../../tests/fixtures/alpha_ref_tested.dxbc").as_slice(),InstructionUnit::DxbcTokenRecords),
+            ("Elden alpha reference fixture",ShaderFormat::Dxil,
+                include_bytes!("../../../tests/fixtures/alpha_ref_tested.dxil").as_slice(),InstructionUnit::DxilInstructions),
+        ] {
+            let lifted = crate::passes::program_reads::lift(format,bytes).unwrap();
+            let facts = lifted.facts(name);
+            assert_eq!(facts.stage,Stage::Pixel); assert_eq!(facts.hash,Some(primase_shader::source_hash(bytes)));
+            assert_eq!(facts.instruction_count.unwrap().unit,unit); assert!(facts.instruction_count.unwrap().count > 0);
+            assert_eq!(facts.inputs,lifted.interface.inputs.iter().filter(|input|input.used).cloned().collect::<Vec<_>>());
+            assert!(!facts.inputs.is_empty()); assert!(facts.inputs.iter().all(|input|input.provenance.d3d.is_some()));
+        }
+    }
 }

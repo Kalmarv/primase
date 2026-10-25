@@ -701,6 +701,7 @@ fn the_fromsoft_passes_register_by_name() {
         "lower-fromsoft-lights",
         "lower-fromsoft-materials",
         "lower-fromsoft-object-collision",
+        "lower-fromsoft-part-collision",
         "raise-fromsoft-display-masks",
         "resolve-fromsoft-shaders",
         "select-fromsoft-outfit",

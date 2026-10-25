@@ -340,7 +340,7 @@ mod tests {
         u32le(&mut b, 0x118, 0x120);
         // the record: the name at 0x140, loops, no import, source -1
         u32le(&mut b, 0x120, 0x140);
-        b[0x128] = 1;
+        put(&mut b, 0x128, &[1]);
         u32le(&mut b, 0x12c, u32::MAX);
         let name: Vec<u8> = "a000_003000.hkt\0".encode_utf16().flat_map(u16::to_le_bytes).collect();
         put(&mut b, 0x140, &name);

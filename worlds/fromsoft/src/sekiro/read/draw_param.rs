@@ -30,6 +30,11 @@ use std::collections::BTreeMap;
 
 const LIGHT_SET: &str = "LightSet ParamEditor";
 const FOG: &str = "FogParamEditor";
+/// Elden Ring's fog group (its files store this and no `FogParamEditor`). The part's fog slot (`FogParamID` in
+/// SoulsFormats' `GparamConfig`) is taken to select its sets: a hypothesis from the slot's name and from the ids the
+/// census found in it (100 and 101, 77 to 94: the same kind of hundreds ids as the light set's), decided by whether the
+/// ids parts name are among the ones stored (`absent_ids` and `other_ids` name `FogVolume ParamEditor <id>`).
+const FOG_VOLUME: &str = "FogVolume ParamEditor";
 const LIGHT_SCATTERING: &str = "LightScattering : ParamEditor";
 const ENV_MAP: &str = "Env Map:Editor";
 
@@ -119,7 +124,7 @@ pub fn available(archive: &Archive, game: Game, area: &str) -> Vec<String> {
 fn part_id(group: &str) -> Option<fn(&PartGparam) -> i32> {
     match group {
         LIGHT_SET => Some(|c| c.light_set),
-        FOG => Some(|c| c.fog),
+        FOG | FOG_VOLUME => Some(|c| c.fog),
         LIGHT_SCATTERING => Some(|c| c.light_scattering),
         ENV_MAP => Some(|c| c.env_map),
         _ => None,
@@ -347,7 +352,7 @@ impl Report {
                 Notice::new(
                     stage,
                     NoticeKind::Unsupported,
-                    "value sets parts name that the draw-param file does not store (the group is not read)",
+                    "value sets parts name that the draw-param file does not store (the group is not read; a later file of a map stores only what it changes, so where it stores no field in the group the base file holds the set)",
                     self.absent_ids.values().sum::<usize>() as u64,
                 ),
                 |n, (set, parts)| n.example(format!("{set}: {parts} parts")),
@@ -530,6 +535,34 @@ mod tests {
         let d = dominant([5, 2, 5, 2, -1, -1, -1].into_iter()).unwrap();
         assert_eq!((d.id, d.parts, d.others), (2, 2, BTreeMap::from([(5, 2)])));
         assert!(dominant([-1, -1].into_iter()).is_none() && dominant(std::iter::empty()).is_none());
+    }
+
+    #[test]
+    fn elden_rings_fog_volume_takes_the_parts_fog_id_and_is_left_with_its_ids_counted_when_none_is_stored() {
+        // Elden m10_00_0000: the fog volume stores sets 100 and 101 and no ID 0
+        let fog_volume = Gparam {
+            version: 5,
+            groups: vec![group(
+                FOG_VOLUME,
+                vec![field("Density", &[100, 101], Values::F32(vec![1.0, 2.0]))],
+            )],
+            unread: Unread::default(),
+        };
+        let mut report = Report::default();
+        let source = select(&fog_volume, "m10_00_0000", &[config(-1, 101, -1), config(-1, 101, -1)], &mut report);
+        let g = source.group(FOG_VOLUME).unwrap();
+        assert_eq!((g.id, g.chosen), (101, SetChosen::ByParts));
+        assert_eq!(g.value("Density"), Some(&Value::Float(2.0)));
+        assert!(report.unchosen_sets.is_empty());
+        // parts naming a set the group does not store leave it, and say which
+        let mut report = Report::default();
+        let source = select(&fog_volume, "m10_00_0000", &[config(-1, 90, -1)], &mut report);
+        assert!(source.group(FOG_VOLUME).is_none());
+        assert_eq!(report.absent_ids, BTreeMap::from([(format!("{FOG_VOLUME} 90"), 1)]));
+        assert_eq!(report.unchosen_sets[FOG_VOLUME], (vec![100, 101], 1));
+        // parts naming none leave a group of several sets and no ID 0, as before
+        let mut report = Report::default();
+        assert!(select(&fog_volume, "m10_00_0000", &[config(-1, -1, -1)], &mut report).group(FOG_VOLUME).is_none());
     }
 
     #[test]

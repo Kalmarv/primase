@@ -134,6 +134,9 @@ fn why_not_lowered(group: &str) -> &'static str {
     match group {
         LIGHT_SET => "specular, sharpness, occlusion, second directional and local lights: no core.light fields",
         VOLUMETRIC => "a volumetric fog key this pass does not know: only the keys of the census are kept in core.atmosphere's volumetric fog",
+        "FogVolume ParamEditor" => {
+            "Elden Ring's fog volume (30 fields at the value sets the census found): its keys and units are not established, and core.atmosphere's volumetric fog carries Sekiro's VolumetricFog keys only"
+        }
         "FogParamEditor" | "Fog Volume" => {
             "fog: core.atmosphere states fog, but no census file stores this group, so its keys and units are not established"
         }
