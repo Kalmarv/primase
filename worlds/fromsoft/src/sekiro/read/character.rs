@@ -158,8 +158,10 @@ impl CharacterReport {
             out.push(Notice::new(
                 "fromsoft character",
                 NoticeKind::Approximation,
-                "dummy polygons placed as sockets by position alone, in the space of their parent bone and following \
-                 their attach bone; their forward and upward directions stay in fromsoft.dummies",
+                "dummy polygons placed as sockets in their parent bone's space and following their attach bone \
+                 (else parent bone); rotation uses normalized forward (-Z) and upward (+Y) directions when \
+                 use_upward_vector is set and both form a valid frame, otherwise identity; original directions \
+                 and their lengths stay in fromsoft.dummies",
                 (self.dummies - self.dummies_unplaced) as u64,
             ));
         }
@@ -1290,6 +1292,17 @@ impl Reader for CharacterReader<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dummy_notice_describes_the_lowered_rotation_and_its_fallback() {
+        let report = CharacterReport { dummies: 3, dummies_unplaced: 1, ..Default::default() };
+        let notices = report.notices();
+        let placed = notices.iter().find(|notice| notice.reason.contains("dummy polygons placed")).unwrap();
+        assert_eq!(placed.count, 2);
+        assert!(placed.reason.contains("forward (-Z)") && placed.reason.contains("upward (+Y)"));
+        assert!(placed.reason.contains("use_upward_vector") && placed.reason.contains("otherwise identity"));
+        assert!(!placed.reason.contains("position alone"));
+    }
 
     #[test]
     fn character_ids_are_c_and_four_digits() {

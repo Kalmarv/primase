@@ -549,7 +549,10 @@ A character's or part's files are kept beyond the model and its clips:
 - The FLVER's dummy polygons are `fromsoft.dummies` on the prototype (`flver::Dummy`: position, forward and upward
   directions, the reference id, the parent and attach bones, colour bytes, two flags and two unexplained words, as
   stored) and `core.sockets` on the skeleton: a socket for each dummy that places, on its attach bone (else its parent
-  bone), at its position taken in the parent bone's space (the model's where the parent is -1), by position alone. One
+  bone), at its position taken in the parent bone's space (the model's where the parent is -1). Where
+  `use_upward_vector` is set and the directions form a valid frame, normalized forward (-Z) and upward (+Y) also
+  set its rotation in the attached joint's space; otherwise rotation is identity. Stored direction lengths stay in
+  `fromsoft.dummies`. One
   that names a bone the model lacks, follows none, or stands at no finite place is left out and counted
   (`CharacterReport::dummies_unplaced`). Which reference id is which attach point is the game's, not the file's.
 - The `.tae` event files of an animation binder (`tae::Tae`, version `0x1000D`, Sekiro's and Elden Ring's) are read: each

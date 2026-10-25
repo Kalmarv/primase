@@ -75,3 +75,13 @@ constraint sets; any other constraint set is kept by its class name), `hknpRagdo
 body tags) and `hknpConstraintCinfo` (bodies, flags, ids and the class of its constraint data; atoms are not read). A field the
 file lacks is an error naming it. The field names are those `worlds/fromsoft/tests/havok_census.rs` printed (`CLASS`); its
 `PHYSICS` lines are the reader's check against the install.
+
+The `tests-a0b6470ed/havok_census.log` failures split into cloth `null pointer` and ragdoll
+`expected integer`. Reference arrays must use the reflected element size: HKLib's tagfile
+`PointerFormatHandler` reads UInt64 and `IndexItem` advances by one such element. A four-byte stride
+instead visits the first pointer's zero high word as the second pointer. Constraint ids in the 2018
+metadata are records (`hknpBodyId.serialAndIndex`, `hkHandle.value` inherited by constraint/group ids),
+not integer-format values. The reader follows these named fields and retains primitive integer layouts.
+`tests/cloth.rs` supplies synthetic layouts for both SDK versions, two-reference cloth/pose arrays,
+particle values, ragdoll tags and record/primitive constraint ids. This is a written regression,
+not a claim that the install census has been rerun successfully.

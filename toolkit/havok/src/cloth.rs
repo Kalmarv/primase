@@ -128,6 +128,13 @@ fn list<'t, 'a, T>(v: Value<'t, 'a>, each: impl Fn(Value<'t, 'a>) -> Result<T>) 
 }
 
 fn small(v: Value<'_, '_>) -> Result<u32> {
+    // Havok 2018 stores these ids as reflected records; 2016 may expose the
+    // integer directly. Read only the established fields, never a record's first bytes.
+    let v = match (v.format()? & 15, v.type_name()) {
+        (7, "hknpBodyId") => v.field("serialAndIndex")?,
+        (7, "hknpConstraintId" | "hknpConstraintGroupId" | "hkHandle") => v.field("value")?,
+        _ => v,
+    };
     u32::try_from(v.unsigned()?).map_err(|_| invalid(v.offset, "value outside u32"))
 }
 

@@ -164,7 +164,7 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>) -> Result<()> {
                                     physics.constraints.len(),
                                 );
                             }
-                            Err(e) => println!("PHYSICSERR {} {id} {leaf} {}", game.name(), e.detail),
+                            Err(e) => println!("PHYSICSERR {} {id} {leaf} {e}", game.name()),
                         }
                     }
                     let key = classes

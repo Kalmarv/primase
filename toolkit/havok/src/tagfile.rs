@@ -169,14 +169,11 @@ impl<'a> Tagfile<'a> {
         usize::try_from(format).map_err(|_| invalid(0, "type format exceeds the address space"))
     }
     pub fn stride(&self, index: usize) -> Result<usize> {
-        let f = self.format(index)?;
-        // Serialized reference arrays contain 32-bit ITEM indices. Their type's
-        // byte size describes the runtime pointer, not the serialized stride.
-        if f & 15 == 6 || (f & 15 == 3 && f & 32 == 0) {
-            Ok(4)
-        } else {
-            self.inherited(index, |t| t.size)
-        }
+        // DATA retains the reflected element width, including references: an eight-byte
+        // pointer stores its ITEM index in the low word and a zero high word. Advancing
+        // four bytes makes the second array element read that padding as a null pointer.
+        // HKLib's PointerFormatHandler and IndexItem read UInt64 per element (2018.1).
+        self.inherited(index, |t| t.size)
     }
     pub fn bytes(&self, offset: usize, size: usize) -> Result<&'a [u8]> {
         let end = offset

@@ -1,5 +1,5 @@
 //! Hand-authored tagfile records exercise serialized references independently
-//! of the production parser, including runtime-pointer versus stored-index size.
+//! of the production parser, including the reflected width of serialized ITEM references.
 use primase_havok::Tagfile;
 fn section(name: &[u8; 4], leaf: bool, bytes: Vec<u8>) -> Vec<u8> {
     let mut out = (((bytes.len() + 8) as u32) | if leaf { 0x40000000 } else { 0 })
@@ -39,18 +39,18 @@ fn fixture_with(sdk: &[u8; 8], root_counts: Vec<u8>) -> Vec<u8> {
     types.extend(section(b"TNA1", true, names));
     types.extend(section(b"FSTR", true, b"value\0pointer\0array\0".to_vec()));
     types.extend(section(b"TBDY", true, body));
-    let mut data = vec![0u8; 44];
+    let mut data = vec![0u8; 56];
     data[0..4].copy_from_slice(&17u32.to_le_bytes());
     data[8..12].copy_from_slice(&2u32.to_le_bytes());
     data[16..20].copy_from_slice(&3u32.to_le_bytes());
     data[32..36].copy_from_slice(&91u32.to_le_bytes());
-    data[36..40].copy_from_slice(&2u32.to_le_bytes());
-    data[40..44].copy_from_slice(&2u32.to_le_bytes());
+    data[40..48].copy_from_slice(&2u64.to_le_bytes());
+    data[48..56].copy_from_slice(&2u64.to_le_bytes());
     let mut items = vec![0u8; 12];
     for (kind, offset, count) in [
         (0x10000001u32, 0u32, 1u32),
         (0x10000002, 32, 1),
-        (0x20000003, 36, 2),
+        (0x20000003, 40, 2),
     ] {
         items.extend(kind.to_le_bytes());
         items.extend(offset.to_le_bytes());
@@ -63,7 +63,7 @@ fn fixture_with(sdk: &[u8; 8], root_counts: Vec<u8>) -> Vec<u8> {
     section(b"TAG0", false, root)
 }
 #[test]
-fn pointer_arrays_use_serialized_stride() {
+fn pointer_arrays_keep_the_reflected_eight_byte_stride() {
     let bytes = fixture();
     let tag = Tagfile::read(&bytes, None).expect("fixture");
     let root = tag.root().expect("root");
