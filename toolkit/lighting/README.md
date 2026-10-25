@@ -38,6 +38,10 @@ Approximations that stand core lights in for light a destination cannot draw.
   each placement of a named prototype one spot straight down (its lights folded into one: a street lamp whose panels
   face sideways under a shade); `scale` multiplies the intensity of named prototypes. Not read: a surface's two sides, an animation's timing, a time-of-day
   switch of the emission (a light is always on; a destination's own time-of-day mask applies).
+- `scale-emission` (`ScaleEmission`): how bright emissive surfaces draw, apart from the lights made of them. Each
+  emissive material's strength times a factor stated by the name of the mesh drawing it (`prototypes`) or else of the
+  material (`materials`); a material drawn at several factors is copied once per factor (`NAME xFACTOR`), the original
+  keeping the unscaled primitives or else the most common factor. Run after `emissive-lights`.
 - `SurfaceGrid`: the world's placed triangles (`placed_triangles`) bucketed in
   cubic cells within a box of interest, for "is a surface nearer than `d`" queries,
   by meshops' point-triangle distance.
