@@ -339,8 +339,8 @@ mod tests {
             ("C[DetailBlend][S2]_cloth", "[S2] family"),
             ("C[DetailBlend]_SSS", "_SSS family"),
             ("C[DetailBlend]_SSS_cloth", "_SSS family"),
-            ("C[DetailBlend]_FurBlur", "no term for"),
-            ("C[DetailBlend][1_0_0_0][S2]_Glow[Int]", "no term for"),
+            ("C[DetailBlend]_FurBlur", "has a term for"),
+            ("C[DetailBlend][1_0_0_0][S2]_Glow[Int]", "has a term for"),
         ] {
             let Some(Err(reason)) = family(shader) else {
                 panic!("{shader} is not refused by name");

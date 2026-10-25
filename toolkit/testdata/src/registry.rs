@@ -1061,4 +1061,8 @@ pub const DEBUG: &[(&str, &str)] = &[
         "fromsoft.census_areas",
         "which areas the FromSoft memory census reads: a comma list of `<game>/<area>` or `<area>` (default every area it lists; one to a process so an abort loses no other)",
     ),
+    (
+        "fromsoft.detail_census",
+        "which characters the detail-blend census samples: `<game>:<ids>;<game>:<ids>`, each id `cNNNN` (default `elden:c2120,c3251,c2030,c2010;sekiro:c1070`; worlds/fromsoft/tests/detail_census.rs)",
+    ),
 ];

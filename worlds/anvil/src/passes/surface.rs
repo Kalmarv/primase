@@ -500,7 +500,7 @@ impl Pass for BakeAnvilSurface {
                         primitive.material=Some(m);*p=primitive;changed=true;
                         // The bake is the approximation a viewer must show for the material it made, its text the
                         // pass's own declaration made specific to this run's density and budget; the AO it mixed in is
-                        // the same material's (DESIGN-core-lowering.md 2.8: reported on the material).
+                        // the same material's (reported on the material).
                         log.approximate_on(m,&format!("{template}: surface baked at {} texels per metre, up to {} px: surface atlas at caller density/budget; stated static camera for detail blending; uniform terrain AO, caller-stated sediment omission or refusal, stated sampler addressing; static draw without motion",self.texels_per_metre,self.max_size),1);
                         if ao_mixed {
                             log.approximate_on(m,&format!("{template}: {}", super::gbuffer::OCCLUSION_APPROXIMATION),1);

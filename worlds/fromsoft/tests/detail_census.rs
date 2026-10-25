@@ -12,7 +12,7 @@
 //!    - `VERDICT <family> <derived|refused: reason>`: whether the pass derives the family
 //!      ([`primase_fromsoft::sekiro::passes::detail::family`]) or refuses it by name.
 //! 2. `detail_blend_materials_of_characters_by_program` reads characters (Elden Ring's `c2120`, `c3251`, `c2030`, `c2010`
-//!    and Sekiro's `c1070` by default; `PRIMASE_DETAIL_CENSUS=elden:c2120,c3251;sekiro:c1070` chooses others), lowers them
+//!    and Sekiro's `c1070` by default; the debug key `fromsoft.detail_census=elden:c2120,c3251;sekiro:c1070` chooses others), lowers them
 //!    as the lab lowers a character up to its shader binding, and derives each derived-family material's equation
 //!    ([`primase_fromsoft::detail_derive::derive`]) against the phase-1 vocabulary, one line per material:
 //!    - `FITS <game> <char> <program> lowering <..> base_saturation <..> weights <n> proof <role=units ..>`: the
@@ -156,7 +156,7 @@ fn elden_ring_detail_blend_programs_by_family_and_switch() -> Result<()> {
 /// The characters to sample: `game:ids;game:ids`, each id `cNNNN`.
 fn sampled() -> Vec<(Game, Vec<String>)> {
     let default = "elden:c2120,c3251,c2030,c2010;sekiro:c1070";
-    let text = std::env::var("PRIMASE_DETAIL_CENSUS").unwrap_or_else(|_| default.to_owned());
+    let text = primase_testdata::debug("fromsoft.detail_census").unwrap_or_else(|| default.to_owned());
     text.split(';')
         .filter_map(|group| {
             let (game, ids) = group.split_once(':')?;

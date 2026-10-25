@@ -244,7 +244,7 @@ impl Product {
         })
     }
     /// Replay the bake's counts, and its approximations on the material they were made for: the card shows them as
-    /// that material's recorded bake (DESIGN-core-lowering.md 2.8). A cache hit replays exactly what the miss recorded.
+    /// that material's recorded bake. A cache hit replays exactly what the miss recorded.
     pub(super) fn report(&self, log: &mut PassLog, e: primase_core::Entity) {
         for (k, n) in &self.counts {
             log.count(k, *n);
@@ -577,7 +577,7 @@ mod tests {
         let dir = directory("roundtrip");
         let mut fresh_log = PassLog::default();
         let fresh = bake(f.prepare(2), &f.world, None, &mut fresh_log).unwrap();
-        fresh.report(&mut fresh_log);
+        fresh.report(&mut fresh_log, f.texture);
         let expected = frame(&fresh).unwrap();
         let cache = Arc::new(Cache::open(&dir, 1 << 20).unwrap());
         let mut miss_log = PassLog::default();
@@ -588,7 +588,7 @@ mod tests {
             &mut miss_log,
         )
         .unwrap();
-        miss.report(&mut miss_log);
+        miss.report(&mut miss_log, f.texture);
         assert_eq!(expected, frame(&miss).unwrap());
         assert_eq!(miss_log.counts.remove("program bake cache misses"), Some(1));
         assert_eq!(fresh_log.counts, miss_log.counts);
@@ -604,7 +604,7 @@ mod tests {
             &mut hit_log,
         )
         .unwrap();
-        hit.report(&mut hit_log);
+        hit.report(&mut hit_log, f.texture);
         assert_eq!(expected, frame(&hit).unwrap());
         assert_eq!(hit_log.counts.remove("program bake cache hits"), Some(1));
         assert_eq!(fresh_log.counts, hit_log.counts);

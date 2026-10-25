@@ -184,7 +184,8 @@ pub fn weight_steps(v: f32, steps: &[WeightStep]) -> f32 {
         WeightStep::Min(bound) => x.min(bound),
         WeightStep::Max(bound) => x.max(bound),
         WeightStep::Affine { scale, bias } => x * scale + bias,
-        WeightStep::Saturate => x.max(0.0).min(1.0),
+        // as a GPU's saturate: NaN is 0
+        WeightStep::Saturate => if x.is_nan() { 0.0 } else { x.clamp(0.0, 1.0) },
     })
 }
 
@@ -797,7 +798,7 @@ mod tests {
             0.5625
         );
         let mut world = World::new();
-        let weight = |steps| Weight {
+        let mut weight = |steps| Weight {
             source: Source::Mask {
                 texture: TextureRef::new(world.spawn()),
                 channels: [0., 0., 0., 1.],

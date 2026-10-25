@@ -502,6 +502,7 @@ produced by something other than the code it checks.
 | `dxil.fuzz_runs` | how many mutated fixtures the DXIL fuzz test runs (default 3000) |
 | `fromsoft.memory_cap_gb` | the most GiB the FromSoft memory census lets a read hold before it aborts naming the stage (default 10; worlds/fromsoft/tests/memory_census.rs) |
 | `fromsoft.census_areas` | which areas the FromSoft memory census reads: a comma list of `<game>/<area>` or `<area>` (default every area it lists; one to a process so an abort loses no other) |
+| `fromsoft.detail_census` | which characters the detail-blend census samples: `<game>:<ids>;<game>:<ids>`, each id `cNNNN` (default `elden:c2120,c3251,c2030,c2010;sekiro:c1070`; worlds/fromsoft/tests/detail_census.rs) |
 
 <!-- end of real-data tables -->
 

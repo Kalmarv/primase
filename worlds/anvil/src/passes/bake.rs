@@ -1459,7 +1459,7 @@ impl Pass for BakeAnvilMaterial {
                 reason: format!("{template}: own G-buffer program baked at {} x {}; engine inputs and sampling choices are recorded in the pass options and approximation log", self.size, self.size),
             });
             // The bake is itself the approximation a viewer must show for this material, its text the pass's own
-            // declaration made specific to this run's size (DESIGN-core-lowering.md 2.8: reported on the material).
+            // declaration made specific to this run's size (reported on the material).
             log.approximate_on(
                 e,
                 &format!(

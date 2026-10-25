@@ -171,7 +171,7 @@ impl Pass for BakeFromSoftMaterials {
             let name = format!("baked_{}", source.identity_digest().map_err(|e| e.to_string())?);
             baked.report(log, entity);
             // The bake itself is the approximation this material carries, its text the pass's own declaration made
-            // specific to the output size (DESIGN-core-lowering.md 2.8: a bake is reported on the material).
+            // specific to the output size (a bake is reported on the material).
             log.approximate_on(
                 entity,
                 &format!(

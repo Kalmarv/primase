@@ -48,6 +48,7 @@ elden-c3000.log.bake-fromsoft-materials.approximation.instance record frozen to 
 elden-c3000.log.bake-fromsoft-materials.approximation.native texture density capped: program bake density: independent source width/height maxima NxN, requested NxN, allocated NxN=30
 elden-c3000.log.bake-fromsoft-materials.approximation.program bake follows native texture dimensions; tiled detail can lose density=30
 elden-c3000.log.bake-fromsoft-materials.approximation.program bake refused; lowered material retained: vertex binding at NxN: input TANGENTN has no value to run on: Stream(Tangent(N))=3
+elden-c3000.log.bake-fromsoft-materials.approximation.program baked to PBR textures at N px: static flat tangent frame and white vertex colour; secondary UV sets replaced by UVN; base-mip biline=30
 elden-c3000.log.bake-fromsoft-materials.approximation.skinning palette frozen to the identity (bind pose); the pixel inputs do not depend on the pose=30
 elden-c3000.log.bake-fromsoft-materials.approximation.static flat tangent frame, white vertex colour and coincident UV sets=30
 elden-c3000.log.bake-fromsoft-materials.approximation.texture scroll frozen to the identity: N,N layered draws in a Sekiro capture all identity; animated models unobserved=30
@@ -151,6 +152,7 @@ wolf-ashina.log.bake-fromsoft-materials.approximation.preview default for missin
 wolf-ashina.log.bake-fromsoft-materials.approximation.preview default for missing ReflectanceMap binding=5
 wolf-ashina.log.bake-fromsoft-materials.approximation.program bake follows native texture dimensions; tiled detail can lose density=25
 wolf-ashina.log.bake-fromsoft-materials.approximation.program bake refused; lowered material retained: no albedo output role: scene-dependent Colour (frame, view, object or raster inputs); porta=2
+wolf-ashina.log.bake-fromsoft-materials.approximation.program baked to PBR textures at N px: static flat tangent frame and white vertex colour; secondary UV sets replaced by UVN; base-mip biline=25
 wolf-ashina.log.bake-fromsoft-materials.approximation.skinning palette frozen to the identity (bind pose); the pixel inputs do not depend on the pose=25
 wolf-ashina.log.bake-fromsoft-materials.approximation.static flat tangent frame, white vertex colour and coincident UV sets=25
 wolf-ashina.log.bake-fromsoft-materials.approximation.texture scroll frozen to the identity: N,N layered draws in a Sekiro capture all identity; animated models unobserved=25
@@ -272,6 +274,7 @@ wolf-default.log.bake-fromsoft-materials.approximation.preview default for missi
 wolf-default.log.bake-fromsoft-materials.approximation.preview default for missing ReflectanceMap binding=12
 wolf-default.log.bake-fromsoft-materials.approximation.program bake follows native texture dimensions; tiled detail can lose density=38
 wolf-default.log.bake-fromsoft-materials.approximation.program bake refused; lowered material retained: no albedo output role: scene-dependent Colour (frame, view, object or raster inputs); porta=4
+wolf-default.log.bake-fromsoft-materials.approximation.program baked to PBR textures at N px: static flat tangent frame and white vertex colour; secondary UV sets replaced by UVN; base-mip biline=38
 wolf-default.log.bake-fromsoft-materials.approximation.skinning palette frozen to the identity (bind pose); the pixel inputs do not depend on the pose=38
 wolf-default.log.bake-fromsoft-materials.approximation.static flat tangent frame, white vertex colour and coincident UV sets=38
 wolf-default.log.bake-fromsoft-materials.approximation.texture scroll frozen to the identity: N,N layered draws in a Sekiro capture all identity; animated models unobserved=38

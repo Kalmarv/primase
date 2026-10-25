@@ -130,7 +130,7 @@ impl Pass for BakeFromSoftLayers {
         if unplaced > 0 {
             log.count("unplaced meshes whose layer inputs stay", unplaced);
         }
-        // What the bake approximates, recorded once on each material it makes (DESIGN-core-lowering.md 2.8): the pass's
+        // What the bake approximates, recorded once on each material it makes: the pass's
         // own declaration, made specific to this run's size.
         let baked_text = format!(
             "layer materials baked per weight level at up to {} px: layer inputs as constant per-triangle levels; \

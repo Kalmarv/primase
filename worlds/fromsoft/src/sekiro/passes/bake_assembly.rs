@@ -118,13 +118,13 @@ fn source_variant(
 /// Bake every group at its reference size capped at `max_size`, its programs sampled at `sample_time` seconds, and
 /// replace the grouped parts by their levels' parts ([`World::rebuild_primitives`], every per-primitive component
 /// following). Returns the report and the primitives (prototype, index after the rebuild) the baked parts became.
+/// `baked_text` is what the bake itself approximates, as the pass's declaration puts it for this run: recorded once on
+/// every material the bake makes ([`primase_core::pass::PassLog::approximate_on`]).
 pub(super) fn assemble(
     bake: &AreaBake,
     prototypes: &BTreeMap<String, Entity>,
     max_size: u32,
     sample_time: f32,
-    /// What the bake itself approximates, as the pass's declaration puts it for this run: recorded once on every
-    /// material the bake makes ([`primase_core::pass::PassLog::approximate_on`], DESIGN-core-lowering.md 2.8).
     baked_text: &str,
     world: &mut World,
 ) -> Result<(BakeReport, BTreeSet<(Entity, usize)>)> {
@@ -310,7 +310,7 @@ pub(super) fn assemble(
         world.despawn(*entity);
     }
     // What each group's bake approximated belongs to every material it made that the bake kept: a bake is reported on
-    // the material, not as a provenance record (DESIGN-core-lowering.md 2.8). The bake itself is one record per
+    // the material, not as a provenance record. The bake itself is one record per
     // material, its text the pass's; the group's other reasons keep their counts and gain the materials they concern.
     for (made, mut group_log) in records {
         let made: Vec<Entity> = made.into_iter().filter(|e| world.is_alive(*e)).collect();
