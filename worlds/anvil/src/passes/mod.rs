@@ -34,7 +34,7 @@ mod skin;
 mod splat;
 mod water;
 mod world_uv;
-pub use bake::{BAKE_ANVIL_MATERIAL, BakeAnvilMaterial, gbuffer_pixel_key};
+pub use bake::{BAKE_ANVIL_MATERIAL, BakeAnvilMaterial, UnstatedAddress, gbuffer_pixel_key};
 pub use clips::{LOWER_ANVIL_CLIPS, LowerAnvilClips};
 pub use decals::{Family, FamilyRule, LOWER_ANVIL_DECALS, LowerAnvilDecals, TerrainDecals, family};
 pub use grass::{Density, LOWER_ANVIL_GRASS, LowerAnvilGrass};
