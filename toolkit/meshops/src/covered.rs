@@ -29,7 +29,8 @@
 //! polygons are subtracted one by one, each subtraction leaving the convex pieces outside the polygon's edges
 //! (clipped as `split-uv-tiles` clips, [`crate::point_blend`]), and the pieces fanned back into triangles in the
 //! triangle's own winding. Pieces under [`MIN_AREA`] (in every placement) go: slivers along a cover's edge. A triangle
-//! whose covered part or cut would be more than [`MAX_PIECES`] pieces is kept whole, counted. A cut leaves no crack: a vertex on an
+//! whose covered part or cut would be more than [`MAX_PIECES`] pieces is kept whole, counted, as is one whose
+//! corners' tangents differ in handedness (a mirrored texture seam: a point between them has no tangent). A cut leaves no crack: a vertex on an
 //! edge two triangles of the primitive share is computed from the edge alone ([`crate::point_blend::Corner::cut_at`]) and
 //! welded, one vertex.
 //!
@@ -50,8 +51,8 @@ use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode, PbrMaterial};
 use primase_core::skin::Skin;
 use primase_core::{
-    DrawLayer, DrawOrder, Entity, Instance, LayeredMaterial, Mesh, MeshFile, Name, Semantic, Stream,
-    Topology, Transform, VertexBlend, World,
+    DrawLayer, DrawOrder, Entity, Instance, LayeredMaterial, Mesh, MeshFile, Name, Primitive, Semantic,
+    Stream, Topology, Transform, VertexBlend, World,
 };
 
 use crate::point_blend::{
@@ -316,6 +317,18 @@ fn disjoint(pieces: Vec<Poly>, min: f64) -> Option<Vec<Poly>> {
     Some(out)
 }
 
+/// Whether every tangent set of `p` has the same w (handedness) at the corners `v`, so a point between them has one
+/// ([`crate::point_blend::blend_streams`] refuses a blend of corners that differ).
+fn same_handedness(p: &Primitive, v: [u32; 3]) -> bool {
+    p.streams.iter().all(|(sem, stream)| match (sem, stream) {
+        (Semantic::Tangent(_), Stream::F32x4(t)) => {
+            let w = v.map(|i| t.get(i as usize).map(|x| x[3].to_bits()));
+            w[0] == w[1] && w[1] == w[2]
+        }
+        _ => true,
+    })
+}
+
 /// What the placements covering a stored triangle cover of it so far (kept only for a triangle some placement
 /// covers).
 #[derive(Default)]
@@ -568,7 +581,7 @@ impl Pass for DropCoveredSurfaces {
         drop(grid);
         // what each stored triangle becomes: gone, cut, or (absent) as it was
         let mut fates: BTreeMap<(Entity, usize), BTreeMap<usize, Fate>> = BTreeMap::new();
-        let mut too_many = 0u64;
+        let (mut too_many, mut mirrored) = (0u64, 0u64);
         for ((mesh, k, ti), h) in hidden {
             // a placement that covers none of it keeps all of it
             if h.placements < placed[&mesh] || h.covered.is_empty() {
@@ -615,6 +628,11 @@ impl Pass for DropCoveredSurfaces {
             let fate = match kept.as_slice() {
                 [] => Fate::Gone,
                 [one] if one.len() == 3 && (corners_area(one) - 0.5).abs() < 1e-12 => continue,
+                // a point between corners of opposite handedness has no tangent: not cut
+                _ if !same_handedness(p, v) => {
+                    mirrored += 1;
+                    continue;
+                }
                 _ => Fate::Cut(kept),
             };
             fates.entry((mesh, k)).or_default().insert(ti, fate);
@@ -737,6 +755,10 @@ impl Pass for DropCoveredSurfaces {
         log.count(
             "triangles covered in more than MAX_PIECES pieces (kept whole)",
             too_many,
+        );
+        log.count(
+            "partly covered triangles whose corners' tangents differ in handedness (kept whole)",
+            mirrored,
         );
         log.count(
             "partly covered triangles of meshes whose per-vertex data cannot follow a cut (kept whole)",

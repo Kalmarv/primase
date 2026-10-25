@@ -372,6 +372,44 @@ fn many_placements_under_doubled_decks_lose_the_half_they_all_cover() {
     assert!((area - 50.0).abs() < 1e-3, "{area} m2 left: {tris:?}");
 }
 
+/// A floor whose corners' tangents differ in handedness (a mirrored texture seam) cannot be cut (a point between
+/// them has no tangent): half under a deck it is kept whole, counted; under a deck over all of it, it goes.
+#[test]
+fn a_floor_with_a_mirrored_seam_is_not_cut() {
+    for (deck_x, left) in [(5.0, 2), (-1.0, 0)] {
+        let mut w = World::new();
+        let concrete = material(&mut w, "concrete", AlphaMode::Opaque, false);
+        let boards = material(&mut w, "boards", AlphaMode::Opaque, false);
+        let mut floor_square = square(concrete, 0.0, 0.0, 10.0, 0.0);
+        floor_square.streams.insert(
+            Semantic::Tangent(0),
+            Stream::F32x4(vec![
+                [1.0, 0.0, 0.0, 1.0],
+                [1.0, 0.0, 0.0, -1.0],
+                [1.0, 0.0, 0.0, 1.0],
+                [1.0, 0.0, 0.0, -1.0],
+            ]),
+        );
+        let floor = place(&mut w, "plaza", vec![floor_square], &[[0.0; 3]]);
+        place(
+            &mut w,
+            "bowl",
+            vec![square(boards, deck_x, -1.0, 12.0, 0.0037)],
+            &[[0.0; 3]],
+        );
+        let log = run(&mut w, 0.01);
+        assert_eq!(triangles(&w, floor), vec![left], "deck from x {deck_x}");
+        if left == 2 {
+            assert_eq!(
+                log.counts["partly covered triangles whose corners' tangents differ in handedness (kept whole)"],
+                2,
+                "{:?}",
+                log.counts
+            );
+        }
+    }
+}
+
 /// A mesh still linked to its file loses the link once changed (the pass declares the removal); one left as it was
 /// keeps it.
 #[test]
