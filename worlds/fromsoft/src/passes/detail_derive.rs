@@ -1052,7 +1052,7 @@ fn solve_metal_at(program: &Program<'_>, scale: f32) -> Result<Option<(DetailCon
     };
     let mut tints = vec![[0f32; 3]; n];
     let mut alone = Vec::new();
-    for j in 0..n {
+    for (j, tint) in tints.iter_mut().enumerate() {
         if let Some(x) = weights.isolating(j) {
             let s = design(x, 0.);
             let c = unit(run(&s)?.albedo);
@@ -1060,7 +1060,7 @@ fn solve_metal_at(program: &Program<'_>, scale: f32) -> Result<Option<(DetailCon
                 return Ok(None);
             }
             let a = desaturated(s.a);
-            tints[j] = std::array::from_fn(|i| c[i] / (a[i] * s.d[j][i]));
+            *tint = std::array::from_fn(|i| c[i] / (a[i] * s.d[j][i]));
             alone.push(j);
         }
     }
