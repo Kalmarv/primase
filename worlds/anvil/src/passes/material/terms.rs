@@ -73,7 +73,7 @@ pub(super) fn notices(i: &Inputs<'_>) -> Vec<String> {
                 i.scalar(16),i.scalar(11),i.scalar(10)));
             push(format!("B=t77.rgb+(worldNoise.b*{})*(HSV(t77.rgb,H={},S={},V={})-t77.rgb); \
                 worldNoise t79 uses world-space UV, absent from the static texture recipe. Blended permutations instead write \
-                A=t76.r to o0.w/o2.w; cut-out/fade uses per-draw reference and t86 instance data, not the opaque R/translucency contract",
+                coverage A=t76.r to o0.w/o2.w; cut-out/fade uses per-draw reference and t86 instance data, not the opaque R/translucency contract",
                 i.scalar(15),i.scalar(17),i.scalar(14),i.scalar(13)));
             wind(i,1,9,0,&mut push);
         }

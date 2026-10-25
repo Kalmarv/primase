@@ -124,16 +124,22 @@ fn extension(name: &str) -> String {
     leaf.rsplit_once('.').map_or(String::new(), |(_, e)| e.to_owned())
 }
 
+/// What the files of one group are: the path pattern, the status of its reader and who owns it.
+type FileGroup = (String, &'static str, &'static str);
+
+/// How many files a group holds, their stored bytes, and their paths.
+#[derive(Default)]
+struct FileTotals {
+    count: usize,
+    bytes: u64,
+    paths: Vec<String>,
+}
+
 /// The dictionary's paths of an area that the archive holds, grouped by pattern, status and owner.
-fn files(
-    game: Game,
-    archive: &Archive,
-    names: &NameDictionary,
-    area: &str,
-) -> BTreeMap<(String, &'static str, &'static str), (usize, u64, Vec<String>)> {
+fn files(game: Game, archive: &Archive, names: &NameDictionary, area: &str) -> BTreeMap<FileGroup, FileTotals> {
     let number = &area[1..];
     let block = format!("/{}_", &area[..6]);
-    let mut out: BTreeMap<(String, &'static str, &'static str), (usize, u64, Vec<String>)> = BTreeMap::new();
+    let mut out: BTreeMap<FileGroup, FileTotals> = BTreeMap::new();
     for (hash, paths) in &names.names {
         let Some(entry) = archive.entries.get(hash) else {
             continue;
@@ -144,12 +150,10 @@ fn files(
                 continue;
             }
             let (status, owner) = status(game, path);
-            let slot = out
-                .entry((pattern(path, number), status, owner))
-                .or_insert((0, 0, Vec::new()));
-            slot.0 += 1;
-            slot.1 += entry.entry.padded_size as u64;
-            slot.2.push(path.clone());
+            let slot = out.entry((pattern(path, number), status, owner)).or_default();
+            slot.count += 1;
+            slot.bytes += entry.entry.padded_size as u64;
+            slot.paths.push(path.clone());
         }
     }
     out
@@ -192,7 +196,7 @@ fn area_census(
     // the files the area has
     if let Some(names) = names {
         let listed = files(game, archive, names, area);
-        for ((pattern, status, owner), (count, bytes, paths)) in &listed {
+        for ((pattern, status, owner), FileTotals { count, bytes, paths }) in &listed {
             println!("FILES {name} {area} {pattern} files {count} bytes {bytes} status {status} owner {owner}");
             let binder = ["bnd.dcx", "bnd", "bhd"].iter().any(|s| pattern.ends_with(s));
             if !binder {

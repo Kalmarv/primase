@@ -84,7 +84,7 @@ use primase_shader::{ProgramGraph, WordsRead};
 use primase_core::shader::{MaterialPrograms, ProgramFacts};
 
 use crate::components::{
-    AnvilLayout, AnvilMaterial, AnvilMesh, AnvilShaders, AnvilTextureMap, MaterialBinding, MaterialFlags,
+    AnvilLayout, AnvilMaterial, AnvilMesh, AnvilShaders, MaterialBinding, MaterialFlags,
     MaterialValue,
 };
 
@@ -1231,7 +1231,9 @@ mod tests {
         assert_eq!(shading_class("MAD_Clutters_Grass"), Some(4));
         assert_eq!(shading_class("MAD_Tex1"), Some(1));
         assert_eq!(shading_class("MAD_CHR_5Zones_Details"), Some(1));
-        assert_eq!(shading_class("MAD_Road"), None);
+        // The saved Road program packs literal 8 plus the normal's three low bits: class 1.
+        assert_eq!(shading_class("MAD_Road"), Some(1));
+        assert_eq!(shading_class("MAD_Road_Unestablished"), None);
     }
 
     #[test]

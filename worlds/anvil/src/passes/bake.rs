@@ -1587,10 +1587,11 @@ mod tests {
         let emissive = world.get::<Texture>(pbr.emissive_texture.as_ref().expect("emission map").texture).unwrap();
         assert_eq!(emissive.color_space, ColorSpace::Srgb);
         for pixel in emissive.levels[0].as_chunks::<4>().0 {
-            for k in 0..3 {
-                let got = primase_image::srgb8_to_linear(pixel[k]) as f32 * pbr.emissive[k] * pbr.emissive_strength;
-                assert!((got - expected.emission[k]).abs() <= 0.009 * pbr.emissive_strength,
-                    "emission lane {k}: {got}, surface {}", expected.emission[k]);
+            for (k, ((&channel, &factor), &expected)) in pixel[..3].iter()
+                .zip(pbr.emissive.iter()).zip(expected.emission.iter()).enumerate() {
+                let got = primase_image::srgb8_to_linear(channel) as f32 * factor * pbr.emissive_strength;
+                assert!((got - expected).abs() <= 0.009 * pbr.emissive_strength,
+                    "emission lane {k}: {got}, surface {expected}");
             }
         }
         let orm = world.get::<Texture>(pbr.metallic_roughness_texture.as_ref().unwrap().texture).unwrap();

@@ -665,7 +665,7 @@ mod tests {
         let planned = VertexStage::new(
             &shader,
             &binding,
-            &primase_dxbc::lift(PIXEL).unwrap(),
+            &primase_dxbc::lift(include_bytes!("../../../tests/fixtures/fixed_function.dxbc")).unwrap(),
             false,
             &FrozenFrame::static_bake(0.),
         )
