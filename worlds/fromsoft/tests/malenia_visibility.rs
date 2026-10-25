@@ -104,7 +104,7 @@ fn malenia_pixelkill_hash_and_alpha_permutation_discard()->Result<()> {
                 for value in [0f32,0.5,1.,1.5,3.] {
                     buffers[material].1[45/4][45%4]=value.to_bits();
                     let bound:Vec<_>=buffers.iter().map(|(slot,rows)|(*slot,rows.as_slice())).collect();
-                    for noise in [0.5f32] {
+                    { let noise=0.5f32;
                         let mut sampler=|request:primase_shader_exec::Sample|Ok(if Some(request.texture)==dither {[noise;4]}
                             else if matches!(request.texture,40|41) {[0.;4]} else {[1.;4]});
                         let result=shader.execute(&inputs,&bound,&mut sampler)?;
