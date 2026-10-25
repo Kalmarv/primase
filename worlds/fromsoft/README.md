@@ -745,11 +745,11 @@ the formula differs), *model* (the two do not share a lighting model), *agree* (
 
 | Family | Output | Shaded's source | The program's source | Kind | Status |
 |---|---|---|---|---|---|
-| Sekiro simple (`MetallicTex`, `MetallicValue`, `MetallicValue_MeshDecal`), unbaked | base colour | the preview's albedo slot (slot 8, else the lowest), sRGB | target 2 `rgb` (the program's blend of its slots and colour constants) | missing: material colour constants and the slots blended over it are not applied | open; the bake closes it where it runs |
+| Sekiro simple (`MetallicTex`, `MetallicValue`, `MetallicValue_MeshDecal`), unbaked | base colour | the preview's albedo slot (slot 8, else the lowest), sRGB | target 2 `rgb` (the program's blend of its slots and colour constants) | missing: material colour constants and the slots blended over it are not applied | **closed by the bake, which these programs never reached**: their one-set `TEXCOORD0` (two shorts) had no feed in the bake's vertex stage, so every one was refused "input TEXCOORD0 has no value to run on: Stream(TexCoord(0))"; `Feed::TexCoord0` (test `a_one_set_vertex_program_is_fed_the_grid_in_its_two_shorts`). The lowering itself still does not apply the constants: the program's arithmetic is run, not re-derived |
 | same | normal | normal map as stored, `normals::SOURCE` (basis observed for the simple families by `consumer_basis`) | target 0 `xyz`, biased world normal (0.50048876) | agree on the basis; normal-intensity parameters are read by neither lowering path | agree; intensity unverified |
 | same | roughness | `1 - 0.95 sqrt(gloss)`, gloss = the normal map's blue (`pbr::roughness`) | `Gloss(square_of(0.95))` of target 1 `x`, the same value | agree (`gloss_matches_deferred_ggx_alpha`, `surface.rs` tests); the per-light factor `k` is omitted | noticed |
 | same | metallic / F0 | metal map R (or GXMD 237 for `MetallicValue*`), else 0 counted | no metallic output; target 3 `rgb` is F0 (specular workflow), stored as its square root | model: metallic workflow against specular workflow; F0 0.03 represented by glTF 0.04 (the 0.03 is traced for `M[Multiple]` only) | open, noticed |
-| same | emission | none (`source emission without proven radiance`) | target 4 `rgb` | missing | open |
+| same | emission | none (`source emission without proven radiance`) | target 4 `rgb` | missing | closed by the same bake (`Emission` role decoded into the emissive texture); open for the unbaked lowering alone |
 | same | occlusion | none | no output has an occlusion role in either game | agree | closed |
 | same | tiling / UV | **was**: the FLVER's scale about the origin, the base map untiled when `uv-tiling=keep` | the `FC_TextureTilingScale` row: the FLVER's scale, else the MTD's stored one, else the uv group's, each axis about the texture's centre (`layer_bake::resolve::slot_tiling`) | arithmetic (offset `(1 - s) / 2`; stored and uv-group scales absent; base map) | **fixed**: `pbr.rs` takes every map's transform from the row; tests `maps_are_tiled_about_their_centre_by_the_flver_scale_else_the_stored_one`, `selected_normal_identity_controls_both_transforms`. The rule reproduces 301 of 440 captured Sekiro contents (its own doc), so a residual stays |
 | same | alpha cutout | `Mask` at the bound program's `AlphaReference` (`alpha_cut`); a hard cutoff for dithered and transformed tests | the program's discard | agree; dithered and transformed counted (`DITHERED_ALPHA_CUT`, `TRANSFORMED_ALPHA_CUT`) | noticed |
@@ -765,13 +765,36 @@ the formula differs), *model* (the two do not share a lighting model), *agree* (
 | same | emission, occlusion | none | targets 3 and 4 are read by no lighting program: no role | agree | closed |
 | forward materials (`g_BlendMode` 2), both games | all | the lowered material (texture alpha) | the forward program's finished colour (role `Colour`), engine textures bound at zero | model: the bake needs an albedo output and refuses these | open |
 | both games, baked by `bake-fromsoft-materials` | alpha | the previous base texture's alpha at UV0 times the base alpha | the program's discard and blend | arithmetic for a program whose alpha is not that texture's | noticed (`program still discards texels with alpha test disabled` refuses) |
-| both games | vertex colour | Elden Ring material binaries: ignored unless the alpha test reads it; Sekiro: kept only for the layered programs that read it | read by the programs that use it (blend weights, occlusion) | missing for the others | open; noticed |
+| both games | vertex colour | Elden Ring material binaries: ignored unless the alpha test reads it; Sekiro: kept only for the layered programs that read it | read by the programs that use it (blend weights, occlusion) | missing for the others | **stated**: a pixel program with a `COLOR` varying is named per material (`pixel program reads a vertex colour ...`); the bake feeds a program's `COLOR0` white and counts `COLOR0 frozen to white` (it was refused). Core has only `VertexColor::Ignored`; there is no field for "multiplies the albedo by it", and the arithmetic of which output a colour reaches is not read |
 
-Open rows after this round: base colour and emission of unbaked Sekiro simple materials; the F0 of the simple shaders and
-the untraced layered programs; roughness and metallic of the unclassified and Elden Ring shaders (unbaked); Elden Ring's
-normal basis; additive and unstated blend modes; forward materials; vertex colours; the tiling rule's own residual (130
-Sekiro contents it does not reproduce); and the bake's static frame. The first four close by running the program, which
-the lab's Shaded view does; they remain for any consumer that takes the lowering alone.
+Why `bake-fromsoft-materials` refuses a material, from the recorded run reports (`scratch/branch-triage/measure/*/report.json`
+and `scratch/primase-reset/copy-cache-evidence/replies.json`: character parts and areas mixed, so the order, not the
+counts, is what to take), most frequent first, and what each needs:
+
+| Refusal | Cause | Status |
+|---|---|---|
+| `input COLOR0 has no value to run on ... no stream of the lowered geometry carries it` | `resolve_vertex` bound `COLOR0` to nothing | **fixed**: bound as `Color(0)`, fed white, counted (`COLOUR0_POLICY`) |
+| `input TEXCOORD0 has no value to run on: Stream(TexCoord(0))` | one-set programs (Sekiro's non-layered SAT shaders) had no feed | **fixed**: `Feed::TexCoord0` |
+| `input TANGENT4` / `TANGENT2: additional tangent input has no source role` | a further tangent set; the lowered geometry keeps one | open: which value the program expects is not established |
+| `the program reads COLOR1 lanes beyond x` | only `COLOR1.x` is observed (`COLOUR1_POLICY`) | open: needs a capture of `y`..`w` |
+| `input TEXCOORD1`/`TEXCOORD7 ... a further coordinate set` | the lowered geometry keeps two sets | open |
+| `no albedo output role` / `scene-dependent Colour` | forward programs write a finished colour | open (model, see forward row) |
+| `program still discards texels with alpha test disabled` | a discard besides the alpha test (dither, clip) | open: `bind_output_uses` shows which lanes decide it |
+| `frame texture SceneDepth cannot be baked as a material` | the program reads the scene's depth | open: not a material term |
+| `alpha uses a secondary UV set` | the bake samples the previous base texture's alpha on UV0 only | open |
+| `vertex program ...: t1/t7: no queries given` | a vertex program that samples a texture | open |
+
+The two fixed rows do not make every Sekiro simple or Elden Ring material bake: a material still stops at the next row it
+meets. Whether Elden Ring's materials now bake is for a rerun to say (`program bake refused` in its notices).
+
+Not done: the tiling rule's 130 unreproduced Sekiro contents. The capture rows (`cbTextureTilingScale`, 483 contents of 58
+programs) the rule's doc cites are not on disk under the names the task gave (`cache/sekiro/cb11-capture` holds the
+texture-scroll buffer, one content, identity), and Elden Ring's `tiling-offline/RECORD.md` is undecided for the Elden branch
+and says so. Classifying the 130 by what differs needs the capture file tied to the install by a census run.
+
+Open rows after this round: the F0 of the simple shaders and the untraced layered programs; roughness and metallic of the
+unclassified and Elden Ring shaders where the bake still refuses (the table above); Elden Ring's normal basis; additive and
+unstated blend modes; forward materials; vertex colours' arithmetic; the tiling rule's residual; and the bake's static frame.
 
 ## Consumer normal-map frame
 

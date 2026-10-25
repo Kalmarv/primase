@@ -1138,6 +1138,8 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> 
                         component: 0,
                     },
                 ]),
+                // the first vertex colour: the lowered geometry keeps it as `Color(0)` for the materials whose programs read it
+                ("COLOR", 0, _) => InputRole::Stream(Semantic::Color(0)),
                 ("COLOR", 1, _) => InputRole::Stream(SECOND_COLOUR),
                 // the Byte4C members of the layered programs, four floats each; a coordinate pair of integers, or an effect
                 // program's one or two floats, is another input

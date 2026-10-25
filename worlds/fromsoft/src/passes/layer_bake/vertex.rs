@@ -23,6 +23,12 @@ use std::sync::Arc;
 /// and the bake does not group by it.
 pub const COLOUR1_POLICY: &str = "COLOR1.x frozen to 1: observed in Sekiro m10_00/m11_01 and ercap3 RB5-12 c3000 weapon VBs (gap/colour-ercap3-colour1.json SHA256 cb54bc8e8a8b06e82d01320d1c5b110e54f4f9726f7c3fd1ccfcb29561f17190); other meshes and absent streams remain an approximation";
 
+/// The policy for the first vertex colour of a mesh: a program that reads `COLOR0` (the most frequent refusal in the
+/// recorded bake reports: "input COLOR0 has no value to run on") is run with it white, the bake's declared static frame. The
+/// lowered geometry keeps the mesh's own as `Color(0)`, which a baked texture shared by many meshes cannot carry; a
+/// program that multiplies its albedo or an occlusion by it is drawn as if the colour were 1.
+pub const COLOUR0_POLICY: &str = "COLOR0 frozen to white (1, 1, 1, 1): the bake has no mesh, so a vertex colour the program reads (an albedo multiplier, an occlusion or a blend weight) is taken as 1";
+
 /// What feeds one vertex attribute of the program, by the role the binding gives its input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Feed {
@@ -36,8 +42,13 @@ enum Feed {
     TangentSign,
     /// The packed texture coordinates: both sets the grid's.
     TexCoords,
+    /// The one texture coordinate set of a program that takes one (the non-layered SAT shaders'): two shorts, `uv * 2048`,
+    /// the grid's.
+    TexCoord0,
     /// The Byte4C layer member of that index, its lanes the level's bake inputs.
     Member(u8),
+    /// The first vertex colour, white in all four lanes.
+    Colour0,
     /// The second vertex colour.
     Colour1,
     /// The instance index, zero.
@@ -197,6 +208,11 @@ impl VertexStage {
                 InputRole::Stream(Semantic::Tangent) => Feed::Tangent,
                 InputRole::Stream(Semantic::Joints(0)) => Feed::Joints,
                 InputRole::Stream(Semantic::Weights(0)) => Feed::Weights,
+                InputRole::Stream(Semantic::TexCoord(0)) => Feed::TexCoord0,
+                InputRole::Stream(Semantic::Color(0)) => {
+                    policies.insert(COLOUR0_POLICY.into(), 1);
+                    Feed::Colour0
+                }
                 InputRole::Stream(Semantic::Color(n)) if (1..=6).contains(n) => Feed::Member(*n),
                 InputRole::Stream(s) if *s == super::resolve::SECOND_COLOUR => {
                     // only x is handed on: anything more would be a value the bake does not know
@@ -330,6 +346,10 @@ impl VertexStage {
                     let raw = |u: u32| (u * 2048) as i32 as u32;
                     [raw(uv[0]), raw(uv[1]), raw(uv[0]), raw(uv[1])]
                 }
+                Feed::TexCoord0 => {
+                    let raw = |u: u32| (u * 2048) as i32 as u32;
+                    [raw(uv[0]), raw(uv[1]), 0, 0]
+                }
                 Feed::Member(n) => {
                     let mut v = [0f32; 4];
                     for (k, &(member, lane)) in channels.iter().enumerate() {
@@ -339,6 +359,7 @@ impl VertexStage {
                     }
                     v.map(f32::to_bits)
                 }
+                Feed::Colour0 => [1f32.to_bits(); 4],
                 Feed::Colour1 => [1f32.to_bits(), 0, 0, 0],
                 Feed::Joints => [0; 4],
                 Feed::Weights => [1f32.to_bits(), 0, 0, 0],
@@ -627,6 +648,75 @@ mod tests {
             refused.to_string().contains("lanes the bake cannot feed"),
             "{refused}"
         );
+    }
+
+    /// A program that takes one coordinate set (the non-layered SAT shaders': `MetallicTex`, `MetallicValue`) is run with the
+    /// grid's coordinates in its two shorts, `uv * 2048`; it was refused for having "no value to run on" for `TEXCOORD0`.
+    #[test]
+    fn a_one_set_vertex_program_is_fed_the_grid_in_its_two_shorts() {
+        const SINGLE: &[u8] = include_bytes!("../../../tests/fixtures/single_uv_vs.dxbc");
+        let interface = primase_dxbc::reflection(SINGLE).unwrap();
+        let shader = CoreShader {
+            format: ShaderFormat::Dxbc,
+            bytecode: SINGLE.to_vec(),
+            interface,
+        };
+        let binding = resolve_vertex(&shader, World::default().spawn()).unwrap().stage;
+        let planned = VertexStage::new(
+            &shader,
+            &binding,
+            &primase_dxbc::lift(PIXEL).unwrap(),
+            false,
+            &FrozenFrame::static_bake(0.),
+        )
+        .unwrap();
+        let uv: Vec<_> = planned
+            .attributes
+            .iter()
+            .filter(|a| matches!(a.feed, Feed::TexCoord0))
+            .collect();
+        assert_eq!(uv.len(), 1);
+        let corners = planned.corners(&Inputs::default());
+        let at = |corner: usize| -> Vec<u32> { uv[0].lanes.iter().map(|&l| corners[corner][uv[0].register][l]).collect() };
+        // the corners (0, 0), (1, 0), (0, 1), (1, 1) at raw 0 and 2048
+        assert_eq!(at(0), [0, 0]);
+        assert_eq!(at(1), [2048, 0]);
+        assert_eq!(at(2), [0, 2048]);
+        assert_eq!(at(3), [2048, 2048]);
+    }
+
+    /// A vertex input the binding states as the first vertex colour is fed white in every lane and the policy is named
+    /// (the cloth fixture's COLOR1, bound as `Color(0)`): it is no longer refused for having no value to run on.
+    #[test]
+    fn a_first_vertex_colour_is_fed_white_and_the_policy_is_named() {
+        let interface = primase_dxbc::reflection(CLOTH).unwrap();
+        let shader = CoreShader {
+            format: ShaderFormat::Dxbc,
+            bytecode: CLOTH.to_vec(),
+            interface,
+        };
+        let entity = World::default().spawn();
+        let mut binding = resolve_vertex(&shader, entity).unwrap().stage;
+        let at = binding
+            .inputs
+            .iter()
+            .position(|i| i.label.name.eq_ignore_ascii_case("COLOR") && i.label.index == 1)
+            .unwrap();
+        binding.inputs[at].role = InputRole::Stream(Semantic::Color(0));
+        let pixel = primase_dxbc::lift(SIGN_PIXEL).unwrap();
+        let planned = VertexStage::new(&shader, &binding, &pixel, false, &FrozenFrame::static_bake(0.)).unwrap();
+        assert!(planned.policies.contains_key(COLOUR0_POLICY));
+        let colour: Vec<_> = planned
+            .attributes
+            .iter()
+            .filter(|a| matches!(a.feed, Feed::Colour0))
+            .collect();
+        assert_eq!(colour.len(), 1);
+        for registers in planned.corners(&Inputs::default()) {
+            for &lane in &colour[0].lanes {
+                assert_eq!(registers[colour[0].register][lane], 1f32.to_bits());
+            }
+        }
     }
 
     fn lanes(input: &Input) -> [Lane; 4] {

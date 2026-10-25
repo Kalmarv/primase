@@ -503,3 +503,28 @@ fn metallic_without_source_evidence_is_counted_dielectric() {
     assert!(!log.approximations.contains_key(UNKNOWN));
     assert_eq!(log.counts["metallic textures"], 1);
 }
+
+/// A pixel program that reads a `COLOR` varying is named in the material's approximations: how a vertex colour enters its
+/// outputs is not lowered, and the lowering does not drop that silently. A program without one names nothing.
+#[test]
+fn a_program_reading_a_vertex_colour_is_named_in_the_approximations() {
+    use primase_core::shader::{MaterialPrograms, ProgramFacts, Stage};
+    const VERTEX: &[u8] = include_bytes!("fixtures/layered_cloth_vs.dxbc");
+    let colour = primase_dxbc::reflection(VERTEX)
+        .unwrap()
+        .inputs
+        .into_iter()
+        .find(|v| v.label.name.eq_ignore_ascii_case("COLOR"))
+        .expect("the fixture's vertex colour input");
+    let note = "pixel program reads a vertex colour (a COLOR varying): how it enters its outputs is not lowered; the material takes the vertex colour as its vertex colour notice says";
+    let mut world = World::new();
+    let (reads, plain) = (world.spawn(), world.spawn());
+    for (e, inputs) in [(reads, vec![colour]), (plain, vec![])] {
+        world.insert(e, source("MetallicTex"));
+        let mut facts = ProgramFacts::unavailable("p", Stage::Pixel, None, "a fixture");
+        facts.inputs = inputs;
+        world.insert(e, MaterialPrograms(vec![facts]));
+    }
+    let log = pbr::lower(&mut world, &no_payloads(), None, WATER).unwrap();
+    assert_eq!(log.approximated_on[note], std::collections::BTreeSet::from([reads]));
+}

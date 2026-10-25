@@ -199,6 +199,19 @@ fn simple(shader: &str) -> bool {
         "MetallicTex" | "MetallicValue" | "MetallicValue_MeshDecal"
     )
 }
+/// The indices of the `COLOR` varyings the material's resolved pixel program reads (`resolve-fromsoft-shaders`'
+/// `core.material_programs`); none where it was not resolved.
+fn colour_varyings(world: &World, e: Entity) -> BTreeSet<u32> {
+    world
+        .get::<primase_core::shader::MaterialPrograms>(e)
+        .into_iter()
+        .flat_map(|p| p.0.iter())
+        .flat_map(|facts| facts.inputs.iter())
+        .filter(|v| v.label.name.eq_ignore_ascii_case("COLOR"))
+        .map(|v| v.label.index)
+        .collect()
+}
+
 /// The first binding of the definition's slots named for `role`, with its slot's key.
 fn keyed_binding<'a>(m: &'a Material, role: &str) -> Option<(&'a str, &'a Binding)> {
     let d = m.definition.as_ref()?;
@@ -820,6 +833,15 @@ fn lower_materials(
             world.insert(e, primase_core::VertexColor::Ignored);
             log.approximate(
                 "vertex colours of material binary materials ignored: their use is not read from the programs",
+                1,
+            );
+        }
+        if !baked && !colour_varyings(world, e).is_empty() {
+            // core states only whether `COLOR_0` is ignored ([`primase_core::VertexColor`]), not how a program multiplies
+            // its albedo or another output by it: the use is stated, not dropped
+            log.approximate_on(
+                e,
+                "pixel program reads a vertex colour (a COLOR varying): how it enters its outputs is not lowered; the material takes the vertex colour as its vertex colour notice says",
                 1,
             );
         }
