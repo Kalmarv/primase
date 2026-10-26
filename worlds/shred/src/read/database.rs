@@ -6,9 +6,7 @@
 //! differs from its table's declared columns, a b-tree that reaches a page twice or lists rowids out of order, text
 //! that is not valid in the file's encoding, a truncated file or a page outside it. File-format reference:
 //! <https://www.sqlite.org/fileformat2.html>.
-use quantydb_sqlite::{
-    Affinity, ObjectKind, Reader, SchemaObject, SliceSource, SqliteError, SqliteValue, TableDef,
-};
+use quantydb_sqlite::{Affinity, ObjectKind, Reader, SchemaObject, SliceSource, SqliteValue, TableDef};
 
 /// Why a file was refused, and what.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
