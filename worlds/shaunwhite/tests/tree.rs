@@ -259,7 +259,7 @@ fn level_01_trees_read_and_place() {
 }
 
 /// Level 01's trees follow the world's state: each of its Entities has a RealTreeMesh and the stored Mesh
-/// `00_Veg_RealTree_UrbanTree`, restored keeps the first and unrestored the second.
+/// `00_Veg_RealTree_UrbanTree`: restored keeps both, unrestored the second alone.
 #[test]
 fn level_01_trees_follow_influence() {
     let Some(folder) = install(Game::ShaunWhite) else {
@@ -302,7 +302,7 @@ fn level_01_trees_follow_influence() {
     println!("pairs {pairs}");
     assert_eq!(pairs, 36);
     assert_eq!((trees, metal), (36, 36));
-    assert_eq!((count(&restored, true), count(&restored, false)), (36, 0));
+    assert_eq!((count(&restored, true), count(&restored, false)), (36, 36));
     let (unrestored, _) = run("unrestored");
     assert_eq!((count(&unrestored, true), count(&unrestored, false)), (0, 36));
 }

@@ -17,15 +17,22 @@
 //!   level 01 (`01_Q01_UnloadMetroStation`, `01_Great_White_Challenge_01`, ...). The grid cells and `Cell05460` (the
 //!   global cell) are the world.
 //!
-//! `influence` chooses between an Entity's two trees. Each tree of level 01 is an Entity with two Visuals: a
+//! `influence` is the world's state for an Entity's two trees. Each tree of level 01 is an Entity with two Visuals: a
 //! RealTreeMesh (trunk, branches and leaves from the game's own data, [`RealTree`]) and a stored Mesh,
-//! `00_Veg_RealTree_UrbanTree` (36 Entities of 36 in the level, every one with exactly that pair). The game's leaf
-//! shader (`leaves.fx`, built with `KILL_UNINFLUENCED_PIXEL`) discards a leaf pixel where the world's influence is 0,
-//! so a world that is not restored has bare RealTrees; its screens (the level 01 captures `g_c01` and `g_c06`) show the
-//! stored Mesh, a metal tree (`00_Min_MetalTree01_Mat`), and no RealTree leaves. `restored` keeps each pair's RealTree
-//! and drops its stored Mesh; `unrestored` keeps the stored Mesh and drops the RealTree. What is read is the two
-//! Visuals and the shader's clip; how the game switches the Visual is not decoded. An Entity with a RealTree and no
-//! stored Mesh, or the stored Mesh alone, is untouched.
+//! `00_Veg_RealTree_UrbanTree` (36 Entities of 36 in the level, every one with exactly that pair): the metal tree
+//! (`00_Min_MetalTree01_Mat`: a pole, branches and white light strips). The game draws the stored Mesh in both states.
+//! Of the RealTree, only the grown one has leaves: the game's un-restored screens (level 01 captures `g_c01` and
+//! `g_c06`) show the metal tree alone, and a restored screen with the trees grown (`r_tree1`, the growth event fired in
+//! the live game) shows the foliage with the metal tree's white strips among it. Nothing hides the metal tree: its five
+//! Materials (`00_Min_MetalTree01_Mat`, `Gen_Light_Tree1600`, `Gen_Light_White_No_Emissive_Mat`, `00_Veg_TrunkA_Mat`,
+//! `00_Veg_TreeLeavesA`) store `InfluenceHidePixelMode` 0, `HideNone` (the u32 at body 525), and the game's shader-key
+//! generation (`SKGenericMaterial` at 0xce2e44 and 0xce2e60) then sets neither `KILL_UNINFLUENCED_PIXEL` (the mode is
+//! not 0) nor `INVERSE_KILL_UNINFLUENCED_PIXEL` (it is not 2). So `restored` keeps both Visuals of a pair, and
+//! `unrestored` keeps the stored Mesh and drops the RealTree, which has not grown. The leaf shader's own
+//! `KILL_UNINFLUENCED_PIXEL` clip, which discards a leaf pixel where the world's influence is 0, is what the
+//! un-restored world shows of the RealTree; here it is dropped whole. How the game switches the growth is an event
+//! (`ActivateRealTreeGrowthEvent`) not decoded further. An Entity with a RealTree and no stored Mesh, or the stored
+//! Mesh alone, is untouched.
 //!
 //! A placement goes when one row of a dropped class matches its Entity's name, its prototype's name, a material of its
 //! prototype, its prototype's vertex flag or its cell; the first matching row is the reason. What stays is untouched.
@@ -253,9 +260,9 @@ impl Keep {
 /// The world's state the Entities with two trees are shown in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Influence {
-    /// Each pair keeps its RealTree.
+    /// Each pair keeps both: the grown RealTree and the stored Mesh.
     Restored,
-    /// Each pair keeps its stored Mesh.
+    /// Each pair keeps its stored Mesh: the RealTree has not grown.
     Unrestored,
 }
 
@@ -315,7 +322,7 @@ pub const SELECT_SHAUNWHITE_CONTENT: PassSpec = PassSpec {
         ),
         OptionSpec::choice::<Influence>(
             "influence",
-            "the world's state: restored keeps each tree Entity's RealTreeMesh and drops its stored Mesh, unrestored the reverse",
+            "the world's state: restored keeps each tree Entity's RealTreeMesh and its stored Mesh, unrestored only the stored Mesh",
         ),
     ],
     make: |g: &Given| {
@@ -361,8 +368,8 @@ impl Pass for SelectShaunwhiteContent {
     fn approximates(&self) -> &'static str {
         "classes are chosen by the tables' name and vertex-flag rows, which are evidence from level 01's names, not a \
          field the source states: a prop that shares a row's name is dropped with the rest, one a row does not name stays; \
-         which of an Entity's two trees the game draws in each state is read from the leaf shader's clip and level 01's \
-         screens, not from the switch itself"
+         which of an Entity's two trees the game draws in each state is read from the materials' stored hide mode, the \
+         shader-key generation and level 01's screens, not from the growth event itself"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let placements: Vec<(Entity, Entity)> = w
@@ -453,8 +460,8 @@ fn prototype_reasons(w: &World, p: Entity) -> Vec<Reason> {
 
 impl SelectShaunwhiteContent {
     /// The placements the world's state drops, with their reason: of each Entity that holds a RealTreeMesh Visual and a
-    /// stored Mesh Visual, the stored Mesh's (`restored`) or the RealTree's (`unrestored`). Entities of one kind alone
-    /// are counted and untouched.
+    /// stored Mesh Visual, the RealTree's (`unrestored`); `restored` keeps both. Entities of one kind alone are
+    /// counted and untouched.
     fn by_influence(
         &self,
         w: &World,
@@ -470,10 +477,6 @@ impl SelectShaunwhiteContent {
                     .push((e, w.has::<RealTree>(p)));
             }
         }
-        let (drops_tree, kept) = match self.influence {
-            Influence::Restored => (false, "RealTreeMesh"),
-            Influence::Unrestored => (true, "stored Mesh"),
-        };
         let mut out = BTreeMap::new();
         for group in groups.values() {
             let trees = group.iter().filter(|(_, tree)| *tree).count();
@@ -485,13 +488,16 @@ impl SelectShaunwhiteContent {
                 continue;
             }
             log.count("tree entities with a RealTreeMesh and a stored Mesh", 1);
+            if self.influence == Influence::Restored {
+                log.count("tree entities with both Visuals kept (restored)", 1);
+                continue;
+            }
             for &(e, tree) in group {
-                if tree == drops_tree {
-                    let what = if tree { "RealTreeMesh" } else { "stored Mesh" };
+                if tree {
                     out.insert(
                         e,
                         format!(
-                            "{what} of an Entity that also draws a {kept} (select-shaunwhite-content influence={})",
+                            "RealTreeMesh of an Entity that also draws a stored Mesh (select-shaunwhite-content influence={})",
                             self.influence.text()
                         ),
                     );
@@ -917,8 +923,8 @@ mod tests {
         v
     }
 
-    /// A restored world keeps each pair's RealTree and an unrestored one its stored Mesh; Entities with one of the two
-    /// alone are untouched in both, and the unused prototype, material and the drops are declared.
+    /// A restored world keeps both Visuals of each pair and an unrestored one its stored Mesh alone; Entities with one
+    /// of the two alone are untouched in both, and the unused prototype, material and the drops are declared.
     #[test]
     fn influence_chooses_between_an_entitys_two_trees() {
         let text = |state: &str| {
@@ -935,20 +941,18 @@ mod tests {
         .map(|(a, b)| (a.to_owned(), b.to_owned()));
 
         let mut w = trees();
+        let before = drawn(&w);
         let report = run(&mut w, &text("restored")).unwrap();
         let log = &report.steps[0].log;
         assert_eq!(
             log.counts["tree entities with a RealTreeMesh and a stored Mesh"],
             2
         );
+        assert_eq!(log.counts["tree entities with both Visuals kept (restored)"], 2);
         assert_eq!(log.counts["tree entities with no stored Mesh Visual (kept)"], 1);
-        assert_eq!(log.counts["placements dropped"], 2);
-        let mut want = [pair("00_Veg_UrbanTree01"), rest.to_vec()].concat();
-        want.sort();
-        assert_eq!(drawn(&w), want);
-        let why = "stored Mesh of an Entity that also draws a RealTreeMesh (select-shaunwhite-content influence=restored)";
-        assert!(log.drops.keys().any(|(_, r)| r == why), "{:?}", log.drops);
-        // the stored Mesh is still used by Entity 10: it stays with its material
+        assert!(!log.counts.contains_key("placements dropped"));
+        assert!(log.drops.is_empty(), "{:?}", log.drops);
+        assert_eq!(drawn(&w), before);
         assert!(
             w.iter::<MaterialRef>()
                 .any(|(_, m)| m.name == "00_Min_MetalTree01_Mat")

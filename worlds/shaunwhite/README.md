@@ -109,12 +109,19 @@ reader can decode, so the rows are the game's names, not a field: the pass says 
 row, and the prototypes, materials and textures only the dropped placements reached go with them.
 Collision-only placements remain: these options select what Visuals draw, without removing authored physics.
 
-`influence` chooses between the two trees of each tree Entity. Every tree of level 01 (36 Entities) holds a RealTreeMesh
-Visual (`shaunwhite.real_tree` marks its prototype) and the stored Mesh `00_Veg_RealTree_UrbanTree`, a metal tree. The
-leaf shader discards a leaf pixel where the world's influence is 0 (`KILL_UNINFLUENCED_PIXEL` in `leaves.fx`), and the
-game's un-restored screens (level 01 views `g_c01`, `g_c06`) show the metal tree and no leaves, so `restored` keeps each pair's RealTree and
-drops the stored Mesh, and `unrestored` the reverse. How the game switches the Visual is not decoded; the pass says so
-in its approximation. An Entity with only one of the two is untouched, and the pass counts both kinds.
+`influence` is the world's state for the two trees of each tree Entity. Every tree of level 01 (36 Entities) holds a
+RealTreeMesh Visual (`shaunwhite.real_tree` marks its prototype) and the stored Mesh `00_Veg_RealTree_UrbanTree`, a metal
+tree: a pole, branches and white light strips. The game draws the metal tree in both states and nothing hides it: its five
+Materials (`00_Min_MetalTree01_Mat`, `Gen_Light_Tree1600`, `Gen_Light_White_No_Emissive_Mat`, `00_Veg_TrunkA_Mat`,
+`00_Veg_TreeLeavesA`) store `InfluenceHidePixelMode` 0 (`HideNone`, the u32 at body 525, native property `0x7dacf81c`),
+and the game's shader-key generation (`SKGenericMaterial` at `0xce2e44` and `0xce2e60`) sets `KILL_UNINFLUENCED_PIXEL`
+only for a mode other than 0 and `INVERSE_KILL_UNINFLUENCED_PIXEL` only for mode 2, so neither is set. The RealTree is the
+part that changes with the world: its leaf shader (`leaves.fx`) discards a leaf pixel where the influence is 0, and
+`ActivateRealTreeGrowthEvent` grows it. The game's un-restored screens (level 01 views `g_c01`, `g_c06`) show the metal
+tree and no leaves; a restored screen with the trees grown (`r_tree1`, the event fired in the live game) shows the foliage
+with the metal tree's white strips among it. So `restored` keeps both Visuals of a pair and `unrestored` keeps the stored
+Mesh and drops the RealTree, which has not grown there. The growth event is not decoded further; the pass says so in its
+approximation. An Entity with only one of the two is untouched, and the pass counts both kinds.
 
 ## Water
 

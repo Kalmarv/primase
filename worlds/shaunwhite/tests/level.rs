@@ -237,14 +237,14 @@ fn level_01_reads_and_lowers() {
     // the content selection: keeping everything changes nothing; dropping the classes leaves no placement a row names
     let all_keep = "select-shaunwhite-content{helpers=keep,effects=keep,characters=keep,missions=keep,influence=restored}";
     let kept = run(&mut w, all_keep).unwrap();
-    // restored: the only placements that go are the 36 stored metal trees that sit beside a RealTreeMesh
+    // restored keeps both Visuals of the 36 tree Entities: nothing goes
     let log = &kept.steps[0].log;
     assert_eq!(
         log.counts["tree entities with a RealTreeMesh and a stored Mesh"],
         36
     );
-    assert_eq!(log.counts["placements dropped"], 36);
-    let placements = placements - 36;
+    assert_eq!(log.counts["tree entities with both Visuals kept (restored)"], 36);
+    assert!(!log.counts.contains_key("placements dropped"));
     assert_eq!(w.iter::<Instance>().count(), placements);
     let drop = run(
         &mut w,
