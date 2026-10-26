@@ -1,5 +1,5 @@
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
-use primase_core::{Environment, Light, LightKind, Linear, Transform, World};
+use primase_core::{Ambient, AmbientLight, Environment, Light, LightKind, Linear, Transform, World};
 use primase_shaunwhite::components::{LightShape, SkySettings};
 use primase_shaunwhite::read::light::{self, OMNI_LIGHT, SKY_LIGHT, SPOT_LIGHT, SUN_LIGHT};
 
@@ -148,7 +148,14 @@ fn explicit_light_units_and_axes_lower_through_the_manager() {
         [0., -1., 0.]
     );
     assert_eq!(w.resource::<Environment>().unwrap().sun, Some(sun));
-    assert!(w.resource::<Environment>().unwrap().ambient.is_none());
+    // the sky's ambient colour (0.2, 0.3, 0.4) in the sun's unit, which sun-scale states here
+    assert_eq!(
+        w.resource::<Environment>().unwrap().ambient,
+        Some(Ambient {
+            intensity: 2.,
+            light: AmbientLight::Flat([0.2, 0.3, 0.4])
+        })
+    );
     assert!(w.has::<SkySettings>(sun));
 }
 
@@ -186,6 +193,66 @@ fn the_sun_fixes_the_light_unit_when_asked() {
     assert!(near(w.get::<Light>(sun).unwrap().intensity, 2. * unit));
     assert!(near(w.get::<Light>(point).unwrap().intensity, 2. * unit));
     assert_eq!(w.get::<Light>(point).unwrap().range, Some(30.));
+    // the ambient is in the same unit as the sun: its colour times the lux per stored unit
+    let ambient = w.resource::<Environment>().unwrap().ambient.clone().unwrap();
+    assert!(near(ambient.intensity, unit));
+    assert_eq!(ambient.light, AmbientLight::Flat([0.2, 0.3, 0.4]));
+}
+
+/// The ambient follows the colour encoding of the lights, is reported (counted, approximated, and the bake named as
+/// not carried), and does not replace an ambient the world already states.
+#[test]
+fn the_ambient_is_reported_and_follows_the_colour_encoding() {
+    let mut w = World::new();
+    let sun = w.spawn();
+    let (settings, l) = light::read_sky(&sky()).unwrap();
+    w.insert(sun, settings);
+    w.insert(sun, l);
+    w.insert(sun, Transform::IDENTITY);
+    let mut reg = PassRegistry::new();
+    primase_shaunwhite::register(&mut reg);
+    let pipeline = reg
+        .parse("lower-shaunwhite-lighting{point-scale=100,sun-scale=3,spot-axis=y,sun-vector=to-sun,colour=srgb}")
+        .unwrap();
+    let manager = PassManager::new(reg).with_pass_checks(true);
+    let mut taken = w.clone();
+    let mut report = RunReport::default();
+    manager.run(&mut w, &pipeline, &mut report).unwrap();
+    let linear = |v: f32| ((v + 0.055) / 1.055).powf(2.4);
+    let ambient = w.resource::<Environment>().unwrap().ambient.clone().unwrap();
+    assert_eq!(ambient.intensity, 3.);
+    assert_eq!(
+        ambient.light,
+        AmbientLight::Flat([linear(0.2), linear(0.3), linear(0.4)])
+    );
+    let log = &report.steps[0].log;
+    assert_eq!(log.counts["sky ambient colours lowered as core ambient"], 1);
+    assert!(
+        log.omitted.keys().any(|k| k.starts_with("baked lighting")),
+        "{:?}",
+        log.omitted
+    );
+    assert!(
+        log.approximations
+            .keys()
+            .any(|k| k.starts_with("sky ambient as one flat light")),
+        "{:?}",
+        log.approximations
+    );
+    taken.insert_resource(Environment {
+        sun: None,
+        ambient: Some(Ambient {
+            intensity: 1.,
+            light: AmbientLight::Flat([1.; 3]),
+        }),
+    });
+    assert!(
+        manager
+            .run(&mut taken, &pipeline, &mut RunReport::default())
+            .unwrap_err()
+            .to_string()
+            .contains("already states an ambient")
+    );
 }
 
 #[test]
@@ -203,5 +270,62 @@ fn point_scale_is_a_number_or_sun_lux() {
     }
     for bad in ["sun:0", "sun:", "sun:-3", "sun:x", "-1", "nan", "sky:5"] {
         assert!(make(bad).is_err(), "{bad}");
+    }
+}
+
+/// The game's levels: each sky's ambient colour is lowered in the sun's unit (the sun taken as 100,000 lux), and is
+/// the lux the level's baked lighting leaves a dark surface (the colour times lux per stored unit).
+#[test]
+fn levels_state_their_sky_ambient_in_the_suns_unit() {
+    use primase_testdata::{Game, install_file};
+    let files = [
+        install_file(Game::ShaunWhite, "DataPC_01.forge"),
+        install_file(Game::ShaunWhite, "DataPC_02.forge"),
+        install_file(Game::ShaunWhite, "DataPC_03.forge"),
+        install_file(Game::ShaunWhite, "DataPC_04.forge"),
+        install_file(Game::ShaunWhite, "DataPC_05.forge"),
+        install_file(Game::ShaunWhite, "DataPC_06.forge"),
+    ];
+    let Some(files) = files.into_iter().collect::<Option<Vec<_>>>() else {
+        return;
+    };
+    // (grey level of the ambient colour in 1/255, the ambient's lux in thousands) per level
+    let expected = [
+        (70., 11.6),
+        (70., 11.6),
+        (70., 11.6),
+        (90., 14.9),
+        (70., 11.9),
+        (50., 10.4),
+    ];
+    for (level, path) in files.iter().enumerate() {
+        let shared: Vec<_> = files.iter().filter(|p| *p != path).cloned().collect();
+        let (mut w, _) = primase_shaunwhite::read::level::read_level(path, &shared).unwrap();
+        let mut reg = PassRegistry::new();
+        primase_shaunwhite::register(&mut reg);
+        let pipeline = reg
+            .parse(
+                "lower-shaunwhite-lighting{point-scale=sun:100000,sun-scale=1,spot-axis=y,sun-vector=to-sun,colour=linear}",
+            )
+            .unwrap();
+        PassManager::new(reg)
+            .with_pass_checks(true)
+            .run(&mut w, &pipeline, &mut RunReport::default())
+            .unwrap();
+        let ambient = w.resource::<Environment>().unwrap().ambient.clone().unwrap();
+        let AmbientLight::Flat(c) = ambient.light else {
+            panic!("level {}: not flat", level + 1)
+        };
+        assert!(
+            c.iter().all(|v| (v * 255. - expected[level].0).abs() < 0.01),
+            "level {}: {c:?}",
+            level + 1
+        );
+        let lux = f64::from(c[0] * ambient.intensity) / 1000.;
+        assert!(
+            (lux - expected[level].1).abs() < 0.06,
+            "level {}: {lux} klux",
+            level + 1
+        );
     }
 }

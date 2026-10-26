@@ -344,7 +344,8 @@ impl Component for LightSource {
 
 /// The level root's SkyLight settings, retained alongside its inline sun. Vectors are in the source Z-up frame.
 /// Native property hashes establish the sun and ambient names; the other fields remain unlabelled. Ambient alpha,
-/// the second colour's meaning and global fog units are not established and are not lowered to core ambient/fog.
+/// the second colour's meaning and global fog units are not established and are not lowered; the ambient colour (its rgb)
+/// is lowered as `core.environment`'s ambient by `lower-shaunwhite-lighting`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SkySettings {
     pub id: u32,

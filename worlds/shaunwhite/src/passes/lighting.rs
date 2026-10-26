@@ -9,10 +9,20 @@
 //! intensity is taken as LUX lux (the noon sun, 100,000), which makes one stored unit `LUX / (intensity x luminance)`
 //! lux, and a local light's candela its stored intensity x that, its illuminance at 1 m where its window is about 1.
 //! A bare number stays an uncalibrated candela per unit, and the sun keeps its own `sun-scale`.
+//!
+//! The sky's `AmbientColor` is lowered as `core.environment`'s flat ambient, in the sun's unit (one stored unit is the
+//! lux of a stored sun intensity of 1). The game's static world is lit by baked lightmaps and per-vertex lighting
+//! whose decode is `value x scale + bias`, and the bias of every one of the six levels' bakes is that same
+//! `AmbientColor` (the composite spherical-harmonic path is floored at it: `max(SH, g_AmbientColor)`): it is the light
+//! a surface the bake leaves dark still has. The bake itself, which adds the baked sun, shadows, occlusion and local
+//! light pools to it, is not carried, and a surface whose baked value is near 0 (a tower's shadowed faces, a tunnel
+//! the bake leaves dark) has the ambient alone, as in the game. The colour's alpha (the uninfluenced level) is not used.
 use crate::components::{LightShape, LightSource, SkySettings};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
-use primase_core::{Component, Entity, Environment, Light, LightKind, Transform, World};
+use primase_core::{
+    Ambient, AmbientLight, Component, Entity, Environment, Light, LightKind, Transform, World,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SpotAxis {
@@ -182,7 +192,7 @@ impl Pass for LowerShaunwhiteLighting {
         &[Transform::NAME, "core.environment"]
     }
     fn approximates(&self) -> &'static str {
-        "chosen relative intensity scales, RGB encoding and spot/sun directions; inverse-square falloff replaces source near/far falloff; all resolved activation states retained"
+        "chosen relative intensity scales, RGB encoding and spot/sun directions; inverse-square falloff replaces source near/far falloff; all resolved activation states retained; the sky's ambient as the bias of baked lighting the game adds, without the bake"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         if !self.sun_scale.is_finite() || self.sun_scale < 0. {
@@ -282,11 +292,19 @@ impl Pass for LowerShaunwhiteLighting {
             prepared.push((e, light, t, l));
         }
         let mut environment = w.resource::<Environment>().cloned().unwrap_or_default();
-        if let Some((sun, _)) = skies.first() {
+        if let Some((sun, sky)) = skies.first() {
             if environment.sun.is_some_and(|e| e != *sun) {
                 return Err("world already names a different sun; select one explicitly".into());
             }
+            if environment.ambient.is_some() {
+                return Err("world already states an ambient; remove it before lowering the sky's".into());
+            }
             environment.sun = prepared.iter().any(|(e, _, _, _)| e == sun).then_some(*sun);
+            let [r, g, b, _] = sky.ambient_colour;
+            environment.ambient = Some(Ambient {
+                intensity: sun_scale,
+                light: AmbientLight::Flat([r, g, b].map(convert)),
+            });
         }
         for (e, light, t, source) in prepared {
             w.insert(e, light);
@@ -302,8 +320,17 @@ impl Pass for LowerShaunwhiteLighting {
         }
         if !skies.is_empty() {
             w.insert_resource(environment);
+            log.count("sky ambient colours lowered as core ambient", skies.len() as u64);
             log.omit(
-                "sky ambient, unlabelled settings and global fog (meaning/units not established)",
+                "unlabelled sky settings and global fog (meaning/units not established)",
+                skies.len() as u64,
+            );
+            log.omit(
+                "baked lighting (the lightmaps, per-vertex lighting and composite spherical harmonics the game lights its static world with): only its ambient bias is carried",
+                skies.len() as u64,
+            );
+            log.approximate(
+                "sky ambient as one flat light in the sun's unit: the game adds it as the bias of its baked lightmaps and vertex lighting and floors its composite spherical harmonics at it, and its alpha (the uninfluenced level) is not used",
                 skies.len() as u64,
             );
         }

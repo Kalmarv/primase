@@ -93,7 +93,7 @@ fn level_01_reads_and_lowers() {
     let sun = w.get::<Light>(env.sun.unwrap()).unwrap();
     assert_eq!(sun.kind, LightKind::Directional);
     assert_eq!(sun.intensity, 2.5);
-    assert!(env.ambient.is_none());
+    assert!(env.ambient.is_some(), "the sky's ambient is lowered with the sun");
     println!(
         "lights: {points} omni, {spots} spot, {} core lights, one named sun",
         w.iter::<Light>().count()

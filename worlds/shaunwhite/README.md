@@ -191,13 +191,45 @@ to 53,000 across the six levels (suns of 2.0 to 2.5). A level-05 light of intens
 as skate. writes it (8.1 lm per cd): San Vansterdam's own lights are 75,000 to 225,000 lm at 13 to 27 m, the
 community's floodlit parks 0.6 to 2.1 million lm at 40 to 50 m, while `point-scale=100` is 770 lm. The game's static
 world is lit by baked lightmaps, per-vertex lighting and composite spherical harmonics (the `STATIC_LIGHTMAP`,
-`STATIC_VERTEXLIGHTING` paths of `eklightingps.hlsl` and the `COMPOSITELIGHTING` spherical harmonics of `ekcompositelightingcommon.hlsl`), which this does not carry.
+`STATIC_VERTEXLIGHTING` paths of `eklightingps.hlsl` and the `COMPOSITELIGHTING` spherical harmonics of `ekcompositelightingcommon.hlsl`), which this does not carry
+(see "Baked lighting and the sky's ambient" below).
 The spot's local +Y and the sky vector pointing toward the sun are hypotheses, exposed as required choices,
 not established game conventions. Spot angles are retained as radians. `colour=linear|srgb` states the assumed
 source encoding. The pass produces `core.light` and names the sky's directional light in `core.environment`.
 It reports replacing source near/far falloff with inverse-square falloff and a far cutoff, omitting character-only
 lights, flares and cookies, and retaining resolved lights without selecting day/night or scripted activation.
-Global ambient, sky/fog settings and physical calibration remain separate work.
+Unlabelled sky settings, fog and physical calibration remain separate work.
+
+### Baked lighting and the sky's ambient
+
+The game's static world is lit by baked data, not by the stored omni and spot lights (those are `Dynamic` and feed the
+composite spherical harmonics of objects drawn that way; the PC shaders have no per-pixel local-light loop, and the level's
+lights are out of range of much of the map: in level 05's tunnel the nearest lowered light is 24.8 m away with a range of 25,
+56 lux against a sun of 103,666 lux; level 06 has 16 lights, the nearest 150 m from its spawn). The data, from the six
+levels' cells:
+- `LightMapData` (class `aa9c9cb4`) names a `TextureMap` called `LMP_ColLightMapTexture...` (DXT5, one mip, on the second
+  UV set; 1057, 1049, 367, 750, 195 and 527 distinct textures in levels 01 to 06);
+- `VertexLightData` (`37542fa0`) is the per-vertex form: one D3DCOLOR per vertex inline in the placement's
+  `MeshInstanceData` (`536e963b`), drawn from a second vertex stream (`TEXCOORD2`, D3DCOLOR; 15 of the 23 vertex
+  declarations the game creates loading level 01 have it);
+- both carry a `StaticColorModification` (`40f951da`): the colour is `value x scale + bias`, and **the bias is the level's
+  SkyLight `AmbientColor` in all six levels** (0.2745, 0.2745, 0.2745, 0.3529, 0.2745, 0.1961);
+- `CompositeLightingStaticComponent` (`95dc9cd6`) holds baked spherical harmonics, and that path is
+  `max(SH(normal), g_AmbientColor)`.
+So the ambient is the light a surface the bake leaves dark still has: a baked value of 0 decodes to it. `lower-shaunwhite-lighting`
+lowers it: `core.environment`'s ambient is the flat `AmbientColor` in the sun's unit (the unit `point-scale=sun:LUX` fixes, or
+`sun-scale`), reported as an approximation (the game adds it as the bias of the bake and floors the SH at it; its alpha, the
+uninfluenced level, is not used) and with the bake named as not carried: the baked sun, shadows, occlusion and local-light pools
+are not in the ambient. At `sun:100000` it is 11.6, 11.6, 11.6, 14.9, 11.9 and 10.4 thousand lux (about 11% of the sun). Measured on
+two surfaces: the level 05 tunnel's pipe decodes to a mean of 0.55 (ambient 0.27 plus a baked 0.28), a level 06 tower's lightmap
+is almost black (mean 0.02) so its shadowed faces are the ambient alone, 8% of what the sun lights.
+
+A renderer with no ambient of its own draws it with the toolkit's `fill-ambient-lights`; the program states the grid.
+
+**Darkness by design.** Level 05's `05A_SecurityLaserCorridor` is inside `05A_CoridorBlackBox01` (`Gen_Black_Mat`, base colour 0,
+202 triangles, a 37 x 83 x 267 m box) whose normals face inward, with `05A_Shadowbox01` and `05A_Shadowbox02`
+(`Gen_PLH_LDGrid_Gameplay_Mat`) in the same place: the game draws a black room around the pipe, and light does not lighten a black
+albedo. Not all of that tunnel's darkness is missing light.
 
 
 ## Restored material layers
