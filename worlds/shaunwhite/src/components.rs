@@ -152,6 +152,7 @@ impl Component for MaterialRef {
 /// `unresolved` names records whose material allocation could not be filled; their original binding is
 /// retained. The original `core.shader_binding` is unchanged. `lower-shaunwhite-material` consumes only
 /// `shaunwhite.material`, leaving this component and the shader provenance intact.
+/// Empty stages do not imply successful resolution: read the named unavailable reason from `MaterialPrograms`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShaderInputs {
     pub material: MaterialRef,

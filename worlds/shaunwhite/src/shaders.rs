@@ -89,6 +89,9 @@ pub struct Database {
 /// Named graph derivation from the stored forward Colour pixel program.
 pub mod albedo;
 
+/// Named base-UV graph derivation from the matching stored generic VS.
+pub mod base_uv;
+
 mod material;
 pub use material::bind_material;
 

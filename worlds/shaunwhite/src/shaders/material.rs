@@ -76,11 +76,22 @@ pub(crate) fn bind_stage(
     stage: &StageBinding,
     material: &MaterialRef,
 ) -> Result<StageBinding, String> {
+    let mut binding = stage.clone();
+    binding.constants = bind_constants(interface, &stage.constants, material)?;
+    Ok(binding)
+}
+
+/// Pack established material words for a derived program without manufacturing a source shader binding.
+pub(crate) fn bind_constants(
+    interface: &primase_core::shader::Interface,
+    constants: &[ConstantBinding],
+    material: &MaterialRef,
+) -> Result<Vec<ConstantBinding>, String> {
     let state = material.state.ok_or("albedo material fields not read")?;
     if state.water {
         return Err("water material is not generic albedo".into());
     }
-    let mut binding = stage.clone();
+    let mut bindings = constants.to_vec();
     let mut unresolved = BTreeMap::<(ResourceId, u32), String>::new();
     let mut supplied = BTreeMap::<(ResourceId, u32), (u32, String)>::new();
     for resource in &interface.resources {
@@ -90,8 +101,7 @@ pub(crate) fn bind_stage(
         if !layout.size.is_multiple_of(4) {
             return Err("unaligned constant bank size".into());
         }
-        let mut spans = binding
-            .constants
+        let mut spans = bindings
             .iter()
             .filter(|c| c.resource == resource.id)
             .map(|c| (c.offset, c.size))
@@ -109,7 +119,7 @@ pub(crate) fn bind_stage(
                 return Err("material constant spans overlap, are unaligned or exceed the buffer".into());
             }
             if start > end {
-                binding.constants.push(ConstantBinding {
+                bindings.push(ConstantBinding {
                     resource: resource.id,
                     offset: end,
                     size: start - end,
@@ -123,7 +133,7 @@ pub(crate) fn bind_stage(
             end = next;
         }
         if end < layout.size {
-            binding.constants.push(ConstantBinding {
+            bindings.push(ConstantBinding {
                 resource: resource.id,
                 offset: end,
                 size: layout.size - end,
@@ -281,7 +291,7 @@ pub(crate) fn bind_stage(
     }
     for ((resource, offset), (word, name)) in supplied {
         overlay(
-            &mut binding.constants,
+            &mut bindings,
             ConstantBinding {
                 resource,
                 offset,
@@ -292,10 +302,10 @@ pub(crate) fn bind_stage(
             },
         )?;
     }
-    binding.constants.sort_by_key(|c| (c.resource, c.offset));
+    bindings.sort_by_key(|c| (c.resource, c.offset));
     for ((resource, offset), why) in unresolved {
         overlay(
-            &mut binding.constants,
+            &mut bindings,
             ConstantBinding {
                 resource,
                 offset,
@@ -306,9 +316,9 @@ pub(crate) fn bind_stage(
             },
         )?;
     }
-    binding.constants.sort_by_key(|c| (c.resource, c.offset));
+    bindings.sort_by_key(|c| (c.resource, c.offset));
     let mut compact: Vec<ConstantBinding> = Vec::new();
-    for c in binding.constants {
+    for c in bindings {
         if let Some(last) = compact.last_mut()
             && last.resource == c.resource
             && last.offset + last.size == c.offset
@@ -330,6 +340,5 @@ pub(crate) fn bind_stage(
         }
         compact.push(c);
     }
-    binding.constants = compact;
-    Ok(binding)
+    Ok(compact)
 }

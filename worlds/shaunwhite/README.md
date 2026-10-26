@@ -424,3 +424,26 @@ This selects neither a record nor a world influence mode. The original `core.sha
 and shader bytecode stay unchanged. `lower-shaunwhite-material` consumes `shaunwhite.material`
 and leaves these game-owned shader inputs intact, so a consumer can derive/bind a display
 program after lowering without keeping its own copy of the game's material meaning.
+
+
+`shaders::base_uv::derive` returns `shaunwhite.generic-base-uv.v1` from the explicitly
+selected Colour record's stored VS. It identifies TEXCOORD7.xy, requires its value graph
+to depend only on raw UV0.xy and the six established base-diffuse matrix words, and uses
+the toolkit's output projection to retain the original arithmetic. Unknown frame inputs,
+missing/incomplete matrices and extra UV dependencies are refused by name. This is a
+derivation of the stored VS's output, not an independently authored UV equation.
+
+The result carries shared IR, raw UV input roles, material constants packed against the
+VS's own CTAB, exact record/permutation/native-VS key/hash and named cuts. Unused constants
+stay Unknown. Evaluate the graph at vertices on raw mesh UV0, then interpolate its xy as
+the original VS does; B=0/A=1 are placeholders. Original VS/Colour bindings remain unchanged.
+The helper selects no pass variant. `ShaderInputs.material` survives lowering for this
+purpose; empty ShaderInputs stages take their unavailable reason from MaterialPrograms.
+
+The private `tools.ref_sm3` host's VS mode runs the complete original vertex program,
+then an independently compiled pass-through PS reads TEXCOORD7 to a float target. Tests
+gate direct-UV and vertex-constant controls first, then compare the derived graph with a
+stored sidewalk material's non-identity (2,1) base scale over negative/above-one UVs.
+Identity and changed rotation/scale/offset cases discriminate missing uploads and a
+bypassed transform. Neutral frame constants rasterize the proof only; no lighting,
+position or full-frame reconstruction is claimed. Native host/game inputs stay private.

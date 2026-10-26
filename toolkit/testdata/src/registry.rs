@@ -227,7 +227,7 @@ pub const KEYS: &[Entry] = &[
 pub const TOOLS: &[Entry] = &[
     Entry {
         key: "tools.ref_sm3",
-        about: "the private raw SM3 draw/readback host using Microsoft D3D9 REF, with constant and texture controls",
+        about: "the private raw SM3 PS/VS draw/readback host using Microsoft D3D9 REF, with constant/texture controls and --vertex-self-test vertex-input/constant controls",
         source: "third-party: Microsoft D3D9 reference rasterizer d3dref9.dll 10.0.26100.4654, SHA-256 44cb58f54e11cb6d2cb123dbe92ded3ce3c2b3e2e4d2659c20ddd941b8e3eb51; thin private host, no primase lifter or game equations",
         gate: true,
     },
