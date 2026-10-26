@@ -368,6 +368,25 @@ fn place_guidance(
     }
 }
 
+/// The report line for a Visual that shows class `class`, which draws nothing here: what the class is where it is known.
+fn unplaced(class: u32) -> String {
+    let why = match class {
+        c if light::is_light(c) => "a light, placed as one",
+        scene::PARTICLE_SYSTEM => "a particle system: an effect, no geometry",
+        scene::DYNAMIC_MESH => "a dynamic mesh: its vertices are made at run time",
+        scene::REAL_TREE_MESH => "a RealTree: native tree data",
+        scene::FREE_FORM_SHAPE_HULL => {
+            "a free-form shape hull: the shaping mechanic's deformation volume, not drawn and not collision"
+        }
+        _ => "",
+    };
+    if why.is_empty() {
+        format!("visuals showing class {class:#010x} (not placed)")
+    } else {
+        format!("visuals showing class {class:#010x}, {why} (not placed)")
+    }
+}
+
 /// The Mesh a Visual's target draws: a Mesh, or a LODSelector's nearest level.
 fn resolve(index: &Index, target: u32, bump: &mut impl FnMut(String)) -> Option<u32> {
     let Some((o, body)) = index.get(target) else {
@@ -388,7 +407,7 @@ fn resolve(index: &Index, target: u32, bump: &mut impl FnMut(String)) -> Option<
             first
         }
         c => {
-            bump(format!("visuals showing class {c:#010x} (not placed)"));
+            bump(unplaced(c));
             None
         }
     }

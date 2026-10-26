@@ -49,6 +49,21 @@ fn level_01_reads_and_lowers() {
         !report.iter().any(|(_, t)| t.starts_with("meshes not read")),
         "{report:?}"
     );
+    // the classes a Visual shows that draw nothing are named, not just counted by hash (placements of each in level 01)
+    for (class, why, n) in [
+        ("0xc3120087", "free-form shape hull", 140),
+        ("0xcaaa7ee8", "particle system", 290),
+        ("0xcd0d35e6", "RealTree", 36),
+        ("0xf4bbbb9e", "dynamic mesh", 20),
+    ] {
+        let want = format!("visuals showing class {class}, a {why}");
+        let line = report.iter().find(|(_, t)| t.starts_with(&want));
+        assert_eq!(
+            line.and_then(|(_, t)| t.rsplit(": ").next()?.parse::<usize>().ok()),
+            Some(n),
+            "{want}"
+        );
+    }
     let morphs: Vec<usize> = w.iter::<Morphs>().map(|(_, m)| m.targets.len()).collect();
     println!(
         "morphs: {} meshes, {} targets",

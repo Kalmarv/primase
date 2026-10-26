@@ -29,6 +29,15 @@ pub const GRID_CELL_DATA_BLOCK: u32 = 0xAC2B_BF68;
 /// The class of a spawn node's component (`0xF63C9D7F`; the name `SpawnPoint` is the class's in later games of the
 /// engine family, where the hash is named: this game's data does not name it).
 pub const SPAWN_POINT: u32 = 0xF63C_9D7F;
+/// Classes a Visual can show besides a Mesh, a LODSelector and a light: a particle system (effects: checkpoints,
+/// collectibles, the collision dust), a DynamicMesh (an 18-byte body: its vertices are made at run time, the banners and
+/// flags), a RealTreeMesh (native tree data, the three urban tree species) and the shaping mechanic's free-form shape
+/// hull (`0xC3120087`: a GraphicObject holding u16 indices, an octagonal prism's 16 positions, its edge normals and
+/// plane equations; every `00_SHP_FF*` entity shows one next to its Mesh, so it is the deformation volume).
+pub const PARTICLE_SYSTEM: u32 = 0xCAAA_7EE8;
+pub const DYNAMIC_MESH: u32 = 0xF4BB_BB9E;
+pub const REAL_TREE_MESH: u32 = 0xCD0D_35E6;
+pub const FREE_FORM_SHAPE_HULL: u32 = 0xC312_0087;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
