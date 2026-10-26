@@ -5,7 +5,9 @@ use primase_core::{
     frame::{Axis, SourceFrame},
 };
 use primase_shred::{
-    components::{MaterialId, MaterialNamespace, MeshId, RefusedMesh, VertexInputs},
+    components::{
+        MaterialId, MaterialNamespace, MeshId, RefusedMesh, SourceSkeleton, SourceSkin, VertexInputs,
+    },
     read::{convert::ShredReader, level, pak::Pak, scene},
 };
 use std::collections::BTreeSet;
@@ -30,6 +32,94 @@ struct Fixture {
     mgp: Vec<u8>,
 }
 impl Fixture {
+    /// Literal two-palette processed stream, with a separate rigid sibling and named source skeleton.
+    fn processed() -> Self {
+        let mut f = Self::new();
+        let positions: Vec<_> = f.mmp[..96]
+            .as_chunks::<16>()
+            .0
+            .iter()
+            .map(|v| v[..12].to_vec())
+            .collect();
+        let ep = 432;
+        let stream_size = 640;
+        let metadata_size = ep + stream_size + 16;
+        f.mlp.splice(84 + ep..84 + ep, vec![0; stream_size + 16]);
+        word(&mut f.mlp, 28 + 16, metadata_size as u32);
+        word(&mut f.mlp, 28 + 20, 12);
+        word(&mut f.mlp, 56 + 4, metadata_size as u32);
+        word(&mut f.mlp, 56 + 8, 12);
+        word(&mut f.mlp, 84 + 0x8c, 0x8007f);
+        word(&mut f.mlp, 84 + 0x9c, ep as u32);
+        word(&mut f.mlp, 84 + 0xb4, 1);
+        word(&mut f.mlp, 84 + 384 + 8, 36);
+        word(&mut f.mlp, 84 + 384 + 20, 6 * 36);
+        word(&mut f.mlp, 84 + 408 + 8, 0);
+        word(&mut f.mlp, 84 + 192 + 56, 0x0100ffff);
+        word(&mut f.mlp, 84 + 192 + 96 + 56, 0xffffffff);
+        f.mmp.drain(..96);
+        let start = 84 + ep;
+        word(&mut f.mlp, start, stream_size as u32);
+        for i in 0..15 {
+            word(&mut f.mlp, start + 4 + i * 4, 0xaabbccdd);
+        }
+        for batch in 0..2 {
+            let header = start + 64 + batch * 256;
+            f.mlp[header..header + 4].copy_from_slice(if batch == 0 {
+                &[0, 1, 255, 255]
+            } else {
+                &[2, 255, 255, 255]
+            });
+            f.mlp[header + 4..header + 6].copy_from_slice(&3u16.to_be_bytes());
+            f.mlp[header + 6..header + 8].copy_from_slice(&(if batch == 0 { 2u16 } else { 1 }).to_be_bytes());
+            for i in 0..14 {
+                word(&mut f.mlp, header + 8 + i * 4, 0xddccbbaa);
+            }
+            for j in 0..3 {
+                let p = header + 64 + j * 64;
+                f.mlp[p..p + 12].copy_from_slice(&positions[batch * 3 + j]);
+                let weights = if batch == 0 {
+                    [[128, 127, 0, 0], [64, 191, 0, 0], [0, 255, 0, 0]][j]
+                } else {
+                    [255, 0, 0, 0]
+                };
+                f.mlp[p + 12..p + 16].copy_from_slice(&weights);
+                float(&mut f.mlp, p + 24, 1.);
+                word(&mut f.mlp, p + 28, 0x11223344);
+                float(&mut f.mlp, p + 32, 1.);
+                float(&mut f.mlp, p + 44, -1.);
+                for (k, value) in [0x3800u16, 0xbc00, 0x4000, 0x3400].into_iter().enumerate() {
+                    f.mlp[p + 48 + k * 2..p + 50 + k * 2].copy_from_slice(&value.to_be_bytes());
+                }
+                f.mlp[p + 56..p + 64].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+            }
+        }
+        // Zero-count terminator occupies the last 64 stream bytes; the 16-byte footer stays opaque.
+        let table = f.scp.len();
+        f.scp.resize(table + 3 * 16 + 3 * 64, 0);
+        word(&mut f.scp, 0x20, 3);
+        word(&mut f.scp, 0x24, table as u32);
+        for (i, name) in [b"root".as_slice(), b"joint", b"toe"].into_iter().enumerate() {
+            let text = f.scp.len();
+            f.scp.extend_from_slice(name);
+            f.scp.push(0);
+            let transform = table + 48 + i * 64;
+            matrix(&mut f.scp, transform, false, 10. + i as f32);
+            word(
+                &mut f.scp,
+                table + i * 16,
+                if i == 0 { 254 } else { 96 + i as u32 },
+            );
+            word(
+                &mut f.scp,
+                table + i * 16 + 4,
+                if i == 0 { u32::MAX } else { i as u32 - 1 },
+            );
+            word(&mut f.scp, table + i * 16 + 8, text as u32);
+            word(&mut f.scp, table + i * 16 + 12, transform as u32);
+        }
+        f
+    }
     /// Hand-written native packed declaration families. The six vertices each receive the same known lanes.
     fn attributes(mask: u32, stride: usize) -> Self {
         let mut f = Self::new();
@@ -388,6 +478,135 @@ fn embedded_mesh_does_not_hide_rigid_sibling() {
     assert_eq!(w.column::<Mesh>().unwrap().len(), 1);
     assert_eq!(w.column::<RefusedMesh>().unwrap().len(), 1);
     assert_eq!(w.column::<Instance>().unwrap().len(), 3);
+}
+
+#[test]
+fn processed_source_geometry_skeleton_and_remapping() {
+    let fixture = Fixture::processed();
+    let pak = fixture.pak();
+    let frame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::NegZ], 0.5);
+    let (mut world, report) = level::read_level(&[("fixture", &pak)], frame).unwrap();
+    assert_eq!(
+        (
+            report.rigid,
+            report.processed,
+            report.refused,
+            report.processed_batches
+        ),
+        (1, 1, 0, 2)
+    );
+    assert_eq!((report.source_skeletons, report.source_bones), (1, 3));
+    assert!(world.verify_components().is_empty());
+    let entity = world.column::<SourceSkin>().unwrap().iter().next().unwrap().0;
+    let skin = world.get::<SourceSkin>(entity).unwrap().clone();
+    let skeleton = world.get::<SourceSkeleton>(skin.skeleton).unwrap();
+    assert_eq!(skeleton.frame, frame);
+    assert_eq!(skeleton.bones[0].name, b"root");
+    assert_eq!(skeleton.bones[1].words, [97, 0]);
+    assert_eq!(skeleton.bones[1].matrix.cols[3], [11., 0., 0.]);
+    assert!(world.column::<primase_core::skeleton::Skeleton>().is_none());
+    assert!(world.column::<primase_core::skin::Skin>().is_none());
+    let mesh = world.get::<Mesh>(entity).unwrap();
+    let first = &mesh.primitives()[0];
+    assert_eq!(first.positions().unwrap()[0], [0.5, 1., -1.5]);
+    assert_eq!(
+        first.streams[&Semantic::Normal],
+        Stream::F32x3(vec![[0., 0., -1.]; 3])
+    );
+    assert_eq!(
+        first.streams[&Semantic::TexCoord(0)],
+        Stream::F32x2(vec![[2., 0.25]; 3])
+    );
+    assert_eq!(
+        first.streams[&Semantic::TexCoord(1)],
+        Stream::F32x2(vec![[0.5, -1.]; 3])
+    );
+    assert!(!first.streams.contains_key(&Semantic::TexCoord(2)));
+    assert!(!first.streams.contains_key(&Semantic::Tangent(0)));
+    assert_eq!(
+        world.get::<VertexInputs>(entity).unwrap().primitives[0]["skin_basis"].values[0],
+        [1., 0., 0., -1.]
+    );
+    assert_eq!(skin.primitives[0][0].bones, [0, 1, 255, 255]);
+    assert_eq!(skin.primitives[0][0].weights, [128, 127, 0, 0]);
+    assert_eq!(skin.primitives[0][0].extra, 0x11223344);
+    assert_eq!(skin.primitives[0][0].padding, [1, 2, 3, 4, 5, 6, 7, 8]);
+    let mapped = skin.remap_primitives(&[1, 0, 1]).unwrap().unwrap();
+    assert_eq!(mapped.primitives[0][0].bones, [2, 255, 255, 255]);
+    assert_eq!(mapped.primitives[1], skin.primitives[0]);
+    world.remap_vertices(entity, 0, &[2, 0, 2]).unwrap();
+    let mapped = world.get::<SourceSkin>(entity).unwrap();
+    assert_eq!(
+        mapped.primitives[0].iter().map(|v| v.weights).collect::<Vec<_>>(),
+        vec![[0, 255, 0, 0], [128, 127, 0, 0], [0, 255, 0, 0]]
+    );
+    assert!(skin.remap_vertices(0, &[99]).unwrap().is_err());
+    assert!(world.verify_components().is_empty());
+    let mut reader = ShredReader::new(vec![("fixture", &pak)], frame);
+    let (mut plan, _) = reader.read().unwrap();
+    assert!(plan.get::<Mesh>(entity).is_some());
+    assert_eq!(plan.get::<SourceSkin>(entity), Some(&skin));
+    assert!(plan.get::<SourceSkeleton>(skin.skeleton).is_some());
+    plan.remap_vertices(entity, 0, &[2, 0, 2]).unwrap();
+    assert!(plan.verify_components().is_empty());
+    let (loaded, _) = reader.load(&plan, &BTreeSet::from([entity])).unwrap();
+    assert_eq!(loaded.get::<SourceSkin>(entity), world.get::<SourceSkin>(entity));
+    assert!(loaded.get::<SourceSkeleton>(skin.skeleton).is_some());
+    assert!(loaded.verify_components().is_empty());
+}
+
+#[test]
+fn processed_nan_normals_preserve_bits_and_omit_only_the_affected_primitive() {
+    let mut fixture = Fixture::processed();
+    word(&mut fixture.mlp, 84 + 432 + 128 + 64 + 16, 0x7fa12345);
+    let pak = fixture.pak();
+    let (world, report) = level::read_level(&[("fixture", &pak)], SourceFrame::WORLD).unwrap();
+    assert_eq!((report.nonfinite_normals, report.omitted_normal_streams), (1, 1));
+    assert_eq!(report.nonfinite_normal_exceptions.len(), 1);
+    let (entity, skin) = world.column::<SourceSkin>().unwrap().iter().next().unwrap();
+    assert_eq!(skin.primitives[0][1].normal_bits[0], 0x7fa12345);
+    let mesh = world.get::<Mesh>(entity).unwrap();
+    assert!(!mesh.primitives()[0].streams.contains_key(&Semantic::Normal));
+    assert!(mesh.primitives()[1].streams.contains_key(&Semantic::Normal));
+    assert!(world.verify_components().is_empty());
+}
+
+#[test]
+fn processed_refusals_and_malformed_data() {
+    let mut fixture = Fixture::processed();
+    word(&mut fixture.mlp, 84 + 0xb4, 0);
+    let scene = fixture.decode().unwrap();
+    assert!(
+        scene.models[0]
+            .refusal
+            .unwrap()
+            .1
+            .contains("processed skin format")
+    );
+    assert!(scene.models[1].refusal.is_none());
+    for (offset, bytes, reason) in [
+        (84 + 432 + 64, vec![3], "bone palette"),
+        (84 + 432 + 64 + 4, vec![0, 0], "batch vertex count"),
+        (84 + 432 + 128 + 12, vec![127], "weights must sum"),
+        (84 + 432 + 128 + 48, vec![0x7c, 0], "processed UV"),
+        (84 + 432 + 640 - 64 + 4, vec![0, 1], "terminal/size"),
+    ] {
+        let mut fixture = Fixture::processed();
+        fixture.mlp[offset..offset + bytes.len()].copy_from_slice(&bytes);
+        assert!(
+            fixture.decode().unwrap_err().to_string().contains(reason),
+            "{reason}"
+        );
+    }
+    let mut fixture = Fixture::processed();
+    word(&mut fixture.scp, 0x20, 0);
+    assert!(
+        fixture
+            .decode()
+            .unwrap_err()
+            .to_string()
+            .contains("no source skeleton")
+    );
 }
 
 #[test]

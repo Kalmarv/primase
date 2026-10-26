@@ -8,8 +8,8 @@ use super::{
 use crate::{
     Result,
     components::{
-        MaterialId, MaterialNamespace, MeshId, RefusedMesh, SceneLight, Spline, Spot, VertexInput,
-        VertexInputs,
+        MaterialId, MaterialNamespace, MeshId, RefusedMesh, SceneLight, SourceSkeleton, SourceSkin, Spline,
+        Spot, VertexInput, VertexInputs,
     },
     invalid,
 };
@@ -25,6 +25,14 @@ pub struct LevelReport {
     pub quartets: usize,
     pub meshes: usize,
     pub rigid: usize,
+    pub processed: usize,
+    pub processed_vertices: usize,
+    pub processed_batches: usize,
+    pub source_skeletons: usize,
+    pub source_bones: usize,
+    pub nonfinite_normals: usize,
+    pub omitted_normal_streams: usize,
+    pub nonfinite_normal_exceptions: Vec<(MeshId, usize)>,
     pub refused: usize,
     pub submeshes: usize,
     pub placements: usize,
@@ -66,8 +74,14 @@ impl LevelReport {
         let mut lines = vec![(
             "shred geometry".into(),
             format!(
-                "{} quartets; {} meshes ({} rigid, {} refused); {} submeshes; {} placements",
-                self.quartets, self.meshes, self.rigid, self.refused, self.submeshes, self.placements
+                "{} quartets; {} meshes ({} rigid, {} processed, {} refused); {} submeshes; {} placements",
+                self.quartets,
+                self.meshes,
+                self.rigid,
+                self.processed,
+                self.refused,
+                self.submeshes,
+                self.placements
             ),
         )];
         lines.push((
@@ -106,6 +120,27 @@ impl LevelReport {
         for (source, count) in &self.normal_exceptions {
             lines.push((
                 "shred zero normals".into(),
+                format!(
+                    "{} {:?} {:08x}: {count} stored vertices",
+                    source.pak,
+                    String::from_utf8_lossy(&source.quartet),
+                    source.id
+                ),
+            ));
+        }
+        if self.processed > 0 {
+            lines.push(("shred processed skins".into(), format!(
+                "{} meshes / {} batches; {} source skeletons / {} bones; palettes, weights and original matrices retained in shred provenance; runtime rest/inverse-bind/deformation binding unproved, no core.skin assigned",
+                self.processed, self.processed_batches, self.source_skeletons, self.source_bones
+            )));
+            lines.push(("shred nonfinite normals".into(), format!(
+                "{} authored nonfinite normal vectors; {} primitive normal streams omitted; exact bits retained in shred.source_skin",
+                self.nonfinite_normals, self.omitted_normal_streams
+            )));
+        }
+        for (source, count) in &self.nonfinite_normal_exceptions {
+            lines.push((
+                "shred source normal exception".into(),
                 format!(
                     "{} {:?} {:08x}: {count} stored vertices",
                     source.pak,
@@ -214,6 +249,20 @@ pub fn read_level(paks: &[(&str, &Pak)], frame: SourceFrame) -> Result<(World, L
             report
                 .unread
                 .extend(scene.unread.into_iter().map(|u| (label.into(), name.clone(), u)));
+            let source_skeleton = scene.source_bones.map(|bones| {
+                report.source_skeletons += 1;
+                report.source_bones += bones.len();
+                let e = world.spawn();
+                world.insert(
+                    e,
+                    Source(format!(
+                        "{label}:{:?}:source_skeleton",
+                        String::from_utf8_lossy(&name)
+                    )),
+                );
+                world.insert(e, SourceSkeleton { frame, bones });
+                e
+            });
             let mut prototypes = BTreeMap::new();
             for model in scene.models {
                 report.meshes += 1;
@@ -260,7 +309,25 @@ pub fn read_level(paks: &[(&str, &Pak)], frame: SourceFrame) -> Result<(World, L
                     );
                     continue;
                 }
-                report.rigid += 1;
+                if model.processed.is_some() {
+                    report.processed += 1;
+                    report.processed_vertices += model.positions.len();
+                    report.processed_batches += model.processed_batches;
+                } else {
+                    report.rigid += 1;
+                }
+                let nonfinite = model
+                    .attributes
+                    .normals
+                    .iter()
+                    .filter(|n| n.iter().any(|x| !x.is_finite()))
+                    .count();
+                report.nonfinite_normals += nonfinite;
+                if nonfinite > 0 {
+                    report
+                        .nonfinite_normal_exceptions
+                        .push((source.clone(), nonfinite));
+                }
                 report.zero_normals += model.attributes.zero_normals;
                 if model.attributes.zero_normals > 0 {
                     report
@@ -273,6 +340,7 @@ pub fn read_level(paks: &[(&str, &Pak)], frame: SourceFrame) -> Result<(World, L
                 }
                 let mut primitives = Vec::new();
                 let mut raw_primitives = Vec::new();
+                let mut source_primitives = Vec::new();
                 for sub in model.submeshes {
                     let mut indices = model.indices[sub.indices].to_vec();
                     // Keep each submesh's contiguous vertex range and rebase its indices.
@@ -289,21 +357,22 @@ pub fn read_level(paks: &[(&str, &Pak)], frame: SourceFrame) -> Result<(World, L
                         }
                     }
                     let range = low as usize..end as usize;
-                    let mut streams = BTreeMap::from([
-                        (
-                            Semantic::Position,
-                            Stream::F32x3(positions[range.clone()].to_vec()),
-                        ),
-                        (
+                    if let Some(vertices) = &model.processed {
+                        source_primitives.push(vertices[range.clone()].to_vec());
+                    }
+                    let mut streams = BTreeMap::from([(
+                        Semantic::Position,
+                        Stream::F32x3(positions[range.clone()].to_vec()),
+                    )]);
+                    let normals = &model.attributes.normals[range.clone()];
+                    if normals.iter().flatten().all(|v| v.is_finite()) {
+                        streams.insert(
                             Semantic::Normal,
-                            Stream::F32x3(
-                                model.attributes.normals[range.clone()]
-                                    .iter()
-                                    .map(|&v| frame.direction(v))
-                                    .collect(),
-                            ),
-                        ),
-                    ]);
+                            Stream::F32x3(normals.iter().map(|&v| frame.direction(v)).collect()),
+                        );
+                    } else {
+                        report.omitted_normal_streams += 1;
+                    }
                     if let Some(color) = &model.attributes.colors {
                         streams.insert(Semantic::Color(0), Stream::F32x4(color[range.clone()].to_vec()));
                     }
@@ -344,6 +413,16 @@ pub fn read_level(paks: &[(&str, &Pak)], frame: SourceFrame) -> Result<(World, L
                     });
                 }
                 world.insert(e, Mesh::new(primitives));
+                if model.processed.is_some() {
+                    world.insert(
+                        e,
+                        SourceSkin {
+                            frame,
+                            skeleton: source_skeleton.expect("decoded source skeleton"),
+                            primitives: source_primitives,
+                        },
+                    );
+                }
                 if raw_primitives.iter().any(|p| !p.is_empty()) {
                     world.insert(
                         e,

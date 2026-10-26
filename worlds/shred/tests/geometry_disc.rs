@@ -3,6 +3,7 @@ use primase_core::{
     Instance, Mesh, Semantic, Stream,
     frame::{Axis, SourceFrame},
 };
+use primase_shred::components::SourceSkin;
 use primase_shred::read::{level, pak::Pak};
 use primase_testdata::{Game, Query, expect_found, install};
 use std::path::{Path, PathBuf};
@@ -37,7 +38,7 @@ fn every_quartet_and_mesh_including_mixed_embedded() {
 }
 
 fn census(paths: &[PathBuf], frame: SourceFrame) {
-    let mut totals = [0; 6];
+    let mut totals = [0; 7];
     let mut with_geometry = 0;
     let mut zero_normals = 0;
     let mut cosines = Vec::new();
@@ -57,6 +58,7 @@ fn census(paths: &[PathBuf], frame: SourceFrame) {
             r.quartets,
             r.meshes,
             r.rigid,
+            r.processed,
             r.refused,
             r.submeshes,
             r.placements,
@@ -69,7 +71,10 @@ fn census(paths: &[PathBuf], frame: SourceFrame) {
             path.display(),
             world.verify_components()
         );
-        assert_eq!(world.column::<Mesh>().map_or(0, |c| c.len()), r.rigid);
+        assert_eq!(
+            world.column::<Mesh>().map_or(0, |c| c.len()),
+            r.rigid + r.processed
+        );
         assert_eq!(world.column::<Instance>().map_or(0, |c| c.len()), r.placements);
         zero_normals += r.zero_normals;
         for (source, count) in &r.normal_exceptions {
@@ -81,7 +86,10 @@ fn census(paths: &[PathBuf], frame: SourceFrame) {
             );
         }
         if let Some(meshes) = world.column::<Mesh>() {
-            for (_, mesh) in meshes.iter() {
+            for (entity, mesh) in meshes.iter() {
+                if world.get::<SourceSkin>(entity).is_some() {
+                    continue;
+                }
                 for primitive in mesh.primitives() {
                     let positions = primitive.positions().expect("rigid position stream");
                     let Stream::F32x3(normals) = &primitive.streams[&Semantic::Normal] else {
@@ -119,10 +127,10 @@ fn census(paths: &[PathBuf], frame: SourceFrame) {
         }
     }
     eprintln!(
-        "SHRED geometry census: {with_geometry} PAKs; [quartets, meshes, rigid, refused, submeshes, placements] = {totals:?}; every rigid position checked against source AABB (0.05 source units)"
+        "SHRED geometry census: {with_geometry} PAKs; [quartets, meshes, rigid, processed, refused, submeshes, placements] = {totals:?}; positions checked against source AABB (0.05 source units)"
     );
     assert_eq!(with_geometry, 324);
-    assert_eq!(totals, [657, 21_309, 17_897, 3_412, 35_114, 168_887]);
+    assert_eq!(totals, [657, 21_309, 17_897, 3_412, 0, 35_114, 168_887]);
     assert_eq!(
         zero_normals, 11_488,
         "stock exceptions counted per stored resource vertex"

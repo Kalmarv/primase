@@ -14,4 +14,5 @@ pub mod scene;
 pub mod scp_lights;
 pub mod scp_splines;
 pub mod scp_tables;
+mod skin;
 pub mod texture;

@@ -1,8 +1,12 @@
 //! Pure quartet decoder. All offsets in diagnostics are relative to the named decoded file.
 //! Contracts: SHRED's stored bounds/tables and its native loader, documented in the game's geometry recon.
 use super::attributes::{self, Attributes};
-use super::scp_tables;
-use crate::{Result, invalid};
+use super::{scp_tables, skin};
+use crate::{
+    Result,
+    components::{SourceBone, SourceSkinVertex},
+    invalid,
+};
 use primase_core::Transform;
 use std::{collections::BTreeSet, ops::Range};
 
@@ -29,6 +33,8 @@ pub struct Model {
     pub positions: Vec<[f32; 3]>,
     pub format: u32,
     pub attributes: Attributes,
+    pub processed: Option<Vec<SourceSkinVertex>>,
+    pub processed_batches: usize,
     pub indices: Vec<u32>,
     pub submeshes: Vec<Submesh>,
     /// MLP offset and reason; no geometry is fabricated for an unsupported model.
@@ -47,6 +53,7 @@ pub struct Scene {
     pub placements: Vec<Placement>,
     /// The SCP's node table, world matrices and blob sections (spot chunks).
     pub tables: scp_tables::Tables,
+    pub source_bones: Option<Vec<SourceBone>>,
     pub unread: Vec<Unread>,
 }
 
@@ -78,20 +85,20 @@ impl<'a> Bytes<'a> {
     pub(super) fn u(self, at: usize) -> Result<usize> {
         Ok(u32::from_be_bytes(self.slice(at, 4)?.try_into().expect("four bytes")) as usize)
     }
-    fn f(self, at: usize) -> Result<f32> {
+    pub(super) fn f(self, at: usize) -> Result<f32> {
         let n = f32::from_bits(self.u(at)? as u32);
         if !n.is_finite() {
             return Err(self.error(at, "nonfinite float"));
         }
         Ok(n)
     }
-    fn v3(self, at: usize) -> Result<[f32; 3]> {
+    pub(super) fn v3(self, at: usize) -> Result<[f32; 3]> {
         Ok([self.f(at)?, self.f(at + 4)?, self.f(at + 8)?])
     }
     pub(super) fn require(self, at: usize, yes: bool, reason: &str) -> Result<()> {
         if yes { Ok(()) } else { Err(self.error(at, reason)) }
     }
-    fn table(self, at: usize, count: usize, stride: usize) -> Result<()> {
+    pub(super) fn table(self, at: usize, count: usize, stride: usize) -> Result<()> {
         self.slice(
             at,
             count
@@ -100,7 +107,7 @@ impl<'a> Bytes<'a> {
         )?;
         Ok(())
     }
-    fn matrix(self, at: usize) -> Result<Transform> {
+    pub(super) fn matrix(self, at: usize) -> Result<Transform> {
         self.slice(at, 64)?;
         let mut cols = [[0.; 3]; 4];
         for (j, col) in cols.iter_mut().enumerate() {
@@ -177,7 +184,7 @@ fn stream(b: Bytes<'_>, at: usize) -> Result<(usize, usize, Range<usize>)> {
     Ok((count, stride, off..off + size))
 }
 
-/// Decode one quartet in source coordinates. Unsupported embedded meshes are refused individually.
+/// Decode one quartet in source coordinates. Unsupported format variants are refused individually.
 /// Unknown attributes/tables are returned with exact byte spans rather than assigned guessed meanings.
 pub fn decode(scp: &[u8], mlp: &[u8], mmp: &[u8], mgp: &[u8]) -> Result<Scene> {
     let s = Bytes {
@@ -218,6 +225,7 @@ pub fn decode(scp: &[u8], mlp: &[u8], mmp: &[u8], mgp: &[u8]) -> Result<Scene> {
         models: vec![],
         placements: vec![],
         tables: scp_tables::Tables::default(),
+        source_bones: None,
         unread: vec![],
     };
     let mut ids = BTreeSet::new();
@@ -312,6 +320,14 @@ pub fn decode(scp: &[u8], mlp: &[u8], mmp: &[u8], mgp: &[u8]) -> Result<Scene> {
         let mut positions = Vec::new();
         let format = b.u(0x8c)? as u32;
         let mut attributes = Attributes::default();
+        let mut processed = None;
+        let mut processed_batches = 0;
+        let unsupported_uv = subs.iter().enumerate().find_map(|(i, sub)| {
+            sub.uv_remap
+                .iter()
+                .position(|&v| v > 3 && v != 255)
+                .map(|slot| b.base + sp + i * 96 + 56 + slot)
+        });
         let refusal = if embedded {
             b.require(
                 0x94,
@@ -319,7 +335,32 @@ pub fn decode(scp: &[u8], mlp: &[u8], mmp: &[u8], mgp: &[u8]) -> Result<Scene> {
                 "unsupported embedded MGP stream",
             )?;
             coverage(cpu, std::iter::once(io..io + size).collect(), false)?;
-            Some((b.base + 0x9c, "STR-FF stride-36 embedded vertex stream is unread"))
+            if format != 0x8007f || b.u(0xb4)? != 1 {
+                Some((b.base + 0x8c, "unsupported processed skin format/flags"))
+            } else if let Some(offset) = unsupported_uv {
+                Some((offset, "unsupported UV source selector"))
+            } else {
+                if scene.source_bones.is_none() {
+                    scene.source_bones = Some(skin::skeleton(s)?);
+                }
+                let bones = scene.source_bones.as_ref().expect("source skeleton decoded");
+                let decoded = skin::decode(b, extra, vc, bones.len(), bounds)?;
+                scene.unread.extend(unread_gaps(
+                    b,
+                    vec![
+                        0..0xc0,
+                        sp..sp + ns * 96,
+                        vp..vp + 24,
+                        ip..ip + 24,
+                        decoded.stream,
+                    ],
+                )?);
+                positions = decoded.positions;
+                attributes = decoded.attributes;
+                processed = Some(decoded.vertices);
+                processed_batches = decoded.batches;
+                None
+            }
         } else {
             cpu.slice(vr.start, vr.len())?;
             for j in 0..vc {
@@ -348,16 +389,8 @@ pub fn decode(scp: &[u8], mlp: &[u8], mmp: &[u8], mgp: &[u8]) -> Result<Scene> {
             scene.unread.extend(unread_gaps(b, meta)?);
             if attributes::stride(format).is_none() {
                 Some((b.base + 0x8c, "unsupported rigid vertex format mask"))
-            } else if let Some((submesh, slot)) = subs.iter().enumerate().find_map(|(i, s)| {
-                s.uv_remap
-                    .iter()
-                    .position(|&v| v > 3 && v != 255)
-                    .map(|slot| (i, slot))
-            }) {
-                Some((
-                    b.base + sp + submesh * 96 + 56 + slot,
-                    "unsupported UV source selector",
-                ))
+            } else if let Some(offset) = unsupported_uv {
+                Some((offset, "unsupported UV source selector"))
             } else {
                 b.require(
                     0x94,
@@ -380,6 +413,8 @@ pub fn decode(scp: &[u8], mlp: &[u8], mmp: &[u8], mgp: &[u8]) -> Result<Scene> {
             positions,
             format,
             attributes,
+            processed,
+            processed_batches,
             indices,
             submeshes: subs,
             refusal,
@@ -395,11 +430,11 @@ pub fn decode(scp: &[u8], mlp: &[u8], mmp: &[u8], mgp: &[u8]) -> Result<Scene> {
     let (tables, tables_unread) = scp_tables::decode(scp)?;
     scene.tables = tables;
     scene.unread.extend(tables_unread);
-    // Native loader proves these strides, but their semantic types remain unknown.
+    // Other native-loader tables remain opaque. Processed skins already retain the named bone table.
     for (field, stride) in [(0x20, 16), (0x28, 56), (0x30, 512)] {
         let count = s.u(field)?;
         let start = s.u(field + 4)?;
-        if count > 0 {
+        if count > 0 && !(field == 0x20 && scene.source_bones.is_some()) {
             s.table(start, count, stride)?;
             scene.unread.push(Unread {
                 file: "scp",

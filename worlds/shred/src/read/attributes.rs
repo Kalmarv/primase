@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Default)]
 pub struct Attributes {
-    /// Exact RSX CMP values, including authored zero normals; no normalization or repair.
+    /// Source normals: exact RSX CMP for rigid meshes, authored float3 for processed skins. No repair.
     pub normals: Vec<[f32; 3]>,
     pub colors: Option<Vec<[f32; 4]>>,
     pub uvs: [Option<Vec<[f32; 2]>>; 4],

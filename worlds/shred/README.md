@@ -1,6 +1,6 @@
 # primase-shred
 
-Tony Hawk: SHRED (PS3, 2010), RME archives and rigid scene geometry.
+Tony Hawk: SHRED (PS3, 2010), RME archives and scene geometry, including processed crowd/actor source meshes.
 
 `read::pak::Pak::open` reads one PAK v4; `from_bytes` accepts caller-owned bytes. Metadata validates the header,
 name hashes, supported attributes/alignment, zero on-disc runtime offsets, bounded NUL-terminated names and exact
@@ -26,8 +26,9 @@ disc census: 336 archives, 67,320 entry occurrences, 31,227 streams, 111,391 blo
 `read::scene::decode(scp, mlp, mmp, mgp)` reads one decoded quartet in source coordinates. It checks resource IDs,
 slice coverage through EOF (only zero alignment padding), finite affine matrices, identity model-local matrices,
 stride-16 positions, stored AABB containment (0.05 source units), BE u16 triangle lists, index bounds and exact
-submesh partitions. Unknown formats fail with the file and byte offset. Stride-36 embedded models are individually
-refused, retaining their identity, submesh material references and placements; rigid siblings still decode.
+submesh partitions. Unsupported mesh variants are individually refused with their identity, submesh material
+references and placements retained; supported siblings still decode. Malformed supported records fail with the file
+and byte offset. Processed stride-36 declarations use the embedded source format described below.
 
 `read::level::read_level(&[(label, &pak), ...], frame)` assembles all quartets of precisely the supplied archives.
 The program chooses the base/layers. There is one prototype per resource occurrence, one primitive per rigid
@@ -90,7 +91,7 @@ textures. Colours become normalized RGBA streams. Unproved tangent roles and bit
 `shred.vertex_inputs` as `attr15`, `attr14`, `attr12` and `attr13`; no core tangent is invented. This component also
 retains every stored UV set as `stored_uv0` through `stored_uv3`, including sets unused by the remap. Its values
 retain the recorded source frame and remain source provenance under geometry transforms. Primitive/vertex remaps
-keep these arrays aligned with the mesh, and deferred loading restores them alongside geometry.
+keep these arrays aligned with the mesh. The read world includes them alongside geometry; loading retains the selected arrays.
 
 SCP table strides are checked
 against the native loader, but their meanings and nested objects remain unread. SCP's opaque coverage notice
@@ -128,8 +129,62 @@ at cosine thresholds -0.5/+0.5, with 23,293 ambiguous and 7,078 degenerate or ze
 source-CW normalization, both frames must produce 5,384,944 agreeing, 1,469 opposing and 23,293 ambiguous triangles:
 99.97% of the triangles with a decisive normal agree. Authored exceptions remain unchanged; the reader applies one
 format convention rather than changing individual triangles to follow their normals. Both frames measure signed
-cosines p1 = 0.798705 and median = 0.999549 over 5,409,706 nondegenerate triangles with nonzero average normals.
+cosines p1 = 0.798705 and median = 0.999549 over 5,409,706 nondegenerate rigid triangles with nonzero average normals.
 Lab/game visual verification remains separate.
+
+Processed skin source records (formerly called "STR-FF") decode for all 3,412 observed meshes: 1,375 meshes in 103
+character PAKs and 2,037 meshes in 21 layer PAKs, with 3,302,877 stored vertices and 311,835 palette batches. The layer
+records are male/female crowd outfits under `actors/male/male` and `actors/female/female`: each of those 21 archives
+has 97 processed meshes and 97 placements across two quartets. They now have geometry. There are 3,412 processed
+placements over the full corpus. These counts include packaged copies, not unique characters or an assembled outfit.
+
+The observed format has mask `0x8007f`, processed flags `+0xb4 = 1`, a stride-36 declaration, no MGP, and MMP indices.
+Its actual source vertices are 64 bytes in the MLP, at the mesh-relative `+0x9c` offset. The native preprocessing
+writer (`0x430e38`, vertex writer `0x430b28`) establishes this layout; it does not establish a complete runtime bind
+convention. The 64-byte envelope starts with a byte size and 60 bytes of AABBCCDD padding. Each batch has a 64-byte
+header: four bone indices, BE u16 vertex count, BE u16 influence count (1..4), and DDCCBBAA padding. Inactive bone
+indices are 255, with zero weights. The terminal header has both counts zero. Stream size includes envelope and
+terminator and equals `64 * (vertices + batches + 2)`; the following 16 metadata bytes remain opaque and reported.
+
+| Source vertex offset | Decoding |
+| --- | --- |
+| +0 | float3 source position, finite and within the stored AABB |
+| +12 | four weight bytes summing to 255, for the batch's shared bone palette |
+| +16 | float3 normal; original bits also retained, including stock NaNs |
+| +28 | unproved u32 attribute, retained as `extra`; every observed value is zero |
+| +32 | finite float4 basis candidate, retained as `skin_basis`, with no inferred core tangent |
+| +48, +52 | half2 UV0 and UV1, using the same submesh remap/top-left convention as rigid meshes |
+| +56 | eight source padding bytes, retained |
+
+The reader emits the authored source positions, normals and UVs through the requested frame, without posing them.
+`shred.source_skin` retains per-primitive bone indices, quantized weights, normal bits, extra word and padding;
+`shred.vertex_inputs` retains the basis candidate and both stored UV sets. Submesh narrowing and geometry remaps
+keep every array aligned. `LevelReport.processed_vertices` counts source vertices once per resource, before expansion
+into primitive ranges. The read world includes this provenance alongside geometry; loads retain the source skeleton
+through the source skin's explicit reference in World closure.
+
+Each processed quartet's SCP supplies its named bone table: count/pointer at +0x20/+0x24, 16 bytes per record, two
+unassigned words followed by file-relative name and matrix pointers. All 145 source skeletons / 18,455 bone records
+retain names, words and finite affine matrices in `shred.source_skeleton`, with the original source-frame context.
+Their matrices remain source provenance under subsequent geometry transforms. The +4 word is not assigned a core
+parent relationship, and the matrix is not assigned a local-rest or inverse-bind meaning: the native SCP loader
+relocates it, while skin-job setup supplies separate runtime matrix buffers and has an identity fallback. Runtime
+rest/pose/bind and deformation conventions remain unproved. The reader reports this gap and preserves binding data
+in SHRED components; it emits no fabricated `core.skeleton` or `core.skin`. Proving that mapping is the next chunk.
+
+Four character resources have 14 authored NaN normals. Exactly four primitive normal streams are omitted; geometry
+and UVs remain present, and the original IEEE bits remain in source provenance. Reports list each resource/count:
+`2494c946` (4), `0c190ea7` (4), `5c6bd829` (4), `c5f5bfcf` (2). No normals are repaired or synthesized. All other source
+normals are finite and unit length within 0.005. The basis candidate is preserved without orthonormalization.
+
+`skin_disc` checks all processed meshes, every palette/weight and source-skeleton reference, these numerical
+exceptions, all 97 placements in each crowd layer, and source-CW normalization under identity and mirrored frames.
+The source-only face census found 4,860,801 opposing and 528 agreeing triangles at cosine thresholds -0.5/+0.5,
+with 16,389 ambiguous. After winding normalization, expected agreement is reversed. Signed comparisons include
+finite authored normals retained in provenance on the four omitted normal streams; degenerate faces and nonfinite
+or zero-average normals are excluded. Both frames compare 4,877,718 valid triangles with signed p1 = 0.645460 and
+median = 0.983114. Hand-worked fixtures check literal palettes, weights, halfs, raw normal bits,
+names/matrices, range failures, remapping and loading. No runtime skinning or lowering is claimed by these checks.
 
 ## Collision
 
@@ -258,7 +313,7 @@ unavailable in the supplied archives, and headers without pixels remain explicit
 these are source facts, not substituted files. A reader's unavailable-path report describes its caller-supplied
 archive scope, which may be smaller than the disc. All source headers, sections, residencies, first-mip indices,
 cube tails and copy identities are retained. Texture references participate in World closure before any pixels
-load, including dependencies of prototypes whose geometry is deferred.
+load, including dependencies of the prototypes already present in the read world.
 
 `read()` creates the copy graph without decoded texture payloads. `load()` decodes all reached copies into
 core Texture components, one entity per cube face, through the GCM reader. Values are raw linear samples with
