@@ -34,6 +34,20 @@
 //! (`ActivateRealTreeGrowthEvent`) not decoded further. An Entity with a RealTree and no stored Mesh, or the stored
 //! Mesh alone, is untouched.
 //!
+//! `influence` also decides the Materials whose pixels the game's shader discards. A Material stores
+//! `InfluenceHidePixelMode` (the u32 at body 525: 0 `HideNone`, 1 `HideBefore`, 2 `HideAfter`); the game's shader-key
+//! generation turns a mode other than 0 into `KILL_UNINFLUENCED_PIXEL` and 2 into `INVERSE_KILL_UNINFLUENCED_PIXEL`, and
+//! `ekinfluencecommon.hlsl` then clips `influence - 0.01` (`HideBefore`: nothing of it draws where the world is not
+//! influenced) or `1 - (influence + 0.01)` (`HideAfter`: nothing of it draws where it is). The world's influence is 1
+//! in a `restored` world and 0 in an `unrestored` one, so `restored` discards every pixel of a `HideAfter` Material
+//! and `unrestored` every pixel of a `HideBefore` one; the primitives that draw such a Material are dropped (a placement
+//! whose every primitive does goes whole). Level 01 stores 5 `HideAfter` Materials and 76 `HideBefore`; the first is
+//! `01_Influence_MetroTilesDecal_Mat`, a tile pattern blended 2 to 47 mm over 286 m2 of the metro platform's
+//! floor, which the restored game never draws (the others: `Gen_Window_ShellLight01_Mat`, `GEN_GFX_Glow_Spot`,
+//! `00_Obj_Vehicule_PrisonBusBars_Mat`, `Gen_Mini_Logo2_Mat`). The pass reads the stored mode and decides by the state
+//! alone: the game's influence is a texture over the map, so a partly influenced world draws both in its own places,
+//! which this does not model.
+//!
 //! A placement goes when one row of a dropped class matches its Entity's name, its prototype's name, a material of its
 //! prototype, its prototype's vertex flag or its cell; the first matching row is the reason. What stays is untouched.
 //! A prototype no placement uses any more goes with its primitives, then the materials and textures only it reached; each
@@ -43,10 +57,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use primase_core::ledger::Measure;
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Component, Entity, Instance, Mesh, Name, World, ledger};
 
-use crate::components::{MaterialRef, MeshFormat, PlacedBy, RealTree};
+use crate::components::{MaterialRef, MaterialShader, MeshFormat, PlacedBy, RealTree};
 
 /// What the tables sort a placement into.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -280,6 +295,32 @@ impl Influence {
             Influence::Unrestored => "unrestored",
         }
     }
+
+    /// The world's influence in this state, as the shader reads it.
+    fn level(self) -> u8 {
+        match self {
+            Influence::Restored => 1,
+            Influence::Unrestored => 0,
+        }
+    }
+
+    /// The stored `InfluenceHidePixelMode` this state discards, by its enum name.
+    fn discarded_mode(self) -> &'static str {
+        match self {
+            Influence::Restored => "HideAfter",
+            Influence::Unrestored => "HideBefore",
+        }
+    }
+
+    /// Whether a Material of `InfluenceHidePixelMode` `hide` (0 `HideNone`, 1 `HideBefore`, 2 `HideAfter`) draws no pixel
+    /// where the world's influence is this state's (restored 1, unrestored 0): the clips of `ekinfluencecommon.hlsl`,
+    /// `influence - 0.01` for a mode other than 0 and `1 - (influence + 0.01)` for 2, discard every pixel.
+    fn discards(self, hide: u32) -> bool {
+        match self {
+            Influence::Restored => hide == 2,
+            Influence::Unrestored => hide == 1,
+        }
+    }
 }
 
 /// See the module documentation.
@@ -362,6 +403,9 @@ impl Pass for SelectShaunwhiteContent {
     fn requires(&self) -> &[&'static str] {
         &[Instance::NAME, PlacedBy::NAME, MaterialRef::NAME]
     }
+    fn modifies(&self) -> &[&'static str] {
+        &[Mesh::NAME]
+    }
     fn despawns_entities(&self) -> bool {
         true
     }
@@ -383,6 +427,7 @@ impl Pass for SelectShaunwhiteContent {
             proto.entry(p).or_insert_with(|| prototype_reasons(w, p));
         }
         let by_influence = self.by_influence(w, &placements, log);
+        let (hidden_protos, hidden_materials) = self.hide_discarded(w, &placements, log)?;
         let mut dropped_protos: BTreeSet<Entity> = BTreeSet::new();
         for (e, p) in placements {
             let mut reasons: Vec<Reason> = Vec::new();
@@ -405,11 +450,25 @@ impl Pass for SelectShaunwhiteContent {
             for (_, why) in &reasons {
                 log.count(&format!("placements whose {why}"), 1);
             }
-            let drop = reasons
+            let mut drop = reasons
                 .iter()
                 .find(|(c, _)| self.of(*c) == Keep::Drop)
                 .map(|(class, why)| format!("{why} (select-shaunwhite-content {}=drop)", class.option()))
                 .or_else(|| by_influence.get(&e).cloned());
+            if drop.is_none() && hidden_protos.contains(&p) {
+                log.count(
+                    &format!(
+                        "placements dropped, every primitive's material stored {}",
+                        self.influence.discarded_mode()
+                    ),
+                    1,
+                );
+                drop = Some(format!(
+                    "every primitive draws a Material whose pixels the shader discards at influence {} (select-shaunwhite-content influence={})",
+                    self.influence.level(),
+                    self.influence.text()
+                ));
+            }
             match drop {
                 Some(text) => {
                     ledger::despawn(w, e, log, &text);
@@ -419,7 +478,7 @@ impl Pass for SelectShaunwhiteContent {
                 None => log.count("placements kept", 1),
             }
         }
-        self.prune(w, log, &dropped_protos);
+        self.prune(w, log, &dropped_protos, &hidden_materials);
         Ok(())
     }
 }
@@ -507,11 +566,96 @@ impl SelectShaunwhiteContent {
         out
     }
 
-    /// Despawn the prototypes of dropped placements that no placement uses now, then the materials and textures only
-    /// they reached.
-    fn prune(&self, w: &mut World, log: &mut PassLog, candidates: &BTreeSet<Entity>) {
+    /// The prototypes of `placements` that draw a Material whose pixels the shader discards at this state's influence
+    /// (`MaterialShader::hide`): the primitives drawing one are dropped from a prototype that has others, and the
+    /// prototypes whose every primitive does are returned, to drop their placements whole. Also the Materials those
+    /// primitives drew, for [`SelectShaunwhiteContent::prune`].
+    fn hide_discarded(
+        &self,
+        w: &mut World,
+        placements: &[(Entity, Entity)],
+        log: &mut PassLog,
+    ) -> Result<(BTreeSet<Entity>, BTreeSet<Entity>), String> {
+        let discarded: BTreeSet<Entity> = w
+            .iter::<MaterialShader>()
+            .filter(|(e, f)| self.influence.discards(f.hide) && w.has::<MaterialRef>(*e))
+            .map(|(e, _)| e)
+            .collect();
+        let (mut whole, mut freed) = (BTreeSet::new(), BTreeSet::new());
+        if discarded.is_empty() {
+            return Ok((whole, freed));
+        }
+        let prototypes: BTreeSet<Entity> = placements.iter().map(|&(_, p)| p).collect();
+        for p in prototypes {
+            let Some(mesh) = w.get::<Mesh>(p) else {
+                continue;
+            };
+            let hide: Vec<bool> = mesh
+                .primitives()
+                .iter()
+                .map(|pr| pr.material.is_some_and(|m| discarded.contains(&m)))
+                .collect();
+            let n = hide.iter().filter(|h| **h).count();
+            if n == 0 {
+                continue;
+            }
+            if n == hide.len() {
+                whole.insert(p);
+                continue;
+            }
+            let materials = mesh
+                .primitives()
+                .iter()
+                .zip(&hide)
+                .filter(|(_, h)| **h)
+                .filter_map(|(pr, _)| pr.material);
+            freed.extend(materials);
+            w.edit_mesh(p, |mesh| {
+                let (mut from, mut kept) = (Vec::new(), Vec::new());
+                for (i, primitive) in std::mem::take(mesh).into_primitives().into_iter().enumerate() {
+                    if !hide.get(i).copied().unwrap_or(false) {
+                        from.push(i);
+                        kept.push(primitive);
+                    }
+                }
+                *mesh = Mesh::new(kept);
+                Ok(Some(from))
+            })?;
+            log.dropped(
+                Measure::Primitives,
+                &format!(
+                    "draws a Material whose pixels the shader discards at influence {} (select-shaunwhite-content influence={})",
+                    self.influence.level(),
+                    self.influence.text()
+                ),
+                n as u64,
+            );
+            log.count(
+                &format!(
+                    "primitives dropped, material stored {}",
+                    self.influence.discarded_mode()
+                ),
+                n as u64,
+            );
+        }
+        log.count(
+            &format!("materials stored {} (discarded)", self.influence.discarded_mode()),
+            discarded.len() as u64,
+        );
+        Ok((whole, freed))
+    }
+
+    /// Despawn the prototypes of dropped placements that no placement uses now, then the materials (and `extra`, the
+    /// Materials of primitives dropped from prototypes that stay) and textures only they reached.
+    fn prune(
+        &self,
+        w: &mut World,
+        log: &mut PassLog,
+        candidates: &BTreeSet<Entity>,
+        extra: &BTreeSet<Entity>,
+    ) {
         let used: BTreeSet<Entity> = w.iter::<Instance>().map(|(_, i)| i.prototype).collect();
-        let mut materials: BTreeSet<Entity> = BTreeSet::new();
+        let mut materials: BTreeSet<Entity> = extra.clone();
         for &p in candidates.difference(&used) {
             if let Some(m) = w.get::<Mesh>(p) {
                 materials.extend(m.primitives().iter().filter_map(|pr| pr.material));
@@ -557,7 +701,7 @@ impl SelectShaunwhiteContent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{RealTree, SlotRef};
+    use crate::components::{MaterialShader, RealTree, SlotRef};
     use primase_core::pass::{Conservation, PassManager, PassRegistry, Pipeline, RunReport};
     use primase_core::{Primitive, Semantic, Stream, Topology, Transform};
 
@@ -967,6 +1111,119 @@ mod tests {
         assert_eq!(drawn(&w), want);
         let why = "RealTreeMesh of an Entity that also draws a stored Mesh (select-shaunwhite-content influence=unrestored)";
         assert!(log.drops.keys().any(|(_, r)| r == why), "{:?}", log.drops);
+        assert!(w.verify_components().is_empty());
+    }
+
+    /// A material entity named `name` that stores `InfluenceHidePixelMode` `hide`, with one bare texture.
+    fn hiding(w: &mut World, name: &str, hide: u32) -> Entity {
+        let texture = w.spawn();
+        let m = material(w, name, &[texture]);
+        w.insert(
+            m,
+            MaterialShader {
+                flags: 0,
+                layers: [false; 2],
+                half_lambert: false,
+                glossiness: false,
+                layer3_no_specular: false,
+                rim_alpha: false,
+                hide,
+                dynamic_uv: 0,
+                texture_slots: Vec::new(),
+                unsupported: Vec::new(),
+            },
+        );
+        m
+    }
+
+    /// The names of the materials each placement's prototype draws, by placement name.
+    fn drawn_materials(w: &World) -> BTreeMap<String, Vec<String>> {
+        w.iter::<Instance>()
+            .filter_map(|(e, i)| {
+                let name = w.get::<Name>(e)?.0.clone();
+                let mesh = w.get::<Mesh>(i.prototype)?;
+                let names = mesh
+                    .primitives()
+                    .iter()
+                    .filter_map(|p| p.material)
+                    .filter_map(|m| w.get::<MaterialRef>(m).map(|r| r.name.clone()))
+                    .collect();
+                Some((name, names))
+            })
+            .collect()
+    }
+
+    /// A Material's stored hide mode, with the world's influence of the state, decides whether its pixels are drawn: a
+    /// restored world (influence 1) discards `HideAfter` and an unrestored one (0) `HideBefore`, `HideNone` stays in both.
+    /// A primitive goes from a prototype that has others (its material and texture with it), a prototype whose every
+    /// primitive goes takes its placements, and both are declared.
+    #[test]
+    fn influence_discards_the_materials_its_stored_hide_mode_kills() {
+        let text = |state: &str| {
+            select(&format!(
+                "helpers=keep,effects=keep,characters=keep,missions=keep,influence={state}"
+            ))
+        };
+        let build = || {
+            let mut w = World::new();
+            let floor = hiding(&mut w, "Floor_Mat", 0);
+            let before = hiding(&mut w, "Graffiti_Mat", 1);
+            let after = hiding(&mut w, "TilesDecal_Mat", 2);
+            let plain = material(&mut w, "Wall_Mat", &[]);
+            let platform = prototype(&mut w, "01_Platform", 68, &[floor, after, before]);
+            let decal = prototype(&mut w, "01_DecalOnly", 68, &[after]);
+            let wall = prototype(&mut w, "01_B_Wall", 68, &[plain]);
+            place(&mut w, platform, "Platform_1", GRID);
+            place(&mut w, platform, "Platform_2", GRID);
+            place(&mut w, decal, "Decal_1", GRID);
+            place(&mut w, wall, "Wall_1", GRID);
+            w
+        };
+        let names = |v: &[&str]| v.iter().map(|n| (*n).to_owned()).collect::<Vec<_>>();
+
+        let mut w = build();
+        let report = run(&mut w, &text("restored")).unwrap();
+        let log = &report.steps[0].log;
+        let drawn = drawn_materials(&w);
+        assert_eq!(drawn.len(), 3, "{drawn:?}");
+        assert_eq!(drawn["Platform_1"], names(&["Floor_Mat", "Graffiti_Mat"]));
+        assert_eq!(drawn["Platform_2"], names(&["Floor_Mat", "Graffiti_Mat"]));
+        assert_eq!(drawn["Wall_1"], names(&["Wall_Mat"]));
+        assert_eq!(log.counts["materials stored HideAfter (discarded)"], 1);
+        assert_eq!(log.counts["placements dropped"], 1);
+        assert_eq!(
+            log.counts["placements dropped, every primitive's material stored HideAfter"],
+            1
+        );
+        assert_eq!(log.counts["primitives dropped, material stored HideAfter"], 1);
+        assert_eq!(log.counts["materials stored HideAfter (discarded)"], 1);
+        let why = "draws a Material whose pixels the shader discards at influence 1 (select-shaunwhite-content influence=restored)";
+        assert_eq!(log.drops[&(Measure::Primitives, why.to_owned())], 1);
+        let materials: Vec<String> = w.iter::<MaterialRef>().map(|(_, m)| m.name.clone()).collect();
+        assert!(!materials.contains(&"TilesDecal_Mat".to_owned()), "{materials:?}");
+        assert!(materials.contains(&"Graffiti_Mat".to_owned()));
+        // the dropped material's texture goes with it: the floor's and the graffiti's remain
+        assert_eq!(
+            w.iter::<MaterialRef>()
+                .map(|(_, m)| m.textures().count())
+                .sum::<usize>(),
+            2
+        );
+        assert!(w.verify_components().is_empty());
+
+        let mut w = build();
+        let report = run(&mut w, &text("unrestored")).unwrap();
+        let log = &report.steps[0].log;
+        let drawn = drawn_materials(&w);
+        assert_eq!(drawn.len(), 4, "{drawn:?}");
+        assert_eq!(drawn["Platform_1"], names(&["Floor_Mat", "TilesDecal_Mat"]));
+        assert_eq!(drawn["Decal_1"], names(&["TilesDecal_Mat"]));
+        assert_eq!(drawn["Wall_1"], names(&["Wall_Mat"]));
+        assert!(!log.counts.contains_key("placements dropped"));
+        assert!(
+            !w.iter::<MaterialRef>().any(|(_, m)| m.name == "Graffiti_Mat"),
+            "the HideBefore material is unreferenced and gone"
+        );
         assert!(w.verify_components().is_empty());
     }
 
