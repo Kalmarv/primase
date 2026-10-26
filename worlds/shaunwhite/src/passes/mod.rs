@@ -8,6 +8,7 @@ mod lighting;
 mod material;
 mod resolve_shaders;
 mod select;
+mod vertex_alpha;
 mod water;
 pub use collision::{LOWER_SHAUNWHITE_COLLISION, LowerShaunwhiteCollision};
 pub use decals::{DECAL_QUEUE, MARK_SHAUNWHITE_DECALS, MarkShaunwhiteDecals, Survey, survey};
@@ -21,6 +22,7 @@ pub use resolve_shaders::{RECORD_FIELD, RESOLVE_SHAUNWHITE_SHADERS, ResolveShaun
 pub use select::{
     Class, Influence, Keep, ROWS, Row, SELECT_SHAUNWHITE_CONTENT, SelectShaunwhiteContent, Subject, Test,
 };
+pub use vertex_alpha::{LOWER_SHAUNWHITE_VERTEX_ALPHA, LowerShaunwhiteVertexAlpha};
 pub use water::{LOWER_SHAUNWHITE_WATER, LowerShaunwhiteWater, WATER_SURFACES};
 
 use primase_core::pass::PassRegistry;
@@ -36,4 +38,5 @@ pub fn register(reg: &mut PassRegistry) {
     reg.add(&LOWER_SHAUNWHITE_LAYERS);
     reg.add(&RESOLVE_SHAUNWHITE_SHADERS);
     reg.add(&MARK_SHAUNWHITE_DECALS);
+    reg.add(&LOWER_SHAUNWHITE_VERTEX_ALPHA);
 }

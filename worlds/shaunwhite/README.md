@@ -228,9 +228,10 @@ colour is never a colour multiplier in the shader; level 01's plaza planters car
 white tint and are grey concrete in the restored game, not red). With a tint, a texture and a drawing with `COLOR_0`
 the layers pass builds the two-layer form (untinted base, tinted layer weighted by the vertex red), 101 materials of
 level 01; with no `COLOR_0` the texture times the tint is exact. The vertex alpha does reach the output, as the alpha
-of a blend or test, and core can multiply `COLOR_0` or ignore it but not take its alpha alone: a blended or
-alpha-tested Material with a vertex alpha below one keeps the multiplier (54 of level 01's 551 materials drawn with
-`COLOR_0`, their vertex red, green and blue then an approximation), counted by the material pass.
+of a blend or test, and core can multiply `COLOR_0` or ignore it but not take its alpha alone: `lower-shaunwhite-material` leaves
+a blended or alpha-tested Material with a vertex alpha below one drawing with the multiplier (54 of level 01's 551
+materials drawn with `COLOR_0`), counted by the material pass, and `lower-shaunwhite-vertex-alpha` then rewrites those
+streams to what the multiplier should be (below).
 
 Current coverage is opaque host materials. Host blend/alpha-test, authored rotated-UV matrices, border addressing,
 missing base textures, unread fields and out-of-range tints are named and counted omissions; they retain the generic
@@ -243,6 +244,24 @@ Runtime Direct3D 9 declarations identify COLOR0 and morph COLOR1 as D3DCOLOR (st
 converts both to core RGBA. This is also checked against the restored game's metro mural: raw byte order hides the
 third layer, whereas BGRA-to-RGBA restores it at the same places. Saturated colour corners remain saturated under
 this permutation; they are shader weights, and the earlier red/blue interpretation was reversed.
+
+## Vertex alpha of blended and alpha-tested materials
+
+The shader reads a vertex colour's red as the tint weight and its alpha as the vertex alpha; green and blue are not read.
+`lower-shaunwhite-vertex-alpha` runs after `lower-shaunwhite-material` and sets red, green and blue of `COLOR_0` to 1 (the
+stream's own type, alpha untouched) on the primitives of the Materials that pass left drawing with `COLOR_0` as a
+multiplier (blended or alpha-tested `pbr.material`, no `core.vertex_color`, not layered, not water or vegetation), so the
+multiplier is the alpha alone and the base colour (the tint) multiplies the texture whole. That is the shader's equation
+`lerp(texture, texture * tint, r)` at a red `r` of 1. Per Material: a vertex red of 1 on every vertex (or no `COLOR_0`,
+which the shader reads as white) or a white tint is exact; a red of 0 on every vertex never applies the tint, so the
+Material's tint becomes white (exact); a red between draws the tint in full, an approximation named per Material.
+A primitive that a Material reading `COLOR_0` as a colour also draws is left as stored and counted (none in the six
+levels). Census over the six levels' recipe (streams rewritten, Materials exact, tint dropped, approximated): L01 80, 33,
+2, 8; L02 25, 32, 2, 5; L03 9, 5, 1, 2; L04 17, 25, 1, 4; L05 3, 9, 0, 1; L06 4, 15, 1, 2. Level 01's approximated
+Materials are `Gen_Glass01`, `Gen_Glass_Dirty01`, `GFX_GlassBulb`, `Gen_Metal_ChainLinkFence01`, `DecalLookHere`,
+`DecalSimpleGeo`, `Gen_Glass_Opaque_VertexAlpha01` and `Gen_Graf_Skullman01`. The exact form for those would put the
+tint in the stream (`lerp(1, tint, r)`) and white in the base colour, which the blended-surface pass's frosted glass
+(it reads the base colour) would lose.
 
 ## Normal maps
 

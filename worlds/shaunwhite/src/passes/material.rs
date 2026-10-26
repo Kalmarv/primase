@@ -23,6 +23,7 @@
 //! blend or test. So every Material is marked [`VertexColor::Ignored`], except one that is blended or alpha-tested
 //! and has a vertex alpha below one: core has no mode that takes the alpha alone, so it keeps `COLOR_0` as a
 //! multiplier, its red, green and blue then approximate, and the pass counts it.
+//! `lower-shaunwhite-vertex-alpha` then rewrites those streams to the alpha alone (red, green and blue 1).
 
 use std::collections::BTreeSet;
 
