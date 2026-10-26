@@ -30,12 +30,12 @@ use primase_core::frame::SourceFrame;
 use primase_core::morphs::{Frame, MorphId, Morphs, Target};
 use primase_core::{Entity, Instance, Marker, Mesh, Name, Primitive, Semantic, Stream, Transform, World};
 
-use crate::components::{MaterialRef, MaterialState, MeshFormat, PlacedBy, Sampler, SlotRef};
-use crate::read::markers;
+use crate::components::{Guidance, MaterialRef, MaterialState, MeshFormat, PlacedBy, Sampler, SlotRef};
 use crate::read::material::{self, MATERIAL, Material};
 use crate::read::mesh::{self, CompiledMesh, MESH};
 use crate::read::scene::{self, GRID_CELL_DATA_BLOCK, LOD_SELECTOR};
 use crate::read::texture::{TEXTURE_MAP_SPEC, TextureMap};
+use crate::read::{guidance, markers};
 
 /// The most bytes a block may declare decoded (the largest entry seen decodes to about 38 MB).
 const MAX_DECODED: usize = 1 << 30;
@@ -153,6 +153,7 @@ pub fn read_level(level: &Path, shared: &[PathBuf]) -> Result<(World, Report)> {
                 }
                 Err(e) => bump(format!("collision bindings not read: {e}")),
             }
+            place_guidance(&mut world, frame, &d.name, &o.name, &entity, body, &mut bump);
             for v in &entity.visuals {
                 let Some(mesh_id) = resolve(&index, v.target, &mut bump) else {
                     continue;
@@ -207,6 +208,103 @@ pub fn read_level(level: &Path, shared: &[PathBuf]) -> Result<(World, Report)> {
         report.push(("shaunwhite".into(), format!("{k}: {n}")));
     }
     Ok((world, report))
+}
+
+/// An Entity's skate guidance as curves: one entity per chain ([`guidance::GuidanceSystem::chains`]) with its
+/// `core.curve` in world space (the points through the Entity's matrix, row vectors) and its `shaunwhite.guidance`.
+/// The curve's kind is the edges' sub-type name ([`guidance::SUB_TYPES`]), `guidance` for sub-type 0 (none named).
+/// A loop of two edges retraces one segment, so it is placed open, back to its first point.
+fn place_guidance(
+    world: &mut World,
+    frame: SourceFrame,
+    cell: &str,
+    name: &str,
+    entity: &scene::Entity,
+    body: &[u8],
+    bump: &mut impl FnMut(String),
+) {
+    let m = entity.matrix;
+    let row = |r: usize| [m[4 * r], m[4 * r + 1], m[4 * r + 2]];
+    let linear = |p: [f32; 3]| {
+        let (x, y, z) = (row(0), row(1), row(2));
+        [0, 1, 2].map(|k| p[0] * x[k] + p[1] * y[k] + p[2] * z[k])
+    };
+    let place = |p: [f32; 3]| {
+        let l = linear(p);
+        let t = row(3);
+        frame.point([l[0] + t[0], l[1] + t[1], l[2] + t[2]])
+    };
+    let unit = |d: [f32; 3]| {
+        let l = linear(d);
+        let n = (l[0] * l[0] + l[1] * l[1] + l[2] * l[2]).sqrt();
+        frame.direction(if n > 0. { l.map(|v| v / n) } else { l })
+    };
+    for (class, at) in guidance::classes(body) {
+        if class != guidance::SW_GUIDANCE_SYSTEM {
+            bump(format!("guidance systems of class {class:#010x} (not read)"));
+            continue;
+        }
+        let system = match guidance::GuidanceSystem::parse(body, at) {
+            Ok(s) => s,
+            Err(e) => {
+                bump(format!("guidance systems not read: {e}"));
+                continue;
+            }
+        };
+        bump("guidance systems".into());
+        for chain in system.chains() {
+            let mut points: Vec<[f32; 3]> = chain
+                .points
+                .iter()
+                .filter_map(|&i| system.points.get(i as usize).map(|&p| place(p)))
+                .collect();
+            let edges: Vec<&guidance::Edge> =
+                chain.edges.iter().filter_map(|&i| system.edges.get(i)).collect();
+            let mut closed = chain.closed;
+            if closed && points.len() < 3 {
+                if let Some(&p) = points.first() {
+                    points.push(p);
+                }
+                closed = false;
+            }
+            let Some(sub_type) = edges.first().map(|e| e.sub_type) else {
+                continue;
+            };
+            let kind = match sub_type {
+                0 => "guidance",
+                s => guidance::SUB_TYPES
+                    .get(s as usize)
+                    .copied()
+                    .unwrap_or("guidance_other"),
+            };
+            let e = world.spawn();
+            world.insert(
+                e,
+                primase_core::Curve {
+                    kind: kind.into(),
+                    points,
+                    closed,
+                    tangents: None,
+                    up: None,
+                },
+            );
+            world.insert(
+                e,
+                Guidance {
+                    cell: cell.into(),
+                    entity: entity.id,
+                    sub_type,
+                    normals: edges.iter().map(|g| g.normals.map(unit)).collect(),
+                    lengths: edges.iter().map(|g| g.length).collect(),
+                },
+            );
+            world.insert(e, Name(name.into()));
+            bump(format!("guidance curves: {kind}"));
+            for _ in &edges {
+                bump(format!("guidance edges: {kind}"));
+            }
+        }
+    }
 }
 
 /// The Mesh a Visual's target draws: a Mesh, or a LODSelector's nearest level.

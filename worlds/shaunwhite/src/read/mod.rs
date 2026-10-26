@@ -1,6 +1,7 @@
 //! Source readers. Textures retain their BCn blocks; collision retains local geometry and source surface ids.
 
 pub mod collision;
+pub mod guidance;
 pub mod level;
 mod level_collision;
 pub mod markers;

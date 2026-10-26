@@ -158,3 +158,25 @@ impl Component for CollisionPlacedBy {
         primase_core::Linearity::Invariant
     }
 }
+
+/// What the source states of a grind guidance chain, on the entity of its `core.curve` (read by
+/// [`crate::read::guidance`]): the Entity that holds the guidance system, the edges' GuidanceObjectSubType, and per
+/// edge (between curve points `i` and `i + 1`) its two face normals, world space in core's frame like the curve's
+/// points, and its stored length (metres). Lowered by `lower-shaunwhite-grinds`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Guidance {
+    pub cell: String,
+    pub entity: u32,
+    pub sub_type: u32,
+    pub normals: Vec<[[f32; 3]; 2]>,
+    pub lengths: Vec<f32>,
+}
+
+impl Component for Guidance {
+    const NAME: &'static str = "shaunwhite.guidance";
+    const GEOMETRY: Geometry = Geometry::None;
+    /// World space, as `core.curve`: not in any entity's local space.
+    fn apply_linear(&self, _: &primase_core::Linear) -> primase_core::Linearity<Self> {
+        primase_core::Linearity::Invariant
+    }
+}
