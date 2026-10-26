@@ -55,6 +55,7 @@ use primase_core::{
     Stream, Topology, Transform, VertexBlend, World,
 };
 
+use crate::layers::{Affine, Frame, Index, Over, Poly, Tri, Uv, area, clip_all, disjoint, edges, value};
 use crate::point_blend::{
     Bary, Corner, Key, Replacement, blend_streams, describe, drawn_with, replace_primitives, tidy,
 };
@@ -65,8 +66,6 @@ const COINCIDENT: f64 = 1.0e-4;
 const FACING: f64 = 0.99;
 /// The hash cell, metres.
 const CELL: f64 = 1.0;
-/// The most cells one triangle is listed in; a bigger triangle (a far terrain's) covers nothing and is counted.
-const MAX_CELLS: i64 = 1 << 16;
 /// The least area, square metres, of a covered piece that counts and of a piece a cut keeps: 1 mm2.
 pub const MIN_AREA: f64 = 1.0e-6;
 /// The most pieces one triangle is cut into; a triangle needing more is kept whole, counted.
@@ -146,91 +145,14 @@ fn cover_of(w: &World, m: Entity) -> Cover {
     }
 }
 
-/// A placed triangle: its corners (world frame), unit normal, the placement drawing it, and where it is stored.
+/// A placed triangle ([`Tri`]: corners in the world frame, unit normal), the placement drawing it, and where it is
+/// stored.
 struct Placed {
-    c: [[f64; 3]; 3],
-    n: [f64; 3],
+    tri: Tri,
     placement: usize,
     mesh: Entity,
     primitive: usize,
     triangle: usize,
-}
-
-fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-
-/// A point in a triangle's own coordinates: `s` along its first edge (corner 0 to 1), `t` along its second (0 to 2).
-type Uv = [f64; 2];
-/// A convex polygon in a triangle's own coordinates, counter-clockwise (the triangle's winding).
-type Poly = Vec<Uv>;
-/// An affine function of a triangle's coordinates, `a s + b t + c`, as `[a, b, c]`: a half-plane where it is >= 0.
-type Affine = [f64; 3];
-
-fn value(f: Affine, p: Uv) -> f64 {
-    f[0] * p[0] + f[1] * p[1] + f[2]
-}
-
-/// The signed area, in the triangle's coordinates (the triangle itself is 0.5).
-fn area(p: &[Uv]) -> f64 {
-    (0..p.len())
-        .map(|i| {
-            let (a, b) = (p[i], p[(i + 1) % p.len()]);
-            a[0] * b[1] - b[0] * a[1]
-        })
-        .sum::<f64>()
-        / 2.0
-}
-
-/// The triangle's own edges as half-planes: `s >= 0`, `t >= 0`, `s + t <= 1`.
-const INSIDE: [Affine; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [-1.0, -1.0, 1.0]];
-
-/// The half-planes whose intersection is `p` (convex, counter-clockwise): each edge's left side.
-fn edges(p: &[Uv]) -> impl Iterator<Item = Affine> + '_ {
-    (0..p.len()).map(|i| {
-        let (a, b) = (p[i], p[(i + 1) % p.len()]);
-        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-        [-dy, dx, dy * a[0] - dx * a[1]]
-    })
-}
-
-/// `p` where `f >= 0` (Sutherland-Hodgman); fewer than three points when nothing is left.
-fn clip(p: &[Uv], f: Affine) -> Poly {
-    let mut out = Vec::with_capacity(p.len() + 1);
-    for (i, &cur) in p.iter().enumerate() {
-        let next = p[(i + 1) % p.len()];
-        let (c, d) = (value(f, cur), value(f, next));
-        if c >= 0.0 {
-            out.push(cur);
-        }
-        if (c < 0.0 && d > 0.0) || (c > 0.0 && d < 0.0) {
-            let t = c / (c - d);
-            out.push([cur[0] + t * (next[0] - cur[0]), cur[1] + t * (next[1] - cur[1])]);
-        }
-    }
-    out
-}
-
-/// `p` cut to every half-plane of `fs`; `None` when under `min` in area.
-fn clip_all(p: &[Uv], fs: impl IntoIterator<Item = Affine>, min: f64) -> Option<Poly> {
-    let mut p = p.to_vec();
-    for f in fs {
-        p = clip(&p, f);
-        if p.len() < 3 {
-            return None;
-        }
-    }
-    (area(&p) >= min).then_some(p)
 }
 
 /// `p` (a piece being cut, its corners combinations of the triangle's vertices) where `f >= 0`, as `split-uv-tiles`
@@ -276,45 +198,6 @@ fn subtract(p: Vec<Corner>, c: &[Uv], min: f64, out: &mut Vec<Vec<Corner>>) {
         rest = clip_corners(&r, f);
     }
     // what is left is inside `c`: covered
-}
-
-/// `p` less the convex polygon `c`, in coordinates only (a covered piece less another): as [`subtract`].
-fn subtract_uv(p: Poly, c: &[Uv], min: f64, out: &mut Vec<Poly>) {
-    if clip_all(&p, edges(c), min).is_none() {
-        out.push(p);
-        return;
-    }
-    let mut rest = Some(p);
-    for f in edges(c) {
-        let Some(r) = rest.take() else { break };
-        out.extend(clip_all(&r, [[-f[0], -f[1], -f[2]]], min));
-        let inside = clip(&r, f);
-        rest = (inside.len() >= 3).then_some(inside);
-    }
-}
-
-/// `pieces` as disjoint convex polygons with the same union (each less the ones before it), so intersecting two
-/// placements' pieces makes no piece twice; `None` past [`MAX_PIECES`].
-fn disjoint(pieces: Vec<Poly>, min: f64) -> Option<Vec<Poly>> {
-    let mut out: Vec<Poly> = Vec::new();
-    for p in pieces {
-        let mut frags = vec![p];
-        for q in &out {
-            let mut next = Vec::with_capacity(frags.len());
-            for f in frags {
-                subtract_uv(f, q, min, &mut next);
-            }
-            frags = next;
-            if frags.is_empty() {
-                break;
-            }
-        }
-        out.extend(frags);
-        if out.len() > MAX_PIECES {
-            return None;
-        }
-    }
-    Some(out)
 }
 
 /// Whether every tangent set of `p` has the same w (handedness) at the corners `v`, so a point between them has one
@@ -426,14 +309,9 @@ impl Pass for DropCoveredSurfaces {
                 for (ti, c) in ix.as_chunks::<3>().0.iter().enumerate() {
                     let c: [[f64; 3]; 3] =
                         std::array::from_fn(|j| t.apply(pos[c[j] as usize]).map(f64::from));
-                    let nn = cross(sub(c[1], c[0]), sub(c[2], c[0]));
-                    let len = dot(nn, nn).sqrt();
-                    if len <= 1e-12 || !len.is_finite() || !c.iter().flatten().all(|x| x.is_finite()) {
-                        continue;
-                    }
+                    let Some(tri) = Tri::new(c) else { continue };
                     tris.push(Placed {
-                        c,
-                        n: nn.map(|x| x / len),
+                        tri,
                         placement: pi,
                         mesh,
                         primitive: k,
@@ -443,75 +321,31 @@ impl Pass for DropCoveredSurfaces {
             }
         }
         // the hash: every triangle in the cells its box (padded by the gap) touches
-        let mut grid: HashMap<(i64, i64, i64), Vec<u32>> = HashMap::new();
-        let cell = |x: f64| (x / CELL).floor() as i64;
-        let cells = |t: &Placed| -> ([i64; 3], [i64; 3]) {
-            let lo = std::array::from_fn(|a| {
-                cell(t.c.iter().map(|c| c[a]).fold(f64::INFINITY, f64::min) - self.gap)
-            });
-            let hi = std::array::from_fn(|a| {
-                cell(t.c.iter().map(|c| c[a]).fold(f64::NEG_INFINITY, f64::max) + self.gap)
-            });
-            (lo, hi)
-        };
-        let mut too_big = 0u64;
-        let mut listed = vec![false; tris.len()];
-        for (i, t) in tris.iter().enumerate() {
-            let (lo, hi) = cells(t);
-            if (hi[0] - lo[0] + 1) * (hi[1] - lo[1] + 1) * (hi[2] - lo[2] + 1) > MAX_CELLS {
-                too_big += 1;
-                continue;
-            }
-            listed[i] = true;
-            for x in lo[0]..=hi[0] {
-                for y in lo[1]..=hi[1] {
-                    for z in lo[2]..=hi[2] {
-                        grid.entry((x, y, z)).or_default().push(i as u32);
-                    }
-                }
-            }
-        }
+        let placed_tris: Vec<Tri> = tris.iter().map(|t| t.tri).collect();
+        let index = Index::new(&placed_tris, CELL, self.gap);
         let mut hidden: BTreeMap<(Entity, usize, usize), Hidden> = BTreeMap::new();
         let (mut coincident, mut double) = (0u64, 0u64);
         let mut near: Vec<u32> = Vec::new();
         for (i, t) in tris.iter().enumerate() {
             let kind = kinds[&(t.mesh, t.primitive)];
-            let (e1, e2) = (sub(t.c[1], t.c[0]), sub(t.c[2], t.c[0]));
-            let normal = cross(e1, e2);
-            let nn = dot(normal, normal);
+            let frame = Frame::of(&t.tri);
             // square metres per unit of the triangle's coordinates' area
-            let scale = nn.sqrt();
+            let scale = frame.scale;
             let min = MIN_AREA / scale;
-            let uv_of = |x: [f64; 3]| -> Uv {
-                let d = sub(x, t.c[0]);
-                [dot(cross(d, e2), normal) / nn, dot(cross(e1, d), normal) / nn]
-            };
-            near.clear();
-            if listed[i] {
-                let (lo, hi) = cells(t);
-                for x in lo[0]..=hi[0] {
-                    for y in lo[1]..=hi[1] {
-                        for z in lo[2]..=hi[2] {
-                            near.extend(grid.get(&(x, y, z)).map(Vec::as_slice).unwrap_or(&[]));
-                        }
-                    }
-                }
-                near.sort_unstable();
-                near.dedup();
-            }
+            index.near(&placed_tris, i, &mut near);
             let mut covered: Vec<Poly> = Vec::new();
             let mut same = false;
             for &j in &near {
                 let u = &tris[j as usize];
-                let facing = dot(u.n, t.n);
                 if j as usize == i
                     || (u.placement == t.placement && u.primitive == t.primitive && u.mesh == t.mesh)
-                    || facing < FACING
                 {
                     continue;
                 }
                 // the distance from the triangle's plane along its normal to the cover's plane, at each corner
-                let d: [f64; 3] = std::array::from_fn(|k| dot(u.n, sub(u.c[0], t.c[k])) / facing);
+                let Some(d) = Over::corner_distances(&t.tri, &u.tri, FACING) else {
+                    continue;
+                };
                 let (lo, hi) = (
                     d.iter().copied().fold(f64::INFINITY, f64::min),
                     d.iter().copied().fold(f64::NEG_INFINITY, f64::max),
@@ -519,22 +353,14 @@ impl Pass for DropCoveredSurfaces {
                 if lo > self.gap || hi < -COINCIDENT {
                     continue;
                 }
-                let mut shadow: Poly = u.c.iter().map(|&x| uv_of(x)).collect();
-                if area(&shadow) < 0.0 {
-                    shadow.reverse();
-                }
-                let Some(over) = clip_all(&shadow, INSIDE, min) else {
+                let Some(over) = Over::of(&frame, &u.tri, d, min) else {
                     continue;
                 };
-                let along: Affine = [d[1] - d[0], d[2] - d[0], d[0]];
-                let above = |x: f64| [along[0], along[1], along[2] - x];
-                let below = |x: f64| [-along[0], -along[1], x - along[2]];
-                if lo <= COINCIDENT && clip_all(&over, [above(-COINCIDENT), below(COINCIDENT)], min).is_some()
-                {
+                if lo <= COINCIDENT && over.band(-COINCIDENT, COINCIDENT, min).is_some() {
                     same = true;
                 }
                 if hi > COINCIDENT
-                    && let Some(piece) = clip_all(&over, [above(COINCIDENT), below(self.gap)], min)
+                    && let Some(piece) = over.band(COINCIDENT, self.gap, min)
                 {
                     covered.push(piece);
                 }
@@ -556,7 +382,7 @@ impl Pass for DropCoveredSurfaces {
                     if h.intricate || (!first && h.covered.is_empty()) {
                         continue;
                     }
-                    match disjoint(covered, min) {
+                    match disjoint(covered, min, MAX_PIECES) {
                         None => h.intricate = true,
                         Some(here) if first => h.covered = here,
                         // covered in every placement: the overlaps of the two disjoint sets, disjoint
@@ -578,7 +404,8 @@ impl Pass for DropCoveredSurfaces {
                 Cover::Covering | Cover::No => {}
             }
         }
-        drop(grid);
+        let index_unlisted = index.unlisted();
+        drop(index);
         // what each stored triangle becomes: gone, cut, or (absent) as it was
         let mut fates: BTreeMap<(Entity, usize), BTreeMap<usize, Fate>> = BTreeMap::new();
         let (mut too_many, mut mirrored) = (0u64, 0u64);
@@ -766,7 +593,7 @@ impl Pass for DropCoveredSurfaces {
         );
         log.count("triangles on a coincident surface (kept)", coincident);
         log.count("double-sided triangles covered (kept)", double);
-        log.count("triangles too big to index (kept, cover nothing)", too_big);
+        log.count("triangles too big to index (kept, cover nothing)", index_unlisted);
         Ok(())
     }
 }

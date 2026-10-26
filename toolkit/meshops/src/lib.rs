@@ -3,6 +3,7 @@
 
 mod back_faces;
 mod covered;
+pub mod layers;
 pub use covered::{DROP_COVERED_SURFACES, DropCoveredSurfaces};
 mod clip;
 pub use clip::{clip_convex_to_rect, clip_half_plane, twice_signed_area};
