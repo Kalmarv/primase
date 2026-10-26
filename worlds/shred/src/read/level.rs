@@ -2,7 +2,6 @@
 use super::{
     pak::Pak,
     scene::{self, Scene, Unread},
-    scp_splines::SplineKind,
     scp_tables::{self, Chain},
 };
 use crate::{
@@ -43,11 +42,10 @@ pub struct LevelReport {
     pub teleports: usize,
     /// Spot chunks whose class hash matches no proven name, by hash.
     pub unnamed_classes: BTreeMap<u32, usize>,
-    /// Splines read, by section type, and those too short for a core curve.
+    /// Splines read, by class (`SplineKind::class`: rail candidates, guides, AI paths, navigation paths, short
+    /// paths), and those too short for a core curve.
     pub splines: usize,
-    pub ai_paths: usize,
-    pub guides: usize,
-    pub rail_candidates: usize,
+    pub spline_classes: [usize; 5],
     pub short_splines: usize,
     /// Light records, as `shred.light` entities, by kind code.
     pub lights: usize,
@@ -87,19 +85,22 @@ impl LevelReport {
         lines.push((
             "shred scene".into(),
             format!(
-                "{} nodes; {} spot chunks ({} teleport markers, facing unverified: markers face local +Z by core's                  convention); {} section chains stopped early",
+                "{} nodes; {} spot chunks ({} teleport markers, facing unverified: markers face local +Z by core's convention); {} section chains stopped early",
                 self.nodes, self.spots, self.teleports, self.chain_stops
             ),
         ));
         lines.push((
             "shred splines".into(),
             format!(
-                "{} splines ({} ai paths, {} guides, {} rail candidates: probable grind rails, not proven); \
-                 {} with fewer than two points have no curve; {} lights as data, not core lights",
+                "{} splines ({} rail candidates: probable grind rails, not proven; {} guides, {} ai paths, \
+                 {} nav paths, {} short paths); {} with fewer than two points have no curve; {} lights as data, \
+                 not core lights",
                 self.splines,
-                self.ai_paths,
-                self.guides,
-                self.rail_candidates,
+                self.spline_classes[0],
+                self.spline_classes[1],
+                self.spline_classes[2],
+                self.spline_classes[3],
+                self.spline_classes[4],
                 self.short_splines,
                 self.lights
             ),
@@ -520,20 +521,8 @@ pub fn read_level(paks: &[(&str, &Pak)], frame: SourceFrame) -> Result<(World, L
                     ));
                 }
                 report.splines += 1;
-                let kind = match spline.kind {
-                    SplineKind::AiPath => {
-                        report.ai_paths += 1;
-                        "ai_path"
-                    }
-                    SplineKind::Guide => {
-                        report.guides += 1;
-                        "guide"
-                    }
-                    SplineKind::RailCandidate => {
-                        report.rail_candidates += 1;
-                        "rail_candidate"
-                    }
-                };
+                report.spline_classes[spline.kind.class()] += 1;
+                let kind = spline.kind.curve_kind();
                 if points.len() >= 2 {
                     world.insert(
                         e,

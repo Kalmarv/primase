@@ -214,8 +214,8 @@ fn manifest_nodes_spot_chunks_and_spawns() {
     let mut total = [0usize; 6];
     let mut unnamed = std::collections::BTreeMap::<u32, usize>::new();
     let mut undecoded_sections = 0;
-    // splines by (section type, low flags), lights by kind code, names given
-    let mut spline_classes = std::collections::BTreeMap::<(u32, u32), usize>::new();
+    // splines by section type, lights by kind code, names given
+    let mut spline_classes = std::collections::BTreeMap::<u32, usize>::new();
     let mut light_kinds = std::collections::BTreeMap::<u32, usize>::new();
     let mut rail_surfaces = std::collections::BTreeMap::<u32, usize>::new();
     let (mut named_guides, mut named_rails) = (0usize, 0usize);
@@ -245,9 +245,7 @@ fn manifest_nodes_spot_chunks_and_spawns() {
         let (mut world, r) = level::read_level(&level_paks, SourceFrame::WORLD).unwrap();
         assert!(world.verify_components().is_empty(), "{level_name}");
         for (_, sp) in world.iter::<Spline>() {
-            *spline_classes
-                .entry((sp.flags >> 16, sp.flags & 0xffff))
-                .or_default() += 1;
+            *spline_classes.entry(sp.flags >> 16).or_default() += 1;
             if sp.flags >> 16 == 0 {
                 *rail_surfaces.entry(sp.surface).or_default() += 1;
                 assert!(
@@ -265,7 +263,7 @@ fn manifest_nodes_spot_chunks_and_spawns() {
         }
         assert_eq!(r.lights, world.iter::<SceneLight>().count());
         assert_eq!(r.light_kinds.values().sum::<usize>(), r.lights);
-        assert_eq!(r.splines, r.ai_paths + r.guides + r.rail_candidates);
+        assert_eq!(r.splines, r.spline_classes.iter().sum::<usize>());
         assert_eq!(r.splines, world.iter::<Spline>().count());
         let named = names::name_splines(&mut world, &[]);
         named_guides += named;
@@ -327,38 +325,30 @@ fn manifest_nodes_spot_chunks_and_spawns() {
          {undecoded_sections} undecoded blob sections; unnamed spot classes {unnamed:08x?}"
     );
     eprintln!(
-        "SHRED spline/light census: splines by (type, flags) {spline_classes:?}; lights by kind {light_kinds:?};          named by NavGuide scheme {named_guides}, by flythrough rails {named_rails}"
+        "SHRED spline/light census: splines by type {spline_classes:?}; lights by kind {light_kinds:?}; named by NavGuide scheme {named_guides}, by flythrough rails {named_rails}"
     );
     assert_eq!(total, [166_089, 167_503, 53_015, 538, 194, 183]);
-    // 605 before splines (186) and lights (55) were read
-    assert_eq!(undecoded_sections, 364);
-    // 29,560 splines: the recon census's classes (SCENE.md's 31,105 total does not reconcile with it)
+    // 605 before splines (186) and lights (55) were read, 364 before the splines of types 0xA and 0xC and the
+    // ones whose flags had other low halves (45 more sections)
+    assert_eq!(undecoded_sections, 319);
+    // 33,575 splines in the five classes the game keeps them in, by section type (SCENE.md's 31,105 total does
+    // not reconcile with any recount)
     assert_eq!(
         spline_classes.into_iter().collect::<Vec<_>>(),
-        [
-            ((0, 0x80), 1_054),
-            ((0, 0x81), 1_173),
-            ((1, 0x80), 66),
-            ((1, 0x81), 2_017),
-            ((9, 0), 25_009),
-            ((9, 16_900), 78),
-            ((9, 17_002), 45),
-            ((9, 17_073), 40),
-            ((9, 49_816), 78),
-        ]
+        [(0, 2_334), (1, 2_200), (9, 25_250), (0xa, 3_760), (0xc, 31)]
     );
     assert_eq!(
         light_kinds.into_iter().collect::<Vec<_>>(),
         [(0, 5_251), (1, 23), (3, 4), (4, 23), (7, 4_079), (8, 398)]
     );
-    assert_eq!((named_guides, named_rails), (1_897, 186));
+    assert_eq!((named_guides, named_rails), (1_897, 300));
     // the rail candidates' surface ids as the recon census counted them
     assert_eq!(
         rail_surfaces.into_iter().collect::<Vec<_>>(),
         [
             (0, 666),
             (2, 34),
-            (3, 576),
+            (3, 683),
             (11, 381),
             (14, 13),
             (32, 290),

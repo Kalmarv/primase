@@ -27,7 +27,9 @@ const LIGHT: usize = 0x10 + 80 + 64;
 const RAIL: usize = BLOB;
 const AI: usize = RAIL + SPLINE;
 const GUIDE: usize = AI + SPLINE;
-const LIGHTS: usize = GUIDE + SPLINE;
+const NAV: usize = GUIDE + SPLINE;
+const SHORT: usize = NAV + SPLINE;
+const LIGHTS: usize = SHORT + SPLINE;
 const END: usize = LIGHTS + LIGHT;
 
 /// One section holding one spline: id, a surface id (rails only) and three points rising along x.
@@ -62,9 +64,12 @@ fn fixture() -> Vec<u8> {
     let mut b = vec![0u8; END + 16];
     word(&mut b, 0, 0xbabf003c);
     word(&mut b, 0x44, BLOB as u32);
-    spline_section(&mut b, RAIL, 0x0000_0081, 0xaaaa, 11);
+    // the low half of the flags is junk: 0x10 here, 0x81 and 0x80 on the disc
+    spline_section(&mut b, RAIL, 0x0000_0010, 0xaaaa, 11);
     spline_section(&mut b, AI, 0x0009_0000, 0xbbbb, 0);
     spline_section(&mut b, GUIDE, 0x0001_0080, 0xcccc, 0);
+    spline_section(&mut b, NAV, 0x000a_3f80, 0xdddd, 0);
+    spline_section(&mut b, SHORT, 0x000c_0000, 0xeeee, 0);
     // a light: colour, name, three parameters, kind 7, the matrix at 0x60
     word(&mut b, LIGHTS, 0x0004_0000);
     word(&mut b, LIGHTS + 4, LIGHT as u32);
@@ -91,11 +96,17 @@ fn splines_and_lights_as_authored() {
     let (t, unread) = scp_tables::decode(&fixture()).unwrap();
     assert_eq!(t.chain, Chain::Complete);
     assert!(unread.is_empty(), "{unread:?}");
-    assert_eq!(t.sections.len(), 4);
+    assert_eq!(t.sections.len(), 6);
     let kinds: Vec<_> = t.splines.iter().map(|s| s.kind).collect();
     assert_eq!(
         kinds,
-        [SplineKind::RailCandidate, SplineKind::AiPath, SplineKind::Guide]
+        [
+            SplineKind::RailCandidate,
+            SplineKind::AiPath,
+            SplineKind::Guide,
+            SplineKind::NavPath,
+            SplineKind::ShortPath
+        ]
     );
     let s = &t.splines[0];
     assert_eq!(
@@ -105,7 +116,10 @@ fn splines_and_lights_as_authored() {
     assert_eq!(s.points, [[0., 5., -1.], [1., 5., -1.], [2., 5., -1.]]);
     assert_eq!(s.params, [0., 0.5, 1.]);
     assert_eq!(s.matrix[12..15], [9., 9., 9.]);
-    assert_eq!((t.splines[1].id, t.splines[2].id), (0xbbbb, 0xcccc));
+    assert_eq!(
+        t.splines.iter().map(|s| s.id).collect::<Vec<_>>(),
+        [0xaaaa, 0xbbbb, 0xcccc, 0xdddd, 0xeeee]
+    );
     assert_eq!(t.splines[1].surface, 0);
 
     assert_eq!(t.lights.len(), 1);
@@ -119,18 +133,29 @@ fn splines_and_lights_as_authored() {
 
 #[test]
 fn section_flags_say_the_kind() {
-    assert_eq!(SplineKind::of_section(0x0009_0000), Some(SplineKind::AiPath));
-    assert_eq!(SplineKind::of_section(0x0009_0081), Some(SplineKind::AiPath));
-    assert_eq!(SplineKind::of_section(0x0001_0081), Some(SplineKind::Guide));
-    assert_eq!(
-        SplineKind::of_section(0x0000_0080),
-        Some(SplineKind::RailCandidate)
-    );
-    // type 0 or 1 without the spline flags, and every other type, is no spline section
-    assert_eq!(SplineKind::of_section(0x0000_0000), None);
-    assert_eq!(SplineKind::of_section(0x0001_0000), None);
-    assert_eq!(SplineKind::of_section(0x0002_0080), None);
-    assert_eq!(SplineKind::of_section(0x0004_0080), None);
+    // the type is `flags >> 16`; the low half never matters
+    for low in [0x0000, 0x0010, 0x0080, 0x0081, 0x3f80, 0xffff] {
+        assert_eq!(SplineKind::of_section(low), Some(SplineKind::RailCandidate));
+        assert_eq!(SplineKind::of_section(0x0001_0000 | low), Some(SplineKind::Guide));
+        assert_eq!(
+            SplineKind::of_section(0x0009_0000 | low),
+            Some(SplineKind::AiPath)
+        );
+        assert_eq!(
+            SplineKind::of_section(0x000a_0000 | low),
+            Some(SplineKind::NavPath)
+        );
+        assert_eq!(
+            SplineKind::of_section(0x000c_0000 | low),
+            Some(SplineKind::ShortPath)
+        );
+    }
+    // the class indices run 0 to 4 in the order of ALL
+    assert_eq!(SplineKind::ALL.map(SplineKind::class), [0, 1, 2, 3, 4]);
+    // every other type is no spline section
+    for t in [2u32, 3, 4, 5, 6, 7, 8, 0xb, 0xd, 0xe, 0xf, 0x10] {
+        assert_eq!(SplineKind::of_section(t << 16 | 0x81), None, "{t:#x}");
+    }
 }
 
 #[test]
@@ -162,7 +187,7 @@ fn damage_is_refused_or_reported() {
     let mut b = ok.clone();
     word(&mut b, RAIL + 8, 9);
     let (t, unread) = scp_tables::decode(&b).unwrap();
-    assert_eq!(t.splines.len(), 2);
+    assert_eq!(t.splines.len(), 4);
     assert!(unread.iter().any(|u| u.offset == RAIL));
     // a light section whose size is not data + count * 144: reported, no lights
     let mut b = ok.clone();

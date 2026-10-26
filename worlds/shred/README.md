@@ -263,19 +263,25 @@ or lower-cased): 183 of the 194 rows resolve, all to `Teleport` chunks.
 
 ### Splines and lights
 
-Three section kinds hold splines (`read::scp_splines`, 56-byte records whose pointers are section-relative; the
-points are already in level space and the record's matrix is not applied): type 9 is the `ai_path` network (25,250),
-type 1 with low flags 0x80/0x81 the `guide` ribbons and flythrough cameras (2,083) and type 0 with 0x80/0x81 the
-`rail_candidate` splines (2,227). Each is an entity with a core `Curve` of that kind (only with two or more points)
+Five section types hold splines (`read::scp_splines`, 56-byte records whose pointers are section-relative; the
+points are already in level space and the record's matrix is not applied). They are the game's five spline classes:
+the executable registers the loaders of types 0, 1, 9, 0xA and 0xC with one spline manager (a pool of 5 classes of
+1,000 records of 56 bytes) under the class indices 0 to 4, and the low half of the section flags varies and means
+nothing. Type 0 is the `rail_candidate` splines (2,334), type 1 the `guide` ribbons and flythrough cameras (2,200),
+type 9 the `ai_path` network (25,250), type 0xA the `nav_path` splines of the navigation layers (3,760, long) and type
+0xC the `short_path` splines (31). Each is an entity with a core `Curve` of that kind (only with two or more points)
 and `shred.spline` (id, parent, counts, words, surface id, matrix, per-point parameters). The recount over the disc is
-29,560 splines; SCENE.md's 31,105 total does not reconcile with it.
+33,575 splines; SCENE.md's 31,105 total and the 29,560 of the first reader (which took only low flags 0x80 and 0x81 of
+types 0 and 1) do not match it. All 33,575 records lie inside their sections.
 
 Rail candidates are not called rails. The evidence for it: record word 9 is a MAIN.DB `surfaces.id` (0 or a row of the
-table, for all 2,227; the snow surfaces occur only on the snow levels), the AI paths and guides have words 7, 8 and 9
-all zero, and the DB's GRIND-task volumes contain candidate points more often (76% of 212) than other task volumes
-(39% of 803). Against it, no engine code was found that reads the section flags: the grind-surface setter
-(`GRIND_SURFACE` when the skater's physics state is RAIL) takes its surface key from a collision hit record. The
-hypothesis (grind rails, surface from `surfaces`) is stated, not proven.
+table, for all 2,334; the snow surfaces occur only on the snow levels), the other four classes have words 7, 8 and 9
+all zero, their parent groups are nodes named `grind1` to `grind3` and one spline is named `Grinds`, and the DB's
+GRIND-task volumes contain candidate points more often (76% of 212) than other task volumes (39% of 803). The engine
+sets a character's rail position by Lua `SetRailData`, which writes a spline index into a per-character state, but no
+code was found that gives a character the class of these splines, and the grind-surface setter (`GRIND_SURFACE` when
+the skater's physics state is RAIL) takes its surface key from a collision hit record. The hypothesis (grind rails,
+surface from `surfaces`) is stated, not proven.
 
 `read::names` names splines whose id is sdbm of a `NavGuide_<A..ZZ><0..39>` name (1,897 on the disc) or of a
 `FLYTHROUGH_RAIL` name from `<Level>_sessions` (186), as written or lower-cased; the rest stay unnamed.

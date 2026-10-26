@@ -1,7 +1,9 @@
 //! Spline sections of the SCP blob, read as authored.
 //!
-//! A spline section (type 0, 1 or 9 with low flags 0x80/0x81 for types 0 and 1) holds `count` records of 56 bytes
-//! from its data offset, then their arrays; the record's pointers are offsets from the section start. Record words
+//! A spline section (type 0, 1, 9, 0xA or 0xC; the low half of the flags varies and means nothing here) holds `count`
+//! records of 56 bytes from its data offset, then their arrays; the record's pointers are offsets from the section
+//! start. The five types are the game's five spline classes: the executable registers each type's loader with the
+//! same spline manager (a pool of 5 classes of 1,000 records of 56 bytes) under class index 0, 1, 2, 3 and 4. Record words
 //! (big-endian): `0` id (sdbm of the spline's name), `1` parent group id, `2` the id again (not always), `3` unread,
 //! `4` 1 (3 once), `5` point count, `6` a second count (equal to `5` except in a few records), `7` and `8` small
 //! integers, `9` surface id, `10` pointer to a 64-byte matrix, `11` pointer to `count` world-space points (3 x f32),
@@ -13,27 +15,66 @@ use primase_bytes::{Endian, Field, View};
 
 const RECORD: usize = 56;
 
-/// What a spline section's type says its splines are.
+/// What a spline section's type says its splines are: the game's spline class of that index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SplineKind {
-    /// Section type 9: the walking network of pedestrians and AI skaters (edges between `AIJunction`/`NavJunction`
-    /// chunks); every point lies on the ground.
-    AiPath,
-    /// Section type 1: the guide ribbons and flythrough cameras (`NavGuide_<set><n>`, `<name>_CamSpline`); points
+    /// Class 0, section type 0: splines that carry a surface id. See [`Spline::surface`]: they are the probable
+    /// grind rails (their parent groups are named `grind1` to `grind3`); not proven, so the reader does not call
+    /// them rails.
+    RailCandidate,
+    /// Class 1, type 1: the guide ribbons and flythrough cameras (`NavGuide_<set><n>`, `<name>_CamSpline`); points
     /// hover about 2 above the ground.
     Guide,
-    /// Section type 0, flags 0x80/0x81: splines that carry a surface id. See [`Spline::surface`]: they are the
-    /// probable grind rails; not proven, so the reader does not call them rails.
-    RailCandidate,
+    /// Class 2, type 9: the walking network of pedestrians and AI skaters (edges between `AIJunction`/`NavJunction`
+    /// chunks); every point lies on the ground.
+    AiPath,
+    /// Class 3, type 0xA: long splines (60 points in most) of the navigation layers.
+    NavPath,
+    /// Class 4, type 0xC: few and short (2 to a few points), in three level layers.
+    ShortPath,
 }
 impl SplineKind {
-    /// The kind of a section by its flags, `None` for any section that is not a spline section.
+    /// Every class, in class order.
+    pub const ALL: [Self; 5] = [
+        Self::RailCandidate,
+        Self::Guide,
+        Self::AiPath,
+        Self::NavPath,
+        Self::ShortPath,
+    ];
+
+    /// The kind of a section by its flags (`flags >> 16` is the type), `None` for any section that is not a
+    /// spline section.
     pub fn of_section(flags: u32) -> Option<Self> {
-        match (flags >> 16, flags & 0xffff) {
-            (9, _) => Some(Self::AiPath),
-            (1, 0x80 | 0x81) => Some(Self::Guide),
-            (0, 0x80 | 0x81) => Some(Self::RailCandidate),
+        match flags >> 16 {
+            0 => Some(Self::RailCandidate),
+            1 => Some(Self::Guide),
+            9 => Some(Self::AiPath),
+            0xa => Some(Self::NavPath),
+            0xc => Some(Self::ShortPath),
             _ => None,
+        }
+    }
+
+    /// The game's spline class index.
+    pub fn class(self) -> usize {
+        match self {
+            Self::RailCandidate => 0,
+            Self::Guide => 1,
+            Self::AiPath => 2,
+            Self::NavPath => 3,
+            Self::ShortPath => 4,
+        }
+    }
+
+    /// The `kind` of the core `Curve` made from a spline of this kind.
+    pub fn curve_kind(self) -> &'static str {
+        match self {
+            Self::RailCandidate => "rail_candidate",
+            Self::Guide => "guide",
+            Self::AiPath => "ai_path",
+            Self::NavPath => "nav_path",
+            Self::ShortPath => "short_path",
         }
     }
 }
@@ -50,7 +91,7 @@ pub struct Spline {
     pub parent: u32,
     /// Words 5 and 6: the point count and a second count that is equal except in a few records.
     pub counts: [u32; 2],
-    /// Words 7 and 8: 0 for every AI path and guide; for rail candidates 0 to 2 and 0 or 1. Meaning unproven.
+    /// Words 7 and 8: 0 for every spline outside class 0; for rail candidates 0 to 2 and 0 or 1. Meaning unproven.
     pub words: [u32; 2],
     /// Word 9. For rail candidates a `MAIN.DB` `surfaces.id` (proven by the data: all values are in the table and
     /// the snow surfaces occur only on the snow levels); 0 for every other spline.

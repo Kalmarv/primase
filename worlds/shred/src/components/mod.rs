@@ -75,8 +75,8 @@ pub struct Spot {
 }
 component!(Spot, "shred.spot");
 
-/// One SCP spline as authored, beside a core `Curve` of its points (`kind` there: `ai_path`, `guide` or
-/// `rail_candidate`; the section type says which).
+/// One SCP spline as authored, beside a core `Curve` of its points (`kind` there: `rail_candidate`, `guide`,
+/// `ai_path`, `nav_path` or `short_path`; the section type says which, and `flags >> 16` is that type).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Spline {
     pub pak: String,

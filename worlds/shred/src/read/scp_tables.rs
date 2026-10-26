@@ -8,7 +8,8 @@
 //! The blob is a chain of sections `{flags, size, count, data offset}`: `size` runs to the next section, the data
 //! starts `data offset` bytes in (0x10, except 0x20 to 0x40 for type 0xE), the type is `flags >> 16` (the low half
 //! varies and is kept), and the chain ends in a 16-byte record `{junk, 8, 0, 0}`. Type 2 is the spot chunks.
-//! Types 0, 1 and 9 (flags 0x80/0x81 for 0 and 1) are splines (`scp_splines`) and type 4 is lights (`scp_lights`).
+//! Types 0, 1, 9, 0xA and 0xC are splines (`scp_splines`; the low half of their flags is junk) and type 4 is lights
+//! (`scp_lights`).
 //! Every other type is listed with its flags, size and count and reported unread.
 use super::scene::Unread;
 use super::scp_lights::{self, SceneLight};
