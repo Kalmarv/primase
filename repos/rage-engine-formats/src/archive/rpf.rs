@@ -223,8 +223,8 @@ impl Archive {
         match encryption {
             Encryption::None | Encryption::Open => {}
             Encryption::Aes => {
-                aes_decrypt(keys, &mut entries_data)?;
-                aes_decrypt(keys, &mut names)?;
+                aes_decrypt(keys, &path, &mut entries_data)?;
+                aes_decrypt(keys, &path, &mut names)?;
             }
             Encryption::Ng => {
                 ng_decrypt(keys, &name, size32, &mut entries_data)?;
@@ -439,7 +439,7 @@ impl Archive {
         let mut data = self.read_at(f, block, if stored == 0 { size } else { stored })?;
         if encrypted {
             match self.encryption {
-                Encryption::Aes => aes_decrypt(keys, &mut data)?,
+                Encryption::Aes => aes_decrypt(keys, &self.path, &mut data)?,
                 // archives left in the clear by tools still NG-encrypt their entries
                 _ => ng_decrypt(keys, &e.name, size, &mut data)?,
             }
@@ -500,7 +500,7 @@ impl Archive {
         // only scripts are encrypted; nothing marks them but the extension
         if e.name.to_lowercase().ends_with(".ysc") {
             match self.encryption {
-                Encryption::Aes => aes_decrypt(keys, body)?,
+                Encryption::Aes => aes_decrypt(keys, &self.path, body)?,
                 _ => ng_decrypt(keys, &e.name, stored, body)?,
             }
         }

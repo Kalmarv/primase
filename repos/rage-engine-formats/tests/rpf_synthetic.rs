@@ -363,6 +363,21 @@ fn key_material_matches_the_digests_it_is_given() {
     assert!(Keys::from_parts(&ng, &tables, &lut, None, Some(&short)).is_err());
 }
 
+/// An archive under AES (Enhanced has two) opened without the AES key fails naming that archive.
+#[test]
+fn an_aes_archive_without_the_aes_key_is_named() {
+    let mut bytes = write_rpf(vec![Item::Stored("a.txt", b"x".to_vec())]);
+    bytes[12..16].copy_from_slice(&0x0FFF_FFF9u32.to_le_bytes());
+    let path = temp_file("aes.rpf", &bytes);
+    let e = Archive::open(&path, "x64c.rpf\\anim\\Cuts.rpf", &Keys::none())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        e.contains("x64c.rpf\\anim\\cuts.rpf: an AES archive needs the AES key"),
+        "{e}"
+    );
+}
+
 /// The install's listing over archives written here: a nested archive is an archive of its own and a file of its
 /// parent, directories are not files, and every file carries the sizes and extension its table of contents gives.
 /// Oracle: the layout written here, and the inputs it was written from.

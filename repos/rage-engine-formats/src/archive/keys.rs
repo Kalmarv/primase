@@ -1,9 +1,10 @@
 //! Archive key material supplied by the caller, checked against SHA-1 digests the caller also supplies.
 //!
 //! GTA V Enhanced keeps its archives under the NG cipher, whose keys and tables are not present in the Enhanced
-//! executable in a form a digest search finds; the caller passes them in. The Legacy executable does hold them, and
-//! [`Keys::from_legacy_executable`] finds them there by the digests. This crate holds neither the key material nor
-//! the digests: [`KeyDigests`] is what the caller says the material must hash to.
+//! executable in a form a digest search finds; the caller passes them in. Two of its archives are under AES instead
+//! (cutscene archives nested in `x64c.rpf`), so opening the whole install needs the AES key as well. The Legacy
+//! executable does hold them, and [`Keys::from_legacy_executable`] finds them there by the digests. This crate holds
+//! neither the key material nor the digests: [`KeyDigests`] is what the caller says the material must hash to.
 #![allow(
     clippy::disallowed_methods,
     clippy::disallowed_types,
@@ -97,7 +98,8 @@ fn words(bytes: &[u8]) -> impl Iterator<Item = u32> + '_ {
 
 impl Keys {
     /// From the four parts: 101 NG keys of 272 bytes, 17 x 16 decrypt tables of 1024 bytes, the 256-byte name
-    /// lookup table, and optionally the 32-byte AES key (archives under AES only; Enhanced has none).
+    /// lookup table, and optionally the 32-byte AES key (archives under AES only: Enhanced has two, so an install
+    /// opened without it fails at the first of them).
     /// With `digests`, every part must match its digest; with `None` the parts are taken as given.
     pub fn from_parts(
         ng_keys: &[u8],

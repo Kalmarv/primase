@@ -60,11 +60,12 @@ pub fn ng_decrypt(keys: &Keys, name: &str, length: u32, data: &mut [u8]) -> Resu
     Ok(())
 }
 
-/// AES-256-ECB-decrypt `data` in place (archives flagged AES; none in Enhanced).
-pub fn aes_decrypt(keys: &Keys, data: &mut [u8]) -> Result<()> {
+/// AES-256-ECB-decrypt `data` of the archive at `archive` in place (archives flagged AES: two of Enhanced's, both
+/// cutscene archives nested in `x64c.rpf`).
+pub fn aes_decrypt(keys: &Keys, archive: &str, data: &mut [u8]) -> Result<()> {
     let key = keys
         .aes_key
-        .ok_or_else(|| Error::Keys("an AES archive needs the AES key".into()))?;
+        .ok_or_else(|| Error::Keys(format!("{archive}: an AES archive needs the AES key")))?;
     let cipher = Aes256::new(&Array::from(key));
     for block in data.as_chunks_mut::<16>().0 {
         let mut b = Array::from(*block);
