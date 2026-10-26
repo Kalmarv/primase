@@ -247,6 +247,8 @@ pub fn read_level(level: &Path, shared: &[PathBuf]) -> Result<(World, Report)> {
 
 /// An Entity's skate guidance as curves: one entity per chain ([`guidance::GuidanceSystem::chains`]) with its
 /// `core.curve` in world space (the points through the Entity's matrix, row vectors) and its `shaunwhite.guidance`.
+/// A system of any of the four classes is read (a morph system's curves are the shape at rest, its further states'
+/// points are on the component).
 /// The curve's kind is the edges' sub-type name ([`guidance::SUB_TYPES`]), `guidance` for sub-type 0 (none named).
 /// A loop of two edges retraces one segment, so it is placed open, back to its first point.
 fn place_guidance(
@@ -275,33 +277,52 @@ fn place_guidance(
         frame.direction(if n > 0. { l.map(|v| v / n) } else { l })
     };
     for (class, at) in guidance::classes(body) {
-        if class != guidance::SW_GUIDANCE_SYSTEM {
-            bump(format!("guidance systems of class {class:#010x} (not read)"));
-            continue;
-        }
         let system = match guidance::GuidanceSystem::parse(body, at) {
             Ok(s) => s,
             Err(e) => {
-                bump(format!("guidance systems not read: {e}"));
+                let name = guidance::Class::of(class).map_or("?", guidance::Class::name);
+                bump(format!("guidance systems not read: {name}: {e}"));
                 continue;
             }
         };
         bump("guidance systems".into());
+        bump(format!("guidance systems: {}", system.class.name()));
+        if !system.ends_at_component(body) {
+            bump("guidance systems not followed by a component".into());
+        }
+        match &system.shaping {
+            guidance::Shaping::None => {}
+            guidance::Shaping::Template(id) => {
+                bump(format!("free-form guidance systems naming object {id:#010x}"));
+            }
+            guidance::Shaping::States(states) => {
+                for _ in states.iter().skip(1) {
+                    bump("morph guidance states past the first".into());
+                }
+            }
+        }
+        let states: &[guidance::State] = match &system.shaping {
+            guidance::Shaping::States(s) => s.get(1..).unwrap_or_default(),
+            _ => &[],
+        };
         for chain in system.chains() {
-            let mut points: Vec<[f32; 3]> = chain
-                .points
-                .iter()
-                .filter_map(|&i| system.points.get(i as usize).map(|&p| place(p)))
-                .collect();
+            // a loop of two edges retraces one segment: placed open, back to its first point
+            let retraced = chain.closed && chain.points.len() < 3;
+            let at_points = |points: &[[f32; 3]]| -> Vec<[f32; 3]> {
+                let mut list: Vec<[f32; 3]> = chain
+                    .points
+                    .iter()
+                    .filter_map(|&i| points.get(i as usize).map(|&p| place(p)))
+                    .collect();
+                if retraced && let Some(&p) = list.first() {
+                    list.push(p);
+                }
+                list
+            };
+            let points = at_points(&system.points);
             let edges: Vec<&guidance::Edge> =
                 chain.edges.iter().filter_map(|&i| system.edges.get(i)).collect();
-            let mut closed = chain.closed;
-            if closed && points.len() < 3 {
-                if let Some(&p) = points.first() {
-                    points.push(p);
-                }
-                closed = false;
-            }
+            let closed = chain.closed && !retraced;
             let Some(sub_type) = edges.first().map(|e| e.sub_type) else {
                 continue;
             };
@@ -328,9 +349,11 @@ fn place_guidance(
                 Guidance {
                     cell: cell.into(),
                     entity: entity.id,
+                    class: system.class,
                     sub_type,
                     normals: edges.iter().map(|g| g.normals.map(unit)).collect(),
                     lengths: edges.iter().map(|g| g.length).collect(),
+                    morph_points: states.iter().map(|s| at_points(&s.points)).collect(),
                 },
             );
             world.insert(e, Name(name.into()));

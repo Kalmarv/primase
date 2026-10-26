@@ -4,8 +4,9 @@
 //! faces both slope away from its top (fences, stair rails, a clothesline: both normals tilted 25-60 degrees from up),
 //! a ledge has a flat top or a vertical side (benches, planters, curbs: one normal up, the other level). An edge is a
 //! rail's when neither normal's vertical part is under [`RAIL_MIN_UP`] or over [`RAIL_MAX_UP`]; a curve is a rail when
-//! its rail edges are at least half its stored length. Other sub-types keep their kind. The dialect component is taken
-//! off every curve.
+//! its rail edges are at least half its stored length. Other sub-types keep their kind. The shaping mechanic's systems
+//! (free-form, scale and morph) lower the same way, at rest; a morph system's further states have no form in
+//! `core.curve` and are counted as omitted. The dialect component is taken off every curve.
 
 use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::{Component, Curve, World};
@@ -48,12 +49,16 @@ impl Pass for LowerShaunwhiteGrinds {
         &[Curve::NAME]
     }
     fn approximates(&self) -> &'static str {
-        "rail or ledge is chosen from the edges' face normals (a rule from level 01's names), not a field the source states"
+        "rail or ledge is chosen from the edges' face normals (a rule from level 01's names), not a field the source states; a morph system's guidance stays at rest"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let chains: Vec<_> = w.iter::<Guidance>().map(|(e, g)| (e, g.clone())).collect();
         for (e, g) in chains {
             w.remove::<Guidance>(e);
+            log.omit(
+                "guidance morph states (core.curve has no morph targets)",
+                g.morph_points.len() as u64,
+            );
             let Some(curve) = w.get_mut::<Curve>(e) else {
                 return Err("a shaunwhite.guidance without its core.curve".into());
             };

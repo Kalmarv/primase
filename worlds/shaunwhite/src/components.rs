@@ -159,17 +159,53 @@ impl Component for CollisionPlacedBy {
     }
 }
 
+/// The four guidance classes the game stores (read by [`crate::read::guidance`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GuidanceClass {
+    /// SWSkateGuidanceSystem.
+    Plain,
+    /// SWSkateFreeFormGuidanceSystem: the shaping mechanic's placed grind rails.
+    FreeForm,
+    /// SWSkateScaleGuidanceSystem.
+    Scale,
+    /// SWSkateMorphGuidanceSystem.
+    Morph,
+}
+
+impl GuidanceClass {
+    pub const ALL: [GuidanceClass; 4] = [
+        GuidanceClass::Plain,
+        GuidanceClass::FreeForm,
+        GuidanceClass::Scale,
+        GuidanceClass::Morph,
+    ];
+
+    /// The game's class name.
+    pub const fn name(self) -> &'static str {
+        match self {
+            GuidanceClass::Plain => "SWSkateGuidanceSystem",
+            GuidanceClass::FreeForm => "SWSkateFreeFormGuidanceSystem",
+            GuidanceClass::Scale => "SWSkateScaleGuidanceSystem",
+            GuidanceClass::Morph => "SWSkateMorphGuidanceSystem",
+        }
+    }
+}
+
 /// What the source states of a grind guidance chain, on the entity of its `core.curve` (read by
-/// [`crate::read::guidance`]): the Entity that holds the guidance system, the edges' GuidanceObjectSubType, and per
-/// edge (between curve points `i` and `i + 1`) its two face normals, world space in core's frame like the curve's
-/// points, and its stored length (metres). Lowered by `lower-shaunwhite-grinds`.
+/// [`crate::read::guidance`]): the Entity that holds the guidance system and the system's class, the edges'
+/// GuidanceObjectSubType, and per edge (between curve points `i` and `i + 1`) its two face normals, world space in
+/// core's frame like the curve's points, and its stored length (metres). For a morph system's chain, `morph_points`
+/// has one list per state past the first (the shape at rest is the curve): the chain's points, by the same point
+/// indices, in that state, world space like the curve's. Lowered by `lower-shaunwhite-grinds`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Guidance {
     pub cell: String,
     pub entity: u32,
+    pub class: GuidanceClass,
     pub sub_type: u32,
     pub normals: Vec<[[f32; 3]; 2]>,
     pub lengths: Vec<f32>,
+    pub morph_points: Vec<Vec<[f32; 3]>>,
 }
 
 impl Component for Guidance {

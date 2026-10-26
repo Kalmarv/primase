@@ -5,7 +5,9 @@ use primase_core::{Curve, World};
 use primase_shaunwhite::components::Guidance;
 use primase_shaunwhite::passes::register;
 use primase_shaunwhite::read::guidance::{
-    GUIDANCE_OBJECT, GuidanceSystem, NO_LINK, SW_GUIDANCE_OBJECT_DATA, SW_GUIDANCE_SYSTEM,
+    Class, EDGE_FILTER, FREE_FORM_GUIDANCE_SYSTEM, GUIDANCE_OBJECT, GuidanceSystem, MORPH_GUIDANCE_SYSTEM,
+    MORPH_TARGET_DATA, NO_LINK, PART_NODE, PARTITIONER, SCALE_GUIDANCE_SYSTEM, SW_GUIDANCE_OBJECT_DATA,
+    SW_GUIDANCE_SYSTEM, Shaping,
 };
 use primase_shaunwhite::read::level::read_level;
 use primase_shaunwhite::read::scene::RESOURCE_REF;
@@ -25,11 +27,9 @@ fn f32s(out: &mut Vec<u8>, v: &[f32]) {
 /// An edge: (start, end) points, (start link, end link), length.
 type BuiltEdge = ((u32, u32), (u32, u32), f32);
 
-/// A system of `edges` over `points` (encoded as the game encodes them).
-fn system(edges: &[BuiltEdge], points: &[[f32; 3]]) -> Vec<u8> {
-    let mut b = vec![0u8, 4];
-    u32s(&mut b, &[0x1234, SW_GUIDANCE_SYSTEM, 0x1235, RESOURCE_REF]);
-    b.push(0xff);
+/// A GuidanceObject array: a count, then the objects.
+fn objects(edges: &[BuiltEdge]) -> Vec<u8> {
+    let mut b = Vec::new();
     u32s(&mut b, &[edges.len() as u32]);
     for ((i0, i1), (start, end), length) in edges {
         b.extend_from_slice(&[0, 0, 0, 0]);
@@ -44,13 +44,60 @@ fn system(edges: &[BuiltEdge], points: &[[f32; 3]]) -> Vec<u8> {
         u32s(&mut b, &[0x2000, SW_GUIDANCE_OBJECT_DATA, 0, *end, *start]);
         f32s(&mut b, &[*length]);
     }
+    b
+}
+
+/// The edge filter and the partitioner every system holds after its points: `leaves` leaf edges, one node.
+fn index(leaves: u16) -> Vec<u8> {
+    let mut b = vec![0u8];
+    u32s(&mut b, &[0x2001, EDGE_FILTER]);
+    f32s(
+        &mut b,
+        &[
+            std::f32::consts::FRAC_1_SQRT_2,
+            std::f32::consts::FRAC_PI_8,
+            std::f32::consts::FRAC_PI_4,
+        ],
+    );
+    b.extend_from_slice(&[0, 0]);
+    f32s(&mut b, &[46., 60., 0.2]);
+    b.push(0);
+    b.push(0);
+    u32s(&mut b, &[0x2002, PARTITIONER]);
+    b.extend_from_slice(&[0, 0]);
+    u32s(&mut b, &[u32::from(leaves)]);
+    for i in 0..leaves {
+        b.extend_from_slice(&i.to_le_bytes());
+    }
+    f32s(&mut b, &[-1., -1., -1., 1., 1., 1.]);
+    u32s(&mut b, &[1]);
+    b.extend_from_slice(&[0, 0, 0, 0]);
+    u32s(&mut b, &[PART_NODE, 0]);
+    b.extend_from_slice(&[0, 0, 1, 0]);
+    f32s(&mut b, &[0.]);
+    b
+}
+
+/// A component of class `class` of `edges` over `points` (encoded as the game encodes them), up to the end of its
+/// partitioner.
+fn system_of(class: u32, edges: &[BuiltEdge], points: &[[f32; 3]]) -> Vec<u8> {
+    let mut b = vec![0u8, 4];
+    u32s(&mut b, &[0x1234, class, 0x1235, RESOURCE_REF]);
+    b.push(0xff);
+    b.extend(objects(edges));
     u32s(&mut b, &[(points.len() * 3) as u32]);
     for p in points {
         for v in p {
             b.extend_from_slice(&((v * 200.).round() as i32 + 32767).to_le_bytes()[..2]);
         }
     }
+    b.extend(index(edges.len() as u16));
     b
+}
+
+/// A plain system.
+fn system(edges: &[BuiltEdge], points: &[[f32; 3]]) -> Vec<u8> {
+    system_of(SW_GUIDANCE_SYSTEM, edges, points)
 }
 
 #[test]
@@ -103,6 +150,102 @@ fn a_loop_reads_closed() {
     );
 }
 
+#[test]
+fn the_shaping_classes_read_after_the_partitioner() {
+    let points = [[0., 0., 0.], [0., 5., 0.], [0., 5., 2.]];
+    let edges = [((0, 1), (NO_LINK, 1), 5.), ((1, 2), (0, NO_LINK), 2.)];
+
+    // scale: the plain layout, nothing after the partitioner
+    let b = system_of(SCALE_GUIDANCE_SYSTEM, &edges, &points);
+    let s = GuidanceSystem::parse(&b, 6).unwrap();
+    assert_eq!(
+        (s.class, s.shaping.clone(), s.end),
+        (Class::Scale, Shaping::None, b.len())
+    );
+    assert_eq!(s.chains().len(), 1);
+
+    // free-form: one u32 after it, the shared object's id
+    let mut b = system_of(FREE_FORM_GUIDANCE_SYSTEM, &edges, &points);
+    u32s(&mut b, &[0x9016_87FC]);
+    let s = GuidanceSystem::parse(&b, 6).unwrap();
+    assert_eq!(
+        (s.class, s.shaping, s.end),
+        (Class::FreeForm, Shaping::Template(0x9016_87FC), b.len())
+    );
+    // the u32 is not optional
+    assert!(GuidanceSystem::parse(&b[..b.len() - 1], 6).is_err());
+}
+
+/// A morph system of `edges` over `points` with one further state: the same edges, every point 3 m higher.
+fn morph(edges: &[BuiltEdge], points: &[[f32; 3]]) -> Vec<u8> {
+    let mut b = system_of(MORPH_GUIDANCE_SYSTEM, edges, points);
+    u32s(&mut b, &[2]);
+    for (id, lift) in [(0x40u32, 0f32), (0x41, 3.)] {
+        u32s(&mut b, &[id, MORPH_TARGET_DATA]);
+        b.extend(objects(edges));
+        u32s(&mut b, &[points.len() as u32]);
+        for p in points {
+            f32s(&mut b, &[p[0], p[1] + lift, p[2]]);
+        }
+    }
+    b
+}
+
+#[test]
+fn a_morph_system_reads_its_states_and_chains_by_points() {
+    let points = [[0., 0., 0.], [1., 0., 0.], [2., 0., 0.], [5., 5., 5.]];
+    // links that name nothing in the object list (the game's morph systems hold such links)
+    let edges = [((0, 1), (7, 9), 1.), ((2, 1), (8, 8), 1.)];
+    let b = morph(&edges, &points);
+    let s = GuidanceSystem::parse(&b, 6).unwrap();
+    assert_eq!((s.class, s.end), (Class::Morph, b.len()));
+    let Shaping::States(states) = &s.shaping else {
+        panic!("{:?}", s.shaping)
+    };
+    assert_eq!(states.iter().map(|x| x.id).collect::<Vec<_>>(), vec![0x40, 0x41]);
+    assert_eq!(states[1].points[1], [1., 3., 0.]);
+    assert_eq!(states[1].edges.len(), 2);
+    // the edges 0-1 and 2-1 share point 1: one chain, starting at the lowest end
+    let chains = s.chains();
+    assert_eq!(chains.len(), 1);
+    assert_eq!(
+        (chains[0].points.clone(), chains[0].edges.clone()),
+        (vec![0, 1, 2], vec![0, 1])
+    );
+
+    // a state with another point count than the system is refused
+    let mut short = system_of(MORPH_GUIDANCE_SYSTEM, &edges, &points);
+    u32s(&mut short, &[1, 0x40, MORPH_TARGET_DATA]);
+    short.extend(objects(&edges));
+    u32s(&mut short, &[2]);
+    f32s(&mut short, &[0.; 6]);
+    assert!(GuidanceSystem::parse(&short, 6).is_err());
+    // so is a state whose edge names a point past the system's
+    let mut past = system_of(MORPH_GUIDANCE_SYSTEM, &edges, &points);
+    u32s(&mut past, &[1, 0x40, MORPH_TARGET_DATA]);
+    past.extend(objects(&[((0, 9), (NO_LINK, NO_LINK), 1.)]));
+    u32s(&mut past, &[points.len() as u32]);
+    f32s(&mut past, &[0.; 12]);
+    assert!(GuidanceSystem::parse(&past, 6).is_err());
+}
+
+#[test]
+fn a_morph_loop_reads_closed_and_a_plain_system_needs_its_partitioner() {
+    let points = [[0., 0., 0.], [1., 0., 0.], [1., 1., 0.]];
+    let edges = [((0, 1), (0, 0), 1.), ((1, 2), (0, 0), 1.), ((2, 0), (0, 0), 1.4)];
+    let s = GuidanceSystem::parse(&morph(&edges, &points), 6).unwrap();
+    let chains = s.chains();
+    assert_eq!(chains.len(), 1);
+    assert_eq!(
+        (chains[0].points.clone(), chains[0].closed),
+        (vec![0, 1, 2], true)
+    );
+    // a system cut before its partitioner is refused
+    let b = system(&edges, &points);
+    let cut = b.len() - index(3).len();
+    assert!(GuidanceSystem::parse(&b[..cut], 6).is_err());
+}
+
 fn run(w: &mut World, text: &str) -> Result<RunReport, String> {
     let mut reg = PassRegistry::new();
     register(&mut reg);
@@ -125,12 +268,23 @@ fn level_01_guidance_reads_and_lowers() {
     for (who, what) in report.iter().filter(|(_, t)| t.contains("guidance")) {
         println!("{who}: {what}");
     }
-    assert!(
-        !report
+    // every system of the four classes reads, and ends where the next component starts
+    for bad in ["guidance systems not read", "guidance systems not followed"] {
+        assert!(
+            !report.iter().any(|(_, t)| t.starts_with(bad)),
+            "{bad}: {report:?}"
+        );
+    }
+    let systems = |class: Class| -> usize {
+        let line = format!("guidance systems: {}: ", class.name());
+        report
             .iter()
-            .any(|(_, t)| t.starts_with("guidance systems not read")),
-        "{report:?}"
-    );
+            .find_map(|(_, t)| t.strip_prefix(&line).and_then(|n| n.parse().ok()))
+            .unwrap_or(0)
+    };
+    let by_class = Class::ALL.map(systems);
+    println!("systems by class (plain, free-form, scale, morph): {by_class:?}");
+    assert_eq!(by_class, [714, 95, 25, 5]);
     // every edge: its world length (rigid placements) is its stored length
     let (mut edges, mut agree) = (0usize, 0usize);
     for (e, g) in w.iter::<Guidance>() {
@@ -150,8 +304,8 @@ fn level_01_guidance_reads_and_lowers() {
         }
     }
     println!("guidance edges: {edges}, world length = stored length: {agree}");
-    assert_eq!(edges, 6118);
-    assert!(agree * 100 >= edges * 95, "{agree} of {edges}");
+    assert_eq!(edges, 6993);
+    assert_eq!(agree, edges);
 
     run(&mut w, "lower-shaunwhite-grinds").unwrap();
     assert_eq!(w.iter::<Guidance>().count(), 0);
