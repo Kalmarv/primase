@@ -42,3 +42,35 @@ The tests contain a hand-worked red BC1 fixture, cube ordering and refusal check
 stored mip buffers and compares decoded levels against third-party bcdec_rs 0.2.0. Repeated ids must have identical
 bodies. Ten raw-channel PNG previews and a manifest are written under `scratch.root/textures-sample`; BCn decoding
 is confined to the tests.
+
+## Collision
+
+`read::collision::Shape::parse` reads complete managed shape bodies obtained through Anvil's `read_objects`.
+`MeshShape::parse` reads the mesh case directly: local float4 vertices, triangle indices in source winding, and
+the source surface **object id per triangle**. It also retains the material table/index bytes, filter layer/part,
+local bounds and MOPP bytes, offset/scale and version. Coordinates remain in the source frame (Z up); the reader
+does not place, tessellate or change the geometry.
+
+Also read: capsule and sphere endpoints/centre/radius, transformed boxes, BarrelShape convex planes/vertices/matrix,
+lists (inline children, references or null), and MultiMeshShape's contained entity handles and shape ids. A list's
+final flag is retained. `InertComponent::parse` exposes the rigid-body shape id, mass, damping, flags, inertia and
+walkability; `MultiInertComponent::parse` exposes its inline shape container. Inline inert objects can have managed
+byte zero. The inertia tensor is not a placement transform.
+
+An ordinary inert's collision uses its entity's transform. MultiMeshShape's parallel entity/shape arrays refer to
+the contained entities' own transforms. Pairing is supported by an independently inspected ten-child sample:
+each locally resolved collision shape has exactly the corresponding entity's visual mesh name. References are
+kept as ids for a consumer to resolve across cells/forges in its chosen order.
+
+The explicit mesh layout follows AnvilToolkit 1.3.7's AC2 schema, except the game's vertices are float4, not float3.
+The MOPP is an acceleration structure; no Havok tagfile/packfile decoder is needed for these triangles. Code version
+5 is stored; the Havok SDK version is unknown. Modern 2016/2018 tagfiles are a different container.
+
+Source surface names are the directory names of `SWCollisionMaterial` (class `0xef0c7e58`), referenced from the
+shape's material table: Concrete, ConcreteVert, ConcreteNonRidable, Asphalt, Metal, WoodDeck, WoodPipeTop, Bail, etc.
+Keep these ids/names in a consumer's surface table. Surface id zero remains zero; its default meaning is unknown.
+The game-specific material parameters and grind flags are not decoded. This reader supplies source collision;
+destination surface assignments and skateability in a running target are separate work.
+
+Collision tests use a hand-worked two-surface quad, capsule/list fixtures, malformed inputs, three real cells with
+36 meshes and three list/hull shapes, a real inert shape reference and a fourth cell's multi-inert container.

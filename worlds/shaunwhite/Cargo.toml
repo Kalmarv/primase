@@ -1,6 +1,6 @@
 [package]
 name = "primase-shaunwhite"
-description = "Shaun White Skateboarding's PC object containers and stored textures"
+description = "Shaun White Skateboarding's PC textures and collision shapes"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

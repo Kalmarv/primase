@@ -1,5 +1,6 @@
-//! Source readers. Decoding BCn pixels is a consumer's operation; these readers retain the encoded blocks.
+//! Source readers. Textures retain their BCn blocks; collision retains local geometry and source surface ids.
 
+pub mod collision;
 pub mod level;
 pub mod mesh;
 pub mod scene;
