@@ -449,6 +449,20 @@ pub const DECLARED: &[Declared] = &[
         source: r#"the user's own copy; the first two rows (GlobalMetaFile, Graphic Bootstrap) and the second's two blocks hand-checked in a hex dump, and AnvilToolkit 1.3.7's version-25 forge reader and AC2 compression table as the third-party reading of the layout"#,
     },
     Declared {
+        query: Query::Install(Game::ShaunWhite, Some("DataPC_01.forge")),
+        status: Status::Live,
+        gate: true,
+        about: r#"Shaun White Skateboarding PC 1.0 level-01 forge (version 26): every texture in all 253 GridCellDataBlock entries; worlds/shaunwhite/tests/texture.rs"#,
+        source: r#"the user's own copy, extracted unchanged; object directory/envelopes hand-checked separately, texture fields cross-checked with AnvilToolkit 1.3.7's AC2/Brotherhood readers and AC2 schema, duplicated compiled metadata and exact mip lengths checked on every texture; BC1/2/3 decoded against third-party bcdec_rs 0.2.0; code 12's BC3 storage established by sizes and normal-map content, not the AC2 enum"#,
+    },
+    Declared {
+        query: Query::Install(Game::ShaunWhite, Some("DataPC_extra.forge")),
+        status: Status::Live,
+        gate: true,
+        about: r#"Shaun White Skateboarding PC 1.0 standalone textures: all 48 TextureMapSpec entries and their owned TextureMaps; worlds/shaunwhite/tests/texture.rs"#,
+        source: r#"the user's own copy, extracted unchanged; same field/layout checks as DataPC_01.forge and all stored mip levels decoded against third-party bcdec_rs 0.2.0"#,
+    },
+    Declared {
         query: Query::Install(Game::Skate, Some("Data")),
         status: Status::Live,
         gate: true,

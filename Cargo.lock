@@ -1374,6 +1374,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "primase-shaunwhite"
+version = "0.1.0"
+dependencies = [
+ "primase-anvil",
+ "primase-bytes",
+ "primase-core",
+ "primase-image",
+ "primase-testdata",
+ "primase-texcodec",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "primase-skatebird"
 version = "0.1.0"
 dependencies = [

@@ -36,6 +36,7 @@ members = [
     "worlds/gta",
     "worlds/monogame",
     "worlds/anvil",
+    "worlds/shaunwhite",
 ]
 # a patched copy of a crate, built through [patch.crates-io] below (README there); not one of our crates
 exclude = ["third_party/oozextract"]
@@ -96,6 +97,7 @@ primase-stuntboost = { path = "worlds/stuntboost" }
 primase-gta = { path = "worlds/gta" }
 primase-monogame = { path = "worlds/monogame" }
 primase-anvil = { path = "worlds/anvil" }
+primase-shaunwhite = { path = "worlds/shaunwhite" }
 
 thiserror = { version = "=2.0.21", default-features = false, features = ["std"] }
 serde = { version = "1", default-features = false, features = ["std", "derive"] }
