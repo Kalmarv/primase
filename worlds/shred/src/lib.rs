@@ -1,6 +1,7 @@
-//! Tony Hawk: SHRED (PS3): RME PAK v4 archives and their CSTR streams.
+//! Tony Hawk: SHRED (PS3): RME archives, rigid mesh prototypes and scene placements.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+pub mod components;
 pub mod read;
 
 #[derive(Debug, thiserror::Error)]

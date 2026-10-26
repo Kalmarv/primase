@@ -1,6 +1,6 @@
 # primase-shred
 
-Tony Hawk: SHRED (PS3, 2010), RME archive containers only. World and mesh reading are not implemented.
+Tony Hawk: SHRED (PS3, 2010), RME archives and rigid scene geometry.
 
 `read::pak::Pak::open` reads one PAK v4; `from_bytes` accepts caller-owned bytes. Metadata validates the header,
 name hashes, supported attributes/alignment, zero on-disc runtime offsets, bounded NUL-terminated names and exact
@@ -22,3 +22,37 @@ Configure `installs.shred` in the local test-data file as the extracted disc roo
 Run `cargo test --release -p primase-shred -- --nocapture` with that configuration. Smoke depth selects eight archives
 by a seeded rotation of sorted paths; full depth opens every archive and decodes every stream, checking the known
 disc census: 336 archives, 67,320 entry occurrences, 31,227 streams, 111,391 blocks, 4,221 stored blocks.
+
+`read::scene::decode(scp, mlp, mmp, mgp)` reads one decoded quartet in source coordinates. It checks resource IDs,
+slice coverage through EOF (only zero alignment padding), finite affine matrices, identity model-local matrices,
+stride-16 positions, stored AABB containment (0.05 source units), BE u16 triangle lists, index bounds and exact
+submesh partitions. Unknown formats fail with the file and byte offset. Stride-36 embedded models are individually
+refused, retaining their identity, submesh material references and placements; rigid siblings still decode.
+
+`read::level::read_level(&[(label, &pak), ...], frame)` assembles all quartets of precisely the supplied archives.
+The program chooses the base/layers. There is one prototype per resource occurrence, one primitive per rigid
+submesh, one material entity per global ID and one instance per placement. Submesh vertex ranges are narrowed and
+indices rebased. Mirrored placements retain their affine transforms; a mirroring source frame reverses prototype
+winding. Refused prototypes have `shred.refused_mesh` instead of fabricated geometry. IDs live in `shred.mesh_id`
+and `shred.material_id`. ID zero's bank ambiguity is not resolved by assigning material content.
+
+The caller **must state a `primase_core::frame::SourceFrame`**. Y-up is evidenced by the geometry recon, but units,
+handedness and north have not been proven. There is no default frame and no claim that the census's identity frame
+establishes physical metres. Conversion of positions, transforms and winding uses core's frame operations.
+
+The returned `LevelReport` counts all occurrences (including packaged copies and refused models) and lists every
+refused model and unread attribute/table region with its source and decoded-file offset. MMP +12 and MGP attributes
+are not yet emitted as streams; the subsequent attribute chunk owns those semantics. SCP table strides are checked
+against the native loader, but their meanings and nested objects remain unread. SCP's opaque coverage notice
+intentionally overlaps interpreted fields and is **not** a count of distinct unread bytes.
+
+`read::convert::ShredReader` implements core's conversion reader. It currently decodes/caches geometry during `read`,
+returns a planning world without meshes and with explicit material dependencies, and copies only the roots' closure
+on `load`. `prototype_box` reports a converted box from the cached rigid geometry. Incremental archive I/O is not
+implemented. The adapter emits only `core` and `shred` namespaces.
+
+The hand-worked quartet tests cover two resources, two submeshes of one resource, shared materials, instancing,
+reflection, frame scaling/mirroring, malformed inputs, truncated metadata and refusal within a mixed quartet.
+`geometry_disc` always traverses every quartet, regardless of smoke/full depth: expected totals are 657 quartets
+in 324 PAKs, 21,309 resources (17,897 rigid, 3,412 embedded), 35,114 submeshes and 168,887 placements. These are checks
+against source tables and bounds, not an independent rendering proof. Lab/game visual verification remains separate.

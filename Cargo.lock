@@ -1409,8 +1409,11 @@ version = "0.1.0"
 dependencies = [
  "primase-bytes",
  "primase-compress",
+ "primase-core",
  "primase-hash",
  "primase-testdata",
+ "serde",
+ "serde_json",
  "thiserror",
 ]
 
