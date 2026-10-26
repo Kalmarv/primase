@@ -140,7 +140,7 @@ fn field(c: &crate::Constant) -> Result<Field> {
 }
 
 pub(crate) fn lift(source: &Shader, bytes: &[u8]) -> Result<Program> {
-    lower(source, bytes, None)
+    lower(source, bytes, None, false)
 }
 
 pub(crate) fn project(source: &Shader, bytes: &[u8], cut: crate::Projection, tail: bool) -> Result<Program> {
@@ -164,7 +164,7 @@ pub(crate) fn project(source: &Shader, bytes: &[u8], cut: crate::Projection, tai
             "projection input register v31 already occupied",
         ));
     }
-    let mut program = lower(source, bytes, Some((cut, tail)))?;
+    let mut program = lower(source, bytes, Some((cut, tail)), false)?;
     // A derived value and its original program share the source hash, but are distinct cache artifacts.
     program.provenance.lifter = format!(
         "primase-d3d9/{}:word={}:r{}:{:?}",
@@ -176,7 +176,17 @@ pub(crate) fn project(source: &Shader, bytes: &[u8], cut: crate::Projection, tai
     Ok(program)
 }
 
-fn lower(source: &Shader, bytes: &[u8], projection: Option<(crate::Projection, bool)>) -> Result<Program> {
+/// A sliced vertex output runs as an invocation program. Unselected RGBA lanes are placeholders (0,0,0,1).
+pub(crate) fn vertex_output(source: &Shader, bytes: &[u8]) -> Result<Program> {
+    lower(source, bytes, None, true)
+}
+
+fn lower(
+    source: &Shader,
+    bytes: &[u8],
+    projection: Option<(crate::Projection, bool)>,
+    pad_output: bool,
+) -> Result<Program> {
     let mut l = Lower {
         source,
         b: Builder::new(),
@@ -258,6 +268,26 @@ fn lower(source: &Shader, bytes: &[u8], projection: Option<(crate::Projection, b
             }
         }
         l.b.check().map_err(|e| error(i.word, e))?;
+    }
+    if pad_output {
+        let &(_, mask) = l
+            .locals
+            .get(&Register::Target(0))
+            .ok_or_else(|| error(0, "projected output has no writes"))?;
+        if mask != 15 {
+            let zero = l.b.lit_f(0.);
+            let one = l.b.lit_f(1.);
+            let padding = l.b.compose(&[zero, zero, zero, one]);
+            l.write(
+                Destination {
+                    register: Register::Target(0),
+                    mask: 15 & !mask,
+                    saturate: false,
+                    partial_precision: false,
+                },
+                padding,
+            );
+        }
     }
     l.finish(bytes)
 }
@@ -526,12 +556,7 @@ impl Lower<'_> {
         }
     }
     fn source(&mut self, s: Source, needed: u8) -> Result<Val> {
-        let required = s
-            .swizzle
-            .iter()
-            .enumerate()
-            .filter(|(n, _)| needed & (1 << n) != 0)
-            .fold(0, |m, (_, n)| m | (1 << n));
+        let required = s.read_mask(needed);
         let mut v = self.register(s.register, required)?;
         v = self.b.swizzle(v, &s.swizzle);
         if s.absolute {
@@ -666,17 +691,9 @@ impl Lower<'_> {
             self.write(d, v);
             return Ok(());
         }
-        let needed = match i.opcode {
-            Rcp | Rsq | Exp | Log | Pow => 1,
-            Dp3 => 7,
-            Dp4 => 15,
-            Nrm => 7 | d.mask,
-            Dp2Add => 3,
-            _ => d.mask,
-        };
         let mut args = Vec::new();
         for (n, &s) in i.sources.iter().enumerate() {
-            args.push(self.source(s, if i.opcode == Dp2Add && n == 2 { 1 } else { needed })?);
+            args.push(self.source(s, i.source_mask(n))?);
         }
         let a = args[0];
         let v = match i.opcode {

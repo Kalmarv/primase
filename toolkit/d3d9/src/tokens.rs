@@ -25,6 +25,17 @@ pub struct Source {
     pub negate: bool,
 }
 
+impl Source {
+    /// Source register lanes needed for selected result lanes after the operand's swizzle.
+    pub(crate) fn read_mask(self, needed: u8) -> u8 {
+        self.swizzle
+            .iter()
+            .enumerate()
+            .filter(|(n, _)| needed & (1 << n) != 0)
+            .fold(0, |mask, (_, lane)| mask | (1 << lane))
+    }
+}
+
 /// A destination token; masks keep their original lane positions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Destination {
@@ -137,6 +148,22 @@ pub struct Instruction {
     pub destination: Option<Destination>,
     pub sources: Vec<Source>,
     pub control: u8,
+}
+
+impl Instruction {
+    /// Arithmetic operand lanes before swizzle; shared by execution and backwards output slicing.
+    pub(crate) fn source_mask(&self, operand: usize) -> u8 {
+        let mask = self.destination.map_or(0, |d| d.mask);
+        match self.opcode {
+            Opcode::Rcp | Opcode::Rsq | Opcode::Exp | Opcode::Log | Opcode::Pow => 1,
+            Opcode::Dp3 => 7,
+            Opcode::Dp4 => 15,
+            Opcode::Nrm => 7 | mask,
+            Opcode::Dp2Add if operand == 2 => 1,
+            Opcode::Dp2Add => 3,
+            _ => mask,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -36,6 +36,15 @@ limits follow the stage. Every declared output lane must be written. Vertex text
 point size, relative addressing and flow control remain unsupported. The existing RGB
 `project` and `reencode` helpers are pixel-only.
 
+`project_vertex_output(bytes, register, mask)` selects declared vertex output lanes by
+backwards register/lane dataflow, preserving their original arithmetic and source hash.
+It first validates the full VS, so unsupported or invalid dead code is not hidden. The
+result is an explicitly derived pixel-stage invocation program: Target0's selected lanes
+keep their original RGBA positions, with (0,0,0,1) placeholders elsewhere. Other original
+outputs are excluded. It assigns no meaning to a semantic and does not choose bindings;
+original input declarations and CTAB allocations remain, with actual reads visible in
+`used` and the shared value graph. Its distinct lifter identity and notes name the slice.
+
 Unknown models, operations, register banks, relative addressing, predication, control
 flow, structured/int/bool constant layouts and sampler arrays are refused with an offset
 and reason. Uninitialized temporary lanes and undeclared input lanes are refused. This

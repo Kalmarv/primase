@@ -21,6 +21,7 @@ mod lower;
 mod sampler;
 pub use sampler::sampler_states;
 mod tokens;
+mod vertex_output;
 
 pub use ctab::{Constant, ConstantTable, Type, TypeMember};
 pub use tokens::{Comment, Destination, Input, Instruction, Opcode, Output, Register, Shader, Source, read};
@@ -112,4 +113,17 @@ pub fn frame(bytes: &[u8]) -> Result<(primase_shader::Stage, &[u8])> {
         at = end;
     }
     Err(error(at / 4, "raw program exceeds 1,048,576 words or lacks END"))
+}
+
+/// Project selected lanes of a declared `vs_3_0` output into a derived invocation program.
+///
+/// The complete original program must lift successfully. A backwards register/lane slice retains only the
+/// writes that reach the selected output. It preserves original arithmetic, swizzles, masks and local DEF values;
+/// it does not interpret the output semantic. The result is pixel-stage IR for an independent invocation,
+/// with original vertex inputs and constant-register bindings. Target0 keeps selected lanes in their original
+/// RGBA positions; other lanes are explicitly placeholder (0,0,0,1). Other original outputs are excluded.
+/// Full original source hash, a distinct lifter identity and a derivation note keep this separate from the VS.
+/// Its original declarations remain in the interface; `used` and graph dependencies describe actual reads.
+pub fn project_vertex_output(bytes: &[u8], register: u32, mask: u8) -> Result<primase_shader::Program> {
+    vertex_output::project(bytes, register, mask)
 }
