@@ -128,3 +128,28 @@ The exact source collision-surface name `Water` maps to shared `SurfaceClass::Wa
 other forges), `NonRidable`, `Unsafe` variants and `InvisibleWall` stay separate source names, without guessed
 death/respawn behaviour. The named `01A_DeathZoneSafety` is a Scene volume without a visual mesh, not a water shader
 material. A shared water surface class does not encode that volume's scripted respawn behaviour.
+
+
+## Lights and sun
+
+`read::light::read_light` reads complete OmniLight, SpotLight, DirectionalLight and SunLight bodies. It retains
+RGBA, intensity, near/far range, spot cone angles, cookies, shadow flags/resolution and the inline flare. The
+AnvilToolkit 1.3.7 AC2 schema supplies the field names; this game's category, five light flags, resolution and
+range order were checked on the stored objects. Level 01 resolves 110 omni and 79 spot placements through their
+Visual resource ids, at their owning Entity matrices.
+
+`read::light::read_sky` reads the level root's 200-byte SkyLight, including its inline SunLight. Native property
+hashes and the serializer establish the sun colour/intensity and AmbientColor fields. The other scalars, vector
+and second colour remain unlabelled in `shaunwhite.sky_settings`; no ambient alpha or fog interpretation is made.
+This component stays after lighting is lowered. The reader rejects unknown classes, malformed bools, invalid
+ranges/cones, non-finite values, truncation and trailing bytes by field name.
+
+A program explicitly chooses the interpretation, for example:
+`lower-shaunwhite-lighting{point-scale=100,sun-scale=1,spot-axis=y,sun-vector=to-sun,colour=linear}`.
+The two scales convert stored relative intensity to candela (local) and lux (directional); they are **uncalibrated**.
+The spot's local +Y and the sky vector pointing toward the sun are hypotheses, exposed as required choices,
+not established game conventions. Spot angles are retained as radians. `colour=linear|srgb` states the assumed
+source encoding. The pass produces `core.light` and names the sky's directional light in `core.environment`.
+It reports replacing source near/far falloff with inverse-square falloff and a far cutoff, omitting character-only
+lights, flares and cookies, and retaining resolved lights without selecting day/night or scripted activation.
+Global ambient, sky/fog settings and physical calibration remain separate work.

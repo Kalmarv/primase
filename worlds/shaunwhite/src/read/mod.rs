@@ -4,6 +4,7 @@ pub mod collision;
 pub mod guidance;
 pub mod level;
 mod level_collision;
+pub mod light;
 pub mod markers;
 pub mod material;
 pub mod mesh;

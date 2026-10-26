@@ -5,11 +5,12 @@ use primase_core::frame::SourceFrame;
 use primase_core::pass::{Conservation, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::pbr::{AlphaMode, PbrMaterial, Shading};
 use primase_core::{
-    Collider, Collision, Instance, Marker, MaterialUsage, Mesh, Morphs, Name, Surfaces, Texture, Transform,
-    VertexColor, World,
+    Collider, Collision, Environment, Instance, Light, LightKind, Marker, MaterialUsage, Mesh, Morphs, Name,
+    Surfaces, Texture, Transform, VertexColor, World,
 };
 use primase_shaunwhite::components::{
-    CollisionPlacedBy, CollisionSource, CollisionSurfaces, MaterialRef, MeshFormat, PlacedBy, Sampler,
+    CollisionPlacedBy, CollisionSource, CollisionSurfaces, LightShape, LightSource, MaterialRef, MeshFormat,
+    PlacedBy, Sampler, SkySettings,
 };
 use primase_shaunwhite::passes::register;
 use primase_shaunwhite::read::level::read_level;
@@ -56,6 +57,33 @@ fn level_01_reads_and_lowers() {
     );
     assert_eq!((morphs.len(), morphs.iter().sum::<usize>()), (26, 30));
     let placements = w.iter::<Instance>().count();
+    let points = w
+        .iter::<LightSource>()
+        .filter(|(_, l)| matches!(l.shape, LightShape::Point { .. }))
+        .count();
+    let spots = w
+        .iter::<LightSource>()
+        .filter(|(_, l)| matches!(l.shape, LightShape::Spot { .. }))
+        .count();
+    assert_eq!((points, spots, w.iter::<SkySettings>().count()), (110, 79, 1));
+    let sky = w.iter::<SkySettings>().next().unwrap().1.clone();
+    // Root entry's native SkyLight fields were separately inspected: source vector and AmbientColor retained.
+    assert_eq!(sky.direction, [0.46, 0.27, 0.85]);
+    assert_eq!(sky.sun_colour, 0xFFF9_F1DE);
+    run(
+        &mut w,
+        "lower-shaunwhite-lighting{point-scale=100,sun-scale=1,spot-axis=y,sun-vector=to-sun,colour=linear}",
+    )
+    .unwrap();
+    let env = w.resource::<Environment>().unwrap();
+    let sun = w.get::<Light>(env.sun.unwrap()).unwrap();
+    assert_eq!(sun.kind, LightKind::Directional);
+    assert_eq!(sun.intensity, 2.5);
+    assert!(env.ambient.is_none());
+    println!(
+        "lights: {points} omni, {spots} spot, {} core lights, one named sun",
+        w.iter::<Light>().count()
+    );
     let meshes = w.iter::<Mesh>().count();
     let textures = w.iter::<Texture>().count();
     assert!(

@@ -4,8 +4,9 @@
 //! (the shared props other levels' forges hold) are indexed too, so a Visual naming a Mesh outside the level's own
 //! cells finds it. Each Entity of a GridCellDataBlock entry becomes one placement per drawn Visual: a Mesh shown
 //! directly, or a LODSelector's nearest level (its first descriptor: every level is kept by the source, and the
-//! reader places the nearest one, which a selector draws up close). Visuals showing anything else (lights, effects)
-//! are counted in the report, not placed. A Mesh is read once, as a prototype, in the source's frame converted to
+//! reader places the nearest one, which a selector draws up close). Omni/spot Visual targets become dialect light
+//! placements; the root SkyLight retains its settings and inline sun. Other Visual targets are counted in the report.
+//! A Mesh is read once, as a prototype, in the source's frame converted to
 //! core's (`SourceFrame::ENU`: x east, y north, z up, metres); its primitives take one Material entity per Material id
 //! (`shaunwhite.material`: the id, the object's name and its texture ids), which [`crate::read::level`]'s caller
 //! lowers (the textures it names are read by [`crate::read::texture`]).
@@ -18,7 +19,7 @@
     reason = "reader I/O: opens the forge files the caller names"
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
@@ -31,6 +32,7 @@ use primase_core::morphs::{Frame, MorphId, Morphs, Target};
 use primase_core::{Entity, Instance, Marker, Mesh, Name, Primitive, Semantic, Stream, Transform, World};
 
 use crate::components::{Guidance, MaterialRef, MaterialState, MeshFormat, PlacedBy, Sampler, SlotRef};
+use crate::read::light;
 use crate::read::material::{self, MATERIAL, Material};
 use crate::read::mesh::{self, CompiledMesh, MESH};
 use crate::read::scene::{self, GRID_CELL_DATA_BLOCK, LOD_SELECTOR};
@@ -104,7 +106,23 @@ pub fn read_level(level: &Path, shared: &[PathBuf]) -> Result<(World, Report)> {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut bump = |k: String| *counts.entry(k).or_default() += 1;
     let mut collision = super::level_collision::CollisionReader::new(&index);
+    let mut light_placements = BTreeSet::new();
     for d in index.entries.get(..level_entries).unwrap_or_default() {
+        // SkyLight belongs to the level root entry, not to its cell directories. Shared forges' suns are not this
+        // level's settings; every SkyLight of the requested level is retained for an explicit lowering/selection.
+        for o in d.objects.iter().filter(|o| o.class == light::SKY_LIGHT) {
+            match light::read_sky(d.resource.get(o.body.clone()).unwrap_or_default()) {
+                Ok((sky, sun)) => {
+                    let e = world.spawn();
+                    world.insert(e, sky);
+                    world.insert(e, sun);
+                    world.insert(e, Transform::IDENTITY);
+                    world.insert(e, Name(o.name.clone()));
+                    bump("sky settings with inline sun".into());
+                }
+                Err(err) => bump(format!("SkyLight not read: {err}")),
+            }
+        }
         if d.objects.first().map(|o| o.class) != Some(GRID_CELL_DATA_BLOCK) {
             continue;
         }
@@ -155,6 +173,23 @@ pub fn read_level(level: &Path, shared: &[PathBuf]) -> Result<(World, Report)> {
             }
             place_guidance(&mut world, frame, &d.name, &o.name, &entity, body, &mut bump);
             for v in &entity.visuals {
+                if let Some((object, bytes)) = index.get(v.target)
+                    && light::is_light(object.class)
+                {
+                    if light_placements.insert((entity.id, v.target)) {
+                        match light::read_light(bytes) {
+                            Ok(source) => {
+                                let e = world.spawn();
+                                world.insert(e, source);
+                                world.insert(e, frame.transform(&t));
+                                world.insert(e, Name(o.name.clone()));
+                                bump("local light placements".into());
+                            }
+                            Err(err) => bump(format!("light {:#010x} not read: {err}", object.id)),
+                        }
+                    }
+                    continue;
+                }
                 let Some(mesh_id) = resolve(&index, v.target, &mut bump) else {
                     continue;
                 };

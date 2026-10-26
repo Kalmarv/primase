@@ -180,3 +180,81 @@ impl Component for Guidance {
         primase_core::Linearity::Invariant
     }
 }
+
+/// A light's authored shape. Spot angles are stored radians; source range falloff has a near and a far distance.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LightShape {
+    Point {
+        near: f32,
+        far: f32,
+    },
+    Spot {
+        inner: f32,
+        outer: f32,
+        cookie: u32,
+        unknown: u32,
+        near: f32,
+        far: f32,
+    },
+    Directional,
+}
+
+/// The source flare, retained even though the punctual-light lowering cannot draw it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LightFlare {
+    pub id: u32,
+    pub enabled: bool,
+    pub texture: u32,
+    /// Width, height, occlusion width, occlusion height, intensity.
+    pub values: [f32; 5],
+    pub scale: bool,
+    pub fade: bool,
+    pub offset: f32,
+    pub blend: u32,
+}
+
+/// Source light data before its uncalibrated intensity/colour and spot axis are interpreted by a chosen pass.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LightSource {
+    pub id: u32,
+    pub class: u32,
+    pub category: u32,
+    pub generated: bool,
+    pub colour_id: u32,
+    pub colour: [f32; 4],
+    /// Dynamic, cast shadows, affect characters, affect environment, dirty.
+    pub flags: [bool; 5],
+    pub intensity: f32,
+    pub flare: LightFlare,
+    pub shadow_resolution: u32,
+    pub shape: LightShape,
+}
+impl Component for LightSource {
+    const NAME: &'static str = "shaunwhite.light";
+    const GEOMETRY: Geometry = Geometry::None;
+}
+
+/// The level root's SkyLight settings, retained alongside its inline sun. Vectors are in the source Z-up frame.
+/// Native property hashes establish the sun and ambient names; the other fields remain unlabelled. Ambient alpha,
+/// the second colour's meaning and global fog units are not established and are not lowered to core ambient/fog.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SkySettings {
+    pub id: u32,
+    pub direction: [f32; 3],
+    pub sun_colour_id: u32,
+    pub sun_colour: u32,
+    pub sun_intensity: f32,
+    pub unknown_scalars: [f32; 2],
+    pub use_character_sun: bool,
+    pub character_colour_id: u32,
+    pub character_colour: u32,
+    pub character_intensity: f32,
+    pub unknown_vector: [f32; 3],
+    pub ambient_colour: [f32; 4],
+    /// Native property hash 0xea0e031c.
+    pub unknown_colour: [f32; 4],
+}
+impl Component for SkySettings {
+    const NAME: &'static str = "shaunwhite.sky_settings";
+    const GEOMETRY: Geometry = Geometry::None;
+}
