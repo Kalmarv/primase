@@ -85,3 +85,15 @@ not integer-format values. The reader follows these named fields and retains pri
 `tests/cloth.rs` supplies synthetic layouts for both SDK versions, two-reference cloth/pose arrays,
 particle values, ragdoll tags and record/primitive constraint ids. This is a written regression,
 not a claim that the install census has been rerun successfully.
+
+## Packfiles (`packfile`)
+
+`Packfile` reads the older binary *packfile* container (`57E0E057 10C0C010`), version 7, contents version `Havok-7.1.0-r1`,
+4-byte pointers, big endian; other versions and layout rules are refused by name and file offset. It checks the section
+headers, the class-name table and every local, global and virtual fixup (all in range, class-name offsets valid, no slot with
+two fixups); objects are the virtual-fixup targets, and a pointer slot is null exactly when it has no fixup (a slot with none
+must hold zero). The level files have an empty `__types__`, so `packfile::physics` states the 7.1 class layouts (rigid body,
+MOPP tree, storage extended mesh with its subparts and storages, convex vertices, box, sphere, capsule, cylinder, convex
+translate, list) in a table with the check that confirmed each on real data. The mesh view keeps the whole `u32` per-triangle
+material word (`MeshMaterial::a`); what its bits mean is a game's choice. `hkpMoppCode`, convex connectivity, constraints and
+the container/system classes are recognised by name and counted (`physics::census`), not decoded.

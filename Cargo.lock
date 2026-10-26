@@ -1411,6 +1411,7 @@ dependencies = [
  "primase-compress",
  "primase-core",
  "primase-hash",
+ "primase-havok",
  "primase-testdata",
  "serde",
  "serde_json",

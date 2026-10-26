@@ -18,6 +18,7 @@ primase-hash.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+primase-havok.workspace = true
 primase-testdata.workspace = true
 
 [lints]

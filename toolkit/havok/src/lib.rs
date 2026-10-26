@@ -6,6 +6,7 @@ pub mod animation;
 pub mod cloth;
 mod convex;
 mod mesh;
+pub mod packfile;
 pub use convex::{ConvexCore, MAX_PLANES, MAX_VERTICES};
 mod section;
 pub mod spline;
