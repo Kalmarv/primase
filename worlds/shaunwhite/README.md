@@ -145,6 +145,27 @@ death/respawn behaviour. The named `01A_DeathZoneSafety` is a Scene volume witho
 material. A shared water surface class does not encode that volume's scripted respawn behaviour.
 
 
+## Blended materials laid on a surface
+
+The game states no decal. A graffiti, a road marking and a pane of glass are the same blended Material (blend 4, alpha
+blending, depth write off) and the shader records of all six levels set no depth bias or slope bias; the only field that
+tracks decals, `InfluenceHidePixelMode`, is the restoration mechanic's pixel kill (it is 0 on 18 of 95 decal-named
+Materials and non-zero on water splashes and window lights). The game draws blended Materials after the opaque ones with
+depth write off, so a decal in the floor's plane shows over it without a depth fight: level 01's blue arrow lies from
+0.1 mm under to 0.6 mm over its tile, and some decals lie 1.5 mm under it. A destination that writes depth for a blended
+surface (skate. draws it as a mask) fights there, and the arrow dissolves into fragments of the floor.
+
+`mark-shaunwhite-decals{gap=0.005,area=1,share=0.1}` runs after `lower-shaunwhite-material` and marks such a Material
+`core.draw_order` decal (queue 2500, no depth write). A blended material, not water, vegetation or layered and without a
+stated draw order, is marked when its placed triangles within `gap` metres (either side) of an opaque, same-facing
+surface add up to `area` square metres and `share` of its placed area. It is a judgement by placement, reported as an
+approximation naming the material. Census of the six levels' recipe (`gap=0.005,area=1,share=0.1`): 65 of 171 blended
+materials are marked (L01 49, L02 25, L03 3, L04 31, L05 1, L06 5 per level): graffiti, road paint, stains, cracks, asphalt
+patches. Marked though not decals: three window glows and a ground light projection (`ShellLight`, `Glow_Line`,
+`INF_Ministry_Proj01`) and `GFX_GlassBulb`, a glass shell lying on the opaque bulb; no gap or share tells those from
+decals in the data. Not marked: `Gen_Glass01`, `Gen_Glass_Dirty01` and the window glow `Gen_Window_ShellLight01` (under
+`share`), decals lying centimetres over the floor, and decals with few coplanar bits (`DecalHerbs`).
+
 ## Lights and sun
 
 `read::light::read_light` reads complete OmniLight, SpotLight, DirectionalLight and SunLight bodies. It retains
