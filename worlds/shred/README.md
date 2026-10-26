@@ -413,3 +413,15 @@ exceptions, missing/encoded/pending pixels, ambiguous fields and mandatory optio
 loads the first 20 placements in CHARLIE (base plus training), OSCAR and MIKE and checks both omitted normals
 and the explicitly selected AG-down approximation. This is reader/pass integration, not appearance proof.
 Shaded lab comparisons with the textured Blender references belong to the lab integration chunk.
+
+`lower-shred-fog{metres-per-unit=1}` turns the level script's `change_fog(a1 .. a9)` into core fog: `Linear { a1, a2 }`
+in metres (the option is the reader's frame scale, stated again because a pass has no frame) with colour `a5, a6, a7`
+as stored. It needs `shred.level_params`, gives no fog when the script never calls `enable_fog`, when `a8` (opacity) is
+0, or when it sets no fog, and refuses several `change_fog` calls, `a1 >= a2` or `a1 < 0`. The game's fog is the
+fullscreen pass `shaders\pixelsfxog.psp`, whose microcode was decoded whole: with `dA` the surface's view-space z,
+`dB` its world height and `S(t) = t^2 (3 - 2t)`, `tD = sat((dA - a1) / (a2 - a1))`,
+`tH1 = sat((dB - a3) / ((a4 - a3) / 2))`, `tH2 = sat((a4 - dB) / ((a4 - a3) / 2))`,
+`f = S(tD) S(tH1) S(tH2)` and `out = scene + f a8 (fogColor - scene)`. The pass drops and reports `a8` below 1,
+the smoothstep, the height window, view-space z against radial distance and the colour encoding. That MainInv, which
+unprojects the depth, is the inverse projection is inferred (the shader divides by w, the engine patches only the
+height plane), not read from a camera writer.

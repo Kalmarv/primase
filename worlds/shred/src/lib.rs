@@ -5,10 +5,11 @@ pub mod components;
 pub mod passes;
 pub mod read;
 
-/// Register SHRED's source lowerings. Normal-map interpretation is the program's
+/// Register SHRED's source lowerings. Fog is a named linear approximation of the game's fullscreen pass. Normal-map interpretation is the program's
 /// explicit choice until shader and tangent-basis evidence establishes it.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     reg.add(&passes::LOWER_SHRED_MATERIALS);
+    reg.add(&passes::LOWER_SHRED_FOG);
 }
 
 #[derive(Debug, thiserror::Error)]
