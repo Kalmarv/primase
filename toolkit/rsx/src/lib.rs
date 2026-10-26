@@ -3,3 +3,4 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod cgbinary;
+pub mod fragment;

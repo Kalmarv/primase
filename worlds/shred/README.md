@@ -106,6 +106,19 @@ container structure and preserved metadata; it does not establish microcode
 meaning or identify sampler roles. Those require disassembly and an independent
 instruction oracle. No shader-to-material binding is added by this test.
 
+`fragment_disc` compares every distinct fragment microcode with the independently
+run RPCS3 TaskFP disassembly, and byte-matches every repeated packaged program to
+an already checked one. Configure `oracles.rpcs3.shred/fragment` as documented in
+CONTRIBUTING. Full covers all 181,851 occurrences (3,267 distinct microcodes);
+smoke visits eight shader-bearing archives. Typed sources, constants, texture
+units, destination masks, END and IF boundaries match the fields represented by
+the oracle. Its omitted flags and known condition-spelling ambiguity remain
+separate fixture checks, rather than silently treating the tool as hardware truth.
+The test also analyzes possible unit-to-output/kill/coordinate dependencies and
+writes `shred-fragment-flow/units.tsv` plus the source parameter-to-inline-constant
+locations in `constants.tsv` under the configured scratch root. These reports
+preserve program-family paths; they do not assign PBR roles or bind materials.
+
 `read::convert::ShredReader` implements core's conversion reader for exactly the PAKs and `SourceFrame` the caller
 states; the reader chooses nothing. `read` returns the whole level: placements, prototypes with their meshes and
 vertex inputs, material entities, spot chunks and, for the inputs the caller adds, the `.hkw` collision of the same

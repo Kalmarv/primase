@@ -24,6 +24,7 @@ half.workspace = true
 [dev-dependencies]
 primase-testdata.workspace = true
 primase-rsx.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true
