@@ -27,12 +27,13 @@ use primase_anvil::read::forge::Forge;
 use primase_anvil::read::objects::{StoredObject, read_objects};
 use primase_core::convert::Report;
 use primase_core::frame::SourceFrame;
-use primase_core::{Entity, Instance, Marker, Mesh, Name, Transform, World};
+use primase_core::morphs::{Frame, MorphId, Morphs, Target};
+use primase_core::{Entity, Instance, Marker, Mesh, Name, Primitive, Semantic, Stream, Transform, World};
 
 use crate::components::{MaterialRef, MaterialState, MeshFormat, PlacedBy, Sampler, SlotRef};
 use crate::read::markers;
 use crate::read::material::{self, MATERIAL, Material};
-use crate::read::mesh::{CompiledMesh, MESH};
+use crate::read::mesh::{self, CompiledMesh, MESH};
 use crate::read::scene::{self, GRID_CELL_DATA_BLOCK, LOD_SELECTOR};
 use crate::read::texture::{TEXTURE_MAP_SPEC, TextureMap};
 
@@ -257,34 +258,60 @@ fn prototype(
         .iter()
         .map(|&m| material(index, m, world, materials, textures, bump))
         .collect();
-    let mut prims = match cm.primitives(|k| mats.get(k).copied()) {
+    let read = match cm.primitives(|k| mats.get(k).copied()) {
         Ok(p) => p,
         Err(e) => {
             bump(format!("meshes not read: {e}"));
             return None;
         }
     };
-    for p in &mut prims {
-        for (sem, st) in &mut p.streams {
-            match (sem, st) {
-                (primase_core::Semantic::Position, primase_core::Stream::F32x3(v)) => {
-                    v.iter_mut().for_each(|x| *x = frame.point(*x));
+    for _ in 0..read.zeroed {
+        bump("vertices whose NaN texture coordinates are zeroed".into());
+    }
+    let mut prims = read.list;
+    to_core_frame(&mut prims, frame, true);
+    // the further streams, as morph targets (weight 0 draws the first stream)
+    let mut targets = Vec::new();
+    match cm.morph_primitives() {
+        Ok(states) => {
+            for (k, state) in states.into_iter().enumerate() {
+                let mut state = state.list;
+                to_core_frame(&mut state, frame, false);
+                let d = mesh::deltas(&prims, &state);
+                if d.other_differs {
+                    bump(
+                        "further streams that also change texture coordinates or colours (not carried)"
+                            .into(),
+                    );
                 }
-                (primase_core::Semantic::Normal, primase_core::Stream::F32x3(v)) => {
-                    v.iter_mut().for_each(|x| *x = frame.direction(*x));
+                if d.primitives.iter().all(Option::is_none) {
+                    bump("further streams that change no position or normal (not a morph target)".into());
+                    continue;
                 }
-                _ => {}
+                let id = u32::try_from(k.saturating_add(1)).unwrap_or(u32::MAX);
+                targets.push(Target {
+                    id: MorphId(id),
+                    name: format!("stream {id}"),
+                    default_weight: 0.0,
+                    frames: vec![Frame {
+                        weight: 1.0,
+                        primitives: d.primitives,
+                    }],
+                });
             }
         }
-        if frame.flips_winding()
-            && let Some(ix) = &mut p.indices
-        {
-            ix.as_chunks_mut::<3>().0.iter_mut().for_each(|t| t.swap(1, 2));
-        }
+        Err(e) => bump(format!("further streams not read: {e}")),
     }
     let e = world.spawn();
     world.insert(e, Mesh::new(prims));
     world.insert(e, Name(o.name.clone()));
+    if !targets.is_empty() {
+        bump("meshes with morph targets (further vertex streams)".into());
+        for _ in &targets {
+            bump("morph targets".into());
+        }
+        world.insert(e, Morphs { targets });
+    }
     if let Ok(stride) = u32::try_from(cm.stride) {
         world.insert(
             e,
@@ -296,6 +323,29 @@ fn prototype(
     }
     bump("meshes".into());
     Some(e)
+}
+
+/// `prims` in core's frame (positions and normals; the winding too when `winding`).
+fn to_core_frame(prims: &mut [Primitive], frame: SourceFrame, winding: bool) {
+    for p in prims {
+        for (sem, st) in &mut p.streams {
+            match (sem, st) {
+                (Semantic::Position, Stream::F32x3(v)) => {
+                    v.iter_mut().for_each(|x| *x = frame.point(*x));
+                }
+                (Semantic::Normal, Stream::F32x3(v)) => {
+                    v.iter_mut().for_each(|x| *x = frame.direction(*x));
+                }
+                _ => {}
+            }
+        }
+        if winding
+            && frame.flips_winding()
+            && let Some(ix) = &mut p.indices
+        {
+            ix.as_chunks_mut::<3>().0.iter_mut().for_each(|t| t.swap(1, 2));
+        }
+    }
 }
 
 /// The texture entity of TextureMap `id`, read once (its first face: a cube map's others are not read).

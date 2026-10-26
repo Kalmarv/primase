@@ -5,7 +5,7 @@ use primase_core::frame::SourceFrame;
 use primase_core::pass::{Conservation, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::pbr::{AlphaMode, PbrMaterial, Shading};
 use primase_core::{
-    Collider, Collision, Instance, Marker, MaterialUsage, Mesh, Name, Surfaces, Texture, Transform,
+    Collider, Collision, Instance, Marker, MaterialUsage, Mesh, Morphs, Name, Surfaces, Texture, Transform,
     VertexColor, World,
 };
 use primase_shaunwhite::components::{
@@ -43,6 +43,18 @@ fn level_01_reads_and_lowers() {
     for (who, what) in &report {
         println!("{who}: {what}");
     }
+    // every Mesh of level 01 reads: the further vertex streams are morph targets, NaN texture coordinates are zeroed
+    assert!(
+        !report.iter().any(|(_, t)| t.starts_with("meshes not read")),
+        "{report:?}"
+    );
+    let morphs: Vec<usize> = w.iter::<Morphs>().map(|(_, m)| m.targets.len()).collect();
+    println!(
+        "morphs: {} meshes, {} targets",
+        morphs.len(),
+        morphs.iter().sum::<usize>()
+    );
+    assert_eq!((morphs.len(), morphs.iter().sum::<usize>()), (26, 30));
     let placements = w.iter::<Instance>().count();
     let meshes = w.iter::<Mesh>().count();
     let textures = w.iter::<Texture>().count();
