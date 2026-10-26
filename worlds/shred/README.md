@@ -31,12 +31,13 @@ refused, retaining their identity, submesh material references and placements; r
 
 `read::level::read_level(&[(label, &pak), ...], frame)` assembles all quartets of precisely the supplied archives.
 The program chooses the base/layers. There is one prototype per resource occurrence, one primitive per rigid
-submesh, one material entity per global ID and one instance per placement. Submesh vertex ranges are narrowed and
+submesh, one material entity per nonzero global ID and one instance per placement. ID zero is keyed by the
+quartet source namespace, so actor and environment defaults remain separate. Submesh vertex ranges are narrowed and
 indices rebased. Source render triangles are clockwise relative to their stored normals. The reader normalizes
 them to core's counterclockwise fronts, swapping indices when `source_cw XOR frame.flips_winding()` is true.
 This format convention is independent of the caller's frame/handedness choice. Mirrored placements retain their
 affine transforms. Refused prototypes have `shred.refused_mesh` instead of fabricated geometry. IDs live in `shred.mesh_id`
-and `shred.material_id`. ID zero's bank ambiguity is not resolved by assigning material content.
+and `shred.material_id`; zero's source namespace is retained as `shred.material_namespace`.
 
 The caller **must state a `primase_core::frame::SourceFrame`**. Y-up is evidenced by the geometry recon, but units,
 handedness and north have not been proven. There is no default frame and no claim that the census's identity frame
@@ -204,3 +205,58 @@ Type 4 sections are light records (`read::scp_lights`, 80 bytes + a 64-byte matr
 parameters, a kind code (0: 5,251; 7: 4,079; 8: 398; 1: 23; 4: 23; 3: 4), links and a leftover text buffer. They are
 `shred.light` entities with the record's transform, not core lights: units, range, cone and the shining axis are not
 established.
+
+## Material banks and texture dependencies
+
+`ShredReader::with_materials(MaterialInputs { banks, assets, textures })` attaches source materials to the
+existing material entities. `banks` is MATERIALS.PAK; `assets` supplies additional archives, alongside the
+geometry PAKs already given to the reader. `textures: TexturePreference::FullChainThenPrefetch` explicitly
+requests the full mip chain where present and a prefetch tail otherwise. Every packaged copy remains data.
+The geometry-only constructor remains available and reports that material inputs were not supplied.
+
+`read::material_join::MaterialLibrary` also exposes the source join directly. It reads all three MBP/MDP
+banks, resolves a nonzero ID only when it has one bank candidate, and retains unresolved candidates in
+`shred.material_resolution`. On the PS3 disc BLUS30542 version 01.00, all 34,469 nonzero submesh references
+resolve uniquely: 26,669 environment, 1,521 character and 6,279 actor occurrences. The 645 ID-zero references
+have three bank candidates each; their quartet namespaces identify 514 environment (`levels`), five character
+(`characters`) and 126 actor (`actors`) occurrences. Applying this namespace convention to zero is **inferred**,
+supported by every nonzero reference with no exceptions; it is not a native-loader observation. Both the
+resolution component and report identify the inference. An unknown zero namespace stays unresolved. PAK kind
+alone cannot select a bank: LEVELS PAKs contain both environment and actor resources.
+
+The bound PSP's own named constants populate parameters. Cg sampler names are absent from these program
+tables. Four material sampler names instead have exact sdbm matches in the executable's own NUL-terminated
+strings (decrypted executable SHA256 `27918ced575f802a5e372622cfa3899789b8af4490c53b07084c7a99b9431622`):
+
+| Hash | Engine string | Slot occurrences across all 4,102 materials |
+|---|---|---:|
+| `95591c40` | `Color_Map` | 3,995 |
+| `d79d6be4` | `Normal_Map` | 3,948 |
+| `ffc34d98` | `Spec_Map` | 2,998 |
+| `2538db2e` | `Effect_Map` | 2,816 |
+
+These name 13,757 of 30,421 slots. The other 16,664 slots (17 hashes) remain unnamed. Samplers retain
+`name_source: ExecutableStringSdbm`; the component version is 2. The dictionary search covers the executable,
+all 1,278 decoded Lua chunks and all 743 VSP, 765 PSP and three MBP archive occurrences. Matching a name does
+not establish its shader operation, hardware texture unit, colour space or normal-map convention. No `slot i`
+to texture-unit assumption is made. The reader retains every state word without deriving blend or PBR state.
+
+`shred.material_textures` links sampler ordinals to `shred.source_texture` entities. Empty source paths, paths
+unavailable in the supplied archives, and headers without pixels remain explicit. The full bank census has
+15,319 empty bindings, 14,117 `.thp` matches and 985 missing nonempty references (91 character, 894 environment);
+these are source facts, not substituted files. A reader's unavailable-path report describes its caller-supplied
+archive scope, which may be smaller than the disc. All source headers, sections, residencies, first-mip indices,
+cube tails and copy identities are retained. Texture references participate in World closure before any pixels
+load, including dependencies of prototypes whose geometry is deferred.
+
+`read()` creates the copy graph without decoded texture payloads. `load()` decodes all reached copies into
+core Texture components, one entity per cube face, through the GCM reader. Values are raw linear samples with
+role Other; the reader makes no shader colour-space claim. Volumes outside this 2D material API preserve
+their encoded payload in `shred.encoded_texture` and emit a notice; `decode_volume` remains available separately. Malformed supported layouts are errors, not fallback data.
+Shading and PBR conversion remain separate passes. This chunk supplies no shaded-render or runtime claim.
+
+Hand-worked join fixtures check exact pixels, both full and prefetch copies, preference, dependency closure,
+missing paths/pixels, ID-zero separation, inference reporting and unsupported-versus-malformed payloads.
+`material_join_disc` checks every submesh ID against its bank and loads material/texture closures of the first
+20 placements in CHARLIE (base plus default layer), OSCAR and MIKE. These are source and pixel integration checks,
+not independent appearance evidence.

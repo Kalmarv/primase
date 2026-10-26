@@ -1,7 +1,7 @@
 //! MBP/MDP bank records. All offsets are BE and MDP pointers are relative to +0x40.
 //! Opaque header/state fields are explicit data, not interpreted enums. New structural
 //! layouts, encoding words, sentinels, gaps, overlaps and nonzero padding are errors.
-use crate::components::{MaterialKey, MaterialParameter, MaterialSampler, ShredMaterial};
+use crate::components::{MaterialKey, MaterialParameter, MaterialSampler, SamplerNameSource, ShredMaterial};
 use crate::{Result, invalid};
 use primase_bytes::{Endian::Big, Field, View};
 use primase_core::{Entity, World};
@@ -9,6 +9,20 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Reflected names from the bound fragment program, indexed by the source hash.
 pub type UniformNames = BTreeMap<u32, String>;
+
+/// Recovered from the shipped executable's own NUL-terminated strings. The
+/// exact sdbm matches identify names only, not texture-unit or shading semantics.
+/// Source executable SHA256 and the exhaustive dictionary census are documented
+/// in the crate README. No compiled Cg parameter table supplied these names.
+pub fn sampler_name(hash: u32) -> Option<&'static str> {
+    match hash {
+        0x95591c40 => Some("Color_Map"),
+        0xd79d6be4 => Some("Normal_Map"),
+        0xffc34d98 => Some("Spec_Map"),
+        0x2538db2e => Some("Effect_Map"),
+        _ => None,
+    }
+}
 
 fn word(b: &[u8], at: usize) -> Result<u32> {
     View::new(b)
@@ -107,10 +121,12 @@ pub fn record(bank: &str, b: &[u8], names: &UniformNames) -> Result<ShredMateria
     for i in 0..nt {
         let at = pos;
         expect(b, at + 24, 0xffff000e)?;
+        let name = sampler_name(word(b, at + 16)?);
         samplers.push(MaterialSampler {
             slot: i as u32,
             hash: word(b, at + 16)?,
-            name: None,
+            name: name.map(str::to_owned),
+            name_source: name.map(|_| SamplerNameSource::ExecutableStringSdbm),
             texture: String::new(),
             unknown_state: [
                 word(b, at)?,

@@ -87,6 +87,7 @@ fn all_material_banks_and_source_reference_census() {
         all.extend(materials);
     }
     let (mut named, mut unnamed, mut empty, mut resolved, mut missing) = (0, 0, 0, 0, 0);
+    let mut named_samplers = 0;
     for m in &all {
         for p in &m.parameters {
             if let Some(n) = &p.name {
@@ -97,7 +98,16 @@ fn all_material_banks_and_source_reference_census() {
             }
         }
         for s in &m.samplers {
-            assert!(s.name.is_none());
+            if let Some(name) = &s.name {
+                assert_eq!(primase_hash::sdbm(name.as_bytes()), s.hash);
+                assert_eq!(
+                    s.name_source,
+                    Some(primase_shred::components::SamplerNameSource::ExecutableStringSdbm)
+                );
+                named_samplers += 1;
+            } else {
+                assert!(s.name_source.is_none());
+            }
             if s.texture.is_empty() {
                 empty += 1;
             } else if textures.contains(&s.texture.to_lowercase()) {
@@ -117,6 +127,11 @@ fn all_material_banks_and_source_reference_census() {
     assert_eq!(
         (named, unnamed, empty, resolved, missing, missing_shaders),
         (28121, 44115, 15319, 14117, 985, 1)
+    );
+    assert_eq!(named_samplers, 13_757);
+    eprintln!(
+        "SHRED sampler names: {named_samplers} named / {} unnamed from executable-string dictionary",
+        30_421 - named_samplers
     );
     let mut world = primase_core::World::new();
     assert_eq!(material::attach(&mut world, all).unwrap().len(), 4102);

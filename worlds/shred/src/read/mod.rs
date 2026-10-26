@@ -6,6 +6,7 @@ pub mod cstr;
 pub mod level;
 pub mod manifest;
 pub mod material;
+pub mod material_join;
 pub mod names;
 pub mod pak;
 pub mod scene;

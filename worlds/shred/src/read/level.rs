@@ -7,7 +7,10 @@ use super::{
 };
 use crate::{
     Result,
-    components::{MaterialId, MeshId, RefusedMesh, SceneLight, Spline, Spot, VertexInput, VertexInputs},
+    components::{
+        MaterialId, MaterialNamespace, MeshId, RefusedMesh, SceneLight, Spline, Spot, VertexInput,
+        VertexInputs,
+    },
     invalid,
 };
 use primase_core::{
@@ -193,9 +196,18 @@ pub fn decode_quartet(pak: &Pak, entries: [usize; 4]) -> Result<Scene> {
 pub fn read_level(paks: &[(&str, &Pak)], frame: SourceFrame) -> Result<(World, LevelReport)> {
     let mut world = World::new();
     let mut report = LevelReport::default();
-    let mut materials = BTreeMap::<u32, Entity>::new();
+    let mut materials = BTreeMap::<(u32, Vec<u8>), Entity>::new();
     for &(label, pak) in paks {
         for (name, entries) in quartets(pak)? {
+            // Nonzero IDs are globally disjoint across material banks. ID zero
+            // occurs in all three: retain its authored namespace rather than
+            // merging actor, character and environment defaults in one world.
+            let namespace = name
+                .split(|&b| b == b'\\' || b == b'/')
+                .next()
+                .unwrap_or(&name)
+                .to_vec();
+            let material_key = |id| (id, if id == 0 { namespace.clone() } else { Vec::new() });
             let scene = decode_quartet(pak, entries)?;
             report.quartets += 1;
             report
@@ -222,9 +234,12 @@ pub fn read_level(paks: &[(&str, &Pak)], frame: SourceFrame) -> Result<(World, L
                     )),
                 );
                 for sub in &model.submeshes {
-                    materials.entry(sub.material).or_insert_with(|| {
+                    materials.entry(material_key(sub.material)).or_insert_with(|| {
                         let mat = world.spawn();
                         world.insert(mat, MaterialId(sub.material));
+                        if sub.material == 0 {
+                            world.insert(mat, MaterialNamespace(namespace.clone()));
+                        }
                         mat
                     });
                 }
@@ -324,7 +339,7 @@ pub fn read_level(paks: &[(&str, &Pak)], frame: SourceFrame) -> Result<(World, L
                         topology: Topology::Triangles,
                         streams,
                         indices: Some(indices),
-                        material: Some(materials[&sub.material]),
+                        material: Some(materials[&material_key(sub.material)]),
                     });
                 }
                 world.insert(e, Mesh::new(primitives));

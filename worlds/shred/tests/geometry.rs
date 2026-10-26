@@ -5,7 +5,7 @@ use primase_core::{
     frame::{Axis, SourceFrame},
 };
 use primase_shred::{
-    components::{MaterialId, RefusedMesh, VertexInputs},
+    components::{MaterialId, MaterialNamespace, MeshId, RefusedMesh, VertexInputs},
     read::{convert::ShredReader, level, pak::Pak, scene},
 };
 use std::collections::BTreeSet;
@@ -168,20 +168,33 @@ impl Fixture {
         scene::decode(&self.scp, &self.mlp, &self.mmp, &self.mgp)
     }
     fn pak(&self) -> Pak {
-        let names = b"scene.scp\0scene.mlp\0scene.mmp\0scene.mgp\0";
+        self.pak_named("scene")
+    }
+    fn pak_named(&self, stem: &str) -> Pak {
+        let paths: Vec<_> = ["scp", "mlp", "mmp", "mgp"]
+            .map(|ext| format!("{stem}.{ext}"))
+            .into_iter()
+            .collect();
+        let mut names = Vec::new();
+        let mut name_offsets = Vec::new();
+        for path in &paths {
+            name_offsets.push(names.len());
+            names.extend(path.as_bytes());
+            names.push(0);
+        }
         let mut bytes = vec![0; 16 + 4 * 32 + names.len()];
         bytes[..4].copy_from_slice(b"PAK\0");
         bytes[4..8].copy_from_slice(&[0xfe, 0xeb, 0, 4]);
         word(&mut bytes, 8, 4);
         word(&mut bytes, 12, names.len() as u32);
-        bytes[144..].copy_from_slice(names);
+        bytes[144..].copy_from_slice(&names);
         for (i, payload) in [&self.scp, &self.mlp, &self.mmp, &self.mgp]
             .into_iter()
             .enumerate()
         {
             let at = 16 + i * 32;
-            word(&mut bytes, at, primase_hash::sdbm(&names[i * 10..i * 10 + 9]));
-            word(&mut bytes, at + 4, i as u32 * 10);
+            word(&mut bytes, at, primase_hash::sdbm(paths[i].as_bytes()));
+            word(&mut bytes, at + 4, name_offsets[i] as u32);
             word(&mut bytes, at + 12, 16);
             let len = bytes.len() as u32;
             word(&mut bytes, at + 16, len);
@@ -189,6 +202,30 @@ impl Fixture {
             bytes.extend(payload);
         }
         Pak::from_bytes(bytes).expect("valid hand-worked PAK envelope")
+    }
+}
+
+#[test]
+fn zero_material_ids_are_scoped_by_quartet_namespace_in_one_world() {
+    let mut f = Fixture::new();
+    for at in [84 + 192 + 52, 84 + 192 + 96 + 52, 84 + 432 + 192 + 52] {
+        word(&mut f.mlp, at, 0);
+    }
+    let env = f.pak_named("levels\\fixture");
+    let actor = f.pak_named("actors\\fixture");
+    let (world, _) = level::read_level(&[("env", &env), ("actor", &actor)], SourceFrame::WORLD).unwrap();
+    assert_eq!(world.iter::<MaterialId>().count(), 2);
+    for (e, mesh) in world.iter::<Mesh>() {
+        let expected = if world.get::<MeshId>(e).unwrap().pak == "env" {
+            b"levels".as_slice()
+        } else {
+            b"actors".as_slice()
+        };
+        for primitive in mesh.primitives() {
+            let mat = primitive.material.unwrap();
+            assert_eq!(world.get::<MaterialId>(mat).unwrap().0, 0);
+            assert_eq!(world.get::<MaterialNamespace>(mat).unwrap().0, expected);
+        }
     }
 }
 

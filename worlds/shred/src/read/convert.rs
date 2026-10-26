@@ -1,6 +1,7 @@
 //! Conversion adapter; the caller owns archive selection and the source-frame assertion.
 use super::{
     level::{self, LevelReport},
+    material_join::{MaterialInputs, MaterialLibrary, MaterialReport},
     pak::Pak,
 };
 use crate::components::{ModelDependencies, VertexInputs};
@@ -15,7 +16,10 @@ pub struct ShredReader<'a> {
     paks: Vec<(&'a str, &'a Pak)>,
     frame: SourceFrame,
     loaded: Option<World>,
+    material_inputs: Option<MaterialInputs<'a>>,
+    material_library: Option<MaterialLibrary<'a>>,
     pub report: LevelReport,
+    pub material_report: MaterialReport,
 }
 
 impl std::fmt::Debug for ShredReader<'_> {
@@ -33,15 +37,37 @@ impl<'a> ShredReader<'a> {
             paks,
             frame,
             loaded: None,
+            material_inputs: None,
+            material_library: None,
             report: LevelReport::default(),
+            material_report: MaterialReport::default(),
         }
+    }
+
+    pub fn with_materials(mut self, inputs: MaterialInputs<'a>) -> Self {
+        self.material_inputs = Some(inputs);
+        self
     }
 }
 
 impl Reader for ShredReader<'_> {
     fn read(&mut self) -> convert::Result<(World, Report)> {
-        let (world, report) = level::read_level(&self.paks, self.frame)?;
+        let (mut world, report) = level::read_level(&self.paks, self.frame)?;
         self.report = report;
+        let mut lines = self.report.lines();
+        if let Some(inputs) = &self.material_inputs {
+            let mut assets = self.paks.clone();
+            assets.extend(inputs.assets.iter().copied());
+            let mut library = MaterialLibrary::new(inputs.banks, &assets)?;
+            self.material_report = library.attach(&mut world, inputs.textures)?;
+            lines.extend(self.material_report.lines());
+            self.material_library = Some(library);
+        } else {
+            lines.push((
+                "shred materials".into(),
+                "material inputs not supplied; geometry identities only".into(),
+            ));
+        }
         // Keep material references in the planning world: closure must reach them before geometry loads.
         let mut planning = world.clone();
         let prototypes = planning.entities_named("core.mesh");
@@ -52,7 +78,7 @@ impl Reader for ShredReader<'_> {
             planning.insert(e, ModelDependencies(materials.into_iter().collect()));
         }
         self.loaded = Some(world);
-        Ok((planning, self.report.lines()))
+        Ok((planning, lines))
     }
     fn load(&mut self, world: &World, roots: &BTreeSet<Entity>) -> convert::Result<(World, Report)> {
         let loaded = self.loaded.as_ref().ok_or("SHRED reader must read before load")?;
@@ -66,7 +92,12 @@ impl Reader for ShredReader<'_> {
                 }
             }
         }
-        Ok((part, vec![]))
+        let lines = if let Some(library) = &self.material_library {
+            library.load(&mut part)?
+        } else {
+            vec![]
+        };
+        Ok((part, lines))
     }
     fn emits(&self) -> &'static [&'static str] {
         &["core", "shred"]

@@ -7,7 +7,11 @@ pub use vertex_inputs::{VertexInput, VertexInputs};
 mod collision;
 mod material;
 pub use collision::{CollisionFlags, DynamicShape, MOTION_FIXED, RigidBody};
-pub use material::{MaterialKey, MaterialParameter, MaterialSampler, ShredMaterial};
+pub use material::{
+    BankEvidence, EncodedTexture, MaterialKey, MaterialNamespace, MaterialParameter, MaterialResolution,
+    MaterialSampler, MaterialTextures, SamplerNameSource, SamplerTexture, ShredMaterial, SourceTexture,
+    TextureCopy, TextureResidency,
+};
 
 /// A model ID is scoped to its PAK and quartet, never globally deduplicated.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

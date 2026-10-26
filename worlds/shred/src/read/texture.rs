@@ -2,6 +2,7 @@
 use super::pak::Pak;
 use primase_core::{ColorSpace, TexRole, Texture};
 use primase_texcodec::gcm::CellGcmTexture;
+use std::borrow::Cow;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -201,6 +202,29 @@ impl<'a> TextureCatalog<'a> {
     }
     pub fn archive_label(&self, index: usize) -> Option<&str> {
         self.archives.get(index).map(|a| a.0)
+    }
+
+    pub fn section_name(&self, texture: usize) -> Option<&[u8]> {
+        let record = self.records.get(texture)?;
+        let section = record.section?;
+        Some(&self.archives[record.archive].1.sections()[section].name)
+    }
+
+    /// Keep an unsupported payload in the World without inventing a pixel layout.
+    pub fn encoded(&self, texture: usize, payload: Payload) -> Result<Cow<'_, [u8]>> {
+        let record = self.records.get(texture).ok_or(Error::Copy {
+            texture,
+            detail: "record index out of bounds",
+        })?;
+        let pixels = match payload {
+            Payload::Primary => record.pixels,
+            Payload::CubeTail => record.cube_tail,
+        }
+        .ok_or(Error::Copy {
+            texture,
+            detail: "requested pixel payload is absent",
+        })?;
+        Ok(self.archives[record.archive].1.payload(pixels.entry)?)
     }
 
     /// All source records of this extensionless material texture path. `/` and
