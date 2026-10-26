@@ -5,15 +5,6 @@ use primase_core::{Instance, Mesh, Name, World};
 use primase_shaunwhite::components::MaterialRef;
 use primase_testdata::{Game, install_file};
 
-const FILES: [&str; 6] = [
-    "DataPC_01.forge",
-    "DataPC_02.forge",
-    "DataPC_03.forge",
-    "DataPC_04.forge",
-    "DataPC_05.forge",
-    "DataPC_06.forge",
-];
-
 /// The names of the placed meshes of `w`.
 fn placed(w: &World) -> Vec<String> {
     w.iter::<Instance>()
@@ -32,10 +23,15 @@ fn drawn(w: &World) -> Vec<String> {
 
 /// Reads level `n` (1 to 6) with the other five as its shared forges, and drops the effects of what it placed.
 fn level(n: usize, effects: &str) -> Option<World> {
-    let files: Vec<_> = FILES
-        .into_iter()
-        .map(|f| install_file(Game::ShaunWhite, f))
-        .collect::<Option<Vec<_>>>()?;
+    let files = [
+        install_file(Game::ShaunWhite, "DataPC_01.forge"),
+        install_file(Game::ShaunWhite, "DataPC_02.forge"),
+        install_file(Game::ShaunWhite, "DataPC_03.forge"),
+        install_file(Game::ShaunWhite, "DataPC_04.forge"),
+        install_file(Game::ShaunWhite, "DataPC_05.forge"),
+        install_file(Game::ShaunWhite, "DataPC_06.forge"),
+    ];
+    let files = files.into_iter().collect::<Option<Vec<_>>>()?;
     let shared: Vec<_> = files
         .iter()
         .enumerate()
