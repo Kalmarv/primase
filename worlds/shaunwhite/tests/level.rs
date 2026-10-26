@@ -235,12 +235,20 @@ fn level_01_reads_and_lowers() {
     );
 
     // the content selection: keeping everything changes nothing; dropping the classes leaves no placement a row names
-    let all_keep = "select-shaunwhite-content{helpers=keep,effects=keep,characters=keep,missions=keep}";
-    run(&mut w, all_keep).unwrap();
+    let all_keep = "select-shaunwhite-content{helpers=keep,effects=keep,characters=keep,missions=keep,influence=restored}";
+    let kept = run(&mut w, all_keep).unwrap();
+    // restored: the only placements that go are the 36 stored metal trees that sit beside a RealTreeMesh
+    let log = &kept.steps[0].log;
+    assert_eq!(
+        log.counts["tree entities with a RealTreeMesh and a stored Mesh"],
+        36
+    );
+    assert_eq!(log.counts["placements dropped"], 36);
+    let placements = placements - 36;
     assert_eq!(w.iter::<Instance>().count(), placements);
     let drop = run(
         &mut w,
-        "select-shaunwhite-content{helpers=drop,effects=drop,characters=drop,missions=keep}",
+        "select-shaunwhite-content{helpers=drop,effects=drop,characters=drop,missions=keep,influence=restored}",
     )
     .unwrap();
     let log = &drop.steps[0].log;
@@ -264,7 +272,7 @@ fn level_01_reads_and_lowers() {
     assert_eq!(w.iter::<Marker>().count(), markers.len());
     let missions = run(
         &mut w,
-        "select-shaunwhite-content{helpers=drop,effects=drop,characters=drop,missions=drop}",
+        "select-shaunwhite-content{helpers=drop,effects=drop,characters=drop,missions=drop,influence=restored}",
     )
     .unwrap();
     println!("missions: {:?}", missions.steps[0].log.counts);

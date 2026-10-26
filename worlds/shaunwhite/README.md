@@ -99,7 +99,8 @@ forward is not read, and the program picks the spawn it wants. What no row maps 
 
 ## Selecting what a map draws
 
-`select-shaunwhite-content{helpers, effects, characters, missions}` (every option `keep` or `drop`, none defaulted) drops
+`select-shaunwhite-content{helpers, effects, characters, missions, influence}` (the first four `keep` or `drop`, `influence`
+`restored` or `unrestored`, none defaulted) drops
 the placements a map should not draw, by the rows of `passes::ROWS`: each a name test on the Entity, the prototype Mesh
 or one of its materials, with the level 01 evidence that gives it its class, plus the vertex flag that skins a mesh
 (`MeshFormat::SKINNED`) and the cell name that tells a mission cell from a grid cell. The source states no hide flag this
@@ -107,6 +108,13 @@ reader can decode, so the rows are the game's names, not a field: the pass says 
 `lower-shaunwhite-material` (which removes the material names the material rows match). Every drop is declared by its
 row, and the prototypes, materials and textures only the dropped placements reached go with them.
 Collision-only placements remain: these options select what Visuals draw, without removing authored physics.
+
+`influence` chooses between the two trees of each tree Entity. Every tree of level 01 (36 Entities) holds a RealTreeMesh
+Visual (`shaunwhite.real_tree` marks its prototype) and the stored Mesh `00_Veg_RealTree_UrbanTree`, a metal tree. The
+leaf shader discards a leaf pixel where the world's influence is 0 (`KILL_UNINFLUENCED_PIXEL` in `leaves.fx`), and the
+game's un-restored screens (level 01 views `g_c01`, `g_c06`) show the metal tree and no leaves, so `restored` keeps each pair's RealTree and
+drops the stored Mesh, and `unrestored` the reverse. How the game switches the Visual is not decoded; the pass says so
+in its approximation. An Entity with only one of the two is untouched, and the pass counts both kinds.
 
 ## Water
 

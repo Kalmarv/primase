@@ -31,7 +31,9 @@ use primase_core::frame::SourceFrame;
 use primase_core::morphs::{Frame, MorphId, Morphs, Target};
 use primase_core::{Entity, Instance, Marker, Mesh, Name, Primitive, Semantic, Stream, Transform, World};
 
-use crate::components::{Guidance, MaterialRef, MaterialState, MeshFormat, PlacedBy, Sampler, SlotRef};
+use crate::components::{
+    Guidance, MaterialRef, MaterialState, MeshFormat, PlacedBy, RealTree, Sampler, SlotRef,
+};
 use crate::read::light;
 use crate::read::material::{self, MATERIAL, Material};
 use crate::read::mesh::{self, CompiledMesh, MESH};
@@ -544,6 +546,7 @@ fn tree_prototype(
     let e = world.spawn();
     world.insert(e, Mesh::new(prims));
     world.insert(e, Name(o.name.clone()));
+    world.insert(e, RealTree);
     bump("trees".into());
     Some(e)
 }

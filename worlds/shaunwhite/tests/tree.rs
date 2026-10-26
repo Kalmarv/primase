@@ -1,6 +1,9 @@
 //! RealTreeMesh trunks and branches: a body built byte by byte read back, and level 01's three trees read whole
 //! (`installs.shaunwhite`) and placed as meshes.
-use primase_core::{Mesh, Name, Semantic, Stream, World};
+use primase_core::pass::{Conservation, PassManager, PassRegistry, RunReport};
+use primase_core::{Instance, Mesh, Name, Semantic, Stream, World};
+use primase_shaunwhite::components::{MeshFormat, RealTree};
+use primase_shaunwhite::passes::register;
 use primase_shaunwhite::read::level::read_level;
 use primase_shaunwhite::read::tree::{REAL_TREE_MESH, RING, SUB_REAL_TREE_MESH, Tree};
 use primase_testdata::{Game, install};
@@ -253,4 +256,53 @@ fn level_01_trees_read_and_place() {
     ] {
         assert!(names.iter().any(|n| n == want), "{want} in {names:?}");
     }
+}
+
+/// Level 01's trees follow the world's state: each of its Entities has a RealTreeMesh and the stored Mesh
+/// `00_Veg_RealTree_UrbanTree`, restored keeps the first and unrestored the second.
+#[test]
+fn level_01_trees_follow_influence() {
+    let Some(folder) = install(Game::ShaunWhite) else {
+        return;
+    };
+    let (world, _): (World, _) = read_level(&folder.join("DataPC_01.forge"), &[]).unwrap();
+    let count = |w: &World, tree: bool| {
+        w.iter::<Instance>()
+            .filter(|(_, i)| {
+                w.has::<RealTree>(i.prototype) == tree && w.has::<MeshFormat>(i.prototype) != tree
+            })
+            .filter(|(_, i)| {
+                tree || w
+                    .get::<Name>(i.prototype)
+                    .is_some_and(|n| n.0 == "00_Veg_RealTree_UrbanTree")
+            })
+            .count()
+    };
+    let run = |state: &str| -> (World, u64) {
+        let mut w = world.clone();
+        let mut reg = PassRegistry::new();
+        register(&mut reg);
+        let pipeline = reg
+            .parse(&format!(
+                "select-shaunwhite-content{{helpers=keep,effects=keep,characters=keep,missions=keep,influence={state}}}"
+            ))
+            .unwrap();
+        let mut report = RunReport::default();
+        PassManager::new(reg)
+            .with_pass_checks(true)
+            .with_conservation(Conservation::Enforce)
+            .run(&mut w, &pipeline, &mut report)
+            .unwrap();
+        let pairs = report.steps[0].log.counts["tree entities with a RealTreeMesh and a stored Mesh"];
+        (w, pairs)
+    };
+    let (trees, metal) = (count(&world, true), count(&world, false));
+    println!("trees {trees}, stored tree meshes {metal}");
+    let (restored, pairs) = run("restored");
+    println!("pairs {pairs}");
+    assert_eq!(pairs, 36);
+    assert_eq!((trees, metal), (36, 36));
+    assert_eq!((count(&restored, true), count(&restored, false)), (36, 0));
+    let (unrestored, _) = run("unrestored");
+    assert_eq!((count(&unrestored, true), count(&unrestored, false)), (0, 36));
 }

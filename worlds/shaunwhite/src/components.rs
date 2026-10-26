@@ -138,6 +138,17 @@ impl Component for MeshFormat {
     const GEOMETRY: Geometry = Geometry::None;
 }
 
+/// Marks a Mesh prototype built from a RealTreeMesh ([`crate::read::tree`]): a tree the game draws from its own
+/// trunk, branch and leaf data, as opposed to a stored Mesh. An Entity that holds one and a stored Mesh Visual draws
+/// the stored Mesh when the world is not restored (`select-shaunwhite-content`'s `influence`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RealTree;
+
+impl Component for RealTree {
+    const NAME: &'static str = "shaunwhite.real_tree";
+    const GEOMETRY: Geometry = Geometry::None;
+}
+
 /// Authored collision geometry in core's frame, before source surface ids are lowered. A list is represented by
 /// one prototype per leaf, with any leaf-local matrix retained in the placement's transform.
 #[derive(Clone, Debug, PartialEq)]

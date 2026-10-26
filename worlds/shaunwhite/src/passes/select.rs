@@ -1,10 +1,10 @@
-//! `select-shaunwhite-content{helpers=keep|drop, effects=keep|drop, characters=keep|drop, missions=keep|drop}` (all
-//! required): which of the placements the reader makes a map takes. The reader keeps every Visual of every Entity;
-//! the source states no "do not draw" field this reader can decode (the Entity's 34 flag bytes track size class, shadows
-//! and masks, and GridCellDataBlock holds only its object list), so this pass chooses by the **tables below**, each row
-//! a name or a vertex flag the game's own data carries and the evidence that gives it its class. Nothing here is
-//! read from a field: that is what the options are for. Run it before `lower-shaunwhite-material`, which removes the
-//! material names the material rows match.
+//! `select-shaunwhite-content{helpers=keep|drop, effects=keep|drop, characters=keep|drop, missions=keep|drop,
+//! influence=restored|unrestored}` (all required): which of the placements the reader makes a map takes. The reader
+//! keeps every Visual of every Entity; the source states no "do not draw" field this reader can decode (the Entity's 34
+//! flag bytes track size class, shadows and masks, and GridCellDataBlock holds only its object list), so this pass
+//! chooses by the **tables below**, each row a name or a vertex flag the game's own data carries and the evidence that
+//! gives it its class. Nothing here is read from a field: that is what the options are for. Run it before
+//! `lower-shaunwhite-material`, which removes the material names the material rows match.
 //! It selects Visual placements (`shaunwhite.placed_by`); collision-only placements are independent authored physics
 //! and are retained when a Visual is hidden.
 //!
@@ -16,6 +16,16 @@
 //! - `missions`: placements of the cells that are not grid cells (`CellNNNN_DataBlock`): the 20 mission and event cells of
 //!   level 01 (`01_Q01_UnloadMetroStation`, `01_Great_White_Challenge_01`, ...). The grid cells and `Cell05460` (the
 //!   global cell) are the world.
+//!
+//! `influence` chooses between an Entity's two trees. Each tree of level 01 is an Entity with two Visuals: a
+//! RealTreeMesh (trunk, branches and leaves from the game's own data, [`RealTree`]) and a stored Mesh,
+//! `00_Veg_RealTree_UrbanTree` (36 Entities of 36 in the level, every one with exactly that pair). The game's leaf
+//! shader (`leaves.fx`, built with `KILL_UNINFLUENCED_PIXEL`) discards a leaf pixel where the world's influence is 0,
+//! so a world that is not restored has bare RealTrees; its screens (the level 01 captures `g_c01` and `g_c06`) show the
+//! stored Mesh, a metal tree (`00_Min_MetalTree01_Mat`), and no RealTree leaves. `restored` keeps each pair's RealTree
+//! and drops its stored Mesh; `unrestored` keeps the stored Mesh and drops the RealTree. What is read is the two
+//! Visuals and the shader's clip; how the game switches the Visual is not decoded. An Entity with a RealTree and no
+//! stored Mesh, or the stored Mesh alone, is untouched.
 //!
 //! A placement goes when one row of a dropped class matches its Entity's name, its prototype's name, a material of its
 //! prototype, its prototype's vertex flag or its cell; the first matching row is the reason. What stays is untouched.
@@ -29,7 +39,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Component, Entity, Instance, Mesh, Name, World, ledger};
 
-use crate::components::{MaterialRef, MeshFormat, PlacedBy};
+use crate::components::{MaterialRef, MeshFormat, PlacedBy, RealTree};
 
 /// What the tables sort a placement into.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -240,6 +250,31 @@ impl Keep {
     }
 }
 
+/// The world's state the Entities with two trees are shown in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Influence {
+    /// Each pair keeps its RealTree.
+    Restored,
+    /// Each pair keeps its stored Mesh.
+    Unrestored,
+}
+
+impl Choice for Influence {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("restored", Influence::Restored),
+        ("unrestored", Influence::Unrestored),
+    ];
+}
+
+impl Influence {
+    fn text(self) -> &'static str {
+        match self {
+            Influence::Restored => "restored",
+            Influence::Unrestored => "unrestored",
+        }
+    }
+}
+
 /// See the module documentation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SelectShaunwhiteContent {
@@ -247,6 +282,7 @@ pub struct SelectShaunwhiteContent {
     pub effects: Keep,
     pub characters: Keep,
     pub missions: Keep,
+    pub influence: Influence,
 }
 
 impl SelectShaunwhiteContent {
@@ -277,6 +313,10 @@ pub const SELECT_SHAUNWHITE_CONTENT: PassSpec = PassSpec {
             "missions",
             "placements of the mission and event cells (not CellNNNN_DataBlock) kept, or dropped",
         ),
+        OptionSpec::choice::<Influence>(
+            "influence",
+            "the world's state: restored keeps each tree Entity's RealTreeMesh and drops its stored Mesh, unrestored the reverse",
+        ),
     ],
     make: |g: &Given| {
         Ok(Box::new(SelectShaunwhiteContent {
@@ -284,6 +324,7 @@ pub const SELECT_SHAUNWHITE_CONTENT: PassSpec = PassSpec {
             effects: g.choice("effects"),
             characters: g.choice("characters"),
             missions: g.choice("missions"),
+            influence: g.choice("influence"),
         }))
     },
 };
@@ -308,6 +349,7 @@ impl Pass for SelectShaunwhiteContent {
             ("effects".to_owned(), self.effects.text().to_owned()),
             ("characters".to_owned(), self.characters.text().to_owned()),
             ("missions".to_owned(), self.missions.text().to_owned()),
+            ("influence".to_owned(), self.influence.text().to_owned()),
         ])
     }
     fn requires(&self) -> &[&'static str] {
@@ -318,7 +360,9 @@ impl Pass for SelectShaunwhiteContent {
     }
     fn approximates(&self) -> &'static str {
         "classes are chosen by the tables' name and vertex-flag rows, which are evidence from level 01's names, not a \
-         field the source states: a prop that shares a row's name is dropped with the rest, one a row does not name stays"
+         field the source states: a prop that shares a row's name is dropped with the rest, one a row does not name stays; \
+         which of an Entity's two trees the game draws in each state is read from the leaf shader's clip and level 01's \
+         screens, not from the switch itself"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let placements: Vec<(Entity, Entity)> = w
@@ -331,6 +375,7 @@ impl Pass for SelectShaunwhiteContent {
         for &(_, p) in &placements {
             proto.entry(p).or_insert_with(|| prototype_reasons(w, p));
         }
+        let by_influence = self.by_influence(w, &placements, log);
         let mut dropped_protos: BTreeSet<Entity> = BTreeSet::new();
         for (e, p) in placements {
             let mut reasons: Vec<Reason> = Vec::new();
@@ -353,10 +398,13 @@ impl Pass for SelectShaunwhiteContent {
             for (_, why) in &reasons {
                 log.count(&format!("placements whose {why}"), 1);
             }
-            let drop = reasons.iter().find(|(c, _)| self.of(*c) == Keep::Drop);
+            let drop = reasons
+                .iter()
+                .find(|(c, _)| self.of(*c) == Keep::Drop)
+                .map(|(class, why)| format!("{why} (select-shaunwhite-content {}=drop)", class.option()))
+                .or_else(|| by_influence.get(&e).cloned());
             match drop {
-                Some((class, why)) => {
-                    let text = format!("{why} (select-shaunwhite-content {}=drop)", class.option());
+                Some(text) => {
                     ledger::despawn(w, e, log, &text);
                     log.count("placements dropped", 1);
                     dropped_protos.insert(p);
@@ -404,6 +452,55 @@ fn prototype_reasons(w: &World, p: Entity) -> Vec<Reason> {
 }
 
 impl SelectShaunwhiteContent {
+    /// The placements the world's state drops, with their reason: of each Entity that holds a RealTreeMesh Visual and a
+    /// stored Mesh Visual, the stored Mesh's (`restored`) or the RealTree's (`unrestored`). Entities of one kind alone
+    /// are counted and untouched.
+    fn by_influence(
+        &self,
+        w: &World,
+        placements: &[(Entity, Entity)],
+        log: &mut PassLog,
+    ) -> BTreeMap<Entity, String> {
+        let mut groups: BTreeMap<(&str, u32), Vec<(Entity, bool)>> = BTreeMap::new();
+        for &(e, p) in placements {
+            if let Some(by) = w.get::<PlacedBy>(e) {
+                groups
+                    .entry((by.cell.as_str(), by.entity))
+                    .or_default()
+                    .push((e, w.has::<RealTree>(p)));
+            }
+        }
+        let (drops_tree, kept) = match self.influence {
+            Influence::Restored => (false, "RealTreeMesh"),
+            Influence::Unrestored => (true, "stored Mesh"),
+        };
+        let mut out = BTreeMap::new();
+        for group in groups.values() {
+            let trees = group.iter().filter(|(_, tree)| *tree).count();
+            if trees == 0 {
+                continue;
+            }
+            if trees == group.len() {
+                log.count("tree entities with no stored Mesh Visual (kept)", 1);
+                continue;
+            }
+            log.count("tree entities with a RealTreeMesh and a stored Mesh", 1);
+            for &(e, tree) in group {
+                if tree == drops_tree {
+                    let what = if tree { "RealTreeMesh" } else { "stored Mesh" };
+                    out.insert(
+                        e,
+                        format!(
+                            "{what} of an Entity that also draws a {kept} (select-shaunwhite-content influence={})",
+                            self.influence.text()
+                        ),
+                    );
+                }
+            }
+        }
+        out
+    }
+
     /// Despawn the prototypes of dropped placements that no placement uses now, then the materials and textures only
     /// they reached.
     fn prune(&self, w: &mut World, log: &mut PassLog, candidates: &BTreeSet<Entity>) {
@@ -454,7 +551,7 @@ impl SelectShaunwhiteContent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::SlotRef;
+    use crate::components::{RealTree, SlotRef};
     use primase_core::pass::{Conservation, PassManager, PassRegistry, Pipeline, RunReport};
     use primase_core::{Primitive, Semantic, Stream, Topology, Transform};
 
@@ -513,6 +610,11 @@ mod tests {
     }
 
     fn place(w: &mut World, proto: Entity, name: &str, cell: &str) {
+        place_as(w, proto, name, cell, 1);
+    }
+
+    /// A placement made by Entity object `entity` of `cell`.
+    fn place_as(w: &mut World, proto: Entity, name: &str, cell: &str, entity: u32) {
         let e = w.spawn();
         w.insert(
             e,
@@ -527,7 +629,7 @@ mod tests {
             e,
             PlacedBy {
                 cell: cell.into(),
-                entity: 1,
+                entity,
                 kind: 0xff,
             },
         );
@@ -643,7 +745,7 @@ mod tests {
         let (mut w, stays) = level();
         let report = run(
             &mut w,
-            &select("helpers=drop,effects=drop,characters=drop,missions=drop"),
+            &select("helpers=drop,effects=drop,characters=drop,missions=drop,influence=restored"),
         )
         .unwrap();
         assert_eq!(placed_names(&w), stays.iter().map(|s| (*s).to_owned()).collect());
@@ -699,7 +801,7 @@ mod tests {
             v.into_iter().map(str::to_owned).collect::<Vec<_>>()
         };
         assert_eq!(
-            gone("helpers=drop,effects=keep,characters=keep,missions=keep"),
+            gone("helpers=drop,effects=keep,characters=keep,missions=keep,influence=restored"),
             sorted(vec![
                 "00_OutOfBound_Air_Trig_004",
                 "01B_TRIG_ChangeWorld_02C",
@@ -711,15 +813,15 @@ mod tests {
             ])
         );
         assert_eq!(
-            gone("helpers=keep,effects=drop,characters=keep,missions=keep"),
+            gone("helpers=keep,effects=drop,characters=keep,missions=keep,influence=restored"),
             sorted(vec!["GFX_MedalGold", "Kicker_1", "Strip_1", "RaceGate_1"])
         );
         assert_eq!(
-            gone("helpers=keep,effects=keep,characters=drop,missions=keep"),
+            gone("helpers=keep,effects=keep,characters=drop,missions=keep,influence=restored"),
             sorted(vec!["NPC_Worker_1"])
         );
         assert_eq!(
-            gone("helpers=keep,effects=keep,characters=keep,missions=drop"),
+            gone("helpers=keep,effects=keep,characters=keep,missions=drop,influence=restored"),
             sorted(vec!["Q01_SQ01_Wall_001"])
         );
     }
@@ -731,7 +833,7 @@ mod tests {
         let before = placed_names(&w);
         let report = run(
             &mut w,
-            &select("helpers=keep,effects=keep,characters=keep,missions=keep"),
+            &select("helpers=keep,effects=keep,characters=keep,missions=keep,influence=restored"),
         )
         .unwrap();
         assert_eq!(placed_names(&w), before);
@@ -752,7 +854,7 @@ mod tests {
         let (mut w, _) = level();
         run(
             &mut w,
-            &select("helpers=drop,effects=keep,characters=keep,missions=keep"),
+            &select("helpers=drop,effects=keep,characters=keep,missions=keep,influence=restored"),
         )
         .unwrap();
         assert!(
@@ -769,12 +871,99 @@ mod tests {
             "select-shaunwhite-content",
             "select-shaunwhite-content{helpers=drop}",
             "select-shaunwhite-content{helpers=drop,effects=drop,characters=drop}",
-            "select-shaunwhite-content{helpers=maybe,effects=drop,characters=drop,missions=drop}",
-            "select-shaunwhite-content{helpers=drop,effects=drop,characters=drop,missions=drop,size=2}",
+            "select-shaunwhite-content{helpers=drop,effects=drop,characters=drop,missions=drop}",
+            "select-shaunwhite-content{helpers=drop,effects=drop,characters=drop,missions=drop,influence=bare}",
+            "select-shaunwhite-content{helpers=maybe,effects=drop,characters=drop,missions=drop,influence=restored}",
+            "select-shaunwhite-content{helpers=drop,effects=drop,characters=drop,missions=drop,influence=restored,size=2}",
         ] {
             assert!(reg.parse(text).is_err(), "{text}");
         }
         assert!(reg.requires_options("select-shaunwhite-content"));
+    }
+
+    /// A world of two trees (Entities 7 and 8 of a grid cell), each a RealTree and the stored Mesh `Metal`, a tree with
+    /// no stored Mesh (Entity 9), a stored Mesh alone (Entity 10) and a wall.
+    fn trees() -> World {
+        let mut w = World::new();
+        let wall_mat = material(&mut w, "Gen_Wall_Mat", &[]);
+        let metal_mat = material(&mut w, "00_Min_MetalTree01_Mat", &[]);
+        let leaf_mat = material(&mut w, "00_Veg_TreeLeavesA", &[]);
+        let wall = prototype(&mut w, "01_B_Wall", 68, &[wall_mat]);
+        let metal = prototype(&mut w, "00_Veg_RealTree_UrbanTree", 68, &[metal_mat]);
+        let real = prototype(&mut w, "00_Veg_UrbanTree01", 68, &[leaf_mat]);
+        w.insert(real, RealTree);
+        for entity in [7, 8] {
+            place_as(&mut w, real, "Tree", GRID, entity);
+            place_as(&mut w, metal, "Tree", GRID, entity);
+        }
+        place_as(&mut w, real, "Tree_Alone", GRID, 9);
+        place_as(&mut w, metal, "Metal_Alone", GRID, 10);
+        place_as(&mut w, wall, "Wall", GRID, 11);
+        w
+    }
+
+    /// The Entities' placements by prototype, as `(Entity name, prototype name)` pairs.
+    fn drawn(w: &World) -> Vec<(String, String)> {
+        let mut v: Vec<(String, String)> = w
+            .iter::<Instance>()
+            .map(|(e, i)| {
+                (
+                    w.get::<Name>(e).unwrap().0.clone(),
+                    w.get::<Name>(i.prototype).unwrap().0.clone(),
+                )
+            })
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// A restored world keeps each pair's RealTree and an unrestored one its stored Mesh; Entities with one of the two
+    /// alone are untouched in both, and the unused prototype, material and the drops are declared.
+    #[test]
+    fn influence_chooses_between_an_entitys_two_trees() {
+        let text = |state: &str| {
+            select(&format!(
+                "helpers=keep,effects=keep,characters=keep,missions=keep,influence={state}"
+            ))
+        };
+        let pair = |tree: &str| vec![("Tree".to_owned(), tree.to_owned()); 2];
+        let rest = [
+            ("Tree_Alone", "00_Veg_UrbanTree01"),
+            ("Metal_Alone", "00_Veg_RealTree_UrbanTree"),
+            ("Wall", "01_B_Wall"),
+        ]
+        .map(|(a, b)| (a.to_owned(), b.to_owned()));
+
+        let mut w = trees();
+        let report = run(&mut w, &text("restored")).unwrap();
+        let log = &report.steps[0].log;
+        assert_eq!(
+            log.counts["tree entities with a RealTreeMesh and a stored Mesh"],
+            2
+        );
+        assert_eq!(log.counts["tree entities with no stored Mesh Visual (kept)"], 1);
+        assert_eq!(log.counts["placements dropped"], 2);
+        let mut want = [pair("00_Veg_UrbanTree01"), rest.to_vec()].concat();
+        want.sort();
+        assert_eq!(drawn(&w), want);
+        let why = "stored Mesh of an Entity that also draws a RealTreeMesh (select-shaunwhite-content influence=restored)";
+        assert!(log.drops.keys().any(|(_, r)| r == why), "{:?}", log.drops);
+        // the stored Mesh is still used by Entity 10: it stays with its material
+        assert!(
+            w.iter::<MaterialRef>()
+                .any(|(_, m)| m.name == "00_Min_MetalTree01_Mat")
+        );
+
+        let mut w = trees();
+        let report = run(&mut w, &text("unrestored")).unwrap();
+        let log = &report.steps[0].log;
+        assert_eq!(log.counts["placements dropped"], 2);
+        let mut want = [pair("00_Veg_RealTree_UrbanTree"), rest.to_vec()].concat();
+        want.sort();
+        assert_eq!(drawn(&w), want);
+        let why = "RealTreeMesh of an Entity that also draws a stored Mesh (select-shaunwhite-content influence=unrestored)";
+        assert!(log.drops.keys().any(|(_, r)| r == why), "{:?}", log.drops);
+        assert!(w.verify_components().is_empty());
     }
 
     /// The pass reads material names, which the material lowering removes: after it the pass is refused, naming them.
@@ -784,7 +973,7 @@ mod tests {
         run(&mut w, "lower-shaunwhite-material").unwrap();
         let err = run(
             &mut w,
-            &select("helpers=drop,effects=drop,characters=drop,missions=drop"),
+            &select("helpers=drop,effects=drop,characters=drop,missions=drop,influence=restored"),
         )
         .unwrap_err();
         assert!(err.contains("shaunwhite.material"), "{err}");

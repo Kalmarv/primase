@@ -12,7 +12,9 @@ pub use grind::{LOWER_SHAUNWHITE_GRINDS, LowerShaunwhiteGrinds, RAIL_MAX_UP, RAI
 pub use layers::{LOWER_SHAUNWHITE_LAYERS, LowerShaunwhiteLayers};
 pub use lighting::{LOWER_SHAUNWHITE_LIGHTING, LightColour, LowerShaunwhiteLighting, SpotAxis, SunVector};
 pub use material::{LOWER_SHAUNWHITE_MATERIAL, LowerShaunwhiteMaterial};
-pub use select::{Class, Keep, ROWS, Row, SELECT_SHAUNWHITE_CONTENT, SelectShaunwhiteContent, Subject, Test};
+pub use select::{
+    Class, Influence, Keep, ROWS, Row, SELECT_SHAUNWHITE_CONTENT, SelectShaunwhiteContent, Subject, Test,
+};
 pub use water::{LOWER_SHAUNWHITE_WATER, LowerShaunwhiteWater, WATER_SURFACES};
 
 use primase_core::pass::PassRegistry;
