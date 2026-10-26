@@ -161,7 +161,16 @@ ranges/cones, non-finite values, truncation and trailing bytes by field name.
 
 A program explicitly chooses the interpretation, for example:
 `lower-shaunwhite-lighting{point-scale=100,sun-scale=1,spot-axis=y,sun-vector=to-sun,colour=linear}`.
-The two scales convert stored relative intensity to candela (local) and lux (directional); they are **uncalibrated**.
+The two scales convert stored relative intensity to candela (local) and lux (directional). Numbers are
+**uncalibrated**; `point-scale=sun:LUX` calibrates from the level's own sun instead. The game's local lights and its sun
+share one unit (its lighting multiplies colour x intensity by N.L, a local light also by a linear `(far - d) /
+(far - near)` window; `ComputeOmniLightAttenuation`, `eklighting.hlsl`), so taking the sun's luminance x intensity as LUX
+(100,000 at noon, as the GTA lights do) gives one lux per stored unit for both: `LUX / (intensity x luminance)`, 42,000
+to 53,000 across the six levels (suns of 2.0 to 2.5). A level-05 light of intensity 0.95 is then 40,000 cd, 330,000 lm
+as skate. writes it (8.1 lm per cd): San Vansterdam's own lights are 75,000 to 225,000 lm at 13 to 27 m, the
+community's floodlit parks 0.6 to 2.1 million lm at 40 to 50 m, while `point-scale=100` is 770 lm. The game's static
+world is lit by baked lightmaps, per-vertex lighting and composite spherical harmonics (the `STATIC_LIGHTMAP`,
+`STATIC_VERTEXLIGHTING` paths of `eklightingps.hlsl` and the `COMPOSITELIGHTING` spherical harmonics of `ekcompositelightingcommon.hlsl`), which this does not carry.
 The spot's local +Y and the sky vector pointing toward the sun are hypotheses, exposed as required choices,
 not established game conventions. Spot angles are retained as radians. `colour=linear|srgb` states the assumed
 source encoding. The pass produces `core.light` and names the sky's directional light in `core.environment`.

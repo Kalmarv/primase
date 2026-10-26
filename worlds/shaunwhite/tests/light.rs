@@ -151,3 +151,57 @@ fn explicit_light_units_and_axes_lower_through_the_manager() {
     assert!(w.resource::<Environment>().unwrap().ambient.is_none());
     assert!(w.has::<SkySettings>(sun));
 }
+
+/// `point-scale=sun:LUX`: the level's own sun fixes one unit for the local lights and the sun alike. The fixture's
+/// sun is intensity 2 in colour (0.5, 0.25, 0.125), luminance 0.2126 x 0.5 + 0.7152 x 0.25 + 0.0722 x 0.125.
+#[test]
+fn the_sun_fixes_the_light_unit_when_asked() {
+    let mut w = World::new();
+    let point = w.spawn();
+    w.insert(point, light::read_light(&fixture(OMNI_LIGHT)).unwrap());
+    w.insert(point, Transform::IDENTITY);
+    let mut reg = PassRegistry::new();
+    primase_shaunwhite::register(&mut reg);
+    let text = "lower-shaunwhite-lighting{point-scale=sun:100000,sun-scale=7,spot-axis=y,sun-vector=to-sun,colour=linear}";
+    let pipeline = reg.parse(text).unwrap();
+    let manager = PassManager::new(reg).with_pass_checks(true);
+    // a level without its sky has no sun to take the unit from
+    assert!(
+        manager
+            .run(&mut w.clone(), &pipeline, &mut RunReport::default())
+            .unwrap_err()
+            .to_string()
+            .contains("needs the level's SkyLight")
+    );
+    let sun = w.spawn();
+    let (settings, l) = light::read_sky(&sky()).unwrap();
+    w.insert(sun, settings);
+    w.insert(sun, l);
+    w.insert(sun, Transform::IDENTITY);
+    manager.run(&mut w, &pipeline, &mut RunReport::default()).unwrap();
+    let luminance = 0.2126_f64 * 0.5 + 0.7152 * 0.25 + 0.0722 * 0.125;
+    let unit = 100_000. / (2. * luminance);
+    let near = |a: f32, b: f64| (f64::from(a) - b).abs() < b * 1e-5;
+    // the sun is the stated lux in luminance, whatever sun-scale says; a light of intensity 2 is twice the unit
+    assert!(near(w.get::<Light>(sun).unwrap().intensity, 2. * unit));
+    assert!(near(w.get::<Light>(point).unwrap().intensity, 2. * unit));
+    assert_eq!(w.get::<Light>(point).unwrap().range, Some(30.));
+}
+
+#[test]
+fn point_scale_is_a_number_or_sun_lux() {
+    let mut reg = PassRegistry::new();
+    primase_shaunwhite::register(&mut reg);
+    let make = |scale: &str| {
+        reg.parse(&format!(
+            "lower-shaunwhite-lighting{{point-scale={scale},sun-scale=1,spot-axis=y,sun-vector=to-sun,colour=linear}}"
+        ))
+        .map(|_| ())
+    };
+    for good in ["100", "0.5", "sun:100000"] {
+        assert!(make(good).is_ok(), "{good}");
+    }
+    for bad in ["sun:0", "sun:", "sun:-3", "sun:x", "-1", "nan", "sky:5"] {
+        assert!(make(bad).is_err(), "{bad}");
+    }
+}
