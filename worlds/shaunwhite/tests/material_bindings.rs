@@ -214,7 +214,7 @@ fn partial_allocations_and_unknown_transforms_never_become_identity_or_zero() {
     assert_eq!(word(&partial, 49, 0), None, "outside optimized allocation");
     assert_eq!(word(&partial, 59, 0), None, "outside optimized allocation");
     let (derived, _) = fixture(21);
-    material.slots.get_mut("diffuse_b").unwrap().rotation = 0.5;
+    material.slots.remove("diffuse_b");
     material.slots.remove("mask");
     let bound = bind_material(&derived, &material).unwrap();
     assert_eq!(row(&bound, 48), [None; 4]);
@@ -224,13 +224,17 @@ fn partial_allocations_and_unknown_transforms_never_become_identity_or_zero() {
         bound
             .constants
             .iter()
-            .any(|c| matches!(&c.role,ConstantRole::Unknown{why} if why.contains("diffuse_b UV rotation")))
+            .any(|c| matches!(&c.role,ConstantRole::Unknown{why} if why.contains("diffuse_b UV fields")))
     );
     assert!(
         bound
             .constants
             .iter()
             .any(|c| matches!(&c.role,ConstantRole::Unknown{why} if why.contains("mask UV fields")))
+    );
+    material.slots.insert(
+        "diffuse_b".into(),
+        fixture(21).1.slots.remove("diffuse_b").unwrap(),
     );
     material.slots.get_mut("diffuse_b").unwrap().texcoord = 2;
     assert!(bind_material(&derived, &material).unwrap_err().contains("UV set"));
@@ -242,4 +246,72 @@ fn partial_allocations_and_unknown_transforms_never_become_identity_or_zero() {
             .unwrap_err()
             .contains("non-finite")
     );
+}
+
+#[test]
+fn degrees_rotate_about_origin_before_nonuniform_scale_and_offset() {
+    let (derived, mut material) = fixture(21);
+    for (angle, expected) in [
+        (90., [0., -2., 0.25, 3., 0., -0.5]),
+        (-90., [0., 2., 0.25, -3., 0., -0.5]),
+        (450., [0., -2., 0.25, 3., 0., -0.5]),
+    ] {
+        material.slots.get_mut("diffuse_b").unwrap().rotation = angle;
+        let bound = bind_material(&derived, &material).unwrap();
+        let actual = [
+            word(&bound, 48, 0),
+            word(&bound, 48, 1),
+            word(&bound, 48, 2),
+            word(&bound, 49, 0),
+            word(&bound, 49, 1),
+            word(&bound, 49, 2),
+        ];
+        for (actual, expected) in actual.into_iter().zip(expected) {
+            assert!((actual.unwrap() - expected).abs() < 2e-6);
+        }
+        assert_eq!(word(&bound, 48, 3), None);
+        assert_eq!(word(&bound, 49, 3), None);
+    }
+    material.slots.get_mut("diffuse_b").unwrap().rotation = f32::INFINITY;
+    assert!(
+        bind_material(&derived, &material)
+            .unwrap_err()
+            .contains("rotation is non-finite")
+    );
+}
+
+#[test]
+fn native_setter_control_words_match_including_noncardinal_and_multiple_turns() {
+    use primase_testdata::{Game, OracleSet, oracle};
+    let Some(path) = oracle(OracleSet::GameCode, Game::ShaunWhite, "uv-rotation.tsv") else {
+        return;
+    };
+    let text = std::fs::read_to_string(path).unwrap();
+    let mut gate = primase_core::gate::GateReport::new(
+        "original native UV setter",
+        primase_core::gate::Tolerance::Abs(5e-7),
+    );
+    let mut count = 0;
+    for line in text.lines().filter(|line| !line.starts_with('#')) {
+        let mut fields = line.split('\t');
+        let name = fields.next().unwrap();
+        let values = fields
+            .map(|v| f32::from_bits(u32::from_str_radix(v, 16).unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(values.len(), 11);
+        let (derived, mut material) = fixture(21);
+        let slot = material.slots.get_mut("diffuse_b").unwrap();
+        slot.scale = [values[0], values[1]];
+        slot.offset = [values[2], values[3]];
+        slot.rotation = values[4];
+        let bound = bind_material(&derived, &material).unwrap();
+        for (n, wanted) in values[5..].iter().enumerate() {
+            let actual = word(&bound, 48 + n as u32 / 3, n as u32 % 3).unwrap();
+            gate.record(format!("{name} word{n}"), f64::from((actual - wanted).abs()));
+        }
+        count += 1;
+    }
+    assert_eq!(count, 11);
+    eprintln!("{gate:?}");
+    gate.assert_passed();
 }

@@ -342,7 +342,7 @@ fn state(effect: &Effect, case: Case, influence: f32) -> State {
                 s.c[row + 8] = case.tint[1];
                 for offset in [9, 13, 15] {
                     if offset + 1 < usize::from(c.count) {
-                        s.c[row + offset] = [1., 0., 0., 0.];
+                        s.c[row + offset] = [1., -0., 0., 0.];
                         s.c[row + offset + 1] = [0., 1., 0., 0.];
                     }
                 }
@@ -365,6 +365,17 @@ fn state(effect: &Effect, case: Case, influence: f32) -> State {
     s
 }
 fn execute(p: &ProgramShader, effect: &Effect, s: &State, cut: Option<[f32; 4]>) -> [f32; 4] {
+    execute_sample(p, effect, s, cut, &mut |request: Sample| {
+        Ok(s.t[request.texture as usize])
+    })
+}
+fn execute_sample(
+    p: &ProgramShader,
+    effect: &Effect,
+    s: &State,
+    cut: Option<[f32; 4]>,
+    sample: &mut dyn primase_shader_exec::Sampler,
+) -> [f32; 4] {
     let source = primase_d3d9::read(effect.pixel.as_ref().unwrap()).unwrap();
     let mut v = vec![[0; 4]; 32];
     for i in &source.inputs {
@@ -380,12 +391,7 @@ fn execute(p: &ProgramShader, effect: &Effect, s: &State, cut: Option<[f32; 4]>)
         v[31] = rgb.map(f32::to_bits);
     }
     let c = s.c.map(|v| v.map(f32::to_bits));
-    p.execute(&v, &[(0, &c)], &mut |request: Sample| {
-        Ok(s.t[request.texture as usize])
-    })
-    .unwrap()
-    .outputs[0]
-        .map(f32::from_bits)
+    p.execute(&v, &[(0, &c)], sample).unwrap().outputs[0].map(f32::from_bits)
 }
 // Independent equation from shipped e k generic source FctDiffuseColor: interpolate base modulation,
 // then layer2 and layer3 by vertex.g/b * mask.g/b * optional texture-alpha modulation.
@@ -414,11 +420,13 @@ fn expected(case: Case, effect: &Effect) -> [f32; 3] {
     }
     rgb
 }
-fn metro_record(db: &Database) -> Option<usize> {
-    use primase_shaunwhite::{
-        components::{MaterialRef, MaterialState},
-        passes::material_key,
-    };
+fn stored_material(
+    name: &str,
+) -> Option<(
+    primase_shaunwhite::components::MaterialRef,
+    primase_shaunwhite::components::MaterialShader,
+)> {
+    use primase_shaunwhite::components::{MaterialRef, MaterialState, SlotRef};
     let path = install_file(Game::ShaunWhite, "DataPC_01.forge")?;
     let forge = primase_anvil::read::forge::Forge::open(&path).unwrap();
     let index = forge
@@ -433,7 +441,7 @@ fn metro_record(db: &Database) -> Option<usize> {
         primase_anvil::read::objects::read_objects(&entry.metadata.data, &entry.resource.data).unwrap();
     let object = objects
         .iter()
-        .find(|o| o.class == 0xb71f6261 && o.name == "01_Wall_Metro01Grafitti_Mat")
+        .find(|o| o.class == 0xb71f6261 && o.name == name)
         .unwrap();
     let body = &entry.resource.data[object.body.clone()];
     let m = primase_shaunwhite::read::material::Material::parse(body).unwrap();
@@ -454,10 +462,33 @@ fn metro_record(db: &Database) -> Option<usize> {
             normal_scale: m.normal_scale,
             layering: m.layering,
         }),
-        slots: BTreeMap::new(),
+        slots: m
+            .slots
+            .iter()
+            .map(|s| {
+                (
+                    s.name.into(),
+                    SlotRef {
+                        texture: World::new().spawn(),
+                        scale: s.scale,
+                        offset: s.offset,
+                        rotation: s.rotation,
+                        texcoord: s.texcoord,
+                        address: s.address,
+                    },
+                )
+            })
+            .collect(),
         unread: vec![],
     };
-    let (mask, value) = material_key(&material, &fields).unwrap();
+    Some((material, fields))
+}
+fn compatible_record(
+    db: &Database,
+    material: &primase_shaunwhite::components::MaterialRef,
+    fields: &primase_shaunwhite::components::MaterialShader,
+) -> usize {
+    let (mask, value) = primase_shaunwhite::passes::material_key(material, fields).unwrap();
     let selected = db
         .records
         .iter()
@@ -486,10 +517,14 @@ fn metro_record(db: &Database) -> Option<usize> {
         })
         .expect("metro mural has a compatible fog/static-lighting Colour variant");
     eprintln!(
-        "METRO exact material {}, record {}, key {:#x}, material mask {mask:#x} value {value:#x}",
+        "STORED exact material {}, record {}, key {:#x}, material mask {mask:#x} value {value:#x}",
         material.name, selected.0, selected.1.key.permutation
     );
-    Some(selected.0)
+    selected.0
+}
+fn metro_record(db: &Database) -> Option<usize> {
+    let (material, fields) = stored_material("01_Wall_Metro01Grafitti_Mat")?;
+    Some(compatible_record(db, &material, &fields))
 }
 #[test]
 fn original_programs_prove_the_material_frontier_against_microsoft_ref() {
@@ -621,5 +656,254 @@ fn original_programs_prove_the_material_frontier_against_microsoft_ref() {
         }
     }
     eprintln!("{gate:?}");
+    gate.assert_passed();
+}
+
+// Original setter outputs, generated by executing its original image instructions, not a second UV implementation.
+fn native_uv_rows() -> Option<BTreeMap<String, [f32; 11]>> {
+    let path = primase_testdata::oracle(
+        primase_testdata::OracleSet::GameCode,
+        Game::ShaunWhite,
+        "uv-rotation.tsv",
+    )?;
+    let text = std::fs::read_to_string(path).unwrap();
+    assert!(text.contains("c7eb65c89ab016694a2f60a5f586c451a5a02bf05f226bffc943d256128d35c4"));
+    Some(
+        text.lines()
+            .filter(|line| !line.starts_with('#'))
+            .map(|line| {
+                let mut cells = line.split('\t');
+                let name = cells.next().unwrap().to_owned();
+                let words = cells
+                    .map(|w| f32::from_bits(u32::from_str_radix(w, 16).unwrap()))
+                    .collect::<Vec<_>>();
+                (name, words.try_into().unwrap())
+            })
+            .collect(),
+    )
+}
+#[test]
+fn stored_rotated_mask_matches_native_setter_and_full_ps_on_ref() {
+    use primase_core::shader::ConstantRole;
+    let Some(path) = install_file(Game::ShaunWhite, "ekshadersPChigh.bin") else {
+        return;
+    };
+    let Some(host) = tool(Tool::RefSm3) else { return };
+    let Some(oracle) = native_uv_rows() else { return };
+    let controls = Command::new(&host).arg("--self-test").output().unwrap();
+    assert!(
+        controls.status.success(),
+        "{}",
+        String::from_utf8_lossy(&controls.stderr)
+    );
+    assert!(String::from_utf8_lossy(&controls.stdout).contains("REF_PATTERN_CONTROLS_PASS"));
+    let db = primase_shaunwhite::read::shaders::read(&std::fs::read(path).unwrap()).unwrap();
+    let Some((material, fields)) = stored_material("Gen_Metal_Surface_BlueRusty01_Mat") else {
+        return;
+    };
+    assert_eq!(material.id, 0x6e48322c);
+    let record = compatible_record(&db, &material, &fields);
+    let Payload::Effect(effect) = &db.records[record].payload else {
+        panic!("effect")
+    };
+    let derived = derive(
+        &db,
+        record as u32,
+        &binding(&db, record as u32),
+        Influence::Restored,
+    )
+    .unwrap();
+    let helper = primase_shaunwhite::shaders::bind_material(&derived, &material).unwrap();
+    let full = ProgramShader::new(primase_d3d9::lift(effect.pixel.as_ref().unwrap()).unwrap()).unwrap();
+    let parsed = primase_d3d9::read(effect.pixel.as_ref().unwrap()).unwrap();
+    let bank = parsed
+        .constants
+        .unwrap()
+        .constants
+        .into_iter()
+        .find(|c| c.name == "g_VectorArray")
+        .unwrap()
+        .register as usize;
+    let source = material.state.unwrap();
+    let case = Case {
+        vertex: [0.3, 0.8, 0.5],
+        tint: [source.color, source.layering.colors[0], source.layering.colors[1]],
+        alpha: [
+            f32::from(source.layering.use_alpha[0] && (source.blended || source.alpha_test)),
+            f32::from(source.layering.use_alpha[1]),
+            f32::from(source.layering.use_alpha[2]),
+            0.,
+        ],
+        ..cases()[0]
+    };
+    let mut base = state(effect, case, 1.);
+    // Neutral frame as in the established full-PS proof. UV words below come ONLY from native execution.
+    for (row, name) in [
+        (2, "diffuse"),
+        (4, "normal"),
+        (6, "specular"),
+        (9, "diffuse_b"),
+        (11, "specular_b"),
+        (13, "diffuse_c"),
+        (15, "mask"),
+    ] {
+        let Some(slot) = material.slots.get(name) else {
+            continue;
+        };
+        let native = &oracle[name];
+        assert_eq!(
+            [
+                slot.scale[0],
+                slot.scale[1],
+                slot.offset[0],
+                slot.offset[1],
+                slot.rotation
+            ],
+            native[..5],
+            "oracle inputs must match stored {name}"
+        );
+        base.c[bank + row][..3].copy_from_slice(&native[5..8]);
+        base.c[bank + row + 1][..3].copy_from_slice(&native[8..11]);
+    }
+    base.c[bank + 17] = [source.normal_scale, 1., 1., 1.];
+    base.c[bank + 19][0] = source.illumination;
+    base.c[bank + 20] = [
+        0.,
+        material
+            .slots
+            .get("diffuse_b")
+            .map_or(0., |s| f32::from(s.texcoord)),
+        0.,
+        f32::from(material.slots["mask"].texcoord),
+    ];
+    // 16x16 point/clamp images; only the mask varies spatially. Every sampler retains its original register.
+    let width = 16usize;
+    let mut images = Vec::new();
+    let mask_slot = (effect
+        .samplers
+        .iter()
+        .find(|s| s.texture == "g_MaskTexture")
+        .unwrap()
+        .address
+        & 65535) as usize;
+    for (slot, constant) in base.t.iter().enumerate() {
+        for y in 0..width {
+            for x in 0..width {
+                images.push(if slot == mask_slot {
+                    [1., ((x + 3 * y) % 16) as f32 / 15., 0., 1.]
+                } else {
+                    *constant
+                });
+            }
+        }
+    }
+    let mut states = Vec::new();
+    for y in 0..5 {
+        for x in 0..7 {
+            let mut s = base.clone();
+            let uv = [x as f32 * 0.61 - 0.37, y as f32 * 0.73 - 0.21];
+            for v in &mut s.v[2..10] {
+                *v = [uv[0], uv[1], uv[0] + 0.13, uv[1] + 0.19];
+            }
+            states.push(s);
+        }
+    }
+    let scratch = own_scratch("shaunwhite-ref-uv-rotation");
+    let shader = scratch.join("original.bin");
+    let input = scratch.join("states.bin");
+    let output = scratch.join("rgba.bin");
+    let textures = scratch.join("images.bin");
+    std::fs::write(&shader, effect.pixel.as_ref().unwrap()).unwrap();
+    std::fs::write(&input, states.iter().flat_map(State::bytes).collect::<Vec<_>>()).unwrap();
+    let mut image_bytes = [0x32474d49u32, 16, 16, 16]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect::<Vec<_>>();
+    image_bytes.extend(images.iter().flatten().flat_map(|v| v.to_le_bytes()));
+    std::fs::write(&textures, image_bytes).unwrap();
+    let result = Command::new(&host)
+        .arg(shader)
+        .arg(input)
+        .arg(&output)
+        .arg(textures)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{} {}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let bytes = std::fs::read(output).unwrap();
+    assert_eq!(bytes.len(), states.len() * 16);
+    let native = bytes
+        .as_chunks::<16>()
+        .0
+        .iter()
+        .map(|b| std::array::from_fn::<_, 4, _>(|n| f32::from_le_bytes(b.as_chunks::<4>().0[n])))
+        .collect::<Vec<_>>();
+    let mut gate = GateReport::new(
+        "stored rotated UV / full PS on Microsoft D3D9 REF",
+        Tolerance::Abs(1e-5),
+    );
+    let mut identity_differs = 0;
+    let mut degrees_as_radians_differs = 0;
+    for (index, s) in states.iter().enumerate() {
+        let mut filled = s.clone();
+        for c in &helper.constants {
+            if let ConstantRole::Material(words) = &c.role {
+                for (i, &word) in words.iter().enumerate() {
+                    let at = c.offset as usize / 4 + i;
+                    filled.c[at / 4][at % 4] = f32::from_bits(word);
+                }
+            }
+        }
+        let mut sample = |request: Sample| {
+            let x = (request.uv[0] * width as f32)
+                .floor()
+                .clamp(0., (width - 1) as f32) as usize;
+            let y = (request.uv[1] * width as f32)
+                .floor()
+                .clamp(0., (width - 1) as f32) as usize;
+            Ok(images[(request.texture as usize * width + y) * width + x])
+        };
+        let actual = execute_sample(&full, effect, &filled, None, &mut sample);
+        for lane in 0..3 {
+            assert!(native[index][lane].is_finite());
+            gate.record(
+                format!("UV case{index} lane{lane}"),
+                f64::from((actual[lane] - native[index][lane]).abs()),
+            );
+        }
+        let mut identity = filled.clone();
+        let slot = material.slots["mask"];
+        identity.c[bank + 15] = [slot.scale[0], 0., slot.offset[0], 0.];
+        identity.c[bank + 16] = [0., slot.scale[1], slot.offset[1], 0.];
+        let wrong = execute_sample(&full, effect, &identity, None, &mut sample);
+        if (0..3).any(|n| (wrong[n] - native[index][n]).abs() > 0.01) {
+            identity_differs += 1;
+        }
+        let (sin, cos) = slot.rotation.sin_cos();
+        identity.c[bank + 15] = [slot.scale[0] * cos, -slot.scale[0] * sin, slot.offset[0], 0.];
+        identity.c[bank + 16] = [slot.scale[1] * sin, slot.scale[1] * cos, slot.offset[1], 0.];
+        let wrong = execute_sample(&full, effect, &identity, None, &mut sample);
+        if (0..3).any(|n| (wrong[n] - native[index][n]).abs() > 0.01) {
+            degrees_as_radians_differs += 1;
+        }
+    }
+    assert!(identity_differs > 0, "pattern must detect omitted rotation");
+    assert!(
+        degrees_as_radians_differs > 0,
+        "pattern must discriminate degrees from radians"
+    );
+    eprintln!(
+        "UV ROTATION material={} record={record} key={:#x} source={} mask-degrees={} identity differs={identity_differs}/{} radians differs={degrees_as_radians_differs}/{} {gate:?}",
+        material.name,
+        derived.derivation.key.permutation,
+        derived.derivation.source_hash,
+        material.slots["mask"].rotation,
+        states.len(),
+        states.len()
+    );
     gate.assert_passed();
 }

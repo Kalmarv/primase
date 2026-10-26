@@ -457,6 +457,13 @@ pub const DECLARED: &[Declared] = &[
         source: "the user's own install; hand-worked fixture and native version-39 loader establish framing",
     },
     Declared {
+        query: Query::Oracle(OracleSet::GameCode, Game::ShaunWhite, "uv-rotation.tsv"),
+        status: Status::Live,
+        gate: true,
+        about: "Original native UV setter inputs and six written matrix words (float32 hex): controls and the stored BlueRusty material's slots; worlds/shaunwhite/tests/albedo.rs and material_bindings.rs",
+        source: "independent: original executable SHA256 c7eb65c89ab016694a2f60a5f586c451a5a02bf05f226bffc943d256128d35c4, original function at 0x00cd7590 SHA256 335612ce548156ea10272422486f40db1958cad4d32315272968185eef0d320d, executed in a private x86 host without game initialization; original HIGHLOW relocations applied, untouched row padding checked by canaries; full PS independently executed by Microsoft D3D9 REF",
+    },
+    Declared {
         query: Query::Oracle(OracleSet::D3dDisassembler, Game::General, "sm3"),
         status: Status::Live,
         gate: true,

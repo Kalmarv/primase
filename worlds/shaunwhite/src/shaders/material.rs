@@ -53,12 +53,16 @@ fn overlay(bindings: &mut Vec<ConstantBinding>, value: ConstantBinding) -> Resul
 
 /// Fill only established material controls of an explicitly derived albedo program. The original derivation,
 /// source shader and forward binding are untouched. The result retains every unresolved frame/varying/texture
-/// binding; missing slots and rotated UV matrices remain Unknown with the slot's name.
+/// binding; missing slots remain Unknown with the slot's name.
 ///
 /// Packing comes from the shipped generic shader header: g_VectorArray row8 is the second tint, rows2..16
 /// the seven two-row UV matrices, row17 normal height, row19.x self illumination, row20 the UV-set switches.
-/// The native zero-rotation UV setter multiplies (u,v,1,0) by rows (scaleU,0,offsetU,unused) and
-/// (0,scaleV,offsetV,unused); rotation units are unestablished. The native alpha setter gates layer1's switch
+/// The native UV setter converts authored degrees to radians in double precision, rounds the angle to
+/// float, then writes (scaleU*cos,-scaleU*sin,offsetU,unused) and
+/// (scaleV*sin,scaleV*cos,offsetV,unused). Applied to (u,v,1,0), this rotates about the UV origin,
+/// then scales and offsets; it does not rotate about the texture centre. The unused fourth words stay Unknown.
+/// This packing is cross-checked against execution of the original native setter and a full PS on REF.
+/// The native alpha setter gates layer1's switch
 /// on blended/alpha-tested material state; the shader uses y/z directly for the later layer weights.
 /// Optimized CTAB allocations may end partway through this table; no word outside their span is added.
 /// Non-finite supplied values, invalid coordinate sets and overlapping/misaligned bindings are errors.
@@ -207,10 +211,6 @@ pub fn bind_material(derived: &DerivedAlbedo, material: &MaterialRef) -> Result<
                             Some(s) if !s.rotation.is_finite() => {
                                 return Err(format!("{slot} UV rotation is non-finite"));
                             }
-                            Some(s) if s.rotation != 0. => Some(format!(
-                                "{slot} UV rotation {} has unestablished units",
-                                s.rotation
-                            )),
                             _ => None,
                         };
                         if let Some(why) = missing {
@@ -218,17 +218,29 @@ pub fn bind_material(derived: &DerivedAlbedo, material: &MaterialRef) -> Result<
                                 unresolved.insert((resource.id, c.offset + relative), why.clone());
                             }
                         } else if let Some(s) = material.slots.get(slot) {
+                            let radians = (f64::from(s.rotation) * (std::f64::consts::PI / 180.)) as f32;
+                            let (sin, cos) = radians.sin_cos();
                             rows.insert(
                                 row,
                                 (
-                                    [Some(s.scale[0]), Some(0.), Some(s.offset[0]), None],
+                                    [
+                                        Some(s.scale[0] * cos),
+                                        Some(-s.scale[0] * sin),
+                                        Some(s.offset[0]),
+                                        None,
+                                    ],
                                     format!("{slot} UV row0"),
                                 ),
                             );
                             rows.insert(
                                 row + 1,
                                 (
-                                    [Some(0.), Some(s.scale[1]), Some(s.offset[1]), None],
+                                    [
+                                        Some(s.scale[1] * sin),
+                                        Some(s.scale[1] * cos),
+                                        Some(s.offset[1]),
+                                        None,
+                                    ],
                                     format!("{slot} UV row1"),
                                 ),
                             );

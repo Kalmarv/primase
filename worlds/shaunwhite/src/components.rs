@@ -62,7 +62,7 @@ pub struct SlotRef {
     pub texture: Entity,
     pub scale: [f32; 2],
     pub offset: [f32; 2],
-    /// Source TexCoordRotation, retained without assuming its matrix convention.
+    /// Source TexCoordRotation in degrees, about the UV origin before scale and offset.
     pub rotation: f32,
     pub texcoord: u8,
     /// Material map address codes (0 wrap, 1 clamp, 2 border), when authored here rather than on the texture.

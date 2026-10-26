@@ -4,7 +4,7 @@
 //! [`Error::Length`]), and every field below is at the same offset in all of them. It begins `[managed u8][id][class]`
 //! and holds no length or count. Each texture slot is a TextureMapSpec's id (a bare u32; the spec's last u32 is the
 //! TextureMap's, read by [`crate::read::level`]); the slots of the layer kind carry five f32 after it, **scale u, scale
-//! v, offset u, offset v, rotation** (the UV transform the slot samples with: the scale is 1 in most, 0.25 to 8 where a texture
+//! v, offset u, offset v, rotation in degrees** (the UV transform the slot samples with: the scale is 1 in most, 0.25 to 8 where a texture
 //! tiles, negative where it mirrors; the offset is 0 except in the second and third diffuse layers). The slots and the
 //! offsets of their ids:
 //!
@@ -160,6 +160,7 @@ pub struct Slot {
     pub scale: [f32; 2],
     /// Offset u, offset v; (0, 0) for a slot without layer floats.
     pub offset: [f32; 2],
+    /// Rotation about the UV origin in degrees, before scale and offset (native UV setter).
     pub rotation: f32,
     pub texcoord: u8,
     pub address: Option<[u32; 2]>,

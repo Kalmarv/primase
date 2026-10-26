@@ -370,10 +370,15 @@ included. This establishes a derived albedo slice, not a reproduction of the lit
 `shaders::bind_material` fills the derived program's established material constants from its
 source `MaterialRef`: layer tints/alpha flags, packed UV matrices and coordinate-set flags,
 normal height and self illumination. It splits packed unknown spans around known words,
-retaining frame constants and unused padding as unresolved. Only zero-rotation UV matrices
-have an established native convention here; rotated/missing slot matrices remain named
-Unknown bindings. The helper returns a binding without changing the source or derivation.
-Hand-worked packing fixtures cover partial allocations, UV scale/offset, missing/rotated
-slots and invalid values; the native REF gate compares its read material words to the
-independently supplied proof controls. The six-level resolver test prints the number of
-read source materials with any nonzero stored slot rotation, before material lowerings.
+retaining frame constants and unused padding as unresolved. The native UV setter converts
+stored degrees to float radians using a double-precision degree coefficient, rotates about
+the UV origin, then applies scale and offset. Missing slot matrices remain named Unknown
+bindings; finite authored rotations are filled, including negative angles and multiple turns.
+The helper returns a binding without changing the source or derivation.
+Hand-worked packing fixtures cover partial allocations, nonuniform UV scale/offset,
+origin rotation, missing slots and invalid values. Original native setter outputs independently
+check the matrix words; a stored BlueRusty mask with 26.27-degree rotation is checked by
+the complete original pixel shader on Microsoft D3D9 REF with patterned textures, including
+controls that distinguish zero rotation and treating degrees as radians. The albedo REF
+gate also compares read material words with its independently supplied proof controls.
+The six-level resolver test prints the number of read source materials with any nonzero stored slot rotation, before material lowerings.
