@@ -67,14 +67,23 @@ fn overlay(bindings: &mut Vec<ConstantBinding>, value: ConstantBinding) -> Resul
 /// Optimized CTAB allocations may end partway through this table; no word outside their span is added.
 /// Non-finite supplied values, invalid coordinate sets and overlapping/misaligned bindings are errors.
 pub fn bind_material(derived: &DerivedAlbedo, material: &MaterialRef) -> Result<StageBinding, String> {
+    bind_stage(&derived.program.interface, &derived.binding, material)
+}
+
+/// Fill the same established controls before any consumer chooses a derivation or record.
+pub(crate) fn bind_stage(
+    interface: &primase_core::shader::Interface,
+    stage: &StageBinding,
+    material: &MaterialRef,
+) -> Result<StageBinding, String> {
     let state = material.state.ok_or("albedo material fields not read")?;
     if state.water {
         return Err("water material is not generic albedo".into());
     }
-    let mut binding = derived.binding.clone();
+    let mut binding = stage.clone();
     let mut unresolved = BTreeMap::<(ResourceId, u32), String>::new();
     let mut supplied = BTreeMap::<(ResourceId, u32), (u32, String)>::new();
-    for resource in &derived.program.interface.resources {
+    for resource in &interface.resources {
         let ResourceKind::ConstantBuffer { layout } = &resource.kind else {
             continue;
         };

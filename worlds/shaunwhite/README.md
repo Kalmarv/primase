@@ -414,3 +414,13 @@ the complete original pixel shader on Microsoft D3D9 REF with patterned textures
 controls that distinguish zero rotation and treating degrees as radians. The albedo REF
 gate also compares read material words with its independently supplied proof controls.
 The six-level resolver test prints the number of read source materials with any nonzero stored slot rotation, before material lowerings.
+
+
+`resolve-shaunwhite-shaders` also attaches `shaunwhite.shader_inputs` to every source
+material: its authored derivation/UV controls and the exact compatible Colour record bindings
+with the known material words filled. Frame/varying inputs and unwritten words stay Unknown;
+records whose allocation cannot be filled retain their original binding with a named reason.
+This selects neither a record nor a world influence mode. The original `core.shader_binding`
+and shader bytecode stay unchanged. `lower-shaunwhite-material` consumes `shaunwhite.material`
+and leaves these game-owned shader inputs intact, so a consumer can derive/bind a display
+program after lowering without keeping its own copy of the game's material meaning.

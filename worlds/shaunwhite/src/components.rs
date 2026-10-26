@@ -140,6 +140,32 @@ impl Component for MaterialRef {
     }
 }
 
+/// Generic shader material inputs retained by `resolve-shaunwhite-shaders` across material lowering.
+///
+/// `material` keeps the authored controls (including base-UV composition inputs) needed by a later
+/// graph derivation. `bindings` keeps every exact compatible Colour record with the established material
+/// words filled; pass/frame/varying inputs stay unresolved. No record or influence state is selected.
+/// `unresolved` names records whose material allocation could not be filled; their original binding is
+/// retained. The original `core.shader_binding` is unchanged. `lower-shaunwhite-material` consumes only
+/// `shaunwhite.material`, leaving this component and the shader provenance intact.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShaderInputs {
+    pub material: MaterialRef,
+    pub bindings: primase_core::shader::ShaderBinding,
+    pub unresolved: BTreeMap<u32, String>,
+}
+impl Component for ShaderInputs {
+    const NAME: &'static str = "shaunwhite.shader_inputs";
+    const GEOMETRY: Geometry = Geometry::None;
+    fn references(&self, out: &mut Vec<Entity>) {
+        self.material.references(out);
+        self.bindings.references(out);
+    }
+    fn verify(&self, entity: Entity, world: &primase_core::World) -> Result<(), String> {
+        self.bindings.verify(entity, world)
+    }
+}
+
 /// How the source samples a texture: its U, V, W address modes (wrap 0, mirror 1, clamp 2, border 3, mirror-once 4) and
 /// its magnification, minification and mip filters (point 0, linear 1, none 2, anisotropic 3, comparison-linear 4),
 /// on the `core.texture` entity.

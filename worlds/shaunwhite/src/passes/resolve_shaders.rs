@@ -2,7 +2,9 @@
 //! material bits; draw/frame bits remain explicit record variants. Nothing selects a nearby permutation.
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::components::{MaterialRef, MaterialShader, MeshFormat, RealTree, ShaderLibrary, ShaderPasses};
+use crate::components::{
+    MaterialRef, MaterialShader, MeshFormat, RealTree, ShaderInputs, ShaderLibrary, ShaderPasses,
+};
 use crate::shaders::{Effect, Payload};
 use primase_core::pass::{Options, Pass, PassLog, PassSpec};
 use primase_core::shader::*;
@@ -291,6 +293,7 @@ impl Pass for ResolveShaunwhiteShaders {
             ProgramFacts::NAME,
             MaterialPrograms::NAME,
             ShaderPasses::NAME,
+            ShaderInputs::NAME,
             Name::NAME,
         ]
     }
@@ -327,6 +330,17 @@ impl Pass for ResolveShaunwhiteShaders {
         let mut cache = BTreeMap::<(u64, Vec<u8>), Result<(Entity, ProgramFacts), String>>::new();
         let mut unknown = BTreeMap::<String, u64>::new();
         for (entity, m) in materials {
+            w.insert(
+                entity,
+                ShaderInputs {
+                    material: m.clone(),
+                    bindings: ShaderBinding {
+                        stages: Vec::new(),
+                        state: RenderState::default(),
+                    },
+                    unresolved: BTreeMap::new(),
+                },
+            );
             let key = w
                 .get::<MaterialShader>(entity)
                 .ok_or("material shader fields not read")
@@ -360,6 +374,8 @@ impl Pass for ResolveShaunwhiteShaders {
                 continue;
             };
             let mut stages = Vec::new();
+            let mut filled = Vec::new();
+            let mut unfilled = BTreeMap::new();
             let mut facts = Vec::new();
             let mut records = Vec::new();
             for (index, r) in db.records.iter().enumerate() {
@@ -424,6 +440,14 @@ impl Pass for ResolveShaunwhiteShaders {
                             .ok_or("resolved shader disappeared")?
                             .interface;
                         let b = binding(&m, effect, index as u32, k, shader, interface, &mut unknown);
+                        match crate::shaders::bind_stage(interface, &b, &m) {
+                            Ok(known) => filled.push(known),
+                            Err(why) => {
+                                log.count(&format!("material binding unresolved: {why}"), 1);
+                                unfilled.insert(index as u32, why);
+                                filled.push(b.clone());
+                            }
+                        }
                         fact.name = name;
                         facts.push(fact.bound(shader, &b.outputs));
                         stages.push(b);
@@ -471,6 +495,17 @@ impl Pass for ResolveShaunwhiteShaders {
                     },
                 );
                 w.insert(entity, ShaderPasses(records));
+                w.insert(
+                    entity,
+                    ShaderInputs {
+                        material: m.clone(),
+                        bindings: ShaderBinding {
+                            stages: filled,
+                            state: RenderState::default(),
+                        },
+                        unresolved: unfilled,
+                    },
+                );
             }
             w.insert(entity, MaterialPrograms(facts));
         }

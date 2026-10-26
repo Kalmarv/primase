@@ -3,7 +3,9 @@
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::shader::{ConstantRole, MaterialPrograms, OutputRole, Shader, ShaderBinding, Stage};
 use primase_core::{Mesh, Primitive, Semantic, Stream, Topology, World};
-use primase_shaunwhite::components::{MaterialRef, MaterialState, MeshFormat, ShaderLibrary, ShaderPasses};
+use primase_shaunwhite::components::{
+    MaterialRef, MaterialState, MeshFormat, ShaderInputs, ShaderLibrary, ShaderPasses,
+};
 use primase_shaunwhite::passes::{RECORD_FIELD, material_key};
 use primase_shaunwhite::shaders::{Database, Effect, Key, Payload, Record};
 use primase_testdata::{Game, install_file};
@@ -187,6 +189,30 @@ fn exact_record_variants_keep_unknown_constants_and_forward_output() {
     }
     assert_eq!(w.get::<MaterialPrograms>(host).unwrap().0.len(), 2);
     assert_eq!(r.steps[0].log.counts["stored colour record variants"], 2);
+    let inputs = w.get::<ShaderInputs>(host).unwrap().clone();
+    assert_eq!(inputs.material, material(&b));
+    assert!(inputs.unresolved.is_empty());
+    assert_eq!(inputs.bindings.stages.len(), 2);
+    assert_eq!(inputs.bindings.stages[1].variant, binding.stages[1].variant);
+    assert!(matches!(
+        inputs.bindings.stages[0].constants[0].role,
+        ConstantRole::Unknown { .. }
+    ));
+    assert_eq!(
+        inputs.bindings.stages[1].constants[0].role,
+        ConstantRole::Material(vec![0; 4])
+    );
+    let original = binding.clone();
+    let mut registry = PassRegistry::new();
+    primase_shaunwhite::register(&mut registry);
+    let pipeline = registry.parse("lower-shaunwhite-material").unwrap();
+    PassManager::new(registry)
+        .with_pass_checks(true)
+        .run(&mut w, &pipeline, &mut RunReport::default())
+        .unwrap();
+    assert!(!w.has::<MaterialRef>(host));
+    assert_eq!(w.get::<ShaderInputs>(host), Some(&inputs));
+    assert_eq!(w.get::<ShaderBinding>(host), Some(&original));
 }
 
 #[test]

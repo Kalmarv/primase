@@ -91,3 +91,5 @@ pub mod albedo;
 
 mod material;
 pub use material::bind_material;
+
+pub(crate) use material::bind_stage;
