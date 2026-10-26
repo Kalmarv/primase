@@ -256,7 +256,7 @@ and radii and reverses winding.
 world-matrix table and the blob section chain. A section is `{flags, size, count, data offset}`; the data offset is
 0x10 except 0x20-0x40 for type 0xE, and the chain ends in a 16-byte `{junk, 8, 0, 0}` record: all 411 level SCPs with a
 blob walk to it (136 have no blob). Type 2 sections are spot chunks (0x200 bytes + a 64-byte world matrix each); every
-other section is listed with its flags and reported unread until a reader decodes it (types 6, b, d, e, f and 10 are not). Nodes stay
+other section is listed with its flags and reported unread until a reader decodes it (types 6, d, e, f and 10 are not). Nodes stay
 in `Scene::tables` and are counted in `LevelReport`; `read_level` puts each spot chunk in the World as an entity with
 its world transform and `shred.spot` (class hash and, for the 14 proven class names in `scp_tables::CLASS_NAMES`, the
 name; shape; name hash; ids; node index). `Teleport` chunks also carry a core `Marker` (kind `teleport`): the class
@@ -313,6 +313,13 @@ of two frames; "camera and the point it looks at" is read from the names, the fu
 They are `shred.spot_camera` entities whose transform is the first frame, with the second as `target`. Type 5 holds
 one record (the `echo` level's): class `RMLocator`, kind `Waypoint` (both by hash), a name hash and a matrix. It is a
 `shred.locator` entity with a core `Marker` of kind `waypoint`.
+
+Type b sections are occluders (`read::scp_occluders`; 341 records in 9 SCPs): 16-byte records (name hash, sdbm of
+`RMOccluder` or `RMOccluder<N>` for 276 of them, other names for 65; matrix and outline offsets; flags) followed, record by record, by a 64-byte matrix and an outline of
+line segments, tiling the section exactly. The flags' low half gives the outline: `0x0800` four segments (269
+records), `0x1801` twelve (72); the high half varies and is kept, unknown. They are `shred.occluder` entities with the
+record's transform and the outline as stored. The engine has no section handler for the type; the only consumer
+found is the Lua binding `set_occluder_enabled`.
 
 ## Material banks and texture dependencies
 

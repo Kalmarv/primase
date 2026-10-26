@@ -8,8 +8,8 @@ use super::{
 use crate::{
     Result,
     components::{
-        Locator, MaterialId, MaterialNamespace, MeshId, RefusedMesh, SceneLight, SourceSkeleton, SourceSkin,
-        Spline, Spot, SpotCamera, VertexInput, VertexInputs,
+        Locator, MaterialId, MaterialNamespace, MeshId, Occluder, RefusedMesh, SceneLight, SourceSkeleton,
+        SourceSkin, Spline, Spot, SpotCamera, VertexInput, VertexInputs,
     },
     invalid,
 };
@@ -56,6 +56,8 @@ pub struct LevelReport {
     pub spot_cameras: usize,
     pub locators: usize,
     pub waypoints: usize,
+    /// Occluder records (`shred.occluder`).
+    pub occluders: usize,
     /// SCPs whose blob section chain does not end in the end record.
     pub chain_stops: usize,
     pub unread: Vec<(String, Vec<u8>, Unread)>,
@@ -100,7 +102,7 @@ impl LevelReport {
             format!(
                 "{} splines ({} rail candidates: probable grind rails, not proven; {} guides, {} ai paths, \
                  {} nav paths, {} short paths); {} with fewer than two points have no curve; {} lights as data, \
-                 not core lights; {} spot cameras and {} locators ({} waypoint markers) as data",
+                 not core lights; {} spot cameras, {} locators ({} waypoint markers) and {} occluders as data",
                 self.splines,
                 self.spline_classes[0],
                 self.spline_classes[1],
@@ -111,7 +113,8 @@ impl LevelReport {
                 self.lights,
                 self.spot_cameras,
                 self.locators,
-                self.waypoints
+                self.waypoints,
+                self.occluders
             ),
         ));
         for (class, n) in &self.unnamed_classes {
@@ -691,6 +694,39 @@ pub fn read_level(paks: &[(&str, &Pak)], frame: SourceFrame) -> Result<(World, L
                         class: loc.class,
                         name: loc.name,
                         kind: loc.kind,
+                    },
+                );
+            }
+            for occ in tables.occluders {
+                let transform = frame.transform(&occ.world);
+                if transform.cols.iter().flatten().any(|x| !x.is_finite()) {
+                    return Err(invalid(
+                        occ.section,
+                        "occluder matrix overflow in requested frame",
+                    ));
+                }
+                let e = world.spawn();
+                world.insert(e, transform);
+                world.insert(
+                    e,
+                    Source(format!(
+                        "{label}:{:?}:occluder:{:#x}:{}",
+                        String::from_utf8_lossy(&name),
+                        occ.section,
+                        occ.index
+                    )),
+                );
+                report.occluders += 1;
+                world.insert(
+                    e,
+                    Occluder {
+                        pak: label.into(),
+                        quartet: name.clone(),
+                        section: occ.section,
+                        index: occ.index,
+                        name: occ.name,
+                        flags: occ.flags,
+                        outline: occ.outline,
                     },
                 );
             }

@@ -153,3 +153,21 @@ pub struct Locator {
     pub kind: u32,
 }
 component!(Locator, "shred.locator");
+
+/// One SCP occluder record (section type b) as authored: the entity's transform is the record's matrix. Nothing
+/// draws or collides with it; the engine's Lua binding `set_occluder_enabled` is the only consumer found.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Occluder {
+    pub pak: String,
+    pub quartet: Vec<u8>,
+    pub section: usize,
+    pub index: u32,
+    /// sdbm of the occluder's name: `RMOccluder` or `RMOccluder<N>` for 276 of the 341 on the disc.
+    pub name: u32,
+    /// The record's flags as stored: the low half is the outline's shape (`0x0800`: four segments, `0x1801`:
+    /// twelve), the high half is unknown.
+    pub flags: u32,
+    /// The outline's segments as stored (not mapped by the requested frame).
+    pub outline: Vec<[[f32; 3]; 2]>,
+}
+component!(Occluder, "shred.occluder");

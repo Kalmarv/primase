@@ -9,12 +9,14 @@
 //! starts `data offset` bytes in (0x10, except 0x20 to 0x40 for type 0xE), the type is `flags >> 16` (the low half
 //! varies and is kept), and the chain ends in a 16-byte record `{junk, 8, 0, 0}`. Type 2 is the spot chunks.
 //! Types 0, 1, 9, 0xA and 0xC are splines (`scp_splines`; the low half of their flags is junk), type 3 is spot
-//! cameras (`scp_cameras`), type 4 lights (`scp_lights`) and type 5 locators (`scp_locators`).
+//! cameras (`scp_cameras`), type 4 lights (`scp_lights`), type 5 locators (`scp_locators`) and type 0xB
+//! occluders (`scp_occluders`).
 //! Every other type is listed with its flags, size and count and reported unread.
 use super::scene::Unread;
 use super::scp_cameras::{self, SpotCamera};
 use super::scp_lights::{self, SceneLight};
 use super::scp_locators::{self, Locator};
+use super::scp_occluders::{self, Occluder};
 use super::scp_splines::{self, Spline, SplineKind};
 use crate::{Result, invalid};
 use primase_bytes::{Endian, Field, View};
@@ -27,6 +29,7 @@ const SECTION_SPOTS: u32 = 2;
 const SECTION_CAMERAS: u32 = 3;
 const SECTION_LIGHTS: u32 = 4;
 const SECTION_LOCATORS: u32 = 5;
+const SECTION_OCCLUDERS: u32 = 0xb;
 const CHUNK: usize = 0x200;
 const CHUNK_MATRIX: usize = 64;
 
@@ -107,6 +110,7 @@ pub struct Tables {
     pub lights: Vec<SceneLight>,
     pub cameras: Vec<SpotCamera>,
     pub locators: Vec<Locator>,
+    pub occluders: Vec<Occluder>,
 }
 
 /// The spot classes whose names are proven: each hash is sdbm of the name, and the engine's `AddSpotChunk_*` list
@@ -333,6 +337,10 @@ pub fn decode(scp: &[u8]) -> Result<(Tables, Vec<Unread>)> {
             tables.cameras.extend(scp_cameras::decode(scp, s, &mut unread)?);
         } else if s.kind() == SECTION_LOCATORS {
             tables.locators.extend(scp_locators::decode(scp, s, &mut unread)?);
+        } else if s.kind() == SECTION_OCCLUDERS {
+            tables
+                .occluders
+                .extend(scp_occluders::decode(scp, s, &mut unread)?);
         } else if s.kind() == SECTION_LIGHTS {
             tables.lights.extend(scp_lights::decode(scp, s, &mut unread)?);
         } else {

@@ -4,7 +4,7 @@
 use primase_core::{Marker, frame::SourceFrame};
 use primase_shred::read::database::Database;
 use primase_shred::{
-    components::{Locator, SceneLight, Spline, Spot, SpotCamera},
+    components::{Locator, Occluder, SceneLight, Spline, Spot, SpotCamera},
     read::{
         level,
         manifest::{self, Difficulty, Manifest},
@@ -219,6 +219,12 @@ fn manifest_nodes_spot_chunks_and_spawns() {
     let mut light_kinds = std::collections::BTreeMap::<u32, usize>::new();
     let mut rail_surfaces = std::collections::BTreeMap::<u32, usize>::new();
     let (mut cameras, mut locators, mut waypoints) = (0usize, 0usize, 0usize);
+    let mut occluder_shapes = std::collections::BTreeMap::<u32, usize>::new();
+    let occluder_names: std::collections::BTreeSet<u32> = (0..1000)
+        .map(|n| primase_hash::sdbm(format!("RMOccluder{n}").as_bytes()))
+        .chain([primase_hash::sdbm(b"RMOccluder")])
+        .collect();
+    let mut occluders_named = 0usize;
     let (mut named_guides, mut named_rails) = (0usize, 0usize);
     let surface_ids: std::collections::BTreeSet<i64> = db
         .table("surfaces")
@@ -290,6 +296,12 @@ fn manifest_nodes_spot_chunks_and_spawns() {
                     .count()
             )
         );
+        for (_, o) in world.iter::<Occluder>() {
+            *occluder_shapes.entry(o.flags & 0xffff).or_default() += 1;
+            assert_eq!(o.outline.len(), if o.flags & 0xffff == 0x0800 { 4 } else { 12 });
+            occluders_named += usize::from(occluder_names.contains(&o.name));
+        }
+        assert_eq!(r.occluders, world.iter::<Occluder>().count());
         assert_eq!(r.lights, world.iter::<SceneLight>().count());
         assert_eq!(r.light_kinds.values().sum::<usize>(), r.lights);
         assert_eq!(r.splines, r.spline_classes.iter().sum::<usize>());
@@ -362,8 +374,15 @@ fn manifest_nodes_spot_chunks_and_spawns() {
     assert_eq!(total, [166_089, 167_503, 53_015, 538, 194, 183]);
     // 605 before splines (186) and lights (55) were read, 364 before the splines of types 0xA and 0xC and the
     // ones whose flags had other low halves (45 more sections)
-    // and 11 more once the spot cameras (10 sections) and the locator (1) were read
-    assert_eq!(undecoded_sections, 308);
+    // and 11 more once the spot cameras (10 sections) and the locator (1) were read, 9 more with the occluders
+    assert_eq!(undecoded_sections, 299);
+    // 341 occluders: 269 rectangle outlines (flags 0x0800) and 72 box outlines (0x1801)
+    // 276 of them are named RMOccluder or RMOccluder0 to 999; the other 65 hash names not known
+    assert_eq!(occluders_named, 276);
+    assert_eq!(
+        occluder_shapes.into_iter().collect::<Vec<_>>(),
+        [(0x0800, 269), (0x1801, 72)]
+    );
     assert_eq!((cameras, locators, waypoints), (281, 1, 1));
     // 33,575 splines in the five classes the game keeps them in, by section type (SCENE.md's 31,105 total does
     // not reconcile with any recount)
