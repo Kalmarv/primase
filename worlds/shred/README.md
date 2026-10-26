@@ -123,3 +123,28 @@ type, response type, friction, restitution, collision filter word) and the shape
 triangles equal for all 482 files (pinned for the ten level bases and CHARLIE's training layer), the surface
 histogram (36 ids) and the flag-word census equal, every world verifies, and a mirroring, scaling frame moves points
 and radii and reverses winding.
+## Scene
+
+`read::scp_tables::decode(scp)` (called by `scene::decode`, result in `Scene::tables`) reads the SCP's node table
+(0x70-byte records: id, optional bounding-sphere words, child and placement links resolved to indices), its
+world-matrix table and the blob section chain. A section is `{flags, size, count, data offset}`; the data offset is
+0x10 except 0x20-0x40 for type 0xE, and the chain ends in a 16-byte `{junk, 8, 0, 0}` record: all 411 level SCPs with a
+blob walk to it (136 have no blob). Type 2 sections are spot chunks (0x200 bytes + a 64-byte world matrix each); every
+other section is listed with its flags and reported unread until its owner decodes it (splines, lights...). Nodes stay
+in `Scene::tables` and are counted in `LevelReport`; `read_level` puts each spot chunk in the World as an entity with
+its world transform and `shred.spot` (class hash and, for the 14 proven class names in `scp_tables::CLASS_NAMES`, the
+name; shape; name hash; ids; node index). `Teleport` chunks also carry a core `Marker` (kind `teleport`): the class
+name is proven, the facing is not (matrices are right-handed with a z flip for most; which axis is forward is
+unverified), and the report says so. Twelve class hashes name no proven class and are kept by hash, counted in
+`LevelReport::unnamed_classes`.
+
+`read::manifest::Manifest::new(db, &[(file, &pak)])` lists the `LEVELS` and `LEVELS/LAYERS` archives: bases, layer
+archives (`0xDSZZ` name: difficulty nibble, `session_types.id`, map id; quartets they hold) and MAIN.DB's `levels` and
+`session_types` rows. `map_ids(level)`, `common(map)`, `session(map, difficulty, type)`, `layers_naming(level)` and
+`base(level)` filter; nothing is chosen. The row-to-map join is the level's Lua load script (inside `SCRIPTS.SDAT`),
+which is not read: the program picks the map id among `map_ids`. `drop_spots(db, level)` reads `<Level>_dropspots`;
+`resolve_drop_spots(world, rows)` returns, per row, the spot chunks whose name hash is sdbm of `SPOT_NAME` (as written
+or lower-cased): 183 of the 194 rows resolve, all to `Teleport` chunks.
+
+`scene_disc` recounts every level from the disc: 547 SCPs, 166,089 nodes, 167,503 placements, 53,015 spot chunks
+(538 Teleport), no chain stop, and the per-level spawn resolution.

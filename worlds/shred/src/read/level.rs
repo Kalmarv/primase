@@ -2,14 +2,15 @@
 use super::{
     pak::Pak,
     scene::{self, Scene, Unread},
+    scp_tables::{self, Chain},
 };
 use crate::{
     Result,
-    components::{MaterialId, MeshId, RefusedMesh},
+    components::{MaterialId, MeshId, RefusedMesh, Spot},
     invalid,
 };
 use primase_core::{
-    Entity, Instance, Mesh, Primitive, Semantic, Source, Stream, Topology, World, frame::SourceFrame,
+    Entity, Instance, Marker, Mesh, Primitive, Semantic, Source, Stream, Topology, World, frame::SourceFrame,
 };
 use std::collections::BTreeMap;
 
@@ -22,6 +23,15 @@ pub struct LevelReport {
     pub refused: usize,
     pub submeshes: usize,
     pub placements: usize,
+    /// Nodes read from the SCP node tables (kept in `scene::Scene::tables`, not in the World).
+    pub nodes: usize,
+    /// Spot chunks, as `shred.spot` entities, and how many of them are `Teleport` markers.
+    pub spots: usize,
+    pub teleports: usize,
+    /// Spot chunks whose class hash matches no proven name, by hash.
+    pub unnamed_classes: BTreeMap<u32, usize>,
+    /// SCPs whose blob section chain does not end in the end record.
+    pub chain_stops: usize,
     pub unread: Vec<(String, Vec<u8>, Unread)>,
     pub refusals: Vec<MeshRefusal>,
 }
@@ -42,6 +52,19 @@ impl LevelReport {
                 self.quartets, self.meshes, self.rigid, self.refused, self.submeshes, self.placements
             ),
         )];
+        lines.push((
+            "shred scene".into(),
+            format!(
+                "{} nodes; {} spot chunks ({} teleport markers, facing unverified: markers face local +Z by core's                  convention); {} section chains stopped early",
+                self.nodes, self.spots, self.teleports, self.chain_stops
+            ),
+        ));
+        for (class, n) in &self.unnamed_classes {
+            lines.push((
+                "shred spot class".into(),
+                format!("{class:08x}: {n} chunks; no class name is proven for this hash"),
+            ));
+        }
         for r in &self.refusals {
             lines.push((
                 "shred refused mesh".into(),
@@ -228,6 +251,60 @@ pub fn read_level(paks: &[(&str, &Pak)], frame: SourceFrame) -> Result<(World, L
                     )),
                 );
                 report.placements += 1;
+            }
+            let tables = scene.tables;
+            report.nodes += tables.nodes.len();
+            report.chain_stops += usize::from(matches!(tables.chain, Chain::Stopped { .. }));
+            for chunk in tables.spots {
+                let transform = frame.transform(&chunk.world);
+                if transform.cols.iter().flatten().any(|x| !x.is_finite()) {
+                    return Err(invalid(chunk.section, "spot matrix overflow in requested frame"));
+                }
+                let e = world.spawn();
+                let class_name = scp_tables::class_name(chunk.class);
+                world.insert(e, transform);
+                world.insert(
+                    e,
+                    Source(format!(
+                        "{label}:{:?}:spot:{:#x}:{}",
+                        String::from_utf8_lossy(&name),
+                        chunk.section,
+                        chunk.index
+                    )),
+                );
+                world.insert(
+                    e,
+                    Spot {
+                        pak: label.into(),
+                        quartet: name.clone(),
+                        index: chunk.index,
+                        class: chunk.class,
+                        class_name: class_name.map(String::from),
+                        shape: chunk.shape,
+                        shape_name: scp_tables::shape_name(chunk.shape).map(String::from),
+                        name: chunk.name,
+                        id: chunk.id,
+                        parent: chunk.parent,
+                        pair: chunk.pair,
+                        node: chunk.node,
+                    },
+                );
+                report.spots += 1;
+                match class_name {
+                    Some("Teleport") => {
+                        report.teleports += 1;
+                        world.insert(
+                            e,
+                            Marker {
+                                kind: "teleport".into(),
+                                ground: None,
+                                yaw: None,
+                            },
+                        );
+                    }
+                    Some(_) => {}
+                    None => *report.unnamed_classes.entry(chunk.class).or_default() += 1,
+                }
             }
         }
     }

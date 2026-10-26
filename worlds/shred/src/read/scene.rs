@@ -1,5 +1,6 @@
 //! Pure quartet decoder. All offsets in diagnostics are relative to the named decoded file.
 //! Contracts: SHRED's stored bounds/tables and its native loader, documented in the game's geometry recon.
+use super::scp_tables;
 use crate::{Result, invalid};
 use primase_core::Transform;
 use std::{collections::BTreeSet, ops::Range};
@@ -39,6 +40,8 @@ pub struct Placement {
 pub struct Scene {
     pub models: Vec<Model>,
     pub placements: Vec<Placement>,
+    /// The SCP's node table, world matrices and blob sections (spot chunks).
+    pub tables: scp_tables::Tables,
     pub unread: Vec<Unread>,
 }
 
@@ -209,6 +212,7 @@ pub fn decode(scp: &[u8], mlp: &[u8], mmp: &[u8], mgp: &[u8]) -> Result<Scene> {
     let mut scene = Scene {
         models: vec![],
         placements: vec![],
+        tables: scp_tables::Tables::default(),
         unread: vec![],
     };
     let mut ids = BTreeSet::new();
@@ -366,8 +370,12 @@ pub fn decode(scp: &[u8], mlp: &[u8], mmp: &[u8], mgp: &[u8]) -> Result<Scene> {
     let n = s.u(16)?;
     let off = s.u(20)?;
     s.table(off, n, 48)?;
+    // The node and world-matrix tables and the blob chain are read by `scp_tables`.
+    let (tables, tables_unread) = scp_tables::decode(scp)?;
+    scene.tables = tables;
+    scene.unread.extend(tables_unread);
     // Native loader proves these strides, but their semantic types remain unknown.
-    for (field, stride) in [(0x18, 112), (0x20, 16), (0x28, 56), (0x30, 512), (0x38, 8)] {
+    for (field, stride) in [(0x20, 16), (0x28, 56), (0x30, 512)] {
         let count = s.u(field)?;
         let start = s.u(field + 4)?;
         if count > 0 {

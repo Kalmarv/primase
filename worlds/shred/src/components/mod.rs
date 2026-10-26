@@ -44,6 +44,29 @@ component!(MeshId, "shred.mesh_id");
 component!(MaterialId, "shred.material_id");
 component!(RefusedMesh, "shred.refused_mesh");
 
+/// One SCP spot chunk as authored. The entity's transform is the chunk's own world matrix.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Spot {
+    pub pak: String,
+    pub quartet: Vec<u8>,
+    /// The chunk's index within its SCP's spot chunks, in section order.
+    pub index: u32,
+    /// sdbm of the class name; `class_name` when the name is proven (`scp_tables::CLASS_NAMES`).
+    pub class: u32,
+    pub class_name: Option<String>,
+    /// `Rectangle`: a centred unit box in the chunk's frame; `Grid` otherwise (hash kept when neither).
+    pub shape: u32,
+    pub shape_name: Option<String>,
+    /// sdbm of the chunk's name; DB spot names match it (as written or lower-cased).
+    pub name: u32,
+    pub id: u32,
+    pub parent: u32,
+    pub pair: [u32; 2],
+    /// Index of the node of the same SCP whose id is `id`.
+    pub node: Option<u32>,
+}
+component!(Spot, "shred.spot");
+
 /// Deferred prototype dependencies, retained before its geometry is loaded.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ModelDependencies(pub Vec<primase_core::Entity>);
