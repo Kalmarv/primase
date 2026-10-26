@@ -151,24 +151,7 @@ impl Pass for PlaceSpawn {
         }
         let ground = match self.at {
             SpawnAt::Ground(g) => g,
-            SpawnAt::Centre => {
-                // a placement without a transform has no place: it would count as the origin
-                let mut grounds = Vec::new();
-                for (e, _) in w.iter::<Instance>() {
-                    let t = w.get::<Transform>(e).ok_or_else(|| {
-                        format!("place-spawn at=centre: placement {e:?} has no core.transform, so no place to count")
-                    })?;
-                    grounds.push(crate::frame::ground(t.cols[3]));
-                }
-                let (mut east, mut north): (Vec<f32>, Vec<f32>) =
-                    grounds.into_iter().map(|[x, n]| (x, n)).unzip();
-                if east.is_empty() {
-                    return Err("place-spawn at=centre: the world has no placement to centre on".into());
-                }
-                east.sort_by(f32::total_cmp);
-                north.sort_by(f32::total_cmp);
-                [median(&east), median(&north)]
-            }
+            SpawnAt::Centre => centre_ground(w, "place-spawn")?,
         };
         let e = w.spawn();
         w.insert(e, Name("spawn".into()));
@@ -184,6 +167,30 @@ impl Pass for PlaceSpawn {
         log.count("spawn markers placed", 1);
         Ok(())
     }
+}
+
+/// The per-axis median of the placements' ground positions (east, north): a few placements far from the rest do not
+/// move it off the map. A placement without a transform has no place, so it is refused (naming `pass`) rather than
+/// counted as the origin.
+pub fn centre_ground(w: &World, pass: &str) -> Result<[f32; 2], String> {
+    let mut east = Vec::new();
+    let mut north = Vec::new();
+    for (e, _) in w.iter::<Instance>() {
+        let t = w.get::<Transform>(e).ok_or_else(|| {
+            format!("{pass} at=centre: placement {e:?} has no core.transform, so no place to count")
+        })?;
+        let [x, n] = crate::frame::ground(t.cols[3]);
+        east.push(x);
+        north.push(n);
+    }
+    if east.is_empty() {
+        return Err(format!(
+            "{pass} at=centre: the world has no placement to centre on"
+        ));
+    }
+    east.sort_by(f32::total_cmp);
+    north.sort_by(f32::total_cmp);
+    Ok([median(&east), median(&north)])
 }
 
 /// The median of sorted, nonempty `v` (the mean of the middle two for an even count).

@@ -12,6 +12,8 @@ pub mod select;
 pub use back_faces::{ADD_BACK_FACES, AddBackFaces};
 mod curves;
 mod distance;
+mod drop_marker;
+pub use drop_marker::{DROP_MARKER, DropMarker, MarkerAt};
 pub mod frames;
 mod grid;
 pub use grid::{Triangle, TriangleGrid};
@@ -46,6 +48,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         &ADD_BACK_FACES,
         &DROP_COVERED_SURFACES,
         &DRAW_COLLISION,
+        &DROP_MARKER,
         &GROUP_PRIMITIVES,
         &OMIT_MATERIALLESS_PRIMITIVES,
         &OMIT_PLACEMENTS,
@@ -527,6 +530,7 @@ mod tests {
             "bake-texture-transforms",
             "draw-collision",
             "drop-covered-surfaces",
+            "drop-marker",
             "flatten-curves",
             "group-primitives",
             "omit-materialless-primitives",
