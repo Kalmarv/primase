@@ -13,6 +13,8 @@ pub use back_faces::{ADD_BACK_FACES, AddBackFaces};
 mod curves;
 mod distance;
 mod drop_marker;
+mod spawn_at_start;
+pub use spawn_at_start::{SPAWN_AT_START, SpawnAtStart};
 pub use drop_marker::{DROP_MARKER, DropMarker, MarkerAt};
 pub mod frames;
 mod grid;
@@ -54,6 +56,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         &OMIT_PLACEMENTS,
         &PARTITION_GRID,
         &SET_SHADOW_CASTING,
+        &SPAWN_AT_START,
         &SPLIT_BY_COLLISION,
         &SPECIALIZE_MATERIAL_VARIANTS,
     ] {
@@ -537,6 +540,7 @@ mod tests {
             "omit-placements",
             "partition-grid",
             "set-shadow-casting",
+            "spawn-at-start",
             "specialize-material-variants",
             "split-by-collision",
             "split-uv-tiles",
