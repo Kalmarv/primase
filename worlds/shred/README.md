@@ -218,8 +218,12 @@ names/matrices, range failures, remapping and loading. No runtime skinning or lo
 `read::collision::read_collision(&mut world, &[(label, &pak), ...], &surfaces, frame)` reads every `.hkw` entry of
 precisely the supplied archives (the program chooses a level's base and layers) through `primase_havok::packfile`
 (layouts and censuses: `toolkit/havok/README.md`). `SurfaceTable::from_main_db` reads MAIN.DB's `surfaces` table
-(54 rows, `id` 0..53 in order, `NAME`) through `read::database` (`quantydb-sqlite`); the world's `core.surfaces` is that table, so a
-surface id is its index. There is no skate. mapping here.
+(54 rows, `id` 0..53 in order, `NAME`) through `read::database` (`quantydb-sqlite`). Zero-flag rows retain those indices
+and names in `core.surfaces`; distinct used `(database id, opaque flags)` pairs append distinct rows, sorted by pair.
+`shred.collision_surfaces` maps each core index to its original database id, name and flag word. Later reads append
+new pairs without renumbering existing ones, and refuse an incompatible or already lowered surface table.
+There is no skate. mapping here. A consumer that classifies source names uses the resource's database name, since
+nonzero pairs have distinct names (`NAME [shred-flags=0xXXXXXXXX]`).
 
 One entity per leaf shape of each rigid body (12,641 bodies, 12,672 leaves in the 482 `.hkw` of the PAKs; the 8
 ragdoll `PHYSICS/*.HKX` are not level collision), with the body's transform and `shred.rigid_body` (name, motion
@@ -229,9 +233,12 @@ type, response type, friction, restitution, collision filter word) and the shape
   subparts in stored order (646,081 triangles on the disc, all in fixed bodies), any other leaf a `core.collider`.
 - **Other bodies** (motion type 2 or 3) are kept as data and never merged into the static collision: their shape is
   `shred.dynamic_shape` (a soup or a collider), their motion type is in `shred.rigid_body`.
-- **Triangle material word `a`**: surface id `(a >> 3) & 0x3F` indexes `core.surfaces`; the rest of the word is the
-  opaque per-triangle `shred.collision_flags` (bits 0x1, 0x4, 0x800, 0x1000, 0x2000, 0x4000, 0x80000000 occur; their
-  meanings are not established and nothing names them). Shapes without triangles carry no surface: they are surface 0.
+- **Triangle material word `a`**: database id `(a >> 3) & 0x3F` and the remaining flag bits identify the triangle's
+  source surface. Its core surface index keeps both attached through triangle filtering/reordering, including
+  dynamic soups. The previous per-triangle `shred.collision_flags` component is replaced by the surface-origin
+  resource; no parallel flag array remains to go stale. Meanings of the flag bits are not established. Across all
+  482 PAK `.hkw` files there are 92 used pairs and 13 flag words over 646,081 triangles. Shapes without triangles
+  remain on zero-flag surface 0. Destination renaming/classification does not change the source identity resource.
 - **Shapes**: convex-vertices as `Shape::Convex` of the vertices (the stored planes are not exact faces); box,
   sphere, capsule and cylinder (its cylinder radius) as core's primitives, so nothing is tessellated; `ConvexTranslate`
   offsets its child, lists and MOPP trees hold their children. Havok's convex radius (at most 0.05 in the data) is not

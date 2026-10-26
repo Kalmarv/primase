@@ -9,7 +9,7 @@ pub use vertex_inputs::{VertexInput, VertexInputs};
 mod collision;
 mod level_params;
 mod material;
-pub use collision::{CollisionFlags, DynamicShape, MOTION_FIXED, RigidBody};
+pub use collision::{CollisionSurface, CollisionSurfaces, DynamicShape, MOTION_FIXED, RigidBody};
 pub use level_params::{LevelParams, ScriptCall, ScriptValue};
 pub use material::{
     BankEvidence, EncodedTexture, MaterialKey, MaterialNamespace, MaterialParameter, MaterialResolution,

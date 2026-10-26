@@ -9,6 +9,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dev-dependencies]
+primase-shred.workspace = true
 primase-anvil.workspace = true
 primase-animation.workspace = true
 primase-core.workspace = true

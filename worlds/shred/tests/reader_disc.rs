@@ -58,7 +58,14 @@ fn one_reader_reads_mike_with_meshes_collision_materials_and_textures() {
     let colliders = world.column::<Collider>().map_or(0, |c| c.len());
     let dynamic = world.column::<DynamicShape>().map_or(0, |c| c.len());
     assert_eq!(soups + colliders + dynamic, reader.collision.leaves);
-    assert!(world.resource::<Surfaces>().is_some_and(|s| s.0.len() == 54));
+    let origins = world
+        .resource::<primase_shred::components::CollisionSurfaces>()
+        .unwrap();
+    assert!(
+        world
+            .resource::<Surfaces>()
+            .is_some_and(|s| s.0.len() == origins.0.len() && s.0.len() >= 54)
+    );
 
     // a selection of 20 placements and the collision loads with its pixels decoded
     let roots: BTreeSet<_> = world

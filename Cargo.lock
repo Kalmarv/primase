@@ -1047,6 +1047,7 @@ dependencies = [
  "primase-meshops",
  "primase-monogame",
  "primase-reskate",
+ "primase-shred",
  "primase-stuntboost",
  "primase-testdata",
  "primase-unity",

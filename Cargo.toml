@@ -106,6 +106,7 @@ primase-gta = { path = "worlds/gta" }
 primase-monogame = { path = "worlds/monogame" }
 primase-anvil = { path = "worlds/anvil" }
 primase-shaunwhite = { path = "worlds/shaunwhite" }
+primase-shred = { path = "worlds/shred" }
 
 thiserror = { version = "=2.0.21", default-features = false, features = ["std"] }
 serde = { version = "1", default-features = false, features = ["std", "derive"] }

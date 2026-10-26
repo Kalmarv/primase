@@ -1,5 +1,5 @@
 //! The disc's level collision through `read_collision`: counts and surface histograms equal the offline recon's
-//! (`HK.md`, an independent Python reader: 646,081 triangles, 36 surface ids), the flag words equal its census, the
+//! (`HK.md`, a separate census: 646,081 triangles, 36 surface ids), the flag words equal its census, the
 //! winding is counter-clockwise-front (the topmost near-horizontal triangles of the fixed meshes face up), and the
 //! collision sits on the render geometry of the same level (the frame check).
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
@@ -7,8 +7,12 @@ use primase_core::{
     Collider, Collision, Instance, Mesh, Shape, Source, Transform, World,
     frame::{Axis, SourceFrame},
 };
+use primase_havok::packfile::{
+    Packfile,
+    physics::{self, RigidBody as StoredBody, Shape as StoredShape},
+};
 use primase_shred::{
-    components::{DynamicShape, RigidBody},
+    components::{CollisionSurfaces, DynamicShape, RigidBody},
     read::{
         collision::{self, CollisionReport, SurfaceTable},
         level,
@@ -60,6 +64,74 @@ fn world_point(t: &Transform, p: [f32; 3]) -> [f32; 3] {
     std::array::from_fn(|k| t.cols[0][k] * p[0] + t.cols[1][k] * p[1] + t.cols[2][k] * p[2] + t.cols[3][k])
 }
 
+/// Check the association against the original Havok material-index sequences, before surface expansion. This
+/// exercises the mapping; it is not an independent oracle for the Havok decoder (the hand-worked fixture is).
+fn assert_material_sequences(path: &Path, world: &World) {
+    let pak = Pak::open(path).unwrap();
+    let mut expected = BTreeMap::new();
+    for (i, entry) in pak.entries().iter().enumerate() {
+        if !entry.name.ends_with(b".hkw") {
+            continue;
+        }
+        let payload = pak.payload(i).unwrap();
+        let pack = Packfile::read(&payload).unwrap();
+        for (body_index, at) in physics::rigid_bodies(&pack).into_iter().enumerate() {
+            let body = StoredBody::read(&pack, at).unwrap();
+            let mut stack = vec![body.shape];
+            let mut leaf_index = 0;
+            while let Some(at) = stack.pop() {
+                match StoredShape::read(&pack, at).unwrap() {
+                    StoredShape::Mopp { child } | StoredShape::ConvexTranslate { child, .. } => {
+                        stack.push(child)
+                    }
+                    StoredShape::List { children } => stack.extend(children.into_iter().rev()),
+                    leaf => {
+                        if let StoredShape::ExtendedMesh(mesh) = leaf {
+                            let pairs: Vec<_> = mesh
+                                .subparts
+                                .iter()
+                                .flat_map(|sub| {
+                                    sub.material_indices.iter().map(|&m| {
+                                        let a = sub.materials[usize::from(m)].a;
+                                        (((a >> 3) & 0x3f) as u16, a & !0x1f8)
+                                    })
+                                })
+                                .collect();
+                            let key = format!(
+                                "{}:{:?}:body{body_index}:{leaf_index}",
+                                stem(path),
+                                String::from_utf8_lossy(&entry.name)
+                            );
+                            assert!(expected.insert(key, pairs).is_none());
+                        }
+                        leaf_index += 1;
+                    }
+                }
+            }
+        }
+    }
+    let origins = world.resource::<CollisionSurfaces>().unwrap();
+    let mut soups: BTreeMap<_, _> = world.iter::<Collision>().collect();
+    soups.extend(world.iter::<DynamicShape>().filter_map(|(e, shape)| match shape {
+        DynamicShape::Soup(c) => Some((e, c)),
+        DynamicShape::Primitive(_) => None,
+    }));
+    for (e, soup) in soups {
+        let key = &world.get::<Source>(e).unwrap().0;
+        let original = expected.remove(key).unwrap();
+        let recovered: Vec<_> = soup
+            .surfaces
+            .iter()
+            .map(|i| {
+                let s = &origins.0[i];
+                (s.database_id, s.flags)
+            })
+            .collect();
+        assert_eq!(recovered, original, "{}: {key}", path.display());
+    }
+    assert!(expected.is_empty(), "{}: omitted source mesh", path.display());
+}
+
 #[test]
 fn counts_surfaces_and_flags_equal_the_recon() {
     let (Some(root), Some(table)) = (install(Game::Shred), surfaces()) else {
@@ -74,6 +146,31 @@ fn counts_surfaces_and_flags_equal_the_recon() {
     let mut files = BTreeMap::new();
     for path in all_paks(&root) {
         let (world, r) = read(&path, &table, SourceFrame::WORLD);
+        assert_material_sequences(&path, &world);
+        let origins = world.resource::<CollisionSurfaces>().unwrap();
+        let mut recovered = BTreeMap::new();
+        for soup in world
+            .iter::<Collision>()
+            .map(|(_, c)| c)
+            .chain(world.iter::<DynamicShape>().filter_map(|(_, s)| match s {
+                DynamicShape::Soup(c) => Some(c),
+                DynamicShape::Primitive(_) => None,
+            }))
+        {
+            for index in &soup.surfaces {
+                let source = &origins.0[index];
+                *recovered.entry((source.database_id, source.flags)).or_default() += 1;
+            }
+        }
+        assert_eq!(
+            recovered,
+            r.material_triangles,
+            "{}: source material identity",
+            path.display()
+        );
+        for (pair, count) in &recovered {
+            *total.material_triangles.entry(*pair).or_default() += count;
+        }
         assert!(
             world.verify_components().is_empty(),
             "{}: {:?}",
@@ -127,6 +224,13 @@ fn counts_surfaces_and_flags_equal_the_recon() {
     );
     assert_eq!(total.fixed_triangles + total.dynamic_triangles, 646_081);
     assert_eq!(total.dynamic_triangles, 0);
+    assert_eq!(total.material_triangles.len(), 92);
+    assert_eq!(total.material_triangles.values().sum::<usize>(), 646_081);
+    eprintln!(
+        "SHRED source material identities: {} pairs, {} flag words, 646081 triangle references recovered",
+        total.material_triangles.len(),
+        total.flag_triangles.len()
+    );
     assert!(total.max_radius <= 0.06, "convex radius {}", total.max_radius);
     let histogram: Vec<(u16, usize)> = total.surface_triangles.into_iter().collect();
     assert_eq!(

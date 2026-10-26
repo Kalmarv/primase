@@ -1,10 +1,12 @@
-//! SHRED's Havok rigid bodies beside core's collision: the body's own data, the opaque per-triangle flag bits and the
+//! SHRED's Havok rigid bodies beside core's collision: the body's own data, opaque source surface identities and the
 //! shapes of bodies that move (those are not static collision and stay out of `core.collision`/`core.collider`).
 use primase_core::{
-    Collider, Collision, Component, Entity, Geometry, Linear, World, json::JsonError, world::Linearity,
+    Collider, Collision, Component, Entity, Geometry, Linear, Resource, Surfaces, World, json::JsonError,
+    world::Linearity,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 /// Havok's `hkpMotion::MotionType` of a fixed body (the others in the data are 2, sphere inertia, and 3, box inertia).
 pub const MOTION_FIXED: u8 = 5;
@@ -88,34 +90,41 @@ impl Component for DynamicShape {
     }
 }
 
-/// The bits of each triangle's material word outside the surface id (`a & !(0x3F << 3)`), one per triangle of the
-/// entity's `core.collision` or [`DynamicShape::Soup`] (`shred.collision_flags`). Their meanings are not established;
-/// they are carried whole and unnamed.
-#[derive(Clone, Debug, PartialEq)]
-pub struct CollisionFlags(pub Vec<u32>);
+/// A source material identity. Flag meanings are unknown; no physical behavior is inferred from them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct CollisionSurface {
+    pub database_id: u16,
+    pub database_name: String,
+    /// `a & !(0x3F << 3)`: the unmodified bits outside the database surface field.
+    pub flags: u32,
+}
 
-impl Component for CollisionFlags {
-    const NAME: &'static str = "shred.collision_flags";
-    const GEOMETRY: Geometry = Geometry::None;
-    fn apply_linear(&self, _: &Linear) -> Linearity<Self> {
-        Linearity::Invariant
-    }
-    fn payload_bytes(&self) -> u64 {
-        self.0.len() as u64 * 4
-    }
-    fn verify(&self, e: Entity, w: &World) -> Result<(), String> {
-        let triangles = match (w.get::<Collision>(e), w.get::<DynamicShape>(e)) {
-            (Some(c), None) => c.triangles.len(),
-            (None, Some(DynamicShape::Soup(c))) => c.triangles.len(),
-            _ => return Err("flags on an entity without exactly one triangle soup".into()),
-        };
-        if self.0.len() == triangles {
-            Ok(())
-        } else {
-            Err(format!("{} flag words for {triangles} triangles", self.0.len()))
+/// `shred.collision_surfaces`: source identities by `core.surfaces` index. A triangle's existing surface index
+/// carries this association through edits of either `core.collision` or [`DynamicShape::Soup`]. Destination passes
+/// may rename/classify core surfaces; the original database name and bits stay here. Zero-flag database rows keep
+/// their original indices; distinct nonzero `(database_id, flags)` pairs have distinct additional rows.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct CollisionSurfaces(pub BTreeMap<u16, CollisionSurface>);
+
+impl Resource for CollisionSurfaces {
+    const NAME: &'static str = "shred.collision_surfaces";
+    fn verify(&self, w: &World) -> Result<(), String> {
+        let surfaces = w.resource::<Surfaces>().ok_or("missing core.surfaces")?;
+        let mut pairs = std::collections::BTreeSet::new();
+        for (&index, source) in &self.0 {
+            if usize::from(index) >= surfaces.0.len() {
+                return Err(format!("source surface {index} past core.surfaces"));
+            }
+            if source.flags & (0x3f << 3) != 0 || source.database_id > 0x3f {
+                return Err(format!("source surface {index} has invalid surface/flag bits"));
+            }
+            if !pairs.insert((source.database_id, source.flags)) {
+                return Err(format!("source surface {index} repeats a material identity"));
+            }
         }
+        Ok(())
     }
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
-        Ok(Some(json!({"triangles": self.0.len()})))
+        primase_core::json::to_value(self).map(Some)
     }
 }

@@ -10,7 +10,7 @@
 //! Shapes: the extended mesh's subparts are one soup in stored vertex and index order. The data's winding is
 //! counter-clockwise-front (the world's convention) and is kept: it is the render geometry's opposite, whose triangles
 //! are clockwise against their stored normals. A triangle's surface is the `surfaces` row `(a >> 3) & 0x3F` of its
-//! material word and the other bits of `a` travel as `shred.collision_flags`. A convex-vertices shape is
+//! material word; that id and the remaining opaque bits identify a `shred.collision_surfaces` row. A convex-vertices shape is
 //! `Shape::Convex` of its vertices (the stored planes are not exact faces); box, sphere, capsule and cylinder are
 //! core's primitives, so nothing is tessellated. Havok's convex radius (a skin around every convex shape) is not
 //! added to any of them. A `ConvexTranslate` offsets its child; a list and a MOPP tree hold their children. Only
@@ -19,7 +19,7 @@ use super::pak::Pak;
 use crate::read::database::{Database, Value};
 use crate::{
     Error, Result,
-    components::{CollisionFlags, DynamicShape, RigidBody as BodyData},
+    components::{CollisionSurface, CollisionSurfaces, DynamicShape, RigidBody as BodyData},
     invalid,
 };
 use primase_core::{
@@ -29,7 +29,7 @@ use primase_havok::packfile::{
     Packfile,
     physics::{self, ExtendedMesh, RigidBody, Shape},
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The surface field of a triangle's material word: bits 3..=8.
 pub const SURFACE_SHIFT: u32 = 3;
@@ -38,7 +38,7 @@ pub const SURFACE_MASK: u32 = 0x3F;
 const MAX_DEPTH: usize = 16;
 
 /// MAIN.DB's `surfaces` table: the name of each id (`surfaces.id`, 0..n in order), which is the index into the
-/// world's `core.surfaces` that [`read_collision`] sets.
+/// world's zero-flag `core.surfaces` rows that [`read_collision`] sets. Flagged material identities append rows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SurfaceTable(pub Vec<String>);
 
@@ -86,6 +86,92 @@ impl SurfaceTable {
         }
         Ok(s)
     }
+
+    fn catalog(&self, world: &World, pairs: BTreeSet<(u16, u32)>) -> Result<(Surfaces, CollisionSurfaces)> {
+        let base = self.to_world()?;
+        if self.0.len() > 64 {
+            return Err(invalid(0, "MAIN.DB has more than 64 surface ids"));
+        }
+        let mut sources = CollisionSurfaces(
+            self.0
+                .iter()
+                .enumerate()
+                .map(|(id, name)| {
+                    (
+                        id as u16,
+                        CollisionSurface {
+                            database_id: id as u16,
+                            database_name: name.clone(),
+                            flags: 0,
+                        },
+                    )
+                })
+                .collect(),
+        );
+        let mut surfaces = match (
+            world.resource::<Surfaces>(),
+            world.resource::<CollisionSurfaces>(),
+        ) {
+            (None, None) => base,
+            (Some(held), None) if *held == base => held.clone(),
+            (Some(held), Some(origins)) => {
+                // Reading into a lowered/renamed table would mix source and destination state.
+                if held.0.len() != origins.0.len() || !held.0.starts_with(&base.0) {
+                    return Err(invalid(0, "existing collision surfaces are not the source table"));
+                }
+                for (i, surface) in held.0.iter().enumerate() {
+                    let source = origins
+                        .0
+                        .get(&(i as u16))
+                        .ok_or_else(|| invalid(0, "existing collision surface has no source identity"))?;
+                    if self.0.get(usize::from(source.database_id)) != Some(&source.database_name)
+                        || *surface != primase_core::Surface::new(surface_name(source))
+                    {
+                        return Err(invalid(
+                            0,
+                            "existing collision surface identity differs from MAIN.DB",
+                        ));
+                    }
+                }
+                primase_core::Resource::verify(origins, world).map_err(|e| invalid(0, e))?;
+                sources = origins.clone();
+                held.clone()
+            }
+            _ => {
+                return Err(invalid(
+                    0,
+                    "the world's core.surfaces is not MAIN.DB's source table",
+                ));
+            }
+        };
+        let known: BTreeSet<_> = sources.0.values().map(|s| (s.database_id, s.flags)).collect();
+        for (id, flags) in pairs.difference(&known).copied() {
+            let name = self
+                .0
+                .get(usize::from(id))
+                .ok_or_else(|| invalid(0, "material surface past MAIN.DB"))?;
+            let source = CollisionSurface {
+                database_id: id,
+                database_name: name.clone(),
+                flags,
+            };
+            let name = surface_name(&source);
+            if surfaces.0.iter().any(|s| s.name == name) {
+                return Err(invalid(0, format!("collision surface name {name:?} repeats")));
+            }
+            let index = surfaces.index(&name).map_err(|e| invalid(0, e))?;
+            sources.0.insert(index, source);
+        }
+        Ok((surfaces, sources))
+    }
+}
+
+fn surface_name(source: &CollisionSurface) -> String {
+    if source.flags == 0 {
+        source.database_name.clone()
+    } else {
+        format!("{} [shred-flags=0x{:08x}]", source.database_name, source.flags)
+    }
 }
 
 /// What one `.hkw` entry contributed.
@@ -116,6 +202,8 @@ pub struct CollisionReport {
     pub surface_triangles: BTreeMap<u16, usize>,
     /// Triangles per flag word (`a` without the surface bits), fixed and not.
     pub flag_triangles: BTreeMap<u32, usize>,
+    /// Triangles per source material identity (database surface id, opaque flag word).
+    pub material_triangles: BTreeMap<(u16, u32), usize>,
     /// The largest convex radius over the box, convex-vertices, capsule and cylinder shapes read (never added).
     pub max_radius: f32,
 }
@@ -172,16 +260,15 @@ fn moved(p: [f32; 3], by: [f32; 3]) -> [f32; 3] {
     std::array::from_fn(|k| p[k] + by[k])
 }
 
-/// The extended mesh as one soup in the target frame, with each triangle's flag word.
+/// The extended mesh as one soup in the target frame. Surface indices carry the complete source material identity.
 fn soup(
     mesh: &ExtendedMesh,
     offset: [f32; 3],
     frame: SourceFrame,
-    surfaces: usize,
+    catalog: &BTreeMap<(u16, u32), u16>,
     at: usize,
-) -> Result<(Collision, Vec<u32>)> {
+) -> Result<Collision> {
     let mut soup = Collision::default();
-    let mut flags = Vec::new();
     for sub in &mesh.subparts {
         let base = u32::try_from(soup.positions.len()).map_err(|_| invalid(at, "mesh past 2^32 vertices"))?;
         soup.positions
@@ -193,22 +280,19 @@ fn soup(
                 .ok_or_else(|| invalid(at, format!("material index {m} past {}", sub.materials.len())))?
                 .a;
             let surface = (a >> SURFACE_SHIFT) & SURFACE_MASK;
-            if surface as usize >= surfaces {
-                return Err(invalid(
-                    at,
-                    format!("surface id {surface} past the {surfaces} of MAIN.DB"),
-                ));
-            }
+            let flags = a & !(SURFACE_MASK << SURFACE_SHIFT);
+            let index = catalog
+                .get(&(surface as u16, flags))
+                .ok_or_else(|| invalid(at, "material identity absent from source surface table"))?;
             let mut t = tri.map(|i| i + base);
             if frame.flips_winding() {
                 t.swap(1, 2);
             }
             soup.triangles.push(t);
-            soup.surfaces.push(surface as u16);
-            flags.push(a & !(SURFACE_MASK << SURFACE_SHIFT));
+            soup.surfaces.push(*index);
         }
     }
-    Ok((soup, flags))
+    Ok(soup)
 }
 
 /// A length in the frame's units.
@@ -224,14 +308,42 @@ pub fn read_collision(
     surfaces: &SurfaceTable,
     frame: SourceFrame,
 ) -> Result<CollisionReport> {
-    let table = surfaces.to_world()?;
-    match world.resource::<Surfaces>() {
-        None => {
-            world.insert_resource(table);
+    // Census used pairs first so new indices are sorted, independent of archive enumeration order. No policy
+    // enters here: only identities actually selected by source triangle material indices get additional rows.
+    let mut pairs = BTreeSet::new();
+    for &(_, pak) in paks {
+        for (i, entry) in pak.entries().iter().enumerate() {
+            if !entry.name.ends_with(b".hkw") {
+                continue;
+            }
+            let payload = pak.payload(i)?;
+            let pack = Packfile::read(&payload).map_err(|e| invalid(0, e))?;
+            for at in physics::rigid_bodies(&pack) {
+                let body = RigidBody::read(&pack, at).map_err(|e| invalid(at, e))?;
+                for leaf in leaves(&pack, body.shape)? {
+                    if let Shape::ExtendedMesh(mesh) = leaf.shape {
+                        for sub in mesh.subparts {
+                            for m in sub.material_indices {
+                                let a = sub.materials[usize::from(m)].a;
+                                pairs.insert((
+                                    ((a >> SURFACE_SHIFT) & SURFACE_MASK) as u16,
+                                    a & !(SURFACE_MASK << SURFACE_SHIFT),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
         }
-        Some(existing) if *existing == table => {}
-        Some(_) => return Err(invalid(0, "the world's core.surfaces is not MAIN.DB's table")),
     }
+    let (table, origins) = surfaces.catalog(world, pairs)?;
+    let catalog = origins
+        .0
+        .iter()
+        .map(|(&i, s)| ((s.database_id, s.flags), i))
+        .collect();
+    world.insert_resource(table);
+    world.insert_resource(origins);
     let mut report = CollisionReport::default();
     for &(label, pak) in paks {
         for (i, entry) in pak.entries().iter().enumerate() {
@@ -243,7 +355,7 @@ pub fn read_collision(
                 world,
                 &payload,
                 (label, &entry.name),
-                surfaces.0.len(),
+                &catalog,
                 frame,
                 &mut report,
             )
@@ -264,7 +376,7 @@ fn read_file(
     world: &mut World,
     bytes: &[u8],
     (label, name): (&str, &[u8]),
-    surfaces: usize,
+    catalog: &BTreeMap<(u16, u32), u16>,
     frame: SourceFrame,
     report: &mut CollisionReport,
 ) -> Result<FileReport> {
@@ -309,12 +421,19 @@ fn read_file(
             let p = |v| frame.point(moved(v, leaf.offset));
             let shape = match leaf.shape {
                 Shape::ExtendedMesh(mesh) => {
-                    let (soup, flags) = soup(&mesh, leaf.offset, frame, surfaces, at)?;
-                    let triangles = soup.triangles.len();
-                    for (&s, &f) in soup.surfaces.iter().zip(&flags) {
-                        *report.surface_triangles.entry(s).or_default() += 1;
-                        *report.flag_triangles.entry(f).or_default() += 1;
+                    // Counts remain database identities, not the expanded core surface indices.
+                    for sub in &mesh.subparts {
+                        for &m in &sub.material_indices {
+                            let a = sub.materials[usize::from(m)].a;
+                            let id = ((a >> SURFACE_SHIFT) & SURFACE_MASK) as u16;
+                            let flags = a & !(SURFACE_MASK << SURFACE_SHIFT);
+                            *report.surface_triangles.entry(id).or_default() += 1;
+                            *report.flag_triangles.entry(flags).or_default() += 1;
+                            *report.material_triangles.entry((id, flags)).or_default() += 1;
+                        }
                     }
+                    let soup = soup(&mesh, leaf.offset, frame, catalog, at)?;
+                    let triangles = soup.triangles.len();
                     if fixed {
                         report.fixed_triangles += triangles;
                         file.fixed_triangles += triangles;
@@ -324,7 +443,6 @@ fn read_file(
                         file.dynamic_triangles += triangles;
                         world.insert(e, DynamicShape::Soup(soup));
                     }
-                    world.insert(e, CollisionFlags(flags));
                     continue;
                 }
                 Shape::ConvexVertices(c) => {
@@ -382,4 +500,96 @@ fn read_file(
         }
     }
     Ok(file)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use primase_havok::packfile::physics::{MeshMaterial, Subpart};
+
+    #[test]
+    fn material_indices_select_distinct_pairs_and_repeated_pairs_share_a_surface() {
+        let table = SurfaceTable(vec!["default".into(), "hazard".into()]);
+        let pairs = BTreeSet::from([(0, 0x1000), (0, 1)]);
+        let (surfaces, origins) = table.catalog(&World::new(), pairs).unwrap();
+        assert_eq!(
+            surfaces.0.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+            [
+                "default",
+                "hazard",
+                "default [shred-flags=0x00000001]",
+                "default [shred-flags=0x00001000]",
+            ]
+        );
+        let catalog = origins
+            .0
+            .iter()
+            .map(|(&i, s)| ((s.database_id, s.flags), i))
+            .collect();
+        let mesh = ExtendedMesh {
+            aabb_half_extents: [1.0; 3],
+            aabb_center: [0.0; 3],
+            welding: vec![0; 3],
+            subparts: vec![Subpart {
+                vertices: vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+                triangles: vec![[0, 1, 2]; 3],
+                material_indices: vec![1, 0, 1],
+                triangle_offset: 0,
+                materials: vec![
+                    MeshMaterial {
+                        a: 1,
+                        b: 0x3f80,
+                        c: 0,
+                    },
+                    MeshMaterial {
+                        a: 0x1000,
+                        b: 0x3f80,
+                        c: 0,
+                    },
+                ],
+            }],
+        };
+        let c = soup(&mesh, [0.0; 3], SourceFrame::WORLD, &catalog, 0).unwrap();
+        assert_eq!(c.surfaces, [3, 2, 3]);
+        assert_eq!(
+            c.surfaces.iter().map(|i| origins.0[i].flags).collect::<Vec<_>>(),
+            [0x1000, 1, 0x1000]
+        );
+        let mut world = World::new();
+        world.insert_resource(surfaces);
+        world.insert_resource(origins.clone());
+        let e = world.spawn();
+        world.insert(e, DynamicShape::Soup(c));
+        assert!(world.verify_components().is_empty());
+        assert_eq!(
+            world.subset(&BTreeSet::from([e])).resource::<CollisionSurfaces>(),
+            Some(&origins)
+        );
+    }
+
+    #[test]
+    fn additional_reads_append_sorted_new_pairs_without_changing_existing_indices() {
+        let table = SurfaceTable(vec!["default".into()]);
+        let (surfaces, origins) = table
+            .catalog(&World::new(), BTreeSet::from([(0, 0x1000)]))
+            .unwrap();
+        let mut world = World::new();
+        world.insert_resource(surfaces);
+        world.insert_resource(origins);
+        let (surfaces, origins) = table
+            .catalog(&world, BTreeSet::from([(0, 1), (0, 0x1000)]))
+            .unwrap();
+        assert_eq!(surfaces.0.len(), 3);
+        assert_eq!(origins.0[&1].flags, 0x1000);
+        assert_eq!(origins.0[&2].flags, 1);
+        world.resource_mut::<Surfaces>().unwrap().0[0].name = "renamed".into();
+        assert!(table.catalog(&world, BTreeSet::new()).is_err());
+    }
+
+    #[test]
+    fn authored_names_cannot_alias_generated_surface_names() {
+        let table = SurfaceTable(vec!["default".into(), "default [shred-flags=0x00000001]".into()]);
+        assert!(table.catalog(&World::new(), BTreeSet::from([(0, 1)])).is_err());
+    }
 }
