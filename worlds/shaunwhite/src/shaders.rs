@@ -85,3 +85,6 @@ pub struct Database {
     /// The zeroed reserve between the active record table and the first payload, in bytes.
     pub table_padding: usize,
 }
+
+/// Named graph derivation from the stored forward Colour pixel program.
+pub mod albedo;

@@ -18,6 +18,7 @@ primase-shader.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+primase-shader-exec.workspace = true
 primase-meshops.workspace = true
 primase-testdata.workspace = true
 primase-texcodec.workspace = true

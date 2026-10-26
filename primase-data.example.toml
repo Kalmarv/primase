@@ -12,6 +12,8 @@ sledding = 'D:/placeholder/games/Sledding Game'
 gta = 'D:/placeholder/keys/gta'
 
 [tools]
+# Optional native raw-SM3 proof host, using Microsoft D3D9 REF (not WARP).
+# ref_sm3 = 'D:/placeholder/tools/ref_sm3.exe'
 unity_tpk = 'D:/placeholder/tools/typetrees.tpk'
 
 [oracles]

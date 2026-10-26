@@ -1396,6 +1396,7 @@ dependencies = [
  "primase-image",
  "primase-meshops",
  "primase-shader",
+ "primase-shader-exec",
  "primase-testdata",
  "primase-texcodec",
  "sha2",

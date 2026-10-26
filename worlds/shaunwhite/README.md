@@ -300,8 +300,8 @@ named report entries, never white textures. Unresolved frame/object constants, u
 ranges and packed/transformed vertex outputs retain explicit Unknown roles. Per-variant render states
 remain in the source metadata and are counted as not lowered; the binding's unspecified state does not
 claim equivalence to the game. The primary target's RGB is forward **Colour**, not Albedo. Auxiliary
-and alpha/bloom lanes remain unlabelled. This chunk establishes key/reflection coverage, not rendered
-pixel equivalence; the graph-derived albedo slice and native rendering proof are separate work.
+and alpha/bloom lanes remain unlabelled. The resolver establishes key/reflection coverage. The separate named derivation below has a
+focused native pixel proof; neither claims full lit-frame equivalence.
 
 The generic constraints are checked by a hand-worked flag/key fixture and independent token/CTAB
 fixtures. A six-level test reads all six level forges as explicit shared sources, resolves through the pass
@@ -309,3 +309,20 @@ manager with component checks, and reports material totals, compatible record va
 reasons and unresolved binding occurrences for each level. The D3D9 enum mapping follows Microsoft's
 [D3DSAMPLERSTATETYPE](https://learn.microsoft.com/windows/win32/direct3d9/d3dsamplerstatetype) and
 [D3DTEXTUREFILTERTYPE](https://learn.microsoft.com/windows/win32/direct3d9/d3dtexturefiltertype).
+
+The game-owned `shaders::albedo::derive` returns `shaunwhite.generic-albedo.v1`, a named
+material-only RGB slice of an explicitly resolved generic forward Colour record. It finds
+the maximal material-only RGB frontier in the lifted value graph, retaining the record,
+native pixel key, original source hash and register/word/lane cut. It refuses non-generic,
+ambiguous and unsupported frontiers; it changes no stored shader or forward binding.
+Lighting, fog, influence colour control, tone mapping and source alpha remain named cuts.
+Unknown varyings/constants/coordinates stay unresolved; callers supply them explicitly.
+Alpha one is a placeholder, and the influence mode is an explicit consumer choice.
+
+The independent pixel gate uses Microsoft D3D9 REF (`tools.ref_sm3`), after exact constant
+and texture draw/readback controls. It runs complete stored pixel shaders for a basic
+material, a three-layer variant, and a key-compatible metro graffiti wall variant. Raw RGB
+is checked against the shipped FctDiffuseColor equation; RGB re-encoded through the original
+lifted tail is checked against REF with unit lighting, no fog, explicit influence 0/1 and
+identity colour controls. Non-neutral light/fog controls and HDR peak normalization are
+included. This establishes a derived albedo slice, not a reproduction of the lit game frame.

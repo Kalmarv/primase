@@ -36,6 +36,31 @@ pub fn lift(bytes: &[u8]) -> Result<primase_shader::Program> {
     lower::lift(&read(bytes)?, bytes)
 }
 
+/// A register value immediately after one original instruction. `lanes` order is the projected RGB order.
+/// The word offset must identify an instruction, and all three distinct temporary lanes must be initialized.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Projection {
+    pub after_word: usize,
+    pub temporary: u32,
+    pub lanes: [u8; 3],
+}
+
+/// Lift the original instruction prefix through `cut`, returning its selected lanes as RGB and alpha one.
+/// Prior discards remain; subsequent operations/discards are excluded. This is a derived program, whose notes
+/// name the cut, whose lifter identity includes the projection, and whose source hash still identifies the complete original bytecode. No meaning is assigned
+/// to the chosen value: recognizing a useful cut is the caller's responsibility.
+pub fn project(bytes: &[u8], cut: Projection) -> Result<primase_shader::Program> {
+    lower::project(&read(bytes)?, bytes, cut, false)
+}
+
+/// Lift the complete original program, replacing just the cut's three register lanes with the new float3
+/// input `DERIVED_RGB0` (signature register 31). This runs the original downstream operations, including
+/// normalization and discards, rather than a rewritten equation. Other register lanes and the prefix remain.
+/// An original input v31 is refused. The caller supplies projected RGB in that new input's xyz lanes.
+pub fn reencode(bytes: &[u8], cut: Projection) -> Result<primase_shader::Program> {
+    lower::project(&read(bytes)?, bytes, cut, true)
+}
+
 /// Frame the first raw SM3 vertex or pixel program in a container's remaining bytes.
 /// Returns its stage and exact bytes through END; subsequent container metadata is not consumed.
 /// This checks token/comment spans, not instruction semantics: an unsupported operation is retained as

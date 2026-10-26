@@ -45,6 +45,7 @@ impl Game {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Tool {
     Warp,
+    RefSm3,
     Dxc,
     Fxc,
     ReskateCli,
@@ -63,6 +64,7 @@ impl Tool {
     pub const fn key(self) -> &'static str {
         match self {
             Tool::Warp => "warp",
+            Tool::RefSm3 => "ref_sm3",
             Tool::Dxc => "dxc",
             Tool::Fxc => "fxc",
             Tool::ReskateCli => "reskate_cli",
@@ -223,6 +225,12 @@ pub const KEYS: &[Entry] = &[
 
 /// Every tool, by [`Tool::key`].
 pub const TOOLS: &[Entry] = &[
+    Entry {
+        key: "tools.ref_sm3",
+        about: "the private raw SM3 draw/readback host using Microsoft D3D9 REF, with constant and texture controls",
+        source: "third-party: Microsoft D3D9 reference rasterizer d3dref9.dll 10.0.26100.4654, SHA-256 44cb58f54e11cb6d2cb123dbe92ded3ce3c2b3e2e4d2659c20ddd941b8e3eb51; thin private host, no primase lifter or game equations",
+        gate: true,
+    },
     Entry {
         key: "tools.warp",
         about: "the WARP oracle program that runs a shader on Microsoft's WARP rasterizer",
@@ -431,7 +439,7 @@ pub const DECLARED: &[Declared] = &[
         query: Query::Install(Game::ShaunWhite, Some("ekshadersPChigh.bin")),
         status: Status::Live,
         gate: true,
-        about: "Shaun White Skateboarding's uncompressed high-quality SDB2 v39 database: source CRCs and identities, all raw stage programs, pass metadata tails, state-only and missing records; worlds/shaunwhite/tests/shaders.rs",
+        about: "Shaun White Skateboarding's uncompressed high-quality SDB2 v39 database: source CRCs and identities, all raw stage programs, pass metadata tails, state-only and missing records; named material-only RGB derivation and full-PS REF proof for basic/layered/metro-compatible records; worlds/shaunwhite/tests/shaders.rs and albedo.rs",
         source: "the user's own install; hand-worked fixture and native version-39 loader establish framing; record 5's PS is also checked against Microsoft's disassembly in toolkit/d3d9/tests/disassembly.rs",
     },
     Declared {
@@ -494,7 +502,7 @@ pub const DECLARED: &[Declared] = &[
         query: Query::Install(Game::ShaunWhite, Some("DataPC_01.forge")),
         status: Status::Live,
         gate: true,
-        about: r#"Shaun White Skateboarding PC 1.0 level-01 forge (version 26): every texture in all 253 GridCellDataBlock entries; focused collision shape and inert-component fixtures in four cells; level placements, materials, collision and stored water-flag lowering, harbour tint and placement; 110 omni and 79 spot placements plus the root SkyLight and sun; restored metro mural and CliffDry layer weights; worlds/shaunwhite/tests/texture.rs, collision.rs, level.rs, layers.rs"#,
+        about: r#"Shaun White Skateboarding PC 1.0 level-01 forge (version 26): every texture in all 253 GridCellDataBlock entries; focused collision shape and inert-component fixtures in four cells; level placements, materials, collision and stored water-flag lowering, harbour tint and placement; 110 omni and 79 spot placements plus the root SkyLight and sun; restored metro mural and CliffDry layer weights; exact metro graffiti wall key for the REF-backed albedo derivation; worlds/shaunwhite/tests/albedo.rs and texture.rs, collision.rs, level.rs, layers.rs"#,
         source: r#"the user's own copy, extracted unchanged; object directory/envelopes hand-checked separately, texture fields cross-checked with AnvilToolkit 1.3.7's AC2/Brotherhood readers and AC2 schema, duplicated compiled metadata and exact mip lengths checked on every texture; BC1/2/3 decoded against third-party bcdec_rs 0.2.0; code 12's BC3 storage established by sizes and normal-map content, not the AC2 enum; collision fields cross-checked with the AC2 schema and hand-inspected inert and multi-inert entity/shape references; light fields checked with the AC2 schema and exact body ends, SkyLight fields with native property descriptors and serializer; physical light units, colour encoding and direction signs remain explicit lowering approximations; restored layer equation from the shipped SDB2 HLSL and Microsoft-disassembled SM3 pixel shader, native material property hashes identify layer tints and alpha switches"#,
     },
     Declared {

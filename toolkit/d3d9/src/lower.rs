@@ -123,6 +123,40 @@ fn field(c: &crate::Constant) -> Result<Field> {
 }
 
 pub(crate) fn lift(source: &Shader, bytes: &[u8]) -> Result<Program> {
+    lower(source, bytes, None)
+}
+
+pub(crate) fn project(source: &Shader, bytes: &[u8], cut: crate::Projection, tail: bool) -> Result<Program> {
+    if cut.lanes.iter().any(|&n| n > 3)
+        || cut.lanes[0] == cut.lanes[1]
+        || cut.lanes[0] == cut.lanes[2]
+        || cut.lanes[1] == cut.lanes[2]
+        || !source.instructions.iter().any(|i| i.word == cut.after_word)
+    {
+        return Err(error(
+            cut.after_word,
+            "invalid projection lanes or instruction boundary",
+        ));
+    }
+    if tail && source.inputs.iter().any(|i| i.register == 31) {
+        return Err(error(
+            cut.after_word,
+            "projection input register v31 already occupied",
+        ));
+    }
+    let mut program = lower(source, bytes, Some((cut, tail)))?;
+    // A derived value and its original program share the source hash, but are distinct cache artifacts.
+    program.provenance.lifter = format!(
+        "primase-d3d9/{}:word={}:r{}:{:?}",
+        if tail { "reencode" } else { "projection" },
+        cut.after_word,
+        cut.temporary,
+        cut.lanes
+    );
+    Ok(program)
+}
+
+fn lower(source: &Shader, bytes: &[u8], projection: Option<(crate::Projection, bool)>) -> Result<Program> {
     let mut l = Lower {
         source,
         b: Builder::new(),
@@ -146,6 +180,63 @@ pub(crate) fn lift(source: &Shader, bytes: &[u8]) -> Result<Program> {
     for i in &source.instructions {
         l.at = i.word;
         l.instruction(i)?;
+        if let Some((cut, tail)) = projection
+            && i.word == cut.after_word
+        {
+            let mask = cut.lanes.iter().fold(0, |m, n| m | (1 << n));
+            let value = l.register(Register::Temporary(cut.temporary), mask)?;
+            l.notes.push(format!(
+                "derived register projection after word {}: r{} lanes {:?}; {}",
+                cut.after_word,
+                cut.temporary,
+                cut.lanes,
+                if tail {
+                    "original tail with replacement input"
+                } else {
+                    "prefix only; alpha one"
+                }
+            ));
+            if tail {
+                let index = l.interface.inputs.len();
+                let mut input = varying("DERIVED_RGB", 0, 7, 31, None);
+                input.used = true;
+                l.interface.inputs.push(input);
+                let arg = Val {
+                    expr: l.b.app(E::FunctionArgument(index as u32)),
+                    kind: Kind::F,
+                    width: 3,
+                };
+                let mut parts = (0..4).map(|n| l.b.lane(value, n)).collect::<Vec<_>>();
+                for (n, &lane) in cut.lanes.iter().enumerate() {
+                    parts[lane as usize] = l.b.lane(arg, n as u8);
+                }
+                let replaced = l.b.compose(&parts);
+                l.write(
+                    Destination {
+                        register: Register::Temporary(cut.temporary),
+                        mask,
+                        saturate: false,
+                        partial_precision: false,
+                    },
+                    replaced,
+                );
+            } else {
+                let mut parts = cut.lanes.map(|n| l.b.lane(value, n)).to_vec();
+                parts.push(l.b.lit_f(1.));
+                let rgb = l.b.compose(&parts);
+                l.locals.retain(|r, _| !matches!(r, Register::Target(_)));
+                l.write(
+                    Destination {
+                        register: Register::Target(0),
+                        mask: 15,
+                        saturate: false,
+                        partial_precision: false,
+                    },
+                    rgb,
+                );
+                break;
+            }
+        }
         l.b.check().map_err(|e| error(i.word, e))?;
     }
     l.finish(bytes)
