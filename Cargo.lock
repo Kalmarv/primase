@@ -1404,6 +1404,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "primase-shred"
+version = "0.1.0"
+dependencies = [
+ "primase-bytes",
+ "primase-compress",
+ "primase-hash",
+ "primase-testdata",
+ "thiserror",
+]
+
+[[package]]
 name = "primase-skatebird"
 version = "0.1.0"
 dependencies = [

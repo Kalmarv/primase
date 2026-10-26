@@ -184,3 +184,24 @@ mod md5_tests {
         }
     }
 }
+
+/// SDBM over the exact bytes: h = h * 65599 + byte, modulo 2^32.
+pub fn sdbm(bytes: &[u8]) -> u32 {
+    bytes
+        .iter()
+        .fold(0u32, |h, &b| h.wrapping_mul(65599).wrapping_add(u32::from(b)))
+}
+
+#[cfg(test)]
+mod sdbm_tests {
+    #[test]
+    fn hand_worked_values() {
+        assert_eq!(super::sdbm(b""), 0);
+        assert_eq!(super::sdbm(b"a"), 97);
+        // ab: 97 * 65599 + 98 = 6,363,201.
+        // abc: 6,363,201 * 65599 + 99 = 417,419,622,498;
+        // subtract 97 * 2^32 = 416,611,827,712 -> 807,794,786.
+        assert_eq!(super::sdbm(b"ab"), 6_363_201);
+        assert_eq!(super::sdbm(b"abc"), 807_794_786);
+    }
+}

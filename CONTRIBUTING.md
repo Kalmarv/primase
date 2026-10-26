@@ -359,6 +359,7 @@ produced by something other than the code it checks.
 | `installs.skatebird` | yes | SkateBIRD's install folder (`SkateBIRD_Data`: a Unity 2019.4.20f1 player) | the user's own install |
 | `installs.sledding` | yes | Sledding Game's install folder (`Sledding Game_Data`: a Unity 6000.3 player) | the user's own install |
 | `installs.stuntboost` | yes | STUNTBOOST's install folder (Steam buildid 25832744: `Content/Models/Export`) | the user's own install |
+| `installs.shred` | yes | Tony Hawk: SHRED's (PS3, 2010) disc folder: `PS3_GAME/USRDIR` with its PAK archives | the user's own disc, extracted unchanged |
 | `installs.skate` | yes | the skate. install the ReSkate tools use (`Data`: its `layout.toc`, TOCs and CAS archives; the Oodle 9 DLL) | the user's own install |
 | `keys.gta` | yes | the user's GTA V archive key material in the community layout (`gtav_ng_key.dat`, `gtav_ng_decrypt_tables.dat`, `gtav_hash_lut.dat`, optional `gtav_aes_key.dat`); never committed | the user's own key material, checked against published digests |
 | `keys.elden` | - | the user's Elden Ring archive keys, one PKCS#1 `RSA PUBLIC KEY` PEM per archive named after its stem, and `regulation.key`, the key of `regulation.bin` as 64 hexadecimal digits (held to the SHA-256 worlds/fromsoft/src/elden/mod.rs states) | the community unpacker's published keys (UXM's ArchiveKeys.cs) and SoulsFormats' RegulationDecryptor key for the game, written out by a script kept with the game's private tools |

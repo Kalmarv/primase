@@ -33,6 +33,7 @@ members = [
     "worlds/unity",
     "worlds/skatebird",
     "worlds/stuntboost",
+    "worlds/shred",
     "worlds/frostbite",
     "worlds/gta",
     "worlds/monogame",

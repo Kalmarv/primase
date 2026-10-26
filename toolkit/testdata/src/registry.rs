@@ -19,6 +19,7 @@ pub enum Game {
     Sledding,
     Stuntboost,
     ShaunWhite,
+    Shred,
     Skate,
     General,
 }
@@ -35,6 +36,7 @@ impl Game {
             Game::Sledding => "sledding",
             Game::Stuntboost => "stuntboost",
             Game::ShaunWhite => "shaunwhite",
+            Game::Shred => "shred",
             Game::Skate => "skate",
             Game::General => "general",
         }
@@ -197,6 +199,12 @@ pub const INSTALLS: &[Entry] = &[
         key: "installs.stuntboost",
         about: "STUNTBOOST's install folder (Steam buildid 25832744: `Content/Models/Export`)",
         source: "the user's own install",
+        gate: true,
+    },
+    Entry {
+        key: "installs.shred",
+        about: "Tony Hawk: SHRED's (PS3, 2010) disc folder: `PS3_GAME/USRDIR` with its PAK archives",
+        source: "the user's own disc, extracted unchanged",
         gate: true,
     },
     Entry {
