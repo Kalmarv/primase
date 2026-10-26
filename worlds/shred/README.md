@@ -448,3 +448,58 @@ fullscreen pass `shaders\pixelsfxog.psp`, whose microcode was decoded whole: w
 the smoothstep, the height window, view-space z against radial distance and the colour encoding. That MainInv, which
 unprojects the depth, is the inverse projection is inferred (the shader divides by w, the engine patches only the
 height plane), not read from a camera writer.
+
+## Animation reference rigs
+
+`read::reference_rig::read_reference_rigs` takes caller-selected `Archive` values,
+each naming a PAK and its exact animation-container entry. `append_bundle` accepts
+already decoded container bytes. Neither API chooses a skating, snowboarding,
+crowd or UI variant, reads motion siblings, or joins joints to render bones by name.
+Every type 1 occurrence becomes a separate `shred.reference_rig` entity, keyed by
+PAK, entry, record offset, asset ID and GUID. Copies are not merged by ID or GUID.
+
+The reusable 32-bit big-endian bundle/rig codec lives in `primase-morpheme`.
+The component retains joint indices, byte names, parents, local XYZW rotations,
+XYZ translations, the ignored position lane's original bits, separate rig-header
+orientation and raw header vector, the caller's `SourceFrame`, and the complete rig payload
+for auxiliary fields whose meaning remains unassigned. Derived source reference
+matrices use the authored values directly, without quaternion normalization;
+`matrices()` conjugates these maps through the recorded source frame. These are
+reference-space queries, not posed or baked geometry.
+
+Native evidence is the PS3 executable SHA256
+`27918ced575f802a5e372622cfa3899789b8af4490c53b07084c7a99b9431622`:
+
+| Consumer | Established contract |
+|---|---|
+| `0x396474` | 32-byte bundle headers; payload size at +24, rounded to 16 for stepping |
+| `0x714424` | Rig-relative hierarchy (+0x20), name table (+0x44), reference attributes (+0x48); hierarchy runtime pointer replaced by inline parent array |
+| `0x706968`, `0x706804` | String-table-relative ID, offset and byte arrays; lookup by source joint index |
+| `0x7089f0` | Attribute-header-relative data buffer, then buffer-relative descriptor and value arrays |
+| `0x390e18`, `0x392264` | Type 6 quaternion and type 2 position produce local matrices; global reference is parent global times local; getter returns the resulting joint matrix |
+| `0x36810` | Render bones matched to animation joint names use these global references before inversion; only unmatched bones use the SCP matrix fallback |
+
+The rig-header orientation has a separate later consumer. Its relationship to render
+bone space is not asserted here. `source_space_rigs` explicitly reports deferred
+core Skeleton/binding conversion, and `rigs_with_uninterpreted_fields` reports the
+retained auxiliary data. Unknown network/other assets are bounded and individually
+reported with source identity, type and byte count. Malformed supported rigs fail
+with a source offset. Bundle validation completes before `append_bundle` mutates
+its World or report. Motion samples, state graphs, events, retargeting, skin
+lowering and runtime posing remain outside this reader.
+
+Public prior work was inspected read-only:
+[MorphemeConnect's reference-rig reader](https://github.com/LordRadai/MorphemeConnect/blob/81704f62b0cd35c20cf985f845095a4393a1c37a/MorphemeConnect/src/FromsoftFormat/Morpheme/MR/Rig/Rig.cpp).
+Its 64-bit layout differs from this executable's 32-bit layout; no code was reused.
+The native relocators and the literal hand-worked fixture establish this reader's
+layout. The fixture checks a noncommuting two-joint reference and frame conversion;
+the disc test checks all five supplied containers, every supported field's bounds,
+component verification and explicit coverage reporting. A corpus census alone is
+not an independent matrix oracle or a claim of correct skin deformation.
+
+The full five-container gate (`actor_male`, `ai_skate`, `skate`, `snowboard`, `ui`)
+reads 1,680 records through exact EOF: ten rig occurrences, 812 joints and seven
+distinct asset-ID/GUID pairs, with 1,670 non-rig records reported. Every rig verifies
+under both an identity frame and a mirrored frame with 0.01 metres per source unit.
+These counts include repeated occurrences across archives; they are not deduplicated
+rig or animation counts. Empty requested bundles are explicit in `bundles_without_rigs`.

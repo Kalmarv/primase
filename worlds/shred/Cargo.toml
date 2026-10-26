@@ -19,6 +19,7 @@ primase-hash.workspace = true
 primase-havok.workspace = true
 primase-lua51.workspace = true
 primase-rsx.workspace = true
+primase-morpheme.workspace = true
 quantydb-sqlite.workspace = true
 thiserror.workspace = true
 half.workspace = true

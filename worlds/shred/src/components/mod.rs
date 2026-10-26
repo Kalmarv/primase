@@ -1,6 +1,8 @@
 //! Source identities survive frame conversion; no material semantics are inferred from IDs.
 use primase_core::{Component, Geometry, Linear, Transform, world::Linearity};
 use serde::Serialize;
+mod reference_rig;
+pub use reference_rig::ReferenceRig;
 mod skin;
 pub use skin::{SourceBone, SourceSkeleton, SourceSkin, SourceSkinVertex};
 mod vertex_inputs;

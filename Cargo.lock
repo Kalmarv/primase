@@ -1342,6 +1342,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "primase-morpheme"
+version = "0.1.0"
+dependencies = [
+ "primase-bytes",
+ "thiserror",
+]
+
+[[package]]
 name = "primase-reskate"
 version = "0.1.0"
 dependencies = [
@@ -1431,6 +1439,7 @@ dependencies = [
  "primase-hash",
  "primase-havok",
  "primase-lua51",
+ "primase-morpheme",
  "primase-rsx",
  "primase-testdata",
  "primase-texcodec",

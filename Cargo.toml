@@ -19,6 +19,7 @@ members = [
     "toolkit/rsx",
     "toolkit/havok",
     "toolkit/lua51",
+    "toolkit/morpheme",
     "toolkit/dxbc",
     "toolkit/d3d9",
     "toolkit/shader",
@@ -89,6 +90,7 @@ primase-rsx = { path = "toolkit/rsx" }
 primase-cache = { path = "toolkit/cache" }
 primase-havok = { path = "toolkit/havok" }
 primase-lua51 = { path = "toolkit/lua51" }
+primase-morpheme = { path = "toolkit/morpheme" }
 primase-dxbc = { path = "toolkit/dxbc" }
 primase-d3d9 = { path = "toolkit/d3d9" }
 primase-shader = { path = "toolkit/shader" }

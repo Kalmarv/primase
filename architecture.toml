@@ -51,3 +51,7 @@ reason = "the tagfile reader reads untrusted section trees, type tables and comp
 [[parse_crate]]
 path = "toolkit/lua51"
 reason = "the chunk reader reads untrusted precompiled scripts: counts, strings and instructions"
+
+[[parse_crate]]
+path = "toolkit/morpheme"
+reason = "the reference-rig reader reads untrusted bundle lengths, relative pointers and joint arrays"
