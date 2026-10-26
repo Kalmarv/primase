@@ -245,3 +245,32 @@ vertical one (-0.004), green with the vertical gradient up the image (-0.071) an
 baked from height tilts away from the slope, and a crease is dark where it is low. The vertices say the tangent
 follows +u and `cross(N, T) * w` follows -v (up the image) on 99.4% of 30,784 triangles. Level 01 has no brick or wall
 with a normal map: the maps belong to the characters and the water effects.
+
+## Shader databases
+
+`read::shaders::read` reads an uncompressed SDB2 v39 (`ekshadersPChigh.bin`, `ekshadersPCmed.bin`,
+`ekshadersPClow.bin`). The caller chooses the quality file. `read_into` attaches the chosen database as
+`shaunwhite.shader_library`; a failed read leaves the world unchanged. Material permutation selection and
+binding resolution remain separate work, so merely loading this resource does not select a material shader.
+
+The database retains every source's raw bytes, CRC-32 and dependency identity; every table key (kind,
+64-bit permutation, 128-bit source dependency mask); raw vertex/pixel bytecodes; both native stage cache
+keys; literal render-state assignments; save/restore state placeholders; both sampler-binding groups
+(sampler name, texture parameter name, packed address, sampler-state pairs); and runtime state-variable
+names. It checks source CRCs, unique keys, spans, zero table reserves, payload tiling and the exact end of
+every metadata tail. Unknown versions/kinds and compressed siblings are named refusals. D3D9 state values
+are retained in their original vocabulary, without destination policy.
+
+Kinds 4 and 8 carry the same 48-byte BEEF header and counted metadata. Kind 8 is a **state-only pass**,
+not a vertex declaration: the native loader saves, sets and restores its render states without shader
+bytecode. Zero-length kind-4 records retain their keys as `Payload::Missing`, distinct from a shader with
+an empty body. Kinds 5..7 hold utility programs; kind 6 is retained without guessing a purpose (the native
+loader marks its presence without loading its stage). The generic `primase_d3d9::frame` walks SM3 token
+lengths through END, including comments and immediates, without treating an END-shaped operand as a terminator.
+Framing preserves operations a future lifter may refuse; it is not semantic shader validation.
+
+The hand-worked fixture exercises every record kind, both sampler groups and truncated/corrupt inputs.
+The real-data test reads all three quality databases to the exact end. High and medium each contain 62
+sources and 6,456 records (54 uncompiled keys); low has 62 sources and 3,919 records. High record 5's pixel
+program is the same one checked against Microsoft D3DDisassemble by `primase-d3d9`. Game sources,
+bytecode, disassembly and native decompilation remain outside the repository.

@@ -33,3 +33,52 @@ pub const LIFTER_VERSION: u32 = 1;
 pub fn lift(bytes: &[u8]) -> Result<primase_shader::Program> {
     lower::lift(&read(bytes)?, bytes)
 }
+
+/// Frame the first raw SM3 vertex or pixel program in a container's remaining bytes.
+/// Returns its stage and exact bytes through END; subsequent container metadata is not consumed.
+/// This checks token/comment spans, not instruction semantics: an unsupported operation is retained as
+/// bytecode for a later lifter to refuse. It never searches for END inside operands or comments.
+pub fn frame(bytes: &[u8]) -> Result<(primase_shader::Stage, &[u8])> {
+    use primase_shader::Stage;
+    let word = |at: usize| -> Result<u32> {
+        let b = bytes
+            .get(at..at.saturating_add(4))
+            .ok_or_else(|| error(at / 4, "truncated raw program token"))?;
+        let a: [u8; 4] = b
+            .try_into()
+            .map_err(|_| error(at / 4, "truncated raw program word"))?;
+        Ok(u32::from_le_bytes(a))
+    };
+    let stage = match word(0)? {
+        0xfffe_0300 => Stage::Vertex,
+        0xffff_0300 => Stage::Pixel,
+        version => {
+            return Err(error(
+                0,
+                format!("raw program version {version:#x}, expected vs_3_0 or ps_3_0"),
+            ));
+        }
+    };
+    let mut at = 4usize;
+    while at / 4 < 1_048_576 {
+        let token = word(at)?;
+        at += 4;
+        if token == 0xffff {
+            return Ok((stage, &bytes[..at]));
+        }
+        let count = if token & 65535 == 65534 {
+            (token >> 16) & 32767
+        } else {
+            (token >> 24) & 15
+        };
+        let end = at.saturating_add(count as usize * 4);
+        if end > bytes.len() {
+            return Err(error(
+                at / 4 - 1,
+                "raw program operand/comment span exceeds container",
+            ));
+        }
+        at = end;
+    }
+    Err(error(at / 4, "raw program exceeds 1,048,576 words or lacks END"))
+}

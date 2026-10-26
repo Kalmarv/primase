@@ -414,6 +414,27 @@ pub fn declaration(query: Query) -> Option<&'static Declared> {
 /// Every file of an install or an oracle set a test asks for, by its query's key.
 pub const DECLARED: &[Declared] = &[
     Declared {
+        query: Query::Install(Game::ShaunWhite, Some("ekshadersPChigh.bin")),
+        status: Status::Live,
+        gate: true,
+        about: "Shaun White Skateboarding's uncompressed high-quality SDB2 v39 database: source CRCs and identities, all raw stage programs, pass metadata tails, state-only and missing records; worlds/shaunwhite/tests/shaders.rs",
+        source: "the user's own install; hand-worked fixture and native version-39 loader establish framing; record 5's PS is also checked against Microsoft's disassembly in toolkit/d3d9/tests/disassembly.rs",
+    },
+    Declared {
+        query: Query::Install(Game::ShaunWhite, Some("ekshadersPCmed.bin")),
+        status: Status::Live,
+        gate: true,
+        about: "Shaun White Skateboarding's uncompressed medium-quality SDB2 v39 database, every record and metadata tail; worlds/shaunwhite/tests/shaders.rs",
+        source: "the user's own install; hand-worked fixture and native version-39 loader establish framing",
+    },
+    Declared {
+        query: Query::Install(Game::ShaunWhite, Some("ekshadersPClow.bin")),
+        status: Status::Live,
+        gate: true,
+        about: "Shaun White Skateboarding's uncompressed low-quality SDB2 v39 database, every record and metadata tail; worlds/shaunwhite/tests/shaders.rs",
+        source: "the user's own install; hand-worked fixture and native version-39 loader establish framing",
+    },
+    Declared {
         query: Query::Oracle(OracleSet::D3dDisassembler, Game::General, "sm3"),
         status: Status::Live,
         gate: true,

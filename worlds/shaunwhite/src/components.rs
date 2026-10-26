@@ -1,8 +1,15 @@
 //! The World data the Shaun White Skateboarding reader attaches (`shaunwhite.*`).
 
+use primase_core::{Component, Entity, Geometry};
 use std::collections::BTreeMap;
 
-use primase_core::{Component, Entity, Geometry};
+/// The chosen SDB2 shader database, supplied by the reader. Raw sources, stage bytecodes and pass metadata
+/// are retained; selecting a material's permutation and resolving its bindings is a separate pass.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShaderLibrary(pub std::sync::Arc<crate::shaders::Database>);
+impl primase_core::Resource for ShaderLibrary {
+    const NAME: &'static str = "shaunwhite.shader_library";
+}
 
 /// Where a placement comes from: its cell entry, its Entity object's id, and its Visual's ResourceRef kind byte (0xfe
 /// or 0xff; its meaning is not read).

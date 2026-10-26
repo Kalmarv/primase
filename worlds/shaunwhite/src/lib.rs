@@ -5,5 +5,6 @@
 pub mod components;
 pub mod passes;
 pub mod read;
+pub mod shaders;
 
 pub use passes::register;

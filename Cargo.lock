@@ -1391,6 +1391,8 @@ dependencies = [
  "primase-anvil",
  "primase-bytes",
  "primase-core",
+ "primase-d3d9",
+ "primase-hash",
  "primase-image",
  "primase-meshops",
  "primase-testdata",
