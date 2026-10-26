@@ -7,8 +7,10 @@
 //! specular level, colour and map are glTF's specular factor, colour and colour texture; the illumination is the
 //! diffuse layer as emission at that strength. Approximations, stated and counted: the specular map, a Blinn-Phong
 //! colour, can darken glTF's dielectric highlight and not brighten it. A Material `lower-shaunwhite-layers` made a
-//! blend (core.layered, before this pass) is drawn by its layers and takes no PBR material of its own. Otherwise the
-//! normal map is not lowered (its green orientation is not established), and a Material holding a mask, second or third
+//! blend (core.layered, before this pass) is drawn by its layers and takes no PBR material of its own, and its normal
+//! map is omitted (counted). The normal map of any other Material is core's normal texture with the scale of its
+//! `HeightScale`, its channels the shader's ([`crate::read::texture::NORMAL_CONVENTION`]), drawn with the mesh's own
+//! tangents. A Material holding a mask, second or third
 //! layer without a blend falls back to its diffuse layer, marked to ignore its vertex
 //! colour (a layered Material's vertex colours are saturated and mostly not grey, 58% of 497,307 vertices of level 01,
 //! against 13% of 801,135 of the others: weights, which drawn as a colour paint magenta and green across rocks and
@@ -129,6 +131,19 @@ fn with_vertex_alpha(w: &World) -> BTreeSet<Entity> {
     out
 }
 
+/// The materials some drawing of which has no tangent stream.
+fn without_tangent(w: &World) -> BTreeSet<Entity> {
+    let mut out = BTreeSet::new();
+    for (e, mesh) in w.iter::<Mesh>() {
+        for (i, p) in mesh.primitives().iter().enumerate() {
+            if !p.streams.contains_key(&Semantic::Tangent(0)) {
+                out.extend(drawn_with(w, e, i, p));
+            }
+        }
+    }
+    out
+}
+
 /// The roughness of a Blinn-Phong exponent `power`: the lobe's GGX roughness `sqrt(2 / (n + 2))`, as glTF's perceptual
 /// roughness (its square root), within 0.05 to 1.
 fn roughness(power: f32) -> f32 {
@@ -184,22 +199,28 @@ impl Pass for LowerShaunwhiteMaterial {
         &[MaterialRef::NAME]
     }
     fn approximates(&self) -> &'static str {
-        "PBR specular approximates the source, normal maps omitted; layered sources without core.layered use the diffuse fallback; additive materials alpha-blended and \
-         unlit; every material one-sided, rough and dielectric"
+        "PBR specular approximates the source, normal maps of blends omitted; layered sources without core.layered use the diffuse fallback; additive materials alpha-blended and \
+         unlit; blended or alpha-tested materials with a vertex alpha below one keep COLOR_0 as a colour multiplier, as core has no alpha-only mode; every material one-sided, \
+         rough and dielectric"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let all: Vec<(Entity, MaterialRef)> = w.iter::<MaterialRef>().map(|(e, m)| (e, m.clone())).collect();
         let vertex_alpha = with_vertex_alpha(w);
+        let untangented = without_tangent(w);
         for (e, m) in all {
             // a blend (core.layered, lower-shaunwhite-layers') is drawn by its layers, each a material of its own: it
             // takes no pbr.material itself (core's and the targets' rule)
             if w.has::<primase_core::LayeredMaterial>(e) {
                 w.remove::<MaterialRef>(e);
                 log.count("blends drawn by their layers (no material of their own)", 1);
+                if m.slots.contains_key("normal") {
+                    log.omit("normal maps of blends drawn by their layers", 1);
+                }
                 continue;
             }
             let base = m.slots.get("diffuse").map(|s| texture_ref(w, s, log));
             let specular_map = m.slots.get("specular").map(|s| texture_ref(w, s, log));
+            let normal_map = m.slots.get("normal").map(|s| texture_ref(w, s, log));
             if base.is_none() {
                 log.count("materials without a diffuse texture (white)", 1);
             }
@@ -212,7 +233,7 @@ impl Pass for LowerShaunwhiteMaterial {
                     1,
                 );
             }
-            for slot in ["normal", "mask", "diffuse_b", "specular_b", "diffuse_c"] {
+            for slot in ["mask", "diffuse_b", "specular_b", "diffuse_c"] {
                 if m.slots.contains_key(slot) {
                     log.omit(&format!("{slot} maps (not lowered)"), 1);
                 }
@@ -226,6 +247,16 @@ impl Pass for LowerShaunwhiteMaterial {
                 roughness: 0.9,
                 ..PbrMaterial::default()
             };
+            if let Some(map) = normal_map {
+                pbr.normal_texture = Some(map);
+                log.count("normal maps lowered (X in alpha, Y in green, Z rebuilt)", 1);
+                if untangented.contains(&e) {
+                    log.approximate(
+                        "normal maps drawn on primitives without a tangent stream (the consumer derives the frame)",
+                        1,
+                    );
+                }
+            }
             if let Some(map) = specular_map {
                 log.count("specular maps lowered (colour texture)", 1);
                 pbr.specular = Some(Specular {
@@ -241,6 +272,9 @@ impl Pass for LowerShaunwhiteMaterial {
                     }
                     (pbr.alpha_mode, pbr.shading) = alpha(s, log);
                     pbr.roughness = roughness(s.specular_power);
+                    if pbr.normal_texture.is_some() {
+                        pbr.normal_scale = s.normal_scale;
+                    }
                     let level = s.specular_level.clamp(0.0, 1.0);
                     let color = [1.; 3]; // Body 332 is Layer2_ModulationColor, not a specular colour.
                     if level != 1.0 || color != [1.0; 3] || pbr.specular.is_some() {
@@ -329,6 +363,7 @@ mod tests {
             illumination: 0.0,
             specular_level: 1.0,
             specular_power: 2.0,
+            normal_scale: 1.,
             layering: crate::components::LayerState::default(),
         }
     }
@@ -380,6 +415,70 @@ mod tests {
         assert_eq!(log.counts.get("materials lowered"), Some(&5));
         assert_eq!(
             log.counts.get("materials without fields (opaque, white)"),
+            Some(&1)
+        );
+        assert!(w.verify_components().is_empty());
+    }
+
+    /// The normal slot is core's normal texture at its own tiling with the `HeightScale` as its scale; the texture
+    /// keeps the convention the reader gave it, and a primitive without tangents is counted.
+    #[test]
+    fn normal_maps_are_lowered_with_their_scale_and_tiling() {
+        use primase_core::{Mesh, Primitive, Topology};
+        let mut w = World::new();
+        let t = texture(&mut w, [0, 0, 0]);
+        let slot = SlotRef {
+            texture: t,
+            scale: [1.0; 2],
+            offset: [0.0; 2],
+            rotation: 0.,
+            texcoord: 0,
+            address: None,
+        };
+        let mut s = state(0, false, false, 128);
+        s.normal_scale = 1.5;
+        let bumped = material(&mut w, Some(s), Some(slot));
+        let normal = SlotRef {
+            scale: [4.0, 2.0],
+            offset: [0.25, 0.],
+            ..slot
+        };
+        w.get_mut::<MaterialRef>(bumped)
+            .unwrap()
+            .slots
+            .insert("normal".into(), normal);
+        let plain = material(&mut w, Some(state(0, false, false, 128)), Some(slot));
+        let mesh = w.spawn();
+        w.insert(
+            mesh,
+            Mesh::new(vec![Primitive {
+                topology: Topology::Triangles,
+                streams: std::collections::BTreeMap::from([(
+                    Semantic::Position,
+                    Stream::F32x3(vec![[0.; 3], [1., 0., 0.], [0., 1., 0.]]),
+                )]),
+                indices: Some(vec![0, 1, 2]),
+                material: Some(bumped),
+            }]),
+        );
+        let mut log = PassLog::default();
+        LowerShaunwhiteMaterial.run(&mut w, &mut log).unwrap();
+        let p = w.get::<PbrMaterial>(bumped).unwrap();
+        let n = p.normal_texture.unwrap();
+        assert_eq!((n.texture, n.texcoord), (t, 0));
+        let tr = n.transform.unwrap();
+        assert_eq!((tr.scale, tr.offset), ([4.0, 2.0], [0.25, 0.0]));
+        assert_eq!(p.normal_scale, 1.5);
+        assert!(w.get::<PbrMaterial>(plain).unwrap().normal_texture.is_none());
+        assert_eq!(
+            log.counts
+                .get("normal maps lowered (X in alpha, Y in green, Z rebuilt)"),
+            Some(&1)
+        );
+        assert_eq!(
+            log.approximations.get(
+                "normal maps drawn on primitives without a tangent stream (the consumer derives the frame)"
+            ),
             Some(&1)
         );
         assert!(w.verify_components().is_empty());

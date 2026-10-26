@@ -187,6 +187,8 @@ pub struct Material {
     pub specular_level: f32,
     /// The float at 114.
     pub specular_power: f32,
+    /// The normal slot's `HeightScale` at 265.
+    pub normal_scale: f32,
     pub layering: LayerState,
     /// The slots that hold a spec id, in body order.
     pub slots: Vec<Slot>,
@@ -264,11 +266,14 @@ impl Material {
         let illumination = v.f32(87, LE).field("Material illumination")?;
         let specular_level = v.f32(110, LE).field("Material specular level")?;
         let specular_power = v.f32(114, LE).field("Material specular power")?;
+        let normal_scale = v.f32(265, LE).field("normal map HeightScale")?;
         let finite = |xs: &[f32]| xs.iter().all(|x| x.is_finite());
-        if !finite(&[illumination, specular_level, specular_power]) || !colors.iter().all(|c| finite(c)) {
+        if !finite(&[illumination, specular_level, specular_power, normal_scale])
+            || !colors.iter().all(|c| finite(c))
+        {
             return Err(Error::Invalid {
-                what: "Material illumination, specular and layer colours",
-                value: format!("{illumination} {specular_level} {specular_power} {colors:?}"),
+                what: "Material illumination, specular, normal scale and layer colours",
+                value: format!("{illumination} {specular_level} {specular_power} {normal_scale} {colors:?}"),
             });
         }
         if !finite(&color) {
@@ -335,6 +340,7 @@ impl Material {
             illumination,
             specular_level,
             specular_power,
+            normal_scale,
             layering,
             slots,
         })
@@ -374,6 +380,8 @@ mod tests {
         for (k, f) in [2.0f32, 3.0, 0.5, -1.0].iter().enumerate() {
             b[196 + 4 * k..200 + 4 * k].copy_from_slice(&f.to_le_bytes());
         }
+        // the normal slot's HeightScale
+        b[265..269].copy_from_slice(&1.5f32.to_le_bytes());
         // generic: a spec id and no layer floats (the floats after it are not tiling)
         b[537..541].copy_from_slice(&0x22u32.to_le_bytes());
         b[541..545].copy_from_slice(&0.45f32.to_le_bytes());
@@ -396,6 +404,7 @@ mod tests {
             (6.0, 0.5, 10.0)
         );
         assert_eq!(m.layering.colors[0], [1.0, 0.75, 0.5, 1.0]);
+        assert_eq!(m.normal_scale, 1.5);
         let names: Vec<_> = m.slots.iter().map(|s| s.name).collect();
         assert_eq!(names, ["diffuse", "generic"]);
         let d = m.slot("diffuse").unwrap();

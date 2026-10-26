@@ -8,8 +8,12 @@
 //!
 //! Code 12 is this game's BC3 normal storage, established by the complete mip sizes and the decoded content
 //! (neutral blocks have alpha/green near 128 and red/blue 255/0). The AC2 schema calls 12 AutoSelect; the toolkit's
-//! later generic table calls it RGBA32F and does not apply here. Normal channel orientation is not established:
-//! the reader keeps the stored pixels, sets the stored Normal role, and leaves `Texture::normal` unset.
+//! later generic table calls it RGBA32F and does not apply here. The channels are the shipped shader's
+//! (`SampleNormalMap` in `ekcommonps.hlsl`): X is the alpha channel and Y the green one, each `(v - 0.5) * 2`, and Z is
+//! rebuilt as `sqrt(1 - x^2 - y^2)`. The shader then takes `x * T + y * B + z * N` with the mesh's tangent `T`, its
+//! normal `N` and `B = cross(N, T) * w` (`DecompressTangentBasis` in `ekcommonvs.hlsl`), which is core's tangent
+//! frame with green along the bitangent (`NormalGreen::Up`). The reader keeps the stored pixels, sets the Normal role
+//! and that convention, [`NORMAL_CONVENTION`].
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
@@ -17,9 +21,20 @@
 )]
 
 use primase_bytes::{Cursor, Endian, Field, FieldError};
-use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
+use primase_core::{
+    ColorSpace, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat, TexRole, Texture,
+};
 
 const LE: Endian = Endian::Little;
+
+/// How the shipped shader reads a normal map (the module documentation): X in alpha, Y in green up the bitangent,
+/// Z rebuilt, the tangent frame's T and `cross(N, T) * w`.
+pub const NORMAL_CONVENTION: NormalConvention = NormalConvention {
+    green: NormalGreen::Up,
+    z: NormalZ::Rebuild,
+    x: NormalX::Alpha,
+    basis: NormalBasis::TangentBitangent,
+};
 pub const TEXTURE_MAP: u32 = 0xA2B7_E917;
 pub const TEXTURE_MAP_SPEC: u32 = 0x989D_C6B2;
 pub const COMPILED_TEXTURE_MAP: u32 = 0x1323_7FE9;
@@ -323,7 +338,7 @@ impl<'a> TextureMap<'a> {
                 levels,
                 color_space,
                 role,
-                normal: None,
+                normal: (role == TexRole::Normal).then_some(NORMAL_CONVENTION),
             });
         }
         end(&c, "face mip chains")?;

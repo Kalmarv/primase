@@ -1,7 +1,8 @@
 //! Hand-worked object/BCn fixtures and the complete texture census of the PC level-01 and standalone texture forges.
 //! Metadata meanings: AnvilToolkit 1.3.7's AC2/Brotherhood code and schema, checked against this game's duplicated
 //! metadata and exact mip sizes. Pixel oracle: third-party bcdec_rs 0.2.0 through primase-texcodec's Bcdec adapter.
-//! Code 12's BC3 storage is content evidence (not a value supplied by the AC2 table); normal orientation is unknown.
+//! Code 12's BC3 storage is content evidence (not a value supplied by the AC2 table); its channels are checked in
+//! `normals.rs`.
 use std::collections::BTreeMap;
 use std::fs::File;
 

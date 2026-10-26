@@ -213,3 +213,26 @@ Runtime Direct3D 9 declarations identify COLOR0 and morph COLOR1 as D3DCOLOR (st
 converts both to core RGBA. This is also checked against the restored game's metro mural: raw byte order hides the
 third layer, whereas BGRA-to-RGBA restores it at the same places. Saturated colour corners remain saturated under
 this permutation; they are shader weights, and the earlier red/blue interpretation was reversed.
+
+## Normal maps
+
+A Material's `normal` slot is a BC3 texture of format code 12. The shipped shader (`SampleNormalMap`, `ekcommonps.hlsl`)
+reads X from the **alpha** channel and Y from **green**, each `(v - 0.5) * 2`, rebuilds Z as `sqrt(1 - x^2 - y^2)`, scales
+X and Y by the Material's `HeightScale` and takes `x * T + y * B + z * N` with the vertex tangent `T`, the normal `N` and
+`B = cross(N, T) * w` (`DecompressTangentBasis`, `ekcommonvs.hlsl`). That is core's tangent frame with green along the
+bitangent, so the reader gives every normal texture `NormalConvention { x: Alpha, green: Up, z: Rebuild,
+basis: TangentBitangent }` (`read::texture::NORMAL_CONVENTION`), and the Mesh reader gives each primitive whose vertex
+has room for it a `Tangent(0)` stream (xyz as the normal, the fourth byte the sign: 255 is +1, 0 is -1; 4,581 of level
+01's 4,646 primitives, every normal-mapped one). `HeightScale` is the float at body 265 (property hash `0xd963a8e7`,
+the CRC-32 of `HeightScale`, last field of the slot's `SKGenericMaterialNormalMap` object; 1 on 788 of the 798
+Materials with a normal map, 0.75 to 1.5 on the characters' clothes) and becomes `pbr.normal_scale`.
+`lower-shaunwhite-material` lowers the slot to `pbr.normal_texture` at the slot's tiling; a blend's (`core.layered`)
+normal map is omitted and counted.
+
+Checked against the pixels and vertices (`tests/normals.rs`, level 01's 15 character maps with a diffuse map, the
+characters being the only static-height normal maps in the game's levels; the others are water waves): red and blue
+are constant, the alpha channel correlates with the diffuse luminance's horizontal gradient (mean -0.102) and not its
+vertical one (-0.004), green with the vertical gradient up the image (-0.071) and not the horizontal (-0.008): a map
+baked from height tilts away from the slope, and a crease is dark where it is low. The vertices say the tangent
+follows +u and `cross(N, T) * w` follows -v (up the image) on 99.4% of 30,784 triangles. Level 01 has no brick or wall
+with a normal map: the maps belong to the characters and the water effects.

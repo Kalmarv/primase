@@ -358,6 +358,27 @@ impl CompiledMesh {
                         .collect(),
                 ),
             );
+            if let Some(at) = l.tangent {
+                // xyz as the normal, the fourth byte the bitangent sign (the shader's `cross(N, T) * w`, whose byte
+                // is read as 0 or 255 in the game's meshes)
+                streams.insert(
+                    Semantic::Tangent(0),
+                    Stream::F32x4(
+                        (0..n)
+                            .map(|i| {
+                                let b = vert(i);
+                                let t = norm(unorm(b, at));
+                                let w = if b.get(at + 3).copied().unwrap_or(255) >= 128 {
+                                    1.0
+                                } else {
+                                    -1.0
+                                };
+                                [t[0], t[1], t[2], w]
+                            })
+                            .collect(),
+                    ),
+                );
+            }
             if let Some(at) = l.uv1 {
                 streams.insert(
                     Semantic::TexCoord(1),
@@ -569,6 +590,45 @@ mod tests {
         assert_eq!(
             p.streams.get(&Semantic::TexCoord(0)),
             Some(&Stream::F32x2(vec![[0.0, 0.5], [1.0, 0.5], [2.0, 0.5]]))
+        );
+    }
+
+    /// A stride 4 longer than position, normal and one set of texture coordinates holds a tangent after the normal:
+    /// its xyz as the normal's, normalised, and its fourth byte the sign of the bitangent (255 is +1, 0 is -1).
+    #[test]
+    fn a_tangent_follows_the_normal_and_its_last_byte_is_the_bitangent_sign() {
+        let with_tangent = |i: usize, tangent: [u8; 4]| {
+            let mut v = Vec::new();
+            [i as f32, 0.0, 0.0]
+                .iter()
+                .for_each(|x| v.extend(x.to_le_bytes()));
+            v.extend([128, 128, 255, 0]);
+            v.extend(tangent);
+            [i as f32, 0.5].iter().for_each(|x| v.extend(x.to_le_bytes()));
+            v
+        };
+        let stream = vec![
+            with_tangent(0, [255, 128, 128, 255]),
+            with_tangent(1, [128, 255, 128, 0]),
+            with_tangent(2, [128, 128, 255, 255]),
+        ];
+        let m = CompiledMesh::parse(&data(&[stream], 0, None)).unwrap();
+        assert_eq!(m.stride, 28);
+        let p = &m.primitives(|_| None).unwrap().list[0];
+        let Some(Stream::F32x4(t)) = p.streams.get(&Semantic::Tangent(0)) else {
+            panic!("no tangent stream");
+        };
+        for (got, axis, w) in [(t[0], 0, 1.0), (t[1], 1, -1.0), (t[2], 2, 1.0)] {
+            assert!((got[axis] - 1.0).abs() < 0.01 && got[3] == w, "{got:?}");
+            let len = (got[0] * got[0] + got[1] * got[1] + got[2] * got[2]).sqrt();
+            assert!((len - 1.0).abs() < 1e-6);
+        }
+        // a stride without the room has none
+        let plain = CompiledMesh::parse(&data(&[tri(0.0, 0.0, None)], 0, None)).unwrap();
+        assert!(
+            !plain.primitives(|_| None).unwrap().list[0]
+                .streams
+                .contains_key(&Semantic::Tangent(0))
         );
     }
 

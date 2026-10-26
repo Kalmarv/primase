@@ -105,6 +105,7 @@ fn fixture() -> (World, Entity, Entity, Entity) {
                 illumination: 0.,
                 specular_level: 1.,
                 specular_power: 10.,
+                normal_scale: 1.,
                 layering: LayerState {
                     colors: [[1., 1., 1., 0.5], [1., 1., 0.5, 0.5]],
                     use_alpha: [true; 3],
@@ -326,6 +327,7 @@ fn plain(
                 illumination: 0.,
                 specular_level: 1.,
                 specular_power: 10.,
+                normal_scale: 1.,
                 layering: LayerState::default(),
             }),
             slots: BTreeMap::from([(

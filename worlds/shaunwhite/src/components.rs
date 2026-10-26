@@ -67,6 +67,9 @@ pub struct MaterialState {
     pub specular_level: f32,
     /// The float at 114: an exponent, 1 and up.
     pub specular_power: f32,
+    /// The normal slot's `HeightScale` (the float at 265): the shader's `g_NormalMap_HeightScales.x`, which scales the
+    /// normal map's X and Y; 1 where the Material has no normal map.
+    pub normal_scale: f32,
     pub layering: LayerState,
 }
 
@@ -93,7 +96,7 @@ impl MaterialRef {
 
 impl Component for MaterialRef {
     const NAME: &'static str = "shaunwhite.material";
-    const VERSION: u32 = 3;
+    const VERSION: u32 = 4;
     const GEOMETRY: Geometry = Geometry::None;
     fn references(&self, out: &mut Vec<Entity>) {
         out.extend(self.textures());

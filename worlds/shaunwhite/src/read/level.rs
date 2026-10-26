@@ -562,6 +562,13 @@ fn to_core_frame(prims: &mut [Primitive], frame: SourceFrame, winding: bool) {
                 (Semantic::Normal, Stream::F32x3(v)) => {
                     v.iter_mut().for_each(|x| *x = frame.direction(*x));
                 }
+                (Semantic::Tangent(_), Stream::F32x4(v)) => {
+                    // the frame is a rotation (ENU): the sign w of the bitangent keeps its meaning
+                    for x in v.iter_mut() {
+                        let t = frame.direction([x[0], x[1], x[2]]);
+                        *x = [t[0], t[1], t[2], x[3]];
+                    }
+                }
                 _ => {}
             }
         }
@@ -652,6 +659,7 @@ fn material(
                     illumination: m.illumination,
                     specular_level: m.specular_level,
                     specular_power: m.specular_power,
+                    normal_scale: m.normal_scale,
                     layering: m.layering,
                 });
                 for slot in &m.slots {
