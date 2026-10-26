@@ -14,6 +14,8 @@
 
 mod ctab;
 mod lower;
+mod sampler;
+pub use sampler::sampler_states;
 mod tokens;
 
 pub use ctab::{Constant, ConstantTable, Type, TypeMember};

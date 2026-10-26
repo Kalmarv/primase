@@ -9,6 +9,7 @@ pub mod markers;
 pub mod material;
 pub mod mesh;
 pub mod scene;
+pub mod shader_material;
 pub mod shaders;
 pub mod texture;
 pub mod tree;

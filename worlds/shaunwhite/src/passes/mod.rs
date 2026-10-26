@@ -5,6 +5,7 @@ mod grind;
 mod layers;
 mod lighting;
 mod material;
+mod resolve_shaders;
 mod select;
 mod water;
 pub use collision::{LOWER_SHAUNWHITE_COLLISION, LowerShaunwhiteCollision};
@@ -14,6 +15,7 @@ pub use lighting::{
     LOWER_SHAUNWHITE_LIGHTING, LightColour, LowerShaunwhiteLighting, PointScale, SpotAxis, SunVector,
 };
 pub use material::{LOWER_SHAUNWHITE_MATERIAL, LowerShaunwhiteMaterial};
+pub use resolve_shaders::{RECORD_FIELD, RESOLVE_SHAUNWHITE_SHADERS, ResolveShaunwhiteShaders, material_key};
 pub use select::{
     Class, Influence, Keep, ROWS, Row, SELECT_SHAUNWHITE_CONTENT, SelectShaunwhiteContent, Subject, Test,
 };
@@ -30,4 +32,5 @@ pub fn register(reg: &mut PassRegistry) {
     reg.add(&LOWER_SHAUNWHITE_GRINDS);
     reg.add(&LOWER_SHAUNWHITE_LIGHTING);
     reg.add(&LOWER_SHAUNWHITE_LAYERS);
+    reg.add(&RESOLVE_SHAUNWHITE_SHADERS);
 }

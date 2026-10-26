@@ -649,6 +649,12 @@ fn material(
         r.name = o.name.clone();
         match Material::parse(body) {
             Ok(m) => {
+                match super::shader_material::read(body) {
+                    Ok(fields) => {
+                        world.insert(e, fields);
+                    }
+                    Err(error) => bump(format!("material shader fields not read: {error}")),
+                }
                 r.state = Some(MaterialState {
                     blend: m.blend,
                     blended: m.blended,

@@ -274,3 +274,38 @@ The real-data test reads all three quality databases to the exact end. High and 
 sources and 6,456 records (54 uncompiled keys); low has 62 sources and 3,919 records. High record 5's pixel
 program is the same one checked against Microsoft D3DDisassemble by `primase-d3d9`. Game sources,
 bytecode, disassembly and native decompilation remain outside the repository.
+
+
+`resolve-shaunwhite-shaders` runs after the caller reads the chosen shader database and the level,
+before material/layer lowerings make new material entities. It derives the supported generic-material
+constraints from the serialized base flag word, layer switches, texture slots, influence-hide mode and
+native generic key setters. The result is a required mask/value, not a guessed whole frame key.
+The pass retains every compatible stored forward-colour record (SHADERCONFIG=2); skin, morph and
+RealTree vertex draws, water, video/multi-texture and unsupported alpha/dynamic-UV controls are named
+and counted. A normal map is allowed rather than required, following the native required/allowed keys.
+It never substitutes a nearby key when no compatible stored record exists.
+
+On each material, `core.shader_binding` holds pixel-stage variants keyed by `shaunwhite.shader.record`
+(the record's index in the chosen SDB2). Variant descriptions keep the full permutation and native pixel
+cache key; `shaunwhite.shader_passes` links the retained records to their original stages and metadata.
+The caller/consumer must choose a draw/frame variant; the resolver does not choose fog, lighting or
+influence-texture settings. Different bytecodes sharing a cache identity remain distinct programs.
+`core.material_programs` retains the program facts and named failures. CTAB register allocations and
+input lane masks remain on each raw-D3D9 `core.shader` interface.
+
+Only established source modulation tints and texture parameters are bound. SDB2 sampler names,
+texture parameter names and native sampler addresses must agree with reflection. Unknown parameters,
+unread textures and sampler states outside the shared D3D9 mapper's subset are missing bindings with
+named report entries, never white textures. Unresolved frame/object constants, unreflected register
+ranges and packed/transformed vertex outputs retain explicit Unknown roles. Per-variant render states
+remain in the source metadata and are counted as not lowered; the binding's unspecified state does not
+claim equivalence to the game. The primary target's RGB is forward **Colour**, not Albedo. Auxiliary
+and alpha/bloom lanes remain unlabelled. This chunk establishes key/reflection coverage, not rendered
+pixel equivalence; the graph-derived albedo slice and native rendering proof are separate work.
+
+The generic constraints are checked by a hand-worked flag/key fixture and independent token/CTAB
+fixtures. A six-level test reads all six level forges as explicit shared sources, resolves through the pass
+manager with component checks, and reports material totals, compatible record variants, unsupported
+reasons and unresolved binding occurrences for each level. The D3D9 enum mapping follows Microsoft's
+[D3DSAMPLERSTATETYPE](https://learn.microsoft.com/windows/win32/direct3d9/d3dsamplerstatetype) and
+[D3DTEXTUREFILTERTYPE](https://learn.microsoft.com/windows/win32/direct3d9/d3dtexturefiltertype).

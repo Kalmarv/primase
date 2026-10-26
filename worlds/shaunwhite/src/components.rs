@@ -11,6 +11,36 @@ impl primase_core::Resource for ShaderLibrary {
     const NAME: &'static str = "shaunwhite.shader_library";
 }
 
+/// Source fields used by the native generic-material key setters. `flags` is the reconstructed runtime
+/// Material flag word, not a shader key. Texture presence follows the stored slots, including unread textures.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MaterialShader {
+    pub flags: u32,
+    pub layers: [bool; 2],
+    pub half_lambert: bool,
+    pub glossiness: bool,
+    pub layer3_no_specular: bool,
+    pub rim_alpha: bool,
+    pub hide: u32,
+    pub dynamic_uv: u32,
+    pub texture_slots: Vec<String>,
+    pub unsupported: Vec<String>,
+}
+impl Component for MaterialShader {
+    const NAME: &'static str = "shaunwhite.material_shader";
+    const GEOMETRY: Geometry = Geometry::None;
+}
+
+/// The exact source records retained by shader resolution. Record numbers are variants of
+/// `shaunwhite.shader.record`; their keys and both stage cache identities remain in the chosen library.
+/// This is a compatible variant set, not a claim that the game draws all passes at once.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShaderPasses(pub Vec<u32>);
+impl Component for ShaderPasses {
+    const NAME: &'static str = "shaunwhite.shader_passes";
+    const GEOMETRY: Geometry = Geometry::None;
+}
+
 /// Where a placement comes from: its cell entry, its Entity object's id, and its Visual's ResourceRef kind byte (0xfe
 /// or 0xff; its meaning is not read).
 #[derive(Clone, Debug, PartialEq, Eq)]

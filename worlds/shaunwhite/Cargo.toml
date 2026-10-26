@@ -14,6 +14,7 @@ primase-bytes.workspace = true
 primase-core.workspace = true
 primase-d3d9.workspace = true
 primase-hash.workspace = true
+primase-shader.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

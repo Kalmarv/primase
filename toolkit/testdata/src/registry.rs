@@ -414,6 +414,20 @@ pub fn declaration(query: Query) -> Option<&'static Declared> {
 /// Every file of an install or an oracle set a test asks for, by its query's key.
 pub const DECLARED: &[Declared] = &[
     Declared {
+        query: Query::Install(Game::ShaunWhite, Some("DataPC_03.forge")),
+        status: Status::Live,
+        gate: true,
+        about: "Shaun White Skateboarding PC level 03, material-key and SDB2 binding coverage; worlds/shaunwhite/tests/resolve_shaders.rs",
+        source: "the user's own copy; material key constraints from native property descriptors and setters, hand-worked key/record fixtures; shader reflection from the stored SM3 programs",
+    },
+    Declared {
+        query: Query::Install(Game::ShaunWhite, Some("DataPC_05.forge")),
+        status: Status::Live,
+        gate: true,
+        about: "Shaun White Skateboarding PC level 05, material-key and SDB2 binding coverage; worlds/shaunwhite/tests/resolve_shaders.rs",
+        source: "the user's own copy; material key constraints from native property descriptors and setters, hand-worked key/record fixtures; shader reflection from the stored SM3 programs",
+    },
+    Declared {
         query: Query::Install(Game::ShaunWhite, Some("ekshadersPChigh.bin")),
         status: Status::Live,
         gate: true,

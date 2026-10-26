@@ -9,11 +9,11 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+primase-core.workspace = true
 primase-shader.workspace = true
 naga.workspace = true
 
 [dev-dependencies]
-primase-core.workspace = true
 primase-shader-exec.workspace = true
 primase-testdata.workspace = true
 
