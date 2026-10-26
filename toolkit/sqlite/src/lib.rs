@@ -105,24 +105,40 @@ impl<'a> Database<'a> {
         let page_size = match raw {
             1 => 65536,
             n if n >= 512 && n.is_power_of_two() => usize::from(n),
-            n => return Err(invalid(16, format!("page size {n} is not a power of two from 512 to 32768"))),
+            n => {
+                return Err(invalid(
+                    16,
+                    format!("page size {n} is not a power of two from 512 to 32768"),
+                ));
+            }
         };
         for (at, name) in [(18, "write version"), (19, "read version")] {
             match view.u8(at).field(name)? {
                 1 => {}
-                2 => return Err(invalid(at, format!("{name} 2: a write-ahead-log database is not read"))),
+                2 => {
+                    return Err(invalid(
+                        at,
+                        format!("{name} 2: a write-ahead-log database is not read"),
+                    ));
+                }
                 n => return Err(invalid(at, format!("{name} {n} is not a known file format"))),
             }
         }
         let reserved = usize::from(view.u8(20).field("reserved bytes")?);
         let usable = page_size - reserved;
         if usable < 480 {
-            return Err(invalid(20, format!("{reserved} reserved bytes leave fewer than 480 usable")));
+            return Err(invalid(
+                20,
+                format!("{reserved} reserved bytes leave fewer than 480 usable"),
+            ));
         }
         for (at, want) in [(21, 64), (22, 32), (23, 32)] {
             let got = view.u8(at).field("payload fraction")?;
             if got != want {
-                return Err(invalid(at, format!("payload fraction {got}, the format fixes {want}")));
+                return Err(invalid(
+                    at,
+                    format!("payload fraction {got}, the format fixes {want}"),
+                ));
             }
         }
         let encoding = view.u32(56, Endian::Big).field("text encoding")?;
@@ -143,7 +159,10 @@ impl<'a> Database<'a> {
         let valid_for = view.u32(92, Endian::Big).field("version-valid-for")?;
         let stated = view.u32(28, Endian::Big).field("page count")?;
         if counter == valid_for && stated != 0 && stated as usize != pages {
-            return Err(invalid(28, format!("header page count {stated}, file holds {pages}")));
+            return Err(invalid(
+                28,
+                format!("header page count {stated}, file holds {pages}"),
+            ));
         }
         let mut db = Database {
             view,
@@ -171,7 +190,8 @@ impl<'a> Database<'a> {
                 Value::Text(s) => s.clone(),
                 _ => return Err(invalid(at, format!("table {name:?} has no CREATE text"))),
             };
-            let root_page = u32::try_from(*root).map_err(|_| invalid(at, format!("table {name:?} root page {root}")))?;
+            let root_page =
+                u32::try_from(*root).map_err(|_| invalid(at, format!("table {name:?} root page {root}")))?;
             db.tables.push(TableInfo {
                 name: name.clone(),
                 root_page,
@@ -204,7 +224,8 @@ impl<'a> Database<'a> {
         if info.root_page == 0 {
             return Err(invalid(0, format!("table {:?} is virtual", info.name)));
         }
-        let columns = parse_columns(&info.sql).map_err(|e| invalid(self.page_offset(1), format!("{:?}: {e}", info.name)))?;
+        let columns = parse_columns(&info.sql)
+            .map_err(|e| invalid(self.page_offset(1), format!("{:?}: {e}", info.name)))?;
         let rows = self.read_btree(info.root_page, &columns)?;
         Ok(Table {
             name: info.name.clone(),
@@ -254,7 +275,12 @@ impl<'a> Database<'a> {
                     }
                 }
                 0x02 | 0x0a => return Err(invalid(head, format!("index b-tree page {kind:#x} in a table"))),
-                n => return Err(invalid(head, format!("page type {n:#x} is not a table b-tree page"))),
+                n => {
+                    return Err(invalid(
+                        head,
+                        format!("page type {n:#x} is not a table b-tree page"),
+                    ));
+                }
             }
         }
         Ok(rows)
@@ -262,7 +288,10 @@ impl<'a> Database<'a> {
 
     fn page_offset_checked(&self, page: u32) -> Result<usize> {
         if page == 0 || page as usize > self.pages {
-            return Err(invalid(0, format!("page {page} is outside the file's {} pages", self.pages)));
+            return Err(invalid(
+                0,
+                format!("page {page} is outside the file's {} pages", self.pages),
+            ));
         }
         Ok(self.page_offset(page))
     }
@@ -271,7 +300,10 @@ impl<'a> Database<'a> {
     fn cell_offset(&self, page_at: usize, array: usize, i: usize) -> Result<usize> {
         let p = usize::from(self.view.u16(array + 2 * i, Endian::Big).field("cell pointer")?);
         if p < array - page_at + 2 * (i + 1) || p >= self.usable {
-            return Err(invalid(array + 2 * i, format!("cell pointer {p} outside the page's content")));
+            return Err(invalid(
+                array + 2 * i,
+                format!("cell pointer {p} outside the page's content"),
+            ));
         }
         Ok(page_at + p)
     }
@@ -313,12 +345,18 @@ impl<'a> Database<'a> {
         let mut payload = Vec::with_capacity(total);
         payload.extend_from_slice(self.view.slice(body, local).field("cell payload")?);
         if total > local {
-            let mut next = self.view.u32(body + local, Endian::Big).field("first overflow page")?;
+            let mut next = self
+                .view
+                .u32(body + local, Endian::Big)
+                .field("first overflow page")?;
             let mut hops = 0usize;
             while payload.len() < total {
                 hops += 1;
                 if next == 0 || hops > self.pages {
-                    return Err(invalid(body + local, "overflow chain ends or loops before the payload is complete"));
+                    return Err(invalid(
+                        body + local,
+                        "overflow chain ends or loops before the payload is complete",
+                    ));
                 }
                 let at = self.page_offset_checked(next)?;
                 let want = (total - payload.len()).min(u - 4);
@@ -349,7 +387,13 @@ impl<'a> Database<'a> {
         let (header_len, n) = varint(payload).ok_or_else(|| invalid(at, "record header size varint"))?;
         let header_len = usize::try_from(header_len).map_err(|_| invalid(at, "record header size"))?;
         if header_len < n || header_len > payload.len() {
-            return Err(invalid(at, format!("record header size {header_len} outside its {} bytes", payload.len())));
+            return Err(invalid(
+                at,
+                format!(
+                    "record header size {header_len} outside its {} bytes",
+                    payload.len()
+                ),
+            ));
         }
         let mut types = Vec::new();
         let mut p = n;
@@ -379,7 +423,10 @@ impl<'a> Database<'a> {
                 n => usize::try_from((n - 12) / 2).map_err(|_| invalid(at, "serial type length"))?,
             };
             let bytes = payload
-                .get(q..q.checked_add(len).ok_or_else(|| invalid(at, "value length overflows"))?)
+                .get(
+                    q..q.checked_add(len)
+                        .ok_or_else(|| invalid(at, "value length overflows"))?,
+                )
                 .ok_or_else(|| invalid(at, "record value runs past its payload"))?;
             q += len;
             values.push(match t {
@@ -397,12 +444,16 @@ impl<'a> Database<'a> {
                 7 => Value::Real(f64::from_be_bytes(bytes.try_into().expect("eight bytes"))),
                 n if n % 2 == 0 => Value::Blob(bytes.to_vec()),
                 _ => Value::Text(
-                    String::from_utf8(bytes.to_vec()).map_err(|_| invalid(at, "text value is not valid UTF-8"))?,
+                    String::from_utf8(bytes.to_vec())
+                        .map_err(|_| invalid(at, "text value is not valid UTF-8"))?,
                 ),
             });
         }
         if q != payload.len() {
-            return Err(invalid(at, format!("{} bytes after the record's last value", payload.len() - q)));
+            return Err(invalid(
+                at,
+                format!("{} bytes after the record's last value", payload.len() - q),
+            ));
         }
         Ok(values)
     }
@@ -424,7 +475,17 @@ fn varint(b: &[u8]) -> Option<(u64, usize)> {
     None
 }
 
-const CONSTRAINT_WORDS: [&str; 9] = ["PRIMARY", "NOT", "NULL", "DEFAULT", "UNIQUE", "CHECK", "COLLATE", "REFERENCES", "CONSTRAINT"];
+const CONSTRAINT_WORDS: [&str; 9] = [
+    "PRIMARY",
+    "NOT",
+    "NULL",
+    "DEFAULT",
+    "UNIQUE",
+    "CHECK",
+    "COLLATE",
+    "REFERENCES",
+    "CONSTRAINT",
+];
 
 /// A column a `CREATE TABLE` declares.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -440,7 +501,9 @@ pub struct Column {
 /// SQLite's column affinity rule over the declared type's words (<https://www.sqlite.org/datatype3.html>, 3.1).
 fn has_real_affinity(type_words: &str) -> bool {
     let t = type_words.to_ascii_uppercase();
-    !["INT", "CHAR", "CLOB", "TEXT", "BLOB"].iter().any(|k| t.contains(k))
+    !["INT", "CHAR", "CLOB", "TEXT", "BLOB"]
+        .iter()
+        .any(|k| t.contains(k))
         && ["REAL", "FLOA", "DOUB"].iter().any(|k| t.contains(k))
 }
 
@@ -501,7 +564,10 @@ pub fn parse_columns(sql: &str) -> std::result::Result<Vec<Column>, String> {
     }
     let close = close.ok_or("column list is not closed")?;
     if close + 1 != tokens.len() {
-        return Err(format!("table options after the column list ({:?})", tokens[close + 1]));
+        return Err(format!(
+            "table options after the column list ({:?})",
+            tokens[close + 1]
+        ));
     }
     let mut columns: Vec<Column> = Vec::new();
     let mut table_pk: Vec<String> = Vec::new();
@@ -512,7 +578,10 @@ pub fn parse_columns(sql: &str) -> std::result::Result<Vec<Column>, String> {
         };
         if let Token::Word(w) = first {
             let w = w.to_ascii_uppercase();
-            if matches!(w.as_str(), "CONSTRAINT" | "PRIMARY" | "UNIQUE" | "CHECK" | "FOREIGN") {
+            if matches!(
+                w.as_str(),
+                "CONSTRAINT" | "PRIMARY" | "UNIQUE" | "CHECK" | "FOREIGN"
+            ) {
                 if w == "PRIMARY" {
                     table_pk.extend(def.iter().filter_map(|t| match t {
                         Token::Word(n) | Token::Ident(n) => Some(n.clone()),
@@ -659,7 +728,9 @@ mod tests {
     fn column_lists() {
         assert_eq!(names("CREATE TABLE t (id,SORT,NAME)"), ["id", "SORT", "NAME"]);
         assert_eq!(
-            names("CREATE TABLE \"a b\" (\"x y\" TEXT, [z] varchar(10) NOT NULL DEFAULT (1,2), `w`, PRIMARY KEY (z, w))"),
+            names(
+                "CREATE TABLE \"a b\" (\"x y\" TEXT, [z] varchar(10) NOT NULL DEFAULT (1,2), `w`, PRIMARY KEY (z, w))"
+            ),
             ["x y", "z", "w"]
         );
         let c = parse_columns("create table t(a INTEGER PRIMARY KEY, b INT PRIMARY KEY, c)").unwrap();

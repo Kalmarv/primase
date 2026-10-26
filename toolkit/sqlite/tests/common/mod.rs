@@ -47,7 +47,11 @@ pub fn compare(data: &[u8], oracle: &str) -> (usize, usize) {
     let want = parse(oracle);
     let mut names = vec!["sqlite_master".to_owned()];
     names.extend(db.tables().iter().map(|t| t.name.clone()));
-    assert_eq!(names, want.iter().map(|t| t.0.clone()).collect::<Vec<_>>(), "table list");
+    assert_eq!(
+        names,
+        want.iter().map(|t| t.0.clone()).collect::<Vec<_>>(),
+        "table list"
+    );
     let mut rows = 0;
     for (name, columns, rows_want) in &want {
         let got: Table = db.table(name).unwrap_or_else(|e| panic!("{name}: {e}"));
