@@ -88,3 +88,6 @@ pub struct Database {
 
 /// Named graph derivation from the stored forward Colour pixel program.
 pub mod albedo;
+
+mod material;
+pub use material::bind_material;

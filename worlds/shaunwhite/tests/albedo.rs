@@ -204,6 +204,102 @@ fn cases() -> Vec<Case> {
         },
     ]
 }
+fn source_material(case: Case) -> primase_shaunwhite::components::MaterialRef {
+    use primase_shaunwhite::components::{LayerState, MaterialRef, MaterialState, SlotRef};
+    let mut w = World::new();
+    MaterialRef {
+        id: 1,
+        name: "controlled material".into(),
+        state: Some(MaterialState {
+            blend: 0,
+            blended: false,
+            alpha_test: false,
+            alpha_ref: 128,
+            water: false,
+            color: case.tint[0],
+            illumination: 0.,
+            specular_level: 1.,
+            specular_power: 10.,
+            normal_scale: 1.,
+            layering: LayerState {
+                colors: [case.tint[1], case.tint[2]],
+                use_alpha: case.alpha[..3]
+                    .iter()
+                    .map(|v| *v != 0.)
+                    .collect::<Vec<_>>()
+                    .try_into()
+                    .unwrap(),
+            },
+        }),
+        slots: [
+            "diffuse",
+            "diffuse_b",
+            "diffuse_c",
+            "mask",
+            "normal",
+            "specular",
+            "specular_b",
+        ]
+        .into_iter()
+        .map(|name| {
+            (
+                name.into(),
+                SlotRef {
+                    texture: w.spawn(),
+                    scale: [1.; 2],
+                    offset: [0.; 2],
+                    rotation: 0.,
+                    texcoord: 0,
+                    address: None,
+                },
+            )
+        })
+        .collect(),
+        unread: vec![],
+    }
+}
+fn check_material_bindings(
+    derived: &primase_shaunwhite::shaders::albedo::DerivedAlbedo,
+    case: Case,
+    state: &State,
+) {
+    use primase_core::shader::ConstantRole;
+    let bound = primase_shaunwhite::shaders::bind_material(derived, &source_material(case)).unwrap();
+    let reads = derived.program.constant_reads().unwrap();
+    let mut checked = 0;
+    for c in &bound.constants {
+        if let ConstantRole::Material(words) = &c.role {
+            for (n, &word) in words.iter().enumerate() {
+                let at = c.offset + n as u32 * 4;
+                if reads.reads(c.resource, at, 4) {
+                    assert_eq!(
+                        word,
+                        state.c[at as usize / 16][at as usize % 16 / 4].to_bits(),
+                        "material helper vs independently supplied REF fixture {} at byte{at}",
+                        c.name.as_deref().unwrap_or("unnamed")
+                    );
+                    checked += 1;
+                }
+            }
+        }
+    }
+    let required = reads
+        .buffers()
+        .map(|resource| reads.words(resource).count())
+        .sum::<usize>();
+    assert!(required > 0);
+    assert_eq!(
+        checked, required,
+        "every material word read by the proven albedo records must be filled"
+    );
+    assert!(
+        bound
+            .constants
+            .iter()
+            .any(|c| matches!(c.role, ConstantRole::Unknown { .. })),
+        "frame words must remain unresolved"
+    );
+}
 fn state(effect: &Effect, case: Case, influence: f32) -> State {
     let source = primase_d3d9::read(effect.pixel.as_ref().unwrap()).unwrap();
     let mut s = State {
@@ -433,8 +529,8 @@ fn original_programs_prove_the_material_frontier_against_microsoft_ref() {
         );
         assert!(derived.derivation.cuts.iter().any(|s| s.contains("tone mapping")));
         primase_shader::emit::wgsl(&derived.program).unwrap();
-        let cut = ProgramShader::new(derived.program).unwrap();
-        let tail = ProgramShader::new(derived.reencode).unwrap();
+        let cut = ProgramShader::new(derived.program.clone()).unwrap();
+        let tail = ProgramShader::new(derived.reencode.clone()).unwrap();
         let full = ProgramShader::new(primase_d3d9::lift(effect.pixel.as_ref().unwrap()).unwrap()).unwrap();
         let cases = cases();
         let mut states = Vec::new();
@@ -482,6 +578,9 @@ fn original_programs_prove_the_material_frontier_against_microsoft_ref() {
             .map(|b| std::array::from_fn::<_, 4, _>(|n| f32::from_le_bytes(b.as_chunks::<4>().0[n])))
             .collect::<Vec<_>>();
         for (index, s) in states.iter().enumerate() {
+            if index < 8 {
+                check_material_bindings(&derived, cases[index / 2], s);
+            }
             let raw = execute(&cut, effect, s, None);
             let encoded = execute(&tail, effect, s, Some(raw));
             let lifted = execute(&full, effect, s, None);

@@ -326,3 +326,14 @@ is checked against the shipped FctDiffuseColor equation; RGB re-encoded through 
 lifted tail is checked against REF with unit lighting, no fog, explicit influence 0/1 and
 identity colour controls. Non-neutral light/fog controls and HDR peak normalization are
 included. This establishes a derived albedo slice, not a reproduction of the lit game frame.
+
+`shaders::bind_material` fills the derived program's established material constants from its
+source `MaterialRef`: layer tints/alpha flags, packed UV matrices and coordinate-set flags,
+normal height and self illumination. It splits packed unknown spans around known words,
+retaining frame constants and unused padding as unresolved. Only zero-rotation UV matrices
+have an established native convention here; rotated/missing slot matrices remain named
+Unknown bindings. The helper returns a binding without changing the source or derivation.
+Hand-worked packing fixtures cover partial allocations, UV scale/offset, missing/rotated
+slots and invalid values; the native REF gate compares its read material words to the
+independently supplied proof controls. The six-level resolver test prints the number of
+read source materials with any nonzero stored slot rotation, before material lowerings.

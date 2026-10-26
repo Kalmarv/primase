@@ -215,6 +215,18 @@ fn six_levels_resolve_and_count_every_supported_or_unresolved_material() {
             .collect();
         eprintln!("KEYFIELDS L{:02} {field_failures:?}", level + 1);
         let materials = w.iter::<MaterialRef>().count();
+        let read = w.iter::<MaterialRef>().filter(|(_, m)| m.state.is_some()).count();
+        let rotated = w
+            .iter::<MaterialRef>()
+            .filter(|(_, m)| m.slots.values().any(|s| s.rotation != 0.))
+            .map(|(_, m)| (m.id, m.name.clone()))
+            .collect::<BTreeMap<_, _>>();
+        eprintln!(
+            "UV_ROTATION L{:02}: {} / {read} read source materials; rotated={rotated:?}",
+            level + 1,
+            rotated.len()
+        );
+
         w.insert_resource(ShaderLibrary(db.clone()));
         let report = run(&mut w);
         let log = &report.steps[0].log;
