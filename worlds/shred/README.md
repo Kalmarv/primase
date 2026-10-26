@@ -50,13 +50,25 @@ pixel entries in the matching sections are refused rather than selected.
 `decode(record_index, Payload::Primary | Payload::CubeTail, color_space, role)` returns core textures, one per cube
 face, through the toolkit GCM codec. The caller selects the copy and its colour meaning. Prefetch and `_m1.txp`
 use the source's mip tail (smaller axis at most 128, or the single mip), retaining base pitch for linear textures.
-Identity-remapped BC1/BC3 remain compressed; ARGB/B8 and remapped BCn become RGBA8. Volume textures return a named
-GCM dimension refusal because 3D swizzle is unproven. This API does not assign textures to materials or choose LOD.
+Identity-remapped BC1/BC3 remain compressed; ARGB/B8 and remapped BCn become RGBA8. The 2D API refuses volumes;
+`decode_volume` returns an explicit `gcm::Volume` with depth retained at each mip, Z-major slices and no automatic
+slice selection. It supports uncompressed XYZ Morton storage and BC1/BC3 VTC storage through the toolkit codec.
+This API does not assign textures to materials or choose LOD.
 
 `texture_disc` uses smoke/full depth: eight seeded archives or the whole disc. It decodes every available header/pixel
 pair, expands every supported mip through the pixel codec, counts volume/header-only entries, and compares each
 prefetch copy with its streamed mip tail and each cube `_m1` with prefetch. This is an independent copy stored by
 the game; hand-worked fixtures separately check header parsing, pairing and pixel meaning.
+
+`volume_disc` separately decodes all volume copies and compares their stored prefetch versions. It measures RGB
+differences across neighbouring Z slices against a deterministic control that shuffles pixel correspondences within
+the next slice (preserving its histogram), with a synthetic positive control. For the source's 32-cube grading LUTs,
+it compares all six RGB axis assignments against the canonical RGB ramp. These are content checks of this disc,
+not universal promises that arbitrary 3D textures must be smooth or close to an identity colour transform. Smoke
+selects eight volume-bearing PAKs from a seeded rotation; full covers all volume headers. The layout descriptions
+come from NVIDIA's published VTC extension and RPCS3's RSX consumer at commit
+`979a52415003fd7a74ddd216e1a5782b3731281f`; no RPCS3 implementation code was copied. The codec documents its
+unproven layout combinations as explicit refusals rather than inferring them from these content metrics.
 
 The returned `LevelReport` counts all occurrences (including packaged copies and refused models) and lists every
 refused model and unread attribute/table region with its source and decoded-file offset. MMP +12 and MGP attributes

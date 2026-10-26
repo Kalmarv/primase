@@ -10,11 +10,14 @@
 //! <https://github.com/ps3dev/PSL1GHT/blob/master/ppu/include/rsx/gcm_sys.h>
 //! (`gcmTexture`, `GCM_TEXTURE_REMAP_MODE`) and
 //! <https://github.com/RPCS3/rpcs3/blob/979a52415003fd7a74ddd216e1a5782b3731281f/rpcs3/Emu/RSX/Common/TextureUtils.cpp>
-//! (`get_subresources_layout_impl`). 3D swizzle is deliberately unsupported.
+//! (`get_subresources_layout_impl`). [`CellGcmTexture::decode_volume`] handles 3D
+//! storage explicitly; the 2D/cube API never flattens a volume into images.
 
 use crate::{Decoder, TexDecoder};
 use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
 use thiserror::Error;
+mod volume;
+pub use volume::{Volume, VolumeLevel, VolumeSubresource};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -22,7 +25,7 @@ pub enum Error {
     DescriptorLength(usize),
     #[error("unsupported GCM texture format 0x{0:02x}")]
     Format(u8),
-    #[error("unsupported GCM texture dimension {dimension}, depth {depth} (3D swizzle unproven)")]
+    #[error("GCM texture dimension {dimension}, depth {depth} is incompatible with this decoding API")]
     Dimension { dimension: u8, depth: u16 },
     #[error("invalid GCM texture: {0}")]
     Invalid(&'static str),
@@ -233,26 +236,7 @@ impl CellGcmTexture {
                     dst.copy_from_slice(&src[y * level.pitch..y * level.pitch + row]);
                 }
             }
-            let pixels = if keep_bc {
-                packed
-            } else {
-                let mut rgba = if source.is_block_compressed() {
-                    Decoder::default().decode_rgba8(source, level.width, level.height, &packed)?
-                } else if bytes == 1 {
-                    packed.iter().flat_map(|&b| [b, b, b, 255]).collect()
-                } else {
-                    packed
-                        .as_chunks::<4>()
-                        .0
-                        .iter()
-                        .flat_map(|b| [b[1], b[2], b[3], b[0]])
-                        .collect()
-                };
-                for pixel in rgba.as_chunks_mut::<4>().0 {
-                    *pixel = remap_pixel(self.remap, *pixel);
-                }
-                rgba
-            };
+            let pixels = expand_level(source, level.width, level.height, packed, self.remap)?;
             faces[level.face as usize].levels.push(pixels);
         }
         Ok(faces)
@@ -262,19 +246,43 @@ impl CellGcmTexture {
 // Interleave the available low x/y bits; a rectangular surface's remaining
 // bits belong only to its longer axis (there are no holes in its storage).
 fn morton(x: u32, y: u32, width: u32, height: u32) -> usize {
+    morton3([x, y, 0], [width, height, 1])
+}
+
+fn morton3(position: [u32; 3], extent: [u32; 3]) -> usize {
     let mut result = 0;
     let mut out = 0;
-    for bit in 0..width.max(height).ilog2() {
-        if (1 << bit) < width {
-            result |= (((x >> bit) & 1) as usize) << out;
-            out += 1;
-        }
-        if (1 << bit) < height {
-            result |= (((y >> bit) & 1) as usize) << out;
-            out += 1;
+    for bit in 0..extent.into_iter().max().unwrap_or(1).ilog2() {
+        for axis in 0..3 {
+            if (1 << bit) < extent[axis] {
+                result |= (((position[axis] >> bit) & 1) as usize) << out;
+                out += 1;
+            }
         }
     }
     result
+}
+
+fn expand_level(source: TexFormat, width: u32, height: u32, packed: Vec<u8>, remap: u32) -> Result<Vec<u8>> {
+    if source.is_block_compressed() && remap == 0xaae4 {
+        return Ok(packed);
+    }
+    let mut rgba = if source.is_block_compressed() {
+        Decoder::default().decode_rgba8(source, width, height, &packed)?
+    } else if source == TexFormat::R8Unorm {
+        packed.iter().flat_map(|&b| [b, b, b, 255]).collect()
+    } else {
+        packed
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|b| [b[1], b[2], b[3], b[0]])
+            .collect()
+    };
+    for pixel in rgba.as_chunks_mut::<4>().0 {
+        *pixel = remap_pixel(remap, *pixel);
+    }
+    Ok(rgba)
 }
 
 fn validate_remap(remap: u32) -> Result<()> {

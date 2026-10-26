@@ -216,7 +216,7 @@ impl<'a> TextureCatalog<'a> {
     }
 
     /// Caller explicitly names a packaged payload and the texture's colour meaning.
-    /// Unsupported volume textures return `Error::Gcm(gcm::Error::Dimension {..})`.
+    /// Volumes are refused here; use `decode_volume` to retain their depth.
     pub fn decode(
         &self,
         texture: usize,
@@ -224,6 +224,27 @@ impl<'a> TextureCatalog<'a> {
         color_space: ColorSpace,
         role: TexRole,
     ) -> Result<Vec<Texture>> {
+        let (gcm, first_mip, bytes) = self.pixel_data(texture, payload)?;
+        Ok(gcm.decode(&bytes, first_mip, color_space, role)?)
+    }
+
+    /// Decode an explicitly selected 3D copy without flattening it into core images.
+    pub fn decode_volume(
+        &self,
+        texture: usize,
+        payload: Payload,
+        color_space: ColorSpace,
+        role: TexRole,
+    ) -> Result<primase_texcodec::gcm::Volume> {
+        let (gcm, first_mip, bytes) = self.pixel_data(texture, payload)?;
+        Ok(gcm.decode_volume(&bytes, first_mip, color_space, role)?)
+    }
+
+    fn pixel_data(
+        &self,
+        texture: usize,
+        payload: Payload,
+    ) -> Result<(CellGcmTexture, u8, std::borrow::Cow<'_, [u8]>)> {
         let r = self.records.get(texture).ok_or(Error::Copy {
             texture,
             detail: "record index out of bounds",
@@ -237,6 +258,6 @@ impl<'a> TextureCatalog<'a> {
             detail: "requested pixel payload is absent",
         })?;
         let bytes = self.archives[r.archive].1.payload(pixels.entry)?;
-        Ok(r.header.gcm.decode(&bytes, pixels.first_mip, color_space, role)?)
+        Ok((r.header.gcm, pixels.first_mip, bytes))
     }
 }
