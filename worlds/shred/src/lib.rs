@@ -1,4 +1,4 @@
-//! Tony Hawk: SHRED (PS3): RME archives, rigid mesh prototypes and scene placements.
+//! Tony Hawk: SHRED (PS3): RME archives, source materials, rigid meshes and scene placements.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod components;

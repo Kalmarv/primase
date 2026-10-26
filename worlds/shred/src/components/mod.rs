@@ -2,6 +2,9 @@
 use primase_core::{Component, Geometry, Linear, world::Linearity};
 use serde::Serialize;
 
+mod material;
+pub use material::{MaterialKey, MaterialParameter, MaterialSampler, ShredMaterial};
+
 /// A model ID is scoped to its PAK and quartet, never globally deduplicated.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct MeshId {
