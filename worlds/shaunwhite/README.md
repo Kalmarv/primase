@@ -74,3 +74,23 @@ destination surface assignments and skateability in a running target are separat
 
 Collision tests use a hand-worked two-surface quad, capsule/list fixtures, malformed inputs, three real cells with
 36 meshes and three list/hull shapes, a real inert shape reference and a fourth cell's multi-inert container.
+
+## Levels
+
+`read::level::read_level` reads a level forge's cells into a World: every Visual of every Entity becomes a placement of
+a Mesh prototype (`shaunwhite.placed_by` names its cell and Entity), with the vertex stride and flags of the prototype
+kept as `shaunwhite.mesh_format`. An Entity that marks a place is read as a `core.marker` at its matrix, named as the
+Entity is: a **spawn node** (a component of the SpawnPoint class, kind `spawn_point`) and a **start position** (a name
+in the `read::markers::START_NAMES` table, kind `start`: `CH_GAME_StartPosition`, `D01_C04_StartPosition`,
+`Q01_Intro_FinalPlayerPos`, ...). The marker carries the whole matrix and no yaw: which local axis the game calls
+forward is not read, and the program picks the spawn it wants. What no row maps is counted in the report.
+
+## Selecting what a map draws
+
+`select-shaunwhite-content{helpers, effects, characters, missions}` (every option `keep` or `drop`, none defaulted) drops
+the placements a map should not draw, by the rows of `passes::ROWS`: each a name test on the Entity, the prototype Mesh
+or one of its materials, with the level 01 evidence that gives it its class, plus the vertex flag that skins a mesh
+(`MeshFormat::SKINNED`) and the cell name that tells a mission cell from a grid cell. The source states no hide flag this
+reader can decode, so the rows are the game's names, not a field: the pass says so in its approximation. It runs before
+`lower-shaunwhite-material` (which removes the material names the material rows match). Every drop is declared by its
+row, and the prototypes, materials and textures only the dropped placements reached go with them.

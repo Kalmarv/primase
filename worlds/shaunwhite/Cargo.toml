@@ -27,3 +27,5 @@ workspace = true
 kind = "game"
 engine = "primase-anvil"
 names = ["shaunwhite", "anvil", "scimitar"]
+# the game's own material name holding the destination's word, matched as a whole string
+source-names = ["Gen_Obj_Skate_blocker_01"]

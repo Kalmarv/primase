@@ -35,3 +35,27 @@ impl Component for MaterialRef {
         out.extend(self.textures.values().copied());
     }
 }
+
+/// A Mesh prototype's vertex stride and flags word as its CompiledMesh header stores them. The reader reads the
+/// vertex layout from them ([`crate::read::mesh`]); the flags stay as data so a pass can choose by them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MeshFormat {
+    pub stride: u32,
+    pub flags: u32,
+}
+
+impl MeshFormat {
+    /// The flag that adds skinning (bone indices and weights) to the vertex. Of level 01's 101 distinct meshes with it,
+    /// 93 are named `CH_*` (characters and their accessories), 5 `GFX_*` and 3 others; one `CH_*` mesh lacks it.
+    pub const SKINNED: u32 = 1;
+
+    /// Whether the vertices hold bone indices and weights.
+    pub fn skinned(&self) -> bool {
+        self.flags & Self::SKINNED != 0
+    }
+}
+
+impl Component for MeshFormat {
+    const NAME: &'static str = "shaunwhite.mesh_format";
+    const GEOMETRY: Geometry = Geometry::None;
+}

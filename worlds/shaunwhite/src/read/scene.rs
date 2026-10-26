@@ -9,6 +9,10 @@
 //! entity's body (Visual class, an id, the ResourceRef class), not by reading every component class: the component
 //! classes the reader does not read are skipped this way, and [`Entity::visuals`] is what the run finds.
 //!
+//! Every component, inline, begins `[pointer byte 0][managed byte][id u32][class u32][ResourceRef: id u32, class
+//! 0x3C6C77C8, ...]`; [`Entity::components`] lists the classes found by that run, in order (a component whose
+//! fields are not read is still named by its class). A SpawnPoint component ([`SPAWN_POINT`]) marks a spawn.
+//!
 //! A LODSelector's body holds five LODDescriptors, each its id, class `0xA360319A`, the object of that level (u32),
 //! its switch distance (f32) and a flag byte; the first is the nearest level.
 
@@ -22,6 +26,9 @@ pub const RESOURCE_REF: u32 = 0x3C6C_77C8;
 pub const LOD_SELECTOR: u32 = 0x51DC_6B80;
 pub const LOD_DESCRIPTOR: u32 = 0xA360_319A;
 pub const GRID_CELL_DATA_BLOCK: u32 = 0xAC2B_BF68;
+/// The class of a spawn node's component (`0xF63C9D7F`; the name `SpawnPoint` is the class's in later games of the
+/// engine family, where the hash is named: this game's data does not name it).
+pub const SPAWN_POINT: u32 = 0xF63C_9D7F;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -47,6 +54,8 @@ pub struct Entity {
     /// GlobalMatrix, row by row (row vectors).
     pub matrix: [f32; 16],
     pub visuals: Vec<Visual>,
+    /// The classes of its components, in order of appearance (the module documentation).
+    pub components: Vec<u32>,
 }
 
 impl Entity {
@@ -85,7 +94,28 @@ impl Entity {
             }
             at = p.saturating_add(4);
         }
-        Ok(Entity { id, matrix, visuals })
+        let mut components = Vec::new();
+        let mut at = 73usize;
+        while let Some(p) = body
+            .get(at..)
+            .and_then(|rest| rest.windows(4).position(|w| w == rref))
+        {
+            let q = at.saturating_add(p);
+            // [pointer 0][managed][id][class][ResourceRef id] precede the ResourceRef's class
+            if let Some(h) = q.checked_sub(14)
+                && body.get(h) == Some(&0)
+                && let Ok(class) = v.u32(q.saturating_sub(8), LE)
+            {
+                components.push(class);
+            }
+            at = q.saturating_add(4);
+        }
+        Ok(Entity {
+            id,
+            matrix,
+            visuals,
+            components,
+        })
     }
 }
 
@@ -108,4 +138,60 @@ pub fn lod_levels(body: &[u8]) -> Result<Vec<(u32, f32)>, Error> {
         at = p.saturating_add(13);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A component's header as the module documentation lays it out: pointer byte, managed byte, id, class, then the
+    /// ResourceRef (id, class, kind, target).
+    fn component(class: u32, kind: u8, target: u32) -> Vec<u8> {
+        let mut b = vec![0, 1];
+        for w in [7, class, 8, RESOURCE_REF] {
+            b.extend(w.to_le_bytes());
+        }
+        b.push(kind);
+        b.extend(target.to_le_bytes());
+        b.extend([0xAA; 6]);
+        b
+    }
+
+    /// An Entity body, hand-laid: managed byte, id, class, the identity matrix with translation (1, 2, 3), a null
+    /// hierarchy pointer, the component count and the components.
+    fn entity(components: &[Vec<u8>]) -> Vec<u8> {
+        let mut b = vec![1];
+        b.extend(0x1234u32.to_le_bytes());
+        b.extend(ENTITY.to_le_bytes());
+        let m: [f32; 16] = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 1., 2., 3., 1.];
+        m.iter().for_each(|x| b.extend(x.to_le_bytes()));
+        b.push(3);
+        b.extend((components.len() as u32).to_le_bytes());
+        components.iter().for_each(|c| b.extend(c));
+        b
+    }
+
+    /// Visuals and the classes of all components are read from the component headers, in order, and a component whose
+    /// fields are not read is named by its class.
+    #[test]
+    fn components_are_named_by_their_headers() {
+        let body = entity(&[
+            component(SPAWN_POINT, 0xff, 0),
+            component(VISUAL, 0xfe, 0x99),
+            component(0xDEAD_BEEF, 0xff, 0),
+        ]);
+        let e = Entity::parse(&body).unwrap();
+        assert_eq!(e.id, 0x1234);
+        assert_eq!(e.matrix[12..15], [1.0, 2.0, 3.0]);
+        assert_eq!(e.components, [SPAWN_POINT, VISUAL, 0xDEAD_BEEF]);
+        assert_eq!(
+            e.visuals,
+            [Visual {
+                kind: 0xfe,
+                target: 0x99
+            }]
+        );
+        // an Entity with no component has none
+        assert!(Entity::parse(&entity(&[])).unwrap().components.is_empty());
+    }
 }

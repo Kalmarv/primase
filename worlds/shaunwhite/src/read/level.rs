@@ -24,9 +24,10 @@ use primase_anvil::read::forge::Forge;
 use primase_anvil::read::objects::{StoredObject, read_objects};
 use primase_core::convert::Report;
 use primase_core::frame::SourceFrame;
-use primase_core::{Entity, Instance, Mesh, Name, Transform, World};
+use primase_core::{Entity, Instance, Marker, Mesh, Name, Transform, World};
 
-use crate::components::{MaterialRef, PlacedBy};
+use crate::components::{MaterialRef, MeshFormat, PlacedBy};
+use crate::read::markers;
 use crate::read::mesh::{CompiledMesh, MESH};
 use crate::read::scene::{self, GRID_CELL_DATA_BLOCK, LOD_SELECTOR};
 use crate::read::texture::{TEXTURE_MAP_SPEC, TextureMap};
@@ -115,6 +116,33 @@ pub fn read_level(level: &Path, shared: &[PathBuf]) -> Result<(World, Report)> {
                 }
             };
             bump("entities".into());
+            let m = entity.matrix;
+            let t = Transform {
+                cols: [
+                    [m[0], m[1], m[2]],
+                    [m[4], m[5], m[6]],
+                    [m[8], m[9], m[10]],
+                    [m[12], m[13], m[14]],
+                ],
+            };
+            // an Entity that marks a place (a start position, a spawn node) is a marker at its matrix
+            let kind = markers::kind(&o.name, &entity.components);
+            if let Some(kind) = kind {
+                let e = world.spawn();
+                world.insert(e, frame.transform(&t));
+                world.insert(
+                    e,
+                    Marker {
+                        kind: kind.into(),
+                        ground: None,
+                        yaw: None,
+                    },
+                );
+                world.insert(e, Name(o.name.clone()));
+                bump(format!("markers: {kind}"));
+            } else if entity.visuals.is_empty() {
+                bump("entities with neither a Visual nor a marker (not placed)".into());
+            }
             for v in &entity.visuals {
                 let Some(mesh_id) = resolve(&index, v.target, &mut bump) else {
                     continue;
@@ -132,15 +160,6 @@ pub fn read_level(level: &Path, shared: &[PathBuf]) -> Result<(World, Report)> {
                 });
                 let Some(proto) = proto else {
                     continue;
-                };
-                let m = entity.matrix;
-                let t = Transform {
-                    cols: [
-                        [m[0], m[1], m[2]],
-                        [m[4], m[5], m[6]],
-                        [m[8], m[9], m[10]],
-                        [m[12], m[13], m[14]],
-                    ],
                 };
                 let p = world.spawn();
                 world.insert(p, frame.transform(&t));
@@ -256,6 +275,15 @@ fn prototype(
     let e = world.spawn();
     world.insert(e, Mesh::new(prims));
     world.insert(e, Name(o.name.clone()));
+    if let Ok(stride) = u32::try_from(cm.stride) {
+        world.insert(
+            e,
+            MeshFormat {
+                stride,
+                flags: cm.flags,
+            },
+        );
+    }
     bump("meshes".into());
     Some(e)
 }
