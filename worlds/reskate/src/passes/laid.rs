@@ -436,7 +436,8 @@ impl Pass for PrepareReskateLaidLayers {
         ])
     }
     fn provides(&self) -> &[&'static str] {
-        &[DrawOrder::NAME, SkateLaidLayers::NAME]
+        // a decal copy of an unnamed layer gets its name here
+        &[DrawOrder::NAME, SkateLaidLayers::NAME, Name::NAME]
     }
     fn modifies(&self) -> &[&'static str] {
         &[
@@ -901,6 +902,25 @@ mod tests {
             "layer leaves drawn as a decal (1 material(s), 1 also drawn elsewhere and copied as leaves_laid): 1.000 m2 \
              laid within 2.00 mm of a surface"
         ));
+    }
+
+    /// A source material may carry no name: its decal copy is named after it all the same, and the pass declares that
+    /// it adds the name (the manager's checks run in `run`).
+    #[test]
+    fn an_unnamed_layer_drawn_elsewhere_gets_a_named_decal_copy() {
+        let mut w = World::new();
+        let ground = material(&mut w, "ground", AlphaMode::Opaque);
+        mesh(&mut w, vec![square(ground, 10.0)], Transform::IDENTITY);
+        let leaves = material(&mut w, "leaves", MASK);
+        w.remove::<Name>(leaves);
+        let laid = mesh(&mut w, vec![square(leaves, 1.0)], tilted(0.0, [1.0, 0.002, 1.0]));
+        mesh(&mut w, vec![square(leaves, 1.0)], tilted(90.0, [4.0, 0.5, 1.0]));
+        run(&mut w, "prepare-reskate-laid-layers").unwrap();
+        assert!(!w.has::<Name>(leaves));
+        let copy = w.get::<Mesh>(laid).unwrap().primitives()[0].material.unwrap();
+        assert_ne!(copy, leaves);
+        assert!(decal(&w, copy));
+        assert_eq!(w.get::<Name>(copy).unwrap().0, format!("{leaves:?}_laid"));
     }
 
     /// One primitive holding a laid square and a square a metre over the floor is split: the floating square stays in
