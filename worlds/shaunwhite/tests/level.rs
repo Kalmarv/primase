@@ -3,7 +3,7 @@
 //! are printed; the checks are what must hold of any level read.
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Conservation, PassManager, PassRegistry, Pipeline, RunReport};
-use primase_core::pbr::PbrMaterial;
+use primase_core::pbr::{AlphaMode, PbrMaterial, Shading};
 use primase_core::{Collider, Collision, Instance, Marker, Mesh, Name, Surfaces, Texture, Transform, World};
 use primase_shaunwhite::components::{
     CollisionPlacedBy, CollisionSource, CollisionSurfaces, MaterialRef, MeshFormat, PlacedBy, Sampler,
@@ -215,7 +215,27 @@ fn level_01_reads_and_lowers() {
         let p = w.get::<Instance>(e).unwrap().prototype;
         assert!(w.has::<Collision>(p) || w.has::<Collider>(p));
     }
-    run(&mut w, "lower-shaunwhite-material").unwrap();
+    let lowered = run(&mut w, "lower-shaunwhite-material").unwrap();
     assert_eq!(w.iter::<MaterialRef>().count(), 0);
     assert!(w.iter::<PbrMaterial>().count() > 500);
+    // the lowered materials' alpha modes and tiling follow the stored fields; every one verifies
+    let pbr: Vec<&PbrMaterial> = w.iter::<PbrMaterial>().map(|(_, p)| p).collect();
+    let mode = |f: fn(&AlphaMode) -> bool| pbr.iter().filter(|p| f(&p.alpha_mode)).count();
+    let tiled = pbr
+        .iter()
+        .filter(|p| p.base_color_texture.is_some_and(|t| t.transform.is_some()))
+        .count();
+    println!(
+        "lowered: {} materials, {} blend, {} mask, {} unlit, {tiled} with a UV transform; {:?}",
+        pbr.len(),
+        mode(|m| matches!(m, AlphaMode::Blend)),
+        mode(|m| matches!(m, AlphaMode::Mask { .. })),
+        pbr.iter().filter(|p| p.shading == Shading::Unlit).count(),
+        lowered.steps[0].log.counts
+    );
+    assert!(
+        mode(|m| matches!(m, AlphaMode::Blend)) > 20 && mode(|m| matches!(m, AlphaMode::Mask { .. })) > 20
+    );
+    assert!(tiled > 10, "{tiled} tiled");
+    assert!(w.verify_components().is_empty());
 }
