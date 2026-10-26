@@ -40,6 +40,24 @@ The caller **must state a `primase_core::frame::SourceFrame`**. Y-up is evidence
 handedness and north have not been proven. There is no default frame and no claim that the census's identity frame
 establishes physical metres. Conversion of positions, transforms and winding uses core's frame operations.
 
+`read::texture::TextureCatalog::new(&[(label, &pak), ...])` indexes all texture headers in precisely the supplied
+archives. `resolve(extensionless_path)` returns every matching record, including repeated packages, streamed and
+prefetch copies; it compares slash and backslash equally and preserves case. `records()` exposes each copy's source
+archive/section, exact 84-byte header, unresolved words, GCM description and available pixel entries. Missing pixels
+remain explicit. MAIN/LOCAL and CACHE_MAIN/CACHE_LOCAL are paired by their source section convention. Duplicate
+pixel entries in the matching sections are refused rather than selected.
+
+`decode(record_index, Payload::Primary | Payload::CubeTail, color_space, role)` returns core textures, one per cube
+face, through the toolkit GCM codec. The caller selects the copy and its colour meaning. Prefetch and `_m1.txp`
+use the source's mip tail (smaller axis at most 128, or the single mip), retaining base pitch for linear textures.
+Identity-remapped BC1/BC3 remain compressed; ARGB/B8 and remapped BCn become RGBA8. Volume textures return a named
+GCM dimension refusal because 3D swizzle is unproven. This API does not assign textures to materials or choose LOD.
+
+`texture_disc` uses smoke/full depth: eight seeded archives or the whole disc. It decodes every available header/pixel
+pair, expands every supported mip through the pixel codec, counts volume/header-only entries, and compares each
+prefetch copy with its streamed mip tail and each cube `_m1` with prefetch. This is an independent copy stored by
+the game; hand-worked fixtures separately check header parsing, pairing and pixel meaning.
+
 The returned `LevelReport` counts all occurrences (including packaged copies and refused models) and lists every
 refused model and unread attribute/table region with its source and decoded-file offset. MMP +12 and MGP attributes
 are not yet emitted as streams; the subsequent attribute chunk owns those semantics. SCP table strides are checked

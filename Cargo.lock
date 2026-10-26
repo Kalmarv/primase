@@ -1413,6 +1413,7 @@ dependencies = [
  "primase-hash",
  "primase-havok",
  "primase-testdata",
+ "primase-texcodec",
  "serde",
  "serde_json",
  "thiserror",

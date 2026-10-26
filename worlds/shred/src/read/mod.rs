@@ -5,3 +5,4 @@ pub mod level;
 pub mod material;
 pub mod pak;
 pub mod scene;
+pub mod texture;
