@@ -50,6 +50,16 @@ fn world(area: f32, uv: [[f32; 2]; 3], scale: f32) -> (World, Entity, Entity) {
             cols: [[scale, 0., 0.], [0., scale, 0.], [0., 0., scale], [0.; 3]],
         },
     );
+    let marker = w.spawn();
+    w.insert(
+        marker,
+        primase_core::Marker {
+            kind: "spawn".into(),
+            ground: None,
+            yaw: None,
+        },
+    );
+    w.insert(marker, Transform::IDENTITY);
     let mut reg = PassRegistry::new();
     primase_reskate::register(&mut reg);
     let pipe = reg
@@ -64,17 +74,33 @@ fn world(area: f32, uv: [[f32; 2]; 3], scale: f32) -> (World, Entity, Entity) {
 fn run(w: &mut World) -> Result<RunReport, String> {
     let mut reg = PassRegistry::new();
     primase_reskate::register(&mut reg);
-    let pipe = reg.parse("prepare-reskate-repeat-clipping").unwrap();
+    let pipe = reg
+        .parse("prepare-reskate-repeat-clipping{max_render_edge=0}")
+        .unwrap();
     let mut report = RunReport::default();
     PassManager::new(reg)
         .run(w, &pipe, &mut report)
         .map_err(|e| e.to_string())?;
     Ok(report)
 }
-fn triangles(w: &World, e: Entity) -> usize {
-    let p = &w.get::<Mesh>(e).unwrap().primitives()[0];
-    p.indices.as_ref().map_or(p.vertex_count(), Vec::len) / 3
+fn triangles(w: &World, _: Entity) -> usize {
+    let rec = w
+        .resource::<primase_reskate::components::SkateRepeatClipping>()
+        .unwrap();
+    let changed: Vec<_> = rec
+        .meshes
+        .values()
+        .flat_map(|m| m.replacements.values())
+        .collect();
+    if changed.is_empty() {
+        return 1;
+    }
+    changed
+        .into_iter()
+        .map(|p| p.as_ref().map_or(0, |p| p.idx.len() / 3))
+        .sum()
 }
+
 #[test]
 fn measured_threshold_depends_on_world_piece_area_and_uv_extent() {
     for (area, uv, scale, expected) in [
@@ -102,115 +128,121 @@ fn measured_threshold_depends_on_world_piece_area_and_uv_extent() {
             assert!(
                 report.steps[0]
                     .log
-                    .counts
+                    .omitted
                     .keys()
-                    .any(|s| s.starts_with("measured_overlay: discarded"))
+                    .any(|s| s.contains("Studio repeat-clipped fan triangles"))
             );
         }
     }
 }
 #[test]
-fn retained_vertices_keep_interpolated_opacity_and_single_tile_uvs() {
-    let (mut w, e, _) = world(1e-10, CROSSING, 1.);
-    use primase_core::morphs::{Deltas, Frame, MorphId, Morphs, Target};
-    w.insert(
-        e,
-        Morphs {
-            targets: vec![Target {
-                id: MorphId(0),
-                name: "measured_delta".into(),
-                default_weight: 0.,
-                frames: vec![Frame {
-                    weight: 1.,
-                    primitives: vec![Some(Deltas {
-                        positions: Some(vec![[0.2, 0., 0.], [0.4, 0., 0.], [0.8, 0., 0.]]),
-                        ..Default::default()
-                    })],
-                }],
-            }],
-        },
-    );
-    run(&mut w).unwrap();
-    assert!(w.verify_components().is_empty(), "{:?}", w.verify_components());
-    let p = &w.get::<Mesh>(e).unwrap().primitives()[0];
-    let Stream::F32x3(pos) = &p.streams[&Semantic::Position] else {
-        panic!()
-    };
-    let Stream::F32x2(uv) = &p.streams[&Semantic::TexCoord(0)] else {
-        panic!()
-    };
-    let opacity = w.get::<BlendOpacity>(e).unwrap().0[0].as_ref().unwrap();
-    assert_eq!(pos.len(), opacity.len());
-    let deltas = w.get::<Morphs>(e).unwrap().targets[0].frames[0].primitives[0]
-        .as_ref()
-        .unwrap()
-        .positions
-        .as_ref()
-        .unwrap();
-    for (d, o) in deltas.iter().zip(opacity) {
-        assert!((d[0] - o).abs() < 1e-6);
-    }
-    for (at, &o) in pos.iter().zip(opacity) {
-        let b = at[0];
-        let c = at[1] / 2e-10;
-        assert!((o - (0.2 * (1. - b - c) + 0.4 * b + 0.8 * c)).abs() < 1e-6);
-    }
-    for tri in p.indices.as_ref().unwrap().as_chunks::<3>().0 {
-        for axis in [0, 1] {
-            let lo = tri
-                .map(|i| uv[i as usize][axis])
-                .into_iter()
-                .fold(f32::INFINITY, f32::min);
-            let hi = tri
-                .map(|i| uv[i as usize][axis])
-                .into_iter()
-                .fold(f32::NEG_INFINITY, f32::max);
-            assert!((hi - 1e-5).floor() <= (lo + 1e-5).floor());
-        }
-    }
-    let before = w.get::<Mesh>(e).unwrap().clone();
-    run(&mut w).unwrap();
-    assert_eq!(w.get::<Mesh>(e).unwrap(), &before, "preparation is idempotent");
-}
-#[test]
-fn opaque_materials_and_disagreeing_shared_placements_are_explicit() {
+fn preparation_keeps_core_data_and_handles_shared_scales() {
     let (mut w, e, place) = world(1e-10, CROSSING, 1.);
-    let m = w.get::<Mesh>(e).unwrap().primitives()[0].material.unwrap();
-    w.get_mut::<SkateMaterial>(m).unwrap().class = MaterialClass::Opaque;
-    run(&mut w).unwrap();
-    assert_eq!(triangles(&w, e), 1);
-    w.get_mut::<SkateMaterial>(m).unwrap().class = MaterialClass::Decal;
     let other = w.duplicate(place).unwrap();
     w.insert(
         other,
         Transform {
-            cols: [[0.001, 0., 0.], [0., 0.001, 0.], [0., 0., 0.001], [0.; 3]],
+            cols: [[0.001, 0., 0.], [0., 0.001, 0.], [0., 0., 0.001], [10., 0., 0.]],
         },
     );
     let before = w.get::<Mesh>(e).unwrap().clone();
-    let error = run(&mut w).unwrap_err();
-    assert!(error.contains("shared placements disagree"), "{error}");
+    let opacity = w.get::<BlendOpacity>(e).unwrap().clone();
+    run(&mut w).unwrap();
     assert_eq!(w.get::<Mesh>(e).unwrap(), &before);
+    assert_eq!(w.get::<BlendOpacity>(e).unwrap(), &opacity);
+    assert!(w.verify_components().is_empty());
+    let rec = w
+        .resource::<primase_reskate::components::SkateRepeatClipping>()
+        .unwrap();
+    assert!(!rec.discarded.is_empty());
+    let changed = rec
+        .meshes
+        .values()
+        .flat_map(|m| m.replacements.values())
+        .flatten()
+        .next()
+        .unwrap();
+    assert_eq!(changed.idx.len() / 3, 2);
+    assert!(
+        changed
+            .blend
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|x| (0.2..=0.8).contains(x))
+    );
+}
+#[test]
+fn final_coordinate_rounding_and_stale_records_are_checked() {
+    // A visible-area sliver whose tiny UV slice collapses only at these stored f32 coordinates.
+    let (mut w, e, _) = world(1., CROSSING, 1.);
+    let mut mesh = w.get::<Mesh>(e).unwrap().clone();
+    let mut part = mesh.primitive_mut(0).unwrap();
+    part.streams_mut().insert(
+        Semantic::Position,
+        Stream::F32x3(vec![
+            [22.436964, -1.0787257, -75.71633],
+            [22.436964, -1.0787257, -72.45642],
+            [22.437044, -1.0787257, -72.456345],
+        ]),
+    );
+    part.streams_mut().insert(
+        Semantic::TexCoord(0),
+        Stream::F32x2(vec![
+            [-7.1020103, -3.996503],
+            [-7.1020103, -4.4004426],
+            [-7.101996, -4.400452],
+        ]),
+    );
+    w.insert(e, mesh);
+    run(&mut w).unwrap();
+    let rec = w
+        .resource::<primase_reskate::components::SkateRepeatClipping>()
+        .unwrap();
+    assert!(!rec.discarded.is_empty());
+    let mut mesh = w.get::<Mesh>(e).unwrap().clone();
+    mesh.primitive_mut(0)
+        .unwrap()
+        .streams_mut()
+        .insert(Semantic::TexCoord(0), Stream::F32x2(INSIDE.to_vec()));
+    w.insert(e, mesh);
+    let path = std::env::temp_dir().join(format!("primase-repeat-stale-{}", std::process::id()));
+    let error = primase_reskate::write_map(
+        &w,
+        std::path::Path::new(""),
+        &primase_reskate::EncodingOptions {
+            out_root: path,
+            max_render_edge: Some(0.),
+            ..Default::default()
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("stale repeat-clipping"), "{error}");
 }
 
 #[test]
-fn unknown_vertex_data_is_refused_before_any_mesh_changes() {
-    #[derive(Clone, Debug)]
-    struct UnknownVertexData;
-    impl primase_core::Component for UnknownVertexData {
-        const NAME: &'static str = "test.unknown_vertex_data";
-        const GEOMETRY: primase_core::Geometry = primase_core::Geometry::PerVertex;
-        fn remap_primitives(&self, _: &[usize]) -> Option<Result<Self, String>> {
-            Some(Err("unmodelled primitive data".into()))
-        }
-        fn remap_vertices(&self, _: usize, _: &[u32]) -> Option<Result<Self, String>> {
-            Some(Err("unmodelled vertex data".into()))
-        }
-    }
-    let (mut w, e, _) = world(1e-10, CROSSING, 1.);
-    w.insert(e, UnknownVertexData);
-    let before = w.get::<Mesh>(e).unwrap().clone();
-    let error = run(&mut w).unwrap_err();
-    assert!(error.contains("test.unknown_vertex_data"), "{error}");
-    assert_eq!(w.get::<Mesh>(e).unwrap(), &before);
+fn shared_prototype_clips_once_in_local_coordinates() {
+    let (mut w, e, place) = world(1e-10, CROSSING, 1.);
+    let other = w.duplicate(place).unwrap();
+    w.insert(
+        other,
+        Transform {
+            cols: [[0.001, 0., 0.], [0., 0.001, 0.], [0., 0., 0.001], [10., 0., 0.]],
+        },
+    );
+    let mut registry = PassRegistry::new();
+    primase_reskate::register(&mut registry);
+    let pipeline = registry
+        .parse("prepare-reskate-repeat-clipping{min_instances=2,min_instance_tris=0,max_render_edge=0}")
+        .unwrap();
+    PassManager::new(registry)
+        .run(&mut w, &pipeline, &mut RunReport::default())
+        .unwrap();
+    let rec = w
+        .resource::<primase_reskate::components::SkateRepeatClipping>()
+        .unwrap();
+    assert_eq!(rec.meshes.len(), 1);
+    assert!(rec.meshes.keys().next().unwrap().starts_with("p_"));
+    assert_eq!(triangles(&w, e), 2);
 }

@@ -1731,3 +1731,6 @@ mod tests {
         );
     }
 }
+
+mod repeat_clip;
+pub use repeat_clip::{RepeatMesh, SkateRepeatClipping};

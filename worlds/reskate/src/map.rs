@@ -649,6 +649,14 @@ pub struct Ctx {
     pub mats: MatLib,
 }
 
+#[derive(Debug, Default)]
+pub(crate) enum RepeatClipping {
+    #[default]
+    Off,
+    Record(crate::components::SkateRepeatClipping),
+    Replay(crate::components::SkateRepeatClipping),
+}
+
 /// Studio's map, being written.
 #[derive(Debug)]
 pub struct MapWriter {
@@ -672,6 +680,7 @@ pub struct MapWriter {
     stack: Stack,
     /// The blend chains: none, chosen here for `prepare-reskate-blend-order`, or the ones it chose, built again.
     chains: Chains,
+    repeat_clipping: RepeatClipping,
     /// The chain-object budget `plan-reskate-blend-budget` decided (`None`: none planned; tiles with chains refused).
     budget: Option<SkateBlendBudget>,
     /// How the collision is written, as `prepare-reskate-collision` planned it (`None`: exactly).
@@ -875,9 +884,34 @@ impl MapWriter {
             stack: Stack::Off { unstacked: 0 },
             chains: Chains::Off { left: 0 },
             budget: None,
+            repeat_clipping: RepeatClipping::Off,
             mesh_files: BTreeMap::new(),
             files: BTreeMap::new(),
         })
+    }
+
+    pub(crate) fn set_repeat_clipping(&mut self, rec: Option<crate::components::SkateRepeatClipping>) {
+        self.repeat_clipping = rec.map_or(RepeatClipping::Off, RepeatClipping::Replay);
+    }
+    pub(crate) fn record_repeat_clipping(&mut self) {
+        self.repeat_clipping = RepeatClipping::Record(Default::default());
+    }
+    pub(crate) fn take_repeat_clipping(&mut self) -> crate::components::SkateRepeatClipping {
+        match std::mem::take(&mut self.repeat_clipping) {
+            RepeatClipping::Record(rec) => rec,
+            _ => unreachable!("record mode"),
+        }
+    }
+    fn prepared_render(&mut self, stem: &str, pr: &[GlbPrim]) -> Result<Vec<GlbPrim>> {
+        match &mut self.repeat_clipping {
+            RepeatClipping::Off => Ok(pr.to_vec()),
+            RepeatClipping::Record(rec) => {
+                crate::passes::repeat_clip::record(stem, pr, &self.ctx.mats, rec).map_err(Error::Scene)
+            }
+            RepeatClipping::Replay(rec) => {
+                crate::passes::repeat_clip::replay(stem, pr, rec).map_err(Error::Scene)
+            }
+        }
     }
 
     /// The overlay stack as `stack` says; a replayed stack's totals are the map's.
@@ -1127,8 +1161,10 @@ impl MapWriter {
             blend: a.blend.clone(),
             idx: a.idx.clone(),
         };
-        let decal_input: Vec<(usize, usize, Geometry)> =
-            decals.iter().map(|&k| (k, parts[&k].seq, geometry(&parts[&k]))).collect();
+        let decal_input: Vec<(usize, usize, Geometry)> = decals
+            .iter()
+            .map(|&k| (k, parts[&k].seq, geometry(&parts[&k])))
+            .collect();
         let decal_refs: Vec<(usize, usize, &Geometry)> =
             decal_input.iter().map(|(k, seq, g)| (*k, *seq, g)).collect();
         let decal_ranks = blend_order::decal_ranks(&decal_refs)
@@ -1252,7 +1288,8 @@ impl MapWriter {
             } else {
                 format!("{tile}_v{axis}{rank}")
             };
-            let lifted = at + blend_order::axis_vector(axis) * blend_order::lift(rank, plan.ranks, steps[&axis]);
+            let lifted =
+                at + blend_order::axis_vector(axis) * blend_order::lift(rank, plan.ranks, steps[&axis]);
             objects.extend(self.write_mesh(&stem, &pr, lifted)?);
             files.push(format!("{stem}.glb"));
         }
@@ -1362,10 +1399,11 @@ impl MapWriter {
     /// Writes `meshes/<stem>.glb` and returns an object per primitive (`<stem>`, or `<stem> / section N`) at
     /// translation `at`, each counting the Studio cells it meets.
     fn write_mesh(&mut self, stem: &str, pr: &[GlbPrim], at: Vec3) -> Result<Vec<MapObject>> {
+        let pr = self.prepared_render(stem, pr)?;
         let rows = MapObject::translation(at.x, at.y, at.z);
         let file = format!("{stem}.glb");
-        if self.layout.encodes() {
-            self.mesh_files.insert(file.clone(), glb::write(stem, pr)?);
+        if self.layout.encodes() && !pr.is_empty() {
+            self.mesh_files.insert(file.clone(), glb::write(stem, &pr)?);
         }
         Ok(pr
             .iter()
@@ -1744,7 +1782,8 @@ impl MapWriter {
         let order = draw_order(&parts, |k| draw_class(mats.by_id(k)), &under);
         let (pr, lifts) = prims(&parts, mats, &order);
         record_lifts(&mut self.r, format!("meshes/{stem}.glb"), lifts);
-        if self.layout.encodes() {
+        let pr = self.prepared_render(&stem, &pr)?;
+        if self.layout.encodes() && !pr.is_empty() {
             self.mesh_files
                 .insert(format!("{stem}.glb"), glb::write(&stem, &pr)?);
         }

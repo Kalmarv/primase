@@ -208,6 +208,7 @@ pub fn target() -> primase_core::pass::Target {
         .legal(crate::components::SkateWaterSurfaces::NAME)
         .legal(crate::components::SkateLayoutSummary::NAME)
         .legal(SkateMarkerSnaps::NAME)
+        .legal(crate::components::SkateRepeatClipping::NAME)
         .legal(SkateOverlayStack::NAME)
         .legal(SkateBlendChains::NAME)
         .legal(SkateBlendBudget::NAME)
@@ -780,6 +781,7 @@ impl MapSink {
             // no copy of the first part's is kept
             let writer = Records {
                 stack: None,
+                repeat_clipping: None,
                 chains: None,
                 budget: records.budget.clone(),
                 plan: records.plan.clone(),
@@ -842,6 +844,7 @@ impl MapSink {
         }
         t.parts += 1;
         t.writer.set_counts(counts);
+        t.writer.set_repeat_clipping(records.repeat_clipping.clone());
         let (left, matched) = crate::map::pause_left_of(world, &o);
         t.writer.set_pause_left(left);
         t.pause_matched.extend(matched);

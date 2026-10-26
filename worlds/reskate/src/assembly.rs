@@ -542,6 +542,32 @@ pub(crate) fn blend_chains(
     }
 }
 
+/// Prepare exact final local render primitives, including both chain budget forms, with no file access.
+pub(crate) fn repeat_clipping(
+    world: &World,
+    a: &EncodingOptions,
+) -> Result<crate::components::SkateRepeatClipping> {
+    let PartRead {
+        scene: s,
+        o,
+        placements,
+        records,
+        counts,
+        ..
+    } = read_part(world, Path::new(""), a, false)?;
+    let grouping = grouping(&s, a);
+    let mut writer = records
+        .writer(o, s.surfaces.clone())?
+        .without_encoding()
+        .with_layout(Layout::Render);
+    writer.set_counts(counts);
+    writer.record_repeat_clipping();
+    assemble(&s, &placements, &mut writer)?;
+    let mut rec = writer.take_repeat_clipping();
+    rec.grouping = Some(grouping);
+    Ok(rec)
+}
+
 /// One material of the writer's assembly: its id, name and texture ids (base, normal, mask, alpha; -1: none).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AssembledMaterial {
@@ -893,6 +919,7 @@ fn part_options(world: &World, s: &Scene, a: &EncodingOptions, encode: bool) -> 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Records {
     pub stack: Option<crate::components::SkateOverlayStack>,
+    pub repeat_clipping: Option<crate::components::SkateRepeatClipping>,
     pub chains: Option<crate::components::SkateBlendChains>,
     pub budget: Option<crate::components::SkateBlendBudget>,
     pub plan: Option<crate::components::SkateCollisionPlan>,
@@ -902,10 +929,15 @@ pub(crate) struct Records {
 /// (each part's whole), the overlay stack's and the blend chains' settings (each part's own meshes and tiles).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct RecordsBasis {
+    pub repeat_grouping: Option<Option<crate::components::OverlayGrouping>>,
     pub plan: Option<crate::components::SkateCollisionPlan>,
     pub budget: Option<crate::components::SkateBlendBudget>,
     pub stack: Option<(f32, Option<crate::components::OverlayGrouping>)>,
-    pub chains: Option<(f32, crate::blend_order::ChainOrder, Option<crate::components::OverlayGrouping>)>,
+    pub chains: Option<(
+        f32,
+        crate::blend_order::ChainOrder,
+        Option<crate::components::OverlayGrouping>,
+    )>,
 }
 
 impl Records {
@@ -913,6 +945,7 @@ impl Records {
     /// not the records (an overlay stack and blend chains are a part's own, and replayed as they come).
     pub(crate) fn basis(&self) -> RecordsBasis {
         RecordsBasis {
+            repeat_grouping: self.repeat_clipping.as_ref().map(|r| r.grouping),
             plan: self.plan.clone(),
             budget: self.budget.clone(),
             stack: self.stack.as_ref().map(|s| (s.step, s.grouping)),
@@ -945,7 +978,16 @@ impl Records {
                 rec.grouping
             )));
         }
+        let repeat_clipping = world
+            .resource::<crate::components::SkateRepeatClipping>()
+            .cloned();
+        if repeat_clipping.as_ref().is_some_and(|r| r.grouping != Some(mine)) {
+            return Err(Error::Scene(
+                "repeat clipping was prepared for other encoding settings".into(),
+            ));
+        }
         Ok(Records {
+            repeat_clipping,
             stack,
             chains,
             budget: world.resource::<crate::components::SkateBlendBudget>().cloned(),
@@ -955,7 +997,9 @@ impl Records {
 
     /// A writer with options `o` and the surface table `surfaces`, replaying these records.
     pub(crate) fn writer(self, o: WriterOptions, surfaces: crate::scene::SurfaceTable) -> Result<MapWriter> {
-        Ok(MapWriter::new(o, surfaces)?
+        let mut writer = MapWriter::new(o, surfaces)?;
+        writer.set_repeat_clipping(self.repeat_clipping);
+        Ok(writer
             .with_stack(match self.stack {
                 Some(rec) => Stack::Replay(Box::new(rec)),
                 None => Stack::Off { unstacked: 0 },

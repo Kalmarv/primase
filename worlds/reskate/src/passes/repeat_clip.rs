@@ -1,5 +1,5 @@
 //! `prepare-reskate-repeat-clipping`: remove the pieces Studio's repeat clipping discards before recording a map's
-//! vertex-blend weights. Run after material/UV/geometry preparation, before overlay, blend-order and map summaries.
+//! vertex-blend weights. Run after overlay and blend-order preparation, before map summaries and blend-budget planning.
 //!
 //! Studio 20261012 clips repeating/mirrored decals and textured blended surfaces at integer UV lines. A triangle
 //! within one tile (including an outside tile) bypasses the area check. Otherwise it rejects each clipped polygon
@@ -15,42 +15,58 @@
 //! survival; changing UV extent changes the individual pieces. These observations agree with the independently
 //! published Studio repeat-cut analysis (peter-w07/los-santos-reskate, tools/studio_cut_np.py). No code is copied.
 //!
+//! Studio clips shared meshes once in their local space: a two-instance fixture at scales 1 and .001 retains
+//! one two-triangle shared MeshSet; baking those placements retains only the unit-scale triangle's two pieces.
+//! Baked tiles and padded blend chains have different local f32 coordinates. In a real emitted sliver, clipping
+//! at v=-4 rounds two x coordinates to the same 22.436964, losing a weight that survives prototype-space clipping.
+//! Therefore preparation uses the final assembly, including instancing, overlay lifts and chain/cell padding.
+//!
 //! Only a source triangle that loses a polygon is rebuilt. Its surviving polygons keep their original UV tile,
-//! winding and linearly interpolated streams, morph deltas and blend opacity; Studio then sees single-tile triangles.
-//! Other triangles, opaque/clamped materials and collision are untouched. The shared meshops clip and vertex-blend
-//! mechanisms perform the interpolation. Skin deformation cannot be predicted statically and is refused on a changed
-//! primitive. Unknown per-vertex data refuses through the core geometry hooks. Material variants must agree about
-//! repeat clipping, and all placements of a shared prototype must agree about each piece's survival (their linear
-//! transforms supply the world-space area); disagreement is refused by name, before changing geometry. This operation
-//! is local to owned prototypes in a conversion part. It reports discarded fan triangles per material,
-//! wholly removed source triangles, and rebuilt triangles. It cannot predict later compiler LOD simplification or
-//! float-position collapse caused by subsequent spatial batching; the postcompile containment check remains strict.
+//! winding and linearly interpolated streams and blend opacity; Studio then sees single-tile triangles.
+//! Other triangles, opaque/clamped materials and collision are untouched. Core meshes and their per-vertex data
+//! remain authored. The prepared dialect resource stores only changed assembled primitives plus every mesh's
+//! content identity. The writer refuses stale records and encodes replacements without making clipping decisions.
+//! Shared prototypes need no specialization: their local assembly is processed once; baked placements are processed
+//! at their actual tile/chain coordinates. Both possible budget forms are prepared. The encoding must be supplied
+//! when it differs from the default. Reported per material across both candidate budget forms: discarded fan triangles, plus wholly removed source
+//! triangles. Later compiler LOD simplification remains guarded by exact postcompile weight containment.
 //! Coordinates beyond one million UV tiles or a triangle over the existing repeat-tile limit are refused by name.
 
-use std::collections::BTreeMap;
-
-use primase_core::ledger::Measure;
-use primase_core::pass::{Pass, PassLog, PassSpec};
-use primase_core::{Entity, Instance, Mesh, Semantic, Stream, Topology, Transform, VertexBlend, World};
-use primase_meshops::point_blend::{Replacement, blend_streams, describe, drawn_with, replace_primitives};
-
-use crate::components::{SkateMaterial, SkatePrototype};
-use crate::scene::{cut_at_repeats, repeats_texture};
-
-/// Studio's summed polygon cross-product magnitude cutoff, in square metres (twice area).
+use crate::EncodingOptions;
+use crate::components::{RepeatMesh, SkateRepeatClipping};
+use crate::glb::GlbPrim;
+use crate::material::{MatLib, VClass};
+use primase_core::pass::{Options, Pass, PassLog, PassSpec};
+use primase_core::{Primitive, Semantic, Stream, Topology, VertexBlend, World};
+use primase_meshops::point_blend::blend_streams;
+use std::collections::{BTreeMap, BTreeSet};
 const MIN_CROSS: f32 = 1e-10;
 const UV_MARGIN: f32 = 1e-5;
 
-/// See the module documentation. Selecting this pass explicitly selects Studio's clipped-piece exclusions.
-#[derive(Clone, Copy, Debug)]
-pub struct PrepareReskateRepeatClipping;
-
+/// Prepare the assembled render geometry for the stated map encoding.
+#[derive(Clone, Debug, Default)]
+pub struct PrepareReskateRepeatClipping {
+    encoding: EncodingOptions,
+}
+impl PrepareReskateRepeatClipping {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn for_encoding(mut self, e: &EncodingOptions) -> Result<Self, String> {
+        super::overlays::check_grouping(e)?;
+        self.encoding = super::overlays::grouping_only(e);
+        Ok(self)
+    }
+}
 pub const PREPARE_RESKATE_REPEAT_CLIPPING: PassSpec = PassSpec {
     name: "prepare-reskate-repeat-clipping",
-    options: &[],
-    make: |_| Ok(Box::new(PrepareReskateRepeatClipping)),
+    options: &super::overlays::ENCODING,
+    make: |g| {
+        Ok(Box::new(
+            PrepareReskateRepeatClipping::new().for_encoding(&super::overlays::encoding_from(g)?)?,
+        ))
+    },
 };
-
 #[derive(Clone, Copy)]
 struct Corner {
     uv: [f32; 2],
@@ -130,15 +146,12 @@ fn pieces(uv: [[f32; 2]; 3], pos: [[f32; 3]; 3]) -> Result<Option<Vec<Vec<Corner
     Ok(Some(out))
 }
 
-fn survives(poly: &[Corner], t: &Transform) -> bool {
-    // Translation does not change area. Include the placement's scale/shear without adding its world offset.
-    let map =
-        |p: [f32; 3]| -> [f32; 3] { std::array::from_fn(|a| (0..3).map(|b| t.cols[b][a] * p[b]).sum()) };
-    let origin = map(poly[0].pos);
+fn survives(poly: &[Corner]) -> bool {
+    let origin = poly[0].pos;
     let mut cross = [0.0f32; 3];
     for i in 2..poly.len() {
-        let a = map(poly[i - 1].pos);
-        let b = map(poly[i].pos);
+        let a = poly[i - 1].pos;
+        let b = poly[i].pos;
         let a: [f32; 3] = std::array::from_fn(|k| a[k] - origin[k]);
         let b: [f32; 3] = std::array::from_fn(|k| b[k] - origin[k]);
         for k in 0..3 {
@@ -148,172 +161,230 @@ fn survives(poly: &[Corner], t: &Transform) -> bool {
     cross.iter().map(|x| x * x).sum::<f32>().sqrt() > MIN_CROSS
 }
 
-fn repeats(w: &World, m: Entity) -> bool {
-    w.get::<SkateMaterial>(m).is_some_and(|s| {
-        let (decal, blend) = cut_at_repeats(s);
-        (decal || blend) && repeats_texture(s)
-    })
+/// Identity includes every stream and its material name; reordering or a changed encoding invalidates preparation.
+pub(crate) fn identity(prims: &[GlbPrim]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    for p in prims {
+        let name = p.material.as_deref().unwrap_or("");
+        h.update((name.len() as u64).to_le_bytes());
+        h.update(name.as_bytes());
+        for stream in [Some(&p.pos), p.nrm.as_ref(), p.uv.as_ref(), p.blend.as_ref()] {
+            h.update([u8::from(stream.is_some())]);
+            if let Some(values) = stream {
+                h.update((values.len() as u64).to_le_bytes());
+                for v in values {
+                    h.update(v.to_bits().to_le_bytes());
+                }
+            }
+        }
+        h.update((p.idx.len() as u64).to_le_bytes());
+        for i in &p.idx {
+            h.update(i.to_le_bytes());
+        }
+    }
+    h.finalize().into()
+}
+struct Changed {
+    primitive: Option<GlbPrim>,
+    fan_triangles: u64,
+    source_triangles: u64,
+}
+fn prepare(p: &GlbPrim, what: &str) -> Result<Option<Changed>, String> {
+    let Some(uv) = &p.uv else {
+        return Ok(None);
+    };
+    let n = p.pos.len() / 3;
+    if !p.idx.len().is_multiple_of(3)
+        || p.pos.len() != n * 3
+        || uv.len() != n * 2
+        || p.idx.iter().any(|&i| i as usize >= n)
+    {
+        return Err(format!("{what}: malformed assembled triangle streams"));
+    }
+    let positions: Vec<[f32; 3]> = p.pos.as_chunks::<3>().0.to_vec();
+    let coords: Vec<[f32; 2]> = uv.as_chunks::<2>().0.to_vec();
+    let mut blends = Vec::new();
+    let mut out_pos = Vec::new();
+    let mut out_uv = Vec::new();
+    let mut dropped = 0;
+    let mut removed = 0;
+    for tri in p.idx.as_chunks::<3>().0 {
+        let mut kept = Vec::new();
+        let mut lost = 0;
+        if let Some(polys) = pieces(
+            tri.map(|i| coords[i as usize]),
+            tri.map(|i| positions[i as usize]),
+        )? {
+            for poly in polys {
+                if survives(&poly) {
+                    kept.push(poly);
+                } else {
+                    lost += (poly.len() - 2) as u64;
+                }
+            }
+        }
+        if lost == 0 {
+            for &v in tri {
+                blends.push(VertexBlend::copy(v));
+                out_pos.push(positions[v as usize]);
+                out_uv.push(coords[v as usize]);
+            }
+            continue;
+        }
+        dropped += lost;
+        removed += u64::from(kept.is_empty());
+        for poly in kept {
+            for j in 1..poly.len() - 1 {
+                for k in [0, j, j + 1] {
+                    blends.push(VertexBlend {
+                        sources: *tri,
+                        weights: poly[k].weights,
+                    });
+                    out_pos.push(poly[k].pos);
+                    out_uv.push(poly[k].uv);
+                }
+            }
+        }
+    }
+    if dropped == 0 {
+        return Ok(None);
+    }
+    if blends.is_empty() {
+        return Ok(Some(Changed {
+            primitive: None,
+            fan_triangles: dropped,
+            source_triangles: removed,
+        }));
+    }
+    let mut streams = BTreeMap::from([(Semantic::Position, Stream::F32x3(positions))]);
+    if let Some(normals) = &p.nrm {
+        streams.insert(
+            Semantic::Normal,
+            Stream::F32x3(normals.as_chunks::<3>().0.to_vec()),
+        );
+    }
+    let src = Primitive {
+        topology: Topology::Triangles,
+        streams,
+        indices: Some(p.idx.clone()),
+        material: None,
+    };
+    let interpolated = blend_streams(&src, &blends, None, what)?;
+    let nrm = interpolated.streams.get(&Semantic::Normal).map(|s| match s {
+        Stream::F32x3(v) => v.iter().flatten().copied().collect(),
+        _ => unreachable!(),
+    });
+    let blend = p.blend.as_ref().map(|values| {
+        blends
+            .iter()
+            .map(|b| {
+                b.terms()
+                    .map(|(i, w)| f64::from(values[i as usize]) * f64::from(w))
+                    .sum::<f64>() as f32
+            })
+            .collect()
+    });
+    let count = u32::try_from(blends.len()).map_err(|_| format!("{what}: too many prepared vertices"))?;
+    Ok(Some(Changed {
+        primitive: Some(GlbPrim {
+            material: p.material.clone(),
+            pos: out_pos.into_iter().flatten().collect(),
+            nrm,
+            uv: Some(out_uv.into_iter().flatten().collect()),
+            idx: (0..count).collect(),
+            blend,
+        }),
+        fan_triangles: dropped,
+        source_triangles: removed,
+    }))
 }
 
+pub(crate) fn record(
+    stem: &str,
+    prims: &[GlbPrim],
+    mats: &MatLib,
+    rec: &mut SkateRepeatClipping,
+) -> Result<Vec<GlbPrim>, String> {
+    let names: BTreeSet<&str> = mats
+        .list
+        .iter()
+        .filter(|m| {
+            (m.class == VClass::Decal
+                || (matches!(m.class, VClass::Alpha | VClass::Glass) && m.alpha == 3 && m.tex >= 0))
+                && matches!(m.wrap.as_deref(), None | Some("repeat" | "mirror"))
+        })
+        .map(|m| m.name.as_str())
+        .collect();
+    let mut replacements = BTreeMap::new();
+    for (i, p) in prims.iter().enumerate() {
+        if !p.material.as_deref().is_some_and(|m| names.contains(m)) {
+            continue;
+        }
+        if let Some(changed) = prepare(p, stem)? {
+            *rec.discarded
+                .entry(p.material.clone().unwrap_or_default())
+                .or_default() += changed.fan_triangles;
+            rec.source_triangles += changed.source_triangles;
+            replacements.insert(i, changed.primitive);
+        }
+    }
+    rec.meshes.insert(
+        stem.into(),
+        RepeatMesh {
+            source: identity(prims),
+            replacements,
+        },
+    );
+    replay(stem, prims, rec)
+}
+pub(crate) fn replay(
+    stem: &str,
+    prims: &[GlbPrim],
+    rec: &SkateRepeatClipping,
+) -> Result<Vec<GlbPrim>, String> {
+    let mesh=rec.meshes.get(stem).ok_or_else(|| format!("{stem}: no repeat-clipping preparation; run prepare-reskate-repeat-clipping after overlays and blend order"))?;
+    if mesh.source != identity(prims) {
+        return Err(format!(
+            "{stem}: stale repeat-clipping preparation; geometry/materials changed after prepare-reskate-repeat-clipping"
+        ));
+    }
+    Ok(prims
+        .iter()
+        .enumerate()
+        .filter_map(|(i, p)| match mesh.replacements.get(&i) {
+            Some(q) => q.clone(),
+            None => Some(p.clone()),
+        })
+        .collect())
+}
 impl Pass for PrepareReskateRepeatClipping {
     fn name(&self) -> &'static str {
         "prepare-reskate-repeat-clipping"
     }
+    fn options(&self) -> Options {
+        super::overlays::encoding_options(&self.encoding)
+    }
     fn requires(&self) -> &[&'static str] {
         &["skate.scene"]
     }
-    fn modifies(&self) -> &[&'static str] {
-        &["core.mesh", "core.morphs", "reskate.blend_opacity"]
+    fn provides(&self) -> &[&'static str] {
+        &["skate.repeat_clipping"]
     }
     fn approximates(&self) -> &'static str {
-        "repeat-clipped interpolation in f32; cancelling normals keep the nearest corner"
-    }
-    fn removes(&self) -> &[&'static str] {
-        &["core.mesh_file"]
+        "Studio repeat-clipped render geometry interpolated in f32"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        let owned = super::Owned::of(w);
-        let mut transforms: BTreeMap<Entity, Vec<Transform>> = BTreeMap::new();
-        for (e, i) in w.iter::<Instance>() {
-            transforms
-                .entry(i.prototype)
-                .or_default()
-                .push(w.get::<Transform>(e).copied().unwrap_or(Transform::IDENTITY));
+        if w.resource::<SkateRepeatClipping>().is_some() {
+            return Err("repeat clipping is already prepared".into());
         }
-        let mut plan = Vec::new();
-        for (e, mesh) in w
-            .iter::<Mesh>()
-            .filter(|(e, _)| owned.contains(*e) && w.has::<SkatePrototype>(*e))
-        {
-            for (i, p) in mesh.primitives().iter().enumerate() {
-                let materials = drawn_with(w, e, i, p);
-                if !materials.iter().any(|&m| repeats(w, m)) {
-                    continue;
-                }
-                let what = describe(w, e, i);
-                if p.topology != Topology::Triangles {
-                    return Err(format!("{what}: not triangles"));
-                }
-                let Some(Stream::F32x2(uv)) = p.streams.get(&Semantic::TexCoord(0)) else {
-                    return Err(format!("{what}: no float2 UV0"));
-                };
-                let Some(Stream::F32x3(pos)) = p.streams.get(&Semantic::Position) else {
-                    return Err(format!("{what}: no float3 positions"));
-                };
-                let indices = p
-                    .indices
-                    .clone()
-                    .unwrap_or_else(|| (0..p.vertex_count() as u32).collect());
-                if !indices.len().is_multiple_of(3)
-                    || indices
-                        .iter()
-                        .any(|&v| v as usize >= pos.len() || v as usize >= uv.len())
-                {
-                    return Err(format!("{what}: invalid triangle indices"));
-                }
-                if !pos.iter().flatten().all(|x| x.is_finite()) {
-                    return Err(format!("{what}: non-finite positions"));
-                }
-                let placements = transforms
-                    .get(&e)
-                    .map(Vec::as_slice)
-                    .unwrap_or(&[Transform::IDENTITY]);
-                if !placements
-                    .iter()
-                    .all(|t| t.cols.iter().flatten().all(|x| x.is_finite()))
-                {
-                    return Err(format!("{what}: non-finite placement transform"));
-                }
-                let mut blends = Vec::new();
-                let mut coords = Vec::new();
-                let mut dropped = 0u64;
-                let mut omitted = 0u64;
-                for tri in indices.as_chunks::<3>().0 {
-                    let polys = pieces(tri.map(|v| uv[v as usize]), tri.map(|v| pos[v as usize]))
-                        .map_err(|err| format!("{what}: {err}"))?;
-                    let mut retained = Vec::new();
-                    let mut lost = 0;
-                    if let Some(polys) = polys {
-                        for poly in polys {
-                            let keep = survives(&poly, &placements[0]);
-                            if placements.iter().skip(1).any(|t| survives(&poly, t) != keep) {
-                                return Err(format!(
-                                    "{what}: shared placements disagree on repeat-clipped piece area; specialize the prototype by placement first"
-                                ));
-                            }
-                            if keep {
-                                retained.push(poly);
-                            } else {
-                                lost += (poly.len() - 2) as u64;
-                            }
-                        }
-                    }
-                    if lost == 0 {
-                        for &v in tri {
-                            blends.push(VertexBlend::copy(v));
-                            coords.push(uv[v as usize]);
-                        }
-                        continue;
-                    }
-                    if materials.iter().any(|&m| !repeats(w, m)) {
-                        return Err(format!(
-                            "{what}: material variants disagree on repeat clipping; specialize-material-variants first"
-                        ));
-                    }
-                    if w.has::<primase_core::skin::Skin>(e) {
-                        return Err(format!(
-                            "{what}: skinned repeat clipping needs the evaluated pose"
-                        ));
-                    }
-                    dropped += lost;
-                    omitted += u64::from(retained.is_empty());
-                    for poly in retained {
-                        for j in 1..poly.len() - 1 {
-                            for k in [0, j, j + 1] {
-                                blends.push(VertexBlend {
-                                    sources: *tri,
-                                    weights: poly[k].weights,
-                                });
-                                coords.push(poly[k].uv);
-                            }
-                        }
-                    }
-                }
-                if dropped == 0 {
-                    continue;
-                }
-                let mut blended = blend_streams(p, &blends, None, &what)?;
-                blended
-                    .streams
-                    .insert(Semantic::TexCoord(0), Stream::F32x2(coords));
-                log.approximate(
-                    "repeat-clipped interpolation with cancelling normals (nearest corner kept)",
-                    blended.normals_cancelled,
-                );
-                for m in materials {
-                    let key = &w.get::<SkateMaterial>(m).expect("checked repeating").key;
-                    log.count(&format!("{key}: discarded repeat-clipped fan triangles"), dropped);
-                }
-                log.dropped(
-                    Measure::Triangles,
-                    "source triangles discarded by Studio repeat clipping",
-                    omitted,
-                );
-                log.count("repeat-clipped fan triangles discarded", dropped);
-                log.count("replacement triangles", (blends.len() / 3) as u64);
-                let count = u32::try_from(blends.len())
-                    .map_err(|_| format!("{what}: too many replacement vertices"))?;
-                plan.push(Replacement {
-                    entity: e,
-                    primitive: i,
-                    indices: (0..count).collect(),
-                    streams: blended.streams,
-                    blends,
-                    influences: None,
-                });
-            }
+        let rec = crate::assembly::repeat_clipping(w, &self.encoding).map_err(|e| e.to_string())?;
+        for (material, n) in &rec.discarded {
+            log.omit(&format!("{material}: Studio repeat-clipped fan triangles"), *n);
         }
-        replace_primitives(w, plan)?;
+        log.count("source triangles wholly discarded", rec.source_triangles);
+        log.count("render meshes prepared", rec.meshes.len() as u64);
+        w.insert_resource(rec);
         Ok(())
     }
 }
