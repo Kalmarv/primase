@@ -1359,6 +1359,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "primase-rsx"
+version = "0.1.0"
+dependencies = [
+ "primase-bytes",
+ "thiserror",
+]
+
+[[package]]
 name = "primase-shader"
 version = "0.1.0"
 dependencies = [
@@ -1413,6 +1421,7 @@ dependencies = [
  "primase-core",
  "primase-hash",
  "primase-havok",
+ "primase-rsx",
  "primase-sqlite",
  "primase-testdata",
  "primase-texcodec",

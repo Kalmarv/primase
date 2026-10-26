@@ -17,6 +17,7 @@ members = [
     "toolkit/sqlite",
     "toolkit/exactsum",
     "toolkit/dxcontainer",
+    "toolkit/rsx",
     "toolkit/havok",
     "toolkit/dxbc",
     "toolkit/d3d9",
@@ -84,6 +85,7 @@ primase-hash = { path = "toolkit/hash" }
 primase-sqlite = { path = "toolkit/sqlite" }
 primase-exactsum = { path = "toolkit/exactsum" }
 primase-dxcontainer = { path = "toolkit/dxcontainer" }
+primase-rsx = { path = "toolkit/rsx" }
 primase-cache = { path = "toolkit/cache" }
 primase-havok = { path = "toolkit/havok" }
 primase-dxbc = { path = "toolkit/dxbc" }

@@ -91,6 +91,15 @@ SCP table strides are checked
 against the native loader, but their meanings and nested objects remain unread. SCP's opaque coverage notice
 intentionally overlaps interpreted fields and is **not** a count of distinct unread bytes.
 
+`cgbinary_disc` feeds the `.vsp` and `.psp` entries to `primase-rsx`'s generic
+CgBinaryProgram reader. SHRED owns the stream's 64-byte zero padding between
+containers. Full depth checks 743 VSP and 765 PSP occurrences, containing 199,017
+vertex and 181,851 fragment programs and 8,041,219 parameter records. Smoke
+selects eight shader-bearing archives by seeded rotation. The corpus checks
+container structure and preserved metadata; it does not establish microcode
+meaning or identify sampler roles. Those require disassembly and an independent
+instruction oracle. No shader-to-material binding is added by this test.
+
 `read::convert::ShredReader` implements core's conversion reader. It currently decodes/caches geometry during `read`,
 returns a planning world without meshes and with explicit material dependencies, and copies only the roots' closure
 on `load`. `prototype_box` reports a converted box from the cached rigid geometry. Incremental archive I/O is not
