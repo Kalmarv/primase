@@ -84,6 +84,38 @@ impl Component for BlendOpacity {
             out
         }))
     }
+    /// Opacity is linear over a triangle, like the colour alpha from which an overlay was lowered.
+    fn blend_vertices(
+        &self,
+        primitive: usize,
+        from: &[primase_core::VertexBlend],
+    ) -> Option<Result<Self, String>> {
+        Some((|| {
+            let entry = self
+                .0
+                .get(primitive)
+                .ok_or_else(|| format!("primitive {primitive} of {}", self.0.len()))?;
+            let Some(opacity) = entry else {
+                return Ok(self.clone());
+            };
+            let values = from
+                .iter()
+                .map(|b| {
+                    let mut sum = 0.0f64;
+                    for (v, weight) in b.terms() {
+                        let value = opacity
+                            .get(v as usize)
+                            .ok_or_else(|| format!("vertex {v} of {}", opacity.len()))?;
+                        sum += f64::from(*value) * f64::from(weight);
+                    }
+                    Ok((sum as f32).clamp(0.0, 1.0))
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            let mut out = self.clone();
+            out.0[primitive] = Some(values);
+            Ok(out)
+        })())
+    }
     fn verify(&self, e: Entity, w: &World) -> Result<(), String> {
         let mesh = w.get::<Mesh>(e).ok_or("blend opacity without core.mesh")?;
         if self.0.len() != mesh.primitives().len() {

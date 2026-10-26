@@ -19,6 +19,8 @@ pub mod overlays;
 pub mod pause_map;
 pub mod raise;
 pub mod region;
+pub mod repeat_clip;
+pub use repeat_clip::{PREPARE_RESKATE_REPEAT_CLIPPING, PrepareReskateRepeatClipping};
 pub mod sampling;
 pub mod shadows;
 pub mod snap;

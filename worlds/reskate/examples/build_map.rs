@@ -4,6 +4,7 @@
 //! when the scene has none, the markers snapped (`snap-reskate-markers`), the textures capped (`cap-textures`, box-filtered as the map writer used to), tints
 //! multiplied in (`prepare-reskate-textures`), the scene's texture budget when it states one
 //! (`budget-reskate-textures`), the triangles over too many texture repeats (`prepare-reskate-uv-repeats`), the
+//! small repeat-clipped pieces excluded (`prepare-reskate-repeat-clipping`, required before weight recording), the
 //! overlays stacked (`prepare-reskate-overlays`, 4 mm), the blend chains split (`prepare-reskate-blend-order`, 200 m),
 //! the collision planned (`prepare-reskate-collision`, minor surfaces coalesced, 1 mm weld) and the chains' budget
 //! (`plan-reskate-blend-budget`, the cull-ID pool), then the writer.
@@ -186,13 +187,19 @@ fn main() -> Result<(), BoxError> {
         primase_reskate::passes::RepeatDecals::Omit,
         primase_reskate::passes::RepeatBlended::Cutout,
     )));
+    // Studio discards small polygons when clipping repeats; record only the surviving blend weights.
+    passes.push(Box::new(primase_reskate::passes::PrepareReskateRepeatClipping));
     // the overlays stacked 4 mm apart, as the writer stacked them, over the meshes this encoding makes
     passes.push(Box::new(
         primase_reskate::passes::PrepareReskateOverlays::new(0.004)?.for_encoding(&o)?,
     ));
     // and the blend chains split into objects of their own, cut on Studio's 200 m cells, as the writer split them
     passes.push(Box::new(
-        primase_reskate::passes::PrepareReskateBlendOrder::new(200.0, primase_reskate::blend_order::ChainOrder::Tie)?.for_encoding(&o)?,
+        primase_reskate::passes::PrepareReskateBlendOrder::new(
+            200.0,
+            primase_reskate::blend_order::ChainOrder::Tie,
+        )?
+        .for_encoding(&o)?,
     ));
     // the collision as the writer wrote it: a leaf's minor surfaces written as its most common one, its pieces welded
     // at a millimetre

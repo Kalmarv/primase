@@ -12,7 +12,8 @@
 //!   `<stem>___section_..._<counter>_<n>` or `<stem>_<counter>_<n>` (a map not written by the writer may not follow
 //!   this);
 //! - Studio tessellates and re-wraps those surfaces (about five times the triangles), so section vertices are not the
-//!   primitive's vertices; but tessellation keeps the source vertices' weights, so every distinct weight of the
+//!   primitive's vertices; after `prepare-reskate-repeat-clipping` removes the tiny/zero-area polygons Studio drops,
+//!   tessellation keeps the surviving source vertices' weights, so every distinct weight of the
 //!   vertices the primitive draws (Studio drops the others: a lowered overlay shares its source primitive's
 //!   vertices), as a half float (a weight exactly halfway between two halves: either, as Studio rounds such a tie
 //!   away from the even half: [`half_choices`]), occurs in its key's sections;
@@ -404,7 +405,8 @@ fn resolve_by(
                     0,
                     format!(
                         "{at}: 0 vertex-blend keys contain all {} of its weights, in its MeshSets, its placement \
-                         peers' or the whole Patch (the compile did not carry the weights? vertex_blend needs \
+                         peers' or the whole Patch (Studio repeat clipping can discard zero-area or tiny polygons: \
+                         run prepare-reskate-repeat-clipping before the map writer; vertex_blend also needs \
                          {STUDIO_BUILD} or a build checked against it)",
                         weights.len()
                     ),

@@ -127,6 +127,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         // shadow casting as core states it (core.shadows), lowered to skate's per-material flag
         &LOWER_RESKATE_SHADOWS,
         &PREPARE_RESKATE_UV_REPEATS,
+        &PREPARE_RESKATE_REPEAT_CLIPPING,
         &PREPARE_RESKATE_COLLISION,
         // a part's collision per cell, for a map in parts (the gather traversal), for the encoding given
         &SHARE_RESKATE_COLLISION,
@@ -271,6 +272,7 @@ mod tests {
             "prepare-reskate-grinds",
             "prepare-reskate-overlays",
             "prepare-reskate-pause-map",
+            "prepare-reskate-repeat-clipping",
             "prepare-reskate-textures",
             "prepare-reskate-uv-repeats",
             "prepare-reskate-uv-transforms",
@@ -299,6 +301,7 @@ mod tests {
             "lower-tint-reskate",
             "lower-vertex-alpha-reskate",
             "prepare-reskate-grinds",
+            "prepare-reskate-repeat-clipping",
             "prepare-reskate-textures",
             "share-reskate-collision",
             "snap-reskate-markers",
