@@ -535,6 +535,10 @@ hidden by skips; build one when a whole-route (step 20) or in-game difference po
   donor rows, determinism) with our own readers; no independent decode checks the result. The decal retarget is
   checked in game at step 20 (Legion's blended materials); the two-texture-set retarget has no producer in any route
   and is unit-tested only.
+- ReSkate: the level-root string repair (`postcompile::levelroot`). `level_root.rs` checks the gate, the repair and the
+  writer's layout on a document in the shape of Studio's level root and on Legion's Patch with our own readers; that the
+  slot's target is what faults (`strlen` of the loaded `char*`, three Shaun White level 4 crash dumps) is read from the
+  dumps, and that the repaired level loads is checked only in game (repeated launches of level 4).
 
 Declare a file in `toolkit/testdata/src/registry.rs` when a test first asks for it; the tables above are made from
 the registry and checked against it. Test outputs go to `scratch()` or a temporary directory, never into the source

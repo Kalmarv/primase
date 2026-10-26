@@ -328,7 +328,7 @@ pub struct Report {
     clippy::disallowed_types,
     reason = "writer I/O: writes the patched files"
 )]
-fn write_file(p: &Path, d: &[u8]) -> Result<()> {
+pub(crate) fn write_file(p: &Path, d: &[u8]) -> Result<()> {
     fs::write(p, d).map_err(|source| Error::Io {
         path: p.to_path_buf(),
         source,
@@ -340,7 +340,7 @@ fn write_file(p: &Path, d: &[u8]) -> Result<()> {
     clippy::disallowed_types,
     reason = "writer I/O: copies the Patch folder to the output"
 )]
-fn copy_dir(from: &Path, to: &Path) -> Result<()> {
+pub(crate) fn copy_dir(from: &Path, to: &Path) -> Result<()> {
     let io = |p: &Path| {
         let p = p.to_path_buf();
         move |source| Error::Io { path: p, source }
@@ -363,13 +363,20 @@ fn copy_dir(from: &Path, to: &Path) -> Result<()> {
 }
 
 /// New payloads go to one new archive per install directory, appended with 16-byte alignment.
-struct Archives<'a> {
+pub(crate) struct Archives<'a> {
     folder: &'a Folder,
     open: BTreeMap<u32, (u16, PathBuf, Vec<u8>)>,
 }
 
-impl Archives<'_> {
-    fn put(&mut self, near: Loc, data: &[u8]) -> Result<FileRef> {
+impl<'a> Archives<'a> {
+    pub(crate) fn new(folder: &'a Folder) -> Self {
+        Archives {
+            folder,
+            open: BTreeMap::new(),
+        }
+    }
+
+    pub(crate) fn put(&mut self, near: Loc, data: &[u8]) -> Result<FileRef> {
         if !self.open.contains_key(&near.chunk) {
             let (num, path) = self.folder.new_archive(near)?;
             self.open.insert(near.chunk, (num, path, Vec::new()));
@@ -392,7 +399,7 @@ impl Archives<'_> {
         ))
     }
 
-    fn finish(self) -> Result<()> {
+    pub(crate) fn finish(self) -> Result<()> {
         for (_, (_, path, buf)) in self.open {
             write_file(&path, &buf)?;
         }
@@ -400,11 +407,11 @@ impl Archives<'_> {
     }
 }
 
-fn encode(data: &[u8]) -> Result<Vec<u8>> {
+pub(crate) fn encode(data: &[u8]) -> Result<Vec<u8>> {
     Ok(CasRaw.compress(data)?)
 }
 
-fn sha1(data: &[u8]) -> [u8; 20] {
+pub(crate) fn sha1(data: &[u8]) -> [u8; 20] {
     Sha1::digest(data).into()
 }
 
@@ -485,11 +492,11 @@ pub(crate) struct Bundle {
     pub(crate) files: Vec<FileRef>,
     pub(crate) manifest: Manifest,
     framed_manifest: bool,
-    changed: bool,
+    pub(crate) changed: bool,
 }
 
 /// Every TOC of the Patch with its bundles, `Some` for each bundle the Patch places.
-type PatchBundles = Vec<(String, toc::Toc, Vec<Option<Bundle>>)>;
+pub(crate) type PatchBundles = Vec<(String, toc::Toc, Vec<Option<Bundle>>)>;
 
 pub(crate) fn patch_bundles(src: &Source) -> Result<PatchBundles> {
     let mut tocs = Vec::new();
@@ -682,10 +689,7 @@ pub fn apply(
             }
         }
     }
-    let mut archives = Archives {
-        folder: &folder,
-        open: BTreeMap::new(),
-    };
+    let mut archives = Archives::new(&folder);
     // ---- depots, MeshSets and lookups
     for (_, _, bundles) in &mut tocs {
         for b in bundles.iter_mut().flatten() {
@@ -802,8 +806,14 @@ pub fn apply(
             )));
         }
     }
-    // ---- manifests, regions, TOCs
-    for (rel, t, bundles) in &mut tocs {
+    write_back(&folder, &mut tocs, archives)?;
+    Ok(report)
+}
+
+/// Writes the changed bundles of `tocs` back: their manifests into the Patch's own archives, their regions and
+/// every TOC with a changed bundle, and the new archives `archives` collected.
+pub(crate) fn write_back(folder: &Folder, tocs: &mut PatchBundles, mut archives: Archives) -> Result<()> {
+    for (rel, t, bundles) in tocs.iter_mut() {
         let mut toc_changed = false;
         for (j, b) in bundles.iter_mut().enumerate() {
             let Some(b) = b.as_mut().filter(|b| b.changed) else {
@@ -821,8 +831,7 @@ pub fn apply(
             write_file(&folder.toc_path(rel), &bytes)?;
         }
     }
-    archives.finish()?;
-    Ok(report)
+    archives.finish()
 }
 
 /// A position as half floats, each coordinate rounded to nearest.
