@@ -20,6 +20,15 @@
 //! which reverses the culled winding, is read but not lowered: it is set on two Materials, both TwoSided, so no
 //! drawn surface has it alone; a Material that did would be counted as omitted.
 //!
+//! The tint's colour space is the texture's stored one. The game never decodes a texture: no effect sets the sampler
+//! state `D3DSAMP_SRGBTEXTURE` (11) or `D3DRS_SRGBWRITEENABLE`, the engine's cached SetSamplerState only ever stated type 11 as 0
+//! (304 calls of 40,001 in one level), and the shipped pixel shaders have no transfer, so `texture * tint` multiplies stored
+//! values whether or not the texture is flagged sRGB. Core's sRGB texture is decoded to linear before the base colour factor
+//! multiplies it, so the tint of a Material whose diffuse texture is flagged sRGB is decoded the same way
+//! (`decode(texel) * decode(tint) = decode(texel * tint)` for a power-law transfer; the sRGB curve's linear toe differs
+//! slightly near black). The alpha, the tint of a linear-flagged diffuse texture (both sides multiply stored values) and the
+//! colour of a Material without a diffuse texture (its encoding is not established) are left as stored.
+//!
 //! No Material takes `COLOR_0` as a colour. The shader (`ekgeneric.fx` `FctDiffuseColor`) uses its red as the weight
 //! that interpolates the first texture towards that texture times the tint, which `lower-shaunwhite-layers` builds; a
 //! white tint leaves the texture whatever the weight. Only its alpha reaches the output, as the vertex alpha of the
@@ -33,7 +42,8 @@ use std::collections::BTreeSet;
 use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode, PbrMaterial, Shading, Specular, TextureRef, UvTransform, Wrap};
 use primase_core::{
-    Component, Entity, MaterialVariants, Mesh, Primitive, Semantic, Stream, VertexColor, World,
+    ColorSpace, Component, Entity, MaterialVariants, Mesh, Primitive, Semantic, Stream, Texture, VertexColor,
+    World,
 };
 
 use crate::components::{MaterialRef, MaterialState, Sampler, SlotRef};
@@ -67,6 +77,15 @@ fn wrap(code: u32, log: &mut PassLog) -> Wrap {
             log.approximate("mirror-once address modes drawn mirrored", 1);
             Wrap::Mirror
         }
+    }
+}
+
+/// One channel of the sRGB transfer's decode, stored 0..1 to linear 0..1.
+fn srgb_decode(c: f32) -> f32 {
+    if c <= 0.040_45 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
     }
 }
 
@@ -258,7 +277,7 @@ impl Pass for LowerShaunwhiteMaterial {
     fn approximates(&self) -> &'static str {
         "PBR specular approximates the source, normal maps of blends omitted; layered sources without core.layered use the diffuse fallback; additive materials alpha-blended and \
          unlit; blended or alpha-tested materials with a vertex alpha below one keep COLOR_0 as a colour multiplier, as core has no alpha-only mode; InvertCulling without TwoSided not lowered (none in the game's data); \
-         every material rough and dielectric"
+         every material rough and dielectric; the tint of an sRGB-flagged diffuse texture decoded per channel with the sRGB curve (the game multiplies stored values, exact for a power-law transfer)"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let all: Vec<(Entity, MaterialRef)> = w.iter::<MaterialRef>().map(|(e, m)| (e, m.clone())).collect();
@@ -276,6 +295,10 @@ impl Pass for LowerShaunwhiteMaterial {
                 continue;
             }
             let base = m.slots.get("diffuse").map(|s| texture_ref(w, s, log));
+            let diffuse_srgb = m.slots.get("diffuse").is_some_and(|s| {
+                w.get::<Texture>(s.texture)
+                    .is_some_and(|t| t.color_space == ColorSpace::Srgb)
+            });
             let specular_map = m.slots.get("specular").map(|s| texture_ref(w, s, log));
             let normal_map = m.slots.get("normal").map(|s| texture_ref(w, s, log));
             if base.is_none() {
@@ -326,6 +349,12 @@ impl Pass for LowerShaunwhiteMaterial {
                     pbr.base_color = s.color.map(|c| c.clamp(0.0, 1.0));
                     if s.color.iter().any(|c| !(0.0..=1.0).contains(c)) {
                         log.approximate("material colours outside 0-1 clamped", 1);
+                    }
+                    if diffuse_srgb && pbr.base_color[..3].iter().any(|c| *c != 1.0) {
+                        for c in &mut pbr.base_color[..3] {
+                            *c = srgb_decode(*c);
+                        }
+                        log.count("tints of sRGB-flagged diffuse textures decoded to linear (the game multiplies stored values)", 1);
                     }
                     (pbr.alpha_mode, pbr.shading) = alpha(s, log);
                     pbr.double_sided = s.two_sided;
@@ -456,7 +485,10 @@ mod tests {
         LowerShaunwhiteMaterial.run(&mut w, &mut log).unwrap();
 
         let p = w.get::<PbrMaterial>(opaque).unwrap();
-        assert_eq!(p.base_color, [0.5, 0.25, 1.0, 1.0]);
+        // the test texture is flagged sRGB: its tint is decoded (0.5 -> 0.21404, 0.25 -> 0.05088), white and alpha stay
+        for (got, want) in p.base_color.iter().zip([0.214_04, 0.050_876, 1.0, 1.0]) {
+            assert!((got - want).abs() < 1e-5, "{:?}", p.base_color);
+        }
         let r = p.base_color_texture.unwrap();
         assert_eq!(r.texture, t);
         assert_eq!(r.wrap, [Wrap::Repeat, Wrap::Clamp]);
@@ -483,6 +515,66 @@ mod tests {
             Some(&1)
         );
         assert!(w.verify_components().is_empty());
+    }
+
+    /// The game multiplies stored texel values by the tint whatever the texture's gamma flag, and core multiplies the
+    /// decoded texel of an sRGB texture by the factor: only the tint of an sRGB-flagged diffuse texture is decoded, its
+    /// alpha, a white tint, a linear-flagged texture's tint and an untextured colour stay as stored, and the emission
+    /// (the tinted diffuse layer) follows the base colour.
+    #[test]
+    fn the_tint_is_decoded_only_for_srgb_flagged_diffuse_textures() {
+        let mut w = World::new();
+        let srgb = texture(&mut w, [0, 0, 0]);
+        let linear = texture(&mut w, [0, 0, 0]);
+        w.get_mut::<Texture>(linear).unwrap().color_space = ColorSpace::Linear;
+        let slot = |texture| SlotRef {
+            texture,
+            scale: [1.0; 2],
+            offset: [0.0; 2],
+            rotation: 0.,
+            texcoord: 0,
+            address: None,
+        };
+        let tinted = |alpha, illumination| MaterialState {
+            color: [0.5, 1.0, 0.04, alpha],
+            illumination,
+            ..state(0, false, false, 128)
+        };
+        let on_srgb = material(&mut w, Some(tinted(0.7, 2.0)), Some(slot(srgb)));
+        let on_linear = material(&mut w, Some(tinted(0.7, 0.0)), Some(slot(linear)));
+        let untextured = material(&mut w, Some(tinted(0.7, 0.0)), None);
+        let white = material(
+            &mut w,
+            Some(MaterialState {
+                color: [1.0; 4],
+                ..state(0, false, false, 128)
+            }),
+            Some(slot(srgb)),
+        );
+        let mut log = PassLog::default();
+        LowerShaunwhiteMaterial.run(&mut w, &mut log).unwrap();
+
+        let decoded = [0.214_04, 1.0, 0.04 / 12.92, 0.7];
+        let p = w.get::<PbrMaterial>(on_srgb).unwrap();
+        for (got, want) in p.base_color.iter().zip(decoded) {
+            assert!((got - want).abs() < 1e-5, "{:?}", p.base_color);
+        }
+        assert_eq!(p.emissive, [p.base_color[0], p.base_color[1], p.base_color[2]]);
+        assert_eq!(
+            w.get::<PbrMaterial>(on_linear).unwrap().base_color,
+            [0.5, 1.0, 0.04, 0.7]
+        );
+        assert_eq!(
+            w.get::<PbrMaterial>(untextured).unwrap().base_color,
+            [0.5, 1.0, 0.04, 0.7]
+        );
+        assert_eq!(w.get::<PbrMaterial>(white).unwrap().base_color, [1.0; 4]);
+        assert_eq!(
+            log.counts.get(
+                "tints of sRGB-flagged diffuse textures decoded to linear (the game multiplies stored values)"
+            ),
+            Some(&1)
+        );
     }
 
     /// TwoSided is the PBR material's `double_sided` and nothing else is; InvertCulling reverses a winding the target
