@@ -56,10 +56,13 @@ fn levels_keep_their_vertex_alpha_and_lose_the_vertex_red_as_a_colour() {
         return;
     };
     // (streams rewritten, exact, tint dropped by a red of 0, tint applied in full) per level, after the selection dropped
-    // the HideAfter materials the restored world discards
+    // the HideAfter materials the restored world discards and the effects: level 02 has 28 exact materials, not 31. The
+    // material lists of the two selections (with and without the light-paint rows) differ by exactly three names, the
+    // ribbons' materials `effects=drop` now removes: 02_GFX_LightPaintYellow_Mat, 02_GFX_LightPaintBlue_Mat and
+    // 02B_GFX_LightPPaintMauve_Mat
     let expected = [
         (80, 32, 2, 8),
-        (24, 31, 2, 4),
+        (24, 28, 2, 4),
         (9, 5, 1, 2),
         (17, 24, 1, 4),
         (3, 9, 0, 1),

@@ -11,7 +11,8 @@
 //! The classes (an option each):
 //! - `helpers`: gameplay volumes and placeholders the game draws only in a tool or as feedback: triggers, out-of-bound
 //!   and death volumes, the collectible blockers' red outline;
-//! - `effects`: meshes of effects and feedback (`GFX_*`, the race checkpoint gate);
+//! - `effects`: meshes of effects and feedback (`GFX_*`, the race checkpoint gate, level 02's light-paint ribbons
+//!   `02B_GFX_LP*`);
 //! - `characters`: skinned meshes (vertex flag [`MeshFormat::SKINNED`]);
 //! - `missions`: placements of the cells that are not grid cells (`CellNNNN_DataBlock`): the 20 mission and event cells of
 //!   level 01 (`01_Q01_UnloadMetroStation`, `01_Great_White_Challenge_01`, ...). The grid cells and `Cell05460` (the
@@ -149,7 +150,7 @@ pub struct Row {
 }
 
 /// The rows, in the order they are tried (an Entity's name first, then its prototype's name, then its materials).
-pub const ROWS: [Row; 15] = [
+pub const ROWS: [Row; 18] = [
     Row {
         subject: Subject::Entity,
         test: Test::WordPrefix("trig"),
@@ -202,6 +203,13 @@ pub const ROWS: [Row; 15] = [
     },
     Row {
         subject: Subject::Mesh,
+        test: Test::Prefix("02B_GFX_LP"),
+        class: Class::Effect,
+        evidence: "02B_GFX_LPYellow, 02B_GFX_LPMauve, 02B_GFX_LPBlue: level 02's light-paint ribbons, one Entity each, named with GFX_ after \
+                   the cell prefix, which the GFX_ rows do not see",
+    },
+    Row {
+        subject: Subject::Mesh,
         test: Test::Exact("RACE_CHECKPOINT"),
         class: Class::Effect,
         evidence: "the race checkpoint gate: GFX_Glow_Solarize, GFX_FeedbackLine and GFX_CheckpointSolarize materials only",
@@ -230,6 +238,19 @@ pub const ROWS: [Row; 15] = [
         class: Class::Effect,
         evidence: "GFX_FeedbackGroundLine_*, GFX_FeedbackLine_Mat: ground and race feedback lines (other GFX_ materials are \
                    on real props: lamp bulbs, lasers, so only these are rows)",
+    },
+    Row {
+        subject: Subject::Material,
+        test: Test::Prefix("02_GFX_LightPaint"),
+        class: Class::Effect,
+        evidence: "02_GFX_LightPaintYellow_Mat, 02_GFX_LightPaintBlue_Mat: the glow lines of the ribbons (blend 6), on them only; the other \
+                   numbered GFX_ materials (03_GFX_Water_Ocean, 03_GFX_Water_PirateShip, 04_GFX_ReservoireWater01_Mat) are water and stay",
+    },
+    Row {
+        subject: Subject::Material,
+        test: Test::Prefix("02B_GFX_LightPPaint"),
+        class: Class::Effect,
+        evidence: "02B_GFX_LightPPaintMauve_Mat: the third ribbon's material (its name spells the paint with two Ps)",
     },
     Row {
         subject: Subject::Material,
@@ -920,8 +941,8 @@ mod tests {
         for want in [
             "entity name has a word starting \"trig\" (row 1) (select-shaunwhite-content helpers=drop)",
             "mesh name starts with \"Collectible_Blocker\" (row 6) (select-shaunwhite-content helpers=drop)",
-            "material name starts with \"PLH_\" (row 10) (select-shaunwhite-content helpers=drop)",
-            "material name starts with \"GFX_Feedback\" (row 13) (select-shaunwhite-content effects=drop)",
+            "material name starts with \"PLH_\" (row 11) (select-shaunwhite-content helpers=drop)",
+            "material name starts with \"GFX_Feedback\" (row 14) (select-shaunwhite-content effects=drop)",
             "vertex flag 1 (skinned) (select-shaunwhite-content characters=drop)",
         ] {
             assert!(reasons.iter().any(|r| r.as_str() == want), "{want}: {reasons:#?}");
@@ -974,6 +995,69 @@ mod tests {
             gone("helpers=keep,effects=keep,characters=keep,missions=drop,influence=restored"),
             sorted(vec!["Q01_SQ01_Wall_001"])
         );
+    }
+
+    /// Level 02's light-paint ribbons are effects by their mesh name and by their material names, and level 03's and 04's
+    /// water, which also carries `GFX_` after a cell prefix, is not: dropping the effects removes the first and keeps the
+    /// second, keeping them removes neither.
+    #[test]
+    fn the_light_paint_ribbons_are_effects_and_the_numbered_gfx_water_is_not() {
+        let build = || {
+            let mut w = World::new();
+            let yellow = material(&mut w, "02_GFX_LightPaintYellow_Mat", &[]);
+            let blue = material(&mut w, "02_GFX_LightPaintBlue_Mat", &[]);
+            let mauve = material(&mut w, "02B_GFX_LightPPaintMauve_Mat", &[]);
+            let ocean = material(&mut w, "03_GFX_Water_Ocean", &[]);
+            let ship = material(&mut w, "03_GFX_Water_PirateShip", &[]);
+            let reservoir = material(&mut w, "04_GFX_ReservoireWater01_Mat", &[]);
+            for (mesh, mat) in [
+                ("02B_GFX_LPYellow", yellow),
+                ("02B_GFX_LPBlue", blue),
+                ("02B_GFX_LPMauve", mauve),
+                // a mesh the mesh row does not name, on a ribbon material: the material rows catch it
+                ("02_Ribbon_Other_Blue", blue),
+                ("02_Ribbon_Other_Mauve", mauve),
+                ("Map_03_Ocean_00Original", ocean),
+                ("03_Island_PirateShip_Water_01", ship),
+                ("04_Silo_Transition01_Center", reservoir),
+            ] {
+                let p = prototype(&mut w, mesh, 68, &[mat]);
+                place(&mut w, p, mesh, GRID);
+            }
+            w
+        };
+        let water = [
+            "Map_03_Ocean_00Original",
+            "03_Island_PirateShip_Water_01",
+            "04_Silo_Transition01_Center",
+        ];
+        let mut w = build();
+        let everything = placed_names(&w);
+        let report = run(
+            &mut w,
+            &select("helpers=keep,effects=drop,characters=keep,missions=keep,influence=restored"),
+        )
+        .unwrap();
+        assert_eq!(placed_names(&w), water.iter().map(|s| (*s).to_owned()).collect());
+        assert!(w.verify_components().is_empty());
+        let log = &report.steps[0].log;
+        assert_eq!(log.counts["placements dropped"], 5);
+        assert_eq!(log.counts["placements kept"], 3);
+        let reasons: Vec<&String> = log.drops.keys().map(|(_, why)| why).collect();
+        for want in [
+            "mesh name starts with \"02B_GFX_LP\" (row 9) (select-shaunwhite-content effects=drop)",
+            "material name starts with \"02_GFX_LightPaint\" (row 15) (select-shaunwhite-content effects=drop)",
+            "material name starts with \"02B_GFX_LightPPaint\" (row 16) (select-shaunwhite-content effects=drop)",
+        ] {
+            assert!(reasons.iter().any(|r| r.as_str() == want), "{want}: {reasons:#?}");
+        }
+        let mut kept = build();
+        run(
+            &mut kept,
+            &select("helpers=drop,effects=keep,characters=drop,missions=drop,influence=restored"),
+        )
+        .unwrap();
+        assert_eq!(placed_names(&kept), everything);
     }
 
     /// Keeping everything changes nothing, and still counts every row's matches.
