@@ -27,10 +27,6 @@ fn invalid(detail: impl ToString) -> Error {
     Error::Invalid(detail.to_string())
 }
 
-fn refused(e: &SqliteError) -> Error {
-    invalid(e)
-}
-
 /// One stored value.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -101,8 +97,8 @@ const SCHEMA_COLUMNS: [&str; 5] = ["type", "name", "tbl_name", "rootpage", "sql"
 
 impl<'a> Database<'a> {
     pub fn open(data: &'a [u8]) -> Result<Self> {
-        let reader = Reader::open(SliceSource::new(data)).map_err(|e| refused(&e))?;
-        let schema = reader.schema().map_err(|e| refused(&e))?;
+        let reader = Reader::open(SliceSource::new(data)).map_err(invalid)?;
+        let schema = reader.schema().map_err(invalid)?;
         let mut tables = Vec::new();
         for object in schema.objects().iter().filter(|o| o.kind == ObjectKind::Table) {
             let (Some(root_page), Some(sql)) = (object.root_page, object.sql.clone()) else {
@@ -160,8 +156,8 @@ impl<'a> Database<'a> {
         real: &[bool],
     ) -> Result<Table> {
         let mut rows = Vec::new();
-        for row in self.reader.table_scan(root).map_err(|e| refused(&e))? {
-            let row = row.map_err(|e| refused(&e))?;
+        for row in self.reader.table_scan(root).map_err(invalid)? {
+            let row = row.map_err(invalid)?;
             if row.values.len() != columns.len() {
                 return Err(invalid(format!(
                     "table {name:?} row {}: {} values, {} declared columns",
