@@ -4,3 +4,4 @@
 *.dds binary
 *.png binary
 *.stl binary
+*.db binary

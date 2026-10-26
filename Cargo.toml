@@ -14,6 +14,7 @@ members = [
     "toolkit/compress",
     "toolkit/glb",
     "toolkit/hash",
+    "toolkit/sqlite",
     "toolkit/exactsum",
     "toolkit/dxcontainer",
     "toolkit/havok",
@@ -80,6 +81,7 @@ primase-lighting = { path = "toolkit/lighting" }
 primase-compress = { path = "toolkit/compress" }
 primase-glb = { path = "toolkit/glb" }
 primase-hash = { path = "toolkit/hash" }
+primase-sqlite = { path = "toolkit/sqlite" }
 primase-exactsum = { path = "toolkit/exactsum" }
 primase-dxcontainer = { path = "toolkit/dxcontainer" }
 primase-cache = { path = "toolkit/cache" }

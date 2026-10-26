@@ -1435,6 +1435,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "primase-sqlite"
+version = "0.1.0"
+dependencies = [
+ "primase-bytes",
+ "primase-testdata",
+ "thiserror",
+]
+
+[[package]]
 name = "primase-stuntboost"
 version = "0.1.0"
 dependencies = [
