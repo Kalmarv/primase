@@ -3,15 +3,15 @@
 //! The body is 647 bytes in 1,971 of the 1,973 distinct Materials of the game's cells, the rest 659 and 663 (refused:
 //! [`Error::Length`]), and every field below is at the same offset in all of them. It begins `[managed u8][id][class]`
 //! and holds no length or count. Each texture slot is a TextureMapSpec's id (a bare u32; the spec's last u32 is the
-//! TextureMap's, read by [`crate::read::level`]); the slots of the layer kind carry four f32 after it, **scale u, scale
-//! v, offset u, offset v** (the UV transform the slot samples with: the scale is 1 in most, 0.25 to 8 where a texture
+//! TextureMap's, read by [`crate::read::level`]); the slots of the layer kind carry five f32 after it, **scale u, scale
+//! v, offset u, offset v, rotation** (the UV transform the slot samples with: the scale is 1 in most, 0.25 to 8 where a texture
 //! tiles, negative where it mirrors; the offset is 0 except in the second and third diffuse layers). The slots and the
 //! offsets of their ids:
 //!
 //! | name | at | layer floats | what the slot holds |
 //! |---|---|---|---|
 //! | `detail` | 118 | no | a ramp (`Gen_Ramp_FakeReflection01`), a character's skin wrap |
-//! | `mask` | 132 | yes | `Gen_Mask_*`, `*_Mask_*`: an RGB mask (alpha 255 in all 47 of level 01's); which channel weights which layer is not read |
+//! | `mask` | 132 | yes | `Gen_Mask_*`, `*_Mask_*`: an RGB mask (alpha 255 in all 47 of level 01's); RGB channels weight the base tint and later layers in the shipped shader |
 //! | `diffuse` | 192 | yes | the surface's colour; the one slot nearly every Material has (1,882 of 1,971) |
 //! | `normal` | 233 | yes | a normal map (format code 12) |
 //! | `specular` | 277 | yes | an RGB map (BC1) |
@@ -29,17 +29,20 @@
 //! cell holds); blend 6 are `GFX_*` glows and light paint (`LightPaintBlue`, `Glow_Solarize`, `LaserBeam`) whose maps
 //! carry none in 22 of 32: added light; the alpha-tested are leaves, ferns and decals. Of blend 1 and 3 nothing but
 //! the names (lights: `Totem*Light`, `ShellLight`, `Gyrophare`) is known. The **colour** is four f32 at 168 (white on
-//! 1,017; 0.12 grey on dark glass, a green on the checkpoint glow, a blue on `BlueRusty`): it multiplies the diffuse
-//! layer. Three floats are read from their values' spread, not from a stated name: the **illumination** at 87 (0 on
+//! 1,017; 0.12 grey on dark glass, a green on the checkpoint glow, a blue on `BlueRusty`): it is the first layer's modulation tint, interpolated by the red vertex/mask factor in the shader. Three floats are read from their values' spread, not from a stated name: the **illumination** at 87 (0 on
 //! 1,729 Materials; 0.02 to 50 on 242, among them `ExitSign_GLOW` 6, `Light_InteriorHall` 10, `TelevisionLCD` 1, the
 //! skies 0.3: a self-lit factor), the **specular level** at 110 (0 to 1: 1 on 627, 0 on 218) and the **specular power**
 //! at 114 (1 to 333: 10 on 703, 1 on 492, 2 on 253, 50 on 151, 100 on 13: round numbers of an exponent). The
-//! **specular colour** is the quad at 332 (0 to 1, white on 1,366). One more colour quad sits at 94 (a reflection tint of the
+//! quad at 332 is **Layer2_ModulationColor**, not specular colour (native property hash 0xc865f2a3); layer 3 is at
+//! 434. UseTextureAlpha lives at 224/392/494. Layer maps also store TexCoordRotation and two TexMapMode codes
+//! (0 wrap, 1 clamp, 2 border); Mask/Layer2/Layer3_UVChannel are at 164/348/450 (0 or 1).
+//! One more colour quad sits at 94 (a reflection tint of the
 //! Materials with a `detail` slot); it is not read.
 //!
 //! What no field here says is whether a surface is drawn from both sides (the byte at 79 is 1 on 406 Materials, 2 on
-//! 37 `GFX_*` lights, and could be that, or the vertex colour's use), how the `mask`'s channels weight the second and
-//! third layers, or how `detail` and `diffuse2` combine: they are kept as the slots' data and not read further.
+//! 37 `GFX_*` lights, and could be that, or the vertex colour's use), or how `detail` and `diffuse2` combine.
+//! Their slots are kept without assigning those semantics. Restored RGB layering is established separately
+//! from the shipped SDB2 HLSL and compiled SM3 pixel shaders; [`crate::passes::LowerShaunwhiteLayers`] lowers it.
 //!
 //! Byte 91 is the water shader switch: an independent inspection of 1,971 fixed-size materials finds it set on
 //! exactly six (Port, Pool, Toxic, Ocean, PirateShip, Reservoir). All six have normal/specular/cube-reflection
@@ -52,6 +55,7 @@
     clippy::cast_possible_truncation
 )]
 
+use crate::components::LayerState;
 use primase_bytes::{Endian, Field, FieldError, View};
 
 const LE: Endian = Endian::Little;
@@ -156,6 +160,9 @@ pub struct Slot {
     pub scale: [f32; 2],
     /// Offset u, offset v; (0, 0) for a slot without layer floats.
     pub offset: [f32; 2],
+    pub rotation: f32,
+    pub texcoord: u8,
+    pub address: Option<[u32; 2]>,
 }
 
 /// The fields of a Material (the module documentation).
@@ -180,8 +187,7 @@ pub struct Material {
     pub specular_level: f32,
     /// The float at 114.
     pub specular_power: f32,
-    /// RGBA at 332.
-    pub specular_color: [f32; 4],
+    pub layering: LayerState,
     /// The slots that hold a spec id, in body order.
     pub slots: Vec<Slot>,
 }
@@ -224,20 +230,45 @@ impl Material {
                 .f32(168usize.saturating_add(k.saturating_mul(4)), LE)
                 .field("Material colour")?;
         }
-        let mut specular_color = [0f32; 4];
-        for (k, c) in specular_color.iter_mut().enumerate() {
-            *c = v
-                .f32(332usize.saturating_add(k.saturating_mul(4)), LE)
-                .field("Material specular colour")?;
+        let mut colors = [[0.; 4]; 2];
+        for (layer, rgba) in colors.iter_mut().enumerate() {
+            let start = if layer == 0 { 332usize } else { 434usize };
+            for (k, c) in rgba.iter_mut().enumerate() {
+                *c = v
+                    .f32(start.saturating_add(k.saturating_mul(4)), LE)
+                    .field("Layer modulation colour")?;
+            }
+        }
+        let layering = LayerState {
+            colors,
+            use_alpha: [
+                flag(224, "diffuse UseTextureAlpha")?,
+                flag(392, "diffuse_b UseTextureAlpha")?,
+                flag(494, "diffuse_c UseTextureAlpha")?,
+            ],
+        };
+        let mut uv = [0u8; 3];
+        for (target, at) in uv.iter_mut().zip([164usize, 348, 450]) {
+            let code = v.u32(at, LE).field("layer UVChannel")?;
+            *target = match code {
+                0 => 0,
+                1 => 1,
+                _ => {
+                    return Err(Error::Invalid {
+                        what: "layer UVChannel",
+                        value: code.to_string(),
+                    });
+                }
+            };
         }
         let illumination = v.f32(87, LE).field("Material illumination")?;
         let specular_level = v.f32(110, LE).field("Material specular level")?;
         let specular_power = v.f32(114, LE).field("Material specular power")?;
         let finite = |xs: &[f32]| xs.iter().all(|x| x.is_finite());
-        if !finite(&[illumination, specular_level, specular_power]) || !finite(&specular_color) {
+        if !finite(&[illumination, specular_level, specular_power]) || !colors.iter().all(|c| finite(c)) {
             return Err(Error::Invalid {
-                what: "Material illumination and specular",
-                value: format!("{illumination} {specular_level} {specular_power} {specular_color:?}"),
+                what: "Material illumination, specular and layer colours",
+                value: format!("{illumination} {specular_level} {specular_power} {colors:?}"),
             });
         }
         if !finite(&color) {
@@ -253,11 +284,25 @@ impl Material {
                 continue;
             }
             let (mut scale, mut offset) = ([1.0, 1.0], [0.0, 0.0]);
+            let mut rotation = 0.;
+            let mut address = None;
             if s.layer {
                 let at = |k: usize| s.at.saturating_add(4).saturating_add(k.saturating_mul(4));
                 let f = |k: usize| v.f32(at(k), LE).field(s.name);
                 (scale, offset) = ([f(0)?, f(1)?], [f(2)?, f(3)?]);
-                if !finite(&scale) || !finite(&offset) {
+                rotation = f(4)?;
+                let a = [
+                    v.u32(s.at.saturating_add(24), LE).field(s.name)?,
+                    v.u32(s.at.saturating_add(28), LE).field(s.name)?,
+                ];
+                if a.iter().any(|c| *c > 2) {
+                    return Err(Error::Invalid {
+                        what: "TexMapMode",
+                        value: format!("{a:?}"),
+                    });
+                }
+                address = Some(a);
+                if !finite(&scale) || !finite(&offset) || !rotation.is_finite() {
                     return Err(Error::Invalid {
                         what: s.name,
                         value: format!("scale {scale:?} offset {offset:?}"),
@@ -269,6 +314,14 @@ impl Material {
                 spec,
                 scale,
                 offset,
+                rotation,
+                texcoord: match s.name {
+                    "mask" => uv.first().copied().unwrap_or(0),
+                    "diffuse_b" => uv.get(1).copied().unwrap_or(0),
+                    "diffuse_c" => uv.get(2).copied().unwrap_or(0),
+                    _ => 0,
+                },
+                address,
             });
         }
         Ok(Material {
@@ -282,7 +335,7 @@ impl Material {
             illumination,
             specular_level,
             specular_power,
-            specular_color,
+            layering,
             slots,
         })
     }
@@ -342,7 +395,7 @@ mod tests {
             (m.illumination, m.specular_level, m.specular_power),
             (6.0, 0.5, 10.0)
         );
-        assert_eq!(m.specular_color, [1.0, 0.75, 0.5, 1.0]);
+        assert_eq!(m.layering.colors[0], [1.0, 0.75, 0.5, 1.0]);
         let names: Vec<_> = m.slots.iter().map(|s| s.name).collect();
         assert_eq!(names, ["diffuse", "generic"]);
         let d = m.slot("diffuse").unwrap();
@@ -350,6 +403,46 @@ mod tests {
         let g = m.slot("generic").unwrap();
         assert_eq!((g.spec, g.scale, g.offset), (0x22, [1.0, 1.0], [0.0, 0.0]));
         assert!(m.slot("normal").is_none());
+    }
+
+    /// Native field hashes identify the second tint, UV channel, authored rotation/address and alpha switch.
+    #[test]
+    fn layer_inputs_are_retained_and_unknown_codes_are_named() {
+        let mut b = body();
+        b[360..364].copy_from_slice(&0x33u32.to_le_bytes());
+        b[348..352].copy_from_slice(&1u32.to_le_bytes());
+        b[380..384].copy_from_slice(&90f32.to_le_bytes());
+        b[384..388].copy_from_slice(&1u32.to_le_bytes());
+        b[392] = 1;
+        let m = Material::parse(&b).unwrap();
+        let slot = m.slot("diffuse_b").unwrap();
+        assert_eq!(
+            (slot.texcoord, slot.rotation, slot.address),
+            (1, 90., Some([1, 0]))
+        );
+        assert!(m.layering.use_alpha[1]);
+        assert_eq!(m.layering.colors[0], [1., 0.75, 0.5, 1.]);
+        for (at, bad, field) in [
+            (348, 2u32.to_le_bytes(), "UVChannel"),
+            (380, f32::NAN.to_le_bytes(), "diffuse_b"),
+            (384, 3u32.to_le_bytes(), "TexMapMode"),
+        ] {
+            let mut bad_body = b.clone();
+            bad_body[at..at + 4].copy_from_slice(&bad);
+            assert!(
+                Material::parse(&bad_body)
+                    .unwrap_err()
+                    .to_string()
+                    .contains(field)
+            );
+        }
+        b[392] = 2;
+        assert!(
+            Material::parse(&b)
+                .unwrap_err()
+                .to_string()
+                .contains("UseTextureAlpha")
+        );
     }
 
     #[test]

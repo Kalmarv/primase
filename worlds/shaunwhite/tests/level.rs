@@ -307,6 +307,7 @@ fn level_01_reads_and_lowers() {
     for (e, t) in &water_placements {
         assert_eq!(w.get::<Transform>(*e), Some(t));
     }
+    run(&mut w, "lower-shaunwhite-layers{influence=restored}").unwrap();
     let lowered = run(&mut w, "lower-shaunwhite-material").unwrap();
     assert_eq!(w.get::<MaterialUsage>(harbour.0), Some(&MaterialUsage::Water));
     assert_eq!(w.get::<PbrMaterial>(harbour.0).unwrap().roughness, 0.05);

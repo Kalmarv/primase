@@ -477,6 +477,9 @@ mod tests {
                                 texture: *t,
                                 scale: [1.0; 2],
                                 offset: [0.0; 2],
+                                rotation: 0.,
+                                texcoord: 0,
+                                address: None,
                             },
                         )
                     })

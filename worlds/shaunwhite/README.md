@@ -153,3 +153,36 @@ source encoding. The pass produces `core.light` and names the sky's directional 
 It reports replacing source near/far falloff with inverse-square falloff and a far cutoff, omitting character-only
 lights, flares and cookies, and retaining resolved lights without selecting day/night or scripted activation.
 Global ambient, sky/fog settings and physical calibration remain separate work.
+
+
+## Restored material layers
+
+Select `lower-shaunwhite-layers{influence=restored}` after content selection/water and before
+`lower-shaunwhite-material`. The explicit influence choice selects the colour-restored world. Its RGB equation is
+from the game's shipped `ekgeneric.fx` (`FctDiffuseColor`) and `ekcommonps.hlsl`, checked against compiled SM3
+pixel shader instructions with Microsoft's disassembler. Vertex `COLOR0` times the mask's RGB supplies the factors:
+red interpolates between the first diffuse and that diffuse times its tint; green then lerps to the second layer;
+blue then lerps to the third. Each later layer's factor also takes its sampled alpha times tint alpha when its
+stored UseTextureAlpha bool is set. The three factors stay in `Channel::Product`; none is discarded or normalized.
+
+The source tints are body 168/332/434: **332 is Layer2_ModulationColor**, corrected from the earlier specular-colour
+interpretation. UseTextureAlpha lives at 224/392/494. Native property CRCs identify these fields; independent
+source-byte inspection checks their offsets. The material component is version 3. Layer UV sets and authored map
+wrap/clamp modes are retained; the map's rotation is retained as source data.
+
+The pass creates up to four ordinary layer materials with `core.layered` in `over` order. A material shared by
+meshes with and without colour streams gets a separate colourless drawing (including material variants); the shader
+supplies one for absent vertex colour. The original weight stream stays on the mesh. The following generic material
+pass lowers the ordinary child materials and supplies the host's roughness/specular approximation.
+
+Current coverage is opaque host materials. Host blend/alpha-test, authored rotated-UV matrices, border addressing,
+missing base textures, unread fields and out-of-range tints are named and counted omissions; they retain the generic
+material fallback. This does not omit alpha factors of supported opaque materials' later layers. Layer-dependent
+specular response, the un-restored greyscale path and the source lighting model remain outside this RGB lowering.
+The real-data gate checks the metro's `01_Wall_Metro01Grafitti_Mat`, CliffDry01 and level 06's masked walls. The
+mural's second and third weights each retain vertex, mask and sampled-alpha sources; its third map clamps V.
+
+Runtime Direct3D 9 declarations identify COLOR0 and morph COLOR1 as D3DCOLOR (stored BGRA). The mesh reader
+converts both to core RGBA. This is also checked against the restored game's metro mural: raw byte order hides the
+third layer, whereas BGRA-to-RGBA restores it at the same places. Saturated colour corners remain saturated under
+this permutation; they are shader weights, and the earlier red/blue interpretation was reversed.

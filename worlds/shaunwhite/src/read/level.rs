@@ -604,7 +604,7 @@ fn material(
                     illumination: m.illumination,
                     specular_level: m.specular_level,
                     specular_power: m.specular_power,
-                    specular_color: m.specular_color,
+                    layering: m.layering,
                 });
                 for slot in &m.slots {
                     // the slots whose maps no lowering reads are named, not read
@@ -626,6 +626,9 @@ fn material(
                                 texture: t,
                                 scale: slot.scale,
                                 offset: slot.offset,
+                                rotation: slot.rotation,
+                                texcoord: slot.texcoord,
+                                address: slot.address,
                             },
                         );
                     }

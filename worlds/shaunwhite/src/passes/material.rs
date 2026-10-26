@@ -7,8 +7,8 @@
 //! specular level, colour and map are glTF's specular factor, colour and colour texture; the illumination is the
 //! diffuse layer as emission at that strength. Approximations, stated and counted: the specular map, a Blinn-Phong
 //! colour, can darken glTF's dielectric highlight and not brighten it; the normal map, the mask and the second and
-//! third layers are not lowered (the normal map's green orientation is not established and how the mask and the vertex
-//! colour weight the layers is not read); a Material that holds any of those layers is marked to ignore its vertex
+//! third layers are lowered separately by `lower-shaunwhite-layers` before this pass; otherwise the fallback
+//! remains the diffuse layer (the normal map's green orientation is not established); a Material that holds any of those layers is marked to ignore its vertex
 //! colour (a layered Material's vertex colours are saturated and mostly not grey, 58% of 497,307 vertices of level 01,
 //! against 13% of 801,135 of the others: weights, which drawn as a colour paint magenta and green across rocks and
 //! roofs), so it draws as its diffuse layer; an additive Material (blend 6) is drawn alpha-blended and unlit, its
@@ -53,12 +53,26 @@ fn wrap(code: u32, log: &mut PassLog) -> Wrap {
 }
 
 /// The slot as a texture reference: its texture, the sampler's address modes, the slot's scale and offset.
-fn texture_ref(w: &World, slot: &SlotRef, log: &mut PassLog) -> TextureRef {
+pub(super) fn texture_ref(w: &World, slot: &SlotRef, log: &mut PassLog) -> TextureRef {
     let mut r = TextureRef::new(slot.texture);
     if let Some(s) = w.get::<Sampler>(slot.texture) {
         r.wrap = [wrap(s.address[0], log), wrap(s.address[1], log)];
     } else {
         log.count("textures without a sampler (repeat)", 1);
+    }
+    r.texcoord = slot.texcoord;
+    if let Some(address) = slot.address {
+        r.wrap = address.map(|mode| match mode {
+            0 => Wrap::Repeat,
+            1 => Wrap::Clamp,
+            _ => {
+                log.approximate("material map border address drawn clamped", 1);
+                Wrap::Clamp
+            }
+        });
+    }
+    if slot.rotation != 0. {
+        log.omit("authored TexCoordRotation (matrix convention not lowered)", 1);
     }
     if slot.scale != [1.0; 2] || slot.offset != [0.0; 2] {
         r.transform = Some(UvTransform {
@@ -125,7 +139,7 @@ impl Pass for LowerShaunwhiteMaterial {
         &[MaterialRef::NAME]
     }
     fn approximates(&self) -> &'static str {
-        "specular and normal maps and the second and third layers not lowered; additive materials alpha-blended and \
+        "PBR specular approximates the source, normal maps omitted; layered sources without core.layered use the diffuse fallback; additive materials alpha-blended and \
          unlit; every material one-sided, rough and dielectric"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
@@ -139,7 +153,7 @@ impl Pass for LowerShaunwhiteMaterial {
             let layered = ["mask", "diffuse_b", "diffuse_c"]
                 .iter()
                 .any(|k| m.slots.contains_key(*k));
-            if layered {
+            if layered && !w.has::<primase_core::LayeredMaterial>(e) {
                 w.insert(e, VertexColor::Ignored);
                 log.approximate(
                     "layered materials drawn as their diffuse layer, vertex colour ignored",
@@ -147,7 +161,10 @@ impl Pass for LowerShaunwhiteMaterial {
                 );
             }
             for slot in ["normal", "mask", "diffuse_b", "specular_b", "diffuse_c"] {
-                if m.slots.contains_key(slot) {
+                if m.slots.contains_key(slot)
+                    && !(w.has::<primase_core::LayeredMaterial>(e)
+                        && ["mask", "diffuse_b", "diffuse_c"].contains(&slot))
+                {
                     log.omit(&format!("{slot} maps (not lowered)"), 1);
                 }
             }
@@ -176,7 +193,7 @@ impl Pass for LowerShaunwhiteMaterial {
                     (pbr.alpha_mode, pbr.shading) = alpha(s, log);
                     pbr.roughness = roughness(s.specular_power);
                     let level = s.specular_level.clamp(0.0, 1.0);
-                    let color = [0, 1, 2].map(|k| s.specular_color.get(k).copied().unwrap_or(1.0).max(0.0));
+                    let color = [1.; 3]; // Body 332 is Layer2_ModulationColor, not a specular colour.
                     if level != 1.0 || color != [1.0; 3] || pbr.specular.is_some() {
                         let specular = pbr.specular.get_or_insert_with(Specular::default);
                         specular.factor = level;
@@ -254,7 +271,7 @@ mod tests {
             illumination: 0.0,
             specular_level: 1.0,
             specular_power: 2.0,
-            specular_color: [1.0; 4],
+            layering: crate::components::LayerState::default(),
         }
     }
 
@@ -268,6 +285,9 @@ mod tests {
             texture: t,
             scale: [4.0, 2.0],
             offset: [0.5, 0.0],
+            rotation: 0.,
+            texcoord: 0,
+            address: None,
         };
         let opaque = material(&mut w, Some(state(0, false, false, 128)), Some(slot));
         let tested = material(&mut w, Some(state(0, false, true, 51)), Some(slot));
@@ -307,8 +327,9 @@ mod tests {
         assert!(w.verify_components().is_empty());
     }
 
-    /// The specular power is the roughness, the level and colour the specular factor and colour, the map its colour
-    /// texture, the illumination the diffuse layer as emission; a default specular states nothing.
+    /// The specular power is the roughness, the level the specular factor, the map its colour
+    /// texture, the illumination the diffuse layer as emission; a default specular states nothing. The layer-2 tint
+    /// does not colour the specular highlight.
     #[test]
     fn specular_and_illumination_are_lowered() {
         let mut w = World::new();
@@ -317,12 +338,15 @@ mod tests {
             texture: t,
             scale: [1.0; 2],
             offset: [0.0; 2],
+            rotation: 0.,
+            texcoord: 0,
+            address: None,
         };
         let mut s = state(0, false, false, 128);
         s.color = [1.0; 4];
         s.specular_power = 30.0;
         s.specular_level = 0.5;
-        s.specular_color = [1.0, 0.5, 0.25, 1.0];
+        s.layering.colors[0] = [1.0, 0.5, 0.25, 1.0];
         s.illumination = 6.0;
         let lit = material(&mut w, Some(s), Some(slot));
         w.get_mut::<MaterialRef>(lit)
@@ -332,7 +356,7 @@ mod tests {
         let mut plain = state(0, false, false, 128);
         plain.specular_power = 2.0;
         plain.specular_level = 1.0;
-        plain.specular_color = [1.0; 4];
+        plain.layering.colors[0] = [1.0; 4];
         let plain = material(&mut w, Some(plain), Some(slot));
         let layered = material(&mut w, Some(state(0, false, false, 128)), Some(slot));
         w.get_mut::<MaterialRef>(layered)
@@ -346,7 +370,7 @@ mod tests {
         let p = w.get::<PbrMaterial>(lit).unwrap();
         assert!((p.roughness - 0.5).abs() < 1e-6, "{}", p.roughness);
         let spec = p.specular.unwrap();
-        assert_eq!((spec.factor, spec.color), (0.5, [1.0, 0.5, 0.25]));
+        assert_eq!((spec.factor, spec.color), (0.5, [1.0; 3]));
         assert_eq!(spec.color_texture.map(|r| r.texture), Some(t));
         assert_eq!((p.emissive, p.emissive_strength), ([1.0; 3], 6.0));
         assert_eq!(p.emissive_texture, p.base_color_texture);

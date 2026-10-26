@@ -20,7 +20,7 @@ fn stored_water_flag_lowers_without_matching_names_and_keeps_death_surfaces_dist
         illumination: 0.0,
         specular_level: 1.0,
         specular_power: 2.0,
-        specular_color: [1.0; 4],
+        layering: primase_shaunwhite::components::LayerState::default(),
     };
     for (e, name, state) in [
         (water, "renamed source material", state),

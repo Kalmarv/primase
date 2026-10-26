@@ -452,8 +452,8 @@ pub const DECLARED: &[Declared] = &[
         query: Query::Install(Game::ShaunWhite, Some("DataPC_01.forge")),
         status: Status::Live,
         gate: true,
-        about: r#"Shaun White Skateboarding PC 1.0 level-01 forge (version 26): every texture in all 253 GridCellDataBlock entries; focused collision shape and inert-component fixtures in four cells; level placements, materials, collision and stored water-flag lowering, harbour tint and placement; 110 omni and 79 spot placements plus the root SkyLight and sun; worlds/shaunwhite/tests/texture.rs, collision.rs, level.rs"#,
-        source: r#"the user's own copy, extracted unchanged; object directory/envelopes hand-checked separately, texture fields cross-checked with AnvilToolkit 1.3.7's AC2/Brotherhood readers and AC2 schema, duplicated compiled metadata and exact mip lengths checked on every texture; BC1/2/3 decoded against third-party bcdec_rs 0.2.0; code 12's BC3 storage established by sizes and normal-map content, not the AC2 enum; collision fields cross-checked with the AC2 schema and hand-inspected inert and multi-inert entity/shape references; light fields checked with the AC2 schema and exact body ends, SkyLight fields with native property descriptors and serializer; physical light units, colour encoding and direction signs remain explicit lowering approximations"#,
+        about: r#"Shaun White Skateboarding PC 1.0 level-01 forge (version 26): every texture in all 253 GridCellDataBlock entries; focused collision shape and inert-component fixtures in four cells; level placements, materials, collision and stored water-flag lowering, harbour tint and placement; 110 omni and 79 spot placements plus the root SkyLight and sun; restored metro mural and CliffDry layer weights; worlds/shaunwhite/tests/texture.rs, collision.rs, level.rs, layers.rs"#,
+        source: r#"the user's own copy, extracted unchanged; object directory/envelopes hand-checked separately, texture fields cross-checked with AnvilToolkit 1.3.7's AC2/Brotherhood readers and AC2 schema, duplicated compiled metadata and exact mip lengths checked on every texture; BC1/2/3 decoded against third-party bcdec_rs 0.2.0; code 12's BC3 storage established by sizes and normal-map content, not the AC2 enum; collision fields cross-checked with the AC2 schema and hand-inspected inert and multi-inert entity/shape references; light fields checked with the AC2 schema and exact body ends, SkyLight fields with native property descriptors and serializer; physical light units, colour encoding and direction signs remain explicit lowering approximations; restored layer equation from the shipped SDB2 HLSL and Microsoft-disassembled SM3 pixel shader, native material property hashes identify layer tints and alpha switches"#,
     },
     Declared {
         query: Query::Install(Game::ShaunWhite, Some("DataPC_02.forge")),
@@ -468,6 +468,13 @@ pub const DECLARED: &[Declared] = &[
         gate: true,
         about: r#"Shaun White Skateboarding PC 1.0 shared level-04 objects referenced by level 01; worlds/shaunwhite/tests/level.rs"#,
         source: r#"the user's own copy, extracted unchanged; source object ids resolve mesh, texture and collision references across forges"#,
+    },
+    Declared {
+        query: Query::Install(Game::ShaunWhite, Some("DataPC_06.forge")),
+        status: Status::Live,
+        gate: true,
+        about: "Shaun White Skateboarding PC 1.0 level-06 masked wall and layered material lowering in the restored state; worlds/shaunwhite/tests/layers.rs",
+        source: "the user's own copy; layer equation established from the shipped HLSL and compiled D3D9 pixel shader, material fields identified by native property hashes",
     },
     Declared {
         query: Query::Install(Game::ShaunWhite, Some("DataPC_extra.forge")),

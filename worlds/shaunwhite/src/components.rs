@@ -25,6 +25,28 @@ pub struct SlotRef {
     pub texture: Entity,
     pub scale: [f32; 2],
     pub offset: [f32; 2],
+    /// Source TexCoordRotation, retained without assuming its matrix convention.
+    pub rotation: f32,
+    pub texcoord: u8,
+    /// Material map address codes (0 wrap, 1 clamp, 2 border), when authored here rather than on the texture.
+    pub address: Option<[u32; 2]>,
+}
+
+/// Layer tints and alpha switches established by native property hashes and the shipped shader programs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LayerState {
+    /// Layer2_ModulationColor at 332 and Layer3_ModulationColor at 434.
+    pub colors: [[f32; 4]; 2],
+    /// UseTextureAlpha on diffuse1/2/3 at 224/392/494.
+    pub use_alpha: [bool; 3],
+}
+impl Default for LayerState {
+    fn default() -> Self {
+        Self {
+            colors: [[1.; 4]; 2],
+            use_alpha: [true; 3],
+        }
+    }
 }
 
 /// The fixed fields of a stored Material that say how it is drawn ([`crate::read::material`] gives their offsets and
@@ -37,7 +59,7 @@ pub struct MaterialState {
     pub alpha_ref: u8,
     /// The stored water shader switch at body offset 91.
     pub water: bool,
-    /// RGBA, multiplying the diffuse layer.
+    /// Layer1_ModulationColor; its tint is interpolated by the shader's red vertex/mask weight.
     pub color: [f32; 4],
     /// A self-lit factor (0: none): the float at 87.
     pub illumination: f32,
@@ -45,8 +67,7 @@ pub struct MaterialState {
     pub specular_level: f32,
     /// The float at 114: an exponent, 1 and up.
     pub specular_power: f32,
-    /// RGBA of the specular, 0 to 1.
-    pub specular_color: [f32; 4],
+    pub layering: LayerState,
 }
 
 /// A Material as the source stores it: its id, its object's name (empty when no forge read holds it), its fields
@@ -72,7 +93,7 @@ impl MaterialRef {
 
 impl Component for MaterialRef {
     const NAME: &'static str = "shaunwhite.material";
-    const VERSION: u32 = 2;
+    const VERSION: u32 = 3;
     const GEOMETRY: Geometry = Geometry::None;
     fn references(&self, out: &mut Vec<Entity>) {
         out.extend(self.textures());

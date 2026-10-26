@@ -23,6 +23,11 @@
 //! does not give is refused, naming both. The standard primitives become core primitives; the shadow primitives are
 //! the same buffers' depth-only draws and are not read.
 //!
+//! The runtime Direct3D 9 vertex declarations use D3DDECLTYPE_D3DCOLOR for COLOR0 and morph COLOR1:
+//! bytes are B,G,R,A in memory. Both the base and further streams are converted to core R,G,B,A. An independent
+//! metro-wall comparison against the restored game confirms this order: preserving the stored order hides its
+//! third-layer graffiti; converting it restores the mural in the authored places.
+//!
 //! **Further streams** (`m > 0`) are further states of the same vertices: each stream is a whole vertex of the one
 //! layout (the first stream's), the same count, with its own positions and normals (and in 30 of the 84 further streams
 //! its own texture coordinates or colours; the other bytes equal the first stream's). The first stream is the mesh as
@@ -373,7 +378,7 @@ impl CompiledMesh {
                         (0..n)
                             .map(|i| {
                                 let b = vert(i);
-                                std::array::from_fn(|c| b.get(at + c).copied().unwrap_or(255))
+                                [2, 1, 0, 3].map(|c| b.get(at + c).copied().unwrap_or(255))
                             })
                             .collect(),
                     ),
@@ -553,7 +558,13 @@ mod tests {
         let p = &m.primitives(|_| None).unwrap().list[0];
         assert_eq!(
             p.streams.get(&Semantic::Color(0)),
-            Some(&Stream::U8x4(vec![[1, 2, 3, 4]; 3]))
+            Some(&Stream::U8x4(vec![[3, 2, 1, 4]; 3]))
+        );
+        assert_eq!(
+            m.morph_primitives().unwrap()[0].list[0]
+                .streams
+                .get(&Semantic::Color(0)),
+            Some(&Stream::U8x4(vec![[3, 2, 1, 4]; 3]))
         );
         assert_eq!(
             p.streams.get(&Semantic::TexCoord(0)),
