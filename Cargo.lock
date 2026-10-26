@@ -1304,6 +1304,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "primase-lua51"
+version = "0.1.0"
+dependencies = [
+ "primase-bytes",
+ "thiserror",
+]
+
+[[package]]
 name = "primase-meshops"
 version = "0.1.0"
 dependencies = [

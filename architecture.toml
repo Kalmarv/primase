@@ -47,3 +47,7 @@ reason = "the GLB reader reads untrusted containers, buffer views and accessors"
 [[parse_crate]]
 path = "toolkit/havok"
 reason = "the tagfile reader reads untrusted section trees, type tables and compressed animation blocks"
+
+[[parse_crate]]
+path = "toolkit/lua51"
+reason = "the chunk reader reads untrusted precompiled scripts: counts, strings and instructions"

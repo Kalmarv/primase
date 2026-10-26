@@ -1,0 +1,16 @@
+[package]
+name = "primase-lua51"
+description = "Strict reader of Lua 5.1 precompiled chunks (any byte order) and a lister of the calls made with constant arguments"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+primase-bytes.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
