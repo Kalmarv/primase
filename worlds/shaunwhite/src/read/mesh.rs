@@ -318,6 +318,20 @@ impl CompiledMesh {
                     ),
                 );
             }
+            // a non-finite value means the layout read is not this mesh's: refused, named
+            for (sem, st) in &streams {
+                let finite = match st {
+                    Stream::F32x2(v) => v.iter().flatten().all(|x| x.is_finite()),
+                    Stream::F32x3(v) => v.iter().flatten().all(|x| x.is_finite()),
+                    _ => true,
+                };
+                if !finite {
+                    return Err(Error::Layout(format!(
+                        "flags {:#x} with stride {}: {sem:?} not finite in the layout read",
+                        self.flags, self.stride
+                    )));
+                }
+            }
             out.push(Primitive {
                 topology: Topology::Triangles,
                 streams,
