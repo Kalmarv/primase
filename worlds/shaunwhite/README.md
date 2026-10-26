@@ -107,3 +107,24 @@ reader can decode, so the rows are the game's names, not a field: the pass says 
 `lower-shaunwhite-material` (which removes the material names the material rows match). Every drop is declared by its
 row, and the prototypes, materials and textures only the dropped placements reached go with them.
 Collision-only placements remain: these options select what Visuals draw, without removing authored physics.
+
+## Water
+
+The Material's **stored bool at body offset 91** selects the water shader. Independently checking 1,971 fixed-size
+materials found six set: WaterPort, WaterPool, WaterToxic01, Water_Ocean, Water_PirateShip and ReservoireWater01.
+All six have normal, specular and reflection-cube slots, with no diffuse. Foam decals, fountains, tanks and fabric
+whose names contain water leave it clear. The lowering uses the field, never a name or missing-diffuse heuristic.
+`read::material::Material::water` and `MaterialState::water` retain it (`shaunwhite.material` version 2).
+
+Run `lower-shaunwhite-collision`, then `lower-shaunwhite-water{roughness=0.05}`, then `lower-shaunwhite-material`.
+The water pass lowers only the flagged materials to `core.material_usage = Water` and a static PBR preview, keeping
+the authored colour at 168, mesh and placement. Roughness is an explicit preview choice; wave normals, reflection
+cubes, specular shading and animation are omitted and reported. The normal slot's stored UV transform remains
+available before lowering; its packed BC3 normal is not treated as an ordinary RGB normal. No shader template id
+or independent scalar water-height field has been established: the surface uses its existing geometry and entity
+matrix (level 01's harbour entity has source Z -10.999994).
+
+The exact source collision-surface name `Water` maps to shared `SurfaceClass::Water`. `Bail` (and `RobotBail` in
+other forges), `NonRidable`, `Unsafe` variants and `InvisibleWall` stay separate source names, without guessed
+death/respawn behaviour. The named `01A_DeathZoneSafety` is a Scene volume without a visual mesh, not a water shader
+material. A shared water surface class does not encode that volume's scripted respawn behaviour.

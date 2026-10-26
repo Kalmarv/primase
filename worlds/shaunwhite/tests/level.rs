@@ -5,7 +5,8 @@ use primase_core::frame::SourceFrame;
 use primase_core::pass::{Conservation, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::pbr::{AlphaMode, PbrMaterial, Shading};
 use primase_core::{
-    Collider, Collision, Instance, Marker, Mesh, Name, Surfaces, Texture, Transform, VertexColor, World,
+    Collider, Collision, Instance, Marker, MaterialUsage, Mesh, Name, Surfaces, Texture, Transform,
+    VertexColor, World,
 };
 use primase_shaunwhite::components::{
     CollisionPlacedBy, CollisionSource, CollisionSurfaces, MaterialRef, MeshFormat, PlacedBy, Sampler,
@@ -217,7 +218,43 @@ fn level_01_reads_and_lowers() {
         let p = w.get::<Instance>(e).unwrap().prototype;
         assert!(w.has::<Collision>(p) || w.has::<Collider>(p));
     }
+    let harbour = w
+        .iter::<MaterialRef>()
+        .find(|(_, m)| m.name == "Gen_GFX_WaterPort_Mat")
+        .map(|(e, m)| (e, m.clone()))
+        .expect("harbour water material");
+    assert!(harbour.1.state.unwrap().water);
+    assert!(!harbour.1.slots.contains_key("diffuse"));
+    assert!(harbour.1.slots.contains_key("normal") && harbour.1.slots.contains_key("specular"));
+    let water_meshes: Vec<_> = w
+        .iter::<Mesh>()
+        .filter(|(_, m)| m.primitives().iter().any(|p| p.material == Some(harbour.0)))
+        .map(|(e, m)| (e, m.clone()))
+        .collect();
+    assert_eq!(water_meshes.len(), 1);
+    let water_placements: Vec<_> = w
+        .iter::<Instance>()
+        .filter(|(_, i)| i.prototype == water_meshes[0].0)
+        .map(|(e, _)| (e, *w.get::<Transform>(e).unwrap()))
+        .collect();
+    assert_eq!(water_placements.len(), 1);
+    // Height read separately from the Cell05460 harbour Entity: source Z=-10.999994, core Y unchanged.
+    assert!((water_placements[0].1.cols[3][1] + 10.999_994).abs() < 0.000_01);
+    run(&mut w, "lower-shaunwhite-water{roughness=0.05}").unwrap();
+    assert_eq!(w.get::<MaterialUsage>(harbour.0), Some(&MaterialUsage::Water));
+    assert_eq!(
+        w.get::<PbrMaterial>(harbour.0).unwrap().base_color,
+        harbour.1.state.unwrap().color
+    );
+    for (e, m) in &water_meshes {
+        assert_eq!(w.get::<Mesh>(*e), Some(m));
+    }
+    for (e, t) in &water_placements {
+        assert_eq!(w.get::<Transform>(*e), Some(t));
+    }
     let lowered = run(&mut w, "lower-shaunwhite-material").unwrap();
+    assert_eq!(w.get::<MaterialUsage>(harbour.0), Some(&MaterialUsage::Water));
+    assert_eq!(w.get::<PbrMaterial>(harbour.0).unwrap().roughness, 0.05);
     assert_eq!(w.iter::<MaterialRef>().count(), 0);
     assert!(w.iter::<PbrMaterial>().count() > 500);
     // the lowered materials' alpha modes and tiling follow the stored fields; every one verifies

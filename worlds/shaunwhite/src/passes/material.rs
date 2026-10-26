@@ -249,6 +249,7 @@ mod tests {
             blended,
             alpha_test,
             alpha_ref,
+            water: false,
             color: [0.5, 0.25, 1.0, 1.0],
             illumination: 0.0,
             specular_level: 1.0,

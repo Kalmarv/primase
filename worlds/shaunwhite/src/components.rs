@@ -35,6 +35,8 @@ pub struct MaterialState {
     pub blended: bool,
     pub alpha_test: bool,
     pub alpha_ref: u8,
+    /// The stored water shader switch at body offset 91.
+    pub water: bool,
     /// RGBA, multiplying the diffuse layer.
     pub color: [f32; 4],
     /// A self-lit factor (0: none): the float at 87.
@@ -70,6 +72,7 @@ impl MaterialRef {
 
 impl Component for MaterialRef {
     const NAME: &'static str = "shaunwhite.material";
+    const VERSION: u32 = 2;
     const GEOMETRY: Geometry = Geometry::None;
     fn references(&self, out: &mut Vec<Entity>) {
         out.extend(self.textures());

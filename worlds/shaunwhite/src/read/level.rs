@@ -371,6 +371,7 @@ fn material(
                     blended: m.blended,
                     alpha_test: m.alpha_test,
                     alpha_ref: m.alpha_ref,
+                    water: m.water,
                     color: m.color,
                     illumination: m.illumination,
                     specular_level: m.specular_level,

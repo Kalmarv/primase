@@ -40,6 +40,12 @@
 //! What no field here says is whether a surface is drawn from both sides (the byte at 79 is 1 on 406 Materials, 2 on
 //! 37 `GFX_*` lights, and could be that, or the vertex colour's use), how the `mask`'s channels weight the second and
 //! third layers, or how `detail` and `diffuse2` combine: they are kept as the slots' data and not read further.
+//!
+//! Byte 91 is the water shader switch: an independent inspection of 1,971 fixed-size materials finds it set on
+//! exactly six (Port, Pool, Toxic, Ocean, PirateShip, Reservoir). All six have normal/specular/cube-reflection
+//! slots and no diffuse; tanks, foam decals, waterfalls and fountain effects leave it clear. It is a stored bool,
+//! not a test on a name or on slot absence. Height is the placed mesh's, tint is the colour at 168 and wave-normal
+//! tiling is the normal slot's UV transform. No shader-template id or animation-field semantics are established.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
@@ -164,6 +170,8 @@ pub struct Material {
     pub alpha_test: bool,
     /// The byte at 27.
     pub alpha_ref: u8,
+    /// Stored water shader switch at 91.
+    pub water: bool,
     /// RGBA at 168.
     pub color: [f32; 4],
     /// The float at 87.
@@ -209,6 +217,7 @@ impl Material {
         let blended = flag(25, "Material blended")?;
         let alpha_test = flag(26, "Material alpha test")?;
         let alpha_ref = v.u8(27).field("Material alpha reference")?;
+        let water = flag(91, "Material water")?;
         let mut color = [0f32; 4];
         for (k, c) in color.iter_mut().enumerate() {
             *c = v
@@ -268,6 +277,7 @@ impl Material {
             blended,
             alpha_test,
             alpha_ref,
+            water,
             color,
             illumination,
             specular_level,
@@ -340,6 +350,22 @@ mod tests {
         let g = m.slot("generic").unwrap();
         assert_eq!((g.spec, g.scale, g.offset), (0x22, [1.0, 1.0], [0.0, 0.0]));
         assert!(m.slot("normal").is_none());
+    }
+
+    #[test]
+    fn water_is_a_stored_flag_not_a_missing_diffuse_or_a_name() {
+        let mut b = body();
+        assert!(!Material::parse(&b).unwrap().water);
+        b[91] = 1;
+        assert!(Material::parse(&b).unwrap().water);
+        b[91] = 2;
+        assert!(matches!(
+            Material::parse(&b),
+            Err(Error::Invalid {
+                what: "Material water",
+                ..
+            })
+        ));
     }
 
     /// A body of another length, another class, a flag that is no bool and a non-finite scale are refused, named.
