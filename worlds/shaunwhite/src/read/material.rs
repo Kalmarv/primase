@@ -39,8 +39,14 @@
 //! One more colour quad sits at 94 (a reflection tint of the
 //! Materials with a `detail` slot); it is not read.
 //!
-//! What no field here says is whether a surface is drawn from both sides (the byte at 79 is 1 on 406 Materials, 2 on
-//! 37 `GFX_*` lights, and could be that, or the vertex colour's use), or how `detail` and `diffuse2` combine.
+//! Whether a surface is drawn from both sides is stored in two of the Material base class's bit-field bools, which the
+//! native property descriptors name by the CRC-32 of their name: **TwoSided** (`0x403525b2`) at 36, bit 20 of the
+//! runtime flag word, and **InvertCulling** (`0x4f892276`) at 37, bit 21. The native material update turns them into
+//! the D3DRS_CULLMODE the draw sets: TwoSided is `NONE`, else InvertCulling is `CCW` and its absence `CW`. Of the
+//! 1,971 distinct Materials of 647 bytes both are 0 or 1; TwoSided is set on 153 (fences, leaves, glass, cloth, light
+//! paint, `02_Wall_ConcreteExteriorBlend01_DOUBLESIDED_Mat`) and InvertCulling on two, `GEN_GFX_Bonus1_Mat` and
+//! `GEN_GFX_Bonus2_Mat`, which are two-sided too. The byte at 79 (1 on 406, 2 on 37: characters, vehicles,
+//! helicopters, light paint) is not read by that update and is not sidedness. What no field here says is how `detail` and `diffuse2` combine.
 //! Their slots are kept without assigning those semantics. Restored RGB layering is established separately
 //! from the shipped SDB2 HLSL and compiled SM3 pixel shaders; [`crate::passes::LowerShaunwhiteLayers`] lowers it.
 //!
@@ -180,6 +186,10 @@ pub struct Material {
     pub alpha_ref: u8,
     /// Stored water shader switch at 91.
     pub water: bool,
+    /// The bool at 36 (TwoSided): no face is culled.
+    pub two_sided: bool,
+    /// The bool at 37 (InvertCulling): the culled winding is the other one. Moot where `two_sided` is set.
+    pub invert_culling: bool,
     /// RGBA at 168.
     pub color: [f32; 4],
     /// The float at 87.
@@ -227,6 +237,8 @@ impl Material {
         let alpha_test = flag(26, "Material alpha test")?;
         let alpha_ref = v.u8(27).field("Material alpha reference")?;
         let water = flag(91, "Material water")?;
+        let two_sided = flag(36, "Material TwoSided")?;
+        let invert_culling = flag(37, "Material InvertCulling")?;
         let mut color = [0f32; 4];
         for (k, c) in color.iter_mut().enumerate() {
             *c = v
@@ -337,6 +349,8 @@ impl Material {
             alpha_test,
             alpha_ref,
             water,
+            two_sided,
+            invert_culling,
             color,
             illumination,
             specular_level,
@@ -453,6 +467,30 @@ mod tests {
                 .to_string()
                 .contains("UseTextureAlpha")
         );
+    }
+
+    /// TwoSided and InvertCulling are the bools at 36 and 37, each its own; the byte at 79 is neither, and a value other
+    /// than 0 or 1 is refused by name.
+    #[test]
+    fn sidedness_is_the_two_stored_bools_at_36_and_37() {
+        let mut b = body();
+        let m = Material::parse(&b).unwrap();
+        assert!(!m.two_sided && !m.invert_culling);
+        b[79] = 2;
+        let m = Material::parse(&b).unwrap();
+        assert!(!m.two_sided && !m.invert_culling);
+        b[36] = 1;
+        let m = Material::parse(&b).unwrap();
+        assert!(m.two_sided && !m.invert_culling);
+        b[36] = 0;
+        b[37] = 1;
+        let m = Material::parse(&b).unwrap();
+        assert!(!m.two_sided && m.invert_culling);
+        for (at, field) in [(36, "TwoSided"), (37, "InvertCulling")] {
+            let mut bad = body();
+            bad[at] = 2;
+            assert!(Material::parse(&bad).unwrap_err().to_string().contains(field));
+        }
     }
 
     #[test]

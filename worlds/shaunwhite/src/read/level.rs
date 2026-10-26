@@ -661,6 +661,8 @@ fn material(
                     alpha_test: m.alpha_test,
                     alpha_ref: m.alpha_ref,
                     water: m.water,
+                    two_sided: m.two_sided,
+                    invert_culling: m.invert_culling,
                     color: m.color,
                     illumination: m.illumination,
                     specular_level: m.specular_level,

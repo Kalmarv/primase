@@ -16,6 +16,8 @@ fn stored_water_flag_lowers_without_matching_names_and_keeps_death_surfaces_dist
         alpha_test: false,
         alpha_ref: 128,
         water: true,
+        two_sided: false,
+        invert_culling: false,
         color: [0.16, 0.24, 0.28, 1.],
         illumination: 0.0,
         specular_level: 1.0,
@@ -30,6 +32,8 @@ fn stored_water_flag_lowers_without_matching_names_and_keeps_death_surfaces_dist
             "WaterPort",
             MaterialState {
                 water: false,
+                two_sided: false,
+                invert_culling: false,
                 ..state
             },
         ),

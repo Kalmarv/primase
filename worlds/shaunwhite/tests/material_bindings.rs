@@ -142,6 +142,8 @@ fn fixture(count: u32) -> (DerivedAlbedo, MaterialRef) {
             alpha_test: false,
             alpha_ref: 128,
             water: false,
+            two_sided: false,
+            invert_culling: false,
             color: [0.8, 0.9, 0.7, 0.9],
             illumination: 0.75,
             specular_level: 1.,

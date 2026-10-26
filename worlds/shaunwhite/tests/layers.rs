@@ -101,6 +101,8 @@ fn fixture() -> (World, Entity, Entity, Entity) {
                 alpha_test: false,
                 alpha_ref: 128,
                 water: false,
+                two_sided: false,
+                invert_culling: false,
                 color: [0.5, 1., 1., 1.],
                 illumination: 0.,
                 specular_level: 1.,
@@ -323,6 +325,8 @@ fn plain(
                 alpha_test: false,
                 alpha_ref: 128,
                 water: false,
+                two_sided: false,
+                invert_culling: false,
                 color: tint,
                 illumination: 0.,
                 specular_level: 1.,
@@ -407,6 +411,36 @@ fn a_single_layer_material_takes_its_tint_by_the_vertex_red_and_never_the_vertex
         w.get::<PbrMaterial>(bare).unwrap().base_color,
         [0.5, 0.25, 1., 1.]
     );
+    assert!(w.verify_components().is_empty());
+}
+
+/// A blend has no material of its own, so its TwoSided is its layers': each layer's material is drawn from both sides,
+/// as is a single-layer Material, and a one-sided blend's layers stay one-sided.
+#[test]
+fn a_two_sided_material_is_two_sided_in_every_layer() {
+    let mut w = World::new();
+    let tint = [0.5, 0.25, 1., 1.];
+    let (two, _) = plain(&mut w, "two", tint, false, Some([0.5, 0.9, 0.1, 1.]));
+    let (one, _) = plain(&mut w, "one", tint, false, Some([0.5, 0.9, 0.1, 1.]));
+    let (flat, _) = plain(&mut w, "flat", [1.; 4], false, None);
+    for e in [two, flat] {
+        w.get_mut::<MaterialRef>(e)
+            .unwrap()
+            .state
+            .as_mut()
+            .unwrap()
+            .two_sided = true;
+    }
+    run(&mut w, "lower-shaunwhite-layers{influence=restored}");
+    run(&mut w, "lower-shaunwhite-material");
+    for (host, sided) in [(two, true), (one, false)] {
+        let layered = w.get::<LayeredMaterial>(host).unwrap();
+        assert_eq!(layered.layers.len(), 2);
+        for layer in layered.layers.iter().flatten() {
+            assert_eq!(w.get::<PbrMaterial>(layer.material).unwrap().double_sided, sided);
+        }
+    }
+    assert!(!w.has::<LayeredMaterial>(flat) && w.get::<PbrMaterial>(flat).unwrap().double_sided);
     assert!(w.verify_components().is_empty());
 }
 

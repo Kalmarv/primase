@@ -96,6 +96,10 @@ pub struct MaterialState {
     pub alpha_ref: u8,
     /// The stored water shader switch at body offset 91.
     pub water: bool,
+    /// TwoSided (body offset 36): the draw culls no face.
+    pub two_sided: bool,
+    /// InvertCulling (body offset 37): the culled winding is the other one. Moot where `two_sided` is set.
+    pub invert_culling: bool,
     /// Layer1_ModulationColor; its tint is interpolated by the shader's red vertex/mask weight.
     pub color: [f32; 4],
     /// A self-lit factor (0: none): the float at 87.

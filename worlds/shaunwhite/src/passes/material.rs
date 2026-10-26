@@ -15,7 +15,10 @@
 //! colour (a layered Material's vertex colours are saturated and mostly not grey, 58% of 497,307 vertices of level 01,
 //! against 13% of 801,135 of the others: weights, which drawn as a colour paint magenta and green across rocks and
 //! roofs), so it draws as its diffuse layer; an additive Material (blend 6) is drawn alpha-blended and unlit, its
-//! additive blend having no form here; every material is one-sided and dielectric.
+//! additive blend having no form here; every material is dielectric. A Material stored TwoSided (`read::material`: the
+//! bit the native update turns into D3DRS_CULLMODE `NONE`) is `double_sided`, every other one-sided. InvertCulling,
+//! which reverses the culled winding, is read but not lowered: it is set on two Materials, both TwoSided, so no
+//! drawn surface has it alone; a Material that did would be counted as omitted.
 //!
 //! No Material takes `COLOR_0` as a colour. The shader (`ekgeneric.fx` `FctDiffuseColor`) uses its red as the weight
 //! that interpolates the first texture towards that texture times the tint, which `lower-shaunwhite-layers` builds; a
@@ -201,8 +204,8 @@ impl Pass for LowerShaunwhiteMaterial {
     }
     fn approximates(&self) -> &'static str {
         "PBR specular approximates the source, normal maps of blends omitted; layered sources without core.layered use the diffuse fallback; additive materials alpha-blended and \
-         unlit; blended or alpha-tested materials with a vertex alpha below one keep COLOR_0 as a colour multiplier, as core has no alpha-only mode; every material one-sided, \
-         rough and dielectric"
+         unlit; blended or alpha-tested materials with a vertex alpha below one keep COLOR_0 as a colour multiplier, as core has no alpha-only mode; InvertCulling without TwoSided not lowered (none in the game's data); \
+         every material rough and dielectric"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let all: Vec<(Entity, MaterialRef)> = w.iter::<MaterialRef>().map(|(e, m)| (e, m.clone())).collect();
@@ -272,6 +275,12 @@ impl Pass for LowerShaunwhiteMaterial {
                         log.approximate("material colours outside 0-1 clamped", 1);
                     }
                     (pbr.alpha_mode, pbr.shading) = alpha(s, log);
+                    pbr.double_sided = s.two_sided;
+                    if s.two_sided {
+                        log.count("materials lowered two-sided (TwoSided)", 1);
+                    } else if s.invert_culling {
+                        log.omit("InvertCulling without TwoSided (winding not reversed)", 1);
+                    }
                     pbr.roughness = roughness(s.specular_power);
                     if pbr.normal_texture.is_some() {
                         pbr.normal_scale = s.normal_scale;
@@ -360,6 +369,8 @@ mod tests {
             alpha_test,
             alpha_ref,
             water: false,
+            two_sided: false,
+            invert_culling: false,
             color: [0.5, 0.25, 1.0, 1.0],
             illumination: 0.0,
             specular_level: 1.0,
@@ -419,6 +430,37 @@ mod tests {
             Some(&1)
         );
         assert!(w.verify_components().is_empty());
+    }
+
+    /// TwoSided is the PBR material's `double_sided` and nothing else is; InvertCulling reverses a winding the target
+    /// has no form for, so it is counted as left out and does not make a one-sided material two-sided, and where
+    /// TwoSided is set it changes nothing (no face is culled).
+    #[test]
+    fn two_sided_is_double_sided_and_invert_culling_alone_is_omitted() {
+        let mut w = World::new();
+        let sided = |two_sided, invert_culling| MaterialState {
+            two_sided,
+            invert_culling,
+            ..state(0, false, false, 128)
+        };
+        let one = material(&mut w, Some(sided(false, false)), None);
+        let two = material(&mut w, Some(sided(true, false)), None);
+        let both = material(&mut w, Some(sided(true, true)), None);
+        let inverted = material(&mut w, Some(sided(false, true)), None);
+        let bare = material(&mut w, None, None);
+        let mut log = PassLog::default();
+        LowerShaunwhiteMaterial.run(&mut w, &mut log).unwrap();
+        let sides = |e| w.get::<PbrMaterial>(e).unwrap().double_sided;
+        assert_eq!(
+            [one, two, both, inverted, bare].map(sides),
+            [false, true, true, false, false]
+        );
+        assert_eq!(log.counts.get("materials lowered two-sided (TwoSided)"), Some(&2));
+        assert_eq!(
+            log.omitted
+                .get("InvertCulling without TwoSided (winding not reversed)"),
+            Some(&1)
+        );
     }
 
     /// The normal slot is core's normal texture at its own tiling with the `HeightScale` as its scale; the texture
