@@ -1,4 +1,5 @@
 //! Source containers, material banks, quartet geometry, World assembly and conversion adapter.
+pub mod collision;
 pub mod convert;
 pub mod cstr;
 pub mod level;

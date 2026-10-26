@@ -2,7 +2,9 @@
 use primase_core::{Component, Geometry, Linear, world::Linearity};
 use serde::Serialize;
 
+mod collision;
 mod material;
+pub use collision::{CollisionFlags, DynamicShape, MOTION_FIXED, RigidBody};
 pub use material::{MaterialKey, MaterialParameter, MaterialSampler, ShredMaterial};
 
 /// A model ID is scoped to its PAK and quartet, never globally deduplicated.

@@ -86,3 +86,40 @@ reflection, frame scaling/mirroring, malformed inputs, truncated metadata and re
 `geometry_disc` always traverses every quartet, regardless of smoke/full depth: expected totals are 657 quartets
 in 324 PAKs, 21,309 resources (17,897 rigid, 3,412 embedded), 35,114 submeshes and 168,887 placements. These are checks
 against source tables and bounds, not an independent rendering proof. Lab/game visual verification remains separate.
+
+## Collision
+
+`read::collision::read_collision(&mut world, &[(label, &pak), ...], &surfaces, frame)` reads every `.hkw` entry of
+precisely the supplied archives (the program chooses a level's base and layers) through `primase_havok::packfile`
+(layouts and censuses: `toolkit/havok/README.md`). `SurfaceTable::from_main_db` reads MAIN.DB's `surfaces` table
+(54 rows, `id` 0..53 in order, `NAME`) through `primase-sqlite`; the world's `core.surfaces` is that table, so a
+surface id is its index. There is no skate. mapping here.
+
+One entity per leaf shape of each rigid body (12,641 bodies, 12,672 leaves in the 482 `.hkw` of the PAKs; the 8
+ragdoll `PHYSICS/*.HKX` are not level collision), with the body's transform and `shred.rigid_body` (name, motion
+type, response type, friction, restitution, collision filter word) and the shape in the body's space.
+
+- **Fixed bodies** (motion type 5; 2,021) are static collision: a mesh leaf is one `core.collision` soup of its
+  subparts in stored order (646,081 triangles on the disc, all in fixed bodies), any other leaf a `core.collider`.
+- **Other bodies** (motion type 2 or 3) are kept as data and never merged into the static collision: their shape is
+  `shred.dynamic_shape` (a soup or a collider), their motion type is in `shred.rigid_body`.
+- **Triangle material word `a`**: surface id `(a >> 3) & 0x3F` indexes `core.surfaces`; the rest of the word is the
+  opaque per-triangle `shred.collision_flags` (bits 0x1, 0x4, 0x800, 0x1000, 0x2000, 0x4000, 0x80000000 occur; their
+  meanings are not established and nothing names them). Shapes without triangles carry no surface: they are surface 0.
+- **Shapes**: convex-vertices as `Shape::Convex` of the vertices (the stored planes are not exact faces); box,
+  sphere, capsule and cylinder (its cylinder radius) as core's primitives, so nothing is tessellated; `ConvexTranslate`
+  offsets its child, lists and MOPP trees hold their children. Havok's convex radius (at most 0.05 in the data) is not
+  added to any shape.
+- **Winding** is the data's: counter-clockwise-front, core's convention, so no triangle is reordered (a frame that
+  mirrors reverses them, as for meshes). It is the render geometry's opposite (render triangles are clockwise against
+  their stored normals). Proof across the disc (`collision_winding_is_counter_clockwise_front`): the topmost
+  near-horizontal triangle of each 2 m cell of a file's fixed meshes is an exterior surface and must face up; 40,368
+  such cells face up and 4,103 down, and each of the 29 files with at least 200 cells is mostly up (the 18 files that
+  are mostly down are the small layers, under 200 cells each: sloped or one-sided pieces).
+- **Frame**: collision is in the same space as the SCP placements and render geometry (identity). On MIKE, the median
+  distance from a collision vertex to the nearest render surface point is under 1 cm.
+
+`collision_disc` checks the disc against an independent Python reader's census (`HK.md`): per-file bodies and fixed
+triangles equal for all 482 files (pinned for the ten level bases and CHARLIE's training layer), the surface
+histogram (36 ids) and the flag-word census equal, every world verifies, and a mirroring, scaling frame moves points
+and radii and reverses winding.

@@ -16,10 +16,11 @@ serde_json.workspace = true
 primase-bytes.workspace = true
 primase-compress.workspace = true
 primase-hash.workspace = true
+primase-havok.workspace = true
+primase-sqlite.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-primase-havok.workspace = true
 primase-testdata.workspace = true
 
 [lints]
