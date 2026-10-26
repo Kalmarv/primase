@@ -1,6 +1,6 @@
 use crate::ooz::error::{ErrorContext, Res};
 
-/// Oodle's LZNIB: a byte-aligned LZ77 with no entropy coding, in blocks of [`crate::ooz::SMALL_BLOCK`] bytes.
+/// Oodle's LZB16: a byte-aligned LZ77 with no entropy coding, in blocks of [`crate::ooz::SMALL_BLOCK`] bytes.
 ///
 /// A block is a sequence of commands. A command's control byte holds the literal count in its low nibble and the
 /// match code in its high nibble; the literal bytes follow it, then the match:
@@ -19,25 +19,25 @@ use crate::ooz::error::{ErrorContext, Res};
 ///
 /// Derived from the bytes of 50 streams of Sekiro's archives and the output the game's library gives for them, not
 /// from another decoder's source. Checked against the library: every one of those 50, and the streams its compressor 4
-/// (decoder type 2) writes for 60 inputs of 1 to 600000 bytes (primase-compress `lznib_cross_check`).
+/// (decoder type 2) writes for 60 inputs of 1 to 600000 bytes (primase-compress `lzb16_cross_check`).
 #[derive(Debug)]
-pub(crate) struct Lznib<'a> {
+pub(crate) struct Lzb16<'a> {
     input: &'a [u8],
     out: &'a mut [u8],
     offset: usize,
     history: usize,
 }
 
-impl ErrorContext for Lznib<'_> {
+impl ErrorContext for Lzb16<'_> {
     fn describe(&self) -> Option<String> {
-        Some("Lznib".into())
+        Some("Lzb16".into())
     }
 }
 
-impl<'a> Lznib<'a> {
+impl<'a> Lzb16<'a> {
     /// Decode `input` into `out[offset..]`; matches reach back to `out[history..]`.
     pub fn new(input: &'a [u8], out: &'a mut [u8], offset: usize, history: usize) -> Self {
-        Lznib {
+        Lzb16 {
             input,
             out,
             offset,

@@ -2,7 +2,7 @@ mod bitknit;
 mod kraken;
 mod leviathan;
 mod lzna;
-mod lznib;
+mod lzb16;
 mod mermaid;
 
 use crate::decoder::pointer::{Pointer, PointerDest};
@@ -14,7 +14,7 @@ pub(crate) use bitknit::*;
 pub(crate) use kraken::Kraken;
 pub(crate) use leviathan::Leviathan;
 pub(crate) use lzna::*;
-pub(crate) use lznib::Lznib;
+pub(crate) use lzb16::Lzb16;
 pub(crate) use mermaid::Mermaid;
 
 pub trait Algorithm: Debug {

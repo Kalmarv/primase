@@ -17,10 +17,10 @@ declared-MIT, unverified.
 - `decode_bytes_type12` (`src/decoder/mod.rs`): a Huffman chunk whose code lengths name a single symbol returns the chunk's
   declared size, not `src - src_end`. 0.5.6 reported such a chunk as using 0 bytes and refused it ("Expected 0 == 3 for
   chunk type 4"); the game's library decodes it. Test: `single_symbol_huffman_chunk_uses_its_declared_size`.
-- LZNIB (decoder type 2, block header `8C 02`, `src/algorithm/lznib.rs`): 0.5.6 and the C `ooz` it ports refuse the header
+- LZB16 (decoder type 2, block header `8C 02`, `src/algorithm/lzb16.rs`; Oodle's compressor 4 writes it, while its LZNIB, compressor 2, writes `8C 01`): 0.5.6 and the C `ooz` it ports refuse the header
   ("Unknown decoder type 2"). The format is written out in that file's comments; it was derived from 50 streams of
   Sekiro's archives and the game's Oodle 6 library's output for them (all 50 decode to the same bytes), not from
-  another decoder's source. Tests: `lznib_commands`, `lznib_refuses_a_match_before_its_history`. Its block size (16 KiB,
+  another decoder's source. Tests: `lzb16_commands`, `lzb16_refuses_a_match_before_its_history`. Its block size (16 KiB,
   with the two-byte quantum header) and the long length forms are checked against the game library's own compressor 4,
-  which writes decoder type 2: 60 inputs of 1 to 600000 bytes, all exact (primase-compress `lznib_cross_check`); and
+  which writes decoder type 2: 60 inputs of 1 to 600000 bytes, all exact (primase-compress `lzb16_cross_check`); and
   Sekiro's 7829 and Elden Ring's 71312 Kraken-framed streams decode to the library's bytes (`krak_archive`).

@@ -107,19 +107,19 @@ mod tests {
         assert!(output.iter().all(|&b| b == 0x41));
     }
 
-    /// One LZNIB block (decoder type 2): block header `8C 02`, the two-byte quantum header, then the commands.
-    fn lznib_block(commands: &[u8]) -> Vec<u8> {
+    /// One LZB16 block (decoder type 2): block header `8C 02`, the two-byte quantum header, then the commands.
+    fn lzb16_block(commands: &[u8]) -> Vec<u8> {
         let size = commands.len() - 1;
         let mut block = vec![0x8C, 0x02, (size >> 8) as u8, size as u8];
         block.extend_from_slice(commands);
         block
     }
 
-    /// The commands the LZNIB description in `algorithm/lznib.rs` allows, each form once: the output is checked
+    /// The commands the LZB16 description in `algorithm/lzb16.rs` allows, each form once: the output is checked
     /// against bytes worked out by hand.
     #[test_log::test]
     #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
-    fn lznib_commands() {
+    fn lzb16_commands() {
         let mut expected = Vec::new();
         let mut commands = Vec::new();
         // 3 literals, then a match of code 1 (length 5) at distance 2 (two bytes)
@@ -167,7 +167,7 @@ mod tests {
         commands.extend_from_slice(b"12345678");
         expected.extend_from_slice(b"12345678");
 
-        let input = lznib_block(&commands);
+        let input = lzb16_block(&commands);
         let mut output = vec![0u8; expected.len()];
         let n = Extractor::new()
             .read_from_slice(&input, &mut output)
@@ -178,9 +178,9 @@ mod tests {
 
     #[test_log::test]
     #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
-    fn lznib_refuses_a_match_before_its_history() {
+    fn lzb16_refuses_a_match_before_its_history() {
         // a match at distance 9 with 3 bytes of output
-        let input = lznib_block(&[0x13, b'a', b'b', b'c', 0x09, 0x00]);
+        let input = lzb16_block(&[0x13, b'a', b'b', b'c', 0x09, 0x00]);
         let mut output = vec![0u8; 8];
         assert!(Extractor::new()
             .read_from_slice(&input, &mut output)

@@ -297,13 +297,13 @@ mod tests {
         Ok(())
     }
 
-    /// Streams the game's library compresses with LZNIB (decoder type 2, `8C 02`), from inputs of the shapes game files
+    /// Streams the game's library compresses with LZB16 (decoder type 2, `8C 02`), from inputs of the shapes game files
     /// have (UTF-16 names, long zero runs, repeated structures, incompressible bytes) at sizes around the block and header
     /// spans: oozextract must give the input back. Which compressor number makes decoder type 2 is probed first (the
     /// table is printed). A stream oozextract gets wrong is kept in the folder the debug key `oodle.dump` names, and every
     /// failure is reported, not the first.
     #[test]
-    fn lznib_cross_check() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn lzb16_cross_check() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let Some(path) = tool(Tool::Oodle6) else {
             return Ok(());
         };
@@ -350,7 +350,7 @@ mod tests {
         let dump = primase_testdata::debug("oodle.dump").map(|name| primase_testdata::scratch().join(name));
         // which compressor numbers give which decoder type, for a 20000-byte input of names
         let probe = sample("utf16-names", 20000);
-        let mut lznib = Vec::new();
+        let mut lzb16 = Vec::new();
         for id in 0..=15 {
             match dll.compress_as(Codec(id), &probe) {
                 Ok(stream) if stream.len() > 2 => {
@@ -363,18 +363,18 @@ mod tests {
                         stream[1]
                     );
                     if decoder == 2 {
-                        lznib.push(id);
+                        lzb16.push(id);
                     }
                 }
                 other => println!("compressor {id}: {other:?}"),
             }
         }
         assert!(
-            !lznib.is_empty(),
+            !lzb16.is_empty(),
             "no compressor number of the library makes decoder type 2"
         );
         let mut failures = Vec::new();
-        for id in lznib {
+        for id in lzb16 {
             let mut checked = 0;
             for n in [
                 1, 9, 100, 5000, 16383, 16384, 16385, 40000, 65535, 65536, 65537, 262143, 262144, 262145,
@@ -415,7 +415,7 @@ mod tests {
         }
         assert!(
             failures.is_empty(),
-            "LZNIB streams oozextract does not read as the library's input:\n{}",
+            "LZB16 streams oozextract does not read as the library's input:\n{}",
             failures.join("\n")
         );
         Ok(())

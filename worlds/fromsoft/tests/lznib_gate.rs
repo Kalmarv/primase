@@ -1,4 +1,4 @@
-//! Sekiro's LZNIB streams (Oodle decoder type 2) against the output the game's Oodle library gave for them
+//! Sekiro's LZB16 streams (Oodle decoder type 2) against the output the game's Oodle library gave for them
 //! (`corpus.sekiro/lznib`): oozextract, the decoder where there is no game library, must give the same bytes. The oracle
 //! holds what the library produced, so this runs without it.
 
@@ -26,10 +26,10 @@ fn oozextract_decodes_the_lznib_streams_as_the_game_library_does()
     payloads.sort();
     expect_found(
         Query::Oracle(OracleSet::Corpus, Game::Sekiro, "lznib"),
-        "LZNIB streams",
+        "LZB16 streams",
         payloads.len(),
     );
-    let mut report = GateReport::new("LZNIB oozextract vs the game library", Tolerance::Exact);
+    let mut report = GateReport::new("LZB16 oozextract vs the game library", Tolerance::Exact);
     for payload in payloads {
         let name = payload.file_name().unwrap().to_string_lossy().into_owned();
         let stream = std::fs::read(&payload)?;
