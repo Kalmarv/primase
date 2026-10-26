@@ -30,8 +30,12 @@
 //! carry none in 22 of 32: added light; the alpha-tested are leaves, ferns and decals. Of blend 1 and 3 nothing but
 //! the names (lights: `Totem*Light`, `ShellLight`, `Gyrophare`) is known. The **colour** is four f32 at 168 (white on
 //! 1,017; 0.12 grey on dark glass, a green on the checkpoint glow, a blue on `BlueRusty`): it multiplies the diffuse
-//! layer. Two more colour quads sit at 94 (a reflection tint of the Materials with a `detail` slot) and 332 (the
-//! specular's colour); they are not read.
+//! layer. Three floats are read from their values' spread, not from a stated name: the **illumination** at 87 (0 on
+//! 1,729 Materials; 0.02 to 50 on 242, among them `ExitSign_GLOW` 6, `Light_InteriorHall` 10, `TelevisionLCD` 1, the
+//! skies 0.3: a self-lit factor), the **specular level** at 110 (0 to 1: 1 on 627, 0 on 218) and the **specular power**
+//! at 114 (1 to 333: 10 on 703, 1 on 492, 2 on 253, 50 on 151, 100 on 13: round numbers of an exponent). The
+//! **specular colour** is the quad at 332 (0 to 1, white on 1,366). One more colour quad sits at 94 (a reflection tint of the
+//! Materials with a `detail` slot); it is not read.
 //!
 //! What no field here says is whether a surface is drawn from both sides (the byte at 79 is 1 on 406 Materials, 2 on
 //! 37 `GFX_*` lights, and could be that, or the vertex colour's use), how the `mask`'s channels weight the second and
@@ -162,6 +166,14 @@ pub struct Material {
     pub alpha_ref: u8,
     /// RGBA at 168.
     pub color: [f32; 4],
+    /// The float at 87.
+    pub illumination: f32,
+    /// The float at 110.
+    pub specular_level: f32,
+    /// The float at 114.
+    pub specular_power: f32,
+    /// RGBA at 332.
+    pub specular_color: [f32; 4],
     /// The slots that hold a spec id, in body order.
     pub slots: Vec<Slot>,
 }
@@ -203,7 +215,22 @@ impl Material {
                 .f32(168usize.saturating_add(k.saturating_mul(4)), LE)
                 .field("Material colour")?;
         }
+        let mut specular_color = [0f32; 4];
+        for (k, c) in specular_color.iter_mut().enumerate() {
+            *c = v
+                .f32(332usize.saturating_add(k.saturating_mul(4)), LE)
+                .field("Material specular colour")?;
+        }
+        let illumination = v.f32(87, LE).field("Material illumination")?;
+        let specular_level = v.f32(110, LE).field("Material specular level")?;
+        let specular_power = v.f32(114, LE).field("Material specular power")?;
         let finite = |xs: &[f32]| xs.iter().all(|x| x.is_finite());
+        if !finite(&[illumination, specular_level, specular_power]) || !finite(&specular_color) {
+            return Err(Error::Invalid {
+                what: "Material illumination and specular",
+                value: format!("{illumination} {specular_level} {specular_power} {specular_color:?}"),
+            });
+        }
         if !finite(&color) {
             return Err(Error::Invalid {
                 what: "Material colour",
@@ -242,6 +269,10 @@ impl Material {
             alpha_test,
             alpha_ref,
             color,
+            illumination,
+            specular_level,
+            specular_power,
+            specular_color,
             slots,
         })
     }
@@ -269,6 +300,12 @@ mod tests {
         for (k, c) in [0.5f32, 0.25, 0.125, 1.0].iter().enumerate() {
             b[168 + 4 * k..172 + 4 * k].copy_from_slice(&c.to_le_bytes());
         }
+        b[87..91].copy_from_slice(&6.0f32.to_le_bytes());
+        b[110..114].copy_from_slice(&0.5f32.to_le_bytes());
+        b[114..118].copy_from_slice(&10.0f32.to_le_bytes());
+        for (k, c) in [1.0f32, 0.75, 0.5, 1.0].iter().enumerate() {
+            b[332 + 4 * k..336 + 4 * k].copy_from_slice(&c.to_le_bytes());
+        }
         // diffuse: spec 0x11, scale (2, 3), offset (0.5, -1)
         b[192..196].copy_from_slice(&0x11u32.to_le_bytes());
         for (k, f) in [2.0f32, 3.0, 0.5, -1.0].iter().enumerate() {
@@ -291,6 +328,11 @@ mod tests {
             (4, true, true, 0x80)
         );
         assert_eq!(m.color, [0.5, 0.25, 0.125, 1.0]);
+        assert_eq!(
+            (m.illumination, m.specular_level, m.specular_power),
+            (6.0, 0.5, 10.0)
+        );
+        assert_eq!(m.specular_color, [1.0, 0.75, 0.5, 1.0]);
         let names: Vec<_> = m.slots.iter().map(|s| s.name).collect();
         assert_eq!(names, ["diffuse", "generic"]);
         let d = m.slot("diffuse").unwrap();

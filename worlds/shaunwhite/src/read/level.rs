@@ -372,6 +372,10 @@ fn material(
                     alpha_test: m.alpha_test,
                     alpha_ref: m.alpha_ref,
                     color: m.color,
+                    illumination: m.illumination,
+                    specular_level: m.specular_level,
+                    specular_power: m.specular_power,
+                    specular_color: m.specular_color,
                 });
                 for slot in &m.slots {
                     // the slots whose maps no lowering reads are named, not read

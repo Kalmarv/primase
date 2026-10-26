@@ -37,6 +37,14 @@ pub struct MaterialState {
     pub alpha_ref: u8,
     /// RGBA, multiplying the diffuse layer.
     pub color: [f32; 4],
+    /// A self-lit factor (0: none): the float at 87.
+    pub illumination: f32,
+    /// The float at 110, 0 to 1.
+    pub specular_level: f32,
+    /// The float at 114: an exponent, 1 and up.
+    pub specular_power: f32,
+    /// RGBA of the specular, 0 to 1.
+    pub specular_color: [f32; 4],
 }
 
 /// A Material as the source stores it: its id, its object's name (empty when no forge read holds it), its fields

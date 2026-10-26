@@ -2,14 +2,17 @@
 //!
 //! The base colour is the diffuse layer (white where it has none) at its stated UV scale and offset, times the
 //! Material's colour; the texture's address modes are the sampler's. The blend and alpha-test fields are the alpha
-//! mode: blended is `Blend`, alpha-tested alone is `Mask` at the reference, neither is `Opaque`. Approximations, stated
-//! and counted: the specular map, the normal map and the second and third layers are not lowered (the normal map's
-//! green orientation is not established and how the mask weights the layers is not read); an additive Material (blend
-//! 6) is drawn alpha-blended and unlit, its additive blend having no form here; every material is one-sided, rough and
-//! dielectric.
+//! mode: blended is `Blend`, alpha-tested alone is `Mask` at the reference, neither is `Opaque`. The specular power
+//! (an exponent n) is the roughness `(2 / (n + 2))^(1/4)` (the Blinn-Phong lobe's width as a GGX roughness); the
+//! specular level, colour and map are glTF's specular factor, colour and colour texture; the illumination is the
+//! diffuse layer as emission at that strength. Approximations, stated and counted: the specular map, a Blinn-Phong
+//! colour, can darken glTF's dielectric highlight and not brighten it; the normal map, the mask and the second and
+//! third layers are not lowered (the normal map's green orientation is not established and how the mask and the vertex
+//! colour weight the layers is not read); an additive Material (blend 6) is drawn alpha-blended and unlit, its
+//! additive blend having no form here; every material is one-sided and dielectric.
 
 use primase_core::pass::{Pass, PassLog, PassSpec};
-use primase_core::pbr::{AlphaMode, PbrMaterial, Shading, TextureRef, UvTransform, Wrap};
+use primase_core::pbr::{AlphaMode, PbrMaterial, Shading, Specular, TextureRef, UvTransform, Wrap};
 use primase_core::{Component, Entity, World};
 
 use crate::components::{MaterialRef, MaterialState, Sampler, SlotRef};
@@ -62,6 +65,12 @@ fn texture_ref(w: &World, slot: &SlotRef, log: &mut PassLog) -> TextureRef {
         });
     }
     r
+}
+
+/// The roughness of a Blinn-Phong exponent `power`: the lobe's GGX roughness `sqrt(2 / (n + 2))`, as glTF's perceptual
+/// roughness (its square root), within 0.05 to 1.
+fn roughness(power: f32) -> f32 {
+    (2.0 / (power.max(0.0) + 2.0)).powf(0.25).clamp(0.05, 1.0)
 }
 
 /// The alpha mode and shading the Material's fields state.
@@ -120,17 +129,11 @@ impl Pass for LowerShaunwhiteMaterial {
         let all: Vec<(Entity, MaterialRef)> = w.iter::<MaterialRef>().map(|(e, m)| (e, m.clone())).collect();
         for (e, m) in all {
             let base = m.slots.get("diffuse").map(|s| texture_ref(w, s, log));
+            let specular_map = m.slots.get("specular").map(|s| texture_ref(w, s, log));
             if base.is_none() {
                 log.count("materials without a diffuse texture (white)", 1);
             }
-            for slot in [
-                "normal",
-                "specular",
-                "mask",
-                "diffuse_b",
-                "specular_b",
-                "diffuse_c",
-            ] {
+            for slot in ["normal", "mask", "diffuse_b", "specular_b", "diffuse_c"] {
                 if m.slots.contains_key(slot) {
                     log.omit(&format!("{slot} maps (not lowered)"), 1);
                 }
@@ -144,6 +147,13 @@ impl Pass for LowerShaunwhiteMaterial {
                 roughness: 0.9,
                 ..PbrMaterial::default()
             };
+            if let Some(map) = specular_map {
+                log.count("specular maps lowered (colour texture)", 1);
+                pbr.specular = Some(Specular {
+                    color_texture: Some(map),
+                    ..Specular::default()
+                });
+            }
             match &m.state {
                 Some(s) => {
                     pbr.base_color = s.color.map(|c| c.clamp(0.0, 1.0));
@@ -151,6 +161,20 @@ impl Pass for LowerShaunwhiteMaterial {
                         log.approximate("material colours outside 0-1 clamped", 1);
                     }
                     (pbr.alpha_mode, pbr.shading) = alpha(s, log);
+                    pbr.roughness = roughness(s.specular_power);
+                    let level = s.specular_level.clamp(0.0, 1.0);
+                    let color = [0, 1, 2].map(|k| s.specular_color.get(k).copied().unwrap_or(1.0).max(0.0));
+                    if level != 1.0 || color != [1.0; 3] || pbr.specular.is_some() {
+                        let specular = pbr.specular.get_or_insert_with(Specular::default);
+                        specular.factor = level;
+                        specular.color = color;
+                    }
+                    if s.illumination > 0.0 {
+                        pbr.emissive = [0, 1, 2].map(|k| pbr.base_color.get(k).copied().unwrap_or(1.0));
+                        pbr.emissive_texture = pbr.base_color_texture;
+                        pbr.emissive_strength = s.illumination;
+                        log.count("materials lowered as emissive (illumination)", 1);
+                    }
                 }
                 None => log.count("materials without fields (opaque, white)", 1),
             }
@@ -213,6 +237,10 @@ mod tests {
             alpha_test,
             alpha_ref,
             color: [0.5, 0.25, 1.0, 1.0],
+            illumination: 0.0,
+            specular_level: 1.0,
+            specular_power: 2.0,
+            specular_color: [1.0; 4],
         }
     }
 
@@ -262,6 +290,49 @@ mod tests {
             log.counts.get("materials without fields (opaque, white)"),
             Some(&1)
         );
+        assert!(w.verify_components().is_empty());
+    }
+
+    /// The specular power is the roughness, the level and colour the specular factor and colour, the map its colour
+    /// texture, the illumination the diffuse layer as emission; a default specular states nothing.
+    #[test]
+    fn specular_and_illumination_are_lowered() {
+        let mut w = World::new();
+        let t = texture(&mut w, [0, 0, 0]);
+        let slot = SlotRef {
+            texture: t,
+            scale: [1.0; 2],
+            offset: [0.0; 2],
+        };
+        let mut s = state(0, false, false, 128);
+        s.color = [1.0; 4];
+        s.specular_power = 30.0;
+        s.specular_level = 0.5;
+        s.specular_color = [1.0, 0.5, 0.25, 1.0];
+        s.illumination = 6.0;
+        let lit = material(&mut w, Some(s), Some(slot));
+        w.get_mut::<MaterialRef>(lit)
+            .unwrap()
+            .slots
+            .insert("specular".into(), slot);
+        let mut plain = state(0, false, false, 128);
+        plain.specular_power = 2.0;
+        plain.specular_level = 1.0;
+        plain.specular_color = [1.0; 4];
+        let plain = material(&mut w, Some(plain), Some(slot));
+        let mut log = PassLog::default();
+        LowerShaunwhiteMaterial.run(&mut w, &mut log).unwrap();
+
+        let p = w.get::<PbrMaterial>(lit).unwrap();
+        assert!((p.roughness - 0.5).abs() < 1e-6, "{}", p.roughness);
+        let spec = p.specular.unwrap();
+        assert_eq!((spec.factor, spec.color), (0.5, [1.0, 0.5, 0.25]));
+        assert_eq!(spec.color_texture.map(|r| r.texture), Some(t));
+        assert_eq!((p.emissive, p.emissive_strength), ([1.0; 3], 6.0));
+        assert_eq!(p.emissive_texture, p.base_color_texture);
+        let q = w.get::<PbrMaterial>(plain).unwrap();
+        assert!(q.specular.is_none() && q.emissive_texture.is_none() && q.emissive_strength == 1.0);
+        assert!((q.roughness - 0.8409).abs() < 1e-3);
         assert!(w.verify_components().is_empty());
     }
 }

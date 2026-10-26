@@ -237,5 +237,19 @@ fn level_01_reads_and_lowers() {
         mode(|m| matches!(m, AlphaMode::Blend)) > 20 && mode(|m| matches!(m, AlphaMode::Mask { .. })) > 20
     );
     assert!(tiled > 10, "{tiled} tiled");
+    let emissive = pbr
+        .iter()
+        .filter(|p| p.emissive_strength != 1.0 || p.emissive_texture.is_some())
+        .count();
+    let specular = pbr
+        .iter()
+        .filter(|p| p.specular.is_some_and(|s| s.color_texture.is_some()))
+        .count();
+    println!(
+        "lowered: {emissive} emissive, {specular} with a specular map, roughness {:.2} to {:.2}",
+        pbr.iter().map(|p| p.roughness).fold(1.0, f32::min),
+        pbr.iter().map(|p| p.roughness).fold(0.0, f32::max)
+    );
+    assert!(emissive > 5 && specular > 100);
     assert!(w.verify_components().is_empty());
 }
