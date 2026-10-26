@@ -1103,17 +1103,12 @@ mod tests {
             bytes: [0; DECL_SIZE],
         };
         meshset::Section {
-            at: 0,
             key: 1,
             draw_decl: decl.clone(),
             stride: decl.strides.iter().sum(),
             decl,
-            flags: 0,
-            primitives: 0,
-            start_index: 0,
-            vertex_offset: 0,
             vertices: 1,
-            bones: Vec::new(),
+            ..meshset::Section::default()
         }
     }
 

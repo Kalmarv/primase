@@ -103,11 +103,10 @@ pub struct Thumbnailed {
     pub thumbnails: Vec<MadeThumbnail>,
 }
 
-/// The `NameHash` of a CDN document: the case-sensitive DJB2-XOR hash (`h = 5381; h = h * 33 ^ byte`, 32 bits) of the
-/// name of the texture asset it refers to. The game's stock CDN documents carry it for their textures' `Name`.
+/// The `NameHash` of a CDN document: the case-sensitive [`djb2`](primase_frostbite::djb2) of the name of the texture
+/// asset it refers to. The game's stock CDN documents carry it for their textures' `Name`.
 pub fn name_hash(name: &str) -> u32 {
-    name.bytes()
-        .fold(5381u32, |h, b| h.wrapping_mul(33) ^ u32::from(b))
+    primase_frostbite::djb2(name)
 }
 
 /// The item document Studio added: its entry's index and the document.

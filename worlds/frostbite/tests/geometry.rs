@@ -95,7 +95,7 @@ fn fixture() -> (Vec<u8>, Lod, Section) {
         start_index: 0,
         vertex_offset: 0,
         vertices: 3,
-        bones: Vec::new(),
+        ..Section::default()
     };
     let lod = Lod {
         at: 0,
@@ -104,6 +104,7 @@ fn fixture() -> (Vec<u8>, Lod, Section) {
         index_bytes: 6,
         vertex_bytes: 96,
         sections: vec![section.clone()],
+        ..Lod::default()
     };
     (chunk, lod, section)
 }

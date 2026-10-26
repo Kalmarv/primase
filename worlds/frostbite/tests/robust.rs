@@ -66,14 +66,26 @@ fn a_latin1_name_round_trips() {
     assert_eq!(back.field("café").and_then(Node::u32), Some(3));
 }
 
-/// The LOD record pointers lie between 0x30 and the count at 0xb4: a count of more reads "pointers" out of the header's
-/// other fields.
+/// The LOD record pointers lie between 0x30 and the name at 0x68: a count of more would read "pointers" out of the
+/// header's other fields. A header of an unknown size is refused before anything else.
 #[test]
 fn a_lod_count_past_the_header_is_refused() {
     let mut d = vec![0u8; 0x200];
+    for (at, v) in [(0, 0xc0u32), (4, 0xb0), (8, 0x180)] {
+        d[at..at + 4].copy_from_slice(&v.to_le_bytes());
+    }
+    // the name, at 0x100 (pointers are stored relative to byte 16)
+    for at in [0x68, 0x70] {
+        d[at..at + 8].copy_from_slice(&0xf0u64.to_le_bytes());
+    }
+    d[0x100] = b'x';
     d[0xb4..0xb6].copy_from_slice(&((meshset::MAX_LODS + 1) as u16).to_le_bytes());
     let e = meshset::read(&d).unwrap_err().to_string();
-    assert!(e.contains("17 LODs"), "{e}");
+    assert!(e.contains("8 LODs"), "{e}");
     d[0xb4..0xb6].copy_from_slice(&0u16.to_le_bytes());
-    assert!(meshset::read(&d).unwrap().lods.is_empty());
+    let m = meshset::read(&d).unwrap();
+    assert!(m.lods.is_empty() && m.name == "x");
+    d[0] = 0xb0;
+    let e = meshset::read(&d).unwrap_err().to_string();
+    assert!(e.contains("header of 0xc0 bytes"), "{e}");
 }

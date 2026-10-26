@@ -4,7 +4,8 @@
 //! - `patch_round_trip` (`oracles.studio.gta/legion/patch`, a Patch folder written by ReSkate Studio's compile, plus
 //!   `installs.skate/Data`, the game's `Data` folder, and `tools.oodle9`, the game's Oodle DLL, for the bundles a
 //!   Patch places in the base game): every TOC, bundle region, bundle manifest, shader block depot, shader lookup
-//!   table and `layout.toc` read and written again is byte-identical; every MeshSet reads.
+//!   table and `layout.toc` read and written again is byte-identical; every MeshSet reads with its metadata, and
+//!   written in the game's layout reads back with the same records, names and lists.
 //! - `meshset_census` (`installs.skate/Data`, `tools.oodle9`): every MeshSet of every base-game TOC reads, failures
 //!   counted by message.
 
@@ -32,12 +33,16 @@ fn hex(b: &[u8]) -> String {
 /// A MeshSet declaring more sections than its bytes can hold is refused before anything is reserved.
 #[test]
 fn corrupt_section_count_is_an_error() {
-    // MeshSet: one LOD declaring 0x7fffffff sections
+    // MeshSet: the plain header (0xd0 bytes, LOD records of 0xb0, sections of 0x180; null names read as the empty
+    // string at byte 16), one LOD at 0xd0 declaring 0x7fffffff sections
     let mut ms = vec![0u8; 0x200];
-    ms[0x30..0x38].copy_from_slice(&0x80u64.to_le_bytes());
+    for (at, v) in [(0, 0xc0u32), (4, 0xb0), (8, 0x180)] {
+        ms[at..at + 4].copy_from_slice(&v.to_le_bytes());
+    }
+    ms[0x30..0x38].copy_from_slice(&0xc0u64.to_le_bytes());
     ms[0xb4..0xb6].copy_from_slice(&1u16.to_le_bytes());
-    ms[0x98..0x9c].copy_from_slice(&0x7fff_ffffu32.to_le_bytes());
-    ms[0x90 + 0x54..0x90 + 0x58].copy_from_slice(&0x21u32.to_le_bytes());
+    ms[0xd0 + 8..0xd0 + 12].copy_from_slice(&0x7fff_ffffu32.to_le_bytes());
+    ms[0xd0 + 0x54..0xd0 + 0x58].copy_from_slice(&0x21u32.to_le_bytes());
     let e = meshset::read(&ms)
         .expect_err("a corrupt count must be an error")
         .to_string();
@@ -45,6 +50,15 @@ fn corrupt_section_count_is_an_error() {
         e.contains("entries of at least"),
         "refused for another reason: {e}"
     );
+}
+
+/// A MeshSet without where its records lay.
+fn placeless(mut m: meshset::MeshSet) -> meshset::MeshSet {
+    for l in &mut m.lods {
+        l.at = 0;
+        l.sections.iter_mut().for_each(|s| s.at = 0);
+    }
+    m
 }
 
 fn oodle() -> Option<Oodle> {
@@ -73,7 +87,7 @@ fn summary(patch: &Path, base: Option<&Folder>, oodle: Option<&Oodle>, report: &
     };
     let mut tocs = serde_json::Map::new();
     let (mut depots, mut meshsets) = (Vec::new(), Vec::new());
-    let (mut programs, mut texture_sets) = (0usize, 0usize);
+    let (mut programs, mut texture_sets, mut rewritten) = (0usize, 0usize, 0usize);
     for rel in &folder.tocs {
         let bytes = std::fs::read(folder.toc_path(rel))?;
         let t = toc::read(&bytes)?;
@@ -133,6 +147,24 @@ fn summary(patch: &Path, base: Option<&Folder>, oodle: Option<&Oodle>, report: &
                 } else if a.rtype == MESHSET {
                     let d = src.payload(f, a.size as usize)?;
                     let ms = meshset::read(&d)?;
+                    // written in the game's layout (Studio orders its pool otherwise) and read again: the same
+                    // records, names, lists and trailing data
+                    let stored = placeless(meshset::read_resource(&d, &a.rmeta)?);
+                    let (w, wm) = meshset::write(&stored)?;
+                    let again = placeless(meshset::read_resource(&w, &wm)?);
+                    if again == stored {
+                        rewritten += 1;
+                    } else {
+                        let (x, y) = (format!("{again:?}"), format!("{stored:?}"));
+                        let at = x.bytes().zip(y.bytes()).position(|(p, q)| p != q).unwrap_or(0);
+                        return Err(format!(
+                            "{}: written MeshSet reads back otherwise: ...{} / ...{}",
+                            a.name,
+                            &x[at.saturating_sub(80)..(at + 80).min(x.len())],
+                            &y[at.saturating_sub(80)..(at + 80).min(y.len())]
+                        )
+                        .into());
+                    }
                     let lods: Vec<Value> = ms
                         .lods
                         .iter()
@@ -159,7 +191,7 @@ fn summary(patch: &Path, base: Option<&Folder>, oodle: Option<&Oodle>, report: &
         );
     }
     Ok(
-        json!({"tocs": tocs, "depots": depots, "meshsets": meshsets, "programs": programs, "texture_sets": texture_sets}),
+        json!({"tocs": tocs, "depots": depots, "meshsets": meshsets, "rewritten": rewritten, "programs": programs, "texture_sets": texture_sets}),
     )
 }
 
@@ -184,8 +216,9 @@ fn patch_round_trip() -> R {
     let s = summary(&patch, Some(&base), Some(&oodle), &mut report)?;
     println!("{report}");
     println!(
-        "meshsets {} depots {} program rows {} texture-set rows {}",
+        "meshsets {} ({} written and read back alike) depots {} program rows {} texture-set rows {}",
         s["meshsets"].as_array().map_or(0, Vec::len),
+        s["rewritten"],
         s["depots"].as_array().map_or(0, Vec::len),
         s["programs"],
         s["texture_sets"]

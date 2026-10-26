@@ -28,8 +28,10 @@ pub mod passes;
 pub mod permutation;
 pub mod physics;
 mod read;
+pub mod rigid;
 pub mod selector;
 pub mod skeleton;
+pub mod tangent;
 pub mod texture;
 pub mod toc;
 
@@ -65,6 +67,14 @@ pub enum Error {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+/// Frostbite's string hash: DJB2 with xor (`h = 5381`, then `h = h * 33 ^ byte` over the name's bytes, 32 bits), case as
+/// given. The `NameHash` of assets (a MeshSet's header word 0x78, a RigidMeshAsset's `NameHash`), the name hashes of
+/// MeshSet records, and (lowercased) resource type ids ([`listing::type_id`]).
+pub fn djb2(name: &str) -> u32 {
+    name.bytes()
+        .fold(5381u32, |h, b| h.wrapping_mul(33) ^ u32::from(b))
+}
 
 /// Lowercase hexadecimal of `bytes`, in the order given.
 pub(crate) fn hex(bytes: &[u8]) -> String {

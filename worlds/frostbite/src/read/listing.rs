@@ -174,12 +174,9 @@ pub const TYPE_NAMES: &[(u32, &str)] = &[
     (0xF434_940D, "ShaderParameterCollectionTable"),
 ];
 
-/// A resource type's id from its name: the lowercased name hashed with djb2 and xor (`h = 0x1505`, then
-/// `h = h * 33 ^ byte`).
+/// A resource type's id from its name: the lowercased name's [`djb2`](crate::djb2).
 pub fn type_id(name: &str) -> u32 {
-    name.to_ascii_lowercase()
-        .bytes()
-        .fold(0x1505u32, |h, b| h.wrapping_mul(0x21) ^ u32::from(b))
+    crate::djb2(&name.to_ascii_lowercase())
 }
 
 impl Source<'_> {
