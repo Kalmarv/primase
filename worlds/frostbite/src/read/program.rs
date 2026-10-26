@@ -374,6 +374,49 @@ impl Source<'_> {
             .collect())
     }
 
+    /// The fixed-function states ([`permutation::FixedState`]) of program `record`'s raster permutations, in its
+    /// order, looked up in `scope` (compute permutations have none). A permutation or shared data the scope does not
+    /// hold, or a state that does not decode, is an error naming it.
+    pub fn program_states(
+        &self,
+        scope: &Scope<'_>,
+        record: &lookup::ProgramRecord,
+    ) -> Result<Vec<permutation::FixedState>> {
+        let mut out = Vec::new();
+        for &id in &record.permutations {
+            let (home, entry) = scope
+                .permutation(id)
+                .ok_or_else(|| Error::Missing(format!("permutation {id:#x} is in no bundle of the scope")))?;
+            if entry.resource_type != Some(permutation::RASTER) {
+                continue;
+            }
+            let meta = home.manifest.res[entry.index].rmeta;
+            let p = permutation::read(
+                permutation::RASTER,
+                &self.payload(entry.file, entry.size as usize)?,
+                &meta,
+            )
+            .map_err(|e| Error::Unsupported(format!("{}: {e}", entry.name)))?;
+            let (home, shared) = scope
+                .resource_with_home(permutation::SHARED_RASTER, p.shared_data)
+                .ok_or_else(|| {
+                    Error::Missing(format!(
+                        "{}: shared data {:#x} is in no bundle of the scope",
+                        entry.name, p.shared_data
+                    ))
+                })?;
+            let d = permutation::read_shared(
+                permutation::SHARED_RASTER,
+                &self.payload(shared.file, shared.size as usize)?,
+                &home.manifest.res[shared.index].rmeta,
+            )
+            .and_then(|s| s.fixed_state())
+            .map_err(|e| Error::Unsupported(format!("{}: {e}", shared.name)))?;
+            out.push(d);
+        }
+        Ok(out)
+    }
+
     /// What the scope's depots, program databases and texture lookups hold by material key. Reads each depot, database
     /// and lookup of the scope's bundles once; where two hold a key the earlier bundle's wins.
     pub fn materials(&self, scope: &Scope<'_>) -> Result<Materials> {
@@ -560,7 +603,10 @@ mod tests {
         let note = super::gbuffer_roles_unknown();
         assert_eq!(note.key, "frostbite.gbuffer_roles_unknown");
         assert_eq!(note.reason, super::GBUFFER_ROLES_UNKNOWN);
-        assert_eq!(note.reason.as_str(), "no PBR material derived: no G-buffer target of a Frostbite program has an established role (the frame graph binding the producers' targets to the lighting programs is engine code, not data; slot names are undecoded hashes), so none is mapped by slot name, format or colour space");
+        assert_eq!(
+            note.reason.as_str(),
+            "no PBR material derived: no G-buffer target of a Frostbite program has an established role (the frame graph binding the producers' targets to the lighting programs is engine code, not data; slot names are undecoded hashes), so none is mapped by slot name, format or colour space"
+        );
         assert!(note.unsupported);
         assert_eq!(note.at, None);
         w.insert(e, note.clone());

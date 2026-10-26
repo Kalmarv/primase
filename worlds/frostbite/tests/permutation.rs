@@ -1,7 +1,9 @@
 //! Shader permutations and program records: hand-laid permutations read to their ids and GUIDs, the refusals, a GUID's
-//! bytecode name, program records read from a hand-laid program lookup; and, on the game's data (the skate. install
-//! and its Oodle 9 library), every program of the first program database of `Win32/globals.toc` followed through its
-//! permutations to bytecode that reads, and a material key's programs read into a world.
+//! bytecode name, program records read from a hand-laid program lookup, a shared data's fixed-function state read in
+//! the layouts the game's own state printers use (`Skate.exe`'s rc2 IR filter: the oracle, see
+//! `primase_frostbite::permutation::FixedState`); and, on the game's data (the skate. install and its Oodle 9 library),
+//! every program of the first program database of `Win32/globals.toc` followed through its permutations to bytecode
+//! that reads, a material key's programs read into a world, and every stock raster state decoded.
 
 #![allow(clippy::unwrap_used)]
 
@@ -282,4 +284,245 @@ fn a_levels_programs_resolve_through_the_game_configuration() {
         println!("  FAILED {f}");
     }
     assert!(failed.is_empty(), "{} material keys did not read", failed.len());
+}
+
+/// A raster shared data laid as the game's: the ids, zeros to 0x78, then `state` (0x78 to 0xb4).
+fn shared_with_state(state: &[u8; 0x3c]) -> (Vec<u8>, [u8; 16]) {
+    let mut d = vec![0u8; 0xc0];
+    d[0x08..0x10].copy_from_slice(&1u64.to_le_bytes());
+    d[0x38..0x40].copy_from_slice(&2u64.to_le_bytes());
+    d[0x78..0xb4].copy_from_slice(state);
+    let m = meta(d.len() as u32, 0, 7);
+    (d, m)
+}
+
+/// The stock decal row's state (hand-worked from the game's printers' layouts, permutation.rs's table): bias 200,
+/// slope 0.1, cull back, front counter-clockwise, depth clip; depth test GreaterEqual, no write, stencil test reading
+/// 0x08 and writing nothing, both faces keep / keep / replace / GreaterEqual; logic op 4 off, independent blend; three
+/// premultiplied targets (One, InvSourceAlpha; masks rgb, rgb, gb) and five unblended ones.
+fn decal_state() -> [u8; 0x3c] {
+    let mut s = [0u8; 0x3c];
+    s[0..4].copy_from_slice(&0.1f32.to_le_bytes());
+    s[4..6].copy_from_slice(&200i16.to_le_bytes());
+    s[7] = 0x1c;
+    s[8..16].copy_from_slice(&[0x35, 0x08, 0x00, 0x00, 0x32, 0x00, 0x32, 0x44]);
+    s[16] = 0xff;
+    let records: [[u8; 5]; 8] = [
+        [0x03, 0x05, 0x01, 0x05, 0x07],
+        [0x03, 0x05, 0x01, 0x05, 0x07],
+        [0x03, 0x05, 0x01, 0x05, 0x06],
+        [0x02, 0x00, 0x01, 0x00, 0x0f],
+        [0x02, 0x00, 0x01, 0x00, 0x0f],
+        [0x02, 0x00, 0x01, 0x00, 0x0f],
+        [0x02, 0x00, 0x01, 0x00, 0x0f],
+        [0x02, 0x00, 0x01, 0x00, 0x0f],
+    ];
+    for (i, r) in records.iter().enumerate() {
+        s[0x14 + 5 * i..0x19 + 5 * i].copy_from_slice(r);
+    }
+    s
+}
+
+#[test]
+fn a_shared_datas_fixed_state_reads_in_the_games_layout() {
+    use primase_core::shader::{BlendOp, Compare, Cull, Fill, StencilFace, StencilOp};
+    let (d, m) = shared_with_state(&decal_state());
+    let s = permutation::read_shared(permutation::SHARED_RASTER, &d, &m)
+        .unwrap()
+        .fixed_state()
+        .unwrap();
+    assert_eq!((s.depth_bias, s.slope_scaled_depth_bias), (200, 0.1));
+    assert_eq!((s.fill, s.cull), (Fill::Solid, Cull::Back));
+    assert!(s.front_counter_clockwise && s.depth_clip && !s.multisample && !s.conservative);
+    assert!(s.depth_test && !s.depth_write && s.stencil_test);
+    assert_eq!(s.depth_compare, Compare::GreaterEqual);
+    assert_eq!((s.stencil_read_mask, s.stencil_write_mask), (0x08, 0x00));
+    let face = StencilFace {
+        fail: StencilOp::Keep,
+        depth_fail: StencilOp::Keep,
+        pass: StencilOp::Replace,
+        compare: Compare::GreaterEqual,
+    };
+    assert_eq!((s.front, s.back), (face, face));
+    assert_eq!(s.logic_op, 4);
+    assert!(!s.logic_op_enable && !s.alpha_to_coverage && s.independent_blend);
+    let t = s.targets[0];
+    assert!(t.blend);
+    assert_eq!(
+        (
+            t.source,
+            t.destination,
+            t.source_alpha,
+            t.destination_alpha,
+            t.alpha_op,
+            t.write_mask
+        ),
+        (1, 5, 1, 5, BlendOp::Add, 0x7)
+    );
+    assert_eq!(s.targets[2].write_mask, 0x6);
+    assert!(!s.targets[3].blend);
+    assert_eq!((s.targets[3].source, s.targets[3].write_mask), (1, 0xf));
+}
+
+#[test]
+fn a_fixed_state_out_of_the_games_ranges_is_refused() {
+    let refused = |state: [u8; 0x3c]| {
+        let (d, m) = shared_with_state(&state);
+        permutation::read_shared(permutation::SHARED_RASTER, &d, &m)
+            .unwrap()
+            .fixed_state()
+            .unwrap_err()
+            .to_string()
+    };
+    let mut cull = decal_state();
+    cull[7] = 0x06;
+    assert!(refused(cull).contains("cull mode 3"));
+    let mut op = decal_state();
+    op[0x15] = 0x25;
+    assert!(refused(op).contains("colour blend operation"));
+    let mut mode = decal_state();
+    mode[0x16] = 0x11;
+    assert!(refused(mode).contains("past the game's 17"));
+    // a payload that ends before the state
+    let (mut d, _) = shared_with_state(&decal_state());
+    d.truncate(0x90);
+    let m = meta(d.len() as u32, 0, 7);
+    let short = permutation::read_shared(permutation::SHARED_RASTER, &d, &m).unwrap();
+    assert!(
+        short
+            .fixed_state()
+            .unwrap_err()
+            .to_string()
+            .contains("hold no state")
+    );
+}
+
+/// Every raster shared data of `dingolevel_root` and `globals.toc` decodes to a state in the game's ranges, and the
+/// programs of the stock decal row (key 0xca7afe635959dd1e) draw with a no-write, stencil-tested, biased state.
+#[test]
+fn every_stock_raster_state_decodes() {
+    let (Some(data), Some(dll)) = (install_file(Game::Skate, "Data"), tool(Tool::Oodle9)) else {
+        return;
+    };
+    let folder = Folder::open(data).unwrap();
+    // SAFETY: the configured Oodle 9 library is the game's own.
+    #[allow(unsafe_code)]
+    let oodle = unsafe { Oodle::load(dll, Version::V9) }.unwrap();
+    let src = Source {
+        folder: &folder,
+        base: Some(&folder),
+        oodle: Some(&oodle),
+    };
+    let root = src
+        .listing("Win32/levels/game/dingolevel_root/dingolevel_root.toc")
+        .unwrap();
+    let mut bundles = root.bundles.clone();
+    bundles.extend(src.listing("Win32/globals.toc").unwrap().bundles);
+    let mut seen = std::collections::BTreeSet::new();
+    let mut classes = std::collections::BTreeMap::new();
+    for b in &bundles {
+        for (i, a) in b.manifest.res.iter().enumerate() {
+            if a.rtype != permutation::SHARED_RASTER || !seen.insert(permutation::resource_id(&a.rmeta)) {
+                continue;
+            }
+            let e = b.resource(i);
+            let s =
+                permutation::read_shared(a.rtype, &src.payload(e.file, e.size as usize).unwrap(), &a.rmeta)
+                    .unwrap()
+                    .fixed_state()
+                    .unwrap_or_else(|err| panic!("{}: {err}", e.name));
+            *classes
+                .entry((
+                    s.depth_write,
+                    s.depth_bias,
+                    s.stencil_test,
+                    format!("{:?}", s.depth_compare),
+                ))
+                .or_insert(0usize) += 1;
+        }
+    }
+    println!(
+        "{} raster shared data decoded; (write, bias, stencil, compare): {classes:?}",
+        seen.len()
+    );
+    assert!(seen.len() > 1000, "{} shared data", seen.len());
+    // the decal row
+    let scope = Scope::new(&bundles);
+    let database = root
+        .bundles
+        .iter()
+        .flat_map(|b| b.entries())
+        .find(|e| e.kind == Kind::Res && e.resource_type == Some(lookup::PROGRAM_LOOKUP))
+        .unwrap();
+    let home = root.bundles.iter().find(|b| b.name == database.bundle).unwrap();
+    let payload = src.payload(database.file, database.size as usize).unwrap();
+    let meta = home.manifest.res[database.index].rmeta;
+    let records = lookup::read_records(&payload, &meta).unwrap();
+    let row = lookup::read_programs(&payload, &meta).unwrap().rows[&0xca7a_fe63_5959_dd1e].clone();
+    let states: Vec<_> = row
+        .iter()
+        .flat_map(|&p| src.program_states(&scope, &records[p as usize]).unwrap())
+        .collect();
+    assert!(!states.is_empty());
+    assert!(
+        states.iter().all(|s| !s.depth_write),
+        "the decal row writes no depth"
+    );
+    assert!(
+        states.iter().any(|s| s.depth_bias == 200
+            && s.slope_scaled_depth_bias == 0.1
+            && s.stencil_test
+            && s.stencil_read_mask == 0x08),
+        "{states:?}"
+    );
+}
+
+/// The decal state as D3D12 receives it (the game's own pipeline descriptions: clamp 0, colour op Add, see
+/// `FixedState::render_state`).
+#[test]
+fn a_fixed_state_maps_to_cores_render_state() {
+    use primase_core::shader::{BlendFactor, BlendOp, Compare, DepthBias, DepthState};
+    let (d, m) = shared_with_state(&decal_state());
+    let r = permutation::read_shared(permutation::SHARED_RASTER, &d, &m)
+        .unwrap()
+        .fixed_state()
+        .unwrap()
+        .render_state()
+        .unwrap();
+    r.verify().unwrap();
+    assert_eq!(
+        r.depth,
+        Some(DepthState {
+            test: Compare::GreaterEqual,
+            write: false
+        })
+    );
+    assert_eq!(
+        r.depth_bias,
+        Some(DepthBias {
+            constant: 200.0,
+            slope_scaled: 0.1,
+            clamp: 0.0
+        })
+    );
+    let s = r.stencil.unwrap();
+    assert_eq!((s.read_mask, s.write_mask, s.reference), (0x08, 0x00, None));
+    let b = r.blend.unwrap();
+    assert_eq!(
+        (b.colour.source, b.colour.destination, b.colour.op),
+        (BlendFactor::One, BlendFactor::OneMinusSrcAlpha, BlendOp::Add)
+    );
+    assert_eq!(r.targets[2].unwrap().write_mask, 0x6);
+    assert_eq!(r.targets[3].unwrap().blend, None);
+    // a blended target with a constant factor has no core factor
+    let mut s = decal_state();
+    s[0x14] = 0x03 | (11 << 1);
+    let (d, m) = shared_with_state(&s);
+    let refused = permutation::read_shared(permutation::SHARED_RASTER, &d, &m)
+        .unwrap()
+        .fixed_state()
+        .unwrap()
+        .render_state()
+        .unwrap_err();
+    assert!(refused.to_string().contains("no core factor"), "{refused}");
 }
