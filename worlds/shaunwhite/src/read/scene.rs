@@ -32,6 +32,11 @@ pub const SPAWN_POINT: u32 = 0xF63C_9D7F;
 /// The class of a player spawner's component (`0xE74CB43D`, CRC-32 of `PlayerSpawner`, which the data names as it names
 /// `Entity`: a world's missions each put the skater down at one, in its cells and in its root entry).
 pub const PLAYER_SPAWNER: u32 = 0xE74C_B43D;
+/// The class of a multiplayer world's player spawner (`0x5D54B379`, `MultiPointPlayerSpawner` in the executable's class
+/// name table): each of the four multiplayer worlds' root entries holds one Entity with it, `MULTI_Spawner_Player_001`
+/// (`04_MULTI_Spawner_Player_001` in 04_Multi), where the skater is put down; the team, scatter and together spawners
+/// beside it are other classes.
+pub const MULTI_POINT_PLAYER_SPAWNER: u32 = 0x5D54_B379;
 /// Classes a Visual can show besides a Mesh, a LODSelector and a light: a particle system (effects: checkpoints,
 /// collectibles, the collision dust), a DynamicMesh (an 18-byte body: its vertices are made at run time, the banners and
 /// flags), a RealTreeMesh (native tree data, the three urban tree species) and the shaping mechanic's free-form shape

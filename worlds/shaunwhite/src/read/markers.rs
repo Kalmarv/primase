@@ -4,7 +4,8 @@
 //! ([`crate::read::scene::SPAWN_POINT`]): the data states it, so the kind `spawn_point` is read from the class, not a
 //! name (82 in level 01: 74 are `01_A_/01_B_SpawnPoint_Plaza_NNN`, the rest nodes named after NPC trajectories).
 //! A **player spawner** carries a component of the PlayerSpawner class ([`crate::read::scene::PLAYER_SPAWNER`]): where
-//! a mission puts the skater down (level 01: one in a cell; the Stronghold's root entry: ten);
+//! a mission puts the skater down (level 01: one in a cell; the Stronghold's root entry: ten), and so does a
+//! multiplayer world's [`crate::read::scene::MULTI_POINT_PLAYER_SPAWNER`] (one in each root entry);
 //! it is read as a `start`, named by its Entity. A **start position** is an Entity with no component at all, whose only
 //! statement is its name; [`START_NAMES`] is the table of those names. The reader places each as a `core.marker` at the Entity's matrix; which local axis the game
 //! calls forward is not read, so the marker carries the whole matrix and no yaw.
@@ -12,7 +13,7 @@
 //! What no row maps is not guessed: an Entity that has neither a Visual nor a marker is counted in the reader's
 //! report (`entities with neither a Visual nor a marker`).
 
-use crate::read::scene::{PLAYER_SPAWNER, SPAWN_POINT};
+use crate::read::scene::{MULTI_POINT_PLAYER_SPAWNER, PLAYER_SPAWNER, SPAWN_POINT};
 
 /// The `core.marker` kind of a spawn node (a SpawnPoint component).
 pub const SPAWN_POINT_KIND: &str = "spawn_point";
@@ -57,7 +58,10 @@ pub const START_NAMES: [StartName; 5] = [
 pub fn kind(name: &str, components: &[u32]) -> Option<&'static str> {
     if components.contains(&SPAWN_POINT) {
         Some(SPAWN_POINT_KIND)
-    } else if components.contains(&PLAYER_SPAWNER) || START_NAMES.iter().any(|r| name.contains(r.needle)) {
+    } else if components.contains(&PLAYER_SPAWNER)
+        || components.contains(&MULTI_POINT_PLAYER_SPAWNER)
+        || START_NAMES.iter().any(|r| name.contains(r.needle))
+    {
         Some(START_KIND)
     } else {
         None
@@ -91,6 +95,7 @@ mod tests {
         assert_eq!(kind("anything", &[0x1234, SPAWN_POINT]), Some(SPAWN_POINT_KIND));
         // a player spawner is a start by its class, whatever its name
         assert_eq!(kind("anything", &[PLAYER_SPAWNER]), Some(START_KIND));
+        assert_eq!(kind("anything", &[MULTI_POINT_PLAYER_SPAWNER]), Some(START_KIND));
         // an Entity that draws or scripts something else is no marker
         for name in [
             "01_B_Arc_06_Building_03",
