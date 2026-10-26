@@ -4,7 +4,9 @@
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Conservation, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::pbr::{AlphaMode, PbrMaterial, Shading};
-use primase_core::{Collider, Collision, Instance, Marker, Mesh, Name, Surfaces, Texture, Transform, World};
+use primase_core::{
+    Collider, Collision, Instance, Marker, Mesh, Name, Surfaces, Texture, Transform, VertexColor, World,
+};
 use primase_shaunwhite::components::{
     CollisionPlacedBy, CollisionSource, CollisionSurfaces, MaterialRef, MeshFormat, PlacedBy, Sampler,
 };
@@ -251,5 +253,8 @@ fn level_01_reads_and_lowers() {
         pbr.iter().map(|p| p.roughness).fold(0.0, f32::max)
     );
     assert!(emissive > 5 && specular > 100);
+    let ignored = w.iter::<VertexColor>().count();
+    println!("lowered: {ignored} materials ignore their vertex colour");
+    assert!(ignored > 50);
     assert!(w.verify_components().is_empty());
 }

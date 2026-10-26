@@ -8,12 +8,15 @@
 //! diffuse layer as emission at that strength. Approximations, stated and counted: the specular map, a Blinn-Phong
 //! colour, can darken glTF's dielectric highlight and not brighten it; the normal map, the mask and the second and
 //! third layers are not lowered (the normal map's green orientation is not established and how the mask and the vertex
-//! colour weight the layers is not read); an additive Material (blend 6) is drawn alpha-blended and unlit, its
+//! colour weight the layers is not read); a Material that holds any of those layers is marked to ignore its vertex
+//! colour (a layered Material's vertex colours are saturated and mostly not grey, 58% of 497,307 vertices of level 01,
+//! against 13% of 801,135 of the others: weights, which drawn as a colour paint magenta and green across rocks and
+//! roofs), so it draws as its diffuse layer; an additive Material (blend 6) is drawn alpha-blended and unlit, its
 //! additive blend having no form here; every material is one-sided and dielectric.
 
 use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode, PbrMaterial, Shading, Specular, TextureRef, UvTransform, Wrap};
-use primase_core::{Component, Entity, World};
+use primase_core::{Component, Entity, VertexColor, World};
 
 use crate::components::{MaterialRef, MaterialState, Sampler, SlotRef};
 
@@ -116,7 +119,7 @@ impl Pass for LowerShaunwhiteMaterial {
         &[MaterialRef::NAME]
     }
     fn provides(&self) -> &[&'static str] {
-        &[PbrMaterial::NAME]
+        &[PbrMaterial::NAME, VertexColor::NAME]
     }
     fn removes(&self) -> &[&'static str] {
         &[MaterialRef::NAME]
@@ -132,6 +135,16 @@ impl Pass for LowerShaunwhiteMaterial {
             let specular_map = m.slots.get("specular").map(|s| texture_ref(w, s, log));
             if base.is_none() {
                 log.count("materials without a diffuse texture (white)", 1);
+            }
+            let layered = ["mask", "diffuse_b", "diffuse_c"]
+                .iter()
+                .any(|k| m.slots.contains_key(*k));
+            if layered {
+                w.insert(e, VertexColor::Ignored);
+                log.approximate(
+                    "layered materials drawn as their diffuse layer, vertex colour ignored",
+                    1,
+                );
             }
             for slot in ["normal", "mask", "diffuse_b", "specular_b", "diffuse_c"] {
                 if m.slots.contains_key(slot) {
@@ -320,8 +333,14 @@ mod tests {
         plain.specular_level = 1.0;
         plain.specular_color = [1.0; 4];
         let plain = material(&mut w, Some(plain), Some(slot));
+        let layered = material(&mut w, Some(state(0, false, false, 128)), Some(slot));
+        w.get_mut::<MaterialRef>(layered)
+            .unwrap()
+            .slots
+            .insert("diffuse_b".into(), slot);
         let mut log = PassLog::default();
         LowerShaunwhiteMaterial.run(&mut w, &mut log).unwrap();
+        assert_eq!(w.get::<VertexColor>(layered), Some(&VertexColor::Ignored));
 
         let p = w.get::<PbrMaterial>(lit).unwrap();
         assert!((p.roughness - 0.5).abs() < 1e-6, "{}", p.roughness);
@@ -330,6 +349,7 @@ mod tests {
         assert_eq!(spec.color_texture.map(|r| r.texture), Some(t));
         assert_eq!((p.emissive, p.emissive_strength), ([1.0; 3], 6.0));
         assert_eq!(p.emissive_texture, p.base_color_texture);
+        assert!(w.get::<VertexColor>(lit).is_none());
         let q = w.get::<PbrMaterial>(plain).unwrap();
         assert!(q.specular.is_none() && q.emissive_texture.is_none() && q.emissive_strength == 1.0);
         assert!((q.roughness - 0.8409).abs() < 1e-3);
