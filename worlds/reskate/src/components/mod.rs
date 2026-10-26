@@ -1584,6 +1584,42 @@ impl Resource for SkateOverlayStack {
     }
 }
 
+/// What `prepare-reskate-laid-layers` drew as decals ([`crate::passes::laid`]): its settings and each layer material
+/// some of whose triangles it drew as decals, by name. `raise-skate` and `prepare-reskate-blended-surfaces` require it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SkateLaidLayers {
+    /// Metres either side of a surface's plane.
+    pub gap: f64,
+    /// The least share of a mesh's placements a triangle is laid in.
+    pub share: f64,
+    /// By material name.
+    pub layers: Vec<LaidLayer>,
+}
+
+/// A layer material some of whose triangles are drawn as decals ([`SkateLaidLayers`]).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct LaidLayer {
+    /// The material's name.
+    pub material: String,
+    /// Its decal form's name: its own, or its copy's (`<name>_laid`) when it is also drawn where it is not laid.
+    pub decal: String,
+    /// The mesh triangles drawn as decals (not counting placements).
+    pub triangles: u64,
+    /// Their area laid on a surface, summed over the placements, square metres.
+    pub area: f64,
+    /// The largest distance of a laid triangle's centroid from its surface's plane, metres.
+    pub gap: f64,
+    /// Whether it was alpha-tested (its decal form blends by its texture alpha).
+    pub alpha_tested: bool,
+}
+
+impl Resource for SkateLaidLayers {
+    const NAME: &'static str = "skate.laid_layers";
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+}
+
 shown!(
     SkatePartsOff = "skate.parts_off",
     SkateBaseFactor = "skate.base_factor",

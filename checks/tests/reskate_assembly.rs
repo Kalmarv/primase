@@ -73,7 +73,7 @@ fn legion_materials_are_the_same_encoded_or_identified() -> Result<()> {
         "select-lod{form=1}, lower-gta-embedded-collision{foliage=leave-out,river=leave-out}, lower-gta-surfaces, \
          gta-pose-fragments, lower-gta-pbr{night=false,water-colour=48,98,122,190}, gta-winding, gta-tint, gta-terrain-layers, bake-layer-channels, \
          gta-vertex-colours, lower-gta-water{water-colour=48,98,122,190}, normalize-normals, bake-normal-scale, \
-         raise-skate{name=legion,light_scale=0.0003007,unclassified=default}, lower-layered-reskate{overlays=all}, \
+         prepare-reskate-laid-layers, raise-skate{name=legion,light_scale=0.0003007,unclassified=default}, lower-layered-reskate{overlays=all}, \
          lower-tint-reskate, lower-vertex-alpha-reskate, cap-textures{max=256,beyond=filter,normals=box}, prepare-reskate-textures",
     )?;
     let got = Arc::new(Mutex::new(Vec::new()));

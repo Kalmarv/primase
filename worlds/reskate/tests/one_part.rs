@@ -252,7 +252,7 @@ fn the_preparation_passes_run_under_the_pass_manager() {
     let (mut w, _) = unraised();
     let mut registry = PassRegistry::new();
     primase_reskate::register(&mut registry);
-    let program = "raise-skate{name=parts,light_scale=standard,unclassified=leave-out}, \
+    let program = "prepare-reskate-laid-layers, raise-skate{name=parts,light_scale=standard,unclassified=leave-out}, \
                    lower-layered-reskate{overlays=all}, lower-tint-reskate, \
                    lower-vertex-alpha-reskate, prepare-reskate-floor{min_height=100,stub_below=250}, \
                    clip-reskate-region{x0=0,y0=0,x1=512,y1=256,apron=30}, prepare-reskate-grinds, \

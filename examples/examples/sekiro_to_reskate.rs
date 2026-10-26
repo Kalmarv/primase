@@ -26,7 +26,7 @@ use primase_reskate::components::{CollisionSurfaces, CollisionWeld};
 use primase_reskate::passes::{
     ClipReskateRegion, LightCalibration, OceanMaterials, PauseColour, PauseDrawing, PauseExtent, PauseLeaveOut,
     PauseSource, PlaceReskateSpawn, PlanReskateBlendBudget, PrepareReskateBlendOrder, PrepareReskateCollision,
-    PrepareReskateFloor, PrepareReskateGrinds, PrepareReskateOverlays, PrepareReskatePauseMap, PrepareReskateTextures,
+    PrepareReskateFloor, PrepareReskateGrinds, PrepareReskateLaidLayers, PrepareReskateOverlays, PrepareReskatePauseMap, PrepareReskateTextures,
     PrepareReskateUvRepeats, PrepareReskateWater, RaiseOptions, RaiseSkate, RepeatBlended, RepeatDecals,
     SnapReskateMarkers, SummarizeReskateMap, Unclassified, WaterExtent,
 };
@@ -76,6 +76,8 @@ fn main() -> Result<()> {
         passes: vec![
             Box::new(NormalizeNormals),
             Box::new(DropFromSoftTextureTransforms::new()),
+            // layers laid on a surface drawn as decals (raise-skate requires it)
+            Box::new(PrepareReskateLaidLayers::default()),
             Box::new(RaiseSkate::new(RaiseOptions::new("ashina", LightCalibration::Standard, Unclassified::LeaveOut)?)),
             Box::new(ClipReskateRegion::new(region, 30.0)?),
             Box::new(PrepareReskateFloor::new(100.0, 250.0)?),

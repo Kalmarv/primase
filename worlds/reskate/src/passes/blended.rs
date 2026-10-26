@@ -3,7 +3,9 @@
 //! material to the stock decal/blend shader pair, which skate does not draw as standalone world geometry (a blended
 //! tree canopy vanishes); an alpha-tested one compiles to the cutout programs and draws. So a blended PBR material that
 //! is neither a decal (drawn over the surface beneath it, which skate's decal path draws: `core.draw_order`'s decal
-//! layer) nor water (`core.material_usage` water) is drawn as a mask at the stated cutoff: soft edges become hard.
+//! layer) nor water (`core.material_usage` water) is drawn as a mask at the stated cutoff: soft edges become hard. It
+//! runs after `prepare-reskate-laid-layers` (it requires that pass's `skate.laid_layers`), so a blended layer laid on a
+//! surface is a decal by then and stays blended.
 //!
 //! A material's alpha is uniform when it is its base colour factor's alpha, times its base colour texture's when that
 //! is the same at every texel the material's primitives can sample, at every level they sample (an atlas transparent
@@ -508,8 +510,10 @@ impl Pass for PrepareReskateBlendedSurfaces {
         }
         o
     }
+    /// The layers laid on a surface judged first (`prepare-reskate-laid-layers`): they are decals then, and stay
+    /// blended here.
     fn requires(&self) -> &[&'static str] {
-        &["pbr.material"]
+        &["pbr.material", "skate.laid_layers"]
     }
     fn modifies(&self) -> &[&'static str] {
         &["pbr.material"]

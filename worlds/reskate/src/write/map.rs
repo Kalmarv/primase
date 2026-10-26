@@ -137,10 +137,10 @@ impl BuildReport {
 pub fn target() -> primase_core::pass::Target {
     use crate::components::{
         SkateBaseFactor, SkateBlendBudget, SkateBlendChains, SkateCollision, SkateCollisionPlan,
-        SkateFloorPlan, SkateForm, SkateGrindCurve, SkateGrindPrism, SkateLight, SkateMapSummary,
-        SkateMarker, SkateMarkerSnaps, SkateMaterial, SkateOverlayStack, SkateParts, SkatePartsOff,
-        SkatePlacement, SkatePrototype, SkateRegionClip, SkateRock, SkateScene, SkateSoup, SkateTexture,
-        SkateWater,
+        SkateFloorPlan, SkateForm, SkateGrindCurve, SkateGrindPrism, SkateLaidLayers, SkateLight,
+        SkateMapSummary, SkateMarker, SkateMarkerSnaps, SkateMaterial, SkateOverlayStack, SkateParts,
+        SkatePartsOff, SkatePlacement, SkatePrototype, SkateRegionClip, SkateRock, SkateScene, SkateSoup,
+        SkateTexture, SkateWater,
     };
     use crate::passes::layered::{BlendOpacity, VertexBlend};
     use crate::passes::pause_map::{SkatePauseImage, SkatePausePicture};
@@ -210,6 +210,7 @@ pub fn target() -> primase_core::pass::Target {
         .legal(SkateMarkerSnaps::NAME)
         .legal(crate::components::SkateRepeatClipping::NAME)
         .legal(SkateOverlayStack::NAME)
+        .legal(SkateLaidLayers::NAME)
         .legal(SkateBlendChains::NAME)
         .legal(SkateBlendBudget::NAME)
         // the map's summary is taken in through the budget planned from it (its basis is checked on writing)

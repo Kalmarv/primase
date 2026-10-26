@@ -10,6 +10,7 @@ pub mod floor;
 pub mod grind_curves;
 pub mod grinds;
 pub mod ground_markers;
+pub mod laid;
 pub mod layered;
 mod layered_lower;
 pub mod layout;
@@ -103,6 +104,7 @@ pub use floor::{
 pub use grind_curves::{LOWER_RESKATE_GRIND_CURVES, LowerReskateGrindCurves};
 pub use grinds::{PREPARE_RESKATE_GRINDS, PrepareReskateGrinds};
 pub use ground_markers::{GROUND_RESKATE_MARKERS, GroundReskateMarkers};
+pub use laid::{PREPARE_RESKATE_LAID_LAYERS, PrepareReskateLaidLayers};
 pub use layered_lower::LowerLayeredPbr;
 pub use layout::{SUMMARIZE_RESKATE_LAYOUT, SummarizeReskateLayout};
 pub use lights::{

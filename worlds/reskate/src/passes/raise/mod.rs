@@ -50,6 +50,9 @@
 //!   in parts;
 //! - the `skate.scene` resource, named by the caller.
 //!
+//! It runs after `prepare-reskate-laid-layers` (it requires that pass's `skate.laid_layers`), so the layers a world
+//! lays on its surfaces are decals by the time they are raised.
+//!
 //! It chooses no floor, spawn or region: those are the program's (`place-spawn` at selection, the writer's floor and
 //! region options) and run apart from raising. It requires no light, collision or marker: a world without them raises
 //! without them.
@@ -1067,6 +1070,11 @@ impl primase_core::pass::Pass for RaiseSkate {
     }
     fn options(&self) -> primase_core::pass::Options {
         self.options.options()
+    }
+    /// The layers laid on a surface judged first (`prepare-reskate-laid-layers`): a layer raised before that is drawn
+    /// in its surface's plane with depth write, and fights it.
+    fn requires(&self) -> &[&'static str] {
+        &["skate.laid_layers"]
     }
     fn provides(&self) -> &[&'static str] {
         &[

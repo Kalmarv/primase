@@ -227,8 +227,10 @@ fn check_chain_objects(
             continue;
         }
         match stem.rsplit_once("_v") {
-            Some((group, ar)) if ar.len() == 2 && ar.bytes().all(|c| c.is_ascii_digit()) => {
-                let (axis, rank) = (ar.as_bytes()[0] - b'0', ar.as_bytes()[1] - b'0');
+            // `_v<axis><rank>`: one axis digit, then the rank (`blend_order`'s ranks pass 9 where decals overlap
+            // many others)
+            Some((group, ar)) if ar.len() >= 2 && ar.bytes().all(|c| c.is_ascii_digit()) => {
+                let (axis, rank) = (ar.as_bytes()[0] - b'0', ar[1..].parse::<u8>().unwrap());
                 chain_mats.insert(mat.to_owned());
                 let prev = ranks
                     .entry((group.to_owned(), axis))
@@ -339,8 +341,9 @@ fn layered_terrain_lowers_to_pbr_keeping_every_triangle() -> Result<()> {
 #[test]
 fn layered_terrain_builds_with_vertex_blend_overlays() -> Result<()> {
     let m = PassManager::new(registry());
-    let raised =
-        format!("{LOWERED}, raise-skate{{name=vespucci,light_scale=0.0003007,unclassified=default}}");
+    let raised = format!(
+        "{LOWERED}, prepare-reskate-laid-layers, raise-skate{{name=vespucci,light_scale=0.0003007,unclassified=default}}"
+    );
     let Some(mut w) = vespucci(&m, &raised)? else {
         return Ok(());
     };

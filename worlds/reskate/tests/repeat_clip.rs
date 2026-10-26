@@ -63,7 +63,7 @@ fn world(area: f32, uv: [[f32; 2]; 3], scale: f32) -> (World, Entity, Entity) {
     let mut reg = PassRegistry::new();
     primase_reskate::register(&mut reg);
     let pipe = reg
-        .parse("raise-skate{name=measured,light_scale=standard,unclassified=leave-out}")
+        .parse("prepare-reskate-laid-layers, raise-skate{name=measured,light_scale=standard,unclassified=leave-out}")
         .unwrap();
     PassManager::new(reg)
         .run(&mut w, &pipe, &mut RunReport::default())
