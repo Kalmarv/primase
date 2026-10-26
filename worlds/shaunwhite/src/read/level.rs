@@ -127,6 +127,18 @@ pub fn read_level(level: &Path, shared: &[PathBuf]) -> Result<(World, Report)> {
             }
         }
         if d.objects.first().map(|o| o.class) != Some(GRID_CELL_DATA_BLOCK) {
+            // the world root entry holds Entities of its own: the player spawners of the world's missions
+            for o in d.objects.iter().filter(|o| o.class == scene::ENTITY) {
+                let body = d.resource.get(o.body.clone()).unwrap_or_default();
+                let Ok(entity) = scene::Entity::parse(body) else {
+                    bump("root entities not read".into());
+                    continue;
+                };
+                if let Some(kind) = markers::kind(&o.name, &entity.components) {
+                    place_marker(&mut world, frame, &entity, &o.name, kind);
+                    bump(format!("markers in the root entry: {kind}"));
+                }
+            }
             continue;
         }
         for o in d.objects.iter().filter(|o| o.class == scene::ENTITY) {
@@ -139,29 +151,11 @@ pub fn read_level(level: &Path, shared: &[PathBuf]) -> Result<(World, Report)> {
                 }
             };
             bump("entities".into());
-            let m = entity.matrix;
-            let t = Transform {
-                cols: [
-                    [m[0], m[1], m[2]],
-                    [m[4], m[5], m[6]],
-                    [m[8], m[9], m[10]],
-                    [m[12], m[13], m[14]],
-                ],
-            };
+            let t = matrix_transform(&entity);
             // an Entity that marks a place (a start position, a spawn node) is a marker at its matrix
             let kind = markers::kind(&o.name, &entity.components);
             if let Some(kind) = kind {
-                let e = world.spawn();
-                world.insert(e, frame.transform(&t));
-                world.insert(
-                    e,
-                    Marker {
-                        kind: kind.into(),
-                        ground: None,
-                        yaw: None,
-                    },
-                );
-                world.insert(e, Name(o.name.clone()));
+                place_marker(&mut world, frame, &entity, &o.name, kind);
                 bump(format!("markers: {kind}"));
             } else if entity.visuals.is_empty() {
                 bump("entities with neither a Visual nor a marker (no visual placement)".into());
@@ -246,6 +240,34 @@ pub fn read_level(level: &Path, shared: &[PathBuf]) -> Result<(World, Report)> {
         report.push(("shaunwhite".into(), format!("{k}: {n}")));
     }
     Ok((world, report))
+}
+
+/// An Entity's GlobalMatrix as a transform (row vectors: the three axes, then the translation).
+fn matrix_transform(entity: &scene::Entity) -> Transform {
+    let m = entity.matrix;
+    Transform {
+        cols: [
+            [m[0], m[1], m[2]],
+            [m[4], m[5], m[6]],
+            [m[8], m[9], m[10]],
+            [m[12], m[13], m[14]],
+        ],
+    }
+}
+
+/// A `core.marker` of `kind` named `name` at the Entity's matrix.
+fn place_marker(world: &mut World, frame: SourceFrame, entity: &scene::Entity, name: &str, kind: &str) {
+    let e = world.spawn();
+    world.insert(e, frame.transform(&matrix_transform(entity)));
+    world.insert(
+        e,
+        Marker {
+            kind: kind.into(),
+            ground: None,
+            yaw: None,
+        },
+    );
+    world.insert(e, Name(name.to_owned()));
 }
 
 /// An Entity's skate guidance as curves: one entity per chain ([`guidance::GuidanceSystem::chains`]) with its

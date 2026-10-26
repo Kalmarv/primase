@@ -29,6 +29,9 @@ pub const GRID_CELL_DATA_BLOCK: u32 = 0xAC2B_BF68;
 /// The class of a spawn node's component (`0xF63C9D7F`; the name `SpawnPoint` is the class's in later games of the
 /// engine family, where the hash is named: this game's data does not name it).
 pub const SPAWN_POINT: u32 = 0xF63C_9D7F;
+/// The class of a player spawner's component (`0xE74CB43D`, CRC-32 of `PlayerSpawner`, which the data names as it names
+/// `Entity`: a world's missions each put the skater down at one, in its cells and in its root entry).
+pub const PLAYER_SPAWNER: u32 = 0xE74C_B43D;
 /// Classes a Visual can show besides a Mesh, a LODSelector and a light: a particle system (effects: checkpoints,
 /// collectibles, the collision dust), a DynamicMesh (an 18-byte body: its vertices are made at run time, the banners and
 /// flags), a RealTreeMesh (native tree data, the three urban tree species) and the shaping mechanic's free-form shape

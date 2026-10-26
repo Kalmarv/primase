@@ -187,6 +187,19 @@ fn level_01_reads_and_lowers() {
             .iter()
             .any(|(n, k)| n == "Q01_Intro_FinalPlayerPos" && k == "start")
     );
+    // the one PlayerSpawner component of the level's cells (D01_C06_Spawner, translation (-57.74, 160.73, -1.40) read
+    // from the Entity's matrix by a separate census) is a start by its class: its name has no start text
+    let (e, _) = w
+        .iter::<Name>()
+        .find(|(e, n)| n.0 == "D01_C06_Spawner" && w.has::<Marker>(*e))
+        .expect("the player spawner of cell 01885");
+    assert_eq!(w.get::<Marker>(e).unwrap().kind, "start");
+    let want = SourceFrame::ENU.point([-57.74, 160.73, -1.40]);
+    let at = w.get::<Transform>(e).unwrap().cols[3];
+    assert!(
+        at.iter().zip(want).all(|(a, b)| (a - b).abs() < 0.01),
+        "{at:?} against {want:?}"
+    );
 
     let collision_placements = w.iter::<CollisionPlacedBy>().count();
     assert!(collision_placements > 2000, "{collision_placements}");
