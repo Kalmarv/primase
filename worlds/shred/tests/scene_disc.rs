@@ -1,11 +1,13 @@
-//! The disc's level archives: manifest from MAIN.DB and the archives' names, SCP nodes and spot chunks, spawns.
+//! The disc's level archives: manifest from MAIN.DB and the archives' names, SCP nodes and spot chunks, spawns,
+//! splines and lights.
 //! Counts are those of the recon census (`scratch/scene`), recounted here by this reader.
 use primase_core::{Marker, frame::SourceFrame};
 use primase_shred::{
-    components::Spot,
+    components::{SceneLight, Spline, Spot},
     read::{
         level,
         manifest::{self, Difficulty, Manifest},
+        names,
         pak::Pak,
         scp_tables,
     },
@@ -212,6 +214,18 @@ fn manifest_nodes_spot_chunks_and_spawns() {
     let mut total = [0usize; 6];
     let mut unnamed = std::collections::BTreeMap::<u32, usize>::new();
     let mut undecoded_sections = 0;
+    // splines by (section type, low flags), lights by kind code, names given
+    let mut spline_classes = std::collections::BTreeMap::<(u32, u32), usize>::new();
+    let mut light_kinds = std::collections::BTreeMap::<u32, usize>::new();
+    let mut rail_surfaces = std::collections::BTreeMap::<u32, usize>::new();
+    let (mut named_guides, mut named_rails) = (0usize, 0usize);
+    let surface_ids: std::collections::BTreeSet<i64> = db
+        .table("surfaces")
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| r.rowid)
+        .collect();
     for Level {
         name: level_name,
         archives: n_paks,
@@ -228,8 +242,40 @@ fn manifest_nodes_spot_chunks_and_spawns() {
         assert_eq!(files.len(), n_paks, "{level_name} archives");
         let by_name: std::collections::BTreeMap<&str, &Pak> = refs.iter().copied().collect();
         let level_paks: Vec<(&str, &Pak)> = files.iter().map(|f| (f.as_str(), by_name[f.as_str()])).collect();
-        let (world, r) = level::read_level(&level_paks, SourceFrame::WORLD).unwrap();
+        let (mut world, r) = level::read_level(&level_paks, SourceFrame::WORLD).unwrap();
         assert!(world.verify_components().is_empty(), "{level_name}");
+        for (_, sp) in world.iter::<Spline>() {
+            *spline_classes
+                .entry((sp.flags >> 16, sp.flags & 0xffff))
+                .or_default() += 1;
+            if sp.flags >> 16 == 0 {
+                *rail_surfaces.entry(sp.surface).or_default() += 1;
+                assert!(
+                    sp.surface == 0 || surface_ids.contains(&i64::from(sp.surface)),
+                    "{level_name}: rail candidate surface {}",
+                    sp.surface
+                );
+            } else {
+                assert_eq!((sp.words, sp.surface), ([0, 0], 0), "{level_name}");
+            }
+            assert_eq!(sp.counts[0] as usize, sp.params.len());
+        }
+        for (_, l) in world.iter::<SceneLight>() {
+            *light_kinds.entry(l.kind).or_default() += 1;
+        }
+        assert_eq!(r.lights, world.iter::<SceneLight>().count());
+        assert_eq!(r.light_kinds.values().sum::<usize>(), r.lights);
+        assert_eq!(r.splines, r.ai_paths + r.guides + r.rail_candidates);
+        assert_eq!(r.splines, world.iter::<Spline>().count());
+        let named = names::name_splines(&mut world, &[]);
+        named_guides += named;
+        let rails = names::flythrough_rails(&db, &{
+            let mut c = level_name.chars();
+            c.next().unwrap().to_ascii_uppercase().to_string() + c.as_str()
+        })
+        .unwrap()
+        .unwrap_or_default();
+        named_rails += names::name_splines(&mut world, &rails) - named;
         let spots: Vec<_> = world.iter::<Spot>().collect();
         let marked = world.iter::<Marker>().count();
         assert_eq!(
@@ -280,8 +326,51 @@ fn manifest_nodes_spot_chunks_and_spawns() {
         "SHRED scene census: [nodes, placements, spot chunks, teleports, drop-spot rows, rows naming a chunk] = {total:?}; \
          {undecoded_sections} undecoded blob sections; unnamed spot classes {unnamed:08x?}"
     );
+    eprintln!(
+        "SHRED spline/light census: splines by (type, flags) {spline_classes:?}; lights by kind {light_kinds:?};          named by NavGuide scheme {named_guides}, by flythrough rails {named_rails}"
+    );
     assert_eq!(total, [166_089, 167_503, 53_015, 538, 194, 183]);
-    assert_eq!(undecoded_sections, 605);
+    // 605 before splines (186) and lights (55) were read
+    assert_eq!(undecoded_sections, 364);
+    // 29,560 splines: the recon census's classes (SCENE.md's 31,105 total does not reconcile with it)
+    assert_eq!(
+        spline_classes.into_iter().collect::<Vec<_>>(),
+        [
+            ((0, 0x80), 1_054),
+            ((0, 0x81), 1_173),
+            ((1, 0x80), 66),
+            ((1, 0x81), 2_017),
+            ((9, 0), 25_009),
+            ((9, 16_900), 78),
+            ((9, 17_002), 45),
+            ((9, 17_073), 40),
+            ((9, 49_816), 78),
+        ]
+    );
+    assert_eq!(
+        light_kinds.into_iter().collect::<Vec<_>>(),
+        [(0, 5_251), (1, 23), (3, 4), (4, 23), (7, 4_079), (8, 398)]
+    );
+    assert_eq!((named_guides, named_rails), (1_897, 186));
+    // the rail candidates' surface ids as the recon census counted them
+    assert_eq!(
+        rail_surfaces.into_iter().collect::<Vec<_>>(),
+        [
+            (0, 666),
+            (2, 34),
+            (3, 576),
+            (11, 381),
+            (14, 13),
+            (32, 290),
+            (37, 5),
+            (39, 23),
+            (40, 12),
+            (41, 141),
+            (43, 43),
+            (46, 19),
+            (53, 24)
+        ]
+    );
     assert_eq!(
         unnamed.into_iter().collect::<Vec<_>>(),
         [

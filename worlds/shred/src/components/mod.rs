@@ -69,6 +69,47 @@ pub struct Spot {
 }
 component!(Spot, "shred.spot");
 
+/// One SCP spline as authored, beside a core `Curve` of its points (`kind` there: `ai_path`, `guide` or
+/// `rail_candidate`; the section type says which).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Spline {
+    pub pak: String,
+    pub quartet: Vec<u8>,
+    /// The section's flags and offset, and the spline's index in it.
+    pub flags: u32,
+    pub section: usize,
+    pub index: u32,
+    /// sdbm of the spline's name (`core.name` when a name is known to hash to it).
+    pub id: u32,
+    pub parent: u32,
+    pub counts: [u32; 2],
+    pub words: [u32; 2],
+    /// A `MAIN.DB` `surfaces.id` for rail candidates, 0 for the rest.
+    pub surface: u32,
+    pub matrix: [f32; 16],
+    /// The stored per-point values, increasing from zero (not arc length).
+    pub params: Vec<f32>,
+}
+component!(Spline, "shred.spline");
+
+/// One SCP light record as authored: the entity's transform is the record's matrix. Not a core light: the units,
+/// range, cone and shining axis of the game's lights are not established.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SceneLight {
+    pub pak: String,
+    pub quartet: Vec<u8>,
+    pub section: usize,
+    pub index: u32,
+    pub kind: u32,
+    pub rgba: [f32; 4],
+    pub name: u32,
+    pub params: [f32; 3],
+    pub links: [u32; 4],
+    pub tail_words: [u32; 2],
+    pub buffer: [u8; 16],
+}
+component!(SceneLight, "shred.light");
+
 /// Deferred prototype dependencies, retained before its geometry is loaded.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ModelDependencies(pub Vec<primase_core::Entity>);

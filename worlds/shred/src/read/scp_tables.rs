@@ -8,9 +8,11 @@
 //! The blob is a chain of sections `{flags, size, count, data offset}`: `size` runs to the next section, the data
 //! starts `data offset` bytes in (0x10, except 0x20 to 0x40 for type 0xE), the type is `flags >> 16` (the low half
 //! varies and is kept), and the chain ends in a 16-byte record `{junk, 8, 0, 0}`. Type 2 is the spot chunks.
-//! Every other type is listed with its flags, size and count and reported unread: the splines and lights are the
-//! next chunk's, the rest are not decoded.
+//! Types 0, 1 and 9 (flags 0x80/0x81 for 0 and 1) are splines (`scp_splines`) and type 4 is lights (`scp_lights`).
+//! Every other type is listed with its flags, size and count and reported unread.
 use super::scene::Unread;
+use super::scp_lights::{self, SceneLight};
+use super::scp_splines::{self, Spline, SplineKind};
 use crate::{Result, invalid};
 use primase_bytes::{Endian, Field, View};
 use primase_core::Transform;
@@ -19,6 +21,7 @@ use primase_core::Transform;
 const NODE: usize = 0x70;
 const PLACEMENT: usize = 0x30;
 const SECTION_SPOTS: u32 = 2;
+const SECTION_LIGHTS: u32 = 4;
 const CHUNK: usize = 0x200;
 const CHUNK_MATRIX: usize = 64;
 
@@ -95,6 +98,8 @@ pub struct Tables {
     pub sections: Vec<Section>,
     pub chain: Chain,
     pub spots: Vec<SpotChunk>,
+    pub splines: Vec<Spline>,
+    pub lights: Vec<SceneLight>,
 }
 
 /// The spot classes whose names are proven: each hash is sdbm of the name, and the engine's `AddSpotChunk_*` list
@@ -313,6 +318,12 @@ pub fn decode(scp: &[u8]) -> Result<(Tables, Vec<Unread>)> {
                 bytes: s.size,
                 reason: "spot section whose size is not 0x10 + count * 576 or whose flags carry low bits",
             });
+        } else if let Some(kind) = SplineKind::of_section(s.flags) {
+            tables
+                .splines
+                .extend(scp_splines::decode(scp, s, kind, &mut unread)?);
+        } else if s.kind() == SECTION_LIGHTS {
+            tables.lights.extend(scp_lights::decode(scp, s, &mut unread)?);
         } else {
             unread.push(Unread {
                 file: "scp",

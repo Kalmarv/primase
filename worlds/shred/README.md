@@ -162,7 +162,7 @@ and radii and reverses winding.
 world-matrix table and the blob section chain. A section is `{flags, size, count, data offset}`; the data offset is
 0x10 except 0x20-0x40 for type 0xE, and the chain ends in a 16-byte `{junk, 8, 0, 0}` record: all 411 level SCPs with a
 blob walk to it (136 have no blob). Type 2 sections are spot chunks (0x200 bytes + a 64-byte world matrix each); every
-other section is listed with its flags and reported unread until its owner decodes it (splines, lights...). Nodes stay
+other section is listed with its flags and reported unread until a reader decodes it (types 1, 3, 5, a, c, e and 10 are not). Nodes stay
 in `Scene::tables` and are counted in `LevelReport`; `read_level` puts each spot chunk in the World as an entity with
 its world transform and `shred.spot` (class hash and, for the 14 proven class names in `scp_tables::CLASS_NAMES`, the
 name; shape; name hash; ids; node index). `Teleport` chunks also carry a core `Marker` (kind `teleport`): the class
@@ -180,3 +180,27 @@ or lower-cased): 183 of the 194 rows resolve, all to `Teleport` chunks.
 
 `scene_disc` recounts every level from the disc: 547 SCPs, 166,089 nodes, 167,503 placements, 53,015 spot chunks
 (538 Teleport), no chain stop, and the per-level spawn resolution.
+
+### Splines and lights
+
+Three section kinds hold splines (`read::scp_splines`, 56-byte records whose pointers are section-relative; the
+points are already in level space and the record's matrix is not applied): type 9 is the `ai_path` network (25,250),
+type 1 with low flags 0x80/0x81 the `guide` ribbons and flythrough cameras (2,083) and type 0 with 0x80/0x81 the
+`rail_candidate` splines (2,227). Each is an entity with a core `Curve` of that kind (only with two or more points)
+and `shred.spline` (id, parent, counts, words, surface id, matrix, per-point parameters). The recount over the disc is
+29,560 splines; SCENE.md's 31,105 total does not reconcile with it.
+
+Rail candidates are not called rails. The evidence for it: record word 9 is a MAIN.DB `surfaces.id` (0 or a row of the
+table, for all 2,227; the snow surfaces occur only on the snow levels), the AI paths and guides have words 7, 8 and 9
+all zero, and the DB's GRIND-task volumes contain candidate points more often (76% of 212) than other task volumes
+(39% of 803). Against it, no engine code was found that reads the section flags: the grind-surface setter
+(`GRIND_SURFACE` when the skater's physics state is RAIL) takes its surface key from a collision hit record. The
+hypothesis (grind rails, surface from `surfaces`) is stated, not proven.
+
+`read::names` names splines whose id is sdbm of a `NavGuide_<A..ZZ><0..39>` name (1,897 on the disc) or of a
+`FLYTHROUGH_RAIL` name from `<Level>_sessions` (186), as written or lower-cased; the rest stay unnamed.
+
+Type 4 sections are light records (`read::scp_lights`, 80 bytes + a 64-byte matrix each): colour, name hash, three
+parameters, a kind code (0: 5,251; 7: 4,079; 8: 398; 1: 23; 4: 23; 3: 4), links and a leftover text buffer. They are
+`shred.light` entities with the record's transform, not core lights: units, range, cone and the shining axis are not
+established.

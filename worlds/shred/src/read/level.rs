@@ -2,15 +2,17 @@
 use super::{
     pak::Pak,
     scene::{self, Scene, Unread},
+    scp_splines::SplineKind,
     scp_tables::{self, Chain},
 };
 use crate::{
     Result,
-    components::{MaterialId, MeshId, RefusedMesh, Spot, VertexInput, VertexInputs},
+    components::{MaterialId, MeshId, RefusedMesh, SceneLight, Spline, Spot, VertexInput, VertexInputs},
     invalid,
 };
 use primase_core::{
-    Entity, Instance, Marker, Mesh, Primitive, Semantic, Source, Stream, Topology, World, frame::SourceFrame,
+    Curve, Entity, Instance, Marker, Mesh, Primitive, Semantic, Source, Stream, Topology, World,
+    frame::SourceFrame,
 };
 use std::collections::BTreeMap;
 
@@ -30,6 +32,15 @@ pub struct LevelReport {
     pub teleports: usize,
     /// Spot chunks whose class hash matches no proven name, by hash.
     pub unnamed_classes: BTreeMap<u32, usize>,
+    /// Splines read, by section type, and those too short for a core curve.
+    pub splines: usize,
+    pub ai_paths: usize,
+    pub guides: usize,
+    pub rail_candidates: usize,
+    pub short_splines: usize,
+    /// Light records, as `shred.light` entities, by kind code.
+    pub lights: usize,
+    pub light_kinds: BTreeMap<u32, usize>,
     /// SCPs whose blob section chain does not end in the end record.
     pub chain_stops: usize,
     pub unread: Vec<(String, Vec<u8>, Unread)>,
@@ -61,6 +72,19 @@ impl LevelReport {
             format!(
                 "{} nodes; {} spot chunks ({} teleport markers, facing unverified: markers face local +Z by core's                  convention); {} section chains stopped early",
                 self.nodes, self.spots, self.teleports, self.chain_stops
+            ),
+        ));
+        lines.push((
+            "shred splines".into(),
+            format!(
+                "{} splines ({} ai paths, {} guides, {} rail candidates: probable grind rails, not proven); \
+                 {} with fewer than two points have no curve; {} lights as data, not core lights",
+                self.splines,
+                self.ai_paths,
+                self.guides,
+                self.rail_candidates,
+                self.short_splines,
+                self.lights
             ),
         ));
         for (class, n) in &self.unnamed_classes {
@@ -390,6 +414,106 @@ pub fn read_level(paks: &[(&str, &Pak)], frame: SourceFrame) -> Result<(World, L
                     Some(_) => {}
                     None => *report.unnamed_classes.entry(chunk.class).or_default() += 1,
                 }
+            }
+            for spline in tables.splines {
+                let e = world.spawn();
+                let points: Vec<[f32; 3]> = spline.points.iter().map(|&p| frame.point(p)).collect();
+                if points.iter().flatten().any(|x| !x.is_finite()) {
+                    return Err(invalid(
+                        spline.section,
+                        "spline point overflow in requested frame",
+                    ));
+                }
+                report.splines += 1;
+                let kind = match spline.kind {
+                    SplineKind::AiPath => {
+                        report.ai_paths += 1;
+                        "ai_path"
+                    }
+                    SplineKind::Guide => {
+                        report.guides += 1;
+                        "guide"
+                    }
+                    SplineKind::RailCandidate => {
+                        report.rail_candidates += 1;
+                        "rail_candidate"
+                    }
+                };
+                if points.len() >= 2 {
+                    world.insert(
+                        e,
+                        Curve {
+                            kind: kind.into(),
+                            points,
+                            closed: false,
+                            tangents: None,
+                            up: None,
+                        },
+                    );
+                } else {
+                    report.short_splines += 1;
+                }
+                world.insert(
+                    e,
+                    Source(format!(
+                        "{label}:{:?}:spline:{:#x}:{}",
+                        String::from_utf8_lossy(&name),
+                        spline.section,
+                        spline.index
+                    )),
+                );
+                world.insert(
+                    e,
+                    Spline {
+                        pak: label.into(),
+                        quartet: name.clone(),
+                        flags: spline.flags,
+                        section: spline.section,
+                        index: spline.index,
+                        id: spline.id,
+                        parent: spline.parent,
+                        counts: spline.counts,
+                        words: spline.words,
+                        surface: spline.surface,
+                        matrix: spline.matrix,
+                        params: spline.params,
+                    },
+                );
+            }
+            for light in tables.lights {
+                let transform = frame.transform(&light.world);
+                if transform.cols.iter().flatten().any(|x| !x.is_finite()) {
+                    return Err(invalid(light.section, "light matrix overflow in requested frame"));
+                }
+                let e = world.spawn();
+                world.insert(e, transform);
+                world.insert(
+                    e,
+                    Source(format!(
+                        "{label}:{:?}:light:{:#x}:{}",
+                        String::from_utf8_lossy(&name),
+                        light.section,
+                        light.index
+                    )),
+                );
+                report.lights += 1;
+                *report.light_kinds.entry(light.kind).or_default() += 1;
+                world.insert(
+                    e,
+                    SceneLight {
+                        pak: label.into(),
+                        quartet: name.clone(),
+                        section: light.section,
+                        index: light.index,
+                        kind: light.kind,
+                        rgba: light.rgba,
+                        name: light.name,
+                        params: light.params,
+                        links: light.links,
+                        tail_words: light.tail_words,
+                        buffer: light.buffer,
+                    },
+                );
             }
         }
     }
