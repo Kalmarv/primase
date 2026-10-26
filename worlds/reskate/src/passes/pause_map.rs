@@ -9,8 +9,10 @@
 //!   (`region`; an error without one), the map's own content bounds as the writer measures them (`content`), the
 //!   play space (`collision` with `max-extent=M`: the box of every placed collision soup no wider than M metres on any
 //!   axis, [`primase_meshops::collision_query::collision_box`], so a level's skyline backdrops stay out of the
-//!   picture; a map converted whole only, the scene's region left alone), or a ground rectangle; padded by 10% and at
-//!   least 50 m high. Two more choices, both required:
+//!   picture; with `max-gap=G`, of the largest group of those soups joined by ground gaps of at most G metres
+//!   ([`primase_meshops::collision_query::connected_collision_box`]), so a piece of collision lying far from the
+//!   level stays out too; a map converted whole only, the scene's region left alone), or a ground rectangle;
+//!   padded by 10% and at least 50 m high. Two more choices, both required:
 //!   - `leave-out=shadowless` leaves out the triangles whose material casts no shadow (`skate.material`
 //!     `cast_shadows` false: an indoor level's shell and ceiling, as `lower-reskate-shadows` lowered them), so
 //!     the picture shows the room from above, counted in the writer's report. `leave-out=placements` with
@@ -55,8 +57,10 @@ pub enum PauseExtent {
     Content,
     /// A ground rectangle `[east0, north0, east1, north1]`.
     Rect([f32; 4]),
-    /// The play space: the box of every placed collision soup no wider than `max_extent` metres on any axis.
-    Collision { max_extent: f32 },
+    /// The play space: the box of every placed collision soup no wider than `max_extent` metres on any axis; with
+    /// `max_gap`, of the largest group of them joined by ground gaps of at most that many metres (the pieces of
+    /// collision lying detached from the level left out).
+    Collision { max_extent: f32, max_gap: Option<f32> },
 }
 
 /// Where [`PrepareReskatePauseMap`] takes the picture from.
@@ -140,15 +144,20 @@ impl PrepareReskatePauseMap {
                 };
                 let rect = [num("x0")?, num("y0")?, num("x1")?, num("y1")?];
                 let max_extent = num("max-extent")?;
+                let max_gap = num("max-gap")?;
                 let extent_kind = g.optional_choice::<ExtentKind>("extent");
-                if max_extent.is_some() && extent_kind != Some(ExtentKind::Collision) {
-                    return Err("max-extent goes with extent=collision".into());
+                if (max_extent.is_some() || max_gap.is_some()) && extent_kind != Some(ExtentKind::Collision) {
+                    return Err("max-extent and max-gap go with extent=collision".into());
+                }
+                if max_gap.is_some_and(|m| !m.is_finite() || m < 0.0) {
+                    return Err("max-gap is metres, 0 or more".into());
                 }
                 let extent = match (extent_kind, rect) {
                     (Some(ExtentKind::Collision), [None, None, None, None]) => PauseExtent::Collision {
                         max_extent: max_extent
                             .filter(|m| m.is_finite() && *m > 0.0)
                             .ok_or("extent=collision requires max-extent (metres, above 0)")?,
+                        max_gap,
                     },
                     (Some(ExtentKind::Region), [None, None, None, None]) => PauseExtent::Region,
                     (Some(ExtentKind::Content), [None, None, None, None]) => PauseExtent::Content,
@@ -282,6 +291,13 @@ pub const PREPARE_RESKATE_PAUSE_MAP: PassSpec = PassSpec {
             "required with extent=collision, not taken otherwise",
         ),
         OptionSpec::optional(
+            "max-gap",
+            "100",
+            "metres, 0 or more, with extent=collision: soups whose boxes lie at most this far apart on the ground \
+             join, and the group with the most triangles is the play space",
+            "every soup within max-extent counts, however far from the level",
+        ),
+        OptionSpec::optional(
             "x0",
             "0",
             "metres east: the west edge of the ground rectangle drawn",
@@ -346,9 +362,12 @@ impl Pass for PrepareReskatePauseMap {
                     PauseExtent::Content => {
                         o.insert("extent".into(), ExtentKind::Content.text().into());
                     }
-                    PauseExtent::Collision { max_extent } => {
+                    PauseExtent::Collision { max_extent, max_gap } => {
                         o.insert("extent".into(), ExtentKind::Collision.text().into());
                         o.insert("max-extent".into(), max_extent.to_string());
+                        if let Some(g) = max_gap {
+                            o.insert("max-gap".into(), g.to_string());
+                        }
                     }
                     PauseExtent::Rect(r) => {
                         for (k, v) in ["x0", "y0", "x1", "y1"].into_iter().zip(r) {
@@ -437,14 +456,19 @@ impl Pass for PrepareReskatePauseMap {
                     }
                     PauseExtent::Rect(r) => Some(r),
                     // the play space: a part's soups are not the map's, so a map converted whole only
-                    PauseExtent::Collision { max_extent } => {
+                    PauseExtent::Collision { max_extent, max_gap } => {
                         super::require_whole_map(w, self.name()).map_err(|e| {
                             format!("{e}: extent=collision measures the whole map's collision")
                         })?;
-                        let [lo, hi] = primase_meshops::collision_query::collision_box(
-                            w,
-                            f64::from(max_extent),
-                        )
+                        let max_extent_m = f64::from(max_extent);
+                        let [lo, hi] = match max_gap {
+                            Some(gap) => primase_meshops::collision_query::connected_collision_box(
+                                w,
+                                max_extent_m,
+                                f64::from(gap),
+                            ),
+                            None => primase_meshops::collision_query::collision_box(w, max_extent_m),
+                        }
                         .ok_or_else(|| {
                             format!("extent=collision: no collision soup within {max_extent} m on every axis")
                         })?;
@@ -675,6 +699,51 @@ mod tests {
         let mut missing = opts.clone();
         missing.remove("max-extent");
         assert!(PREPARE_RESKATE_PAUSE_MAP.instance(&missing).is_err());
+    }
+
+    /// extent=collision with max-gap: a small piece 560 m from the rest is left out of the box; the options read
+    /// back; max-gap goes with extent=collision and is not negative.
+    #[test]
+    fn the_play_space_extent_with_a_gap_leaves_out_detached_pieces() {
+        let mut w = World::new();
+        for (x, size, triangles) in [(0.0f32, 60.0f32, 10usize), (140.0, 60.0, 10), (700.0, 20.0, 3)] {
+            let h = size / 2.0;
+            let e = w.spawn();
+            w.insert(
+                e,
+                primase_core::Collision {
+                    positions: vec![[-h, 0.0, -h], [h, 0.0, -h], [h, 0.0, h], [-h, 0.0, h]],
+                    triangles: vec![[0, 2, 1]; triangles],
+                    surfaces: vec![0; triangles],
+                },
+            );
+            let mut t = primase_core::Transform::IDENTITY;
+            t.cols[3] = [x, 0.0, 0.0];
+            w.insert(e, t);
+        }
+        let opts = o(&[
+            ("from", "geometry"),
+            ("height", "720"),
+            ("extent", "collision"),
+            ("max-extent", "400"),
+            ("max-gap", "100"),
+            ("leave-out", "nothing"),
+            ("colour", "mean"),
+        ]);
+        let pass = PREPARE_RESKATE_PAUSE_MAP.instance(&opts).unwrap();
+        assert_eq!(pass.options(), opts);
+        pass.run(&mut w, &mut PassLog::default()).unwrap();
+        assert!(matches!(
+            w.resource::<SkatePausePicture>(),
+            Some(SkatePausePicture::Geometry { extent: Some(r), .. }) if *r == [-30.0, -30.0, 170.0, 30.0]
+        ));
+        let mut bad = opts.clone();
+        bad.remove("extent");
+        bad.remove("max-extent");
+        assert!(PREPARE_RESKATE_PAUSE_MAP.instance(&bad).is_err());
+        let mut negative = opts.clone();
+        negative.insert("max-gap".into(), "-1".into());
+        assert!(PREPARE_RESKATE_PAUSE_MAP.instance(&negative).is_err());
     }
 
     /// From the geometry over the scene's region, its content or a rectangle; from the scene's own image, which must be

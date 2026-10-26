@@ -39,32 +39,103 @@ pub fn at(t: Option<&Transform>, v: [f32; 3]) -> [f64; 3] {
     }
 }
 
+/// One placed collision soup: its box in the core frame and its triangle count.
+struct SoupBox {
+    lo: [f64; 3],
+    hi: [f64; 3],
+    triangles: usize,
+}
+
+/// Every placed soup no wider than `max_extent` metres on any axis: a soup too large on an axis (or with no finite
+/// extent) is not play space.
+fn play_soups(w: &World, max_extent: f64) -> Vec<SoupBox> {
+    let mut out = Vec::new();
+    for (c, t) in placed(w) {
+        let mut lo = [f64::INFINITY; 3];
+        let mut hi = [f64::NEG_INFINITY; 3];
+        for &p in &c.positions {
+            let q = at(t.as_ref(), p);
+            for i in 0..3 {
+                lo[i] = lo[i].min(q[i]);
+                hi[i] = hi[i].max(q[i]);
+            }
+        }
+        if (0..3).any(|i| (hi[i] - lo[i]).is_nan() || hi[i] - lo[i] > max_extent) {
+            continue;
+        }
+        out.push(SoupBox {
+            lo,
+            hi,
+            triangles: c.triangles.len(),
+        });
+    }
+    out
+}
+
+/// The box enclosing `soups`; `None` when there are none.
+fn enclosing<'a>(soups: impl IntoIterator<Item = &'a SoupBox>) -> Option<[[f64; 3]; 2]> {
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    for s in soups {
+        for i in 0..3 {
+            lo[i] = lo[i].min(s.lo[i]);
+            hi[i] = hi[i].max(s.hi[i]);
+        }
+    }
+    (lo[0] <= hi[0]).then_some([lo, hi])
+}
+
 /// The box (min and max corners) of every placed collision soup no wider than `max_extent` metres on any axis: the
 /// play space of a level whose backdrops (skylines, building sides seen from afar) are large soups. `None` when no soup
 /// is left.
 pub fn collision_box(w: &World, max_extent: f64) -> Option<[[f64; 3]; 2]> {
-    let mut lo = [f64::INFINITY; 3];
-    let mut hi = [f64::NEG_INFINITY; 3];
-    for (c, t) in placed(w) {
-        let mut a = [f64::INFINITY; 3];
-        let mut b = [f64::NEG_INFINITY; 3];
-        for &p in &c.positions {
-            let q = at(t.as_ref(), p);
-            for i in 0..3 {
-                a[i] = a[i].min(q[i]);
-                b[i] = b[i].max(q[i]);
+    enclosing(&play_soups(w, max_extent))
+}
+
+/// The box of the largest connected group of placed collision soups no wider than `max_extent` metres on any axis:
+/// soups are joined when the gap between their boxes on the ground plane (x, z) is at most `max_gap` metres, and the
+/// group with the most triangles is taken (a tie goes to the group of the last soup in placement order). Where
+/// [`collision_box`] takes in a small piece lying far from the level, this leaves it out: a level's detached pieces
+/// (another district's streets 300 m off) do not stretch the play space. `None` when no soup is left.
+pub fn connected_collision_box(w: &World, max_extent: f64, max_gap: f64) -> Option<[[f64; 3]; 2]> {
+    let soups = play_soups(w, max_extent);
+    enclosing(largest_group(&soups, max_gap))
+}
+
+/// The gap between two soups' boxes on the ground plane (x, z), metres: 0 where they overlap.
+fn gap(a: &SoupBox, b: &SoupBox) -> f64 {
+    let dx = (a.lo[0] - b.hi[0]).max(b.lo[0] - a.hi[0]).max(0.0);
+    let dz = (a.lo[2] - b.hi[2]).max(b.lo[2] - a.hi[2]).max(0.0);
+    dx.hypot(dz)
+}
+
+/// The group of `soups` joined by gaps of at most `max_gap` with the most triangles.
+fn largest_group(soups: &[SoupBox], max_gap: f64) -> Vec<&SoupBox> {
+    let mut parent: Vec<usize> = (0..soups.len()).collect();
+    fn root(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    for i in 0..soups.len() {
+        for j in i + 1..soups.len() {
+            if gap(&soups[i], &soups[j]) <= max_gap {
+                let (a, b) = (root(&mut parent, i), root(&mut parent, j));
+                parent[a] = b;
             }
         }
-        // a soup too large on an axis (or with no finite extent) is not play space
-        if (0..3).any(|i| (b[i] - a[i]).is_nan() || b[i] - a[i] > max_extent) {
-            continue;
-        }
-        for i in 0..3 {
-            lo[i] = lo[i].min(a[i]);
-            hi[i] = hi[i].max(b[i]);
-        }
     }
-    (lo[0] <= hi[0]).then_some([lo, hi])
+    let mut groups: BTreeMap<usize, Vec<&SoupBox>> = BTreeMap::new();
+    for (i, soup) in soups.iter().enumerate() {
+        let r = root(&mut parent, i);
+        groups.entry(r).or_default().push(soup);
+    }
+    groups
+        .into_values()
+        .max_by_key(|g| g.iter().map(|s| s.triangles).sum::<usize>())
+        .unwrap_or_default()
 }
 
 /// The height of the first collision surface straight below `p` (core frame, +Y up): the highest triangle of any placed
@@ -226,5 +297,59 @@ mod tests {
         assert!((ramp.height - 3.0).abs() < 1e-9 && (ramp.level - 0.5f64.sqrt()).abs() < 1e-9);
         assert_eq!(ground.surface_below([3.0, 2.9, 2.0], 0.05), None);
         assert!(ground.surface_below([3.0, 2.9, 2.0], 0.2).is_some());
+    }
+
+    /// A flat square soup `size` metres across centred on core (x, z) with `triangles` triangles.
+    fn square(w: &mut World, x: f32, z: f32, size: f32, triangles: usize) {
+        let h = size / 2.0;
+        let e = w.spawn();
+        w.insert(
+            e,
+            Collision {
+                positions: vec![[-h, 0.0, -h], [h, 0.0, -h], [h, 0.0, h], [-h, 0.0, h]],
+                triangles: vec![[0, 2, 1]; triangles],
+                surfaces: vec![0; triangles],
+            },
+        );
+        let mut t = Transform::IDENTITY;
+        t.cols[3] = [x, 0.0, z];
+        w.insert(e, t);
+    }
+
+    /// A chain of soups 80 m apart joins; a small piece 300 m past its end is left out; the group with the most
+    /// triangles wins, not the widest; a soup wider than the limit is no play space; with no gap to join over, every
+    /// soup is its own group.
+    #[test]
+    fn the_connected_box_leaves_out_detached_pieces() {
+        let mut w = World::new();
+        for k in 0..4 {
+            square(&mut w, k as f32 * 140.0, 0.0, 60.0, 10);
+        }
+        square(&mut w, 3.0 * 140.0 + 400.0, 0.0, 20.0, 3);
+        assert_eq!(
+            connected_collision_box(&w, 400.0, 100.0),
+            Some([[-30.0, 0.0, -30.0], [450.0, 0.0, 30.0]])
+        );
+        // the plain box takes the stray in
+        assert_eq!(collision_box(&w, 400.0).unwrap()[1][0], 3.0 * 140.0 + 410.0);
+
+        let mut w = World::new();
+        square(&mut w, 0.0, 0.0, 300.0, 4);
+        square(&mut w, 1000.0, 0.0, 10.0, 40);
+        assert_eq!(
+            connected_collision_box(&w, 400.0, 100.0),
+            Some([[995.0, 0.0, -5.0], [1005.0, 0.0, 5.0]])
+        );
+
+        let mut w = World::new();
+        square(&mut w, 0.0, 0.0, 30.0, 2);
+        square(&mut w, 10.0, 0.0, 500.0, 2000);
+        assert_eq!(
+            connected_collision_box(&w, 400.0, 100.0),
+            Some([[-15.0, 0.0, -15.0], [15.0, 0.0, 15.0]])
+        );
+        let mut w = World::new();
+        square(&mut w, 0.0, 0.0, 500.0, 2);
+        assert_eq!(connected_collision_box(&w, 400.0, 100.0), None);
     }
 }
