@@ -39,12 +39,12 @@ impl Pass for LowerShaunwhiteMaterial {
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let all: Vec<(Entity, MaterialRef)> = w.iter::<MaterialRef>().map(|(e, m)| (e, m.clone())).collect();
         for (e, m) in all {
-            let base = m.textures.get("diffuse").copied();
+            let base = m.slots.get("diffuse").map(|s| s.texture);
             if base.is_none() {
                 log.count("materials without a diffuse texture (white)", 1);
             }
             for slot in ["normal", "specular"] {
-                if m.textures.contains_key(slot) {
+                if m.slots.contains_key(slot) {
                     log.omit(&format!("{slot} maps (not lowered)"), 1);
                 }
             }

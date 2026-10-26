@@ -3,6 +3,7 @@
 pub mod collision;
 pub mod level;
 pub mod markers;
+pub mod material;
 pub mod mesh;
 pub mod scene;
 pub mod texture;

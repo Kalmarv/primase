@@ -26,18 +26,15 @@ use primase_core::convert::Report;
 use primase_core::frame::SourceFrame;
 use primase_core::{Entity, Instance, Marker, Mesh, Name, Transform, World};
 
-use crate::components::{MaterialRef, MeshFormat, PlacedBy};
+use crate::components::{MaterialRef, MaterialState, MeshFormat, PlacedBy, Sampler, SlotRef};
 use crate::read::markers;
+use crate::read::material::{self, MATERIAL, Material};
 use crate::read::mesh::{CompiledMesh, MESH};
 use crate::read::scene::{self, GRID_CELL_DATA_BLOCK, LOD_SELECTOR};
 use crate::read::texture::{TEXTURE_MAP_SPEC, TextureMap};
 
 /// The most bytes a block may declare decoded (the largest entry seen decodes to about 38 MB).
 const MAX_DECODED: usize = 1 << 30;
-/// CRC-32 of the Material class's name as Shaun White Skateboarding stores it (`0xB71F6261`).
-pub const MATERIAL: u32 = 0xB71F_6261;
-/// Where a Material body holds its texture specs' ids (the diffuse, normal and specular slots).
-pub const MATERIAL_SLOTS: [(&str, usize); 3] = [("diffuse", 192), ("normal", 233), ("specular", 277)];
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -300,7 +297,12 @@ fn texture(
         return t;
     }
     let read = index.get(id).and_then(|(o, body)| {
-        let read = TextureMap::parse(body).and_then(|t| t.textures());
+        let map = TextureMap::parse(body);
+        let sampler = map.as_ref().ok().map(|t| Sampler {
+            address: t.info.address,
+            filter: t.info.filter,
+        });
+        let read = map.and_then(|t| t.textures());
         match read {
             Ok(mut faces) if !faces.is_empty() => {
                 if faces.len() > 1 {
@@ -309,6 +311,9 @@ fn texture(
                 let e = world.spawn();
                 world.insert(e, faces.swap_remove(0));
                 world.insert(e, Name(o.name.clone()));
+                if let Some(s) = sampler {
+                    world.insert(e, s);
+                }
                 Some(e)
             }
             Ok(_) => None,
@@ -338,29 +343,49 @@ fn material(
     let mut r = MaterialRef {
         id,
         name: String::new(),
-        textures: BTreeMap::new(),
+        state: None,
+        slots: BTreeMap::new(),
+        unread: Vec::new(),
     };
     if let Some((o, body)) = index.get(id)
         && o.class == MATERIAL
     {
         r.name = o.name.clone();
-        for (slot, at) in MATERIAL_SLOTS {
-            let Some(spec) = body
-                .get(at..at + 4)
-                .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-            else {
-                continue;
-            };
-            // a slot holds a TextureMapSpec's id when one exists; its last u32 is the TextureMap's id
-            if let Some((so, sb)) = index.get(spec)
-                && so.class == TEXTURE_MAP_SPEC
-                && let Some(tm) = sb
-                    .get(28..32)
-                    .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-                && let Some(t) = texture(index, tm, world, textures, bump)
-            {
-                r.textures.insert(slot.to_string(), t);
+        match Material::parse(body) {
+            Ok(m) => {
+                r.state = Some(MaterialState {
+                    blend: m.blend,
+                    blended: m.blended,
+                    alpha_test: m.alpha_test,
+                    alpha_ref: m.alpha_ref,
+                    color: m.color,
+                });
+                for slot in &m.slots {
+                    // the slots whose maps no lowering reads are named, not read
+                    if !material::READ_SLOTS.contains(&slot.name) {
+                        r.unread.push(slot.name.to_string());
+                        continue;
+                    }
+                    // a slot holds a TextureMapSpec's id when one exists; its last u32 is the TextureMap's id
+                    if let Some((so, sb)) = index.get(slot.spec)
+                        && so.class == TEXTURE_MAP_SPEC
+                        && let Some(tm) = sb
+                            .get(28..32)
+                            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                        && let Some(t) = texture(index, tm, world, textures, bump)
+                    {
+                        r.slots.insert(
+                            slot.name.to_string(),
+                            SlotRef {
+                                texture: t,
+                                scale: slot.scale,
+                                offset: slot.offset,
+                            },
+                        );
+                    }
+                }
             }
+            Err(err) => bump(format!("materials not read: {err}")),
         }
         world.insert(e, Name(o.name.clone()));
     }

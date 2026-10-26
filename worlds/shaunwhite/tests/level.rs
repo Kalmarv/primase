@@ -6,7 +6,7 @@ use primase_core::pass::{Conservation, PassManager, PassRegistry, Pipeline, RunR
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Instance, Marker, Mesh, Name, Texture, Transform, World};
-use primase_shaunwhite::components::{MaterialRef, MeshFormat, PlacedBy};
+use primase_shaunwhite::components::{MaterialRef, MeshFormat, PlacedBy, Sampler};
 use primase_shaunwhite::passes::{LowerShaunwhiteMaterial, register};
 use primase_shaunwhite::read::level::read_level;
 use primase_testdata::{Game, install};
@@ -52,6 +52,39 @@ fn level_01_reads_and_lowers() {
     }
     // every prototype states its vertex stride and flags
     assert!(w.iter::<Mesh>().all(|(e, _)| w.has::<MeshFormat>(e)));
+
+    // every material states its fields (a body of another length is the exception), every slot its texture and the
+    // texture how it is sampled
+    let materials: Vec<&MaterialRef> = w.iter::<MaterialRef>().map(|(_, m)| m).collect();
+    let stated = materials.iter().filter(|m| m.state.is_some()).count();
+    let blended = materials
+        .iter()
+        .filter(|m| m.state.is_some_and(|s| s.blended))
+        .count();
+    let tested = materials
+        .iter()
+        .filter(|m| m.state.is_some_and(|s| s.alpha_test))
+        .count();
+    println!(
+        "materials: {} read, {stated} with fields, {blended} blended, {tested} alpha-tested, {} with a layer, {} unread slots",
+        materials.len(),
+        materials
+            .iter()
+            .filter(|m| m.slots.contains_key("diffuse_b"))
+            .count(),
+        materials.iter().map(|m| m.unread.len()).sum::<usize>()
+    );
+    assert!(stated + 2 >= materials.len() && blended > 20 && tested > 20);
+    for m in &materials {
+        for s in m.slots.values() {
+            assert!(
+                w.has::<Sampler>(s.texture),
+                "{}: a texture without its sampler",
+                m.name
+            );
+            assert!(s.scale.iter().chain(&s.offset).all(|x| x.is_finite()));
+        }
+    }
 
     // markers: the start positions and spawn nodes, each at its Entity's matrix with its name
     let markers: Vec<(String, String)> = w

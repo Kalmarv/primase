@@ -18,22 +18,68 @@ impl Component for PlacedBy {
     const GEOMETRY: Geometry = Geometry::None;
 }
 
-/// A Material as the source stores it: its id, its object's name (empty when no forge read holds it), and the
-/// textures of the slots read (`diffuse`, `normal`, `specular`: `core.texture` entities). Lowered by
+/// One texture slot of a stored Material: the texture (a `core.texture` entity) and the UV transform the slot states:
+/// the scale and offset its u and v are multiplied and moved by.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SlotRef {
+    pub texture: Entity,
+    pub scale: [f32; 2],
+    pub offset: [f32; 2],
+}
+
+/// The fixed fields of a stored Material that say how it is drawn ([`crate::read::material`] gives their offsets and
+/// what is known of them).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MaterialState {
+    pub blend: u8,
+    pub blended: bool,
+    pub alpha_test: bool,
+    pub alpha_ref: u8,
+    /// RGBA, multiplying the diffuse layer.
+    pub color: [f32; 4],
+}
+
+/// A Material as the source stores it: its id, its object's name (empty when no forge read holds it), its fields
+/// (`None` when its body is not one the reader reads), the textures of the slots read (`diffuse`, `normal`,
+/// `specular`, `mask`, `diffuse_b`, `specular_b`, `diffuse_c`: `core.texture` entities) and the names of the slots
+/// that hold a texture spec the reader does not read (`detail`, `diffuse2`, `generic`). Lowered by
 /// `lower-shaunwhite-material`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct MaterialRef {
     pub id: u32,
     pub name: String,
-    pub textures: BTreeMap<String, Entity>,
+    pub state: Option<MaterialState>,
+    pub slots: BTreeMap<String, SlotRef>,
+    pub unread: Vec<String>,
+}
+
+impl MaterialRef {
+    /// The textures of the slots read.
+    pub fn textures(&self) -> impl Iterator<Item = Entity> + '_ {
+        self.slots.values().map(|s| s.texture)
+    }
 }
 
 impl Component for MaterialRef {
     const NAME: &'static str = "shaunwhite.material";
     const GEOMETRY: Geometry = Geometry::None;
     fn references(&self, out: &mut Vec<Entity>) {
-        out.extend(self.textures.values().copied());
+        out.extend(self.textures());
     }
+}
+
+/// How the source samples a texture: its U, V, W address modes (wrap 0, mirror 1, clamp 2, border 3, mirror-once 4) and
+/// its magnification, minification and mip filters (point 0, linear 1, none 2, anisotropic 3, comparison-linear 4),
+/// on the `core.texture` entity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Sampler {
+    pub address: [u32; 3],
+    pub filter: [u32; 3],
+}
+
+impl Component for Sampler {
+    const NAME: &'static str = "shaunwhite.sampler";
+    const GEOMETRY: Geometry = Geometry::None;
 }
 
 /// A Mesh prototype's vertex stride and flags word as its CompiledMesh header stores them. The reader reads the

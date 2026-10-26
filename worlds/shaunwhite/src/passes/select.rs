@@ -420,7 +420,7 @@ impl SelectShaunwhiteContent {
         let mut textures: BTreeSet<Entity> = BTreeSet::new();
         for m in materials.into_iter().filter(|m| free.contains(m)) {
             if let Some(r) = w.get::<MaterialRef>(m) {
-                textures.extend(r.textures.values().copied());
+                textures.extend(r.textures());
             }
             if ledger::despawn(
                 w,
@@ -448,6 +448,7 @@ impl SelectShaunwhiteContent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::SlotRef;
     use primase_core::pass::{Conservation, PassManager, PassRegistry, Pipeline, RunReport};
     use primase_core::{Primitive, Semantic, Stream, Topology, Transform};
 
@@ -459,11 +460,22 @@ mod tests {
             MaterialRef {
                 id: 0,
                 name: name.into(),
-                textures: textures
+                state: None,
+                slots: textures
                     .iter()
                     .enumerate()
-                    .map(|(i, t)| (format!("slot{i}"), *t))
+                    .map(|(i, t)| {
+                        (
+                            format!("slot{i}"),
+                            SlotRef {
+                                texture: *t,
+                                scale: [1.0; 2],
+                                offset: [0.0; 2],
+                            },
+                        )
+                    })
                     .collect(),
+                unread: Vec::new(),
             },
         );
         m
