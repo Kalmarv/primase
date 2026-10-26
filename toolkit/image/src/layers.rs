@@ -5,26 +5,69 @@
 //! the identity mapping), summed. Masks are sampled bilinearly, or at the nearest texel where their reference states
 //! a nearest magnification filter. Between vertices the weights then interpolate instead of following the mask: an
 //! approximation, counted.
+//!
+//! **Layer alpha.** A weight channel may carry its layer's own texture alpha as a factor (a Shaun White layer with
+//! `UseTextureAlpha`: the channel is the vertex weight times the layer texture's alpha, per pixel). A consumer that
+//! draws the layer as an alpha-blended overlay of that texture applies the alpha per pixel itself, so baking it into
+//! the vertex weight as well applies it twice (squared where the vertex samples the same alpha, and aliased: a vertex
+//! samples one texel of a texture whose features are smaller than the vertex spacing). `layer-alpha=pixel` leaves the
+//! factor out of the baked weight (a scalar the factor carries, such as a modulation colour's alpha, stays) for a
+//! consumer that does apply it; the default `baked` is the original behaviour, for one that does not.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::layered::{Composition, Source, height_blend, over_as_sum};
-use primase_core::pass::{Pass, PassLog, PassSpec};
-use primase_core::pbr::{Filter, TextureRef, Wrap};
+use primase_core::layered::{Channel, Composition, Source, height_blend, over_as_sum};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
+use primase_core::pbr::{Filter, PbrMaterial, TextureRef, Wrap};
 use primase_core::{
     Component, Entity, LayeredMaterial, Mesh, Semantic, Stream, Texture, WeightMapping, World,
 };
 use primase_texcodec::{Decoder, TexDecoder};
 
-/// `bake-layer-channels`' declaration: no options.
+/// The most coverage an Over channel with its layer alpha left out may have: one 512th short of one, which an 8-bit
+/// opacity still writes as 1.
+const UNDER_OPAQUE: f32 = 1.0 - 1.0 / 512.0;
+
+/// What the baked weight holds of a layer's own texture alpha (option `layer-alpha`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LayerAlpha {
+    /// The factor is evaluated at the vertex with the rest of the channel.
+    #[default]
+    Baked,
+    /// The factor is left out: the consumer applies the layer texture's alpha per pixel.
+    Pixel,
+}
+
+impl Choice for LayerAlpha {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("baked", LayerAlpha::Baked), ("pixel", LayerAlpha::Pixel)];
+}
+
+/// `bake-layer-channels`' declaration.
 pub const BAKE_LAYER_CHANNELS: PassSpec = PassSpec {
     name: "bake-layer-channels",
-    options: &[],
-    make: |_| Ok(Box::new(BakeLayerChannels)),
+    options: &[OptionSpec::optional_choice::<LayerAlpha>(
+        "layer-alpha",
+        "whether a layer's own texture alpha, a factor of its weight channel, is baked at the vertices (baked) or left to          the consumer's per-pixel alpha (pixel)",
+        "baked",
+    )],
+    make: |g: &Given| {
+        Ok(
+            match g.optional_choice::<LayerAlpha>("layer-alpha").unwrap_or_default() {
+                LayerAlpha::Baked => Box::new(BakeLayerChannels),
+                LayerAlpha::Pixel => Box::new(BakeLayerChannelsPixelAlpha),
+            },
+        )
+    },
 };
 
+/// `bake-layer-channels` with `layer-alpha=baked` (the default): see the module documentation.
 #[derive(Debug)]
 pub struct BakeLayerChannels;
+
+/// `bake-layer-channels{layer-alpha=pixel}`: a layer's own texture alpha is not baked (see the module documentation).
+#[derive(Debug)]
+pub struct BakeLayerChannelsPixelAlpha;
 
 impl Pass for BakeLayerChannels {
     fn name(&self) -> &'static str {
@@ -40,10 +83,121 @@ impl Pass for BakeLayerChannels {
         "per-pixel layer weights evaluated at the vertices and interpolated between them"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        bake(w, log, LayerAlpha::Baked)
+    }
+}
+
+impl Pass for BakeLayerChannelsPixelAlpha {
+    fn name(&self) -> &'static str {
+        "bake-layer-channels"
+    }
+    fn options(&self) -> Options {
+        Options::from([("layer-alpha".into(), LayerAlpha::Pixel.text().into())])
+    }
+    fn requires(&self) -> &[&'static str] {
+        &[LayeredMaterial::NAME, PbrMaterial::NAME]
+    }
+    fn modifies(&self) -> &[&'static str] {
+        &[LayeredMaterial::NAME, Mesh::NAME]
+    }
+    fn approximates(&self) -> &'static str {
+        "per-pixel layer weights evaluated at the vertices and interpolated between them, less each layer's own          texture alpha, which the consumer applies per pixel"
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        bake(w, log, LayerAlpha::Pixel)
+    }
+}
+
+/// The weight channels of `l` without the factor that is slot `k`'s own texture alpha: a [`Source::Mask`] reading only
+/// the alpha of the texture slot `k`'s layer material draws, alone or in a product at channel `k` (identity mapping, the slot
+/// weighted by its channel). The factor's scalar stays as a constant. `None` when nothing is left out.
+fn without_layer_alpha(w: &World, l: &LayeredMaterial) -> Option<(Vec<Channel>, Vec<usize>)> {
+    let channels = l.weights.channels.as_ref()?;
+    if l.weights.mapping != WeightMapping::Identity {
+        return None;
+    }
+    let mut out = channels.clone();
+    let mut left = Vec::new();
+    for (k, c) in out.iter_mut().enumerate().skip(1) {
+        let Some(layer) = l.layers.get(k).and_then(Option::as_ref) else {
+            continue;
+        };
+        let Some(own) = w
+            .get::<PbrMaterial>(layer.material)
+            .and_then(|m| m.base_color_texture)
+            .map(|t| t.texture)
+        else {
+            continue;
+        };
+        let own_alpha = |s: &Source| matches!(s, Source::Mask { texture, channels: [0., 0., 0., _], bias: 0. } if texture.texture == own);
+        // the factor with its texture alpha gone: the scalar it carries, as a constant (None: it was 1)
+        let scalar = |s: &Source| match s {
+            Source::Mask {
+                texture,
+                channels: [_, _, _, scale],
+                ..
+            } if *scale != 1. => Some(Source::Mask {
+                texture: *texture,
+                channels: [0.; 4],
+                bias: *scale,
+            }),
+            _ => None,
+        };
+        match c {
+            // a channel that is the alpha alone (a layer with no vertex weight or mask): weight 1 (times its scalar)
+            Channel::Source(s) if own_alpha(s) => {
+                *s = scalar(s).unwrap_or_else(|| match s {
+                    Source::Mask { texture, .. } => Source::Mask {
+                        texture: *texture,
+                        channels: [0.; 4],
+                        bias: 1.,
+                    },
+                    Source::Vertex { .. } => unreachable!("own_alpha matched a mask"),
+                });
+            }
+            Channel::Product { sources } if sources.iter().filter(|s| own_alpha(s)).count() == 1 => {
+                let mut rest = Vec::new();
+                for s in sources.iter() {
+                    if own_alpha(s) {
+                        rest.extend(scalar(s));
+                    } else {
+                        rest.push(s.clone());
+                    }
+                }
+                *c = if rest.len() == 1 {
+                    Channel::Source(rest.remove(0))
+                } else {
+                    Channel::Product { sources: rest }
+                };
+            }
+            _ => continue,
+        }
+        left.push(k);
+    }
+    (!left.is_empty()).then_some((out, left))
+}
+
+fn bake(w: &mut World, log: &mut PassLog, layer_alpha: LayerAlpha) -> Result<(), String> {
+    {
+        // the channels whose layer alpha is left out, by material (their Over weights are capped below one)
+        let mut unalpha: BTreeMap<Entity, Vec<usize>> = BTreeMap::new();
         let materials: Vec<(Entity, LayeredMaterial)> = w
             .iter::<LayeredMaterial>()
             .filter(|(_, l)| l.weights.per_pixel())
-            .map(|(e, l)| (e, l.clone()))
+            .map(|(e, l)| {
+                let mut l = l.clone();
+                if layer_alpha == LayerAlpha::Pixel
+                    && let Some((channels, left)) = without_layer_alpha(w, &l)
+                {
+                    l.weights.channels = Some(channels);
+                    log.count(
+                        "layer texture alphas left to the consumer's per-pixel alpha",
+                        left.len() as u64,
+                    );
+                    unalpha.insert(e, left);
+                }
+                (e, l)
+            })
             .collect();
         if materials.is_empty() {
             return Ok(());
@@ -98,7 +252,16 @@ impl Pass for BakeLayerChannels {
                         channels(&l.weights, p, v, &masks).map_err(|m| format!("{e:?} on {mesh:?}: {m}"))?;
                     out.push(match l.weights.composition {
                         Composition::Sum => ch,
-                        Composition::Over => over_as_sum(l.weights.mapping.evaluate(ch), slots),
+                        Composition::Over => {
+                            let mut ch = l.weights.mapping.evaluate(ch);
+                            // A channel with its layer alpha left out is a coverage the consumer's pixel alpha
+                            // thins: held below one, so the layers under it keep their weights (at one they sum to
+                            // zero, and the overlays they become would be lost where that alpha is below one).
+                            for &k in unalpha.get(e).into_iter().flatten() {
+                                ch[k] = ch[k].min(UNDER_OPAQUE);
+                            }
+                            over_as_sum(ch, slots)
+                        }
                         Composition::Height { contrast } => {
                             let mut heights = [0.0; 4];
                             for (h, s) in heights.iter_mut().zip(&l.weights.heights) {

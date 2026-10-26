@@ -232,3 +232,232 @@ fn a_three_source_product_is_baked_without_dropping_its_last_mask() {
         &vec![[0.2, 0., 0., 0.], [0.4, 0.2, 0., 0.], [0.6, 0.15, 0., 0.]]
     );
 }
+
+/// A decal-style layered material: two layers, the second drawing `alpha_texture` (a 2 x 1 texture whose alpha is 0 on
+/// the left texel and 1 on the right), weighted by the vertex red times that texture's alpha. COLOR_0 red is 0.2, 0.4,
+/// 0.5 at u 0.25, 0.75, 0.5, where the alpha is 0, 1, 0.5.
+fn decal_world(own_alpha: bool, scale: f32) -> (World, primase_core::Entity, primase_core::Entity) {
+    let (mut w, host, proto) = world(Composition::Over);
+    let alpha_texture = w.spawn();
+    w.insert(
+        alpha_texture,
+        Texture {
+            width: 2,
+            height: 1,
+            format: TexFormat::Rgba8Unorm,
+            levels: vec![vec![255, 255, 255, 0, 255, 255, 255, 255]],
+            color_space: ColorSpace::Srgb,
+            role: TexRole::Color,
+            normal: None,
+        },
+    );
+    let mut l = w.get::<LayeredMaterial>(host).unwrap().clone();
+    // the second layer's material draws the alpha texture, or (not its own alpha) another texture
+    let drawn = if own_alpha { alpha_texture } else { w.spawn() };
+    let layer_material = l.layers[1].as_ref().unwrap().material;
+    w.insert(
+        layer_material,
+        PbrMaterial {
+            base_color_texture: Some(TextureRef::new(drawn)),
+            ..PbrMaterial::default()
+        },
+    );
+    l.weights.channels = Some(vec![
+        Channel::Source(Source::Mask {
+            texture: TextureRef::new(alpha_texture),
+            channels: [0.; 4],
+            bias: 1.0,
+        }),
+        Channel::Product {
+            sources: vec![
+                Source::Vertex {
+                    semantic: Semantic::Color(0),
+                    channel: 0,
+                },
+                Source::Mask {
+                    texture: TextureRef::new(alpha_texture),
+                    channels: [0., 0., 0., scale],
+                    bias: 0.,
+                },
+            ],
+        },
+    ]);
+    w.insert(host, l);
+    let m = w.get_mut::<Mesh>(proto).unwrap();
+    if let Some(Stream::F32x4(c)) = m
+        .primitive_mut(0)
+        .unwrap()
+        .streams_mut()
+        .get_mut(&Semantic::Color(0))
+    {
+        c[2] = [0.5, 0., 0., 1.];
+    }
+    (w, host, proto)
+}
+
+fn bake_with(w: &mut World, text: &str) -> Vec<[f32; 4]> {
+    let mut reg = PassRegistry::new();
+    primase_image::register(&mut reg);
+    let pipeline = reg.parse(text).unwrap();
+    PassManager::new(reg)
+        .run(w, &pipeline, &mut RunReport::default())
+        .unwrap();
+    let proto = w.iter::<Mesh>().next().unwrap().0;
+    let Some(Stream::F32x4(baked)) = w.get::<Mesh>(proto).unwrap().primitives()[0]
+        .streams
+        .get(&Semantic::Color(1))
+    else {
+        panic!("no baked stream")
+    };
+    baked.clone()
+}
+
+fn close(a: &[[f32; 4]], b: &[[f32; 4]]) {
+    assert_eq!(a.len(), b.len());
+    for (x, y) in a.iter().zip(b) {
+        for k in 0..4 {
+            assert!((x[k] - y[k]).abs() < 1e-6, "{a:?} vs {b:?}");
+        }
+    }
+}
+
+/// The overlay's own texture alpha is applied per pixel by the consumer, so the vertex weight is the red alone: 0.5 at
+/// the vertex where the red is 0.5 and the alpha 0.5, not 0.25. Over composition: slot 0 keeps one minus it.
+#[test]
+fn a_layers_own_texture_alpha_is_left_out_of_its_baked_weight_with_layer_alpha_pixel() {
+    let (mut w, _, _) = decal_world(true, 1.0);
+    close(
+        &bake_with(&mut w, "bake-layer-channels{layer-alpha=pixel}"),
+        &[[0.8, 0.2, 0., 0.], [0.6, 0.4, 0., 0.], [0.5, 0.5, 0., 0.]],
+    );
+}
+
+/// The default is the original behaviour: the alpha is sampled at the vertex and multiplied in (0.5 x 0.5 = 0.25).
+#[test]
+fn a_layers_own_texture_alpha_is_baked_at_the_vertices_by_default() {
+    let (mut w, _, _) = decal_world(true, 1.0);
+    close(
+        &bake_with(&mut w, "bake-layer-channels"),
+        &[[1., 0., 0., 0.], [0.6, 0.4, 0., 0.], [0.75, 0.25, 0., 0.]],
+    );
+    let (mut w, _, _) = decal_world(true, 1.0);
+    close(
+        &bake_with(&mut w, "bake-layer-channels{layer-alpha=baked}"),
+        &[[1., 0., 0., 0.], [0.6, 0.4, 0., 0.], [0.75, 0.25, 0., 0.]],
+    );
+}
+
+/// What the factor carries besides the texture's alpha stays: a modulation alpha of 0.5 halves the weight.
+#[test]
+fn the_factors_scalar_stays_in_the_weight() {
+    let (mut w, _, _) = decal_world(true, 0.5);
+    close(
+        &bake_with(&mut w, "bake-layer-channels{layer-alpha=pixel}"),
+        &[[0.9, 0.1, 0., 0.], [0.8, 0.2, 0., 0.], [0.75, 0.25, 0., 0.]],
+    );
+}
+
+/// An alpha that is not the layer's own (another texture's, or one on a layer that draws none) is a mask, whatever the
+/// option: the baked weights are those of the default.
+#[test]
+fn an_alpha_that_is_not_the_layers_own_is_baked_with_layer_alpha_pixel() {
+    let (mut w, _, _) = decal_world(false, 1.0);
+    close(
+        &bake_with(&mut w, "bake-layer-channels{layer-alpha=pixel}"),
+        &[[1., 0., 0., 0.], [0.6, 0.4, 0., 0.], [0.75, 0.25, 0., 0.]],
+    );
+}
+
+/// Channels that are not a product with the layer's own alpha (a plain mask, a vertex weight) are untouched.
+#[test]
+fn other_channels_are_unchanged_with_layer_alpha_pixel() {
+    let (mut w, _, _) = world(Composition::Sum);
+    let pixel = bake_with(&mut w, "bake-layer-channels{layer-alpha=pixel}");
+    close(
+        &pixel,
+        &[[0.2, 0., 0., 0.], [0.4, 1., 0., 0.], [0.6, 0.5, 0., 0.]],
+    );
+}
+
+/// A layer with no vertex weight or mask has the alpha alone as its channel (Shaun White's material without vertex
+/// colour): the weight is then 1 (held one 512th short, see the next test) times the scalar, whatever the texture
+/// holds; baked, it is the alpha at the vertex.
+#[test]
+fn a_channel_that_is_the_layers_own_alpha_alone_becomes_its_scalar() {
+    for (scale, pixel, baked) in [
+        (
+            1.0,
+            [1.0 / 512.0, 1.0 - 1.0 / 512.0],
+            [[1., 0., 0., 0.], [0., 1., 0., 0.], [0.5, 0.5, 0., 0.]],
+        ),
+        (
+            0.5,
+            [0.5, 0.5],
+            [[1., 0., 0., 0.], [0.5, 0.5, 0., 0.], [0.75, 0.25, 0., 0.]],
+        ),
+    ] {
+        let alone = |w: &mut World, host| {
+            let mut l = w.get::<LayeredMaterial>(host).unwrap().clone();
+            let Some(Channel::Product { sources }) =
+                l.weights.channels.as_ref().and_then(|c| c.get(1)).cloned()
+            else {
+                panic!("decal fixture")
+            };
+            l.weights.channels.as_mut().unwrap()[1] = Channel::Source(sources[1].clone());
+            w.insert(host, l);
+        };
+        let (mut w, host, _) = decal_world(true, scale);
+        alone(&mut w, host);
+        let out = bake_with(&mut w, "bake-layer-channels{layer-alpha=pixel}");
+        close(&out, &[[pixel[0], pixel[1], 0., 0.]; 3]);
+        let (mut w, host, _) = decal_world(true, scale);
+        alone(&mut w, host);
+        close(&bake_with(&mut w, "bake-layer-channels"), &baked);
+    }
+}
+
+/// A later layer whose alpha is left out is a coverage of (nearly) one that the consumer's pixel alpha thins: the layer
+/// under it keeps its weight (its overlay opacity is its own coverage, the vertex red) instead of summing to zero.
+#[test]
+fn a_later_layer_with_its_alpha_left_out_does_not_zero_the_layers_under_it() {
+    let (mut w, host, proto) = decal_world(true, 1.0);
+    let mut l = w.get::<LayeredMaterial>(host).unwrap().clone();
+    let alpha_texture = l.layers[1]
+        .as_ref()
+        .and_then(|y| w.get::<PbrMaterial>(y.material))
+        .and_then(|m| m.base_color_texture)
+        .unwrap()
+        .texture;
+    let third = w.spawn();
+    w.insert(
+        third,
+        PbrMaterial {
+            base_color_texture: Some(TextureRef::new(alpha_texture)),
+            ..PbrMaterial::default()
+        },
+    );
+    l.layers.push(Some(Layer {
+        material: third,
+        texcoord: None,
+        transform: None,
+    }));
+    l.weights
+        .channels
+        .as_mut()
+        .unwrap()
+        .push(Channel::Source(Source::Mask {
+            texture: TextureRef::new(alpha_texture),
+            channels: [0., 0., 0., 1.],
+            bias: 0.,
+        }));
+    w.insert(host, l);
+    let _ = proto;
+    let baked = bake_with(&mut w, "bake-layer-channels{layer-alpha=pixel}");
+    let red = [0.2, 0.4, 0.5];
+    for (v, w) in baked.iter().enumerate() {
+        // overlay opacities as the lowering reads them: weight over the weights up to it
+        let under_one = w[0] + w[1];
+        assert!((w[1] / under_one - red[v]).abs() < 1e-3, "vertex {v}: {w:?}");
+        assert!(w[2] > 0.99, "vertex {v}: {w:?}");
+    }
+}

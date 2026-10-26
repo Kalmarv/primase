@@ -18,7 +18,7 @@ pub use channels::{Rgba8Texel, TextureMetadata, map_rgba8_levels, map_rgba8_leve
 pub use frames::{Bitangent, UV_FRAME_NORMALS, UvFrameNormals};
 pub use jpeg::{Jpeg, JpegColor, read_jpeg};
 mod layers;
-pub use layers::{BAKE_LAYER_CHANNELS, BakeLayerChannels};
+pub use layers::{BAKE_LAYER_CHANNELS, BakeLayerChannels, BakeLayerChannelsPixelAlpha, LayerAlpha};
 mod modes;
 pub use modes::{SET_MATERIAL_MODES, SetMaterialModes};
 mod normals;
@@ -35,9 +35,9 @@ pub use normals::{NormalFilter, normal_mip_chain, rebuild_normal_z, resize_norma
 use std::io::Cursor;
 use std::sync::LazyLock;
 pub use texture::{
-    BAKE_NORMAL_SCALE, BakeNormalScale, NORMALIZE_NORMALS, NormalizeNormals, TextureLoadReport, bake_normal_scale,
-    decode_texture_file, load_textures, normalize_normals, texture_level_png, texture_level_rgba8,
-    texture_level_rgba8_with,
+    BAKE_NORMAL_SCALE, BakeNormalScale, NORMALIZE_NORMALS, NormalizeNormals, TextureLoadReport,
+    bake_normal_scale, decode_texture_file, load_textures, normalize_normals, texture_level_png,
+    texture_level_rgba8, texture_level_rgba8_with,
 };
 pub use upscale::{MAX_UPSCALED, UPSCALE_NEAREST, UpscaleBy, UpscaleNearest, enlarge_nearest};
 
