@@ -113,8 +113,8 @@ fn walk(a: &Archive, f: &mut File, keys: &Keys, oracle: &BTreeMap<String, Oracle
         None => {}
         Some(o) => {
             let enc = match a.encryption {
-                rage_engine_formats::archive::rpf::Encryption::None => 0x4E45_504F,
-                rage_engine_formats::archive::rpf::Encryption::Open => 0x4F50_454E,
+                rage_engine_formats::archive::rpf::Encryption::None => 0,
+                rage_engine_formats::archive::rpf::Encryption::Open => 0x4E45_504F,
                 rage_engine_formats::archive::rpf::Encryption::Aes => 0x0FFF_FFF9,
                 rage_engine_formats::archive::rpf::Encryption::Ng => 0x0FEF_FFFF,
             };

@@ -282,6 +282,26 @@ fn rejects_broken_tables() {
     assert!(Archive::open(&path, "magic.rpf", &keys).is_err());
 }
 
+/// The header's cipher word: 0 and "OPEN" are tables in the clear, any word but the four known is refused.
+#[test]
+fn cipher_words() {
+    use rage_engine_formats::archive::rpf::Encryption;
+    let keys = Keys::none();
+    for (word, want) in [
+        (0u32, Some(Encryption::None)),
+        (0x4E45_504F, Some(Encryption::Open)),
+        (0x4F50_454E, None),
+    ] {
+        let mut bytes = write_rpf(vec![Item::Stored("a.txt", b"x".to_vec())]);
+        bytes[12..16].copy_from_slice(&word.to_le_bytes());
+        let path = temp_file(&format!("cipher_{word:08x}.rpf"), &bytes);
+        let got = Archive::open(&path, "cipher.rpf", &keys)
+            .ok()
+            .map(|a| a.encryption);
+        assert_eq!(got, want, "cipher word {word:#010x}");
+    }
+}
+
 #[test]
 fn key_material_is_checked() {
     // wrong sizes and wrong contents are refused with a message, never used

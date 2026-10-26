@@ -26,21 +26,24 @@ use crate::{Result, invalid};
 pub const MAGIC: u32 = 0x5250_4637;
 const BLOCK: u64 = 512;
 
-/// The cipher on an archive's table of contents (and its encrypted entries).
+/// The cipher on an archive's table of contents (and its encrypted entries), by the header's cipher word.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Encryption {
+    /// Word 0: no cipher word at all, as some tools write.
     None,
-    /// A table of contents left in the clear by an editing tool.
+    /// Word `0x4E45504F` (the bytes "OPEN"): a table of contents left in the clear by an editing tool.
     Open,
+    /// Word `0x0FFFFFF9`.
     Aes,
+    /// Word `0x0FEFFFFF`.
     Ng,
 }
 
 impl Encryption {
     fn from_u32(v: u32) -> Option<Self> {
         match v {
-            0x4E45_504F => Some(Encryption::None),
-            0x4F50_454E => Some(Encryption::Open),
+            0 => Some(Encryption::None),
+            0x4E45_504F => Some(Encryption::Open),
             0x0FFF_FFF9 => Some(Encryption::Aes),
             0x0FEF_FFFF => Some(Encryption::Ng),
             _ => None,
