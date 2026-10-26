@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     Result,
-    components::{MaterialId, MeshId, RefusedMesh, Spot},
+    components::{MaterialId, MeshId, RefusedMesh, Spot, VertexInput, VertexInputs},
     invalid,
 };
 use primase_core::{
@@ -34,6 +34,10 @@ pub struct LevelReport {
     pub chain_stops: usize,
     pub unread: Vec<(String, Vec<u8>, Unread)>,
     pub refusals: Vec<MeshRefusal>,
+    /// Counts stored source vertices, once per library resource (not expanded per draw or placement).
+    pub zero_normals: usize,
+    pub normal_exceptions: Vec<(MeshId, usize)>,
+    pub raw_vertex_streams: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -63,6 +67,24 @@ impl LevelReport {
             lines.push((
                 "shred spot class".into(),
                 format!("{class:08x}: {n} chunks; no class name is proven for this hash"),
+            ));
+        }
+        lines.push((
+            "shred vertex attributes".into(),
+            format!(
+                "{} authored zero normals; {} source input streams retained per primitive",
+                self.zero_normals, self.raw_vertex_streams
+            ),
+        ));
+        for (source, count) in &self.normal_exceptions {
+            lines.push((
+                "shred zero normals".into(),
+                format!(
+                    "{} {:?} {:08x}: {count} stored vertices",
+                    source.pak,
+                    String::from_utf8_lossy(&source.quartet),
+                    source.id
+                ),
             ));
         }
         for r in &self.refusals {
@@ -199,11 +221,18 @@ pub fn read_level(paks: &[(&str, &Pak)], frame: SourceFrame) -> Result<(World, L
                     continue;
                 }
                 report.rigid += 1;
+                report.zero_normals += model.attributes.zero_normals;
+                if model.attributes.zero_normals > 0 {
+                    report
+                        .normal_exceptions
+                        .push((source.clone(), model.attributes.zero_normals));
+                }
                 let positions: Vec<_> = model.positions.into_iter().map(|p| frame.point(p)).collect();
                 if positions.iter().flatten().any(|x| !x.is_finite()) {
                     return Err(invalid(0, "position overflow in requested frame"));
                 }
                 let mut primitives = Vec::new();
+                let mut raw_primitives = Vec::new();
                 for sub in model.submeshes {
                     let mut indices = model.indices[sub.indices].to_vec();
                     // Keep each submesh's contiguous vertex range and rebase its indices.
@@ -212,22 +241,78 @@ pub fn read_level(paks: &[(&str, &Pak)], frame: SourceFrame) -> Result<(World, L
                     for index in &mut indices {
                         *index -= low;
                     }
-                    if frame.flips_winding() {
+                    // Source render triangles are CW relative to their authored normals; core fronts are CCW.
+                    // This format convention is independent of a caller's handedness choice.
+                    if !frame.flips_winding() {
                         for tri in indices.as_chunks_mut::<3>().0 {
                             tri.swap(1, 2);
                         }
                     }
+                    let range = low as usize..end as usize;
+                    let mut streams = BTreeMap::from([
+                        (
+                            Semantic::Position,
+                            Stream::F32x3(positions[range.clone()].to_vec()),
+                        ),
+                        (
+                            Semantic::Normal,
+                            Stream::F32x3(
+                                model.attributes.normals[range.clone()]
+                                    .iter()
+                                    .map(|&v| frame.direction(v))
+                                    .collect(),
+                            ),
+                        ),
+                    ]);
+                    if let Some(color) = &model.attributes.colors {
+                        streams.insert(Semantic::Color(0), Stream::F32x4(color[range.clone()].to_vec()));
+                    }
+                    for (logical, &selector) in sub.uv_remap.iter().enumerate() {
+                        let stored = if selector == 255 {
+                            logical
+                        } else {
+                            selector as usize
+                        };
+                        if let Some(uv) = &model.attributes.uvs[stored] {
+                            streams.insert(
+                                Semantic::TexCoord(logical as u8),
+                                Stream::F32x2(uv[range.clone()].to_vec()),
+                            );
+                        }
+                    }
+                    let raw: BTreeMap<_, _> = model
+                        .attributes
+                        .raw
+                        .iter()
+                        .map(|(name, a)| {
+                            (
+                                name.clone(),
+                                VertexInput {
+                                    lanes: a.lanes,
+                                    values: a.values[range.clone()].to_vec(),
+                                },
+                            )
+                        })
+                        .collect();
+                    report.raw_vertex_streams += raw.len();
+                    raw_primitives.push(raw);
                     primitives.push(Primitive {
                         topology: Topology::Triangles,
-                        streams: BTreeMap::from([(
-                            Semantic::Position,
-                            Stream::F32x3(positions[low as usize..end as usize].to_vec()),
-                        )]),
+                        streams,
                         indices: Some(indices),
                         material: Some(materials[&sub.material]),
                     });
                 }
                 world.insert(e, Mesh::new(primitives));
+                if raw_primitives.iter().any(|p| !p.is_empty()) {
+                    world.insert(
+                        e,
+                        VertexInputs {
+                            frame,
+                            primitives: raw_primitives,
+                        },
+                    );
+                }
             }
             for (i, placement) in scene.placements.into_iter().enumerate() {
                 let transform = frame.transform(&placement.transform);

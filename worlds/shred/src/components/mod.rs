@@ -1,6 +1,8 @@
 //! Source identities survive frame conversion; no material semantics are inferred from IDs.
 use primase_core::{Component, Geometry, Linear, world::Linearity};
 use serde::Serialize;
+mod vertex_inputs;
+pub use vertex_inputs::{VertexInput, VertexInputs};
 
 mod collision;
 mod material;

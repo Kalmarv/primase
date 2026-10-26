@@ -1,5 +1,6 @@
 //! Pure quartet decoder. All offsets in diagnostics are relative to the named decoded file.
 //! Contracts: SHRED's stored bounds/tables and its native loader, documented in the game's geometry recon.
+use super::attributes::{self, Attributes};
 use super::scp_tables;
 use crate::{Result, invalid};
 use primase_core::Transform;
@@ -17,6 +18,8 @@ pub struct Unread {
 pub struct Submesh {
     pub indices: Range<usize>,
     pub material: u32,
+    /// Logical ATTR8..11 -> stored UV0..3; 255 retains the same-index source.
+    pub uv_remap: [u8; 4],
 }
 
 #[derive(Clone, Debug)]
@@ -24,6 +27,8 @@ pub struct Model {
     pub id: u32,
     pub bounds: [[f32; 3]; 2],
     pub positions: Vec<[f32; 3]>,
+    pub format: u32,
+    pub attributes: Attributes,
     pub indices: Vec<u32>,
     pub submeshes: Vec<Submesh>,
     /// MLP offset and reason; no geometry is fabricated for an unsupported model.
@@ -46,8 +51,8 @@ pub struct Scene {
 }
 
 #[derive(Clone, Copy)]
-struct Bytes<'a> {
-    data: &'a [u8],
+pub(super) struct Bytes<'a> {
+    pub(super) data: &'a [u8],
     file: &'static str,
     base: usize,
 }
@@ -55,7 +60,7 @@ impl<'a> Bytes<'a> {
     fn error(self, at: usize, reason: &str) -> crate::Error {
         invalid(self.base + at, format!("{}: {reason}", self.file))
     }
-    fn slice(self, at: usize, n: usize) -> Result<&'a [u8]> {
+    pub(super) fn slice(self, at: usize, n: usize) -> Result<&'a [u8]> {
         let end = at
             .checked_add(n)
             .ok_or_else(|| self.error(at, "range overflow"))?;
@@ -70,7 +75,7 @@ impl<'a> Bytes<'a> {
             ..self
         })
     }
-    fn u(self, at: usize) -> Result<usize> {
+    pub(super) fn u(self, at: usize) -> Result<usize> {
         Ok(u32::from_be_bytes(self.slice(at, 4)?.try_into().expect("four bytes")) as usize)
     }
     fn f(self, at: usize) -> Result<f32> {
@@ -83,7 +88,7 @@ impl<'a> Bytes<'a> {
     fn v3(self, at: usize) -> Result<[f32; 3]> {
         Ok([self.f(at)?, self.f(at + 4)?, self.f(at + 8)?])
     }
-    fn require(self, at: usize, yes: bool, reason: &str) -> Result<()> {
+    pub(super) fn require(self, at: usize, yes: bool, reason: &str) -> Result<()> {
         if yes { Ok(()) } else { Err(self.error(at, reason)) }
     }
     fn table(self, at: usize, count: usize, stride: usize) -> Result<()> {
@@ -293,6 +298,7 @@ pub fn decode(scp: &[u8], mlp: &[u8], mmp: &[u8], mgp: &[u8]) -> Result<Scene> {
             subs.push(Submesh {
                 indices: first..first + n,
                 material: b.u(p + 52)? as u32,
+                uv_remap: b.slice(p + 56, 4)?.try_into().expect("four remap bytes"),
             });
         }
         // A virtual byte per index allows the same exact-partition validation without allocating an index mask.
@@ -304,6 +310,8 @@ pub fn decode(scp: &[u8], mlp: &[u8], mmp: &[u8], mgp: &[u8]) -> Result<Scene> {
         }
         b.require(sp, end == ic, "submesh partition does not reach index end")?;
         let mut positions = Vec::new();
+        let format = b.u(0x8c)? as u32;
+        let mut attributes = Attributes::default();
         let refusal = if embedded {
             b.require(
                 0x94,
@@ -324,41 +332,54 @@ pub fn decode(scp: &[u8], mlp: &[u8], mmp: &[u8], mgp: &[u8]) -> Result<Scene> {
                 positions.push(p);
             }
             coverage(cpu, vec![vr.clone(), io..io + size], false)?;
-            scene.unread.push(Unread {
-                file: "mmp",
-                offset: cpu.base + vr.start + 12,
-                bytes: vc * 4,
-                reason: "packed +12 word per stride-16 vertex; interleaved",
-            });
-            if gp == u32::MAX as usize {
+            let (gs, gr) = if gp == u32::MAX as usize {
                 b.require(0x94, gpu.data.is_empty(), "missing MGP descriptor with payload")?;
+                (0, 0..0)
             } else {
                 let (gc, gs, gr) = stream(b, gp)?;
                 b.require(gp, gc == vc, "MGP vertex count mismatch")?;
-                b.require(
-                    gp + 8,
-                    matches!(gs, 4 | 8 | 12 | 16 | 20 | 24 | 28 | 40),
-                    "unsupported MGP stride",
-                )?;
                 coverage(gpu, vec![gr.clone()], false)?;
-                scene.unread.push(Unread {
-                    file: "mgp",
-                    offset: gpu.base + gr.start,
-                    bytes: gr.len(),
-                    reason: "vertex attribute semantics unread",
-                });
-            }
+                (gs, gr)
+            };
             let mut meta = vec![0..0xc0, sp..sp + ns * 96, vp..vp + 24, ip..ip + 24];
             if gp != u32::MAX as usize {
                 meta.push(gp..gp + 24);
             }
             scene.unread.extend(unread_gaps(b, meta)?);
-            None
+            if attributes::stride(format).is_none() {
+                Some((b.base + 0x8c, "unsupported rigid vertex format mask"))
+            } else if let Some((submesh, slot)) = subs.iter().enumerate().find_map(|(i, s)| {
+                s.uv_remap
+                    .iter()
+                    .position(|&v| v > 3 && v != 255)
+                    .map(|slot| (i, slot))
+            }) {
+                Some((
+                    b.base + sp + submesh * 96 + 56 + slot,
+                    "unsupported UV source selector",
+                ))
+            } else {
+                b.require(
+                    0x94,
+                    attributes::stride(format) == Some(gs),
+                    "MGP stride differs from vertex format mask",
+                )?;
+                attributes = attributes::decode(
+                    format,
+                    vc,
+                    cpu.sub(vr.start, vr.len())?,
+                    gpu.sub(gr.start, gr.len())?,
+                    gs,
+                )?;
+                None
+            }
         };
         scene.models.push(Model {
             id,
             bounds,
             positions,
+            format,
+            attributes,
             indices,
             submeshes: subs,
             refusal,

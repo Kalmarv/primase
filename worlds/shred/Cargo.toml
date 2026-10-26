@@ -19,6 +19,7 @@ primase-hash.workspace = true
 primase-havok.workspace = true
 primase-sqlite.workspace = true
 thiserror.workspace = true
+half.workspace = true
 
 [dev-dependencies]
 primase-testdata.workspace = true

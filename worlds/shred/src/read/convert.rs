@@ -3,7 +3,7 @@ use super::{
     level::{self, LevelReport},
     pak::Pak,
 };
-use crate::components::ModelDependencies;
+use crate::components::{ModelDependencies, VertexInputs};
 use primase_core::{
     Entity, Mesh, World,
     convert::{self, Reader, Report},
@@ -47,6 +47,7 @@ impl Reader for ShredReader<'_> {
         let prototypes = planning.entities_named("core.mesh");
         for e in prototypes {
             let mesh = planning.remove::<Mesh>(e).expect("mesh entity");
+            planning.remove::<VertexInputs>(e);
             let materials: BTreeSet<_> = mesh.primitives().iter().filter_map(|p| p.material).collect();
             planning.insert(e, ModelDependencies(materials.into_iter().collect()));
         }
@@ -60,6 +61,9 @@ impl Reader for ShredReader<'_> {
         for e in entities {
             if let Some(mesh) = loaded.get::<Mesh>(e) {
                 part.insert(e, mesh.clone());
+                if let Some(inputs) = loaded.get::<VertexInputs>(e) {
+                    part.insert(e, inputs.clone());
+                }
             }
         }
         Ok((part, vec![]))

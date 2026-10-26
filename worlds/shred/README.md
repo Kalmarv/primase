@@ -32,8 +32,10 @@ refused, retaining their identity, submesh material references and placements; r
 `read::level::read_level(&[(label, &pak), ...], frame)` assembles all quartets of precisely the supplied archives.
 The program chooses the base/layers. There is one prototype per resource occurrence, one primitive per rigid
 submesh, one material entity per global ID and one instance per placement. Submesh vertex ranges are narrowed and
-indices rebased. Mirrored placements retain their affine transforms; a mirroring source frame reverses prototype
-winding. Refused prototypes have `shred.refused_mesh` instead of fabricated geometry. IDs live in `shred.mesh_id`
+indices rebased. Source render triangles are clockwise relative to their stored normals. The reader normalizes
+them to core's counterclockwise fronts, swapping indices when `source_cw XOR frame.flips_winding()` is true.
+This format convention is independent of the caller's frame/handedness choice. Mirrored placements retain their
+affine transforms. Refused prototypes have `shred.refused_mesh` instead of fabricated geometry. IDs live in `shred.mesh_id`
 and `shred.material_id`. ID zero's bank ambiguity is not resolved by assigning material content.
 
 The caller **must state a `primase_core::frame::SourceFrame`**. Y-up is evidenced by the geometry recon, but units,
@@ -71,8 +73,21 @@ come from NVIDIA's published VTC extension and RPCS3's RSX consumer at commit
 unproven layout combinations as explicit refusals rather than inferring them from these content metrics.
 
 The returned `LevelReport` counts all occurrences (including packaged copies and refused models) and lists every
-refused model and unread attribute/table region with its source and decoded-file offset. MMP +12 and MGP attributes
-are not yet emitted as streams; the subsequent attribute chunk owns those semantics. SCP table strides are checked
+refused model and unread table region with its source and decoded-file offset. MMP +12 normals use the native signed
+11:11:10 CMP conversion and the source frame's direction conversion, without normalization or position scaling.
+Nonzero normals must be unit length within 0.005; authored zero normals remain zero and are counted and listed by
+resource in the report. All 16 observed packed MGP layouts decode finite colours, half-float UVs and native vertex
+inputs. Unknown format bits refuse that mesh while retaining rigid siblings.
+
+Submesh +0x38 maps logical UV slots 0..3 to stored MGP UV sets; byte 0xff selects the same-index stored set.
+Missing stored sets produce no stream. UVs retain the source's top-left convention, matching core and decoded
+textures. Colours become normalized RGBA streams. Unproved basis roles/handedness and tree attributes remain in
+`shred.vertex_inputs` as `attr15`, `attr14`, `attr12` and `attr13`; no core tangent is invented. This component also
+retains every stored UV set as `stored_uv0` through `stored_uv3`, including sets unused by the remap. Its values
+retain the recorded source frame and remain source provenance under geometry transforms. Primitive/vertex remaps
+keep these arrays aligned with the mesh, and deferred loading restores them alongside geometry.
+
+SCP table strides are checked
 against the native loader, but their meanings and nested objects remain unread. SCP's opaque coverage notice
 intentionally overlaps interpreted fields and is **not** a count of distinct unread bytes.
 
@@ -85,7 +100,15 @@ The hand-worked quartet tests cover two resources, two submeshes of one resource
 reflection, frame scaling/mirroring, malformed inputs, truncated metadata and refusal within a mixed quartet.
 `geometry_disc` always traverses every quartet, regardless of smoke/full depth: expected totals are 657 quartets
 in 324 PAKs, 21,309 resources (17,897 rigid, 3,412 embedded), 35,114 submeshes and 168,887 placements. These are checks
-against source tables and bounds, not an independent rendering proof. Lab/game visual verification remains separate.
+against source tables and bounds. The attribute gate checks every rigid normal and stream, counts the 11,488 authored
+zero normals, and reports p1/median signed cosines between geometric face normals and average corner normals under
+both identity and mirrored frames. The full-disc source census found 5,384,944 opposing and 1,469 agreeing triangles
+at cosine thresholds -0.5/+0.5, with 23,293 ambiguous and 7,078 degenerate or zero-average-normal triangles. After
+source-CW normalization, both frames must produce 5,384,944 agreeing, 1,469 opposing and 23,293 ambiguous triangles:
+99.97% of the triangles with a decisive normal agree. Authored exceptions remain unchanged; the reader applies one
+format convention rather than changing individual triangles to follow their normals. Both frames measure signed
+cosines p1 = 0.798705 and median = 0.999549 over 5,409,706 nondegenerate triangles with nonzero average normals.
+Lab/game visual verification remains separate.
 
 ## Collision
 
