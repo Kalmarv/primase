@@ -1020,6 +1020,13 @@ pub const DECLARED: &[Declared] = &[
         source: r#"third-party: ReSkate Studio 20261012's compile of that map"#,
     },
     Declared {
+        query: Query::Oracle(OracleSet::Studio, Game::Skate, "layers/patch"),
+        status: Status::Live,
+        gate: false,
+        about: r#"ReSkate Studio's Patch folder of a layering fixture (fifteen columns of layered cases: depth-writing layers 0 / 0.5 / 4 mm apart, cutouts, decals below / on / above their base, a covered decal, overlapping decal stacks ordered by ties, origins and bounds, decals over LOD bases, duplicate surfaces), each case looked at in the game (two runs, frames kept with the private research); the gate's verdict per case is asserted; worlds/reskate/tests/postcompile_layers.rs. Not a landing-gate input yet: becoming one (`gate: true`) needs this folder (23 MB) provisioned under the landing gate machine's `oracles.root`"#,
+        source: r#"third-party: ReSkate Studio 20261012's compile (with LODs) of a map our own generator wrote; it carries copies of stock bundles Studio rewrites, so it stays in private storage, never in a repository; the expected verdicts come from the game's frames, not from this code"#,
+    },
+    Declared {
         query: Query::Oracle(OracleSet::Studio, Game::Skate, "physics"),
         status: Status::Live,
         gate: false,

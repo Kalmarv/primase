@@ -329,6 +329,11 @@ impl Index {
         out.dedup();
     }
 
+    /// Whether triangle `i` was listed (not too big).
+    pub fn listed(&self, i: usize) -> bool {
+        self.listed[i]
+    }
+
     /// How many triangles were too big to list.
     pub fn unlisted(&self) -> u64 {
         self.listed.iter().filter(|l| !**l).count() as u64
