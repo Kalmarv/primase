@@ -1,4 +1,5 @@
 //! A shipped game database (Tony Hawk: SHRED's `MAIN.DB`, 142 tables) against Python's sqlite3 reading of it.
+#[path = "database_oracle/mod.rs"]
 mod common;
 use primase_testdata::{Game, OracleSet, install_file, oracle};
 

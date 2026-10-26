@@ -17,7 +17,7 @@ primase-bytes.workspace = true
 primase-compress.workspace = true
 primase-hash.workspace = true
 primase-havok.workspace = true
-primase-sqlite.workspace = true
+quantydb-sqlite.workspace = true
 thiserror.workspace = true
 half.workspace = true
 

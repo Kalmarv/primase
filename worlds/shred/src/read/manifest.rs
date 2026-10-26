@@ -11,8 +11,8 @@
 //! constants in the encrypted `SCRIPTS.SDAT`), which this reader does not read; [`Manifest::map_ids`] gives the
 //! candidates (a level's maps) from the archives themselves.
 use super::{level, pak::Pak};
+use crate::read::database::{Database, Value};
 use crate::{Result, invalid};
-use primase_sqlite::{Database, Value};
 
 /// A layer archive's difficulty nibble.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -113,14 +113,18 @@ fn number(v: &Value) -> Option<u32> {
     }
 }
 
-fn cell<'a>(row: &'a primase_sqlite::Row, t: &primase_sqlite::Table, col: &str) -> Result<&'a Value> {
+fn cell<'a>(
+    row: &'a crate::read::database::Row,
+    t: &crate::read::database::Table,
+    col: &str,
+) -> Result<&'a Value> {
     let i = t
         .column(col)
         .ok_or_else(|| invalid(0, format!("database: table {:?} has no column {col}", t.name)))?;
     Ok(&row.values[i])
 }
 
-fn db_error(e: primase_sqlite::Error) -> crate::Error {
+fn db_error(e: crate::read::database::Error) -> crate::Error {
     invalid(0, format!("database: {e}"))
 }
 
@@ -283,7 +287,7 @@ impl Manifest {
 pub fn drop_spots(db: &Database<'_>, level: &str) -> Result<Option<Vec<DropSpot>>> {
     let t = match db.table(&format!("{level}_dropspots")) {
         Ok(t) => t,
-        Err(primase_sqlite::Error::NoTable(_)) => return Ok(None),
+        Err(crate::read::database::Error::NoTable(_)) => return Ok(None),
         Err(e) => return Err(db_error(e)),
     };
     let mut out = Vec::new();

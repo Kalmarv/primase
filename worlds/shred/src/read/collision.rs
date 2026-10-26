@@ -16,6 +16,7 @@
 //! added to any of them. A `ConvexTranslate` offsets its child; a list and a MOPP tree hold their children. Only
 //! meshes carry a surface: every other leaf is surface 0 (`default`).
 use super::pak::Pak;
+use crate::read::database::{Database, Value};
 use crate::{
     Error, Result,
     components::{CollisionFlags, DynamicShape, RigidBody as BodyData},
@@ -28,7 +29,6 @@ use primase_havok::packfile::{
     Packfile,
     physics::{self, ExtendedMesh, RigidBody, Shape},
 };
-use primase_sqlite::{Database, Value};
 use std::collections::BTreeMap;
 
 /// The surface field of a triangle's material word: bits 3..=8.

@@ -1,6 +1,6 @@
 """The sqlite oracle set's corpus/shred/main-db.tsv: every table of a database as Python's sqlite3 reads it.
 
-  python -I toolkit/sqlite/tests/oracles/dump.py <database> <output.tsv>
+  python -I worlds/shred/tests/oracles/sqlite_dump.py <database> <output.tsv>
 
 Output, one block per table (sqlite_master first, then the schema's tables in schema order):
   @<table><TAB><column><TAB>...            the table and the column names sqlite3 reports

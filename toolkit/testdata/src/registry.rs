@@ -699,15 +699,15 @@ pub const DECLARED: &[Declared] = &[
         query: Query::Install(Game::Shred, Some("PS3_GAME/USRDIR/database/main.db")),
         status: Status::Live,
         gate: true,
-        about: r#"Tony Hawk: SHRED's SQLite 3 database of levels, sessions, goals and drop spots (142 tables); toolkit/sqlite/tests/main_db.rs"#,
+        about: r#"Tony Hawk: SHRED's SQLite 3 database of levels, sessions, goals and drop spots (142 tables); worlds/shred/tests/main_db.rs"#,
         source: r#"the user's own disc, extracted unchanged"#,
     },
     Declared {
         query: Query::Oracle(OracleSet::Corpus, Game::Shred, "main-db.tsv"),
         status: Status::Live,
         gate: true,
-        about: r#"TSV of every table of SHRED's MAIN.DB (sqlite_master first): `@table` and its column names, then one line per row, its rowid and typed values (`n`, `i:`, `r:` big-endian double, `t:` UTF-8 and `b:` as hex); toolkit/sqlite/tests/main_db.rs"#,
-        source: r#"independent: Python's standard-library sqlite3 (SQLite's own C library) reading the database read-only, toolkit/sqlite/tests/oracles/dump.py"#,
+        about: r#"TSV of every table of SHRED's MAIN.DB (sqlite_master first): `@table` and its column names, then one line per row, its rowid and typed values (`n`, `i:`, `r:` big-endian double, `t:` UTF-8 and `b:` as hex); worlds/shred/tests/main_db.rs"#,
+        source: r#"independent: Python's standard-library sqlite3 (SQLite's own C library) reading the database read-only, worlds/shred/tests/oracles/sqlite_dump.py"#,
     },
     Declared {
         query: Query::Oracle(OracleSet::Corpus, Game::General, "codecs.tsv"),

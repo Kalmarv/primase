@@ -1422,9 +1422,9 @@ dependencies = [
  "primase-hash",
  "primase-havok",
  "primase-rsx",
- "primase-sqlite",
  "primase-testdata",
  "primase-texcodec",
+ "quantydb-sqlite",
  "serde",
  "serde_json",
  "thiserror",
@@ -1444,15 +1444,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "thiserror",
-]
-
-[[package]]
-name = "primase-sqlite"
-version = "0.1.0"
-dependencies = [
- "primase-bytes",
- "primase-testdata",
  "thiserror",
 ]
 
@@ -1551,6 +1542,12 @@ checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
 ]
+
+[[package]]
+name = "quantydb-sqlite"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dec6e3654d7f007e8860e4c1b19c16d784a4912b8a512d315fc905fa4341acd7"
 
 [[package]]
 name = "quick-xml"

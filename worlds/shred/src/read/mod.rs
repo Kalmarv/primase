@@ -3,6 +3,7 @@ pub mod attributes;
 pub mod collision;
 pub mod convert;
 pub mod cstr;
+pub mod database;
 pub mod level;
 pub mod manifest;
 pub mod material;

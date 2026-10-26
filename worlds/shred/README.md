@@ -136,7 +136,7 @@ Lab/game visual verification remains separate.
 `read::collision::read_collision(&mut world, &[(label, &pak), ...], &surfaces, frame)` reads every `.hkw` entry of
 precisely the supplied archives (the program chooses a level's base and layers) through `primase_havok::packfile`
 (layouts and censuses: `toolkit/havok/README.md`). `SurfaceTable::from_main_db` reads MAIN.DB's `surfaces` table
-(54 rows, `id` 0..53 in order, `NAME`) through `primase-sqlite`; the world's `core.surfaces` is that table, so a
+(54 rows, `id` 0..53 in order, `NAME`) through `read::database` (`quantydb-sqlite`); the world's `core.surfaces` is that table, so a
 surface id is its index. There is no skate. mapping here.
 
 One entity per leaf shape of each rigid body (12,641 bodies, 12,672 leaves in the 482 `.hkw` of the PAKs; the 8

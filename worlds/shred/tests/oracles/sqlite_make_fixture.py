@@ -1,7 +1,7 @@
 """Writes fixtures/multi.db with Python's sqlite3: a database shaped to need every part of the reader.
 
-  python -I toolkit/sqlite/tests/oracles/make_fixture.py toolkit/sqlite/tests/fixtures
-  python -I toolkit/sqlite/tests/oracles/dump.py toolkit/sqlite/tests/fixtures/multi.db toolkit/sqlite/tests/fixtures/multi.tsv
+  python -I worlds/shred/tests/oracles/sqlite_make_fixture.py worlds/shred/tests/fixtures
+  python -I worlds/shred/tests/oracles/sqlite_dump.py worlds/shred/tests/fixtures/multi.db worlds/shred/tests/fixtures/multi.tsv
 
 512-byte pages so that 300 rows need interior pages (two levels), a 5,000-byte text and a 3,000-byte blob need
 overflow chains, and integers of every width, reals, NULLs, an INTEGER PRIMARY KEY alias and an empty table occur.

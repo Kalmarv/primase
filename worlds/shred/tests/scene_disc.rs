@@ -2,6 +2,7 @@
 //! splines and lights.
 //! Counts are those of the recon census (`scratch/scene`), recounted here by this reader.
 use primase_core::{Marker, frame::SourceFrame};
+use primase_shred::read::database::Database;
 use primase_shred::{
     components::{SceneLight, Spline, Spot},
     read::{
@@ -12,7 +13,6 @@ use primase_shred::{
         scp_tables,
     },
 };
-use primase_sqlite::Database;
 use primase_testdata::{Game, Query, expect_found, install, install_file};
 use std::path::{Path, PathBuf};
 
