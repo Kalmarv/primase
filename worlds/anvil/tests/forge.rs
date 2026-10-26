@@ -116,7 +116,7 @@ fn a_two_entry_forge_reads_as_laid() {
         ),
         (2, 3, 1, 1094)
     );
-    assert_eq!((d1.unknown_04, d1.unknown_14), ([2, 0, 0, 0], -1));
+    assert_eq!((d1.unknown_04.as_slice(), d1.unknown_14), (&[2, 0, 0, 0][..], -1));
     let d2 = &f.data_header_2;
     assert_eq!(
         (
@@ -140,8 +140,14 @@ fn a_two_entry_forge_reads_as_laid() {
     assert_eq!((n.size, n.id, n.type_id), (6, 0x5E5E_0000_0000_0002, 0x415D_9568));
     assert_eq!(n.name, "Sphere");
     assert_eq!(
-        (n.unknown_1c, n.timestamp, n.unknown_ac),
-        (2, 1_789_743_211, [4, 0, 0, 0, 0])
+        (
+            n.unknown_1c,
+            n.timestamp,
+            n.unknown_ac,
+            n.meta_file_key,
+            n.unknown_b8
+        ),
+        (2, 1_789_743_211, 4, 0, [0, 0])
     );
     assert_eq!((rows[0].0.id, rows[0].1.name.as_str()), (16, "GlobalMetaFile"));
 }
@@ -158,7 +164,7 @@ fn a_forge_out_of_its_layout_is_refused_by_name() {
     };
     assert_eq!(
         set(0x09, &28i32.to_le_bytes()),
-        "forge version 28: only version 27 is read"
+        "forge version 28: only versions 26 and 27 are read"
     );
     assert!(set(0, b"scimitaR").starts_with("not a forge"));
     let e = set(INDEX_TABLE + 20 + 16, &1000i32.to_le_bytes());

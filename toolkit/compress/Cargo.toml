@@ -1,6 +1,6 @@
 [package]
 name = "primase-compress"
-description = "Compression codecs: LZ4, deflate/zlib, zstd, Oodle via the game's own DLL (Windows) or oozextract (elsewhere)"
+description = "Compression codecs: LZ4, deflate/zlib, zstd, LZO2A, Oodle via the game's own DLL (Windows) or oozextract (elsewhere)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

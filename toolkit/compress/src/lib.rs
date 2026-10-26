@@ -3,6 +3,8 @@
 
 use std::io::Write;
 
+mod lzo2a;
+pub use lzo2a::Lzo2a;
 #[allow(unsafe_code)]
 pub mod oodle;
 #[cfg(any(feature = "reference-decoder", not(windows)))]

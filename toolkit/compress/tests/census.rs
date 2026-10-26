@@ -1,8 +1,9 @@
 //! Optional private real-data gate over `oracles.corpus.general/codecs.tsv`: game streams with what third-party decoders
-//! make of them (`tests/oracles/codecs.py`: Python's zlib and the lz4 package). Each row is
+//! make of them (`tests/oracles/codecs.py`: Python's zlib and the lz4 package; LZO 2.10's own `lzo2a_decompress_safe`
+//! for the lzo2a rows, through `tests/oracles/lzo2a.c`). Each row is
 //! `codec<TAB>input<TAB>reference`, a relative path relative to the TSV's folder; bytes stay outside the repository.
-//! Codec names: lz4, deflate, zlib, zlib-unterminated. Oodle uses the DLL module's gate instead.
-use primase_compress::{Decompressor, Deflate, Lz4, Zlib, ZlibUnterminated};
+//! Codec names: lz4, deflate, zlib, zlib-unterminated, lzo2a. Oodle uses the DLL module's gate instead.
+use primase_compress::{Decompressor, Deflate, Lz4, Lzo2a, Zlib, ZlibUnterminated};
 use primase_core::gate::{GateReport, Tolerance};
 use primase_testdata::{Game, OracleSet, oracle};
 #[test]
@@ -29,6 +30,7 @@ fn corpus() -> Result<(), Box<dyn std::error::Error>> {
             "deflate" => &Deflate,
             "zlib" => &Zlib,
             "zlib-unterminated" => &ZlibUnterminated,
+            "lzo2a" => &Lzo2a,
             name => return Err(format!("unknown codec {name}").into()),
         };
         // a relative path is the TSV's folder's

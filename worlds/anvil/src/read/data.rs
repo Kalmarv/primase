@@ -4,13 +4,15 @@
 //! A data block (little-endian; offsets from the block's start):
 //! - magic 0x1004FA9957FBAA33 (u64);
 //! - the compression info, 11 bytes: version (u16), algorithm (u8), two u16 (observed 0 and 32772), chunk count
-//!   (u32);
-//! - every chunk's decoded size and stored size (u32 each), in order;
+//!   (u32); in version 1, 9 bytes: the chunk count is a u16 (the two u16 observed 32768 and 32768);
+//! - every chunk's decoded size and stored size (u32 each; u16 each in version 1), in order;
 //! - then for each chunk in order: its checksum (u32: Adler-32 started from 0 over its stored bytes) and its stored
 //!   bytes.
 //!
 //! Read here: version 2, algorithm 5 (zstd: established on Mesh resources and a three-chunk CompiledMip, Riders
-//! Republic build 25394987); a chunk whose stored size equals its decoded size is stored raw. The block's data is its
+//! Republic build 25394987), and version 1, algorithm 2 (LZO2A: every chunk of Shaun White Skateboarding's PC forges,
+//! algorithm 2 as AnvilToolkit maps it for the Assassin's Creed 2 era); a chunk whose stored size equals its decoded
+//! size is stored raw. The block's data is its
 //! chunks' decoded bytes in order. An entry is two consecutive blocks: a metadata block (16 bytes decoded, kept as
 //! stored) and the resource's. Anything else is refused, naming what it
 //! found. A forge's `GlobalMetaFile` entry has no block magic: it is not data blocks, and is refused as such.
@@ -21,16 +23,20 @@
 )]
 
 use primase_bytes::{Field, FieldError, View};
-use primase_compress::{Decompressor, Zstd};
+use primase_compress::{Decompressor, Lzo2a, Zstd};
 
 use crate::read::fields::LE;
 
 /// A data block's first bytes.
 pub const BLOCK_MAGIC: u64 = 0x1004_FA99_57FB_AA33;
-/// The compression version read.
+/// The compression version read with zstd.
 pub const VERSION: u16 = 2;
-/// The one algorithm read (zstd).
+/// The compression version read with LZO2A.
+pub const VERSION_1: u16 = 1;
+/// Version 2's algorithm read (zstd).
 pub const ALGORITHM_ZSTD: u8 = 5;
+/// Version 1's algorithm read (LZO2A).
+pub const ALGORITHM_LZO2A: u8 = 2;
 /// The checksum's starting value.
 pub const CHECKSUM_INIT: u32 = 0;
 
@@ -39,10 +45,12 @@ pub const CHECKSUM_INIT: u32 = 0;
 pub enum Error {
     #[error("block at {at}: no block magic (found {found:016x}): not a data block")]
     Magic { at: usize, found: u64 },
-    #[error("block at {at}: compression version {version}: only version 2 is read")]
+    #[error("block at {at}: compression version {version}: only versions 1 and 2 are read")]
     Version { at: usize, version: u16 },
-    #[error("block at {at}: compression algorithm {algorithm}: only algorithm 5 (zstd) is read")]
-    Algorithm { at: usize, algorithm: u8 },
+    #[error(
+        "block at {at}: compression version {version}, algorithm {algorithm}: only 2 with 5 (zstd) and 1 with 2 (LZO2A) are read"
+    )]
+    Algorithm { at: usize, version: u16, algorithm: u8 },
     #[error("block at {at}: {count} chunks: {why}")]
     Chunks {
         at: usize,
@@ -147,18 +155,33 @@ pub fn read_block(bytes: &[u8], at: usize, max_decoded: usize) -> Result<(Block,
     let info = |off: usize| at.saturating_add(off);
     let overflow = Error::Overflow;
     let version = View::new(bytes).u16(info(8), LE).field("compression version")?;
-    if version != VERSION {
+    if version != VERSION && version != VERSION_1 {
         return Err(Error::Version { at, version });
     }
+    let narrow = version == VERSION_1;
     let algorithm = View::new(bytes).u8(info(10)).field("compression algorithm")?;
-    if algorithm != ALGORITHM_ZSTD {
-        return Err(Error::Algorithm { at, algorithm });
-    }
+    let decoder: &dyn Decompressor = match (version, algorithm) {
+        (VERSION, ALGORITHM_ZSTD) => &Zstd,
+        (VERSION_1, ALGORITHM_LZO2A) => &Lzo2a,
+        _ => {
+            return Err(Error::Algorithm {
+                at,
+                version,
+                algorithm,
+            });
+        }
+    };
     let unknown = [
         View::new(bytes).u16(info(11), LE).field("compression info")?,
         View::new(bytes).u16(info(13), LE).field("compression info")?,
     ];
-    let count = View::new(bytes).u32(info(15), LE).field("chunk count")?;
+    let count = if narrow {
+        View::new(bytes).u16(info(15), LE).field("chunk count")?.into()
+    } else {
+        View::new(bytes).u32(info(15), LE).field("chunk count")?
+    };
+    // the chunk table's start and a row's size: (u16, u16) rows after a u16 count in version 1
+    let (table, row): (usize, usize) = if narrow { (17, 4) } else { (19, 8) };
     let n = usize::try_from(count).map_err(|_| Error::Chunks {
         at,
         count,
@@ -171,8 +194,9 @@ pub fn read_block(bytes: &[u8], at: usize, max_decoded: usize) -> Result<(Block,
             why: "a block holds at least one",
         });
     }
-    // every chunk needs 8 bytes of sizes and 4 of checksum: a count the bytes can't hold is refused before allocating
-    let tables = n.checked_mul(12).ok_or(overflow("chunk table"))?;
+    // every chunk needs its row of sizes and 4 bytes of checksum: a count the bytes can't hold is refused before
+    // allocating
+    let tables = n.checked_mul(row.saturating_add(4)).ok_or(overflow("chunk table"))?;
     if tables > bytes.len().saturating_sub(at) {
         return Err(Error::Chunks {
             at,
@@ -183,13 +207,22 @@ pub fn read_block(bytes: &[u8], at: usize, max_decoded: usize) -> Result<(Block,
     let mut chunks = Vec::with_capacity(n);
     let mut total = 0usize;
     for k in 0..n {
-        let pair = info(19)
-            .checked_add(k.checked_mul(8).ok_or(overflow("chunk table"))?)
+        let pair = info(table)
+            .checked_add(k.checked_mul(row).ok_or(overflow("chunk table"))?)
             .ok_or(overflow("chunk table"))?;
-        let decoded_size = View::new(bytes).u32(pair, LE).field("chunk decoded size")?;
-        let stored_size = View::new(bytes)
-            .u32(pair.checked_add(4).ok_or(overflow("chunk table"))?, LE)
-            .field("chunk stored size")?;
+        let (decoded_size, stored_size) = if narrow {
+            let second = pair.checked_add(2).ok_or(overflow("chunk table"))?;
+            (
+                u32::from(View::new(bytes).u16(pair, LE).field("chunk decoded size")?),
+                u32::from(View::new(bytes).u16(second, LE).field("chunk stored size")?),
+            )
+        } else {
+            let second = pair.checked_add(4).ok_or(overflow("chunk table"))?;
+            (
+                View::new(bytes).u32(pair, LE).field("chunk decoded size")?,
+                View::new(bytes).u32(second, LE).field("chunk stored size")?,
+            )
+        };
         let decoded = usize::try_from(decoded_size).map_err(|_| Error::Size {
             at,
             chunk: k,
@@ -216,8 +249,8 @@ pub fn read_block(bytes: &[u8], at: usize, max_decoded: usize) -> Result<(Block,
     let mut data = Vec::new();
     data.try_reserve_exact(total)
         .map_err(|_| overflow("decoded bytes"))?;
-    let mut cursor = info(19)
-        .checked_add(n.checked_mul(8).ok_or(overflow("chunk table"))?)
+    let mut cursor = info(table)
+        .checked_add(n.checked_mul(row).ok_or(overflow("chunk table"))?)
         .ok_or(overflow("chunk table"))?;
     for (k, chunk) in chunks.iter_mut().enumerate() {
         let size = |why| Error::Size {
@@ -248,7 +281,7 @@ pub fn read_block(bytes: &[u8], at: usize, max_decoded: usize) -> Result<(Block,
         if stored_len == decoded {
             data.extend_from_slice(stored);
         } else {
-            let out = Zstd
+            let out = decoder
                 .decompress(stored, decoded)
                 .map_err(|source| Error::Decode { at, source })?;
             data.extend_from_slice(&out);

@@ -18,6 +18,7 @@ pub enum Game {
     Skatebird,
     Sledding,
     Stuntboost,
+    ShaunWhite,
     Skate,
     General,
 }
@@ -33,6 +34,7 @@ impl Game {
             Game::Skatebird => "skatebird",
             Game::Sledding => "sledding",
             Game::Stuntboost => "stuntboost",
+            Game::ShaunWhite => "shaunwhite",
             Game::Skate => "skate",
             Game::General => "general",
         }
@@ -169,6 +171,12 @@ pub const INSTALLS: &[Entry] = &[
         key: "installs.riders",
         about: "Riders Republic's folder of `.forge` archives (Steam build 25394987)",
         source: "the user's own install",
+        gate: false,
+    },
+    Entry {
+        key: "installs.shaunwhite",
+        about: "Shaun White Skateboarding's (PC, 2010) folder of `.forge` archives, version 26",
+        source: "the user's own copy: the forges as the release's archives hold them, extracted unchanged",
         gate: false,
     },
     Entry {
@@ -432,6 +440,13 @@ pub const DECLARED: &[Declared] = &[
         gate: false,
         about: r#"one Anvil forge archive of version 27 (Riders Republic, Steam build 25394987: `DataPC_MAD_WhiteRoom_patch_01.forge`, 1,021,872 bytes, 337 entries); worlds/anvil/tests/forge.rs"#,
         source: r#"the user's own install; rows hand-checked against a separate read-only census of the file"#,
+    },
+    Declared {
+        query: Query::Install(Game::ShaunWhite, Some("DataPC.forge")),
+        status: Status::Live,
+        gate: false,
+        about: r#"one Anvil forge of version 26 (Shaun White Skateboarding, PC 1.0: `DataPC.forge`, 20,545,833 bytes, 38 entries: the game's bootstrap, settings and localization), its tables, FILEDATA headers and every entry's data blocks (LZO2A) read; worlds/anvil/tests/forge.rs, data.rs"#,
+        source: r#"the user's own copy; the first two rows (GlobalMetaFile, Graphic Bootstrap) and the second's two blocks hand-checked in a hex dump, and AnvilToolkit 1.3.7's version-25 forge reader and AC2 compression table as the third-party reading of the layout"#,
     },
     Declared {
         query: Query::Install(Game::Skate, Some("Data")),

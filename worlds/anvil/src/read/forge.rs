@@ -1,21 +1,28 @@
-//! A forge archive's index: a `.forge` file of version 27 opened, its headers and its one FileSet's index and name
-//! tables read as stored, and every entry's payload located (offset and size in the file; payloads are not read or
-//! decoded: their compression is not established).
+//! A forge archive's index: a `.forge` file of version 26 or 27 opened, its headers and its one FileSet's index and
+//! name tables read as stored, and every entry's payload located (offset and size in the file; payloads are not read
+//! or decoded here: [`crate::read::data`] decodes their blocks).
 //!
-//! Layout (little-endian; offsets in bytes):
-//! - file header: magic `scimitar\0` (9), version 0x09 (i32, 27), header size 0x0D (u64), then an i64 and an i32
-//!   (observed 16 and 1);
-//! - DataHeader1 (44) at the header size: entry count, four i32, an i64, `MaxFilesForThisIndex`, an i32 (observed 1:
-//!   one FileSet), the offset of DataHeader2 (i64);
+//! Layout (little-endian; offsets in bytes; version 26 where it differs, as Shaun White Skateboarding's PC forges
+//! store it, AnvilToolkit's version-25 reader being the third-party reading of the same layout):
+//! - file header: magic `scimitar\0` (9), version 0x09 (i32, 26 or 27), header size 0x0D (u64), then an i64 and an
+//!   i32 (observed 16 and 1);
+//! - DataHeader1 (44; 40 in version 26) at the header size: entry count, four i32 (three in version 26), an i64,
+//!   `MaxFilesForThisIndex`, an i32 (observed 1: one FileSet), the offset of DataHeader2 (i64);
 //! - DataHeader2 (48) there: index count, an i32 (observed 2), the index table's offset (i64), the next FileSet's
 //!   offset (i64, -1: none), index start and end (i32), the name table's offset (i64), an i64 (observed: the name
 //!   table's offset plus `MaxFilesForThisIndex` name records);
-//! - index records (20): payload offset (i64), id (u64), payload size (i32);
-//! - name records (192): size (i32), id (u64), an i32, the type id (u32: CRC-32 of the type's name), two i32, three
-//!   i32, a timestamp (i32), the name (128 bytes from 44, NUL-padded), five i32.
+//! - index records (20; 16 in version 26): payload offset (i64), id (u64; u32 in version 26), payload size (i32);
+//! - name records (192; 188 in version 26): size (i32), id (u64), an i32, the type id (u32: CRC-32 of the type's name;
+//!   0 on every version-26 record seen), two i32, three i32, a timestamp (i32), the name (128 bytes from 44,
+//!   NUL-padded), then an i32, the meta-file key (u64; u32 in version 26) and two i32.
 //!
 //! Index record `i` and name record `i` describe the same entry: the tables correspond by position (their sizes are
 //! equal row for row). Their ids are different fields, both kept; the tables are never joined by id.
+//!
+//! A version-26 entry starts with a 440-byte FILEDATA header before the bytes its size counts: `FILEDATA` (8), the
+//! entry's name NUL-padded to 383 bytes, then its index id (u32), its size (i32), the name record's id (u64) and 33
+//! bytes more (observed: eight i32, the timestamp the seventh of them, then a zero byte). [`Forge::payload`] checks the
+//! magic, the name, the ids and the size against the tables and returns the bytes after it.
 #![allow(
     clippy::disallowed_methods,
     clippy::disallowed_types,
@@ -36,16 +43,26 @@ use std::path::Path;
 
 /// The file's first bytes.
 pub const MAGIC: [u8; 9] = *b"scimitar\0";
-/// The one version read.
-pub const VERSION: i32 = 27;
-/// An index record's size.
-pub const INDEX_RECORD: u64 = 20;
-/// A name record's size.
-pub const NAME_RECORD: u64 = 192;
+/// The versions read.
+pub const VERSIONS: [i32; 2] = [26, 27];
+/// A version-26 entry's header's first bytes.
+pub const FILEDATA_MAGIC: [u8; 8] = *b"FILEDATA";
+/// A version-26 entry's header's size, before the bytes its size counts.
+pub const FILEDATA_HEADER: u64 = 440;
 
 const FILE_HEADER: u64 = 0x21;
-const DATA_HEADER_1: u64 = 44;
 const DATA_HEADER_2: u64 = 48;
+/// Where a FILEDATA header's index id is: after the magic and the name.
+const FILEDATA_IDS: usize = 8 + 383;
+
+/// A version's record sizes: DataHeader1, an index record, a name record.
+fn sizes(version: i32) -> (u64, u64, u64) {
+    if version == 26 {
+        (40, 16, 188)
+    } else {
+        (44, 20, 192)
+    }
+}
 
 /// Why a forge can't be read.
 #[derive(Debug, thiserror::Error)]
@@ -54,8 +71,10 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("not a forge: magic {0:02x?}, not \"scimitar\\0\"")]
     Magic([u8; 9]),
-    #[error("forge version {0}: only version 27 is read")]
+    #[error("forge version {0}: only versions 26 and 27 are read")]
     Version(i32),
+    #[error("entry {index}: its FILEDATA header {why}")]
+    FileData { index: usize, why: String },
     #[error("{what} at {offset}, {length} bytes: outside the file's {file} bytes")]
     OutOfFile {
         what: &'static str,
@@ -109,7 +128,8 @@ pub struct FileHeader {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DataHeader1 {
     pub entries: i32,
-    pub unknown_04: [i32; 4],
+    /// Four i32 (three in version 26).
+    pub unknown_04: Vec<i32>,
     pub unknown_14: i64,
     pub max_files_for_this_index: i32,
     /// Observed 1 (one FileSet).
@@ -138,7 +158,7 @@ pub struct DataHeader2 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IndexRecord {
     pub offset: i64,
-    /// The index table's id (not the name record's).
+    /// The index table's id (not the name record's); 32 bits in version 26.
     pub id: u64,
     pub size: i32,
 }
@@ -160,7 +180,10 @@ pub struct NameRecord {
     pub timestamp: i32,
     /// The name, up to its first NUL.
     pub name: String,
-    pub unknown_ac: [i32; 5],
+    pub unknown_ac: i32,
+    /// The meta-file key (AnvilToolkit's name for it; 32 bits in version 26).
+    pub meta_file_key: u64,
+    pub unknown_b8: [i32; 2],
 }
 
 /// A forge's index: its headers, and its entries' index and name records in table order.
@@ -197,9 +220,10 @@ impl Forge {
             return Err(Error::Magic(magic));
         }
         let version = head.i32(LE).field("the file header")?;
-        if version != VERSION {
+        if !VERSIONS.contains(&version) {
             return Err(Error::Version(version));
         }
+        let (data_header_1_size, index_record, name_record_size) = sizes(version);
         let header = FileHeader {
             version,
             header_size: head.u64(LE).field("the file header")?,
@@ -209,19 +233,16 @@ impl Forge {
         let start = i64::try_from(header.header_size).map_err(|_| Error::OutOfFile {
             what: "DataHeader1",
             offset: i64::MAX,
-            length: DATA_HEADER_1,
+            length: data_header_1_size,
             file: file_size,
         })?;
-        let d1_bytes = at(r, file_size, "DataHeader1", start, DATA_HEADER_1)?;
+        let d1_bytes = at(r, file_size, "DataHeader1", start, data_header_1_size)?;
         let mut f = Cursor::new(&d1_bytes);
         let data_header_1 = DataHeader1 {
             entries: f.i32(LE).field("DataHeader1")?,
-            unknown_04: [
-                f.i32(LE).field("DataHeader1")?,
-                f.i32(LE).field("DataHeader1")?,
-                f.i32(LE).field("DataHeader1")?,
-                f.i32(LE).field("DataHeader1")?,
-            ],
+            unknown_04: (0..if version == 26 { 3 } else { 4 })
+                .map(|_| f.i32(LE).field("DataHeader1"))
+                .collect::<Result<_, _>>()?,
             unknown_14: f.i64(LE).field("DataHeader1")?,
             max_files_for_this_index: f.i32(LE).field("DataHeader1")?,
             unknown_20: f.i32(LE).field("DataHeader1")?,
@@ -245,7 +266,7 @@ impl Forge {
             offset_to_name_table: f.i64(LE).field("DataHeader2")?,
             unknown_28: f.i64(LE).field("DataHeader2")?,
         };
-        let count = counts(&data_header_1, &data_header_2)?;
+        let count = counts(version, &data_header_1, &data_header_2)?;
         let table = |r: &mut R, what: &'static str, offset: i64, record: u64| {
             let length = u64::try_from(count)
                 .ok()
@@ -262,31 +283,36 @@ impl Forge {
             r,
             "the index table",
             data_header_2.offset_to_index_table,
-            INDEX_RECORD,
+            index_record,
         )?;
         let name_bytes = table(
             r,
             "the name table",
             data_header_2.offset_to_name_table,
-            NAME_RECORD,
+            name_record_size,
         )?;
+        let wide = version != 26;
         let index = index_bytes
-            .as_chunks::<20>()
-            .0
-            .iter()
+            .chunks_exact(usize::try_from(index_record).unwrap_or(usize::MAX))
             .map(|b| {
                 let mut f = Cursor::new(b);
                 Ok(IndexRecord {
                     offset: f.i64(LE).field("an index record")?,
-                    id: f.u64(LE).field("an index record")?,
+                    id: if wide {
+                        f.u64(LE).field("an index record")?
+                    } else {
+                        f.u32(LE).field("an index record")?.into()
+                    },
                     size: f.i32(LE).field("an index record")?,
                 })
             })
             .collect::<Result<Vec<_>, Error>>()?;
+        let header_bytes = if wide { 0 } else { FILEDATA_HEADER };
         let mut names = Vec::with_capacity(index.len());
-        for (k, (b, entry)) in name_bytes.as_chunks::<192>().0.iter().zip(&index).enumerate() {
-            check_entry(k, entry, file_size)?;
-            let n = name_record(k, b)?;
+        let records = name_bytes.chunks_exact(usize::try_from(name_record_size).unwrap_or(usize::MAX));
+        for (k, (b, entry)) in records.zip(&index).enumerate() {
+            check_entry(k, entry, header_bytes, file_size)?;
+            let n = name_record(k, b, wide)?;
             if n.size != entry.size {
                 return Err(Error::Sizes {
                     index: k,
@@ -328,14 +354,22 @@ impl Forge {
         self.index.iter().zip(&self.names)
     }
 
-    /// Entry `k`'s payload bytes as stored (its index record's offset and size), from the forge `r` this index was
-    /// read from; [`crate::read::data::read_entry`] reads its blocks.
+    /// The forge's version (one of [`VERSIONS`]).
+    pub fn version(&self) -> i32 {
+        self.header.version
+    }
+
+    /// Entry `k`'s payload bytes as stored (its index record's size of them, at its offset; in version 26 after its
+    /// FILEDATA header, which is checked against the entry's records), from the forge `r` this index was read from;
+    /// [`crate::read::data::read_entry`] reads its blocks.
     pub fn payload<R: Read + Seek>(&self, r: &mut R, k: usize) -> Result<Vec<u8>, Error> {
-        let e = self.index.get(k).ok_or(Error::Count {
-            what: "the entry",
-            value: i64::try_from(k).unwrap_or(i64::MAX),
-            why: format!("past the {} entries", self.index.len()),
-        })?;
+        let (Some(e), Some(n)) = (self.index.get(k), self.names.get(k)) else {
+            return Err(Error::Count {
+                what: "the entry",
+                value: i64::try_from(k).unwrap_or(i64::MAX),
+                why: format!("past the {} entries", self.index.len()),
+            });
+        };
         let file = r.seek(SeekFrom::End(0))?;
         let size = u64::try_from(e.size).map_err(|_| Error::Entry {
             index: k,
@@ -343,12 +377,50 @@ impl Forge {
             size: e.size,
             why: "negative size",
         })?;
-        at(r, file, "the entry's payload", e.offset, size)
+        if self.version() != 26 {
+            return at(r, file, "the entry's payload", e.offset, size);
+        }
+        let length = FILEDATA_HEADER.saturating_add(size);
+        let mut bytes = at(r, file, "the entry's payload", e.offset, length)?;
+        check_filedata(k, &bytes, e, n)?;
+        Ok(bytes.split_off(usize::try_from(FILEDATA_HEADER).unwrap_or(usize::MAX)))
     }
 }
 
-/// The entry count, checked against the index count, `MaxFilesForThisIndex`, the index range and the FileSet link.
-fn counts(d1: &DataHeader1, d2: &DataHeader2) -> Result<usize, Error> {
+/// A version-26 entry's FILEDATA header (the module documentation), held to its index and name records.
+fn check_filedata(k: usize, bytes: &[u8], e: &IndexRecord, n: &NameRecord) -> Result<(), Error> {
+    let fail = |why: String| Error::FileData { index: k, why };
+    let magic = bytes.get(..8).unwrap_or_default();
+    if magic != FILEDATA_MAGIC {
+        return Err(fail(format!("starts {magic:02x?}, not FILEDATA")));
+    }
+    let stored = bytes.get(8..FILEDATA_IDS).unwrap_or_default();
+    let end = stored.iter().position(|&c| c == 0).unwrap_or(stored.len());
+    let (name, padding) = stored.split_at(end);
+    if name != n.name.as_bytes() || padding.iter().any(|&c| c != 0) {
+        return Err(fail(format!(
+            "names {:?}, not the name record's {:?}",
+            String::from_utf8_lossy(name),
+            n.name
+        )));
+    }
+    let mut f = Cursor::new(bytes.get(FILEDATA_IDS..).unwrap_or_default());
+    let id = f.u32(LE).field("a FILEDATA header")?;
+    let size = f.i32(LE).field("a FILEDATA header")?;
+    let name_id = f.u64(LE).field("a FILEDATA header")?;
+    if u64::from(id) != e.id || size != e.size || name_id != n.id {
+        return Err(fail(format!(
+            "holds index id {id:#x}, size {size} and name id {name_id:#x}; the records hold {:#x}, {} and {:#x}",
+            e.id, e.size, n.id
+        )));
+    }
+    Ok(())
+}
+
+/// The entry count, checked against the index count, `MaxFilesForThisIndex`, the index range and the FileSet link. The
+/// index range is the entries' (`index_end` the count) in version 27, the table's room in version 26 (`index_end` the
+/// last of `MaxFilesForThisIndex` records, on all 33 forges of the one version-26 game read).
+fn counts(version: i32, d1: &DataHeader1, d2: &DataHeader2) -> Result<usize, Error> {
     let count = |what, value: i32| {
         usize::try_from(value).map_err(|_| Error::Count {
             what,
@@ -373,14 +445,19 @@ fn counts(d1: &DataHeader1, d2: &DataHeader2) -> Result<usize, Error> {
     }
     // two i32 apart: no i64 overflow
     let range = i64::from(d2.index_end).saturating_sub(i64::from(d2.index_start));
-    if d2.index_start < 0 || range != i64::from(d2.index_count) {
+    let (expected, of) = if version == 26 {
+        (
+            i64::from(d1.max_files_for_this_index).saturating_sub(1),
+            "MaxFilesForThisIndex - 1",
+        )
+    } else {
+        (i64::from(d2.index_count), "the index count")
+    };
+    if d2.index_start < 0 || range != expected {
         return Err(Error::Count {
             what: "the index range",
             value: range,
-            why: format!(
-                "from {} to {}: not the index count {}",
-                d2.index_start, d2.index_end, d2.index_count
-            ),
+            why: format!("from {} to {}: not {of} {expected}", d2.index_start, d2.index_end),
         });
     }
     if d2.offset_to_next_data_section != -1 {
@@ -389,8 +466,8 @@ fn counts(d1: &DataHeader1, d2: &DataHeader2) -> Result<usize, Error> {
     Ok(entries)
 }
 
-/// Entry `k`'s payload inside the file.
-fn check_entry(k: usize, e: &IndexRecord, file: u64) -> Result<(), Error> {
+/// Entry `k`'s payload (after a header of `header` bytes) inside the file.
+fn check_entry(k: usize, e: &IndexRecord, header: u64, file: u64) -> Result<(), Error> {
     let fail = |why| Error::Entry {
         index: k,
         offset: e.offset,
@@ -399,14 +476,14 @@ fn check_entry(k: usize, e: &IndexRecord, file: u64) -> Result<(), Error> {
     };
     let offset = u64::try_from(e.offset).map_err(|_| fail("negative offset"))?;
     let size = u64::try_from(e.size).map_err(|_| fail("negative size"))?;
-    match offset.checked_add(size) {
+    match offset.checked_add(size).and_then(|end| end.checked_add(header)) {
         Some(end) if end <= file => Ok(()),
         _ => Err(fail("past the end of the file")),
     }
 }
 
-/// Name record `k` from its 192 bytes.
-fn name_record(k: usize, b: &[u8]) -> Result<NameRecord, Error> {
+/// Name record `k` from its bytes (192, or 188 when not `wide`: version 26).
+fn name_record(k: usize, b: &[u8], wide: bool) -> Result<NameRecord, Error> {
     let mut f = Cursor::new(b);
     let size = f.i32(LE).field("a name record")?;
     let id = f.u64(LE).field("a name record")?;
@@ -438,10 +515,13 @@ fn name_record(k: usize, b: &[u8]) -> Result<NameRecord, Error> {
         unknown_24,
         timestamp,
         name,
-        unknown_ac: [
-            f.i32(LE).field("a name record")?,
-            f.i32(LE).field("a name record")?,
-            f.i32(LE).field("a name record")?,
+        unknown_ac: f.i32(LE).field("a name record")?,
+        meta_file_key: if wide {
+            f.u64(LE).field("a name record")?
+        } else {
+            f.u32(LE).field("a name record")?.into()
+        },
+        unknown_b8: [
             f.i32(LE).field("a name record")?,
             f.i32(LE).field("a name record")?,
         ],
