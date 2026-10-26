@@ -10,6 +10,7 @@ use thiserror::Error;
 mod blocks;
 mod encode;
 mod flip;
+pub mod gcm;
 mod pixels;
 
 pub use encode::{Encoder, TexEncoder};
