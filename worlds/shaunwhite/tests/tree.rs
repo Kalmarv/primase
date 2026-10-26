@@ -74,6 +74,29 @@ fn built() -> Vec<u8> {
         put(&mut blob, a + 80 * k + 72, branch[k]);
         putf(&mut blob, r + 32 * k + 16, 0.1 + k as f32 / 100.);
     }
+    // the kind table: kind 0 has three corners (a code of 100 or more), a parallelogram of the atlas' left part
+    for (i, v) in [0.8f32, 1.0, 0.8, 0.0, 0.0, 1.0].iter().enumerate() {
+        putf(&mut blob, 0x3e8 + 4 * i, *v);
+    }
+    for i in 0..3 {
+        put(&mut blob, 0x400 + 4 * i, 0x3F00_8081);
+    }
+    putf(&mut blob, 0x40c, 102.);
+    // one leaf: size 0.5, scale 1, a square's four vectors, kind 0, corners 0, 3, 1, 2; centre (1, 0.5, 3)
+    blob[c + 24..c + 32].copy_from_slice(&[0, 100, 4, 0, 3, 1, 2, 0]);
+    putf(&mut blob, c + 32, 0.5);
+    putf(&mut blob, c + 40, 1.);
+    for (i, v) in [[1f32, 0., 0.], [0., 1., 0.], [-1., 0., 0.], [0., -1., 0.]]
+        .iter()
+        .enumerate()
+    {
+        for (j, x) in v.iter().enumerate() {
+            putf(&mut blob, c + 44 + 12 * i + 4 * j, *x);
+        }
+    }
+    for (j, v) in [1f32, 0.5, 3.].iter().enumerate() {
+        putf(&mut blob, e + 4 + 4 * j, *v);
+    }
     body.extend_from_slice(&blob);
     assert!(body.len() > start);
     body
@@ -84,8 +107,14 @@ fn a_built_tree_reads_back_as_branches() {
     let body = built();
     let tree = Tree::parse(&body).unwrap();
     assert_eq!(
-        (tree.trunk_material, tree.leaf_material, tree.leaves, tree.dropped),
-        (0x11, 0x22, 1, 0)
+        (
+            tree.trunk_material,
+            tree.leaf_material,
+            tree.leaves.len(),
+            tree.unusable_leaves,
+            tree.dropped
+        ),
+        (0x11, 0x22, 1, 0, 0)
     );
     assert_eq!(tree.branches.len(), 2);
     assert_eq!(tree.branches[0].len(), 3);
@@ -116,6 +145,48 @@ fn a_built_tree_reads_back_as_branches() {
 }
 
 #[test]
+fn a_built_leaf_is_a_card_with_both_faces() {
+    let tree = Tree::parse(&built()).unwrap();
+    assert_eq!(tree.kinds.len(), 1);
+    // three corners and the parallelogram's fourth
+    assert_eq!(
+        tree.kinds[0].corners,
+        [[0.8, 1.0], [0.8, 0.0], [0.0, 1.0], [0.0, 0.0]]
+    );
+    let prim = tree.cards(None);
+    let Some(Stream::F32x3(p)) = prim.streams.get(&Semantic::Position) else {
+        panic!("no positions")
+    };
+    let Some(Stream::F32x2(uv)) = prim.streams.get(&Semantic::TexCoord(0)) else {
+        panic!("no texture coordinates")
+    };
+    assert_eq!(p.len(), 8);
+    // the front face: the centre plus the four vectors times the size
+    assert_eq!(
+        &p[..4],
+        &[[1.5, 0.5, 3.], [1., 1., 3.], [0.5, 0.5, 3.], [1., 0., 3.]]
+    );
+    // vertex i takes corner perm[i] = 0, 3, 1, 2
+    assert_eq!(&uv[..4], &[[0.8, 1.0], [0.0, 0.0], [0.8, 0.0], [0.0, 1.0]]);
+    // the back face repeats the vertices; its triangles run the other way round the same quad
+    assert_eq!(&p[4..], &p[..4]);
+    let ix = prim.indices.unwrap();
+    assert_eq!(ix.len(), 12);
+    assert_eq!(&ix[..6], &[3, 0, 1, 3, 1, 2]);
+    assert_eq!(&ix[6..], &[7, 5, 4, 7, 6, 5]);
+}
+
+#[test]
+fn a_leaf_far_from_every_node_is_no_card() {
+    let mut body = built();
+    let start = body.len() - 0x2000;
+    // the leaf centre array is at 0x1220: move the centre's y to 9 m, far from the nodes
+    put(&mut body, start + 0x1220 + 8, 9f32.to_bits());
+    let tree = Tree::parse(&body).unwrap();
+    assert_eq!((tree.leaves.len(), tree.unusable_leaves), (0, 1));
+}
+
+#[test]
 fn a_tree_that_does_not_add_up_is_refused() {
     let good = built();
     // the node count disagrees with its second copy
@@ -126,6 +197,14 @@ fn a_tree_that_does_not_add_up_is_refused() {
     // an array pointer outside the blob
     let mut bad = good.clone();
     put(&mut bad, start + 0x108, 0x7230_0000 + 0x1fff);
+    assert!(Tree::parse(&bad).is_err());
+    // a leaf of a kind the table lacks, and one whose corners are no permutation
+    let mut bad = good.clone();
+    let c = 0x400 + 5 * 80 + 5 * 32;
+    bad[start + c + 24] = 4;
+    assert!(Tree::parse(&bad).is_err());
+    let mut bad = good.clone();
+    bad[start + c + 27] = 1;
     assert!(Tree::parse(&bad).is_err());
     // not a RealTreeMesh
     let mut bad = good.clone();

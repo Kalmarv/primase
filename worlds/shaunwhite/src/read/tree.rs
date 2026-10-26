@@ -29,6 +29,28 @@
 //!
 //! [`Tree::tubes`] builds the trunk and branches as tapering rings of [`RING`] vertices at every node, joined along
 //! each branch.
+//!
+//! A leaf is a card of four vertices. Its record `C` (92 bytes): two opposite vectors (3 x f32 each, not read: the
+//! shader's far view), a byte for its kind (0 to 3: an entry of the kind table), a byte 100 (the leaf shader's "do not
+//! turn to face the camera" scale code), two bytes not read, a permutation of 0 to 3 in four bytes (the UV corner of
+//! each vertex), a byte 0, a size in metres (f32), 0, a scale (f32: 1 in `00_Veg_UrbanTree01_Thin`, 1.5 in
+//! `00_Veg_UrbanTree01`, 0.76 to 1.4 in `00_Veg_UrbanTreeSmall01`) and four vectors (3 x f32 each), the vertices'
+//! offsets from the leaf's centre in units of the size: the shader computes `centre + size x vector` (`RegenScaling x
+//! CtrToVertexDist x (CtrToVertexDir x 2 - 1)` with the scale at 1 in the near view). In every tree the four points
+//! are coplanar (median tetrahedron volume 0.001 to 0.003 of the scale cubed over all leaves; `v0` and `v2` lie on
+//! one ray from the centre, `v2` at the scale times `v0`'s distance), so a card is a quad; its order round the quad is
+//! found from the angles about its centre. Record `E`: its centre at 4. A leaf with no size, a scale outside 0.5 to 2
+//! (the last leaf of each tree: 0.05, 0.25) or a vector longer than 2 (16 of `00_Veg_UrbanTreeSmall01`'s: corners of
+//! a cube and one of 6.9 or 9.0, a clamped value) or a centre more than its reach (its longest vector and 0.5 m) outside
+//! the box of the nodes (the second-last leaf of two trees, at the origin) is not a card and is counted.
+//! The kind table, in the blob's header from 0x300: per kind three or four UV corners (u, v) of the leaf atlas, then
+//! three 0.502 (the vertex colour), then a code (5 or 100 to 104): a kind with a code of 100 or more has three
+//! corners (the fourth completes the parallelogram), the others four. In `00_Veg_TreeLeavesA`'s atlas (256 x 256)
+//! kinds 0 to 2 are the big branch (u 0 to 0.8, v 0 to 1) and kind 3 a bush (u 0.81 to 0.98, v 0.80 to 1).
+//!
+//! The leaves are the *restored* world's: the leaf shader (`leaves.fx`) clips every pixel where the world's influence is
+//! 0, and the game before the Ministry's influence is lifted shows the sibling Mesh `00_Veg_RealTree_UrbanTree`, a
+//! metal tree with light strips, instead. [`Tree::cards`] makes them with both faces.
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
@@ -84,8 +106,31 @@ pub struct Tree {
     pub branches: Vec<Vec<Node>>,
     /// Nodes of a branch past the last (dropped).
     pub dropped: usize,
-    /// How many leaves the tree has.
-    pub leaves: usize,
+    /// The leaf kinds' UV corners.
+    pub kinds: Vec<LeafKind>,
+    /// The leaves that make a card, in the blob's order.
+    pub leaves: Vec<Leaf>,
+    /// Leaves with no card (no size, a scale outside 0.5 to 2, a vertex vector longer than 2, or a centre far from every
+    /// node).
+    pub unusable_leaves: usize,
+}
+
+/// A leaf card (the module documentation).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Leaf {
+    pub center: [f32; 3],
+    /// Each vertex's offset from the centre, metres.
+    pub offsets: [[f32; 3]; 4],
+    /// Index into [`Tree::kinds`].
+    pub kind: usize,
+    /// The UV corner (0 to 3) of each vertex.
+    pub corners: [u8; 4],
+}
+
+/// A leaf kind's UV corners in the leaf atlas.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LeafKind {
+    pub corners: [[f32; 2]; 4],
 }
 
 struct Blob<'a> {
@@ -251,13 +296,159 @@ impl Tree {
                 format!("{} branches, the header says {m}", branches.len()),
             ));
         }
+        // the box of the nodes
+        let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+        for node in branches.values().flatten() {
+            for ((l, h), v) in lo.iter_mut().zip(hi.iter_mut()).zip(node.position) {
+                *l = l.min(v);
+                *h = h.max(v);
+            }
+        }
+        let kinds = leaf_kinds(&blob)?;
+        let mut leaves = Vec::new();
+        let mut unusable_leaves = 0usize;
+        for k in 0..l {
+            let rec = c.saturating_add(k.saturating_mul(92));
+            let at = |o: usize| rec.saturating_add(o);
+            let vec3 = |o: usize, what: &'static str| -> Result<[f32; 3], Error> {
+                Ok([
+                    blob.float(at(o), what)?,
+                    blob.float(at(o).saturating_add(4), what)?,
+                    blob.float(at(o).saturating_add(8), what)?,
+                ])
+            };
+            let size = blob.float(at(32), "leaf size")?;
+            let scale = blob.float(at(40), "leaf scale")?;
+            let mut vectors = [[0f32; 3]; 4];
+            for (i, v) in vectors.iter_mut().enumerate() {
+                *v = vec3(44usize.saturating_add(i.saturating_mul(12)), "leaf vertex")?;
+            }
+            let bytes = blob.v.slice(at(24), 8).field("leaf bytes")?;
+            let kind = usize::from(bytes.first().copied().unwrap_or(u8::MAX));
+            let mut corners = [0u8; 4];
+            for (i, c) in corners.iter_mut().enumerate() {
+                *c = bytes.get(3usize.saturating_add(i)).copied().unwrap_or(u8::MAX);
+            }
+            let mut seen = [false; 4];
+            for &c in &corners {
+                if let Some(s) = seen.get_mut(usize::from(c)) {
+                    *s = true;
+                }
+            }
+            if kind >= kinds.len() || !seen.iter().all(|&s| s) {
+                return Err(invalid(
+                    "leaf",
+                    format!("leaf {k}: kind {kind} of {}, corners {corners:?}", kinds.len()),
+                ));
+            }
+            let longest = vectors
+                .iter()
+                .map(|v| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt())
+                .fold(0f32, f32::max);
+            if size <= 0. || !(0.5..=2.).contains(&scale) || longest > 2. {
+                unusable_leaves = unusable_leaves.saturating_add(1);
+                continue;
+            }
+            let offsets = vectors.map(|v| v.map(|x| x * size));
+            let ec = e.saturating_add(k.saturating_mul(32));
+            let center = [
+                blob.float(ec.saturating_add(4), "leaf centre")?,
+                blob.float(ec.saturating_add(8), "leaf centre")?,
+                blob.float(ec.saturating_add(12), "leaf centre")?,
+            ];
+            // a leaf hangs near its branches: the second-last leaf of two trees sits at the origin, 2.6 m under the
+            // lowest node, and is a sentinel
+            let reach = offsets
+                .iter()
+                .map(|v| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt())
+                .fold(0f32, f32::max)
+                + 0.5;
+            let near = center
+                .iter()
+                .zip(lo.iter().zip(&hi))
+                .all(|(c, (l, h))| *c >= l - reach && *c <= h + reach);
+            if !near {
+                unusable_leaves = unusable_leaves.saturating_add(1);
+                continue;
+            }
+            leaves.push(Leaf {
+                center,
+                offsets,
+                kind,
+                corners,
+            });
+        }
         Ok(Tree {
             trunk_material,
             leaf_material,
             branches: branches.into_values().collect(),
             dropped,
-            leaves: l,
+            kinds,
+            leaves,
+            unusable_leaves,
         })
+    }
+
+    /// The leaves as one triangle-list primitive in the tree's own frame: per card four vertices (the centre plus the
+    /// offsets, the kind's UV corners by the card's permutation, the plane's normal) and two triangles taken round the
+    /// quad, and the same four again reversed with the normal negated, so that a one-sided material shows both faces.
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "vertex indices: counts of one tree's leaves times eight, far below u32's range"
+    )]
+    pub fn cards(&self, material: Option<primase_core::Entity>) -> Primitive {
+        let mut position = Vec::new();
+        let mut normal = Vec::new();
+        let mut uv = Vec::new();
+        let mut indices: Vec<u32> = Vec::new();
+        for leaf in &self.leaves {
+            let kind = self.kinds.get(leaf.kind);
+            let o = leaf.offsets;
+            // the quad's plane: its diagonals' normal, against the centre's side
+            let mut n = unit(cross(sub(o[2], o[0]), sub(o[3], o[1]))).unwrap_or([0., 0., 1.]);
+            // the vertices round the quad, by the angle about their mean in the plane
+            let mean = o.iter().fold([0f32; 3], |a, &v| add3(a, v)).map(|x| x / 4.);
+            let u = unit(sub(o[0], mean)).unwrap_or([1., 0., 0.]);
+            let w = cross(n, u);
+            let mut order = [0usize, 1, 2, 3];
+            let angle = |i: usize| {
+                let d = sub(o.get(i).copied().unwrap_or(mean), mean);
+                (d[0] * w[0] + d[1] * w[1] + d[2] * w[2]).atan2(d[0] * u[0] + d[1] * u[1] + d[2] * u[2])
+            };
+            order.sort_by(|&a, &b| angle(a).total_cmp(&angle(b)));
+            if n[2] < 0. {
+                n = [-n[0], -n[1], -n[2]];
+            }
+            for back in [false, true] {
+                let first = u32::try_from(position.len()).unwrap_or(u32::MAX);
+                for (i, off) in o.iter().enumerate() {
+                    position.push(add3(leaf.center, *off));
+                    normal.push(if back { [-n[0], -n[1], -n[2]] } else { n });
+                    let corner = usize::from(leaf.corners.get(i).copied().unwrap_or(0));
+                    uv.push(
+                        kind.and_then(|k| k.corners.get(corner))
+                            .copied()
+                            .unwrap_or([0., 0.]),
+                    );
+                }
+                let q = |j: usize| first + u32::try_from(order.get(j).copied().unwrap_or(0)).unwrap_or(0);
+                if back {
+                    indices.extend_from_slice(&[q(0), q(2), q(1), q(0), q(3), q(2)]);
+                } else {
+                    indices.extend_from_slice(&[q(0), q(1), q(2), q(0), q(2), q(3)]);
+                }
+            }
+        }
+        Primitive {
+            topology: Topology::Triangles,
+            streams: BTreeMap::from([
+                (Semantic::Position, Stream::F32x3(position)),
+                (Semantic::Normal, Stream::F32x3(normal)),
+                (Semantic::TexCoord(0), Stream::F32x2(uv)),
+            ]),
+            indices: Some(indices),
+            material,
+        }
     }
 
     /// The trunk and branches as one triangle-list primitive in the tree's own frame: a ring of [`RING`] vertices
@@ -331,8 +522,57 @@ impl Tree {
     }
 }
 
+/// The kind table: each run of three words `0x3F008081` (0.502) in the blob's header from 0x300 to 0x4A0 ends one kind's
+/// UV corners, which the words before it hold ([`LeafKind`]).
+fn leaf_kinds(blob: &Blob<'_>) -> Result<Vec<LeafKind>, Error> {
+    const GREY: u32 = 0x3F00_8081;
+    let word = |at: usize| blob.word(at, "leaf kind table");
+    let mut kinds = Vec::new();
+    let mut at = 0x300usize;
+    while at < 0x4A0 {
+        if word(at)? == GREY && word(at.saturating_add(4))? == GREY && word(at.saturating_add(8))? == GREY {
+            let code = blob.float(at.saturating_add(12), "leaf kind code")?;
+            let count = if code >= 100. { 6usize } else { 8 };
+            let mut uv = Vec::new();
+            for k in 0..count {
+                let back = count.saturating_sub(k).saturating_mul(4);
+                let v = blob.float(at.saturating_sub(back), "leaf kind UV")?;
+                if !(0.0..=1.0).contains(&v) {
+                    return Err(invalid("leaf kind UV", format!("{v} outside 0 to 1")));
+                }
+                uv.push(v);
+            }
+            let pair = |i: usize| {
+                let j = i.saturating_mul(2);
+                [
+                    uv.get(j).copied().unwrap_or(0.),
+                    uv.get(j.saturating_add(1)).copied().unwrap_or(0.),
+                ]
+            };
+            let corners = if count == 6 {
+                let (c0, c1, c2) = (pair(0), pair(1), pair(2));
+                [c0, c1, c2, [c1[0] + c2[0] - c0[0], c1[1] + c2[1] - c0[1]]]
+            } else {
+                [pair(0), pair(1), pair(2), pair(3)]
+            };
+            kinds.push(LeafKind { corners });
+            at = at.saturating_add(16);
+        } else {
+            at = at.saturating_add(4);
+        }
+    }
+    if kinds.is_empty() {
+        return Err(invalid("leaf kind table", "no kind found"));
+    }
+    Ok(kinds)
+}
+
 fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn add3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
 
 fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {

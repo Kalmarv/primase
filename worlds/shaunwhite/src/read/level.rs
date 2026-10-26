@@ -507,7 +507,7 @@ fn prototype(
 }
 
 /// The prototype of RealTreeMesh `id`: its trunk and branches as one primitive with the trunk Material ([`Tree::tubes`]).
-/// The leaves are not placed yet (counted).
+/// and its leaves as cards with the leaf Material ([`Tree::cards`]).
 fn tree_prototype(
     index: &Index,
     id: u32,
@@ -526,13 +526,20 @@ fn tree_prototype(
         }
     };
     let trunk = material(index, tree.trunk_material, world, materials, textures, bump);
+    let leaf = material(index, tree.leaf_material, world, materials, textures, bump);
     let mut prims = vec![tree.tubes(Some(trunk))];
+    if !tree.leaves.is_empty() {
+        prims.push(tree.cards(Some(leaf)));
+    }
     to_core_frame(&mut prims, frame, true);
     for _ in 0..tree.dropped {
         bump("tree nodes of no branch (dropped)".into());
     }
-    for _ in 0..tree.leaves {
-        bump("tree leaves (not placed)".into());
+    for _ in &tree.leaves {
+        bump("tree leaves".into());
+    }
+    for _ in 0..tree.unusable_leaves {
+        bump("tree leaves with no card (no size, an unlikely scale or a vector too long)".into());
     }
     let e = world.spawn();
     world.insert(e, Mesh::new(prims));
