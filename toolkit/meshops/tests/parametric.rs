@@ -2,7 +2,7 @@
 
 #![allow(clippy::unwrap_used)]
 
-use primase_core::pass::{PassManager, PassRegistry, RunReport};
+use primase_core::pass::{PassManager, PassRegistry, RunReport, SKIPPED};
 use primase_core::{Collider, Collision, Curve, Diagonal, Heightfield, Shape, Surfaces, World};
 
 fn world() -> World {
@@ -22,6 +22,38 @@ fn run(w: &mut World, text: &str) -> RunReport {
     let mut report = RunReport::default();
     PassManager::new(reg).run(w, &pipeline, &mut report).unwrap();
     report
+}
+
+fn absent_parametric_input_is_skipped_without_changing_collision(text: &str, input: &str) {
+    let mut w = world();
+    let e = w.spawn();
+    let collision = Collision {
+        positions: vec![[0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]],
+        triangles: vec![[0, 1, 2]],
+        surfaces: vec![1],
+    };
+    w.insert(e, collision.clone());
+    let report = run(&mut w, text);
+    assert_eq!(report.steps.len(), 1);
+    let step = &report.steps[0];
+    assert_eq!(step.skipped, [input]);
+    assert_eq!(step.log.counts[SKIPPED], 1);
+    assert!(step.failed.is_none() && step.added.is_empty() && step.removed.is_empty());
+    assert_eq!(w.get::<Collision>(e), Some(&collision));
+    assert_eq!(w.iter::<Collision>().count(), 1);
+}
+
+#[test]
+fn triangle_collision_without_colliders_skips_tessellation() {
+    absent_parametric_input_is_skipped_without_changing_collision("tessellate-colliders", "core.collider");
+}
+
+#[test]
+fn collision_without_curves_skips_flattening() {
+    absent_parametric_input_is_skipped_without_changing_collision(
+        "flatten-curves{tolerance=0.005}",
+        "core.curve",
+    );
 }
 
 #[test]

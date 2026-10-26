@@ -29,6 +29,7 @@ pub const FLATTEN_CURVES: PassSpec = PassSpec {
 /// space, with the collider's surface (a heightfield's per-cell surfaces where it has them). Boxes, convex hulls and
 /// heightfields are exact; spheres, capsules and cylinders are tessellated by [`sphere`], [`capsule`] and
 /// [`cylinder`]'s radius rule, counted. The colliders are removed; a heightfield stays (it is also a drawn surface).
+/// Worlds without `core.collider` record a skipped step and keep their existing collision unchanged.
 #[derive(Debug)]
 pub struct TessellateColliders;
 
@@ -38,6 +39,9 @@ impl Pass for TessellateColliders {
     }
     fn requires(&self) -> &[&'static str] {
         &[Collider::NAME]
+    }
+    fn may_lack_inputs(&self) -> bool {
+        true
     }
     fn provides(&self) -> &[&'static str] {
         &[Collision::NAME]
@@ -177,6 +181,7 @@ fn heightfield(f: &Heightfield, surface: u16) -> Result<Soup, String> {
 /// no further than `tolerance` metres from the curve, each segment subdivided at equal parameter steps until its
 /// control polygon lies within the tolerance of its chord. Up directions are interpolated along each segment and
 /// renormalised. Polylines are unchanged.
+/// Worlds without `core.curve` record a skipped step.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlattenCurves {
     tolerance: f32,
@@ -210,6 +215,12 @@ impl FlattenCurves {
 impl Pass for FlattenCurves {
     fn name(&self) -> &'static str {
         "flatten-curves"
+    }
+    fn requires(&self) -> &[&'static str] {
+        &[Curve::NAME]
+    }
+    fn may_lack_inputs(&self) -> bool {
+        true
     }
     fn options(&self) -> Options {
         Options::from([("tolerance".to_owned(), self.tolerance.to_string())])
