@@ -20,6 +20,11 @@ fn putf(b: &mut Vec<u8>, at: usize, v: f32) {
 
 /// A tree of a trunk of three nodes up the z axis and a branch of two, one leaf; node `k` has radius `0.1 + k / 100`.
 fn built() -> Vec<u8> {
+    built_at(0x7230_0000)
+}
+
+/// [`built`] in an image whose base address is `base`.
+fn built_at(base: u32) -> Vec<u8> {
     let mut body = vec![1u8];
     for w in [0x1234, REAL_TREE_MESH, 0] {
         body.extend_from_slice(&u32::to_le_bytes(w));
@@ -44,7 +49,6 @@ fn built() -> Vec<u8> {
     let start = body.len();
     let mut blob = vec![0u8; size];
     let (n, m, l) = (5usize, 2usize, 1usize);
-    let base = 0x7230_0000u32;
     let (a, bb, c) = (0x400usize, 0x400 + n * 80, 0x400 + n * 80 + n * 32);
     let (f, g) = (0x1000usize, 0x1000 + n * 72);
     let r = (g + l * 24 + 15) & !15;
@@ -55,6 +59,10 @@ fn built() -> Vec<u8> {
     put(&mut blob, 0x110, m as u32);
     put(&mut blob, 0x11c, l as u32);
     put(&mut blob, 0x120, base + c as u32);
+    // the three words that point at the image itself
+    put(&mut blob, 0x154, base + 0x3B0);
+    put(&mut blob, 0x158, base + 0x390);
+    put(&mut blob, 0x280, base + 0x3D0);
     put(&mut blob, 0x354, n as u32);
     put(&mut blob, 0x358, l as u32);
     put(&mut blob, 0x364, base + f as u32);
@@ -189,6 +197,36 @@ fn a_leaf_far_from_every_node_is_no_card() {
     assert_eq!((tree.leaves.len(), tree.unusable_leaves), (0, 1));
 }
 
+/// The image's base address differs by level; the tree read does not.
+#[test]
+fn a_tree_reads_the_same_at_every_levels_base() {
+    let want = Tree::parse(&built()).unwrap();
+    for base in [
+        0x7104_0000u32, // level 02 and 05
+        0x6FFA_0000,    // 03
+        0x734D_0000,    // 04
+        0x7321_0000,    // 04's second forge
+        0x7300_0000,    // 06
+        0x757C_0000,    // the shared forge
+    ] {
+        assert_eq!(Tree::parse(&built_at(base)).unwrap(), want, "{base:#x}");
+    }
+}
+
+/// The base comes from the image's own pointers: a blob whose three disagree, or one of which lies below its target,
+/// is refused by name rather than read at a guessed base.
+#[test]
+fn a_base_the_images_own_pointers_disagree_on_is_refused() {
+    let good = built();
+    let start = good.len() - 0x2000;
+    for (at, value) in [(0x158, 0x7231_0390), (0x154, 0x7230_0000 + 0x3B1), (0x280, 0x10)] {
+        let mut bad = good.clone();
+        put(&mut bad, start + at, value);
+        let e = Tree::parse(&bad).unwrap_err().to_string();
+        assert!(e.starts_with("RealTreeMesh base:"), "{at:#x}: {e}");
+    }
+}
+
 #[test]
 fn a_tree_that_does_not_add_up_is_refused() {
     let good = built();
@@ -305,4 +343,35 @@ fn level_01_trees_follow_influence() {
     assert_eq!((count(&restored, true), count(&restored, false)), (36, 36));
     let (unrestored, _) = run("unrestored");
     assert_eq!((count(&unrestored, true), count(&unrestored, false)), (0, 36));
+}
+
+/// Each level's trees are read at the base address its own image states (`0x72300000` in level 01, `0x71040000` in 02,
+/// `0x6FFA0000` in 03, `0x734D0000` in 04 ...): level 02 was refused whole while the base was level 01's. Level 04's
+/// `00_Veg_TreeCherry` is refused for a leaf kind UV of -3e-8 (a different defect), nothing else is.
+#[test]
+fn every_levels_trees_read_at_their_own_base() {
+    let Some(folder) = install(Game::ShaunWhite) else {
+        return;
+    };
+    // (level, trees read, trees refused)
+    for (level, read, refused) in [(1, 3, 0), (2, 2, 0), (3, 2, 0), (4, 1, 1), (5, 1, 0), (6, 3, 0)] {
+        let (w, report): (World, _) =
+            read_level(&folder.join(format!("DataPC_0{level}.forge")), &[]).unwrap();
+        let count = |key: &str| -> usize {
+            report
+                .iter()
+                .filter_map(|(_, t)| {
+                    t.strip_prefix(key)
+                        .and_then(|n| n.rsplit(": ").next()?.parse::<usize>().ok())
+                })
+                .sum()
+        };
+        assert_eq!(count("trees: "), read, "level {level}: {report:?}");
+        assert_eq!(count("trees not read"), refused, "level {level}: {report:?}");
+        let placed = w
+            .iter::<Instance>()
+            .filter(|(_, i)| w.has::<RealTree>(i.prototype))
+            .count();
+        assert!(placed > 0, "level {level}: no RealTree placed");
+    }
 }

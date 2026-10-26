@@ -7,8 +7,12 @@
 //! (u8), then the SubMeshes array: a u32 count (2) and per SubRealTreeMesh (class `0xFE8CCC18`) `[pointer 0][managed
 //! 1][id][class]`, the Material id, a u32 0, the kind (0 the trunk, 1 the leaves), and a count of f32 distances (the
 //! levels of detail: 6 or 5). Five zero bytes, the u32 `0x5E5E7E30`, the blob's size (u32), 154, 12345, 0 and more
-//! fields follow, and the blob is the last `size` bytes of the body: a native memory image whose pointers are
-//! `0x72300000` plus an offset in it.
+//! fields follow, and the blob is the last `size` bytes of the body: a native memory image whose pointers are its
+//! base address plus an offset in it. The base differs by level (`0x72300000` in level 01, `0x71040000` in 02,
+//! `0x6FFA0000` in 03, `0x734D0000` or `0x73210000` in 04, `0x73000000` in 06, `0x757C0000` in the shared forge) and the
+//! image stores it: three header words, at 0x154, 0x158 and 0x280, point at the offsets 0x3B0, 0x390 and 0x3D0 of the
+//! image itself, in all 18 distinct trees of the game's cells (nine forges). [`Blob::new`] takes the base from them and refuses a blob whose
+//! three disagree.
 //!
 //! The blob's header, at 0x100: `[0][N][A][B]`, `[M][..][..][L]`, `[C]`, with `N` nodes, `M` branches (the trunk
 //! the first) and `L` leaves; at 0x350 `[0][N][L][0]`, `[0][F][G][0]`, `[0][N][L][0]`, `[R][E][0][0]`; each a pointer or a count.
@@ -67,8 +71,8 @@ const LE: Endian = Endian::Little;
 pub const REAL_TREE_MESH: u32 = 0xCD0D_35E6;
 pub const SUB_REAL_TREE_MESH: u32 = 0xFE8C_CC18;
 const BLOB_MARKER: u32 = 0x5E5E_7E30;
-/// The offset a blob's pointers count from.
-const BASE: u32 = 0x7230_0000;
+/// The header words that point at the image itself, and the offset each points at: they give the image's base address.
+const SELF_POINTERS: [(usize, u32); 3] = [(0x154, 0x3B0), (0x158, 0x390), (0x280, 0x3D0)];
 /// Vertices of a branch's ring.
 pub const RING: usize = 8;
 
@@ -136,9 +140,36 @@ pub struct LeafKind {
 struct Blob<'a> {
     v: View<'a>,
     len: usize,
+    /// The address the image was built at: its pointers are this plus an offset.
+    base: u32,
 }
 
-impl Blob<'_> {
+impl<'a> Blob<'a> {
+    /// The blob `v` of `len` bytes, its base the address its own pointers ([`SELF_POINTERS`]) give.
+    fn new(v: View<'a>, len: usize) -> Result<Self, Error> {
+        let mut base = None;
+        for (at, offset) in SELF_POINTERS {
+            let b = v
+                .u32(at, LE)
+                .field("image pointer")?
+                .checked_sub(offset)
+                .ok_or_else(|| {
+                    invalid(
+                        "base",
+                        format!("the pointer at {at:#x} is below its target {offset:#x}"),
+                    )
+                })?;
+            if base.is_some_and(|first| first != b) {
+                return Err(invalid(
+                    "base",
+                    "the header's pointers to the image itself disagree",
+                ));
+            }
+            base = Some(b);
+        }
+        let base = base.ok_or_else(|| invalid("base", "no pointer to the image itself"))?;
+        Ok(Blob { v, len, base })
+    }
     fn word(&self, at: usize, field: &'static str) -> Result<u32, Error> {
         Ok(self.v.u32(at, LE).field(field)?)
     }
@@ -149,7 +180,7 @@ impl Blob<'_> {
     fn array(&self, at: usize, n: usize, size: usize, field: &'static str) -> Result<usize, Error> {
         let p = self
             .word(at, field)?
-            .checked_sub(BASE)
+            .checked_sub(self.base)
             .and_then(|o| usize::try_from(o).ok())
             .ok_or_else(|| invalid(field, "a pointer outside the blob's base"))?;
         n.checked_mul(size)
@@ -224,10 +255,7 @@ impl Tree {
             .checked_sub(size)
             .filter(|&s| s >= at.saturating_add(21))
             .ok_or_else(|| invalid("blob size", format!("{size} bytes of a body of {}", body.len())))?;
-        let blob = Blob {
-            v: View::new(body.get(start..).unwrap_or_default()),
-            len: size,
-        };
+        let blob = Blob::new(View::new(body.get(start..).unwrap_or_default()), size)?;
         let n = blob.count(0x104, "node count")?;
         let m = blob.count(0x110, "branch count")?;
         let l = blob.count(0x11c, "leaf count")?;
