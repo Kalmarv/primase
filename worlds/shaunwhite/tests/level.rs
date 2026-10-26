@@ -53,7 +53,6 @@ fn level_01_reads_and_lowers() {
     for (class, why, n) in [
         ("0xc3120087", "free-form shape hull", 140),
         ("0xcaaa7ee8", "particle system", 290),
-        ("0xcd0d35e6", "RealTree", 36),
         ("0xf4bbbb9e", "dynamic mesh", 20),
     ] {
         let want = format!("visuals showing class {class}, a {why}");
@@ -110,8 +109,12 @@ fn level_01_reads_and_lowers() {
         assert!(w.has::<Mesh>(i.prototype) || w.has::<CollisionSource>(i.prototype));
         assert!(w.has::<PlacedBy>(e) || w.has::<CollisionPlacedBy>(e));
     }
-    // every prototype states its vertex stride and flags
-    assert!(w.iter::<Mesh>().all(|(e, _)| w.has::<MeshFormat>(e)));
+    // every compiled mesh states its vertex stride and flags; the three trees' meshes are made by the reader
+    let formats = w.iter::<MeshFormat>().count();
+    assert!(
+        w.iter::<MeshFormat>().all(|(e, _)| w.has::<Mesh>(e)) && formats + 3 == meshes,
+        "{formats} of {meshes}"
+    );
 
     // every material states its fields (a body of another length is the exception), every slot its texture and the
     // texture how it is sampled
@@ -254,7 +257,8 @@ fn level_01_reads_and_lowers() {
             let n = &w.get::<Name>(e).unwrap().0;
             assert!(!n.contains("OutOfBound") && !n.starts_with("FPP_Blocker"), "{n}");
         } else {
-            assert!(w.has::<CollisionPlacedBy>(e));
+            // a tree (a Mesh the reader made, with no vertex format) or a collision placement
+            assert!(w.has::<CollisionPlacedBy>(e) || w.has::<Mesh>(i.prototype));
         }
     }
     assert_eq!(w.iter::<Marker>().count(), markers.len());

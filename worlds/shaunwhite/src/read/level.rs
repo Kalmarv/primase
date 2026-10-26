@@ -37,6 +37,7 @@ use crate::read::material::{self, MATERIAL, Material};
 use crate::read::mesh::{self, CompiledMesh, MESH};
 use crate::read::scene::{self, GRID_CELL_DATA_BLOCK, LOD_SELECTOR};
 use crate::read::texture::{TEXTURE_MAP_SPEC, TextureMap};
+use crate::read::tree::Tree;
 use crate::read::{guidance, markers};
 
 /// The most bytes a block may declare decoded (the largest entry seen decodes to about 38 MB).
@@ -374,7 +375,6 @@ fn unplaced(class: u32) -> String {
         c if light::is_light(c) => "a light, placed as one",
         scene::PARTICLE_SYSTEM => "a particle system: an effect, no geometry",
         scene::DYNAMIC_MESH => "a dynamic mesh: its vertices are made at run time",
-        scene::REAL_TREE_MESH => "a RealTree: native tree data",
         scene::FREE_FORM_SHAPE_HULL => {
             "a free-form shape hull: the shaping mechanic's deformation volume, not drawn and not collision"
         }
@@ -394,7 +394,7 @@ fn resolve(index: &Index, target: u32, bump: &mut impl FnMut(String)) -> Option<
         return None;
     };
     match o.class {
-        MESH => Some(target),
+        MESH | scene::REAL_TREE_MESH => Some(target),
         LOD_SELECTOR => {
             let levels = scene::lod_levels(body).ok()?;
             let first = levels
@@ -424,6 +424,9 @@ fn prototype(
     bump: &mut impl FnMut(String),
 ) -> Option<Entity> {
     let (o, body) = index.get(id)?;
+    if o.class == scene::REAL_TREE_MESH {
+        return tree_prototype(index, id, frame, world, materials, textures, bump);
+    }
     let cm = match CompiledMesh::in_mesh(body) {
         Ok(m) => m,
         Err(e) => {
@@ -500,6 +503,41 @@ fn prototype(
         );
     }
     bump("meshes".into());
+    Some(e)
+}
+
+/// The prototype of RealTreeMesh `id`: its trunk and branches as one primitive with the trunk Material ([`Tree::tubes`]).
+/// The leaves are not placed yet (counted).
+fn tree_prototype(
+    index: &Index,
+    id: u32,
+    frame: SourceFrame,
+    world: &mut World,
+    materials: &mut BTreeMap<u32, Entity>,
+    textures: &mut BTreeMap<u32, Option<Entity>>,
+    bump: &mut impl FnMut(String),
+) -> Option<Entity> {
+    let (o, body) = index.get(id)?;
+    let tree = match Tree::parse(body) {
+        Ok(t) => t,
+        Err(e) => {
+            bump(format!("trees not read: {e}"));
+            return None;
+        }
+    };
+    let trunk = material(index, tree.trunk_material, world, materials, textures, bump);
+    let mut prims = vec![tree.tubes(Some(trunk))];
+    to_core_frame(&mut prims, frame, true);
+    for _ in 0..tree.dropped {
+        bump("tree nodes of no branch (dropped)".into());
+    }
+    for _ in 0..tree.leaves {
+        bump("tree leaves (not placed)".into());
+    }
+    let e = world.spawn();
+    world.insert(e, Mesh::new(prims));
+    world.insert(e, Name(o.name.clone()));
+    bump("trees".into());
     Some(e)
 }
 
