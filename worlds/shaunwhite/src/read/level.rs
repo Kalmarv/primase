@@ -110,6 +110,7 @@ pub fn read_level(level: &Path, shared: &[PathBuf]) -> Result<(World, Report)> {
     let mut bump = |k: String| *counts.entry(k).or_default() += 1;
     let mut collision = super::level_collision::CollisionReader::new(&index);
     let mut light_placements = BTreeSet::new();
+    let mut root_markers: Vec<(scene::Entity, String, &str)> = Vec::new();
     for d in index.entries.get(..level_entries).unwrap_or_default() {
         // SkyLight belongs to the level root entry, not to its cell directories. Shared forges' suns are not this
         // level's settings; every SkyLight of the requested level is retained for an explicit lowering/selection.
@@ -127,7 +128,8 @@ pub fn read_level(level: &Path, shared: &[PathBuf]) -> Result<(World, Report)> {
             }
         }
         if d.objects.first().map(|o| o.class) != Some(GRID_CELL_DATA_BLOCK) {
-            // the world root entry holds Entities of its own: the player spawners of the world's missions
+            // the world root entry holds Entities of its own: the player spawners of the world's missions (placed after
+            // the cells' markers, so the first start of a level stays the first of its cells)
             for o in d.objects.iter().filter(|o| o.class == scene::ENTITY) {
                 let body = d.resource.get(o.body.clone()).unwrap_or_default();
                 let Ok(entity) = scene::Entity::parse(body) else {
@@ -135,7 +137,7 @@ pub fn read_level(level: &Path, shared: &[PathBuf]) -> Result<(World, Report)> {
                     continue;
                 };
                 if let Some(kind) = markers::kind(&o.name, &entity.components) {
-                    place_marker(&mut world, frame, &entity, &o.name, kind);
+                    root_markers.push((entity, o.name.clone(), kind));
                     bump(format!("markers in the root entry: {kind}"));
                 }
             }
@@ -225,6 +227,9 @@ pub fn read_level(level: &Path, shared: &[PathBuf]) -> Result<(World, Report)> {
                 bump("placements".into());
             }
         }
+    }
+    for (entity, name, kind) in &root_markers {
+        place_marker(&mut world, frame, entity, name, kind);
     }
     collision.finish(&mut world);
     report.push((
