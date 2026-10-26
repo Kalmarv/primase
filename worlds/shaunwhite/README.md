@@ -185,6 +185,16 @@ meshes with and without colour streams gets a separate colourless drawing (inclu
 supplies one for absent vertex colour. The original weight stream stays on the mesh. The following generic material
 pass lowers the ordinary child materials and supplies the host's roughness/specular approximation.
 
+A Material with only a diffuse layer is the equation's first step alone: `lerp(texture, texture * tint, COLOR_0.r)`. With
+a white tint that is the texture, so `lower-shaunwhite-material` marks every Material `VertexColor::Ignored` (a vertex
+colour is never a colour multiplier in the shader; level 01's plaza planters carry `COLOR_0` of about (0.93, 0, 0) on a
+white tint and are grey concrete in the restored game, not red). With a tint, a texture and a drawing with `COLOR_0`
+the layers pass builds the two-layer form (untinted base, tinted layer weighted by the vertex red), 101 materials of
+level 01; with no `COLOR_0` the texture times the tint is exact. The vertex alpha does reach the output, as the alpha
+of a blend or test, and core can multiply `COLOR_0` or ignore it but not take its alpha alone: a blended or
+alpha-tested Material with a vertex alpha below one keeps the multiplier (54 of level 01's 551 materials drawn with
+`COLOR_0`, their vertex red, green and blue then an approximation), counted by the material pass.
+
 Current coverage is opaque host materials. Host blend/alpha-test, authored rotated-UV matrices, border addressing,
 missing base textures, unread fields and out-of-range tints are named and counted omissions; they retain the generic
 material fallback. This does not omit alpha factors of supported opaque materials' later layers. Layer-dependent

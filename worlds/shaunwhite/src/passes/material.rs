@@ -14,10 +14,21 @@
 //! against 13% of 801,135 of the others: weights, which drawn as a colour paint magenta and green across rocks and
 //! roofs), so it draws as its diffuse layer; an additive Material (blend 6) is drawn alpha-blended and unlit, its
 //! additive blend having no form here; every material is one-sided and dielectric.
+//!
+//! No Material takes `COLOR_0` as a colour. The shader (`ekgeneric.fx` `FctDiffuseColor`) uses its red as the weight
+//! that interpolates the first texture towards that texture times the tint, which `lower-shaunwhite-layers` builds; a
+//! white tint leaves the texture whatever the weight. Only its alpha reaches the output, as the vertex alpha of the
+//! blend or test. So every Material is marked [`VertexColor::Ignored`], except one that is blended or alpha-tested
+//! and has a vertex alpha below one: core has no mode that takes the alpha alone, so it keeps `COLOR_0` as a
+//! multiplier, its red, green and blue then approximate, and the pass counts it.
+
+use std::collections::BTreeSet;
 
 use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode, PbrMaterial, Shading, Specular, TextureRef, UvTransform, Wrap};
-use primase_core::{Component, Entity, VertexColor, World};
+use primase_core::{
+    Component, Entity, MaterialVariants, Mesh, Primitive, Semantic, Stream, VertexColor, World,
+};
 
 use crate::components::{MaterialRef, MaterialState, Sampler, SlotRef};
 
@@ -85,6 +96,39 @@ pub(super) fn texture_ref(w: &World, slot: &SlotRef, log: &mut PassLog) -> Textu
     r
 }
 
+/// Every material some drawing of `primitive` (the `index`th of `mesh`) uses: its own and its variants'.
+pub(super) fn drawn_with(w: &World, mesh: Entity, index: usize, primitive: &Primitive) -> Vec<Entity> {
+    primitive
+        .material
+        .into_iter()
+        .chain(
+            w.get::<MaterialVariants>(mesh)
+                .and_then(|v| v.0.get(index))
+                .into_iter()
+                .flat_map(|v| v.values().copied()),
+        )
+        .collect()
+}
+
+/// The materials some drawing of which has a vertex whose `COLOR_0` alpha is below one.
+fn with_vertex_alpha(w: &World) -> BTreeSet<Entity> {
+    let mut out = BTreeSet::new();
+    for (e, mesh) in w.iter::<Mesh>() {
+        for (i, p) in mesh.primitives().iter().enumerate() {
+            let varies = match p.streams.get(&Semantic::Color(0)) {
+                Some(Stream::F32x4(c)) => c.iter().any(|v| v[3] < 1.),
+                Some(Stream::U8x4(c)) => c.iter().any(|v| v[3] < u8::MAX),
+                Some(Stream::U16x4(c)) => c.iter().any(|v| v[3] < u16::MAX),
+                _ => false,
+            };
+            if varies {
+                out.extend(drawn_with(w, e, i, p));
+            }
+        }
+    }
+    out
+}
+
 /// The roughness of a Blinn-Phong exponent `power`: the lobe's GGX roughness `sqrt(2 / (n + 2))`, as glTF's perceptual
 /// roughness (its square root), within 0.05 to 1.
 fn roughness(power: f32) -> f32 {
@@ -145,6 +189,7 @@ impl Pass for LowerShaunwhiteMaterial {
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let all: Vec<(Entity, MaterialRef)> = w.iter::<MaterialRef>().map(|(e, m)| (e, m.clone())).collect();
+        let vertex_alpha = with_vertex_alpha(w);
         for (e, m) in all {
             // a blend (core.layered, lower-shaunwhite-layers') is drawn by its layers, each a material of its own: it
             // takes no pbr.material itself (core's and the targets' rule)
@@ -162,7 +207,6 @@ impl Pass for LowerShaunwhiteMaterial {
                 .iter()
                 .any(|k| m.slots.contains_key(*k));
             if layered {
-                w.insert(e, VertexColor::Ignored);
                 log.approximate(
                     "layered materials drawn as their diffuse layer, vertex colour ignored",
                     1,
@@ -212,6 +256,15 @@ impl Pass for LowerShaunwhiteMaterial {
                     }
                 }
                 None => log.count("materials without fields (opaque, white)", 1),
+            }
+            if layered || pbr.alpha_mode == AlphaMode::Opaque || !vertex_alpha.contains(&e) {
+                w.insert(e, VertexColor::Ignored);
+            } else {
+                log.approximate_on(
+                    e,
+                    "blended or alpha-tested materials keep COLOR_0 as a colour for its alpha (the shader takes only the alpha)",
+                    1,
+                );
             }
             w.remove::<MaterialRef>(e);
             w.insert(e, pbr);
@@ -379,7 +432,7 @@ mod tests {
         assert_eq!(spec.color_texture.map(|r| r.texture), Some(t));
         assert_eq!((p.emissive, p.emissive_strength), ([1.0; 3], 6.0));
         assert_eq!(p.emissive_texture, p.base_color_texture);
-        assert!(w.get::<VertexColor>(lit).is_none());
+        assert_eq!(w.get::<VertexColor>(lit), Some(&VertexColor::Ignored));
         let q = w.get::<PbrMaterial>(plain).unwrap();
         assert!(q.specular.is_none() && q.emissive_texture.is_none() && q.emissive_strength == 1.0);
         assert!((q.roughness - 0.8409).abs() < 1e-3);

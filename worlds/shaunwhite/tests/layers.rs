@@ -8,7 +8,7 @@ use primase_core::pass::{Conservation, PassManager, PassRegistry, RunReport};
 use primase_core::pbr::{PbrMaterial, UvTransform, Wrap};
 use primase_core::{
     ColorSpace, Entity, LayeredMaterial, MaterialVariants, Mesh, Primitive, Semantic, Stream, TexFormat,
-    TexRole, Texture, Topology, World,
+    TexRole, Texture, Topology, VertexColor, World,
 };
 use primase_shaunwhite::components::{LayerState, MaterialRef, MaterialState, SlotRef};
 use std::collections::BTreeMap;
@@ -288,4 +288,201 @@ fn restored_metro_mural_and_level_six_masked_walls_keep_every_weight_factor() {
         );
         assert!(w.verify_components().is_empty());
     }
+}
+
+fn plain(
+    w: &mut World,
+    name: &str,
+    tint: [f32; 4],
+    blended: bool,
+    vertex: Option<[f32; 4]>,
+) -> (Entity, Entity) {
+    let texture = w.spawn();
+    w.insert(
+        texture,
+        Texture {
+            width: 1,
+            height: 1,
+            format: TexFormat::Rgba8Unorm,
+            levels: vec![vec![128, 64, 255, 255]],
+            color_space: ColorSpace::Linear,
+            role: TexRole::Color,
+            normal: None,
+        },
+    );
+    let material = w.spawn();
+    w.insert(
+        material,
+        MaterialRef {
+            id: 7,
+            name: name.into(),
+            state: Some(MaterialState {
+                blend: if blended { 4 } else { 0 },
+                blended,
+                alpha_test: false,
+                alpha_ref: 128,
+                water: false,
+                color: tint,
+                illumination: 0.,
+                specular_level: 1.,
+                specular_power: 10.,
+                layering: LayerState::default(),
+            }),
+            slots: BTreeMap::from([(
+                "diffuse".into(),
+                SlotRef {
+                    texture,
+                    scale: [1.; 2],
+                    offset: [0.; 2],
+                    rotation: 0.,
+                    texcoord: 0,
+                    address: Some([0; 2]),
+                },
+            )]),
+            unread: Vec::new(),
+        },
+    );
+    let mut streams = BTreeMap::from([
+        (
+            Semantic::Position,
+            Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0., 0., 1.]]),
+        ),
+        (Semantic::TexCoord(0), Stream::F32x2(vec![[0.; 2]; 3])),
+    ]);
+    if let Some(c) = vertex {
+        streams.insert(Semantic::Color(0), Stream::F32x4(vec![c; 3]));
+    }
+    let mesh = w.spawn();
+    w.insert(
+        mesh,
+        Mesh::new(vec![Primitive {
+            topology: Topology::Triangles,
+            streams,
+            indices: Some(vec![0, 1, 2]),
+            material: Some(material),
+        }]),
+    );
+    (material, mesh)
+}
+
+/// The shader's first step is `lerp(texture, texture * tint, COLOR_0.r)` and its vertex alpha only reaches the alpha:
+/// a white tint draws the texture whatever the vertex colour (the level 01 planters, red `COLOR_0` on a grey texture),
+/// a tint is weighted by the vertex red, and no vertex colour leaves texture times tint.
+#[test]
+fn a_single_layer_material_takes_its_tint_by_the_vertex_red_and_never_the_vertex_rgb() {
+    let mut w = World::new();
+    let (planter, _) = plain(&mut w, "planter", [1.; 4], false, Some([0.93, 0., 0., 1.]));
+    let (tinted, _) = plain(
+        &mut w,
+        "tinted",
+        [0.5, 0.25, 1., 1.],
+        false,
+        Some([0.5, 0.9, 0.1, 1.]),
+    );
+    let (bare, _) = plain(&mut w, "bare", [0.5, 0.25, 1., 1.], false, None);
+    let report = run(&mut w, "lower-shaunwhite-layers{influence=restored}");
+    assert_eq!(
+        report.steps[0]
+            .log
+            .counts
+            .get("single-layer materials weighted by the vertex red"),
+        Some(&1)
+    );
+    assert!(!w.has::<LayeredMaterial>(planter) && !w.has::<LayeredMaterial>(bare));
+    // red 0.5: halfway from the texture (128, 64, 255) to texture times tint (64, 16, 255)
+    let l = w.get::<LayeredMaterial>(tinted).unwrap();
+    assert_eq!(l.layers.len(), 2);
+    assert!(l.reads(Semantic::Color(0)));
+    run(&mut w, "lower-shaunwhite-material");
+    let c = colour(&w, tinted, [0.5, 0.9, 0.1, 1.]);
+    assert!((c[0] - 96. / 255.).abs() < 1e-6 && (c[1] - 40. / 255.).abs() < 1e-6 && (c[2] - 1.).abs() < 1e-6);
+    for e in [planter, bare] {
+        assert_eq!(w.get::<VertexColor>(e), Some(&VertexColor::Ignored));
+    }
+    let p = w.get::<PbrMaterial>(planter).unwrap();
+    assert_eq!(p.base_color, [1.; 4]);
+    assert_eq!(
+        w.get::<PbrMaterial>(bare).unwrap().base_color,
+        [0.5, 0.25, 1., 1.]
+    );
+    assert!(w.verify_components().is_empty());
+}
+
+/// Core can multiply `COLOR_0` or ignore it, not take its alpha alone: a blended material with a vertex alpha below
+/// one keeps the multiplier (counted); one whose alpha is one everywhere, or that is opaque, ignores it.
+#[test]
+fn vertex_alpha_is_kept_only_where_it_reaches_the_output() {
+    let mut w = World::new();
+    let (fading, _) = plain(&mut w, "fading", [1.; 4], true, Some([1., 1., 1., 0.5]));
+    let (solid, _) = plain(&mut w, "solid", [1.; 4], true, Some([1., 1., 1., 1.]));
+    let (opaque, _) = plain(&mut w, "opaque", [1.; 4], false, Some([1., 1., 1., 0.5]));
+    let report = run(
+        &mut w,
+        "lower-shaunwhite-layers{influence=restored},lower-shaunwhite-material",
+    );
+    assert_eq!(w.get::<VertexColor>(fading), None);
+    assert_eq!(w.get::<VertexColor>(solid), Some(&VertexColor::Ignored));
+    assert_eq!(w.get::<VertexColor>(opaque), Some(&VertexColor::Ignored));
+    assert_eq!(
+        report.steps[1]
+            .log
+            .approximations
+            .iter()
+            .find(|(name, _)| name.starts_with("blended or alpha-tested materials keep COLOR_0")),
+        Some((
+            &"blended or alpha-tested materials keep COLOR_0 as a colour for its alpha (the shader takes only the alpha)"
+                .to_owned(),
+            &1
+        ))
+    );
+}
+
+/// Level 01: the planter material (white tint, `COLOR_0` about (0.93, 0, 0)) draws its grey texture, and the only
+/// materials still multiplying `COLOR_0` are blended or alpha-tested ones.
+#[test]
+fn level_01_materials_no_longer_take_the_vertex_rgb() {
+    use primase_testdata::{Game, install};
+    let Some(folder) = install(Game::ShaunWhite) else {
+        return;
+    };
+    let shared = vec![folder.join("DataPC_02.forge"), folder.join("DataPC_04.forge")];
+    let (mut w, _) =
+        primase_shaunwhite::read::level::read_level(&folder.join("DataPC_01.forge"), &shared).unwrap();
+    let planter = w
+        .iter::<MaterialRef>()
+        .find(|(_, m)| m.name == "01_Grind_TopRampPlaza01_Mat")
+        .map(|(e, _)| e)
+        .unwrap();
+    let report = run(
+        &mut w,
+        "lower-shaunwhite-layers{influence=restored},lower-shaunwhite-material",
+    );
+    assert!(!w.has::<LayeredMaterial>(planter));
+    assert_eq!(w.get::<VertexColor>(planter), Some(&VertexColor::Ignored));
+    assert_eq!(w.get::<PbrMaterial>(planter).unwrap().base_color[..3], [1.; 3]);
+    let mut keep = std::collections::BTreeSet::new();
+    let mut drawn = std::collections::BTreeSet::new();
+    for (_, mesh) in w.iter::<Mesh>() {
+        for p in mesh.primitives() {
+            let Some(m) = p.material.filter(|_| p.streams.contains_key(&Semantic::Color(0))) else {
+                continue;
+            };
+            drawn.insert(m);
+            if w.get::<VertexColor>(m).is_none() && !w.has::<LayeredMaterial>(m) {
+                assert_ne!(
+                    w.get::<PbrMaterial>(m).unwrap().alpha_mode,
+                    primase_core::pbr::AlphaMode::Opaque
+                );
+                keep.insert(m);
+            }
+        }
+    }
+    println!(
+        "{} materials drawn with COLOR_0: {} still multiply it for its alpha; layers {:?}; approximations {:?}",
+        drawn.len(),
+        keep.len(),
+        report.steps[0].log.counts,
+        report.steps[1].log.approximations
+    );
+    assert!(!keep.is_empty() && keep.len() < 100);
 }

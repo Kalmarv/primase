@@ -1,6 +1,9 @@
-//! The restored-state RGB equation of the shipped generic shader, represented by four ordered core layers.
+//! The restored-state RGB equation of the shipped generic shader, represented by up to four ordered core layers.
 //! Source HLSL and its SM3 pixel bytecode establish the red tint, then green and blue lerps. This pass runs before
-//! the ordinary material lowering. It never substitutes a vertex colour for a missing mask or alpha factor.
+//! the ordinary material lowering. It never substitutes a vertex colour for a missing mask or alpha factor. A Material
+//! with only a diffuse layer is the same equation's first step: the texture interpolated towards the texture times
+//! the tint by the vertex red, so it is built here too (two layers) when it has a tint, a texture and a drawing with
+//! `COLOR_0`, and otherwise left to the ordinary lowering, whose texture times tint is then exact.
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::layered::{Channel, Composition, Source};
@@ -11,7 +14,7 @@ use primase_core::{
     VertexColor, WeightMapping, World,
 };
 
-use super::material::texture_ref;
+use super::material::{drawn_with, texture_ref};
 use crate::components::{LayerState, MaterialRef, MaterialState};
 
 #[derive(Clone, Copy, Debug)]
@@ -80,12 +83,7 @@ fn usage(w: &World) -> BTreeMap<Entity, BTreeSet<bool>> {
     for (e, mesh) in w.iter::<Mesh>() {
         for (i, p) in mesh.primitives().iter().enumerate() {
             let vertex = p.streams.contains_key(&Semantic::Color(0));
-            for material in p.material.into_iter().chain(
-                w.get::<MaterialVariants>(e)
-                    .and_then(|v| v.0.get(i))
-                    .into_iter()
-                    .flat_map(|v| v.values().copied()),
-            ) {
+            for material in drawn_with(w, e, i, p) {
                 out.entry(material).or_default().insert(vertex);
             }
         }
@@ -214,11 +212,16 @@ impl Pass for LowerShaunwhiteLayers {
         let all: Vec<_> = w.iter::<MaterialRef>().map(|(e, m)| (e, m.clone())).collect();
         let mut colourless = BTreeMap::new();
         for (e, m) in all {
-            if !["mask", "diffuse_b", "diffuse_c"]
+            let layered = ["mask", "diffuse_b", "diffuse_c"]
                 .iter()
-                .any(|s| m.slots.contains_key(*s))
-            {
-                continue;
+                .any(|s| m.slots.contains_key(*s));
+            if !layered {
+                // the first step alone: it changes nothing without a tint, a texture to tint or a vertex red
+                let tinted = m.state.is_some_and(|s| s.color[..3].iter().any(|c| *c != 1.));
+                let weighted = uses.get(&e).is_some_and(|modes| modes.contains(&true));
+                if !(tinted && weighted && m.slots.contains_key("diffuse")) {
+                    continue;
+                }
             }
             let reason = match m.state {
                 None => Some("material fields not read"),
@@ -260,6 +263,9 @@ impl Pass for LowerShaunwhiteLayers {
             let state = m.state.ok_or("material fields not read")?;
             let both = uses.get(&e).is_some_and(|modes| modes.len() == 2);
             let vertex = uses.get(&e).is_none_or(|modes| modes.contains(&true));
+            if !layered {
+                log.count("single-layer materials weighted by the vertex red", 1);
+            }
             build(w, e, &m, state, vertex, log);
             if both {
                 let other = w.spawn();
