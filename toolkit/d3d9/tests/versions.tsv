@@ -1,0 +1,6 @@
+# lifted fixtures of primase-d3d9
+# versions lifter=1 program=2
+ctab	lifted	a18f09633b93b317a5e083e5a34dd8cddd1bdd1ac4d5e0d270e01091a4babeca
+normalize	lifted	363b6dfce56ad6f6efae93e433b5620c51777557ebf8c989b18e3d5e22b776b2
+texture	lifted	ff47342a66de7bbc07ea8e0726135145854905880c9984db1c2da08cfafa4dac
+relative	refused	D3D9 at word 3: parameter marker/reserved bits or relative addressing (not supported)

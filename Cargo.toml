@@ -18,6 +18,7 @@ members = [
     "toolkit/dxcontainer",
     "toolkit/havok",
     "toolkit/dxbc",
+    "toolkit/d3d9",
     "toolkit/shader",
     "toolkit/shader-exec",
     "toolkit/dxil",
@@ -83,6 +84,7 @@ primase-dxcontainer = { path = "toolkit/dxcontainer" }
 primase-cache = { path = "toolkit/cache" }
 primase-havok = { path = "toolkit/havok" }
 primase-dxbc = { path = "toolkit/dxbc" }
+primase-d3d9 = { path = "toolkit/d3d9" }
 primase-shader = { path = "toolkit/shader" }
 primase-shader-exec = { path = "toolkit/shader-exec" }
 primase-dxil = { path = "toolkit/dxil" }

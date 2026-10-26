@@ -1081,6 +1081,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "primase-d3d9"
+version = "0.1.0"
+dependencies = [
+ "naga",
+ "primase-core",
+ "primase-shader",
+ "primase-shader-exec",
+ "primase-testdata",
+]
+
+[[package]]
 name = "primase-dds"
 version = "0.1.0"
 dependencies = [

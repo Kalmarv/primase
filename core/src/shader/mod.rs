@@ -31,6 +31,7 @@ pub use binding::{
     StageBinding, Stencil, StencilFace, StencilOp, TargetState, TextureBinding, TextureSource, Unshown,
     VariantKey, ViewParameter,
 };
+pub use facts::{InstructionCount, InstructionUnit, MaterialPrograms, ProgramFacts, ProgramResourceFacts};
 pub use interface::{
     D3dSignature, DomainFacts, GeometryFacts, GsInput, GsOutput, HitGroup, HitGroupKind, HullFacts,
     Interface, InterpMode, InterpSampling, Interpolation, Label, MeshFacts, MeshTopology, Partitioning,
@@ -38,7 +39,6 @@ pub use interface::{
     Varying, VaryingProvenance,
 };
 pub use program::Shader;
-pub use facts::{InstructionCount, InstructionUnit, MaterialPrograms, ProgramFacts, ProgramResourceFacts};
 pub use resource::{
     Access, BufferKind, BufferLayout, Constant, ConstantType, D3dBinding, D3dClass, Majorness, Member,
     Resource, ResourceId, ResourceKind, ResourceProvenance, SampleType, StorageTarget, TextureDim,
@@ -61,6 +61,8 @@ pub enum ShaderFormat {
     SpirV,
     /// GLSL source text.
     Glsl,
+    /// Raw Direct3D 9 shader tokens, including the version token and END (no DXBC container).
+    D3d9,
 }
 
 /// The pipeline stage a program runs in.
