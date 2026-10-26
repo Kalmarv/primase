@@ -4,7 +4,7 @@
 //! ([`crate::read::scene::SPAWN_POINT`]): the data states it, so the kind `spawn_point` is read from the class, not a
 //! name (82 in level 01: 74 are `01_A_/01_B_SpawnPoint_Plaza_NNN`, the rest nodes named after NPC trajectories).
 //! A **player spawner** carries a component of the PlayerSpawner class ([`crate::read::scene::PLAYER_SPAWNER`]): where
-//! a mission puts the skater down (level 01: one in a cell; the Stronghold's root entry: nine, one per mission step);
+//! a mission puts the skater down (level 01: one in a cell; the Stronghold's root entry: ten);
 //! it is read as a `start`, named by its Entity. A **start position** is an Entity with no component at all, whose only
 //! statement is its name; [`START_NAMES`] is the table of those names. The reader places each as a `core.marker` at the Entity's matrix; which local axis the game
 //! calls forward is not read, so the marker carries the whole matrix and no yaw.
