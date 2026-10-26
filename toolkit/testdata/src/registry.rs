@@ -891,6 +891,13 @@ pub const DECLARED: &[Declared] = &[
         source: r#"third-party: ReSkate Studio 20261012's compile of that map"#,
     },
     Declared {
+        query: Query::Oracle(OracleSet::Studio, Game::Skate, "physics"),
+        status: Status::Live,
+        gate: false,
+        about: r#"ReSkate Studio's PhysicsResource of each collision object of a small map of known shapes (a triangle, a quad, a box and the box turned, an 8 x 8 and a 64 x 64 bumpy grid, a hull-mode box, a floor): `oracle.json` holds every object's input mesh (positions, indices), transform, collision mode and packed material, `<mesh>_<slot>.bin` Studio's resource of it; worlds/reskate/tests/physics.rs"#,
+        source: r#"third-party: ReSkate Studio 20261012's compile-map of that map (--no-stream --no-lods --no-gi --time-of-day noon)"#,
+    },
+    Declared {
         query: Query::Oracle(OracleSet::UnityPy, Game::Skatebird, "census.json"),
         status: Status::Live,
         gate: true,

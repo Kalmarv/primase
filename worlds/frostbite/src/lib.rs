@@ -26,6 +26,7 @@ pub mod lookup;
 pub mod meshset;
 pub mod passes;
 pub mod permutation;
+pub mod physics;
 mod read;
 pub mod selector;
 pub mod skeleton;
