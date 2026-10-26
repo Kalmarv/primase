@@ -109,14 +109,14 @@ impl Reader<'_> {
     }
 }
 
-pub(crate) fn read(data: &[u8], word: usize) -> Result<ConstantTable> {
+pub(crate) fn read(data: &[u8], word: usize, expected_version: u32) -> Result<ConstantTable> {
     let r = Reader { data, word };
     if r.u32(0)? != 28 {
         return Err(error(word, "CTAB header size is not 28"));
     }
     let version = r.u32(8)?;
-    if version != 0xffff_0300 {
-        return Err(error(word + 2, "CTAB version disagrees with ps_3_0"));
+    if version != expected_version {
+        return Err(error(word + 2, "CTAB version disagrees with the program stage"));
     }
     let count = r.offset(12)?;
     if count > 1024 {
@@ -133,8 +133,21 @@ pub(crate) fn read(data: &[u8], word: usize) -> Result<ConstantTable> {
         let register = r.u16(at + 6)?;
         let count = r.u16(at + 8)?;
         let limit = match register_set {
-            0 | 1 | 3 => 16,
-            2 => 224,
+            0 | 1 => 16,
+            3 => {
+                if version == 0xfffe_0300 {
+                    4
+                } else {
+                    16
+                }
+            }
+            2 => {
+                if version == 0xfffe_0300 {
+                    256
+                } else {
+                    224
+                }
+            }
             _ => return Err(error(word + at / 4, format!("CTAB register set {register_set}"))),
         };
         if count == 0 || u32::from(register) + u32::from(count) > limit {

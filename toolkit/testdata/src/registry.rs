@@ -467,8 +467,8 @@ pub const DECLARED: &[Declared] = &[
         query: Query::Oracle(OracleSet::D3dDisassembler, Game::General, "sm3"),
         status: Status::Live,
         gate: true,
-        about: r#"a privately extracted raw ps_3_0 (`pixel.bin`) and Microsoft's disassembly (`pixel.asm`); toolkit/d3d9/tests/disassembly.rs checks all executable operands, declarations, definitions and CTAB allocations"#,
-        source: r#"independent: Microsoft d3dcompiler_47.dll D3DDisassemble via toolkit/d3d9/tests/oracles/disassemble.py, on a shipped Shaun White Skateboarding SDB2 v39 pixel shader (record 5, ekshadersPChigh.bin); raw bytes and disassembly stay outside the repository"#,
+        about: r#"privately extracted raw ps_3_0 (`pixel.bin`) and two vs_3_0 programs (`vertex.bin`, `vertex-layered.bin`), each with Microsoft's `.asm` disassembly; toolkit/d3d9/tests/disassembly.rs checks all executable operands, declarations, definitions and CTAB allocations"#,
+        source: r#"independent: Microsoft d3dcompiler_47.dll D3DDisassemble via toolkit/d3d9/tests/oracles/disassemble.py, on a shipped Shaun White Skateboarding SDB2 v39 pixel shader (record 5) and vertex shaders (records 5 and 150, ekshadersPChigh.bin); raw bytes and disassembly stay outside the repository"#,
     },
     Declared {
         query: Query::Install(Game::Riders, Some("DataPC_MAD_USNAT.forge")),

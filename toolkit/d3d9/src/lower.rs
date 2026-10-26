@@ -16,6 +16,23 @@ use primase_shader::{
 
 use crate::{Destination, Instruction, LIFTER_VERSION, Opcode, Register, Result, Shader, Source, error};
 
+const SEMANTICS: [&str; 14] = [
+    "POSITION",
+    "BLENDWEIGHT",
+    "BLENDINDICES",
+    "NORMAL",
+    "PSIZE",
+    "TEXCOORD",
+    "TANGENT",
+    "BINORMAL",
+    "TESSFACTOR",
+    "POSITIONT",
+    "COLOR",
+    "FOG",
+    "DEPTH",
+    "SAMPLE",
+];
+
 struct Lower<'a> {
     source: &'a Shader,
     b: Builder,
@@ -127,6 +144,9 @@ pub(crate) fn lift(source: &Shader, bytes: &[u8]) -> Result<Program> {
 }
 
 pub(crate) fn project(source: &Shader, bytes: &[u8], cut: crate::Projection, tail: bool) -> Result<Program> {
+    if source.stage != Stage::Pixel {
+        return Err(error(cut.after_word, "register RGB projections are pixel-only"));
+    }
     if cut.lanes.iter().any(|&n| n > 3)
         || cut.lanes[0] == cut.lanes[1]
         || cut.lanes[0] == cut.lanes[2]
@@ -161,7 +181,7 @@ fn lower(source: &Shader, bytes: &[u8], projection: Option<(crate::Projection, b
         source,
         b: Builder::new(),
         interface: Interface {
-            stage: Stage::Pixel,
+            stage: source.stage,
             inputs: Vec::new(),
             outputs: Vec::new(),
             resources: Vec::new(),
@@ -287,22 +307,6 @@ impl Lower<'_> {
         })
     }
     fn prepare(&mut self) -> Result<()> {
-        const SEMANTICS: [&str; 14] = [
-            "POSITION",
-            "BLENDWEIGHT",
-            "BLENDINDICES",
-            "NORMAL",
-            "PSIZE",
-            "TEXCOORD",
-            "TANGENT",
-            "BINORMAL",
-            "TESSFACTOR",
-            "POSITIONT",
-            "COLOR",
-            "FOG",
-            "DEPTH",
-            "SAMPLE",
-        ];
         for i in &self.source.inputs {
             let mut v = varying(
                 SEMANTICS[i.usage as usize],
@@ -311,7 +315,7 @@ impl Lower<'_> {
                 i.register,
                 None,
             );
-            v.interp = Some(Interpolation {
+            v.interp = (self.source.stage == Stage::Pixel).then_some(Interpolation {
                 mode: InterpMode::Perspective,
                 sampling: if i.centroid {
                     InterpSampling::Centroid
@@ -766,19 +770,66 @@ impl Lower<'_> {
     }
     fn finish(mut self, bytes: &[u8]) -> Result<Program> {
         let mut outputs = Vec::new();
-        for (&r, &(local, mask)) in &self.locals {
-            if let Register::Target(n) = r {
-                let mut v = varying("SV_Target", n, mask, n, Some(SystemValue::Target(n)));
-                v.used = true;
-                if let Some(d) = &mut v.provenance.d3d {
-                    d.read_write_mask = 0;
-                }
-                self.interface.outputs.push(v);
-                let ptr = self.b.local_ptr(local);
-                let v = self.b.load(ptr, Kind::F, 4);
-                let lanes: Vec<_> = (0..4).filter(|n| mask & (1 << n) != 0).collect();
-                outputs.push(self.b.swizzle(v, &lanes).expr);
+        let outgoing: Vec<_> = if self.source.stage == Stage::Vertex {
+            self.source
+                .outputs
+                .iter()
+                .map(|o| {
+                    let system = (o.usage == 0 && o.index == 0).then_some(SystemValue::ClipPosition);
+                    (
+                        Register::Output(o.register),
+                        varying(
+                            SEMANTICS[o.usage as usize],
+                            o.index.into(),
+                            o.mask,
+                            o.register,
+                            system,
+                        ),
+                    )
+                })
+                .collect()
+        } else {
+            self.locals
+                .iter()
+                .filter_map(|(&r, &(_, mask))| {
+                    if let Register::Target(n) = r {
+                        Some((r, varying("SV_Target", n, mask, n, Some(SystemValue::Target(n)))))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+        if self.source.stage == Stage::Vertex
+            && !outgoing
+                .iter()
+                .any(|(_, v)| v.system == Some(SystemValue::ClipPosition))
+        {
+            return Err(error(0, "vertex program has no declared POSITION0 clip output"));
+        }
+        for (r, mut v) in outgoing {
+            let mask = v
+                .provenance
+                .d3d
+                .as_ref()
+                .ok_or_else(|| error(self.at, "output signature missing"))?
+                .mask;
+            let &(local, written) = self
+                .locals
+                .get(&r)
+                .ok_or_else(|| error(self.at, format!("uninitialized output {r:?}")))?;
+            if mask & !written != 0 {
+                return Err(error(
+                    self.at,
+                    format!("{r:?}: uninitialized output lanes {:#x}", mask & !written),
+                ));
             }
+            v.used = true;
+            self.interface.outputs.push(v);
+            let ptr = self.b.local_ptr(local);
+            let v = self.b.load(ptr, Kind::F, 4);
+            let lanes: Vec<_> = (0..4).filter(|n| mask & (1 << n) != 0).collect();
+            outputs.push(self.b.swizzle(v, &lanes).expr);
         }
         let io = entry_io(&self.interface).map_err(|e| error(0, e))?;
         let decl = self.b.declare_entry(&io).map_err(|e| error(0, e))?;
@@ -792,7 +843,11 @@ impl Lower<'_> {
         self.b.check().map_err(|e| error(self.at, e))?;
         let module = self.b.finish(
             "main",
-            naga::ShaderStage::Fragment,
+            if self.source.stage == Stage::Vertex {
+                naga::ShaderStage::Vertex
+            } else {
+                naga::ShaderStage::Fragment
+            },
             decl.arguments,
             decl.result,
             false,
@@ -803,7 +858,7 @@ impl Lower<'_> {
         self.notes.dedup();
         let program = Program {
             module,
-            stage: Stage::Pixel,
+            stage: self.source.stage,
             entry: "main".into(),
             interface: self.interface,
             bindings: self.bindings,
@@ -815,7 +870,12 @@ impl Lower<'_> {
             },
             provenance: Provenance {
                 format: ShaderFormat::D3d9,
-                target: "ps_3_0".into(),
+                target: if self.source.stage == Stage::Vertex {
+                    "vs_3_0"
+                } else {
+                    "ps_3_0"
+                }
+                .into(),
                 lifter: "primase-d3d9".into(),
                 lifter_version: LIFTER_VERSION,
                 source_hash: Some(primase_shader::source_hash(bytes)),

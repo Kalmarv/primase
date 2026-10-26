@@ -297,11 +297,9 @@ fn malformed_and_unsupported_programs_are_refused_without_panics() {
             let _ = lift(&changed);
         }
     }
-    assert!(
-        read(&[0x00, 0x03, 0xfe, 0xff, 0xff, 0xff, 0, 0])
-            .unwrap_err()
-            .detail
-            .contains("ps_3_0")
+    assert_eq!(
+        read(&[0x00, 0x03, 0xfe, 0xff, 0xff, 0xff, 0, 0]).unwrap().stage,
+        primase_shader::Stage::Vertex
     );
     let mut trailing = bytes;
     trailing.extend([0; 4]);

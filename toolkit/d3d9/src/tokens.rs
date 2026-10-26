@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
-use primase_shader::TextureDim;
+use primase_shader::{Stage, TextureDim};
 
 use crate::{ConstantTable, Result, error};
 
-/// A float register in the supported pixel-stage banks.
+/// A float register in the supported stage-specific banks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Register {
     Temporary(u32),
@@ -12,6 +12,8 @@ pub enum Register {
     Constant(u32),
     Sampler(u32),
     Target(u32),
+    /// A declared vertex output register, distinct from pixel render targets.
+    Output(u32),
 }
 
 /// A source token after decoding its swizzle and modifier.
@@ -118,7 +120,10 @@ impl Opcode {
                     96 => "BREAKP",
                     _ => "unrecognized",
                 };
-                return Err(error(at, format!("opcode {op} {name} outside the pixel subset")));
+                return Err(error(
+                    at,
+                    format!("opcode {op} {name} outside the supported SM3 subset"),
+                ));
             }
         })
     }
@@ -151,9 +156,20 @@ pub struct Comment {
     pub data: Vec<u32>,
 }
 
-/// Reflection and executable tokens of one complete `ps_3_0` stream.
+/// A declared vertex output; disjoint masks can pack distinct semantics into one register.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Output {
+    pub register: u32,
+    pub usage: u8,
+    pub index: u8,
+    pub mask: u8,
+}
+
+/// Reflection and executable tokens of one complete `ps_3_0` or `vs_3_0` stream.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Shader {
+    pub stage: Stage,
+    pub outputs: Vec<Output>,
     pub inputs: Vec<Input>,
     pub samplers: BTreeMap<u32, TextureDim>,
     /// `def` constants, as exact f32 bit patterns.
@@ -163,7 +179,7 @@ pub struct Shader {
     pub constants: Option<ConstantTable>,
 }
 
-fn register(t: u32, at: usize) -> Result<Register> {
+fn register(t: u32, at: usize, stage: Stage) -> Result<Register> {
     if t & 0x8000_0000 == 0 || t & 0xe000 != 0 {
         return Err(error(
             at,
@@ -174,21 +190,22 @@ fn register(t: u32, at: usize) -> Result<Register> {
     let n = t & 2047;
     Ok(match (kind, n) {
         (0, 0..32) => Register::Temporary(n),
-        (1, 0..10) => Register::Input(n),
-        (2, 0..224) => Register::Constant(n),
-        (8, 0..4) => Register::Target(n),
-        (10, 0..16) => Register::Sampler(n),
+        (1, _) if n < if stage == Stage::Vertex { 16 } else { 10 } => Register::Input(n),
+        (2, _) if n < if stage == Stage::Vertex { 256 } else { 224 } => Register::Constant(n),
+        (6, 0..12) if stage == Stage::Vertex => Register::Output(n),
+        (8, 0..4) if stage == Stage::Pixel => Register::Target(n),
+        (10, _) if n < if stage == Stage::Vertex { 4 } else { 16 } => Register::Sampler(n),
         _ => {
             return Err(error(
                 at,
-                format!("register type {kind}, index {n} outside the supported ps_3_0 banks"),
+                format!("register type {kind}, index {n} outside the supported {stage:?} SM3 banks"),
             ));
         }
     })
 }
 
-fn destination(t: u32, at: usize, declaration: bool) -> Result<Destination> {
-    let register = register(t, at)?;
+fn destination(t: u32, at: usize, declaration: bool, stage: Stage) -> Result<Destination> {
+    let register = register(t, at, stage)?;
     let mask = ((t >> 16) & 15) as u8;
     let modifiers = (t >> 20) & 15;
     if mask == 0 || t & 0x0f00_0000 != 0 || modifiers & !if declaration { 6 } else { 3 } != 0 {
@@ -202,8 +219,8 @@ fn destination(t: u32, at: usize, declaration: bool) -> Result<Destination> {
     })
 }
 
-fn source(t: u32, at: usize) -> Result<Source> {
-    let register = register(t, at)?;
+fn source(t: u32, at: usize, stage: Stage) -> Result<Source> {
+    let register = register(t, at, stage)?;
     let modifier = (t >> 24) & 15;
     if !matches!(modifier, 0 | 1 | 11 | 12) {
         return Err(error(
@@ -219,7 +236,7 @@ fn source(t: u32, at: usize) -> Result<Source> {
     })
 }
 
-/// Read a complete raw pixel shader, including comment/CTAB payloads and END. Lengths, bank limits,
+/// Read a complete raw pixel or vertex shader, including comment/CTAB payloads and END. Lengths, bank limits,
 /// declaration order, duplicate definitions, reserved bits and every operand count are checked.
 pub fn read(bytes: &[u8]) -> Result<Shader> {
     if !bytes.len().is_multiple_of(4) || bytes.len() > 4 * 1_048_576 {
@@ -234,10 +251,14 @@ pub fn read(bytes: &[u8]) -> Result<Shader> {
         .iter()
         .map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
         .collect();
-    if words.first() != Some(&0xffff_0300) {
-        return Err(error(0, "version: only raw ps_3_0 is supported"));
-    }
+    let stage = match words.first() {
+        Some(0xffff_0300) => Stage::Pixel,
+        Some(0xfffe_0300) => Stage::Vertex,
+        _ => return Err(error(0, "version: only raw ps_3_0 or vs_3_0 is supported")),
+    };
     let mut shader = Shader {
+        stage,
+        outputs: Vec::new(),
         inputs: Vec::new(),
         samplers: BTreeMap::new(),
         definitions: BTreeMap::new(),
@@ -275,7 +296,7 @@ pub fn read(bytes: &[u8]) -> Result<Shader> {
                     return Err(error(word, "duplicate CTAB"));
                 }
                 let data: Vec<_> = args[1..].iter().flat_map(|w| w.to_le_bytes()).collect();
-                shader.constants = Some(crate::ctab::read(&data, word + 2)?);
+                shader.constants = Some(crate::ctab::read(&data, word + 2, words[0])?);
             }
             shader.comments.push(Comment {
                 word,
@@ -293,8 +314,39 @@ pub fn read(bytes: &[u8]) -> Result<Shader> {
             if executable || count != 2 {
                 return Err(error(word, "DCL after executable code or not two operands"));
             }
-            let d = destination(args[1], word + 2, true)?;
+            let d = destination(args[1], word + 2, true, stage)?;
+            if stage == Stage::Vertex && (d.partial_precision || args[1] & 0x0040_0000 != 0) {
+                return Err(error(word, "vertex DCL partial precision or centroid modifier"));
+            }
             match d.register {
+                Register::Output(register) => {
+                    if args[0] & !0x800f_000f != 0 || args[0] & 0x8000_0000 == 0 {
+                        return Err(error(word, "DCL semantic reserved bits"));
+                    }
+                    let usage = (args[0] & 15) as u8;
+                    let index = ((args[0] >> 16) & 15) as u8;
+                    if usage > 13 || usage == 4 {
+                        return Err(error(
+                            word,
+                            "vertex output usage outside the subset (PSIZE not supported)",
+                        ));
+                    }
+                    if usage == 0 && index == 0 && d.mask != 15 {
+                        return Err(error(word, "vertex POSITION0 must declare all four lanes"));
+                    }
+                    if shader.outputs.iter().any(|o| {
+                        (o.register == register && o.mask & d.mask != 0)
+                            || (o.usage == usage && o.index == index)
+                    }) {
+                        return Err(error(word, "overlapping output masks or duplicate semantic"));
+                    }
+                    shader.outputs.push(Output {
+                        register,
+                        usage,
+                        index,
+                        mask: d.mask,
+                    });
+                }
                 Register::Input(register) => {
                     if args[0] & !0x800f_000f != 0 || args[0] & 0x8000_0000 == 0 {
                         return Err(error(word, "DCL semantic reserved bits"));
@@ -335,7 +387,12 @@ pub fn read(bytes: &[u8]) -> Result<Shader> {
                         return Err(error(word, "duplicate or modified sampler declaration"));
                     }
                 }
-                _ => return Err(error(word, "DCL destination is neither input nor sampler")),
+                _ => {
+                    return Err(error(
+                        word,
+                        "DCL destination is neither input, vertex output nor sampler",
+                    ));
+                }
             }
             continue;
         }
@@ -343,7 +400,7 @@ pub fn read(bytes: &[u8]) -> Result<Shader> {
             if executable || count != 5 {
                 return Err(error(word, "DEF after executable code or not five operands"));
             }
-            let d = destination(args[0], word + 1, false)?;
+            let d = destination(args[0], word + 1, false, stage)?;
             let Register::Constant(n) = d.register else {
                 return Err(error(word, "DEF destination is not cN"));
             };
@@ -360,6 +417,15 @@ pub fn read(bytes: &[u8]) -> Result<Shader> {
             continue;
         }
         let (opcode, sources) = Opcode::decode(op, word)?;
+        if stage == Stage::Vertex && matches!(opcode, Opcode::Cmp | Opcode::Dp2Add) {
+            return Err(error(word, format!("{opcode:?} is a pixel-only SM3 opcode")));
+        }
+        if stage == Stage::Vertex && matches!(opcode, Opcode::Tex | Opcode::TexKill) {
+            return Err(error(
+                word,
+                "pixel sampling/discard opcode in vertex stage (vertex texture fetch not supported)",
+            ));
+        }
         let expected = if opcode == Opcode::Nop { 0 } else { 1 + sources };
         if count != expected {
             return Err(error(
@@ -370,13 +436,28 @@ pub fn read(bytes: &[u8]) -> Result<Shader> {
         let destination = if count == 0 {
             None
         } else {
-            Some(destination(args[0], word + 1, false)?)
+            Some(destination(args[0], word + 1, false, stage)?)
         };
         if let Some(d) = destination {
-            let allowed = matches!(d.register, Register::Temporary(_) | Register::Target(_))
-                || (opcode == Opcode::TexKill && matches!(d.register, Register::Input(_)));
+            let allowed = matches!(
+                d.register,
+                Register::Temporary(_) | Register::Target(_) | Register::Output(_)
+            ) || (opcode == Opcode::TexKill && matches!(d.register, Register::Input(_)));
             if !allowed {
                 return Err(error(word, format!("{opcode:?} destination {:?}", d.register)));
+            }
+            if let Register::Output(n) = d.register {
+                let declared = shader
+                    .outputs
+                    .iter()
+                    .filter(|o| o.register == n)
+                    .fold(0, |m, o| m | o.mask);
+                if d.mask & !declared != 0 {
+                    return Err(error(word, "write to undeclared vertex output lanes"));
+                }
+            }
+            if stage == Stage::Vertex && d.partial_precision {
+                return Err(error(word, "vertex partial precision modifier not supported"));
             }
             if opcode == Opcode::TexKill && (d.saturate || d.partial_precision) {
                 return Err(error(word, "modified TEXKILL destination"));
@@ -386,7 +467,7 @@ pub fn read(bytes: &[u8]) -> Result<Shader> {
             .iter()
             .skip(1)
             .enumerate()
-            .map(|(i, &t)| source(t, word + 2 + i))
+            .map(|(i, &t)| source(t, word + 2 + i, stage))
             .collect::<Result<_>>()?;
         shader.instructions.push(Instruction {
             word,

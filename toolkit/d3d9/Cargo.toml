@@ -1,6 +1,6 @@
 [package]
 name = "primase-d3d9"
-description = "Raw Direct3D 9 pixel shader reflection and lifting"
+description = "Raw Direct3D 9 shader reflection and lifting"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

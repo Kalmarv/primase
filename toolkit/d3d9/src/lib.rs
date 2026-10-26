@@ -1,7 +1,8 @@
-//! Raw Direct3D 9 `ps_3_0` tokens, their CTAB reflection, and lifting to the shared shader IR.
+//! Raw Direct3D 9 `ps_3_0` and `vs_3_0` tokens, their CTAB reflection, and lifting to the shared shader IR.
 //!
-//! This is a bounded pixel-shader reader: straight-line float arithmetic, declarations, immediate constants,
-//! 2D/cube/volume sampling and discard. Other models, control flow, relative addressing and modifiers outside
+//! This is a bounded shader reader: straight-line float arithmetic, declarations, immediate constants,
+//! 2D/cube/volume sampling and discard. Vertex programs additionally keep input/output declarations and clip position. Vertex texture fetch, point size,
+//! other models, control flow, relative addressing and modifiers outside
 //! this subset are refused by name and word offset. No translated text or native compiler is needed at runtime.
 //! [`read`] preserves comments and CTAB's type/default metadata; [`lift`] normalizes registers into varyings and
 //! a float constant bank (raw words in `cb0`, register `cN` at byte `16*N`). A `def` overrides that bank locally.
@@ -9,6 +10,9 @@
 //! Token layout: Microsoft's [instruction](https://learn.microsoft.com/windows-hardware/drivers/display/instruction-token),
 //! [source](https://learn.microsoft.com/windows-hardware/drivers/display/source-parameter-token) and
 //! [destination](https://learn.microsoft.com/windows-hardware/drivers/display/destination-parameter-token) tokens.
+//! Vertex register banks are bounded to 16 inputs, 32 temporaries, 12 declared outputs and 256 float constants;
+//! [the VS register reference](https://learn.microsoft.com/windows/win32/direct3dhlsl/dx9-graphics-reference-asm-vs-registers-vs-3-0)
+//! and [output declarations](https://learn.microsoft.com/windows/win32/direct3dhlsl/dcl-usage-outut-register---vs) define their layout.
 //! Arithmetic follows the [ps_3_0 instruction reference](https://learn.microsoft.com/windows/win32/direct3dhlsl/dx9-graphics-reference-asm-ps-instructions-ps-3-0).
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
@@ -19,7 +23,7 @@ pub use sampler::sampler_states;
 mod tokens;
 
 pub use ctab::{Constant, ConstantTable, Type, TypeMember};
-pub use tokens::{Comment, Destination, Input, Instruction, Opcode, Register, Shader, Source, read};
+pub use tokens::{Comment, Destination, Input, Instruction, Opcode, Output, Register, Shader, Source, read};
 
 /// A refusal states the word offset in the raw token stream and the unsupported or malformed feature.
 pub type Error = primase_shader::Refusal;
@@ -31,7 +35,7 @@ pub(crate) fn error(at: usize, detail: impl Into<String>) -> Error {
 /// Increment when the same tokens lift differently. Hand-worked fixtures gate this version.
 pub const LIFTER_VERSION: u32 = 1;
 
-/// Lift one complete `ps_3_0` program; trailing bytes and unknown features are errors.
+/// Lift one complete `ps_3_0` or `vs_3_0` program; trailing bytes and unknown features are errors.
 pub fn lift(bytes: &[u8]) -> Result<primase_shader::Program> {
     lower::lift(&read(bytes)?, bytes)
 }
@@ -45,7 +49,7 @@ pub struct Projection {
     pub lanes: [u8; 3],
 }
 
-/// Lift the original instruction prefix through `cut`, returning its selected lanes as RGB and alpha one.
+/// Pixel-only: lift the original instruction prefix through `cut`, returning its selected lanes as RGB and alpha one.
 /// Prior discards remain; subsequent operations/discards are excluded. This is a derived program, whose notes
 /// name the cut, whose lifter identity includes the projection, and whose source hash still identifies the complete original bytecode. No meaning is assigned
 /// to the chosen value: recognizing a useful cut is the caller's responsibility.
@@ -53,7 +57,7 @@ pub fn project(bytes: &[u8], cut: Projection) -> Result<primase_shader::Program>
     lower::project(&read(bytes)?, bytes, cut, false)
 }
 
-/// Lift the complete original program, replacing just the cut's three register lanes with the new float3
+/// Pixel-only: lift the complete original program, replacing just the cut's three register lanes with the new float3
 /// input `DERIVED_RGB0` (signature register 31). This runs the original downstream operations, including
 /// normalization and discards, rather than a rewritten equation. Other register lanes and the prefix remain.
 /// An original input v31 is refused. The caller supplies projected RGB in that new input's xyz lanes.

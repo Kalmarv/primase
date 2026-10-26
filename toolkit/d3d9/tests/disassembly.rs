@@ -1,5 +1,5 @@
 #![allow(clippy::unwrap_used)]
-//! One privately extracted shipped PS compared with Microsoft D3DDisassemble (d3dcompiler_47.dll).
+//! Privately extracted shipped PS and VS programs compared with Microsoft D3DDisassemble (d3dcompiler_47.dll).
 //! All executable operands, input/sampler declarations, immediate values and CTAB allocations are compared;
 //! validation and WGSL emission check the resulting IR. This is reflection/token evidence, not a rendered-pixel oracle.
 use primase_core::gate::{GateReport, Tolerance};
@@ -13,6 +13,7 @@ fn register(r: Register) -> String {
         Register::Constant(n) => format!("c{n}"),
         Register::Sampler(n) => format!("s{n}"),
         Register::Target(n) => format!("oC{n}"),
+        Register::Output(n) => format!("o{n}"),
     }
 }
 fn mask(mask: u8) -> String {
@@ -53,19 +54,9 @@ fn normalize(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-#[test]
-fn shipped_pixel_shader_matches_microsofts_disassembly() {
-    let Some(folder) = oracle(OracleSet::D3dDisassembler, Game::General, "sm3") else {
-        return;
-    };
-    let bytes = std::fs::read(folder.join("pixel.bin")).unwrap();
-    let asm = std::fs::read_to_string(folder.join("pixel.asm")).unwrap();
-    let shader = read(&bytes).unwrap();
-    let p = lift(&bytes).unwrap();
-    assert_eq!(
-        p.provenance.source_hash.as_deref(),
-        Some("sha256:82ffb69b8dced07b67e74ed481349f1c68ede096add5379c7b5749ea9b809c0e")
-    );
+fn check(bytes: &[u8], asm: &str) -> primase_d3d9::Shader {
+    let shader = read(bytes).unwrap();
+    let p = lift(bytes).unwrap();
     primase_shader::emit::wgsl(&p).unwrap();
     let mut gate = GateReport::new("raw SM3 vs Microsoft disassembly", Tolerance::Exact);
     let actual: Vec<_> = shader
@@ -105,6 +96,7 @@ fn shipped_pixel_shader_matches_microsofts_disassembly() {
                 && !s.starts_with("dcl_")
                 && !s.starts_with("def ")
                 && *s != "ps_3_0"
+                && *s != "vs_3_0"
         })
         .map(normalize)
         .collect();
@@ -141,6 +133,21 @@ fn shipped_pixel_shader_matches_microsofts_disassembly() {
             if i.centroid { "_centroid" } else { "" },
             i.register,
             mask(i.mask)
+        );
+        assert!(asm.lines().any(|s| s.trim() == decl), "missing {decl}");
+        gate.record(decl, 0.);
+    }
+    for o in &shader.outputs {
+        let decl = format!(
+            "dcl_{}{} o{}{}",
+            SEMANTICS[o.usage as usize],
+            if o.index == 0 {
+                String::new()
+            } else {
+                o.index.to_string()
+            },
+            o.register,
+            mask(o.mask)
         );
         assert!(asm.lines().any(|s| s.trim() == decl), "missing {decl}");
         gate.record(decl, 0.);
@@ -205,11 +212,51 @@ fn shipped_pixel_shader_matches_microsofts_disassembly() {
         assert_eq!(values.as_slice(), expected);
         gate.record(format!("def c{n}"), 0.);
     }
-    assert_eq!(actual.len(), 30);
-    assert_eq!(
-        (shader.inputs.len(), shader.samplers.len(), table.constants.len()),
-        (5, 2, 8)
-    );
     gate.assert_passed();
     eprintln!("{gate}");
+    shader
+}
+
+#[test]
+fn shipped_pixel_shader_matches_microsofts_disassembly() {
+    let Some(folder) = oracle(OracleSet::D3dDisassembler, Game::General, "sm3") else {
+        return;
+    };
+    let bytes = std::fs::read(folder.join("pixel.bin")).unwrap();
+    let asm = std::fs::read_to_string(folder.join("pixel.asm")).unwrap();
+    assert_eq!(
+        primase_shader::source_hash(&bytes),
+        "sha256:82ffb69b8dced07b67e74ed481349f1c68ede096add5379c7b5749ea9b809c0e"
+    );
+    let shader = check(&bytes, &asm);
+    assert_eq!(shader.instructions.len(), 30);
+    assert_eq!(
+        (
+            shader.inputs.len(),
+            shader.samplers.len(),
+            shader.constants.unwrap().constants.len()
+        ),
+        (5, 2, 8)
+    );
+}
+
+#[test]
+fn shipped_vertex_shaders_match_microsofts_disassembly() {
+    let Some(folder) = oracle(OracleSet::D3dDisassembler, Game::General, "sm3") else {
+        return;
+    };
+    for (name, inputs, outputs, instructions) in [("vertex", 3, 6, 48), ("vertex-layered", 5, 8, 71)] {
+        let bytes = std::fs::read(folder.join(format!("{name}.bin"))).unwrap();
+        let asm = std::fs::read_to_string(folder.join(format!("{name}.asm"))).unwrap();
+        let shader = check(&bytes, &asm);
+        assert_eq!(shader.stage, primase_shader::Stage::Vertex);
+        assert_eq!(
+            (
+                shader.inputs.len(),
+                shader.outputs.len(),
+                shader.instructions.len()
+            ),
+            (inputs, outputs, instructions)
+        );
+    }
 }
