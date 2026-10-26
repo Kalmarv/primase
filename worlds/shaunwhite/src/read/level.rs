@@ -287,6 +287,9 @@ fn place_guidance(
         };
         bump("guidance systems".into());
         bump(format!("guidance systems: {}", system.class.name()));
+        for _ in 0..system.stale_links {
+            bump("guidance links that name an edge holding neither point (read as no link)".into());
+        }
         if !system.ends_at_component(body) {
             bump("guidance systems not followed by a component".into());
         }

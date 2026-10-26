@@ -18,7 +18,12 @@
 //!
 //! The objects' links say which edges continue each other: an object's end link joins an edge that has the object's
 //! end point as one of its two points, its start link one that has its start point (an edge may run either way).
-//! [`GuidanceSystem::chains`] follows them into polylines; a link to an edge that holds neither point is refused.
+//! [`GuidanceSystem::chains`] follows them into polylines. A link to an edge past the list, or to an edge that holds
+//! neither point and links back, is refused; one to an edge that holds neither point and does not link back is stale and
+//! read as no link ([`GuidanceSystem::stale_links`]). Links are mutual (11,552 of level 01's 11,573 valid links are linked
+//! back, and all 4,826 of level 05's but the two below), and level 05's `05A_MainHall_BalconyStructure` holds the only two stale links of the six levels:
+//! its edges 151 and 152 (5.5 m and 1 m, their stored lengths equal their decoded points' distances) share point 171
+//! and name edges 42 and 40, 6 m away at point 22, which name them back nowhere.
 //!
 //! The shaping mechanic's three further classes (SWSkateFreeFormGuidanceSystem `0x359BE54E`,
 //! SWSkateScaleGuidanceSystem `0x6A1CFF2F`, SWSkateMorphGuidanceSystem `0x081AF61A`) have the same layout up to the
@@ -174,6 +179,8 @@ pub struct GuidanceSystem {
     /// Local frame, metres.
     pub points: Vec<[f32; 3]>,
     pub shaping: Shaping,
+    /// Links the system's own edges hold that name nothing ([`check_edges`]), read as [`NO_LINK`].
+    pub stale_links: usize,
     /// Where the component ends in the body: the next component's first byte.
     pub end: usize,
 }
@@ -300,8 +307,11 @@ fn read_states(c: &mut Cursor<'_>, points: usize) -> Result<Vec<State>, Error> {
     Ok(states)
 }
 
-/// Every index of `edges` in range of `points`; where `links`, every link to an edge that holds the point it joins at.
-fn check_edges(edges: &[Edge], points: usize, links: bool) -> Result<(), Error> {
+/// Every index of `edges` in range of `points`. Where `links`, every link must name an edge that holds the point it
+/// joins at; one that names an edge that holds neither, and that edge does not link back, is a stale link: set to
+/// [`NO_LINK`] and counted in the result. A link to an edge past the list, or to one that links back, is refused.
+fn check_edges(edges: &mut [Edge], points: usize, links: bool) -> Result<usize, Error> {
+    let mut stale = Vec::new();
     for (i, e) in edges.iter().enumerate() {
         if let Some(p) = e
             .points
@@ -321,10 +331,13 @@ fn check_edges(edges: &[Edge], points: usize, links: bool) -> Result<(), Error> 
             let other = usize::try_from(link).ok().and_then(|l| edges.get(l));
             match other {
                 Some(o) if o.points.contains(&at) => {}
+                Some(o) if u32::try_from(i).is_ok_and(|i| !o.links.contains(&i)) => {
+                    stale.push((i, side));
+                }
                 Some(_) => {
                     return Err(invalid(
                         "link",
-                        format!("edge {i}: edge {link} does not hold point {at}"),
+                        format!("edge {i}: edge {link} does not hold point {at} and links back"),
                     ));
                 }
                 None => {
@@ -336,7 +349,12 @@ fn check_edges(edges: &[Edge], points: usize, links: bool) -> Result<(), Error> 
             }
         }
     }
-    Ok(())
+    for &(i, side) in &stale {
+        if let Some(l) = edges.get_mut(i).and_then(|e| e.links.get_mut(side)) {
+            *l = NO_LINK;
+        }
+    }
+    Ok(stale.len())
 }
 
 impl GuidanceSystem {
@@ -373,11 +391,12 @@ impl GuidanceSystem {
             Class::FreeForm => Shaping::Template(word(&mut c, "free-form template")?),
             Class::Morph => Shaping::States(read_states(&mut c, points.len())?),
         };
-        let system = GuidanceSystem {
+        let mut system = GuidanceSystem {
             class,
             edges,
             points,
             shaping,
+            stale_links: 0,
             end: c.position(),
         };
         system.check(leaf)?;
@@ -393,23 +412,18 @@ impl GuidanceSystem {
         )
     }
 
-    /// The edge lists a system holds: its own and each state's.
-    fn edge_lists(&self) -> impl Iterator<Item = &[Edge]> {
-        let states = match &self.shaping {
-            Shaping::States(s) => s.as_slice(),
-            _ => &[],
-        };
-        std::iter::once(self.edges.as_slice()).chain(states.iter().map(|s| s.edges.as_slice()))
-    }
-
-    /// Every index in range; every link, but a morph system's, to an edge that holds the point it joins at; the
-    /// partitioner's leaves among the edges of the system or of one of its states.
-    fn check(&self, leaf: Option<u16>) -> Result<(), Error> {
+    /// Every index in range; every link, but a morph system's, to an edge that holds the point it joins at (or a stale
+    /// one, [`check_edges`]); the partitioner's leaves among the edges of the system or of one of its states.
+    fn check(&mut self, leaf: Option<u16>) -> Result<(), Error> {
         let n = self.points.len();
-        for edges in self.edge_lists() {
-            check_edges(edges, n, self.class != Class::Morph)?;
+        self.stale_links = check_edges(&mut self.edges, n, self.class != Class::Morph)?;
+        let mut most = self.edges.len();
+        if let Shaping::States(states) = &mut self.shaping {
+            for s in states {
+                check_edges(&mut s.edges, n, false)?;
+                most = most.max(s.edges.len());
+            }
         }
-        let most = self.edge_lists().map(<[Edge]>::len).max().unwrap_or(0);
         if let Some(l) = leaf
             && usize::from(l) >= most
         {

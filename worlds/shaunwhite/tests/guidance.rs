@@ -126,12 +126,19 @@ fn a_built_system_reads_back_as_chains() {
     let runs: Vec<(Vec<u32>, bool)> = chains.iter().map(|c| (c.points.clone(), c.closed)).collect();
     assert_eq!(runs, vec![(vec![0, 1, 2, 3], false), (vec![4, 0], false)]);
 
-    // a link to an edge that does not hold the point it joins at is refused
-    let bad = system(
+    // a link to an edge that holds neither point and does not link back is stale: read as no link, and counted
+    let stale = system(
         &[((0, 1), (NO_LINK, 1), 2.), ((2, 3), (NO_LINK, NO_LINK), 3.)],
         &points,
     );
-    assert!(GuidanceSystem::parse(&bad, 6).is_err());
+    let s = GuidanceSystem::parse(&stale, 6).unwrap();
+    assert_eq!((s.stale_links, s.edges[0].links), (1, [NO_LINK, NO_LINK]));
+    assert_eq!(s.chains().len(), 2);
+    // one the named edge links back, or to an edge past the list, is refused
+    let back = system(&[((0, 1), (NO_LINK, 1), 2.), ((2, 3), (0, NO_LINK), 3.)], &points);
+    assert!(GuidanceSystem::parse(&back, 6).is_err());
+    let beyond = system(&[((0, 1), (NO_LINK, 7), 2.)], &points);
+    assert!(GuidanceSystem::parse(&beyond, 6).is_err());
     // so is an index past the points
     let past = system(&[((0, 9), (NO_LINK, NO_LINK), 2.)], &points);
     assert!(GuidanceSystem::parse(&past, 6).is_err());
