@@ -1,4 +1,5 @@
-//! Level 01 of the game: the metro's blue arrow and its tile decal are marked, glass and the window glow are not.
+//! Level 01 of the game: the metro's blue arrow is marked, its tile decal is gone (a HideAfter material of the restored
+//! world), glass and the window glow are not marked.
 #![allow(clippy::unwrap_used, reason = "explicit gate assertions")]
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{DrawLayer, DrawOrder, MaterialUsage, Name};
@@ -40,7 +41,6 @@ fn level_one_marks_the_metro_arrow_and_not_its_glass() {
         .collect();
     for decal in [
         "Gen_Grafitti_SingleArrow_Blue01_Mat",
-        "01_Influence_MetroTilesDecal_Mat",
         "Gen_Street_LinePieton01_Mat",
     ] {
         assert!(
@@ -48,6 +48,12 @@ fn level_one_marks_the_metro_arrow_and_not_its_glass() {
             "{decal} is not marked: {marked:?}"
         );
     }
+    // a HideAfter material is discarded by the shader at the restored world's influence: the selection dropped it
+    assert!(
+        !w.iter::<Name>()
+            .any(|(_, n)| n.0.contains("01_Influence_MetroTilesDecal_Mat")),
+        "the metro tile decal is still in the world"
+    );
     for not in [
         "Gen_Glass01_Mat",
         "Gen_Glass_Dirty01_Mat",
@@ -61,5 +67,5 @@ fn level_one_marks_the_metro_arrow_and_not_its_glass() {
             .all(|(e, _)| DrawOrder::of(&w, e).layer != DrawLayer::Decal),
         "water or vegetation marked"
     );
-    assert_eq!(marked.len(), 49, "{marked:?}");
+    assert_eq!(marked.len(), 48, "{marked:?}");
 }

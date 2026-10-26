@@ -55,14 +55,15 @@ fn levels_keep_their_vertex_alpha_and_lose_the_vertex_red_as_a_colour() {
     let Some(files) = files.into_iter().collect::<Option<Vec<_>>>() else {
         return;
     };
-    // (streams rewritten, exact, tint dropped by a red of 0, tint applied in full) per level
+    // (streams rewritten, exact, tint dropped by a red of 0, tint applied in full) per level, after the selection dropped
+    // the HideAfter materials the restored world discards
     let expected = [
-        (80, 33, 2, 8),
-        (25, 32, 2, 5),
+        (80, 32, 2, 8),
+        (24, 31, 2, 4),
         (9, 5, 1, 2),
-        (17, 25, 1, 4),
+        (17, 24, 1, 4),
         (3, 9, 0, 1),
-        (4, 15, 1, 2),
+        (4, 14, 1, 2),
     ];
     for (level, path) in files.iter().enumerate() {
         let shared: Vec<_> = files.iter().filter(|p| *p != path).cloned().collect();

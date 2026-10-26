@@ -14,7 +14,7 @@ use primase_core::{
     VertexColor, WeightMapping, World,
 };
 
-use super::material::{drawn_with, texture_ref};
+use super::material::{drawn_with, radians, texture_ref, uv_transform};
 use crate::components::{LayerState, MaterialRef, MaterialState};
 
 #[derive(Clone, Copy, Debug)]
@@ -101,17 +101,38 @@ fn child(
     slot: crate::components::SlotRef,
     label: &str,
 ) -> Layer {
-    let transform = (slot.scale != [1.; 2] || slot.offset != [0.; 2]).then_some(UvTransform {
-        offset: slot.offset,
-        scale: slot.scale,
-        rotation: 0.,
-    });
     let texcoord = slot.texcoord;
-    let slot = crate::components::SlotRef {
-        texcoord: 0,
-        scale: [1.; 2],
-        offset: [0.; 2],
-        ..slot
+    // A rotated slot is the native matrix `S R(a) uv + o`, which core states exactly as two transforms in a row: the
+    // layer's rotation, then the slot's scale and offset (the layer's transform precedes every texture's own).
+    let (transform, slot) = if slot.rotation == 0. {
+        let transform = (slot.scale != [1.; 2] || slot.offset != [0.; 2]).then_some(UvTransform {
+            offset: slot.offset,
+            scale: slot.scale,
+            rotation: 0.,
+        });
+        (
+            transform,
+            crate::components::SlotRef {
+                texcoord: 0,
+                scale: [1.; 2],
+                offset: [0.; 2],
+                ..slot
+            },
+        )
+    } else {
+        let turn = UvTransform {
+            offset: [0.; 2],
+            scale: [1.; 2],
+            rotation: radians(slot.rotation),
+        };
+        (
+            Some(turn),
+            crate::components::SlotRef {
+                texcoord: 0,
+                rotation: 0.,
+                ..slot
+            },
+        )
     };
     let e = w.spawn();
     state.color = [color[0], color[1], color[2], 1.];
@@ -238,11 +259,10 @@ impl Pass for LowerShaunwhiteLayers {
                     Some("modulation colours outside 0..1")
                 }
                 _ if !m.slots.contains_key("diffuse") => Some("base diffuse texture missing"),
-                _ if m.slots.iter().any(|(n, s)| {
-                    ["diffuse", "mask", "diffuse_b", "diffuse_c"].contains(&n.as_str()) && s.rotation != 0.
-                }) =>
-                {
-                    Some("rotated UV matrix convention not established")
+                // a rotated diffuse slot is exact as its layer's rotation; the mask is one texture sampled by the
+                // weights, so its matrix must be core's rotation after scale
+                _ if m.slots.get("mask").is_some_and(|s| uv_transform(s).is_none()) => {
+                    Some("rotated mask UV matrix (unequal scale) is not core's rotation after scale")
                 }
                 _ if m.slots.iter().any(|(n, s)| {
                     ["diffuse", "mask", "diffuse_b", "diffuse_c"].contains(&n.as_str())
@@ -265,6 +285,19 @@ impl Pass for LowerShaunwhiteLayers {
             let vertex = uses.get(&e).is_none_or(|modes| modes.contains(&true));
             if !layered {
                 log.count("single-layer materials weighted by the vertex red", 1);
+            }
+            let rotated = m
+                .slots
+                .iter()
+                .filter(|(n, s)| {
+                    ["diffuse", "diffuse_b", "diffuse_c"].contains(&n.as_str()) && s.rotation != 0.
+                })
+                .count();
+            if rotated > 0 {
+                log.count(
+                    "rotated layer UV matrices stated as rotation, then scale",
+                    rotated as u64,
+                );
             }
             build(w, e, &m, state, vertex, log);
             if both {

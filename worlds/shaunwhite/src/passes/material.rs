@@ -89,16 +89,69 @@ pub(super) fn texture_ref(w: &World, slot: &SlotRef, log: &mut PassLog) -> Textu
             }
         });
     }
-    if slot.rotation != 0. {
-        log.omit("authored TexCoordRotation (matrix convention not lowered)", 1);
+    match uv_transform(slot) {
+        Some(t) => r.transform = (t != UvTransform::IDENTITY).then_some(t),
+        None => {
+            log.omit(
+                "authored TexCoordRotation with unequal scale (a transform core's rotation after scale cannot state)",
+                1,
+            );
+            if slot.scale != [1.0; 2] || slot.offset != [0.0; 2] {
+                r.transform = Some(UvTransform {
+                    offset: slot.offset,
+                    scale: slot.scale,
+                    rotation: 0.0,
+                });
+            }
+        }
     }
-    if slot.scale != [1.0; 2] || slot.offset != [0.0; 2] {
-        r.transform = Some(UvTransform {
+    r
+}
+
+/// The native UV setter's matrix of a slot as core's [`UvTransform`]: the game rotates the coordinates by the stored
+/// degrees about the UV origin, then scales and offsets them (`uv' = S R(a) uv + o`), while core scales, then rotates
+/// (`uv' = R(r) (S' uv) + o`). The two agree where the matrix's columns are orthogonal (a uniform scale, or a quarter
+/// turn): `None` where they do not, which core states only as two transforms in a row (a layer's, then the slot's: `lower-shaunwhite-layers`).
+pub(super) fn uv_transform(slot: &SlotRef) -> Option<UvTransform> {
+    if slot.rotation == 0. {
+        return Some(UvTransform {
             offset: slot.offset,
             scale: slot.scale,
             rotation: 0.0,
         });
     }
+    let (sin, cos) = radians(slot.rotation).sin_cos();
+    let [sx, sy] = slot.scale.map(f64::from);
+    let (sin, cos) = (f64::from(sin), f64::from(cos));
+    let first = [sx * cos, sy * sin];
+    let second = [-sx * sin, sy * cos];
+    let (n1, n2) = (first[0].hypot(first[1]), second[0].hypot(second[1]));
+    let dot = first[0] * second[0] + first[1] * second[1];
+    if n1 == 0. || n2 == 0. || dot.abs() > 1e-6 * n1 * n2 {
+        return None;
+    }
+    // columns n1 (cos b, sin b) and q (-sin b, cos b): q is signed, so a mirrored matrix is a negative scale
+    let b = first[1].atan2(first[0]);
+    let q = -second[0] * b.sin() + second[1] * b.cos();
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "f64 results of f32 inputs, rounded once"
+    )]
+    let t = UvTransform {
+        offset: slot.offset,
+        scale: [n1 as f32, q as f32],
+        rotation: b as f32,
+    };
+    Some(t)
+}
+
+/// A stored rotation in degrees as radians, in the native setter's way (a double product, rounded to f32 once).
+pub(super) fn radians(degrees: f32) -> f32 {
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "the native setter stores the f64 product as f32"
+    )]
+    let r = (f64::from(degrees) * std::f64::consts::PI / 180.0) as f32;
     r
 }
 

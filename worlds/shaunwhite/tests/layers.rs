@@ -193,6 +193,108 @@ fn the_shader_equation_keeps_tint_mask_alpha_and_order() {
     assert_eq!(colour(&w, host, [0.5, 0.5, 0.5, 1.]), [0.5625, 0., 0.125]);
 }
 
+/// The native setter's matrix: rotate by the stored degrees about the UV origin, then scale and offset.
+fn native_uv(slot: &SlotRef, [u, v]: [f32; 2]) -> [f64; 2] {
+    let a = f64::from(slot.rotation).to_radians();
+    let (s, c) = a.sin_cos();
+    let (u, v) = (f64::from(u), f64::from(v));
+    [
+        f64::from(slot.scale[0]) * (c * u - s * v) + f64::from(slot.offset[0]),
+        f64::from(slot.scale[1]) * (s * u + c * v) + f64::from(slot.offset[1]),
+    ]
+}
+
+const POINTS: [[f32; 2]; 4] = [[0., 0.], [1., 0.], [0.3, 0.8], [-1.5, 2.25]];
+
+fn close(a: [f64; 2], b: [f64; 2]) -> bool {
+    (a[0] - b[0]).abs() < 2e-5 && (a[1] - b[1]).abs() < 2e-5
+}
+
+/// A rotated layer slot, whatever its scale, is the layer's rotation then the slot's scale and offset: core's order
+/// of the two, which equals the native matrix (a single core transform scales first and cannot).
+#[test]
+fn a_rotated_layer_slot_is_the_native_matrix_as_the_layers_rotation_then_the_slots_scale() {
+    let (mut w, host, _, _) = fixture();
+    let slot = {
+        let m = w.get_mut::<MaterialRef>(host).unwrap();
+        let s = m.slots.get_mut("diffuse_b").unwrap();
+        (s.scale, s.offset, s.rotation) = ([0.25, 0.5], [0.1, 0.2], 47.54);
+        *s
+    };
+    let report = run(&mut w, "lower-shaunwhite-layers{influence=restored}");
+    assert_eq!(
+        report.steps[0].log.counts["rotated layer UV matrices stated as rotation, then scale"],
+        1
+    );
+    run(&mut w, "lower-shaunwhite-material");
+    let l = w.get::<LayeredMaterial>(host).unwrap();
+    let layer = l.layers[2].as_ref().unwrap();
+    assert_eq!(layer.texcoord, Some(1));
+    let turn = layer.transform.unwrap();
+    assert_eq!((turn.offset, turn.scale), ([0.; 2], [1.; 2]));
+    let texture = w
+        .get::<PbrMaterial>(layer.material)
+        .unwrap()
+        .base_color_texture
+        .unwrap();
+    assert_eq!(
+        texture.transform,
+        Some(UvTransform {
+            offset: [0.1, 0.2],
+            scale: [0.25, 0.5],
+            rotation: 0.
+        })
+    );
+    for uv in POINTS {
+        let sampled = texture.transform.unwrap().apply(turn.apply(uv));
+        assert!(
+            close(sampled.map(f64::from), native_uv(&slot, uv)),
+            "{uv:?}: {sampled:?} against {:?}",
+            native_uv(&slot, uv)
+        );
+    }
+    // the unrotated layers keep the slot's scale and offset on the layer, as before
+    assert_eq!(l.layers[0].as_ref().unwrap().transform, None);
+}
+
+/// The mask is one texture the weights sample: its rotation is lowered where core's rotation after scale equals the
+/// native matrix (a uniform scale; a quarter turn with the scales swapped), else the material is named, not lowered.
+#[test]
+fn a_rotated_mask_is_lowered_where_core_can_state_its_matrix() {
+    for (scale, degrees) in [
+        ([0.25, 0.25], 43.01),
+        ([2., 3.], 90.),
+        ([0.5, 0.5], 121.3),
+        ([-1., 1.], 0.),
+    ] {
+        let (mut w, host, _, _) = fixture();
+        let slot = {
+            let m = w.get_mut::<MaterialRef>(host).unwrap();
+            let s = m.slots.get_mut("mask").unwrap();
+            (s.scale, s.offset, s.rotation) = (scale, [0.125, 0.5], degrees);
+            *s
+        };
+        run(&mut w, "lower-shaunwhite-layers{influence=restored}");
+        let l = w.get::<LayeredMaterial>(host).unwrap();
+        let channels = l.weights.channels.as_ref().unwrap();
+        let transform = channels[1]
+            .sources()
+            .into_iter()
+            .find_map(|s| match s {
+                Source::Mask { texture, .. } => Some(texture.transform),
+                Source::Vertex { .. } => None,
+            })
+            .expect("the red weight samples the mask")
+            .unwrap_or(UvTransform::IDENTITY);
+        for uv in POINTS {
+            assert!(
+                close(transform.apply(uv).map(f64::from), native_uv(&slot, uv)),
+                "{scale:?} {degrees}: {uv:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn colourless_drawings_get_the_shader_one_and_variants_follow_their_primitive() {
     let (mut w, host, proto, _) = fixture();
@@ -218,7 +320,11 @@ fn unsupported_equations_are_named_and_counted() {
         m.name = name.into();
         match kind {
             0 => m.state.as_mut().unwrap().alpha_test = true,
-            1 => m.slots.get_mut("mask").unwrap().rotation = 90.,
+            1 => {
+                // rotation then unequal scale: not core's rotation after scale
+                let mask = m.slots.get_mut("mask").unwrap();
+                (mask.rotation, mask.scale) = (47.54, [0.25, 0.5]);
+            }
             _ => m.slots.get_mut("diffuse_b").unwrap().address = Some([2, 0]),
         }
         let e = w.spawn();

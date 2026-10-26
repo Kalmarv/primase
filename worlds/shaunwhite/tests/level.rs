@@ -237,15 +237,27 @@ fn level_01_reads_and_lowers() {
     // the content selection: keeping everything changes nothing; dropping the classes leaves no placement a row names
     let all_keep = "select-shaunwhite-content{helpers=keep,effects=keep,characters=keep,missions=keep,influence=restored}";
     let kept = run(&mut w, all_keep).unwrap();
-    // restored keeps both Visuals of the 36 tree Entities: nothing goes
+    // restored keeps both Visuals of the 36 tree Entities; the only placements that go are those that draw nothing but
+    // the 5 HideAfter materials, whose pixels the shader discards at influence 1
     let log = &kept.steps[0].log;
     assert_eq!(
         log.counts["tree entities with a RealTreeMesh and a stored Mesh"],
         36
     );
     assert_eq!(log.counts["tree entities with both Visuals kept (restored)"], 36);
-    assert!(!log.counts.contains_key("placements dropped"));
-    assert_eq!(w.iter::<Instance>().count(), placements);
+    assert_eq!(log.counts["materials stored HideAfter (discarded)"], 5);
+    let hidden = log.counts["placements dropped"];
+    assert_eq!(
+        log.counts["placements dropped, every primitive's material stored HideAfter"],
+        hidden
+    );
+    assert!(hidden > 0);
+    assert!(
+        !w.iter::<MaterialRef>()
+            .any(|(_, m)| m.name == "01_Influence_MetroTilesDecal_Mat")
+    );
+    assert_eq!(w.iter::<Instance>().count() as u64, placements as u64 - hidden);
+    let placements = placements - hidden as usize;
     let drop = run(
         &mut w,
         "select-shaunwhite-content{helpers=drop,effects=drop,characters=drop,missions=keep,influence=restored}",
