@@ -5,9 +5,9 @@
 //! shader operations: these mappings, UV0/repeat sampling, dielectric roughness 1,
 //! and unknown render state are named approximations, not native semantics.
 //! See the crate README for the mapping/evidence table. Effect_Map stays unmapped.
-use crate::components::{EncodedTexture, MaterialTextures, ShredMaterial, SourceTexture};
+use crate::components::{EncodedTexture, MaterialTextures, PixelProgram, ShredMaterial, SourceTexture};
 use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
-use primase_core::pbr::{AlphaMode, PbrMaterial, Specular, TextureRef};
+use primase_core::pbr::{AlphaMode, PbrMaterial, Shading, Specular, TextureRef};
 use primase_core::{
     ColorSpace, Component, Entity, Name, NormalConvention, TexFormat, TexRole, Texture, World,
 };
@@ -270,7 +270,7 @@ impl Pass for LowerShredMaterials {
         &[ShredMaterial::NAME]
     }
     fn approximates(&self) -> &'static str {
-        "named slot and constant mappings to PBR; colour transfer, normal encoding/basis, UV0/repeat, rough dielectric response, alpha and culling without native state semantics; unmapped shader operations omitted"
+        "named slot and constant mappings to PBR; colour transfer, normal encoding/basis, UV0/repeat, rough dielectric response, alpha and culling without native state semantics; unmapped shader operations omitted; a material whose pixel program (microcode) only scales its colour texture by uniforms is unlit"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         let materials: Vec<_> = world
@@ -288,6 +288,7 @@ impl Pass for LowerShredMaterials {
                 ctx.log.count("existing PBR materials kept", 1);
                 continue;
             }
+            let program = ctx.world.get::<PixelProgram>(e).cloned();
             let mut pbr = PbrMaterial {
                 metallic: 0.0,
                 roughness: 1.0,
@@ -445,12 +446,68 @@ impl Pass for LowerShredMaterials {
                     "opaque alpha without decoded blend/test enable state",
                 );
             }
-            approximate(
-                ctx.log,
-                e,
-                &m,
-                "lit dielectric PBR, metallic 0, roughness 1 and single-sided culling without native lighting/state",
-            );
+            if let Some(PixelProgram::ScaledTexture { unit, uniforms }) = &program {
+                let colour_slot = m
+                    .samplers
+                    .iter()
+                    .find(|s| s.name.as_deref() == Some("Color_Map"))
+                    .map(|s| s.slot);
+                if colour_slot == Some(*unit) && pbr.base_color_texture.is_some() {
+                    // The program's output is texture unit `unit` times its uniforms and nothing else: no light is read.
+                    let mut tint = [1.0; 3];
+                    for name in uniforms {
+                        match parameter(&m, name)? {
+                            Some(value) => {
+                                let value = colour(value, e, &m, name, ctx.log);
+                                for (t, v) in tint.iter_mut().zip(value) {
+                                    *t *= v;
+                                }
+                                used.insert(name.clone());
+                            }
+                            None => approximate(
+                                ctx.log,
+                                e,
+                                &m,
+                                &format!("uniform {name} has no material value; 1 used"),
+                            ),
+                        }
+                    }
+                    pbr.base_color[..3].copy_from_slice(&tint);
+                    pbr.shading = Shading::Unlit;
+                    approximate(
+                        ctx.log,
+                        e,
+                        &m,
+                        &format!(
+                            "pixel program only scales texture unit {unit} by {uniforms:?} (microcode): unlit, uniform RGB as base factor"
+                        ),
+                    );
+                } else {
+                    approximate(
+                        ctx.log,
+                        e,
+                        &m,
+                        &format!(
+                            "pixel program only scales texture unit {unit}, but Color_Map is not that mapped slot; kept lit"
+                        ),
+                    );
+                }
+            }
+            if pbr.shading == Shading::Unlit {
+                approximate(
+                    ctx.log,
+                    e,
+                    &m,
+                    "single-sided culling and fog without native state",
+                );
+            } else {
+                approximate(
+                    ctx.log,
+                    e,
+                    &m,
+                    "lit dielectric PBR, metallic 0, roughness 1 and single-sided culling without native lighting/state",
+                );
+            }
             if pbr.base_color_texture.is_none() {
                 approximate(ctx.log, e, &m, "base colour has no mapped texture; factor only");
             }

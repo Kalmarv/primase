@@ -344,3 +344,54 @@ fn shared_source_and_role_reuse_one_view_across_materials() {
     );
     assert_eq!(w.iter::<Texture>().count(), 3);
 }
+
+/// Unlit follows the pixel program, never the shader's name: the same family is lit without a classified program, and a
+/// classified program makes any family unlit.
+#[test]
+fn a_program_that_only_scales_its_texture_is_unlit_whatever_the_material_is_called() {
+    use primase_core::pbr::Shading;
+    use primase_shred::components::PixelProgram;
+    let scaled = |unit| PixelProgram::ScaledTexture {
+        unit,
+        uniforms: vec!["GlobalBrightness".into()],
+    };
+    let build = |w: &mut World, family: &str, class: Option<PixelProgram>, tint: [f32; 4]| {
+        let m = material(w, family, &["Color_Map"], &[("GlobalBrightness", tint)]);
+        let (s, _, _) = source(w, Some(pixels()));
+        bind(w, m, 0, s);
+        if let Some(class) = class {
+            w.insert(m, class);
+        }
+        m
+    };
+    let mut w = World::new();
+    let sky = build(&mut w, "env_skydome", Some(scaled(0)), [0.5, 0.25, 1.0, 0.0]);
+    let renamed = build(&mut w, "env_texture", Some(scaled(0)), [1.0; 4]);
+    let by_name = build(&mut w, "env_skydome", None, [1.0; 4]);
+    let other = build(&mut w, "env_skydome", Some(PixelProgram::Unclassified), [1.0; 4]);
+    let wrong_unit = build(&mut w, "env_skydome", Some(scaled(2)), [1.0; 4]);
+    let bright = build(&mut w, "env_icon", Some(scaled(0)), [2.0, 1.0, 1.0, 0.0]);
+    let report = run(&mut w, "omit").unwrap();
+    let p = w.get::<PbrMaterial>(sky).unwrap();
+    assert_eq!(p.shading, Shading::Unlit);
+    assert_eq!(p.base_color, [0.5, 0.25, 1.0, 1.0]);
+    assert!(p.base_color_texture.is_some() && !p.double_sided);
+    assert_eq!(w.get::<PbrMaterial>(renamed).unwrap().shading, Shading::Unlit);
+    for lit in [by_name, other, wrong_unit] {
+        let p = w.get::<PbrMaterial>(lit).unwrap();
+        assert_eq!((p.shading, p.base_color), (Shading::Lit, [1.0; 4]));
+    }
+    // a tint above 1 is clamped to the PBR factor range and says so
+    assert_eq!(
+        w.get::<PbrMaterial>(bright).unwrap().base_color,
+        [1.0, 1.0, 1.0, 1.0]
+    );
+    let text = format!("{report:?}");
+    for said in [
+        "pixel program only scales texture unit 0 by [\\\"GlobalBrightness\\\"] (microcode): unlit",
+        "Color_Map is not that mapped slot; kept lit",
+        "GlobalBrightness RGB clamped",
+    ] {
+        assert!(text.contains(said), "{said}: {text}");
+    }
+}

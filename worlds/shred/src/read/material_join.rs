@@ -2,13 +2,15 @@
 use super::{
     material,
     pak::Pak,
+    pixel_program,
     texture::{self, Payload, Residency, TextureCatalog},
 };
 use crate::{
     Result,
     components::{
         BankEvidence, EncodedTexture, MaterialId, MaterialKey, MaterialNamespace, MaterialResolution,
-        MaterialTextures, SamplerTexture, ShredMaterial, SourceTexture, TextureCopy, TextureResidency,
+        MaterialTextures, PixelProgram, SamplerTexture, ShredMaterial, SourceTexture, TextureCopy,
+        TextureResidency,
     },
     invalid,
 };
@@ -111,6 +113,7 @@ struct PendingCopy {
 pub struct MaterialLibrary<'a> {
     materials: BTreeMap<u32, Vec<ShredMaterial>>,
     programs: BTreeSet<String>,
+    classes: BTreeMap<String, PixelProgram>,
     textures: TextureCatalog<'a>,
     pending: Vec<PendingCopy>,
 }
@@ -118,13 +121,24 @@ pub struct MaterialLibrary<'a> {
 impl<'a> MaterialLibrary<'a> {
     pub fn new(banks: &Pak, assets: &[(&'a str, &'a Pak)]) -> Result<Self> {
         let mut names = BTreeMap::new();
+        let mut classes = BTreeMap::new();
         for (_, pak) in assets {
             for (i, e) in pak.entries().iter().enumerate() {
                 let Some(stem) = e.name.strip_suffix(b".psp") else {
                     continue;
                 };
                 let stem = std::str::from_utf8(stem).map_err(|e| invalid(0, e))?.to_owned();
-                let reflected = material::fragment_uniform_names(&pak.payload(i)?)?;
+                let payload = pak.payload(i)?;
+                let reflected = material::fragment_uniform_names(&payload)?;
+                let class = pixel_program::classify(&payload)?;
+                if let Some(previous) = classes.insert(stem.clone(), class.clone())
+                    && previous != class
+                {
+                    return Err(invalid(
+                        e.offset,
+                        format!("conflicting pixel program class for {stem}"),
+                    ));
+                }
                 if let Some(previous) = names.insert(stem.clone(), reflected.clone())
                     && previous != reflected
                 {
@@ -166,6 +180,7 @@ impl<'a> MaterialLibrary<'a> {
         }
         let mut library = Self::from_materials(materials, assets)?;
         library.programs = names.into_keys().collect();
+        library.classes = classes;
         Ok(library)
     }
 
@@ -185,6 +200,7 @@ impl<'a> MaterialLibrary<'a> {
         Ok(Self {
             materials: by_id,
             programs: BTreeSet::new(),
+            classes: BTreeMap::new(),
             textures: TextureCatalog::new(assets).map_err(|e| invalid(0, e))?,
             pending: Vec::new(),
         })
@@ -271,6 +287,9 @@ impl<'a> MaterialLibrary<'a> {
                     slot: sampler.slot,
                     texture,
                 });
+            }
+            if let Some(class) = self.classes.get(&material.fragment_shader) {
+                world.insert(entity, class.clone());
             }
             world.insert(entity, material);
             world.insert(entity, MaterialTextures(bindings));

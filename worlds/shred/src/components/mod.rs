@@ -13,8 +13,8 @@ pub use collision::{CollisionSurface, CollisionSurfaces, DynamicShape, MOTION_FI
 pub use level_params::{LevelParams, ScriptCall, ScriptValue};
 pub use material::{
     BankEvidence, EncodedTexture, MaterialKey, MaterialNamespace, MaterialParameter, MaterialResolution,
-    MaterialSampler, MaterialTextures, SamplerNameSource, SamplerTexture, ShredMaterial, SourceTexture,
-    TextureCopy, TextureResidency,
+    MaterialSampler, MaterialTextures, PixelProgram, SamplerNameSource, SamplerTexture, ShredMaterial,
+    SourceTexture, TextureCopy, TextureResidency,
 };
 
 /// A model ID is scoped to its PAK and quartet, never globally deduplicated.

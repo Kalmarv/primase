@@ -11,6 +11,7 @@ pub mod material;
 pub mod material_join;
 pub mod names;
 pub mod pak;
+pub mod pixel_program;
 pub mod scene;
 pub mod scp_cameras;
 pub mod scp_lights;

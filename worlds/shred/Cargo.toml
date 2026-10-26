@@ -18,13 +18,13 @@ primase-compress.workspace = true
 primase-hash.workspace = true
 primase-havok.workspace = true
 primase-lua51.workspace = true
+primase-rsx.workspace = true
 quantydb-sqlite.workspace = true
 thiserror.workspace = true
 half.workspace = true
 
 [dev-dependencies]
 primase-testdata.workspace = true
-primase-rsx.workspace = true
 sha2.workspace = true
 
 [lints]

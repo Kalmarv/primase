@@ -51,6 +51,25 @@ pub struct ShredMaterial {
     pub samplers: Vec<MaterialSampler>,
 }
 
+/// What a material's pixel program does, from its microcode and not its name (`read::pixel_program`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub enum PixelProgram {
+    /// Not classified: anything but the case below. This does not say the program is lit.
+    Unclassified,
+    /// Samples texture unit `unit` at the first texture coordinate and only copies or multiplies the sample with the
+    /// uniforms `uniforms` (by their program names): no normal, light, fog or other interpolant is read.
+    ScaledTexture { unit: u32, uniforms: Vec<String> },
+}
+
+impl Component for PixelProgram {
+    const NAME: &'static str = "shred.pixel_program";
+    const GEOMETRY: Geometry = Geometry::None;
+    const VERSION: u32 = 1;
+    fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+}
+
 impl Component for ShredMaterial {
     const NAME: &'static str = "shred.material";
     const GEOMETRY: Geometry = Geometry::None;
