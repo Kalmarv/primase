@@ -5,7 +5,7 @@ use primase_testdata::{Game, OracleSet, install_file, oracle};
 #[test]
 fn main_db_equals_pythons_dump() {
     let (Some(db), Some(tsv)) = (
-        install_file(Game::Shred, "PS3_GAME/USRDIR/DATABASE/MAIN.DB"),
+        install_file(Game::Shred, "PS3_GAME/USRDIR/database/main.db"),
         oracle(OracleSet::Corpus, Game::Shred, "main-db.tsv"),
     ) else {
         return;

@@ -696,7 +696,7 @@ pub const DECLARED: &[Declared] = &[
         source: r#"the user's own install: the containers of its `/shader/*.shaderbnd.dcx` binders and `/shader/*.shaderbdlebnd.dcx` bundles (ray-tracing `[rt]` bundles included), worlds/fromsoft/examples/corpus_elden_shaders.rs"#,
     },
     Declared {
-        query: Query::Install(Game::Shred, Some("PS3_GAME/USRDIR/DATABASE/MAIN.DB")),
+        query: Query::Install(Game::Shred, Some("PS3_GAME/USRDIR/database/main.db")),
         status: Status::Live,
         gate: true,
         about: r#"Tony Hawk: SHRED's SQLite 3 database of levels, sessions, goals and drop spots (142 tables); toolkit/sqlite/tests/main_db.rs"#,
