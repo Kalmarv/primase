@@ -8,7 +8,8 @@ use primase_core::ledger::Conservation;
 use primase_core::pass::{Options, Pass, PassLog, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::pbr::{PbrMaterial, TextureRef, TextureSlot, UvTransform, Wrap};
 use primase_core::{
-    Entity, Instance, MaterialVariants, Mesh, Name, Primitive, Semantic, Stream, Topology, Transform, World,
+    Entity, Instance, Layer, LayerWeights, LayeredMaterial, MaterialVariants, Mesh, Name, Primitive,
+    Semantic, Stream, Topology, Transform, WeightMapping, World,
 };
 use primase_meshops::{SpecializeMaterialVariants, UnusedVariants};
 use primase_reskate::passes::{
@@ -206,6 +207,127 @@ fn variants_tiling_differently_are_refused_until_specialized() {
     .unwrap();
     let copy = w.get::<Instance>(b).unwrap().prototype;
     assert_eq!(coords(&w, copy)[1], [2.0, 0.0]);
+}
+
+/// A blend `blend` drawn by a placed prototype, its layer 0 `floor` (untiled) and layer 1 `paint` with `layer` as the
+/// layer's transform.
+fn blend(w: &mut World, floor: Entity, paint: Entity, layer: UvTransform) -> (Entity, Entity) {
+    let blend = material(w, "blend", None, None);
+    w.insert(
+        blend,
+        LayeredMaterial {
+            layers: vec![
+                Some(Layer {
+                    material: floor,
+                    texcoord: None,
+                    transform: None,
+                }),
+                Some(Layer {
+                    material: paint,
+                    texcoord: None,
+                    transform: Some(layer),
+                }),
+            ],
+            weights: LayerWeights::new(Semantic::Color(0), WeightMapping::Identity),
+        },
+    );
+    let p = prototype(w, blend);
+    w.get_mut::<Mesh>(p)
+        .unwrap()
+        .primitive_mut(0)
+        .unwrap()
+        .streams_mut()
+        .insert(Semantic::Color(0), Stream::U8x4(vec![[255, 0, 0, 255]; 3]));
+    (blend, p)
+}
+
+fn set(w: &World, p: Entity, n: u8) -> Vec<[f32; 2]> {
+    match w.get::<Mesh>(p).unwrap().primitives()[0]
+        .streams
+        .get(&Semantic::TexCoord(n))
+    {
+        Some(Stream::F32x2(v)) => v.clone(),
+        _ => panic!("no coordinate set {n}"),
+    }
+}
+
+fn near(a: &[[f32; 2]], b: &[[f32; 2]]) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .zip(b)
+            .all(|(a, b)| (a[0] - b[0]).abs() < 1e-5 && (a[1] - b[1]).abs() < 1e-5)
+}
+
+/// A layer rotated a quarter turn whose material then scales unequally and offsets (Shaun White's rotated layer
+/// slots: two transforms in a row that are not one): the layer draws from a set of its own holding both, exactly, the
+/// material's slots lose the tiling the layer took, and the primitive's first set is untouched.
+#[test]
+fn a_layers_tiling_and_its_materials_are_folded_into_a_set_of_its_own() {
+    let mut w = World::new();
+    let tex = w.spawn();
+    let floor = material(&mut w, "floor", Some(TextureRef::new(tex)), None);
+    let mut tiled = TextureRef::new(tex);
+    tiled.transform = Some(UvTransform {
+        offset: [0.5, 0.0],
+        scale: [2.0, 3.0],
+        rotation: 0.0,
+    });
+    let paint = material(&mut w, "paint", Some(tiled), None);
+    let turn = UvTransform {
+        rotation: std::f32::consts::FRAC_PI_2,
+        ..UvTransform::IDENTITY
+    };
+    let (blend, p) = blend(&mut w, floor, paint, turn);
+    let log = run(&mut w, vec![uv(TextureSlot::BaseColor, SamplingConflicts::Adopt)]).unwrap();
+    assert_eq!(
+        log.counts["layer tilings folded into a coordinate set of their own"],
+        1
+    );
+    assert_eq!(log.counts["layer materials whose tiling the layers took"], 1);
+    let layer = w.get::<LayeredMaterial>(blend).unwrap().layers[1]
+        .clone()
+        .unwrap();
+    assert_eq!((layer.texcoord, layer.transform), (Some(1), None));
+    // (1,0) turned to (0,1), scaled to (0,3), offset to (0.5,3); (0,1) to (-1,0), (-2,0), (-1.5,0)
+    assert!(
+        near(&set(&w, p, 1), &[[0.5, 0.0], [0.5, 3.0], [-1.5, 0.0]]),
+        "{:?}",
+        set(&w, p, 1)
+    );
+    assert_eq!(set(&w, p, 0), [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]);
+    assert!(slots(&w, paint).iter().all(|r| r.transform.is_none()));
+    let untouched = w.get::<LayeredMaterial>(blend).unwrap().layers[0]
+        .clone()
+        .unwrap();
+    assert_eq!((untouched.texcoord, untouched.transform), (None, None));
+}
+
+/// A layer material a primitive also draws keeps its tiling for that primitive (baked there by the baker), while the
+/// layer takes its own copy of it.
+#[test]
+fn a_layer_material_drawn_directly_keeps_its_tiling_for_the_baker() {
+    let mut w = World::new();
+    let tex = w.spawn();
+    let floor = material(&mut w, "floor", Some(TextureRef::new(tex)), None);
+    let paint = material(&mut w, "paint", Some(scaled(tex, 4.0)), None);
+    let (blend, p) = blend(&mut w, floor, paint, UvTransform::IDENTITY);
+    let q = prototype(&mut w, paint);
+    let log = run(&mut w, vec![uv(TextureSlot::BaseColor, SamplingConflicts::Adopt)]).unwrap();
+    assert_eq!(
+        log.counts["layer tilings folded into a coordinate set of their own"],
+        1
+    );
+    assert!(
+        !log.counts
+            .contains_key("layer materials whose tiling the layers took")
+    );
+    assert_eq!(set(&w, p, 1), [[0.0, 0.0], [4.0, 0.0], [0.0, 4.0]]);
+    assert_eq!(coords(&w, q), [[0.0, 0.0], [4.0, 0.0], [0.0, 4.0]]);
+    assert!(slots(&w, paint).iter().all(|r| r.transform.is_none()));
+    let layer = w.get::<LayeredMaterial>(blend).unwrap().layers[1]
+        .clone()
+        .unwrap();
+    assert_eq!(layer.texcoord, Some(1));
 }
 
 /// Every slot wraps along both axes as the anchor wraps along the chosen axis; each material changed is reported by

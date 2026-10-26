@@ -8,7 +8,9 @@
 //! - `prepare-reskate-uv-transforms{anchor=<slot>,conflicts=adopt|refuse}`: every slot takes the anchor's texture
 //!   transform (`adopt`, each slot that differed reported by material and slot as an approximation; `refuse`: an error
 //!   naming it), then the transforms are baked into the coordinates by the toolkit's baker
-//!   ([`primase_meshops::bake_texture_transforms`]). A slot sampling another set than the first is refused. A material
+//!   ([`primase_meshops::bake_texture_transforms`]). A blend's layer whose material tiles (a layer's transform comes
+//!   before its textures' own) is first given a coordinate set of its own holding both, which `lower-layered-reskate`
+//!   draws its overlay with. A slot sampling another set than the first is refused. A material
 //!   drawn whose tiling the baker could not bake (materials sharing a primitive that tile differently: a prototype's
 //!   variants, `specialize-material-variants` first) is refused, never erased.
 //! - `prepare-reskate-wrap{anchor=<slot>,axis=u|v}`: every slot wraps along both axes as the anchor wraps along `axis`,
@@ -21,7 +23,9 @@ use std::collections::BTreeSet;
 
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial, TextureSlot, UvTransform, Wrap};
-use primase_core::{Entity, LayeredMaterial, MaterialVariants, Mesh, MeshFile, Name, World};
+use primase_core::{
+    Entity, LayeredMaterial, MaterialVariants, Mesh, MeshFile, Name, Semantic, Stream, World,
+};
 
 const SLOTS: [(TextureSlot, &str); 7] = [
     (TextureSlot::BaseColor, "base-colour"),
@@ -69,23 +73,43 @@ fn anchor_of(m: &PbrMaterial, anchor: TextureSlot) -> Option<TextureSlot> {
         .map(|(s, _)| s)
 }
 
-/// The materials drawn: by a primitive (its own, its variants', its file's), and the layers of a drawn blend.
-fn drawn(w: &World) -> BTreeSet<Entity> {
-    let mut drawn = BTreeSet::new();
+/// The materials a primitive draws with (its own, its variants'), each with its primitive: `Some((prototype, index))`
+/// for a loaded mesh, `None` for a prototype whose geometry is still in its file (its file's materials).
+fn direct_uses(w: &World) -> Vec<(Entity, Option<(Entity, usize)>)> {
+    let mut uses = Vec::new();
     for (e, mesh) in w.iter::<Mesh>() {
-        drawn.extend(mesh.primitives().iter().filter_map(|p| p.material));
-        if let Some(v) = w.get::<MaterialVariants>(e) {
-            drawn.extend(v.0.iter().flat_map(|m| m.values().copied()));
+        let variants = w.get::<MaterialVariants>(e);
+        for (i, p) in mesh.primitives().iter().enumerate() {
+            let own = p.material.into_iter();
+            let other = variants
+                .and_then(|v| v.0.get(i))
+                .into_iter()
+                .flat_map(|m| m.values().copied());
+            uses.extend(own.chain(other).map(|m| (m, Some((e, i)))));
         }
     }
     for (e, f) in w.iter::<MeshFile>() {
         if !w.has::<Mesh>(e) {
-            drawn.extend(f.materials.iter().flatten());
-            if let Some(v) = w.get::<MaterialVariants>(e) {
-                drawn.extend(v.0.iter().flat_map(|m| m.values().copied()));
-            }
+            let variants = w.get::<MaterialVariants>(e);
+            let other = variants
+                .into_iter()
+                .flat_map(|v| v.0.iter().flat_map(|m| m.values().copied()));
+            uses.extend(
+                f.materials
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .chain(other)
+                    .map(|m| (m, None)),
+            );
         }
     }
+    uses
+}
+
+/// The materials drawn: by a primitive (its own, its variants', its file's), and the layers of a drawn blend.
+fn drawn(w: &World) -> BTreeSet<Entity> {
+    let mut drawn: BTreeSet<Entity> = direct_uses(w).into_iter().map(|(m, _)| m).collect();
     let layers: Vec<Entity> = drawn
         .iter()
         .filter_map(|&e| w.get::<LayeredMaterial>(e))
@@ -93,6 +117,101 @@ fn drawn(w: &World) -> BTreeSet<Entity> {
         .collect();
     drawn.extend(layers);
     drawn
+}
+
+/// The tiling a layer material's slots share once they follow their anchor: the first slot's (`None`: none, or the
+/// identity).
+fn shared_tiling(m: &PbrMaterial) -> Option<UvTransform> {
+    m.textures()
+        .find_map(|r| r.transform)
+        .filter(|t| *t != UvTransform::IDENTITY)
+}
+
+/// Each drawn blend's layer whose material tiles: its coordinates as core samples them, the layer's transform of its
+/// selected set and then the material's own tiling (composed exactly, though the two in a row are not one
+/// [`UvTransform`] in general: a rotation, then an unequal scale), written into a new set on every primitive the blend
+/// draws, which the layer then selects untransformed. A material drawn only as layers, each of them folded, loses its
+/// slots' tiling; one also drawn by a primitive keeps it for the baker. A blend whose geometry is still in a file is
+/// left alone (its layers' tiling is then refused as not baked).
+fn fold_layer_tiling(w: &mut World, log: &mut PassLog) -> Result<(), String> {
+    let uses = direct_uses(w);
+    let direct: BTreeSet<Entity> = uses.iter().map(|&(m, _)| m).collect();
+    let mut folded: BTreeSet<Entity> = BTreeSet::new();
+    let mut kept: BTreeSet<Entity> = BTreeSet::new();
+    for &blend in &direct {
+        let Some(layered) = w.get::<LayeredMaterial>(blend).cloned() else {
+            continue;
+        };
+        let users: Vec<Option<(Entity, usize)>> = uses
+            .iter()
+            .filter(|(m, _)| *m == blend)
+            .map(|&(_, p)| p)
+            .collect();
+        let loaded: Option<BTreeSet<(Entity, usize)>> = users.iter().copied().collect();
+        for (slot, layer) in layered.layers.iter().enumerate() {
+            let Some(layer) = layer else { continue };
+            let Some(tiling) = w.get::<PbrMaterial>(layer.material).and_then(shared_tiling) else {
+                continue;
+            };
+            let Some(prims) = &loaded else {
+                log.count("not baked: a blend's geometry still in a file", 1);
+                kept.insert(layer.material);
+                continue;
+            };
+            let from = layer.texcoord.unwrap_or(0);
+            let mut moved = Vec::new();
+            let mut next = 1u8;
+            for &(e, i) in prims {
+                let p = &w.get::<Mesh>(e).expect("a loaded use").primitives()[i];
+                let Some(Stream::F32x2(uv)) = p.streams.get(&Semantic::TexCoord(from)) else {
+                    return Err(format!(
+                        "prepare-reskate-uv-transforms: material {}'s layer {slot} samples TexCoord({from}), which                          a primitive drawing it lacks (or holds otherwise than as float pairs)",
+                        name_of(w, blend)
+                    ));
+                };
+                let uv: Vec<[f32; 2]> = uv
+                    .iter()
+                    .map(|&c| tiling.apply(layer.transform.map_or(c, |t| t.apply(c))))
+                    .collect();
+                for s in p.streams.keys() {
+                    if let Semantic::TexCoord(n) = s {
+                        next = next.max(n.checked_add(1).ok_or("a primitive holds TexCoord(255)")?);
+                    }
+                }
+                moved.push(((e, i), uv));
+            }
+            for ((e, i), uv) in moved {
+                w.get_mut::<Mesh>(e)
+                    .expect("a loaded use")
+                    .primitive_mut(i)
+                    .expect("a listed primitive")
+                    .streams_mut()
+                    .insert(Semantic::TexCoord(next), Stream::F32x2(uv));
+                w.remove::<MeshFile>(e);
+            }
+            let l = w.get_mut::<LayeredMaterial>(blend).expect("listed").layers[slot]
+                .as_mut()
+                .expect("listed");
+            l.texcoord = Some(next);
+            l.transform = None;
+            folded.insert(layer.material);
+            log.count("layer tilings folded into a coordinate set of their own", 1);
+        }
+    }
+    for m in folded {
+        if direct.contains(&m) || kept.contains(&m) {
+            continue;
+        }
+        for r in w
+            .get_mut::<PbrMaterial>(m)
+            .expect("a tiling material")
+            .textures_mut()
+        {
+            r.transform = None;
+        }
+        log.count("layer materials whose tiling the layers took", 1);
+    }
+    Ok(())
 }
 
 /// What a slot that samples otherwise than its anchor becomes.
@@ -226,6 +345,7 @@ impl Pass for PrepareReskateUvTransforms {
                 r.transform = want;
             }
         }
+        fold_layer_tiling(w, log)?;
         let baked = primase_meshops::bake_texture_transforms(w);
         log.absorb(baked);
         log.approximate(
