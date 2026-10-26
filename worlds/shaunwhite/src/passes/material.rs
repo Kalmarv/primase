@@ -6,9 +6,10 @@
 //! (an exponent n) is the roughness `(2 / (n + 2))^(1/4)` (the Blinn-Phong lobe's width as a GGX roughness); the
 //! specular level, colour and map are glTF's specular factor, colour and colour texture; the illumination is the
 //! diffuse layer as emission at that strength. Approximations, stated and counted: the specular map, a Blinn-Phong
-//! colour, can darken glTF's dielectric highlight and not brighten it; the normal map, the mask and the second and
-//! third layers are lowered separately by `lower-shaunwhite-layers` before this pass; otherwise the fallback
-//! remains the diffuse layer (the normal map's green orientation is not established); a Material that holds any of those layers is marked to ignore its vertex
+//! colour, can darken glTF's dielectric highlight and not brighten it. A Material `lower-shaunwhite-layers` made a
+//! blend (core.layered, before this pass) is drawn by its layers and takes no PBR material of its own. Otherwise the
+//! normal map is not lowered (its green orientation is not established), and a Material holding a mask, second or third
+//! layer without a blend falls back to its diffuse layer, marked to ignore its vertex
 //! colour (a layered Material's vertex colours are saturated and mostly not grey, 58% of 497,307 vertices of level 01,
 //! against 13% of 801,135 of the others: weights, which drawn as a colour paint magenta and green across rocks and
 //! roofs), so it draws as its diffuse layer; an additive Material (blend 6) is drawn alpha-blended and unlit, its
@@ -145,6 +146,13 @@ impl Pass for LowerShaunwhiteMaterial {
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let all: Vec<(Entity, MaterialRef)> = w.iter::<MaterialRef>().map(|(e, m)| (e, m.clone())).collect();
         for (e, m) in all {
+            // a blend (core.layered, lower-shaunwhite-layers') is drawn by its layers, each a material of its own: it
+            // takes no pbr.material itself (core's and the targets' rule)
+            if w.has::<primase_core::LayeredMaterial>(e) {
+                w.remove::<MaterialRef>(e);
+                log.count("blends drawn by their layers (no material of their own)", 1);
+                continue;
+            }
             let base = m.slots.get("diffuse").map(|s| texture_ref(w, s, log));
             let specular_map = m.slots.get("specular").map(|s| texture_ref(w, s, log));
             if base.is_none() {
@@ -153,7 +161,7 @@ impl Pass for LowerShaunwhiteMaterial {
             let layered = ["mask", "diffuse_b", "diffuse_c"]
                 .iter()
                 .any(|k| m.slots.contains_key(*k));
-            if layered && !w.has::<primase_core::LayeredMaterial>(e) {
+            if layered {
                 w.insert(e, VertexColor::Ignored);
                 log.approximate(
                     "layered materials drawn as their diffuse layer, vertex colour ignored",
@@ -161,10 +169,7 @@ impl Pass for LowerShaunwhiteMaterial {
                 );
             }
             for slot in ["normal", "mask", "diffuse_b", "specular_b", "diffuse_c"] {
-                if m.slots.contains_key(slot)
-                    && !(w.has::<primase_core::LayeredMaterial>(e)
-                        && ["mask", "diffuse_b", "diffuse_c"].contains(&slot))
-                {
+                if m.slots.contains_key(slot) {
                     log.omit(&format!("{slot} maps (not lowered)"), 1);
                 }
             }

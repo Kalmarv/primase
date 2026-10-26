@@ -170,7 +170,9 @@ interpretation. UseTextureAlpha lives at 224/392/494. Native property CRCs ident
 source-byte inspection checks their offsets. The material component is version 3. Layer UV sets and authored map
 wrap/clamp modes are retained; the map's rotation is retained as source data.
 
-The pass creates up to four ordinary layer materials with `core.layered` in `over` order. A material shared by
+The pass creates up to four ordinary layer materials with `core.layered` in `over` order. Each core layer selects its
+map's coordinate set and tiling (`Layer.texcoord`, `Layer.transform`); its material samples `TexCoord(0)` untiled, as
+core's layer contract states, so target lowerings move the selected set into each drawn part's first set. A material shared by
 meshes with and without colour streams gets a separate colourless drawing (including material variants); the shader
 supplies one for absent vertex colour. The original weight stream stays on the mesh. The following generic material
 pass lowers the ordinary child materials and supplies the host's roughness/specular approximation.

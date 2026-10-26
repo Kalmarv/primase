@@ -5,7 +5,7 @@
 )]
 use primase_core::layered::{Channel, Composition, Source, mask_value};
 use primase_core::pass::{Conservation, PassManager, PassRegistry, RunReport};
-use primase_core::pbr::{PbrMaterial, Wrap};
+use primase_core::pbr::{PbrMaterial, UvTransform, Wrap};
 use primase_core::{
     ColorSpace, Entity, LayeredMaterial, MaterialVariants, Mesh, Primitive, Semantic, Stream, TexFormat,
     TexRole, Texture, Topology, World,
@@ -116,6 +116,8 @@ fn fixture() -> (World, Entity, Entity, Entity) {
                     "diffuse_b".into(),
                     SlotRef {
                         texcoord: 1,
+                        scale: [2., 3.],
+                        offset: [0.25, 0.],
                         ..slot(second)
                     },
                 ),
@@ -154,7 +156,18 @@ fn the_shader_equation_keeps_tint_mask_alpha_and_order() {
     run(&mut w, "lower-shaunwhite-layers{influence=restored}");
     let l = w.get::<LayeredMaterial>(host).unwrap();
     assert_eq!(l.layers.len(), 4);
-    assert_eq!(l.layers[2].as_ref().unwrap().texcoord, Some(1));
+    // the layer selects the slot's coordinate set and tiling; its material samples TexCoord(0) untiled
+    let b = l.layers[2].as_ref().unwrap();
+    assert_eq!(b.texcoord, Some(1));
+    assert_eq!(
+        b.transform,
+        Some(UvTransform {
+            offset: [0.25, 0.],
+            scale: [2., 3.],
+            rotation: 0.
+        })
+    );
+    assert_eq!(l.layers[3].as_ref().unwrap().transform, None);
     assert!(
         matches!(&l.weights.channels.as_ref().unwrap()[2],Channel::Product { sources } if sources.len()==3)
     );
@@ -171,6 +184,8 @@ fn the_shader_equation_keeps_tint_mask_alpha_and_order() {
         .base_color_texture
         .unwrap()
         .texture;
+    let sampled = w.get::<PbrMaterial>(second).unwrap().base_color_texture.unwrap();
+    assert_eq!((sampled.texcoord, sampled.transform), (0, None));
     w.get_mut::<Texture>(texture).unwrap().levels[0][3] = 0;
     assert_eq!(colour(&w, host, [0.5, 0.5, 0.5, 1.]), [0.5625, 0., 0.125]);
 }

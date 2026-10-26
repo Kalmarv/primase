@@ -316,10 +316,15 @@ fn level_01_reads_and_lowers() {
     // the lowered materials' alpha modes and tiling follow the stored fields; every one verifies
     let pbr: Vec<&PbrMaterial> = w.iter::<PbrMaterial>().map(|(_, p)| p).collect();
     let mode = |f: fn(&AlphaMode) -> bool| pbr.iter().filter(|p| f(&p.alpha_mode)).count();
+    // tiling lives on the material's base colour, or on the core layer of a blend's layer (its material untiled)
     let tiled = pbr
         .iter()
         .filter(|p| p.base_color_texture.is_some_and(|t| t.transform.is_some()))
-        .count();
+        .count()
+        + w.iter::<primase_core::LayeredMaterial>()
+            .flat_map(|(_, l)| l.layers.iter().flatten())
+            .filter(|l| l.transform.is_some())
+            .count();
     println!(
         "lowered: {} materials, {} blend, {} mask, {} unlit, {tiled} with a UV transform; {:?}",
         pbr.len(),

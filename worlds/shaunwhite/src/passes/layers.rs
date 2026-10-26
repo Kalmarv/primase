@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::layered::{Channel, Composition, Source};
 use primase_core::pass::{OptionSpec, Options, Pass, PassLog, PassSpec};
+use primase_core::pbr::UvTransform;
 use primase_core::{
     Component, Entity, Layer, LayerWeights, LayeredMaterial, MaterialVariants, Mesh, Name, Semantic,
     VertexColor, WeightMapping, World,
@@ -92,6 +93,8 @@ fn usage(w: &World) -> BTreeMap<Entity, BTreeSet<bool>> {
     out
 }
 
+/// One layer: a material sampling its map on TexCoord(0), untiled, and the core layer selecting the slot's coordinate
+/// set and tiling (core's contract: the layer alone selects them, applied before every texture of its material).
 fn child(
     w: &mut World,
     m: &MaterialRef,
@@ -100,6 +103,18 @@ fn child(
     slot: crate::components::SlotRef,
     label: &str,
 ) -> Layer {
+    let transform = (slot.scale != [1.; 2] || slot.offset != [0.; 2]).then_some(UvTransform {
+        offset: slot.offset,
+        scale: slot.scale,
+        rotation: 0.,
+    });
+    let texcoord = slot.texcoord;
+    let slot = crate::components::SlotRef {
+        texcoord: 0,
+        scale: [1.; 2],
+        offset: [0.; 2],
+        ..slot
+    };
     let e = w.spawn();
     state.color = [color[0], color[1], color[2], 1.];
     state.layering = LayerState::default();
@@ -118,8 +133,8 @@ fn child(
     w.insert(e, VertexColor::Ignored);
     Layer {
         material: e,
-        texcoord: Some(slot.texcoord),
-        transform: None,
+        texcoord: Some(texcoord),
+        transform,
     }
 }
 
