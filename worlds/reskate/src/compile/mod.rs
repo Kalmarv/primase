@@ -1,11 +1,17 @@
 //! The stage after writing a map: ReSkate Studio's `compile-map` of a normalized map folder into a mod's staging
 //! folder, run as the program states it: which Studio, which game install, which staging folder and mod folder, and
-//! every compile choice ([`CompileChoices`]). Nothing here adapts the map; a choice left unstated is Studio's own.
-//! Orchestration (which maps, their names, deploying, packaging) is the program's.
+//! every compile choice ([`CompileChoices`]); then the post-compile steps in their one order
+//! ([`crate::postcompile::finish`]: the blend stage, the level root's repair, the layering gate), so what a compile
+//! leaves is the Patch a player installs and no program can leave a step out. Nothing here adapts the map; a choice
+//! left unstated is Studio's own. Orchestration (which maps, their names, deploying, packaging) is the program's.
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use primase_compress::oodle::Oodle;
+
+use crate::postcompile::fb::folder::Folder;
+use crate::postcompile::finish::{Finished, finish};
 use crate::{Error, Result};
 
 /// Where Studio is and which game it compiles against.
@@ -104,22 +110,28 @@ impl CompileChoices {
 /// What a compile left.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Compiled {
-    /// The mod's native Patch folder, in the staging folder.
+    /// The mod's native Patch folder, finished, in the staging folder: what a player installs.
     pub patch: PathBuf,
     /// Studio's output, beside the staging folder (`<staging>.compile.log`).
     pub log: PathBuf,
+    /// Studio's compile, seconds.
     pub seconds: f64,
     /// Lines of Studio's output that are warnings (`warning:`).
     pub warnings: usize,
+    /// What finishing did: the blend stage, the level root's repair, and the layering gate's findings and time.
+    pub finished: Finished,
 }
 
 /// Compile the normalized map folder `map` with `studio` into `staging` (absent or empty: an existing folder with
-/// anything in it is refused, never emptied here) as the mod folder `mod_folder`, by `choices`. Studio's output is kept
-/// as the log beside `staging` whatever happens; a compile Studio fails is an error naming it.
+/// anything in it is refused, never emptied here) as the mod folder `mod_folder`, by `choices`, and finish it against
+/// the game Studio compiled against (its `Data` folder; `oodle` is that install's Oodle library, which the caller
+/// loads). Studio writes into `staging/studio`, which is removed once `staging/Patch` is finished. Studio's output is
+/// kept as the log beside `staging` whatever happens; a compile Studio fails, or a finish refused (a blend stage that
+/// does not restore the game's programs, a level root that does not read, an enforced layering check that fails), is
+/// an error naming it.
 #[allow(
     clippy::disallowed_methods,
-    clippy::disallowed_types,
-    reason = "writer I/O: runs Studio's compile-map, which writes the mod into the staging folder, and writes its log"
+    reason = "writer I/O: removes Studio's own output once it is finished"
 )]
 pub fn compile_map(
     studio: &Studio,
@@ -127,7 +139,49 @@ pub fn compile_map(
     staging: &Path,
     mod_folder: &str,
     choices: &CompileChoices,
+    oodle: &Oodle,
 ) -> Result<Compiled> {
+    let ran = run_studio(studio, map, staging, mod_folder, choices)?;
+    let patch = staging.join("Patch");
+    let data =
+        Folder::open(studio.game.join("Data")).map_err(|e| Error::Write(format!("the game's data: {e}")))?;
+    let finished = finish(map, &ran.output.join("Patch"), &patch, &data, oodle)
+        .map_err(|e| Error::Write(format!("finishing {}: {e}", ran.output.display())))?;
+    std::fs::remove_dir_all(&ran.output).map_err(|source| Error::Io {
+        path: ran.output.clone(),
+        source,
+    })?;
+    Ok(Compiled {
+        patch,
+        log: ran.log,
+        seconds: ran.seconds,
+        warnings: ran.warnings,
+        finished,
+    })
+}
+
+/// What Studio's compile left, before finishing.
+struct Ran {
+    /// Studio's output folder (`staging/studio`, its `Patch` inside).
+    output: PathBuf,
+    log: PathBuf,
+    seconds: f64,
+    warnings: usize,
+}
+
+/// Studio's `compile-map` of `map` into `staging/studio`, after refusing a staging folder in use ([`compile_map`]).
+#[allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "writer I/O: runs Studio's compile-map, which writes the mod into the staging folder, and writes its log"
+)]
+fn run_studio(
+    studio: &Studio,
+    map: &Path,
+    staging: &Path,
+    mod_folder: &str,
+    choices: &CompileChoices,
+) -> Result<Ran> {
     let io = |path: &Path| {
         let path = path.to_owned();
         move |source| Error::Io { path, source }
@@ -144,11 +198,12 @@ pub fn compile_map(
     }
     let log = staging.with_extension("compile.log");
     let started = Instant::now();
+    let output = staging.join("studio");
     let out = std::process::Command::new(&studio.cli)
         .arg("compile-map")
         .arg(&studio.game)
         .arg(map)
-        .arg(staging)
+        .arg(&output)
         .args(["--mod-folder", mod_folder])
         .args(choices.arguments())
         .output()
@@ -162,8 +217,8 @@ pub fn compile_map(
             log.display()
         )));
     }
-    Ok(Compiled {
-        patch: staging.join("Patch"),
+    Ok(Ran {
+        output,
         log,
         seconds: started.elapsed().as_secs_f64(),
         warnings: String::from_utf8_lossy(&text)
@@ -221,11 +276,14 @@ mod tests {
             time_of_day: None,
             pause_map: None,
         };
-        let refused = compile_map(&studio, &root.join("map"), &staging, "Mod", &choices).unwrap_err();
+        let refused = run_studio(&studio, &root.join("map"), &staging, "Mod", &choices)
+            .err()
+            .unwrap();
         assert!(refused.to_string().contains("not empty"), "{refused}");
         assert!(staging.join("kept.txt").exists(), "nothing was emptied");
-        let missing =
-            compile_map(&studio, &root.join("map"), &root.join("fresh"), "Mod", &choices).unwrap_err();
+        let missing = run_studio(&studio, &root.join("map"), &root.join("fresh"), "Mod", &choices)
+            .err()
+            .unwrap();
         assert!(missing.to_string().contains("no_studio.exe"), "{missing}");
         std::fs::remove_dir_all(&root).unwrap();
     }

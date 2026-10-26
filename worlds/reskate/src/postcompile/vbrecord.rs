@@ -624,7 +624,7 @@ pub fn blend_values(input: &SectionInput) -> Result<SectionValues> {
 /// Applies a map's vertex-blend input (from [`crate::postcompile::map_folder::read`]) to Patch `patch` into `out`
 /// ([`vblend::apply`]): every recorded material's key onto the stock decal row of `decal`, its opacities from Studio's
 /// weights, and the game's program records `stock` in place of Studio's.
-pub fn apply(
+pub(crate) fn apply(
     patch: &Path,
     out: &Path,
     input: &BlendMap,

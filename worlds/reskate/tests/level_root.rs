@@ -6,8 +6,10 @@
 //! - `the_games_level_root_is_the_donor` (`installs.skate/Data`, `tools.oodle9`): the donor is read from the game's
 //!   level root, a missing bundle or document is refused;
 //! - `studio_level_root_is_repaired` (`oracles.studio.gta/legion/patch`, a Patch folder of ReSkate Studio 20261012's
-//!   compile, plus the game): the gate refuses the Patch for the level root's boxed string, the repaired copy passes
-//!   it, differs from the Patch in that one document only, and is the same bytes when repeated.
+//!   compile, its map `oracles.baseline.gta/legion/map`, plus the game): the gate refuses the Patch for the level
+//!   root's boxed string; the copy `postcompile::finish` writes (blend stage, repair, layering gate) passes it,
+//!   differs from the Patch's documents in that one only, is the same bytes when repeated, and finishing it again
+//!   repairs nothing.
 
 #![allow(clippy::unwrap_used)]
 
@@ -20,6 +22,7 @@ use primase_reskate::postcompile::fb::ebx::{
     self, BoxedRef, BoxedValueRecord, Document, FieldValue, Instance, Object, TypeDescriptor, Value,
 };
 use primase_reskate::postcompile::fb::folder::{Folder, Source};
+use primase_reskate::postcompile::finish::finish;
 use primase_reskate::postcompile::levelroot::{
     self, DONOR_BUNDLE, DONOR_EBX, DONOR_TOC, Donor, DonorField, outside_pointers, point_at_strings,
     repair_document,
@@ -370,8 +373,11 @@ fn files(dir: &Path) -> R<BTreeMap<String, Vec<u8>>> {
 
 #[test]
 fn studio_level_root_is_repaired() -> R {
-    let (Some(patch), Some((base, oodle))) = (oracle(OracleSet::Studio, Game::Gta, "legion/patch"), game()?)
-    else {
+    let (Some(map), Some(patch), Some((base, oodle))) = (
+        oracle(OracleSet::Baseline, Game::Gta, "legion/map"),
+        oracle(OracleSet::Studio, Game::Gta, "legion/patch"),
+        game()?,
+    ) else {
         return Ok(());
     };
     let folder = Folder::open(&patch)?;
@@ -396,7 +402,8 @@ fn studio_level_root_is_repaired() -> R {
         std::fs::remove_dir_all(&scratch)?;
     }
     let (a, b) = (scratch.join("a"), scratch.join("b"));
-    let report = levelroot::apply(&patch, &a, Some(&base), Some(&oodle), &donor)?;
+    // through the one public route (the blend stage first, which rewrites no EBX document; the layering gate after)
+    let report = finish(&map, &patch, &a, &base, &oodle)?.level_root;
     assert_eq!(report.repaired.len(), 1, "{:?}", report.repaired);
     let r = &report.repaired[0];
     assert_eq!(r.repairs.len(), 1);
@@ -424,11 +431,13 @@ fn studio_level_root_is_repaired() -> R {
     assert_eq!(changed.len(), 1, "{changed:?}");
     assert_eq!(changed[0].2, r.document);
 
-    // a repeat gives the same files, and repairing the repaired copy changes nothing
-    levelroot::apply(&patch, &b, Some(&base), Some(&oodle), &donor)?;
+    // a repeat gives the same files, and finishing the finished copy (as a map with no blend record) changes nothing
+    finish(&map, &patch, &b, &base, &oodle)?;
     assert_eq!(files(&a)?, files(&b)?);
-    let c = scratch.join("c");
-    let again = levelroot::apply(&a, &c, Some(&base), Some(&oodle), &donor)?;
+    let (plain, c) = (scratch.join("no-blend-map"), scratch.join("c"));
+    #[allow(clippy::disallowed_methods, reason = "test scratch folder")]
+    std::fs::create_dir_all(&plain)?;
+    let again = finish(&plain, &a, &c, &base, &oodle)?.level_root;
     assert!(again.repaired.is_empty());
     assert_eq!(files(&a)?, files(&c)?);
     Ok(())

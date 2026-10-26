@@ -3,7 +3,11 @@
 //! (read from the map folder by `map_folder`) resolved against the compile (`vbrecord`), and the level root's boxed
 //! strings that point out of their document (`levelroot`); and the layering gate on the result (`layers`, over the
 //! compiled level as drawn, `level`); over the Frostbite containers of `primase-frostbite` (re-exported as `fb`).
+//!
+//! [`finish::finish`] runs them in their one order and is the only public way to apply them: the steps that write a
+//! Patch are this crate's own, so no program can leave one out, the gate included.
 
+pub mod finish;
 pub mod layers;
 pub mod level;
 pub mod levelroot;

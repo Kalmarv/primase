@@ -35,7 +35,7 @@ use primase_reskate::{EncodingOptions, MapSink};
 fn main() -> Result<()> {
     // Ashina Castle (m11_01), the part within [west, south, east, north] metres, and placements reaching 30 m into it
     let region = [-170.0, 180.0, -50.0, 300.0];
-    let oodle = load_oodle(Path::new("C:/Games/Sekiro/oo2core_6_win64.dll"))?;
+    let oodle = load_oodle(Path::new("C:/Games/Sekiro/oo2core_6_win64.dll"), Version::V6)?;
     let decoder = Decoder { oodle: Some(&oodle), max_output: 1 << 30 };
     let options = sekiro::Options { region: Some(sekiro::Region { rect: region, margin: 30.0 }), ..Default::default() };
     let mut reader = AreaReader::new("C:/Games/Sekiro", "m11_01", decoder, options);
@@ -106,8 +106,10 @@ fn main() -> Result<()> {
         println!("{notice}");
     }
 
-    // ReSkate Studio compiles the map folder into a mod.
+    // ReSkate Studio compiles the map folder into a mod, then the post-compile steps finish it (blend stage, level
+    // root, layering gate) against skate.'s data, read with skate.'s own Oodle library (version 9).
     let studio = Studio { cli: "C:/ReSkate/reskate_cli.exe".into(), game: "C:/Games/skate".into() };
+    let skate_oodle = load_oodle(Path::new("C:/Games/skate/oo2core_9_win64.dll"), Version::V9)?;
     let choices = CompileChoices {
         streaming: Some(Streaming::Cells),
         lods: true,
@@ -115,14 +117,21 @@ fn main() -> Result<()> {
         time_of_day: Some(TimeOfDay::Noon),
         pause_map: None,
     };
-    let compiled = compile_map(&studio, Path::new("out/ashina"), Path::new("out/staging"), "ashina", &choices)?;
-    println!("{} ({} warnings)", compiled.patch.display(), compiled.warnings);
+    let compiled =
+        compile_map(&studio, Path::new("out/ashina"), Path::new("out/staging"), "ashina", &choices, &skate_oodle)?;
+    println!(
+        "{} ({} warnings; layering gate {:.0} s, failing but not yet enforced: {:?})",
+        compiled.patch.display(),
+        compiled.warnings,
+        compiled.finished.gate_seconds,
+        compiled.finished.reported
+    );
     Ok(())
 }
 
-/// The game's Oodle library (version 6), which decompresses its archives.
+/// A game's Oodle library, which decompresses its archives.
 #[allow(unsafe_code)]
-fn load_oodle(path: &Path) -> Result<Oodle> {
-    // SAFETY: the library shipped with the game.
-    Ok(unsafe { Oodle::load(path, Version::V6) }?)
+fn load_oodle(path: &Path, version: Version) -> Result<Oodle> {
+    // SAFETY: the library shipped with that game.
+    Ok(unsafe { Oodle::load(path, version) }?)
 }

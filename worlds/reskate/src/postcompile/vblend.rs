@@ -600,7 +600,7 @@ pub(crate) fn surface(sec: &meshset::Section, geo: &[u8]) -> Option<Surface> {
     clippy::disallowed_types,
     reason = "writer I/O: refuses an existing output folder"
 )]
-pub fn apply(
+pub(crate) fn apply(
     patch: &Path,
     out: &Path,
     base: Option<&Folder>,

@@ -5,9 +5,11 @@
 //! carries the weights), `installs.skate/Data` and `tools.oodle9` (the game's data and Oodle). Then:
 //! - every recorded primitive resolves; each one's margin (the best containment among the other keys of its GLB) and
 //!   whether each GLB's sections follow its primitive order are printed;
-//! - the stage is applied into `scratch.root` and read back with our readers: every MeshSet reads; each section of a
-//!   resolved key has the stock decal declaration (both copies), `Color0` = `decal_opacity` of Studio's weight,
-//!   sub-material 0, texture coordinates equal to Studio's `x, y`, tangent frames byte for byte, positions at half
+//! - the stage is applied into `scratch.root` through `postcompile::finish` (its one public route: then the level
+//!   root's repair, which rewrites only EBX documents, and the layering gate) and read back with our readers: every
+//!   MeshSet reads; each section of a resolved key has the stock decal declaration (both copies), `Color0` =
+//!   `decal_opacity` of Studio's weight, sub-material 0, texture coordinates equal to Studio's `x, y`, tangent frames
+//!   byte for byte, positions at half
 //!   precision (w = 1) never behind their surface: Studio's position rounded to nearest where that is not behind the
 //!   plane of the vertex's triangles (normals computed here from Studio's own positions and indices), otherwise
 //!   moved out along the normal's dominant axis only and no further than needed (one half step back would be
@@ -28,6 +30,7 @@ use std::path::Path;
 use common::{BAM, R, ROOT, all_files, index_buffer, meshes, rows, stream};
 use primase_compress::oodle::{Oodle, Version};
 use primase_reskate::postcompile::fb::folder::{Folder, Source};
+use primase_reskate::postcompile::finish::finish;
 use primase_reskate::postcompile::map_folder;
 use primase_reskate::postcompile::meshset;
 use primase_reskate::postcompile::vblend::{DECAL_DONOR, Donor, StockPrograms, decal_opacity};
@@ -102,8 +105,10 @@ fn vbrecord_gate() -> R {
     let root = primase_testdata::scratch().join("reskate-vbrecord");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root)?;
+    // through the one public route: blend, level root, layering gate
     let run = |out: &Path| -> R<vbrecord::Resolution> {
-        let (report, res) = vbrecord::apply(&patch, out, &input, Some(&base), Some(&oodle), &decal, &stock)?;
+        let done = finish(&map, &patch, out, &base, &oodle)?;
+        let (report, res) = done.blend.ok_or("the map has a vertex-blend record")?;
         println!(
             "rewrote {} sections in {} MeshSets, max position error {} m",
             report.sections, report.meshsets, report.max_position_error

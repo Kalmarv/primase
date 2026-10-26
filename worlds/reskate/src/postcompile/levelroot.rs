@@ -395,7 +395,7 @@ pub struct Report {
     clippy::disallowed_methods,
     reason = "writer I/O: refuses an existing output folder"
 )]
-pub fn apply(
+pub(crate) fn apply(
     patch: &Path,
     out: &Path,
     base: Option<&Folder>,
