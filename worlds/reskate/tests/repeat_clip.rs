@@ -107,10 +107,10 @@ fn measured_threshold_depends_on_world_piece_area_and_uv_extent() {
         (3.2e-11, CROSSING, 1., 0),
         (6.4e-11, CROSSING, 1., 2),
         (1e-10, CROSSING, 1., 2),
-        // At high area no polygon is lost, so the source triangle stays for Studio to split.
-        (1e-6, CROSSING, 1., 1),
+        // High-area pieces are also prepared, preserving all corners Studio actually retains.
+        (1e-6, CROSSING, 1., 3),
         (1e-10, CROSSING, 0.001, 0),
-        (1e-10, CROSSING, 1000., 1),
+        (1e-10, CROSSING, 1000., 3),
         (1e-10, [[-0.5, -0.5], [1.5, -0.5], [-0.5, 1.5]], 1., 0),
         (1e-12, INSIDE, 1., 1),
         (0., INSIDE, 1., 1),
@@ -245,4 +245,52 @@ fn shared_prototype_clips_once_in_local_coordinates() {
     assert_eq!(rec.meshes.len(), 1);
     assert!(rec.meshes.keys().next().unwrap().starts_with("p_"));
     assert_eq!(triangles(&w, e), 2);
+}
+
+#[test]
+fn tile_margin_excludes_a_corner_even_without_area_loss() {
+    let (mut w, e, _) = world(1., [[-0.2, 0.98], [-0.2, 0.94], [1.0000069, 0.94]], 1.);
+    let low = 0.0015526774;
+    w.insert(e, BlendOpacity(vec![Some(vec![0.5, 0.7, low])]));
+    run(&mut w).unwrap();
+    let rec = w
+        .resource::<primase_reskate::components::SkateRepeatClipping>()
+        .unwrap();
+    let prepared = rec
+        .meshes
+        .values()
+        .flat_map(|m| m.replacements.values())
+        .flatten()
+        .next()
+        .unwrap();
+    assert_eq!(
+        rec.source_triangles, 0,
+        "the measured case loses no whole triangle"
+    );
+    assert!(
+        prepared
+            .uv
+            .as_ref()
+            .unwrap()
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .all(|uv| uv[0] <= 1.)
+    );
+    let min = prepared
+        .blend
+        .as_ref()
+        .unwrap()
+        .iter()
+        .copied()
+        .fold(f32::INFINITY, f32::min);
+    assert!(
+        min > low + 1e-7,
+        "the clipped-away corner's weight must not be recorded: {min}"
+    );
+    assert_eq!(
+        w.get::<Mesh>(e).unwrap().primitives()[0].vertex_count(),
+        3,
+        "core data stays authored"
+    );
 }

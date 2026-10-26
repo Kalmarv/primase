@@ -21,7 +21,9 @@
 //! at v=-4 rounds two x coordinates to the same 22.436964, losing a weight that survives prototype-space clipping.
 //! Therefore preparation uses the final assembly, including instancing, overlay lifts and chain/cell padding.
 //!
-//! Only a source triangle that loses a polygon is rebuilt. Its surviving polygons keep their original UV tile,
+//! Every triangle crossing UV tiles is prepared, including those with no area loss: Studio's 1e-5 tile-range
+//! margin can exclude a corner just beyond an integer edge (measured at u=1.0000069), losing its distinctive
+//! weight. Its surviving polygons keep their original UV tile,
 //! winding and linearly interpolated streams and blend opacity; Studio then sees single-tile triangles.
 //! Other triangles, opaque/clamped materials and collision are untouched. Core meshes and their per-vertex data
 //! remain authored. The prepared dialect resource stores only changed assembled primitives plus every mesh's
@@ -185,10 +187,21 @@ pub(crate) fn identity(prims: &[GlbPrim]) -> [u8; 32] {
     }
     h.finalize().into()
 }
+fn opacity(values: &[f32], b: &VertexBlend) -> (f32, bool) {
+    let value = b
+        .terms()
+        .map(|(i, w)| f64::from(values[i as usize]) * f64::from(w))
+        .sum::<f64>() as f32;
+    (value.clamp(0.0, 1.0), !(0.0..=1.0).contains(&value))
+}
+
 struct Changed {
     primitive: Option<GlbPrim>,
     fan_triangles: u64,
     source_triangles: u64,
+    opacity_clamped: u64,
+    normals_cancelled: u64,
+    split: u64,
 }
 fn prepare(p: &GlbPrim, what: &str) -> Result<Option<Changed>, String> {
     let Some(uv) = &p.uv else {
@@ -209,28 +222,29 @@ fn prepare(p: &GlbPrim, what: &str) -> Result<Option<Changed>, String> {
     let mut out_uv = Vec::new();
     let mut dropped = 0;
     let mut removed = 0;
+    let mut split = 0;
     for tri in p.idx.as_chunks::<3>().0 {
         let mut kept = Vec::new();
         let mut lost = 0;
-        if let Some(polys) = pieces(
+        let Some(polys) = pieces(
             tri.map(|i| coords[i as usize]),
             tri.map(|i| positions[i as usize]),
-        )? {
-            for poly in polys {
-                if survives(&poly) {
-                    kept.push(poly);
-                } else {
-                    lost += (poly.len() - 2) as u64;
-                }
-            }
-        }
-        if lost == 0 {
+        )?
+        else {
             for &v in tri {
                 blends.push(VertexBlend::copy(v));
                 out_pos.push(positions[v as usize]);
                 out_uv.push(coords[v as usize]);
             }
             continue;
+        };
+        split += 1;
+        for poly in polys {
+            if survives(&poly) {
+                kept.push(poly);
+            } else {
+                lost += (poly.len() - 2) as u64;
+            }
         }
         dropped += lost;
         removed += u64::from(kept.is_empty());
@@ -247,7 +261,7 @@ fn prepare(p: &GlbPrim, what: &str) -> Result<Option<Changed>, String> {
             }
         }
     }
-    if dropped == 0 {
+    if split == 0 {
         return Ok(None);
     }
     if blends.is_empty() {
@@ -255,6 +269,9 @@ fn prepare(p: &GlbPrim, what: &str) -> Result<Option<Changed>, String> {
             primitive: None,
             fan_triangles: dropped,
             source_triangles: removed,
+            opacity_clamped: 0,
+            normals_cancelled: 0,
+            split,
         }));
     }
     let mut streams = BTreeMap::from([(Semantic::Position, Stream::F32x3(positions))]);
@@ -275,13 +292,14 @@ fn prepare(p: &GlbPrim, what: &str) -> Result<Option<Changed>, String> {
         Stream::F32x3(v) => v.iter().flatten().copied().collect(),
         _ => unreachable!(),
     });
+    let mut opacity_clamped = 0;
     let blend = p.blend.as_ref().map(|values| {
         blends
             .iter()
             .map(|b| {
-                b.terms()
-                    .map(|(i, w)| f64::from(values[i as usize]) * f64::from(w))
-                    .sum::<f64>() as f32
+                let (value, clamped) = opacity(values, b);
+                opacity_clamped += u64::from(clamped);
+                value
             })
             .collect()
     });
@@ -297,6 +315,9 @@ fn prepare(p: &GlbPrim, what: &str) -> Result<Option<Changed>, String> {
         }),
         fan_triangles: dropped,
         source_triangles: removed,
+        opacity_clamped,
+        normals_cancelled: interpolated.normals_cancelled,
+        split,
     }))
 }
 
@@ -326,6 +347,9 @@ pub(crate) fn record(
                 .entry(p.material.clone().unwrap_or_default())
                 .or_default() += changed.fan_triangles;
             rec.source_triangles += changed.source_triangles;
+            rec.opacity_clamped += changed.opacity_clamped;
+            rec.normals_cancelled += changed.normals_cancelled;
+            rec.split += changed.split;
             replacements.insert(i, changed.primitive);
         }
     }
@@ -383,8 +407,29 @@ impl Pass for PrepareReskateRepeatClipping {
             log.omit(&format!("{material}: Studio repeat-clipped fan triangles"), *n);
         }
         log.count("source triangles wholly discarded", rec.source_triangles);
+        log.count("triangles crossing UV tiles prepared", rec.split);
+        log.approximate("f32 opacity roundoff clamped to 0..1", rec.opacity_clamped);
+        log.approximate(
+            "cancelled interpolated normals keep the nearest corner",
+            rec.normals_cancelled,
+        );
         log.count("render meshes prepared", rec.meshes.len() as u64);
         w.insert_resource(rec);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn convex_weight_roundoff_stays_inside_the_studio_opacity_contract() {
+        let b = VertexBlend {
+            sources: [0, 1, 2],
+            weights: [0.3, 0.3, 0.4000001],
+        };
+        assert_eq!(opacity(&[1.; 3], &b), (1., true));
+        assert_eq!(opacity(&[0.; 3], &b), (0., false));
+        assert_eq!(opacity(&[0.25; 3], &VertexBlend::copy(0)), (0.25, false));
     }
 }

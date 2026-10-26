@@ -18,6 +18,9 @@ pub struct SkateRepeatClipping {
     pub meshes: BTreeMap<String, RepeatMesh>,
     pub discarded: BTreeMap<String, u64>,
     pub source_triangles: u64,
+    pub opacity_clamped: u64,
+    pub normals_cancelled: u64,
+    pub split: u64,
 }
 impl Resource for SkateRepeatClipping {
     const NAME: &'static str = "skate.repeat_clipping";
