@@ -26,6 +26,7 @@ pub mod mesh;
 pub mod mesh_shape;
 pub mod meshes;
 pub mod mip;
+pub mod objects;
 pub mod overview;
 pub mod placements;
 pub mod reference;
