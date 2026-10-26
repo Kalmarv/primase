@@ -295,6 +295,44 @@ fn hand_worked_world_and_mirror() {
     assert_eq!(part.get::<Mesh>(placements[0].1.prototype).unwrap(), first);
 }
 
+/// A lowering that runs on the read world needs the meshes there, and what it changes is what `load` returns.
+#[test]
+fn a_pass_on_the_read_world_sees_meshes_and_its_change_survives_load() {
+    let p = Fixture::new().pak();
+    let frame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::PosZ], 1.0);
+    let mut reader = ShredReader::new(vec![("fixture", &p)], frame);
+    let (mut world, _) = reader.read().unwrap();
+    assert_eq!(world.entities_named("core.mesh").len(), 2);
+    assert!(world.entities_named("shred.model_dependencies").is_empty());
+    let placements: Vec<_> = world
+        .column::<Instance>()
+        .unwrap()
+        .iter()
+        .map(|(e, i)| (e, i.prototype))
+        .collect();
+    let (root, prototype) = placements[0];
+    // the pass: lift every vertex of the prototype by 100 and drop its second draw
+    let mesh = world.remove::<Mesh>(prototype).unwrap();
+    let mut primitives = mesh.primitives().to_vec();
+    primitives.truncate(1);
+    for v in primitives[0].streams.values_mut() {
+        if let Stream::F32x3(points) = v {
+            points.iter_mut().for_each(|p| p[1] += 100.);
+        }
+    }
+    let lowered = Mesh::new(primitives);
+    world.insert(prototype, lowered.clone());
+    // the selection: the root alone
+    let (part, _) = reader.load(&world, &BTreeSet::from([root])).unwrap();
+    assert_eq!(part.get::<Mesh>(prototype), Some(&lowered));
+    assert!(part.verify_components().is_empty());
+    // the whole source loads in place, unchanged
+    let n = world.entities().count();
+    let (all, _) = reader.load_all(world).unwrap();
+    assert_eq!(all.entities().count(), n);
+    assert_eq!(all.get::<Mesh>(prototype), Some(&lowered));
+}
+
 #[test]
 fn precise_refusals_and_eof() {
     let mut f = Fixture::new();
@@ -507,7 +545,7 @@ fn remapped_uvs_source_inputs_frame_and_deferred_loading() {
     );
     let mut reader = ShredReader::new(vec![("fixture", &pak)], frame);
     let (plan, _) = reader.read().unwrap();
-    assert!(plan.column::<VertexInputs>().is_none_or(|c| c.is_empty()));
+    assert_eq!(plan.get::<VertexInputs>(e), Some(&inputs));
     let (loaded, _) = reader.load(&plan, &BTreeSet::from([e])).unwrap();
     assert_eq!(loaded.get::<VertexInputs>(e), Some(&inputs));
     assert!(loaded.verify_components().is_empty());

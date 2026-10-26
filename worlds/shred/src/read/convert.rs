@@ -1,10 +1,10 @@
-//! Conversion adapter; the caller owns archive selection and the source-frame assertion.
+//! Conversion adapter; the caller owns archive selection, the source-frame assertion and every optional input.
 use super::{
+    collision::{self, CollisionReport, SurfaceTable},
     level::{self, LevelReport},
     material_join::{MaterialInputs, MaterialLibrary, MaterialReport},
     pak::Pak,
 };
-use crate::components::{ModelDependencies, VertexInputs};
 use primase_core::{
     Entity, Mesh, World,
     convert::{self, Reader, Report},
@@ -12,13 +12,19 @@ use primase_core::{
 };
 use std::collections::BTreeSet;
 
+/// Reads the whole of the level that exactly the caller's PAKs hold: placements, prototypes with their meshes and
+/// material entities, spot chunks and, when the caller gives them, the MAIN.DB surface table (collision) and the
+/// material banks (source materials and the texture copies they bind). Geometry is read with the level, so a
+/// lowering that runs on the read world sees it and `load` keeps what the selected world holds; only texture pixels
+/// wait for `load`.
 pub struct ShredReader<'a> {
     paks: Vec<(&'a str, &'a Pak)>,
     frame: SourceFrame,
-    loaded: Option<World>,
+    surfaces: Option<SurfaceTable>,
     material_inputs: Option<MaterialInputs<'a>>,
     material_library: Option<MaterialLibrary<'a>>,
     pub report: LevelReport,
+    pub collision: CollisionReport,
     pub material_report: MaterialReport,
 }
 
@@ -27,6 +33,7 @@ impl std::fmt::Debug for ShredReader<'_> {
         f.debug_struct("ShredReader")
             .field("frame", &self.frame)
             .field("report", &self.report)
+            .field("collision", &self.collision)
             .finish_non_exhaustive()
     }
 }
@@ -36,12 +43,20 @@ impl<'a> ShredReader<'a> {
         Self {
             paks,
             frame,
-            loaded: None,
+            surfaces: None,
             material_inputs: None,
             material_library: None,
             report: LevelReport::default(),
+            collision: CollisionReport::default(),
             material_report: MaterialReport::default(),
         }
+    }
+
+    /// Also read the `.hkw` collision of the PAKs (`read::collision::read_collision`) with MAIN.DB's surface table.
+    /// Without a table the world has no collision: surface ids have no names to be indices of.
+    pub fn with_collision(mut self, surfaces: SurfaceTable) -> Self {
+        self.surfaces = Some(surfaces);
+        self
     }
 
     pub fn with_materials(mut self, inputs: MaterialInputs<'a>) -> Self {
@@ -55,6 +70,10 @@ impl Reader for ShredReader<'_> {
         let (mut world, report) = level::read_level(&self.paks, self.frame)?;
         self.report = report;
         let mut lines = self.report.lines();
+        if let Some(surfaces) = &self.surfaces {
+            self.collision = collision::read_collision(&mut world, &self.paks, surfaces, self.frame)?;
+            lines.extend(self.collision.lines());
+        }
         if let Some(inputs) = &self.material_inputs {
             let mut assets = self.paks.clone();
             assets.extend(inputs.assets.iter().copied());
@@ -68,42 +87,25 @@ impl Reader for ShredReader<'_> {
                 "material inputs not supplied; geometry identities only".into(),
             ));
         }
-        // Keep material references in the planning world: closure must reach them before geometry loads.
-        let mut planning = world.clone();
-        let prototypes = planning.entities_named("core.mesh");
-        for e in prototypes {
-            let mesh = planning.remove::<Mesh>(e).expect("mesh entity");
-            planning.remove::<VertexInputs>(e);
-            let materials: BTreeSet<_> = mesh.primitives().iter().filter_map(|p| p.material).collect();
-            planning.insert(e, ModelDependencies(materials.into_iter().collect()));
-        }
-        self.loaded = Some(world);
-        Ok((planning, lines))
+        Ok((world, lines))
     }
+    /// The part of `world` the roots reach, with the pixels of the texture copies it holds decoded: the meshes,
+    /// materials and collision are in it as the selected world has them, so a selection or lowering that changed
+    /// them is what comes back.
     fn load(&mut self, world: &World, roots: &BTreeSet<Entity>) -> convert::Result<(World, Report)> {
-        let loaded = self.loaded.as_ref().ok_or("SHRED reader must read before load")?;
         let mut part = world.subset(&world.closure(roots.iter().copied()));
-        let entities = part.entities_named("shred.model_dependencies");
-        for e in entities {
-            if let Some(mesh) = loaded.get::<Mesh>(e) {
-                part.insert(e, mesh.clone());
-                if let Some(inputs) = loaded.get::<VertexInputs>(e) {
-                    part.insert(e, inputs.clone());
-                }
-            }
-        }
-        let lines = if let Some(library) = &self.material_library {
-            library.load(&mut part)?
-        } else {
-            vec![]
-        };
+        let lines = self.decode(&mut part)?;
         Ok((part, lines))
+    }
+    fn load_all(&mut self, mut world: World) -> convert::Result<(World, Report)> {
+        let lines = self.decode(&mut world)?;
+        Ok((world, lines))
     }
     fn emits(&self) -> &'static [&'static str] {
         &["core", "shred"]
     }
-    fn prototype_box(&self, _: &World, e: Entity) -> Option<[[f64; 3]; 2]> {
-        let mesh = self.loaded.as_ref()?.get::<Mesh>(e)?;
+    fn prototype_box(&self, world: &World, e: Entity) -> Option<[[f64; 3]; 2]> {
+        let mesh = world.get::<Mesh>(e)?;
         let mut bounds = [[f64::INFINITY; 3], [f64::NEG_INFINITY; 3]];
         let mut any = false;
         for p in mesh.primitives() {
@@ -116,5 +118,15 @@ impl Reader for ShredReader<'_> {
             }
         }
         any.then_some(bounds)
+    }
+}
+
+impl ShredReader<'_> {
+    /// Decode the texture copies a world holds faces of (none without material inputs).
+    fn decode(&self, world: &mut World) -> convert::Result<Report> {
+        match &self.material_library {
+            Some(library) => Ok(library.load(world)?),
+            None => Ok(vec![]),
+        }
     }
 }

@@ -120,6 +120,26 @@ pub struct CollisionReport {
     pub max_radius: f32,
 }
 
+impl CollisionReport {
+    /// The log lines of a collision read.
+    pub fn lines(&self) -> primase_core::convert::Report {
+        vec![(
+            "shred collision".into(),
+            format!(
+                "{} .hkw; {} bodies ({} fixed); {} leaf shapes ({} convex, {} other primitives); {} fixed + {} dynamic triangles",
+                self.files.len(),
+                self.bodies,
+                self.fixed_bodies,
+                self.leaves,
+                self.convex,
+                self.primitives - self.convex,
+                self.fixed_triangles,
+                self.dynamic_triangles
+            ),
+        )]
+    }
+}
+
 /// One leaf of a body's shape tree: its shape, offset by the `ConvexTranslate`s above it.
 struct Leaf {
     shape: Shape,

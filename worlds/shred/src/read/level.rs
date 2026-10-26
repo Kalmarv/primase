@@ -192,7 +192,8 @@ pub fn decode_quartet(pak: &Pak, entries: [usize; 4]) -> Result<Scene> {
 }
 
 /// Builds a World from every quartet in the caller's PAK list. No base/layer or difficulty selection occurs here.
-/// `frame` is required: source units, north and handedness have not yet been independently established.
+/// `frame` is required: the caller states it. Native SHRED is left-handed, Y-up (a right-handed caller mirrors Z);
+/// north and physical units are not established.
 pub fn read_level(paks: &[(&str, &Pak)], frame: SourceFrame) -> Result<(World, LevelReport)> {
     let mut world = World::new();
     let mut report = LevelReport::default();

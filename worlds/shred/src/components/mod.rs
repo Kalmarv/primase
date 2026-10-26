@@ -113,20 +113,3 @@ pub struct SceneLight {
     pub buffer: [u8; 16],
 }
 component!(SceneLight, "shred.light");
-
-/// Deferred prototype dependencies, retained before its geometry is loaded.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct ModelDependencies(pub Vec<primase_core::Entity>);
-impl Component for ModelDependencies {
-    const NAME: &'static str = "shred.model_dependencies";
-    const GEOMETRY: Geometry = Geometry::None;
-    fn apply_linear(&self, _: &Linear) -> Linearity<Self> {
-        Linearity::Invariant
-    }
-    fn references(&self, out: &mut Vec<primase_core::Entity>) {
-        out.extend(&self.0);
-    }
-    fn to_json(&self) -> Result<Option<serde_json::Value>, primase_core::json::JsonError> {
-        primase_core::json::to_value(self).map(Some)
-    }
-}

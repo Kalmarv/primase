@@ -39,9 +39,13 @@ This format convention is independent of the caller's frame/handedness choice. M
 affine transforms. Refused prototypes have `shred.refused_mesh` instead of fabricated geometry. IDs live in `shred.mesh_id`
 and `shred.material_id`; zero's source namespace is retained as `shred.material_namespace`.
 
-The caller **must state a `primase_core::frame::SourceFrame`**. Y-up is evidenced by the geometry recon, but units,
-handedness and north have not been proven. There is no default frame and no claim that the census's identity frame
-establishes physical metres. Conversion of positions, transforms and winding uses core's frame operations.
+The caller **must state a `primase_core::frame::SourceFrame`**; there is no default and the reader chooses nothing.
+Y-up is evidenced by the geometry recon. Handedness is established from the engine's own matrices (observed in
+the running game): the view matrix has determinant +1, the player stands at view-space z +2.456, and world +X maps to
+screen right. Native SHRED is therefore left-handed (+X right, +Y up, +Z forward), and a right-handed caller reads it
+with the Z mirror, `SourceFrame::new([PosX, PosY, NegZ], scale)`. North and physical metres are not established, and
+the census's identity frame makes no claim about either. Conversion of positions, transforms and winding uses core's
+frame operations.
 
 `read::texture::TextureCatalog::new(&[(label, &pak), ...])` indexes all texture headers in precisely the supplied
 archives. `resolve(extensionless_path)` returns every matching record, including repeated packages, streamed and
@@ -82,7 +86,7 @@ inputs. Unknown format bits refuse that mesh while retaining rigid siblings.
 
 Submesh +0x38 maps logical UV slots 0..3 to stored MGP UV sets; byte 0xff selects the same-index stored set.
 Missing stored sets produce no stream. UVs retain the source's top-left convention, matching core and decoded
-textures. Colours become normalized RGBA streams. Unproved basis roles/handedness and tree attributes remain in
+textures. Colours become normalized RGBA streams. Unproved tangent roles and bitangent sign, and tree attributes remain in
 `shred.vertex_inputs` as `attr15`, `attr14`, `attr12` and `attr13`; no core tangent is invented. This component also
 retains every stored UV set as `stored_uv0` through `stored_uv3`, including sets unused by the remap. Its values
 retain the recorded source frame and remain source provenance under geometry transforms. Primitive/vertex remaps
@@ -101,10 +105,17 @@ container structure and preserved metadata; it does not establish microcode
 meaning or identify sampler roles. Those require disassembly and an independent
 instruction oracle. No shader-to-material binding is added by this test.
 
-`read::convert::ShredReader` implements core's conversion reader. It currently decodes/caches geometry during `read`,
-returns a planning world without meshes and with explicit material dependencies, and copies only the roots' closure
-on `load`. `prototype_box` reports a converted box from the cached rigid geometry. Incremental archive I/O is not
-implemented. The adapter emits only `core` and `shred` namespaces.
+`read::convert::ShredReader` implements core's conversion reader for exactly the PAKs and `SourceFrame` the caller
+states; the reader chooses nothing. `read` returns the whole level: placements, prototypes with their meshes and
+vertex inputs, material entities, spot chunks and, for the inputs the caller adds, the `.hkw` collision of the same
+PAKs (`with_collision(SurfaceTable)`, MAIN.DB's `surfaces` built by the caller) and the source materials with the
+texture copies they bind (`with_materials`, below). Geometry is read with the level, so a lowering that runs on the
+read world sees the meshes, and `load` returns the subset of the world it is given that the roots reach (the selected
+world, not a saved copy), with the pixels of the texture copies in it decoded: a change a pass made to a mesh is what
+comes back. Collision entities are not reached from placements, so a program that wants them roots them
+(`shred.rigid_body`). `load_all` takes the world, decodes its texture copies in place and returns it.
+`prototype_box` is the box of the world's mesh. Incremental archive I/O is not implemented. The adapter emits only
+`core` and `shred` namespaces.
 
 The hand-worked quartet tests cover two resources, two submeshes of one resource, shared materials, instancing,
 reflection, frame scaling/mirroring, malformed inputs, truncated metadata and refusal within a mixed quartet.
@@ -167,8 +178,8 @@ other section is listed with its flags and reported unread until a reader decode
 in `Scene::tables` and are counted in `LevelReport`; `read_level` puts each spot chunk in the World as an entity with
 its world transform and `shred.spot` (class hash and, for the 14 proven class names in `scp_tables::CLASS_NAMES`, the
 name; shape; name hash; ids; node index). `Teleport` chunks also carry a core `Marker` (kind `teleport`): the class
-name is proven, the facing is not (matrices are right-handed with a z flip for most; which axis is forward is
-unverified), and the report says so. Twelve class hashes name no proven class and are kept by hash, counted in
+name is proven, the facing is not (the frame is left-handed, above; which local axis is forward is unverified), and the report
+says so. Twelve class hashes name no proven class and are kept by hash, counted in
 `LevelReport::unnamed_classes`.
 
 `read::manifest::Manifest::new(db, &[(file, &pak)])` lists the `LEVELS` and `LEVELS/LAYERS` archives: bases, layer
