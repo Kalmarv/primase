@@ -234,7 +234,7 @@ impl<'a> Packfile<'a> {
             .map_err(bounds(class_header.start, "the class names"))?;
         let mut classes = Vec::new();
         let mut at = 0usize;
-        // an entry is `u32 signature, 0x09, name `; the signature may start with any byte, so the separator decides
+        // an entry is `u32 signature, 0x09, name, NUL`; the signature may start with any byte, so the separator decides
         while class_bytes.get(at..).unwrap_or_default().get(4) == Some(&9) {
             let here = sum(class_header.start, class_header.start, at)?;
             let name_at = sum(here, at, 5)?;
