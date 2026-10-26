@@ -13,7 +13,12 @@ declared-MIT, unverified.
 **What differs from 0.5.6** (the sources otherwise are upstream's, so the changes can go back as a pull request):
 - `Cargo.toml` is reduced to the library: no `unoodle` binary, benches, wasm package, `cli` feature or `build.rs`;
   `[lints.rust] unexpected_cfgs = "allow"` stands for what `build.rs` declared.
-- `src/main.rs`, `benches/`, `wasm-test/`, `perf/` and the CI files are not copied.
+- `src/main.rs`, `benches/`, `wasm-test/`, `perf/` and the CI files are not copied. Neither are upstream's `testdata/` (75 files,
+  328 MB: the Silesia corpus files and the Kraken-restart and bundle samples compressed by each decoder) and `verify/` (15 files,
+  213 MB: their plain bytes), 541 MB with no licence file in the upstream repository and the corpus files under their own
+  licences. The four tests that read them (`read`, `read_from_slice`, `read_async`, `read_stream`) are `#[ignore]`d; with the
+  two folders from the `v0.5.6` tag placed here, `cargo test -- --ignored` runs them. The decoders are held against the game
+  library's own output by the gates in primase-compress and worlds/fromsoft instead.
 - `decode_bytes_type12` (`src/decoder/mod.rs`): a Huffman chunk whose code lengths name a single symbol returns the chunk's
   declared size, not `src - src_end`. 0.5.6 reported such a chunk as using 0 bytes and refused it ("Expected 0 == 3 for
   chunk type 4"); the game's library decodes it. Test: `single_symbol_huffman_chunk_uses_its_declared_size`.

@@ -49,6 +49,7 @@ mod tests {
 
     #[test_log::test]
     #[allow(clippy::unwrap_used)]
+    #[ignore = "needs upstream's testdata/ and verify/ (541 MB, not copied: README)"]
     fn read() {
         loop_files(|extractor, file, output| {
             let mut buf = [0; 8];
@@ -189,6 +190,7 @@ mod tests {
 
     #[test_log::test]
     #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+    #[ignore = "needs upstream's testdata/ and verify/ (541 MB, not copied: README)"]
     fn read_from_slice() {
         loop_files(|extractor, file, output| {
             let mut buf = Vec::new();
@@ -211,6 +213,7 @@ mod tests {
     #[cfg(feature = "tokio")]
     #[test_log::test]
     #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+    #[ignore = "needs upstream's testdata/ and verify/ (541 MB, not copied: README)"]
     fn read_async() {
         Runtime::new()
             .unwrap()
@@ -238,6 +241,7 @@ mod tests {
     #[cfg(feature = "async")]
     #[test_log::test]
     #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+    #[ignore = "needs upstream's testdata/ and verify/ (541 MB, not copied: README)"]
     fn read_stream() {
         Runtime::new()
             .unwrap()
