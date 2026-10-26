@@ -55,6 +55,15 @@
 //! The leaves are the *restored* world's: the leaf shader (`leaves.fx`) clips every pixel where the world's influence is
 //! 0, and the game before the Ministry's influence is lifted shows the sibling Mesh `00_Veg_RealTree_UrbanTree`, a
 //! metal tree with light strips, instead. [`Tree::cards`] makes them with both faces.
+//!
+//! **The leaves' shading normal.** The leaf shader (`leaves.fx`) lights a leaf by no normal of its own: its vertex
+//! normal is `normalize(position - DensityBoundingSphere.xyz)` with the result's z raised to at least 0.6 and the
+//! vector normalised again, a crown lit as one rounded, upward-tilted body, the same on both faces of a card. The
+//! sphere is the one the blob's header holds at 0x1d4 (centre x y z, then a radius): in all five distinct trees of the
+//! game (level 01's three, level 03's palm, level 04's cherry) its centre lies within 0.07 to 0.55 m of the leaves'
+//! centroid, 1.5 m in the cherry's (a crown 8 m across), so it is read as the density sphere; its radius is not used.
+//! [`Tree::cards`] gives each vertex that normal, the back face's negated (a double-sided material lights a back face
+//! with the opposite of the normal its vertices carry, so the two faces shade alike).
 #![deny(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
@@ -73,6 +82,10 @@ pub const SUB_REAL_TREE_MESH: u32 = 0xFE8C_CC18;
 const BLOB_MARKER: u32 = 0x5E5E_7E30;
 /// The header words that point at the image itself, and the offset each points at: they give the image's base address.
 const SELF_POINTERS: [(usize, u32); 3] = [(0x154, 0x3B0), (0x158, 0x390), (0x280, 0x3D0)];
+/// The header offset of the leaves' density sphere: a centre (3 x f32) and a radius.
+const CROWN: usize = 0x1d4;
+/// The least z of a leaf's shading normal (the leaf shader's `max(0.6, normal.z)`).
+const CROWN_NORMAL_Z: f32 = 0.6;
 /// Vertices of a branch's ring.
 pub const RING: usize = 8;
 
@@ -117,6 +130,9 @@ pub struct Tree {
     /// Leaves with no card (no size, a scale outside 0.5 to 2, a vertex vector longer than 2, or a centre far from every
     /// node).
     pub unusable_leaves: usize,
+    /// The centre of the leaves' density sphere, metres, the tree's own frame: the leaf shader's shading normals point
+    /// away from it.
+    pub crown: [f32; 3],
 }
 
 /// A leaf card (the module documentation).
@@ -333,6 +349,11 @@ impl Tree {
             }
         }
         let kinds = leaf_kinds(&blob)?;
+        let crown = [
+            blob.float(CROWN, "crown centre")?,
+            blob.float(CROWN.saturating_add(4), "crown centre")?,
+            blob.float(CROWN.saturating_add(8), "crown centre")?,
+        ];
         let mut leaves = Vec::new();
         let mut unusable_leaves = 0usize;
         for k in 0..l {
@@ -414,12 +435,14 @@ impl Tree {
             kinds,
             leaves,
             unusable_leaves,
+            crown,
         })
     }
 
     /// The leaves as one triangle-list primitive in the tree's own frame: per card four vertices (the centre plus the
-    /// offsets, the kind's UV corners by the card's permutation, the plane's normal) and two triangles taken round the
-    /// quad, and the same four again reversed with the normal negated, so that a one-sided material shows both faces.
+    /// offsets, the kind's UV corners by the card's permutation, the crown's shading normal [`Tree::crown_normal`]) and
+    /// two triangles taken round the quad, and the same four again reversed with the normal negated, so that a
+    /// one-sided material shows both faces and a double-sided one shades them alike.
     #[allow(
         clippy::arithmetic_side_effects,
         reason = "vertex indices: counts of one tree's leaves times eight, far below u32's range"
@@ -432,8 +455,8 @@ impl Tree {
         for leaf in &self.leaves {
             let kind = self.kinds.get(leaf.kind);
             let o = leaf.offsets;
-            // the quad's plane: its diagonals' normal, against the centre's side
-            let mut n = unit(cross(sub(o[2], o[0]), sub(o[3], o[1]))).unwrap_or([0., 0., 1.]);
+            // the quad's plane, for the winding: its diagonals' normal
+            let n = unit(cross(sub(o[2], o[0]), sub(o[3], o[1]))).unwrap_or([0., 0., 1.]);
             // the vertices round the quad, by the angle about their mean in the plane
             let mean = o.iter().fold([0f32; 3], |a, &v| add3(a, v)).map(|x| x / 4.);
             let u = unit(sub(o[0], mean)).unwrap_or([1., 0., 0.]);
@@ -444,14 +467,17 @@ impl Tree {
                 (d[0] * w[0] + d[1] * w[1] + d[2] * w[2]).atan2(d[0] * u[0] + d[1] * u[1] + d[2] * u[2])
             };
             order.sort_by(|&a, &b| angle(a).total_cmp(&angle(b)));
-            if n[2] < 0. {
-                n = [-n[0], -n[1], -n[2]];
-            }
             for back in [false, true] {
                 let first = u32::try_from(position.len()).unwrap_or(u32::MAX);
                 for (i, off) in o.iter().enumerate() {
-                    position.push(add3(leaf.center, *off));
-                    normal.push(if back { [-n[0], -n[1], -n[2]] } else { n });
+                    let at = add3(leaf.center, *off);
+                    position.push(at);
+                    let shade = self.crown_normal(at);
+                    normal.push(if back {
+                        [-shade[0], -shade[1], -shade[2]]
+                    } else {
+                        shade
+                    });
                     let corner = usize::from(leaf.corners.get(i).copied().unwrap_or(0));
                     uv.push(
                         kind.and_then(|k| k.corners.get(corner))
@@ -477,6 +503,14 @@ impl Tree {
             indices: Some(indices),
             material,
         }
+    }
+
+    /// The leaf shader's shading normal at `at` (the tree's own frame): away from the [`crown`](Tree::crown) with its z raised to
+    /// [`CROWN_NORMAL_Z`] and the vector normalised again (unit length); straight up at the centre itself.
+    pub fn crown_normal(&self, at: [f32; 3]) -> [f32; 3] {
+        let mut out = unit(sub(at, self.crown)).unwrap_or([0., 0., 1.]);
+        out[2] = out[2].max(CROWN_NORMAL_Z);
+        unit(out).unwrap_or([0., 0., 1.])
     }
 
     /// The trunk and branches as one triangle-list primitive in the tree's own frame: a ring of [`RING`] vertices

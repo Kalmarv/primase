@@ -93,6 +93,11 @@ fn built_at(base: u32) -> Vec<u8> {
         put(&mut blob, 0x400 + 4 * i, 0x3F00_8081);
     }
     putf(&mut blob, 0x40c, 102.);
+    // the leaves' density sphere: its centre level with the leaf's, so every shading normal is clamped up
+    for (j, v) in [1f32, 0.5, 3.].iter().enumerate() {
+        putf(&mut blob, 0x1d4 + 4 * j, *v);
+    }
+    putf(&mut blob, 0x1d4 + 12, 4.);
     // one leaf: size 0.5, scale 1, a square's four vectors, kind 0, corners 0, 3, 1, 2; centre (1, 0.5, 3)
     blob[c + 24..c + 32].copy_from_slice(&[0, 100, 4, 0, 3, 1, 2, 0]);
     putf(&mut blob, c + 32, 0.5);
@@ -179,6 +184,24 @@ fn a_built_leaf_is_a_card_with_both_faces() {
     );
     // vertex i takes corner perm[i] = 0, 3, 1, 2
     assert_eq!(&uv[..4], &[[0.8, 1.0], [0.0, 0.0], [0.8, 0.0], [0.0, 1.0]]);
+    // each vertex is level with the crown's centre, 0.5 m out from it along x or y: the shader's normal is that
+    // direction with z raised to 0.6 and normalised again (0.8575 out, 0.5145 up); the back face has it negated
+    assert_eq!(tree.crown, [1., 0.5, 3.]);
+    let Some(Stream::F32x3(n)) = prim.streams.get(&Semantic::Normal) else {
+        panic!("no normals")
+    };
+    let norm = 1.36f32.sqrt();
+    let (out, up) = (1. / norm, 0.6 / norm);
+    let want = [[out, 0., up], [0., out, up], [-out, 0., up], [0., -out, up]];
+    for (i, w) in want.iter().enumerate() {
+        for j in 0..3 {
+            assert!((n[i][j] - w[j]).abs() < 1e-6, "front {i}: {:?}", n[i]);
+            assert!((n[4 + i][j] + w[j]).abs() < 1e-6, "back {i}: {:?}", n[4 + i]);
+        }
+    }
+    // straight above the centre is straight up, and a point at the centre itself has no direction: up
+    assert_eq!(tree.crown_normal([1., 0.5, 5.]), [0., 0., 1.]);
+    assert_eq!(tree.crown_normal([1., 0.5, 3.]), [0., 0., 1.]);
     // the back face repeats the vertices; its triangles run the other way round the same quad
     assert_eq!(&p[4..], &p[..4]);
     let ix = prim.indices.unwrap();
@@ -294,6 +317,28 @@ fn level_01_trees_read_and_place() {
     ] {
         assert!(names.iter().any(|n| n == want), "{want} in {names:?}");
     }
+    // the leaf cards carry the crown's normals: unit, tilted up at least 0.6 / 1.166 (core's up is y), the back face's
+    // the negation of the front's
+    let mut cards = 0usize;
+    for (e, mesh) in w.iter::<Mesh>().filter(|(e, _)| w.has::<RealTree>(*e)) {
+        let Some(prim) = mesh.primitives().get(1) else {
+            continue;
+        };
+        let Some(Stream::F32x3(n)) = prim.streams.get(&Semantic::Normal) else {
+            panic!("{e:?}: no normals")
+        };
+        assert_eq!(n.len() % 8, 0);
+        for card in n.chunks(8) {
+            for (front, back) in card[..4].iter().zip(&card[4..]) {
+                let len = front.iter().map(|x| x * x).sum::<f32>().sqrt();
+                assert!((len - 1.).abs() < 1e-5, "{front:?}");
+                assert!(front[1] >= 0.6 / 1.36f32.sqrt() - 1e-5, "{front:?}");
+                assert_eq!(*back, front.map(|x| -x));
+            }
+            cards += 1;
+        }
+    }
+    assert!(cards > 100, "{cards} cards");
 }
 
 /// Level 01's trees follow the world's state: each of its Entities has a RealTreeMesh and the stored Mesh
