@@ -31,7 +31,8 @@
 //!   `extensionsUsed`. A primitive drawn with a layered material but lacking its weight attribute is counted. Its
 //!   `version` is 2 with per-pixel channels or the over composition, 3 with the height composition
 //!   (`"composition": {"height": {"contrast": c}}` and `weights.heights`, a source per slot), 4 with a power channel
-//!   (`{"power": {"v": source, "exponent": n}}`), so an older consumer doesn't draw it as the form it knows.
+//!   (`{"power": {"v": source, "exponent": n}}`); version 5 adds bounded products (`{"product": [source, ...]}`).
+//!   An older consumer must not draw an unknown version as the form it knows.
 //! - **Textures**: a `core.texture` embeds its largest level as deterministic RGBA8 PNG (identical images embedded
 //!   once). Normal maps must already be green-up with stored Z; use the explicit normalization pass first. The writer
 //!   reads no file: a texture still only a `core.texture_file` is skipped and counted (a reader's load step,
@@ -1706,14 +1707,23 @@ impl Writer<'_> {
         }
         let mut ext = Map::new();
         // version 2: per-pixel channels or the over composition; 3: the height composition; 4: a power channel. An
-        // older consumer must not draw it as the version it knows
+        // older consumer must not draw it as the version it knows; 5: a product channel
         let power = layered
             .weights
             .channels
             .iter()
             .flatten()
             .any(|c| matches!(c, Channel::Power { .. }));
+        let product = layered
+            .weights
+            .channels
+            .iter()
+            .flatten()
+            .any(|c| matches!(c, Channel::Product { .. }));
         match layered.weights.composition {
+            _ if product => {
+                ext.insert("version".into(), json!(5));
+            }
             _ if power => {
                 ext.insert("version".into(), json!(4));
             }
@@ -1865,7 +1875,10 @@ impl Writer<'_> {
             self.factors(e, &[m.normal_strength])?[0].clone(),
         );
         if let SurfaceLowering::GlossReflectance { dielectric_f0 } = d.lowering {
-            x.insert("dielectricF0".into(), self.factors(e, &[dielectric_f0])?[0].clone());
+            x.insert(
+                "dielectricF0".into(),
+                self.factors(e, &[dielectric_f0])?[0].clone(),
+            );
         }
         if m.base_saturation != 0.0 {
             x.insert(
@@ -1961,6 +1974,10 @@ impl Writer<'_> {
                 json!({"threshold": {"v": v, "m": m, "k": self.factors(e, k)?}})
             }
             Channel::Power { v, exponent } => json!({"power": {"v": source(v)?, "exponent": exponent}}),
+            Channel::Product { sources } => {
+                let factors = sources.iter().map(source).collect::<Result<Vec<_>>>()?;
+                json!({"product": factors})
+            }
         })
     }
 
@@ -2502,8 +2519,9 @@ impl Writer<'_> {
                             Property::Translation => ("translation", ElementType::Vec3),
                             Property::Rotation => ("rotation", ElementType::Vec4),
                             Property::Scale => ("scale", ElementType::Vec3),
-                            Property::Scalar | Property::Visibility | Property::Values(_) =>
-                                return Err(failed(format!("a {:?} channel on a joint", c.property))),
+                            Property::Scalar | Property::Visibility | Property::Values(_) => {
+                                return Err(failed(format!("a {:?} channel on a joint", c.property)));
+                            }
                         };
                         samplers.push(self.sampler(&c.times, &c.values, kind, c.interpolation)?);
                         channels.push(

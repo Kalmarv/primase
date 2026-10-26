@@ -325,12 +325,19 @@ impl TextureEncoder {
                         ("source", &[""][..]),
                         ("lerp", &["/a", "/b", "/t"][..]),
                         ("threshold", &["/v", "/m"][..]),
+                        ("power", &["/v"][..]),
                     ] {
                         if c.get(form).is_some() {
                             for part in parts {
                                 masks.push(format!("{channels}/{i}/{form}{part}/mask/texture/index"));
                             }
                         }
+                    }
+                    if let Some(product) = c.get("product").and_then(Value::as_array) {
+                        masks.extend(
+                            (0..product.len())
+                                .map(|factor| format!("{channels}/{i}/product/{factor}/mask/texture/index")),
+                        );
                     }
                 }
                 let heights = "/extensions/PRIMASE_layered_material/weights/heights";
@@ -1204,9 +1211,12 @@ mod tests {
             "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":png.len()}],
             "images":[{"bufferView":0,"mimeType":"image/png"}],"textures":[{"source":0}],
             "materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}},
-                "extensions":{"PRIMASE_layered_material":{"version":2,"weights":{"attribute":"COLOR_1",
+                "extensions":{"PRIMASE_layered_material":{"version":5,"weights":{"attribute":"COLOR_1",
                 "mapping":"identity","channels":[{"source":mask},{"threshold":{"v":{"vertex":{"attribute":"COLOR_0",
-                "channel":0}},"m":mask,"k":[0,1,1,0]}}]},"layers":[{"material":0},{"material":0}]}}}]});
+                "channel":0}},"m":mask,"k":[0,1,1,0]}},
+                {"product":[{"vertex":{"attribute":"COLOR_0","channel":1}},mask,mask]},
+                {"power":{"v":mask,"exponent":2}}]},
+                "layers":[{"material":0},{"material":0},{"material":0},{"material":0}]}}}]});
         let bytes = primase_glb::assemble(&serde_json::to_vec(&doc).unwrap(), &png).unwrap();
         let output = glb(&mut TextureEncoder::default(), bytes).unwrap();
         let chunks = primase_glb::parse(&output).unwrap();
@@ -1225,6 +1235,13 @@ mod tests {
             role(&format!("{channels}/1/threshold/m/mask/texture/index")),
             "mask"
         );
+        for factor in [1, 2] {
+            assert_eq!(
+                role(&format!("{channels}/2/product/{factor}/mask/texture/index")),
+                "mask"
+            );
+        }
+        assert_eq!(role(&format!("{channels}/3/power/v/mask/texture/index")), "mask");
     }
 
     /// A detail blend's slots (`PRIMASE_materials_detail_blend`) each keep pointing at the texture they sampled,

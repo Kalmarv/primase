@@ -137,7 +137,7 @@ pub enum Source {
     },
 }
 
-/// One weight channel per pixel: a source, or one of two combinations of sources. Bounded by its type (no nesting).
+/// One weight channel per pixel, with bounded combinations of sources and no nesting.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Channel {
@@ -154,12 +154,19 @@ pub enum Channel {
         m: Source,
         k: [f32; 4],
     },
+    /// Product of 2 to [`PRODUCT_LIMIT`] sources, multiplied from left to right without clamping.
+    Product {
+        sources: Vec<Source>,
+    },
     /// `v^exponent` ([`power`]), `exponent` 1 to 16.
     Power {
         v: Source,
         exponent: u8,
     },
 }
+
+/// Maximum number of factors in [`Channel::Product`]; products require at least two.
+pub const PRODUCT_LIMIT: usize = 4;
 
 /// The largest exponent of [`Channel::Power`].
 pub const POWER_LIMIT: u8 = 16;
@@ -187,6 +194,7 @@ impl Channel {
             Channel::Lerp { a, b, t } => vec![a, b, t],
             Channel::Threshold { v, m, .. } => vec![v, m],
             Channel::Power { v, .. } => vec![v],
+            Channel::Product { sources } => sources.iter().collect(),
         }
     }
     /// The channel's value from its sources' values (in [`Channel::sources`] order).
@@ -199,12 +207,17 @@ impl Channel {
                 (k[0] + k[1] * v + k[2] * m + k[3] * v * m).clamp(0.0, 1.0)
             }
             Channel::Power { exponent, .. } => power(values[0], *exponent),
+            Channel::Product { sources } => values[..sources.len()].iter().fold(1., |p, v| p * v),
         }
     }
 
-    /// Its own checks (its sources' apart): a threshold's factors finite, a power's exponent 1 to [`POWER_LIMIT`].
+    /// Its own checks (its sources' apart): finite threshold factors, a bounded power exponent or product arity.
     pub fn check(&self) -> Result<(), String> {
         match self {
+            Channel::Product { sources } if !(2..=PRODUCT_LIMIT).contains(&sources.len()) => Err(format!(
+                "product has {} sources, requires 2 to {PRODUCT_LIMIT}",
+                sources.len()
+            )),
             Channel::Threshold { k, .. } if !k.iter().all(|x| x.is_finite()) => {
                 Err(format!("threshold {k:?} is not finite"))
             }
@@ -295,8 +308,8 @@ impl Component for LayeredMaterial {
     const NAME: &'static str = "core.layered";
     const GEOMETRY: crate::Geometry = crate::Geometry::None;
     /// 2: per-pixel `channels` and the `composition`; 3: each mask texture's `filters`; 4: the height composition
-    /// and its `heights`.
-    const VERSION: u32 = 4;
+    /// and its `heights`; 5: bounded product channels.
+    const VERSION: u32 = 5;
     fn references(&self, out: &mut Vec<Entity>) {
         out.extend(self.layers.iter().flatten().map(|layer| layer.material));
         out.extend(self.mask_textures().map(|t| t.texture));

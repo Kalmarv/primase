@@ -322,6 +322,7 @@ fn sources_mut(c: &mut Channel) -> Vec<&mut Source> {
         Channel::Lerp { a, b, t } => vec![a, b, t],
         Channel::Threshold { v, m, .. } => vec![v, m],
         Channel::Power { v, .. } => vec![v],
+        Channel::Product { sources } => sources.iter_mut().collect(),
     }
 }
 
@@ -874,6 +875,60 @@ mod tests {
                 .values()
                 .any(|p| p.source_dimensions == [513, 3] && p.cap == 256)
         );
+    }
+
+    /// Product factors retain their order while shared colour textures get mask copies at the requested cap.
+    #[test]
+    fn product_mask_factors_are_prepared_and_rebound_in_order() {
+        use primase_core::layered::{Layer, LayerWeights};
+        use primase_core::{Semantic, WeightMapping};
+        let (mut w, wall, _, m, _) = world();
+        let layered = w.spawn();
+        let mask = Source::Mask {
+            texture: TextureRef::new(wall),
+            channels: [0., 1., 0., 0.],
+            bias: 0.,
+        };
+        w.insert(
+            layered,
+            LayeredMaterial {
+                layers: vec![Some(Layer {
+                    material: m,
+                    texcoord: None,
+                    transform: None,
+                })],
+                weights: LayerWeights {
+                    channels: Some(vec![Channel::Product {
+                        sources: vec![
+                            Source::Vertex {
+                                semantic: Semantic::Color(0),
+                                channel: 1,
+                            },
+                            mask.clone(),
+                            mask,
+                        ],
+                    }]),
+                    ..LayerWeights::new(Semantic::Color(0), WeightMapping::Identity)
+                },
+            },
+        );
+        pass(&[("color", "512"), ("normal", "512"), ("mask", "64")])
+            .run(&mut w, &mut PassLog::default())
+            .unwrap();
+        let l = w.get::<LayeredMaterial>(layered).unwrap();
+        let Channel::Product { sources } = &l.weights.channels.as_ref().unwrap()[0] else {
+            panic!("product")
+        };
+        assert!(matches!(sources[0], Source::Vertex { channel: 1, .. }));
+        for source in &sources[1..] {
+            let Source::Mask { texture, .. } = source else {
+                panic!("mask")
+            };
+            assert_ne!(texture.texture, wall);
+            assert_eq!(w.get::<Name>(texture.texture).unwrap().0, "wall~mask");
+            assert_eq!(w.get::<Texture>(texture.texture).unwrap().width, 64);
+        }
+        assert_eq!(sources[1], sources[2]);
     }
 
     /// A height map of the height composition is a mask: capped by the mask cap, and given a copy of its own where

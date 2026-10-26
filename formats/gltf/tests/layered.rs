@@ -341,3 +341,32 @@ fn the_height_composition_is_version_3_with_a_height_per_slot() {
         serde_json::json!([0.0, 0.0, 0.0, 1.0])
     );
 }
+
+#[test]
+fn product_channels_write_every_factor_and_require_version_five() {
+    use primase_core::layered::{Channel, Source};
+    let (mut w, host) = world(Some(Semantic::Color(1)), WeightMapping::Identity, 2);
+    let vertex = |channel| Source::Vertex {
+        semantic: Semantic::Color(1),
+        channel,
+    };
+    let layered = w.get_mut::<LayeredMaterial>(host).unwrap();
+    layered.weights.channels = Some(vec![
+        Channel::Source(vertex(0)),
+        Channel::Product {
+            sources: vec![vertex(0), vertex(1), vertex(2)],
+        },
+    ]);
+    let (bytes, _) = write(&w, &WriteOptions::default()).unwrap();
+    let doc = document(&bytes);
+    let ext = &material(&doc, "terrain")["extensions"]["PRIMASE_layered_material"];
+    assert_eq!(ext["version"], 5);
+    let factors = ext["weights"]["channels"][1]["product"].as_array().unwrap();
+    assert_eq!(factors.len(), 3);
+    for (i, f) in factors.iter().enumerate() {
+        assert_eq!(f["vertex"]["attribute"], "COLOR_1");
+        assert_eq!(f["vertex"]["channel"], i);
+    }
+    let (again, _) = write(&w, &WriteOptions::default()).unwrap();
+    assert_eq!(bytes, again);
+}

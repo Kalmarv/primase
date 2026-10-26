@@ -446,6 +446,19 @@ that only implements versions 1 and 2 must not evaluate it as either; it draws t
   (primase-image) evaluates the weights at the vertices into a colour stream and writes the material as version 1, an
   approximation it reports.
 
+### Version 4: bounded powers
+
+Version 4 adds `{"power": {"v": source, "exponent": n}}`, with an integer exponent from 1 to 16.
+Evaluate a power of two by repeated squaring, other powers by left-to-right multiplication, without clamping.
+
+### Version 5: bounded source products
+
+Version 5 adds `{"product": [source0, source1, source2]}` weight channels. The list contains two to four sources,
+each a `vertex` or `mask` value as in version 2. Evaluate their values per pixel, then multiply in list order from
+left to right, without clamping or normalization. No source contains another channel expression. Products can
+combine an interpolated vertex weight, a mask channel and a layer's sampled alpha without dropping a factor.
+Versions 1 through 4 retain their forms; consumers lacking version 5 draw the host rather than guess a lower version.
+
 ## Detail-blend materials
 
 A material whose surface a source program computes from a base and tiled detail textures (a character's cloth and

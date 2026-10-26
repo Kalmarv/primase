@@ -174,3 +174,80 @@ fn height_blend_weights_worked_by_hand() {
     let got = height_blend([0.5, 0.5, 0.0, 0.0], [0.8, 0.4, 0.0, 0.0], 2, 1.0);
     assert!(close(got, [0.0; 4]), "{got:?}");
 }
+
+/// Hand-worked: vertex weight 1/2 times mask 1/4 times sampled alpha 3/4 is 3/32. Products retain signs and values
+/// outside 0..1; each factor, including the last, participates in reference and source validation.
+#[test]
+fn products_are_bounded_ordered_and_keep_all_sources() {
+    use primase_core::layered::PRODUCT_LIMIT;
+    let mut w = World::new();
+    let material = w.spawn();
+    let host = w.spawn();
+    let mask = w.spawn();
+    let vertex = Source::Vertex {
+        semantic: Semantic::Color(0),
+        channel: 1,
+    };
+    let texture = Source::Mask {
+        texture: TextureRef::new(mask),
+        channels: [0., 0., 0., 1.],
+        bias: 0.,
+    };
+    let channel = Channel::Product {
+        sources: vec![vertex.clone(), texture.clone(), texture.clone()],
+    };
+    assert_eq!(channel.evaluate(&[0.5, 0.25, 0.75]), 0.09375);
+    assert_eq!(channel.evaluate(&[-2., 3., 0.5]), -3.);
+    assert_eq!(channel.sources(), vec![&vertex, &texture, &texture]);
+    for n in [0, 1, PRODUCT_LIMIT + 1] {
+        assert!(
+            Channel::Product {
+                sources: vec![vertex.clone(); n]
+            }
+            .check()
+            .unwrap_err()
+            .contains("product")
+        );
+    }
+    assert!(
+        Channel::Product {
+            sources: vec![vertex.clone(); PRODUCT_LIMIT]
+        }
+        .check()
+        .is_ok()
+    );
+    let mut layered = LayeredMaterial {
+        layers: vec![Some(Layer {
+            material,
+            texcoord: None,
+            transform: None,
+        })],
+        weights: LayerWeights {
+            channels: Some(vec![channel]),
+            ..LayerWeights::new(Semantic::Color(0), WeightMapping::Identity)
+        },
+    };
+    w.insert(host, layered.clone());
+    assert!(w.closure([host]).contains(&mask));
+    assert!(layered.reads(Semantic::Color(0)));
+    assert_eq!(layered.mask_textures().count(), 2);
+    assert!(layered.verify(host, &w).is_ok());
+    if let Some(channels) = &mut layered.weights.channels {
+        channels[0] = Channel::Product {
+            sources: vec![
+                vertex.clone(),
+                texture,
+                Source::Vertex {
+                    semantic: Semantic::Color(0),
+                    channel: 4,
+                },
+            ],
+        };
+    }
+    assert!(layered.verify(host, &w).unwrap_err().contains("past 3"));
+    // The order is specified even when reassociating floating-point multiplication would change the result.
+    let three = Channel::Product {
+        sources: vec![vertex; 3],
+    };
+    assert_eq!(three.evaluate(&[1e20, 1e20, 1e-20]), f32::INFINITY);
+}

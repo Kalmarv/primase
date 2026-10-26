@@ -192,3 +192,43 @@ fn a_texture_coordinate_past_the_integer_range_samples_a_texel() {
         assert!(!l.weights.per_pixel(), "{uv:?}");
     }
 }
+
+/// At the three vertices: 0.2*0*0.5 = 0, 0.4*1*0.5 = 0.2, 0.6*0.5*0.5 = 0.15. The third factor samples alpha
+/// independently; all factors are evaluated before the shared baker writes its explicitly approximate vertex weights.
+#[test]
+fn a_three_source_product_is_baked_without_dropping_its_last_mask() {
+    let (mut w, host, proto) = world(Composition::Sum);
+    let weights = &mut w.get_mut::<LayeredMaterial>(host).unwrap().weights;
+    let channels = weights.channels.as_mut().unwrap();
+    let Channel::Source(mask) = channels[1].clone() else {
+        panic!("mask fixture")
+    };
+    let Source::Mask { texture, .. } = &mask else {
+        panic!("mask fixture")
+    };
+    channels[1] = Channel::Product {
+        sources: vec![
+            Source::Vertex {
+                semantic: Semantic::Color(0),
+                channel: 0,
+            },
+            mask.clone(),
+            Source::Mask {
+                texture: *texture,
+                channels: [0., 0., 0., 0.5],
+                bias: 0.,
+            },
+        ],
+    };
+    bake(&mut w);
+    let Some(Stream::F32x4(baked)) = w.get::<Mesh>(proto).unwrap().primitives()[0]
+        .streams
+        .get(&Semantic::Color(1))
+    else {
+        panic!("baked stream")
+    };
+    assert_eq!(
+        baked,
+        &vec![[0.2, 0., 0., 0.], [0.4, 0.2, 0., 0.], [0.6, 0.15, 0., 0.]]
+    );
+}
