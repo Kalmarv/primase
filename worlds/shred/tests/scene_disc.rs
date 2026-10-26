@@ -4,7 +4,7 @@
 use primase_core::{Marker, frame::SourceFrame};
 use primase_shred::read::database::Database;
 use primase_shred::{
-    components::{SceneLight, Spline, Spot},
+    components::{Locator, SceneLight, Spline, Spot, SpotCamera},
     read::{
         level,
         manifest::{self, Difficulty, Manifest},
@@ -218,6 +218,7 @@ fn manifest_nodes_spot_chunks_and_spawns() {
     let mut spline_classes = std::collections::BTreeMap::<u32, usize>::new();
     let mut light_kinds = std::collections::BTreeMap::<u32, usize>::new();
     let mut rail_surfaces = std::collections::BTreeMap::<u32, usize>::new();
+    let (mut cameras, mut locators, mut waypoints) = (0usize, 0usize, 0usize);
     let (mut named_guides, mut named_rails) = (0usize, 0usize);
     let surface_ids: std::collections::BTreeSet<i64> = db
         .table("surfaces")
@@ -261,6 +262,34 @@ fn manifest_nodes_spot_chunks_and_spawns() {
         for (_, l) in world.iter::<SceneLight>() {
             *light_kinds.entry(l.kind).or_default() += 1;
         }
+        for (_, c) in world.iter::<SpotCamera>() {
+            cameras += 1;
+            assert_eq!(
+                (c.value.to_bits(), c.flag),
+                (0x4256_8d50, 1),
+                "{level_name}: spot camera"
+            );
+        }
+        for (e, l) in world.iter::<Locator>() {
+            locators += 1;
+            assert_eq!(
+                (l.class, l.kind),
+                (primase_hash::sdbm(b"RMLocator"), primase_hash::sdbm(b"Waypoint"))
+            );
+            assert_eq!(world.get::<Marker>(e).map(|m| m.kind.as_str()), Some("waypoint"));
+            waypoints += 1;
+        }
+        assert_eq!(r.spot_cameras, world.iter::<SpotCamera>().count());
+        assert_eq!(
+            (r.locators, r.waypoints),
+            (
+                world.iter::<Locator>().count(),
+                world
+                    .iter::<Marker>()
+                    .filter(|(_, m)| m.kind == "waypoint")
+                    .count()
+            )
+        );
         assert_eq!(r.lights, world.iter::<SceneLight>().count());
         assert_eq!(r.light_kinds.values().sum::<usize>(), r.lights);
         assert_eq!(r.splines, r.spline_classes.iter().sum::<usize>());
@@ -275,7 +304,10 @@ fn manifest_nodes_spot_chunks_and_spawns() {
         .unwrap_or_default();
         named_rails += names::name_splines(&mut world, &rails) - named;
         let spots: Vec<_> = world.iter::<Spot>().collect();
-        let marked = world.iter::<Marker>().count();
+        let marked = world
+            .iter::<Marker>()
+            .filter(|(_, m)| m.kind == "teleport")
+            .count();
         assert_eq!(
             (r.nodes, r.placements, r.spots, r.teleports, marked, r.chain_stops),
             (nodes, placements, chunks, teleports, teleports, 0),
@@ -330,7 +362,9 @@ fn manifest_nodes_spot_chunks_and_spawns() {
     assert_eq!(total, [166_089, 167_503, 53_015, 538, 194, 183]);
     // 605 before splines (186) and lights (55) were read, 364 before the splines of types 0xA and 0xC and the
     // ones whose flags had other low halves (45 more sections)
-    assert_eq!(undecoded_sections, 319);
+    // and 11 more once the spot cameras (10 sections) and the locator (1) were read
+    assert_eq!(undecoded_sections, 308);
+    assert_eq!((cameras, locators, waypoints), (281, 1, 1));
     // 33,575 splines in the five classes the game keeps them in, by section type (SCENE.md's 31,105 total does
     // not reconcile with any recount)
     assert_eq!(

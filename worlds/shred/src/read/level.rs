@@ -2,13 +2,14 @@
 use super::{
     pak::Pak,
     scene::{self, Scene, Unread},
+    scp_locators,
     scp_tables::{self, Chain},
 };
 use crate::{
     Result,
     components::{
-        MaterialId, MaterialNamespace, MeshId, RefusedMesh, SceneLight, SourceSkeleton, SourceSkin, Spline,
-        Spot, VertexInput, VertexInputs,
+        Locator, MaterialId, MaterialNamespace, MeshId, RefusedMesh, SceneLight, SourceSkeleton, SourceSkin,
+        Spline, Spot, SpotCamera, VertexInput, VertexInputs,
     },
     invalid,
 };
@@ -50,6 +51,11 @@ pub struct LevelReport {
     /// Light records, as `shred.light` entities, by kind code.
     pub lights: usize,
     pub light_kinds: BTreeMap<u32, usize>,
+    /// Spot camera records (`shred.spot_camera`), and locator records (`shred.locator`) of which waypoints are core
+    /// markers.
+    pub spot_cameras: usize,
+    pub locators: usize,
+    pub waypoints: usize,
     /// SCPs whose blob section chain does not end in the end record.
     pub chain_stops: usize,
     pub unread: Vec<(String, Vec<u8>, Unread)>,
@@ -94,7 +100,7 @@ impl LevelReport {
             format!(
                 "{} splines ({} rail candidates: probable grind rails, not proven; {} guides, {} ai paths, \
                  {} nav paths, {} short paths); {} with fewer than two points have no curve; {} lights as data, \
-                 not core lights",
+                 not core lights; {} spot cameras and {} locators ({} waypoint markers) as data",
                 self.splines,
                 self.spline_classes[0],
                 self.spline_classes[1],
@@ -102,7 +108,10 @@ impl LevelReport {
                 self.spline_classes[3],
                 self.spline_classes[4],
                 self.short_splines,
-                self.lights
+                self.lights,
+                self.spot_cameras,
+                self.locators,
+                self.waypoints
             ),
         ));
         for (class, n) in &self.unnamed_classes {
@@ -596,6 +605,92 @@ pub fn read_level(paks: &[(&str, &Pak)], frame: SourceFrame) -> Result<(World, L
                         links: light.links,
                         tail_words: light.tail_words,
                         buffer: light.buffer,
+                    },
+                );
+            }
+            for cam in tables.cameras {
+                let (camera, target) = (frame.transform(&cam.camera), frame.transform(&cam.target));
+                if camera
+                    .cols
+                    .iter()
+                    .chain(&target.cols)
+                    .flatten()
+                    .any(|x| !x.is_finite())
+                {
+                    return Err(invalid(
+                        cam.section,
+                        "spot camera matrix overflow in requested frame",
+                    ));
+                }
+                let e = world.spawn();
+                world.insert(e, camera);
+                world.insert(
+                    e,
+                    Source(format!(
+                        "{label}:{:?}:spotcam:{:#x}:{}",
+                        String::from_utf8_lossy(&name),
+                        cam.section,
+                        cam.index
+                    )),
+                );
+                report.spot_cameras += 1;
+                world.insert(
+                    e,
+                    SpotCamera {
+                        pak: label.into(),
+                        quartet: name.clone(),
+                        section: cam.section,
+                        index: cam.index,
+                        id: cam.id,
+                        name: cam.name,
+                        parent: cam.parent,
+                        value: cam.value,
+                        flag: cam.flag,
+                        target,
+                    },
+                );
+            }
+            for loc in tables.locators {
+                let transform = frame.transform(&loc.world);
+                if transform.cols.iter().flatten().any(|x| !x.is_finite()) {
+                    return Err(invalid(loc.section, "locator matrix overflow in requested frame"));
+                }
+                let e = world.spawn();
+                world.insert(e, transform);
+                world.insert(
+                    e,
+                    Source(format!(
+                        "{label}:{:?}:locator:{:#x}:{}",
+                        String::from_utf8_lossy(&name),
+                        loc.section,
+                        loc.index
+                    )),
+                );
+                report.locators += 1;
+                // The class and kind hashes are sdbm of the names the record carries; a waypoint is a marker.
+                if loc.class == primase_hash::sdbm(scp_locators::CLASS_LOCATOR.as_bytes())
+                    && loc.kind == primase_hash::sdbm(scp_locators::KIND_WAYPOINT.as_bytes())
+                {
+                    report.waypoints += 1;
+                    world.insert(
+                        e,
+                        Marker {
+                            kind: "waypoint".into(),
+                            ground: None,
+                            yaw: None,
+                        },
+                    );
+                }
+                world.insert(
+                    e,
+                    Locator {
+                        pak: label.into(),
+                        quartet: name.clone(),
+                        section: loc.section,
+                        index: loc.index,
+                        class: loc.class,
+                        name: loc.name,
+                        kind: loc.kind,
                     },
                 );
             }

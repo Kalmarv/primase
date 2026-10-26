@@ -256,7 +256,7 @@ and radii and reverses winding.
 world-matrix table and the blob section chain. A section is `{flags, size, count, data offset}`; the data offset is
 0x10 except 0x20-0x40 for type 0xE, and the chain ends in a 16-byte `{junk, 8, 0, 0}` record: all 411 level SCPs with a
 blob walk to it (136 have no blob). Type 2 sections are spot chunks (0x200 bytes + a 64-byte world matrix each); every
-other section is listed with its flags and reported unread until a reader decodes it (types 1, 3, 5, a, c, e and 10 are not). Nodes stay
+other section is listed with its flags and reported unread until a reader decodes it (types 6, b, d, e, f and 10 are not). Nodes stay
 in `Scene::tables` and are counted in `LevelReport`; `read_level` puts each spot chunk in the World as an entity with
 its world transform and `shred.spot` (class hash and, for the 14 proven class names in `scp_tables::CLASS_NAMES`, the
 name; shape; name hash; ids; node index). `Teleport` chunks also carry a core `Marker` (kind `teleport`): the class
@@ -298,12 +298,21 @@ the skater's physics state is RAIL) takes its surface key from a collision hit r
 surface from `surfaces`) is stated, not proven.
 
 `read::names` names splines whose id is sdbm of a `NavGuide_<A..ZZ><0..39>` name (1,897 on the disc) or of a
-`FLYTHROUGH_RAIL` name from `<Level>_sessions` (186), as written or lower-cased; the rest stay unnamed.
+`FLYTHROUGH_RAIL` name from `<Level>_sessions` (300), as written or lower-cased; the rest stay unnamed.
 
 Type 4 sections are light records (`read::scp_lights`, 80 bytes + a 64-byte matrix each): colour, name hash, three
 parameters, a kind code (0: 5,251; 7: 4,079; 8: 398; 1: 23; 4: 23; 3: 4), links and a leftover text buffer. They are
 `shred.light` entities with the record's transform, not core lights: units, range, cone and the shining axis are not
 established.
+
+Type 3 sections are spot cameras (`read::scp_cameras`, 48-byte records + two 64-byte matrices each; 281 records in 10
+base SCPs). Each record has the hash of a spot name (`BigJumpOne`, `Chlg17_ObjSpot_Cam12_AnyTrick`: the names of
+the database's spots), an id and parent, an f32 (53.638 in all 281) and a flag (1 in all 281), and offsets of two
+frames. The engine's handler for the section copies them into the object with the record's id, so they are placements
+of two frames; "camera and the point it looks at" is read from the names, the function that uses them is not traced.
+They are `shred.spot_camera` entities whose transform is the first frame, with the second as `target`. Type 5 holds
+one record (the `echo` level's): class `RMLocator`, kind `Waypoint` (both by hash), a name hash and a matrix. It is a
+`shred.locator` entity with a core `Marker` of kind `waypoint`.
 
 ## Material banks and texture dependencies
 

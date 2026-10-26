@@ -8,11 +8,13 @@
 //! The blob is a chain of sections `{flags, size, count, data offset}`: `size` runs to the next section, the data
 //! starts `data offset` bytes in (0x10, except 0x20 to 0x40 for type 0xE), the type is `flags >> 16` (the low half
 //! varies and is kept), and the chain ends in a 16-byte record `{junk, 8, 0, 0}`. Type 2 is the spot chunks.
-//! Types 0, 1, 9, 0xA and 0xC are splines (`scp_splines`; the low half of their flags is junk) and type 4 is lights
-//! (`scp_lights`).
+//! Types 0, 1, 9, 0xA and 0xC are splines (`scp_splines`; the low half of their flags is junk), type 3 is spot
+//! cameras (`scp_cameras`), type 4 lights (`scp_lights`) and type 5 locators (`scp_locators`).
 //! Every other type is listed with its flags, size and count and reported unread.
 use super::scene::Unread;
+use super::scp_cameras::{self, SpotCamera};
 use super::scp_lights::{self, SceneLight};
+use super::scp_locators::{self, Locator};
 use super::scp_splines::{self, Spline, SplineKind};
 use crate::{Result, invalid};
 use primase_bytes::{Endian, Field, View};
@@ -22,7 +24,9 @@ use primase_core::Transform;
 const NODE: usize = 0x70;
 const PLACEMENT: usize = 0x30;
 const SECTION_SPOTS: u32 = 2;
+const SECTION_CAMERAS: u32 = 3;
 const SECTION_LIGHTS: u32 = 4;
+const SECTION_LOCATORS: u32 = 5;
 const CHUNK: usize = 0x200;
 const CHUNK_MATRIX: usize = 64;
 
@@ -101,6 +105,8 @@ pub struct Tables {
     pub spots: Vec<SpotChunk>,
     pub splines: Vec<Spline>,
     pub lights: Vec<SceneLight>,
+    pub cameras: Vec<SpotCamera>,
+    pub locators: Vec<Locator>,
 }
 
 /// The spot classes whose names are proven: each hash is sdbm of the name, and the engine's `AddSpotChunk_*` list
@@ -137,7 +143,7 @@ pub fn shape_name(hash: u32) -> Option<&'static str> {
         .find(|n| primase_hash::sdbm(n.as_bytes()) == hash)
 }
 
-fn matrix(v: View<'_>, at: usize) -> Result<Transform> {
+pub(super) fn matrix(v: View<'_>, at: usize) -> Result<Transform> {
     let mut cols = [[0.; 3]; 4];
     for (j, col) in cols.iter_mut().enumerate() {
         for (k, x) in col.iter_mut().enumerate() {
@@ -323,6 +329,10 @@ pub fn decode(scp: &[u8]) -> Result<(Tables, Vec<Unread>)> {
             tables
                 .splines
                 .extend(scp_splines::decode(scp, s, kind, &mut unread)?);
+        } else if s.kind() == SECTION_CAMERAS {
+            tables.cameras.extend(scp_cameras::decode(scp, s, &mut unread)?);
+        } else if s.kind() == SECTION_LOCATORS {
+            tables.locators.extend(scp_locators::decode(scp, s, &mut unread)?);
         } else if s.kind() == SECTION_LIGHTS {
             tables.lights.extend(scp_lights::decode(scp, s, &mut unread)?);
         } else {

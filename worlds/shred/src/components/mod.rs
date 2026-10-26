@@ -1,5 +1,5 @@
 //! Source identities survive frame conversion; no material semantics are inferred from IDs.
-use primase_core::{Component, Geometry, Linear, world::Linearity};
+use primase_core::{Component, Geometry, Linear, Transform, world::Linearity};
 use serde::Serialize;
 mod skin;
 pub use skin::{SourceBone, SourceSkeleton, SourceSkin, SourceSkinVertex};
@@ -117,3 +117,39 @@ pub struct SceneLight {
     pub buffer: [u8; 16],
 }
 component!(SceneLight, "shred.light");
+
+/// One SCP spot camera record (section type 3) as authored: the entity's transform is the record's first matrix, the
+/// frame it places; `target` is the second, in the same (requested) frame. Reading them as a camera and the point it
+/// looks at comes from the spot names and the frame pair; the engine function that uses them was not traced.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SpotCamera {
+    pub pak: String,
+    pub quartet: Vec<u8>,
+    pub section: usize,
+    pub index: u32,
+    pub id: u32,
+    /// sdbm of a database spot name as written.
+    pub name: u32,
+    pub parent: u32,
+    /// An f32 that is 53.638 in every record of the game.
+    pub value: f32,
+    /// 1 in every record of the game.
+    pub flag: u32,
+    pub target: Transform,
+}
+component!(SpotCamera, "shred.spot_camera");
+
+/// One SCP locator record (section type 5) as authored: the entity's transform is the record's matrix.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Locator {
+    pub pak: String,
+    pub quartet: Vec<u8>,
+    pub section: usize,
+    pub index: u32,
+    /// sdbm of the class name (`RMLocator`).
+    pub class: u32,
+    pub name: u32,
+    /// sdbm of the kind name (`Waypoint` for the one record there is).
+    pub kind: u32,
+}
+component!(Locator, "shred.locator");
