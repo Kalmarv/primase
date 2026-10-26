@@ -2,6 +2,7 @@
 
 pub mod collision;
 pub mod level;
+mod level_collision;
 pub mod markers;
 pub mod material;
 pub mod mesh;

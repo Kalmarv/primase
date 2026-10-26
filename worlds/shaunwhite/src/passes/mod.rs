@@ -1,7 +1,9 @@
 //! Shaun White Skateboarding's lowerings: its stored data to core meanings.
 
+mod collision;
 mod material;
 mod select;
+pub use collision::{LOWER_SHAUNWHITE_COLLISION, LowerShaunwhiteCollision};
 pub use material::{LOWER_SHAUNWHITE_MATERIAL, LowerShaunwhiteMaterial};
 pub use select::{Class, Keep, ROWS, Row, SELECT_SHAUNWHITE_CONTENT, SelectShaunwhiteContent, Subject, Test};
 
@@ -11,4 +13,5 @@ use primase_core::pass::PassRegistry;
 pub fn register(reg: &mut PassRegistry) {
     reg.add(&LOWER_SHAUNWHITE_MATERIAL);
     reg.add(&SELECT_SHAUNWHITE_CONTENT);
+    reg.add(&LOWER_SHAUNWHITE_COLLISION);
 }

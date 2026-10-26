@@ -15,6 +15,7 @@ primase-core.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+primase-meshops.workspace = true
 primase-testdata.workspace = true
 primase-texcodec.workspace = true
 primase-image.workspace = true

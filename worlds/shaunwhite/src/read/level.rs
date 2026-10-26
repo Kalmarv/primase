@@ -9,6 +9,9 @@
 //! core's (`SourceFrame::ENU`: x east, y north, z up, metres); its primitives take one Material entity per Material id
 //! (`shaunwhite.material`: the id, the object's name and its texture ids), which [`crate::read::level`]'s caller
 //! lowers (the textures it names are read by [`crate::read::texture`]).
+//! Inert and MultiInert components also place collision-only prototypes (`shaunwhite.collision`): ordinary shapes
+//! at their entity, multi shapes at their contained entities. The caller runs `lower-shaunwhite-collision` to index
+//! source surface names and obtain core collision. Unknown bindings/shapes are named in the report.
 #![allow(
     clippy::disallowed_methods,
     clippy::disallowed_types,
@@ -47,7 +50,7 @@ struct Decoded {
 
 /// Every object of the forges read, by id: which entry, which object.
 #[derive(Default)]
-struct Index {
+pub(super) struct Index {
     entries: Vec<Decoded>,
     by_id: BTreeMap<u32, (usize, usize)>,
 }
@@ -75,7 +78,7 @@ impl Index {
         Ok(())
     }
 
-    fn get(&self, id: u32) -> Option<(&StoredObject, &[u8])> {
+    pub(super) fn get(&self, id: u32) -> Option<(&StoredObject, &[u8])> {
         let (e, i) = *self.by_id.get(&id)?;
         let d = self.entries.get(e)?;
         let o = d.objects.get(i)?;
@@ -99,6 +102,7 @@ pub fn read_level(level: &Path, shared: &[PathBuf]) -> Result<(World, Report)> {
     let mut textures: BTreeMap<u32, Option<Entity>> = BTreeMap::new();
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut bump = |k: String| *counts.entry(k).or_default() += 1;
+    let mut collision = super::level_collision::CollisionReader::new(&index);
     for d in index.entries.get(..level_entries).unwrap_or_default() {
         if d.objects.first().map(|o| o.class) != Some(GRID_CELL_DATA_BLOCK) {
             continue;
@@ -138,7 +142,15 @@ pub fn read_level(level: &Path, shared: &[PathBuf]) -> Result<(World, Report)> {
                 world.insert(e, Name(o.name.clone()));
                 bump(format!("markers: {kind}"));
             } else if entity.visuals.is_empty() {
-                bump("entities with neither a Visual nor a marker (not placed)".into());
+                bump("entities with neither a Visual nor a marker (no visual placement)".into());
+            }
+            match scene::collision_bindings(body) {
+                Ok(bindings) => {
+                    for (owner, shape) in bindings {
+                        collision.place(&mut world, &d.name, owner, shape, &mut bump);
+                    }
+                }
+                Err(e) => bump(format!("collision bindings not read: {e}")),
             }
             for v in &entity.visuals {
                 let Some(mesh_id) = resolve(&index, v.target, &mut bump) else {
@@ -180,6 +192,7 @@ pub fn read_level(level: &Path, shared: &[PathBuf]) -> Result<(World, Report)> {
             }
         }
     }
+    collision.finish(&mut world);
     report.push((
         "shaunwhite".into(),
         format!(

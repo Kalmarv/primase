@@ -179,6 +179,10 @@ fn three_real_cells_and_an_inert_shape_reference() -> Result {
                 assert_eq!(component.managed, 0);
                 assert_eq!(component.shape_id, 0x6E9C_4D7E);
                 assert_eq!(component.walkability, 2);
+                assert!(
+                    primase_shaunwhite::read::scene::collision_bindings(body)?
+                        .contains(&(0x5F09_35E2, 0x6E9C_4D7E))
+                );
                 assert_eq!(u32::from_le_bytes(body[1136..1140].try_into()?), INERT_COMPONENT);
                 inert += 1;
             }
@@ -231,5 +235,11 @@ fn a_real_multi_inert_keeps_contained_entity_shape_pairs() -> Result {
     assert_eq!(&entity_ids[..2], [0x3BB4_9511, 0x3BB4_9512]);
     assert_eq!(&shape_ids[..2], [0xB310_25C9, 0xB310_25C9]);
     assert_eq!(mopp.len(), 128);
+    let bindings = primase_shaunwhite::read::scene::collision_bindings(body)?;
+    assert_eq!(
+        &bindings[..2],
+        [(0x3BB4_9511, 0xB310_25C9), (0x3BB4_9512, 0xB310_25C9)]
+    );
+    assert_eq!(bindings.len(), 10);
     Ok(())
 }

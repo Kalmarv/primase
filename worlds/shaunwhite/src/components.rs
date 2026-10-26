@@ -105,3 +105,45 @@ impl Component for MeshFormat {
     const NAME: &'static str = "shaunwhite.mesh_format";
     const GEOMETRY: Geometry = Geometry::None;
 }
+
+/// Authored collision geometry in core's frame, before source surface ids are lowered. A list is represented by
+/// one prototype per leaf, with any leaf-local matrix retained in the placement's transform.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CollisionSource {
+    Mesh {
+        positions: Vec<[f32; 3]>,
+        triangles: Vec<[u32; 3]>,
+        surfaces: Vec<u32>,
+    },
+    Shape {
+        shape: primase_core::Shape,
+        surface: u32,
+    },
+}
+impl Component for CollisionSource {
+    const NAME: &'static str = "shaunwhite.collision";
+    const GEOMETRY: Geometry = Geometry::None;
+}
+
+/// Source collision-material object ids and directory names. Missing objects keep an explicit hexadecimal id;
+/// no destination material or game-specific grind/walkability behaviour is inferred.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CollisionSurfaces(pub BTreeMap<u32, String>);
+impl primase_core::Resource for CollisionSurfaces {
+    const NAME: &'static str = "shaunwhite.collision_surfaces";
+}
+
+/// The source entity and shape of a collision placement, independent of its visual mesh.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CollisionPlacedBy {
+    pub cell: String,
+    pub entity: u32,
+    pub shape: u32,
+}
+impl Component for CollisionPlacedBy {
+    const NAME: &'static str = "shaunwhite.collision_placed_by";
+    const GEOMETRY: Geometry = Geometry::None;
+    fn apply_linear(&self, _: &primase_core::Linear) -> primase_core::Linearity<Self> {
+        primase_core::Linearity::Invariant
+    }
+}

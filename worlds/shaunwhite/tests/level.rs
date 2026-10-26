@@ -1,13 +1,14 @@
 //! Level 01 read whole (`installs.shaunwhite`): its cells' entities placed with their meshes, materials and textures,
-//! its start and spawn markers read, the content selection run over it, and the material lowering after. The counts
+//! its start and spawn markers read, the content selection run over it, and the material and collision lowerings. The counts
 //! are printed; the checks are what must hold of any level read.
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Conservation, PassManager, PassRegistry, Pipeline, RunReport};
-use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
-use primase_core::{Instance, Marker, Mesh, Name, Texture, Transform, World};
-use primase_shaunwhite::components::{MaterialRef, MeshFormat, PlacedBy, Sampler};
-use primase_shaunwhite::passes::{LowerShaunwhiteMaterial, register};
+use primase_core::{Collider, Collision, Instance, Marker, Mesh, Name, Surfaces, Texture, Transform, World};
+use primase_shaunwhite::components::{
+    CollisionPlacedBy, CollisionSource, CollisionSurfaces, MaterialRef, MeshFormat, PlacedBy, Sampler,
+};
+use primase_shaunwhite::passes::register;
 use primase_shaunwhite::read::level::read_level;
 use primase_testdata::{Game, install};
 
@@ -47,8 +48,9 @@ fn level_01_reads_and_lowers() {
         "{placements} {meshes} {textures}"
     );
     for (e, i) in w.iter::<Instance>() {
-        assert!(w.has::<Transform>(e) && w.has::<Mesh>(i.prototype));
-        assert!(w.has::<PlacedBy>(e));
+        assert!(w.has::<Transform>(e));
+        assert!(w.has::<Mesh>(i.prototype) || w.has::<CollisionSource>(i.prototype));
+        assert!(w.has::<PlacedBy>(e) || w.has::<CollisionPlacedBy>(e));
     }
     // every prototype states its vertex stride and flags
     assert!(w.iter::<Mesh>().all(|(e, _)| w.has::<MeshFormat>(e)));
@@ -125,6 +127,52 @@ fn level_01_reads_and_lowers() {
             .any(|(n, k)| n == "Q01_Intro_FinalPlayerPos" && k == "start")
     );
 
+    let collision_placements = w.iter::<CollisionPlacedBy>().count();
+    assert!(collision_placements > 2000, "{collision_placements}");
+    run(&mut w, "lower-shaunwhite-collision").unwrap();
+    assert_eq!(w.iter::<CollisionSource>().count(), 0);
+    assert!(w.resource::<CollisionSurfaces>().is_none());
+    let surfaces = w.resource::<Surfaces>().unwrap();
+    for name in ["Concrete", "ConcreteVert", "ConcreteNonRidable", "WoodDeck"] {
+        assert!(surfaces.0.iter().any(|s| s.name == name), "{name}");
+    }
+    // Unresolved source zero is preserved by name, not assigned a guessed destination material.
+    assert!(
+        surfaces
+            .0
+            .iter()
+            .any(|s| s.name == "source:0x00000000" && s.class.is_none())
+    );
+    let mut placed_triangles = 0;
+    let mut multi_children = 0;
+    for (e, source) in w.iter::<CollisionPlacedBy>() {
+        let instance = w.get::<Instance>(e).unwrap();
+        let mesh = w.get::<Collision>(instance.prototype);
+        assert!(mesh.is_some() || w.has::<Collider>(instance.prototype));
+        if let Some(mesh) = mesh {
+            placed_triangles += mesh.triangles.len();
+        }
+        // These two independently inspected MultiInert children share a shape prototype, but keep their own poses.
+        if [0x3BB4_9511, 0x3BB4_9512].contains(&source.entity) {
+            assert_eq!(source.shape, 0xB310_25C9);
+            // Translation floats read separately from the source bytes in Cell01439. The containing MultiInert
+            // is at the origin, so these also distinguish child poses from an incorrect container pose.
+            let bits = if source.entity == 0x3BB4_9511 {
+                [0x41F7_F520, 0x4071_169E, 0x4237_FBB0]
+            } else {
+                [0x41F7_F516, 0x4071_5DB2, 0x424F_DD33]
+            };
+            assert_eq!(w.get::<Transform>(e).unwrap().cols[3].map(f32::to_bits), bits);
+            multi_children += 1;
+        }
+    }
+    assert_eq!(multi_children, 2);
+    assert!(placed_triangles > 100_000, "{placed_triangles}");
+    println!(
+        "collision: {collision_placements} placements, {placed_triangles} placed triangles, {} source surface names",
+        surfaces.0.len()
+    );
+
     // the content selection: keeping everything changes nothing; dropping the classes leaves no placement a row names
     let all_keep = "select-shaunwhite-content{helpers=keep,effects=keep,characters=keep,missions=keep}";
     run(&mut w, all_keep).unwrap();
@@ -143,9 +191,13 @@ fn level_01_reads_and_lowers() {
     assert!(dropped > 100, "{dropped} placements dropped");
     assert_eq!(w.iter::<Instance>().count() as u64, placements as u64 - dropped);
     for (e, i) in w.iter::<Instance>() {
-        assert!(!w.get::<MeshFormat>(i.prototype).unwrap().skinned());
-        let n = &w.get::<Name>(e).unwrap().0;
-        assert!(!n.contains("OutOfBound") && !n.starts_with("FPP_Blocker"), "{n}");
+        if let Some(format) = w.get::<MeshFormat>(i.prototype) {
+            assert!(!format.skinned());
+            let n = &w.get::<Name>(e).unwrap().0;
+            assert!(!n.contains("OutOfBound") && !n.starts_with("FPP_Blocker"), "{n}");
+        } else {
+            assert!(w.has::<CollisionPlacedBy>(e));
+        }
     }
     assert_eq!(w.iter::<Marker>().count(), markers.len());
     let missions = run(
@@ -157,8 +209,13 @@ fn level_01_reads_and_lowers() {
     assert!(w.iter::<PlacedBy>().all(|(_, p)| p.cell.starts_with("Cell")));
     assert!(w.iter::<PlacedBy>().count() > 3000);
 
-    let mut log = PassLog::default();
-    LowerShaunwhiteMaterial.run(&mut w, &mut log).unwrap();
+    // Draw-content selection preserves authored collision and its prototypes, including mission/helper names.
+    assert_eq!(w.iter::<CollisionPlacedBy>().count(), collision_placements);
+    for (e, _) in w.iter::<CollisionPlacedBy>() {
+        let p = w.get::<Instance>(e).unwrap().prototype;
+        assert!(w.has::<Collision>(p) || w.has::<Collider>(p));
+    }
+    run(&mut w, "lower-shaunwhite-material").unwrap();
     assert_eq!(w.iter::<MaterialRef>().count(), 0);
     assert!(w.iter::<PbrMaterial>().count() > 500);
 }

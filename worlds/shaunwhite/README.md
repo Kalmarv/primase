@@ -75,6 +75,18 @@ destination surface assignments and skateability in a running target are separat
 Collision tests use a hand-worked two-surface quad, capsule/list fixtures, malformed inputs, three real cells with
 36 meshes and three list/hull shapes, a real inert shape reference and a fourth cell's multi-inert container.
 
+`read::level::read_level` resolves inert shape references across the supplied forges and places collision-only
+prototypes beside the visual placements. MultiInert's child shapes use each contained entity's own matrix; list
+leaves retain their own local matrices. Shared cell references to the same entity/shape pair are placed once.
+The namespaced `CollisionSource` holds geometry in core's frame and source material ids; `CollisionPlacedBy` keeps
+the entity/shape provenance, and `CollisionSurfaces` holds source names (unresolved ids use `source:0x........`).
+
+The registered `lower-shaunwhite-collision` pass turns these into `core.collision` or `core.collider` and indexes the
+authored names in `core.surfaces`, preserving any existing table entries. Mesh triangles and winding stay exact;
+capsules, spheres, boxes and convex hulls remain implicit. Programs needing triangles then select the shared
+`tessellate-colliders` pass. No grind flags or destination surfaces are guessed. Level 01's test exercises both
+inert forms through the reader and pass manager, alongside the material lowering.
+
 ## Levels
 
 `read::level::read_level` reads a level forge's cells into a World: every Visual of every Entity becomes a placement of
@@ -94,3 +106,4 @@ or one of its materials, with the level 01 evidence that gives it its class, plu
 reader can decode, so the rows are the game's names, not a field: the pass says so in its approximation. It runs before
 `lower-shaunwhite-material` (which removes the material names the material rows match). Every drop is declared by its
 row, and the prototypes, materials and textures only the dropped placements reached go with them.
+Collision-only placements remain: these options select what Visuals draw, without removing authored physics.

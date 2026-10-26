@@ -404,6 +404,15 @@ pub struct MultiInertComponent<'a> {
 }
 impl<'a> MultiInertComponent<'a> {
     pub fn parse(bytes: &'a [u8]) -> Result<Self, Error> {
+        let (value, used) = Self::parse_prefix(bytes)?;
+        if used != bytes.len() {
+            return Err(invalid("object end", "trailing bytes after MultiInertComponent"));
+        }
+        Ok(value)
+    }
+    /// One inline component at the start of an Entity's remaining bytes, and its consumed length. The component's
+    /// counted arrays delimit it; subsequent Entity components are not part of this object.
+    pub fn parse_prefix(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let mut c = Cursor::new(bytes);
         let managed = c.u8().field("managed flag")?;
         if managed > 1 {
@@ -427,15 +436,18 @@ impl<'a> MultiInertComponent<'a> {
         if !matches!(shape, Shape::MultiMesh { .. }) {
             return Err(invalid("multi inert shape", "not a MultiMeshShape"));
         }
-        finish(&c)?;
-        Ok(Self {
-            managed,
-            id,
-            resource_id,
-            resource_kind,
-            resource_target,
-            shape,
-        })
+        let used = bytes.len().saturating_sub(c.remaining());
+        Ok((
+            Self {
+                managed,
+                id,
+                resource_id,
+                resource_kind,
+                resource_target,
+                shape,
+            },
+            used,
+        ))
     }
 }
 

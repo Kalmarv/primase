@@ -140,6 +140,58 @@ pub fn lod_levels(body: &[u8]) -> Result<Vec<(u32, f32)>, Error> {
     Ok(out)
 }
 
+/// The collision bindings an Entity's supported inert components carry: (owning entity id, shape id).
+/// Like Visual discovery above, this scans component signatures instead of decoding unsupported component classes.
+/// Both class and ResourceRef signature must match, and each matching component is then read in full. Multi-inert
+/// bindings name the contained entities, whose matrices place their corresponding shapes.
+pub fn collision_bindings(body: &[u8]) -> Result<Vec<(u32, u32)>, super::collision::Error> {
+    use super::collision::{
+        INERT_COMPONENT, InertComponent, MULTI_INERT_COMPONENT, MultiInertComponent, Shape,
+    };
+    let entity = View::new(body).u32(1, LE).field("Entity id")?;
+    let mut out = Vec::new();
+    let mut at = 73usize;
+    while let Some(rest) = body.get(at..) {
+        let Some(n) = rest
+            .windows(4)
+            .position(|w| w == INERT_COMPONENT.to_le_bytes() || w == MULTI_INERT_COMPONENT.to_le_bytes())
+        else {
+            break;
+        };
+        let p = at.saturating_add(n);
+        let start = p.saturating_sub(5);
+        at = p.saturating_add(4);
+        if body.get(start.saturating_add(13)..start.saturating_add(17))
+            != Some(RESOURCE_REF.to_le_bytes().as_slice())
+        {
+            continue;
+        }
+        if body.get(p..p.saturating_add(4)) == Some(INERT_COMPONENT.to_le_bytes().as_slice()) {
+            let bytes = body.get(start..start.saturating_add(150)).ok_or_else(|| {
+                super::collision::Error::Invalid {
+                    field: "InertComponent",
+                    why: "truncated Entity component".into(),
+                }
+            })?;
+            let inert = InertComponent::parse(bytes)?;
+            out.push((entity, inert.shape_id));
+            at = start.saturating_add(150);
+        } else {
+            let (multi, used) = MultiInertComponent::parse_prefix(body.get(start..).unwrap_or_default())?;
+            if let Shape::MultiMesh {
+                entity_ids,
+                shape_ids,
+                ..
+            } = multi.shape
+            {
+                out.extend(entity_ids.into_iter().zip(shape_ids));
+            }
+            at = start.saturating_add(used);
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

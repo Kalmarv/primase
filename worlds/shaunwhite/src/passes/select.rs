@@ -5,6 +5,8 @@
 //! a name or a vertex flag the game's own data carries and the evidence that gives it its class. Nothing here is
 //! read from a field: that is what the options are for. Run it before `lower-shaunwhite-material`, which removes the
 //! material names the material rows match.
+//! It selects Visual placements (`shaunwhite.placed_by`); collision-only placements are independent authored physics
+//! and are retained when a Visual is hidden.
 //!
 //! The classes (an option each):
 //! - `helpers`: gameplay volumes and placeholders the game draws only in a tool or as feedback: triggers, out-of-bound
@@ -319,7 +321,11 @@ impl Pass for SelectShaunwhiteContent {
          field the source states: a prop that shares a row's name is dropped with the rest, one a row does not name stays"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        let placements: Vec<(Entity, Entity)> = w.iter::<Instance>().map(|(e, i)| (e, i.prototype)).collect();
+        let placements: Vec<(Entity, Entity)> = w
+            .iter::<Instance>()
+            .filter(|(e, _)| w.has::<PlacedBy>(*e))
+            .map(|(e, i)| (e, i.prototype))
+            .collect();
         // what each prototype is, once: its mesh-name, material-name and vertex-flag reasons
         let mut proto: BTreeMap<Entity, Vec<Reason>> = BTreeMap::new();
         for &(_, p) in &placements {
