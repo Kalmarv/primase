@@ -131,6 +131,20 @@ comes back. Collision entities are not reached from placements, so a program tha
 `prototype_box` is the box of the world's mesh. Incremental archive I/O is not implemented. The adapter emits only
 `core` and `shred` namespaces.
 
+`with_scripts(ScriptInputs { scripts, level })` also reads the level's look from the game's scripts archive. The
+archive is the PAK inside `SCRIPTS.SDAT`, which the disc stores encrypted; the caller decrypts it (primase holds no
+key) and passes the plain PAK. A level's `scriptfx_level_load_<level>.lua` is Lua 5.1 bytecode that sets fog, shadow
+colours and bounds, bloom, back light, ambient fall-off, the colour LUT and more by calling engine functions with
+literal numbers and strings. `primase-lua51` lists its calls; every call whose callee is a global (or a field path) and
+whose arguments are all literals becomes a `ScriptCall` of the `shred.level_params` world resource, in script order,
+with its arguments as the script writes them. Nothing says what an argument means or its unit; no value is
+hard-coded, and nothing is lowered to a core `Environment` or `Atmosphere` until the engine function is proven. A call
+with a variable argument is counted in the report with its instruction; a script with control flow or nested
+functions is not read (its report line says so); a level with no script is a report line. The ten levels'
+scripts (charlie, delta, echo, foxtrot, india, juliet, mike, november, oscar, papa) are straight-line and all their
+calls read. Proven so far from the engine's code (not applied): `change_fog` arguments 5 to 8 are the fog colour and
+9 a blend value; arguments 1 to 4 reach the fog pass as the boundaries `(a1, a3, a2, a4)`.
+
 The hand-worked quartet tests cover two resources, two submeshes of one resource, shared materials, instancing,
 reflection, frame scaling/mirroring, malformed inputs, truncated metadata and refusal within a mixed quartet.
 `geometry_disc` always traverses every quartet, regardless of smoke/full depth: expected totals are 657 quartets

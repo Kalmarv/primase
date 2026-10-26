@@ -6,8 +6,9 @@ an engine (`change_fog(400, 700, ...)`, `level.LoadData(level, "path")`) reads. 
 crate says which calls mean what.
 
 **Header.** `ESC Lua`, version `0x51`, format 0, a byte-order flag (0 big, 1 little), the sizes of `int` and `size_t`
-(4 or 8 each), of an instruction (4) and of a number (8, a float: the integral flag must be 0). Console builds of Lua
-write big-endian chunks with 4-byte `int` and `size_t`; the same code reads a desktop build's little-endian ones.
+(4 or 8 each), of an instruction (4) and of a number (8, a float: the integral flag must be 0). Both byte orders
+read with the same code (the one game's scripts it was built for are little-endian with 4-byte `int` and `size_t`;
+the fixtures cover big-endian too).
 
 **Refused, naming the byte:** any other header; a count the rest of the chunk cannot hold (no allocation is sized by an
 unchecked count); a string without its terminating NUL; a boolean other than 0 or 1; a constant of an unknown type;

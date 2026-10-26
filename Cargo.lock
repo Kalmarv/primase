@@ -1429,6 +1429,7 @@ dependencies = [
  "primase-core",
  "primase-hash",
  "primase-havok",
+ "primase-lua51",
  "primase-rsx",
  "primase-testdata",
  "primase-texcodec",

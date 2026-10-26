@@ -2,6 +2,7 @@
 use super::{
     collision::{self, CollisionReport, SurfaceTable},
     level::{self, LevelReport},
+    level_params::{self, ParamsReport, ScriptInputs},
     material_join::{MaterialInputs, MaterialLibrary, MaterialReport},
     pak::Pak,
 };
@@ -14,7 +15,7 @@ use std::collections::BTreeSet;
 
 /// Reads the whole of the level that exactly the caller's PAKs hold: placements, prototypes with their meshes and
 /// material entities, spot chunks and, when the caller gives them, the MAIN.DB surface table (collision) and the
-/// material banks (source materials and the texture copies they bind). Geometry is read with the level, so a
+/// material banks (source materials and the texture copies they bind) and the level's parameter script. Geometry is read with the level, so a
 /// lowering that runs on the read world sees it and `load` keeps what the selected world holds; only texture pixels
 /// wait for `load`.
 pub struct ShredReader<'a> {
@@ -22,10 +23,12 @@ pub struct ShredReader<'a> {
     frame: SourceFrame,
     surfaces: Option<SurfaceTable>,
     material_inputs: Option<MaterialInputs<'a>>,
+    scripts: Option<ScriptInputs<'a>>,
     material_library: Option<MaterialLibrary<'a>>,
     pub report: LevelReport,
     pub collision: CollisionReport,
     pub material_report: MaterialReport,
+    pub params: ParamsReport,
 }
 
 impl std::fmt::Debug for ShredReader<'_> {
@@ -45,10 +48,12 @@ impl<'a> ShredReader<'a> {
             frame,
             surfaces: None,
             material_inputs: None,
+            scripts: None,
             material_library: None,
             report: LevelReport::default(),
             collision: CollisionReport::default(),
             material_report: MaterialReport::default(),
+            params: ParamsReport::default(),
         }
     }
 
@@ -63,6 +68,13 @@ impl<'a> ShredReader<'a> {
         self.material_inputs = Some(inputs);
         self
     }
+
+    /// Also read the level's `vfx_level_load_<level>` script from the (decrypted) scripts archive as the
+    /// `shred.level_params` resource.
+    pub fn with_scripts(mut self, inputs: ScriptInputs<'a>) -> Self {
+        self.scripts = Some(inputs);
+        self
+    }
 }
 
 impl Reader for ShredReader<'_> {
@@ -73,6 +85,14 @@ impl Reader for ShredReader<'_> {
         if let Some(surfaces) = &self.surfaces {
             self.collision = collision::read_collision(&mut world, &self.paks, surfaces, self.frame)?;
             lines.extend(self.collision.lines());
+        }
+        if let Some(inputs) = &self.scripts {
+            let (params, report) = level_params::read_level_params(inputs)?;
+            self.params = report;
+            lines.extend(self.params.lines());
+            if let Some(params) = params {
+                world.insert_resource(params);
+            }
         }
         if let Some(inputs) = &self.material_inputs {
             let mut assets = self.paks.clone();

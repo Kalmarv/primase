@@ -717,6 +717,13 @@ pub const DECLARED: &[Declared] = &[
         source: r#"the user's own disc, extracted unchanged"#,
     },
     Declared {
+        query: Query::Oracle(OracleSet::Corpus, Game::Shred, "scripts.pak"),
+        status: Status::Live,
+        gate: true,
+        about: r#"SHRED's scripts archive, decrypted: the PAK (version 4) inside the disc's `SCRIPTS.SDAT`, whose `script\*.lua` entries are Lua 5.1 bytecode (1,278 scripts, 1,459,346 bytes); worlds/shred/tests/level_params_disc.rs"#,
+        source: r#"the user's own disc's SCRIPTS.SDAT decrypted outside primase by RPCS3's own decryptor (`rpcs3 --headless --decrypt`, no key in primase); the plaintext PAK is used unchanged"#,
+    },
+    Declared {
         query: Query::Oracle(OracleSet::Corpus, Game::Shred, "main-db.tsv"),
         status: Status::Live,
         gate: true,

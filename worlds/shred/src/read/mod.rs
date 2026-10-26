@@ -5,6 +5,7 @@ pub mod convert;
 pub mod cstr;
 pub mod database;
 pub mod level;
+pub mod level_params;
 pub mod manifest;
 pub mod material;
 pub mod material_join;
