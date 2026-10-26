@@ -503,3 +503,44 @@ distinct asset-ID/GUID pairs, with 1,670 non-rig records reported. Every rig ver
 under both an identity frame and a mirrored frame with 0.01 metres per source unit.
 These counts include repeated occurrences across archives; they are not deduplicated
 rig or animation counts. Empty requested bundles are explicit in `bundles_without_rigs`.
+
+## Placement identities and session source data
+
+Every render placement also has `shred.placement` (`components::SourcePlacement`): PAK/quartet/index,
+SCP offset, all twelve source words, its prototype reference, and its name hash at `+0x0c`.
+The other opaque words stay exact. The core transform holds the frame-converted placement; the raw words
+include the original matrix pointer, not a second interpreted transform. The prototype remains reachable
+through this source component even if a later selection removes its core instance.
+
+`components::SessionGraph::from_main_db(bytes, level_id)` (implemented in `read::session`) reads the caller's
+explicit `levels.id` row and all rows of its NAME-prefixed `_sessions`, `_goals` and `_tasks` tables.
+`ShredReader::with_sessions(graph)` attaches that graph as a world resource,
+so loading any placement subset retains its graph. This records source data: no active session, mode, difficulty,
+archive or task progress is selected, and all original core instances remain. Without this input the report
+states that the graph was not supplied.
+
+Every TEXT/NULL cell is kept by its original column name, including unknown columns and raw relationship
+expressions (`GOALS`, `TASKS_REQ`, `TASKS_OPT`, `TASKS_DONT`, `TASKS_HELP`, `SEQUENTIAL`, and others).
+NULL and empty text are distinct. Rows stay in SQLite rowid order, carrying both rowid and logical `id`:
+the PS3 BLUS30542 01.00 `Papa_tasks` table contains duplicate logical id 203, so an id-keyed map would lose data.
+Non-TEXT/non-NULL cells and unreadable tables are refused with their table/row/column; no source field is coerced.
+
+Each non-sentinel IDENTIFIERS cell also exposes its ampersand-separated names and case-sensitive sdbm hashes.
+The native session/goal/task loaders call the same ampersand splitter and hash routine; its recurrence is
+`hash = byte + hash * 65599` modulo 2^32. No lowercasing or material-name heuristic participates in the join.
+The unparsed cells remain available even for empty/none/NULL/-1 sentinels.
+
+In the checked CHARLIE common-layer `challengesession` SCP, 202 placements match task identifiers; including
+session identifiers raises the union to 221. These are separate categories, not 221 task matches.
+For example placements 154/155/156 are `Grind7_Grind` / `Grind8_Grind` / `Grind9_Grind`
+(prototype `b86f65a9`), placement170 is `Flatland7_Flatland` (`d2c62439`) and placement197 is
+`Air_Icon13_Air` (`e7ccbd29`). They are the floating challenge icons in the unselected scene. Their task rows
+belong to the possible task graph of session71, `charlie_training1_1_adv_05_s_IconIntro`; navigation sessions
+103/104/105 instead reference pylon visualizations. This is source membership evidence, not a complete
+emulation of runtime task activation or sequential progression. A selection pass is separate work.
+
+Hand-written SQLite rows check exact fields, unknown values, duplicate IDs, sentinel handling and unparsed ranges;
+a literal quartet checks placement words, frame conversion and graph/prototype closure. `session_disc` counts
+all placements and task/goal/session matches separately for all ten installed base maps with every layer PAK
+whose quartet namespace names that map. These are all authored layer occurrences, not a selected runtime set;
+the reader's dropped count is always zero.

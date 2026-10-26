@@ -319,6 +319,38 @@ fn zero_material_ids_are_scoped_by_quartet_namespace_in_one_world() {
     }
 }
 
+/// Literal placement words survive frame conversion and keep both graph and prototype reachable.
+#[test]
+fn placement_source_identity_survives_a_subset_without_selecting_a_session() {
+    use primase_shred::components::{SessionGraph, SourcePlacement};
+    let mut f = Fixture::new();
+    let off = u32::from_be_bytes(f.scp[20..24].try_into().expect("placement offset")) as usize;
+    word(&mut f.scp, off + 12, 0x00411041); // sdbm("AB")
+    word(&mut f.scp, off + 24, 0x12345678); // unknown stays exact
+    let p = f.pak();
+    let graph = SessionGraph::from_main_db(include_bytes!("fixtures/sessions.db"), 7).expect("graph");
+    let mut reader = ShredReader::new(vec![("fixture", &p)], SourceFrame::WORLD).with_sessions(graph);
+    let (world, _) = reader.read().expect("fixture read");
+    assert_eq!(world.iter::<Instance>().count(), 3);
+    assert_eq!(world.iter::<SourcePlacement>().count(), 3);
+    let (e, source) = world
+        .iter::<SourcePlacement>()
+        .find(|(_, s)| s.index == 0)
+        .expect("placement0");
+    assert_eq!(source.name, 0x00411041);
+    assert_eq!(source.words[6], 0x12345678);
+    assert_eq!(source.offset, off);
+    assert_eq!(
+        world.get::<Instance>(e).expect("instance").prototype,
+        source.prototype
+    );
+    let (part, _) = reader.load(&world, &BTreeSet::from([e])).expect("subset");
+    assert!(part.resource::<SessionGraph>().is_some());
+    assert!(part.get::<Mesh>(source.prototype).is_some());
+    assert_eq!(part.get::<SourcePlacement>(e), Some(source));
+    assert!(part.verify_components().is_empty());
+}
+
 #[test]
 fn hand_worked_world_and_mirror() {
     let f = Fixture::new();

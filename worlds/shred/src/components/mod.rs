@@ -7,6 +7,8 @@ mod skin;
 pub use skin::{SourceBone, SourceSkeleton, SourceSkin, SourceSkinVertex};
 mod vertex_inputs;
 pub use vertex_inputs::{VertexInput, VertexInputs};
+mod session;
+pub use session::{SessionGraph, SessionIdentifier, SessionRow, SourcePlacement};
 
 mod collision;
 mod level_params;

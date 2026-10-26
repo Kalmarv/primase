@@ -6,6 +6,7 @@ use super::{
     material_join::{MaterialInputs, MaterialLibrary, MaterialReport},
     pak::Pak,
 };
+use crate::components::SessionGraph;
 use primase_core::{
     Entity, Mesh, World,
     convert::{self, Reader, Report},
@@ -25,6 +26,7 @@ pub struct ShredReader<'a> {
     material_inputs: Option<MaterialInputs<'a>>,
     scripts: Option<ScriptInputs<'a>>,
     material_library: Option<MaterialLibrary<'a>>,
+    sessions: Option<SessionGraph>,
     pub report: LevelReport,
     pub collision: CollisionReport,
     pub material_report: MaterialReport,
@@ -50,6 +52,7 @@ impl<'a> ShredReader<'a> {
             material_inputs: None,
             scripts: None,
             material_library: None,
+            sessions: None,
             report: LevelReport::default(),
             collision: CollisionReport::default(),
             material_report: MaterialReport::default(),
@@ -75,6 +78,12 @@ impl<'a> ShredReader<'a> {
         self.scripts = Some(inputs);
         self
     }
+
+    /// Record the caller's MAIN.DB graph. Activating a session is a separate pass.
+    pub fn with_sessions(mut self, graph: SessionGraph) -> Self {
+        self.sessions = Some(graph);
+        self
+    }
 }
 
 impl Reader for ShredReader<'_> {
@@ -82,6 +91,24 @@ impl Reader for ShredReader<'_> {
         let (mut world, report) = level::read_level(&self.paks, self.frame)?;
         self.report = report;
         let mut lines = self.report.lines();
+        if let Some(graph) = &self.sessions {
+            world.insert_resource(graph.clone());
+            lines.push((
+                "shred sessions".into(),
+                format!(
+                    "level {}: {} session / {} goal / {} task rows; graph recorded, no session selected",
+                    graph.level_id,
+                    graph.sessions.len(),
+                    graph.goals.len(),
+                    graph.tasks.len()
+                ),
+            ));
+        } else {
+            lines.push((
+                "shred sessions".into(),
+                "MAIN.DB session graph not supplied; all placements retained".into(),
+            ));
+        }
         if let Some(surfaces) = &self.surfaces {
             self.collision = collision::read_collision(&mut world, &self.paks, surfaces, self.frame)?;
             lines.extend(self.collision.lines());

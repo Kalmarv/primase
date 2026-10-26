@@ -45,6 +45,10 @@ pub struct Model {
 pub struct Placement {
     pub id: u32,
     pub transform: Transform,
+    /// Offset of this 48-byte record in its SCP, all source words, and its name hash (+0x0c).
+    pub offset: usize,
+    pub words: [u32; 12],
+    pub name: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -458,6 +462,13 @@ pub fn decode(scp: &[u8], mlp: &[u8], mmp: &[u8], mgp: &[u8]) -> Result<Scene> {
         scene.placements.push(Placement {
             id,
             transform: s.matrix(s.u(at)?)?,
+            offset: at,
+            words: (0..12)
+                .map(|j| s.u(at + j * 4).map(|v| v as u32))
+                .collect::<Result<Vec<_>>>()?
+                .try_into()
+                .map_err(|_| invalid(at, "placement word count"))?,
+            name: s.u(at + 12)? as u32,
         });
     }
     Ok(scene)

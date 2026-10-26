@@ -8,8 +8,8 @@ use super::{
 use crate::{
     Result,
     components::{
-        Locator, MaterialId, MaterialNamespace, MeshId, Occluder, RefusedMesh, SceneLight, SourceSkeleton,
-        SourceSkin, Spline, Spot, SpotCamera, VertexInput, VertexInputs,
+        Locator, MaterialId, MaterialNamespace, MeshId, Occluder, RefusedMesh, SceneLight, SourcePlacement,
+        SourceSkeleton, SourceSkin, Spline, Spot, SpotCamera, VertexInput, VertexInputs,
     },
     invalid,
 };
@@ -460,6 +460,18 @@ pub fn read_level(paks: &[(&str, &Pak)], frame: SourceFrame) -> Result<(World, L
                     },
                 );
                 world.insert(e, transform);
+                world.insert(
+                    e,
+                    SourcePlacement {
+                        pak: label.into(),
+                        quartet: name.clone(),
+                        index: i as u32,
+                        offset: placement.offset,
+                        name: placement.name,
+                        words: placement.words,
+                        prototype: prototypes[&placement.id],
+                    },
+                );
                 world.insert(
                     e,
                     Source(format!(

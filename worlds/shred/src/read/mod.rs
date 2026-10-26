@@ -20,5 +20,6 @@ pub mod scp_locators;
 pub mod scp_occluders;
 pub mod scp_splines;
 pub mod scp_tables;
+pub mod session;
 mod skin;
 pub mod texture;
