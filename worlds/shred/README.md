@@ -271,3 +271,57 @@ missing paths/pixels, ID-zero separation, inference reporting and unsupported-ve
 `material_join_disc` checks every submesh ID against its bank and loads material/texture closures of the first
 20 placements in CHARLIE (base plus default layer), OSCAR and MIKE. These are source and pixel integration checks,
 not independent appearance evidence.
+
+## PBR material approximation
+
+Register with `primase_shred::register(&mut registry)`, then select
+`lower-shred-materials{normals=omit,alpha=opaque}` through the pass manager **after** `reader.load`.
+Both options are required. `normals` accepts `omit`, `rgb-up`, `rgb-down`, `ag-up`, `ag-down`;
+`alpha` accepts `opaque`, `named`. These are explicit interpretations of unproved source state,
+not native shader execution. `ag` reads X from post-remap alpha, Y from green and rebuilds positive Z;
+`down` inverts Y. Converted normal views have core's glTF convention and include every loaded mip.
+An AG interpretation still does not prove which source tangent axis each component follows.
+
+The pass retains `shred.material`, its ID/resolution and the entire texture-copy graph. PBR references
+new views of the preferred loaded copy, shared across materials using the same source face and role.
+It never changes raw source texture bytes or metadata, picks a different packaged copy, or silently
+decodes pending pixels. A pending preferred copy is an error naming `reader.load`; an absent path,
+header without pixels, encoded volume or cube map is reported without inventing a 2D texture.
+Existing `pbr.material` values are authoritative and left unchanged, counted by the pass.
+
+| Source | PBR mapping | Evidence and limits |
+|---|---|---|
+| `Color_Map` | sRGB base colour, UV0/repeat | Exact executable-string sdbm name; shader operation, transfer and sampler state remain approximations. Exception: `env_water` binds the same normal texture to Color/Normal, so its Color_Map is not treated as colour. |
+| `Normal_Map` | Program-selected encoding, or omitted | The name is exact. One checked `char_fabric` microcode reads expanded green/alpha and reconstructs a third component; binding hash to hardware unit and basis orientation are not established. No convention is selected automatically. |
+| `Spec_Map` | sRGB `KHR_materials_specular` colour | Exact name, approximate channel/transfer and reflectance model. It is not silently packed into metal/rough channels. |
+| `Effect_Map` and unnamed slots | Preserved as source data, unmapped | No emissive or other operation is established by the name. Each nonempty slot is reported with shader family and ordinal/hash. |
+| `BaseColor` in character families; `PrimaryColor` in design; `SolidColor` in env_solid | RGB base factor, alpha 1 | Named in bound PSP; multiplication and linear colour are approximations. Values outside PBR's factor range are clamped and reported. Stored unused w is not opacity. |
+| `baseWaterColor` in env_water | RGB base factor | Approximation of static water; animated normals, reflection, murkiness and blending are not reproduced. |
+| `GlassColor` in env_glass | RGB base factor; w as blend alpha only with `alpha=named` | Named parameter and family; refraction/Fresnel and native blend state are not reproduced. `alpha=opaque` leaves alpha 1. |
+| `Alpha_test_ref` in seven environment families, only with `alpha=named` | Mask with sampled alpha >= x | Requested heuristic for env_base, env_base_specular, env_base_detail, env_base_detail_specular, env_tree_frond, env_tree_leafmesh and env_uvanim. Source census: 121 material occurrences. Native enable/comparison and selected permutation remain unproved. Other families stay opaque. |
+| Unknown state, gloss and metallic | Single-sided, dielectric 0, roughness 1 | Named approximations on every material; no unknown state word or exponent lane is assigned a native meaning. |
+
+Every approximation is attached to its material in the pass log and names the source fragment shader.
+All parameters not mapped, including unnamed hashes, are counted individually as omitted from PBR;
+the source values remain intact. Missing colour textures produce a reported factor-only material.
+Emission remains zero until a shader operation is established; an effect slot is not proof of emission.
+Detail/overlay/AO, dynamic fades, animation and lighting are source data rather than silently invented PBR terms.
+
+Bounded shader evidence prevents two tempting name rules. `env_base` microcode SHA256
+`29488e5d43b53f54439931471d8aa79c7e619186eba01e3e590e00483f4eefd5` adds ColorBias
+to TEX0 RGB with saturation at 0xc0 and blends toward ColorConstant using a dynamic fade at 0x120/0x160.
+Consequently ColorConstant is **not** an unconditional base multiplier and is left unmapped.
+The same checked program does not prove that its TEX0 corresponds to every record's Color_Map.
+`actor` microcode `ff10a62fba90c489c933f25ff33049917f9ee288ed8e154ad382d81d2c817076`
+discards TEX0 alpha strictly below Alpha_test_ref.x (0x120/0x140/0x170), but checked effect_params and
+char_matcap programs use the same constant without that sampled-alpha kill. Constant presence alone is
+therefore insufficient: the environment heuristic is opt-in and explicitly approximate.
+SpecExponentValues can control lookup LOD; no direct Phong-to-roughness rule is applied.
+These are observations of particular programs, not claims about every shader permutation.
+
+Hand-worked tests run through a pass manager with effect/value checks. They cover colour/normal mips,
+AG reconstruction, green inversion, preferred copies, shared views, unchanged raw graph, water and alpha
+exceptions, missing/encoded/pending pixels, ambiguous fields and mandatory options. `material_lower_disc`
+loads the first 20 placements in CHARLIE (base plus training), OSCAR and MIKE and checks both omitted normals
+and the explicitly selected AG-down approximation. This is reader/pass integration, not appearance proof.
+Shaded lab comparisons with the textured Blender references belong to the lab integration chunk.

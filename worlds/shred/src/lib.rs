@@ -2,7 +2,14 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod components;
+pub mod passes;
 pub mod read;
+
+/// Register SHRED's source lowerings. Normal-map interpretation is the program's
+/// explicit choice until shader and tangent-basis evidence establishes it.
+pub fn register(reg: &mut primase_core::pass::PassRegistry) {
+    reg.add(&passes::LOWER_SHRED_MATERIALS);
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
