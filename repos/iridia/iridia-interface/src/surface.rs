@@ -358,7 +358,7 @@ impl Surface {
 #[allow(clippy::unwrap_used, reason = "hand-worked values")]
 mod tests {
     use super::*;
-    use crate::shader::LaneAffine;
+    use crate::LaneAffine;
 
     fn close(a: [f32; 3], b: [f32; 3]) -> bool {
         within(a, b, 1e-4)

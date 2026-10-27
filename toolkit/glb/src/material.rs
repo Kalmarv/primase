@@ -2,7 +2,8 @@
 //! themselves ([`crate::Gltf::json`]): a sampler's filters and wrap ([`sampler_filters`]), a material's shading
 //! ([`material_shading`]). The glTF writer writes the same codes.
 
-use primase_core::pbr::{Filter, Filters, MipFilter, Shading, Wrap};
+use iridia_interface::{Filter, Filters, MipFilter};
+use primase_core::{pbr::Shading, pbr::Wrap};
 use serde_json::Value;
 
 use crate::Result;

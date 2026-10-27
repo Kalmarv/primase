@@ -1,9 +1,7 @@
 //! Shared raw-source fixtures; no lowered material snapshot.
 #![allow(clippy::unwrap_used)]
-use primase_core::{
-    World,
-    shader::{KeyPart, Stage, StageBinding, VariantKey},
-};
+use iridia_interface::{KeyPart, Stage, VariantKey};
+use primase_core::{World, shader::StageBinding};
 use primase_shaunwhite::shaders::{Database, Payload};
 use primase_testdata::{Game, install_file};
 pub fn binding(db: &Database, record: u32) -> StageBinding {

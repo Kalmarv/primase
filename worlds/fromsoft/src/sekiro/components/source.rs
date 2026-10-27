@@ -775,7 +775,7 @@ impl ShaderStage {
 pub struct ShaderProgram {
     pub name: String,
     pub stage: ShaderStage,
-    pub format: primase_core::shader::ShaderFormat,
+    pub format: iridia_interface::ShaderFormat,
     pub code: std::sync::Arc<[u8]>,
 }
 

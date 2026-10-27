@@ -1,10 +1,5 @@
 use std::{collections::BTreeMap, num::NonZeroU32};
 
-use naga::{
-    AddressSpace, ArraySize, BinaryOperator as Bo, Expression as E, GlobalVariable, Handle, ImageClass,
-    ImageDimension, LocalVariable, MathFunction as Mf, RelationalFunction, ResourceBinding, SampleLevel,
-    ScalarKind, Statement, TypeInner, UnaryOperator,
-};
 use iridia::{
     BufferLayout, Constant as Field, ConstantType, Conventions, D3dBinding, D3dClass, D3dModes, D3dSignature,
     Interface, InterpMode, InterpSampling, Interpolation, Label, Majorness, Program, Provenance, Resource,
@@ -12,6 +7,11 @@ use iridia::{
     SystemValue, TextureDim, Value, Varying, VaryingProvenance,
     build::{Builder, Kind, Val},
     entry_io,
+};
+use naga::{
+    AddressSpace, ArraySize, BinaryOperator as Bo, Expression as E, GlobalVariable, Handle, ImageClass,
+    ImageDimension, LocalVariable, MathFunction as Mf, RelationalFunction, ResourceBinding, SampleLevel,
+    ScalarKind, Statement, TypeInner, UnaryOperator,
 };
 
 use crate::{Destination, Instruction, LIFTER_VERSION, Opcode, Register, Result, Shader, Source, error};
@@ -869,8 +869,7 @@ impl Lower<'_> {
             decl.result,
             false,
         );
-        self.notes
-            .extend(iridia::interface_notes(&self.interface));
+        self.notes.extend(iridia::interface_notes(&self.interface));
         self.notes.sort();
         self.notes.dedup();
         let program = Program {

@@ -44,13 +44,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use iridia_interface::Filters;
 use primase_core::layered::LayeredMaterial;
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
-use primase_core::pbr::{AlphaMode, Filters, PbrMaterial, TextureRef, TextureSlot, Wrap};
 use primase_core::{
     ColorSpace, Component, DrawOrder, Entity, MaterialUsage, MaterialVariants, Mesh, MeshFile, Name,
     NormalConvention, Semantic, Stream, TexFormat, TexRole, Texture, TextureFile, VertexColor, World,
 };
+use primase_core::{pbr::AlphaMode, pbr::PbrMaterial, pbr::TextureRef, pbr::TextureSlot, pbr::Wrap};
 
 use crate::{Image, Samples, linear_to_srgb8, resize_normals, rgba8_exact, scale_normal, srgb8_to_linear};
 

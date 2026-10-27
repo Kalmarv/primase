@@ -1,15 +1,16 @@
 //! Execute the resolved pixel stage and decode only the roles its binding declares, through primase's one reading of a
-//! program's outputs as a surface (`primase_core::shader::surface`).
+//! program's outputs as a surface (`iridia_interface::surface`).
 use crate::layer_bake::{self, FrozenFrame};
-use primase_core::parallel::Threads;
-use primase_core::pbr::{PbrMaterial, UvTransform, Wrap};
-use primase_core::shader::surface::{Base, Place, Surface};
-use primase_core::shader::{NormalSpace, OutputBinding, OutputRole, Shader, StageBinding, TextureSource};
-use primase_core::{ColorSpace, Texture, World};
-use primase_image::sampling::{Address, Levels, Transfer};
 use iridia_exec::{
     Grid, Input, Invocation, Lane, PixelShader, Raw, SampledTexture, SamplerUse, Unstated, evaluate_raw_with,
 };
+use iridia_interface::{NormalSpace, OutputBinding, OutputRole};
+use iridia_interface::{surface::Base, surface::Place, surface::Surface};
+use primase_core::parallel::Threads;
+use primase_core::pbr::{PbrMaterial, UvTransform, Wrap};
+use primase_core::{ColorSpace, Texture, World};
+use primase_core::{shader::Shader, shader::StageBinding, shader::TextureSource};
+use primase_image::sampling::{Address, Levels, Transfer};
 use primase_texcodec::TexDecoder;
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -308,8 +309,7 @@ pub(super) fn bake(prepared: Prepared<'_>, world: &World) -> Result<Baked, Strin
         base_alpha,
         sample_time: _,
     } = prepared;
-    let textures =
-        iridia_exec::Views::refusing(textures.iter().map(|(&slot, t)| (slot, t.view())).collect());
+    let textures = iridia_exec::Views::refusing(textures.iter().map(|(&slot, t)| (slot, t.view())).collect());
     let raw = evaluate_raw_with(
         Threads::of(world),
         &shader,
@@ -472,7 +472,7 @@ impl Decode<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use primase_core::shader::{Label, NormalEncoding, ScalarEncoding};
+    use iridia_interface::{Label, NormalEncoding, ScalarEncoding};
 
     fn target(name: &str, lanes: u8, role: OutputRole) -> OutputBinding {
         OutputBinding {

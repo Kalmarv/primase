@@ -10,9 +10,10 @@ use iridia::ProgramGraph;
 use iridia::output_uses::bind_output_uses;
 use iridia_exec::PixelShader;
 use iridia_exec::ProgramShader;
+use iridia_interface::{ShaderFormat, Stage};
 use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
-use primase_core::shader::{MaterialPrograms, ProgramFacts, Shader, ShaderBinding, ShaderFormat, Stage};
 use primase_core::{ColorSpace, Component, Entity, Mesh, Name, Semantic, TexRole, Texture, World};
+use primase_core::{shader::MaterialPrograms, shader::ProgramFacts, shader::Shader, shader::ShaderBinding};
 use std::collections::BTreeMap;
 
 /// `resolve-fromsoft-shaders{unbound-textures=preview|leave}`: for each material with a layered definition, bind its
@@ -581,7 +582,7 @@ fn run(
 mod program_facts_tests {
     #[test]
     fn sekiro_and_elden_fixture_lifts_keep_source_counts_hash_and_register_inputs() {
-        use primase_core::shader::{InstructionUnit, ShaderFormat, Stage};
+        use iridia_interface::{InstructionUnit, ShaderFormat, Stage};
         for (name, format, bytes, unit) in [
             (
                 "Sekiro alpha reference fixture",

@@ -156,8 +156,8 @@ fn the_enhanced_shader_database() {
     for (g, stage) in sgd2::GROUP_STAGES.iter().enumerate() {
         for program in &db.groups[g] {
             programs += 1;
-            let chunks = dxcontainer::chunks(program.container)
-                .unwrap_or_else(|e| panic!("{}: {e}", program.name));
+            let chunks =
+                dxcontainer::chunks(program.container).unwrap_or_else(|e| panic!("{}: {e}", program.name));
             assert!(
                 chunks.iter().any(|c| &c.kind == b"DXIL"),
                 "{}: not a DXIL container",
@@ -187,12 +187,12 @@ fn the_enhanced_shader_database() {
                         Err(problems) => invalid.push(format!("{}: {problems:?}", program.name)),
                         Ok(_) => {
                             // a program of a stage with no WGSL stage is written as its functions
-                            let written =
-                                if iridia::stage_functions(&p.interface).is_ok_and(|f| f.is_some()) {
-                                    iridia::emit::wgsl_functions(&p)
-                                } else {
-                                    iridia::emit::wgsl(&p)
-                                };
+                            let written = if iridia::stage_functions(&p.interface).is_ok_and(|f| f.is_some())
+                            {
+                                iridia::emit::wgsl_functions(&p)
+                            } else {
+                                iridia::emit::wgsl(&p)
+                            };
                             match written {
                                 Ok(_) => {}
                                 // a program the validator accepts and a writer cannot write is counted, not wrong

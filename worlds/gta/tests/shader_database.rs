@@ -3,7 +3,8 @@
 //! program compiled from this repository's own HLSL) and a geometry stand-in the world has no facts for.
 use std::path::Path;
 
-use primase_core::shader::{Shader, ShaderFormat, Stage};
+use iridia_interface::{ShaderFormat, Stage};
+use primase_core::shader::Shader;
 use primase_core::{Entity, Name, World};
 use primase_gta::components::{GtaEffect, GtaStage};
 use primase_gta::rage::sgd2;

@@ -18,13 +18,13 @@
 //! Each mesh's normal and tangent are the members its program reads as them, as `lower-fromsoft-geometry` takes them
 //! with `speedtree-frame=program` ([`program_frame`], [`Model::set_speedtree_frame`]); the meshes where those are not
 //! its layout's pair are listed. Billboard cards are the `billboard` material class, and their decode is refused.
-use primase_core::shader::{ResourceKind, ShaderFormat};
+use iridia_exec::{Backend, Element, Executable, ImageSample, Resources, Runner};
+use iridia_interface::{ResourceKind, ShaderFormat};
 use primase_fromsoft::flver::{Model, SpeedTreeLayout, is_speedtree, speedtree_layout, tangent_to_scene};
 use primase_fromsoft::materials::{self, Definition, SkipClass};
 use primase_fromsoft::sekiro::passes::geometry::program_frame;
 use primase_fromsoft::sekiro::source::{ShaderBundle, ShaderProgram, ShaderStage};
 use primase_fromsoft::{Binder, Game, NameDictionary, dcx::Decoder};
-use iridia_exec::{Backend, Element, Executable, ImageSample, Resources, Runner};
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 mod common;

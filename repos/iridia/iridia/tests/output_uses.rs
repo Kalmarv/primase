@@ -2,11 +2,11 @@
 //! ([`iridia::output_uses`]), on `fixtures/output_uses.hlsl`, each entry point compiled to both bytecodes and
 //! lifted by both lifters: an alpha-tested program's tested alpha is Coverage where it writes it, a discard on a value
 //! written nowhere binds nothing, and a target blended by the source alpha has its alpha lane as Opacity.
-use primase_core::shader::{
-    Blend, BlendEquation, BlendFactor, BlendOp, OutputBinding, OutputRole, RenderState, TargetState,
-};
 use iridia::output_uses::{OutputUses, bind_output_uses};
 use iridia::{Label, Program};
+use iridia_interface::{
+    Blend, BlendEquation, BlendFactor, BlendOp, OutputBinding, OutputRole, RenderState, TargetState,
+};
 
 /// Each entry point of the fixture, as fxc and dxc compile it.
 const FIXTURES: [(&str, &[u8], &[u8]); 3] = [

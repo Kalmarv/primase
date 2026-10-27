@@ -296,7 +296,8 @@ pub(crate) fn texture_transform(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use primase_core::pbr::{Filter, Filters, Wrap};
+    use iridia_interface::{Filter, Filters};
+    use primase_core::pbr::Wrap;
     use primase_core::{Opaque, World};
     use serde_json::json;
 

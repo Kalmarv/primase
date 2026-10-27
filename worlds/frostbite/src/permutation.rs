@@ -14,7 +14,7 @@
 //! hold a vertex and a pixel program, or a vertex program alone; a compute permutation one program. The word at 0x18
 //! of a raster permutation is kept as stored (it is 0 in every one seen).
 
-use primase_core::shader::{
+use iridia_interface::{
     Blend, BlendEquation, BlendFactor, BlendOp, Compare, Cull, DepthBias, DepthState, Fill, RenderState,
     Stencil, StencilFace, StencilOp, TargetState,
 };
@@ -234,7 +234,7 @@ pub fn read_shared(rtype: u32, d: &[u8], meta: &[u8; 16]) -> Result<SharedData> 
 /// Compares (`Never` .. `Always`) and stencil ops (`Keep`, `Zero`, `Replace`, `IncrementSaturate`,
 /// `DecrementSaturate`, `Invert`, `Increment`, `Decrement`) are D3D12's, in D3D12's order less one. Blend factors are
 /// the game's `RenderBlendMode` codes (0 `Zero` .. 16 `InvSource1Alpha`), kept as stored: core's
-/// [`primase_core::shader::BlendFactor`] has no constant, saturate or second-source factor. The printed record has no
+/// [`iridia_interface::BlendFactor`] has no constant, saturate or second-source factor. The printed record has no
 /// colour blend operation (only the alpha one); bits 5-7 of the destination byte are refused unless zero.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FixedState {

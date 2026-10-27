@@ -8,9 +8,9 @@
 
 use std::collections::BTreeMap;
 
+use iridia_interface::{D3dClass, ResourceKind};
 use primase_compress::oodle::{Oodle, Version};
 use primase_core::World;
-use primase_core::shader::{D3dClass, ResourceKind};
 use primase_frostbite::MESHSET;
 use primase_frostbite::binding::{self, BINDING_SET, Bindings, PASS_BINDING};
 use primase_frostbite::bundle::Kind;

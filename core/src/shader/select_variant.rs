@@ -182,7 +182,8 @@ impl Pass for SelectVariant {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shader::{Stage, StageBinding, VariantKey};
+    use crate::shader::StageBinding;
+    use iridia_interface::{Stage, VariantKey};
 
     fn key(field: &str, value: u32) -> Option<VariantKey> {
         Some(VariantKey {

@@ -2,8 +2,8 @@
 //! Privately extracted shipped PS and VS programs compared with Microsoft D3DDisassemble (d3dcompiler_47.dll).
 //! All executable operands, input/sampler declarations, immediate values and CTAB allocations are compared;
 //! validation and WGSL emission check the resulting IR. This is reflection/token evidence, not a rendered-pixel oracle.
-use primase_core::gate::{GateReport, Tolerance};
 use iridia_d3d9::{Destination, Opcode, Register, Source, lift, read};
+use primase_core::gate::{GateReport, Tolerance};
 use primase_testdata::{Game, OracleSet, oracle};
 
 fn register(r: Register) -> String {

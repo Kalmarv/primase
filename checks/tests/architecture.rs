@@ -86,7 +86,8 @@ impl Member {
     /// A library crate: holds readers, passes, writers or mechanisms (not `checks` or `examples`, nor the dev-only
     /// test-data crate).
     fn library(&self) -> bool {
-        matches!(self.layer(), "core" | "toolkit" | "formats" | "worlds" | "repos") && self.path != "toolkit/testdata"
+        matches!(self.layer(), "core" | "toolkit" | "formats" | "worlds" | "repos")
+            && self.path != "toolkit/testdata"
     }
 }
 

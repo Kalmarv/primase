@@ -1,8 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 //! The subobjects of a library's runtime data, read from data built by hand to the layout `primase_dxil::rdat` states: every
 //! kind, the references (strings, index arrays, raw bytes), and the refusals.
-use primase_dxil::rdat::{export_name, subobjects};
 use iridia::{HitGroup, HitGroupKind, Subobject};
+use primase_dxil::rdat::{export_name, subobjects};
 
 fn words(w: &[u32]) -> Vec<u8> {
     w.iter().flat_map(|x| x.to_le_bytes()).collect()

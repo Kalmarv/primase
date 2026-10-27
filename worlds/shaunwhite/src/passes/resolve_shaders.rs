@@ -1,5 +1,9 @@
 //! Exact generic-material constraints on SDB2's stored forward-colour keys. Native setters determine
 //! material bits; draw/frame bits remain explicit record variants. Nothing selects a nearby permutation.
+use iridia_interface::{
+    ConstantBinding, ConstantRole, InputBinding, InputRole, Interface, KeyPart, OutputBinding, OutputRole,
+    ProgramResourceFacts, RenderState, ResourceKind, ShaderFormat, Stage, VariantKey,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::components::{
@@ -221,9 +225,8 @@ fn binding(
                             .get(slot)
                             .ok_or_else(|| format!("{slot} texture not read"))?
                             .texture;
-                        let sampler =
-                            iridia_d3d9::sampler_states(s.states.iter().map(|s| (s.kind, s.value)))
-                                .map_err(|e| e.to_string())?;
+                        let sampler = iridia_d3d9::sampler_states(s.states.iter().map(|s| (s.kind, s.value)))
+                            .map_err(|e| e.to_string())?;
                         Ok(TextureSource::Texture { texture, sampler })
                     })
                     .unwrap_or_else(|why| {

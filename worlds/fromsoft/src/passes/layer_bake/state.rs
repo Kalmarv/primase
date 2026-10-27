@@ -10,8 +10,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use primase_image::sampling::Address;
 use iridia_exec::{Input, Lane, View, Views, evaluate::Constants};
+use primase_image::sampling::Address;
 use serde_json::json;
 
 use crate::{Result, invalid};
@@ -340,8 +340,8 @@ impl PipelineState {
             primase_dxbc::lift(&bytecode).map_err(|e| invalid("layer bake state", e.at * 4, e.detail))?,
         )
         .map_err(|e| invalid("layer bake state", e.at, e.detail))?;
-        let layout = iridia_exec::Layout::of(&lifted)
-            .map_err(|e| invalid("layer bake state", e.at, e.detail))?;
+        let layout =
+            iridia_exec::Layout::of(&lifted).map_err(|e| invalid("layer bake state", e.at, e.detail))?;
         let mut constants = Constants::new(&layout);
         for (slot, rows) in rows_of(&pixel["constants"])? {
             let words: Vec<u32> = rows.into_iter().flatten().collect();

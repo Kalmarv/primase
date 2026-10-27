@@ -74,7 +74,7 @@ fn slice_a_keeps_the_bundle_of_every_shader_its_materials_name() {
 /// Needs `installs.elden`, `keys.elden` and `tools.oodle6`.
 #[test]
 fn elden_ring_materials_link_their_shader_model_6_bundles() {
-    use primase_core::shader::ShaderFormat;
+    use iridia_interface::ShaderFormat;
     use primase_fromsoft::{Game as FromSoft, Install, Keys};
     let (Some(root), Some(keys), Some(dll)) = (
         install(Game::Elden),

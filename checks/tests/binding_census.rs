@@ -14,9 +14,10 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::too_many_lines)]
 use std::collections::{BTreeMap, BTreeSet};
 
+use iridia_interface::{ConstantRole, InputRole, OutputRole, RenderState};
 use primase_core::pass::{Options, PassLog, PassManager, PassRegistry, RunReport};
-use primase_core::shader::{ConstantRole, InputRole, OutputRole, RenderState, ShaderBinding, TextureSource};
 use primase_core::{Component, World};
+use primase_core::{shader::ShaderBinding, shader::TextureSource};
 use serde_json::{Value, json};
 
 /// A reason string with the hashes that vary by material taken out, so equal reasons count together.

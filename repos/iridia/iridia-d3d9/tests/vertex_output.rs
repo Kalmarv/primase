@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
 //! Independent hand-worked answers for lane slicing; full-program comparisons are regressions, not an oracle.
-use iridia_d3d9::{lift, project_vertex_output};
 use iridia::flow::{At, Node, Values};
+use iridia_d3d9::{lift, project_vertex_output};
 use iridia_exec::{PixelShader, ProgramShader, Sample};
 
 fn op(code: u32, args: &[u32]) -> Vec<u32> {

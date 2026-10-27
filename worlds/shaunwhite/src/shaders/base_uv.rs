@@ -3,17 +3,15 @@
 //! use only raw TEXCOORD0.xy and the six established base-matrix words. Frame and other outputs are cut.
 use super::{Database, Key, Payload};
 use crate::components::MaterialRef;
-use primase_core::{
-    Semantic,
-    shader::{
-        ConstantBinding, ConstantRole, InputBinding, InputRole, LaneStream, ResourceId, ResourceKind, Stage,
-        StageBinding,
-    },
-};
 use iridia::{
     Program,
     flow::{At, Node, Values},
 };
+use iridia_interface::{
+    Attribute, ConstantBinding, ConstantRole, InputBinding, InputRole, LaneStream, ResourceId, ResourceKind,
+    Stage,
+};
+use primase_core::shader::StageBinding;
 use std::collections::BTreeSet;
 
 pub const NAME: &str = "shaunwhite.generic-base-uv.v1";
@@ -179,8 +177,7 @@ pub fn derive(
     {
         return Err("base UV: graph is not the complete UV0/base-matrix composition".into());
     }
-    let program =
-        iridia_d3d9::project_vertex_output(bytes, output.register, 3).map_err(|e| e.to_string())?;
+    let program = iridia_d3d9::project_vertex_output(bytes, output.register, 3).map_err(|e| e.to_string())?;
     let constants = super::material::bind_constants(&program.interface, &[], material)?;
     for &(id, word) in &seen {
         let at = word * 4;
@@ -197,7 +194,7 @@ pub fn derive(
             label: v.label.clone(),
             role: if v.label.name == "TEXCOORD" && v.label.index == 0 {
                 InputRole::Lanes(vec![LaneStream {
-                    semantic: Semantic::TexCoord(0),
+                    semantic: Attribute::TexCoord(0),
                     first: 0,
                     component: 0,
                     count: 2,

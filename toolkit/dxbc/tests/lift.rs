@@ -2,8 +2,8 @@
 //! Lifting the D3D behaviour fixture (tests/fixtures/modes.hlsl, our own HLSL, compiled with fxc /T ps_5_0 /E main):
 //! the interface and resources as worked out from the HLSL, and the D3D behaviours present in the lifted body as
 //! plain operations.
-use primase_dxbc::lift;
 use iridia::{BufferKind, ResourceKind, ScalarType, Stage, SystemValue};
+use primase_dxbc::lift;
 
 const MODES: &[u8] = include_bytes!("fixtures/modes.dxbc");
 

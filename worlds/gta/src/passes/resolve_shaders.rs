@@ -61,15 +61,19 @@
 //!   `PS_Textured_Zero|Four|Eight` program, the finished `Colour`.
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
-use primase_core::shader::{
+use iridia_interface::{
     Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantRole, Cull, D3dClass,
     DepthState, Fill, FrameParameter, InputBinding, InputRole, Interface, NormalEncoding, NormalSpace,
     ObjectMatrix, ObjectParameter, Occluded, OutputBinding, OutputRole, RenderState, ResourceId,
-    ResourceKind, SamplerState, ScalarEncoding, Shader, ShaderBinding, Stage, StageBinding, Stencil,
-    StencilFace, StencilOp, SystemValue, TargetState, TextureBinding, TextureSource, ViewParameter,
+    ResourceKind, SamplerState, ScalarEncoding, Stage, Stencil, StencilFace, StencilOp, SystemValue,
+    TargetState, ViewParameter,
 };
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Component, Entity, Semantic, Texture, TextureFile, World};
+use primase_core::{
+    shader::Shader, shader::ShaderBinding, shader::StageBinding, shader::TextureBinding,
+    shader::TextureSource,
+};
 
 use super::gbuffer::{self, GBufferWrites};
 use super::sampler_state;
@@ -712,7 +716,7 @@ impl ResolveGtaShaders {
                                 v.label.name
                             ),
                         },
-                        InputRole::Stream,
+                        |semantic| InputRole::Stream(semantic.into()),
                     ),
                     Stage::Pixel if vertex_bound => InputRole::Previous,
                     _ => InputRole::Unknown {
@@ -748,7 +752,7 @@ impl ResolveGtaShaders {
 /// The outputs of a pixel program with their roles: the G-buffer's where the program is of the family and writes its
 /// four targets (the layout's lanes as `passes::gbuffer` reads them), `Unknown` with why otherwise.
 fn output_bindings(
-    interface: &primase_core::shader::Interface,
+    interface: &iridia_interface::Interface,
     writes: Option<&Result<GBufferWrites, String>>,
     forward: bool,
     counts: &mut Counts,
@@ -1462,7 +1466,7 @@ mod tests {
         // GTA shared analysis path, not a mocked instruction count.
         let bytes = include_bytes!("../../../../toolkit/dxil/tests/fixtures/draw_texture.dxil");
         let shader = Shader {
-            format: primase_core::shader::ShaderFormat::Dxil,
+            format: iridia_interface::ShaderFormat::Dxil,
             bytecode: bytes.to_vec(),
             interface: primase_dxil::interface(bytes).unwrap(),
         };
@@ -1472,7 +1476,7 @@ mod tests {
         assert_eq!(analysed.facts.hash, Some(iridia::source_hash(bytes)));
         assert_eq!(
             analysed.facts.instruction_count.unwrap().unit,
-            primase_core::shader::InstructionUnit::DxilInstructions
+            iridia_interface::InstructionUnit::DxilInstructions
         );
         assert!(analysed.facts.instruction_count.unwrap().count > 0);
         assert!(
@@ -1962,7 +1966,7 @@ mod tests {
 
     /// A pixel program's interface with `count` colour targets of four float lanes (`SV_Target0` on).
     fn targets(count: u32) -> Interface {
-        use primase_core::shader::{Label, ScalarType, StageFacts, Value, Varying, VaryingProvenance};
+        use iridia_interface::{Label, ScalarType, StageFacts, Value, Varying, VaryingProvenance};
         Interface {
             stage: Stage::Pixel,
             inputs: Vec::new(),
@@ -1987,14 +1991,16 @@ mod tests {
         }
     }
 
-    /// The family's G-buffer read as a surface (`primase_core::shader::surface`), the one reading a viewer's composite
+    /// The family's G-buffer read as a surface (`iridia_interface::surface`), the one reading a viewer's composite
     /// takes: the albedo in target 0, the world normal `n * 0.5 + 0.5` in target 1, the roughness from target 2's
     /// specular falloff (`sqrt(n / 512)`, Blinn-Phong) and the specular strength from its x, target 3's z the emission
     /// over 16 as a scale of the albedo and its x the natural ambient's occlusion, which scales the ambient light alone;
     /// no metalness and no reflectance. A forward program's one target is its finished colour, the surface's base.
     #[test]
     fn the_gbuffer_is_read_as_a_surface() {
-        use primase_core::shader::surface::{Base, Emission, Place, Roughness, Surface};
+        use iridia_interface::{
+            surface::Base, surface::Emission, surface::Place, surface::Roughness, surface::Surface,
+        };
         let writes: Result<GBufferWrites, String> = Ok(GBufferWrites {
             normal_biased: true,
             normal_zero: false,

@@ -16,12 +16,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use iridia_interface::Filter;
 use primase_core::layered::{Channel, Composition, Source, height_blend, over_as_sum};
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
-use primase_core::pbr::{Filter, PbrMaterial, TextureRef, Wrap};
 use primase_core::{
     Component, Entity, LayeredMaterial, Mesh, Semantic, Stream, Texture, WeightMapping, World,
 };
+use primase_core::{pbr::PbrMaterial, pbr::TextureRef, pbr::Wrap};
 use primase_texcodec::{Decoder, TexDecoder};
 
 /// The most coverage an Over channel with its layer alpha left out may have: one 512th short of one, which an 8-bit

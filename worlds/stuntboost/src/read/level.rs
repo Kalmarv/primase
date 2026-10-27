@@ -17,8 +17,9 @@
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
+use iridia_interface::Filters;
 use primase_core::frame::{Axis, SourceFrame};
-use primase_core::pbr::{Filters, Wrap};
+use primase_core::pbr::Wrap;
 use primase_core::{
     ColorSpace, Curve, Entity, Instance, Mesh, Name, Semantic, Source, Stream, TexFormat, TexRole, Texture,
     Transform, World,

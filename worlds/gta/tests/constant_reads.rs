@@ -9,11 +9,11 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 use std::collections::{BTreeMap, BTreeSet};
 
+use iridia::ResourceKind;
 use primase_core::World;
 use primase_core::shader::Shader;
 use primase_gta::components::GtaEffect;
 use primase_gta::read::source::GtaSource;
-use iridia::ResourceKind;
 use primase_testdata::{Game, install, keys};
 
 /// The lanes of rows a program reads, from its WGSL (the emitter writes only what the program uses; the lifted IR also

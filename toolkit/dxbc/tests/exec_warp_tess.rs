@@ -13,11 +13,11 @@
 //!
 //! Needs the WARP oracle program with the `d3d11ts` case form (the configured `Tool::Warp`), `tools.fxc` and the
 //! scratch folder. Every program is compiled here from the HLSL below, so the cases are the whole of the input.
-use primase_dxbc::lift;
 use iridia::TessTopology;
 use iridia_exec::Constants;
 use iridia_exec::tessellation::TessellationShader;
 use iridia_exec::{Sample, Sampler};
+use primase_dxbc::lift;
 use primase_testdata::{Tool, own_scratch, tool};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

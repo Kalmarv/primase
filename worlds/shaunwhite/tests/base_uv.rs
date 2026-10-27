@@ -2,11 +2,9 @@
 //! The derived graph is evaluated separately on the same raw mesh UV/material controls.
 #![allow(clippy::unwrap_used)]
 mod support;
-use primase_core::{
-    gate::{GateReport, Tolerance},
-    shader::ConstantRole,
-};
 use iridia_exec::{PixelShader, ProgramShader, Sample};
+use iridia_interface::{Attribute, ConstantRole};
+use primase_core::{gate::GateReport, gate::Tolerance};
 use primase_shaunwhite::shaders::{Payload, base_uv::derive};
 use primase_testdata::{Game, Tool, install_file, own_scratch, tool};
 use std::process::Command;
@@ -369,7 +367,9 @@ fn hand_worked_uv_graph_uses_vs_rows_and_keeps_cut_bindings_unknown() {
         uv.derivation.words.iter().map(|(_, w)| *w).collect::<Vec<_>>(),
         [24, 25, 26, 28, 29, 30]
     );
-    assert!(uv.inputs.iter().any(|i|matches!(&i.role,primase_core::shader::InputRole::Lanes(l) if l[0].semantic==primase_core::Semantic::TexCoord(0))));
+    assert!(uv.inputs.iter().any(
+        |i| matches!(&i.role,iridia_interface::InputRole::Lanes(l) if l[0].semantic==Attribute::TexCoord(0))
+    ));
     assert!(
         uv.constants
             .iter()

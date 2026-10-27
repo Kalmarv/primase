@@ -190,7 +190,7 @@ fn numeric_slot_ties_prefer_the_selected_mtd_declaration() {
 /// where it states none, and the MTD-only bindings state none.
 #[test]
 fn the_stored_tiling_types_become_the_bindings_addressing() {
-    use primase_core::shader::AddressMode;
+    use iridia_interface::AddressMode;
     use primase_fromsoft::flver::Tiling;
     let mut src = source();
     src.textures = vec![

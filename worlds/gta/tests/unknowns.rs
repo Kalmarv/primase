@@ -8,11 +8,10 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 use std::collections::BTreeMap;
 
+use iridia_interface::{ConstantRole, InputRole, OutputRole, RenderState, Stage};
 use primase_core::World;
 use primase_core::pass::{Options, PassLog};
-use primase_core::shader::{
-    ConstantRole, InputRole, OutputRole, RenderState, Shader, ShaderBinding, Stage, TextureSource,
-};
+use primase_core::{shader::Shader, shader::ShaderBinding, shader::TextureSource};
 use primase_gta::components::{GtaEffectTechniques, GtaMaterialEffect, GtaShader, GtaShaderTable};
 use primase_gta::passes::resolve_shaders::RESOLVE_GTA_SHADERS;
 use primase_gta::read::source::GtaSource;
@@ -123,7 +122,7 @@ fn what_is_left_unknown_on_a_region() {
         binding.state.verify().unwrap();
         verified += 1;
         stenciled += usize::from(binding.state.stencil.is_some());
-        wireframe += usize::from(binding.state.fill == Some(primase_core::shader::Fill::Wireframe));
+        wireframe += usize::from(binding.state.fill == Some(iridia_interface::Fill::Wireframe));
         *masks
             .entry(
                 binding

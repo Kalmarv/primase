@@ -2,7 +2,6 @@
 //! Programs of the stages naga has no entry point for, built by hand: a hull program (a control-point function and a
 //! patch-constant function), the domain program that reads its patches, and a vertex program that feeds them. They
 //! validate against the functions the interface says, are shown as text, and are refused by the WGSL writer by name.
-use naga::{Expression, Statement};
 use iridia::build::{Builder, Kind};
 use iridia::emit;
 use iridia::{
@@ -10,6 +9,7 @@ use iridia::{
     ScalarType, ShaderFormat, Stage, StageFacts, SystemValue, TessDomain, TessTopology, Value, Varying,
     VaryingProvenance,
 };
+use naga::{Expression, Statement};
 
 fn varying(name: &str, index: u32, width: u8, system: Option<SystemValue>) -> Varying {
     Varying {
@@ -320,10 +320,7 @@ fn the_geometry_function_returns_its_vertices_count_and_strip_starts() {
     let bound = exe.bind_resources(&resources).unwrap();
     struct None_;
     impl iridia_exec::Backend for None_ {
-        fn sample(
-            &mut self,
-            _: iridia_exec::ImageSample<iridia_exec::Element>,
-        ) -> Result<[f32; 4], String> {
+        fn sample(&mut self, _: iridia_exec::ImageSample<iridia_exec::Element>) -> Result<[f32; 4], String> {
             Err("none".into())
         }
     }

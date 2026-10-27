@@ -147,7 +147,7 @@ fn over_is_baked_to_summed_slot_weights() {
 /// floor(0.5 * 2) = 1, the right one (red 255), where bilinear gives the mean.
 #[test]
 fn a_stated_nearest_filter_samples_the_nearest_texel() {
-    use primase_core::pbr::{Filter, Filters};
+    use iridia_interface::{Filter, Filters};
     let (mut w, host, proto) = world(Composition::Sum);
     let mut l = w.get::<LayeredMaterial>(host).unwrap().clone();
     if let Some(Channel::Source(Source::Mask { texture, .. })) =

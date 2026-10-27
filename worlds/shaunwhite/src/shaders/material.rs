@@ -2,9 +2,8 @@
 //! No frame, light, fog, influence or vertex-output value is supplied here. Unknown words remain Unknown.
 use super::albedo::DerivedAlbedo;
 use crate::components::MaterialRef;
-use primase_core::shader::{
-    ConstantBinding, ConstantRole, ConstantType, ResourceId, ResourceKind, ScalarType, StageBinding,
-};
+use iridia_interface::{ConstantBinding, ConstantRole, ConstantType, ResourceId, ResourceKind, ScalarType};
+use primase_core::shader::StageBinding;
 use std::collections::BTreeMap;
 
 fn part(c: &ConstantBinding, start: u32, end: u32) -> Result<ConstantBinding, String> {
@@ -72,7 +71,7 @@ pub fn bind_material(derived: &DerivedAlbedo, material: &MaterialRef) -> Result<
 
 /// Fill the same established controls before any consumer chooses a derivation or record.
 pub(crate) fn bind_stage(
-    interface: &primase_core::shader::Interface,
+    interface: &iridia_interface::Interface,
     stage: &StageBinding,
     material: &MaterialRef,
 ) -> Result<StageBinding, String> {
@@ -83,7 +82,7 @@ pub(crate) fn bind_stage(
 
 /// Pack established material words for a derived program without manufacturing a source shader binding.
 pub(crate) fn bind_constants(
-    interface: &primase_core::shader::Interface,
+    interface: &iridia_interface::Interface,
     constants: &[ConstantBinding],
     material: &MaterialRef,
 ) -> Result<Vec<ConstantBinding>, String> {

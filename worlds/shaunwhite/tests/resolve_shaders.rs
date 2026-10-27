@@ -1,8 +1,9 @@
 //! Exact material constraints and stored-record variants. Full forward colour is not an albedo derivation.
 #![allow(clippy::unwrap_used, reason = "explicit fixture and gate assertions")]
+use iridia_interface::{ConstantRole, OutputRole, Stage};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
-use primase_core::shader::{ConstantRole, MaterialPrograms, OutputRole, Shader, ShaderBinding, Stage};
 use primase_core::{Mesh, Primitive, Semantic, Stream, Topology, World};
+use primase_core::{shader::MaterialPrograms, shader::Shader, shader::ShaderBinding};
 use primase_shaunwhite::components::{
     MaterialRef, MaterialState, MeshFormat, ShaderInputs, ShaderLibrary, ShaderPasses,
 };

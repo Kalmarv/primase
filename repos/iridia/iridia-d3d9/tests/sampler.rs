@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, reason = "hand-worked native enum fixture")]
-use primase_core::pbr::{Filter, MipFilter};
-use primase_core::shader::{AddressMode, SamplerState};
+use iridia_interface::{AddressMode, SamplerState};
+use iridia_interface::{Filter, MipFilter};
 #[test]
 fn native_sampler_pairs_keep_addresses_filters_and_unknowns() {
     let s = iridia_d3d9::sampler_states([

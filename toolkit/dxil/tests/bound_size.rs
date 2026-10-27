@@ -4,9 +4,7 @@
 //! size the source binds when the lift is given it, as D3D12 bounds a constant buffer read by the view and not by the
 //! declaration (`fixtures/bound_palette_vs.hlsl`).
 use iridia::{BoundSizes, Program, ResourceId, ResourceKind, SystemValue};
-use iridia_exec::{
-    Backend, Element, Executable, ImageLoad, ImageQuery, ImageSample, Resources, Runner,
-};
+use iridia_exec::{Backend, Element, Executable, ImageLoad, ImageQuery, ImageSample, Resources, Runner};
 
 const PROGRAM: &[u8] = include_bytes!("fixtures/bound_palette_vs.dxil");
 

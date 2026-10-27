@@ -1,5 +1,5 @@
-use primase_core::shader::AlphaComparison;
 use iridia::output_uses::{AlphaDither, AlphaExpr, Known, alpha_tests, discard_compares};
+use iridia_interface::AlphaComparison;
 
 #[test]
 fn alpha_reference_requires_structural_data_and_a_disjoint_dither_source() {

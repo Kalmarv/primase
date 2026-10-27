@@ -9,6 +9,7 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 use std::collections::{BTreeMap, BTreeSet};
 
+use iridia_interface::Stage;
 use primase_anvil::passes::RESOLVE_ANVIL_SHADERS;
 use primase_anvil::read::convert::{
     AnvilOptions, AnvilReader, CellSelection, Edition, ForgeFile, GridSelection, Levels,
@@ -17,8 +18,8 @@ use primase_anvil::read::placements::{InstancedCollision, InstancedLevels};
 use primase_core::convert::Reader;
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassLog};
-use primase_core::shader::{Shader, ShaderBinding, Stage};
 use primase_core::{Instance, World};
+use primase_core::{shader::Shader, shader::ShaderBinding};
 use primase_testdata::{Game, install};
 
 #[test]

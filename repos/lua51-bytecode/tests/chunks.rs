@@ -2,8 +2,8 @@
 //! reader is checked against the format and not against code that writes it.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
-use primase_bytes::Endian;
 use lua51_bytecode::{Call, Chunk, Constant, Op, Value, calls};
+use primase_bytes::Endian;
 
 fn cat(parts: &[&[u8]]) -> Vec<u8> {
     parts.concat()

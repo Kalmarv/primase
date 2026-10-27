@@ -17,7 +17,7 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::shader::{D3dClass, ResourceKind};
+use iridia_interface::{D3dClass, ResourceKind};
 use primase_gta::components::{GtaEffect, GtaEffectParameters, GtaShaderTable};
 use primase_gta::passes::resolve_shaders::value_bytes;
 use primase_gta::rage::sgd2;

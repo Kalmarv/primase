@@ -21,6 +21,10 @@
 //! constant is compared with the material word it reads ([`FieldComparison`]).
 use std::collections::BTreeMap;
 
+use iridia::ResourceKind;
+use iridia_exec::ImageSample;
+use iridia_exec::probe::{AnsweredReads, affine_uv};
+use iridia_interface::{NormalEncoding, OutputBinding, OutputRole, ScalarEncoding};
 use primase_core::detail::{
     DETAIL_LIMIT, Detail, DetailLerp, DetailMix, DetailSample, DetailSamples, DetailSurface,
     DetailedMaterial, Frozen, GlossScale, LUMA, ReflectanceTerm, SurfaceLowering, Weight, WeightStep, chain,
@@ -28,10 +32,6 @@ use primase_core::detail::{
 };
 use primase_core::layered::{Source, mask_value};
 use primase_core::pbr::{TextureRef, UvTransform};
-use primase_core::shader::{NormalEncoding, OutputBinding, OutputRole, ScalarEncoding};
-use iridia::ResourceKind;
-use iridia_exec::ImageSample;
-use iridia_exec::probe::{AnsweredReads, affine_uv};
 
 use crate::detail_probe::ProgramProbe;
 pub use crate::probe_accept::BOUND_UNITS;
@@ -2461,8 +2461,8 @@ fn roles_of(probe: &mut ProgramProbe, outputs: Outputs) -> Result<SlotRoles, Str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use primase_core::shader::{D3dSignature, ScalarType, SystemValue, Value, Varying, VaryingProvenance};
     use iridia::Label;
+    use iridia_interface::{D3dSignature, ScalarType, SystemValue, Value, Varying, VaryingProvenance};
 
     fn target(n: u32) -> Label {
         Label {

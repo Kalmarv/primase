@@ -2,7 +2,7 @@
 //! readers share them: both state signatures and constant buffers in D3D's terms. Nothing here is evaluation; a
 //! number the table does not map is refused with its name (an `Err` the reader reports), never guessed.
 
-use primase_core::shader::{
+use iridia_interface::{
     ConstantType, D3dSignature, InterpMode, InterpSampling, Interpolation, Label, Majorness, ScalarType,
     Stage, SystemValue, Value, Varying, VaryingProvenance,
 };

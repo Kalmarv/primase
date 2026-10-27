@@ -1,8 +1,8 @@
 #![allow(clippy::unwrap_used)]
 //! Programs in MojoShader's dialect, written as it writes them, lifted: they validate and are written as WGSL; what the
 //! dialect does not have is refused by name.
-use iridia_mojo::{Attribute, Constant, Hints, Sampler, lift};
 use iridia::{Stage, emit};
+use iridia_mojo::{Attribute, Constant, Hints, Sampler, lift};
 
 const GAMMA: &str = "#ifdef GL_ES
 precision mediump float;
@@ -309,11 +309,7 @@ fn what_the_lifter_makes_of_its_programs_is_the_versions() {
             (name.to_owned(), outcome)
         })
         .collect();
-    let current = iridia::gate::table(
-        "primase-mojoshader",
-        iridia_mojo::LIFTER_VERSION,
-        &outcomes,
-    );
+    let current = iridia::gate::table("primase-mojoshader", iridia_mojo::LIFTER_VERSION, &outcomes);
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
     let committed = std::fs::read_to_string(dir.join("lifted.hashes")).unwrap_or_default();
     if let Err(what) = iridia::gate::check(&committed, &current) {

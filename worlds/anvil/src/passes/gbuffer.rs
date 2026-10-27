@@ -1,7 +1,7 @@
 //! Decode the resolver's output roles through core's one surface reading. A role's ordinal is not a target register:
 //! several roles can name different lanes of the same target, and the signature can list targets out of order.
-use primase_core::shader::surface::{Place, Surface};
-use primase_core::shader::{Interface, OutputRole};
+use iridia_interface::{Interface, OutputRole};
+use iridia_interface::{surface::Place, surface::Surface};
 
 use super::resolve_shaders::{output_bindings, target_of};
 
@@ -244,7 +244,7 @@ pub(super) mod fixture {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use primase_core::shader::NormalEncoding;
+    use iridia_interface::NormalEncoding;
 
     #[test]
     fn surface_places_follow_target_labels_not_signature_or_role_ordinals() {

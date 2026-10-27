@@ -7,11 +7,11 @@
 //!
 //! Needs the WARP oracle program with the `d3d12rt` case form (the configured `Tool::Warp`) and the scratch folder. The
 //! scenes and rays are made from fixed seeds.
-use primase_dxil::lift;
 use iridia::D3dClass;
 use iridia_exec::{
     Backend, Element, Executable, Geometry, ImageSample, Instance, InstanceFlags, Resources, Scene,
 };
+use primase_dxil::lift;
 use primase_testdata::{Tool, own_scratch, tool};
 use std::collections::BTreeMap;
 use std::path::Path;

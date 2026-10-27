@@ -634,7 +634,7 @@ fn layout_fits(name: &str, layout: &BufferLayout) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shader::{
+    use crate::{
         BufferLayout, Constant, ConstantType, D3dBinding, ResourceProvenance, SampleType, TextureDim,
     };
 
@@ -696,7 +696,7 @@ mod tests {
     fn storage() -> ResourceKind {
         ResourceKind::Storage {
             target: StorageTarget::Buffer(BufferKind::Raw),
-            access: crate::shader::Access::ReadWrite,
+            access: crate::Access::ReadWrite,
         }
     }
     fn broken(i: &Interface, expect: &str) {

@@ -3,12 +3,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use iridia_interface::{Filter, Filters, MipFilter};
 use primase_core::pass::{Options, Pass, PassLog};
-use primase_core::pbr::{AlphaMode, Filter, Filters, MipFilter, PbrMaterial, Shading, Wrap};
 use primase_core::{
     Collision, Entity, Instance, Marker, MaterialVariants, Mesh, Primitive, Semantic, Stream, SurfaceClass,
     Surfaces, Topology, Transform, World,
 };
+use primase_core::{pbr::AlphaMode, pbr::PbrMaterial, pbr::Shading, pbr::Wrap};
 
 use super::*;
 use crate::components::names::parse;

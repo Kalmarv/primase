@@ -501,7 +501,8 @@ fn metallic_without_source_evidence_is_counted_dielectric() {
 /// outputs is not lowered, and the lowering does not drop that silently. A program without one names nothing.
 #[test]
 fn a_program_reading_a_vertex_colour_is_named_in_the_approximations() {
-    use primase_core::shader::{MaterialPrograms, ProgramFacts, Stage};
+    use iridia_interface::Stage;
+    use primase_core::{shader::MaterialPrograms, shader::ProgramFacts};
     const VERTEX: &[u8] = include_bytes!("fixtures/layered_cloth_vs.dxbc");
     let colour = primase_dxbc::reflection(VERTEX)
         .unwrap()

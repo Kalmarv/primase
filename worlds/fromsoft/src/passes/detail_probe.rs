@@ -11,11 +11,12 @@
 //! texture coordinate sets take the probe's coordinate unless explicitly overridden by ProgramProbe::set_input.
 use std::collections::BTreeMap;
 
-use primase_core::World;
-use primase_core::shader::{ConstantRole, OutputBinding, RenderState, StageBinding, TextureSource};
 use iridia::output_uses::bind_output_uses;
 use iridia_exec::evaluate::Constants;
 use iridia_exec::{Layout, PixelShader, ProgramShader, Sampler};
+use iridia_interface::{ConstantRole, OutputBinding, RenderState};
+use primase_core::World;
+use primase_core::{shader::StageBinding, shader::TextureSource};
 
 use crate::layer_bake::resolve::{
     ProgramTexture, Unbound, program_texture, register, render_state, resolve, textures_of,

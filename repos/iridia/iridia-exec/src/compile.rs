@@ -1693,12 +1693,7 @@ pub(super) fn compile(
         globals,
         flush_denormals: p.modes.flush_denormals,
         workgroup: ep
-            .filter(|_| {
-                matches!(
-                    p.stage,
-                    iridia::Stage::Compute | iridia::Stage::Mesh
-                )
-            })
+            .filter(|_| matches!(p.stage, iridia::Stage::Compute | iridia::Stage::Mesh))
             .map(|e| e.workgroup_size),
         mesh_output,
         builtins: f

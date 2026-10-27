@@ -445,6 +445,37 @@ pub enum Semantic {
     Weights(u8),
 }
 
+/// A shader input reads a vertex attribute by the same meaning a mesh stream has.
+impl From<Semantic> for iridia_interface::Attribute {
+    fn from(s: Semantic) -> Self {
+        use iridia_interface::Attribute as A;
+        match s {
+            Semantic::Position => A::Position,
+            Semantic::Normal => A::Normal,
+            Semantic::Tangent(n) => A::Tangent(n),
+            Semantic::TexCoord(n) => A::TexCoord(n),
+            Semantic::Color(n) => A::Color(n),
+            Semantic::Joints(n) => A::Joints(n),
+            Semantic::Weights(n) => A::Weights(n),
+        }
+    }
+}
+
+impl From<iridia_interface::Attribute> for Semantic {
+    fn from(a: iridia_interface::Attribute) -> Self {
+        use iridia_interface::Attribute as A;
+        match a {
+            A::Position => Semantic::Position,
+            A::Normal => Semantic::Normal,
+            A::Tangent(n) => Semantic::Tangent(n),
+            A::TexCoord(n) => Semantic::TexCoord(n),
+            A::Color(n) => Semantic::Color(n),
+            A::Joints(n) => Semantic::Joints(n),
+            A::Weights(n) => Semantic::Weights(n),
+        }
+    }
+}
+
 /// One vertex stream, decoded to the type a writer can use directly. Readers that need to keep a game's
 /// quantisation (SNORM16 positions with a scale, packed normals) attach it as a dialect component and lower later.
 #[derive(Clone, Debug, PartialEq)]

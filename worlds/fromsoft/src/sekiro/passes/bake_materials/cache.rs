@@ -1,11 +1,11 @@
 //! Material bake identity and payload, using the caller's memo store.
 use super::pixels::{self, Baked, BoundTexture, Prepared};
+use iridia_exec::{Filtering, Input, Lane, SampledTexture};
 use primase_cache::{Key, KeyBuilder, source_hash};
 use primase_core::World;
 use primase_core::pass::PassLog;
 use primase_core::pass::memo::{Key as MemoKey, Memo};
 use primase_image::sampling::{Address, Subtexel, Transfer};
-use iridia_exec::{Filtering, Input, Lane, SampledTexture};
 use std::collections::BTreeMap;
 
 /// The files that compute a bake's bytes in this crate: editing one retires every entry made before.
@@ -375,19 +375,20 @@ mod tests {
     )]
     use super::super::pixels;
     use super::*;
+    use iridia_interface::Attribute;
     use primase_cache::Cache;
     use std::sync::Arc;
 
     fn memo(cache: &Arc<Cache>, build: &str) -> Memo {
         Memo::new(cache.clone(), build).unwrap()
     }
-    use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform};
-    use primase_core::shader::{
+    use iridia_interface::{
         ConstantBinding, ConstantRole, InputBinding, InputRole, LaneStream, NormalEncoding, NormalSpace,
-        OutputBinding, OutputRole, ResourceKind, SamplerState, ScalarEncoding, Shader, ShaderFormat, Stage,
-        StageBinding, TextureBinding, TextureSource,
+        OutputBinding, OutputRole, ResourceKind, SamplerState, ScalarEncoding, ShaderFormat, Stage,
     };
-    use primase_core::{ColorSpace, Entity, Semantic, TexFormat, TexRole, Texture};
+    use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform};
+    use primase_core::{ColorSpace, Entity, TexFormat, TexRole, Texture};
+    use primase_core::{shader::Shader, shader::StageBinding, shader::TextureBinding, shader::TextureSource};
 
     struct Fixture {
         world: World,
@@ -487,17 +488,17 @@ mod tests {
                 } else {
                     for v in &program.interface.inputs {
                         let role = match (v.label.name.to_ascii_uppercase().as_str(), v.label.index) {
-                            ("POSITION", 0) => InputRole::Stream(Semantic::Position),
+                            ("POSITION", 0) => InputRole::Stream(Attribute::Position),
                             ("SV_INSTANCEID", 0) => InputRole::System,
                             ("TEXCOORD", 0) => InputRole::Lanes(vec![
                                 LaneStream {
-                                    semantic: Semantic::TexCoord(0),
+                                    semantic: Attribute::TexCoord(0),
                                     first: 0,
                                     count: 2,
                                     component: 0,
                                 },
                                 LaneStream {
-                                    semantic: Semantic::TexCoord(1),
+                                    semantic: Attribute::TexCoord(1),
                                     first: 2,
                                     count: 2,
                                     component: 0,
@@ -672,7 +673,7 @@ mod tests {
         let TextureSource::Texture { sampler, .. } = &mut f.pixel.textures[0].source else {
             unreachable!()
         };
-        sampler.wrap[0] = Some(primase_core::shader::AddressMode::Clamp);
+        sampler.wrap[0] = Some(iridia_interface::AddressMode::Clamp);
         assert_ne!(original, f.prepare(2).key("build-a").unwrap());
         let TextureSource::Texture { sampler, .. } = &mut f.pixel.textures[0].source else {
             unreachable!()

@@ -26,8 +26,9 @@
 #![allow(clippy::unwrap_used)]
 use std::collections::{BTreeMap, BTreeSet};
 
+use iridia_interface::Stage;
 use primase_core::World;
-use primase_core::shader::{Shader, ShaderBinding, Stage};
+use primase_core::{shader::Shader, shader::ShaderBinding};
 use primase_fromsoft::detail_derive::{BOUND_UNITS, derive};
 use primase_fromsoft::detail_probe::ProgramProbe;
 use primase_fromsoft::materials::{Definition, LayeredMaterial, Material};

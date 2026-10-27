@@ -2,10 +2,10 @@
 //! The geometry fixture (`geometry.hlsl`: a triangle in, a strip of its corners with x scaled, a restart, a strip of its
 //! corners moved by the primitive and the instance; two instances) drawn on the CPU: the primitives a topology makes,
 //! the instances of each, the strips they emit. The values are the arithmetic of the HLSL.
-use primase_dxil::lift;
 use iridia::{GsInput, GsOutput};
 use iridia_exec::geometry::{GeometryShader, Strip, Topology, Vertex};
 use iridia_exec::{Sample, Sampler};
+use primase_dxil::lift;
 use std::collections::BTreeMap;
 use std::path::Path;
 

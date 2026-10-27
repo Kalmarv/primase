@@ -1,13 +1,13 @@
 //! Synthetic gates on our own dxc-built fixtures (`tests/fixtures/*.hlsl`, compiled with the command at the top of
 //! each): the lifted interface, execution (`iridia_exec::ProgramShader`) against outputs derived from the HLSL by
 //! hand, every truncation refused, and a seeded mutation run that must never panic.
-use primase_dxil::lift;
 use iridia::{
     ConstantType, InterpMode, InterpSampling, ResourceKind, SampleType, ScalarType, SystemValue, TextureDim,
     Value,
 };
 use iridia_exec::ProgramShader;
 use iridia_exec::{PixelShader, Sample};
+use primase_dxil::lift;
 
 const BLEND: &[u8] = include_bytes!("fixtures/blend.dxil");
 

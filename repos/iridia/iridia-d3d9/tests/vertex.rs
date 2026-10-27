@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
 //! Hand-assembled SM3 tokens: bank edges, packed output semantics and independent arithmetic answers.
-use iridia_d3d9::{lift, read};
 use iridia::{Stage, SystemValue};
+use iridia_d3d9::{lift, read};
 use iridia_exec::{ProgramShader, Sample};
 
 fn instruction(op: u32, operands: &[u32]) -> Vec<u32> {
@@ -54,10 +54,7 @@ fn vertex_banks_clip_position_and_packed_semantics_keep_their_values() {
     let p = lift(&bytes).unwrap();
     assert_eq!(p.stage, Stage::Vertex);
     assert_eq!(p.provenance.target, "vs_3_0");
-    assert_eq!(
-        p.provenance.source_hash,
-        Some(iridia::source_hash(&bytes))
-    );
+    assert_eq!(p.provenance.source_hash, Some(iridia::source_hash(&bytes)));
     assert!(p.interface.inputs.iter().all(|v| v.interp.is_none()));
     let outs = &p.interface.outputs;
     assert_eq!(outs[0].system, Some(SystemValue::ClipPosition));

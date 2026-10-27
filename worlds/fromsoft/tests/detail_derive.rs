@@ -260,7 +260,8 @@ fn bound_world(
     name: &str,
     uv: [[f32; 2]; 3],
 ) -> Result<Option<primase_core::Entity>, Box<dyn std::error::Error>> {
-    use primase_core::shader::{SamplerState, Shader, ShaderBinding, ShaderFormat, TextureSource};
+    use iridia_interface::{SamplerState, ShaderFormat};
+    use primase_core::{shader::Shader, shader::ShaderBinding, shader::TextureSource};
     use primase_fromsoft::materials::{Definition, Material};
     let Some(bytes) = program(name)? else {
         return Ok(None);

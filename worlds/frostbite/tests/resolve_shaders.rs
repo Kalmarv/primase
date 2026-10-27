@@ -12,10 +12,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use iridia_interface::{ConstantRole, InputRole};
 use primase_compress::oodle::{Oodle, Version};
 use primase_core::World;
 use primase_core::pass::{Pass, PassLog};
-use primase_core::shader::{ConstantRole, InputRole, ShaderBinding, TextureSource};
+use primase_core::{shader::ShaderBinding, shader::TextureSource};
 use primase_frostbite::MESHSET;
 use primase_frostbite::bundle::Kind;
 use primase_frostbite::components::{FrostbiteMaterial, FrostbitePermutation, FrostbiteProgram};

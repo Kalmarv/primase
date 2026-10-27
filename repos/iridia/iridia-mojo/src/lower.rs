@@ -4,17 +4,17 @@
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 
-use naga::{
-    AddressSpace, ArraySize, BinaryOperator as Bo, Block, DerivativeAxis, DerivativeControl, Expression as E,
-    GlobalVariable, Handle, ImageClass, ImageDimension, LocalVariable, MathFunction as Mf,
-    RelationalFunction, ResourceBinding, SampleLevel, ScalarKind, Statement, TypeInner, UnaryOperator as Uo,
-};
 use iridia::build::{Builder, Kind, Val};
 use iridia::{
     BufferLayout, Constant as LayoutConstant, ConstantType, Conventions, D3dBinding, D3dClass, D3dModes,
     D3dSignature, Interface, InterpMode, InterpSampling, Interpolation, Label, Program, Provenance, Resource,
     ResourceId, ResourceKind, ResourceProvenance, SampleType, ScalarType, ShaderFormat, Stage, StageFacts,
     SystemValue, TextureDim, Value, Varying, VaryingProvenance, entry_io,
+};
+use naga::{
+    AddressSpace, ArraySize, BinaryOperator as Bo, Block, DerivativeAxis, DerivativeControl, Expression as E,
+    GlobalVariable, Handle, ImageClass, ImageDimension, LocalVariable, MathFunction as Mf,
+    RelationalFunction, ResourceBinding, SampleLevel, ScalarKind, Statement, TypeInner, UnaryOperator as Uo,
 };
 
 use crate::lex::{self, Spanned, Token};

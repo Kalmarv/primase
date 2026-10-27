@@ -1,9 +1,10 @@
 //! Prepare material masks and losses without changing the source world.
 use std::collections::BTreeMap;
 
+use iridia_interface::Filter;
 use primase_core::pass::PassLog;
-use primase_core::pbr::{Filter, PbrMaterial, Shading, TextureRef, UvTransform, Wrap};
 use primase_core::{ColorSpace, Entity, Name, NormalConvention, TexRole, Texture, TextureFile, World};
+use primase_core::{pbr::PbrMaterial, pbr::Shading, pbr::TextureRef, pbr::UvTransform, pbr::Wrap};
 
 use crate::{Error, Result};
 

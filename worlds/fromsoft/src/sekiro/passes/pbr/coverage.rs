@@ -9,9 +9,9 @@ use crate::materials::{Definition, Material, engine_alpha_reference};
 use crate::metaparam::texture_number;
 use crate::passes::program_reads::{self, Reads, SlotRead};
 use crate::sekiro::source::{MaterialShader, ShaderBundle, ShaderStage};
-use primase_core::shader::{ResourceId, ResourceKind};
-use primase_core::{Entity, World};
 use iridia::output_uses::{AlphaExpr, AlphaTest, Known, alpha_tests};
+use iridia_interface::{ResourceId, ResourceKind};
+use primase_core::{Entity, World};
 use std::collections::BTreeMap;
 
 /// A slot the programs read and the lowered UV set (`TexCoord(n)`) they sample it with.

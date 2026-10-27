@@ -4,8 +4,9 @@ use std::collections::BTreeMap;
 
 pub mod names;
 
-use primase_core::pbr::{Filters, Shading, Wrap};
+use iridia_interface::Filters;
 use primase_core::{Component, Entity, JsonError};
+use primase_core::{pbr::Shading, pbr::Wrap};
 use serde::Serialize;
 
 fn to_json<T: Serialize>(v: &T) -> Result<Option<serde_json::Value>, JsonError> {

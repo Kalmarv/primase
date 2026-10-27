@@ -55,12 +55,7 @@ pub fn containers(pack: &[u8]) -> Result<Vec<&[u8]>, Error> {
             why: "size past the pack",
         })?;
         let stored = container.get(4..20);
-        if size < 32
-            || dxcontainer::checksum(container)
-                .as_ref()
-                .map(|c| c.as_slice())
-                != stored
-        {
+        if size < 32 || dxcontainer::checksum(container).as_ref().map(|c| c.as_slice()) != stored {
             return Err(Error::Checksum { index, at });
         }
         out.push(container);

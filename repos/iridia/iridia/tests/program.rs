@@ -2,15 +2,15 @@
 //! The program representation on a hand-built pixel program (`uv * scale`, with a front-facing flag): the validator
 //! accepts it, finds each way the module and the interface can disagree, and the text and WGSL come out as worked out
 //! from the construction.
-use naga::{
-    AddressSpace, BinaryOperator, Binding, FunctionArgument, GlobalVariable, ResourceBinding, StructMember,
-    TypeInner,
-};
 use iridia::build::{Builder, Kind};
 use iridia::{
     BufferLayout, Conventions, D3dModes, Interface, Label, Problem, Program, Provenance, Resource,
     ResourceId, ResourceKind, ResourceProvenance, ScalarType, ShaderFormat, Stage, SystemValue, Value,
     Varying, VaryingProvenance,
+};
+use naga::{
+    AddressSpace, BinaryOperator, Binding, FunctionArgument, GlobalVariable, ResourceBinding, StructMember,
+    TypeInner,
 };
 
 fn varying(name: &str, index: u32, system: Option<SystemValue>, scalar: ScalarType, width: u8) -> Varying {

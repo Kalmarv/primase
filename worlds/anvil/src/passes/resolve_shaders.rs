@@ -72,16 +72,19 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use iridia::matrix::state_lines;
 use iridia::{ProgramGraph, WordsRead};
-use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
-use primase_core::shader::{
+use iridia_interface::{
     AlphaTest, Compare, ConstantBinding, ConstantRole, Cull, DepthState, FrameParameter, InputBinding,
     InputRole, Interface, NormalEncoding, NormalSpace, ObjectMatrix, ObjectParameter, Occluded,
-    OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, ScalarEncoding, Shader,
-    ShaderBinding, ShaderFormat, Stage, StageBinding, SystemValue, TextureBinding, TextureDim, TextureSource,
-    VariantKey, Varying, ViewParameter,
+    OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, ScalarEncoding,
+    ShaderFormat, Stage, SystemValue, TextureDim, VariantKey, Varying, ViewParameter,
 };
+use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::shader::{MaterialPrograms, ProgramFacts};
 use primase_core::{ColorSpace, Component, Entity, MaterialVariants, Mesh, Name, Semantic, Texture, World};
+use primase_core::{
+    shader::Shader, shader::ShaderBinding, shader::StageBinding, shader::TextureBinding,
+    shader::TextureSource,
+};
 
 use crate::components::{
     AnvilLayout, AnvilMaterial, AnvilMesh, AnvilShaders, MaterialBinding, MaterialFlags, MaterialValue,
@@ -589,8 +592,8 @@ fn engine_constants(
 
 fn by_register(
     interface: &Interface,
-    class: primase_core::shader::D3dClass,
-) -> Vec<(u32, &primase_core::shader::Resource)> {
+    class: iridia_interface::D3dClass,
+) -> Vec<(u32, &iridia_interface::Resource)> {
     interface
         .resources
         .iter()
@@ -1016,7 +1019,7 @@ impl ResolveAnvilShaders {
                 label: v.label.clone(),
                 role: match stage {
                     Stage::Vertex => match stream(&v.label.name, v.label.index) {
-                        Some(s) => InputRole::Stream(s),
+                        Some(s) => InputRole::Stream(s.into()),
                         None => InputRole::Unknown {
                             why: format!(
                                 "vertex input {} is not a mesh semantic this pass maps",
@@ -1036,7 +1039,7 @@ impl ResolveAnvilShaders {
             .collect();
         // constants: cb3 the Material's, the rest the engine's
         let mut constants = Vec::new();
-        for (register, r) in by_register(interface, primase_core::shader::D3dClass::ConstantBuffer) {
+        for (register, r) in by_register(interface, iridia_interface::D3dClass::ConstantBuffer) {
             let ResourceKind::ConstantBuffer { layout } = &r.kind else {
                 continue;
             };
@@ -1048,7 +1051,7 @@ impl ResolveAnvilShaders {
         }
         // textures
         let mut bindings = Vec::new();
-        for (register, r) in by_register(interface, primase_core::shader::D3dClass::ShaderResource) {
+        for (register, r) in by_register(interface, iridia_interface::D3dClass::ShaderResource) {
             let ResourceKind::Texture { dim, .. } = r.kind else {
                 continue;
             };
@@ -1694,7 +1697,7 @@ mod key_tests {
         assert!(facts.instruction_count.unwrap().count > 0);
         assert_eq!(
             facts.instruction_count.unwrap().unit,
-            primase_core::shader::InstructionUnit::DxbcInstructions
+            iridia_interface::InstructionUnit::DxbcInstructions
         );
         assert!(
             facts
@@ -1704,7 +1707,7 @@ mod key_tests {
         );
         assert_eq!(
             facts.surface,
-            primase_core::shader::Surface::read(outputs.iter().map(|output| (output.lanes, &output.role)))
+            iridia_interface::Surface::read(outputs.iter().map(|output| (output.lanes, &output.role)))
         );
     }
 
@@ -1816,14 +1819,17 @@ mod key_tests {
         assert_eq!(of(None, 3), [(0b1111, OutputRole::unknown("…"))]);
     }
 
-    /// The G-buffer read as a surface (`primase_core::shader::surface`), the one reading a viewer's composite takes, by
+    /// The G-buffer read as a surface (`iridia_interface::surface`), the one reading a viewer's composite takes, by
     /// shading class: target 0 the albedo and, opaque, the roughness in w; target 1 the diamond normal and, in w, the
     /// metalness for class 1 or the occlusion of every light for classes 3 to 5; class 1's emission is target 2's z,
     /// one lane that scales the albedo. A blended material has no roughness, and the classes 3 to 5 no metalness and
     /// no emission.
     #[test]
     fn the_gbuffer_is_read_as_a_surface_by_shading_class() {
-        use primase_core::shader::surface::{Base, Emission, Place, Roughness, Surface, Term};
+        use iridia_interface::{
+            surface::Base, surface::Emission, surface::Place, surface::Roughness, surface::Surface,
+            surface::Term,
+        };
         let program = primase_dxbc::lift(LIFTED).unwrap();
         let read = |class: Option<u8>, opaque: bool| -> (Surface, Vec<u32>) {
             let outputs = output_bindings(&program.interface, class, opaque);

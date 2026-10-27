@@ -9,9 +9,9 @@
 //! A texture keeps the stored texels it was made from ([`stored`]), so a bake's pipeline state
 //! ([`super::PipelineState`]) carries the very pixels it samples.
 
-use primase_core::shader::{AddressMode, SamplerState};
-use primase_image::sampling::{Address, Levels, Subtexel, Transfer};
 use iridia_exec::{Filtering, Image, Lod, SampledTexture, SamplerUse, Unstated};
+use iridia_interface::{AddressMode, SamplerState};
+use primase_image::sampling::{Address, Levels, Subtexel, Transfer};
 
 use crate::{Result, invalid};
 

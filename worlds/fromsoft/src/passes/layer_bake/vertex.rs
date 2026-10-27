@@ -11,11 +11,11 @@
 use super::binding::{FrozenFrame, Inputs, TEXTURE_SCROLL_POLICY, frozen_words};
 use super::resolve::{layer_channels, register};
 use crate::{Result, invalid};
-use primase_core::Semantic;
-use primase_core::shader::{ConstantRole, InputRole, LaneStream, Shader as CoreShader, StageBinding};
 use iridia::{Interface, Varying};
 use iridia_exec::ProgramShader;
 use iridia_exec::{Input, Lane, PixelShader, Sampler};
+use iridia_interface::{ConstantRole, InputRole, LaneStream};
+use primase_core::{shader::Shader as CoreShader, shader::StageBinding};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -203,18 +203,22 @@ impl VertexStage {
                     )
                 })?;
             let feed = match role {
-                InputRole::Stream(Semantic::Position) => Feed::Position,
-                InputRole::Stream(Semantic::Normal) => Feed::Normal,
-                InputRole::Stream(Semantic::Tangent(0)) => Feed::Tangent,
-                InputRole::Stream(Semantic::Joints(0)) => Feed::Joints,
-                InputRole::Stream(Semantic::Weights(0)) => Feed::Weights,
-                InputRole::Stream(Semantic::TexCoord(0)) => Feed::TexCoord0,
-                InputRole::Stream(Semantic::Color(0)) => {
+                InputRole::Stream(iridia_interface::Attribute::Position) => Feed::Position,
+                InputRole::Stream(iridia_interface::Attribute::Normal) => Feed::Normal,
+                InputRole::Stream(iridia_interface::Attribute::Tangent(0)) => Feed::Tangent,
+                InputRole::Stream(iridia_interface::Attribute::Joints(0)) => Feed::Joints,
+                InputRole::Stream(iridia_interface::Attribute::Weights(0)) => Feed::Weights,
+                InputRole::Stream(iridia_interface::Attribute::TexCoord(0)) => Feed::TexCoord0,
+                InputRole::Stream(iridia_interface::Attribute::Color(0)) => {
                     policies.insert(COLOUR0_POLICY.into(), 1);
                     Feed::Colour0
                 }
-                InputRole::Stream(Semantic::Color(n)) if (1..=6).contains(n) => Feed::Member(*n),
-                InputRole::Stream(s) if *s == super::resolve::SECOND_COLOUR => {
+                InputRole::Stream(iridia_interface::Attribute::Color(n)) if (1..=6).contains(n) => {
+                    Feed::Member(*n)
+                }
+                InputRole::Stream(s)
+                    if *s == iridia_interface::Attribute::from(super::resolve::SECOND_COLOUR) =>
+                {
                     // only x is handed on: anything more would be a value the bake does not know
                     if required & 0b1110 != 0 {
                         return Err(invalid(
@@ -230,13 +234,13 @@ impl VertexStage {
                     // the packed pair of coordinate sets
                     [
                         LaneStream {
-                            semantic: Semantic::TexCoord(0),
+                            semantic: iridia_interface::Attribute::TexCoord(0),
                             first: 0,
                             count: 2,
                             component: 0,
                         },
                         LaneStream {
-                            semantic: Semantic::TexCoord(1),
+                            semantic: iridia_interface::Attribute::TexCoord(1),
                             first: 2,
                             count: 2,
                             component: 0,
@@ -245,7 +249,7 @@ impl VertexStage {
                     // the tangent's w as an input of its own
                     [
                         LaneStream {
-                            semantic: Semantic::Tangent(0),
+                            semantic: iridia_interface::Attribute::Tangent(0),
                             first: 0,
                             count: 1,
                             component: 3,
@@ -492,8 +496,8 @@ impl VertexStage {
 mod tests {
     use super::*;
     use crate::layer_bake::resolve::resolve_vertex;
+    use iridia_interface::ShaderFormat;
     use primase_core::World;
-    use primase_core::shader::ShaderFormat;
 
     const VERTEX: &[u8] = include_bytes!("../../../tests/fixtures/layered_vs.dxbc");
     const PIXEL: &[u8] = include_bytes!("../../../tests/fixtures/layered.dxbc");
@@ -638,7 +642,7 @@ mod tests {
             .position(|i| i.label.name.eq_ignore_ascii_case("BINORMAL"))
             .unwrap();
         binding.inputs[label].role = InputRole::Lanes(vec![LaneStream {
-            semantic: Semantic::Tangent(0),
+            semantic: iridia_interface::Attribute::Tangent(0),
             first: 0,
             count: 1,
             component: 2,
@@ -708,7 +712,7 @@ mod tests {
             .iter()
             .position(|i| i.label.name.eq_ignore_ascii_case("COLOR") && i.label.index == 1)
             .unwrap();
-        binding.inputs[at].role = InputRole::Stream(Semantic::Color(0));
+        binding.inputs[at].role = InputRole::Stream(iridia_interface::Attribute::Color(0));
         let pixel = primase_dxbc::lift(SIGN_PIXEL).unwrap();
         let planned =
             VertexStage::new(&shader, &binding, &pixel, false, &FrozenFrame::static_bake(0.)).unwrap();

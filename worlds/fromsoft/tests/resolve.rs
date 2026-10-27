@@ -4,16 +4,17 @@
 //! layered material's binding holds, worked out from the HLSL, fxc's listing of its buffers and the material.
 use iridia_exec::PixelShader;
 use iridia_exec::ProgramShader;
-use primase_core::shader::{
-    AddressMode, BlendFactor, BlendOp, Compare, ConstantRole, FrameParameter, FrameTexture, InputRole,
-    LaneStream, MatrixLines, NormalEncoding, NormalSpace, ObjectParameter, OutputRole, ResourceId,
-    SamplerState, ScalarEncoding, Shader, ShaderBinding, ShaderFormat, Stage, TextureSource, ViewParameter,
+use iridia_interface::{
+    AddressMode, Attribute, BlendFactor, BlendOp, Compare, ConstantRole, FrameParameter, FrameTexture,
+    InputRole, LaneStream, MatrixLines, NormalEncoding, NormalSpace, ObjectParameter, OutputRole, ResourceId,
+    SamplerState, ScalarEncoding, ShaderFormat, Stage, ViewParameter,
 };
 use primase_core::{
     BindingId, ColorSpace, Deformation, Entity, Influences, Joint, JointId, Mesh, Name, Primitive, Rest,
     Semantic, Skeleton, Skin, Slot, Stream, TexFormat, TexRole, Texture, Topology, Transform, WeightRule,
     World,
 };
+use primase_core::{shader::Shader, shader::ShaderBinding, shader::TextureSource};
 use primase_fromsoft::layer_bake::resolve::{
     SECOND_COLOUR, UNBOUND_MATERIAL_FIELDS, Unbound, render_state, resolve,
 };
@@ -54,7 +55,7 @@ const CLOTH_ROWS_PROGRAM: &[u8] = include_bytes!("fixtures/layered_cloth_rows_vs
 const BILLBOARD_PROGRAM: &[u8] = include_bytes!("fixtures/layered_billboard_vs.dxbc");
 
 /// A DXBC vertex program as the pass holds it.
-fn dxbc_shader(bytes: &[u8], interface: primase_core::shader::Interface) -> Shader {
+fn dxbc_shader(bytes: &[u8], interface: iridia_interface::Interface) -> Shader {
     Shader {
         format: ShaderFormat::Dxbc,
         bytecode: bytes.to_vec(),
@@ -535,7 +536,7 @@ fn the_pass_binds_every_layered_material_to_shared_shader_and_texture_entities()
             programs: vec![ShaderProgram {
                 name: "M[Multiple]_Gbuf.vpo".into(),
                 stage: ShaderStage::Vertex,
-                format: primase_core::shader::ShaderFormat::Dxbc,
+                format: iridia_interface::ShaderFormat::Dxbc,
                 code: Arc::from(VERTEX_PROGRAM),
             }],
             parameters: None,
@@ -613,7 +614,7 @@ fn the_pass_binds_every_layered_material_to_shared_shader_and_texture_entities()
         assert!(facts.instruction_count.unwrap().count > 0);
         assert_eq!(
             facts.instruction_count.unwrap().unit,
-            primase_core::shader::InstructionUnit::DxbcInstructions
+            iridia_interface::InstructionUnit::DxbcInstructions
         );
         assert!(
             facts
@@ -747,7 +748,7 @@ fn the_bake_binds_a_frozen_frame_to_the_roles() {
 #[test]
 fn a_vertex_program_is_bound_to_streams_and_engine_roles() {
     use ConstantRole::{Object, View};
-    use primase_core::Semantic;
+
     let interface = primase_dxbc::reflection(VERTEX_PROGRAM).unwrap();
     assert_eq!(interface.stage, Stage::Vertex);
     let mut world = World::default();
@@ -768,33 +769,33 @@ fn a_vertex_program_is_bound_to_streams_and_engine_roles() {
     assert_eq!(
         inputs,
         [
-            stream("POSITION0", Semantic::Position),
-            stream("NORMAL0", Semantic::Normal),
-            stream("TANGENT0", Semantic::Tangent(0)),
-            stream("COLOR1", SECOND_COLOUR),
+            stream("POSITION0", Attribute::Position),
+            stream("NORMAL0", Attribute::Normal),
+            stream("TANGENT0", Attribute::Tangent(0)),
+            stream("COLOR1", SECOND_COLOUR.into()),
             (
                 "TEXCOORD0".to_owned(),
                 InputRole::Lanes(vec![
                     LaneStream {
-                        semantic: Semantic::TexCoord(0),
+                        semantic: Attribute::TexCoord(0),
                         first: 0,
                         count: 2,
                         component: 0
                     },
                     LaneStream {
-                        semantic: Semantic::TexCoord(1),
+                        semantic: Attribute::TexCoord(1),
                         first: 2,
                         count: 2,
                         component: 0
                     }
                 ])
             ),
-            stream("TEXCOORD1", Semantic::Color(1)),
-            stream("TEXCOORD2", Semantic::Color(2)),
-            stream("TEXCOORD3", Semantic::Color(3)),
-            stream("TEXCOORD4", Semantic::Color(4)),
-            stream("TEXCOORD5", Semantic::Color(5)),
-            stream("TEXCOORD6", Semantic::Color(6)),
+            stream("TEXCOORD1", Attribute::Color(1)),
+            stream("TEXCOORD2", Attribute::Color(2)),
+            stream("TEXCOORD3", Attribute::Color(3)),
+            stream("TEXCOORD4", Attribute::Color(4)),
+            stream("TEXCOORD5", Attribute::Color(5)),
+            stream("TEXCOORD6", Attribute::Color(6)),
             ("SV_InstanceID0".to_owned(), InputRole::System),
         ]
     );
@@ -930,7 +931,7 @@ fn the_cloth_permutations_inputs_and_switch_are_stated() {
     assert_eq!(
         role("BINORMAL0"),
         InputRole::Lanes(vec![LaneStream {
-            semantic: Semantic::Tangent(0),
+            semantic: Attribute::Tangent(0),
             first: 0,
             count: 1,
             component: 3,
@@ -943,7 +944,7 @@ fn the_cloth_permutations_inputs_and_switch_are_stated() {
         }
     );
     // the streams the program does read keep theirs
-    assert_eq!(role("POSITION0"), InputRole::Stream(Semantic::Position));
+    assert_eq!(role("POSITION0"), InputRole::Stream(Attribute::Position));
     let switch = stage
         .constants
         .iter()
@@ -986,14 +987,14 @@ fn further_coordinates_follow_member_order_and_tangents_keep_semantic_indices() 
         assert_eq!(
             *lane,
             LaneStream {
-                semantic: Semantic::TexCoord(2 + k as u8),
+                semantic: Attribute::TexCoord(2 + k as u8),
                 first: 2 * k as u8,
                 count: 2,
                 component: 0,
             }
         );
     }
-    assert_eq!(role("TANGENT2"), InputRole::Stream(Semantic::Tangent(2)));
+    assert_eq!(role("TANGENT2"), InputRole::Stream(Attribute::Tangent(2)));
     // the layered programs' float members keep their streams
     let layered = primase_dxbc::reflection(VERTEX_PROGRAM).unwrap();
     let layered =
@@ -1005,7 +1006,7 @@ fn further_coordinates_follow_member_order_and_tangents_keep_semantic_indices() 
         .iter()
         .find(|i| i.label.name.eq_ignore_ascii_case("TEXCOORD") && i.label.index == 1)
         .unwrap();
-    assert_eq!(member.role, InputRole::Stream(Semantic::Color(1)));
+    assert_eq!(member.role, InputRole::Stream(Attribute::Color(1)));
 }
 
 #[test]
@@ -1048,7 +1049,7 @@ fn a_further_tangent_binding_requires_the_materials_primitive_to_store_it() {
         Stream::F32x4(vec![[0.0, 1.0, 0.0, -1.0]; 3]),
     );
     world.insert(mesh, Mesh::new(vec![primitive.clone()]));
-    assert_eq!(role(&world), InputRole::Stream(Semantic::Tangent(2)));
+    assert_eq!(role(&world), InputRole::Stream(Attribute::Tangent(2)));
     primitive
         .streams
         .insert(Semantic::Tangent(2), Stream::F32x4(vec![[0.0; 4]; 2]));
@@ -1098,7 +1099,7 @@ fn layout_indices_zero_one_four_are_not_compacted_by_a_program_reading_zero_and_
             .iter()
             .find(|i| i.label.name.eq_ignore_ascii_case("TANGENT") && i.label.index == set)
             .unwrap();
-        assert_eq!(input.role, InputRole::Stream(Semantic::Tangent(set as u8)));
+        assert_eq!(input.role, InputRole::Stream(Attribute::Tangent(set as u8)));
     }
     let mut absent = primitive;
     absent.streams.remove(&Semantic::Tangent(4));
@@ -1205,8 +1206,8 @@ fn a_skinned_vertex_program_is_bound_to_joint_streams_and_a_palette() {
             .map(|i| i.role.clone())
             .unwrap()
     };
-    assert_eq!(role("BLENDINDICES0"), InputRole::Stream(Semantic::Joints(0)));
-    assert_eq!(role("BLENDWEIGHT0"), InputRole::Stream(Semantic::Weights(0)));
+    assert_eq!(role("BLENDINDICES0"), InputRole::Stream(Attribute::Joints(0)));
+    assert_eq!(role("BLENDWEIGHT0"), InputRole::Stream(Attribute::Weights(0)));
     let palette = stage
         .constants
         .iter()
@@ -1595,7 +1596,7 @@ fn an_alpha_tested_programs_discard_makes_fc_alpha_refs_x_its_reference() {
                         4,
                         ConstantRole::AlphaReference {
                             value: x,
-                            compared: primase_core::shader::AlphaComparison::Output
+                            compared: iridia_interface::AlphaComparison::Output
                         }
                     ),
                     (84, 4, bits(&[y]))
@@ -2108,7 +2109,7 @@ fn the_pass_binds_the_other_sat_materials_through_their_bundle() {
         programs: vec![ShaderProgram {
             name: program.into(),
             stage: ShaderStage::Pixel,
-            format: primase_core::shader::ShaderFormat::Dxbc,
+            format: iridia_interface::ShaderFormat::Dxbc,
             code: Arc::from(PROGRAM),
         }],
         parameters: None,
@@ -2151,7 +2152,7 @@ fn a_one_set_vertex_program_binds_its_coordinates_as_the_first_set() {
         .find(|i| i.label.name == "TEXCOORD")
         .map(|i| i.role.clone())
         .unwrap();
-    assert_eq!(uv, InputRole::Stream(Semantic::TexCoord(0)));
+    assert_eq!(uv, InputRole::Stream(Attribute::TexCoord(0)));
 }
 
 /// A fixed-function (`GXFlver_*`) material's textures are addressed by the kind's own name, as the program calls them

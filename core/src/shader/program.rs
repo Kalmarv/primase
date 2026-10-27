@@ -3,9 +3,9 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{Interface, ShaderFormat};
 use crate::json::JsonError;
 use crate::world::{Component, Entity};
+use iridia_interface::{Interface, ShaderFormat};
 
 /// `core.shader`: one shader program, on its own entity. The bytecode (or source text) is kept exactly as the game
 /// stored it, in its [`ShaderFormat`]; what the program exposes, its stage, varyings and resources, is in primase's
@@ -55,7 +55,7 @@ impl Component for Shader {
 mod tests {
     use super::*;
     use crate::World;
-    use crate::shader::{
+    use iridia_interface::{
         BufferKind, BufferLayout, Constant, ConstantType, Label, Resource, ResourceId, ResourceKind,
         ResourceProvenance, ScalarType, Stage, StageFacts, Value as Lanes, Varying, VaryingProvenance,
     };

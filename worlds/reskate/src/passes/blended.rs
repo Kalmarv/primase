@@ -335,7 +335,7 @@ fn footprint(
     r: &TextureRef,
     sizes: &[(u32, u32)],
 ) -> Option<Vec<Option<Vec<bool>>>> {
-    use primase_core::pbr::{Filter, MipFilter};
+    use iridia_interface::{Filter, MipFilter};
     let transform = r.transform.unwrap_or(UvTransform::IDENTITY);
     // bilinear reach unless the slot states nearest both ways
     let reach = !(r.filters.mag == Some(Filter::Nearest) && r.filters.min == Some(Filter::Nearest));
@@ -436,7 +436,7 @@ fn judge(
                 .iter()
                 .enumerate()
                 .map(|(k, &(lw, lh))| {
-                    (k == 0 || r.filters.mip != Some(primase_core::pbr::MipFilter::None))
+                    (k == 0 || r.filters.mip != Some(iridia_interface::MipFilter::None))
                         .then(|| vec![true; lw as usize * lh as usize])
                 })
                 .collect(),
@@ -1128,7 +1128,8 @@ mod tests {
     /// stays a mask.
     #[test]
     fn a_coarser_level_sampled_is_judged_whatever_the_triangles_size() {
-        use primase_core::pbr::{Filter, Filters, MipFilter, TextureRef};
+        use iridia_interface::{Filter, Filters, MipFilter};
+        use primase_core::pbr::TextureRef;
         let mut w = World::new();
         let tex = w.spawn();
         let base: Vec<u8> = (0..32)
@@ -1205,7 +1206,8 @@ mod tests {
     /// uniform, so frost applies.
     #[test]
     fn a_base_only_slot_with_no_mesh_judges_the_base_only() {
-        use primase_core::pbr::{Filters, MipFilter, TextureRef};
+        use iridia_interface::{Filters, MipFilter};
+        use primase_core::pbr::TextureRef;
         let mut w = World::new();
         let tex = w.spawn();
         w.insert(
@@ -1252,7 +1254,8 @@ mod tests {
     /// middle though it holds none of their centres, so its alpha varies and it stays a mask.
     #[test]
     fn a_thin_triangle_over_transparent_texels_stays_a_mask() {
-        use primase_core::pbr::{Filter, Filters, TextureRef};
+        use iridia_interface::{Filter, Filters};
+        use primase_core::pbr::TextureRef;
         let mut w = World::new();
         let tex = w.spawn();
         let level: Vec<u8> = (0..8)

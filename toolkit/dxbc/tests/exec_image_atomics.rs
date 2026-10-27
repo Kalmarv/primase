@@ -3,12 +3,12 @@
 //! lifted from DXBC, run by the executor against textures that apply the operations (tests/fixtures/
 //! image_atomic_results.hlsl: four threads in order, each adding, exchanging and maxing into texels of one texture and
 //! storing the old words it reads to another).
-use primase_dxbc::lift;
 use iridia::D3dClass;
 use iridia::ResourceId;
 use iridia_exec::{
     Backend, Element, Executable, ImageAtomic, ImageAtomicOp, ImageSample, ImageStore, Resources,
 };
+use primase_dxbc::lift;
 use std::collections::BTreeMap;
 use std::path::Path;
 

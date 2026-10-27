@@ -610,10 +610,7 @@ pub fn shaders(body: &[u8]) -> Vec<(usize, &[u8])> {
             continue;
         };
         if container.len() >= 32
-            && dxcontainer::checksum(container)
-                .as_ref()
-                .map(|c| c.as_slice())
-                == container.get(4..20)
+            && dxcontainer::checksum(container).as_ref().map(|c| c.as_slice()) == container.get(4..20)
         {
             out.push((start, container));
             at = start.saturating_add(container.len());

@@ -9,6 +9,7 @@
 //! with the pixel stage only.
 use std::collections::{BTreeMap, BTreeSet};
 
+use iridia_interface::Stage;
 use primase_anvil::components::{AnvilMaterial, AnvilMesh};
 use primase_anvil::passes::{MESH_LAYOUT_FIELD, RESOLVE_ANVIL_SHADERS};
 use primase_anvil::read::archive::{Archive, At};
@@ -22,7 +23,7 @@ use primase_anvil::read::rider::{HAIR_COLOURS, colours};
 use primase_anvil::read::skeleton::SKELETON;
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassLog};
-use primase_core::shader::{ShaderBinding, Stage};
+use primase_core::shader::ShaderBinding;
 use primase_core::{Component, Entity, Name, World};
 use primase_testdata::{Game, install};
 

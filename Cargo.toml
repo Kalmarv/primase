@@ -22,6 +22,7 @@ members = [
     "repos/lua51-bytecode",
     "toolkit/dxbc",
     "repos/iridia/iridia-d3d9",
+    "repos/iridia/iridia-interface",
     "repos/iridia/iridia",
     "repos/iridia/iridia-exec",
     "toolkit/dxil",
@@ -93,6 +94,7 @@ primase-morpheme = { path = "toolkit/morpheme" }
 lua51-bytecode = { path = "repos/lua51-bytecode" }
 primase-dxbc = { path = "toolkit/dxbc" }
 iridia-d3d9 = { path = "repos/iridia/iridia-d3d9" }
+iridia-interface = { path = "repos/iridia/iridia-interface" }
 iridia = { path = "repos/iridia/iridia" }
 iridia-exec = { path = "repos/iridia/iridia-exec" }
 primase-dxil = { path = "toolkit/dxil" }

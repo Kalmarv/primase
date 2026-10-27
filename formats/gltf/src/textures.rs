@@ -21,7 +21,8 @@
 
 use std::collections::BTreeMap;
 
-use primase_core::pbr::{Filters, Wrap};
+use iridia_interface::Filters;
+use primase_core::pbr::Wrap;
 use primase_core::{
     ColorSpace, Component, Entity, Geometry, Name, NormalConvention, Source, TexFormat, TexRole, Texture,
     World,

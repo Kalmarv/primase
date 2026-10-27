@@ -221,7 +221,7 @@ pub fn program_frame(bundle: &ShaderBundle) -> Result<[u32; 2], String> {
         .program(&name)
         .filter(|p| p.stage == ShaderStage::Vertex)
         .ok_or_else(|| format!("{}: no vertex program {name}", bundle.name))?;
-    if program.format != primase_core::shader::ShaderFormat::Dxil {
+    if program.format != iridia_interface::ShaderFormat::Dxil {
         return Err(format!(
             "{name}: a SpeedTree program read as DXIL, this one is not"
         ));

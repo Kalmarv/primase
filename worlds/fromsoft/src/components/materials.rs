@@ -123,7 +123,7 @@ pub struct Binding {
     pub uv_number: i32,
     /// The addressing along u and v the FLVER texture record stores (`None` where it states none, and for a binding
     /// only the MTD states).
-    pub address: [Option<primase_core::shader::AddressMode>; 2],
+    pub address: [Option<iridia_interface::AddressMode>; 2],
     /// Whether the area's texture catalog holds the texture (the reader's fact; a texture it lacks is not loaded).
     pub available: bool,
 }
@@ -392,7 +392,7 @@ impl Material {
     /// The material with every binding's addressing as the engine samples it: an addressing the source does not state
     /// is repeat, the same as a stated repeat.
     pub fn with_effective_addressing(&self) -> Material {
-        use primase_core::shader::AddressMode::Repeat;
+        use iridia_interface::AddressMode::Repeat;
         let mut effective = self.clone();
         let layered = effective.layered.iter_mut().flat_map(|l| l.bindings.values_mut());
         for binding in effective.bindings.values_mut().chain(layered) {

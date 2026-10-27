@@ -28,7 +28,7 @@ mod program;
 mod reads;
 pub mod rt;
 pub mod surface;
-pub use primase_core::shader::{
+pub use iridia_interface::{
     Access, BufferKind, BufferLayout, Constant, ConstantType, D3dBinding, D3dClass, D3dSignature,
     DomainFacts, GeometryFacts, GsInput, GsOutput, HitGroup, HitGroupKind, HullFacts, InstructionCount,
     InstructionUnit, Interface, InterpMode, InterpSampling, Interpolation, Label, Majorness, Member,

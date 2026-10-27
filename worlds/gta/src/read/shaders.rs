@@ -11,7 +11,8 @@
 //! links each material to its effect.
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::shader::{Shader, ShaderFormat};
+use iridia_interface::ShaderFormat;
+use primase_core::shader::Shader;
 use primase_core::{Entity, Name, World};
 
 use crate::components::{

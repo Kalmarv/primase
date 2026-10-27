@@ -1,12 +1,14 @@
-//! The GPU half of [`primase_core::shader::surface`]: a program's [`Surface`] packed as rows of four words a uniform
+//! The GPU half of [`iridia_interface::surface`]: a program's [`Surface`] packed as rows of four words a uniform
 //! table holds ([`rows`]), and [`WGSL`], the functions that decode a G-buffer's values by those rows as the CPU reading
 //! does. A composite that shows a program's outputs lit binds the program's render targets, reads the target a row names
 //! and passes its four values to these functions: which lane is which term, and how it is stored, is never the
 //! composite's to say.
 //!
 //! The layout of a row is described at the head of [`WGSL`]; the row indices below are its constants.
-use primase_core::shader::surface::{Base, Emission, Place, Roughness, Surface, Term};
-use primase_core::shader::{NormalEncoding, ScalarEncoding};
+use iridia_interface::{NormalEncoding, ScalarEncoding};
+use iridia_interface::{
+    surface::Base, surface::Emission, surface::Place, surface::Roughness, surface::Surface, surface::Term,
+};
 
 /// The WGSL functions: `primase_base`, `primase_normal`, `primase_roughness`, `primase_scalar`, `primase_colour` and
 /// `primase_emission` decode a term, `primase_stored` shows its lanes as the program wrote them; each takes a row and

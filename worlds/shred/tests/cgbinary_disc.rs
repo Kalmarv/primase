@@ -1,8 +1,8 @@
 //! Container structure from the published CgBinaryProgram description, checked
 //! over every packaged shader occurrence. Microcode semantics are a separate gate.
-use rsx_reader::cgbinary::{Stage, parse_prefix};
 use primase_shred::read::pak::Pak;
 use primase_testdata::{Depth, Game, Query, depth, expect_found, install, seed};
+use rsx_reader::cgbinary::{Stage, parse_prefix};
 use std::path::{Path, PathBuf};
 
 fn archives(dir: &Path, out: &mut Vec<PathBuf>) {

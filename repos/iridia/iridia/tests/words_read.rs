@@ -23,10 +23,7 @@ fn buffer(program: &Program, register: u32) -> ResourceId {
 fn a_program_that_loads_whole_registers_reads_only_the_lanes_it_uses() {
     // the buffer at b4 holds 245 rows, the four clip rows (words 980-995), 16 rows and the camera's three lanes
     // (1060-1062); the program loads the camera's whole register, and the lane beside it (1063) is not read
-    let program = primase_dxil::lift(include_bytes!(
-        "fixtures/tables_vs.dxil"
-    ))
-    .expect("dxc's program lifts");
+    let program = primase_dxil::lift(include_bytes!("fixtures/tables_vs.dxil")).expect("dxc's program lifts");
     let reads = program.constant_reads().expect("the value graph");
     let pass = buffer(&program, 4);
     let expected: Vec<u32> = (980..996).chain(1060..1063).collect();
@@ -56,8 +53,8 @@ fn a_program_that_loads_whole_registers_reads_only_the_lanes_it_uses() {
 #[test]
 fn a_constant_that_reaches_only_a_storage_write_is_read() {
     // `scale` (b0, word 0) is used only in the value `raw.Store` writes
-    let program = primase_dxil::lift(include_bytes!("fixtures/compute_basic.dxil"))
-        .expect("dxc's program lifts");
+    let program =
+        primase_dxil::lift(include_bytes!("fixtures/compute_basic.dxil")).expect("dxc's program lifts");
     let values = Values::of_program(&program).expect("the value graph");
     assert!(values.outputs().is_empty());
     assert!(!values.writes().is_empty());
@@ -111,8 +108,7 @@ fn a_resource_the_program_never_names_is_unread() {
 fn a_dxbc_program_reads_the_lanes_it_computes_with() {
     // fxc's pixel program of one buffer at b0 (`f` row 0, `u` row 1, `i` row 2) that uses every lane of rows 0 and 1
     // and the x and y lanes of row 2
-    let program = primase_dxbc::lift(include_bytes!("fixtures/modes.dxbc"))
-        .expect("fxc's program lifts");
+    let program = primase_dxbc::lift(include_bytes!("fixtures/modes.dxbc")).expect("fxc's program lifts");
     let reads = program.constant_reads().expect("the value graph");
     let b0 = buffer(&program, 0);
     assert_eq!(reads.rows(b0), [0, 1, 2]);

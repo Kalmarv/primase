@@ -20,15 +20,15 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 use std::collections::{BTreeMap, BTreeSet};
 
+use iridia_exec::ProgramShader;
+use iridia_exec::{
+    Grid, Input, Invocation, Layout, PixelShader, View, Views, evaluate::Constants, evaluate_raw,
+};
 use primase_core::World;
 use primase_core::shader::Shader;
 use primase_gta::components::{GtaEffect, GtaStage};
 use primase_gta::passes::resolve_shaders::split_program_name;
 use primase_gta::read::source::GtaSource;
-use iridia_exec::ProgramShader;
-use iridia_exec::{
-    Grid, Input, Invocation, Layout, PixelShader, View, Views, evaluate::Constants, evaluate_raw,
-};
 use primase_testdata::{Game, install, keys};
 
 /// A program lifted and ready to run, or why not.

@@ -1,11 +1,8 @@
 #![allow(clippy::unwrap_used)]
 //! Hand-worked SDB2 source/table/payload fixture; layout is corroborated by the native version-39 loader.
 //! Real-file checks frame every record and metadata tail, not a second home-made decoder's output.
-use primase_core::{
-    World,
-    gate::{GateReport, Tolerance},
-    shader::Stage,
-};
+use iridia_interface::Stage;
+use primase_core::{World, gate::GateReport, gate::Tolerance};
 use primase_shaunwhite::{
     components::ShaderLibrary,
     read::shaders::{read, read_into},

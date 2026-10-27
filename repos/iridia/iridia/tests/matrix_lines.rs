@@ -81,15 +81,11 @@ fn a_palette_blended_then_chosen_by_a_flag_is_read_by_rows() {
     for (fixture, program) in [
         (
             "dxc",
-            dxil(include_bytes!(
-                "fixtures/layered_cloth_blend_vs.dxil"
-            )),
+            dxil(include_bytes!("fixtures/layered_cloth_blend_vs.dxil")),
         ),
         (
             "fxc",
-            dxbc(include_bytes!(
-                "fixtures/layered_cloth_blend_vs.dxbc"
-            )),
+            dxbc(include_bytes!("fixtures/layered_cloth_blend_vs.dxbc")),
         ),
     ] {
         assert_eq!(
@@ -104,9 +100,7 @@ fn a_palette_blended_then_chosen_by_a_flag_is_read_by_rows() {
 /// of its matrices: it shows no arrangement.
 #[test]
 fn a_palette_read_only_for_its_translations_shows_no_arrangement() {
-    let billboard = dxbc(include_bytes!(
-        "fixtures/layered_billboard_vs.dxbc"
-    ));
+    let billboard = dxbc(include_bytes!("fixtures/layered_billboard_vs.dxbc"));
     assert_eq!(
         palette_lines_of(&billboard, "VC_aObjMatrix"),
         Err(Unshown::NotApplied)
@@ -118,18 +112,9 @@ fn a_palette_read_only_for_its_translations_shows_no_arrangement() {
 #[test]
 fn a_matrix_applied_to_a_row_vector_is_read_by_rows() {
     for (fixture, program) in [
-        (
-            "vertex.dxil",
-            dxil(include_bytes!("fixtures/vertex.dxil")),
-        ),
-        (
-            "vertex.66.dxil",
-            dxil(include_bytes!("fixtures/vertex.66.dxil")),
-        ),
-        (
-            "vertex.od.dxil",
-            dxil(include_bytes!("fixtures/vertex.od.dxil")),
-        ),
+        ("vertex.dxil", dxil(include_bytes!("fixtures/vertex.dxil"))),
+        ("vertex.66.dxil", dxil(include_bytes!("fixtures/vertex.66.dxil"))),
+        ("vertex.od.dxil", dxil(include_bytes!("fixtures/vertex.od.dxil"))),
     ] {
         assert_eq!(
             lines_of(&program, "world_view_projection"),
@@ -151,8 +136,8 @@ fn a_constant_never_applied_shows_no_arrangement() {
 /// program reads but never applies keeps its role with the reason it is unshown. Other roles are left alone.
 #[test]
 fn a_stage_states_the_lines_of_its_matrices() {
-    use primase_core::shader::{ConstantBinding, ConstantRole, MatrixLines, ObjectParameter, ViewParameter};
     use iridia::matrix::state_lines;
+    use iridia_interface::{ConstantBinding, ConstantRole, MatrixLines, ObjectParameter, ViewParameter};
     let skin = dxbc(SKIN_VS);
     let graph = skin.graph().expect("the value graph");
     let constant = |name: &str, role: ConstantRole| {

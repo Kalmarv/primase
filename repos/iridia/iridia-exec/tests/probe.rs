@@ -4,9 +4,7 @@
 use std::collections::BTreeMap;
 
 use iridia::{Program, ResourceKind};
-use iridia_exec::probe::{
-    LOAD_STAND_IN, QUERY_STAND_IN, SAMPLE_STAND_IN, TextureUse, VertexProbe, Zeros,
-};
+use iridia_exec::probe::{LOAD_STAND_IN, QUERY_STAND_IN, SAMPLE_STAND_IN, TextureUse, VertexProbe, Zeros};
 
 const POSITION: [f32; 4] = [0.25, 0.5, 0.75, 1.0];
 const SCALE: [f32; 4] = [2.0, 2.0, 2.0, 1.0];

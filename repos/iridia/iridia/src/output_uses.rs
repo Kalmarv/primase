@@ -2,7 +2,7 @@
 //! binds a lane its source states no role for ([`OutputRole::Unknown`]) to [`OutputRole::Coverage`] or
 //! [`OutputRole::Opacity`]. A world's output bindings call it after stating their own roles; a lane with a role keeps
 //! it, and nothing is read from a program's or a target's name.
-use primase_core::shader::{BlendFactor, OutputBinding, OutputRole, RenderState};
+use iridia_interface::{BlendFactor, OutputBinding, OutputRole, RenderState};
 
 use crate::flow::Node;
 use crate::{Interface, ProgramGraph, SystemValue};

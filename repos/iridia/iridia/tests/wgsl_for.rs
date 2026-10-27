@@ -2,9 +2,9 @@
 //! naga's WGSL front end, so what is checked is what a pipeline is given.
 use std::collections::BTreeMap;
 
-use naga::{Binding, Interpolation, TypeInner};
 use iridia::emit::{ClipVaryings, Pipeline, wgsl_for};
 use iridia::{InterpMode, Interpolation as Interp, Program, ProgramError, ResourceKind, emit};
+use naga::{Binding, Interpolation, TypeInner};
 
 /// dxc's vertex program: SV_Position, TEXCOORD0, COLOR0 and one clip distance.
 fn vertex() -> Program {
@@ -281,8 +281,7 @@ fn resources_are_bound_where_the_pipeline_says() {
 #[test]
 fn a_sampler_heap_is_one_sampler() {
     // dxc's compute program samples with a sampler from the sampler heap at an index from a constant buffer
-    let program = primase_dxil::lift(include_bytes!("fixtures/heap.dxil"))
-        .expect("dxc's program lifts");
+    let program = primase_dxil::lift(include_bytes!("fixtures/heap.dxil")).expect("dxc's program lifts");
     let as_is = emit::wgsl(&program).expect("written");
     assert!(as_is.contains("binding_array<sampler>"), "{as_is}");
     let written = wgsl_for(

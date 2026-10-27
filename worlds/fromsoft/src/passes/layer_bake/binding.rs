@@ -3,19 +3,19 @@ use super::sampler::addressing;
 use super::state::{AlphaState, PipelineState, PixelState, SlotTexture, TARGETS, VertexState};
 use super::vertex::VertexStage;
 use crate::{Result, invalid, materials::LayeredMaterial};
-use primase_core::Entity;
-use primase_core::parallel::Threads;
-use primase_core::shader::{
-    AddressMode, ConstantRole, FrameParameter, MatrixLines, ObjectParameter, StageBinding, TextureSource,
-    ViewParameter,
-};
-use primase_image::sampling::Address;
 use iridia::Interface;
 use iridia_exec::ProgramShader;
 use iridia_exec::SampledTexture;
 use iridia_exec::{
     Grid, Input, Invocation, Lane, Layout, PixelShader, Raw, evaluate::Constants, evaluate_raw_with,
 };
+use iridia_interface::{
+    AddressMode, ConstantRole, FrameParameter, MatrixLines, ObjectParameter, ViewParameter,
+};
+use primase_core::Entity;
+use primase_core::parallel::Threads;
+use primase_core::{shader::StageBinding, shader::TextureSource};
+use primase_image::sampling::Address;
 use std::{collections::BTreeMap, sync::Arc};
 
 /// Frozen per-vertex input for one baked layer-weight group. Choosing groups
@@ -129,7 +129,7 @@ pub(crate) fn executor(bytecode: &[u8]) -> Result<ProgramShader> {
 /// A program's container of `format` (a game's: [`crate::Game::shader_format`]) lifted and ready to run: DXBC
 /// ([`executor`]) or DXIL.
 pub(crate) fn program_executor(
-    format: primase_core::shader::ShaderFormat,
+    format: iridia_interface::ShaderFormat,
     bytecode: &[u8],
 ) -> Result<ProgramShader> {
     program_executor_bound(format, bytecode, &iridia::BoundSizes::new())
@@ -138,11 +138,11 @@ pub(crate) fn program_executor(
 /// [`program_executor`] with the constant buffers `bound` names bound at the sizes it states (a stage's
 /// [`iridia::BoundSizes::of`]).
 pub(crate) fn program_executor_bound(
-    format: primase_core::shader::ShaderFormat,
+    format: iridia_interface::ShaderFormat,
     bytecode: &[u8],
     bound: &iridia::BoundSizes,
 ) -> Result<ProgramShader> {
-    use primase_core::shader::ShaderFormat;
+    use iridia_interface::ShaderFormat;
     match format {
         ShaderFormat::Dxbc => {
             ProgramShader::new(primase_dxbc::lift_with(bytecode, bound).map_err(lifting)?).map_err(evaluation)
@@ -197,7 +197,7 @@ pub const ALPHA_TEST_POLICY: &str = "alpha test off in the bake (FC_AlphaRef.x f
 /// (it reads no others). `interface` is the stage's program's, whose resources the binding names.
 pub(crate) fn program_constants(
     shader: &ProgramShader,
-    interface: &primase_core::shader::Interface,
+    interface: &iridia_interface::Interface,
     stage: &primase_core::shader::StageBinding,
     frame: &FrozenFrame,
     policies: &mut BTreeMap<String, u64>,
@@ -1143,7 +1143,7 @@ mod tests {
             let words = frozen_words(
                 &ConstantRole::AlphaReference {
                     value: reference,
-                    compared: primase_core::shader::AlphaComparison::Output,
+                    compared: iridia_interface::AlphaComparison::Output,
                 },
                 None,
                 &frame,
@@ -1161,7 +1161,7 @@ mod tests {
     #[test]
     fn the_repeat_takes_the_material_textures_and_not_the_engines() {
         use crate::materials::Binding;
-        use primase_core::shader::{
+        use iridia_interface::{
             Resource, ResourceId, ResourceKind, ResourceProvenance, SampleType, TextureDim,
         };
         use resolve::{MaterialTexture, ProgramTexture};

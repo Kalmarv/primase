@@ -15,10 +15,10 @@
 
 use std::collections::BTreeMap;
 
+use iridia_exec::{Field, Filtering, Layout, SampledTexture, SamplerUse, evaluate::Constants};
 use primase_core::{ColorSpace, Texture};
 use primase_image::sampling::{Address, Levels, Transfer};
 use primase_image::srgb_to_linear;
-use iridia_exec::{Field, Filtering, Layout, SampledTexture, SamplerUse, evaluate::Constants};
 
 use crate::components::{Shape, UnityMaterial, UnityProgramVariant, UnityTexture};
 use crate::{Result, invalid};
@@ -49,8 +49,8 @@ fn words(shape: Shape, array_size: u32) -> u32 {
 /// program reads, and its texture slots. A field named twice is an error.
 pub fn bind(name: &str, p: &UnityProgramVariant) -> Result<Bound> {
     let program = primase_dxbc::lift(&p.code).map_err(|e| invalid(format!("program of {name}: {e}")))?;
-    let shader = iridia_exec::ProgramShader::new(program)
-        .map_err(|e| invalid(format!("program of {name}: {e}")))?;
+    let shader =
+        iridia_exec::ProgramShader::new(program).map_err(|e| invalid(format!("program of {name}: {e}")))?;
     let read = iridia_exec::PixelShader::constant_buffers(&shader).to_vec();
     let mut layout = Layout {
         buffers: read.iter().map(|&(slot, rows)| (slot, rows * 4)).collect(),
@@ -223,8 +223,8 @@ mod tests {
 
     use super::*;
     use crate::components::UnityObject;
-    use primase_core::{TexFormat, TexRole};
     use iridia_exec::{Image, Lod};
+    use primase_core::{TexFormat, TexRole};
 
     fn texture(width: u32, height: u32, levels: &[&[[u8; 4]]], space: ColorSpace) -> Texture {
         Texture {

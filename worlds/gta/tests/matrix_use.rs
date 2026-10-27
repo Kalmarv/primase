@@ -10,8 +10,9 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 use std::collections::{BTreeMap, BTreeSet};
 
+use iridia_interface::SystemValue;
 use primase_core::World;
-use primase_core::shader::{Shader, SystemValue};
+use primase_core::shader::Shader;
 use primase_gta::components::{GtaEffect, GtaShaderTable, GtaStage};
 use primase_gta::passes::gbuffer;
 use primase_gta::read::source::GtaSource;

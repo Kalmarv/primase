@@ -40,12 +40,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::shader::{
-    BufferKind, Interface, ResourceId, ResourceKind, ScalarType, Shader, ShaderFormat, Stage, SystemValue,
-};
 use iridia::WordsRead;
 use iridia::flow::{At, Node, Values};
 use iridia_exec::probe::{BufferReads, ProbeRun, VertexProbe};
+use iridia_interface::{
+    BufferKind, Interface, ResourceId, ResourceKind, ScalarType, ShaderFormat, Stage, SystemValue,
+};
+use primase_core::shader::Shader;
 
 use super::clip_position::{ClipRows, pass_buffer};
 
@@ -101,7 +102,7 @@ pub enum MatrixLayout {
     /// Three rows directly after the header.
     Plain,
     /// One element (a translation), `prefix - 1` that no measured program reads, then each joint's three rows
-    /// `joint_stride` elements apart (see [`primase_core::shader::BufferTable::SkinnedMatrices`]).
+    /// `joint_stride` elements apart (see [`iridia_interface::BufferTable::SkinnedMatrices`]).
     Skinned { prefix: u8, joint_stride: u8 },
 }
 

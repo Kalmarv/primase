@@ -6,12 +6,12 @@
 //! instructions, samples and discard must be those it has alone ([`PixelShader::execute_with_derivatives`]); a pixel
 //! past the step limit must stop [`PixelShader::execute_lanes`] as it stops alone, the first such pixel named; and a
 //! grid evaluation must be the one made one pixel after another.
-use primase_core::parallel::Threads;
 use iridia_exec::evaluate::Constants;
 use iridia_exec::{
     Error, Execution, Grid, Image, Input, Invocation, Layout, PixelShader, ProgramShader, Raw, Sampler, View,
     Views, evaluate_raw_with,
 };
+use primase_core::parallel::Threads;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 

@@ -131,9 +131,8 @@ fn what_the_program_needs_and_is_not_given_is_refused() {
         let shader = shader.as_ref();
         let layout = Layout::of(shader).unwrap();
         let c = constants(&layout);
-        let message = |r: Result<_, iridia_exec::Error>| {
-            r.map(|_: iridia_exec::Evaluation| ()).unwrap_err().detail
-        };
+        let message =
+            |r: Result<_, iridia_exec::Error>| r.map(|_: iridia_exec::Evaluation| ()).unwrap_err().detail;
         let mut missing = inputs();
         missing.remove(&("texcoord".into(), 1));
         assert!(
@@ -363,10 +362,7 @@ fn quads_give_the_scalar_outputs_and_their_footprints() {
         .unwrap();
         assert_eq!(quads.pixels, scalar.pixels, "grid of {size}");
         // on several threads (a row, or row of quads, each): the same pixels and counts as one
-        for invocation in [
-            iridia_exec::Invocation::Scalar,
-            iridia_exec::Invocation::Quads,
-        ] {
+        for invocation in [iridia_exec::Invocation::Scalar, iridia_exec::Invocation::Quads] {
             let one = if invocation == iridia_exec::Invocation::Scalar {
                 &scalar
             } else {
@@ -413,8 +409,7 @@ fn quads_give_the_scalar_outputs_and_their_footprints() {
             "grid of {size}"
         );
         assert!(
-            seen.iter()
-                .all(|l| matches!(l, iridia_exec::Lod::Gradients(g)
+            seen.iter().all(|l| matches!(l, iridia_exec::Lod::Gradients(g)
                 if (0..2).all(|i| (0..2).all(|k| (g[i][k] - want[i][k]).abs() < 1e-6)))),
             "grid of {size}: {seen:?}"
         );

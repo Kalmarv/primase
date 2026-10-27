@@ -15,9 +15,10 @@
 
 mod common;
 
+use iridia_interface::Filter;
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
-use primase_core::pbr::{AlphaMode, Filter, PbrMaterial, Wrap};
 use primase_core::{ColorSpace, TexFormat, TexRole, Texture, World};
+use primase_core::{pbr::AlphaMode, pbr::PbrMaterial, pbr::Wrap};
 use primase_gltf::{GltfMaterialTextures, GltfSlot, read_with_images};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};

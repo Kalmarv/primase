@@ -6,17 +6,18 @@
 use crate::materials::{Binding, LayeredMaterial, MaterialView, ParameterValue};
 use crate::metaparam::Metaparam;
 use crate::{Result, invalid};
-use primase_core::Entity;
-use primase_core::shader::{
-    Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantBufferBinding,
-    ConstantRole, DepthState, FrameParameter, FrameTexture, InputBinding, InputRole, LaneStream, MatrixLines,
-    ObjectParameter, OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Shader,
-    Stage, StageBinding, TargetState, TextureBinding, TextureSource, ViewParameter,
-};
 use iridia::matrix::{Unshown, state_lines};
 use iridia::{D3dClass, Interface, Program, Resource, ScalarType, SystemValue};
 use iridia_exec::ProgramShader;
 use iridia_exec::{Layout, PixelShader};
+use iridia_interface::{
+    Attribute, Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantBufferBinding,
+    ConstantRole, DepthState, FrameParameter, FrameTexture, InputBinding, InputRole, LaneStream, MatrixLines,
+    ObjectParameter, OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Stage,
+    TargetState, ViewParameter,
+};
+use primase_core::Entity;
+use primase_core::{shader::Shader, shader::StageBinding, shader::TextureBinding, shader::TextureSource};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The stream that carries a layered mesh's second stored vertex colour (the element the FLVER indexes 1, which the
@@ -380,7 +381,7 @@ pub fn resolve(
             unreachable!("textures_of yields textures")
         };
         let individual_2d =
-            resource.count == 1 && dim == primase_core::shader::TextureDim::D2 && !arrayed && !multisampled;
+            resource.count == 1 && dim == iridia_interface::TextureDim::D2 && !arrayed && !multisampled;
         let register = register(resource)?;
         // the engine's own texture: the dither noise a neutral grey (the fade is off), the scene depth the frame's, any
         // other zero; each is counted by name
@@ -1096,9 +1097,9 @@ fn texture_scroll_set(name: &str) -> Option<u8> {
 fn further_uv_sets(
     interface: &Interface,
     index: u32,
-    input: &primase_core::shader::Varying,
+    input: &iridia_interface::Varying,
 ) -> Option<Vec<LaneStream>> {
-    let packed = |v: &primase_core::shader::Varying| v.value.scalar != ScalarType::Float;
+    let packed = |v: &iridia_interface::Varying| v.value.scalar != ScalarType::Float;
     if !packed(input) {
         return None;
     }
@@ -1115,7 +1116,7 @@ fn further_uv_sets(
     (0..u32::from(input.value.width).div_ceil(2))
         .map(|pair| {
             Some(LaneStream {
-                semantic: primase_core::Semantic::TexCoord(u8::try_from(first + pair).ok()?),
+                semantic: Attribute::TexCoord(u8::try_from(first + pair).ok()?),
                 first: u8::try_from(pair * 2).ok()?,
                 count: 2,
                 component: 0,
@@ -1150,7 +1151,7 @@ pub fn resolve_vertex_for_geometry(
         .filter(|p| p.material == Some(material))
         .collect();
     for input in &mut binding.stage.inputs {
-        let InputRole::Stream(primase_core::Semantic::Tangent(set)) = &input.role else {
+        let InputRole::Stream(Attribute::Tangent(set)) = &input.role else {
             continue;
         };
         let set = *set;
@@ -1195,7 +1196,7 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> 
     use super::vertex_probe::{
         CameraForm, camera_form, flat_constants, inputs_read, palette_indexed_by_vertex,
     };
-    use primase_core::Semantic;
+
     let interface = &shader.interface;
     // the program, lifted once: what it shows of itself (its value graph and a run) is read from it, and an error stays as
     // the reason of what needs it
@@ -1211,42 +1212,42 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> 
                 v.system,
             ) {
                 (_, _, Some(SystemValue::InstanceIndex)) => InputRole::System,
-                ("POSITION", 0, _) => InputRole::Stream(Semantic::Position),
-                ("NORMAL", 0, _) => InputRole::Stream(Semantic::Normal),
-                ("TANGENT", 0, _) => InputRole::Stream(Semantic::Tangent(0)),
+                ("POSITION", 0, _) => InputRole::Stream(Attribute::Position),
+                ("NORMAL", 0, _) => InputRole::Stream(Attribute::Normal),
+                ("TANGENT", 0, _) => InputRole::Stream(Attribute::Tangent(0)),
                 // a program that reads one coordinate set takes its two lanes alone
-                ("TEXCOORD", 0, _) if v.value.width <= 2 => InputRole::Stream(Semantic::TexCoord(0)),
+                ("TEXCOORD", 0, _) if v.value.width <= 2 => InputRole::Stream(Attribute::TexCoord(0)),
                 // the packed pair of texture coordinate sets: uv0 in `xy`, uv1 in `zw`
                 ("TEXCOORD", 0, _) => InputRole::Lanes(vec![
                     LaneStream {
-                        semantic: Semantic::TexCoord(0),
+                        semantic: Attribute::TexCoord(0),
                         first: 0,
                         count: 2,
                         component: 0,
                     },
                     LaneStream {
-                        semantic: Semantic::TexCoord(1),
+                        semantic: Attribute::TexCoord(1),
                         first: 2,
                         count: 2,
                         component: 0,
                     },
                 ]),
                 // the first vertex colour: the lowered geometry keeps it as `Color(0)` for the materials whose programs read it
-                ("COLOR", 0, _) => InputRole::Stream(Semantic::Color(0)),
-                ("COLOR", 1, _) => InputRole::Stream(SECOND_COLOUR),
+                ("COLOR", 0, _) => InputRole::Stream(Attribute::Color(0)),
+                ("COLOR", 1, _) => InputRole::Stream(SECOND_COLOUR.into()),
                 // the Byte4C members of the layered programs, four floats each; a coordinate pair of integers, or an effect
                 // program's one or two floats, is another input
                 ("TEXCOORD", n @ 1..=6, _) if v.value.scalar == ScalarType::Float && v.value.width == 4 => {
-                    InputRole::Stream(Semantic::Color(n as u8))
+                    InputRole::Stream(Attribute::Color(n as u8))
                 }
                 // the skinned permutation's joint indices and weights
-                ("BLENDINDICES", 0, _) => InputRole::Stream(Semantic::Joints(0)),
-                ("BLENDWEIGHT", 0, _) => InputRole::Stream(Semantic::Weights(0)),
+                ("BLENDINDICES", 0, _) => InputRole::Stream(Attribute::Joints(0)),
+                ("BLENDWEIGHT", 0, _) => InputRole::Stream(Attribute::Weights(0)),
                 // the cloth permutations take the tangent's w, the bitangent sign, as the byte of an input of its own: the
                 // program decodes it, `(byte - 127) / 127`, into the w of the tangent it passes on
                 ("BINORMAL", 0, _) if v.value.width == 1 && v.value.scalar == ScalarType::Uint => {
                     InputRole::Lanes(vec![LaneStream {
-                        semantic: Semantic::Tangent(0),
+                        semantic: Attribute::Tangent(0),
                         first: 0,
                         count: 1,
                         component: 3,
@@ -1254,7 +1255,7 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> 
                 }
                 // Like TANGENT0, a tangent label has a layout-defined stream identity.
                 ("TANGENT", n @ 1.., _) => match tangent_set(interface, n) {
-                    Some(set) => InputRole::Stream(Semantic::Tangent(set)),
+                    Some(set) => InputRole::Stream(Attribute::Tangent(set)),
                     None => InputRole::Unknown { why: "tangent semantic index is duplicated or exceeds core's set range".into() },
                 },
                 // an input the program declares and the value graph never reads needs no stream
@@ -1477,8 +1478,8 @@ pub const PALETTE_JOINTS: u32 = 256;
 pub const PALETTE_BOUND_POLICY: &str = "joint palette bound stated at 256 matrices (12,288 bytes), the largest observed in a capture of Elden Ring (the engine binds 64 in one skinned draw and 256 in 20 others; the model's own size is not read)";
 
 /// The bound stated for the palettes of a program of `format`, or none.
-fn palette_bound_size(format: primase_core::shader::ShaderFormat) -> Option<u32> {
-    (format == primase_core::shader::ShaderFormat::Dxil).then_some(PALETTE_JOINTS * 3 * 16)
+fn palette_bound_size(format: iridia_interface::ShaderFormat) -> Option<u32> {
+    (format == iridia_interface::ShaderFormat::Dxil).then_some(PALETTE_JOINTS * 3 * 16)
 }
 
 /// A vertex program's binding ([`resolve_vertex`]) and what the caller must count.
@@ -1697,7 +1698,7 @@ mod tests {
     /// them.
     #[test]
     fn a_program_texture_is_numbered_as_a_material_key_is() {
-        use primase_core::shader::{
+        use iridia_interface::{
             Resource, ResourceId, ResourceKind, ResourceProvenance, SampleType, TextureDim,
         };
         let resource = |name: &str| Resource {

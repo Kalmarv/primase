@@ -1,10 +1,6 @@
 #![allow(clippy::unwrap_used)]
 //! The program executor on hand-built programs: a scalar run with the derivatives the caller states, a quad's own
 //! derivatives, and the requests a 3D sample makes of its sampler.
-use naga::{
-    AddressSpace, Binding, DerivativeAxis, DerivativeControl, FunctionArgument, GlobalVariable, ImageClass,
-    ImageDimension, ResourceBinding, SampleLevel, ScalarKind, StructMember, TypeInner,
-};
 use iridia::build::{Builder, Kind, Val};
 use iridia::{
     BufferLayout, Conventions, D3dBinding, D3dClass, D3dModes, D3dSignature, Interface, Label, Program,
@@ -14,6 +10,10 @@ use iridia::{
 use iridia_exec::probe::AnsweredReads;
 use iridia_exec::{Dim, ImageLod, ImageSample, ProgramShader};
 use iridia_exec::{PixelShader, Sampler};
+use naga::{
+    AddressSpace, Binding, DerivativeAxis, DerivativeControl, FunctionArgument, GlobalVariable, ImageClass,
+    ImageDimension, ResourceBinding, SampleLevel, ScalarKind, StructMember, TypeInner,
+};
 
 fn val(expr: naga::Handle<naga::Expression>, kind: Kind, width: u8) -> Val {
     Val { expr, kind, width }

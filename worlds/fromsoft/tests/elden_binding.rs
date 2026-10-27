@@ -15,8 +15,9 @@
 //! - the outputs carry Elden Ring's G-buffer roles only ([`Game::gbuffer`]).
 //!
 //! It prints how many materials were bound and why the others were not.
+use iridia_interface::ConstantRole;
 use primase_core::World;
-use primase_core::shader::{ConstantRole, Shader, ShaderBinding, TextureSource};
+use primase_core::{shader::Shader, shader::ShaderBinding, shader::TextureSource};
 use primase_fromsoft::materials::{Definition, Material, ParameterValue};
 use primase_fromsoft::metaparam::texture_number;
 use primase_fromsoft::sekiro::source::{MaterialShader, ShaderBundle};
@@ -87,7 +88,7 @@ fn elden_ring_materials_bind_as_their_definitions_state() -> Result<()> {
             // the SAT array's place in the program's own buffer
             // the program's `SAT_MtdParam`: its buffer and the words its members (the components it reads) occupy
             let array = shader.interface.resources.iter().find_map(|r| match &r.kind {
-                primase_core::shader::ResourceKind::ConstantBuffer { layout } => layout
+                iridia_interface::ResourceKind::ConstantBuffer { layout } => layout
                     .constants
                     .iter()
                     .find(|c| c.name == "SAT_MtdParam")
@@ -189,7 +190,7 @@ fn elden_ring_materials_bind_as_their_definitions_state() -> Result<()> {
                 // The verified ER tiling convention; derive the expectation from the definition and metaparam,
                 // without calling the production tiling resolver. The array may start after other buffer fields.
                 let tiling_array = shader.interface.resources.iter().find_map(|r| match &r.kind {
-                    primase_core::shader::ResourceKind::ConstantBuffer { layout } => layout
+                    iridia_interface::ResourceKind::ConstantBuffer { layout } => layout
                         .constants
                         .iter()
                         .find(|c| c.name == "FC_TextureTilingScale")

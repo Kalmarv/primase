@@ -5,12 +5,11 @@
 //! Meanings follow glTF 2.0 §3.9 exactly, so the glTF writer is a direct mapping: factors are linear, colour textures
 //! sRGB, packed maps linear, and [`Default`] is glTF's default material.
 
-use serde::Serialize;
-use serde_json::Value;
-
 use crate::json::JsonError;
 use crate::world::{Component, Entity};
-
+use iridia_interface::Filters;
+use serde::Serialize;
+use serde_json::Value;
 /// How UVs outside 0-1 sample a texture along one axis.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default, Serialize)]
 pub enum Wrap {
@@ -20,7 +19,6 @@ pub enum Wrap {
     Clamp,
     Mirror,
 }
-
 /// A transform of the texture coordinates a slot samples with, exactly glTF's `KHR_texture_transform` (in the world's
 /// texture convention: origin top-left, v down): `uv' = offset + R(rotation) * (scale * uv)`, `R(a)` taking (u, v) to
 /// (u cos a - v sin a, u sin a + v cos a). No reader sets a rotation yet.
@@ -31,7 +29,6 @@ pub struct UvTransform {
     /// Radians.
     pub rotation: f32,
 }
-
 impl UvTransform {
     /// No change: offset 0, scale 1, rotation 0.
     pub const IDENTITY: UvTransform = UvTransform {
@@ -67,38 +64,6 @@ impl UvTransform {
         }
     }
 }
-
-/// How texels are filtered when a texture is magnified or minified (glTF's sampler filters).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-pub enum Filter {
-    /// The nearest texel: crisp texels.
-    Nearest,
-    /// Bilinear between the four nearest texels.
-    Linear,
-}
-
-/// How mip levels are used when a texture is minified.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-pub enum MipFilter {
-    /// No mip levels: the base level only (glTF's `NEAREST` or `LINEAR` minification filter).
-    None,
-    /// The nearest mip level.
-    Nearest,
-    /// Between the two nearest mip levels (trilinear with a linear `min`).
-    Linear,
-}
-
-/// A sampler's filters as the source states them: each `None` where it states none (the renderer's default).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-pub struct Filters {
-    /// Magnification.
-    pub mag: Option<Filter>,
-    /// Minification within a level.
-    pub min: Option<Filter>,
-    /// Minification across mip levels.
-    pub mip: Option<MipFilter>,
-}
-
 /// A texture used by a material slot.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct TextureRef {
@@ -113,7 +78,6 @@ pub struct TextureRef {
     /// The sampler's filters, as the source states them.
     pub filters: Filters,
 }
-
 impl TextureRef {
     /// Sampling `TexCoord(0)` with repeat wrapping, untransformed, no filter stated.
     pub fn new(texture: Entity) -> Self {
@@ -126,7 +90,6 @@ impl TextureRef {
         }
     }
 }
-
 /// Whether a material is lit.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize)]
 pub enum Shading {
@@ -138,7 +101,6 @@ pub enum Shading {
     /// emit them as the fallback glTF prescribes); a renderer draws none of them.
     Unlit,
 }
-
 /// How the base colour's alpha is used.
 #[derive(Clone, Copy, Debug, PartialEq, Default, Serialize)]
 pub enum AlphaMode {
@@ -150,7 +112,6 @@ pub enum AlphaMode {
     /// Alpha blended over what is behind.
     Blend,
 }
-
 /// Specular reflectance, exactly glTF's `KHR_materials_specular`: the dielectric part's F0 is
 /// `min(0.04 * color, 1) * factor` (glTF's default index of refraction, 1.5). Metals ignore it. What a game's own
 /// specular model means in these terms is its lowering pass's named approximation.
@@ -165,7 +126,6 @@ pub struct Specular {
     /// sRGB colour (`specularColorTexture`).
     pub color_texture: Option<TextureRef>,
 }
-
 impl Default for Specular {
     /// The extension's defaults: factor 1, colour white, no textures.
     fn default() -> Self {
@@ -177,7 +137,6 @@ impl Default for Specular {
         }
     }
 }
-
 /// A baked metal-rough material (component `pbr.material`).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PbrMaterial {
@@ -216,7 +175,6 @@ pub struct PbrMaterial {
     /// material's.
     pub shading: Shading,
 }
-
 impl Component for PbrMaterial {
     const NAME: &'static str = "pbr.material";
     const GEOMETRY: crate::Geometry = crate::Geometry::None;
@@ -288,7 +246,6 @@ impl Component for PbrMaterial {
         out.extend(self.textures().map(|r| r.texture));
     }
 }
-
 impl Default for PbrMaterial {
     /// glTF's default material: white, fully metallic and rough, opaque, single-sided, lit.
     fn default() -> Self {
@@ -312,7 +269,6 @@ impl Default for PbrMaterial {
         }
     }
 }
-
 /// A texture slot of a [`PbrMaterial`], in glTF's order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TextureSlot {
@@ -326,7 +282,6 @@ pub enum TextureSlot {
     /// The specular extension's colour (`specularColorTexture`).
     SpecularColor,
 }
-
 impl TextureSlot {
     /// Its name in a report.
     pub fn name(self) -> &'static str {
@@ -341,7 +296,6 @@ impl TextureSlot {
         }
     }
 }
-
 /// Every texture slot of material `$m` with each slot's field borrowed as `$b` (nothing: by value; `&mut`: mutably),
 /// in glTF's order: the one list [`PbrMaterial::slots`] and [`PbrMaterial::slots_mut`] both read.
 macro_rules! texture_slots {
@@ -362,7 +316,6 @@ macro_rules! texture_slots {
         ]
     }};
 }
-
 impl PbrMaterial {
     /// Every texture slot that is set, with its slot, in glTF's order: base colour, metallic-roughness, normal,
     /// occlusion, emissive, then the specular extension's strength and colour.
@@ -386,7 +339,6 @@ impl PbrMaterial {
         self.slots_mut().map(|(_, r)| r)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::{AlphaMode, PbrMaterial, TextureRef, UvTransform};

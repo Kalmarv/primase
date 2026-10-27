@@ -4,12 +4,9 @@
     clippy::unwrap_used,
     reason = "explicit fixtures and native oracle assertions"
 )]
-use primase_core::{
-    World,
-    gate::{GateReport, Tolerance},
-    shader::Stage,
-};
 use iridia_exec::{PixelShader, ProgramShader, Sample};
+use iridia_interface::Stage;
+use primase_core::{World, gate::GateReport, gate::Tolerance};
 use primase_shaunwhite::shaders::{
     Database, Effect, Payload,
     albedo::{Influence, derive},
@@ -238,7 +235,7 @@ fn check_material_bindings(
     case: Case,
     state: &State,
 ) {
-    use primase_core::shader::ConstantRole;
+    use iridia_interface::ConstantRole;
     let bound = primase_shaunwhite::shaders::bind_material(derived, &source_material(case)).unwrap();
     let reads = derived.program.constant_reads().unwrap();
     let mut checked = 0;
@@ -604,7 +601,7 @@ fn native_uv_rows() -> Option<BTreeMap<String, [f32; 11]>> {
 }
 #[test]
 fn stored_rotated_mask_matches_native_setter_and_full_ps_on_ref() {
-    use primase_core::shader::ConstantRole;
+    use iridia_interface::ConstantRole;
     let Some(path) = install_file(Game::ShaunWhite, "ekshadersPChigh.bin") else {
         return;
     };

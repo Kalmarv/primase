@@ -2,8 +2,8 @@
 //! The mesh fixture (`mesh.hlsl`: a quad as two triangles, a thread group of 32) in each build: its facts are the ones the
 //! entry point states, it is a mesh entry point with D3D's thread group and the group index as its one argument, it
 //! validates and is written as WGSL with the mesh stage's attributes, and the executor refuses it by name.
-use primase_dxil::lift;
 use iridia::{MeshFacts, MeshTopology, Stage, StageFacts};
+use primase_dxil::lift;
 
 #[test]
 fn a_mesh_program_is_a_mesh_entry_point_with_its_facts() {

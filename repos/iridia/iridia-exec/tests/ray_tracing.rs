@@ -3,13 +3,13 @@
 //! generation program that traces a ray. They validate against the function the interface says (the ray's system values
 //! then pointers to the payload and the attributes), the pipeline's operations are functions without a body, and the
 //! WGSL writer and the executor refuse them by name.
-use naga::{AddressSpace, Expression, FunctionArgument, Handle, Statement, StructMember, Type, TypeInner};
 use iridia::build::{Builder, Kind};
 use iridia::{
     Conventions, D3dBinding, D3dClass, D3dModes, Interface, Label, Program, Provenance, Resource, ResourceId,
     ResourceKind, ResourceProvenance, ScalarType, ShaderFormat, Stage, StageFacts, SystemValue, Value,
     Varying, VaryingProvenance, emit, rt,
 };
+use naga::{AddressSpace, Expression, FunctionArgument, Handle, Statement, StructMember, Type, TypeInner};
 
 fn system_input(name: &str, system: SystemValue, scalar: ScalarType, width: u8) -> Varying {
     Varying {
@@ -280,10 +280,7 @@ fn a_ray_tracing_program_is_refused_by_name_by_the_writer_and_as_an_entry_point_
         assert!(wgsl.contains("no WGSL stage"), "{wgsl}");
         let functions = emit::wgsl_functions(&p).unwrap_err().to_string();
         assert!(functions.contains("ray tracing pipeline"), "{functions}");
-        let exec = iridia_exec::Executable::new(&p)
-            .err()
-            .unwrap()
-            .to_string();
+        let exec = iridia_exec::Executable::new(&p).err().unwrap().to_string();
         assert!(exec.contains("ray tracing pipeline"), "{exec}");
         // its function compiles: the pipeline runs it (the hand-built programs here have no real body to run)
         let _ = iridia_exec::Executable::function(&p, "main");

@@ -4,7 +4,8 @@
 
 #![allow(clippy::unwrap_used)]
 
-use primase_core::shader::{D3dClass, ResourceId, ResourceKind, Shader, ShaderFormat};
+use iridia_interface::{D3dClass, ResourceId, ResourceKind, ShaderFormat};
+use primase_core::shader::Shader;
 use primase_frostbite::passes::buffer_tables::{
     InstanceBase, MatrixLayout, SkinInputs, TableRoles, probe_tables, probe_tables_with,
 };

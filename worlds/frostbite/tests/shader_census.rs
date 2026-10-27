@@ -9,8 +9,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use iridia_interface::Stage;
 use primase_compress::oodle::{Oodle, Version};
-use primase_core::shader::Stage;
 use primase_frostbite::bundle::Kind;
 use primase_frostbite::folder::{Folder, Source};
 use primase_frostbite::{bytecode, bytecode::RTYPE};
@@ -83,22 +83,22 @@ fn every_compiled_program_of_the_install() {
                                     match iridia::emit::wgsl(&program) {
                                         Ok(_) => {}
                                         // WGSL cannot write it: the program keeps a text form that says why
-                                        Err(iridia::ProgramError::Unsupported { detail, .. }) => {
-                                            match program.text() {
-                                                Ok(text)
-                                                    if text.lines().any(|l| {
-                                                        l.starts_with(
-                                                            "// the module below is naga's IR (Debug), not WGSL",
-                                                        ) && l.contains(&detail)
-                                                    }) =>
-                                                {
-                                                    *text_form.entry(reason(&detail)).or_default() += 1;
-                                                }
-                                                Ok(_) => invalid
-                                                    .push(format!("{}: no stated reason for: {detail}", e.name)),
-                                                Err(err) => invalid.push(format!("{}: text form: {err}", e.name)),
+                                        Err(iridia::ProgramError::Unsupported { detail, .. }) => match program
+                                            .text()
+                                        {
+                                            Ok(text)
+                                                if text.lines().any(|l| {
+                                                    l.starts_with(
+                                                        "// the module below is naga's IR (Debug), not WGSL",
+                                                    ) && l.contains(&detail)
+                                                }) =>
+                                            {
+                                                *text_form.entry(reason(&detail)).or_default() += 1;
                                             }
-                                        }
+                                            Ok(_) => invalid
+                                                .push(format!("{}: no stated reason for: {detail}", e.name)),
+                                            Err(err) => invalid.push(format!("{}: text form: {err}", e.name)),
+                                        },
                                         Err(err) => invalid.push(format!("{}: {err}", e.name)),
                                     }
                                 }

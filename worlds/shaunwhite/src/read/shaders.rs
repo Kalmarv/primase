@@ -18,8 +18,8 @@
 
 use std::collections::BTreeSet;
 
+use iridia_interface::Stage;
 use primase_bytes::{Cursor, Endian, Field, FieldError, View, checked_span};
-use primase_core::shader::Stage;
 
 use crate::shaders::{Database, Effect, Key, Payload, Record, SamplerBinding, Source, State};
 

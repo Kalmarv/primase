@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 [dependencies]
+iridia-interface.workspace = true
 primase-bytes.workspace = true
 primase-core.workspace = true
 primase-compress.workspace = true

@@ -3,8 +3,8 @@
 //! ones the entry point states, its function is the one `stage_functions` describes (the primitive's vertices as arrays,
 //! the primitive and instance numbers; the emitted vertices as arrays, their count and where strips start), and it
 //! validates and is written as WGSL functions.
-use primase_dxil::lift;
 use iridia::{GsInput, GsOutput, Stage, StageFacts, stage_functions};
+use primase_dxil::lift;
 
 #[test]
 fn a_geometry_program_is_the_function_its_facts_describe() {

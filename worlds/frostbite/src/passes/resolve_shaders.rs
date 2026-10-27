@@ -31,8 +31,8 @@
 //!   census sample the engine's lists were 205,208 constants in 1,916 stages and are 3,248 runs.
 //!   Of a vertex stage's pass binding (b4) the words its clip position is placed with are stated when the program has
 //!   the camera-relative form ([`super::clip_position`]): its sixteen row words are
-//!   [`ViewParameter::CameraRelativeViewProjection`](primase_core::shader::ViewParameter::CameraRelativeViewProjection)
-//!   and its three camera words [`ViewParameter::CameraPosition`](primase_core::shader::ViewParameter::CameraPosition), cut
+//!   [`ViewParameter::CameraRelativeViewProjection`](iridia_interface::ViewParameter::CameraRelativeViewProjection)
+//!   and its three camera words [`ViewParameter::CameraPosition`](iridia_interface::ViewParameter::CameraPosition), cut
 //!   out of the `Unknown` constants over them; a program that has not that form keeps them `Unknown`. The words differ by
 //!   pass, so they come from the program, not from a fixed offset.
 //!   Its buffers are stated by running the program ([`super::buffer_tables`]): when it reads an instance table and a matrix
@@ -64,14 +64,17 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::pass::{Pass, PassLog, PassSpec};
-use primase_core::shader::{
+use iridia_interface::{
     BufferBinding, BufferSource, BufferTable, ConstantBinding, ConstantRole, D3dClass, InputBinding,
     InputRole, Interface, KeyPart, ObjectParameter, OutputBinding, OutputRole, RenderState, ResourceId,
-    ResourceKind, SamplerState, Shader, ShaderBinding, SkinPrefix, Stage, StageBinding, SystemValue,
-    TextureBinding, TextureDim, TextureSource, VariantKey,
+    ResourceKind, SamplerState, SkinPrefix, Stage, SystemValue, TextureDim, VariantKey,
 };
+use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::{Component, Entity, Lods, Semantic, Texture, TextureLayers, World};
+use primase_core::{
+    shader::Shader, shader::ShaderBinding, shader::StageBinding, shader::TextureBinding,
+    shader::TextureSource,
+};
 
 use super::buffer_tables::{MatrixLayout, SkinInputs, TableRoles, probe_tables_with};
 use super::clip_position::{ClipRows, cut_out, shader_clip_rows, state_clip_roles};
@@ -551,7 +554,9 @@ fn skin_inputs(interface: &Interface, layout: Option<&InputLayout>) -> Option<Sk
     let roles = vertex_inputs(interface, layout, &mut PassLog::default());
     // the roles are of the non-system inputs, in order: back to indices in the interface's inputs
     let at = |semantic: Semantic| -> Option<usize> {
-        let role = roles.iter().position(|r| r.role == InputRole::Stream(semantic))?;
+        let role = roles
+            .iter()
+            .position(|r| r.role == InputRole::Stream(semantic.into()))?;
         interface
             .inputs
             .iter()
@@ -766,7 +771,7 @@ pub fn element_role(layout: &InputLayout, i: usize, width: u32, log: &mut PassLo
         };
     }
     log.count("vertex inputs that are a stream of the mesh", 1);
-    InputRole::Stream(semantic)
+    InputRole::Stream(semantic.into())
 }
 
 /// The words a depot parameter holds: its value bytes after the 20-byte record header.
@@ -932,6 +937,7 @@ mod tests {
     use super::*;
     use crate::binding::{Entry, Param};
     use crate::depot::{Block, TEXTURE};
+    use iridia_interface::Attribute;
 
     const FLOAT: u32 = 0x2bb6_5c2d;
     const FLOAT4: u32 = 0x7f99_9829;
@@ -1254,11 +1260,11 @@ mod tests {
         let mut log = PassLog::default();
         assert_eq!(
             element_role(&layout, 0, 3, &mut log),
-            InputRole::Stream(Semantic::Position)
+            InputRole::Stream(Attribute::Position)
         );
         assert_eq!(
             element_role(&layout, 1, 2, &mut log),
-            InputRole::Stream(Semantic::TexCoord(0))
+            InputRole::Stream(Attribute::TexCoord(0))
         );
         assert!(
             matches!(element_role(&layout, 1, 4, &mut log), InputRole::Unknown { why } if why.contains("4 components"))
@@ -1268,11 +1274,11 @@ mod tests {
         );
         assert_eq!(
             element_role(&layout, 3, 4, &mut log),
-            InputRole::Stream(Semantic::Joints(0))
+            InputRole::Stream(Attribute::Joints(0))
         );
         assert_eq!(
             element_role(&layout, 4, 4, &mut log),
-            InputRole::Stream(Semantic::Weights(0))
+            InputRole::Stream(Attribute::Weights(0))
         );
     }
 

@@ -130,7 +130,7 @@ pub struct Provenance {
     /// computes: a program a lifter made has it, one built by hand may not.
     pub source_hash: Option<String>,
     /// Source instruction records counted while decoding, before lowering expands them into IR.
-    pub instruction_count: Option<primase_core::shader::InstructionCount>,
+    pub instruction_count: Option<iridia_interface::InstructionCount>,
 }
 
 /// A shader program: the module, and what the module cannot say.
@@ -172,7 +172,7 @@ impl Program {
                 .interface
                 .resources
                 .iter()
-                .map(|resource| primase_core::shader::ProgramResourceFacts {
+                .map(|resource| iridia_interface::ProgramResourceFacts {
                     id: resource.id,
                     name: resource.provenance.name.clone(),
                     d3d: resource.provenance.d3d,

@@ -5,9 +5,10 @@ mod pixels;
 
 use super::settings::{PixelCap, Seconds};
 use crate::materials::Material;
+use iridia_interface::Stage;
 use primase_core::pass::{OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial, Specular, TextureRef};
-use primase_core::shader::{ShaderBinding, Stage};
+use primase_core::shader::ShaderBinding;
 use primase_core::{ColorSpace, Component, Mesh, Name, TexFormat, TexRole, Texture, World};
 use std::collections::BTreeSet;
 

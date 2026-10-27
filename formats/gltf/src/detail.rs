@@ -8,6 +8,7 @@
 //! revision 3 may not use what 4 added. The extension's specification is
 //! `docs/extensions/PRIMASE_materials_detail_blend.md`.
 
+use iridia_interface::ScalarEncoding;
 use primase_core::Semantic;
 use primase_core::detail::{
     DETAIL_LIMIT, Detail, DetailLerp, DetailMix, DetailedMaterial, Frozen, GlossScale, REVISION,
@@ -16,7 +17,6 @@ use primase_core::detail::{
 use primase_core::layered::Source;
 use primase_core::pass::PassLog;
 use primase_core::pbr::TextureRef;
-use primase_core::shader::ScalarEncoding;
 use serde_json::{Map, Value};
 
 use crate::lower::{object, only, texture_transform};
@@ -476,12 +476,13 @@ fn floats<const N: usize>(o: &Map<String, Value>, key: &str) -> Result<[f32; N],
 mod tests {
     use std::collections::BTreeMap;
 
+    use iridia_interface::{Filter, Filters};
     use primase_core::pass::Pass;
-    use primase_core::pbr::{Filter, Filters, PbrMaterial, UvTransform, Wrap};
     use primase_core::{
         ColorSpace, Entity, Instance, Mesh, Name, Opaque, OpaqueData, Primitive, Stream, TexFormat, TexRole,
         Texture, Topology, Transform, World,
     };
+    use primase_core::{pbr::PbrMaterial, pbr::UvTransform, pbr::Wrap};
     use serde_json::json;
 
     use super::*;

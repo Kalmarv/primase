@@ -15,10 +15,10 @@
 //! [`palette_indexed_by_vertex`] reads in the value graph whether a constant buffer is indexed by a vertex stream, as a
 //! joint palette is, or only by the instance, as the object matrices of an unskinned draw are.
 
-use primase_core::shader::{BufferLayout, ConstantType, ResourceId, ResourceKind, ScalarType};
 use iridia::Program;
 use iridia::flow::{At, Node, NodeId, Values};
 use iridia_exec::probe::{ProbeRun, VertexProbe, Zeros};
+use iridia_interface::{BufferLayout, ConstantType, ResourceId, ResourceKind, ScalarType};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The position the probe gives the program, and the camera it moves to.
@@ -211,7 +211,7 @@ pub fn inputs_read(program: &Program) -> Result<BTreeSet<(String, u32)>, String>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use primase_core::shader::{Majorness, Value};
+    use iridia_interface::{Majorness, Value};
 
     fn matrix(rows: u8, columns: u8, major: Majorness) -> ConstantType {
         ConstantType::Matrix {

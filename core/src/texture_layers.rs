@@ -12,9 +12,9 @@ use serde_json::{Value, json};
 
 use crate::components::{ColorSpace, NormalConvention, TexRole};
 use crate::json::JsonError;
-use crate::shader::TextureDim;
 use crate::texformat::TexFormat;
 use crate::world::{Component, Entity};
+use iridia_interface::TextureDim;
 
 /// What the layers of a [`TextureLayers`] are.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize)]

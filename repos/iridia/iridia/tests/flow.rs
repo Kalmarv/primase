@@ -347,8 +347,8 @@ fn a_call_is_refused_not_dropped() {
 /// of holds the add of the counter's earlier value and the index.
 #[test]
 fn an_atomic_on_thread_group_memory_is_followed() {
-    let program = primase_dxil::lift(include_bytes!("fixtures/compute_basic.dxil"))
-        .expect("dxc's program lifts");
+    let program =
+        primase_dxil::lift(include_bytes!("fixtures/compute_basic.dxil")).expect("dxc's program lifts");
     let values = Values::of_program(&program).expect("the value graph");
     let index = program
         .interface
@@ -384,14 +384,8 @@ fn an_atomic_on_thread_group_memory_is_followed() {
 #[test]
 fn a_texture_picked_from_an_array_by_a_run_time_index_is_a_texel_of_the_array_with_the_index_as_a_control() {
     for (name, bytes) in [
-        (
-            "ps_6_0",
-            &include_bytes!("fixtures/resource_arrays.dxil")[..],
-        ),
-        (
-            "ps_6_6",
-            &include_bytes!("fixtures/resource_arrays.66.dxil")[..],
-        ),
+        ("ps_6_0", &include_bytes!("fixtures/resource_arrays.dxil")[..]),
+        ("ps_6_6", &include_bytes!("fixtures/resource_arrays.66.dxil")[..]),
     ] {
         let program = primase_dxil::lift(bytes).expect("dxc's program lifts");
         let values = Values::of_program(&program).unwrap_or_else(|e| panic!("{name}: {e}"));

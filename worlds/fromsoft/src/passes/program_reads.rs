@@ -31,9 +31,9 @@
 //! What it does not read is named in [`Reads::left_out`]: a discard against an engine texture (the screen-door dither of
 //! a fade) is not a material slot's coverage.
 use crate::metaparam::{Metaparam, Texture, texture_number};
-use primase_core::shader::{Resource, ResourceId, ResourceKind, ShaderFormat};
 use iridia::flow::{BinaryOperator, Node, NodeId, Op, Read, UnaryOperator, Values};
 use iridia::{BoundSizes, Program};
+use iridia_interface::{Resource, ResourceId, ResourceKind, ShaderFormat};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// The render target the programs write the albedo to.

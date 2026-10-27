@@ -4,12 +4,13 @@
 //! (DXIL programs holding a metallic factor); the other Elden Ring families are refused by name ([`family`]).
 use std::collections::BTreeMap;
 
+use iridia_interface::{AddressMode, Stage};
 use primase_core::detail::DetailedMaterial;
 use primase_core::detail::SurfaceLowering;
 use primase_core::pass::{Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{TextureRef, UvTransform, Wrap};
-use primase_core::shader::{AddressMode, Shader, ShaderBinding, Stage, TextureSource};
 use primase_core::{Component, Entity, Mesh, Semantic, Stream, World};
+use primase_core::{shader::Shader, shader::ShaderBinding, shader::TextureSource};
 
 use crate::Game;
 use crate::detail_derive::{derive_equation, slot_transform};

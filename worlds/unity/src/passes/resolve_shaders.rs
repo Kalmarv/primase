@@ -51,17 +51,20 @@
 //!   winding, `ZClip`, alpha-to-coverage and the conservative flag.
 use std::collections::BTreeMap;
 
-use primase_core::pass::{Choice, Given, OptionSpec, PassSpec};
-use primase_core::shader::{
-    Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantRole, Cull, D3dClass,
-    DepthBias, DepthState, FrameParameter, FrameTexture, InputBinding, InputRole, Interface, ObjectParameter,
-    OutputBinding, OutputRole, RenderState, SamplerState, Shader, ShaderBinding, ShaderFormat, Stage,
-    StageBinding, Stencil, StencilFace, StencilOp, SystemValue, TargetState, TextureBinding, TextureSource,
-    ViewParameter,
-};
-use primase_core::{Component, Entity, Name, Semantic, Texture, World};
 use iridia::matrix::state_lines;
 use iridia::{ProgramGraph, WordsRead};
+use iridia_interface::{
+    Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantRole, Cull, D3dClass,
+    DepthBias, DepthState, FrameParameter, FrameTexture, InputBinding, InputRole, Interface, ObjectParameter,
+    OutputBinding, OutputRole, RenderState, SamplerState, ShaderFormat, Stage, Stencil, StencilFace,
+    StencilOp, SystemValue, TargetState, ViewParameter,
+};
+use primase_core::pass::{Choice, Given, OptionSpec, PassSpec};
+use primase_core::{Component, Entity, Name, Semantic, Texture, World};
+use primase_core::{
+    shader::Shader, shader::ShaderBinding, shader::StageBinding, shader::TextureBinding,
+    shader::TextureSource,
+};
 
 use crate::components::{Parameters, Shape, UnityMaterial, UnityProgramVariant, UnityPrograms, UnityTexEnv};
 use crate::passes::draw_keywords::{SceneKeywords, receivers};
@@ -321,7 +324,7 @@ struct Declared {
 pub fn buffer_constants(
     parameters: &Parameters,
     slot: u32,
-    resource: primase_core::shader::ResourceId,
+    resource: iridia_interface::ResourceId,
     size: u32,
     m: &UnityMaterial,
     linear: bool,
@@ -993,7 +996,7 @@ impl ResolveUnityShaders {
                                 v.label.name
                             ),
                         },
-                        InputRole::Stream,
+                        |semantic| InputRole::Stream(semantic.into()),
                     ),
                     Stage::Pixel if vertex_bound => InputRole::Previous,
                     _ => InputRole::Unknown {
@@ -1008,7 +1011,7 @@ impl ResolveUnityShaders {
         for r in &interface.resources {
             let Some(b) = r.provenance.d3d else { continue };
             match (&r.kind, b.class) {
-                (primase_core::shader::ResourceKind::ConstantBuffer { layout }, D3dClass::ConstantBuffer) => {
+                (iridia_interface::ResourceKind::ConstantBuffer { layout }, D3dClass::ConstantBuffer) => {
                     constants.extend(buffer_constants(
                         parameters,
                         b.register,
@@ -1020,7 +1023,7 @@ impl ResolveUnityShaders {
                         counts,
                     ));
                 }
-                (primase_core::shader::ResourceKind::Texture { .. }, D3dClass::ShaderResource) => {
+                (iridia_interface::ResourceKind::Texture { .. }, D3dClass::ShaderResource) => {
                     let named = parameters.textures.iter().find(|t| t.slot == b.register);
                     let source = match named {
                         None => {
@@ -1215,7 +1218,7 @@ mod tests {
     use super::*;
     use crate::components::{ConstantBuffer, Field, StructField, TextureParam, UnityObject};
     use crate::shader::fixture;
-    use primase_core::shader::ResourceId;
+    use iridia_interface::ResourceId;
 
     fn material() -> UnityMaterial {
         UnityMaterial {

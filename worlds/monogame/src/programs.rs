@@ -7,8 +7,8 @@
     clippy::cast_possible_truncation
 )]
 
-use iridia_mojo::{Attribute, Constant, Hints, Sampler};
 use iridia::{Program, Stage};
+use iridia_mojo::{Attribute, Constant, Hints, Sampler};
 
 use crate::mgfx::{Effect, Profile, Shader, Stage as ShaderStage};
 

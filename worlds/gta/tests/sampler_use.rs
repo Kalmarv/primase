@@ -13,8 +13,9 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 use std::collections::{BTreeMap, BTreeSet};
 
+use iridia_interface::ResourceKind;
 use primase_core::World;
-use primase_core::shader::{ResourceKind, Shader};
+use primase_core::shader::Shader;
 use primase_gta::components::{GtaEffect, GtaEffectTechniques, GtaShaderTable};
 use primase_gta::passes::sampler_state;
 use primase_gta::passes::sampler_use::{self, Through};

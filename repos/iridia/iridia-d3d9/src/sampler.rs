@@ -1,7 +1,7 @@
 //! D3D9 sampler-state pairs, mapped without supplying unstated defaults.
 use crate::{Result, error};
-use primase_core::pbr::{Filter, MipFilter};
-use primase_core::shader::{AddressMode, SamplerState};
+use iridia_interface::{AddressMode, SamplerState};
+use iridia_interface::{Filter, MipFilter};
 
 /// Map native D3DSAMP pairs. Unknown states and values are refused at the pair's word offset.
 pub fn sampler_states(states: impl IntoIterator<Item = (u32, u32)>) -> Result<SamplerState> {

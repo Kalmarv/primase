@@ -7,9 +7,9 @@
 
 #![allow(clippy::unwrap_used)]
 
+use iridia_interface::Stage;
 use primase_compress::oodle::{Oodle, Version};
 use primase_core::World;
-use primase_core::shader::Stage;
 use primase_frostbite::bundle::Kind;
 use primase_frostbite::components::{FrostbitePermutation, FrostbiteProgram};
 use primase_frostbite::folder::{Folder, Source};
@@ -325,7 +325,7 @@ fn decal_state() -> [u8; 0x3c] {
 
 #[test]
 fn a_shared_datas_fixed_state_reads_in_the_games_layout() {
-    use primase_core::shader::{BlendOp, Compare, Cull, Fill, StencilFace, StencilOp};
+    use iridia_interface::{BlendOp, Compare, Cull, Fill, StencilFace, StencilOp};
     let (d, m) = shared_with_state(&decal_state());
     let s = permutation::read_shared(permutation::SHARED_RASTER, &d, &m)
         .unwrap()
@@ -481,7 +481,7 @@ fn every_stock_raster_state_decodes() {
 /// `FixedState::render_state`).
 #[test]
 fn a_fixed_state_maps_to_cores_render_state() {
-    use primase_core::shader::{BlendFactor, BlendOp, Compare, DepthBias, DepthState};
+    use iridia_interface::{BlendFactor, BlendOp, Compare, DepthBias, DepthState};
     let (d, m) = shared_with_state(&decal_state());
     let r = permutation::read_shared(permutation::SHARED_RASTER, &d, &m)
         .unwrap()

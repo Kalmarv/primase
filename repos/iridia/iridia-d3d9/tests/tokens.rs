@@ -1,10 +1,10 @@
 #![allow(clippy::unwrap_used)]
 //! Hand-worked SM3 tokens and arithmetic. Expected numbers come from the SDK instruction definitions, not
 //! a second bytecode decoder. The common executor only observes the lifted IR's answer.
-use primase_core::gate::{GateReport, Tolerance};
-use iridia_d3d9::{lift, read};
 use iridia::{ResourceKind, ShaderFormat};
+use iridia_d3d9::{lift, read};
 use iridia_exec::{PixelShader, ProgramShader, Sample};
+use primase_core::gate::{GateReport, Tolerance};
 
 fn program(body: &[u32]) -> Vec<u8> {
     [&[0xffff_0300][..], body, &[0xffff][..]]
@@ -343,6 +343,5 @@ fn lifted_fixture_changes_require_a_version_bump() {
         })
         .collect::<Vec<_>>();
     let table = iridia::gate::table("primase-d3d9", iridia_d3d9::LIFTER_VERSION, &outcomes);
-    iridia::gate::check(include_str!("versions.tsv"), &table)
-        .unwrap_or_else(|e| panic!("{e}\n{table}"));
+    iridia::gate::check(include_str!("versions.tsv"), &table).unwrap_or_else(|e| panic!("{e}\n{table}"));
 }

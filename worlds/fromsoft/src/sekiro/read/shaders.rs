@@ -10,7 +10,7 @@ use crate::materials::LayeredMaterial;
 use crate::metaparam::Metaparam;
 use crate::names::fold;
 use crate::{Archive, Binder, Game, Result, dcx::Decoder, invalid};
-use primase_core::shader::ShaderFormat;
+use iridia_interface::ShaderFormat;
 use primase_core::{Entity, World};
 use std::collections::{BTreeMap, BTreeSet};
 

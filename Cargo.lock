@@ -700,6 +700,7 @@ dependencies = [
 name = "iridia"
 version = "0.1.0"
 dependencies = [
+ "iridia-interface",
  "naga",
  "primase-core",
  "primase-dxbc",
@@ -714,6 +715,7 @@ version = "0.1.0"
 dependencies = [
  "iridia",
  "iridia-exec",
+ "iridia-interface",
  "naga",
  "primase-core",
  "primase-testdata",
@@ -725,12 +727,21 @@ version = "0.1.0"
 dependencies = [
  "half",
  "iridia",
+ "iridia-interface",
  "naga",
  "primase-core",
  "primase-dxbc",
  "primase-dxil",
  "primase-image",
  "thiserror",
+]
+
+[[package]]
+name = "iridia-interface"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1054,6 +1065,7 @@ dependencies = [
  "dxcontainer",
  "iridia",
  "iridia-exec",
+ "iridia-interface",
  "primase-bytes",
  "primase-compress",
  "primase-core",
@@ -1084,6 +1096,7 @@ dependencies = [
 name = "primase-checks"
 version = "0.1.0"
 dependencies = [
+ "iridia-interface",
  "meshopt",
  "primase-animation",
  "primase-anvil",
@@ -1128,6 +1141,7 @@ dependencies = [
 name = "primase-core"
 version = "0.1.0"
 dependencies = [
+ "iridia-interface",
  "serde",
  "serde_json",
  "thiserror",
@@ -1197,6 +1211,7 @@ dependencies = [
  "half",
  "iridia",
  "iridia-exec",
+ "iridia-interface",
  "num-bigint",
  "primase-animation",
  "primase-bytes",
@@ -1227,6 +1242,7 @@ dependencies = [
  "half",
  "iridia",
  "iridia-exec",
+ "iridia-interface",
  "primase-bytes",
  "primase-compress",
  "primase-core",
@@ -1244,6 +1260,7 @@ name = "primase-glb"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "iridia-interface",
  "primase-core",
  "primase-testdata",
  "serde_json",
@@ -1255,6 +1272,7 @@ name = "primase-gltf"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "iridia-interface",
  "primase-animation",
  "primase-core",
  "primase-glb",
@@ -1276,6 +1294,7 @@ dependencies = [
  "indexmap",
  "iridia",
  "iridia-exec",
+ "iridia-interface",
  "naga",
  "primase-bytes",
  "primase-compress",
@@ -1315,6 +1334,7 @@ dependencies = [
 name = "primase-image"
 version = "0.1.0"
 dependencies = [
+ "iridia-interface",
  "png",
  "primase-core",
  "primase-dds",
@@ -1380,6 +1400,7 @@ name = "primase-reskate"
 version = "0.1.0"
 dependencies = [
  "half",
+ "iridia-interface",
  "primase-animation",
  "primase-bytes",
  "primase-compress",
@@ -1408,6 +1429,7 @@ dependencies = [
  "iridia",
  "iridia-d3d9",
  "iridia-exec",
+ "iridia-interface",
  "primase-anvil",
  "primase-bytes",
  "primase-core",
@@ -1465,6 +1487,7 @@ version = "0.1.0"
 dependencies = [
  "iridia",
  "iridia-exec",
+ "iridia-interface",
  "primase-core",
  "primase-glb",
  "primase-image",
@@ -1501,6 +1524,7 @@ dependencies = [
  "half",
  "iridia",
  "iridia-exec",
+ "iridia-interface",
  "primase-animation",
  "primase-compress",
  "primase-core",

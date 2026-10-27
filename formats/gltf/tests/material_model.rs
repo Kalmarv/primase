@@ -3,8 +3,9 @@
 
 #![allow(clippy::unwrap_used)]
 
-use primase_core::pbr::{Filter, Filters, MipFilter, PbrMaterial, Shading, TextureRef, Wrap};
+use iridia_interface::{Filter, Filters, MipFilter};
 use primase_core::{ColorSpace, Entity, Mesh, TexFormat, TexRole, Texture, Transform, World};
+use primase_core::{pbr::PbrMaterial, pbr::Shading, pbr::TextureRef, pbr::Wrap};
 use serde_json::Value;
 
 mod common;

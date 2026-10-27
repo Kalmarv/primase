@@ -7,8 +7,8 @@
 //! (`gDynamicSamplerIndex_sdi<Filter><Address>`, whose name states the filter and the addressing). Only the second
 //! kind has a state anywhere in the data this reads; the effect's sampler records ([`SamplerDesc`]) are held against
 //! it as evidence ([`held_by`]), not used in place of it.
-use primase_core::pbr::{Filter, Filters, MipFilter};
-use primase_core::shader::{AddressMode, SamplerState};
+use iridia_interface::{AddressMode, SamplerState};
+use iridia_interface::{Filter, Filters, MipFilter};
 
 use super::resolve_shaders::compare;
 use crate::rage::sgd2_effect::SamplerDesc;
@@ -151,7 +151,7 @@ mod tests {
         // a comparison filter states its function; a plain one does not
         assert_eq!(
             state(&record(0x95, 3, 1, 4)).compare,
-            Some(primase_core::shader::Compare::LessEqual)
+            Some(iridia_interface::Compare::LessEqual)
         );
         assert_eq!(state(&record(0x55, 3, 1, 4)).compare, None);
         // a bias is carried where it is not zero

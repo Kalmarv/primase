@@ -12,7 +12,7 @@
 //! a quad (an evaluation one pixel at a time) has no footprint: it is refused, unless the caller states the level such
 //! a sample takes ([`SampledTexture::with_footprintless_level`]).
 
-use primase_core::shader::{AddressMode, SamplerState};
+use iridia_interface::{AddressMode, SamplerState};
 use primase_image::sampling::{Address, Decoded, Levels, Subtexel, Transfer, footprint_lod};
 
 use crate::{Image, Lod};

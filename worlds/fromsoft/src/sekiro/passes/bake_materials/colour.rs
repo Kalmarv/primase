@@ -1,8 +1,8 @@
 //! Why a finished Colour output is not an Albedo bake. This query diagnoses; it never changes output roles.
-use primase_core::Semantic;
-use primase_core::shader::{ConstantRole, InputRole, OutputRole, StageBinding, TextureSource};
 use iridia::Program;
 use iridia::flow::{At, Node, Op, Values};
+use iridia_interface::{Attribute, ConstantRole, InputRole, OutputRole};
+use primase_core::{shader::StageBinding, shader::TextureSource};
 
 /// Stable categories aggregate across materials. Unknown resource names/reasons remain in their source binding;
 /// the pass log does not create a new key for every material or program.
@@ -78,7 +78,7 @@ pub(super) fn refusal(program: &Program, stage: &StageBinding) -> &'static str {
                 if input.system.is_some() {
                     scene = true;
                 } else if !stage.inputs.iter().any(|i| {
-                    i.label == input.label && matches!(i.role, InputRole::Stream(Semantic::TexCoord(_)))
+                    i.label == input.label && matches!(i.role, InputRole::Stream(Attribute::TexCoord(_)))
                 }) {
                     // A varying is not a portable coordinate just because its label looks like one.
                     unknown = true;
@@ -103,10 +103,8 @@ pub(super) fn refusal(program: &Program, stage: &StageBinding) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use primase_core::{
-        World,
-        shader::{ConstantBinding, FrameParameter, OutputBinding, Stage},
-    };
+    use iridia_interface::{ConstantBinding, FrameParameter, OutputBinding, Stage};
+    use primase_core::World;
 
     fn binding(program: &Program) -> StageBinding {
         StageBinding {

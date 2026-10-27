@@ -4,7 +4,7 @@
 
 #![allow(clippy::unwrap_used)]
 
-use primase_core::shader::ShaderFormat;
+use iridia_interface::ShaderFormat;
 use primase_frostbite::bytecode::{self, Span};
 use primase_frostbite::listing::{TYPE_NAMES, type_id};
 

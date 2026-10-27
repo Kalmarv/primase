@@ -63,7 +63,7 @@ pub enum Payload {
     Effect(Effect),
     /// Raw utility stage (kinds 5..7). Stage meaning follows the token version, not a guess from its role.
     Program {
-        stage: primase_core::shader::Stage,
+        stage: iridia_interface::Stage,
         bytes: Vec<u8>,
     },
 }

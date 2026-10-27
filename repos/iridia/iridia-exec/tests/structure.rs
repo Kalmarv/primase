@@ -4,7 +4,6 @@
 //! the output is a hash of the nodes and edges visited in order; each deciding node picks its way from a hash of its
 //! visit count. The output must be the one a walk of the graph itself gives, including for graphs with loops, switches
 //! and branches that leave several constructs at once.
-use naga::{Expression, Handle, Statement, SwitchValue};
 use iridia::build::structure::{self, Cfg, Emit, Term};
 use iridia::build::{Builder, Kind, Val};
 use iridia::{
@@ -13,6 +12,7 @@ use iridia::{
 };
 use iridia_exec::PixelShader;
 use iridia_exec::ProgramShader;
+use naga::{Expression, Handle, Statement, SwitchValue};
 
 const LIMIT: u32 = 64;
 

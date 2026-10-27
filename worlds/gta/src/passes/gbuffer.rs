@@ -88,7 +88,7 @@ pub(super) fn writes_program(program: &iridia::Program) -> Result<GBufferWrites,
 /// `cb[row]` the stores into the output's variable reach. For checking what an interpolant depends on.
 pub fn constant_rows(
     container: &[u8],
-    output: &primase_core::shader::Label,
+    output: &iridia_interface::Label,
 ) -> Result<BTreeMap<u32, BTreeSet<u32>>, String> {
     let program = primase_dxil::lift(container).map_err(|e| e.to_string())?;
     OutputStores::of(&program)?.constant_rows(output)

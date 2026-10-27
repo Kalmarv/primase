@@ -1016,10 +1016,7 @@ impl<'a, const N: usize, M: Mask> Runner<'a, N, M> {
             Pick::Fixed(i) => i,
             Pick::Slot(s) => self.regs[s as usize * N + l][0],
         };
-        if !matches!(res.pick, Pick::One)
-            && res.count != iridia::Resource::UNBOUNDED
-            && index >= res.count
-        {
+        if !matches!(res.pick, Pick::One) && res.count != iridia::Resource::UNBOUNDED && index >= res.count {
             return Err(format!(
                 "resource {}: element {index} of an array of {} (D3D12 leaves it undefined)",
                 res.id.0, res.count

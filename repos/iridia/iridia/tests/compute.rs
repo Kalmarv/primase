@@ -4,15 +4,15 @@
 //! D3D cannot have is refused.
 use std::num::NonZeroU32;
 
-use naga::{
-    AddressSpace, AtomicFunction, Barrier, Expression, GlobalVariable, ResourceBinding, Scalar, Statement,
-    StorageAccess, TypeInner,
-};
 use iridia::build::{Builder, Kind, Val};
 use iridia::{
     Access, BufferKind, Conventions, D3dBinding, D3dClass, D3dModes, Interface, Label, Program, Provenance,
     Resource, ResourceId, ResourceKind, ResourceProvenance, ScalarType, ShaderFormat, Stage, StorageTarget,
     SystemValue, Value, Varying, VaryingProvenance,
+};
+use naga::{
+    AddressSpace, AtomicFunction, Barrier, Expression, GlobalVariable, ResourceBinding, Scalar, Statement,
+    StorageAccess, TypeInner,
 };
 
 fn program(size: [u32; 3]) -> Program {

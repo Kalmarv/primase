@@ -8,8 +8,9 @@
 use primase_core::pass::{Options, PassLog};
 use std::collections::BTreeMap;
 
-use primase_core::shader::{ConstantRole, SamplerState, Shader, ShaderBinding, Stage, TextureSource};
+use iridia_interface::{ConstantRole, SamplerState, Stage};
 use primase_core::{Component, World};
+use primase_core::{shader::Shader, shader::ShaderBinding, shader::TextureSource};
 use primase_gta::components::{GtaParam, GtaShader};
 use primase_gta::passes::resolve_shaders::RESOLVE_GTA_SHADERS;
 use primase_gta::read::source::GtaSource;

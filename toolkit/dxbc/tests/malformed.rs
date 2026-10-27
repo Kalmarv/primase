@@ -2,9 +2,9 @@
 //! Programs a malformed container could hold, made from the committed fixtures by changing the words the case is about:
 //! each is refused by name, never a panic or an allocation the declaration asked for. The oracle is the token format's
 //! own rules (D3D11's limits, an opcode's operand count); nothing here is a second reader.
+use dxcontainer::chunks;
 use primase_dxbc::decode::Declared;
 use primase_dxbc::{decode, lift};
-use dxcontainer::chunks;
 
 fn fixture(name: &str) -> Vec<u8> {
     std::fs::read(format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()

@@ -12,8 +12,8 @@ use crate::{
 use std::collections::BTreeMap;
 
 /// The addressing a FLVER tiling type states; `None` where it states none.
-pub fn address(tiling: flver::Tiling) -> Option<primase_core::shader::AddressMode> {
-    use primase_core::shader::AddressMode;
+pub fn address(tiling: flver::Tiling) -> Option<iridia_interface::AddressMode> {
+    use iridia_interface::AddressMode;
     match tiling {
         flver::Tiling::None => None,
         flver::Tiling::Repeat => Some(AddressMode::Repeat),
@@ -270,7 +270,7 @@ pub fn resolve_definition(
 
 /// The alpha test's reference a material states, from the first word of its `g_AlphaRef` (`raw`): the word over 255
 /// where it is above 0, none where it is 0 or below (the game's plain program, which tests nothing). The one rule the
-/// material's class, its binding's [`primase_core::shader::ConstantRole::AlphaReference`] and the bakes take it by.
+/// material's class, its binding's [`iridia_interface::ConstantRole::AlphaReference`] and the bakes take it by.
 pub fn alpha_reference(raw: i32) -> Option<f32> {
     (raw > 0).then(|| raw as f32 / 255.)
 }
@@ -305,7 +305,7 @@ pub const TRANSFORMED_ALPHA_CUT: &str = "pre-transform alpha test lowered as a h
 pub const COVERAGE_ALPHA_CUT: &str = "alpha test of an unwritten value lowered as a hard cutoff of its coverage slot at the material's g_AlphaRef";
 
 /// What a lowering counts where the binding states the program's alpha test as a comparison of a value the program
-/// writes nowhere ([`primase_core::shader::AlphaComparison::Unwritten`]) and the lowering could not evaluate that
+/// writes nowhere ([`iridia_interface::AlphaComparison::Unwritten`]) and the lowering could not evaluate that
 /// expression with the values the binding states (it names why in its own notice): no cut is made, because none would be
 /// the program's.
 pub const UNSOLVED_ALPHA_TEST: &str = "alpha test of an unwritten value not evaluated (the expression is not one varying texture alpha with stated constants): not cut";
@@ -348,12 +348,12 @@ pub fn alpha_cut(
 /// the cut is not the bound program's own.
 ///
 /// With a binding (`resolve-fromsoft-shaders` run), the cut is the pixel stage's
-/// [`primase_core::shader::ConstantRole::AlphaReference`]: a reference above 0 its cutoff, none at 0 or below or where
+/// [`iridia_interface::ConstantRole::AlphaReference`]: a reference above 0 its cutoff, none at 0 or below or where
 /// the binding states no reference (its program's discard compares against none), the last counted
 /// ([`UNTESTED_ALPHA_REFERENCE`]) where the material states one; but where the lowering read the slot the discard tests
 /// and colours the surface with it ([`AlphaTestRead::Coverage`]), the material's reference, counted
 /// ([`COVERAGE_ALPHA_CUT`]). Where the binding states a test of a value the program writes nowhere
-/// ([`primase_core::shader::AlphaComparison::Unwritten`]) the cut is the program's own expression solved
+/// ([`iridia_interface::AlphaComparison::Unwritten`]) the cut is the program's own expression solved
 /// ([`AlphaTestRead::Solved`]), uncounted, or none, counted ([`UNSOLVED_ALPHA_TEST`]).
 /// Without, the material's class: `cutout` and `leaves` at its cutoff, counted ([`UNBOUND_ALPHA_CUT`]); a solved test
 /// is the cut either way.
@@ -362,7 +362,7 @@ pub fn alpha_cut_read(
     material: &Material,
     read: AlphaTestRead,
 ) -> (Option<f32>, Option<&'static str>) {
-    use primase_core::shader::{AlphaComparison, ConstantRole, Stage};
+    use iridia_interface::{AlphaComparison, ConstantRole, Stage};
     match binding {
         Some(b) => {
             let stated = b.stage(Stage::Pixel).and_then(|s| {
@@ -446,10 +446,9 @@ pub fn alpha_mode_read(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iridia_interface::{ConstantBinding, ConstantRole, RenderState, ResourceId, Stage};
     use primase_core::pbr::AlphaMode;
-    use primase_core::shader::{
-        ConstantBinding, ConstantRole, RenderState, ResourceId, ShaderBinding, Stage, StageBinding,
-    };
+    use primase_core::{shader::ShaderBinding, shader::StageBinding};
 
     /// A material of `class` stating `g_AlphaRef` as `aref` (none where `None`), cut at `cutoff` by the read-time rule.
     fn material(class: &str, aref: Option<i32>, cutoff: f32) -> Material {
@@ -496,7 +495,7 @@ mod tests {
                         name: Some("FC_AlphaRef".into()),
                         role: ConstantRole::AlphaReference {
                             value: r,
-                            compared: primase_core::shader::AlphaComparison::Output,
+                            compared: iridia_interface::AlphaComparison::Output,
                         },
                         lines: None,
                     })
@@ -531,11 +530,11 @@ mod tests {
         );
         for (compared, policy) in [
             (
-                primase_core::shader::AlphaComparison::Dithered { scale_word: 21 },
+                iridia_interface::AlphaComparison::Dithered { scale_word: 21 },
                 DITHERED_ALPHA_CUT,
             ),
             (
-                primase_core::shader::AlphaComparison::Transformed,
+                iridia_interface::AlphaComparison::Transformed,
                 TRANSFORMED_ALPHA_CUT,
             ),
         ] {
@@ -580,7 +579,7 @@ mod tests {
         let mut unwritten_binding = binding(Some(reference));
         unwritten_binding.stages[0].constants[0].role = ConstantRole::AlphaReference {
             value: reference,
-            compared: primase_core::shader::AlphaComparison::Unwritten,
+            compared: iridia_interface::AlphaComparison::Unwritten,
         };
         let solved = |cut, dithered| AlphaTestRead::Solved { cut, dithered };
         // scale 0: the dither term vanished and the cut is exact, uncounted; a nonzero scale (0.5) counts DITHERED

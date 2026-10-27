@@ -2,7 +2,6 @@
 //! A mesh program built by hand: a thread group of 32 that sets its counts (4 vertices, 2 triangles), writes the position of
 //! the vertex its group index names and the indices of the first triangle. It validates, is written as WGSL with the mesh
 //! stage's attributes, and the executor runs it to the meshlets its thread groups wrote.
-use naga::{Expression, Statement};
 use iridia::build::Builder;
 use iridia::{
     Conventions, D3dModes, Interface, Label, MeshFacts, MeshTopology, Program, Provenance, ScalarType,
@@ -10,6 +9,7 @@ use iridia::{
     mesh_vertex_io,
 };
 use iridia_exec::mesh::MeshShader;
+use naga::{Expression, Statement};
 
 fn varying(name: &str, system: Option<SystemValue>, scalar: ScalarType, width: u8) -> Varying {
     Varying {

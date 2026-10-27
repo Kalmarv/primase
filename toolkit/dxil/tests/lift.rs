@@ -66,8 +66,7 @@ fn every_fixture_lifts() {
                     ));
                 } else {
                     // a program of a stage with no WGSL stage is written as its functions
-                    let written = if iridia::stage_functions(&p.interface).is_ok_and(|f| f.is_some())
-                    {
+                    let written = if iridia::stage_functions(&p.interface).is_ok_and(|f| f.is_some()) {
                         iridia::emit::wgsl_functions(&p)
                     } else {
                         iridia::emit::wgsl(&p)

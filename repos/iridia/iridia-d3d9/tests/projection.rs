@@ -32,10 +32,7 @@ fn projection_keeps_original_hash_and_runs_original_tail_with_replaced_lanes() {
         lanes: [2, 0, 1],
     };
     let prefix = project(&b, cut).unwrap();
-    assert_eq!(
-        prefix.provenance.source_hash,
-        Some(iridia::source_hash(&b))
-    );
+    assert_eq!(prefix.provenance.source_hash, Some(iridia::source_hash(&b)));
     assert!(prefix.provenance.lifter.contains("projection:word=4"));
     let constants = [[2., 3., 4., 5.], [3.; 4], [1.; 4]].map(|v| v.map(f32::to_bits));
     let run = |p, inputs: &[[u32; 4]]| {

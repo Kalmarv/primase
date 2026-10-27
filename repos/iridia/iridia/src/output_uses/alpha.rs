@@ -1,7 +1,7 @@
 //! Structural evidence for an alpha reference, without following discard control back into the output.
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_core::shader::{AlphaComparison, ResourceId};
+use iridia_interface::{AlphaComparison, ResourceId};
 
 use crate::flow::{
     At, BinaryOperator as B, MathFunction as M, Node, NodeId, Op, Read, UnaryOperator as U, Values,

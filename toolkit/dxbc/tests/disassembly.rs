@@ -5,10 +5,10 @@
 //! nothing here is ours.
 use std::collections::BTreeMap;
 
-use primase_dxbc::decode::{Declared, Decoded};
-use primase_dxbc::{decode, lift};
 use iridia_exec::ProgramShader;
 use iridia_exec::{PixelShader, Sample};
+use primase_dxbc::decode::{Declared, Decoded};
+use primase_dxbc::{decode, lift};
 
 mod common;
 

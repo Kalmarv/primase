@@ -6,7 +6,8 @@
 //! container and after each container are kept as stored. A container is found by its magic and delimited by its own
 //! size field; a magic that is not a container is an error, not skipped.
 
-use primase_core::shader::{Shader, ShaderFormat};
+use iridia_interface::ShaderFormat;
+use primase_core::shader::Shader;
 
 use crate::components::FrostbiteBytecode;
 use crate::{Error, Result, bad};

@@ -1,5 +1,8 @@
 //! Hand-worked constant-bank packing, plus the REF proof's independent controls in albedo.rs.
 #![allow(clippy::unwrap_used, reason = "hand-worked fixtures")]
+use iridia_interface::{
+    Constant, ConstantBinding, ConstantRole, ConstantType, ResourceKind, ScalarType, Stage, Value,
+};
 use primase_core::{World, shader::*};
 use primase_shaunwhite::{
     components::{LayerState, MaterialRef, MaterialState, SlotRef},

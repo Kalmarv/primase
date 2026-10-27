@@ -9,6 +9,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+iridia-interface.workspace = true
 primase-core.workspace = true
 primase-image.workspace = true
 iridia.workspace = true

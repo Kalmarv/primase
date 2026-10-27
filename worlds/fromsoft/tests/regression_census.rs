@@ -17,9 +17,10 @@
 use std::collections::BTreeMap;
 use std::time::Instant;
 
+use iridia_interface::{BufferSource, Stage};
 use primase_animation::game_skin;
 use primase_core::pass::PassLog;
-use primase_core::shader::{BufferSource, ShaderBinding, Stage};
+use primase_core::shader::ShaderBinding;
 use primase_core::{Mesh, Skin, World};
 use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::materials::Material;

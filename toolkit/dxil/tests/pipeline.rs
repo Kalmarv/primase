@@ -1,12 +1,10 @@
 #![allow(clippy::unwrap_used)]
 //! The ray tracing pipeline on the CPU, run on the lifted programs of `ray_tracing.hlsl` (raygen, miss, closest_hit,
 //! any_hit, intersection, callable) over scenes built here. The values are the arithmetic of the HLSL.
-use primase_dxil::lift;
 use iridia::{HitGroup, HitGroupKind, Program};
-use iridia_exec::{
-    Geometry, Instance, InstanceFlags, Pipeline, PipelineResources, Scene, ShaderTable,
-};
+use iridia_exec::{Geometry, Instance, InstanceFlags, Pipeline, PipelineResources, Scene, ShaderTable};
 use iridia_exec::{Sampler, Store};
+use primase_dxil::lift;
 use std::collections::BTreeMap;
 use std::path::Path;
 

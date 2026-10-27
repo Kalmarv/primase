@@ -12,9 +12,9 @@
 //! [`Majorness::Row`] is each line one of its rows ([`MatrixLines::Rows`] in a binding).
 use std::collections::{BTreeSet, HashMap};
 
+pub use iridia_interface::Unshown;
+use iridia_interface::{ConstantBinding, MatrixLines};
 use naga::{BinaryOperator, MathFunction, UnaryOperator};
-pub use primase_core::shader::Unshown;
-use primase_core::shader::{ConstantBinding, MatrixLines};
 
 use crate::flow::{At, Literal, Node, NodeId, Op, Values};
 use crate::{ConstantType, Interface, Majorness, ProgramGraph, ResourceId, ResourceKind};

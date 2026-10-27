@@ -4,6 +4,9 @@
 //! apart as the names say, and the Materials that need what the bake states of the vertex colour counted.
 use std::collections::BTreeMap;
 
+use iridia_exec::{
+    Grid, Input, Invocation, Layout, Lod, PixelShader, ProgramShader, evaluate::Constants, evaluate_raw_with,
+};
 use primase_anvil::components::{AnvilMaterial, AnvilShaders, MaterialBinding, MaterialValue};
 use primase_anvil::passes::BAKE_ANVIL_MATERIAL;
 use primase_anvil::read::archive::Archive;
@@ -18,9 +21,6 @@ use primase_core::pass::{Options, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial};
 use primase_core::{Entity, Name, Texture, World};
 use primase_image::sampling::{Address, Levels, Transfer, footprint_lod};
-use iridia_exec::{
-    Grid, Input, Invocation, Layout, Lod, PixelShader, ProgramShader, evaluate::Constants, evaluate_raw_with,
-};
 use primase_testdata::{Game, install};
 
 fn open() -> Option<Archive> {
@@ -309,10 +309,7 @@ fn kept_by_the_alpha_tested_program(w: &World, m: &AnvilMaterial, size: u32) -> 
         .expect("Mask1");
     let image = Levels::of(w.get::<Texture>(mask1).expect("texture")).expect("levels");
     let mut textures = BTreeMap::new();
-    textures.insert(
-        75,
-        iridia_exec::View::Image(std::sync::Arc::new(Atlas(image))),
-    );
+    textures.insert(75, iridia_exec::View::Image(std::sync::Arc::new(Atlas(image))));
     for slot in [76, 77] {
         textures.insert(slot, iridia_exec::View::Constant([1.0; 4]));
     }

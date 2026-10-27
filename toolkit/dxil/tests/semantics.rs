@@ -2,9 +2,9 @@
 //! The lifted fixtures run on the executor with outputs worked out by hand from the HLSL (tests/fixtures/*.hlsl), for
 //! both the default and the -Od build of each (different instruction streams of one source). The evaluator cannot run
 //! them (loops, switches, memory); the values below are the arithmetic of the source, not of the lifter.
-use primase_dxil::lift;
 use iridia::{Program, ResourceId, ResourceKind};
 use iridia_exec::{Backend, Element, Executable, ImageSample, Output, Resources};
+use primase_dxil::lift;
 use std::path::Path;
 
 fn f(x: f32) -> u32 {
@@ -547,11 +547,7 @@ mod resource_arrays {
         assert_eq!(tex.count, 4, "{variant}");
         let smp = find(0, iridia::D3dClass::Sampler);
         assert!(smp.is_unbounded(), "{variant}");
-        assert_eq!(
-            find(8, iridia::D3dClass::ShaderResource).count,
-            1,
-            "{variant}"
-        );
+        assert_eq!(find(8, iridia::D3dClass::ShaderResource).count, 1, "{variant}");
         let mut resources = Resources::default();
         // Select { uint2 which; float2 uv; }
         let cb = find(0, iridia::D3dClass::ConstantBuffer).id;

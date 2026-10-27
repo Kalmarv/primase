@@ -94,13 +94,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
 
+use iridia_interface::{Filter, Filters, MipFilter};
 use primase_core::detail::{
     DetailMix, DetailedMaterial, Frozen, GlossScale, ReflectanceTerm, SurfaceLowering, WeightStep,
 };
 use primase_core::layered::{Channel, Composition, Source};
-use primase_core::pbr::{
-    AlphaMode, Filter, Filters, MipFilter, PbrMaterial, Shading, TextureRef, UvTransform, Wrap,
-};
 use primase_core::state::{Condition, PrimitiveCondition, StateOverride};
 use primase_core::{
     BindingId, Clip, ClipBinding, ClipTarget, Extrapolation, Interpolation, JointId, MorphWeights, Morphs,
@@ -111,6 +109,9 @@ use primase_core::{
     Component, ComponentJson, Entity, Instance, Light, LightKind, Lods, MaterialVariants, Mesh, MeshFile,
     Name, Semantic, ShadowCast, Shadows, Texture, TextureFile, Tile, Topology, Transform, TransformKind,
     World,
+};
+use primase_core::{
+    pbr::AlphaMode, pbr::PbrMaterial, pbr::Shading, pbr::TextureRef, pbr::UvTransform, pbr::Wrap,
 };
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};

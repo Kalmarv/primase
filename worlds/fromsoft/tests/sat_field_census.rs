@@ -10,8 +10,9 @@
 //! for comparing two revisions' reads. The Wolf's scarf's rows are those Sekiro's capture shows (cb11-capture), and
 //! no FLVER of c3000 stores a texture scale other than 1, so the tiling rule's first step (the FLVER's scale) changes
 //! no row of Elden Ring's captured rule.
+use iridia_interface::{ConstantRole, ResourceKind};
 use primase_core::World;
-use primase_core::shader::{ConstantRole, ResourceKind, Shader, ShaderBinding};
+use primase_core::{shader::Shader, shader::ShaderBinding};
 use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::materials::Material;
 use primase_fromsoft::sekiro::{self, CharacterOptions};

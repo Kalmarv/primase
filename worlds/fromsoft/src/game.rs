@@ -4,7 +4,7 @@
 //! through [`Game`] by the shared readers.
 use crate::bhd::{PathHash, RecordLayout};
 pub use crate::sekiro::source::Resolution;
-use primase_core::shader::OutputRole;
+use iridia_interface::OutputRole;
 
 /// A FromSoftware game.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
@@ -118,7 +118,7 @@ impl Game {
     ///   value those programs also write to target 3's `w`; the emissive ones choose by a constant between a computed
     ///   value and a constant's `w` (`FC_GlowScale.w` in the flower's). What it holds is not established.
     pub fn gbuffer(self) -> Vec<(u32, u8, OutputRole)> {
-        use primase_core::shader::{NormalEncoding, NormalSpace, ScalarEncoding};
+        use iridia_interface::{NormalEncoding, NormalSpace, ScalarEncoding};
         let normal = OutputRole::Normal {
             encoding: NormalEncoding::XyzBiased {
                 bias_bits: 0x3f00_2008,
@@ -268,10 +268,10 @@ impl Game {
 
     /// The container format of the game's compiled shader programs: Shader Model 5 DXBC (Sekiro), Shader Model 6 DXIL
     /// (Elden Ring).
-    pub fn shader_format(self) -> primase_core::shader::ShaderFormat {
+    pub fn shader_format(self) -> iridia_interface::ShaderFormat {
         match self {
-            Game::Sekiro => primase_core::shader::ShaderFormat::Dxbc,
-            Game::EldenRing => primase_core::shader::ShaderFormat::Dxil,
+            Game::Sekiro => iridia_interface::ShaderFormat::Dxbc,
+            Game::EldenRing => iridia_interface::ShaderFormat::Dxil,
         }
     }
 
