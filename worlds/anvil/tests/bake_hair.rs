@@ -288,7 +288,7 @@ fn kept_by_the_alpha_tested_program(w: &World, m: &AnvilMaterial, size: u32) -> 
         .and_then(|s| w.get::<AnvilShaders>(s))
         .expect("the template's shaders");
     let program = shaders.pixel(0x40_4000).expect("the alpha-tested permutation");
-    let shader = ProgramShader::new(primase_dxbc::lift(program).expect("lift")).expect("shader");
+    let shader = ProgramShader::new(iridia_dxbc::lift(program).expect("lift")).expect("shader");
     let buffers: Vec<(u32, u32)> = PixelShader::constant_buffers(&shader)
         .iter()
         .map(|&(slot, n)| (slot, n.saturating_mul(4)))

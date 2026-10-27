@@ -506,7 +506,7 @@ mod tests {
         let shader = CoreShader {
             format: ShaderFormat::Dxbc,
             bytecode: vertex.to_vec(),
-            interface: primase_dxbc::reflection(vertex).unwrap(),
+            interface: iridia_dxbc::reflection(vertex).unwrap(),
         };
         let mut binding = resolve_vertex(&shader, World::default().spawn()).unwrap().stage;
         if missing_position {
@@ -522,7 +522,7 @@ mod tests {
         VertexStage::new(
             &shader,
             &binding,
-            &primase_dxbc::lift(pixel).unwrap(),
+            &iridia_dxbc::lift(pixel).unwrap(),
             false,
             &FrozenFrame::static_bake(0.),
         )
@@ -540,7 +540,7 @@ mod tests {
                 .keys()
                 .any(|p| p == "TEXCOORD1 fed nothing: no pixel output reads them")
         );
-        let pixel = primase_dxbc::reflection(DEMAND_DEAD).unwrap();
+        let pixel = iridia_dxbc::reflection(DEMAND_DEAD).unwrap();
         let inputs = vertex.pixel_inputs(&pixel, &Inputs::default()).unwrap();
         assert_eq!(lanes(&inputs[&("TEXCOORD".into(), 0)])[..2], [Lane::U, Lane::V]);
         // The same missing source is required as soon as its varying reaches a pixel output.
@@ -578,7 +578,7 @@ mod tests {
     }
 
     fn stage(frame: &FrozenFrame) -> Result<VertexStage> {
-        let interface = primase_dxbc::reflection(VERTEX).unwrap();
+        let interface = iridia_dxbc::reflection(VERTEX).unwrap();
         let entity = World::default().spawn();
         let shader = CoreShader {
             format: ShaderFormat::Dxbc,
@@ -589,7 +589,7 @@ mod tests {
         VertexStage::new(
             &shader,
             &binding,
-            &primase_dxbc::lift(PIXEL).unwrap(),
+            &iridia_dxbc::lift(PIXEL).unwrap(),
             false,
             frame,
         )
@@ -602,7 +602,7 @@ mod tests {
     /// the lanes of the packed pair are. A lane of another component, or of another attribute, is refused by name.
     #[test]
     fn a_tangent_component_lane_is_fed_the_tangent_sign_and_no_coordinate() {
-        let interface = primase_dxbc::reflection(CLOTH).unwrap();
+        let interface = iridia_dxbc::reflection(CLOTH).unwrap();
         let shader = CoreShader {
             format: ShaderFormat::Dxbc,
             bytecode: CLOTH.to_vec(),
@@ -612,7 +612,7 @@ mod tests {
         let mut binding = resolve_vertex(&shader, entity).unwrap().stage;
         let frame = FrozenFrame::static_bake(0.);
         // Unlike PIXEL, this program consumes TANGENT0.w and TEXCOORD7.w: both the sign and COLOR1.x are live.
-        let pixel = primase_dxbc::lift(SIGN_PIXEL).unwrap();
+        let pixel = iridia_dxbc::lift(SIGN_PIXEL).unwrap();
         let planned = VertexStage::new(&shader, &binding, &pixel, false, &frame).unwrap();
         let sign: Vec<_> = planned
             .attributes
@@ -659,7 +659,7 @@ mod tests {
     #[test]
     fn a_one_set_vertex_program_is_fed_the_grid_in_its_two_shorts() {
         const SINGLE: &[u8] = include_bytes!("../../../tests/fixtures/single_uv_vs.dxbc");
-        let interface = primase_dxbc::reflection(SINGLE).unwrap();
+        let interface = iridia_dxbc::reflection(SINGLE).unwrap();
         let shader = CoreShader {
             format: ShaderFormat::Dxbc,
             bytecode: SINGLE.to_vec(),
@@ -669,7 +669,7 @@ mod tests {
         let planned = VertexStage::new(
             &shader,
             &binding,
-            &primase_dxbc::lift(include_bytes!("../../../tests/fixtures/fixed_function.dxbc")).unwrap(),
+            &iridia_dxbc::lift(include_bytes!("../../../tests/fixtures/fixed_function.dxbc")).unwrap(),
             false,
             &FrozenFrame::static_bake(0.),
         )
@@ -699,7 +699,7 @@ mod tests {
     /// (the cloth fixture's COLOR1, bound as `Color(0)`): it is no longer refused for having no value to run on.
     #[test]
     fn a_first_vertex_colour_is_fed_white_and_the_policy_is_named() {
-        let interface = primase_dxbc::reflection(CLOTH).unwrap();
+        let interface = iridia_dxbc::reflection(CLOTH).unwrap();
         let shader = CoreShader {
             format: ShaderFormat::Dxbc,
             bytecode: CLOTH.to_vec(),
@@ -713,7 +713,7 @@ mod tests {
             .position(|i| i.label.name.eq_ignore_ascii_case("COLOR") && i.label.index == 1)
             .unwrap();
         binding.inputs[at].role = InputRole::Stream(iridia_interface::Attribute::Color(0));
-        let pixel = primase_dxbc::lift(SIGN_PIXEL).unwrap();
+        let pixel = iridia_dxbc::lift(SIGN_PIXEL).unwrap();
         let planned =
             VertexStage::new(&shader, &binding, &pixel, false, &FrozenFrame::static_bake(0.)).unwrap();
         assert!(planned.policies.contains_key(COLOUR0_POLICY));
@@ -742,7 +742,7 @@ mod tests {
     #[test]
     fn the_vertex_program_gives_the_pixel_program_its_inputs() {
         let vertex = stage(&FrozenFrame::static_bake(0.)).unwrap();
-        let pixel = primase_dxbc::reflection(PIXEL).unwrap();
+        let pixel = iridia_dxbc::reflection(PIXEL).unwrap();
         let params = Inputs {
             weights_snow: [0.125, 0.25, 0.5, 0.75],
             ..Inputs::default()
@@ -775,7 +775,7 @@ mod tests {
     #[test]
     fn the_skinned_permutation_at_the_bind_pose_gives_the_same_pixel_inputs() {
         const SKIN: &[u8] = include_bytes!("../../../tests/fixtures/layered_skin_vs.dxbc");
-        let interface = primase_dxbc::reflection(SKIN).unwrap();
+        let interface = iridia_dxbc::reflection(SKIN).unwrap();
         let entity = World::default().spawn();
         let shader = CoreShader {
             format: ShaderFormat::Dxbc,
@@ -786,13 +786,13 @@ mod tests {
         let skinned = VertexStage::new(
             &shader,
             &binding,
-            &primase_dxbc::lift(PIXEL).unwrap(),
+            &iridia_dxbc::lift(PIXEL).unwrap(),
             false,
             &FrozenFrame::static_bake(0.),
         )
         .unwrap();
         assert!(skinned.policies.contains_key(super::super::BIND_POSE_POLICY));
-        let pixel = primase_dxbc::reflection(PIXEL).unwrap();
+        let pixel = iridia_dxbc::reflection(PIXEL).unwrap();
         let params = Inputs {
             weights_snow: [0.125, 0.25, 0.5, 0.75],
             ..Inputs::default()
@@ -809,7 +809,7 @@ mod tests {
     #[test]
     fn the_corner_runs_are_the_pixel_inputs_source() {
         let vertex = stage(&FrozenFrame::static_bake(0.)).unwrap();
-        let pixel = primase_dxbc::reflection(PIXEL).unwrap();
+        let pixel = iridia_dxbc::reflection(PIXEL).unwrap();
         let params = Inputs {
             weights_snow: [0.125, 0.25, 0.5, 0.75],
             ..Inputs::default()
@@ -832,7 +832,7 @@ mod tests {
         let mut frame = FrozenFrame::static_bake(0.);
         frame.texture_scroll[0] = [2., 1., 0., 0.];
         let vertex = stage(&frame).unwrap();
-        let pixel = primase_dxbc::reflection(PIXEL).unwrap();
+        let pixel = iridia_dxbc::reflection(PIXEL).unwrap();
         let error = vertex
             .pixel_inputs(&pixel, &Inputs::default())
             .unwrap_err()

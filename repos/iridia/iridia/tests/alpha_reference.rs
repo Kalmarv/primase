@@ -39,7 +39,7 @@ fn alpha_reference_requires_structural_data_and_a_disjoint_dither_source() {
     ];
     for (name, dxbc, dxil, expected, dither_name) in fixtures {
         for (compiler, p) in [
-            ("fxc", primase_dxbc::lift(dxbc).unwrap()),
+            ("fxc", iridia_dxbc::lift(dxbc).unwrap()),
             ("dxc", primase_dxil::lift(dxil).unwrap()),
         ] {
             let g = p.graph().unwrap();
@@ -85,7 +85,7 @@ fn compiled(entry: &str) -> Vec<(&'static str, iridia::Program)> {
     vec![
         (
             "fxc",
-            primase_dxbc::lift(&read("dxbc")).unwrap_or_else(|e| panic!("{entry}.dxbc: {e}")),
+            iridia_dxbc::lift(&read("dxbc")).unwrap_or_else(|e| panic!("{entry}.dxbc: {e}")),
         ),
         (
             "dxc",

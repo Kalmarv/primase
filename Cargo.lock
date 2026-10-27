@@ -445,6 +445,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "dxbc-reader"
+version = "0.1.0"
+dependencies = [
+ "dxcontainer",
+]
+
+[[package]]
 name = "dxcontainer"
 version = "0.1.0"
 dependencies = [
@@ -700,10 +707,10 @@ dependencies = [
 name = "iridia"
 version = "0.1.0"
 dependencies = [
+ "iridia-dxbc",
  "iridia-interface",
  "naga",
  "primase-core",
- "primase-dxbc",
  "primase-dxil",
  "sha2",
  "thiserror",
@@ -722,15 +729,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "iridia-dxbc"
+version = "0.1.0"
+dependencies = [
+ "dxbc-reader",
+ "dxcontainer",
+ "iridia",
+ "iridia-exec",
+ "naga",
+ "primase-testdata",
+ "serde_json",
+]
+
+[[package]]
 name = "iridia-exec"
 version = "0.1.0"
 dependencies = [
  "half",
  "iridia",
+ "iridia-dxbc",
  "iridia-interface",
  "naga",
  "primase-core",
- "primase-dxbc",
  "primase-dxil",
  "primase-image",
  "thiserror",
@@ -1072,12 +1092,12 @@ version = "0.1.0"
 dependencies = [
  "dxcontainer",
  "iridia",
+ "iridia-dxbc",
  "iridia-exec",
  "iridia-interface",
  "primase-bytes",
  "primase-compress",
  "primase-core",
- "primase-dxbc",
  "primase-hash",
  "primase-image",
  "primase-meshops",
@@ -1166,18 +1186,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "primase-dxbc"
-version = "0.1.0"
-dependencies = [
- "dxcontainer",
- "iridia",
- "iridia-exec",
- "naga",
- "primase-testdata",
- "serde_json",
-]
-
-[[package]]
 name = "primase-dxil"
 version = "0.1.0"
 dependencies = [
@@ -1218,6 +1226,7 @@ dependencies = [
  "encoding_rs",
  "half",
  "iridia",
+ "iridia-dxbc",
  "iridia-exec",
  "iridia-interface",
  "num-bigint",
@@ -1227,7 +1236,6 @@ dependencies = [
  "primase-compress",
  "primase-core",
  "primase-dds",
- "primase-dxbc",
  "primase-dxil",
  "primase-hash",
  "primase-havok",
@@ -1301,13 +1309,13 @@ dependencies = [
  "dxcontainer",
  "indexmap",
  "iridia",
+ "iridia-dxbc",
  "iridia-exec",
  "iridia-interface",
  "naga",
  "primase-bytes",
  "primase-compress",
  "primase-core",
- "primase-dxbc",
  "primase-dxil",
  "primase-hash",
  "primase-image",
@@ -1523,12 +1531,12 @@ version = "0.1.0"
 dependencies = [
  "half",
  "iridia",
+ "iridia-dxbc",
  "iridia-exec",
  "iridia-interface",
  "primase-animation",
  "primase-compress",
  "primase-core",
- "primase-dxbc",
  "primase-gltf",
  "primase-image",
  "primase-meshops",

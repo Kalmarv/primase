@@ -133,7 +133,7 @@ fn bits(values: &[f32]) -> ConstantRole {
 
 /// A program's container lifted and ready to run.
 fn executor(bytes: &[u8]) -> ProgramShader {
-    ProgramShader::new(primase_dxbc::lift(bytes).unwrap()).unwrap()
+    ProgramShader::new(iridia_dxbc::lift(bytes).unwrap()).unwrap()
 }
 
 /// Every constant of the resolved stage as (buffer, name, byte offset, bytes, role), in buffer and offset order.
@@ -749,7 +749,7 @@ fn the_bake_binds_a_frozen_frame_to_the_roles() {
 fn a_vertex_program_is_bound_to_streams_and_engine_roles() {
     use ConstantRole::{Object, View};
 
-    let interface = primase_dxbc::reflection(VERTEX_PROGRAM).unwrap();
+    let interface = iridia_dxbc::reflection(VERTEX_PROGRAM).unwrap();
     assert_eq!(interface.stage, Stage::Vertex);
     let mut world = World::default();
     let program = world.spawn();
@@ -881,7 +881,7 @@ fn a_vertex_program_is_bound_to_streams_and_engine_roles() {
 #[test]
 fn the_view_projection_is_camera_relative_where_the_program_subtracts_the_camera() {
     let role_of = |bytes: &[u8]| {
-        let interface = primase_dxbc::reflection(bytes).unwrap();
+        let interface = iridia_dxbc::reflection(bytes).unwrap();
         let entity = World::default().spawn();
         let stage =
             primase_fromsoft::layer_bake::resolve::resolve_vertex(&dxbc_shader(bytes, interface), entity)
@@ -914,7 +914,7 @@ fn the_view_projection_is_camera_relative_where_the_program_subtracts_the_camera
 /// declared and never read (a value-graph fact), and the switch constant is the cloth simulation role.
 #[test]
 fn the_cloth_permutations_inputs_and_switch_are_stated() {
-    let interface = primase_dxbc::reflection(CLOTH_PROGRAM).unwrap();
+    let interface = iridia_dxbc::reflection(CLOTH_PROGRAM).unwrap();
     let entity = World::default().spawn();
     let stage =
         primase_fromsoft::layer_bake::resolve::resolve_vertex(&dxbc_shader(CLOTH_PROGRAM, interface), entity)
@@ -962,7 +962,7 @@ fn the_cloth_permutations_inputs_and_switch_are_stated() {
 /// Neither is taken for the layered members.
 #[test]
 fn further_coordinates_follow_member_order_and_tangents_keep_semantic_indices() {
-    let interface = primase_dxbc::reflection(LINING_PROGRAM).unwrap();
+    let interface = iridia_dxbc::reflection(LINING_PROGRAM).unwrap();
     let entity = World::default().spawn();
     let stage = primase_fromsoft::layer_bake::resolve::resolve_vertex(
         &dxbc_shader(LINING_PROGRAM, interface),
@@ -996,7 +996,7 @@ fn further_coordinates_follow_member_order_and_tangents_keep_semantic_indices() 
     }
     assert_eq!(role("TANGENT2"), InputRole::Stream(Attribute::Tangent(2)));
     // the layered programs' float members keep their streams
-    let layered = primase_dxbc::reflection(VERTEX_PROGRAM).unwrap();
+    let layered = iridia_dxbc::reflection(VERTEX_PROGRAM).unwrap();
     let layered =
         primase_fromsoft::layer_bake::resolve::resolve_vertex(&dxbc_shader(VERTEX_PROGRAM, layered), entity)
             .unwrap()
@@ -1011,7 +1011,7 @@ fn further_coordinates_follow_member_order_and_tangents_keep_semantic_indices() 
 
 #[test]
 fn a_further_tangent_binding_requires_the_materials_primitive_to_store_it() {
-    let shader = dxbc_shader(LINING_PROGRAM, primase_dxbc::reflection(LINING_PROGRAM).unwrap());
+    let shader = dxbc_shader(LINING_PROGRAM, iridia_dxbc::reflection(LINING_PROGRAM).unwrap());
     let mut world = World::default();
     let shader_entity = world.spawn();
     let material = world.spawn();
@@ -1062,7 +1062,7 @@ fn a_further_tangent_binding_requires_the_materials_primitive_to_store_it() {
 #[test]
 fn layout_indices_zero_one_four_are_not_compacted_by_a_program_reading_zero_and_four() {
     // Reuse the fixture's complete reflected interface; only the sparse tangent label differs.
-    let mut interface = primase_dxbc::reflection(LINING_PROGRAM).unwrap();
+    let mut interface = iridia_dxbc::reflection(LINING_PROGRAM).unwrap();
     for input in &mut interface.inputs {
         if input.label.name.eq_ignore_ascii_case("TANGENT") && input.label.index == 2 {
             input.label.index = 4;
@@ -1154,7 +1154,7 @@ fn an_elden_ring_palette_is_bound_larger_than_declared_and_sekiros_states_none()
     assert_eq!(stage.constant_buffers.len(), 2);
     let sekiro = resolve(dxbc_shader(
         SKIN_PROGRAM,
-        primase_dxbc::reflection(SKIN_PROGRAM).unwrap(),
+        iridia_dxbc::reflection(SKIN_PROGRAM).unwrap(),
     ));
     assert!(!sekiro.palette_bound);
     assert!(sekiro.stage.constant_buffers.is_empty());
@@ -1165,7 +1165,7 @@ fn an_elden_ring_palette_is_bound_larger_than_declared_and_sekiros_states_none()
 #[test]
 fn an_undecided_view_projection_is_taken_as_camera_relative_with_its_reason() {
     let resolved = |bytes: &[u8]| {
-        let interface = primase_dxbc::reflection(bytes).unwrap();
+        let interface = iridia_dxbc::reflection(bytes).unwrap();
         let entity = World::default().spawn();
         primase_fromsoft::layer_bake::resolve::resolve_vertex(&dxbc_shader(bytes, interface), entity).unwrap()
     };
@@ -1192,7 +1192,7 @@ fn an_undecided_view_projection_is_taken_as_camera_relative_with_its_reason() {
 /// unskinned program reads as object matrices is, in this one, the joints' palette.
 #[test]
 fn a_skinned_vertex_program_is_bound_to_joint_streams_and_a_palette() {
-    let interface = primase_dxbc::reflection(SKIN_PROGRAM).unwrap();
+    let interface = iridia_dxbc::reflection(SKIN_PROGRAM).unwrap();
     let entity = World::default().spawn();
     let stage =
         primase_fromsoft::layer_bake::resolve::resolve_vertex(&dxbc_shader(SKIN_PROGRAM, interface), entity)
@@ -1242,7 +1242,7 @@ fn a_skinned_vertex_program_is_bound_to_joint_streams_and_a_palette() {
 /// zero and collapse the vertices).
 #[test]
 fn a_cloth_programs_palette_is_read_through_its_flag() {
-    let interface = primase_dxbc::reflection(CLOTH_ROWS_PROGRAM).unwrap();
+    let interface = iridia_dxbc::reflection(CLOTH_ROWS_PROGRAM).unwrap();
     let entity = World::default().spawn();
     let stage = primase_fromsoft::layer_bake::resolve::resolve_vertex(
         &dxbc_shader(CLOTH_ROWS_PROGRAM, interface),
@@ -1264,7 +1264,7 @@ fn a_cloth_programs_palette_is_read_through_its_flag() {
 /// count.
 #[test]
 fn a_palette_read_only_for_its_translations_is_held_by_rows_by_the_rule() {
-    let interface = primase_dxbc::reflection(BILLBOARD_PROGRAM).unwrap();
+    let interface = iridia_dxbc::reflection(BILLBOARD_PROGRAM).unwrap();
     let entity = World::default().spawn();
     let vertex = primase_fromsoft::layer_bake::resolve::resolve_vertex(
         &dxbc_shader(BILLBOARD_PROGRAM, interface),
@@ -1281,7 +1281,7 @@ fn a_palette_read_only_for_its_translations_is_held_by_rows_by_the_rule() {
     assert_eq!(palette.role, ConstantRole::Object(ObjectParameter::BonePalette));
     assert_eq!(palette.lines, Some(MatrixLines::Rows));
     // a palette the program applies shows its lines itself
-    let interface = primase_dxbc::reflection(CLOTH_ROWS_PROGRAM).unwrap();
+    let interface = iridia_dxbc::reflection(CLOTH_ROWS_PROGRAM).unwrap();
     let applied = primase_fromsoft::layer_bake::resolve::resolve_vertex(
         &dxbc_shader(CLOTH_ROWS_PROGRAM, interface),
         entity,
@@ -2140,7 +2140,7 @@ fn the_pass_binds_the_other_sat_materials_through_their_bundle() {
 #[test]
 fn a_one_set_vertex_program_binds_its_coordinates_as_the_first_set() {
     const SINGLE: &[u8] = include_bytes!("fixtures/single_uv_vs.dxbc");
-    let interface = primase_dxbc::reflection(SINGLE).unwrap();
+    let interface = iridia_dxbc::reflection(SINGLE).unwrap();
     let entity = World::default().spawn();
     let stage =
         primase_fromsoft::layer_bake::resolve::resolve_vertex(&dxbc_shader(SINGLE, interface), entity)

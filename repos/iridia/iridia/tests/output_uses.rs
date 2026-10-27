@@ -31,7 +31,7 @@ const FIXTURES: [(&str, &[u8], &[u8]); 3] = [
 fn lifted(entry: &str) -> Vec<(&'static str, Program)> {
     let (_, dxbc, dxil) = FIXTURES.iter().find(|f| f.0 == entry).expect("a fixture");
     vec![
-        ("dxbc", primase_dxbc::lift(dxbc).expect("fxc's program lifts")),
+        ("dxbc", iridia_dxbc::lift(dxbc).expect("fxc's program lifts")),
         ("dxil", primase_dxil::lift(dxil).expect("dxc's program lifts")),
     ]
 }

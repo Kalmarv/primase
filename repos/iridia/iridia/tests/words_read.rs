@@ -108,7 +108,7 @@ fn a_resource_the_program_never_names_is_unread() {
 fn a_dxbc_program_reads_the_lanes_it_computes_with() {
     // fxc's pixel program of one buffer at b0 (`f` row 0, `u` row 1, `i` row 2) that uses every lane of rows 0 and 1
     // and the x and y lanes of row 2
-    let program = primase_dxbc::lift(include_bytes!("fixtures/modes.dxbc")).expect("fxc's program lifts");
+    let program = iridia_dxbc::lift(include_bytes!("fixtures/modes.dxbc")).expect("fxc's program lifts");
     let reads = program.constant_reads().expect("the value graph");
     let b0 = buffer(&program, 0);
     assert_eq!(reads.rows(b0), [0, 1, 2]);

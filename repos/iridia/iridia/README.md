@@ -3,7 +3,7 @@
 This crate holds what the lifters share: the program representation (`Program`: a naga module with the interface in
 primase's vocabulary, `validate`, `text`, `emit`), the typed `build::Builder` they lift with, the D3D mapping tables
 (`d3d`), the refusal type and the version gate (`Refusal`, `gate`). Running a program is `iridia-exec`, which
-depends on this crate; the lifters (`primase-dxbc`, `primase-dxil`, `iridia-mojo`) do not. The interface
+depends on this crate; the lifters (`iridia-dxbc`, `primase-dxil`, `iridia-mojo`) do not. The interface
 vocabulary, the program representation, the versions and the support ledger follow.
 
 ## The interface vocabulary
@@ -36,7 +36,7 @@ it, never a guess.
 
 What the readers keep and drop, so nobody looks for it:
 
-- DXBC's interpolation is declared by the program, not the signature: `primase_dxbc::lift` fills `interp` from the
+- DXBC's interpolation is declared by the program, not the signature: `iridia_dxbc::lift` fills `interp` from the
   `dcl_input_ps` declarations covering an input's lanes; the standalone
   `reflection` and `signatures` leave it `None`. An input the program never declares has none. DXIL states it in the
   entry point's signature metadata and `primase_dxil::interface` fills it.
@@ -48,7 +48,7 @@ What the readers keep and drop, so nobody looks for it:
 
 ## The program representation
 
-`Program` is what every bytecode lifts into (`primase-dxbc`'s `lift` today): a `naga::Module` (typed body, structured
+`Program` is what every bytecode lifts into (`iridia-dxbc`'s `lift` today): a `naga::Module` (typed body, structured
 control flow, resources as globals; naga 30.0.1 is the IR: the release plus three changes it lacks, from the `naga-30.0.1-primase` branch of `github.com/Kalmarv/wgpu`, pinned in the workspace `[patch.crates-io]`: the WGSL writer writes ray queries, and `Statement::ImageAtomic` has an optional result (the texel's previous value) and accepts `Exchange`) with what the module cannot say:
 
 - `interface` (the vocabulary above) and `bindings` (which global each `ResourceId` is). `entry_io(&Interface)` is the

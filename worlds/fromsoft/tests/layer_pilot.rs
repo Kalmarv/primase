@@ -223,7 +223,7 @@ fn the_bake_runs_as_warp_runs_its_state() -> Result<()> {
                     .unwrap_or_default();
                 c.not_streamed += not_streamed.len();
                 // the system values' registers: the pipeline's, not a varying of ours
-                let system: Vec<usize> = primase_dxbc::reflection(&vertex.bytecode)?
+                let system: Vec<usize> = iridia_dxbc::reflection(&vertex.bytecode)?
                     .outputs
                     .iter()
                     .filter(|o| o.system.is_some())

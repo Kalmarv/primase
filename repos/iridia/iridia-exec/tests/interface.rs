@@ -28,9 +28,9 @@ fn interfaces(resources: bool) -> Vec<(&'static str, Interface)> {
         (
             "DXBC",
             if resources {
-                primase_dxbc::reflection(dxbc).unwrap()
+                iridia_dxbc::reflection(dxbc).unwrap()
             } else {
-                primase_dxbc::lift(dxbc).unwrap().interface
+                iridia_dxbc::lift(dxbc).unwrap().interface
             },
         ),
         ("DXIL", primase_dxil::interface(dxil).unwrap()),

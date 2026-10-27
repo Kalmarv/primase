@@ -1,5 +1,5 @@
 //! Lifting a Shader Model 6 pixel or vertex program (DXIL) to primase's shader representation
-//! ([`iridia::Program`]), with the same conventions as the DXBC lift (`primase-dxbc`): varyings unpacked from
+//! ([`iridia::Program`]), with the same conventions as the DXBC lift (`iridia-dxbc`): varyings unpacked from
 //! D3D registers, resources as module globals (constant buffer `cb<n>` a uniform `array<vec4<u32>, rows>` in group 0,
 //! textures and buffer views group 1, samplers group 2, typed texture views group 3, the hidden counters of unordered-access
 //! views group 4, binding = register), D3D's

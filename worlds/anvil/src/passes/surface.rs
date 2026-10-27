@@ -275,7 +275,7 @@ impl BakeAnvilSurface {
         let bytes = programs
             .pixel(key)
             .ok_or_else(|| format!("missing G-buffer pixel permutation {key:#x}"))?;
-        let program = primase_dxbc::lift(bytes).map_err(|e| e.to_string())?;
+        let program = iridia_dxbc::lift(bytes).map_err(|e| e.to_string())?;
         let reads = program.constant_reads()?;
         let shader = ProgramShader::new(program).map_err(|e| e.to_string())?;
         if self.sediments == SurfaceSediments::Refuse
@@ -1261,10 +1261,7 @@ mod tests {
     #[test]
     fn layout_is_read_from_the_programs_encoded_class_and_world_normal_is_rebased() {
         let mut images = Images::new(1);
-        let fixture = primase_dxbc::lift(include_bytes!(
-            "../../../../toolkit/dxbc/tests/fixtures/modes.dxbc"
-        ))
-        .unwrap();
+        let fixture = iridia_dxbc::lift(include_bytes!("../../tests/fixtures/modes.dxbc")).unwrap();
         let reading = super::super::gbuffer::Reading::new(&fixture.interface, 1).unwrap();
         let mut output = Execution {
             outputs: vec![

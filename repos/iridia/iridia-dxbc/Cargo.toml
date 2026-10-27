@@ -1,0 +1,23 @@
+[package]
+name = "iridia-dxbc"
+description = "Lift Direct3D Shader Model 4 and 5 bytecode (DXBC) to naga through iridia"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+iridia.workspace = true
+dxcontainer.workspace = true
+dxbc-reader.workspace = true
+naga.workspace = true
+
+[dev-dependencies]
+primase-testdata.workspace = true
+serde_json.workspace = true
+
+iridia-exec.workspace = true
+[lints]
+workspace = true

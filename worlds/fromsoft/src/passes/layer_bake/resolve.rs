@@ -1174,7 +1174,7 @@ pub fn resolve_vertex_for_geometry(
 
 /// Bind a layered shader's vertex program (`<shader>_Gbuf.vpo`, the G-buffer pass of an unskinned draw, or `<shader>_Gbuf_Skin.vpo`
 /// of a skinned one; the `@[cl]` permutations differ only in having no clip-distance outputs) from its
-/// interface (`primase_dxbc::reflection`) as `core.shader_binding` states it:
+/// interface (`iridia_dxbc::reflection`) as `core.shader_binding` states it:
 /// - its inputs as streams of the lowered geometry: `POSITION0`, `NORMAL0` and `TANGENT0` as the position, normal and
 ///   tangent (and of the skinned permutation `BLENDINDICES0` and `BLENDWEIGHT0` as `Joints(0)` and `Weights(0)`); the
 ///   packed `TEXCOORD0` as lanes (`xy` the first UV set, `zw` the second: `TexCoord(1)`); `COLOR1` as the
@@ -1660,7 +1660,7 @@ mod tests {
     #[test]
     fn sparse_tangent_labels_keep_their_layout_semantic_indices() {
         let mut interface =
-            primase_dxbc::reflection(include_bytes!("../../../tests/fixtures/layered_lining_vs.dxbc"))
+            iridia_dxbc::reflection(include_bytes!("../../../tests/fixtures/layered_lining_vs.dxbc"))
                 .unwrap();
         for input in &mut interface.inputs {
             if input.label.name.eq_ignore_ascii_case("TANGENT") && input.label.index == 2 {

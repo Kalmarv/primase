@@ -29,7 +29,7 @@ fn shaders() -> Vec<(&'static str, ProgramShader)> {
     vec![
         (
             "DXBC",
-            executor(primase_dxbc::lift(include_bytes!("fixtures/lanes.dxbc")).unwrap()),
+            executor(iridia_dxbc::lift(include_bytes!("fixtures/lanes.dxbc")).unwrap()),
         ),
         (
             "DXIL",

@@ -115,7 +115,7 @@ pub(crate) struct OutputRgb {
     pub bits: [u32; 3],
     pub mask: u8,
 }
-fn lifting(e: primase_dxbc::Error) -> crate::Error {
+fn lifting(e: iridia_dxbc::Error) -> crate::Error {
     invalid("layer lift", e.at * 4, e.detail)
 }
 fn evaluation(e: iridia_exec::Error) -> crate::Error {
@@ -123,7 +123,7 @@ fn evaluation(e: iridia_exec::Error) -> crate::Error {
 }
 /// A DXBC pixel program's container lifted and ready to run.
 pub(crate) fn executor(bytecode: &[u8]) -> Result<ProgramShader> {
-    ProgramShader::new(primase_dxbc::lift(bytecode).map_err(lifting)?).map_err(evaluation)
+    ProgramShader::new(iridia_dxbc::lift(bytecode).map_err(lifting)?).map_err(evaluation)
 }
 
 /// A program's container of `format` (a game's: [`crate::Game::shader_format`]) lifted and ready to run: DXBC
@@ -145,7 +145,7 @@ pub(crate) fn program_executor_bound(
     use iridia_interface::ShaderFormat;
     match format {
         ShaderFormat::Dxbc => {
-            ProgramShader::new(primase_dxbc::lift_with(bytecode, bound).map_err(lifting)?).map_err(evaluation)
+            ProgramShader::new(iridia_dxbc::lift_with(bytecode, bound).map_err(lifting)?).map_err(evaluation)
         }
         other => ProgramShader::new(
             crate::passes::program_reads::lift_with(other, bytecode, bound)
@@ -1318,7 +1318,7 @@ mod tests {
         );
         Prepared {
             bytecode: bytes.as_slice().into(),
-            shader: ProgramShader::new(primase_dxbc::lift(&bytes).unwrap()).unwrap(),
+            shader: ProgramShader::new(iridia_dxbc::lift(&bytes).unwrap()).unwrap(),
             constants: Constants::new(&Layout::default()),
             textures: BTreeMap::new(),
             alpha: None,
@@ -1478,7 +1478,7 @@ mod tests {
         assert_eq!(texcoord, [Lane::U, Lane::V, Lane::U, Lane::V]);
         let raw = evaluate_raw_with(
             Threads::ONE,
-            &ProgramShader::new(primase_dxbc::lift(&state.pixel.bytecode).unwrap()).unwrap(),
+            &ProgramShader::new(iridia_dxbc::lift(&state.pixel.bytecode).unwrap()).unwrap(),
             &state.pixel.constants,
             &state.pixel.evaluated_textures(),
             &state.pixel.evaluated_inputs(),
@@ -1529,7 +1529,7 @@ mod tests {
         let run = |s: &PipelineState| {
             evaluate_raw_with(
                 Threads::ONE,
-                &ProgramShader::new(primase_dxbc::lift(&s.pixel.bytecode).unwrap()).unwrap(),
+                &ProgramShader::new(iridia_dxbc::lift(&s.pixel.bytecode).unwrap()).unwrap(),
                 &s.pixel.constants,
                 &s.pixel.evaluated_textures(),
                 &s.pixel.evaluated_inputs(),

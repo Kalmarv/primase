@@ -888,7 +888,7 @@ fn decode_normal(o1: [f32; 3]) -> ([f64; 3], u8) {
 impl BakeAnvilMaterial {
     /// Run `program` for `m` (whose recipe is `recipe`) over the texture square.
     fn bake(&self, w: &World, m: &AnvilMaterial, recipe: &Recipe, program: &[u8]) -> Result<Baked, String> {
-        let shader = iridia_exec::ProgramShader::new(primase_dxbc::lift(program).map_err(|e| e.to_string())?)
+        let shader = iridia_exec::ProgramShader::new(iridia_dxbc::lift(program).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
         let mut rows = material_rows(m)?;
         if recipe.zones {
@@ -1605,7 +1605,7 @@ mod tests {
         let Some(program) = fixture::program("MAD_Road") else {
             return;
         };
-        let shader = iridia_exec::ProgramShader::new(primase_dxbc::lift(&program).unwrap()).unwrap();
+        let shader = iridia_exec::ProgramShader::new(iridia_dxbc::lift(&program).unwrap()).unwrap();
         let mut world = World::new();
         let mut textures = Vec::new();
         let bytes = [[128, 128, 153, 100], [128, 128, 128, 128]];

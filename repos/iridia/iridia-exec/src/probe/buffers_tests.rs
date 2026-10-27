@@ -55,7 +55,7 @@ fn compiled_programs_read_answered_buffers_and_images_together() {
     let programs = [
         (
             "fxc",
-            primase_dxbc::lift(include_bytes!("../../tests/fixtures/answered_buffers.dxbc")).unwrap(),
+            iridia_dxbc::lift(include_bytes!("../../tests/fixtures/answered_buffers.dxbc")).unwrap(),
         ),
         (
             "dxc",
@@ -192,7 +192,7 @@ fn a_missing_word_keeps_its_reason_and_writes_remain_refused() {
 
 #[test]
 fn an_image_default_cannot_hide_a_missing_structured_view() {
-    let program = primase_dxbc::lift(include_bytes!("../../tests/fixtures/answered_buffers.dxbc")).unwrap();
+    let program = iridia_dxbc::lift(include_bytes!("../../tests/fixtures/answered_buffers.dxbc")).unwrap();
     let shader = ProgramShader::new(program).unwrap();
     let inputs = vec![[0; 4]; shader.input_count()];
     let mut answers = AnsweredBuffers::new(PermissiveImages, BTreeMap::new(), word).unwrap();

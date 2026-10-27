@@ -863,7 +863,7 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
                     continue;
                 };
                 if !shaders.contains_key(&variant.code) {
-                    let made = match primase_dxbc::lift(&variant.code) {
+                    let made = match iridia_dxbc::lift(&variant.code) {
                         Err(e) => Err(format!("a program the lifter refuses: {}", e.group())),
                         Ok(program) => {
                             let e = world.spawn();
@@ -1440,10 +1440,7 @@ mod tests {
     /// reads every lane of rows 0 and 1 and the x and y lanes of row 2.
     #[test]
     fn only_the_bytes_the_program_reads_are_bound() {
-        let program = primase_dxbc::lift(include_bytes!(
-            "../../../../toolkit/dxbc/tests/fixtures/modes.dxbc"
-        ))
-        .unwrap();
+        let program = iridia_dxbc::lift(include_bytes!("../../tests/fixtures/modes.dxbc")).unwrap();
         let reads = program.constant_reads().unwrap();
         let parameters = Parameters {
             constant_buffers: vec![ConstantBuffer {
@@ -1821,13 +1818,13 @@ mod tests {
 
     /// The D3D behaviour fixture of the DXBC lifter (our own HLSL, `ps_5_0`): five colour targets, which a lifted
     /// program states as the system values `SV_Target0..4` (not as semantics).
-    const LIFTED: &[u8] = include_bytes!("../../../../toolkit/dxbc/tests/fixtures/modes.dxbc");
+    const LIFTED: &[u8] = include_bytes!("../../tests/fixtures/modes.dxbc");
 
     /// A lifted pixel program's outputs are system values, and each has its role all the same: target 0 the colour,
     /// the others Unknown with why; a depth output is none.
     #[test]
     fn a_lifted_pixel_programs_targets_have_roles() {
-        let program = primase_dxbc::lift(LIFTED).unwrap();
+        let program = iridia_dxbc::lift(LIFTED).unwrap();
         let roles: Vec<OutputRole> = output_bindings(&program.interface)
             .into_iter()
             .map(|o| o.role)

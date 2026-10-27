@@ -3,7 +3,7 @@
 //! values, interpolation), the pipeline conventions the program was written for, which D3D behaviours its body spells
 //! out, and where it came from.
 //!
-//! A program is derived, never stored: `core.shader` keeps the bytecode as it was, and a lifter (`primase-dxbc`'s
+//! A program is derived, never stored: `core.shader` keeps the bytecode as it was, and a lifter (`iridia-dxbc`'s
 //! `lift`) builds this on demand. The rules for differences between APIs are the shader design's:
 //!
 //! - **Conventions are normalized.** D3D register packing is unpacked into one varying per label, constant buffers

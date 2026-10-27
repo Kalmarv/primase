@@ -88,7 +88,7 @@ pub fn lift(format: ShaderFormat, bytes: &[u8]) -> Result<Program, String> {
 /// [`lift`] with the constant buffers `bound` names bound at the sizes it states (a stage's [`BoundSizes::of`]).
 pub fn lift_with(format: ShaderFormat, bytes: &[u8], bound: &BoundSizes) -> Result<Program, String> {
     match format {
-        ShaderFormat::Dxbc => primase_dxbc::lift_with(bytes, bound).map_err(|e| e.to_string()),
+        ShaderFormat::Dxbc => iridia_dxbc::lift_with(bytes, bound).map_err(|e| e.to_string()),
         ShaderFormat::Dxil => primase_dxil::lift_with(bytes, bound).map_err(|e| e.to_string()),
         other => Err(format!("a FromSoftware program of format {other:?}")),
     }

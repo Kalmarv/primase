@@ -77,7 +77,7 @@ fn how_the_programs_read_the_engine_buffers() {
         let Some(shader) = world.get::<Shader>(e) else {
             continue;
         };
-        let Ok(lifted) = primase_dxbc::lift(&shader.bytecode) else {
+        let Ok(lifted) = iridia_dxbc::lift(&shader.bytecode) else {
             continue;
         };
         programs += 1;
@@ -113,7 +113,7 @@ fn how_the_programs_read_the_engine_buffers() {
         let dump = primase_testdata::scratch().join("anvil-engine-use");
         std::fs::create_dir_all(&dump).unwrap();
         for (stage, (_, bytes)) in smallest {
-            let lifted = primase_dxbc::lift(&bytes).unwrap();
+            let lifted = iridia_dxbc::lift(&bytes).unwrap();
             let text = iridia::emit::wgsl(&lifted).unwrap();
             let name = if stage == Stage::Vertex { "vertex" } else { "pixel" };
             std::fs::write(dump.join(format!("{name}.wgsl")), text).unwrap();

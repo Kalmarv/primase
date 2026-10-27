@@ -107,7 +107,7 @@ impl Prepared<'_> {
             .bytes("source", &source())
             .u32("bake-version", BAKE_VERSION)
             .f32("sample-time", *sample_time)
-            .u32("dxbc-lifter", primase_dxbc::LIFTER_VERSION)
+            .u32("dxbc-lifter", iridia_dxbc::LIFTER_VERSION)
             .u32("dxil-lifter", primase_dxil::LIFTER_VERSION)
             .u32("program-version", iridia::PROGRAM_VERSION);
         for program in [pixel, vertex] {
@@ -427,7 +427,7 @@ mod tests {
                     Stage::Vertex,
                 ),
             ] {
-                let program = primase_dxbc::lift(bytes).unwrap();
+                let program = iridia_dxbc::lift(bytes).unwrap();
                 let entity = world.spawn();
                 let mut binding = StageBinding {
                     stage,

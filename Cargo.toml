@@ -20,7 +20,8 @@ members = [
     "toolkit/havok",
     "repos/morpheme-formats",
     "repos/lua51-bytecode",
-    "toolkit/dxbc",
+    "repos/dx/dxbc-reader",
+    "repos/iridia/iridia-dxbc",
     "repos/iridia/iridia-d3d9",
     "repos/iridia/iridia-interface",
     "repos/iridia/iridia",
@@ -92,7 +93,8 @@ primase-cache = { path = "toolkit/cache" }
 primase-havok = { path = "toolkit/havok" }
 morpheme-formats = { path = "repos/morpheme-formats" }
 lua51-bytecode = { path = "repos/lua51-bytecode" }
-primase-dxbc = { path = "toolkit/dxbc" }
+dxbc-reader = { path = "repos/dx/dxbc-reader" }
+iridia-dxbc = { path = "repos/iridia/iridia-dxbc" }
 iridia-d3d9 = { path = "repos/iridia/iridia-d3d9" }
 iridia-interface = { path = "repos/iridia/iridia-interface" }
 iridia = { path = "repos/iridia/iridia" }

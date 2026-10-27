@@ -1,7 +1,7 @@
 //! The per-texel formulas `lower-anvil-material` makes its textures of, each one value as the template's pixel shader
 //! computes it (the Riders Republic notes, docs/material-spec.md §4, §13-15), on values as the shader samples them
 //! (linear). Public so the shader oracle (worlds/anvil/tests/shader_oracle.rs) checks these very functions against
-//! the game's own pixel shaders run in primase-dxbc.
+//! the game's own pixel shaders run in iridia-dxbc.
 
 /// `S(x) = x x (3 - 2 x)`.
 pub fn smooth(x: f64) -> f64 {

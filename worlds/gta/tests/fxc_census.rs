@@ -70,7 +70,7 @@ fn every_effect_of_the_install() {
                 let result = if is_dxil {
                     primase_dxil::lift(&shader.bytecode).map_err(|e| e.group())
                 } else {
-                    primase_dxbc::lift(&shader.bytecode).map_err(|e| e.group())
+                    iridia_dxbc::lift(&shader.bytecode).map_err(|e| e.group())
                 };
                 match result {
                     Err(reason) => *refused.entry(reason).or_default() += 1,

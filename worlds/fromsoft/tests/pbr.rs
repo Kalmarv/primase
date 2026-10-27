@@ -504,7 +504,7 @@ fn a_program_reading_a_vertex_colour_is_named_in_the_approximations() {
     use iridia_interface::Stage;
     use primase_core::{shader::MaterialPrograms, shader::ProgramFacts};
     const VERTEX: &[u8] = include_bytes!("fixtures/layered_cloth_vs.dxbc");
-    let colour = primase_dxbc::reflection(VERTEX)
+    let colour = iridia_dxbc::reflection(VERTEX)
         .unwrap()
         .inputs
         .into_iter()

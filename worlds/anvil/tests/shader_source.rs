@@ -50,7 +50,7 @@ fn a_shader_by_name_is_the_permutations_container() {
             .unwrap()
             .contains(&wanted.key)
     );
-    assert!(primase_dxbc::lift(&container).is_ok());
+    assert!(iridia_dxbc::lift(&container).is_ok());
     // an entry that is no template, and a key the template lacks, are refused by reason
     let not_template = source
         .container(forge, 0, Stage::Pixel, 0)

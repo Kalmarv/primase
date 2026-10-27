@@ -40,7 +40,7 @@ fn read(program: &Program, name: &str, indexed: bool) -> Result<Majorness, Unsho
 }
 
 fn dxbc(bytes: &[u8]) -> Program {
-    primase_dxbc::lift(bytes).expect("fxc's program lifts")
+    iridia_dxbc::lift(bytes).expect("fxc's program lifts")
 }
 
 fn dxil(bytes: &[u8]) -> Program {

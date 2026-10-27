@@ -23,7 +23,7 @@ fn shaders() -> Vec<(&'static str, Box<dyn PixelShader>)> {
         (
             "DXBC",
             Box::new(executor(
-                primase_dxbc::lift(include_bytes!("fixtures/evaluate.dxbc")).unwrap(),
+                iridia_dxbc::lift(include_bytes!("fixtures/evaluate.dxbc")).unwrap(),
             )),
         ),
         (

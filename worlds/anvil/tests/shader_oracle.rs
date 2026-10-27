@@ -1,4 +1,4 @@
-//! The shader oracle: each template `lower-anvil-material` lowers has its own pixel shader run in primase-dxbc (the
+//! The shader oracle: each template `lower-anvil-material` lowers has its own pixel shader run in iridia-dxbc (the
 //! container its MaterialTemplate body holds, unmodified) on random inputs, and its outputs compared with the formulas
 //! the pass makes its textures of ([`primase_anvil::passes::formulas`]). The method is the Riders Republic notes'
 //! (docs/material-spec.md §8: uniform textures, chosen constants and interpolants, decoys in the constants the shader
@@ -38,7 +38,7 @@ impl Random {
 
 /// The program lifted and ready to run.
 fn executor(container: &[u8]) -> ProgramShader {
-    let program = primase_dxbc::lift(container).unwrap_or_else(|e| panic!("the shader lifts: {e}"));
+    let program = iridia_dxbc::lift(container).unwrap_or_else(|e| panic!("the shader lifts: {e}"));
     ProgramShader::new(program).unwrap_or_else(|e| panic!("the shader runs: {e}"))
 }
 

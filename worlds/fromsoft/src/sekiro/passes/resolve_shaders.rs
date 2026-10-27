@@ -384,7 +384,7 @@ fn run(
                     // the vertex program's interface: a DXBC program's reflection, a DXIL one's as the lifter reads it
                     let interface = match format {
                         ShaderFormat::Dxbc => {
-                            primase_dxbc::reflection(&code).map_err(|e| format!("{vertex_name}: {e}"))?
+                            iridia_dxbc::reflection(&code).map_err(|e| format!("{vertex_name}: {e}"))?
                         }
                         _ => {
                             primase_dxil::lift(&code)

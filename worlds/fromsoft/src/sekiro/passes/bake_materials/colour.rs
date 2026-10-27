@@ -143,7 +143,7 @@ mod tests {
     #[test]
     fn material_colour_is_not_silently_promoted_to_albedo() {
         let p =
-            primase_dxbc::lift(include_bytes!("../../../../tests/fixtures/colour_material.dxbc")).unwrap();
+            iridia_dxbc::lift(include_bytes!("../../../../tests/fixtures/colour_material.dxbc")).unwrap();
         let stage = binding(&p);
         assert_eq!(
             refusal(&p, &stage),
@@ -154,7 +154,7 @@ mod tests {
 
     #[test]
     fn colour_reading_the_frame_light_is_scene_dependent() {
-        let p = primase_dxbc::lift(include_bytes!("../../../../tests/fixtures/colour_scene.dxbc")).unwrap();
+        let p = iridia_dxbc::lift(include_bytes!("../../../../tests/fixtures/colour_scene.dxbc")).unwrap();
         assert_eq!(
             refusal(&p, &binding(&p)),
             "no albedo output role: scene-dependent Colour (frame, view, object or raster inputs); portable surface terms not established"

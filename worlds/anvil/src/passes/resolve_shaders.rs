@@ -963,7 +963,7 @@ fn program(
         None => Err(format!(
             "the template has no {stage} permutation for the G-buffer key"
         )),
-        Some(bytes) => match primase_dxbc::lift(&bytes) {
+        Some(bytes) => match iridia_dxbc::lift(&bytes) {
             Err(e) => Err(format!("a {stage} program the lifter refuses: {e}")),
             Ok(program) => {
                 let e = world.spawn();
@@ -1648,7 +1648,7 @@ mod key_tests {
 
     /// The D3D behaviour fixture of the DXBC lifter (our own HLSL, `ps_5_0`): five colour targets, which a lifted
     /// program states as the system values `SV_Target0..4` (not as semantics), as every program this pass binds.
-    const LIFTED: &[u8] = include_bytes!("../../../../toolkit/dxbc/tests/fixtures/modes.dxbc");
+    const LIFTED: &[u8] = include_bytes!("../../tests/fixtures/modes.dxbc");
 
     #[test]
     fn cached_program_records_facts_and_graph_from_its_single_fixture_lift() {
@@ -1727,7 +1727,7 @@ mod key_tests {
     /// pass reads for the class, the rest Unknown with why.
     #[test]
     fn a_lifted_pixel_programs_targets_have_the_gbuffer_roles() {
-        let program = primase_dxbc::lift(LIFTED).unwrap();
+        let program = iridia_dxbc::lift(LIFTED).unwrap();
         assert!(
             program
                 .interface
@@ -1795,7 +1795,7 @@ mod key_tests {
     /// template with no class in the notes' table has them all Unknown.
     #[test]
     fn the_lanes_of_targets_2_and_3_follow_the_shading_class() {
-        let program = primase_dxbc::lift(LIFTED).unwrap();
+        let program = iridia_dxbc::lift(LIFTED).unwrap();
         let of = |class: Option<u8>, target: u32| -> Vec<(u8, OutputRole)> {
             output_bindings(&program.interface, class, true)
                 .into_iter()
@@ -1830,7 +1830,7 @@ mod key_tests {
             surface::Base, surface::Emission, surface::Place, surface::Roughness, surface::Surface,
             surface::Term,
         };
-        let program = primase_dxbc::lift(LIFTED).unwrap();
+        let program = iridia_dxbc::lift(LIFTED).unwrap();
         let read = |class: Option<u8>, opaque: bool| -> (Surface, Vec<u32>) {
             let outputs = output_bindings(&program.interface, class, opaque);
             let targets = outputs
@@ -1908,7 +1908,7 @@ mod key_tests {
     /// takes, on the lifter's D3D fixture.
     #[test]
     fn the_engine_buffers_bind_the_lanes_the_program_reads() {
-        let program = primase_dxbc::lift(LIFTED).unwrap();
+        let program = iridia_dxbc::lift(LIFTED).unwrap();
         let reads = program.constant_reads().unwrap();
         let m = material(Vec::new(), Vec::new(), Vec::new());
         let mut found_buffer = false;
@@ -1969,7 +1969,7 @@ mod key_tests {
         m.flags.booleans[MaterialFlags::ALPHA_TEST_ENABLED] = 1;
         let mut counts = BTreeMap::new();
         // a program that reads cb2[18].y gets the Material's reference, the 128 / 255 of a Material with the test on
-        let reads = primase_dxbc::lift(LIFTED).unwrap().constant_reads().unwrap();
+        let reads = iridia_dxbc::lift(LIFTED).unwrap().constant_reads().unwrap();
         let _ = engine_constants(2, ResourceId(0), 18 * 16 + 16, Ok(&reads), &m, &mut counts);
         let tile = |reference: f32| engine_tile(2, 18, reference).remove(0);
         assert_eq!(

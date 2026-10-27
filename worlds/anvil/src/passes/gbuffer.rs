@@ -248,10 +248,7 @@ mod tests {
 
     #[test]
     fn surface_places_follow_target_labels_not_signature_or_role_ordinals() {
-        let mut program = primase_dxbc::lift(include_bytes!(
-            "../../../../toolkit/dxbc/tests/fixtures/modes.dxbc"
-        ))
-        .unwrap();
+        let mut program = iridia_dxbc::lift(include_bytes!("../../tests/fixtures/modes.dxbc")).unwrap();
         program.interface.outputs.reverse();
         let n = NormalEncoding::encode_octahedral_diamond([0.0, 0.0, 1.0], 1).map(|v| f32::from(v) / 255.0);
         let outputs = [

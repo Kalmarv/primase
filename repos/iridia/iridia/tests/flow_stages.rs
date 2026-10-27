@@ -29,7 +29,7 @@ const FIXTURES: [(&str, &[u8], &[u8]); 3] = [
 fn walked(stage: &str) -> Vec<(&'static str, Program, Values)> {
     let (_, dxbc, dxil) = FIXTURES.iter().find(|f| f.0 == stage).expect("a fixture");
     [
-        ("dxbc", primase_dxbc::lift(dxbc).expect("fxc's program lifts")),
+        ("dxbc", iridia_dxbc::lift(dxbc).expect("fxc's program lifts")),
         ("dxil", primase_dxil::lift(dxil).expect("dxc's program lifts")),
     ]
     .into_iter()

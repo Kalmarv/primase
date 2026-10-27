@@ -1,6 +1,6 @@
 //! The shader pack's census: every container of `ShaderDataDX11.bin` (in the folder `installs.riders` names),
 //! checked by its own checksum and the pack by its trailing MD5 ([`containers`]); each container's stage counted; each
-//! pixel program lifted by primase-dxbc, the refusals counted by their message (numbers taken out), most first: what the
+//! pixel program lifted by iridia-dxbc, the refusals counted by their message (numbers taken out), most first: what the
 //! lift lacks, by how many pixel shaders it stops. A count, not an oracle. Run by hand: `cargo test -p primase-anvil --test shaders -- --ignored --nocapture`.
 
 use std::collections::BTreeMap;
@@ -59,7 +59,7 @@ fn every_container_of_the_shader_pack() {
         if stage != "pixel" {
             continue;
         }
-        let lifted = match primase_dxbc::lift(c) {
+        let lifted = match iridia_dxbc::lift(c) {
             Ok(_) => "lifted".to_owned(),
             Err(e) => kind(&e.detail),
         };

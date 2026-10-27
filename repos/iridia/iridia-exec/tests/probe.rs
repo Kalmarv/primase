@@ -14,7 +14,7 @@ fn programs() -> [(&'static str, Program); 2] {
     [
         (
             "fxc",
-            primase_dxbc::lift(include_bytes!("fixtures/probe_vs.dxbc")).expect("fxc's program lifts"),
+            iridia_dxbc::lift(include_bytes!("fixtures/probe_vs.dxbc")).expect("fxc's program lifts"),
         ),
         (
             "dxc",
@@ -119,7 +119,7 @@ fn a_run_that_reads_no_texture_names_no_stand_in() {
 /// A program that is not a vertex program is refused before it is run.
 #[test]
 fn a_pixel_program_is_refused() {
-    let pixel = primase_dxbc::lift(include_bytes!("fixtures/lanes.dxbc")).expect("the pixel program lifts");
+    let pixel = iridia_dxbc::lift(include_bytes!("fixtures/lanes.dxbc")).expect("the pixel program lifts");
     let refused = VertexProbe::new(pixel).expect_err("a pixel program");
     assert_eq!(refused, "the program is not a vertex program");
 }
