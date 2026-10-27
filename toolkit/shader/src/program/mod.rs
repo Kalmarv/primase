@@ -155,12 +155,33 @@ impl Program {
     /// Reuse this lift's facts; no parsing, lifting, graph building or GPU work. Material resolvers add output roles
     /// with ProgramFacts::bound once they have resolved the stage binding.
     pub fn facts(&self, name: impl Into<String>) -> primase_core::shader::ProgramFacts {
-        primase_core::shader::ProgramFacts {name:name.into(),hash:self.provenance.source_hash.clone(),stage:self.stage,
-            shader:None,instruction_count:self.provenance.instruction_count,
-            inputs:self.interface.inputs.iter().filter(|input|input.used).cloned().collect(),
-            resources:self.interface.resources.iter().map(|resource|primase_core::shader::ProgramResourceFacts {
-                id:resource.id,name:resource.provenance.name.clone(),d3d:resource.provenance.d3d,
-            }).collect(),outputs:Vec::new(),surface:Default::default(),not_lifted:None}
+        primase_core::shader::ProgramFacts {
+            name: name.into(),
+            hash: self.provenance.source_hash.clone(),
+            stage: self.stage,
+            shader: None,
+            instruction_count: self.provenance.instruction_count,
+            inputs: self
+                .interface
+                .inputs
+                .iter()
+                .filter(|input| input.used)
+                .cloned()
+                .collect(),
+            resources: self
+                .interface
+                .resources
+                .iter()
+                .map(|resource| primase_core::shader::ProgramResourceFacts {
+                    id: resource.id,
+                    name: resource.provenance.name.clone(),
+                    d3d: resource.provenance.d3d,
+                })
+                .collect(),
+            outputs: Vec::new(),
+            surface: Default::default(),
+            not_lifted: None,
+        }
     }
 }
 

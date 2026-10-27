@@ -556,7 +556,11 @@ impl Pass for LowerFromSoftPartCollision {
                 log.approximate(STORED_POSE, 1);
                 for (tri, material) in triangles.into_iter().zip(materials) {
                     let surface = surface_of(game, material, log);
-                    push(&mut soup, tri, surfaces.index(surface).map_err(|e| e.to_string())?)?;
+                    push(
+                        &mut soup,
+                        tri,
+                        surfaces.index(surface).map_err(|e| e.to_string())?,
+                    )?;
                     log.count("part collision triangles", 1);
                 }
             }
@@ -817,7 +821,8 @@ mod tests {
     }
 
     #[test]
-    fn a_parts_collision_becomes_collision_on_the_part_itself_and_a_placed_prototype_is_left_to_the_object_pass() {
+    fn a_parts_collision_becomes_collision_on_the_part_itself_and_a_placed_prototype_is_left_to_the_object_pass()
+     {
         let (mut w, placed, unplaced) = world();
         let mut log = PassLog::default();
         let options = Options::from(
@@ -833,7 +838,12 @@ mod tests {
         assert!(soup.positions.iter().all(|p| p[0].abs() <= 0.5 + 1e-5));
         assert!(!w.has::<ObjectBodies>(unplaced));
         assert!(w.has::<ObjectBodies>(placed) && !w.has::<Collision>(placed));
-        assert_eq!(w.get::<crate::sekiro::source::CollisionSource>(unplaced).unwrap().group, "parts");
+        assert_eq!(
+            w.get::<crate::sekiro::source::CollisionSource>(unplaced)
+                .unwrap()
+                .group,
+            "parts"
+        );
         assert_eq!(log.counts["parts whose collision was lowered"], 1);
         assert!(w.verify_resources().is_empty());
         // the choices are the program's

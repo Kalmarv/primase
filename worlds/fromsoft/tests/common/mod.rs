@@ -5,13 +5,15 @@ use primase_core::pass::{PassManager, PassRegistry, RunReport};
 
 /// Binder file paths from a clip-only plan's asset provenance, in authored order.
 /// This includes companion binders that have events but no clip members.
-pub fn clip_binders(plans:&World)->Vec<String> {
-    let mut binders=Vec::new();
-    for (entity,_) in plans.iter::<primase_core::Asset>() {
-        if let Some(provenance)=plans.get::<primase_core::Provenance>(entity) {
+pub fn clip_binders(plans: &World) -> Vec<String> {
+    let mut binders = Vec::new();
+    for (entity, _) in plans.iter::<primase_core::Asset>() {
+        if let Some(provenance) = plans.get::<primase_core::Provenance>(entity) {
             for origin in &provenance.origins {
-                let path=origin.file.to_string();
-                if !binders.contains(&path) {binders.push(path);}
+                let path = origin.file.to_string();
+                if !binders.contains(&path) {
+                    binders.push(path);
+                }
             }
         }
     }

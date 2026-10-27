@@ -112,10 +112,7 @@ impl CharacterReport {
     pub fn notices(&self) -> Vec<Notice> {
         let mut out = Vec::new();
         for (items, reason) in [
-            (
-                &self.unread,
-                "character binder members not read (named below)",
-            ),
+            (&self.unread, "character binder members not read (named below)"),
             (
                 &self.npc_stats_unread.iter().cloned().collect::<Vec<String>>(),
                 "NPC param descriptive fields not read (the display masks were)",
@@ -325,7 +322,10 @@ fn named_parts(text: &str) -> Vec<String> {
 /// This query chooses no NPC row, group visibility or fallback outfit; those
 /// are program choices. The model identity is its prototype entity in `world`.
 pub fn character_display_masks(world: &World) -> Vec<(Entity, Vec<Vec<u32>>)> {
-    world.iter::<source::MeshMasks>().map(|(entity, masks)| (entity, masks.0.clone())).collect()
+    world
+        .iter::<source::MeshMasks>()
+        .map(|(entity, masks)| (entity, masks.0.clone()))
+        .collect()
 }
 
 fn display_marks(material: &str) -> Result<Vec<u32>> {
@@ -977,7 +977,13 @@ impl<'a> Reading<'a> {
     /// a character without an animation binder).
     fn read_animations(&self, of: &str, w: &mut World) -> Result<(Vec<Entity>, AnimationReport)> {
         let of = character_id(of)?;
-        read_animation_clips(&self.install,self.decoder,of,self.animation_clips.as_deref(),w)
+        read_animation_clips(
+            &self.install,
+            self.decoder,
+            of,
+            self.animation_clips.as_deref(),
+            w,
+        )
     }
 
     /// Put the payloads read so far into `w` as its resources.
@@ -987,10 +993,17 @@ impl<'a> Reading<'a> {
         // remains readable if params are unavailable; event lowering reports that refusal.
         use crate::components::material_events::MaterialExRows;
         let material_rows = if self.game == Game::EldenRing {
-            super::params::read_param(&self.install, &self.archive, self.decoder, "MaterialExParam.param")
-                .and_then(|table|super::material_events::read_rows(&table))
-                .unwrap_or_else(|error|MaterialExRows::refused(error.to_string()))
-        } else {MaterialExRows::refused("Sekiro MaterialEx row layout is unproven; raw events retained")};
+            super::params::read_param(
+                &self.install,
+                &self.archive,
+                self.decoder,
+                "MaterialExParam.param",
+            )
+            .and_then(|table| super::material_events::read_rows(&table))
+            .unwrap_or_else(|error| MaterialExRows::refused(error.to_string()))
+        } else {
+            MaterialExRows::refused("Sekiro MaterialEx row layout is unproven; raw events retained")
+        };
         w.insert_resource(material_rows);
         w.insert_resource(source::TexturePayloads(self.textures));
         w.insert_resource(source::ShaderPrograms(self.programs));
@@ -1175,46 +1188,76 @@ pub fn read_parts_with(
 
 /// Compatibility for eager character helpers. Planning and each strict load use
 /// CharacterReader; continuing after a bad member is this helper's explicit choice.
-fn read_animation_clips(install:&Install,decoder:&Decoder<'_>,of:&str,chosen:Option<&[String]>,
-    destination:&mut World)->Result<(Vec<Entity>,AnimationReport)> {
-    let mut reader=CharacterReader::animations(install.clone(),of,*decoder);
-    if let Some(chosen)=chosen {reader=reader.with_animation_clips(of,chosen.to_vec());}
-    eager_clip_roots(&mut reader,destination)
+fn read_animation_clips(
+    install: &Install,
+    decoder: &Decoder<'_>,
+    of: &str,
+    chosen: Option<&[String]>,
+    destination: &mut World,
+) -> Result<(Vec<Entity>, AnimationReport)> {
+    let mut reader = CharacterReader::animations(install.clone(), of, *decoder);
+    if let Some(chosen) = chosen {
+        reader = reader.with_animation_clips(of, chosen.to_vec());
+    }
+    eager_clip_roots(&mut reader, destination)
 }
 
-fn eager_clip_roots(reader:&mut CharacterReader<'_>,destination:&mut World)->Result<(Vec<Entity>,AnimationReport)> {
-    reader.first_index=destination.next_index();
-    let convert_error=|error:Box<dyn std::error::Error+Send+Sync>|invalid("FromSoftware eager animations",0,error.to_string());
-    let (mut plans,_)=reader.read().map_err(convert_error)?;
-    let roots:Vec<_>=plans.iter::<animation::ClipSource>().map(|(e,_)|e).collect();
-    let mut animations=Vec::new();let mut report=AnimationReport::default();
+fn eager_clip_roots(
+    reader: &mut CharacterReader<'_>,
+    destination: &mut World,
+) -> Result<(Vec<Entity>, AnimationReport)> {
+    reader.first_index = destination.next_index();
+    let convert_error = |error: Box<dyn std::error::Error + Send + Sync>| {
+        invalid("FromSoftware eager animations", 0, error.to_string())
+    };
+    let (mut plans, _) = reader.read().map_err(convert_error)?;
+    let roots: Vec<_> = plans.iter::<animation::ClipSource>().map(|(e, _)| e).collect();
+    let mut animations = Vec::new();
+    let mut report = AnimationReport::default();
     for entity in roots {
-        let name=plans.get::<Name>(entity).map_or_else(||format!("clip {}",entity.index()),|name|name.0.clone());
-        match reader.load(&plans,&[entity].into()) {
-            Err(error)=>{
-                report.refused.entry(format!("clip {name} load refused: {error}")).or_default().push(name);
+        let name = plans
+            .get::<Name>(entity)
+            .map_or_else(|| format!("clip {}", entity.index()), |name| name.0.clone());
+        match reader.load(&plans, &[entity].into()) {
+            Err(error) => {
+                report
+                    .refused
+                    .entry(format!("clip {name} load refused: {error}"))
+                    .or_default()
+                    .push(name);
                 plans.despawn(entity);
             }
-            Ok((mut loaded,_))=>{
+            Ok((mut loaded, _)) => {
                 // Definitions borrowed from earlier loaded roots keep their identity.
-                let borrowed:Vec<_>=loaded.entities().filter(|other|*other!=entity && plans.is_alive(*other)).collect();
-                for borrowed in borrowed {loaded.despawn(borrowed);}
-                let previous=plans.split_off(&[entity].into());
-                plans.absorb(loaded).map_err(|error|invalid("FromSoftware eager animations",0,error.to_string()))?;
+                let borrowed: Vec<_> = loaded
+                    .entities()
+                    .filter(|other| *other != entity && plans.is_alive(*other))
+                    .collect();
+                for borrowed in borrowed {
+                    loaded.despawn(borrowed);
+                }
+                let previous = plans.split_off(&[entity].into());
+                plans
+                    .absorb(loaded)
+                    .map_err(|error| invalid("FromSoftware eager animations", 0, error.to_string()))?;
                 drop(previous);
                 animations.push(entity);
-                if let Some(mut read)=reader.last_load_reports.remove(&entity) {
+                if let Some(mut read) = reader.last_load_reports.remove(&entity) {
                     report.absent_components.append(&mut read.absent_components);
                     report.unread.append(&mut read.unread);
-                    for (reason,mut names) in read.refused {report.refused.entry(reason).or_default().append(&mut names);}
+                    for (reason, mut names) in read.refused {
+                        report.refused.entry(reason).or_default().append(&mut names);
+                    }
                 }
             }
         }
     }
-    reader.clips.summarize(&plans,&animations,&mut report);
-    let loaded=plans.subset(&plans.closure(animations.iter().copied()));
-    destination.absorb(loaded).map_err(|error|invalid("FromSoftware eager animations",0,error.to_string()))?;
-    Ok((animations,report))
+    reader.clips.summarize(&plans, &animations, &mut report);
+    let loaded = plans.subset(&plans.closure(animations.iter().copied()));
+    destination
+        .absorb(loaded)
+        .map_err(|error| invalid("FromSoftware eager animations", 0, error.to_string()))?;
+    Ok((animations, report))
 }
 
 /// The assets [`read_character`] and [`read_parts`] read as a [`Reader`] for [`primase_core::convert`]: the read world
@@ -1270,19 +1313,29 @@ impl<'a> CharacterReader<'a> {
     /// path, without opening model, material or texture binders. `read` parses no
     /// animation tracks; `load` decodes only the reached clip entities.
     pub fn animations(install: Install, id: &str, decoder: Decoder<'a>) -> Self {
-        let mut reader=Self::new(install,id,decoder).with_animations(id);
-        reader.request=Request::Animations;
+        let mut reader = Self::new(install, id, decoder).with_animations(id);
+        reader.request = Request::Animations;
         reader
     }
 
     /// The same clip-only scope with an already-open immutable archive index.
     /// Catalogs can share one handle across readers; it must belong to this install.
-    pub fn animations_in(install:Install,id:&str,decoder:Decoder<'a>,archive:std::sync::Arc<Archive>)->Result<Self> {
-        if archive.game()!=install.game || archive.root()!=install.root.as_path() {
-            return Err(invalid("FromSoftware clip reader",0,"shared archive belongs to a different install or game"));
+    pub fn animations_in(
+        install: Install,
+        id: &str,
+        decoder: Decoder<'a>,
+        archive: std::sync::Arc<Archive>,
+    ) -> Result<Self> {
+        if archive.game() != install.game || archive.root() != install.root.as_path() {
+            return Err(invalid(
+                "FromSoftware clip reader",
+                0,
+                "shared archive belongs to a different install or game",
+            ));
         }
-        let mut reader=Self::animations(install,id,decoder);
-        reader.clips=animation::ClipReader::with_archive(archive);Ok(reader)
+        let mut reader = Self::animations(install, id, decoder);
+        reader.clips = animation::ClipReader::with_archive(archive);
+        Ok(reader)
     }
 
     /// List only these explicit clip names or keys; an ambiguous name refuses.
@@ -1314,9 +1367,9 @@ impl Reader for CharacterReader<'_> {
         world.reserve_indices_before(self.first_index);
         // The adapter returns clip plans; direct read_character_with remains the explicit
         // eager API until consumers migrate. Loading, not read(), parses chosen tracks.
-        let mut model_options=self.options.clone();
-        model_options.animations=None;
-        model_options.animation_clips=None;
+        let mut model_options = self.options.clone();
+        model_options.animations = None;
+        model_options.animation_clips = None;
         let mut animation_line = None;
         let reports = match &self.request {
             Request::Animations => Vec::new(),
@@ -1371,24 +1424,43 @@ impl Reader for CharacterReader<'_> {
         if let (Some(line), Some(of)) = (animation_line, &self.options.animations) {
             report.push(("fromsoft character".into(), format!("{of}: {line}")));
         }
-        if let Some(of)=&self.options.animations {
+        if let Some(of) = &self.options.animations {
             character_id(of)?;
-            if let Some(root)=self.clips.plan(&self.install,&self.decoder,of,
-                self.options.animation_clips.as_deref(),&mut world)? {
-                let count=world.get::<Asset>(root).map_or(0,|asset|asset.members.len());
-                if let Request::Character(id)=&self.request {
-                    let source=format!("chr/{id}");
-                    let owner=world.iter::<Asset>().find(|(entity,_)|world.get::<Source>(*entity).is_some_and(|s|s.0==source))
-                        .map(|(entity,_)|entity);
-                    if let Some(owner)=owner {
-                        let clips=world.get::<Asset>(root).expect("published clip asset").members.clone();
-                        let mut asset=world.get::<Asset>(owner).expect("character asset").clone();
-                        asset.members.extend(clips);world.insert(owner,asset);world.despawn(root);
+            if let Some(root) = self.clips.plan(
+                &self.install,
+                &self.decoder,
+                of,
+                self.options.animation_clips.as_deref(),
+                &mut world,
+            )? {
+                let count = world.get::<Asset>(root).map_or(0, |asset| asset.members.len());
+                if let Request::Character(id) = &self.request {
+                    let source = format!("chr/{id}");
+                    let owner = world
+                        .iter::<Asset>()
+                        .find(|(entity, _)| world.get::<Source>(*entity).is_some_and(|s| s.0 == source))
+                        .map(|(entity, _)| entity);
+                    if let Some(owner) = owner {
+                        let clips = world
+                            .get::<Asset>(root)
+                            .expect("published clip asset")
+                            .members
+                            .clone();
+                        let mut asset = world.get::<Asset>(owner).expect("character asset").clone();
+                        asset.members.extend(clips);
+                        world.insert(owner, asset);
+                        world.despawn(root);
                     }
                 }
-                report.push(("fromsoft clip plans".into(),format!("{of}: {count} listed; no animation tracks loaded")));
+                report.push((
+                    "fromsoft clip plans".into(),
+                    format!("{of}: {count} listed; no animation tracks loaded"),
+                ));
             } else {
-                report.push(("fromsoft clip plans".into(),format!("{of}: no authored animation binder")));
+                report.push((
+                    "fromsoft clip plans".into(),
+                    format!("{of}: no authored animation binder"),
+                ));
             }
         }
         // each prototype's box, as read: a model whose box can't be computed refuses the read
@@ -1412,11 +1484,15 @@ impl Reader for CharacterReader<'_> {
             if !keep.contains(&entity)
                 || world.has::<primase_havok::world::HavokAnimation>(entity)
                 || world.has::<primase_core::Clip>(entity)
-            { continue; }
+            {
+                continue;
+            }
             let label = format!("{} havok skeleton", source.character);
-            let existing: Vec<_> = world.iter::<primase_core::Skeleton>()
+            let existing: Vec<_> = world
+                .iter::<primase_core::Skeleton>()
                 .filter(|(e, _)| world.get::<Name>(*e).is_some_and(|name| name.0 == label))
-                .map(|(e, _)| e).collect();
+                .map(|(e, _)| e)
+                .collect();
             if existing.len() > 1 {
                 return Err(format!("clip {}: ambiguous source skeleton {label:?}", source.key).into());
             }
@@ -1425,21 +1501,35 @@ impl Reader for CharacterReader<'_> {
             }
         }
         let mut part = world.subset(&keep);
-        let selected:Vec<_>=part.iter::<animation::ClipSource>().map(|(entity,source)|(entity,source.clone())).collect();
-        let mut report=Vec::new();
-        for (entity,source) in selected {
+        let selected: Vec<_> = part
+            .iter::<animation::ClipSource>()
+            .map(|(entity, source)| (entity, source.clone()))
+            .collect();
+        let mut report = Vec::new();
+        for (entity, source) in selected {
             use primase_core::Component;
-            source.verify(entity,&part)?;
-            if part.has::<primase_havok::world::HavokAnimation>(entity) || part.has::<primase_core::Clip>(entity) {continue}
-            let read=self.clips.load(&self.install,&self.decoder,&source,entity,&mut part)?;
+            source.verify(entity, &part)?;
+            if part.has::<primase_havok::world::HavokAnimation>(entity)
+                || part.has::<primase_core::Clip>(entity)
+            {
+                continue;
+            }
+            let read = self
+                .clips
+                .load(&self.install, &self.decoder, &source, entity, &mut part)?;
             self.pending.extend(animation_notices(&read));
-            report.push(("fromsoft clip load".into(),format!("{}: raw havok.animation, {} bones, {} events; no lowering or map policy applied",
-                source.key,read.bones,read.events)));
-            self.last_load_reports.insert(entity,read);
+            report.push((
+                "fromsoft clip load".into(),
+                format!(
+                    "{}: raw havok.animation, {} bones, {} events; no lowering or map policy applied",
+                    source.key, read.bones, read.events
+                ),
+            ));
+            self.last_load_reports.insert(entity, read);
         }
         super::convert::scope_sources(&mut part)?;
         // Remove any metadata-only skeleton a refused/duplicate source did not reference.
-        let part=part.subset(&part.closure(roots.iter().copied()));
+        let part = part.subset(&part.closure(roots.iter().copied()));
         Ok((part, report))
     }
     fn emits(&self) -> &'static [&'static str] {
@@ -1458,38 +1548,71 @@ impl Reader for CharacterReader<'_> {
 mod tests {
     use super::*;
 
-    fn unread_clip_reader()->CharacterReader<'static> {
-        let binder=Binder{version:[0;8],format:0,files:["walk.hkx","run.hkx"].into_iter().map(|name|
-            crate::BinderFile{id:None,name:Some(name.into()),flags:0,bytes:vec![0xff]}).collect()};
-        let mut reader=CharacterReader::animations(Install::sekiro("not opened"),"c1010",Decoder{oodle:None,max_output:1024});
-        reader.clips=animation::ClipReader::test_binder("c1010",binder);reader
+    fn unread_clip_reader() -> CharacterReader<'static> {
+        let binder = Binder {
+            version: [0; 8],
+            format: 0,
+            files: ["walk.hkx", "run.hkx"]
+                .into_iter()
+                .map(|name| crate::BinderFile {
+                    id: None,
+                    name: Some(name.into()),
+                    flags: 0,
+                    bytes: vec![0xff],
+                })
+                .collect(),
+        };
+        let mut reader = CharacterReader::animations(
+            Install::sekiro("not opened"),
+            "c1010",
+            Decoder {
+                oodle: None,
+                max_output: 1024,
+            },
+        );
+        reader.clips = animation::ClipReader::test_binder("c1010", binder);
+        reader
     }
 
     #[test]
     fn clip_scopes_share_one_archive_and_refuse_another_install_identity() {
-        let archive=std::sync::Arc::new(Archive::empty(Game::Sekiro));
-        let install=Install::sekiro(std::path::PathBuf::new());
-        let decoder=Decoder{oodle:None,max_output:1024};
-        let first=CharacterReader::animations_in(install.clone(),"c1010",decoder,archive.clone()).unwrap();
-        let second=CharacterReader::animations_in(install.clone(),"c0000",decoder,archive.clone()).unwrap();
-        assert_eq!(std::sync::Arc::strong_count(&archive),3);
-        drop(first);assert_eq!(std::sync::Arc::strong_count(&archive),2);
-        drop(second);assert_eq!(std::sync::Arc::strong_count(&archive),1);
-        assert!(CharacterReader::animations_in(Install::sekiro("another install"),"c1010",decoder,archive).is_err());
+        let archive = std::sync::Arc::new(Archive::empty(Game::Sekiro));
+        let install = Install::sekiro(std::path::PathBuf::new());
+        let decoder = Decoder {
+            oodle: None,
+            max_output: 1024,
+        };
+        let first =
+            CharacterReader::animations_in(install.clone(), "c1010", decoder, archive.clone()).unwrap();
+        let second =
+            CharacterReader::animations_in(install.clone(), "c0000", decoder, archive.clone()).unwrap();
+        assert_eq!(std::sync::Arc::strong_count(&archive), 3);
+        drop(first);
+        assert_eq!(std::sync::Arc::strong_count(&archive), 2);
+        drop(second);
+        assert_eq!(std::sync::Arc::strong_count(&archive), 1);
+        assert!(
+            CharacterReader::animations_in(Install::sekiro("another install"), "c1010", decoder, archive)
+                .is_err()
+        );
     }
 
     #[test]
     fn clip_only_scope_plans_without_models_and_load_is_strict_on_the_same_entity() {
-        let mut reader=unread_clip_reader();reader.first_index=40;
-        let (plans,_)=reader.read().unwrap();
-        assert!(plans.entities().all(|entity|entity.index()>=40));
-        assert_eq!(plans.iter::<animation::ClipSource>().count(),2);
-        assert_eq!(plans.iter::<SourceModel>().count(),0);
-        let selected=plans.iter::<animation::ClipSource>().next().unwrap().0;
-        let key=plans.get::<primase_core::ClipKey>(selected).cloned();
-        let error=reader.load(&plans,&[selected].into()).unwrap_err().to_string();
-        assert!(error.contains("walk") && error.contains("Havok tagfile not read"),"{error}");
-        assert_eq!(plans.get::<primase_core::ClipKey>(selected).cloned(),key);
+        let mut reader = unread_clip_reader();
+        reader.first_index = 40;
+        let (plans, _) = reader.read().unwrap();
+        assert!(plans.entities().all(|entity| entity.index() >= 40));
+        assert_eq!(plans.iter::<animation::ClipSource>().count(), 2);
+        assert_eq!(plans.iter::<SourceModel>().count(), 0);
+        let selected = plans.iter::<animation::ClipSource>().next().unwrap().0;
+        let key = plans.get::<primase_core::ClipKey>(selected).cloned();
+        let error = reader.load(&plans, &[selected].into()).unwrap_err().to_string();
+        assert!(
+            error.contains("walk") && error.contains("Havok tagfile not read"),
+            "{error}"
+        );
+        assert_eq!(plans.get::<primase_core::ClipKey>(selected).cloned(), key);
         assert!(!plans.has::<primase_havok::world::HavokAnimation>(selected));
     }
 
@@ -1503,15 +1626,20 @@ mod tests {
         plans.spawn();
         let next = plans.next_index();
         let count = plans.entity_count();
-        let roots: Vec<_> = plans.iter::<animation::ClipSource>()
-            .map(|(entity, source)| (entity, source.name.clone())).collect();
+        let roots: Vec<_> = plans
+            .iter::<animation::ClipSource>()
+            .map(|(entity, source)| (entity, source.name.clone()))
+            .collect();
         assert_eq!(roots.len(), 2);
         for (entity, name) in roots {
             // Deliberately unreadable HKX must reach the decoder even when an
             // earlier root's source skeleton is below the allocator. Previously
             // this failed first with spawn_at's NotAscending error.
             let error = reader.load(&plans, &[entity].into()).unwrap_err().to_string();
-            assert!(error.contains(&name) && error.contains("Havok tagfile not read"), "{error}");
+            assert!(
+                error.contains(&name) && error.contains("Havok tagfile not read"),
+                "{error}"
+            );
             assert_eq!(plans.next_index(), next);
             assert_eq!(plans.entity_count(), count);
             assert!(plans.has::<primase_core::Skeleton>(skeleton));
@@ -1521,36 +1649,56 @@ mod tests {
 
     #[test]
     fn eager_helper_reports_every_bad_root_and_preserves_the_existing_destination() {
-        let mut reader=unread_clip_reader();let mut destination=World::new();
-        let existing=destination.spawn();destination.insert(existing,Name("existing model".into()));
-        let next=destination.next_index();
-        let (clips,report)=eager_clip_roots(&mut reader,&mut destination).unwrap();
-        assert!(clips.is_empty());assert_eq!(report.refused.len(),2);
-        for name in ["walk","run"] {assert!(report.refused.keys().any(|reason|reason.contains(name)));}
-        assert_eq!(destination.entity_count(),1);assert_eq!(destination.next_index(),next);
-        assert_eq!(destination.get::<Name>(existing).unwrap().0,"existing model");
+        let mut reader = unread_clip_reader();
+        let mut destination = World::new();
+        let existing = destination.spawn();
+        destination.insert(existing, Name("existing model".into()));
+        let next = destination.next_index();
+        let (clips, report) = eager_clip_roots(&mut reader, &mut destination).unwrap();
+        assert!(clips.is_empty());
+        assert_eq!(report.refused.len(), 2);
+        for name in ["walk", "run"] {
+            assert!(report.refused.keys().any(|reason| reason.contains(name)));
+        }
+        assert_eq!(destination.entity_count(), 1);
+        assert_eq!(destination.next_index(), next);
+        assert_eq!(destination.get::<Name>(existing).unwrap().0, "existing model");
     }
 
     #[test]
     fn authored_group_query_preserves_models_mesh_order_and_duplicates_without_choices() {
-        let mut world=World::new();
-        let first=world.spawn();let second=world.spawn();
-        let groups=vec![vec![],vec![4,1,4],vec![31]];
-        world.insert(first,source::MeshMasks(groups.clone()));
-        world.insert(second,source::MeshMasks(vec![vec![]]));
-        let rows=character_display_masks(&world);
-        assert_eq!(rows.len(),2);
-        assert_eq!(rows.iter().find(|(entity,_)|*entity==first).unwrap().1,groups);
-        assert_eq!(rows.iter().find(|(entity,_)|*entity==second).unwrap().1,vec![Vec::<u32>::new()]);
+        let mut world = World::new();
+        let first = world.spawn();
+        let second = world.spawn();
+        let groups = vec![vec![], vec![4, 1, 4], vec![31]];
+        world.insert(first, source::MeshMasks(groups.clone()));
+        world.insert(second, source::MeshMasks(vec![vec![]]));
+        let rows = character_display_masks(&world);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows.iter().find(|(entity, _)| *entity == first).unwrap().1,
+            groups
+        );
+        assert_eq!(
+            rows.iter().find(|(entity, _)| *entity == second).unwrap().1,
+            vec![Vec::<u32>::new()]
+        );
         assert!(!world.component_names().contains(&"core.draw_groups"));
         assert!(world.resource::<source::NpcRows>().is_none());
     }
 
     #[test]
     fn dummy_notice_describes_the_lowered_rotation_and_its_fallback() {
-        let report = CharacterReport { dummies: 3, dummies_unplaced: 1, ..Default::default() };
+        let report = CharacterReport {
+            dummies: 3,
+            dummies_unplaced: 1,
+            ..Default::default()
+        };
         let notices = report.notices();
-        let placed = notices.iter().find(|notice| notice.reason.contains("dummy polygons placed")).unwrap();
+        let placed = notices
+            .iter()
+            .find(|notice| notice.reason.contains("dummy polygons placed"))
+            .unwrap();
         assert_eq!(placed.count, 2);
         assert!(placed.reason.contains("forward (-Z)") && placed.reason.contains("upward (+Y)"));
         assert!(placed.reason.contains("use_upward_vector") && placed.reason.contains("otherwise identity"));

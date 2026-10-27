@@ -13,7 +13,9 @@ use std::collections::{BTreeMap, BTreeSet};
 /// The game whose HitMtrl classes the world's collision uses: the one its read states (`fromsoft.read_scope`); a world
 /// without a scope (one a test builds by hand) reads them as Sekiro's, the table the passes began with.
 pub(super) fn game_of(world: &World) -> Game {
-    world.resource::<ReadScope>().map_or(Game::Sekiro, |scope| scope.game)
+    world
+        .resource::<ReadScope>()
+        .map_or(Game::Sekiro, |scope| scope.game)
 }
 
 /// The core surface a HitMtrl class (an ID's base value, modulo 100) of `game` stands for, where its class is known to

@@ -36,7 +36,9 @@ impl LowerFromSoftMapRecords {
         let mut leave_out = BTreeSet::new();
         for word in g.required("leave-out").split('+').filter(|w| !w.is_empty()) {
             if !primase_core::kind_is_valid(word) {
-                return Err(format!("leave-out: {word:?} is not a region kind (a word of a-z, 0-9 and _)"));
+                return Err(format!(
+                    "leave-out: {word:?} is not a region kind (a word of a-z, 0-9 and _)"
+                ));
             }
             leave_out.insert(word.to_owned());
         }
@@ -87,7 +89,9 @@ impl Pass for LowerFromSoftMapRecords {
         "a region's rotation read as a part's (degrees about X, then Z, then Y), its shape not drawn: the marker is the region's place; an event has no place"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
-        let records = world.remove_resource::<MapRecords>().ok_or("no fromsoft.map_records")?;
+        let records = world
+            .remove_resource::<MapRecords>()
+            .ok_or("no fromsoft.map_records")?;
         let area = world.resource::<ReadScope>().map(|s| s.area.clone());
         let label = |name: &str| match &area {
             Some(area) => format!("{area}:{name}"),
@@ -117,7 +121,13 @@ impl Pass for LowerFromSoftMapRecords {
             world.insert(e, transform);
             world.insert(e, Name(region.name.clone()));
             world.insert(e, Source(label(&region.name)));
-            world.insert(e, Record {category:"region".into(),kind:word.clone()});
+            world.insert(
+                e,
+                Record {
+                    category: "region".into(),
+                    kind: word.clone(),
+                },
+            );
             world.insert(e, region);
             log.place(e);
             log.count(&format!("{word} regions"), 1);
@@ -145,7 +155,13 @@ impl Pass for LowerFromSoftMapRecords {
             world.insert(e, transform);
             world.insert(e, Name(part.name.clone()));
             world.insert(e, Source(label(&part.name)));
-            world.insert(e, Record {category:"part".into(),kind:part.kind.into()});
+            world.insert(
+                e,
+                Record {
+                    category: "part".into(),
+                    kind: part.kind.into(),
+                },
+            );
             log.count(&format!("{} parts", part.kind), 1);
             world.insert(e, part);
             log.place(e);
@@ -157,7 +173,13 @@ impl Pass for LowerFromSoftMapRecords {
                 .map_or_else(|| format!("type_{}", event.type_code), str::to_owned);
             world.insert(e, Name(event.name.clone()));
             world.insert(e, Source(label(&event.name)));
-            world.insert(e, Record {category:"event".into(),kind:word.clone()});
+            world.insert(
+                e,
+                Record {
+                    category: "event".into(),
+                    kind: word.clone(),
+                },
+            );
             world.insert(e, event);
             log.place(e);
             log.count(&format!("{word} events"), 1);
@@ -240,7 +262,10 @@ mod tests {
         assert_eq!(kinds, ["sound", "wind_sfx", "type_77", "enemy"]);
         assert_eq!(log.counts["enemy parts"], 1);
         let (enemy, part) = w.iter::<UnplacedPart>().next().unwrap();
-        assert_eq!((part.npc_param, part.model.as_deref()), (Some(100), Some("c1000")));
+        assert_eq!(
+            (part.npc_param, part.model.as_deref()),
+            (Some(100), Some("c1000"))
+        );
         assert_eq!(w.get::<Transform>(enemy).unwrap().cols[3], [5., 6., -7.]);
         assert_eq!(log.counts["spawn regions left to lower-fromsoft-extras"], 1);
         let (e, _) = w.iter::<Marker>().next().unwrap();
@@ -249,12 +274,33 @@ mod tests {
         // the transform is the part rule's: the position through the core frame (z reflected)
         assert_eq!(w.get::<Transform>(e).unwrap().cols[3], [1., 2., -3.]);
         let (chest, event) = w.iter::<Event>().next().unwrap();
-        assert_eq!((event.type_name, event.part.as_deref()), (Some("treasure"), Some("o1")));
+        assert_eq!(
+            (event.type_name, event.part.as_deref()),
+            (Some("treasure"), Some("o1"))
+        );
         assert!(!w.has::<Transform>(chest) && !w.has::<Marker>(chest));
         assert_eq!(w.get::<Name>(chest).unwrap().0, "Chest");
-        assert_eq!(w.get::<Record>(chest),Some(&Record {category:"event".into(),kind:"treasure".into()}));
-        assert_eq!(w.get::<Record>(enemy),Some(&Record {category:"part".into(),kind:"enemy".into()}));
-        assert_eq!(w.get::<Record>(e),Some(&Record {category:"region".into(),kind:"sound".into()}));
+        assert_eq!(
+            w.get::<Record>(chest),
+            Some(&Record {
+                category: "event".into(),
+                kind: "treasure".into()
+            })
+        );
+        assert_eq!(
+            w.get::<Record>(enemy),
+            Some(&Record {
+                category: "part".into(),
+                kind: "enemy".into()
+            })
+        );
+        assert_eq!(
+            w.get::<Record>(e),
+            Some(&Record {
+                category: "region".into(),
+                kind: "sound".into()
+            })
+        );
         assert_eq!(log.counts["treasure events"], 1);
     }
 

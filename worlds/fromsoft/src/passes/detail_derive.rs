@@ -269,7 +269,6 @@ impl Weights<'static> {
 }
 
 impl Weights<'_> {
-
     /// The details it weighs: one more than its weights.
     fn details(self) -> usize {
         self.0.len() + 1
@@ -1048,7 +1047,13 @@ fn solve_metal_at(program: &Program<'_>, scale: f32) -> Result<Option<(DetailCon
     };
     // the details' colour `C` from an albedo
     let unit = |albedo: [f32; 3]| -> [f32; 3] {
-        std::array::from_fn(|i| if colour[i] == 0. { 0. } else { albedo[i] / colour[i] })
+        std::array::from_fn(|i| {
+            if colour[i] == 0. {
+                0.
+            } else {
+                albedo[i] / colour[i]
+            }
+        })
     };
     let mut tints = vec![[0f32; 3]; n];
     let mut alone = Vec::new();
@@ -1106,7 +1111,10 @@ fn solve_metal_at(program: &Program<'_>, scale: f32) -> Result<Option<(DetailCon
                     return Ok(unlerp(f, &terms, &w, p) - m);
                 }
             }
-            Err(format!("no base mask leaves the metallic factor unsaturated where detail {p} is read").into())
+            Err(
+                format!("no base mask leaves the metallic factor unsaturated where detail {p} is read")
+                    .into(),
+            )
         })()?;
         for j in (0..n).filter(|&j| j != p) {
             let x = weights.half_way(j);
@@ -1623,7 +1631,9 @@ fn fold_cost(c: &DetailConstants, gain: f32, words: &[[f32; 3]], seed: u32) -> R
         let s = random_samples(&mut random, c.details.len());
         let _uv = [random.unit(), random.unit()];
         let folded = c.lowering.written(&equation(c, 1., &s));
-        let unfolded = unfolded_constants.lowering.written(&equation(&unfolded_constants, gain, &s));
+        let unfolded = unfolded_constants
+            .lowering
+            .written(&equation(&unfolded_constants, gain, &s));
         for i in 0..3 {
             largest = largest.max(units(folded.albedo[i], unfolded.albedo[i])?);
             if let (Some(a), Some(b)) = (folded.reflectance, unfolded.reflectance) {
@@ -2034,7 +2044,9 @@ fn ramp_weights(
         a.insert(t.base_normal, [0.5, 0.5, 0.5, x]);
         observe_slots(probe, outputs, &a, UV).ok().map(|o| o.albedo)
     };
-    let xs: Vec<f32> = (0..=RAMP_SAMPLES).map(|i| i as f32 / RAMP_SAMPLES as f32).collect();
+    let xs: Vec<f32> = (0..=RAMP_SAMPLES)
+        .map(|i| i as f32 / RAMP_SAMPLES as f32)
+        .collect();
     let mut values: Vec<[f32; 3]> = Vec::with_capacity(xs.len());
     for &x in &xs {
         match at(x) {

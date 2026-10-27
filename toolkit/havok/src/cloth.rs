@@ -179,7 +179,10 @@ fn link(v: Value<'_, '_>, kind: LinkKind) -> Result<Link> {
             LinkKind::Plain | LinkKind::Bend => None,
         },
         stretch: match kind {
-            LinkKind::Bend => Some((v.field("stretchMaxLength")?.float()?, v.field("stretchStiffness")?.float()?)),
+            LinkKind::Bend => Some((
+                v.field("stretchMaxLength")?.float()?,
+                v.field("stretchStiffness")?.float()?,
+            )),
             LinkKind::Plain | LinkKind::Compressible => None,
         },
     })
@@ -240,7 +243,9 @@ fn sim_cloth(v: Value<'_, '_>) -> Result<SimCloth> {
         })?,
         max_particle_radius: v.field("maxParticleRadius")?.float()?,
         total_mass: v.field("totalMass")?.float()?,
-        constraint_sets: list(v.field("staticConstraintSets")?, |s| constraint_set(s.dereference()?))?,
+        constraint_sets: list(v.field("staticConstraintSets")?, |s| {
+            constraint_set(s.dereference()?)
+        })?,
     })
 }
 
@@ -259,7 +264,11 @@ pub fn read(tag: &Tagfile<'_>) -> Result<Physics> {
         if bone_to_body.len() != skeleton.bones.len() {
             return Err(invalid(
                 data.offset,
-                format!("{} bones, {} body map entries", skeleton.bones.len(), bone_to_body.len()),
+                format!(
+                    "{} bones, {} body map entries",
+                    skeleton.bones.len(),
+                    bone_to_body.len()
+                ),
             ));
         }
         out.ragdolls.push(Ragdoll {

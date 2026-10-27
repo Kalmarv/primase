@@ -171,7 +171,13 @@ fn world_uv_is_skipped_where_no_material_is_world_mapped() {
     );
     let mut report = RunReport::default();
     PassManager::new(PassRegistry::new())
-        .run(&mut w, &Pipeline { passes: vec![Box::new(LowerAnvilWorldUv)] }, &mut report)
+        .run(
+            &mut w,
+            &Pipeline {
+                passes: vec![Box::new(LowerAnvilWorldUv)],
+            },
+            &mut report,
+        )
         .expect("skipped, not refused");
     assert!(!report.steps[0].skipped.is_empty(), "{:?}", report.steps[0]);
     assert!(w.get::<Mesh>(mesh).is_some());

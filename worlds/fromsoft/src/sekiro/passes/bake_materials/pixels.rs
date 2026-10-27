@@ -77,7 +77,12 @@ fn values(raw: &Raw, place: Place, pixel: usize) -> Result<[f32; 4], String> {
 /// A unit world or view normal in the baked texture's bytes.
 fn normal(n: [f32; 3]) -> [u8; 4] {
     // Frozen N=(0,1,0), T=(1,0,0), cross(N,T)=(0,0,-1). Restore the source normal convention.
-    [byte(-n[2] * 0.5 + 0.5), byte(n[0] * 0.5 + 0.5), byte(n[1] * 0.5 + 0.5), 255]
+    [
+        byte(-n[2] * 0.5 + 0.5),
+        byte(n[0] * 0.5 + 0.5),
+        byte(n[1] * 0.5 + 0.5),
+        255,
+    ]
 }
 
 /// The resolved values both the cache key and the evaluation consume. Entity identities never enter the key.

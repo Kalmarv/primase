@@ -180,7 +180,13 @@ fn world_facts(world: &World) -> (usize, usize, usize, usize, usize) {
             }
         }
     }
-    (world.entity_count(), textures, texture_bytes, primitives, vertices)
+    (
+        world.entity_count(),
+        textures,
+        texture_bytes,
+        primitives,
+        vertices,
+    )
 }
 
 /// One area's read, stage by stage.
@@ -206,7 +212,14 @@ fn census(game: Game, label: &str, install: &Install, area: &str, decoder: &Deco
         PEAK.store(now, Relaxed);
         running = Some((name.to_owned(), Instant::now(), now));
     };
-    let read = read_game_area_staged(install, area, decoder, &Options::default(), &mut world, &mut stage);
+    let read = read_game_area_staged(
+        install,
+        area,
+        decoder,
+        &Options::default(),
+        &mut world,
+        &mut stage,
+    );
     let peak = PEAK.load(Relaxed);
     let retained = CURRENT.load(Relaxed).saturating_sub(baseline);
     match read {

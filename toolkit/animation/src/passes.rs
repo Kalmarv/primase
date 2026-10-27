@@ -188,8 +188,14 @@ impl Pass for EvaluateClip {
             }
             log.count("source control channels not evaluated", out.controls.len() as u64);
             // Phase 1 exposes these in pose::Evaluated; source/display consumers migrate in phase 3.
-            log.count("draw-group channels not applied to static world", out.draw_groups.len() as u64);
-            log.count("material-parameter targets not applied to static world", out.material_parameters.len() as u64);
+            log.count(
+                "draw-group channels not applied to static world",
+                out.draw_groups.len() as u64,
+            );
+            log.count(
+                "material-parameter targets not applied to static world",
+                out.material_parameters.len() as u64,
+            );
             log.count(
                 "joint channels on another skeleton than the bound rig's",
                 out.other_skeletons as u64,
@@ -318,7 +324,11 @@ impl Pass for PoseSkin {
                 if let Some(t) = v.tangents {
                     streams.insert(Semantic::Tangent(0), Stream::F32x4(t));
                 }
-                streams.extend(v.further_tangents.into_iter().map(|(set, values)| (Semantic::Tangent(set), Stream::F32x4(values))));
+                streams.extend(
+                    v.further_tangents
+                        .into_iter()
+                        .map(|(set, values)| (Semantic::Tangent(set), Stream::F32x4(values))),
+                );
             }
             let holder = if drawn == e {
                 e

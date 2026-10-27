@@ -234,7 +234,12 @@ pub(crate) fn dummy_sockets(model: &Model) -> Result<(primase_core::Sockets, Vec
         };
         let [ax, ay, az] = axes.unwrap_or([[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]]);
         let offset = primase_core::Rest::Affine(Transform {
-            cols: [ax.map(|c| c as f32), ay.map(|c| c as f32), az.map(|c| c as f32), t],
+            cols: [
+                ax.map(|c| c as f32),
+                ay.map(|c| c as f32),
+                az.map(|c| c as f32),
+                t,
+            ],
         })
         .converted(&FRAME)
         .matrix();
@@ -439,7 +444,10 @@ mod tests {
             parent,
         };
         let model = Model {
-            bones: vec![flat("root", [1.0, 0.0, 0.0], -1), flat("hand", [0.0, 2.0, 0.0], 0)],
+            bones: vec![
+                flat("root", [1.0, 0.0, 0.0], -1),
+                flat("hand", [0.0, 2.0, 0.0], 0),
+            ],
             dummies: vec![
                 // the hand's own origin, which stands at (1, 2, 0) in the model
                 dummy([0.0; 3], 1, 1),
@@ -463,11 +471,21 @@ mod tests {
         assert_eq!(sockets.0.len(), 2);
         let near = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-5);
         let (first, second) = (&sockets.0[0], &sockets.0[1]);
-        assert_eq!((first.id, first.joint, first.name.as_str()), (primase_core::SocketId(0), primase_core::JointId(1), "dummy 120"));
+        assert_eq!(
+            (first.id, first.joint, first.name.as_str()),
+            (primase_core::SocketId(0), primase_core::JointId(1), "dummy 120")
+        );
         assert!(near(first.offset.cols[3], [0.0; 3]), "{:?}", first.offset);
         // (5, 5, 5) is (4, 3, 5) from the hand in the file's frame, (4, 3, -5) in the world's
-        assert_eq!((second.id, second.joint), (primase_core::SocketId(1), primase_core::JointId(1)));
-        assert!(near(second.offset.cols[3], [4.0, 3.0, -5.0]), "{:?}", second.offset);
+        assert_eq!(
+            (second.id, second.joint),
+            (primase_core::SocketId(1), primase_core::JointId(1))
+        );
+        assert!(
+            near(second.offset.cols[3], [4.0, 3.0, -5.0]),
+            "{:?}",
+            second.offset
+        );
     }
 
     /// Directions the file stores at 0.05 to 0.3 of a unit give the same frame as unit ones: forward along -Z, upward
@@ -478,10 +496,17 @@ mod tests {
         let near = |a: [f64; 3], b: [f64; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-12);
         // forward along +X at length 0.5, upward along +Y at length 0.3: Z = -forward, X = Y x Z
         let axes = dummy_axes([0.5, 0.0, 0.0], [0.0, 0.3, 0.0]).unwrap();
-        assert!(near(axes[0], [0., 0., 1.]) && near(axes[1], [0., 1., 0.]) && near(axes[2], [-1., 0., 0.]), "{axes:?}");
+        assert!(
+            near(axes[0], [0., 0., 1.]) && near(axes[1], [0., 1., 0.]) && near(axes[2], [-1., 0., 0.]),
+            "{axes:?}"
+        );
         // the install's own convention, forward -Z and upward +Y at the stored 0.196, is the identity
         let identity = dummy_axes([0.0, 0.0, -0.196], [0.0, 0.196, 0.0]).unwrap();
-        assert!(near(identity[0], [1., 0., 0.]) && near(identity[1], [0., 1., 0.]) && near(identity[2], [0., 0., 1.]));
+        assert!(
+            near(identity[0], [1., 0., 0.])
+                && near(identity[1], [0., 1., 0.])
+                && near(identity[2], [0., 0., 1.])
+        );
         // 0.0006 off perpendicular, 0.057 long: still orthonormal
         let off = dummy_axes([0.0, 0.0, -0.057], [0.0, 0.057, 0.000_034]).unwrap();
         let dot = |a: [f64; 3], b: [f64; 3]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f64>();
@@ -534,7 +559,11 @@ mod tests {
                 assert!(dot(turned[i], turned[j]).abs() < 1e-5, "{turned:?}");
             }
         }
-        assert_ne!(turned[..3], [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], "{turned:?}");
+        assert_ne!(
+            turned[..3],
+            [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            "{turned:?}"
+        );
         assert_eq!(cols(1)[..3], [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
     }
 

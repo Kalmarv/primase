@@ -532,7 +532,10 @@ mod tests {
     fn the_older_flat_file_is_refused_and_other_variables_configure_nothing() {
         let flat = "PRIMASE_GTA_DIR = 'file/gta'\nPRIMASE_SHADER_DIFF_LIMIT = '7'\n";
         let e = config(&[], Some(flat)).unwrap_err().to_string();
-        assert!(e.contains("data.toml") && e.contains("structured sections"), "{e}");
+        assert!(
+            e.contains("data.toml") && e.contains("structured sections"),
+            "{e}"
+        );
         let e = config::validate(flat).unwrap_err().to_string();
         assert!(e.contains("structured sections"), "{e}");
         // every variable set, PRIMASE_DATA aside: the configuration is empty

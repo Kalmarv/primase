@@ -7,9 +7,9 @@
 //! it is counted by name. Sets the read left unresolved are not part of the scene's environment and stay as stored.
 use crate::gparam::Value;
 use crate::sekiro::source::{DrawField, DrawParam, SetChosen};
-use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::Resource;
 use primase_core::World;
+use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 
 /// What a lowering counts for each field it interpolated.
 pub const INTERPOLATED: &str = "draw-param field interpolated linearly between its stored hours over the 24-hour day (angles included): a preview policy, not the engine's curve";
@@ -36,7 +36,10 @@ impl SampleFromSoftDrawParams {
     }
     fn from_given(g: &Given) -> Result<Self, String> {
         let text = g.required("hour");
-        Self::new(text.parse::<f32>().map_err(|_| format!("hour={text} is not a number"))?)
+        Self::new(
+            text.parse::<f32>()
+                .map_err(|_| format!("hour={text} is not a number"))?,
+        )
     }
 }
 
@@ -88,7 +91,9 @@ impl Pass for SampleFromSoftDrawParams {
                     continue;
                 }
                 let key = &group.fields[first].key;
-                let same: Vec<usize> = (first..group.fields.len()).filter(|&i| group.fields[i].key == *key).collect();
+                let same: Vec<usize> = (first..group.fields.len())
+                    .filter(|&i| group.fields[i].key == *key)
+                    .collect();
                 for &i in &same {
                     taken[i] = true;
                 }
@@ -101,8 +106,13 @@ impl Pass for SampleFromSoftDrawParams {
                     .map(|&i| {
                         let field = &group.fields[i];
                         match field.time {
-                            Some(time) if time.is_finite() && (0.0..=24.0).contains(&time) => Ok((time.rem_euclid(24.0), &field.value)),
-                            _ => Err(why(format!("{}: a stored hour that is missing or outside 0 to 24", field.key))),
+                            Some(time) if time.is_finite() && (0.0..=24.0).contains(&time) => {
+                                Ok((time.rem_euclid(24.0), &field.value))
+                            }
+                            _ => Err(why(format!(
+                                "{}: a stored hour that is missing or outside 0 to 24",
+                                field.key
+                            ))),
                         }
                     })
                     .collect::<Result<Vec<_>, String>>()?;
@@ -172,7 +182,11 @@ fn interpolate(a: &Value, b: &Value, t: f32) -> Result<(Value, How), String> {
     }
     let lane = |a: f32, b: f32| {
         let value = a * (1.0 - t) + b * t;
-        if value.is_finite() { Ok(value) } else { Err("a non-finite interpolated value".to_owned()) }
+        if value.is_finite() {
+            Ok(value)
+        } else {
+            Err("a non-finite interpolated value".to_owned())
+        }
     };
     let value = match (a, b) {
         (Value::Float(a), Value::Float(b)) => {
@@ -184,10 +198,15 @@ fn interpolate(a: &Value, b: &Value, t: f32) -> Result<(Value, How), String> {
             Value::Float(value)
         }
         (Value::Vec2(a), Value::Vec2(b)) => Value::Vec2([lane(a[0], b[0])?, lane(a[1], b[1])?]),
-        (Value::Vec3(a), Value::Vec3(b)) => Value::Vec3([lane(a[0], b[0])?, lane(a[1], b[1])?, lane(a[2], b[2])?]),
-        (Value::Vec4(a), Value::Vec4(b)) => {
-            Value::Vec4([lane(a[0], b[0])?, lane(a[1], b[1])?, lane(a[2], b[2])?, lane(a[3], b[3])?])
+        (Value::Vec3(a), Value::Vec3(b)) => {
+            Value::Vec3([lane(a[0], b[0])?, lane(a[1], b[1])?, lane(a[2], b[2])?])
         }
+        (Value::Vec4(a), Value::Vec4(b)) => Value::Vec4([
+            lane(a[0], b[0])?,
+            lane(a[1], b[1])?,
+            lane(a[2], b[2])?,
+            lane(a[3], b[3])?,
+        ]),
         _ => return Ok((a.clone(), How::Held)),
     };
     Ok((value, How::Interpolated))
@@ -200,7 +219,12 @@ mod tests {
     use primase_core::pass::{PassManager, PassRegistry, RunReport};
 
     fn at(key: &str, time: f32, value: Value) -> DrawField {
-        DrawField { key: key.into(), name: String::new(), value, time: Some(time) }
+        DrawField {
+            key: key.into(),
+            name: String::new(),
+            value,
+            time: Some(time),
+        }
     }
 
     fn world(fields: Vec<DrawField>, chosen: SetChosen) -> World {
@@ -208,7 +232,13 @@ mod tests {
         w.insert_resource(DrawParam {
             file: "fixture".into(),
             version: 5,
-            groups: vec![DrawGroup { key: "Light".into(), name: String::new(), id: 7, chosen, fields }],
+            groups: vec![DrawGroup {
+                key: "Light".into(),
+                name: String::new(),
+                id: 7,
+                chosen,
+                fields,
+            }],
         });
         w
     }
@@ -219,13 +249,22 @@ mod tests {
         registry.add(&SAMPLE_FROMSOFT_DRAW_PARAMS);
         let manager = PassManager::new(registry).with_pass_checks(true);
         let mut report = RunReport::default();
-        let pipeline = manager.registry.parse(&format!("sample-fromsoft-draw-params{{hour={hour}}}")).map_err(|e| e.to_string())?;
-        manager.run(w, &pipeline, &mut report).map_err(|e| e.to_string())?;
+        let pipeline = manager
+            .registry
+            .parse(&format!("sample-fromsoft-draw-params{{hour={hour}}}"))
+            .map_err(|e| e.to_string())?;
+        manager
+            .run(w, &pipeline, &mut report)
+            .map_err(|e| e.to_string())?;
         Ok(report)
     }
 
     fn values(w: &World) -> Vec<(String, Value, Option<f32>)> {
-        w.resource::<DrawParam>().unwrap().groups[0].fields.iter().map(|f| (f.key.clone(), f.value.clone(), f.time)).collect()
+        w.resource::<DrawParam>().unwrap().groups[0]
+            .fields
+            .iter()
+            .map(|f| (f.key.clone(), f.value.clone(), f.time))
+            .collect()
     }
 
     /// Hand-worked: keys 2 at 6 and 8 at 18 meet 5 at 12; the day wraps, so 0 lies halfway from 18 to 6 (5 again) and
@@ -234,14 +273,30 @@ mod tests {
     fn a_field_is_interpolated_between_its_hours_over_the_wrap_and_counted() {
         for (hour, expected) in [("6", 2.0), ("12", 5.0), ("18", 8.0), ("0", 5.0), ("24", 5.0)] {
             let mut w = world(
-                vec![at("Brightness", 6.0, Value::Float(2.0)), at("Brightness", 18.0, Value::Float(8.0))],
+                vec![
+                    at("Brightness", 6.0, Value::Float(2.0)),
+                    at("Brightness", 18.0, Value::Float(8.0)),
+                ],
                 SetChosen::OnlySet,
             );
             let report = run(&mut w, hour).unwrap();
-            assert_eq!(values(&w), [("Brightness".to_owned(), Value::Float(expected), Some(hour.parse::<f32>().unwrap()))], "{hour}");
+            assert_eq!(
+                values(&w),
+                [(
+                    "Brightness".to_owned(),
+                    Value::Float(expected),
+                    Some(hour.parse::<f32>().unwrap())
+                )],
+                "{hour}"
+            );
             let log = &report.steps[0].log;
             let counted = log.approximations.get(INTERPOLATED).copied().unwrap_or(0);
-            assert_eq!(counted, u64::from(hour == "12" || hour == "0" || hour == "24"), "{hour}: {:?}", log.approximations);
+            assert_eq!(
+                counted,
+                u64::from(hour == "12" || hour == "0" || hour == "24"),
+                "{hour}: {:?}",
+                log.approximations
+            );
         }
     }
 
@@ -270,29 +325,62 @@ mod tests {
         let log = &report.steps[0].log;
         assert_eq!(log.approximations.get(INTERPOLATED), Some(&1));
         assert_eq!(log.approximations.get(HELD), None);
-        let mut w = world(vec![at("Flag", 6.0, Value::Bool(false)), at("Flag", 18.0, Value::Bool(true))], SetChosen::OnlySet);
+        let mut w = world(
+            vec![
+                at("Flag", 6.0, Value::Bool(false)),
+                at("Flag", 18.0, Value::Bool(true)),
+            ],
+            SetChosen::OnlySet,
+        );
         let report = run(&mut w, "12").unwrap();
         assert_eq!(values(&w)[0].1, Value::Bool(false));
         assert_eq!(report.steps[0].log.approximations.get(HELD), Some(&1));
-        let mut w = world(vec![at("Flag", 6.0, Value::Bool(false)), at("Flag", 18.0, Value::Bool(true))], SetChosen::OnlySet);
+        let mut w = world(
+            vec![
+                at("Flag", 6.0, Value::Bool(false)),
+                at("Flag", 18.0, Value::Bool(true)),
+            ],
+            SetChosen::OnlySet,
+        );
         run(&mut w, "0").unwrap();
-        assert_eq!(values(&w)[0].1, Value::Bool(true), "the wrap holds the last key of the day");
+        assert_eq!(
+            values(&w)[0].1,
+            Value::Bool(true),
+            "the wrap holds the last key of the day"
+        );
     }
 
     #[test]
     fn unresolved_sets_stay_as_stored_and_bad_input_is_a_named_error() {
-        let stored = vec![at("Density", 0.0, Value::Float(1.0)), at("Density", 12.0, Value::Float(2.0))];
+        let stored = vec![
+            at("Density", 0.0, Value::Float(1.0)),
+            at("Density", 12.0, Value::Float(2.0)),
+        ];
         let mut w = world(stored.clone(), SetChosen::Unresolved);
         run(&mut w, "6").unwrap();
         assert_eq!(values(&w).len(), 2);
         for hour in ["25", "-1", "nan", "x"] {
-            assert!(run(&mut world(stored.clone(), SetChosen::OnlySet), hour).is_err(), "{hour}");
+            assert!(
+                run(&mut world(stored.clone(), SetChosen::OnlySet), hour).is_err(),
+                "{hour}"
+            );
         }
-        let conflicting = vec![at("Density", 6.0, Value::Float(1.0)), at("Density", 6.0, Value::Float(2.0))];
-        assert!(run(&mut world(conflicting, SetChosen::OnlySet), "6").unwrap_err().contains("conflicting"));
+        let conflicting = vec![
+            at("Density", 6.0, Value::Float(1.0)),
+            at("Density", 6.0, Value::Float(2.0)),
+        ];
+        assert!(
+            run(&mut world(conflicting, SetChosen::OnlySet), "6")
+                .unwrap_err()
+                .contains("conflicting")
+        );
         let mut untimed = stored;
         untimed[1].time = None;
-        assert!(run(&mut world(untimed, SetChosen::OnlySet), "6").unwrap_err().contains("hour"));
+        assert!(
+            run(&mut world(untimed, SetChosen::OnlySet), "6")
+                .unwrap_err()
+                .contains("hour")
+        );
     }
 
     #[test]
@@ -300,6 +388,12 @@ mod tests {
         let mut w = World::new();
         let report = run(&mut w, "12").unwrap();
         let step = &report.steps[0];
-        assert!(!step.skipped.is_empty() || step.log.counts.contains_key("areas with no draw-param environment"));
+        assert!(
+            !step.skipped.is_empty()
+                || step
+                    .log
+                    .counts
+                    .contains_key("areas with no draw-param environment")
+        );
     }
 }

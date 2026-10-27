@@ -96,7 +96,10 @@ fn status(game: Game, path: &str) -> (&'static str, &'static str) {
     } else if ends(".tpfbhd") || ends(".tpfbdt") {
         match game {
             Game::Sekiro => ("read", "primase read/textures.rs catalog; lab Textures"),
-            Game::EldenRing => ("unread", "primase: Elden Ring finds textures by material, not here; lab none"),
+            Game::EldenRing => (
+                "unread",
+                "primase: Elden Ring finds textures by material, not here; lab none",
+            ),
         }
     } else if ends(".emevd.dcx") {
         match game {
@@ -104,7 +107,10 @@ fn status(game: Game, path: &str) -> (&'static str, &'static str) {
             Game::EldenRing => ("unread", "primase: Elden Ring's states are refused; lab none"),
         }
     } else if path.starts_with("/param/drawparam/") {
-        ("read", "primase read/draw_param.rs when the caller names the file; lab Properties")
+        (
+            "read",
+            "primase read/draw_param.rs when the caller names the file; lab Properties",
+        )
     } else {
         ("unread", "primase: no reader; lab none")
     }
@@ -119,7 +125,11 @@ fn pattern(path: &str, number: &str) -> String {
 }
 
 fn extension(name: &str) -> String {
-    let leaf = name.rsplit(['/', '\\']).next().unwrap_or(name).to_ascii_lowercase();
+    let leaf = name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(name)
+        .to_ascii_lowercase();
     let leaf = leaf.strip_suffix(".dcx").unwrap_or(&leaf);
     leaf.rsplit_once('.').map_or(String::new(), |(_, e)| e.to_owned())
 }
@@ -136,7 +146,12 @@ struct FileTotals {
 }
 
 /// The dictionary's paths of an area that the archive holds, grouped by pattern, status and owner.
-fn files(game: Game, archive: &Archive, names: &NameDictionary, area: &str) -> BTreeMap<FileGroup, FileTotals> {
+fn files(
+    game: Game,
+    archive: &Archive,
+    names: &NameDictionary,
+    area: &str,
+) -> BTreeMap<FileGroup, FileTotals> {
     let number = &area[1..];
     let block = format!("/{}_", &area[..6]);
     let mut out: BTreeMap<FileGroup, FileTotals> = BTreeMap::new();
@@ -197,7 +212,9 @@ fn area_census(
     if let Some(names) = names {
         let listed = files(game, archive, names, area);
         for ((pattern, status, owner), FileTotals { count, bytes, paths }) in &listed {
-            println!("FILES {name} {area} {pattern} files {count} bytes {bytes} status {status} owner {owner}");
+            println!(
+                "FILES {name} {area} {pattern} files {count} bytes {bytes} status {status} owner {owner}"
+            );
             let binder = ["bnd.dcx", "bnd", "bhd"].iter().any(|s| pattern.ends_with(s));
             if !binder {
                 continue;
@@ -269,7 +286,10 @@ fn area_census(
     let mut regions: BTreeMap<(String, u32), Vec<&Region>> = BTreeMap::new();
     let all_regions = layout.map_regions()?;
     for r in &all_regions {
-        regions.entry((word(r.type_name, r.type_code), r.type_code)).or_default().push(r);
+        regions
+            .entry((word(r.type_name, r.type_code), r.type_code))
+            .or_default()
+            .push(r);
     }
     for ((kind, code), list) in &regions {
         let shapes: BTreeSet<String> = list
@@ -282,13 +302,19 @@ fn area_census(
             })
             .collect();
         let lengths: BTreeSet<usize> = list.iter().map(|r| r.type_data.len()).collect();
-        let example = list.iter().find(|r| !r.type_data.is_empty()).map(|r| hex(&r.type_data));
+        let example = list
+            .iter()
+            .find(|r| !r.type_data.is_empty())
+            .map(|r| hex(&r.type_data));
         let entity_ids = list.iter().filter(|r| r.entity_id > 0).count();
         // a spawn region is the extras' travel marker, not a record of the records pass
         let (status, lowered) = if layout.generation.spawn_region == Some(*code) {
             (
                 "read (lower-fromsoft-extras: travel markers)",
-                format!("0 records, {} read as spawn points", extras.region_types.get(kind).copied().unwrap_or(0)),
+                format!(
+                    "0 records, {} read as spawn points",
+                    extras.region_types.get(kind).copied().unwrap_or(0)
+                ),
             )
         } else {
             (
@@ -306,11 +332,17 @@ fn area_census(
     let all_events = layout.map_events()?;
     let mut events: BTreeMap<(String, u32), Vec<&Event>> = BTreeMap::new();
     for e in &all_events {
-        events.entry((word(e.type_name, e.type_code), e.type_code)).or_default().push(e);
+        events
+            .entry((word(e.type_name, e.type_code), e.type_code))
+            .or_default()
+            .push(e);
     }
     for ((kind, code), list) in &events {
         let lengths: BTreeSet<usize> = list.iter().map(|e| e.type_data.len()).collect();
-        let example = list.iter().find(|e| !e.type_data.is_empty()).map(|e| hex(&e.type_data));
+        let example = list
+            .iter()
+            .find(|e| !e.type_data.is_empty())
+            .map(|e| hex(&e.type_data));
         let parts_named = list.iter().filter(|e| e.part.is_some()).count();
         let regions_named = list.iter().filter(|e| e.region.is_some()).count();
         let status = if layout.generation.map_offset_event == Some(*code) {
@@ -340,10 +372,19 @@ fn area_census(
     Ok(())
 }
 
-fn census(game: Game, install: &Install, names: Option<&NameDictionary>, decoder: &Decoder<'_>) -> Result<()> {
+fn census(
+    game: Game,
+    install: &Install,
+    names: Option<&NameDictionary>,
+    decoder: &Decoder<'_>,
+) -> Result<()> {
     let archive = install.open()?;
     if let Some(names) = names {
-        let unnamed = archive.entries.keys().filter(|h| !names.names.contains_key(h)).count();
+        let unnamed = archive
+            .entries
+            .keys()
+            .filter(|h| !names.names.contains_key(h))
+            .count();
         println!(
             "DICTIONARY {} entries {} unnamed {unnamed}",
             game.name(),

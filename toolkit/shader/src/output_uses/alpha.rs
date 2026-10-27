@@ -3,7 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::shader::{AlphaComparison, ResourceId};
 
-use crate::flow::{At, BinaryOperator as B, MathFunction as M, Node, NodeId, Op, Read, UnaryOperator as U, Values};
+use crate::flow::{
+    At, BinaryOperator as B, MathFunction as M, Node, NodeId, Op, Read, UnaryOperator as U, Values,
+};
 use crate::{ProgramGraph, SystemValue};
 
 /// The producer's established dither texture and its scale word, in the reference's buffer. These are graph resource
@@ -277,7 +279,10 @@ fn has_signal(v: &Values, id: NodeId) -> bool {
 pub enum AlphaExpr {
     Literal(f64),
     /// A word of a constant buffer: the buffer's resource and the word's index.
-    Word { buffer: ResourceId, word: u32 },
+    Word {
+        buffer: ResourceId,
+        word: u32,
+    },
     /// A lane of a texture sample. `sample` identifies the read (two samples of one texture at different coordinates are
     /// two values).
     Texel {
@@ -299,7 +304,9 @@ const MAX_EXPR_DEPTH: u32 = 48;
 impl AlphaExpr {
     fn of(v: &Values, id: NodeId, depth: u32) -> AlphaExpr {
         if depth > MAX_EXPR_DEPTH {
-            return AlphaExpr::Other(format!("an expression more than {MAX_EXPR_DEPTH} operations deep"));
+            return AlphaExpr::Other(format!(
+                "an expression more than {MAX_EXPR_DEPTH} operations deep"
+            ));
         }
         let below = |n: NodeId| Box::new(AlphaExpr::of(v, n, depth + 1));
         match v.node(id) {
@@ -383,7 +390,12 @@ impl std::fmt::Display for AlphaExpr {
         match self {
             AlphaExpr::Literal(n) => write!(f, "{n}"),
             AlphaExpr::Word { buffer, word } => write!(f, "cb{}[{word}]", buffer.0),
-            AlphaExpr::Texel { resource, lane, .. } => write!(f, "tex{}.{}", resource.0, ["x", "y", "z", "w"][usize::from(*lane & 3)]),
+            AlphaExpr::Texel { resource, lane, .. } => write!(
+                f,
+                "tex{}.{}",
+                resource.0,
+                ["x", "y", "z", "w"][usize::from(*lane & 3)]
+            ),
             AlphaExpr::Negate(a) => write!(f, "-({a})"),
             AlphaExpr::Add(a, b) => write!(f, "({a} + {b})"),
             AlphaExpr::Subtract(a, b) => write!(f, "({a} - {b})"),
@@ -461,7 +473,10 @@ impl Linear {
     pub fn cutoff(&self, reference: f64) -> Result<Option<f64>, String> {
         if self.sample.is_none() || self.scale == 0. {
             return if self.offset < reference {
-                Err(format!("the test discards every sample ({} < {reference})", self.offset))
+                Err(format!(
+                    "the test discards every sample ({} < {reference})",
+                    self.offset
+                ))
             } else {
                 Ok(None)
             };

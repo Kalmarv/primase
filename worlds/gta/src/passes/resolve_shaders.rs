@@ -80,9 +80,9 @@ use crate::components::{
 };
 use crate::rage::sgd2_effect::SamplerDesc;
 use crate::rage::sgd2_table::{ProgramTable, TableConstant, TableResource};
+use primase_core::shader::{MaterialPrograms, ProgramFacts};
 use primase_shader::matrix::state_lines;
 use primase_shader::{ProgramGraph, WordsRead};
-use primase_core::shader::{MaterialPrograms, ProgramFacts};
 
 /// The pixel program family whose targets the pass names roles for (`PS_DeferredTextured` and its alpha-clipped and
 /// sub-sample variants: [`gbuffer`] has the layout and how it was checked).
@@ -136,19 +136,31 @@ fn graph_of(bytecode: &[u8]) -> Result<ProgramGraph, String> {
 /// become lift failures: the bytecode can be lifted even when a graph or sampler expression cannot be followed.
 struct ProgramAnalysis {
     facts: ProgramFacts,
-    graph: Result<ProgramGraph,String>,
-    samples: Result<SamplerUses,String>,
-    writes: Result<GBufferWrites,String>,
+    graph: Result<ProgramGraph, String>,
+    samples: Result<SamplerUses, String>,
+    writes: Result<GBufferWrites, String>,
 }
 fn analyse(program: &Shader, name: &str) -> ProgramAnalysis {
     match primase_dxil::lift(&program.bytecode) {
-        Ok(lifted) => ProgramAnalysis {facts:lifted.facts(name),graph:lifted.graph(),
-            samples:sampler_use::uses_program(&lifted),writes:gbuffer::writes_program(&lifted)},
+        Ok(lifted) => ProgramAnalysis {
+            facts: lifted.facts(name),
+            graph: lifted.graph(),
+            samples: sampler_use::uses_program(&lifted),
+            writes: gbuffer::writes_program(&lifted),
+        },
         Err(error) => {
             let reason = error.to_string();
-            ProgramAnalysis {facts:ProgramFacts::unavailable(name,program.interface.stage,
-                Some(primase_shader::source_hash(&program.bytecode)),&reason),
-                graph:Err(reason.clone()),samples:Err(reason.clone()),writes:Err(reason)}
+            ProgramAnalysis {
+                facts: ProgramFacts::unavailable(
+                    name,
+                    program.interface.stage,
+                    Some(primase_shader::source_hash(&program.bytecode)),
+                    &reason,
+                ),
+                graph: Err(reason.clone()),
+                samples: Err(reason.clone()),
+                writes: Err(reason),
+            }
         }
     }
 }
@@ -586,8 +598,14 @@ impl ResolveGtaShaders {
         let interface = &program.interface;
         let mut constants = Vec::new();
         let mut textures = Vec::new();
-        let analysis = analyses.entry(shader).or_insert_with(|| analyse(program,
-            world.get::<primase_core::Name>(shader).map_or("",|name|name.0.as_str())));
+        let analysis = analyses.entry(shader).or_insert_with(|| {
+            analyse(
+                program,
+                world
+                    .get::<primase_core::Name>(shader)
+                    .map_or("", |name| name.0.as_str()),
+            )
+        });
         let uses = &analysis.samples;
         let graph = &analysis.graph;
         let reads = graph.as_ref().map(|graph| &graph.reads);
@@ -1244,7 +1262,7 @@ impl Pass for ResolveGtaShaders {
         // per effect: the programs chosen, or why not
         let mut chosen: BTreeMap<(Entity, String), Result<Chosen, String>> = BTreeMap::new();
         let mut bound: Vec<(Entity, ShaderBinding)> = Vec::new();
-        let mut analyses: BTreeMap<Entity,ProgramAnalysis> = BTreeMap::new();
+        let mut analyses: BTreeMap<Entity, ProgramAnalysis> = BTreeMap::new();
         for (material, shader, effect_entity) in materials {
             // the technique asked for, or where the effect has none of that name the one its material is drawn with
             let (technique, fallback) = match world.get::<GtaEffectTechniques>(effect_entity) {
@@ -1291,8 +1309,20 @@ impl Pass for ResolveGtaShaders {
                             world
                                 .get::<Shader>(entity)
                                 .ok_or_else(|| "a pixel program without its shader".to_owned())
-                                .and_then(|s| analyses.entry(entity).or_insert_with(||analyse(s,
-                                    world.get::<primase_core::Name>(entity).map_or("",|name|name.0.as_str()))).writes.clone())
+                                .and_then(|s| {
+                                    analyses
+                                        .entry(entity)
+                                        .or_insert_with(|| {
+                                            analyse(
+                                                s,
+                                                world
+                                                    .get::<primase_core::Name>(entity)
+                                                    .map_or("", |name| name.0.as_str()),
+                                            )
+                                        })
+                                        .writes
+                                        .clone()
+                                })
                         })
                     });
                     let mut notes = Vec::new();
@@ -1319,8 +1349,15 @@ impl Pass for ResolveGtaShaders {
             } = match picked {
                 Ok(pair) => pair,
                 Err(why) => {
-                    world.insert(material,MaterialPrograms(vec![ProgramFacts::unavailable(
-                        format!("effect {:08x} · {technique}",shader.name),Stage::Pixel,None,&why)]));
+                    world.insert(
+                        material,
+                        MaterialPrograms(vec![ProgramFacts::unavailable(
+                            format!("effect {:08x} · {technique}", shader.name),
+                            Stage::Pixel,
+                            None,
+                            &why,
+                        )]),
+                    );
                     counts.add(&format!("materials left unbound: {why}"));
                     continue;
                 }
@@ -1360,8 +1397,15 @@ impl Pass for ResolveGtaShaders {
                 }
             }
             if let Some(why) = failed {
-                world.insert(material,MaterialPrograms(vec![ProgramFacts::unavailable(
-                    format!("effect {:08x} · {technique}",shader.name),Stage::Pixel,None,&why)]));
+                world.insert(
+                    material,
+                    MaterialPrograms(vec![ProgramFacts::unavailable(
+                        format!("effect {:08x} · {technique}", shader.name),
+                        Stage::Pixel,
+                        None,
+                        &why,
+                    )]),
+                );
                 counts.add(&format!("materials left unbound: {why}"));
                 continue;
             }
@@ -1375,9 +1419,15 @@ impl Pass for ResolveGtaShaders {
             for note in &notes {
                 counts.add(&format!("render state: {note}"));
             }
-            let facts = stages.iter().filter_map(|stage|analyses.get(&stage.shader)
-                .map(|analysis|analysis.facts.clone().bound(stage.shader,&stage.outputs))).collect();
-            world.insert(material,MaterialPrograms(facts));
+            let facts = stages
+                .iter()
+                .filter_map(|stage| {
+                    analyses
+                        .get(&stage.shader)
+                        .map(|analysis| analysis.facts.clone().bound(stage.shader, &stage.outputs))
+                })
+                .collect();
+            world.insert(material, MaterialPrograms(facts));
             bound.push((material, ShaderBinding { stages, state }));
         }
         for (e, b) in bound {
@@ -1411,17 +1461,38 @@ mod tests {
         // No proprietary GTA bytecode is committed; use the existing owned DXIL draw fixture through the actual
         // GTA shared analysis path, not a mocked instruction count.
         let bytes = include_bytes!("../../../../toolkit/dxil/tests/fixtures/draw_texture.dxil");
-        let shader = Shader {format:primase_core::shader::ShaderFormat::Dxil,bytecode:bytes.to_vec(),
-            interface:primase_dxil::interface(bytes).unwrap()};
-        let analysed = analyse(&shader,"owned draw fixture");
-        assert!(analysed.graph.is_ok()); assert!(analysed.samples.is_ok());
-        assert_eq!(analysed.facts.hash,Some(primase_shader::source_hash(bytes)));
-        assert_eq!(analysed.facts.instruction_count.unwrap().unit,primase_core::shader::InstructionUnit::DxilInstructions);
+        let shader = Shader {
+            format: primase_core::shader::ShaderFormat::Dxil,
+            bytecode: bytes.to_vec(),
+            interface: primase_dxil::interface(bytes).unwrap(),
+        };
+        let analysed = analyse(&shader, "owned draw fixture");
+        assert!(analysed.graph.is_ok());
+        assert!(analysed.samples.is_ok());
+        assert_eq!(analysed.facts.hash, Some(primase_shader::source_hash(bytes)));
+        assert_eq!(
+            analysed.facts.instruction_count.unwrap().unit,
+            primase_core::shader::InstructionUnit::DxilInstructions
+        );
         assert!(analysed.facts.instruction_count.unwrap().count > 0);
-        assert!(analysed.facts.inputs.iter().all(|input|input.used && input.provenance.d3d.is_some()));
-        let refused = analyse(&Shader {bytecode:vec![0],..shader},"broken");
-        assert!(refused.facts.not_lifted.is_some()); assert!(refused.facts.instruction_count.is_none());
-        assert!(refused.graph.is_err()); assert!(refused.samples.is_err());
+        assert!(
+            analysed
+                .facts
+                .inputs
+                .iter()
+                .all(|input| input.used && input.provenance.d3d.is_some())
+        );
+        let refused = analyse(
+            &Shader {
+                bytecode: vec![0],
+                ..shader
+            },
+            "broken",
+        );
+        assert!(refused.facts.not_lifted.is_some());
+        assert!(refused.facts.instruction_count.is_none());
+        assert!(refused.graph.is_err());
+        assert!(refused.samples.is_err());
     }
 
     fn program(stage: GtaStage, name: &str) -> Option<GtaEffectProgram> {
@@ -1969,14 +2040,19 @@ mod tests {
             ((3, 0b0100), ScalarEncoding::linear_over(16.0))
         );
         let ambient = s.ambient_occlusion.unwrap();
-        assert_eq!((at(ambient.place), ambient.encoding), ((3, 0b0001), AMBIENT_OCCLUSION));
+        assert_eq!(
+            (at(ambient.place), ambient.encoding),
+            ((3, 0b0001), AMBIENT_OCCLUSION)
+        );
         assert_eq!((s.metallic, s.reflectance, s.occlusion), (None, None, None));
         // decoded: a falloff of 510 stored as sqrt(510 / 512) is roughness 1/4, an emission of 0.5 is 8 times the albedo
         let stored = (510.0f32 / 512.0).sqrt();
         let roughness = s.roughness.unwrap().decode([0.0, stored, 0.0, 0.0]);
         assert!((roughness - 0.25).abs() < 1e-4, "{roughness}");
         assert_eq!(
-            s.emission.unwrap().decode([0.0, 0.0, 0.5, 0.0], [0.25, 0.5, 0.125]),
+            s.emission
+                .unwrap()
+                .decode([0.0, 0.0, 0.5, 0.0], [0.25, 0.5, 0.125]),
             [2.0, 4.0, 1.0]
         );
 

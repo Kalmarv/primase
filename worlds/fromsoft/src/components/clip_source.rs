@@ -18,22 +18,27 @@ pub struct ClipSource {
     pub duration: Option<f64>,
 }
 impl Component for ClipSource {
-    const NAME:&'static str="fromsoft.clip_source";
-    const GEOMETRY:Geometry=Geometry::None;
-    fn to_json(&self)->Result<Option<Value>,JsonError> {primase_core::json::to_value(self).map(Some)}
-    fn verify(&self,entity:Entity,world:&World)->Result<(),String> {
-        if [&self.character,&self.key,&self.name,&self.binder,&self.member].iter().any(|s|s.trim().is_empty()) {
+    const NAME: &'static str = "fromsoft.clip_source";
+    const GEOMETRY: Geometry = Geometry::None;
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+    fn verify(&self, entity: Entity, world: &World) -> Result<(), String> {
+        if [&self.character, &self.key, &self.name, &self.binder, &self.member]
+            .iter()
+            .any(|s| s.trim().is_empty())
+        {
             return Err("clip source has an empty identity field".into());
         }
-        if world.get::<ClipKey>(entity).is_none_or(|key|key.0!=self.key) {
+        if world.get::<ClipKey>(entity).is_none_or(|key| key.0 != self.key) {
             return Err("clip source and core.clip_key differ".into());
         }
-        if self.duration.is_some_and(|d|!d.is_finite() || d<0.) {
+        if self.duration.is_some_and(|d| !d.is_finite() || d < 0.) {
             return Err("clip source duration is not finite non-negative seconds".into());
         }
         Ok(())
     }
-    fn apply_linear(&self,_linear:&Linear)->primase_core::world::Linearity<Self> {
+    fn apply_linear(&self, _linear: &Linear) -> primase_core::world::Linearity<Self> {
         primase_core::world::Linearity::Invariant
     }
 }

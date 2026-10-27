@@ -342,24 +342,48 @@ fn display_channels_without_a_gltf_form_are_counted() {
     let mut w = world([128, 127, 0, 0]);
     let clip = w.iter::<Clip>().next().unwrap().0;
     let material = w.spawn();
-    w.insert(material, primase_core::MaterialParameters(std::collections::BTreeMap::from([
-        ("tint".into(), vec![0.25, 0.5]),
-    ])));
+    w.insert(
+        material,
+        primase_core::MaterialParameters(std::collections::BTreeMap::from([(
+            "tint".into(),
+            vec![0.25, 0.5],
+        )])),
+    );
     w.get_mut::<Clip>(clip).unwrap().channels.extend([
-        Channel { target: ClipTarget::DrawGroup { scope: "character".into(), group: 4 },
-            property: Property::Visibility, interpolation: Interpolation::Step,
-            times: vec![0.0], values: vec![0.0] },
-        Channel { target: ClipTarget::MaterialParameter { materials: vec![material], name: "tint".into() },
-            property: Property::Values(2), interpolation: Interpolation::Linear,
-            times: vec![0.0], values: vec![0.25, 0.5] },
+        Channel {
+            target: ClipTarget::DrawGroup {
+                scope: "character".into(),
+                group: 4,
+            },
+            property: Property::Visibility,
+            interpolation: Interpolation::Step,
+            times: vec![0.0],
+            values: vec![0.0],
+        },
+        Channel {
+            target: ClipTarget::MaterialParameter {
+                materials: vec![material],
+                name: "tint".into(),
+            },
+            property: Property::Values(2),
+            interpolation: Interpolation::Linear,
+            times: vec![0.0],
+            values: vec![0.25, 0.5],
+        },
     ]);
     let (bytes, report) = write(&w, &WriteOptions::default()).unwrap();
-    assert_eq!((report.draw_group_channels, report.material_parameter_channels), (1, 1));
+    assert_eq!(
+        (report.draw_group_channels, report.material_parameter_channels),
+        (1, 1)
+    );
     assert_eq!((report.control_channels, report.animation_channels), (1, 2));
     let doc = json(&bytes);
     assert_eq!(doc["animations"][0]["channels"].as_array().unwrap().len(), 2);
     let text = report.to_string();
-    assert!(text.contains("draw-group channels 1") && text.contains("material-parameter channels 1"), "{text}");
+    assert!(
+        text.contains("draw-group channels 1") && text.contains("material-parameter channels 1"),
+        "{text}"
+    );
 }
 
 /// Weights that do not sum to 1 (bytes summing 253) are refused, naming the pass that normalises them; a skinned

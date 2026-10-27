@@ -9,14 +9,14 @@ use std::path::{Path, PathBuf};
 use primase_core::pass::{Options, Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{
-    DrawLayer, DrawOrder, Instance, Layer, LayerWeights, LayeredMaterial, Mesh, Name, Primitive, Semantic, Stream,
-    Topology, Transform, WeightMapping, World,
+    DrawLayer, DrawOrder, Instance, Layer, LayerWeights, LayeredMaterial, Mesh, Name, Primitive, Semantic,
+    Stream, Topology, Transform, WeightMapping, World,
 };
 use primase_reskate::EncodingOptions;
+use primase_reskate::blend_order::{ChainOrder, STACK_BEHIND, STACK_STEP};
 use primase_reskate::components::{
     MarkerKind, Other, SkateBlendBudget, SkateBlendChains, SkateLight, SkateMarker,
 };
-use primase_reskate::blend_order::{ChainOrder, STACK_BEHIND, STACK_STEP};
 use primase_reskate::passes::SummarizeReskateMap;
 use primase_reskate::passes::layered::{LowerLayeredReskate, OverlayLimit};
 use primase_reskate::passes::{
@@ -340,7 +340,12 @@ fn the_blend_order_options_round_trip_and_are_checked() {
     };
     for given in [
         o(&[("grid", "200"), ("order", "tie")]),
-        o(&[("grid", "0"), ("order", "stacked"), ("tile", "100"), ("limit", "2000")]),
+        o(&[
+            ("grid", "0"),
+            ("order", "stacked"),
+            ("tile", "100"),
+            ("limit", "2000"),
+        ]),
     ] {
         let pass = PREPARE_RESKATE_BLEND_ORDER.instance(&given).unwrap();
         assert_eq!(
@@ -643,7 +648,12 @@ fn decals() -> World {
         if faded {
             streams.insert(
                 Semantic::Color(0),
-                Stream::F32x4(vec![[1., 1., 1., 1.], [1., 1., 1., 0.5], [1., 1., 1., 1.], [1., 1., 1., 0.5]]),
+                Stream::F32x4(vec![
+                    [1., 1., 1., 1.],
+                    [1., 1., 1., 0.5],
+                    [1., 1., 1., 1.],
+                    [1., 1., 1., 0.5],
+                ]),
             );
         }
         Primitive {
@@ -793,7 +803,12 @@ fn stacked_decal_ranks_get_boxes_metres_apart_under_the_ground() {
             .unwrap_or_else(|| panic!("rank {rank}: {:?}", tile.groups.keys()))
     };
     let centre = |rank: u8| (pad(rank).0[2] + pad(rank).1[2]) / 2.0;
-    assert!((centre(6) - centre(5) - STACK_STEP).abs() < 1e-3, "{} {}", centre(6), centre(5));
+    assert!(
+        (centre(6) - centre(5) - STACK_STEP).abs() < 1e-3,
+        "{} {}",
+        centre(6),
+        centre(5)
+    );
     // the decals lie 1 cm over the ground at 0 (the tile's frame, z up): every centre at least STACK_BEHIND / 2 under
     // them
     assert!(centre(6) <= 0.01 - STACK_BEHIND / 2.0 + 1e-3, "{}", centre(6));

@@ -212,8 +212,10 @@ fn a_characters_animations_read_lower_and_map_onto_its_model() -> Result<()> {
                     Property::Translation => translation.to_vec(),
                     Property::Scale => scale.to_vec(),
                     Property::Rotation => rotation.to_vec(),
-                    Property::Scalar | Property::Visibility | Property::Values(_) =>
-                        panic!("a non-transform property on a Havok joint: {:?}", channel.property),
+                    Property::Scalar | Property::Visibility | Property::Values(_) => panic!(
+                        "a non-transform property on a Havok joint: {:?}",
+                        channel.property
+                    ),
                 };
                 let got = &channel.values[k * width..(k + 1) * width];
                 // a rotation's sign is the clip's (continuity), the rotation the same

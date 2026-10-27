@@ -32,7 +32,11 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>, map: &str) -> Re
             margin: 30.0,
         })
     } else {
-        println!("{} {map}: {} parts, skipped (more than a read keeps whole)", game.name(), layout.parts.len());
+        println!(
+            "{} {map}: {} parts, skipped (more than a read keeps whole)",
+            game.name(),
+            layout.parts.len()
+        );
         return Ok(());
     };
     let options = sekiro::Options {
@@ -89,7 +93,13 @@ fn the_shader_families_the_maps_use() -> Result<()> {
         (
             Game::Sekiro,
             primase_testdata::Game::Sekiro,
-            &["m11_01_00_00", "m20_00_00_00", "m25_00_00_00", "m17_00_00_00", "m10_00_00_00"][..],
+            &[
+                "m11_01_00_00",
+                "m20_00_00_00",
+                "m25_00_00_00",
+                "m17_00_00_00",
+                "m10_00_00_00",
+            ][..],
         ),
         (
             Game::EldenRing,

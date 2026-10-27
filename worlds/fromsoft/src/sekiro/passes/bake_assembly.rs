@@ -183,8 +183,7 @@ pub(super) fn assemble(
                 false,
                 &mut group_log,
             );
-            let material =
-                channel_material(world, &name, alpha_mode, image, reflectance, &mut group_log)?;
+            let material = channel_material(world, &name, alpha_mode, image, reflectance, &mut group_log)?;
             templates.push((material, reflectance));
         }
         for source in &group.parts {
@@ -320,7 +319,11 @@ pub(super) fn assemble(
         }
         for &e in &made {
             for reason in &reasons {
-                group_log.approximated_on.entry(reason.clone()).or_default().insert(e);
+                group_log
+                    .approximated_on
+                    .entry(reason.clone())
+                    .or_default()
+                    .insert(e);
             }
         }
         report.policies.absorb(group_log);
@@ -586,7 +589,10 @@ mod tests {
             };
             assert_eq!(pixels(&before), pixels(&after));
             classification.record_material(&mut log);
-            assert!(!log.approximations.contains_key("source dielectric F0 0.03 mapped to target F0 0.04"));
+            assert!(
+                !log.approximations
+                    .contains_key("source dielectric F0 0.03 mapped to target F0 0.04")
+            );
             assert!(!log.approximations.contains_key(pbr::UNKNOWN_METALLIC_LOSS));
         }
         println!(

@@ -346,11 +346,26 @@ impl NpcStats {
                 0,
                 format!(
                     "{} version {} with rows of {} bytes, the NPC stats read are {NPC_PARAM_TYPE} version {} with rows of {}",
-                    param.param_type, param.data_version, param.row_size, layout.data_version, layout.row_size
+                    param.param_type,
+                    param.data_version,
+                    param.row_size,
+                    layout.data_version,
+                    layout.row_size
                 ),
             ));
         }
-        let [behavior, name, turn, height, radius, weight, y_offset, hp, mp, soul] = layout.offsets;
+        let [
+            behavior,
+            name,
+            turn,
+            height,
+            radius,
+            weight,
+            y_offset,
+            hp,
+            mp,
+            soul,
+        ] = layout.offsets;
         let mut out = Vec::with_capacity(param.rows.len());
         for r in &param.rows {
             let word = |at: usize| -> Result<[u8; 4]> {
@@ -364,7 +379,11 @@ impl NpcStats {
                 if n.is_finite() {
                     Ok(n)
                 } else {
-                    Err(invalid(FORMAT, at, format!("row {}: a field that is not finite", r.id)))
+                    Err(invalid(
+                        FORMAT,
+                        at,
+                        format!("row {}: a field that is not finite", r.id),
+                    ))
                 }
             };
             out.push(NpcStats {
@@ -650,15 +669,31 @@ mod tests {
             GRASS_PARAM_TYPE,
             1,
             GRASS_ROW,
-            &[(10, grass_row("Grass_A", "bb_a", 1.5)), (11, grass_row("", "", 0.0))],
+            &[
+                (10, grass_row("Grass_A", "bb_a", 1.5)),
+                (11, grass_row("", "", 0.0)),
+            ],
         );
         let grass = GrassParam::from_param(&Param::read(&bytes).unwrap()).unwrap();
         let a = grass.row(10).unwrap();
         assert_eq!(
-            (a.lod_range, a.base_density, a.spacing, a.model0.as_str(), a.model1.as_str()),
+            (
+                a.lod_range,
+                a.base_density,
+                a.spacing,
+                a.model0.as_str(),
+                a.model1.as_str()
+            ),
             (40, 1.5, 0.5, "Grass_A", "M1")
         );
-        assert_eq!((a.billboard_texture.as_str(), a.flat_texture.as_str(), a.simple_model.as_str()), ("bb_a", "", ""));
+        assert_eq!(
+            (
+                a.billboard_texture.as_str(),
+                a.flat_texture.as_str(),
+                a.simple_model.as_str()
+            ),
+            ("bb_a", "", "")
+        );
         assert_eq!(grass.row(11).unwrap().model0, "");
         assert!(grass.row(12).is_none());
         // the NPC param is not a grass param, and a short row or a row of non-text name fields is another layout
@@ -674,7 +709,9 @@ mod tests {
         let mut binary = grass_row("x", "", 1.0);
         binary[12..14].copy_from_slice(&0x1234u16.to_le_bytes());
         let garbled = fixture(GRASS_PARAM_TYPE, 1, GRASS_ROW, &[(1, binary)]);
-        let e = GrassParam::from_param(&Param::read(&garbled).unwrap()).unwrap_err().to_string();
+        let e = GrassParam::from_param(&Param::read(&garbled).unwrap())
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("not the layout read"), "{e}");
     }
 }

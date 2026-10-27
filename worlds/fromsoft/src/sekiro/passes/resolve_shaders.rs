@@ -1,6 +1,8 @@
 //! `resolve-fromsoft-shaders`: the layered materials' G-buffer programs as `core.shader` entities and each material's
 //! `core.shader_binding`.
-use crate::layer_bake::resolve::{PALETTE_ROWS_RULE, Unbound, render_state, resolve, resolve_vertex_for_geometry};
+use crate::layer_bake::resolve::{
+    PALETTE_ROWS_RULE, Unbound, render_state, resolve, resolve_vertex_for_geometry,
+};
 use crate::materials::Material;
 use crate::metaparam::Metaparam;
 use crate::sekiro::source::{MaterialShader, Payloads, ShaderBundle, ShaderPrograms, TexturePayloads};
@@ -118,7 +120,14 @@ impl Pass for ResolveFromSoftShaders {
         &[Material::NAME]
     }
     fn provides(&self) -> &[&'static str] {
-        &[Shader::NAME, ShaderBinding::NAME, MaterialPrograms::NAME, ProgramFacts::NAME, Texture::NAME, Name::NAME]
+        &[
+            Shader::NAME,
+            ShaderBinding::NAME,
+            MaterialPrograms::NAME,
+            ProgramFacts::NAME,
+            Texture::NAME,
+            Name::NAME,
+        ]
     }
     fn approximates(&self) -> &'static str {
         "a texture slot with no texture gets a preview colour for its role (unbound-textures=preview)"
@@ -240,8 +249,15 @@ fn run(
                     .map(|p| (p.name.clone(), p.format, p.code.clone()))
             });
         let Some((name, format, bytes)) = found else {
-            world.insert(material_entity,MaterialPrograms(vec![ProgramFacts::unavailable(requested,Stage::Pixel,None,
-                "the reader does not hold the requested pixel program")]));
+            world.insert(
+                material_entity,
+                MaterialPrograms(vec![ProgramFacts::unavailable(
+                    requested,
+                    Stage::Pixel,
+                    None,
+                    "the reader does not hold the requested pixel program",
+                )]),
+            );
             t.without_program += 1;
             continue;
         };
@@ -274,8 +290,15 @@ fn run(
             let lifted = match crate::passes::program_reads::lift(format, &bytes) {
                 Ok(lifted) => lifted,
                 Err(error) => {
-                    world.insert(material_entity,MaterialPrograms(vec![ProgramFacts::unavailable(&name,Stage::Pixel,
-                        Some(primase_shader::source_hash(&bytes)),error.to_string())]));
+                    world.insert(
+                        material_entity,
+                        MaterialPrograms(vec![ProgramFacts::unavailable(
+                            &name,
+                            Stage::Pixel,
+                            Some(primase_shader::source_hash(&bytes)),
+                            error.to_string(),
+                        )]),
+                    );
                     return Err(format!("{name}: {error}"));
                 }
             };
@@ -284,13 +307,13 @@ fn run(
                 Ok(parsed) => parsed,
                 Err(error) => {
                     // This is an executor refusal, not a failed lift: retain the successful source facts.
-                    world.insert(material_entity,MaterialPrograms(vec![facts]));
+                    world.insert(material_entity, MaterialPrograms(vec![facts]));
                     return Err(format!("{name}: {error}"));
                 }
             };
             let entity = world.spawn();
             world.insert(entity, Name(name.clone()));
-            world.insert(entity,facts);
+            world.insert(entity, facts);
             world.insert(
                 entity,
                 Shader {
@@ -345,7 +368,10 @@ fn run(
         )
         .map_err(|e| format!("{name}: {e}"))?;
         if let Some(why) = refused {
-            log.omit(&format!("layer textures the DDS reader refuses, resolved as unbound ({why})"), 1);
+            log.omit(
+                &format!("layer textures the DDS reader refuses, resolved as unbound ({why})"),
+                1,
+            );
         }
         for (policy, count) in resolution.policies {
             *policies.entry(policy).or_default() += count;
@@ -376,7 +402,8 @@ fn run(
                     vertex_shaders.insert(vertex_name.clone(), (entity, shader));
                 }
                 let (entity, shader) = &vertex_shaders[&vertex_name];
-                let vertex = resolve_vertex_for_geometry(shader, *entity, world, material_entity).map_err(|e| format!("{vertex_name}: {e}"))?;
+                let vertex = resolve_vertex_for_geometry(shader, *entity, world, material_entity)
+                    .map_err(|e| format!("{vertex_name}: {e}"))?;
                 if let Some(why) = vertex.undecided {
                     // not a finding: the matrix is taken as camera-relative, as most programs of the corpus are
                     *policies
@@ -448,10 +475,19 @@ fn run(
             }
         }
         // Reuse the very lift used to resolve this material, including the material-specific output roles.
-        let facts = world.get::<ProgramFacts>(*shader_entity).ok_or("resolved pixel program has no facts")?
-            .clone().bound(*shader_entity,&stages.iter().find(|stage|stage.stage == Stage::Pixel)
-                .ok_or("resolved material has no pixel stage")?.outputs);
-        world.insert(material_entity,MaterialPrograms(vec![facts]));
+        let facts = world
+            .get::<ProgramFacts>(*shader_entity)
+            .ok_or("resolved pixel program has no facts")?
+            .clone()
+            .bound(
+                *shader_entity,
+                &stages
+                    .iter()
+                    .find(|stage| stage.stage == Stage::Pixel)
+                    .ok_or("resolved material has no pixel stage")?
+                    .outputs,
+            );
+        world.insert(material_entity, MaterialPrograms(vec![facts]));
         world.insert(material_entity, ShaderBinding { stages, state });
         t.bound += 1;
     }
@@ -541,23 +577,43 @@ fn run(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used,reason = "owned fixture programs")]
+#[allow(clippy::unwrap_used, reason = "owned fixture programs")]
 mod program_facts_tests {
     #[test]
     fn sekiro_and_elden_fixture_lifts_keep_source_counts_hash_and_register_inputs() {
-        use primase_core::shader::{InstructionUnit,ShaderFormat,Stage};
-        for (name,format,bytes,unit) in [
-            ("Sekiro alpha reference fixture",ShaderFormat::Dxbc,
-                include_bytes!("../../../tests/fixtures/alpha_ref_tested.dxbc").as_slice(),InstructionUnit::DxbcInstructions),
-            ("Elden alpha reference fixture",ShaderFormat::Dxil,
-                include_bytes!("../../../tests/fixtures/alpha_ref_tested.dxil").as_slice(),InstructionUnit::DxilInstructions),
+        use primase_core::shader::{InstructionUnit, ShaderFormat, Stage};
+        for (name, format, bytes, unit) in [
+            (
+                "Sekiro alpha reference fixture",
+                ShaderFormat::Dxbc,
+                include_bytes!("../../../tests/fixtures/alpha_ref_tested.dxbc").as_slice(),
+                InstructionUnit::DxbcInstructions,
+            ),
+            (
+                "Elden alpha reference fixture",
+                ShaderFormat::Dxil,
+                include_bytes!("../../../tests/fixtures/alpha_ref_tested.dxil").as_slice(),
+                InstructionUnit::DxilInstructions,
+            ),
         ] {
-            let lifted = crate::passes::program_reads::lift(format,bytes).unwrap();
+            let lifted = crate::passes::program_reads::lift(format, bytes).unwrap();
             let facts = lifted.facts(name);
-            assert_eq!(facts.stage,Stage::Pixel); assert_eq!(facts.hash,Some(primase_shader::source_hash(bytes)));
-            assert_eq!(facts.instruction_count.unwrap().unit,unit); assert!(facts.instruction_count.unwrap().count > 0);
-            assert_eq!(facts.inputs,lifted.interface.inputs.iter().filter(|input|input.used).cloned().collect::<Vec<_>>());
-            assert!(!facts.inputs.is_empty()); assert!(facts.inputs.iter().all(|input|input.provenance.d3d.is_some()));
+            assert_eq!(facts.stage, Stage::Pixel);
+            assert_eq!(facts.hash, Some(primase_shader::source_hash(bytes)));
+            assert_eq!(facts.instruction_count.unwrap().unit, unit);
+            assert!(facts.instruction_count.unwrap().count > 0);
+            assert_eq!(
+                facts.inputs,
+                lifted
+                    .interface
+                    .inputs
+                    .iter()
+                    .filter(|input| input.used)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            );
+            assert!(!facts.inputs.is_empty());
+            assert!(facts.inputs.iter().all(|input| input.provenance.d3d.is_some()));
         }
     }
 }

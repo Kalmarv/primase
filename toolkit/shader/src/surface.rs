@@ -5,8 +5,8 @@
 //! composite's to say.
 //!
 //! The layout of a row is described at the head of [`WGSL`]; the row indices below are its constants.
-use primase_core::shader::{NormalEncoding, ScalarEncoding};
 use primase_core::shader::surface::{Base, Emission, Place, Roughness, Surface, Term};
+use primase_core::shader::{NormalEncoding, ScalarEncoding};
 
 /// The WGSL functions: `primase_base`, `primase_normal`, `primase_roughness`, `primase_scalar`, `primase_colour` and
 /// `primase_emission` decode a term, `primase_stored` shows its lanes as the program wrote them; each takes a row and
@@ -64,7 +64,9 @@ pub fn rows(surface: &Surface, target: impl Fn(usize) -> Option<u32>) -> [[u32; 
     let mut rows = [[0u32; 4]; ROWS];
     let at = |output: usize| target(output).map(|t| t + 1);
     let term_row = |t: &Term, kind: u32| -> [u32; 4] {
-        at(t.place.output).map_or([0; 4], |x| [x, layout(t.place, kind, t.encoding), t.encoding.scale_bits, 0])
+        at(t.place.output).map_or([0; 4], |x| {
+            [x, layout(t.place, kind, t.encoding), t.encoding.scale_bits, 0]
+        })
     };
     if let Some(base) = &surface.base {
         let (place, kind) = match *base {

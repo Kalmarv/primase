@@ -121,7 +121,11 @@ impl Buffers {
                 (Semantic::Tangent(n), Stream::F32x4(v)) => (
                     // Primase's own attribute for the further tangent sets: `_TANGENT<n>` belongs to whatever
                     // application wrote it, and the reader would otherwise read a foreign one as our tangent set.
-                    if *n == 0 { "TANGENT".to_owned() } else { format!("_PRIMASE_TANGENT{n}") },
+                    if *n == 0 {
+                        "TANGENT".to_owned()
+                    } else {
+                        format!("_PRIMASE_TANGENT{n}")
+                    },
                     self.floats(bytemuck::cast_slice(v), count, ElementType::Vec4, None)
                         .map_err(number)?,
                 ),

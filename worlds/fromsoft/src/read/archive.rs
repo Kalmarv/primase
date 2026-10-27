@@ -268,7 +268,9 @@ impl Archive {
         self.game
     }
     /// The install path whose indexes and BDT members this handle reads.
-    pub fn root(&self) -> &Path { &self.root }
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
     /// The archive pair whose entries report `shard`.
     pub fn pair(&self, shard: u8) -> Option<&'static ArchivePair> {
         self.game.archives().pairs.iter().find(|p| p.shard == shard)

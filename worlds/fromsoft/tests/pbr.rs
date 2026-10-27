@@ -393,12 +393,7 @@ fn maps_are_tiled_about_their_centre_by_the_flver_scale_else_the_stored_one() {
         let mut m = source("MetallicTex");
         // the base map: the FLVER stores 4 by 2; the normal map: it stores none, the MTD states 3 by 1
         m.bindings.get_mut("Texture2D_0_AlbedoMap").unwrap().scale = [4., 2.];
-        m.definition
-            .as_mut()
-            .and_then(|d| d.mtd_mut())
-            .unwrap()
-            .textures[1]
-            .extra = vec![3., 1.];
+        m.definition.as_mut().and_then(|d| d.mtd_mut()).unwrap().textures[1].extra = vec![3., 1.];
         world.insert(e, m);
         if let Some(applied) = applied {
             world.insert(e, primase_fromsoft::sekiro::passes::UvTiling(applied));
@@ -524,5 +519,8 @@ fn a_program_reading_a_vertex_colour_is_named_in_the_approximations() {
         world.insert(e, MaterialPrograms(vec![facts]));
     }
     let log = pbr::lower(&mut world, &no_payloads(), None, WATER).unwrap();
-    assert_eq!(log.approximated_on[note], std::collections::BTreeSet::from([reads]));
+    assert_eq!(
+        log.approximated_on[note],
+        std::collections::BTreeSet::from([reads])
+    );
 }

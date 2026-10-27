@@ -57,7 +57,7 @@ pub fn writes(container: &[u8]) -> Result<GBufferWrites, String> {
 }
 
 /// Reuse a resolve pass's existing lift rather than lifting again for the output-store query.
-pub(super) fn writes_program(program: &primase_shader::Program) -> Result<GBufferWrites,String> {
+pub(super) fn writes_program(program: &primase_shader::Program) -> Result<GBufferWrites, String> {
     let stores = OutputStores::of(program)?;
     // the stored values of a lane of target n
     let lane = |target: u32, lane: u32| -> Vec<Handle<Expression>> { stores.lane(target, lane) };

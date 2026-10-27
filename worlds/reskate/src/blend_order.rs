@@ -61,7 +61,8 @@ pub enum ChainOrder {
 }
 
 impl primase_core::pass::Choice for ChainOrder {
-    const VALUES: &'static [(&'static str, Self)] = &[("tie", ChainOrder::Tie), ("stacked", ChainOrder::Stacked)];
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("tie", ChainOrder::Tie), ("stacked", ChainOrder::Stacked)];
 }
 
 /// The box of `rank` (of `ranks`) of a (cell, axis) whose box is `lo`..`hi`, under [`ChainOrder::Stacked`]: reaching
@@ -437,7 +438,9 @@ impl ChainPlan {
     pub fn pad(&mut self) {
         let keys: Vec<ChainKey> = self.groups.keys().copied().collect();
         for key in keys {
-            let Some((lo, hi)) = self.rank_box(key) else { continue };
+            let Some((lo, hi)) = self.rank_box(key) else {
+                continue;
+            };
             let first_use = &self.first_use;
             let g = self.groups.get_mut(&key).expect("its key");
             let first = *g
@@ -498,10 +501,7 @@ pub fn pad(g: &mut Geometry, lo: Vec3, hi: Vec3, axis: u8) {
 
 /// The lift of `rank` (1..=`ranks`) along the axis in steps of `step`: `ranks + 1 - rank` steps, the top rank lowest.
 pub fn lift(rank: u8, ranks: u8, step: f32) -> f32 {
-    assert!(
-        (1..=ranks).contains(&rank),
-        "rank {rank} outside 1..={ranks}"
-    );
+    assert!((1..=ranks).contains(&rank), "rank {rank} outside 1..={ranks}");
     f32::from(ranks + 1 - rank) * step
 }
 
@@ -538,7 +538,12 @@ pub fn decal_ranks(decals: &[(usize, usize, &Geometry)]) -> Option<BTreeMap<usiz
     let mut ranks = BTreeMap::new();
     for &&(k, _, g) in &order {
         let mine = cells(g);
-        let under = mine.iter().filter_map(|c| top.get(c)).copied().max().unwrap_or(CHAIN_RANKS);
+        let under = mine
+            .iter()
+            .filter_map(|c| top.get(c))
+            .copied()
+            .max()
+            .unwrap_or(CHAIN_RANKS);
         let rank = under.checked_add(1)?;
         for c in mine {
             top.insert(c, rank);
@@ -694,13 +699,29 @@ mod tests {
         // 1e6 m out an f32 step is 6 cm: no step up to 2.5 mm stays distinct
         assert_eq!(lift_step(Vec3::new(1.0e6, 0.0, 0.0), 0, CHAIN_RANKS), None);
         // across the axis the translation's size does not matter
-        assert_eq!(lift_step(Vec3::new(1.0e6, 0.0, 0.0), 4, CHAIN_RANKS), Some(LIFT_STEP));
+        assert_eq!(
+            lift_step(Vec3::new(1.0e6, 0.0, 0.0), 4, CHAIN_RANKS),
+            Some(LIFT_STEP)
+        );
     }
 
     /// A square of `side` metres at x `x0`, as a decal's geometry.
     fn square(x0: f32, side: f32) -> Geometry {
         Geometry {
-            pos: vec![x0, 0.0, 0.0, x0 + side, 0.0, 0.0, x0, 0.0, side, x0 + side, 0.0, side],
+            pos: vec![
+                x0,
+                0.0,
+                0.0,
+                x0 + side,
+                0.0,
+                0.0,
+                x0,
+                0.0,
+                side,
+                x0 + side,
+                0.0,
+                side,
+            ],
             idx: vec![0, 1, 2, 2, 1, 3],
             ..Geometry::default()
         }
@@ -711,18 +732,31 @@ mod tests {
     /// chain and the lifts put the highest lowest.
     #[test]
     fn decals_rank_over_the_ones_they_overlap_in_first_use_order() {
-        let (a, b, c, apart) = (square(0.0, 4.0), square(2.5, 4.0), square(5.5, 4.0), square(40.0, 2.0));
+        let (a, b, c, apart) = (
+            square(0.0, 4.0),
+            square(2.5, 4.0),
+            square(5.5, 4.0),
+            square(40.0, 2.0),
+        );
         // given out of order: the first use decides
         let r = decal_ranks(&[(7, 3, &c), (4, 0, &a), (9, 9, &apart), (5, 1, &b)]).unwrap();
         assert_eq!(
             r,
-            BTreeMap::from([(4, CHAIN_RANKS + 1), (5, CHAIN_RANKS + 2), (7, CHAIN_RANKS + 3), (9, CHAIN_RANKS + 1)])
+            BTreeMap::from([
+                (4, CHAIN_RANKS + 1),
+                (5, CHAIN_RANKS + 2),
+                (7, CHAIN_RANKS + 3),
+                (9, CHAIN_RANKS + 1)
+            ])
         );
         assert_eq!(decal_ranks(&[]), Some(BTreeMap::new()));
         let ranks = CHAIN_RANKS + 3;
         assert!(lift(ranks, ranks, LIFT_STEP) < lift(CHAIN_RANKS, ranks, LIFT_STEP));
         assert!(lift(1, ranks, LIFT_STEP) > lift(CHAIN_RANKS + 1, ranks, LIFT_STEP));
-        assert_eq!(lift_step(Vec3::new(100.0, -900.0, 0.0), 2, ranks), Some(LIFT_STEP));
+        assert_eq!(
+            lift_step(Vec3::new(100.0, -900.0, 0.0), 2, ranks),
+            Some(LIFT_STEP)
+        );
     }
 
     /// Stacked boxes: every rank's centre lies at least STACK_BEHIND / 2 behind the cell's surfaces and STACK_STEP
@@ -736,12 +770,20 @@ mod tests {
             (
                 2u8,
                 lo,
-                [Vec3::new(50.0, 30.5, 50.0), Vec3::new(-400.0, 31.0, 20.0), Vec3::new(50.0, 300.0, 50.0)],
+                [
+                    Vec3::new(50.0, 30.5, 50.0),
+                    Vec3::new(-400.0, 31.0, 20.0),
+                    Vec3::new(50.0, 300.0, 50.0),
+                ],
             ),
             (
                 1u8,
                 hi,
-                [Vec3::new(99.0, 40.0, 50.0), Vec3::new(-50.0, 0.0, -300.0), Vec3::new(-500.0, 90.0, 50.0)],
+                [
+                    Vec3::new(99.0, 40.0, 50.0),
+                    Vec3::new(-50.0, 0.0, -300.0),
+                    Vec3::new(-500.0, 90.0, 50.0),
+                ],
             ),
         ] {
             let n = axis_vector(axis);
@@ -751,7 +793,10 @@ mod tests {
             };
             for r in 1..=ranks {
                 // behind the cell's surfaces: the face of the box opposite the axis
-                assert!((centre(r) - back).dot(n) <= -STACK_BEHIND / 2.0, "rank {r} axis {axis}");
+                assert!(
+                    (centre(r) - back).dot(n) <= -STACK_BEHIND / 2.0,
+                    "rank {r} axis {axis}"
+                );
             }
             for r in 1..ranks {
                 assert!(((centre(r + 1) - centre(r)).dot(n) - STACK_STEP).abs() < 1e-4);
@@ -774,15 +819,22 @@ mod tests {
     #[test]
     fn lifts_put_the_top_rank_lowest_and_survive_f32() {
         assert!(lift(CHAIN_RANKS, CHAIN_RANKS, LIFT_STEP) < lift(1, CHAIN_RANKS, LIFT_STEP));
-        assert_eq!(lift_step(Vec3::new(100.0, -900.0, 0.0), 4, CHAIN_RANKS), Some(LIFT_STEP));
+        assert_eq!(
+            lift_step(Vec3::new(100.0, -900.0, 0.0), 4, CHAIN_RANKS),
+            Some(LIFT_STEP)
+        );
         // 3 km out along x a f32 holds steps of 0.24 mm: 0.2 mm would collapse, so the step grows
         let far = Vec3::new(3000.5, 0.0, 0.0);
         let s = lift_step(far, 0, CHAIN_RANKS).unwrap();
         assert!(s > LIFT_STEP);
-        let at: Vec<f32> = (1..=CHAIN_RANKS).map(|r| far.x + lift(r, CHAIN_RANKS, s)).collect();
+        let at: Vec<f32> = (1..=CHAIN_RANKS)
+            .map(|r| far.x + lift(r, CHAIN_RANKS, s))
+            .collect();
         assert!(at.windows(2).all(|w| w[0] > w[1]) && at[3] > far.x);
         let s = lift_step(far, 1, CHAIN_RANKS).unwrap();
-        let at: Vec<f32> = (1..=CHAIN_RANKS).map(|r| far.x - lift(r, CHAIN_RANKS, s)).collect();
+        let at: Vec<f32> = (1..=CHAIN_RANKS)
+            .map(|r| far.x - lift(r, CHAIN_RANKS, s))
+            .collect();
         assert!(at.windows(2).all(|w| w[0] < w[1]) && at[3] < far.x);
     }
 }

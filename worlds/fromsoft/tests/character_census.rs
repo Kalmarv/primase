@@ -14,8 +14,8 @@
 //! - `NPC <game> <row> ...`: the first rows' descriptive fields.
 //!
 //! Runs where the install, its keys and the Oodle library are configured; otherwise it does nothing.
-use primase_core::{Skeleton, Sockets, World};
 use primase_core::convert::Reader;
+use primase_core::{Skeleton, Sockets, World};
 use primase_fromsoft::sekiro::character_data::{Cloth, Dummies, NpcStatRows};
 use primase_fromsoft::sekiro::{self, CharacterOptions};
 use primase_fromsoft::tae::Tae;
@@ -27,8 +27,9 @@ mod common;
 fn census(game: Game, install: &Install, decoder: &Decoder<'_>, ids: &[&str]) -> Result<()> {
     let archive = std::sync::Arc::new(install.open()?);
     for id in ids {
-        let mut reader=sekiro::CharacterReader::animations_in(install.clone(),id,*decoder,archive.clone())?;
-        let (plans,_)=reader.read().map_err(|error|error.to_string())?;
+        let mut reader =
+            sekiro::CharacterReader::animations_in(install.clone(), id, *decoder, archive.clone())?;
+        let (plans, _) = reader.read().map_err(|error| error.to_string())?;
         let mut world = World::default();
         let options = CharacterOptions {
             animations: Some((*id).to_owned()),
@@ -68,15 +69,16 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>, ids: &[&str]) ->
         let path = format!("/chr/{id}.anibnd.dcx");
         if archive.contains(&path) {
             let binder = Binder::read(&archive.read(&path, decoder)?, decoder)?;
-            for f in binder
-                .files
-                .iter()
-                .filter(|f| f.name.as_deref().is_some_and(|n| n.to_ascii_lowercase().ends_with(".tae")))
-            {
+            for f in binder.files.iter().filter(|f| {
+                f.name
+                    .as_deref()
+                    .is_some_and(|n| n.to_ascii_lowercase().ends_with(".tae"))
+            }) {
                 if let Ok(tae) = Tae::read(&decoder.decode_if_dcx(&f.bytes)?) {
                     let numbers: Vec<i64> = tae.animations.iter().take(10).map(|a| a.id).collect();
-                    let clips = plans.iter::<sekiro::ClipSource>()
-                        .map(|(_,source)|source.name.clone())
+                    let clips = plans
+                        .iter::<sekiro::ClipSource>()
+                        .map(|(_, source)| source.name.clone())
                         .take(10)
                         .collect::<Vec<_>>();
                     println!(
@@ -123,7 +125,8 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>, ids: &[&str]) ->
         let norm = |v: [f32; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
         let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
         let used: Vec<_> = dummies.iter().filter(|d| d.use_upward_vector).collect();
-        let off = |f: &dyn Fn(&primase_fromsoft::flver::Dummy) -> bool| dummies.iter().filter(|d| f(d)).count();
+        let off =
+            |f: &dyn Fn(&primase_fromsoft::flver::Dummy) -> bool| dummies.iter().filter(|d| f(d)).count();
         println!(
             "DUMMYDIR {} {id} dummies {} forward_not_unit {} forward_zero {} use_upward {} upward_not_unit {} \
              not_perpendicular {} max_abs_dot {:.4}",
@@ -133,8 +136,12 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>, ids: &[&str]) ->
             off(&|d| norm(d.forward) == 0.),
             used.len(),
             used.iter().filter(|d| (norm(d.upward) - 1.).abs() > 1e-3).count(),
-            used.iter().filter(|d| dot(d.forward, d.upward).abs() > 1e-3).count(),
-            used.iter().map(|d| dot(d.forward, d.upward).abs()).fold(0., f32::max)
+            used.iter()
+                .filter(|d| dot(d.forward, d.upward).abs() > 1e-3)
+                .count(),
+            used.iter()
+                .map(|d| dot(d.forward, d.upward).abs())
+                .fold(0., f32::max)
         );
         for d in used.iter().take(3) {
             println!(

@@ -49,14 +49,19 @@ mod entity_json_tests {
 
     #[test]
     fn entity_index_roundtrips_without_accepting_other_json_shapes() {
-        for index in [0,u32::MAX] {
+        for index in [0, u32::MAX] {
             let entity = Entity::from_index(index);
             let value = serde_json::to_value(entity).unwrap();
-            assert_eq!(value,serde_json::json!(index));
-            assert_eq!(serde_json::from_value::<Entity>(value).unwrap(),entity);
+            assert_eq!(value, serde_json::json!(index));
+            assert_eq!(serde_json::from_value::<Entity>(value).unwrap(), entity);
         }
-        for value in [serde_json::json!(-1),serde_json::json!(4294967296u64),
-            serde_json::json!(1.5),serde_json::json!("1"),serde_json::Value::Null] {
+        for value in [
+            serde_json::json!(-1),
+            serde_json::json!(4294967296u64),
+            serde_json::json!(1.5),
+            serde_json::json!("1"),
+            serde_json::Value::Null,
+        ] {
             assert!(serde_json::from_value::<Entity>(value).is_err());
         }
     }
@@ -2706,11 +2711,11 @@ mod tests {
         let mut world = World::new();
         let first = world.spawn();
         world.reserve_indices_before(100);
-        assert_eq!(world.entity_count(),1);
+        assert_eq!(world.entity_count(), 1);
         assert!(world.is_alive(first));
-        assert_eq!(world.spawn().index(),100);
+        assert_eq!(world.spawn().index(), 100);
         world.reserve_indices_before(5);
-        assert_eq!(world.spawn().index(),101);
+        assert_eq!(world.spawn().index(), 101);
     }
 
     /// A part with an entity alive in the world it is absorbed into is an error that changes nothing.

@@ -289,7 +289,10 @@ fn mean_colour_of(
     name: &str,
 ) -> Result<[f32; 3]> {
     let read_copy;
-    let t = match cache.get(&(name.to_owned(), false)).and_then(|e| world.get::<Texture>(*e)) {
+    let t = match cache
+        .get(&(name.to_owned(), false))
+        .and_then(|e| world.get::<Texture>(*e))
+    {
         Some(t) => t,
         None => {
             read_copy = read(payloads, name)?;
@@ -303,7 +306,8 @@ fn mean_colour_of(
         .filter_map(|(n, level)| Some((u32::try_from(n).ok()?, level)))
         .rev()
         .find(|(n, _)| {
-            t.width.checked_shr(*n).is_some_and(|w| w >= 4) && t.height.checked_shr(*n).is_some_and(|h| h >= 4)
+            t.width.checked_shr(*n).is_some_and(|w| w >= 4)
+                && t.height.checked_shr(*n).is_some_and(|h| h >= 4)
         })
         .or_else(|| t.levels.first().map(|level| (0, level)))
         .ok_or_else(|| invalid("Sekiro PBR", 0, "missing base mip"))?;
@@ -335,7 +339,10 @@ fn uniform_alpha(
     name: &str,
 ) -> std::result::Result<Option<f64>, String> {
     let read_copy;
-    let t = match cache.get(&(name.to_owned(), false)).and_then(|e| world.get::<Texture>(*e)) {
+    let t = match cache
+        .get(&(name.to_owned(), false))
+        .and_then(|e| world.get::<Texture>(*e))
+    {
         Some(t) => t,
         None => {
             read_copy = read(payloads, name).map_err(|e| e.to_string())?;
@@ -736,7 +743,9 @@ fn lower_materials(
                     && b.scale.iter().all(|v| v.is_finite())
                 {
                     let row = tiling_row(world, e, &m, kind, b);
-                    if row.iter().all(|v| v.is_finite()) && row_transform(row, applied) != UvTransform::IDENTITY {
+                    if row.iter().all(|v| v.is_finite())
+                        && row_transform(row, applied) != UvTransform::IDENTITY
+                    {
                         r.transform = Some(row_transform(row, applied));
                     }
                 }
@@ -800,7 +809,11 @@ fn lower_materials(
                 }
                 let (normal_kind, normal_binding) = keyed_normal_binding(&m, &pv)
                     .ok_or_else(|| invalid("Sekiro PBR", 0, "normal binding absent"))?;
-                let nt = transform(tiling_row(world, e, &m, normal_kind, normal_binding), applied, normal_binding)?;
+                let nt = transform(
+                    tiling_row(world, e, &m, normal_kind, normal_binding),
+                    applied,
+                    normal_binding,
+                )?;
                 let mt = metal_keyed
                     .map(|(kind, b)| transform(tiling_row(world, e, &m, kind, b), applied, b))
                     .transpose()?;

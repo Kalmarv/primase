@@ -237,7 +237,7 @@ pub fn uses(container: &[u8]) -> Result<SamplerUses, String> {
 }
 
 /// The resolve pass already has this program lifted for constants, outputs and inspection facts.
-pub(super) fn uses_program(program: &primase_shader::Program) -> Result<SamplerUses,String> {
+pub(super) fn uses_program(program: &primase_shader::Program) -> Result<SamplerUses, String> {
     let function = &program
         .module
         .entry_points

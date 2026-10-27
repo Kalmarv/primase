@@ -602,18 +602,41 @@ fn the_pass_binds_every_layered_material_to_shared_shader_and_texture_entities()
     );
     assert_eq!(world.get::<ShaderBinding>(b).unwrap().stages.len(), 1);
     // The same selected pixel program supplies the card's facts, without an inspection-time lift.
-    for entity in [a,b] {
-        let facts = &world.get::<primase_core::shader::MaterialPrograms>(entity).unwrap().0[0];
-        assert_eq!(facts.shader,Some(shader));
-        assert_eq!(facts.hash,Some(primase_shader::source_hash(PROGRAM)));
-        assert_eq!(facts.stage,Stage::Pixel);
+    for entity in [a, b] {
+        let facts = &world
+            .get::<primase_core::shader::MaterialPrograms>(entity)
+            .unwrap()
+            .0[0];
+        assert_eq!(facts.shader, Some(shader));
+        assert_eq!(facts.hash, Some(primase_shader::source_hash(PROGRAM)));
+        assert_eq!(facts.stage, Stage::Pixel);
         assert!(facts.instruction_count.unwrap().count > 0);
-        assert_eq!(facts.instruction_count.unwrap().unit,primase_core::shader::InstructionUnit::DxbcInstructions);
-        assert!(facts.inputs.iter().all(|input|input.used && input.provenance.d3d.is_some()));
-        assert_eq!(facts.outputs,world.get::<ShaderBinding>(entity).unwrap().stage(Stage::Pixel).unwrap().outputs);
+        assert_eq!(
+            facts.instruction_count.unwrap().unit,
+            primase_core::shader::InstructionUnit::DxbcInstructions
+        );
+        assert!(
+            facts
+                .inputs
+                .iter()
+                .all(|input| input.used && input.provenance.d3d.is_some())
+        );
+        assert_eq!(
+            facts.outputs,
+            world
+                .get::<ShaderBinding>(entity)
+                .unwrap()
+                .stage(Stage::Pixel)
+                .unwrap()
+                .outputs
+        );
         assert!(facts.surface.base.is_some());
     }
-    assert!(world.get::<primase_core::shader::MaterialPrograms>(c).unwrap().0[0].not_lifted.is_some());
+    assert!(
+        world.get::<primase_core::shader::MaterialPrograms>(c).unwrap().0[0]
+            .not_lifted
+            .is_some()
+    );
     for e in [a, b] {
         let binding = world.get::<ShaderBinding>(e).unwrap();
         assert_eq!(binding.stage(Stage::Pixel).unwrap().shader, shader);
@@ -998,18 +1021,37 @@ fn a_further_tangent_binding_requires_the_materials_primitive_to_store_it() {
             (Semantic::Position, Stream::F32x3(vec![[0.0; 3]; 3])),
             (Semantic::Tangent(0), Stream::F32x4(vec![[1.0, 0.0, 0.0, 1.0]; 3])),
         ]),
-        indices: Some(vec![0, 1, 2]), material: Some(material),
+        indices: Some(vec![0, 1, 2]),
+        material: Some(material),
     };
     let role = |world: &World| {
-        primase_fromsoft::layer_bake::resolve::resolve_vertex_for_geometry(&shader, shader_entity, world, material)
-            .unwrap().stage.inputs.into_iter().find(|i| i.label.name.eq_ignore_ascii_case("TANGENT") && i.label.index == 2).unwrap().role
+        primase_fromsoft::layer_bake::resolve::resolve_vertex_for_geometry(
+            &shader,
+            shader_entity,
+            world,
+            material,
+        )
+        .unwrap()
+        .stage
+        .inputs
+        .into_iter()
+        .find(|i| i.label.name.eq_ignore_ascii_case("TANGENT") && i.label.index == 2)
+        .unwrap()
+        .role
     };
     world.insert(mesh, Mesh::new(vec![primitive.clone()]));
-    assert!(matches!(role(&world), InputRole::Unknown { why } if why.contains("Tangent(2)") && why.contains("absent or incomplete")));
-    primitive.streams.insert(Semantic::Tangent(2), Stream::F32x4(vec![[0.0, 1.0, 0.0, -1.0]; 3]));
+    assert!(
+        matches!(role(&world), InputRole::Unknown { why } if why.contains("Tangent(2)") && why.contains("absent or incomplete"))
+    );
+    primitive.streams.insert(
+        Semantic::Tangent(2),
+        Stream::F32x4(vec![[0.0, 1.0, 0.0, -1.0]; 3]),
+    );
     world.insert(mesh, Mesh::new(vec![primitive.clone()]));
     assert_eq!(role(&world), InputRole::Stream(Semantic::Tangent(2)));
-    primitive.streams.insert(Semantic::Tangent(2), Stream::F32x4(vec![[0.0; 4]; 2]));
+    primitive
+        .streams
+        .insert(Semantic::Tangent(2), Stream::F32x4(vec![[0.0; 4]; 2]));
     world.insert(mesh, Mesh::new(vec![primitive]));
     assert!(matches!(role(&world), InputRole::Unknown { .. }));
 }
@@ -1021,27 +1063,55 @@ fn layout_indices_zero_one_four_are_not_compacted_by_a_program_reading_zero_and_
     // Reuse the fixture's complete reflected interface; only the sparse tangent label differs.
     let mut interface = primase_dxbc::reflection(LINING_PROGRAM).unwrap();
     for input in &mut interface.inputs {
-        if input.label.name.eq_ignore_ascii_case("TANGENT") && input.label.index == 2 { input.label.index = 4; }
+        if input.label.name.eq_ignore_ascii_case("TANGENT") && input.label.index == 2 {
+            input.label.index = 4;
+        }
     }
-    let shader = dxbc_shader(LINING_PROGRAM,interface);
+    let shader = dxbc_shader(LINING_PROGRAM, interface);
     let mut world = World::new();
-    let program = world.spawn(); let material = world.spawn(); let mesh = world.spawn();
-    let mut streams = BTreeMap::from([(Semantic::Position,Stream::F32x3(vec![[0.0;3];3]))]);
-    for set in [0,1,4] { streams.insert(Semantic::Tangent(set),Stream::F32x4(vec![[1.0,0.0,0.0,1.0];3])); }
-    let primitive = Primitive { topology:Topology::Triangles,streams,indices:Some(vec![0,1,2]),material:Some(material) };
-    world.insert(mesh,Mesh::new(vec![primitive.clone()]));
-    let bind = |world:&World| primase_fromsoft::layer_bake::resolve::resolve_vertex_for_geometry(&shader,program,world,material).unwrap().stage;
+    let program = world.spawn();
+    let material = world.spawn();
+    let mesh = world.spawn();
+    let mut streams = BTreeMap::from([(Semantic::Position, Stream::F32x3(vec![[0.0; 3]; 3]))]);
+    for set in [0, 1, 4] {
+        streams.insert(
+            Semantic::Tangent(set),
+            Stream::F32x4(vec![[1.0, 0.0, 0.0, 1.0]; 3]),
+        );
+    }
+    let primitive = Primitive {
+        topology: Topology::Triangles,
+        streams,
+        indices: Some(vec![0, 1, 2]),
+        material: Some(material),
+    };
+    world.insert(mesh, Mesh::new(vec![primitive.clone()]));
+    let bind = |world: &World| {
+        primase_fromsoft::layer_bake::resolve::resolve_vertex_for_geometry(&shader, program, world, material)
+            .unwrap()
+            .stage
+    };
     let stage = bind(&world);
-    for set in [0,4] {
-        let input = stage.inputs.iter().find(|i| i.label.name.eq_ignore_ascii_case("TANGENT") && i.label.index == set).unwrap();
-        assert_eq!(input.role,InputRole::Stream(Semantic::Tangent(set as u8)));
+    for set in [0, 4] {
+        let input = stage
+            .inputs
+            .iter()
+            .find(|i| i.label.name.eq_ignore_ascii_case("TANGENT") && i.label.index == set)
+            .unwrap();
+        assert_eq!(input.role, InputRole::Stream(Semantic::Tangent(set as u8)));
     }
     let mut absent = primitive;
     absent.streams.remove(&Semantic::Tangent(4));
-    world.insert(mesh,Mesh::new(vec![absent]));
+    world.insert(mesh, Mesh::new(vec![absent]));
     let stage = bind(&world);
-    let input = stage.inputs.iter().find(|i| i.label.name.eq_ignore_ascii_case("TANGENT") && i.label.index == 4).unwrap();
-    assert!(matches!(&input.role,InputRole::Unknown { why } if why.contains("Tangent(4)") && why.contains("absent")));
+    let input = stage
+        .inputs
+        .iter()
+        .find(|i| i.label.name.eq_ignore_ascii_case("TANGENT") && i.label.index == 4)
+        .unwrap();
+    assert!(
+        matches!(&input.role,InputRole::Unknown { why } if why.contains("Tangent(4)") && why.contains("absent"))
+    );
 }
 
 /// The joints' palette and the cloth-cancel palette of an Elden Ring (DXIL) skinned program are bound at 256 matrices of

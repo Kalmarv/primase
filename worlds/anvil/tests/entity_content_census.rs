@@ -27,7 +27,10 @@ fn forges(root: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
         if kind.is_dir() {
             forges(&entry.path(), out)?;
         } else if kind.is_file()
-            && entry.path().extension().is_some_and(|e| e.eq_ignore_ascii_case("forge"))
+            && entry
+                .path()
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("forge"))
         {
             out.push(entry.path());
         }
@@ -81,13 +84,7 @@ struct Outcome {
     examples: Vec<Value>,
 }
 
-fn outcome(
-    rows: &mut BTreeMap<(u32, String), Outcome>,
-    kind: u32,
-    status: &str,
-    bytes: u64,
-    example: Value,
-) {
+fn outcome(rows: &mut BTreeMap<(u32, String), Outcome>, kind: u32, status: &str, bytes: u64, example: Value) {
     let tally = rows.entry((kind, status.to_owned())).or_default();
     tally.entries += 1;
     tally.stored_bytes += bytes;
@@ -97,15 +94,21 @@ fn outcome(
 }
 
 fn outcome_rows(rows: &BTreeMap<(u32, String), Outcome>) -> Vec<Value> {
-    rows.iter().map(|((kind, status), tally)| json!({
-        "type_id": format!("{kind:#010x}"), "status": status, "entries": tally.entries,
-        "stored_payload_bytes": tally.stored_bytes, "examples": tally.examples,
-    })).collect()
+    rows.iter()
+        .map(|((kind, status), tally)| {
+            json!({
+                "type_id": format!("{kind:#010x}"), "status": status, "entries": tally.entries,
+                "stored_payload_bytes": tally.stored_bytes, "examples": tally.examples,
+            })
+        })
+        .collect()
 }
 
 #[test]
 fn embedded_components_report_semantic_gaps_and_grid_listed_owners() {
-    let Some(root) = install(Game::Riders) else { return; };
+    let Some(root) = install(Game::Riders) else {
+        return;
+    };
     let mut paths = Vec::new();
     forges(&root, &mut paths).expect("enumerate Riders forge files");
     paths.sort();
@@ -119,30 +122,54 @@ fn embedded_components_report_semantic_gaps_and_grid_listed_owners() {
     // Establish a reproducible map-candidate cohort without guessing from owner names. A missing/refused graph
     // record is counted explicitly: the cohort is then a lower bound even before state/patch selection.
     for path in &paths {
-        let relative = path.strip_prefix(&root).expect("forge below install").to_string_lossy();
+        let relative = path
+            .strip_prefix(&root)
+            .expect("forge below install")
+            .to_string_lossy();
         let mut archive = Archive::open(&[path]).expect("open census forge");
-        let entries: Vec<_> = archive.forge(0).expect("one forge").listing()
+        let entries: Vec<_> = archive
+            .forge(0)
+            .expect("one forge")
+            .listing()
             .filter(|e| matches!(e.type_id, GRID_CELL_DATA_BLOCK | ENTITY_GROUP))
-            .map(|e| (e.entry, e.type_id, e.id, e.name.to_owned(), e.size)).collect();
+            .map(|e| (e.entry, e.type_id, e.id, e.name.to_owned(), e.size))
+            .collect();
         for (entry, kind, id, name, bytes) in entries {
-            let mut example = json!({"forge": relative, "entry": entry, "id": format!("{id:#018x}"), "name": name});
-            let result = archive.resource(At { forge: 0, entry }).map_err(|e| e.to_string())
+            let mut example =
+                json!({"forge": relative, "entry": entry, "id": format!("{id:#018x}"), "name": name});
+            let result = archive
+                .resource(At { forge: 0, entry })
+                .map_err(|e| e.to_string())
                 .and_then(|r| {
-                    if r.type_id != kind { return Err("index/resource type disagreement".to_owned()); }
+                    if r.type_id != kind {
+                        return Err("index/resource type disagreement".to_owned());
+                    }
                     if kind == GRID_CELL_DATA_BLOCK {
                         let block = StoredGridCellDataBlock::parse(&r.body).map_err(|e| e.to_string())?;
                         roots.extend(block.objects.iter().map(|r| r.id));
                     } else {
                         let group = StoredEntityGroup::parse(&r.body).map_err(|e| e.to_string())?;
-                        groups.entry(id).or_default().extend(group.members.iter().map(|r| r.id));
+                        groups
+                            .entry(id)
+                            .or_default()
+                            .extend(group.members.iter().map(|r| r.id));
                     }
                     Ok(())
                 });
             let status = match result {
                 Ok(()) => "parsed",
-                Err(why) => { example["why"] = json!(why); "refused" }
+                Err(why) => {
+                    example["why"] = json!(why);
+                    "refused"
+                }
             };
-            outcome(&mut graph_outcomes, kind, status, u64::try_from(bytes).expect("nonnegative entry size"), example);
+            outcome(
+                &mut graph_outcomes,
+                kind,
+                status,
+                u64::try_from(bytes).expect("nonnegative entry size"),
+                example,
+            );
         }
     }
     let listed = listed_closure(&roots, &groups);
@@ -153,11 +180,18 @@ fn embedded_components_report_semantic_gaps_and_grid_listed_owners() {
     let mut sample_bytes = 0usize;
     let mut sample_number = 0u64;
     for path in &paths {
-        let relative = path.strip_prefix(&root).expect("forge below install").to_string_lossy();
+        let relative = path
+            .strip_prefix(&root)
+            .expect("forge below install")
+            .to_string_lossy();
         let mut archive = Archive::open(&[path]).expect("open census forge");
-        let entries: Vec<_> = archive.forge(0).expect("one forge").listing()
+        let entries: Vec<_> = archive
+            .forge(0)
+            .expect("one forge")
+            .listing()
             .filter(|e| matches!(e.type_id, ENTITY | ENTITY_GROUP))
-            .map(|e| (e.entry, e.type_id, e.id, e.name.to_owned(), e.size)).collect();
+            .map(|e| (e.entry, e.type_id, e.id, e.name.to_owned(), e.size))
+            .collect();
         let count = entries.len();
         for (entry, kind, id, name, bytes) in entries {
             let bytes = u64::try_from(bytes).expect("nonnegative entry size");
@@ -166,13 +200,19 @@ fn embedded_components_report_semantic_gaps_and_grid_listed_owners() {
             let grid_listed = listed.contains(&id);
             let mut owner = json!({"forge": relative, "entry": entry, "owner_id": format!("{id:#018x}"),
                 "owner_type": format!("{kind:#010x}"), "name": name, "grid_listed": grid_listed});
-            let parsed = archive.resource(At { forge: 0, entry }).map_err(|e| e.to_string())
+            let parsed = archive
+                .resource(At { forge: 0, entry })
+                .map_err(|e| e.to_string())
                 .and_then(|r| {
-                    if r.type_id != kind { return Err("index/resource type disagreement".to_owned()); }
+                    if r.type_id != kind {
+                        return Err("index/resource type disagreement".to_owned());
+                    }
                     if kind == ENTITY {
                         StoredEntity::parse(&r.body).map_err(|e| e.to_string())
                     } else {
-                        StoredEntityGroup::parse(&r.body).map(|g| g.entity).map_err(|e| e.to_string())
+                        StoredEntityGroup::parse(&r.body)
+                            .map(|g| g.entity)
+                            .map_err(|e| e.to_string())
                     }
                 });
             let entity = match parsed {
@@ -191,15 +231,21 @@ fn embedded_components_report_semantic_gaps_and_grid_listed_owners() {
             owner["phantom"] = json!(entity.is_phantom());
             owner["has_visual"] = json!(entity.visuals().next().is_some());
             // These are facts about co-occurrence, not a heuristic exclusion of animated map props.
-            owner["has_skeleton_or_animation"] = json!(entity.components.iter().any(|c|
-                matches!(&c.body, ComponentBody::Skeleton(_) | ComponentBody::Anim(_))));
+            owner["has_skeleton_or_animation"] = json!(
+                entity
+                    .components
+                    .iter()
+                    .any(|c| matches!(&c.body, ComponentBody::Skeleton(_) | ComponentBody::Anim(_)))
+            );
             let mut seen = BTreeSet::new();
             for component in &entity.components {
                 let (status, body) = classification(component.kind, &component.body);
                 let key = (grid_listed, component.kind, status);
                 let tally = tallies.entry(key).or_default();
                 tally.components += 1;
-                if seen.insert(key) { tally.owners += 1; }
+                if seen.insert(key) {
+                    tally.owners += 1;
+                }
                 if let Some(body) = body {
                     tally.retained_body_bytes += u64::try_from(body.len()).expect("body length fits u64");
                     *tally.body_lengths.entry(body.len()).or_default() += 1;
@@ -212,9 +258,15 @@ fn embedded_components_report_semantic_gaps_and_grid_listed_owners() {
                     }
                     if let Some(body) = body {
                         example["body_bytes"] = json!(body.len());
-                        example["sha256"] = json!(Sha256::digest(body).iter().map(|b| format!("{b:02x}")).collect::<String>());
+                        example["sha256"] = json!(
+                            Sha256::digest(body)
+                                .iter()
+                                .map(|b| format!("{b:02x}"))
+                                .collect::<String>()
+                        );
                         // Samples are complete bodies or explicitly absent, never truncated evidence for a schema.
-                        if status != "downstream-reader" && body.len() <= MAX_SAMPLE_BYTES
+                        if status != "downstream-reader"
+                            && body.len() <= MAX_SAMPLE_BYTES
                             && body.len() <= TOTAL_SAMPLE_BYTES.saturating_sub(sample_bytes)
                         {
                             let file = format!("component-{sample_number:06}.bin");
@@ -223,17 +275,27 @@ fn embedded_components_report_semantic_gaps_and_grid_listed_owners() {
                             sample_number += 1;
                             sample_bytes += body.len();
                         } else {
-                            example["body_not_saved"] = json!("downstream reader, per-body cap or total sample budget");
+                            example["body_not_saved"] =
+                                json!("downstream reader, per-body cap or total sample budget");
                         }
                     }
                     tally.examples.push(example);
                 }
             }
         }
-        println!("ANVIL_ENTITY_CONTENT_FORGE={}", json!({"forge": relative, "owners": count}));
+        println!(
+            "ANVIL_ENTITY_CONTENT_FORGE={}",
+            json!({"forge": relative, "owners": count})
+        );
     }
-    assert_eq!(owner_outcomes.values().map(|r| r.entries).sum::<u64>(), indexed_owners);
-    assert_eq!(owner_outcomes.values().map(|r| r.stored_bytes).sum::<u64>(), indexed_owner_bytes);
+    assert_eq!(
+        owner_outcomes.values().map(|r| r.entries).sum::<u64>(),
+        indexed_owners
+    );
+    assert_eq!(
+        owner_outcomes.values().map(|r| r.stored_bytes).sum::<u64>(),
+        indexed_owner_bytes
+    );
     let rows: Vec<_> = tallies.iter().map(|((listed, kind, status), tally)| json!({
         "grid_listed": listed, "component_type": format!("{kind:#010x}"), "component": component_name(*kind),
         "status": status, "components": tally.components, "owners": tally.owners,
@@ -253,12 +315,24 @@ fn embedded_components_report_semantic_gaps_and_grid_listed_owners() {
         "graph": graph, "owner_outcomes": outcomes, "components": rows,
         "sample_bytes": sample_bytes, "sample_body_count": sample_number,
         "sample_limits": {"per_row": SAMPLES_PER_ROW, "per_body_bytes": MAX_SAMPLE_BYTES, "total_bytes": TOTAL_SAMPLE_BYTES}});
-    std::fs::write(output.join("report.json"), serde_json::to_vec_pretty(&report).expect("serialize census"))
-        .expect("write census report");
-    for row in &graph { println!("ANVIL_ENTITY_GRAPH={row}"); }
-    for row in &outcomes { println!("ANVIL_ENTITY_OWNER={row}"); }
-    for row in &rows { println!("ANVIL_ENTITY_COMPONENT={row}"); }
-    println!("ANVIL_ENTITY_CONTENT_CENSUS={}", output.join("report.json").display());
+    std::fs::write(
+        output.join("report.json"),
+        serde_json::to_vec_pretty(&report).expect("serialize census"),
+    )
+    .expect("write census report");
+    for row in &graph {
+        println!("ANVIL_ENTITY_GRAPH={row}");
+    }
+    for row in &outcomes {
+        println!("ANVIL_ENTITY_OWNER={row}");
+    }
+    for row in &rows {
+        println!("ANVIL_ENTITY_COMPONENT={row}");
+    }
+    println!(
+        "ANVIL_ENTITY_CONTENT_CENSUS={}",
+        output.join("report.json").display()
+    );
 }
 
 #[test]
@@ -274,9 +348,18 @@ fn listed_membership_uses_group_edges_and_survives_cycles_and_patch_unions() {
 fn raw_water_and_decals_are_not_ranked_as_missing_semantic_readers() {
     let bytes = ComponentBody::Raw(vec![1, 2, 3]);
     for kind in [WATER_COMPONENT, HOUDINI_DECAL_INSTANCER, STATIC_DDECAL] {
-        assert_eq!(classification(kind, &bytes), ("downstream-reader", Some(&[1, 2, 3][..])));
+        assert_eq!(
+            classification(kind, &bytes),
+            ("downstream-reader", Some(&[1, 2, 3][..]))
+        );
     }
-    assert_eq!(classification(0x713F_0C7D, &bytes), ("length-rule-only", Some(&[1, 2, 3][..])));
+    assert_eq!(
+        classification(0x713F_0C7D, &bytes),
+        ("length-rule-only", Some(&[1, 2, 3][..]))
+    );
     let unread = ComponentBody::Unread(vec![4]);
-    assert_eq!(classification(WATER_COMPONENT, &unread), ("header-delimited-unread", Some(&[4][..])));
+    assert_eq!(
+        classification(WATER_COMPONENT, &unread),
+        ("header-delimited-unread", Some(&[4][..]))
+    );
 }

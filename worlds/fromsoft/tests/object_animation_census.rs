@@ -24,7 +24,10 @@ fn native(path: &primase_testdata::OodleLibrary) -> primase_compress::Result<pri
 }
 
 fn leaf(name: &str) -> String {
-    name.rsplit(['/', '\\']).next().unwrap_or(name).to_ascii_lowercase()
+    name.rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(name)
+        .to_ascii_lowercase()
 }
 
 fn census(
@@ -97,7 +100,10 @@ fn census(
                             .take(8)
                             .map(|f| leaf(f.name.as_deref().unwrap_or("")))
                             .collect();
-                        println!("sample {label} {path} {} members: {list:?}", animation.files.len());
+                        println!(
+                            "sample {label} {path} {} members: {list:?}",
+                            animation.files.len()
+                        );
                     }
                 }
                 Ok(())

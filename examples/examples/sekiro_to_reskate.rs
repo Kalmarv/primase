@@ -26,9 +26,9 @@ use primase_reskate::components::{CollisionSurfaces, CollisionWeld};
 use primase_reskate::passes::{
     ClipReskateRegion, LightCalibration, OceanMaterials, PauseColour, PauseDrawing, PauseExtent, PauseLeaveOut,
     PauseSource, PlaceReskateSpawn, PlanReskateBlendBudget, PrepareReskateBlendOrder, PrepareReskateCollision,
-    PrepareReskateFloor, PrepareReskateGrinds, PrepareReskateLaidLayers, PrepareReskateOverlays, PrepareReskatePauseMap, PrepareReskateTextures,
-    PrepareReskateUvRepeats, PrepareReskateWater, RaiseOptions, RaiseSkate, RepeatBlended, RepeatDecals,
-    SnapReskateMarkers, SummarizeReskateMap, Unclassified, WaterExtent,
+    PrepareReskateFloor, PrepareReskateGrinds, PrepareReskateLaidLayers, PrepareReskateOverlays,
+    PrepareReskatePauseMap, PrepareReskateTextures, PrepareReskateUvRepeats, PrepareReskateWater, RaiseOptions,
+    RaiseSkate, RepeatBlended, RepeatDecals, SnapReskateMarkers, SummarizeReskateMap, Unclassified, WaterExtent,
 };
 use primase_reskate::{EncodingOptions, MapSink};
 
@@ -94,7 +94,10 @@ fn main() -> Result<()> {
             Box::new(PrepareReskateTextures),
             Box::new(PrepareReskateUvRepeats::new(RepeatDecals::Omit, RepeatBlended::Cutout)),
             Box::new(PrepareReskateOverlays::new(0.004)?.for_encoding(&e)?),
-            Box::new(PrepareReskateBlendOrder::new(200.0, primase_reskate::blend_order::ChainOrder::Tie)?.for_encoding(&e)?),
+            Box::new(
+                PrepareReskateBlendOrder::new(200.0, primase_reskate::blend_order::ChainOrder::Tie)?
+                    .for_encoding(&e)?,
+            ),
             Box::new(PrepareReskateCollision::new(CollisionSurfaces::Coalesce, CollisionWeld::Millimetre, &e)?),
             Box::new(SummarizeReskateMap::for_encoding(&e)?),
             Box::new(PlanReskateBlendBudget::pool()),

@@ -71,20 +71,36 @@ fn indexed_tangents_round_trip_through_standard_and_custom_attributes() {
     use primase_core::{Mesh, Primitive};
     use std::collections::BTreeMap;
     let streams = BTreeMap::from([
-        (Semantic::Position, Stream::F32x3(vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])),
+        (
+            Semantic::Position,
+            Stream::F32x3(vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+        ),
         (Semantic::Tangent(0), Stream::F32x4(vec![[1.0, 0.0, 0.0, 1.0]; 3])),
-        (Semantic::Tangent(1), Stream::F32x4(vec![[0.0, 1.0, 0.0, -1.0]; 3])),
+        (
+            Semantic::Tangent(1),
+            Stream::F32x4(vec![[0.0, 1.0, 0.0, -1.0]; 3]),
+        ),
         (Semantic::Tangent(4), Stream::F32x4(vec![[0.0, 0.0, 1.0, 1.0]; 3])),
     ]);
-    let mesh = Mesh::new(vec![Primitive { topology: Topology::Triangles, streams: streams.clone(), indices: Some(vec![0, 1, 2]), material: None }]);
+    let mesh = Mesh::new(vec![Primitive {
+        topology: Topology::Triangles,
+        streams: streams.clone(),
+        indices: Some(vec![0, 1, 2]),
+        material: None,
+    }]);
     let bytes = primase_glb::encode_mesh("indexed tangents", &mesh).unwrap();
     let gltf = Gltf::from_glb(&bytes).unwrap();
     let attributes = &gltf.json()["meshes"][0]["primitives"][0]["attributes"];
-    for name in ["TANGENT", "_PRIMASE_TANGENT1", "_PRIMASE_TANGENT4"] { assert!(attributes.get(name).is_some(), "{name}"); }
+    for name in ["TANGENT", "_PRIMASE_TANGENT1", "_PRIMASE_TANGENT4"] {
+        assert!(attributes.get(name).is_some(), "{name}");
+    }
     assert!(attributes.get("TANGENT1").is_none());
     // `_TANGENT<n>` is a foreign application's name: we never write it, and a document that has one keeps it custom.
     assert!(attributes.get("_TANGENT1").is_none());
-    assert_eq!(gltf.read_mesh(0).unwrap().primitives[0].primitive.streams, streams);
+    assert_eq!(
+        gltf.read_mesh(0).unwrap().primitives[0].primitive.streams,
+        streams
+    );
 }
 
 /// `_TANGENT<n>` is another application's attribute: a document that has one keeps it in `custom`, and it is not read

@@ -53,13 +53,19 @@ fn sekiros_gbuffer_is_a_specular_workflow_surface() {
     };
     assert_eq!(at(&targets, emission.place), (4, 0b0111));
     // no metallic, specular strength or occlusion: the reflectance is the F0
-    assert_eq!((s.metallic, s.specular, s.occlusion, s.ambient_occlusion), (None, None, None, None));
+    assert_eq!(
+        (s.metallic, s.specular, s.occlusion, s.ambient_occlusion),
+        (None, None, None, None)
+    );
 
     // decoded by hand: the up normal as the writer stores it, a gloss of 0.64 (smoothness 0.8 * 0.95), F0 0.04 stored
     // as 0.2, the emission as it is
     let bias = f32::from_bits(0x3f00_2008);
     let up = normal.decode([bias, 1.0 * 0.5 + bias, bias, 0.0]).unwrap();
-    assert!(close(up[0], 0.0) && close(up[1], 1.0) && close(up[2], 0.0), "{up:?}");
+    assert!(
+        close(up[0], 0.0) && close(up[1], 1.0) && close(up[2], 0.0),
+        "{up:?}"
+    );
     assert!(close(s.roughness.unwrap().decode([0.64, 0.0, 0.0, 0.0]), 0.24));
     let f0 = reflectance.colour([0.2, 0.2, 0.2, 1.0]);
     assert!(f0.iter().all(|c| close(*c, 0.04)), "{f0:?}");

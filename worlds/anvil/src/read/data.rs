@@ -196,7 +196,9 @@ pub fn read_block(bytes: &[u8], at: usize, max_decoded: usize) -> Result<(Block,
     }
     // every chunk needs its row of sizes and 4 bytes of checksum: a count the bytes can't hold is refused before
     // allocating
-    let tables = n.checked_mul(row.saturating_add(4)).ok_or(overflow("chunk table"))?;
+    let tables = n
+        .checked_mul(row.saturating_add(4))
+        .ok_or(overflow("chunk table"))?;
     if tables > bytes.len().saturating_sub(at) {
         return Err(Error::Chunks {
             at,

@@ -148,8 +148,9 @@ fn lower(
             match property {
                 Property::Translation => root.0 = curve,
                 Property::Rotation => root.1 = curve,
-                Property::Scale | Property::Scalar | Property::Visibility | Property::Values(_) =>
-                    return Err(format!("{name}: unsupported root-motion property {property:?}")),
+                Property::Scale | Property::Scalar | Property::Visibility | Property::Values(_) => {
+                    return Err(format!("{name}: unsupported root-motion property {property:?}"));
+                }
             }
             continue;
         }

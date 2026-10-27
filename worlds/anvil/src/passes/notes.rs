@@ -23,22 +23,17 @@
 use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::{ContentNote, Entity, Marker, Name, World};
 
+use crate::components::component_types::component_name;
 use crate::components::{
     AnvilFloorHeight, AnvilGiDyn, AnvilGridMetadata, AnvilLookPreset, AnvilRenderStatus,
     AnvilSourceComponents,
 };
-use crate::components::component_types::component_name;
 
 /// Put `note` on `e`, counted when it replaces a different note this pass left there before.
 fn note(w: &mut World, e: Entity, note: ContentNote, log: &mut PassLog) {
-    let replaced = w
-        .get::<ContentNote>(e)
-        .is_some_and(|previous| *previous != note);
+    let replaced = w.get::<ContentNote>(e).is_some_and(|previous| *previous != note);
     if replaced {
-        log.omit(
-            "entities whose second Anvil content note replaces the first",
-            1,
-        );
+        log.omit("entities whose second Anvil content note replaces the first", 1);
     }
     w.insert(e, note);
 }
@@ -74,7 +69,10 @@ fn gi_notes(w: &mut World, entity: Entity, gi: &AnvilGiDyn, log: &mut PassLog) {
             },
         );
         if let Some(name) = &name {
-            w.insert(probe, Name(format!("{name} probe {index} (irradiance unresolved)")));
+            w.insert(
+                probe,
+                Name(format!("{name} probe {index} (irradiance unresolved)")),
+            );
         }
         w.insert(
             probe,
@@ -177,10 +175,7 @@ pub fn note_anvil_content(w: &mut World) -> PassLog {
             &mut log,
         );
     }
-    let frames: Vec<(Entity, AnvilGiDyn)> = w
-        .iter::<AnvilGiDyn>()
-        .map(|(e, gi)| (e, gi.clone()))
-        .collect();
+    let frames: Vec<(Entity, AnvilGiDyn)> = w.iter::<AnvilGiDyn>().map(|(e, gi)| (e, gi.clone())).collect();
     for (e, gi) in frames {
         gi_notes(w, e, &gi, &mut log);
     }
@@ -210,12 +205,7 @@ impl Pass for NoteAnvilContent {
     /// `core.content_note` on the entities the components are on, and the GI probes' `core.marker`, `core.name` and
     /// `core.transform`.
     fn provides(&self) -> &[&'static str] {
-        &[
-            "core.content_note",
-            "core.marker",
-            "core.name",
-            "core.transform",
-        ]
+        &["core.content_note", "core.marker", "core.name", "core.transform"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         log.absorb(note_anvil_content(w));
@@ -228,9 +218,9 @@ mod tests {
     use primase_core::Component;
 
     use super::*;
-    use crate::components::stored::{StoredGiDyn, StoredGridPartition, StoredLook};
     use crate::components::SourceComponent;
     use crate::components::component_types::COMPONENT_TYPES;
+    use crate::components::stored::{StoredGiDyn, StoredGridPartition, StoredLook};
 
     /// A world with one of each Anvil content fact, and a GI frame of two probes.
     fn world() -> World {
@@ -358,11 +348,7 @@ mod tests {
     #[test]
     fn a_gi_frame_is_noted_at_its_position_and_each_probe_is_a_marker() {
         let mut w = world();
-        let frame = w
-            .iter::<AnvilGiDyn>()
-            .map(|(e, _)| e)
-            .next()
-            .expect("a GI frame");
+        let frame = w.iter::<AnvilGiDyn>().map(|(e, _)| e).next().expect("a GI frame");
         let mut log = PassLog::default();
         log.absorb(note_anvil_content(&mut w));
         let gi = note_of(&w, frame);

@@ -20,16 +20,19 @@ pub use read::area::{
     read_game_area_staged, world_bounds,
 };
 pub use read::character::{
-    CharacterOptions, CharacterReader, CharacterReport, animation_notices, character_display_masks, part_forms, part_textures,
-    read_character, read_character_with, read_parts, read_parts_with,
+    CharacterOptions, CharacterReader, CharacterReport, animation_notices, character_display_masks,
+    part_forms, part_textures, read_character, read_character_with, read_parts, read_parts_with,
 };
 pub use read::collision::Report as CollisionReport;
 pub use read::draw_param::{DrawParams, Report as DrawParamReport, available as draw_params_available};
+pub use read::equipment::{
+    NpcOutfit, PresenceChoice, character_mesh_count, character_skeletons, empty_character_reason,
+    npc_outfit_catalog, npc_outfits, outfit_notices,
+};
 pub use read::extras::{Report as ExtrasReport, light_record, records as read_map_records};
 pub use read::messages::{NpcNamesRead, message_languages, npc_names, npc_names_into_world, npc_row_names};
 pub use read::objects::Report as ObjectCollisionReport;
 pub use read::params::{NpcPlacement, npc_placements, read_npc_param, read_npc_stats, read_param};
-pub use read::equipment::{NpcOutfit, PresenceChoice, outfit_notices, npc_outfits, npc_outfit_catalog, character_mesh_count, character_skeletons, empty_character_reason};
 pub use read::visibility::decode as decode_visibility;
 pub use read::{convert, states};
 

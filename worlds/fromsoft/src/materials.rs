@@ -302,15 +302,13 @@ pub const TRANSFORMED_ALPHA_CUT: &str = "pre-transform alpha test lowered as a h
 /// times the vertex colour's is below `FC_AlphaRef.x`), and the lowering read the tested slot from the program's
 /// dataflow and made the base colour of it ([`crate::passes::program_reads::Reads::coverage`]): the base colour's
 /// alpha is the tested value, cut at the material's `g_AlphaRef`.
-pub const COVERAGE_ALPHA_CUT: &str =
-    "alpha test of an unwritten value lowered as a hard cutoff of its coverage slot at the material's g_AlphaRef";
+pub const COVERAGE_ALPHA_CUT: &str = "alpha test of an unwritten value lowered as a hard cutoff of its coverage slot at the material's g_AlphaRef";
 
 /// What a lowering counts where the binding states the program's alpha test as a comparison of a value the program
 /// writes nowhere ([`primase_core::shader::AlphaComparison::Unwritten`]) and the lowering could not evaluate that
 /// expression with the values the binding states (it names why in its own notice): no cut is made, because none would be
 /// the program's.
-pub const UNSOLVED_ALPHA_TEST: &str =
-    "alpha test of an unwritten value not evaluated (the expression is not one varying texture alpha with stated constants): not cut";
+pub const UNSOLVED_ALPHA_TEST: &str = "alpha test of an unwritten value not evaluated (the expression is not one varying texture alpha with stated constants): not cut";
 
 /// How far a lowering read what a program's alpha test compares, where the binding states no reference for it or
 /// states one for a value the program writes nowhere.
@@ -373,9 +371,7 @@ pub fn alpha_cut_read(
                     _ => None,
                 })
             });
-            let reference = material
-                .view()
-                .and_then(|v| alpha_reference(v.alpha_reference()));
+            let reference = material.view().and_then(|v| alpha_reference(v.alpha_reference()));
             let states = reference.is_some();
             match stated {
                 // the program's test is of a value it writes nowhere: its own expression, evaluated, or no cut
@@ -396,9 +392,7 @@ pub fn alpha_cut_read(
                         None
                     },
                 ),
-                None if states && read == AlphaTestRead::Coverage => {
-                    (reference, Some(COVERAGE_ALPHA_CUT))
-                }
+                None if states && read == AlphaTestRead::Coverage => (reference, Some(COVERAGE_ALPHA_CUT)),
                 None if states => (None, Some(UNTESTED_ALPHA_REFERENCE)),
                 None => (None, None),
             }
@@ -596,7 +590,10 @@ mod tests {
         );
         assert_eq!(
             unwritten(&cutout, Some(&unwritten_binding), solved(Some(0.25), true)),
-            (AlphaMode::Mask { cutoff: 0.25 }, vec![DITHERED_ALPHA_CUT.to_owned()])
+            (
+                AlphaMode::Mask { cutoff: 0.25 },
+                vec![DITHERED_ALPHA_CUT.to_owned()]
+            )
         );
         assert_eq!(
             unwritten(&cutout, Some(&unwritten_binding), solved(None, false)),
@@ -616,8 +613,14 @@ mod tests {
         );
         // the engine's two words of the alpha constant: the material's over 255, -100 and 0 where it states none
         assert_eq!(engine_alpha_reference(&cutout), [reference, 0.]);
-        assert_eq!(engine_alpha_reference(&material("cutout", None, 0.5)), [-100., 0.]);
-        assert_eq!(engine_alpha_reference(&material("cutout", Some(0), 0.5)), [-100., 0.]);
+        assert_eq!(
+            engine_alpha_reference(&material("cutout", None, 0.5)),
+            [-100., 0.]
+        );
+        assert_eq!(
+            engine_alpha_reference(&material("cutout", Some(0), 0.5)),
+            [-100., 0.]
+        );
         // a reference the binding states, or none the material states, is decided as before
         assert_eq!(
             mode_read(&cutout, Some(&binding(Some(reference))), true),

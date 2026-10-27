@@ -135,9 +135,19 @@ impl Vertex {
     }
 
     fn push_tangent(&mut self, index: u32, tangent: [f32; 4]) -> Result<()> {
-        let index = u8::try_from(index).map_err(|_| invalid("FLVER vertex", 0, format!("tangent semantic index {index} exceeds 255")))?;
+        let index = u8::try_from(index).map_err(|_| {
+            invalid(
+                "FLVER vertex",
+                0,
+                format!("tangent semantic index {index} exceeds 255"),
+            )
+        })?;
         if self.tangent_indices.contains(&index) {
-            return Err(invalid("FLVER vertex", 0, format!("duplicate tangent semantic index {index}")));
+            return Err(invalid(
+                "FLVER vertex",
+                0,
+                format!("duplicate tangent semantic index {index}"),
+            ));
         }
         self.tangent_indices.push(index);
         self.tangents.push(tangent);
@@ -274,10 +284,23 @@ mod tangent_tests {
 
     #[test]
     fn tangent_members_retain_the_layouts_sparse_semantic_indices() {
-        let members: Vec<_> = [0, 1, 4].into_iter().enumerate().map(|(i, index)| Member {
-            unknown: 0, stored: true, offset: i * 16, kind: 3, semantic: 6, index,
-        }).collect();
-        let tangents = [[1.0f32, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0], [0.0, 0.0, -1.0, -1.0]];
+        let members: Vec<_> = [0, 1, 4]
+            .into_iter()
+            .enumerate()
+            .map(|(i, index)| Member {
+                unknown: 0,
+                stored: true,
+                offset: i * 16,
+                kind: 3,
+                semantic: 6,
+                index,
+            })
+            .collect();
+        let tangents = [
+            [1.0f32, 0.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0, -1.0],
+        ];
         let bytes: Vec<_> = tangents.iter().flatten().flat_map(|v| v.to_le_bytes()).collect();
         let mut vertex = Vertex::default();
         vertex.read(&bytes, &members, 2048.0).unwrap();

@@ -80,17 +80,22 @@ pub struct DecodedEvent {
 }
 impl Component for ClipEvents {
     const NAME: &'static str = "fromsoft.clip_events";
-    const VERSION:u32=2;
+    const VERSION: u32 = 2;
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         to_value(self).map(Some)
     }
-    fn verify(&self, _entity:primase_core::Entity, _world:&primase_core::World)->Result<(),String> {
-        if !self.typed.is_empty() && self.typed.len()!=self.events.len() {
-            return Err(format!("{}: {} raw events but {} typed records",self.file,self.events.len(),self.typed.len()));
+    fn verify(&self, _entity: primase_core::Entity, _world: &primase_core::World) -> Result<(), String> {
+        if !self.typed.is_empty() && self.typed.len() != self.events.len() {
+            return Err(format!(
+                "{}: {} raw events but {} typed records",
+                self.file,
+                self.events.len(),
+                self.typed.len()
+            ));
         }
         for event in &self.typed {
-            if event.name.is_some()!=event.naming.is_some() {
+            if event.name.is_some() != event.naming.is_some() {
                 return Err("event name and naming origin must travel together".into());
             }
         }
@@ -119,16 +124,20 @@ impl Resource for NpcStatRows {
 pub struct NpcNames {
     pub game: crate::Game,
     pub language: String,
-    pub names: std::collections::BTreeMap<i32,String>,
+    pub names: std::collections::BTreeMap<i32, String>,
     /// Missing optional binders and duplicate message ids, with both source paths.
     pub report: Vec<String>,
 }
 impl Resource for NpcNames {
     const NAME: &'static str = "fromsoft.npc_names";
-    fn to_json(&self) -> Result<Option<Value>, JsonError> {to_value(self).map(Some)}
-    fn verify(&self,_world:&primase_core::World)->Result<(),String> {
-        if self.language.trim().is_empty() {return Err("NPC game-name language is empty".into())}
-        if self.names.values().any(|name|name.trim().is_empty()) {
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        to_value(self).map(Some)
+    }
+    fn verify(&self, _world: &primase_core::World) -> Result<(), String> {
+        if self.language.trim().is_empty() {
+            return Err("NPC game-name language is empty".into());
+        }
+        if self.names.values().any(|name| name.trim().is_empty()) {
             return Err("NPC game-name table has an empty name".into());
         }
         Ok(())

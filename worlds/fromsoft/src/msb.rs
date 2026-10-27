@@ -258,8 +258,10 @@ pub struct MapLayout {
 /// records are excluded. Uses each part's own transform, never the map-offset event,
 /// which places map-local resources rather than the already-positioned MSB parts.
 pub fn drawn_part_points(layout: &MapLayout) -> Result<Vec<[f32; 2]>> {
-    layout.parts.iter().filter(|part| matches!(part.kind,
-        PartKind::MapPiece | PartKind::Object | PartKind::Asset))
+    layout
+        .parts
+        .iter()
+        .filter(|part| matches!(part.kind, PartKind::MapPiece | PartKind::Object | PartKind::Asset))
         .map(|part| part.transform().map(|t| [t.cols[3][0], -t.cols[3][2]]))
         .collect()
 }
@@ -521,11 +523,23 @@ impl MapLayout {
     /// EnemyBase.ReadTypeData both read CharaInitID at type-data +0x18, after think/NPC/talk and platoon.
     /// A negative stored ID means no initializer; non-enemies have no such field.
     pub fn character_init(&self, index: usize) -> Result<Option<i32>> {
-        let part = self.parts.get(index).ok_or_else(|| invalid("MSB part", index, "no part"))?;
-        if !matches!(part.kind, PartKind::Enemy | PartKind::DummyEnemy) { return Ok(None); }
-        let data = self.sections.get(5).and_then(|s| s.records.get(index))
+        let part = self
+            .parts
+            .get(index)
+            .ok_or_else(|| invalid("MSB part", index, "no part"))?;
+        if !matches!(part.kind, PartKind::Enemy | PartKind::DummyEnemy) {
+            return Ok(None);
+        }
+        let data = self
+            .sections
+            .get(5)
+            .and_then(|s| s.records.get(index))
             .ok_or_else(|| invalid("MSB part", index, "no source record"))?;
-        let r = View { data, format: "MSB character initializer", be: false };
+        let r = View {
+            data,
+            format: "MSB character initializer",
+            be: false,
+        };
         let at = r.size(104)?;
         r.expect(at, &[0; 8])?;
         let id = r.u32(at + 0x18)? as i32;
@@ -678,7 +692,10 @@ impl MapLayout {
             for (i, id) in ids.iter_mut().enumerate() {
                 *id = r.u32(at + 4 * i)? as i32;
             }
-            out.push(PartGrass { part: part.index, ids });
+            out.push(PartGrass {
+                part: part.index,
+                ids,
+            });
         }
         Ok(out)
     }
@@ -1090,8 +1107,12 @@ impl MapLayout {
             let shape = match shape_code {
                 0xFFFF_FFFF => RegionShape::None,
                 0 => RegionShape::Point,
-                1 => RegionShape::Circle { radius: floats(1)?[0] },
-                2 => RegionShape::Sphere { radius: floats(1)?[0] },
+                1 => RegionShape::Circle {
+                    radius: floats(1)?[0],
+                },
+                2 => RegionShape::Sphere {
+                    radius: floats(1)?[0],
+                },
                 3 => {
                     let f = floats(2)?;
                     RegionShape::Cylinder {
@@ -1120,7 +1141,12 @@ impl MapLayout {
                     }
                     RegionShape::Composite {
                         children: (0..8)
-                            .map(|i| Ok((r.u32(shape_data + 8 * i)? as i32, r.u32(shape_data + 8 * i + 4)? as i32)))
+                            .map(|i| {
+                                Ok((
+                                    r.u32(shape_data + 8 * i)? as i32,
+                                    r.u32(shape_data + 8 * i + 4)? as i32,
+                                ))
+                            })
                             .collect::<Result<_>>()?,
                     }
                 }
@@ -1170,14 +1196,17 @@ impl MapLayout {
                 at if at >= 40 => r.slice(at, r.data.len() - at.min(r.data.len()))?.to_vec(),
                 _ => return Err(invalid(r.format, 32, "type data inside the header")),
             };
-            let named = |i: i32, names: &dyn Fn(usize) -> Option<String>| usize::try_from(i).ok().and_then(names);
+            let named =
+                |i: i32, names: &dyn Fn(usize) -> Option<String>| usize::try_from(i).ok().and_then(names);
             out.push(Event {
                 index,
                 name,
                 event_id: r.u32(8)? as i32,
                 type_code,
                 type_name: self.generation.event_type(type_code),
-                part: named(r.u32(base)? as i32, &|i| self.parts.get(i).map(|p| p.name.clone())),
+                part: named(r.u32(base)? as i32, &|i| {
+                    self.parts.get(i).map(|p| p.name.clone())
+                }),
                 region: named(r.u32(base + 4)? as i32, &|i| regions.get(i).cloned()),
                 entity_id: r.u32(base + 8)? as i32,
                 type_data,
@@ -1196,7 +1225,14 @@ mod region_tests {
     }
 
     /// A region record: a 96-byte header, then the name, the entity block, the shape data and the type data.
-    fn region(name: &str, type_code: u32, shape: u32, floats: &[f32], entity: u32, type_data: &[u8]) -> Vec<u8> {
+    fn region(
+        name: &str,
+        type_code: u32,
+        shape: u32,
+        floats: &[f32],
+        entity: u32,
+        type_data: &[u8],
+    ) -> Vec<u8> {
         let mut tail = utf16(name);
         let entity_at = 96 + tail.len();
         tail.extend([0u8; 4]);
@@ -1212,7 +1248,8 @@ mod region_tests {
         for (i, v) in [1.0f32, 2.0, 3.0, 10.0, 20.0, 30.0].iter().enumerate() {
             r[20 + 4 * i..24 + 4 * i].copy_from_slice(&v.to_le_bytes());
         }
-        let slot = |r: &mut [u8], at: usize, v: usize| r[at..at + 8].copy_from_slice(&(v as u64).to_le_bytes());
+        let slot =
+            |r: &mut [u8], at: usize, v: usize| r[at..at + 8].copy_from_slice(&(v as u64).to_le_bytes());
         slot(&mut r, 72, if floats.is_empty() { 0 } else { shape_at });
         slot(&mut r, 80, entity_at);
         slot(&mut r, 88, if type_data.is_empty() { 0 } else { type_at });
@@ -1242,14 +1279,34 @@ mod region_tests {
 
     #[test]
     fn drawn_points_use_the_same_part_kinds_and_ground_frame_as_the_area_opener() {
-        let mut layout=layout(&Generation::SEKIRO,vec![]);
-        let part=|index,kind|Part {index,name:format!("part{index}"),kind,model:None,hit_filter:None,npc_param:None,
-            position:[index as f32,2.0,3.0],rotation_degrees:[0.0;3],scale:[1.0;3],entity_id:0,
-            entity_group_ids:[0;8],shadows:ShadowFlags::default()};
-        layout.parts=vec![part(0,PartKind::MapPiece),part(1,PartKind::Object),part(2,PartKind::Asset),
-            part(3,PartKind::Enemy),part(4,PartKind::Collision),part(5,PartKind::Player)];
-        assert_eq!(drawn_part_points(&layout).unwrap(),vec![[0.0,3.0],[1.0,3.0],[2.0,3.0]]);
-        layout.parts[0].position[0]=f32::NAN;
+        let mut layout = layout(&Generation::SEKIRO, vec![]);
+        let part = |index, kind| Part {
+            index,
+            name: format!("part{index}"),
+            kind,
+            model: None,
+            hit_filter: None,
+            npc_param: None,
+            position: [index as f32, 2.0, 3.0],
+            rotation_degrees: [0.0; 3],
+            scale: [1.0; 3],
+            entity_id: 0,
+            entity_group_ids: [0; 8],
+            shadows: ShadowFlags::default(),
+        };
+        layout.parts = vec![
+            part(0, PartKind::MapPiece),
+            part(1, PartKind::Object),
+            part(2, PartKind::Asset),
+            part(3, PartKind::Enemy),
+            part(4, PartKind::Collision),
+            part(5, PartKind::Player),
+        ];
+        assert_eq!(
+            drawn_part_points(&layout).unwrap(),
+            vec![[0.0, 3.0], [1.0, 3.0], [2.0, 3.0]]
+        );
+        layout.parts[0].position[0] = f32::NAN;
         assert!(drawn_part_points(&layout).is_err());
     }
 
@@ -1279,8 +1336,14 @@ mod region_tests {
         );
         assert_eq!(regions[0].position, [1.0, 2.0, 3.0]);
         assert_eq!(regions[0].rotation_degrees, [10.0, 20.0, 30.0]);
-        assert_eq!((regions[0].entity_id, regions[0].type_data.clone()), (1042, vec![7, 8, 9]));
-        assert_eq!((regions[1].shape.clone(), regions[1].type_name), (RegionShape::Point, Some("connection")));
+        assert_eq!(
+            (regions[0].entity_id, regions[0].type_data.clone()),
+            (1042, vec![7, 8, 9])
+        );
+        assert_eq!(
+            (regions[1].shape.clone(), regions[1].type_name),
+            (RegionShape::Point, Some("connection"))
+        );
         assert!(regions[1].type_data.is_empty());
         // a type the generation does not name keeps its code
         assert_eq!((regions[2].type_code, regions[2].type_name), (77, None));
@@ -1302,9 +1365,20 @@ mod region_tests {
             record[140..144].copy_from_slice(&10002020i32.to_le_bytes());
             record[152..156].copy_from_slice(&9000i32.to_le_bytes());
             layout.sections[5].records.push(record);
-            layout.parts.push(Part { index: 0, name: "human".into(), kind: PartKind::Enemy, model: None,
-                hit_filter: None, npc_param: Some(10002020), position: [0.; 3], rotation_degrees: [0.; 3],
-                scale: [1.; 3], entity_id: -1, entity_group_ids: [-1; 8], shadows: Default::default() });
+            layout.parts.push(Part {
+                index: 0,
+                name: "human".into(),
+                kind: PartKind::Enemy,
+                model: None,
+                hit_filter: None,
+                npc_param: Some(10002020),
+                position: [0.; 3],
+                rotation_degrees: [0.; 3],
+                scale: [1.; 3],
+                entity_id: -1,
+                entity_group_ids: [-1; 8],
+                shadows: Default::default(),
+            });
             assert_eq!(layout.character_init(0).unwrap(), Some(9000));
             layout.sections[5].records[0][152..156].copy_from_slice(&(-1i32).to_le_bytes());
             assert_eq!(layout.character_init(0).unwrap(), None);
@@ -1323,9 +1397,13 @@ mod region_tests {
         // every word is a valid marker kind
         for generation in Generation::ALL {
             for code in 0..64 {
-                for word in [generation.region_type(code), generation.event_type(code)].into_iter().flatten() {
+                for word in [generation.region_type(code), generation.event_type(code)]
+                    .into_iter()
+                    .flatten()
+                {
                     assert!(
-                        word.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'),
+                        word.bytes()
+                            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'),
                         "{word}"
                     );
                 }
@@ -1339,13 +1417,20 @@ mod region_tests {
         let mut bad = region("Wind", 6, 5, &[4.0, 5.0, 6.0], 1, &[]);
         bad[72..80].copy_from_slice(&0u64.to_le_bytes());
         assert!(layout(&Generation::ELDEN_RING, vec![bad]).map_regions().is_err());
-        assert!(layout(&Generation::ELDEN_RING, vec![vec![0; 40]]).map_regions().is_err());
+        assert!(
+            layout(&Generation::ELDEN_RING, vec![vec![0; 40]])
+                .map_regions()
+                .is_err()
+        );
     }
 
     /// Type data is serialised as hexadecimal text, not a list of numbers.
     #[test]
     fn type_data_serialises_as_hex() {
-        let layout = layout(&Generation::SEKIRO, vec![region("Snd", 4, 2, &[3.0], 9, &[0xab, 0x01])]);
+        let layout = layout(
+            &Generation::SEKIRO,
+            vec![region("Snd", 4, 2, &[3.0], 9, &[0xab, 0x01])],
+        );
         let json = serde_json::to_value(&layout.map_regions().unwrap()[0]).unwrap();
         assert_eq!(json["type_data"], "ab01");
         assert_eq!(json["shape"], "sphere");

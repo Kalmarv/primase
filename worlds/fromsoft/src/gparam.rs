@@ -209,7 +209,11 @@ impl Gparam {
         v.expect(0, MAGIC)?;
         let version = v.u32(8)?;
         if !matches!(version, 3 | 5 | 6) {
-            return Err(invalid(FORMAT, 8, format!("version {version} is not read (3, 5 and 6 are)")));
+            return Err(invalid(
+                FORMAT,
+                8,
+                format!("version {version} is not read (3, 5 and 6 are)"),
+            ));
         }
         // a zero byte, the flag byte (not read), two zero bytes
         v.expect(12, &[0])?;
@@ -287,8 +291,10 @@ fn read_field(
     ids_at: usize,
     budget: &Budget,
 ) -> Result<Field> {
-    let values_offset = usize::try_from(v.u32(record)?).map_err(|_| invalid(FORMAT, record, "size overflow"))?;
-    let ids_offset = usize::try_from(v.u32(record + 4)?).map_err(|_| invalid(FORMAT, record + 4, "size overflow"))?;
+    let values_offset =
+        usize::try_from(v.u32(record)?).map_err(|_| invalid(FORMAT, record, "size overflow"))?;
+    let ids_offset =
+        usize::try_from(v.u32(record + 4)?).map_err(|_| invalid(FORMAT, record + 4, "size overflow"))?;
     let (kind, capacity) = if version < 6 {
         (v.u8(record + 8)?, usize::from(v.u8(record + 9)?))
     } else {
@@ -616,7 +622,10 @@ mod tests {
         ];
         build(
             version,
-            &[("LightSet ParamEditor", "Light Set", light), ("Misc", "Misc", misc)],
+            &[
+                ("LightSet ParamEditor", "Light Set", light),
+                ("Misc", "Misc", misc),
+            ],
         )
     }
 
@@ -640,18 +649,33 @@ mod tests {
             light.field("Colour").unwrap().value_of(7),
             Some(Value::Vec4([0.25, 0.5, 0.75, 1.0]))
         );
-        assert_eq!(light.field("Angle").unwrap().value_of(7), Some(Value::Vec2([10.0, -20.0])));
-        assert_eq!(light.field("Axis").unwrap().value_of(7), Some(Value::Vec3([1.0, 2.0, 3.0])));
+        assert_eq!(
+            light.field("Angle").unwrap().value_of(7),
+            Some(Value::Vec2([10.0, -20.0]))
+        );
+        assert_eq!(
+            light.field("Axis").unwrap().value_of(7),
+            Some(Value::Vec3([1.0, 2.0, 3.0]))
+        );
         let misc = g.group("Misc").unwrap();
         assert_eq!(misc.field("Enable").unwrap().value_of(0), Some(Value::Bool(true)));
         assert_eq!(misc.field("Count").unwrap().values, Values::I32(vec![5, -6]));
-        assert_eq!(misc.field("Tint").unwrap().value_of(3), Some(Value::Rgba([255, 128, 0, 255])));
+        assert_eq!(
+            misc.field("Tint").unwrap().value_of(3),
+            Some(Value::Rgba([255, 128, 0, 255]))
+        );
         assert_eq!(
             misc.field("Label").unwrap().values,
             Values::Text(vec!["a".into(), "bc".into()])
         );
         // the blocks it does not interpret are counted
-        assert_eq!(g.unread, Unread { extras: 2, data_bytes: 8 });
+        assert_eq!(
+            g.unread,
+            Unread {
+                extras: 2,
+                data_bytes: 8
+            }
+        );
         assert!(light.field("Missing").is_none() && g.group("Missing").is_none());
     }
 
@@ -660,13 +684,21 @@ mod tests {
         // version 3 stores no times of day and a shorter header; version 6 a field's count as a short
         let three = Gparam::read(&sample(3)).unwrap();
         assert_eq!(three.version, 3);
-        let sharp = three.group("LightSet ParamEditor").unwrap().field("Sharpness").unwrap();
+        let sharp = three
+            .group("LightSet ParamEditor")
+            .unwrap()
+            .field("Sharpness")
+            .unwrap();
         assert_eq!(sharp.ids, [0, 7, 7]);
         assert!(sharp.times.is_empty());
         assert_eq!(sharp.values, Values::F32(vec![1.0, 2.0, 3.0]));
         let six = Gparam::read(&sample(6)).unwrap();
         assert_eq!(six.version, 6);
-        let sharp = six.group("LightSet ParamEditor").unwrap().field("Sharpness").unwrap();
+        let sharp = six
+            .group("LightSet ParamEditor")
+            .unwrap()
+            .field("Sharpness")
+            .unwrap();
         assert_eq!(sharp.times, [0.0, 0.5, 12.0]);
         assert_eq!(sharp.value_of(7), Some(Value::Float(2.0)));
         // a field with more than 255 values only a version 6 record can count
@@ -701,7 +733,12 @@ mod tests {
             .position(|w| w == utf16z("Sharpness"))
             .unwrap();
         bad[at - 4] = 99;
-        assert!(Gparam::read(&bad).unwrap_err().to_string().contains("field type 99"));
+        assert!(
+            Gparam::read(&bad)
+                .unwrap_err()
+                .to_string()
+                .contains("field type 99")
+        );
     }
 
     #[test]

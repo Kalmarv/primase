@@ -42,13 +42,21 @@ impl Vertices {
                 None => None,
                 Some(_) => return Err(Error("Tangent is not four floats".into())),
             },
-            further_tangents: p.streams.iter().filter_map(|(semantic, stream)| match semantic {
-                Semantic::Tangent(set @ 1..) => Some(match stream {
-                    Stream::F32x4(values) if values.len() == p.vertex_count() => Ok((*set, values.clone())),
-                    _ => Err(Error(format!("Tangent({set}) is not a complete four-float stream"))),
-                }),
-                _ => None,
-            }).collect::<Result<_>>()?,
+            further_tangents: p
+                .streams
+                .iter()
+                .filter_map(|(semantic, stream)| match semantic {
+                    Semantic::Tangent(set @ 1..) => Some(match stream {
+                        Stream::F32x4(values) if values.len() == p.vertex_count() => {
+                            Ok((*set, values.clone()))
+                        }
+                        _ => Err(Error(format!(
+                            "Tangent({set}) is not a complete four-float stream"
+                        ))),
+                    }),
+                    _ => None,
+                })
+                .collect::<Result<_>>()?,
         })
     }
 }
@@ -287,7 +295,11 @@ pub fn skin_counted(
         positions: Vec::with_capacity(v.positions.len()),
         normals: v.normals.as_ref().map(|_| Vec::new()),
         tangents: v.tangents.as_ref().map(|_| Vec::new()),
-        further_tangents: v.further_tangents.keys().map(|&set| (set, Vec::with_capacity(v.positions.len()))).collect(),
+        further_tangents: v
+            .further_tangents
+            .keys()
+            .map(|&set| (set, Vec::with_capacity(v.positions.len())))
+            .collect(),
     };
     for (i, inf) in per_vertex.iter().enumerate() {
         let mut m = [[0.0f64; 3]; 4];
@@ -325,16 +337,25 @@ pub fn skin_counted(
                 std::array::from_fn(|r| (0..3).map(|k| cof[k][r] * n[k]).sum::<f64>() * det.signum());
             dst.push(unit(turned).map(|x| x as f32));
         }
-        let handedness = if primase_core::Linear::of_f64([m[0],m[1],m[2]]).mirrors() { -1.0 } else { 1.0 };
+        let handedness = if primase_core::Linear::of_f64([m[0], m[1], m[2]]).mirrors() {
+            -1.0
+        } else {
+            1.0
+        };
         if let (Some(src), Some(dst)) = (&v.tangents, out.tangents.as_mut()) {
             let t = src[i];
             let d = unit(apply([t[0], t[1], t[2]].map(f64::from), 0.0));
             dst.push([d[0] as f32, d[1] as f32, d[2] as f32, t[3] * handedness]);
         }
         for (set, src) in &v.further_tangents {
-            let t = *src.get(i).ok_or_else(|| Error(format!("Tangent({set}) has no vertex {i}")))?;
+            let t = *src
+                .get(i)
+                .ok_or_else(|| Error(format!("Tangent({set}) has no vertex {i}")))?;
             let d = unit(apply([t[0], t[1], t[2]].map(f64::from), 0.0));
-            out.further_tangents.get_mut(set).expect("output tangent set").push([d[0] as f32, d[1] as f32, d[2] as f32, t[3] * handedness]);
+            out.further_tangents
+                .get_mut(set)
+                .expect("output tangent set")
+                .push([d[0] as f32, d[1] as f32, d[2] as f32, t[3] * handedness]);
         }
     }
     Ok((out, unweighted))
@@ -531,12 +552,29 @@ mod tests {
         assert!(near(s.normals.as_ref().unwrap()[0], [0.0, 1.0, 0.0]));
         assert_eq!(s.tangents.as_ref().unwrap()[0][3], -1.0);
         assert_eq!(s.further_tangents[&1], *s.tangents.as_ref().unwrap());
-        assert!(near(s.further_tangents[&1][0][..3].try_into().unwrap(), [-1.0, 0.0, 0.0]));
-        let mirror = BTreeMap::from([(JointId(1), [[-1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,1.0],[0.0;3]])]);
-        let mirrored = skin(&v,&p,Influences::Whole { slot:0 },WeightRule::AsStored,Deformation::Linear,&palette,&mirror).unwrap();
-        let expected = primase_core::Linear::mirror_x().tangent([0.0,1.0,0.0,-1.0]).unwrap();
-        assert_eq!(mirrored.tangents.as_ref().unwrap()[0],expected);
-        assert_eq!(mirrored.further_tangents[&1][0],expected);
+        assert!(near(
+            s.further_tangents[&1][0][..3].try_into().unwrap(),
+            [-1.0, 0.0, 0.0]
+        ));
+        let mirror = BTreeMap::from([(
+            JointId(1),
+            [[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0; 3]],
+        )]);
+        let mirrored = skin(
+            &v,
+            &p,
+            Influences::Whole { slot: 0 },
+            WeightRule::AsStored,
+            Deformation::Linear,
+            &palette,
+            &mirror,
+        )
+        .unwrap();
+        let expected = primase_core::Linear::mirror_x()
+            .tangent([0.0, 1.0, 0.0, -1.0])
+            .unwrap();
+        assert_eq!(mirrored.tangents.as_ref().unwrap()[0], expected);
+        assert_eq!(mirrored.further_tangents[&1][0], expected);
         let r = std::f32::consts::FRAC_1_SQRT_2;
         let q = primitive(vec![
             (Semantic::Position, Stream::F32x3(vec![[0.0; 3]])),

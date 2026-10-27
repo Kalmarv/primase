@@ -78,14 +78,13 @@ use primase_core::shader::{
     ShaderBinding, ShaderFormat, Stage, StageBinding, SystemValue, TextureBinding, TextureDim, TextureSource,
     VariantKey, Varying, ViewParameter,
 };
+use primase_core::shader::{MaterialPrograms, ProgramFacts};
 use primase_core::{ColorSpace, Component, Entity, MaterialVariants, Mesh, Name, Semantic, Texture, World};
 use primase_shader::matrix::state_lines;
 use primase_shader::{ProgramGraph, WordsRead};
-use primase_core::shader::{MaterialPrograms, ProgramFacts};
 
 use crate::components::{
-    AnvilLayout, AnvilMaterial, AnvilMesh, AnvilShaders, MaterialBinding, MaterialFlags,
-    MaterialValue,
+    AnvilLayout, AnvilMaterial, AnvilMesh, AnvilShaders, MaterialBinding, MaterialFlags, MaterialValue,
 };
 
 /// What a texture binding with no texture becomes.
@@ -340,12 +339,13 @@ pub fn material_constants(
             MaterialBinding::UvTransform { vec4 } => {
                 let role = match value(key, binding) {
                     Some(MaterialValue::Floats(f)) => match f.as_slice() {
-                        f if f.len() == 8 => {
-                            match super::material::static_uv_rows(f) {
-                                Ok(rows) => ConstantRole::Material(bits(rows.as_flattened())),
-                                Err(why) => unknown(&super::material::uv_motion_notice(f).unwrap_or_else(||why.to_owned()), counts),
-                            }
-                        }
+                        f if f.len() == 8 => match super::material::static_uv_rows(f) {
+                            Ok(rows) => ConstantRole::Material(bits(rows.as_flattened())),
+                            Err(why) => unknown(
+                                &super::material::uv_motion_notice(f).unwrap_or_else(|| why.to_owned()),
+                                counts,
+                            ),
+                        },
                         _ => unknown("a UV transform property that is not eight floats", counts),
                     },
                     _ => unknown(
@@ -631,8 +631,12 @@ impl Textures {
             ColorSpace::Linear
         };
         if let Some(have) = world.get::<primase_core::TextureLayers>(e) {
-            if have.color_space == wanted { return Some(e); }
-            if let Some(&copy) = self.spawned.get(&(e, srgb)) { return Some(copy); }
+            if have.color_space == wanted {
+                return Some(e);
+            }
+            if let Some(&copy) = self.spawned.get(&(e, srgb)) {
+                return Some(copy);
+            }
             let mut copy = have.clone();
             copy.color_space = wanted;
             let name = world.get::<Name>(e).map_or_else(String::new, |n| n.0.clone());
@@ -671,7 +675,15 @@ impl Pass for ResolveAnvilShaders {
         &[AnvilMaterial::NAME, AnvilShaders::NAME]
     }
     fn provides(&self) -> &[&'static str] {
-        &[Shader::NAME, ShaderBinding::NAME, MaterialPrograms::NAME, ProgramFacts::NAME, Texture::NAME, primase_core::TextureLayers::NAME, Name::NAME]
+        &[
+            Shader::NAME,
+            ShaderBinding::NAME,
+            MaterialPrograms::NAME,
+            ProgramFacts::NAME,
+            Texture::NAME,
+            primase_core::TextureLayers::NAME,
+            Name::NAME,
+        ]
     }
     fn approximates(&self) -> &'static str {
         "a texture binding with no texture reads white (unset-textures=white)"
@@ -719,8 +731,15 @@ impl Pass for ResolveAnvilShaders {
         };
         'materials: for (material, m) in materials {
             let Some(tables) = m.shaders else {
-                world.insert(material,MaterialPrograms(vec![ProgramFacts::unavailable(m.template_name.as_deref().unwrap_or(""),Stage::Pixel,None,
-                    "the reader does not hold the template's shader permutations")]));
+                world.insert(
+                    material,
+                    MaterialPrograms(vec![ProgramFacts::unavailable(
+                        m.template_name.as_deref().unwrap_or(""),
+                        Stage::Pixel,
+                        None,
+                        "the reader does not hold the template's shader permutations",
+                    )]),
+                );
                 bump(
                     "materials without their template's shader permutations read",
                     1,
@@ -743,7 +762,15 @@ impl Pass for ResolveAnvilShaders {
                     k
                 }
                 Err(why) => {
-                    world.insert(material,MaterialPrograms(vec![ProgramFacts::unavailable(&template,Stage::Pixel,None,&why)]));
+                    world.insert(
+                        material,
+                        MaterialPrograms(vec![ProgramFacts::unavailable(
+                            &template,
+                            Stage::Pixel,
+                            None,
+                            &why,
+                        )]),
+                    );
                     bump(&format!("materials left unbound: {why}"), 1, &mut counts);
                     continue;
                 }
@@ -757,11 +784,30 @@ impl Pass for ResolveAnvilShaders {
                     &mut counts,
                 );
             }
-            let pixel = match program(world, &mut programs, &mut graphs, &template, tables, false, pixel_key) {
+            let pixel = match program(
+                world,
+                &mut programs,
+                &mut graphs,
+                &template,
+                tables,
+                false,
+                pixel_key,
+            ) {
                 Ok(e) => e,
                 Err(why) => {
-                    let hash = world.get::<AnvilShaders>(tables).and_then(|tables|tables.pixel(pixel_key)).map(primase_shader::source_hash);
-                    world.insert(material,MaterialPrograms(vec![ProgramFacts::unavailable(format!("{template}-{pixel_key:06x}.ps"),Stage::Pixel,hash,&why)]));
+                    let hash = world
+                        .get::<AnvilShaders>(tables)
+                        .and_then(|tables| tables.pixel(pixel_key))
+                        .map(primase_shader::source_hash);
+                    world.insert(
+                        material,
+                        MaterialPrograms(vec![ProgramFacts::unavailable(
+                            format!("{template}-{pixel_key:06x}.ps"),
+                            Stage::Pixel,
+                            hash,
+                            &why,
+                        )]),
+                    );
                     bump(&format!("materials left unbound: {why}"), 1, &mut counts);
                     continue 'materials;
                 }
@@ -811,9 +857,21 @@ impl Pass for ResolveAnvilShaders {
                         e,
                     )),
                     Err(why) => {
-                        let hash = world.get::<AnvilShaders>(tables).and_then(|tables|tables.vertex(key)).map(primase_shader::source_hash);
-                        facts.push(ProgramFacts::unavailable(format!("{template}-{key:06x}.vs"),Stage::Vertex,hash,&why));
-                        bump(&format!("vertex layouts whose vertex stage is left unbound: {why}"),1,&mut counts);
+                        let hash = world
+                            .get::<AnvilShaders>(tables)
+                            .and_then(|tables| tables.vertex(key))
+                            .map(primase_shader::source_hash);
+                        facts.push(ProgramFacts::unavailable(
+                            format!("{template}-{key:06x}.vs"),
+                            Stage::Vertex,
+                            hash,
+                            &why,
+                        ));
+                        bump(
+                            &format!("vertex layouts whose vertex stage is left unbound: {why}"),
+                            1,
+                            &mut counts,
+                        );
                     }
                 }
             }
@@ -826,7 +884,9 @@ impl Pass for ResolveAnvilShaders {
                     .map(|s| s.interface.clone())
                     .ok_or("a resolved shader entity without its shader")?;
                 // program() cached these from the same lift that produced the interface.
-                let graph = graphs.get(&shader).ok_or("a resolved shader entity without its graph result")?;
+                let graph = graphs
+                    .get(&shader)
+                    .ok_or("a resolved shader entity without its graph result")?;
                 let binding = self.stage_binding(
                     world,
                     &mut textures,
@@ -840,12 +900,17 @@ impl Pass for ResolveAnvilShaders {
                     graph.as_ref().map_err(String::as_str),
                     &mut counts,
                 );
-                facts.push(world.get::<ProgramFacts>(shader).ok_or("a resolved shader entity without its facts")?
-                    .clone().bound(shader,&binding.outputs));
+                facts.push(
+                    world
+                        .get::<ProgramFacts>(shader)
+                        .ok_or("a resolved shader entity without its facts")?
+                        .clone()
+                        .bound(shader, &binding.outputs),
+                );
                 bound.push(binding);
             }
             bound.sort_by_key(|s| s.stage);
-            world.insert(material,MaterialPrograms(facts));
+            world.insert(material, MaterialPrograms(facts));
             world.insert(
                 material,
                 ShaderBinding {
@@ -899,13 +964,13 @@ fn program(
             Err(e) => Err(format!("a {stage} program the lifter refuses: {e}")),
             Ok(program) => {
                 let e = world.spawn();
-                let name = format!("{template}-{key:06x}.{}",if is_vertex {"vs"} else {"ps"});
-                world.insert(e,program.facts(&name));
-                graphs.insert(e,program.graph().map_err(|why|format!("the value graph: {why}")));
-                world.insert(
+                let name = format!("{template}-{key:06x}.{}", if is_vertex { "vs" } else { "ps" });
+                world.insert(e, program.facts(&name));
+                graphs.insert(
                     e,
-                    Name(name),
+                    program.graph().map_err(|why| format!("the value graph: {why}")),
                 );
+                world.insert(e, Name(name));
                 world.insert(
                     e,
                     Shader {
@@ -1077,14 +1142,30 @@ mod tests {
 
     #[test]
     fn program_texture_binding_without_texturemap_keeps_the_declared_transfer() {
-        use primase_core::{TexFormat,TexRole};
-        let mut world=World::new();let e=world.spawn();
-        world.insert(e,Texture{width:1,height:1,format:TexFormat::Rgba8Unorm,levels:vec![vec![128,64,32,255]],
-            color_space:ColorSpace::Srgb,role:TexRole::Color,normal:None});
-        let mut bindings=Textures{spawned:BTreeMap::new()};
-        assert_eq!(bindings.entity(&mut world,e),Some(e));
-        assert_eq!(world.get::<Texture>(e).unwrap().color_space,ColorSpace::Srgb);
-        assert!(bindings.spawned.is_empty(),"no linear duplicate of an already stated sRGB texture");
+        use primase_core::{TexFormat, TexRole};
+        let mut world = World::new();
+        let e = world.spawn();
+        world.insert(
+            e,
+            Texture {
+                width: 1,
+                height: 1,
+                format: TexFormat::Rgba8Unorm,
+                levels: vec![vec![128, 64, 32, 255]],
+                color_space: ColorSpace::Srgb,
+                role: TexRole::Color,
+                normal: None,
+            },
+        );
+        let mut bindings = Textures {
+            spawned: BTreeMap::new(),
+        };
+        assert_eq!(bindings.entity(&mut world, e), Some(e));
+        assert_eq!(world.get::<Texture>(e).unwrap().color_space, ColorSpace::Srgb);
+        assert!(
+            bindings.spawned.is_empty(),
+            "no linear duplicate of an already stated sRGB texture"
+        );
     }
 
     pub(super) fn material(
@@ -1177,8 +1258,10 @@ mod tests {
             ConstantRole::Material(bits(&[2.0, 0.0, 0.5, 0.0, 0.0, 3.0, -1.0, 0.0]))
         );
         let (s, c) = 0.3f32.sin_cos();
-        assert_eq!(transform(vec![2.0, 3.0, 0.5, -1.0, 0.0, 0.0, 0.3, 0.0]),
-            ConstantRole::Material(bits(&[2.0*c, -2.0*s, 0.5, 0.0, 3.0*s, 3.0*c, -1.0, 0.0])));
+        assert_eq!(
+            transform(vec![2.0, 3.0, 0.5, -1.0, 0.0, 0.0, 0.3, 0.0]),
+            ConstantRole::Material(bits(&[2.0 * c, -2.0 * s, 0.5, 0.0, 3.0 * s, 3.0 * c, -1.0, 0.0]))
+        );
         for moving in [
             vec![1.0, 1.0, 0.0, 0.0, 0.1, 0.0, 0.0, 0.0],
             vec![1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.3, 0.1],
@@ -1186,10 +1269,14 @@ mod tests {
         ] {
             assert!(matches!(transform(moving), ConstantRole::Unknown { .. }));
         }
-        let ConstantRole::Unknown{why}=transform(vec![1.0,1.0,0.0,0.0,0.25,-0.5,0.0,0.125]) else {
+        let ConstantRole::Unknown { why } = transform(vec![1.0, 1.0, 0.0, 0.0, 0.25, -0.5, 0.0, 0.125])
+        else {
             panic!("a moving property must retain its rate-bearing refusal");
         };
-        assert!(why.contains("TranslationSpeedU=0.25") && why.contains("RotationSpeed=0.125"),"{why}");
+        assert!(
+            why.contains("TranslationSpeedU=0.25") && why.contains("RotationSpeed=0.125"),
+            "{why}"
+        );
     }
 
     #[test]
@@ -1347,9 +1434,16 @@ pub(super) fn output_bindings(interface: &Interface, class: Option<u8>, opaque: 
                     }
                     _ => {
                         role(0b0100, OutputRole::SpecularOcclusion);
-                        role(0b1000, if opaque { OutputRole::Translucency } else {
-                            OutputRole::unknown("blended layout-B target 2.w: coverage replaces the opaque translucency (Clutters_Grass writes opacity); no transmission inferred")
-                        });
+                        role(
+                            0b1000,
+                            if opaque {
+                                OutputRole::Translucency
+                            } else {
+                                OutputRole::unknown(
+                                    "blended layout-B target 2.w: coverage replaces the opaque translucency (Clutters_Grass writes opacity); no transmission inferred",
+                                )
+                            },
+                        );
                     }
                 }
             }
@@ -1555,22 +1649,63 @@ mod key_tests {
 
     #[test]
     fn cached_program_records_facts_and_graph_from_its_single_fixture_lift() {
-        let mut world = World::new(); let tables = world.spawn();
+        let mut world = World::new();
+        let tables = world.spawn();
         let mut template = template(&[]);
-        template.pixel = vec![(0,0)]; template.programs = vec![LIFTED.to_vec()];
-        world.insert(tables,template);
-        let mut programs = BTreeMap::new(); let mut graphs = BTreeMap::new();
-        let entity = program(&mut world,&mut programs,&mut graphs,"fixture",tables,false,0).unwrap();
-        assert_eq!(program(&mut world,&mut programs,&mut graphs,"fixture",tables,false,0).unwrap(),entity);
-        assert_eq!(graphs.len(),1); assert!(graphs[&entity].is_ok());
+        template.pixel = vec![(0, 0)];
+        template.programs = vec![LIFTED.to_vec()];
+        world.insert(tables, template);
+        let mut programs = BTreeMap::new();
+        let mut graphs = BTreeMap::new();
+        let entity = program(
+            &mut world,
+            &mut programs,
+            &mut graphs,
+            "fixture",
+            tables,
+            false,
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            program(
+                &mut world,
+                &mut programs,
+                &mut graphs,
+                "fixture",
+                tables,
+                false,
+                0
+            )
+            .unwrap(),
+            entity
+        );
+        assert_eq!(graphs.len(), 1);
+        assert!(graphs[&entity].is_ok());
         let shader = world.get::<Shader>(entity).unwrap();
-        let outputs = output_bindings(&shader.interface,Some(1),true);
-        let facts = world.get::<ProgramFacts>(entity).unwrap().clone().bound(entity,&outputs);
-        assert_eq!(facts.hash,Some(primase_shader::source_hash(LIFTED)));
-        assert_eq!(facts.stage,Stage::Pixel); assert!(facts.instruction_count.unwrap().count > 0);
-        assert_eq!(facts.instruction_count.unwrap().unit,primase_core::shader::InstructionUnit::DxbcInstructions);
-        assert!(facts.inputs.iter().all(|input|input.used && input.provenance.d3d.is_some()));
-        assert_eq!(facts.surface,primase_core::shader::Surface::read(outputs.iter().map(|output|(output.lanes,&output.role))));
+        let outputs = output_bindings(&shader.interface, Some(1), true);
+        let facts = world
+            .get::<ProgramFacts>(entity)
+            .unwrap()
+            .clone()
+            .bound(entity, &outputs);
+        assert_eq!(facts.hash, Some(primase_shader::source_hash(LIFTED)));
+        assert_eq!(facts.stage, Stage::Pixel);
+        assert!(facts.instruction_count.unwrap().count > 0);
+        assert_eq!(
+            facts.instruction_count.unwrap().unit,
+            primase_core::shader::InstructionUnit::DxbcInstructions
+        );
+        assert!(
+            facts
+                .inputs
+                .iter()
+                .all(|input| input.used && input.provenance.d3d.is_some())
+        );
+        assert_eq!(
+            facts.surface,
+            primase_core::shader::Surface::read(outputs.iter().map(|output| (output.lanes, &output.role)))
+        );
     }
 
     /// An output role with any why as `UNKNOWN`'s, where it has one: the tests below hold which lanes are Unknown.
@@ -1695,7 +1830,12 @@ mod key_tests {
             let targets = outputs
                 .iter()
                 .map(|o| {
-                    let n = program.interface.outputs.iter().position(|v| v.label == o.label).unwrap();
+                    let n = program
+                        .interface
+                        .outputs
+                        .iter()
+                        .position(|v| v.label == o.label)
+                        .unwrap();
                     u32::try_from(n).unwrap()
                 })
                 .collect();
@@ -1713,7 +1853,10 @@ mod key_tests {
         let Some(Roughness::Roughness(roughness)) = metal.roughness else {
             panic!("a roughness: {:?}", metal.roughness)
         };
-        assert_eq!((at(&targets, roughness.place), roughness.encoding), ((0, 0b1000), linear));
+        assert_eq!(
+            (at(&targets, roughness.place), roughness.encoding),
+            ((0, 0b1000), linear)
+        );
         let normal = metal.normal.unwrap();
         assert_eq!(
             (at(&targets, normal.place), normal.encoding),
@@ -1728,11 +1871,15 @@ mod key_tests {
         assert_eq!(at(&targets, metal.occlusion.unwrap().place), (3, 0b0001));
         assert_eq!((metal.reflectance, metal.specular), (None, None));
         // the diamond normal decodes what its encoder stores, the emission scales the albedo
-        let lanes = NormalEncoding::encode_octahedral_diamond([0.0, 0.0, 1.0], 5).map(|b| f32::from(b) / 255.0);
+        let lanes =
+            NormalEncoding::encode_octahedral_diamond([0.0, 0.0, 1.0], 5).map(|b| f32::from(b) / 255.0);
         let up = normal.decode([lanes[0], lanes[1], lanes[2], 0.4]).unwrap();
         assert!(up[2] > 0.999, "{up:?}");
         assert_eq!(
-            metal.emission.unwrap().decode([0.0, 0.0, 2.0, 0.0], [0.25, 0.5, 1.0]),
+            metal
+                .emission
+                .unwrap()
+                .decode([0.0, 0.0, 2.0, 0.0], [0.25, 0.5, 1.0]),
             [0.5, 1.0, 2.0]
         );
 
@@ -1743,9 +1890,11 @@ mod key_tests {
 
         let (blended, _) = read(Some(5), false);
         assert_eq!(blended.roughness, None);
-        let roles=output_bindings(&program.interface,Some(4),false);
-        assert!(!roles.iter().any(|o|o.role==OutputRole::Translucency),
-            "blended foliage coverage must not be lit as opaque transmission");
+        let roles = output_bindings(&program.interface, Some(4), false);
+        assert!(
+            !roles.iter().any(|o| o.role == OutputRole::Translucency),
+            "blended foliage coverage must not be lit as opaque transmission"
+        );
     }
 
     /// Only the lanes a program reads of the engine's buffers are bound, each with the role the notes establish or an

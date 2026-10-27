@@ -185,7 +185,13 @@ pub fn weight_steps(v: f32, steps: &[WeightStep]) -> f32 {
         WeightStep::Max(bound) => x.max(bound),
         WeightStep::Affine { scale, bias } => x * scale + bias,
         // as a GPU's saturate: NaN is 0
-        WeightStep::Saturate => if x.is_nan() { 0.0 } else { x.clamp(0.0, 1.0) },
+        WeightStep::Saturate => {
+            if x.is_nan() {
+                0.0
+            } else {
+                x.clamp(0.0, 1.0)
+            }
+        }
     })
 }
 
@@ -711,7 +717,11 @@ mod tests {
             assert_eq!((out.c, out.mix, out.colour), (c, f, mix.colour), "{n} details");
             for (i, c) in c.iter().enumerate() {
                 assert_eq!(written.albedo[i], (1. - f) * c * mix.colour[i], "{n} details");
-                assert_eq!(written.reflectance.map(|r| r[i]), Some(0.03 + (c - 0.03) * f), "{n} details");
+                assert_eq!(
+                    written.reflectance.map(|r| r[i]),
+                    Some(0.03 + (c - 0.03) * f),
+                    "{n} details"
+                );
                 assert_eq!(written.metallic, None);
             }
             let k = |i: usize| {
@@ -782,19 +792,34 @@ mod tests {
     #[test]
     fn the_ramp_steps_are_taken_in_turn() {
         let ramp = [
-            WeightStep::Affine { scale: 2., bias: -0.5 },
+            WeightStep::Affine {
+                scale: 2.,
+                bias: -0.5,
+            },
             WeightStep::Saturate,
         ];
         assert_eq!(weight_steps(0.375, &ramp), 0.25);
         assert_eq!(weight_steps(0.125, &ramp), 0.);
         assert_eq!(weight_steps(1., &ramp), 1.);
         assert_eq!(weight_steps(f32::NAN, &ramp), 0.);
-        assert_eq!(weight_steps(-1., &[WeightStep::Max(0.), WeightStep::Power(8)]), 0.);
+        assert_eq!(
+            weight_steps(-1., &[WeightStep::Max(0.), WeightStep::Power(8)]),
+            0.
+        );
         assert_eq!(weight_steps(f32::NAN, &[WeightStep::Max(0.)]), 0.);
         assert_eq!(weight_steps(0.5, &[WeightStep::Max(0.75)]), 0.75);
         // a power after the ramp window: the order matters
         assert_eq!(
-            weight_steps(0.5, &[WeightStep::Affine { scale: 1., bias: 0.25 }, WeightStep::Power(2)]),
+            weight_steps(
+                0.5,
+                &[
+                    WeightStep::Affine {
+                        scale: 1.,
+                        bias: 0.25
+                    },
+                    WeightStep::Power(2)
+                ]
+            ),
             0.5625
         );
         let mut world = World::new();
@@ -808,10 +833,13 @@ mod tests {
         };
         assert_eq!(weight(ramp.to_vec()).check(), Ok(()));
         assert!(
-            weight(vec![WeightStep::Affine { scale: f32::NAN, bias: 0. }])
-                .check()
-                .unwrap_err()
-                .contains("affine")
+            weight(vec![WeightStep::Affine {
+                scale: f32::NAN,
+                bias: 0.
+            }])
+            .check()
+            .unwrap_err()
+            .contains("affine")
         );
         assert!(
             weight(vec![WeightStep::Max(f32::INFINITY)])
@@ -999,13 +1027,18 @@ mod tests {
         let pixel = metal.evaluate(&surface);
         assert_eq!(pixel.base_color, [0.25, 0.5, 0.375, 0.5]);
         assert_eq!(pixel.normal, [0., 0.6, 0.8]);
-        assert_eq!((pixel.roughness, pixel.metallic, pixel.specular_color), (0.25, 0.5, None));
+        assert_eq!(
+            (pixel.roughness, pixel.metallic, pixel.specular_color),
+            (0.25, 0.5, None)
+        );
         // a dielectric reflectance that is not finite is refused
         let mut world = World::new();
         let e = world.spawn();
         let bad = DetailedMaterial {
             mix: DetailMix::DetailLerp(mix(&mut world, 1)),
-            lowering: SurfaceLowering::GlossReflectance { dielectric_f0: f32::NAN },
+            lowering: SurfaceLowering::GlossReflectance {
+                dielectric_f0: f32::NAN,
+            },
             frozen: Vec::new(),
         };
         assert!(bad.verify(e, &world).unwrap_err().contains("dielectric"));

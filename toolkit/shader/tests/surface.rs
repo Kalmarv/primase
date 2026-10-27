@@ -66,13 +66,19 @@ fn a_surface_packs_one_row_per_term() {
     assert_eq!(packed[surface::BASE], [3, y(0, 3, 1, 1, 1), 0, 0]);
     assert_eq!(packed[surface::NORMAL], [1, y(0, 3, 3, 1, 1), bias, 0]);
     // a gloss: square_of(0.95) is power 1, root 2
-    assert_eq!(packed[surface::ROUGHNESS], [2, y(0, 1, 2, 1, 2), 0.95f32.to_bits(), 0]);
+    assert_eq!(
+        packed[surface::ROUGHNESS],
+        [2, y(0, 1, 2, 1, 2), 0.95f32.to_bits(), 0]
+    );
     // the metallic in lane 1
     assert_eq!(packed[surface::METALLIC], [2, y(1, 1, 1, 1, 1), one, 0]);
     assert_eq!(packed[surface::REFLECTANCE], [4, y(0, 3, 1, 2, 1), one, 0]);
     assert_eq!(packed[surface::SPECULAR], [4, y(0, 1, 1, 2, 1), one, 0]);
     // one lane of emission in lane 2, a scale of the albedo
-    assert_eq!(packed[surface::EMISSION], [5, y(2, 1, 2, 1, 1), 16.0f32.to_bits(), 0]);
+    assert_eq!(
+        packed[surface::EMISSION],
+        [5, y(2, 1, 2, 1, 1), 16.0f32.to_bits(), 0]
+    );
     assert_eq!(packed[surface::OCCLUSION], [5, y(3, 1, 1, 1, 1), one, 0]);
     // the occlusion of every light is stated, so there is no ambient-only row
     assert_eq!(packed[surface::AMBIENT_OCCLUSION], [0; 4]);
@@ -122,7 +128,12 @@ fn a_missing_term_is_a_row_of_zeros_and_normal_numbers_ride_in_z_and_w() {
     let packed = rows(&read(&outputs), |o| (o == 0).then_some(6));
     assert_eq!(
         packed[surface::NORMAL],
-        [7, 4 << 4 | 8 << 8 | 1 << 16 | 1 << 24, minor.scale_bits, minor.bias_bits]
+        [
+            7,
+            4 << 4 | 8 << 8 | 1 << 16 | 1 << 24,
+            minor.scale_bits,
+            minor.bias_bits
+        ]
     );
     // the albedo's output has no target: no row
     for row in [
@@ -183,9 +194,12 @@ fn main(@location(0) value: vec4<f32>) -> @location(0) vec4<f32> {{
         rows = ROWS
     );
     let module = naga::front::wgsl::parse_str(&text).unwrap_or_else(|e| panic!("the WGSL parses: {e}"));
-    naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::empty())
-        .validate(&module)
-        .unwrap_or_else(|e| panic!("the WGSL validates: {e:?}"));
+    naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::empty(),
+    )
+    .validate(&module)
+    .unwrap_or_else(|e| panic!("the WGSL validates: {e:?}"));
     let constant = |name: &str| -> u32 {
         let (_, c) = module
             .constants

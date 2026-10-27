@@ -5,47 +5,71 @@ use super::{Inputs, MaterialBinding, MaterialValue, TextureSource};
 /// Stored rates are not proof of an active animation: MaterialValue's eight floats do not retain the operator's
 /// activation bytes, and no read consumer establishes the engine-clock conversion. Do not invent units per second.
 pub(super) fn uv_motion(f: &[f32]) -> Option<String> {
-    let &[su,sv,tu,tv,du,dv,rotation,angular] = f else {return None;};
-    if (du,dv,angular)==(0.0,0.0,0.0) {return None;}
-    Some(format!("UVTransform stored scale=({su},{sv}), translation=({tu},{tv}), rotation={rotation} radians; \
+    let &[su, sv, tu, tv, du, dv, rotation, angular] = f else {
+        return None;
+    };
+    if (du, dv, angular) == (0.0, 0.0, 0.0) {
+        return None;
+    }
+    Some(format!(
+        "UVTransform stored scale=({su},{sv}), translation=({tu},{tv}), rotation={rotation} radians; \
         TranslationSpeedU={du}, TranslationSpeedV={dv}, RotationSpeed={angular}; core has no UV-animation component; \
-        activation bytes and engine-clock/rate conversion are not retained/established, so no t*rate motion is invented"))
+        activation bytes and engine-clock/rate conversion are not retained/established, so no t*rate motion is invented"
+    ))
 }
 
 pub(super) fn notices(i: &Inputs<'_>) -> Vec<String> {
-    let template=i.m.template_name.as_deref().unwrap_or("unnamed");
-    let mut out=Vec::new();
-    let mut push=|text:String|out.push(format!("{template} Material {:#x}: {text}",i.m.index_id));
-    let layout=match template {
-        "MAD_Tex1"|"MAD_Tex1_SkinningSupported"=>Some(super::TEX1),
-        "MAD_Tex1_TerrainBlend"=>Some(super::TEX1_TERRAIN_BLEND),
-        "MAD_Tex1_Emissive"=>Some(super::TEX1_EMISSIVE),
-        "MAD_Tex1_UGE"=>Some(super::TEX1_UGE),
-        "MAD_Tex1_TeamColoured"=>Some(super::TEX1_TEAM_COLOURED),
-        _=>None,
+    let template = i.m.template_name.as_deref().unwrap_or("unnamed");
+    let mut out = Vec::new();
+    let mut push = |text: String| out.push(format!("{template} Material {:#x}: {text}", i.m.index_id));
+    let layout = match template {
+        "MAD_Tex1" | "MAD_Tex1_SkinningSupported" => Some(super::TEX1),
+        "MAD_Tex1_TerrainBlend" => Some(super::TEX1_TERRAIN_BLEND),
+        "MAD_Tex1_Emissive" => Some(super::TEX1_EMISSIVE),
+        "MAD_Tex1_UGE" => Some(super::TEX1_UGE),
+        "MAD_Tex1_TeamColoured" => Some(super::TEX1_TEAM_COLOURED),
+        _ => None,
     };
-    if let Some(layout)=layout {
-        let vci=layout.vertex_colour.map_or(0.0,|r|i.scalar(r));
-        if vci!=0.0 {
-            let alpha=layout.alpha.map_or(1.0,|r|i.scalar(r));
-            push(format!("G-buffer B=tintedDiffuse*(1+{vci}*(COLOR0.rgb-1)); coverage A=diffuse.a*{alpha}, \
+    if let Some(layout) = layout {
+        let vci = layout.vertex_colour.map_or(0.0, |r| i.scalar(r));
+        if vci != 0.0 {
+            let alpha = layout.alpha.map_or(1.0, |r| i.scalar(r));
+            push(format!(
+                "G-buffer B=tintedDiffuse*(1+{vci}*(COLOR0.rgb-1)); coverage A=diffuse.a*{alpha}, \
                 independent of COLOR0.a. core's default vertex product multiplies RGBA; it has no RGB-only or \
-                interpolated affine colour field. Shaded keeps its stated vertex approximation; it must not be read as shader coverage"));
-            if let Some(em)=layout.emission {
-                let slot=match em.mask {TextureSource::Bound(s)=>format!("t{}",75+s),TextureSource::Set(s)=>format!("TextureSet[{s}]")};
-                push(format!("G-buffer E=B*({slot}[{}]*{}/t23.x), including the RGB vertex factor above; \
+                interpolated affine colour field. Shaded keeps its stated vertex approximation; it must not be read as shader coverage"
+            ));
+            if let Some(em) = layout.emission {
+                let slot = match em.mask {
+                    TextureSource::Bound(s) => format!("t{}", 75 + s),
+                    TextureSource::Set(s) => format!("TextureSet[{s}]"),
+                };
+                push(format!(
+                    "G-buffer E=B*({slot}[{}]*{}/t23.x), including the RGB vertex factor above; \
                     Shaded E uses tintedDiffuse without that vertex factor (core vertex colour affects base only); \
-                    COLOR0.a is not an emission factor; stated emissive-exposure is not a read of t23",em.lane,i.scalar(em.scale)));
+                    COLOR0.a is not an emission factor; stated emissive-exposure is not a read of t23",
+                    em.lane,
+                    i.scalar(em.scale)
+                ));
             }
         }
     }
-    if let Some(rows)=match template {"MAD_Tex2"=>Some(super::TEX2_ROWS),
-        "MAD_Tex2_TintBFromShaderConstants"=>Some(super::TEX2_TINT_B_ROWS),_=>None} {
-        let vci=rows.vertex_colour.map_or(0.0,|r|i.scalar(r));
-        if vci!=0.0 {push(format!("G-buffer B=heightBlend(A,B)*(1+{vci}*(COLOR0.rgb-1)); \
+    if let Some(rows) = match template {
+        "MAD_Tex2" => Some(super::TEX2_ROWS),
+        "MAD_Tex2_TintBFromShaderConstants" => Some(super::TEX2_TINT_B_ROWS),
+        _ => None,
+    } {
+        let vci = rows.vertex_colour.map_or(0.0, |r| i.scalar(r));
+        if vci != 0.0 {
+            push(format!(
+                "G-buffer B=heightBlend(A,B)*(1+{vci}*(COLOR0.rgb-1)); \
             COLOR0.a supplies sat((a-.5)*{}+.5+{}*{}) to layer B, not coverage or emission. \
             Shaded retains the alpha weight and omits the RGB factor; rewriting COLOR0.a to a colour factor would corrupt that weight",
-            i.scalar(rows.alpha_contrast),i.scalar(rows.alpha_contrast),i.scalar(rows.alpha_offset)));}
+                i.scalar(rows.alpha_contrast),
+                i.scalar(rows.alpha_contrast),
+                i.scalar(rows.alpha_offset)
+            ));
+        }
     }
     match template {
         "MAD_Tex1_Wind"=>push(format!("G-buffer translucency o3.w={} (cb3[18].x), not opacity or emission; \
@@ -93,23 +117,39 @@ pub(super) fn notices(i: &Inputs<'_>) -> Vec<String> {
         }
         _=>{}
     }
-    for &(key,binding) in &i.m.bindings {
-        if let MaterialBinding::UvTransform{vec4}=binding
-            && let Some(MaterialValue::Floats(f))=i.bound(binding)
-            && let Some(motion)=uv_motion(f) {
+    for &(key, binding) in &i.m.bindings {
+        if let MaterialBinding::UvTransform { vec4 } = binding
+            && let Some(MaterialValue::Floats(f)) = i.bound(binding)
+            && let Some(motion) = uv_motion(f)
+        {
             push(format!("property {key:08x}, cb3[{vec4}]: {motion}"));
         }
     }
     out
 }
 
-fn wind(i:&Inputs<'_>,first:u32,last:u32,debug:u32,push:&mut impl FnMut(String)) {
-    let parameters=(first..=last).map(|r|(r,i.bound(MaterialBinding::Scalar{vec4:r})
-        .or_else(||i.bound(MaterialBinding::Vector{vec4:r})))).collect::<Vec<_>>();
-    let debug=if debug==0 {"this contract has no pixel wind-debug row".into()}
-        else {format!("pixel wind-debug cb3[{debug}]={}; its noise-colour blend is omitted",i.scalar(debug))};
-    push(format!("wind deformation is the retained vertex program, cb3 rows/values {parameters:?}; \
-        no core static-material field encodes it; {debug}; phase/varying inputs remain the vertex program's named bindings"));
+fn wind(i: &Inputs<'_>, first: u32, last: u32, debug: u32, push: &mut impl FnMut(String)) {
+    let parameters = (first..=last)
+        .map(|r| {
+            (
+                r,
+                i.bound(MaterialBinding::Scalar { vec4: r })
+                    .or_else(|| i.bound(MaterialBinding::Vector { vec4: r })),
+            )
+        })
+        .collect::<Vec<_>>();
+    let debug = if debug == 0 {
+        "this contract has no pixel wind-debug row".into()
+    } else {
+        format!(
+            "pixel wind-debug cb3[{debug}]={}; its noise-colour blend is omitted",
+            i.scalar(debug)
+        )
+    };
+    push(format!(
+        "wind deformation is the retained vertex program, cb3 rows/values {parameters:?}; \
+        no core static-material field encodes it; {debug}; phase/varying inputs remain the vertex program's named bindings"
+    ));
 }
 
 #[cfg(test)]
@@ -117,18 +157,37 @@ mod tests {
     use super::*;
     use crate::components::{AnvilMaterial, MaterialFlags};
 
-    fn material(template:&str,scalars:&[(u32,f32)]) -> AnvilMaterial {
-        AnvilMaterial {index_id:0x123,template:None,template_name:Some(template.into()),
-            bindings:scalars.iter().map(|&(r,_)|(r,MaterialBinding::Scalar{vec4:r})).collect(),
-            values:scalars.iter().map(|&(r,v)|(r,MaterialValue::Float(v))).collect(),texture_set:Vec::new(),
-            textures:Vec::new(),defaults:Vec::new(),frame:primase_core::frame::SourceFrame::WORLD,
-            flags:MaterialFlags{blend_mode:0,alpha_display_mode:0,alpha_test_value:0,booleans:[0;35]},shaders:None}
+    fn material(template: &str, scalars: &[(u32, f32)]) -> AnvilMaterial {
+        AnvilMaterial {
+            index_id: 0x123,
+            template: None,
+            template_name: Some(template.into()),
+            bindings: scalars
+                .iter()
+                .map(|&(r, _)| (r, MaterialBinding::Scalar { vec4: r }))
+                .collect(),
+            values: scalars
+                .iter()
+                .map(|&(r, v)| (r, MaterialValue::Float(v)))
+                .collect(),
+            texture_set: Vec::new(),
+            textures: Vec::new(),
+            defaults: Vec::new(),
+            frame: primase_core::frame::SourceFrame::WORLD,
+            flags: MaterialFlags {
+                blend_mode: 0,
+                alpha_display_mode: 0,
+                alpha_test_value: 0,
+                booleans: [0; 35],
+            },
+            shaders: None,
+        }
     }
 
     #[test]
     fn vertex_notice_keeps_rgb_coverage_and_emission_separate() {
-        let m=material("MAD_Tex1_Emissive",&[(2,4.0),(6,0.5),(7,1.0)]);
-        let text=notices(&Inputs{m:&m}).join("\n");
+        let m = material("MAD_Tex1_Emissive", &[(2, 4.0), (6, 0.5), (7, 1.0)]);
+        let text = notices(&Inputs { m: &m }).join("\n");
         assert!(text.contains("1+1*(COLOR0.rgb-1)") && text.contains("coverage A=diffuse.a*0.5"));
         assert!(text.contains("E=B*(t77[0]*4/t23.x)") && text.contains("COLOR0.a is not an emission factor"));
         assert!(text.contains("Material 0x123"));
@@ -136,21 +195,21 @@ mod tests {
 
     #[test]
     fn foliage_notice_preserves_zero_specular_occlusion_and_mask_lanes() {
-        let m=material("MAD_Clutters_Grass",&[(10,0.75),(11,0.0),(16,0.5)]);
-        let text=notices(&Inputs{m:&m}).join("\n");
+        let m = material("MAD_Clutters_Grass", &[(10, 0.75), (11, 0.0), (16, 0.5)]);
+        let text = notices(&Inputs { m: &m }).join("\n");
         assert!(text.contains("specular occlusion o2.z=0") && text.contains("o2.w=t75.r*0.75"));
         assert!(text.contains("O=1+0.5*(t75.b-1)") && text.contains("coverage"));
-        let m=material("MAD_Tex1_Leaves",&[(21,0.5),(25,0.25),(27,1.0),(31,0.75)]);
-        let text=notices(&Inputs{m:&m}).join("\n");
+        let m = material("MAD_Tex1_Leaves", &[(21, 0.5), (25, 0.25), (27, 1.0), (31, 0.75)]);
+        let text = notices(&Inputs { m: &m }).join("\n");
         assert!(text.contains("sat(COLOR0.a+0.25)") && text.contains("o2.z=t78.b*0.5"));
         assert!(text.contains("o2.w=t78.r*0.75") && text.contains("A=t79.r"));
     }
 
     #[test]
     fn moving_uv_notice_retains_rates_without_guessing_the_engine_clock() {
-        let text=uv_motion(&[2.0,3.0,0.0,0.0,0.25,-0.5,1.0,0.125]).unwrap();
+        let text = uv_motion(&[2.0, 3.0, 0.0, 0.0, 0.25, -0.5, 1.0, 0.125]).unwrap();
         assert!(text.contains("TranslationSpeedU=0.25") && text.contains("TranslationSpeedV=-0.5"));
         assert!(text.contains("RotationSpeed=0.125") && text.contains("activation bytes"));
-        assert!(uv_motion(&[1.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0]).is_none());
+        assert!(uv_motion(&[1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]).is_none());
     }
 }

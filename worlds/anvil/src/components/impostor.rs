@@ -1,35 +1,50 @@
 //! Stored impostor geometry and the render explanations that survive lowering.
-use primase_core::{Component, Entity};
 use super::stored::{Controller, StoredImpostor, StoredSky, StoredSpotLight};
+use primase_core::{Component, Entity};
 
-#[derive(Clone,Debug,PartialEq)]
-pub struct AnvilSurfaceBake {pub material:Entity,pub atlas_size:u32,pub texels_per_metre:f32}
-impl Component for AnvilSurfaceBake{
-    const NAME:&'static str="anvil.surface_bake";
-    const GEOMETRY:primase_core::Geometry=primase_core::Geometry::None;
-    fn references(&self,out:&mut Vec<Entity>){out.push(self.material);}
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnvilSurfaceBake {
+    pub material: Entity,
+    pub atlas_size: u32,
+    pub texels_per_metre: f32,
+}
+impl Component for AnvilSurfaceBake {
+    const NAME: &'static str = "anvil.surface_bake";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.push(self.material);
+    }
 }
 
-#[derive(Clone,Debug,PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AnvilSkyControllers {
-    pub look:String,
-    pub time_of_day:Controller,
-    pub weather:Option<Controller>,
+    pub look: String,
+    pub time_of_day: Controller,
+    pub weather: Option<Controller>,
 }
 impl Component for AnvilSkyControllers {
-    const NAME:&'static str="anvil.sky_controllers";
-    const GEOMETRY:primase_core::Geometry=primase_core::Geometry::None;
-    fn payload_bytes(&self)->u64{
-        let bytes=|c:&Controller|c.tracks.iter().map(|t|t.path.len()*4+t.times.len()*2+t.values.len()*16).sum::<usize>();
-        (bytes(&self.time_of_day)+self.weather.as_ref().map_or(0,bytes)) as u64
+    const NAME: &'static str = "anvil.sky_controllers";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    fn payload_bytes(&self) -> u64 {
+        let bytes = |c: &Controller| {
+            c.tracks
+                .iter()
+                .map(|t| t.path.len() * 4 + t.times.len() * 2 + t.values.len() * 16)
+                .sum::<usize>()
+        };
+        (bytes(&self.time_of_day) + self.weather.as_ref().map_or(0, bytes)) as u64
     }
-    fn to_json(&self)->Result<Option<serde_json::Value>,primase_core::JsonError>{
-        let tracks=|controller:&Controller|controller.tracks.iter().map(|track|
+    fn to_json(&self) -> Result<Option<serde_json::Value>, primase_core::JsonError> {
+        let tracks = |controller: &Controller| {
+            controller.tracks.iter().map(|track|
             serde_json::json!({"path":track.path.iter().map(|p|format!("{p:#010x}")).collect::<Vec<_>>(),
                 "kind":format!("{:#010x}",track.kind),"times":track.times,"values":track.values,
-                "path_flags":track.path_flags,"binding":track.binding,"trailer":track.trailer})).collect::<Vec<_>>();
-        Ok(Some(serde_json::json!({"look":self.look,"time_of_day":tracks(&self.time_of_day),
-            "weather":self.weather.as_ref().map(tracks)})))
+                "path_flags":track.path_flags,"binding":track.binding,"trailer":track.trailer})).collect::<Vec<_>>()
+        };
+        Ok(Some(
+            serde_json::json!({"look":self.look,"time_of_day":tracks(&self.time_of_day),
+            "weather":self.weather.as_ref().map(tracks)}),
+        ))
     }
 }
 /// Coarse terrain held separately so the near-terrain lowering cannot accidentally lower full coarse rectangles.
@@ -44,12 +59,21 @@ pub struct AnvilFarTerrain {
 impl Component for AnvilFarTerrain {
     const NAME: &'static str = "anvil.far_terrain";
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
-    fn references(&self, out: &mut Vec<Entity>) { out.push(self.near); }
-    fn payload_bytes(&self) -> u64 { self.levels.iter().map(Component::payload_bytes).sum() }
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.push(self.near);
+    }
+    fn payload_bytes(&self) -> u64 {
+        self.levels.iter().map(Component::payload_bytes).sum()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AnvilFarClass { Real, MergedProxy, Canopy, Tree }
+pub enum AnvilFarClass {
+    Real,
+    MergedProxy,
+    Canopy,
+    Tree,
+}
 impl Component for AnvilFarClass {
     const NAME: &'static str = "anvil.far_class";
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
@@ -73,14 +97,25 @@ impl Component for AnvilSky {
     const NAME: &'static str = "anvil.sky";
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn payload_bytes(&self) -> u64 {
-        self.stored.keyframes.iter().map(|k| k.inscatter.len() + k.optical_depth.len()
-            + k.irradiance.len() + k.sun_depth.len() + k.sun_irradiance.len()).sum::<usize>() as u64
+        self.stored
+            .keyframes
+            .iter()
+            .map(|k| {
+                k.inscatter.len()
+                    + k.optical_depth.len()
+                    + k.irradiance.len()
+                    + k.sun_depth.len()
+                    + k.sun_irradiance.len()
+            })
+            .sum::<usize>() as u64
     }
     fn to_json(&self) -> Result<Option<serde_json::Value>, primase_core::JsonError> {
-        Ok(Some(serde_json::json!({"source_id": self.index_id, "sun_elevation": self.stored.sun_elevation,
+        Ok(Some(
+            serde_json::json!({"source_id": self.index_id, "sun_elevation": self.stored.sun_elevation,
             "sun_color": self.stored.sun_color, "keyframes": self.stored.keyframes.iter()
                 .map(|key| serde_json::json!({"hour": key.hour, "crc": key.crc, "inscatter_bytes": key.inscatter.len()}))
-                .collect::<Vec<_>>(), "runtime_weather_evaluated": false})))
+                .collect::<Vec<_>>(), "runtime_weather_evaluated": false}),
+        ))
     }
 }
 
@@ -94,10 +129,12 @@ impl Component for AnvilSpotLight {
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, primase_core::JsonError> {
         let light = &self.stored;
-        Ok(Some(serde_json::json!({"source_id": self.index_id, "color": light.color,
+        Ok(Some(
+            serde_json::json!({"source_id": self.index_id, "color": light.color,
             "stored_intensity": light.intensity, "stored_luminance": light.luminance,
             "inner": light.inner, "outer": light.outer, "range": light.range,
-            "intensity_unit": "not established; lowering requires caller calibration"})))
+            "intensity_unit": "not established; lowering requires caller calibration"}),
+        ))
     }
 }
 
@@ -119,10 +156,12 @@ impl Component for AnvilImpostor {
         (self.stored.cards.len() * 108 + 199) as u64
     }
     fn to_json(&self) -> Result<Option<serde_json::Value>, primase_core::JsonError> {
-        Ok(Some(serde_json::json!({"source_id": self.index_id, "top_cards": self.stored.top,
+        Ok(Some(
+            serde_json::json!({"source_id": self.index_id, "top_cards": self.stored.top,
             "side_cards": self.stored.side, "texture_ids": self.stored.maps.map(|map| map.map(|r| r.id)),
             "textures": self.textures.map(|texture| texture.map(|e| e.index())),
-            "cutoff": f32::from_bits(self.stored.table[14])})))
+            "cutoff": f32::from_bits(self.stored.table[14])}),
+        ))
     }
 }
 
@@ -143,7 +182,9 @@ impl Component for AnvilRenderStatus {
         (self.source.len() + self.reason.len() + self.template.as_ref().map_or(0, String::len)) as u64
     }
     fn to_json(&self) -> Result<Option<serde_json::Value>, primase_core::JsonError> {
-        Ok(Some(serde_json::json!({"source": self.source, "template": self.template,
-            "reason": self.reason, "unsupported": self.unsupported})))
+        Ok(Some(
+            serde_json::json!({"source": self.source, "template": self.template,
+            "reason": self.reason, "unsupported": self.unsupported}),
+        ))
     }
 }

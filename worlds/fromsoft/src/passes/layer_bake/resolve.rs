@@ -396,7 +396,10 @@ pub fn resolve(
                     continue;
                 }
                 let (value, what) = if name == ENGINE_DITHER_TEXTURE {
-                    ([ENGINE_DITHER_NEUTRAL as f32; 4], "read only by the dithered alpha fade, which is off")
+                    (
+                        [ENGINE_DITHER_NEUTRAL as f32; 4],
+                        "read only by the dithered alpha fade, which is off",
+                    )
                 } else {
                     ([0.; 4], "not a material slot, left at zero")
                 };
@@ -1124,23 +1127,45 @@ fn further_uv_sets(
 /// A unique signature label names the same semantic index the FLVER layout stores.
 /// The decoder carries Member.index through compaction: sparse labels never collapse to ordinals.
 fn tangent_set(interface: &Interface, index: u32) -> Option<u8> {
-    let count = interface.inputs.iter().filter(|v| v.label.name.eq_ignore_ascii_case("TANGENT") && v.label.index == index).count();
+    let count = interface
+        .inputs
+        .iter()
+        .filter(|v| v.label.name.eq_ignore_ascii_case("TANGENT") && v.label.index == index)
+        .count();
     (count == 1).then(|| u8::try_from(index).ok()).flatten()
 }
 
 /// Bind then validate further tangent sets against every primitive drawing this material. A shared material
 /// cannot silently use a vector absent from one of its layouts, including set 0.
-pub fn resolve_vertex_for_geometry(shader: &Shader, entity: Entity, world: &primase_core::World, material: Entity) -> Result<VertexBinding> {
+pub fn resolve_vertex_for_geometry(
+    shader: &Shader,
+    entity: Entity,
+    world: &primase_core::World,
+    material: Entity,
+) -> Result<VertexBinding> {
     let mut binding = resolve_vertex(shader, entity)?;
-    let primitives: Vec<_> = world.iter::<primase_core::Mesh>().flat_map(|(_, m)| m.primitives())
-        .filter(|p| p.material == Some(material)).collect();
+    let primitives: Vec<_> = world
+        .iter::<primase_core::Mesh>()
+        .flat_map(|(_, m)| m.primitives())
+        .filter(|p| p.material == Some(material))
+        .collect();
     for input in &mut binding.stage.inputs {
-        let InputRole::Stream(primase_core::Semantic::Tangent(set)) = &input.role else { continue; };
+        let InputRole::Stream(primase_core::Semantic::Tangent(set)) = &input.role else {
+            continue;
+        };
         let set = *set;
-        if primitives.is_empty() || primitives.iter().any(|p| !matches!(p.streams.get(&primase_core::Semantic::Tangent(set)),
-            Some(primase_core::Stream::F32x4(v)) if v.len() == p.vertex_count())) {
-            input.role = InputRole::Unknown { why: format!("{}{} needs layout semantic Tangent({set}), absent or incomplete on a primitive drawing this material",
-                input.label.name, input.label.index) };
+        if primitives.is_empty()
+            || primitives.iter().any(|p| {
+                !matches!(p.streams.get(&primase_core::Semantic::Tangent(set)),
+            Some(primase_core::Stream::F32x4(v)) if v.len() == p.vertex_count())
+            })
+        {
+            input.role = InputRole::Unknown {
+                why: format!(
+                    "{}{} needs layout semantic Tangent({set}), absent or incomplete on a primitive drawing this material",
+                    input.label.name, input.label.index
+                ),
+            };
         }
     }
     Ok(binding)
@@ -1537,7 +1562,12 @@ fn tiling(
     resource: &Resource,
     binding: Option<&Binding>,
 ) -> [f32; 4] {
-    slot_tiling(material, metaparam, texture_slot(resource), binding.map(|b| b.scale))
+    slot_tiling(
+        material,
+        metaparam,
+        texture_slot(resource),
+        binding.map(|b| b.scale),
+    )
 }
 
 /// [`tiling`] for the texture slot `Texture2D_<n>` (`n`: [`crate::metaparam::texture_number`] of the binding's key or
@@ -1628,15 +1658,25 @@ mod tests {
 
     #[test]
     fn sparse_tangent_labels_keep_their_layout_semantic_indices() {
-        let mut interface = primase_dxbc::reflection(include_bytes!("../../../tests/fixtures/layered_lining_vs.dxbc")).unwrap();
+        let mut interface =
+            primase_dxbc::reflection(include_bytes!("../../../tests/fixtures/layered_lining_vs.dxbc"))
+                .unwrap();
         for input in &mut interface.inputs {
-            if input.label.name.eq_ignore_ascii_case("TANGENT") && input.label.index == 2 { input.label.index = 4; }
+            if input.label.name.eq_ignore_ascii_case("TANGENT") && input.label.index == 2 {
+                input.label.index = 4;
+            }
         }
         assert_eq!(super::tangent_set(&interface, 0), Some(0));
         assert_eq!(super::tangent_set(&interface, 4), Some(4));
         assert_eq!(super::tangent_set(&interface, 1), None);
-        interface.inputs.retain(|v| !(v.label.name.eq_ignore_ascii_case("TANGENT") && v.label.index == 0));
-        assert_eq!(super::tangent_set(&interface, 4), Some(4), "unused lower members do not renumber the input");
+        interface
+            .inputs
+            .retain(|v| !(v.label.name.eq_ignore_ascii_case("TANGENT") && v.label.index == 0));
+        assert_eq!(
+            super::tangent_set(&interface, 4),
+            Some(4),
+            "unused lower members do not renumber the input"
+        );
     }
 
     fn param(value_type: u8, srgb: bool) -> MtdParam {

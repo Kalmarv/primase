@@ -53,9 +53,13 @@ pub const EMITTED_NAMES: &[&str] = &[
 /// `DrawParams::None` deliberately reads no GPARAM, even if the area stores one.
 /// A requested but missing/unreadable file is still declared and explained by the read's notices.
 pub fn emitted_names(options: &Options) -> Vec<&'static str> {
-    EMITTED_NAMES.iter().copied().filter(|name|
-        *name != "fromsoft.draw_param" || options.draw_param != super::draw_param::DrawParams::None
-    ).collect()
+    EMITTED_NAMES
+        .iter()
+        .copied()
+        .filter(|name| {
+            *name != "fromsoft.draw_param" || options.draw_param != super::draw_param::DrawParams::None
+        })
+        .collect()
 }
 
 /// See the module documentation.

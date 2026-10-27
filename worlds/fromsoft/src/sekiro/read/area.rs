@@ -358,7 +358,8 @@ impl Report {
                 "map regions outside the read region",
             ),
             (
-                self.extras.region_types.values().sum::<usize>() + self.extras.event_types.values().sum::<usize>(),
+                self.extras.region_types.values().sum::<usize>()
+                    + self.extras.event_types.values().sum::<usize>(),
                 NoticeKind::Unsupported,
                 "map regions and events kept with their type's data as bytes (fromsoft.map_records): what a type's data \
                  holds (a sound's id, an effect, a message, a treasure's item lot) is not decoded, only the header, \
@@ -483,7 +484,9 @@ fn unplaced_word(kind: PartKind) -> &'static str {
         PartKind::DummyAsset => "dummy assets",
         PartKind::DummyEnemy => "dummy enemies",
         PartKind::ConnectCollision => "connect collisions",
-        PartKind::MapPiece | PartKind::Object | PartKind::Asset | PartKind::Collision => "placed or read parts",
+        PartKind::MapPiece | PartKind::Object | PartKind::Asset | PartKind::Collision => {
+            "placed or read parts"
+        }
     }
 }
 
@@ -1183,7 +1186,12 @@ pub fn read_game_area_staged(
         &mut world,
     )?;
     if options.map_records {
-        extras::records(&layout, options.region.map(|r| r.rect), &mut report.extras, &mut world)?;
+        extras::records(
+            &layout,
+            options.region.map(|r| r.rect),
+            &mut report.extras,
+            &mut world,
+        )?;
     }
     stage("environment");
     let configs: Vec<_> = if options.draw_param == draw_param::DrawParams::None {

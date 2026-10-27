@@ -193,7 +193,9 @@ impl Reader {
                 why: format!(
                     "{} slots reach the alpha test, not one{}",
                     reads.coverage.len(),
-                    not_exact.map_or_else(String::new, |why| format!("; its expression is not solved: {why}"))
+                    not_exact.map_or_else(String::new, |why| format!(
+                        "; its expression is not solved: {why}"
+                    ))
                 ),
                 program: name,
             });
@@ -293,7 +295,8 @@ fn programs(bundle: &ShaderBundle, name: String) -> Result<Programs, Unread> {
                 t.name.clone(),
                 SlotFacts {
                     number: texture_number(&t.name),
-                    default_stem: (!t.default_texture.is_empty()).then(|| crate::materials::stem(&t.default_texture)),
+                    default_stem: (!t.default_texture.is_empty())
+                        .then(|| crate::materials::stem(&t.default_texture)),
                 },
             )
         })
@@ -333,7 +336,10 @@ fn solve(
     let Some(test) = mine.first() else {
         return Ok(None);
     };
-    if let Some(other) = mine.iter().find(|t| (t.buffer, t.word) != (test.buffer, test.word)) {
+    if let Some(other) = mine
+        .iter()
+        .find(|t| (t.buffer, t.word) != (test.buffer, test.word))
+    {
         return Err(format!(
             "the program compares texture alphas against two constants (word {} and word {})",
             test.word, other.word
@@ -361,8 +367,12 @@ fn solve(
     // a default texture that could not be read is `Unknown` to the evaluation, and its reason is kept for the error
     let unread = std::cell::RefCell::new(Vec::<String>::new());
     let mut known = |leaf: &AlphaExpr| match leaf {
-        AlphaExpr::Word { buffer: b, word: w } if *b == buffer && *w == word => Known::Value(f64::from(reference)),
-        AlphaExpr::Word { buffer: b, word: w } if *b == buffer && *w == word + 1 => Known::Value(f64::from(scale)),
+        AlphaExpr::Word { buffer: b, word: w } if *b == buffer && *w == word => {
+            Known::Value(f64::from(reference))
+        }
+        AlphaExpr::Word { buffer: b, word: w } if *b == buffer && *w == word + 1 => {
+            Known::Value(f64::from(scale))
+        }
         AlphaExpr::Texel { resource, lane, .. } => match texels.get(resource) {
             Some(Texel::Slot(slot)) if bound(slot) => Known::Varies,
             // a default texture's alpha, where it is one value everywhere
@@ -372,7 +382,9 @@ fn solve(
                 .and_then(|stem| match default_alpha(stem) {
                     Ok(alpha) => alpha,
                     Err(why) => {
-                        unread.borrow_mut().push(format!("default texture {stem} could not be read: {why}"));
+                        unread
+                            .borrow_mut()
+                            .push(format!("default texture {stem} could not be read: {why}"));
                         None
                     }
                 })
@@ -400,27 +412,43 @@ fn solve(
             .collect();
         let mut unread = unread.borrow().clone();
         unread.dedup();
-        let unread = if unread.is_empty() { String::new() } else { format!("; {}", unread.join("; ")) };
-        format!("{why} (the test is {} < reference; {}){unread}", test.tested, named.join(", "))
+        let unread = if unread.is_empty() {
+            String::new()
+        } else {
+            format!("; {}", unread.join("; "))
+        };
+        format!(
+            "{why} (the test is {} < reference; {}){unread}",
+            test.tested,
+            named.join(", ")
+        )
     })?;
     let Some((_, resource, lane)) = linear.sample else {
         return Err(format!("no sample varies in {}", test.tested));
     };
     if lane != 3 {
-        return Err(format!("the varying sample of {} is lane {lane}, not an alpha", test.tested));
+        return Err(format!(
+            "the varying sample of {} is lane {lane}, not an alpha",
+            test.tested
+        ));
     }
     let Some(Texel::Slot(texture)) = texels.get(&resource) else {
-        return Err(format!("the varying sample of {} is no material slot", test.tested));
+        return Err(format!(
+            "the varying sample of {} is no material slot",
+            test.tested
+        ));
     };
     // alpha is not below 0: a cutoff there discards nothing
-    let cut = linear.cutoff(f64::from(reference))?.filter(|c| *c > 0.).map(|c| c as f32);
+    let cut = linear
+        .cutoff(f64::from(reference))?
+        .filter(|c| *c > 0.)
+        .map(|c| c as f32);
     // the test depends on the noise (a nonzero folded coefficient: the scale word is not 0) exactly when another answer
     // moves the expression; a hard cutoff at the noise mean is then not the stochastic test
     dither.set(ENGINE_DITHER_NEUTRAL + 1.);
-    let dithered = test
-        .tested
-        .linear(&mut known)
-        .map_or(true, |other| other.scale != linear.scale || other.offset != linear.offset);
+    let dithered = test.tested.linear(&mut known).map_or(true, |other| {
+        other.scale != linear.scale || other.offset != linear.offset
+    });
     Ok(Some((texture.clone(), cut, dithered)))
 }
 

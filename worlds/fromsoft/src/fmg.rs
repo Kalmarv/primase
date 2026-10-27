@@ -49,18 +49,36 @@ impl Fmg {
                 .ok_or_else(|| invalid(FORMAT, at, "ends inside a 64-bit value"))
         };
         if u8_at(0)? != 0 || u8_at(3)? != 0 {
-            return Err(invalid(FORMAT, 0, "not an FMG (the first and fourth bytes are 0 in the games' files)"));
+            return Err(invalid(
+                FORMAT,
+                0,
+                "not an FMG (the first and fourth bytes are 0 in the games' files)",
+            ));
         }
         if u8_at(1)? != 0 {
-            return Err(invalid(FORMAT, 1, "a big-endian FMG: no game this reader serves stores one"));
+            return Err(invalid(
+                FORMAT,
+                1,
+                "a big-endian FMG: no game this reader serves stores one",
+            ));
         }
         let wide = match u8_at(2)? {
             1 => false,
             2 => true,
-            other => return Err(invalid(FORMAT, 2, format!("version {other}; the readable ones are 1 and 2"))),
+            other => {
+                return Err(invalid(
+                    FORMAT,
+                    2,
+                    format!("version {other}; the readable ones are 1 and 2"),
+                ));
+            }
         };
         if u8_at(8)? != 1 {
-            return Err(invalid(FORMAT, 8, "a Shift-JIS FMG: no game this reader serves stores one"));
+            return Err(invalid(
+                FORMAT,
+                8,
+                "a Shift-JIS FMG: no game this reader serves stores one",
+            ));
         }
         let groups = u32_at(0x0c)? as usize;
         let strings = u32_at(0x10)? as usize;
@@ -87,14 +105,22 @@ impl Fmg {
         let mut counted = 0usize;
         for g in 0..groups {
             let at = first_group + g * group_size;
-            let (index, first, last) = (u32_at(at)? as usize, u32_at(at + 4)? as i32, u32_at(at + 8)? as i32);
+            let (index, first, last) = (
+                u32_at(at)? as usize,
+                u32_at(at + 4)? as i32,
+                u32_at(at + 8)? as i32,
+            );
             if last < first {
                 return Err(invalid(FORMAT, at, format!("a group of ids {first} to {last}")));
             }
             let count = (i64::from(last) - i64::from(first) + 1) as usize;
             counted += count;
             if counted > strings {
-                return Err(invalid(FORMAT, at, format!("groups hold more than the {strings} strings it states")));
+                return Err(invalid(
+                    FORMAT,
+                    at,
+                    format!("groups hold more than the {strings} strings it states"),
+                ));
             }
             for j in 0..count {
                 let slot_at = offsets + (index + j) * slot;
@@ -128,7 +154,11 @@ fn utf16_at(data: &[u8], at: usize) -> Result<String> {
         .collect();
     // a string that runs to the end of the file with no terminator is cut off, not a string
     if (units.len() + 1) * 2 > rest.len() {
-        return Err(invalid(FORMAT, at, "a string with no terminator before the end of the file"));
+        return Err(invalid(
+            FORMAT,
+            at,
+            "a string with no terminator before the end of the file",
+        ));
     }
     String::from_utf16(&units).map_err(|_| invalid(FORMAT, at, "a string with an unpaired surrogate"))
 }
@@ -197,7 +227,10 @@ pub(crate) mod tests {
     #[test]
     fn both_layouts_read_their_groups_strings_and_missing_ids() {
         let groups: &[(i32, &[Option<&str>])] = &[
-            (10, &[Some("Genichiro Ashina"), None, Some("Isshin")] as &[Option<&str>]),
+            (
+                10,
+                &[Some("Genichiro Ashina"), None, Some("Isshin")] as &[Option<&str>],
+            ),
             (700_000, &[Some("Ōkami 狼")] as &[Option<&str>]),
         ];
         for wide in [true, false] {

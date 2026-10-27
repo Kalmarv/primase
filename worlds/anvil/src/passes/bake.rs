@@ -121,9 +121,7 @@ use primase_shader_exec::{
 };
 
 use super::material::{Green, NORMAL_GREEN, SHADER_UV, ShaderUv, UNSET, Unset, uv_transform};
-use crate::components::{
-    AnvilMaterial, AnvilShaders, MaterialBinding, MaterialFlags, MaterialValue,
-};
+use crate::components::{AnvilMaterial, AnvilShaders, MaterialBinding, MaterialFlags, MaterialValue};
 
 /// The G-buffer pass's number, in the key's bits 22 to 29.
 const GBUFFER: u32 = 1;
@@ -576,7 +574,10 @@ const RECIPES: &[Recipe] = &[
     ROCKS,
     // material-spec §27.4 / verify_m17.py: the same property and texture roles as Rocks;
     // the program itself writes layout A and takes roughness from the detail normal's alpha.
-    Recipe { template: "MAD_Tex1_UniqueNormal", ..ROCKS },
+    Recipe {
+        template: "MAD_Tex1_UniqueNormal",
+        ..ROCKS
+    },
     UNIQUE_NORMAL_GRADIENT,
     ROAD,
     UNIQUE_NORMAL_DIFFUSE_BLEND,
@@ -809,8 +810,12 @@ pub(super) fn material_rows(m: &AnvilMaterial) -> Result<BTreeMap<u32, [f32; 4]>
             },
             MaterialBinding::UvTransform { vec4 } => match value(key, binding) {
                 Some(MaterialValue::Floats(f)) => {
-                    let [u, v] = super::material::static_uv_rows(f)
-                        .map_err(|why| format!("UV transform {key:08X}: {}", super::material::uv_motion_notice(f).unwrap_or_else(||why.to_owned())))?;
+                    let [u, v] = super::material::static_uv_rows(f).map_err(|why| {
+                        format!(
+                            "UV transform {key:08X}: {}",
+                            super::material::uv_motion_notice(f).unwrap_or_else(|| why.to_owned())
+                        )
+                    })?;
                     rows.insert(vec4, u);
                     rows.insert(vec4.saturating_add(1), v);
                     rows.insert(vec4.saturating_add(2), [0.0, 0.0, 1.0, 0.0]);
@@ -857,10 +862,14 @@ fn unorm8(x: f32) -> u8 {
 /// Store the shared surface reading's linear emission without clipping its HDR range. Negative light is not PBR.
 fn encode_emission(pixels: &[[f32; 3]]) -> Result<(Option<Vec<u8>>, f32), String> {
     if pixels.iter().flatten().any(|v| !v.is_finite() || *v < 0.0) {
-        return Err("G-buffer emission is negative or non-finite; no nonnegative PBR emission represents it".into());
+        return Err(
+            "G-buffer emission is negative or non-finite; no nonnegative PBR emission represents it".into(),
+        );
     }
     let peak = pixels.iter().flatten().copied().fold(0.0f32, f32::max);
-    if peak == 0.0 { return Ok((None, 1.0)); }
+    if peak == 0.0 {
+        return Ok((None, 1.0));
+    }
     let strength = peak.max(1.0);
     let mut bytes = Vec::with_capacity(pixels.len() * 4);
     for rgb in pixels {
@@ -959,9 +968,14 @@ impl BakeAnvilMaterial {
         if recipe.terrain.is_some() {
             // The virtual page table/sediment views are the explicit uniform stand-ins below. Keep their affine
             // coordinates finite even for the UniqueNormal sibling, whose program reads the same engine rows.
-            for (row,value) in [(47,[1.0f32,0.0,0.0,0.0]),(48,[1.0,1.0,0.0,0.0])] {
-                if buffers.iter().any(|&(slot,words)|slot==0 && words>=(row+1)*4) {
-                    constants.set_words(0,row*4,&value.map(f32::to_bits)).map_err(|e|e.to_string())?;
+            for (row, value) in [(47, [1.0f32, 0.0, 0.0, 0.0]), (48, [1.0, 1.0, 0.0, 0.0])] {
+                if buffers
+                    .iter()
+                    .any(|&(slot, words)| slot == 0 && words >= (row + 1) * 4)
+                {
+                    constants
+                        .set_words(0, row * 4, &value.map(f32::to_bits))
+                        .map_err(|e| e.to_string())?;
                 }
             }
         }
@@ -1182,27 +1196,42 @@ impl BakeAnvilMaterial {
                     return Err("the program writes a value that isn't finite".into());
                 }
                 let (normal, class) = decode_normal([o1[0], o1[1], o1[2]]);
-                if let Some(expected)=super::resolve_shaders::shading_class(recipe.template)
-                    .filter(|_|!recipe.template.starts_with("MAD_CHR_"))
-                    && class!=expected {
-                    return Err(format!("{} program writes shading class {class}, output contract states {expected}",recipe.template));
+                if let Some(expected) = super::resolve_shaders::shading_class(recipe.template)
+                    .filter(|_| !recipe.template.starts_with("MAD_CHR_"))
+                    && class != expected
+                {
+                    return Err(format!(
+                        "{} program writes shading class {class}, output contract states {expected}",
+                        recipe.template
+                    ));
                 }
                 let texel = match class {
                     1 | 3..=5 => {
                         if let std::collections::btree_map::Entry::Vacant(entry) = readings.entry(class) {
                             entry.insert(super::gbuffer::Reading::new(shader.interface(), class)?);
                         }
-                        readings.get(&class).ok_or("missing surface reading")?.read(|target| {
-                            raw.pixels.get(target).and_then(|t| t.get(p))
-                                .map(|(v, mask)| (v.map(f32::from_bits), *mask))
-                        })?
+                        readings
+                            .get(&class)
+                            .ok_or("missing surface reading")?
+                            .read(|target| {
+                                raw.pixels
+                                    .get(target)
+                                    .and_then(|t| t.get(p))
+                                    .map(|(v, mask)| (v.map(f32::from_bits), *mask))
+                            })?
                     }
                     // the lighting pass's class 2 (hair): the albedo, roughness and normal as the others, F0 fixed (no
                     // metalness), the occlusion where layout A reads it from `o3.x` read from `o3.y`, the specular
                     // occlusion and translucency of layout B (`o2.z`, `o2.w`)
                     2 if o3_written => super::gbuffer::Texel {
-                        base: [o0[0], o0[1], o0[2]], normal: normal.map(|v| v as f32), roughness: o0[3],
-                        metallic: 0.0, occlusion: o3[1], specular_occlusion: o2[2], translucency: o2[3], emission: [0.0; 3],
+                        base: [o0[0], o0[1], o0[2]],
+                        normal: normal.map(|v| v as f32),
+                        roughness: o0[3],
+                        metallic: 0.0,
+                        occlusion: o3[1],
+                        specular_occlusion: o2[2],
+                        translucency: o2[3],
+                        emission: [0.0; 3],
                     },
                     _ => {
                         return Err(format!(
@@ -1298,7 +1327,12 @@ impl Pass for BakeAnvilMaterial {
         o
     }
     fn provides(&self) -> &[&'static str] {
-        &[PbrMaterial::NAME, Texture::NAME, VertexColor::NAME, crate::components::AnvilRenderStatus::NAME]
+        &[
+            PbrMaterial::NAME,
+            Texture::NAME,
+            VertexColor::NAME,
+            crate::components::AnvilRenderStatus::NAME,
+        ]
     }
     fn removes(&self) -> &[&'static str] {
         &[AnvilMaterial::NAME]
@@ -1349,10 +1383,15 @@ impl Pass for BakeAnvilMaterial {
                 Ok(b) => b,
                 Err(why) => {
                     let source = format!("Material {:#x}", m.index_id);
-                    w.insert(e, crate::components::AnvilRenderStatus {
-                        source, template: Some(template.clone()), unsupported: true,
-                        reason: format!("{template}: own-program bake refused: {why}"),
-                    });
+                    w.insert(
+                        e,
+                        crate::components::AnvilRenderStatus {
+                            source,
+                            template: Some(template.clone()),
+                            unsupported: true,
+                            reason: format!("{template}: own-program bake refused: {why}"),
+                        },
+                    );
                     log.omit(
                         &format!(
                             "{} Materials not baked (left to lower-anvil-material): {why}",
@@ -1383,12 +1422,17 @@ impl Pass for BakeAnvilMaterial {
                 .occlusion
                 .map(|o| spawn(w, texture(s, o, ColorSpace::Linear, TexRole::Mask, None)));
             if occlusion.is_some() {
-                log.approximate_on(e, &format!("{template}: {}", super::gbuffer::OCCLUSION_APPROXIMATION), 1);
+                log.approximate_on(
+                    e,
+                    &format!("{template}: {}", super::gbuffer::OCCLUSION_APPROXIMATION),
+                    1,
+                );
             }
             if baked.clipped_base {
                 log.approximate_on(e, &format!("{template}: program albedo outside 0 to 1 clipped by RGBA8 PBR base colour; HDR emission is retained separately"), 1);
             }
-            let emissive = baked.emission
+            let emissive = baked
+                .emission
                 .map(|o| spawn(w, texture(s, o, ColorSpace::Srgb, TexRole::Color, None)));
             if baked.assumed_addressing > 0 {
                 log.approximate_on(e,
@@ -1402,7 +1446,8 @@ impl Pass for BakeAnvilMaterial {
                 );
             }
             if baked.terrain_ao {
-                log.approximate_on(e,
+                log.approximate_on(
+                    e,
                     &format!(
                         "{} Materials mixing in the terrain's ambient occlusion: the stated terrain-ao",
                         template
@@ -1411,7 +1456,8 @@ impl Pass for BakeAnvilMaterial {
                 );
             }
             if baked.sediment {
-                log.approximate_on(e,
+                log.approximate_on(
+                    e,
                     &format!(
                         "{} Materials mixing in the terrain's sediments: none (sediment layer 0)",
                         template
@@ -1555,57 +1601,136 @@ mod tests {
     /// material actually installed by the pass with the common surface reading of that same program and inputs.
     #[test]
     fn road_lowering_retains_the_surface_readings_hdr_emission() {
-        use crate::components::{BoundTexture, TextureFrom};
         use super::super::gbuffer::{Reading, fixture};
-        let Some(program) = fixture::program("MAD_Road") else { return; };
+        use crate::components::{BoundTexture, TextureFrom};
+        let Some(program) = fixture::program("MAD_Road") else {
+            return;
+        };
         let shader = primase_shader_exec::ProgramShader::new(primase_dxbc::lift(&program).unwrap()).unwrap();
         let mut world = World::new();
         let mut textures = Vec::new();
         let bytes = [[128, 128, 153, 100], [128, 128, 128, 128]];
         for (slot, rgba) in bytes.into_iter().enumerate() {
             let e = world.spawn();
-            world.insert(e, texture(1, rgba.to_vec(), ColorSpace::Linear, TexRole::Mask, None));
-            textures.push(BoundTexture { key: slot as u32, shader_slot: slot as u32, parameter: None,
-                texture: Some(e), from: TextureFrom::Record });
+            world.insert(
+                e,
+                texture(1, rgba.to_vec(), ColorSpace::Linear, TexRole::Mask, None),
+            );
+            textures.push(BoundTexture {
+                key: slot as u32,
+                shader_slot: slot as u32,
+                parameter: None,
+                texture: Some(e),
+                from: TextureFrom::Record,
+            });
         }
-        let mut material = AnvilMaterial { index_id: 1, template: None, template_name: Some("MAD_Road".into()),
-            bindings: Vec::new(), values: Vec::new(), texture_set: Vec::new(), textures,
-            defaults: Vec::new(), frame: primase_core::frame::SourceFrame::WORLD, flags: flags(), shaders: None };
+        let mut material = AnvilMaterial {
+            index_id: 1,
+            template: None,
+            template_name: Some("MAD_Road".into()),
+            bindings: Vec::new(),
+            values: Vec::new(),
+            texture_set: Vec::new(),
+            textures,
+            defaults: Vec::new(),
+            frame: primase_core::frame::SourceFrame::WORLD,
+            flags: flags(),
+            shaders: None,
+        };
         for &row in ROAD.rows.iter().filter(|&&r| r < 13) {
-            let value = match row { 1 => 0.6, 2 => 8.0, 5 | 10 | 11 => 1.0, 8 => 0.2, 9 => 0.5, _ => 0.0 };
-            material.bindings.push((row, MaterialBinding::Scalar { vec4: row }));
+            let value = match row {
+                1 => 0.6,
+                2 => 8.0,
+                5 | 10 | 11 => 1.0,
+                8 => 0.2,
+                9 => 0.5,
+                _ => 0.0,
+            };
+            material
+                .bindings
+                .push((row, MaterialBinding::Scalar { vec4: row }));
             material.values.push((row, MaterialValue::Float(value)));
         }
-        material.bindings.push((13, MaterialBinding::UvTransform { vec4: 13 }));
-        material.values.push((13, MaterialValue::Floats(vec![1.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0])));
+        material
+            .bindings
+            .push((13, MaterialBinding::UvTransform { vec4: 13 }));
+        material.values.push((
+            13,
+            MaterialValue::Floats(vec![1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        ));
         let mut rows = vec![[0.0; 4]; 16];
-        for (row, value) in material_rows(&material).unwrap() { rows[row as usize] = value; }
+        for (row, value) in material_rows(&material).unwrap() {
+            rows[row as usize] = value;
+        }
         let sampled = bytes.map(|b| b.map(|v| f32::from(v) / 255.0));
-        let output = fixture::execute(&shader, &rows, &[(75, sampled[0]), (76, sampled[1]), (23, [1.0; 4])]);
-        let expected = Reading::new(shader.interface(), 1).unwrap().read(|target| {
-            output.outputs.get(target).zip(output.output_masks.get(target)).map(|(v, m)| (v.map(f32::from_bits), *m))
-        }).unwrap();
-        assert!(expected.emission.iter().any(|v| *v > 1.0), "fixture must discriminate dropped/clipped emission");
+        let output = fixture::execute(
+            &shader,
+            &rows,
+            &[(75, sampled[0]), (76, sampled[1]), (23, [1.0; 4])],
+        );
+        let expected = Reading::new(shader.interface(), 1)
+            .unwrap()
+            .read(|target| {
+                output
+                    .outputs
+                    .get(target)
+                    .zip(output.output_masks.get(target))
+                    .map(|(v, m)| (v.map(f32::from_bits), *m))
+            })
+            .unwrap();
+        assert!(
+            expected.emission.iter().any(|v| *v > 1.0),
+            "fixture must discriminate dropped/clipped emission"
+        );
         let shaders = world.spawn();
-        world.insert(shaders, AnvilShaders { pixel: vec![(0x40_0000, 0)], vertex: Vec::new(), programs: vec![program], feature_node: Vec::new() });
+        world.insert(
+            shaders,
+            AnvilShaders {
+                pixel: vec![(0x40_0000, 0)],
+                vertex: Vec::new(),
+                programs: vec![program],
+                feature_node: Vec::new(),
+            },
+        );
         material.shaders = Some(shaders);
-        let e = world.spawn(); world.insert(e, material);
-        let pass = BakeAnvilMaterial { size: 2, normal_green: NormalGreen::Up, shader_uv: ShaderUv::TexCoord,
-            mip_bias: 0.0, terrain_ao: 0.5, sun_elevation: 45.0, view_cosine: 0.7,
-            camera_distance: 1_000_000.0, skin_tone: None, unstated_address: UnstatedAddress::Wrap };
-        let mut log = PassLog::default(); pass.run(&mut world, &mut log).unwrap();
+        let e = world.spawn();
+        world.insert(e, material);
+        let pass = BakeAnvilMaterial {
+            size: 2,
+            normal_green: NormalGreen::Up,
+            shader_uv: ShaderUv::TexCoord,
+            mip_bias: 0.0,
+            terrain_ao: 0.5,
+            sun_elevation: 45.0,
+            view_cosine: 0.7,
+            camera_distance: 1_000_000.0,
+            skin_tone: None,
+            unstated_address: UnstatedAddress::Wrap,
+        };
+        let mut log = PassLog::default();
+        pass.run(&mut world, &mut log).unwrap();
         let pbr = world.get::<PbrMaterial>(e).unwrap_or_else(|| panic!("{log:?}"));
-        let emissive = world.get::<Texture>(pbr.emissive_texture.as_ref().expect("emission map").texture).unwrap();
+        let emissive = world
+            .get::<Texture>(pbr.emissive_texture.as_ref().expect("emission map").texture)
+            .unwrap();
         assert_eq!(emissive.color_space, ColorSpace::Srgb);
         for pixel in emissive.levels[0].as_chunks::<4>().0 {
-            for (k, ((&channel, &factor), &expected)) in pixel[..3].iter()
-                .zip(pbr.emissive.iter()).zip(expected.emission.iter()).enumerate() {
+            for (k, ((&channel, &factor), &expected)) in pixel[..3]
+                .iter()
+                .zip(pbr.emissive.iter())
+                .zip(expected.emission.iter())
+                .enumerate()
+            {
                 let got = primase_image::srgb8_to_linear(channel) as f32 * factor * pbr.emissive_strength;
-                assert!((got - expected).abs() <= 0.009 * pbr.emissive_strength,
-                    "emission lane {k}: {got}, surface {expected}");
+                assert!(
+                    (got - expected).abs() <= 0.009 * pbr.emissive_strength,
+                    "emission lane {k}: {got}, surface {expected}"
+                );
             }
         }
-        let orm = world.get::<Texture>(pbr.metallic_roughness_texture.as_ref().unwrap().texture).unwrap();
+        let orm = world
+            .get::<Texture>(pbr.metallic_roughness_texture.as_ref().unwrap().texture)
+            .unwrap();
         assert_eq!(orm.levels[0][1], unorm8(expected.roughness));
         assert_eq!(orm.levels[0][2], unorm8(expected.metallic));
     }

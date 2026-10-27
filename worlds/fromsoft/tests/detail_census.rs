@@ -84,7 +84,11 @@ fn install_and_decoder() -> Result<Option<(std::path::PathBuf, Install, primase_
     ) else {
         return Ok(None);
     };
-    let install = Install::new(root.clone(), Game::EldenRing, Keys::from_folder(keys, Game::EldenRing)?);
+    let install = Install::new(
+        root.clone(),
+        Game::EldenRing,
+        Keys::from_folder(keys, Game::EldenRing)?,
+    );
     Ok(Some((root, install, common::oodle(dll)?)))
 }
 
@@ -140,7 +144,10 @@ fn elden_ring_detail_blend_programs_by_family_and_switch() -> Result<()> {
             .iter()
             .map(|s| s.map_or("-".to_owned(), |n| n.to_string()))
             .collect();
-        println!("FAMILY {name} programs {programs} gbuffer {gbuffer} switches [{}]", switches.join(", "));
+        println!(
+            "FAMILY {name} programs {programs} gbuffer {gbuffer} switches [{}]",
+            switches.join(", ")
+        );
         // the pass's verdict on the shader of this family (the bundle's shader name is the family without a pass)
         let verdict = match family(name) {
             Some(Ok(game)) => format!("derived ({game:?})"),
@@ -149,7 +156,10 @@ fn elden_ring_detail_blend_programs_by_family_and_switch() -> Result<()> {
         };
         println!("VERDICT {name} {verdict}");
     }
-    assert!(!families.is_empty(), "the install holds no C[DetailBlend] program");
+    assert!(
+        !families.is_empty(),
+        "the install holds no C[DetailBlend] program"
+    );
     Ok(())
 }
 
@@ -186,8 +196,10 @@ fn detail_blend_materials_of_characters_by_program() -> Result<()> {
         let install = match game {
             Game::EldenRing => elden.clone(),
             Game::Sekiro => {
-                let (Some(root), Some(keys)) = (sekiro_install.clone(), primase_testdata::keys(primase_testdata::Game::Sekiro))
-                else {
+                let (Some(root), Some(keys)) = (
+                    sekiro_install.clone(),
+                    primase_testdata::keys(primase_testdata::Game::Sekiro),
+                ) else {
                     println!("SKIPPED sekiro: no install or keys configured");
                     continue;
                 };
@@ -198,7 +210,9 @@ fn detail_blend_materials_of_characters_by_program() -> Result<()> {
         let mut by_program: BTreeMap<String, (usize, usize, BTreeMap<String, usize>)> = BTreeMap::new();
         for id in &ids {
             let mut world = World::default();
-            if let Err(e) = sekiro::read_character_with(&install, id, &decoder, CharacterOptions::default(), &mut world) {
+            if let Err(e) =
+                sekiro::read_character_with(&install, id, &decoder, CharacterOptions::default(), &mut world)
+            {
                 println!("UNREAD {game:?} {id}: {e}");
                 continue;
             }
@@ -216,9 +230,10 @@ fn detail_blend_materials_of_characters_by_program() -> Result<()> {
                 let Some(verdict) = family(&material.shader) else {
                     continue;
                 };
-                let program = material
-                    .view()
-                    .map_or_else(|| format!("{} (no definition)", material.shader), |v| v.gbuffer_program());
+                let program = material.view().map_or_else(
+                    || format!("{} (no definition)", material.shader),
+                    |v| v.gbuffer_program(),
+                );
                 let entry = by_program.entry(program.clone()).or_default();
                 entry.0 += 1;
                 let outcome: std::result::Result<String, String> = (|| {
@@ -254,10 +269,16 @@ fn detail_blend_materials_of_characters_by_program() -> Result<()> {
                         .iter()
                         .map(|(role, u)| format!("{role}={u:.1}"))
                         .collect();
-                    let transition = d.equation.proof.transition.as_ref().map_or(String::new(), |(sets, largest)| {
-                        let l: Vec<String> = largest.iter().map(|(role, u)| format!("{role}={u:.1}")).collect();
-                        format!(" transition {sets} sets {}", l.join(" "))
-                    });
+                    let transition =
+                        d.equation
+                            .proof
+                            .transition
+                            .as_ref()
+                            .map_or(String::new(), |(sets, largest)| {
+                                let l: Vec<String> =
+                                    largest.iter().map(|(role, u)| format!("{role}={u:.1}")).collect();
+                                format!(" transition {sets} sets {}", l.join(" "))
+                            });
                     Ok(format!(
                         "lowering {:?} base_saturation {} weights {} proof {}{} (bound {BOUND_UNITS})",
                         c.lowering,
@@ -281,7 +302,10 @@ fn detail_blend_materials_of_characters_by_program() -> Result<()> {
             }
         }
         for (program, (materials, fit, reasons)) in &by_program {
-            println!("SUMMARY {game:?}: {program} materials {materials} fit {fit} lack {}", materials - fit);
+            println!(
+                "SUMMARY {game:?}: {program} materials {materials} fit {fit} lack {}",
+                materials - fit
+            );
             for (reason, n) in reasons {
                 println!("SUMMARY {game:?}:   {n} x {reason}");
             }
@@ -299,7 +323,11 @@ mod splitting {
     fn a_program_name_splits_into_family_switch_and_pass() {
         assert_eq!(
             split("C[DetailBlend][Rich]_cloth_6_Gbuf_[A].ppo"),
-            ("C[DetailBlend][Rich]_cloth".to_owned(), Some(6), "Gbuf_[A]".to_owned())
+            (
+                "C[DetailBlend][Rich]_cloth".to_owned(),
+                Some(6),
+                "Gbuf_[A]".to_owned()
+            )
         );
         assert_eq!(
             split("C[DetailBlend]_0_Gbuf.ppo"),
@@ -311,7 +339,11 @@ mod splitting {
         );
         assert_eq!(
             split("C[DetailBlend][1_0_0_0][S2]_Glow[Int]_3_Gbuf.ppo"),
-            ("C[DetailBlend][1_0_0_0][S2]_Glow[Int]".to_owned(), Some(3), "Gbuf".to_owned())
+            (
+                "C[DetailBlend][1_0_0_0][S2]_Glow[Int]".to_owned(),
+                Some(3),
+                "Gbuf".to_owned()
+            )
         );
     }
 }

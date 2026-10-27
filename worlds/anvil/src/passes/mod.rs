@@ -5,24 +5,24 @@ use std::collections::BTreeMap;
 mod bake;
 mod gbuffer;
 mod surface;
-pub use surface::{BakeAnvilSurface, SurfaceSediments, BAKE_ANVIL_SURFACE};
+pub use surface::{BAKE_ANVIL_SURFACE, BakeAnvilSurface, SurfaceSediments};
 mod charts;
 mod clips;
 mod decals;
+mod far;
+mod far_terrain;
 pub mod formulas;
 mod grass;
 mod impostor;
 mod preview;
-mod far;
-mod far_terrain;
-pub use far_terrain::{LowerAnvilFarTerrain, LOWER_ANVIL_FAR_TERRAIN};
-pub use far::{SelectAnvilFarView, SELECT_ANVIL_FAR_VIEW};
+pub use far::{SELECT_ANVIL_FAR_VIEW, SelectAnvilFarView};
+pub use far_terrain::{LOWER_ANVIL_FAR_TERRAIN, LowerAnvilFarTerrain};
 mod lights;
 mod sky;
-pub use sky::{LowerAnvilSky, LOWER_ANVIL_SKY};
-pub use lights::{LowerAnvilLights, LOWER_ANVIL_LIGHTS};
-pub use preview::{SelectAnvilPreviewLod, SELECT_ANVIL_PREVIEW_LOD};
-pub use impostor::{LowerAnvilImpostor, LOWER_ANVIL_IMPOSTOR};
+pub use impostor::{LOWER_ANVIL_IMPOSTOR, LowerAnvilImpostor};
+pub use lights::{LOWER_ANVIL_LIGHTS, LowerAnvilLights};
+pub use preview::{SELECT_ANVIL_PREVIEW_LOD, SelectAnvilPreviewLod};
+pub use sky::{LOWER_ANVIL_SKY, LowerAnvilSky};
 mod listed;
 mod material;
 mod notes;
@@ -64,8 +64,8 @@ use primase_core::world::Resource;
 use primase_core::{Collider, Shape};
 use primase_core::{
     Collision, ColorSpace, Component, Entity, Instance, LodForm, Lods, Mesh, NormalBasis, NormalConvention,
-    NormalGreen, NormalX, NormalZ, Primitive, PrimitiveKeys, Semantic, Stream, Surfaces, TexFormat,
-    TexRole, Texture, Topology, Transform, World,
+    NormalGreen, NormalX, NormalZ, Primitive, PrimitiveKeys, Semantic, Stream, Surfaces, TexFormat, TexRole,
+    Texture, Topology, Transform, World,
 };
 
 use crate::components::{
@@ -469,7 +469,12 @@ impl Pass for LowerAnvilMesh {
         &[AnvilMesh::NAME]
     }
     fn provides(&self) -> &[&'static str] {
-        &[Mesh::NAME, AnvilPalette::NAME, AnvilLayout::NAME, PrimitiveKeys::NAME]
+        &[
+            Mesh::NAME,
+            AnvilPalette::NAME,
+            AnvilLayout::NAME,
+            PrimitiveKeys::NAME,
+        ]
     }
     fn removes(&self) -> &[&'static str] {
         &[AnvilMesh::NAME]
@@ -3053,12 +3058,12 @@ pub fn register(reg: &mut PassRegistry) {
         &LOWER_ANVIL_TERRAIN,
         &LOWER_ANVIL_FAR_TERRAIN,
         &LOWER_ANVIL_MESH,
-          &LOWER_ANVIL_IMPOSTOR,
-          &LOWER_ANVIL_LIGHTS,
-          &LOWER_ANVIL_SKY,
+        &LOWER_ANVIL_IMPOSTOR,
+        &LOWER_ANVIL_LIGHTS,
+        &LOWER_ANVIL_SKY,
         &NOTE_ANVIL_CONTENT,
         &SELECT_ANVIL_PREVIEW_LOD,
-          &SELECT_ANVIL_FAR_VIEW,
+        &SELECT_ANVIL_FAR_VIEW,
     ] {
         reg.add(spec);
     }

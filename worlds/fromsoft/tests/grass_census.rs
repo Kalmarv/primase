@@ -57,7 +57,13 @@ fn the_grass_the_maps_name() -> Result<()> {
                 Some(t) => println!(
                     "row {map} {id} parts {parts} model {:?} model1 {:?} simple {:?} flat {:?} billboard {:?} density {} \
                      spacing {} lod_range {}",
-                    t.model0, t.model1, t.simple_model, t.flat_texture, t.billboard_texture, t.base_density, t.spacing,
+                    t.model0,
+                    t.model1,
+                    t.simple_model,
+                    t.flat_texture,
+                    t.billboard_texture,
+                    t.base_density,
+                    t.spacing,
                     t.lod_range
                 ),
                 None => println!("missing {map} {id} parts {parts}"),

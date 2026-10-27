@@ -321,10 +321,7 @@ mod tests {
     fn the_table_is_sorted_and_names_the_known_components() {
         assert!(COMPONENT_TYPES.windows(2).all(|w| w[0].0 < w[1].0));
         assert_eq!(component_name(0xEC65_8D29), Some("Visual"));
-        assert_eq!(
-            component_name(0xC177_D702),
-            Some("RigidBodyComponent")
-        );
+        assert_eq!(component_name(0xC177_D702), Some("RigidBodyComponent"));
         assert!(!is_component_type(0x4AEC_3476));
     }
 }

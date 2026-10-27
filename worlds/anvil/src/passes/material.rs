@@ -182,7 +182,9 @@ use crate::components::{
 
 mod terms;
 
-pub(super) fn uv_motion_notice(f: &[f32]) -> Option<String> { terms::uv_motion(f) }
+pub(super) fn uv_motion_notice(f: &[f32]) -> Option<String> {
+    terms::uv_motion(f)
+}
 
 /// How the alpha channel is drawn: the program's statement.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1125,14 +1127,20 @@ impl Inputs<'_> {
 
 /// Static shader rows, shared with the program binding and executor bake: `S R uv + translation` (module §UV).
 pub(super) fn static_uv_rows(f: &[f32]) -> Result<[[f32; 4]; 2], &'static str> {
-    let &[su, sv, tu, tv, speed_u, speed_v, t, speed_t] = f else { return Err("not 8 floats"); };
-    if f.iter().any(|v| !v.is_finite()) { return Err("non-finite UV transform"); }
+    let &[su, sv, tu, tv, speed_u, speed_v, t, speed_t] = f else {
+        return Err("not 8 floats");
+    };
+    if f.iter().any(|v| !v.is_finite()) {
+        return Err("non-finite UV transform");
+    }
     if (speed_u, speed_v, speed_t) != (0.0, 0.0, 0.0) {
         return Err("moving (the time term isn't established)");
     }
     let (sin, cos) = t.sin_cos();
-    Ok([[su * cos, if t == 0.0 { 0.0 } else { -su * sin }, tu, 0.0],
-        [if t == 0.0 { 0.0 } else { sv * sin }, sv * cos, tv, 0.0]])
+    Ok([
+        [su * cos, if t == 0.0 { 0.0 } else { -su * sin }, tu, 0.0],
+        [if t == 0.0 { 0.0 } else { sv * sin }, sv * cos, tv, 0.0],
+    ])
 }
 
 /// A UV property's eight floats as a transform of the mesh's `TexCoord(0)`: `None` for identity, or a named refusal.
@@ -1142,7 +1150,9 @@ pub(super) fn uv_transform(f: &[f32], shader_uv: ShaderUv) -> Result<Option<UvTr
         return Err("not 8 floats");
     };
     if t != 0.0 && su != sv {
-        return Err("rotated with unequal scales: shader S R cannot be represented by core TextureRef's R S; a surface bake is required");
+        return Err(
+            "rotated with unequal scales: shader S R cannot be represented by core TextureRef's R S; a surface bake is required",
+        );
     }
     if (su, sv, tu, tv, t) == (1.0, 1.0, 0.0, 0.0, 0.0) {
         return Ok(None);
@@ -1167,8 +1177,12 @@ pub(super) fn uv_transform(f: &[f32], shader_uv: ShaderUv) -> Result<Option<UvTr
 /// The same transfer as the program binding: the TextureMap's u32 at 25 where present, otherwise the core texture's.
 pub(super) fn srgb(w: &World, e: Entity) -> bool {
     w.get::<AnvilTextureMap>(e).map_or_else(
-        || w.get::<Texture>(e).map(|t| t.color_space)
-            .or_else(|| w.get::<primase_core::TextureLayers>(e).map(|t| t.color_space)) == Some(ColorSpace::Srgb),
+        || {
+            w.get::<Texture>(e)
+                .map(|t| t.color_space)
+                .or_else(|| w.get::<primase_core::TextureLayers>(e).map(|t| t.color_space))
+                == Some(ColorSpace::Srgb)
+        },
         |t| t.field_25 == 1,
     )
 }
@@ -1279,8 +1293,10 @@ impl Pass for LowerAnvilMaterial {
                 continue;
             };
             let name = m.template_name.clone().unwrap_or_default();
-            let earlier_refusal = w.get::<crate::components::AnvilRenderStatus>(e)
-                .filter(|status| status.unsupported).map(|status| status.reason.clone());
+            let earlier_refusal = w
+                .get::<crate::components::AnvilRenderStatus>(e)
+                .filter(|status| status.unsupported)
+                .map(|status| status.reason.clone());
             let i = Inputs { m: &m };
             let surface_notices = terms::notices(&i);
             let mut placeholder_used = false;
@@ -1801,7 +1817,13 @@ impl Pass for LowerAnvilMaterial {
                         };
                         set_normal(w, n, normal);
                         if occlusion.is_some() {
-                            log.approximate(&format!("{name} layer {which}: {}", super::gbuffer::OCCLUSION_APPROXIMATION), 1);
+                            log.approximate(
+                                &format!(
+                                    "{name} layer {which}: {}",
+                                    super::gbuffer::OCCLUSION_APPROXIMATION
+                                ),
+                                1,
+                            );
                         }
                         let layer = w.spawn();
                         if let Some(Name(material)) = w.get::<Name>(e).cloned() {
@@ -2094,7 +2116,9 @@ impl Pass for LowerAnvilMaterial {
                     placeholder()
                 }
             };
-            for notice in &surface_notices { log.approximate(notice, 1); }
+            for notice in &surface_notices {
+                log.approximate(notice, 1);
+            }
             w.insert(e, crate::components::AnvilRenderStatus {
                 source: format!("Material {:#x}", m.index_id),
                 template: Some(name.clone()),
@@ -2446,7 +2470,7 @@ fn lowered_uv(
                 t
             }
             Err(why) => {
-                let reason=uv_motion_notice(f).unwrap_or_else(||why.to_owned());
+                let reason = uv_motion_notice(f).unwrap_or_else(|| why.to_owned());
                 log.approximate(&format!("{what} UV transforms {reason}: untransformed"), 1);
                 None
             }
@@ -2733,124 +2757,315 @@ mod tests {
 
     #[test]
     fn foliage_without_a_normal_map_is_still_the_programs_dielectric_surface() {
+        use super::super::{
+            gbuffer::fixture,
+            resolve_shaders::{output_bindings, shading_class},
+        };
         use primase_core::shader::surface::Surface;
-        use super::super::{gbuffer::fixture,resolve_shaders::{output_bindings,shading_class}};
-        for (template,reads) in [("MAD_Bark",&BARK),("MAD_Tex1_Leaves",&LEAVES),("MAD_Clutters_Grass",&GRASS)] {
-            let Some(program)=fixture::program(template) else {return;};
-            let program=primase_dxbc::lift(&program).unwrap();
-            let roles=output_bindings(&program.interface,shading_class(template),true);
-            let surface=Surface::read(roles.iter().map(|r|(r.lanes,&r.role)));
-            assert!(surface.metallic.is_none(),"{template}: layout B has no metallic term");
-            let mut w=World::new();let e=w.spawn();
-            w.insert(e,AnvilMaterial {index_id:1,template:None,template_name:Some(template.into()),
-                bindings:reads.textures.iter().map(|&(slot,key)|(key,MaterialBinding::Texture{slot}))
-                    .chain(reads.constants.iter().map(|&(row,key)|(key,MaterialBinding::Scalar{vec4:row}))).collect(),
-                values:reads.constants.iter().map(|&(_,key)|(key,MaterialValue::Float(0.0))).collect(),
-                texture_set:Vec::new(),textures:Vec::new(),defaults:Vec::new(),
-                frame:primase_core::frame::SourceFrame::WORLD,flags:MaterialFlags{blend_mode:0,
-                    alpha_display_mode:0,alpha_test_value:0,booleans:[0;35]},shaders:None});
-            let mut log=PassLog::default();
-            LowerAnvilMaterial {normal_green:NormalGreen::Up,alpha:AlphaChoice::Opaque,shader_uv:ShaderUv::TexCoord,
-                emissive_exposure:1.0,underground_view:0.5,fake_river_s:0.0,decals1_cutout:Decals1Cutout::Decal}
-                .run(&mut w,&mut log).unwrap();
-            let pbr=w.get::<PbrMaterial>(e).unwrap();
-            assert_eq!(pbr.metallic,0.0,"{template}: no map must not become metallic; {log:?}");
-            let status=w.get::<crate::components::AnvilRenderStatus>(e).unwrap();
-            assert!(!status.unsupported,"{template}: {status:?}");
+        for (template, reads) in [
+            ("MAD_Bark", &BARK),
+            ("MAD_Tex1_Leaves", &LEAVES),
+            ("MAD_Clutters_Grass", &GRASS),
+        ] {
+            let Some(program) = fixture::program(template) else {
+                return;
+            };
+            let program = primase_dxbc::lift(&program).unwrap();
+            let roles = output_bindings(&program.interface, shading_class(template), true);
+            let surface = Surface::read(roles.iter().map(|r| (r.lanes, &r.role)));
+            assert!(
+                surface.metallic.is_none(),
+                "{template}: layout B has no metallic term"
+            );
+            let mut w = World::new();
+            let e = w.spawn();
+            w.insert(
+                e,
+                AnvilMaterial {
+                    index_id: 1,
+                    template: None,
+                    template_name: Some(template.into()),
+                    bindings: reads
+                        .textures
+                        .iter()
+                        .map(|&(slot, key)| (key, MaterialBinding::Texture { slot }))
+                        .chain(
+                            reads
+                                .constants
+                                .iter()
+                                .map(|&(row, key)| (key, MaterialBinding::Scalar { vec4: row })),
+                        )
+                        .collect(),
+                    values: reads
+                        .constants
+                        .iter()
+                        .map(|&(_, key)| (key, MaterialValue::Float(0.0)))
+                        .collect(),
+                    texture_set: Vec::new(),
+                    textures: Vec::new(),
+                    defaults: Vec::new(),
+                    frame: primase_core::frame::SourceFrame::WORLD,
+                    flags: MaterialFlags {
+                        blend_mode: 0,
+                        alpha_display_mode: 0,
+                        alpha_test_value: 0,
+                        booleans: [0; 35],
+                    },
+                    shaders: None,
+                },
+            );
+            let mut log = PassLog::default();
+            LowerAnvilMaterial {
+                normal_green: NormalGreen::Up,
+                alpha: AlphaChoice::Opaque,
+                shader_uv: ShaderUv::TexCoord,
+                emissive_exposure: 1.0,
+                underground_view: 0.5,
+                fake_river_s: 0.0,
+                decals1_cutout: Decals1Cutout::Decal,
+            }
+            .run(&mut w, &mut log)
+            .unwrap();
+            let pbr = w.get::<PbrMaterial>(e).unwrap();
+            assert_eq!(
+                pbr.metallic, 0.0,
+                "{template}: no map must not become metallic; {log:?}"
+            );
+            let status = w.get::<crate::components::AnvilRenderStatus>(e).unwrap();
+            assert!(!status.unsupported, "{template}: {status:?}");
             assert!(status.reason.contains("layout B") && status.reason.contains("specular occlusion"));
         }
     }
 
     #[test]
     fn fake_without_texturemap_keeps_the_programs_declared_srgb_transfer() {
-        use crate::components::{BoundTexture, TextureFrom};
         use super::super::gbuffer::{Reading, fixture};
-        let Some(program) = fixture::program("MAD_Fake") else { return; };
+        use crate::components::{BoundTexture, TextureFrom};
+        let Some(program) = fixture::program("MAD_Fake") else {
+            return;
+        };
         let shader = primase_shader_exec::ProgramShader::new(primase_dxbc::lift(&program).unwrap()).unwrap();
         let mut w = World::new();
         let rgba = [[92, 128, 187, 211], [128, 128, 193, 170]];
         let mut textures = Vec::new();
         for (slot, pixel) in rgba.into_iter().enumerate() {
             let e = w.spawn();
-            w.insert(e, Texture { width: 1, height: 1, format: TexFormat::Rgba8Unorm,
-                levels: vec![pixel.to_vec()], color_space: ColorSpace::Srgb, role: TexRole::Color, normal: None });
-            textures.push(BoundTexture { key: slot as u32, shader_slot: slot as u32, parameter: None,
-                texture: Some(e), from: TextureFrom::Record });
+            w.insert(
+                e,
+                Texture {
+                    width: 1,
+                    height: 1,
+                    format: TexFormat::Rgba8Unorm,
+                    levels: vec![pixel.to_vec()],
+                    color_space: ColorSpace::Srgb,
+                    role: TexRole::Color,
+                    normal: None,
+                },
+            );
+            textures.push(BoundTexture {
+                key: slot as u32,
+                shader_slot: slot as u32,
+                parameter: None,
+                texture: Some(e),
+                from: TextureFrom::Record,
+            });
         }
         let e = w.spawn();
-        w.insert(e, AnvilMaterial { index_id: 1, template: None, template_name: Some("MAD_Fake".into()),
-            bindings: Vec::new(), values: Vec::new(), texture_set: Vec::new(), textures,
-            defaults: Vec::new(), frame: primase_core::frame::SourceFrame::WORLD,
-            flags: MaterialFlags { blend_mode: 0, alpha_display_mode: 0, alpha_test_value: 0, booleans: [0;35] }, shaders: None });
+        w.insert(
+            e,
+            AnvilMaterial {
+                index_id: 1,
+                template: None,
+                template_name: Some("MAD_Fake".into()),
+                bindings: Vec::new(),
+                values: Vec::new(),
+                texture_set: Vec::new(),
+                textures,
+                defaults: Vec::new(),
+                frame: primase_core::frame::SourceFrame::WORLD,
+                flags: MaterialFlags {
+                    blend_mode: 0,
+                    alpha_display_mode: 0,
+                    alpha_test_value: 0,
+                    booleans: [0; 35],
+                },
+                shaders: None,
+            },
+        );
         let sampled = rgba.map(|pixel| sampled(pixel, true).map(|v| v as f32));
         let output = fixture::execute(&shader, &[], &[(75, sampled[0]), (76, sampled[1])]);
-        let expected = Reading::new(PixelShader::interface(&shader), 1).unwrap().read(|target| {
-            output.outputs.get(target).zip(output.output_masks.get(target)).map(|(v, m)| (v.map(f32::from_bits), *m))
-        }).unwrap();
-        let pass = LowerAnvilMaterial { normal_green: NormalGreen::Up, alpha: AlphaChoice::Opaque,
-            shader_uv: ShaderUv::TexCoord, emissive_exposure: 1.0, underground_view: 0.5,
-            fake_river_s: 0.0, decals1_cutout: Decals1Cutout::Decal };
+        let expected = Reading::new(PixelShader::interface(&shader), 1)
+            .unwrap()
+            .read(|target| {
+                output
+                    .outputs
+                    .get(target)
+                    .zip(output.output_masks.get(target))
+                    .map(|(v, m)| (v.map(f32::from_bits), *m))
+            })
+            .unwrap();
+        let pass = LowerAnvilMaterial {
+            normal_green: NormalGreen::Up,
+            alpha: AlphaChoice::Opaque,
+            shader_uv: ShaderUv::TexCoord,
+            emissive_exposure: 1.0,
+            underground_view: 0.5,
+            fake_river_s: 0.0,
+            decals1_cutout: Decals1Cutout::Decal,
+        };
         pass.run(&mut w, &mut PassLog::default()).unwrap();
         let pbr = w.get::<PbrMaterial>(e).unwrap();
-        let base = w.get::<Texture>(pbr.base_color_texture.as_ref().unwrap().texture).unwrap();
+        let base = w
+            .get::<Texture>(pbr.base_color_texture.as_ref().unwrap().texture)
+            .unwrap();
         assert_eq!(base.color_space, ColorSpace::Srgb);
         for k in 0..3 {
             assert!((srgb8_to_linear(base.levels[0][k]) - f64::from(expected.base[k])).abs() < 1e-6);
         }
-        let orm = w.get::<Texture>(pbr.metallic_roughness_texture.as_ref().unwrap().texture).unwrap();
+        let orm = w
+            .get::<Texture>(pbr.metallic_roughness_texture.as_ref().unwrap().texture)
+            .unwrap();
         assert_eq!(orm.levels[0][1], byte(f64::from(expected.roughness)));
         assert_eq!(orm.levels[0][2], byte(f64::from(expected.metallic)));
     }
 
     #[test]
     fn rotated_translated_tex1_matches_the_fixture_programs_surface_sample() {
+        use super::super::{
+            gbuffer::{Reading, fixture},
+            resolve_shaders::material_constants,
+        };
         use crate::components::{BoundTexture, TextureFrom};
         use primase_core::shader::{ConstantRole, ResourceId};
         use primase_shader_exec::{Load, Sample, Sampler, Store};
-        use super::super::{gbuffer::{Reading, fixture}, resolve_shaders::material_constants};
         struct Coordinates;
         impl Sampler for Coordinates {
-            fn sample(&mut self, r: Sample) -> Result<[f32;4],String> {
-                match r.texture { 75 => Ok([0.5;4]), 76 => Ok([r.uv[0],r.uv[1],0.5,1.0]), 77 => Ok([1.0;4]),
-                    t => Err(format!("unestablished fixture t{t}")) }
+            fn sample(&mut self, r: Sample) -> Result<[f32; 4], String> {
+                match r.texture {
+                    75 => Ok([0.5; 4]),
+                    76 => Ok([r.uv[0], r.uv[1], 0.5, 1.0]),
+                    77 => Ok([1.0; 4]),
+                    t => Err(format!("unestablished fixture t{t}")),
+                }
             }
-            fn load(&mut self, _r: Load) -> Result<[u32;4],String> {Err("unexpected load".into())}
-            fn structured(&mut self, _s:u32,_e:u32,_o:u32)->Result<u32,String>{Err("unexpected buffer".into())}
-            fn store(&mut self,_r:Store)->Result<(),String>{Err("unexpected store".into())}
+            fn load(&mut self, _r: Load) -> Result<[u32; 4], String> {
+                Err("unexpected load".into())
+            }
+            fn structured(&mut self, _s: u32, _e: u32, _o: u32) -> Result<u32, String> {
+                Err("unexpected buffer".into())
+            }
+            fn store(&mut self, _r: Store) -> Result<(), String> {
+                Err("unexpected store".into())
+            }
         }
-        let Some(program) = fixture::program("MAD_Tex1") else { return; };
+        let Some(program) = fixture::program("MAD_Tex1") else {
+            return;
+        };
         let shader = primase_shader_exec::ProgramShader::new(primase_dxbc::lift(&program).unwrap()).unwrap();
         let mut w = World::new();
         let image = white_texture(&mut w);
-        let floats = vec![1.0,1.0,0.1,-0.2,0.0,0.0,0.3,0.0];
-        let material = AnvilMaterial { index_id:1,template:None,template_name:Some("MAD_Tex1".into()),
-            bindings:TEX1.reads.iter().map(|&(r,k)| (k,if r==8 {MaterialBinding::UvTransform{vec4:r}}
-                else {MaterialBinding::Scalar{vec4:r}})).collect(),
-            values:TEX1.reads.iter().map(|&(r,k)|(k,if r==8 {MaterialValue::Floats(floats.clone())}
-                else {MaterialValue::Float(0.0)})).collect(),
-            texture_set:Vec::new(),textures:(0..3).map(|slot|BoundTexture{key:slot,shader_slot:slot,
-                parameter:None,texture:Some(image),from:TextureFrom::Record}).collect(),defaults:Vec::new(),
-            frame:primase_core::frame::SourceFrame::WORLD,flags:MaterialFlags{blend_mode:0,alpha_display_mode:0,
-                alpha_test_value:0,booleans:[0;35]},shaders:None };
+        let floats = vec![1.0, 1.0, 0.1, -0.2, 0.0, 0.0, 0.3, 0.0];
+        let material = AnvilMaterial {
+            index_id: 1,
+            template: None,
+            template_name: Some("MAD_Tex1".into()),
+            bindings: TEX1
+                .reads
+                .iter()
+                .map(|&(r, k)| {
+                    (
+                        k,
+                        if r == 8 {
+                            MaterialBinding::UvTransform { vec4: r }
+                        } else {
+                            MaterialBinding::Scalar { vec4: r }
+                        },
+                    )
+                })
+                .collect(),
+            values: TEX1
+                .reads
+                .iter()
+                .map(|&(r, k)| {
+                    (
+                        k,
+                        if r == 8 {
+                            MaterialValue::Floats(floats.clone())
+                        } else {
+                            MaterialValue::Float(0.0)
+                        },
+                    )
+                })
+                .collect(),
+            texture_set: Vec::new(),
+            textures: (0..3)
+                .map(|slot| BoundTexture {
+                    key: slot,
+                    shader_slot: slot,
+                    parameter: None,
+                    texture: Some(image),
+                    from: TextureFrom::Record,
+                })
+                .collect(),
+            defaults: Vec::new(),
+            frame: primase_core::frame::SourceFrame::WORLD,
+            flags: MaterialFlags {
+                blend_mode: 0,
+                alpha_display_mode: 0,
+                alpha_test_value: 0,
+                booleans: [0; 35],
+            },
+            shaders: None,
+        };
         // Exercise the actual Game binding, rather than supplying the expected UV matrix to the program by hand.
-        let mut rows=vec![[0.0;4];10];
-        for binding in material_constants(&material,ResourceId(0),160,&mut BTreeMap::new()) {
-            if let ConstantRole::Material(words)=binding.role {
-                for (word,bits) in words.into_iter().enumerate(){
-                    let at=binding.offset as usize/4+word;rows[at/4][at%4]=f32::from_bits(bits);
+        let mut rows = vec![[0.0; 4]; 10];
+        for binding in material_constants(&material, ResourceId(0), 160, &mut BTreeMap::new()) {
+            if let ConstantRole::Material(words) = binding.role {
+                for (word, bits) in words.into_iter().enumerate() {
+                    let at = binding.offset as usize / 4 + word;
+                    rows[at / 4][at % 4] = f32::from_bits(bits);
                 }
             }
         }
-        let output=fixture::execute_with(&shader,&rows,&mut Coordinates);
-        let expected=Reading::new(PixelShader::interface(&shader),1).unwrap().read(|target|output.outputs.get(target)
-            .zip(output.output_masks.get(target)).map(|(v,m)|(v.map(f32::from_bits),*m))).unwrap();
-        let e=w.spawn();w.insert(e,material);
-        LowerAnvilMaterial { normal_green:NormalGreen::Up,alpha:AlphaChoice::Opaque,shader_uv:ShaderUv::TexCoord,
-            emissive_exposure:1.0,underground_view:0.5,fake_river_s:0.0,decals1_cutout:Decals1Cutout::Decal }
-            .run(&mut w,&mut PassLog::default()).unwrap();
-        let pbr=w.get::<PbrMaterial>(e).unwrap();
-        let uv=pbr.base_color_texture.as_ref().unwrap().transform.expect("static rotated/translated UV").apply([0.25;2]);
-        for k in 0..2 {assert!((uv[k]-expected.base[k]).abs()<1e-6,"{uv:?}, surface {:?}",expected.base);}
+        let output = fixture::execute_with(&shader, &rows, &mut Coordinates);
+        let expected = Reading::new(PixelShader::interface(&shader), 1)
+            .unwrap()
+            .read(|target| {
+                output
+                    .outputs
+                    .get(target)
+                    .zip(output.output_masks.get(target))
+                    .map(|(v, m)| (v.map(f32::from_bits), *m))
+            })
+            .unwrap();
+        let e = w.spawn();
+        w.insert(e, material);
+        LowerAnvilMaterial {
+            normal_green: NormalGreen::Up,
+            alpha: AlphaChoice::Opaque,
+            shader_uv: ShaderUv::TexCoord,
+            emissive_exposure: 1.0,
+            underground_view: 0.5,
+            fake_river_s: 0.0,
+            decals1_cutout: Decals1Cutout::Decal,
+        }
+        .run(&mut w, &mut PassLog::default())
+        .unwrap();
+        let pbr = w.get::<PbrMaterial>(e).unwrap();
+        let uv = pbr
+            .base_color_texture
+            .as_ref()
+            .unwrap()
+            .transform
+            .expect("static rotated/translated UV")
+            .apply([0.25; 2]);
+        for k in 0..2 {
+            assert!(
+                (uv[k] - expected.base[k]).abs() < 1e-6,
+                "{uv:?}, surface {:?}",
+                expected.base
+            );
+        }
     }
 
     /// Against shader rows the notes read in the world snapshot (docs/material-spec.md §12.2): the translated one as

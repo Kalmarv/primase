@@ -93,19 +93,39 @@ impl Model {
                 ),
             ),
         ]);
-        if m.vertices.iter().any(|v| v.tangent_indices.len() != v.tangents.len()) {
-            return Err(invalid("FLVER geometry", source_mesh, "tangent values and semantic indices have different counts"));
+        if m.vertices
+            .iter()
+            .any(|v| v.tangent_indices.len() != v.tangents.len())
+        {
+            return Err(invalid(
+                "FLVER geometry",
+                source_mesh,
+                "tangent values and semantic indices have different counts",
+            ));
         }
-        let tangent_sets: BTreeSet<_> = m.vertices.iter().flat_map(|v| v.tangent_indices.iter().copied()).collect();
+        let tangent_sets: BTreeSet<_> = m
+            .vertices
+            .iter()
+            .flat_map(|v| v.tangent_indices.iter().copied())
+            .collect();
         for set in tangent_sets {
             let semantic = Semantic::Tangent(set);
             let tangents = m
                 .vertices
                 .iter()
                 .map(|v| {
-                    v.tangent_indices.iter().position(|&index| index == set).and_then(|at| v.tangents.get(at))
+                    v.tangent_indices
+                        .iter()
+                        .position(|&index| index == set)
+                        .and_then(|at| v.tangents.get(at))
                         .copied()
-                        .ok_or_else(|| invalid("FLVER geometry", source_mesh, format!("partial tangent stream set {set}")))
+                        .ok_or_else(|| {
+                            invalid(
+                                "FLVER geometry",
+                                source_mesh,
+                                format!("partial tangent stream set {set}"),
+                            )
+                        })
                 })
                 .collect::<Result<Vec<_>>>()?;
             streams.insert(semantic, Stream::F32x4(tangents));
@@ -135,13 +155,18 @@ impl Model {
         for t in &mut tangents {
             *t = tangent_to_scene(*t);
         }
-        let further_tangents = streams.into_iter().filter_map(|(semantic, stream)| match (semantic, stream) {
-            (Semantic::Tangent(set), Stream::F32x4(mut tangents)) => {
-                for t in &mut tangents { *t = tangent_to_scene(*t); }
-                Some((set, tangents))
-            }
-            _ => None,
-        }).collect();
+        let further_tangents = streams
+            .into_iter()
+            .filter_map(|(semantic, stream)| match (semantic, stream) {
+                (Semantic::Tangent(set), Stream::F32x4(mut tangents)) => {
+                    for t in &mut tangents {
+                        *t = tangent_to_scene(*t);
+                    }
+                    Some((set, tangents))
+                }
+                _ => None,
+            })
+            .collect();
         let mut mesh = Mesh {
             positions,
             normals,
@@ -182,17 +207,37 @@ mod tests {
 
     fn two_tangent_model() -> Model {
         Model {
-            bones: Vec::new(), dummies: Vec::new(), version: 0x2001a, speedtree: false,
-            layouts: Vec::new(), materials: Vec::new(),
+            bones: Vec::new(),
+            dummies: Vec::new(),
+            version: 0x2001a,
+            speedtree: false,
+            layouts: Vec::new(),
+            materials: Vec::new(),
             meshes: vec![SourceMesh {
-                dynamic: false, material: 0, node: -1, palette: Vec::new(), layouts: Vec::new(),
-                vertices: (0..3).map(|i| Vertex {
-                    position: [i as f32, (i == 1) as u8 as f32, 0.0], normal: [0.0, 1.0, 0.0],
-                    tangents: vec![[1.0, 0.0, 0.0, 1.0], [0.0,1.0,0.0,1.0], [0.0, 0.0, 1.0, if i == 1 { -1.0 } else { 1.0 }]],
-                    tangent_indices: vec![0, 1, 4],
-                    ..Vertex::default()
-                }).collect(),
-                faces: vec![FaceSet { flags: 0, strip: false, cull: true, indices: vec![2, 0, 1] }],
+                dynamic: false,
+                material: 0,
+                node: -1,
+                palette: Vec::new(),
+                layouts: Vec::new(),
+                vertices: (0..3)
+                    .map(|i| Vertex {
+                        position: [i as f32, (i == 1) as u8 as f32, 0.0],
+                        normal: [0.0, 1.0, 0.0],
+                        tangents: vec![
+                            [1.0, 0.0, 0.0, 1.0],
+                            [0.0, 1.0, 0.0, 1.0],
+                            [0.0, 0.0, 1.0, if i == 1 { -1.0 } else { 1.0 }],
+                        ],
+                        tangent_indices: vec![0, 1, 4],
+                        ..Vertex::default()
+                    })
+                    .collect(),
+                faces: vec![FaceSet {
+                    flags: 0,
+                    strip: false,
+                    cull: true,
+                    indices: vec![2, 0, 1],
+                }],
             }],
         }
     }
@@ -203,8 +248,14 @@ mod tests {
         let part = model.decode(0, 0).unwrap().unwrap();
         assert_eq!(part.source_vertices, [2, 0, 1]);
         assert_eq!(part.tangents, vec![tangent_to_scene([1.0, 0.0, 0.0, 1.0]); 3]);
-        assert_eq!(part.further_tangents[&4], [2, 0, 1].map(|i| tangent_to_scene(model.meshes[0].vertices[i].tangents[2])));
-        assert_eq!(part.further_tangents[&1], vec![tangent_to_scene([0.0,1.0,0.0,1.0]);3]);
+        assert_eq!(
+            part.further_tangents[&4],
+            [2, 0, 1].map(|i| tangent_to_scene(model.meshes[0].vertices[i].tangents[2]))
+        );
+        assert_eq!(
+            part.further_tangents[&1],
+            vec![tangent_to_scene([0.0, 1.0, 0.0, 1.0]); 3]
+        );
     }
 
     #[test]
@@ -212,6 +263,12 @@ mod tests {
         let mut model = two_tangent_model();
         model.meshes[0].vertices[1].tangents.pop();
         model.meshes[0].vertices[1].tangent_indices.pop();
-        assert!(model.decode(0, 0).unwrap_err().to_string().contains("partial tangent stream set 4"));
+        assert!(
+            model
+                .decode(0, 0)
+                .unwrap_err()
+                .to_string()
+                .contains("partial tangent stream set 4")
+        );
     }
 }

@@ -60,7 +60,8 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>) -> Result<()> {
     let held: Vec<String> = (0..10_000)
         .map(|n| format!("c{n:04}"))
         .filter(|id| {
-            archive.contains(&format!("/chr/{id}.chrbnd.dcx")) || archive.contains(&format!("/chr/{id}.anibnd.dcx"))
+            archive.contains(&format!("/chr/{id}.chrbnd.dcx"))
+                || archive.contains(&format!("/chr/{id}.anibnd.dcx"))
         })
         .collect();
     let ids: Vec<&String> = (0..TAKEN.min(held.len()))
@@ -85,17 +86,23 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>) -> Result<()> {
                 }
                 let binder = Binder::read(&archive.read(&path, decoder)?, decoder)?;
                 for f in &binder.files {
-                    let leaf = f.name.as_deref().unwrap_or("").rsplit(['/', '\\']).next().unwrap_or("");
+                    let leaf = f
+                        .name
+                        .as_deref()
+                        .unwrap_or("")
+                        .rsplit(['/', '\\'])
+                        .next()
+                        .unwrap_or("");
                     let e = leaf.rsplit_once('.').map_or("", |(_, e)| e).to_ascii_lowercase();
                     let entry = ext.entry((kind.to_owned(), e)).or_default();
                     entry.0 += 1;
                     entry.1.insert(id.clone());
                 }
-                let compendium = match binder
-                    .files
-                    .iter()
-                    .find(|f| f.name.as_deref().is_some_and(|n| n.to_ascii_lowercase().ends_with(".compendium")))
-                {
+                let compendium = match binder.files.iter().find(|f| {
+                    f.name
+                        .as_deref()
+                        .is_some_and(|n| n.to_ascii_lowercase().ends_with(".compendium"))
+                }) {
                     Some(f) => Some(Compendium::read(&decoder.decode_if_dcx(&f.bytes)?)?),
                     None => None,
                 };
@@ -103,13 +110,20 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>) -> Result<()> {
                 let mut clips_read = 0;
                 for f in &binder.files {
                     let member = f.name.as_deref().unwrap_or("");
-                    let leaf = member.rsplit(['/', '\\']).next().unwrap_or(member).to_ascii_lowercase();
+                    let leaf = member
+                        .rsplit(['/', '\\'])
+                        .next()
+                        .unwrap_or(member)
+                        .to_ascii_lowercase();
                     if !leaf.ends_with(".hkx") {
                         continue;
                     }
                     if is_clip(&leaf) {
                         if clips_read == 3 {
-                            groups.entry("(clips beyond the three read)".to_owned()).or_default().0 += 1;
+                            groups
+                                .entry("(clips beyond the three read)".to_owned())
+                                .or_default()
+                                .0 += 1;
                             continue;
                         }
                         clips_read += 1;
@@ -137,15 +151,21 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>) -> Result<()> {
                         }
                     }
                     // the cloth and ragdoll reader on every file that holds either: what it read, or why not
-                    if classes.keys().any(|c| c.starts_with("hclClothData") || c.starts_with("hknpRagdollData")) {
+                    if classes
+                        .keys()
+                        .any(|c| c.starts_with("hclClothData") || c.starts_with("hknpRagdollData"))
+                    {
                         match primase_havok::cloth::read(&tag) {
                             Ok(physics) => {
-                                let sims: Vec<_> = physics.cloths.iter().flat_map(|c| &c.sim_cloths).collect();
+                                let sims: Vec<_> =
+                                    physics.cloths.iter().flat_map(|c| &c.sim_cloths).collect();
                                 let unread: BTreeSet<&str> = sims
                                     .iter()
                                     .flat_map(|s| &s.constraint_sets)
                                     .filter_map(|s| match s {
-                                        primase_havok::cloth::ConstraintSet::Unread { class } => Some(class.as_str()),
+                                        primase_havok::cloth::ConstraintSet::Unread { class } => {
+                                            Some(class.as_str())
+                                        }
                                         _ => None,
                                     })
                                     .collect();
@@ -160,7 +180,11 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>) -> Result<()> {
                                     sims.iter().map(|s| s.poses.len()).sum::<usize>(),
                                     sims.iter().map(|s| s.constraint_sets.len()).sum::<usize>(),
                                     physics.ragdolls.len(),
-                                    physics.ragdolls.iter().map(|r| r.skeleton.bones.len()).sum::<usize>(),
+                                    physics
+                                        .ragdolls
+                                        .iter()
+                                        .map(|r| r.skeleton.bones.len())
+                                        .sum::<usize>(),
                                     physics.constraints.len(),
                                 );
                             }

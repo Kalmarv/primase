@@ -191,10 +191,17 @@ fn rgb(t: [f64; 4]) -> [f64; 3] {
 
 /// Read the class actually packed by the unmodified existing program, not the class a test supplies as a role.
 fn assert_surface_class(template: &str, out: &[[f64; 4]]) {
-    let normal=out.get(1).expect("fixture G-buffer normal target");
-    let (_, class)=primase_core::shader::NormalEncoding::decode_octahedral_diamond(
-        [normal[0] as f32,normal[1] as f32,normal[2] as f32]);
-    assert_eq!(primase_anvil::passes::shading_class(template),Some(class),"{template}: program class {class}");
+    let normal = out.get(1).expect("fixture G-buffer normal target");
+    let (_, class) = primase_core::shader::NormalEncoding::decode_octahedral_diamond([
+        normal[0] as f32,
+        normal[1] as f32,
+        normal[2] as f32,
+    ]);
+    assert_eq!(
+        primase_anvil::passes::shading_class(template),
+        Some(class),
+        "{template}: program class {class}"
+    );
 }
 
 /// MAD_Tex1 (DataPC 61047, at 0x0B8247): t75 normal map, t76 diffuse, t77 mask; cb3[1..7] Metalness, Hue,
@@ -308,7 +315,7 @@ fn mad_tex1_wind() {
         uv_rows(&mut cb3, 19);
         let out = run(&s, &[(75, normal), (76, diffuse), (77, mask)], &cb3, r.texel());
         assert_surface_class("MAD_Tex1_Wind", &out);
-        worst.see("translucency, not coverage",out[3][3],cb3[18][0]);
+        worst.see("translucency, not coverage", out[3][3], cb3[18][0]);
         worst.rgb("albedo", out[0], tinted(rgb(diffuse), mask[0], hsl));
         worst.see("roughness", out[0][3], roughness(normal[3], Rough::Raw));
         worst.see("metalness", out[1][3], metalness(normal[2], None));
@@ -344,9 +351,13 @@ fn mad_bark() {
         assert_surface_class("MAD_Bark", &out);
         worst.rgb("albedo", out[0], rgb(diffuse));
         worst.see("roughness", out[0][3], roughness(normal[3], Rough::Raw));
-        worst.see("occlusion including vertex alpha", out[1][3], occlusion(mask[2], ao_on)*colour[3]);
-        worst.see("specular occlusion",out[2][2],1.0);
-        worst.see("translucency",out[2][3],0.0);
+        worst.see(
+            "occlusion including vertex alpha",
+            out[1][3],
+            occlusion(mask[2], ao_on) * colour[3],
+        );
+        worst.see("specular occlusion", out[2][2], 1.0);
+        worst.see("translucency", out[2][3], 0.0);
     }
     worst.check("MAD_Bark");
 }
@@ -388,12 +399,19 @@ fn mad_tex1_leaves() {
             [0.0, 0.0, 0.0, alpha],
         );
         assert_surface_class("MAD_Tex1_Leaves", &out);
-        worst.rgb("albedo including vertex AO", out[0], tint(rgb(diffuse), hue, saturation, luminosity)
-            .map(|v|v*sat(alpha+vertex_ao)));
+        worst.rgb(
+            "albedo including vertex AO",
+            out[0],
+            tint(rgb(diffuse), hue, saturation, luminosity).map(|v| v * sat(alpha + vertex_ao)),
+        );
         worst.see("roughness (mask green)", out[0][3], mask[1]);
-        worst.see("occlusion including vertex alpha", out[1][3], occlusion(mask[2], ao_on)*alpha);
-        worst.see("specular occlusion",out[2][2],mask[2]*cb3[21][0]);
-        worst.see("translucency",out[2][3],mask[0]*cb3[31][0]);
+        worst.see(
+            "occlusion including vertex alpha",
+            out[1][3],
+            occlusion(mask[2], ao_on) * alpha,
+        );
+        worst.see("specular occlusion", out[2][2], mask[2] * cb3[21][0]);
+        worst.see("translucency", out[2][3], mask[0] * cb3[31][0]);
     }
     worst.check("MAD_Tex1_Leaves");
 }
@@ -412,7 +430,9 @@ fn mad_clutters_grass() {
         let (mask, alpha, diffuse, normal, noise) = (r.texel(), r.texel(), r.texel(), r.texel(), r.texel());
         let ao_on = r.next();
         let mut cb3 = r.decoys(18);
-        if case%2==0 {set(&mut cb3,11,0.0);}
+        if case % 2 == 0 {
+            set(&mut cb3, 11, 0.0);
+        }
         set(&mut cb3, 15, 0.0);
         set(&mut cb3, 16, ao_on);
         let out = run(
@@ -425,8 +445,8 @@ fn mad_clutters_grass() {
         worst.rgb("albedo", out[0], rgb(diffuse));
         worst.see("roughness", out[0][3], roughness(normal[3], Rough::Raw));
         worst.see("occlusion", out[1][3], occlusion(mask[2], ao_on));
-        worst.see("specular occlusion including zero",out[2][2],cb3[11][0]);
-        worst.see("translucency",out[2][3],mask[0]*cb3[10][0]);
+        worst.see("specular occlusion including zero", out[2][2], cb3[11][0]);
+        worst.see("translucency", out[2][3], mask[0] * cb3[10][0]);
     }
     worst.check("MAD_Clutters_Grass");
 }
@@ -602,7 +622,7 @@ fn emissive(s: &ProgramShader, seed: u64, uv: usize, lane: usize, template: &str
             colour,
         );
         let tinted = tinted(rgb(albedo), 1.0, hsl);
-        assert_surface_class(template,&out);
+        assert_surface_class(template, &out);
         let factor = |k: usize| if vci == 1.0 { colour[k] } else { 1.0 };
         worst.rgb("albedo", out[0], [0, 1, 2].map(|k| tinted[k] * factor(k)));
         worst.see("roughness", out[0][3], roughness(normal[3], Rough::Raw));
@@ -612,8 +632,11 @@ fn emissive(s: &ProgramShader, seed: u64, uv: usize, lane: usize, template: &str
         worst.see("emission (relative)", out[2][2] / e.max(1.0), e / e.max(1.0));
         for k in 0..3 {
             // Surface::Emission::OfAlbedo uses B including RGB vertex colour; no alpha term enters emitted light.
-            worst.see("emitted colour including vertex RGB (relative)",out[0][k]*out[2][2]/e.max(1.0),
-                tinted[k]*factor(k)*e/e.max(1.0));
+            worst.see(
+                "emitted colour including vertex RGB (relative)",
+                out[0][k] * out[2][2] / e.max(1.0),
+                tinted[k] * factor(k) * e / e.max(1.0),
+            );
         }
     }
     worst.check(template);
@@ -1244,8 +1267,8 @@ fn mad_outskirt_maps_by_the_world_position() {
             .collect();
         let views: Vec<(u32, &[[u32; 4]])> = buffers.iter().map(|(s, v)| (*s, v.as_slice())).collect();
         let out = s.execute(&inputs, &views, &mut Coordinates).expect("runs");
-        let values=out.outputs.iter().map(|v|v.map(float)).collect::<Vec<_>>();
-        assert_surface_class("MAD_Outskirt",&values);
+        let values = out.outputs.iter().map(|v| v.map(float)).collect::<Vec<_>>();
+        assert_surface_class("MAD_Outskirt", &values);
         let albedo = float(out.outputs[0][0]);
         let albedo_v = float(out.outputs[0][1]);
         // the point through the placement (source frame), in core's frame, through the lowering's rows

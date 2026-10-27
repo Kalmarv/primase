@@ -48,7 +48,9 @@ impl Clm2 {
             v.expect(at + 12, &[0; 4])?;
             let n = v.u32(at + 4)? as usize;
             let offset = v.u32(at + 8)? as usize;
-            let bytes = n.checked_mul(4).ok_or_else(|| invalid(FORMAT, at + 4, "size overflow"))?;
+            let bytes = n
+                .checked_mul(4)
+                .ok_or_else(|| invalid(FORMAT, at + 4, "size overflow"))?;
             if n == 0 {
                 meshes.push(Vec::new());
                 continue;

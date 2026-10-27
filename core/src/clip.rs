@@ -41,9 +41,17 @@ use crate::{Component, Entity, Instance, JsonError, World};
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum ClipTarget {
     /// A joint of the skeleton held by `skeleton`.
-    Joint { skeleton: Entity, #[serde(deserialize_with="joint_id")] joint: JointId },
+    Joint {
+        skeleton: Entity,
+        #[serde(deserialize_with = "joint_id")]
+        joint: JointId,
+    },
     /// A morph target of the morph set held by `geometry` (a prototype's `core.morphs`).
-    Morph { geometry: Entity, #[serde(deserialize_with="morph_id")] morph: MorphId },
+    Morph {
+        geometry: Entity,
+        #[serde(deserialize_with = "morph_id")]
+        morph: MorphId,
+    },
     /// A source's scalar control by its name (its meaning is its source's).
     Control { name: String },
     /// A draw group in a source-defined scope. Core supports groups 0..64:
@@ -54,10 +62,10 @@ pub enum ClipTarget {
     MaterialParameter { materials: Vec<Entity>, name: String },
 }
 
-fn joint_id<'de,D:serde::Deserializer<'de>>(d:D)->Result<JointId,D::Error> {
+fn joint_id<'de, D: serde::Deserializer<'de>>(d: D) -> Result<JointId, D::Error> {
     u32::deserialize(d).map(JointId)
 }
-fn morph_id<'de,D:serde::Deserializer<'de>>(d:D)->Result<MorphId,D::Error> {
+fn morph_id<'de, D: serde::Deserializer<'de>>(d: D) -> Result<MorphId, D::Error> {
     u32::deserialize(d).map(MorphId)
 }
 
@@ -302,38 +310,52 @@ impl Component for Clip {
                     }
                 }
                 (ClipTarget::Control { .. }, Property::Scalar) => {}
-                (ClipTarget::DrawGroup {scope,group},Property::Visibility) => {
+                (ClipTarget::DrawGroup { scope, group }, Property::Visibility) => {
                     if scope.trim().is_empty() || *group >= 64 {
-                        return Err(format!("{what}: draw-group scope must be nonempty and group below core's limit of 64"));
+                        return Err(format!(
+                            "{what}: draw-group scope must be nonempty and group below core's limit of 64"
+                        ));
                     }
                     if c.interpolation != Interpolation::Step {
                         return Err(format!("{what}: visibility requires Step interpolation"));
                     }
-                    if c.values.iter().any(|v| ![-1.0,0.0,1.0].contains(v)) {
-                        return Err(format!("{what}: visibility values must be -1 (default), 0 (hidden) or 1 (shown)"));
+                    if c.values.iter().any(|v| ![-1.0, 0.0, 1.0].contains(v)) {
+                        return Err(format!(
+                            "{what}: visibility values must be -1 (default), 0 (hidden) or 1 (shown)"
+                        ));
                     }
                 }
-                (ClipTarget::MaterialParameter {materials,name},Property::Values(width)) => {
+                (ClipTarget::MaterialParameter { materials, name }, Property::Values(width)) => {
                     if !(1..=4).contains(&width) || name.trim().is_empty() || materials.is_empty() {
-                        return Err(format!("{what}: material parameter needs a name, targets and Values(1..=4)"));
+                        return Err(format!(
+                            "{what}: material parameter needs a name, targets and Values(1..=4)"
+                        ));
                     }
                     if c.interpolation == Interpolation::Hermite {
-                        return Err(format!("{what}: material values require Step or Linear interpolation"));
+                        return Err(format!(
+                            "{what}: material values require Step or Linear interpolation"
+                        ));
                     }
                     let mut targets = BTreeSet::new();
                     for &material in materials {
                         if !targets.insert(material) {
                             return Err(format!("{what}: repeated material target {material:?}"));
                         }
-                        let defaults = w.get::<crate::MaterialParameters>(material)
-                            .ok_or_else(|| format!("{what}: {material:?} holds no core.material_parameters default"))?;
-                        let value = defaults.0.get(name)
-                            .ok_or_else(|| format!("{what}: {material:?} has no default for material parameter {name:?}"))?;
+                        let defaults = w.get::<crate::MaterialParameters>(material).ok_or_else(|| {
+                            format!("{what}: {material:?} holds no core.material_parameters default")
+                        })?;
+                        let value = defaults.0.get(name).ok_or_else(|| {
+                            format!("{what}: {material:?} has no default for material parameter {name:?}")
+                        })?;
                         if value.len() != usize::from(width) || !value.iter().all(|v| v.is_finite()) {
-                            return Err(format!("{what}: {material:?} default for {name:?} is not {width} finite values"));
+                            return Err(format!(
+                                "{what}: {material:?} default for {name:?} is not {width} finite values"
+                            ));
                         }
-                        if !material_channels.insert((material,name)) {
-                            return Err(format!("{what}: a second channel for material {material:?} parameter {name:?}"));
+                        if !material_channels.insert((material, name)) {
+                            return Err(format!(
+                                "{what}: a second channel for material {material:?} parameter {name:?}"
+                            ));
                         }
                     }
                 }
@@ -437,8 +459,10 @@ impl Component for ClipBinding {
                 ClipTarget::Morph { geometry, .. } => {
                     driven.insert(geometry);
                 }
-                ClipTarget::Joint { .. } | ClipTarget::Control { .. }
-                    | ClipTarget::DrawGroup { .. } | ClipTarget::MaterialParameter { .. } => {}
+                ClipTarget::Joint { .. }
+                | ClipTarget::Control { .. }
+                | ClipTarget::DrawGroup { .. }
+                | ClipTarget::MaterialParameter { .. } => {}
             }
         }
         for &m in &self.meshes {
@@ -611,76 +635,112 @@ mod tests {
         assert!(w.closure([binding]).contains(&rig));
     }
 
-    fn with_display_channels() -> (World,Entity,Entity) {
-        let (mut w,clip, ..)=world();
-        let material=w.spawn();
-        w.insert(material,crate::MaterialParameters(std::collections::BTreeMap::from([("tint".into(),vec![0.25,0.5])])));
+    fn with_display_channels() -> (World, Entity, Entity) {
+        let (mut w, clip, ..) = world();
+        let material = w.spawn();
+        w.insert(
+            material,
+            crate::MaterialParameters(std::collections::BTreeMap::from([(
+                "tint".into(),
+                vec![0.25, 0.5],
+            )])),
+        );
         w.get_mut::<Clip>(clip).unwrap().channels.extend([
-            Channel { target:ClipTarget::DrawGroup {scope:"character".into(),group:63},
-                property:Property::Visibility,interpolation:Interpolation::Step,
-                times:vec![0.0,0.5,1.0],values:vec![-1.0,0.0,1.0] },
-            Channel { target:ClipTarget::MaterialParameter {materials:vec![material],name:"tint".into()},
-                property:Property::Values(2),interpolation:Interpolation::Linear,
-                times:vec![0.0,1.0],values:vec![0.25,0.5,0.75,1.0] },
+            Channel {
+                target: ClipTarget::DrawGroup {
+                    scope: "character".into(),
+                    group: 63,
+                },
+                property: Property::Visibility,
+                interpolation: Interpolation::Step,
+                times: vec![0.0, 0.5, 1.0],
+                values: vec![-1.0, 0.0, 1.0],
+            },
+            Channel {
+                target: ClipTarget::MaterialParameter {
+                    materials: vec![material],
+                    name: "tint".into(),
+                },
+                property: Property::Values(2),
+                interpolation: Interpolation::Linear,
+                times: vec![0.0, 1.0],
+                values: vec![0.25, 0.5, 0.75, 1.0],
+            },
         ]);
-        (w,clip,material)
+        (w, clip, material)
     }
 
     #[test]
     fn display_channels_roundtrip_and_keep_material_references_in_the_closure() {
-        let (w,clip,material)=with_display_channels();
-        assert!(errors(&w).is_empty(),"{:?}",errors(&w));
-        let c=w.get::<Clip>(clip).unwrap();
-        let copy:Clip=serde_json::from_value(serde_json::to_value(c).unwrap()).unwrap();
-        assert_eq!(&copy,c,"includes old joint/morph ids and new targets/properties");
-        assert_eq!(copy.channels.last().unwrap().property.width(),2);
-        let closure=w.closure([clip]);
+        let (w, clip, material) = with_display_channels();
+        assert!(errors(&w).is_empty(), "{:?}", errors(&w));
+        let c = w.get::<Clip>(clip).unwrap();
+        let copy: Clip = serde_json::from_value(serde_json::to_value(c).unwrap()).unwrap();
+        assert_eq!(
+            &copy, c,
+            "includes old joint/morph ids and new targets/properties"
+        );
+        assert_eq!(copy.channels.last().unwrap().property.width(), 2);
+        let closure = w.closure([clip]);
         assert!(closure.contains(&material));
-        let part=w.subset(&closure);
-        assert_eq!(part.get::<Clip>(clip),Some(c));
-        assert!(c.remap_primitives(&[1,0]).is_none(),"clip channels are not mesh-primitive arrays");
+        let part = w.subset(&closure);
+        assert_eq!(part.get::<Clip>(clip), Some(c));
+        assert!(
+            c.remap_primitives(&[1, 0]).is_none(),
+            "clip channels are not mesh-primitive arrays"
+        );
         assert!(errors(&part).is_empty());
     }
 
     #[test]
     fn visibility_is_step_only_three_valued_and_scope_bounded() {
-        for interpolation in [Interpolation::Linear,Interpolation::Hermite] {
-            let (mut w,c,_)=with_display_channels();
-            w.get_mut::<Clip>(c).unwrap().channels[4].interpolation=interpolation;
-            assert!(errors(&w).iter().any(|e|e.contains("visibility requires Step")));
+        for interpolation in [Interpolation::Linear, Interpolation::Hermite] {
+            let (mut w, c, _) = with_display_channels();
+            w.get_mut::<Clip>(c).unwrap().channels[4].interpolation = interpolation;
+            assert!(errors(&w).iter().any(|e| e.contains("visibility requires Step")));
         }
-        for value in [-2.0,0.5,2.0,f32::NAN] {
-            let (mut w,c,_)=with_display_channels();
-            w.get_mut::<Clip>(c).unwrap().channels[4].values[1]=value;
-            assert!(errors(&w).iter().any(|e|e.contains("visibility values")));
+        for value in [-2.0, 0.5, 2.0, f32::NAN] {
+            let (mut w, c, _) = with_display_channels();
+            w.get_mut::<Clip>(c).unwrap().channels[4].values[1] = value;
+            assert!(errors(&w).iter().any(|e| e.contains("visibility values")));
         }
-        for (scope,group) in [(" ",0),("character",64)] {
-            let (mut w,c,_)=with_display_channels();
-            w.get_mut::<Clip>(c).unwrap().channels[4].target=ClipTarget::DrawGroup{scope:scope.into(),group};
-            assert!(errors(&w).iter().any(|e|e.contains("scope")));
+        for (scope, group) in [(" ", 0), ("character", 64)] {
+            let (mut w, c, _) = with_display_channels();
+            w.get_mut::<Clip>(c).unwrap().channels[4].target = ClipTarget::DrawGroup {
+                scope: scope.into(),
+                group,
+            };
+            assert!(errors(&w).iter().any(|e| e.contains("scope")));
         }
     }
 
     #[test]
     fn material_channels_require_defaults_widths_unique_targets_and_no_overlap() {
-        for width in [0,1,3,4,5] {
-            let (mut w,c,_)=with_display_channels();
-            w.get_mut::<Clip>(c).unwrap().channels[5].property=Property::Values(width);
-            assert!(!errors(&w).is_empty(),"default width 2 does not match {width}");
+        for width in [0, 1, 3, 4, 5] {
+            let (mut w, c, _) = with_display_channels();
+            w.get_mut::<Clip>(c).unwrap().channels[5].property = Property::Values(width);
+            assert!(!errors(&w).is_empty(), "default width 2 does not match {width}");
         }
-        let (mut w,_c,m)=with_display_channels();
+        let (mut w, _c, m) = with_display_channels();
         w.remove::<crate::MaterialParameters>(m);
-        assert!(errors(&w).iter().any(|e|e.contains("no core.material_parameters")));
-        let (mut w,c,m)=with_display_channels();
-        w.get_mut::<Clip>(c).unwrap().channels[5].target=ClipTarget::MaterialParameter{materials:vec![m,m],name:"tint".into()};
-        assert!(errors(&w).iter().any(|e|e.contains("repeated material")));
-        let (mut w,c,_)=with_display_channels();
-        let duplicate=w.get::<Clip>(c).unwrap().channels[5].clone();
+        assert!(
+            errors(&w)
+                .iter()
+                .any(|e| e.contains("no core.material_parameters"))
+        );
+        let (mut w, c, m) = with_display_channels();
+        w.get_mut::<Clip>(c).unwrap().channels[5].target = ClipTarget::MaterialParameter {
+            materials: vec![m, m],
+            name: "tint".into(),
+        };
+        assert!(errors(&w).iter().any(|e| e.contains("repeated material")));
+        let (mut w, c, _) = with_display_channels();
+        let duplicate = w.get::<Clip>(c).unwrap().channels[5].clone();
         w.get_mut::<Clip>(c).unwrap().channels.push(duplicate);
-        assert!(errors(&w).iter().any(|e|e.contains("second channel")));
-        let (mut w,c,_)=with_display_channels();
-        w.get_mut::<Clip>(c).unwrap().channels[5].interpolation=Interpolation::Hermite;
-        assert!(errors(&w).iter().any(|e|e.contains("Step or Linear")));
+        assert!(errors(&w).iter().any(|e| e.contains("second channel")));
+        let (mut w, c, _) = with_display_channels();
+        w.get_mut::<Clip>(c).unwrap().channels[5].interpolation = Interpolation::Hermite;
+        assert!(errors(&w).iter().any(|e| e.contains("Step or Linear")));
     }
 
     #[test]

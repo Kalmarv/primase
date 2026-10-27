@@ -145,7 +145,12 @@ impl ProgramProbe {
     /// material's, as the one binding writes them (a colour times its intensity), those it states none for zero until
     /// set.
     pub fn with_material(bytes: &[u8], material: &LayeredMaterial) -> Result<Self> {
-        Self::bind(crate::Game::Sekiro, bytes, &material.view(), &render_state(material))
+        Self::bind(
+            crate::Game::Sekiro,
+            bytes,
+            &material.view(),
+            &render_state(material),
+        )
     }
 
     /// `game`'s pixel program `bytes` (the game's [`crate::Game::shader_format`]: Sekiro's DXBC, Elden Ring's DXIL) bound
@@ -163,7 +168,12 @@ impl ProgramProbe {
         Self::bind(game, bytes, material, &render_state(&Self::unstated()))
     }
 
-    fn bind(game: crate::Game, bytes: &[u8], material: &MaterialView<'_>, state: &RenderState) -> Result<Self> {
+    fn bind(
+        game: crate::Game,
+        bytes: &[u8],
+        material: &MaterialView<'_>,
+        state: &RenderState,
+    ) -> Result<Self> {
         let shader = layer_bake::program_executor(game.shader_format(), bytes)?;
         let mut world = World::default();
         let program = world.spawn();

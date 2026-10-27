@@ -313,7 +313,9 @@ impl Surface {
                 OutputRole::Metallic if s.metallic.is_none() && fits("a metallic", &[1]) => {
                     s.metallic = Some(linear);
                 }
-                OutputRole::Reflectance { encoding } if s.reflectance.is_none() && fits("a reflectance", &[3]) => {
+                OutputRole::Reflectance { encoding }
+                    if s.reflectance.is_none() && fits("a reflectance", &[3]) =>
+                {
                     s.reflectance = Some(term(encoding));
                 }
                 OutputRole::SpecularIntensity { encoding }
@@ -380,7 +382,10 @@ mod tests {
     fn each_normal_encoding_decodes_what_it_stores() {
         let n = [0.6f32, 0.0, 0.8];
         let unorm = n.map(|c| c * 0.5 + 0.5);
-        assert!(close(normal(NormalEncoding::Xyz, 0b0111).vector([n[0], n[1], n[2], 9.0]), n));
+        assert!(close(
+            normal(NormalEncoding::Xyz, 0b0111).vector([n[0], n[1], n[2], 9.0]),
+            n
+        ));
         assert!(close(
             normal(NormalEncoding::XyzUnorm, 0b0111).vector([unorm[0], unorm[1], unorm[2], 0.0]),
             n
@@ -403,7 +408,10 @@ mod tests {
         assert_eq!(long.decode([0.0, 2.0, 0.0, 0.0]), Some([0.0, 1.0, 0.0]));
         assert_eq!(long.decode([0.0; 4]), None);
         // two lanes, in lanes 2 and 3 of the output
-        assert!(close(normal(NormalEncoding::Xy, 0b1100).vector([9.0, 9.0, 0.6, 0.0]), n));
+        assert!(close(
+            normal(NormalEncoding::Xy, 0b1100).vector([9.0, 9.0, 0.6, 0.0]),
+            n
+        ));
         assert!(close(
             normal(NormalEncoding::XyUnorm, 0b1100).vector([9.0, 9.0, 0.8, 0.5]),
             n
@@ -429,7 +437,8 @@ mod tests {
         let n = [0.36f64, -0.48, 0.8];
         let bytes = NormalEncoding::encode_octahedral_diamond(n, 5);
         let lanes = bytes.map(|b| f32::from(b) / 255.0);
-        let diamond = normal(NormalEncoding::OctahedralDiamond, 0b0111).decode([lanes[0], lanes[1], lanes[2], 0.0]);
+        let diamond =
+            normal(NormalEncoding::OctahedralDiamond, 0b0111).decode([lanes[0], lanes[1], lanes[2], 0.0]);
         assert!(within(diamond.unwrap(), n.map(|c| c as f32), 0.01), "{diamond:?}");
         let (minor, payload) = (LaneAffine::UNORM, LaneAffine::new(0.25, 0.1));
         for n in [[0.36f32, -0.48, 0.8], [-0.9, 0.3, 0.3162], [0.2, -0.95, -0.24]] {
@@ -511,11 +520,17 @@ mod tests {
             },
         )]);
         assert_eq!(
-            (ambient.occlusion, ambient.ambient_occlusion.map(|t| t.place.output)),
+            (
+                ambient.occlusion,
+                ambient.ambient_occlusion.map(|t| t.place.output)
+            ),
             (None, Some(0))
         );
         assert_eq!(s.refused, ["output 5: a metallic in 2 lanes (0b0011), not 1"]);
-        assert_eq!((s.normal, s.roughness, s.reflectance, s.emission), (None, None, None, None));
+        assert_eq!(
+            (s.normal, s.roughness, s.reflectance, s.emission),
+            (None, None, None, None)
+        );
         // a forward program's colour is the base where nothing writes an albedo
         let forward = roles(&[(0b1111, OutputRole::Colour)]);
         assert_eq!(
@@ -529,7 +544,10 @@ mod tests {
         let scalar = roles(&[(0b0100, OutputRole::Emission { encoding: linear })]);
         assert!(matches!(scalar.emission, Some(Emission::OfAlbedo(_))));
         assert_eq!(
-            scalar.emission.unwrap().decode([0.0, 0.0, 2.0, 0.0], [0.5, 0.25, 1.0]),
+            scalar
+                .emission
+                .unwrap()
+                .decode([0.0, 0.0, 2.0, 0.0], [0.5, 0.25, 1.0]),
             [1.0, 0.5, 2.0]
         );
         let colour = roles(&[(0b0111, OutputRole::Emission { encoding: linear })]);

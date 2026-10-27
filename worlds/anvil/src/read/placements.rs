@@ -40,6 +40,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use primase_core::frame::SourceFrame;
 use primase_core::{Entity, Instance, Name, Transform, World};
 
+use crate::components::AnvilImpostor;
 use crate::components::{
     AnvilBounds, AnvilClip, AnvilClipBinding, AnvilClipCandidates, AnvilCollisionFilter, AnvilCollisionOnly,
     AnvilCollisionShape, AnvilDataLayers, AnvilDecalModel, AnvilDeferredDecals, AnvilEntityState, AnvilFake,
@@ -59,7 +60,6 @@ use crate::read::entity::{
     SkeletonBinding, Slot, StoredEntity, StoredEntityGroup, Visual, query,
 };
 use crate::read::grass::{GRASS_PATTERN_LIBRARY, StoredGrassLibrary};
-use crate::components::AnvilImpostor;
 use crate::read::impostor::{IMPOSTOR, StoredImpostor};
 use crate::read::lod::{LOD_SELECTOR, StoredLodSelector};
 use crate::read::material::{Payload, StoredMaterial, StoredTextureSet};
@@ -768,9 +768,14 @@ impl<'a> Placer<'a> {
         if let Some(name) = self.name(at) {
             self.world.insert(e, Name(name));
         }
-        if mesh.materials.iter().any(|&id| entry_name(self.archive, id)
-            .is_some_and(|name| matches!(name.as_str(), "MAD_MAT_FakeForest" | "MAD_MAT_FakeForest_triangle")))
-        {
+        if mesh.materials.iter().any(|&id| {
+            entry_name(self.archive, id).is_some_and(|name| {
+                matches!(
+                    name.as_str(),
+                    "MAD_MAT_FakeForest" | "MAD_MAT_FakeForest_triangle"
+                )
+            })
+        }) {
             self.world.insert(e, crate::components::AnvilFarClass::Canopy);
         }
         self.world.insert(e, mesh);
@@ -1264,13 +1269,21 @@ impl<'a> Placer<'a> {
     }
 
     /// Read an Impostor's own atlas references as well as its card table. They are independent of the Mesh proxy.
-    fn impostor(
-        &mut self, at: At, id: u64, body: &[u8], placed: &mut Placed,
-    ) -> Result<Entity, Error> {
+    fn impostor(&mut self, at: At, id: u64, body: &[u8], placed: &mut Placed) -> Result<Entity, Error> {
         let stored = StoredImpostor::parse(body).map_err(|why| Error::Impostor { at, why })?;
-        let textures = stored.maps.map(|map| map.and_then(|map| self.texture(map.id, placed)));
+        let textures = stored
+            .maps
+            .map(|map| map.and_then(|map| self.texture(map.id, placed)));
         let entity = self.prototype(at);
-        self.world.insert(entity, AnvilImpostor { index_id: id, frame: self.frame, stored, textures });
+        self.world.insert(
+            entity,
+            AnvilImpostor {
+                index_id: id,
+                frame: self.frame,
+                stored,
+                textures,
+            },
+        );
         Ok(entity)
     }
 
@@ -1353,8 +1366,12 @@ impl<'a> Placer<'a> {
                                     match self.impostor(m, reference, &r.body, placed) {
                                         Ok(entity) => {
                                             levels.push((level, entity));
-                                            distances.levels.push((level, s.levels.get(usize::from(level))
-                                                .map_or(0.0, |l| l.switch_distance())));
+                                            distances.levels.push((
+                                                level,
+                                                s.levels
+                                                    .get(usize::from(level))
+                                                    .map_or(0.0, |l| l.switch_distance()),
+                                            ));
                                         }
                                         Err(error) => {
                                             placed.refused.push((reference, error.to_string()));
@@ -1363,8 +1380,12 @@ impl<'a> Placer<'a> {
                                     }
                                 }
                                 _ => {
-                                    placed.refused.push((reference,
-                                        format!("LOD {level}: resource is missing or is neither Mesh nor Impostor")));
+                                    placed.refused.push((
+                                        reference,
+                                        format!(
+                                            "LOD {level}: resource is missing or is neither Mesh nor Impostor"
+                                        ),
+                                    ));
                                 }
                             }
                         }
@@ -1860,8 +1881,13 @@ impl<'a> Placer<'a> {
     /// object it shows or a shape its RigidBody names that can't be read is recorded in [`Placed::refused`] instead,
     /// and only what needs it is left out.
     pub fn place(&mut self, at: At, placed: &mut Placed) -> Result<(), Error> {
-        let starts = [placed.placements.len(), placed.collisions.len(), placed.lakes.len(),
-            placed.deferred_decals.len(), placed.grass.len()];
+        let starts = [
+            placed.placements.len(),
+            placed.collisions.len(),
+            placed.lakes.len(),
+            placed.deferred_decals.len(),
+            placed.grass.len(),
+        ];
         let r = self.archive.resource(at)?;
         let (e, group) = match r.type_id {
             ENTITY => (
@@ -1973,13 +1999,24 @@ impl<'a> Placer<'a> {
             .chain(e.decals().map(|v| (v, true, None)))
             .chain(grass.iter().map(|(v, g)| (v, false, Some(*g))))
         {
-            if let Shown::Raw { kind: crate::read::entity::LIGHT_INSTANCE, bytes, id } = &v.instance {
+            if let Shown::Raw {
+                kind: crate::read::entity::LIGHT_INSTANCE,
+                bytes,
+                id,
+            } = &v.instance
+            {
                 let read = (|| -> Result<(u64, crate::read::light::StoredSpotLight), String> {
                     let id = crate::read::light::instance_reference(bytes)?;
-                    let at = self.archive.find(id).ok_or("light reference is absent from the archive")?;
+                    let at = self
+                        .archive
+                        .find(id)
+                        .ok_or("light reference is absent from the archive")?;
                     let resource = self.archive.resource(at).map_err(|e| e.to_string())?;
                     if resource.type_id != crate::read::light::SPOT_LIGHT {
-                        return Err(format!("light {id:#x} is type {:#x}, not SpotLight", resource.type_id));
+                        return Err(format!(
+                            "light {id:#x} is type {:#x}, not SpotLight",
+                            resource.type_id
+                        ));
                     }
                     Ok((id, crate::read::light::StoredSpotLight::parse(&resource.body)?))
                 })();
@@ -1987,10 +2024,16 @@ impl<'a> Placer<'a> {
                     Ok((index_id, stored)) => {
                         let light = self.world.spawn();
                         self.world.insert(light, Name(name.clone()));
-                        self.world.insert(light, self.frame.transform(&transform(&e.matrix, e.scale)));
-                        self.world.insert(light, crate::components::AnvilSpotLight { index_id, stored });
-                        if let Some(layers) = &layers { self.world.insert(light, layers.clone()); }
-                        if let Some(state) = state { self.world.insert(light, state); }
+                        self.world
+                            .insert(light, self.frame.transform(&transform(&e.matrix, e.scale)));
+                        self.world
+                            .insert(light, crate::components::AnvilSpotLight { index_id, stored });
+                        if let Some(layers) = &layers {
+                            self.world.insert(light, layers.clone());
+                        }
+                        if let Some(state) = state {
+                            self.world.insert(light, state);
+                        }
                         self.world.insert(light, bounds);
                         placed.placements.push(light);
                     }
@@ -2001,14 +2044,19 @@ impl<'a> Placer<'a> {
             if let Shown::Raw { kind, id, .. } = &v.instance {
                 let marker = self.world.spawn();
                 self.world.insert(marker, Name(name.clone()));
-                self.world.insert(marker, self.frame.transform(&transform(&e.matrix, e.scale)));
+                self.world
+                    .insert(marker, self.frame.transform(&transform(&e.matrix, e.scale)));
                 let target = v.object.and_then(|r| entry_name(self.archive, r.id));
                 self.world.insert(marker, crate::components::AnvilRenderStatus {
                     source: format!("Visual instance {id:#x}"), template: None, unsupported: true,
                     reason: format!("Visual instance class {kind:#010x}, target {target:?}: runtime-generated visual; no static geometry decoded"),
                 });
-                if let Some(layers) = &layers { self.world.insert(marker, layers.clone()); }
-                if let Some(state) = state { self.world.insert(marker, state); }
+                if let Some(layers) = &layers {
+                    self.world.insert(marker, layers.clone());
+                }
+                if let Some(state) = state {
+                    self.world.insert(marker, state);
+                }
                 self.world.insert(marker, bounds);
                 placed.placements.push(marker);
                 continue;
@@ -2141,18 +2189,32 @@ impl<'a> Placer<'a> {
         // Runtime effects retain a spatial, named explanation rather than becoming a silently empty catalog row.
         // Their emission timing and property programs are not static geometry, so no particle picture is invented.
         for component in &e.components {
-            if !matches!(component.kind, 0xD2BF_93A6 | 0x713F_0C7D) { continue; }
+            if !matches!(component.kind, 0xD2BF_93A6 | 0x713F_0C7D) {
+                continue;
+            }
             let marker = self.world.spawn();
             let class = crate::read::component_types::component_name(component.kind).unwrap_or("effect");
             self.world.insert(marker, Name(format!("{name}: {class}")));
-            self.world.insert(marker, self.frame.transform(&transform(&e.matrix, e.scale)));
-            self.world.insert(marker, primase_core::Marker { kind: "effect_emitter".into(), ground: None, yaw: None });
+            self.world
+                .insert(marker, self.frame.transform(&transform(&e.matrix, e.scale)));
+            self.world.insert(
+                marker,
+                primase_core::Marker {
+                    kind: "effect_emitter".into(),
+                    ground: None,
+                    yaw: None,
+                },
+            );
             self.world.insert(marker, crate::components::AnvilRenderStatus {
                 source: format!("component {:#x}", component.id), template: None, unsupported: true,
                 reason: format!("{class}: runtime emitter/property program; marked at its authored transform; particle simulation and FX property evaluation unavailable"),
             });
-            if let Some(layers) = &layers { self.world.insert(marker, layers.clone()); }
-            if let Some(state) = state { self.world.insert(marker, state); }
+            if let Some(layers) = &layers {
+                self.world.insert(marker, layers.clone());
+            }
+            if let Some(state) = state {
+                self.world.insert(marker, state);
+            }
             self.world.insert(marker, bounds);
             placed.placements.push(marker);
         }
@@ -2393,26 +2455,55 @@ impl<'a> Placer<'a> {
         }
         // Preserve bounded opaque component bodies once per source owner, not once per mesh instance.
         // Water/decal Raw bodies already have typed readers above; other Raw bodies only had length rules.
-        let components: Vec<_> = e.components.iter().filter_map(|c| {
-            let (bytes, status) = match &c.body {
-                ComponentBody::Raw(bytes) if !matches!(c.kind, WATER_COMPONENT | HOUDINI_DECAL_INSTANCER | STATIC_DDECAL) =>
-                    (bytes, "length-rule-only; semantic fields not decoded".to_owned()),
-                ComponentBody::Unread(bytes) => (bytes, "unread; extent delimited by component headers".to_owned()),
-                ComponentBody::Refused { bytes, why } => (bytes, format!("refused: {}", why.reason())),
-                _ => return None,
-            };
-            Some(crate::components::SourceComponent { type_id: c.kind, id: c.id, status, bytes: bytes.clone() })
-        }).collect();
+        let components: Vec<_> = e
+            .components
+            .iter()
+            .filter_map(|c| {
+                let (bytes, status) = match &c.body {
+                    ComponentBody::Raw(bytes)
+                        if !matches!(c.kind, WATER_COMPONENT | HOUDINI_DECAL_INSTANCER | STATIC_DDECAL) =>
+                    {
+                        (bytes, "length-rule-only; semantic fields not decoded".to_owned())
+                    }
+                    ComponentBody::Unread(bytes) => {
+                        (bytes, "unread; extent delimited by component headers".to_owned())
+                    }
+                    ComponentBody::Refused { bytes, why } => (bytes, format!("refused: {}", why.reason())),
+                    _ => return None,
+                };
+                Some(crate::components::SourceComponent {
+                    type_id: c.kind,
+                    id: c.id,
+                    status,
+                    bytes: bytes.clone(),
+                })
+            })
+            .collect();
         if !components.is_empty() {
-            let lists = [&placed.placements, &placed.collisions, &placed.lakes, &placed.deferred_decals, &placed.grass];
-            let occurrences: Vec<_> = lists.into_iter().zip(starts)
-                .flat_map(|(list, start)| list.iter().skip(start).copied()).collect();
+            let lists = [
+                &placed.placements,
+                &placed.collisions,
+                &placed.lakes,
+                &placed.deferred_decals,
+                &placed.grass,
+            ];
+            let occurrences: Vec<_> = lists
+                .into_iter()
+                .zip(starts)
+                .flat_map(|(list, start)| list.iter().skip(start).copied())
+                .collect();
             let target = self.world.spawn();
-            self.world.insert(target, Name(format!("{name} source components")));
-            self.world.insert(target, self.frame.transform(&transform(&e.matrix, e.scale)));
+            self.world
+                .insert(target, Name(format!("{name} source components")));
+            self.world
+                .insert(target, self.frame.transform(&transform(&e.matrix, e.scale)));
             self.world.insert(target, bounds);
-            if let Some(layers) = &layers { self.world.insert(target, layers.clone()); }
-            if let Some(state) = state { self.world.insert(target, state); }
+            if let Some(layers) = &layers {
+                self.world.insert(target, layers.clone());
+            }
+            if let Some(state) = state {
+                self.world.insert(target, state);
+            }
             if occurrences.is_empty() {
                 self.world.insert(target, crate::components::AnvilRenderStatus {
                     source: format!("Entity {:#x}", r.class_id), template: None, unsupported: true,
@@ -2422,9 +2513,16 @@ impl<'a> Placer<'a> {
             // Include the source record in listed/state selection, and retain it through each occurrence's closure.
             placed.placements.push(target);
             for occurrence in occurrences {
-                self.world.insert(occurrence, crate::components::AnvilSourceOwner { source: target });
+                self.world
+                    .insert(occurrence, crate::components::AnvilSourceOwner { source: target });
             }
-            self.world.insert(target, crate::components::AnvilSourceComponents { owner: r.class_id, components });
+            self.world.insert(
+                target,
+                crate::components::AnvilSourceComponents {
+                    owner: r.class_id,
+                    components,
+                },
+            );
         }
         Ok(())
     }

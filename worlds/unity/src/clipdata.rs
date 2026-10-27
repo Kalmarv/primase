@@ -169,7 +169,10 @@ pub struct ClipLowering {
 
 /// A channel value or tangent of `property` in the world's frame.
 fn convert(property: Property, v: &[f32]) -> Vec<f32> {
-    if matches!(property, Property::Scalar | Property::Visibility | Property::Values(_)) {
+    if matches!(
+        property,
+        Property::Scalar | Property::Visibility | Property::Values(_)
+    ) {
         return v.to_vec();
     }
     let rest = match property {
@@ -188,7 +191,9 @@ fn convert(property: Property, v: &[f32]) -> Vec<f32> {
             rotation: [0.0, 0.0, 0.0, 1.0],
             scale: [v[0], v[1], v[2]],
         },
-        Property::Scalar | Property::Visibility | Property::Values(_) => unreachable!("non-spatial values returned above"),
+        Property::Scalar | Property::Visibility | Property::Values(_) => {
+            unreachable!("non-spatial values returned above")
+        }
     };
     match rest.converted(&UNITY) {
         Rest::Trs {
@@ -199,7 +204,9 @@ fn convert(property: Property, v: &[f32]) -> Vec<f32> {
             Property::Translation => translation.to_vec(),
             Property::Rotation => rotation.to_vec(),
             Property::Scale => scale.to_vec(),
-            Property::Scalar | Property::Visibility | Property::Values(_) => unreachable!("non-spatial values returned above"),
+            Property::Scalar | Property::Visibility | Property::Values(_) => {
+                unreachable!("non-spatial values returned above")
+            }
         },
         Rest::Affine(_) => unreachable!("a TRS converts to a TRS"),
     }

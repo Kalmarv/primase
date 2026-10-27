@@ -17,7 +17,10 @@ fn triangle() -> Mesh {
     );
     streams.insert(Semantic::Normal, Stream::F32x3(vec![[0.0, 1.0, 0.0]; 3]));
     streams.insert(Semantic::Tangent(0), Stream::F32x4(vec![[1.0, 0.0, 0.0, 1.0]; 3]));
-    streams.insert(Semantic::Tangent(1), Stream::F32x4(vec![[0.0, 0.0, 1.0, -1.0]; 3]));
+    streams.insert(
+        Semantic::Tangent(1),
+        Stream::F32x4(vec![[0.0, 0.0, 1.0, -1.0]; 3]),
+    );
     Mesh::new(vec![Primitive {
         topology: Topology::Triangles,
         streams,
@@ -28,8 +31,14 @@ fn triangle() -> Mesh {
 
 #[test]
 fn indexed_tangents_use_the_same_json_shape_as_indexed_coordinates() {
-    assert_eq!(serde_json::to_value(Semantic::Tangent(0)).unwrap(), serde_json::json!({"Tangent": 0}));
-    assert_eq!(serde_json::to_value(Semantic::Tangent(1)).unwrap(), serde_json::json!({"Tangent": 1}));
+    assert_eq!(
+        serde_json::to_value(Semantic::Tangent(0)).unwrap(),
+        serde_json::json!({"Tangent": 0})
+    );
+    assert_eq!(
+        serde_json::to_value(Semantic::Tangent(1)).unwrap(),
+        serde_json::json!({"Tangent": 1})
+    );
     assert_eq!(<Mesh as primase_core::Component>::VERSION, 2);
 }
 

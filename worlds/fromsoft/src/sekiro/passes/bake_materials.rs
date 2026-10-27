@@ -74,7 +74,9 @@ pub const BAKE_FROMSOFT_MATERIALS: PassSpec = PassSpec {
             PixelCap::parse("max-size", g.required("max-size"))?,
             Seconds::parse("sample-time", g.required("sample-time"))?,
         );
-        Ok(Box::new(pass.with_cache(g.optional_choice::<Cache>("cache") == Some(Cache::On))))
+        Ok(Box::new(pass.with_cache(
+            g.optional_choice::<Cache>("cache") == Some(Cache::On),
+        )))
     },
 };
 

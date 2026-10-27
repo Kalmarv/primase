@@ -79,7 +79,8 @@ fn round_trip_geometry_and_transforms() {
     // Regular and mirrored: the transform exactly, the prototype's mesh shared, geometry bit-exact (glTF reverses
     // the winding of a negative-determinant node itself).
     let regular = node_by_source(doc, "plac:0").unwrap();
-    let attributes = &doc["meshes"][regular["mesh"].as_u64().unwrap() as usize]["primitives"][0]["attributes"];
+    let attributes =
+        &doc["meshes"][regular["mesh"].as_u64().unwrap() as usize]["primitives"][0]["attributes"];
     assert!(attributes.get("TANGENT").is_some());
     assert!(attributes.get("_PRIMASE_TANGENT1").is_some());
     assert!(attributes.get("TANGENT1").is_none());

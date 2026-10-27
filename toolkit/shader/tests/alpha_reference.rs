@@ -79,11 +79,18 @@ fn compiled(entry: &str) -> Vec<(&'static str, primase_shader::Program)> {
             "{}/tests/fixtures/alpha_reference_{entry}.{extension}",
             env!("CARGO_MANIFEST_DIR")
         );
-        std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e} (compile alpha_reference.hlsl's `{entry}`)"))
+        std::fs::read(&path)
+            .unwrap_or_else(|e| panic!("{path}: {e} (compile alpha_reference.hlsl's `{entry}`)"))
     };
     vec![
-        ("fxc", primase_dxbc::lift(&read("dxbc")).unwrap_or_else(|e| panic!("{entry}.dxbc: {e}"))),
-        ("dxc", primase_dxil::lift(&read("dxil")).unwrap_or_else(|e| panic!("{entry}.dxil: {e}"))),
+        (
+            "fxc",
+            primase_dxbc::lift(&read("dxbc")).unwrap_or_else(|e| panic!("{entry}.dxbc: {e}")),
+        ),
+        (
+            "dxc",
+            primase_dxil::lift(&read("dxil")).unwrap_or_else(|e| panic!("{entry}.dxil: {e}")),
+        ),
     ]
 }
 
@@ -94,12 +101,23 @@ fn a_test_of_two_texture_alphas_is_read_exactly_and_solved_only_where_one_varies
     for (compiler, p) in compiled("unwritten") {
         let g = p.graph().unwrap();
         let buffer = g.reads.buffer_at(0, 0).unwrap();
-        assert_eq!(discard_compares(&g, buffer, 0, None), Some(AlphaComparison::Unwritten), "{compiler}");
+        assert_eq!(
+            discard_compares(&g, buffer, 0, None),
+            Some(AlphaComparison::Unwritten),
+            "{compiler}"
+        );
         let tests: Vec<_> = alpha_tests(&g).into_iter().filter(|t| t.word == 0).collect();
         assert_eq!(tests.len(), 1, "{compiler}: {tests:?}");
         let tested = &tests[0].tested;
-        assert!(tested.is_exact() && tested.has_alpha_texel(), "{compiler}: {tested}");
-        let samples: Vec<_> = tested.leaves().into_iter().filter(|l| matches!(l, AlphaExpr::Texel { .. })).collect();
+        assert!(
+            tested.is_exact() && tested.has_alpha_texel(),
+            "{compiler}: {tested}"
+        );
+        let samples: Vec<_> = tested
+            .leaves()
+            .into_iter()
+            .filter(|l| matches!(l, AlphaExpr::Texel { .. }))
+            .collect();
         assert_eq!(samples.len(), 2, "{compiler}: {tested}");
         let name_of = |resource| {
             g.interface
@@ -124,7 +142,11 @@ fn a_test_of_two_texture_alphas_is_read_exactly_and_solved_only_where_one_varies
         };
         let linear = tested.linear(&mut half_detail).expect(compiler);
         assert_eq!((linear.scale, linear.offset), (0.5, 0.), "{compiler}");
-        assert_eq!(linear.sample.map(|(_, r, lane)| (name_of(r), lane)), Some(("base_map".to_owned(), 3)), "{compiler}");
+        assert_eq!(
+            linear.sample.map(|(_, r, lane)| (name_of(r), lane)),
+            Some(("base_map".to_owned(), 3)),
+            "{compiler}"
+        );
         assert_eq!(linear.cutoff(0.25).unwrap(), Some(0.5), "{compiler}");
         // a default of alpha 1 drops out: the cutoff is the reference itself
         let one = tested
@@ -144,7 +166,11 @@ fn a_test_of_two_texture_alphas_is_read_exactly_and_solved_only_where_one_varies
             })
             .expect(compiler);
         assert!(zero.cutoff(0.3).is_err(), "{compiler}");
-        assert_eq!(zero.cutoff(-100.).unwrap(), None, "{compiler}: a reference below the range never discards");
+        assert_eq!(
+            zero.cutoff(-100.).unwrap(),
+            None,
+            "{compiler}: a reference below the range never discards"
+        );
     }
 }
 
@@ -168,9 +194,13 @@ fn a_dither_bound_to_its_default_adds_exactly_its_value() {
         };
         let solve = |dither: f64, scale: Option<f64>| {
             tested.linear(&mut |leaf| match leaf {
-                AlphaExpr::Texel { resource, .. } if name_of(*resource) == "dither_map" => Known::Value(dither),
+                AlphaExpr::Texel { resource, .. } if name_of(*resource) == "dither_map" => {
+                    Known::Value(dither)
+                }
                 AlphaExpr::Texel { .. } => Known::Varies,
-                AlphaExpr::Word { buffer: b, word: 1 } if *b == buffer => scale.map_or(Known::Unknown, Known::Value),
+                AlphaExpr::Word { buffer: b, word: 1 } if *b == buffer => {
+                    scale.map_or(Known::Unknown, Known::Value)
+                }
                 _ => Known::Unknown,
             })
         };
@@ -178,7 +208,10 @@ fn a_dither_bound_to_its_default_adds_exactly_its_value() {
         assert_eq!((neutral.scale, neutral.offset), (1., 0.), "{compiler}");
         assert_eq!(neutral.cutoff(0.4).unwrap(), Some(0.4), "{compiler}");
         let bright = solve(1., Some(0.25)).expect(compiler);
-        assert!((bright.cutoff(0.4).unwrap().unwrap() - 0.275).abs() < 1e-12, "{compiler}");
+        assert!(
+            (bright.cutoff(0.4).unwrap().unwrap() - 0.275).abs() < 1e-12,
+            "{compiler}"
+        );
         // whether the test moves with the noise is whether another answer changes the folded expression: scale 0 it does
         // not (exact, uncounted), scale 0.5 it does (a hard cutoff replaces a stochastic test)
         let moves = |scale: f64| {

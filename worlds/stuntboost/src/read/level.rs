@@ -168,21 +168,54 @@ pub fn level_spawns(install: &Path, level: &str) -> Result<Vec<LevelSpawnEntry>>
 
 fn spawn_entries(json: &Value, part: u32, file: &str) -> Result<Vec<LevelSpawnEntry>> {
     let scene = json.get("scene").and_then(Value::as_u64).unwrap_or(0) as usize;
-    let roots = json.get("scenes").and_then(Value::as_array).and_then(|scenes|scenes.get(scene))
-        .and_then(|scene|scene.get("nodes")).and_then(Value::as_array);
-    let nodes = json.get("nodes").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
-    let mut stack: Vec<usize> = roots.into_iter().flatten().filter_map(Value::as_u64).map(|id|id as usize).rev().collect();
-    let mut visited = vec![false;nodes.len()];
+    let roots = json
+        .get("scenes")
+        .and_then(Value::as_array)
+        .and_then(|scenes| scenes.get(scene))
+        .and_then(|scene| scene.get("nodes"))
+        .and_then(Value::as_array);
+    let nodes = json
+        .get("nodes")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let mut stack: Vec<usize> = roots
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_u64)
+        .map(|id| id as usize)
+        .rev()
+        .collect();
+    let mut visited = vec![false; nodes.len()];
     let mut result = Vec::new();
     while let Some(index) = stack.pop() {
-        let node = nodes.get(index).ok_or_else(||format(file,format!("node {index} past the document's {}",nodes.len())))?;
-        if std::mem::replace(&mut visited[index],true) { return Err(format(file,format!("node {index} reached twice"))); }
+        let node = nodes
+            .get(index)
+            .ok_or_else(|| format(file, format!("node {index} past the document's {}", nodes.len())))?;
+        if std::mem::replace(&mut visited[index], true) {
+            return Err(format(file, format!("node {index} reached twice")));
+        }
         let name = names::parse(node.get("name").and_then(Value::as_str).unwrap_or(""));
-        if let Some(class) = name.class.as_ref().filter(|class|class.name == "Spawn") {
-            result.push(LevelSpawnEntry {part,node:index,name:class.args.as_ref().and_then(|args|args.first()).cloned().unwrap_or_default()});
+        if let Some(class) = name.class.as_ref().filter(|class| class.name == "Spawn") {
+            result.push(LevelSpawnEntry {
+                part,
+                node: index,
+                name: class
+                    .args
+                    .as_ref()
+                    .and_then(|args| args.first())
+                    .cloned()
+                    .unwrap_or_default(),
+            });
         }
         if let Some(children) = node.get("children").and_then(Value::as_array) {
-            stack.extend(children.iter().rev().filter_map(Value::as_u64).map(|id|id as usize));
+            stack.extend(
+                children
+                    .iter()
+                    .rev()
+                    .filter_map(Value::as_u64)
+                    .map(|id| id as usize),
+            );
         }
     }
     Ok(result)
@@ -196,16 +229,30 @@ mod spawn_listing_tests {
         let json = serde_json::json!({"scene":1,"scenes":[{"nodes":[3]},{"nodes":[0]}],"nodes":[
             {"name":"root","children":[2,1]},{"name":"Unnamed=Spawn()"},
             {"name":"Checkpoint=Spawn(first,7)"},{"name":"Inactive=Spawn(other)"}]});
-        assert_eq!(spawn_entries(&json,4,"test").unwrap(),[
-            LevelSpawnEntry {part:4,node:2,name:"first".into()},
-            LevelSpawnEntry {part:4,node:1,name:String::new()}]);
+        assert_eq!(
+            spawn_entries(&json, 4, "test").unwrap(),
+            [
+                LevelSpawnEntry {
+                    part: 4,
+                    node: 2,
+                    name: "first".into()
+                },
+                LevelSpawnEntry {
+                    part: 4,
+                    node: 1,
+                    name: String::new()
+                }
+            ]
+        );
     }
     #[test]
     fn invalid_or_repeated_reachable_nodes_are_refused() {
         for json in [
             serde_json::json!({"scenes":[{"nodes":[8]}],"nodes":[]}),
-            serde_json::json!({"scenes":[{"nodes":[0]}],"nodes":[{"children":[0]}]})
-        ] { assert!(spawn_entries(&json,0,"test").is_err()); }
+            serde_json::json!({"scenes":[{"nodes":[0]}],"nodes":[{"children":[0]}]}),
+        ] {
+            assert!(spawn_entries(&json, 0, "test").is_err());
+        }
     }
 }
 

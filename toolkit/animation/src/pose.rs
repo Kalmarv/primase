@@ -189,20 +189,35 @@ pub fn shown(
     evaluated: &Evaluated,
     primitive: usize,
 ) -> Result<bool> {
-    let group = groups.groups.get(primitive)
-        .ok_or_else(|| Error(format!("primitive {primitive}: only {} draw-group entries", groups.groups.len())))?;
+    let group = groups.groups.get(primitive).ok_or_else(|| {
+        Error(format!(
+            "primitive {primitive}: only {} draw-group entries",
+            groups.groups.len()
+        ))
+    })?;
     let Some(group) = *group else { return Ok(true) };
     if defaults.scope != groups.scope || groups.scope.trim().is_empty() {
-        return Err(Error(format!("draw-group scope {:?} differs from default scope {:?}", groups.scope, defaults.scope)));
+        return Err(Error(format!(
+            "draw-group scope {:?} differs from default scope {:?}",
+            groups.scope, defaults.scope
+        )));
     }
     if group >= 64 {
-        return Err(Error(format!("draw group {:?}/{group}: outside the core 64-group limit", groups.scope)));
+        return Err(Error(format!(
+            "draw group {:?}/{group}: outside the core 64-group limit",
+            groups.scope
+        )));
     }
-    let mut matching = evaluated.draw_groups.iter()
+    let mut matching = evaluated
+        .draw_groups
+        .iter()
         .filter(|(scope, index, _)| scope == &groups.scope && *index == group);
     let value = matching.next().and_then(|(_, _, value)| *value);
     if matching.next().is_some() {
-        return Err(Error(format!("duplicate evaluated draw group {:?}/{group}", groups.scope)));
+        return Err(Error(format!(
+            "duplicate evaluated draw group {:?}/{group}",
+            groups.scope
+        )));
     }
     Ok(value.unwrap_or(defaults.shown & (1u64 << group) != 0))
 }
@@ -274,8 +289,9 @@ fn compose_additive(property: Property, current: &mut Trs, reference: Option<&Tr
             }
             current.scale = std::array::from_fn(|i| current.scale[i] * v[i] / r[i]);
         }
-        Property::Scalar | Property::Visibility | Property::Values(_) =>
-            return Err(Error(format!("a {property:?} channel on a joint"))),
+        Property::Scalar | Property::Visibility | Property::Values(_) => {
+            return Err(Error(format!("a {property:?} channel on a joint")));
+        }
     }
     Ok(())
 }
@@ -325,19 +341,27 @@ fn evaluate_over(
     };
     for c in &clip.channels {
         let width = c.property.width();
-        match (&c.target,c.property) {
-            (ClipTarget::DrawGroup {scope,group},Property::Visibility) => {
-                if scope.trim().is_empty() || *group >= 64 || c.interpolation != primase_core::Interpolation::Step
-                    || c.values.iter().any(|v| ![-1.0,0.0,1.0].contains(v)) {
-                    return Err(Error(format!("draw group {scope:?}/{group}: requires a group below 64 and Step values -1, 0 or 1")));
+        match (&c.target, c.property) {
+            (ClipTarget::DrawGroup { scope, group }, Property::Visibility) => {
+                if scope.trim().is_empty()
+                    || *group >= 64
+                    || c.interpolation != primase_core::Interpolation::Step
+                    || c.values.iter().any(|v| ![-1.0, 0.0, 1.0].contains(v))
+                {
+                    return Err(Error(format!(
+                        "draw group {scope:?}/{group}: requires a group below 64 and Step values -1, 0 or 1"
+                    )));
                 }
             }
-            (ClipTarget::MaterialParameter {materials,name},Property::Values(n))
-                if (1..=4).contains(&n) && !materials.is_empty() && !name.trim().is_empty()
+            (ClipTarget::MaterialParameter { materials, name }, Property::Values(n))
+                if (1..=4).contains(&n)
+                    && !materials.is_empty()
+                    && !name.trim().is_empty()
                     && c.interpolation != primase_core::Interpolation::Hermite => {}
-            (ClipTarget::Joint {..},Property::Translation | Property::Rotation | Property::Scale)
-                | (ClipTarget::Morph {..},Property::Scalar) | (ClipTarget::Control {..},Property::Scalar) => {}
-            _ => return Err(Error(format!("{:?} does not fit {:?}",c.property,c.target))),
+            (ClipTarget::Joint { .. }, Property::Translation | Property::Rotation | Property::Scale)
+            | (ClipTarget::Morph { .. }, Property::Scalar)
+            | (ClipTarget::Control { .. }, Property::Scalar) => {}
+            _ => return Err(Error(format!("{:?} does not fit {:?}", c.property, c.target))),
         }
         let v = sample(
             c.interpolation,
@@ -372,32 +396,43 @@ fn evaluate_over(
                         Property::Translation => trs.translation = [v[0], v[1], v[2]],
                         Property::Rotation => trs.rotation = [v[0], v[1], v[2], v[3]],
                         Property::Scale => trs.scale = [v[0], v[1], v[2]],
-                        Property::Scalar | Property::Visibility | Property::Values(_) =>
-                            return Err(Error(format!("a {:?} channel on a joint",c.property))),
+                        Property::Scalar | Property::Visibility | Property::Values(_) => {
+                            return Err(Error(format!("a {:?} channel on a joint", c.property)));
+                        }
                     }
                 }
                 driven.insert(*joint, trs);
             }
             ClipTarget::Joint { .. } => out.other_skeletons += 1,
-            ClipTarget::Morph { .. } | ClipTarget::Control { .. } | ClipTarget::DrawGroup {..}
-                | ClipTarget::MaterialParameter {..} if additive => {
+            ClipTarget::Morph { .. }
+            | ClipTarget::Control { .. }
+            | ClipTarget::DrawGroup { .. }
+            | ClipTarget::MaterialParameter { .. }
+                if additive =>
+            {
                 return Err(Error(format!(
                     "clip {:?} is additive and drives {:?}: there is no base to add to",
-                    clip.name,c.target
+                    clip.name, c.target
                 )));
             }
             ClipTarget::Morph { geometry, morph } => out.morphs.push((*geometry, *morph, v[0] as f32)),
             ClipTarget::Control { name } => out.controls.push((name.clone(), v[0] as f32)),
-            ClipTarget::DrawGroup { scope,group } => {
-                let shown=if v[0] == -1.0 {None} else {Some(v[0] == 1.0)};
-                out.draw_groups.push((scope.clone(),*group,shown));
+            ClipTarget::DrawGroup { scope, group } => {
+                let shown = if v[0] == -1.0 { None } else { Some(v[0] == 1.0) };
+                out.draw_groups.push((scope.clone(), *group, shown));
             }
-            ClipTarget::MaterialParameter { materials,name } => {
-                let value:Vec<f32>=v.into_iter().map(|v|v as f32).collect();
-                if !value.iter().all(|v|v.is_finite()) {
-                    return Err(Error(format!("material parameter {name:?}: evaluated value is not finite")));
+            ClipTarget::MaterialParameter { materials, name } => {
+                let value: Vec<f32> = v.into_iter().map(|v| v as f32).collect();
+                if !value.iter().all(|v| v.is_finite()) {
+                    return Err(Error(format!(
+                        "material parameter {name:?}: evaluated value is not finite"
+                    )));
                 }
-                out.material_parameters.extend(materials.iter().map(|&entity|(entity,name.clone(),value.clone())));
+                out.material_parameters.extend(
+                    materials
+                        .iter()
+                        .map(|&entity| (entity, name.clone(), value.clone())),
+                );
             }
         }
     }
@@ -476,37 +511,47 @@ pub fn blend(parts: &[(&Evaluated, f64)]) -> Result<Evaluated> {
             ));
         }
     }
-    let group_map=|e:&Evaluated|->Result<BTreeMap<(String,u32),Option<bool>>> {
-        let mut map=BTreeMap::new();
-        for (scope,group,value) in &e.draw_groups {
-            if map.insert((scope.clone(),*group),*value).is_some() {
+    let group_map = |e: &Evaluated| -> Result<BTreeMap<(String, u32), Option<bool>>> {
+        let mut map = BTreeMap::new();
+        for (scope, group, value) in &e.draw_groups {
+            if map.insert((scope.clone(), *group), *value).is_some() {
                 return Err(Error(format!("duplicate evaluated draw group {scope:?}/{group}")));
             }
         }
         Ok(map)
     };
-    let parameter_map=|e:&Evaluated|->Result<BTreeMap<(Entity,String),Vec<f32>>> {
-        let mut map=BTreeMap::new();
-        for (entity,name,value) in &e.material_parameters {
-            if map.insert((*entity,name.clone()),value.clone()).is_some() {
-                return Err(Error(format!("duplicate evaluated material parameter {entity:?}/{name:?}")));
+    let parameter_map = |e: &Evaluated| -> Result<BTreeMap<(Entity, String), Vec<f32>>> {
+        let mut map = BTreeMap::new();
+        for (entity, name, value) in &e.material_parameters {
+            if map.insert((*entity, name.clone()), value.clone()).is_some() {
+                return Err(Error(format!(
+                    "duplicate evaluated material parameter {entity:?}/{name:?}"
+                )));
             }
         }
         Ok(map)
     };
-    let groups=group_map(first)?;
-    let parameters=parameter_map(first)?;
-    for (e,_) in &used[1..] {
-        let other=group_map(e)?;
+    let groups = group_map(first)?;
+    let parameters = parameter_map(first)?;
+    for (e, _) in &used[1..] {
+        let other = group_map(e)?;
         for key in groups.keys().chain(other.keys()) {
             if groups.get(key) != other.get(key) {
-                return Err(Error(format!("blended draw group {key:?} differs: {:?} versus {:?}",groups.get(key),other.get(key))));
+                return Err(Error(format!(
+                    "blended draw group {key:?} differs: {:?} versus {:?}",
+                    groups.get(key),
+                    other.get(key)
+                )));
             }
         }
-        let other=parameter_map(e)?;
+        let other = parameter_map(e)?;
         for key in parameters.keys().chain(other.keys()) {
             if parameters.get(key) != other.get(key) {
-                return Err(Error(format!("blended material parameter {key:?} differs: {:?} versus {:?}",parameters.get(key),other.get(key))));
+                return Err(Error(format!(
+                    "blended material parameter {key:?} differs: {:?} versus {:?}",
+                    parameters.get(key),
+                    other.get(key)
+                )));
             }
         }
     }
@@ -1009,13 +1054,26 @@ mod tests {
         clip.duration = 2.0;
         clip.extrapolation = Extrapolation::Hold;
         clip.channels = vec![
-            Channel { target: ClipTarget::DrawGroup { scope: "character".into(), group: 3 },
-                property: Property::Visibility, interpolation: Interpolation::Step,
-                times: vec![0.0, 0.5, 1.0], values: vec![-1.0, 0.0, 1.0] },
-            Channel { target: ClipTarget::MaterialParameter {
-                materials: vec![Entity::from_index(12), Entity::from_index(13)], name: "source.tint".into() },
-                property: Property::Values(2), interpolation: Interpolation::Linear,
-                times: vec![0.0, 1.0], values: vec![0.0, 2.0, 2.0, 4.0] },
+            Channel {
+                target: ClipTarget::DrawGroup {
+                    scope: "character".into(),
+                    group: 3,
+                },
+                property: Property::Visibility,
+                interpolation: Interpolation::Step,
+                times: vec![0.0, 0.5, 1.0],
+                values: vec![-1.0, 0.0, 1.0],
+            },
+            Channel {
+                target: ClipTarget::MaterialParameter {
+                    materials: vec![Entity::from_index(12), Entity::from_index(13)],
+                    name: "source.tint".into(),
+                },
+                property: Property::Values(2),
+                interpolation: Interpolation::Linear,
+                times: vec![0.0, 1.0],
+                values: vec![0.0, 2.0, 2.0, 4.0],
+            },
         ];
         clip
     }
@@ -1025,8 +1083,14 @@ mod tests {
         let mut clip = display_clip();
         let s = skeleton();
         let skel = Entity::from_index(5);
-        let groups = primase_core::DrawGroups { scope: "character".into(), groups: vec![Some(3), None, Some(63)] };
-        let mut defaults = primase_core::DrawGroupDefaults { scope: "character".into(), shown: 1u64 << 63 };
+        let groups = primase_core::DrawGroups {
+            scope: "character".into(),
+            groups: vec![Some(3), None, Some(63)],
+        };
+        let mut defaults = primase_core::DrawGroupDefaults {
+            scope: "character".into(),
+            shown: 1u64 << 63,
+        };
         let at = |clip: &Clip, time| evaluate(clip, skel, &s, None, time).unwrap();
         let inherit = at(&clip, 0.0);
         assert!(!shown(&defaults, &groups, &inherit, 0).unwrap());
@@ -1034,15 +1098,33 @@ mod tests {
         assert!(shown(&defaults, &groups, &inherit, 0).unwrap());
         assert!(!shown(&defaults, &groups, &at(&clip, 0.5), 0).unwrap());
         assert!(shown(&defaults, &groups, &at(&clip, 1.0), 0).unwrap());
-        assert!(shown(&defaults, &groups, &at(&clip, 0.1), 0).unwrap(), "seek backwards restores inheritance");
-        assert!(shown(&defaults, &groups, &at(&clip, 0.5), 1).unwrap(), "ungrouped primitive");
-        assert!(shown(&defaults, &groups, &inherit, 2).unwrap(), "undriven group keeps default bit 63");
+        assert!(
+            shown(&defaults, &groups, &at(&clip, 0.1), 0).unwrap(),
+            "seek backwards restores inheritance"
+        );
+        assert!(
+            shown(&defaults, &groups, &at(&clip, 0.5), 1).unwrap(),
+            "ungrouped primitive"
+        );
+        assert!(
+            shown(&defaults, &groups, &inherit, 2).unwrap(),
+            "undriven group keeps default bit 63"
+        );
         assert!(shown(&defaults, &groups, &inherit, 3).is_err());
-        let foreign = primase_core::DrawGroups { scope: "other".into(), groups: vec![Some(3)] };
-        let foreign_defaults = primase_core::DrawGroupDefaults { scope: "other".into(), shown: 0 };
+        let foreign = primase_core::DrawGroups {
+            scope: "other".into(),
+            groups: vec![Some(3)],
+        };
+        let foreign_defaults = primase_core::DrawGroupDefaults {
+            scope: "other".into(),
+            shown: 0,
+        };
         assert!(!shown(&foreign_defaults, &foreign, &at(&clip, 1.0), 0).unwrap());
         assert!(shown(&defaults, &foreign, &inherit, 0).is_err());
-        let outside = primase_core::DrawGroups { scope: "character".into(), groups: vec![Some(64)] };
+        let outside = primase_core::DrawGroups {
+            scope: "character".into(),
+            groups: vec![Some(64)],
+        };
         assert!(shown(&defaults, &outside, &inherit, 0).is_err());
         clip.extrapolation = Extrapolation::Loop;
         assert!(!shown(&defaults, &groups, &at(&clip, 2.5), 0).unwrap());
@@ -1055,15 +1137,26 @@ mod tests {
         let skel = Entity::from_index(5);
         let mut clip = display_clip();
         let half = evaluate(&clip, skel, &s, None, 0.5).unwrap();
-        assert_eq!(half.material_parameters, vec![
-            (Entity::from_index(12), "source.tint".into(), vec![1.0, 3.0]),
-            (Entity::from_index(13), "source.tint".into(), vec![1.0, 3.0]),
-        ]);
+        assert_eq!(
+            half.material_parameters,
+            vec![
+                (Entity::from_index(12), "source.tint".into(), vec![1.0, 3.0]),
+                (Entity::from_index(13), "source.tint".into(), vec![1.0, 3.0]),
+            ]
+        );
         clip.channels[1].interpolation = Interpolation::Step;
-        assert_eq!(evaluate(&clip, skel, &s, None, 0.5).unwrap().material_parameters[0].2, vec![0.0, 2.0]);
+        assert_eq!(
+            evaluate(&clip, skel, &s, None, 0.5).unwrap().material_parameters[0].2,
+            vec![0.0, 2.0]
+        );
         clip.channels.pop();
-        assert!(evaluate(&clip, skel, &s, None, 0.5).unwrap().material_parameters.is_empty(),
-            "undriven parameters stay at the material's stored defaults");
+        assert!(
+            evaluate(&clip, skel, &s, None, 0.5)
+                .unwrap()
+                .material_parameters
+                .is_empty(),
+            "undriven parameters stay at the material's stored defaults"
+        );
     }
 
     #[test]
@@ -1073,9 +1166,14 @@ mod tests {
             let mut clip = display_clip();
             clip.channels = vec![channel];
             clip.additive = Some(AdditiveReference::Identity);
-            let error = evaluate(&clip, Entity::from_index(5), &s, None, 0.5).unwrap_err().0;
+            let error = evaluate(&clip, Entity::from_index(5), &s, None, 0.5)
+                .unwrap_err()
+                .0;
             assert!(error.contains("no base to add to"), "{error}");
-            assert!(error.contains("character") || error.contains("source.tint"), "{error}");
+            assert!(
+                error.contains("character") || error.contains("source.tint"),
+                "{error}"
+            );
         }
     }
 
@@ -1083,8 +1181,10 @@ mod tests {
     fn display_blending_requires_identical_keyed_values_and_ignores_zero_weight() {
         let mut a = evaluated(vec![]);
         a.draw_groups = vec![("character".into(), 3, None), ("other".into(), 3, Some(true))];
-        a.material_parameters = vec![(Entity::from_index(12), "tint".into(), vec![1.0, 2.0]),
-            (Entity::from_index(13), "tint".into(), vec![3.0])];
+        a.material_parameters = vec![
+            (Entity::from_index(12), "tint".into(), vec![1.0, 2.0]),
+            (Entity::from_index(13), "tint".into(), vec![3.0]),
+        ];
         let mut b = a.clone();
         b.draw_groups.reverse();
         b.material_parameters.reverse();
@@ -1092,20 +1192,36 @@ mod tests {
         let mut conflict = b.clone();
         conflict.draw_groups[1].2 = Some(false);
         let error = blend(&[(&a, 1.0), (&conflict, 9.0)]).unwrap_err().0;
-        assert!(error.contains("character") && error.contains("None") && error.contains("false"), "{error}");
+        assert!(
+            error.contains("character") && error.contains("None") && error.contains("false"),
+            "{error}"
+        );
         assert_eq!(blend(&[(&a, 1.0), (&conflict, 0.0)]).unwrap(), a);
         conflict = b.clone();
         conflict.draw_groups.pop();
-        assert!(blend(&[(&a, 1.0), (&conflict, 1.0)]).unwrap_err().0.contains("character"));
+        assert!(
+            blend(&[(&a, 1.0), (&conflict, 1.0)])
+                .unwrap_err()
+                .0
+                .contains("character")
+        );
         for value in [vec![9.0, 2.0], vec![1.0]] {
             conflict = b.clone();
             conflict.material_parameters[1].2 = value;
             let error = blend(&[(&a, 1.0), (&conflict, 1.0)]).unwrap_err().0;
-            assert!(error.contains("material parameter") && error.contains("tint"), "{error}");
+            assert!(
+                error.contains("material parameter") && error.contains("tint"),
+                "{error}"
+            );
         }
         conflict = b;
         conflict.material_parameters.pop();
-        assert!(blend(&[(&a, 1.0), (&conflict, 1.0)]).unwrap_err().0.contains("material parameter"));
+        assert!(
+            blend(&[(&a, 1.0), (&conflict, 1.0)])
+                .unwrap_err()
+                .0
+                .contains("material parameter")
+        );
     }
 
     fn joint_trs(e: &Evaluated, id: u32) -> Trs {

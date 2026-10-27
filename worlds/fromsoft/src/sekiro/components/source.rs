@@ -483,7 +483,9 @@ impl Resource for DrawParam {
 impl DrawParam {
     /// The selected group with key `key`; unresolved source sets are inspection data only.
     pub fn group(&self, key: &str) -> Option<&DrawGroup> {
-        self.groups.iter().find(|g| g.key == key && g.chosen != SetChosen::Unresolved)
+        self.groups
+            .iter()
+            .find(|g| g.key == key && g.chosen != SetChosen::Unresolved)
     }
 }
 

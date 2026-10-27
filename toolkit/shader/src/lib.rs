@@ -30,11 +30,11 @@ pub mod rt;
 pub mod surface;
 pub use primase_core::shader::{
     Access, BufferKind, BufferLayout, Constant, ConstantType, D3dBinding, D3dClass, D3dSignature,
-    DomainFacts, GeometryFacts, GsInput, GsOutput, HitGroup, HitGroupKind, HullFacts, Interface, InterpMode,
-    InterpSampling, Interpolation, Label, Majorness, Member, MeshFacts, MeshTopology, Partitioning,
-    RayTracingFacts, Resource, ResourceId, ResourceKind, ResourceProvenance, SampleType, ScalarType,
-    ShaderFormat, Stage, StageFacts, StorageTarget, Subobject, SystemValue, TessDomain, TessTopology,
-    TextureDim, Value, Varying, VaryingProvenance, InstructionCount, InstructionUnit,
+    DomainFacts, GeometryFacts, GsInput, GsOutput, HitGroup, HitGroupKind, HullFacts, InstructionCount,
+    InstructionUnit, Interface, InterpMode, InterpSampling, Interpolation, Label, Majorness, Member,
+    MeshFacts, MeshTopology, Partitioning, RayTracingFacts, Resource, ResourceId, ResourceKind,
+    ResourceProvenance, SampleType, ScalarType, ShaderFormat, Stage, StageFacts, StorageTarget, Subobject,
+    SystemValue, TessDomain, TessTopology, TextureDim, Value, Varying, VaryingProvenance,
 };
 mod refusal;
 pub use bound::BoundSizes;

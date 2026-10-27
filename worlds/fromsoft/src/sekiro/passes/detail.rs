@@ -5,17 +5,17 @@
 use std::collections::BTreeMap;
 
 use primase_core::detail::DetailedMaterial;
+use primase_core::detail::SurfaceLowering;
 use primase_core::pass::{Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{TextureRef, UvTransform, Wrap};
-use primase_core::detail::SurfaceLowering;
 use primase_core::shader::{AddressMode, Shader, ShaderBinding, Stage, TextureSource};
 use primase_core::{Component, Entity, Mesh, Semantic, Stream, World};
 
+use crate::Game;
 use crate::detail_derive::{derive_equation, slot_transform};
 use crate::detail_probe::ProgramProbe;
 use crate::materials::{Definition, LayeredMaterial, Material};
 use crate::sekiro::components::lowered::UvTiling;
-use crate::Game;
 
 /// `derive-fromsoft-detail`: for each material whose shader is Sekiro's `Character_AMSN_[DetailBlend]` or Elden Ring's
 /// `C[DetailBlend]` (plain, `[Rich]`, and their `_cloth` variants, whose pixel programs are the same) and which a
@@ -58,10 +58,12 @@ pub fn family(shader: &str) -> Option<Result<Game, &'static str>> {
     let rest = shader.strip_prefix(ELDEN_FAMILY)?;
     Some(match rest {
         "" | "[Rich]" | "_cloth" | "[Rich]_cloth" => Ok(Game::EldenRing),
-        r if r.starts_with("[S2]") => {
-            Err("its [S2] family has an overlay layer drawn by its own alpha and a back face, which the model has no term for")
+        r if r.starts_with("[S2]") => Err(
+            "its [S2] family has an overlay layer drawn by its own alpha and a back face, which the model has no term for",
+        ),
+        r if r.starts_with("_SSS") => {
+            Err("its _SSS family writes a subsurface lane, which the model has no term for")
         }
-        r if r.starts_with("_SSS") => Err("its _SSS family writes a subsurface lane, which the model has no term for"),
         _ => Err("its family is none the model has a term for"),
     })
 }
@@ -331,7 +333,12 @@ mod tests {
     #[test]
     fn a_shader_is_of_a_derived_family_or_refused_by_name() {
         assert_eq!(family("Character_AMSN_[DetailBlend]"), Some(Ok(Game::Sekiro)));
-        for shader in ["C[DetailBlend]", "C[DetailBlend][Rich]", "C[DetailBlend]_cloth", "C[DetailBlend][Rich]_cloth"] {
+        for shader in [
+            "C[DetailBlend]",
+            "C[DetailBlend][Rich]",
+            "C[DetailBlend]_cloth",
+            "C[DetailBlend][Rich]_cloth",
+        ] {
             assert_eq!(family(shader), Some(Ok(Game::EldenRing)), "{shader}");
         }
         for (shader, expected) in [

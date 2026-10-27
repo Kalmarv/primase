@@ -8,7 +8,11 @@
 //!
 //! Runs where the install, its keys and the Oodle library are configured; otherwise it does nothing.
 use primase_core::{Entity, World};
-use primase_fromsoft::sekiro::{self, collision::{class_name, known_surface}, source::MapCollision};
+use primase_fromsoft::sekiro::{
+    self,
+    collision::{class_name, known_surface},
+    source::MapCollision,
+};
 use primase_fromsoft::{Game, Install, Keys, dcx::Decoder};
 use std::collections::BTreeMap;
 
@@ -40,7 +44,11 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>, map: &str) -> Re
             *classes.entry(class).or_default() += 1;
         }
     }
-    assert_eq!(classes.values().sum::<usize>(), triangles, "{map}: every triangle has a class or -1");
+    assert_eq!(
+        classes.values().sum::<usize>(),
+        triangles,
+        "{map}: every triangle has a class or -1"
+    );
     for (class, count) in &classes {
         println!(
             "{} {map} {class} {count} {} {}",
@@ -87,7 +95,10 @@ fn the_classes_the_maps_use() -> Result<()> {
             let classes = census(game, &install, &decoder, map)?;
             // a class the program lowers as water must be a class the install uses, or the choice is untested
             if game == Game::EldenRing {
-                println!("{map}: class 21 (Water) triangles {}", classes.get(&21).copied().unwrap_or(0));
+                println!(
+                    "{map}: class 21 (Water) triangles {}",
+                    classes.get(&21).copied().unwrap_or(0)
+                );
             }
         }
     }

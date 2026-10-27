@@ -67,7 +67,10 @@ impl VolumetricFog {
             ("Global HeightFogDensity Scale", f(self.height_fog_density_scale)),
             ("SkyLight SkyColor", c(self.sky_colour)),
             ("SkyLight StartDist", f(self.sky_start_dist)),
-            ("DirLight LightBankId", self.directional_light_bank.map(|x| x.to_string())),
+            (
+                "DirLight LightBankId",
+                self.directional_light_bank.map(|x| x.to_string()),
+            ),
             ("DirLight DirectColor", c(self.directional_direct_colour)),
             ("DirLight OppositeColor", c(self.directional_opposite_colour)),
             ("DirLight StartDist", f(self.directional_start_dist)),
@@ -93,7 +96,10 @@ impl VolumetricFog {
             ("SkyLight StartDist", self.sky_start_dist),
             ("DirLight StartDist", self.directional_start_dist),
         ];
-        if let Some((name, v)) = scalars.into_iter().find_map(|(n, v)| v.filter(|x| !x.is_finite()).map(|x| (n, x))) {
+        if let Some((name, v)) = scalars
+            .into_iter()
+            .find_map(|(n, v)| v.filter(|x| !x.is_finite()).map(|x| (n, x)))
+        {
             return Err(format!("volumetric fog {name} {v} is not finite"));
         }
         let colours = [
@@ -101,7 +107,10 @@ impl VolumetricFog {
             ("DirLight DirectColor", self.directional_direct_colour),
             ("DirLight OppositeColor", self.directional_opposite_colour),
         ];
-        if let Some((name, v)) = colours.into_iter().find_map(|(n, v)| v.filter(|c| !c.iter().all(|x| x.is_finite())).map(|c| (n, c))) {
+        if let Some((name, v)) = colours
+            .into_iter()
+            .find_map(|(n, v)| v.filter(|c| !c.iter().all(|x| x.is_finite())).map(|c| (n, c)))
+        {
             return Err(format!("volumetric fog {name} {v:?} is not finite"));
         }
         Ok(())
@@ -160,9 +169,15 @@ impl Atmosphere {
                     ));
                 }
                 FogFalloff::ExponentialHeightSlab { density, bottom, top }
-                    if !(density.is_finite() && density >= 0. && bottom.is_finite() && top.is_finite() && bottom < top) =>
+                    if !(density.is_finite()
+                        && density >= 0.
+                        && bottom.is_finite()
+                        && top.is_finite()
+                        && bottom < top) =>
                 {
-                    return Err(format!("fog slab density {density}, bottom {bottom}, top {top} requires finite nonnegative density and bottom < top"));
+                    return Err(format!(
+                        "fog slab density {density}, bottom {bottom}, top {top} requires finite nonnegative density and bottom < top"
+                    ));
                 }
                 _ => {}
             }
@@ -205,7 +220,10 @@ mod tests {
     fn a_valid_atmosphere_is_kept_by_every_part_and_shown_as_json() {
         let mut w = World::new();
         let e = w.spawn();
-        w.insert_resource(fog(FogFalloff::Linear { start: 10., end: 400. }));
+        w.insert_resource(fog(FogFalloff::Linear {
+            start: 10.,
+            end: 400.,
+        }));
         assert!(w.verify_resources().is_empty());
         let part = w.subset(&BTreeSet::from([e]));
         assert_eq!(part.resource::<Atmosphere>(), w.resource::<Atmosphere>());
@@ -241,13 +259,19 @@ mod tests {
         let e = w.spawn();
         w.insert_resource(a);
         assert!(w.verify_resources().is_empty());
-        assert_eq!(w.subset(&BTreeSet::from([e])).resource::<Atmosphere>(), w.resource::<Atmosphere>());
+        assert_eq!(
+            w.subset(&BTreeSet::from([e])).resource::<Atmosphere>(),
+            w.resource::<Atmosphere>()
+        );
         assert_eq!(
             volumetric.fields(),
             [
                 ("GameScale", "12".to_owned()),
                 ("Global FixedDensity", "0.004".to_owned()),
-                ("SkyLight SkyColor", "[0.062745, 0.070588, 0.078431, 0.0]".to_owned()),
+                (
+                    "SkyLight SkyColor",
+                    "[0.062745, 0.070588, 0.078431, 0.0]".to_owned()
+                ),
                 ("DirLight LightBankId", "111010000".to_owned()),
             ]
         );
@@ -255,10 +279,19 @@ mod tests {
         assert_eq!(json["volumetric"]["game_scale"], serde_json::json!(12.0));
         assert!(json["volumetric"]["far_depth"].is_null());
         for bad in [
-            VolumetricFog { fixed_density: Some(f32::NAN), ..Default::default() },
-            VolumetricFog { sky_colour: Some([0., f32::INFINITY, 0., 0.]), ..Default::default() },
+            VolumetricFog {
+                fixed_density: Some(f32::NAN),
+                ..Default::default()
+            },
+            VolumetricFog {
+                sky_colour: Some([0., f32::INFINITY, 0., 0.]),
+                ..Default::default()
+            },
         ] {
-            w.insert_resource(Atmosphere { volumetric: Some(bad), ..Default::default() });
+            w.insert_resource(Atmosphere {
+                volumetric: Some(bad),
+                ..Default::default()
+            });
             assert_eq!(w.verify_resources().len(), 1);
         }
     }
@@ -312,9 +345,21 @@ mod tests {
 
     #[test]
     fn height_slab_uses_absolute_heights_including_below_the_origin() {
-        assert!(fog(FogFalloff::ExponentialHeightSlab { density: 0.01, bottom: -40., top: 200. }).check().is_ok());
+        assert!(
+            fog(FogFalloff::ExponentialHeightSlab {
+                density: 0.01,
+                bottom: -40.,
+                top: 200.
+            })
+            .check()
+            .is_ok()
+        );
         for (density, bottom, top) in [(0.01, 2., 2.), (-0.01, 0., 2.), (0.01, f32::NAN, 2.)] {
-            assert!(fog(FogFalloff::ExponentialHeightSlab { density, bottom, top }).check().is_err());
+            assert!(
+                fog(FogFalloff::ExponentialHeightSlab { density, bottom, top })
+                    .check()
+                    .is_err()
+            );
         }
     }
 }

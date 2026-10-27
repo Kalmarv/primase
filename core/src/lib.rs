@@ -17,8 +17,10 @@ pub use clip_events::{ClipEvent, ClipEvents, EventValue, EventValueData};
 mod content;
 pub use content::{ContentNote, DisplayName, NameOrigin, Record};
 mod controller;
-pub use controller::{Controller, ControllerBinding, ControllerLayer, ControllerParameter,
-    ControllerParameterKind, ControllerState, LayerBlending, Motion};
+pub use controller::{
+    Controller, ControllerBinding, ControllerLayer, ControllerParameter, ControllerParameterKind,
+    ControllerState, LayerBlending, Motion,
+};
 mod draw_groups;
 pub use draw_groups::{DrawGroupDefaults, DrawGroups};
 mod material_parameters;

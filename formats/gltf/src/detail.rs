@@ -10,8 +10,8 @@
 
 use primase_core::Semantic;
 use primase_core::detail::{
-    DETAIL_LIMIT, Detail, DetailLerp, DetailMix, DetailedMaterial, Frozen, GlossScale, REVISION, ReflectanceTerm,
-    SurfaceLowering, WEIGHT_POWER_LIMIT, Weight, WeightStep,
+    DETAIL_LIMIT, Detail, DetailLerp, DetailMix, DetailedMaterial, Frozen, GlossScale, REVISION,
+    ReflectanceTerm, SurfaceLowering, WEIGHT_POWER_LIMIT, Weight, WeightStep,
 };
 use primase_core::layered::Source;
 use primase_core::pass::PassLog;
@@ -124,7 +124,9 @@ fn parse(x: &Value, slots: &mut Slots) -> Result<DetailedMaterial, Refusal> {
         },
         "metallic_gloss" if fourth => {
             if x.contains_key("dielectricF0") {
-                return Err("dielectricF0 belongs to the gloss_reflectance lowering, not metallic_gloss".into());
+                return Err(
+                    "dielectricF0 belongs to the gloss_reflectance lowering, not metallic_gloss".into(),
+                );
             }
             SurfaceLowering::MetallicGloss
         }
@@ -852,7 +854,8 @@ mod tests {
 
     /// The writer's revision, `metallic_gloss` without a dielectric reflectance and no saturation key where there is none.
     #[test]
-    fn a_metallic_gloss_material_round_trips_without_what_it_does_not_state() -> Result<(), Box<dyn std::error::Error>> {
+    fn a_metallic_gloss_material_round_trips_without_what_it_does_not_state()
+    -> Result<(), Box<dyn std::error::Error>> {
         let (mut w, material, _) = world();
         let mut d = w.get::<DetailedMaterial>(material).ok_or("the detail")?.clone();
         d.lowering = SurfaceLowering::MetallicGloss;
@@ -863,14 +866,18 @@ mod tests {
         let x = &doc.json["materials"][0]["extensions"][NAME];
         assert_eq!(x["revision"], json!(REVISION));
         assert_eq!(x["lowering"], json!("metallic_gloss"));
-        assert!(x.get("dielectricF0").is_none() && x.get("baseSaturation").is_none(), "{x}");
+        assert!(
+            x.get("dielectricF0").is_none() && x.get("baseSaturation").is_none(),
+            "{x}"
+        );
         let (bytes, _) = crate::write::write(&w, &crate::write::WriteOptions::default())?;
         let mut back = World::new();
         crate::read::read_glb(&bytes, "detail.glb", &mut back)?;
         let mut log = PassLog::default();
         LowerGltfMaterials.run(&mut back, &mut log)?;
         let read: Vec<&DetailedMaterial> = back.iter::<DetailedMaterial>().map(|(_, d)| d).collect();
-        let [read] = <[&DetailedMaterial; 1]>::try_from(read).map_err(|r| format!("{} pbr.detail", r.len()))?;
+        let [read] =
+            <[&DetailedMaterial; 1]>::try_from(read).map_err(|r| format!("{} pbr.detail", r.len()))?;
         assert_eq!(read.lowering, SurfaceLowering::MetallicGloss);
         let DetailMix::DetailLerp(r) = &read.mix;
         assert_eq!(r.base_saturation.to_bits(), 0f32.to_bits());
@@ -891,15 +898,22 @@ mod tests {
         let (run, _, w) = lower(material, textures, w);
         run?;
         let read: Vec<&DetailedMaterial> = w.iter::<DetailedMaterial>().map(|(_, d)| d).collect();
-        let [read] = <[&DetailedMaterial; 1]>::try_from(read).map_err(|r| format!("{} pbr.detail", r.len()))?;
-        assert_eq!(read.lowering, SurfaceLowering::GlossReflectance { dielectric_f0: 0.03 });
+        let [read] =
+            <[&DetailedMaterial; 1]>::try_from(read).map_err(|r| format!("{} pbr.detail", r.len()))?;
+        assert_eq!(
+            read.lowering,
+            SurfaceLowering::GlossReflectance { dielectric_f0: 0.03 }
+        );
         let DetailMix::DetailLerp(r) = &read.mix;
         assert_eq!(r.base_saturation, 0.);
         let refused: [(&str, Edit); 3] = [
-            ("baseSaturation needs revision 4", |x| x["baseSaturation"] = json!(0.5)),
-            ("lowering \"metallic_gloss\" is not gloss_reflectance (revision 3)", |x| {
-                x["lowering"] = json!("metallic_gloss")
+            ("baseSaturation needs revision 4", |x| {
+                x["baseSaturation"] = json!(0.5)
             }),
+            (
+                "lowering \"metallic_gloss\" is not gloss_reflectance (revision 3)",
+                |x| x["lowering"] = json!("metallic_gloss"),
+            ),
             ("a step saturate is not one of power, min", |x| {
                 x["weights"][0]["steps"] = json!([{"saturate": {}}])
             }),

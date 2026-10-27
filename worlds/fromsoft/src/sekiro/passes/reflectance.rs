@@ -152,7 +152,10 @@ mod tests {
         let specular = Reflectance::Dielectric.specular().unwrap_or_default();
         assert!((0.04 * specular.factor - stored * stored).abs() < 1e-9);
         assert!((0.04 * specular.factor - 0.03).abs() < 1e-5);
-        assert_eq!((specular.color, specular.texture, specular.color_texture), ([1.; 3], None, None));
+        assert_eq!(
+            (specular.color, specular.texture, specular.color_texture),
+            ([1.; 3], None, None)
+        );
         assert!(specular.factor > 0. && specular.factor <= 1.);
         assert_eq!(Reflectance::Unsupported.specular(), None);
         let mut log = PassLog::default();

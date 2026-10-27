@@ -215,37 +215,37 @@ pub(super) fn select(gparam: &Gparam, stem: &str, configs: &[PartGparam], report
             None => Vec::new(),
         };
         for (id, chosen) in picks {
-        let mut fields = Vec::new();
-        for field in &group.fields {
-            let at: Vec<_> = field.indices_of(id).collect();
-            if at.is_empty() {
-                report.fields_without_set += 1;
-                continue;
+            let mut fields = Vec::new();
+            for field in &group.fields {
+                let at: Vec<_> = field.indices_of(id).collect();
+                if at.is_empty() {
+                    report.fields_without_set += 1;
+                    continue;
+                }
+                // every stored sample is kept, in stored order: choosing an hour is `sample-fromsoft-draw-params`'s
+                report.time_variants += at.len().saturating_sub(1);
+                for index in at {
+                    let Some(value) = field.values.get(index) else {
+                        report.fields_without_set += 1;
+                        continue;
+                    };
+                    fields.push(DrawField {
+                        key: field.key.clone(),
+                        name: field.name.clone(),
+                        value,
+                        time: field.times.get(index).copied(),
+                    });
+                }
             }
-            // every stored sample is kept, in stored order: choosing an hour is `sample-fromsoft-draw-params`'s
-            report.time_variants += at.len().saturating_sub(1);
-            for index in at {
-            let Some(value) = field.values.get(index) else {
-                report.fields_without_set += 1;
-                continue;
-            };
-            fields.push(DrawField {
-                key: field.key.clone(),
-                name: field.name.clone(),
-                value,
-                time: field.times.get(index).copied(),
+            report.groups += 1;
+            report.fields += fields.len();
+            groups.push(DrawGroup {
+                key: group.key.clone(),
+                name: group.name.clone(),
+                id,
+                chosen,
+                fields,
             });
-            }
-        }
-        report.groups += 1;
-        report.fields += fields.len();
-        groups.push(DrawGroup {
-            key: group.key.clone(),
-            name: group.name.clone(),
-            id,
-            chosen,
-            fields,
-        });
         }
     }
     report.file = Some(stem.to_owned());
@@ -401,7 +401,9 @@ impl Report {
                 "FogVolume source sets and every time sample retained in fromsoft.draw_param with selection Unresolved; no established placed-volume selector, so none is applied to the scene",
                 ids.len() as u64).example(format!("{FOG_VOLUME}: {ids:?}")));
         }
-        let unread_fields = self.unchosen_fields.saturating_sub(fog_sets.map_or(0, |(_, fields)| *fields));
+        let unread_fields = self
+            .unchosen_fields
+            .saturating_sub(fog_sets.map_or(0, |(_, fields)| *fields));
         if unread_fields > 0 {
             // counted in fields, named by group (a group that stores no field has none to leave: counted below)
             out.push(
@@ -470,14 +472,21 @@ mod tests {
             unread: Unread::default(),
             groups: vec![group(
                 LIGHT_SET,
-                vec![Field { times: vec![6.0, 12.0, 18.0], ..field("Brightness", &[7, 9, 7], Values::F32(vec![2.0, 99.0, 8.0])) }],
+                vec![Field {
+                    times: vec![6.0, 12.0, 18.0],
+                    ..field("Brightness", &[7, 9, 7], Values::F32(vec![2.0, 99.0, 8.0]))
+                }],
             )],
         };
         let mut report = Report::default();
         let source = select(&gparam, "fixture", &[config(7, -1, -1)], &mut report);
         let light = source.group(LIGHT_SET).unwrap();
         assert_eq!(
-            light.fields.iter().map(|f| (&f.value, f.time)).collect::<Vec<_>>(),
+            light
+                .fields
+                .iter()
+                .map(|f| (&f.value, f.time))
+                .collect::<Vec<_>>(),
             [(&Value::Float(2.0), Some(6.0)), (&Value::Float(8.0), Some(18.0))]
         );
         assert_eq!(report.time_variants, 1);
@@ -521,7 +530,11 @@ mod tests {
                     LIGHT_SET,
                     vec![
                         field("Sharpness", &[3, 7, 7], Values::F32(vec![1.0, 2.0, 3.0])),
-                        field("Colour", &[3, 7], Values::Vec4(vec![[0.; 4], [1., 0.5, 0.25, 1.]])),
+                        field(
+                            "Colour",
+                            &[3, 7],
+                            Values::Vec4(vec![[0.; 4], [1., 0.5, 0.25, 1.]]),
+                        ),
                     ],
                 ),
                 // a single set, no part names it
@@ -534,7 +547,10 @@ mod tests {
                     vec![field("Exposure", &[0, 1], Values::F32(vec![0.5, 2.0]))],
                 ),
                 // no part-level ID and no ID 0: not read
-                group("Bloom", vec![field("Threshold", &[2, 5], Values::F32(vec![1.0, 2.0]))]),
+                group(
+                    "Bloom",
+                    vec![field("Threshold", &[2, 5], Values::F32(vec![1.0, 2.0]))],
+                ),
             ],
             unread: Unread {
                 extras: 2,
@@ -545,7 +561,12 @@ mod tests {
 
     #[test]
     fn the_value_set_most_parts_name_is_read_and_every_other_choice_is_counted() {
-        let configs = [config(7, 0, 9), config(7, 0, 9), config(3, 0, 9), config(-1, -1, -1)];
+        let configs = [
+            config(7, 0, 9),
+            config(7, 0, 9),
+            config(3, 0, 9),
+            config(-1, -1, -1),
+        ];
         let mut report = Report::default();
         let source = select(&file(), "m11_01_0000", &configs, &mut report);
         assert_eq!((source.file.as_str(), source.version), ("m11_01_0000", 5));
@@ -557,7 +578,11 @@ mod tests {
         // the second value stored for set 7, at another time of day
         assert_eq!(report.time_variants, 1);
         let fog = source.group(FOG).unwrap();
-        assert_eq!((fog.id, fog.chosen), (0, SetChosen::ByParts), "parts name ID 0 of the fog");
+        assert_eq!(
+            (fog.id, fog.chosen),
+            (0, SetChosen::ByParts),
+            "parts name ID 0 of the fog"
+        );
         let tone = source.group("Tone Map[Yebis]").unwrap();
         assert_eq!((tone.id, tone.chosen), (0, SetChosen::ZeroId));
         assert_eq!(tone.value("Exposure"), Some(&Value::Float(0.5)));
@@ -570,7 +595,13 @@ mod tests {
         assert_eq!(report.unchosen_fields, 2);
         // Sharpness stores two samples for set 7 (kept, both), Colour one, Dist one, Exposure one
         assert_eq!((report.groups, report.fields), (3, 5));
-        assert_eq!(report.unread, Unread { extras: 2, data_bytes: 8 });
+        assert_eq!(
+            report.unread,
+            Unread {
+                extras: 2,
+                data_bytes: 8
+            }
+        );
         assert_eq!(report.file.as_deref(), Some("m11_01_0000"));
     }
 
@@ -578,7 +609,10 @@ mod tests {
     fn a_group_with_one_set_is_read_whatever_the_parts_name_and_a_tie_takes_the_lowest() {
         let only = Gparam {
             version: 5,
-            groups: vec![group("Fog volume", vec![field("A", &[4], Values::F32(vec![1.0]))])],
+            groups: vec![group(
+                "Fog volume",
+                vec![field("A", &[4], Values::F32(vec![1.0]))],
+            )],
             unread: Unread::default(),
         };
         let mut report = Report::default();
@@ -598,23 +632,41 @@ mod tests {
             version: 5,
             groups: vec![group(
                 FOG_VOLUME,
-                vec![Field { times: vec![0.0,12.0,0.0],
-                    ..field("Density", &[100, 100, 101], Values::F32(vec![1.0, 2.0, 3.0])) }],
+                vec![Field {
+                    times: vec![0.0, 12.0, 0.0],
+                    ..field("Density", &[100, 100, 101], Values::F32(vec![1.0, 2.0, 3.0]))
+                }],
             )],
             unread: Unread::default(),
         };
-        for fog in [-1,90,101] {
-            let mut report = Report { asked:true,..Default::default() };
-            let source = select(&fog_volume,"m10_00_0000",&[config(-1,fog,-1)],&mut report);
+        for fog in [-1, 90, 101] {
+            let mut report = Report {
+                asked: true,
+                ..Default::default()
+            };
+            let source = select(&fog_volume, "m10_00_0000", &[config(-1, fog, -1)], &mut report);
             assert!(source.group(FOG_VOLUME).is_none());
-            assert_eq!(source.groups.iter().map(|g|(g.id,g.chosen)).collect::<Vec<_>>(),
-                [(100,SetChosen::Unresolved),(101,SetChosen::Unresolved)]);
-            assert_eq!(source.groups[0].fields.iter().map(|f|(&f.value,f.time)).collect::<Vec<_>>(),
-                [(&Value::Float(1.0),Some(0.0)),(&Value::Float(2.0),Some(12.0))]);
-            assert_eq!(source.groups[1].value("Density"),Some(&Value::Float(3.0)));
+            assert_eq!(
+                source.groups.iter().map(|g| (g.id, g.chosen)).collect::<Vec<_>>(),
+                [(100, SetChosen::Unresolved), (101, SetChosen::Unresolved)]
+            );
+            assert_eq!(
+                source.groups[0]
+                    .fields
+                    .iter()
+                    .map(|f| (&f.value, f.time))
+                    .collect::<Vec<_>>(),
+                [(&Value::Float(1.0), Some(0.0)), (&Value::Float(2.0), Some(12.0))]
+            );
+            assert_eq!(source.groups[1].value("Density"), Some(&Value::Float(3.0)));
             assert!(report.other_ids.is_empty() && report.absent_ids.is_empty());
-            assert_eq!(report.unchosen_sets[FOG_VOLUME],(vec![100,101],1));
-            assert!(report.notices().iter().any(|n|n.reason.contains("selection Unresolved")));
+            assert_eq!(report.unchosen_sets[FOG_VOLUME], (vec![100, 101], 1));
+            assert!(
+                report
+                    .notices()
+                    .iter()
+                    .any(|n| n.reason.contains("selection Unresolved"))
+            );
         }
     }
 
@@ -641,7 +693,11 @@ mod tests {
     fn a_file_whose_groups_store_nothing_is_empty_not_unchosen() {
         let shells = Gparam {
             version: 5,
-            groups: vec![group(LIGHT_SET, vec![]), group("Tone Map[Yebis]", vec![]), group(FOG, vec![])],
+            groups: vec![
+                group(LIGHT_SET, vec![]),
+                group("Tone Map[Yebis]", vec![]),
+                group(FOG, vec![]),
+            ],
             unread: Unread::default(),
         };
         let mut report = Report {
@@ -655,8 +711,15 @@ mod tests {
         assert_eq!((report.unchosen_groups.len(), report.unchosen_fields), (3, 0));
         assert!(report.unchosen_sets.is_empty());
         let notices = report.notices();
-        assert!(notices.iter().all(|n| !n.reason.starts_with("draw-param groups with no value set")));
-        let n = notices.iter().find(|n| n.reason.contains("stores no value at all")).unwrap();
+        assert!(
+            notices
+                .iter()
+                .all(|n| !n.reason.starts_with("draw-param groups with no value set"))
+        );
+        let n = notices
+            .iter()
+            .find(|n| n.reason.contains("stores no value at all"))
+            .unwrap();
         assert_eq!(n.count, 3);
         // a group with fields it leaves is told apart, with the IDs it stores
         let mut mixed = Report::default();
@@ -695,13 +758,23 @@ mod tests {
         assert_eq!((n.kind, n.count), (NoticeKind::Selection, 1));
         assert_eq!(n.examples, ["m11_01_0100"]);
         let n = &notices[find(&notices, "collision parts storing a scene config").unwrap()];
-        assert_eq!((n.count, n.examples.clone()), (4, vec!["4 x [2, -1, -1, -1]".to_owned()]));
+        assert_eq!(
+            (n.count, n.examples.clone()),
+            (4, vec!["4 x [2, -1, -1, -1]".to_owned()])
+        );
         let n = &notices[find(&notices, "parts naming another value set").unwrap()];
         assert_eq!(n.count, 1);
-        let n = &notices[find(&notices, "value sets parts name that the draw-param file does not store").unwrap()];
+        let n = &notices[find(
+            &notices,
+            "value sets parts name that the draw-param file does not store",
+        )
+        .unwrap()];
         assert_eq!((n.kind, n.count), (NoticeKind::Unsupported, 2));
         let n = &notices[find(&notices, "draw-param groups no part names").unwrap()];
-        assert_eq!((n.kind, n.examples.clone()), (NoticeKind::Approximation, vec!["Tone Map[Yebis]".to_owned()]));
+        assert_eq!(
+            (n.kind, n.examples.clone()),
+            (NoticeKind::Approximation, vec!["Tone Map[Yebis]".to_owned()])
+        );
         // the groups left unread count their fields
         let n = &notices[find(&notices, "draw-param groups with no value set").unwrap()];
         assert_eq!(n.count, 2);
@@ -714,10 +787,22 @@ mod tests {
     #[test]
     fn a_map_names_its_files_by_its_first_two_blocks_and_open_world_tiles_share_one_set() {
         assert_eq!(map_stem(Game::Sekiro, "m11_01_00_00").as_deref(), Some("m11_01"));
-        assert_eq!(map_stem(Game::EldenRing, "m10_00_00_00").as_deref(), Some("m10_00"));
-        assert_eq!(map_stem(Game::EldenRing, "m12_02_00_00").as_deref(), Some("m12_02"));
-        assert_eq!(map_stem(Game::EldenRing, "m60_44_36_00").as_deref(), Some("m60_00"));
-        assert_eq!(map_stem(Game::EldenRing, "m61_50_50_00").as_deref(), Some("m61_00"));
+        assert_eq!(
+            map_stem(Game::EldenRing, "m10_00_00_00").as_deref(),
+            Some("m10_00")
+        );
+        assert_eq!(
+            map_stem(Game::EldenRing, "m12_02_00_00").as_deref(),
+            Some("m12_02")
+        );
+        assert_eq!(
+            map_stem(Game::EldenRing, "m60_44_36_00").as_deref(),
+            Some("m60_00")
+        );
+        assert_eq!(
+            map_stem(Game::EldenRing, "m61_50_50_00").as_deref(),
+            Some("m61_00")
+        );
         assert_eq!(map_stem(Game::Sekiro, "m6").as_deref(), None);
         assert_eq!(path("m11_01_0720"), "/param/drawparam/m11_01_0720.gparam.dcx");
     }

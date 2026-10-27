@@ -103,16 +103,13 @@ fn parameter(
 /// The index in `controller.parameters` of the numeric parameter whose name hashes to `id`: what `core.controller`
 /// states by position. `None` for an id the controller has no numeric parameter for (0: none, as Unity stores it).
 fn numeric_parameter(controller: &UnityAnimatorController, id: u32) -> Option<usize> {
-    controller
-        .parameters
-        .iter()
-        .position(|p| {
-            p.id == id
-                && matches!(
-                    parameter_kind(p.kind),
-                    Some(ControllerParameterKind::Float | ControllerParameterKind::Int)
-                )
-        })
+    controller.parameters.iter().position(|p| {
+        p.id == id
+            && matches!(
+                parameter_kind(p.kind),
+                Some(ControllerParameterKind::Float | ControllerParameterKind::Int)
+            )
+    })
 }
 
 /// The `core.clip` leaf `index` of `controller` names, as the one bound to `rig`: `Err` says why the leaf has none (a
@@ -190,9 +187,7 @@ fn motion(
             thresholds.len()
         ));
     }
-    if !thresholds.iter().all(|t| t.is_finite())
-        || !thresholds.windows(2).all(|pair| pair[0] < pair[1])
-    {
+    if !thresholds.iter().all(|t| t.is_finite()) || !thresholds.windows(2).all(|pair| pair[0] < pair[1]) {
         return Motion::Unsupported("a 1D blend tree whose thresholds do not ascend strictly".to_owned());
     }
     let Some(parameter) = numeric_parameter(controller, node.event_id) else {
@@ -216,20 +211,12 @@ fn motion(
 }
 
 /// The motion a state plays: its one motion set's tree, or a named refusal.
-fn state_motion(
-    s: &State,
-    controller: &UnityAnimatorController,
-    rig: Entity,
-    w: &World,
-) -> Motion {
+fn state_motion(s: &State, controller: &UnityAnimatorController, rig: Entity, w: &World) -> Motion {
     match s.blend_tree_index.as_slice() {
         [index] => match usize::try_from(*index).ok().and_then(|i| s.blend_trees.get(i)) {
             Some(tree) if !tree.is_empty() => motion(tree, 0, controller, rig, w, 0),
             Some(_) => Motion::Unsupported("a blend tree of no nodes".to_owned()),
-            None => Motion::Unsupported(format!(
-                "its motion set {index} of {}",
-                s.blend_trees.len()
-            )),
+            None => Motion::Unsupported(format!("its motion set {index} of {}", s.blend_trees.len())),
         },
         sets => Motion::Unsupported(format!(
             "{} motion sets (a synchronised layer's overrides)",
@@ -339,7 +326,10 @@ fn controller_for(
             return None;
         };
         if !layer.default_weight.is_finite() {
-            log.omit("controllers not lowered: a layer's default weight is not finite", 1);
+            log.omit(
+                "controllers not lowered: a layer's default weight is not finite",
+                1,
+            );
             return None;
         }
         let mut states = Vec::with_capacity(machine.states.len());
@@ -377,10 +367,8 @@ fn controller_for(
 /// and its `core.controller_binding` on the rig.
 pub fn lower_unity_animator(w: &mut World) -> Result<PassLog> {
     let mut log = PassLog::default();
-    let animators: Vec<(Entity, UnityAnimator)> = w
-        .iter::<UnityAnimator>()
-        .map(|(e, a)| (e, a.clone()))
-        .collect();
+    let animators: Vec<(Entity, UnityAnimator)> =
+        w.iter::<UnityAnimator>().map(|(e, a)| (e, a.clone())).collect();
     log.count("Animators", animators.len() as u64);
     for (rig, animator) in animators {
         if !animator.enabled {
@@ -645,7 +633,10 @@ mod tests {
                 state(FLY, vec![node(3, 0, vec![1], vec![], u32::MAX), leaf(0)], 1.0),
             ],
         };
-        w.insert(controller_entity, controller(vec![layer(0, BASE, 0, 0.75)], vec![machine]));
+        w.insert(
+            controller_entity,
+            controller(vec![layer(0, BASE, 0, 0.75)], vec![machine]),
+        );
         w.insert(
             rig,
             UnityAnimator {
@@ -705,10 +696,7 @@ mod tests {
         assert_eq!(layer.states[0].speed, 1.0);
         assert_eq!(layer.states[0].cycle_offset, 0.25);
         assert_eq!(layer.states[0].speed_parameter, None);
-        let clips: Vec<Entity> = w
-            .iter::<Clip>()
-            .map(|(e, _)| e)
-            .collect();
+        let clips: Vec<Entity> = w.iter::<Clip>().map(|(e, _)| e).collect();
         match &layer.states[0].motion {
             Motion::Clip(clip) => assert!(clips.contains(clip)),
             other => panic!("{other:?}"),
@@ -777,17 +765,16 @@ mod tests {
     fn a_leaf_whose_clip_is_not_bound_is_named() {
         let (mut w, _, _) = world();
         // the first clip is not bound to the rig any more
-        let clip = w
-            .iter::<ClipBinding>()
-            .map(|(e, _)| e)
-            .next()
-            .expect("a binding");
+        let clip = w.iter::<ClipBinding>().map(|(e, _)| e).next().expect("a binding");
         w.get_mut::<ClipBinding>(clip).unwrap().rig = None;
         lower_unity_animator(&mut w).unwrap();
         let (_, value) = w.iter::<Controller>().next().unwrap();
         match &value.layers[0].states[1].motion {
-            Motion::Blend1D { children, .. } => assert!(children.iter().any(|(_, m)| matches!(m,
-                Motion::Unsupported(why) if why.contains("the rig has no clip"))), "{children:?}"),
+            Motion::Blend1D { children, .. } => assert!(
+                children.iter().any(|(_, m)| matches!(m,
+                Motion::Unsupported(why) if why.contains("the rig has no clip"))),
+                "{children:?}"
+            ),
             other => panic!("{other:?}"),
         }
     }

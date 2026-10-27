@@ -100,7 +100,10 @@ impl Pass for PrepareReskateBlendOrder {
     fn options(&self) -> Options {
         let mut o = crate::passes::overlays::encoding_options(&self.encoding);
         o.insert("grid".into(), self.grid.to_string());
-        o.insert("order".into(), primase_core::pass::Choice::text(self.order).into());
+        o.insert(
+            "order".into(),
+            primase_core::pass::Choice::text(self.order).into(),
+        );
         o
     }
     fn requires(&self) -> &[&'static str] {

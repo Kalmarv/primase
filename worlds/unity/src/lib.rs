@@ -53,8 +53,8 @@ pub mod shader;
 pub mod state_pose;
 
 pub use passes::{
-    draw_keywords, drawn, lower, lower_ambient, lower_animator, lower_collision, lower_lights,
-    lower_terrain, resolve_shaders,
+    draw_keywords, drawn, lower, lower_ambient, lower_animator, lower_collision, lower_lights, lower_terrain,
+    resolve_shaders,
 };
 pub use read::serialized::{ObjectInfo, SerializedFile};
 pub use read::tpk::TypeTreePackage;

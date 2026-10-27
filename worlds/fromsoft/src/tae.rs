@@ -186,12 +186,18 @@ impl Tae {
 
     /// Follow a TAE import's event record, detecting missing targets and cycles. Motion-only imports
     /// keep their own events; only ImportOther inherits events as well as motion.
-    pub fn resolved_animation(&self,id:i64)->Result<Option<&Animation>> {
-        let Some(mut record)=self.animation(id) else {return Ok(None);};
-        let mut seen=std::collections::BTreeSet::new();
-        while let Header::ImportOther {from,..}=&record.header {
-            if !seen.insert(record.id) {return Err(invalid(FORMAT,0,format!("animation {id}: cyclic event import")));}
-            record=self.animation(i64::from(*from)).ok_or_else(||invalid(FORMAT,0,format!("animation {id}: event import {from} absent")))?;
+    pub fn resolved_animation(&self, id: i64) -> Result<Option<&Animation>> {
+        let Some(mut record) = self.animation(id) else {
+            return Ok(None);
+        };
+        let mut seen = std::collections::BTreeSet::new();
+        while let Header::ImportOther { from, .. } = &record.header {
+            if !seen.insert(record.id) {
+                return Err(invalid(FORMAT, 0, format!("animation {id}: cyclic event import")));
+            }
+            record = self
+                .animation(i64::from(*from))
+                .ok_or_else(|| invalid(FORMAT, 0, format!("animation {id}: event import {from} absent")))?;
         }
         Ok(Some(record))
     }
@@ -356,7 +362,10 @@ mod tests {
         u32le(&mut b, 0x120, 0x140);
         put(&mut b, 0x128, &[1]);
         u32le(&mut b, 0x12c, u32::MAX);
-        let name: Vec<u8> = "a000_003000.hkt\0".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let name: Vec<u8> = "a000_003000.hkt\0"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
         put(&mut b, 0x140, &name);
         // the times: 0, 0.5 and the placeholder for no end
         f32le(&mut b, 0x160, 0.0);
@@ -397,7 +406,10 @@ mod tests {
             }
         );
         assert_eq!(a.events.len(), 2);
-        assert_eq!((a.events[0].kind, a.events[0].start, a.events[0].end), (0, 0.0, 0.5));
+        assert_eq!(
+            (a.events[0].kind, a.events[0].start, a.events[0].end),
+            (0, 0.0, 0.5)
+        );
         assert_eq!(a.events[0].parameters, vec![0xaa; 16]);
         assert_eq!(a.events[1].kind, 5);
         assert_eq!(a.events[1].unk04, 9);

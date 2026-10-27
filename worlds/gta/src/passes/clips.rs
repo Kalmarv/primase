@@ -83,8 +83,9 @@ fn converted(property: Property, v: &[f32]) -> Vec<f32> {
         (Property::Rotation, Rest::Trs { rotation: r, .. }) => r.to_vec(),
         (Property::Scale, Rest::Trs { scale: s, .. }) => s.to_vec(),
         (Property::Scalar | Property::Visibility | Property::Values(_), _) => v.to_vec(),
-        (Property::Translation | Property::Rotation | Property::Scale, Rest::Affine(_)) =>
-            unreachable!("GTA signed axis permutation preserves TRS"),
+        (Property::Translation | Property::Rotation | Property::Scale, Rest::Affine(_)) => {
+            unreachable!("GTA signed axis permutation preserves TRS")
+        }
     }
 }
 

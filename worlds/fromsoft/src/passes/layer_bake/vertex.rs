@@ -677,7 +677,13 @@ mod tests {
             .collect();
         assert_eq!(uv.len(), 1);
         let corners = planned.corners(&Inputs::default());
-        let at = |corner: usize| -> Vec<u32> { uv[0].lanes.iter().map(|&l| corners[corner][uv[0].register][l]).collect() };
+        let at = |corner: usize| -> Vec<u32> {
+            uv[0]
+                .lanes
+                .iter()
+                .map(|&l| corners[corner][uv[0].register][l])
+                .collect()
+        };
         // the corners (0, 0), (1, 0), (0, 1), (1, 1) at raw 0 and 2048
         assert_eq!(at(0), [0, 0]);
         assert_eq!(at(1), [2048, 0]);
@@ -704,7 +710,8 @@ mod tests {
             .unwrap();
         binding.inputs[at].role = InputRole::Stream(Semantic::Color(0));
         let pixel = primase_dxbc::lift(SIGN_PIXEL).unwrap();
-        let planned = VertexStage::new(&shader, &binding, &pixel, false, &FrozenFrame::static_bake(0.)).unwrap();
+        let planned =
+            VertexStage::new(&shader, &binding, &pixel, false, &FrozenFrame::static_bake(0.)).unwrap();
         assert!(planned.policies.contains_key(COLOUR0_POLICY));
         let colour: Vec<_> = planned
             .attributes

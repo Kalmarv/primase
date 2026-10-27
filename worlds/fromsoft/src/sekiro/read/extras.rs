@@ -183,8 +183,14 @@ pub fn assemble(
 /// position, as spawn points are) and every event of the layout as the `fromsoft.map_records` resource, counted by type
 /// into `report`. The spawn regions are among them: the extras make markers of those, and the records pass leaves them
 /// to it.
-pub fn records(layout: &MapLayout, region: Option<[f32; 4]>, report: &mut Report, world: &mut World) -> Result<()> {
-    let inside = |p: [f32; 3]| region.is_none_or(|r| p[0] >= r[0] && p[0] < r[2] && -p[2] >= r[1] && -p[2] < r[3]);
+pub fn records(
+    layout: &MapLayout,
+    region: Option<[f32; 4]>,
+    report: &mut Report,
+    world: &mut World,
+) -> Result<()> {
+    let inside =
+        |p: [f32; 3]| region.is_none_or(|r| p[0] >= r[0] && p[0] < r[2] && -p[2] >= r[1] && -p[2] < r[3]);
     let word = |name: Option<&str>, code: u32| name.map_or_else(|| format!("type_{code}"), str::to_owned);
     let mut regions = Vec::new();
     for r in layout.map_regions()? {
@@ -192,12 +198,18 @@ pub fn records(layout: &MapLayout, region: Option<[f32; 4]>, report: &mut Report
             report.regions_dropped_outside += 1;
             continue;
         }
-        *report.region_types.entry(word(r.type_name, r.type_code)).or_default() += 1;
+        *report
+            .region_types
+            .entry(word(r.type_name, r.type_code))
+            .or_default() += 1;
         regions.push(r);
     }
     let events = layout.map_events()?;
     for e in &events {
-        *report.event_types.entry(word(e.type_name, e.type_code)).or_default() += 1;
+        *report
+            .event_types
+            .entry(word(e.type_name, e.type_code))
+            .or_default() += 1;
     }
     let mut parts = Vec::new();
     for p in layout.unplaced_parts() {
