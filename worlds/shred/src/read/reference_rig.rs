@@ -80,7 +80,7 @@ pub fn append_bundle(
     frame: SourceFrame,
 ) -> Result<()> {
     // Decode and validate the entire bundle before mutating the caller's World or report.
-    let records = primase_morpheme::bundle_be32(bytes).map_err(|e| invalid(e.offset, e.detail))?;
+    let records = morpheme_formats::bundle_be32(bytes).map_err(|e| invalid(e.offset, e.detail))?;
     let mut rigs = Vec::new();
     let mut unsupported = Vec::new();
     let mut padding_bytes = 0;
@@ -91,7 +91,7 @@ pub fn append_bundle(
                 .offset
                 .checked_add(32)
                 .ok_or_else(|| invalid(record.offset, "rig origin overflow"))?;
-            let rig = primase_morpheme::rig_be32(record.payload, origin)
+            let rig = morpheme_formats::rig_be32(record.payload, origin)
                 .map_err(|e| invalid(e.offset, e.detail))?;
             let component = ReferenceRig {
                 pak: pak.into(),

@@ -1,5 +1,5 @@
 [package]
-name = "primase-morpheme"
+name = "morpheme-formats"
 description = "Morpheme 32-bit big-endian simple bundles and reference rigs"
 version.workspace = true
 edition.workspace = true

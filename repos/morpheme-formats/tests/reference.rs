@@ -1,4 +1,4 @@
-use primase_morpheme::{bundle_be32, rig_be32};
+use morpheme_formats::{bundle_be32, rig_be32};
 
 fn u(b: &mut [u8], at: usize, value: u32) {
     b[at..at + 4].copy_from_slice(&value.to_be_bytes());

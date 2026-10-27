@@ -458,7 +458,7 @@ crowd or UI variant, reads motion siblings, or joins joints to render bones by n
 Every type 1 occurrence becomes a separate `shred.reference_rig` entity, keyed by
 PAK, entry, record offset, asset ID and GUID. Copies are not merged by ID or GUID.
 
-The reusable 32-bit big-endian bundle/rig codec lives in `primase-morpheme`.
+The reusable 32-bit big-endian bundle/rig codec lives in `morpheme-formats`.
 The component retains joint indices, byte names, parents, local XYZW rotations,
 XYZ translations, the ignored position lane's original bits, separate rig-header
 orientation and raw header vector, the caller's `SourceFrame`, and the complete rig payload

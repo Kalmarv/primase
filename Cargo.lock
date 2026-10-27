@@ -897,6 +897,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "morpheme-formats"
+version = "0.1.0"
+dependencies = [
+ "primase-bytes",
+ "thiserror",
+]
+
+[[package]]
 name = "multiversion_no_op"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1376,14 +1384,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "primase-morpheme"
-version = "0.1.0"
-dependencies = [
- "primase-bytes",
- "thiserror",
-]
-
-[[package]]
 name = "primase-oozextract"
 version = "0.5.6"
 dependencies = [
@@ -1448,12 +1448,12 @@ version = "0.1.0"
 dependencies = [
  "half",
  "lua51-bytecode",
+ "morpheme-formats",
  "primase-bytes",
  "primase-compress",
  "primase-core",
  "primase-hash",
  "primase-havok",
- "primase-morpheme",
  "primase-testdata",
  "primase-texcodec",
  "quantydb-sqlite",

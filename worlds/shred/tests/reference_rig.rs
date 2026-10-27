@@ -1,9 +1,9 @@
+use morpheme_formats::{Joint, Rig};
 use primase_core::{
     Transform, World,
     frame::{Axis, SourceFrame},
     gate::{GateReport, Tolerance},
 };
-use primase_morpheme::{Joint, Rig};
 use primase_shred::{
     components::ReferenceRig,
     read::reference_rig::{Report, append_bundle},

@@ -1,8 +1,8 @@
 //! Animation reference data in its authored rig space; binding to render bones is separate.
+use morpheme_formats::Rig;
 use primase_core::{
     Component, Entity, Geometry, Linear, Transform, World, frame::SourceFrame, world::Linearity,
 };
-use primase_morpheme::Rig;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReferenceRig {
@@ -119,7 +119,7 @@ impl Component for ReferenceRig {
                 .sum::<u64>()
     }
     fn verify(&self, _: Entity, _: &World) -> Result<(), String> {
-        let decoded = primase_morpheme::rig_be32(&self.source_payload, 0).map_err(|e| e.to_string())?;
+        let decoded = morpheme_formats::rig_be32(&self.source_payload, 0).map_err(|e| e.to_string())?;
         if decoded != self.rig {
             return Err("reference rig differs from source provenance".into());
         }
