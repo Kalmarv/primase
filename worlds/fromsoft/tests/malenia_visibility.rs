@@ -10,6 +10,7 @@ use fromsoft_formats::{
 use primase_core::convert::Reader;
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{Clip, ClipTarget, Property, Skeleton, World};
+use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::game::Shading;
 use primase_fromsoft::sekiro;
 use primase_testdata::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
@@ -98,7 +99,7 @@ fn malenia_pixelkill_hash_and_alpha_permutation_discard() -> Result<()> {
     let install = Install::new(
         root,
         Game::EldenRing,
-        Keys::from_folder(key_dir, Game::EldenRing)?,
+        Keys::from_folder(key_dir, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
     );
     let archive = install.open()?;
     let report: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&report_path)?)?;
@@ -259,7 +260,7 @@ fn malenia_dynamic_parameter_defaults_and_rest_model_transforms() -> Result<()> 
     let install = Install::new(
         root,
         Game::EldenRing,
-        Keys::from_folder(key_dir, Game::EldenRing)?,
+        Keys::from_folder(key_dir, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
     );
     let archive = install.open()?;
     let mut wanted: BTreeSet<String> = ["c[c2120]_arts_petal", "c[c2120]_clone_bodyglow", "c[detailblend]"]
@@ -385,7 +386,7 @@ fn malenia_named_material_defaults_and_actual_npc_resident_slots() -> Result<()>
     let install = Install::new(
         root,
         Game::EldenRing,
-        Keys::from_folder(key_dir, Game::EldenRing)?,
+        Keys::from_folder(key_dir, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
     );
     let archive = install.open()?;
     let npcs = fromsoft_formats::game_params::read_param(&install, &archive, &decoder, "NpcParam.param")?;
@@ -546,7 +547,7 @@ fn malenia_material_ex_defaults_and_event198_target() -> Result<()> {
     let install = Install::new(
         root,
         Game::EldenRing,
-        Keys::from_folder(key_dir, Game::EldenRing)?,
+        Keys::from_folder(key_dir, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
     );
     let archive = install.open()?;
     let materials =
@@ -630,7 +631,7 @@ fn malenia_draw_flags_material_records_and_all_tae_controls() -> Result<()> {
     let install = Install::new(
         root,
         Game::EldenRing,
-        Keys::from_folder(key_dir, Game::EldenRing)?,
+        Keys::from_folder(key_dir, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
     );
     let archive = install.open()?;
     let npc = fromsoft_formats::game_params::read_npc_param(&install, &archive, &decoder)?;
@@ -723,7 +724,7 @@ fn malenia_source_mesh_groups_tae233_and_petal_bone_scales() -> Result<()> {
     let install = Install::new(
         root,
         Game::EldenRing,
-        Keys::from_folder(key_dir, Game::EldenRing)?,
+        Keys::from_folder(key_dir, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
     );
     let archive = install.open()?;
     let binder = Binder::read(&archive.read("/chr/c2120.chrbnd.dcx", &decoder)?, &decoder)?;

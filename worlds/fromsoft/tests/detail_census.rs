@@ -1,7 +1,7 @@
 //! A census of the detail-blend programs against the detail model (`pbr.detail`, [`primase_core::detail`]), in two parts.
 //! Both are `#[ignore]`d: they read the install (minutes), run alone with
 //! `cargo test -p primase-fromsoft --test detail_census -- --ignored --nocapture`, and do nothing where the install, its
-//! keys and the Oodle library are not configured (`GAME_DATA`, `primase_testdata`).
+//! keys and the Oodle library are not configured (`PRIMASE_DATA`, `primase_testdata`).
 //!
 //! 1. `elden_ring_detail_blend_programs_by_family_and_switch` lists every `C[DetailBlend]` program of Elden Ring's shader
 //!    bundles by family (the shader: `C[DetailBlend]`, `[Rich]`, `[S2]`, `_SSS`, `_cloth`, ...), switch and pass. It reads
@@ -24,8 +24,7 @@
 //!
 //!    A program no sampled character's material uses is not classified; add characters to cover it.
 #![allow(clippy::unwrap_used)]
-mod inputs;
-
+use primase_fromsoft::game::ParamKey;
 use std::collections::{BTreeMap, BTreeSet};
 
 use fromsoft_formats::{Binder, Game, Install, Keys, dcx::Decoder};
@@ -79,24 +78,18 @@ fn split(file: &str) -> (String, Option<u32>, String) {
     (family, switch, rest.join("_"))
 }
 
-fn install_and_decoder() -> Result<
-    Option<(
-        std::path::PathBuf,
-        Install,
-        primase_foundations::compress::oodle::Oodle,
-    )>,
-> {
+fn install_and_decoder() -> Result<Option<(std::path::PathBuf, Install, primase_foundations::compress::oodle::Oodle)>> {
     let (Some(root), Some(keys), Some(dll)) = (
-        inputs::install(inputs::Game::Elden),
-        inputs::keys(inputs::Game::Elden),
-        inputs::oodle(inputs::Tool::Oodle6),
+        primase_testdata::install(primase_testdata::Game::Elden),
+        primase_testdata::keys(primase_testdata::Game::Elden),
+        primase_testdata::oodle(primase_testdata::Tool::Oodle6),
     ) else {
         return Ok(None);
     };
     let install = Install::new(
         root.clone(),
         Game::EldenRing,
-        Keys::from_folder(keys, Game::EldenRing)?,
+        Keys::from_folder(keys, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
     );
     Ok(Some((root, install, common::oodle(dll)?)))
 }
@@ -175,7 +168,7 @@ fn elden_ring_detail_blend_programs_by_family_and_switch() -> Result<()> {
 /// The characters to sample: `game:ids;game:ids`, each id `cNNNN`.
 fn sampled() -> Vec<(Game, Vec<String>)> {
     let default = "elden:c2120,c3251,c2030,c2010;sekiro:c1070";
-    let text = inputs::debug("fromsoft.detail_census").unwrap_or_else(|| default.to_owned());
+    let text = primase_testdata::debug("fromsoft.detail_census").unwrap_or_else(|| default.to_owned());
     text.split(';')
         .filter_map(|group| {
             let (game, ids) = group.split_once(':')?;
@@ -193,7 +186,7 @@ fn sampled() -> Vec<(Game, Vec<String>)> {
 #[test]
 #[ignore = "reads characters from the install"]
 fn detail_blend_materials_of_characters_by_program() -> Result<()> {
-    let sekiro_install = inputs::install(inputs::Game::Sekiro);
+    let sekiro_install = primase_testdata::install(primase_testdata::Game::Sekiro);
     let Some((_, elden, dll)) = install_and_decoder()? else {
         return Ok(());
     };
@@ -205,12 +198,14 @@ fn detail_blend_materials_of_characters_by_program() -> Result<()> {
         let install = match game {
             Game::EldenRing => elden.clone(),
             Game::Sekiro => {
-                let (Some(root), Some(keys)) = (sekiro_install.clone(), inputs::keys(inputs::Game::Sekiro))
-                else {
+                let (Some(root), Some(keys)) = (
+                    sekiro_install.clone(),
+                    primase_testdata::keys(primase_testdata::Game::Sekiro),
+                ) else {
                     println!("SKIPPED sekiro: no install or keys configured");
                     continue;
                 };
-                Install::new(root, Game::Sekiro, Keys::from_folder(keys, Game::Sekiro)?)
+                Install::new(root, Game::Sekiro, Keys::from_folder(keys, Game::Sekiro, None)?)
             }
         };
         // program -> (materials, fit, reasons)

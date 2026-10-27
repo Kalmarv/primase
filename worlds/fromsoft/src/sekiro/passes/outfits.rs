@@ -183,7 +183,7 @@ impl Pass for RaiseFromSoftDisplayMasks {
 /// (`NpcParam 10100000 modelDispMask27=0 -> #27# hidden (primitives)`). Which character a row dresses is the program's
 /// statement, never derived: the rows' ids follow the character number (`c1010` has rows `10100000..10109999`) for
 /// 1738 of the 1760 character parts of Sekiro's ten maps and 23319 of the 23871 of Elden Ring's (the parts' NPC rows
-/// as [`crate::sekiro::npc_placements`] reads them, Sekiro's equal to the `enemies.jsonl` of
+/// as [`fromsoft_formats::game_params::npc_placements`] reads them, Sekiro's equal to the `enemies.jsonl` of
 /// `oracles.soulsformats.sekiro/npc`), but not for Sekiro's `c1001` (rows `1000xxxx`), `c7200`, `c7300` and `c7400` (rows `7201xxxx`,
 /// `7301xxxx`, `7310xxxx`, `7401xxxx`) or `c1000` (row `12600050`), so the pass counts a row whose id does not follow
 /// the number (`npc row ids not following the character number`) and still applies it. The report echoes the pair

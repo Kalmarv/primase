@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 use primase_core::World;
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
+use primase_fromsoft::game::ParamKey;
 
 /// Binder file paths from a clip-only plan's asset provenance, in authored order.
 /// This includes companion binders that have events but no clip members.
@@ -130,7 +131,11 @@ pub fn archive(
         Game::EldenRing => Data::Elden,
     };
     Ok(match (install(data), keys(data)) {
-        (Some(dir), Some(keys)) => Some(Archive::open_game(dir, game, &Keys::from_folder(keys, game)?)?),
+        (Some(dir), Some(keys)) => Some(Archive::open_game(
+            dir,
+            game,
+            &Keys::from_folder(keys, game, game.param_key_sha256())?,
+        )?),
         _ => None,
     })
 }
@@ -147,7 +152,7 @@ pub fn sekiro(
     Ok(Some(Install::new(
         root,
         Game::Sekiro,
-        Keys::from_folder(keys, Game::Sekiro)?,
+        Keys::from_folder(keys, Game::Sekiro, None)?,
     )))
 }
 

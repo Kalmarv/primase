@@ -1,6 +1,7 @@
 //! Metadata census for the permutation decision, not a claim about the engine's draw calls.
 //! Reads material definitions and bundle inventories only: no images, spline decode or shader lift.
 use fromsoft_formats::{Binder, Game, Install, Keys, dcx::Decoder, metaparam::Metaparam};
+use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::materials::{Definition, MaterialView, ParameterValue};
 use primase_testdata::{Game as Data, Tool, install, keys, oodle};
 use serde_json::{Value, json};
@@ -235,7 +236,7 @@ fn pixelkill_permutation_inventory_across_materials() -> Result<()> {
         Install::new(
             root,
             Game::EldenRing,
-            Keys::from_folder(key_dir, Game::EldenRing)?,
+            Keys::from_folder(key_dir, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
         ),
         &decoder,
     )?;

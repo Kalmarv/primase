@@ -41,7 +41,7 @@ fn census(
     };
     // each game opens with its own keys: Sekiro's are published, Elden Ring's are the install owner's folder
     let keys = match (kind, primase_testdata::keys(game)) {
-        (_, Some(folder)) => fromsoft_formats::Keys::from_folder(folder, kind)?,
+        (_, Some(folder)) => fromsoft_formats::Keys::from_folder(folder, kind, None)?,
         (_, None) => return Ok(()),
     };
     let Some(names) = oracle(OracleSet::Uxm, game, "dictionary.txt") else {

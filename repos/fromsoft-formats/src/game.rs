@@ -185,11 +185,10 @@ pub enum ParamSource {
     Archived(&'static str),
     /// A file beside the executable (`root` of an [`crate::Install`]), AES-256-CBC encrypted (its first 16 bytes the
     /// initialisation vector), holding a DCX envelope around the param binder. The key is the user's key material: the
-    /// file `key_file` of the keys folder ([`crate::Keys::from_folder`]), whose SHA-256 must be `key_sha256`.
+    /// file `key_file` of the keys folder ([`crate::Keys::from_folder`]).
     Regulation {
         file: &'static str,
         key_file: &'static str,
-        key_sha256: [u8; 32],
     },
 }
 

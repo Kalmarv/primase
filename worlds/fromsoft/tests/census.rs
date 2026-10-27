@@ -7,6 +7,7 @@ use fromsoft_formats::{
     bhd::{Header, unwrap_rsa},
 };
 use primase_core::gate::{GateReport, Tolerance};
+use primase_fromsoft::game::ParamKey;
 
 use std::path::PathBuf;
 
@@ -58,7 +59,7 @@ fn install(game: Game) -> Result<Option<Install>, Box<dyn std::error::Error>> {
     let Some(folder) = primase_testdata::keys(data) else {
         return Ok(None);
     };
-    let keys = Keys::from_folder(folder, game)?;
+    let keys = Keys::from_folder(folder, game, game.param_key_sha256())?;
     Ok(Some(Install {
         game,
         root,

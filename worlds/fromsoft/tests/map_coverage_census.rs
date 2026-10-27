@@ -41,6 +41,7 @@
 use fromsoft_formats::msb::{Event, MapLayout, Region};
 use fromsoft_formats::{Archive, Binder, Game, Install, Keys, NameDictionary, dcx::Decoder};
 use primase_core::World;
+use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::sekiro::{ExtrasReport, read_map_records};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -423,7 +424,7 @@ fn what_the_maps_store_and_what_primase_keeps() -> Result<()> {
             continue;
         };
         let keys = match (game, keys) {
-            (_, Some(folder)) => Keys::from_folder(folder, game)?,
+            (_, Some(folder)) => Keys::from_folder(folder, game, game.param_key_sha256())?,
             (_, None) => continue,
         };
         let names = primase_testdata::oracle(primase_testdata::OracleSet::Uxm, data, "dictionary.txt")

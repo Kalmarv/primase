@@ -1,5 +1,6 @@
 //! Archive key material in the forms a caller supplies it: an archive pair's RSA public key as a PKCS#1 PEM block
-//! ([`pem_public_key`]), and a 32-byte key as hexadecimal digits held to a digest ([`checked_key`]).
+//! ([`pem_public_key`]), and a 32-byte key as hexadecimal digits, held to a digest when the caller states one
+//! ([`checked_key`]).
 /// The modulus and exponent (big-endian, without leading zeros) of a PKCS#1 `RSA PUBLIC KEY` PEM block.
 pub(crate) fn pem_public_key(text: &str) -> crate::Result<(Vec<u8>, Vec<u8>)> {
     let err = |detail: &str| crate::invalid("PEM", 0, detail);
@@ -175,9 +176,9 @@ AA==
     }
 }
 
-/// A 32-byte key written as 64 hexadecimal digits, refused unless its SHA-256 is `sha256`: key material the user
-/// supplies is held to the digest the game's data states, never to the key itself.
-pub(crate) fn checked_key(hex: &str, sha256: &[u8; 32]) -> Result<[u8; 32], String> {
+/// A 32-byte key written as 64 hexadecimal digits, refused unless its SHA-256 is `sha256` when that is given: key
+/// material the user supplies is held to a digest the caller states, never to the key itself.
+pub(crate) fn checked_key(hex: &str, sha256: Option<&[u8; 32]>) -> Result<[u8; 32], String> {
     use sha2::{Digest, Sha256};
     if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(format!(
@@ -189,7 +190,7 @@ pub(crate) fn checked_key(hex: &str, sha256: &[u8; 32]) -> Result<[u8; 32], Stri
     for (i, k) in key.iter_mut().enumerate() {
         *k = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).map_err(|e| e.to_string())?;
     }
-    if Sha256::digest(key)[..] != sha256[..] {
+    if sha256.is_some_and(|sha256| Sha256::digest(key)[..] != sha256[..]) {
         return Err("not the key the game states (its SHA-256 differs)".into());
     }
     Ok(key)
@@ -205,13 +206,18 @@ mod checked_key_tests {
         let key = [7u8; 32];
         let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
         let digest: [u8; 32] = Sha256::digest(key).into();
-        assert_eq!(checked_key(&hex, &digest).unwrap(), key);
-        assert!(checked_key(&hex, &[0; 32]).unwrap_err().contains("SHA-256"));
+        assert_eq!(checked_key(&hex, Some(&digest)).unwrap(), key);
+        assert_eq!(checked_key(&hex, None).unwrap(), key);
+        assert_eq!(
+            checked_key(&hex, Some(&[0; 32])).unwrap_err(),
+            "not the key the game states (its SHA-256 differs)"
+        );
         assert!(
-            checked_key(&hex[..62], &digest)
+            checked_key(&hex[..62], Some(&digest))
                 .unwrap_err()
                 .contains("62 characters")
         );
-        assert!(checked_key(&"zz".repeat(32), &digest).is_err());
+        assert!(checked_key(&hex[..62], None).is_err());
+        assert!(checked_key(&"zz".repeat(32), None).is_err());
     }
 }

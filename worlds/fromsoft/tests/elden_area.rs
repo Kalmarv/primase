@@ -6,6 +6,7 @@
 //! its parent tile's offset where a parent places it: translation exact, with the core frame's z reversed.
 use fromsoft_formats::{Game, Install, Keys, dcx::Decoder};
 use primase_core::{Instance, Source, Transform, World};
+use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::sekiro;
 
 use std::collections::BTreeMap;
@@ -46,7 +47,11 @@ fn every_placed_part_is_accounted_for() -> Result<()> {
     ) else {
         return Ok(());
     };
-    let install = Install::new(root, Game::EldenRing, Keys::from_folder(keys, Game::EldenRing)?);
+    let install = Install::new(
+        root,
+        Game::EldenRing,
+        Keys::from_folder(keys, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
+    );
     let dll = common::oodle(dll)?;
     let decoder = Decoder {
         oodle: Some(&dll),

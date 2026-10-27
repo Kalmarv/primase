@@ -15,6 +15,7 @@
 //!   parts name: the meshes drawn are those SoulsFormats' cells of the row show, and each mask is traced to the row.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
+use primase_fromsoft::game::ParamKey;
 use std::collections::{BTreeMap, BTreeSet};
 
 use fromsoft_formats::dcx::Decoder;
@@ -61,7 +62,10 @@ fn configured(game: Game) -> Result<Option<(Install, primase_testdata::OodleLibr
         Game::EldenRing => Data::Elden,
     };
     Ok(match (install(data), keys(data)) {
-        (Some(dir), Some(k)) => Some((Install::new(dir, game, Keys::from_folder(k, game)?), dll)),
+        (Some(dir), Some(k)) => Some((
+            Install::new(dir, game, Keys::from_folder(k, game, game.param_key_sha256())?),
+            dll,
+        )),
         _ => None,
     })
 }

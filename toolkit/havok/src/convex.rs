@@ -237,7 +237,7 @@ impl ConvexCore {
     }
     /// The rounded surface Havok gives a convex shape, the core's vertices swept by a sphere of the convex radius,
     /// within `max_error` metres: the convex hull of every core vertex plus every vertex of a sphere polyhedron
-    /// inscribed in the radius ([`sphere_directions`], refined until each face lies within `max_error` of the
+    /// inscribed in the radius (`sphere_directions`, refined until each face lies within `max_error` of the
     /// sphere). Every hull vertex lies on the true surface, so the hull lies inside the shape, and no point of the
     /// shape is further than `max_error` from it (before f32 rounding). A core of no radius is its own polytope
     /// ([`ConvexCore::expanded_triangles`]). Triangles wind counter-clockwise from outside.

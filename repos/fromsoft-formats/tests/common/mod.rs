@@ -22,7 +22,11 @@ pub fn archive(
         Game::EldenRing => Data::Elden,
     };
     Ok(match (install(data), keys(data)) {
-        (Some(dir), Some(keys)) => Some(Archive::open_game(dir, game, &Keys::from_folder(keys, game)?)?),
+        (Some(dir), Some(keys)) => Some(Archive::open_game(
+            dir,
+            game,
+            &Keys::from_folder(keys, game, None)?,
+        )?),
         _ => None,
     })
 }

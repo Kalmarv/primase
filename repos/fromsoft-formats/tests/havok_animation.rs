@@ -48,7 +48,7 @@ fn h1_every_character_animation_file_reads() -> Result<()> {
     let archive = Archive::open_game(
         dir,
         fromsoft_formats::Game::Sekiro,
-        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro)?,
+        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro, None)?,
     )?;
     let mut binders = 0;
     let mut files = 0;
@@ -209,7 +209,7 @@ fn h2_every_spline_animation_decodes() -> Result<()> {
     let archive = Archive::open_game(
         dir,
         fromsoft_formats::Game::Sekiro,
-        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro)?,
+        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro, None)?,
     )?;
     let mut decoded = 0;
     let mut blocks = 0;

@@ -55,7 +55,7 @@ fn every_script_reads_and_matches_an_independent_reader() -> Result<()> {
     let archive = Archive::open_game(
         root,
         fromsoft_formats::Game::Sekiro,
-        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro)?,
+        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro, None)?,
     )?;
     let paths = scripts(&archive);
     let mut read = BTreeMap::new();

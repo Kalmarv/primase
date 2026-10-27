@@ -25,6 +25,7 @@
 use fromsoft_formats::dcx::Decoder;
 use fromsoft_formats::{Game, Install, Keys};
 use primase_core::{Asset, Role, Skeleton, World};
+use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::materials::Material;
 use primase_fromsoft::sekiro::{CharacterOptions, read_character_with};
 use primase_testdata::{Game as Data, Tool, install, keys, oodle};
@@ -44,7 +45,11 @@ fn an_elden_ring_character_reads_through_the_one_character_reader() -> Result<()
         oodle: Some(&dll),
         max_output: 1 << 30,
     };
-    let install = Install::new(dir, Game::EldenRing, Keys::from_folder(keys, Game::EldenRing)?);
+    let install = Install::new(
+        dir,
+        Game::EldenRing,
+        Keys::from_folder(keys, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
+    );
     let mut w = World::new();
     let report = read_character_with(&install, "c2010", &decoder, CharacterOptions::default(), &mut w)?;
     println!(
@@ -98,7 +103,11 @@ fn joints_scaled_to_nothing_hold_the_identity_when_no_vertex_weights_them() -> R
         oodle: Some(&dll),
         max_output: 1 << 30,
     };
-    let install = Install::new(dir, Game::EldenRing, Keys::from_folder(keys, Game::EldenRing)?);
+    let install = Install::new(
+        dir,
+        Game::EldenRing,
+        Keys::from_folder(keys, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
+    );
     let mut w = World::new();
     read_character_with(&install, "c8002", &decoder, CharacterOptions::default(), &mut w)?;
     let report = common::run(
@@ -126,7 +135,11 @@ fn a_character_with_no_model_lowers_to_nothing_and_its_asset_stays_whole() -> Re
         oodle: Some(&dll),
         max_output: 1 << 30,
     };
-    let install = Install::new(dir, Game::EldenRing, Keys::from_folder(keys, Game::EldenRing)?);
+    let install = Install::new(
+        dir,
+        Game::EldenRing,
+        Keys::from_folder(keys, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
+    );
     let mut w = World::new();
     read_character_with(&install, "c8000", &decoder, CharacterOptions::default(), &mut w)?;
     let report = common::run(
@@ -154,7 +167,11 @@ fn the_parts_folder_textures_of_a_character_are_found_in_the_common_body_package
         oodle: Some(&dll),
         max_output: 1 << 30,
     };
-    let install = Install::new(dir, Game::EldenRing, Keys::from_folder(keys, Game::EldenRing)?);
+    let install = Install::new(
+        dir,
+        Game::EldenRing,
+        Keys::from_folder(keys, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
+    );
     for id in ["c2200", "c2010"] {
         let mut w = World::new();
         read_character_with(&install, id, &decoder, CharacterOptions::default(), &mut w)?;
@@ -188,7 +205,11 @@ fn the_asset_textures_a_character_binds_are_read_from_their_packages() -> Result
         oodle: Some(&dll),
         max_output: 1 << 30,
     };
-    let install = Install::new(dir, Game::EldenRing, Keys::from_folder(keys, Game::EldenRing)?);
+    let install = Install::new(
+        dir,
+        Game::EldenRing,
+        Keys::from_folder(keys, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
+    );
     let archive = install.open()?;
     for id in ["c8100", "c8101", "c8110"] {
         let mut w = World::new();
@@ -228,7 +249,11 @@ fn an_alpha_tested_card_is_drawn_with_the_slot_its_program_tests() -> Result<()>
         oodle: Some(&dll),
         max_output: 1 << 30,
     };
-    let install = Install::new(dir, Game::EldenRing, Keys::from_folder(keys, Game::EldenRing)?);
+    let install = Install::new(
+        dir,
+        Game::EldenRing,
+        Keys::from_folder(keys, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
+    );
     let mut w = World::new();
     read_character_with(&install, "c5840", &decoder, CharacterOptions::default(), &mut w)?;
     common::run(

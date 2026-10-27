@@ -9,6 +9,7 @@
 //! (`oracles.uxm.elden/dictionary.txt`), the game's own Oodle library (in its Game folder), and
 //! `<oracles.root>/corpus/elden/shaders`.
 
+use primase_fromsoft::game::ParamKey;
 use std::path::PathBuf;
 
 use fromsoft_formats::{Archive, Binder, Game, Keys, NameDictionary, dcx::Decoder};
@@ -24,7 +25,7 @@ fn main() -> Result<(), BoxError> {
                 .into(),
         );
     };
-    let keys = Keys::from_folder(keys, Game::EldenRing)?;
+    let keys = Keys::from_folder(keys, Game::EldenRing, Game::EldenRing.param_key_sha256())?;
     let archive = Archive::open_game(install, Game::EldenRing, &keys)?;
     let names = NameDictionary::read_for(dictionary, Game::EldenRing)?;
     // SAFETY: the caller names the game's own Oodle library.

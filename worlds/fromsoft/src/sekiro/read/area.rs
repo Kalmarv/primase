@@ -30,7 +30,7 @@ pub struct Options {
     /// their parts that belong to it: none (default: the map's own layout only) or included, moved into the map's frame.
     pub parents: Parents,
     /// The area's draw-param file ([`draw_param`]): none (default: the graphics environment is not read) or the file
-    /// of this stem, one of [`draw_param::available`].
+    /// of this stem, one of [`fromsoft_formats::area::draw_params`].
     pub draw_param: draw_param::DrawParams,
     /// Whether the animation binder of each kept object model (Sekiro's objects, Elden Ring's assets: doors, lifts) is
     /// read into the world beside the model: its Havok skeleton and clips, named after the model. Off by default: the

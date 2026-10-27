@@ -11,6 +11,7 @@
 //! Runs where the install, its keys (regulation.key) and the Oodle library are configured; otherwise it does nothing.
 use fromsoft_formats::{Game, Install, Keys, dcx::Decoder};
 use primase_core::World;
+use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::sekiro;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -36,7 +37,11 @@ fn the_grass_the_maps_name() -> Result<()> {
     let (Some(root), Some(folder)) = (primase_testdata::install(data), primase_testdata::keys(data)) else {
         return Ok(());
     };
-    let install = Install::new(root, Game::EldenRing, Keys::from_folder(folder, Game::EldenRing)?);
+    let install = Install::new(
+        root,
+        Game::EldenRing,
+        Keys::from_folder(folder, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
+    );
     for map in ["m10_00_00_00", "m12_02_00_00", "m60_39_54_00"] {
         let mut world = World::default();
         let options = sekiro::Options {

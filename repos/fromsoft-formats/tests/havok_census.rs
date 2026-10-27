@@ -237,7 +237,7 @@ fn what_the_character_binders_hold_of_havok() -> Result<()> {
             continue;
         };
         let keys = match (game, keys) {
-            (_, Some(folder)) => Keys::from_folder(folder, game)?,
+            (_, Some(folder)) => Keys::from_folder(folder, game, None)?,
             (_, None) => continue,
         };
         let install = Install::new(root, game, keys);

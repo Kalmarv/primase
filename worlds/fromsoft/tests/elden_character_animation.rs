@@ -11,6 +11,7 @@
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
+use primase_fromsoft::game::ParamKey;
 use std::collections::BTreeMap;
 
 use fromsoft_formats::dcx::Decoder;
@@ -137,7 +138,11 @@ fn elden_ring_clips_move_onto_the_model_by_the_games_own_rule() -> Result<()> {
         oodle: Some(&dll),
         max_output: 1 << 30,
     };
-    let install = Install::new(dir, Game::EldenRing, Keys::from_folder(keys, Game::EldenRing)?);
+    let install = Install::new(
+        dir,
+        Game::EldenRing,
+        Keys::from_folder(keys, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
+    );
     // M1, M2: a creature whose hierarchy differs widely, and a humanoid
     let (clips, key_times, pairs, reparented) =
         check("c8000", "a000_000000;a000_003000;a000_020000", &decoder, &install)?;
@@ -169,7 +174,11 @@ fn elden_ring_divisions_are_read_from_the_blf_markers_and_a_refusal_names_its_bo
         oodle: Some(&dll),
         max_output: 1 << 30,
     };
-    let install = Install::new(dir, Game::EldenRing, Keys::from_folder(keys, Game::EldenRing)?);
+    let install = Install::new(
+        dir,
+        Game::EldenRing,
+        Keys::from_folder(keys, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
+    );
     let mut w = World::new();
     let report = read_character_with(
         &install,

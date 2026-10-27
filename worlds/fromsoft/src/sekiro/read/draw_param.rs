@@ -11,8 +11,8 @@
 //! groups of the file in force, and a collision part's scene config holds four signed bytes that Elden Ring's
 //! SoulsFormats names the hundreds digits of the files to use (`GparamSubID_Base` and three overrides) and Sekiro's does
 //! not explain. How the engine turns those and the area's events and weather into one file is not established, so the
-//! file is the caller's choice ([`DrawParams`]) from the ones the archive holds ([`available`]); the scene bytes are
-//! counted in the read's notices.
+//! file is the caller's choice ([`DrawParams`]) from the ones the archive holds
+//! ([`fromsoft_formats::area::draw_params`]); the scene bytes are counted in the read's notices.
 //!
 //! Which values. A file holds, for each field, one value per value ID (and time of day). The area's parts name the ID
 //! of four groups (`LightSet ParamEditor`, `FogParamEditor`, `LightScattering : ParamEditor`, `Env Map:Editor`): the ID
@@ -50,7 +50,7 @@ pub enum DrawParams {
     /// None read (default).
     #[default]
     None,
-    /// The file with this stem (`m11_01_0720`), one of [`available`].
+    /// The file with this stem (`m11_01_0720`), one of [`fromsoft_formats::area::draw_params`].
     File(String),
 }
 

@@ -8,6 +8,7 @@
 //! `Data5.pem`, `keys.sekiro`), the game's own Oodle library (in its folder), and `<oracles.root>/corpus/sekiro/havok`.
 //! The default area is Ashina Castle.
 
+use primase_fromsoft::game::ParamKey;
 use std::path::PathBuf;
 
 use fromsoft_formats::{Archive, Binder, Game, dcx::Decoder};
@@ -36,7 +37,11 @@ fn main() -> Result<(), BoxError> {
         .strip_prefix('m')
         .ok_or_else(|| format!("{area}: an area is named m<..>"))?;
     let game = Game::Sekiro;
-    let archive = Archive::open_game(install, game, &fromsoft_formats::Keys::from_folder(keys, game)?)?;
+    let archive = Archive::open_game(
+        install,
+        game,
+        &fromsoft_formats::Keys::from_folder(keys, game, game.param_key_sha256())?,
+    )?;
     // SAFETY: the caller names the game's own Oodle library.
     #[allow(unsafe_code)]
     let oodle = unsafe { Oodle::load(dll, Version::V6)? };

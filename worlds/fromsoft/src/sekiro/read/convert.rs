@@ -1,7 +1,7 @@
 //! A Sekiro area through the convert loop ([`primase_core::convert`]): [`AreaReader`] reads an area of an install
-//! with [`super::area::read_area`] and gives each part the closure of its roots in that world.
+//! with [`super::area::read_game_area`] and gives each part the closure of its roots in that world.
 //!
-//! [`super::area::read_area`] decodes every model, texture and collision file it keeps while it reads (the archive's files
+//! [`super::area::read_game_area`] decodes every model, texture and collision file it keeps while it reads (the archive's files
 //! are compressed whole), so the read world already holds the payloads: a part's load is its roots' closure, nothing
 //! read again, with the source files (`fromsoft.texture_payloads`, `fromsoft.shader_programs`) its materials bind
 //! and no others, shared with the read world rather than copied. The read is eager: the whole area's source stays

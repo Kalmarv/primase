@@ -12,6 +12,7 @@
 use fromsoft_formats::msb::MapLayout;
 use fromsoft_formats::{Game, Install, Keys, dcx::Decoder};
 use primase_core::World;
+use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::sekiro;
 use std::collections::BTreeMap;
 
@@ -112,7 +113,7 @@ fn the_shader_families_the_maps_use() -> Result<()> {
             continue;
         };
         let keys = match (game, keys) {
-            (_, Some(folder)) => Keys::from_folder(folder, game)?,
+            (_, Some(folder)) => Keys::from_folder(folder, game, game.param_key_sha256())?,
             (_, None) => continue,
         };
         let install = Install::new(root, game, keys);

@@ -115,7 +115,7 @@ fn all_texture_packages() -> Result<()> {
     let archive = Archive::open_game(
         root,
         fromsoft_formats::Game::Sekiro,
-        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro)?,
+        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro, None)?,
     )?;
     let names = NameDictionary::read(names)?;
     let mut expected = BTreeMap::new();

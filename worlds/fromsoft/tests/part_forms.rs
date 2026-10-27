@@ -2,6 +2,7 @@
 //! (`wp_a_0761_l`: the umbrella closed and open, each with an animation binder of its own) and Elden Ring's
 //! `wp_a_1152_l` (one mesh in two materials). Each form's other members go with it: its animation binder is its
 //! asset's clips when they are asked for, and is named on its report as not read otherwise.
+use primase_fromsoft::game::ParamKey;
 use std::collections::BTreeMap;
 
 use fromsoft_formats::dcx::Decoder;
@@ -169,7 +170,11 @@ fn a_part_binders_forms_are_assets_of_their_own() -> Result<()> {
         primase_testdata::install(primase_testdata::Game::Elden),
         primase_testdata::keys(primase_testdata::Game::Elden),
     ) {
-        let install = Install::new(root, Game::EldenRing, Keys::from_folder(keys, Game::EldenRing)?);
+        let install = Install::new(
+            root,
+            Game::EldenRing,
+            Keys::from_folder(keys, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
+        );
         let refused = part_forms(&install.open()?, &decoder, "fg_a_6000")
             .err()
             .ok_or("fg_a_6000 holds no FLVER")?;

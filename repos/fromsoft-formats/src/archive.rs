@@ -88,9 +88,14 @@ impl Keys {
     /// The keys the caller supplies: a PKCS#1 `RSA PUBLIC KEY` PEM file per archive pair in `folder`, named after the
     /// last component of the pair's stem (`Data0.pem`, `sd.pem`), and, for a game whose params are encrypted, their key
     /// in the file the game names ([`crate::game::ParamSource::Regulation`]: 64 hexadecimal digits, refused unless its
-    /// SHA-256 is the one the game states). A pair without a file has no key; opening an install that holds it then
-    /// fails. Without the params' key file, reading the params fails, naming it.
-    pub fn from_folder(folder: impl AsRef<Path>, game: Game) -> Result<Self> {
+    /// SHA-256 is `regulation_sha256` when that is given; with `None` it is not checked). A pair without a file has no
+    /// key; opening an install that holds it then fails. Without the params' key file, reading the params fails,
+    /// naming it.
+    pub fn from_folder(
+        folder: impl AsRef<Path>,
+        game: Game,
+        regulation_sha256: Option<&[u8; 32]>,
+    ) -> Result<Self> {
         let folder = folder.as_ref();
         let mut pairs = BTreeMap::new();
         for pair in game.archives().pairs {
@@ -102,15 +107,12 @@ impl Keys {
             }
         }
         let mut regulation = None;
-        if let crate::game::ParamSource::Regulation {
-            key_file, key_sha256, ..
-        } = game.params()
-        {
+        if let crate::game::ParamSource::Regulation { key_file, .. } = game.params() {
             let file = folder.join(key_file);
             if file.is_file() {
                 let text = std::fs::read_to_string(&file)?;
                 regulation = Some(
-                    crate::keys::checked_key(text.trim(), &key_sha256)
+                    crate::keys::checked_key(text.trim(), regulation_sha256)
                         .map_err(|e| invalid("key", 0, format!("{}: {e}", file.display())))?,
                 );
             }

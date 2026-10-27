@@ -1,5 +1,6 @@
 //! What primase takes of a FromSoftware game besides its files: how its renderer stores what a material program
-//! writes ([`Shading`]). Where the game keeps its files and how they are laid out is [`fromsoft_formats::Game`]'s.
+//! writes ([`Shading`]), and the digest the key of its encrypted params must have ([`ParamKey`]). Where the game keeps
+//! its files and how they are laid out is [`fromsoft_formats::Game`]'s.
 use fromsoft_formats::Game;
 use iridia_interface::OutputRole;
 
@@ -180,6 +181,29 @@ impl Shading for Game {
         match self {
             Game::Sekiro => iridia_interface::ShaderFormat::Dxbc,
             Game::EldenRing => iridia_interface::ShaderFormat::Dxil,
+        }
+    }
+}
+
+/// What the key of a game's encrypted params ([`fromsoft_formats::game::ParamSource::Regulation`]) must hash to: the
+/// user supplies the key ([`fromsoft_formats::Keys::from_folder`]), primase holds it to this SHA-256.
+pub trait ParamKey {
+    /// The SHA-256 of the 32-byte params key: none for Sekiro, whose params are not encrypted; for Elden Ring, the
+    /// digest of the `regulation.bin` key SoulsFormats' `RegulationDecryptor` names for the game.
+    fn param_key_sha256(self) -> Option<&'static [u8; 32]>;
+}
+
+/// Elden Ring's `regulation.bin` key's SHA-256.
+const ELDEN_RING_REGULATION_KEY_SHA256: [u8; 32] = [
+    0xcb, 0x34, 0x9d, 0x15, 0xa6, 0x49, 0x29, 0x69, 0xe3, 0xc8, 0x01, 0xdb, 0xf4, 0xd6, 0x0c, 0x72, 0x1e,
+    0x9c, 0x58, 0xab, 0xd4, 0xb4, 0x0c, 0xfc, 0x5b, 0x87, 0xaf, 0xf2, 0x53, 0xd6, 0x8c, 0x72,
+];
+
+impl ParamKey for Game {
+    fn param_key_sha256(self) -> Option<&'static [u8; 32]> {
+        match self {
+            Game::Sekiro => None,
+            Game::EldenRing => Some(&ELDEN_RING_REGULATION_KEY_SHA256),
         }
     }
 }

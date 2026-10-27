@@ -15,6 +15,7 @@ use fromsoft_formats::{Game, Install, Keys};
 use iridia_interface::{ConstantRole, ResourceKind};
 use primase_core::World;
 use primase_core::{shader::Shader, shader::ShaderBinding};
+use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::materials::Material;
 use primase_fromsoft::sekiro::{self, CharacterOptions};
 use std::collections::BTreeMap;
@@ -108,7 +109,11 @@ fn every_program_with_material_fields_binds_the_materials_parameters() -> Result
         primase_testdata::install(primase_testdata::Game::Elden),
         primase_testdata::keys(primase_testdata::Game::Elden),
     ) {
-        let install = Install::new(root, Game::EldenRing, Keys::from_folder(keys, Game::EldenRing)?);
+        let install = Install::new(
+            root,
+            Game::EldenRing,
+            Keys::from_folder(keys, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
+        );
         let mut world = World::default();
         sekiro::read_character_with(
             &install,

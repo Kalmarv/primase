@@ -35,7 +35,7 @@ fn all_material_definitions() -> Result<()> {
     let archive = Archive::open_game(
         root,
         fromsoft_formats::Game::Sekiro,
-        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro)?,
+        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro, None)?,
     )?;
     let binder = Binder::read(
         &archive.read("/mtd/allmaterialbnd.mtdbnd.dcx", &decoder)?,

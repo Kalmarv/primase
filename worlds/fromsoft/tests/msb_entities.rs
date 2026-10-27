@@ -41,7 +41,7 @@ fn part_entities_match_an_independent_reader() -> Result<()> {
     let archive = Archive::open_game(
         root,
         fromsoft_formats::Game::Sekiro,
-        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro)?,
+        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro, None)?,
     )?;
     let mut gate = GateReport::new("MSB part entity IDs and groups", Tolerance::Exact);
     let (mut maps, mut parts, mut with_entity, mut with_group) = (0, 0, 0, 0);

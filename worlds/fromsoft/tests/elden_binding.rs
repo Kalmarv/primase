@@ -20,6 +20,7 @@ use fromsoft_formats::{Game, Install, Keys, dcx::Decoder};
 use iridia_interface::ConstantRole;
 use primase_core::World;
 use primase_core::{shader::Shader, shader::ShaderBinding, shader::TextureSource};
+use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::game::Shading;
 use primase_fromsoft::materials::{Definition, Material, ParameterValue};
 use primase_fromsoft::sekiro;
@@ -45,7 +46,11 @@ fn elden_ring_materials_bind_as_their_definitions_state() -> Result<()> {
     ) else {
         return Ok(());
     };
-    let install = Install::new(root, Game::EldenRing, Keys::from_folder(keys, Game::EldenRing)?);
+    let install = Install::new(
+        root,
+        Game::EldenRing,
+        Keys::from_folder(keys, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
+    );
     let dll = common::oodle(dll)?;
     let decoder = Decoder {
         oodle: Some(&dll),

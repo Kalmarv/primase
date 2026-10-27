@@ -9,6 +9,7 @@
 //! Runs where the install, its keys and the Oodle library are configured; otherwise it does nothing.
 use fromsoft_formats::{Game, Install, Keys, dcx::Decoder};
 use primase_core::{Entity, World};
+use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::sekiro::{
     self,
     collision::{class_name, known_surface},
@@ -86,7 +87,7 @@ fn the_classes_the_maps_use() -> Result<()> {
             continue;
         };
         let keys = match (game, keys) {
-            (_, Some(folder)) => Keys::from_folder(folder, game)?,
+            (_, Some(folder)) => Keys::from_folder(folder, game, game.param_key_sha256())?,
             (_, None) => continue,
         };
         let install = Install::new(root, game, keys);

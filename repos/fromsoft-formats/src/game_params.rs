@@ -52,7 +52,7 @@ fn param_binder(install: &Install, archive: &Archive, decoder: &Decoder<'_>) -> 
             }
             Binder::read(&archive.read(path, decoder)?, decoder)
         }
-        ParamSource::Regulation { file, key_file, .. } => {
+        ParamSource::Regulation { file, key_file } => {
             let key = install.keys.regulation().ok_or_else(|| {
                 invalid(
                     FORMAT,

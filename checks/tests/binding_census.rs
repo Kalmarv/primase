@@ -12,6 +12,7 @@
 //! whose install is not configured prints nothing. Run it as one job: `cargo test -p primase-checks --test
 //! binding_census -- --nocapture --test-threads=1`.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::too_many_lines)]
+use primase_fromsoft::game::ParamKey;
 use std::collections::{BTreeMap, BTreeSet};
 
 use iridia_interface::{ConstantRole, InputRole, OutputRole, RenderState};
@@ -400,9 +401,9 @@ fn oodle(path: std::path::PathBuf) -> primase_foundations::compress::oodle::Oodl
 
 #[test]
 fn fromsoft_areas() {
+    use fromsoft_formats::{Game as FsGame, Install, Keys, dcx::Decoder};
     use primase_fromsoft::materials::Material;
     use primase_fromsoft::sekiro;
-    use fromsoft_formats::{Game as FsGame, Install, Keys, dcx::Decoder};
     use primase_testdata::{Game, Tool, install, keys, tool};
     let Some(dll) = tool(Tool::Oodle6) else {
         return;
@@ -419,7 +420,11 @@ fn fromsoft_areas() {
         print(&tally(&world, game, scene, materials, log));
     };
     if let (Some(root), Some(keys)) = (install(Game::Sekiro), keys(Game::Sekiro)) {
-        let install = Install::new(root, FsGame::Sekiro, Keys::from_folder(keys, FsGame::Sekiro).unwrap());
+        let install = Install::new(
+            root,
+            FsGame::Sekiro,
+            Keys::from_folder(keys, FsGame::Sekiro, None).unwrap(),
+        );
         let mut world = World::default();
         sekiro::read_game_area(
             &install,
@@ -441,7 +446,7 @@ fn fromsoft_areas() {
         let install = Install::new(
             root,
             FsGame::EldenRing,
-            Keys::from_folder(keys, FsGame::EldenRing).unwrap(),
+            Keys::from_folder(keys, FsGame::EldenRing, FsGame::EldenRing.param_key_sha256()).unwrap(),
         );
         for (map, parents, label) in [
             (

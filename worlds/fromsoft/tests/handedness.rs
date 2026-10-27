@@ -109,7 +109,7 @@ fn mirror_is_undone_in_the_geometry() {
     let archive = Archive::open_game(
         root,
         fromsoft_formats::Game::Sekiro,
-        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro).unwrap(),
+        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro, None).unwrap(),
     )
     .unwrap();
     let text = std::fs::read_to_string(frames.join("frames.jsonl")).unwrap();

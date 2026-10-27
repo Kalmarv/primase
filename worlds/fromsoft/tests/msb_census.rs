@@ -63,7 +63,7 @@ fn stored_parts_match_an_independent_reading() -> Result<()> {
     let archive = Archive::open_game(
         root,
         fromsoft_formats::Game::Sekiro,
-        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro)?,
+        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro, None)?,
     )?;
     let map = MapLayout::read(&archive.read(AREA, &decoder)?)?;
     // the parts the dump holds, by name: map pieces and objects

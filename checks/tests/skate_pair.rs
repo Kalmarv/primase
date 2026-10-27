@@ -1,4 +1,5 @@
 //! The existing Sekiro soldier and skate idle, through the same table in both directions, and a skin fit census.
+use fromsoft_formats::{Install, NameDictionary, dcx::Decoder};
 use primase_animation::{
     Fit, Placement, Reference, RetargetClip, RetargetSkin, Translation, UnmappedJoints,
     joint_table::JointTable, pair,
@@ -6,7 +7,6 @@ use primase_animation::{
 use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, RunReport};
 use primase_core::{Clip, ClipTarget, Entity, JointMap, Name, Skeleton, Skin, World};
 use primase_fromsoft::sekiro;
-use fromsoft_formats::{Install, NameDictionary, dcx::Decoder};
 use primase_frostbite::folder::{Folder, Source};
 use primase_reskate::{
     game::{clip::LowerSkateClips, rig::render_map},
@@ -150,7 +150,11 @@ fn existing_soldier_and_skate_idle_transfer_both_ways_and_skin_rebinds() -> Resu
     let Some(keys) = primase_testdata::keys(Game::Sekiro) else {
         return Err("needs keys.sekiro; no game data was measured".into());
     };
-    let install = Install::new(root, fromsoft_formats::Game::Sekiro, fromsoft_formats::Keys::from_folder(keys, fromsoft_formats::Game::Sekiro)?);
+    let install = Install::new(
+        root,
+        fromsoft_formats::Game::Sekiro,
+        fromsoft_formats::Keys::from_folder(keys, fromsoft_formats::Game::Sekiro, None)?,
+    );
     let mut w = World::new();
     sekiro::read_character_with(
         &install,
@@ -259,7 +263,11 @@ fn every_sekiro_human_candidate_reports_pairs_ratios_and_skin_fit() -> Result<()
     let Some(keys) = primase_testdata::keys(Game::Sekiro) else {
         return Err("needs keys.sekiro; no game data was measured".into());
     };
-    let install = Install::new(root, fromsoft_formats::Game::Sekiro, fromsoft_formats::Keys::from_folder(keys, fromsoft_formats::Game::Sekiro)?);
+    let install = Install::new(
+        root,
+        fromsoft_formats::Game::Sekiro,
+        fromsoft_formats::Keys::from_folder(keys, fromsoft_formats::Game::Sekiro, None)?,
+    );
     let archive = install.open()?;
     let dictionary = NameDictionary::read_for(names, fromsoft_formats::Game::Sekiro)?;
     let folder = Folder::open(data)?;

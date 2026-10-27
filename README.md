@@ -97,7 +97,7 @@ fn main() -> Result<()> {
     let oodle = load_oodle(Path::new("C:/Games/Sekiro/oo2core_6_win64.dll"))?;
     let decoder = Decoder { oodle: Some(&oodle), max_output: 1 << 30 };
     let options = sekiro::Options { region: Some(sekiro::Region { rect: region, margin: 30.0 }), ..Default::default() };
-    let keys = Keys::from_folder("C:/Games/Sekiro/keys", Game::Sekiro)?;
+    let keys = Keys::from_folder("C:/Games/Sekiro/keys", Game::Sekiro, None)?;
     let install = Install::new("C:/Games/Sekiro", Game::Sekiro, keys);
     let mut reader = AreaReader::of(install, "m11_01", decoder, options);
     let e = EncodingOptions {

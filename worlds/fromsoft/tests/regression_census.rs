@@ -14,6 +14,7 @@
 //! on a difference the test writes the new table to the scratch directory (`regression-census.txt`), prints each field with
 //! the baseline's value and the new one, and fails. The worlds whose install is missing are skipped, and so are their
 //! lines of the baseline. Phase times of each world are printed (`--nocapture`).
+use primase_fromsoft::game::ParamKey;
 use std::collections::BTreeMap;
 use std::time::Instant;
 
@@ -280,7 +281,11 @@ fn what_the_readers_and_passes_make_of_the_characters_is_the_baseline() -> Resul
         primase_testdata::install(primase_testdata::Game::Elden),
         primase_testdata::keys(primase_testdata::Game::Elden),
     ) {
-        let install = Install::new(root, Game::EldenRing, Keys::from_folder(keys, Game::EldenRing)?);
+        let install = Install::new(
+            root,
+            Game::EldenRing,
+            Keys::from_folder(keys, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
+        );
         now.extend(census("elden-c3000", |w| {
             sekiro::read_character_with(&install, "c3000", &decoder, CharacterOptions::default(), w)?;
             Ok(())

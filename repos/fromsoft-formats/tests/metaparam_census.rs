@@ -30,7 +30,7 @@ fn every_metaparam_of_the_install() {
     let archive = Archive::open_game(
         root,
         fromsoft_formats::Game::Sekiro,
-        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro).unwrap(),
+        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro, None).unwrap(),
     )
     .unwrap();
     let outer = Binder::read(

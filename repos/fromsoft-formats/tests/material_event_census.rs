@@ -53,7 +53,7 @@ fn every_elden_character_material_event198_payload() -> Result<()> {
     let install = Install::new(
         root,
         Game::EldenRing,
-        Keys::from_folder(key_dir, Game::EldenRing)?,
+        Keys::from_folder(key_dir, Game::EldenRing, None)?,
     );
     let archive = install.open()?;
     let table =

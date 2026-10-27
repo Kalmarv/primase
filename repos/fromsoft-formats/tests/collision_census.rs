@@ -33,7 +33,7 @@ fn installed_collision_types() -> Result<()> {
     let archive = Archive::open_game(
         dir,
         fromsoft_formats::Game::Sekiro,
-        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro)?,
+        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro, None)?,
     )?;
     let names = NameDictionary::read(names)?;
     let unnamed = archive

@@ -9,6 +9,7 @@
 //! [--limit N] [--max-bytes N] [--compression KRAK|DFLT]`, `<keys>` the folder of `Data1.pem` to `Data5.pem`
 //! (`keys.sekiro`), `<out>` being `<oracles.root>/corpus/sekiro/dcx`.
 
+use primase_fromsoft::game::ParamKey;
 use std::path::PathBuf;
 
 use fromsoft_formats::{Archive, dcx};
@@ -42,7 +43,11 @@ fn main() -> Result<(), BoxError> {
         );
     };
     let game = fromsoft_formats::Game::Sekiro;
-    let archive = Archive::open_game(install, game, &fromsoft_formats::Keys::from_folder(keys, game)?)?;
+    let archive = Archive::open_game(
+        install,
+        game,
+        &fromsoft_formats::Keys::from_folder(keys, game, game.param_key_sha256())?,
+    )?;
     std::fs::create_dir_all(out)?;
     let mut written = 0usize;
     for (&hash, indexed) in &archive.entries {

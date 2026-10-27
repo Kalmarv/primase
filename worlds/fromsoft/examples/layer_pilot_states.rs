@@ -15,6 +15,7 @@
 //! `<out>/cases.json` and, per case, cap and variant, `<out>/<case>-<cap>-<variant>/` holding the state's `state.json`
 //! and the files it names (its schema: [`primase_fromsoft::layer_bake::SCHEMA`]).
 
+use primase_fromsoft::game::ParamKey;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -94,8 +95,11 @@ fn main() -> Result<(), BoxError> {
         ..Default::default()
     };
     let game = fromsoft_formats::Game::Sekiro;
-    let install =
-        fromsoft_formats::Install::new(install, game, fromsoft_formats::Keys::from_folder(keys, game)?);
+    let install = fromsoft_formats::Install::new(
+        install,
+        game,
+        fromsoft_formats::Keys::from_folder(keys, game, game.param_key_sha256())?,
+    );
     let (mut world, _) = AreaReader::of(install, &area, decoder, options).read()?;
     // lowered as the conversion lowers it, up to the shader binding the bake reads
     let skip = [SkipClass::Sky, SkipClass::LightVolume, SkipClass::Shadow].into();

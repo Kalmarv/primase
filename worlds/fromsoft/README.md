@@ -276,7 +276,7 @@ block, probed by path), requires the oracle to list the same set, and compares e
 `sekiro::Options::states` (default `None`: nothing changes) set to `Event` reads the block's event script
 (`sekiro::states`). Each `2000:6` call of the part-state common functions 20004110 (map pieces), 20004112 (objects)
 or 20004114 (collisions) with exactly seven arguments and no parameter substitution is a rule: the entity (a part's
-entity ID or one of its groups) is disabled while any of its four (flag, state) pairs holds. `read_area` then makes a
+entity ID or one of its groups) is disabled while any of its four (flag, state) pairs holds. `read_game_area` then makes a
 bool `core.state_axis` per flag (`fromsoft.flag.<id>`, class `event`, default off) and gives each decided placement a
 `core.condition`, the AND over its rules of "flag is not the state". World collision files and object collision
 present only in some states are written as separate soups (`collision/game_state<n>.bin`, `water_state<n>.bin`,
@@ -376,8 +376,8 @@ words `unk30`, `cbuffer_size`, `flags`, `unk40`, `gxmd_key`, `ca_block_size`, `u
 
 ## Area reading and its passes
 
-`sekiro::read_game_area(&Install, map, ...)` reads any game's map through the same read (`read_area` is Sekiro's,
-`AreaReader::of(install, ...)` the reader adapter's); an `Install` is the folder, its `Game` and its archive keys.
+`sekiro::read_game_area(&Install, map, ...)` reads any game's map through the same read (`AreaReader::of(install, ...)` is the
+reader adapter's); an `Install` is the folder, its `Game` and its archive keys.
 What differs between the games and is not stated by their files is `Game`'s: where a map keeps its files
 (`map_folder`: Sekiro `/map/<map>`, Elden Ring `/map/<mAA>/<map>`), how a placed object's model is found
 (`object_model`: Sekiro's `/obj/<model>.objbnd.dcx` with its HKX, Elden Ring's `/asset/aeg/<group>/<model>.geombnd.dcx`)

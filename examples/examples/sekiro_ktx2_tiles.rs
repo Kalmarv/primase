@@ -8,12 +8,12 @@
 //! <oo2core_6_win64.dll> <out>`, `<keys>` the folder of the install's archive keys (`Data1.pem` to `Data5.pem`).
 use std::path::{Path, PathBuf};
 
+use fromsoft_formats::dcx::Decoder;
+use fromsoft_formats::{Game, Install, Keys};
 use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_core::convert::{Result, convert_parts};
 use primase_core::pass::{PassManager, PassRegistry, Pipeline};
 use primase_core::{LodChoice, SelectLod};
-use fromsoft_formats::dcx::Decoder;
-use fromsoft_formats::{Game, Install, Keys};
 use primase_fromsoft::materials::SkipClass;
 use primase_fromsoft::rigid::ApplyRigidSkinning;
 use primase_fromsoft::sekiro;
@@ -35,7 +35,7 @@ fn main() -> Result<()> {
     let oodle = load_oodle(dll)?;
     let decoder = Decoder { oodle: Some(&oodle), max_output: 1 << 30 };
     let options = sekiro::Options { region: Some(sekiro::Region { rect: region, margin: 30.0 }), ..Default::default() };
-    let install = Install::new(install, Game::Sekiro, Keys::from_folder(keys, Game::Sekiro)?);
+    let install = Install::new(install, Game::Sekiro, Keys::from_folder(keys, Game::Sekiro, None)?);
     let mut reader = AreaReader::of(install, "m11_01", decoder, options);
 
     // the two sets: KTX2, and its plain twin; one plan (the same cells), so the same prepared worlds reach both

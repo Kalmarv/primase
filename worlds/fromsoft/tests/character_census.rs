@@ -18,6 +18,7 @@ use fromsoft_formats::tae::Tae;
 use fromsoft_formats::{Binder, Game, Install, Keys, dcx::Decoder};
 use primase_core::convert::Reader;
 use primase_core::{Skeleton, Sockets, World};
+use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::sekiro::character_data::{Cloth, Dummies, NpcStatRows};
 use primase_fromsoft::sekiro::{self, CharacterOptions};
 
@@ -199,7 +200,7 @@ fn what_the_characters_hold() -> Result<()> {
             continue;
         };
         let keys = match (game, keys) {
-            (_, Some(folder)) => Keys::from_folder(folder, game)?,
+            (_, Some(folder)) => Keys::from_folder(folder, game, game.param_key_sha256())?,
             (_, None) => continue,
         };
         let install = Install::new(root, game, keys);

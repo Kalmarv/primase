@@ -5,6 +5,7 @@
 #![allow(clippy::unwrap_used)]
 use fromsoft_formats::dcx::Decoder;
 use primase_core::{Name, World};
+use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::materials::Material;
 use primase_fromsoft::sekiro::source::{MaterialShader, ShaderBundle, ShaderStage};
 use primase_fromsoft::sekiro::{self, read_game_area};
@@ -89,7 +90,7 @@ fn elden_ring_materials_link_their_shader_model_6_bundles() {
     let install = Install::new(
         root,
         FromSoft::EldenRing,
-        Keys::from_folder(keys, FromSoft::EldenRing).unwrap(),
+        Keys::from_folder(keys, FromSoft::EldenRing, FromSoft::EldenRing.param_key_sha256()).unwrap(),
     );
     let dll = common::oodle(dll).unwrap();
     let decoder = Decoder {

@@ -38,7 +38,7 @@ fn full_castle_rigid_vertices() -> Result<()> {
     let archive = Archive::open_game(
         root,
         fromsoft_formats::Game::Sekiro,
-        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro)?,
+        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro, None)?,
     )?;
     let jsonl = |name: &str| -> Result<Vec<serde_json::Value>> {
         std::fs::read_to_string(oracle.join(name))?
