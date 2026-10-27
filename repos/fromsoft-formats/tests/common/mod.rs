@@ -4,10 +4,15 @@
 /// The version-6 Oodle codec: the configured game library on Windows, oozextract elsewhere.
 #[allow(unsafe_code)]
 pub fn oodle(
-    library: primase_testdata::OodleLibrary,
+    library: crate::inputs::OodleLibrary,
 ) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
     // SAFETY: the test configuration names a trusted native library.
-    unsafe { primase_foundations::compress::oodle::Oodle::open(library.path(), primase_foundations::compress::oodle::Version::V6) }
+    unsafe {
+        primase_foundations::compress::oodle::Oodle::open(
+            library.path(),
+            primase_foundations::compress::oodle::Version::V6,
+        )
+    }
 }
 
 /// A configured game's archives (`installs.sekiro` with `keys.sekiro`, or `installs.elden` with `keys.elden`), or
@@ -15,8 +20,8 @@ pub fn oodle(
 pub fn archive(
     game: fromsoft_formats::Game,
 ) -> Result<Option<fromsoft_formats::Archive>, Box<dyn std::error::Error>> {
+    use crate::inputs::{Game as Data, install, keys};
     use fromsoft_formats::{Archive, Game, Keys};
-    use primase_testdata::{Game as Data, install, keys};
     let data = match game {
         Game::Sekiro => Data::Sekiro,
         Game::EldenRing => Data::Elden,

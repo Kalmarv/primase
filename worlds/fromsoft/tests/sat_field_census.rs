@@ -10,6 +10,8 @@
 //! for comparing two revisions' reads. The Wolf's scarf's rows are those Sekiro's capture shows (cb11-capture), and
 //! no FLVER of c3000 stores a texture scale other than 1, so the tiling rule's first step (the FLVER's scale) changes
 //! no row of Elden Ring's captured rule.
+mod inputs;
+
 use fromsoft_formats::dcx::Decoder;
 use fromsoft_formats::{Game, Install, Keys};
 use iridia_interface::{ConstantRole, ResourceKind};
@@ -89,7 +91,7 @@ fn tilings(world: &World) -> Vec<String> {
 
 #[test]
 fn every_program_with_material_fields_binds_the_materials_parameters() -> Result<()> {
-    let Some(dll) = primase_testdata::oodle(primase_testdata::Tool::Oodle6) else {
+    let Some(dll) = inputs::oodle(inputs::Tool::Oodle6) else {
         return Ok(());
     };
     let dll = common::oodle(dll)?;
@@ -98,7 +100,7 @@ fn every_program_with_material_fields_binds_the_materials_parameters() -> Result
         max_output: 1 << 30,
     };
     let mut reads: Vec<(&str, World)> = Vec::new();
-    if let Some(root) = primase_testdata::install(primase_testdata::Game::Sekiro)
+    if let Some(root) = inputs::install(inputs::Game::Sekiro)
         && let Some(root) = common::sekiro(root)?
     {
         let mut world = World::default();
@@ -106,8 +108,8 @@ fn every_program_with_material_fields_binds_the_materials_parameters() -> Result
         reads.push(("Sekiro Wolf (default outfit)", world));
     }
     if let (Some(root), Some(keys)) = (
-        primase_testdata::install(primase_testdata::Game::Elden),
-        primase_testdata::keys(primase_testdata::Game::Elden),
+        inputs::install(inputs::Game::Elden),
+        inputs::keys(inputs::Game::Elden),
     ) {
         let install = Install::new(
             root,

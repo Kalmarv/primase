@@ -1,17 +1,26 @@
 //! Independent MTD values, including every decoded string and stored parameter.
+mod inputs;
+
 use fromsoft_formats::{
     Archive, Binder,
     dcx::Decoder,
     mtd::{MaterialDefinition, Value},
 };
-use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
+use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[allow(unsafe_code)]
-fn native(path: primase_testdata::OodleLibrary) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
+fn native(
+    path: inputs::OodleLibrary,
+) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
     // SAFETY: caller explicitly supplies a trusted version-6 native library.
-    unsafe { primase_foundations::compress::oodle::Oodle::open(path.path(), primase_foundations::compress::oodle::Version::V6) }
+    unsafe {
+        primase_foundations::compress::oodle::Oodle::open(
+            path.path(),
+            primase_foundations::compress::oodle::Version::V6,
+        )
+    }
 }
 #[test]
 fn all_material_definitions() -> Result<()> {
@@ -29,7 +38,7 @@ fn all_material_definitions() -> Result<()> {
         oodle: Some(&dll),
         max_output: 512 * 1024 * 1024,
     };
-    let Some(sekiro_keys) = primase_testdata::keys(primase_testdata::Game::Sekiro) else {
+    let Some(sekiro_keys) = inputs::keys(inputs::Game::Sekiro) else {
         return Ok(());
     };
     let archive = Archive::open_game(

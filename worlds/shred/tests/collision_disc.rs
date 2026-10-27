@@ -5,14 +5,14 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod inputs;
 
+use havok_formats::packfile::{
+    Packfile,
+    physics::{self, RigidBody as StoredBody, Shape as StoredShape},
+};
 use inputs::{Game, Query, expect_found, install, install_file};
 use primase_core::{
     Collider, Collision, Instance, Mesh, Shape, Source, Transform, World,
     frame::{Axis, SourceFrame},
-};
-use havok_formats::packfile::{
-    Packfile,
-    physics::{self, RigidBody as StoredBody, Shape as StoredShape},
 };
 use primase_shred::{
     components::{CollisionSurfaces, DynamicShape, RigidBody},

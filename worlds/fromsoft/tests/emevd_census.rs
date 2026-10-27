@@ -3,20 +3,27 @@
 //! (`emevd.jsonl` in `oracles.scripts.sekiro/state`: per script the decompressed file's sha256 and every event's id,
 //! rest behaviour, instructions as bank, id, argument bytes and layer, parameter substitutions, linked files and
 //! strings) must equal ours exactly, and it must list the same scripts as the census found.
+mod inputs;
+
 use std::collections::BTreeMap;
 
 use fromsoft_formats::{Archive, dcx::Decoder, emevd::Script};
-use primase_core::gate::{GateReport, Tolerance};
-use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
+use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
+use primase_testdata::gate::{GateReport, Tolerance};
 use sha2::{Digest, Sha256};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[allow(unsafe_code)]
 mod native {
     pub fn load(
-        path: primase_testdata::OodleLibrary,
+        path: crate::inputs::OodleLibrary,
     ) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
         // SAFETY: caller explicitly supplies a trusted version-6 native library.
-        unsafe { primase_foundations::compress::oodle::Oodle::open(path.path(), primase_foundations::compress::oodle::Version::V6) }
+        unsafe {
+            primase_foundations::compress::oodle::Oodle::open(
+                path.path(),
+                primase_foundations::compress::oodle::Version::V6,
+            )
+        }
     }
 }
 
@@ -49,7 +56,7 @@ fn every_script_reads_and_matches_an_independent_reader() -> Result<()> {
         oodle: Some(&dll),
         max_output: 512 * 1024 * 1024,
     };
-    let Some(sekiro_keys) = primase_testdata::keys(primase_testdata::Game::Sekiro) else {
+    let Some(sekiro_keys) = inputs::keys(inputs::Game::Sekiro) else {
         return Ok(());
     };
     let archive = Archive::open_game(

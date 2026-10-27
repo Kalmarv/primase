@@ -11,16 +11,18 @@
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
+mod inputs;
+
 use primase_fromsoft::game::ParamKey;
 use std::collections::BTreeMap;
 
 use fromsoft_formats::dcx::Decoder;
 use fromsoft_formats::{Game, Install, Keys};
+use inputs::{Game as Data, Tool, install, keys, oodle};
 use primase_animation::pose::{evaluate, model_transforms};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{Clip, ClipTarget, Entity, JointId, JointMap, Name, Rest, Skeleton, World};
 use primase_fromsoft::sekiro::{CharacterOptions, read_character_with};
-use primase_testdata::{Game as Data, Tool, install, keys, oodle};
 
 mod common;
 

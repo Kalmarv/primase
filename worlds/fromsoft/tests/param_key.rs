@@ -1,11 +1,13 @@
 //! The user's Elden Ring params key (`regulation.key` of `keys.elden`) is the key whose SHA-256 [`ParamKey`] states:
 //! read with that digest it is accepted, with another refused, and without one read unchecked to the same key.
+mod inputs;
+
 use fromsoft_formats::{Game, Keys};
 use primase_fromsoft::game::ParamKey;
 
 #[test]
 fn the_users_regulation_key_has_the_stated_digest() {
-    let Some(folder) = primase_testdata::keys(primase_testdata::Game::Elden) else {
+    let Some(folder) = inputs::keys(inputs::Game::Elden) else {
         return;
     };
     let game = Game::EldenRing;

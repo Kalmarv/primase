@@ -1,12 +1,14 @@
 //! Real selected-area assembly, including split geometry and authoritative PBR.
+mod inputs;
+
 use fromsoft_formats::dcx::Decoder;
+use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
 use primase_core::pass::RunReport;
 use primase_core::pbr::PbrMaterial;
 use primase_core::{DrawLayer, DrawOrder, Entity, MaterialUsage, Mesh, Name, Texture, World};
 use primase_fromsoft::materials::Material;
 use primase_fromsoft::sekiro;
 use primase_fromsoft::sekiro::source::{FaceCull, MaterialSlots, PrototypeSource};
-use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 use std::collections::BTreeMap;
 mod common;
 /// One read and bake of `region` of m11_01, its layers baked at most `max_size` pixels on an edge, its source
@@ -204,8 +206,8 @@ fn region_holds(
 }
 
 /// The baseline scene's region of m11_01, baked as the conversion bakes it, holds what any region's bake holds
-/// ([`region_holds`]). The smoke gate ([`primase_testdata::depth`]) bakes a sample of the region's cells
-/// ([`common::cells`]: [`SMOKE_CELLS`] of nine, drawn with [`primase_testdata::seed`], printed and named in every
+/// ([`region_holds`]). The smoke gate ([`inputs::depth`]) bakes a sample of the region's cells
+/// ([`common::cells`]: [`SMOKE_CELLS`] of nine, drawn with [`inputs::seed`], printed and named in every
 /// failure) at [`SMOKE_MAX_SIZE`], so it checks nothing that depends on the resolution (the baked pixels, which
 /// variants share their content); the full gate bakes the whole region at the conversion's 512 and checks its
 /// counts, as measured.
@@ -226,8 +228,8 @@ fn baked_slice_assembly() -> Result<(), Box<dyn std::error::Error>> {
     let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(reference.join("scene.json"))?)?;
     let region: [f32; 4] = serde_json::from_value(manifest["region"].clone())?;
     let dll = common::oodle(dll)?;
-    if primase_testdata::depth() == primase_testdata::Depth::Smoke {
-        let seed = primase_testdata::seed();
+    if inputs::depth() == inputs::Depth::Smoke {
+        let seed = inputs::seed();
         let cells = common::cells(region);
         let sample = common::sample(seed, cells.len(), SMOKE_CELLS);
         println!(

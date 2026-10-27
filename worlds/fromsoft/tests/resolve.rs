@@ -2,6 +2,8 @@
 //! Sekiro's binding rules (`resolve`) and the `resolve-fromsoft-shaders` pass, on one layered program built to
 //! Sekiro's naming (tests/fixtures/layered.hlsl, compiled with fxc): the constants, texture slots and outputs a
 //! layered material's binding holds, worked out from the HLSL, fxc's listing of its buffers and the material.
+mod inputs;
+
 use fromsoft_formats::mtd::{self, MaterialDefinition, Parameter, Value};
 use iridia_exec::PixelShader;
 use iridia_exec::ProgramShader;
@@ -16,6 +18,7 @@ use primase_core::{
     World,
 };
 use primase_core::{shader::Shader, shader::ShaderBinding, shader::TextureSource};
+use primase_foundations::sampling::Address;
 use primase_fromsoft::layer_bake::resolve::{
     SECOND_COLOUR, UNBOUND_MATERIAL_FIELDS, Unbound, render_state, resolve,
 };
@@ -23,7 +26,6 @@ use primase_fromsoft::materials::{Binding, LayeredMaterial, Material};
 use primase_fromsoft::sekiro::source::{
     MaterialShader, ShaderBundle, ShaderProgram, ShaderPrograms, ShaderStage, TexturePayloads,
 };
-use primase_foundations::sampling::Address;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 mod common;

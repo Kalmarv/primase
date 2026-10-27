@@ -16,6 +16,8 @@
 //!   not read).
 //!
 //! Runs where the install, its keys and the Oodle library are configured; otherwise it does nothing.
+mod inputs;
+
 use fromsoft_formats::{Binder, Game, Install, Keys, dcx::Decoder};
 use havok_formats::{Compendium, Tagfile};
 use std::collections::{BTreeMap, BTreeSet};
@@ -221,7 +223,7 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>) -> Result<()> {
 
 #[test]
 fn what_the_character_binders_hold_of_havok() -> Result<()> {
-    let Some(dll) = primase_testdata::oodle(primase_testdata::Tool::Oodle6) else {
+    let Some(dll) = inputs::oodle(inputs::Tool::Oodle6) else {
         return Ok(());
     };
     let dll = common::oodle(dll)?;
@@ -230,10 +232,10 @@ fn what_the_character_binders_hold_of_havok() -> Result<()> {
         max_output: 1 << 30,
     };
     for (game, data) in [
-        (Game::Sekiro, primase_testdata::Game::Sekiro),
-        (Game::EldenRing, primase_testdata::Game::Elden),
+        (Game::Sekiro, inputs::Game::Sekiro),
+        (Game::EldenRing, inputs::Game::Elden),
     ] {
-        let (Some(root), keys) = (primase_testdata::install(data), primase_testdata::keys(data)) else {
+        let (Some(root), keys) = (inputs::install(data), inputs::keys(data)) else {
             continue;
         };
         let keys = match (game, keys) {

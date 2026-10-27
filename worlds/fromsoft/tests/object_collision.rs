@@ -9,8 +9,10 @@
 //!
 //! Havoc's reading gives a name's UTF-8 bytes as one character each (`本` read as `æ\u{9c}¬`): such a name is compared
 //! with its characters taken back to bytes and read as UTF-8, and counted.
+mod inputs;
+
 use fromsoft_formats::collision::{self, BodyGeometry};
-use primase_testdata::{Game, OracleSet, oracle};
+use inputs::{Game, OracleSet, oracle};
 use serde_json::Value;
 use std::fs;
 

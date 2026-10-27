@@ -2,6 +2,8 @@
 //! format oracle: SoulsFormatsNEXT ee1dd61's BTL for Elden Ring, `oracles.soulsformats.elden/format`): the stored
 //! version and every light's name, type, colours, powers, shadow flag, cone, position, rotation and radius, floats as
 //! bit patterns. A bank the reference refuses must be refused by ours too.
+mod inputs;
+
 use fromsoft_formats::{Game, btl::LightBank, dcx::Decoder};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -11,16 +13,12 @@ mod common;
 fn every_light_bank_matches_an_independent_reading() -> Result<()> {
     for (game, format) in [(
         Game::EldenRing,
-        primase_testdata::oracle(
-            primase_testdata::OracleSet::SoulsFormats,
-            primase_testdata::Game::Elden,
-            "format",
-        ),
+        inputs::oracle(inputs::OracleSet::SoulsFormats, inputs::Game::Elden, "format"),
     )] {
         let (Some(archive), Some(oracle), Some(dll)) = (
             common::archive(game)?,
             format,
-            primase_testdata::oodle(primase_testdata::Tool::Oodle6),
+            inputs::oodle(inputs::Tool::Oodle6),
         ) else {
             continue;
         };

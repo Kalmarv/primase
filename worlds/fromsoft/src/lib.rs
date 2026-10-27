@@ -19,3 +19,8 @@ pub use passes::{
 pub(crate) fn invalid(format: &'static str, offset: usize, detail: impl ToString) -> fromsoft_formats::Error {
     fromsoft_formats::Error::invalid(format, offset, detail)
 }
+
+/// The real-data inputs this crate's unit tests read (tests/inputs/mod.rs).
+#[cfg(test)]
+#[path = "../tests/inputs/mod.rs"]
+mod inputs;

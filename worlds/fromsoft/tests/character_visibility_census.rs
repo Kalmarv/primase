@@ -1,14 +1,16 @@
 //! Source visibility coverage for every dictionary-named character in both games. No HKX tracks,
 //! meshes, textures or shaders are decoded. A zero counts events, not a claim about bone-scale animation.
+mod inputs;
+
 use fromsoft_formats::{
     Binder, Game, Install, Keys, NameDictionary,
     dcx::Decoder,
     tae::{Tae, clip_animation_id},
 };
+use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use primase_core::convert::Reader;
 use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::sekiro;
-use primase_testdata::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use serde_json::json;
 use std::collections::BTreeSet;
 mod common;

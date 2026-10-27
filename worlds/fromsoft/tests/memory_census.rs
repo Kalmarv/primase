@@ -8,7 +8,7 @@
 //! last stage began. A read that would hold more than the cap (the debug key `fromsoft.memory_cap_gb`, default 10) aborts
 //! the process with a `MEMCAP-EXCEEDED` line naming the stage, rather than the machine's memory manager killing it later
 //! and saying nothing; run one area to a process (the debug key `fromsoft.census_areas=sekiro/m11_01_00_00`) so the others
-//! are not lost to an abort. Debug keys are set in `PRIMASE_DEBUG` (`key=value;key=value`, CONTRIBUTING.md).
+//! are not lost to an abort. Debug keys are set in `GAME_DATA_DEBUG` (`key=value;key=value`, CONTRIBUTING.md).
 //!
 //! The lines:
 //!
@@ -28,6 +28,8 @@
     unsafe_code,
     reason = "a counting global allocator: it forwards every call to the system allocator, which it only adds counters to"
 )]
+mod inputs;
+
 use primase_fromsoft::game::ParamKey;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::io::Write;
@@ -148,7 +150,7 @@ const AREAS: [(Game, &str, &[&str]); 2] = [
 
 /// The cap in bytes: the debug key `fromsoft.memory_cap_gb` (a whole or decimal number of GiB), else 10 GiB.
 fn cap_bytes() -> usize {
-    primase_testdata::debug("fromsoft.memory_cap_gb")
+    inputs::debug("fromsoft.memory_cap_gb")
         .and_then(|v| v.parse::<f64>().ok())
         .filter(|gb| gb.is_finite() && *gb > 0.0)
         .map_or(10 << 30, |gb| (gb * (1u64 << 30) as f64) as usize)
@@ -157,7 +159,7 @@ fn cap_bytes() -> usize {
 /// The areas to read: the debug key `fromsoft.census_areas` (a comma list of `<game>/<area>` or `<area>`), else every one
 /// of [`AREAS`].
 fn wanted(game: &str, area: &str) -> bool {
-    primase_testdata::debug("fromsoft.census_areas").is_none_or(|list| {
+    inputs::debug("fromsoft.census_areas").is_none_or(|list| {
         list.split(',')
             .map(str::trim)
             .any(|item| item == area || item == format!("{game}/{area}"))
@@ -244,7 +246,7 @@ fn census(game: Game, label: &str, install: &Install, area: &str, decoder: &Deco
 fn what_an_area_read_holds_at_each_stage() -> Result<()> {
     CAP.store(cap_bytes(), Relaxed);
     println!("MEMCAP {}", CAP.load(Relaxed));
-    let Some(dll) = primase_testdata::oodle(primase_testdata::Tool::Oodle6) else {
+    let Some(dll) = inputs::oodle(inputs::Tool::Oodle6) else {
         return Ok(());
     };
     let dll = common::oodle(dll)?;
@@ -255,10 +257,10 @@ fn what_an_area_read_holds_at_each_stage() -> Result<()> {
     let mut read_any = false;
     for (game, label, areas) in AREAS {
         let data = match game {
-            Game::Sekiro => primase_testdata::Game::Sekiro,
-            Game::EldenRing => primase_testdata::Game::Elden,
+            Game::Sekiro => inputs::Game::Sekiro,
+            Game::EldenRing => inputs::Game::Elden,
         };
-        let (Some(root), keys) = (primase_testdata::install(data), primase_testdata::keys(data)) else {
+        let (Some(root), keys) = (inputs::install(data), inputs::keys(data)) else {
             continue;
         };
         let keys = match (game, keys) {
@@ -267,7 +269,7 @@ fn what_an_area_read_holds_at_each_stage() -> Result<()> {
         };
         let install = Install::new(root, game, keys);
         // the dictionary is not needed by the read; it is listed so a census names what it could not have read
-        let _ = primase_testdata::oracle(primase_testdata::OracleSet::Uxm, data, "dictionary.txt")
+        let _ = inputs::oracle(inputs::OracleSet::Uxm, data, "dictionary.txt")
             .map(|path| NameDictionary::read_for(path, game));
         let archive = install.open()?;
         for area in areas.iter().filter(|area| wanted(label, area)) {

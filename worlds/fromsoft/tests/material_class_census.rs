@@ -9,6 +9,8 @@
 //! Maps of more than 1500 parts are read at the 100 m square the repository's other area tests use for Sekiro's
 //! m11_01 and skipped otherwise (a whole castle is more than a test reads). Runs where the install, its keys and the
 //! Oodle library are configured; otherwise it does nothing.
+mod inputs;
+
 use fromsoft_formats::msb::MapLayout;
 use fromsoft_formats::{Game, Install, Keys, dcx::Decoder};
 use primase_core::World;
@@ -83,7 +85,7 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>, map: &str) -> Re
 
 #[test]
 fn the_shader_families_the_maps_use() -> Result<()> {
-    let Some(dll) = primase_testdata::oodle(primase_testdata::Tool::Oodle6) else {
+    let Some(dll) = inputs::oodle(inputs::Tool::Oodle6) else {
         return Ok(());
     };
     let dll = common::oodle(dll)?;
@@ -94,7 +96,7 @@ fn the_shader_families_the_maps_use() -> Result<()> {
     for (game, data, maps) in [
         (
             Game::Sekiro,
-            primase_testdata::Game::Sekiro,
+            inputs::Game::Sekiro,
             &[
                 "m11_01_00_00",
                 "m20_00_00_00",
@@ -105,11 +107,11 @@ fn the_shader_families_the_maps_use() -> Result<()> {
         ),
         (
             Game::EldenRing,
-            primase_testdata::Game::Elden,
+            inputs::Game::Elden,
             &["m10_00_00_00", "m12_02_00_00", "m14_00_00_00", "m31_12_00_00"][..],
         ),
     ] {
-        let (Some(root), keys) = (primase_testdata::install(data), primase_testdata::keys(data)) else {
+        let (Some(root), keys) = (inputs::install(data), inputs::keys(data)) else {
             continue;
         };
         let keys = match (game, keys) {

@@ -6,12 +6,14 @@
 //! The counts are the ones the offline recon census produced (`HK.md`: 12,789 bodies, 1,758 meshes, 6,445 subparts,
 //! 646,081 triangles, 855,428 vertices, 8,780 convex shapes).
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod inputs;
+
 use havok_formats::packfile::{
     Packfile,
     physics::{self, ConvexVertices, ExtendedMesh, RigidBody, Shape},
 };
-use primase_shred::read::pak::Pak;
-use primase_testdata::{Game, Query, expect_found, install};
+use inputs::{Game, Query, expect_found, install};
+use rme_formats::pak::Pak;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 

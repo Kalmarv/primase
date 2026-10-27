@@ -10,6 +10,9 @@
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
+mod inputs;
+
+use inputs::{Game, Tool, install, oodle};
 use primase_core::frame::{Axis, SourceFrame};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{
@@ -20,7 +23,6 @@ use fromsoft_formats::dcx::Decoder;
 use havok_formats::spline::{Absent, Fallback};
 use primase_fromsoft::sekiro::{CharacterOptions, read_character_with, read_parts_with};
 use primase_havok::world::HavokAnimation;
-use primase_testdata::{Game, Tool, install, oodle};
 mod common;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -37,8 +39,12 @@ fn a_characters_animations_read_lower_and_map_onto_its_model() -> Result<()> {
         return Ok(());
     };
     // SAFETY: explicitly supplied trusted native decoder.
-    let dll =
-        unsafe { primase_foundations::compress::oodle::Oodle::open(dll.path(), primase_foundations::compress::oodle::Version::V6) }?;
+    let dll = unsafe {
+        primase_foundations::compress::oodle::Oodle::open(
+            dll.path(),
+            primase_foundations::compress::oodle::Version::V6,
+        )
+    }?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1 << 30,
@@ -264,8 +270,12 @@ fn the_players_animations_come_from_the_binders_its_markers_name() -> Result<()>
         return Ok(());
     };
     // SAFETY: explicitly supplied trusted native decoder.
-    let dll =
-        unsafe { primase_foundations::compress::oodle::Oodle::open(dll.path(), primase_foundations::compress::oodle::Version::V6) }?;
+    let dll = unsafe {
+        primase_foundations::compress::oodle::Oodle::open(
+            dll.path(),
+            primase_foundations::compress::oodle::Version::V6,
+        )
+    }?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1 << 30,

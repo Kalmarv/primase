@@ -1,7 +1,9 @@
 //! Container coverage gate. The independent decoder supplies loose tagfiles
 //! and their compendium; no game data is included in the repository.
+mod inputs;
+
 use havok_formats::{Compendium, Tagfile};
-use primase_testdata::{Game, OracleSet, Query, expect_found, resolve};
+use inputs::{Game, OracleSet, Query, expect_found, resolve};
 #[test]
 fn tagfile_containers() -> Result<(), Box<dyn std::error::Error>> {
     let corpus = Query::Oracle(OracleSet::Corpus, Game::Sekiro, "havok");

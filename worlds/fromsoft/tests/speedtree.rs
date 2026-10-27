@@ -18,6 +18,8 @@
 //! Each mesh's normal and tangent are the members its program reads as them, as `lower-fromsoft-geometry` takes them
 //! with `speedtree-frame=program` ([`program_frame`], [`Model::set_speedtree_frame`]); the meshes where those are not
 //! its layout's pair are listed. Billboard cards are the `billboard` material class, and their decode is refused.
+mod inputs;
+
 use fromsoft_formats::flver::{Model, SpeedTreeLayout, is_speedtree, speedtree_layout};
 use fromsoft_formats::{Binder, Game, NameDictionary, dcx::Decoder};
 use iridia_exec::{Backend, Element, Executable, ImageSample, Resources, Runner};
@@ -32,10 +34,15 @@ mod common;
 #[allow(unsafe_code)]
 mod native {
     pub fn load(
-        path: primase_testdata::OodleLibrary,
+        path: crate::inputs::OodleLibrary,
     ) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
         // SAFETY: caller explicitly supplies a trusted version-6 native library.
-        unsafe { primase_foundations::compress::oodle::Oodle::open(path.path(), primase_foundations::compress::oodle::Version::V6) }
+        unsafe {
+            primase_foundations::compress::oodle::Oodle::open(
+                path.path(),
+                primase_foundations::compress::oodle::Version::V6,
+            )
+        }
     }
 }
 
@@ -190,12 +197,8 @@ struct Counts {
 fn speedtree_models_are_what_their_programs_draw() -> Result<()> {
     let (Some(archive), Some(dll), Some(names)) = (
         common::archive(Game::EldenRing)?,
-        primase_testdata::oodle(primase_testdata::Tool::Oodle6),
-        primase_testdata::oracle(
-            primase_testdata::OracleSet::Uxm,
-            primase_testdata::Game::Elden,
-            "dictionary.txt",
-        ),
+        inputs::oodle(inputs::Tool::Oodle6),
+        inputs::oracle(inputs::OracleSet::Uxm, inputs::Game::Elden, "dictionary.txt"),
     ) else {
         return Ok(());
     };

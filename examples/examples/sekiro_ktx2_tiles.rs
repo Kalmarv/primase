@@ -10,10 +10,10 @@ use std::path::{Path, PathBuf};
 
 use fromsoft_formats::dcx::Decoder;
 use fromsoft_formats::{Game, Install, Keys};
-use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_core::convert::{Result, convert_parts};
 use primase_core::pass::{PassManager, PassRegistry, Pipeline};
 use primase_core::{LodChoice, SelectLod};
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_fromsoft::materials::SkipClass;
 use primase_fromsoft::rigid::ApplyRigidSkinning;
 use primase_fromsoft::sekiro;

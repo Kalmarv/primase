@@ -103,18 +103,6 @@ primase_testdata::inputs! {
             about: r#"folder recursively containing loose KRAK DCX files"#,
             source: r#"the game's own files from the user's install: worlds/fromsoft/examples/corpus_sekiro_dcx.rs (KRAK envelopes as stored, the first 256 in hash order up to 4 MiB)"#,
         },
-        Query::Oracle(OracleSet::Corpus, Game::Sekiro, "havok") => {
-            status: Live,
-            gate: true,
-            about: r#"one area's high-resolution map collision as its binder stores it: loose Havok 2016.2 tagfiles and the compendium they share, every body and compressed mesh read; toolkit/havok/tests/corpus.rs, schema in toolkit/havok/README.md"#,
-            source: r#"the game's own files from the user's install: worlds/fromsoft/examples/corpus_sekiro_havok.rs (the area's `h*.hkxbhd`/`.hkxbdt` binder, each member out of its DCX envelope)"#,
-        },
-        Query::Oracle(OracleSet::Corpus, Game::Sekiro, "havok-soup") => {
-            status: Live,
-            gate: true,
-            about: r#"an independent decoder's raw triangle soup of each `havok` tagfile, `<name>.hkx.soup`; schema in toolkit/havok/README.md; worlds/fromsoft/tests/collision.rs"#,
-            source: r#"independent: a clean-room decoder written from the data alone (no primase decoding code, no third-party code), the primase-oracles harness dumps/havok-soup (5f6dde8, Python standard library) run over `corpus.sekiro/havok`; its README states the format facts and its counts.tsv the per-file triangles"#,
-        },
         Query::Oracle(OracleSet::Corpus, Game::Sekiro, "lznib") => {
             status: Live,
             gate: true,
@@ -198,12 +186,6 @@ primase_testdata::inputs! {
             gate: true,
             about: r#"a SoulsFormats dump of an area: parts.jsonl (every MSB map piece and object part with its model and matrix), models.jsonl, missing-rigid.jsonl (placed models it could not dump, with why) and per placed model a binary of mesh/vertex counts followed by position and normal f32 triples in model space; worlds/fromsoft/tests/rigid_census.rs, sekiro_scene.rs"#,
             source: r#"independent: SoulsFormats 9c0da6b, through a thin dump harness kept with the private oracle tools (`rigid` mode)"#,
-        },
-        Query::Oracle(OracleSet::SoulsFormats, Game::Sekiro, "materials") => {
-            status: Live,
-            gate: true,
-            about: r#"independent MTD fields and block lengths (mtd.jsonl, mtd-boundaries.jsonl); schema in worlds/fromsoft/README.md; worlds/fromsoft/tests/mtd_census.rs"#,
-            source: r#"independent: SoulsFormats 9c0da6b, through a thin dump harness kept with the private oracle tools (`mtd` mode): the fields from its MTD reader, the consumed block lengths from its writer's rewrite of each file"#,
         },
         Query::Oracle(OracleSet::SoulsFormats, Game::Sekiro, "npc") => {
             status: Live,

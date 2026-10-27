@@ -1,5 +1,10 @@
 //! The existing Sekiro soldier and skate idle, through the same table in both directions, and a skin fit census.
+mod inputs;
+
+use inputs::{Game, OracleSet, Tool, install, install_file, oodle, oracle, tool};
+
 use fromsoft_formats::{Install, NameDictionary, dcx::Decoder};
+use frostbite_formats::folder::{Folder, Source};
 use primase_animation::{
     Fit, Placement, Reference, RetargetClip, RetargetSkin, Translation, UnmappedJoints,
     joint_table::JointTable, pair,
@@ -7,12 +12,10 @@ use primase_animation::{
 use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, RunReport};
 use primase_core::{Clip, ClipTarget, Entity, JointMap, Name, Skeleton, Skin, World};
 use primase_fromsoft::sekiro;
-use primase_frostbite::folder::{Folder, Source};
 use primase_reskate::{
     game::{clip::LowerSkateClips, rig::render_map},
     read::animation,
 };
-use primase_testdata::{Game, OracleSet, Tool, install, install_file, oodle, oracle, tool};
 use serde_json::json;
 use std::collections::BTreeSet;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -24,10 +27,15 @@ const SEKIRO_SKATE_TABLE: &str = include_str!("fixtures/sekiro-human__skate-rend
 /// The version-6 Oodle codec: the configured game library on Windows, oozextract elsewhere.
 #[allow(unsafe_code)]
 fn fromsoft_oodle(
-    library: primase_testdata::OodleLibrary,
+    library: inputs::OodleLibrary,
 ) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
     // SAFETY: the test configuration names a trusted native library.
-    unsafe { primase_foundations::compress::oodle::Oodle::open(library.path(), primase_foundations::compress::oodle::Version::V6) }
+    unsafe {
+        primase_foundations::compress::oodle::Oodle::open(
+            library.path(),
+            primase_foundations::compress::oodle::Version::V6,
+        )
+    }
 }
 
 const LOWER: &str = "lower-fromsoft-geometry{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw,speedtree-frame=program},select-lod{form=finest}";
@@ -147,7 +155,7 @@ fn existing_soldier_and_skate_idle_transfer_both_ways_and_skin_rebinds() -> Resu
         oodle: Some(&codec),
         max_output: 1 << 30,
     };
-    let Some(keys) = primase_testdata::keys(Game::Sekiro) else {
+    let Some(keys) = inputs::keys(Game::Sekiro) else {
         return Err("needs keys.sekiro; no game data was measured".into());
     };
     let install = Install::new(
@@ -176,8 +184,12 @@ fn existing_soldier_and_skate_idle_transfer_both_ways_and_skin_rebinds() -> Resu
     let folder = Folder::open(data)?;
     // SAFETY: explicitly configured trusted game decoder.
     #[allow(unsafe_code)]
-    let skate_codec =
-        unsafe { primase_foundations::compress::oodle::Oodle::load(skate_dll, primase_foundations::compress::oodle::Version::V9) }?;
+    let skate_codec = unsafe {
+        primase_foundations::compress::oodle::Oodle::load(
+            skate_dll,
+            primase_foundations::compress::oodle::Version::V9,
+        )
+    }?;
     let src = Source {
         folder: &folder,
         base: Some(&folder),
@@ -260,7 +272,7 @@ fn every_sekiro_human_candidate_reports_pairs_ratios_and_skin_fit() -> Result<()
         oodle: Some(&codec),
         max_output: 1 << 30,
     };
-    let Some(keys) = primase_testdata::keys(Game::Sekiro) else {
+    let Some(keys) = inputs::keys(Game::Sekiro) else {
         return Err("needs keys.sekiro; no game data was measured".into());
     };
     let install = Install::new(
@@ -273,8 +285,12 @@ fn every_sekiro_human_candidate_reports_pairs_ratios_and_skin_fit() -> Result<()
     let folder = Folder::open(data)?;
     // SAFETY: explicitly configured trusted game decoder.
     #[allow(unsafe_code)]
-    let skate_codec =
-        unsafe { primase_foundations::compress::oodle::Oodle::load(skate_dll, primase_foundations::compress::oodle::Version::V9) }?;
+    let skate_codec = unsafe {
+        primase_foundations::compress::oodle::Oodle::load(
+            skate_dll,
+            primase_foundations::compress::oodle::Version::V9,
+        )
+    }?;
     let src = Source {
         folder: &folder,
         base: Some(&folder),

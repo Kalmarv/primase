@@ -15,6 +15,8 @@
 //! - the outputs carry Elden Ring's G-buffer roles only ([`Game::gbuffer`]).
 //!
 //! It prints how many materials were bound and why the others were not.
+mod inputs;
+
 use fromsoft_formats::metaparam::texture_number;
 use fromsoft_formats::{Game, Install, Keys, dcx::Decoder};
 use iridia_interface::ConstantRole;
@@ -40,9 +42,9 @@ fn floats(value: &ParameterValue) -> Vec<f32> {
 #[test]
 fn elden_ring_materials_bind_as_their_definitions_state() -> Result<()> {
     let (Some(root), Some(keys), Some(dll)) = (
-        primase_testdata::install(primase_testdata::Game::Elden),
-        primase_testdata::keys(primase_testdata::Game::Elden),
-        primase_testdata::oodle(primase_testdata::Tool::Oodle6),
+        inputs::install(inputs::Game::Elden),
+        inputs::keys(inputs::Game::Elden),
+        inputs::oodle(inputs::Tool::Oodle6),
     ) else {
         return Ok(());
     };

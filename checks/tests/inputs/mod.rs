@@ -68,6 +68,11 @@ primase_testdata::inputs! {
             source: "the user's own key material, checked against published digests",
             gate: true,
         },
+        Sekiro {
+            about: "the user's Sekiro archive keys: one PKCS#1 `RSA PUBLIC KEY` PEM per archive, Data1.pem to Data5.pem",
+            source: "the community unpacker's published keys (UXM's ArchiveKeys.cs), written out as PEM files",
+            gate: true,
+        },
     }
     tools {
         Oodle6 = "oodle6" {

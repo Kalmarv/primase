@@ -14,8 +14,8 @@ use iridia_interface::{
     AddressMode, ConstantRole, FrameParameter, MatrixLines, ObjectParameter, ViewParameter,
 };
 use primase_core::Entity;
-use primase_foundations::parallel::Threads;
 use primase_core::{shader::StageBinding, shader::TextureSource};
+use primase_foundations::parallel::Threads;
 use primase_foundations::sampling::Address;
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -1034,7 +1034,8 @@ fn channels(
         }
         for &c in &color[..3] {
             albedo.push(
-                (primase_foundations::color::linear_to_srgb((c as f64).clamp(0., 1.)) * 255.).round_ties_even() as u8,
+                (primase_foundations::color::linear_to_srgb((c as f64).clamp(0., 1.)) * 255.)
+                    .round_ties_even() as u8,
             );
         }
         albedo.push(if let Some(AlphaState { image, scale }) = &state.alpha {
@@ -1495,7 +1496,8 @@ mod tests {
         for (pixel, (colour, _)) in raw.pixels[2].iter().enumerate() {
             for (c, &bits) in colour[..3].iter().enumerate() {
                 let linear = f64::from(f32::from_bits(bits)).clamp(0., 1.);
-                let byte = (primase_foundations::color::linear_to_srgb(linear) * 255.).round_ties_even() as u8;
+                let byte =
+                    (primase_foundations::color::linear_to_srgb(linear) * 255.).round_ties_even() as u8;
                 assert_eq!(bake.albedo[pixel * 4 + c], byte, "pixel {pixel} lane {c}");
             }
         }

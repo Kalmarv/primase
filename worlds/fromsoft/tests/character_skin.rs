@@ -4,13 +4,15 @@
 //! arithmetic), every mesh's dynamic flag, palette and vertex count, and every vertex's position, bone indices and
 //! weights as stored (exact). Every texture its materials bind is read (some are kept in other characters' and shared
 //! packages). Then the character lowered with its skin verifies: `core.skin` and `core.mesh` hold together.
+mod inputs;
+
 use std::collections::BTreeSet;
 
 use fromsoft_formats::dcx::Decoder;
+use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
 use primase_core::frame::{Axis, SourceFrame};
 use primase_core::{Skeleton, World};
 use primase_fromsoft::rigid::SourceModel;
-use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 mod common;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -31,8 +33,12 @@ fn characters_read_as_soulsformats_reads_them() -> Result<()> {
         return Ok(());
     };
     // SAFETY: explicitly supplied trusted native decoder.
-    let dll =
-        unsafe { primase_foundations::compress::oodle::Oodle::open(dll.path(), primase_foundations::compress::oodle::Version::V6) }?;
+    let dll = unsafe {
+        primase_foundations::compress::oodle::Oodle::open(
+            dll.path(),
+            primase_foundations::compress::oodle::Version::V6,
+        )
+    }?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1 << 30,
@@ -206,8 +212,12 @@ fn a_character_converts_as_one_part_per_asset() -> Result<()> {
         return Ok(());
     };
     // SAFETY: explicitly supplied trusted native decoder.
-    let dll =
-        unsafe { primase_foundations::compress::oodle::Oodle::open(dll.path(), primase_foundations::compress::oodle::Version::V6) }?;
+    let dll = unsafe {
+        primase_foundations::compress::oodle::Oodle::open(
+            dll.path(),
+            primase_foundations::compress::oodle::Version::V6,
+        )
+    }?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1 << 30,
@@ -264,8 +274,12 @@ fn the_finest_face_set_and_the_stored_normals_survive_lowering() -> Result<()> {
         return Ok(());
     };
     // SAFETY: explicitly supplied trusted native decoder.
-    let dll =
-        unsafe { primase_foundations::compress::oodle::Oodle::open(dll.path(), primase_foundations::compress::oodle::Version::V6) }?;
+    let dll = unsafe {
+        primase_foundations::compress::oodle::Oodle::open(
+            dll.path(),
+            primase_foundations::compress::oodle::Version::V6,
+        )
+    }?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1 << 30,

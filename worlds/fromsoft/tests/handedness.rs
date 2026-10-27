@@ -21,20 +21,27 @@
 //! tangents of both handedness signs.
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use std::collections::BTreeMap;
 
 use fromsoft_formats::flver::Model;
 use fromsoft_formats::{Archive, Binder, dcx::Decoder};
-use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
+use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
 use serde_json::Value as Json;
 
 #[allow(unsafe_code)]
 mod native {
     pub fn load(
-        path: primase_testdata::OodleLibrary,
+        path: crate::inputs::OodleLibrary,
     ) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
         // SAFETY: caller explicitly supplies a trusted version-6 native library.
-        unsafe { primase_foundations::compress::oodle::Oodle::open(path.path(), primase_foundations::compress::oodle::Version::V6) }
+        unsafe {
+            primase_foundations::compress::oodle::Oodle::open(
+                path.path(),
+                primase_foundations::compress::oodle::Version::V6,
+            )
+        }
     }
 }
 
@@ -103,7 +110,7 @@ fn mirror_is_undone_in_the_geometry() {
         oodle: Some(&dll),
         max_output: 512 * 1024 * 1024,
     };
-    let Some(sekiro_keys) = primase_testdata::keys(primase_testdata::Game::Sekiro) else {
+    let Some(sekiro_keys) = inputs::keys(inputs::Game::Sekiro) else {
         return;
     };
     let archive = Archive::open_game(

@@ -14,12 +14,14 @@
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
+mod inputs;
+
 use std::collections::BTreeMap;
 
 use fromsoft_formats::{Archive, Binder, dcx::Decoder};
 use havok_formats::animation::{Tracks, container};
 use havok_formats::{Compendium, Tagfile};
-use primase_testdata::{Game, Tool, install, oodle};
+use inputs::{Game, Tool, install, oodle};
 
 /// The files the census expects not to read cleanly, by file name, and why.
 const KNOWN: [(&str, &str); 1] = [(r"c1090\hkx\a000_205000.hkx", "unsupported SDK version")];
@@ -27,9 +29,16 @@ const KNOWN: [(&str, &str); 1] = [(r"c1090\hkx\a000_205000.hkx", "unsupported SD
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 #[allow(unsafe_code)]
-fn native(path: &primase_testdata::OodleLibrary) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
+fn native(
+    path: &inputs::OodleLibrary,
+) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
     // SAFETY: caller explicitly supplies a trusted native version-6 decoder.
-    unsafe { primase_foundations::compress::oodle::Oodle::open(path.path(), primase_foundations::compress::oodle::Version::V6) }
+    unsafe {
+        primase_foundations::compress::oodle::Oodle::open(
+            path.path(),
+            primase_foundations::compress::oodle::Version::V6,
+        )
+    }
 }
 
 #[test]
@@ -42,7 +51,7 @@ fn h1_every_character_animation_file_reads() -> Result<()> {
         oodle: Some(&oodle),
         max_output: 1024 * 1024 * 1024,
     };
-    let Some(sekiro_keys) = primase_testdata::keys(primase_testdata::Game::Sekiro) else {
+    let Some(sekiro_keys) = inputs::keys(inputs::Game::Sekiro) else {
         return Ok(());
     };
     let archive = Archive::open_game(
@@ -203,7 +212,7 @@ fn h2_every_spline_animation_decodes() -> Result<()> {
         oodle: Some(&oodle),
         max_output: 1024 * 1024 * 1024,
     };
-    let Some(sekiro_keys) = primase_testdata::keys(primase_testdata::Game::Sekiro) else {
+    let Some(sekiro_keys) = inputs::keys(inputs::Game::Sekiro) else {
         return Ok(());
     };
     let archive = Archive::open_game(

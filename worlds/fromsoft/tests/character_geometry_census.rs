@@ -1,11 +1,13 @@
 //! Every dictionary-named character binder: drawable source mesh count, or an explicit reason for zero.
 //! Reads FLVERs only, never textures, shader bakes or animation tracks. This is source geometry coverage,
 //! not a claim that every material will lower or a rendered draw count. Patch/archive lookup uses Install's policy.
+mod inputs;
+
 use fromsoft_formats::{Game, Install, Keys, NameDictionary, dcx::Decoder};
+use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use primase_core::convert::Reader;
 use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::sekiro;
-use primase_testdata::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use serde_json::json;
 use std::collections::BTreeSet;
 mod common;

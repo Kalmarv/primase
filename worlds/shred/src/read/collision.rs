@@ -20,12 +20,12 @@ use crate::{
     components::{CollisionSurface, CollisionSurfaces, DynamicShape, RigidBody as BodyData},
     invalid,
 };
-use primase_core::{
-    Collider, Collision, Shape as CoreShape, Source, Surfaces, Transform, World, frame::SourceFrame,
-};
 use havok_formats::packfile::{
     Packfile,
     physics::{self, ExtendedMesh, RigidBody, Shape},
+};
+use primase_core::{
+    Collider, Collision, Shape as CoreShape, Source, Surfaces, Transform, World, frame::SourceFrame,
 };
 use rme_formats::{pak::Pak, surfaces::SurfaceTable};
 use std::collections::{BTreeMap, BTreeSet};

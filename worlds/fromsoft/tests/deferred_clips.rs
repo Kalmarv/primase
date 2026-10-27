@@ -1,10 +1,13 @@
 //! Existing character fixture: reader planning and one strict root load, without models/materials.
+mod inputs;
+
+use inputs::{Game, Tool, install, oodle};
+
 use fromsoft_formats::dcx::Decoder;
 use primase_core::convert::Reader;
 use primase_core::{ClipKey, Name};
 use primase_fromsoft::sekiro;
 use primase_havok::world::HavokAnimation;
-use primase_testdata::{Game, Tool, install, oodle};
 mod common;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 

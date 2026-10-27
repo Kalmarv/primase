@@ -1,8 +1,10 @@
 //! Every discovered Elden Ring character TAE's authored event 198, without interpreting its unknown ramp fields.
 //! Main character names are exhaustively probed (c0000..c9999); companion binders come from the dictionary and
 //! authored marker members. No HKX, material texture or shader is decoded. One binder is held at a time.
+mod inputs;
+
 use fromsoft_formats::{Binder, Game, Install, Keys, NameDictionary, dcx::Decoder, tae::Tae};
-use primase_testdata::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
+use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 mod common;

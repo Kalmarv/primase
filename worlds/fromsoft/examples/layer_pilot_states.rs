@@ -20,10 +20,10 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use fromsoft_formats::dcx::Decoder;
-use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_core::convert::Reader;
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::{LodChoice, SelectLod};
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_fromsoft::layer_bake::{ALPHA_TEST_POLICY, Inputs};
 use primase_fromsoft::materials::SkipClass;
 use primase_fromsoft::rigid::ApplyRigidSkinning;

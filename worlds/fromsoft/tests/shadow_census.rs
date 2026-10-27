@@ -1,10 +1,12 @@
 //! Independent source shadow records, checked against the original MSB bytes,
 //! then joined by part name to the placements an installed-area read selects.
+mod inputs;
+
 use fromsoft_formats::{dcx::Decoder, msb::MapLayout};
+use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
 use primase_core::{ShadowCast, Shadows, Source, World};
 use primase_fromsoft::sekiro;
 use primase_fromsoft::stored::ShadowFlags;
-use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 mod common;
@@ -27,11 +29,7 @@ struct Part {
 
 #[test]
 fn source_shadow_flags() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(root) = primase_testdata::oracle(
-        primase_testdata::OracleSet::Scripts,
-        primase_testdata::Game::Sekiro,
-        "shadow",
-    ) else {
+    let Some(root) = inputs::oracle(inputs::OracleSet::Scripts, inputs::Game::Sekiro, "shadow") else {
         return Ok(());
     };
     let data = std::fs::read(root.join("map.msb"))?;
@@ -81,9 +79,16 @@ fn source_shadow_flags() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[allow(unsafe_code)]
-fn native(path: primase_testdata::OodleLibrary) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
+fn native(
+    path: inputs::OodleLibrary,
+) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
     // SAFETY: the caller explicitly supplies a trusted native version-6 library.
-    unsafe { primase_foundations::compress::oodle::Oodle::open(path.path(), primase_foundations::compress::oodle::Version::V6) }
+    unsafe {
+        primase_foundations::compress::oodle::Oodle::open(
+            path.path(),
+            primase_foundations::compress::oodle::Version::V6,
+        )
+    }
 }
 
 /// The oracle map is m11_01. Every selected placement must name an oracle part;

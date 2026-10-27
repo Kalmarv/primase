@@ -4,9 +4,11 @@
 //! instances compressed meshes hold, and the custom primitives of an unknown kind, which are counted. No file may be
 //! refused and no convex body may tessellate to nothing. HKLib's reading of the extern instances themselves is compared
 //! in `havok_census.rs`.
+mod inputs;
+
 use fromsoft_formats::collision::{BodyGeometry, read_bodies};
 use fromsoft_formats::{Binder, Game, dcx::Decoder};
-use primase_testdata::{OracleSet, Query, Tool, expect_found, oodle, oracle};
+use inputs::{OracleSet, Query, Tool, expect_found, oodle, oracle};
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 mod common;
@@ -15,7 +17,7 @@ mod common;
 fn every_asset_collision_file_reads_and_tessellates() -> Result<()> {
     let (Some(archive), Some(census), Some(dll)) = (
         common::archive(Game::EldenRing)?,
-        oracle(OracleSet::SoulsFormats, primase_testdata::Game::Elden, "census"),
+        oracle(OracleSet::SoulsFormats, inputs::Game::Elden, "census"),
         oodle(Tool::Oodle6),
     ) else {
         return Ok(());
@@ -82,7 +84,7 @@ fn every_asset_collision_file_reads_and_tessellates() -> Result<()> {
         println!("FAILED {f}");
     }
     expect_found(
-        Query::Oracle(OracleSet::SoulsFormats, primase_testdata::Game::Elden, "census"),
+        Query::Oracle(OracleSet::SoulsFormats, inputs::Game::Elden, "census"),
         "asset collision files",
         files,
     );

@@ -49,16 +49,21 @@ pub fn run(world: &mut World, pipeline: &str) -> Result<RunReport, Box<dyn std::
 /// The threads the configuration lets a heavy test's work use (`[run] threads`), as the world states them
 /// (`core.threads`).
 pub fn threads() -> primase_foundations::parallel::Threads {
-    primase_foundations::parallel::Threads::new(primase_testdata::threads().get()).expect("at least one thread")
+    primase_foundations::parallel::Threads::new(crate::inputs::threads().get()).expect("at least one thread")
 }
 
 /// The version-6 Oodle codec: the configured game library on Windows, oozextract elsewhere.
 #[allow(unsafe_code)]
 pub fn oodle(
-    library: primase_testdata::OodleLibrary,
+    library: crate::inputs::OodleLibrary,
 ) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
     // SAFETY: the test configuration names a trusted native library.
-    unsafe { primase_foundations::compress::oodle::Oodle::open(library.path(), primase_foundations::compress::oodle::Version::V6) }
+    unsafe {
+        primase_foundations::compress::oodle::Oodle::open(
+            library.path(),
+            primase_foundations::compress::oodle::Version::V6,
+        )
+    }
 }
 
 /// One quad on the ground, u along +x and v along +z, with Sekiro's stored frame for its most common class: the
@@ -124,8 +129,8 @@ pub fn image_passes(world: &mut primase_core::World, pipeline: &str) -> primase_
 pub fn archive(
     game: fromsoft_formats::Game,
 ) -> Result<Option<fromsoft_formats::Archive>, Box<dyn std::error::Error>> {
+    use crate::inputs::{Game as Data, install, keys};
     use fromsoft_formats::{Archive, Game, Keys};
-    use primase_testdata::{Game as Data, install, keys};
     let data = match game {
         Game::Sekiro => Data::Sekiro,
         Game::EldenRing => Data::Elden,
@@ -146,7 +151,7 @@ pub fn sekiro(
     root: impl Into<std::path::PathBuf>,
 ) -> Result<Option<fromsoft_formats::Install>, Box<dyn std::error::Error>> {
     use fromsoft_formats::{Game, Install, Keys};
-    let Some(keys) = primase_testdata::keys(primase_testdata::Game::Sekiro) else {
+    let Some(keys) = crate::inputs::keys(crate::inputs::Game::Sekiro) else {
         return Ok(None);
     };
     Ok(Some(Install::new(

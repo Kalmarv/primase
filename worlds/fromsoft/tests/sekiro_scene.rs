@@ -2,12 +2,14 @@
 //! SoulsFormats dump of the area (`oracles.soulsformats.sekiro/m11_01`: MSB parts with their matrices, every placed
 //! model's FLVER in model space) and material fixtures worked out by hand from that dump's FLVER materials and MTD
 //! names.
+mod inputs;
+
 use fromsoft_formats::dcx::Decoder;
+use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
 use primase_core::frame::{Axis, SourceFrame};
 use primase_core::{Instance, Mesh, Source, Transform, World};
 use primase_fromsoft::materials::Material;
 use primase_fromsoft::sekiro::{self, source::PrototypeSource};
-use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
