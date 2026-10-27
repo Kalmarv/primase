@@ -14,6 +14,15 @@ Wolf baseline (`worlds/fromsoft/tests/regression_census.rs`). These are field-la
 archive-presence checks, not a claim of runtime face/body/equipment simulation. Unresolved or
 ambiguous part bindings retain their reasons.
 
+Elden Ring uses the same chain through `fromsoft_formats::equipment::OutfitLayout::of(game)`: `CHARACTER_INIT_PARAM`
+version 2 (320 bytes, slots at 32/36/40/44, `npcPlayerSex` at 228) and `EQUIP_PARAM_PROTECTOR_ST` version 6 (416
+bytes, `equipModelId` at 164, category at 212, gender at 213). The protector's category says which part it is (head 5,
+body 2, arms 1, legs 6; Sekiro's category 3 in the head slot is the face, `fc`); a protector in a slot of another
+category is refused, and a slot whose protector row does not exist leaves only that slot unresolved. Elden Ring's
+gender 3 (split by sex) is resolved by which of `m` and `f` the install holds; where it holds both the outfit is
+ambiguous and says so (88 of the base game's 793 protector rows with a model), since the mapping of `npcPlayerSex` to
+a letter is not established.
+
 Unspecified protector gender modes 0/1 require a unique held `m`, `f` or `a` binder. They are not the split-by-sex
 mode 3. SDT describes `npcPlayerSex` as an NPC-player field that does not apply to the normal player: filtering
 unspecified modes to its letter discarded the actual male Wolf part binders. Shared mode 4 still uses `a`;

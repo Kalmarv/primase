@@ -42,6 +42,7 @@ use primase_core::{Entity, Name, Origin, Provenance, World};
 use primase_havok::world::{HavokAnimation, insert_animation, insert_skeleton};
 
 use crate::sekiro::character_data::ClipEvents;
+use fromsoft_formats::names::stem;
 use fromsoft_formats::tae::{self, Tae};
 use fromsoft_formats::{Archive, Binder, Result, dcx::Decoder};
 
@@ -584,12 +585,6 @@ pub struct Animations {
 /// The file's name after its last separator, lowercased.
 fn file_name(name: &str) -> String {
     fromsoft_formats::names::fold(name.rsplit(['/', '\\']).next().unwrap_or(name))
-}
-
-/// The file's name after its last separator, lowercased, without its extension.
-fn stem(name: &str) -> String {
-    let file = file_name(name);
-    file.rsplit_once('.').map_or(file.clone(), |(s, _)| s.to_owned())
 }
 
 fn refuse(report: &mut AnimationReport, why: &str, file: &str) {

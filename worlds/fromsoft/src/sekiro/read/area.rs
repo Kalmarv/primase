@@ -851,20 +851,9 @@ pub fn read_game_area_staged(
         };
         // a member by file name; `dcx`: also its compressed form
         let member = |leaf: &str, dcx: bool| {
-            binder.files.iter().find(|f| {
-                f.name
-                    .as_deref()
-                    .unwrap_or("")
-                    .rsplit(['/', '\\'])
-                    .next()
-                    .is_some_and(|s| {
-                        fromsoft_formats::names::fold(s) == fromsoft_formats::names::fold(leaf)
-                            || dcx
-                                && s.strip_suffix(".dcx").is_some_and(|s| {
-                                    fromsoft_formats::names::fold(s) == fromsoft_formats::names::fold(leaf)
-                                })
-                    })
-            })
+            binder
+                .member(leaf)
+                .or_else(|| dcx.then(|| binder.member(&format!("{leaf}.dcx"))).flatten())
         };
         let Some(f) = member(&leaf, false) else {
             report.missing_models.push(key);
@@ -1014,7 +1003,7 @@ pub fn read_game_area_staged(
             let script = fromsoft_formats::emevd::Script::read(
                 &archive.read(&format!("/event/{area}.emevd.dcx"), decoder)?,
             )?;
-            let mut s = states::States::read(&script);
+            let mut s = states::States::read(&script, game);
             s.spawn_axes(&mut world);
             Some(s)
         }

@@ -41,9 +41,9 @@ pub struct States {
 }
 
 impl States {
-    /// The rules of one script.
-    pub fn read(script: &Script) -> Self {
-        let rules = Rules::read(script);
+    /// The rules of one script of `game` (the games lay `2000:6` out differently).
+    pub fn read(script: &Script, game: fromsoft_formats::Game) -> Self {
+        let rules = Rules::read(script, game);
         let report = Report {
             rules: rules.decided.clone(),
             undecidable_calls: rules.undecidable_calls,

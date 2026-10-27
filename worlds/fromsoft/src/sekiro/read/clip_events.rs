@@ -11,6 +11,16 @@ pub const CREDIT: &str = "Smithbox cbd477a8; Vawser, Katalash, Meowmaritus and c
 struct Field {
     kind: String,
     name: String,
+    /// The value the template asserts the field holds (`assert="0"` in every bundled template).
+    assert: Option<f64>,
+}
+
+impl Field {
+    /// Whether a record that stores no bytes for the field loses nothing: it is asserted zero, or the template names it
+    /// padding.
+    fn is_padding(&self) -> bool {
+        self.assert == Some(0.0) || self.name.to_ascii_lowercase().starts_with("pad")
+    }
 }
 #[derive(Clone, Debug)]
 struct Template {
@@ -78,7 +88,16 @@ fn parse(xml: &str) -> Result<BTreeMap<i64, Template>, String> {
                         .filter(|name| !name.trim().is_empty())
                         .cloned()
                         .unwrap_or_else(|| format!("field_{}", template.fields.len()));
-                    template.fields.push(Field { kind, name });
+                    let assert = attributes
+                        .get("assert")
+                        .map(|value| {
+                            value
+                                .trim()
+                                .parse::<f64>()
+                                .map_err(|e| format!("assert {value:?}: {e}"))
+                        })
+                        .transpose()?;
+                    template.fields.push(Field { kind, name, assert });
                 }
             }
             Event::End(tag) if tag.name().as_ref() == "event" => {
@@ -113,13 +132,24 @@ fn templates(game: Game) -> Result<&'static BTreeMap<i64, Template>, String> {
     result.as_ref().map_err(Clone::clone)
 }
 
+/// What the template made of an event's stored bytes.
+#[derive(Debug)]
+struct Decoded {
+    values: Vec<EventValue>,
+    /// Set where the record stores fewer bytes than the template's fields need and the fields it lacks are not all
+    /// padding: the fields read stay in `values`, this names the ones not read.
+    shorter: Option<String>,
+}
+
 /// Sequential little-endian scalar fields exactly as the template states them. Anonymous
-/// fields get a structural field_N label; duplicate source labels remain duplicates. All
-/// typed values are refused together on a truncated/unknown/non-finite field; bytes survive.
-fn values(template: &Template, bytes: &[u8]) -> Result<Vec<EventValue>, String> {
+/// fields get a structural field_N label; duplicate source labels remain duplicates. A record that stores fewer
+/// bytes than the template's fields need (1.5% of the stock events: 4,627 of Sekiro's, 268 of Elden Ring's) keeps the
+/// fields it stores, and says which it lacks unless they are zero-asserted or padding. An unknown, non-finite or
+/// asserted-against field refuses all the typed values together; bytes survive.
+fn values(template: &Template, bytes: &[u8]) -> Result<Decoded, String> {
     let mut offset = 0usize;
     let mut out = Vec::new();
-    for field in &template.fields {
+    for (index, field) in template.fields.iter().enumerate() {
         let width = match field.kind.as_str() {
             "b" | "u8" | "s8" => 1,
             "u16" | "s16" => 2,
@@ -132,13 +162,23 @@ fn values(template: &Template, bytes: &[u8]) -> Result<Vec<EventValue>, String> 
                 ));
             }
         };
-        let b = bytes.get(offset..offset + width).ok_or_else(|| {
-            format!(
-                "field {:?}: needs {width} bytes at {offset}, record has {}",
-                field.name,
-                bytes.len()
-            )
-        })?;
+        let Some(b) = bytes.get(offset..offset + width) else {
+            let unread: Vec<&str> = template
+                .fields
+                .iter()
+                .skip(index)
+                .filter(|f| !f.is_padding())
+                .map(|f| f.name.as_str())
+                .collect();
+            let shorter = (!unread.is_empty()).then(|| {
+                format!(
+                    "stored shorter than the community template ({} bytes); fields not read: {}",
+                    bytes.len(),
+                    unread.join(", ")
+                )
+            });
+            return Ok(Decoded { values: out, shorter });
+        };
         let value = match field.kind.as_str() {
             "b" => match b[0] {
                 0 => EventValueData::Bool(false),
@@ -166,6 +206,20 @@ fn values(template: &Template, bytes: &[u8]) -> Result<Vec<EventValue>, String> 
                 ));
             }
         };
+        if let Some(asserted) = field.assert {
+            let stored = match &value {
+                EventValueData::Bool(b) => f64::from(u8::from(*b)),
+                EventValueData::I64(v) => *v as f64,
+                EventValueData::F64(v) => *v,
+                _ => asserted,
+            };
+            if stored != asserted {
+                return Err(format!(
+                    "field {:?}: stored {stored}, the community template asserts {asserted}",
+                    field.name
+                ));
+            }
+        }
         out.push(EventValue {
             name: field.name.clone(),
             value,
@@ -178,7 +232,10 @@ fn values(template: &Template, bytes: &[u8]) -> Result<Vec<EventValue>, String> 
             bytes.len() - offset
         ));
     }
-    Ok(out)
+    Ok(Decoded {
+        values: out,
+        shorter: None,
+    })
 }
 
 /// One typed descriptor per raw event, in identical order. Event 198's observed structural
@@ -196,7 +253,10 @@ pub fn decode(game: Game, events: &[fromsoft_formats::tae::Event]) -> Vec<Decode
                             credit: CREDIT.into(),
                         });
                         match values(template, &event.parameters) {
-                            Ok(values) => out.values = values,
+                            Ok(decoded) => {
+                                out.values = decoded.values;
+                                out.refusals.extend(decoded.shorter);
+                            }
                             Err(reason) => out.refusals.push(reason),
                         }
                     }
@@ -231,7 +291,7 @@ mod tests {
             vec![0; 3],
         ]
         .concat();
-        let fields = values(t, &bytes).unwrap();
+        let fields = values(t, &bytes).unwrap().values;
         assert_eq!(
             fields.iter().map(|v| v.name.as_str()).collect::<Vec<_>>(),
             ["v", "v", "field_2", "wide"]
@@ -240,7 +300,46 @@ mod tests {
         assert_eq!(fields[1].value, EventValueData::F64(0.5));
         assert_eq!(fields[2].value, EventValueData::Bool(true));
         assert_eq!(fields[3].value, EventValueData::I64(-9));
-        assert!(values(t, &bytes[..4]).is_err());
+        // a record that stores only the first field keeps it and names the ones it lacks
+        let short = values(t, &bytes[..4]).unwrap();
+        assert_eq!(short.values.len(), 1);
+        assert_eq!(short.values[0].value, EventValueData::I64(-2));
+        let note = short.shorter.unwrap();
+        assert!(
+            note.contains("stored shorter than the community template"),
+            "{note}"
+        );
+        assert!(note.ends_with("fields not read: v, field_2, wide"), "{note}");
+        // an unknown type still refuses every value
+        let unknown =
+            parse(r#"<event_template><event id="8"><s32 name="a"/><dummy/></event></event_template>"#)
+                .unwrap();
+        assert!(values(&unknown[&8], &[0; 8]).is_err());
+    }
+
+    /// The fields a record lacks are not reported when they are asserted zero or named padding; a stored value that
+    /// differs from an asserted one is a named refusal.
+    #[test]
+    fn padding_and_asserted_zero_fields_may_be_missing_and_assertions_are_enforced() {
+        let parsed = parse(
+            r#"<event_template><event id="9"><s32 name="a"/><s32 assert="0"/><u8 name="Padding1"/><s32 name="b"/></event><event id="10"><s32 name="a"/><s16 assert="0"/><s32 assert="0"/></event></event_template>"#,
+        )
+        .unwrap();
+        // 9: a, then the asserted-zero field, the padding and `b` missing: b is reported
+        let d = values(&parsed[&9], &[1, 0, 0, 0]).unwrap();
+        assert_eq!(d.values.len(), 1);
+        assert!(d.shorter.unwrap().ends_with("fields not read: b"));
+        // 10: everything missing is asserted zero: nothing to report
+        let d = values(&parsed[&10], &[7, 0, 0, 0]).unwrap();
+        assert_eq!((d.values.len(), d.shorter), (1, None));
+        // the whole record stored: the asserted value is read and held to the assertion
+        let d = values(&parsed[&10], &[7, 0, 0, 0, 0, 0, 0, 0, 0, 0]).unwrap();
+        assert_eq!((d.values.len(), d.shorter), (3, None));
+        let e = values(&parsed[&10], &[7, 0, 0, 0, 1, 0, 0, 0, 0, 0]).unwrap_err();
+        assert!(e.contains("asserts 0") && e.contains("stored 1"), "{e}");
+        // a partial field counts as missing
+        let d = values(&parsed[&10], &[7, 0, 0, 0, 0]).unwrap();
+        assert_eq!((d.values.len(), d.shorter), (1, None));
     }
 
     #[test]

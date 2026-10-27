@@ -208,6 +208,7 @@ mod tests {
             rotation_degrees: [0., 90., 0.],
             entity_id: 7,
             type_data: vec![1, 2],
+            extra_map: None,
         }
     }
 
@@ -230,6 +231,7 @@ mod tests {
                 region: None,
                 entity_id: 9,
                 type_data: vec![3],
+                extra_map: None,
             }],
             parts: vec![msb::UnplacedPart {
                 index: 4,

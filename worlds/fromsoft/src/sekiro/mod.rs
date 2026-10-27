@@ -23,6 +23,7 @@ pub use read::character::{
     CharacterOptions, CharacterReader, CharacterReport, animation_notices, character_display_masks,
     part_forms, part_textures, read_character_with, read_parts_with,
 };
+pub use read::clip_events::decode as decode_clip_events;
 pub use read::collision::Report as CollisionReport;
 pub use read::draw_param::{DrawParams, Report as DrawParamReport};
 pub use read::equipment::{character_skeletons, empty_character_reason, outfit_notices};

@@ -493,6 +493,8 @@ mod tests {
             light_scattering: -1,
             env_map,
             scene: None,
+            gparam_override: None,
+            scene_sub_id: None,
         }
     }
 

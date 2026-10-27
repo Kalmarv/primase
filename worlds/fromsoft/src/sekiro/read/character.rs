@@ -351,18 +351,6 @@ fn display_marks(material: &str) -> Result<Vec<u32>> {
     Ok(marks)
 }
 
-/// The member of `binder` whose file name is `leaf`.
-fn member<'b>(binder: &'b Binder, leaf: &str) -> Option<&'b fromsoft_formats::BinderFile> {
-    binder.files.iter().find(|f| {
-        f.name
-            .as_deref()
-            .unwrap_or("")
-            .rsplit(['/', '\\'])
-            .next()
-            .is_some_and(|s| fromsoft_formats::names::fold(s) == fromsoft_formats::names::fold(leaf))
-    })
-}
-
 /// The level suffixes a part binder's name may end in after the part (`bd_m_9120_l`, `wp_a_0300_m`): of the part
 /// binders the dictionaries name, Sekiro's 164 end in `_l` (76), `_m` (12) or neither, Elden Ring's 3778 in `_l`
 /// (1888), `_m` (2) or neither.
@@ -459,7 +447,7 @@ impl Item<'_> {
         let path = self.binder_path();
         match self {
             Item::Character(id) => {
-                let flver = member(binder, &format!("{id}.flver")).ok_or_else(|| {
+                let flver = binder.member(&format!("{id}.flver")).ok_or_else(|| {
                     invalid("FromSoftware character", 0, format!("{path} holds no {id}.flver"))
                 })?;
                 Ok(vec![Form {
@@ -790,7 +778,7 @@ impl<'a> Reading<'a> {
         }
         // the form's own animation binder, when its animations are asked for
         let own_animations = match item {
-            Item::Part(_) if form_animations => member(binder, &format!("{}.anibnd", form.base)),
+            Item::Part(_) if form_animations => binder.member(&format!("{}.anibnd", form.base)),
             _ => None,
         };
         // a member not read is named on the report of the form it goes with ([`member_form`]); one that goes with none,

@@ -43,6 +43,8 @@ fn part(name: &str, kind: PartKind, entity_id: i32, groups: &[i32]) -> Part {
         entity_id,
         entity_group_ids: g,
         shadows: Default::default(),
+        draw: Default::default(),
+        tile_load: None,
     }
 }
 
@@ -98,7 +100,7 @@ fn script() -> Script {
 
 #[test]
 fn rules_match_by_id_and_group_and_count_what_they_leave_open() {
-    let mut s = States::read(&script());
+    let mut s = States::read(&script(), fromsoft_formats::Game::Sekiro);
     assert_eq!(s.report.rules.get(&20004110), Some(&2));
     assert_eq!(s.report.rules.get(&20004112), Some(&1));
     assert_eq!(
@@ -179,7 +181,7 @@ fn rules_match_by_id_and_group_and_count_what_they_leave_open() {
 
 #[test]
 fn conditions_resolve_to_the_flags_state() {
-    let mut s = States::read(&script());
+    let mut s = States::read(&script(), fromsoft_formats::Game::Sekiro);
     let mut w = World::new();
     s.spawn_axes(&mut w);
     let proto = w.spawn();
