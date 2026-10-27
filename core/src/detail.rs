@@ -18,8 +18,8 @@ use serde_json::Value;
 
 use crate::layered::{Source, check_source, mask_value};
 use crate::pbr::TextureRef;
+use crate::shader::ScalarEncoding;
 use crate::{Component, Entity, JsonError, World};
-use iridia_interface::ScalarEncoding;
 
 /// A material's detail form (component `pbr.detail`).
 #[derive(Clone, Debug, PartialEq, Serialize)]

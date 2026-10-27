@@ -4,11 +4,9 @@
 
 #![allow(clippy::unwrap_used)]
 
-use iridia_interface::{
-    ConstantBinding, ConstantRole, D3dClass, MatrixLines, ResourceId, ResourceKind, ShaderFormat,
-    ViewParameter,
-};
+use iridia_interface::{D3dClass, MatrixLines, ResourceId, ResourceKind, ShaderFormat};
 use primase_core::shader::Shader;
+use primase_core::shader::{ConstantBinding, ConstantRole, ViewParameter};
 use primase_frostbite::passes::clip_position::{ClipRows, shader_clip_rows, state_clip_roles};
 
 const FORM: &[u8] = include_bytes!("fixtures/camera_relative_vs.dxil");

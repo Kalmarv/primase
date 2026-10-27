@@ -19,16 +19,16 @@
 //!
 //! Where the words sit is the program's, so the roles are stated per program, never from a fixed offset.
 //!
-//! [`ViewParameter`]: iridia_interface::ViewParameter
+//! [`ViewParameter`]: primase_core::shader::ViewParameter
 
 use std::collections::BTreeSet;
 
 use iridia::flow::{At, BinaryOperator, Node, NodeId, Op, Values};
 use iridia_interface::{
-    ConstantBinding, ConstantRole, D3dClass, Interface, MatrixLines, ResourceId, ResourceKind, ShaderFormat,
-    Stage, SystemValue, ViewParameter,
+    D3dClass, Interface, MatrixLines, ResourceId, ResourceKind, ShaderFormat, Stage, SystemValue,
 };
 use primase_core::shader::Shader;
+use primase_core::shader::{ConstantBinding, ConstantRole, ViewParameter};
 
 /// Where a vertex program's clip position reads its matrix rows and its camera position.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -2,8 +2,9 @@
 //! No frame, light, fog, influence or vertex-output value is supplied here. Unknown words remain Unknown.
 use super::albedo::DerivedAlbedo;
 use crate::components::MaterialRef;
-use iridia_interface::{ConstantBinding, ConstantRole, ConstantType, ResourceId, ResourceKind, ScalarType};
+use iridia_interface::{ConstantType, ResourceId, ResourceKind, ScalarType};
 use primase_core::shader::StageBinding;
+use primase_core::shader::{ConstantBinding, ConstantRole};
 use std::collections::BTreeMap;
 
 fn part(c: &ConstantBinding, start: u32, end: u32) -> Result<ConstantBinding, String> {

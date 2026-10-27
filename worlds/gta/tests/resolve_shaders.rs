@@ -11,7 +11,8 @@ use primase_core::pass::{Options, PassLog};
 use std::collections::BTreeMap;
 
 use inputs::{Game, debug, install, keys};
-use iridia_interface::{ConstantRole, SamplerState, Stage};
+use iridia_interface::{SamplerState, Stage};
+use primase_core::shader::ConstantRole;
 use primase_core::{Component, World};
 use primase_core::{shader::Shader, shader::ShaderBinding, shader::TextureSource};
 use primase_gta::components::{GtaParam, GtaShader};

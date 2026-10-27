@@ -15,7 +15,7 @@ use fromsoft_formats::Result;
 use iridia::{Interface, Varying};
 use iridia_exec::ProgramShader;
 use iridia_exec::{Input, Lane, PixelShader, Sampler};
-use iridia_interface::{ConstantRole, InputRole, LaneStream};
+use primase_core::shader::{ConstantRole, InputRole, LaneStream};
 use primase_core::{shader::Shader as CoreShader, shader::StageBinding};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -204,21 +204,21 @@ impl VertexStage {
                     )
                 })?;
             let feed = match role {
-                InputRole::Stream(iridia_interface::Attribute::Position) => Feed::Position,
-                InputRole::Stream(iridia_interface::Attribute::Normal) => Feed::Normal,
-                InputRole::Stream(iridia_interface::Attribute::Tangent(0)) => Feed::Tangent,
-                InputRole::Stream(iridia_interface::Attribute::Joints(0)) => Feed::Joints,
-                InputRole::Stream(iridia_interface::Attribute::Weights(0)) => Feed::Weights,
-                InputRole::Stream(iridia_interface::Attribute::TexCoord(0)) => Feed::TexCoord0,
-                InputRole::Stream(iridia_interface::Attribute::Color(0)) => {
+                InputRole::Stream(primase_core::shader::Attribute::Position) => Feed::Position,
+                InputRole::Stream(primase_core::shader::Attribute::Normal) => Feed::Normal,
+                InputRole::Stream(primase_core::shader::Attribute::Tangent(0)) => Feed::Tangent,
+                InputRole::Stream(primase_core::shader::Attribute::Joints(0)) => Feed::Joints,
+                InputRole::Stream(primase_core::shader::Attribute::Weights(0)) => Feed::Weights,
+                InputRole::Stream(primase_core::shader::Attribute::TexCoord(0)) => Feed::TexCoord0,
+                InputRole::Stream(primase_core::shader::Attribute::Color(0)) => {
                     policies.insert(COLOUR0_POLICY.into(), 1);
                     Feed::Colour0
                 }
-                InputRole::Stream(iridia_interface::Attribute::Color(n)) if (1..=6).contains(n) => {
+                InputRole::Stream(primase_core::shader::Attribute::Color(n)) if (1..=6).contains(n) => {
                     Feed::Member(*n)
                 }
                 InputRole::Stream(s)
-                    if *s == iridia_interface::Attribute::from(super::resolve::SECOND_COLOUR) =>
+                    if *s == primase_core::shader::Attribute::from(super::resolve::SECOND_COLOUR) =>
                 {
                     // only x is handed on: anything more would be a value the bake does not know
                     if required & 0b1110 != 0 {
@@ -235,13 +235,13 @@ impl VertexStage {
                     // the packed pair of coordinate sets
                     [
                         LaneStream {
-                            semantic: iridia_interface::Attribute::TexCoord(0),
+                            semantic: primase_core::shader::Attribute::TexCoord(0),
                             first: 0,
                             count: 2,
                             component: 0,
                         },
                         LaneStream {
-                            semantic: iridia_interface::Attribute::TexCoord(1),
+                            semantic: primase_core::shader::Attribute::TexCoord(1),
                             first: 2,
                             count: 2,
                             component: 0,
@@ -250,7 +250,7 @@ impl VertexStage {
                     // the tangent's w as an input of its own
                     [
                         LaneStream {
-                            semantic: iridia_interface::Attribute::Tangent(0),
+                            semantic: primase_core::shader::Attribute::Tangent(0),
                             first: 0,
                             count: 1,
                             component: 3,
@@ -643,7 +643,7 @@ mod tests {
             .position(|i| i.label.name.eq_ignore_ascii_case("BINORMAL"))
             .unwrap();
         binding.inputs[label].role = InputRole::Lanes(vec![LaneStream {
-            semantic: iridia_interface::Attribute::Tangent(0),
+            semantic: primase_core::shader::Attribute::Tangent(0),
             first: 0,
             count: 1,
             component: 2,
@@ -713,7 +713,7 @@ mod tests {
             .iter()
             .position(|i| i.label.name.eq_ignore_ascii_case("COLOR") && i.label.index == 1)
             .unwrap();
-        binding.inputs[at].role = InputRole::Stream(iridia_interface::Attribute::Color(0));
+        binding.inputs[at].role = InputRole::Stream(primase_core::shader::Attribute::Color(0));
         let pixel = iridia_dxbc::lift(SIGN_PIXEL).unwrap();
         let planned =
             VertexStage::new(&shader, &binding, &pixel, false, &FrozenFrame::static_bake(0.)).unwrap();

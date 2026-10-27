@@ -11,13 +11,27 @@ Readers read supported source information faithfully; they do not bake it for a 
 transform that information. Writers encode prepared data they support, report what they omit, and reject invalid
 data that prevents valid output. Compilation, stitching and other later stages remain explicit operations.
 
+## What it reads and writes
+
+| Crate | Reads or writes |
+| --- | --- |
+| [`worlds/fromsoft`](worlds/fromsoft/) | Sekiro: Shadows Die Twice and Elden Ring areas: placements, models, layered materials and their shaders, lights, collision |
+| [`worlds/gta`](worlds/gta/) | Grand Theft Auto V from an install |
+| [`worlds/frostbite`](worlds/frostbite/) | Frostbite data folders (skate.) |
+| [`worlds/anvil`](worlds/anvil/), [`worlds/shaunwhite`](worlds/shaunwhite/) | Anvil forge archives (Riders Republic), and Shaun White Skateboarding over them |
+| [`worlds/unity`](worlds/unity/), [`worlds/skatebird`](worlds/skatebird/) | Unity players' data files, and what SkateBIRD's own scripts say |
+| [`worlds/monogame`](worlds/monogame/), [`worlds/stuntboost`](worlds/stuntboost/) | MonoGame (XNA 4.0, FNA) content, and STUNTBOOST's levels |
+| [`worlds/shred`](worlds/shred/) | Tony Hawk: SHRED's archives and scenes |
+| [`worlds/reskate`](worlds/reskate/) | skate. maps: preparation passes, the map folder ReSkate Studio compiles, and the compile itself |
+| [`formats/gltf`](formats/gltf/), [`formats/web`](formats/web/) | glTF 2.0 / GLB, and tiled glTF scenes for web viewers |
+
 ## Architecture
 
 | Layer | What belongs here |
 | --- | --- |
-| [`core`](core/) | Shared meanings: geometry, materials, lights, collision and world state; the `World` store and pass/conversion machinery. |
-| [`toolkit`](toolkit/) | Reusable mechanisms such as compression, texture processing and mesh operations, independent of a particular game or destination. |
-| [`formats`](formats/) | Interchange formats and their readers, passes and writers. |
+| [`core`](core/) | Shared meanings: geometry, materials, lights, collision and world state; what a shader program's inputs, constants and outputs stand for (`core::shader`); the `World` store and pass/conversion machinery. |
+| [`toolkit`](toolkit/) | Reusable mechanisms, independent of a particular game or destination: texture codecs, DDS, images, mesh operations, animation, lighting, the GLB codec, Havok lowering, a disk cache. |
+| [`formats`](formats/) | Interchange formats and their writers. |
 | [`worlds`](worlds/) | Game, engine-family and destination knowledge: source readers, namespaced data and domain passes/writers. |
 | [`examples`](examples/) | Programs using primase as a library (the one below). primase has no command line: a program composes readers, passes and writers itself. |
 | [`checks`](checks/) | The architecture rules' tests and tests spanning crates. |
@@ -25,6 +39,32 @@ data that prevents valid output. Compilation, stitching and other later stages r
 A game crate may depend on its engine's crate, never the reverse. Each worlds crate names only its own game,
 engine or destination. Reusable destination preparation belongs alongside that destination's writer, as separately
 selected passes. Complete conversion programs live in consumer repositories and own their recipes and choices.
+
+### The crates under it
+
+How a game stores its data is not primase's: the readers of game and engine formats, the shader lifter, and the
+plumbing under them are libraries in their own repositories, published on crates.io, so they can be used without
+primase. They use none of primase's crates; primase's worlds crates read through them and turn what they read into
+the world.
+
+| Repository | Crates | What |
+| --- | --- | --- |
+| [iridia](https://github.com/Kalmarv/iridia) | `iridia`, `iridia-interface`, `iridia-dxbc`, `iridia-dxil`, `iridia-d3d9`, `iridia-mojo`, `iridia-exec` | Compiled shaders (DXBC, DXIL, Direct3D 9, Mojo) lifted to one program form, run on the CPU, and read for what their code shows |
+| [dx](https://github.com/Kalmarv/dx) | `dxcontainer`, `dxbc-reader`, `dxil-reader`, `rsx-reader` | Direct3D shader bytecode (the container, DXBC and DXIL, with their reflection), and the PlayStation 3's RSX textures and shader programs |
+| [fromsoft-formats](https://github.com/Kalmarv/fromsoft-formats), [rage-engine-formats](https://github.com/Kalmarv/rage-engine-formats), [frostbite-formats](https://github.com/Kalmarv/frostbite-formats), [anvil-formats](https://github.com/Kalmarv/anvil-formats), [unity-formats](https://github.com/Kalmarv/unity-formats), [monogame-formats](https://github.com/Kalmarv/monogame-formats), [rme-formats](https://github.com/Kalmarv/rme-formats) | one per engine | An engine's archives and file formats |
+| [havok-formats](https://github.com/Kalmarv/havok-formats), [morpheme-formats](https://github.com/Kalmarv/morpheme-formats), [lua51-bytecode](https://github.com/Kalmarv/lua51-bytecode) | one each | Middleware formats several engines share |
+| [primase-foundations](https://github.com/Kalmarv/primase-foundations) | `primase-foundations` | Checked byte reads, game-file hashes, vertex decoding, texture sampling, and the compression codecs game files use |
+| [primase-naga](https://github.com/Kalmarv/primase-naga) | `primase-naga` | naga with the changes primase needs that upstream has not released |
+| [primase-testdata](https://github.com/Kalmarv/primase-testdata) | `primase-testdata` | The real-data test loader, a dev-dependency only |
+
+The line between iridia and primase is the line between what a program is and what it means. iridia reports what a
+shader's code shows: its interface, Direct3D's fixed-function state, whether a matrix constant is read by rows or
+columns, which output lanes a discard tests or a blend weighs by. What those stand for (a view-projection matrix, an
+albedo, a normal stored octahedrally) is primase's to say, in `core::shader`, together with the one reading of a pixel
+program's outputs as a lit surface and the WGSL a GPU composite decodes them with.
+
+primase depends on each of these at one git commit, and every repository that shares one names the same commit
+([CONTRIBUTING](CONTRIBUTING.md#crates-in-their-own-repositories)).
 
 ## What this means
 
@@ -34,8 +74,9 @@ selected passes. Complete conversion programs live in consumer repositories and 
   selected passes transform it. Writers do not need to know which reader supplied it; coverage determines what can transfer.
 - **Losses are visible.** Reports retain known approximations, exclusions and unsupported output, including per-part
   details. Preserving meaning matters; matching an old tool's encoded bytes is not a general requirement.
-- **New code has a home.** Shared concepts go in core, neutral mechanisms in toolkit, domain knowledge in formats
-  or worlds, and recipe choices in the consuming program. A standard shared concept need not wait for a second reader.
+- **New code has a home.** How a game stores its data goes in its engine's formats repository, shared concepts in
+  core, neutral mechanisms in toolkit, domain knowledge in formats or worlds, and recipe choices in the consuming
+  program. A standard shared concept need not wait for a second reader.
 
 ## Using the library
 
@@ -64,10 +105,6 @@ Use `convert_parts` for incremental loading with explicit partition planning, or
 
 ## From a Sekiro area to a skate. map
 
-![PLACEHOLDER: an in-game screenshot of the Sekiro area as a skate. map](docs/sekiro-to-skate.png)
-
-*Placeholder: the in-game screenshot comes with the whole-route proof.*
-
 One program, five stages:
 
 - **Read.** `AreaReader` reads an area of Sekiro as the game stores it: placements, models, materials and their
@@ -86,8 +123,8 @@ One program, five stages:
 
 `convert` drives the first four: it reads, runs the selection, loads the region, runs its preparation, checks it
 against what the writer writes, and writes it. This region is one part; a larger map is converted in parts
-(`convert_parts`) and written as the whole map would be. Every choice is a typed value, an enum or a checked number, so a choice that is not valid fails while the pipeline is built, before
-anything is read.
+(`convert_parts`) and written as the whole map would be. Every choice is a typed value, an enum or a checked number,
+so a choice that is not valid fails while the pipeline is built, before anything is read.
 
 <!-- quoted from examples/examples/sekiro_to_reskate.rs: keep the two the same -->
 ```rust
@@ -191,10 +228,9 @@ loader; `cargo test --workspace` builds it. With the game, ReSkate Studio and sk
 cargo run --release -p primase-examples --example sekiro_to_reskate
 ```
 
-The screenshot is a complete program's output: these passes and the program's own, for what it chooses beyond the
-library: ledges chained into grind rails, travel markers named for players with the spawn among them, collision
-added where the game has none under a rendered surface, foliage drawn as plain surfaces, and markers snapped down to
-the ground.
+A complete program adds passes of its own for what it chooses beyond the library: ledges chained into grind rails,
+travel markers named for players with the spawn among them, collision added where the game has none under a rendered
+surface, foliage drawn as plain surfaces, and markers snapped down to the ground.
 
 Status: the library is being aligned with this model; remaining boundary exceptions are tracked in
 [`architecture.toml`](architecture.toml).

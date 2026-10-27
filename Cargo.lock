@@ -764,7 +764,7 @@ dependencies = [
 [[package]]
 name = "iridia"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=4b2bc5d49645b1e8d8affbc861610d77a1fe0257#4b2bc5d49645b1e8d8affbc861610d77a1fe0257"
+source = "git+https://github.com/Kalmarv/iridia?rev=0e6c4771b966d7d2344f7ea747f0a1ee9dee9bdd#0e6c4771b966d7d2344f7ea747f0a1ee9dee9bdd"
 dependencies = [
  "iridia-interface",
  "primase-naga",
@@ -775,7 +775,7 @@ dependencies = [
 [[package]]
 name = "iridia-d3d9"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=4b2bc5d49645b1e8d8affbc861610d77a1fe0257#4b2bc5d49645b1e8d8affbc861610d77a1fe0257"
+source = "git+https://github.com/Kalmarv/iridia?rev=0e6c4771b966d7d2344f7ea747f0a1ee9dee9bdd#0e6c4771b966d7d2344f7ea747f0a1ee9dee9bdd"
 dependencies = [
  "iridia",
  "iridia-interface",
@@ -785,7 +785,7 @@ dependencies = [
 [[package]]
 name = "iridia-dxbc"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=4b2bc5d49645b1e8d8affbc861610d77a1fe0257#4b2bc5d49645b1e8d8affbc861610d77a1fe0257"
+source = "git+https://github.com/Kalmarv/iridia?rev=0e6c4771b966d7d2344f7ea747f0a1ee9dee9bdd#0e6c4771b966d7d2344f7ea747f0a1ee9dee9bdd"
 dependencies = [
  "dxbc-reader",
  "dxcontainer",
@@ -796,7 +796,7 @@ dependencies = [
 [[package]]
 name = "iridia-dxil"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=4b2bc5d49645b1e8d8affbc861610d77a1fe0257#4b2bc5d49645b1e8d8affbc861610d77a1fe0257"
+source = "git+https://github.com/Kalmarv/iridia?rev=0e6c4771b966d7d2344f7ea747f0a1ee9dee9bdd#0e6c4771b966d7d2344f7ea747f0a1ee9dee9bdd"
 dependencies = [
  "dxcontainer",
  "dxil-reader",
@@ -808,7 +808,7 @@ dependencies = [
 [[package]]
 name = "iridia-exec"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=4b2bc5d49645b1e8d8affbc861610d77a1fe0257#4b2bc5d49645b1e8d8affbc861610d77a1fe0257"
+source = "git+https://github.com/Kalmarv/iridia?rev=0e6c4771b966d7d2344f7ea747f0a1ee9dee9bdd#0e6c4771b966d7d2344f7ea747f0a1ee9dee9bdd"
 dependencies = [
  "half",
  "iridia",
@@ -821,7 +821,7 @@ dependencies = [
 [[package]]
 name = "iridia-interface"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=4b2bc5d49645b1e8d8affbc861610d77a1fe0257#4b2bc5d49645b1e8d8affbc861610d77a1fe0257"
+source = "git+https://github.com/Kalmarv/iridia?rev=0e6c4771b966d7d2344f7ea747f0a1ee9dee9bdd#0e6c4771b966d7d2344f7ea747f0a1ee9dee9bdd"
 dependencies = [
  "serde",
 ]
@@ -829,7 +829,7 @@ dependencies = [
 [[package]]
 name = "iridia-mojo"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=4b2bc5d49645b1e8d8affbc861610d77a1fe0257#4b2bc5d49645b1e8d8affbc861610d77a1fe0257"
+source = "git+https://github.com/Kalmarv/iridia?rev=0e6c4771b966d7d2344f7ea747f0a1ee9dee9bdd#0e6c4771b966d7d2344f7ea747f0a1ee9dee9bdd"
 dependencies = [
  "iridia",
  "primase-naga",
@@ -1218,6 +1218,7 @@ version = "0.1.0"
 dependencies = [
  "iridia-interface",
  "primase-foundations",
+ "primase-naga",
  "serde",
  "serde_json",
  "thiserror",
@@ -1455,6 +1456,7 @@ dependencies = [
  "once_cell",
  "rustc-hash 1.1.0",
  "thiserror",
+ "unicode-ident",
 ]
 
 [[package]]

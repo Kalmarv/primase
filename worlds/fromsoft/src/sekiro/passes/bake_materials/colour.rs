@@ -1,7 +1,7 @@
 //! Why a finished Colour output is not an Albedo bake. This query diagnoses; it never changes output roles.
 use iridia::Program;
 use iridia::flow::{At, Node, Op, Values};
-use iridia_interface::{Attribute, ConstantRole, InputRole, OutputRole};
+use primase_core::shader::{Attribute, ConstantRole, InputRole, OutputRole};
 use primase_core::{shader::StageBinding, shader::TextureSource};
 
 /// Stable categories aggregate across materials. Unknown resource names/reasons remain in their source binding;
@@ -103,8 +103,9 @@ pub(super) fn refusal(program: &Program, stage: &StageBinding) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iridia_interface::{ConstantBinding, FrameParameter, OutputBinding, Stage};
+    use iridia_interface::Stage;
     use primase_core::World;
+    use primase_core::shader::{ConstantBinding, FrameParameter, OutputBinding};
 
     fn binding(program: &Program) -> StageBinding {
         StageBinding {

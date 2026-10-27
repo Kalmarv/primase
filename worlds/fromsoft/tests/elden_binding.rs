@@ -19,8 +19,8 @@ mod inputs;
 
 use fromsoft_formats::metaparam::texture_number;
 use fromsoft_formats::{Game, Install, Keys, dcx::Decoder};
-use iridia_interface::ConstantRole;
 use primase_core::World;
+use primase_core::shader::ConstantRole;
 use primase_core::{shader::Shader, shader::ShaderBinding, shader::TextureSource};
 use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::game::Shading;

@@ -1,8 +1,9 @@
 //! Exact generic-material constraints on SDB2's stored forward-colour keys. Native setters determine
 //! material bits; draw/frame bits remain explicit record variants. Nothing selects a nearby permutation.
-use iridia_interface::{
-    ConstantBinding, ConstantRole, InputBinding, InputRole, Interface, KeyPart, OutputBinding, OutputRole,
-    ProgramResourceFacts, RenderState, ResourceKind, ShaderFormat, Stage, VariantKey,
+use iridia_interface::{Interface, RenderState, ResourceKind, ShaderFormat, Stage};
+use primase_core::shader::{
+    ConstantBinding, ConstantRole, InputBinding, InputRole, KeyPart, OutputBinding, OutputRole,
+    ProgramResourceFacts, VariantKey,
 };
 use std::collections::{BTreeMap, BTreeSet};
 

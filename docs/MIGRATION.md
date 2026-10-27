@@ -28,7 +28,10 @@ crate is a git dependency; name the same `rev` primase's root `Cargo.toml` names
 
 | from | to |
 | --- | --- |
-| `primase_core::shader` (the program interface: `ProgramFacts`, bindings, render state, `D3dBinding`, ...) | `iridia_interface` (`primase_core::shader::ProgramFacts` is `iridia_interface::ProgramFacts<Entity>`) |
+| `primase_core::shader`'s program vocabulary (the interface, resources, `D3dBinding`, render and sampler state, `MatrixLines`, ...) | `iridia_interface`; the roles (`ConstantRole`, `OutputRole`, the bindings, the encodings, `surface`, `ProgramFacts`) stay in `primase_core::shader` |
+| `iridia::matrix::state_lines(graph, interface, &mut constants)` | `primase_core::shader::state_lines(&mut constants, \|c\| iridia::matrix::lines_at(graph, interface, c.resource, c.offset, c.size))` |
+| `iridia::output_uses::bind_output_uses(&mut outputs, interface, graph, state)` | `primase_core::shader::bind_output_uses(&mut outputs, &iridia::output_uses::output_uses(interface, graph, state))` |
+| `program.facts(name)` | `ProgramFacts::lifted(name, program.stage, program.provenance.source_hash.clone(), program.provenance.instruction_count, &program.interface)` |
 | `primase_core::parallel::Threads::of(world)` | `primase_core::parallel::threads(world)` (`Threads` is `primase_foundations::parallel::Threads`) |
 | `primase_image`'s sRGB curves (`srgb_to_linear`, `linear_to_srgb`, ...) and `sampling` | `primase_foundations::color`, `primase_foundations::sampling` |
 | the file readers of `primase-frostbite` | `frostbite-formats` |

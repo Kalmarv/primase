@@ -31,8 +31,8 @@
 //!   census sample the engine's lists were 205,208 constants in 1,916 stages and are 3,248 runs.
 //!   Of a vertex stage's pass binding (b4) the words its clip position is placed with are stated when the program has
 //!   the camera-relative form ([`super::clip_position`]): its sixteen row words are
-//!   [`ViewParameter::CameraRelativeViewProjection`](iridia_interface::ViewParameter::CameraRelativeViewProjection)
-//!   and its three camera words [`ViewParameter::CameraPosition`](iridia_interface::ViewParameter::CameraPosition), cut
+//!   [`ViewParameter::CameraRelativeViewProjection`](primase_core::shader::ViewParameter::CameraRelativeViewProjection)
+//!   and its three camera words [`ViewParameter::CameraPosition`](primase_core::shader::ViewParameter::CameraPosition), cut
 //!   out of the `Unknown` constants over them; a program that has not that form keeps them `Unknown`. The words differ by
 //!   pass, so they come from the program, not from a fixed offset.
 //!   Its buffers are stated by running the program ([`super::buffer_tables`]): when it reads an instance table and a matrix
@@ -65,11 +65,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use iridia_interface::{
-    BufferBinding, BufferSource, BufferTable, ConstantBinding, ConstantRole, D3dClass, InputBinding,
-    InputRole, Interface, KeyPart, ObjectParameter, OutputBinding, OutputRole, RenderState, ResourceId,
-    ResourceKind, SamplerState, SkinPrefix, Stage, SystemValue, TextureDim, VariantKey,
+    D3dClass, Interface, RenderState, ResourceId, ResourceKind, SamplerState, Stage, SystemValue, TextureDim,
 };
 use primase_core::pass::{Pass, PassLog, PassSpec};
+use primase_core::shader::{
+    BufferBinding, BufferSource, BufferTable, ConstantBinding, ConstantRole, InputBinding, InputRole,
+    KeyPart, ObjectParameter, OutputBinding, OutputRole, SkinPrefix, VariantKey,
+};
 use primase_core::{Component, Entity, Lods, Semantic, Texture, TextureLayers, World};
 use primase_core::{
     shader::Shader, shader::ShaderBinding, shader::StageBinding, shader::TextureBinding,
@@ -937,7 +939,7 @@ mod tests {
     use super::*;
     use frostbite_formats::binding::{Entry, Param};
     use frostbite_formats::depot::{Block, TEXTURE};
-    use iridia_interface::Attribute;
+    use primase_core::shader::Attribute;
 
     const FLOAT: u32 = 0x2bb6_5c2d;
     const FLOAT4: u32 = 0x7f99_9829;

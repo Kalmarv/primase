@@ -2,7 +2,7 @@
 //! writes ([`Shading`]), and the digest the key of its encrypted params must have ([`ParamKey`]). Where the game keeps
 //! its files and how they are laid out is [`fromsoft_formats::Game`]'s.
 use fromsoft_formats::Game;
-use iridia_interface::OutputRole;
+use primase_core::shader::OutputRole;
 
 /// A game's renderer as its material programs address it.
 pub trait Shading {
@@ -48,7 +48,7 @@ pub trait Shading {
 
 impl Shading for Game {
     fn gbuffer(self) -> Vec<(u32, u8, OutputRole)> {
-        use iridia_interface::{NormalEncoding, NormalSpace, ScalarEncoding};
+        use primase_core::shader::{NormalEncoding, NormalSpace, ScalarEncoding};
         let normal = OutputRole::Normal {
             encoding: NormalEncoding::XyzBiased {
                 bias_bits: 0x3f00_2008,

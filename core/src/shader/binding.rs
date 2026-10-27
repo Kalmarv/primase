@@ -5,10 +5,13 @@
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::shader::{
+    BufferBinding, BufferSource, BufferTable, ConstantBinding, ConstantRole, FrameTexture, InputBinding,
+    ObjectParameter, OutputBinding, OutputRole, VariantKey,
+};
 use iridia_interface::{
-    BufferBinding, BufferKind, BufferSource, BufferTable, ConstantBinding, ConstantBufferBinding,
-    ConstantRole, FrameTexture, InputBinding, Interface, Label, MatrixLines, ObjectParameter, OutputBinding,
-    OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Stage, SystemValue, Unshown, VariantKey,
+    BufferKind, ConstantBufferBinding, Interface, Label, MatrixLines, RenderState, ResourceId, ResourceKind,
+    SamplerState, Stage, SystemValue, Unshown,
 };
 
 use super::Shader;
@@ -481,12 +484,6 @@ impl StageBinding {
                         ));
                     }
                 }
-                BufferSource::Table(table) => {
-                    return Err(format!(
-                        "buffer slot {} holds a table this check does not know: {table:?}",
-                        b.resource.0
-                    ));
-                }
             }
         }
         if !self.buffers.is_empty()
@@ -577,10 +574,9 @@ impl Component for ShaderBinding {
 mod tests {
     use super::*;
     use crate::World;
-    use iridia_interface::Attribute;
-    use iridia_interface::{
-        AddressMode, InputRole, KeyPart, Occluded, ScalarEncoding, SkinPrefix, ViewParameter,
-    };
+    use crate::shader::Attribute;
+    use crate::shader::{InputRole, KeyPart, Occluded, ScalarEncoding, SkinPrefix, ViewParameter};
+    use iridia_interface::AddressMode;
     use iridia_interface::{
         BufferLayout, Constant, ConstantType, ResourceProvenance, SampleType, ScalarType, ShaderFormat,
         TextureDim, Value as Lanes, Varying, VaryingProvenance,

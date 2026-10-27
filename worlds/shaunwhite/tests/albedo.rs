@@ -237,7 +237,7 @@ fn check_material_bindings(
     case: Case,
     state: &State,
 ) {
-    use iridia_interface::ConstantRole;
+    use primase_core::shader::ConstantRole;
     let bound = primase_shaunwhite::shaders::bind_material(derived, &source_material(case)).unwrap();
     let reads = derived.program.constant_reads().unwrap();
     let mut checked = 0;
@@ -599,7 +599,7 @@ fn native_uv_rows() -> Option<BTreeMap<String, [f32; 11]>> {
 }
 #[test]
 fn stored_rotated_mask_matches_native_setter_and_full_ps_on_ref() {
-    use iridia_interface::ConstantRole;
+    use primase_core::shader::ConstantRole;
     let Some(path) = install_file(Game::ShaunWhite, "ekshadersPChigh.bin") else {
         return;
     };

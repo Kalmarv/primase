@@ -7,11 +7,9 @@ use iridia::{
     Program,
     flow::{At, Node, Values},
 };
-use iridia_interface::{
-    Attribute, ConstantBinding, ConstantRole, InputBinding, InputRole, LaneStream, ResourceId, ResourceKind,
-    Stage,
-};
+use iridia_interface::{ResourceId, ResourceKind, Stage};
 use primase_core::shader::StageBinding;
+use primase_core::shader::{Attribute, ConstantBinding, ConstantRole, InputBinding, InputRole, LaneStream};
 use std::collections::BTreeSet;
 
 pub const NAME: &str = "shaunwhite.generic-base-uv.v1";

@@ -145,25 +145,26 @@ an occlusion of which light). What a lighting pass takes from those roles is rea
 gloss, or from a Blinn-Phong exponent), the metallic, the reflectance, the specular strength, the emission and the
 occlusion, and how each stored value decodes. Every consumer takes it from there: a material bake decoding a program it
 evaluated on the CPU (`bake-fromsoft-materials`), and a viewer's composite decoding a G-buffer on the GPU, which packs
-the reading with `iridia::surface::rows` and decodes it with that module's WGSL. A game's layout is tested as a
-surface in its own crate (the fromsoft `gbuffer_surface` tests, the anvil and gta `resolve_shaders` tests).
+the reading with `primase_core::shader::surface::rows` and decodes it with that module's WGSL. A game's layout is
+tested as a surface in its own crate (the fromsoft `gbuffer_surface` tests, the anvil and gta `resolve_shaders` tests).
 
 ## 5. Crates
 
 ```
-core/         world, core components, TexFormat, frame conversions, pass manager, gates, serialisation (v2)
-toolkit/      texcodec (TexFormat decoders/encoders and gates), dds, image (PNG, sRGB, mips), compress (lz4,
-              deflate/zlib, Frostbite CAS blocks, Oodle via the game's own DLL), container (TOC and archive helpers,
-              version gates), hash, vertex (layouts, quantisation, strips), havok, meshops (weld, split, meshopt),
-              frostbite (skate.'s containers: TOC, bundles, native DB, CAS archives, shader depots and lookups),
-              validate (identity rules)
-worlds/       one crate per game or engine: reskate (Frostbite CAS/TOC/EBX, map writer and reader), fromsoft, gta,
-              forza, unity, insomniac, ...
-formats/      gltf, web, usd, stl/3mf, obj, ... (skate-scene interchange v1: worlds/reskate)
-bindings/     python (pyo3) and C# (csbindgen), so existing tools can call the toolkit
+core/         world, core components (among them what a shader program's values stand for, core::shader), TexFormat,
+              frame conversions, pass manager, gates, serialisation (v2)
+toolkit/      texcodec (TexFormat decoders/encoders and gates), dds, image (PNG, JPEG, sRGB, mips), glb, meshops
+              (weld, split, meshopt), animation, lighting, exactsum, havok (Havok data lowered), cache
+worlds/       one crate per game, engine family or destination: fromsoft, gta, frostbite, anvil, shaunwhite, unity,
+              skatebird, monogame, stuntboost, shred, reskate (the skate. map writer, its preparation and compile)
+formats/      gltf, web (later: usd, stl/3mf, obj, ...; skate-scene interchange v1: worlds/reskate)
 checks/       the architecture rules' tests and tests spanning crates
 examples/     programs using the library (primase has no command line; programs live in their own repos)
 ```
+
+Game and engine formats, the shader lifter (iridia), shader bytecode readers, and the byte, hash, vertex and
+compression plumbing under them are libraries in their own repositories (CONTRIBUTING.md, "Crates in their own
+repositories"). Bindings for other languages (python through pyo3, C# through csbindgen) are later.
 
 **The crate rule.** Each game becomes its own crate (`worlds/sekiro`, `worlds/gta`, ...), and patterns that recur
 across games become core or toolkit functions: the second time a game crate needs something another game already has

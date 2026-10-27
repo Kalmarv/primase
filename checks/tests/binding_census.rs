@@ -17,8 +17,9 @@ mod inputs;
 use primase_fromsoft::game::ParamKey;
 use std::collections::{BTreeMap, BTreeSet};
 
-use iridia_interface::{ConstantRole, InputRole, OutputRole, RenderState};
+use iridia_interface::RenderState;
 use primase_core::pass::{Options, PassLog, PassManager, PassRegistry, RunReport};
+use primase_core::shader::{ConstantRole, InputRole, OutputRole};
 use primase_core::{Component, World};
 use primase_core::{shader::ShaderBinding, shader::TextureSource};
 use serde_json::{Value, json};

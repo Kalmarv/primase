@@ -267,7 +267,7 @@ pub fn resolve_definition(
 
 /// The alpha test's reference a material states, from the first word of its `g_AlphaRef` (`raw`): the word over 255
 /// where it is above 0, none where it is 0 or below (the game's plain program, which tests nothing). The one rule the
-/// material's class, its binding's [`iridia_interface::ConstantRole::AlphaReference`] and the bakes take it by.
+/// material's class, its binding's [`primase_core::shader::ConstantRole::AlphaReference`] and the bakes take it by.
 pub fn alpha_reference(raw: i32) -> Option<f32> {
     (raw > 0).then(|| raw as f32 / 255.)
 }
@@ -345,7 +345,7 @@ pub fn alpha_cut(
 /// the cut is not the bound program's own.
 ///
 /// With a binding (`resolve-fromsoft-shaders` run), the cut is the pixel stage's
-/// [`iridia_interface::ConstantRole::AlphaReference`]: a reference above 0 its cutoff, none at 0 or below or where
+/// [`primase_core::shader::ConstantRole::AlphaReference`]: a reference above 0 its cutoff, none at 0 or below or where
 /// the binding states no reference (its program's discard compares against none), the last counted
 /// ([`UNTESTED_ALPHA_REFERENCE`]) where the material states one; but where the lowering read the slot the discard tests
 /// and colours the surface with it ([`AlphaTestRead::Coverage`]), the material's reference, counted
@@ -359,7 +359,8 @@ pub fn alpha_cut_read(
     material: &Material,
     read: AlphaTestRead,
 ) -> (Option<f32>, Option<&'static str>) {
-    use iridia_interface::{AlphaComparison, ConstantRole, Stage};
+    use iridia_interface::{AlphaComparison, Stage};
+    use primase_core::shader::ConstantRole;
     match binding {
         Some(b) => {
             let stated = b.stage(Stage::Pixel).and_then(|s| {
@@ -443,8 +444,9 @@ pub fn alpha_mode_read(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iridia_interface::{ConstantBinding, ConstantRole, RenderState, ResourceId, Stage};
+    use iridia_interface::{RenderState, ResourceId, Stage};
     use primase_core::pbr::AlphaMode;
+    use primase_core::shader::{ConstantBinding, ConstantRole};
     use primase_core::{shader::ShaderBinding, shader::StageBinding};
 
     /// A material of `class` stating `g_AlphaRef` as `aref` (none where `None`), cut at `cutoff` by the read-time rule.

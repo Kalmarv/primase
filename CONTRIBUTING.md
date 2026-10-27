@@ -121,7 +121,7 @@ with its role (`allow(clippy::disallowed_*, reason = "<role>: ...")`).
 
 ```
 core/                 primase-core: world store, core components, TexFormat, frame, pass manager, conversion helper
-toolkit/<name>/       primase-<name>: shared mechanisms (texcodec, dds, compress, glb, hash, image, meshops, ...)
+toolkit/<name>/       primase-<name>: shared mechanisms (texcodec, dds, glb, image, meshops, animation, ...)
 worlds/<name>/        primase-<name>: one crate per game (or game family), engine family or destination (fromsoft,
                       gta, unity, frostbite, monogame, reskate, ...): its reader, its passes, and for a destination its
                       preparation passes and writer
@@ -164,9 +164,9 @@ manifest: `cargo check --config "patch.'https://github.com/Kalmarv/dx'.dxbc-read
 Names are owned: core, toolkit and formats name no game, engine or destination; a world crate uses only its own
 (`[package.metadata.primase] names`): a game crate its games and engine, an engine crate its engine, a destination
 crate its destination and engine. A source crate naming a destination, or any crate naming another game, is a break.
-Vendor formats used across engines (Havok, DXBC, DXIL) are toolkit mechanisms. One vendor vocabulary is a stated exception
-and sits in core: Direct3D's addressing of shader resources (`core::shader`: `D3dBinding`, `D3dClass`, `D3dSignature`, and the
-`ShaderFormat` names of the bytecodes). It is **provenance**: a lifter maps a program's resources and varyings into the
+Vendor formats used across engines (Havok, DXBC, DXIL) are libraries in their own repositories. One vendor vocabulary is a stated exception and reaches core: Direct3D's addressing of shader resources
+(`iridia_interface`: `D3dBinding`, `D3dClass`, `D3dSignature`, and the `ShaderFormat` names of the bytecodes), which
+`core::shader` uses. It is **provenance**: a lifter maps a program's resources and varyings into the
 API-independent meaning once and keeps the register, class and signature row it came from beside it, because every shader
 lifted here comes from a D3D-family bytecode and what runs or inspects a program (an executor, a consumer answering a request)
 addresses its resources by those. It is never the meaning itself, and no other vendor's vocabulary gets this place: a new

@@ -194,7 +194,7 @@ fn rgb(t: [f64; 4]) -> [f64; 3] {
 /// Read the class actually packed by the unmodified existing program, not the class a test supplies as a role.
 fn assert_surface_class(template: &str, out: &[[f64; 4]]) {
     let normal = out.get(1).expect("fixture G-buffer normal target");
-    let (_, class) = iridia_interface::NormalEncoding::decode_octahedral_diamond([
+    let (_, class) = primase_core::shader::NormalEncoding::decode_octahedral_diamond([
         normal[0] as f32,
         normal[1] as f32,
         normal[2] as f32,

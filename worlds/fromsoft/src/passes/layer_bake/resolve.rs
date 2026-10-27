@@ -8,17 +8,20 @@ use crate::invalid;
 use crate::materials::{Binding, LayeredMaterial, MaterialView, ParameterValue};
 use fromsoft_formats::Result;
 use fromsoft_formats::metaparam::Metaparam;
-use iridia::matrix::{Unshown, state_lines};
+use iridia::matrix::{Unshown, lines_at};
 use iridia::{D3dClass, Interface, Program, Resource, ScalarType, SystemValue};
 use iridia_exec::ProgramShader;
 use iridia_exec::{Layout, PixelShader};
 use iridia_interface::{
-    Attribute, Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantBufferBinding,
-    ConstantRole, DepthState, FrameParameter, FrameTexture, InputBinding, InputRole, LaneStream, MatrixLines,
-    ObjectParameter, OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Stage,
-    TargetState, ViewParameter,
+    Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBufferBinding, DepthState, MatrixLines,
+    RenderState, ResourceId, ResourceKind, SamplerState, Stage, TargetState,
 };
 use primase_core::Entity;
+use primase_core::shader::state_lines;
+use primase_core::shader::{
+    Attribute, ConstantBinding, ConstantRole, FrameParameter, FrameTexture, InputBinding, InputRole,
+    LaneStream, ObjectParameter, OutputBinding, OutputRole, ViewParameter,
+};
 use primase_core::{shader::Shader, shader::StageBinding, shader::TextureBinding, shader::TextureSource};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -882,7 +885,10 @@ pub fn resolve(
         })
         .collect();
     // a matrix's lines as the program applies it, or why it does not show them
-    state_lines(graph.as_ref().map_err(String::as_str), interface, &mut constants);
+    let graph_or_why = graph.as_ref().map_err(String::as_str);
+    state_lines(&mut constants, |c| {
+        lines_at(graph_or_why, interface, c.resource, c.offset, c.size)
+    });
     Ok(Resolution {
         stage: StageBinding {
             stage: Stage::Pixel,
@@ -1402,7 +1408,10 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> 
     }
     // a matrix's lines as the program applies it, or why it does not show them
     let graph = program.as_ref().map_err(Clone::clone).and_then(Program::graph);
-    state_lines(graph.as_ref().map_err(String::as_str), interface, &mut constants);
+    let graph_or_why = graph.as_ref().map_err(String::as_str);
+    state_lines(&mut constants, |c| {
+        lines_at(graph_or_why, interface, c.resource, c.offset, c.size)
+    });
     let palette_rows = palette_rows_by_rule(&mut constants);
     // the buffers of the joints' palettes are bound larger than the program declares
     let mut constant_buffers: Vec<ConstantBufferBinding> = Vec::new();

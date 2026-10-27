@@ -446,9 +446,9 @@ pub enum Semantic {
 }
 
 /// A shader input reads a vertex attribute by the same meaning a mesh stream has.
-impl From<Semantic> for iridia_interface::Attribute {
+impl From<Semantic> for crate::shader::Attribute {
     fn from(s: Semantic) -> Self {
-        use iridia_interface::Attribute as A;
+        use crate::shader::Attribute as A;
         match s {
             Semantic::Position => A::Position,
             Semantic::Normal => A::Normal,
@@ -461,9 +461,9 @@ impl From<Semantic> for iridia_interface::Attribute {
     }
 }
 
-impl From<iridia_interface::Attribute> for Semantic {
-    fn from(a: iridia_interface::Attribute) -> Self {
-        use iridia_interface::Attribute as A;
+impl From<crate::shader::Attribute> for Semantic {
+    fn from(a: crate::shader::Attribute) -> Self {
+        use crate::shader::Attribute as A;
         match a {
             A::Position => Semantic::Position,
             A::Normal => Semantic::Normal,

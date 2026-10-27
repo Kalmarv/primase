@@ -23,8 +23,8 @@ use iridia_exec::ProgramShader;
 use iridia_exec::{
     Grid, Input, Invocation, Layout, PixelShader, View, Views, evaluate::Constants, evaluate_raw,
 };
-use iridia_interface::ScalarEncoding;
 use primase_core::World;
+use primase_core::shader::ScalarEncoding;
 use primase_core::shader::Shader;
 use primase_gta::components::{GtaEffect, GtaStage};
 use primase_gta::passes::gbuffer;

@@ -6,7 +6,7 @@ mod support;
 use anvil_formats::shaunwhite::shaders::Payload;
 use inputs::{Game, Tool, install_file, own_scratch, tool};
 use iridia_exec::{PixelShader, ProgramShader, Sample};
-use iridia_interface::{Attribute, ConstantRole};
+use primase_core::shader::{Attribute, ConstantRole};
 use primase_shaunwhite::shaders::base_uv::derive;
 use primase_testdata::gate::{GateReport, Tolerance};
 use std::process::Command;
@@ -371,7 +371,7 @@ fn hand_worked_uv_graph_uses_vs_rows_and_keeps_cut_bindings_unknown() {
         [24, 25, 26, 28, 29, 30]
     );
     assert!(uv.inputs.iter().any(
-        |i| matches!(&i.role,iridia_interface::InputRole::Lanes(l) if l[0].semantic==Attribute::TexCoord(0))
+        |i| matches!(&i.role,primase_core::shader::InputRole::Lanes(l) if l[0].semantic==Attribute::TexCoord(0))
     ));
     assert!(
         uv.constants

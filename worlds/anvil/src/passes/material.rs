@@ -2761,7 +2761,7 @@ mod tests {
             gbuffer::fixture,
             resolve_shaders::{output_bindings, shading_class},
         };
-        use iridia_interface::surface::Surface;
+        use primase_core::shader::surface::Surface;
         for (template, reads) in [
             ("MAD_Bark", &BARK),
             ("MAD_Tex1_Leaves", &LEAVES),
@@ -2937,7 +2937,8 @@ mod tests {
         };
         use crate::components::{BoundTexture, TextureFrom};
         use iridia_exec::{Load, Sample, Sampler, Store};
-        use iridia_interface::{ConstantRole, ResourceId};
+        use iridia_interface::ResourceId;
+        use primase_core::shader::ConstantRole;
         struct Coordinates;
         impl Sampler for Coordinates {
             fn sample(&mut self, r: Sample) -> Result<[f32; 4], String> {

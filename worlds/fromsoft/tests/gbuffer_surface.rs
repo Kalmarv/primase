@@ -1,11 +1,11 @@
-//! Each game's G-buffer ([`Game::gbuffer`]) read as a surface (`iridia_interface::surface`), the one reading a
+//! Each game's G-buffer ([`Game::gbuffer`]) read as a surface (`primase_core::shader::surface`), the one reading a
 //! material bake and a viewer's composite both take: which target and lanes hold each term, and what a stored value
 //! decodes to, by hand from the layout's own statements (the normal `n * 0.5 + 0.50048876`, the gloss the square of the
 //! smoothness over 0.95, Sekiro's reflectance its square root).
 #![allow(clippy::unwrap_used)]
 use fromsoft_formats::Game;
-use iridia_interface::{NormalEncoding, NormalSpace, ScalarEncoding};
-use iridia_interface::{
+use primase_core::shader::{NormalEncoding, NormalSpace, ScalarEncoding};
+use primase_core::shader::{
     surface::Base, surface::Emission, surface::Place, surface::Roughness, surface::Surface, surface::Term,
 };
 use primase_fromsoft::game::Shading;

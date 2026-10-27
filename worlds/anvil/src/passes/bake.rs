@@ -111,9 +111,10 @@ use iridia_exec::{
     Filtering, Grid, Input, Invocation, Layout, Lod, PixelShader, SampledTexture, SamplerUse, Unstated,
     evaluate::Constants, evaluate_raw_with,
 };
-use iridia_interface::{NormalEncoding, SamplerState};
+use iridia_interface::SamplerState;
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform};
+use primase_core::shader::NormalEncoding;
 use primase_core::{
     ColorSpace, Component, Entity, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat,
     TexRole, Texture, VertexColor, World,

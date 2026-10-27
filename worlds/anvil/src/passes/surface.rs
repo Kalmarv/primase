@@ -15,9 +15,10 @@ use crate::components::{AnvilMaterial, AnvilRenderStatus, AnvilShaders, AnvilTex
 use iridia_exec::{
     Execution, Filtering, PixelShader, ProgramShader, SampledTexture, SamplerUse, View, Views,
 };
-use iridia_interface::{NormalEncoding, SamplerState};
+use iridia_interface::SamplerState;
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial, TextureRef, Wrap};
+use primase_core::shader::NormalEncoding;
 use primase_core::{
     ColorSpace, Component, Instance, Linear, MaterialVariants, Mesh, Name, NormalBasis, NormalConvention,
     NormalGreen, NormalX, NormalZ, Primitive, Semantic, Stream, TexFormat, TexRole, Texture, Topology,

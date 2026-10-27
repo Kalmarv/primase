@@ -4,8 +4,9 @@ mod inputs;
 
 use anvil_formats::shaunwhite::shaders::{Database, Effect, Key, Payload, Record};
 use inputs::{Game, install_file};
-use iridia_interface::{ConstantRole, OutputRole, Stage};
+use iridia_interface::Stage;
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
+use primase_core::shader::{ConstantRole, OutputRole};
 use primase_core::{Mesh, Primitive, Semantic, Stream, Topology, World};
 use primase_core::{shader::MaterialPrograms, shader::Shader, shader::ShaderBinding};
 use primase_shaunwhite::components::{

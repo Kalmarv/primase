@@ -70,15 +70,19 @@
 //! the vertex stage's are mesh streams by their semantic name.
 use std::collections::{BTreeMap, BTreeSet};
 
-use iridia::matrix::state_lines;
+use iridia::matrix::lines_at;
 use iridia::{ProgramGraph, WordsRead};
 use iridia_interface::{
-    AlphaTest, Compare, ConstantBinding, ConstantRole, Cull, DepthState, FrameParameter, InputBinding,
-    InputRole, Interface, NormalEncoding, NormalSpace, ObjectMatrix, ObjectParameter, Occluded,
-    OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, ScalarEncoding,
-    ShaderFormat, Stage, SystemValue, TextureDim, VariantKey, Varying, ViewParameter,
+    AlphaTest, Compare, Cull, DepthState, Interface, RenderState, ResourceId, ResourceKind, SamplerState,
+    ShaderFormat, Stage, SystemValue, TextureDim, Varying,
 };
 use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
+use primase_core::shader::state_lines;
+use primase_core::shader::{
+    ConstantBinding, ConstantRole, FrameParameter, InputBinding, InputRole, NormalEncoding, NormalSpace,
+    ObjectMatrix, ObjectParameter, Occluded, OutputBinding, OutputRole, ScalarEncoding, VariantKey,
+    ViewParameter,
+};
 use primase_core::shader::{MaterialPrograms, ProgramFacts};
 use primase_core::{ColorSpace, Component, Entity, MaterialVariants, Mesh, Name, Semantic, Texture, World};
 use primase_core::{
@@ -969,7 +973,16 @@ fn program(
             Ok(program) => {
                 let e = world.spawn();
                 let name = format!("{template}-{key:06x}.{}", if is_vertex { "vs" } else { "ps" });
-                world.insert(e, program.facts(&name));
+                world.insert(
+                    e,
+                    ProgramFacts::lifted(
+                        &name,
+                        program.stage,
+                        program.provenance.source_hash.clone(),
+                        program.provenance.instruction_count,
+                        &program.interface,
+                    ),
+                );
                 graphs.insert(
                     e,
                     program.graph().map_err(|why| format!("the value graph: {why}")),
@@ -1114,7 +1127,9 @@ impl ResolveAnvilShaders {
                 );
             }
         }
-        let unshown = state_lines(graph, interface, &mut constants);
+        let unshown = state_lines(&mut constants, |c| {
+            lines_at(graph, interface, c.resource, c.offset, c.size)
+        });
         if unshown > 0 {
             *counts
                 .entry("matrices whose lines the program does not show (a consumer writing a non-symmetric matrix cannot bind them)".into())
@@ -1710,7 +1725,7 @@ mod key_tests {
         );
         assert_eq!(
             facts.surface,
-            iridia_interface::Surface::read(outputs.iter().map(|output| (output.lanes, &output.role)))
+            primase_core::shader::Surface::read(outputs.iter().map(|output| (output.lanes, &output.role)))
         );
     }
 
@@ -1822,14 +1837,14 @@ mod key_tests {
         assert_eq!(of(None, 3), [(0b1111, OutputRole::unknown("…"))]);
     }
 
-    /// The G-buffer read as a surface (`iridia_interface::surface`), the one reading a viewer's composite takes, by
+    /// The G-buffer read as a surface (`primase_core::shader::surface`), the one reading a viewer's composite takes, by
     /// shading class: target 0 the albedo and, opaque, the roughness in w; target 1 the diamond normal and, in w, the
     /// metalness for class 1 or the occlusion of every light for classes 3 to 5; class 1's emission is target 2's z,
     /// one lane that scales the albedo. A blended material has no roughness, and the classes 3 to 5 no metalness and
     /// no emission.
     #[test]
     fn the_gbuffer_is_read_as_a_surface_by_shading_class() {
-        use iridia_interface::{
+        use primase_core::shader::{
             surface::Base, surface::Emission, surface::Place, surface::Roughness, surface::Surface,
             surface::Term,
         };

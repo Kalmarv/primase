@@ -22,9 +22,10 @@ use std::time::Instant;
 
 use fromsoft_formats::dcx::Decoder;
 use fromsoft_formats::{Game, Install, Keys};
-use iridia_interface::{BufferSource, Stage};
+use iridia_interface::Stage;
 use primase_animation::game_skin;
 use primase_core::pass::PassLog;
+use primase_core::shader::BufferSource;
 use primase_core::shader::ShaderBinding;
 use primase_core::{Mesh, Skin, World};
 use primase_fromsoft::materials::Material;

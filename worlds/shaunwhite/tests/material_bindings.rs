@@ -3,9 +3,8 @@
 mod inputs;
 
 use anvil_formats::shaunwhite::{material::LayerState, shaders::Key};
-use iridia_interface::{
-    Constant, ConstantBinding, ConstantRole, ConstantType, ResourceKind, ScalarType, Stage, Value,
-};
+use iridia_interface::{Constant, ConstantType, ResourceKind, ScalarType, Stage, Value};
+use primase_core::shader::{ConstantBinding, ConstantRole};
 use primase_core::{World, shader::*};
 use primase_shaunwhite::{
     components::{MaterialRef, MaterialState, SlotRef},

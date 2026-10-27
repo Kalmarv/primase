@@ -8,9 +8,11 @@ use fromsoft_formats::mtd::{self, MaterialDefinition, Parameter, Value};
 use iridia_exec::PixelShader;
 use iridia_exec::ProgramShader;
 use iridia_interface::{
-    AddressMode, Attribute, BlendFactor, BlendOp, Compare, ConstantRole, FrameParameter, FrameTexture,
-    InputRole, LaneStream, MatrixLines, NormalEncoding, NormalSpace, ObjectParameter, OutputRole, ResourceId,
-    SamplerState, ScalarEncoding, ShaderFormat, Stage, ViewParameter,
+    AddressMode, BlendFactor, BlendOp, Compare, MatrixLines, ResourceId, SamplerState, ShaderFormat, Stage,
+};
+use primase_core::shader::{
+    Attribute, ConstantRole, FrameParameter, FrameTexture, InputRole, LaneStream, NormalEncoding,
+    NormalSpace, ObjectParameter, OutputRole, ScalarEncoding, ViewParameter,
 };
 use primase_core::{
     BindingId, ColorSpace, Deformation, Entity, Influences, Joint, JointId, Mesh, Name, Primitive, Rest,

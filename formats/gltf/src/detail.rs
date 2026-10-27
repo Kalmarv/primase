@@ -8,7 +8,6 @@
 //! revision 3 may not use what 4 added. The extension's specification is
 //! `docs/extensions/PRIMASE_materials_detail_blend.md`.
 
-use iridia_interface::ScalarEncoding;
 use primase_core::Semantic;
 use primase_core::detail::{
     DETAIL_LIMIT, Detail, DetailLerp, DetailMix, DetailedMaterial, Frozen, GlossScale, REVISION,
@@ -17,6 +16,7 @@ use primase_core::detail::{
 use primase_core::layered::Source;
 use primase_core::pass::PassLog;
 use primase_core::pbr::TextureRef;
+use primase_core::shader::ScalarEncoding;
 use serde_json::{Map, Value};
 
 use crate::lower::{object, only, texture_transform};

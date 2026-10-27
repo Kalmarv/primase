@@ -14,8 +14,9 @@ mod inputs;
 
 use fromsoft_formats::dcx::Decoder;
 use fromsoft_formats::{Game, Install, Keys};
-use iridia_interface::{ConstantRole, ResourceKind};
+use iridia_interface::ResourceKind;
 use primase_core::World;
+use primase_core::shader::ConstantRole;
 use primase_core::{shader::Shader, shader::ShaderBinding};
 use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::materials::Material;

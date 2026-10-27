@@ -8,8 +8,8 @@ use anvil_formats::shaunwhite::shaders::{Database, Key, Payload};
 use iridia::flow::{At, BinaryOperator, Node, NodeId, Op, UnaryOperator, Values};
 use iridia::{Program, source_hash};
 use iridia_d3d9::{Projection, Register};
-use iridia_interface::{OutputBinding, OutputRole};
 use primase_core::shader::StageBinding;
+use primase_core::shader::{OutputBinding, OutputRole};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const NAME: &str = "shaunwhite.generic-albedo.v1";

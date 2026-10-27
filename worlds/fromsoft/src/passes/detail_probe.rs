@@ -12,11 +12,13 @@
 use crate::game::Shading;
 use std::collections::BTreeMap;
 
-use iridia::output_uses::bind_output_uses;
+use iridia::output_uses::output_uses;
 use iridia_exec::evaluate::Constants;
 use iridia_exec::{Layout, PixelShader, ProgramShader, Sampler};
-use iridia_interface::{ConstantRole, OutputBinding, RenderState};
+use iridia_interface::RenderState;
 use primase_core::World;
+use primase_core::shader::bind_output_uses;
+use primase_core::shader::{ConstantRole, OutputBinding};
 use primase_core::{shader::StageBinding, shader::TextureSource};
 
 use crate::invalid;
@@ -198,12 +200,8 @@ impl ProgramProbe {
         // the outputs as the resolve pass binds them: a lane left Unknown is Coverage where the program's discard tests it,
         // Opacity where the material's blend weighs by it
         let mut outputs = resolution.stage.outputs.clone();
-        bind_output_uses(
-            &mut outputs,
-            &interface,
-            shader.program().graph().ok().as_ref(),
-            state,
-        );
+        let graph = shader.program().graph().ok();
+        bind_output_uses(&mut outputs, &output_uses(&interface, graph.as_ref(), state));
         let constants = layer_bake::program_constants(
             &shader,
             &interface,

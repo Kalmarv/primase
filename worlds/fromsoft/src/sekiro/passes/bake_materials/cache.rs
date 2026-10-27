@@ -375,18 +375,19 @@ mod tests {
     )]
     use super::super::pixels;
     use super::*;
-    use iridia_interface::Attribute;
     use primase_cache::Cache;
+    use primase_core::shader::Attribute;
     use std::sync::Arc;
 
     fn memo(cache: &Arc<Cache>, build: &str) -> Memo {
         Memo::new(cache.clone(), build).unwrap()
     }
-    use iridia_interface::{
-        ConstantBinding, ConstantRole, InputBinding, InputRole, LaneStream, NormalEncoding, NormalSpace,
-        OutputBinding, OutputRole, ResourceKind, SamplerState, ScalarEncoding, ShaderFormat, Stage,
-    };
+    use iridia_interface::{ResourceKind, SamplerState, ShaderFormat, Stage};
     use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform};
+    use primase_core::shader::{
+        ConstantBinding, ConstantRole, InputBinding, InputRole, LaneStream, NormalEncoding, NormalSpace,
+        OutputBinding, OutputRole, ScalarEncoding,
+    };
     use primase_core::{ColorSpace, Entity, TexFormat, TexRole, Texture};
     use primase_core::{shader::Shader, shader::StageBinding, shader::TextureBinding, shader::TextureSource};
 

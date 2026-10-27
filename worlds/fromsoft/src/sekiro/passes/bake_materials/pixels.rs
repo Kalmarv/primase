@@ -1,12 +1,12 @@
 //! Execute the resolved pixel stage and decode only the roles its binding declares, through primase's one reading of a
-//! program's outputs as a surface (`iridia_interface::surface`).
+//! program's outputs as a surface (`primase_core::shader::surface`).
 use crate::layer_bake::{self, FrozenFrame};
 use iridia_exec::{
     Grid, Input, Invocation, Lane, PixelShader, Raw, SampledTexture, SamplerUse, Unstated, evaluate_raw_with,
 };
-use iridia_interface::{NormalSpace, OutputBinding, OutputRole};
-use iridia_interface::{surface::Base, surface::Place, surface::Surface};
 use primase_core::pbr::{PbrMaterial, UvTransform, Wrap};
+use primase_core::shader::{NormalSpace, OutputBinding, OutputRole};
+use primase_core::shader::{surface::Base, surface::Place, surface::Surface};
 use primase_core::{ColorSpace, Texture, World};
 use primase_core::{shader::Shader, shader::StageBinding, shader::TextureSource};
 use primase_foundations::parallel::Threads;
@@ -472,7 +472,8 @@ impl Decode<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iridia_interface::{Label, NormalEncoding, ScalarEncoding};
+    use iridia_interface::Label;
+    use primase_core::shader::{NormalEncoding, ScalarEncoding};
 
     fn target(name: &str, lanes: u8, role: OutputRole) -> OutputBinding {
         OutputBinding {

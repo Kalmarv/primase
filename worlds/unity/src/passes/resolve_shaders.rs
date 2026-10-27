@@ -51,15 +51,19 @@
 //!   winding, `ZClip`, alpha-to-coverage and the conservative flag.
 use std::collections::BTreeMap;
 
-use iridia::matrix::state_lines;
+use iridia::matrix::lines_at;
 use iridia::{ProgramGraph, WordsRead};
 use iridia_interface::{
-    Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantRole, Cull, D3dClass,
-    DepthBias, DepthState, FrameParameter, FrameTexture, InputBinding, InputRole, Interface, ObjectParameter,
-    OutputBinding, OutputRole, RenderState, SamplerState, ShaderFormat, Stage, Stencil, StencilFace,
-    StencilOp, SystemValue, TargetState, ViewParameter,
+    Blend, BlendEquation, BlendFactor, BlendOp, Compare, Cull, D3dClass, DepthBias, DepthState, Interface,
+    RenderState, SamplerState, ShaderFormat, Stage, Stencil, StencilFace, StencilOp, SystemValue,
+    TargetState,
 };
 use primase_core::pass::{Choice, Given, OptionSpec, PassSpec};
+use primase_core::shader::state_lines;
+use primase_core::shader::{
+    ConstantBinding, ConstantRole, FrameParameter, FrameTexture, InputBinding, InputRole, ObjectParameter,
+    OutputBinding, OutputRole, ViewParameter,
+};
 use primase_core::{Component, Entity, Name, Semantic, Texture, World};
 use primase_core::{
     shader::Shader, shader::ShaderBinding, shader::StageBinding, shader::TextureBinding,
@@ -1053,7 +1057,9 @@ impl ResolveUnityShaders {
                 _ => {}
             }
         }
-        let unshown = state_lines(graph, interface, &mut constants);
+        let unshown = state_lines(&mut constants, |c| {
+            lines_at(graph, interface, c.resource, c.offset, c.size)
+        });
         if unshown > 0 {
             *counts
                 .entry("matrices whose lines the program does not show (a consumer writing a non-symmetric matrix cannot bind them)".into())

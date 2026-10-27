@@ -10,10 +10,9 @@ use iridia_exec::SampledTexture;
 use iridia_exec::{
     Grid, Input, Invocation, Lane, Layout, PixelShader, Raw, evaluate::Constants, evaluate_raw_with,
 };
-use iridia_interface::{
-    AddressMode, ConstantRole, FrameParameter, MatrixLines, ObjectParameter, ViewParameter,
-};
+use iridia_interface::{AddressMode, MatrixLines};
 use primase_core::Entity;
+use primase_core::shader::{ConstantRole, FrameParameter, ObjectParameter, ViewParameter};
 use primase_core::{shader::StageBinding, shader::TextureSource};
 use primase_foundations::parallel::Threads;
 use primase_foundations::sampling::Address;

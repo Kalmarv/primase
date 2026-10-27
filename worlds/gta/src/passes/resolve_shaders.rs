@@ -62,13 +62,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use iridia_interface::{
-    Blend, BlendEquation, BlendFactor, BlendOp, Compare, ConstantBinding, ConstantRole, Cull, D3dClass,
-    DepthState, Fill, FrameParameter, InputBinding, InputRole, Interface, NormalEncoding, NormalSpace,
-    ObjectMatrix, ObjectParameter, Occluded, OutputBinding, OutputRole, RenderState, ResourceId,
-    ResourceKind, SamplerState, ScalarEncoding, Stage, Stencil, StencilFace, StencilOp, SystemValue,
-    TargetState, ViewParameter,
+    Blend, BlendEquation, BlendFactor, BlendOp, Compare, Cull, D3dClass, DepthState, Fill, Interface,
+    RenderState, ResourceId, ResourceKind, SamplerState, Stage, Stencil, StencilFace, StencilOp, SystemValue,
+    TargetState,
 };
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
+use primase_core::shader::{
+    ConstantBinding, ConstantRole, FrameParameter, InputBinding, InputRole, NormalEncoding, NormalSpace,
+    ObjectMatrix, ObjectParameter, Occluded, OutputBinding, OutputRole, ScalarEncoding, ViewParameter,
+};
 use primase_core::{Component, Entity, Semantic, Texture, TextureFile, World};
 use primase_core::{
     shader::Shader, shader::ShaderBinding, shader::StageBinding, shader::TextureBinding,
@@ -82,8 +84,9 @@ use crate::components::{
     GtaEffect, GtaEffectParameters, GtaEffectTechniques, GtaMaterialEffect, GtaParam, GtaPass, GtaShader,
     GtaShaderTable,
 };
-use iridia::matrix::state_lines;
+use iridia::matrix::lines_at;
 use iridia::{ProgramGraph, WordsRead};
+use primase_core::shader::state_lines;
 use primase_core::shader::{MaterialPrograms, ProgramFacts};
 use rage_engine_formats::sgd2_effect::SamplerDesc;
 use rage_engine_formats::sgd2_table::{ProgramTable, TableConstant, TableResource};
@@ -147,7 +150,13 @@ struct ProgramAnalysis {
 fn analyse(program: &Shader, name: &str) -> ProgramAnalysis {
     match iridia_dxil::lift(&program.bytecode) {
         Ok(lifted) => ProgramAnalysis {
-            facts: lifted.facts(name),
+            facts: ProgramFacts::lifted(
+                name,
+                lifted.stage,
+                lifted.provenance.source_hash.clone(),
+                lifted.provenance.instruction_count,
+                &lifted.interface,
+            ),
             graph: lifted.graph(),
             samples: sampler_use::uses_program(&lifted),
             writes: gbuffer::writes_program(&lifted),
@@ -725,7 +734,10 @@ impl ResolveGtaShaders {
                 },
             })
             .collect();
-        let unshown = state_lines(graph.as_ref().map_err(String::as_str), interface, &mut constants);
+        let graph = graph.as_ref().map_err(String::as_str);
+        let unshown = state_lines(&mut constants, |c| {
+            lines_at(graph, interface, c.resource, c.offset, c.size)
+        });
         counts.add_by(
             "matrices whose lines the program does not show (a consumer writing a non-symmetric matrix cannot bind them)",
             unshown as u64,
@@ -1991,14 +2003,14 @@ mod tests {
         }
     }
 
-    /// The family's G-buffer read as a surface (`iridia_interface::surface`), the one reading a viewer's composite
+    /// The family's G-buffer read as a surface (`primase_core::shader::surface`), the one reading a viewer's composite
     /// takes: the albedo in target 0, the world normal `n * 0.5 + 0.5` in target 1, the roughness from target 2's
     /// specular falloff (`sqrt(n / 512)`, Blinn-Phong) and the specular strength from its x, target 3's z the emission
     /// over 16 as a scale of the albedo and its x the natural ambient's occlusion, which scales the ambient light alone;
     /// no metalness and no reflectance. A forward program's one target is its finished colour, the surface's base.
     #[test]
     fn the_gbuffer_is_read_as_a_surface() {
-        use iridia_interface::{
+        use primase_core::shader::{
             surface::Base, surface::Emission, surface::Place, surface::Roughness, surface::Surface,
         };
         let writes: Result<GBufferWrites, String> = Ok(GBufferWrites {

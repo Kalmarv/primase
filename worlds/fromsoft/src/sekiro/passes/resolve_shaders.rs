@@ -7,11 +7,12 @@ use crate::materials::Material;
 use crate::sekiro::source::{MaterialShader, Payloads, ShaderBundle, ShaderPrograms, TexturePayloads};
 use fromsoft_formats::metaparam::Metaparam;
 use iridia::ProgramGraph;
-use iridia::output_uses::bind_output_uses;
+use iridia::output_uses::output_uses;
 use iridia_exec::PixelShader;
 use iridia_exec::ProgramShader;
 use iridia_interface::{ShaderFormat, Stage};
 use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
+use primase_core::shader::bind_output_uses;
 use primase_core::{ColorSpace, Component, Entity, Mesh, Name, Semantic, TexRole, Texture, World};
 use primase_core::{shader::MaterialPrograms, shader::ProgramFacts, shader::Shader, shader::ShaderBinding};
 use std::collections::BTreeMap;
@@ -303,7 +304,13 @@ fn run(
                     return Err(format!("{name}: {error}"));
                 }
             };
-            let facts = lifted.facts(&name);
+            let facts = ProgramFacts::lifted(
+                &name,
+                lifted.stage,
+                lifted.provenance.source_hash.clone(),
+                lifted.provenance.instruction_count,
+                &lifted.interface,
+            );
             let parsed = match ProgramShader::new(lifted) {
                 Ok(parsed) => parsed,
                 Err(error) => {
@@ -454,12 +461,8 @@ fn run(
         }
         // the lanes left Unknown that the program's discards or the target's blend show a use for
         if let Some(pixel) = stages.iter_mut().find(|s| s.stage == Stage::Pixel) {
-            let bound = bind_output_uses(
-                &mut pixel.outputs,
-                PixelShader::interface(parsed),
-                graph.as_ref().ok(),
-                &state,
-            );
+            let observed = output_uses(PixelShader::interface(parsed), graph.as_ref().ok(), &state);
+            let bound = bind_output_uses(&mut pixel.outputs, &observed);
             let family = format!(
                 "{}{}",
                 material.pass(),
@@ -598,7 +601,13 @@ mod program_facts_tests {
             ),
         ] {
             let lifted = crate::passes::program_reads::lift(format, bytes).unwrap();
-            let facts = lifted.facts::<primase_core::Entity>(name);
+            let facts = primase_core::shader::ProgramFacts::lifted(
+                name,
+                lifted.stage,
+                lifted.provenance.source_hash.clone(),
+                lifted.provenance.instruction_count,
+                &lifted.interface,
+            );
             assert_eq!(facts.stage, Stage::Pixel);
             assert_eq!(facts.hash, Some(iridia::source_hash(bytes)));
             assert_eq!(facts.instruction_count.unwrap().unit, unit);

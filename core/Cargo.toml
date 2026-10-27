@@ -15,5 +15,9 @@ thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
+[dev-dependencies]
+# naga's WGSL front end, to read the surface's WGSL back and validate it (tests/surface_wgsl.rs)
+naga = { workspace = true, features = ["wgsl-in"] }
+
 [lints]
 workspace = true

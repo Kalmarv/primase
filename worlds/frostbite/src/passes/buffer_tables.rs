@@ -102,7 +102,7 @@ pub enum MatrixLayout {
     /// Three rows directly after the header.
     Plain,
     /// One element (a translation), `prefix - 1` that no measured program reads, then each joint's three rows
-    /// `joint_stride` elements apart (see [`iridia_interface::BufferTable::SkinnedMatrices`]).
+    /// `joint_stride` elements apart (see [`primase_core::shader::BufferTable::SkinnedMatrices`]).
     Skinned { prefix: u8, joint_stride: u8 },
 }
 
