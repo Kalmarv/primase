@@ -4,13 +4,13 @@
 use std::fs::File;
 use std::path::Path;
 
+use anvil_formats::archive::MAX_RECORD;
+use anvil_formats::data::{Resource, read_entry};
+use anvil_formats::forge::Forge;
+use anvil_formats::mesh::{self, StoredMesh};
 use primase_anvil::components::AnvilMesh;
 use primase_anvil::passes::{LOWER_ANVIL_MESH, LowerAnvilMesh, Static16Normal};
-use primase_anvil::read::data::{Resource, read_entry};
-use primase_anvil::read::forge::Forge;
-use primase_anvil::read::mesh::{self, StoredMesh};
 use primase_anvil::read::meshes::{Error, read_meshes};
-use primase_anvil::read::shapes::MAX_RECORD;
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, Pass, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::{Instance, Mesh, Semantic, Stream, World};

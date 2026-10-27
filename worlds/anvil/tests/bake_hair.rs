@@ -4,18 +4,18 @@
 //! apart as the names say, and the Materials that need what the bake states of the vertex colour counted.
 use std::collections::BTreeMap;
 
+use anvil_formats::archive::Archive;
+use anvil_formats::build_table::BUILD_TABLE;
+use anvil_formats::rider::{HAIR_COLOURS, colours};
+use anvil_formats::skeleton::SKELETON;
 use iridia_exec::{
     Grid, Input, Invocation, Layout, Lod, PixelShader, ProgramShader, evaluate::Constants, evaluate_raw_with,
 };
 use primase_anvil::components::{AnvilMaterial, AnvilShaders, MaterialBinding, MaterialValue};
 use primase_anvil::passes::BAKE_ANVIL_MATERIAL;
-use primase_anvil::read::archive::Archive;
-use primase_anvil::read::build_table::BUILD_TABLE;
 use primase_anvil::read::placements::{
     Gender, InstancedLevels, Placed, Placer, RiderPartChoice, RiderSpec, Variant,
 };
-use primase_anvil::read::rider::{HAIR_COLOURS, colours};
-use primase_anvil::read::skeleton::SKELETON;
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial};

@@ -3,10 +3,10 @@
 //! per pixel, baked over one period of its own UV, against the notes' formula worked here (the stripes in f32, as the
 //! program compares them; the rest in f64) at every texel, and its texture references carrying its UV transform over
 //! the period.
+use anvil_formats::archive::{Archive, At};
+use anvil_formats::material::{MATERIAL, StoredMaterial};
 use primase_anvil::components::{AnvilMaterial, AnvilTextureMap, MaterialBinding, MaterialValue};
 use primase_anvil::passes::BAKE_ANVIL_MATERIAL;
-use primase_anvil::read::archive::{Archive, At};
-use primase_anvil::read::material::{MATERIAL, StoredMaterial};
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassLog};

@@ -15,7 +15,8 @@ use primase_core::{
 };
 
 use super::material::{drawn_with, radians, texture_ref, uv_transform};
-use crate::components::{LayerState, MaterialRef, MaterialState};
+use crate::components::{MaterialRef, MaterialState};
+use anvil_formats::shaunwhite::material::LayerState;
 
 #[derive(Clone, Copy, Debug)]
 pub struct LowerShaunwhiteLayers;

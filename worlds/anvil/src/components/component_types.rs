@@ -1,7 +1,7 @@
 //! Pure names of the classes deriving from `Component` in Riders Republic's class registry (the runtime image's, build
 //! 25394987), by type id (the CRC-32 of the class name) with the class name. An Entity's components are objects
 //! (`04`, a u64 id, a u32 type, a body) whose type is one of these, which is how the headers of components without a
-//! length rule are found ([`crate::read::entity`]); the names say what each type is where a report names it. The
+//! length rule are found ([`anvil_formats::entity`]); the names say what each type is where a report names it. The
 //! registry holds 291 such classes; a type missing here is not a component the game stores.
 
 /// Every component class, ascending by type id.

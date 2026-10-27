@@ -1,7 +1,7 @@
 # Shaun White Skateboarding
 
 The PC texture reader preserves stored BCn blocks, mip chains, colour space, map role, sampler fields and cube
-faces. It uses `primase-anvil` for forge tables, compression and object envelopes. It does not infer ownership from
+faces. It uses `anvil-formats` for forge tables, compression and object envelopes, and for the records it reads. It does not infer ownership from
 names or neighbouring ids: a TextureMap's compiled object is inline in its own body.
 
 ```rust,no_run

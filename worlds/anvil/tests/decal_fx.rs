@@ -1,10 +1,10 @@
 //! MAD_Tex1_Graffiti_Mode_DecalFX's placed Material (Riders Republic build 25394987; docs/material-spec.md §27.10)
 //! lowered by `lower-anvil-material`: its team colour to the 2.2 as the base colour, its atlas's alpha at the logo's
 //! cell (worked by hand from its shader's cell formula), cut out at its AlphaTestValue over 255.
+use anvil_formats::archive::{Archive, At};
+use anvil_formats::material::{MATERIAL, StoredMaterial};
 use primase_anvil::components::{AnvilMaterial, MaterialBinding, MaterialValue};
 use primase_anvil::passes::{AlphaChoice, Decals1Cutout, LowerAnvilMaterial, ShaderUv};
-use primase_anvil::read::archive::{Archive, At};
-use primase_anvil::read::material::{MATERIAL, StoredMaterial};
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Pass, PassLog};

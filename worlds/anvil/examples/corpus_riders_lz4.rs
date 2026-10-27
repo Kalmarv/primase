@@ -7,8 +7,8 @@
 
 use std::path::PathBuf;
 
-use primase_anvil::read::archive::{Archive, At};
-use primase_anvil::read::tnl::{StoredTnlChunk, TNL_CHUNK};
+use anvil_formats::archive::{Archive, At};
+use anvil_formats::tnl::{StoredTnlChunk, TNL_CHUNK};
 
 type BoxError = Box<dyn std::error::Error>;
 

@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use primase_anvil::read::shader_pack::containers;
+use anvil_formats::shader_pack::containers;
 use primase_testdata::{Game, install};
 
 /// A message with its digits taken out, so one feature counts once.

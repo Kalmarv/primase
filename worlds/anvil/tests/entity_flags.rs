@@ -7,8 +7,8 @@
 //! names are the 3D ones and the UI's).
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_anvil::read::archive::{Archive, At};
-use primase_anvil::read::entity::{
+use anvil_formats::archive::{Archive, At};
+use anvil_formats::entity::{
     CollisionFilter, ComponentBody, ENTITY, ENTITY_GROUP, Instance, StoredEntity, StoredEntityGroup, query,
 };
 use primase_testdata::{Game, install};
@@ -37,7 +37,10 @@ fn rigid_body_filters_and_entity_flags_count_as_the_registry_census() {
             let e = match n.type_id {
                 ENTITY => {
                     let body = archive.resource(At { forge: 0, entry }).expect("entity").body;
-                    let Ok(e) = StoredEntity::parse(&body) else {
+                    let Ok(e) = StoredEntity::parse(
+                        &body,
+                        primase_anvil::components::component_types::is_component_type,
+                    ) else {
                         refused_bodies += body
                             .windows(4)
                             .filter(|w| *w == 0xC177_D702u32.to_le_bytes())
@@ -51,7 +54,10 @@ fn rigid_body_filters_and_entity_flags_count_as_the_registry_census() {
                 }
                 ENTITY_GROUP => {
                     let body = archive.resource(At { forge: 0, entry }).expect("group").body;
-                    let Ok(g) = StoredEntityGroup::parse(&body) else {
+                    let Ok(g) = StoredEntityGroup::parse(
+                        &body,
+                        primase_anvil::components::component_types::is_component_type,
+                    ) else {
                         refused_bodies += body
                             .windows(4)
                             .filter(|w| *w == 0xC177_D702u32.to_le_bytes())

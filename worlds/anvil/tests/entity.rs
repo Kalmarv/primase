@@ -2,10 +2,10 @@
 //! Riders Republic notes (docs/placement.md §14), each's scale, slots, instances and material infos as found there.
 use std::fs::File;
 
-use primase_anvil::read::data::{Resource, read_entry};
-use primase_anvil::read::entity::{ENTITY, Instance, Slot, StoredEntity};
-use primase_anvil::read::forge::Forge;
-use primase_anvil::read::shapes::MAX_RECORD;
+use anvil_formats::archive::MAX_RECORD;
+use anvil_formats::data::{Resource, read_entry};
+use anvil_formats::entity::{ENTITY, Instance, Slot, StoredEntity};
+use anvil_formats::forge::Forge;
 use primase_testdata::{Game, install};
 
 /// Each LODSelectorInstance slot as a letter: M a MeshInstanceData, I an ImpostorInstanceData, - none.
@@ -76,7 +76,11 @@ fn placement_fixtures_read_whole() {
         let block = read_entry(&payload, MAX_RECORD).expect("entry");
         let r = Resource::parse(&block.resource.data).expect("resource");
         assert_eq!((r.type_id, r.body.len()), (ENTITY, length), "{name}:{entry}");
-        let e = StoredEntity::parse(&r.body).expect("entity");
+        let e = StoredEntity::parse(
+            &r.body,
+            primase_anvil::components::component_types::is_component_type,
+        )
+        .expect("entity");
         // to the precision the notes give it (13.65 to two places, 2.2497 to four)
         assert!(
             (e.scale - scale).abs() <= 5e-3,

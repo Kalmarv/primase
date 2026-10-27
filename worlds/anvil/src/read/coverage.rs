@@ -1,6 +1,6 @@
 //! Archive coverage contracts, not a claim that every payload of a type parses or renders.
 //! Embedded Entity components have a separate denominator; they are not forge entries.
-use super::listing::Kind;
+use anvil_formats::listing::Kind;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
@@ -31,49 +31,49 @@ pub struct Coverage {
 
 pub const EXTRA: &[Coverage] = &[
     Coverage {
-        type_id: super::tnl::TNL_CHUNK,
+        type_id: anvil_formats::tnl::TNL_CHUNK,
         name: "TNLChunk",
         status: Status::Read,
         destination: "AnvilTerrain tiles through read::terrain",
         question: "Which stored chunks are reached by each selected area/level?",
     },
     Coverage {
-        type_id: super::grass::GRASS_PATTERN_LIBRARY,
+        type_id: anvil_formats::grass::GRASS_PATTERN_LIBRARY,
         name: "GrassPatternLibrary",
         status: Status::Read,
         destination: "AnvilGrass.library",
         question: "Which setups reference the library; does the caller run lower-anvil-grass?",
     },
     Coverage {
-        type_id: super::light::SPOT_LIGHT,
+        type_id: anvil_formats::light::SPOT_LIGHT,
         name: "SpotLight",
         status: Status::Read,
         destination: "AnvilSpotLight via LightInstance",
         question: "Which light owners are selected; what caller calibration is stated?",
     },
     Coverage {
-        type_id: super::controller::TIME_OF_DAY,
+        type_id: anvil_formats::controller::TIME_OF_DAY,
         name: "TimeOfDayPropertyControllerData",
         status: Status::Read,
         destination: "AnvilSkyControllers.time_of_day (selected look)",
         question: "Which path-node profiles refuse; which look owns each controller?",
     },
     Coverage {
-        type_id: super::controller::WEATHER,
+        type_id: anvil_formats::controller::WEATHER,
         name: "WeatherPropertyControllerData",
         status: Status::Read,
         destination: "AnvilSkyControllers.weather (selected look)",
         question: "Which path-node profiles refuse; which look owns each controller?",
     },
     Coverage {
-        type_id: super::build_table::BUILD_TABLE,
+        type_id: anvil_formats::build_table::BUILD_TABLE,
         name: "BuildTable",
         status: Status::Read,
         destination: "StoredBuildTable; character work excluded from this round",
         question: "Count only; no character implementation in this round",
     },
     Coverage {
-        type_id: super::animation::ANIMATION,
+        type_id: anvil_formats::animation::ANIMATION,
         name: "Animation",
         status: Status::Read,
         destination: "AnvilClip; animation work excluded from this round",
@@ -205,7 +205,7 @@ pub fn of(type_id: u32) -> Coverage {
             ),
             Kind::FloorHeightData => (
                 Status::Read,
-                "AnvilFloorHeight through StoredFloorHeight::component; area source uses TNL instead",
+                "AnvilFloorHeight through AnvilFloorHeight::new; area source uses TNL instead",
             ),
             Kind::CollisionMaterial => (
                 Status::Read,

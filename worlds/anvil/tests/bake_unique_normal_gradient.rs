@@ -3,11 +3,11 @@
 //! executed by the notes on WARP and on primase's evaluator; the rows read from the program), worked here in f64 from
 //! the same sampled texels with the camera far (the medium albedo): the bake runs the game's program, the oracle the
 //! formulas.
+use anvil_formats::archive::{Archive, At};
+use anvil_formats::material::{MATERIAL, StoredMaterial};
 use primase_anvil::components::{AnvilMaterial, AnvilTextureMap, MaterialBinding, MaterialValue};
 use primase_anvil::passes::BAKE_ANVIL_MATERIAL;
 use primase_anvil::passes::formulas::{sat, tint};
-use primase_anvil::read::archive::{Archive, At};
-use primase_anvil::read::material::{MATERIAL, StoredMaterial};
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassLog};

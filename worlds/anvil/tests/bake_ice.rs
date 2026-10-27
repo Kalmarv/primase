@@ -3,10 +3,10 @@
 //! (docs/material-spec.md §27.2, §27.6, executed by the notes; the rows read from the programs), worked here in f64
 //! from the same sampled texels with the sun 30 degrees up and the eye at 0.7 to the normal (the colour's mix `f` not
 //! 0), the parallax march seeing the surface straight on.
+use anvil_formats::archive::{Archive, At};
+use anvil_formats::material::{MATERIAL, StoredMaterial};
 use primase_anvil::components::{AnvilMaterial, AnvilTextureMap, MaterialBinding, MaterialValue};
 use primase_anvil::passes::BAKE_ANVIL_MATERIAL;
-use primase_anvil::read::archive::{Archive, At};
-use primase_anvil::read::material::{MATERIAL, StoredMaterial};
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassLog};

@@ -131,7 +131,7 @@ pub(super) mod fixture {
 
     /// Existing installed template fixtures, as used by tests/shader_oracle.rs. No shader binary is generated.
     pub fn program(name: &str) -> Option<Vec<u8>> {
-        use crate::read::{
+        use anvil_formats::{
             archive::{Archive, At},
             template,
         };

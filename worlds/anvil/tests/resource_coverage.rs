@@ -1,6 +1,7 @@
 //! Index-only, every forge and every type, including unknowns. Runs in the ordinary test suite.
 //! Counts stored entries (patch duplicates included), never decoded bytes or active placements.
-use primase_anvil::read::{coverage, forge::Forge, listing::KINDS};
+use anvil_formats::{forge::Forge, listing::KINDS};
+use primase_anvil::read::coverage;
 use primase_testdata::{Game, install, scratch};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -134,7 +135,7 @@ fn coverage_contracts_are_unique_and_unknown_types_stay_unread() {
 /// Prefix bytes are observations, never scanned for coincidental reference ids or called a decoded schema.
 #[test]
 fn map_resource_profile_samples_name_the_next_format_observation() {
-    use primase_anvil::read::{
+    use anvil_formats::{
         archive::{Archive, At},
         gidyn::StoredGiDyn,
         listing::Kind,
@@ -191,14 +192,13 @@ fn map_resource_profile_samples_name_the_next_format_observation() {
                             .collect::<String>()
                     );
                     let parsed =
-                        if type_id == primase_anvil::read::gidyn::GI_DYN_RESOURCE {
+                        if type_id == anvil_formats::gidyn::GI_DYN_RESOURCE {
                             Some(StoredGiDyn::parse(&resource.body).map(
                                 |s| json!({"cell": s.cell_id, "samples": s.samples, "probes": s.probes}),
                             ))
                         } else if matches!(
                             type_id,
-                            primase_anvil::read::look::AMBIANCE_PRESET
-                                | primase_anvil::read::look::FORECAST_PRESET
+                            anvil_formats::look::AMBIANCE_PRESET | anvil_formats::look::FORECAST_PRESET
                         ) {
                             Some(
                                 StoredLook::parse(type_id, &resource.body)

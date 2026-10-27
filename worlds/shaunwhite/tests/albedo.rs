@@ -4,13 +4,11 @@
     clippy::unwrap_used,
     reason = "explicit fixtures and native oracle assertions"
 )]
+use anvil_formats::shaunwhite::shaders::{Database, Effect, Payload};
 use iridia_exec::{PixelShader, ProgramShader, Sample};
 use iridia_interface::Stage;
 use primase_core::{World, gate::GateReport, gate::Tolerance};
-use primase_shaunwhite::shaders::{
-    Database, Effect, Payload,
-    albedo::{Influence, derive},
-};
+use primase_shaunwhite::shaders::albedo::{Influence, derive};
 use primase_testdata::{Game, Tool, install_file, own_scratch, tool};
 use std::{collections::BTreeMap, process::Command};
 
@@ -19,7 +17,7 @@ use support::binding;
 
 #[test]
 fn hand_worked_frontier_is_a_derivation_and_refuses_a_disconnected_colour() {
-    use primase_shaunwhite::shaders::{Key, Record, SamplerBinding};
+    use anvil_formats::shaunwhite::shaders::{Key, Record, SamplerBinding};
     let mut ps = vec![
         0xffff0300u32,
         0x0200001f,
@@ -175,7 +173,8 @@ fn cases() -> Vec<Case> {
     ]
 }
 fn source_material(case: Case) -> primase_shaunwhite::components::MaterialRef {
-    use primase_shaunwhite::components::{LayerState, MaterialRef, MaterialState, SlotRef};
+    use anvil_formats::shaunwhite::material::LayerState;
+    use primase_shaunwhite::components::{MaterialRef, MaterialState, SlotRef};
     let mut w = World::new();
     MaterialRef {
         id: 1,
@@ -457,7 +456,7 @@ fn original_programs_prove_the_material_frontier_against_microsoft_ref() {
         String::from_utf8_lossy(&controls.stderr)
     );
     assert!(String::from_utf8_lossy(&controls.stdout).contains("REF_CONTROLS_PASS"));
-    let db = primase_shaunwhite::read::shaders::read(&std::fs::read(path).unwrap()).unwrap();
+    let db = anvil_formats::shaunwhite::shaders::read(&std::fs::read(path).unwrap()).unwrap();
     let scratch = own_scratch("shaunwhite-ref-albedo");
     let mut gate = GateReport::new(
         "derived albedo / full stored PS on Microsoft D3D9 REF",
@@ -614,7 +613,7 @@ fn stored_rotated_mask_matches_native_setter_and_full_ps_on_ref() {
         String::from_utf8_lossy(&controls.stderr)
     );
     assert!(String::from_utf8_lossy(&controls.stdout).contains("REF_PATTERN_CONTROLS_PASS"));
-    let db = primase_shaunwhite::read::shaders::read(&std::fs::read(path).unwrap()).unwrap();
+    let db = anvil_formats::shaunwhite::shaders::read(&std::fs::read(path).unwrap()).unwrap();
     let Some((material, fields)) = stored_material("Gen_Metal_Surface_BlueRusty01_Mat") else {
         return;
     };

@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::fs::File;
 
-use primase_anvil::read::{data::read_block, forge::Forge, objects::read_objects};
+use anvil_formats::{data::read_block, forge::Forge, objects::read_objects};
 use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
 use primase_shaunwhite::read::texture::{COMPILED_TEXTURE_MAP, TEXTURE_MAP, TEXTURE_MAP_SPEC, TextureMap};
 use primase_testdata::{Game, Query, expect_found, install_file};

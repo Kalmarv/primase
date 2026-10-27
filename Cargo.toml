@@ -18,6 +18,7 @@ members = [
     "repos/morpheme-formats",
     "repos/frostbite-formats",
     "repos/lua51-bytecode",
+    "repos/anvil-formats",
     "repos/iridia/iridia-d3d9",
     "repos/iridia/iridia-interface",
     "repos/iridia/iridia",
@@ -92,6 +93,7 @@ morpheme-formats = { path = "repos/morpheme-formats" }
 frostbite-formats = { path = "repos/frostbite-formats" }
 lua51-bytecode = { path = "repos/lua51-bytecode" }
 iridia-dxbc = { path = "repos/iridia/iridia-dxbc" }
+anvil-formats = { path = "repos/anvil-formats" }
 iridia-d3d9 = { path = "repos/iridia/iridia-d3d9" }
 iridia-interface = { path = "repos/iridia/iridia-interface" }
 iridia = { path = "repos/iridia/iridia" }

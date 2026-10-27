@@ -21,18 +21,18 @@ use primase_core::frame::SourceFrame;
 use primase_core::{Entity, World};
 
 use crate::components::{AnvilListed, AnvilMesh, AnvilTerrain, ListedBy};
-use crate::read::archive::{Archive, At};
 use crate::read::component_types::component_name;
-use crate::read::entity::{ENTITY, ENTITY_GROUP, StoredEntityGroup};
-use crate::read::grid::{
-    GridDescription, GridLayout, StoredGridCellDataBlock, StoredGridPartition, grid_descriptions,
-};
-use crate::read::listing::Kind;
-use crate::read::material::TEXTURE_SET;
 use crate::read::overview::{self, Counts, GridOverview};
 use crate::read::placements::{InstancedCollision, InstancedLevels, Placed, Placer};
 use crate::read::terrain::{TerrainRead, read_terrain};
-use crate::read::tnl::TERRAIN_NODE_LAYER;
+use anvil_formats::archive::{Archive, At};
+use anvil_formats::entity::{ENTITY, ENTITY_GROUP, StoredEntityGroup};
+use anvil_formats::grid::{
+    GridDescription, GridLayout, StoredGridCellDataBlock, StoredGridPartition, grid_descriptions,
+};
+use anvil_formats::listing::Kind;
+use anvil_formats::material::TEXTURE_SET;
+use anvil_formats::tnl::TERRAIN_NODE_LAYER;
 
 /// Whether a forge is a base forge or its patch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -433,7 +433,8 @@ fn with_members(archive: &mut Archive, lists: &[CellList]) -> Result<Vec<Found>>
         }
         let level = found[index[&id]].reached_from;
         let r = archive.resource(at)?;
-        let Ok(g) = StoredEntityGroup::parse(&r.body) else {
+        let Ok(g) = StoredEntityGroup::parse(&r.body, crate::components::component_types::is_component_type)
+        else {
             continue;
         };
         for m in g.members {

@@ -2,10 +2,11 @@
 //! The derived graph is evaluated separately on the same raw mesh UV/material controls.
 #![allow(clippy::unwrap_used)]
 mod support;
+use anvil_formats::shaunwhite::shaders::Payload;
 use iridia_exec::{PixelShader, ProgramShader, Sample};
 use iridia_interface::{Attribute, ConstantRole};
 use primase_core::{gate::GateReport, gate::Tolerance};
-use primase_shaunwhite::shaders::{Payload, base_uv::derive};
+use primase_shaunwhite::shaders::base_uv::derive;
 use primase_testdata::{Game, Tool, install_file, own_scratch, tool};
 use std::process::Command;
 
@@ -25,7 +26,7 @@ fn stored_nonidentity_base_uv_matches_full_native_vs_with_material_controls() {
         String::from_utf8_lossy(&controls.stderr)
     );
     assert!(String::from_utf8_lossy(&controls.stdout).contains("REF_VERTEX_CONTROLS_PASS"));
-    let database = primase_shaunwhite::read::shaders::read(&std::fs::read(path).unwrap()).unwrap();
+    let database = anvil_formats::shaunwhite::shaders::read(&std::fs::read(path).unwrap()).unwrap();
     let Some((material, fields)) = support::material("Cell01251_DataBlock", "Gen_Street_Trottoir01_Mat")
     else {
         return;
@@ -236,13 +237,14 @@ fn fixture(
     rows: u32,
     matrix_register: u32,
 ) -> (
-    primase_shaunwhite::shaders::Database,
+    anvil_formats::shaunwhite::shaders::Database,
     primase_shaunwhite::components::MaterialRef,
 ) {
-    use primase_shaunwhite::{
-        components::{LayerState, MaterialRef, MaterialState, SlotRef},
+    use anvil_formats::shaunwhite::{
+        material::LayerState,
         shaders::{Database, Effect, Key, Record},
     };
+    use primase_shaunwhite::components::{MaterialRef, MaterialState, SlotRef};
     let mut data: Vec<u8> = [
         28u32,
         64,

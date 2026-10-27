@@ -176,9 +176,8 @@ use primase_image::{Rgba8Texel, TextureMetadata, map_rgba8_levels, map_rgba8_lev
 
 use super::decals::DECAL_QUEUE;
 use super::formulas::{Rough, emission, metalness, occlusion, roughness, sat, tinted};
-use crate::components::{
-    AnvilMaterial, AnvilTextureMap, AnvilWorldUv, MaterialBinding, MaterialFlags, MaterialValue,
-};
+use crate::components::{AnvilMaterial, AnvilTextureMap, AnvilWorldUv, MaterialBinding, MaterialValue};
+use anvil_formats::material::MaterialFlags;
 
 mod terms;
 

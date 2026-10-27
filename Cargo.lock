@@ -94,6 +94,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "anvil-formats"
+version = "0.1.0"
+dependencies = [
+ "dxcontainer",
+ "primase-foundations",
+ "primase-testdata",
+ "thiserror",
+]
+
+[[package]]
 name = "arrayvec"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1121,6 +1131,7 @@ dependencies = [
 name = "primase-anvil"
 version = "0.1.0"
 dependencies = [
+ "anvil-formats",
  "dxcontainer",
  "iridia",
  "iridia-dxbc",
@@ -1435,6 +1446,7 @@ dependencies = [
 name = "primase-shaunwhite"
 version = "0.1.0"
 dependencies = [
+ "anvil-formats",
  "iridia",
  "iridia-d3d9",
  "iridia-exec",

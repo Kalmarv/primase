@@ -1,7 +1,7 @@
+use anvil_formats::shaunwhite::light::{self, OMNI_LIGHT, SKY_LIGHT, SPOT_LIGHT, SUN_LIGHT};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{Ambient, AmbientLight, Environment, Light, LightKind, Linear, Transform, World};
-use primase_shaunwhite::components::{LightShape, SkySettings};
-use primase_shaunwhite::read::light::{self, OMNI_LIGHT, SKY_LIGHT, SPOT_LIGHT, SUN_LIGHT};
+use primase_shaunwhite::components::{SkySettings, Stored};
 
 fn words(b: &mut Vec<u8>, values: &[u32]) {
     for n in values {
@@ -54,74 +54,18 @@ fn sky() -> Vec<u8> {
 }
 
 #[test]
-fn hand_worked_point_spot_and_sky_walk_to_the_end() {
-    let p = light::read_light(&fixture(OMNI_LIGHT)).unwrap();
-    assert_eq!(p.colour, [0.5, 0.25, 0.125, 1.]);
-    assert_eq!(p.intensity, 2.);
-    assert_eq!(p.shape, LightShape::Point { near: 0., far: 30. });
-    assert_eq!(p.flare.values, [1., 1., 0.1, 0.1, 1.]);
-    let s = light::read_light(&fixture(SPOT_LIGHT)).unwrap();
-    assert_eq!(
-        s.shape,
-        LightShape::Spot {
-            inner: 0.2,
-            outer: 0.7,
-            cookie: 0,
-            unknown: 0,
-            near: 0.,
-            far: 30.
-        }
-    );
-    let (settings, sun) = light::read_sky(&sky()).unwrap();
-    assert_eq!(settings.ambient_colour, [0.2, 0.3, 0.4, 0.5]);
-    assert_eq!(settings.unknown_colour, [0.6, 0.7, 0.8, 0.9]);
-    assert_eq!(sun.class, SUN_LIGHT);
-    for b in [fixture(OMNI_LIGHT), fixture(SPOT_LIGHT), sky()] {
-        for n in 0..b.len() {
-            let ok = if b.len() == 200 {
-                light::read_sky(&b[..n]).is_ok()
-            } else {
-                light::read_light(&b[..n]).is_ok()
-            };
-            assert!(!ok, "prefix {n}");
-        }
-        let mut extra = b.clone();
-        extra.push(0);
-        assert!(if b.len() == 200 {
-            light::read_sky(&extra).is_err()
-        } else {
-            light::read_light(&extra).is_err()
-        });
-    }
-    let mut b = fixture(OMNI_LIGHT);
-    b[38] = 2;
-    assert!(light::read_light(&b).unwrap_err().to_string().contains("bool"));
-    let mut b = fixture(OMNI_LIGHT);
-    b[43..47].copy_from_slice(&f32::NAN.to_le_bytes());
-    assert!(
-        light::read_light(&b)
-            .unwrap_err()
-            .to_string()
-            .contains("intensity")
-    );
-    let mut b = fixture(SPOT_LIGHT);
-    b[94..98].copy_from_slice(&2.0f32.to_le_bytes());
-    assert!(light::read_light(&b).unwrap_err().to_string().contains("angles"));
-}
-
-#[test]
 fn explicit_light_units_and_axes_lower_through_the_manager() {
     let mut w = World::new();
     let point = w.spawn();
     let spot = w.spawn();
     let sun = w.spawn();
     for (e, class) in [(point, OMNI_LIGHT), (spot, SPOT_LIGHT)] {
-        w.insert(e, light::read_light(&fixture(class)).unwrap());
+        w.insert(e, Stored(light::read_light(&fixture(class)).unwrap()));
         w.insert(e, Transform::IDENTITY);
     }
     let (settings, l) = light::read_sky(&sky()).unwrap();
-    w.insert(sun, settings);
-    w.insert(sun, l);
+    w.insert(sun, Stored(settings));
+    w.insert(sun, Stored(l));
     w.insert(sun, Transform::IDENTITY);
     let mut reg = PassRegistry::new();
     primase_shaunwhite::register(&mut reg);
@@ -165,7 +109,7 @@ fn explicit_light_units_and_axes_lower_through_the_manager() {
 fn the_sun_fixes_the_light_unit_when_asked() {
     let mut w = World::new();
     let point = w.spawn();
-    w.insert(point, light::read_light(&fixture(OMNI_LIGHT)).unwrap());
+    w.insert(point, Stored(light::read_light(&fixture(OMNI_LIGHT)).unwrap()));
     w.insert(point, Transform::IDENTITY);
     let mut reg = PassRegistry::new();
     primase_shaunwhite::register(&mut reg);
@@ -182,8 +126,8 @@ fn the_sun_fixes_the_light_unit_when_asked() {
     );
     let sun = w.spawn();
     let (settings, l) = light::read_sky(&sky()).unwrap();
-    w.insert(sun, settings);
-    w.insert(sun, l);
+    w.insert(sun, Stored(settings));
+    w.insert(sun, Stored(l));
     w.insert(sun, Transform::IDENTITY);
     manager.run(&mut w, &pipeline, &mut RunReport::default()).unwrap();
     let luminance = 0.2126_f64 * 0.5 + 0.7152 * 0.25 + 0.0722 * 0.125;
@@ -206,8 +150,8 @@ fn the_ambient_is_reported_and_follows_the_colour_encoding() {
     let mut w = World::new();
     let sun = w.spawn();
     let (settings, l) = light::read_sky(&sky()).unwrap();
-    w.insert(sun, settings);
-    w.insert(sun, l);
+    w.insert(sun, Stored(settings));
+    w.insert(sun, Stored(l));
     w.insert(sun, Transform::IDENTITY);
     let mut reg = PassRegistry::new();
     primase_shaunwhite::register(&mut reg);

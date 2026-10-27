@@ -1,0 +1,20 @@
+[package]
+name = "anvil-formats"
+description = "Anvil engine formats: forge archives (versions 26 and 27), their data blocks and the resources they hold (entities, meshes, materials, templates, textures, animation, terrain), and Shaun White Skateboarding's records and SDB2 shader databases"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+primase-foundations = { workspace = true, features = ["compress"] }
+dxcontainer.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+primase-testdata.workspace = true
+
+[lints]
+workspace = true

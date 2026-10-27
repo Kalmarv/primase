@@ -1,7 +1,8 @@
 //! MAD_FakeForest lowered as the notes' executed recipe states (docs/material-spec.md §26.6): base colour 1, roughness
 //! 1, metalness 0, opaque, single-sided, and each primitive drawn with it alone given COLOR_0 = pow(c, 2.2) (worked by
 //! hand); a primitive also drawn with another Material keeps its colour, counted.
-use primase_anvil::components::{AnvilMaterial, MaterialFlags};
+use anvil_formats::material::MaterialFlags;
+use primase_anvil::components::AnvilMaterial;
 use primase_anvil::passes::{AlphaChoice, Decals1Cutout, LowerAnvilMaterial, ShaderUv};
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial};

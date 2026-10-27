@@ -1,6 +1,6 @@
 //! A level read into a World: every Entity of the level forge's cells placed with the meshes its Visuals show.
 //!
-//! The level forge's entries are read to their objects ([`primase_anvil::read::objects`]); further forges given
+//! The level forge's entries are read to their objects ([`anvil_formats::objects`]); further forges given
 //! (the shared props other levels' forges hold) are indexed too, so a Visual naming a Mesh outside the level's own
 //! cells finds it. Each Entity of a GridCellDataBlock entry becomes one placement per drawn Visual: a Mesh shown
 //! directly, or a LODSelector's nearest level (its first descriptor: every level is kept by the source, and the
@@ -23,24 +23,24 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use primase_anvil::read::data::read_entry;
-use primase_anvil::read::forge::Forge;
-use primase_anvil::read::objects::{StoredObject, read_objects};
+use anvil_formats::data::read_entry;
+use anvil_formats::forge::Forge;
+use anvil_formats::objects::{StoredObject, read_objects};
 use primase_core::convert::Report;
 use primase_core::frame::SourceFrame;
 use primase_core::morphs::{Frame, MorphId, Morphs, Target};
 use primase_core::{Entity, Instance, Marker, Mesh, Name, Primitive, Semantic, Stream, Transform, World};
 
 use crate::components::{
-    Guidance, MaterialRef, MaterialState, MeshFormat, PlacedBy, RealTree, Sampler, SlotRef,
+    Guidance, MaterialRef, MaterialState, MeshFormat, PlacedBy, RealTree, Sampler, SlotRef, Stored,
 };
-use crate::read::light;
-use crate::read::material::{self, MATERIAL, Material};
 use crate::read::mesh::{self, CompiledMesh, MESH};
-use crate::read::scene::{self, GRID_CELL_DATA_BLOCK, LOD_SELECTOR};
 use crate::read::texture::{TEXTURE_MAP_SPEC, TextureMap};
 use crate::read::tree::Tree;
-use crate::read::{guidance, markers};
+use anvil_formats::shaunwhite::light;
+use anvil_formats::shaunwhite::material::{self, MATERIAL, Material};
+use anvil_formats::shaunwhite::scene::{self, GRID_CELL_DATA_BLOCK, LOD_SELECTOR};
+use anvil_formats::shaunwhite::{guidance, markers};
 
 /// The most bytes a block may declare decoded (the largest entry seen decodes to about 38 MB).
 const MAX_DECODED: usize = 1 << 30;
@@ -118,8 +118,8 @@ pub fn read_level(level: &Path, shared: &[PathBuf]) -> Result<(World, Report)> {
             match light::read_sky(d.resource.get(o.body.clone()).unwrap_or_default()) {
                 Ok((sky, sun)) => {
                     let e = world.spawn();
-                    world.insert(e, sky);
-                    world.insert(e, sun);
+                    world.insert(e, Stored(sky));
+                    world.insert(e, Stored(sun));
                     world.insert(e, Transform::IDENTITY);
                     world.insert(e, Name(o.name.clone()));
                     bump("sky settings with inline sun".into());
@@ -179,7 +179,7 @@ pub fn read_level(level: &Path, shared: &[PathBuf]) -> Result<(World, Report)> {
                         match light::read_light(bytes) {
                             Ok(source) => {
                                 let e = world.spawn();
-                                world.insert(e, source);
+                                world.insert(e, Stored(source));
                                 world.insert(e, frame.transform(&t));
                                 world.insert(e, Name(o.name.clone()));
                                 bump("local light placements".into());
@@ -676,9 +676,9 @@ fn material(
         r.name = o.name.clone();
         match Material::parse(body) {
             Ok(m) => {
-                match super::shader_material::read(body) {
+                match anvil_formats::shaunwhite::shader_material::read(body) {
                     Ok(fields) => {
-                        world.insert(e, fields);
+                        world.insert(e, Stored(fields));
                     }
                     Err(error) => bump(format!("material shader fields not read: {error}")),
                 }

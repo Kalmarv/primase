@@ -37,6 +37,10 @@ path = "worlds/anvil"
 reason = "the forge reader reads untrusted archive headers and tables"
 
 [[parse_crate]]
+path = "repos/anvil-formats"
+reason = "the forge, data-block and resource readers read untrusted archive headers, tables and bodies"
+
+[[parse_crate]]
 path = "repos/dx/dxcontainer"
 reason = "the DXBC container reader reads the part directory of untrusted shader containers"
 

@@ -3,21 +3,22 @@
 //! the rider (rig, parts, clips chosen by coverage) lowers under the pass manager with its checks on.
 use std::collections::{BTreeMap, HashSet};
 
-use primase_anvil::components::{AnvilMesh, StoredBuildTable};
+use anvil_formats::archive::{Archive, At};
+use anvil_formats::build_table::StoredBuildTable;
+use anvil_formats::build_table::{BUILD_TABLE, FEMALE, MALE};
+use anvil_formats::mesh::MATERIAL;
+use anvil_formats::mesh::{MESH, StoredMesh};
+use anvil_formats::rider::{BEARD_COLOURS, HAIR_COLOURS, colours};
+use anvil_formats::skeleton::{SKELETON, StoredSkeleton};
+use primase_anvil::components::AnvilMesh;
 use primase_anvil::passes::{
     LowerAnvilClips, LowerAnvilMesh, LowerAnvilRig, LowerAnvilSkin, OwnTransform, SelectAnvilClips,
     Static16Normal,
 };
-use primase_anvil::read::archive::{Archive, At};
-use primase_anvil::read::build_table::{BUILD_TABLE, FEMALE, MALE};
-use primase_anvil::read::mesh::MATERIAL;
-use primase_anvil::read::mesh::{MESH, StoredMesh};
 use primase_anvil::read::meshes::anvil_mesh;
 use primase_anvil::read::placements::{
     Gender, InstancedLevels, Placed, Placer, RiderPartChoice, RiderSpec, Variant,
 };
-use primase_anvil::read::rider::{BEARD_COLOURS, HAIR_COLOURS, colours};
-use primase_anvil::read::skeleton::{SKELETON, StoredSkeleton};
 use primase_core::clip::{Clip, ClipBinding, Extrapolation, Interpolation};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
@@ -50,7 +51,7 @@ fn id_of(archive: &Archive, type_id: u32, name: &str) -> u64 {
         .unwrap_or_else(|| panic!("no {type_id:#010x} named {name}"))
 }
 
-fn link_id(p: &primase_anvil::components::BuildProperty) -> u64 {
+fn link_id(p: &anvil_formats::build_table::BuildProperty) -> u64 {
     match p.value.kind & 0x3F {
         0x1C => p.value.reference().expect("reference").map_or(0, |r| r.id),
         0x12 => p.value.link().expect("link").id,

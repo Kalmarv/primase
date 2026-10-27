@@ -1,32 +1,46 @@
 //! The World data the Shaun White Skateboarding reader attaches (`shaunwhite.*`).
 
+use anvil_formats::shaunwhite::guidance::Class as GuidanceClass;
+use anvil_formats::shaunwhite::light::{LightSource as StoredLightSource, SkySettings as StoredSkySettings};
+use anvil_formats::shaunwhite::material::LayerState;
+use anvil_formats::shaunwhite::shader_material::MaterialShader as StoredMaterialShader;
 use primase_core::{Component, Entity, Geometry};
 use std::collections::BTreeMap;
+
+/// A record of `anvil_formats` held as a component: the record as stored, its component name, checks and size given
+/// by its `impl Component for Stored<..>` here. It derefs to the record and has the record's JSON (none).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Stored<T>(pub T);
+
+impl<T> std::ops::Deref for Stored<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+impl<T> std::ops::DerefMut for Stored<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.0
+    }
+}
+
+/// A Material's shader key fields ([`StoredMaterialShader`]), `shaunwhite.material_shader`.
+pub type MaterialShader = Stored<StoredMaterialShader>;
+/// A light as stored ([`StoredLightSource`]), `shaunwhite.light`.
+pub type LightSource = Stored<StoredLightSource>;
+/// The level root's SkyLight settings as stored ([`StoredSkySettings`]), `shaunwhite.sky_settings`.
+pub type SkySettings = Stored<StoredSkySettings>;
 
 /// The chosen SDB2 shader database, supplied by the reader. Raw sources, stage bytecodes and pass metadata
 /// are retained; selecting a material's permutation and resolving its bindings is a separate pass.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ShaderLibrary(pub std::sync::Arc<crate::shaders::Database>);
+pub struct ShaderLibrary(pub std::sync::Arc<anvil_formats::shaunwhite::shaders::Database>);
 impl primase_core::Resource for ShaderLibrary {
     const NAME: &'static str = "shaunwhite.shader_library";
 }
 
-/// Source fields used by the native generic-material key setters. `flags` is the reconstructed runtime
-/// Material flag word, not a shader key. Texture presence follows the stored slots, including unread textures.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MaterialShader {
-    pub flags: u32,
-    pub layers: [bool; 2],
-    pub half_lambert: bool,
-    pub glossiness: bool,
-    pub layer3_no_specular: bool,
-    pub rim_alpha: bool,
-    pub hide: u32,
-    pub dynamic_uv: u32,
-    pub texture_slots: Vec<String>,
-    pub unsupported: Vec<String>,
-}
-impl Component for MaterialShader {
+impl Component for Stored<StoredMaterialShader> {
     const NAME: &'static str = "shaunwhite.material_shader";
     const GEOMETRY: Geometry = Geometry::None;
 }
@@ -69,24 +83,7 @@ pub struct SlotRef {
     pub address: Option<[u32; 2]>,
 }
 
-/// Layer tints and alpha switches established by native property hashes and the shipped shader programs.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct LayerState {
-    /// Layer2_ModulationColor at 332 and Layer3_ModulationColor at 434.
-    pub colors: [[f32; 4]; 2],
-    /// UseTextureAlpha on diffuse1/2/3 at 224/392/494.
-    pub use_alpha: [bool; 3],
-}
-impl Default for LayerState {
-    fn default() -> Self {
-        Self {
-            colors: [[1.; 4]; 2],
-            use_alpha: [true; 3],
-        }
-    }
-}
-
-/// The fixed fields of a stored Material that say how it is drawn ([`crate::read::material`] gives their offsets and
+/// The fixed fields of a stored Material that say how it is drawn ([`anvil_formats::shaunwhite::material`] gives their offsets and
 /// what is known of them).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MaterialState {
@@ -262,40 +259,8 @@ impl Component for CollisionPlacedBy {
     }
 }
 
-/// The four guidance classes the game stores (read by [`crate::read::guidance`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GuidanceClass {
-    /// SWSkateGuidanceSystem.
-    Plain,
-    /// SWSkateFreeFormGuidanceSystem: the shaping mechanic's placed grind rails.
-    FreeForm,
-    /// SWSkateScaleGuidanceSystem.
-    Scale,
-    /// SWSkateMorphGuidanceSystem.
-    Morph,
-}
-
-impl GuidanceClass {
-    pub const ALL: [GuidanceClass; 4] = [
-        GuidanceClass::Plain,
-        GuidanceClass::FreeForm,
-        GuidanceClass::Scale,
-        GuidanceClass::Morph,
-    ];
-
-    /// The game's class name.
-    pub const fn name(self) -> &'static str {
-        match self {
-            GuidanceClass::Plain => "SWSkateGuidanceSystem",
-            GuidanceClass::FreeForm => "SWSkateFreeFormGuidanceSystem",
-            GuidanceClass::Scale => "SWSkateScaleGuidanceSystem",
-            GuidanceClass::Morph => "SWSkateMorphGuidanceSystem",
-        }
-    }
-}
-
 /// What the source states of a grind guidance chain, on the entity of its `core.curve` (read by
-/// [`crate::read::guidance`]): the Entity that holds the guidance system and the system's class, the edges'
+/// [`anvil_formats::shaunwhite::guidance`]): the Entity that holds the guidance system and the system's class, the edges'
 /// GuidanceObjectSubType, and per edge (between curve points `i` and `i + 1`) its two face normals, world space in
 /// core's frame like the curve's points, and its stored length (metres). For a morph system's chain, `morph_points`
 /// has one list per state past the first (the shape at rest is the curve): the chain's points, by the same point
@@ -320,81 +285,12 @@ impl Component for Guidance {
     }
 }
 
-/// A light's authored shape. Spot angles are stored radians; source range falloff has a near and a far distance.
-#[derive(Clone, Debug, PartialEq)]
-pub enum LightShape {
-    Point {
-        near: f32,
-        far: f32,
-    },
-    Spot {
-        inner: f32,
-        outer: f32,
-        cookie: u32,
-        unknown: u32,
-        near: f32,
-        far: f32,
-    },
-    Directional,
-}
-
-/// The source flare, retained even though the punctual-light lowering cannot draw it.
-#[derive(Clone, Debug, PartialEq)]
-pub struct LightFlare {
-    pub id: u32,
-    pub enabled: bool,
-    pub texture: u32,
-    /// Width, height, occlusion width, occlusion height, intensity.
-    pub values: [f32; 5],
-    pub scale: bool,
-    pub fade: bool,
-    pub offset: f32,
-    pub blend: u32,
-}
-
-/// Source light data before its uncalibrated intensity/colour and spot axis are interpreted by a chosen pass.
-#[derive(Clone, Debug, PartialEq)]
-pub struct LightSource {
-    pub id: u32,
-    pub class: u32,
-    pub category: u32,
-    pub generated: bool,
-    pub colour_id: u32,
-    pub colour: [f32; 4],
-    /// Dynamic, cast shadows, affect characters, affect environment, dirty.
-    pub flags: [bool; 5],
-    pub intensity: f32,
-    pub flare: LightFlare,
-    pub shadow_resolution: u32,
-    pub shape: LightShape,
-}
-impl Component for LightSource {
+impl Component for Stored<StoredLightSource> {
     const NAME: &'static str = "shaunwhite.light";
     const GEOMETRY: Geometry = Geometry::None;
 }
 
-/// The level root's SkyLight settings, retained alongside its inline sun. Vectors are in the source Z-up frame.
-/// Native property hashes establish the sun and ambient names; the other fields remain unlabelled. Ambient alpha,
-/// the second colour's meaning and global fog units are not established and are not lowered; the ambient colour (its rgb)
-/// is lowered as `core.environment`'s ambient by `lower-shaunwhite-lighting`.
-#[derive(Clone, Debug, PartialEq)]
-pub struct SkySettings {
-    pub id: u32,
-    pub direction: [f32; 3],
-    pub sun_colour_id: u32,
-    pub sun_colour: u32,
-    pub sun_intensity: f32,
-    pub unknown_scalars: [f32; 2],
-    pub use_character_sun: bool,
-    pub character_colour_id: u32,
-    pub character_colour: u32,
-    pub character_intensity: f32,
-    pub unknown_vector: [f32; 3],
-    pub ambient_colour: [f32; 4],
-    /// Native property hash 0xea0e031c.
-    pub unknown_colour: [f32; 4],
-}
-impl Component for SkySettings {
+impl Component for Stored<StoredSkySettings> {
     const NAME: &'static str = "shaunwhite.sky_settings";
     const GEOMETRY: Geometry = Geometry::None;
 }

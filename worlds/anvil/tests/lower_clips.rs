@@ -2,15 +2,17 @@
 //! unread and one of a bone the rig lacks, the root-motion pair), and on real Entities of Riders Republic's forges that
 //! own a SkeletonComponent and an AnimComponent, placed through the Placer and lowered under the pass manager with its
 //! checks on.
-use primase_anvil::components::{
-    AnvilClip, AnvilClipBinding, StoredAnimation, StoredEvents, StoredTrack, Times,
-};
+use anvil_formats::animation::StoredAnimation;
+use anvil_formats::animation::StoredEvents;
+use anvil_formats::animation::StoredTrack;
+use anvil_formats::animation::Times;
+use anvil_formats::archive::Archive;
+use anvil_formats::listing::Kind;
+use primase_anvil::components::{AnvilClip, AnvilClipBinding};
 use primase_anvil::passes::{
     LOWER_ANVIL_CLIPS, LowerAnvilClips, LowerAnvilLods, LowerAnvilMesh, LowerAnvilRig, LowerAnvilSkin,
     OwnTransform, Static16Normal,
 };
-use primase_anvil::read::archive::Archive;
-use primase_anvil::read::listing::Kind;
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
 use primase_core::clip::{Clip, ClipBinding, ClipTarget, Extrapolation, Interpolation, Property};
 use primase_core::frame::SourceFrame;
@@ -235,7 +237,7 @@ fn real_entities_place_their_rigs_and_clips_and_lower() {
         let at = archive
             .listing()
             .find(|(_, l)| l.kind == Some(Kind::Entity) && l.name == name)
-            .map(|(forge, l)| primase_anvil::read::archive::At {
+            .map(|(forge, l)| anvil_formats::archive::At {
                 forge,
                 entry: l.entry,
             })

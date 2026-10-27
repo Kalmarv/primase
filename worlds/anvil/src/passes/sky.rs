@@ -397,8 +397,9 @@ impl Pass for LowerAnvilSky {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::read::controller::{Controller, Track};
-    use crate::read::sky::{SkyKeyframe, StoredSky};
+    use anvil_formats::controller::{Controller, Track};
+    use anvil_formats::sky::{SkyKeyframe, StoredSky};
+
     fn source() -> AnvilSky {
         AnvilSky {
             index_id: 7,

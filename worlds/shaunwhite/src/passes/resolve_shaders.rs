@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::components::{
     MaterialRef, MaterialShader, MeshFormat, RealTree, ShaderInputs, ShaderLibrary, ShaderPasses,
 };
-use crate::shaders::{Effect, Payload};
+use anvil_formats::shaunwhite::shaders::{Effect, Payload};
 use primase_core::pass::{Options, Pass, PassLog, PassSpec};
 use primase_core::shader::*;
 use primase_core::{Component, Entity, Mesh, Morphs, Name, Resource as _, World};
@@ -27,7 +27,10 @@ pub const RESOLVE_SHAUNWHITE_SHADERS: PassSpec = PassSpec {
 /// family-3 packing (template in bits0..5). A present normal map is permitted, not required: the native
 /// required/allowed keys differ at NORMALMAP. Fog, lights, influence, static lighting and pass bits
 /// are deliberately not material constraints. The returned pair is `(mask, value)`.
-pub fn material_key(m: &MaterialRef, f: &MaterialShader) -> Result<(u64, u64), String> {
+pub fn material_key(
+    m: &MaterialRef,
+    f: &anvil_formats::shaunwhite::shader_material::MaterialShader,
+) -> Result<(u64, u64), String> {
     let s = m.state.ok_or("material fields not read")?;
     if s.water {
         return Err("water family is not generic".into());

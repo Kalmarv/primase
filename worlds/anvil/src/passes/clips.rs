@@ -4,7 +4,7 @@
 //!
 //! - **Channels** (read): a track's bone is the CRC-32 of its name, the name a rig's joint carries
 //!   (`lower-anvil-rig`, `lower-anvil-skeleton`); a track of kind 9 drives the joint's translation, one of kinds 3, 4,
-//!   7 and 8 its rotation, each key at its time in seconds ([`StoredTrack::times`](crate::components::StoredTrack)) and
+//!   7 and 8 its rotation, each key at its time in seconds ([`StoredTrack::times`](anvil_formats::animation::StoredTrack)) and
 //!   in the world's frame (the reader's [`SourceFrame`](primase_core::frame::SourceFrame): a translation a point, a
 //!   rotation conjugated as a skeleton's rest is). Every clip's tracks of the hash 0 are a translation and a rotation:
 //!   the clip's **root motion**, in the rig's space (what the aerial clips move: 2.36 m up over the 2.3 s of a flip),
@@ -16,7 +16,7 @@
 //!   `hold` or `loop`.
 //!
 //! Left out, counted: the tracks of kinds not read (5, 16, 17, 18, 21, 22, 25: [`StoredTrack::values`](
-//! crate::components::StoredTrack)), the tracks of a bone the rig has no joint for, the events, the `TTECLAnimation`
+//! anvil_formats::animation::StoredTrack)), the tracks of a bone the rig has no joint for, the events, the `TTECLAnimation`
 //! and the clip's other fields. A clip with no track it can lower is lowered with no channel.
 
 use std::collections::BTreeMap;
@@ -29,7 +29,10 @@ use primase_core::rig::RigInstance;
 use primase_core::skeleton::{JointId, Rest, Skeleton};
 use primase_core::{Component, Entity, World};
 
-use crate::components::{AnimationError, AnvilClip, AnvilClipBinding, StoredAnimation, Values};
+use crate::components::{AnvilClip, AnvilClipBinding};
+use anvil_formats::animation::Error as AnimationError;
+use anvil_formats::animation::StoredAnimation;
+use anvil_formats::animation::Values;
 
 /// How a clip's keys are interpolated and what it does outside them (see the module documentation).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

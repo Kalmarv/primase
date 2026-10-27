@@ -2,10 +2,10 @@
 //! against the notes' formulas for its G-buffer program (docs/material-spec.md §14.6, executed by the notes on WARP;
 //! the program read in docs/shaders.md §6.2: roughness the detail normal's alpha), worked here in f64 from the same
 //! sampled texels: the bake runs the game's program, the oracle the formulas.
+use anvil_formats::archive::{Archive, At};
+use anvil_formats::material::{MATERIAL, StoredMaterial};
 use primase_anvil::components::{AnvilMaterial, AnvilTextureMap, MaterialBinding, MaterialValue};
 use primase_anvil::passes::BAKE_ANVIL_MATERIAL;
-use primase_anvil::read::archive::{Archive, At};
-use primase_anvil::read::material::{MATERIAL, StoredMaterial};
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassLog};

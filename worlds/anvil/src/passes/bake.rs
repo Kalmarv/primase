@@ -121,7 +121,8 @@ use primase_core::{
 use primase_foundations::{sampling::Address, sampling::Transfer};
 
 use super::material::{Green, NORMAL_GREEN, SHADER_UV, ShaderUv, UNSET, Unset, uv_transform};
-use crate::components::{AnvilMaterial, AnvilShaders, MaterialBinding, MaterialFlags, MaterialValue};
+use crate::components::{AnvilMaterial, AnvilShaders, MaterialBinding, MaterialValue};
+use anvil_formats::material::MaterialFlags;
 
 /// The G-buffer pass's number, in the key's bits 22 to 29.
 const GBUFFER: u32 = 1;
@@ -1553,6 +1554,8 @@ impl Pass for BakeAnvilMaterial {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::Stored;
+    use anvil_formats::template::ShaderTables;
 
     fn flags() -> MaterialFlags {
         MaterialFlags {
@@ -1685,12 +1688,12 @@ mod tests {
         let shaders = world.spawn();
         world.insert(
             shaders,
-            AnvilShaders {
+            Stored(ShaderTables {
                 pixel: vec![(0x40_0000, 0)],
                 vertex: Vec::new(),
                 programs: vec![program],
                 feature_node: Vec::new(),
-            },
+            }),
         );
         material.shaders = Some(shaders);
         let e = world.spawn();

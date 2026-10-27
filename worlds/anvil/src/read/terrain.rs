@@ -1,6 +1,6 @@
 //! A terrain's nodes of one level read into a world: those of a TerrainNodeLayer whose squares meet a rectangle, each
-//! TNLChunk found through an [`Archive`], its height block decoded ([`crate::read::tnl_code::heights`]) and its colour
-//! tile's blocks interleaved as stored ([`crate::read::tnl_code::tile`]).
+//! TNLChunk found through an [`Archive`], its height block decoded ([`anvil_formats::tnl_code::heights`]) and its colour
+//! tile's blocks interleaved as stored ([`anvil_formats::tnl_code::tile`]).
 //!
 //! Where the quadtree's square lies is the program's stated choice, as nothing in the layer or its chunks stores it: the
 //! Riders Republic notes place it on the world's GridLayout square ((-8192, -8192), side 16,384) by the colour tiles
@@ -17,26 +17,26 @@ use primase_core::frame::SourceFrame;
 use crate::components::{
     AnvilTerrain, AnvilTerrainGroups, CollisionMaterialRef, GroupTile, TerrainDetail, TerrainTile,
 };
-use crate::read::archive::{Archive, At};
-use crate::read::terrain_material::{
+use crate::read::textures::read_texture_set_slot;
+use anvil_formats::archive::{Archive, At};
+use anvil_formats::terrain_material::{
     StoredMaterialBank, StoredTerrainMaterial, TERRAIN_MATERIAL, TERRAIN_MATERIAL_BANK,
 };
-use crate::read::textures::read_texture_set_slot;
-use crate::read::tnl::{StoredNodeLayer, StoredTnlChunk, TERRAIN_NODE_LAYER, TNL_CHUNK, node};
-use crate::read::tnl_code;
+use anvil_formats::tnl::{StoredNodeLayer, StoredTnlChunk, TERRAIN_NODE_LAYER, TNL_CHUNK, node};
+use anvil_formats::tnl_code;
 
 /// Why terrain can't be read.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
-    Archive(#[from] crate::read::archive::Error),
+    Archive(#[from] anvil_formats::archive::Error),
     #[error("{at:?}: type {found:#010x}, not {what}")]
     Type { at: At, found: u32, what: &'static str },
     #[error("{at:?}: {source}")]
     Layout {
         at: At,
         #[source]
-        source: crate::read::tnl::Error,
+        source: anvil_formats::tnl::Error,
     },
     #[error("node {position} ({at:?}): {source}")]
     Code {
@@ -53,7 +53,7 @@ pub enum Error {
     Material {
         at: At,
         #[source]
-        source: crate::read::terrain_material::Error,
+        source: anvil_formats::terrain_material::Error,
     },
     #[error(transparent)]
     TextureMap(#[from] crate::read::textures::Error),

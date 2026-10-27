@@ -261,7 +261,7 @@ impl Pass for LowerAnvilWater {
             let decoded = primase_image::map_rgba8_levels(atlas, 0..1, meta, |x| Ok(x.rgba))
                 .map_err(|e| format!("Params atlas: {e}"))?;
             let texels = decoded.levels[0].clone();
-            let mut by_level: BTreeMap<u32, Vec<&crate::components::WaterPatch>> = BTreeMap::new();
+            let mut by_level: BTreeMap<u32, Vec<&anvil_formats::water::WaterPatch>> = BTreeMap::new();
             let [x0, y0, x1, y1] = self.rect;
             for p in &lake.patches {
                 let side = p.side().map_or(0.0, f64::from);

@@ -5,10 +5,10 @@
 //! here), albedo the diffuse, roughness and metalness the normal map's alpha and blue, the three normal maps summed,
 //! AO `1 + Use AO (Mask1.b DetailsMask1.b - 1)`; a texture the Material resolves to none sampled white (`unset=white`).
 //! A Material whose second tiling isn't whole (not periodic in the UV square) is left to `lower-anvil-material`.
+use anvil_formats::archive::{Archive, At};
+use anvil_formats::material::{MATERIAL, StoredMaterial};
 use primase_anvil::components::{AnvilMaterial, AnvilTextureMap, MaterialBinding, MaterialValue};
 use primase_anvil::passes::BAKE_ANVIL_MATERIAL;
-use primase_anvil::read::archive::{Archive, At};
-use primase_anvil::read::material::{MATERIAL, StoredMaterial};
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassLog};

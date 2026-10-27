@@ -5,12 +5,12 @@
 //! and lowered: which bindings resolve, from where.
 use std::collections::BTreeMap;
 
+use anvil_formats::archive::{Archive, At};
+use anvil_formats::material::MATERIAL;
+use anvil_formats::template::{self, MATERIAL_TEMPLATE, SHADER_CUSTOM_TEXTURE_OPERATOR};
 use primase_anvil::components::{AnvilMaterial, TextureFrom};
 use primase_anvil::passes::{AlphaChoice, Decals1Cutout, LowerAnvilMaterial, ShaderUv};
-use primase_anvil::read::archive::{Archive, At};
-use primase_anvil::read::material::MATERIAL;
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
-use primase_anvil::read::template::{self, MATERIAL_TEMPLATE, SHADER_CUSTOM_TEXTURE_OPERATOR};
 use primase_core::frame::SourceFrame;
 use primase_core::layered::LayeredMaterial;
 use primase_core::pass::{Pass, PassLog};

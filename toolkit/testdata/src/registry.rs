@@ -496,7 +496,7 @@ pub const DECLARED: &[Declared] = &[
         query: Query::Install(Game::Riders, Some("DataPC_MAD_USNAT.forge")),
         status: Status::Live,
         gate: false,
-        about: r#"a large Anvil forge of version 27 (Riders Republic, Steam build 25394987: `DataPC_MAD_USNAT.forge`, 15,650,919,308 bytes, 767,463 entries; its tables are read, about 163 MB); worlds/anvil/tests/mesh_shape.rs, shapes.rs, meshes.rs"#,
+        about: r#"a large Anvil forge of version 27 (Riders Republic, Steam build 25394987: `DataPC_MAD_USNAT.forge`, 15,650,919,308 bytes, 767,463 entries; its tables are read, about 163 MB); repos/anvil-formats/tests/mesh_shape.rs, worlds/anvil/tests/shapes.rs, meshes.rs"#,
         source: r#"the user's own install; two MeshShape bodies' prefixes, section runs and tails hand-checked in a separate read-only decode (games/riders-republic docs/recon/meshshape-second-fixture.md, c068d20)"#,
     },
     Declared {
@@ -510,21 +510,21 @@ pub const DECLARED: &[Declared] = &[
         query: Query::Install(Game::Riders, Some("DataPC_MAD_WhiteRoom.forge")),
         status: Status::Live,
         gate: false,
-        about: r#"the base forge of installs.riders/DataPC_MAD_WhiteRoom_patch_01.forge's patch (Riders Republic, Steam build 25394987: `DataPC_MAD_WhiteRoom.forge`, 8,951,822 bytes, 388 entries); worlds/anvil/tests/data.rs"#,
+        about: r#"the base forge of installs.riders/DataPC_MAD_WhiteRoom_patch_01.forge's patch (Riders Republic, Steam build 25394987: `DataPC_MAD_WhiteRoom.forge`, 8,951,822 bytes, 388 entries); repos/anvil-formats/tests/data.rs"#,
         source: r#"the user's own install; two resource blocks' sizes, checksums, names and class ids hand-checked in a separate read-only decode (games/riders-republic docs/recon/archive-reader-fit.md, a9f4959)"#,
     },
     Declared {
         query: Query::Install(Game::Riders, Some("DataPC_MAD_WhiteRoom_patch_01.forge")),
         status: Status::Live,
         gate: false,
-        about: r#"one Anvil forge archive of version 27 (Riders Republic, Steam build 25394987: `DataPC_MAD_WhiteRoom_patch_01.forge`, 1,021,872 bytes, 337 entries); worlds/anvil/tests/forge.rs"#,
+        about: r#"one Anvil forge archive of version 27 (Riders Republic, Steam build 25394987: `DataPC_MAD_WhiteRoom_patch_01.forge`, 1,021,872 bytes, 337 entries); repos/anvil-formats/tests/forge.rs"#,
         source: r#"the user's own install; rows hand-checked against a separate read-only census of the file"#,
     },
     Declared {
         query: Query::Install(Game::ShaunWhite, Some("DataPC.forge")),
         status: Status::Live,
         gate: false,
-        about: r#"one Anvil forge of version 26 (Shaun White Skateboarding, PC 1.0: `DataPC.forge`, 20,545,833 bytes, 38 entries: the game's bootstrap, settings and localization), its tables, FILEDATA headers and every entry's data blocks (LZO2A) read; worlds/anvil/tests/forge.rs, data.rs"#,
+        about: r#"one Anvil forge of version 26 (Shaun White Skateboarding, PC 1.0: `DataPC.forge`, 20,545,833 bytes, 38 entries: the game's bootstrap, settings and localization), its tables, FILEDATA headers and every entry's data blocks (LZO2A) read; repos/anvil-formats/tests/forge.rs, data.rs"#,
         source: r#"the user's own copy; the first two rows (GlobalMetaFile, Graphic Bootstrap) and the second's two blocks hand-checked in a hex dump, and AnvilToolkit 1.3.7's version-25 forge reader and AC2 compression table as the third-party reading of the layout"#,
     },
     Declared {

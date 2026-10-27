@@ -1,11 +1,21 @@
 //! The Anvil dialect: what the reader puts in a world that has no core meaning yet, as stored.
 
+use anvil_formats::animation::StoredAnimation;
+use anvil_formats::entity::query;
+use anvil_formats::floor::FloorBlock;
+use anvil_formats::grass::StoredGrassLibrary;
+use anvil_formats::material::MaterialFlags;
+use anvil_formats::mesh::{StoredMeshBone, StoredSkin};
+use anvil_formats::rig::StoredRig;
+use anvil_formats::skeleton::StoredSkeleton;
+use anvil_formats::template::ShaderTables;
+use anvil_formats::vertex::VertexAttributes;
+use anvil_formats::water::WaterPatch;
 use primase_core::{Component, Entity, World};
 
 pub mod component_types;
 mod coverage;
 mod impostor;
-pub mod stored;
 pub use coverage::{
     AnvilGiDyn, AnvilGridMetadata, AnvilLookPreset, AnvilSourceComponents, AnvilSourceOwner, SourceComponent,
 };
@@ -14,7 +24,25 @@ pub use impostor::{
     AnvilSkyControllers, AnvilSpotLight, AnvilSurfaceBake,
 };
 
-/// A MeshShape's triangle geometry ([`crate::read::mesh_shape::Geometry`]) on its prototype: positions converted into
+/// A record of `anvil_formats` held as a component: the record as stored, its component name, checks and size given
+/// by its `impl Component for Stored<..>` here. It derefs to the record and has the record's JSON (none).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Stored<T>(pub T);
+
+impl<T> std::ops::Deref for Stored<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+impl<T> std::ops::DerefMut for Stored<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.0
+    }
+}
+
+/// A MeshShape's triangle geometry ([`anvil_formats::mesh_shape::Geometry`]) on its prototype: positions converted into
 /// core's frame through the frame the reader was given (stated by the program, as the shape's units and frame are not
 /// established), faces as position-index triangles (reversed when that frame mirrors, so their fronts stay), and each
 /// face's edge ids and each edge's face ids as stored, and the CollisionMaterials its tail names with each face's index
@@ -75,8 +103,8 @@ impl Component for AnvilMeshShape {
     }
 }
 
-/// A Mesh's compiled buffers ([`crate::read::mesh::StoredMesh`]) on its prototype: positions decoded
-/// ([`crate::read::mesh::StoredVertices::positions`]) and converted into core's frame through the frame the reader was
+/// A Mesh's compiled buffers ([`anvil_formats::mesh::StoredMesh`]) on its prototype: positions decoded
+/// ([`anvil_formats::mesh::StoredVertices::positions`]) and converted into core's frame through the frame the reader was
 /// given (`frame`, stated by the program); triangles as vertex indices (each stored range counted from its vertex base,
 /// reversed when that frame mirrors); `ranges` each stored range's first triangle; `materials` descriptor *k*'s
 /// Material ClassID for range *k* (in order; descriptor *k*'s vertex count equals range *k*'s low 16 bits; how the
@@ -102,22 +130,6 @@ pub struct AnvilMesh {
     pub attributes: VertexAttributes,
     /// The bone list and skin stream, on a mesh with bones.
     pub skin: Option<AnvilSkin>,
-}
-
-/// A Mesh's vertex attributes as the engine's vertex declarations decode them ([`crate::read::vertex`]; each empty where
-/// its layout declares none), in the source's frame.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct VertexAttributes {
-    /// Unnormalised, as the programs read them.
-    pub normals: Vec<[f32; 3]>,
-    /// xyz unnormalised, w the bitangent's sign (+1 or -1).
-    pub tangents: Vec<[f32; 4]>,
-    /// The texture coordinates of `TEXCOORD0` (or the split layouts' first set), then the second set.
-    pub uvs: [Vec<[f32; 2]>; 2],
-    /// RGBA, UNORM8.
-    pub colour: Vec<[u8; 4]>,
-    /// static16's two spherical vectors: `P` (bytes 10, 11) and `Q` (bytes 8, 9).
-    pub spherical: Vec<[[f32; 3]; 2]>,
 }
 
 impl Component for AnvilMesh {
@@ -256,37 +268,6 @@ impl AnvilCollisionFilter {
     pub fn is_water_surface(&self) -> bool {
         self.queries(query::WATER_LEVEL) && !self.queries(query::STATIC)
     }
-}
-
-/// `QueryLayerBits` slots by the registry's names (the others are unnamed or unset in the data).
-pub mod query {
-    pub const STATIC: u32 = 0;
-    pub const DYNAMIC: u32 = 2;
-    pub const CAMERA_COLLISION: u32 = 3;
-    pub const CAMERA_OCCLUSION: u32 = 5;
-    pub const CHARACTER: u32 = 9;
-    pub const WATER_LEVEL: u32 = 10;
-    pub const PARTICLE: u32 = 11;
-    pub const RAYCAST: u32 = 19;
-    pub const OCCLUSION_HEIGHT_TEST: u32 = 20;
-    pub const TARGETING: u32 = 21;
-    /// `TerrainLod0`; `TerrainLod1` to `4` follow.
-    pub const TERRAIN_LOD0: u32 = 25;
-}
-
-/// `CollisionLayerBits` slots by the registry's names.
-pub mod layer {
-    pub const STATIC: u32 = 0;
-    pub const DYNAMIC: u32 = 2;
-    pub const DEBRIS: u32 = 3;
-    pub const DETECTION_ZONE: u32 = 4;
-    pub const MAIN_CHARACTER: u32 = 5;
-    pub const CHARACTER: u32 = 6;
-    pub const CHARACTER_NO_INTERACTIVE: u32 = 7;
-    pub const WATER_LEVEL: u32 = 13;
-    pub const TARGETABLE: u32 = 14;
-    /// `TerrainLod0`; `TerrainLod1` to `4` follow.
-    pub const TERRAIN_LOD0: u32 = 16;
 }
 
 /// The owning Entity's `IsHidden` and `IsPhantom` as stored (`anvil.entity_state`; the Entity bit-field run's bytes
@@ -448,7 +429,7 @@ impl Component for AnvilDecalModel {
 /// One deferred decal: a projection box in the world (its two half-axes, its centre and its bounds' minimum and
 /// maximum, in the source's frame; the owner's matrix not applied), its window of its texture's length (offset and
 /// width, U units), its fade (its opacity `1 - fade` of its model's) and its 100-byte record as stored
-/// ([`crate::read::ddecal`]).
+/// ([`anvil_formats::ddecal`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DeferredDecal {
     pub axis_x: [f32; 3],
@@ -495,82 +476,6 @@ pub struct AnvilGrassModel {
 impl Component for AnvilGrassModel {
     const NAME: &'static str = "anvil.grass_model";
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
-}
-
-/// A GrassModel's settings, as the registry's class stores them (docs/grass.md §2.2): the six f32, the bytes and the
-/// enum, the imposter shader levels, and the 23 bytes after them that the class list doesn't name.
-#[derive(Clone, Debug, PartialEq)]
-pub struct GrassModelSettings {
-    pub z_offset: f32,
-    pub height_scale_for_occlusion: f32,
-    pub terrain_normal_follower_ratio: f32,
-    pub root_height: f32,
-    pub softness: f32,
-    pub normal_bend_factor: f32,
-    pub visible_virtual_lod_count: u8,
-    pub texture_atlas_element_count: u8,
-    /// `RaycastTranslucency` (the enum `GrassModel::RaycastTranslucency`).
-    pub raycast_translucency: u32,
-    /// `ImposterStartShaderModelLodIndex` and the two after it: three bytes.
-    pub imposter_shader_start_model_lod_index: [u8; 3],
-    pub imposter_lookat_ratio: f32,
-    /// The 23 bytes that follow, as stored: a LOD table of 5 bytes (`00 01 02 03 03`), four f32 and 2 bytes.
-    pub unnamed: [u8; 23],
-    /// The four f32 of `unnamed`: the model's LOD switch distances in metres by the notes' reading by value: (0, 10, 20,
-    /// 40) on 26 models, (0, 5, 10, 20) on 16 and (0, 20, 40, 80) on 4 (counted over the 46 models).
-    pub switch_distances: [f32; 4],
-}
-
-/// One model of the library: its settings and its bounding volume.
-#[derive(Clone, Debug, PartialEq)]
-pub struct StoredGrassModel {
-    pub id: u64,
-    pub settings: GrassModelSettings,
-    /// The BoundingVolume object's id, its six f32 (min and max) and the 24 bytes after them as stored.
-    pub bounds_id: u64,
-    pub bounds: [f32; 6],
-    pub bounds_rest: [u8; 24],
-}
-
-/// A rule: one model that may grow where its group is picked (a GrassPatternElement).
-#[derive(Clone, Debug, PartialEq)]
-pub struct StoredGrassRule {
-    pub id: u64,
-    /// `GrassModelIndex`: the position in the setup's ManagedEntities (and the library's models). 0 to 50 occur;
-    /// 46 to 50 name no model.
-    pub model: u16,
-    pub tiling_log_count: u8,
-    pub density: f32,
-    pub tilt_factor: f32,
-    pub scaling_enabled: bool,
-    pub scale_a: f32,
-    pub scale_b: f32,
-    pub height_scaling_enabled: bool,
-    pub height_scale_a: f32,
-    pub height_scale_b: f32,
-    /// The field `63D19E01` (5.0 on 145 rules, 0.0 on 66, 2.5 on others): not named.
-    pub unnamed_f32: f32,
-    /// The 49 bytes after it as stored (a byte 100, a u16, ten f32 of 1.0 and six bytes).
-    pub unnamed: [u8; 49],
-}
-
-/// A group: the rules that apply where a ground sample picks it (a GrassPattern).
-#[derive(Clone, Debug, PartialEq)]
-pub struct StoredGrassGroup {
-    pub id: u64,
-    pub rules: Vec<StoredGrassRule>,
-}
-
-/// A GrassPatternLibrary body as stored.
-#[derive(Clone, Debug, PartialEq)]
-pub struct StoredGrassLibrary {
-    pub models: Vec<StoredGrassModel>,
-    pub groups: Vec<StoredGrassGroup>,
-    /// The 256-byte table that follows the groups: the group of a material (`FF`: none; all but entry 255 on Riders
-    /// Republic's, whose entry 255 is 184).
-    pub table: [u8; 256],
-    /// The 187 bytes after the table, as stored (zeros).
-    pub rest: Vec<u8>,
 }
 
 /// The GrassComponent of `SETUP_GrassUS_NAT` as stored, less what only its reading needs: its ids, the inline
@@ -641,88 +546,6 @@ impl Component for AnvilTerrainGroups {
     }
 }
 
-/// A bone as stored (see the module documentation for what each field is by the registry and by value).
-#[derive(Clone, Debug, PartialEq)]
-pub struct StoredBone {
-    /// The object's id: what a parent, the root and a mirror name.
-    pub id: u64,
-    /// The CRC-32 of the bone's name (the registry's two packed bit fields `41B24805` and `778FF80E`, 32 bits).
-    pub name_hash: u32,
-    /// The parent's id (none for a root).
-    pub parent: Option<u64>,
-    /// `230C4503`: the bone itself on a chain's bones, the opposite side's bone on a paired one, by value.
-    pub mirror: Option<u64>,
-    /// GlobalPosition: x, y, z and 0.
-    pub global_position: [f32; 4],
-    /// `02A2A3E3`, by value the global rotation: a unit quaternion x, y, z, w.
-    pub global_rotation: [f32; 4],
-    /// LocalPosition: in the parent's space, x, y, z and 0.
-    pub local_position: [f32; 4],
-    /// `8AE955A2`, by value the local rotation: a unit quaternion x, y, z, w.
-    pub local_rotation: [f32; 4],
-    /// `EF07E0C9`: 0 on all but one of the 11,113 bones read.
-    pub flag: u8,
-    /// `73196C8B`, an enum: 0 on 10,890 of 11,113 bones of the census, 1 to 5, 7, 8 and 14 on the others.
-    pub kind: u32,
-    /// `4007121E`, an array of u32 (a hash list like the skeleton's last array).
-    pub hashes: Vec<u32>,
-    /// `B58D6510`, an enum: 7 on every bone.
-    pub kind2: u32,
-    /// `8CE175E4`: 1.0 on every bone.
-    pub unnamed: f32,
-    /// `2DDF1266`: the low 16 bits the bone's position in the skeleton, the high 16 the bones below it, by value.
-    pub key: u32,
-}
-
-/// One SkeletonPoseBone: its object's id and its 16 bytes as stored (no field list of the registry describes them).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StoredPoseBone {
-    pub id: u64,
-    pub bytes: [u8; 16],
-}
-
-/// One SkeletonPose: a f32 and its bones.
-#[derive(Clone, Debug, PartialEq)]
-pub struct StoredPose {
-    pub id: u64,
-    pub value: f32,
-    pub bones: Vec<StoredPoseBone>,
-}
-
-/// One SkeletonPoseGroup: its poses.
-#[derive(Clone, Debug, PartialEq)]
-pub struct StoredPoseGroup {
-    pub id: u64,
-    pub poses: Vec<StoredPose>,
-}
-
-/// A Skeleton body as stored.
-#[derive(Clone, Debug, PartialEq)]
-pub struct StoredSkeleton {
-    /// `9C78EB24`, an enum.
-    pub kind: u32,
-    pub bones: Vec<StoredBone>,
-    /// `4E1F230B`: the root bone's id.
-    pub root: Option<u64>,
-    /// `F4D6F079`: the skeleton's own position (x, y, z, 0).
-    pub position: [f32; 4],
-    /// `9B868C7D`: its own rotation (a quaternion x, y, z, w by value).
-    pub rotation: [f32; 4],
-    /// The BodyPartMapping the skeleton names (its ClassID).
-    pub body_part_mapping: Option<u64>,
-    pub pose_groups: Vec<StoredPoseGroup>,
-    /// The IKData object's id where the skeleton has one (the class stores no field).
-    pub ik_data: Option<u64>,
-    /// The LookAtDataSkeletonDefinition it names (its ClassID).
-    pub look_at: Option<u64>,
-    /// `F656FC33` and `5FC3FE25`.
-    pub floats: [f32; 2],
-    /// The Reflex3SkeletonConstraints object's id and its byte buffer (8 bytes on every skeleton that has one).
-    pub reflex3: Option<(u64, Vec<u8>)>,
-    /// `3708B98C`, an array of u32.
-    pub hashes: Vec<u32>,
-}
-
 /// A Skeleton as stored (`anvil.skeleton`), on an entity of its own named for it: its bones, pose groups and the rest
 /// ([`StoredSkeleton`]), and the frame the reader was given (the bones' positions and rotations are in the game's source
 /// frame). `lower-anvil-skeleton` makes a `core.skeleton` of it.
@@ -735,28 +558,6 @@ pub struct AnvilSkeleton {
 impl Component for AnvilSkeleton {
     const NAME: &'static str = "anvil.skeleton";
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
-}
-
-/// One WaterPatchDesc.
-#[derive(Clone, Debug, PartialEq)]
-pub struct WaterPatch {
-    /// Its object's u64 and type, as stored.
-    pub id: u64,
-    pub kind: u32,
-    /// x and y in metres, z the water level.
-    pub position: [f32; 3],
-    /// The 4 bytes at 25, as stored (`00 00 01 02` on the notes' samples).
-    pub unread: [u8; 4],
-    /// u0, v0, u1, v1 in the atlases.
-    pub rect: [f32; 4],
-    pub level: u32,
-}
-
-impl WaterPatch {
-    /// Its square's side in metres: `512 >> level` (`None` past 512's bits).
-    pub fn side(&self) -> Option<f32> {
-        512u32.checked_shr(self.level).map(|s| s as f32)
-    }
 }
 
 /// A lake's surface as its WaterComponent stores it (`anvil.water`, on an entity of its own): its patches (each a
@@ -805,15 +606,6 @@ impl Component for AnvilDataLayers {
     }
 }
 
-/// A FloorHeightData block: two words and sixteen 2-bit indices between them, cell (r, c) of the block (r along y)
-/// at bits 2 (4 r + c).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FloorBlock {
-    pub lo: u16,
-    pub hi: u16,
-    pub indices: u32,
-}
-
 /// A FloorHeightData grid (`anvil.floor_height`): its cell side, the metres per word step and corner its trailer
 /// stores, its cells along x and y, its 4x4-cell blocks row by row (a row along x), and the frame the program states
 /// for its points. `lower-anvil-floor` makes ground of it.
@@ -828,6 +620,22 @@ pub struct AnvilFloorHeight {
 }
 
 impl AnvilFloorHeight {
+    /// The grid as the reader puts it in a world, its points in `frame` (the program's stated choice).
+    pub fn new(
+        stored: anvil_formats::floor::StoredFloorHeight,
+        frame: primase_core::frame::SourceFrame,
+    ) -> Self {
+        let [x, y, _] = stored.trailer.origin;
+        AnvilFloorHeight {
+            frame,
+            cell: stored.cell,
+            scale: stored.trailer.scale,
+            origin: [x, y],
+            cells: stored.trailer.cells,
+            blocks: stored.blocks,
+        }
+    }
+
     /// The cell at `column` (along x) and `row` (along y): its block's words and its index (0 to 3); `None` outside
     /// the grid.
     pub fn cell(&self, column: u32, row: u32) -> Option<(u16, u16, u8)> {
@@ -972,7 +780,7 @@ impl Component for AnvilCollisionShape {
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
 }
 
-/// What a MaterialTemplate binding binds (see [`crate::read::template::BindingKind`]).
+/// What a MaterialTemplate binding binds (see [`anvil_formats::template::BindingKind`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MaterialBinding {
     Texture { slot: u32 },
@@ -1069,112 +877,19 @@ impl Component for AnvilWorldUv {
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
 }
 
-/// A Material's flags as stored: body 41 to 84 (of the 102 bytes after its references, 20 to 63), the fields the
-/// engine's Material deserialiser reads there in its order, named by its class registry (Riders Republic
-/// docs/shaders.md §6): `BlendMode` (a u32, of which the engine keeps 4 bits), `AlphaDisplayMode` (a u32, 2 bits),
-/// `AlphaTestValue` and 35 booleans, a byte each.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MaterialFlags {
-    pub blend_mode: u32,
-    pub alpha_display_mode: u32,
-    pub alpha_test_value: u8,
-    /// Boolean j at body 50 + j.
-    pub booleans: [u8; 35],
-}
-
-impl MaterialFlags {
-    /// Booleans by their registry names (index j).
-    pub const Z_WRITE_DISABLED_OPAQUE: usize = 0;
-    pub const Z_WRITE_DISABLED_ALPHA: usize = 1;
-    pub const Z_TEST_DISABLED: usize = 2;
-    pub const LAYER_MATERIAL: usize = 3;
-    pub const PRE_TRANSPARENT: usize = 10;
-    pub const FLIP_NORMAL_ON_BACK_FACE: usize = 11;
-    pub const RENDER_IN_LOW_RESOLUTION: usize = 15;
-    pub const ALPHA_TEST_ENABLED: usize = 24;
-    pub const TWO_SIDED: usize = 25;
-    /// The boolean whose name's CRC-32 is `42452A12` (the name not known).
-    pub const BOOLEAN_42452A12: usize = 34;
-}
-
 /// A MaterialTemplate's shader permutations (`anvil.shaders`, on an entity of its own, named as the template, that
-/// its Materials name): each stage's ShaderKeys and their programs' DXBC containers, as stored
-/// (`crate::read::template::permutations`). A key names a permutation within its stage (the engine's ShaderKey, bits
-/// 22 to 29 its pass); the same key may be in both stages, each with its own program.
-#[derive(Clone, Debug, PartialEq)]
-pub struct AnvilShaders {
-    /// (ShaderKey, index into `programs`) of the pixel stage, the keys strictly ascending (each once): the engine looks
-    /// a key up exactly ([`AnvilShaders::check`]).
-    pub pixel: Vec<(u32, usize)>,
-    /// The same for the vertex stage.
-    pub vertex: Vec<(u32, usize)>,
-    /// The containers, each once: permutations that share a program share its index.
-    pub programs: Vec<Vec<u8>>,
-    /// The body of the template's shader-state node as stored ([`crate::read::template::feature_node`]): the object's
-    /// byte, then the template's feature flags.
-    pub feature_node: Vec<u8>,
-}
+/// its Materials name): the template's [`ShaderTables`].
+pub type AnvilShaders = Stored<ShaderTables>;
 
-impl AnvilShaders {
-    /// What the lookups rely on: each stage's keys strictly ascending (a key twice would name two programs, and an
-    /// unsorted list would miss keys it holds), and every index naming one of `programs`.
-    pub fn check(&self) -> Result<(), String> {
-        for (stage, table) in [("pixel", &self.pixel), ("vertex", &self.vertex)] {
-            if let Some(w) = table.windows(2).find(|w| w[0].0 >= w[1].0) {
-                return Err(format!(
-                    "{stage} keys not strictly ascending: {:#x} then {:#x}",
-                    w[0].0, w[1].0
-                ));
-            }
-            if let Some(&(key, index)) = table.iter().find(|&&(_, i)| i >= self.programs.len()) {
-                return Err(format!(
-                    "{stage} key {key:#x} names program {index} of {}",
-                    self.programs.len()
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    fn program(&self, stage: &[(u32, usize)], key: u32) -> Option<&[u8]> {
-        let at = stage.binary_search_by_key(&key, |&(k, _)| k).ok()?;
-        let &(_, program) = stage.get(at)?;
-        self.programs.get(program).map(Vec::as_slice)
-    }
-
-    /// The stored byte of feature `n` (bit `n` of the engine's feature word `T`, which gates bits of the ShaderKey:
-    /// docs/shaders.md §6.2): byte `n + 1` of the template's shader-state node, `None` where the node has no such byte.
-    /// It is 0 or 1 for every feature but 15, which is also 2 on 82 of the 432 templates (see `tests/template_features.rs`).
-    pub fn feature_byte(&self, n: usize) -> Option<u8> {
-        self.feature_node.get(n.checked_add(1)?).copied()
-    }
-
-    /// Whether the template has feature `n`: its byte is not 0. The census (`tests/template_features.rs`) holds this to
-    /// the key bit the feature gates on all 432 templates, for the byte 2 of feature 15 as for the byte 1 of the rest.
-    pub fn feature(&self, n: usize) -> Option<bool> {
-        self.feature_byte(n).map(|b| b != 0)
-    }
-
-    /// The program the pixel key `key` names.
-    pub fn pixel(&self, key: u32) -> Option<&[u8]> {
-        self.program(&self.pixel, key)
-    }
-
-    /// The program the vertex key `key` names.
-    pub fn vertex(&self, key: u32) -> Option<&[u8]> {
-        self.program(&self.vertex, key)
-    }
-}
-
-impl Component for AnvilShaders {
+impl Component for Stored<ShaderTables> {
     const NAME: &'static str = "anvil.shaders";
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
-    /// [`AnvilShaders::check`].
+    /// [`ShaderTables::check`].
     fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
-        self.check()
+        self.0.check()
     }
     fn payload_bytes(&self) -> u64 {
-        let bytes: usize = self.programs.iter().map(Vec::len).sum();
+        let bytes: usize = self.0.programs.iter().map(Vec::len).sum();
         u64::try_from(bytes).unwrap_or(u64::MAX)
     }
 }
@@ -1210,56 +925,6 @@ pub struct AnvilTextureMap {
 impl Component for AnvilTextureMap {
     const NAME: &'static str = "anvil.texture_map";
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
-}
-
-/// One `MeshBone` of a Mesh's bone list: a bone the mesh's skin stream may name, as the 81-byte record stores it
-/// (an object id of 0, the class `MeshBone`, then the registry's three fields, `BoneID`, `InitialMatrixInverse` and
-/// `IsUsedBySubMeshes`; docs/registry-named-fields.md §4).
-#[derive(Clone, Debug, PartialEq)]
-pub struct StoredMeshBone {
-    /// `BoneID`: by value the CRC-32 of the bone's name, the key of a skeleton's [`StoredBone::name_hash`].
-    pub bone_id: u32,
-    /// `InitialMatrixInverse`: a 4x4 as 16 f32 in four rows of x, y, z and w, the translation in the last row.
-    pub initial_matrix_inverse: [[f32; 4]; 4],
-    /// `IsUsedBySubMeshes`.
-    pub used_by_submeshes: bool,
-}
-
-/// A mesh's skin as its skin stream stores it (the split layouts'): each vertex a record of `influences` bone slots
-/// (a byte each: positions in the mesh's bone list, [`crate::read::mesh::StoredMesh::bones`]) and then as many weights (a byte each,
-/// summing to 255). Established on every one of Riders Republic's 29,174 meshes with bones (29,116 with 4 influences
-/// and 58 with 8; 39,795,423 vertices: tests/skin_binding.rs): the weights sum to 255 on every vertex, and every slot
-/// with a weight is below the bone count. A slot with no weight is kept as stored.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StoredSkin {
-    /// The slots and weights of a vertex each: 4 or 8.
-    pub influences: usize,
-    /// Each vertex's slots, in vertex order, `influences` a vertex.
-    pub slots: Vec<u8>,
-    /// Each vertex's weights, in the same order.
-    pub weights: Vec<u8>,
-}
-
-/// One bone of a rig.
-#[derive(Clone, Debug, PartialEq)]
-pub struct RigBone {
-    /// The CRC-32 of its name.
-    pub name_hash: u32,
-    /// The name of its parent bone: none for a root.
-    pub parent: Option<u32>,
-    /// LocalPosition as stored (x, y, z, 0), in its parent's space.
-    pub local_position: [f32; 4],
-    /// The local rotation as stored: a unit quaternion x, y, z, w.
-    pub local_rotation: [f32; 4],
-    /// The position in the list given to [`StoredRig::assemble`] of the Skeleton the bone is from.
-    pub skeleton: usize,
-}
-
-/// A rig (see the module documentation): each bone once, the main Skeleton's first, then each addon's new bones in the
-/// order it stores them.
-#[derive(Clone, Debug, PartialEq)]
-pub struct StoredRig {
-    pub bones: Vec<RigBone>,
 }
 
 /// A Mesh's skin as the reader keeps it, on the mesh's prototype with its [`AnvilMesh`]: the bone list (the slots the
@@ -1364,200 +1029,6 @@ impl Component for AnvilSkinned {
     }
 }
 
-/// How a track's key times are stored ([`crate::read::animation`]: the tag's remainder over 3).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Times {
-    /// A u8 for each key after the first (the first is at 0).
-    U8(Vec<u8>),
-    /// A u16 for each key after the first.
-    U16(Vec<u16>),
-    /// A bit mask of the frames that hold a key, with its marker byte's top two bits (`mode`: 1, 2 or 3).
-    Mask { mode: u8, mask: Vec<u8> },
-}
-
-/// One track of an Animation as stored: its block's tag (`3 * kind + w`), its size field, the key count, the times and
-/// the values (`keys` of the kind's width, as bytes). The bone it drives is the clip's mapping at its position.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StoredTrack {
-    pub tag: u8,
-    /// The block's `a` field, its in-memory size (within 8 of the stored payload's length on every clip).
-    pub size: u32,
-    pub keys: u32,
-    pub times: Times,
-    pub values: Vec<u8>,
-}
-
-/// An Animation's `AnimTrackEvent` array as stored: the count and the elements' bytes (not read).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StoredEvents {
-    pub count: u32,
-    pub bytes: Vec<u8>,
-}
-
-/// An Animation's `TTECLAnimation` object, its four arrays as stored.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StoredEcl {
-    pub id: u64,
-    pub animation: Vec<u8>,
-    pub words: Vec<u32>,
-    pub halves: Vec<u16>,
-    pub bytes: Vec<u8>,
-}
-
-/// An Animation resource's body as stored ([`crate::read::animation`] for what each field is).
-#[derive(Clone, Debug, PartialEq)]
-pub struct StoredAnimation {
-    /// `Length` (f32).
-    pub length: f32,
-    /// `F4F597FF`: varies by clip.
-    pub id_hash: u32,
-    /// `322B96B8`: 0 on every clip.
-    pub f2: u32,
-    /// `556E9166` and `251905D9`: empty on every clip.
-    pub arrays: [Vec<u16>; 2],
-    /// The four booleans (`1F4DA15F`, `93847F6A`, `ABC2D4B8`, `0D7D1D50`).
-    pub flags: [u8; 4],
-    pub events: StoredEvents,
-    /// The `AnimTrackData` object's id (0 on every clip) and its `567530C5`.
-    pub track_data_id: u64,
-    pub track_data_hash: u32,
-    /// Each track's bone: the CRC-32 of its name (0 for the root's), the mappings in the tracks' order.
-    pub mappings: Vec<u32>,
-    /// `66A6DC91`.
-    pub track_data_tail: u16,
-    pub ecl: Option<StoredEcl>,
-    /// `B832D26F`, a byte buffer (empty on every clip).
-    pub buffer: Vec<u8>,
-    /// `CB4E5F18`.
-    pub cb4e: u32,
-    pub tracks: Vec<StoredTrack>,
-}
-
-/// Why an Animation body or a track's values can't be read (`read::animation` names it `Error`).
-#[derive(Debug, thiserror::Error)]
-pub enum AnimationError {
-    #[error("animation body: {0}")]
-    Short(#[from] primase_foundations::bytes::FieldError),
-    #[error("animation {what}: {found:#x} at {at}, not {read}")]
-    Value {
-        what: &'static str,
-        at: usize,
-        found: u64,
-        read: &'static str,
-    },
-    #[error("animation reference at {at}: {why}")]
-    Reference { at: usize, why: String },
-    #[error("animation track {track}: tag {tag:#04x} is kind {kind}, whose value width isn't read")]
-    Kind { track: usize, tag: u8, kind: u8 },
-    #[error("animation track {track}: {why}")]
-    Track { track: usize, why: String },
-    #[error("animation tracks of kind {kind}: their values aren't read")]
-    Unread { kind: u8 },
-    #[error("animation track values: {0}")]
-    Values(String),
-    #[error("animation body: {0} bytes after its last track")]
-    Trailing(usize),
-    #[error("animation events: no AnimTrackData after the {0} events")]
-    NoTrackData(u32),
-}
-
-/// A track's values decoded ([`StoredTrack::values`]).
-#[derive(Clone, Debug, PartialEq)]
-pub enum Values {
-    /// Kind 9: translations.
-    Vec3(Vec<[f32; 3]>),
-    /// Kinds 3, 4, 5, 7 and 8: unit quaternions `[x, y, z, w]`, the component the format leaves out the positive root.
-    Quaternions(Vec<[f32; 4]>),
-}
-
-/// A link as a BuildTable stores one: a tag byte (0 or 1) and the u64 ClassID it names.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct BuildLink {
-    pub tag: u8,
-    pub id: u64,
-}
-
-/// A typed value of a BuildTable: a column's declared one and each row's property (`read::build_table` for what each
-/// field is). `value` holds the bytes of the kind `kind & 0x3F` ([`BuildValue::reference`], [`BuildValue::link`]).
-#[derive(Clone, Debug, PartialEq)]
-pub struct BuildValue {
-    /// The class the value refers to (a reference's or link's target), or 0.
-    pub class: u32,
-    /// The u16 before the kind and the u16 after it, as stored.
-    pub before: u16,
-    pub after: u16,
-    /// The registry's field kind, flags included (`0x1C` a reference, `0x12` a link, `0x02000014` a pointer).
-    pub kind: u32,
-    pub value: Vec<u8>,
-}
-
-/// One node of a column's `PropertyPath`: its 41 bytes of fields as stored and the solver it points to.
-#[derive(Clone, Debug, PartialEq)]
-pub struct PathNode {
-    pub fields: Vec<u8>,
-    /// The solver object: its class and its body as stored (none where the pointer is null).
-    pub solver: Option<(u32, Vec<u8>)>,
-}
-
-/// A BuildTable's column (`BuildColumn`): what a row's property of this column sets.
-#[derive(Clone, Debug, PartialEq)]
-pub struct BuildColumn {
-    pub id: u64,
-    /// The `ApplyPassBitField`'s object id and its byte.
-    pub apply_id: u64,
-    pub apply_bits: u8,
-    /// The `PropertyPath`'s nodes and its two bytes (`DA663376` and `WholeArray`).
-    pub path: Vec<PathNode>,
-    pub path_bytes: [u8; 2],
-    /// The three u32 fields after the path (`2AC53EC4`, `40B8B662`, `A51AC878`): the first is the column's number,
-    /// 1 to the column count, that rows' properties name.
-    pub fields: [u32; 3],
-    /// The column's pointer to a BuildTable (its own table on 32,250 of 32,289).
-    pub table: BuildLink,
-    /// The two u32 before the declared value (1 and 0x2CECF817 on every column).
-    pub header: [u32; 2],
-    /// The value the column declares: the class and kind its rows' properties have.
-    pub declared: BuildValue,
-}
-
-/// A BuildTable's property of one row: the column's number and the value.
-#[derive(Clone, Debug, PartialEq)]
-pub struct BuildProperty {
-    pub column: u32,
-    pub value: BuildValue,
-}
-
-/// A BuildTable's row (`BuildRow`): kept as stored, weight and condition included; nothing here picks a row.
-#[derive(Clone, Debug, PartialEq)]
-pub struct BuildRow {
-    pub id: u64,
-    pub table: BuildLink,
-    pub weight: f32,
-    /// The `BuildTag`'s hash (the gender conditions 0x0B27268E and 0xE2B60126 on the rider tables).
-    pub condition: u32,
-    /// The `BuildTags`' object id.
-    pub tags_id: u64,
-    pub properties: Vec<BuildProperty>,
-}
-
-/// A `DynamicResources` object: the resources a row's properties name, as links.
-#[derive(Clone, Debug, PartialEq)]
-pub struct BuildResources {
-    pub id: u64,
-    pub links: Vec<BuildLink>,
-}
-
-/// A BuildTable resource body as stored (`read::build_table`): the engine's customization and settings table. RRAS
-/// calls it a Selector; the meaning of a row's properties is its claim.
-#[derive(Clone, Debug, PartialEq)]
-pub struct StoredBuildTable {
-    pub columns: Vec<BuildColumn>,
-    pub rows: Vec<BuildRow>,
-    /// The four bytes between the rows and the resources, as stored.
-    pub flags: [u8; 4],
-    pub resources: Vec<BuildResources>,
-}
-
 /// An Animation read for a rig (`anvil.clip`), on an entity named for it: the clip as stored and the rig it drives (the
 /// entity holding its `core.skeleton`), in the source's frame (`frame`, as the reader was given it). Each track names
 /// its bone by the CRC-32 of the bone's name; the rig's joints are named by that hash. `lower-anvil-clips` makes a
@@ -1627,5 +1098,37 @@ impl Component for AnvilClipBinding {
     fn references(&self, out: &mut Vec<Entity>) {
         out.push(self.clip);
         out.push(self.occurrence);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anvil_formats::floor::{FloorBlock, StoredFloorHeight, Trailer};
+
+    #[test]
+    fn a_floor_grid_takes_its_corner_and_its_cells_take_their_indices_in_order() {
+        // one 4x4-cell block, lo 100, hi 400; cell (r, c) index (4 r + c) mod 4
+        let bits: u32 = (0..16).map(|k| (k % 4) << (2 * k)).sum();
+        let stored = StoredFloorHeight {
+            cell: 2.0,
+            blocks: vec![FloorBlock {
+                lo: 100,
+                hi: 400,
+                indices: bits,
+            }],
+            trailer: Trailer {
+                scale: 0.061_879_4,
+                unknown: 338.86,
+                origin: [-4.0, -4.0, -3584.0],
+                cells: [4, 4],
+                rest: [0; 15],
+            },
+        };
+        let g = AnvilFloorHeight::new(stored, primase_core::frame::SourceFrame::WORLD);
+        assert_eq!((g.origin, g.cells), ([-4.0, -4.0], [4, 4]));
+        assert_eq!(g.cell(3, 0), Some((100, 400, 3)));
+        assert_eq!(g.cell(1, 2).map(|c| c.2), Some(1));
+        assert_eq!(g.cell(4, 0), None);
     }
 }

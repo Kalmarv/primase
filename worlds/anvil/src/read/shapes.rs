@@ -15,9 +15,10 @@ use primase_core::frame::SourceFrame;
 use primase_core::{Entity, Instance, Name, Transform, World};
 
 use crate::components::{AnvilMeshShape, CollisionMaterialRef};
-use crate::read::data::{Resource, read_entry};
-use crate::read::forge::Forge;
-use crate::read::mesh_shape::{MESH_SHAPE, MeshShape};
+use anvil_formats::archive::MAX_RECORD;
+use anvil_formats::data::{Resource, read_entry};
+use anvil_formats::forge::Forge;
+use anvil_formats::mesh_shape::{MESH_SHAPE, MeshShape};
 
 /// Why the shapes can't be read.
 #[derive(Debug, thiserror::Error)]
@@ -25,27 +26,24 @@ pub enum Error {
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
-    Forge(#[from] crate::read::forge::Error),
+    Forge(#[from] anvil_formats::forge::Error),
     #[error("entry {entry}: {source}")]
     Data {
         entry: usize,
         #[source]
-        source: crate::read::data::Error,
+        source: anvil_formats::data::Error,
     },
     #[error("entry {entry}: {source}")]
     Shape {
         entry: usize,
         #[source]
-        source: crate::read::mesh_shape::Error,
+        source: anvil_formats::mesh_shape::Error,
     },
     #[error("entry {entry}: type {type_id:#010x}, not a MeshShape ({MESH_SHAPE:#010x})")]
     NotAShape { entry: usize, type_id: u32 },
     #[error("entry {0}: past the forge's entries")]
     Entry(usize),
 }
-
-/// A decoded resource's largest size this reader accepts (a MeshShape's record; the forge's own sizes are checked).
-pub const MAX_RECORD: usize = 64 << 20;
 
 /// The MeshShapes at `entries` of the forge at `path` into `w`, their numbers converted through `frame`: the
 /// placements, in `entries`' order.

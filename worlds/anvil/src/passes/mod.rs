@@ -421,7 +421,7 @@ impl Choice for Static16Normal {
 /// `lower-anvil-mesh{static16-normal=p|omit}`: every Mesh's buffers ([`AnvilMesh`]) become a core mesh on its
 /// prototype: one triangle primitive with no material, or, where the reader read its Materials, a primitive per stored
 /// range, of the vertices its triangles use, drawn with the range's Material entity. Its streams are the attributes the
-/// engine's vertex declarations give ([`crate::read::vertex`], converted through the reader's frame): positions;
+/// engine's vertex declarations give ([`anvil_formats::vertex`], converted through the reader's frame): positions;
 /// normals and tangents (unit length, as glTF requires: the vertex programs don't normalise; the tangent's w the
 /// bitangent's sign, flipped where the frame mirrors); texture coordinates 0 and 1; the vertex colour as UNORM8 RGBA;
 /// and on a mesh with bones the skin: `Joints(k)` (the slot of each influence, U8x4) and `Weights(k)` (U8x4, summing to
@@ -3146,7 +3146,7 @@ mod tests {
                 kind: 7,
                 stride: 0,
                 vertex_records: Vec::new(),
-                attributes: crate::components::VertexAttributes::default(),
+                attributes: anvil_formats::vertex::VertexAttributes::default(),
                 skin: None,
             },
         );

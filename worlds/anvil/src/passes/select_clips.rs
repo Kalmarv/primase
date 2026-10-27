@@ -9,7 +9,7 @@
 //! which the game plays.
 //!
 //! - **Coverage** of a clip on a rig: of the clip's joint-driving tracks (a translation or rotation track of a bone,
-//!   not the root's motion of hash 0: [`StoredAnimation::joint_tracks`](crate::components::StoredAnimation)), the
+//!   not the root's motion of hash 0: [`StoredAnimation::joint_tracks`](anvil_formats::animation::StoredAnimation)), the
 //!   fraction whose bone hash names one of the rig's joints. The tracks of other kinds count for nothing either way.
 //! - **`min-coverage`** `F`, a fraction in (0, 1]: a clip stays when its coverage on the rig is at least `F`. The
 //!   program's choice, none read from the game.

@@ -2,10 +2,10 @@
 //! (Riders Republic build 25394987), against the notes' formulas for its G-buffer program (docs/material-spec.md
 //! §27.8, executed by the notes on WARP; the rows read from the program), worked here in f64 from the same sampled
 //! texels. A Material whose occlusion reads a mask it leaves unset is refused (counted), the others baked.
+use anvil_formats::archive::{Archive, At};
+use anvil_formats::material::{MATERIAL, StoredMaterial};
 use primase_anvil::components::{AnvilMaterial, AnvilTextureMap, MaterialBinding, MaterialValue};
 use primase_anvil::passes::BAKE_ANVIL_MATERIAL;
-use primase_anvil::read::archive::{Archive, At};
-use primase_anvil::read::material::{MATERIAL, StoredMaterial};
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassLog};

@@ -47,37 +47,38 @@ use crate::components::{
     AnvilGrass, AnvilGrassModel, AnvilLodDistances, AnvilLods, AnvilMaterial, AnvilMaterialOverrides,
     AnvilMesh, AnvilRig, AnvilRigOccurrence, AnvilSkeleton, AnvilSkinned, AnvilWater, BoundTexture,
     ClipCandidate, CollisionMaterialRef, DataLayerAction, DeferredDecal, GrassSystemSetup, LibraryClip,
-    MaterialBinding, MaterialValue, ShapeGeometry, StoredBuildTable, TextureFrom,
+    MaterialBinding, MaterialValue, ShapeGeometry, Stored, TextureFrom,
 };
-use crate::read::animation::{ANIMATION, StoredAnimation};
-use crate::read::archive::{Archive, At};
-use crate::read::build_table::{BUILD_TABLE, FEMALE, MALE};
-use crate::read::ddecal::{
+use crate::read::meshes::anvil_mesh;
+use crate::read::shapes::anvil_mesh_shape;
+use crate::read::textures;
+use anvil_formats::animation::{ANIMATION, StoredAnimation};
+use anvil_formats::archive::{Archive, At};
+use anvil_formats::build_table::StoredBuildTable;
+use anvil_formats::build_table::{BUILD_TABLE, FEMALE, MALE};
+use anvil_formats::ddecal::{
     DDECAL_MODEL, HOUDINI_DECAL_INSTANCER, STATIC_DDECAL, StoredDecalModel, StoredDeferredDecals,
 };
-use crate::read::entity::{
+use anvil_formats::entity::{
     CollisionFilter, ComponentBody, ENTITY, ENTITY_GROUP, Instance as Shown, MeshInstance, Refusal,
     SkeletonBinding, Slot, StoredEntity, StoredEntityGroup, Visual, query,
 };
-use crate::read::grass::{GRASS_PATTERN_LIBRARY, StoredGrassLibrary};
-use crate::read::impostor::{IMPOSTOR, StoredImpostor};
-use crate::read::lod::{LOD_SELECTOR, StoredLodSelector};
-use crate::read::material::{Payload, StoredMaterial, StoredTextureSet};
-use crate::read::mesh::{MATERIAL, MESH, StoredMesh, max_culling_distance};
-use crate::read::mesh_shape::{MESH_SHAPE, MeshShape};
-use crate::read::meshes::anvil_mesh;
-pub use crate::read::rider::VariantRow;
-use crate::read::rider::{part_variants, stated};
-use crate::read::rig::StoredRig;
-use crate::read::shape::{
+use anvil_formats::grass::{GRASS_PATTERN_LIBRARY, StoredGrassLibrary};
+use anvil_formats::impostor::{IMPOSTOR, StoredImpostor};
+use anvil_formats::lod::{LOD_SELECTOR, StoredLodSelector};
+use anvil_formats::material::{Payload, StoredMaterial, StoredTextureSet};
+use anvil_formats::mesh::{MATERIAL, MESH, StoredMesh, max_culling_distance};
+use anvil_formats::mesh_shape::{MESH_SHAPE, MeshShape};
+pub use anvil_formats::rider::VariantRow;
+use anvil_formats::rider::{part_variants, stated};
+use anvil_formats::rig::StoredRig;
+use anvil_formats::shape::{
     BOX_SHAPE, CAPSULE_SHAPE, REFERENCE_LIST_SHAPE, SPHERE_SHAPE, StoredBox, StoredCapsule,
     StoredReferenceList, StoredSphere,
 };
-use crate::read::shapes::anvil_mesh_shape;
-use crate::read::skeleton::{SKELETON, StoredSkeleton};
-use crate::read::template::{self, BindingKind};
-use crate::read::textures;
-use crate::read::water::{StoredWater, WATER_COMPONENT};
+use anvil_formats::skeleton::{SKELETON, StoredSkeleton};
+use anvil_formats::template::{self, BindingKind};
+use anvil_formats::water::{StoredWater, WATER_COMPONENT};
 
 /// Why an Entity can't be placed.
 #[derive(Debug, thiserror::Error)]
@@ -85,26 +86,26 @@ pub enum Error {
     #[error("{at:?}: Impostor: {why}")]
     Impostor { at: At, why: String },
     #[error(transparent)]
-    Archive(#[from] crate::read::archive::Error),
+    Archive(#[from] anvil_formats::archive::Error),
     #[error("{at:?}: type {found:#010x}, not {what}")]
     Type { at: At, found: u32, what: &'static str },
     #[error("{at:?}: {source}")]
     Entity {
         at: At,
         #[source]
-        source: crate::read::entity::Error,
+        source: anvil_formats::entity::Error,
     },
     #[error("{at:?}: {source}")]
     Lod {
         at: At,
         #[source]
-        source: crate::read::lod::Error,
+        source: anvil_formats::lod::Error,
     },
     #[error("{at:?}: {source}")]
     Mesh {
         at: At,
         #[source]
-        source: crate::read::mesh::Error,
+        source: anvil_formats::mesh::Error,
     },
     #[error(transparent)]
     Meshes(#[from] crate::read::meshes::Error),
@@ -118,7 +119,7 @@ pub enum Error {
     Shape {
         at: At,
         #[source]
-        source: crate::read::mesh_shape::Error,
+        source: anvil_formats::mesh_shape::Error,
     },
     #[error(transparent)]
     Shapes(#[from] crate::read::shapes::Error),
@@ -126,25 +127,25 @@ pub enum Error {
     Material {
         at: At,
         #[source]
-        source: crate::read::material::MaterialError,
+        source: anvil_formats::material::MaterialError,
     },
     #[error("{at:?}: {source}")]
     Bindings {
         at: At,
         #[source]
-        source: crate::read::template::BindingError,
+        source: anvil_formats::template::BindingError,
     },
     #[error("{at:?}: {source}")]
     Permutations {
         at: At,
         #[source]
-        source: crate::read::template::PermutationError,
+        source: anvil_formats::template::PermutationError,
     },
     #[error("{at:?}: {source}")]
     Features {
         at: At,
         #[source]
-        source: crate::read::template::FeatureError,
+        source: anvil_formats::template::FeatureError,
     },
     #[error(transparent)]
     TextureMap(#[from] crate::read::textures::Error),
@@ -152,13 +153,13 @@ pub enum Error {
     TextureSet {
         at: At,
         #[source]
-        source: crate::read::material::TextureSetError,
+        source: anvil_formats::material::TextureSetError,
     },
     #[error("{at:?}: {source}")]
     ShapeBody {
         at: At,
         #[source]
-        source: crate::read::shape::Error,
+        source: anvil_formats::shape::Error,
     },
     #[error("shape {id:#x}: {why}")]
     ShapeNesting { id: u64, why: String },
@@ -465,7 +466,7 @@ pub enum Variant {
     /// single such row: the weights of other tables are population odds, not a default.
     Stated,
     /// One row of a table the caller names, the row picked by its own condition (a colour's tag) instead of the gender:
-    /// the hair and beard colour tables ([`crate::read::rider::colours`]) list one row per colour, each linking the
+    /// the hair and beard colour tables ([`anvil_formats::rider::colours`]) list one row per colour, each linking the
     /// Materials that replace the generic ones its columns' path nodes name. Refused where no single row has that
     /// condition.
     Row { table: u64, condition: u32 },
@@ -1198,7 +1199,8 @@ impl<'a> Placer<'a> {
         if let Some(name) = self.name(at) {
             self.world.insert(e, Name(name));
         }
-        self.world.insert(e, template::shader_tables(&read, features));
+        self.world
+            .insert(e, Stored(template::shader_tables(&read, features)));
         self.shaders.insert(id, e);
         Ok(e)
     }
@@ -1522,7 +1524,7 @@ impl<'a> Placer<'a> {
             let forge = self
                 .archive
                 .forge(at.forge)
-                .ok_or(crate::read::archive::Error::NoForge(at.forge))?;
+                .ok_or(anvil_formats::archive::Error::NoForge(at.forge))?;
             let named = forge.names.get(at.entry).map(|n| n.type_id);
             (forge.index.get(at.entry).map(|i| i.id), named)
         };
@@ -1891,11 +1893,14 @@ impl<'a> Placer<'a> {
         let r = self.archive.resource(at)?;
         let (e, group) = match r.type_id {
             ENTITY => (
-                StoredEntity::parse(&r.body).map_err(|source| Error::Entity { at, source })?,
+                StoredEntity::parse(&r.body, crate::components::component_types::is_component_type)
+                    .map_err(|source| Error::Entity { at, source })?,
                 false,
             ),
             ENTITY_GROUP => {
-                let g = StoredEntityGroup::parse(&r.body).map_err(|source| Error::Entity { at, source })?;
+                let g =
+                    StoredEntityGroup::parse(&r.body, crate::components::component_types::is_component_type)
+                        .map_err(|source| Error::Entity { at, source })?;
                 placed.members.extend(g.members.iter().map(|m| m.id));
                 (g.entity, true)
             }
@@ -1946,7 +1951,7 @@ impl<'a> Placer<'a> {
                 .collect(),
         });
         // a GrassVisual shows its model's Mesh once, at the owner's matrix: a Visual of that Mesh, marked below
-        let grass: Vec<(Visual, &crate::read::entity::GrassVisual)> = e
+        let grass: Vec<(Visual, &anvil_formats::entity::GrassVisual)> = e
             .components
             .iter()
             .filter_map(|c| match &c.body {
@@ -2000,25 +2005,25 @@ impl<'a> Placer<'a> {
             .chain(grass.iter().map(|(v, g)| (v, false, Some(*g))))
         {
             if let Shown::Raw {
-                kind: crate::read::entity::LIGHT_INSTANCE,
+                kind: anvil_formats::entity::LIGHT_INSTANCE,
                 bytes,
                 id,
             } = &v.instance
             {
-                let read = (|| -> Result<(u64, crate::read::light::StoredSpotLight), String> {
-                    let id = crate::read::light::instance_reference(bytes)?;
+                let read = (|| -> Result<(u64, anvil_formats::light::StoredSpotLight), String> {
+                    let id = anvil_formats::light::instance_reference(bytes)?;
                     let at = self
                         .archive
                         .find(id)
                         .ok_or("light reference is absent from the archive")?;
                     let resource = self.archive.resource(at).map_err(|e| e.to_string())?;
-                    if resource.type_id != crate::read::light::SPOT_LIGHT {
+                    if resource.type_id != anvil_formats::light::SPOT_LIGHT {
                         return Err(format!(
                             "light {id:#x} is type {:#x}, not SpotLight",
                             resource.type_id
                         ));
                     }
-                    Ok((id, crate::read::light::StoredSpotLight::parse(&resource.body)?))
+                    Ok((id, anvil_formats::light::StoredSpotLight::parse(&resource.body)?))
                 })();
                 match read {
                     Ok((index_id, stored)) => {
@@ -2538,7 +2543,7 @@ impl<'a> Placer<'a> {
 )]
 mod shape_tests {
     use super::*;
-    use crate::read::shape::{REFERENCE_LIST_SHAPE, SPHERE_SHAPE};
+    use anvil_formats::shape::{REFERENCE_LIST_SHAPE, SPHERE_SHAPE};
 
     fn floats(v: &[f32]) -> Vec<u8> {
         v.iter().flat_map(|x| x.to_le_bytes()).collect()
@@ -2604,7 +2609,7 @@ mod shape_tests {
         [block(&[]), block(&r)].concat()
     }
 
-    /// A version 27 forge holding `entries` (index id, type, payload) as `crate::read::forge`'s reader lays it.
+    /// A version 27 forge holding `entries` (index id, type, payload) as `anvil_formats::forge`'s reader lays it.
     fn forge(entries: &[(u64, u32, Vec<u8>)]) -> Vec<u8> {
         const INDEX_TABLE: usize = 1142;
         let n = entries.len();
@@ -2671,7 +2676,7 @@ mod shape_tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("shapes.forge");
         std::fs::write(&path, forge(&entries)).unwrap();
-        let mut archive = crate::read::archive::Archive::open(&[&path]).unwrap();
+        let mut archive = anvil_formats::archive::Archive::open(&[&path]).unwrap();
         let mut world = World::new();
         let mut placer = Placer::new(
             &mut archive,

@@ -1,9 +1,9 @@
 //! A Skeleton body laid out by hand in the layout of Riders Republic's (docs/types.md "Skeleton"), two bones, one
 //! pose group of one pose, and `lower-anvil-skeleton` on it: joints with their parents, rests and the hash names, the
 //! frame conversion, the skeleton's own transform composed or refused.
+use anvil_formats::skeleton::StoredSkeleton;
 use primase_anvil::components::AnvilSkeleton;
 use primase_anvil::passes::LOWER_ANVIL_SKELETON;
-use primase_anvil::read::skeleton::StoredSkeleton;
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassLog};
 use primase_core::skeleton::{JointId, Rest, Skeleton};

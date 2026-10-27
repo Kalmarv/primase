@@ -1,7 +1,8 @@
 //! Source records whose data must not disappear between parsing and inspection.
-use super::stored::{
-    GridDescription, Reference, StoredGiDyn, StoredGridCellDataBlock, StoredGridPartition, StoredLook,
-};
+use anvil_formats::gidyn::StoredGiDyn;
+use anvil_formats::grid::{GridDescription, StoredGridCellDataBlock, StoredGridPartition};
+use anvil_formats::look::StoredLook;
+use anvil_formats::reference::Reference;
 use primase_core::{Component, Geometry, JsonError};
 use serde_json::{Value, json};
 

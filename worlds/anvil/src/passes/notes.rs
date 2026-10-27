@@ -220,7 +220,9 @@ mod tests {
     use super::*;
     use crate::components::SourceComponent;
     use crate::components::component_types::COMPONENT_TYPES;
-    use crate::components::stored::{StoredGiDyn, StoredGridPartition, StoredLook};
+    use anvil_formats::gidyn::StoredGiDyn;
+    use anvil_formats::grid::StoredGridPartition;
+    use anvil_formats::look::StoredLook;
 
     /// A world with one of each Anvil content fact, and a GI frame of two probes.
     fn world() -> World {

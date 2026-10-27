@@ -262,7 +262,7 @@ impl BakeAnvilSurface {
         if material
             .flags
             .booleans
-            .get(crate::components::MaterialFlags::ALPHA_TEST_ENABLED)
+            .get(anvil_formats::material::MaterialFlags::ALPHA_TEST_ENABLED)
             == Some(&1)
         {
             return Err("alpha-tested surface requires a coverage-aware chart contract".into());
@@ -1143,7 +1143,7 @@ mod tests {
             defaults: vec![],
             frame: primase_core::frame::SourceFrame::WORLD,
             shaders: None,
-            flags: crate::components::MaterialFlags {
+            flags: anvil_formats::material::MaterialFlags {
                 blend_mode: 0,
                 alpha_display_mode: 0,
                 alpha_test_value: 0,
@@ -1200,7 +1200,7 @@ mod tests {
             defaults: vec![],
             frame: primase_core::frame::SourceFrame::WORLD,
             shaders: None,
-            flags: crate::components::MaterialFlags {
+            flags: anvil_formats::material::MaterialFlags {
                 blend_mode: 0,
                 alpha_display_mode: 0,
                 alpha_test_value: 0,

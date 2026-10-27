@@ -9,18 +9,18 @@
 //! with the pixel stage only.
 use std::collections::{BTreeMap, BTreeSet};
 
+use anvil_formats::archive::{Archive, At};
+use anvil_formats::build_table::BUILD_TABLE;
+use anvil_formats::material::{MATERIAL, StoredMaterial};
+use anvil_formats::mesh::MESH;
+use anvil_formats::rider::{HAIR_COLOURS, colours};
+use anvil_formats::skeleton::SKELETON;
 use iridia_interface::Stage;
 use primase_anvil::components::{AnvilMaterial, AnvilMesh};
 use primase_anvil::passes::{MESH_LAYOUT_FIELD, RESOLVE_ANVIL_SHADERS};
-use primase_anvil::read::archive::{Archive, At};
-use primase_anvil::read::build_table::BUILD_TABLE;
-use primase_anvil::read::material::{MATERIAL, StoredMaterial};
-use primase_anvil::read::mesh::MESH;
 use primase_anvil::read::placements::{
     Gender, InstancedLevels, Placed, Placer, RiderPartChoice, RiderSpec, Variant,
 };
-use primase_anvil::read::rider::{HAIR_COLOURS, colours};
-use primase_anvil::read::skeleton::SKELETON;
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassLog};
 use primase_core::shader::ShaderBinding;

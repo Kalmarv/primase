@@ -1,8 +1,8 @@
 //! Derive the generic base-diffuse UV composition from the exact stored vertex program.
 //! TEXCOORD7.xy is a known generic interface, not an equation reimplemented here. Its active graph must
 //! use only raw TEXCOORD0.xy and the six established base-matrix words. Frame and other outputs are cut.
-use super::{Database, Key, Payload};
 use crate::components::MaterialRef;
+use anvil_formats::shaunwhite::shaders::{Database, Key, Payload};
 use iridia::{
     Program,
     flow::{At, Node, Values},

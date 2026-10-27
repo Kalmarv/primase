@@ -17,7 +17,8 @@
 //! a surface the bake leaves dark still has. The bake itself, which adds the baked sun, shadows, occlusion and local
 //! light pools to it, is not carried, and a surface whose baked value is near 0 (a tower's shadowed faces, a tunnel
 //! the bake leaves dark) has the ambient alone, as in the game. The colour's alpha (the uninfluenced level) is not used.
-use crate::components::{LightShape, LightSource, SkySettings};
+use crate::components::{LightSource, SkySettings};
+use anvil_formats::shaunwhite::light::LightShape;
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{

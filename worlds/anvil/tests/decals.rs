@@ -5,6 +5,8 @@
 //! vertex lies on the ground mesh `lower-anvil-terrain` draws with the same choices. And every DDecalModel of the
 //! Riders Republic forge (build 25394987) through the pass: 69 by name (the patch's one model replaces the base's
 //! MAD_DD_Orange_Line_01A: 70 with it), 16 drawn, 53 of the terrain family left out.
+use anvil_formats::archive::{Archive, At};
+use anvil_formats::ddecal::{DDECAL_MODEL, StoredDecalModel};
 use primase_anvil::components::{
     AnvilDecalModel, AnvilDeferredDecals, AnvilTerrain, AnvilTextureMap, DeferredDecal, TerrainTile,
 };
@@ -12,8 +14,6 @@ use primase_anvil::passes::{
     CellPoint, FamilyRule, GroundColour, GroundNormals, LowerAnvilDecals, LowerAnvilTerrain, Pieces, Steep,
     TerrainDecals,
 };
-use primase_anvil::read::archive::{Archive, At};
-use primase_anvil::read::ddecal::{DDECAL_MODEL, StoredDecalModel};
 use primase_anvil::read::textures::read_texture_map;
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Pass, PassLog};

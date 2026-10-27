@@ -1,12 +1,11 @@
 #![allow(clippy::unwrap_used)]
 //! Hand-worked SDB2 source/table/payload fixture; layout is corroborated by the native version-39 loader.
 //! Real-file checks frame every record and metadata tail, not a second home-made decoder's output.
-use iridia_interface::Stage;
+use anvil_formats::shaunwhite::shaders::{Payload, Stage};
 use primase_core::{World, gate::GateReport, gate::Tolerance};
 use primase_shaunwhite::{
     components::ShaderLibrary,
     read::shaders::{read, read_into},
-    shaders::Payload,
 };
 use primase_testdata::{Game, install_file};
 
@@ -185,6 +184,16 @@ fn hand_worked_database_retains_both_programs_and_every_metadata_group() {
         &old,
         &world.resource::<ShaderLibrary>().unwrap().0
     ));
+}
+
+#[test]
+fn a_stage_program_that_is_not_its_stated_stage_is_refused_where_it_is_stored() {
+    let mut b = fixture();
+    // the utility vertex record's program (kind 5, at 336) stated as a pixel program
+    b[338..340].copy_from_slice(&0xffffu16.to_le_bytes());
+    assert!(anvil_formats::shaunwhite::shaders::read(&b).is_ok());
+    let error = read(&b).unwrap_err().to_string();
+    assert!(error.contains("stage bytecode at 0x150"), "{error}");
 }
 
 #[test]

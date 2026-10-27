@@ -106,32 +106,32 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::Path;
 
-use primase_anvil::read::data::{Resource, read_entry};
-use primase_anvil::read::entity::{
+use anvil_formats::archive::MAX_RECORD;
+use anvil_formats::data::{Resource, read_entry};
+use anvil_formats::entity::{
     BoundingVolume, ComponentBody, ENTITY, ENTITY_GROUP, Instance, Slot, StoredEntity, StoredEntityGroup,
     Visual,
 };
-use primase_anvil::read::forge::Forge;
-use primase_anvil::read::grid::{
+use anvil_formats::forge::Forge;
+use anvil_formats::grid::{
     self, GRID_CELL_DATA_BLOCK, GRID_PARTITION, StoredGridCellDataBlock, StoredGridPartition, WORLD,
 };
-use primase_anvil::read::lod::{LOD_SELECTOR, StoredLodSelector};
-use primase_anvil::read::material::{
+use anvil_formats::lod::{LOD_SELECTOR, StoredLodSelector};
+use anvil_formats::material::{
     MATERIAL, Payload, StoredMaterial, StoredTextureSet, TEXTURE_MAP, TEXTURE_SET,
 };
-use primase_anvil::read::mesh::{Layout, MESH, StoredMesh};
-use primase_anvil::read::mesh_shape::{MESH_SHAPE, MeshShape};
-use primase_anvil::read::mip::{COMPILED_MIP, StoredMip};
-use primase_anvil::read::shape::{
+use anvil_formats::mesh::{Layout, MESH, StoredMesh};
+use anvil_formats::mesh_shape::{MESH_SHAPE, MeshShape};
+use anvil_formats::mip::{COMPILED_MIP, StoredMip};
+use anvil_formats::shape::{
     BOX_SHAPE, CAPSULE_SHAPE, REFERENCE_LIST_SHAPE, SPHERE_SHAPE, StoredBox, StoredCapsule,
     StoredReferenceList, StoredSphere,
 };
-use primase_anvil::read::shapes::MAX_RECORD;
-use primase_anvil::read::template::{self, MATERIAL_TEMPLATE};
-use primase_anvil::read::terrain_material::{
+use anvil_formats::template::{self, MATERIAL_TEMPLATE};
+use anvil_formats::terrain_material::{
     COLLISION_MATERIAL, StoredMaterialBank, StoredTerrainMaterial, TERRAIN_MATERIAL, TERRAIN_MATERIAL_BANK,
 };
-use primase_anvil::read::texture::{self, StoredTextureMap};
+use anvil_formats::texture::{self, StoredTextureMap};
 use primase_core::TexFormat;
 use primase_testdata::{Game, OracleSet, install};
 use serde_json::Value;
@@ -898,28 +898,34 @@ fn census_forge(
                     ));
                 })
                 .map_err(|e| e.to_string()),
-            ENTITY => StoredEntity::parse(&r.body)
-                .map(|e| {
-                    entity_outcomes(tally, &e);
-                    rigid_bodies(tally, &e, &forge);
-                    levels.gather(&e, false);
-                })
-                .map_err(|e| e.to_string()),
-            ENTITY_GROUP => StoredEntityGroup::parse(&r.body)
-                .map(|g| {
-                    entity_outcomes(tally, &g.entity);
-                    rigid_bodies(tally, &g.entity, &forge);
-                    levels.gather(&g.entity, true);
-                    tally.outcome(format!(
-                        "{} members, last word {}",
-                        if g.members.is_empty() { "no" } else { "with" },
-                        g.word
-                    ));
-                    for v in g.entity.visuals() {
-                        tally.outcome(format!("Visual head {:02x?}", v.head));
-                    }
-                })
-                .map_err(|e| e.to_string()),
+            ENTITY => StoredEntity::parse(
+                &r.body,
+                primase_anvil::components::component_types::is_component_type,
+            )
+            .map(|e| {
+                entity_outcomes(tally, &e);
+                rigid_bodies(tally, &e, &forge);
+                levels.gather(&e, false);
+            })
+            .map_err(|e| e.to_string()),
+            ENTITY_GROUP => StoredEntityGroup::parse(
+                &r.body,
+                primase_anvil::components::component_types::is_component_type,
+            )
+            .map(|g| {
+                entity_outcomes(tally, &g.entity);
+                rigid_bodies(tally, &g.entity, &forge);
+                levels.gather(&g.entity, true);
+                tally.outcome(format!(
+                    "{} members, last word {}",
+                    if g.members.is_empty() { "no" } else { "with" },
+                    g.word
+                ));
+                for v in g.entity.visuals() {
+                    tally.outcome(format!("Visual head {:02x?}", v.head));
+                }
+            })
+            .map_err(|e| e.to_string()),
             SPHERE_SHAPE => StoredSphere::parse(&r.body)
                 .map(|x| {
                     tally.outcome(if x.material.is_some() {

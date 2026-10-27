@@ -1,14 +1,14 @@
 //! Real Entities placed into a world through an archive of Riders Republic's forges (searched patch first: a stated
 //! order), then their meshes and levels lowered under the pass manager with its checks on. Instance counts and scales
 //! as the Riders Republic placement notes give them (docs/placement.md §14).
+use anvil_formats::archive::{Archive, At};
+use anvil_formats::entity::{ComponentBody, ENTITY, ENTITY_GROUP, StoredEntity, StoredEntityGroup};
+use anvil_formats::shape::{BOX_SHAPE, CAPSULE_SHAPE, REFERENCE_LIST_SHAPE, SPHERE_SHAPE};
 use primase_anvil::components::{
     AnvilCollisionShape, AnvilLods, AnvilMaterialOverrides, AnvilMesh, AnvilMeshShape, ShapeGeometry,
 };
 use primase_anvil::passes::{LowerAnvilLods, LowerAnvilMesh, Static16Normal};
-use primase_anvil::read::archive::{Archive, At};
-use primase_anvil::read::entity::{ComponentBody, ENTITY, ENTITY_GROUP, StoredEntity, StoredEntityGroup};
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
-use primase_anvil::read::shape::{BOX_SHAPE, CAPSULE_SHAPE, REFERENCE_LIST_SHAPE, SPHERE_SHAPE};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::{Instance, Lods, Mesh, Name, Transform, World};
@@ -224,9 +224,18 @@ fn collision_lies_within_its_owners_bounds() {
             continue;
         };
         let e = if kind == ENTITY_GROUP {
-            StoredEntityGroup::parse(&r.body).ok().map(|g| g.entity)
+            StoredEntityGroup::parse(
+                &r.body,
+                primase_anvil::components::component_types::is_component_type,
+            )
+            .ok()
+            .map(|g| g.entity)
         } else {
-            StoredEntity::parse(&r.body).ok()
+            StoredEntity::parse(
+                &r.body,
+                primase_anvil::components::component_types::is_component_type,
+            )
+            .ok()
         };
         let Some(e) = e.filter(|e| e.scale == 1.0) else {
             continue;
@@ -367,7 +376,11 @@ fn instances_place_the_levels_dependencies_fill_under_every() {
         let mut archive = Archive::open(&order.map(|f| dir.join(f))).expect("archive");
         let at = named(&archive, 1, "MAD_HWIGRP_AREA52_VansPark_TowerBuildingD_Part2_01");
         let r = archive.resource(at).expect("resource");
-        let g = StoredEntityGroup::parse(&r.body).expect("group");
+        let g = StoredEntityGroup::parse(
+            &r.body,
+            primase_anvil::components::component_types::is_component_type,
+        )
+        .expect("group");
         assert!(
             g.entity
                 .visuals()

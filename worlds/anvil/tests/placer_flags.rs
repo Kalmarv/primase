@@ -5,13 +5,13 @@
 //! prototype carries its selector's switch distances (each level's far limit, rising), its finest level the
 //! prototype's own where the selector's first levels hold no reference: the dependencies fill them (the `_LOD0` and
 //! `_LOD1` meshes), so level 0 is present.
+use anvil_formats::archive::{Archive, At};
+use anvil_formats::entity::{ComponentBody, ENTITY, StoredEntity, query};
+use anvil_formats::lod::{LOD_SELECTOR, StoredLodSelector};
 use primase_anvil::components::{
     AnvilCollisionFilter, AnvilEntityState, AnvilFake, AnvilLodDistances, AnvilLods,
 };
 use primase_anvil::passes::{CollisionOnly, Keep, SelectAnvilEntities};
-use primase_anvil::read::archive::{Archive, At};
-use primase_anvil::read::entity::{ComponentBody, ENTITY, StoredEntity, query};
-use primase_anvil::read::lod::{LOD_SELECTOR, StoredLodSelector};
 use primase_anvil::read::placements::{InstancedCollision, InstancedLevels, Placed, Placer};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Pass, PassLog};
@@ -33,8 +33,10 @@ fn first(archive: &mut Archive, forge: usize, pick: impl Fn(&str, &StoredEntity)
             continue;
         }
         let body = archive.resource(At { forge, entry }).expect("entity").body;
-        if let Ok(e) = StoredEntity::parse(&body)
-            && pick(&n.name, &e)
+        if let Ok(e) = StoredEntity::parse(
+            &body,
+            primase_anvil::components::component_types::is_component_type,
+        ) && pick(&n.name, &e)
         {
             return At { forge, entry };
         }
@@ -81,7 +83,10 @@ fn the_placer_reads_the_entity_flags() {
                 continue;
             }
             let body = archive.resource(At { forge: 1, entry }).expect("entity").body;
-            let Ok(e) = StoredEntity::parse(&body) else {
+            let Ok(e) = StoredEntity::parse(
+                &body,
+                primase_anvil::components::component_types::is_component_type,
+            ) else {
                 continue;
             };
             let Some(object) = e.visuals().next().and_then(|v| v.object) else {
@@ -100,12 +105,10 @@ fn the_placer_reads_the_entity_flags() {
                 && s.levels[2].reference.is_some()
                 && s.dependencies.len() == 2
                 && e.visuals().all(|v| match &v.instance {
-                    primase_anvil::read::entity::Instance::Lod { slots, .. } => {
-                        slots.iter().all(|s| match s {
-                            primase_anvil::read::entity::Slot::Mesh(m) => m.instances.is_empty(),
-                            _ => true,
-                        })
-                    }
+                    anvil_formats::entity::Instance::Lod { slots, .. } => slots.iter().all(|s| match s {
+                        anvil_formats::entity::Slot::Mesh(m) => m.instances.is_empty(),
+                        _ => true,
+                    }),
                     _ => true,
                 })
             {

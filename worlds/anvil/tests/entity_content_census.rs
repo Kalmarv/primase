@@ -4,14 +4,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use primase_anvil::read::{
+use anvil_formats::{
     archive::{Archive, At},
-    component_types::component_name,
     ddecal::{HOUDINI_DECAL_INSTANCER, STATIC_DDECAL},
     entity::{ComponentBody, ENTITY, ENTITY_GROUP, StoredEntity, StoredEntityGroup},
     grid::{GRID_CELL_DATA_BLOCK, StoredGridCellDataBlock},
     water::WATER_COMPONENT,
 };
+use primase_anvil::read::component_types::component_name;
 use primase_testdata::{Game, install, scratch};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -148,7 +148,11 @@ fn embedded_components_report_semantic_gaps_and_grid_listed_owners() {
                         let block = StoredGridCellDataBlock::parse(&r.body).map_err(|e| e.to_string())?;
                         roots.extend(block.objects.iter().map(|r| r.id));
                     } else {
-                        let group = StoredEntityGroup::parse(&r.body).map_err(|e| e.to_string())?;
+                        let group = StoredEntityGroup::parse(
+                            &r.body,
+                            primase_anvil::components::component_types::is_component_type,
+                        )
+                        .map_err(|e| e.to_string())?;
                         groups
                             .entry(id)
                             .or_default()
@@ -208,11 +212,18 @@ fn embedded_components_report_semantic_gaps_and_grid_listed_owners() {
                         return Err("index/resource type disagreement".to_owned());
                     }
                     if kind == ENTITY {
-                        StoredEntity::parse(&r.body).map_err(|e| e.to_string())
+                        StoredEntity::parse(
+                            &r.body,
+                            primase_anvil::components::component_types::is_component_type,
+                        )
+                        .map_err(|e| e.to_string())
                     } else {
-                        StoredEntityGroup::parse(&r.body)
-                            .map(|g| g.entity)
-                            .map_err(|e| e.to_string())
+                        StoredEntityGroup::parse(
+                            &r.body,
+                            primase_anvil::components::component_types::is_component_type,
+                        )
+                        .map(|g| g.entity)
+                        .map_err(|e| e.to_string())
                     }
                 });
             let entity = match parsed {

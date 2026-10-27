@@ -1,7 +1,5 @@
-//! Anvil engine containers: the forge archive's index ([`read::forge`]: a `.forge` file of version 27 opened and its
-//! entries listed, offset, size and both ids as stored, with each entry's name record) and its entries' data blocks
-//! ([`read::data`]: compression version 2, algorithm 5 (zstd), checksum checked, the resource's header parsed, its
-//! body kept as stored).
+//! Anvil worlds: forge archives read through `anvil_formats` into a world (placements, terrain, meshes, collision,
+//! textures and the source records as components), and the passes that lower them to core meanings.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod components;

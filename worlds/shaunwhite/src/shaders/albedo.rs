@@ -4,7 +4,7 @@
 //! mask, COLOR0 and material modulation/alpha controls. Texture coordinates remain the original expressions.
 //! Lighting, fog, influence colour control and tone mapping stay in the original tail. This bounded derivation
 //! refuses other families, extra value inputs and ambiguous frontiers; it never substitutes another permutation.
-use super::{Database, Key, Payload};
+use anvil_formats::shaunwhite::shaders::{Database, Key, Payload};
 use iridia::flow::{At, BinaryOperator, Node, NodeId, Op, UnaryOperator, Values};
 use iridia::{Program, source_hash};
 use iridia_d3d9::{Projection, Register};

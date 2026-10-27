@@ -155,7 +155,8 @@ fn wind(i: &Inputs<'_>, first: u32, last: u32, debug: u32, push: &mut impl FnMut
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{AnvilMaterial, MaterialFlags};
+    use crate::components::AnvilMaterial;
+    use anvil_formats::material::MaterialFlags;
 
     fn material(template: &str, scalars: &[(u32, f32)]) -> AnvilMaterial {
         AnvilMaterial {

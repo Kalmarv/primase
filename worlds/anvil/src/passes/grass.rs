@@ -16,7 +16,7 @@
 //!
 //! - **Where and which** (read; the picker is the engine's reading, docs/vegetation.md §3.4): a sample whose group is
 //!   not 254 (none) and whose weight (slot 4, halved) is not 0 takes that group's rules; each rule names a model by
-//!   its number ([`crate::read::grass::StoredGrassRule::model`], the setup's position). A group or model that doesn't
+//!   its number ([`anvil_formats::grass::StoredGrassRule::model`], the setup's position). A group or model that doesn't
 //!   exist is counted and left out (the library's rules name models 46 to 50 of its 46).
 //! - **How many** (chosen: `density`, `tiling`): the notes cannot say whether `Density` is a per-sample probability, a
 //!   count per square metre or scaled by the tiling. `density=per-sample` draws, for each candidate, one plant with

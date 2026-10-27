@@ -5,8 +5,8 @@ use primase_core::frame::SourceFrame;
 use primase_core::{Entity, Instance, Name, Shape as CoreShape, Transform, World};
 
 use crate::components::{CollisionPlacedBy, CollisionSource, CollisionSurfaces};
-use crate::read::collision::{Child, SURFACE_MATERIAL, Shape};
-use crate::read::scene;
+use anvil_formats::shaunwhite::collision::{Child, SURFACE_MATERIAL, Shape};
+use anvil_formats::shaunwhite::scene;
 
 use super::level::Index;
 

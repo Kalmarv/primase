@@ -3,11 +3,12 @@
 //! games/riders-republic docs/recon/texture-format-validation.md, bff28dc), and the top levels decoded.
 use std::fs::File;
 
-use primase_anvil::read::data::{Resource, read_entry};
-use primase_anvil::read::forge::Forge;
-use primase_anvil::read::mip::{COMPILED_MIP, StoredMip};
-use primase_anvil::read::shapes::MAX_RECORD;
-use primase_anvil::read::texture::{self, StoredTextureMap, TEXTURE_MAP};
+use anvil_formats::archive::MAX_RECORD;
+use anvil_formats::data::{Resource, read_entry};
+use anvil_formats::forge::Forge;
+use anvil_formats::mip::{COMPILED_MIP, StoredMip};
+use anvil_formats::texture::{self, StoredTextureMap, TEXTURE_MAP};
+use primase_anvil::read::textures::tex_format;
 use primase_core::TexFormat;
 use primase_testdata::{Game, install, install_file};
 use primase_texcodec::{Bcdec, Decoder, TexDecoder};
@@ -66,7 +67,7 @@ fn texture_maps_read_their_levels_and_decode() {
             (t.width, t.height, t.mip_count, t.field_25),
             (256, 128, 9, field_25)
         );
-        assert_eq!(texture::format(t.format), Some(format));
+        assert_eq!(texture::format(t.format).map(tex_format), Some(format));
         assert!(t.references.is_empty());
         let held: Vec<String> = t.levels().expect("levels").into_iter().map(sha).collect();
         assert_eq!(held, levels, "entry {entry}");
@@ -99,7 +100,7 @@ fn texture_maps_read_their_levels_and_decode() {
     let r = resource(31);
     let t = StoredTextureMap::parse(&r.body).expect("texture map");
     assert_eq!((t.width, t.height, t.mip_count), (1024, 1024, 11));
-    assert_eq!(texture::format(t.format), Some(TexFormat::Bc7));
+    assert_eq!(texture::format(t.format).map(tex_format), Some(TexFormat::Bc7));
     let ids: Vec<u64> = t.references.iter().map(|m| m.id).collect();
     assert_eq!(ids, [1_797_335_016_525, 1_797_335_016_526]);
     assert_eq!((t.pixels.len(), t.levels().expect("levels").len()), (87_408, 9));
@@ -226,7 +227,7 @@ fn agreed_format_codes_decode_as_a_third_party_decoder_does() {
             (code, w, h, external),
             "code {code}"
         );
-        assert_eq!(texture::format(code), Some(format));
+        assert_eq!(texture::format(code).map(tex_format), Some(format));
         let level0 = match t.references.first() {
             Some(m) => {
                 StoredMip::parse(&resource(forge.find(m.id).expect("in this forge")).body)

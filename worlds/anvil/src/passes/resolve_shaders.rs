@@ -87,8 +87,9 @@ use primase_core::{
 };
 
 use crate::components::{
-    AnvilLayout, AnvilMaterial, AnvilMesh, AnvilShaders, MaterialBinding, MaterialFlags, MaterialValue,
+    AnvilLayout, AnvilMaterial, AnvilMesh, AnvilShaders, MaterialBinding, MaterialValue,
 };
+use anvil_formats::material::MaterialFlags;
 
 /// What a texture binding with no texture becomes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1495,6 +1496,8 @@ pub(super) fn output_bindings(interface: &Interface, class: Option<u8>, opaque: 
 mod key_tests {
     use super::tests::material;
     use super::*;
+    use crate::components::Stored;
+    use anvil_formats::template::ShaderTables;
 
     /// A template whose feature node has the given features set (byte 0, the object's, then one byte per feature).
     fn template(features: &[usize]) -> AnvilShaders {
@@ -1503,12 +1506,12 @@ mod key_tests {
         for &n in features {
             node[n + 1] = 1;
         }
-        AnvilShaders {
+        Stored(ShaderTables {
             pixel: Vec::new(),
             vertex: Vec::new(),
             programs: Vec::new(),
             feature_node: node,
-        }
+        })
     }
 
     /// A Material that tests alpha (AlphaTestEnabled, a value above 0, blend mode 0) is drawn with its template's discard

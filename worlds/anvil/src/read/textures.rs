@@ -2,30 +2,32 @@
 //! its own) with its [`AnvilTextureMap`]. The stored transfer flag determines colour space; cubes, arrays and volumes
 //! keep their shape in `core.texture_layers`, and the role stays other until a lowering states it.
 
-use primase_core::{ColorSpace, Entity, Name, TexRole, Texture, TextureLayers, TextureShape, World};
+use primase_core::{
+    ColorSpace, Entity, Name, TexFormat, TexRole, Texture, TextureLayers, TextureShape, World,
+};
 
 use crate::components::AnvilTextureMap;
-use crate::read::archive::{Archive, At};
-use crate::read::material::{StoredTextureSet, TEXTURE_MAP, TEXTURE_SET};
-use crate::read::mip::StoredMip;
-use crate::read::texture::{self, StoredTextureMap};
+use anvil_formats::archive::{Archive, At};
+use anvil_formats::material::{StoredTextureSet, TEXTURE_MAP, TEXTURE_SET};
+use anvil_formats::mip::StoredMip;
+use anvil_formats::texture::{self, StoredTextureMap};
 
 /// Why a TextureMap or TextureSet can't be read.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
-    Archive(#[from] crate::read::archive::Error),
+    Archive(#[from] anvil_formats::archive::Error),
     #[error("{at:?}: {source}")]
     Texture {
         at: At,
         #[source]
-        source: crate::read::texture::Error,
+        source: anvil_formats::texture::Error,
     },
     #[error("{at:?}: {source}")]
     TextureSet {
         at: At,
         #[source]
-        source: crate::read::material::TextureSetError,
+        source: anvil_formats::material::TextureSetError,
     },
     #[error("{at:?}: unsupported or inconsistent layered texture layout ({layers} layers)")]
     Layers { at: At, layers: u32 },
@@ -37,8 +39,27 @@ pub enum Error {
     MipBody {
         at: At,
         #[source]
-        source: crate::read::mip::Error,
+        source: anvil_formats::mip::Error,
     },
+}
+
+/// Core's texture format for a TextureMap's format.
+pub fn tex_format(format: texture::Format) -> TexFormat {
+    match format {
+        texture::Format::Bgra8Unorm => TexFormat::Bgra8Unorm,
+        texture::Format::Rgba8Snorm => TexFormat::Rgba8Snorm,
+        texture::Format::Bc1 => TexFormat::Bc1,
+        texture::Format::Bc2 => TexFormat::Bc2,
+        texture::Format::Bc3 => TexFormat::Bc3,
+        texture::Format::Bc4Unorm => TexFormat::Bc4Unorm,
+        texture::Format::Bc5Unorm => TexFormat::Bc5Unorm,
+        texture::Format::Bc6hUfloat => TexFormat::Bc6hUfloat,
+        texture::Format::Bc6hSfloat => TexFormat::Bc6hSfloat,
+        texture::Format::Bc7 => TexFormat::Bc7,
+        texture::Format::A8Unorm => TexFormat::A8Unorm,
+        texture::Format::R8Unorm => TexFormat::R8Unorm,
+        texture::Format::Rgba16Float => TexFormat::Rgba16Float,
+    }
 }
 
 /// The TextureMap `id` names as a new entity: `None` where `id` is in no forge or isn't a TextureMap.
@@ -54,7 +75,7 @@ pub fn read_texture_map(archive: &mut Archive, w: &mut World, id: u64) -> Result
     if !t.has_image() {
         return Ok(None);
     }
-    let Some(format) = texture::format(t.format) else {
+    let Some(format) = texture::format(t.format).map(tex_format) else {
         return Err(Error::Codec { at, code: t.format });
     };
     let mut levels = Vec::with_capacity(usize::try_from(t.mip_count).unwrap_or(0));

@@ -3,14 +3,14 @@
 //! whole rider lowered with the zones baked instead of drawn as placeholders.
 use std::collections::BTreeMap;
 
+use anvil_formats::archive::Archive;
+use anvil_formats::build_table::BUILD_TABLE;
+use anvil_formats::skeleton::SKELETON;
 use primase_anvil::components::{AnvilMaterial, MaterialBinding, MaterialValue};
 use primase_anvil::passes::BAKE_ANVIL_MATERIAL;
-use primase_anvil::read::archive::Archive;
-use primase_anvil::read::build_table::BUILD_TABLE;
 use primase_anvil::read::placements::{
     Gender, InstancedLevels, Placed, Placer, RiderPartChoice, RiderSpec, Variant,
 };
-use primase_anvil::read::skeleton::SKELETON;
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassLog, PassManager, PassRegistry, RunReport};
 use primase_core::pbr::PbrMaterial;

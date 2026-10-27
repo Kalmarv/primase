@@ -1,5 +1,6 @@
 //! Exact material constraints and stored-record variants. Full forward colour is not an albedo derivation.
 #![allow(clippy::unwrap_used, reason = "explicit fixture and gate assertions")]
+use anvil_formats::shaunwhite::shaders::{Database, Effect, Key, Payload, Record};
 use iridia_interface::{ConstantRole, OutputRole, Stage};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{Mesh, Primitive, Semantic, Stream, Topology, World};
@@ -8,7 +9,6 @@ use primase_shaunwhite::components::{
     MaterialRef, MaterialState, MeshFormat, ShaderInputs, ShaderLibrary, ShaderPasses,
 };
 use primase_shaunwhite::passes::{RECORD_FIELD, material_key};
-use primase_shaunwhite::shaders::{Database, Effect, Key, Payload, Record};
 use primase_testdata::{Game, install_file};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -32,7 +32,7 @@ fn body() -> Vec<u8> {
     b
 }
 fn material(b: &[u8]) -> MaterialRef {
-    let m = primase_shaunwhite::read::material::Material::parse(b).unwrap();
+    let m = anvil_formats::shaunwhite::material::Material::parse(b).unwrap();
     MaterialRef {
         id: m.id,
         name: "fixture".into(),
@@ -90,7 +90,7 @@ fn source_controls_make_required_bits_without_choosing_a_frame() {
     b[123] = 1;
     b[553] = 1;
     b[525..529].copy_from_slice(&2u32.to_le_bytes());
-    let f = primase_shaunwhite::read::shader_material::read(&b).unwrap();
+    let f = anvil_formats::shaunwhite::shader_material::read(&b).unwrap();
     assert_eq!(f.flags, (1 << 5) | (128 << 6));
     let (mask, value) = material_key(&material(&b), &f).unwrap();
     // Template3, alpha test19, layers30/31, half-Lambert36, kill41, no-specular50, inverse56.
@@ -103,14 +103,14 @@ fn source_controls_make_required_bits_without_choosing_a_frame() {
         0
     );
     b[44] = 1;
-    let f = primase_shaunwhite::read::shader_material::read(&b).unwrap();
+    let f = anvil_formats::shaunwhite::shader_material::read(&b).unwrap();
     assert_eq!(f.flags & (1 << 29), 1 << 29);
     assert_eq!(material_key(&material(&b), &f).unwrap().1 & (1 << 36), 0);
     for (at, value) in [(44, 2u32), (525, 3), (496, 3), (28, 4)] {
         let mut bad = b.clone();
         bad[at..at + 4].copy_from_slice(&value.to_le_bytes());
         assert!(
-            primase_shaunwhite::read::shader_material::read(&bad).is_err(),
+            anvil_formats::shaunwhite::shader_material::read(&bad).is_err(),
             "{at}"
         );
     }
@@ -121,11 +121,11 @@ fn exact_record_variants_keep_unknown_constants_and_forward_output() {
     let mut w = World::new();
     let b = body();
     let m = material(&b);
-    let fields = primase_shaunwhite::read::shader_material::read(&b).unwrap();
+    let fields = anvil_formats::shaunwhite::shader_material::read(&b).unwrap();
     let key = material_key(&m, &fields).unwrap().1 | (2 << 20);
     let host = w.spawn();
     w.insert(host, m);
-    w.insert(host, fields);
+    w.insert(host, primase_shaunwhite::components::Stored(fields));
     let proto = w.spawn();
     w.insert(
         proto,
@@ -234,7 +234,8 @@ fn six_levels_resolve_and_count_every_supported_or_unresolved_material() {
     let Some(files) = files.into_iter().collect::<Option<Vec<_>>>() else {
         return;
     };
-    let db = Arc::new(primase_shaunwhite::read::shaders::read(&std::fs::read(shader_file).unwrap()).unwrap());
+    let db =
+        Arc::new(anvil_formats::shaunwhite::shaders::read(&std::fs::read(shader_file).unwrap()).unwrap());
     for (level, path) in files.iter().enumerate() {
         let shared: Vec<_> = files.iter().filter(|p| *p != path).cloned().collect();
         let (mut w, read_report) = primase_shaunwhite::read::level::read_level(path, &shared).unwrap();

@@ -8,9 +8,9 @@
 
 use std::collections::BTreeMap;
 
+use anvil_formats::archive::Archive;
+use anvil_formats::material::MATERIAL;
 use primase_anvil::passes::BAKE_ANVIL_MATERIAL;
-use primase_anvil::read::archive::Archive;
-use primase_anvil::read::material::MATERIAL;
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassLog};

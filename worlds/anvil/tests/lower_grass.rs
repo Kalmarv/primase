@@ -3,13 +3,13 @@
 //! each sample with a scale in 0.5 to 1.5. The plants lie in the rectangle on the ground, within the rule's scale, the
 //! same options give the same plants and another seed others, `max-plants` is refused not truncated, and the setup, the
 //! models' placements and the rasters are consumed.
+use anvil_formats::grass::{
+    GrassModelSettings, StoredGrassGroup, StoredGrassLibrary, StoredGrassModel, StoredGrassRule,
+};
 use primase_anvil::components::{
     AnvilGrass, AnvilGrassModel, AnvilTerrain, AnvilTerrainGroups, GrassSystemSetup, GroupTile, TerrainTile,
 };
 use primase_anvil::passes::LOWER_ANVIL_GRASS;
-use primase_anvil::read::grass::{
-    GrassModelSettings, StoredGrassGroup, StoredGrassLibrary, StoredGrassModel, StoredGrassRule,
-};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassLog};
 use primase_core::{Entity, Instance, Name, Transform, World};

@@ -1,5 +1,7 @@
 //! Stored impostor geometry and the render explanations that survive lowering.
-use super::stored::{Controller, StoredImpostor, StoredSky, StoredSpotLight};
+use anvil_formats::{
+    controller::Controller, impostor::StoredImpostor, light::StoredSpotLight, sky::StoredSky,
+};
 use primase_core::{Component, Entity};
 
 #[derive(Clone, Debug, PartialEq)]

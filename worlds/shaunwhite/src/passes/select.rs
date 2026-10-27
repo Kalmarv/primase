@@ -722,7 +722,8 @@ impl SelectShaunwhiteContent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{MaterialShader, RealTree, SlotRef};
+    use crate::components::Stored;
+    use crate::components::{RealTree, SlotRef};
     use primase_core::pass::{Conservation, PassManager, PassRegistry, Pipeline, RunReport};
     use primase_core::{Primitive, Semantic, Stream, Topology, Transform};
 
@@ -1204,7 +1205,7 @@ mod tests {
         let m = material(w, name, &[texture]);
         w.insert(
             m,
-            MaterialShader {
+            Stored(anvil_formats::shaunwhite::shader_material::MaterialShader {
                 flags: 0,
                 layers: [false; 2],
                 half_lambert: false,
@@ -1215,7 +1216,7 @@ mod tests {
                 dynamic_uv: 0,
                 texture_slots: Vec::new(),
                 unsupported: Vec::new(),
-            },
+            }),
         );
         m
     }

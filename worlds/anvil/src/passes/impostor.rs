@@ -296,7 +296,7 @@ impl Pass for LowerAnvilImpostor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::read::impostor::StoredImpostor;
+    use anvil_formats::impostor::StoredImpostor;
     use primase_core::{TexFormat, frame::SourceFrame};
 
     fn image(world: &mut World, bytes: Vec<u8>, color_space: ColorSpace) -> Entity {

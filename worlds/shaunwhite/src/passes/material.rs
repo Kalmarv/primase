@@ -458,7 +458,7 @@ mod tests {
             specular_level: 1.0,
             specular_power: 2.0,
             normal_scale: 1.,
-            layering: crate::components::LayerState::default(),
+            layering: anvil_formats::shaunwhite::material::LayerState::default(),
         }
     }
 

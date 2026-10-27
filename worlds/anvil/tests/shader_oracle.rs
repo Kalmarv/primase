@@ -5,11 +5,11 @@
 //! shouldn't read), the executor primase's own; the permutations are the notes' (their opaque G-buffer one per
 //! template). Each test asserts its largest differences under 1e-6 and prints them.
 
+use anvil_formats::archive::{Archive, At};
+use anvil_formats::template;
 use iridia_exec::ProgramShader;
 use iridia_exec::{Load, PixelShader, Sample, Sampler, Store};
 use primase_anvil::passes::formulas::{Rough, emission, metalness, occlusion, roughness, sat, tint, tinted};
-use primase_anvil::read::archive::{Archive, At};
-use primase_anvil::read::template;
 use primase_core::layered::height_blend;
 use primase_testdata::{Game, install};
 

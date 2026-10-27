@@ -1,8 +1,8 @@
 //! Shared raw-source fixtures; no lowered material snapshot.
 #![allow(clippy::unwrap_used)]
+use anvil_formats::shaunwhite::shaders::{Database, Payload};
 use iridia_interface::{KeyPart, Stage, VariantKey};
 use primase_core::{World, shader::StageBinding};
-use primase_shaunwhite::shaders::{Database, Payload};
 use primase_testdata::{Game, install_file};
 pub fn binding(db: &Database, record: u32) -> StageBinding {
     let shader = World::new().spawn();
@@ -43,20 +43,18 @@ pub fn material(
 )> {
     use primase_shaunwhite::components::{MaterialRef, MaterialState, SlotRef};
     let path = install_file(Game::ShaunWhite, "DataPC_01.forge")?;
-    let forge = primase_anvil::read::forge::Forge::open(&path).unwrap();
+    let forge = anvil_formats::forge::Forge::open(&path).unwrap();
     let index = forge.names.iter().position(|n| n.name == cell).unwrap();
     let mut file = std::fs::File::open(path).unwrap();
-    let entry =
-        primase_anvil::read::data::read_entry(&forge.payload(&mut file, index).unwrap(), 1 << 30).unwrap();
-    let objects =
-        primase_anvil::read::objects::read_objects(&entry.metadata.data, &entry.resource.data).unwrap();
+    let entry = anvil_formats::data::read_entry(&forge.payload(&mut file, index).unwrap(), 1 << 30).unwrap();
+    let objects = anvil_formats::objects::read_objects(&entry.metadata.data, &entry.resource.data).unwrap();
     let object = objects
         .iter()
         .find(|o| o.class == 0xb71f6261 && o.name == name)
         .unwrap();
     let body = &entry.resource.data[object.body.clone()];
-    let m = primase_shaunwhite::read::material::Material::parse(body).unwrap();
-    let fields = primase_shaunwhite::read::shader_material::read(body).unwrap();
+    let m = anvil_formats::shaunwhite::material::Material::parse(body).unwrap();
+    let fields = anvil_formats::shaunwhite::shader_material::read(body).unwrap();
     let material = MaterialRef {
         id: m.id,
         name: object.name.clone(),
@@ -94,5 +92,5 @@ pub fn material(
             .collect(),
         unread: vec![],
     };
-    Some((material, fields))
+    Some((material, primase_shaunwhite::components::Stored(fields)))
 }

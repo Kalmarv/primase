@@ -1,9 +1,9 @@
 //! Real lakes (Riders Republic build 25394987, DataPC_MAD_USNAT): WaterVisualEntity_001_008 placed and lowered by
 //! lower-anvil-water under the pass manager with its checks on, against the notes' counts (docs/material-spec.md
 //! §24.3: 120 patches, levels 3 to 6 with 29, 41, 34 and 16, all at z 781) and the recipe's geometry (§24.6, §24.9).
+use anvil_formats::archive::Archive;
 use primase_anvil::components::AnvilWater;
 use primase_anvil::passes::{LowerAnvilWater, Shore};
-use primase_anvil::read::archive::Archive;
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
@@ -21,9 +21,7 @@ fn a_lake_becomes_its_patches() {
     let names = &archive.forge(1).expect("forge").names;
     let entry = names
         .iter()
-        .position(|n| {
-            n.name == "WaterVisualEntity_001_008" && n.type_id == primase_anvil::read::entity::ENTITY
-        })
+        .position(|n| n.name == "WaterVisualEntity_001_008" && n.type_id == anvil_formats::entity::ENTITY)
         .expect("the lake");
     let mut w = World::new();
     let mut placed = Placed::default();
@@ -34,7 +32,7 @@ fn a_lake_becomes_its_patches() {
         InstancedLevels::Selector,
     );
     placer
-        .place(primase_anvil::read::archive::At { forge: 1, entry }, &mut placed)
+        .place(anvil_formats::archive::At { forge: 1, entry }, &mut placed)
         .expect("place");
     assert_eq!((placed.lakes.len(), placed.lakes_unread), (1, 0));
     let lake = placed.lakes[0];

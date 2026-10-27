@@ -135,7 +135,7 @@ impl Pass for LowerAnvilLights {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::read::light::StoredSpotLight;
+    use anvil_formats::light::StoredSpotLight;
     use primase_core::Transform;
 
     #[test]

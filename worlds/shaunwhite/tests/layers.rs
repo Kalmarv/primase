@@ -3,6 +3,7 @@
     clippy::unwrap_used,
     reason = "test helpers assert their explicit material and pixel fixtures"
 )]
+use anvil_formats::shaunwhite::material::LayerState;
 use primase_core::layered::{Channel, Composition, Source, mask_value};
 use primase_core::pass::{Conservation, PassManager, PassRegistry, RunReport};
 use primase_core::pbr::{PbrMaterial, UvTransform, Wrap};
@@ -10,7 +11,7 @@ use primase_core::{
     ColorSpace, Entity, LayeredMaterial, MaterialVariants, Mesh, Primitive, Semantic, Stream, TexFormat,
     TexRole, Texture, Topology, VertexColor, World,
 };
-use primase_shaunwhite::components::{LayerState, MaterialRef, MaterialState, SlotRef};
+use primase_shaunwhite::components::{MaterialRef, MaterialState, SlotRef};
 use std::collections::BTreeMap;
 
 fn run(w: &mut World, text: &str) -> RunReport {

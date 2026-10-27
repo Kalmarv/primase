@@ -15,10 +15,10 @@ use primase_core::frame::SourceFrame;
 use primase_core::{Entity, Instance, Name, Transform, World};
 
 use crate::components::{AnvilMesh, AnvilSkin};
-use crate::read::data::{Resource, read_entry};
-use crate::read::forge::Forge;
-use crate::read::mesh::{MESH, StoredMesh};
-use crate::read::shapes::MAX_RECORD;
+use anvil_formats::archive::MAX_RECORD;
+use anvil_formats::data::{Resource, read_entry};
+use anvil_formats::forge::Forge;
+use anvil_formats::mesh::{MESH, StoredMesh};
 
 /// Why the meshes can't be read.
 #[derive(Debug, thiserror::Error)]
@@ -26,18 +26,18 @@ pub enum Error {
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
-    Forge(#[from] crate::read::forge::Error),
+    Forge(#[from] anvil_formats::forge::Error),
     #[error("entry {entry}: {source}")]
     Data {
         entry: usize,
         #[source]
-        source: crate::read::data::Error,
+        source: anvil_formats::data::Error,
     },
     #[error("entry {entry}: {source}")]
     Mesh {
         entry: usize,
         #[source]
-        source: crate::read::mesh::Error,
+        source: anvil_formats::mesh::Error,
     },
     #[error(
         "entry {entry}: type {type_id:#010x}, not a Mesh ({MESH:#010x}); the type is read from the record"
@@ -138,7 +138,7 @@ pub fn anvil_mesh(
         kind: stored.kind,
         stride: u32::try_from(v.stride).map_err(|_| Error::Entry(entry))?,
         vertex_records: v.bytes.clone(),
-        attributes: crate::read::vertex::attributes(
+        attributes: anvil_formats::vertex::attributes(
             stored.kind,
             v.stride,
             &v.bytes,

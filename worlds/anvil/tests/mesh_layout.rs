@@ -4,11 +4,12 @@
 //! lowered (from its `anvil.mesh`) as after (from its `anvil.layout`).
 use std::collections::BTreeSet;
 
+use anvil_formats::archive::{Archive, At};
+use anvil_formats::mesh::MESH;
+use anvil_formats::vertex::VertexAttributes;
 use iridia_interface::Stage;
-use primase_anvil::components::{AnvilLayout, AnvilMaterial, AnvilMesh, VertexAttributes};
+use primase_anvil::components::{AnvilLayout, AnvilMaterial, AnvilMesh};
 use primase_anvil::passes::{LowerAnvilMesh, MESH_LAYOUT_FIELD, RESOLVE_ANVIL_SHADERS, Static16Normal};
-use primase_anvil::read::archive::{Archive, At};
-use primase_anvil::read::mesh::MESH;
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassLog, PassManager, PassRegistry, Pipeline, RunReport};

@@ -2,15 +2,17 @@
 //! three vertices bound to them, a placement following the rig), and on real Entities of Riders Republic's forges placed
 //! through the Placer: the joint and weight streams, the palette, the inverse binds, the occurrences and the placements
 //! that follow them, under the pass manager with its checks on.
-use primase_anvil::components::{
-    AnvilMesh, AnvilRig, AnvilRigOccurrence, AnvilSkin, AnvilSkinned, RigBone, StoredMeshBone, StoredRig,
-    StoredSkin, VertexAttributes,
-};
+use anvil_formats::archive::Archive;
+use anvil_formats::listing::Kind;
+use anvil_formats::mesh::StoredMeshBone;
+use anvil_formats::mesh::StoredSkin;
+use anvil_formats::rig::RigBone;
+use anvil_formats::rig::StoredRig;
+use anvil_formats::vertex::VertexAttributes;
+use primase_anvil::components::{AnvilMesh, AnvilRig, AnvilRigOccurrence, AnvilSkin, AnvilSkinned};
 use primase_anvil::passes::{
     LowerAnvilLods, LowerAnvilMesh, LowerAnvilRig, LowerAnvilSkin, OwnTransform, Static16Normal,
 };
-use primase_anvil::read::archive::Archive;
-use primase_anvil::read::listing::Kind;
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
@@ -257,11 +259,11 @@ fn a_mesh_that_follows_no_rig_is_drawn_without_its_skin_streams() {
 }
 
 /// The Entity named `name`.
-fn entity(archive: &Archive, name: &str) -> primase_anvil::read::archive::At {
+fn entity(archive: &Archive, name: &str) -> anvil_formats::archive::At {
     archive
         .listing()
         .find(|(_, l)| l.kind == Some(Kind::Entity) && l.name == name)
-        .map(|(forge, l)| primase_anvil::read::archive::At {
+        .map(|(forge, l)| anvil_formats::archive::At {
             forge,
             entry: l.entry,
         })

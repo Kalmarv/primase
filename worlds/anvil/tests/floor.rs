@@ -1,10 +1,10 @@
 //! Real FloorHeightData (Riders Republic build 25394987): MAD_USNAT's 8192 x 8192 grid and MAD_WhiteRoom's empty one
 //! read, the cell order within a block measured as the Riders Republic notes measure it (docs/terrain.md §2), and a
 //! square of ground lowered under the pass manager with its checks on.
+use anvil_formats::archive::{Archive, At};
+use anvil_formats::floor::{FLOOR_HEIGHT_DATA, StoredFloorHeight};
 use primase_anvil::components::AnvilFloorHeight;
 use primase_anvil::passes::{CellPoint, LowerAnvilFloor};
-use primase_anvil::read::archive::{Archive, At};
-use primase_anvil::read::floor::{FLOOR_HEIGHT_DATA, StoredFloorHeight};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::{Instance, Mesh, World};
@@ -47,7 +47,7 @@ fn usnat_grid_reads_and_its_block_borders_are_continuous() {
     assert!(f.blocks.iter().all(|b| b.lo <= b.hi));
     // the mean step between neighbouring cells along x across block borders, with the stored order and with each
     // block's rows and columns swapped (measured here: 14.25 against 86.02; the notes: 14.3 against 86)
-    let g = f.component(SourceFrame::WORLD);
+    let g = AnvilFloorHeight::new(f, SourceFrame::WORLD);
     let swap = |c: u32, r: u32| (c - c % 4 + r % 4, r - r % 4 + c % 4);
     let (mut across, mut across_swapped, mut n) = (0.0, 0.0, 0.0);
     for r in (0..8192).step_by(7) {
@@ -69,7 +69,7 @@ fn a_square_of_ground_lowers() {
     let Some(dir) = install(Game::Riders) else {
         return;
     };
-    let g = floor(&dir.join("DataPC_MAD_USNAT.forge")).component(SourceFrame::WORLD);
+    let g = AnvilFloorHeight::new(floor(&dir.join("DataPC_MAD_USNAT.forge")), SourceFrame::WORLD);
     // the cell at the world's middle, by hand
     let middle = (4096, 4096);
     let z = f64::from(g.scale) * word(&g, middle, middle) + 925.0;

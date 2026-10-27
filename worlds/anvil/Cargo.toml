@@ -1,6 +1,6 @@
 [package]
 name = "primase-anvil"
-description = "Anvil engine containers: the forge archive's (scimitar version 27) index and its entries' data blocks"
+description = "Anvil worlds: forge archives read through anvil-formats into a world, and the passes that lower them"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,8 +9,8 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+anvil-formats.workspace = true
 iridia-interface.workspace = true
-dxcontainer.workspace = true
 thiserror.workspace = true
 primase-core.workspace = true
 primase-foundations = { workspace = true, features = ["compress"] }
@@ -22,6 +22,7 @@ primase-meshops.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+dxcontainer.workspace = true
 primase-testdata.workspace = true
 primase-texcodec.workspace = true
 iridia.workspace = true
