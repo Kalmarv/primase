@@ -137,8 +137,8 @@ pub fn attach_map_bounds(
     found.sort_by_key(|(k, _)| *k);
     let bounds = found
         .into_iter()
-        .map(|(k, bound)| (story.path(files[k]).to_string(), bound, live[&files[k]]))
-        .collect();
+        .map(|(k, bound)| Ok((crate::path(story, files[k])?.to_owned(), bound, live[&files[k]])))
+        .collect::<Result<_>>()?;
     place_map_bounds(w, bounds, axis, &mut report);
     let names = install_material_names(story, keys)?;
     if let Some(o) = online

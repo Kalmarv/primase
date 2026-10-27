@@ -52,7 +52,7 @@ use crate::components::{
     UnityTree, UnityTreeInstance,
 };
 use crate::invalid;
-use crate::read::mesh::{primitives, primitives_and_morphs};
+use crate::read::mesh::{leading, primitives, primitives_and_morphs};
 use crate::read::texture::texture;
 use unity_formats::Result;
 use unity_formats::clip::{ClipData, controller_clips, path_hash};
@@ -194,7 +194,10 @@ pub struct LevelReport {
     /// for it, by what: quads and line strips converted, components core has no slot for, non-finite vertex values
     /// ([`crate::mesh::MeshNotices`]).
     pub notices: BTreeMap<String, u64>,
+    /// Renderers not read, by why (`no MeshFilter`, ...).
     pub skipped: Skipped,
+    /// Terrains not read, by why (`no terrain data`: a Terrain naming no TerrainData draws nothing).
+    pub terrains_skipped: Skipped,
 }
 
 /// The blend shapes an Animator's character has, for what a clip made with them depends on: each by the hash of its
@@ -1290,13 +1293,8 @@ impl Builder<'_> {
         }
         let data = UnityMeshData::read(self.player, r)?;
         let mut m = ColliderMesh::default();
-        if let Some(c) = &data.channels[0] {
-            m.positions = (0..data.vertex_count)
-                .map(|i| {
-                    let v = c.vertex(i);
-                    [v[0], v[1], v[2]]
-                })
-                .collect();
+        if data.channels.first().is_some_and(Option::is_some) {
+            m.positions = leading(&data, 0)?;
         }
         for s in &data.submeshes {
             if s.topology != 0 {
@@ -1602,7 +1600,9 @@ fn read_scene(
     let mut terrain_collider_off: BTreeMap<Entity, Vec<OffFlag>> = BTreeMap::new();
     let mut prefabs: BTreeMap<String, Scene> = BTreeMap::new();
     let terrains = if root.is_none() {
-        scene.terrains(player)?
+        let (terrains, skipped) = scene.terrains(player)?;
+        b.report.terrains_skipped = skipped;
+        terrains
     } else {
         Vec::new()
     };
@@ -2567,7 +2567,7 @@ mod tests {
         assert_eq!(json["colliders_not_colliding"]["trigger"], 5);
         assert_eq!(json["skipped"]["no mesh"], 1);
         // every field of the struct is there
-        assert_eq!(json.as_object().map(serde_json::Map::len), Some(36));
+        assert_eq!(json.as_object().map(serde_json::Map::len), Some(37));
     }
 
     #[test]

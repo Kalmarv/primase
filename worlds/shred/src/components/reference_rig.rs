@@ -2,6 +2,7 @@
 use primase_core::{
     Component, Entity, Geometry, Linear, Transform, World, frame::SourceFrame, world::Linearity,
 };
+use rme_formats::reference_rig::MatrixError;
 use std::ops::Deref;
 
 /// One reference rig record and the source frame its matrices are asked in. The record's fields read through `Deref`.
@@ -21,14 +22,14 @@ impl Deref for ReferenceRig {
 impl ReferenceRig {
     /// Global references in authored rig space, as [`rme_formats::reference_rig::ReferenceRig::source_matrices`]
     /// computes them, as core transforms.
-    pub fn source_matrices(&self) -> Result<Vec<Transform>, String> {
+    pub fn source_matrices(&self) -> Result<Vec<Transform>, MatrixError> {
         self.record
             .source_matrices()
             .map(|v| v.iter().map(|m| Transform { cols: m.cols }).collect())
     }
 
     /// The same reference maps with both sides converted through the recorded source frame.
-    pub fn matrices(&self) -> Result<Vec<Transform>, String> {
+    pub fn matrices(&self) -> Result<Vec<Transform>, MatrixError> {
         self.source_matrices()
             .map(|v| v.iter().map(|m| self.frame.transform(m)).collect())
     }
@@ -56,6 +57,6 @@ impl Component for ReferenceRig {
         if decoded != self.rig {
             return Err("reference rig differs from source provenance".into());
         }
-        self.matrices().map(|_| ())
+        self.matrices().map(|_| ()).map_err(|e| e.to_string())
     }
 }

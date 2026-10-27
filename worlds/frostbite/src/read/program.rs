@@ -342,7 +342,7 @@ pub fn materials(src: &Source<'_>, scope: &Scope<'_>) -> Result<Materials> {
     for bundle in scope.bundles() {
         for (i, a) in bundle.manifest.res.iter().enumerate() {
             let entry = match a.rtype {
-                depot::RTYPE | lookup::PROGRAM_LOOKUP | lookup::TEXTURE_LOOKUP => bundle.resource(i),
+                depot::RTYPE | lookup::PROGRAM_LOOKUP | lookup::TEXTURE_LOOKUP => super::resource(bundle, i)?,
                 _ => continue,
             };
             match a.rtype {

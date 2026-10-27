@@ -84,7 +84,11 @@ use anvil_formats::water::{StoredWater, WATER_COMPONENT};
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("{at:?}: Impostor: {why}")]
-    Impostor { at: At, why: String },
+    Impostor {
+        at: At,
+        #[source]
+        why: anvil_formats::impostor::Error,
+    },
     #[error(transparent)]
     Archive(#[from] anvil_formats::archive::Error),
     #[error("{at:?}: type {found:#010x}, not {what}")]
@@ -2011,7 +2015,7 @@ impl<'a> Placer<'a> {
             } = &v.instance
             {
                 let read = (|| -> Result<(u64, anvil_formats::light::StoredSpotLight), String> {
-                    let id = anvil_formats::light::instance_reference(bytes)?;
+                    let id = anvil_formats::light::instance_reference(bytes).map_err(|e| e.to_string())?;
                     let at = self
                         .archive
                         .find(id)
@@ -2023,7 +2027,11 @@ impl<'a> Placer<'a> {
                             resource.type_id
                         ));
                     }
-                    Ok((id, anvil_formats::light::StoredSpotLight::parse(&resource.body)?))
+                    Ok((
+                        id,
+                        anvil_formats::light::StoredSpotLight::parse(&resource.body)
+                            .map_err(|e| e.to_string())?,
+                    ))
                 })();
                 match read {
                     Ok((index_id, stored)) => {

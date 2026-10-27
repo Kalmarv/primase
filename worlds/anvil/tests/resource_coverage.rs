@@ -78,12 +78,15 @@ fn every_forge_resource_type_has_an_explicit_coverage_line() {
         let forge = Forge::open(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let mut tallies: BTreeMap<u32, Tally> = BTreeMap::new();
         for entry in forge.listing() {
+            let type_id = entry
+                .type_id
+                .expect("a Riders forge states every entry's type id");
             let bytes = u64::try_from(entry.size).expect("validated forge entry size must be nonnegative");
             let example = json!({"forge": relative, "entry": entry.entry,
                 "id": format!("{:#018x}", entry.id), "name": entry.name});
             for tally in [
-                tallies.entry(entry.type_id).or_default(),
-                all.entry(entry.type_id).or_default(),
+                tallies.entry(type_id).or_default(),
+                all.entry(type_id).or_default(),
             ] {
                 tally.entries += 1;
                 tally.bytes += bytes;
@@ -158,19 +161,22 @@ fn map_resource_profile_samples_name_the_next_format_observation() {
             .expect("one forge")
             .listing()
             .filter_map(|entry| {
-                let row = coverage::of(entry.type_id);
+                let type_id = entry
+                    .type_id
+                    .expect("a Riders forge states every entry's type id");
+                let row = coverage::of(type_id);
                 let known_open =
                     row.status != coverage::Status::Read && row.name != "unknown or unclassified resource";
                 let new_profile = matches!(
                     entry.kind,
                     Some(Kind::GiDynResource | Kind::AmbiancePreset | Kind::ForecastPreset)
                 );
-                let count = samples.entry(entry.type_id).or_default();
+                let count = samples.entry(type_id).or_default();
                 if (!known_open && !new_profile) || *count >= 3 {
                     return None;
                 }
                 *count += 1;
-                Some((entry.entry, entry.type_id, entry.id, entry.name.to_owned()))
+                Some((entry.entry, type_id, entry.id, entry.name.to_owned()))
             })
             .collect();
         for (entry, type_id, id, name) in selected {
@@ -193,22 +199,24 @@ fn map_resource_profile_samples_name_the_next_format_observation() {
                             .map(|b| format!("{b:02x}"))
                             .collect::<String>()
                     );
-                    let parsed =
-                        if type_id == anvil_formats::gidyn::GI_DYN_RESOURCE {
-                            Some(StoredGiDyn::parse(&resource.body).map(
-                                |s| json!({"cell": s.cell_id, "samples": s.samples, "probes": s.probes}),
-                            ))
-                        } else if matches!(
-                            type_id,
-                            anvil_formats::look::AMBIANCE_PRESET | anvil_formats::look::FORECAST_PRESET
-                        ) {
-                            Some(
-                                StoredLook::parse(type_id, &resource.body)
-                                    .map(|_| json!("stored profile closed")),
-                            )
-                        } else {
-                            None
-                        };
+                    let parsed = if type_id == anvil_formats::gidyn::GI_DYN_RESOURCE {
+                        Some(
+                            StoredGiDyn::parse(&resource.body)
+                                .map(|s| json!({"cell": s.cell_id, "samples": s.samples, "probes": s.probes}))
+                                .map_err(|e| e.to_string()),
+                        )
+                    } else if matches!(
+                        type_id,
+                        anvil_formats::look::AMBIANCE_PRESET | anvil_formats::look::FORECAST_PRESET
+                    ) {
+                        Some(
+                            StoredLook::parse(type_id, &resource.body)
+                                .map(|_| json!("stored profile closed"))
+                                .map_err(|e| e.to_string()),
+                        )
+                    } else {
+                        None
+                    };
                     if let Some(result) = parsed {
                         match result {
                             Ok(value) => row["parsed"] = value,

@@ -30,7 +30,7 @@ use crate::read::assets::{
 use crate::read::collision::{BoundsReport, install_material_names, place_map_bounds};
 use crate::read::region::{RegionReport, read_map_file};
 use crate::read::source::GtaSource;
-use crate::{Result, invalid};
+use crate::{Result, invalid, path};
 use rage_engine_formats::archive::archive_set::{ArchiveSet, FileRef};
 use rage_engine_formats::archive::keys::Keys;
 use rage_engine_formats::archive::rpf::EntryKind;
@@ -52,7 +52,7 @@ fn read_archetypes(set: &ArchiveSet, keys: &Keys) -> Result<Archetypes> {
         for a in types.archetypes {
             out.entry((a.asset_type, a.asset_name))
                 .or_default()
-                .push((set.path(f).to_string(), a));
+                .push((path(set, f)?.to_owned(), a));
         }
     }
     Ok(out)

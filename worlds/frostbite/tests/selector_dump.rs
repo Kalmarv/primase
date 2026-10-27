@@ -138,7 +138,7 @@ fn dump_program_records_and_their_materials() {
             if a.rtype != lookup::PROGRAM_LOOKUP {
                 continue;
             }
-            let entry = bundle.resource(i);
+            let entry = bundle.resource(i).expect("a listed resource");
             let payload = src.payload(entry.file, entry.size as usize).unwrap();
             let records = lookup::read_records(&payload, &a.rmeta).unwrap();
             let program = u32le(&a.rmeta, 0);

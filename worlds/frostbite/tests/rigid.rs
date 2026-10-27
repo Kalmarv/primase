@@ -70,7 +70,7 @@ fn the_games_one_lod_quick_drop_meshes_rebuild() -> R {
         (0usize, 0usize, Vec::new(), 0usize, 0usize);
     for b in &src.listing("Win32/buildkititems.toc")?.bundles {
         for (i, a) in b.manifest.res.iter().enumerate() {
-            let e = b.resource(i);
+            let e = b.resource(i).expect("a listed resource");
             if a.rtype != MESHSET || !seen.insert(e.name.clone()) {
                 continue;
             }
@@ -92,7 +92,7 @@ fn the_games_one_lod_quick_drop_meshes_rebuild() -> R {
             assert_eq!(built.chunk.len(), chunk.len(), "{}: chunk length", e.name);
             let mut frame_bytes = vec![false; chunk.len()];
             for s in &built.meshset.lods[0].sections {
-                let at = s.stream_offset(2);
+                let at = s.stream_offset(2).expect("the tangent stream");
                 frame_bytes[at..at + 4 * s.vertices as usize].fill(true);
             }
             for (k, (x, y)) in built.chunk.iter().zip(&chunk).enumerate() {
@@ -103,7 +103,7 @@ fn the_games_one_lod_quick_drop_meshes_rebuild() -> R {
                 );
             }
             for s in &built.meshset.lods[0].sections {
-                let at = s.stream_offset(2);
+                let at = s.stream_offset(2).expect("the tangent stream");
                 for v in 0..s.vertices as usize {
                     let (x, y) = (
                         &built.chunk[at + 4 * v..at + 4 * v + 4],
@@ -206,7 +206,7 @@ fn measures_agree_with_the_games_quick_drop_sections() -> R {
     let (mut areas, mut densities) = (Vec::new(), Vec::new());
     for b in &src.listing("Win32/buildkititems.toc")?.bundles {
         for (i, a) in b.manifest.res.iter().enumerate() {
-            let e = b.resource(i);
+            let e = b.resource(i).expect("a listed resource");
             if a.rtype != MESHSET || !seen.insert(e.name.clone()) {
                 continue;
             }
@@ -231,7 +231,7 @@ fn measures_agree_with_the_games_quick_drop_sections() -> R {
                         triangles: d.indices.as_chunks::<3>().0.to_vec(),
                         ..rigid::Part::default()
                     };
-                    let got = rigid::measure(&part);
+                    let got = rigid::measure(&part)?;
                     let near = |a: f32, b: f32| (a - b).abs() <= 2e-3 * b.abs().max(1.0);
                     for k in 0..3 {
                         assert!(

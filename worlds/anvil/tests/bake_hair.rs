@@ -201,10 +201,15 @@ fn compare(w: &World, entity: Entity, m: &AnvilMaterial, size: u32) -> (f64, [u6
             let at = (y * size as usize + x) * 4;
             let [t75x, _, t75z, _] = mask
                 .texel(0, x as i64, y as i64, [Address::Wrap; 2])
+                .expect("a stored level")
                 .map(|c| f32::from(c) / 255.0);
-            let t76 = diffuse.texel(0, x as i64, y as i64, [Address::Wrap; 2]).map(lin);
+            let t76 = diffuse
+                .texel(0, x as i64, y as i64, [Address::Wrap; 2])
+                .expect("a stored level")
+                .map(lin);
             let [t77x, t77y, ..] = normals
                 .texel(0, x as i64, y as i64, [Address::Wrap; 2])
+                .expect("a stored level")
                 .map(|c| f32::from(c) / 255.0);
             let (g, t76x, t76z) = (t76[1], t76[0], t76[2]);
             // colour: the first zone's two colours blended by the strand coordinate, tinted by the ID maps

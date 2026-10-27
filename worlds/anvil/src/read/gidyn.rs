@@ -20,7 +20,7 @@ pub fn read_gi_dyn(
     if resource.type_id != GI_DYN_RESOURCE {
         return Err(format!("GIDynResource: type {:#x}", resource.type_id));
     }
-    let stored = StoredGiDyn::parse(&resource.body)?;
+    let stored = StoredGiDyn::parse(&resource.body).map_err(|e| e.to_string())?;
     let entity = world.spawn();
     world.insert(entity, Name(name));
     world.insert(

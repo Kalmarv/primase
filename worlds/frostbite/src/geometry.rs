@@ -122,10 +122,26 @@ pub fn decode(chunk: &[u8], lod: &Lod, section: &Section) -> Result<Decoded> {
     let mut streams = BTreeMap::new();
     let mut raw = Vec::new();
     for e in &section.decl.elements {
-        let stride = usize::from(section.decl.strides[usize::from(e.stream)]);
+        let no_stream = || {
+            refused(format_args!(
+                "element of usage {} in stream {}, which the section's {} streams do not place",
+                e.usage,
+                e.stream,
+                section.decl.strides.len()
+            ))
+        };
+        let stride = usize::from(
+            *section
+                .decl
+                .strides
+                .get(usize::from(e.stream))
+                .ok_or_else(no_stream)?,
+        );
         let size = format::size(e.format)
             .ok_or_else(|| refused(format_args!("element format {} of usage {}", e.format, e.usage)))?;
-        let stream_at = section.stream_offset(usize::from(e.stream));
+        let stream_at = section
+            .stream_offset(usize::from(e.stream))
+            .ok_or_else(no_stream)?;
         // the whole stream lies in the vertex buffer
         slice(chunk, stream_at, stride * n, "a vertex stream")?;
         // each vertex's element: `size` bytes at `base + v * stride`

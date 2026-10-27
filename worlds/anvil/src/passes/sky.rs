@@ -100,6 +100,7 @@ impl LowerAnvilSky {
             controllers
                 .map(|c| c.time_of_day.value(path, time))
                 .transpose()
+                .map_err(|e| e.to_string())
                 .map(Option::flatten)
         };
         let scalar = |name: &str, fallback: f32| -> Result<f32, String> {
@@ -146,7 +147,7 @@ impl LowerAnvilSky {
         }
         if let Some(c) = controllers.and_then(|c| c.weather.as_ref()) {
             for track in &c.tracks {
-                let sampled = track.at(self.weather)?;
+                let sampled = track.at(self.weather).map_err(|e| e.to_string())?;
                 notices.push(format!(
                     "weather path {} = {sampled:?}; retained, cloud/rain simulation omitted",
                     track
@@ -193,7 +194,10 @@ impl LowerAnvilSky {
                 let az = ((x as f32 + 0.5) / width as f32 - 0.5) * std::f32::consts::TAU;
                 let core = [el.cos() * az.sin(), el.sin(), -el.cos() * az.cos()];
                 let direction = primase_core::frame::SourceFrame::ENU.direction_to_source(core);
-                let rgb = sky.radiance(self.hour, direction, sun, mie)?.map(|v| v.max(0.0));
+                let rgb = sky
+                    .radiance(self.hour, direction, sun, mie)
+                    .map_err(|e| e.to_string())?
+                    .map(|v| v.max(0.0));
                 let rgb = std::array::from_fn::<_, 3, _>(|k| rgb[k] * sunlight[k]);
                 if core[1] > 0.0 {
                     let w = core[1] * el.cos();

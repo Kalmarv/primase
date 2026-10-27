@@ -5,7 +5,7 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 use primase_core::TexFormat;
-use primase_foundations::parallel::{Panicked, Threads, rows_mut};
+use primase_foundations::parallel::{RowsError, Threads, rows_mut};
 use thiserror::Error;
 mod blocks;
 mod encode;
@@ -27,7 +27,7 @@ pub enum Error {
     #[error("could not allocate decoded pixels")]
     Allocation,
     #[error("decoding a row of blocks: {0}")]
-    Worker(#[from] Panicked),
+    Worker(#[from] RowsError),
 }
 pub type Result<T> = std::result::Result<T, Error>;
 

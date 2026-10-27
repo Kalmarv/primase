@@ -34,6 +34,23 @@ pub type Error = rage_engine_formats::Error;
 
 pub type Result<T> = rage_engine_formats::Result<T>;
 
+/// The path of file `f` of `set`'s install; an error when the install holds no such file.
+pub(crate) fn path(
+    set: &rage_engine_formats::archive::archive_set::ArchiveSet,
+    f: rage_engine_formats::archive::archive_set::FileRef,
+) -> Result<&str> {
+    set.path(f).ok_or_else(|| {
+        invalid(
+            "archive set",
+            0,
+            format!(
+                "archive {} entry {}: no such file in the install",
+                f.archive, f.entry
+            ),
+        )
+    })
+}
+
 pub(crate) fn invalid(format: &'static str, offset: u64, detail: impl ToString) -> Error {
     Error::Invalid {
         format,

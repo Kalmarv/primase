@@ -47,7 +47,7 @@ use crate::components::{
     BlendStreams, GtaArchetype, GtaBlendStreams, GtaBones, GtaDrawable, GtaLights, GtaParam, GtaShader,
     GtaSkeleton, GtaSources,
 };
-use crate::{Result, invalid};
+use crate::{Result, invalid, path};
 use rage_engine_formats::archive::archive_set::{ArchiveSet, FileRef, Install};
 use rage_engine_formats::archive::keys::Keys;
 use rage_engine_formats::drawable::{
@@ -274,7 +274,17 @@ enum Element {
 
 /// One vertex element: a core stream (frame converted), or a blend stream kept as stored.
 fn stream(g: &Geometry, e: rage_engine_formats::drawable::Element) -> Result<Element> {
-    let bytes = g.element_bytes(e);
+    let bytes = g.element_bytes(e).ok_or_else(|| {
+        invalid(
+            "drawable",
+            0,
+            format!(
+                "{} in format {:#x}: no bytes within the vertex stride",
+                e.semantic(),
+                e.format.0
+            ),
+        )
+    })?;
     let f3 = |b: &[u8]| -> Vec<[f32; 3]> { b.as_chunks::<12>().0.iter().map(le::vec3_of).collect() };
     let fmt = e.format.0;
     let (semantic, s) = match (e.slot, fmt) {
@@ -443,7 +453,7 @@ impl Ctx<'_> {
         };
         if !self.dicts.contains_key(&f) {
             let d = TextureDictionary::read_resource(&self.decode(f)?)?;
-            self.dicts.insert(f, (lookup.set.path(f).to_string(), d));
+            self.dicts.insert(f, (path(lookup.set, f)?.to_owned(), d));
         }
         Ok(self.dicts.get(&f))
     }
@@ -526,7 +536,7 @@ impl Ctx<'_> {
         for f in self.own_dictionaries.clone() {
             if !self.dicts.contains_key(&f) {
                 let dict = TextureDictionary::read_resource(&self.decode(f)?)?;
-                let path = lookup.set.path(f).to_string();
+                let path = path(lookup.set, f)?.to_owned();
                 self.dicts.insert(f, (path, dict));
             }
             let found = self.dicts.get(&f).and_then(|(path, dict)| {
@@ -759,7 +769,10 @@ pub(crate) fn load_prototype(
         let mut bound = None;
         let (path, d) = match a.asset_type {
             // a drawable
-            2 => (set.path(f).to_string(), Drawable::read_resource(&ctx.decode(f)?)?),
+            2 => (
+                path(set, f)?.to_owned(),
+                Drawable::read_resource(&ctx.decode(f)?)?,
+            ),
             // a fragment: its main drawable
             1 => {
                 let mut frag = Fragment::read_resource(&ctx.decode(f)?)?;
@@ -770,7 +783,7 @@ pub(crate) fn load_prototype(
                 };
                 fragment_pose = frag.pose;
                 bump(&mut ctx.report.fragments);
-                (set.path(f).to_string(), d)
+                (path(set, f)?.to_owned(), d)
             }
             // an entry of a drawable dictionary
             3 => {
@@ -783,7 +796,7 @@ pub(crate) fn load_prototype(
                     return Ok(());
                 };
                 bump(&mut ctx.report.dictionary_entries);
-                (format!("{}#{:#010x}", set.path(f), a.asset_name), d)
+                (format!("{}#{:#010x}", path(set, f)?, a.asset_name), d)
             }
             _ => return Ok(()),
         };

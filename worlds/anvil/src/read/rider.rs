@@ -14,6 +14,8 @@ pub enum PaletteError {
     NoTexture(&'static str),
     #[error("the skin palette is {width} x {height}, not 8 x 4")]
     Palette { width: u32, height: u32 },
+    #[error("the skin palette: {0}")]
+    Sampling(#[from] primase_foundations::sampling::Error),
 }
 
 /// The texture of the crowd's skin palette (`MAD_CHR_BULK`'s: the one skin palette the forges hold).
@@ -45,8 +47,8 @@ pub fn skin_palette(archive: &mut Archive) -> Result<Vec<[u8; 3]>, PaletteError>
         });
     }
     let at = |x: i64, y: i64| {
-        let t = levels.texel(0, x, y, [primase_foundations::sampling::Address::Clamp; 2]);
-        [t[0], t[1], t[2]]
+        let [r, g, b, _] = levels.texel(0, x, y, [primase_foundations::sampling::Address::Clamp; 2])?;
+        Ok([r, g, b])
     };
-    Ok((0..4).map(|n| at(2 * n, 2)).collect())
+    (0..4).map(|n| at(2 * n, 2)).collect()
 }

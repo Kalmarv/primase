@@ -38,7 +38,7 @@ fn terrains_match_the_scan() {
     )
     .unwrap();
     let scene = Scene::read(&player, scan["level"].as_str().unwrap()).unwrap();
-    let ours = scene.terrains(&player).unwrap();
+    let (ours, _skipped) = scene.terrains(&player).unwrap();
     let theirs = scan["terrains"].as_array().unwrap();
     assert_eq!(ours.len(), theirs.len(), "drawn terrains");
     let mut gate = GateReport::new(

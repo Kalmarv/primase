@@ -66,7 +66,9 @@ pub fn check_geometry(where_: &str, g: &Geometry, o: &Value, diffs: &mut Vec<Str
         match g.elements.iter().find(|e| e.slot == slot) {
             Some(&e) => diff(
                 e.semantic(),
-                sha(&g.element_bytes(e)),
+                sha(&g
+                    .element_bytes(e)
+                    .expect("an element the reader returns has its bytes")),
                 digest.as_str().unwrap_or("").to_string(),
             ),
             None => diff(

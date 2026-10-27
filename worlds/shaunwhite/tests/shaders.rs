@@ -209,7 +209,7 @@ fn corrupt_spans_crcs_tails_and_unknown_versions_fail_by_name() {
         (4, 38, "version"),
         (88, 0, "CRC-32"),
         (115, 99, "record kind"),
-        (143, 0, "payload region"),
+        (143, 0, "first payload offset"),
         (147, u32::MAX, "record payload"),
         (367, 1, "reserved count"),
         (392, 1, "reserved header"),

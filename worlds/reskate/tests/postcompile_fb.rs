@@ -100,7 +100,7 @@ fn summary(patch: &Path, base: Option<&Folder>, oodle: Option<&Oodle>, report: &
             let (files, inline) = bundle::read_region(region)?;
             report.compare_bytes(
                 format!("{name} region"),
-                &bundle::write_region(&files, &inline),
+                &bundle::write_region(&files, &inline)?,
                 region,
             );
             let Some((m, first, raw)) = src.manifest(&files, &inline)? else {
@@ -115,7 +115,7 @@ fn summary(patch: &Path, base: Option<&Folder>, oodle: Option<&Oodle>, report: &
                 if a.rtype == depot::RTYPE {
                     let d = src.payload(f, a.size as usize)?;
                     let dep = depot::read(&d, &a.rmeta)?;
-                    let (w, wm) = depot::write(&dep);
+                    let (w, wm) = depot::write(&dep)?;
                     report.compare_bytes(format!("{} depot", a.name), &w, &d);
                     report.compare_bytes(format!("{} depot meta", a.name), &wm, &a.rmeta);
                     let entries: Vec<Value> = dep
@@ -133,7 +133,7 @@ fn summary(patch: &Path, base: Option<&Folder>, oodle: Option<&Oodle>, report: &
                 } else if a.rtype == lookup::PROGRAM_LOOKUP {
                     let d = src.payload(f, a.size as usize)?;
                     let t = lookup::read_programs(&d, &a.rmeta)?;
-                    let (w, wm) = lookup::write_programs(&t, &a.rmeta);
+                    let (w, wm) = lookup::write_programs(&t, &a.rmeta)?;
                     report.compare_bytes(format!("{} programs", a.name), &w, &d);
                     report.compare_bytes(format!("{} programs meta", a.name), &wm, &a.rmeta);
                     programs += t.rows.len();

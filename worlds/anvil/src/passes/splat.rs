@@ -289,9 +289,10 @@ impl<'t> Lookup<'t> {
                 return Ok(None);
             };
             let image = n.tile(&n.block_8, "block 8")?;
-            Ok(Some(unorm(
-                image.texel(0, j as i64, i as i64, [Address::Wrap; 2])[0],
-            )))
+            let [b, ..] = image
+                .texel(0, j as i64, i as i64, [Address::Wrap; 2])
+                .map_err(|e| format!("block 8: {e}"))?;
+            Ok(Some(unorm(b)))
         })?;
         Ok(0.5 + b)
     }
@@ -532,9 +533,10 @@ impl<'a> Baker<'a> {
                             return Ok(None);
                         };
                         let image = n.tile(&n.colour, "colour")?;
-                        Ok(Some(decode(
-                            image.texel(0, j as i64, i as i64, [Address::Wrap; 2])[k],
-                        )))
+                        let texel = image
+                            .texel(0, j as i64, i as i64, [Address::Wrap; 2])
+                            .map_err(|e| format!("colour: {e}"))?;
+                        Ok(Some(decode(texel[k])))
                     })?;
                 }
                 Ok(c)

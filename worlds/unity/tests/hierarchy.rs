@@ -391,7 +391,7 @@ fn world_meshes(player: &Player, w: &World) -> GateReport {
                         (Semantic::TexCoord(n), Stream::F32x2(x)) => (4 + *n as usize, x[v].to_vec()),
                         other => panic!("unexpected stream {other:?}"),
                     };
-                    let unity = data.channels[ch].as_ref().unwrap().vertex(src);
+                    let unity = data.channels[ch].as_ref().unwrap().vertex(src).unwrap();
                     let unity: Vec<f32> = if ch >= 4 {
                         vec![unity[0], 1.0 - unity[1]]
                     } else {

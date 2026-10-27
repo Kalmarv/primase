@@ -133,6 +133,7 @@ fn spawn_region_values_are_read_without_map_offset_or_rounding() {
             name: "POINT_PARAM_ST".into(),
             version: 35,
             records: vec![bytes],
+            offsets: vec![],
         }],
     };
     let p = layout.spawn_points().unwrap();

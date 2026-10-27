@@ -296,7 +296,7 @@ impl AnvilReader {
                 let found = self
                     .archive
                     .listing()
-                    .find(|(_, l)| l.type_id == TEXTURE_SET && l.name == n)
+                    .find(|(_, l)| l.type_id == Some(TEXTURE_SET) && l.name == n)
                     .map(|(forge, l)| At {
                         forge,
                         entry: l.entry,

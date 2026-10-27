@@ -35,7 +35,7 @@ use primase_core::{Instance, Name, Provenance, Source, Transform, World};
 use crate::components::state::hour_axis;
 use crate::components::{GTA, GtaArchetype, GtaEntity, GtaResolvedIn};
 use crate::read::assets::{Lookup, Payload};
-use crate::{Result, invalid};
+use crate::{Result, invalid, path};
 use primase_foundations::parallel::Threads;
 use rage_engine_formats::archive::archive_set::{ArchiveSet, FileRef, Install, MapState};
 use rage_engine_formats::archive::keys::Keys;
@@ -116,6 +116,15 @@ struct MapRead {
 }
 
 /// A map's name: its file name without the extension.
+/// The path of the live map named by hash `parent` (a map's LOD parent); `None` for no parent (0) or one no live map
+/// is.
+fn parent_path(set: &ArchiveSet, parent: u32) -> Result<Option<String>> {
+    match set.tables.get("ymap").and_then(|t| t.get(&parent)) {
+        Some(&p) if parent != 0 => Ok(Some(path(set, p)?.to_owned())),
+        _ => Ok(None),
+    }
+}
+
 fn map_name(path: &str) -> String {
     let file = path.rsplit('\\').next().unwrap_or(path);
     file.strip_suffix(".ymap").unwrap_or(file).to_string()
@@ -165,9 +174,13 @@ pub fn list_maps(set: &ArchiveSet, keys: &Keys, threads: Threads) -> Result<Vec<
     let outlines =
         primase_foundations::parallel::map(threads, &files, |_, &f| -> Result<(MapHeader, usize)> {
             let (root, counts) = meta(set, keys, f)?.root_outline()?;
-            let count = *counts
-                .get(&entities)
-                .ok_or_else(|| invalid("CMapData", 0, format!("{}: no entities array", set.path(f))))?;
+            let Some(&count) = counts.get(&entities) else {
+                return Err(invalid(
+                    "CMapData",
+                    0,
+                    format!("{}: no entities array", path(set, f)?),
+                ));
+            };
             Ok((MapHeader::from_root(&root)?, count))
         })
         .map_err(|e| invalid("map listing", 0, e.to_string()))?;
@@ -179,18 +192,20 @@ pub fn list_maps(set: &ArchiveSet, keys: &Keys, threads: Threads) -> Result<Vec<
     // every live map's chain entry, so a parent is never read twice
     let mut chain: BTreeMap<u32, (bool, u32, String)> = listed
         .iter()
-        .map(|(f, h, _)| (h.name, (h.flags & 1 != 0, h.parent, map_name(set.path(*f)))))
-        .collect();
-    Ok(listed
+        .map(|(f, h, _)| Ok((h.name, (h.flags & 1 != 0, h.parent, map_name(path(set, *f)?)))))
+        .collect::<Result<_>>()?;
+    listed
         .into_iter()
-        .map(|(file, header, entities)| MapListing {
-            path: set.path(file).to_string(),
-            file,
-            ipl: ipl_of(set, keys, &mut chain, &header),
-            header,
-            entities,
+        .map(|(file, header, entities)| {
+            Ok(MapListing {
+                path: path(set, file)?.to_owned(),
+                file,
+                ipl: ipl_of(set, keys, &mut chain, &header),
+                header,
+                entities,
+            })
         })
-        .collect())
+        .collect()
 }
 
 /// A map's script-managed map: itself, or the nearest of its LOD parent chain that is (its name). `chain` holds what is
@@ -207,7 +222,7 @@ fn ipl_of(
         // a parent not seen yet: read its header from its file
         let &pf = set.tables.get("ymap")?.get(&at)?;
         let pm = header(set, keys, pf).ok()?;
-        let e = (pm.flags & 1 != 0, pm.parent, map_name(set.path(pf)));
+        let e = (pm.flags & 1 != 0, pm.parent, map_name(set.path(pf)?));
         chain.insert(at, e.clone());
         Some(e)
     }) {
@@ -232,7 +247,10 @@ fn region_maps(set: &ArchiveSet, keys: &Keys, region: &Region) -> Result<Vec<Map
     let mut chain: BTreeMap<u32, (bool, u32, String)> = BTreeMap::new();
     for &f in set.tables.get("ymap").into_iter().flat_map(|t| t.values()) {
         let map = header(set, keys, f)?;
-        chain.insert(map.name, (map.flags & 1 != 0, map.parent, map_name(set.path(f))));
+        chain.insert(
+            map.name,
+            (map.flags & 1 != 0, map.parent, map_name(path(set, f)?)),
+        );
         let ipl = ipl_of(set, keys, &mut chain, &map);
         let [lo, hi] = map.entities_extents;
         if !region.touches(lo, hi) {
@@ -247,15 +265,8 @@ fn region_maps(set: &ArchiveSet, keys: &Keys, region: &Region) -> Result<Vec<Map
             .collect();
         if !entities.is_empty() {
             out.push(MapRead {
-                path: set.path(f).to_string(),
-                parent: (map.parent != 0)
-                    .then(|| {
-                        set.tables
-                            .get("ymap")
-                            .and_then(|t| t.get(&map.parent))
-                            .map(|&p| set.path(p).to_string())
-                    })
-                    .flatten(),
+                path: path(set, f)?.to_owned(),
+                parent: parent_path(set, map.parent)?,
                 ipl,
                 entities,
             });
@@ -325,7 +336,7 @@ fn archetypes(set: &ArchiveSet, keys: &Keys) -> Result<(ArchetypeTable, usize)> 
             match out.entry(a.name) {
                 std::collections::btree_map::Entry::Occupied(_) => duplicates += 1,
                 std::collections::btree_map::Entry::Vacant(v) => {
-                    v.insert((set.path(f).to_string(), a));
+                    v.insert((path(set, f)?.to_owned(), a));
                 }
             }
         }
@@ -521,20 +532,13 @@ pub fn read_map_file(
     let mut chain = BTreeMap::new();
     chain.insert(
         head.name,
-        (head.flags & 1 != 0, head.parent, map_name(set.path(file))),
+        (head.flags & 1 != 0, head.parent, map_name(path(set, file)?)),
     );
     let ipl = ipl_of(set, keys, &mut chain, &head);
     let map = MapData::from_root(&decode(set, keys, file)?)?;
     let m = MapRead {
-        path: set.path(file).to_string(),
-        parent: (map.parent != 0)
-            .then(|| {
-                set.tables
-                    .get("ymap")
-                    .and_then(|t| t.get(&map.parent))
-                    .map(|&p| set.path(p).to_string())
-            })
-            .flatten(),
+        path: path(set, file)?.to_owned(),
+        parent: parent_path(set, map.parent)?,
         ipl,
         entities: (0..).zip(map.entities).collect(),
     };
@@ -697,7 +701,7 @@ fn place<'a, 'l>(
                     _ => None,
                 };
                 let name = ext.and_then(|ext| {
-                    let path = set.path(*set.tables.get(ext)?.get(&a.asset_name)?);
+                    let path = set.path(*set.tables.get(ext)?.get(&a.asset_name)?)?;
                     let file = path.rsplit('\\').next()?;
                     Some(file.strip_suffix(ext)?.strip_suffix('.')?.to_string())
                 });
@@ -994,7 +998,12 @@ mod tests {
                         .filter(|(_, i)| i.prototype == p)
                         .map(|(e, _)| w.get::<Condition>(e).map(|c| c.0[0].0[0].values))
                         .collect();
-                    (a.name, (r.story, r.online), l.set.path(f).to_string(), conditions)
+                    (
+                        a.name,
+                        (r.story, r.online),
+                        path(l.set, f).expect("a file of the install").to_owned(),
+                        conditions,
+                    )
                 })
                 .collect();
             protos.sort();

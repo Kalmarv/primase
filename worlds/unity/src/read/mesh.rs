@@ -235,6 +235,26 @@ pub fn skinned_primitives(
     Ok((out, notices))
 }
 
+/// The first `N` components of every vertex of `mesh`'s channel `ch`, which is present with at least `N` components
+/// per vertex; an error naming the channel when it holds fewer than the mesh's vertices.
+pub(crate) fn leading<const N: usize>(mesh: &UnityMeshData, ch: usize) -> Result<Vec<[f32; N]>> {
+    let name = CHANNELS.get(ch).copied().unwrap_or("unknown");
+    let c = mesh.channels.get(ch).and_then(Option::as_ref);
+    (0..mesh.vertex_count)
+        .map(|i| {
+            c.and_then(|c| c.vertex(i))
+                .and_then(<[f32]>::first_chunk::<N>)
+                .copied()
+                .ok_or_else(|| {
+                    invalid(format!(
+                        "{}: {name} channel holds no {N} components for vertex {i} of {}",
+                        mesh.name, mesh.vertex_count
+                    ))
+                })
+        })
+        .collect()
+}
+
 /// The primitives of the submeshes in `range` with, for each, the mesh vertex of each of its vertices.
 fn primitives_with(
     mesh: &UnityMeshData,
@@ -242,54 +262,43 @@ fn primitives_with(
     skinned: Option<SkinWeights>,
 ) -> Result<(Drawn, Vec<Vec<u32>>, MeshNotices)> {
     let mut notices = MeshNotices::new();
-    let n = mesh.vertex_count;
     let mut streams = BTreeMap::new();
     for (ch, c) in mesh.channels.iter().enumerate() {
         let Some(c) = c else { continue };
-        let xyz = |i: usize| -> [f32; 3] {
-            let v = c.vertex(i);
-            [v[0], v[1], v[2]]
-        };
         let (semantic, stream) = match (ch, c.dim) {
             (0, 3..) => (
                 Semantic::Position,
-                Stream::F32x3((0..n).map(|i| UNITY.point(xyz(i))).collect()),
+                Stream::F32x3(leading(mesh, ch)?.into_iter().map(|v| UNITY.point(v)).collect()),
             ),
             (1, 3..) => (
                 Semantic::Normal,
-                Stream::F32x3((0..n).map(|i| UNITY.direction(xyz(i))).collect()),
+                Stream::F32x3(
+                    leading(mesh, ch)?
+                        .into_iter()
+                        .map(|v| UNITY.direction(v))
+                        .collect(),
+                ),
             ),
             (2, 4) => (
                 Semantic::Tangent(0),
                 Stream::F32x4(
-                    (0..n)
-                        .map(|i| {
-                            let [x, y, z] = UNITY.direction(xyz(i));
-                            [x, y, z, -c.vertex(i)[3]]
+                    leading(mesh, ch)?
+                        .into_iter()
+                        .map(|[x, y, z, w]| {
+                            let [x, y, z] = UNITY.direction([x, y, z]);
+                            [x, y, z, -w]
                         })
                         .collect(),
                 ),
             ),
-            (3, 4) => (
-                Semantic::Color(0),
-                Stream::F32x4(
-                    (0..n)
-                        .map(|i| {
-                            let v = c.vertex(i);
-                            [v[0], v[1], v[2], v[3]]
-                        })
-                        .collect(),
-                ),
-            ),
+            (3, 4) => (Semantic::Color(0), Stream::F32x4(leading(mesh, ch)?)),
             // u and v; components beyond them are not read (counted below, per primitive)
             (4..12, 2..=4) => (
                 Semantic::TexCoord(ch as u8 - 4),
                 Stream::F32x2(
-                    (0..n)
-                        .map(|i| {
-                            let v = c.vertex(i);
-                            [v[0], 1.0 - v[1]]
-                        })
+                    leading(mesh, ch)?
+                        .into_iter()
+                        .map(|[u, v]| [u, 1.0 - v])
                         .collect(),
                 ),
             ),

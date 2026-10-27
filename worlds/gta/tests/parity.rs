@@ -258,7 +258,7 @@ fn parity_list() {
         set.tables
             .get(ext)
             .and_then(|t| t.get(&hash))
-            .map(|f| set.path(*f).to_string())
+            .map(|f| set.path(*f).expect("a file of the install").to_string())
     };
     let mut files: BTreeSet<String> = BTreeSet::new();
     for (name, region) in AREAS {

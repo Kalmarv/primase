@@ -29,7 +29,7 @@ fn a_forge_lists_its_entries_by_kind_and_name() {
         assert_eq!(l.id, f.index[l.entry].id);
         assert_eq!(l.size, f.index[l.entry].size);
         assert_eq!(l.name, f.names[l.entry].name);
-        assert_eq!(l.type_id, f.names[l.entry].type_id);
+        assert_eq!(l.type_id, f.stores_type_ids().then_some(f.names[l.entry].type_id));
     }
     let row = |k: usize| (listed[k].name, listed[k].kind, listed[k].id, listed[k].size);
     assert_eq!(row(0), ("GlobalMetaFile", None, 16, 7281));
@@ -68,7 +68,7 @@ fn a_forge_lists_its_entries_by_kind_and_name() {
         listed
             .iter()
             .filter(|l| l.kind.is_none())
-            .all(|l| Kind::of(l.type_id).is_none())
+            .all(|l| l.type_id.and_then(Kind::of).is_none())
     );
 }
 

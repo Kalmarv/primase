@@ -20,6 +20,8 @@ pub enum Error {
     Field(#[from] primase_foundations::bytes::FieldError),
     #[error("at {offset:#x}: {detail}")]
     Invalid { offset: usize, detail: String },
+    #[error(transparent)]
+    Texture(Box<rme_formats::texture::Error>),
 }
 
 impl From<rme_formats::Error> for Error {
@@ -28,6 +30,7 @@ impl From<rme_formats::Error> for Error {
             rme_formats::Error::Io(e) => Self::Io(e),
             rme_formats::Error::Field(e) => Self::Field(e),
             rme_formats::Error::Invalid { offset, detail } => Self::Invalid { offset, detail },
+            rme_formats::Error::Texture(e) => Self::Texture(e),
         }
     }
 }

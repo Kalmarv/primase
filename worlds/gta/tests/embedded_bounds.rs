@@ -94,12 +94,8 @@ fn props_collide_by_codewalkers_reading_of_their_bounds() {
         let path = oracle["path"].as_str().unwrap();
         let file_name = path.rsplit('\\').next().unwrap();
         let (stem, ext) = file_name.rsplit_once('.').unwrap();
-        let live = set.live(ext, stem).unwrap();
-        assert!(
-            set.path(live).eq_ignore_ascii_case(path),
-            "{stem}: live copy {}",
-            set.path(live)
-        );
+        let live = set.path(set.live(ext, stem).unwrap()).unwrap();
+        assert!(live.eq_ignore_ascii_case(path), "{stem}: live copy {live}");
         let mut w = World::new();
         w.insert_resource(GtaMaterials(names.clone()));
         let proto = w.spawn();

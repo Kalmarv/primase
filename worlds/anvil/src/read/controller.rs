@@ -14,7 +14,8 @@ pub fn attach_sky_controllers(
     entity: Entity,
     look: &str,
 ) -> Result<(), String> {
-    let LookControllers { time_of_day, weather } = look_controllers(archive, look)?;
+    let LookControllers { time_of_day, weather } =
+        look_controllers(archive, look).map_err(|e| e.to_string())?;
     world.insert(
         entity,
         crate::components::AnvilSkyControllers {

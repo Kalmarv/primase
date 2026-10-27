@@ -246,7 +246,7 @@ fn positions(sec: &meshset::Section, geo: &[u8]) -> Option<(bool, Vec<[f32; 3]>)
         _ => return None,
     };
     let width = if half { 8 } else { 12 };
-    let start = sec.stream_offset(j) + usize::from(e.offset);
+    let start = sec.stream_offset(j)? + usize::from(e.offset);
     let n = sec.vertices as usize;
     if n > 0 && (stride < usize::from(e.offset) + width || start + (n - 1) * stride + width > geo.len()) {
         return None;

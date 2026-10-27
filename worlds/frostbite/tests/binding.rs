@@ -105,7 +105,7 @@ fn the_stock_bindings_read_and_agree_with_the_shaders() {
                         (
                             format!("b{}", d3d.register),
                             rule.constant_buffer(d3d.register)
-                                .is_some_and(|g| g.buffer_end() == layout.size),
+                                .is_some_and(|g| g.buffer_end() == u64::from(layout.size)),
                         )
                     }
                     (ResourceKind::ConstantBuffer { .. }, _) => {

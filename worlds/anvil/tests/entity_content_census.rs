@@ -133,8 +133,12 @@ fn embedded_components_report_semantic_gaps_and_grid_listed_owners() {
             .forge(0)
             .expect("one forge")
             .listing()
-            .filter(|e| matches!(e.type_id, GRID_CELL_DATA_BLOCK | ENTITY_GROUP))
-            .map(|e| (e.entry, e.type_id, e.id, e.name.to_owned(), e.size))
+            .filter_map(|e| {
+                let kind = e
+                    .type_id
+                    .filter(|&t| matches!(t, GRID_CELL_DATA_BLOCK | ENTITY_GROUP))?;
+                Some((e.entry, kind, e.id, e.name.to_owned(), e.size))
+            })
             .collect();
         for (entry, kind, id, name, bytes) in entries {
             let mut example =
@@ -195,8 +199,10 @@ fn embedded_components_report_semantic_gaps_and_grid_listed_owners() {
             .forge(0)
             .expect("one forge")
             .listing()
-            .filter(|e| matches!(e.type_id, ENTITY | ENTITY_GROUP))
-            .map(|e| (e.entry, e.type_id, e.id, e.name.to_owned(), e.size))
+            .filter_map(|e| {
+                let kind = e.type_id.filter(|&t| matches!(t, ENTITY | ENTITY_GROUP))?;
+                Some((e.entry, kind, e.id, e.name.to_owned(), e.size))
+            })
             .collect();
         let count = entries.len();
         for (entry, kind, id, name, bytes) in entries {

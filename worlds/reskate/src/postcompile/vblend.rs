@@ -572,11 +572,11 @@ pub(crate) fn surface(sec: &meshset::Section, geo: &[u8]) -> Option<Surface> {
     }
     let n = sec.vertices as usize;
     let stream = |j: usize| {
-        let o = sec.stream_offset(j);
-        &geo[o..o + sec.decl.strides[j] as usize * n]
+        let o = sec.stream_offset(j)?;
+        geo.get(o..o.checked_add(usize::from(*sec.decl.strides.get(j)?).checked_mul(n)?)?)
     };
     let h = |c: &[u8], k: usize| half::f16::from_le_bytes([c[k], c[k + 1]]).to_f32();
-    let positions = stream(0)
+    let positions = stream(0)?
         .as_chunks::<12>()
         .0
         .iter()
@@ -586,7 +586,7 @@ pub(crate) fn surface(sec: &meshset::Section, geo: &[u8]) -> Option<Surface> {
         })
         .collect();
     let width = if blend { 8 } else { 4 };
-    let uv = stream(1).chunks_exact(width);
+    let uv = stream(1)?.chunks_exact(width);
     let uv0 = uv.clone().map(|c| [h(c, 0), h(c, 2)]).collect();
     let weights = blend.then(|| uv.map(|c| h(c, 4)).collect());
     Some((positions, uv0, weights))
@@ -723,7 +723,7 @@ pub(crate) fn apply(
                             hit = true;
                         }
                         if hit {
-                            let (d, meta) = depot::write(&dep);
+                            let (d, meta) = depot::write(&dep)?;
                             b.manifest.res[i].rmeta = meta;
                             Some(d)
                         } else {
@@ -768,7 +768,7 @@ pub(crate) fn apply(
                             t.head.clone_from(&stock.head);
                             let mut m = a.rmeta;
                             m[..8].copy_from_slice(&stock.sizes);
-                            let (d, meta) = lookup::write_programs(&t, &m);
+                            let (d, meta) = lookup::write_programs(&t, &m)?;
                             b.manifest.res[i].rmeta = meta;
                             Some(d)
                         } else {
@@ -822,7 +822,7 @@ pub(crate) fn write_back(folder: &Folder, tocs: &mut PatchBundles, mut archives:
             let m = bundle::write_manifest(&b.manifest)?;
             let stored = if b.framed_manifest { encode(&m)? } else { m };
             b.files[0] = archives.put(b.files[0].0, &stored)?;
-            t.bundles[j].1 = bundle::write_region(&b.files, &[]);
+            t.bundles[j].1 = bundle::write_region(&b.files, &[])?;
             toc_changed = true;
         }
         if toc_changed {
@@ -984,12 +984,19 @@ fn rewrite_meshset(
             let sec = &lod.sections[s];
             let start = u32::try_from(vb.len()).map_err(|_| bad(W, sec.at, "vertex buffer exceeds 4 GiB"))?;
             let n = sec.vertices as usize;
-            let streams: Vec<&[u8]> = (0..sec.decl.strides.len())
-                .map(|j| {
-                    let o = sec.stream_offset(j);
-                    &geo[o..o + sec.decl.strides[j] as usize * n]
+            let streams: Vec<&[u8]> = (sec.decl.strides.iter().enumerate())
+                .map(|(j, &stride)| {
+                    sec.stream_offset(j)
+                        .and_then(|o| geo.get(o..o.checked_add(usize::from(stride).checked_mul(n)?)?))
+                        .ok_or_else(|| {
+                            bad(
+                                W,
+                                sec.at,
+                                format!("vertex stream {j} lies outside the LOD's chunk"),
+                            )
+                        })
                 })
-                .collect();
+                .collect::<Result<_>>()?;
             match wanted.get(&sec.key) {
                 None => {
                     for st in &streams {

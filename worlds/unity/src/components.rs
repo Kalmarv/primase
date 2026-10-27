@@ -710,6 +710,7 @@ impl Component for UnityTerrain {
     /// Its heightmap as the reader requires it ([`check_heightmap`]).
     fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
         unity_formats::terrain::check_heightmap(self.resolution, &self.heights, self.holes.as_deref())
+            .map_err(|e| e.to_string())
     }
 }
 

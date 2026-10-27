@@ -686,7 +686,7 @@ impl Component for FrostbiteSkeleton {
                 return Err(format!("joint {i} {:?}: a link past the {count} joints", j.name));
             }
         }
-        frostbite_formats::skeleton::verify_hierarchy(&self.joints)
+        frostbite_formats::skeleton::verify_hierarchy(&self.joints).map_err(|e| e.to_string())
     }
     fn to_json(&self) -> Result<Option<Value>, primase_core::JsonError> {
         Ok(Some(json!({

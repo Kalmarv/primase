@@ -213,8 +213,9 @@ fn a_zones_material_bakes_to_the_notes_formula() {
         while x < i64::from(size) {
             let [r, g, _, a] = mask1
                 .texel(0, x, y, [Address::Wrap; 2])
+                .expect("a stored level")
                 .map(|c| f32::from(c) / 255.0);
-            let [_, _, _, a2] = mask2.texel(0, x, y, [Address::Wrap; 2]);
+            let [_, _, _, a2] = mask2.texel(0, x, y, [Address::Wrap; 2]).expect("a stored level");
             let zone = if g > 0.75 {
                 4
             } else if g > 0.25 {
@@ -420,7 +421,11 @@ fn a_skin_material_bakes_with_the_chosen_tone_as_its_tint() {
             // the normal's texel under the bake's (256 px over the normal's own size)
             let nx = x * i64::from(normal.width) / 256;
             let ny = y * i64::from(normal.height) / 256;
-            let nz = f64::from(normal.texel(0, nx, ny, [Address::Wrap; 2])[2]) / 255.0;
+            let nz = f64::from(
+                normal
+                    .texel(0, nx, ny, [Address::Wrap; 2])
+                    .expect("a stored level")[2],
+            ) / 255.0;
             let at = (y as usize * 256 + x as usize) * 4;
             for c in 0..3 {
                 let white = lin(b[at + c]);

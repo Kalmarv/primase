@@ -73,7 +73,7 @@ impl TextureIndex {
                 if !names.contains(a.name.as_str()) || !seen.insert(a.name.as_str()) {
                     continue;
                 }
-                let entry = bundle.ebx(i);
+                let entry = super::ebx(bundle, i)?;
                 let guid = ebx::read_file_guid(&src.payload(entry.file, entry.size as usize)?)?;
                 assets.entry(guid).or_insert((b as u32, i as u32));
             }
@@ -205,7 +205,7 @@ fn asset_resource(
         .assets
         .get(guid)
         .ok_or("the GUID is the file GUID of no texture document of the index")?;
-    let entry = index.bundles[b as usize].ebx(i as usize);
+    let entry = super::ebx(&index.bundles[b as usize], i as usize).map_err(|e| e.to_string())?;
     let doc = src
         .payload(entry.file, entry.size as usize)
         .and_then(|bytes| ebx::read(&bytes))
@@ -233,7 +233,7 @@ fn read_texture(
         .get(&rid)
         .ok_or("the asset's Texture resource is in no bundle of the index")?;
     let bundle = &index.bundles[b as usize];
-    let entry = bundle.resource(i as usize);
+    let entry = super::resource(bundle, i as usize).map_err(|e| e.to_string())?;
     debug_assert_eq!(entry.kind, Kind::Res);
     match read_entry(src, bundle, &entry, w) {
         Ok(made) => made

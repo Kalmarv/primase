@@ -103,7 +103,7 @@ pub fn all_files(dir: &Path, out: &mut Vec<PathBuf>) {
 
 /// A section's stored stream `j`.
 pub fn stream(s: &meshset::Section, g: &[u8], j: usize) -> Vec<u8> {
-    let o = s.stream_offset(j);
+    let o = s.stream_offset(j).expect("a stream of the section");
     g[o..o + s.decl.strides[j] as usize * s.vertices as usize].to_vec()
 }
 

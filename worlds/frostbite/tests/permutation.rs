@@ -219,7 +219,7 @@ fn every_stock_raster_state_decodes() {
             if a.rtype != permutation::SHARED_RASTER || !seen.insert(permutation::resource_id(&a.rmeta)) {
                 continue;
             }
-            let e = b.resource(i);
+            let e = b.resource(i).expect("a listed resource");
             let s =
                 permutation::read_shared(a.rtype, &src.payload(e.file, e.size as usize).unwrap(), &a.rmeta)
                     .unwrap()

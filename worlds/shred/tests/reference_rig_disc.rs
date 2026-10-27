@@ -47,10 +47,7 @@ fn all_reference_rigs_in_all_animation_containers() {
             (5, 1680, 10, 812)
         );
         assert_eq!(report.bundles_without_rigs, 0);
-        assert_eq!(
-            (report.source_space_rigs, report.rigs_with_uninterpreted_fields),
-            (10, 10)
-        );
+        assert_eq!(report.rigs_with_source_payload, 10);
         let mut types = BTreeMap::new();
         for asset in &report.uninterpreted_assets {
             *types.entry(asset.asset_type).or_insert(0) += 1;

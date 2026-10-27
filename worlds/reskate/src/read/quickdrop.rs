@@ -3,7 +3,7 @@
 
 use frostbite_formats::ebx::{self, Document, Value};
 use frostbite_formats::folder::Source;
-use frostbite_formats::listing::Bundle;
+use frostbite_formats::listing::{Bundle, Listed};
 use frostbite_formats::{Error, Result, meshset, physics};
 
 use crate::game::quickdrop::{Donor, ECS_TOC, ITEMS_BUNDLE, ITEMS_TOC, MASTER_COLLECTION, Named, Res};
@@ -49,17 +49,27 @@ impl Opened<'_, '_> {
         let i = (m.ebx.iter())
             .position(|e| e.name.eq_ignore_ascii_case(name))
             .ok_or_else(|| missing(format!("{} has no EBX {name}", self.bundle.name)))?;
-        let e = self.bundle.ebx(i);
+        let e = self.listed_ebx(i)?;
         Ok(Named {
             name: e.name.clone(),
             doc: ebx::read(&self.src.payload(e.file, e.size as usize)?)?,
         })
     }
 
+    /// EBX document `i` of the manifest as an entry; refused when the bundle's file table has no file for it.
+    fn listed_ebx(&self, i: usize) -> Result<Listed> {
+        (self.bundle.ebx(i)).ok_or_else(|| {
+            missing(format!(
+                "{}: EBX {i} has no file in the bundle's file table",
+                self.bundle.name
+            ))
+        })
+    }
+
     /// The EBX document of file GUID `guid`, if the bundle holds it.
     fn by_guid(&self, guid: &[u8; 16]) -> Result<Option<Named>> {
         for i in 0..self.bundle.manifest.ebx.len() {
-            let e = self.bundle.ebx(i);
+            let e = self.listed_ebx(i)?;
             let bytes = self.src.payload(e.file, e.size as usize)?;
             if ebx::read_file_guid(&bytes)? == *guid {
                 return Ok(Some(Named {
@@ -76,7 +86,12 @@ impl Opened<'_, '_> {
         let i = (m.res.iter())
             .position(|r| r.rid == rid)
             .ok_or_else(|| missing(format!("{} has no resource {rid:#x}", self.bundle.name)))?;
-        let e = self.bundle.resource(i);
+        let e = (self.bundle.resource(i)).ok_or_else(|| {
+            missing(format!(
+                "{}: resource {i} has no file in the bundle's file table",
+                self.bundle.name
+            ))
+        })?;
         Ok(Res {
             name: e.name.clone(),
             rid,

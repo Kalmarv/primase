@@ -886,7 +886,7 @@ impl Component for Stored<ShaderTables> {
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     /// [`ShaderTables::check`].
     fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
-        self.0.check()
+        self.0.check().map_err(|e| e.to_string())
     }
     fn payload_bytes(&self) -> u64 {
         let bytes: usize = self.0.programs.iter().map(Vec::len).sum();
