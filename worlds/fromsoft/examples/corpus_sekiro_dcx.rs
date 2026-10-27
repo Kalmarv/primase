@@ -3,7 +3,7 @@
 //! hash, hex): the first `--limit` of them (default 256) in hash order whose stored size is at most `--max-bytes`
 //! (default 4 MiB). The bytes are the game's own; the test decodes them with the game's Oodle library and with
 //! oozextract, independently of this program. With `--compression DFLT` it writes the zlib-compressed envelopes instead,
-//! the zlib streams `repos/primase-compress/tests/oracles/codecs.py` cuts for `corpus/general/codecs.tsv`.
+//! the zlib streams `repos/primase-foundations/tests/oracles/codecs.py` cuts for `corpus/general/codecs.tsv`.
 //!
 //! `cargo run --release -p primase-fromsoft --example corpus_sekiro_dcx -- <Sekiro install> <keys> <out>
 //! [--limit N] [--max-bytes N] [--compression KRAK|DFLT]`, `<keys>` the folder of `Data1.pem` to `Data5.pem`

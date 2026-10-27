@@ -13,7 +13,7 @@ and writes, under the output folder, codecs/<codec>/<name>.in (the stream) and .
 package's decoding of it) and codecs.tsv, one `codec<TAB>input<TAB>reference` row per stream with paths relative to
 the TSV. A stream a decoder refuses, or whose decoding is not the size its header states, stops the script.
 
-uv run --no-project --with lz4==4.4.5 python -I repos/primase-compress/tests/oracles/codecs.py <staging> <oracles.root>/corpus/general
+uv run --no-project --with lz4==4.4.5 python -I repos/primase-foundations/tests/oracles/codecs.py <staging> <oracles.root>/corpus/general
 
 It runs on the Linux build machine over the staging folders copied there; its output is portable (relative paths).
 """
@@ -81,7 +81,7 @@ def main() -> None:
             rows.append(f"{codec}\tcodecs/{codec}/{stem}.in\tcodecs/{codec}/{stem}.out")
     if not rows:
         raise SystemExit(f"no streams under {staging}")
-    header = "# codec\tinput\treference (paths relative to this file); made by repos/primase-compress/tests/oracles/codecs.py\n"
+    header = "# codec\tinput\treference (paths relative to this file); made by repos/primase-foundations/tests/oracles/codecs.py\n"
     (out / "codecs.tsv").write_text(header + "\n".join(rows) + "\n", encoding="utf-8", newline="\n")
     print(f"{len(rows)} streams written to {out / 'codecs.tsv'}")
 
