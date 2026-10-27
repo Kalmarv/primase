@@ -43,20 +43,21 @@ use primase_core::{
     Shadows, Skeleton, Skin, SkinInstance, Slot, Source, Transform, WeightRule, World,
 };
 
-use crate::animator::{UnityAnimator, UnityAnimatorController, UnityAvatar};
-use crate::clipdata::RigBone;
+use crate::animator::{UnityAnimator, UnityAvatar};
+use crate::clipdata::{RigBone, lower_clip};
 use crate::components::{
-    ColliderMesh, UNITY, UnityBehaviours, UnityCamera, UnityCollider, UnityColliderShape, UnityLight,
+    ColliderMesh, Stored, UNITY, UnityBehaviours, UnityCamera, UnityCollider, UnityColliderShape, UnityLight,
     UnityMaterial, UnityMesh, UnityObject, UnityPhysicMaterial, UnityRenderSettings, UnityRenderer,
     UnityShadowQuality, UnityTerrain, UnityTerrainCollider, UnityTerrainLayer, UnityTexEnv, UnityTexture,
     UnityTree, UnityTreeInstance,
 };
 use crate::invalid;
-use crate::read::clip::{ClipData, controller_clips, path_hash};
-use crate::read::mesh::{MeshSkin, UnityMeshData};
-use crate::read::texture::UnityTexture as UnityTextureData;
+use crate::read::mesh::{primitives, primitives_and_morphs};
+use crate::read::texture::texture;
 use unity_formats::Result;
+use unity_formats::clip::{ClipData, controller_clips, path_hash};
 use unity_formats::material::{ShaderData, UnityMaterialData};
+use unity_formats::mesh::{MeshSkin, UnityMeshData};
 use unity_formats::pipeline::UnityUrpSettings;
 use unity_formats::player::{ObjRef, Player, QualityLevel, SkinWeights};
 use unity_formats::scene::{ColliderComponent, ColliderShape};
@@ -65,6 +66,7 @@ use unity_formats::scene::{
 };
 use unity_formats::shader::procedural;
 use unity_formats::terrain::{TerrainData, TerrainLayerData};
+use unity_formats::texture::UnityTexture as UnityTextureData;
 use unity_formats::value::Value;
 
 /// A prototype's or form's provenance: the Unity mesh it was read from, and the slice a static-batched renderer draws.
@@ -943,7 +945,8 @@ impl Builder<'_> {
                         None => {
                             let bone_joint =
                                 |hash: u32| bones.get(&hash).map(|(j, rest)| (skeleton, *j, *rest));
-                            let (lowered, report) = d.lower(
+                            let (lowered, report) = lower_clip(
+                                d,
                                 &|hash| hashes.get(&hash).map(|j| (skeleton, *j)),
                                 &|path, shape| morphs.get(&(path, shape)).map(|&(_, g, id)| (g, id)),
                                 humanoid
@@ -1075,7 +1078,7 @@ impl Builder<'_> {
         if let Some(e) = self.avatars.get(r) {
             return Ok(*e);
         }
-        let entity = match UnityAvatar::read(self.player, r) {
+        let entity = match unity_formats::animator::UnityAvatar::read(self.player, r).map(Stored) {
             Ok(avatar) => {
                 let e = w.spawn();
                 w.insert(e, Name(avatar.name.clone()));
@@ -1102,7 +1105,8 @@ impl Builder<'_> {
         if let Some(e) = self.controller_entities.get(r) {
             return Ok(*e);
         }
-        let entity = match UnityAnimatorController::read(self.player, r) {
+        let entity = match unity_formats::animator::UnityAnimatorController::read(self.player, r).map(Stored)
+        {
             Ok(controller) => {
                 let e = w.spawn();
                 w.insert(e, Name(controller.name.clone()));
@@ -1144,7 +1148,7 @@ impl Builder<'_> {
         let t = UnityTextureData::read(self.player, r)?;
         let e = w.spawn();
         w.insert(e, Name(t.name.clone()));
-        let not_decoded = match t.texture() {
+        let not_decoded = match texture(&t) {
             Ok(pixels) => {
                 w.insert(e, pixels);
                 None
@@ -1839,7 +1843,7 @@ fn read_scene(
             if !prototypes.contains_key(&key) {
                 let range = first as usize..first as usize + count;
                 let (read, morphs, notices) =
-                    data.primitives_and_morphs(range, skinning_of.is_some().then(|| limits[&r.mesh]))?;
+                    primitives_and_morphs(data, range, skinning_of.is_some().then(|| limits[&r.mesh]))?;
                 b.note_mesh(notices);
                 let (drawn, primitives): (Vec<u32>, Vec<_>) =
                     read.into_iter().map(|(k, p)| (k as u32, p)).unzip();
@@ -2029,7 +2033,7 @@ fn read_scene(
                     meshes.insert(mesh.clone(), UnityMeshData::read(player, mesh)?);
                 }
                 let data = &meshes[mesh];
-                let (read, notices) = data.primitives(0..data.submeshes.len())?;
+                let (read, notices) = primitives(data, 0..data.submeshes.len())?;
                 b.note_mesh(notices);
                 let (drawn, mut primitives): (Vec<u32>, Vec<_>) =
                     read.into_iter().map(|(k, p)| (k as u32, p)).unzip();
@@ -2389,7 +2393,7 @@ fn read_physic_material(v: &Value, object: &str) -> Result<UnityPhysicMaterial> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::read::mesh::Blend;
+    use unity_formats::mesh::Blend;
 
     /// A quality level the player lacks is refused listing the levels as the option takes them: each name quoted,
     /// what it draws of a skin beside it.

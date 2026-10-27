@@ -66,8 +66,9 @@ use primase_core::{
     shader::TextureSource,
 };
 
-use crate::components::{Parameters, Shape, UnityMaterial, UnityProgramVariant, UnityPrograms, UnityTexEnv};
+use crate::components::{UnityMaterial, UnityProgramVariant, UnityPrograms, UnityTexEnv};
 use crate::passes::draw_keywords::{SceneKeywords, receivers};
+use unity_formats::program::{Parameters, Shape};
 
 /// See the module documentation.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1221,10 +1222,10 @@ fn resolve_texture(
 mod tests {
     use super::*;
     use crate::components::Stored;
-    use crate::components::{ConstantBuffer, Field, StructField, TextureParam};
     use crate::fixture;
     use iridia_interface::ResourceId;
     use unity_formats::player::ObjRef;
+    use unity_formats::program::{ConstantBuffer, Field, StructField, TextureParam};
 
     fn material() -> UnityMaterial {
         UnityMaterial {

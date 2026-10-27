@@ -14,11 +14,11 @@ use std::collections::BTreeMap;
 
 use primase_core::gate::{GateReport, Tolerance};
 use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
-use primase_unity::mesh::UnityMeshData;
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
 use unity_formats::TypeTreePackage;
 use unity_formats::Value;
+use unity_formats::mesh::UnityMeshData;
 use unity_formats::player::{ObjRef, Player};
 
 fn digest_f32(v: impl Iterator<Item = f32>) -> String {

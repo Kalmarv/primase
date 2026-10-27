@@ -70,8 +70,11 @@ use primase_animation::quat::{self, from_columns, inverse, mul, normalize, rotat
 use primase_core::vector::{V3 as Vec3, add, cross, dot, scale as scaled, sub, unit_beyond};
 use primase_core::{Channel, ClipTarget, Entity, Interpolation, JointId, Property, Rest};
 
-use crate::animator::{AvatarAxes, AvatarHuman, UnityAvatar, Xform};
-use crate::clipdata::{ClipData, Curve, RigBone, Track};
+use unity_formats::animator::{AvatarAxes, AvatarHuman, Xform};
+use unity_formats::clip::{ClipData, Curve, Track};
+
+use crate::animator::UnityAvatar;
+use crate::clipdata::RigBone;
 use crate::components::UNITY;
 
 /// How many muscles Unity has (`HumanTrait.MuscleCount`).
@@ -656,146 +659,142 @@ fn translation_channel(skeleton: Entity, joint: JointId, keys: Vec<(f64, Vec3)>)
     }
 }
 
-impl ClipData {
-    /// The rotation channels of `avatar`'s humanoid bones for this clip's muscle curves, in the world's frame, each
-    /// found among the rig's joints by the path hash of its human skeleton node (`resolve`), and what was counted. The
-    /// hips get a rotation and a translation channel, placed by the clip's `RootT` and `RootQ` ([`Hips`]). Empty for an
-    /// avatar that is not a humanoid or a clip with no muscle curves.
-    pub fn humanoid_channels(
-        &self,
-        avatar: &UnityAvatar,
-        resolve: &dyn Fn(u32) -> Option<RigBone>,
-    ) -> (Vec<Channel>, HumanoidLowering) {
-        let mut report = HumanoidLowering::default();
-        let Some(human) = &avatar.human else {
-            return (Vec::new(), report);
-        };
-        let mut curves: [Option<&Curve>; MUSCLES] = [None; MUSCLES];
-        // RootT.xyz, then RootQ.xyzw
-        let mut root: [Option<&Curve>; 7] = [None; 7];
-        let mut any = false;
-        for Track {
-            binding,
-            curves: tracks,
-        } in &self.tracks
-        {
-            if binding.type_id != 95 {
-                continue;
-            }
-            match binding.attribute {
-                a @ 7..=13 => {
-                    report.root_curves += 1;
-                    root[(a - 7) as usize] = tracks.first();
-                }
-                14..=41 => report.goal_curves += 1,
-                a if (MUSCLE_ATTRIBUTE_BASE..MUSCLE_ATTRIBUTE_BASE + MUSCLES as u32).contains(&a) => {
-                    let m = (a - MUSCLE_ATTRIBUTE_BASE) as usize;
-                    if m >= BODY_MUSCLES {
-                        report.finger_curves += 1;
-                    } else if let Some(c) = tracks.first() {
-                        curves[m] = Some(c);
-                        any = true;
-                    }
-                }
-                _ => {}
-            }
+/// The rotation channels of `avatar`'s humanoid bones for this clip's muscle curves, in the world's frame, each
+/// found among the rig's joints by the path hash of its human skeleton node (`resolve`), and what was counted. The
+/// hips get a rotation and a translation channel, placed by the clip's `RootT` and `RootQ` ([`Hips`]). Empty for an
+/// avatar that is not a humanoid or a clip with no muscle curves.
+pub fn humanoid_channels(
+    data: &ClipData,
+    avatar: &UnityAvatar,
+    resolve: &dyn Fn(u32) -> Option<RigBone>,
+) -> (Vec<Channel>, HumanoidLowering) {
+    let mut report = HumanoidLowering::default();
+    let Some(human) = &avatar.human else {
+        return (Vec::new(), report);
+    };
+    let mut curves: [Option<&Curve>; MUSCLES] = [None; MUSCLES];
+    // RootT.xyz, then RootQ.xyzw
+    let mut root: [Option<&Curve>; 7] = [None; 7];
+    let mut any = false;
+    for Track {
+        binding,
+        curves: tracks,
+    } in &data.tracks
+    {
+        if binding.type_id != 95 {
+            continue;
         }
-        if !any {
-            return (Vec::new(), report);
-        }
-        report.missing_muscles = curves[..BODY_MUSCLES].iter().filter(|c| c.is_none()).count();
-        // every key time of the muscle and root curves, within the clip
-        let mut times: Vec<f64> = curves
-            .iter()
-            .chain(&root)
-            .flatten()
-            .flat_map(|c| c.keys.iter().map(|k| f64::from(k.time.min(self.duration))))
-            .collect();
-        times.sort_by(f64::total_cmp);
-        times.dedup();
-        let muscles_at = |t: f64| -> [f64; MUSCLES] {
-            std::array::from_fn(|m| curves[m].map_or(0.0, |c| f64::from(c.sample(t as f32).0)))
-        };
-        let mut channels = Vec::new();
-        for (bone, &name) in BONE_NAMES.iter().enumerate() {
-            if bone == 0 || axes_of(human, bone).is_none() {
-                continue;
+        match binding.attribute {
+            a @ 7..=13 => {
+                report.root_curves += 1;
+                root[(a - 7) as usize] = tracks.first();
             }
-            let Some(&node) = human.bone_index.get(bone).filter(|n| **n >= 0) else {
-                continue;
-            };
-            let Some(path) = usize::try_from(node).ok().and_then(|n| human.skeleton.ids.get(n)) else {
-                continue;
-            };
-            let Some((skeleton, joint, rest)) = resolve(*path) else {
-                report.unresolved_bones.push(name);
-                continue;
-            };
-            let rotation = |t: f64| bone_rotation(human, bone, &muscles_at(t)).expect("the bone has axes");
-            let (keys, worst) = rotation_keys(&times, &rotation);
-            report.worst_between_keys_degrees = report.worst_between_keys_degrees.max(worst);
-            report.bones += 1;
-            report.keys += keys.len();
-            channels.push(rotation_channel(skeleton, joint, keys));
-            // the bone's translation: the avatar's human skeleton states it, and Unity writes it to the bone whatever the scene
-            // has there (see the module documentation)
-            if let Some((t, moved)) = avatar_translation(human, node, rest) {
-                if moved > 0.0 {
-                    report.translation_changes.push((name, moved));
-                }
-                report.keys += 1;
-                channels.push(translation_channel(skeleton, joint, vec![(0.0, t)]));
-            }
-        }
-        // the hips: placed by the body's position and orientation
-        if let Some(hips) = Hips::new(avatar, human)
-            && let Some(path) = node_of(human, 0).and_then(|n| human.skeleton.ids.get(n))
-        {
-            match resolve(*path) {
-                None => report.unresolved_bones.push(BONE_NAMES[0]),
-                Some((skeleton, joint, _)) => {
-                    let at_rest = hips.rest_position();
-                    let placed = |t: f64| -> Option<(Quat, Vec3)> {
-                        let value = |i: usize, default: f64| {
-                            root[i].map_or(default, |c| f64::from(c.sample(t as f32).0))
-                        };
-                        let position = [value(0, at_rest[0]), value(1, at_rest[1]), value(2, at_rest[2])];
-                        let rotation =
-                            normalize([value(3, 0.0), value(4, 0.0), value(5, 0.0), value(6, 1.0)])
-                                .unwrap_or([0.0, 0.0, 0.0, 1.0]);
-                        hips.place(&muscles_at(t), position, rotation)
-                    };
-                    if placed(times[0]).is_some() {
-                        report.hips = true;
-                        report.missing_root_curves = root.iter().filter(|c| c.is_none()).count();
-                        let (keys, worst) = rotation_keys(&times, &|t| placed(t).expect("placed").0);
-                        report.worst_between_keys_degrees = report.worst_between_keys_degrees.max(worst);
-                        report.bones += 1;
-                        report.keys += keys.len();
-                        channels.push(rotation_channel(skeleton, joint, keys));
-                        let limit = TOLERANCE_TRANSLATION * f64::from(human.scale);
-                        let (keys, worst) = bisect_keys(
-                            &times,
-                            &|t| placed(t).expect("placed").1,
-                            &|a: &Vec3, b: &Vec3, f| add(*a, scaled(sub(*b, *a), f)),
-                            &|a: &Vec3, b: &Vec3| dot(sub(*a, *b), sub(*a, *b)).sqrt() / limit,
-                        );
-                        report.worst_hips_between_keys =
-                            report.worst_hips_between_keys.max(worst * TOLERANCE_TRANSLATION);
-                        report.keys += keys.len();
-                        channels.push(translation_channel(skeleton, joint, keys));
-                    }
+            14..=41 => report.goal_curves += 1,
+            a if (MUSCLE_ATTRIBUTE_BASE..MUSCLE_ATTRIBUTE_BASE + MUSCLES as u32).contains(&a) => {
+                let m = (a - MUSCLE_ATTRIBUTE_BASE) as usize;
+                if m >= BODY_MUSCLES {
+                    report.finger_curves += 1;
+                } else if let Some(c) = tracks.first() {
+                    curves[m] = Some(c);
+                    any = true;
                 }
             }
+            _ => {}
         }
-        (channels, report)
     }
+    if !any {
+        return (Vec::new(), report);
+    }
+    report.missing_muscles = curves[..BODY_MUSCLES].iter().filter(|c| c.is_none()).count();
+    // every key time of the muscle and root curves, within the clip
+    let mut times: Vec<f64> = curves
+        .iter()
+        .chain(&root)
+        .flatten()
+        .flat_map(|c| c.keys.iter().map(|k| f64::from(k.time.min(data.duration))))
+        .collect();
+    times.sort_by(f64::total_cmp);
+    times.dedup();
+    let muscles_at = |t: f64| -> [f64; MUSCLES] {
+        std::array::from_fn(|m| curves[m].map_or(0.0, |c| f64::from(c.sample(t as f32).0)))
+    };
+    let mut channels = Vec::new();
+    for (bone, &name) in BONE_NAMES.iter().enumerate() {
+        if bone == 0 || axes_of(human, bone).is_none() {
+            continue;
+        }
+        let Some(&node) = human.bone_index.get(bone).filter(|n| **n >= 0) else {
+            continue;
+        };
+        let Some(path) = usize::try_from(node).ok().and_then(|n| human.skeleton.ids.get(n)) else {
+            continue;
+        };
+        let Some((skeleton, joint, rest)) = resolve(*path) else {
+            report.unresolved_bones.push(name);
+            continue;
+        };
+        let rotation = |t: f64| bone_rotation(human, bone, &muscles_at(t)).expect("the bone has axes");
+        let (keys, worst) = rotation_keys(&times, &rotation);
+        report.worst_between_keys_degrees = report.worst_between_keys_degrees.max(worst);
+        report.bones += 1;
+        report.keys += keys.len();
+        channels.push(rotation_channel(skeleton, joint, keys));
+        // the bone's translation: the avatar's human skeleton states it, and Unity writes it to the bone whatever the scene
+        // has there (see the module documentation)
+        if let Some((t, moved)) = avatar_translation(human, node, rest) {
+            if moved > 0.0 {
+                report.translation_changes.push((name, moved));
+            }
+            report.keys += 1;
+            channels.push(translation_channel(skeleton, joint, vec![(0.0, t)]));
+        }
+    }
+    // the hips: placed by the body's position and orientation
+    if let Some(hips) = Hips::new(avatar, human)
+        && let Some(path) = node_of(human, 0).and_then(|n| human.skeleton.ids.get(n))
+    {
+        match resolve(*path) {
+            None => report.unresolved_bones.push(BONE_NAMES[0]),
+            Some((skeleton, joint, _)) => {
+                let at_rest = hips.rest_position();
+                let placed = |t: f64| -> Option<(Quat, Vec3)> {
+                    let value =
+                        |i: usize, default: f64| root[i].map_or(default, |c| f64::from(c.sample(t as f32).0));
+                    let position = [value(0, at_rest[0]), value(1, at_rest[1]), value(2, at_rest[2])];
+                    let rotation = normalize([value(3, 0.0), value(4, 0.0), value(5, 0.0), value(6, 1.0)])
+                        .unwrap_or([0.0, 0.0, 0.0, 1.0]);
+                    hips.place(&muscles_at(t), position, rotation)
+                };
+                if placed(times[0]).is_some() {
+                    report.hips = true;
+                    report.missing_root_curves = root.iter().filter(|c| c.is_none()).count();
+                    let (keys, worst) = rotation_keys(&times, &|t| placed(t).expect("placed").0);
+                    report.worst_between_keys_degrees = report.worst_between_keys_degrees.max(worst);
+                    report.bones += 1;
+                    report.keys += keys.len();
+                    channels.push(rotation_channel(skeleton, joint, keys));
+                    let limit = TOLERANCE_TRANSLATION * f64::from(human.scale);
+                    let (keys, worst) = bisect_keys(
+                        &times,
+                        &|t| placed(t).expect("placed").1,
+                        &|a: &Vec3, b: &Vec3, f| add(*a, scaled(sub(*b, *a), f)),
+                        &|a: &Vec3, b: &Vec3| dot(sub(*a, *b), sub(*a, *b)).sqrt() / limit,
+                    );
+                    report.worst_hips_between_keys =
+                        report.worst_hips_between_keys.max(worst * TOLERANCE_TRANSLATION);
+                    report.keys += keys.len();
+                    channels.push(translation_channel(skeleton, joint, keys));
+                }
+            }
+        }
+    }
+    (channels, report)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::animator::AvatarSkeleton;
+    use unity_formats::animator::AvatarSkeleton;
 
     const IDENTITY: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 

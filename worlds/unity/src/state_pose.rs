@@ -17,6 +17,7 @@ use crate::animator::UnityAnimatorController;
 use crate::blend_tree::Parameters;
 use crate::components::UnityObject;
 use crate::invalid;
+use unity_formats::player::ObjRef;
 use unity_formats::{Error, Result};
 
 /// What a state of one clip plays: the clip, and how the state's time maps to the clip's. Made from the controller alone (no
@@ -24,7 +25,7 @@ use unity_formats::{Error, Result};
 #[derive(Clone, Debug, PartialEq)]
 pub struct StateMotion {
     /// The clip, as the controller's clip list names it.
-    pub clip: UnityObject,
+    pub clip: ObjRef,
     /// Clip seconds per state second: the state's speed times its speed parameter's value, when it names one.
     pub speed: f64,
     /// The fraction of the clip's length the state starts in (the state's, or its parameter's value).
@@ -147,7 +148,7 @@ pub fn state_pose(
         .iter::<ClipBinding>()
         .filter(|(_, b)| b.rig == Some(rig))
         .map(|(_, b)| b.clip)
-        .find(|c| world.get::<UnityObject>(*c) == Some(&motion.clip))
+        .find(|c| world.get::<UnityObject>(*c).map(|o| &o.0) == Some(&motion.clip))
         .ok_or_else(|| {
             invalid(format!(
                 "state {state} of layer {layer}: the rig has no clip {}/{} bound (a clip that drives none of its joints is not made)",
@@ -172,8 +173,8 @@ mod tests {
     use primase_core::{Channel, ClipTarget, Extrapolation, Interpolation, Joint, JointId, Property, Rest};
 
     use super::*;
-    use crate::animator::{BlendNode, Layer, State, StateMachine};
     use crate::components::Stored;
+    use unity_formats::animator::{BlendNode, Layer, State, StateMachine};
     use unity_formats::player::ObjRef;
 
     fn leaf(clip: u32) -> BlendNode {
@@ -220,11 +221,11 @@ mod tests {
     }
 
     fn controller(states: Vec<State>) -> UnityAnimatorController {
-        UnityAnimatorController {
-            controller: Stored(ObjRef {
+        Stored(unity_formats::animator::UnityAnimatorController {
+            controller: ObjRef {
                 file: "f".into(),
                 path_id: 1,
-            }),
+            },
             name: "c".into(),
             layers: vec![Layer {
                 state_machine: 0,
@@ -251,14 +252,14 @@ mod tests {
             // clip 1 is the one bound to the rig; slot 0 is a null pointer
             clips: vec![
                 None,
-                Some(Stored(ObjRef {
+                Some(ObjRef {
                     file: "f".into(),
                     path_id: 9,
-                })),
+                }),
             ],
             behaviours: vec![],
             tos: vec![(7, "Turning".into())],
-        }
+        })
     }
 
     /// A rig of one joint (id 1, at rest turned not at all) and a clip, bound to it, that turns the joint a half turn about
@@ -358,10 +359,10 @@ mod tests {
         assert_eq!(
             m,
             StateMotion {
-                clip: Stored(ObjRef {
+                clip: ObjRef {
                     file: "f".into(),
                     path_id: 9
-                }),
+                },
                 speed: 2.0,
                 cycle_offset: 0.25
             }

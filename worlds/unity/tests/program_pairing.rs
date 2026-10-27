@@ -15,10 +15,10 @@
 use std::collections::BTreeSet;
 
 use primase_testdata::{Game, Tool, install_file, tool};
-use primase_unity::program::{D3D11_PROGRAM_TYPES, PassProgram, ShaderPrograms, Variant};
 use unity_formats::TypeTreePackage;
 use unity_formats::listing;
 use unity_formats::player::Player;
+use unity_formats::program::{D3D11_PROGRAM_TYPES, PassProgram, ShaderPrograms, Variant};
 
 type Keywords = BTreeSet<String>;
 

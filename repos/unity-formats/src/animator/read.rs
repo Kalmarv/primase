@@ -6,11 +6,9 @@ use crate::animator::{
     Parameter, SELECTOR_BASE, SelectorState, SelectorTransition, SkeletonBone, State, StateMachine,
     Transition, UnityAnimatorController, UnityAvatar, Xform,
 };
-use crate::components::UnityObject;
-use crate::invalid;
-use unity_formats::Result;
-use unity_formats::player::{ObjRef, Player};
-use unity_formats::value::{Array, Value};
+use crate::player::{ObjRef, Player};
+use crate::value::{Array, Value};
+use crate::{Result, invalid};
 
 /// A field reader over one object: errors name `what` and the field.
 struct Fields<'a> {
@@ -79,7 +77,8 @@ impl Fields<'_> {
             self.float(x, "z")?,
             self.float(x, "w")?,
         ];
-        if primase_animation::quat::normalize(q.map(f64::from)).is_none() {
+        let length = q.iter().map(|&x| f64::from(x) * f64::from(x)).sum::<f64>().sqrt();
+        if !(length > 0.0 && length.is_finite()) {
             return Err(invalid(format!("{}: {k} {q:?} is no rotation", self.what)));
         }
         Ok(q)
@@ -369,7 +368,7 @@ impl UnityAvatar {
             )));
         }
         Ok(UnityAvatar {
-            avatar: UnityObject::from(r),
+            avatar: r.clone(),
             name,
             skeleton,
             skeleton_pose,
@@ -571,17 +570,17 @@ impl UnityAnimatorController {
         let c = f.get(&v, "m_Controller")?;
         let values = f.data(f.get(c, "m_Values")?)?;
         let defaults = f.data(f.get(c, "m_DefaultValues")?)?;
-        let pointers = |k: &str| -> Result<Vec<UnityObject>> {
+        let pointers = |k: &str| -> Result<Vec<ObjRef>> {
             let mut out = Vec::new();
             for p in f.list(&v, k)? {
                 if let Some(o) = player.resolve(&r.file, p)? {
-                    out.push(UnityObject::from(&o));
+                    out.push(o);
                 }
             }
             Ok(out)
         };
         let controller = UnityAnimatorController {
-            controller: UnityObject::from(r),
+            controller: r.clone(),
             name,
             layers: f
                 .list(c, "m_LayerArray")?
@@ -610,7 +609,7 @@ impl UnityAnimatorController {
             clips: f
                 .list(&v, "m_AnimationClips")?
                 .iter()
-                .map(|p| Ok(player.resolve(&r.file, p)?.map(|o| UnityObject::from(&o))))
+                .map(|p| player.resolve(&r.file, p))
                 .collect::<Result<_>>()?,
             behaviours: pointers("m_StateMachineBehaviours")?,
             tos: f.tos(&v, "m_TOS")?,
@@ -702,9 +701,7 @@ impl UnityAnimatorController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::Stored;
     use std::sync::Arc;
-    use unity_formats::player::ObjRef;
 
     fn s(fields: &[(&str, Value)]) -> Value {
         Value::Struct(fields.iter().map(|(k, v)| (Arc::from(*k), v.clone())).collect())
@@ -886,10 +883,10 @@ mod tests {
             mirror: false,
         };
         let controller = |clip: u32, to: i64, machine: i64, param_index: i64| UnityAnimatorController {
-            controller: Stored(ObjRef {
+            controller: ObjRef {
                 file: "f".into(),
                 path_id: 1,
-            }),
+            },
             name: "c".into(),
             layers: vec![Layer {
                 state_machine: machine,
@@ -919,10 +916,10 @@ mod tests {
             default_bools: vec![],
             // the second slot is a null pointer: it still counts as a clip index
             clips: vec![
-                Some(Stored(ObjRef {
+                Some(ObjRef {
                     file: "f".into(),
                     path_id: 2,
-                })),
+                }),
                 None,
             ],
             behaviours: vec![],

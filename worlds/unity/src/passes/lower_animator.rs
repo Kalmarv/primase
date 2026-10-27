@@ -43,9 +43,10 @@ use primase_core::{
     ControllerParameterKind, ControllerState, Entity, LayerBlending, Motion, RigInstance, World,
 };
 
-use crate::animator::{BlendNode, Parameter, State, UnityAnimator, UnityAnimatorController};
+use crate::animator::{UnityAnimator, UnityAnimatorController};
 use crate::components::UnityObject;
 use unity_formats::Result;
+use unity_formats::animator::{BlendNode, Parameter, State};
 
 /// The kind of a stored parameter (1 float, 3 int, 4 bool, 9 trigger) as core's; `None` for a kind core has no word
 /// for.
@@ -131,7 +132,7 @@ fn clip_of(
     w.iter::<ClipBinding>()
         .filter(|(_, b)| b.rig == Some(rig))
         .map(|(_, b)| b.clip)
-        .find(|clip| w.has::<Clip>(*clip) && w.get::<UnityObject>(*clip) == Some(object))
+        .find(|clip| w.has::<Clip>(*clip) && w.get::<UnityObject>(*clip).map(|o| &o.0) == Some(object))
         .ok_or_else(|| {
             format!(
                 "the rig has no clip {}/{} bound (a clip that drives none of its joints is not made)",
@@ -483,7 +484,9 @@ mod tests {
     use primase_core::{Component, Extrapolation, Skeleton, Transform};
 
     use super::*;
-    use crate::animator::{Layer, StateMachine};
+    use crate::components::Stored;
+    use unity_formats::animator::{Layer, StateMachine};
+    use unity_formats::player::ObjRef;
 
     const SPEED: u32 = 7;
     const OFFSET: u32 = 11;
@@ -493,11 +496,11 @@ mod tests {
     const WALK: u32 = 32;
     const FLY: u32 = 33;
 
-    fn object(path_id: i64) -> UnityObject {
-        UnityObject::from(&unity_formats::player::ObjRef {
+    fn object(path_id: i64) -> ObjRef {
+        ObjRef {
             file: "fixture.assets".to_owned(),
             path_id,
-        })
+        }
     }
 
     fn node(blend_type: i64, event: u32, children: Vec<u32>, thresholds: Vec<f32>, clip: u32) -> BlendNode {
@@ -563,7 +566,7 @@ mod tests {
     }
 
     fn controller(layers: Vec<Layer>, machines: Vec<StateMachine>) -> UnityAnimatorController {
-        UnityAnimatorController {
+        Stored(unity_formats::animator::UnityAnimatorController {
             controller: object(1),
             name: "bird".to_owned(),
             layers,
@@ -599,7 +602,7 @@ mod tests {
                 (32, "Walk".to_owned()),
                 (33, "Fly".to_owned()),
             ],
-        }
+        })
     }
 
     /// A world with the fixture's controller, one rig its Animator drives, and its two clips bound to that rig.
@@ -640,7 +643,7 @@ mod tests {
         w.insert(
             rig,
             UnityAnimator {
-                animator: object(2),
+                animator: Stored(object(2)),
                 enabled: true,
                 apply_root_motion: false,
                 controller: Some(controller_entity),
@@ -660,7 +663,7 @@ mod tests {
                     additive: None,
                 },
             );
-            w.insert(clip, object(path_id));
+            w.insert(clip, Stored(object(path_id)));
             w.insert(
                 clip,
                 ClipBinding {

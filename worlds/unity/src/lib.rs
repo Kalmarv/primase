@@ -1,7 +1,8 @@
 //! Unity players' data files read into the world.
 //!
 //! The files are read by `unity_formats` (SerializedFile, type trees, TPK, streamed resources, a scene's hierarchy,
-//! materials, shader state, terrains, the pipeline's settings). The reader modules here (`read/`, re-exported):
+//! materials, shader state, terrains, meshes, textures, programs, Animator data and clips, the pipeline's settings).
+//! The reads here (`read/`, re-exported) turn what it reads into the world:
 //! - [`level`]: a scene into the world, Unity's frame converted; [`components`] the `unity.*` dialect. Its report
 //!   serialises ([`level::LevelReport::to_json`]).
 //! - [`convert`]: a scene as a conversion's reader ([`convert::UnityReader`]: the level read, a part its roots' closure).
@@ -42,7 +43,7 @@ pub use passes::{
     draw_keywords, drawn, lower, lower_ambient, lower_animator, lower_collision, lower_lights, lower_terrain,
     resolve_shaders,
 };
-pub use read::{asset, clip, convert, level, mesh, program, texture};
+pub use read::{asset, convert, level, mesh, program, texture};
 
 /// Registers the Unity passes by their declarations: `unity-drawn`, `lower-unity-pbr`, `lower-unity-terrain`,
 /// `lower-unity-collision`, `lower-unity-lights`, `lower-unity-animator`, `resolve-unity-shaders` and

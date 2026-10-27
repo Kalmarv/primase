@@ -17,9 +17,10 @@ use std::collections::BTreeMap;
 
 use primase_core::{Semantic, Stream};
 use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
-use primase_unity::mesh::UnityMeshData;
+use primase_unity::mesh::primitives;
 use serde_json::Value as Json;
 use unity_formats::TypeTreePackage;
+use unity_formats::mesh::UnityMeshData;
 use unity_formats::player::{ObjRef, Player};
 
 fn v3(j: &Json) -> [f64; 3] {
@@ -103,7 +104,7 @@ fn mirror_is_undone_in_the_geometry() {
             .collect();
         let submeshes = m["submeshes"].as_array().unwrap();
         let ours = UnityMeshData::read(&player, &r).unwrap();
-        let prims = ours.primitives(0..submeshes.len()).unwrap();
+        let prims = primitives(&ours, 0..submeshes.len()).unwrap();
         assert_eq!(prims.0.len(), submeshes.len(), "{name}: primitives");
         for ((sub_index, p), tris) in prims.0.iter().zip(submeshes) {
             let tris: Vec<[usize; 3]> = tris

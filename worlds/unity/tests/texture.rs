@@ -21,10 +21,11 @@ use primase_core::{ColorSpace, Texture};
 use primase_image::{Samples, read_png};
 use primase_testdata::gate::{GateReport, Tolerance};
 use primase_texcodec::{Bcdec, Decoder, TexDecoder};
-use primase_unity::texture::UnityTexture;
+use primase_unity::texture::{normal, texture};
 use serde_json::Value as Json;
 use unity_formats::TypeTreePackage;
 use unity_formats::player::{ObjRef, Player};
+use unity_formats::texture::UnityTexture;
 
 /// Per TextureFormat: textures, textures equal, channels compared and differing, the largest difference and where.
 #[derive(Default)]
@@ -108,7 +109,7 @@ fn textures_match_the_oracle() {
             header.fail(&item, format!("{got:?} vs {want:?}"));
             continue;
         }
-        let ours = match u.texture() {
+        let ours = match texture(&u) {
             Ok(x) => x,
             // the header is right; pixels the reader does not decode on purpose are counted, any other failure fails
             Err(unity_formats::Error::Unsupported(why))
@@ -128,7 +129,7 @@ fn textures_match_the_oracle() {
             }
         };
         if ours.levels.len() as u32 != u.mips
-            || (ours.color_space == ColorSpace::Srgb) != (u.srgb && u.normal().is_none())
+            || (ours.color_space == ColorSpace::Srgb) != (u.srgb && normal(&u).is_none())
         {
             header.fail(&item, "levels or colour space".to_owned());
             continue;

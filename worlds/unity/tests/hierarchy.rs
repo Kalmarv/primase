@@ -25,9 +25,9 @@ use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_unity::components::UNITY;
 use primase_unity::components::{UnityBehaviours, UnityMesh, UnityRenderer, UnityTreeInstance};
 use primase_unity::level::{read_level, transform_of};
-use primase_unity::mesh::UnityMeshData;
 use serde_json::{Value as Json, json};
 use unity_formats::TypeTreePackage;
+use unity_formats::mesh::UnityMeshData;
 use unity_formats::player::{ObjRef, Player};
 use unity_formats::scene::Scene;
 

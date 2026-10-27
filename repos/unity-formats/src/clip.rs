@@ -1,5 +1,4 @@
-//! Unity AnimationClips: the curves of a Mecanim clip (`m_MuscleClip`) decoded to keys with tangents, and the
-//! transform curves of a clip lowered to a `core.clip` for the joints of a skeleton.
+//! Unity AnimationClips: the curves of a Mecanim clip (`m_MuscleClip`) decoded to keys with tangents.
 //!
 //! A clip stores its curves in three blocks, numbered in this order: the **streamed** curves (`m_StreamedClip`), the
 //! **dense** curves (`m_DenseClip`, one sample per frame at a fixed rate) and the **constant** curves
@@ -15,11 +14,136 @@
 //! `-f32::MAX` and gives every curve's initial value; the last is at `+inf` with no keys. A segment whose coefficients are
 //! not finite is a step.
 
-pub use crate::clipdata::{ClipData, ClipLowering, Curve, GenericBinding, HumanoidRig, Key, Storage, Track};
-use crate::invalid;
-use unity_formats::player::{ObjRef, Player};
-use unity_formats::value::{Array, Value};
-use unity_formats::{Error, Result};
+use crate::player::{ObjRef, Player};
+use crate::value::{Array, Value};
+use crate::{Error, Result, invalid};
+
+/// One curve binding of a clip (`genericBindings`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GenericBinding {
+    /// The CRC-32 of the target's path below the Animator's GameObject.
+    pub path: u32,
+    /// The attribute: for a Transform (`type_id` 4) 1 position, 2 rotation, 3 scale, 4 Euler angles; else the
+    /// property's hash.
+    pub attribute: u32,
+    /// The target's class id (4 Transform, 95 Animator, 137 SkinnedMeshRenderer, ...).
+    pub type_id: i64,
+    pub is_pptr: bool,
+}
+
+impl GenericBinding {
+    /// How many curves this binding takes.
+    pub fn width(&self) -> usize {
+        match (self.type_id, self.attribute) {
+            (4, 1 | 3 | 4) => 3,
+            (4, 2) => 4,
+            _ => 1,
+        }
+    }
+}
+
+/// Where a curve was stored.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Storage {
+    Streamed,
+    Dense,
+    Constant,
+}
+
+/// A key of a curve: its time (seconds), value and the slopes (per second) into and out of it. An infinite outgoing
+/// slope is a step to the next key.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Key {
+    pub time: f32,
+    pub value: f32,
+    pub in_slope: f32,
+    pub out_slope: f32,
+}
+
+/// One scalar curve: keys in increasing time, evaluated as a cubic Hermite spline between them (a dense curve's slopes
+/// are its secants, so it is piecewise linear).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Curve {
+    pub storage: Storage,
+    pub keys: Vec<Key>,
+}
+
+impl Curve {
+    /// The value at `t` and the slopes into and out of it: a key's own at its time, a segment's derivative inside it,
+    /// the end values held with no slope outside. A step segment holds its key's value.
+    pub fn sample(&self, t: f32) -> (f32, f32, f32) {
+        let k = &self.keys;
+        let (Some(first), Some(last)) = (k.first(), k.last()) else {
+            return (0.0, 0.0, 0.0);
+        };
+        if t <= first.time {
+            return (
+                first.value,
+                0.0,
+                if t == first.time { first.out_slope } else { 0.0 },
+            );
+        }
+        if t >= last.time {
+            return (last.value, if t == last.time { last.in_slope } else { 0.0 }, 0.0);
+        }
+        let i = k.partition_point(|key| key.time <= t) - 1;
+        let (a, b) = (&k[i], &k[i + 1]);
+        if t == a.time {
+            return (a.value, a.in_slope, a.out_slope);
+        }
+        if !a.out_slope.is_finite() {
+            return (a.value, 0.0, 0.0);
+        }
+        let (dt, s) = (
+            f64::from(b.time - a.time),
+            f64::from(t - a.time) / f64::from(b.time - a.time),
+        );
+        let (p0, p1) = (f64::from(a.value), f64::from(b.value));
+        let (m0, m1) = (f64::from(a.out_slope) * dt, f64::from(b.in_slope) * dt);
+        let (s2, s3) = (s * s, s * s * s);
+        let value = (2.0 * s3 - 3.0 * s2 + 1.0) * p0
+            + (s3 - 2.0 * s2 + s) * m0
+            + (-2.0 * s3 + 3.0 * s2) * p1
+            + (s3 - s2) * m1;
+        let slope = ((6.0 * s2 - 6.0 * s) * p0
+            + (3.0 * s2 - 4.0 * s + 1.0) * m0
+            + (-6.0 * s2 + 6.0 * s) * p1
+            + (3.0 * s2 - 2.0 * s) * m1)
+            / dt;
+        (value as f32, slope as f32, slope as f32)
+    }
+
+    /// Whether any slope is a step.
+    pub fn has_steps(&self) -> bool {
+        self.keys.iter().any(|k| !k.out_slope.is_finite())
+    }
+
+    pub fn is_constant(&self) -> bool {
+        self.keys.len() == 1
+    }
+}
+
+/// A binding with the curves it takes, in the order of its attribute's components.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Track {
+    pub binding: GenericBinding,
+    pub curves: Vec<Curve>,
+}
+
+/// An AnimationClip's curves as stored.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClipData {
+    pub name: String,
+    /// Seconds, `m_StopTime - m_StartTime`.
+    pub duration: f32,
+    pub looping: bool,
+    pub tracks: Vec<Track>,
+    /// Animation events (`m_Events`): not read.
+    pub events: usize,
+    /// How far a streamed segment's end was from the next key's value (relative), the worst over the segments of a
+    /// millisecond or more: the decode's own consistency (the segment is the cubic the next key continues).
+    pub worst_continuity_error: f32,
+}
 
 fn int(v: &Value, k: &str) -> Result<i64> {
     v.get(k)
@@ -304,8 +428,6 @@ pub fn controller_clips(player: &Player, controller: &ObjRef) -> Result<Vec<ObjR
 
 #[cfg(test)]
 mod tests {
-    use primase_core::{ClipTarget, Interpolation, JointId, Property};
-
     use super::*;
 
     fn key(time: f32, value: f32, in_slope: f32, out_slope: f32) -> Key {
@@ -375,146 +497,6 @@ mod tests {
     /// A Hermite curve samples to its keys, and a transform track of three curves with different key times becomes
     /// one Hermite channel at the union of the times whose pieces are the same cubics; constants give one key, dense
     /// curves a Linear channel.
-    #[test]
-    fn transform_tracks_become_joint_channels() {
-        let binding = |attribute| GenericBinding {
-            path: 1,
-            attribute,
-            type_id: 4,
-            is_pptr: false,
-        };
-        let line = |a: f32, b: f32| Curve {
-            storage: Storage::Streamed,
-            keys: vec![key(0.0, a, 0.0, b - a), key(1.0, b, b - a, 0.0)],
-        };
-        let mut world = primase_core::World::new();
-        let target = ClipTarget::Joint {
-            skeleton: world.spawn(),
-            joint: JointId(0),
-        };
-        let track = Track {
-            binding: binding(1),
-            curves: vec![
-                line(0.0, 1.0),
-                Curve {
-                    storage: Storage::Constant,
-                    keys: vec![key(0.0, 5.0, 0.0, 0.0)],
-                },
-                Curve {
-                    storage: Storage::Streamed,
-                    keys: vec![
-                        key(0.0, 0.0, 0.0, 2.0),
-                        key(0.5, 1.0, 2.0, 2.0),
-                        key(1.0, 2.0, 2.0, 0.0),
-                    ],
-                },
-            ],
-        };
-        let mut renormalised = 0;
-        let c = track
-            .channel(target.clone(), 1.0, &mut renormalised)
-            .unwrap()
-            .unwrap();
-        assert_eq!(c.property, Property::Translation);
-        assert_eq!(c.interpolation, Interpolation::Hermite);
-        assert_eq!(c.times, vec![0.0, 0.5, 1.0]);
-        // 9 values a key: in tangents, value, out tangents; x runs 0 to 1 and z 0 to 2 along straight lines
-        assert_eq!(c.values.len(), 27);
-        let key1 = &c.values[9..18];
-        assert!(
-            (key1[3] - 0.5).abs() < 1e-6 && (key1[4] - 5.0).abs() < 1e-6 && (key1[5] + 1.0).abs() < 1e-6,
-            "{key1:?}"
-        );
-        let constant = Track {
-            binding: binding(3),
-            curves: vec![
-                Curve {
-                    storage: Storage::Constant,
-                    keys: vec![key(0.0, 1.0, 0.0, 0.0)]
-                };
-                3
-            ],
-        };
-        let c = constant
-            .channel(target.clone(), 1.0, &mut renormalised)
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            (c.interpolation, c.times.len(), c.values.len()),
-            (Interpolation::Linear, 1, 3)
-        );
-        assert!(
-            Track {
-                binding: binding(4),
-                curves: vec![],
-            }
-            .channel(target, 1.0, &mut renormalised)
-            .unwrap()
-            .is_none()
-        );
-    }
-
-    /// A SkinnedMeshRenderer's blend shape curve is a morph channel on the target its renderer path and shape name hashes
-    /// resolve to, in Unity's weights (0 to 100) as stored; one with no such target is counted, not lowered, and two for
-    /// one target are refused.
-    #[test]
-    fn blend_shape_curves_become_morph_channels() {
-        let track = |path: u32, shape: u32| Track {
-            binding: GenericBinding {
-                path,
-                attribute: shape,
-                type_id: 137,
-                is_pptr: false,
-            },
-            curves: vec![Curve {
-                storage: Storage::Streamed,
-                keys: vec![key(0.0, 0.0, 0.0, 100.0), key(1.0, 100.0, 100.0, 0.0)],
-            }],
-        };
-        let mut world = primase_core::World::new();
-        let geometry = world.spawn();
-        let clip = |tracks: Vec<Track>| ClipData {
-            name: "blink".into(),
-            duration: 1.0,
-            looping: false,
-            tracks,
-            events: 0,
-            worst_continuity_error: 0.0,
-        };
-        let morph =
-            |path: u32, shape: u32| (path == 5 && shape == 6).then_some((geometry, primase_core::MorphId(3)));
-        let none = |_: u32| None;
-        let (lowered, report) = clip(vec![track(5, 6), track(5, 99)])
-            .lower(&none, &morph, None)
-            .unwrap();
-        assert_eq!(
-            (report.morph_channels, report.unresolved_morphs, report.channels),
-            (1, 1, 1)
-        );
-        let c = &lowered.channels[0];
-        assert_eq!(
-            c.target,
-            ClipTarget::Morph {
-                geometry,
-                morph: primase_core::MorphId(3)
-            }
-        );
-        assert_eq!(
-            (c.property, c.interpolation),
-            (Property::Scalar, Interpolation::Hermite)
-        );
-        assert_eq!(c.times, vec![0.0, 1.0]);
-        // in tangent, value, out tangent a key; the values are not scaled
-        assert_eq!(c.values.len(), 6);
-        assert!((c.values[4] - 100.0).abs() < 1e-5, "{:?}", c.values);
-        assert!(
-            clip(vec![track(5, 6), track(5, 6)])
-                .lower(&none, &morph, None)
-                .is_err()
-        );
-    }
-
-    /// The path hash is the zlib CRC-32: values from the SkateBIRD avatar's name table.
     #[test]
     fn path_hashes_are_the_crc32_of_the_path() {
         assert_eq!(path_hash(""), 0);

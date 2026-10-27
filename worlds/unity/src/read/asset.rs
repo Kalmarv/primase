@@ -14,8 +14,8 @@ use primase_core::{Entity, Instance, Mesh, Name, World};
 use crate::components::{UNITY, UnityMesh, UnityObject};
 use crate::invalid;
 use crate::level::{Builder, LevelReport, mesh_source, transform_of};
-use crate::mesh::UnityMeshData;
 use unity_formats::Result;
+use unity_formats::mesh::UnityMeshData;
 use unity_formats::player::{ObjRef, Player};
 use unity_formats::scene::IDENTITY;
 
@@ -54,7 +54,7 @@ pub fn read_asset(player: &Player, r: &ObjRef, w: &mut World) -> Result<AssetRea
         "Material" => b.material(w, r)?,
         _ => {
             let data = UnityMeshData::read(player, r)?;
-            let (read, notices) = data.primitives(0..data.submeshes.len())?;
+            let (read, notices) = crate::read::mesh::primitives(&data, 0..data.submeshes.len())?;
             b.note_mesh(notices);
             let (drawn, primitives): (Vec<u32>, Vec<_>) =
                 read.into_iter().map(|(k, p)| (k as u32, p)).unzip();

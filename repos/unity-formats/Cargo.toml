@@ -11,6 +11,7 @@ publish.workspace = true
 [dependencies]
 primase-foundations = { workspace = true, features = ["compress"] }
 thiserror.workspace = true
+half.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

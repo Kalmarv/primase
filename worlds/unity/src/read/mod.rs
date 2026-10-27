@@ -1,8 +1,6 @@
 //! The reads that build the world's data from what `unity_formats` reads of a player's data folder.
 
-pub mod animator;
 pub mod asset;
-pub mod clip;
 pub mod convert;
 pub mod level;
 pub mod mesh;

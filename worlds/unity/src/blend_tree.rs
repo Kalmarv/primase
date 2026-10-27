@@ -23,8 +23,9 @@
 
 use std::collections::BTreeMap;
 
-use crate::animator::{BlendNode, UnityAnimatorController, name_hash};
+use crate::animator::UnityAnimatorController;
 use crate::invalid;
+use unity_formats::animator::{BlendNode, name_hash};
 use unity_formats::{Error, Result};
 
 /// The values of a controller's parameters, by the CRC-32 of the parameter's name, as the controller's blend trees and
@@ -441,25 +442,27 @@ mod tests {
             [(6, 1.0)]
         );
 
-        let controller = |default: f32| UnityAnimatorController {
-            controller: Stored(ObjRef {
-                file: "f".into(),
-                path_id: 1,
-            }),
-            name: "c".into(),
-            layers: vec![],
-            state_machines: vec![],
-            parameters: vec![crate::animator::Parameter {
-                id: name_hash("x"),
-                kind: 1,
-                index: 0,
-            }],
-            default_floats: vec![default],
-            default_ints: vec![],
-            default_bools: vec![],
-            clips: vec![],
-            behaviours: vec![],
-            tos: vec![],
+        let controller = |default: f32| {
+            Stored(unity_formats::animator::UnityAnimatorController {
+                controller: ObjRef {
+                    file: "f".into(),
+                    path_id: 1,
+                },
+                name: "c".into(),
+                layers: vec![],
+                state_machines: vec![],
+                parameters: vec![unity_formats::animator::Parameter {
+                    id: name_hash("x"),
+                    kind: 1,
+                    index: 0,
+                }],
+                default_floats: vec![default],
+                default_ints: vec![],
+                default_bools: vec![],
+                clips: vec![],
+                behaviours: vec![],
+                tos: vec![],
+            })
         };
         assert_eq!(
             Parameters::defaults(&controller(0.25)).unwrap(),

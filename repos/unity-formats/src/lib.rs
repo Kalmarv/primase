@@ -15,6 +15,11 @@
 //!   scene list and render pipeline.
 //! - [`scene`]: a scene's hierarchy (GameObjects, Transforms composed to world matrices) and its renderers, lights,
 //!   colliders and terrains, with the scene's ambient and fog settings.
+//! - [`mesh`]: meshes (vertex streams, compressed meshes, index buffers, submeshes, skins and blend shapes).
+//! - [`texture`]: textures (formats, mip chains, sampler state).
+//! - [`program`]: a shader's compiled programs (variants, constant-buffer layouts, bind slots, code).
+//! - [`animator`]: Avatars and AnimatorControllers (state machines, blend trees, transitions).
+//! - [`clip`]: AnimationClips (curves decoded to keys with tangents).
 //! - [`listing`]: a player's objects by class and name, read from the object tables.
 //! - [`material`]: materials as stored (shader, saved properties, keywords).
 //! - [`shader`]: a Shader's render state as stored (subshaders, passes, blend, depth and stencil state).
@@ -25,16 +30,21 @@
 //! what it found and where.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+pub mod animator;
+pub mod clip;
 pub mod listing;
 pub mod material;
+pub mod mesh;
 pub mod pipeline;
 pub mod player;
-pub mod reader;
+pub mod program;
+mod reader;
 pub mod resource;
 pub mod scene;
 pub mod serialized;
 pub mod shader;
 pub mod terrain;
+pub mod texture;
 pub mod tpk;
 pub mod typetree;
 pub mod value;

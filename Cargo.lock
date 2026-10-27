@@ -1540,14 +1540,12 @@ dependencies = [
 name = "primase-unity"
 version = "0.1.0"
 dependencies = [
- "half",
  "iridia",
  "iridia-dxbc",
  "iridia-exec",
  "iridia-interface",
  "primase-animation",
  "primase-core",
- "primase-foundations",
  "primase-gltf",
  "primase-image",
  "primase-meshops",
@@ -1557,7 +1555,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "thiserror",
  "unity-formats",
 ]
 
@@ -2084,6 +2081,7 @@ checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
 name = "unity-formats"
 version = "0.1.0"
 dependencies = [
+ "half",
  "primase-foundations",
  "primase-testdata",
  "serde",

@@ -20,9 +20,10 @@ use primase_core::{ColorSpace, Texture};
 use primase_foundations::color::srgb_to_linear;
 use primase_foundations::{sampling::Address, sampling::Transfer};
 
-use crate::components::{Shape, UnityMaterial, UnityProgramVariant, UnityTexture};
+use crate::components::{UnityMaterial, UnityProgramVariant, UnityTexture};
 use crate::invalid;
 use unity_formats::Result;
+use unity_formats::program::Shape;
 
 /// A program bound to its layout.
 #[derive(Debug)]

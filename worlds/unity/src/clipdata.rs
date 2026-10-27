@@ -1,143 +1,16 @@
-//! An AnimationClip's curves as data (bindings, keys, cubic curves, tracks) and a clip lowered to a `core.clip` for the
-//! joints of a rig. Plain types: reading them from a file is [`crate::clip`]'s; the humanoid evaluation
-//! ([`crate::humanoid`]) and the passes use these. See the reader's module for how a clip stores its curves.
+//! A clip lowered to a `core.clip` for the joints of a rig: the clip's curves (`unity_formats::clip`) sampled as Hermite
+//! channels in the world's frame. The humanoid evaluation ([`crate::humanoid`]) and the passes use these.
 
 use std::collections::BTreeSet;
 
 use primase_core::{
     Channel, Clip, ClipTarget, Entity, Extrapolation, Interpolation, JointId, MorphId, Property, Rest,
 };
+use unity_formats::clip::{ClipData, Curve, Storage, Track};
+use unity_formats::{Error, Result};
 
 use crate::components::UNITY;
 use crate::invalid;
-use unity_formats::{Error, Result};
-
-/// One curve binding of a clip (`genericBindings`).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GenericBinding {
-    /// The CRC-32 of the target's path below the Animator's GameObject.
-    pub path: u32,
-    /// The attribute: for a Transform (`type_id` 4) 1 position, 2 rotation, 3 scale, 4 Euler angles; else the
-    /// property's hash.
-    pub attribute: u32,
-    /// The target's class id (4 Transform, 95 Animator, 137 SkinnedMeshRenderer, ...).
-    pub type_id: i64,
-    pub is_pptr: bool,
-}
-
-impl GenericBinding {
-    /// How many curves this binding takes.
-    pub(crate) fn width(&self) -> usize {
-        match (self.type_id, self.attribute) {
-            (4, 1 | 3 | 4) => 3,
-            (4, 2) => 4,
-            _ => 1,
-        }
-    }
-}
-
-/// Where a curve was stored.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Storage {
-    Streamed,
-    Dense,
-    Constant,
-}
-
-/// A key of a curve: its time (seconds), value and the slopes (per second) into and out of it. An infinite outgoing
-/// slope is a step to the next key.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Key {
-    pub time: f32,
-    pub value: f32,
-    pub in_slope: f32,
-    pub out_slope: f32,
-}
-
-/// One scalar curve: keys in increasing time, evaluated as a cubic Hermite spline between them (a dense curve's slopes
-/// are its secants, so it is piecewise linear).
-#[derive(Clone, Debug, PartialEq)]
-pub struct Curve {
-    pub storage: Storage,
-    pub keys: Vec<Key>,
-}
-
-impl Curve {
-    /// The value at `t` and the slopes into and out of it: a key's own at its time, a segment's derivative inside it,
-    /// the end values held with no slope outside. A step segment holds its key's value.
-    pub fn sample(&self, t: f32) -> (f32, f32, f32) {
-        let k = &self.keys;
-        let (Some(first), Some(last)) = (k.first(), k.last()) else {
-            return (0.0, 0.0, 0.0);
-        };
-        if t <= first.time {
-            return (
-                first.value,
-                0.0,
-                if t == first.time { first.out_slope } else { 0.0 },
-            );
-        }
-        if t >= last.time {
-            return (last.value, if t == last.time { last.in_slope } else { 0.0 }, 0.0);
-        }
-        let i = k.partition_point(|key| key.time <= t) - 1;
-        let (a, b) = (&k[i], &k[i + 1]);
-        if t == a.time {
-            return (a.value, a.in_slope, a.out_slope);
-        }
-        if !a.out_slope.is_finite() {
-            return (a.value, 0.0, 0.0);
-        }
-        let (dt, s) = (
-            f64::from(b.time - a.time),
-            f64::from(t - a.time) / f64::from(b.time - a.time),
-        );
-        let (p0, p1) = (f64::from(a.value), f64::from(b.value));
-        let (m0, m1) = (f64::from(a.out_slope) * dt, f64::from(b.in_slope) * dt);
-        let (s2, s3) = (s * s, s * s * s);
-        let value = (2.0 * s3 - 3.0 * s2 + 1.0) * p0
-            + (s3 - 2.0 * s2 + s) * m0
-            + (-2.0 * s3 + 3.0 * s2) * p1
-            + (s3 - s2) * m1;
-        let slope = ((6.0 * s2 - 6.0 * s) * p0
-            + (3.0 * s2 - 4.0 * s + 1.0) * m0
-            + (-6.0 * s2 + 6.0 * s) * p1
-            + (3.0 * s2 - 2.0 * s) * m1)
-            / dt;
-        (value as f32, slope as f32, slope as f32)
-    }
-
-    /// Whether any slope is a step.
-    pub(crate) fn has_steps(&self) -> bool {
-        self.keys.iter().any(|k| !k.out_slope.is_finite())
-    }
-
-    pub(crate) fn is_constant(&self) -> bool {
-        self.keys.len() == 1
-    }
-}
-
-/// A binding with the curves it takes, in the order of its attribute's components.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Track {
-    pub binding: GenericBinding,
-    pub curves: Vec<Curve>,
-}
-
-/// An AnimationClip's curves as stored.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ClipData {
-    pub name: String,
-    /// Seconds, `m_StopTime - m_StartTime`.
-    pub duration: f32,
-    pub looping: bool,
-    pub tracks: Vec<Track>,
-    /// Animation events (`m_Events`): not read.
-    pub events: usize,
-    /// How far a streamed segment's end was from the next key's value (relative), the worst over the segments of a
-    /// millisecond or more: the decode's own consistency (the segment is the cubic the next key continues).
-    pub worst_continuity_error: f32,
-}
 
 /// A humanoid bone's joint in the rig: its skeleton, the joint, and the translation the scene gives it (the Transform's local
 /// position, in Unity's frame).
@@ -213,220 +86,217 @@ fn convert(property: Property, v: &[f32]) -> Vec<f32> {
     }
 }
 
-impl Track {
-    /// This transform track as a joint channel on `target`, in the world's frame: its curves sampled at the union of
-    /// their key times, as a Hermite spline (each curve is a cubic between its keys, which the Hermite form with the curve's own
-    /// values and slopes at the keys states exactly; the tangents are per second), as a Linear channel when
-    /// every curve is dense or constant, and as a one-key channel when every curve is constant. `None` for a
-    /// binding that is not position, rotation or scale of a Transform. An error for steps mixed with smooth segments.
-    pub fn channel(
-        &self,
-        target: ClipTarget,
-        duration: f32,
-        renormalised: &mut usize,
-    ) -> Result<Option<Channel>> {
-        let property = match (self.binding.type_id, self.binding.attribute) {
-            (4, 1) => Property::Translation,
-            (4, 2) => Property::Rotation,
-            (4, 3) => Property::Scale,
-            (137, _) => Property::Scalar,
-            _ => return Ok(None),
-        };
-        let width = self.curves.len();
-        let steps = self.curves.iter().filter(|c| c.has_steps()).count();
-        // a scalar curve may step throughout; a transform's, or a scalar's with steps among smooth segments, may not
-        let stepped = steps > 0
-            && property == Property::Scalar
-            && self
-                .curves
-                .iter()
-                .all(|c| c.keys.iter().rev().skip(1).all(|k| !k.out_slope.is_finite()));
-        if steps > 0 && !stepped {
-            return Err(Error::Unsupported(format!("a {property:?} curve with steps")));
-        }
-        let mut times: Vec<f32> = self
+/// This transform track as a joint channel on `target`, in the world's frame: its curves sampled at the union of
+/// their key times, as a Hermite spline (each curve is a cubic between its keys, which the Hermite form with the curve's own
+/// values and slopes at the keys states exactly; the tangents are per second), as a Linear channel when
+/// every curve is dense or constant, and as a one-key channel when every curve is constant. `None` for a
+/// binding that is not position, rotation or scale of a Transform. An error for steps mixed with smooth segments.
+pub fn track_channel(
+    track: &Track,
+    target: ClipTarget,
+    duration: f32,
+    renormalised: &mut usize,
+) -> Result<Option<Channel>> {
+    let property = match (track.binding.type_id, track.binding.attribute) {
+        (4, 1) => Property::Translation,
+        (4, 2) => Property::Rotation,
+        (4, 3) => Property::Scale,
+        (137, _) => Property::Scalar,
+        _ => return Ok(None),
+    };
+    let width = track.curves.len();
+    let steps = track.curves.iter().filter(|c| c.has_steps()).count();
+    // a scalar curve may step throughout; a transform's, or a scalar's with steps among smooth segments, may not
+    let stepped = steps > 0
+        && property == Property::Scalar
+        && track
             .curves
             .iter()
-            .flat_map(|c| c.keys.iter().map(|k| k.time))
-            .collect();
-        // a key a rounding beyond the clip's end is at its end
-        times.retain(|t| *t <= duration + 1e-4);
-        times.iter_mut().for_each(|t| *t = t.min(duration));
-        times.sort_by(f32::total_cmp);
-        times.dedup();
-        let all_constant = self.curves.iter().all(Curve::is_constant);
-        let all_linear = self.curves.iter().all(|c| c.storage != Storage::Streamed);
-        let interpolation = if stepped {
-            Interpolation::Step
-        } else if all_constant || all_linear {
-            Interpolation::Linear
-        } else {
-            Interpolation::Hermite
-        };
-        if all_constant {
-            times.truncate(1);
-        }
-        let mut values = Vec::new();
-        for &t in &times {
-            let samples: Vec<(f32, f32, f32)> = self.curves.iter().map(|c| c.sample(t)).collect();
-            let mut value: Vec<f32> = samples.iter().map(|s| s.0).collect();
-            if property == Property::Rotation {
-                let length = value.iter().map(|x| x * x).sum::<f32>().sqrt();
-                if (length - 1.0).abs() > 1e-4 && length > 0.0 {
-                    value.iter_mut().for_each(|x| *x /= length);
-                    *renormalised += 1;
-                }
-            }
-            if interpolation == Interpolation::Hermite {
-                // core.clip's tangents are per second (the evaluator scales them by the segment's length)
-                let in_tangent: Vec<f32> = samples.iter().map(|s| s.1).collect();
-                let out_tangent: Vec<f32> = samples.iter().map(|s| s.2).collect();
-                values.extend(convert(property, &in_tangent));
-                values.extend(convert(property, &value));
-                values.extend(convert(property, &out_tangent));
-            } else {
-                values.extend(convert(property, &value));
-            }
-        }
-        debug_assert_eq!(width, property.width());
-        Ok(Some(Channel {
-            target,
-            property,
-            interpolation,
-            times,
-            values,
-        }))
+            .all(|c| c.keys.iter().rev().skip(1).all(|k| !k.out_slope.is_finite()));
+    if steps > 0 && !stepped {
+        return Err(Error::Unsupported(format!("a {property:?} curve with steps")));
     }
+    let mut times: Vec<f32> = track
+        .curves
+        .iter()
+        .flat_map(|c| c.keys.iter().map(|k| k.time))
+        .collect();
+    // a key a rounding beyond the clip's end is at its end
+    times.retain(|t| *t <= duration + 1e-4);
+    times.iter_mut().for_each(|t| *t = t.min(duration));
+    times.sort_by(f32::total_cmp);
+    times.dedup();
+    let all_constant = track.curves.iter().all(Curve::is_constant);
+    let all_linear = track.curves.iter().all(|c| c.storage != Storage::Streamed);
+    let interpolation = if stepped {
+        Interpolation::Step
+    } else if all_constant || all_linear {
+        Interpolation::Linear
+    } else {
+        Interpolation::Hermite
+    };
+    if all_constant {
+        times.truncate(1);
+    }
+    let mut values = Vec::new();
+    for &t in &times {
+        let samples: Vec<(f32, f32, f32)> = track.curves.iter().map(|c| c.sample(t)).collect();
+        let mut value: Vec<f32> = samples.iter().map(|s| s.0).collect();
+        if property == Property::Rotation {
+            let length = value.iter().map(|x| x * x).sum::<f32>().sqrt();
+            if (length - 1.0).abs() > 1e-4 && length > 0.0 {
+                value.iter_mut().for_each(|x| *x /= length);
+                *renormalised += 1;
+            }
+        }
+        if interpolation == Interpolation::Hermite {
+            // core.clip's tangents are per second (the evaluator scales them by the segment's length)
+            let in_tangent: Vec<f32> = samples.iter().map(|s| s.1).collect();
+            let out_tangent: Vec<f32> = samples.iter().map(|s| s.2).collect();
+            values.extend(convert(property, &in_tangent));
+            values.extend(convert(property, &value));
+            values.extend(convert(property, &out_tangent));
+        } else {
+            values.extend(convert(property, &value));
+        }
+    }
+    debug_assert_eq!(width, property.width());
+    Ok(Some(Channel {
+        target,
+        property,
+        interpolation,
+        times,
+        values,
+    }))
 }
 
-impl ClipData {
-    /// The clip as a `core.clip` for a rig: the position, rotation and scale curves of the Transforms `resolve` finds
-    /// (a path hash to the skeleton and joint it is), in the world's frame; the rest counted in the returned
-    /// [`ClipLowering`] by reason.
-    pub fn lower(
-        &self,
-        resolve: &dyn Fn(u32) -> Option<(Entity, JointId)>,
-        morph_resolve: &dyn Fn(u32, u32) -> Option<(Entity, MorphId)>,
-        humanoid: Option<HumanoidRig>,
-    ) -> Result<(Clip, ClipLowering)> {
-        let humanoid = humanoid.filter(|(a, _)| a.human.is_some());
-        let mut report = ClipLowering::default();
-        let mut channels = Vec::new();
-        let mut seen = BTreeSet::new();
-        let mut morph_seen = BTreeSet::new();
-        for track in &self.tracks {
-            let b = &track.binding;
-            let kind = match (b.type_id, b.attribute) {
-                (4, 1) => "position",
-                (4, 2) => "rotation",
-                (4, 3) => "scale",
-                (4, 4) => {
-                    *report
-                        .not_lowered
-                        .entry("Euler angle curves of a Transform")
-                        .or_default() += 1;
-                    continue;
-                }
-                // a humanoid avatar's muscle curves are evaluated below
-                (95, _) if humanoid.is_some() => continue,
-                (95, _) => {
-                    *report
-                        .not_lowered
-                        .entry("Animator (humanoid muscle) curves")
-                        .or_default() += 1;
-                    continue;
-                }
-                // a blend shape: the curve's path names the renderer, its attribute the CRC-32 of the shape's name
-                (137, _) => {
-                    let Some((geometry, morph)) = morph_resolve(b.path, b.attribute) else {
-                        report.unresolved_morphs += 1;
-                        continue;
-                    };
-                    let channel = track
-                        .channel(
-                            ClipTarget::Morph { geometry, morph },
-                            self.duration,
-                            &mut report.renormalised_keys,
-                        )?
-                        .expect("a blend shape curve is a channel");
-                    if !morph_seen.insert((geometry, morph)) {
-                        return Err(invalid(format!(
-                            "{}: two channels for one blend shape ({morph:?})",
-                            self.name
-                        )));
-                    }
-                    report.keys += channel.times.len();
-                    report.morph_channels += 1;
-                    channels.push(channel);
-                    continue;
-                }
-                _ => {
-                    *report
-                        .not_lowered
-                        .entry("curves of other components")
-                        .or_default() += 1;
-                    continue;
-                }
-            };
-            let Some((skeleton, joint)) = resolve(b.path) else {
-                *report.unresolved.entry(kind).or_default() += 1;
+/// The clip as a `core.clip` for a rig: the position, rotation and scale curves of the Transforms `resolve` finds
+/// (a path hash to the skeleton and joint it is), in the world's frame; the rest counted in the returned
+/// [`ClipLowering`] by reason.
+pub fn lower_clip(
+    data: &ClipData,
+    resolve: &dyn Fn(u32) -> Option<(Entity, JointId)>,
+    morph_resolve: &dyn Fn(u32, u32) -> Option<(Entity, MorphId)>,
+    humanoid: Option<HumanoidRig>,
+) -> Result<(Clip, ClipLowering)> {
+    let humanoid = humanoid.filter(|(a, _)| a.human.is_some());
+    let mut report = ClipLowering::default();
+    let mut channels = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut morph_seen = BTreeSet::new();
+    for track in &data.tracks {
+        let b = &track.binding;
+        let kind = match (b.type_id, b.attribute) {
+            (4, 1) => "position",
+            (4, 2) => "rotation",
+            (4, 3) => "scale",
+            (4, 4) => {
+                *report
+                    .not_lowered
+                    .entry("Euler angle curves of a Transform")
+                    .or_default() += 1;
                 continue;
-            };
-            let target = ClipTarget::Joint { skeleton, joint };
-            let channel = track
-                .channel(target, self.duration, &mut report.renormalised_keys)?
-                .expect("a position, rotation or scale curve is a channel");
-            if !seen.insert((joint, channel.property)) {
+            }
+            // a humanoid avatar's muscle curves are evaluated below
+            (95, _) if humanoid.is_some() => continue,
+            (95, _) => {
+                *report
+                    .not_lowered
+                    .entry("Animator (humanoid muscle) curves")
+                    .or_default() += 1;
+                continue;
+            }
+            // a blend shape: the curve's path names the renderer, its attribute the CRC-32 of the shape's name
+            (137, _) => {
+                let Some((geometry, morph)) = morph_resolve(b.path, b.attribute) else {
+                    report.unresolved_morphs += 1;
+                    continue;
+                };
+                let channel = track_channel(
+                    track,
+                    ClipTarget::Morph { geometry, morph },
+                    data.duration,
+                    &mut report.renormalised_keys,
+                )?
+                .expect("a blend shape curve is a channel");
+                if !morph_seen.insert((geometry, morph)) {
+                    return Err(invalid(format!(
+                        "{}: two channels for one blend shape ({morph:?})",
+                        data.name
+                    )));
+                }
+                report.keys += channel.times.len();
+                report.morph_channels += 1;
+                channels.push(channel);
+                continue;
+            }
+            _ => {
+                *report
+                    .not_lowered
+                    .entry("curves of other components")
+                    .or_default() += 1;
+                continue;
+            }
+        };
+        let Some((skeleton, joint)) = resolve(b.path) else {
+            *report.unresolved.entry(kind).or_default() += 1;
+            continue;
+        };
+        let target = ClipTarget::Joint { skeleton, joint };
+        let channel = track_channel(track, target, data.duration, &mut report.renormalised_keys)?
+            .expect("a position, rotation or scale curve is a channel");
+        if !seen.insert((joint, channel.property)) {
+            return Err(invalid(format!(
+                "{}: two {:?} channels for one joint ({:?})",
+                data.name, channel.property, joint
+            )));
+        }
+        report.keys += channel.times.len();
+        channels.push(channel);
+    }
+    if let Some((avatar, bone_resolve)) = humanoid {
+        let (bones, mut lowering) = crate::humanoid::humanoid_channels(data, avatar, bone_resolve);
+        for channel in bones {
+            if let ClipTarget::Joint { joint, .. } = channel.target
+                && !seen.insert((joint, channel.property))
+            {
+                // a Transform position curve on a humanoid bone is the clip's own word about its translation
+                if channel.property == Property::Translation {
+                    lowering.translations_kept_from_curves += 1;
+                    continue;
+                }
                 return Err(invalid(format!(
-                    "{}: two {:?} channels for one joint ({:?})",
-                    self.name, channel.property, joint
+                    "{}: a humanoid bone's rotation and a Transform rotation curve for one joint ({joint:?})",
+                    data.name
                 )));
             }
             report.keys += channel.times.len();
             channels.push(channel);
         }
-        if let Some((avatar, bone_resolve)) = humanoid {
-            let (bones, mut lowering) = self.humanoid_channels(avatar, bone_resolve);
-            for channel in bones {
-                if let ClipTarget::Joint { joint, .. } = channel.target
-                    && !seen.insert((joint, channel.property))
-                {
-                    // a Transform position curve on a humanoid bone is the clip's own word about its translation
-                    if channel.property == Property::Translation {
-                        lowering.translations_kept_from_curves += 1;
-                        continue;
-                    }
-                    return Err(invalid(format!(
-                        "{}: a humanoid bone's rotation and a Transform rotation curve for one joint ({joint:?})",
-                        self.name
-                    )));
-                }
-                report.keys += channel.times.len();
-                channels.push(channel);
-            }
-            report.humanoid = Some(lowering);
-        }
-        report.channels = channels.len();
-        Ok((
-            Clip {
-                name: self.name.clone(),
-                duration: self.duration,
-                extrapolation: if self.looping {
-                    Extrapolation::Loop
-                } else {
-                    Extrapolation::Hold
-                },
-                channels,
-                root_motion: None,
-                additive: None,
-            },
-            report,
-        ))
+        report.humanoid = Some(lowering);
     }
+    report.channels = channels.len();
+    Ok((
+        Clip {
+            name: data.name.clone(),
+            duration: data.duration,
+            extrapolation: if data.looping {
+                Extrapolation::Loop
+            } else {
+                Extrapolation::Hold
+            },
+            channels,
+            root_motion: None,
+            additive: None,
+        },
+        report,
+    ))
 }
 
 #[cfg(test)]
 mod tests {
+    use unity_formats::clip::{GenericBinding, Key};
+
     use super::*;
 
     fn key(time: f32, value: f32, in_slope: f32, out_slope: f32) -> Key {
@@ -461,8 +331,7 @@ mod tests {
             skeleton: world.spawn(),
             joint: JointId(0),
         };
-        let channel = track
-            .channel(target, 0.5, &mut 0)
+        let channel = track_channel(&track, target, 0.5, &mut 0)
             .expect("lowers")
             .expect("a position");
         assert_eq!(channel.interpolation, Interpolation::Hermite);
@@ -472,5 +341,137 @@ mod tests {
         assert_eq!(x, [0.0, 0.0, 2.0, -4.0, 1.0, 0.0]);
         let z: Vec<f32> = (0..6).map(|k| channel.values[k * 3 + 2]).collect();
         assert_eq!(z, [-0.0, -0.0, -2.0, 4.0, -1.0, -0.0]);
+    }
+
+    #[test]
+    fn transform_tracks_become_joint_channels() {
+        let binding = |attribute| GenericBinding {
+            path: 1,
+            attribute,
+            type_id: 4,
+            is_pptr: false,
+        };
+        let line = |a: f32, b: f32| Curve {
+            storage: Storage::Streamed,
+            keys: vec![key(0.0, a, 0.0, b - a), key(1.0, b, b - a, 0.0)],
+        };
+        let mut world = primase_core::World::new();
+        let target = ClipTarget::Joint {
+            skeleton: world.spawn(),
+            joint: JointId(0),
+        };
+        let track = Track {
+            binding: binding(1),
+            curves: vec![
+                line(0.0, 1.0),
+                Curve {
+                    storage: Storage::Constant,
+                    keys: vec![key(0.0, 5.0, 0.0, 0.0)],
+                },
+                Curve {
+                    storage: Storage::Streamed,
+                    keys: vec![
+                        key(0.0, 0.0, 0.0, 2.0),
+                        key(0.5, 1.0, 2.0, 2.0),
+                        key(1.0, 2.0, 2.0, 0.0),
+                    ],
+                },
+            ],
+        };
+        let mut renormalised = 0;
+        let c = track_channel(&track, target.clone(), 1.0, &mut renormalised)
+            .unwrap()
+            .unwrap();
+        assert_eq!(c.property, Property::Translation);
+        assert_eq!(c.interpolation, Interpolation::Hermite);
+        assert_eq!(c.times, vec![0.0, 0.5, 1.0]);
+        // 9 values a key: in tangents, value, out tangents; x runs 0 to 1 and z 0 to 2 along straight lines
+        assert_eq!(c.values.len(), 27);
+        let key1 = &c.values[9..18];
+        assert!(
+            (key1[3] - 0.5).abs() < 1e-6 && (key1[4] - 5.0).abs() < 1e-6 && (key1[5] + 1.0).abs() < 1e-6,
+            "{key1:?}"
+        );
+        let constant = Track {
+            binding: binding(3),
+            curves: vec![
+                Curve {
+                    storage: Storage::Constant,
+                    keys: vec![key(0.0, 1.0, 0.0, 0.0)]
+                };
+                3
+            ],
+        };
+        let c = track_channel(&constant, target.clone(), 1.0, &mut renormalised)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (c.interpolation, c.times.len(), c.values.len()),
+            (Interpolation::Linear, 1, 3)
+        );
+        let euler = Track {
+            binding: binding(4),
+            curves: vec![],
+        };
+        assert!(
+            track_channel(&euler, target, 1.0, &mut renormalised)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// A SkinnedMeshRenderer's blend shape curve is a morph channel on the target its renderer path and shape name hashes
+    /// resolve to, in Unity's weights (0 to 100) as stored; one with no such target is counted, not lowered, and two for
+    /// one target are refused.
+    #[test]
+    fn blend_shape_curves_become_morph_channels() {
+        let track = |path: u32, shape: u32| Track {
+            binding: GenericBinding {
+                path,
+                attribute: shape,
+                type_id: 137,
+                is_pptr: false,
+            },
+            curves: vec![Curve {
+                storage: Storage::Streamed,
+                keys: vec![key(0.0, 0.0, 0.0, 100.0), key(1.0, 100.0, 100.0, 0.0)],
+            }],
+        };
+        let mut world = primase_core::World::new();
+        let geometry = world.spawn();
+        let clip = |tracks: Vec<Track>| ClipData {
+            name: "blink".into(),
+            duration: 1.0,
+            looping: false,
+            tracks,
+            events: 0,
+            worst_continuity_error: 0.0,
+        };
+        let morph =
+            |path: u32, shape: u32| (path == 5 && shape == 6).then_some((geometry, primase_core::MorphId(3)));
+        let none = |_: u32| None;
+        let (lowered, report) =
+            lower_clip(&clip(vec![track(5, 6), track(5, 99)]), &none, &morph, None).unwrap();
+        assert_eq!(
+            (report.morph_channels, report.unresolved_morphs, report.channels),
+            (1, 1, 1)
+        );
+        let c = &lowered.channels[0];
+        assert_eq!(
+            c.target,
+            ClipTarget::Morph {
+                geometry,
+                morph: primase_core::MorphId(3)
+            }
+        );
+        assert_eq!(
+            (c.property, c.interpolation),
+            (Property::Scalar, Interpolation::Hermite)
+        );
+        assert_eq!(c.times, vec![0.0, 1.0]);
+        // in tangent, value, out tangent a key; the values are not scaled
+        assert_eq!(c.values.len(), 6);
+        assert!((c.values[4] - 100.0).abs() < 1e-5, "{:?}", c.values);
+        assert!(lower_clip(&clip(vec![track(5, 6), track(5, 6)]), &none, &morph, None).is_err());
     }
 }
