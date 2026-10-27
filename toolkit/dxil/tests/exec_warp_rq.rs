@@ -8,8 +8,8 @@
 //! Needs the WARP oracle program with the `d3d12rt` case form (the configured `Tool::Warp`) and the scratch folder. The
 //! scenes and rays are made from fixed seeds.
 use primase_dxil::lift;
-use primase_shader::D3dClass;
-use primase_shader_exec::{
+use iridia::D3dClass;
+use iridia_exec::{
     Backend, Element, Executable, Geometry, ImageSample, Instance, InstanceFlags, Resources, Scene,
 };
 use primase_testdata::{Tool, own_scratch, tool};
@@ -210,7 +210,7 @@ fn gate(fixture_name: &str, procedural: bool) {
             .iter()
             .find(|r| match class {
                 Some(c) => r.provenance.d3d.is_some_and(|d| d.class == c && d.register == 0),
-                None => matches!(r.kind, primase_shader::ResourceKind::AccelerationStructure),
+                None => matches!(r.kind, iridia::ResourceKind::AccelerationStructure),
             })
             .unwrap()
             .id

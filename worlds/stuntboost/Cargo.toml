@@ -18,8 +18,8 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-primase-shader.workspace = true
-primase-shader-exec.workspace = true
+iridia.workspace = true
+iridia-exec.workspace = true
 primase-testdata.workspace = true
 
 [lints]

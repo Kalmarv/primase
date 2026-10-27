@@ -3,7 +3,7 @@
 //! UV set, which pair of it). A preview chooses its textures from this, not from slot numbers or shader names.
 //!
 //! The programs are read lifted ([`lift`]: DXIL and DXBC alike), as the value graph of their entry point
-//! ([`primase_shader::flow::Values`]): each texel names a texture resource, which is a material slot of the shader's
+//! ([`iridia::flow::Values`]): each texel names a texture resource, which is a material slot of the shader's
 //! metaparam where the metaparam names it ([`slot_of`]); its coordinates are made of an interpolant (`TEXCOORD4.xy`)
 //! scaled and offset by the material's constants; each discard is guarded by the conditions that decide it; render
 //! target 2 is the albedo (the layout of the G-buffer the programs write: target 0 the normal, which reads the normal
@@ -32,8 +32,8 @@
 //! a fade) is not a material slot's coverage.
 use crate::metaparam::{Metaparam, Texture, texture_number};
 use primase_core::shader::{Resource, ResourceId, ResourceKind, ShaderFormat};
-use primase_shader::flow::{BinaryOperator, Node, NodeId, Op, Read, UnaryOperator, Values};
-use primase_shader::{BoundSizes, Program};
+use iridia::flow::{BinaryOperator, Node, NodeId, Op, Read, UnaryOperator, Values};
+use iridia::{BoundSizes, Program};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// The render target the programs write the albedo to.

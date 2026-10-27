@@ -5,8 +5,8 @@
 //! other program is not classified (the answer is "not known", not "lit").
 use crate::components::PixelProgram;
 use crate::{Result, invalid};
-use primase_rsx::cgbinary::{self, Stage};
-use primase_rsx::fragment::{self, Opcode, SourceKind};
+use rsx_reader::cgbinary::{self, Stage};
+use rsx_reader::fragment::{self, Opcode, SourceKind};
 
 /// The fragment input register of the first texture coordinate (RSX: position, two colours, fog, then TEX0).
 const TEX0: u8 = 4;

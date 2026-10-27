@@ -53,7 +53,7 @@ fn both_stages_are_kept() {
                         Stage::Vertex => tables.vertex(key),
                     };
                     assert_eq!(found, Some(program.as_slice()));
-                    let chunks = primase_dxcontainer::chunks(program).expect("container");
+                    let chunks = dxcontainer::chunks(program).expect("container");
                     let code = chunks
                         .iter()
                         .find(|c| &c.kind == b"SHEX" || &c.kind == b"SHDR")

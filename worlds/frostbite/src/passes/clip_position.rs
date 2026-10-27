@@ -27,7 +27,7 @@ use primase_core::shader::{
     ConstantBinding, ConstantRole, D3dClass, Interface, MatrixLines, ResourceId, ResourceKind, Shader,
     ShaderFormat, Stage, SystemValue, ViewParameter,
 };
-use primase_shader::flow::{At, BinaryOperator, Node, NodeId, Op, Values};
+use iridia::flow::{At, BinaryOperator, Node, NodeId, Op, Values};
 
 /// Where a vertex program's clip position reads its matrix rows and its camera position.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

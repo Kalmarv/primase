@@ -7,14 +7,14 @@ use std::collections::BTreeMap;
 
 use primase_dxbc::decode::{Declared, Decoded};
 use primase_dxbc::{decode, lift};
-use primase_shader_exec::ProgramShader;
-use primase_shader_exec::{PixelShader, Sample};
+use iridia_exec::ProgramShader;
+use iridia_exec::{PixelShader, Sample};
 
 mod common;
 
 /// The decoded program of a container.
 fn decoded(bytes: &[u8]) -> Result<Decoded, String> {
-    let parts = primase_dxcontainer::chunks(bytes).map_err(|e| e.to_string())?;
+    let parts = dxcontainer::chunks(bytes).map_err(|e| e.to_string())?;
     let code = parts
         .iter()
         .find(|c| matches!(&c.kind, b"SHDR" | b"SHEX"))
@@ -378,7 +378,7 @@ fn pack_against_microsoft_disassembly() {
     for path in paths {
         let bytes = std::fs::read(&path).unwrap();
         assert_eq!(
-            primase_dxcontainer::checksum(&bytes).unwrap()[..],
+            dxcontainer::checksum(&bytes).unwrap()[..],
             bytes[4..20],
             "{}",
             path.display()

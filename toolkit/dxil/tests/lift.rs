@@ -66,19 +66,19 @@ fn every_fixture_lifts() {
                     ));
                 } else {
                     // a program of a stage with no WGSL stage is written as its functions
-                    let written = if primase_shader::stage_functions(&p.interface).is_ok_and(|f| f.is_some())
+                    let written = if iridia::stage_functions(&p.interface).is_ok_and(|f| f.is_some())
                     {
-                        primase_shader::emit::wgsl_functions(&p)
+                        iridia::emit::wgsl_functions(&p)
                     } else {
-                        primase_shader::emit::wgsl(&p)
+                        iridia::emit::wgsl(&p)
                     };
                     match written {
                         Ok(_) => {}
                         // WebGPU has no ray tracing pipeline: those programs are refused by name
-                        Err(primase_shader::ProgramError::Unsupported { detail, .. })
+                        Err(iridia::ProgramError::Unsupported { detail, .. })
                             if detail.contains("ray tracing pipeline") => {}
                         // WGSL's texture atomics return no old value and have no exchange: naga's writer refuses those by name
-                        Err(primase_shader::ProgramError::Unsupported { detail, .. })
+                        Err(iridia::ProgramError::Unsupported { detail, .. })
                             if detail.contains("texture atomic result")
                                 || detail.contains("texture atomic exchange") => {}
                         Err(e) => failures.push(format!("{name}: wgsl: {e}")),

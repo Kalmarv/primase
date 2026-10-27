@@ -4,7 +4,7 @@
 //! own rules (D3D11's limits, an opcode's operand count); nothing here is a second reader.
 use primase_dxbc::decode::Declared;
 use primase_dxbc::{decode, lift};
-use primase_dxcontainer::chunks;
+use dxcontainer::chunks;
 
 fn fixture(name: &str) -> Vec<u8> {
     std::fs::read(format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()

@@ -113,7 +113,7 @@ fn how_the_programs_read_the_engine_buffers() {
         std::fs::create_dir_all(&dump).unwrap();
         for (stage, (_, bytes)) in smallest {
             let lifted = primase_dxbc::lift(&bytes).unwrap();
-            let text = primase_shader::emit::wgsl(&lifted).unwrap();
+            let text = iridia::emit::wgsl(&lifted).unwrap();
             let name = if stage == Stage::Vertex { "vertex" } else { "pixel" };
             std::fs::write(dump.join(format!("{name}.wgsl")), text).unwrap();
         }

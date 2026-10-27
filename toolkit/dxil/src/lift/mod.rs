@@ -1,12 +1,12 @@
 //! Lifting a Shader Model 6 pixel or vertex program (DXIL) to primase's shader representation
-//! ([`primase_shader::Program`]), with the same conventions as the DXBC lift (`primase-dxbc`): varyings unpacked from
+//! ([`iridia::Program`]), with the same conventions as the DXBC lift (`primase-dxbc`): varyings unpacked from
 //! D3D registers, resources as module globals (constant buffer `cb<n>` a uniform `array<vec4<u32>, rows>` in group 0,
 //! textures and buffer views group 1, samplers group 2, typed texture views group 3, the hidden counters of unordered-access
 //! views group 4, binding = register), D3D's
-//! results written out as operations ([`primase_shader::D3dModes`]).
+//! results written out as operations ([`iridia::D3dModes`]).
 //!
 //! What differs is the source. A DXIL function is LLVM's: values in static single assignment form over basic blocks.
-//! Basic blocks are structured by [`primase_shader::build::structure`] (a reducible graph; irreducible flow is refused
+//! Basic blocks are structured by [`iridia::build::structure`] (a reducible graph; irreducible flow is refused
 //! by name); a phi is a local the edges assign; a value used outside the block that defines it is a local too, the
 //! rest stay expressions. `dx.op` calls are the intrinsics (inputs and outputs, math, bit operations, constant
 //! buffers, samples, loads, derivatives, discard), and `alloca`, `getelementptr`, `load` and `store` the local arrays
@@ -28,34 +28,34 @@ mod wide;
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use iridia::build::{Builder, Kind, Val};
+use iridia::{Conventions, D3dModes, Program, Provenance, ShaderFormat, Stage, StageFacts};
 use naga::{Handle, LocalVariable};
-use primase_shader::build::{Builder, Kind, Val};
-use primase_shader::{Conventions, D3dModes, Program, Provenance, ShaderFormat, Stage, StageFacts};
 
 use crate::module::{Function, Module, Op, Type, TypeId, ValueId};
 use crate::{Result, error};
 
 /// The version of the lifter: bumped when what it produces for the same bytecode changes, so a cache keyed by the
-/// bytecode's hash knows what is stale; gated by `tests/versions.rs` (the lifted fixtures hashed under it, `primase_shader::gate`).
+/// bytecode's hash knows what is stale; gated by `tests/versions.rs` (the lifted fixtures hashed under it, `iridia::gate`).
 pub const LIFTER_VERSION: u32 = 6;
 
 /// Lift a DXIL container's entry function. A pixel or vertex program is the scope; every construct the lifter does not
 /// carry (a wide integer, a resource array, an irreducible loop, an operation it has no meaning for) is an `Err` naming
 /// the bit offset of the instruction and the reason.
 pub fn lift(container: &[u8]) -> Result<Program> {
-    lift_with(container, &primase_shader::BoundSizes::new())
+    lift_with(container, &iridia::BoundSizes::new())
 }
 
 /// [`lift`] with the constant buffers `bound` names bound at the size it states: their uniform arrays have the rows of
 /// that size, so a read past the declaration and inside the bound is the buffer's, and the interface's layout is the
 /// bound size.
-pub fn lift_with(container: &[u8], bound: &primase_shader::BoundSizes) -> Result<Program> {
+pub fn lift_with(container: &[u8], bound: &iridia::BoundSizes) -> Result<Program> {
     let mut program = lift_program(container, bound)?;
-    program.provenance.source_hash = Some(primase_shader::source_hash(container));
+    program.provenance.source_hash = Some(iridia::source_hash(container));
     Ok(program)
 }
 
-fn lift_program(container: &[u8], bound: &primase_shader::BoundSizes) -> Result<Program> {
+fn lift_program(container: &[u8], bound: &iridia::BoundSizes) -> Result<Program> {
     let chunks = crate::parts(container)?;
     let module = crate::reflection::module(&chunks, b"DXIL")?.ok_or_else(|| error(0, "no DXIL part"))?;
     let part = crate::program(
@@ -182,7 +182,7 @@ pub(crate) struct Lift<'m> {
     /// Every function whose instructions the lift reads: the entry's, and a hull program's patch-constant function.
     functions: Vec<&'m Function>,
     /// The function of a program of a stage with no entry point being lifted.
-    sig: Option<primase_shader::FunctionSig>,
+    sig: Option<iridia::FunctionSig>,
     pub(crate) b: Builder,
     pub(super) setup: setup::Setup,
     /// The slot of each local value (arguments and instruction results), by `v - f.first`.
@@ -198,7 +198,7 @@ pub(crate) struct Lift<'m> {
     /// The lane number of a thread group with no lane-number built-in, made at the start of the program.
     lane: Option<Handle<LocalVariable>>,
     /// A mesh program's output variable and facts.
-    mesh: Option<(primase_shader::build::MeshOutput, primase_shader::MeshFacts)>,
+    mesh: Option<(iridia::build::MeshOutput, iridia::MeshFacts)>,
     /// A geometry program's emitted vertices so far.
     gs: Option<stages::GsState>,
     /// The ray tracing pipeline's operations the program calls.
@@ -342,11 +342,11 @@ impl<'m> Lift<'m> {
             }
             match v.system {
                 Some(
-                    primase_shader::SystemValue::Depth
-                    | primase_shader::SystemValue::DepthGreaterEqual
-                    | primase_shader::SystemValue::DepthLessEqual,
+                    iridia::SystemValue::Depth
+                    | iridia::SystemValue::DepthGreaterEqual
+                    | iridia::SystemValue::DepthLessEqual,
                 ) if self.depth.is_none() => self.depth = Some(self.b.local("oDepth", u4)),
-                Some(primase_shader::SystemValue::Coverage) if self.coverage.is_none() => {
+                Some(iridia::SystemValue::Coverage) if self.coverage.is_none() => {
                     self.coverage = Some(self.b.local("oMask", u4));
                 }
                 _ => {}
@@ -363,7 +363,7 @@ impl<'m> Lift<'m> {
     }
 
     /// Lift one function of a program of a stage with no entry point as the module's function `sig`.
-    fn run_function(&mut self, f: &'m Function, sig: &primase_shader::FunctionSig) -> Result<()> {
+    fn run_function(&mut self, f: &'m Function, sig: &iridia::FunctionSig) -> Result<()> {
         // the per-function state: values, blocks, output registers, the argument expressions
         self.f = f;
         let mut blocks = vec![Vec::new(); f.blocks];
@@ -381,11 +381,7 @@ impl<'m> Lift<'m> {
         self.sig = Some(sig.clone());
         // the pointer arguments (a ray tracing program's payload and attributes) are the function's own parameters
         let mut structures = Vec::new();
-        if sig
-            .arguments
-            .iter()
-            .any(|a| a.ty == primase_shader::IoType::Memory)
-        {
+        if sig.arguments.iter().any(|a| a.ty == iridia::IoType::Memory) {
             let params = match self.m.types.get(self.m.value_types[f.value]) {
                 Some(Type::Pointer(t)) => match &self.m.types[*t] {
                     Type::Function { params, .. } => params.clone(),
@@ -397,7 +393,7 @@ impl<'m> Lift<'m> {
                 .arguments
                 .iter()
                 .enumerate()
-                .filter(|(_, a)| a.ty == primase_shader::IoType::Memory)
+                .filter(|(_, a)| a.ty == iridia::IoType::Memory)
                 .map(|(k, _)| k)
                 .collect();
             if params.len() != memory.len() {
@@ -454,7 +450,7 @@ impl<'m> Lift<'m> {
     }
 
     /// The varyings the current function's result is made of: the outputs, or a hull program's patch constants.
-    pub(super) fn result_varyings(&self) -> Vec<primase_shader::Varying> {
+    pub(super) fn result_varyings(&self) -> Vec<iridia::Varying> {
         match (&self.sig, &self.setup.interface.facts) {
             (Some(sig), StageFacts::Hull(h)) if sig.name == "patch_constant" => h.patch_constants.clone(),
             _ => self.setup.interface.outputs.clone(),
@@ -465,9 +461,9 @@ impl<'m> Lift<'m> {
         self.b.check().map_err(|detail| error(self.at, detail))?;
         let stage = self.setup.interface.stage;
         let module = self.b.finish_functions();
-        let mut limit_notes = primase_shader::compute_limit_notes(&module);
+        let mut limit_notes = iridia::compute_limit_notes(&module);
         let interface = self.setup.interface.clone();
-        limit_notes.extend(primase_shader::interface_notes(&interface));
+        limit_notes.extend(iridia::interface_notes(&interface));
         Ok(Program {
             module,
             stage,
@@ -483,13 +479,13 @@ impl<'m> Lift<'m> {
                 lifter_version: LIFTER_VERSION,
                 // the hash of the bytes, which `lift` sets
                 source_hash: None,
-                instruction_count: Some(primase_shader::InstructionCount {
+                instruction_count: Some(iridia::InstructionCount {
                     count: self
                         .functions
                         .iter()
                         .map(|function| function.instructions.len() as u64)
                         .sum(),
-                    unit: primase_shader::InstructionUnit::DxilInstructions,
+                    unit: iridia::InstructionUnit::DxilInstructions,
                 }),
             },
             notes: self.notes.into_iter().chain(limit_notes).collect(),
@@ -515,9 +511,9 @@ impl<'m> Lift<'m> {
                 early,
             )
         };
-        let mut limit_notes = primase_shader::compute_limit_notes(&module);
+        let mut limit_notes = iridia::compute_limit_notes(&module);
         let interface = self.setup.interface.clone();
-        limit_notes.extend(primase_shader::interface_notes(&interface));
+        limit_notes.extend(iridia::interface_notes(&interface));
         Ok(Program {
             module,
             stage,
@@ -533,13 +529,13 @@ impl<'m> Lift<'m> {
                 lifter_version: LIFTER_VERSION,
                 // the hash of the bytes, which `lift` sets
                 source_hash: None,
-                instruction_count: Some(primase_shader::InstructionCount {
+                instruction_count: Some(iridia::InstructionCount {
                     count: self
                         .functions
                         .iter()
                         .map(|function| function.instructions.len() as u64)
                         .sum(),
-                    unit: primase_shader::InstructionUnit::DxilInstructions,
+                    unit: iridia::InstructionUnit::DxilInstructions,
                 }),
             },
             notes: self.notes.into_iter().chain(limit_notes).collect(),

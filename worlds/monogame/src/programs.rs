@@ -1,4 +1,4 @@
-//! An effect's shaders as primase shader programs: each GLSL text is lifted by `primase-mojoshader` with what the
+//! An effect's shaders as primase shader programs: each GLSL text is lifted by `iridia-mojo` with what the
 //! effect's tables say about it (the constants' names and offsets, the samplers' slots and the parameters that hold their
 //! textures, the vertex attributes' usages).
 #![deny(
@@ -7,8 +7,8 @@
     clippy::cast_possible_truncation
 )]
 
-use primase_mojoshader::{Attribute, Constant, Hints, Sampler};
-use primase_shader::{Program, Stage};
+use iridia_mojo::{Attribute, Constant, Hints, Sampler};
+use iridia::{Program, Stage};
 
 use crate::mgfx::{Effect, Profile, Shader, Stage as ShaderStage};
 
@@ -29,7 +29,7 @@ pub enum Error {
     )]
     UnknownUsage { name: String, usage: u8 },
     #[error("{0}")]
-    Lift(#[from] primase_mojoshader::Error),
+    Lift(#[from] iridia_mojo::Error),
 }
 
 /// The vertex usage a number names (MonoGame's `VertexElementUsage`), as the semantic a D3D program writes it.
@@ -146,5 +146,5 @@ pub fn program(effect: &Effect<'_>, index: usize) -> Result<Program, Error> {
         ShaderStage::Vertex => Stage::Vertex,
         ShaderStage::Pixel => Stage::Pixel,
     };
-    Ok(primase_mojoshader::lift(source, stage, &hints(effect, shader)?)?)
+    Ok(iridia_mojo::lift(source, stage, &hints(effect, shader)?)?)
 }

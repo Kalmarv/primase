@@ -4,14 +4,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use naga::ImageDimension;
-use primase_shader::build::Kind;
-use primase_shader::{
+use iridia::build::Kind;
+use iridia::{
     Access, BufferKind, BufferLayout, D3dBinding, D3dClass, DomainFacts, EntryIo, GeometryFacts, GsInput,
     GsOutput, HullFacts, Interface, Label, Partitioning, Resource, ResourceId, ResourceKind,
     ResourceProvenance, SampleType, ScalarType, Stage, StageFacts, StorageTarget, SystemValue, TessDomain,
     TessTopology, TextureDim, Value, Varying, VaryingProvenance, entry_io,
 };
+use naga::ImageDimension;
 
 use crate::decode::{Declared, Decoded, Register, Selection};
 use crate::{Result, error, resource_reflection, signature_elements};
@@ -194,8 +194,8 @@ pub(crate) struct Setup {
     pub declared_inputs: BTreeMap<u32, u8>,
     /// The registers addressed by a computed index (`dcl_index_range`): whether an output, the first register, how many.
     pub index_ranges: Vec<(bool, u32, u32)>,
-    /// The functions of a program of a stage with no entry point (see [`primase_shader::stage_functions`]).
-    pub sigs: Option<Vec<primase_shader::FunctionSig>>,
+    /// The functions of a program of a stage with no entry point (see [`iridia::stage_functions`]).
+    pub sigs: Option<Vec<iridia::FunctionSig>>,
     /// A hull program's phases (empty for the other stages).
     pub phases: Vec<Phase>,
     /// The registers of the patch constants (a hull program's outputs of its fork and join phases, a domain
@@ -207,7 +207,7 @@ pub(crate) struct Setup {
 impl Setup {
     /// Bind the constant buffers `bound` names at the sizes it states: the interface's layouts, and the rows of the
     /// buffers' declarations with them.
-    pub(crate) fn bind_sizes(&mut self, bound: &primase_shader::BoundSizes) -> Result<()> {
+    pub(crate) fn bind_sizes(&mut self, bound: &iridia::BoundSizes) -> Result<()> {
         bound
             .apply(&mut self.interface)
             .map_err(|why| error(0, format!("bound sizes: {why}")))?;
@@ -272,7 +272,7 @@ impl Setup {
         let mut declared_inputs: BTreeMap<u32, u8> = BTreeMap::new();
         let (mut primitive_id, mut input_coverage) = (false, false);
         let (mut depth, mut coverage, mut stencil) = (None, false, false);
-        let mut interpolations: Vec<(u32, u8, primase_shader::Interpolation)> = Vec::new();
+        let mut interpolations: Vec<(u32, u8, iridia::Interpolation)> = Vec::new();
         let mut declared_outputs: BTreeMap<u32, u8> = BTreeMap::new();
         for d in &decoded.declarations {
             let at = |detail: String| error(d.word, detail);
@@ -329,7 +329,7 @@ impl Setup {
                         let register = operand.indices.last().map_or(0, |i| i.base);
                         *declared_inputs.entry(register).or_default() |= mask;
                         if let Some(mode) = interpolation {
-                            let interp = primase_shader::d3d::interpolation(*mode).map_err(at)?;
+                            let interp = iridia::d3d::interpolation(*mode).map_err(at)?;
                             interpolations.push((register, mask, interp));
                         }
                         let _ = name;
@@ -1219,7 +1219,7 @@ impl Setup {
         {
             setup.interface.facts = StageFacts::VertexWithoutPosition;
         }
-        setup.sigs = primase_shader::stage_functions(&setup.interface).map_err(refuse)?;
+        setup.sigs = iridia::stage_functions(&setup.interface).map_err(refuse)?;
         if setup.sigs.is_none() {
             setup.io = entry_io(&setup.interface).map_err(refuse)?;
         }

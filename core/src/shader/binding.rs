@@ -229,7 +229,7 @@ pub enum AlphaComparison {
     /// The discard compares a value made of texture samples and constants that reaches no target's alpha (a G-buffer
     /// program writes none: `t1.w * t0.w + scale * (noise - 0.5) < reference`). A bake freezes the reference
     /// below the range as for the others. The test is the program's own expression, read exactly from its graph
-    /// (`primase_shader::output_uses::alpha_tests`); a cutoff on any output alpha is not it, and a consumer that cuts
+    /// (`iridia::output_uses::alpha_tests`); a cutoff on any output alpha is not it, and a consumer that cuts
     /// evaluates that expression with the values its binding states, or does not cut.
     Unwritten,
 }
@@ -254,7 +254,7 @@ pub struct ConstantBinding {
 /// How a matrix constant's 16-byte lines hold its role's matrix, the one that maps column vectors (a view-projection's
 /// clip position is `M * p`). Neither the layout's packing (`row_major`, `column_major`) nor the role decides it, since
 /// a program may multiply on either side (`mul(M, v)`, `mul(v, M)`): the source states it from what the program does
-/// (`primase_shader::matrix::lines`).
+/// (`iridia::matrix::lines`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MatrixLines {
@@ -997,7 +997,7 @@ pub struct StageBinding {
 /// buffer read by the size of the view the draw binds (the CBV's `SizeInBytes`), not by the shader's declaration, so a
 /// skinning palette a program declares as two matrices is bound as the hundreds the draw uploads, and a joint index past
 /// the declaration reads the palette, not zero. A lifter takes the rows of a buffer's uniform array from the bound size
-/// when it has one (`primase_shader::BoundSizes`).
+/// when it has one (`iridia::BoundSizes`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ConstantBufferBinding {
     /// A constant buffer resource of the shader.

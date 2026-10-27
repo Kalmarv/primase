@@ -17,7 +17,7 @@ fn fixture(name: &str) -> Vec<u8> {
 #[test]
 fn a_program_wgsl_cannot_write_is_dumped_as_ir() {
     let program = lift(&fixture("image_atomic_results.dxil")).unwrap();
-    assert!(primase_shader::emit::wgsl(&program).is_err());
+    assert!(iridia::emit::wgsl(&program).is_err());
     let text = program.text().unwrap();
     let label = text
         .lines()

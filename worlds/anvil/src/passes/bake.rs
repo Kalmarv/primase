@@ -99,7 +99,7 @@
 //! The texture covers the shader's UV square (`shader-uv` relating it to the mesh's `TexCoord(0)` as for
 //! `lower-anvil-material`), repeating: exact on a mesh whose UV leaves the square only where the Material's
 //! function repeats with period 1, which the recipe requires of its UV transforms (integer coefficients). What isn't
-//! the game's: the sampler (trilinear by the quad's footprint, [`primase_shader_exec::Filtering::Trilinear`]; its
+//! the game's: the sampler (trilinear by the quad's footprint, [`iridia_exec::Filtering::Trilinear`]; its
 //! addressing as `unstated-address` states, reported, since resolve-anvil-shaders does not read the engine's sampler
 //! states: reading them is the open item that retires the option), the draw (no per-instance data, no LOD fade, not
 //! reduced), the 8-bit encodings of the outputs.
@@ -107,6 +107,10 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use iridia_exec::{
+    Filtering, Grid, Input, Invocation, Layout, Lod, PixelShader, SampledTexture, SamplerUse, Unstated,
+    evaluate::Constants, evaluate_raw_with,
+};
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform};
 use primase_core::shader::{NormalEncoding, SamplerState};
@@ -115,10 +119,6 @@ use primase_core::{
     TexRole, Texture, VertexColor, World,
 };
 use primase_image::sampling::{Address, Levels, Transfer};
-use primase_shader_exec::{
-    Filtering, Grid, Input, Invocation, Layout, Lod, PixelShader, SampledTexture, SamplerUse, Unstated,
-    evaluate::Constants, evaluate_raw_with,
-};
 
 use super::material::{Green, NORMAL_GREEN, SHADER_UV, ShaderUv, UNSET, Unset, uv_transform};
 use crate::components::{AnvilMaterial, AnvilShaders, MaterialBinding, MaterialFlags, MaterialValue};
@@ -888,9 +888,8 @@ fn decode_normal(o1: [f32; 3]) -> ([f64; 3], u8) {
 impl BakeAnvilMaterial {
     /// Run `program` for `m` (whose recipe is `recipe`) over the texture square.
     fn bake(&self, w: &World, m: &AnvilMaterial, recipe: &Recipe, program: &[u8]) -> Result<Baked, String> {
-        let shader =
-            primase_shader_exec::ProgramShader::new(primase_dxbc::lift(program).map_err(|e| e.to_string())?)
-                .map_err(|e| e.to_string())?;
+        let shader = iridia_exec::ProgramShader::new(primase_dxbc::lift(program).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
         let mut rows = material_rows(m)?;
         if recipe.zones {
             // the mud's switch: HideDirt taken as 1 (a static export has no dirt state)
@@ -1026,7 +1025,7 @@ impl BakeAnvilMaterial {
         for &(slot, value) in recipe.engine {
             let ao = recipe.terrain.is_some_and(|t| t.ao_texture == slot);
             let value = if ao { self.terrain_ao } else { value };
-            textures.insert(slot, primase_shader_exec::View::Constant([value; 4]));
+            textures.insert(slot, iridia_exec::View::Constant([value; 4]));
         }
         let slots: Vec<u32> = if recipe.zones {
             PixelShader::textures(&shader)
@@ -1056,7 +1055,7 @@ impl BakeAnvilMaterial {
                     _ => None,
                 };
                 if let Some(v) = fixed {
-                    textures.insert(75 + slot, primase_shader_exec::View::Constant(v));
+                    textures.insert(75 + slot, iridia_exec::View::Constant(v));
                     continue;
                 }
             }
@@ -1066,12 +1065,12 @@ impl BakeAnvilMaterial {
                     s == slot && row.is_none_or(|r| rows.get(&r).is_some_and(|v| v[0] == 0.0))
                 }) =>
                 {
-                    textures.insert(75 + slot, primase_shader_exec::View::Constant([0.0; 4]));
+                    textures.insert(75 + slot, iridia_exec::View::Constant([0.0; 4]));
                     continue;
                 }
                 // resolved to none: white, as `unset=white` states
                 None => {
-                    textures.insert(75 + slot, primase_shader_exec::View::Constant([1.0; 4]));
+                    textures.insert(75 + slot, iridia_exec::View::Constant([1.0; 4]));
                     continue;
                 }
             };
@@ -1096,7 +1095,7 @@ impl BakeAnvilMaterial {
             if recipe.coverage == Some(slot) {
                 coverage_image = Some(image.clone());
             }
-            textures.insert(75 + slot, primase_shader_exec::View::Image(image));
+            textures.insert(75 + slot, iridia_exec::View::Image(image));
         }
         // the cut-out: the coverage texture's alpha against the Material's `AlphaTestValue`, where it tests alpha
         // (the discard of the alpha-tested permutations: `alpha - reference < 0`)
@@ -1111,7 +1110,7 @@ impl BakeAnvilMaterial {
             .map(|_| f32::from(m.flags.alpha_test_value) / 255.0);
         if recipe.skin {
             let tone = self.skin_tone.ok_or("no skin-tone")?;
-            textures.insert(70, primase_shader_exec::View::Typed(skin_record(tone)));
+            textures.insert(70, iridia_exec::View::Typed(skin_record(tone)));
         }
         let constant = |v: [f32; 4]| Input::Constant(v);
         let mut inputs = BTreeMap::from([
@@ -1124,7 +1123,7 @@ impl BakeAnvilMaterial {
         if let Some(colour) = recipe.vertex_colour {
             inputs.insert(("COLOR".to_owned(), 0), constant(colour.value));
         }
-        let textures = primase_shader_exec::Views::refusing(textures);
+        let textures = iridia_exec::Views::refusing(textures);
         let raw = evaluate_raw_with(
             primase_core::parallel::Threads::of(w),
             &shader,
@@ -1251,7 +1250,7 @@ impl BakeAnvilMaterial {
                         let step = 1.0 / n;
                         let at = [(x as f32 + 0.5) / n, (row as f32 + 0.5) / n];
                         let lod = Lod::GradientsBias([[step, 0.0], [0.0, step]], self.mip_bias);
-                        unorm8(primase_shader_exec::Image::sample(&**image, at, lod)?[3])
+                        unorm8(iridia_exec::Image::sample(&**image, at, lod)?[3])
                     }
                     _ => 255,
                 });
@@ -1606,7 +1605,7 @@ mod tests {
         let Some(program) = fixture::program("MAD_Road") else {
             return;
         };
-        let shader = primase_shader_exec::ProgramShader::new(primase_dxbc::lift(&program).unwrap()).unwrap();
+        let shader = iridia_exec::ProgramShader::new(primase_dxbc::lift(&program).unwrap()).unwrap();
         let mut world = World::new();
         let mut textures = Vec::new();
         let bytes = [[128, 128, 153, 100], [128, 128, 128, 128]];

@@ -1,9 +1,9 @@
 //! A mesh program: a thread group that writes one meshlet. What it writes is the module's output variable (see
-//! [`primase_shader::build::MeshOutput`]): the counts, a vertex type with a member for each output varying and the
+//! [`iridia::build::MeshOutput`]): the counts, a vertex type with a member for each output varying and the
 //! vertices' indices of each primitive.
 
+use iridia::build::{Kind, Val};
 use naga::Expression as E;
-use primase_shader::build::{Kind, Val};
 
 use super::Lift;
 use super::setup::const_int;
@@ -13,11 +13,11 @@ use crate::module::{Instruction, ValueId};
 impl Lift<'_> {
     /// The output variable and its vertex type, once the entry point is declared.
     pub(super) fn start_mesh(&mut self) -> Result<()> {
-        let primase_shader::StageFacts::Mesh(facts) = self.setup.interface.facts.clone() else {
+        let iridia::StageFacts::Mesh(facts) = self.setup.interface.facts.clone() else {
             return self.refuse("a mesh program without its facts");
         };
-        let vertex = primase_shader::mesh_vertex_io(&self.setup.interface)
-            .map_err(|detail| crate::error(self.at, detail))?;
+        let vertex =
+            iridia::mesh_vertex_io(&self.setup.interface).map_err(|detail| crate::error(self.at, detail))?;
         if vertex.len() != self.setup.interface.outputs.len() {
             return self.refuse("clip distances or cull distances of a mesh program are not lifted");
         }

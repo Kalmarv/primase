@@ -445,6 +445,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dxcontainer"
+version = "0.1.0"
+dependencies = [
+ "primase-bytes",
+ "primase-hash",
+ "thiserror",
+]
+
+[[package]]
 name = "either"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -685,6 +694,53 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8c0d789294fb457b791f7797a04478704788f30b407e5d0b01deaa846572d9f"
 dependencies = [
  "hybrid-array",
+]
+
+[[package]]
+name = "iridia"
+version = "0.1.0"
+dependencies = [
+ "naga",
+ "primase-core",
+ "primase-dxbc",
+ "primase-dxil",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "iridia-d3d9"
+version = "0.1.0"
+dependencies = [
+ "iridia",
+ "iridia-exec",
+ "naga",
+ "primase-core",
+ "primase-testdata",
+]
+
+[[package]]
+name = "iridia-exec"
+version = "0.1.0"
+dependencies = [
+ "half",
+ "iridia",
+ "naga",
+ "primase-core",
+ "primase-dxbc",
+ "primase-dxil",
+ "primase-image",
+ "thiserror",
+]
+
+[[package]]
+name = "iridia-mojo"
+version = "0.1.0"
+dependencies = [
+ "iridia",
+ "naga",
+ "primase-testdata",
+ "thiserror",
 ]
 
 [[package]]
@@ -995,16 +1051,16 @@ dependencies = [
 name = "primase-anvil"
 version = "0.1.0"
 dependencies = [
+ "dxcontainer",
+ "iridia",
+ "iridia-exec",
  "primase-bytes",
  "primase-compress",
  "primase-core",
  "primase-dxbc",
- "primase-dxcontainer",
  "primase-hash",
  "primase-image",
  "primase-meshops",
- "primase-shader",
- "primase-shader-exec",
  "primase-testdata",
  "primase-texcodec",
  "serde_json",
@@ -1078,17 +1134,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "primase-d3d9"
-version = "0.1.0"
-dependencies = [
- "naga",
- "primase-core",
- "primase-shader",
- "primase-shader-exec",
- "primase-testdata",
-]
-
-[[package]]
 name = "primase-dds"
 version = "0.1.0"
 dependencies = [
@@ -1102,33 +1147,24 @@ dependencies = [
 name = "primase-dxbc"
 version = "0.1.0"
 dependencies = [
+ "dxcontainer",
+ "iridia",
+ "iridia-exec",
  "naga",
- "primase-dxcontainer",
- "primase-shader",
- "primase-shader-exec",
  "primase-testdata",
  "serde_json",
-]
-
-[[package]]
-name = "primase-dxcontainer"
-version = "0.1.0"
-dependencies = [
- "primase-bytes",
- "primase-hash",
- "thiserror",
 ]
 
 [[package]]
 name = "primase-dxil"
 version = "0.1.0"
 dependencies = [
+ "dxcontainer",
  "half",
+ "iridia",
+ "iridia-exec",
  "naga",
  "primase-bytes",
- "primase-dxcontainer",
- "primase-shader",
- "primase-shader-exec",
  "primase-testdata",
  "serde_json",
 ]
@@ -1156,8 +1192,11 @@ version = "0.1.0"
 dependencies = [
  "aes",
  "criterion",
+ "dxcontainer",
  "encoding_rs",
  "half",
+ "iridia",
+ "iridia-exec",
  "num-bigint",
  "primase-animation",
  "primase-bytes",
@@ -1166,14 +1205,11 @@ dependencies = [
  "primase-core",
  "primase-dds",
  "primase-dxbc",
- "primase-dxcontainer",
  "primase-dxil",
  "primase-hash",
  "primase-havok",
  "primase-image",
  "primase-meshops",
- "primase-shader",
- "primase-shader-exec",
  "primase-testdata",
  "primase-texcodec",
  "primase-vertex",
@@ -1189,12 +1225,12 @@ name = "primase-frostbite"
 version = "0.1.0"
 dependencies = [
  "half",
+ "iridia",
+ "iridia-exec",
  "primase-bytes",
  "primase-compress",
  "primase-core",
  "primase-dxil",
- "primase-shader",
- "primase-shader-exec",
  "primase-testdata",
  "primase-texcodec",
  "serde",
@@ -1236,19 +1272,19 @@ name = "primase-gta"
 version = "0.1.0"
 dependencies = [
  "aes",
+ "dxcontainer",
  "indexmap",
+ "iridia",
+ "iridia-exec",
  "naga",
  "primase-bytes",
  "primase-compress",
  "primase-core",
  "primase-dxbc",
- "primase-dxcontainer",
  "primase-dxil",
  "primase-hash",
  "primase-image",
  "primase-meshops",
- "primase-shader",
- "primase-shader-exec",
  "primase-testdata",
  "primase-texcodec",
  "quick-xml",
@@ -1310,22 +1346,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "primase-mojoshader"
-version = "0.1.0"
-dependencies = [
- "naga",
- "primase-shader",
- "primase-testdata",
- "thiserror",
-]
-
-[[package]]
 name = "primase-monogame"
 version = "0.1.0"
 dependencies = [
+ "iridia",
+ "iridia-mojo",
  "primase-bytes",
- "primase-mojoshader",
- "primase-shader",
  "thiserror",
 ]
 
@@ -1376,52 +1402,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "primase-rsx"
-version = "0.1.0"
-dependencies = [
- "primase-bytes",
- "thiserror",
-]
-
-[[package]]
-name = "primase-shader"
-version = "0.1.0"
-dependencies = [
- "naga",
- "primase-core",
- "primase-dxbc",
- "primase-dxil",
- "sha2",
- "thiserror",
-]
-
-[[package]]
-name = "primase-shader-exec"
-version = "0.1.0"
-dependencies = [
- "half",
- "naga",
- "primase-core",
- "primase-dxbc",
- "primase-dxil",
- "primase-image",
- "primase-shader",
- "thiserror",
-]
-
-[[package]]
 name = "primase-shaunwhite"
 version = "0.1.0"
 dependencies = [
+ "iridia",
+ "iridia-d3d9",
+ "iridia-exec",
  "primase-anvil",
  "primase-bytes",
  "primase-core",
- "primase-d3d9",
  "primase-hash",
  "primase-image",
  "primase-meshops",
- "primase-shader",
- "primase-shader-exec",
  "primase-testdata",
  "primase-texcodec",
  "sha2",
@@ -1440,10 +1432,10 @@ dependencies = [
  "primase-hash",
  "primase-havok",
  "primase-morpheme",
- "primase-rsx",
  "primase-testdata",
  "primase-texcodec",
  "quantydb-sqlite",
+ "rsx-reader",
  "serde",
  "serde_json",
  "sha2",
@@ -1454,11 +1446,11 @@ dependencies = [
 name = "primase-skatebird"
 version = "0.1.0"
 dependencies = [
+ "iridia",
+ "iridia-exec",
  "primase-core",
  "primase-image",
  "primase-meshops",
- "primase-shader",
- "primase-shader-exec",
  "primase-testdata",
  "primase-unity",
  "serde",
@@ -1471,12 +1463,12 @@ dependencies = [
 name = "primase-stuntboost"
 version = "0.1.0"
 dependencies = [
+ "iridia",
+ "iridia-exec",
  "primase-core",
  "primase-glb",
  "primase-image",
  "primase-monogame",
- "primase-shader",
- "primase-shader-exec",
  "primase-testdata",
  "serde",
  "serde_json",
@@ -1507,6 +1499,8 @@ name = "primase-unity"
 version = "0.1.0"
 dependencies = [
  "half",
+ "iridia",
+ "iridia-exec",
  "primase-animation",
  "primase-compress",
  "primase-core",
@@ -1514,8 +1508,6 @@ dependencies = [
  "primase-gltf",
  "primase-image",
  "primase-meshops",
- "primase-shader",
- "primase-shader-exec",
  "primase-testdata",
  "primase-texcodec",
  "primase-vertex",
@@ -1621,6 +1613,14 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "rsx-reader"
+version = "0.1.0"
+dependencies = [
+ "primase-bytes",
+ "thiserror",
+]
 
 [[package]]
 name = "rustc-hash"

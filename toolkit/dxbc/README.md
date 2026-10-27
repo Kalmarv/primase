@@ -4,15 +4,15 @@ Shader Model 4 and 5 programs. `decode` reads a program's token stream into type
 stage's version token, instructions with their controls and extended tokens) and refuses, by name and word, what is
 not a program; it says nothing about what a consumer supports. `reflection` reads RDEF with the signatures
 (`signatures` alone for a container whose RDEF was stripped, as some engines ship them, leaving the constant layout to
-the caller's own records). `lift` turns a program of any stage into a `primase_shader::Program`; running one is
-`primase_shader_exec`'s (`ProgramShader` for a pixel or vertex program). The container itself is read by
-`primase-dxcontainer`: its digest is not verified, this reader does not authenticate shaders.
+the caller's own records). `lift` turns a program of any stage into a `iridia::Program`; running one is
+`iridia_exec`'s (`ProgramShader` for a pixel or vertex program). The container itself is read by
+`dxcontainer`: its digest is not verified, this reader does not authenticate shaders.
 
 Sampling belongs to the caller of an execution: it states its footprint/LOD, addressing, filtering and transfer
 policy, and a scalar execution cannot infer derivatives, so the caller states its inputs'.
 
 `reflection` reads SM5.0 pixel-program RDEF, ISGN and OSGN chunks into primase's interface vocabulary
-(`primase_shader::Interface`, see `toolkit/shader/README.md`): resources by kind with their D3D bind points, constant
+(`iridia::Interface`, see `repos/iridia/iridia/README.md`): resources by kind with their D3D bind points, constant
 buffers with explicit byte offsets, strides and default bytes, and one varying per signature element with its
 register and lanes in provenance. D3D's enum numbers stop there; one the mapping does not know is refused by name.
 It does not flatten arrays, infer their use or assign material parameters; the interpolation a program declares is
@@ -60,7 +60,7 @@ establish equality for other inputs.
 
 ## Lifting
 
-`lift(container)` turns a Shader Model 4 or 5 pixel or vertex program into a `primase_shader::Program`. It reads the
+`lift(container)` turns a Shader Model 4 or 5 pixel or vertex program into a `iridia::Program`. It reads the
 program through `decode` (the token-level decoder every consumer shares: any stage's version token, typed
 declarations, instructions with their controls and extended tokens) and the container's signatures and, where there is one, its RDEF (names and constant layouts).
 

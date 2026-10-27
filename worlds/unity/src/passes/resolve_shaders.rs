@@ -19,7 +19,7 @@
 //!   [`builtin`]; its vectors that pack several values (the screen size, the projection's flip and planes, the time) part
 //!   by part ([`builtin_parts`]: each part's own role, the derived ones `Unknown`); anything else `Unknown` with the
 //!   reason, struct (instancing) fields included. Only the bytes the program reads are bound
-//!   ([`primase_shader::WordsRead`] of the lifted program: the words its outputs, discards and writes are made of; a
+//!   ([`iridia::WordsRead`] of the lifted program: the words its outputs, discards and writes are made of; a
 //!   program whose value graph cannot be followed has every byte bound, counted): a field or part it does not read is
 //!   left out, counted,
 //!   and the bytes between the fields it reads are `Unknown` ("the player stores no field for them"). A buffer the player
@@ -60,8 +60,8 @@ use primase_core::shader::{
     ViewParameter,
 };
 use primase_core::{Component, Entity, Name, Semantic, Texture, World};
-use primase_shader::matrix::state_lines;
-use primase_shader::{ProgramGraph, WordsRead};
+use iridia::matrix::state_lines;
+use iridia::{ProgramGraph, WordsRead};
 
 use crate::components::{Parameters, Shape, UnityMaterial, UnityProgramVariant, UnityPrograms, UnityTexEnv};
 use crate::passes::draw_keywords::{SceneKeywords, receivers};

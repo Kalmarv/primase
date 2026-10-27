@@ -9,12 +9,12 @@ repository.workspace = true
 publish.workspace = true
 [dependencies]
 primase-cache.workspace = true
-primase-dxcontainer.workspace = true
+dxcontainer.workspace = true
 primase-bytes.workspace = true
 primase-dxbc.workspace = true
 primase-dxil.workspace = true
-primase-shader.workspace = true
-primase-shader-exec.workspace = true
+iridia.workspace = true
+iridia-exec.workspace = true
 primase-havok.workspace = true
 primase-texcodec.workspace = true
 primase-image.workspace = true

@@ -16,9 +16,9 @@
 //! joint palette is, or only by the instance, as the object matrices of an unskinned draw are.
 
 use primase_core::shader::{BufferLayout, ConstantType, ResourceId, ResourceKind, ScalarType};
-use primase_shader::Program;
-use primase_shader::flow::{At, Node, NodeId, Values};
-use primase_shader_exec::probe::{ProbeRun, VertexProbe, Zeros};
+use iridia::Program;
+use iridia::flow::{At, Node, NodeId, Values};
+use iridia_exec::probe::{ProbeRun, VertexProbe, Zeros};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The position the probe gives the program, and the camera it moves to.

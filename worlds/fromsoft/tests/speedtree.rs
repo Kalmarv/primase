@@ -24,7 +24,7 @@ use primase_fromsoft::materials::{self, Definition, SkipClass};
 use primase_fromsoft::sekiro::passes::geometry::program_frame;
 use primase_fromsoft::sekiro::source::{ShaderBundle, ShaderProgram, ShaderStage};
 use primase_fromsoft::{Binder, Game, NameDictionary, dcx::Decoder};
-use primase_shader_exec::{Backend, Element, Executable, ImageSample, Resources, Runner};
+use iridia_exec::{Backend, Element, Executable, ImageSample, Resources, Runner};
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 mod common;

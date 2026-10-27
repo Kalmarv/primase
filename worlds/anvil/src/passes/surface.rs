@@ -12,6 +12,9 @@ use std::sync::Arc;
 
 use super::bake::{UnstatedAddress, material_rows};
 use crate::components::{AnvilMaterial, AnvilRenderStatus, AnvilShaders, AnvilTextureMap};
+use iridia_exec::{
+    Execution, Filtering, PixelShader, ProgramShader, SampledTexture, SamplerUse, View, Views,
+};
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial, TextureRef, Wrap};
 use primase_core::shader::{NormalEncoding, SamplerState};
@@ -21,9 +24,6 @@ use primase_core::{
     Transform, VertexColor, World,
 };
 use primase_image::sampling::{Levels, Transfer};
-use primase_shader_exec::{
-    Execution, Filtering, PixelShader, ProgramShader, SampledTexture, SamplerUse, View, Views,
-};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SurfaceSediments {

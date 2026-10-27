@@ -147,7 +147,7 @@ impl<'a> Reader<'a> {
 
 fn raw(bytes: &[u8], at: usize, expected: Stage) -> Result<Vec<u8>> {
     let (stage, program) =
-        primase_d3d9::frame(bytes).map_err(|e| invalid(at, "stage bytecode", e.to_string()))?;
+        iridia_d3d9::frame(bytes).map_err(|e| invalid(at, "stage bytecode", e.to_string()))?;
     if stage != expected || program.len() != bytes.len() {
         return Err(invalid(
             at,

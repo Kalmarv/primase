@@ -1,10 +1,10 @@
 //! The stages that are functions, not entry points: a hull program's two phases, a domain program, a vertex program
 //! that writes no position. What reads their arguments and fills their results (see
-//! [`primase_shader::stage_functions`]).
+//! [`iridia::stage_functions`]).
 
+use iridia::build::{Kind, Val};
+use iridia::{IoType, Program, StageFacts, Varying};
 use naga::{Expression as E, Handle, LocalVariable};
-use primase_shader::build::{Kind, Val};
-use primase_shader::{IoType, Program, StageFacts, Varying};
 
 use super::setup::const_int;
 use super::{Lift, Lv};
@@ -42,7 +42,7 @@ impl Lift<'_> {
         }
     }
 
-    fn argument_named(&self, sig: &primase_shader::FunctionSig, name: &str) -> Result<(usize, IoType)> {
+    fn argument_named(&self, sig: &iridia::FunctionSig, name: &str) -> Result<(usize, IoType)> {
         match sig.arguments.iter().position(|a| a.name == name) {
             Some(index) => Ok((index, sig.arguments[index].ty)),
             None => self.refuse(format!("{}: no argument {name}", sig.name)),
@@ -235,7 +235,7 @@ type GsOutputLocal = (
     Handle<LocalVariable>,
     Handle<LocalVariable>,
     Vec<u8>,
-    primase_shader::Value,
+    iridia::Value,
 );
 
 /// A geometry program's output so far: how many vertices it has emitted, whether the next begins a strip, and for each
@@ -291,7 +291,7 @@ impl Lift<'_> {
                 .b
                 .local(&format!("emit_{}", Program::varying_name(&v.label)), ty);
             let lanes: Vec<u8> = match v.system {
-                Some(primase_shader::SystemValue::ClipPosition) => vec![0, 1, 2, 3],
+                Some(iridia::SystemValue::ClipPosition) => vec![0, 1, 2, 3],
                 _ => (0..4u8).filter(|l| d3d.mask >> l & 1 != 0).collect(),
             };
             outputs.push((array, register, lanes, carried));
@@ -425,7 +425,7 @@ impl Lift<'_> {
                 return self.refuse(format!("{} has no register {}", item.name, d3d.register));
             };
             let lanes: Vec<u8> = match v.system {
-                Some(primase_shader::SystemValue::ClipPosition) => vec![0, 1, 2, 3],
+                Some(iridia::SystemValue::ClipPosition) => vec![0, 1, 2, 3],
                 _ => (0..4u8).filter(|l| d3d.mask >> l & 1 != 0).collect(),
             };
             let p = self.b.local_ptr(local);

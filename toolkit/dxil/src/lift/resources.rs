@@ -4,14 +4,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 
+use iridia::build::{Kind, Val, component};
+use iridia::{
+    Access, BufferKind, Resource, ResourceId, ResourceKind, ResourceProvenance, SampleType, ScalarType,
+    StorageTarget, TextureDim,
+};
 use naga::{
     AddressSpace, ArraySize, BinaryOperator as Bo, Expression as E, GlobalVariable, Handle, ImageClass,
     ImageQuery, ResourceBinding, SampleLevel, StorageAccess, TypeInner,
-};
-use primase_shader::build::{Kind, Val, component};
-use primase_shader::{
-    Access, BufferKind, Resource, ResourceId, ResourceKind, ResourceProvenance, SampleType, ScalarType,
-    StorageTarget, TextureDim,
 };
 
 use super::setup::{binding_of, const_int, dx_opcode};
@@ -256,7 +256,7 @@ impl Lift<'_> {
                     // a typed buffer is carried as four 32-bit lanes per element, whatever the view's own width
                     if let BufferKind::Typed(v) = kind {
                         self.setup.interface.resources[i].kind =
-                            ResourceKind::Buffer(BufferKind::Typed(primase_shader::Value { width: 4, ..*v }));
+                            ResourceKind::Buffer(BufferKind::Typed(iridia::Value { width: 4, ..*v }));
                     }
                     (
                         format!("sb{}", range.lower),
@@ -331,7 +331,7 @@ impl Lift<'_> {
                     });
                     // a typed buffer is carried as four 32-bit lanes per element, whatever the view's own width
                     let kind = match kind {
-                        BufferKind::Typed(v) => BufferKind::Typed(primase_shader::Value { width: 4, ..*v }),
+                        BufferKind::Typed(v) => BufferKind::Typed(iridia::Value { width: 4, ..*v }),
                         other => *other,
                     };
                     self.setup.interface.resources[i].kind = ResourceKind::Storage {

@@ -1,6 +1,6 @@
 //! The engine's shader pack (`ShaderDataDX11.bin` in Riders Republic's folder): DXBC containers back to back, then 16
 //! bytes, the MD5 of every byte before them. Each container is checked by its own stored checksum
-//! ([`primase_dxcontainer::checksum`]) and the pack by its last 16 bytes; a container or pack whose digest disagrees is
+//! ([`dxcontainer::checksum`]) and the pack by its last 16 bytes; a container or pack whose digest disagrees is
 //! refused, naming it. What a container is to the engine (which material, pass or permutation uses it) isn't read.
 //!
 //! The Riders Republic notes (docs/terrain.md §3.4) found the 2,443 containers (SM5; resource definitions stripped);
@@ -56,7 +56,7 @@ pub fn containers(pack: &[u8]) -> Result<Vec<&[u8]>, Error> {
         })?;
         let stored = container.get(4..20);
         if size < 32
-            || primase_dxcontainer::checksum(container)
+            || dxcontainer::checksum(container)
                 .as_ref()
                 .map(|c| c.as_slice())
                 != stored

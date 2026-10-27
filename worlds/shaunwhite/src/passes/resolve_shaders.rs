@@ -222,7 +222,7 @@ fn binding(
                             .ok_or_else(|| format!("{slot} texture not read"))?
                             .texture;
                         let sampler =
-                            primase_d3d9::sampler_states(s.states.iter().map(|s| (s.kind, s.value)))
+                            iridia_d3d9::sampler_states(s.states.iter().map(|s| (s.kind, s.value)))
                                 .map_err(|e| e.to_string())?;
                         Ok(TextureSource::Texture { texture, sampler })
                     })
@@ -397,11 +397,11 @@ impl Pass for ResolveShaunwhiteShaders {
                 let loaded = cache
                     .entry((effect.pixel_key, bytes.clone()))
                     .or_insert_with(|| {
-                        let p = primase_d3d9::lift(bytes).map_err(|e| e.to_string())?;
+                        let p = iridia_d3d9::lift(bytes).map_err(|e| e.to_string())?;
                         let shader = w.spawn();
                         let fact = ProgramFacts {
                             name: format!("SM3 pixel {:016x}", effect.pixel_key),
-                            hash: Some(primase_shader::source_hash(bytes)),
+                            hash: Some(iridia::source_hash(bytes)),
                             stage: Stage::Pixel,
                             shader: Some(shader),
                             instruction_count: None,
@@ -458,7 +458,7 @@ impl Pass for ResolveShaunwhiteShaders {
                         facts.push(ProgramFacts::unavailable(
                             name,
                             Stage::Pixel,
-                            Some(primase_shader::source_hash(bytes)),
+                            Some(iridia::source_hash(bytes)),
                             why,
                         ));
                     }

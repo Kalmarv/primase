@@ -97,7 +97,7 @@ SCP table strides are checked
 against the native loader, but their meanings and nested objects remain unread. SCP's opaque coverage notice
 intentionally overlaps interpreted fields and is **not** a count of distinct unread bytes.
 
-`cgbinary_disc` feeds the `.vsp` and `.psp` entries to `primase-rsx`'s generic
+`cgbinary_disc` feeds the `.vsp` and `.psp` entries to `rsx-reader`'s generic
 CgBinaryProgram reader. SHRED owns the stream's 64-byte zero padding between
 containers. Full depth checks 743 VSP and 765 PSP occurrences, containing 199,017
 vertex and 181,851 fragment programs and 8,041,219 parameter records. Smoke
@@ -135,7 +135,7 @@ comes back. Collision entities are not reached from placements, so a program tha
 archive is the PAK inside `SCRIPTS.SDAT`, which the disc stores encrypted; the caller decrypts it (primase holds no
 key) and passes the plain PAK. A level's `scriptfx_level_load_<level>.lua` is Lua 5.1 bytecode that sets fog, shadow
 colours and bounds, bloom, back light, ambient fall-off, the colour LUT and more by calling engine functions with
-literal numbers and strings. `primase-lua51` lists its calls; every call whose callee is a global (or a field path) and
+literal numbers and strings. `lua51-bytecode` lists its calls; every call whose callee is a global (or a field path) and
 whose arguments are all literals becomes a `ScriptCall` of the `shred.level_params` world resource, in script order,
 with its arguments as the script writes them. Nothing says what an argument means or its unit; no value is
 hard-coded, and nothing is lowered to a core `Environment` or `Atmosphere` until the engine function is proven. A call

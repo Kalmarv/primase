@@ -86,15 +86,15 @@ fn census(game: Game) {
             }
         }
         // a program of a stage with no WGSL stage is written as its functions
-        let written = if primase_shader::stage_functions(&program.interface).is_ok_and(|f| f.is_some()) {
-            primase_shader::emit::wgsl_functions(&program)
+        let written = if iridia::stage_functions(&program.interface).is_ok_and(|f| f.is_some()) {
+            iridia::emit::wgsl_functions(&program)
         } else {
-            primase_shader::emit::wgsl(&program)
+            iridia::emit::wgsl(&program)
         };
         match written {
             Ok(_) => c.written += 1,
             // a program the validator accepts and a writer says it cannot write is counted, not wrong
-            Err(primase_shader::ProgramError::Unsupported { detail, .. }) => {
+            Err(iridia::ProgramError::Unsupported { detail, .. }) => {
                 let entry = c
                     .unwritten
                     .entry(detail)
@@ -104,14 +104,14 @@ fn census(game: Game) {
             Err(e) => c.invalid.push(format!("{}: {e}", path.display())),
         }
         // the executor compiles it too (as an entry point, or as its functions), or refuses it by name
-        let compiled = match primase_shader_exec::Executable::functions(&program) {
+        let compiled = match iridia_exec::Executable::functions(&program) {
             Ok(Some(_)) => {
                 *c.as_functions
                     .entry(format!("{:?}", program.interface.stage))
                     .or_default() += 1;
                 Ok(())
             }
-            Ok(None) => primase_shader_exec::Executable::new(&program).map(|_| ()),
+            Ok(None) => iridia_exec::Executable::new(&program).map(|_| ()),
             Err(e) => Err(e),
         };
         if let Err(e) = compiled {

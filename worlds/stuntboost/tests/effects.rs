@@ -144,10 +144,10 @@ fn e2_every_shader_lifts() {
                                 .collect::<Vec<_>>()
                                 .join("; ")
                         ));
-                    } else if let Err(e) = primase_shader::emit::wgsl(&program) {
+                    } else if let Err(e) = iridia::emit::wgsl(&program) {
                         invalid.push(format!("{name} shader {index}: {e}"));
                     }
-                    if program.stage == primase_shader::Stage::Vertex {
+                    if program.stage == iridia::Stage::Vertex {
                         assert!(
                             program.notes.iter().any(|n| n.contains("posFixup")),
                             "{name} shader {index}: the clip-space fix is not noted"
@@ -193,7 +193,7 @@ fn e3_every_shader_compiles_on_the_executor() {
         for index in 0..effect.shaders.len() {
             let program = primase_monogame::programs::program(&effect, index).unwrap();
             programs += 1;
-            if let Err(e) = primase_shader_exec::Executable::new(&program) {
+            if let Err(e) = iridia_exec::Executable::new(&program) {
                 refused
                     .entry(e.detail.clone())
                     .or_default()

@@ -20,7 +20,7 @@
 //! not compared.
 use primase_core::parallel::Threads;
 use primase_fromsoft::layer_bake::{Encoded, PipelineState, TARGETS};
-use primase_shader_exec::Raw;
+use iridia_exec::Raw;
 use primase_testdata::{Game, OracleSet, oracle};
 use serde_json::Value;
 use std::collections::BTreeMap;

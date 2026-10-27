@@ -4,7 +4,7 @@
 //! the primitive and instance numbers; the emitted vertices as arrays, their count and where strips start), and it
 //! validates and is written as WGSL functions.
 use primase_dxil::lift;
-use primase_shader::{GsInput, GsOutput, Stage, StageFacts, stage_functions};
+use iridia::{GsInput, GsOutput, Stage, StageFacts, stage_functions};
 
 #[test]
 fn a_geometry_program_is_the_function_its_facts_describe() {
@@ -40,7 +40,7 @@ fn a_geometry_program_is_the_function_its_facts_describe() {
             "{name}"
         );
         p.validate().unwrap_or_else(|e| panic!("{name}: {e:?}"));
-        let wgsl = primase_shader::emit::wgsl_functions(&p).unwrap();
+        let wgsl = iridia::emit::wgsl_functions(&p).unwrap();
         assert!(wgsl.contains("fn main("), "{name}: {wgsl}");
         assert!(wgsl.contains("SV_VertexCount"), "{name}");
     }

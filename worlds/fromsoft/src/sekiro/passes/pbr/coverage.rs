@@ -11,7 +11,7 @@ use crate::passes::program_reads::{self, Reads, SlotRead};
 use crate::sekiro::source::{MaterialShader, ShaderBundle, ShaderStage};
 use primase_core::shader::{ResourceId, ResourceKind};
 use primase_core::{Entity, World};
-use primase_shader::output_uses::{AlphaExpr, AlphaTest, Known, alpha_tests};
+use iridia::output_uses::{AlphaExpr, AlphaTest, Known, alpha_tests};
 use std::collections::BTreeMap;
 
 /// A slot the programs read and the lowered UV set (`TexCoord(n)`) they sample it with.

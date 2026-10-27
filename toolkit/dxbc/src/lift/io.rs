@@ -1,9 +1,9 @@
 //! The program's edges: locals for the registers, the prologue that unpacks the entry arguments into input registers,
 //! and the epilogue that packs output registers into the result.
 
+use iridia::build::{Builder, Kind, Val};
+use iridia::{IoType, ScalarType, Stage, SystemValue};
 use naga::{Expression as E, Handle, Statement, TypeInner};
-use primase_shader::build::{Builder, Kind, Val};
-use primase_shader::{IoType, ScalarType, Stage, SystemValue};
 
 use super::resources::{Resources, lanes_of};
 use super::setup::Setup;

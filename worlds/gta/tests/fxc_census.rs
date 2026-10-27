@@ -56,7 +56,7 @@ fn every_effect_of_the_install() {
                     continue;
                 }
                 programs += 1;
-                let chunks = primase_dxcontainer::chunks(&shader.bytecode)
+                let chunks = dxcontainer::chunks(&shader.bytecode)
                     .unwrap_or_else(|e| panic!("{} {}: {e}", path.display(), shader.name));
                 let is_dxil = chunks.iter().any(|c| &c.kind == b"DXIL");
                 if is_dxil {
@@ -80,7 +80,7 @@ fn every_effect_of_the_install() {
                         match program.validate() {
                             Err(p) => invalid.push(format!("{name}: {p:?}")),
                             Ok(_) => {
-                                if let Err(e) = primase_shader::emit::wgsl(&program) {
+                                if let Err(e) = iridia::emit::wgsl(&program) {
                                     invalid.push(format!("{name}: {e}"));
                                 }
                             }
@@ -156,7 +156,7 @@ fn the_enhanced_shader_database() {
     for (g, stage) in sgd2::GROUP_STAGES.iter().enumerate() {
         for program in &db.groups[g] {
             programs += 1;
-            let chunks = primase_dxcontainer::chunks(program.container)
+            let chunks = dxcontainer::chunks(program.container)
                 .unwrap_or_else(|e| panic!("{}: {e}", program.name));
             assert!(
                 chunks.iter().any(|c| &c.kind == b"DXIL"),
@@ -188,28 +188,28 @@ fn the_enhanced_shader_database() {
                         Ok(_) => {
                             // a program of a stage with no WGSL stage is written as its functions
                             let written =
-                                if primase_shader::stage_functions(&p.interface).is_ok_and(|f| f.is_some()) {
-                                    primase_shader::emit::wgsl_functions(&p)
+                                if iridia::stage_functions(&p.interface).is_ok_and(|f| f.is_some()) {
+                                    iridia::emit::wgsl_functions(&p)
                                 } else {
-                                    primase_shader::emit::wgsl(&p)
+                                    iridia::emit::wgsl(&p)
                                 };
                             match written {
                                 Ok(_) => {}
                                 // a program the validator accepts and a writer cannot write is counted, not wrong
-                                Err(primase_shader::ProgramError::Unsupported { detail, .. }) => {
+                                Err(iridia::ProgramError::Unsupported { detail, .. }) => {
                                     *unwritten.entry(detail).or_default() += 1;
                                 }
                                 Err(e) => invalid.push(format!("{}: {e}", program.name)),
                             }
                             // the executor compiles it too (as an entry point, or as its functions), or refuses it by name
-                            let compiled = match primase_shader_exec::Executable::functions(&p) {
+                            let compiled = match iridia_exec::Executable::functions(&p) {
                                 Ok(Some(_)) => {
                                     *as_functions
                                         .entry(format!("{:?}", p.interface.stage))
                                         .or_default() += 1;
                                     Ok(())
                                 }
-                                Ok(None) => primase_shader_exec::Executable::new(&p).map(|_| ()),
+                                Ok(None) => iridia_exec::Executable::new(&p).map(|_| ()),
                                 Err(e) => Err(e),
                             };
                             if let Err(e) = compiled {

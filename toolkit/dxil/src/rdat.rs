@@ -30,7 +30,7 @@
     clippy::cast_possible_truncation
 )]
 
-use primase_shader::{HitGroup, HitGroupKind, Subobject};
+use iridia::{HitGroup, HitGroupKind, Subobject};
 
 use crate::{Result, error};
 

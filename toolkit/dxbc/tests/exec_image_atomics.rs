@@ -4,9 +4,9 @@
 //! image_atomic_results.hlsl: four threads in order, each adding, exchanging and maxing into texels of one texture and
 //! storing the old words it reads to another).
 use primase_dxbc::lift;
-use primase_shader::D3dClass;
-use primase_shader::ResourceId;
-use primase_shader_exec::{
+use iridia::D3dClass;
+use iridia::ResourceId;
+use iridia_exec::{
     Backend, Element, Executable, ImageAtomic, ImageAtomicOp, ImageSample, ImageStore, Resources,
 };
 use std::collections::BTreeMap;
@@ -53,7 +53,7 @@ fn the_old_word_of_an_atomic_on_a_texture_reaches_the_program() {
         let program = lift(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
         program.validate().unwrap_or_else(|p| panic!("{name}: {p:?}"));
         assert!(
-            primase_shader::emit::wgsl(&program)
+            iridia::emit::wgsl(&program)
                 .unwrap_err()
                 .to_string()
                 .contains("texture atomic result"),

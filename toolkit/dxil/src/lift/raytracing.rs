@@ -1,13 +1,13 @@
 //! The ray tracing pipeline's programs (ray generation, intersection, any-hit, closest-hit, miss, callable), which a
 //! library holds: the ray's system values a program reads, and the operations only the pipeline has (`TraceRay`,
 //! `ReportHit`, `CallShader`, `IgnoreHit`, `AcceptHitAndEndSearch`), which are calls of the module's functions named by
-//! [`primase_shader::rt`].
+//! [`iridia::rt`].
 
 use std::collections::BTreeMap;
 
+use iridia::SystemValue;
+use iridia::build::{Kind, Val};
 use naga::{AddressSpace, Expression as E, FunctionArgument, Handle, Statement, TypeInner};
-use primase_shader::SystemValue;
-use primase_shader::build::{Kind, Val};
 
 use super::setup::{const_int, ray_system_value};
 use super::{Lift, Lv};
@@ -126,9 +126,9 @@ impl Lift<'_> {
             }
             155 | 156 => {
                 let name = if code == 155 {
-                    primase_shader::rt::IGNORE_HIT
+                    iridia::rt::IGNORE_HIT
                 } else {
-                    primase_shader::rt::ACCEPT_HIT_AND_END_SEARCH
+                    iridia::rt::ACCEPT_HIT_AND_END_SEARCH
                 };
                 let f = self.operation(name, None, |_| Vec::new(), false);
                 self.call_operation(f, Vec::new(), None);
@@ -152,7 +152,7 @@ impl Lift<'_> {
                 let direction = self.float3(args, 11)?;
                 let tmax = self.float(args[14])?;
                 let f = self.operation(
-                    primase_shader::rt::TRACE_RAY,
+                    iridia::rt::TRACE_RAY,
                     Some(payload_type),
                     |lift| {
                         let accel = lift
@@ -208,7 +208,7 @@ impl Lift<'_> {
                 let t = self.float(args[1])?;
                 let kind = self.uint(args[2])?;
                 let f = self.operation(
-                    primase_shader::rt::REPORT_HIT,
+                    iridia::rt::REPORT_HIT,
                     Some(attribute_type),
                     |lift| {
                         let f = lift.b.ty_of(Kind::F, 1);
@@ -232,7 +232,7 @@ impl Lift<'_> {
                 let (parameter, parameter_type) = self.memory_pointer(args[2])?;
                 let index = self.uint(args[1])?;
                 let f = self.operation(
-                    primase_shader::rt::CALL_SHADER,
+                    iridia::rt::CALL_SHADER,
                     Some(parameter_type),
                     |lift| {
                         let u = lift.b.ty_of(Kind::U, 1);

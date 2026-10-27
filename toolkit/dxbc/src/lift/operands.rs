@@ -1,7 +1,7 @@
 //! Reading and writing DXBC operands: registers as four raw lanes, source swizzles and modifiers, write masks.
 
+use iridia::build::{Kind, Val};
 use naga::{Expression as E, MathFunction as Mf, UnaryOperator as Uo};
-use primase_shader::build::{Kind, Val};
 
 use super::Lift;
 use super::resources::lanes_of;
@@ -101,9 +101,7 @@ impl Lift<'_> {
                 if op.indices.len() == 2
                     && matches!(
                         self.stage,
-                        primase_shader::Stage::Hull
-                            | primase_shader::Stage::Domain
-                            | primase_shader::Stage::Geometry
+                        iridia::Stage::Hull | iridia::Stage::Domain | iridia::Stage::Geometry
                     ) =>
             {
                 self.control_point_register(op, false)
@@ -197,10 +195,10 @@ impl Lift<'_> {
             | Register::ThreadIdInGroup
             | Register::ThreadIdInGroupFlattened => {
                 let system = match op.register {
-                    Register::ThreadId => primase_shader::SystemValue::DispatchThreadId,
-                    Register::ThreadGroupId => primase_shader::SystemValue::GroupId,
-                    Register::ThreadIdInGroup => primase_shader::SystemValue::GroupThreadId,
-                    _ => primase_shader::SystemValue::GroupIndex,
+                    Register::ThreadId => iridia::SystemValue::DispatchThreadId,
+                    Register::ThreadGroupId => iridia::SystemValue::GroupId,
+                    Register::ThreadIdInGroup => iridia::SystemValue::GroupThreadId,
+                    _ => iridia::SystemValue::GroupIndex,
                 };
                 let Some(&local) = self.ids.get(&system) else {
                     return self.refuse(format!("{:?} is used but not declared", op.register));

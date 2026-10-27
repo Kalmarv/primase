@@ -1,10 +1,10 @@
 //! The `dx.op` intrinsics: signature reads and writes, math, bit operations, handles and the resource operations.
 
+use iridia::SystemValue;
+use iridia::build::{Kind, Val};
 use naga::{
     BinaryOperator as Bo, DerivativeAxis, DerivativeControl, Expression as E, MathFunction as Mf, Statement,
 };
-use primase_shader::SystemValue;
-use primase_shader::build::{Kind, Val};
 
 use super::setup::{const_int, dx_opcode};
 use super::{Lift, Lv};
@@ -369,8 +369,8 @@ impl Lift<'_> {
         let expr = self.argument_expr(index);
         // a control point is one element of an array argument: the one the call's vertex index names
         let (expr, carried) = match ty {
-            primase_shader::IoType::Value(carried) => (expr, carried),
-            primase_shader::IoType::Array(carried, _) => {
+            iridia::IoType::Value(carried) => (expr, carried),
+            iridia::IoType::Array(carried, _) => {
                 let point = self.uint(args[4])?;
                 (
                     self.b.app(E::Access {
@@ -380,7 +380,7 @@ impl Lift<'_> {
                     carried,
                 )
             }
-            primase_shader::IoType::ClipDistances(_) | primase_shader::IoType::Memory => {
+            iridia::IoType::ClipDistances(_) | iridia::IoType::Memory => {
                 return self.refuse("an array-typed input");
             }
         };
@@ -469,7 +469,7 @@ impl Lift<'_> {
             };
             (index, io.arguments[index].ty)
         };
-        let primase_shader::IoType::Value(carried) = ty else {
+        let iridia::IoType::Value(carried) = ty else {
             return self.refuse("an array-typed input");
         };
         let expr = self.argument_expr(index);
@@ -541,10 +541,10 @@ impl Lift<'_> {
         let mut parts = Vec::new();
         for item in &io.results {
             let part = match item.ty {
-                primase_shader::IoType::Array(..) | primase_shader::IoType::Memory => {
+                iridia::IoType::Array(..) | iridia::IoType::Memory => {
                     return self.refuse("an array-typed output");
                 }
-                primase_shader::IoType::ClipDistances(n) => {
+                iridia::IoType::ClipDistances(n) => {
                     let mut components = Vec::new();
                     for &i in &item.varyings {
                         let v = self.setup.interface.outputs[i].clone();
@@ -567,7 +567,7 @@ impl Lift<'_> {
                     });
                     self.b.app(E::Compose { ty, components })
                 }
-                primase_shader::IoType::Value(carried) => {
+                iridia::IoType::Value(carried) => {
                     let v = self.setup.interface.outputs[item.varyings[0]].clone();
                     let (local, lanes): (_, Vec<u8>) = match v.system {
                         Some(

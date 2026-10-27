@@ -2,7 +2,7 @@
 //! The subobjects of a library's runtime data, read from data built by hand to the layout `primase_dxil::rdat` states: every
 //! kind, the references (strings, index arrays, raw bytes), and the refusals.
 use primase_dxil::rdat::{export_name, subobjects};
-use primase_shader::{HitGroup, HitGroupKind, Subobject};
+use iridia::{HitGroup, HitGroupKind, Subobject};
 
 fn words(w: &[u32]) -> Vec<u8> {
     w.iter().flat_map(|x| x.to_le_bytes()).collect()
@@ -202,7 +202,7 @@ fn an_export_name_is_the_function_name_undecorated() {
 /// program's facts name its own export.
 #[test]
 fn the_subobjects_dxc_wrote_are_the_ones_the_source_declares() {
-    use primase_shader::StageFacts;
+    use iridia::StageFacts;
     let fixture = |name: &str| {
         std::fs::read(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -212,7 +212,7 @@ fn the_subobjects_dxc_wrote_are_the_ones_the_source_declares() {
         .unwrap()
     };
     let bytes = fixture("ray_subobjects.dxil");
-    let chunks = primase_dxcontainer::chunks(&bytes).unwrap();
+    let chunks = dxcontainer::chunks(&bytes).unwrap();
     let rdat = chunks.iter().find(|c| &c.kind == b"RDAT").unwrap();
     let found = subobjects(rdat.data).unwrap();
     let names: Vec<_> = found

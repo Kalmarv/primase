@@ -1,5 +1,5 @@
 //! A variant of a material's compiled programs ([`UnityProgramVariant`], from `unity.programs`) bound for evaluation
-//! on the CPU ([`primase_shader`]): what Unity itself sets when it draws, as far as the material says it.
+//! on the CPU ([`iridia`]): what Unity itself sets when it draws, as far as the material says it.
 //!
 //! - [`bind`]: the program (its DXBC, whose reflection Unity strips) with the constant layout its parameters record
 //!   (field name, buffer slot, byte offset), and its texture slots by property name.
@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use primase_core::{ColorSpace, Texture};
 use primase_image::sampling::{Address, Levels, Transfer};
 use primase_image::srgb_to_linear;
-use primase_shader_exec::{Field, Filtering, Layout, SampledTexture, SamplerUse, evaluate::Constants};
+use iridia_exec::{Field, Filtering, Layout, SampledTexture, SamplerUse, evaluate::Constants};
 
 use crate::components::{Shape, UnityMaterial, UnityProgramVariant, UnityTexture};
 use crate::{Result, invalid};
@@ -26,7 +26,7 @@ use crate::{Result, invalid};
 /// A program bound to its layout.
 #[derive(Debug)]
 pub struct Bound {
-    pub shader: primase_shader_exec::ProgramShader,
+    pub shader: iridia_exec::ProgramShader,
     pub layout: Layout,
     /// Each texture parameter's slot (`t<n>`), by property name.
     pub textures: BTreeMap<String, u32>,
@@ -49,9 +49,9 @@ fn words(shape: Shape, array_size: u32) -> u32 {
 /// program reads, and its texture slots. A field named twice is an error.
 pub fn bind(name: &str, p: &UnityProgramVariant) -> Result<Bound> {
     let program = primase_dxbc::lift(&p.code).map_err(|e| invalid(format!("program of {name}: {e}")))?;
-    let shader = primase_shader_exec::ProgramShader::new(program)
+    let shader = iridia_exec::ProgramShader::new(program)
         .map_err(|e| invalid(format!("program of {name}: {e}")))?;
-    let read = primase_shader_exec::PixelShader::constant_buffers(&shader).to_vec();
+    let read = iridia_exec::PixelShader::constant_buffers(&shader).to_vec();
     let mut layout = Layout {
         buffers: read.iter().map(|&(slot, rows)| (slot, rows * 4)).collect(),
         fields: BTreeMap::new(),
@@ -224,7 +224,7 @@ mod tests {
     use super::*;
     use crate::components::UnityObject;
     use primase_core::{TexFormat, TexRole};
-    use primase_shader_exec::{Image, Lod};
+    use iridia_exec::{Image, Lod};
 
     fn texture(width: u32, height: u32, levels: &[&[[u8; 4]]], space: ColorSpace) -> Texture {
         Texture {

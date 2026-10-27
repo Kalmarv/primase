@@ -2,12 +2,12 @@
 
 Shader Model 6 containers. `module` reads the LLVM bitcode of the `DXIL` part (our own bounded bitstream reader),
 `reflection` the signatures, resources and constant-buffer layouts, and `lift` turns a program of any stage into a
-`primase_shader::Program`; running one is `primase_shader_exec`'s (`ProgramShader` for a pixel or vertex program).
+`iridia::Program`; running one is `iridia_exec`'s (`ProgramShader` for a pixel or vertex program).
 Sampling belongs to the caller of an execution.
 
 ## Reading
 
-- Container (`primase-dxcontainer`): the DXBC directory format; SM6 parts are not 4-byte aligned. Parts lie inside the
+- Container (`dxcontainer`): the DXBC directory format; SM6 parts are not 4-byte aligned. Parts lie inside the
   container, do not overlap, and each kind appears once. The digest is not verified (not an authenticity check).
 - Program (`program`): the `DXIL` part's header (program version, size, `DXIL` magic, DXIL version, bitcode
   offset and size); the `STAT` reflection part has the same header.
@@ -29,7 +29,7 @@ Sampling belongs to the caller of an execution.
   first register and column, size) and interpolation from `dx.entryPoints`, resources from `dx.resources` (kind,
   element type and stride tags, space), and constant-buffer layouts (field names, offsets, component types and
   matrix annotations) from `dx.typeAnnotations`, named from the `STAT` module when present (the program's own
-  metadata has no names), mapped into primase's interface vocabulary (`primase_shader::Interface`).
+  metadata has no names), mapped into primase's interface vocabulary (`iridia::Interface`).
 
 ## Lifting
 
@@ -42,7 +42,7 @@ bind slot. An operation's arguments are read by position after one check of thei
 
 - `tests/fixtures.rs`: our own HLSL (`tests/fixtures/*.hlsl`, compiled with the dxc command in each file):
   the lifted interface (signature packing of every signature element, `used` where the program reads or writes a cell of it, resource names and slots, buffer field names
-  and offsets), execution (`primase_shader_exec::ProgramShader`) against outputs worked out from the HLSL, missing
+  and offsets), execution (`iridia_exec::ProgramShader`) against outputs worked out from the HLSL, missing
   bindings refused, every truncation of a fixture refused, and a seeded mutation run (the debug key `dxil.fuzz_runs`,
   default 3000).
 - `tests/exec_warp.rs`: the fixtures (blend, ops, flow, loops, switch, arrays, bits, resource arrays, pixel

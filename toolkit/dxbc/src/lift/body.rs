@@ -1,10 +1,10 @@
 //! The instructions: each DXBC instruction as typed operations, with D3D's results where they differ written out.
 
+use iridia::build::{Kind, Val};
 use naga::{
     BinaryOperator as Bo, Block, DerivativeAxis, DerivativeControl, Expression as E, MathFunction as Mf,
     Span, Statement, SwitchCase, SwitchValue, UnaryOperator as Uo,
 };
-use primase_shader::build::{Kind, Val};
 
 use super::{Frame, FrameKind, Lift};
 use crate::Result;

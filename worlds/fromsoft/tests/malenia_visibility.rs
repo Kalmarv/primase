@@ -65,7 +65,7 @@ fn visibility_parameter(name: &str) -> bool {
 /// constants come from the lab's real binding report; textures are explicit controls, not game texels.
 #[test]
 fn malenia_pixelkill_hash_and_alpha_permutation_discard() -> Result<()> {
-    use primase_shader_exec::PixelShader;
+    use iridia_exec::PixelShader;
     for name in [
         "C[PixelKill]_Int",
         "C[PixelKill][ID1]_Int",
@@ -136,7 +136,7 @@ fn malenia_pixelkill_hash_and_alpha_permutation_discard() -> Result<()> {
                     primase_core::shader::ShaderFormat::Dxbc => primase_dxbc::lift(&member.bytes)?,
                     _ => primase_dxil::lift(&member.bytes)?,
                 };
-                let shader = primase_shader_exec::ProgramShader::new(lifted)?;
+                let shader = iridia_exec::ProgramShader::new(lifted)?;
                 let mut buffers: Vec<_> = shader
                     .constant_buffers()
                     .iter()
@@ -200,7 +200,7 @@ fn malenia_pixelkill_hash_and_alpha_permutation_discard() -> Result<()> {
                         .collect();
                     {
                         let noise = 0.5f32;
-                        let mut sampler = |request: primase_shader_exec::Sample| {
+                        let mut sampler = |request: iridia_exec::Sample| {
                             Ok(if Some(request.texture) == dither {
                                 [noise; 4]
                             } else if matches!(request.texture, 40 | 41) {

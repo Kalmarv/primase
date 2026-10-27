@@ -24,7 +24,7 @@
 //!   render state in GTA (the cutoff is a shader constant).
 //! - **Constants.** Each constant buffer a program declares is the table record at its register and space; each
 //!   constant of the record is bound at its byte offset where the program reads it
-//!   ([`primase_shader::WordsRead`] of the program lifted again: the words its value graph reaches, however it loads
+//!   ([`iridia::WordsRead`] of the program lifted again: the words its value graph reaches, however it loads
 //!   them; a buffer indexed by a value that is not a literal is read at every word). A constant the program does not read, or
 //!   one past the end of the buffer it declares, is left out, counted. A constant the effect renames (its parameter records:
 //!   [`GtaEffectParameters`]) is a material parameter, bound to the words the material stores under the new name
@@ -80,9 +80,9 @@ use crate::components::{
 };
 use crate::rage::sgd2_effect::SamplerDesc;
 use crate::rage::sgd2_table::{ProgramTable, TableConstant, TableResource};
+use iridia::matrix::state_lines;
+use iridia::{ProgramGraph, WordsRead};
 use primase_core::shader::{MaterialPrograms, ProgramFacts};
-use primase_shader::matrix::state_lines;
-use primase_shader::{ProgramGraph, WordsRead};
 
 /// The pixel program family whose targets the pass names roles for (`PS_DeferredTextured` and its alpha-clipped and
 /// sub-sample variants: [`gbuffer`] has the layout and how it was checked).
@@ -154,7 +154,7 @@ fn analyse(program: &Shader, name: &str) -> ProgramAnalysis {
                 facts: ProgramFacts::unavailable(
                     name,
                     program.interface.stage,
-                    Some(primase_shader::source_hash(&program.bytecode)),
+                    Some(iridia::source_hash(&program.bytecode)),
                     &reason,
                 ),
                 graph: Err(reason.clone()),
@@ -1469,7 +1469,7 @@ mod tests {
         let analysed = analyse(&shader, "owned draw fixture");
         assert!(analysed.graph.is_ok());
         assert!(analysed.samples.is_ok());
-        assert_eq!(analysed.facts.hash, Some(primase_shader::source_hash(bytes)));
+        assert_eq!(analysed.facts.hash, Some(iridia::source_hash(bytes)));
         assert_eq!(
             analysed.facts.instruction_count.unwrap().unit,
             primase_core::shader::InstructionUnit::DxilInstructions

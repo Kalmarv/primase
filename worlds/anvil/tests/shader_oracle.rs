@@ -9,8 +9,8 @@ use primase_anvil::passes::formulas::{Rough, emission, metalness, occlusion, rou
 use primase_anvil::read::archive::{Archive, At};
 use primase_anvil::read::template;
 use primase_core::layered::height_blend;
-use primase_shader_exec::ProgramShader;
-use primase_shader_exec::{Load, PixelShader, Sample, Sampler, Store};
+use iridia_exec::ProgramShader;
+use iridia_exec::{Load, PixelShader, Sample, Sampler, Store};
 use primase_testdata::{Game, install};
 
 /// A small deterministic generator (xorshift64*), so every run checks the same cases.

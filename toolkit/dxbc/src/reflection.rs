@@ -1,8 +1,8 @@
 //! SM5 RDEF and signature metadata, mapped into primase's interface vocabulary; no material or binding policy.
 //! D3D's enum numbers stop here: a value the mapping does not know is an error naming it.
 use crate::{Result, error};
-use primase_shader::d3d;
-use primase_shader::{
+use iridia::d3d;
+use iridia::{
     Access, BufferKind, BufferLayout, Constant, ConstantType, D3dBinding, D3dClass, Interface, Majorness,
     Member, Resource, ResourceId, ResourceKind, ResourceProvenance, SampleType, ScalarType, Stage,
     StorageTarget, TextureDim, Value, Varying,
@@ -211,7 +211,7 @@ pub fn signature_elements(bytes: &[u8]) -> Result<(Stage, Vec<SignatureElement>,
 
 /// The signature in whichever of these chunks the container has.
 fn signature_of(
-    directory: &[primase_dxcontainer::Chunk<'_>],
+    directory: &[dxcontainer::Chunk<'_>],
     tags: &[&[u8; 4]],
     stage: Stage,
     output: bool,
@@ -224,7 +224,7 @@ fn signature_of(
 }
 
 /// A container's one chunk of kind `tag`.
-fn chunk<'a>(directory: &[primase_dxcontainer::Chunk<'a>], tag: &[u8; 4]) -> Result<&'a [u8]> {
+fn chunk<'a>(directory: &[dxcontainer::Chunk<'a>], tag: &[u8; 4]) -> Result<&'a [u8]> {
     let mut matching = directory.iter().filter(|c| &c.kind == tag);
     let data = matching
         .next()
@@ -242,7 +242,7 @@ fn chunk<'a>(directory: &[primase_dxcontainer::Chunk<'a>], tag: &[u8; 4]) -> Res
 }
 
 /// The stage of a container's program: its code chunk's version token names the program type in the high 16 bits.
-fn stage(directory: &[primase_dxcontainer::Chunk<'_>]) -> Result<Stage> {
+fn stage(directory: &[dxcontainer::Chunk<'_>]) -> Result<Stage> {
     let code = directory
         .iter()
         .find(|c| matches!(&c.kind, b"SHDR" | b"SHEX"))
@@ -673,7 +673,7 @@ pub fn reflection(bytes: &[u8]) -> Result<Interface> {
 
 #[cfg(test)]
 mod structured_tests {
-    use primase_shader::{ConstantType, Majorness, ScalarType};
+    use iridia::{ConstantType, Majorness, ScalarType};
     const BYTES: &[u8] = include_bytes!("../tests/fixtures/structured_layout.dxbc");
     // SDK 10.0.26100.0 compiler dumps: entries stride 96, indices 4, lookup 12.
     // The fixture distinguishes cbuffer offsets (values 16, rows 64) from storage offsets (4, 16).
@@ -683,7 +683,7 @@ mod structured_tests {
         check(&crate::lift(BYTES).expect("lift").interface);
     }
 
-    fn check(interface: &primase_shader::Interface) {
+    fn check(interface: &iridia::Interface) {
         let layout = |name: &str| {
             interface
                 .resources
@@ -756,7 +756,7 @@ mod structured_tests {
         assert_eq!(layout("lookup").size, 12);
         assert_eq!(
             layout("lookup").constants[0].ty,
-            ConstantType::Vector(primase_shader::Value {
+            ConstantType::Vector(iridia::Value {
                 scalar: ScalarType::Uint,
                 width: 3
             })

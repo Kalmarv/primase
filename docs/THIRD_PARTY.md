@@ -6,7 +6,7 @@ workspace. Each such file keeps the licence text in its header.
 
 ## Microsoft Direct3D 11 reference tessellator
 
-- Used in: `toolkit/shader-exec/src/tessellator.rs`, a port to Rust of `CHWTessellator` (the fixed-function
+- Used in: `repos/iridia/iridia-exec/src/tessellator.rs`, a port to Rust of `CHWTessellator` (the fixed-function
   tessellator: factor processing, point placement, ring and transition stitching).
 - Source: `tessellator.cpp` and `tessellator.hpp` ("Microsoft D3D11 Fixed Function Tessellator Reference - May 7, 2012",
   amar.patel@microsoft.com), published with the Direct3D 11.3 Functional Specification in

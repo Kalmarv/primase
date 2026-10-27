@@ -37,7 +37,7 @@ path = "worlds/anvil"
 reason = "the forge reader reads untrusted archive headers and tables"
 
 [[parse_crate]]
-path = "toolkit/dxcontainer"
+path = "repos/dx/dxcontainer"
 reason = "the DXBC container reader reads the part directory of untrusted shader containers"
 
 [[parse_crate]]

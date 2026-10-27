@@ -1,6 +1,6 @@
 //! Independently RUN RPCS3 disassembly, indexed by raw microcode hash. Repeated
 //! packaged programs are byte-compared to an already checked distinct program.
-use primase_rsx::{
+use rsx_reader::{
     cgbinary::{Stage, parse_prefix},
     fragment::{self, Control, Register, SourceKind, flow},
 };

@@ -1,13 +1,13 @@
 #![allow(clippy::unwrap_used)]
-//! The draw stage ([`primase_shader_exec::draw`]) against Microsoft's WARP rasterizer (Direct3D 12): each case draws
+//! The draw stage ([`iridia_exec::draw`]) against Microsoft's WARP rasterizer (Direct3D 12): each case draws
 //! the same triangles through the same vertex and pixel programs (tests/fixtures/draw.hlsl, lifted from their DXIL)
 //! into 16 x 16 targets on both, and every pixel is compared: which pixels each draws (exactly), what it writes (to a
 //! stated tolerance: the interpolation's arithmetic is each implementation's own) and the depth.
 //!
 //! Needs the WARP oracle program with the `d3d12draw` case form (the configured `Tool::Warp`; the form is in
 //! `oracles/warp-draw`) and the scratch folder. Without them the test does nothing.
-use primase_shader_exec::draw::{Compare, Cull, DepthState, DrawShader, Rasterizer, Surface, Viewport};
-use primase_shader_exec::{PixelShader, ProgramShader, Sample};
+use iridia_exec::draw::{Compare, Cull, DepthState, DrawShader, Rasterizer, Surface, Viewport};
+use iridia_exec::{PixelShader, ProgramShader, Sample};
 use primase_testdata::{Tool, own_scratch, tool};
 use std::path::Path;
 

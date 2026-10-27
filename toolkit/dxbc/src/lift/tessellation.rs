@@ -1,12 +1,12 @@
 //! The stages that are functions, not entry points: a hull program's phases, a domain program, a vertex program that
-//! writes no position (see [`primase_shader::stage_functions`]). What builds their arguments into registers, reads
+//! writes no position (see [`iridia::stage_functions`]). What builds their arguments into registers, reads
 //! the registers only they have, and returns their results.
 
-use naga::{Expression as E, Handle, LocalVariable, Statement};
-use primase_shader::build::{Kind, Val};
-use primase_shader::{
+use iridia::build::{Kind, Val};
+use iridia::{
     Conventions, D3dModes, FunctionSig, IoType, Program, Provenance, ShaderFormat, StageFacts, Varying,
 };
+use naga::{Expression as E, Handle, LocalVariable, Statement};
 
 use super::Lift;
 use super::resources::lanes_of;
@@ -23,7 +23,7 @@ type GsOutputLocal = (
     Handle<LocalVariable>,
     Handle<LocalVariable>,
     Vec<u8>,
-    primase_shader::Value,
+    iridia::Value,
 );
 
 /// A geometry program's output so far: how many vertices it has emitted, whether the next begins a strip, and for each
@@ -189,12 +189,7 @@ impl Lift<'_> {
     }
 
     /// One argument that carries a varying: its lanes go to the register the varying places them in.
-    fn unpack_argument(
-        &mut self,
-        item: &primase_shader::FnItem,
-        expr: Handle<E>,
-        varying: usize,
-    ) -> Result<()> {
+    fn unpack_argument(&mut self, item: &iridia::FnItem, expr: Handle<E>, varying: usize) -> Result<()> {
         let facts = self.setup.interface.facts.clone();
         let is_patch_constant =
             matches!(&facts, StageFacts::Domain(_)) && !matches!(item.ty, IoType::Array(..));
@@ -212,7 +207,7 @@ impl Lift<'_> {
         let Some(d3d) = v.provenance.d3d.filter(|d| d.register != u32::MAX) else {
             return Ok(());
         };
-        let bits_of = |lift: &mut Self, base: Handle<E>, carried: primase_shader::Value| -> Val {
+        let bits_of = |lift: &mut Self, base: Handle<E>, carried: iridia::Value| -> Val {
             let value = Val {
                 expr: base,
                 kind: Kind::of(carried.scalar),
@@ -310,7 +305,7 @@ impl Lift<'_> {
                 .b
                 .local(&format!("emit_{}", Program::varying_name(&v.label)), ty);
             let lanes = match v.system {
-                Some(primase_shader::SystemValue::ClipPosition) => vec![0, 1, 2, 3],
+                Some(iridia::SystemValue::ClipPosition) => vec![0, 1, 2, 3],
                 _ => lanes_of(d3d.mask),
             };
             outputs.push((array, register, lanes, carried));
@@ -432,7 +427,7 @@ impl Lift<'_> {
                 return self.refuse(format!("{} has no register {}", item.name, d3d.register));
             };
             let lanes: Vec<u8> = match v.system {
-                Some(primase_shader::SystemValue::ClipPosition) => vec![0, 1, 2, 3],
+                Some(iridia::SystemValue::ClipPosition) => vec![0, 1, 2, 3],
                 _ => lanes_of(d3d.mask),
             };
             let p = self.b.local_ptr(local);
@@ -533,9 +528,9 @@ impl Lift<'_> {
         self.b.check().map_err(|detail| crate::error(self.word, detail))?;
         let stage = self.setup.interface.stage;
         let module = self.b.finish_functions();
-        let mut limit_notes = primase_shader::compute_limit_notes(&module);
+        let mut limit_notes = iridia::compute_limit_notes(&module);
         let interface = self.setup.interface.clone();
-        limit_notes.extend(primase_shader::interface_notes(&interface));
+        limit_notes.extend(iridia::interface_notes(&interface));
         Ok(Program {
             module,
             stage,
@@ -551,9 +546,9 @@ impl Lift<'_> {
                 lifter_version: super::LIFTER_VERSION,
                 // the hash of the bytes, which `lift` sets
                 source_hash: None,
-                instruction_count: Some(primase_shader::InstructionCount {
+                instruction_count: Some(iridia::InstructionCount {
                     count: self.decoded.instructions.len() as u64,
-                    unit: primase_shader::InstructionUnit::DxbcInstructions,
+                    unit: iridia::InstructionUnit::DxbcInstructions,
                 }),
             },
             notes: self.notes.into_iter().chain(limit_notes).collect(),

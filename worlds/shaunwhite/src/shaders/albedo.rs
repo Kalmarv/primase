@@ -6,9 +6,9 @@
 //! refuses other families, extra value inputs and ambiguous frontiers; it never substitutes another permutation.
 use super::{Database, Key, Payload};
 use primase_core::shader::{OutputBinding, OutputRole, StageBinding};
-use primase_d3d9::{Projection, Register};
-use primase_shader::flow::{At, BinaryOperator, Node, NodeId, Op, UnaryOperator, Values};
-use primase_shader::{Program, source_hash};
+use iridia_d3d9::{Projection, Register};
+use iridia::flow::{At, BinaryOperator, Node, NodeId, Op, UnaryOperator, Values};
+use iridia::{Program, source_hash};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const NAME: &str = "shaunwhite.generic-albedo.v1";
@@ -96,7 +96,7 @@ pub fn derive(
     if r.key.kind != 4 || r.key.permutation & 63 != 3 || (r.key.permutation >> 20) & 7 != 2 {
         return Err("albedo: not a generic forward Colour record".into());
     }
-    if binding.stage != primase_shader::Stage::Pixel {
+    if binding.stage != iridia::Stage::Pixel {
         return Err("albedo: requires a pixel-stage binding".into());
     }
     if binding
@@ -124,11 +124,11 @@ pub fn derive(
         .pixel
         .as_deref()
         .ok_or("albedo: missing stored pixel program")?;
-    let source = primase_d3d9::read(bytes).map_err(|e| e.to_string())?;
+    let source = iridia_d3d9::read(bytes).map_err(|e| e.to_string())?;
     if source.instructions.len() > 512 {
         return Err("albedo: more than 512 instructions outside the bounded derivation".into());
     }
-    let full = primase_d3d9::lift(bytes).map_err(|e| e.to_string())?;
+    let full = iridia_d3d9::lift(bytes).map_err(|e| e.to_string())?;
     let values = Values::of_program(&full)?;
     let hashes = fingerprints(&values);
     let output = full
@@ -202,7 +202,7 @@ pub fn derive(
                 temporary,
                 lanes,
             };
-            let p = primase_d3d9::project(bytes, cut).map_err(|e| e.to_string())?;
+            let p = iridia_d3d9::project(bytes, cut).map_err(|e| e.to_string())?;
             let g = Values::of_program(&p)?;
             let h = fingerprints(&g);
             let roots = (0..3).filter_map(|l| g.output(0, l)).collect::<Vec<_>>();
@@ -336,7 +336,7 @@ pub fn derive(
             _ => {}
         }
     }
-    let reencode = primase_d3d9::reencode(bytes, cut).map_err(|e| e.to_string())?;
+    let reencode = iridia_d3d9::reencode(bytes, cut).map_err(|e| e.to_string())?;
     Ok(DerivedAlbedo {
         program,
         binding: b,

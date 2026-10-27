@@ -1,19 +1,19 @@
 //! Lifting a Shader Model 4 or 5 program (pixel, vertex or compute) to primase's shader representation
-//! ([`primase_shader::Program`]).
+//! ([`iridia::Program`]).
 //!
 //! A DXBC register is four untyped 32-bit lanes, so the body keeps every register as a `vec4<u32>` local and each
 //! instruction bitcasts its operands to the type the instruction implies; the typed values of the module are the
 //! instruction results. Structured flow lifts to structured flow. The conventions are the shader design's:
 //!
 //! - **Varyings** are unpacked: one entry argument per input signature element, one result member per output element
-//!   ([`primase_shader::entry_io`] says which), the D3D register packing undone by the prologue and epilogue and
+//!   ([`iridia::entry_io`] says which), the D3D register packing undone by the prologue and epilogue and
 //!   kept in the interface's provenance.
 //! - **Resources** are module globals: constant buffer `cb<n>` as a uniform `array<vec4<u32>, rows>` (group 0, binding
 //!   n), textures and buffer views `t<n>` (group 1), samplers `s<n>` (group 2), typed texture views `u<n>` (group 3, a storage
 //!   image of four 32-bit lanes). A name and a layout come from the
 //!   container's reflection where it has one; a stripped program's resources are named by register.
 //! - **Behaviour** that differs from naga's or other APIs' is written out as operations
-//!   ([`primase_shader::build`]'s D3D functions), and [`primase_shader::D3dModes`] says so: division by zero,
+//!   ([`iridia::build`]'s D3D functions), and [`iridia::D3dModes`] says so: division by zero,
 //!   float to integer conversion, `min`/`max` and `saturate` with NaN, shift counts, and reads out of range of a
 //!   dynamically indexed buffer (zero).
 //! - **Unknowns** are refused with the instruction word and the reason by name (`store_uav_typed: unordered-access
@@ -29,33 +29,33 @@ mod tessellation;
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use iridia::build::Builder;
+use iridia::{Conventions, D3dModes, Program, Provenance, ShaderFormat, Stage};
 use naga::{Handle, LocalVariable};
-use primase_shader::build::Builder;
-use primase_shader::{Conventions, D3dModes, Program, Provenance, ShaderFormat, Stage};
 
 use crate::decode::{Decoded, decode};
 use crate::{Result, error};
 
 /// The version of the lifter: bumped when what it produces for the same bytecode changes, so a cache keyed by the
-/// bytecode's hash knows what is stale; gated by `tests/versions.rs` (the lifted fixtures hashed under it, `primase_shader::gate`).
+/// bytecode's hash knows what is stale; gated by `tests/versions.rs` (the lifted fixtures hashed under it, `iridia::gate`).
 pub const LIFTER_VERSION: u32 = 6;
 
 /// Lift a DXBC container's program. A pixel or vertex program of Shader Model 4 or 5 is the scope; everything else,
 /// and every instruction or declaration the lifter does not carry, is an `Err` naming the word and the reason.
 pub fn lift(bytes: &[u8]) -> Result<Program> {
-    lift_with(bytes, &primase_shader::BoundSizes::new())
+    lift_with(bytes, &iridia::BoundSizes::new())
 }
 
 /// [`lift`] with the constant buffers `bound` names bound at the size it states: their uniform arrays have the rows of
 /// that size, so a read past the declaration and inside the bound is the buffer's, and the interface's layout is the
 /// bound size.
-pub fn lift_with(bytes: &[u8], bound: &primase_shader::BoundSizes) -> Result<Program> {
+pub fn lift_with(bytes: &[u8], bound: &iridia::BoundSizes) -> Result<Program> {
     let mut program = lift_program(bytes, bound)?;
-    program.provenance.source_hash = Some(primase_shader::source_hash(bytes));
+    program.provenance.source_hash = Some(iridia::source_hash(bytes));
     Ok(program)
 }
 
-fn lift_program(bytes: &[u8], bound: &primase_shader::BoundSizes) -> Result<Program> {
+fn lift_program(bytes: &[u8], bound: &iridia::BoundSizes) -> Result<Program> {
     let directory = crate::parts(bytes)?;
     let code = directory
         .iter()
@@ -132,9 +132,9 @@ struct Lift<'a> {
     /// `x<n>[i]`: the local and its length.
     indexable: BTreeMap<u32, (Handle<LocalVariable>, u32)>,
     /// `vThreadID`, `vThreadGroupID`, `vThreadIDInGroup` and `vThreadIDInGroupFlattened`, by the system value each is.
-    ids: BTreeMap<primase_shader::SystemValue, Handle<LocalVariable>>,
-    /// A hull, domain or position-less vertex program's function being lifted (see [`primase_shader::stage_functions`]).
-    sig: Option<primase_shader::FunctionSig>,
+    ids: BTreeMap<iridia::SystemValue, Handle<LocalVariable>>,
+    /// A hull, domain or position-less vertex program's function being lifted (see [`iridia::stage_functions`]).
+    sig: Option<iridia::FunctionSig>,
     /// The control points of a hull or domain program: `v[point][register]` and a hull program's `vocp`, as arrays of
     /// registers, `registers` of them to a point.
     control_points: Option<(Handle<LocalVariable>, u32)>,
@@ -151,7 +151,7 @@ struct Lift<'a> {
     /// Lifting a phase of a hull program: a `ret` ends the phase, not the function.
     in_phase: bool,
     /// The declared arguments and result of the function being lifted, until it is closed.
-    pending_decl: Option<primase_shader::build::FunctionDecl>,
+    pending_decl: Option<iridia::build::FunctionDecl>,
     /// `vPrim`, `vCoverage`, `oDepth` and `oMask`, lane 0.
     primitive_id: Option<Handle<LocalVariable>>,
     input_coverage: Option<Handle<LocalVariable>>,
@@ -174,7 +174,7 @@ impl<'a> Lift<'a> {
     }
 
     fn u4(&mut self) -> Handle<naga::Type> {
-        self.b.ty_of(primase_shader::build::Kind::U, 4)
+        self.b.ty_of(iridia::build::Kind::U, 4)
     }
 
     fn finish(mut self, target: String) -> Result<Program> {
@@ -194,9 +194,9 @@ impl<'a> Lift<'a> {
             self.result_type,
             self.setup.early_depth_test,
         );
-        let mut limit_notes = primase_shader::compute_limit_notes(&module);
+        let mut limit_notes = iridia::compute_limit_notes(&module);
         let interface = self.setup.interface.clone();
-        limit_notes.extend(primase_shader::interface_notes(&interface));
+        limit_notes.extend(iridia::interface_notes(&interface));
         Ok(Program {
             module,
             stage: self.stage,
@@ -212,9 +212,9 @@ impl<'a> Lift<'a> {
                 lifter_version: LIFTER_VERSION,
                 // the hash of the bytes, which `lift` sets
                 source_hash: None,
-                instruction_count: Some(primase_shader::InstructionCount {
+                instruction_count: Some(iridia::InstructionCount {
                     count: self.decoded.instructions.len() as u64,
-                    unit: primase_shader::InstructionUnit::DxbcInstructions,
+                    unit: iridia::InstructionUnit::DxbcInstructions,
                 }),
             },
             notes: self.notes.into_iter().chain(limit_notes).collect(),

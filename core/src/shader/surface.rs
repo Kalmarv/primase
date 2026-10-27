@@ -3,7 +3,7 @@
 //! occlusion) and how a lane's stored value decodes to the term, from the roles the program's binding states
 //! ([`OutputRole`]). Every consumer that lights a program's outputs takes them through this one reading: a material bake
 //! that evaluates the program on the CPU decodes with [`Surface`]'s terms, and a viewer's composite that decodes a
-//! G-buffer on the GPU uses the same reading written as WGSL (`primase_shader::surface`), so the two cannot disagree on
+//! G-buffer on the GPU uses the same reading written as WGSL (`iridia::surface`), so the two cannot disagree on
 //! what a lane means.
 //!
 //! The reading states only what the roles state. A term no output has a role for is `None`, and the consumer says the

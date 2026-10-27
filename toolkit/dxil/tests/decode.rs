@@ -9,7 +9,7 @@ fn module(name: &str) -> Module {
         .join("tests/fixtures")
         .join(name);
     let bytes = std::fs::read(path).unwrap();
-    let chunks = primase_dxcontainer::chunks(&bytes).unwrap();
+    let chunks = dxcontainer::chunks(&bytes).unwrap();
     let dxil = chunks.iter().find(|c| &c.kind == b"DXIL").unwrap();
     let part = primase_dxil::program(dxil.data).unwrap();
     let blocks = primase_dxil::bitstream::read(part.bitcode, *b"BC\xc0\xde").unwrap();

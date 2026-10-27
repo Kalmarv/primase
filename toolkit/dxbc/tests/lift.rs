@@ -3,7 +3,7 @@
 //! the interface and resources as worked out from the HLSL, and the D3D behaviours present in the lifted body as
 //! plain operations.
 use primase_dxbc::lift;
-use primase_shader::{BufferKind, ResourceKind, ScalarType, Stage, SystemValue};
+use iridia::{BufferKind, ResourceKind, ScalarType, Stage, SystemValue};
 
 const MODES: &[u8] = include_bytes!("fixtures/modes.dxbc");
 
@@ -58,7 +58,7 @@ fn the_fixture_lifts_validates_and_writes_wgsl() {
     assert_eq!(names, [("f", 0), ("u", 16), ("i", 32)]);
     let _ = BufferKind::Raw;
 
-    let wgsl = primase_shader::emit::wgsl(&program).unwrap();
+    let wgsl = iridia::emit::wgsl(&program).unwrap();
     // NaN is tested on its bits (never `x != x`, which a driver may fold away): |x| bits above the infinity's
     assert!(
         wgsl.contains("2147483647u") && wgsl.contains("2139095040u"),
@@ -194,20 +194,20 @@ fn a_typed_view_is_a_storage_image_stored_and_loaded() {
     assert_eq!(resource.provenance.name, "u3");
     assert_eq!(
         resource.provenance.d3d.map(|b| (b.class, b.register)),
-        Some((primase_shader::D3dClass::UnorderedAccess, 3))
+        Some((iridia::D3dClass::UnorderedAccess, 3))
     );
     assert_eq!(
         resource.kind,
         ResourceKind::Storage {
-            target: primase_shader::StorageTarget::Image {
-                dim: primase_shader::TextureDim::D2,
+            target: iridia::StorageTarget::Image {
+                dim: iridia::TextureDim::D2,
                 arrayed: false,
-                sample: primase_shader::SampleType::Float,
+                sample: iridia::SampleType::Float,
             },
-            access: primase_shader::Access::ReadWrite,
+            access: iridia::Access::ReadWrite,
         }
     );
-    let wgsl = primase_shader::emit::wgsl(&program).unwrap();
+    let wgsl = iridia::emit::wgsl(&program).unwrap();
     assert!(wgsl.contains("@group(3) @binding(3)"), "{wgsl}");
     assert!(
         wgsl.contains("texture_storage_2d<rgba32float,read_write>"),
@@ -275,7 +275,7 @@ fn the_compute_fixture_lifts_validates_and_writes_wgsl() {
             .iter()
             .filter_map(|r| match &r.kind {
                 ResourceKind::Storage {
-                    target: primase_shader::StorageTarget::Buffer(kind),
+                    target: iridia::StorageTarget::Buffer(kind),
                     ..
                 } => Some((r.provenance.d3d.unwrap().register, *kind)),
                 _ => None,
@@ -297,7 +297,7 @@ fn the_compute_fixture_lifts_validates_and_writes_wgsl() {
                 .any(|(r, k)| *r == 2 && matches!(k, BufferKind::Typed(_))),
             "{name}: {storage:?}"
         );
-        let wgsl = primase_shader::emit::wgsl(&program).unwrap();
+        let wgsl = iridia::emit::wgsl(&program).unwrap();
         for needle in [
             "@compute @workgroup_size(8, 4, 2)",
             "var<workgroup>",
@@ -319,6 +319,6 @@ fn a_hull_program_whose_phases_declare_different_temporaries_lifts() {
     program.validate().unwrap_or_else(|p| panic!("{p:?}"));
     assert_eq!(program.stage, Stage::Hull);
     for name in ["main", "patch_constant"] {
-        primase_shader_exec::Executable::function(&program, name).unwrap_or_else(|e| panic!("{name}: {e}"));
+        iridia_exec::Executable::function(&program, name).unwrap_or_else(|e| panic!("{name}: {e}"));
     }
 }

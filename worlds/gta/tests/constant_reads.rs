@@ -1,4 +1,4 @@
-//! The constants a program reads ([`primase_shader::WordsRead`] of the lifted program, from its value graph) held to an
+//! The constants a program reads ([`iridia::WordsRead`] of the lifted program, from its value graph) held to an
 //! independent reader of the same programs: the lanes each constant-buffer row is taken at in the program's emitted WGSL
 //! (which writes only what the program computes with). Over every distinct program of the shader database that lifts,
 //! every word the value graph reaches is a lane the code takes; the lanes the code takes that nothing the program
@@ -13,7 +13,7 @@ use primase_core::World;
 use primase_core::shader::Shader;
 use primase_gta::components::GtaEffect;
 use primase_gta::read::source::GtaSource;
-use primase_shader::ResourceKind;
+use iridia::ResourceKind;
 use primase_testdata::{Game, install, keys};
 
 /// The lanes of rows a program reads, from its WGSL (the emitter writes only what the program uses; the lifted IR also
@@ -27,7 +27,7 @@ type Reads = (
 
 fn reads(container: &[u8]) -> Result<Reads, String> {
     let program = primase_dxil::lift(container).map_err(|e| e.to_string())?;
-    let text = primase_shader::emit::wgsl(&program).map_err(|e| format!("{e:?}"))?;
+    let text = iridia::emit::wgsl(&program).map_err(|e| format!("{e:?}"))?;
     // buffer variable name -> (space, register)
     let mut buffers: BTreeMap<String, (u32, u32)> = BTreeMap::new();
     let lines: Vec<&str> = text.lines().collect();

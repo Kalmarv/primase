@@ -3,7 +3,7 @@
 //! entry point states, it is a mesh entry point with D3D's thread group and the group index as its one argument, it
 //! validates and is written as WGSL with the mesh stage's attributes, and the executor refuses it by name.
 use primase_dxil::lift;
-use primase_shader::{MeshFacts, MeshTopology, Stage, StageFacts};
+use iridia::{MeshFacts, MeshTopology, Stage, StageFacts};
 
 #[test]
 fn a_mesh_program_is_a_mesh_entry_point_with_its_facts() {
@@ -45,11 +45,11 @@ fn a_mesh_program_is_a_mesh_entry_point_with_its_facts() {
             .collect();
         assert_eq!(outputs, ["SV_Position", "COLOR"], "{name}");
         p.validate().unwrap_or_else(|e| panic!("{name}: {e:?}"));
-        let wgsl = primase_shader::emit::wgsl(&p).unwrap();
+        let wgsl = iridia::emit::wgsl(&p).unwrap();
         assert!(wgsl.contains("@mesh(mesh_output)"), "{name}: {wgsl}");
         assert!(wgsl.contains("@workgroup_size(32, 1, 1)"), "{name}");
         assert!(wgsl.contains("@builtin(triangle_indices)"), "{name}");
         // a mesh program is an entry point the executor runs (a thread group writing one meshlet)
-        primase_shader_exec::Executable::new(&p).unwrap_or_else(|e| panic!("{name}: {e}"));
+        iridia_exec::Executable::new(&p).unwrap_or_else(|e| panic!("{name}: {e}"));
     }
 }

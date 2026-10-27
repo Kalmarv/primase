@@ -1,8 +1,8 @@
 //! Why a finished Colour output is not an Albedo bake. This query diagnoses; it never changes output roles.
 use primase_core::Semantic;
 use primase_core::shader::{ConstantRole, InputRole, OutputRole, StageBinding, TextureSource};
-use primase_shader::Program;
-use primase_shader::flow::{At, Node, Op, Values};
+use iridia::Program;
+use iridia::flow::{At, Node, Op, Values};
 
 /// Stable categories aggregate across materials. Unknown resource names/reasons remain in their source binding;
 /// the pass log does not create a new key for every material or program.

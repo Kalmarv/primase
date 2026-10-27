@@ -13,10 +13,10 @@ use primase_core::shader::{
     ObjectParameter, OutputBinding, OutputRole, RenderState, ResourceId, ResourceKind, SamplerState, Shader,
     Stage, StageBinding, TargetState, TextureBinding, TextureSource, ViewParameter,
 };
-use primase_shader::matrix::{Unshown, state_lines};
-use primase_shader::{D3dClass, Interface, Program, Resource, ScalarType, SystemValue};
-use primase_shader_exec::ProgramShader;
-use primase_shader_exec::{Layout, PixelShader};
+use iridia::matrix::{Unshown, state_lines};
+use iridia::{D3dClass, Interface, Program, Resource, ScalarType, SystemValue};
+use iridia_exec::ProgramShader;
+use iridia_exec::{Layout, PixelShader};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The stream that carries a layered mesh's second stored vertex colour (the element the FLVER indexes 1, which the
@@ -336,13 +336,13 @@ pub fn resolve(
             }
             let point = r.provenance.d3d?;
             let texture = graph.interface.resources.iter().find(|g| g.provenance.d3d == Some(point))?.id;
-            Some(primase_shader::output_uses::AlphaDither { texture, scale_word: field.offset + 1 })
+            Some(iridia::output_uses::AlphaDither { texture, scale_word: field.offset + 1 })
         });
-        primase_shader::output_uses::discard_compares(graph, buffer, field.offset, dither)
+        iridia::output_uses::discard_compares(graph, buffer, field.offset, dither)
     };
     // a constant of the layout, at `word` words into it, `size` bytes (cut where its buffer ends), by name
     let mut constant = |name: &str, word: usize, size: u32, mut role: ConstantRole| -> Result<()> {
-        let Some(&primase_shader_exec::Field { buffer, offset, .. }) = layout.fields.get(name) else {
+        let Some(&iridia_exec::Field { buffer, offset, .. }) = layout.fields.get(name) else {
             return Ok(());
         };
         let Some((resource, buffer_size)) = buffer_of(buffer) else {

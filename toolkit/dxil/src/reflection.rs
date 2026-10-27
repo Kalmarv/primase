@@ -5,9 +5,9 @@
 //! error naming it.
 use crate::module::{Constant, Metadata, MetadataId, Module, Type, TypeId, Value};
 use crate::{Result, error};
-use primase_dxcontainer::Chunk;
-use primase_shader::d3d;
-use primase_shader::{
+use dxcontainer::Chunk;
+use iridia::d3d;
+use iridia::{
     Access, BufferKind, BufferLayout, Constant as BufferConstant, ConstantType, D3dBinding, D3dClass,
     DomainFacts, HullFacts, Interface, Majorness, Member, Partitioning, Resource, ResourceId, ResourceKind,
     ResourceProvenance, SampleType, ScalarType, Stage, StageFacts, StorageTarget, TessDomain, TessTopology,
@@ -226,8 +226,8 @@ fn entry_property(m: &Module, wanted: i64) -> Result<Option<&[Option<MetadataId>
 /// What a geometry program's entry point states (the properties' tag 1): the primitive it reads, how many vertices it
 /// emits at most, the streams it writes, what its stream makes and how many invocations run for a primitive. Only stream 0
 /// is carried: another stream is refused by name.
-pub fn geometry_facts(m: &Module) -> Result<primase_shader::GeometryFacts> {
-    use primase_shader::{GeometryFacts, GsInput, GsOutput};
+pub fn geometry_facts(m: &Module) -> Result<iridia::GeometryFacts> {
+    use iridia::{GeometryFacts, GsInput, GsOutput};
     let state = entry_property(m, 1)?.ok_or_else(|| error(0, "a geometry program without its state"))?;
     let field = |k: usize| -> Result<u32> {
         u32::try_from(int(m, operand(state, k, "geometry state")?, "geometry state")?)
@@ -273,8 +273,8 @@ pub fn geometry_facts(m: &Module) -> Result<primase_shader::GeometryFacts> {
 
 /// What a mesh program's entry point states (the properties' tag 9): its thread group, the most vertices and primitives it
 /// writes, what its primitives are and the size of the payload it reads from a task program. A payload is refused by name.
-pub fn mesh_facts(m: &Module) -> Result<primase_shader::MeshFacts> {
-    use primase_shader::{MeshFacts, MeshTopology};
+pub fn mesh_facts(m: &Module) -> Result<iridia::MeshFacts> {
+    use iridia::{MeshFacts, MeshTopology};
     let state = entry_property(m, 9)?.ok_or_else(|| error(0, "a mesh program without its state"))?;
     // a null field is zero
     let field = |k: usize| -> Result<u32> {
@@ -1174,7 +1174,7 @@ pub fn reflection(chunks: &[Chunk<'_>], program: &Module, named: Option<&Module>
                 Some(rdat) => crate::rdat::subobjects(rdat)?,
                 None => Vec::new(),
             };
-            StageFacts::RayTracing(primase_shader::RayTracingFacts { export, subobjects })
+            StageFacts::RayTracing(iridia::RayTracingFacts { export, subobjects })
         }
         _ => StageFacts::None,
     };
@@ -1192,7 +1192,7 @@ pub fn reflection(chunks: &[Chunk<'_>], program: &Module, named: Option<&Module>
 
 #[cfg(test)]
 mod structured_tests {
-    use primase_shader::{ConstantType, Majorness, ScalarType};
+    use iridia::{ConstantType, Majorness, ScalarType};
     const BYTES: &[u8] = include_bytes!("../tests/fixtures/structured_layout.dxil");
     // SDK 10.0.26100.0 compiler dumps: entries stride 96, indices 4, lookup 12.
     // The fixture distinguishes cbuffer offsets (values 16, rows 64) from storage offsets (4, 16).
@@ -1202,7 +1202,7 @@ mod structured_tests {
         check(&crate::lift(BYTES).expect("lift").interface);
     }
 
-    fn check(interface: &primase_shader::Interface) {
+    fn check(interface: &iridia::Interface) {
         let layout = |name: &str| {
             interface
                 .resources
@@ -1275,7 +1275,7 @@ mod structured_tests {
         assert_eq!(layout("lookup").size, 12);
         assert_eq!(
             layout("lookup").constants[0].ty,
-            ConstantType::Vector(primase_shader::Value {
+            ConstantType::Vector(iridia::Value {
                 scalar: ScalarType::Uint,
                 width: 3
             })

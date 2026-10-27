@@ -10,8 +10,8 @@ publish.workspace = true
 
 [dependencies]
 primase-bytes.workspace = true
-primase-dxcontainer.workspace = true
-primase-shader.workspace = true
+dxcontainer.workspace = true
+iridia.workspace = true
 naga.workspace = true
 half.workspace = true
 
@@ -19,6 +19,6 @@ half.workspace = true
 primase-testdata.workspace = true
 serde_json.workspace = true
 
-primase-shader-exec.workspace = true
+iridia-exec.workspace = true
 [lints]
 workspace = true

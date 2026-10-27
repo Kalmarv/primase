@@ -2,6 +2,8 @@
 //! Sekiro's binding rules (`resolve`) and the `resolve-fromsoft-shaders` pass, on one layered program built to
 //! Sekiro's naming (tests/fixtures/layered.hlsl, compiled with fxc): the constants, texture slots and outputs a
 //! layered material's binding holds, worked out from the HLSL, fxc's listing of its buffers and the material.
+use iridia_exec::PixelShader;
+use iridia_exec::ProgramShader;
 use primase_core::shader::{
     AddressMode, BlendFactor, BlendOp, Compare, ConstantRole, FrameParameter, FrameTexture, InputRole,
     LaneStream, MatrixLines, NormalEncoding, NormalSpace, ObjectParameter, OutputRole, ResourceId,
@@ -21,8 +23,6 @@ use primase_fromsoft::sekiro::source::{
     MaterialShader, ShaderBundle, ShaderProgram, ShaderPrograms, ShaderStage, TexturePayloads,
 };
 use primase_image::sampling::Address;
-use primase_shader_exec::PixelShader;
-use primase_shader_exec::ProgramShader;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 mod common;
@@ -608,7 +608,7 @@ fn the_pass_binds_every_layered_material_to_shared_shader_and_texture_entities()
             .unwrap()
             .0[0];
         assert_eq!(facts.shader, Some(shader));
-        assert_eq!(facts.hash, Some(primase_shader::source_hash(PROGRAM)));
+        assert_eq!(facts.hash, Some(iridia::source_hash(PROGRAM)));
         assert_eq!(facts.stage, Stage::Pixel);
         assert!(facts.instruction_count.unwrap().count > 0);
         assert_eq!(

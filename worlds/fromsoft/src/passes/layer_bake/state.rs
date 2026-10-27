@@ -11,11 +11,11 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use primase_image::sampling::Address;
-use primase_shader_exec::{Input, Lane, View, Views, evaluate::Constants};
+use iridia_exec::{Input, Lane, View, Views, evaluate::Constants};
 use serde_json::json;
 
 use crate::{Result, invalid};
-use primase_shader_exec::SampledTexture;
+use iridia_exec::SampledTexture;
 
 /// The pixel program's outputs a bake reads, as (output register, component mask): the G-buffer normal, the second
 /// output's x, the albedo, the reflectance and the emission.
@@ -40,7 +40,7 @@ pub struct PixelState {
     /// Every texture slot the program samples, by `t` register.
     pub textures: BTreeMap<u32, SlotTexture>,
     /// What each used input is given, by (semantic, index): each lane its bits, or the grid's U or V
-    /// ([`primase_shader_exec::Grid`]: `(x + 0.5) / size * period[0]` along x, likewise V along y).
+    /// ([`iridia_exec::Grid`]: `(x + 0.5) / size * period[0]` along x, likewise V along y).
     pub inputs: BTreeMap<(String, u32), [Lane; 4]>,
 }
 
@@ -95,7 +95,7 @@ impl PixelState {
                         slot,
                         match t {
                             SlotTexture::Image(image) => {
-                                View::Image(image.clone() as Arc<dyn primase_shader_exec::Image>)
+                                View::Image(image.clone() as Arc<dyn iridia_exec::Image>)
                             }
                             SlotTexture::Constant(value) => View::Constant(*value),
                         },
@@ -336,11 +336,11 @@ impl PipelineState {
         };
         let pixel = &d["pixel"];
         let bytecode: Arc<[u8]> = file(&pixel["bytecode"])?.as_slice().into();
-        let lifted = primase_shader_exec::ProgramShader::new(
+        let lifted = iridia_exec::ProgramShader::new(
             primase_dxbc::lift(&bytecode).map_err(|e| invalid("layer bake state", e.at * 4, e.detail))?,
         )
         .map_err(|e| invalid("layer bake state", e.at, e.detail))?;
-        let layout = primase_shader_exec::Layout::of(&lifted)
+        let layout = iridia_exec::Layout::of(&lifted)
             .map_err(|e| invalid("layer bake state", e.at, e.detail))?;
         let mut constants = Constants::new(&layout);
         for (slot, rows) in rows_of(&pixel["constants"])? {

@@ -15,7 +15,7 @@ primase-dxil.workspace = true
 primase-hash.workspace = true
 primase-image.workspace = true
 primase-meshops.workspace = true
-primase-shader.workspace = true
+iridia.workspace = true
 primase-texcodec.workspace = true
 indexmap.workspace = true
 naga.workspace = true
@@ -26,10 +26,10 @@ quick-xml.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 [dev-dependencies]
-primase-dxcontainer.workspace = true
+dxcontainer.workspace = true
 primase-testdata.workspace = true
 primase-dxbc.workspace = true
-primase-shader-exec.workspace = true
+iridia-exec.workspace = true
 sha2.workspace = true
 toml.workspace = true
 [lints]

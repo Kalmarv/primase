@@ -1,12 +1,12 @@
 #![allow(clippy::unwrap_used)]
 //! Hand-worked controls of the lifted programs' values: each case is a program written as tokens, its expected outputs worked out
 //! by hand from Direct3D's definition of the instruction (the value, not what a lift or an executor does), lifted and run by
-//! the executor (`primase_shader_exec::ProgramShader`). The oracle is the hand-worked value; these cases stood for the
+//! the executor (`iridia_exec::ProgramShader`). The oracle is the hand-worked value; these cases stood for the
 //! legacy evaluator's and now stand for the executor's.
 use primase_dxbc::decode::Declared;
 use primase_dxbc::{decode, lift};
-use primase_shader_exec::ProgramShader;
-use primase_shader_exec::{Execution, PixelShader, Sample, Sampler};
+use iridia_exec::ProgramShader;
+use iridia_exec::{Execution, PixelShader, Sample, Sampler};
 
 fn instruction(op: u32, operands: &[u32]) -> Vec<u32> {
     let mut v = vec![op | (((operands.len() + 1) as u32) << 24)];
@@ -555,7 +555,7 @@ fn gradient_samples_and_shader_model_4() {
                 assert_eq!((s.texture, s.uv), (1, [0.25, 0.5]));
                 assert_eq!(
                     s.lod,
-                    primase_shader_exec::Lod::Gradients([[0.125, 0.], [0., 0.0625]])
+                    iridia_exec::Lod::Gradients([[0.125, 0.], [0., 0.0625]])
                 );
                 Ok([1., 2., 3., 4.])
             })
@@ -644,7 +644,7 @@ fn a_quads_implicit_sample_has_its_gradients() {
             },
         )
         .unwrap();
-    let footprint = primase_shader_exec::Lod::Gradients([[0.25, 0.], [0., 0.5]]);
+    let footprint = iridia_exec::Lod::Gradients([[0.25, 0.], [0., 0.5]]);
     assert_eq!(seen, uvs.map(|uv| (uv, footprint)));
     assert!(
         r.iter()
@@ -733,7 +733,7 @@ fn signature_elements_the_program_does_not_declare_are_listed_unused() {
     );
     let program = lift(&bytes).unwrap();
     program.validate().unwrap_or_else(|p| panic!("{p:?}"));
-    let listed = |list: &[primase_shader::Varying]| {
+    let listed = |list: &[iridia::Varying]| {
         list.iter()
             .map(|v| (v.label.name.clone(), v.label.index, v.used))
             .collect::<Vec<_>>()

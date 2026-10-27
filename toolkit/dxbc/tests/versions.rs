@@ -1,4 +1,4 @@
-//! The version gate (`primase_shader::gate`): what the lifter makes of its committed fixtures is hashed under
+//! The version gate (`iridia::gate`): what the lifter makes of its committed fixtures is hashed under
 //! `LIFTER_VERSION` and `PROGRAM_VERSION` in `tests/lifted.hashes`. A change to the output without a bump of the version that
 //! names it fails here, and so does a bump without the table of that version. The current table is written to the scratch root
 //! (`dxbc-lifted.hashes`, the path is in the failure) when they differ; it replaces the committed one in the commit that bumps the
@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use primase_dxbc::{LIFTER_VERSION, lift};
-use primase_shader::gate;
+use iridia::gate;
 
 #[test]
 fn what_the_lifter_makes_of_its_fixtures_is_the_versions() {

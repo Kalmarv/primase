@@ -10,7 +10,7 @@ use primase_core::{
         StageBinding,
     },
 };
-use primase_shader::{
+use iridia::{
     Program,
     flow::{At, Node, Values},
 };
@@ -111,7 +111,7 @@ pub fn derive(
         .vertex
         .as_deref()
         .ok_or("base UV: stored vertex program missing")?;
-    let source = primase_d3d9::read(bytes).map_err(|e| e.to_string())?;
+    let source = iridia_d3d9::read(bytes).map_err(|e| e.to_string())?;
     if source.stage != Stage::Vertex || source.instructions.len() > 512 {
         return Err("base UV: not a bounded SM3 vertex program".into());
     }
@@ -120,7 +120,7 @@ pub fn derive(
         .iter()
         .find(|o| o.usage == 5 && o.index == 7 && o.mask & 3 == 3)
         .ok_or("base UV: TEXCOORD7.xy not declared")?;
-    let full = primase_d3d9::lift(bytes).map_err(|e| e.to_string())?;
+    let full = iridia_d3d9::lift(bytes).map_err(|e| e.to_string())?;
     let graph = Values::of_program(&full)?;
     let oi = full
         .interface
@@ -180,7 +180,7 @@ pub fn derive(
         return Err("base UV: graph is not the complete UV0/base-matrix composition".into());
     }
     let program =
-        primase_d3d9::project_vertex_output(bytes, output.register, 3).map_err(|e| e.to_string())?;
+        iridia_d3d9::project_vertex_output(bytes, output.register, 3).map_err(|e| e.to_string())?;
     let constants = super::material::bind_constants(&program.interface, &[], material)?;
     for &(id, word) in &seen {
         let at = word * 4;
@@ -225,7 +225,7 @@ pub fn derive(
             record,
             key: r.key,
             vertex_key: effect.vertex_key,
-            source_hash: primase_shader::source_hash(bytes),
+            source_hash: iridia::source_hash(bytes),
             material: material.id,
             output_register: output.register,
             words: seen.into_iter().collect(),

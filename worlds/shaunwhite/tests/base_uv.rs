@@ -6,7 +6,7 @@ use primase_core::{
     gate::{GateReport, Tolerance},
     shader::ConstantRole,
 };
-use primase_shader_exec::{PixelShader, ProgramShader, Sample};
+use iridia_exec::{PixelShader, ProgramShader, Sample};
 use primase_shaunwhite::shaders::{Payload, base_uv::derive};
 use primase_testdata::{Game, Tool, install_file, own_scratch, tool};
 use std::process::Command;
@@ -59,8 +59,8 @@ fn stored_nonidentity_base_uv_matches_full_native_vs_with_material_controls() {
         panic!("effect");
     };
     let raw = effect.vertex.as_ref().unwrap();
-    let source = primase_d3d9::read(raw).unwrap();
-    let full = primase_d3d9::lift(raw).unwrap();
+    let source = iridia_d3d9::read(raw).unwrap();
+    let full = iridia_d3d9::lift(raw).unwrap();
     let table = source.constants.as_ref().unwrap();
     let scratch = own_scratch("base_uv");
     std::fs::create_dir_all(&*scratch).unwrap();
@@ -101,7 +101,7 @@ fn stored_nonidentity_base_uv_matches_full_native_vs_with_material_controls() {
         let original = binding.clone();
         let slice = derive(&database, record as u32, &binding, variant).unwrap();
         assert_eq!(binding, original);
-        assert_eq!(slice.derivation.source_hash, primase_shader::source_hash(raw));
+        assert_eq!(slice.derivation.source_hash, iridia::source_hash(raw));
         assert_eq!(slice.derivation.vertex_key, effect.vertex_key);
         assert_eq!(slice.derivation.words.len(), 6);
         assert!(
@@ -110,7 +110,7 @@ fn stored_nonidentity_base_uv_matches_full_native_vs_with_material_controls() {
                 .iter()
                 .any(|c| matches!(c.role, ConstantRole::Unknown { .. }))
         );
-        primase_shader::emit::wgsl(&slice.program).unwrap();
+        iridia::emit::wgsl(&slice.program).unwrap();
         let executable = ProgramShader::new(slice.program.clone()).unwrap();
         for uv in uvs {
             let mut bank = [[0f32; 4]; 256];
@@ -226,11 +226,11 @@ fn stored_nonidentity_base_uv_matches_full_native_vs_with_material_controls() {
         record,
         database.records[record].key.permutation,
         effect.vertex_key,
-        primase_shader::source_hash(raw),
+        iridia::source_hash(raw),
         gate
     );
     gate.assert_passed();
-    assert_eq!(full.stage, primase_shader::Stage::Vertex);
+    assert_eq!(full.stage, iridia::Stage::Vertex);
 }
 
 fn fixture(

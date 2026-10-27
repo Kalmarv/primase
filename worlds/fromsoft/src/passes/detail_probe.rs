@@ -1,5 +1,5 @@
 //! A FromSoft G-buffer pixel program (Sekiro's DXBC, Elden Ring's DXIL) run one pixel at a time as the program bake binds
-//! it, every texture read answered by the caller ([`primase_shader_exec::probe::AnsweredReads`]): what the program does with what it reads, apart from what
+//! it, every texture read answered by the caller ([`iridia_exec::probe::AnsweredReads`]): what the program does with what it reads, apart from what
 //! any texture holds. The detail form of a material ([`primase_core::detail`]) is read and proven from such runs.
 //!
 //! The program is resolved as the bake resolves it ([`resolve`], no metaparam: the engine's constants by their roles,
@@ -13,9 +13,9 @@ use std::collections::BTreeMap;
 
 use primase_core::World;
 use primase_core::shader::{ConstantRole, OutputBinding, RenderState, StageBinding, TextureSource};
-use primase_shader::output_uses::bind_output_uses;
-use primase_shader_exec::evaluate::Constants;
-use primase_shader_exec::{Layout, PixelShader, ProgramShader, Sampler};
+use iridia::output_uses::bind_output_uses;
+use iridia_exec::evaluate::Constants;
+use iridia_exec::{Layout, PixelShader, ProgramShader, Sampler};
 
 use crate::layer_bake::resolve::{
     ProgramTexture, Unbound, program_texture, register, render_state, resolve, textures_of,
@@ -366,7 +366,7 @@ impl ProgramProbe {
     }
 
     /// The program's interface.
-    pub fn interface(&self) -> &primase_shader::Interface {
+    pub fn interface(&self) -> &iridia::Interface {
         PixelShader::interface(&self.shader)
     }
 
@@ -442,7 +442,7 @@ mod control_tests {
     const INPUTS: &[u8] = include_bytes!("../../tests/fixtures/probe_inputs.dxbc");
 
     fn pixel(probe: &ProgramProbe, uv: [f32; 2]) -> [f32; 4] {
-        let mut no_textures = |_: primase_shader_exec::Sample| Err("fixture has no texture".to_owned());
+        let mut no_textures = |_: iridia_exec::Sample| Err("fixture has no texture".to_owned());
         let (outputs, discarded) = probe.pixel(uv, &mut no_textures).expect("pixel");
         assert!(!discarded);
         outputs[0]

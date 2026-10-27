@@ -2753,7 +2753,7 @@ fn set_normal(w: &mut World, e: Entity, n: NormalConvention) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use primase_shader_exec::PixelShader;
+    use iridia_exec::PixelShader;
 
     #[test]
     fn foliage_without_a_normal_map_is_still_the_programs_dielectric_surface() {
@@ -2844,7 +2844,7 @@ mod tests {
         let Some(program) = fixture::program("MAD_Fake") else {
             return;
         };
-        let shader = primase_shader_exec::ProgramShader::new(primase_dxbc::lift(&program).unwrap()).unwrap();
+        let shader = iridia_exec::ProgramShader::new(primase_dxbc::lift(&program).unwrap()).unwrap();
         let mut w = World::new();
         let rgba = [[92, 128, 187, 211], [128, 128, 193, 170]];
         let mut textures = Vec::new();
@@ -2936,8 +2936,8 @@ mod tests {
             resolve_shaders::material_constants,
         };
         use crate::components::{BoundTexture, TextureFrom};
+        use iridia_exec::{Load, Sample, Sampler, Store};
         use primase_core::shader::{ConstantRole, ResourceId};
-        use primase_shader_exec::{Load, Sample, Sampler, Store};
         struct Coordinates;
         impl Sampler for Coordinates {
             fn sample(&mut self, r: Sample) -> Result<[f32; 4], String> {
@@ -2961,7 +2961,7 @@ mod tests {
         let Some(program) = fixture::program("MAD_Tex1") else {
             return;
         };
-        let shader = primase_shader_exec::ProgramShader::new(primase_dxbc::lift(&program).unwrap()).unwrap();
+        let shader = iridia_exec::ProgramShader::new(primase_dxbc::lift(&program).unwrap()).unwrap();
         let mut w = World::new();
         let image = white_texture(&mut w);
         let floats = vec![1.0, 1.0, 0.1, -0.2, 0.0, 0.0, 0.3, 0.0];

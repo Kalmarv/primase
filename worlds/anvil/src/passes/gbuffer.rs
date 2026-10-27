@@ -127,7 +127,7 @@ impl Reading {
 
 #[cfg(test)]
 pub(super) mod fixture {
-    use primase_shader_exec::{Execution, Load, PixelShader, ProgramShader, Sample, Sampler, Store};
+    use iridia_exec::{Execution, Load, PixelShader, ProgramShader, Sample, Sampler, Store};
 
     /// Existing installed template fixtures, as used by tests/shader_oracle.rs. No shader binary is generated.
     pub fn program(name: &str) -> Option<Vec<u8>> {

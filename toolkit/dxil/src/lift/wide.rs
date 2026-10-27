@@ -4,9 +4,9 @@
 //! counts are written out on the pair; a division and a conversion to or from a float are refused by name (a division
 //! would be a loop, and a conversion's rounding would be a guess).
 
+use iridia::build::{Kind, Val};
 use naga::BinaryOperator as Bo;
 use naga::MathFunction as Mf;
-use primase_shader::build::{Kind, Val};
 
 use super::{Lift, Lv};
 use crate::Result;

@@ -16,12 +16,12 @@
 //! far apart they are, and only a lane further apart than 1e-3 relative fails.
 mod common;
 use common::case;
-use primase_shader::{
+use iridia::{
     InterpMode, InterpSampling, Program, ResourceKind, SampleType, ScalarType, StorageTarget, SystemValue,
     TextureDim,
 };
-use primase_shader_exec::{Dim, ImageLoad, ImageQuery, ImageSample, ProgramShader, QueryKind};
-use primase_shader_exec::{PixelShader, Sampler};
+use iridia_exec::{Dim, ImageLoad, ImageQuery, ImageSample, ProgramShader, QueryKind};
+use iridia_exec::{PixelShader, Sampler};
 use primase_testdata::{Game, Tool, debug, tool};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -109,7 +109,7 @@ fn unbindable(program: &Program) -> Option<String> {
 }
 
 /// The interpolation modifiers of an input in HLSL.
-fn modifiers(v: &primase_shader::Varying) -> String {
+fn modifiers(v: &iridia::Varying) -> String {
     match (v.value.scalar, v.interp) {
         (ScalarType::Float, Some(i)) => {
             let mut m = String::new();
@@ -164,7 +164,7 @@ fn vertex_hlsl(program: &Program) -> Option<String> {
         // style: the one of the first element the program reads, and an element it does not read (whose interpolation
         // its signature does not state) takes it too
         let in_register =
-            |v: &primase_shader::Varying| v.provenance.d3d.is_some_and(|s| s.register + shift == register);
+            |v: &iridia::Varying| v.provenance.d3d.is_some_and(|s| s.register + shift == register);
         let style = inputs
             .iter()
             .copied()
@@ -250,14 +250,14 @@ struct Uniform {
     samples: usize,
 }
 impl Sampler for Uniform {
-    fn sample(&mut self, r: primase_shader_exec::Sample) -> Result<[f32; 4], String> {
+    fn sample(&mut self, r: iridia_exec::Sample) -> Result<[f32; 4], String> {
         self.sample_image(ImageSample {
             texture: r.texture,
             sampler: r.sampler,
             dim: Dim::D2,
             coord: [r.uv[0], r.uv[1], 0.0],
             layer: r.layer,
-            lod: primase_shader_exec::ImageLod::Implicit,
+            lod: iridia_exec::ImageLod::Implicit,
             offset: [0; 3],
             gather: None,
             depth_ref: None,
@@ -276,7 +276,7 @@ impl Sampler for Uniform {
             None => *c,
         })
     }
-    fn load(&mut self, r: primase_shader_exec::Load) -> Result<[u32; 4], String> {
+    fn load(&mut self, r: iridia_exec::Load) -> Result<[u32; 4], String> {
         // a plain load: x, y and an array layer or 3D slice in the third lane
         let (dim, layers) = self.shapes[&r.texture];
         let (layer, z) = match dim {
@@ -402,7 +402,7 @@ fn run_program(
     let Ok(program) = primase_dxbc::lift(bytes) else {
         return;
     };
-    if program.stage != primase_shader::Stage::Pixel {
+    if program.stage != iridia::Stage::Pixel {
         return;
     }
     t.lifted += 1;

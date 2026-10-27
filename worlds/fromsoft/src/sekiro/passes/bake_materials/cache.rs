@@ -5,7 +5,7 @@ use primase_core::World;
 use primase_core::pass::PassLog;
 use primase_core::pass::memo::{Key as MemoKey, Memo};
 use primase_image::sampling::{Address, Subtexel, Transfer};
-use primase_shader_exec::{Filtering, Input, Lane, SampledTexture};
+use iridia_exec::{Filtering, Input, Lane, SampledTexture};
 use std::collections::BTreeMap;
 
 /// The files that compute a bake's bytes in this crate: editing one retires every entry made before.
@@ -109,7 +109,7 @@ impl Prepared<'_> {
             .f32("sample-time", *sample_time)
             .u32("dxbc-lifter", primase_dxbc::LIFTER_VERSION)
             .u32("dxil-lifter", primase_dxil::LIFTER_VERSION)
-            .u32("program-version", primase_shader::PROGRAM_VERSION);
+            .u32("program-version", iridia::PROGRAM_VERSION);
         for program in [pixel, vertex] {
             k = json(k, "program-format", &program.format)?.bytes("bytecode", &program.bytecode);
         }

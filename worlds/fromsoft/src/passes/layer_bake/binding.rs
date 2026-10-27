@@ -10,10 +10,10 @@ use primase_core::shader::{
     ViewParameter,
 };
 use primase_image::sampling::Address;
-use primase_shader::Interface;
-use primase_shader_exec::ProgramShader;
-use primase_shader_exec::SampledTexture;
-use primase_shader_exec::{
+use iridia::Interface;
+use iridia_exec::ProgramShader;
+use iridia_exec::SampledTexture;
+use iridia_exec::{
     Grid, Input, Invocation, Lane, Layout, PixelShader, Raw, evaluate::Constants, evaluate_raw_with,
 };
 use std::{collections::BTreeMap, sync::Arc};
@@ -118,7 +118,7 @@ pub(crate) struct OutputRgb {
 fn lifting(e: primase_dxbc::Error) -> crate::Error {
     invalid("layer lift", e.at * 4, e.detail)
 }
-fn evaluation(e: primase_shader_exec::Error) -> crate::Error {
+fn evaluation(e: iridia_exec::Error) -> crate::Error {
     invalid("layer bake", e.at, e.detail)
 }
 /// A DXBC pixel program's container lifted and ready to run.
@@ -132,15 +132,15 @@ pub(crate) fn program_executor(
     format: primase_core::shader::ShaderFormat,
     bytecode: &[u8],
 ) -> Result<ProgramShader> {
-    program_executor_bound(format, bytecode, &primase_shader::BoundSizes::new())
+    program_executor_bound(format, bytecode, &iridia::BoundSizes::new())
 }
 
 /// [`program_executor`] with the constant buffers `bound` names bound at the sizes it states (a stage's
-/// [`primase_shader::BoundSizes::of`]).
+/// [`iridia::BoundSizes::of`]).
 pub(crate) fn program_executor_bound(
     format: primase_core::shader::ShaderFormat,
     bytecode: &[u8],
-    bound: &primase_shader::BoundSizes,
+    bound: &iridia::BoundSizes,
 ) -> Result<ProgramShader> {
     use primase_core::shader::ShaderFormat;
     match format {

@@ -25,8 +25,8 @@ use primase_core::shader::Shader;
 use primase_gta::components::{GtaEffect, GtaStage};
 use primase_gta::passes::resolve_shaders::split_program_name;
 use primase_gta::read::source::GtaSource;
-use primase_shader_exec::ProgramShader;
-use primase_shader_exec::{
+use iridia_exec::ProgramShader;
+use iridia_exec::{
     Grid, Input, Invocation, Layout, PixelShader, View, Views, evaluate::Constants, evaluate_raw,
 };
 use primase_testdata::{Game, install, keys};

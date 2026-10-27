@@ -1,0 +1,25 @@
+[package]
+name = "iridia-exec"
+description = "Bounded CPU execution of a shader program, whatever bytecode it was lifted from"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+primase-core.workspace = true
+primase-image.workspace = true
+iridia.workspace = true
+thiserror.workspace = true
+naga.workspace = true
+half.workspace = true
+
+[dev-dependencies]
+# The implementations, to run one fixture through each bytecode (a dev-dependency cycle cargo allows).
+primase-dxbc.workspace = true
+primase-dxil.workspace = true
+
+[lints]
+workspace = true

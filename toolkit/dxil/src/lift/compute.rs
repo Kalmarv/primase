@@ -1,9 +1,9 @@
 //! What a compute program does that the other stages do not: barriers, atomic operations (on thread-group variables
 //! and on unordered-access buffers), and writes to unordered-access buffers.
 
+use iridia::build::{Kind, Val};
+use iridia::{BufferKind, ResourceKind, StorageTarget};
 use naga::{AtomicFunction, BinaryOperator as Bo, Expression as E, Handle, Statement};
-use primase_shader::build::{Kind, Val};
-use primase_shader::{BufferKind, ResourceKind, StorageTarget};
 
 use super::memory::Root;
 use super::resources::kind_of_atomic;
@@ -389,12 +389,12 @@ impl Lift<'_> {
         let result: Val = match code {
             // IsFirstLane, LaneIndex, LaneCount
             110 => {
-                let lane = self.system_input(primase_shader::SystemValue::LaneIndex)?;
+                let lane = self.system_input(iridia::SystemValue::LaneIndex)?;
                 let first = self.gather(naga::GatherMode::BroadcastFirst, lane);
                 self.b.binary(Bo::Equal, lane, first)
             }
-            111 => self.system_input(primase_shader::SystemValue::LaneIndex)?,
-            112 => self.system_input(primase_shader::SystemValue::LaneCount)?,
+            111 => self.system_input(iridia::SystemValue::LaneIndex)?,
+            112 => self.system_input(iridia::SystemValue::LaneCount)?,
             // AnyTrue, AllTrue
             113 | 114 => {
                 let c = self.scalar(args[1])?;
@@ -478,7 +478,7 @@ impl Lift<'_> {
                 let c = self.b.bitcast_to(c, Kind::B);
                 let ballot = self.ballot(c);
                 let lane = if code == 136 {
-                    Some(self.system_input(primase_shader::SystemValue::LaneIndex)?)
+                    Some(self.system_input(iridia::SystemValue::LaneIndex)?)
                 } else {
                     None
                 };

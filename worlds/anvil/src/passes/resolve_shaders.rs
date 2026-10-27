@@ -24,7 +24,7 @@
 //!   `S R uv + translation` rows as the material lowering (material-spec §12.2).
 //!   The rows of `cb3` no binding covers are `Unknown`. The other constant buffers (`cb0` per frame, `cb1` per view,
 //!   `cb2` per draw) are the engine's: the program is lifted and only the lanes it reads are bound
-//!   ([`primase_shader::WordsRead`]: the words its outputs, discards and writes are made of; a program reads a
+//!   ([`iridia::WordsRead`]: the words its outputs, discards and writes are made of; a program reads a
 //!   few rows of buffers of some hundred; the rest are counted as left out, a buffer indexed by a computed value is one
 //!   `Unknown` constant). The rows the notes establish have roles where the vocabulary has one: `cb1[37]`
 //!   (`1/W, 1/H, W, H`) the `InverseViewportSize` in its lanes x, y and the `ViewportSize` in z, w, `cb1[39].x` the `Exposure`, `cb2[8..12]` and `cb2[12..16]` the object's `WorldViewProjection` and its `PreviousFrame` one,
@@ -70,6 +70,8 @@
 //! the vertex stage's are mesh streams by their semantic name.
 use std::collections::{BTreeMap, BTreeSet};
 
+use iridia::matrix::state_lines;
+use iridia::{ProgramGraph, WordsRead};
 use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::shader::{
     AlphaTest, Compare, ConstantBinding, ConstantRole, Cull, DepthState, FrameParameter, InputBinding,
@@ -80,8 +82,6 @@ use primase_core::shader::{
 };
 use primase_core::shader::{MaterialPrograms, ProgramFacts};
 use primase_core::{ColorSpace, Component, Entity, MaterialVariants, Mesh, Name, Semantic, Texture, World};
-use primase_shader::matrix::state_lines;
-use primase_shader::{ProgramGraph, WordsRead};
 
 use crate::components::{
     AnvilLayout, AnvilMaterial, AnvilMesh, AnvilShaders, MaterialBinding, MaterialFlags, MaterialValue,
@@ -798,7 +798,7 @@ impl Pass for ResolveAnvilShaders {
                     let hash = world
                         .get::<AnvilShaders>(tables)
                         .and_then(|tables| tables.pixel(pixel_key))
-                        .map(primase_shader::source_hash);
+                        .map(iridia::source_hash);
                     world.insert(
                         material,
                         MaterialPrograms(vec![ProgramFacts::unavailable(
@@ -860,7 +860,7 @@ impl Pass for ResolveAnvilShaders {
                         let hash = world
                             .get::<AnvilShaders>(tables)
                             .and_then(|tables| tables.vertex(key))
-                            .map(primase_shader::source_hash);
+                            .map(iridia::source_hash);
                         facts.push(ProgramFacts::unavailable(
                             format!("{template}-{key:06x}.vs"),
                             Stage::Vertex,
@@ -1689,7 +1689,7 @@ mod key_tests {
             .unwrap()
             .clone()
             .bound(entity, &outputs);
-        assert_eq!(facts.hash, Some(primase_shader::source_hash(LIFTED)));
+        assert_eq!(facts.hash, Some(iridia::source_hash(LIFTED)));
         assert_eq!(facts.stage, Stage::Pixel);
         assert!(facts.instruction_count.unwrap().count > 0);
         assert_eq!(

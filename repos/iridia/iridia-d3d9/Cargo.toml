@@ -1,0 +1,21 @@
+[package]
+name = "iridia-d3d9"
+description = "Raw Direct3D 9 shader reflection and lifting"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+primase-core.workspace = true
+iridia.workspace = true
+naga.workspace = true
+
+[dev-dependencies]
+iridia-exec.workspace = true
+primase-testdata.workspace = true
+
+[lints]
+workspace = true

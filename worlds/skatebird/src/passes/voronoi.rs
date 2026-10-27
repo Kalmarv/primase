@@ -13,7 +13,7 @@
 //! K >= 2 cells a side) and the resolution (`max-texels`, at most this many texels per cell; a map larger is baked at
 //! it, counted). The evaluation grid, (K + 1) x texels a side, is at most 4096, an option beyond it refused.
 //!
-//! The bake (approximated, counted): [`primase_shader_exec::evaluate_periodic`] over a block of K x K cells of the map's
+//! The bake (approximated, counted): [`iridia_exec::evaluate_periodic`] over a block of K x K cells of the map's
 //! coordinate at the map's own texel density (up to `max-texels`), its first cell cross-faded so the block tiles. Each
 //! texture is sampled as Unity samples it ([`primase_unity::bind::sampled_texture`]); the grid is evaluated one pixel at
 //! a time, so a sample at an implicit level has no quad footprint and takes the finest level plus its bias (counted).
@@ -46,14 +46,14 @@ use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial, Specular, TextureRef, UvTransform};
 use primase_core::{ColorSpace, Entity, Name, NormalConvention, TexFormat, TexRole, Texture, World};
 use primase_image::linear_to_srgb;
-use primase_shader_exec::{Input, Lane, PixelShader};
+use iridia_exec::{Input, Lane, PixelShader};
 use primase_unity::bind::{bind, constants, directional_light, sampled_texture};
 use primase_unity::components::{UnityMaterial, UnityPrograms, UnityTexEnv, UnityTexture};
 
 /// The shader this pass bakes.
 pub const VORONOI: &str = "Bumped Specular Voronoi";
 
-/// The largest evaluation grid a side ([`primase_shader_exec::evaluate`]'s bound).
+/// The largest evaluation grid a side ([`iridia_exec::evaluate`]'s bound).
 const GRID: u32 = 4096;
 
 /// The level of detail a texture sample at an implicit level takes: the bake evaluates one pixel at a time, with no
@@ -149,8 +149,8 @@ struct Block {
 fn bake(
     threads: Threads,
     shader: &(dyn PixelShader + Sync),
-    constants: &primase_shader_exec::evaluate::Constants,
-    textures: &primase_shader_exec::Views,
+    constants: &iridia_exec::evaluate::Constants,
+    textures: &iridia_exec::Views,
     cells: u32,
     texels: u32,
 ) -> std::result::Result<Block, String> {
@@ -172,7 +172,7 @@ fn bake(
         .map(|&towards| {
             let mut c = constants.clone();
             directional_light(&mut c, towards, [1.0; 3]).map_err(|e| e.to_string())?;
-            let e = primase_shader_exec::evaluate_periodic_with(
+            let e = iridia_exec::evaluate_periodic_with(
                 threads,
                 shader,
                 &c,
@@ -368,7 +368,7 @@ impl LowerSkatebirdVoronoi {
                             1,
                         );
                     }
-                    primase_shader_exec::View::Image(Arc::new(
+                    iridia_exec::View::Image(Arc::new(
                         sampled_texture(t, u)
                             .map_err(|err| format!("{property}: {err}"))?
                             .with_footprintless_level(FOOTPRINTLESS_LEVEL)?,
@@ -390,7 +390,7 @@ impl LowerSkatebirdVoronoi {
                                 ),
                                 1,
                             );
-                            primase_shader_exec::View::Constant(texel)
+                            iridia_exec::View::Constant(texel)
                         }
                         None => {
                             return Ok(Err(format!(
@@ -403,7 +403,7 @@ impl LowerSkatebirdVoronoi {
             };
             textures.insert(slot, texture);
         }
-        let textures = primase_shader_exec::Views::refusing(textures);
+        let textures = iridia_exec::Views::refusing(textures);
         // the bindings the evaluation runs with: the material's, the extraction's, and any left zero
         let lights = {
             let mut probe = mc.constants.clone();

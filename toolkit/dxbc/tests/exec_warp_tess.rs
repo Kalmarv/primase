@@ -6,7 +6,7 @@
 //! (lifted from the same DXBC) and the primitives it makes are compared with the ones WARP wrote: every vertex of every
 //! point, line or triangle, in order, bit by bit.
 //!
-//! This checks the tessellator ([`primase_shader_exec::tessellator`]: which points, in which order, joined how, for
+//! This checks the tessellator ([`iridia_exec::tessellator`]: which points, in which order, joined how, for
 //! every domain, partitioning and output topology and a spread of factors), the hull and domain stages around it
 //! (patch constants and control points reaching the domain program) and the factor conventions of the programs (which
 //! constant is which edge, which is the line density).
@@ -14,10 +14,10 @@
 //! Needs the WARP oracle program with the `d3d11ts` case form (the configured `Tool::Warp`), `tools.fxc` and the
 //! scratch folder. Every program is compiled here from the HLSL below, so the cases are the whole of the input.
 use primase_dxbc::lift;
-use primase_shader::TessTopology;
-use primase_shader_exec::Constants;
-use primase_shader_exec::tessellation::TessellationShader;
-use primase_shader_exec::{Sample, Sampler};
+use iridia::TessTopology;
+use iridia_exec::Constants;
+use iridia_exec::tessellation::TessellationShader;
+use iridia_exec::{Sample, Sampler};
 use primase_testdata::{Tool, own_scratch, tool};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

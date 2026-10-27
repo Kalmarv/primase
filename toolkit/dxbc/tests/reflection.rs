@@ -1,5 +1,5 @@
 #![allow(clippy::unwrap_used)]
-use primase_shader::{BufferKind, ConstantType, D3dClass, ResourceKind, ScalarType, Value};
+use iridia::{BufferKind, ConstantType, D3dClass, ResourceKind, ScalarType, Value};
 mod common;
 use std::collections::BTreeMap;
 

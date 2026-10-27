@@ -3,8 +3,8 @@
 //! both the default and the -Od build of each (different instruction streams of one source). The evaluator cannot run
 //! them (loops, switches, memory); the values below are the arithmetic of the source, not of the lifter.
 use primase_dxil::lift;
-use primase_shader::{Program, ResourceId, ResourceKind};
-use primase_shader_exec::{Backend, Element, Executable, ImageSample, Output, Resources};
+use iridia::{Program, ResourceId, ResourceKind};
+use iridia_exec::{Backend, Element, Executable, ImageSample, Output, Resources};
 use std::path::Path;
 
 fn f(x: f32) -> u32 {
@@ -68,7 +68,7 @@ fn run(name: &str, args: &[[u32; 4]], constants: &[(u32, Vec<[u32; 4]>)]) -> Out
     }
     let bound = exe.bind_resources(&resources).unwrap();
     let mut backend = NoBackend;
-    let mut runner = primase_shader_exec::Runner::<1>::new(&exe, &bound, &mut backend, None);
+    let mut runner = iridia_exec::Runner::<1>::new(&exe, &bound, &mut backend, None);
     let args = arguments(&program, args);
     let [out] = runner.run([&args]).unwrap_or_else(|e| panic!("{name}: {e}"));
     out
@@ -263,7 +263,7 @@ fn a_vertex_program() {
 
 mod textures {
     use super::*;
-    use primase_shader_exec::{ImageLoad, ImageQuery, QueryKind, Runner};
+    use iridia_exec::{ImageLoad, ImageQuery, QueryKind, Runner};
     use std::collections::BTreeSet;
 
     /// Answers every request with a fixed value and records what was asked, by texture register.
@@ -418,7 +418,7 @@ mod textures {
 
 mod resources {
     use super::*;
-    use primase_shader_exec::{ImageLoad, ImageStore, Runner};
+    use iridia_exec::{ImageLoad, ImageStore, Runner};
 
     #[derive(Default)]
     struct Views {
@@ -444,7 +444,7 @@ mod resources {
     fn buffer_views_and_an_unordered_access_texture() {
         for v in BOTH {
             let (program, exe) = lifted(&fixture("resources", v));
-            let by_register = |register: u32, class: primase_shader::D3dClass| {
+            let by_register = |register: u32, class: iridia::D3dClass| {
                 program
                     .interface
                     .resources
@@ -460,7 +460,7 @@ mod resources {
             let mut resources = Resources::default();
             // Values { int4 n; }: n = (2, 1, 3, 4)
             resources.constants.insert(
-                by_register(0, primase_shader::D3dClass::ConstantBuffer),
+                by_register(0, iridia::D3dClass::ConstantBuffer),
                 vec![[2u32, 1, 3, 4]],
             );
             // t0 StructuredBuffer<float4>: element e lane l is 10e + l; t2 Buffer<float4>: 100 + 10e + l; t1 raw: 1000 + word
@@ -469,13 +469,13 @@ mod resources {
             let raw: Vec<u32> = (0..16).map(|w| 1000 + w).collect();
             resources
                 .buffers
-                .insert(by_register(0, primase_shader::D3dClass::ShaderResource), sb);
+                .insert(by_register(0, iridia::D3dClass::ShaderResource), sb);
             resources
                 .buffers
-                .insert(by_register(1, primase_shader::D3dClass::ShaderResource), raw);
+                .insert(by_register(1, iridia::D3dClass::ShaderResource), raw);
             resources
                 .buffers
-                .insert(by_register(2, primase_shader::D3dClass::ShaderResource), typed);
+                .insert(by_register(2, iridia::D3dClass::ShaderResource), typed);
             let bound = exe.bind_resources(&resources).unwrap();
             let mut backend = Views::default();
             let mut runner = Runner::<1>::new(&exe, &bound, &mut backend, None);
@@ -500,7 +500,7 @@ mod resources {
 
 mod resource_arrays {
     use super::*;
-    use primase_shader_exec::{ImageLoad, ImageQuery, QueryKind, Runner};
+    use iridia_exec::{ImageLoad, ImageQuery, QueryKind, Runner};
 
     /// The textures of `resource_arrays.hlsl` answer with their element: a sample is (texture, sampler, 0.25, 1), a
     /// load 100 + the texture's element, a size 2 << element wide and 1 << element high; the single texture is 32 by 64.
@@ -530,7 +530,7 @@ mod resource_arrays {
     fn run(variant: &str, which: [u32; 2]) -> Result<Output, String> {
         let (program, exe) = lifted(&fixture("resource_arrays", variant));
         program.validate().unwrap();
-        let find = |register: u32, class: primase_shader::D3dClass| {
+        let find = |register: u32, class: iridia::D3dClass| {
             program
                 .interface
                 .resources
@@ -543,18 +543,18 @@ mod resource_arrays {
                 .unwrap_or_else(|| panic!("{variant}: no {class:?} {register}"))
         };
         // the arrays are arrays: four textures, and samplers the program does not size
-        let tex = find(0, primase_shader::D3dClass::ShaderResource);
+        let tex = find(0, iridia::D3dClass::ShaderResource);
         assert_eq!(tex.count, 4, "{variant}");
-        let smp = find(0, primase_shader::D3dClass::Sampler);
+        let smp = find(0, iridia::D3dClass::Sampler);
         assert!(smp.is_unbounded(), "{variant}");
         assert_eq!(
-            find(8, primase_shader::D3dClass::ShaderResource).count,
+            find(8, iridia::D3dClass::ShaderResource).count,
             1,
             "{variant}"
         );
         let mut resources = Resources::default();
         // Select { uint2 which; float2 uv; }
-        let cb = find(0, primase_shader::D3dClass::ConstantBuffer).id;
+        let cb = find(0, iridia::D3dClass::ConstantBuffer).id;
         resources
             .constants
             .insert(cb, vec![[which[0], which[1], f(0.25), f(0.75)]]);
@@ -602,7 +602,7 @@ mod resource_arrays {
 
 mod pixel_ops {
     use super::*;
-    use primase_shader_exec::{ImageLoad, ImageQuery, QueryKind, Runner};
+    use iridia_exec::{ImageLoad, ImageQuery, QueryKind, Runner};
 
     /// A load answers its texel as floats; a query of the sample count answers 4.
     struct Texels;
@@ -674,7 +674,7 @@ mod pixel_ops {
 
 mod compute {
     use super::*;
-    use primase_shader::D3dClass;
+    use iridia::D3dClass;
     use std::collections::BTreeMap;
 
     /// `compute_basic.hlsl` dispatched as (2, 2, 1) groups of 8 by 4 by 2 with scale 0xff. Per group g = gx + 2 gy
@@ -744,7 +744,7 @@ mod compute {
 
 mod waves {
     use super::*;
-    use primase_shader::D3dClass;
+    use iridia::D3dClass;
     use std::collections::BTreeMap;
 
     /// `waves.hlsl`: 64 invocations in one group, 13 result words each, on waves of 32 lanes (invocation i is lane
@@ -798,8 +798,8 @@ mod waves {
 
 mod stage_functions {
     use super::*;
-    use primase_shader::{D3dClass, stage_functions};
-    use primase_shader_exec::Runner;
+    use iridia::{D3dClass, stage_functions};
+    use iridia_exec::Runner;
     use std::collections::BTreeMap;
 
     /// Run function `name` of the lifted program `base` once, its constant buffer 0 `constants`, giving each argument
@@ -979,8 +979,8 @@ mod half_ops {
 
 mod image_atomics {
     use super::*;
-    use primase_shader::D3dClass;
-    use primase_shader_exec::{ImageAtomic, ImageAtomicOp};
+    use iridia::D3dClass;
+    use iridia_exec::{ImageAtomic, ImageAtomicOp};
     use std::collections::BTreeMap;
 
     /// Two textures that apply the atomic operations they are asked for: the words of each by texel, absent ones 0
@@ -1086,7 +1086,7 @@ mod image_atomics {
             };
             Ok(old)
         }
-        fn store_image(&mut self, r: primase_shader_exec::ImageStore<ResourceId>) -> Result<(), String> {
+        fn store_image(&mut self, r: iridia_exec::ImageStore<ResourceId>) -> Result<(), String> {
             self.stores.insert((r.view, r.texel), r.value[0]);
             Ok(())
         }
@@ -1115,7 +1115,7 @@ mod image_atomics {
             };
             let (counts, olds) = (uav(0), uav(1));
             assert!(
-                primase_shader::emit::wgsl(&program)
+                iridia::emit::wgsl(&program)
                     .unwrap_err()
                     .to_string()
                     .contains("texture atomic result"),
@@ -1150,7 +1150,7 @@ mod image_atomics {
 
 mod buffer_arrays {
     use super::*;
-    use primase_shader::D3dClass;
+    use iridia::D3dClass;
     use std::collections::BTreeMap;
 
     /// `buffer_arrays.hlsl`: one group of 4 with which = 1. Thread i writes bufs[1][i] = n1 * 100 + i, where n1 is the
@@ -1205,8 +1205,8 @@ mod buffer_arrays {
 
 mod image_arrays {
     use super::*;
-    use primase_shader::D3dClass;
-    use primase_shader_exec::ImageStore;
+    use iridia::D3dClass;
+    use iridia_exec::ImageStore;
     use std::collections::BTreeMap;
 
     /// Keeps the stores by view and element, and by texel.
@@ -1262,7 +1262,7 @@ mod image_arrays {
 
 mod wide_ints {
     use super::*;
-    use primase_shader::D3dClass;
+    use iridia::D3dClass;
     use std::collections::BTreeMap;
 
     /// The 32 words `wide_ints.hlsl` writes for a, b and n: thirteen 64-bit results as low then high word (a + b, a - b,
@@ -1353,7 +1353,7 @@ mod wide_ints {
 
 mod lane_2d {
     use super::*;
-    use primase_shader::D3dClass;
+    use iridia::D3dClass;
     use std::collections::BTreeMap;
 
     /// `lane_2d.hlsl`: 64 invocations in an 8 by 8 group, on waves of 32 lanes (invocation i, the group's flattened
@@ -1403,8 +1403,8 @@ mod lane_2d {
 
 mod ray_queries {
     use super::*;
-    use primase_shader::D3dClass;
-    use primase_shader_exec::{Geometry, Instance, InstanceFlags, Scene};
+    use iridia::D3dClass;
+    use iridia_exec::{Geometry, Instance, InstanceFlags, Scene};
     use std::collections::BTreeMap;
 
     /// Two bottom-level geometries in one bottom level, the triangle (0,0), (4,0), (0,4) at z = 5 (opaque, geometry 0)
@@ -1529,7 +1529,7 @@ mod ray_queries {
 
 mod uav_counter {
     use super::*;
-    use primase_shader::D3dClass;
+    use iridia::D3dClass;
     use std::collections::BTreeMap;
 
     /// `uav_counter.hlsl`: 8 threads. Thread i appends i * 10 to `appended` (u0), consumes one value of `consumed` (u1) into
@@ -1610,8 +1610,8 @@ mod uav_counter {
 
 mod procedural_primitives {
     use super::*;
-    use primase_shader::D3dClass;
-    use primase_shader_exec::{Geometry, Instance, InstanceFlags, Scene};
+    use iridia::D3dClass;
+    use iridia_exec::{Geometry, Instance, InstanceFlags, Scene};
     use std::collections::BTreeMap;
 
     /// `ray_query_procedural.hlsl` on one sphere (centre (0.5, 0, 1), radius 1, in the object space of an instance)
@@ -1687,8 +1687,8 @@ mod procedural_primitives {
 
 mod instance_matrices {
     use super::*;
-    use primase_shader::D3dClass;
-    use primase_shader_exec::{Geometry, Instance, InstanceFlags, Scene};
+    use iridia::D3dClass;
+    use iridia_exec::{Geometry, Instance, InstanceFlags, Scene};
     use std::collections::BTreeMap;
 
     /// `ray_query_matrices.hlsl` on an instance that rotates a little, scales unevenly and translates: the matrices a

@@ -297,7 +297,7 @@ fn raw_quality_databases_frame_every_source_record_and_tail() {
                 ),
                 ("InfluenceSampler", "g_InfluenceTexture", 0x0080_000f)
             );
-            let proof = primase_d3d9::lift(e.pixel.as_ref().unwrap()).unwrap();
+            let proof = iridia_d3d9::lift(e.pixel.as_ref().unwrap()).unwrap();
             assert_eq!(
                 proof.provenance.source_hash.as_deref(),
                 Some("sha256:82ffb69b8dced07b67e74ed481349f1c68ede096add5379c7b5749ea9b809c0e")

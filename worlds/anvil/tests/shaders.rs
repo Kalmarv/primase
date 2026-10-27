@@ -31,7 +31,7 @@ fn every_container_of_the_shader_pack() {
     let mut stages: BTreeMap<String, u64> = BTreeMap::new();
     let mut program: BTreeMap<String, u64> = BTreeMap::new();
     for c in &all {
-        let code = primase_dxcontainer::chunks(c)
+        let code = dxcontainer::chunks(c)
             .expect("directory")
             .into_iter()
             .find(|k| &k.kind == b"SHEX" || &k.kind == b"SHDR")

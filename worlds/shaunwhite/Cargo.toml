@@ -12,13 +12,13 @@ publish.workspace = true
 primase-anvil.workspace = true
 primase-bytes.workspace = true
 primase-core.workspace = true
-primase-d3d9.workspace = true
+iridia-d3d9.workspace = true
 primase-hash.workspace = true
-primase-shader.workspace = true
+iridia.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-primase-shader-exec.workspace = true
+iridia-exec.workspace = true
 primase-meshops.workspace = true
 primase-testdata.workspace = true
 primase-texcodec.workspace = true

@@ -13,9 +13,9 @@ use super::resolve::{layer_channels, register};
 use crate::{Result, invalid};
 use primase_core::Semantic;
 use primase_core::shader::{ConstantRole, InputRole, LaneStream, Shader as CoreShader, StageBinding};
-use primase_shader::{Interface, Varying};
-use primase_shader_exec::ProgramShader;
-use primase_shader_exec::{Input, Lane, PixelShader, Sampler};
+use iridia::{Interface, Varying};
+use iridia_exec::ProgramShader;
+use iridia_exec::{Input, Lane, PixelShader, Sampler};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -85,7 +85,7 @@ pub(crate) struct VertexStage {
 /// The raw buffer of per-instance indices the program reads: one instance, index zero.
 struct Instances;
 impl Sampler for Instances {
-    fn sample(&mut self, request: primase_shader_exec::Sample) -> std::result::Result<[f32; 4], String> {
+    fn sample(&mut self, request: iridia_exec::Sample) -> std::result::Result<[f32; 4], String> {
         Err(format!(
             "t{}: a vertex program of this bake samples nothing",
             request.texture
@@ -114,16 +114,16 @@ impl VertexStage {
     pub fn new(
         vertex: &CoreShader,
         stage: &StageBinding,
-        pixel: &primase_shader::Program,
+        pixel: &iridia::Program,
         ground: bool,
         frame: &FrozenFrame,
     ) -> Result<Self> {
         let lifted = super::binding::program_executor_bound(
             vertex.format,
             &vertex.bytecode,
-            &primase_shader::BoundSizes::of(stage),
+            &iridia::BoundSizes::of(stage),
         )?;
-        let demand = primase_shader::flow::VertexDemand::of_programs(lifted.program(), pixel)
+        let demand = iridia::flow::VertexDemand::of_programs(lifted.program(), pixel)
             .map_err(|e| invalid("vertex demand", 0, e))?;
         let pixel_lanes = demand
             .pixel

@@ -455,7 +455,7 @@ pub const DECLARED: &[Declared] = &[
         status: Status::Live,
         gate: true,
         about: "Shaun White Skateboarding's uncompressed high-quality SDB2 v39 database: source CRCs and identities, all raw stage programs, pass metadata tails, state-only and missing records; named material-only RGB derivation and full-PS REF proof for basic/layered/metro-compatible records; worlds/shaunwhite/tests/shaders.rs and albedo.rs",
-        source: "the user's own install; hand-worked fixture and native version-39 loader establish framing; record 5's PS is also checked against Microsoft's disassembly in toolkit/d3d9/tests/disassembly.rs",
+        source: "the user's own install; hand-worked fixture and native version-39 loader establish framing; record 5's PS is also checked against Microsoft's disassembly in repos/iridia/iridia-d3d9/tests/disassembly.rs",
     },
     Declared {
         query: Query::Install(Game::ShaunWhite, Some("ekshadersPCmed.bin")),
@@ -482,8 +482,8 @@ pub const DECLARED: &[Declared] = &[
         query: Query::Oracle(OracleSet::D3dDisassembler, Game::General, "sm3"),
         status: Status::Live,
         gate: true,
-        about: r#"privately extracted raw ps_3_0 (`pixel.bin`) and two vs_3_0 programs (`vertex.bin`, `vertex-layered.bin`), each with Microsoft's `.asm` disassembly; toolkit/d3d9/tests/disassembly.rs checks all executable operands, declarations, definitions and CTAB allocations"#,
-        source: r#"independent: Microsoft d3dcompiler_47.dll D3DDisassemble via toolkit/d3d9/tests/oracles/disassemble.py, on a shipped Shaun White Skateboarding SDB2 v39 pixel shader (record 5) and vertex shaders (records 5 and 150, ekshadersPChigh.bin); raw bytes and disassembly stay outside the repository"#,
+        about: r#"privately extracted raw ps_3_0 (`pixel.bin`) and two vs_3_0 programs (`vertex.bin`, `vertex-layered.bin`), each with Microsoft's `.asm` disassembly; repos/iridia/iridia-d3d9/tests/disassembly.rs checks all executable operands, declarations, definitions and CTAB allocations"#,
+        source: r#"independent: Microsoft d3dcompiler_47.dll D3DDisassemble via repos/iridia/iridia-d3d9/tests/oracles/disassemble.py, on a shipped Shaun White Skateboarding SDB2 v39 pixel shader (record 5) and vertex shaders (records 5 and 150, ekshadersPChigh.bin); raw bytes and disassembly stay outside the repository"#,
     },
     Declared {
         query: Query::Oracle(OracleSet::Rpcs3, Game::Shred, "fragment"),
@@ -735,7 +735,7 @@ pub const DECLARED: &[Declared] = &[
         status: Status::Live,
         gate: true,
         about: r#"TSV: codec, compressed path, oracle decoded path (tab-separated)"#,
-        source: r#"independent: the games' own streams (Sekiro's DFLT DCX envelopes, skate.'s zlib CAS blocks, Riders Republic's terrain LZ4 blocks, GTA V's raw deflate archive files, cut by the corpus_* example programs) decoded by Python's zlib and the lz4 package 4.4.5, toolkit/compress/tests/oracles/codecs.py"#,
+        source: r#"independent: the games' own streams (Sekiro's DFLT DCX envelopes, skate.'s zlib CAS blocks, Riders Republic's terrain LZ4 blocks, GTA V's raw deflate archive files, cut by the corpus_* example programs) decoded by Python's zlib and the lz4 package 4.4.5, repos/primase-compress/tests/oracles/codecs.py"#,
     },
     Declared {
         query: Query::Oracle(OracleSet::Corpus, Game::General, "dxbc"),

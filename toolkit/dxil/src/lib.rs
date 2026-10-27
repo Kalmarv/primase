@@ -1,7 +1,7 @@
-//! Shader Model 6 (DXIL) programs: the container is the DXBC format (`primase-dxcontainer`); the LLVM bitcode in its `DXIL`
+//! Shader Model 6 (DXIL) programs: the container is the DXBC format (`dxcontainer`); the LLVM bitcode in its `DXIL`
 //! part is read by a bounded bitstream reader of our own (`bitstream`, `module`), the reflection (`reflection`, `rdat`), the
-//! lifter to `primase_shader::Program` (`lift`, every stage a DXIL container holds). A lifted program is run by
-//! `primase_shader_exec`.
+//! lifter to `iridia::Program` (`lift`, every stage a DXIL container holds). A lifted program is run by
+//! `iridia_exec`.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 pub mod bitstream;
 mod lift;
@@ -12,11 +12,11 @@ pub use lift::{LIFTER_VERSION, lift, lift_with};
 pub use reflection::interface;
 
 /// A DXIL program or container refused or unreadable: the bit it is at (in the bitcode, or eight times a byte of the
-/// container) and why ([`primase_shader::Refusal`]).
-pub type Error = primase_shader::Refusal;
+/// container) and why ([`iridia::Refusal`]).
+pub type Error = iridia::Refusal;
 pub type Result<T> = std::result::Result<T, Error>;
 pub(crate) fn error(bit: usize, detail: impl Into<String>) -> Error {
-    Error::new("DXIL", primase_shader::Unit::Bit, bit, detail)
+    Error::new("DXIL", iridia::Unit::Bit, bit, detail)
 }
 
 /// The `DXIL` part of a DXBC container: the program header and its LLVM bitcode.
@@ -30,8 +30,8 @@ pub struct Part<'a> {
 }
 
 /// The parts of a DXBC container, an error of the container as one of the program (the bit it is at).
-pub(crate) fn parts(container: &[u8]) -> Result<Vec<primase_dxcontainer::Chunk<'_>>> {
-    primase_dxcontainer::chunks(container).map_err(|e| error(e.offset.saturating_mul(8), e.detail))
+pub(crate) fn parts(container: &[u8]) -> Result<Vec<dxcontainer::Chunk<'_>>> {
+    dxcontainer::chunks(container).map_err(|e| error(e.offset.saturating_mul(8), e.detail))
 }
 
 /// A program part's header (`DXIL` and the `STAT` reflection part share it) and its bitcode.

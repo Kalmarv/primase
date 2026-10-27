@@ -1,10 +1,10 @@
 #![allow(clippy::unwrap_used)]
-//! The bound size of a constant buffer ([`primase_shader::BoundSizes`]): a program that declares a palette of two matrices
+//! The bound size of a constant buffer ([`iridia::BoundSizes`]): a program that declares a palette of two matrices
 //! (six rows) and indexes it by a joint reads zero past the declaration by default, and the buffer's own rows up to the
 //! size the source binds when the lift is given it, as D3D12 bounds a constant buffer read by the view and not by the
 //! declaration (`fixtures/bound_palette_vs.hlsl`).
-use primase_shader::{BoundSizes, Program, ResourceId, ResourceKind, SystemValue};
-use primase_shader_exec::{
+use iridia::{BoundSizes, Program, ResourceId, ResourceKind, SystemValue};
+use iridia_exec::{
     Backend, Element, Executable, ImageLoad, ImageQuery, ImageSample, Resources, Runner,
 };
 

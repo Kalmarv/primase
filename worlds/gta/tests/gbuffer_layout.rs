@@ -1,6 +1,6 @@
 //! The G-buffer the pixel programs of the shader database write (`PS_Deferred*`), read from the programs themselves:
 //! every distinct program of every effect, the widths of its output targets, and what each lane of each target
-//! responds to, found by evaluating the program ([`primase_shader_exec::evaluate_raw`], one pixel) at two operating points
+//! responds to, found by evaluating the program ([`iridia_exec::evaluate_raw`], one pixel) at two operating points
 //! and changing one class of input at a time: the textures, the constant buffers (every word), each lane of `COLOR0`
 //! (the vertex colour) and the surface normal (`TEXCOORD1`, with a tangent and bitangent orthogonal to it).
 //!
@@ -22,8 +22,8 @@ use primase_gta::components::{GtaEffect, GtaStage};
 use primase_gta::passes::gbuffer;
 use primase_gta::passes::resolve_shaders::split_program_name;
 use primase_gta::read::source::GtaSource;
-use primase_shader_exec::ProgramShader;
-use primase_shader_exec::{
+use iridia_exec::ProgramShader;
+use iridia_exec::{
     Grid, Input, Invocation, Layout, PixelShader, View, Views, evaluate::Constants, evaluate_raw,
 };
 use primase_testdata::{Game, install, keys};

@@ -3,10 +3,10 @@
 
 use std::collections::BTreeMap;
 
+use iridia::build::{Kind, Val};
 use naga::{ArraySize, Expression as E, GlobalVariable, Handle, LocalVariable, TypeInner};
-use primase_shader::build::{Kind, Val};
 
-use primase_shader::ResourceKind;
+use iridia::ResourceKind;
 
 use super::{Lift, Lv};
 use crate::Result;

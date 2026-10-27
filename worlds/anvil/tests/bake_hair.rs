@@ -18,7 +18,7 @@ use primase_core::pass::{Options, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial};
 use primase_core::{Entity, Name, Texture, World};
 use primase_image::sampling::{Address, Levels, Transfer, footprint_lod};
-use primase_shader_exec::{
+use iridia_exec::{
     Grid, Input, Invocation, Layout, Lod, PixelShader, ProgramShader, evaluate::Constants, evaluate_raw_with,
 };
 use primase_testdata::{Game, install};
@@ -256,7 +256,7 @@ fn compare(w: &World, entity: Entity, m: &AnvilMaterial, size: u32) -> (f64, [u6
 #[derive(Debug)]
 struct Atlas(Levels);
 
-impl primase_shader_exec::Image for Atlas {
+impl iridia_exec::Image for Atlas {
     fn sample(&self, uv: [f32; 2], lod: Lod) -> Result<[f32; 4], String> {
         let (w, h) = (self.0.width, self.0.height);
         let grad = |g: [[f32; 2]; 2]| g.map(|d| d.map(f64::from));
@@ -311,12 +311,12 @@ fn kept_by_the_alpha_tested_program(w: &World, m: &AnvilMaterial, size: u32) -> 
     let mut textures = BTreeMap::new();
     textures.insert(
         75,
-        primase_shader_exec::View::Image(std::sync::Arc::new(Atlas(image))),
+        iridia_exec::View::Image(std::sync::Arc::new(Atlas(image))),
     );
     for slot in [76, 77] {
-        textures.insert(slot, primase_shader_exec::View::Constant([1.0; 4]));
+        textures.insert(slot, iridia_exec::View::Constant([1.0; 4]));
     }
-    let textures = primase_shader_exec::Views::refusing(textures);
+    let textures = iridia_exec::Views::refusing(textures);
     let constant = |v: [f32; 4]| Input::Constant(v);
     let inputs = BTreeMap::from([
         (("SV_Position".to_owned(), 0), constant([0.0, 0.0, 0.0, 1.0])),

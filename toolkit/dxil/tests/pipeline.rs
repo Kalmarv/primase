@@ -2,11 +2,11 @@
 //! The ray tracing pipeline on the CPU, run on the lifted programs of `ray_tracing.hlsl` (raygen, miss, closest_hit,
 //! any_hit, intersection, callable) over scenes built here. The values are the arithmetic of the HLSL.
 use primase_dxil::lift;
-use primase_shader::{HitGroup, HitGroupKind, Program};
-use primase_shader_exec::{
+use iridia::{HitGroup, HitGroupKind, Program};
+use iridia_exec::{
     Geometry, Instance, InstanceFlags, Pipeline, PipelineResources, Scene, ShaderTable,
 };
-use primase_shader_exec::{Sampler, Store};
+use iridia_exec::{Sampler, Store};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -68,7 +68,7 @@ struct Image {
     texels: BTreeMap<(u32, u32), [f32; 4]>,
 }
 impl Sampler for Image {
-    fn sample(&mut self, _: primase_shader_exec::Sample) -> Result<[f32; 4], String> {
+    fn sample(&mut self, _: iridia_exec::Sample) -> Result<[f32; 4], String> {
         Err("no sampling".into())
     }
     fn store(&mut self, s: Store) -> Result<(), String> {

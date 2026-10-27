@@ -145,7 +145,7 @@ an occlusion of which light). What a lighting pass takes from those roles is rea
 gloss, or from a Blinn-Phong exponent), the metallic, the reflectance, the specular strength, the emission and the
 occlusion, and how each stored value decodes. Every consumer takes it from there: a material bake decoding a program it
 evaluated on the CPU (`bake-fromsoft-materials`), and a viewer's composite decoding a G-buffer on the GPU, which packs
-the reading with `primase_shader::surface::rows` and decodes it with that module's WGSL. A game's layout is tested as a
+the reading with `iridia::surface::rows` and decodes it with that module's WGSL. A game's layout is tested as a
 surface in its own crate (the fromsoft `gbuffer_surface` tests, the anvil and gta `resolve_shaders` tests).
 
 ## 5. Crates

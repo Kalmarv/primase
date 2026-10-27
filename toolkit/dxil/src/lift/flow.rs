@@ -1,9 +1,9 @@
 //! The basic blocks as structured control flow: the control flow graph of the function, the structurizer
-//! ([`primase_shader::build::structure`]) and the callbacks that write each block, edge and branch.
+//! ([`iridia::build::structure`]) and the callbacks that write each block, edge and branch.
 
+use iridia::build::structure::{self, Cfg, Emit, Term};
+use iridia::build::{Builder, Kind};
 use naga::{Expression, Handle, SwitchValue};
-use primase_shader::build::structure::{self, Cfg, Emit, Term};
-use primase_shader::build::{Builder, Kind};
 
 use super::Lift;
 use super::setup::const_int;

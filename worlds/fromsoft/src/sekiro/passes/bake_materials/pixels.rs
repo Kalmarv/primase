@@ -7,7 +7,7 @@ use primase_core::shader::surface::{Base, Place, Surface};
 use primase_core::shader::{NormalSpace, OutputBinding, OutputRole, Shader, StageBinding, TextureSource};
 use primase_core::{ColorSpace, Texture, World};
 use primase_image::sampling::{Address, Levels, Transfer};
-use primase_shader_exec::{
+use iridia_exec::{
     Grid, Input, Invocation, Lane, PixelShader, Raw, SampledTexture, SamplerUse, Unstated, evaluate_raw_with,
 };
 use primase_texcodec::TexDecoder;
@@ -89,13 +89,13 @@ fn normal(n: [f32; 3]) -> [u8; 4] {
 pub(super) struct Prepared<'a> {
     pub pixel: &'a Shader,
     pub vertex: &'a Shader,
-    pub shader: primase_shader_exec::ProgramShader,
+    pub shader: iridia_exec::ProgramShader,
     pub outputs: Vec<&'a OutputBinding>,
     /// The outputs read as a surface: every place is a position in `outputs`, and it has the albedo, the normal and the
     /// roughness the bake needs, and the metallic or the reflectance.
     pub surface: Surface,
     pub policies: BTreeMap<String, u64>,
-    pub constants: primase_shader_exec::evaluate::Constants,
+    pub constants: iridia_exec::evaluate::Constants,
     pub textures: BTreeMap<u32, BoundTexture>,
     pub inputs: BTreeMap<(String, u32), Input>,
     pub targets: Vec<(u32, u8)>,
@@ -112,10 +112,10 @@ pub(super) enum BoundTexture {
     Constant([f32; 4]),
 }
 impl BoundTexture {
-    fn view(&self) -> primase_shader_exec::View {
+    fn view(&self) -> iridia_exec::View {
         match self {
-            Self::Image(image) => primase_shader_exec::View::Image(image.clone()),
-            Self::Constant(value) => primase_shader_exec::View::Constant(*value),
+            Self::Image(image) => iridia_exec::View::Image(image.clone()),
+            Self::Constant(value) => iridia_exec::View::Constant(*value),
         }
     }
 }
@@ -309,7 +309,7 @@ pub(super) fn bake(prepared: Prepared<'_>, world: &World) -> Result<Baked, Strin
         sample_time: _,
     } = prepared;
     let textures =
-        primase_shader_exec::Views::refusing(textures.iter().map(|(&slot, t)| (slot, t.view())).collect());
+        iridia_exec::Views::refusing(textures.iter().map(|(&slot, t)| (slot, t.view())).collect());
     let raw = evaluate_raw_with(
         Threads::of(world),
         &shader,

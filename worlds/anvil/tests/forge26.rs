@@ -85,7 +85,7 @@ fn block(chunks: &[(u16, &[u8])]) -> Vec<u8> {
     b
 }
 
-/// The LZO2A stream of 266 bytes `x` (worked by hand in toolkit/compress/tests/lzo2a.rs): stored in fewer bytes than
+/// The LZO2A stream of 266 bytes `x` (worked by hand in repos/primase-compress/tests/lzo2a.rs): stored in fewer bytes than
 /// it decodes to, so the block decodes it rather than taking it as raw.
 const XS: [u8; 8] = [0x1E, b'x', 0x01, 0x00, 0x00, 0x01, 0x20, 0x00];
 

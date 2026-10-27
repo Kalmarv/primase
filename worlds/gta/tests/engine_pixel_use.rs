@@ -155,7 +155,7 @@ fn how_the_programs_use_the_remaining_engine_constants() {
                 let Ok(lifted) = primase_dxil::lift(bytes) else {
                     continue;
                 };
-                let Ok(text) = primase_shader::emit::wgsl(&lifted) else {
+                let Ok(text) = iridia::emit::wgsl(&lifted) else {
                     continue;
                 };
                 let stem = format!("{}/{name}.{stage}.lane{lane}", dump.display());

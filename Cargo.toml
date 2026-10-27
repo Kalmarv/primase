@@ -15,17 +15,17 @@ members = [
     "toolkit/glb",
     "repos/primase-hash",
     "toolkit/exactsum",
-    "toolkit/dxcontainer",
-    "toolkit/rsx",
+    "repos/dx/dxcontainer",
+    "repos/dx/rsx-reader",
     "toolkit/havok",
     "toolkit/morpheme",
     "repos/lua51-bytecode",
     "toolkit/dxbc",
-    "toolkit/d3d9",
-    "toolkit/shader",
-    "toolkit/shader-exec",
+    "repos/iridia/iridia-d3d9",
+    "repos/iridia/iridia",
+    "repos/iridia/iridia-exec",
     "toolkit/dxil",
-    "toolkit/mojoshader",
+    "repos/iridia/iridia-mojo",
     "toolkit/cache",
     "formats/gltf",
     "formats/web",
@@ -85,18 +85,18 @@ primase-compress = { path = "repos/primase-compress" }
 primase-glb = { path = "toolkit/glb" }
 primase-hash = { path = "repos/primase-hash" }
 primase-exactsum = { path = "toolkit/exactsum" }
-primase-dxcontainer = { path = "toolkit/dxcontainer" }
-primase-rsx = { path = "toolkit/rsx" }
+dxcontainer = { path = "repos/dx/dxcontainer" }
+rsx-reader = { path = "repos/dx/rsx-reader" }
 primase-cache = { path = "toolkit/cache" }
 primase-havok = { path = "toolkit/havok" }
 primase-morpheme = { path = "toolkit/morpheme" }
 lua51-bytecode = { path = "repos/lua51-bytecode" }
 primase-dxbc = { path = "toolkit/dxbc" }
-primase-d3d9 = { path = "toolkit/d3d9" }
-primase-shader = { path = "toolkit/shader" }
-primase-shader-exec = { path = "toolkit/shader-exec" }
+iridia-d3d9 = { path = "repos/iridia/iridia-d3d9" }
+iridia = { path = "repos/iridia/iridia" }
+iridia-exec = { path = "repos/iridia/iridia-exec" }
 primase-dxil = { path = "toolkit/dxil" }
-primase-mojoshader = { path = "toolkit/mojoshader" }
+iridia-mojo = { path = "repos/iridia/iridia-mojo" }
 primase-frostbite = { path = "worlds/frostbite" }
 primase-gltf = { path = "formats/gltf" }
 primase-web = { path = "formats/web" }

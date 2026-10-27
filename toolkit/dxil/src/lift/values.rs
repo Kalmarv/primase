@@ -2,8 +2,8 @@
 //! aggregates, phis.
 
 use half::f16;
+use iridia::build::{Kind, Val};
 use naga::{BinaryOperator as Bo, Expression as E, MathFunction as Mf, UnaryOperator as Uo};
-use primase_shader::build::{Kind, Val};
 
 use super::setup::const_int;
 use super::{Lift, Lv, Slot, Stored};

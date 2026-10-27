@@ -3,12 +3,12 @@
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 
+use iridia::ResourceId;
+use iridia::build::{Kind, Val, component};
 use naga::{
     AddressSpace, ArraySize, BinaryOperator as Bo, Expression as E, GlobalVariable, Handle, ImageClass,
     ImageQuery, ResourceBinding, SampleLevel, StorageAccess, TypeInner,
 };
-use primase_shader::ResourceId;
-use primase_shader::build::{Kind, Val, component};
 
 use super::Lift;
 use super::setup::{Declaration, Shared, Texture, UavBuffer, UavKind, View};

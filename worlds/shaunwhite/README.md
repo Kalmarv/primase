@@ -337,14 +337,14 @@ Kinds 4 and 8 carry the same 48-byte BEEF header and counted metadata. Kind 8 is
 not a vertex declaration: the native loader saves, sets and restores its render states without shader
 bytecode. Zero-length kind-4 records retain their keys as `Payload::Missing`, distinct from a shader with
 an empty body. Kinds 5..7 hold utility programs; kind 6 is retained without guessing a purpose (the native
-loader marks its presence without loading its stage). The generic `primase_d3d9::frame` walks SM3 token
+loader marks its presence without loading its stage). The generic `iridia_d3d9::frame` walks SM3 token
 lengths through END, including comments and immediates, without treating an END-shaped operand as a terminator.
 Framing preserves operations a future lifter may refuse; it is not semantic shader validation.
 
 The hand-worked fixture exercises every record kind, both sampler groups and truncated/corrupt inputs.
 The real-data test reads all three quality databases to the exact end. High and medium each contain 62
 sources and 6,456 records (54 uncompiled keys); low has 62 sources and 3,919 records. High record 5's pixel
-program is the same one checked against Microsoft D3DDisassemble by `primase-d3d9`. Game sources,
+program is the same one checked against Microsoft D3DDisassemble by `iridia-d3d9`. Game sources,
 bytecode, disassembly and native decompilation remain outside the repository.
 
 

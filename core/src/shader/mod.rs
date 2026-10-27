@@ -101,7 +101,7 @@ pub enum Stage {
 impl Stage {
     /// Whether this is one of the ray tracing pipeline's stages: a program of it is functions that read the ray's
     /// system values and carry a payload, not an entry point (see [`crate::shader`]'s `stage_functions` in
-    /// primase-shader).
+    /// iridia).
     pub fn is_ray_tracing(self) -> bool {
         matches!(
             self,

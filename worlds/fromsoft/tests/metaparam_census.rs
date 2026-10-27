@@ -56,7 +56,7 @@ fn every_metaparam_of_the_install() {
                 }
                 continue;
             }
-            let chunks = primase_dxcontainer::chunks(&f.bytes).unwrap();
+            let chunks = dxcontainer::chunks(&f.bytes).unwrap();
             let code = chunks
                 .iter()
                 .find(|c| &c.kind == b"SHEX" || &c.kind == b"SHDR")

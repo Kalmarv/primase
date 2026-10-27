@@ -43,9 +43,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use primase_core::shader::{
     BufferKind, Interface, ResourceId, ResourceKind, ScalarType, Shader, ShaderFormat, Stage, SystemValue,
 };
-use primase_shader::WordsRead;
-use primase_shader::flow::{At, Node, Values};
-use primase_shader_exec::probe::{BufferReads, ProbeRun, VertexProbe};
+use iridia::WordsRead;
+use iridia::flow::{At, Node, Values};
+use iridia_exec::probe::{BufferReads, ProbeRun, VertexProbe};
 
 use super::clip_position::{ClipRows, pass_buffer};
 

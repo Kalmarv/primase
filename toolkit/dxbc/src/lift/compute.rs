@@ -1,8 +1,8 @@
 //! What a compute program does that the other stages do not: reads, writes and atomic operations on unordered-access
 //! buffers and thread-group shared memory, and barriers.
 
+use iridia::build::{Kind, Val};
 use naga::{AtomicFunction, BinaryOperator as Bo, Expression as E, GlobalVariable, Handle, Statement};
-use primase_shader::build::{Kind, Val};
 
 use super::Lift;
 use super::resources::lanes_of;

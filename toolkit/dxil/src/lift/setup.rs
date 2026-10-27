@@ -3,14 +3,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_shader::{
+use iridia::{
     EntryIo, Interface, Resource, ResourceId, ResourceKind, Stage, StageFacts, SystemValue, entry_io,
 };
 
 use crate::module::{Constant, Function, Module, Op, Value, ValueId};
 use crate::reflection::{self, Element, Range};
 use crate::{Result, error};
-use primase_dxcontainer::Chunk;
+use dxcontainer::Chunk;
 
 /// The constant integer a value is, if it is one.
 pub(super) fn const_int(m: &Module, f: &Function, v: ValueId) -> Option<i64> {
@@ -110,8 +110,8 @@ pub(crate) struct Setup {
     pub output_elements: Vec<Element>,
     /// A hull or domain program's patch-constant signature elements.
     pub patch_elements: Vec<Element>,
-    /// The functions of a program of a stage with no entry point (see [`primase_shader::stage_functions`]).
-    pub sigs: Option<Vec<primase_shader::FunctionSig>>,
+    /// The functions of a program of a stage with no entry point (see [`iridia::stage_functions`]).
+    pub sigs: Option<Vec<iridia::FunctionSig>>,
     /// The kept resources' ranges, parallel to `interface.resources`.
     pub ranges: Vec<Range>,
     pub notes: BTreeSet<String>,
@@ -288,7 +288,7 @@ impl Setup {
         // the signature's varyings, every one with a register, as the container declares them (input layouts and stage
         // linking are matched against the signature): `used` where the program reads or writes a cell of it. A built-in
         // output without a register (depth, coverage) is kept only if the program writes it: it has no local otherwise.
-        let settle = |v: &mut primase_shader::Varying, cells: &BTreeSet<(u32, u8)>, system: &BTreeSet<u8>| {
+        let settle = |v: &mut iridia::Varying, cells: &BTreeSet<(u32, u8)>, system: &BTreeSet<u8>| {
             match v.provenance.d3d {
                 Some(d3d) if d3d.register != u32::MAX => {
                     // the program's own reading, not the signature's mask: the compiler's masks are not what is stored
@@ -365,28 +365,28 @@ impl Setup {
                     | SystemValue::RayTMin
                     | SystemValue::RayTCurrent
             );
-            interface.inputs.push(primase_shader::Varying {
-                label: primase_shader::Label {
+            interface.inputs.push(iridia::Varying {
+                label: iridia::Label {
                     name: name.into(),
                     index: 0,
                 },
                 system: Some(system),
-                value: primase_shader::Value {
+                value: iridia::Value {
                     scalar: if float {
-                        primase_shader::ScalarType::Float
+                        iridia::ScalarType::Float
                     } else {
-                        primase_shader::ScalarType::Uint
+                        iridia::ScalarType::Uint
                     },
                     width,
                 },
                 interp: None,
                 used: true,
-                provenance: primase_shader::VaryingProvenance::default(),
+                provenance: iridia::VaryingProvenance::default(),
             });
         }
         for (system, row) in matrix_rows {
-            interface.inputs.push(primase_shader::Varying {
-                label: primase_shader::Label {
+            interface.inputs.push(iridia::Varying {
+                label: iridia::Label {
                     name: if system == SystemValue::ObjectToWorld {
                         "SV_ObjectToWorld"
                     } else {
@@ -396,13 +396,13 @@ impl Setup {
                     index: row,
                 },
                 system: Some(system),
-                value: primase_shader::Value {
-                    scalar: primase_shader::ScalarType::Float,
+                value: iridia::Value {
+                    scalar: iridia::ScalarType::Float,
                     width: 4,
                 },
                 interp: None,
                 used: true,
-                provenance: primase_shader::VaryingProvenance::default(),
+                provenance: iridia::VaryingProvenance::default(),
             });
         }
         // the resources the program creates handles for, numbered anew
@@ -446,7 +446,7 @@ impl Setup {
         }
         let heap = heap_resources(m, functions, &mut resources, &mut ranges)?;
         interface.resources = resources;
-        let sigs = primase_shader::stage_functions(&interface).map_err(|detail| error(0, detail))?;
+        let sigs = iridia::stage_functions(&interface).map_err(|detail| error(0, detail))?;
         let io = match sigs {
             // the functions of such a program carry no bindings: no entry point to describe
             Some(_) => EntryIo {
@@ -606,7 +606,7 @@ fn heap_resources(
     Ok(handles)
 }
 
-fn cell(list: &[primase_shader::Varying], register: u32, lane: u8) -> Option<(usize, u8)> {
+fn cell(list: &[iridia::Varying], register: u32, lane: u8) -> Option<(usize, u8)> {
     list.iter().enumerate().find_map(|(i, v)| {
         let d3d = v.provenance.d3d?;
         (lane < 8 && d3d.register == register && d3d.mask >> lane & 1 != 0)

@@ -80,10 +80,10 @@ fn every_compiled_program_of_the_install() {
                             match program.validate() {
                                 Err(p) => invalid.push(format!("{}: {p:?}", e.name)),
                                 Ok(_) => {
-                                    match primase_shader::emit::wgsl(&program) {
+                                    match iridia::emit::wgsl(&program) {
                                         Ok(_) => {}
                                         // WGSL cannot write it: the program keeps a text form that says why
-                                        Err(primase_shader::ProgramError::Unsupported { detail, .. }) => {
+                                        Err(iridia::ProgramError::Unsupported { detail, .. }) => {
                                             match program.text() {
                                                 Ok(text)
                                                     if text.lines().any(|l| {

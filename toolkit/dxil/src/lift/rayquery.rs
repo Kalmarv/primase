@@ -1,8 +1,8 @@
 //! Inline ray tracing: the `rayQuery_*` operations as naga's ray query (a local `RayQuery` object, `Initialize`,
 //! `Proceed`, `Terminate`, the confirmed hit and the intersection a query returns). Capability `RAY_QUERY`.
 
+use iridia::build::{Kind, Val};
 use naga::{Expression as E, Handle, LocalVariable, RayQueryFunction, Statement};
-use primase_shader::build::{Kind, Val};
 
 use super::setup::const_int;
 use super::{Lift, Lv};

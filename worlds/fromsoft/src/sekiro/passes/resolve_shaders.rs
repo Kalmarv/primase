@@ -6,13 +6,13 @@ use crate::layer_bake::resolve::{
 use crate::materials::Material;
 use crate::metaparam::Metaparam;
 use crate::sekiro::source::{MaterialShader, Payloads, ShaderBundle, ShaderPrograms, TexturePayloads};
+use iridia::ProgramGraph;
+use iridia::output_uses::bind_output_uses;
+use iridia_exec::PixelShader;
+use iridia_exec::ProgramShader;
 use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::shader::{MaterialPrograms, ProgramFacts, Shader, ShaderBinding, ShaderFormat, Stage};
 use primase_core::{ColorSpace, Component, Entity, Mesh, Name, Semantic, TexRole, Texture, World};
-use primase_shader::ProgramGraph;
-use primase_shader::output_uses::bind_output_uses;
-use primase_shader_exec::PixelShader;
-use primase_shader_exec::ProgramShader;
 use std::collections::BTreeMap;
 
 /// `resolve-fromsoft-shaders{unbound-textures=preview|leave}`: for each material with a layered definition, bind its
@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 /// the engine's per-view, per-frame and per-object values as roles (never values), the sampler state the source
 /// states (none), each texture slot and the G-buffer's outputs by their role (a lane the layout leaves Unknown is
 /// Coverage where the program's discard tests what it writes there, Opacity where the target's blend weighs by its alpha:
-/// [`primase_shader::output_uses`], counted by program family). A material whose program the reader does not hold is
+/// [`iridia::output_uses`], counted by program family). A material whose program the reader does not hold is
 /// counted and left unbound.
 ///
 /// The option is required: it says what a texture slot with no texture, or whose file the reader does not hold,
@@ -295,7 +295,7 @@ fn run(
                         MaterialPrograms(vec![ProgramFacts::unavailable(
                             &name,
                             Stage::Pixel,
-                            Some(primase_shader::source_hash(&bytes)),
+                            Some(iridia::source_hash(&bytes)),
                             error.to_string(),
                         )]),
                     );
@@ -599,7 +599,7 @@ mod program_facts_tests {
             let lifted = crate::passes::program_reads::lift(format, bytes).unwrap();
             let facts = lifted.facts(name);
             assert_eq!(facts.stage, Stage::Pixel);
-            assert_eq!(facts.hash, Some(primase_shader::source_hash(bytes)));
+            assert_eq!(facts.hash, Some(iridia::source_hash(bytes)));
             assert_eq!(facts.instruction_count.unwrap().unit, unit);
             assert!(facts.instruction_count.unwrap().count > 0);
             assert_eq!(

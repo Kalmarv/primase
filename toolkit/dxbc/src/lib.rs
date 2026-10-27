@@ -1,6 +1,6 @@
 //! Shader Model 4 and 5 programs: the token reader (`decode`), the signatures and reflection (`reflection`,
-//! `signatures`) and the lifter to `primase_shader::Program` (`lift`, any stage). A lifted program is run by
-//! `primase_shader_exec`.
+//! `signatures`) and the lifter to `iridia::Program` (`lift`, any stage). A lifted program is run by
+//! `iridia_exec`.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 mod arity;
@@ -16,14 +16,14 @@ pub use reflection::{
     signatures,
 };
 
-/// A DXBC program or container refused or unreadable: the word it is at and why ([`primase_shader::Refusal`]).
-pub type Error = primase_shader::Refusal;
+/// A DXBC program or container refused or unreadable: the word it is at and why ([`iridia::Refusal`]).
+pub type Error = iridia::Refusal;
 pub type Result<T> = std::result::Result<T, Error>;
 pub(crate) fn error(word: usize, detail: impl Into<String>) -> Error {
-    Error::new("DXBC", primase_shader::Unit::Word, word, detail)
+    Error::new("DXBC", iridia::Unit::Word, word, detail)
 }
 
 /// The parts of a DXBC container, an error of the container as one of the program (the word it is at).
-pub(crate) fn parts(bytes: &[u8]) -> Result<Vec<primase_dxcontainer::Chunk<'_>>> {
-    primase_dxcontainer::chunks(bytes).map_err(|e| error(e.offset / 4, e.detail))
+pub(crate) fn parts(bytes: &[u8]) -> Result<Vec<dxcontainer::Chunk<'_>>> {
+    dxcontainer::chunks(bytes).map_err(|e| error(e.offset / 4, e.detail))
 }
