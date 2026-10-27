@@ -7,43 +7,13 @@ use frostbite_formats::ebx::{self, Document, Value};
 use frostbite_formats::fbmod::{Body, ChunkInfo, Entry, Fbmod, ResInfo, Stored};
 use frostbite_formats::folder::{EbxEntry, Source};
 use frostbite_formats::texture::{self, TextureHeader};
-use sha2::{Digest, Sha256};
 
 use super::textures::Donor;
 use super::{Error, Result};
 
-/// 16 bytes derived from `identity`.
-pub(super) fn derived(identity: &str) -> [u8; 16] {
-    let d = Sha256::digest(identity.as_bytes());
-    let mut g = [0u8; 16];
-    g.copy_from_slice(&d[..16]);
-    g
-}
+pub(super) use crate::hash::{identity as derived, resource_id as derived_rid};
 
-/// The resource id of the texture asset `name`: derived from the name, with bit 0 set as every texture's in the game
-/// (`Win32/items.toc`, all 12011); the game treats an even id as a resolved pointer, and an untagged id crashed it
-/// (`Skate+0x3dc1b71`).
-pub(super) fn derived_rid(name: &str) -> u64 {
-    u64::from_le_bytes(
-        derived(&format!("{name}/rid"))[..8]
-            .try_into()
-            .unwrap_or_default(),
-    ) | 1
-}
-
-/// A GUID's text form (`8-4-4-4-12`) from its stored bytes (the first three groups little-endian).
-pub fn guid_text(g: &[u8; 16]) -> String {
-    let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
-    let rev = |r: std::ops::Range<usize>| hex(&g[r].iter().rev().copied().collect::<Vec<_>>());
-    format!(
-        "{}-{}-{}-{}-{}",
-        rev(0..4),
-        rev(4..6),
-        rev(6..8),
-        hex(&g[8..10]),
-        hex(&g[10..16])
-    )
-}
+pub use frostbite_formats::guid_text;
 
 /// What a new texture's header holds in the two fields whose meaning is not established and which ReSkate does not
 /// read: `unknown_00` (8 bytes) and byte 0x20. The caller states it; there is no default. Context, not proof: among

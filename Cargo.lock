@@ -588,7 +588,7 @@ dependencies = [
 [[package]]
 name = "frostbite-formats"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/frostbite-formats?rev=889692946a59d516d888f892135277f6a991bbe4#889692946a59d516d888f892135277f6a991bbe4"
+source = "git+https://github.com/Kalmarv/frostbite-formats?rev=9b71110e4de8282cf2eee74fb3a8d3c51a98bcb0#9b71110e4de8282cf2eee74fb3a8d3c51a98bcb0"
 dependencies = [
  "half",
  "primase-foundations",
@@ -1227,9 +1227,11 @@ name = "primase-examples"
 version = "0.1.0"
 dependencies = [
  "fromsoft-formats",
+ "frostbite-formats",
  "primase-core",
  "primase-foundations",
  "primase-fromsoft",
+ "primase-frostbite",
  "primase-gltf",
  "primase-image",
  "primase-reskate",

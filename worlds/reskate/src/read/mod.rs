@@ -4,5 +4,6 @@
 pub mod animation;
 pub mod game;
 pub mod interchange;
+pub mod quickdrop;
 pub(crate) mod scene;
 pub use scene::EMITTED_NAMES;

@@ -86,40 +86,7 @@ fn the_games_one_lod_quick_drop_meshes_rebuild() -> R {
             }
             let (file, size) = b.chunk(&src, &lod.chunk)?;
             let chunk = src.payload(file, size)?;
-            let mut parts = Vec::new();
-            for s in &lod.sections {
-                let d = geometry::decode(&chunk, lod, s)?;
-                let (Some(Stream::F32x3(p)), Some(Stream::F32x2(uv))) = (
-                    d.streams.get(&Semantic::Position),
-                    d.streams.get(&Semantic::TexCoord(0)),
-                ) else {
-                    panic!("{}: no positions or UV0", e.name);
-                };
-                let frames: Vec<tangent::Frame> = d
-                    .raw
-                    .iter()
-                    .find(|r| r.usage == meshset::usage::TANGENT_SPACE)
-                    .unwrap()
-                    .data
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .map(|&q| tangent::decode(q))
-                    .collect();
-                parts.push(rigid::Part {
-                    material: s.name.clone(),
-                    key: s.key,
-                    slot: s.record[0x1c],
-                    positions: p.clone(),
-                    normals: frames.iter().map(|f| f.normal).collect(),
-                    tangents: frames
-                        .iter()
-                        .map(|f| [f.tangent[0], f.tangent[1], f.tangent[2], f.sign])
-                        .collect(),
-                    uv: uv.clone(),
-                    triangles: d.indices.as_chunks::<3>().0.to_vec(),
-                });
-            }
+            let parts = geometry::rigid_parts(lod, &chunk)?;
             let built = rigid::build(&stored.name, lod.chunk, &parts)?;
             // the chunk: every byte the same but the tangent frames, which decode to the same frames
             assert_eq!(built.chunk.len(), chunk.len(), "{}: chunk length", e.name);

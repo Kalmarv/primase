@@ -32,7 +32,8 @@ use half::f16;
 use primase_core::{Semantic, Stream};
 
 use frostbite_formats::meshset::{Lod, Section, format, usage};
-use frostbite_formats::{Error, Result};
+use frostbite_formats::rigid::Part;
+use frostbite_formats::{Error, Result, bad, tangent};
 
 /// One vertex element kept as stored: its usage and format as the declaration states them, its size in bytes and the
 /// bytes of every vertex of the section in order.
@@ -238,4 +239,56 @@ pub fn decode(chunk: &[u8], lod: &Lod, section: &Section) -> Result<Decoded> {
         indices,
         raw,
     })
+}
+
+/// The parts a LOD's sections decode to (`chunk` its geometry chunk): each section's positions, UV0, tangent frames
+/// (usage 52, decoded) and triangles, its material name, key and slot (+0x1c) as stored: what
+/// [`frostbite_formats::rigid::build`] takes, so a stock mesh can be built again. Refused: a section without
+/// positions, UV0 or tangent frames.
+pub fn rigid_parts(lod: &Lod, chunk: &[u8]) -> Result<Vec<Part>> {
+    let mut out = Vec::with_capacity(lod.sections.len());
+    for (i, s) in lod.sections.iter().enumerate() {
+        let d = decode(chunk, lod, s)?;
+        let (Some(Stream::F32x3(p)), Some(Stream::F32x2(uv))) = (
+            d.streams.get(&Semantic::Position),
+            d.streams.get(&Semantic::TexCoord(0)),
+        ) else {
+            return Err(bad(
+                "rigid mesh",
+                i,
+                format!("section {i} ({}): no positions or UV0", s.name),
+            ));
+        };
+        let frames: Vec<tangent::Frame> = d
+            .raw
+            .iter()
+            .find(|r| r.usage == usage::TANGENT_SPACE && r.size == 4)
+            .ok_or_else(|| {
+                bad(
+                    "rigid mesh",
+                    i,
+                    format!("section {i} ({}): no tangent frames", s.name),
+                )
+            })?
+            .data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|&q| tangent::decode(q))
+            .collect();
+        out.push(Part {
+            material: s.name.clone(),
+            key: s.key,
+            slot: s.record.get(0x1c).copied().unwrap_or(0),
+            positions: p.clone(),
+            normals: frames.iter().map(|f| f.normal).collect(),
+            tangents: frames
+                .iter()
+                .map(|f| [f.tangent[0], f.tangent[1], f.tangent[2], f.sign])
+                .collect(),
+            uv: uv.clone(),
+            triangles: d.indices.as_chunks::<3>().0.to_vec(),
+        });
+    }
+    Ok(out)
 }

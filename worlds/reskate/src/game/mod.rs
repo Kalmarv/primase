@@ -9,6 +9,7 @@
 
 pub mod clip;
 pub mod eclipse;
+pub mod quickdrop;
 pub mod rig;
 pub mod skeleton;
 

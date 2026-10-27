@@ -1,4 +1,26 @@
-//! Hash framing used by the map writer.
+//! Hash framing used by the map writer, and the identities the mod writers derive from names (GUIDs and resource
+//! ids that come out the same in every build of the same mod).
+
+use sha2::{Digest, Sha256};
+
+/// 16 bytes derived from `identity` (its SHA-256's first 16): a GUID or chunk id that depends on the name alone.
+pub fn identity(identity: &str) -> [u8; 16] {
+    let d = Sha256::digest(identity.as_bytes());
+    let mut g = [0u8; 16];
+    g.copy_from_slice(&d[..16]);
+    g
+}
+
+/// The resource id of the asset `name`: derived from the name, with bit 0 set as every resource id's in the game
+/// (`Win32/items.toc`, all 12011 textures; the Quick Drop items' MeshSets and PhysicsResources too); the game treats
+/// an even id as a resolved pointer, and an untagged id crashed it (`Skate+0x3dc1b71`).
+pub fn resource_id(name: &str) -> u64 {
+    u64::from_le_bytes(
+        identity(&format!("{name}/rid"))[..8]
+            .try_into()
+            .unwrap_or_default(),
+    ) | 1
+}
 /// Extend skate-writer FNV64 state by UTF-16 units followed by the unit 0xFF.
 /// Initial state is 0xcbf29ce484222325. This is NOT FNV over UTF-8 bytes.
 pub fn skate_fnv_string(state: u64, s: &str) -> u64 {
