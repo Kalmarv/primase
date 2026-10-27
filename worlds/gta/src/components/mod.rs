@@ -22,7 +22,7 @@ use primase_core::frame::SourceFrame;
 use primase_core::{Component, Entity, JsonError, Lods, Mesh, World};
 use serde::Serialize;
 
-use crate::rage::map::{ArchetypeDef, EntityDef, EntityKind};
+use rage_engine_formats::map::{ArchetypeDef, EntityDef, EntityKind};
 
 /// GTA V's frame: x east, y north, z up, metres.
 pub const GTA: SourceFrame = SourceFrame::ENU;
@@ -139,9 +139,9 @@ impl GtaArchetype {
             ytyp: ytyp.to_string(),
             name: a.name,
             kind: match a.kind {
-                crate::rage::map::ArchetypeKind::Base => "base",
-                crate::rage::map::ArchetypeKind::Time => "time",
-                crate::rage::map::ArchetypeKind::Interior => "interior",
+                rage_engine_formats::map::ArchetypeKind::Base => "base",
+                rage_engine_formats::map::ArchetypeKind::Time => "time",
+                rage_engine_formats::map::ArchetypeKind::Interior => "interior",
             },
             flags: a.flags,
             special_attribute: a.special_attribute,
@@ -294,16 +294,16 @@ pub struct GtaTechnique {
     pub passes: Vec<GtaPass>,
 }
 
-/// An effect's techniques ([`crate::rage::sgd2_effect`]) on its `gta.effect` entity, and the fixed-function state
+/// An effect's techniques ([`rage_engine_formats::sgd2_effect`]) on its `gta.effect` entity, and the fixed-function state
 /// tables stored with them (each pass names its records). An effect of the post-processing and
 /// lighting kinds has none.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct GtaEffectTechniques {
     pub techniques: Vec<GtaTechnique>,
-    pub rasterizer: Vec<crate::rage::sgd2_effect::Rasterizer>,
-    pub depth_stencil: Vec<crate::rage::sgd2_effect::DepthStencil>,
-    pub blend: Vec<crate::rage::sgd2_effect::Blend>,
-    pub samplers: Vec<crate::rage::sgd2_effect::SamplerDesc>,
+    pub rasterizer: Vec<rage_engine_formats::sgd2_effect::Rasterizer>,
+    pub depth_stencil: Vec<rage_engine_formats::sgd2_effect::DepthStencil>,
+    pub blend: Vec<rage_engine_formats::sgd2_effect::Blend>,
+    pub samplers: Vec<rage_engine_formats::sgd2_effect::SamplerDesc>,
 }
 
 impl Component for GtaEffectTechniques {
@@ -331,11 +331,11 @@ impl Component for GtaEffectTechniques {
     }
 }
 
-/// A shader program's binding table, as the shader database stores it ([`crate::rage::sgd2_table`]), on the program's
+/// A shader program's binding table, as the shader database stores it ([`rage_engine_formats::sgd2_table`]), on the program's
 /// `core.shader` entity: its constant buffers, textures and samplers with their registers and spaces, and each constant
 /// with its byte offset in its buffer, named by hashes of the names in `names`. Not serialised.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GtaShaderTable(pub crate::rage::sgd2_table::ProgramTable);
+pub struct GtaShaderTable(pub rage_engine_formats::sgd2_table::ProgramTable);
 
 impl Component for GtaShaderTable {
     const NAME: &'static str = "gta.shader_table";
@@ -356,9 +356,9 @@ impl Component for GtaShaderTable {
 
 /// The material parameters an effect renames, on the `gta.effect` entity: for each constant of its programs that a
 /// drawable's material stores under another name, the program's name hash and the stored key
-/// ([`crate::rage::sgd2_table::effect_parameters`]). Not serialised.
+/// ([`rage_engine_formats::sgd2_table::effect_parameters`]). Not serialised.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GtaEffectParameters(pub Vec<crate::rage::sgd2_table::EffectParameter>);
+pub struct GtaEffectParameters(pub Vec<rage_engine_formats::sgd2_table::EffectParameter>);
 
 impl Component for GtaEffectParameters {
     const NAME: &'static str = "gta.effect_parameters";
@@ -583,11 +583,11 @@ impl Component for GtaBlendStreams {
     }
 }
 
-/// A prototype's bones as its drawable and fragment store them ([`crate::rage::drawable::Bones`]: the skeleton, each bone
+/// A prototype's bones as its drawable and fragment store them ([`rage_engine_formats::drawable::Bones`]: the skeleton, each bone
 /// in its parent's space with its parent and tag, and a fragment's own bone pose). The passes compose a bone's pose
 /// from it: `gta-pose-fragments` for the models on bones (`gta.bones`), `lower-gta-lights` for the light records.
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct GtaSkeleton(pub crate::rage::drawable::Bones);
+pub struct GtaSkeleton(pub rage_engine_formats::drawable::Bones);
 
 impl Component for GtaSkeleton {
     const NAME: &'static str = "gta.skeleton";
@@ -620,7 +620,7 @@ impl Component for GtaSkeletonRef {
     }
 }
 
-/// A drawable of a component ped, as the ped's variation info offers it ([`crate::rage::ped`]): its slot, its index in
+/// A drawable of a component ped, as the ped's variation info offers it ([`rage_engine_formats::ped`]): its slot, its index in
 /// the slot, the name hash of its entry in the ped's drawable dictionary, and what the info says of it, as stored.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct GtaPedPart {
@@ -643,8 +643,8 @@ impl Component for GtaPedPart {
     }
 }
 
-/// One animation of a clip dictionary ([`crate::rage::ycd`]) with its bone tracks decoded
-/// ([`crate::rage::ycd_channels`]) and sampled at every frame, as stored: a track's bone is the bone's tag (the tags of
+/// One animation of a clip dictionary ([`rage_engine_formats::ycd`]) with its bone tracks decoded
+/// ([`rage_engine_formats::ycd_channels`]) and sampled at every frame, as stored: a track's bone is the bone's tag (the tags of
 /// `skeleton`'s [`GtaSkeleton`]) and its kind a track number (0 translation, 1 rotation, 2 scale, 5 and 6 the mover's
 /// translation and rotation; the others are known only by their number). `lower-gta-clips` makes the `core.clip`.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -741,7 +741,7 @@ impl Component for GtaAnimation {
 /// its `bone_id` tags (the bones are the prototype's `gta.skeleton`).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct GtaLights {
-    pub records: Vec<crate::rage::drawable::LightAttr>,
+    pub records: Vec<rage_engine_formats::drawable::LightAttr>,
 }
 
 impl Component for GtaLights {
@@ -757,7 +757,7 @@ impl Component for GtaLights {
 /// A placed light's record as its drawable or fragment stores it (on the entity `lower-gta-lights` made for it): its
 /// hours, flashiness, volume and corona fields stay here for writers that use them.
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct GtaLight(pub crate::rage::drawable::LightAttr);
+pub struct GtaLight(pub rage_engine_formats::drawable::LightAttr);
 
 impl Component for GtaLight {
     const NAME: &'static str = "gta.light";

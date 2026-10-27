@@ -33,7 +33,7 @@ use crate::components::GTA;
 use crate::components::GtaEntity;
 use crate::components::collision::{EMBEDDED_COLLISION_DISABLED, GtaBounds, GtaEmbeddedBounds, GtaMaterials};
 use crate::passes::rect::{GroundRect, X0, X1, Y0, Y1};
-use crate::rage::bounds::{Bound, Contents, Polygon};
+use rage_engine_formats::bounds::{Bound, Contents, Polygon};
 
 /// A map bound's detail: the plain bounds a body walks or rolls on, or the finer copies the game keeps for weapons
 /// (`hi@`) and vehicles (`ma@`). Option values `plain`, `hi`, `ma`.
@@ -492,7 +492,7 @@ impl Soup {
     }
 
     /// A geometry bound's polygons in its own space.
-    fn geometry(&mut self, g: &crate::rage::bounds::Geometry, log: &mut PassLog) {
+    fn geometry(&mut self, g: &rage_engine_formats::bounds::Geometry, log: &mut PassLog) {
         let v = &g.vertices;
         // the reader allows polygons with no material table (their indices all 0): which surface they are isn't stated
         if !g.polygons.is_empty() && g.materials.is_empty() {
@@ -735,8 +735,8 @@ impl Pass for LowerGtaEmbeddedCollision {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rage::bounds::BoundHeader;
     use primase_core::Name;
+    use rage_engine_formats::bounds::BoundHeader;
 
     fn placement(w: &mut World, prototype: Entity, flags: u32) -> Entity {
         let e = w.spawn();
@@ -849,7 +849,7 @@ mod tests {
     /// children are kept or left out as the options say, counted either way. Both options are required.
     #[test]
     fn flagged_volumes_are_the_callers_choice_and_reports_name_what_was_approximated() {
-        use crate::rage::bounds::Child;
+        use rage_engine_formats::bounds::Child;
         let child = |kind: u8, flags: u32| {
             let mut b = box_bound();
             b.header.kind = kind;
@@ -1093,7 +1093,7 @@ mod tests {
     /// 4 to 6 (radius 0.5 times 2 around 5), y -1.5 to 1.5 (its ends plus its radius) and z -0.5 to 0.5.
     #[test]
     fn curved_colliders_take_their_childs_scale() {
-        use crate::rage::bounds::{Child, Geometry};
+        use rage_engine_formats::bounds::{Child, Geometry};
         let child = |polygons: Vec<Polygon>, vertices: Vec<[f32; 3]>| {
             let mut b = box_bound();
             b.header.kind = 4;

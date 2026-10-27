@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use primase_gta::rage::fxc::{self, ProgramStage};
+use rage_engine_formats::fxc::{self, ProgramStage};
 
 fn files(root: &Path, out: &mut Vec<PathBuf>) {
     let mut entries: Vec<_> = std::fs::read_dir(root)
@@ -114,7 +114,7 @@ fn every_effect_of_the_install() {
 /// WGSL; the effects' program lists are checked to name programs of the right stage.
 #[test]
 fn the_enhanced_shader_database() {
-    use primase_gta::rage::sgd2;
+    use rage_engine_formats::sgd2;
     let Some(path) = primase_testdata::oracle(
         primase_testdata::OracleSet::Corpus,
         primase_testdata::Game::Gta,

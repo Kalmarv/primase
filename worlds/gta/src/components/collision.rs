@@ -3,7 +3,7 @@
 //! (`crate::passes::collision`) make them `core.collision`.
 use primase_core::{Component, JsonError};
 
-use crate::rage::bounds::Bound;
+use rage_engine_formats::bounds::Bound;
 
 /// One ybn's bound as stored (GTA's frame, metres, world space for map bounds), its file and its detail.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]

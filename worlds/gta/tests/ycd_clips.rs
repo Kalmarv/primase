@@ -18,11 +18,11 @@ use primase_core::clip::{Clip, ClipTarget, Property};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::skeleton::{Rest, Skeleton};
 use primase_gta::components::GtaAnimation;
-use primase_gta::rage::ycd::ClipDictionary;
-use primase_gta::read::archive::keys::Keys;
-use primase_gta::read::archive::listing::Storage;
 use primase_gta::read::source::GtaSource;
 use primase_testdata::{Game, install, keys};
+use rage_engine_formats::archive::keys::Keys;
+use rage_engine_formats::archive::listing::Storage;
+use rage_engine_formats::ycd::ClipDictionary;
 
 /// The rotation as a quaternion `[x, y, z, w]` of the matrix whose columns are `cols` (scale removed).
 fn quaternion(cols: &[[f32; 3]; 4]) -> [f32; 4] {
@@ -81,7 +81,8 @@ fn clips_lower_onto_a_peds_skeleton() {
         return;
     };
     let source = GtaSource::open(&dir, &key_dir).expect("install");
-    let keys = Keys::from_dir(&key_dir).expect("key material");
+    let keys =
+        Keys::from_dir(&key_dir, Some(&primase_gta::read::key_digests::DIGESTS)).expect("key material");
     let mut registry = PassRegistry::new();
     primase_core::register(&mut registry);
     primase_gta::register(&mut registry);

@@ -14,16 +14,16 @@ use primase_core::{Entity, Instance, World};
 
 use crate::Result;
 use crate::components::GtaArchetype;
-use crate::read::archive::archive_set::ArchiveSet;
-use crate::read::archive::archive_set::Install;
-use crate::read::archive::keys::Keys;
 use crate::read::assets::{AssetReport, LightsReport, Lookup, Lookups, attach_assets_with, attach_lights};
 use crate::read::collision::{BoundsReport, attach_map_bounds};
-use crate::read::gtxd::TextureParents;
 use crate::read::region::{Region, RegionReport, States, archive_sets, read_region};
 use crate::read::shaders::{
     EffectJoin, ShaderTable, add_shader_database, add_used_shader_effects, join_materials,
 };
+use rage_engine_formats::archive::archive_set::ArchiveSet;
+use rage_engine_formats::archive::archive_set::Install;
+use rage_engine_formats::archive::keys::Keys;
+use rage_engine_formats::gtxd::TextureParents;
 
 /// The file name of the Enhanced shader database.
 const SHADER_DATABASE: &str = "sga_win32_60_final.awc";
@@ -72,7 +72,7 @@ impl GtaSource {
     /// Opens the install at `dir` with the key material in `keys_dir`: Story's and GTA Online's archive sets and
     /// their texture dictionary parents.
     pub fn open(dir: &Path, keys_dir: &Path) -> Result<GtaSource> {
-        let keys = Keys::from_dir(keys_dir)?;
+        let keys = Keys::from_dir(keys_dir, Some(&crate::read::key_digests::DIGESTS))?;
         let install = Install::open(dir, &keys)?;
         let (story, online) = archive_sets(&install, &keys, States::All)?;
         let online = online.ok_or_else(|| crate::invalid("install", 0, "no GTA Online archive set"))?;
@@ -97,7 +97,10 @@ impl GtaSource {
     /// A binary file of the install as its archive stores it, decrypted with the install's keys: a compressed file's
     /// raw deflate stream with the size it inflates to, or an uncompressed file's contents with `None`
     /// ([`Install::stored`]).
-    pub fn stored(&self, f: crate::read::archive::archive_set::FileRef) -> Result<(Vec<u8>, Option<usize>)> {
+    pub fn stored(
+        &self,
+        f: rage_engine_formats::archive::archive_set::FileRef,
+    ) -> Result<(Vec<u8>, Option<usize>)> {
         self.install().stored(f, &self.keys)
     }
 
@@ -108,7 +111,7 @@ impl GtaSource {
     /// interface of about 11,000 programs: call it once per world.
     pub fn add_shader_database(&self, w: &mut World) -> Result<(ShaderTable, EffectJoin)> {
         let bytes = self.shader_database_bytes()?;
-        let db = crate::rage::sgd2::parse(&bytes)?;
+        let db = rage_engine_formats::sgd2::parse(&bytes)?;
         let table = add_shader_database(w, &db);
         let join = join_materials(w, &table.effects);
         Ok((table, join))
@@ -123,7 +126,7 @@ impl GtaSource {
         w: &mut World,
         database: &[u8],
     ) -> Result<(ShaderTable, EffectJoin)> {
-        let db = crate::rage::sgd2::parse(database)?;
+        let db = rage_engine_formats::sgd2::parse(database)?;
         let table = add_used_shader_effects(w, &db);
         let join = join_materials(w, &table.effects);
         Ok((table, join))
@@ -180,7 +183,7 @@ impl GtaSource {
     /// On `threads` threads: the same list on any count.
     pub fn list_maps(&self, threads: primase_foundations::parallel::Threads) -> Result<Vec<MapEntry>> {
         let mut by_file: std::collections::BTreeMap<
-            (String, crate::read::archive::archive_set::FileRef),
+            (String, rage_engine_formats::archive::archive_set::FileRef),
             MapEntry,
         > = std::collections::BTreeMap::new();
         for (set, story) in [(&self.story, true), (&self.online, false)] {

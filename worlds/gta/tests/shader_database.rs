@@ -7,8 +7,8 @@ use iridia_interface::{ShaderFormat, Stage};
 use primase_core::shader::Shader;
 use primase_core::{Entity, Name, World};
 use primase_gta::components::{GtaEffect, GtaStage};
-use primase_gta::rage::sgd2;
 use primase_gta::read::shaders::add_shader_database;
+use rage_engine_formats::sgd2;
 
 fn fixture(name: &str) -> Vec<u8> {
     std::fs::read(

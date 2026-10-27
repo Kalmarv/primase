@@ -1,4 +1,4 @@
-//! The techniques of the Enhanced shader database's effects ([`primase_gta::rage::sgd2_effect`]), against what the
+//! The techniques of the Enhanced shader database's effects ([`rage_engine_formats::sgd2_effect`]), against what the
 //! database says elsewhere:
 //!
 //! - Every effect's record is read or named: the effects with a technique table are read in full (every pass names

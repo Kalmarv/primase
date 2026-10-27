@@ -15,11 +15,11 @@
 
 use primase_core::{Instance, Mesh, Semantic, Stream, World};
 use primase_gta::components::GtaArchetype;
-use primase_gta::rage::map::{ArchetypeDef, ArchetypeKind};
-use primase_gta::read::archive::archive_set::{ArchiveSet, Install, MapState};
-use primase_gta::read::archive::keys::Keys;
 use primase_gta::read::assets::attach_assets;
 use primase_testdata::{Game, OracleSet, install, keys, oracle};
+use rage_engine_formats::archive::archive_set::{ArchiveSet, Install, MapState};
+use rage_engine_formats::archive::keys::Keys;
+use rage_engine_formats::map::{ArchetypeDef, ArchetypeKind};
 use serde_json::Value as Json;
 
 fn v3(j: &Json) -> [f32; 3] {
@@ -64,7 +64,7 @@ fn frame_change_keeps_fronts_and_bitangents() {
     let oracle: Json = serde_json::from_slice(&std::fs::read(&frames).unwrap()).unwrap();
     let path = oracle["path"].as_str().unwrap();
     let stem = path.rsplit('\\').next().unwrap().strip_suffix(".ydr").unwrap();
-    let keys = Keys::from_dir(&keys).unwrap();
+    let keys = Keys::from_dir(&keys, Some(&primase_gta::read::key_digests::DIGESTS)).unwrap();
     let set = ArchiveSet::build(Install::open(&dir, &keys).unwrap(), &keys, MapState::Story).unwrap();
     // one prototype naming the drawable, one placement of it: what attach_assets reads for
     let mut w = World::new();

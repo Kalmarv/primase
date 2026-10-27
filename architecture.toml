@@ -53,5 +53,9 @@ path = "repos/lua51-bytecode"
 reason = "the chunk reader reads untrusted precompiled scripts: counts, strings and instructions"
 
 [[parse_crate]]
+path = "repos/rage-engine-formats"
+reason = "the RAGE readers read untrusted archive tables, resources, META documents and shader containers"
+
+[[parse_crate]]
 path = "repos/morpheme-formats"
 reason = "the reference-rig reader reads untrusted bundle lengths, relative pointers and joint arrays"

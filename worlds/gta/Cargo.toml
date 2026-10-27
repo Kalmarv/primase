@@ -12,19 +12,16 @@ iridia-interface.workspace = true
 primase-foundations = { workspace = true, features = ["compress"] }
 primase-core.workspace = true
 iridia-dxil.workspace = true
+rage-engine-formats.workspace = true
 primase-image.workspace = true
 primase-meshops.workspace = true
 iridia.workspace = true
 primase-texcodec.workspace = true
-indexmap.workspace = true
 naga.workspace = true
-thiserror.workspace = true
-aes.workspace = true
-sha1.workspace = true
-quick-xml.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 [dev-dependencies]
+quick-xml.workspace = true
 dxcontainer.workspace = true
 primase-testdata.workspace = true
 iridia-dxbc.workspace = true

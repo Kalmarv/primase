@@ -47,16 +47,16 @@ use crate::components::{
     BlendStreams, GtaArchetype, GtaBlendStreams, GtaBones, GtaDrawable, GtaLights, GtaParam, GtaShader,
     GtaSkeleton, GtaSources,
 };
-use crate::rage::drawable::{
+use crate::{Result, invalid};
+use rage_engine_formats::archive::archive_set::{ArchiveSet, FileRef, Install};
+use rage_engine_formats::archive::keys::Keys;
+use rage_engine_formats::drawable::{
     Bones, Drawable, DrawableDictionary, Fragment, Geometry, Model, ParamValue, resource_lights,
 };
-use crate::rage::le;
-use crate::rage::map::ArchetypeDef;
-use crate::rage::texture::{Texture, TextureDictionary};
-use crate::read::archive::archive_set::{ArchiveSet, FileRef, Install};
-use crate::read::archive::keys::Keys;
-use crate::read::gtxd::TextureParents;
-use crate::{Result, invalid};
+use rage_engine_formats::gtxd::TextureParents;
+use rage_engine_formats::le;
+use rage_engine_formats::map::ArchetypeDef;
+use rage_engine_formats::texture::{Texture, TextureDictionary};
 
 /// Shared dictionaries searched after a drawable's own dictionary chain. CodeWalker 485d56b's
 /// `GameFileCache.InitGtxds` preloads mapdetail then vehshare into its resident texture-name lookup;
@@ -273,7 +273,7 @@ enum Element {
 }
 
 /// One vertex element: a core stream (frame converted), or a blend stream kept as stored.
-fn stream(g: &Geometry, e: crate::rage::drawable::Element) -> Result<Element> {
+fn stream(g: &Geometry, e: rage_engine_formats::drawable::Element) -> Result<Element> {
     let bytes = g.element_bytes(e);
     let f3 = |b: &[u8]| -> Vec<[f32; 3]> { b.as_chunks::<12>().0.iter().map(le::vec3_of).collect() };
     let fmt = e.format.0;
@@ -416,7 +416,11 @@ fn mesh(
 }
 
 /// A resource file of the install, decoded.
-pub(crate) fn decode(install: &Install, keys: &Keys, f: FileRef) -> Result<crate::rage::resource::Resource> {
+pub(crate) fn decode(
+    install: &Install,
+    keys: &Keys,
+    f: FileRef,
+) -> Result<rage_engine_formats::resource::Resource> {
     let a = install.archives.get(f.archive).ok_or_else(|| {
         invalid(
             "archive set",
@@ -428,7 +432,7 @@ pub(crate) fn decode(install: &Install, keys: &Keys, f: FileRef) -> Result<crate
 }
 
 impl Ctx<'_> {
-    fn decode(&self, f: FileRef) -> Result<crate::rage::resource::Resource> {
+    fn decode(&self, f: FileRef) -> Result<rage_engine_formats::resource::Resource> {
         decode(self.install, self.keys, f)
     }
 
@@ -445,16 +449,11 @@ impl Ctx<'_> {
     }
 
     pub(crate) fn texture_entity(&mut self, w: &mut World, source: &str, t: &Texture) -> Result<Entity> {
-        let key = (
-            source.to_string(),
-            primase_foundations::hash::joaat(t.name.as_bytes()),
-        );
+        let key = (source.to_string(), primase_foundations::hash::joaat(t.name.as_bytes()));
         if let Some(&e) = self.textures.get(&key) {
             return Ok(e);
         }
-        let (format, color_space) = t
-            .format
-            .texture()
+        let (format, color_space) = crate::read::texture_format::texture_format(t.format)
             .ok_or_else(|| invalid("texture", 0, format!("{}: format {:#x}", t.name, t.format.0)))?;
         let mut levels = Vec::new();
         let mut rest = t.data.as_slice();
@@ -678,7 +677,7 @@ pub(crate) fn put_lights(
     w: &mut World,
     report: &mut LightsReport,
     proto: Entity,
-    lights: (Vec<crate::rage::drawable::LightAttr>, Bones),
+    lights: (Vec<rage_engine_formats::drawable::LightAttr>, Bones),
 ) {
     bump(&mut report.prototypes_read);
     if !lights.0.is_empty() {
@@ -693,7 +692,7 @@ pub(crate) fn put_lights(
 }
 
 /// A prototype and the light records read for it.
-type ProtoLights = (Entity, (Vec<crate::rage::drawable::LightAttr>, Bones));
+type ProtoLights = (Entity, (Vec<rage_engine_formats::drawable::LightAttr>, Bones));
 
 /// One read of [`attach_lights`]: a drawable or fragment, or a dictionary with the prototypes of its entries.
 enum Job {
@@ -942,19 +941,19 @@ pub(crate) fn load_prototype(
 #[cfg(test)]
 mod tests {
     use super::{origin, stream};
-    use crate::rage::drawable::{Element, Geometry};
-    use crate::rage::sga::BufferFormat;
     use primase_core::{Semantic, Stream};
+    use rage_engine_formats::drawable::{Element, Geometry};
+    use rage_engine_formats::sga::BufferFormat;
 
     /// A hand-worked dictionary chain: local files precede the global lookup. CodeWalker loads vehshare after
     /// mapdetail and overwrites duplicate resident names, so its global precedence is vehshare then mapdetail.
     #[test]
     fn local_texture_dictionaries_precede_both_resident_dictionaries() {
-        use crate::read::archive::archive_set::{ArchiveSet, FileRef};
         use crate::read::assets::{AssetNames, Lookup};
-        use crate::read::gtxd::TextureParents;
+        use rage_engine_formats::archive::archive_set::{ArchiveSet, FileRef};
+        use rage_engine_formats::gtxd::TextureParents;
         let hash = |name: &str| primase_foundations::hash::joaat(name.as_bytes());
-        let set = ArchiveSet::made_up(
+        let set = ArchiveSet::synthetic(
             &["own.ytd", "parent.ytd", "vehshare.ytd", "mapdetail.ytd"],
             &[
                 ("ytd", 10, 0),
@@ -1053,7 +1052,7 @@ mod tests {
     #[test]
     fn blend_streams_stay_in_the_dialect_as_stored() {
         use crate::components::BlendStreams;
-        use crate::rage::drawable::Model;
+        use rage_engine_formats::drawable::Model;
         let element = |slot, format, offset| Element {
             slot,
             format: BufferFormat(format),

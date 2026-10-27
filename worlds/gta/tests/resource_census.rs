@@ -12,12 +12,12 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::sync::Mutex;
 
-use primase_gta::rage::drawable::{Drawable, DrawableDictionary, Fragment};
-use primase_gta::rage::texture::TextureDictionary;
-use primase_gta::read::archive::archive_set::Install;
-use primase_gta::read::archive::keys::Keys;
-use primase_gta::read::archive::rpf::EntryKind;
 use primase_testdata::{Game, install, keys};
+use rage_engine_formats::archive::archive_set::Install;
+use rage_engine_formats::archive::keys::Keys;
+use rage_engine_formats::archive::rpf::EntryKind;
+use rage_engine_formats::drawable::{Drawable, DrawableDictionary, Fragment};
+use rage_engine_formats::texture::TextureDictionary;
 
 #[derive(Default)]
 struct Tally {
@@ -44,7 +44,8 @@ fn every_drawable_and_texture_dictionary_reads() {
         return;
     };
     let filter = primase_testdata::debug("gta.archive_filter").unwrap_or_default();
-    let keys = Keys::from_dir(&key_dir).expect("key material");
+    let keys =
+        Keys::from_dir(&key_dir, Some(&primase_gta::read::key_digests::DIGESTS)).expect("key material");
     let install = Install::open(&dir, &keys).expect("install");
     let tally = Mutex::new(Tally::default());
     let next = Mutex::new(0usize);
@@ -77,9 +78,9 @@ fn every_drawable_and_texture_dictionary_reads() {
                             *local.versions.entry((ext.to_string(), r.version)).or_default() += 1;
                             // resources in another version's layout (Legacy's, older tools') are counted, not read
                             let want = match ext {
-                                "ydr" | "ydd" => primase_gta::rage::drawable::VERSION,
-                                "yft" => primase_gta::rage::drawable::FRAGMENT_VERSION,
-                                _ => primase_gta::rage::texture::VERSION,
+                                "ydr" | "ydd" => rage_engine_formats::drawable::VERSION,
+                                "yft" => rage_engine_formats::drawable::FRAGMENT_VERSION,
+                                _ => rage_engine_formats::texture::VERSION,
                             };
                             if r.version != want {
                                 other_layout = Some(r.version);

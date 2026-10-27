@@ -1,7 +1,7 @@
 //! `gta-pose-fragments`: a fragment's models drawn at their bones' poses, as the game draws a fragment at rest.
 //!
 //! The reader keeps the bones as stored: each primitive's bone ([`GtaBones`]) and the prototype's skeleton and
-//! fragment pose ([`GtaSkeleton`]). The pass composes each bone's pose ([`crate::rage::drawable::Bones::pose`]: a fragment's
+//! fragment pose ([`GtaSkeleton`]). The pass composes each bone's pose ([`rage_engine_formats::drawable::Bones::pose`]: a fragment's
 //! own pose of the bone, else the skeleton's rest pose up to the root; rows in GTA's frame), places the posed
 //! primitives' positions by it, turns their normals and tangents by its 3x3 part as core turns local space
 //! ([`primase_core::Linear`]: normals by the inverse transpose, tangents by the part, both of unit length; a mirror
@@ -231,7 +231,7 @@ mod tests {
         w.insert(e, GtaBones(vec![Some(0)]));
         w.insert(
             e,
-            GtaSkeleton(crate::rage::drawable::Bones {
+            GtaSkeleton(rage_engine_formats::drawable::Bones {
                 skeleton: None,
                 fragment_pose: vec![pose([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])],
             }),

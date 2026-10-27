@@ -11,7 +11,7 @@
 //! Per light: an entity with `core.transform` (the placement's transform times the light's position, its local -Z along
 //! the light's direction, [`Transform::facing`]) and `core.light`. A record's position and direction are in the space
 //! of the bone its `bone_id` tags, as CodeWalker places them: they are taken into the model's space by that bone's pose,
-//! composed from the prototype's bones as stored ([`GtaSkeleton`], [`crate::rage::drawable::Bones::pose`]: a fragment's own
+//! composed from the prototype's bones as stored ([`GtaSkeleton`], [`rage_engine_formats::drawable::Bones::pose`]: a fragment's own
 //! pose of the bone, else the skeleton's rest pose up to the root), and left as stored when the drawable has no
 //! skeleton or no bone has the tag (counted).
 //! Then:
@@ -159,7 +159,9 @@ impl Pass for LowerGtaLights {
             };
             // each record's bone pose, from the prototype's bones
             let bones = w.get::<GtaSkeleton>(i.prototype).map(|s| &s.0);
-            let poses = bones.map(crate::rage::drawable::Bones::pose).unwrap_or_default();
+            let poses = bones
+                .map(rage_engine_formats::drawable::Bones::pose)
+                .unwrap_or_default();
             let t = w.get::<Transform>(e).ok_or("a placement without a transform")?;
             let scale = (0..3)
                 .map(|c| {
@@ -297,7 +299,7 @@ mod tests {
     use primase_core::{Instance, Light, Transform, World};
 
     use crate::components::GtaLights;
-    use crate::rage::drawable::LightAttr;
+    use rage_engine_formats::drawable::LightAttr;
 
     /// A lamp's light 1 m above its head bone, which stands 6 m up the pole (GTA z): placed 7 m up, at core y 7, not
     /// at the pole's base; a record whose tag names no bone stays at its stored position.
@@ -325,8 +327,8 @@ mod tests {
         let up = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 6.0]];
         w.insert(
             proto,
-            crate::components::GtaSkeleton(crate::rage::drawable::Bones {
-                skeleton: Some(crate::rage::drawable::Skeleton {
+            crate::components::GtaSkeleton(rage_engine_formats::drawable::Bones {
+                skeleton: Some(rage_engine_formats::drawable::Skeleton {
                     local: vec![rest, up],
                     parents: vec![None, Some(0)],
                     tags: Some(vec![0, 0x1234]),

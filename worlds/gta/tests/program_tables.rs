@@ -1,4 +1,4 @@
-//! The binding tables of the Enhanced shader database's programs ([`primase_gta::rage::sgd2_table`]) against the
+//! The binding tables of the Enhanced shader database's programs ([`rage_engine_formats::sgd2_table`]) against the
 //! programs' own interfaces and CodeWalker's parameter list.
 //!
 //! - Every program's table reads (its resources own exactly its constants, its names end in a NUL), and the first
@@ -20,10 +20,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use iridia_interface::{D3dClass, ResourceKind};
 use primase_gta::components::{GtaEffect, GtaEffectParameters, GtaShaderTable};
 use primase_gta::passes::resolve_shaders::value_bytes;
-use primase_gta::rage::sgd2;
-use primase_gta::rage::sgd2_table;
 use primase_gta::read::source::GtaSource;
 use primase_testdata::{Game, OracleSet, install, keys, oracle};
+use rage_engine_formats::sgd2;
+use rage_engine_formats::sgd2_table;
 
 /// The `Item`s of CodeWalker's file: each effect's name and its CBuffer parameters (current name, old name, offset).
 fn conversion(xml: &str) -> BTreeMap<String, Vec<(String, String, u16)>> {

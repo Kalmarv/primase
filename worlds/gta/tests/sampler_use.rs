@@ -19,9 +19,9 @@ use primase_core::shader::Shader;
 use primase_gta::components::{GtaEffect, GtaEffectTechniques, GtaShaderTable};
 use primase_gta::passes::sampler_state;
 use primase_gta::passes::sampler_use::{self, Through};
-use primase_gta::rage::sgd2_table::ProgramTable;
 use primase_gta::read::source::GtaSource;
 use primase_testdata::{Game, install, keys};
+use rage_engine_formats::sgd2_table::ProgramTable;
 
 /// The name of the constant buffer and of the constant at a byte offset of the buffer at a bind point.
 fn word_name(table: &ProgramTable, buffer: (u32, u32), offset: u32) -> Option<(String, String)> {

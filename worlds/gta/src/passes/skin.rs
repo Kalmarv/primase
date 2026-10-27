@@ -42,7 +42,7 @@ fn affine(rows: &[[f32; 4]; 3]) -> Transform {
 pub struct LowerGtaSkin;
 
 /// A drawable's skeleton as core's, in the world's frame.
-fn skeleton_of(s: &crate::rage::drawable::Skeleton) -> Skeleton {
+fn skeleton_of(s: &rage_engine_formats::drawable::Skeleton) -> Skeleton {
     let joints = (0u32..)
         .zip(s.local.iter().zip(&s.parents))
         .map(|(i, (local, parent))| Joint {
@@ -294,8 +294,8 @@ fn lower_primitive(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rage::drawable::{Bones, Skeleton as Rage};
     use primase_core::{Primitive, Topology};
+    use rage_engine_formats::drawable::{Bones, Skeleton as Rage};
 
     const ID: [[f32; 4]; 3] = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
     const UP: [[f32; 4]; 3] = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 2.0]];

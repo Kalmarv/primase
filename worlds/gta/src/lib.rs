@@ -1,15 +1,16 @@
 //! GTA V read straight from an install: archives (RPF7 with their NG or AES ciphers) and resources (RSC7).
 //!
-//! Arranged by role: [`read`] (the archives, the mount data and a region of the map into the world), [`rage`] (the
-//! resource formats, decoded from bytes), [`components`] (the `gta.*` dialect) and [`passes`].
+//! Arranged by role: [`read`] (a region of the map from the archives, into the world), [`components`] (the `gta.*`
+//! dialect) and [`passes`]. The formats themselves (archives, resources, META, drawables, ...) are read by
+//! `rage-engine-formats`.
 //!
-//! Key material is never part of this crate: the caller supplies it ([`Keys`](read::archive::keys::Keys)) and the
-//! crate checks it against published digests before using it.
+//! Key material is never part of this crate: the caller supplies it
+//! ([`Keys`](rage_engine_formats::archive::keys::Keys)) and the crate checks it against the published digests it
+//! holds ([`read::key_digests`]) before using it.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod components;
 pub mod passes;
-pub mod rage;
 pub mod read;
 
 // paths consumers use from before the crate was arranged by role
@@ -28,50 +29,10 @@ pub mod ipl {
     pub use crate::components::state::ipl_base;
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("{format} at {offset:#x}: {detail}")]
-    Invalid {
-        format: &'static str,
-        offset: u64,
-        detail: String,
-    },
-    #[error("key material: {0}")]
-    Keys(String),
-    #[error("I/O: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("compression: {0}")]
-    Compression(#[from] primase_foundations::compress::Error),
-}
+/// The error the readers return: the format crate's, so a failure to read a file passes through unchanged.
+pub type Error = rage_engine_formats::Error;
 
-pub type Result<T> = std::result::Result<T, Error>;
-
-/// A read past the bytes there are ([`primase_foundations::bytes::View`], [`primase_foundations::bytes::Cursor`]): the format's error at its
-/// offset.
-impl From<primase_foundations::bytes::BoundsError> for Error {
-    fn from(e: primase_foundations::bytes::BoundsError) -> Self {
-        Error::from(primase_foundations::bytes::FieldError {
-            what: "bytes",
-            bounds: e,
-        })
-    }
-}
-
-/// A read past the bytes there are, of a named format (`c.u32(LE).field("RBF")`).
-impl From<primase_foundations::bytes::FieldError> for Error {
-    fn from(e: primase_foundations::bytes::FieldError) -> Self {
-        let offset = u64::try_from(e.bounds.absolute()).unwrap_or(u64::MAX);
-        let detail = match e.bounds {
-            primase_foundations::bytes::BoundsError::OutOfBounds { length, total, .. } => {
-                format!("{length} bytes past the {total} there are")
-            }
-            primase_foundations::bytes::BoundsError::LengthOverflow { count, stride, .. } => {
-                format!("{count} entries of {stride} bytes overflow")
-            }
-        };
-        invalid(e.what, offset, detail)
-    }
-}
+pub type Result<T> = rage_engine_formats::Result<T>;
 
 pub(crate) fn invalid(format: &'static str, offset: u64, detail: impl ToString) -> Error {
     Error::Invalid {

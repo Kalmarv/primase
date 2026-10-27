@@ -13,7 +13,7 @@ use primase_core::pass::{PassManager, PassRegistry, Pipeline, Target};
 use primase_core::{Entity, Instance, Light, Name, Transform, World};
 use primase_gta::components::GtaLights;
 use primase_gta::passes::lights::{LightHours, LowerGtaLights};
-use primase_gta::rage::drawable::LightAttr;
+use rage_engine_formats::drawable::LightAttr;
 
 /// One placement of a prototype holding one point light.
 struct OneLamp(World);

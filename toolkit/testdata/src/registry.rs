@@ -643,7 +643,7 @@ pub const DECLARED: &[Declared] = &[
         query: Query::Oracle(OracleSet::CodeWalker, Game::Gta, "active.json"),
         status: Status::Live,
         gate: true,
-        about: r#"optional: an independent reader's live-file tables of that install (JSON; schema in `worlds/gta/tests/archive_set.rs`)"#,
+        about: r#"optional: an independent reader's live-file tables of that install (JSON; schema in `repos/rage-engine-formats/tests/archive_set.rs`)"#,
         source: r#"independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools"#,
     },
     Declared {
@@ -671,14 +671,14 @@ pub const DECLARED: &[Declared] = &[
         query: Query::Oracle(OracleSet::CodeWalker, Game::Gta, "gtxd.json"),
         status: Status::Live,
         gate: true,
-        about: r#"optional: an independent reader's texture dictionary parents of that install with their source files (JSON; schema in `worlds/gta/tests/gtxd.rs`)"#,
+        about: r#"optional: an independent reader's texture dictionary parents of that install with their source files (JSON; schema in `repos/rage-engine-formats/tests/gtxd.rs`)"#,
         source: r#"independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools"#,
     },
     Declared {
         query: Query::Oracle(OracleSet::CodeWalker, Game::Gta, "listing.jsonl"),
         status: Status::Live,
         gate: true,
-        about: r#"optional: an independent reader's listing of every archive of that install (JSON lines; schema in `worlds/gta/tests/census.rs`)"#,
+        about: r#"optional: an independent reader's listing of every archive of that install (JSON lines; schema in `repos/rage-engine-formats/tests/census.rs`)"#,
         source: r#"independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools"#,
     },
     Declared {
@@ -692,14 +692,14 @@ pub const DECLARED: &[Declared] = &[
         query: Query::Oracle(OracleSet::CodeWalker, Game::Gta, "resources"),
         status: Status::Live,
         gate: true,
-        about: r#"optional: a folder of an independent reader's decodings of chosen drawables and texture dictionaries of that install (JSON; schema in `worlds/gta/tests/resource_oracle.rs`)"#,
+        about: r#"optional: a folder of an independent reader's decodings of chosen drawables and texture dictionaries of that install (JSON; schema in `repos/rage-engine-formats/tests/resource_oracle.rs`)"#,
         source: r#"independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools"#,
     },
     Declared {
         query: Query::Oracle(OracleSet::CodeWalker, Game::Gta, "ycd"),
         status: Status::Live,
         gate: false,
-        about: r#"a folder holding `dictionaries.jsonl`: an independent reader's decoding of every clip dictionary (`.ycd`) of that install, the CodeWalker harness's `batch` mode over the install's `.ycd` list (`DumpYcd`: per animation its frames, duration, bone ids, and per sequence block and bone track the channel types and SHA-256 of the channel values and of the evaluated vectors); the channel decoder's values are checked against it (needs `installs.gta`, `keys.gta`); `worlds/gta/tests/ycd_channels.rs`"#,
+        about: r#"a folder holding `dictionaries.jsonl`: an independent reader's decoding of every clip dictionary (`.ycd`) of that install, the CodeWalker harness's `batch` mode over the install's `.ycd` list (`DumpYcd`: per animation its frames, duration, bone ids, and per sequence block and bone track the channel types and SHA-256 of the channel values and of the evaluated vectors); the channel decoder's values are checked against it (needs `installs.gta`, `keys.gta`); `repos/rage-engine-formats/tests/ycd_channels.rs`"#,
         source: r#"independent: CodeWalker.Core 485d56b (GPL-licensed: run as a tool, no code taken), through a thin dump harness kept with the private oracle tools (`batch` mode)"#,
     },
     Declared {

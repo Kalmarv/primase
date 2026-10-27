@@ -17,9 +17,9 @@ use primase_core::skin::Skin;
 use primase_core::state::StateAxis;
 use primase_core::{Instance, World};
 use primase_gta::components::{GtaPedPart, GtaSkeleton};
-use primase_gta::read::archive::listing::Storage;
 use primase_gta::read::source::GtaSource;
 use primase_testdata::{Game, install, keys};
+use rage_engine_formats::archive::listing::Storage;
 
 fn assert_verifies(w: &World, what: &str) {
     let bad = w.verify_components();

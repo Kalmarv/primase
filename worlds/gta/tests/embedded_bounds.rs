@@ -18,12 +18,12 @@ use primase_core::{Collision, Instance, Surfaces, World};
 use primase_gta::components::GtaArchetype;
 use primase_gta::components::collision::GtaMaterials;
 use primase_gta::passes::collision::{FlaggedVolumes, LowerGtaEmbeddedCollision};
-use primase_gta::rage::map::{ArchetypeDef, ArchetypeKind};
-use primase_gta::read::archive::archive_set::{ArchiveSet, Install, MapState};
-use primase_gta::read::archive::keys::Keys;
 use primase_gta::read::assets::attach_assets;
 use primase_gta::read::collision::material_names;
 use primase_testdata::{Game, OracleSet, install, keys, oracle};
+use rage_engine_formats::archive::archive_set::{ArchiveSet, Install, MapState};
+use rage_engine_formats::archive::keys::Keys;
+use rage_engine_formats::map::{ArchetypeDef, ArchetypeKind};
 use serde_json::Value as Json;
 
 /// How many triangles our lowering makes of a polygon or primitive bound that is no triangle.
@@ -72,7 +72,7 @@ fn props_collide_by_codewalkers_reading_of_their_bounds() {
     ) else {
         return;
     };
-    let keys = Keys::from_dir(&keys).unwrap();
+    let keys = Keys::from_dir(&keys, Some(&primase_gta::read::key_digests::DIGESTS)).unwrap();
     let set = ArchiveSet::build(Install::open(&dir, &keys).unwrap(), &keys, MapState::Story).unwrap();
     let names = material_names(&String::from_utf8_lossy(
         &set.install

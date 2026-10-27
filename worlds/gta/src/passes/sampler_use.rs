@@ -4,7 +4,7 @@
 //! samplers at register 0 of space 2) indexed at run time by a word of a constant buffer: a sample is
 //! `textureSample(t14, s0[cb3[3].w], uv)` ("the texture at t14 in space 1, through the sampler whose heap index is the
 //! fourth lane of the fourth row of the buffer at register 3 of space 0"). That buffer's constants are the program's
-//! `gDynamicSamplerIndex_<name>` words ([`crate::rage::sgd2_table`]), so the sample names the sampler the program
+//! `gDynamicSamplerIndex_<name>` words ([`rage_engine_formats::sgd2_table`]), so the sample names the sampler the program
 //! means by its constant: the word at that offset. The heap's contents are the engine's. Some programs sample through
 //! a sampler they declare instead ([`Through::Direct`]).
 use std::collections::BTreeMap;

@@ -25,15 +25,15 @@ use primase_core::state::{Clause, Condition, Domain, Literal, Scope, StateAxis};
 use primase_core::{Entity, Name, Source, World};
 
 use crate::components::{GtaPedPart, GtaResolvedIn, GtaSkeleton, GtaSkeletonRef};
-use crate::rage::drawable::DrawableDictionary;
-use crate::rage::meta::Meta;
-use crate::rage::ped::{COMPONENT_SLOTS, PedVariations, entry_name};
-use crate::read::archive::archive_set::FileRef;
-use crate::read::archive::rpf::EntryKind;
 use crate::read::assets::{AssetReport, Content, Ctx, decode, load_prototype};
 use crate::read::entry::made_archetype;
 use crate::read::source::GtaSource;
 use crate::{Result, invalid};
+use rage_engine_formats::archive::archive_set::FileRef;
+use rage_engine_formats::archive::rpf::EntryKind;
+use rage_engine_formats::drawable::DrawableDictionary;
+use rage_engine_formats::meta::Meta;
+use rage_engine_formats::ped::{COMPONENT_SLOTS, PedVariations, entry_name};
 
 /// What reading a ped did.
 #[derive(Clone, Debug, Default, PartialEq)]

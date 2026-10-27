@@ -1305,9 +1305,7 @@ dependencies = [
 name = "primase-gta"
 version = "0.1.0"
 dependencies = [
- "aes",
  "dxcontainer",
- "indexmap",
  "iridia",
  "iridia-dxbc",
  "iridia-dxil",
@@ -1321,11 +1319,10 @@ dependencies = [
  "primase-testdata",
  "primase-texcodec",
  "quick-xml",
+ "rage-engine-formats",
  "serde",
  "serde_json",
- "sha1",
  "sha2",
- "thiserror",
  "toml",
 ]
 
@@ -1601,6 +1598,22 @@ name = "r-efi"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
+
+[[package]]
+name = "rage-engine-formats"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "indexmap",
+ "primase-foundations",
+ "primase-testdata",
+ "quick-xml",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "thiserror",
+]
 
 [[package]]
 name = "regex"

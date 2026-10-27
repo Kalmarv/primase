@@ -20,9 +20,9 @@ use primase_core::state::{Clause, Condition, Domain, Literal, Scope, StateAxis};
 use primase_core::{Instance, Name, Source, Transform, World};
 
 use crate::components::water::{CalmingQuad, GtaWater, GtaWaterSurface, WaterQuad, WaveQuad, outline};
-use crate::read::archive::archive_set::Install;
-use crate::read::archive::keys::Keys;
 use crate::{Result, invalid};
+use rage_engine_formats::archive::archive_set::Install;
+use rage_engine_formats::archive::keys::Keys;
 
 /// The world map's water data and the water tuning, as the install stores them.
 pub const WATER_FILE: &str = r"common.rpf\data\levels\gta5\water.xml";
@@ -77,7 +77,7 @@ pub fn read_water(install: &Install, keys: &Keys) -> Result<Vec<(&'static str, W
 
 /// A tuning file's `SpecularFalloff`: `None` when it has none, an error when it is not a number.
 pub fn specular_falloff(tune: &[u8], path: &str) -> Result<Option<f32>> {
-    let root = crate::read::xml::parse(tune, path)?;
+    let root = rage_engine_formats::xml::parse(tune, path)?;
     root.child_value("SpecularFalloff")
         .map(|v| {
             v.parse()
@@ -174,15 +174,15 @@ pub fn place_water(w: &mut World, files: Vec<(&str, WaterFile)>) -> Vec<(String,
 
 /// Water data from `water.xml` bytes (`path` empty, no tuning).
 pub fn parse_water(bytes: &[u8]) -> Result<WaterFile> {
-    let root = crate::read::xml::parse(bytes, "water.xml")?;
-    let num = |e: &crate::read::xml::Element, k: &str| -> Result<f32> {
+    let root = rage_engine_formats::xml::parse(bytes, "water.xml")?;
+    let num = |e: &rage_engine_formats::xml::Element, k: &str| -> Result<f32> {
         e.child_value(k)
             .ok_or_else(|| err(format!("a quad without {k}")))?
             .parse()
             .map_err(|_| err(format!("{k}: not a number")))
     };
     // a flag left out is false; any value but true or false is an error
-    let flag = |e: &crate::read::xml::Element, k: &str| -> Result<bool> {
+    let flag = |e: &rage_engine_formats::xml::Element, k: &str| -> Result<bool> {
         match e.child_value(k) {
             None => Ok(false),
             Some(v) if v.eq_ignore_ascii_case("true") => Ok(true),
@@ -190,7 +190,7 @@ pub fn parse_water(bytes: &[u8]) -> Result<WaterFile> {
             Some(v) => Err(err(format!("{k}: {v:?} is neither true nor false"))),
         }
     };
-    let rect = |e: &crate::read::xml::Element| -> Result<([f32; 2], [f32; 2])> {
+    let rect = |e: &rage_engine_formats::xml::Element| -> Result<([f32; 2], [f32; 2])> {
         Ok((
             [num(e, "minX")?, num(e, "minY")?],
             [num(e, "maxX")?, num(e, "maxY")?],

@@ -23,13 +23,6 @@ use primase_core::{Entity, Name, Provenance, Source, World};
 
 use crate::components::collision::GtaMaterials;
 use crate::components::{GtaArchetype, GtaResolvedIn};
-use crate::rage::drawable::{DrawableDictionary, resource_lights};
-use crate::rage::map::{ArchetypeDef, MapTypes};
-use crate::rage::meta::Meta;
-use crate::rage::texture::TextureDictionary;
-use crate::read::archive::archive_set::{ArchiveSet, FileRef};
-use crate::read::archive::keys::Keys;
-use crate::read::archive::rpf::EntryKind;
 use crate::read::assets::{
     AssetReport, Content, Ctx, LightsReport, Lookup, attach_lights, decode, load_prototype, origin,
     put_lights,
@@ -38,6 +31,13 @@ use crate::read::collision::{BoundsReport, install_material_names, place_map_bou
 use crate::read::region::{RegionReport, read_map_file};
 use crate::read::source::GtaSource;
 use crate::{Result, invalid};
+use rage_engine_formats::archive::archive_set::{ArchiveSet, FileRef};
+use rage_engine_formats::archive::keys::Keys;
+use rage_engine_formats::archive::rpf::EntryKind;
+use rage_engine_formats::drawable::{DrawableDictionary, resource_lights};
+use rage_engine_formats::map::{ArchetypeDef, MapTypes};
+use rage_engine_formats::meta::Meta;
+use rage_engine_formats::texture::TextureDictionary;
 
 /// A map state's archetypes by their asset (type, name hash), each with the map types file that defines it, in the
 /// live files' order: the first is the one a placement takes.
@@ -91,7 +91,7 @@ fn split_name(path: &str) -> (String, String) {
 }
 
 impl GtaSource {
-    /// The file at `path` (lowercase, `\`: [`crate::read::archive::archive_set::Install::file`]).
+    /// The file at `path` (lowercase, `\`: [`rage_engine_formats::archive::archive_set::Install::file`]).
     pub fn file(&self, path: &str) -> Option<FileRef> {
         self.install().file(path)
     }
@@ -255,7 +255,7 @@ impl GtaSource {
 
     fn bounds(&self, file: FileRef, stem: &str, report: &mut EntryReport) -> Result<World> {
         let (install, keys) = (self.install(), self.keys());
-        let bound = crate::rage::bounds::read_ybn(&install.resource(file, keys)?)?;
+        let bound = rage_engine_formats::bounds::read_ybn(&install.resource(file, keys)?)?;
         let mut w = World::new();
         // a file in a map archive is a map bound: stored in world space, so at the origin
         place_map_bounds(

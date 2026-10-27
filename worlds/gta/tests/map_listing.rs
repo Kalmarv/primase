@@ -7,11 +7,11 @@
 //!
 //! Needs `installs.gta` and `keys.gta`.
 use primase_foundations::parallel::Threads;
-use primase_gta::rage::map::MapData;
-use primase_gta::rage::meta::Meta;
-use primase_gta::read::archive::archive_set::Install;
-use primase_gta::read::archive::keys::Keys;
 use primase_gta::read::region::{States, archive_sets, list_maps};
+use rage_engine_formats::archive::archive_set::Install;
+use rage_engine_formats::archive::keys::Keys;
+use rage_engine_formats::map::MapData;
+use rage_engine_formats::meta::Meta;
 
 #[test]
 fn every_listed_header_is_the_decoded_files() {
@@ -21,7 +21,7 @@ fn every_listed_header_is_the_decoded_files() {
     ) else {
         return;
     };
-    let keys = Keys::from_dir(&keys).expect("keys");
+    let keys = Keys::from_dir(&keys, Some(&primase_gta::read::key_digests::DIGESTS)).expect("keys");
     let install = Install::open(&dir, &keys).expect("install");
     let (story, online) = archive_sets(&install, &keys, States::All).expect("archive sets");
     // bit 4 against "an entity at SLOD1 or coarser", over both states: (both, bit only, entities only)
@@ -72,7 +72,7 @@ fn every_listed_header_is_the_decoded_files() {
                     has(&[3, 4, 6]),
                     full.entities
                         .iter()
-                        .any(|e| e.kind == primase_gta::rage::map::EntityKind::Interior),
+                        .any(|e| e.kind == rage_engine_formats::map::EntityKind::Interior),
                     !full.physics_dictionaries.is_empty()
                 ),
                 "{state}: {} content flags {:#x}",

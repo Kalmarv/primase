@@ -11,7 +11,7 @@ use iridia_interface::{AddressMode, SamplerState};
 use iridia_interface::{Filter, Filters, MipFilter};
 
 use super::resolve_shaders::compare;
-use crate::rage::sgd2_effect::SamplerDesc;
+use rage_engine_formats::sgd2_effect::SamplerDesc;
 
 /// The prefix of the constants naming a static sampler.
 const STATIC_PREFIX: &str = "gDynamicSamplerIndex_sdi";

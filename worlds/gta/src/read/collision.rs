@@ -10,10 +10,10 @@ use primase_core::state::{Clause, Condition, Literal, StateAxis};
 use primase_core::{Entity, Transform, World};
 
 use crate::components::collision::{GtaBounds, GtaMaterials};
-use crate::rage::bounds::{Bound, read_ybn};
-use crate::read::archive::archive_set::{ArchiveSet, FileRef};
-use crate::read::archive::keys::Keys;
 use crate::{Result, invalid};
+use rage_engine_formats::archive::archive_set::{ArchiveSet, FileRef};
+use rage_engine_formats::archive::keys::Keys;
+use rage_engine_formats::bounds::{Bound, read_ybn};
 
 /// A ybn file name's detail: what precedes an `@` in it, lowercase.
 pub fn ybn_detail(file_name: &str) -> Option<String> {
@@ -201,7 +201,7 @@ mod tests {
     use primase_core::state::{Domain, Scope};
 
     use super::*;
-    use crate::rage::bounds::{BoundHeader, Contents};
+    use rage_engine_formats::bounds::{BoundHeader, Contents};
 
     /// A ybn's detail is its name's prefix before `@`, lowercase.
     #[test]

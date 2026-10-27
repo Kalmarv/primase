@@ -2,7 +2,7 @@
 //! stored, its interface read from it) and one [`GtaEffect`] per effect naming its programs. A geometry program stays
 //! named in the effect with no entity: a `core.shader` has no facts for it yet.
 //!
-//! The database is read by [`crate::rage::sgd2`] from bytes; where the install keeps those bytes is the caller's
+//! The database is read by [`rage_engine_formats::sgd2`] from bytes; where the install keeps those bytes is the caller's
 //! ([`crate::read::source::GtaSource::add_shader_database`] finds the file in the install's listing).
 //!
 //! A drawable's shader names its effect by a hash: [`GtaShader::name`] is the joaat of the effect's lowercase name
@@ -19,9 +19,9 @@ use crate::components::{
     GtaEffect, GtaEffectParameters, GtaEffectProgram, GtaEffectTechniques, GtaMaterialEffect, GtaPass,
     GtaShader, GtaShaderTable, GtaStage, GtaTechnique,
 };
-use crate::rage::fxc::ProgramStage;
-use crate::rage::sgd2::{self, Sgd2};
-use crate::rage::sgd2_effect;
+use rage_engine_formats::fxc::ProgramStage;
+use rage_engine_formats::sgd2::{self, Sgd2};
+use rage_engine_formats::sgd2_effect;
 
 /// What [`add_shader_database`] made.
 #[derive(Debug, Default)]
@@ -129,7 +129,7 @@ pub fn add_shader_effects(w: &mut World, db: &Sgd2<'_>, only: Option<&BTreeSet<u
                             },
                         );
                         table.shaders += 1;
-                        match crate::rage::sgd2_table::parse(program.tables) {
+                        match rage_engine_formats::sgd2_table::parse(program.tables) {
                             Ok(t) => {
                                 w.insert(e, GtaShaderTable(t));
                                 table.tables += 1;
@@ -188,7 +188,7 @@ pub fn add_shader_effects(w: &mut World, db: &Sgd2<'_>, only: Option<&BTreeSet<u
                 }
             }
         }
-        let parameters = crate::rage::sgd2_table::effect_parameters(effect.rest, &known);
+        let parameters = rage_engine_formats::sgd2_table::effect_parameters(effect.rest, &known);
         table.parameters += parameters.len();
         let e = w.spawn();
         w.insert(e, Name(effect.name.to_owned()));
@@ -200,7 +200,7 @@ pub fn add_shader_effects(w: &mut World, db: &Sgd2<'_>, only: Option<&BTreeSet<u
             },
         );
         w.insert(e, GtaEffectParameters(parameters));
-        match crate::rage::sgd2_effect::parse(effect.rest) {
+        match rage_engine_formats::sgd2_effect::parse(effect.rest) {
             Ok(Some(t)) => match techniques(&t, &listed) {
                 Ok(t) => {
                     table.techniques += 1;

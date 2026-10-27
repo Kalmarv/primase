@@ -9,8 +9,8 @@
 
 use std::path::PathBuf;
 
-use primase_gta::read::archive::listing::Storage;
 use primase_gta::read::source::GtaSource;
+use rage_engine_formats::archive::listing::Storage;
 
 type BoxError = Box<dyn std::error::Error>;
 

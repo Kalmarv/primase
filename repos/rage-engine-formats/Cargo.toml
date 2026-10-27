@@ -1,0 +1,27 @@
+[package]
+name = "rage-engine-formats"
+description = "RAGE engine formats as GTA V Enhanced stores them: RPF7 archives, resources, META, drawables, textures, collision bounds, clips, shader containers, RBF and XML"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+primase-foundations = { workspace = true, features = ["compress"] }
+aes.workspace = true
+indexmap.workspace = true
+quick-xml.workspace = true
+serde.workspace = true
+sha1.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+primase-testdata.workspace = true
+serde_json.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+
+[lints]
+workspace = true

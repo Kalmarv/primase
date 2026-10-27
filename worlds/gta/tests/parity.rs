@@ -25,15 +25,15 @@ mod codewalker;
 use codewalker::{check_drawable, check_ytd};
 use primase_core::Instance;
 use primase_gta::components::{GtaArchetype, GtaEntity};
-use primase_gta::rage::drawable::{Drawable, DrawableDictionary, Fragment};
-use primase_gta::rage::map::{ArchetypeDef, ArchetypeKind, EntityDef, EntityKind, MapData, MapTypes};
-use primase_gta::rage::meta::Meta;
-use primase_gta::rage::resource::Resource;
-use primase_gta::rage::texture::TextureDictionary;
-use primase_gta::read::archive::archive_set::{ArchiveSet, Install, MapState};
-use primase_gta::read::archive::keys::Keys;
 use primase_gta::read::source::GtaSource;
 use primase_testdata::{Game, OracleSet, install, keys, oracle};
+use rage_engine_formats::archive::archive_set::{ArchiveSet, Install, MapState};
+use rage_engine_formats::archive::keys::Keys;
+use rage_engine_formats::drawable::{Drawable, DrawableDictionary, Fragment};
+use rage_engine_formats::map::{ArchetypeDef, ArchetypeKind, EntityDef, EntityKind, MapData, MapTypes};
+use rage_engine_formats::meta::Meta;
+use rage_engine_formats::resource::Resource;
+use rage_engine_formats::texture::TextureDictionary;
 use serde_json::Value;
 
 /// The areas listed: the gate regions, `[x0, y0, x1, y1]` in GTA ground coordinates, read with this reach.
@@ -236,7 +236,7 @@ fn check_ydd(dict: &DrawableDictionary, o: &Value, d: &mut Vec<String>) {
 }
 
 fn open(dir: &std::path::Path, key_dir: &std::path::Path) -> (Install, Keys) {
-    let keys = Keys::from_dir(key_dir).expect("key material");
+    let keys = Keys::from_dir(key_dir, Some(&primase_gta::read::key_digests::DIGESTS)).expect("key material");
     let install = Install::open(dir, &keys).expect("install");
     (install, keys)
 }

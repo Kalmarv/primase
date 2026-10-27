@@ -1,10 +1,10 @@
 //! `resolve-gta-shaders{technique=NAME,unset-textures=white|leave}`: a drawable's material bound to the programs of its
 //! effect's technique, as `core.shader_binding` on the material's entity. The programs are the `core.shader` entities
 //! of the shader database ([`crate::read::shaders`]); what they read comes from the database's own tables
-//! ([`crate::rage::sgd2_table`]) and the material's stored parameters.
+//! ([`rage_engine_formats::sgd2_table`]) and the material's stored parameters.
 //!
 //! - **Programs.** An effect names its techniques ([`GtaEffectTechniques`], read from the effect's record by
-//!   [`crate::rage::sgd2_effect`]): `deferred_draw` is its G-buffer pass for an unskinned mesh, `deferred_drawskinned`
+//!   [`rage_engine_formats::sgd2_effect`]): `deferred_draw` is its G-buffer pass for an unskinned mesh, `deferred_drawskinned`
 //!   for a skinned one, `deferredalphaclip_draw` the alpha-clipped variant, `lightweight0_draw` a forward pass,
 //!   `wdcascade_draw` the cascaded shadow pass, `cube_draw` the cube-map pass, and each lists the programs it runs
 //!   (the vertex and the pixel program, or the vertex program alone of a depth-only pass). Which technique a draw uses
@@ -82,11 +82,11 @@ use crate::components::{
     GtaEffect, GtaEffectParameters, GtaEffectTechniques, GtaMaterialEffect, GtaParam, GtaPass, GtaShader,
     GtaShaderTable,
 };
-use crate::rage::sgd2_effect::SamplerDesc;
-use crate::rage::sgd2_table::{ProgramTable, TableConstant, TableResource};
 use iridia::matrix::state_lines;
 use iridia::{ProgramGraph, WordsRead};
 use primase_core::shader::{MaterialPrograms, ProgramFacts};
+use rage_engine_formats::sgd2_effect::SamplerDesc;
+use rage_engine_formats::sgd2_table::{ProgramTable, TableConstant, TableResource};
 
 /// The pixel program family whose targets the pass names roles for (`PS_DeferredTextured` and its alpha-clipped and
 /// sub-sample variants: [`gbuffer`] has the layout and how it was checked).
@@ -245,7 +245,7 @@ fn render_state(t: &GtaEffectTechniques, pass: &GtaPass, notes: &mut Vec<&'stati
             })
         };
         if d.stencil_enable == 1 {
-            let face = |f: &crate::rage::sgd2_effect::StencilFace| {
+            let face = |f: &rage_engine_formats::sgd2_effect::StencilFace| {
                 Some(StencilFace {
                     fail: stencil_op(f.fail_op)?,
                     depth_fail: stencil_op(f.depth_fail_op)?,
@@ -1668,8 +1668,8 @@ mod tests {
         assert!(names("Deferred_draw").is_err());
     }
 
-    fn target(enable: u8, src: u8, dest: u8) -> crate::rage::sgd2_effect::TargetBlend {
-        crate::rage::sgd2_effect::TargetBlend {
+    fn target(enable: u8, src: u8, dest: u8) -> rage_engine_formats::sgd2_effect::TargetBlend {
+        rage_engine_formats::sgd2_effect::TargetBlend {
             enable,
             src,
             dest,
@@ -1687,7 +1687,7 @@ mod tests {
     /// and an effect without tables states none.
     #[test]
     fn a_passes_state_is_the_records_it_names() {
-        use crate::rage::sgd2_effect::{
+        use rage_engine_formats::sgd2_effect::{
             Blend as BlendRecord, DepthStencil, Rasterizer, StencilFace as FaceRecord,
         };
         let face = |func| FaceRecord {
@@ -1708,8 +1708,8 @@ mod tests {
             tail: [0; 10],
         };
         // render target 0 as given, the others opaque with the write mask 0
-        let blend = |t: crate::rage::sgd2_effect::TargetBlend| {
-            let mut targets = [crate::rage::sgd2_effect::TargetBlend {
+        let blend = |t: rage_engine_formats::sgd2_effect::TargetBlend| {
+            let mut targets = [rage_engine_formats::sgd2_effect::TargetBlend {
                 write_mask: 0,
                 ..target(0, 2, 1)
             }; 8];

@@ -34,13 +34,13 @@ use primase_core::{Instance, Name, Provenance, Source, Transform, World};
 
 use crate::components::state::hour_axis;
 use crate::components::{GTA, GtaArchetype, GtaEntity, GtaResolvedIn};
-use crate::rage::map::{ArchetypeDef, EntityDef, EntityKind, MapData, MapHeader, MapTypes};
-use crate::rage::meta::Meta;
-use crate::read::archive::archive_set::{ArchiveSet, FileRef, Install, MapState};
-use crate::read::archive::keys::Keys;
 use crate::read::assets::{Lookup, Payload};
 use crate::{Result, invalid};
 use primase_foundations::parallel::Threads;
+use rage_engine_formats::archive::archive_set::{ArchiveSet, FileRef, Install, MapState};
+use rage_engine_formats::archive::keys::Keys;
+use rage_engine_formats::map::{ArchetypeDef, EntityDef, EntityKind, MapData, MapHeader, MapTypes};
+use rage_engine_formats::meta::Meta;
 
 /// Which map states to read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -127,7 +127,7 @@ fn meta(set: &ArchiveSet, keys: &Keys, f: FileRef) -> Result<Meta> {
     Meta::read(&r)
 }
 
-fn decode(set: &ArchiveSet, keys: &Keys, f: FileRef) -> Result<crate::rage::meta::Struct> {
+fn decode(set: &ArchiveSet, keys: &Keys, f: FileRef) -> Result<rage_engine_formats::meta::Struct> {
     meta(set, keys, f)?.root()
 }
 
@@ -162,15 +162,14 @@ pub fn list_maps(set: &ArchiveSet, keys: &Keys, threads: Threads) -> Result<Vec<
         .flat_map(|t| t.values().copied())
         .collect();
     let entities = primase_foundations::hash::joaat_exact(b"entities");
-    let outlines =
-        primase_foundations::parallel::map(threads, &files, |_, &f| -> Result<(MapHeader, usize)> {
-            let (root, counts) = meta(set, keys, f)?.root_outline()?;
-            let count = *counts
-                .get(&entities)
-                .ok_or_else(|| invalid("CMapData", 0, format!("{}: no entities array", set.path(f))))?;
-            Ok((MapHeader::from_root(&root)?, count))
-        })
-        .map_err(|e| invalid("map listing", 0, e.to_string()))?;
+    let outlines = primase_foundations::parallel::map(threads, &files, |_, &f| -> Result<(MapHeader, usize)> {
+        let (root, counts) = meta(set, keys, f)?.root_outline()?;
+        let count = *counts
+            .get(&entities)
+            .ok_or_else(|| invalid("CMapData", 0, format!("{}: no entities array", set.path(f))))?;
+        Ok((MapHeader::from_root(&root)?, count))
+    })
+    .map_err(|e| invalid("map listing", 0, e.to_string()))?;
     let mut listed = Vec::with_capacity(files.len());
     for (&f, outline) in files.iter().zip(outlines) {
         let (header, count) = outline?;
@@ -802,7 +801,7 @@ mod tests {
 
     fn archetype(name: u32, asset_name: u32) -> ArchetypeDef {
         ArchetypeDef {
-            kind: crate::rage::map::ArchetypeKind::Base,
+            kind: rage_engine_formats::map::ArchetypeKind::Base,
             name,
             lod_dist: 100.0,
             flags: 0,
@@ -924,7 +923,7 @@ mod tests {
     #[test]
     fn each_state_s_resolved_payload_is_a_prototype_of_its_own() {
         use crate::read::assets::Lookups;
-        use crate::read::gtxd::TextureParents;
+        use rage_engine_formats::gtxd::TextureParents;
         const H: u32 = 1;
         const K: u32 = 2;
         const D: u32 = 10;
@@ -938,8 +937,8 @@ mod tests {
             "x\\common\\t.ytd",
             "x\\online\\p.ytd",
         ];
-        let story_set = ArchiveSet::made_up(&paths, &[("ydr", D, 0), ("ydr", E, 2), ("ytd", T, 3)]);
-        let online_set = ArchiveSet::made_up(
+        let story_set = ArchiveSet::synthetic(&paths, &[("ydr", D, 0), ("ydr", E, 2), ("ytd", T, 3)]);
+        let online_set = ArchiveSet::synthetic(
             &paths,
             &[("ydr", D, 1), ("ydr", E, 2), ("ytd", T, 3), ("ytd", P, 4)],
         );

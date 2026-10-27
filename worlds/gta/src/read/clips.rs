@@ -1,5 +1,5 @@
 //! A clip dictionary (`.ycd`) read into a world ([`GtaSource::read_clips`]): one entity per animation, holding the
-//! animation's bone tracks decoded ([`crate::rage::ycd_channels`]) and sampled at every frame ([`GtaAnimation`]),
+//! animation's bone tracks decoded ([`rage_engine_formats::ycd_channels`]) and sampled at every frame ([`GtaAnimation`]),
 //! bound to the skeleton the tracks' bone ids tag; `lower-gta-clips` makes the `core.clip`.
 //!
 //! An animation is stored as sequences, each a span of at most `sequence_frame_limit` frames plus the first frame of
@@ -10,12 +10,12 @@
 use primase_core::{Entity, Name, Source, World};
 
 use crate::components::{GtaAnimation, GtaAnimationTrack, GtaClipUse, GtaSkeleton};
-use crate::rage::ycd::{Animation, ClipDictionary};
-use crate::rage::ycd_channels::Track;
-use crate::read::archive::archive_set::FileRef;
-use crate::read::archive::rpf::EntryKind;
 use crate::read::source::GtaSource;
 use crate::{Result, invalid};
+use rage_engine_formats::archive::archive_set::FileRef;
+use rage_engine_formats::archive::rpf::EntryKind;
+use rage_engine_formats::ycd::{Animation, ClipDictionary};
+use rage_engine_formats::ycd_channels::Track;
 
 /// What reading a clip dictionary did.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
