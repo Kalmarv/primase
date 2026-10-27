@@ -216,8 +216,8 @@ fn studio_presets_are_repaired_and_retextured() -> R {
             assert_eq!(h.kind, 3, "a texture array keeps its kind");
             assert_eq!(&h.mip_sizes[..5], &[64, 16, 16, 16, 0]);
             assert_eq!(
-                (h.chunk_size, h.unknown_00, h.unknown_20[0], h.unknown_20[1]),
-                (112, [0; 8], 0, 4)
+                (h.chunk_size, h.mip_block_offsets, h.unknown_20[0], h.unknown_20[1]),
+                (112, [0; 2], 0, 4)
             );
             let chunk = m.entries.iter().find(|e| e.name == guid_text(&h.chunk)).unwrap();
             assert_eq!(
@@ -303,8 +303,8 @@ fn studio_presets_are_repaired_and_retextured() -> R {
             .unwrap();
         let h = texture::read(&donor_run.payload(res.index().unwrap(), Some(&oodle))?)?;
         assert_eq!(
-            (h.unknown_00, h.unknown_20[0]),
-            (template.unknown_00, template.unknown_20[0])
+            (h.mip_block_offsets, h.unknown_20[0]),
+            (template.mip_block_offsets, template.unknown_20[0])
         );
         assert_eq!(h.unknown_20[1], 4);
 

@@ -9,7 +9,7 @@
 //! - its texture resource: the donor's header with the replacement's format, size and levels, one slice (a texture
 //!   array keeps its kind with one slice: an array index past the end is clamped to the last slice, so every UV tile
 //!   samples it, and the order of levels and slices in the chunk is not in question), first mip 0 (every level in
-//!   the chunk), byte 0x21 the level count (as in every game texture), `unknown_00` and byte 0x20 as the caller
+//!   the chunk), byte 0x21 the level count (as in every game texture), `mip_block_offsets` and byte 0x20 as the caller
 //!   states ([`HeaderUnknowns`]: their meaning is not established), the rest as the donor's; the donor's resource
 //!   metadata;
 //! - a chunk of the levels, largest first, added as Studio adds its own chunks (range, logical offset and h32 0, the

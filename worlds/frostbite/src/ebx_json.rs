@@ -132,9 +132,15 @@ impl Serialize for ValueView<'_> {
             }
             Value::TypeRef(t) => {
                 let mut m = s.serialize_map(Some(1))?;
-                match t.descriptor.and_then(|i| d.types.get(i)) {
-                    Some(ty) => m.serialize_entry("type", &ty.name)?,
-                    None => m.serialize_entry("encoded_type", &t.encoded)?,
+                // a type of the document's reflection table by name; else the GUID the EFIX type list holds at the
+                // reference's slot (most references name types the document does not reflect); else as stored
+                match (
+                    d.type_ref_target(t),
+                    t.fixup_type.and_then(|slot| d.fixup_type_guids.get(slot)),
+                ) {
+                    (Some(i), _) => m.serialize_entry("type", &d.types[i].name)?,
+                    (None, Some(guid)) => m.serialize_entry("type_guid", &hex(guid))?,
+                    (None, None) => m.serialize_entry("encoded_type", &t.encoded)?,
                 }
                 m.end()
             }

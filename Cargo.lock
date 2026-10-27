@@ -589,8 +589,8 @@ dependencies = [
 
 [[package]]
 name = "frostbite-formats"
-version = "0.1.0"
-source = "git+https://github.com/Kalmarv/frostbite-formats?rev=55995371da07a29e1f2a61291712e5aaeaf6ebb0#55995371da07a29e1f2a61291712e5aaeaf6ebb0"
+version = "0.2.0"
+source = "git+https://github.com/Kalmarv/frostbite-formats?rev=9dbc4584a9f0a40a529dccf6c57d9fcc0d70fe80#9dbc4584a9f0a40a529dccf6c57d9fcc0d70fe80"
 dependencies = [
  "half",
  "primase-foundations",

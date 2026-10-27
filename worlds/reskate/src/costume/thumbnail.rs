@@ -7,7 +7,7 @@
 //! - a texture asset: the donor's EBX with a new file GUID, instance GUID, `Name` (the asset's name) and `Resource` id,
 //!   everything else (the crop and authored size are the slot's layout) as the donor's; its resource, the donor's
 //!   header with a new chunk GUID and the new picture's byte size, byte 0x21 the level count (as in every game
-//!   texture), `unknown_00` and byte 0x20 as the caller states ([`Choices::header_unknowns`]), the rest (the format,
+//!   texture), `mip_block_offsets` and byte 0x20 as the caller states ([`Choices::header_unknowns`]), the rest (the format,
 //!   size, one level, the texture group name) as the donor's, the donor's resource metadata; and a chunk of the
 //!   encoded picture, added as [`super::textures`] adds its chunks;
 //! - a CDN document: the donor's with a new file GUID, instance GUID, `Name`, a `Ref` import of the new texture asset,
@@ -89,7 +89,7 @@ pub enum CdnContentHash {
 /// The choices the caller states: what [`set_thumbnail`] writes where a value's meaning is not established.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Choices {
-    /// The new textures' header fields `unknown_00` and byte 0x20 (see [`HeaderUnknowns`]). The donor thumbnails have
+    /// The new textures' header fields `mip_block_offsets` and byte 0x20 (see [`HeaderUnknowns`]). The donor thumbnails have
     /// both zero, so the two choices make the same bytes for them; the choice is still the caller's.
     pub header_unknowns: HeaderUnknowns,
     pub content_hash: CdnContentHash,

@@ -101,10 +101,12 @@ impl Component for FrostbiteTexture {
             "chunk": hex(&h.chunk),
             "chunk_size": h.chunk_size,
             "mip_sizes": &h.mip_sizes[..usize::from(h.mip_count)],
-            "unknown_00": hex(&h.unknown_00),
-            "unknown_10": h.unknown_10,
+            "mip_block_offsets": h.mip_block_offsets,
+            "pool_id": h.pool_id,
             "unknown_20": hex(&h.unknown_20),
-            "unknown_78": hex(&h.unknown_78),
+            "name_hash": h.name_hash,
+            "unknown_7c": h.unknown_7c,
+            "unknown_80": hex(&h.unknown_80),
         })))
     }
 }

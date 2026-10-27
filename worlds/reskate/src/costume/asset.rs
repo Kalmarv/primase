@@ -15,11 +15,11 @@ pub(super) use crate::hash::{identity as derived, resource_id as derived_rid};
 
 pub use frostbite_formats::guid_text;
 
-/// What a new texture's header holds in the two fields whose meaning is not established and which ReSkate does not
-/// read: `unknown_00` (8 bytes) and byte 0x20. The caller states it; there is no default. Context, not proof: among
-/// the textures of `Win32/items.toc` whose first mip is 0 (every level in the chunk, as the costume's), 6654 of 7733
-/// have `unknown_00` zero (elsewhere it looks like a pair of compressed sizes) and 7726 have byte 0x20 zero; the
-/// donor's were written for its own chunk, not the costume's.
+/// What a new texture's header holds in two fields which ReSkate does not read: `mip_block_offsets` (where the blocks
+/// of mips 1 and 2 start in the chunk's stored range: they describe the donor's chunk, not the costume's) and byte
+/// 0x20, whose meaning is not established. The caller states it; there is no default. Context, not proof: among the
+/// textures of `Win32/items.toc` whose first mip is 0 (every level in the chunk, as the costume's), 6654 of 7733 have
+/// `mip_block_offsets` zero and 7726 have byte 0x20 zero.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HeaderUnknowns {
     /// Both zero.
@@ -29,16 +29,16 @@ pub enum HeaderUnknowns {
 }
 
 impl HeaderUnknowns {
-    /// Set `header`'s `unknown_00` and `unknown_20` from this choice and the donor texture's header, and byte 0x21
+    /// Set `header`'s `mip_block_offsets` and `unknown_20` from this choice and the donor texture's header, and byte 0x21
     /// (`unknown_20[1]`) to the level count, as in every game texture.
     pub(super) fn apply(self, header: &mut TextureHeader, donor: &TextureHeader, levels: u8) {
         header.unknown_20 = donor.unknown_20;
-        header.unknown_00 = match self {
+        header.mip_block_offsets = match self {
             Self::Zero => {
                 header.unknown_20[0] = 0;
-                [0; 8]
+                [0; 2]
             }
-            Self::Donor => donor.unknown_00,
+            Self::Donor => donor.mip_block_offsets,
         };
         header.unknown_20[1] = levels;
     }

@@ -74,6 +74,47 @@ fn a_value_json_cannot_hold_is_not_dropped() -> R {
     Ok(())
 }
 
+/// A type reference names a slot of the EFIX type list: the fixture's list holds its three reflected types in order, so
+/// slot 1 is `Child`; a slot whose type the document does not reflect shows the GUID the list holds there; a primitive
+/// type shows as stored.
+#[test]
+fn a_type_reference_shows_the_type_of_its_efix_slot() -> R {
+    let mut doc = ebx::read(REFL)?;
+    assert_eq!(doc.types[1].name, "Child");
+    doc.fixup_type_guids.push([0x77; 16]);
+    doc.fixup_type_signatures.push(7);
+    let by_slot = |slot: usize| ebx::TypeRef {
+        primitive: false,
+        primitive_type: None,
+        fixup_type: Some(slot),
+        encoded: u32::try_from(slot).unwrap() << 2,
+    };
+    let primitive = ebx::TypeRef {
+        primitive: true,
+        primitive_type: Some(ebx::FieldType::Int32),
+        fixup_type: None,
+        encoded: 0x8000_01E0,
+    };
+    let object = doc.instances[0].object.as_mut().unwrap();
+    *object.field_mut("label").unwrap() = ebx::Value::Array(
+        vec![
+            ebx::Value::TypeRef(by_slot(1)),
+            ebx::Value::TypeRef(by_slot(3)),
+            ebx::Value::TypeRef(primitive),
+        ],
+        None,
+    );
+    assert_eq!(
+        ebx_json::to_json(&doc)?["instances"][0]["values"]["label"],
+        json!([
+            { "type": "Child" },
+            { "type_guid": "77".repeat(16) },
+            { "encoded_type": 0x8000_01E0u32 }
+        ])
+    );
+    Ok(())
+}
+
 /// A Frostbite format ordinal has a core layout exactly where the texture reader knows its storage, and the two
 /// agree on a level's size.
 #[test]

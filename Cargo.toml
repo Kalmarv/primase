@@ -98,7 +98,7 @@ primase-shaunwhite = { path = "worlds/shaunwhite" }
 primase-shred = { path = "worlds/shred" }
 anvil-formats = { git = "https://github.com/Kalmarv/anvil-formats", rev = "039ab87775795ac49a1067eaf9d84a2fad0a38da" }
 dxil-reader = { git = "https://github.com/Kalmarv/dx", rev = "ee5dce9e8d52ccdf54864245ecca2cc0ee8a53bf" }
-frostbite-formats = { git = "https://github.com/Kalmarv/frostbite-formats", rev = "55995371da07a29e1f2a61291712e5aaeaf6ebb0" }
+frostbite-formats = { git = "https://github.com/Kalmarv/frostbite-formats", rev = "9dbc4584a9f0a40a529dccf6c57d9fcc0d70fe80" }
 rage-engine-formats = { git = "https://github.com/Kalmarv/rage-engine-formats", rev = "55ddde5ce56b7e552749f3ba84a60f796f5d982a" }
 
 thiserror = { version = "=2.0.21", default-features = false, features = ["std"] }

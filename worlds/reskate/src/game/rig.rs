@@ -119,8 +119,10 @@ fn dof_names(set: &Document, what: &str) -> Result<Vec<String>, String> {
         .iter()
         .enumerate()
         .map(|(i, w)| match w {
+            // the words are raw bytes; the game's field type is a signed 64-bit integer
+            Value::Int(x) => Ok(x.to_le_bytes()),
             Value::UInt(u) => Ok(u.to_le_bytes()),
-            _ => Err(format!("{what}: LayoutData[{i}] is not a u64")),
+            _ => Err(format!("{what}: LayoutData[{i}] is not a 64-bit integer")),
         })
         .collect::<Result<Vec<_>, String>>()?
         .concat();
