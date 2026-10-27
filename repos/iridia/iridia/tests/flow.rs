@@ -46,7 +46,7 @@ fn lifted(entry: &str) -> Vec<(&'static str, Program)> {
     let (_, dxbc, dxil) = FIXTURES.iter().find(|f| f.0 == entry).expect("a fixture");
     vec![
         ("dxbc", iridia_dxbc::lift(dxbc).expect("fxc's program lifts")),
-        ("dxil", primase_dxil::lift(dxil).expect("dxc's program lifts")),
+        ("dxil", iridia_dxil::lift(dxil).expect("dxc's program lifts")),
     ]
 }
 
@@ -348,7 +348,7 @@ fn a_call_is_refused_not_dropped() {
 #[test]
 fn an_atomic_on_thread_group_memory_is_followed() {
     let program =
-        primase_dxil::lift(include_bytes!("fixtures/compute_basic.dxil")).expect("dxc's program lifts");
+        iridia_dxil::lift(include_bytes!("fixtures/compute_basic.dxil")).expect("dxc's program lifts");
     let values = Values::of_program(&program).expect("the value graph");
     let index = program
         .interface
@@ -387,7 +387,7 @@ fn a_texture_picked_from_an_array_by_a_run_time_index_is_a_texel_of_the_array_wi
         ("ps_6_0", &include_bytes!("fixtures/resource_arrays.dxil")[..]),
         ("ps_6_6", &include_bytes!("fixtures/resource_arrays.66.dxil")[..]),
     ] {
-        let program = primase_dxil::lift(bytes).expect("dxc's program lifts");
+        let program = iridia_dxil::lift(bytes).expect("dxc's program lifts");
         let values = Values::of_program(&program).unwrap_or_else(|e| panic!("{name}: {e}"));
         let tex = program
             .interface

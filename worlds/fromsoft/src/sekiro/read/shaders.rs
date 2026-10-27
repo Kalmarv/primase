@@ -243,7 +243,7 @@ fn shader_kind(format: ShaderFormat, code: &[u8]) -> std::result::Result<Option<
             .find(|c| &c.kind == b"SHEX" || &c.kind == b"SHDR")
             .and_then(|c| Some(u32::from_le_bytes(c.data.get(..4)?.try_into().ok()?) >> 16))),
         ShaderFormat::Dxil => Ok(Some(
-            primase_dxil::part(code)
+            dxil_reader::part(code)
                 .map_err(|e| e.to_string())?
                 .program_version
                 >> 16,

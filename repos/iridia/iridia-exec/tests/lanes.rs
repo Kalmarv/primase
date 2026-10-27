@@ -33,7 +33,7 @@ fn shaders() -> Vec<(&'static str, ProgramShader)> {
         ),
         (
             "DXIL",
-            executor(primase_dxil::lift(include_bytes!("fixtures/lanes.dxil")).unwrap()),
+            executor(iridia_dxil::lift(include_bytes!("fixtures/lanes.dxil")).unwrap()),
         ),
     ]
 }

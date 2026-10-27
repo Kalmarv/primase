@@ -32,7 +32,7 @@ use primase_testdata::{Game, install, keys};
 
 /// A program lifted and ready to run, or why not.
 fn executor(bytecode: &[u8]) -> Result<ProgramShader, String> {
-    let program = primase_dxil::lift(bytecode).map_err(|e| e.to_string())?;
+    let program = iridia_dxil::lift(bytecode).map_err(|e| e.to_string())?;
     ProgramShader::new(program).map_err(|e| e.to_string())
 }
 

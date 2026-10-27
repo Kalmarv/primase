@@ -68,7 +68,7 @@ fn every_effect_of_the_install() {
                     continue;
                 }
                 let result = if is_dxil {
-                    primase_dxil::lift(&shader.bytecode).map_err(|e| e.group())
+                    iridia_dxil::lift(&shader.bytecode).map_err(|e| e.group())
                 } else {
                     iridia_dxbc::lift(&shader.bytecode).map_err(|e| e.group())
                 };
@@ -173,7 +173,7 @@ fn the_enhanced_shader_database() {
                 continue;
             }
             tally.entry(g).or_default().0 += 1;
-            match primase_dxil::lift(program.container) {
+            match iridia_dxil::lift(program.container) {
                 Err(e) => {
                     refused
                         .entry(e.group())

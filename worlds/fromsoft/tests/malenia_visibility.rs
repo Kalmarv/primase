@@ -134,7 +134,7 @@ fn malenia_pixelkill_hash_and_alpha_permutation_discard() -> Result<()> {
                 // not the SHEX/SHDR code chunks the DXBC lifter requires (Game::shader_format).
                 let lifted = match Game::EldenRing.shader_format() {
                     iridia_interface::ShaderFormat::Dxbc => iridia_dxbc::lift(&member.bytes)?,
-                    _ => primase_dxil::lift(&member.bytes)?,
+                    _ => iridia_dxil::lift(&member.bytes)?,
                 };
                 let shader = iridia_exec::ProgramShader::new(lifted)?;
                 let mut buffers: Vec<_> = shader

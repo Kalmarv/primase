@@ -33,7 +33,7 @@ fn interfaces(resources: bool) -> Vec<(&'static str, Interface)> {
                 iridia_dxbc::lift(dxbc).unwrap().interface
             },
         ),
-        ("DXIL", primase_dxil::interface(dxil).unwrap()),
+        ("DXIL", iridia_dxil::interface(dxil).unwrap()),
     ]
 }
 

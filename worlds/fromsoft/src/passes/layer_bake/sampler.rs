@@ -1,7 +1,7 @@
 //! The layer bake's named offline sampling policy, over the executor's shared texture
 //! ([`iridia_exec::SampledTexture`]): the base mip, bilinear filtering as Direct3D 11 filters (the texel
 //! coordinate truncated to 8 sub-texel bits, [`Subtexel::D3d11`], as the GPU and WARP do; the arithmetic in f32,
-//! [`primase_image::sampling`]'s mechanism), the addressing along each axis the binding states (wrap where it states
+//! [`primase_foundations::sampling`]'s mechanism), the addressing along each axis the binding states (wrap where it states
 //! none: the caller counts it). Albedo RGB is linearized with the shared sRGB transfer before filtering; alpha and data
 //! textures remain linear. Runtime derivatives are not inferred from the shader resource names. This is not runtime
 //! sampler state.

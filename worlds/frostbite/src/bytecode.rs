@@ -90,7 +90,7 @@ pub fn read(payload: &[u8]) -> Result<Vec<(Shader, FrostbiteBytecode)>> {
         let end = span.offset + span.size;
         let next = spans.get(i + 1).map_or(payload.len(), |n| n.offset);
         let container = &payload[span.offset..end];
-        let interface = primase_dxil::interface(container).map_err(|e| {
+        let interface = iridia_dxil::interface(container).map_err(|e| {
             Error::Unsupported(format!(
                 "{W}: container {i} of {} at {}: {e}",
                 spans.len(),

@@ -3,7 +3,7 @@
 //!
 //! - Every program's table reads (its resources own exactly its constants, its names end in a NUL), and the first
 //!   name hash of every record is the joaat of a name in the table.
-//! - Against each vertex, pixel, hull, domain and compute program's interface (`primase_dxil::interface`): every
+//! - Against each vertex, pixel, hull, domain and compute program's interface (`iridia_dxil::interface`): every
 //!   constant buffer, texture and sampler it declares has a record of the same class at its register and space (a
 //!   texture or sampler arrays of unbounded length excepted), and a constant buffer's record has the size the
 //!   interface declares rounded up to 16 bytes (the root constants' record states none: size 0).
@@ -143,7 +143,7 @@ fn every_programs_table_agrees_with_its_interface() {
                 named += 1;
             }
             // against the interface (the stages that have one)
-            let Ok(interface) = primase_dxil::interface(program.container) else {
+            let Ok(interface) = iridia_dxil::interface(program.container) else {
                 continue;
             };
             for r in &interface.resources {

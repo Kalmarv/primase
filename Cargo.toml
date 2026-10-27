@@ -23,7 +23,8 @@ members = [
     "repos/iridia/iridia-interface",
     "repos/iridia/iridia",
     "repos/iridia/iridia-exec",
-    "toolkit/dxil",
+    "repos/dx/dxil-reader",
+    "repos/iridia/iridia-dxil",
     "repos/iridia/iridia-mojo",
     "toolkit/cache",
     "formats/gltf",
@@ -93,7 +94,8 @@ iridia-d3d9 = { path = "repos/iridia/iridia-d3d9" }
 iridia-interface = { path = "repos/iridia/iridia-interface" }
 iridia = { path = "repos/iridia/iridia" }
 iridia-exec = { path = "repos/iridia/iridia-exec" }
-primase-dxil = { path = "toolkit/dxil" }
+dxil-reader = { path = "repos/dx/dxil-reader" }
+iridia-dxil = { path = "repos/iridia/iridia-dxil" }
 iridia-mojo = { path = "repos/iridia/iridia-mojo" }
 primase-frostbite = { path = "worlds/frostbite" }
 primase-gltf = { path = "formats/gltf" }

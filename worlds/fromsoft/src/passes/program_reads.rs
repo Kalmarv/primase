@@ -89,7 +89,7 @@ pub fn lift(format: ShaderFormat, bytes: &[u8]) -> Result<Program, String> {
 pub fn lift_with(format: ShaderFormat, bytes: &[u8], bound: &BoundSizes) -> Result<Program, String> {
     match format {
         ShaderFormat::Dxbc => iridia_dxbc::lift_with(bytes, bound).map_err(|e| e.to_string()),
-        ShaderFormat::Dxil => primase_dxil::lift_with(bytes, bound).map_err(|e| e.to_string()),
+        ShaderFormat::Dxil => iridia_dxil::lift_with(bytes, bound).map_err(|e| e.to_string()),
         other => Err(format!("a FromSoftware program of format {other:?}")),
     }
 }

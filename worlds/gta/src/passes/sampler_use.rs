@@ -1,4 +1,4 @@
-//! Which sampler each texture sample of a program reads through, from the program lifted by [`primase_dxil::lift`].
+//! Which sampler each texture sample of a program reads through, from the program lifted by [`iridia_dxil::lift`].
 //!
 //! The programs sample through one bindless heap of samplers (`g_Bindless_SamplerState`, an unbounded array of
 //! samplers at register 0 of space 2) indexed at run time by a word of a constant buffer: a sample is
@@ -232,7 +232,7 @@ fn variant(function: &Function, at: Handle<Expression>) -> String {
 
 /// The samples of a DXIL container's program, or why it cannot be lifted.
 pub fn uses(container: &[u8]) -> Result<SamplerUses, String> {
-    let program = primase_dxil::lift(container).map_err(|e| e.to_string())?;
+    let program = iridia_dxil::lift(container).map_err(|e| e.to_string())?;
     uses_program(&program)
 }
 

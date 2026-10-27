@@ -1,5 +1,5 @@
 //! What a G-buffer pixel program's output stores say about the lanes the G-buffer's roles name, read from the program
-//! lifted by [`primase_dxil::lift`]: for each colour output the interface declares (`SV_Target<n>`), the stores into
+//! lifted by [`iridia_dxil::lift`]: for each colour output the interface declares (`SV_Target<n>`), the stores into
 //! its lanes and how each stored value is made ([`OutputStores`], shared with every engine's G-buffer reading). Nothing
 //! here is read from a program's name or a local's name.
 //!
@@ -52,7 +52,7 @@ pub struct GBufferWrites {
 /// The writes of a DXIL container's pixel program, or why they cannot be read: an error where no output's stores are
 /// found (the lifted program is not shaped as this reading expects).
 pub fn writes(container: &[u8]) -> Result<GBufferWrites, String> {
-    let program = primase_dxil::lift(container).map_err(|e| e.to_string())?;
+    let program = iridia_dxil::lift(container).map_err(|e| e.to_string())?;
     writes_program(&program)
 }
 
@@ -90,6 +90,6 @@ pub fn constant_rows(
     container: &[u8],
     output: &iridia_interface::Label,
 ) -> Result<BTreeMap<u32, BTreeSet<u32>>, String> {
-    let program = primase_dxil::lift(container).map_err(|e| e.to_string())?;
+    let program = iridia_dxil::lift(container).map_err(|e| e.to_string())?;
     OutputStores::of(&program)?.constant_rows(output)
 }

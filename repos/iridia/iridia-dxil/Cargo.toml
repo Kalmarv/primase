@@ -1,0 +1,25 @@
+[package]
+name = "iridia-dxil"
+description = "Lift Direct3D Shader Model 6 programs (DXIL) to naga through iridia"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+primase-foundations.workspace = true
+dxcontainer.workspace = true
+iridia.workspace = true
+dxil-reader.workspace = true
+naga.workspace = true
+half.workspace = true
+
+[dev-dependencies]
+primase-testdata.workspace = true
+serde_json.workspace = true
+
+iridia-exec.workspace = true
+[lints]
+workspace = true

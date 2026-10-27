@@ -29,7 +29,7 @@ fn shaders() -> Vec<(&'static str, Box<dyn PixelShader>)> {
         (
             "DXIL",
             Box::new(executor(
-                primase_dxil::lift(include_bytes!("fixtures/evaluate.dxil")).unwrap(),
+                iridia_dxil::lift(include_bytes!("fixtures/evaluate.dxil")).unwrap(),
             )),
         ),
     ]

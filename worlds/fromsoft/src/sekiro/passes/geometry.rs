@@ -226,7 +226,7 @@ pub fn program_frame(bundle: &ShaderBundle) -> Result<[u32; 2], String> {
             "{name}: a SpeedTree program read as DXIL, this one is not"
         ));
     }
-    let interface = primase_dxil::interface(&program.code).map_err(|e| format!("{name}: {e}"))?;
+    let interface = iridia_dxil::interface(&program.code).map_err(|e| format!("{name}: {e}"))?;
     let mut texcoords: Vec<u32> = interface
         .inputs
         .iter()

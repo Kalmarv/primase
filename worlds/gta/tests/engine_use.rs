@@ -43,7 +43,7 @@ const NAMES: [&str; 14] = [
 
 /// The lanes of constant-buffer rows a program reads: (space, register, row, lane); lane 4 for a row used whole.
 fn rows_read(container: &[u8]) -> Result<BTreeSet<(u32, u32, u32, u32)>, String> {
-    let program = primase_dxil::lift(container).map_err(|e| e.to_string())?;
+    let program = iridia_dxil::lift(container).map_err(|e| e.to_string())?;
     let function = &program.module.entry_points.first().ok_or("no entry")?.function;
     let mut loads: BTreeMap<usize, (u32, u32, u32)> = BTreeMap::new();
     for (h, e) in function.expressions.iter() {

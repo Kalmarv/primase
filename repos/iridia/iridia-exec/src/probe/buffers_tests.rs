@@ -59,7 +59,7 @@ fn compiled_programs_read_answered_buffers_and_images_together() {
         ),
         (
             "dxc",
-            primase_dxil::lift(include_bytes!("../../tests/fixtures/answered_buffers.dxil")).unwrap(),
+            iridia_dxil::lift(include_bytes!("../../tests/fixtures/answered_buffers.dxil")).unwrap(),
         ),
     ];
     for (compiler, program) in programs {

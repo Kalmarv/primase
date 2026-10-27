@@ -3,7 +3,7 @@ use serde::Serialize;
 
 /// How a shader program's bytes are encoded, for every game and target (the way [`crate::TexFormat`] is for texture
 /// bytes). Only the encoding lives here; reading one is the job of the crate that knows it (`iridia-dxbc`,
-/// `primase-dxil`), and the program's meaning is lifted from it on demand.
+/// `iridia-dxil`), and the program's meaning is lifted from it on demand.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]

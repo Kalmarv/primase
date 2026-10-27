@@ -3,7 +3,7 @@
 This crate holds what the lifters share: the program representation (`Program`: a naga module with the interface in
 primase's vocabulary, `validate`, `text`, `emit`), the typed `build::Builder` they lift with, the D3D mapping tables
 (`d3d`), the refusal type and the version gate (`Refusal`, `gate`). Running a program is `iridia-exec`, which
-depends on this crate; the lifters (`iridia-dxbc`, `primase-dxil`, `iridia-mojo`) do not. The interface
+depends on this crate; the lifters (`iridia-dxbc`, `iridia-dxil`, `iridia-mojo`) do not. The interface
 vocabulary, the program representation, the versions and the support ledger follow.
 
 ## The interface vocabulary
@@ -39,7 +39,7 @@ What the readers keep and drop, so nobody looks for it:
 - DXBC's interpolation is declared by the program, not the signature: `iridia_dxbc::lift` fills `interp` from the
   `dcl_input_ps` declarations covering an input's lanes; the standalone
   `reflection` and `signatures` leave it `None`. An input the program never declares has none. DXIL states it in the
-  entry point's signature metadata and `primase_dxil::interface` fills it.
+  entry point's signature metadata and `iridia_dxil::interface` fills it.
 - A UAV's `access` is `ReadWrite`: neither reflection says more.
 - A structured buffer is its stride; the element layout of D3D's "resource bind info" is read past, not kept.
 - A DXIL `half` and a DXBC-side min-precision type are read as 32-bit; DXIL min-precision signature annotations are not
@@ -78,7 +78,7 @@ got wrong itself, such as control flow left open.
 
 `PROGRAM_VERSION` and each lifter's `LIFTER_VERSION` are what a cache keyed by a bytecode's hash trusts to know that a
 program it holds is stale. They are gated: a lifter's tests (`toolkit/dxbc/tests/versions.rs`,
-`toolkit/dxil/tests/versions.rs`, the last test of `repos/iridia/iridia-mojo/tests/lift.rs`) lift its committed fixtures and
+`repos/iridia/iridia-dxil/tests/versions.rs`, the last test of `repos/iridia/iridia-mojo/tests/lift.rs`) lift its committed fixtures and
 compare a table of their outcomes (the program's text form hashed, or the refusal) under both versions with the
 committed `tests/lifted.hashes`. Output that changed under unchanged versions fails and says which to bump; a bump
 fails until the table is replaced by the current one, which the failing test writes to the scratch root
@@ -87,7 +87,7 @@ program a lifter makes carries `source_hash`, the SHA-256 of the bytes it was gi
 
 ## Support ledger
 
-What the lifters make of every program of every corpus the project holds, counted by the census tests (`toolkit/dxbc/tests/lift_corpus.rs`, `toolkit/dxil/tests/lift_corpus.rs`, `worlds/gta/tests/fxc_census.rs`, `worlds/stuntboost/tests/effects.rs`) in one release run on main `11fe408a` plus the commit that switches naga to the fork (the STUNTBOOST row was not re-run: it is as first measured, and the fork changes nothing it uses). The corpora are from the oracle tree (`oracles.corpus.<game>/shaders`; the Elden Ring folder holds 50,283 containers today, the row it replaces counted 44,450) and the STUNTBOOST install's `Content/Effects`; the numbers are the tests' own output. Lifted is `lift` returning a program; validated is `Program::validate`; written is `emit::wgsl` (or `wgsl_functions` for a stage with no entry point) succeeding. A lifted program is executable in one of two forms: as an entry point (`iridia_exec::Executable::new`: pixel, vertex, compute and mesh programs) or as its functions (`iridia_exec::Executable::functions`, which compiles each with `iridia_exec::Executable::function`: hull, domain and geometry programs, vertex programs that feed a tessellator, and the ray tracing pipeline's programs, which `iridia_exec::Pipeline` runs). No lifted program of any corpus is refused by the executor.
+What the lifters make of every program of every corpus the project holds, counted by the census tests (`toolkit/dxbc/tests/lift_corpus.rs`, `repos/iridia/iridia-dxil/tests/lift_corpus.rs`, `worlds/gta/tests/fxc_census.rs`, `worlds/stuntboost/tests/effects.rs`) in one release run on main `11fe408a` plus the commit that switches naga to the fork (the STUNTBOOST row was not re-run: it is as first measured, and the fork changes nothing it uses). The corpora are from the oracle tree (`oracles.corpus.<game>/shaders`; the Elden Ring folder holds 50,283 containers today, the row it replaces counted 44,450) and the STUNTBOOST install's `Content/Effects`; the numbers are the tests' own output. Lifted is `lift` returning a program; validated is `Program::validate`; written is `emit::wgsl` (or `wgsl_functions` for a stage with no entry point) succeeding. A lifted program is executable in one of two forms: as an entry point (`iridia_exec::Executable::new`: pixel, vertex, compute and mesh programs) or as its functions (`iridia_exec::Executable::functions`, which compiles each with `iridia_exec::Executable::function`: hull, domain and geometry programs, vertex programs that feed a tessellator, and the ray tracing pipeline's programs, which `iridia_exec::Pipeline` runs). No lifted program of any corpus is refused by the executor.
 
 | corpus (test) | programs | lifted | validated | written as WGSL | refused by the lift | executable as an entry point | executable as functions |
 |---|---:|---:|---:|---:|---:|---:|---:|

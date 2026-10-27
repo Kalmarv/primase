@@ -22,7 +22,7 @@ const SKINNED_BIT_18: &[u8] = include_bytes!("fixtures/tables_vs.skinned_bit18.d
 const SKINNED_SECOND_BLOCK: &[u8] = include_bytes!("fixtures/tables_vs.skinned_second_block.dxil");
 
 fn shader(bytes: &[u8]) -> Shader {
-    let program = primase_dxil::lift(bytes).expect("the fixture lifts");
+    let program = iridia_dxil::lift(bytes).expect("the fixture lifts");
     Shader {
         format: ShaderFormat::Dxil,
         bytecode: bytes.to_vec(),

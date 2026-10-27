@@ -8,12 +8,12 @@ use naga::{Binding, Interpolation, TypeInner};
 
 /// dxc's vertex program: SV_Position, TEXCOORD0, COLOR0 and one clip distance.
 fn vertex() -> Program {
-    primase_dxil::lift(include_bytes!("fixtures/vertex.dxil")).expect("dxc's program lifts")
+    iridia_dxil::lift(include_bytes!("fixtures/vertex.dxil")).expect("dxc's program lifts")
 }
 
 /// dxc's pixel program reading TEXCOORD0 and COLOR0.
 fn pixel() -> Program {
-    primase_dxil::lift(include_bytes!("fixtures/flow_value.dxil")).expect("dxc's program lifts")
+    iridia_dxil::lift(include_bytes!("fixtures/flow_value.dxil")).expect("dxc's program lifts")
 }
 
 fn parsed(text: &str) -> naga::Module {
@@ -281,7 +281,7 @@ fn resources_are_bound_where_the_pipeline_says() {
 #[test]
 fn a_sampler_heap_is_one_sampler() {
     // dxc's compute program samples with a sampler from the sampler heap at an index from a constant buffer
-    let program = primase_dxil::lift(include_bytes!("fixtures/heap.dxil")).expect("dxc's program lifts");
+    let program = iridia_dxil::lift(include_bytes!("fixtures/heap.dxil")).expect("dxc's program lifts");
     let as_is = emit::wgsl(&program).expect("written");
     assert!(as_is.contains("binding_array<sampler>"), "{as_is}");
     let written = wgsl_for(

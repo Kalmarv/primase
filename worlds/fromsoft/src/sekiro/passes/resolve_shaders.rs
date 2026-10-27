@@ -387,7 +387,7 @@ fn run(
                             iridia_dxbc::reflection(&code).map_err(|e| format!("{vertex_name}: {e}"))?
                         }
                         _ => {
-                            primase_dxil::lift(&code)
+                            iridia_dxil::lift(&code)
                                 .map_err(|e| format!("{vertex_name}: {e}"))?
                                 .interface
                         }

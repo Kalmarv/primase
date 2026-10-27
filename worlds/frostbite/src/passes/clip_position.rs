@@ -238,7 +238,7 @@ pub fn shader_clip_rows(shader: &Shader) -> Result<(ResourceId, ClipRows), Strin
     }
     let bound = pass_buffer(&shader.interface).ok_or("the program has no constant buffer at register 4")?;
     let program =
-        primase_dxil::lift(&shader.bytecode).map_err(|e| format!("the program does not lift: {e}"))?;
+        iridia_dxil::lift(&shader.bytecode).map_err(|e| format!("the program does not lift: {e}"))?;
     // the lifted program's own resource for the same binding
     let buffer =
         pass_buffer(&program.interface).ok_or("the lifted program has no constant buffer at register 4")?;

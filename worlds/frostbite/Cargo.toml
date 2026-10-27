@@ -13,7 +13,7 @@ iridia-interface.workspace = true
 primase-foundations = { workspace = true, features = ["compress"] }
 primase-core.workspace = true
 half.workspace = true
-primase-dxil.workspace = true
+iridia-dxil.workspace = true
 iridia.workspace = true
 iridia-exec.workspace = true
 serde.workspace = true

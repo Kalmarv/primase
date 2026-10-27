@@ -1125,7 +1125,7 @@ fn an_elden_ring_palette_is_bound_larger_than_declared_and_sekiros_states_none()
     let resolve =
         |shader: Shader| primase_fromsoft::layer_bake::resolve::resolve_vertex(&shader, entity).unwrap();
     let dxil = {
-        let program = primase_dxil::lift(SKIN_DXIL_PROGRAM).unwrap();
+        let program = iridia_dxil::lift(SKIN_DXIL_PROGRAM).unwrap();
         Shader {
             format: ShaderFormat::Dxil,
             bytecode: SKIN_DXIL_PROGRAM.to_vec(),
@@ -1538,7 +1538,7 @@ fn alpha_programs(entry: &str) -> Vec<(&'static str, ProgramShader)> {
         ("dxbc", executor(dxbc)),
         (
             "dxil",
-            ProgramShader::new(primase_dxil::lift(dxil).unwrap()).unwrap(),
+            ProgramShader::new(iridia_dxil::lift(dxil).unwrap()).unwrap(),
         ),
     ]
 }

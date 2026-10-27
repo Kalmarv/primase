@@ -18,7 +18,7 @@ fn programs() -> [(&'static str, Program); 2] {
         ),
         (
             "dxc",
-            primase_dxil::lift(include_bytes!("fixtures/probe_vs.dxil")).expect("dxc's program lifts"),
+            iridia_dxil::lift(include_bytes!("fixtures/probe_vs.dxil")).expect("dxc's program lifts"),
         ),
     ]
 }

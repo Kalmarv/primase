@@ -33,7 +33,7 @@ use primase_testdata::{Game, install, keys};
 
 /// A program lifted and ready to run, or why not.
 fn executor(bytecode: &[u8]) -> Result<ProgramShader, String> {
-    let program = primase_dxil::lift(bytecode).map_err(|e| e.to_string())?;
+    let program = iridia_dxil::lift(bytecode).map_err(|e| e.to_string())?;
     ProgramShader::new(program).map_err(|e| e.to_string())
 }
 
@@ -158,7 +158,7 @@ fn the_lighting_passes_read_w_as_the_normals_sub_step_bits() {
                 continue;
             }
             let sh = world.get::<Shader>(entity).unwrap();
-            let Ok(text) = primase_dxil::lift(&sh.bytecode)
+            let Ok(text) = iridia_dxil::lift(&sh.bytecode)
                 .map_err(|e| e.to_string())
                 .and_then(|p| p.text().map_err(|e| e.to_string()))
             else {

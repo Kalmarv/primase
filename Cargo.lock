@@ -460,6 +460,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dxil-reader"
+version = "0.1.0"
+dependencies = [
+ "dxcontainer",
+ "primase-foundations",
+]
+
+[[package]]
 name = "either"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -707,9 +715,9 @@ name = "iridia"
 version = "0.1.0"
 dependencies = [
  "iridia-dxbc",
+ "iridia-dxil",
  "iridia-interface",
  "naga",
- "primase-dxil",
  "sha2",
  "thiserror",
 ]
@@ -740,15 +748,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "iridia-dxil"
+version = "0.1.0"
+dependencies = [
+ "dxcontainer",
+ "dxil-reader",
+ "half",
+ "iridia",
+ "iridia-exec",
+ "naga",
+ "primase-foundations",
+ "primase-testdata",
+ "serde_json",
+]
+
+[[package]]
 name = "iridia-exec"
 version = "0.1.0"
 dependencies = [
  "half",
  "iridia",
  "iridia-dxbc",
+ "iridia-dxil",
  "iridia-interface",
  "naga",
- "primase-dxil",
  "primase-foundations",
  "thiserror",
 ]
@@ -1163,20 +1186,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "primase-dxil"
-version = "0.1.0"
-dependencies = [
- "dxcontainer",
- "half",
- "iridia",
- "iridia-exec",
- "naga",
- "primase-foundations",
- "primase-testdata",
- "serde_json",
-]
-
-[[package]]
 name = "primase-exactsum"
 version = "0.1.0"
 
@@ -1216,10 +1225,12 @@ dependencies = [
  "aes",
  "criterion",
  "dxcontainer",
+ "dxil-reader",
  "encoding_rs",
  "half",
  "iridia",
  "iridia-dxbc",
+ "iridia-dxil",
  "iridia-exec",
  "iridia-interface",
  "num-bigint",
@@ -1227,7 +1238,6 @@ dependencies = [
  "primase-cache",
  "primase-core",
  "primase-dds",
- "primase-dxil",
  "primase-foundations",
  "primase-havok",
  "primase-image",
@@ -1247,10 +1257,10 @@ version = "0.1.0"
 dependencies = [
  "half",
  "iridia",
+ "iridia-dxil",
  "iridia-exec",
  "iridia-interface",
  "primase-core",
- "primase-dxil",
  "primase-foundations",
  "primase-testdata",
  "primase-texcodec",
@@ -1300,11 +1310,11 @@ dependencies = [
  "indexmap",
  "iridia",
  "iridia-dxbc",
+ "iridia-dxil",
  "iridia-exec",
  "iridia-interface",
  "naga",
  "primase-core",
- "primase-dxil",
  "primase-foundations",
  "primase-image",
  "primase-meshops",

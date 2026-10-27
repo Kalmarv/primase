@@ -13,7 +13,7 @@ use primase_gta::read::shaders::add_shader_database;
 fn fixture(name: &str) -> Vec<u8> {
     std::fs::read(
         Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../toolkit/dxil/tests/fixtures")
+            .join("tests/fixtures")
             .join(name),
     )
     .unwrap()

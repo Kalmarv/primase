@@ -11,7 +11,7 @@ publish.workspace = true
 iridia-interface.workspace = true
 primase-foundations = { workspace = true, features = ["compress"] }
 primase-core.workspace = true
-primase-dxil.workspace = true
+iridia-dxil.workspace = true
 primase-image.workspace = true
 primase-meshops.workspace = true
 iridia.workspace = true

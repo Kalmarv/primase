@@ -108,7 +108,7 @@ impl Prepared<'_> {
             .u32("bake-version", BAKE_VERSION)
             .f32("sample-time", *sample_time)
             .u32("dxbc-lifter", iridia_dxbc::LIFTER_VERSION)
-            .u32("dxil-lifter", primase_dxil::LIFTER_VERSION)
+            .u32("dxil-lifter", iridia_dxil::LIFTER_VERSION)
             .u32("program-version", iridia::PROGRAM_VERSION);
         for program in [pixel, vertex] {
             k = json(k, "program-format", &program.format)?.bytes("bytecode", &program.bytecode);

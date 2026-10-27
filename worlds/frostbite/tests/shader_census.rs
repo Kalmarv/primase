@@ -73,7 +73,7 @@ fn every_compiled_program_of_the_install() {
                     ) {
                         continue;
                     }
-                    match primase_dxil::lift(&shader.bytecode) {
+                    match iridia_dxil::lift(&shader.bytecode) {
                         Err(err) => *refused.entry(err.group()).or_default() += 1,
                         Ok(program) => {
                             lifted += 1;

@@ -133,7 +133,7 @@ pub fn constant_reads_of(bytecode: &[u8]) -> Result<WordsRead, String> {
 /// A program's value graph and the constant words it reads ([`ProgramGraph`]), its DXIL container lifted again, or why
 /// it cannot be lifted or followed.
 fn graph_of(bytecode: &[u8]) -> Result<ProgramGraph, String> {
-    primase_dxil::lift(bytecode).map_err(|e| e.to_string())?.graph()
+    iridia_dxil::lift(bytecode).map_err(|e| e.to_string())?.graph()
 }
 
 /// One lift per program for all the resolver's queries, including inspection. Individual query failures do not
@@ -145,7 +145,7 @@ struct ProgramAnalysis {
     writes: Result<GBufferWrites, String>,
 }
 fn analyse(program: &Shader, name: &str) -> ProgramAnalysis {
-    match primase_dxil::lift(&program.bytecode) {
+    match iridia_dxil::lift(&program.bytecode) {
         Ok(lifted) => ProgramAnalysis {
             facts: lifted.facts(name),
             graph: lifted.graph(),
@@ -1464,11 +1464,11 @@ mod tests {
     fn the_dxil_analysis_keeps_fixture_facts_and_failure_reasons() {
         // No proprietary GTA bytecode is committed; use the existing owned DXIL draw fixture through the actual
         // GTA shared analysis path, not a mocked instruction count.
-        let bytes = include_bytes!("../../../../toolkit/dxil/tests/fixtures/draw_texture.dxil");
+        let bytes = include_bytes!("../../tests/fixtures/draw_texture.dxil");
         let shader = Shader {
             format: iridia_interface::ShaderFormat::Dxil,
             bytecode: bytes.to_vec(),
-            interface: primase_dxil::interface(bytes).unwrap(),
+            interface: iridia_dxil::interface(bytes).unwrap(),
         };
         let analysed = analyse(&shader, "owned draw fixture");
         assert!(analysed.graph.is_ok());

@@ -116,7 +116,7 @@ pub fn add_shader_effects(w: &mut World, db: &Sgd2<'_>, only: Option<&BTreeSet<u
                     | ProgramStage::Compute
                     | ProgramStage::Domain
                     | ProgramStage::Hull,
-                ) => match primase_dxil::interface(program.container) {
+                ) => match iridia_dxil::interface(program.container) {
                     Ok(interface) => {
                         let e = w.spawn();
                         w.insert(e, Name(program.name.to_owned()));

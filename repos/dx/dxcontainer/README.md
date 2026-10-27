@@ -10,6 +10,7 @@ a kind twice, a size other than the container's and a version other than 1. The 
 authenticity check. `checksum(bytes)` computes it (MD5's block function over the bytes from 20 on, padded as the compiler
 pads), for a caller that wants to know it.
 
-`iridia-dxbc` (programs of Shader Model 4 and 5) and `primase-dxil` (Shader Model 6) read their containers with it, and
-map its error into their own refusal at the container's byte; callers that read a container's parts themselves use it
-directly. `tests/container.rs` builds containers by hand for each refusal and reads the lifters' committed fixtures.
+`dxbc-reader` (programs of Shader Model 4 and 5) and `dxil-reader` (Shader Model 6) read their containers with it, and
+map its error into their own at the container's byte; callers that read a container's parts themselves use it
+directly. `tests/container.rs` builds containers by hand for each refusal and reads the committed fixtures of
+`iridia-dxbc` and `dxil-reader`.

@@ -30,7 +30,7 @@ type Reads = (
 );
 
 fn reads(container: &[u8]) -> Result<Reads, String> {
-    let program = primase_dxil::lift(container).map_err(|e| e.to_string())?;
+    let program = iridia_dxil::lift(container).map_err(|e| e.to_string())?;
     let text = iridia::emit::wgsl(&program).map_err(|e| format!("{e:?}"))?;
     // buffer variable name -> (space, register)
     let mut buffers: BTreeMap<String, (u32, u32)> = BTreeMap::new();

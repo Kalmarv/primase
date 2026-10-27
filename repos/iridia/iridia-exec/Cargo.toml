@@ -19,7 +19,7 @@ half.workspace = true
 [dev-dependencies]
 # The implementations, to run one fixture through each bytecode (a dev-dependency cycle cargo allows).
 iridia-dxbc.workspace = true
-primase-dxil.workspace = true
+iridia-dxil.workspace = true
 
 [lints]
 workspace = true

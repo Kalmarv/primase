@@ -41,12 +41,12 @@ fn has_discard(bytecode: &[u8]) -> bool {
             _ => false,
         })
     }
-    primase_dxil::lift(bytecode).is_ok_and(|p| p.module.entry_points.iter().any(|e| block(&e.function.body)))
+    iridia_dxil::lift(bytecode).is_ok_and(|p| p.module.entry_points.iter().any(|e| block(&e.function.body)))
 }
 
 /// A program lifted and ready to run, or why not.
 fn executor(bytecode: &[u8]) -> Result<ProgramShader, String> {
-    let program = primase_dxil::lift(bytecode).map_err(|e| e.to_string())?;
+    let program = iridia_dxil::lift(bytecode).map_err(|e| e.to_string())?;
     ProgramShader::new(program).map_err(|e| e.to_string())
 }
 
@@ -290,7 +290,7 @@ fn the_deferred_programs_write_one_g_buffer() {
         // the lifted program's own text, for the G-buffer pass's five targets: target 1's xyz are each `... + 0.5`
         // (a biased value), and target 3's z is the constant 0 or a computed value
         if group == FIVE {
-            let text = primase_dxil::lift(&sh.bytecode)
+            let text = iridia_dxil::lift(&sh.bytecode)
                 .map_err(|e| e.to_string())
                 .and_then(|p| p.text().map_err(|e| e.to_string()));
             match text {

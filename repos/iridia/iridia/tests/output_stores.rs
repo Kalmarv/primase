@@ -7,7 +7,7 @@ use iridia::output_stores::OutputStores;
 
 #[test]
 fn a_pixel_programs_output_stores_and_their_makes() {
-    let program = primase_dxil::lift(include_bytes!("fixtures/output_stores.dxil")).unwrap();
+    let program = iridia_dxil::lift(include_bytes!("fixtures/output_stores.dxil")).unwrap();
     let stores = OutputStores::of(&program).unwrap();
     let every =
         |target: u32, lane: u32, test: &dyn Fn(&OutputStores<'_>, naga::Handle<naga::Expression>) -> bool| {

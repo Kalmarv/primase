@@ -12,8 +12,9 @@ iridia-interface.workspace = true
 primase-cache.workspace = true
 dxcontainer.workspace = true
 primase-foundations = { workspace = true, features = ["compress"] }
+dxil-reader.workspace = true
 iridia-dxbc.workspace = true
-primase-dxil.workspace = true
+iridia-dxil.workspace = true
 iridia.workspace = true
 iridia-exec.workspace = true
 primase-havok.workspace = true

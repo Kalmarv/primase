@@ -152,7 +152,7 @@ fn how_the_programs_use_the_remaining_engine_constants() {
                     continue;
                 };
                 let bytes = &world.get::<Shader>(*entity).unwrap().bytecode;
-                let Ok(lifted) = primase_dxil::lift(bytes) else {
+                let Ok(lifted) = iridia_dxil::lift(bytes) else {
                     continue;
                 };
                 let Ok(text) = iridia::emit::wgsl(&lifted) else {

@@ -17,7 +17,7 @@ const WORLD_USES_CAMERA: &[u8] = include_bytes!("fixtures/camera_relative_vs.wor
 const OTHER_LAST_ROW: &[u8] = include_bytes!("fixtures/camera_relative_vs.other_last_row.dxil");
 
 fn shader(bytes: &[u8]) -> Shader {
-    let program = primase_dxil::lift(bytes).expect("the fixture lifts");
+    let program = iridia_dxil::lift(bytes).expect("the fixture lifts");
     Shader {
         format: ShaderFormat::Dxil,
         bytecode: bytes.to_vec(),

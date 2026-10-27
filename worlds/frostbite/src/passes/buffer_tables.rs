@@ -274,7 +274,7 @@ pub fn probe_tables_with(
         return Err("the program is not DXIL".into());
     }
     let program =
-        primase_dxil::lift(&shader.bytecode).map_err(|e| format!("the program does not lift: {e}"))?;
+        iridia_dxil::lift(&shader.bytecode).map_err(|e| format!("the program does not lift: {e}"))?;
     let probe = VertexProbe::new(program)?;
     let program = probe.program();
     let iface = &program.interface;

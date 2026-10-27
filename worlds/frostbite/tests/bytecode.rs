@@ -8,7 +8,7 @@ use iridia_interface::ShaderFormat;
 use primase_frostbite::bytecode::{self, Span};
 use primase_frostbite::listing::{TYPE_NAMES, type_id};
 
-const BLEND: &[u8] = include_bytes!("../../../toolkit/dxil/tests/fixtures/blend.dxil");
+const BLEND: &[u8] = include_bytes!("fixtures/blend.dxil");
 
 /// A payload: a `header` of 0x40 bytes with `tag` at 0x20, then each container with the `gap` after it.
 fn payload(tag: &[u8; 4], containers: &[(&[u8], &[u8])]) -> Vec<u8> {

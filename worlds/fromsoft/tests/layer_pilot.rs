@@ -12,7 +12,7 @@
 //! `warp.json` lists under `vertex.not_streamed`: the clip distances).
 //!
 //! The bake filters as Direct3D 11 filters, the texel coordinate truncated to 8 sub-texel bits
-//! ([`primase_image::sampling::Subtexel::D3d11`]), as WARP and the GPU do. Our executor's and WARP's outputs each go
+//! ([`primase_foundations::sampling::Subtexel::D3d11`]), as WARP and the GPU do. Our executor's and WARP's outputs each go
 //! through the bake's own rules ([`PipelineState::bake`]): the albedo and normal bytes must agree within one level, the second output's x and the emission within one level of 1/255 or a
 //! thousandth of the value, the albedo alpha within one level, and the vertex outputs within four units in the last
 //! place. Float differences are reported per target. A vertex program's system-value outputs (the position, the clip

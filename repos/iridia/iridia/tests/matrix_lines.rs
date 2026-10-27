@@ -44,7 +44,7 @@ fn dxbc(bytes: &[u8]) -> Program {
 }
 
 fn dxil(bytes: &[u8]) -> Program {
-    primase_dxil::lift(bytes).expect("dxc's program lifts")
+    iridia_dxil::lift(bytes).expect("dxc's program lifts")
 }
 
 const SINGLE_UV_VS: &[u8] = include_bytes!("fixtures/single_uv_vs.dxbc");
