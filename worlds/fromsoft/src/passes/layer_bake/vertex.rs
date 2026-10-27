@@ -121,7 +121,7 @@ impl VertexStage {
         let lifted = super::binding::program_executor_bound(
             vertex.format,
             &vertex.bytecode,
-            &iridia::BoundSizes::of(stage),
+            &iridia::BoundSizes::of(&stage.constant_buffers),
         )?;
         let demand = iridia::flow::VertexDemand::of_programs(lifted.program(), pixel)
             .map_err(|e| invalid("vertex demand", 0, e))?;

@@ -288,7 +288,7 @@ pub fn lower_light(l: &SkateLight) -> Result<(Light, Transform), String> {
 
 /// sRGB-encoded byte -> linear (IEC 61966-2-1 piecewise curve), in f64, rounded once to f32.
 fn srgb_to_linear(c: u8) -> f32 {
-    primase_image::srgb8_to_linear(c) as f32
+    primase_foundations::color::srgb8_to_linear(c) as f32
 }
 
 /// One material, with skate-scene v1's defaults: alpha `mask` for cutout/leaves, `blend` for

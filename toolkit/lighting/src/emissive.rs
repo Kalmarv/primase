@@ -71,7 +71,7 @@ use primase_core::{
     ColorSpace, Component, Entity, Instance, Light, LightKind, Mesh, Name, Semantic, Stream, Texture,
     Topology, Transform, World,
 };
-use primase_image::sampling::{Address, Levels, Transfer};
+use primase_foundations::{sampling::Address, sampling::Levels, sampling::Transfer};
 use primase_texcodec::{Decoder, TexDecoder};
 
 /// Rec. 709 luminance weights.

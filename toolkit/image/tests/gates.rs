@@ -1,7 +1,6 @@
 use primase_core::gate::{GateReport, Tolerance};
-use primase_image::{
-    Image, Samples, half, linear_to_srgb, mip_chain, pick_level, read_png, srgb_to_linear, write_png,
-};
+use primase_foundations::{color::linear_to_srgb, color::srgb_to_linear};
+use primase_image::{Image, Samples, half, mip_chain, pick_level, read_png, write_png};
 #[test]
 fn png_independent_fixtures() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");

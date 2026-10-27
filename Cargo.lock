@@ -709,7 +709,6 @@ dependencies = [
  "iridia-dxbc",
  "iridia-interface",
  "naga",
- "primase-core",
  "primase-dxil",
  "sha2",
  "thiserror",
@@ -749,10 +748,8 @@ dependencies = [
  "iridia-dxbc",
  "iridia-interface",
  "naga",
- "primase-core",
  "primase-dxil",
  "primase-foundations",
- "primase-image",
  "thiserror",
 ]
 
@@ -1354,6 +1351,7 @@ name = "primase-lighting"
 version = "0.1.0"
 dependencies = [
  "primase-core",
+ "primase-foundations",
  "primase-image",
  "primase-meshops",
  "primase-texcodec",

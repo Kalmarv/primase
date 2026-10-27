@@ -118,7 +118,7 @@ use primase_core::{
     ColorSpace, Component, Entity, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat,
     TexRole, Texture, VertexColor, World,
 };
-use primase_image::sampling::{Address, Levels, Transfer};
+use primase_foundations::{sampling::Address, sampling::Transfer};
 
 use super::material::{Green, NORMAL_GREEN, SHADER_UV, ShaderUv, UNSET, Unset, uv_transform};
 use crate::components::{AnvilMaterial, AnvilShaders, MaterialBinding, MaterialFlags, MaterialValue};
@@ -873,7 +873,7 @@ fn encode_emission(pixels: &[[f32; 3]]) -> Result<(Option<Vec<u8>>, f32), String
     let strength = peak.max(1.0);
     let mut bytes = Vec::with_capacity(pixels.len() * 4);
     for rgb in pixels {
-        bytes.extend(rgb.map(|v| primase_image::linear_to_srgb8(f64::from(v / strength))));
+        bytes.extend(rgb.map(|v| primase_foundations::color::linear_to_srgb8(f64::from(v / strength))));
         bytes.push(255);
     }
     Ok((Some(bytes), strength))
@@ -1081,7 +1081,7 @@ impl BakeAnvilMaterial {
             // the binding states no addressing: the program's assumption, or a refusal
             let unread = SamplerState::default();
             let image = SampledTexture::new(
-                Levels::of(t).map_err(|e| e.to_string())?,
+                primase_image::levels(t).map_err(|e| e.to_string())?,
                 if srgb {
                     Transfer::SrgbColour
                 } else {
@@ -1241,7 +1241,8 @@ impl BakeAnvilMaterial {
                 baked.clipped_base |= texel.base.iter().any(|v| !(0.0..=1.0).contains(v));
                 for c in &texel.base {
                     baked.base.push(
-                        (primase_image::linear_to_srgb(f64::from(c.clamp(0.0, 1.0))) * 255.0).round() as u8,
+                        (primase_foundations::color::linear_to_srgb(f64::from(c.clamp(0.0, 1.0))) * 255.0)
+                            .round() as u8,
                     );
                 }
                 baked.base.push(match (&coverage_image, cutoff) {
@@ -1720,7 +1721,9 @@ mod tests {
                 .zip(expected.emission.iter())
                 .enumerate()
             {
-                let got = primase_image::srgb8_to_linear(channel) as f32 * factor * pbr.emissive_strength;
+                let got = primase_foundations::color::srgb8_to_linear(channel) as f32
+                    * factor
+                    * pbr.emissive_strength;
                 assert!(
                     (got - expected).abs() <= 0.009 * pbr.emissive_strength,
                     "emission lane {k}: {got}, surface {expected}"

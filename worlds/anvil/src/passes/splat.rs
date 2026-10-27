@@ -30,11 +30,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use primase_foundations::parallel::{self, Threads};
+use primase_foundations::parallel::{self};
 
 use primase_core::{ColorSpace, Entity, TexFormat, TexRole, Texture, World};
-use primase_image::sampling::{Address, Levels, Transfer};
-use primase_image::srgb8_to_linear;
+use primase_foundations::color::srgb8_to_linear;
+use primase_foundations::{sampling::Address, sampling::Levels, sampling::Transfer};
 
 use crate::components::{AnvilTerrain, AnvilTextureMap, TerrainTile};
 
@@ -108,7 +108,7 @@ fn detail(
                     let image = match images.get(&e) {
                         Some(i) => i.clone(),
                         None => {
-                            let i = Arc::new(Levels::of(tex).map_err(|e| e.to_string())?);
+                            let i = Arc::new(primase_image::levels(tex).map_err(|e| e.to_string())?);
                             images.insert(e, i.clone());
                             i
                         }
@@ -175,7 +175,7 @@ fn tile_image(format: TexFormat, blocks: &[u8], colour: ColorSpace) -> Result<Le
     if blocks.len() != 33 * 33 * 8 {
         return Err(format!("{} bytes, not 33 x 33 blocks of 8", blocks.len()));
     }
-    Levels::of(&Texture {
+    primase_image::levels(&Texture {
         width: 132,
         height: 132,
         format,
@@ -231,7 +231,7 @@ impl<'t> Lookup<'t> {
         let level = t.level.min(30);
         let node_side = t.side / f64::from(1u32 << level);
         let noise = match t.noise.and_then(|e| w.get::<Texture>(e)) {
-            Some(n) => Levels::of(n).map_err(|e| e.to_string())?,
+            Some(n) => primase_image::levels(n).map_err(|e| e.to_string())?,
             None => {
                 return Err(
                     "the ground's material lookup needs the splatting noise (TerrainRead's noise)".into(),
@@ -482,7 +482,7 @@ impl<'a> Baker<'a> {
             c = c.map(|v| v * o);
         }
         Ok(Texel {
-            rgb: c.map(primase_image::linear_to_srgb8),
+            rgb: c.map(primase_foundations::color::linear_to_srgb8),
             tile_fallback: fell_back,
         })
     }

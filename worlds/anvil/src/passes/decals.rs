@@ -370,7 +370,7 @@ impl LowerAnvilDecals {
         // the alpha the shader reads: Mask1's blue, made linear where it's viewed sRGB
         let blue = |b: u8| {
             if mask_srgb {
-                primase_image::srgb8_to_linear(b)
+                primase_foundations::color::srgb8_to_linear(b)
             } else {
                 f64::from(b) / 255.0
             }

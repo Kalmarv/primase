@@ -12,7 +12,7 @@ use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassLog};
 use primase_core::pbr::{PbrMaterial, UvTransform};
 use primase_core::{Entity, Texture, World};
-use primase_image::sampling::{Address, Levels, Transfer, footprint_lod};
+use primase_foundations::{sampling::Address, sampling::Transfer, sampling::footprint_lod};
 use primase_testdata::{Game, install};
 
 const SIZE: u32 = 128;
@@ -162,7 +162,7 @@ fn road_bakes_its_lane_lines_over_a_period() {
         } else {
             Transfer::Stored
         };
-        let levels = Levels::of(w.get::<Texture>(map).expect("texture")).expect("levels");
+        let levels = primase_image::levels(w.get::<Texture>(map).expect("texture")).expect("levels");
         let ramp = |h: f64| {
             [
                 sat((6.0 * h - 3.0).abs() - 1.0),
@@ -197,7 +197,8 @@ fn road_bakes_its_lane_lines_over_a_period() {
                 let i = ((py * SIZE + px) * 4) as usize;
                 for ch in 0..3 {
                     let albedo = (col[ch] * paint).powf(2.2);
-                    let b = (primase_image::linear_to_srgb(albedo.clamp(0.0, 1.0)) * 255.0).round() as u8;
+                    let b = (primase_foundations::color::linear_to_srgb(albedo.clamp(0.0, 1.0)) * 255.0)
+                        .round() as u8;
                     worst[0] = worst[0].max(b.abs_diff(base_px[i + ch]));
                 }
                 let r = (n[3].clamp(0.0, 1.0) * 255.0).round() as u8;

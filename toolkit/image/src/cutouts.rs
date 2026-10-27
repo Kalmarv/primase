@@ -123,7 +123,8 @@ fn spec_of(m: &PbrMaterial, what: &str) -> Result<Option<Spec>, String> {
         texture: r.map(|r| r.texture),
         texcoord: r.map_or(0, |r| r.texcoord),
         repeat: r.map_or([false; 2], |r| {
-            r.wrap.map(|w| address(w) == crate::sampling::Address::Wrap)
+            r.wrap
+                .map(|w| address(w) == primase_foundations::sampling::Address::Wrap)
         }),
         cutoff: cutoff.to_bits(),
         factor: m.base_color[3].to_bits(),
@@ -164,9 +165,9 @@ fn build_field(w: &World, spec: Spec, resolution: usize, what: &str) -> Result<O
         spec.cutoff(),
         spec.repeat.map(|r| {
             if r {
-                crate::sampling::Address::Wrap
+                primase_foundations::sampling::Address::Wrap
             } else {
-                crate::sampling::Address::Clamp
+                primase_foundations::sampling::Address::Clamp
             }
         }),
     )))

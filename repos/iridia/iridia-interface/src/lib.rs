@@ -11,6 +11,7 @@
 //!
 //! Everything is plain data: owned strings, integers and enums, no handles and no GPU types, and every type
 //! serializes, so the vocabulary can be shown, stored and compared.
+#![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 mod binding;
 mod facts;

@@ -154,8 +154,8 @@ pub struct Program {
 impl Program {
     /// Reuse this lift's facts; no parsing, lifting, graph building or GPU work. Material resolvers add output roles
     /// with ProgramFacts::bound once they have resolved the stage binding.
-    pub fn facts(&self, name: impl Into<String>) -> primase_core::shader::ProgramFacts {
-        primase_core::shader::ProgramFacts {
+    pub fn facts<H>(&self, name: impl Into<String>) -> iridia_interface::ProgramFacts<H> {
+        iridia_interface::ProgramFacts {
             name: name.into(),
             hash: self.provenance.source_hash.clone(),
             stage: self.stage,

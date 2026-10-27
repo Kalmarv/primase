@@ -13,7 +13,10 @@
 //! a sample takes ([`SampledTexture::with_footprintless_level`]).
 
 use iridia_interface::{AddressMode, SamplerState};
-use primase_image::sampling::{Address, Decoded, Levels, Subtexel, Transfer, footprint_lod};
+use primase_foundations::{
+    sampling::Address, sampling::Decoded, sampling::Levels, sampling::Subtexel, sampling::Transfer,
+    sampling::footprint_lod,
+};
 
 use crate::{Image, Lod};
 

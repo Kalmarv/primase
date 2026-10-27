@@ -11,8 +11,6 @@ publish.workspace = true
 [dependencies]
 primase-foundations.workspace = true
 iridia-interface.workspace = true
-primase-core.workspace = true
-primase-image.workspace = true
 iridia.workspace = true
 thiserror.workspace = true
 naga.workspace = true

@@ -569,6 +569,7 @@ fn source_hash() -> &'static [u8; 32] {
     HASH.get_or_init(|| {
         let mut files = vec![("web/ktx2.rs", include_bytes!("ktx2.rs").as_slice())];
         files.extend(primase_image::CACHE_SOURCES.iter().copied());
+        files.extend(primase_foundations::SOURCES.iter().copied());
         primase_cache::source_hash(&files)
     })
 }
@@ -891,7 +892,7 @@ fn resize(width: u32, height: u32, rgba: &[u8], role: Role, w: u32, h: u32) -> (
                     for c in 0..4 {
                         let mut v = rgba[((sy * width + sx) * 4) as usize + c] as f64 / 255.;
                         if role == Role::Colour && c < 3 {
-                            v = primase_image::srgb_to_linear(v);
+                            v = primase_foundations::color::srgb_to_linear(v);
                         }
                         sum[c] += v;
                     }
@@ -903,7 +904,7 @@ fn resize(width: u32, height: u32, rgba: &[u8], role: Role, w: u32, h: u32) -> (
             }
             for (c, mut v) in sum.into_iter().enumerate() {
                 if role == Role::Colour && c < 3 {
-                    v = primase_image::linear_to_srgb(v);
+                    v = primase_foundations::color::linear_to_srgb(v);
                 }
                 out.push((v * 255.).round().clamp(0., 255.) as u8);
             }

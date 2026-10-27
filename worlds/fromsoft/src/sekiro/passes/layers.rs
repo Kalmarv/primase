@@ -107,7 +107,7 @@ impl<'a> AreaBake<'a> {
         let (shader, bytecode, stage, vertex) = Self::bound(world, g)?;
         let view = |t: &Texture,
                     srgb: bool,
-                    address: [primase_image::sampling::Address; 2]|
+                    address: [primase_foundations::sampling::Address; 2]|
          -> Result<Arc<iridia_exec::SampledTexture>> {
             let level = t
                 .levels

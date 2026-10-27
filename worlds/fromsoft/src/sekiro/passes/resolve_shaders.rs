@@ -598,7 +598,7 @@ mod program_facts_tests {
             ),
         ] {
             let lifted = crate::passes::program_reads::lift(format, bytes).unwrap();
-            let facts = lifted.facts(name);
+            let facts = lifted.facts::<primase_core::Entity>(name);
             assert_eq!(facts.stage, Stage::Pixel);
             assert_eq!(facts.hash, Some(iridia::source_hash(bytes)));
             assert_eq!(facts.instruction_count.unwrap().unit, unit);

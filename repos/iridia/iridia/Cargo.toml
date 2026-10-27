@@ -10,7 +10,6 @@ publish.workspace = true
 
 [dependencies]
 iridia-interface.workspace = true
-primase-core.workspace = true
 thiserror.workspace = true
 naga.workspace = true
 sha2.workspace = true

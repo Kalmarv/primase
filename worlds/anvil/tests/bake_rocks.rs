@@ -11,7 +11,7 @@ use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Entity, Texture, World};
-use primase_image::sampling::{Address, Levels, Transfer, footprint_lod};
+use primase_foundations::{sampling::Address, sampling::Levels, sampling::Transfer, sampling::footprint_lod};
 use primase_testdata::{Game, install};
 
 const SIZE: u32 = 64;
@@ -38,7 +38,7 @@ fn bound(w: &World, m: &AnvilMaterial, slot: u32) -> (Levels, Transfer) {
         Transfer::Stored
     };
     (
-        Levels::of(w.get::<Texture>(e).expect("texture")).expect("levels"),
+        primase_image::levels(w.get::<Texture>(e).expect("texture")).expect("levels"),
         transfer,
     )
 }
@@ -233,7 +233,8 @@ fn rocks_bake_as_the_notes_formulas() {
             let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
             let i = ((y * SIZE + x) * 4) as usize;
             for c in 0..3 {
-                let srgb = (primase_image::linear_to_srgb(expect[c].clamp(0.0, 1.0)) * 255.0).round() as u8;
+                let srgb = (primase_foundations::color::linear_to_srgb(expect[c].clamp(0.0, 1.0)) * 255.0)
+                    .round() as u8;
                 worst[0] = worst[0].max(srgb.abs_diff(base_px[i + c]));
                 let nb = ((n[c] / len * 0.5 + 0.5) * 255.0).round() as u8;
                 worst[2] = worst[2].max(nb.abs_diff(normal[i + c]));

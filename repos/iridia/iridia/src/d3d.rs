@@ -1,4 +1,4 @@
-//! D3D's enum numbers and packing rules, mapped into the vocabulary ([`primase_core::shader`]). The DXBC and DXIL
+//! D3D's enum numbers and packing rules, mapped into the vocabulary ([`iridia_interface`]). The DXBC and DXIL
 //! readers share them: both state signatures and constant buffers in D3D's terms. Nothing here is evaluation; a
 //! number the table does not map is refused with its name (an `Err` the reader reports), never guessed.
 

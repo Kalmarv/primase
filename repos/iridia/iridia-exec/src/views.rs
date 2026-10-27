@@ -22,7 +22,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use primase_image::sampling::{Address, Decoded, Subtexel};
+use primase_foundations::{sampling::Address, sampling::Decoded, sampling::Subtexel};
 
 use crate::{Dim, ImageLoad, ImageQuery, ImageSample, Load, Lod, QueryKind, Sample, Sampler};
 
@@ -124,7 +124,7 @@ impl Views {
         lod: Lod,
     ) -> Result<[f32; 4], String> {
         let state = || self.sampler(sampler);
-        let error = |e: primase_image::Error| format!("t{texture}: {e}");
+        let error = |e: primase_foundations::sampling::Error| format!("t{texture}: {e}");
         match (self.views.get(&texture), dim) {
             (None, _) => self.absent(|| format!("t{texture} has no texture")),
             (Some(View::Uniform(c) | View::Constant(c)), _) => Ok(*c),

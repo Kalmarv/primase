@@ -42,7 +42,7 @@ use primase_core::{
     DrawLayer, DrawOrder, Entity, MaterialUsage, MaterialVariants, Mesh, Name, Semantic, Stream, Texture,
     Topology, World,
 };
-use primase_image::srgb8_to_linear_f32;
+use primase_foundations::color::srgb8_to_linear_f32;
 use primase_texcodec::{Decoder, TexDecoder};
 
 /// Which blended materials become cutouts.

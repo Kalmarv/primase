@@ -7,7 +7,7 @@
 //! the buffer's, not zero) and the interface's layout the bound size.
 use std::collections::BTreeMap;
 
-use primase_core::shader::StageBinding;
+use iridia_interface::ConstantBufferBinding;
 
 use crate::{Interface, ResourceId, ResourceKind};
 
@@ -22,11 +22,10 @@ impl BoundSizes {
         BoundSizes::default()
     }
 
-    /// The sizes a stage's binding states ([`StageBinding::constant_buffers`]).
-    pub fn of(stage: &StageBinding) -> BoundSizes {
+    /// The sizes a stage's constant-buffer bindings state.
+    pub fn of(constant_buffers: &[ConstantBufferBinding]) -> BoundSizes {
         BoundSizes(
-            stage
-                .constant_buffers
+            constant_buffers
                 .iter()
                 .filter_map(|c| c.bound_size.map(|bytes| (c.resource, bytes)))
                 .collect(),

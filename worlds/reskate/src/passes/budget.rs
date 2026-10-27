@@ -209,7 +209,7 @@ fn mean_factor(w: &World, t: Entity) -> Result<[f32; 4], String> {
     let channel = |c: u32| {
         let v = c as f32 / 255.0;
         if srgb {
-            primase_image::srgb_to_linear_f32(v)
+            primase_foundations::color::srgb_to_linear_f32(v)
         } else {
             v
         }

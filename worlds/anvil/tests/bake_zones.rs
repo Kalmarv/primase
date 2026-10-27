@@ -15,7 +15,7 @@ use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassLog, PassManager, PassRegistry, RunReport};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Entity, Name, Texture, World};
-use primase_image::sampling::{Address, Levels};
+use primase_foundations::{sampling::Address, sampling::Levels};
 use primase_testdata::{Game, install};
 
 fn crc(name: &str) -> u32 {
@@ -99,7 +99,7 @@ fn options() -> Options {
 }
 
 fn srgb8(linear: f32) -> f32 {
-    (primase_image::linear_to_srgb(f64::from(linear.clamp(0.0, 1.0))) * 255.0).round() as f32
+    (primase_foundations::color::linear_to_srgb(f64::from(linear.clamp(0.0, 1.0))) * 255.0).round() as f32
 }
 
 #[test]
@@ -146,7 +146,7 @@ fn a_zones_material_bakes_to_the_notes_formula() {
             .find(|t| t.key == key)
             .and_then(|t| t.texture)
             .unwrap_or_else(|| panic!("no texture {name}"));
-        Levels::of(w.get::<Texture>(e).expect("texture")).expect("levels")
+        primase_image::levels(w.get::<Texture>(e).expect("texture")).expect("levels")
     };
     let mask1 = texture_of("Textures-Mask1");
     let mask2 = texture_of("Textures-Mask2");
@@ -409,9 +409,9 @@ fn a_skin_material_bakes_with_the_chosen_tone_as_its_tint() {
             .find(|t| t.shader_slot == 1)
             .and_then(|t| t.texture)
             .expect("the Normal");
-        Levels::of(w_tone.get::<Texture>(e).expect("normal")).expect("levels")
+        primase_image::levels(w_tone.get::<Texture>(e).expect("normal")).expect("levels")
     };
-    let lin = primase_image::srgb8_to_linear;
+    let lin = primase_foundations::color::srgb8_to_linear;
     let (mut compared, mut off) = (0u64, 0u64);
     for y in (0..256i64).step_by(4) {
         for x in (0..256i64).step_by(4) {

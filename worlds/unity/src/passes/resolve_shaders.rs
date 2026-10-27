@@ -291,7 +291,7 @@ fn material_value(m: &UnityMaterial, name: &str, linear: bool) -> Option<Vec<u32
         return Some(words(&[v]));
     }
     if let Some(c) = m.color(name) {
-        let l = |x: f32| primase_image::srgb_to_linear(f64::from(x)) as f32;
+        let l = |x: f32| primase_foundations::color::srgb_to_linear(f64::from(x)) as f32;
         return Some(words(&if linear {
             [l(c[0]), l(c[1]), l(c[2]), c[3]]
         } else {

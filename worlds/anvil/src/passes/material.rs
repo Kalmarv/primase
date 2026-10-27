@@ -171,8 +171,8 @@ use primase_core::{
     Name, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, Semantic, Stream, TexFormat, TexRole,
     Texture, VertexColor, World,
 };
-use primase_foundations::parallel::Threads;
-use primase_image::{Rgba8Texel, TextureMetadata, map_rgba8_levels, map_rgba8_levels_with, srgb8_to_linear};
+use primase_foundations::color::srgb8_to_linear;
+use primase_image::{Rgba8Texel, TextureMetadata, map_rgba8_levels, map_rgba8_levels_with};
 
 use super::decals::DECAL_QUEUE;
 use super::formulas::{Rough, emission, metalness, occlusion, roughness, sat, tinted};
@@ -1567,7 +1567,8 @@ impl Pass for LowerAnvilMaterial {
                     };
                     let base = made_texture(w, &mut made, (diffuse, "screen", [0; 5]), |w| {
                         derived(w, diffuse, TexRole::Color, ColorSpace::Srgb, |_, c| {
-                            let v = |x: f64| primase_image::linear_to_srgb8(0.6 * sat(x).powf(2.2));
+                            let v =
+                                |x: f64| primase_foundations::color::linear_to_srgb8(0.6 * sat(x).powf(2.2));
                             [v(c[0]), v(c[1]), v(c[2]), 255]
                         })
                     })?;
@@ -1639,7 +1640,7 @@ impl Pass for LowerAnvilMaterial {
                         |w| {
                             derived(w, foam, TexRole::Color, ColorSpace::Srgb, |_, c| {
                                 let albedo = fake_river_albedo(c[3], s);
-                                let v = |x: f64| primase_image::linear_to_srgb8(x);
+                                let v = |x: f64| primase_foundations::color::linear_to_srgb8(x);
                                 [v(albedo[0]), v(albedo[1]), v(albedo[2]), 255]
                             })
                         },
@@ -2397,7 +2398,7 @@ fn decal_fx(
         Some(mask) => {
             let lane = made_texture(w, made, (mask, "decal emission", [0; 5]), |w| {
                 derived(w, mask, TexRole::Color, ColorSpace::Srgb, |_, c| {
-                    let v = primase_image::linear_to_srgb8(c[1] * c[1]);
+                    let v = primase_foundations::color::linear_to_srgb8(c[1] * c[1]);
                     [v, v, v, 255]
                 })
             })?;
@@ -2533,7 +2534,7 @@ fn base_colour(
             let alpha = opacity_image
                 .as_ref()
                 .map_or(c[3], |(img, srgb)| sampled(nearest(img, t), *srgb)[0]);
-            let enc = |x: f64| primase_image::linear_to_srgb8(x);
+            let enc = |x: f64| primase_foundations::color::linear_to_srgb8(x);
             [enc(rgb[0]), enc(rgb[1]), enc(rgb[2]), byte(alpha)]
         })
     })
@@ -2606,7 +2607,7 @@ fn emission_of(
         derived(w, diffuse, TexRole::Color, ColorSpace::Srgb, |t, c| {
             let rgb = tinted([c[0], c[1], c[2]], 1.0, hsl);
             let m = sampled(nearest(&mask_image, t), mask_srgb)[lane];
-            let enc = |x: f64| primase_image::linear_to_srgb8(x * m);
+            let enc = |x: f64| primase_foundations::color::linear_to_srgb8(x * m);
             [enc(rgb[0]), enc(rgb[1]), enc(rgb[2]), 255]
         })
     })?;

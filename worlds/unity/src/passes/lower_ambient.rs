@@ -32,7 +32,7 @@ use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 
 use super::lower_lights::parse_candela_per_unit;
 use primase_core::{Ambient, AmbientLight, Environment, World};
-use primase_image::srgb_to_linear_f32;
+use primase_foundations::color::srgb_to_linear_f32;
 
 use crate::components::{UnityAmbient, UnityRenderSettings};
 

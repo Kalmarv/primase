@@ -14,7 +14,7 @@ use primase_core::{
     Collision, ColorSpace, Entity, Instance, Mesh, Primitive, Semantic, Stream, TexFormat, TexRole, Texture,
     Transform, World,
 };
-use primase_image::srgb_to_linear;
+use primase_foundations::color::srgb_to_linear;
 
 const PIXEL: f64 = 0.25;
 /// The detail's uv scale: a 4 x 4 texture repeating every metre of its coordinates.

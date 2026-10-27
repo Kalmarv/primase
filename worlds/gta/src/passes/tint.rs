@@ -72,7 +72,7 @@ pub struct GtaTintVariants;
 
 /// sRGB byte to linear, as 16-bit normalised.
 fn linear16(c: u8) -> u16 {
-    (primase_image::srgb_to_linear(f64::from(c) / 255.0) * 65535.0).round() as u16
+    (primase_foundations::color::srgb_to_linear(f64::from(c) / 255.0) * 65535.0).round() as u16
 }
 
 /// `mesh`'s tinted primitives coloured for `row`.

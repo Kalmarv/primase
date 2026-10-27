@@ -26,23 +26,20 @@ mod orm;
 pub use orm::{MissingLevels, OrmSize, PACK_ORM, PackOrm};
 mod qoi;
 mod rgba8;
-pub mod sampling;
 pub use qoi::{Qoi, QoiChannels, QoiColorspace, read_qoi};
 pub use rgba8::{LOWER_TEXTURES_RGBA8, LowerTexturesRgba8, SignedData, rgba8_exact};
 mod texture;
 mod upscale;
 pub use normals::{NormalFilter, normal_mip_chain, rebuild_normal_z, resize_normals, scale_normal};
+use primase_foundations::color::{linear_to_srgb8, srgb8_to_linear};
 use std::io::Cursor;
-use std::sync::LazyLock;
 pub use texture::{
     BAKE_NORMAL_SCALE, BakeNormalScale, NORMALIZE_NORMALS, NormalizeNormals, TextureLoadReport,
     bake_normal_scale, decode_texture_file, load_textures, normalize_normals, texture_level_png,
     texture_level_rgba8, texture_level_rgba8_with,
 };
-pub use upscale::{MAX_UPSCALED, UPSCALE_NEAREST, UpscaleBy, UpscaleNearest, enlarge_nearest};
-
 use thiserror::Error;
-
+pub use upscale::{MAX_UPSCALED, UPSCALE_NEAREST, UpscaleBy, UpscaleNearest, enlarge_nearest};
 /// This crate's source files, for the keys of disk caches whose values its code computes (`primase-cache`): editing
 /// any of them retires those entries. A test keeps the list equal to the `src` folder.
 pub const CACHE_SOURCES: &[(&str, &[u8])] = &[
@@ -61,11 +58,9 @@ pub const CACHE_SOURCES: &[(&str, &[u8])] = &[
     ("image/orm.rs", include_bytes!("orm.rs")),
     ("image/qoi.rs", include_bytes!("qoi.rs")),
     ("image/rgba8.rs", include_bytes!("rgba8.rs")),
-    ("image/sampling.rs", include_bytes!("sampling.rs")),
     ("image/texture.rs", include_bytes!("texture.rs")),
     ("image/upscale.rs", include_bytes!("upscale.rs")),
 ];
-
 /// Register this crate's passes by their declarations.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     for spec in [
@@ -85,7 +80,6 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         reg.add(spec);
     }
 }
-
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("{path}: {source}")]
@@ -149,7 +143,6 @@ fn allocate<T: Default + Clone>(len: usize) -> Result<Vec<T>> {
     v.resize(len, T::default());
     Ok(v)
 }
-
 /// PNG ancillary chunks that are consumed but not represented in the pixel image.
 /// Callers can report lost metadata explicitly. Animation is rejected.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -332,69 +325,10 @@ pub fn write_png(image: &Image) -> Result<Vec<u8>> {
     }
     Ok(out)
 }
-// One curve definition, evaluated at the precision explicitly requested by the caller.
-macro_rules! srgb_transfer {
-    ($decode:ident, $encode:ident, $float:ty) => {
-        /// IEC sRGB encoded value to linear light, with no clamping.
-        pub fn $decode(c: $float) -> $float {
-            if c <= 0.04045 {
-                c / 12.92
-            } else {
-                ((c + 0.055) / 1.055).powf(2.4)
-            }
-        }
-        /// Linear light to IEC sRGB encoded value, with no clamping.
-        pub fn $encode(c: $float) -> $float {
-            if c <= 0.0031308 {
-                12.92 * c
-            } else {
-                1.055 * c.powf(1. / 2.4) - 0.055
-            }
-        }
-    };
-}
-srgb_transfer!(srgb_to_linear, linear_to_srgb, f64);
-srgb_transfer!(srgb_to_linear_f32, linear_to_srgb_f32, f32);
-
-/// Encode linear light with f64 arithmetic, clamping before transfer and rounding to nearest byte: the byte of
-/// `(linear_to_srgb(c.clamp(0, 1)) * 255).round()`, found in a table of the curve's 255 rounding thresholds (no `powf`
-/// per call; see [`Thresholds`]).
-pub fn linear_to_srgb8(c: f64) -> u8 {
-    static TABLE: LazyLock<Thresholds<f64>> = LazyLock::new(|| Thresholds::<f64>::new(linear_to_srgb8_curve));
-    TABLE.byte(c, linear_to_srgb8_curve)
-}
-
-/// [`linear_to_srgb8`] evaluated on the curve itself.
-fn linear_to_srgb8_curve(c: f64) -> u8 {
-    (linear_to_srgb(c.clamp(0., 1.)) * 255.).round() as u8
-}
-
-/// Encode linear light with f32 arithmetic and half-up byte quantization.
-/// Clamping follows transfer and the saturating float-to-integer conversion. Found in a table of the curve's rounding
-/// thresholds, as [`linear_to_srgb8`].
-pub fn linear_to_srgb8_f32(c: f32) -> u8 {
-    static TABLE: LazyLock<Thresholds<f32>> =
-        LazyLock::new(|| Thresholds::<f32>::new(linear_to_srgb8_f32_curve));
-    TABLE.byte(c, linear_to_srgb8_f32_curve)
-}
-
-/// [`linear_to_srgb8_f32`] evaluated on the curve itself.
-fn linear_to_srgb8_f32_curve(c: f32) -> u8 {
-    ((linear_to_srgb_f32(c) * 255. + 0.5) as i32).clamp(0, 255) as u8
-}
-
-/// A stored sRGB byte to linear light, `srgb_to_linear(byte / 255)` in f64: the same bits, from a 256-entry table.
-pub fn srgb8_to_linear(byte: u8) -> f64 {
-    static TABLE: LazyLock<[f64; 256]> =
-        LazyLock::new(|| std::array::from_fn(|i| srgb_to_linear(f64::from(i as u8) / 255.)));
-    TABLE[usize::from(byte)]
-}
-
 /// A colour a caller states, as an option's `R,G,B,A`: sRGB bytes and a linear alpha byte, each 0 to 255 (a flat colour
 /// standing in for a shader a lowering does not draw, which is the program's choice, not the source's).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Srgba8(pub [u8; 4]);
-
 impl Srgba8 {
     /// `R,G,B,A`, four bytes.
     pub fn parse(text: &str) -> std::result::Result<Srgba8, String> {
@@ -421,82 +355,12 @@ impl Srgba8 {
         ]
     }
 }
-
 impl std::fmt::Display for Srgba8 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let [r, g, b, a] = self.0;
         write!(f, "{r},{g},{b},{a}")
     }
 }
-
-/// A stored sRGB byte to linear light, `srgb_to_linear_f32(byte / 255)` in f32: the same bits, from a 256-entry table.
-pub fn srgb8_to_linear_f32(byte: u8) -> f32 {
-    static TABLE: LazyLock<[f32; 256]> =
-        LazyLock::new(|| std::array::from_fn(|i| srgb_to_linear_f32(f32::from(i as u8) / 255.)));
-    TABLE[usize::from(byte)]
-}
-
-/// The inputs where an encoding curve's byte steps up: `at[k - 1]` is the smallest input in (0, 1) giving byte `k` or
-/// more, found by bisection over the input's bit patterns (ordered like the values for non-negative floats) with the
-/// curve itself. A byte is then the count of thresholds at or below the input. The curve is monotone in exact
-/// arithmetic but `powf` is not correctly rounded on every platform, so it may wobble by a few ulps where its output
-/// crosses a half byte: inputs within a relative band of a threshold (`BAND`), and inputs outside (0, 1)
-/// (clamped, NaN), are evaluated on the curve itself. The table therefore gives the curve's byte for every input.
-struct Thresholds<F> {
-    at: [F; 255],
-}
-
-macro_rules! thresholds {
-    ($float:ty, $bits:ty, $band:expr) => {
-        impl Thresholds<$float> {
-            const BAND: $float = $band;
-
-            fn new(curve: fn($float) -> u8) -> Self {
-                let one = (1.0 as $float).to_bits();
-                Thresholds {
-                    at: std::array::from_fn(|i| {
-                        let k = i as u8 + 1;
-                        // curve(0) = 0 < k <= 255 = curve(1): the smallest bit pattern in (0, 1] reaching k
-                        let (mut lo, mut hi): ($bits, $bits) = (0, one);
-                        while hi - lo > 1 {
-                            let mid = lo + (hi - lo) / 2;
-                            if curve(<$float>::from_bits(mid)) >= k {
-                                hi = mid;
-                            } else {
-                                lo = mid;
-                            }
-                        }
-                        <$float>::from_bits(hi)
-                    }),
-                }
-            }
-
-            fn byte(&self, c: $float, curve: fn($float) -> u8) -> u8 {
-                if !(c > 0.0 && c < 1.0) {
-                    return curve(c);
-                }
-                let k = self.at.partition_point(|&t| t <= c);
-                let near = |i: usize| {
-                    self.at
-                        .get(i)
-                        .is_some_and(|&t| (c - t).abs() <= t * Self::BAND)
-                };
-                if near(k) || (k > 0 && near(k - 1)) {
-                    return curve(c);
-                }
-                k as u8
-            }
-        }
-    };
-}
-// The bands are far wider than the curves' rounding wobble near a threshold. There the curve's slope is at least 0.43
-// (its smallest, at 1), and `powf` and the products after it are each within a few ulps of the output, so an input
-// whose byte could differ from its neighbours' lies within some 10 ulps of the threshold: 2^-24 of the input is ~10^8
-// f64 ulps, 2^-16 ~256 f32 ulps. The linear segment below 0.0031308 (12.92 c) is monotone as computed, and the knee
-// is no threshold (its byte is 10.3).
-thresholds!(f64, u64, 1.0 / 16_777_216.0);
-thresholds!(f32, u32, 1.0 / 65_536.0);
-
 /// Next mip. Each target pixel covers [x*w/w', (x+1)*w/w'), so the final
 /// region includes the third leftover row/column for odd dimensions.
 /// Integer means round half upwards, including straight alpha, in stored space.
@@ -590,7 +454,6 @@ pub fn pick_level(width: u32, height: u32, levels: usize, cap: u32) -> Result<(u
     }
     Ok((i, w, h))
 }
-
 /// Deterministic 8-bit RGB PNG (colour type 2), without an alpha channel or
 /// implicit colour transfer. Input is row-major RGB and must exactly fit dimensions.
 pub fn write_png_rgb(width: u32, height: u32, rgb: &[u8]) -> Result<Vec<u8>> {
@@ -612,7 +475,6 @@ pub fn write_png_rgb(width: u32, height: u32, rgb: &[u8]) -> Result<Vec<u8>> {
     }
     Ok(out)
 }
-
 #[cfg(test)]
 mod registration_tests {
     use super::*;
@@ -657,5 +519,28 @@ mod registration_tests {
                 .unwrap()
                 .starts_with("upscale-nearest{(factor|size)*,textures*}\n")
         );
+    }
+}
+
+/// Every stored level of `t`, decoded to RGBA8 as stored (no transfer applied), for sampling.
+pub fn levels(t: &primase_core::Texture) -> Result<primase_foundations::sampling::Levels> {
+    let meta = TextureMetadata {
+        color_space: primase_core::ColorSpace::Linear,
+        role: primase_core::TexRole::Other,
+        normal: None,
+    };
+    let d = map_rgba8_levels(t, 0..t.levels.len(), meta, |x| Ok(x.rgba))?;
+    Ok(primase_foundations::sampling::Levels {
+        width: d.width,
+        height: d.height,
+        levels: d.levels,
+    })
+}
+
+impl From<primase_foundations::sampling::Error> for Error {
+    fn from(e: primase_foundations::sampling::Error) -> Error {
+        match e {
+            primase_foundations::sampling::Error::Invalid(why) => Error::Invalid(why),
+        }
     }
 }

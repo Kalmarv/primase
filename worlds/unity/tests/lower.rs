@@ -19,7 +19,8 @@ use std::path::Path;
 use primase_core::Texture;
 use primase_core::World;
 use primase_core::pbr::{AlphaMode, PbrMaterial, UvTransform};
-use primase_image::{Samples, linear_to_srgb, read_png};
+use primase_foundations::color::linear_to_srgb;
+use primase_image::{Samples, read_png};
 use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_texcodec::{Decoder, TexDecoder};
 use primase_unity::TypeTreePackage;
@@ -51,7 +52,8 @@ fn base_image(w: &World, p: &PbrMaterial) -> (u32, u32, Vec<u8>) {
     for p in px.as_chunks_mut::<4>().0 {
         if !white {
             for c in 0..3 {
-                let lin = primase_image::srgb_to_linear(f64::from(p[c]) / 255.0) * f64::from(factor[c]);
+                let lin = primase_foundations::color::srgb_to_linear(f64::from(p[c]) / 255.0)
+                    * f64::from(factor[c]);
                 p[c] = (linear_to_srgb(lin).clamp(0.0, 1.0) * 255.0).round() as u8;
             }
         }

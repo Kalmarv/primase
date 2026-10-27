@@ -410,7 +410,7 @@ pub fn skin_palette(archive: &mut Archive) -> Result<Vec<[u8; 3]>, Error> {
     let texture = world
         .get::<primase_core::Texture>(e)
         .ok_or(Error::NoTexture(SKIN_PALETTE))?;
-    let levels = primase_image::sampling::Levels::of(texture).map_err(|_| Error::NoTexture(SKIN_PALETTE))?;
+    let levels = primase_image::levels(texture).map_err(|_| Error::NoTexture(SKIN_PALETTE))?;
     if (levels.width, levels.height) != (8, 4) {
         return Err(Error::Palette {
             width: levels.width,
@@ -418,7 +418,7 @@ pub fn skin_palette(archive: &mut Archive) -> Result<Vec<[u8; 3]>, Error> {
         });
     }
     let at = |x: i64, y: i64| {
-        let t = levels.texel(0, x, y, [primase_image::sampling::Address::Clamp; 2]);
+        let t = levels.texel(0, x, y, [primase_foundations::sampling::Address::Clamp; 2]);
         [t[0], t[1], t[2]]
     };
     Ok((0..4).map(|n| at(2 * n, 2)).collect())

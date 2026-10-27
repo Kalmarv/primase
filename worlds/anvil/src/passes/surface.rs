@@ -23,7 +23,7 @@ use primase_core::{
     NormalGreen, NormalX, NormalZ, Primitive, Semantic, Stream, TexFormat, TexRole, Texture, Topology,
     Transform, VertexColor, World,
 };
-use primase_image::sampling::{Levels, Transfer};
+use primase_foundations::sampling::Transfer;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SurfaceSediments {
@@ -381,7 +381,7 @@ impl BakeAnvilSurface {
                         .get::<AnvilTextureMap>(entity)
                         .map_or(texture.color_space == ColorSpace::Srgb, |t| t.field_25 == 1);
                     View::Image(Arc::new(SampledTexture::new(
-                        Levels::of(texture).map_err(|e| e.to_string())?,
+                        primase_image::levels(texture).map_err(|e| e.to_string())?,
                         if srgb {
                             Transfer::SrgbColour
                         } else {
@@ -467,9 +467,9 @@ impl Images {
         let n = frame.direction(texel.normal);
         let normal = tbn.map(|axis| dot(n, axis));
         self.base[at..at + 4].copy_from_slice(&[
-            byte(primase_image::linear_to_srgb(f64::from(texel.base[0])) as f32),
-            byte(primase_image::linear_to_srgb(f64::from(texel.base[1])) as f32),
-            byte(primase_image::linear_to_srgb(f64::from(texel.base[2])) as f32),
+            byte(primase_foundations::color::linear_to_srgb(f64::from(texel.base[0])) as f32),
+            byte(primase_foundations::color::linear_to_srgb(f64::from(texel.base[1])) as f32),
+            byte(primase_foundations::color::linear_to_srgb(f64::from(texel.base[2])) as f32),
             255,
         ]);
         self.normal[at..at + 4].copy_from_slice(&[

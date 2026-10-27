@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use iridia_exec::{Input, Lane, View, Views, evaluate::Constants};
-use primase_image::sampling::Address;
+use primase_foundations::sampling::Address;
 use serde_json::json;
 
 use crate::{Result, invalid};

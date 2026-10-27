@@ -164,6 +164,6 @@ fn decal_fx_is_its_team_colour_cut_out_at_its_cell() {
     )
     .expect("decode")
     .levels[0][1];
-    let want = primase_image::linear_to_srgb8((f64::from(first) / 255.0).powi(2));
+    let want = primase_foundations::color::linear_to_srgb8((f64::from(first) / 255.0).powi(2));
     assert_eq!(lane.levels[0][..3], [want; 3]);
 }

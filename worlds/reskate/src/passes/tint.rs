@@ -62,12 +62,12 @@ fn colours(p: &Primitive) -> Result<Option<Vec<[u16; 3]>>, String> {
 
 /// A colour as a material tint, sRGB bytes.
 fn srgb(c: [f64; 3]) -> [u8; 3] {
-    c.map(primase_image::linear_to_srgb8)
+    c.map(primase_foundations::color::linear_to_srgb8)
 }
 
 /// An sRGB byte in linear light (the IEC 61966-2-1 curve).
 fn linear(b: u8) -> f64 {
-    primase_image::srgb8_to_linear(b)
+    primase_foundations::color::srgb8_to_linear(b)
 }
 
 /// A colour of a split, linear 0..1.
@@ -341,7 +341,7 @@ impl LowerTintReskate {
         let mut s = world.get::<SkateMaterial>(m)?.clone();
         let own = s.tint.unwrap_or([255; 3]);
         s.tint = Some(std::array::from_fn(|k| {
-            primase_image::linear_to_srgb8(linear(own[k]) * colour[k])
+            primase_foundations::color::linear_to_srgb8(linear(own[k]) * colour[k])
         }));
         s.key = format!("{}~tint{:02x}{:02x}{:02x}", s.key, rgb[0], rgb[1], rgb[2]);
         let c = world.spawn();

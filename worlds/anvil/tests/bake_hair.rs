@@ -20,7 +20,7 @@ use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial};
 use primase_core::{Entity, Name, Texture, World};
-use primase_image::sampling::{Address, Levels, Transfer, footprint_lod};
+use primase_foundations::{sampling::Address, sampling::Levels, sampling::Transfer, sampling::footprint_lod};
 use primase_testdata::{Game, install};
 
 fn open() -> Option<Archive> {
@@ -150,7 +150,7 @@ fn vector(m: &AnvilMaterial, row: u32) -> [f32; 3] {
 }
 
 fn srgb8(linear: f32) -> f32 {
-    (primase_image::linear_to_srgb(f64::from(linear.clamp(0.0, 1.0))) * 255.0).round() as f32
+    (primase_foundations::color::linear_to_srgb(f64::from(linear.clamp(0.0, 1.0))) * 255.0).round() as f32
 }
 
 fn sat(x: f32) -> f32 {
@@ -181,11 +181,11 @@ fn compare(w: &World, entity: Entity, m: &AnvilMaterial, size: u32) -> (f64, [u6
             .unwrap_or_else(|| panic!("no texture at slot {slot}"));
         let t = w.get::<Texture>(e).expect("texture");
         assert_eq!((t.width, t.height), (size, size), "the maps are the bake's size");
-        Levels::of(t).expect("levels")
+        primase_image::levels(t).expect("levels")
     };
     let (mask, diffuse, normals) = (bound(0), bound(1), bound(2));
     // t76 is read as sRGB (its TextureMap's field 25), t75 and t77 as stored
-    let lin = |b: u8| primase_image::srgb8_to_linear(b) as f32;
+    let lin = |b: u8| primase_foundations::color::srgb8_to_linear(b) as f32;
     let (k15, k16, k17, k21) = (scalar(m, 15), scalar(m, 16), scalar(m, 17), scalar(m, 21));
     let [c40, c41, c42, c43] = [40, 41, 42, 43].map(|r| vector(m, r));
     // the first zone only (the vertex colour's red 0), as the Material's second and third zone are off
@@ -307,7 +307,7 @@ fn kept_by_the_alpha_tested_program(w: &World, m: &AnvilMaterial, size: u32) -> 
         .find(|t| t.shader_slot == 0)
         .and_then(|t| t.texture)
         .expect("Mask1");
-    let image = Levels::of(w.get::<Texture>(mask1).expect("texture")).expect("levels");
+    let image = primase_image::levels(w.get::<Texture>(mask1).expect("texture")).expect("levels");
     let mut textures = BTreeMap::new();
     textures.insert(75, iridia_exec::View::Image(std::sync::Arc::new(Atlas(image))));
     for slot in [76, 77] {

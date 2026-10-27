@@ -16,7 +16,7 @@ use primase_core::{
     ColorSpace, Entity, Instance, Mesh, Name, Primitive, Semantic, Stream, TexFormat, TexRole, Texture,
     Topology, World,
 };
-use primase_image::{linear_to_srgb, srgb_to_linear};
+use primase_foundations::{color::linear_to_srgb, color::srgb_to_linear};
 use primase_texcodec::{Decoder, TexDecoder};
 
 use crate::components::UNITY;

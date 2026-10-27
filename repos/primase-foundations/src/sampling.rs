@@ -9,9 +9,16 @@
 //! caller holds as floats ([`Decoded::from_texels`], [`Decoded::volume`]). A volume filters linearly between the eight
 //! texels about a coordinate ([`Decoded::linear_3d`]) or takes the one it falls in ([`Decoded::point_3d`]).
 
-use primase_core::{ColorSpace, TexRole, Texture};
+use crate::color::srgb8_to_linear;
 
-use crate::{Error, Result, TextureMetadata, map_rgba8_levels, srgb8_to_linear};
+/// Why a sample or a texture's levels are refused.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum Error {
+    #[error("invalid image: {0}")]
+    Invalid(String),
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 /// Where a coordinate outside 0..1 reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,21 +78,6 @@ pub struct Levels {
 }
 
 impl Levels {
-    /// Every stored level of `t`, decoded to RGBA8 as stored (no transfer applied).
-    pub fn of(t: &Texture) -> Result<Levels> {
-        let meta = TextureMetadata {
-            color_space: ColorSpace::Linear,
-            role: TexRole::Other,
-            normal: None,
-        };
-        let d = map_rgba8_levels(t, 0..t.levels.len(), meta, |x| Ok(x.rgba))?;
-        Ok(Levels {
-            width: d.width,
-            height: d.height,
-            levels: d.levels,
-        })
-    }
-
     /// One level of RGBA8 texels.
     pub fn one(width: u32, height: u32, rgba: Vec<u8>) -> Result<Levels> {
         let count = (width as usize)
@@ -535,7 +527,7 @@ mod tests {
         let g = Levels::one(1, 1, vec![128, 128, 128, 128]).unwrap();
         let c = g.bilinear(0, [0.5, 0.5], wrap, Transfer::SrgbColour).unwrap();
         assert!(
-            (c[0] - crate::srgb_to_linear(128.0 / 255.0)).abs() < 1e-15
+            (c[0] - crate::color::srgb_to_linear(128.0 / 255.0)).abs() < 1e-15
                 && (c[3] - 128.0 / 255.0).abs() < 1e-15
         );
     }
@@ -583,7 +575,7 @@ mod tests {
             (1.0, 0.0)
         );
         let c = l.point(0, [0.25, 0.75], wrap, Transfer::SrgbColour).unwrap();
-        assert_eq!(c[0], crate::srgb8_to_linear(128));
+        assert_eq!(c[0], crate::color::srgb8_to_linear(128));
         assert!(l.point(0, [f64::NAN, 0.0], wrap, Transfer::Stored).is_err());
         assert_eq!(
             [-3.0, 0.49, 0.5, 1.2, 9.0].map(|lod| l.nearest_level(lod).unwrap()),

@@ -171,8 +171,8 @@ impl<'a> Painter<'a> {
                 let uv = [0, 1].map(|c| (0..3).map(|k| b[k] * self.uv[k][c]).sum::<f32>());
                 let texel = pyramid.sample(uv, self.footprint, *wrap);
                 std::array::from_fn(|c| {
-                    f32::from(primase_image::linear_to_srgb8_f32(
-                        primase_image::srgb_to_linear_f32(texel[c] / 255.0) * factor[c],
+                    f32::from(primase_foundations::color::linear_to_srgb8_f32(
+                        primase_foundations::color::srgb_to_linear_f32(texel[c] / 255.0) * factor[c],
                     ))
                 })
             }

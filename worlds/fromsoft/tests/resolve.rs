@@ -15,6 +15,7 @@ use primase_core::{
     World,
 };
 use primase_core::{shader::Shader, shader::ShaderBinding, shader::TextureSource};
+use primase_foundations::sampling::Address;
 use primase_fromsoft::layer_bake::resolve::{
     SECOND_COLOUR, UNBOUND_MATERIAL_FIELDS, Unbound, render_state, resolve,
 };
@@ -23,7 +24,6 @@ use primase_fromsoft::mtd::{self, MaterialDefinition, Parameter, Value};
 use primase_fromsoft::sekiro::source::{
     MaterialShader, ShaderBundle, ShaderProgram, ShaderPrograms, ShaderStage, TexturePayloads,
 };
-use primase_image::sampling::Address;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 mod common;

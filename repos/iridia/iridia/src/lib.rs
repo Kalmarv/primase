@@ -7,7 +7,7 @@
 //! show an unroled output lane is used for, [`output_stores`] what its entry point stores into each output lane and
 //! how a stored value is made, [`surface`] the reading of a program's outputs as a surface packed for a GPU composite,
 //! with the WGSL that decodes it. The vocabulary is
-//! [`primase_core::shader`], re-exported here: varyings by label, resources with explicit constant layouts, D3D's
+//! [`iridia_interface`], re-exported here: varyings by label, resources with explicit constant layouts, D3D's
 //! registers kept in provenance. The [`d3d`] module is where D3D's enum numbers and
 //! packing rules are mapped into it, for the readers of every bytecode.
 //!

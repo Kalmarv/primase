@@ -187,7 +187,7 @@ impl Pass for GtaTerrainLayers {
                 layered.push((m, slots, rough, specular));
             }
         }
-        let srgb = |b: u8| primase_image::srgb_to_linear(f64::from(b) / 255.0) as f32;
+        let srgb = |b: u8| primase_foundations::color::srgb_to_linear(f64::from(b) / 255.0) as f32;
         for (m, specular) in grey {
             log.count("terrain materials with no layer texture: grey", 1);
             w.insert(

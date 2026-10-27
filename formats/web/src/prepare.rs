@@ -23,7 +23,6 @@ use primase_core::layered::{Channel, LayeredMaterial, Source};
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef};
 use primase_core::{Component, Entity, Name, Resource, TexRole, Texture, World};
-use primase_foundations::parallel::Threads;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 

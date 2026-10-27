@@ -10,7 +10,7 @@ use primase_core::pbr::{PbrMaterial, UvTransform, Wrap};
 use primase_core::{ColorSpace, Texture, World};
 use primase_core::{shader::Shader, shader::StageBinding, shader::TextureSource};
 use primase_foundations::parallel::Threads;
-use primase_image::sampling::{Address, Levels, Transfer};
+use primase_foundations::{sampling::Address, sampling::Levels, sampling::Transfer};
 use primase_texcodec::TexDecoder;
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -47,7 +47,7 @@ fn byte(x: f32) -> u8 {
     (255. * x.clamp(0., 1.)).round_ties_even() as u8
 }
 fn colour(x: f32) -> u8 {
-    (255. * primase_image::linear_to_srgb(f64::from(x.clamp(0., 1.)))).round_ties_even() as u8
+    (255. * primase_foundations::color::linear_to_srgb(f64::from(x.clamp(0., 1.)))).round_ties_even() as u8
 }
 
 /// Output register comes from the reflected varying, not from the semantic's index or a game's target number.

@@ -17,8 +17,8 @@ use std::collections::BTreeMap;
 
 use iridia_exec::{Field, Filtering, Layout, SampledTexture, SamplerUse, evaluate::Constants};
 use primase_core::{ColorSpace, Texture};
-use primase_image::sampling::{Address, Levels, Transfer};
-use primase_image::srgb_to_linear;
+use primase_foundations::color::srgb_to_linear;
+use primase_foundations::{sampling::Address, sampling::Transfer};
 
 use crate::components::{Shape, UnityMaterial, UnityProgramVariant, UnityTexture};
 use crate::{Result, invalid};
@@ -207,8 +207,8 @@ pub fn sampled_texture(t: &Texture, unity: &UnityTexture) -> Result<SampledTextu
         ColorSpace::Srgb => Transfer::SrgbColour,
         ColorSpace::Linear => Transfer::Stored,
     };
-    let levels = Levels::of(t)
-        .and_then(Levels::rows_reversed)
+    let levels = primase_image::levels(t)
+        .and_then(|l| l.rows_reversed().map_err(Into::into))
         .map_err(|e| invalid(format!("decoding a texture to sample: {e}")))?;
     let sampler = SamplerUse {
         address: [address(0)?, address(1)?],

@@ -155,7 +155,7 @@ impl Pass for LowerFromSoftLights {
                     kind,
                     color: source
                         .diffuse
-                        .map(|c| primase_image::srgb_to_linear(f64::from(c) / 255.) as f32),
+                        .map(|c| primase_foundations::color::srgb_to_linear(f64::from(c) / 255.) as f32),
                     intensity: intensity as f32,
                     range: Some(source.radius.max(self.min_range.get())),
                     cast_shadows: Some(source.cast_shadows),

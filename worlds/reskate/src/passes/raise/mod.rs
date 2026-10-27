@@ -356,7 +356,7 @@ pub fn studio_watts(candela: f32) -> f32 {
 }
 
 fn byte(linear: f32) -> u8 {
-    primase_image::linear_to_srgb8(f64::from(linear))
+    primase_foundations::color::linear_to_srgb8(f64::from(linear))
 }
 
 /// A manifest key from a name: `[A-Za-z0-9_-]` kept, other characters `_`, unique by a number suffix.

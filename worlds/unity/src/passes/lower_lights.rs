@@ -51,7 +51,7 @@
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::state::Condition;
 use primase_core::{Entity, Light, LightKind, World};
-use primase_image::srgb_to_linear;
+use primase_foundations::color::srgb_to_linear;
 
 use crate::Result;
 use crate::components::RenderPipeline;

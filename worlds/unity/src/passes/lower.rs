@@ -83,7 +83,7 @@ use primase_core::{
     World,
 };
 use primase_core::{DrawLayer, DrawOrder, MaterialUsage, VertexColor};
-use primase_image::{linear_to_srgb, srgb_to_linear};
+use primase_foundations::{color::linear_to_srgb, color::srgb_to_linear};
 use primase_texcodec::TexDecoder;
 
 use crate::components::RenderPipeline;

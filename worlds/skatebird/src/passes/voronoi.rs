@@ -45,8 +45,8 @@ use iridia_exec::{Input, Lane, PixelShader};
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial, Specular, TextureRef, UvTransform};
 use primase_core::{ColorSpace, Entity, Name, NormalConvention, TexFormat, TexRole, Texture, World};
+use primase_foundations::color::linear_to_srgb;
 use primase_foundations::parallel::Threads;
-use primase_image::linear_to_srgb;
 use primase_unity::bind::{bind, constants, directional_light, sampled_texture};
 use primase_unity::components::{UnityMaterial, UnityPrograms, UnityTexEnv, UnityTexture};
 

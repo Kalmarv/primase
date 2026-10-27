@@ -1,4 +1,6 @@
-use primase_image::{linear_to_srgb8, linear_to_srgb8_f32, srgb_to_linear, srgb_to_linear_f32};
+use primase_foundations::{
+    color::linear_to_srgb8, color::linear_to_srgb8_f32, color::srgb_to_linear, color::srgb_to_linear_f32,
+};
 
 /// The exact curve leaves the f32 writer, which rounds every intermediate, at most 6 ULP away over all 256 bytes;
 /// the f64 writer rounds once and stays within 1. Bounds cover libm's last-bit variation (host `powf` is not
@@ -212,7 +214,7 @@ fn near_boundaries_f64(spread: u64) -> Vec<f64> {
 /// curve as written before the tables ([`scene_encode`], [`map_encode`]).
 #[test]
 fn byte_tables_give_the_curves_own_results() {
-    use primase_image::{srgb8_to_linear, srgb8_to_linear_f32};
+    use primase_foundations::{color::srgb8_to_linear, color::srgb8_to_linear_f32};
     for i in 0..=255u8 {
         assert_eq!(
             srgb8_to_linear(i).to_bits(),

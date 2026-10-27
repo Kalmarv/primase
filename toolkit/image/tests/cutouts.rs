@@ -14,8 +14,8 @@ use primase_core::{
     ColorSpace, Entity, MaterialVariants, Mesh, MeshFile, Name, Primitive, Semantic, Stream, TexFormat,
     TexRole, Texture, Topology, World,
 };
+use primase_foundations::{sampling::Address, sampling::Levels, sampling::Transfer};
 use primase_image::ClipAlphaCutouts;
-use primase_image::sampling::{Address, Levels, Transfer};
 
 fn run_passes(w: &mut World, passes: Vec<Box<dyn Pass>>) -> Result<RunReport, String> {
     let mut registry = PassRegistry::new();

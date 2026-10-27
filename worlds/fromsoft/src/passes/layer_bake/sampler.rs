@@ -11,7 +11,7 @@
 
 use iridia_exec::{Filtering, Image, Lod, SampledTexture, SamplerUse, Unstated};
 use iridia_interface::{AddressMode, SamplerState};
-use primase_image::sampling::{Address, Levels, Subtexel, Transfer};
+use primase_foundations::{sampling::Address, sampling::Levels, sampling::Subtexel, sampling::Transfer};
 
 use crate::{Result, invalid};
 

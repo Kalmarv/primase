@@ -178,7 +178,8 @@ pub(crate) fn emissive_from_linear(width: u32, height: u32, rgb: &[[f32; 3]]) ->
     let mut zeroed = 0;
     for pixel in rgb {
         let encoded = pixel.map(|v| {
-            (primase_image::linear_to_srgb(f64::from(v) / f64::from(strength)) * 255.).round() as u8
+            (primase_foundations::color::linear_to_srgb(f64::from(v) / f64::from(strength)) * 255.).round()
+                as u8
         });
         if pixel.iter().any(|&v| v > 0.) && encoded == [0; 3] {
             zeroed += 1;

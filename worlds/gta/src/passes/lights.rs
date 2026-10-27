@@ -115,7 +115,7 @@ pub const LOWER_GTA_LIGHTS: PassSpec = PassSpec {
     make: |g| Ok(Box::new(LowerGtaLights::from_given(g)?)),
 };
 fn linear(c: u8) -> f32 {
-    primase_image::srgb_to_linear(f64::from(c) / 255.0) as f32
+    primase_foundations::color::srgb_to_linear(f64::from(c) / 255.0) as f32
 }
 
 impl Pass for LowerGtaLights {

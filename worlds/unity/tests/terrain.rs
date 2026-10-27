@@ -211,7 +211,7 @@ fn terrain_geometry_matches_the_port() {
             for c in 0..3 {
                 let x = f64::from(q[c]) / 255.0;
                 sum[c] += if t.color_space == primase_core::ColorSpace::Srgb {
-                    primase_image::srgb_to_linear(x)
+                    primase_foundations::color::srgb_to_linear(x)
                 } else {
                     x
                 };
@@ -385,7 +385,8 @@ fn terrain_geometry_matches_the_port() {
                         .enumerate()
                         .map(|(l, m)| f64::from(weights[at * 4 + l]) / 255.0 * m[c])
                         .sum();
-                    let baked = (primase_image::linear_to_srgb(lin).clamp(0.0, 1.0) * 255.0).round() as u8;
+                    let baked = (primase_foundations::color::linear_to_srgb(lin).clamp(0.0, 1.0) * 255.0)
+                        .round() as u8;
                     worst_formula = worst_formula.max(baked.abs_diff(theirs));
                 }
             }

@@ -5,7 +5,7 @@ use primase_cache::{Key, KeyBuilder, source_hash};
 use primase_core::World;
 use primase_core::pass::PassLog;
 use primase_core::pass::memo::{Key as MemoKey, Memo};
-use primase_image::sampling::{Address, Subtexel, Transfer};
+use primase_foundations::{sampling::Address, sampling::Subtexel, sampling::Transfer};
 use std::collections::BTreeMap;
 
 /// The files that compute a bake's bytes in this crate: editing one retires every entry made before.

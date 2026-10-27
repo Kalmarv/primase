@@ -155,7 +155,7 @@ pub fn roughness(n: f32) -> f32 {
 /// reads A), G the [`roughness`] of the power `power` x a (glTF's metallic-roughness reads G; 1 without a power), B 0.
 pub fn specular_texture(t: &Texture, mask: [f32; 3], power: Option<f32>) -> Result<Texture, String> {
     let linear = |c: u8| match t.color_space {
-        ColorSpace::Srgb => primase_image::srgb_to_linear(f64::from(c) / 255.0) as f32,
+        ColorSpace::Srgb => primase_foundations::color::srgb_to_linear(f64::from(c) / 255.0) as f32,
         ColorSpace::Linear => f32::from(c) / 255.0,
     };
     let mut levels = Vec::with_capacity(t.levels.len());
@@ -237,8 +237,8 @@ pub fn emissive_texture(t: &Texture) -> Result<Option<Texture>, String> {
                     masked |= p[3] < 255;
                     let a = f64::from(p[3]) / 255.0;
                     let c = |v: u8| {
-                        primase_image::linear_to_srgb8(
-                            primase_image::srgb_to_linear(f64::from(v) / 255.0) * a,
+                        primase_foundations::color::linear_to_srgb8(
+                            primase_foundations::color::srgb_to_linear(f64::from(v) / 255.0) * a,
                         )
                     };
                     [c(p[0]), c(p[1]), c(p[2]), 255]
@@ -1080,7 +1080,7 @@ impl LowerGtaPbr {
         night: bool,
         log: &mut PassLog,
     ) -> (PbrMaterial, Option<SpecularMap>, Option<Entity>) {
-        let srgb = |b: u8| primase_image::srgb_to_linear(f64::from(b) / 255.0) as f32;
+        let srgb = |b: u8| primase_foundations::color::srgb_to_linear(f64::from(b) / 255.0) as f32;
         let mut distance = None;
         let mut m = PbrMaterial {
             metallic: 0.0,

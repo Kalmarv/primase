@@ -26,7 +26,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use primase_core::pbr::Wrap;
 use primase_meshops::point_blend::{Corner, tidy};
 
-use crate::sampling::Address;
+use primase_foundations::sampling::Address;
 
 /// A cell's relation to the cut-out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

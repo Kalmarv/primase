@@ -11,7 +11,8 @@ use primase_core::{
     ColorSpace, Entity, MaterialVariants, Mesh, MeshFile, Name, NormalConvention, Primitive, Semantic,
     Stream, TexFormat, TexRole, Texture, TextureFile, Topology, World,
 };
-use primase_image::{GUTTER, PACK_TEXTURE_ATLAS, PackTextureAtlas, linear_to_srgb8};
+use primase_foundations::color::linear_to_srgb8;
+use primase_image::{GUTTER, PACK_TEXTURE_ATLAS, PackTextureAtlas};
 
 fn run(w: &mut World, size: u32) -> Result<RunReport, String> {
     let mut report = RunReport::default();

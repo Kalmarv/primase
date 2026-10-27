@@ -179,7 +179,7 @@ fn water_texture(texels: &[u8], width: u32, height: u32, d: f64, s: &LowerAnvilW
             if s.shore == Shore::Coverage {
                 alpha *= unorm(a);
             }
-            let srgb = |x: f64| primase_image::linear_to_srgb8(x);
+            let srgb = |x: f64| primase_foundations::color::linear_to_srgb8(x);
             [
                 srgb(colour[0]),
                 srgb(colour[1]),
