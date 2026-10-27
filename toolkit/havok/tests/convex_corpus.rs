@@ -1,12 +1,15 @@
 //! Output geometry is checked independently against stored half-spaces after
 //! f32 rounding: every vertex lies inside all planes and on at least three
 //! planes within 0.01 mm. This gate does not claim reference tessellation parity.
-mod inputs;
-
-use primase_havok::{ConvexCore, Tagfile};
+use havok_formats::Tagfile;
+use primase_havok::ConvexCore;
 #[test]
 fn object_half_spaces() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(dir) = inputs::oracle(inputs::OracleSet::Corpus, inputs::Game::Sekiro, "object-hkx") else {
+    let Some(dir) = primase_testdata::oracle(
+        primase_testdata::OracleSet::Corpus,
+        primase_testdata::Game::Sekiro,
+        "object-hkx",
+    ) else {
         return Ok(());
     };
     let mut files = std::fs::read_dir(dir)?

@@ -1,6 +1,6 @@
 //! Hand-authored tagfile records exercise serialized references independently
 //! of the production parser, including the reflected width of serialized ITEM references.
-use primase_havok::Tagfile;
+use havok_formats::Tagfile;
 fn section(name: &[u8; 4], leaf: bool, bytes: Vec<u8>) -> Vec<u8> {
     let mut out = (((bytes.len() + 8) as u32) | if leaf { 0x40000000 } else { 0 })
         .to_be_bytes()

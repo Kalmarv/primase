@@ -2,7 +2,8 @@
 //! fsnp material tables and source-frame conventions belong here.
 use crate::pose::{pose, pose_columns, posed};
 use crate::{Result, invalid};
-use primase_havok::{Compendium, ConvexCore, CustomKind, Tagfile, Value};
+use havok_formats::{Compendium, CustomKind, Tagfile, Value};
+use primase_havok::ConvexCore;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -21,7 +22,7 @@ pub struct Soup {
     pub placement_dependent_keys: usize,
     /// The shape classes of bodies [`read_map`] has no decoder for, one per body: listed, not read.
     pub unread_bodies: Vec<String>,
-    /// Custom primitives whose data is not an extern shape reference ([`primase_havok::CustomKind::Unread`]): not read.
+    /// Custom primitives whose data is not an extern shape reference ([`havok_formats::CustomKind::Unread`]): not read.
     pub unread_custom_primitives: usize,
 }
 
@@ -148,7 +149,7 @@ pub fn read_map(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Soup> {
                     soup.unread_bodies.push(shape.type_name().to_owned());
                     continue;
                 }
-                let mesh = primase_havok::compressed_mesh(shape.field("data")?.dereference()?)?;
+                let mesh = havok_formats::compressed_mesh(shape.field("data")?.dereference()?)?;
                 if mesh.custom.iter().any(|c| c.kind != CustomKind::Unread) {
                     return Err(invalid(
                         "collision",
@@ -333,8 +334,8 @@ pub fn read_bodies(bytes: &[u8], compendium: Option<&Compendium>) -> Result<Vec<
                 };
                 match shape.type_name() {
                     "fsnpCustomParamCompressedMeshShape" | "hknpCompressedMeshShape" => {
-                        let mesh = primase_havok::compressed_mesh(shape.field("data")?.dereference()?)?;
-                        let instances = primase_havok::extern_shapes(shape, &mesh)?;
+                        let mesh = havok_formats::compressed_mesh(shape.field("data")?.dereference()?)?;
+                        let instances = havok_formats::extern_shapes(shape, &mesh)?;
                         let keys = if shape.type_name() == "fsnpCustomParamCompressedMeshShape" {
                             material_keys(shape, !mesh.triangles.is_empty())?
                         } else {

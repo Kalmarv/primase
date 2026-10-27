@@ -1,5 +1,5 @@
 //! Level collision: the base and layer `.hkw` Havok 7.1.0-r1 packfiles of the PAKs the program supplies, as core
-//! collision on entities (`primase_havok::packfile` reads the files; layouts and censuses are its tables).
+//! collision on entities (`havok_formats::packfile` reads the files; layouts and censuses are its tables).
 //!
 //! One entity per leaf shape of each rigid body, with the body's transform (frame-converted) and the shape in the
 //! body's space (frame-converted points): a body that moves keeps its own transform. A fixed body (motion type 5) is
@@ -23,7 +23,7 @@ use crate::{
 use primase_core::{
     Collider, Collision, Shape as CoreShape, Source, Surfaces, Transform, World, frame::SourceFrame,
 };
-use primase_havok::packfile::{
+use havok_formats::packfile::{
     Packfile,
     physics::{self, ExtendedMesh, RigidBody, Shape},
 };
@@ -475,7 +475,7 @@ fn read_file(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use primase_havok::packfile::physics::{MeshMaterial, Subpart};
+    use havok_formats::packfile::physics::{MeshMaterial, Subpart};
 
     #[test]
     fn material_indices_select_distinct_pairs_and_repeated_pairs_share_a_surface() {

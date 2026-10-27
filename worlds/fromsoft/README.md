@@ -579,7 +579,7 @@ A character's or part's files are kept beyond the model and its clips:
 - `tests/havok_census.rs` (install-gated) prints, for twenty characters of each game, the classes of every Havok member of
   their chrbnd, anibnd, behbnd and texbnd binders (`HAVOK`, `CLASS` with the stored field names of the cloth, ragdoll,
   rigid body, constraint and physics classes, `HAVOKERR`) and every binder member by kind, extension and whether a
-  reader keeps it (`EXT`). `primase_havok::cloth::read` (cloth data, ragdoll data, constraint infos) is written from those lines and the census prints what it reads of every such file (`PHYSICS`, or `PHYSICSERR` with the reason); the character reader does not keep its output yet.
+  reader keeps it (`EXT`). `havok_formats::cloth::read` (cloth data, ragdoll data, constraint infos) is written from those lines and the census prints what it reads of every such file (`PHYSICS`, or `PHYSICSERR` with the reason); the character reader does not keep its output yet.
 - `tests/character_census.rs` also prints `DUMMYDIR`: whether the dummies' stored forward and upward directions are unit
   vectors and perpendicular where the flag says upward is used. A direction is lowered only once that and the axes agree.
 - Not read: the Havok physics and ragdoll files of a character binder beyond what `unread` names, and what the TAE
@@ -848,7 +848,7 @@ basis is checked by the hand-worked probes above.
 
 ## Collision reader (in progress)
 
-Raw map collision uses `primase-havok` for tagfiles, compendia and compressed
+Raw map collision uses `havok-formats` for tagfiles, compendia and compressed
 meshes. The FromSoft layer maps left-aligned shape keys through fsnp material
 records. All-ones invalid keys are counted; missing materials remain -1 and are
 counted separately. Contradictory bindings for a valid key fail.
@@ -864,7 +864,7 @@ blockers; 40) and the crop are `lower-fromsoft-collision`'s options. HitMtrl IDs
 map by their base value modulo 100 to core surface names where the class's surface
 is known.
 
-Elden Ring's collision is Havok 2018.1 (`primase-havok`'s `SDK_VERSIONS`). Its stored compressed meshes are
+Elden Ring's collision is Havok 2018.1 (`havok-formats`'s `SDK_VERSIONS`). Its stored compressed meshes are
 checked against HKLib ac40bc9 (`havok.jsonl` of `oracles.soulsformats.elden/format`, `tests/havok_census.rs`): one record
 per file, `file` (`<binder path>:<member>`), then `error` or `shapes`, each `kind`, `bits_per_key`, `sections`
 (`codec` as six f32 bit patterns, `first_packed_vertex`, `packed_vertices`, `first_shared_vertex`,

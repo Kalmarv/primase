@@ -2,8 +2,8 @@
 //! reader), so these check the packfile and physics views against fixtures. Real-data gates for the 490 SHRED files live in
 //! that game's crate (`worlds/shred/tests/collision_disc.rs`).
 #![allow(clippy::unwrap_used)]
-use primase_havok::packfile::Packfile;
-use primase_havok::packfile::physics::{self, ConvexVertices, ExtendedMesh, MOTION_FIXED, RigidBody, Shape};
+use havok_formats::packfile::Packfile;
+use havok_formats::packfile::physics::{self, ConvexVertices, ExtendedMesh, MOTION_FIXED, RigidBody, Shape};
 
 /// Builds a packfile: class names, data bytes, local/global/virtual fixups.
 struct Builder {

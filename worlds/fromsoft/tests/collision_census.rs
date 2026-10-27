@@ -1,24 +1,15 @@
 //! Collision scope: every named map collision binder and every HKX in object
 //! binders, including broken states for census coverage. Character/ragdoll
 //! binders are counted as outside the map/object reader's scope.
-mod inputs;
-
-use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
 use primase_fromsoft::{Archive, Binder, NameDictionary, dcx::Decoder};
-use primase_havok::{Compendium, Tagfile};
+use havok_formats::{Compendium, Tagfile};
+use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[allow(unsafe_code)]
-fn native(
-    path: &inputs::OodleLibrary,
-) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
+fn native(path: &primase_testdata::OodleLibrary) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
     // SAFETY: caller explicitly supplies a trusted native version-6 decoder.
-    unsafe {
-        primase_foundations::compress::oodle::Oodle::open(
-            path.path(),
-            primase_foundations::compress::oodle::Version::V6,
-        )
-    }
+    unsafe { primase_foundations::compress::oodle::Oodle::open(path.path(), primase_foundations::compress::oodle::Version::V6) }
 }
 #[test]
 fn installed_collision_types() -> Result<()> {

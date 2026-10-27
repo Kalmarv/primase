@@ -1,4 +1,4 @@
-//! The 490 Havok 7.1.0-r1 packfiles of the disc (482 `.hkw` PAK entries + 8 `PHYSICS/*.HKX`) read by `primase-havok`'s
+//! The 490 Havok 7.1.0-r1 packfiles of the disc (482 `.hkw` PAK entries + 8 `PHYSICS/*.HKX`) read by `havok-formats`'s
 //! packfile view: every file parses with zero failures, every class is accounted for, and the structural identities the
 //! format guarantees hold. The oracle is the data's own redundancy, not a second reader (no public reader has the
 //! physics classes): stored AABBs contain the vertices, cumulative triangle offsets, welding count == triangles,
@@ -6,14 +6,12 @@
 //! The counts are the ones the offline recon census produced (`HK.md`: 12,789 bodies, 1,758 meshes, 6,445 subparts,
 //! 646,081 triangles, 855,428 vertices, 8,780 convex shapes).
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
-mod inputs;
-
-use inputs::{Game, Query, expect_found, install};
-use primase_havok::packfile::{
+use havok_formats::packfile::{
     Packfile,
     physics::{self, ConvexVertices, ExtendedMesh, RigidBody, Shape},
 };
-use rme_formats::pak::Pak;
+use primase_shred::read::pak::Pak;
+use primase_testdata::{Game, Query, expect_found, install};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -67,7 +65,7 @@ fn every_packfile_parses_and_the_census_matches() {
     let (mut convex, mut convex_vertices, mut leaf_shapes) = (0, 0, 0);
     let mut surfaces = BTreeMap::<u32, usize>::new();
     for (label, bytes) in &blobs {
-        let fail = |e: primase_havok::Error| -> ! { panic!("{label}: {e}") };
+        let fail = |e: havok_formats::Error| -> ! { panic!("{label}: {e}") };
         let pack = Packfile::read(bytes).unwrap_or_else(|e| fail(e));
         let census = physics::census(&pack);
         assert!(

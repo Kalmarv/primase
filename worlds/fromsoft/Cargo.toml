@@ -17,6 +17,7 @@ iridia-dxbc.workspace = true
 iridia-dxil.workspace = true
 iridia.workspace = true
 iridia-exec.workspace = true
+havok-formats.workspace = true
 primase-havok.workspace = true
 primase-texcodec.workspace = true
 primase-image.workspace = true

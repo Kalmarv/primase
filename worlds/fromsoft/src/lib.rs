@@ -43,7 +43,7 @@ pub enum Error {
         detail: String,
     },
     #[error("{0}")]
-    Havok(#[from] primase_havok::Error),
+    Havok(#[from] havok_formats::Error),
     #[error("I/O: {0}")]
     Io(#[from] std::io::Error),
     #[error("compression: {0}")]

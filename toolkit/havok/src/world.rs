@@ -5,7 +5,7 @@
 //! Reading takes no choice: the skeleton is the file's, each animation keeps its decoded blocks and its binding. The
 //! source's frame is the caller's (a reader knows its game's), given to both, so the skeleton and the clips that drive
 //! it are in the world's frame. Lowering states what the format leaves open: what stands in for a component a track
-//! does not state (`absent`, from [`crate::spline::Absent`]; the source's files say neutral, see [`crate::spline`]),
+//! does not state (`absent`, from [`havok_formats::spline::Absent`]; the source's files say neutral, see [`havok_formats::spline`]),
 //! how many keys a clip has for each frame the animation was authored at (`rate`), and which animations (`clips`).
 //! The spline an animation is evaluated as continuously is sampled into keys, and between keys `core.clip`
 //! interpolates, not the spline: the pass reports that as an approximation. A channel whose values are one value all
@@ -25,9 +25,9 @@ use primase_core::{
     JointId, Name, Property, Rest, RootMotion, RootSpace, Skeleton as CoreSkeleton, World,
 };
 
-use crate::animation::{Binding, Container, QsTransform, ReferenceFrame, Skeleton, Tracks};
 use crate::invalid;
-use crate::spline::{Absent, Fallback, SplineAnimation};
+use havok_formats::animation::{Binding, Container, QsTransform, ReferenceFrame, Skeleton, Tracks};
+use havok_formats::spline::{Absent, Fallback, SplineAnimation};
 
 /// `havok.animation`: a spline compressed animation as stored (its decoded blocks, its binding's track to bone table,
 /// the reference pose of the skeleton it binds, its extracted motion), on an entity with `core.name`.
@@ -61,11 +61,11 @@ impl Component for HavokAnimation {
             .iter()
             .flatten()
             .map(|t| {
-                let vector = |v: &crate::spline::Vector| {
+                let vector = |v: &havok_formats::spline::Vector| {
                     [&v.x, &v.y, &v.z]
                         .into_iter()
                         .map(|c| match c {
-                            crate::spline::Component::Spline(p) => p.len() as u64 * 4,
+                            havok_formats::spline::Component::Spline(p) => p.len() as u64 * 4,
                             _ => 4,
                         })
                         .sum::<u64>()
@@ -73,7 +73,7 @@ impl Component for HavokAnimation {
                 vector(&t.position)
                     + vector(&t.scale)
                     + match &t.rotation {
-                        crate::spline::Rotation::Spline { points, .. } => points.len() as u64 * 16,
+                        havok_formats::spline::Rotation::Spline { points, .. } => points.len() as u64 * 16,
                         _ => 16,
                     }
             })
@@ -108,7 +108,7 @@ impl Component for HavokAnimation {
 
 /// A Havok skeleton as a `core.skeleton` in the world's frame (`frame` is the file's): joint `i` is bone `i` with its
 /// stored name, parent and reference transform. The entity also has `core.name`.
-pub fn insert_skeleton(w: &mut World, s: &Skeleton, frame: &SourceFrame) -> crate::Result<Entity> {
+pub fn insert_skeleton(w: &mut World, s: &Skeleton, frame: &SourceFrame) -> havok_formats::Result<Entity> {
     let mut joints = Vec::with_capacity(s.bones.len());
     for (i, bone) in s.bones.iter().enumerate() {
         let q = s
@@ -148,7 +148,7 @@ pub fn insert_animation(
     skeleton: Entity,
     havok: &Skeleton,
     frame: &SourceFrame,
-) -> crate::Result<Option<Entity>> {
+) -> havok_formats::Result<Option<Entity>> {
     let ([animation], [binding]) = (container.animations.as_slice(), container.bindings.as_slice()) else {
         return Err(invalid(
             0,
@@ -204,7 +204,7 @@ pub fn insert_animation(
 
 /// A spline error that names a track ("block 0 track 119 scale: ...") also names the bone `binding` has that track
 /// drive in `havok`, so the refusal of an animation says which bone's data it is.
-fn name_the_bone(e: crate::Error, binding: &Binding, havok: &Skeleton) -> crate::Error {
+fn name_the_bone(e: havok_formats::Error, binding: &Binding, havok: &Skeleton) -> havok_formats::Error {
     let bone = e
         .detail
         .split_once(" track ")
@@ -274,9 +274,15 @@ pub struct LowerHavokClips {
     pub root_motion: RootMotionUse,
 }
 
-impl Choice for Fallback {
-    const VALUES: &'static [(&'static str, Self)] =
-        &[("neutral", Fallback::Neutral), ("reference", Fallback::Reference)];
+/// `absent`'s values: a [`Fallback`] by the name the option gives it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FallbackOption(Fallback);
+
+impl Choice for FallbackOption {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("neutral", FallbackOption(Fallback::Neutral)),
+        ("reference", FallbackOption(Fallback::Reference)),
+    ];
 }
 
 impl Choice for RootMotionUse {
@@ -291,7 +297,7 @@ impl Choice for RootMotionUse {
 pub const LOWER_HAVOK_CLIPS: PassSpec = PassSpec {
     name: "lower-havok-clips",
     options: &[
-        OptionSpec::choice::<Fallback>(
+        OptionSpec::choice::<FallbackOption>(
             "absent",
             "what stands in for a component a track does not state: zero, the identity and one, or the bone's \
              reference transform",
@@ -332,7 +338,7 @@ fn lower_havok_clips(g: &Given) -> std::result::Result<Box<dyn Pass>, String> {
         Clips::Named(names)
     };
     Ok(Box::new(LowerHavokClips {
-        absent: g.choice::<Fallback>("absent"),
+        absent: g.choice::<FallbackOption>("absent").0,
         rate,
         clips,
         root_motion: g.choice::<RootMotionUse>("root-motion"),
@@ -565,7 +571,7 @@ impl Pass for LowerHavokClips {
     }
     fn options(&self) -> Options {
         Options::from([
-            ("absent".to_owned(), self.absent.text().to_owned()),
+            ("absent".to_owned(), FallbackOption(self.absent).text().to_owned()),
             ("rate".to_owned(), self.rate.to_string()),
             ("root-motion".to_owned(), self.root_motion.text().to_owned()),
             (
@@ -709,7 +715,7 @@ mod tests {
     use primase_core::pass::{PassManager, RunReport};
 
     use super::*;
-    use crate::spline::{Component as C, Knots, Rotation, Track, Vector};
+    use havok_formats::spline::{Component as C, Knots, Rotation, Track, Vector};
 
     fn vector(x: C, y: C, z: C, knots: Option<Knots>) -> Vector {
         Vector { knots, x, y, z }
@@ -1129,7 +1135,7 @@ mod tests {
             name: "c0".into(),
             parents: vec![-1, 0],
             bones: ["Master", "R_Egg"]
-                .map(|n| crate::animation::Bone {
+                .map(|n| havok_formats::animation::Bone {
                     name: n.into(),
                     lock_translation: false,
                 })
@@ -1176,7 +1182,7 @@ mod tests {
             name: "c0".into(),
             parents: vec![-1, 0],
             bones: ["Master", "Child"]
-                .map(|n| crate::animation::Bone {
+                .map(|n| havok_formats::animation::Bone {
                     name: n.into(),
                     lock_translation: false,
                 })

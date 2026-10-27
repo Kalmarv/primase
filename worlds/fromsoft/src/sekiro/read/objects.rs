@@ -16,7 +16,7 @@ pub struct Report {
     /// Their bodies by stored motion type, and by shape class.
     pub bodies_by_motion: BTreeMap<u64, usize>,
     pub bodies_by_shape: BTreeMap<String, usize>,
-    /// Compressed-mesh custom primitives of an unknown kind ([`primase_havok::CustomKind::Unread`]): not read.
+    /// Compressed-mesh custom primitives of an unknown kind ([`havok_formats::CustomKind::Unread`]): not read.
     pub unread_custom_primitives: usize,
 }
 

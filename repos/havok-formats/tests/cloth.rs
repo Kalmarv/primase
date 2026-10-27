@@ -1,7 +1,7 @@
 //! Synthetic reflected layouts, including two-element reference arrays and record-valued ids.
 //! The layouts follow the field names in havok_census and HKLib's 2018 class metadata;
 //! no game payload is embedded here.
-use primase_havok::{Tagfile, cloth};
+use havok_formats::{Tagfile, cloth};
 
 struct Definition {
     name: &'static str,
@@ -220,7 +220,7 @@ fn fixture(sdk: &[u8; 8]) -> Built<Vec<u8>> {
 
 #[test]
 fn cloth_data_reads_both_eight_byte_sim_references() -> Built<()> {
-    for sdk in primase_havok::SDK_VERSIONS {
+    for sdk in havok_formats::SDK_VERSIONS {
         let bytes = fixture(&sdk)?;
         let tag = Tagfile::read(&bytes, None).unwrap();
         let physics = cloth::read(&tag).unwrap();

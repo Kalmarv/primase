@@ -19,7 +19,7 @@
 mod inputs;
 
 use primase_fromsoft::{Binder, Game, Install, Keys, dcx::Decoder};
-use primase_havok::{Compendium, Tagfile};
+use havok_formats::{Compendium, Tagfile};
 use std::collections::{BTreeMap, BTreeSet};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -157,7 +157,7 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>) -> Result<()> {
                         .keys()
                         .any(|c| c.starts_with("hclClothData") || c.starts_with("hknpRagdollData"))
                     {
-                        match primase_havok::cloth::read(&tag) {
+                        match havok_formats::cloth::read(&tag) {
                             Ok(physics) => {
                                 let sims: Vec<_> =
                                     physics.cloths.iter().flat_map(|c| &c.sim_cloths).collect();
@@ -165,7 +165,7 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>) -> Result<()> {
                                     .iter()
                                     .flat_map(|s| &s.constraint_sets)
                                     .filter_map(|s| match s {
-                                        primase_havok::cloth::ConstraintSet::Unread { class } => {
+                                        havok_formats::cloth::ConstraintSet::Unread { class } => {
                                             Some(class.as_str())
                                         }
                                         _ => None,

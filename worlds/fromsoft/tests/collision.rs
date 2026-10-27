@@ -17,7 +17,7 @@
 mod inputs;
 
 use primase_fromsoft::collision;
-use primase_havok::Compendium;
+use havok_formats::Compendium;
 
 /// The position bound in units of `EPSILON * m` (the module comment derives it).
 const BOUND: f32 = 8.;

@@ -10,7 +10,7 @@ use primase_core::{
     Collider, Collision, Instance, Mesh, Shape, Source, Transform, World,
     frame::{Axis, SourceFrame},
 };
-use primase_havok::packfile::{
+use havok_formats::packfile::{
     Packfile,
     physics::{self, RigidBody as StoredBody, Shape as StoredShape},
 };

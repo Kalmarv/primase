@@ -2,18 +2,14 @@
 
 Tony Hawk: SHRED (PS3, 2010), RME archives and scene geometry, including processed crowd/actor source meshes.
 
-The file readers (PAK/CSTR, quartets and SCP tables, material banks, texture headers, MAIN.DB rows, level scripts, reference
-rigs) are the `rme-formats` crate (`repos/rme-formats`); this crate builds worlds from their records, and lowers them.
-Paths below name the module that owns each reader.
-
-`rme_formats::pak::Pak::open` reads one PAK v4; `from_bytes` accepts caller-owned bytes. Metadata validates the header,
+`read::pak::Pak::open` reads one PAK v4; `from_bytes` accepts caller-owned bytes. Metadata validates the header,
 name hashes, supported attributes/alignment, zero on-disc runtime offsets, bounded NUL-terminated names and exact
 payload tiling. Names remain byte strings, including original case and separators. Sections include their marker
 entries; entries before a marker have no section. Allocation alignment is a runtime property, not a file constraint.
 Stored entries have `compressed_size == 0` and occupy `size` bytes; compressed entries occupy `compressed_size` bytes.
 
 `payload(index)` borrows stored bytes or lazily decodes one CSTR v1. `encoded(index)` exposes its encoded bytes.
-`rme_formats::cstr::decode` checks the endian tag, version, threshold, block count, block bounds, exact DEFLATE consumption,
+`read::cstr::decode` checks the endian tag, version, threshold, block count, block bounds, exact DEFLATE consumption,
 each output length, total output length and exact stream end. Errors retain byte offsets. Neither API extracts paths
 to disk. The archive bytes remain in memory; decoded payloads are not cached.
 
@@ -23,11 +19,11 @@ malformed/truncated inputs, and a real-disc census. The latter is a structural c
 independent semantic decode of the enclosed resources.
 
 Configure `installs.shred` in the local test-data file as the extracted disc root containing `PS3_GAME/USRDIR`.
-Run `cargo test --release -p primase-shred -p rme-formats -- --nocapture` with that configuration. Smoke depth selects eight archives
+Run `cargo test --release -p primase-shred -- --nocapture` with that configuration. Smoke depth selects eight archives
 by a seeded rotation of sorted paths; full depth opens every archive and decodes every stream, checking the known
 disc census: 336 archives, 67,320 entry occurrences, 31,227 streams, 111,391 blocks, 4,221 stored blocks.
 
-`rme_formats::scene::decode(scp, mlp, mmp, mgp)` reads one decoded quartet in source coordinates. It checks resource IDs,
+`read::scene::decode(scp, mlp, mmp, mgp)` reads one decoded quartet in source coordinates. It checks resource IDs,
 slice coverage through EOF (only zero alignment padding), finite affine matrices, identity model-local matrices,
 stride-16 positions, stored AABB containment (0.05 source units), BE u16 triangle lists, index bounds and exact
 submesh partitions. Unsupported mesh variants are individually refused with their identity, submesh material
@@ -52,7 +48,7 @@ with the Z mirror, `SourceFrame::new([PosX, PosY, NegZ], scale)`. North and phys
 the census's identity frame makes no claim about either. Conversion of positions, transforms and winding uses core's
 frame operations.
 
-`rme_formats::texture::TextureCatalog::new(&[(label, &pak), ...])` indexes all texture headers in precisely the supplied
+`read::texture::TextureCatalog::new(&[(label, &pak), ...])` indexes all texture headers in precisely the supplied
 archives. `resolve(extensionless_path)` returns every matching record, including repeated packages, streamed and
 prefetch copies; it compares slash and backslash equally and preserves case. `records()` exposes each copy's source
 archive/section, exact 84-byte header, unresolved words, GCM description and available pixel entries. Missing pixels
@@ -220,9 +216,9 @@ names/matrices, range failures, remapping and loading. No runtime skinning or lo
 ## Collision
 
 `read::collision::read_collision(&mut world, &[(label, &pak), ...], &surfaces, frame)` reads every `.hkw` entry of
-precisely the supplied archives (the program chooses a level's base and layers) through `primase_havok::packfile`
-(layouts and censuses: `toolkit/havok/README.md`). `SurfaceTable::from_main_db` reads MAIN.DB's `surfaces` table
-(54 rows, `id` 0..53 in order, `NAME`) through `rme_formats::database` (`quantydb-sqlite`). Zero-flag rows retain those indices
+precisely the supplied archives (the program chooses a level's base and layers) through `havok_formats::packfile`
+(layouts and censuses: `repos/havok-formats/README.md`). `SurfaceTable::from_main_db` reads MAIN.DB's `surfaces` table
+(54 rows, `id` 0..53 in order, `NAME`) through `read::database` (`quantydb-sqlite`). Zero-flag rows retain those indices
 and names in `core.surfaces`; distinct used `(database id, opaque flags)` pairs append distinct rows, sorted by pair.
 `shred.collision_surfaces` maps each core index to its original database id, name and flag word. Later reads append
 new pairs without renumbering existing ones, and refuse an incompatible or already lowered surface table.
@@ -262,7 +258,7 @@ histogram (36 ids) and the flag-word census equal, every world verifies, and a m
 and radii and reverses winding.
 ## Scene
 
-`rme_formats::scp_tables::decode(scp)` (called by `scene::decode`, result in `Scene::tables`) reads the SCP's node table
+`read::scp_tables::decode(scp)` (called by `scene::decode`, result in `Scene::tables`) reads the SCP's node table
 (0x70-byte records: id, optional bounding-sphere words, child and placement links resolved to indices), its
 world-matrix table and the blob section chain. A section is `{flags, size, count, data offset}`; the data offset is
 0x10 except 0x20-0x40 for type 0xE, and the chain ends in a 16-byte `{junk, 8, 0, 0}` record: all 411 level SCPs with a
@@ -275,7 +271,7 @@ name is proven, the facing is not (the frame is left-handed, above; which local 
 says so. Twelve class hashes name no proven class and are kept by hash, counted in
 `LevelReport::unnamed_classes`.
 
-`rme_formats::manifest::Manifest::new(db, &[(file, &pak)])` lists the `LEVELS` and `LEVELS/LAYERS` archives: bases, layer
+`read::manifest::Manifest::new(db, &[(file, &pak)])` lists the `LEVELS` and `LEVELS/LAYERS` archives: bases, layer
 archives (`0xDSZZ` name: difficulty nibble, `session_types.id`, map id; quartets they hold) and MAIN.DB's `levels` and
 `session_types` rows. `map_ids(level)`, `common(map)`, `session(map, difficulty, type)`, `layers_naming(level)` and
 `base(level)` filter; nothing is chosen. The row-to-map join is the level's Lua load script (inside `SCRIPTS.SDAT`),
@@ -288,7 +284,7 @@ or lower-cased): 183 of the 194 rows resolve, all to `Teleport` chunks.
 
 ### Splines and lights
 
-Five section types hold splines (`rme_formats::scp_splines`, 56-byte records whose pointers are section-relative; the
+Five section types hold splines (`read::scp_splines`, 56-byte records whose pointers are section-relative; the
 points are already in level space and the record's matrix is not applied). They are the game's five spline classes:
 the executable registers the loaders of types 0, 1, 9, 0xA and 0xC with one spline manager (a pool of 5 classes of
 1,000 records of 56 bytes) under the class indices 0 to 4, and the low half of the section flags varies and means
@@ -311,12 +307,12 @@ surface from `surfaces`) is stated, not proven.
 `read::names` names splines whose id is sdbm of a `NavGuide_<A..ZZ><0..39>` name (1,897 on the disc) or of a
 `FLYTHROUGH_RAIL` name from `<Level>_sessions` (300), as written or lower-cased; the rest stay unnamed.
 
-Type 4 sections are light records (`rme_formats::scp_lights`, 80 bytes + a 64-byte matrix each): colour, name hash, three
+Type 4 sections are light records (`read::scp_lights`, 80 bytes + a 64-byte matrix each): colour, name hash, three
 parameters, a kind code (0: 5,251; 7: 4,079; 8: 398; 1: 23; 4: 23; 3: 4), links and a leftover text buffer. They are
 `shred.light` entities with the record's transform, not core lights: units, range, cone and the shining axis are not
 established.
 
-Type 3 sections are spot cameras (`rme_formats::scp_cameras`, 48-byte records + two 64-byte matrices each; 281 records in 10
+Type 3 sections are spot cameras (`read::scp_cameras`, 48-byte records + two 64-byte matrices each; 281 records in 10
 base SCPs). Each record has the hash of a spot name (`BigJumpOne`, `Chlg17_ObjSpot_Cam12_AnyTrick`: the names of
 the database's spots), an id and parent, an f32 (53.638 in all 281) and a flag (1 in all 281), and offsets of two
 frames. The engine's handler for the section copies them into the object with the record's id, so they are placements
@@ -325,7 +321,7 @@ They are `shred.spot_camera` entities whose transform is the first frame, with t
 one record (the `echo` level's): class `RMLocator`, kind `Waypoint` (both by hash), a name hash and a matrix. It is a
 `shred.locator` entity with a core `Marker` of kind `waypoint`.
 
-Type b sections are occluders (`rme_formats::scp_occluders`; 341 records in 9 SCPs): 16-byte records (name hash, sdbm of
+Type b sections are occluders (`read::scp_occluders`; 341 records in 9 SCPs): 16-byte records (name hash, sdbm of
 `RMOccluder` or `RMOccluder<N>` for 276 of them, other names for 65; matrix and outline offsets; flags) followed, record by record, by a 64-byte matrix and an outline of
 line segments, tiling the section exactly. The flags' low half gives the outline: `0x0800` four segments (269
 records), `0x1801` twelve (72); the high half varies and is kept, unknown. They are `shred.occluder` entities with the
@@ -516,7 +512,7 @@ The other opaque words stay exact. The core transform holds the frame-converted 
 include the original matrix pointer, not a second interpreted transform. The prototype remains reachable
 through this source component even if a later selection removes its core instance.
 
-`rme_formats::session::SessionGraph::from_main_db(bytes, level_id)` reads the caller's
+`components::SessionGraph::from_main_db(bytes, level_id)` (implemented in `read::session`) reads the caller's
 explicit `levels.id` row and all rows of its NAME-prefixed `_sessions`, `_goals` and `_tasks` tables.
 `ShredReader::with_sessions(graph)` attaches that graph as a world resource,
 so loading any placement subset retains its graph. This records source data: no active session, mode, difficulty,

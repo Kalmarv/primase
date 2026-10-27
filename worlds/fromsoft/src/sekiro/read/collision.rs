@@ -9,7 +9,7 @@ use crate::{
     msb::{MapLayout, PartKind},
 };
 use primase_core::{Name, Transform, World};
-use primase_havok::Compendium;
+use havok_formats::Compendium;
 use std::collections::BTreeMap;
 
 /// What the reader found of the area's map collision.
@@ -31,7 +31,7 @@ pub struct Report {
     pub missing_files: Vec<String>,
     /// Bodies of the read files whose shape class has no decoder, by class: listed on their file, not read.
     pub unread_bodies: BTreeMap<String, usize>,
-    /// Compressed-mesh custom primitives of an unknown kind ([`primase_havok::CustomKind::Unread`]): not read.
+    /// Compressed-mesh custom primitives of an unknown kind ([`havok_formats::CustomKind::Unread`]): not read.
     pub unread_custom_primitives: usize,
 }
 

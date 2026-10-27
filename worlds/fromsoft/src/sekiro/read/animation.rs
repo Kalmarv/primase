@@ -35,9 +35,9 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use primase_core::{Entity, Name, Origin, Provenance, World};
-use primase_havok::animation::{Container, Skeleton, container};
+use havok_formats::animation::{Container, Skeleton, container};
 use primase_havok::world::{HavokAnimation, insert_animation, insert_skeleton};
-use primase_havok::{Compendium, Tagfile};
+use havok_formats::{Compendium, Tagfile};
 
 use crate::sekiro::character_data::ClipEvents;
 use crate::tae::{self, Tae};

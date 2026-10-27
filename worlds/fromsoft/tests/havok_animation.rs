@@ -14,14 +14,12 @@
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
-mod inputs;
-
 use std::collections::BTreeMap;
 
-use inputs::{Game, Tool, install, oodle};
 use primase_fromsoft::{Archive, Binder, dcx::Decoder};
-use primase_havok::animation::{Tracks, container};
-use primase_havok::{Compendium, Tagfile};
+use havok_formats::animation::{Tracks, container};
+use havok_formats::{Compendium, Tagfile};
+use primase_testdata::{Game, Tool, install, oodle};
 
 /// The files the census expects not to read cleanly, by file name, and why.
 const KNOWN: [(&str, &str); 1] = [(r"c1090\hkx\a000_205000.hkx", "unsupported SDK version")];
@@ -29,16 +27,9 @@ const KNOWN: [(&str, &str); 1] = [(r"c1090\hkx\a000_205000.hkx", "unsupported SD
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 #[allow(unsafe_code)]
-fn native(
-    path: &inputs::OodleLibrary,
-) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
+fn native(path: &primase_testdata::OodleLibrary) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
     // SAFETY: caller explicitly supplies a trusted native version-6 decoder.
-    unsafe {
-        primase_foundations::compress::oodle::Oodle::open(
-            path.path(),
-            primase_foundations::compress::oodle::Version::V6,
-        )
-    }
+    unsafe { primase_foundations::compress::oodle::Oodle::open(path.path(), primase_foundations::compress::oodle::Version::V6) }
 }
 
 #[test]
@@ -192,7 +183,7 @@ fn h1_every_character_animation_file_reads() -> Result<()> {
 /// rotation, so those would be wrong).
 #[test]
 fn h2_every_spline_animation_decodes() -> Result<()> {
-    use primase_havok::spline::{Absent, Component, Rotation, SplineAnimation};
+    use havok_formats::spline::{Absent, Component, Rotation, SplineAnimation};
 
     /// What the statistics below say an absent component is: zero, the identity, one.
     const ABSENT: Absent = Absent::NEUTRAL;

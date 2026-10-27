@@ -1,6 +1,6 @@
 [package]
 name = "primase-havok"
-description = "Checked Havok tagfile and compendium views"
+description = "Havok convex cores as triangles, and Havok skeletons and animations as world data with their clip lowering"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,6 +11,7 @@ publish.workspace = true
 [dependencies]
 thiserror.workspace = true
 primase-foundations.workspace = true
+havok-formats.workspace = true
 primase-core.workspace = true
 
 [dev-dependencies]

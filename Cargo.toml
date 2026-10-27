@@ -13,6 +13,7 @@ members = [
     "toolkit/exactsum",
     "repos/dx/dxcontainer",
     "repos/dx/rsx-reader",
+    "repos/havok-formats",
     "toolkit/havok",
     "repos/morpheme-formats",
     "repos/rme-formats",
@@ -91,6 +92,7 @@ primase-exactsum = { path = "toolkit/exactsum" }
 dxcontainer = { path = "repos/dx/dxcontainer" }
 rsx-reader = { path = "repos/dx/rsx-reader" }
 primase-cache = { path = "toolkit/cache" }
+havok-formats = { path = "repos/havok-formats" }
 primase-havok = { path = "toolkit/havok" }
 morpheme-formats = { path = "repos/morpheme-formats" }
 rme-formats = { path = "repos/rme-formats" }
