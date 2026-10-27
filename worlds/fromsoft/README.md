@@ -531,7 +531,11 @@ A character's or part's files are kept beyond the model and its clips:
   animation's record is put on the animation's entity as `fromsoft.clip_events` (the events with their type, their start
   and end in seconds, the word after the type and their parameter bytes, and the record's mini header), found by the
   animation's number (`a000_003000` is the record numbered 3000, `a050_003000` the one numbered 50003000:
-  `tae::clip_animation_id`). The report counts the records no animation matches and the animations no record matches
+  `tae::clip_animation_id`). The player's binder holds one event file per animation group (`a50.tae` in binder slot
+  5,000,050), storing numbers within the group: each file is numbered by its slot (`Tae::read_member`), and an import
+  (`ImportOther`) is followed to the animation it names among the event files of the record's own binder
+  (`tae::resolve`); one naming an animation those files do not hold leaves the clip without events, refused by name in
+  the report. The report counts the records no animation matches and the animations no record matches
   (`AnimationReport::tae_unmatched`, `clips_without_events`); `tests/character_census.rs` prints the first numbers of
   each beside the first names so the rule can be read against the install. The event types are the file's numbers;
   their names are the game's templates, which the file does not carry. An object's binder (`o252050.tae`) is read the

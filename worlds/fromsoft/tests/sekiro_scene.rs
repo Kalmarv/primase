@@ -368,8 +368,10 @@ fn installed_area_against_soulsformats() -> Result<()> {
             Some("m11_wood_13_a"),
             Some("m11_wood_08_n"),
         ),
-        // M[m11_01]_Tessellation_Water: no albedo bound; water.
-        ("m11_01_00_00/m210000", 0, "water", None, None),
+        // M[m11_01]_Tessellation_Water: water; the FLVER binds no path in any slot, so its MTD's own textures stand:
+        // no albedo, and the normal map the preview takes for water (the lowest normal slot) is Texture2D_2_NormalMap,
+        // m99_Water_n (SoulsFormats' MTD reading, oracles.soulsformats.sekiro/materials).
+        ("m11_01_00_00/m210000", 0, "water", None, Some("m99_water_n")),
     ] {
         let e = by_source
             .get(source)

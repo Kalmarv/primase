@@ -3,12 +3,7 @@
 //! scale samples of the flower's influencing bones (plus their ancestors). Run with --nocapture.
 mod inputs;
 
-use fromsoft_formats::{
-    Binder, Game, Install, Keys,
-    dcx::Decoder,
-    flver::Model,
-    tae::{Header, Tae},
-};
+use fromsoft_formats::{Binder, Game, Install, Keys, dcx::Decoder, flver::Model, tae::Tae};
 use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use primase_core::convert::Reader;
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
@@ -686,20 +681,19 @@ fn malenia_draw_flags_material_records_and_all_tae_controls() -> Result<()> {
             if !leaf(member).to_ascii_lowercase().ends_with(".tae") {
                 continue;
             }
-            let tae = Tae::read(&decoder.decode_if_dcx(&file.bytes)?)?;
+            let tae = Tae::read_member(&binder, file)?;
             for animation in &tae.animations {
-                let resolved = tae
-                    .resolved_animation(animation.id)?
-                    .ok_or("TAE record disappeared")?;
+                let number = tae.number(animation);
+                let resolved = tae.resolved_animation(number)?.ok_or("TAE record disappeared")?;
                 for event in &resolved.events {
                     *kinds.entry(event.kind).or_insert(0usize) += 1;
-                    if matches!(animation.id, 2000 | 3029 | 3019 | 20002)
+                    if matches!(number, 2000 | 3029 | 3019 | 20002)
                         || matches!(event.kind, 193..=200 | 233 | 235 | 710 | 711 | 713)
                     {
                         println!(
                             "MALENIA_EVENT_CONTROL={}",
-                            json!({"binder":set,"file":member,"animation":animation.id,
-                            "resolved":resolved.id,"kind":event.kind,"start":event.start,"end":event.end,"parameters":event.parameters})
+                            json!({"binder":set,"file":member,"animation":number,
+                            "resolved":tae.number(resolved),"kind":event.kind,"start":event.start,"end":event.end,"parameters":event.parameters})
                         );
                     }
                 }
@@ -844,30 +838,22 @@ fn malenia_source_mesh_groups_tae233_and_petal_bone_scales() -> Result<()> {
             if !leaf(member).to_ascii_lowercase().ends_with(".tae") {
                 continue;
             }
-            let tae = Tae::read(&decoder.decode_if_dcx(&file.bytes)?)?;
+            let tae = Tae::read_member(&binder, file)?;
             for animation in &tae.animations {
-                let mut resolved = animation;
-                let mut seen = BTreeSet::new();
-                while let Header::ImportOther { from, .. } = &resolved.header {
-                    if !seen.insert(resolved.id) {
-                        return Err("TAE import cycle".into());
-                    }
-                    resolved = tae
-                        .animation(i64::from(*from))
-                        .ok_or("TAE import target missing")?;
-                }
+                let number = tae.number(animation);
+                let resolved = tae.resolved_animation(number)?.ok_or("TAE record disappeared")?;
                 for event in resolved
                     .events
                     .iter()
                     .filter(|e| matches!(e.kind, 233 | 711 | 713))
                 {
                     if event.kind == 233 {
-                        attack_ids.insert(animation.id);
+                        attack_ids.insert(number);
                     }
                     println!(
                         "MALENIA_TAE={}",
-                        json!({"binder":set,"file":member,"animation":animation.id,
-                        "resolved_animation":resolved.id,"header":animation.header,"kind":event.kind,
+                        json!({"binder":set,"file":member,"animation":number,
+                        "resolved_animation":tae.number(resolved),"header":animation.header,"kind":event.kind,
                         "start":event.start,"end":event.end,"bytes":event.parameters,
                         "mask32":if event.kind==233 {event.parameters.get(..32)} else {None}})
                     );

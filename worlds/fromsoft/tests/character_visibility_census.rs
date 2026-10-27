@@ -5,7 +5,7 @@ mod inputs;
 use fromsoft_formats::{
     Binder, Game, Install, Keys, NameDictionary,
     dcx::Decoder,
-    tae::{Tae, clip_animation_id},
+    tae::{self, Tae, clip_animation_id},
 };
 use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use primase_core::convert::Reader;
@@ -67,19 +67,29 @@ fn every_sekiro_and_elden_character_reports_its_clip_visibility_event_coverage()
                 continue;
             }
             let mut records = std::collections::BTreeMap::new();
+            // imports naming an animation no event file of the binder holds: their records have no events to read
+            let mut unresolved = Vec::new();
             for binder in common::clip_binders(&plans) {
                 let binder = Binder::read(&archive.read(&binder, &decoder)?, &decoder)?;
+                let mut taes = Vec::new();
                 for file in &binder.files {
                     let name = file.name.as_deref().unwrap_or("");
-                    if !name.to_ascii_lowercase().ends_with(".tae") {
-                        continue;
+                    if name.to_ascii_lowercase().ends_with(".tae") {
+                        taes.push(Tae::read_member(&binder, file)?);
                     }
-                    let tae = Tae::read(&decoder.decode_if_dcx(&file.bytes)?)?;
+                }
+                // an import names an animation of any event file of the binder
+                for tae in &taes {
                     for animation in &tae.animations {
-                        if let Some(inherited) = tae.resolved_animation(animation.id)? {
-                            records
-                                .entry(animation.id)
-                                .or_insert_with(|| sekiro::decode_visibility(character, &inherited.events));
+                        let number = tae.number(animation);
+                        match tae::resolve(&taes, number) {
+                            Ok(Some((_, inherited))) => {
+                                records.entry(number).or_insert_with(|| {
+                                    sekiro::decode_visibility(character, &inherited.events)
+                                });
+                            }
+                            Ok(None) => return Err("a TAE record disappeared".into()),
+                            Err(why) => unresolved.push(why.to_string()),
                         }
                     }
                 }
@@ -106,7 +116,7 @@ fn every_sekiro_and_elden_character_reports_its_clip_visibility_event_coverage()
             println!(
                 "FS_CHARACTER_VISIBILITY={}",
                 json!({"game":game.name(),"character":character,"clips":clips.len(),
-                "clips_with_tae":matched,"visibility_clips":visibility,"visibility_events":events,"by_kind":kinds,"refused_records":refused,
+                "clips_with_tae":matched,"visibility_clips":visibility,"visibility_events":events,"by_kind":kinds,"refused_records":refused,"unresolved_imports":unresolved,
                 "scope":"TAE233 latched assignments and711/713 intervals; bone-scale motion not decoded in this census"})
             );
         }

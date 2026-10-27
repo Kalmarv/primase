@@ -143,6 +143,7 @@ mod tests {
             event_bank: 0,
             skeleton_name: None,
             sib_name: None,
+            group: 0,
             animations: vec![own, alias],
         };
         let inherited = tae.resolved_animation(2).unwrap().unwrap();

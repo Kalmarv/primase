@@ -77,8 +77,8 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>, ids: &[&str]) ->
                     .as_deref()
                     .is_some_and(|n| n.to_ascii_lowercase().ends_with(".tae"))
             }) {
-                if let Ok(tae) = Tae::read(&decoder.decode_if_dcx(&f.bytes)?) {
-                    let numbers: Vec<i64> = tae.animations.iter().take(10).map(|a| a.id).collect();
+                if let Ok(tae) = Tae::read_member(&binder, f) {
+                    let numbers: Vec<i64> = tae.animations.iter().take(10).map(|a| tae.number(a)).collect();
                     let clips = plans
                         .iter::<sekiro::ClipSource>()
                         .map(|(_, source)| source.name.clone())

@@ -14,9 +14,11 @@
 //! by name as any other. Markers of other characters (`delayload_c0000_c1020.txt`) name no binder of this one and stay
 //! unread.
 //!
-//! A binder's event file (`c1010.tae`, an object's `o252050.tae`) is read too ([`fromsoft_formats::tae`]): the record of each
-//! animation read is put on its entity as `fromsoft.clip_events` (the events with their times and parameter bytes as
-//! stored), found by the animation's number (`a000_003000` is the record numbered 3000; [`fromsoft_formats::tae::clip_animation_id`]).
+//! A binder's event files (`c1010.tae`, an object's `o252050.tae`, the player's `a50.tae` of group 50) are read too
+//! ([`fromsoft_formats::tae`], each numbered by its binder slot): the record of each animation read is put on its entity
+//! as `fromsoft.clip_events` (the events with their times and parameter bytes as stored), found by the animation's
+//! number (`a050_003000` is the record numbered 50,003,000; [`fromsoft_formats::tae::clip_animation_id`]), its imports
+//! followed among the event files of its own binder.
 //! The report counts the records no animation matches and the animations no record matches, so a numbering that does not
 //! hold shows as counts, not as silence.
 //!
@@ -387,7 +389,7 @@ impl ClipReader {
             for (file, tae) in &held.events {
                 self.event_records
                     .entry((binder.clone(), file.clone()))
-                    .or_insert_with(|| tae.animations.iter().map(|a| a.id).collect());
+                    .or_insert_with(|| tae.animations.iter().map(|a| tae.number(a)).collect());
             }
         }
         let result = insert(held, &source.character, report, install.game, world)?;
@@ -671,7 +673,7 @@ fn hold_with_compendium(
         }
         if lower.ends_with(".tae") {
             let file = file_name(name);
-            match Tae::read(&decoder.decode_if_dcx(&f.bytes)?) {
+            match Tae::read_member(binder, f) {
                 Ok(tae) => {
                     report.tae_files += 1;
                     held.events.push((file, Arc::new(tae)));
@@ -799,9 +801,12 @@ fn insert(
         out.skeleton.get_or_insert(entity);
         skeletons.insert(s.name.clone(), (entity, s.clone()));
     }
-    // the event files of every binder, in read order, and which of their animations an animation read matched
+    // the event files of every binder, in read order, the binder of each, and which of their animations an animation
+    // read matched
     let mut records: Vec<(String, Arc<Tae>)> = Vec::new();
-    for h in &mut held {
+    let mut binder_of: Vec<usize> = Vec::new();
+    for (set, h) in held.iter_mut().enumerate() {
+        binder_of.extend(std::iter::repeat_n(set, h.events.len()));
         records.append(&mut h.events);
     }
     let mut matched: std::collections::BTreeSet<(usize, i64)> = std::collections::BTreeSet::new();
@@ -859,25 +864,39 @@ fn insert(
                 });
                 match record {
                     Some((i, name, a)) => {
-                        let inherited = records[i]
-                            .1
-                            .resolved_animation(a.id)?
-                            .ok_or_else(|| crate::invalid("TAE", 0, "matched event record disappeared"))?;
-                        out.report.events += inherited.events.len();
-                        matched.insert((i, a.id));
-                        w.insert(e, super::visibility::decode(id, &inherited.events));
-                        w.insert(
-                            e,
-                            ClipEvents {
-                                file: name.clone(),
-                                animation: a.id,
-                                header: a.header.clone(),
-                                file_name: a.file_name.clone(),
-                                authored_events: a.events.clone(),
-                                typed: super::clip_events::decode(game, &inherited.events),
-                                events: inherited.events.clone(),
-                            },
-                        );
+                        let number = records[i].1.number(a);
+                        // an import names an animation of the event files of the record's own binder
+                        let binder: Vec<&Tae> = records
+                            .iter()
+                            .zip(&binder_of)
+                            .filter(|(_, set)| **set == binder_of[i])
+                            .map(|((_, t), _)| &**t)
+                            .collect();
+                        matched.insert((i, number));
+                        // an import naming an animation the binder's event files do not hold leaves the clip without
+                        // events, named in the report
+                        match tae::resolve(&binder, number) {
+                            Ok(Some((_, inherited))) => {
+                                out.report.events += inherited.events.len();
+                                w.insert(e, super::visibility::decode(id, &inherited.events));
+                                w.insert(
+                                    e,
+                                    ClipEvents {
+                                        file: name.clone(),
+                                        animation: number,
+                                        header: a.header.clone(),
+                                        file_name: a.file_name.clone(),
+                                        authored_events: a.events.clone(),
+                                        typed: super::clip_events::decode(game, &inherited.events),
+                                        events: inherited.events.clone(),
+                                    },
+                                );
+                            }
+                            Ok(None) => {
+                                return Err(crate::invalid("TAE", 0, "matched event record disappeared"));
+                            }
+                            Err(why) => refuse(&mut out.report, &format!("events not read: {why}"), &file),
+                        }
                     }
                     None if !records.is_empty() => out.report.clips_without_events += 1,
                     None => {}

@@ -107,7 +107,7 @@ primase_testdata::inputs! {
             status: Live,
             gate: true,
             about: r#"a folder of Sekiro's LZB16 streams (Oodle decoder type 2, `8C 02`): `<hash>.payload`, the stream as the archive stores it in its DCX envelope from the block header on, and `<hash>.decoded`, the game's Oodle library's output for it; worlds/fromsoft/tests/lznib_gate.rs"#,
-            source: r#"the game's own library's output for the game's own streams: worlds/fromsoft/tests/krak_archive.rs with the debug key `oodle.dump` on a machine with the Oodle 6 library, the files it keeps for the streams oozextract cannot decode or decodes differently"#,
+            source: r#"the game's own library's output for the game's own streams: worlds/fromsoft/examples/corpus_sekiro_lzb16.rs (every Kraken-enveloped stream of the install whose first block header is `8C 02`, decoded by the install's Oodle 6 library)"#,
         },
         Query::Oracle(OracleSet::Corpus, Game::Sekiro, "shaders") => {
             status: Live,

@@ -50,12 +50,14 @@ impl Component for Cloth {
 /// The events one animation's `.tae` record holds (`fromsoft.clip_events`, on the entity that holds the animation and,
 /// once lowered, its `core.clip`): where the record was read from, the animation's number in it, its mini header and
 /// the events with their times in seconds and their parameter bytes as stored.
-/// Version 2 retains the authored record separately and adds reader-typed descriptors.
+/// Version 2 retains the authored record separately and adds reader-typed descriptors. Version 3 numbers the animation
+/// with its group (the player's event files store numbers within their group).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ClipEvents {
     /// The `.tae` member the record was read from (`c1010.tae`).
     pub file: String,
-    /// The animation's number as the file stores it (`3000`).
+    /// The animation's number: its group times a million plus the number the file stores (`3000`, `50122301`;
+    /// [`fromsoft_formats::tae::Tae::number`]).
     pub animation: i64,
     pub header: Header,
     /// The motion file name the record's mini header names, where it names one.
@@ -80,7 +82,7 @@ pub struct DecodedEvent {
 }
 impl Component for ClipEvents {
     const NAME: &'static str = "fromsoft.clip_events";
-    const VERSION: u32 = 2;
+    const VERSION: u32 = 3;
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         to_value(self).map(Some)
