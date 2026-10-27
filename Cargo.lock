@@ -96,7 +96,7 @@ dependencies = [
 [[package]]
 name = "anvil-formats"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/anvil-formats?rev=d9ba3acfebd9a1bee5be8869db7a3ef823478d3e#d9ba3acfebd9a1bee5be8869db7a3ef823478d3e"
+source = "git+https://github.com/Kalmarv/anvil-formats?rev=039ab87775795ac49a1067eaf9d84a2fad0a38da#039ab87775795ac49a1067eaf9d84a2fad0a38da"
 dependencies = [
  "dxcontainer",
  "primase-foundations",
@@ -456,8 +456,8 @@ dependencies = [
 
 [[package]]
 name = "dxbc-reader"
-version = "0.1.0"
-source = "git+https://github.com/Kalmarv/dx?rev=ab07f2b27e9f154508c4502ac8b61134b7e34b08#ab07f2b27e9f154508c4502ac8b61134b7e34b08"
+version = "0.1.1"
+source = "git+https://github.com/Kalmarv/dx?rev=ee5dce9e8d52ccdf54864245ecca2cc0ee8a53bf#ee5dce9e8d52ccdf54864245ecca2cc0ee8a53bf"
 dependencies = [
  "dxcontainer",
  "thiserror",
@@ -465,8 +465,8 @@ dependencies = [
 
 [[package]]
 name = "dxcontainer"
-version = "0.1.0"
-source = "git+https://github.com/Kalmarv/dx?rev=ab07f2b27e9f154508c4502ac8b61134b7e34b08#ab07f2b27e9f154508c4502ac8b61134b7e34b08"
+version = "0.1.1"
+source = "git+https://github.com/Kalmarv/dx?rev=ee5dce9e8d52ccdf54864245ecca2cc0ee8a53bf#ee5dce9e8d52ccdf54864245ecca2cc0ee8a53bf"
 dependencies = [
  "primase-foundations",
  "thiserror",
@@ -474,8 +474,8 @@ dependencies = [
 
 [[package]]
 name = "dxil-reader"
-version = "0.1.0"
-source = "git+https://github.com/Kalmarv/dx?rev=ab07f2b27e9f154508c4502ac8b61134b7e34b08#ab07f2b27e9f154508c4502ac8b61134b7e34b08"
+version = "0.1.1"
+source = "git+https://github.com/Kalmarv/dx?rev=ee5dce9e8d52ccdf54864245ecca2cc0ee8a53bf#ee5dce9e8d52ccdf54864245ecca2cc0ee8a53bf"
 dependencies = [
  "dxcontainer",
  "primase-foundations",
@@ -574,7 +574,7 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 [[package]]
 name = "fromsoft-formats"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/fromsoft-formats?rev=7936aa30b2e14b311687fe78e0904e4ab08c55a8#7936aa30b2e14b311687fe78e0904e4ab08c55a8"
+source = "git+https://github.com/Kalmarv/fromsoft-formats?rev=05ee19cd739d807563b851f1bfbf785cdd005b46#05ee19cd739d807563b851f1bfbf785cdd005b46"
 dependencies = [
  "aes",
  "encoding_rs",
@@ -590,7 +590,7 @@ dependencies = [
 [[package]]
 name = "frostbite-formats"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/frostbite-formats?rev=acf57b0145bde7c131d21c123b610fa6e71171be#acf57b0145bde7c131d21c123b610fa6e71171be"
+source = "git+https://github.com/Kalmarv/frostbite-formats?rev=55995371da07a29e1f2a61291712e5aaeaf6ebb0#55995371da07a29e1f2a61291712e5aaeaf6ebb0"
 dependencies = [
  "half",
  "primase-foundations",
@@ -727,7 +727,7 @@ dependencies = [
 [[package]]
 name = "havok-formats"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/havok-formats?rev=fd5ac50a722dfb993ad232605cea7bc0577c2134#fd5ac50a722dfb993ad232605cea7bc0577c2134"
+source = "git+https://github.com/Kalmarv/havok-formats?rev=1da63c88309165c03c9bf0e57b1e2debee40e2a7#1da63c88309165c03c9bf0e57b1e2debee40e2a7"
 dependencies = [
  "primase-foundations",
  "thiserror",
@@ -764,7 +764,7 @@ dependencies = [
 [[package]]
 name = "iridia"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=d07dc203ed8a9599a97cf3518485af2cb85025b6#d07dc203ed8a9599a97cf3518485af2cb85025b6"
+source = "git+https://github.com/Kalmarv/iridia?rev=4b2bc5d49645b1e8d8affbc861610d77a1fe0257#4b2bc5d49645b1e8d8affbc861610d77a1fe0257"
 dependencies = [
  "iridia-interface",
  "primase-naga",
@@ -775,7 +775,7 @@ dependencies = [
 [[package]]
 name = "iridia-d3d9"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=d07dc203ed8a9599a97cf3518485af2cb85025b6#d07dc203ed8a9599a97cf3518485af2cb85025b6"
+source = "git+https://github.com/Kalmarv/iridia?rev=4b2bc5d49645b1e8d8affbc861610d77a1fe0257#4b2bc5d49645b1e8d8affbc861610d77a1fe0257"
 dependencies = [
  "iridia",
  "iridia-interface",
@@ -785,7 +785,7 @@ dependencies = [
 [[package]]
 name = "iridia-dxbc"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=d07dc203ed8a9599a97cf3518485af2cb85025b6#d07dc203ed8a9599a97cf3518485af2cb85025b6"
+source = "git+https://github.com/Kalmarv/iridia?rev=4b2bc5d49645b1e8d8affbc861610d77a1fe0257#4b2bc5d49645b1e8d8affbc861610d77a1fe0257"
 dependencies = [
  "dxbc-reader",
  "dxcontainer",
@@ -796,7 +796,7 @@ dependencies = [
 [[package]]
 name = "iridia-dxil"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=d07dc203ed8a9599a97cf3518485af2cb85025b6#d07dc203ed8a9599a97cf3518485af2cb85025b6"
+source = "git+https://github.com/Kalmarv/iridia?rev=4b2bc5d49645b1e8d8affbc861610d77a1fe0257#4b2bc5d49645b1e8d8affbc861610d77a1fe0257"
 dependencies = [
  "dxcontainer",
  "dxil-reader",
@@ -808,7 +808,7 @@ dependencies = [
 [[package]]
 name = "iridia-exec"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=d07dc203ed8a9599a97cf3518485af2cb85025b6#d07dc203ed8a9599a97cf3518485af2cb85025b6"
+source = "git+https://github.com/Kalmarv/iridia?rev=4b2bc5d49645b1e8d8affbc861610d77a1fe0257#4b2bc5d49645b1e8d8affbc861610d77a1fe0257"
 dependencies = [
  "half",
  "iridia",
@@ -821,7 +821,7 @@ dependencies = [
 [[package]]
 name = "iridia-interface"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=d07dc203ed8a9599a97cf3518485af2cb85025b6#d07dc203ed8a9599a97cf3518485af2cb85025b6"
+source = "git+https://github.com/Kalmarv/iridia?rev=4b2bc5d49645b1e8d8affbc861610d77a1fe0257#4b2bc5d49645b1e8d8affbc861610d77a1fe0257"
 dependencies = [
  "serde",
 ]
@@ -829,7 +829,7 @@ dependencies = [
 [[package]]
 name = "iridia-mojo"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=d07dc203ed8a9599a97cf3518485af2cb85025b6#d07dc203ed8a9599a97cf3518485af2cb85025b6"
+source = "git+https://github.com/Kalmarv/iridia?rev=4b2bc5d49645b1e8d8affbc861610d77a1fe0257#4b2bc5d49645b1e8d8affbc861610d77a1fe0257"
 dependencies = [
  "iridia",
  "primase-naga",
@@ -914,7 +914,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 [[package]]
 name = "lua51-bytecode"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/lua51-bytecode?rev=7060ef7d8f2bd3adc48c9bc5853945231aba05c3#7060ef7d8f2bd3adc48c9bc5853945231aba05c3"
+source = "git+https://github.com/Kalmarv/lua51-bytecode?rev=07acfdfb6fd703a166e9f185604f7f1623f51ca0#07acfdfb6fd703a166e9f185604f7f1623f51ca0"
 dependencies = [
  "primase-foundations",
  "thiserror",
@@ -982,7 +982,7 @@ dependencies = [
 [[package]]
 name = "monogame-formats"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/monogame-formats?rev=bef1834f063948907f3c2c93d2f00bd6ccb5605b#bef1834f063948907f3c2c93d2f00bd6ccb5605b"
+source = "git+https://github.com/Kalmarv/monogame-formats?rev=914dda828e636d8f2688498354653ffebd819599#914dda828e636d8f2688498354653ffebd819599"
 dependencies = [
  "primase-foundations",
  "thiserror",
@@ -991,7 +991,7 @@ dependencies = [
 [[package]]
 name = "morpheme-formats"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/morpheme-formats?rev=bec4fb142111be5bba3c5b95f48f6a91357e8973#bec4fb142111be5bba3c5b95f48f6a91357e8973"
+source = "git+https://github.com/Kalmarv/morpheme-formats?rev=3bed1179a9ef237865e9b8fefe306484c735a2e2#3bed1179a9ef237865e9b8fefe306484c735a2e2"
 dependencies = [
  "primase-foundations",
  "thiserror",
@@ -1080,6 +1080,20 @@ name = "oorandom"
 version = "11.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
+
+[[package]]
+name = "oozextract"
+version = "0.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "890a74cc43300b8e482f62f989bcab89ec760921b0cea87aa5bbb7fdfef1c013"
+dependencies = [
+ "bytemuck",
+ "bytes",
+ "futures",
+ "log",
+ "test-log",
+ "wide",
+]
 
 [[package]]
 name = "page_size"
@@ -1241,14 +1255,14 @@ dependencies = [
 
 [[package]]
 name = "primase-foundations"
-version = "0.1.0"
-source = "git+https://github.com/Kalmarv/primase-foundations?rev=dc4369b73343f3e0d81adc47f2e504027efc1d5a#dc4369b73343f3e0d81adc47f2e504027efc1d5a"
+version = "0.2.0"
+source = "git+https://github.com/Kalmarv/primase-foundations?rev=b3a3d4b3a892b8342fda081ab4449bb57052a2f8#b3a3d4b3a892b8342fda081ab4449bb57052a2f8"
 dependencies = [
  "flate2",
  "half",
  "libloading 0.9.0",
  "lz4_flex",
- "primase-oozextract",
+ "oozextract",
  "ruzstd",
  "thiserror",
 ]
@@ -1441,19 +1455,6 @@ dependencies = [
  "once_cell",
  "rustc-hash 1.1.0",
  "thiserror",
-]
-
-[[package]]
-name = "primase-oozextract"
-version = "0.5.6"
-source = "git+https://github.com/Kalmarv/primase-oozextract?rev=9273ca48cd301d0cf7fb7cd3a83c9ecdc6c0bb32#9273ca48cd301d0cf7fb7cd3a83c9ecdc6c0bb32"
-dependencies = [
- "bytemuck",
- "bytes",
- "futures",
- "log",
- "test-log",
- "wide",
 ]
 
 [[package]]
@@ -1667,7 +1668,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 [[package]]
 name = "rage-engine-formats"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/rage-engine-formats?rev=185a406869c5bf2b53735a1137a2524645bd6660#185a406869c5bf2b53735a1137a2524645bd6660"
+source = "git+https://github.com/Kalmarv/rage-engine-formats?rev=55ddde5ce56b7e552749f3ba84a60f796f5d982a#55ddde5ce56b7e552749f3ba84a60f796f5d982a"
 dependencies = [
  "aes",
  "indexmap",
@@ -1710,7 +1711,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 [[package]]
 name = "rme-formats"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/rme-formats?rev=96764e30df25967fe27bb0160f1a835079f2ad31#96764e30df25967fe27bb0160f1a835079f2ad31"
+source = "git+https://github.com/Kalmarv/rme-formats?rev=4a6e2e3dda68d3dd6a475c65af32934ed51ae034#4a6e2e3dda68d3dd6a475c65af32934ed51ae034"
 dependencies = [
  "half",
  "lua51-bytecode",
@@ -1724,8 +1725,8 @@ dependencies = [
 
 [[package]]
 name = "rsx-reader"
-version = "0.1.0"
-source = "git+https://github.com/Kalmarv/dx?rev=ab07f2b27e9f154508c4502ac8b61134b7e34b08#ab07f2b27e9f154508c4502ac8b61134b7e34b08"
+version = "0.1.1"
+source = "git+https://github.com/Kalmarv/dx?rev=ee5dce9e8d52ccdf54864245ecca2cc0ee8a53bf#ee5dce9e8d52ccdf54864245ecca2cc0ee8a53bf"
 dependencies = [
  "primase-foundations",
  "thiserror",
@@ -2123,7 +2124,7 @@ checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
 [[package]]
 name = "unity-formats"
 version = "0.1.0"
-source = "git+https://github.com/Kalmarv/unity-formats?rev=fa95acb5c6cc2f0d377b082fe353a74bcf45e9b1#fa95acb5c6cc2f0d377b082fe353a74bcf45e9b1"
+source = "git+https://github.com/Kalmarv/unity-formats?rev=6f0a1fc6753f4f7fa75aed838c716580afc10de5#6f0a1fc6753f4f7fa75aed838c716580afc10de5"
 dependencies = [
  "half",
  "primase-foundations",
