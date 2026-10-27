@@ -472,7 +472,7 @@ impl Reader for AnvilReader {
         let mut world = World::new();
         let mut placed = Placed::default();
         let mut refused: Vec<(u64, String)> = Vec::new();
-        let mut ranges: Vec<(usize, [usize; 5], usize)> = Vec::new();
+        let mut ranges: Vec<(usize, [usize; 8], usize)> = Vec::new();
         {
             let mut placer = Placer::new(
                 &mut self.archive,
@@ -482,13 +482,7 @@ impl Reader for AnvilReader {
             )
             .with_instanced_collision(self.options.instanced_collision);
             for (k, (f, at)) in to_place.iter().enumerate() {
-                let before = [
-                    placed.placements.len(),
-                    placed.collisions.len(),
-                    placed.lakes.len(),
-                    placed.deferred_decals.len(),
-                    placed.grass.len(),
-                ];
+                let before = placed.made_lengths();
                 if let Err(e) = placer.place(*at, &mut placed) {
                     refused.push((f.id, e.to_string()));
                 }
@@ -496,13 +490,7 @@ impl Reader for AnvilReader {
             }
         }
         // each owner's marks, on everything made for it: the placements' ranges run to the next owner's start
-        let ends = [
-            placed.placements.len(),
-            placed.collisions.len(),
-            placed.lakes.len(),
-            placed.deferred_decals.len(),
-            placed.grass.len(),
-        ];
+        let ends = placed.made_lengths();
         for (n, &(k, before, _)) in ranges.iter().enumerate() {
             let after = ranges.get(n + 1).map_or(ends, |r| r.1);
             let f = to_place[k].0;
@@ -512,14 +500,7 @@ impl Reader for AnvilReader {
                 cells: f.cells.clone(),
                 reached_from: f.reached_from,
             };
-            let lists: [&[Entity]; 5] = [
-                &placed.placements,
-                &placed.collisions,
-                &placed.lakes,
-                &placed.deferred_decals,
-                &placed.grass,
-            ];
-            for (list, (b, a)) in lists.iter().zip(before.iter().zip(after)) {
+            for (list, (b, a)) in placed.made().iter().zip(before.iter().zip(after)) {
                 for &e in &list[*b..a] {
                     world.insert(e, mark.clone());
                 }
@@ -653,7 +634,7 @@ impl Reader for AnvilReader {
 fn summary(p: &Placed) -> String {
     format!(
         "{} placements, {} collisions, {} lakes, {} deferred decal sets, {} static decals, {} fakes, {} water bodies, \
-         {} collision-only, {} hidden or phantom, {} grass setups",
+         {} collision-only, {} hidden or phantom, {} grass setups, {} lights, {} markers, {} source records",
         p.placements.len(),
         p.collisions.len(),
         p.lakes.len(),
@@ -663,7 +644,10 @@ fn summary(p: &Placed) -> String {
         p.water_bodies,
         p.collision_only,
         p.hidden_or_phantom,
-        p.grass.len()
+        p.grass.len(),
+        p.lights.len(),
+        p.markers.len(),
+        p.sources.len()
     )
 }
 
@@ -712,12 +696,6 @@ fn read_notices(
         NoticeKind::Unsupported,
         "visuals whose object resolves to nothing the reader places",
         placed.visuals_skipped,
-        Vec::new(),
-    );
-    push(
-        NoticeKind::Unsupported,
-        "levels referring to an Impostor, not placed",
-        placed.impostor_levels,
         Vec::new(),
     );
     push(

@@ -217,10 +217,11 @@ fn graffiti_monster_bakes_as_the_notes_formulas() {
         ids.len()
     );
     // a second tiling that isn't whole isn't periodic in the UV square: left to lower-anvil-material, the others baked
+    // (the two so left store it unrotated, 0.5 by 0.5: the coefficient that isn't whole is its scale)
     let aperiodic = log
         .omitted
         .get(
-            "MAD_Tex1_Graffiti_Monster Materials not baked (left to lower-anvil-material): UV transform BEE89D40: a scale that isn't whole (not periodic in the square)",
+            "MAD_Tex1_Graffiti_Monster Materials not baked (left to lower-anvil-material): UV transform BEE89D40: a matrix coefficient that isn't whole (not periodic in the square)",
         )
         .copied()
         .unwrap_or(0);

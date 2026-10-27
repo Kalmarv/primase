@@ -211,9 +211,10 @@ impl Component for AnvilMesh {
     }
 }
 
-/// A LODSelector's mesh levels on the prototype placed for it (`anvil.lods`): the prototype's own [`AnvilMesh`] is the
-/// level `detail` (the finest level with a mesh), `forms` the other levels with a mesh (each `(level, entity)`, the
-/// entity holding its [`AnvilMesh`], not placed). Levels referring to an Impostor or to nothing aren't forms.
+/// A LODSelector's levels on the prototype placed for it (`anvil.lods`): the prototype's own [`AnvilMesh`] (or
+/// [`AnvilImpostor`]) is the level `detail` (the finest level read), `forms` the other levels read (each
+/// `(level, entity)`, the entity holding its [`AnvilMesh`] or [`AnvilImpostor`], not placed). Levels referring to
+/// nothing aren't forms.
 /// `lower-anvil-lods` makes `core.lods` of it once the meshes are core meshes; which level the game draws when isn't
 /// read (it chooses by distance), so no default.
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -1468,10 +1468,10 @@ impl Pass for BakeAnvilMaterial {
                 );
             }
             if !baked.plain {
-                log.approximate_on(e,
+                log.omit(
                     &format!(
-                        "{} Materials' G-buffer specular occlusion or translucency is non-neutral; core.pbr has no separate terms: left out",
-                        template
+                        "{template} Materials' specular occlusion or translucency (not (1, 0) everywhere; core.pbr has \
+                         no place for them): left out"
                     ),
                     1,
                 );

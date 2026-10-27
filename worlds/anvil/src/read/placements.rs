@@ -18,11 +18,17 @@
 //!   Entities read). What each instance places is the caller's stated [`InstancedLevels`].
 //! - In more than one slot, in the LODSelectorInstance itself or in an ImpostorInstanceData: not seen, refused.
 //!
-//! Impostor levels retain their authored cards and owned atlases in `AnvilImpostor`, including forms reached through
+//! Impostor levels retain their authored cards and owned atlases in [`AnvilImpostor`], including forms reached through
 //! a selector; lowering chooses their static representation. An Entity or EntityGroup whose `IsHidden` or `IsPhantom`
-//! is set isn't placed at all ([`Placed::hidden_or_phantom`]): on Riders Republic those are UI, HUD and editor helpers
-//! (docs/placement.md §19.1). A Visual whose MeshInstanceData is a fake (`IsFake`: the far terrain's cells) places as
-//! any other, each placement marked [`AnvilFake`] for the program to leave out or keep.
+//! is set is placed as any other, each of its placements marked [`AnvilEntityState`] ([`Placed::hidden_or_phantom`]):
+//! on Riders Republic those are UI, HUD and editor helpers (docs/placement.md §19.1). A Visual whose MeshInstanceData
+//! is a fake (`IsFake`: the far terrain's cells) places as any other, each placement marked [`AnvilFake`] for the
+//! program to leave out or keep.
+//!
+//! [`Placed::placements`] holds the visual placements only, each an [`Instance`]. A Visual whose instance is a
+//! LightInstance places a light ([`Placed::lights`]); one of another instance class, and a runtime effect component,
+//! a marker with no geometry ([`Placed::markers`]); an owner's components kept as stored, one source record
+//! ([`Placed::sources`]). Every list of what was made for an owner is [`Placed::made`].
 //!
 //! Collision: each RigidBodyComponent's shape (the reference at its offset 748) is placed once at its owner's T R, as
 //! a prototype holding the shape's collision in the owner's local frame; an EntityGroup's (a merged shape spanning
@@ -40,14 +46,14 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use primase_core::frame::SourceFrame;
 use primase_core::{Entity, Instance, Name, Transform, World};
 
-use crate::components::AnvilImpostor;
 use crate::components::{
     AnvilBounds, AnvilClip, AnvilClipBinding, AnvilClipCandidates, AnvilCollisionFilter, AnvilCollisionOnly,
     AnvilCollisionShape, AnvilDataLayers, AnvilDecalModel, AnvilDeferredDecals, AnvilEntityState, AnvilFake,
-    AnvilGrass, AnvilGrassModel, AnvilLodDistances, AnvilLods, AnvilMaterial, AnvilMaterialOverrides,
-    AnvilMesh, AnvilRig, AnvilRigOccurrence, AnvilSkeleton, AnvilSkinned, AnvilWater, BoundTexture,
+    AnvilGrass, AnvilGrassModel, AnvilImpostor, AnvilLodDistances, AnvilLods, AnvilMaterial,
+    AnvilMaterialOverrides, AnvilMesh, AnvilRenderStatus, AnvilRig, AnvilRigOccurrence, AnvilSkeleton,
+    AnvilSkinned, AnvilSourceComponents, AnvilSourceOwner, AnvilSpotLight, AnvilWater, BoundTexture,
     ClipCandidate, CollisionMaterialRef, DataLayerAction, DeferredDecal, GrassSystemSetup, LibraryClip,
-    MaterialBinding, MaterialValue, ShapeGeometry, Stored, TextureFrom,
+    MaterialBinding, MaterialValue, ShapeGeometry, SourceComponent, Stored, TextureFrom,
 };
 use crate::read::meshes::anvil_mesh;
 use crate::read::shapes::anvil_mesh_shape;
@@ -227,10 +233,13 @@ pub enum InstancedCollision {
 /// What placing the Entities did, beyond the placements.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Placed {
+    /// The visual placements: each an [`Instance`] of the prototype a Visual shows, at its owner's (or instance's)
+    /// transform.
     pub placements: Vec<Entity>,
     /// Visuals whose object resolves to nothing the reader places (a SplashFX, an id in no forge).
     pub visuals_skipped: u64,
-    /// LODSelector levels referring to an Impostor (not placed), once per LODSelector.
+    /// LODSelector levels referring to an Impostor, once per LODSelector: each read as a level holding its
+    /// [`AnvilImpostor`], placed where the caller's [`InstancedLevels`] places that level.
     pub impostor_levels: u64,
     /// Mesh levels of instanced Visuals not placed at their instances (see [`InstancedLevels`]), once per Visual.
     pub levels_unplaced: u64,
@@ -265,6 +274,15 @@ pub struct Placed {
     pub deferred_decals: Vec<Entity>,
     /// The grass setups: an entity each, holding its [`AnvilGrass`].
     pub grass: Vec<Entity>,
+    /// The spot lights: an entity per Visual whose instance is a LightInstance, holding its SpotLight's
+    /// [`AnvilSpotLight`] at the owner's T R s.
+    pub lights: Vec<Entity>,
+    /// What shows at an owner with no geometry read: an entity per Visual of an instance class this reader doesn't
+    /// decode and per runtime effect component, at the owner's T R s, its [`AnvilRenderStatus`] naming the class.
+    pub markers: Vec<Entity>,
+    /// The owners' components kept as stored (length-rule-only, unread or refused): an entity per owner holding its
+    /// [`AnvilSourceComponents`], everything else made for the owner marked [`AnvilSourceOwner`].
+    pub sources: Vec<Entity>,
     /// HoudiniDecalInstancerComponents whose body can't be read (recorded in `refused` too).
     pub deferred_decals_unread: u64,
     /// Entities and EntityGroups whose `IsHidden` or `IsPhantom` is set (UI, HUD and editor helpers, docs/placement.md
@@ -288,6 +306,29 @@ pub struct Placed {
     /// The components of types read here whose rule refused their bytes ([`ComponentBody::Refused`]), kept as stored,
     /// once per owner placed: by type and reason ([`Refusal::reason`], why without the positions).
     pub refused_components: BTreeMap<(u32, String), Refusals>,
+}
+
+impl Placed {
+    /// Every list of entities made for the owners placed, in one fixed order: the placements, collisions, lakes,
+    /// deferred decal sets, grass setups, lights, markers and source records. Each list only grows, so its lengths
+    /// before and after placing an owner bound what was made for it.
+    pub fn made(&self) -> [&[Entity]; 8] {
+        [
+            &self.placements,
+            &self.collisions,
+            &self.lakes,
+            &self.deferred_decals,
+            &self.grass,
+            &self.lights,
+            &self.markers,
+            &self.sources,
+        ]
+    }
+
+    /// The lengths of [`Placed::made`]'s lists.
+    pub fn made_lengths(&self) -> [usize; 8] {
+        self.made().map(<[Entity]>::len)
+    }
 }
 
 /// The components refused for one reason: how many, and the first in full.
@@ -1369,6 +1410,7 @@ impl<'a> Placer<'a> {
                                     }
                                 }
                                 Some((m, r)) if r.type_id == IMPOSTOR => {
+                                    placed.impostor_levels = placed.impostor_levels.saturating_add(1);
                                     match self.impostor(m, reference, &r.body, placed) {
                                         Ok(entity) => {
                                             levels.push((level, entity));
@@ -1887,13 +1929,7 @@ impl<'a> Placer<'a> {
     /// object it shows or a shape its RigidBody names that can't be read is recorded in [`Placed::refused`] instead,
     /// and only what needs it is left out.
     pub fn place(&mut self, at: At, placed: &mut Placed) -> Result<(), Error> {
-        let starts = [
-            placed.placements.len(),
-            placed.collisions.len(),
-            placed.lakes.len(),
-            placed.deferred_decals.len(),
-            placed.grass.len(),
-        ];
+        let starts = placed.made_lengths();
         let r = self.archive.resource(at)?;
         let (e, group) = match r.type_id {
             ENTITY => (
@@ -2039,8 +2075,7 @@ impl<'a> Placer<'a> {
                         self.world.insert(light, Name(name.clone()));
                         self.world
                             .insert(light, self.frame.transform(&transform(&e.matrix, e.scale)));
-                        self.world
-                            .insert(light, crate::components::AnvilSpotLight { index_id, stored });
+                        self.world.insert(light, AnvilSpotLight { index_id, stored });
                         if let Some(layers) = &layers {
                             self.world.insert(light, layers.clone());
                         }
@@ -2048,7 +2083,7 @@ impl<'a> Placer<'a> {
                             self.world.insert(light, state);
                         }
                         self.world.insert(light, bounds);
-                        placed.placements.push(light);
+                        placed.lights.push(light);
                     }
                     Err(why) => placed.refused.push((*id, why)),
                 }
@@ -2060,7 +2095,7 @@ impl<'a> Placer<'a> {
                 self.world
                     .insert(marker, self.frame.transform(&transform(&e.matrix, e.scale)));
                 let target = v.object.and_then(|r| entry_name(self.archive, r.id));
-                self.world.insert(marker, crate::components::AnvilRenderStatus {
+                self.world.insert(marker, AnvilRenderStatus {
                     source: format!("Visual instance {id:#x}"), template: None, unsupported: true,
                     reason: format!("Visual instance class {kind:#010x}, target {target:?}: runtime-generated visual; no static geometry decoded"),
                 });
@@ -2071,7 +2106,7 @@ impl<'a> Placer<'a> {
                     self.world.insert(marker, state);
                 }
                 self.world.insert(marker, bounds);
-                placed.placements.push(marker);
+                placed.markers.push(marker);
                 continue;
             }
             let shows = shows(v, at)?;
@@ -2218,7 +2253,7 @@ impl<'a> Placer<'a> {
                     yaw: None,
                 },
             );
-            self.world.insert(marker, crate::components::AnvilRenderStatus {
+            self.world.insert(marker, AnvilRenderStatus {
                 source: format!("component {:#x}", component.id), template: None, unsupported: true,
                 reason: format!("{class}: runtime emitter/property program; marked at its authored transform; particle simulation and FX property evaluation unavailable"),
             });
@@ -2229,7 +2264,7 @@ impl<'a> Placer<'a> {
                 self.world.insert(marker, state);
             }
             self.world.insert(marker, bounds);
-            placed.placements.push(marker);
+            placed.markers.push(marker);
         }
         // the grass setup: the GrassComponent as stored and the library it names, on an entity of its own
         for c in &e.components {
@@ -2484,7 +2519,7 @@ impl<'a> Placer<'a> {
                     ComponentBody::Refused { bytes, why } => (bytes, format!("refused: {}", why.reason())),
                     _ => return None,
                 };
-                Some(crate::components::SourceComponent {
+                Some(SourceComponent {
                     type_id: c.kind,
                     id: c.id,
                     status,
@@ -2493,14 +2528,8 @@ impl<'a> Placer<'a> {
             })
             .collect();
         if !components.is_empty() {
-            let lists = [
-                &placed.placements,
-                &placed.collisions,
-                &placed.lakes,
-                &placed.deferred_decals,
-                &placed.grass,
-            ];
-            let occurrences: Vec<_> = lists
+            let occurrences: Vec<_> = placed
+                .made()
                 .into_iter()
                 .zip(starts)
                 .flat_map(|(list, start)| list.iter().skip(start).copied())
@@ -2518,20 +2547,19 @@ impl<'a> Placer<'a> {
                 self.world.insert(target, state);
             }
             if occurrences.is_empty() {
-                self.world.insert(target, crate::components::AnvilRenderStatus {
+                self.world.insert(target, AnvilRenderStatus {
                     source: format!("Entity {:#x}", r.class_id), template: None, unsupported: true,
                     reason: "source components retained in anvil.source_components; no static visual decoded for this owner".into(),
                 });
             }
-            // Include the source record in listed/state selection, and retain it through each occurrence's closure.
-            placed.placements.push(target);
+            // the record carries the owner's layers and state as its occurrences do, and each occurrence names it
+            placed.sources.push(target);
             for occurrence in occurrences {
-                self.world
-                    .insert(occurrence, crate::components::AnvilSourceOwner { source: target });
+                self.world.insert(occurrence, AnvilSourceOwner { source: target });
             }
             self.world.insert(
                 target,
-                crate::components::AnvilSourceComponents {
+                AnvilSourceComponents {
                     owner: r.class_id,
                     components,
                 },
