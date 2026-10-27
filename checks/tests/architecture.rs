@@ -86,7 +86,7 @@ impl Member {
     /// A library crate: holds readers, passes, writers or mechanisms (not `checks` or `examples`, nor the dev-only
     /// test-data crate).
     fn library(&self) -> bool {
-        matches!(self.layer(), "core" | "toolkit" | "formats" | "worlds") && self.path != "toolkit/testdata"
+        matches!(self.layer(), "core" | "toolkit" | "formats" | "worlds" | "repos") && self.path != "toolkit/testdata"
     }
 }
 
@@ -407,15 +407,20 @@ const TEST_INPUT_REGISTRY: &str = "toolkit/testdata";
 /// engine crate it names, never the other way round.
 fn edge_allowed(from: &Member, to: &Member, dev: bool) -> bool {
     let to_layer = to.layer();
+    // a crate under repos/ leaves primase: it depends on other repos crates only, its tests included
+    if from.layer() == "repos" {
+        return to_layer == "repos";
+    }
     if to.path == TEST_INPUT_REGISTRY {
         return dev;
     }
     let normal = match from.layer() {
-        "core" => false,
-        "toolkit" => matches!(to_layer, "core" | "toolkit"),
-        "formats" => matches!(to_layer, "core" | "toolkit") || to.path == "formats/gltf",
+        // the crates that left primase are below everything, core included
+        "core" => to_layer == "repos",
+        "toolkit" => matches!(to_layer, "core" | "toolkit" | "repos"),
+        "formats" => matches!(to_layer, "core" | "toolkit" | "repos") || to.path == "formats/gltf",
         "worlds" => {
-            matches!(to_layer, "core" | "toolkit")
+            matches!(to_layer, "core" | "toolkit" | "repos")
                 || (to.kind.as_deref() == Some("engine") && from.engine.as_deref() == Some(to.name.as_str()))
         }
         // they hold no library: tests and example programs may compose anything
@@ -499,6 +504,8 @@ fn io_roles_of(layer: &str) -> &'static [&'static str] {
     match layer {
         "formats" | "worlds" => &["reader I/O", "writer I/O", "test I/O"],
         "toolkit" => &["toolkit I/O", "test I/O"],
+        // the crates leaving primase keep the roles they had where they came from
+        "repos" => &["reader I/O", "writer I/O", "toolkit I/O", "test I/O"],
         _ => &["test I/O"],
     }
 }

@@ -1,13 +1,15 @@
 [package]
-name = "oozextract"
-description = "Open source Kraken / Mermaid / Selkie / Leviathan / LZNA / Bitknit decompressor (primase's patched copy of oozextract 0.5.6)"
-repository = "https://github.com/lvlvllvlvllvlvl/oozextract"
+name = "primase-oozextract"
+description = "oozextract 0.5.6 (a Kraken / Mermaid / Selkie / Leviathan / LZNA / Bitknit decompressor) with fixes not yet released upstream; retired when they are"
+repository = "https://github.com/Kalmarv/primase-oozextract"
+homepage = "https://github.com/lvlvllvlvllvlvl/oozextract"
 version = "0.5.6"
 edition = "2021"
 license = "MIT"
 publish = false
 
 [lib]
+name = "oozextract"
 crate-type = ["rlib"]
 
 [dependencies]

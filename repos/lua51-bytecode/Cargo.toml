@@ -1,5 +1,5 @@
 [package]
-name = "primase-lua51"
+name = "lua51-bytecode"
 description = "Strict reader of Lua 5.1 precompiled chunks (any byte order) and a lister of the calls made with constant arguments"
 version.workspace = true
 edition.workspace = true

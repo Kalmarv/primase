@@ -11,7 +11,7 @@ use crate::{
     components::{LevelParams, ScriptCall, ScriptValue},
     invalid,
 };
-use primase_lua51::{Chunk, Op, Value, calls};
+use lua51_bytecode::{Chunk, Op, Value, calls};
 
 /// The scripts archive and the level whose script to read (`charlie`, `mike`, ...).
 #[derive(Clone, Copy, Debug)]

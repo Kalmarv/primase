@@ -3,23 +3,23 @@ resolver = "3"
 members = [
     "core",
     "toolkit/testdata",
-    "toolkit/bytes",
+    "repos/primase-bytes",
     "toolkit/texcodec",
     "toolkit/dds",
     "toolkit/image",
-    "toolkit/vertex",
+    "repos/primase-vertex",
     "toolkit/meshops",
     "toolkit/animation",
     "toolkit/lighting",
-    "toolkit/compress",
+    "repos/primase-compress",
     "toolkit/glb",
-    "toolkit/hash",
+    "repos/primase-hash",
     "toolkit/exactsum",
     "toolkit/dxcontainer",
     "toolkit/rsx",
     "toolkit/havok",
-    "toolkit/lua51",
     "toolkit/morpheme",
+    "repos/lua51-bytecode",
     "toolkit/dxbc",
     "toolkit/d3d9",
     "toolkit/shader",
@@ -43,8 +43,8 @@ members = [
     "worlds/anvil",
     "worlds/shaunwhite",
 ]
-# a patched copy of a crate, built through [patch.crates-io] below (README there); not one of our crates
-exclude = ["third_party/oozextract"]
+# the oozextract fork: upstream's sources and lints, not one of our crates (README there)
+exclude = ["repos/primase-oozextract"]
 
 [workspace.package]
 version = "0.1.0"
@@ -70,27 +70,27 @@ flate2 = { version = "=1.1.10", default-features = false, features = ["rust_back
 quantydb-sqlite = { version = "=0.4.0", default-features = false }
 ruzstd = { version = "=0.7.3", default-features = false, features = ["std", "hash"] }
 libloading = { version = "=0.9.0", default-features = false, features = ["std"] }
-oozextract = { version = "=0.5.6", default-features = false, features = ["verbose_errors"] }
+oozextract = { package = "primase-oozextract", version = "=0.5.6", path = "repos/primase-oozextract", default-features = false, features = ["verbose_errors"] }
 primase-core = { path = "core" }
 primase-testdata = { path = "toolkit/testdata" }
-primase-bytes = { path = "toolkit/bytes" }
+primase-bytes = { path = "repos/primase-bytes" }
 primase-texcodec = { path = "toolkit/texcodec" }
 primase-dds = { path = "toolkit/dds" }
 primase-image = { path = "toolkit/image" }
-primase-vertex = { path = "toolkit/vertex" }
+primase-vertex = { path = "repos/primase-vertex" }
 primase-meshops = { path = "toolkit/meshops" }
 primase-animation = { path = "toolkit/animation" }
 primase-lighting = { path = "toolkit/lighting" }
-primase-compress = { path = "toolkit/compress" }
+primase-compress = { path = "repos/primase-compress" }
 primase-glb = { path = "toolkit/glb" }
-primase-hash = { path = "toolkit/hash" }
+primase-hash = { path = "repos/primase-hash" }
 primase-exactsum = { path = "toolkit/exactsum" }
 primase-dxcontainer = { path = "toolkit/dxcontainer" }
 primase-rsx = { path = "toolkit/rsx" }
 primase-cache = { path = "toolkit/cache" }
 primase-havok = { path = "toolkit/havok" }
-primase-lua51 = { path = "toolkit/lua51" }
 primase-morpheme = { path = "toolkit/morpheme" }
+lua51-bytecode = { path = "repos/lua51-bytecode" }
 primase-dxbc = { path = "toolkit/dxbc" }
 primase-d3d9 = { path = "toolkit/d3d9" }
 primase-shader = { path = "toolkit/shader" }
@@ -131,14 +131,11 @@ zune-core = { version = "=0.5.3", default-features = false, features = ["std"] }
 bcdec_rs = { version = "=0.2.0", default-features = false }
 block_compression = { version = "=0.10.1", default-features = false, features = ["bc7"] }
 
-# oozextract 0.5.6 with the fixes in third_party/oozextract (README there): Oodle off Windows is decoded by it.
-#
 # naga 30.0.1 plus three changes it lacks (branch naga-30.0.1-primase of github.com/Kalmarv/wgpu, from the v30.0.1 tag, nothing
 # else): the WGSL writer writes ray queries, `Statement::ImageAtomic` has an optional result (the texel's previous value), and
 # accepts `Exchange` on 32-bit images. Not yet proposed upstream.
 [patch.crates-io]
 naga = { git = "https://github.com/Kalmarv/wgpu", rev = "546ce02f49d9da8f7118b0a8257e210f3b7b1d02" }
-oozextract = { path = "third_party/oozextract" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

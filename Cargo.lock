@@ -763,6 +763,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
+name = "lua51-bytecode"
+version = "0.1.0"
+dependencies = [
+ "primase-bytes",
+ "thiserror",
+]
+
+[[package]]
 name = "lz4_flex"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -929,18 +937,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
-name = "oozextract"
-version = "0.5.6"
-dependencies = [
- "bytemuck",
- "bytes",
- "futures",
- "log",
- "test-log",
- "wide",
-]
-
-[[package]]
 name = "page_size"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1064,9 +1060,9 @@ dependencies = [
  "flate2",
  "libloading 0.9.0",
  "lz4_flex",
- "oozextract",
  "primase-compress",
  "primase-core",
+ "primase-oozextract",
  "primase-testdata",
  "ruzstd",
  "thiserror",
@@ -1305,14 +1301,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "primase-lua51"
-version = "0.1.0"
-dependencies = [
- "primase-bytes",
- "thiserror",
-]
-
-[[package]]
 name = "primase-meshops"
 version = "0.1.0"
 dependencies = [
@@ -1347,6 +1335,18 @@ version = "0.1.0"
 dependencies = [
  "primase-bytes",
  "thiserror",
+]
+
+[[package]]
+name = "primase-oozextract"
+version = "0.5.6"
+dependencies = [
+ "bytemuck",
+ "bytes",
+ "futures",
+ "log",
+ "test-log",
+ "wide",
 ]
 
 [[package]]
@@ -1433,12 +1433,12 @@ name = "primase-shred"
 version = "0.1.0"
 dependencies = [
  "half",
+ "lua51-bytecode",
  "primase-bytes",
  "primase-compress",
  "primase-core",
  "primase-hash",
  "primase-havok",
- "primase-lua51",
  "primase-morpheme",
  "primase-rsx",
  "primase-testdata",
