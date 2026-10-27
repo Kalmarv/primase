@@ -9,12 +9,12 @@
 //!
 //! Shapes: the extended mesh's subparts are one soup in stored vertex and index order. The data's winding is
 //! counter-clockwise-front (the world's convention) and is kept: it is the render geometry's opposite, whose triangles
-//! are clockwise against their stored normals. A triangle's surface is the `surfaces` row `(a >> 3) & 0x3F` of its
-//! material word; that id and the remaining opaque bits identify a `shred.collision_surfaces` row. A convex-vertices shape is
-//! `Shape::Convex` of its vertices (the stored planes are not exact faces); box, sphere, capsule and cylinder are
-//! core's primitives, so nothing is tessellated. Havok's convex radius (a skin around every convex shape) is not
-//! added to any of them. A `ConvexTranslate` offsets its child; a list and a MOPP tree hold their children. Only
-//! meshes carry a surface: every other leaf is surface 0 (`default`).
+//! are clockwise against their stored normals. A triangle's surface is the `surfaces` row
+//! `(filter_info >> 3) & 0x3F` of its material's filter word; that id and the remaining opaque bits identify a
+//! `shred.collision_surfaces` row. A convex-vertices shape is `Shape::Convex` of its vertices (the stored planes are
+//! not exact faces); box, sphere, capsule and cylinder are core's primitives, so nothing is tessellated. Havok's convex
+//! radius (a skin around every convex shape) is not added to any of them. A `ConvexTranslate` offsets its child; a list
+//! and a MOPP tree hold their children. Only meshes carry a surface: every other leaf is surface 0 (`default`).
 use crate::{
     Error, Result,
     components::{CollisionSurface, CollisionSurfaces, DynamicShape, RigidBody as BodyData},
@@ -30,7 +30,7 @@ use primase_core::{
 use rme_formats::{pak::Pak, surfaces::SurfaceTable};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// The surface field of a triangle's material word: bits 3..=8.
+/// The surface field of a triangle material's filter word: bits 3..=8.
 pub const SURFACE_SHIFT: u32 = 3;
 pub const SURFACE_MASK: u32 = 0x3F;
 /// How deep a body's shape tree may go (the data's is 3).
@@ -247,7 +247,7 @@ fn soup(
                 .materials
                 .get(usize::from(m))
                 .ok_or_else(|| invalid(at, format!("material index {m} past {}", sub.materials.len())))?
-                .a;
+                .filter_info;
             let surface = (a >> SURFACE_SHIFT) & SURFACE_MASK;
             let flags = a & !(SURFACE_MASK << SURFACE_SHIFT);
             let index = catalog
@@ -293,7 +293,7 @@ pub fn read_collision(
                     if let Shape::ExtendedMesh(mesh) = leaf.shape {
                         for sub in mesh.subparts {
                             for m in sub.material_indices {
-                                let a = sub.materials[usize::from(m)].a;
+                                let a = sub.materials[usize::from(m)].filter_info;
                                 pairs.insert((
                                     ((a >> SURFACE_SHIFT) & SURFACE_MASK) as u16,
                                     a & !(SURFACE_MASK << SURFACE_SHIFT),
@@ -393,7 +393,7 @@ fn read_file(
                     // Counts remain database identities, not the expanded core surface indices.
                     for sub in &mesh.subparts {
                         for &m in &sub.material_indices {
-                            let a = sub.materials[usize::from(m)].a;
+                            let a = sub.materials[usize::from(m)].filter_info;
                             let id = ((a >> SURFACE_SHIFT) & SURFACE_MASK) as u16;
                             let flags = a & !(SURFACE_MASK << SURFACE_SHIFT);
                             *report.surface_triangles.entry(id).or_default() += 1;
@@ -507,14 +507,16 @@ mod tests {
                 triangle_offset: 0,
                 materials: vec![
                     MeshMaterial {
-                        a: 1,
-                        b: 0x3f80,
-                        c: 0,
+                        filter_info: 1,
+                        restitution: 0.0,
+                        friction: 1.0,
+                        user_data: 0,
                     },
                     MeshMaterial {
-                        a: 0x1000,
-                        b: 0x3f80,
-                        c: 0,
+                        filter_info: 0x1000,
+                        restitution: 0.0,
+                        friction: 1.0,
+                        user_data: 0,
                     },
                 ],
             }],

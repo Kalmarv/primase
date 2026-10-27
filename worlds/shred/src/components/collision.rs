@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 /// Havok's `hkpMotion::MotionType` of a fixed body (the others in the data are 2, sphere inertia, and 3, box inertia).
-pub const MOTION_FIXED: u8 = 5;
+pub use havok_formats::packfile::physics::MOTION_FIXED;
 
 /// One `hkpRigidBody` (`shred.rigid_body`), on each entity made from one of its leaf shapes. The entity's transform is
 /// the body's; a fixed body's shape is `core.collision`/`core.collider`, any other's a [`DynamicShape`].
@@ -20,7 +20,8 @@ pub struct RigidBody {
     pub response_type: u8,
     pub friction: f32,
     pub restitution: f32,
-    /// Havok's collision filter word, kept whole.
+    /// The body's collision filter word (its collidable's `collisionFilterInfo`), kept whole: 0, 2, 7, 11, 15 or 18 on
+    /// the disc.
     pub collision_filter_info: u32,
 }
 

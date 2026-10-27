@@ -94,7 +94,7 @@ fn assert_material_sequences(path: &Path, world: &World) {
                                 .iter()
                                 .flat_map(|sub| {
                                     sub.material_indices.iter().map(|&m| {
-                                        let a = sub.materials[usize::from(m)].a;
+                                        let a = sub.materials[usize::from(m)].filter_info;
                                         (((a >> 3) & 0x3f) as u16, a & !0x1f8)
                                     })
                                 })

@@ -4,17 +4,19 @@
 //! physics classes): stored AABBs contain the vertices, cumulative triangle offsets, welding count == triangles,
 //! index bounds and orthonormal rotations are checked inside the views; the AABB containment is re-checked here.
 //! The counts are the ones the offline recon census produced (`HK.md`: 12,789 bodies, 1,758 meshes, 6,445 subparts,
-//! 646,081 triangles, 855,428 vertices, 8,780 convex shapes).
+//! 646,081 triangles, 855,428 vertices, 8,780 convex shapes), and the header words, class signatures, body filter
+//! words and material records the separate read-only census of the same 490 files found.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod inputs;
 
 use havok_formats::packfile::{
-    Packfile,
+    CLASS_SIGNATURES, Packfile,
     physics::{self, ConvexVertices, ExtendedMesh, RigidBody, Shape},
 };
 use inputs::{Game, Query, expect_found, install};
 use rme_formats::pak::Pak;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 fn files(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) {
@@ -66,9 +68,24 @@ fn every_packfile_parses_and_the_census_matches() {
     let (mut bodies, mut fixed, mut meshes, mut subparts, mut triangles, mut vertices) = (0, 0, 0, 0, 0, 0);
     let (mut convex, mut convex_vertices, mut leaf_shapes) = (0, 0, 0);
     let mut surfaces = BTreeMap::<u32, usize>::new();
+    let mut filters = BTreeMap::<u32, usize>::new();
+    let mut storage_indices = BTreeSet::<u16>::new();
+    let (mut records, mut stored_user_data) = (0, 0);
+    let mut signed = BTreeSet::new();
     for (label, bytes) in &blobs {
         let fail = |e: havok_formats::Error| -> ! { panic!("{label}: {e}") };
         let pack = Packfile::read(bytes).unwrap_or_else(|e| fail(e));
+        // version 7: user tag 0, the two header words after the contents version are filler
+        assert_eq!((pack.user_tag, pack.filler), (0, [0xFFFF_FFFF; 2]), "{label}");
+        // every class name is one of the 24 the reader checks (it refuses another signature for them)
+        for c in pack.class_names() {
+            assert!(
+                CLASS_SIGNATURES.contains(&(c.name.as_str(), c.signature)),
+                "{label}: {}",
+                c.name
+            );
+            signed.insert(c.name.clone());
+        }
         let census = physics::census(&pack);
         assert!(
             census.unknown.is_empty(),
@@ -82,6 +99,8 @@ fn every_packfile_parses_and_the_census_matches() {
             let b = RigidBody::read(&pack, body).unwrap_or_else(|e| fail(e));
             bodies += 1;
             fixed += usize::from(b.motion_type == physics::MOTION_FIXED);
+            *filters.entry(b.collision_filter_info).or_default() += 1;
+            storage_indices.insert(b.storage_index);
             // the shape tree resolves to shapes this module reads
             let mut stack = vec![b.shape];
             while let Some(s) = stack.pop() {
@@ -103,8 +122,13 @@ fn every_packfile_parses_and_the_census_matches() {
                     inside(&s.vertices, m.aabb_center, m.aabb_half_extents, 0.06),
                     "{label}: mesh {o:#x} has a vertex outside its stored AABB"
                 );
+                for m in &s.materials {
+                    records += 1;
+                    stored_user_data += usize::from(m.user_data != 0);
+                    assert_eq!((m.restitution, m.friction), (0.0, 1.0), "{label}");
+                }
                 for &i in &s.material_indices {
-                    let a = s.materials[usize::from(i)].a;
+                    let a = s.materials[usize::from(i)].filter_info;
                     *surfaces.entry((a >> 3) & 0x3F).or_default() += 1;
                 }
             }
@@ -153,6 +177,14 @@ fn every_packfile_parses_and_the_census_matches() {
     ] {
         assert_eq!(count(name), n, "{name}");
     }
+    assert_eq!(signed.len(), CLASS_SIGNATURES.len());
+    // the bodies' filter words (the census of `+0x2C`): layers only, system group 0
+    assert_eq!(
+        filters,
+        BTreeMap::from([(0, 148), (2, 1_933), (7, 8_741), (11, 1_953), (15, 1), (18, 13)])
+    );
+    assert_eq!(storage_indices.len(), 540);
+    assert_eq!((records, stored_user_data), (7_909, 6_279));
     // the surface field of every triangle is a `surfaces` row id (0..=53): 36 distinct ids occur
     assert_eq!(surfaces.values().sum::<usize>(), 646_081);
     assert_eq!(surfaces.keys().max(), Some(&53));

@@ -48,7 +48,7 @@ encoding_rs = { version = "=0.8.42", default-features = false, features = ["allo
 meshopt = { version = "=0.6.2", default-features = false }
 aes = { version = "=0.9.3", default-features = false }
 num-bigint = { version = "=0.5.1", default-features = false, features = ["std"] }
-fromsoft-formats = { git = "https://github.com/Kalmarv/fromsoft-formats", rev = "c2d713a3b2dd0adadeb2b7055cf63a630b36f269" }
+fromsoft-formats = { git = "https://github.com/Kalmarv/fromsoft-formats", rev = "8ad480654e300a86060f1e81f1a9c3baa0c4cb3f" }
 primase-fromsoft = { path = "worlds/fromsoft" }
 lz4_flex = { version = "=0.14.0", default-features = false, features = ["std", "safe-encode", "safe-decode", "checked-decode"] }
 flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
@@ -69,7 +69,7 @@ primase-exactsum = { path = "toolkit/exactsum" }
 dxcontainer = { git = "https://github.com/Kalmarv/dx", rev = "ee5dce9e8d52ccdf54864245ecca2cc0ee8a53bf" }
 rsx-reader = { git = "https://github.com/Kalmarv/dx", rev = "ee5dce9e8d52ccdf54864245ecca2cc0ee8a53bf" }
 primase-cache = { path = "toolkit/cache" }
-havok-formats = { git = "https://github.com/Kalmarv/havok-formats", rev = "1da63c88309165c03c9bf0e57b1e2debee40e2a7" }
+havok-formats = { git = "https://github.com/Kalmarv/havok-formats", rev = "850a3edbbd563471fc7f4a7d5e56f04592babc89" }
 primase-havok = { path = "toolkit/havok" }
 morpheme-formats = { git = "https://github.com/Kalmarv/morpheme-formats", rev = "3bed1179a9ef237865e9b8fefe306484c735a2e2" }
 rme-formats = { git = "https://github.com/Kalmarv/rme-formats", rev = "4a6e2e3dda68d3dd6a475c65af32934ed51ae034" }
