@@ -76,7 +76,7 @@ primase_testdata::inputs! {
             status: Live,
             gate: true,
             about: "Shaun White Skateboarding's uncompressed high-quality SDB2 v39 database: source CRCs and identities, all raw stage programs, pass metadata tails, state-only and missing records; named material-only RGB derivation and full-PS REF proof for basic/layered/metro-compatible records; worlds/shaunwhite/tests/shaders.rs and albedo.rs",
-            source: "the user's own install; hand-worked fixture and native version-39 loader establish framing; record 5's PS is also checked against Microsoft's disassembly in repos/iridia/iridia-d3d9/tests/disassembly.rs",
+            source: "the user's own install; hand-worked fixture and native version-39 loader establish framing; record 5's PS is also checked against Microsoft's disassembly in https://github.com/Kalmarv/iridia/blob/main/iridia-d3d9/tests/disassembly.rs",
         },
         Query::Install(Game::ShaunWhite, Some("ekshadersPClow.bin")) => {
             status: Live,

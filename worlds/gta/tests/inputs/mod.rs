@@ -61,7 +61,7 @@ primase_testdata::inputs! {
         Query::Oracle(OracleSet::CodeWalker, Game::Gta, "resources") => {
             status: Live,
             gate: true,
-            about: r#"optional: a folder of an independent reader's decodings of chosen drawables and texture dictionaries of that install (JSON; schema in `repos/rage-engine-formats/tests/resource_oracle.rs`)"#,
+            about: r#"optional: a folder of an independent reader's decodings of chosen drawables and texture dictionaries of that install (JSON; schema in `https://github.com/Kalmarv/rage-engine-formats/blob/main/tests/resource_oracle.rs`)"#,
             source: r#"independent: CodeWalker.Core 485d56b, through a thin dump harness kept with the private oracle tools"#,
         },
         Query::Oracle(OracleSet::Corpus, Game::Gta, "legacy-effects") => {

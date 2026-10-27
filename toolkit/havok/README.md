@@ -1,6 +1,6 @@
 # primase-havok
 
-Havok data made primase's. The files are read by `havok-formats` (`repos/havok-formats`); this crate holds what
+Havok data made primase's. The files are read by `havok-formats` (`https://github.com/Kalmarv/havok-formats`); this crate holds what
 turns what it reads into geometry and world data:
 
 - `ConvexCore`: a convex shape's stored core as triangles.

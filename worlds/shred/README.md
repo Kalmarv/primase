@@ -3,7 +3,7 @@
 Tony Hawk: SHRED (PS3, 2010), RME archives and scene geometry, including processed crowd/actor source meshes.
 
 The file readers (PAK/CSTR, quartets and SCP tables, material banks, texture headers, MAIN.DB rows, level scripts, reference
-rigs) are the `rme-formats` crate (`repos/rme-formats`); this crate builds worlds from their records, and lowers them.
+rigs) are the `rme-formats` crate (`https://github.com/Kalmarv/rme-formats`); this crate builds worlds from their records, and lowers them.
 Paths below name the module that owns each reader.
 
 `rme_formats::pak::Pak::open` reads one PAK v4; `from_bytes` accepts caller-owned bytes. Metadata validates the header,
@@ -224,7 +224,7 @@ precisely the supplied archives (the program chooses a level's base and layers) 
 (layouts and censuses: `toolkit/havok/README.md`). `SurfaceTable::from_main_db` reads MAIN.DB's `surfaces` table
 (54 rows, `id` 0..53 in order, `NAME`) through `rme_formats::database` (`quantydb-sqlite`). Zero-flag rows retain those indices
 precisely the supplied archives (the program chooses a level's base and layers) through `havok_formats::packfile`
-(layouts and censuses: `repos/havok-formats/README.md`). `SurfaceTable::from_main_db` reads MAIN.DB's `surfaces` table
+(layouts and censuses: `https://github.com/Kalmarv/havok-formats/blob/main/README.md`). `SurfaceTable::from_main_db` reads MAIN.DB's `surfaces` table
 (54 rows, `id` 0..53 in order, `NAME`) through `read::database` (`quantydb-sqlite`). Zero-flag rows retain those indices
 and names in `core.surfaces`; distinct used `(database id, opaque flags)` pairs append distinct rows, sorted by pair.
 `shred.collision_surfaces` maps each core index to its original database id, name and flag word. Later reads append

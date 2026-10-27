@@ -744,7 +744,7 @@ pub(super) fn read_member(
 
 /// The animation binder of a placed object's model (Sekiro's `obj/o001010`, Elden Ring's `aeg007_310`), decoded, if it
 /// has one: a `.anibnd` member of the model's own binder. In Sekiro's install that is where they are (233 of its 1395
-/// object binders hold one, and no object has a binder of its own beside it: `repos/fromsoft-formats/tests/object_animation_census.rs`); a
+/// object binders hold one, and no object has a binder of its own beside it: `https://github.com/Kalmarv/fromsoft-formats/blob/main/tests/object_animation_census.rs`); a
 /// model without the member is static. The member holds `skeleton.hkx`, the animations (`a000_000500.hkx`), their
 /// compendium and the object's event file (`o252050.tae`), which [`read_member`] reads as a character's binder.
 pub(super) fn object_binder(decoder: &Decoder<'_>, binder: &Binder) -> Result<Option<Vec<u8>>> {

@@ -3,7 +3,7 @@
 //! At most `--per-toc` (default 16) entries' first such block are taken from each superbundle TOC, in its listing
 //! order, so the corpus spans the TOCs. The bytes are the game's own; the test decodes them with the game's Oodle
 //! library and with oozextract. With `--zlib` it takes the zlib-compressed blocks (kind 2) instead, the zlib streams
-//! `repos/primase-foundations/tests/oracles/codecs.py` cuts for `corpus/general/codecs.tsv`.
+//! `https://github.com/Kalmarv/primase-foundations/blob/main/tests/oracles/codecs.py` cuts for `corpus/general/codecs.tsv`.
 //!
 //! `cargo run --release -p primase-reskate --example corpus_skate_cas -- <skate. Data> <oo2core_9_win64.dll> <out>
 //! [--per-toc N] [--zlib]`, `<out>` being `<oracles.root>/corpus/skate/cas` (the library decodes the bundle manifests the

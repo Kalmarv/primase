@@ -85,7 +85,7 @@ primase_testdata::inputs! {
         Query::Oracle(OracleSet::Baseline, Game::Skate, "fbmod") => {
             status: Live,
             gate: false,
-            about: r#"a folder of `.fbmod` files (searched recursively); each is read, written again byte for byte and every payload decoded (`tools.oodle9` for Oodle blocks); repos/frostbite-formats/tests/fbmod.rs. The costume files among them (top level, with Studio's `<name>.readback.glb` beside them when present) also gate the costume steps with `installs.skate/Data`: worlds/reskate/tests/costume.rs"#,
+            about: r#"a folder of `.fbmod` files (searched recursively); each is read, written again byte for byte and every payload decoded (`tools.oodle9` for Oodle blocks); https://github.com/Kalmarv/frostbite-formats/blob/main/tests/fbmod.rs. The costume files among them (top level, with Studio's `<name>.readback.glb` beside them when present) also gate the costume steps with `installs.skate/Data`: worlds/reskate/tests/costume.rs"#,
             source: r#"ReSkate Studio 2026-10-12 `cosmetic-mesh-import` output: our own producer's files, a round-trip baseline, not an oracle"#,
         },
         Query::Oracle(OracleSet::Pillow, Game::Sekiro, "skate-mask") => {

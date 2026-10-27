@@ -28,7 +28,7 @@
 //!   by a pass.
 //! - `writers_read_only`: a writer's entry points take the world read-only.
 //! - `real_data_variables_are_declared`: a `PRIMASE_*` name in the workspace's sources is a test's handoff to its own
-//!   child process (the configuration is `GAME_DATA`, read by `repos/primase-testdata` alone). Names are whole string
+//!   child process (the configuration is `GAME_DATA`, read by primase-testdata alone). Names are whole string
 //!   literals, so the scan sees every one: a name a format string builds (`PRIMASE_{x}`) fails.
 //!   `real_data_inputs_are_checked`: every crate that declares real-data inputs (`tests/inputs/mod.rs`) runs
 //!   primase-testdata's self-check on them (`tests/real_data_inputs.rs`), which holds every typed query to a declared
@@ -85,11 +85,9 @@ impl Member {
     fn layer(&self) -> &str {
         self.path.split('/').next().unwrap()
     }
-    /// A library crate: holds readers, passes, writers or mechanisms (not `checks` or `examples`, nor the dev-only
-    /// test-data crate).
+    /// A library crate: holds readers, passes, writers or mechanisms (not `checks` or `examples`).
     fn library(&self) -> bool {
-        matches!(self.layer(), "core" | "toolkit" | "formats" | "worlds" | "repos")
-            && self.path != TEST_INPUT_REGISTRY
+        matches!(self.layer(), "core" | "toolkit" | "formats" | "worlds")
     }
 }
 
@@ -400,30 +398,22 @@ fn code(path: &str) -> Vec<Tok> {
 
 // ---- dependencies ----
 
-/// The real-data test loader: `repos/primase-testdata` resolves the real-data inputs each crate's tests declare
-/// (`tests/inputs/mod.rs`). It holds no game logic (it depends on no workspace crate) and may not be a normal
-/// dependency of any crate, so nothing it says reaches a library build. `dependencies` checks both, and
-/// `architecture.toml` cannot excuse either.
-const TEST_INPUT_REGISTRY: &str = "repos/primase-testdata";
+/// The real-data test loader (its own repository): it resolves the real-data inputs each crate's tests declare
+/// (`tests/inputs/mod.rs`) and may not be a normal dependency of any crate, so nothing it says reaches a library
+/// build. `dependencies` checks it, and `architecture.toml` cannot excuse it.
+const TEST_INPUT_REGISTRY: &str = "primase-testdata";
 
 /// Whether `from` may depend on `to`; `dev` for dev-dependencies. A game or destination crate may depend on the
-/// engine crate it names, never the other way round.
+/// engine crate it names, never the other way round. The format crates in their own repositories are not members:
+/// any crate may use them.
 fn edge_allowed(from: &Member, to: &Member, dev: bool) -> bool {
     let to_layer = to.layer();
-    // a crate under repos/ leaves primase: its dependencies are other repos crates only, its tests' included
-    if from.layer() == "repos" {
-        return to_layer == "repos";
-    }
-    if to.path == TEST_INPUT_REGISTRY {
-        return dev;
-    }
     let normal = match from.layer() {
-        // the crates that left primase are below everything, core included
-        "core" => to_layer == "repos",
-        "toolkit" => matches!(to_layer, "core" | "toolkit" | "repos"),
-        "formats" => matches!(to_layer, "core" | "toolkit" | "repos") || to.path == "formats/gltf",
+        "core" => false,
+        "toolkit" => matches!(to_layer, "core" | "toolkit"),
+        "formats" => matches!(to_layer, "core" | "toolkit") || to.path == "formats/gltf",
         "worlds" => {
-            matches!(to_layer, "core" | "toolkit" | "repos")
+            matches!(to_layer, "core" | "toolkit")
                 || (to.kind.as_deref() == Some("engine") && from.engine.as_deref() == Some(to.name.as_str()))
         }
         // they hold no library: tests and example programs may compose anything
@@ -464,25 +454,18 @@ fn dependencies() {
                 .collect();
             for (key, spec) in tables.into_iter().flatten() {
                 let package = spec.get("package").and_then(|p| p.as_str()).unwrap_or(key);
-                let Some(to) = by_name.get(package) else { continue };
                 assert!(
-                    m.path != TEST_INPUT_REGISTRY,
-                    "{} depends on {}: the test-input registry depends on no workspace crate",
-                    m.path,
-                    to.path
+                    package != TEST_INPUT_REGISTRY || dev,
+                    "{} has {package} in [{section}]: the test-input registry is only ever a dev-dependency",
+                    m.path
                 );
                 assert!(
-                    to.path != TEST_INPUT_REGISTRY || dev,
-                    "{} has {} in [{section}]: the test-input registry is only ever a dev-dependency",
-                    m.path,
-                    to.path
-                );
-                assert!(
-                    dev || !(to.name == "primase-foundations" && enables(spec, "reference-decoder")),
+                    dev || !(package == "primase-foundations" && enables(spec, "reference-decoder")),
                     "{} enables primase-foundations's `reference-decoder` in [{section}]: the second Kraken decoder is a test aid, \
                      only a dev-dependency may turn it on, so no production crate links it",
                     m.path
                 );
+                let Some(to) = by_name.get(package) else { continue };
                 if !edge_allowed(m, to, dev) {
                     found.insert(format!("{} -> {} ({section})", m.path, to.path));
                 }
@@ -507,8 +490,6 @@ fn io_roles_of(layer: &str) -> &'static [&'static str] {
     match layer {
         "formats" | "worlds" => &["reader I/O", "writer I/O", "test I/O"],
         "toolkit" => &["toolkit I/O", "test I/O"],
-        // the crates leaving primase keep the roles they had where they came from
-        "repos" => &["reader I/O", "writer I/O", "toolkit I/O", "test I/O"],
         _ => &["test I/O"],
     }
 }
@@ -1844,7 +1825,7 @@ fn real_data_variables_are_declared() {
 #[test]
 fn real_data_inputs_are_checked() {
     let mut problems = Vec::new();
-    for m in members().iter().filter(|m| m.path != TEST_INPUT_REGISTRY) {
+    for m in members() {
         let dir = root().join(&m.path);
         let man = manifest(&dir.join("Cargo.toml"));
         let consumer = man

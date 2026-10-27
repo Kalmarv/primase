@@ -1,9 +1,9 @@
 # primase-fromsoft
 
 What primase makes of FromSoftware's data (Sekiro, Elden Ring): the area and character readers that build a world
-from what `fromsoft-formats` (`repos/fromsoft-formats`) reads, the components they make, and the passes that lower
+from what `fromsoft-formats` (`https://github.com/Kalmarv/fromsoft-formats`) reads, the components they make, and the passes that lower
 them. The archives, binders and formats themselves, and the archive keys a caller supplies, are described in
-`repos/fromsoft-formats/README.md`.
+`https://github.com/Kalmarv/fromsoft-formats/blob/main/README.md`.
 
 ## Gates
 
@@ -157,7 +157,7 @@ geometric/stored-normal agreement, `Part::drop_degenerates` retains the vertices
 and `Part::apply_uv_scale` applies a material's main-layer UV scale. `lower-fromsoft-geometry` makes each of these
 choices explicit. None of them bakes layered materials or splits parts into baked weight levels.
 
-The archive oracle directory (`oracles.soulsformats.sekiro/census`, `oracles.soulsformats.elden/census`; `repos/fromsoft-formats/tests/flver_census.rs`
+The archive oracle directory (`oracles.soulsformats.sekiro/census`, `oracles.soulsformats.elden/census`; `https://github.com/Kalmarv/fromsoft-formats/blob/main/tests/flver_census.rs`
 runs one body for each game) adds `flver/models.jsonl`, one record per FLVER2
 found in the archive and its binders (a FLVER the reference refuses: `id`, `sha256` and `error`; ours must refuse
 it too), `id` the shard/hex hash followed by
@@ -231,7 +231,7 @@ patterns). Repeated names follow the reference's convention: later uses become
 
 `btl::LightBank::read` reads versions 16 (Sekiro) and 18 (Elden Ring), which share the 232-byte light record, and
 keeps the stored version; other versions are refused. Elden Ring's banks are checked against SoulsFormatsNEXT's BTL
-(`btl.jsonl`, `repos/fromsoft-formats/tests/btl_census.rs`): one record per bank the install holds, `path`, then either `error` (the
+(`btl.jsonl`, `https://github.com/Kalmarv/fromsoft-formats/blob/main/tests/btl_census.rs`): one record per bank the install holds, `path`, then either `error` (the
 reference refuses it; ours must refuse it too) or `version` and `lights` (`name`, `type`, `diffuse`/`specular` RGB,
 `diffuse_power`, `specular_power`, `cast_shadows`, `cone_angle`, `position`, `rotation`, `radius`; floats as bit
 patterns).
@@ -332,7 +332,7 @@ glTF's default of 1, and is counted as an approximation. Material identity is ch
 any reference exporter's string formatting or key hashing.
 
 `oracles.soulsformats.sekiro/materials` is SoulsFormats' reading of every MTD in
-`/mtd/allmaterialbnd.mtdbnd.dcx`, in binder order, made by the dump harness's `mtd` mode (`repos/fromsoft-formats/tests/mtd_census.rs`).
+`/mtd/allmaterialbnd.mtdbnd.dcx`, in binder order, made by the dump harness's `mtd` mode (`https://github.com/Kalmarv/fromsoft-formats/blob/main/tests/mtd_census.rs`).
 `mtd.jsonl` lists each one's binder name, decoded SHA256, shader, description,
 typed parameters and every texture declaration; the gate compares them exactly,
 f32 values by their bits. `mtd-boundaries.jsonl` lists each file's blocks as
@@ -356,7 +356,7 @@ and bytes after the last referenced item are kept as the unreferenced tail; any 
 SoulsFormatsNEXT's MATBIN over every material binder of the install (`matbin.jsonl` of `oracles.soulsformats.elden/format`:
 one record per member in member order, `binder` (archive path), `name`, `shader`, `source`, `key`, `params` (`name`,
 `key`, `type`, `value` as strings: bools 0/1, ints decimal, floats as bit patterns; the reference keeps three floats of
-a float3) and `samplers` (`type`, `path`, `key`, `unknown`); `repos/fromsoft-formats/tests/matbin_census.rs`). The reference reads a short
+a float3) and `samplers` (`type`, `path`, `key`, `unknown`); `https://github.com/Kalmarv/fromsoft-formats/blob/main/tests/matbin_census.rs`). The reference reads a short
 value's declared size past the next item; the gate compares the stored prefix and counts such values. The area read
 does not resolve materials against them yet.
 
@@ -372,7 +372,7 @@ are zero). Checked against SoulsFormatsNEXT ee1dd61's `METAPARAM` over every bun
 (`metaparam.jsonl` of `oracles.soulsformats.elden/format`: one record per bundle, `binder`, `bundle`, `name`, the header
 words `unk30`, `cbuffer_size`, `flags`, `unk40`, `gxmd_key`, `ca_block_size`, `unk50`, `ca_param_components`,
 `shader_id`, then `textures`, `render_passes`, `ca_params` and `mtd_params` with floats as bit patterns;
-`repos/fromsoft-formats/tests/metaparam_census.rs`). Elden Ring stores colour MtdParams as type 13 where Sekiro stores 12.
+`https://github.com/Kalmarv/fromsoft-formats/blob/main/tests/metaparam_census.rs`). Elden Ring stores colour MtdParams as type 13 where Sekiro stores 12.
 
 ## Area reading and its passes
 
@@ -504,7 +504,7 @@ Havok skeleton named `<model> havok skeleton` and `havok.animation` clips, count
 `Report::object_animation` and the read's notices; they are not lowered onto the placements
 yet (the placed objects keep their rest pose), and the clip entities of different models
 share their file names (`a000_003000`), told apart by their `core.provenance`.
-`repos/fromsoft-formats/tests/object_animation_census.rs` (install-gated) prints what the object binders hold for
+`https://github.com/Kalmarv/fromsoft-formats/blob/main/tests/object_animation_census.rs` (install-gated) prints what the object binders hold for
 both games (Elden Ring's with its own keys), checking Elden Ring's assets for a binder beside
 them too.
 `tests/draw_param_census.rs` (install-gated) prints every draw-param field the chosen
@@ -548,7 +548,7 @@ A character's or part's files are kept beyond the model and its clips:
   `lower-fromsoft-part-collision{convex=...,leave-out-motion=...}` lowers the bodies of a prototype no placement uses
   (as `lower-fromsoft-object-collision` does the placed ones) into `core.collision` on the prototype itself, in its own space.
   A file that does not read is named in `unread` with its reason.
-- `repos/fromsoft-formats/tests/havok_census.rs` (install-gated) prints, for twenty characters of each game, the classes of every Havok member of
+- `https://github.com/Kalmarv/fromsoft-formats/blob/main/tests/havok_census.rs` (install-gated) prints, for twenty characters of each game, the classes of every Havok member of
   their chrbnd, anibnd, behbnd and texbnd binders (`HAVOK`, `CLASS` with the stored field names of the cloth, ragdoll,
   rigid body, constraint and physics classes, `HAVOKERR`) and every binder member by kind, extension and whether a
   reader keeps it (`EXT`). `havok_formats::cloth::read` (cloth data, ragdoll data, constraint infos) is written from those lines and the census prints what it reads of every such file (`PHYSICS`, or `PHYSICSERR` with the reason); the character reader does not keep its output yet.
@@ -837,7 +837,7 @@ map by their base value modulo 100 to core surface names where the class's surfa
 is known.
 
 Elden Ring's collision is Havok 2018.1 (`havok-formats`'s `SDK_VERSIONS`). Its stored compressed meshes are
-checked against HKLib ac40bc9 (`havok.jsonl` of `oracles.soulsformats.elden/format`, `repos/fromsoft-formats/tests/havok_census.rs`): one record
+checked against HKLib ac40bc9 (`havok.jsonl` of `oracles.soulsformats.elden/format`, `https://github.com/Kalmarv/fromsoft-formats/blob/main/tests/havok_census.rs`): one record
 per file, `file` (`<binder path>:<member>`), then `error` or `shapes`, each `kind`, `bits_per_key`, `sections`
 (`codec` as six f32 bit patterns, `first_packed_vertex`, `packed_vertices`, `first_shared_vertex`,
 `first_primitive`, `primitives`), `packed_vertices`, `shared_vertices`, `shared_vertices_index`, `primitives` (four

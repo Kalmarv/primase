@@ -1,7 +1,7 @@
 //! The corpus oracle set's `sekiro/havok` (toolkit/testdata's registry): one area's high-resolution map collision
 //! binder (`/map/<area>/h<area>.hkxbhd` and `.hkxbdt`) written loose, each member out of its DCX envelope under its own
 //! name: the area's Havok 2016.2 tagfiles and the compendium they share. The bytes are the game's own;
-//! repos/havok-formats/tests/corpus.rs reads every body and compressed mesh of them.
+//! https://github.com/Kalmarv/havok-formats/blob/main/tests/corpus.rs reads every body and compressed mesh of them.
 //!
 //! `cargo run --release -p primase-fromsoft --example corpus_sekiro_havok -- <Sekiro install> <keys>
 //! <oo2core_6_win64.dll> <out> [--area m11_00_00_00]`: the install, the folder of its archive keys (`Data1.pem` to
