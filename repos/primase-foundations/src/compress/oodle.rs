@@ -145,7 +145,8 @@ impl Decompressor for Oodle {
         let library = match &self.backend {
             Backend::Library(library) => library,
             Backend::Portable => {
-                return crate::compress::reference::decode(input, expected).map_err(|e| invalid("oodle", 0, e));
+                return crate::compress::reference::decode(input, expected)
+                    .map_err(|e| invalid("oodle", 0, e));
             }
         };
         let src_len = isize::try_from(input.len()).map_err(|_| crate::compress::Error::Limit)?;

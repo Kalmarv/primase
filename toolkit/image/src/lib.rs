@@ -475,6 +475,29 @@ pub fn write_png_rgb(width: u32, height: u32, rgb: &[u8]) -> Result<Vec<u8>> {
     }
     Ok(out)
 }
+/// Every stored level of `t`, decoded to RGBA8 as stored (no transfer applied), for sampling.
+pub fn levels(t: &primase_core::Texture) -> Result<primase_foundations::sampling::Levels> {
+    let meta = TextureMetadata {
+        color_space: primase_core::ColorSpace::Linear,
+        role: primase_core::TexRole::Other,
+        normal: None,
+    };
+    let d = map_rgba8_levels(t, 0..t.levels.len(), meta, |x| Ok(x.rgba))?;
+    Ok(primase_foundations::sampling::Levels {
+        width: d.width,
+        height: d.height,
+        levels: d.levels,
+    })
+}
+
+impl From<primase_foundations::sampling::Error> for Error {
+    fn from(e: primase_foundations::sampling::Error) -> Error {
+        match e {
+            primase_foundations::sampling::Error::Invalid(why) => Error::Invalid(why),
+        }
+    }
+}
+
 #[cfg(test)]
 mod registration_tests {
     use super::*;
@@ -519,28 +542,5 @@ mod registration_tests {
                 .unwrap()
                 .starts_with("upscale-nearest{(factor|size)*,textures*}\n")
         );
-    }
-}
-
-/// Every stored level of `t`, decoded to RGBA8 as stored (no transfer applied), for sampling.
-pub fn levels(t: &primase_core::Texture) -> Result<primase_foundations::sampling::Levels> {
-    let meta = TextureMetadata {
-        color_space: primase_core::ColorSpace::Linear,
-        role: primase_core::TexRole::Other,
-        normal: None,
-    };
-    let d = map_rgba8_levels(t, 0..t.levels.len(), meta, |x| Ok(x.rgba))?;
-    Ok(primase_foundations::sampling::Levels {
-        width: d.width,
-        height: d.height,
-        levels: d.levels,
-    })
-}
-
-impl From<primase_foundations::sampling::Error> for Error {
-    fn from(e: primase_foundations::sampling::Error) -> Error {
-        match e {
-            primase_foundations::sampling::Error::Invalid(why) => Error::Invalid(why),
-        }
     }
 }

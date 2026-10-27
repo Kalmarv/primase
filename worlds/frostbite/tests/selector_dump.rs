@@ -57,9 +57,9 @@ use frostbite_formats::bundle::Kind;
 use frostbite_formats::folder::{Folder, Source};
 use frostbite_formats::lookup::{self, RECORD_LEN};
 use frostbite_formats::scope::Scope;
-use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_core::shader::Shader;
 use primase_core::{Entity, World};
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_frostbite::components::{
     FrostbiteInputLayout, FrostbiteMaterial, FrostbiteMeshSet, FrostbitePermutation, FrostbiteProgram,
 };

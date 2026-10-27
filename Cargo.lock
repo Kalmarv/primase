@@ -1521,7 +1521,6 @@ dependencies = [
 name = "primase-testdata"
 version = "0.1.0"
 dependencies = [
- "primase-foundations",
  "thiserror",
  "toml",
 ]

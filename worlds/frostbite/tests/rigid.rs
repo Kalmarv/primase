@@ -17,8 +17,8 @@
 
 use frostbite_formats::folder::{Folder, Source};
 use frostbite_formats::{MESHSET, meshset, rigid, tangent};
-use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_core::{Semantic, Stream};
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_frostbite::geometry;
 use primase_testdata::{Game, Tool, install_file, tool};
 

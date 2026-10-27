@@ -97,11 +97,17 @@ pub fn bad(what: &'static str, offset: usize, detail: impl Into<String>) -> Erro
 
 /// A read past the data ([`primase_bytes`]): `what`'s error at the read's offset, naming how many bytes it wanted and
 /// the `total` there are (a span whose end overflows the address space wants all it names).
-pub(crate) fn past_end(what: &'static str, e: primase_foundations::bytes::BoundsError, total: usize) -> Error {
+pub(crate) fn past_end(
+    what: &'static str,
+    e: primase_foundations::bytes::BoundsError,
+    total: usize,
+) -> Error {
     let at = usize::try_from(e.absolute()).unwrap_or(usize::MAX);
     let length = match e {
         primase_foundations::bytes::BoundsError::OutOfBounds { length, .. } => length,
-        primase_foundations::bytes::BoundsError::LengthOverflow { count, stride, .. } => count.saturating_mul(stride),
+        primase_foundations::bytes::BoundsError::LengthOverflow { count, stride, .. } => {
+            count.saturating_mul(stride)
+        }
     };
     bad(what, at, format!("{length} bytes past the end ({total} bytes)"))
 }

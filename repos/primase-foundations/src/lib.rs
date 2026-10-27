@@ -26,10 +26,19 @@ pub mod vertex;
 pub const SOURCES: &[(&str, &[u8])] = &[
     ("foundations/bytes.rs", include_bytes!("bytes.rs")),
     ("foundations/color.rs", include_bytes!("color.rs")),
-    ("foundations/compress/lzo2a.rs", include_bytes!("compress/lzo2a.rs")),
+    (
+        "foundations/compress/lzo2a.rs",
+        include_bytes!("compress/lzo2a.rs"),
+    ),
     ("foundations/compress/mod.rs", include_bytes!("compress/mod.rs")),
-    ("foundations/compress/oodle.rs", include_bytes!("compress/oodle.rs")),
-    ("foundations/compress/reference.rs", include_bytes!("compress/reference.rs")),
+    (
+        "foundations/compress/oodle.rs",
+        include_bytes!("compress/oodle.rs"),
+    ),
+    (
+        "foundations/compress/reference.rs",
+        include_bytes!("compress/reference.rs"),
+    ),
     ("foundations/hash.rs", include_bytes!("hash.rs")),
     ("foundations/lib.rs", include_bytes!("lib.rs")),
     ("foundations/parallel.rs", include_bytes!("parallel.rs")),

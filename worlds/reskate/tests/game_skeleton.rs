@@ -8,8 +8,8 @@
 //!   its local pose, and every inverse model pose composed with the model pose is the identity, within f32 rounding.
 
 use frostbite_formats::folder::{Folder, Source};
-use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_core::{Rest, Skeleton, World};
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_reskate::game::skeleton::{SkateSkeletonAsset, check_poses, read_skeleton};
 use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 

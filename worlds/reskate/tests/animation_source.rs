@@ -1,8 +1,8 @@
 //! Light source proof using the existing off-board idle fixture: list all, decode one, then map onto render bones.
 use frostbite_formats::folder::{Folder, Source};
-use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{Clip, JointMap, Mesh, Skeleton, Texture, World};
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_reskate::{
     game::{
         clip::{LowerSkateClips, SkateClip},

@@ -30,9 +30,9 @@ use frostbite_formats::binding::PASS_BINDING;
 use frostbite_formats::bundle::Kind;
 use frostbite_formats::folder::{Folder, Source};
 use frostbite_formats::scope::Scope;
-use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_core::World;
 use primase_core::shader::Shader;
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_frostbite::components::{
     FrostbiteBindings, FrostbiteMaterial, FrostbitePermutation, FrostbiteProgram,
 };

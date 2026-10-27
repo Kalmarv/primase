@@ -28,7 +28,6 @@ impl Threads {
     pub fn get(self) -> usize {
         self.0.get()
     }
-
 }
 
 impl Default for Threads {

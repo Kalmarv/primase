@@ -11,7 +11,11 @@ fn sources_list_every_source_file() {
             if path.is_dir() {
                 dirs.push(path);
             } else {
-                let rel = path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+                let rel = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
                 files.push(format!("foundations/{rel}"));
             }
         }

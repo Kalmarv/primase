@@ -37,8 +37,7 @@ pub fn skin_palette(archive: &mut Archive) -> Result<Vec<[u8; 3]>, PaletteError>
     let texture = world
         .get::<primase_core::Texture>(e)
         .ok_or(PaletteError::NoTexture(SKIN_PALETTE))?;
-    let levels =
-        primase_image::levels(texture).map_err(|_| PaletteError::NoTexture(SKIN_PALETTE))?;
+    let levels = primase_image::levels(texture).map_err(|_| PaletteError::NoTexture(SKIN_PALETTE))?;
     if (levels.width, levels.height) != (8, 4) {
         return Err(PaletteError::Palette {
             width: levels.width,

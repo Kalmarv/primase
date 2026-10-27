@@ -408,9 +408,10 @@ const TEST_INPUT_REGISTRY: &str = "toolkit/testdata";
 /// engine crate it names, never the other way round.
 fn edge_allowed(from: &Member, to: &Member, dev: bool) -> bool {
     let to_layer = to.layer();
-    // a crate under repos/ leaves primase: it depends on other repos crates only, its tests included
+    // a crate under repos/ leaves primase: its dependencies are other repos crates only. Its tests may still use the
+    // real-data loader and core's gate reports until the shared primase-testdata is under repos/ too.
     if from.layer() == "repos" {
-        return to_layer == "repos";
+        return to_layer == "repos" || (dev && (to.path == TEST_INPUT_REGISTRY || to.path == "core"));
     }
     if to.path == TEST_INPUT_REGISTRY {
         return dev;

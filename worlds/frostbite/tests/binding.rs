@@ -15,8 +15,8 @@ use frostbite_formats::folder::{Folder, Source};
 use frostbite_formats::permutation::{self};
 use frostbite_formats::scope::Scope;
 use iridia_interface::{D3dClass, ResourceKind};
-use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_core::World;
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_frostbite::components::{
     FrostbiteBindings, FrostbiteMaterial, FrostbiteMeshSet, FrostbitePermutation, FrostbiteProgram,
 };

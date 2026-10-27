@@ -1,4 +1,5 @@
 //! The existing Sekiro soldier and skate idle, through the same table in both directions, and a skin fit census.
+use frostbite_formats::folder::{Folder, Source};
 use primase_animation::{
     Fit, Placement, Reference, RetargetClip, RetargetSkin, Translation, UnmappedJoints,
     joint_table::JointTable, pair,
@@ -6,7 +7,6 @@ use primase_animation::{
 use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, RunReport};
 use primase_core::{Clip, ClipTarget, Entity, JointMap, Name, Skeleton, Skin, World};
 use primase_fromsoft::{Install, NameDictionary, dcx::Decoder, sekiro};
-use frostbite_formats::folder::{Folder, Source};
 use primase_reskate::{
     game::{clip::LowerSkateClips, rig::render_map},
     read::animation,

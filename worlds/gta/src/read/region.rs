@@ -162,14 +162,15 @@ pub fn list_maps(set: &ArchiveSet, keys: &Keys, threads: Threads) -> Result<Vec<
         .flat_map(|t| t.values().copied())
         .collect();
     let entities = primase_foundations::hash::joaat_exact(b"entities");
-    let outlines = primase_foundations::parallel::map(threads, &files, |_, &f| -> Result<(MapHeader, usize)> {
-        let (root, counts) = meta(set, keys, f)?.root_outline()?;
-        let count = *counts
-            .get(&entities)
-            .ok_or_else(|| invalid("CMapData", 0, format!("{}: no entities array", set.path(f))))?;
-        Ok((MapHeader::from_root(&root)?, count))
-    })
-    .map_err(|e| invalid("map listing", 0, e.to_string()))?;
+    let outlines =
+        primase_foundations::parallel::map(threads, &files, |_, &f| -> Result<(MapHeader, usize)> {
+            let (root, counts) = meta(set, keys, f)?.root_outline()?;
+            let count = *counts
+                .get(&entities)
+                .ok_or_else(|| invalid("CMapData", 0, format!("{}: no entities array", set.path(f))))?;
+            Ok((MapHeader::from_root(&root)?, count))
+        })
+        .map_err(|e| invalid("map listing", 0, e.to_string()))?;
     let mut listed = Vec::with_capacity(files.len());
     for (&f, outline) in files.iter().zip(outlines) {
         let (header, count) = outline?;

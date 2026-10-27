@@ -1,5 +1,5 @@
-use primase_foundations::compress::*;
 use primase_core::gate::{GateReport, Tolerance};
+use primase_foundations::compress::*;
 
 /// Literal-only LZ4 and independently generated Python zlib fixtures; round trips
 /// include zero, one, and both sides of a 64 KiB boundary.

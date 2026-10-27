@@ -449,7 +449,10 @@ impl Ctx<'_> {
     }
 
     pub(crate) fn texture_entity(&mut self, w: &mut World, source: &str, t: &Texture) -> Result<Entity> {
-        let key = (source.to_string(), primase_foundations::hash::joaat(t.name.as_bytes()));
+        let key = (
+            source.to_string(),
+            primase_foundations::hash::joaat(t.name.as_bytes()),
+        );
         if let Some(&e) = self.textures.get(&key) {
             return Ok(e);
         }
