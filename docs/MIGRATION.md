@@ -21,7 +21,7 @@ crate is a git dependency; name the same `rev` primase's root `Cargo.toml` names
 | `primase-shader` | `iridia` (iridia) |
 | `primase-shader-exec` | `iridia-exec` (iridia) |
 | `primase-lua51` | `lua51-bytecode` |
-| `oozextract` (vendored) | `oozextract = { package = "primase-oozextract", git = ... }` |
+| `oozextract` (vendored) | `oozextract = "=0.5.7"` (crates.io) |
 | `naga` (patched) | `naga = { package = "primase-naga", git = ... }` |
 
 ## Code that moved out of a crate that stays

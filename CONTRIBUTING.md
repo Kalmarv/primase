@@ -153,7 +153,7 @@ someone looking for one finds it without primase. Any primase crate may use them
 | [iridia](https://github.com/Kalmarv/iridia) | iridia, iridia-interface, iridia-dxbc, iridia-dxil, iridia-d3d9, iridia-mojo, iridia-exec |
 | [frostbite-formats](https://github.com/Kalmarv/frostbite-formats), [rage-engine-formats](https://github.com/Kalmarv/rage-engine-formats), [anvil-formats](https://github.com/Kalmarv/anvil-formats), [fromsoft-formats](https://github.com/Kalmarv/fromsoft-formats), [unity-formats](https://github.com/Kalmarv/unity-formats), [monogame-formats](https://github.com/Kalmarv/monogame-formats), [rme-formats](https://github.com/Kalmarv/rme-formats) | one engine's formats each |
 | [havok-formats](https://github.com/Kalmarv/havok-formats), [morpheme-formats](https://github.com/Kalmarv/morpheme-formats), [lua51-bytecode](https://github.com/Kalmarv/lua51-bytecode) | middleware formats |
-| [primase-oozextract](https://github.com/Kalmarv/primase-oozextract), [primase-naga](https://github.com/Kalmarv/primase-naga) | forks carrying changes upstream has not released |
+| [primase-naga](https://github.com/Kalmarv/primase-naga) | a fork of naga carrying changes upstream has not released |
 
 They are git dependencies pinned to a commit (`[workspace.dependencies]`). A change to one is made, checked and pushed
 in its repository; primase then moves its `rev` to that commit. Every repository that uses a shared crate (most use
