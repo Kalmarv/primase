@@ -3,12 +3,14 @@
 //!
 //! Needs `installs.sekiro` and `tools.oodle6`.
 #![allow(clippy::unwrap_used)]
+mod inputs;
+
+use inputs::{Game, Tool, install, oodle};
 use primase_core::{Name, World};
 use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::materials::Material;
 use primase_fromsoft::sekiro::source::{MaterialShader, ShaderBundle, ShaderStage};
 use primase_fromsoft::sekiro::{self, read_area};
-use primase_testdata::{Game, Tool, install, oodle};
 use std::collections::BTreeMap;
 mod common;
 
@@ -78,7 +80,7 @@ fn elden_ring_materials_link_their_shader_model_6_bundles() {
     use primase_fromsoft::{Game as FromSoft, Install, Keys};
     let (Some(root), Some(keys), Some(dll)) = (
         install(Game::Elden),
-        primase_testdata::keys(Game::Elden),
+        inputs::keys(Game::Elden),
         oodle(Tool::Oodle6),
     ) else {
         return;

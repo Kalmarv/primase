@@ -14,13 +14,15 @@
 //!
 //! The counts are printed. Needs `installs.gta` and `keys.gta`.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod inputs;
+
 use std::collections::BTreeMap;
 
+use inputs::{Game, install, keys};
 use primase_core::World;
 use primase_gta::components::{GtaEffect, GtaEffectProgram, GtaEffectTechniques};
 use primase_gta::passes::resolve_shaders::split_program_name;
 use primase_gta::read::source::GtaSource;
-use primase_testdata::{Game, install, keys};
 
 fn hash_of(p: &Option<GtaEffectProgram>) -> Option<String> {
     p.as_ref()

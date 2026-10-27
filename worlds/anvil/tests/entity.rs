@@ -1,12 +1,14 @@
 //! Real Entities read from byte 0 to their last byte (Riders Republic build 25394987): the placement fixtures of the
 //! Riders Republic notes (docs/placement.md §14), each's scale, slots, instances and material infos as found there.
+mod inputs;
+
 use std::fs::File;
 
 use anvil_formats::archive::MAX_RECORD;
 use anvil_formats::data::{Resource, read_entry};
 use anvil_formats::entity::{ENTITY, Instance, Slot, StoredEntity};
 use anvil_formats::forge::Forge;
-use primase_testdata::{Game, install};
+use inputs::{Game, install};
 
 /// Each LODSelectorInstance slot as a letter: M a MeshInstanceData, I an ImpostorInstanceData, - none.
 fn slots(e: &StoredEntity) -> String {

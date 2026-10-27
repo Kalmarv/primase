@@ -6,17 +6,19 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use std::collections::BTreeMap;
 
 use anvil_formats::archive::Archive;
 use anvil_formats::material::MATERIAL;
+use inputs::{Game, install};
 use primase_anvil::passes::BAKE_ANVIL_MATERIAL;
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Entity, Texture, World};
-use primase_testdata::{Game, install};
 use sha2::{Digest, Sha256};
 
 const ORDER: [&str; 4] = [
@@ -123,7 +125,7 @@ fn the_baked_materials_of_the_usnat_forge() {
     }
     let total = hex(&total.finalize());
     println!("{} Materials baked, digest {total}", digests.len());
-    if let Some(expected) = primase_testdata::debug("anvil.bake_digest") {
+    if let Some(expected) = inputs::debug("anvil.bake_digest") {
         assert_eq!(
             total, expected,
             "the baked Materials differ from the digest given"

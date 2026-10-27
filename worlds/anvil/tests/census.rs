@@ -11,10 +11,12 @@
 //! stored order and winding). Each difference is counted with examples, under `vs RRAssetStudio`.
 
 /// RRAssetStudio's row for a mesh, by forge file name and entry.
+mod inputs;
+
 type Oracle = std::collections::HashMap<(String, usize), Value>;
 
 fn oracle() -> Option<Oracle> {
-    let dir = primase_testdata::oracle(OracleSet::RrAssetStudio, Game::Riders, "meshes")?;
+    let dir = inputs::oracle(OracleSet::RrAssetStudio, Game::Riders, "meshes")?;
     let text = std::fs::read_to_string(dir.join("summary.jsonl")).expect("summary.jsonl");
     Some(
         text.lines()
@@ -132,8 +134,8 @@ use anvil_formats::terrain_material::{
     COLLISION_MATERIAL, StoredMaterialBank, StoredTerrainMaterial, TERRAIN_MATERIAL, TERRAIN_MATERIAL_BANK,
 };
 use anvil_formats::texture::{self, StoredTextureMap};
+use inputs::{Game, OracleSet, install};
 use primase_core::TexFormat;
-use primase_testdata::{Game, OracleSet, install};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 

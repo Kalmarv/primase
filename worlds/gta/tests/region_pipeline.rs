@@ -7,6 +7,8 @@
 //! triangles straddling palette columns, decals, vertex-alpha surfaces, layered terrain, LOD forms) are printed.
 //!
 //! Needs `installs.gta` and `keys.gta`; the debug key `gta.region` limits it to one named region.
+mod inputs;
+
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Instance, LayeredMaterial, Mesh};
@@ -39,12 +41,12 @@ const PART: &str = "select-lod{form=finest}, lower-gta-embedded-collision{foliag
 #[test]
 fn every_named_region_through_the_gta_passes() {
     let (Some(dir), Some(keys)) = (
-        primase_testdata::install(primase_testdata::Game::Gta),
-        primase_testdata::keys(primase_testdata::Game::Gta),
+        inputs::install(inputs::Game::Gta),
+        inputs::keys(inputs::Game::Gta),
     ) else {
         return;
     };
-    let only = primase_testdata::debug("gta.region");
+    let only = inputs::debug("gta.region");
     let source = GtaSource::open(&dir, &keys).expect("install");
     let mut registry = PassRegistry::new();
     registry.add(&primase_core::SELECT_LOD);

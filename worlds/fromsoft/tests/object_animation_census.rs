@@ -11,15 +11,17 @@
 //!
 //! It asserts only that the binders read. Runs where the install, the dictionary and the Oodle library are configured;
 //! otherwise it does nothing.
+mod inputs;
+
+use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
 use primase_fromsoft::{Archive, Binder, NameDictionary, dcx::Decoder};
-use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 use std::collections::BTreeMap;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 #[allow(unsafe_code)]
 fn native(
-    path: &primase_testdata::OodleLibrary,
+    path: &inputs::OodleLibrary,
 ) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
     // SAFETY: caller explicitly supplies a trusted native version-6 decoder.
     unsafe {
@@ -47,7 +49,7 @@ fn census(
         return Ok(());
     };
     // each game opens with its own keys: Sekiro's are published, Elden Ring's are the install owner's folder
-    let keys = match (kind, primase_testdata::keys(game)) {
+    let keys = match (kind, inputs::keys(game)) {
         (primase_fromsoft::Game::Sekiro, _) => {
             primase_fromsoft::Keys::published(kind).ok_or("Sekiro's keys")?
         }

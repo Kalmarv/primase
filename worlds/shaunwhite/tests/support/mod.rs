@@ -1,9 +1,9 @@
 //! Shared raw-source fixtures; no lowered material snapshot.
 #![allow(clippy::unwrap_used)]
+use crate::inputs::{Game, install_file};
 use anvil_formats::shaunwhite::shaders::{Database, Payload};
 use iridia_interface::{KeyPart, Stage, VariantKey};
 use primase_core::{World, shader::StageBinding};
-use primase_testdata::{Game, install_file};
 pub fn binding(db: &Database, record: u32) -> StageBinding {
     let shader = World::new().spawn();
     StageBinding {

@@ -3,9 +3,11 @@
 //! counts (docs/material-spec.md §25: 432 templates, 177,578 records, every hash resolving) and the engine's key
 //! composer for Rocks (docs/shaders.md §6.2): a plain static Rocks G-buffer draw's pixel key 0x400000 names the
 //! program at 0x25A2D, its roughness the detail normal's alpha.
+mod inputs;
+
 use anvil_formats::archive::{Archive, At};
 use anvil_formats::template::{self, MATERIAL_TEMPLATE, Stage};
-use primase_testdata::{Game, install};
+use inputs::{Game, install};
 
 #[test]
 fn every_permutation_names_one_program() {

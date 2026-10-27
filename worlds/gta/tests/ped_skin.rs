@@ -5,12 +5,14 @@
 //! are the stored blend indices. The counts are printed.
 //!
 //! Needs the GTA install and its key material.
+mod inputs;
+
+use inputs::{Game, install, keys};
 use primase_core::pass::{PassManager, PassRegistry};
 use primase_core::skin::Skin;
 use primase_core::{Mesh, Semantic, Stream};
 use primase_gta::components::GtaBlendStreams;
 use primase_gta::read::source::GtaSource;
-use primase_testdata::{Game, install, keys};
 
 #[test]
 fn peds_lower_to_skins_that_verify() {

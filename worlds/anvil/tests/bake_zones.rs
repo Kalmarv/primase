@@ -1,11 +1,14 @@
 //! `bake-anvil-material` on the character zones (`MAD_CHR_5Zones_*`): a glove Material of a rider baked at its mask's
 //! size and held against the notes' formula (docs/material-spec.md section 18.2) evaluated by hand on the same texels, and the
 //! whole rider lowered with the zones baked instead of drawn as placeholders.
+mod inputs;
+
 use std::collections::BTreeMap;
 
 use anvil_formats::archive::Archive;
 use anvil_formats::build_table::BUILD_TABLE;
 use anvil_formats::skeleton::SKELETON;
+use inputs::{Game, install};
 use primase_anvil::components::{AnvilMaterial, MaterialBinding, MaterialValue};
 use primase_anvil::passes::BAKE_ANVIL_MATERIAL;
 use primase_anvil::read::placements::{
@@ -16,7 +19,6 @@ use primase_core::pass::{Options, PassLog, PassManager, PassRegistry, RunReport}
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Entity, Name, Texture, World};
 use primase_foundations::{sampling::Address, sampling::Levels};
-use primase_testdata::{Game, install};
 
 fn crc(name: &str) -> u32 {
     let mut hash = 0xFFFF_FFFFu32;

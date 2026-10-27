@@ -3,6 +3,8 @@
     clippy::unwrap_used,
     reason = "test helpers assert their explicit material and pixel fixtures"
 )]
+mod inputs;
+
 use anvil_formats::shaunwhite::material::LayerState;
 use primase_core::layered::{Channel, Composition, Source, mask_value};
 use primase_core::pass::{Conservation, PassManager, PassRegistry, RunReport};
@@ -340,7 +342,7 @@ fn unsupported_equations_are_named_and_counted() {
 
 #[test]
 fn restored_metro_mural_and_level_six_masked_walls_keep_every_weight_factor() {
-    use primase_testdata::{Game, install};
+    use inputs::{Game, install};
     let Some(folder) = install(Game::ShaunWhite) else {
         return;
     };
@@ -584,7 +586,7 @@ fn vertex_alpha_is_kept_only_where_it_reaches_the_output() {
 /// materials still multiplying `COLOR_0` are blended or alpha-tested ones.
 #[test]
 fn level_01_materials_no_longer_take_the_vertex_rgb() {
-    use primase_testdata::{Game, install};
+    use inputs::{Game, install};
     let Some(folder) = install(Game::ShaunWhite) else {
         return;
     };

@@ -17,7 +17,9 @@ logs/
 .env*
 .cargo/config.toml
 
-# Private corpus locations and gate settings (use primase-data.example.toml as a template)
+# Private corpus locations and gate settings (repos/primase-testdata/game-data.example.toml is the template)
+game-data.toml
+game-data.*.toml
+!game-data.example.toml
 primase-data.toml
 primase-data.*.toml
-!primase-data.example.toml

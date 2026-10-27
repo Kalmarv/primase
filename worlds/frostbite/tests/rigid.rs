@@ -15,12 +15,14 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use frostbite_formats::folder::{Folder, Source};
 use frostbite_formats::{MESHSET, meshset, rigid, tangent};
+use inputs::{Game, Tool, install_file, tool};
 use primase_core::{Semantic, Stream};
 use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_frostbite::geometry;
-use primase_testdata::{Game, Tool, install_file, tool};
 
 type R<T = ()> = Result<T, Box<dyn std::error::Error>>;
 

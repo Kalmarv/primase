@@ -8,11 +8,13 @@
     reason = "test I/O: real-data gates"
 )]
 
+mod inputs;
+
 use frostbite_formats::cas::Cas;
 use frostbite_formats::cas::{CasRaw, blocks};
+use inputs::{Game, OracleSet, Tool, oracle, tool};
 use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_foundations::compress::{Compressor, Decompressor, reference};
-use primase_testdata::{Game, OracleSet, Tool, oracle, tool};
 
 type R<T = ()> = Result<T, Box<dyn std::error::Error>>;
 

@@ -1,5 +1,7 @@
+mod inputs;
+
+use inputs::{Depth, Game, Query, depth, expect_found, install, seed};
 use primase_shred::read::{cstr, pak::Pak};
-use primase_testdata::{Depth, Game, Query, depth, expect_found, install, seed};
 use std::path::{Path, PathBuf};
 
 fn archives(dir: &Path, out: &mut Vec<PathBuf>) {

@@ -5,13 +5,15 @@
 //! the FarFake cell's number. The census reads bodies this reader refuses (46,477 Entities, UI widgets most of them);
 //! its counts bound this reader's while it refuses them, and every body reads now (the UI widgets too: the hidden
 //! names are the 3D ones and the UI's).
+mod inputs;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use anvil_formats::archive::{Archive, At};
 use anvil_formats::entity::{
     CollisionFilter, ComponentBody, ENTITY, ENTITY_GROUP, Instance, StoredEntity, StoredEntityGroup, query,
 };
-use primase_testdata::{Game, install};
+use inputs::{Game, install};
 
 #[test]
 fn rigid_body_filters_and_entity_flags_count_as_the_registry_census() {

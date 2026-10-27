@@ -1,10 +1,12 @@
 //! The forge index reader: a two-entry version 27 file laid out here by hand, its refusals, and the hand-checked rows
 //! of a real forge (`installs.riders/DataPC_MAD_WhiteRoom_patch_01.forge`).
+mod inputs;
+
 use std::collections::BTreeSet;
 use std::io::Cursor;
 
 use anvil_formats::forge::{Error, Forge};
-use primase_testdata::{Game, install_file};
+use inputs::{Game, install_file};
 
 /// One entry of a hand-laid forge: payload offset, index id, size, name id, type id, name.
 struct Row {

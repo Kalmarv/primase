@@ -1,10 +1,12 @@
 //! Source census plus hand-worked fixtures in material.rs. The disc is the source,
 //! not an independent decoding oracle; joins test independently stored references.
+mod inputs;
+
+use inputs::{Game, install};
 use primase_shred::read::{
     material::{self, UniformNames},
     pak::Pak,
 };
-use primase_testdata::{Game, install};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},

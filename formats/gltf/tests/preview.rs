@@ -6,6 +6,7 @@
 #![allow(clippy::unwrap_used)]
 
 mod common;
+mod inputs;
 
 use std::collections::BTreeSet;
 
@@ -647,7 +648,7 @@ fn a_recipe_then_resolve_state_equals_resolving_at_once() {
 /// meshes), and on the file of a resolved world: no errors.
 #[test]
 fn khronos_validator_accepts_each_preview_glb() {
-    let Some(validator) = primase_testdata::tool(primase_testdata::Tool::GltfValidator) else {
+    let Some(validator) = inputs::tool(inputs::Tool::GltfValidator) else {
         return;
     };
     let (dir, _) = preview("preview-validator", wardrobe().w, "");

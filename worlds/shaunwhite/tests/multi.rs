@@ -1,10 +1,12 @@
 //! The four multiplayer worlds (`installs.shaunwhite`): each root entry's one player spawner is read as a start marker.
 //! Translations are those of the Entities' matrices (ENU: east, north, up), read by a separate census of the forges' root
 //! entries.
+mod inputs;
+
+use inputs::{Game, install};
 use primase_core::frame::SourceFrame;
 use primase_core::{Marker, Name, Transform};
 use primase_shaunwhite::read::level::read_level;
-use primase_testdata::{Game, install};
 
 #[test]
 fn each_multiplayer_world_has_its_player_spawner_as_a_start() {

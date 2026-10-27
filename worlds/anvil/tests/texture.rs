@@ -1,6 +1,8 @@
 //! Real TextureMaps read as stored (Riders Republic build 25394987, base WhiteRoom forge): fields, references, every
 //! embedded level's bytes and the external levels' images (SHA-256s from the third-party RRAssetStudio's read in
 //! games/riders-republic docs/recon/texture-format-validation.md, bff28dc), and the top levels decoded.
+mod inputs;
+
 use std::fs::File;
 
 use anvil_formats::archive::MAX_RECORD;
@@ -8,9 +10,9 @@ use anvil_formats::data::{Resource, read_entry};
 use anvil_formats::forge::Forge;
 use anvil_formats::mip::{COMPILED_MIP, StoredMip};
 use anvil_formats::texture::{self, StoredTextureMap, TEXTURE_MAP};
+use inputs::{Game, install, install_file};
 use primase_anvil::read::textures::tex_format;
 use primase_core::TexFormat;
-use primase_testdata::{Game, install, install_file};
 use primase_texcodec::{Bcdec, Decoder, TexDecoder};
 use sha2::{Digest, Sha256};
 

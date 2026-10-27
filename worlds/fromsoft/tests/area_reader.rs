@@ -4,10 +4,13 @@
 //!
 //! Needs `installs.sekiro` and `tools.oodle6`.
 #![allow(clippy::unwrap_used)]
+mod inputs;
+
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
+use inputs::{Game, Tool, install, oodle};
 use primase_core::convert::{Finished, Reader, Result, WholeWorld, Writer, check_emits, convert_parts};
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, Target};
 use primase_core::{Instance, World};
@@ -15,7 +18,6 @@ use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::rigid::SourceModel;
 use primase_fromsoft::sekiro::convert::AreaReader;
 use primase_fromsoft::sekiro::{self, world_bounds};
-use primase_testdata::{Game, Tool, install, oodle};
 mod common;
 
 /// Every part's placements.

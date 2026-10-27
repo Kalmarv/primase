@@ -13,10 +13,12 @@
     clippy::cast_precision_loss,
     reason = "a test reads real pixels and vertices at checked sizes"
 )]
+mod inputs;
+
+use inputs::{Game, install};
 use primase_core::{Mesh, Semantic, Stream, TexRole, Texture};
 use primase_shaunwhite::components::MaterialRef;
 use primase_shaunwhite::read::texture::NORMAL_CONVENTION;
-use primase_testdata::{Game, install};
 use primase_texcodec::{Decoder, TexDecoder};
 
 fn corr(a: &[f64], b: &[f64]) -> f64 {

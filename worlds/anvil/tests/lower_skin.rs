@@ -2,6 +2,8 @@
 //! three vertices bound to them, a placement following the rig), and on real Entities of Riders Republic's forges placed
 //! through the Placer: the joint and weight streams, the palette, the inverse binds, the occurrences and the placements
 //! that follow them, under the pass manager with its checks on.
+mod inputs;
+
 use anvil_formats::archive::Archive;
 use anvil_formats::listing::Kind;
 use anvil_formats::mesh::StoredMeshBone;
@@ -9,6 +11,7 @@ use anvil_formats::mesh::StoredSkin;
 use anvil_formats::rig::RigBone;
 use anvil_formats::rig::StoredRig;
 use anvil_formats::vertex::VertexAttributes;
+use inputs::{Game, install};
 use primase_anvil::components::{AnvilMesh, AnvilRig, AnvilRigOccurrence, AnvilSkin, AnvilSkinned};
 use primase_anvil::passes::{
     LowerAnvilLods, LowerAnvilMesh, LowerAnvilRig, LowerAnvilSkin, OwnTransform, Static16Normal,
@@ -20,7 +23,6 @@ use primase_core::rig::{RigInstance, SkinInstance};
 use primase_core::skeleton::{JointId, Skeleton};
 use primase_core::skin::{BindingId, Influences, Skin, WeightRule};
 use primase_core::{Entity, Instance, Mesh, Semantic, Stream, Transform, World};
-use primase_testdata::{Game, install};
 
 fn rig_bone(name_hash: u32, parent: Option<u32>, z: f32) -> RigBone {
     RigBone {

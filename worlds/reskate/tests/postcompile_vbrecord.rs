@@ -23,11 +23,13 @@
 #![allow(clippy::unwrap_used)]
 
 mod common;
+mod inputs;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use common::{BAM, R, ROOT, all_files, index_buffer, meshes, rows, stream};
+use inputs::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_reskate::postcompile::fb::folder::{Folder, Source};
 use primase_reskate::postcompile::finish::finish;
@@ -35,7 +37,6 @@ use primase_reskate::postcompile::map_folder;
 use primase_reskate::postcompile::meshset;
 use primase_reskate::postcompile::vblend::{DECAL_DONOR, Donor, StockPrograms, decal_opacity};
 use primase_reskate::postcompile::vbrecord;
-use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use serde_json::Value;
 
 #[test]
@@ -102,7 +103,7 @@ fn vbrecord_gate() -> R {
     );
     assert_eq!(resolution.keys.len(), input.record.materials.len());
     // ---- apply, read back
-    let root = primase_testdata::scratch().join("reskate-vbrecord");
+    let root = inputs::scratch().join("reskate-vbrecord");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root)?;
     // through the one public route: blend, level root, layering gate

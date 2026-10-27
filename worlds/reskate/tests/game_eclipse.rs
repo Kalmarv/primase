@@ -6,12 +6,14 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use frostbite_formats::bundle;
 use frostbite_formats::ebx::Value;
 use frostbite_formats::folder::{Folder, Source};
+use inputs::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_reskate::game::eclipse::{Track, decode};
-use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
 

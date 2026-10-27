@@ -6,6 +6,7 @@
 #![allow(clippy::unwrap_used)]
 
 mod common;
+mod inputs;
 
 use std::collections::BTreeSet;
 
@@ -190,7 +191,7 @@ fn two_parts_sharing_a_file_name_are_refused() {
 /// Oracle: the Khronos glTF-Validator on every file: no errors.
 #[test]
 fn khronos_validator_accepts_each_part() {
-    let Some(validator) = primase_testdata::tool(primase_testdata::Tool::GltfValidator) else {
+    let Some(validator) = inputs::tool(inputs::Tool::GltfValidator) else {
         return;
     };
     let m = manager();

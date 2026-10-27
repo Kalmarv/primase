@@ -9,10 +9,12 @@
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
+mod inputs;
+
 use std::collections::{BTreeMap, BTreeSet};
 
+use inputs::{Game, OracleSet, install, oracle};
 use primase_stuntboost::levels;
-use primase_testdata::{Game, OracleSet, install, oracle};
 use serde_json::Value;
 
 #[test]

@@ -1,10 +1,13 @@
 //! Real terrain (Riders Republic build 25394987, DataPC_MAD_USNAT): the level-8 nodes under the CITYSCHOOL campus
 //! read and lowered to ground under the pass manager with its checks on, in the frame the Riders Republic notes place
 //! the quadtree in (docs/terrain.md §3.3: ShortRange cell 9380, x -3584..-3456, y 1152..1280).
+mod inputs;
+
 use anvil_formats::archive::{Archive, At};
 use anvil_formats::grid::{self, StoredGridCellDataBlock, StoredGridPartition, WORLD};
 use anvil_formats::terrain_material::TERRAIN_MATERIAL_BANK;
 use anvil_formats::tnl::TERRAIN_NODE_LAYER;
+use inputs::{Game, install};
 use primase_anvil::components::AnvilTerrain;
 use primase_anvil::components::TerrainTile;
 use primase_anvil::passes::{
@@ -15,7 +18,6 @@ use primase_anvil::read::terrain::{TerrainRead, read_terrain};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::{ColorSpace, Mesh, Transform, World};
-use primase_testdata::{Game, install};
 
 #[test]
 fn the_campus_ground_reads_and_lowers() {

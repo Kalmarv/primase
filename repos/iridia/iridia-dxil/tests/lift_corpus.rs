@@ -4,10 +4,12 @@
 //! the lifter refuses is counted by reason, with the first program of each (the refusals are by name, never silent);
 //! a program it lifts must validate and write, or the lifter is wrong. Needs the corpus oracle set's `skate/shaders`
 //! or `elden/shaders` (each a folder, searched recursively, of containers as the game ships them).
+mod inputs;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use primase_testdata::{Game, OracleSet, Query, expect_found, resolve};
+use inputs::{Game, OracleSet, Query, expect_found, resolve};
 
 fn containers(root: &Path, out: &mut Vec<PathBuf>) {
     let mut entries: Vec<_> = std::fs::read_dir(root)

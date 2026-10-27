@@ -17,6 +17,8 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use frostbite_formats::ebx::{self, Document, Pointer, Value, carry};
 
 const REFL: &[u8] = include_bytes!("fixtures/ebx/refl.ebx");
@@ -297,7 +299,7 @@ fn ebx_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) -> std::i
 /// reader prints (`ebx-values`), a third-party decode rather than ours.
 #[test]
 fn real_documents_census() -> R {
-    use primase_testdata::{Game, OracleSet, Query, Tool, expect_found, install, resolve, tool};
+    use inputs::{Game, OracleSet, Query, Tool, expect_found, install, resolve, tool};
     let corpus = Query::Oracle(OracleSet::Corpus, Game::Skate, "ebx");
     let Some(dir) = resolve(corpus) else {
         return Ok(());

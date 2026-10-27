@@ -1,5 +1,8 @@
 //! Every disc submesh joins independently stored bank IDs. The ID-zero rule is
 //! explicitly inferred from the exhaustive nonzero namespace join, not a native oracle.
+mod inputs;
+
+use inputs::{Game, install};
 use primase_core::{Instance, Mesh, Texture, convert::Reader, frame::SourceFrame};
 use primase_shred::{
     components::{BankEvidence, EncodedTexture, MaterialId, MaterialTextures, ShredMaterial, SourceTexture},
@@ -10,7 +13,6 @@ use primase_shred::{
         pak::Pak,
     },
 };
-use primase_testdata::{Game, install};
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},

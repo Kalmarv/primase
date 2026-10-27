@@ -2,13 +2,15 @@
 //! what it doesn't use: each B's length against the raw bits read, each raster's values against its palette and (block
 //! 2) the node's mask, each node's decoded height range against its stored a and b, and the 4 samples each node shares
 //! with its +x and +y neighbours. Ignored: it decodes 611,667 blocks; run by hand.
+mod inputs;
+
 use std::collections::{BTreeMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use anvil_formats::archive::{Archive, At};
 use anvil_formats::tnl::{StoredNodeLayer, StoredTnlChunk, TERRAIN_NODE_LAYER, node};
 use anvil_formats::tnl_code::{SIDE, heights, hilbert, raster, tile};
-use primase_testdata::{Game, install};
+use inputs::{Game, install};
 
 /// A strip's digest: the samples at x in `xs` and y in `ys`.
 fn strip<T: Hash + Copy>(samples: &[T], xs: std::ops::Range<usize>, ys: std::ops::Range<usize>) -> u64 {

@@ -1,7 +1,10 @@
 //! Real lakes (Riders Republic build 25394987, DataPC_MAD_USNAT): WaterVisualEntity_001_008 placed and lowered by
 //! lower-anvil-water under the pass manager with its checks on, against the notes' counts (docs/material-spec.md
 //! §24.3: 120 patches, levels 3 to 6 with 29, 41, 34 and 16, all at z 781) and the recipe's geometry (§24.6, §24.9).
+mod inputs;
+
 use anvil_formats::archive::Archive;
+use inputs::{Game, install};
 use primase_anvil::components::AnvilWater;
 use primase_anvil::passes::{LowerAnvilWater, Shore};
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
@@ -9,7 +12,6 @@ use primase_core::frame::SourceFrame;
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::pbr::{AlphaMode, PbrMaterial};
 use primase_core::{Instance, Mesh, Semantic, Stream, Texture, Transform, World};
-use primase_testdata::{Game, install};
 
 #[test]
 fn a_lake_becomes_its_patches() {

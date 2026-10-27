@@ -135,7 +135,7 @@ pub(super) mod fixture {
             archive::{Archive, At},
             template,
         };
-        let dir = primase_testdata::install(primase_testdata::Game::Riders)?;
+        let dir = crate::inputs::install(crate::inputs::Game::Riders)?;
         let order = [
             "DataPC_MAD_USNAT_patch_01.forge",
             "DataPC_MAD_USNAT.forge",

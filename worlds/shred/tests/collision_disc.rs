@@ -3,6 +3,9 @@
 //! winding is counter-clockwise-front (the topmost near-horizontal triangles of the fixed meshes face up), and the
 //! collision sits on the render geometry of the same level (the frame check).
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod inputs;
+
+use inputs::{Game, Query, expect_found, install, install_file};
 use primase_core::{
     Collider, Collision, Instance, Mesh, Shape, Source, Transform, World,
     frame::{Axis, SourceFrame},
@@ -19,7 +22,6 @@ use primase_shred::{
         pak::Pak,
     },
 };
-use primase_testdata::{Game, Query, expect_found, install, install_file};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 

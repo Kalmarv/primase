@@ -2,13 +2,15 @@
 //! (`wp_a_0761_l`: the umbrella closed and open, each with an animation binder of its own) and Elden Ring's
 //! `wp_a_1152_l` (one mesh in two materials). Each form's other members go with it: its animation binder is its
 //! asset's clips when they are asked for, and is named on its report as not read otherwise.
+mod inputs;
+
 use std::collections::BTreeMap;
 
+use inputs::Tool;
 use primase_core::{Asset, Name, Role, Source, World};
 use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::sekiro::{CharacterOptions, CharacterReport, part_forms, read_parts_with};
 use primase_fromsoft::{Game, Install, Keys};
-use primase_testdata::Tool;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 mod common;
 
@@ -50,7 +52,7 @@ fn forms(reports: &[CharacterReport]) -> Vec<Form<'_>> {
 
 #[test]
 fn a_part_binders_forms_are_assets_of_their_own() -> Result<()> {
-    let Some(dll) = primase_testdata::oodle(Tool::Oodle6) else {
+    let Some(dll) = inputs::oodle(Tool::Oodle6) else {
         return Ok(());
     };
     let dll = common::oodle(dll)?;
@@ -58,7 +60,7 @@ fn a_part_binders_forms_are_assets_of_their_own() -> Result<()> {
         oodle: Some(&dll),
         max_output: 1 << 30,
     };
-    if let Some(root) = primase_testdata::install(primase_testdata::Game::Sekiro) {
+    if let Some(root) = inputs::install(inputs::Game::Sekiro) {
         let install = Install::sekiro(&root);
         let archive = install.open()?;
         assert_eq!(
@@ -165,8 +167,8 @@ fn a_part_binders_forms_are_assets_of_their_own() -> Result<()> {
         }
     }
     if let (Some(root), Some(keys)) = (
-        primase_testdata::install(primase_testdata::Game::Elden),
-        primase_testdata::keys(primase_testdata::Game::Elden),
+        inputs::install(inputs::Game::Elden),
+        inputs::keys(inputs::Game::Elden),
     ) {
         let install = Install::new(root, Game::EldenRing, Keys::from_folder(keys, Game::EldenRing)?);
         let refused = part_forms(&install.open()?, &decoder, "fg_a_6000")

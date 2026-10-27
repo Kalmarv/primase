@@ -14,6 +14,8 @@
 //! padded by its 0.01 margin, so `m` is taken as the file's largest oracle coordinate magnitude plus [`PAD`]. A decoding
 //! difference (a wrong bit width, domain, codec or index) moves a position by a quantization step or more, at least
 //! `m / 2^22`, which is about 30 times the bound.
+mod inputs;
+
 use primase_fromsoft::collision;
 use primase_havok::Compendium;
 
@@ -24,18 +26,10 @@ const PAD: f32 = 0.02;
 
 #[test]
 fn castle_raw_soups() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(dir) = primase_testdata::oracle(
-        primase_testdata::OracleSet::Corpus,
-        primase_testdata::Game::Sekiro,
-        "havok",
-    ) else {
+    let Some(dir) = inputs::oracle(inputs::OracleSet::Corpus, inputs::Game::Sekiro, "havok") else {
         return Ok(());
     };
-    let Some(soups) = primase_testdata::oracle(
-        primase_testdata::OracleSet::Corpus,
-        primase_testdata::Game::Sekiro,
-        "havok-soup",
-    ) else {
+    let Some(soups) = inputs::oracle(inputs::OracleSet::Corpus, inputs::Game::Sekiro, "havok-soup") else {
         return Ok(());
     };
     let mut files = std::fs::read_dir(dir)?

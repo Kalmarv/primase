@@ -1,7 +1,9 @@
 //! The rider's slots, parts and variants as the customization BuildTables list them, on Riders Republic's forges.
+mod inputs;
+
 use anvil_formats::archive::Archive;
 use anvil_formats::rider::{BEARD_COLOURS, HAIR_COLOURS, RiderCatalog, colours, rider_catalog, stated};
-use primase_testdata::{Game, install};
+use inputs::{Game, install};
 
 /// (slot key, parts, parts listing variants, parts whose variants state one) of every slot.
 fn counts(c: &RiderCatalog) -> Vec<(String, usize, usize, usize)> {

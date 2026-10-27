@@ -13,12 +13,14 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use primase_core::gate::{GateReport, Tolerance};
+use inputs::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_core::{Instance, Mesh, Name, Texture, World};
-use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
+use primase_testdata::gate::{GateReport, Tolerance};
 use primase_unity::TypeTreePackage;
 use primase_unity::asset::read_asset;
 use primase_unity::components::{UnityMaterial, UnityTexture};

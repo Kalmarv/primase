@@ -3,8 +3,11 @@
 //! (docs/material-spec.md §27.2, §27.6, executed by the notes; the rows read from the programs), worked here in f64
 //! from the same sampled texels with the sun 30 degrees up and the eye at 0.7 to the normal (the colour's mix `f` not
 //! 0), the parallax march seeing the surface straight on.
+mod inputs;
+
 use anvil_formats::archive::{Archive, At};
 use anvil_formats::material::{MATERIAL, StoredMaterial};
+use inputs::{Game, install};
 use primase_anvil::components::{AnvilMaterial, AnvilTextureMap, MaterialBinding, MaterialValue};
 use primase_anvil::passes::BAKE_ANVIL_MATERIAL;
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
@@ -13,7 +16,6 @@ use primase_core::pass::{Options, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Entity, Texture, World};
 use primase_foundations::{sampling::Address, sampling::Levels, sampling::Transfer, sampling::footprint_lod};
-use primase_testdata::{Game, install};
 
 const SIZE: u32 = 64;
 

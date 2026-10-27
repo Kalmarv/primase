@@ -8,15 +8,17 @@
 //!
 //! Needs `installs.gta` and `keys.gta`.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod inputs;
+
 use std::collections::{BTreeMap, BTreeSet};
 
+use inputs::{Game, install, keys};
 use iridia_interface::SystemValue;
 use primase_core::World;
 use primase_core::shader::Shader;
 use primase_gta::components::{GtaEffect, GtaShaderTable, GtaStage};
 use primase_gta::passes::gbuffer;
 use primase_gta::read::source::GtaSource;
-use primase_testdata::{Game, install, keys};
 
 #[test]
 fn the_matrices_the_vertex_outputs_are_computed_from() {

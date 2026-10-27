@@ -14,6 +14,7 @@
 #![allow(clippy::unwrap_used)]
 
 mod common;
+mod inputs;
 
 use iridia_interface::Filter;
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
@@ -183,11 +184,8 @@ fn validator_image(validator: &Value, i: usize) -> (String, u64, u64) {
 
 #[test]
 fn t1_khronos_images_and_materials_read_as_the_validator_and_pillow_see_them() {
-    let Some(root) = primase_testdata::oracle(
-        primase_testdata::OracleSet::Khronos,
-        primase_testdata::Game::General,
-        "sample-assets",
-    ) else {
+    let Some(root) = inputs::oracle(inputs::OracleSet::Khronos, inputs::Game::General, "sample-assets")
+    else {
         return;
     };
     let mut models: Vec<_> = std::fs::read_dir(root)

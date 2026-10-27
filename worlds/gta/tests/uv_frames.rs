@@ -6,9 +6,11 @@
 //! coordinates) are left out of the share.
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
+use inputs::{Game, OracleSet, oracle};
 use primase_meshops::frames::{AxisMap, axis_map, uv_axes};
 use primase_meshops::vector::Vec3;
-use primase_testdata::{Game, OracleSet, oracle};
 use serde_json::Value as Json;
 use std::collections::BTreeMap;
 

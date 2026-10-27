@@ -7,12 +7,14 @@
 //!
 //! Needs the WARP oracle program with the `d3d12rt` case form (the configured `Tool::Warp`) and the scratch folder. The
 //! scenes and rays are made from fixed seeds.
+mod inputs;
+
+use inputs::{Tool, own_scratch, tool};
 use iridia::D3dClass;
 use iridia_dxil::lift;
 use iridia_exec::{
     Backend, Element, Executable, Geometry, ImageSample, Instance, InstanceFlags, Resources, Scene,
 };
-use primase_testdata::{Tool, own_scratch, tool};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -327,7 +329,7 @@ fn gate(fixture_name: &str, procedural: bool) {
     let cases_file = scratch.join(format!("{fixture_name}.cases.txt"));
     let out_file = scratch.join(format!("{fixture_name}.warp.jsonl"));
     std::fs::write(&cases_file, text).unwrap();
-    let _oracle = primase_testdata::warp_exclusive();
+    let _oracle = inputs::warp_exclusive();
     let run = std::process::Command::new(&warp)
         .arg(&cases_file)
         .arg(&out_file)

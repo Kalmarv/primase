@@ -1,6 +1,8 @@
 //! Web tiles: placement, pivots, instancing, compression and quantization.
 // helpers outside #[test] functions unwrap too
 #![allow(clippy::unwrap_used)]
+mod inputs;
+
 use primase_core::{Entity, Instance, Mesh, Primitive, Semantic, Stream, Topology, Transform, World};
 use primase_web::{Options, write};
 use std::collections::BTreeMap;
@@ -144,7 +146,7 @@ fn bad_meshes_and_options_are_errors() {
 
 #[test]
 fn validator_and_index_file() {
-    let Some(validator) = primase_testdata::tool(primase_testdata::Tool::GltfValidator) else {
+    let Some(validator) = inputs::tool(inputs::Tool::GltfValidator) else {
         return;
     };
     let mut w = World::new();
@@ -277,7 +279,7 @@ fn instancing_trs_and_baked_mirrors_shears() {
             .len(),
         3
     );
-    if let Some(validator) = primase_testdata::tool(primase_testdata::Tool::GltfValidator) {
+    if let Some(validator) = inputs::tool(inputs::Tool::GltfValidator) {
         let path = std::env::temp_dir().join(format!("primase-web-instance-{}.glb", std::process::id()));
         std::fs::write(&path, bytes).unwrap();
         let output = std::process::Command::new(validator)
@@ -426,7 +428,7 @@ fn quantized_streams_decode_exactly_and_validate() {
             ("position streams".to_owned(), 1),
         ]
     );
-    if let Some(validator) = primase_testdata::tool(primase_testdata::Tool::GltfValidator) {
+    if let Some(validator) = inputs::tool(inputs::Tool::GltfValidator) {
         let path = std::env::temp_dir().join(format!("primase-web-compressed-{}.glb", std::process::id()));
         std::fs::write(&path, bytes).unwrap();
         let output = std::process::Command::new(validator)
@@ -2075,7 +2077,7 @@ fn mesh_files_are_shared_by_the_tiles_that_place_them() {
     shared.write_to(&out).unwrap();
     assert!(out.join(file).is_file());
     // the tile and the mesh file it references by uri are valid glTF together
-    if let Some(validator) = primase_testdata::tool(primase_testdata::Tool::GltfValidator) {
+    if let Some(validator) = inputs::tool(inputs::Tool::GltfValidator) {
         let output = std::process::Command::new(validator)
             .arg("-o")
             .arg(out.join(&shared.index.tiles[1].file))

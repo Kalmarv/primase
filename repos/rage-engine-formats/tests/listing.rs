@@ -5,9 +5,11 @@
 //! `census.rs`): one archive per line. A resource's oracle record holds its page flags, whose sizes are the pages'
 //! bytes ([`PageFlags::size`], the size the inflated body is checked against in `census.rs`). Needs `installs.gta`,
 //! `keys.gta` and `oracles.codewalker.gta/listing.jsonl`.
+mod inputs;
+
 use std::collections::BTreeMap;
 
-use primase_testdata::{Game, OracleSet, install, keys, oracle};
+use inputs::{Game, OracleSet, install, keys, oracle};
 use rage_engine_formats::archive::archive_set::Install;
 use rage_engine_formats::archive::keys::Keys;
 use rage_engine_formats::archive::listing::Storage;

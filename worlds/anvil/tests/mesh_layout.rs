@@ -2,11 +2,14 @@
 //! by hand (one number per primitive, the mesh's `kind`, kept when the primitives are rebuilt), and on real meshes of
 //! Riders Republic's forges, where `resolve-anvil-shaders` binds each Material the same vertex stages before the mesh is
 //! lowered (from its `anvil.mesh`) as after (from its `anvil.layout`).
+mod inputs;
+
 use std::collections::BTreeSet;
 
 use anvil_formats::archive::{Archive, At};
 use anvil_formats::mesh::MESH;
 use anvil_formats::vertex::VertexAttributes;
+use inputs::{Game, install};
 use iridia_interface::Stage;
 use primase_anvil::components::{AnvilLayout, AnvilMaterial, AnvilMesh};
 use primase_anvil::passes::{LowerAnvilMesh, MESH_LAYOUT_FIELD, RESOLVE_ANVIL_SHADERS, Static16Normal};
@@ -15,7 +18,6 @@ use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassLog, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::shader::ShaderBinding;
 use primase_core::{Component, Entity, Mesh, World};
-use primase_testdata::{Game, install};
 
 const PER_FORGE: usize = 120;
 

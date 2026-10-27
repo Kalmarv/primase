@@ -6,6 +6,8 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use std::collections::BTreeMap;
 
 use frostbite_formats::MESHSET;
@@ -14,6 +16,7 @@ use frostbite_formats::bundle::Kind;
 use frostbite_formats::folder::{Folder, Source};
 use frostbite_formats::permutation::{self};
 use frostbite_formats::scope::Scope;
+use inputs::{Game, Tool, install_file, tool};
 use iridia_interface::{D3dClass, ResourceKind};
 use primase_core::World;
 use primase_foundations::compress::oodle::{Oodle, Version};
@@ -22,7 +25,6 @@ use primase_frostbite::components::{
 };
 use primase_frostbite::read::entry::read_entry;
 use primase_frostbite::read::program::{self, resolve_materials};
-use primase_testdata::{Game, Tool, install_file, tool};
 
 #[test]
 fn the_stock_bindings_read_and_agree_with_the_shaders() {

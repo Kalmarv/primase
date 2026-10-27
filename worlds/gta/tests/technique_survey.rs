@@ -15,8 +15,11 @@
 //!
 //! The counts are printed and the statements asserted. Needs `installs.gta` and `keys.gta`.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod inputs;
+
 use std::collections::BTreeMap;
 
+use inputs::{Game, debug, install, keys};
 use iridia_interface::SystemValue;
 use primase_core::World;
 use primase_core::shader::Shader;
@@ -25,7 +28,6 @@ use primase_gta::components::{
 };
 use primase_gta::passes::resolve_shaders::{fallback_technique, split_program_name};
 use primase_gta::read::source::GtaSource;
-use primase_testdata::{Game, debug, install, keys};
 
 fn database() -> Option<(GtaSource, World)> {
     let (Some(dir), Some(keys)) = (install(Game::Gta), keys(Game::Gta)) else {

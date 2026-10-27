@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use primase_testdata::{Game, OracleSet, Query, expect_found, resolve};
+use crate::inputs::{Game, OracleSet, Query, expect_found, resolve};
 
 use iridia::{ConstantType, Majorness, ResourceKind, ScalarType, SystemValue};
 use iridia_exec::PixelShader;
@@ -174,7 +174,7 @@ pub fn corpus(game: Game) -> Option<(String, Vec<PathBuf>)> {
 
 /// How many programs of a corpus a run takes (the debug key `shader.diff_limit`, default all).
 pub fn diff_limit() -> usize {
-    primase_testdata::debug("shader.diff_limit")
+    crate::inputs::debug("shader.diff_limit")
         .and_then(|v| v.parse().ok())
         .unwrap_or(usize::MAX)
 }

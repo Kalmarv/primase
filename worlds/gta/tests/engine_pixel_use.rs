@@ -20,15 +20,17 @@
 //! The counts are printed (`USE name stage: lanes, effects, smallest reader`) and the lane counts the reasons rest on are
 //! asserted. Needs `installs.gta` and `keys.gta`.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod inputs;
+
 use std::collections::{BTreeMap, BTreeSet};
 
+use inputs::{Game, install, keys};
 use primase_core::World;
 use primase_core::shader::Shader;
 use primase_gta::components::{GtaEffect, GtaShaderTable};
 use primase_gta::passes::resolve_shaders::constant_reads_of;
 use primase_gta::passes::resolve_shaders::value_bytes;
 use primase_gta::read::source::GtaSource;
-use primase_testdata::{Game, install, keys};
 
 const NAMES: [&str; 12] = [
     "gDynamicBakesAndWetness",
@@ -127,7 +129,7 @@ fn how_the_programs_use_the_remaining_engine_constants() {
             }
         }
     }
-    let dump = primase_testdata::scratch().join("gta-engine-use");
+    let dump = inputs::scratch().join("gta-engine-use");
     std::fs::create_dir_all(&dump).unwrap();
     for (why, n) in &refused {
         println!("REFUSED {n:6} {why}");

@@ -8,9 +8,11 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use frostbite_formats::physics::{self, KIND_MESH, mesh_shape, weld};
+use inputs::{Game, OracleSet, oracle};
 use primase_reskate::physics::studio_resource;
-use primase_testdata::{Game, OracleSet, oracle};
 use serde_json::Value;
 
 type R<T = ()> = Result<T, Box<dyn std::error::Error>>;

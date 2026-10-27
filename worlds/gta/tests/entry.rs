@@ -11,12 +11,14 @@
 //! it as a part; a file that is not a drawable, texture dictionary or bound is refused.
 //!
 //! Needs `installs.gta`, `keys.gta` and `oracles.codewalker.gta/resources`.
+mod inputs;
+
+use inputs::{Game, OracleSet, install, keys};
 use primase_core::asset::{Asset, Role};
 use primase_core::{Mesh, Name, Texture, Transform};
 use primase_gta::components::collision::GtaBounds;
 use primase_gta::components::{GtaArchetype, GtaDrawable, GtaShader};
 use primase_gta::read::source::GtaSource;
-use primase_testdata::{Game, OracleSet, install, keys};
 use serde_json::Value;
 
 fn oracle(dir: &std::path::Path, file: &str) -> Value {
@@ -97,7 +99,7 @@ fn drawables_textures_and_the_rest_read_as_themselves() {
     let (Some(dir), Some(keys), Some(resources)) = (
         install(Game::Gta),
         keys(Game::Gta),
-        primase_testdata::oracle(OracleSet::CodeWalker, Game::Gta, "resources"),
+        inputs::oracle(OracleSet::CodeWalker, Game::Gta, "resources"),
     ) else {
         return;
     };

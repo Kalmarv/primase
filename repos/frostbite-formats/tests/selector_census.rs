@@ -16,13 +16,15 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use std::collections::BTreeMap;
 
 use frostbite_formats::folder::{Folder, Source};
 use frostbite_formats::lookup;
 use frostbite_formats::selector::{Selector, Target};
+use inputs::{Game, Tool, install_file, tool};
 use primase_foundations::compress::oodle::{Oodle, Version};
-use primase_testdata::{Game, Tool, install_file, tool};
 
 fn u32le(b: &[u8], at: usize) -> usize {
     u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize

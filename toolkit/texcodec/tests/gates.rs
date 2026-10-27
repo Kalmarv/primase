@@ -1,7 +1,5 @@
-use primase_core::{
-    TexFormat,
-    gate::{GateReport, Tolerance},
-};
+use primase_core::TexFormat;
+use primase_testdata::gate::{GateReport, Tolerance};
 use primase_texcodec::{Bcdec, Decoder, TexDecoder};
 /// Independent bcdec_rs 0.2.0 oracle; every random block includes all selector values
 /// statistically, with endpoint orders and equality exercised explicitly below.

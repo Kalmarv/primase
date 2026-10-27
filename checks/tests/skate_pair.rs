@@ -1,5 +1,8 @@
 //! The existing Sekiro soldier and skate idle, through the same table in both directions, and a skin fit census.
+mod inputs;
+
 use frostbite_formats::folder::{Folder, Source};
+use inputs::{Game, OracleSet, Tool, install, install_file, oodle, oracle, tool};
 use primase_animation::{
     Fit, Placement, Reference, RetargetClip, RetargetSkin, Translation, UnmappedJoints,
     joint_table::JointTable, pair,
@@ -11,7 +14,6 @@ use primase_reskate::{
     game::{clip::LowerSkateClips, rig::render_map},
     read::animation,
 };
-use primase_testdata::{Game, OracleSet, Tool, install, install_file, oodle, oracle, tool};
 use serde_json::json;
 use std::collections::BTreeSet;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -23,7 +25,7 @@ const SEKIRO_SKATE_TABLE: &str = include_str!("fixtures/sekiro-human__skate-rend
 /// The version-6 Oodle codec: the configured game library on Windows, oozextract elsewhere.
 #[allow(unsafe_code)]
 fn fromsoft_oodle(
-    library: primase_testdata::OodleLibrary,
+    library: inputs::OodleLibrary,
 ) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
     // SAFETY: the test configuration names a trusted native library.
     unsafe {

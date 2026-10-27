@@ -4,12 +4,14 @@
 //! counts.
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use std::collections::BTreeSet;
 
+use inputs::{Game, Tool, install_file, tool};
 use primase_core::pass::{Options, PassLog};
 use primase_core::shader::ShaderBinding;
 use primase_core::{Component, World};
-use primase_testdata::{Game, Tool, install_file, tool};
 use primase_unity::TypeTreePackage;
 use primase_unity::components::{
     RenderPipeline, UnityLight, UnityMaterial, UnityPrograms, UnityRenderSettings, UnityRenderer,

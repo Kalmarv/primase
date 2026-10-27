@@ -1,11 +1,13 @@
 //! Skate guidance: level 01's guidance read whole (`installs.shaunwhite`) and lowered to grind kinds.
+mod inputs;
+
 use anvil_formats::shaunwhite::guidance::Class;
+use inputs::{Game, install};
 use primase_core::pass::{Conservation, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::{Curve, World};
 use primase_shaunwhite::components::Guidance;
 use primase_shaunwhite::passes::register;
 use primase_shaunwhite::read::level::read_level;
-use primase_testdata::{Game, install};
 
 fn run(w: &mut World, text: &str) -> Result<RunReport, String> {
     let mut reg = PassRegistry::new();

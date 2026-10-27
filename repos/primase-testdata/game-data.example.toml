@@ -1,0 +1,34 @@
+# Copy outside the repository (or to an ignored game-data.toml), then set GAME_DATA to its absolute path.
+# These are placeholders only; never commit real paths. One file serves every repository that uses
+# primase-testdata. Every section and key is optional: a test whose input is not configured skips.
+# Each repository's README lists the keys its tests read; an unknown section is an error.
+
+[installs]
+sekiro = 'D:/placeholder/games/Sekiro'
+sledding = 'D:/placeholder/games/Sledding Game'
+
+[keys]
+gta = 'D:/placeholder/keys/gta'
+
+[tools]
+# Optional native raw-SM3 proof host, using Microsoft D3D9 REF (not WARP).
+# ref_sm3 = 'D:/placeholder/tools/ref_sm3.exe'
+unity_tpk = 'D:/placeholder/tools/typetrees.tpk'
+
+[oracles]
+# <root>/<set>/<game>/<file>: oracles.codewalker.gta/listing.jsonl is <root>/codewalker/gta/listing.jsonl
+root = 'D:/placeholder/oracles'
+
+[scratch]
+root = 'D:/placeholder/scratch'
+
+[run]
+# 'gate': every input the landing gate must have fails when missing; 'all': every input
+require = 'gate'
+# how much the heavy tests cover: 'smoke' (a sample, by default) or 'full' (the overnight gate)
+gate = 'smoke'
+# the smoke sample's seed: unset, the day's, so coverage accumulates; set it to rerun one sample exactly
+# seed = '20384'
+# the threads a heavy real-data test's work may use (the bakes' core.threads): unset, one, as light as the serial
+# run; its results are the same on any count
+# threads = '4'

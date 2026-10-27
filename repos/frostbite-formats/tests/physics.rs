@@ -9,12 +9,14 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use frostbite_formats::folder::{Folder, Source};
 use frostbite_formats::physics::{
     self, Edge, KIND_BOX, KIND_CONVEX, KIND_MESH, Part, PhysicsResource, mesh_shape, weld,
 };
+use inputs::{Game, Tool, install_file, tool};
 use primase_foundations::compress::oodle::{Oodle, Version};
-use primase_testdata::{Game, Tool, install_file, tool};
 
 type R<T = ()> = Result<T, Box<dyn std::error::Error>>;
 

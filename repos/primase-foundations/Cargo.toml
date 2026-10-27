@@ -27,7 +27,6 @@ reference-decoder = ["compress"]
 
 [dev-dependencies]
 primase-testdata.workspace = true
-primase-core.workspace = true
 primase-foundations = { workspace = true, features = ["compress", "reference-decoder"] }
 
 [lints]

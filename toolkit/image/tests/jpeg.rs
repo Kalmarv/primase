@@ -10,6 +10,8 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use primase_image::{Error, JpegColor, Samples, read_jpeg};
 
 const GREY: [u8; 371] = [
@@ -119,11 +121,8 @@ fn cmyk_what_is_not_a_jpeg_and_a_cut_file_are_errors() {
 
 #[test]
 fn the_khronos_jpegs_decode_to_pillows_pixels() {
-    let Some(root) = primase_testdata::oracle(
-        primase_testdata::OracleSet::Khronos,
-        primase_testdata::Game::General,
-        "sample-assets",
-    ) else {
+    let Some(root) = inputs::oracle(inputs::OracleSet::Khronos, inputs::Game::General, "sample-assets")
+    else {
         return;
     };
     for (model, progressive, size) in [("MorphPrimitivesTest", false, 512), ("CesiumMan", true, 1024)] {

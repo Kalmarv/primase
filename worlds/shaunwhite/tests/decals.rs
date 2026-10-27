@@ -1,9 +1,11 @@
 //! Level 01 of the game: the metro's blue arrow is marked, its tile decal is gone (a HideAfter material of the restored
 //! world), glass and the window glow are not marked.
 #![allow(clippy::unwrap_used, reason = "explicit gate assertions")]
+mod inputs;
+
+use inputs::{Game, install_file};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{DrawLayer, DrawOrder, MaterialUsage, Name};
-use primase_testdata::{Game, install_file};
 
 #[test]
 fn level_one_marks_the_metro_arrow_and_not_its_glass() {

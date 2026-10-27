@@ -5,14 +5,16 @@
 //!
 //! Needs `installs.gta` and `keys.gta`.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod inputs;
+
 use std::collections::{BTreeMap, BTreeSet};
 
+use inputs::{Game, install, keys};
 use iridia_interface::ResourceKind;
 use primase_core::World;
 use primase_core::shader::Shader;
 use primase_gta::components::{GtaEffect, GtaShaderTable};
 use primase_gta::read::source::GtaSource;
-use primase_testdata::{Game, install, keys};
 
 /// The tags `resolve-gta-shaders` takes for a texture.
 const TEXTURE_TAGS: [u16; 4] = [258, 322, 514, 770];

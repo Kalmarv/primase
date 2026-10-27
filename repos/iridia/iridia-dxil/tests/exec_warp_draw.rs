@@ -6,9 +6,11 @@
 //!
 //! Needs the WARP oracle program with the `d3d12draw` case form (the configured `Tool::Warp`; the form is in
 //! `oracles/warp-draw`) and the scratch folder. Without them the test does nothing.
+mod inputs;
+
+use inputs::{Tool, own_scratch, tool};
 use iridia_exec::draw::{Compare, Cull, DepthState, DrawShader, Rasterizer, Surface, Viewport};
 use iridia_exec::{PixelShader, ProgramShader, Sample};
-use primase_testdata::{Tool, own_scratch, tool};
 use std::path::Path;
 
 const SIZE: u32 = 16;
@@ -337,7 +339,7 @@ fn draws_agree_with_warp() {
     let text: String = cases.iter().map(|c| case_text(c, &dir)).collect();
     let (input, output) = (work.join("cases.txt"), work.join("results.jsonl"));
     std::fs::write(&input, text).unwrap();
-    let _oracle = primase_testdata::warp_exclusive();
+    let _oracle = inputs::warp_exclusive();
     let status = std::process::Command::new(&warp)
         .arg(&input)
         .arg(&output)

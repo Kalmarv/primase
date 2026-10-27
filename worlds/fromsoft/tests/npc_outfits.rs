@@ -15,8 +15,11 @@
 //!   parts name: the meshes drawn are those SoulsFormats' cells of the row show, and each mask is traced to the row.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
+mod inputs;
+
 use std::collections::{BTreeMap, BTreeSet};
 
+use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{Entity, World};
 use primase_fromsoft::dcx::Decoder;
@@ -26,7 +29,6 @@ use primase_fromsoft::sekiro::lowered::SourceMeshes;
 use primase_fromsoft::sekiro::source::{MeshMasks, NpcRows};
 use primase_fromsoft::sekiro::{self, CharacterOptions};
 use primase_fromsoft::{Game, Install, Keys, NameDictionary};
-use primase_testdata::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use serde_json::Value;
 
 mod common;
@@ -52,7 +54,7 @@ fn oracle_mask(fields: &Value) -> Result<u32> {
 }
 
 /// A configured install of `game` with the decoder's library, or `None` when the configuration lacks one.
-fn configured(game: Game) -> Result<Option<(Install, primase_testdata::OodleLibrary)>> {
+fn configured(game: Game) -> Result<Option<(Install, inputs::OodleLibrary)>> {
     let Some(dll) = oodle(Tool::Oodle6) else {
         return Ok(None);
     };
@@ -248,7 +250,7 @@ fn sekiro_outfits_agree_with_the_old_route_and_with_soulsformats() -> Result<()>
     let (Some((install, dll)), Some(oracle), Some(old)) = (
         configured(Game::Sekiro)?,
         oracle(OracleSet::SoulsFormats, Data::Sekiro, "npc"),
-        primase_testdata::oracle(OracleSet::Baseline, Data::Sekiro, "outfits"),
+        inputs::oracle(OracleSet::Baseline, Data::Sekiro, "outfits"),
     ) else {
         return Ok(());
     };

@@ -6,11 +6,13 @@
 //!
 //! The game's shader pack (`ShaderDataDX11.bin`, the `oracles.d3d-disassembler.riders/shader-pack` folder) is another
 //! population: of these 13,790 programs one is byte-identical to a container in it.
+mod inputs;
+
 use std::collections::BTreeSet;
 
 use anvil_formats::archive::{Archive, At};
 use anvil_formats::template::{self, MATERIAL_TEMPLATE, Stage};
-use primase_testdata::{Game, install};
+use inputs::{Game, install};
 
 #[test]
 fn both_stages_are_kept() {

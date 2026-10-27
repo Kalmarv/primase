@@ -3,13 +3,15 @@
 //! metadata and exact mip sizes. Pixel oracle: third-party bcdec_rs 0.2.0 through primase-texcodec's Bcdec adapter.
 //! Code 12's BC3 storage is content evidence (not a value supplied by the AC2 table); its channels are checked in
 //! `normals.rs`.
+mod inputs;
+
 use std::collections::BTreeMap;
 use std::fs::File;
 
 use anvil_formats::{data::read_block, forge::Forge, objects::read_objects};
+use inputs::{Game, Query, expect_found, install_file};
 use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
 use primase_shaunwhite::read::texture::{COMPILED_TEXTURE_MAP, TEXTURE_MAP, TEXTURE_MAP_SPEC, TextureMap};
-use primase_testdata::{Game, Query, expect_found, install_file};
 use primase_texcodec::{Bcdec, Decoder, TexDecoder};
 use sha2::{Digest, Sha256};
 
@@ -232,7 +234,7 @@ impl Census {
     }
 
     fn samples(&self) -> Result {
-        let folder = primase_testdata::scratch().join("textures-sample");
+        let folder = inputs::scratch().join("textures-sample");
         std::fs::create_dir_all(&folder)?;
         let mut chosen = BTreeMap::new();
         for code in self.formats.keys() {

@@ -14,9 +14,11 @@
 //!
 //! [`ShaderTables::check`]: anvil_formats::template::ShaderTables::check
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod inputs;
+
 use anvil_formats::archive::{Archive, At};
 use anvil_formats::template::{self, MATERIAL_TEMPLATE};
-use primase_testdata::{Game, install};
+use inputs::{Game, install};
 
 #[test]
 fn feature_flags_are_set_where_the_template_stores_the_key_bit_they_gate() {

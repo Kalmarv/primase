@@ -4,9 +4,11 @@
 //! refusals are by name, never silent); a program it lifts must validate and write, or the lifter is wrong.
 //! Needs the corpus oracle set's `sekiro/shaders`, `riders/shaders` or `sledding/shaders` (each a folder, searched
 //! recursively, of containers as the game ships them).
+mod inputs;
+
 use std::collections::BTreeMap;
 
-use primase_testdata::Game;
+use inputs::Game;
 
 mod common;
 

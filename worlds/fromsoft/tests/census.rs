@@ -1,12 +1,14 @@
 //! The archives of each game read against an independent census of the same install (SoulsFormats for Sekiro,
 //! SoulsFormatsNEXT for Elden Ring, each with UXM's keys and path hash): the decrypted indexes, every entry's decoded
 //! bytes and every top-level binder member. Private corpus paths are caller-supplied; no game data is bundled.
-use primase_core::gate::{GateReport, Tolerance};
+mod inputs;
+
 use primase_fromsoft::{
     Game, Keys, NameDictionary,
     archive::Archive,
     bhd::{Header, unwrap_rsa},
 };
+use primase_testdata::gate::{GateReport, Tolerance};
 
 use std::path::PathBuf;
 
@@ -22,30 +24,14 @@ struct Install {
 fn install(game: Game) -> Result<Option<Install>, Box<dyn std::error::Error>> {
     let (root, oracle, names) = match game {
         Game::Sekiro => (
-            primase_testdata::install(primase_testdata::Game::Sekiro),
-            primase_testdata::oracle(
-                primase_testdata::OracleSet::SoulsFormats,
-                primase_testdata::Game::Sekiro,
-                "census",
-            ),
-            primase_testdata::oracle(
-                primase_testdata::OracleSet::Uxm,
-                primase_testdata::Game::Sekiro,
-                "dictionary.txt",
-            ),
+            inputs::install(inputs::Game::Sekiro),
+            inputs::oracle(inputs::OracleSet::SoulsFormats, inputs::Game::Sekiro, "census"),
+            inputs::oracle(inputs::OracleSet::Uxm, inputs::Game::Sekiro, "dictionary.txt"),
         ),
         Game::EldenRing => (
-            primase_testdata::install(primase_testdata::Game::Elden),
-            primase_testdata::oracle(
-                primase_testdata::OracleSet::SoulsFormats,
-                primase_testdata::Game::Elden,
-                "census",
-            ),
-            primase_testdata::oracle(
-                primase_testdata::OracleSet::Uxm,
-                primase_testdata::Game::Elden,
-                "dictionary.txt",
-            ),
+            inputs::install(inputs::Game::Elden),
+            inputs::oracle(inputs::OracleSet::SoulsFormats, inputs::Game::Elden, "census"),
+            inputs::oracle(inputs::OracleSet::Uxm, inputs::Game::Elden, "dictionary.txt"),
         ),
     };
     let (Some(root), Some(oracle)) = (root, oracle) else {
@@ -54,7 +40,7 @@ fn install(game: Game) -> Result<Option<Install>, Box<dyn std::error::Error>> {
     let keys = match Keys::published(game) {
         Some(keys) => keys,
         None => {
-            let Some(folder) = primase_testdata::keys(primase_testdata::Game::Elden) else {
+            let Some(folder) = inputs::keys(inputs::Game::Elden) else {
                 return Ok(None);
             };
             Keys::from_folder(folder, game)?
@@ -156,7 +142,7 @@ fn headers_of(install: &Install) -> Result<(), Box<dyn std::error::Error>> {
 #[allow(unsafe_code)]
 mod native {
     use primase_foundations::compress::oodle::{Oodle, Version};
-    pub fn load(path: primase_testdata::OodleLibrary) -> primase_foundations::compress::Result<Oodle> {
+    pub fn load(path: crate::inputs::OodleLibrary) -> primase_foundations::compress::Result<Oodle> {
         // SAFETY: the gate requires an explicitly supplied, trusted version-6 DLL.
         unsafe { Oodle::open(path.path(), Version::V6) }
     }
@@ -165,7 +151,7 @@ mod native {
 /// Every indexed entry is attempted; corrupt entries remain explicit failures.
 #[test]
 fn whole_install() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(dll) = primase_testdata::oodle(primase_testdata::Tool::Oodle6) else {
+    let Some(dll) = inputs::oodle(inputs::Tool::Oodle6) else {
         return Ok(());
     };
     let oodle = native::load(dll)?;

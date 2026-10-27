@@ -10,6 +10,9 @@
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
+mod inputs;
+
+use inputs::{Game, Tool, install, oodle};
 use primase_core::frame::{Axis, SourceFrame};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{
@@ -20,7 +23,6 @@ use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::sekiro::{CharacterOptions, read_character_with, read_parts_with};
 use primase_havok::spline::{Absent, Fallback};
 use primase_havok::world::HavokAnimation;
-use primase_testdata::{Game, Tool, install, oodle};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 

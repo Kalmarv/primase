@@ -1,6 +1,8 @@
 //! Real LODSelectors read as stored (Riders Republic build 25394987, base WhiteRoom forge), every field against the
 //! bytes (games/riders-republic docs/recon/placement-darkroom-handoff.md, b8dae7b), every reference and dependency
 //! resolving within the forge to a Mesh record.
+mod inputs;
+
 use std::fs::File;
 
 use anvil_formats::archive::MAX_RECORD;
@@ -9,7 +11,7 @@ use anvil_formats::forge::Forge;
 use anvil_formats::lod::{LOD_SELECTOR, StoredLodSelector};
 use anvil_formats::mesh::MESH;
 use anvil_formats::reference::Reference;
-use primase_testdata::{Game, install_file};
+use inputs::{Game, install_file};
 
 #[test]
 fn lod_selectors_read_their_levels_and_dependencies() {

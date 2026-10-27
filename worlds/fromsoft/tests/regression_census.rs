@@ -14,6 +14,8 @@
 //! on a difference the test writes the new table to the scratch directory (`regression-census.txt`), prints each field with
 //! the baseline's value and the new one, and fails. The worlds whose install is missing are skipped, and so are their
 //! lines of the baseline. Phase times of each world are printed (`--nocapture`).
+mod inputs;
+
 use std::collections::BTreeMap;
 use std::time::Instant;
 
@@ -253,7 +255,7 @@ fn parse(text: &str) -> BTreeMap<String, u64> {
 
 #[test]
 fn what_the_readers_and_passes_make_of_the_characters_is_the_baseline() -> Result<()> {
-    let Some(dll) = primase_testdata::oodle(primase_testdata::Tool::Oodle6) else {
+    let Some(dll) = inputs::oodle(inputs::Tool::Oodle6) else {
         return Ok(());
     };
     let dll = common::oodle(dll)?;
@@ -263,7 +265,7 @@ fn what_the_readers_and_passes_make_of_the_characters_is_the_baseline() -> Resul
     };
     let mut now: BTreeMap<String, u64> = BTreeMap::new();
     let mut ran: Vec<&str> = Vec::new();
-    if let Some(root) = primase_testdata::install(primase_testdata::Game::Sekiro) {
+    if let Some(root) = inputs::install(inputs::Game::Sekiro) {
         now.extend(census("wolf-default", |w| {
             sekiro::read_parts(&root, &WOLF, &decoder, w)?;
             Ok(())
@@ -275,8 +277,8 @@ fn what_the_readers_and_passes_make_of_the_characters_is_the_baseline() -> Resul
         ran.extend(["wolf-default.", "wolf-ashina."]);
     }
     if let (Some(root), Some(keys)) = (
-        primase_testdata::install(primase_testdata::Game::Elden),
-        primase_testdata::keys(primase_testdata::Game::Elden),
+        inputs::install(inputs::Game::Elden),
+        inputs::keys(inputs::Game::Elden),
     ) {
         let install = Install::new(root, Game::EldenRing, Keys::from_folder(keys, Game::EldenRing)?);
         now.extend(census("elden-c3000", |w| {
@@ -321,7 +323,7 @@ fn what_the_readers_and_passes_make_of_the_characters_is_the_baseline() -> Resul
     for (field, n) in &all {
         table.push_str(&format!("{field}={n}\n"));
     }
-    let new = primase_testdata::scratch().join("regression-census.txt");
+    let new = inputs::scratch().join("regression-census.txt");
     std::fs::write(&new, table)?;
     panic!(
         "the census is not the baseline ({} fields differ); the new table is {}\n{}",

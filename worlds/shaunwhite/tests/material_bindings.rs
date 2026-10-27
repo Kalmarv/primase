@@ -1,5 +1,7 @@
 //! Hand-worked constant-bank packing, plus the REF proof's independent controls in albedo.rs.
 #![allow(clippy::unwrap_used, reason = "hand-worked fixtures")]
+mod inputs;
+
 use anvil_formats::shaunwhite::{material::LayerState, shaders::Key};
 use iridia_interface::{
     Constant, ConstantBinding, ConstantRole, ConstantType, ResourceKind, ScalarType, Stage, Value,
@@ -287,14 +289,14 @@ fn degrees_rotate_about_origin_before_nonuniform_scale_and_offset() {
 
 #[test]
 fn native_setter_control_words_match_including_noncardinal_and_multiple_turns() {
-    use primase_testdata::{Game, OracleSet, oracle};
+    use inputs::{Game, OracleSet, oracle};
     let Some(path) = oracle(OracleSet::GameCode, Game::ShaunWhite, "uv-rotation.tsv") else {
         return;
     };
     let text = std::fs::read_to_string(path).unwrap();
-    let mut gate = primase_core::gate::GateReport::new(
+    let mut gate = primase_testdata::gate::GateReport::new(
         "original native UV setter",
-        primase_core::gate::Tolerance::Abs(5e-7),
+        primase_testdata::gate::Tolerance::Abs(5e-7),
     );
     let mut count = 0;
     for line in text.lines().filter(|line| !line.starts_with('#')) {

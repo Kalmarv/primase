@@ -1,12 +1,14 @@
 //! The objects of version-26 entries: a directory and objects laid out here by hand, their refusals, and every entry
 //! of every forge of `installs.shaunwhite` read to its objects (the census prints the classes and trailers it meets).
+mod inputs;
+
 use std::collections::BTreeMap;
 use std::fs::File;
 
 use anvil_formats::data::read_entry;
 use anvil_formats::forge::Forge;
 use anvil_formats::objects::{Error, read_objects};
-use primase_testdata::{Game, install};
+use inputs::{Game, install};
 
 /// One object: class, name, body, trailer.
 fn object(class: u32, name: &str, body: &[u8], trailer: &[u8]) -> Vec<u8> {

@@ -15,12 +15,13 @@
 #![allow(clippy::unwrap_used)]
 
 mod common;
+mod inputs;
 
 use common::R;
+use inputs::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_reskate::postcompile::fb::folder::{Folder, Source};
 use primase_reskate::postcompile::layers::{self, Check, Limits};
-use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 
 #[test]
 fn layers_gate_on_the_fixture() -> R {

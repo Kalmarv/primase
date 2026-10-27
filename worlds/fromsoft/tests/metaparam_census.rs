@@ -7,10 +7,12 @@
 //!
 //! Needs `installs.sekiro` and `tools.oodle6`.
 #![allow(clippy::unwrap_used)]
+mod inputs;
+
+use inputs::{Game, Tool, install, oodle};
 use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::metaparam::Metaparam;
 use primase_fromsoft::{Archive, Binder};
-use primase_testdata::{Game, Tool, install, oodle};
 use std::collections::BTreeMap;
 mod common;
 
@@ -101,7 +103,7 @@ fn words(v: serde_json::Value) -> serde_json::Value {
 /// records ([`primase_fromsoft::metaparam::Texture::unknown_20`]), so it is not compared.
 #[test]
 fn every_elden_ring_metaparam_matches_an_independent_reading() {
-    use primase_testdata::{OracleSet, Query, expect_found, oracle};
+    use inputs::{OracleSet, Query, expect_found, oracle};
     use serde_json::json;
     let (Some(archive), Some(format), Some(dll)) = (
         common::archive(primase_fromsoft::Game::EldenRing).unwrap(),

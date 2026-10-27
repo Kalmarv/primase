@@ -6,17 +6,19 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use frostbite_formats::bundle::Kind;
 use frostbite_formats::folder::{Folder, Source};
 use frostbite_formats::listing::resource_type_name;
 use frostbite_formats::{depot, ebx, texture};
+use inputs::{Game, Tool, install_file, tool};
 use primase_core::{ColorSpace, Component, Texture, TextureLayers, TextureShape, World};
 use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_frostbite::components::{FrostbiteDepot, FrostbiteEbx, FrostbiteEntry, FrostbiteTexture};
 use primase_frostbite::ebx_json;
 use primase_frostbite::read::entry::read_entry;
 use primase_frostbite::read::entry::{format_colour_space, tex_format};
-use primase_testdata::{Game, Tool, install_file, tool};
 use primase_texcodec::{Decoder, TexDecoder};
 use serde_json::json;
 

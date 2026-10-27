@@ -5,11 +5,13 @@
 //! Against the notes' worked examples (material-spec §27.0): MAD_Screens_Simple's t76 (slot 0, channel 1, the
 //! Pixels_Screen_A set and its DiffuseMap), MAD_Tex1_Graffiti_Mode_DecalFX's t76 (slot 11, channel 2, the bare
 //! texture GFX_Jammer_NormalMap) and MAD_Screens_Simple's t75 (slot 0, channel 0, no default).
+mod inputs;
+
 use std::collections::BTreeSet;
 
 use anvil_formats::archive::{Archive, At};
 use anvil_formats::template::{self, BindingKind, MATERIAL_TEMPLATE, OperatorDefault, texture_parameter};
-use primase_testdata::{Game, install};
+use inputs::{Game, install};
 
 #[test]
 fn every_texture_binding_has_its_parameter() {

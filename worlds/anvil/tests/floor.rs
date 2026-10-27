@@ -1,14 +1,16 @@
 //! Real FloorHeightData (Riders Republic build 25394987): MAD_USNAT's 8192 x 8192 grid and MAD_WhiteRoom's empty one
 //! read, the cell order within a block measured as the Riders Republic notes measure it (docs/terrain.md §2), and a
 //! square of ground lowered under the pass manager with its checks on.
+mod inputs;
+
 use anvil_formats::archive::{Archive, At};
 use anvil_formats::floor::{FLOOR_HEIGHT_DATA, StoredFloorHeight};
+use inputs::{Game, install};
 use primase_anvil::components::AnvilFloorHeight;
 use primase_anvil::passes::{CellPoint, LowerAnvilFloor};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::{Instance, Mesh, World};
-use primase_testdata::{Game, install};
 
 /// The FloorHeightData of the forge at `path`, as stored.
 fn floor(path: &std::path::Path) -> StoredFloorHeight {

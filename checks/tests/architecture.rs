@@ -27,12 +27,12 @@
 //! - `passes_registered`: every pass is registered by name, and every public lowering returning a `PassLog` is run
 //!   by a pass.
 //! - `writers_read_only`: a writer's entry points take the world read-only.
-//! - `real_data_variables_are_declared`: a `PRIMASE_*` name in the workspace's sources is the configuration's (read by
-//!   `toolkit/testdata` only: `PRIMASE_DATA` and `PRIMASE_DEBUG`) or a test's
-//!   handoff to its own child process; CONTRIBUTING.md's real-data tables and `primase-data.example.toml` agree with
-//!   the registry. Names are whole string literals, so the scan sees every one: a name a format string builds
-//!   (`PRIMASE_{x}`) fails. `real_data_queries_are_declared`: every typed query names a declared file by a literal
-//!   path.
+//! - `real_data_variables_are_declared`: a `PRIMASE_*` name in the workspace's sources is a test's handoff to its own
+//!   child process (the configuration is `GAME_DATA`, read by `repos/primase-testdata` alone). Names are whole string
+//!   literals, so the scan sees every one: a name a format string builds (`PRIMASE_{x}`) fails.
+//!   `real_data_inputs_are_checked`: every crate that declares real-data inputs (`tests/inputs/mod.rs`) runs
+//!   primase-testdata's self-check on them (`tests/real_data_inputs.rs`), which holds every typed query to a declared
+//!   input.
 //! - `component_geometry_hooks`: every component's stated geometry (`const GEOMETRY`) matches the remap hooks it
 //!   implements, in every crate, tests included.
 //! - `parse_modules_are_checked`: in the crates `architecture.toml` opts in as `parse_crate`, every module that
@@ -40,6 +40,8 @@
 //!   says are there and are not are its error, never a panic or a wrapped size.
 
 #![allow(clippy::unwrap_used)]
+
+mod inputs;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -87,7 +89,7 @@ impl Member {
     /// test-data crate).
     fn library(&self) -> bool {
         matches!(self.layer(), "core" | "toolkit" | "formats" | "worlds" | "repos")
-            && self.path != "toolkit/testdata"
+            && self.path != TEST_INPUT_REGISTRY
     }
 }
 
@@ -398,20 +400,19 @@ fn code(path: &str) -> Vec<Tok> {
 
 // ---- dependencies ----
 
-/// The test-input registry: `toolkit/testdata` resolves and declares the real-data inputs tests read. It may name
-/// games and third-party tools (each game's inputs are described there, so `game_names` skips it), holds no game
-/// logic (it depends on no workspace crate) and may not be a normal dependency of any crate, so nothing it says
-/// reaches a library build. `dependencies` checks both, and `architecture.toml` cannot excuse either.
-const TEST_INPUT_REGISTRY: &str = "toolkit/testdata";
+/// The real-data test loader: `repos/primase-testdata` resolves the real-data inputs each crate's tests declare
+/// (`tests/inputs/mod.rs`). It holds no game logic (it depends on no workspace crate) and may not be a normal
+/// dependency of any crate, so nothing it says reaches a library build. `dependencies` checks both, and
+/// `architecture.toml` cannot excuse either.
+const TEST_INPUT_REGISTRY: &str = "repos/primase-testdata";
 
 /// Whether `from` may depend on `to`; `dev` for dev-dependencies. A game or destination crate may depend on the
 /// engine crate it names, never the other way round.
 fn edge_allowed(from: &Member, to: &Member, dev: bool) -> bool {
     let to_layer = to.layer();
-    // a crate under repos/ leaves primase: its dependencies are other repos crates only. Its tests may still use the
-    // real-data loader and core's gate reports until the shared primase-testdata is under repos/ too.
+    // a crate under repos/ leaves primase: its dependencies are other repos crates only, its tests' included
     if from.layer() == "repos" {
-        return to_layer == "repos" || (dev && (to.path == TEST_INPUT_REGISTRY || to.path == "core"));
+        return to_layer == "repos";
     }
     if to.path == TEST_INPUT_REGISTRY {
         return dev;
@@ -857,7 +858,12 @@ fn layout_violations(f: &LayoutFile, stages: &[String], io: &IoIndex) -> Vec<Str
             ));
         }
     }
-    if f.text.contains("#[path") {
+    // the one exception: a crate root's unit tests reach the crate's real-data inputs (primase-testdata)
+    let inputs = "#[cfg(test)]\n#[path = \"../tests/inputs/mod.rs\"]\nmod inputs;";
+    if f.text
+        .replacen(inputs, "", usize::from(src_path == "lib.rs"))
+        .contains("#[path")
+    {
         out.push(format!(
             "{file}: a #[path] attribute (a module's place is its file's path)"
         ));
@@ -1269,8 +1275,6 @@ fn game_names() {
     for m in members()
         .iter()
         .filter(|m| matches!(m.layer(), "core" | "toolkit" | "formats" | "worlds"))
-        // the test-input registry describes each game's inputs by role (see TEST_INPUT_REGISTRY)
-        .filter(|m| m.path != TEST_INPUT_REGISTRY)
     {
         // a worlds crate's own names (its games, its engine, its destination); shared code has none. A game crate's
         // declared source names are its game's own (a whole literal, as stored), and each must be used.
@@ -1802,8 +1806,8 @@ const CHILD_HANDOFFS: &[&str] = &[
 
 #[test]
 fn real_data_variables_are_declared() {
-    // primase-testdata reads the configuration's variables; anywhere else a PRIMASE_* name is a child process's handoff
-    let configuration: BTreeSet<&str> = ["PRIMASE_DATA", "PRIMASE_DEBUG"].into_iter().collect();
+    // primase-testdata reads the configuration (`GAME_DATA`, `GAME_DATA_DEBUG`, checked by each crate's self-check);
+    // a PRIMASE_* name is a child process's handoff
     let mut unknown = Vec::new();
     let mut built = Vec::new();
     for m in members() {
@@ -1813,17 +1817,10 @@ fn real_data_variables_are_declared() {
             .filter(|f| f != "checks/tests/architecture.rs")
         {
             let (names, templates) = variable_literals(&read(&root().join(&file)));
-            let known = |n: &str| {
-                if file.starts_with("toolkit/testdata/") {
-                    configuration.contains(n)
-                } else {
-                    CHILD_HANDOFFS.contains(&n)
-                }
-            };
             unknown.extend(
                 names
                     .into_iter()
-                    .filter(|n| !known(n))
+                    .filter(|n| !CHILD_HANDOFFS.contains(&n.as_str()))
                     .map(|n| format!("{n} ({file})")),
             );
             built.extend(templates.into_iter().map(|t| format!("{t} ({file})")));
@@ -1835,222 +1832,44 @@ fn real_data_variables_are_declared() {
     );
     assert!(
         unknown.is_empty(),
-        "PRIMASE_* names outside the configuration (tests ask primase-testdata by query, CONTRIBUTING.md; a child \
-         process's handoff is listed in CHILD_HANDOFFS): {unknown:?}"
+        "PRIMASE_* names that are not a child process's handoff (tests ask for real data through their crate's inputs \
+         module, CONTRIBUTING.md; a handoff is listed in CHILD_HANDOFFS): {unknown:?}"
     );
-
-    // CONTRIBUTING.md's real-data tables are the registry's, as primase_testdata::doc makes them
-    let contributing = read(&root().join("CONTRIBUTING.md"));
-    let (begin, end) = (primase_testdata::doc::BEGIN, primase_testdata::doc::END);
-    let block = contributing
-        .split_once(begin)
-        .and_then(|(_, rest)| rest.split_once(end))
-        .map(|(inside, _)| format!("{begin}{inside}{end}\n"));
-    let want = primase_testdata::doc::tables();
-    assert!(
-        block.as_deref() == Some(want.as_str()),
-        "CONTRIBUTING.md's real-data tables differ from the registry; between its markers they read:\n{want}"
-    );
-
-    // the example configuration is one in the structured format
-    let example = read(&root().join("primase-data.example.toml"));
-    primase_testdata::config::validate(&example).unwrap_or_else(|e| panic!("primase-data.example.toml: {e}"));
 }
 
-/// The calls of a typed real-data query in a source text, each with its arguments as written (top-level commas, comments
-/// left out): `oracle(..)` and `install_file(..)` called through `primase_testdata::` or imported from it, and
-/// `Query::Oracle(..)` and `Query::Install(..)`.
-fn query_calls(text: &str) -> Vec<(&'static str, Vec<String>)> {
-    let code: String = text
-        .lines()
-        .map(|l| if l.trim_start().starts_with("//") { "" } else { l })
-        .collect::<Vec<_>>()
-        .join("\n");
-    // the names a `use primase_testdata::...;` brings in, however many lines its braces take
-    let imported = |name: &str| {
-        code.match_indices("use primase_testdata::").any(|(at, _)| {
-            let statement = code[at..].split(';').next().unwrap_or_default();
-            statement
-                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
-                .any(|w| w == name)
-        })
-    };
-    let mut calls = Vec::new();
-    for (kind, word) in [
-        ("oracle", "oracle("),
-        ("install_file", "install_file("),
-        ("oracle", "Query::Oracle("),
-        ("install", "Query::Install("),
-    ] {
-        let mut from = 0;
-        while let Some(i) = code[from..].find(word).map(|i| i + from) {
-            from = i + word.len();
-            let before = code[..i].chars().next_back();
-            if before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.') {
-                continue;
-            }
-            let qualified = code[..i].ends_with("primase_testdata::");
-            if !word.starts_with("Query::") && !qualified && !(before != Some(':') && imported(kind)) {
-                continue;
-            }
-            if code[..i].trim_end().ends_with("fn") {
-                continue;
-            }
-            // the arguments up to the matching parenthesis
-            let (mut depth, mut args, mut arg, mut quoted) = (1, Vec::new(), String::new(), false);
-            for c in code[from..].chars() {
-                match c {
-                    '"' => quoted = !quoted,
-                    '(' if !quoted => depth += 1,
-                    ')' if !quoted => depth -= 1,
-                    ',' if !quoted && depth == 1 => {
-                        args.push(std::mem::take(&mut arg));
-                        continue;
-                    }
-                    _ => {}
-                }
-                if depth == 0 {
-                    break;
-                }
-                arg.push(c);
-            }
-            args.push(arg);
-            let args = args
-                .into_iter()
-                .map(|a| a.trim().trim_start_matches("primase_testdata::").to_owned())
-                .filter(|a| !a.is_empty())
-                .collect();
-            calls.push((kind, args));
-        }
-    }
-    calls
-}
-
+/// Every crate that declares real-data inputs (`tests/inputs/mod.rs`, which its tests' queries go through) dev-depends
+/// on primase-testdata and runs its self-check over them as one test, `tests/real_data_inputs.rs` (`check_declared`:
+/// every typed query its sources write names a declared input). A crate may dev-depend on primase-testdata for its
+/// gate reports alone.
 #[test]
-fn query_calls_see_typed_queries() {
-    // assembled, so this file's own text holds no such call
-    let q = '"';
-    let src = format!(
-        "use primase_testdata::{{oracle, Game}};\n// oracle(s) in a comment\nlet a = oracle(OracleSet::Corpus, Game::Sekiro, {q}dcx{q});\n\
-         let b = primase_testdata::install_file(\n    Game::Skate,\n    {q}Data{q},\n);\nlet c = Query::Oracle(OracleSet::Corpus, game, {q}shaders{q});\n\
-         let d = ImageQuery::Size(x); fn oracle(x: u8) {{}}\n"
-    );
-    let calls = query_calls(&src);
-    // an import rustfmt split over lines brings its names in all the same
-    let split = format!(
-        "use primase_testdata::{{\n    Game,\n    OracleSet,\n    oracle,\n}};\nlet a = oracle(OracleSet::Corpus, Game::Sekiro, {q}dcx{q});\n"
-    );
-    assert_eq!(query_calls(&split).len(), 1, "{split}");
-    assert_eq!(
-        calls,
-        [
-            (
-                "oracle",
-                vec![
-                    "OracleSet::Corpus".to_owned(),
-                    "Game::Sekiro".to_owned(),
-                    format!("{q}dcx{q}")
-                ]
-            ),
-            (
-                "install_file",
-                vec!["Game::Skate".to_owned(), format!("{q}Data{q}")]
-            ),
-            (
-                "oracle",
-                vec![
-                    "OracleSet::Corpus".to_owned(),
-                    "game".to_owned(),
-                    format!("{q}shaders{q}")
-                ]
-            ),
-        ]
-    );
-}
-
-/// Every typed real-data query in the workspace's sources names a file the registry declares
-/// (`primase_testdata::registry::DECLARED`), its relative path a string literal: a mistyped path fails here, before any
-/// run, and one built at run time cannot hide. The game may be a variable where the set and path are literal (one
-/// corpus per game): the run then refuses an undeclared game.
-#[test]
-fn real_data_queries_are_declared() {
-    use primase_testdata::Query;
-    use primase_testdata::registry::DECLARED;
-    // (set or `install`, game, relative path)
-    let declared: Vec<(String, String, String)> = DECLARED
-        .iter()
-        .map(|d| match d.query {
-            Query::Oracle(s, g, rel) => (
-                format!("OracleSet::{s:?}"),
-                format!("Game::{g:?}"),
-                format!("\"{rel}\""),
-            ),
-            Query::Install(g, Some(rel)) => {
-                ("install".to_owned(), format!("Game::{g:?}"), format!("\"{rel}\""))
-            }
-            other => panic!("{other:?} is declared, not a file"),
-        })
-        .collect();
-    let literal =
-        |a: &str| a.len() >= 2 && a.starts_with('"') && a.ends_with('"') && !a[1..a.len() - 1].contains('"');
+fn real_data_inputs_are_checked() {
     let mut problems = Vec::new();
-    for m in members() {
-        for file in rust_files(&root().join(&m.path))
-            .into_iter()
-            // primase-testdata asks itself; this file holds query_calls' fixtures, in strings
-            .filter(|f| !f.starts_with("toolkit/testdata/") && f != "checks/tests/architecture.rs")
+    for m in members().iter().filter(|m| m.path != TEST_INPUT_REGISTRY) {
+        let dir = root().join(&m.path);
+        let man = manifest(&dir.join("Cargo.toml"));
+        let consumer = man
+            .get("dev-dependencies")
+            .and_then(|d| d.as_table())
+            .is_some_and(|d| d.contains_key("primase-testdata"));
+        let declared = dir.join("tests/inputs/mod.rs").is_file();
+        let check = std::fs::read_to_string(dir.join("tests/real_data_inputs.rs")).unwrap_or_default();
+        if declared && !consumer {
+            problems.push(format!(
+                "{}: has tests/inputs/mod.rs but no dev-dependency on primase-testdata",
+                m.path
+            ));
+        }
+        if declared
+            && !check
+                .contains("primase_testdata::check_declared(&inputs::REGISTRY, env!(\"CARGO_MANIFEST_DIR\"))")
         {
-            let text = read(&root().join(&file));
-            if !text.contains("primase_testdata") {
-                continue;
-            }
-            for (kind, args) in query_calls(&text) {
-                let (set, game, rel) = match (kind, args.as_slice()) {
-                    ("oracle", [set, game, rel]) => (set.clone(), game, rel),
-                    ("install_file", [game, rel]) => ("install".to_owned(), game, rel),
-                    ("install", [_, none]) if none == "None" => continue,
-                    ("install", [game, some]) => {
-                        match some.strip_prefix("Some(").and_then(|r| r.strip_suffix(')')) {
-                            Some(rel) => ("install".to_owned(), game, &rel.trim().to_owned()),
-                            None => {
-                                problems.push(format!(
-                                    "{file}: Query::Install({game}, {some}): write Some(\"path\") or None"
-                                ));
-                                continue;
-                            }
-                        }
-                    }
-                    _ => {
-                        problems.push(format!(
-                            "{file}: {kind}({}) is not a query the check reads",
-                            args.join(", ")
-                        ));
-                        continue;
-                    }
-                };
-                let call = format!("{kind}({set}, {game}, {rel})");
-                if !literal(rel) {
-                    problems.push(format!(
-                        "{file}: {call}: write the relative path as a string literal"
-                    ));
-                    continue;
-                }
-                if set != "install" && !set.starts_with("OracleSet::") {
-                    problems.push(format!("{file}: {call}: name the oracle set as OracleSet::<Set>"));
-                    continue;
-                }
-                let known = declared
-                    .iter()
-                    .any(|(s, g, r)| *s == set && r == rel && (g == game || !game.starts_with("Game::")));
-                if !known {
-                    problems.push(format!(
-                        "{file}: {call} is not declared in toolkit/testdata/src/registry.rs (DECLARED)"
-                    ));
-                }
-            }
+            problems.push(format!(
+                "{}: tests/real_data_inputs.rs does not run primase_testdata::check_declared on its inputs",
+                m.path
+            ));
         }
     }
-    assert!(problems.is_empty(), "real-data queries:\n{}", problems.join("\n"));
+    assert!(problems.is_empty(), "real-data inputs:\n{}", problems.join("\n"));
 }
 
 /// Every break there was, by identity (its table and every field but `reason` and `removed_when`). The list only

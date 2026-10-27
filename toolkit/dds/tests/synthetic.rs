@@ -1,9 +1,7 @@
 #![allow(clippy::unwrap_used)]
-use primase_core::{
-    ColorSpace, TexFormat, TexRole, Texture,
-    gate::{GateReport, Tolerance},
-};
+use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
 use primase_dds::{from_dxgi, read, write_dx10, write_legacy};
+use primase_testdata::gate::{GateReport, Tolerance};
 fn texture(f: TexFormat, w: u32, h: u32, n: u32) -> Texture {
     Texture {
         width: w,

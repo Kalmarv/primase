@@ -4,9 +4,11 @@
 //! plays. A dictionary that fails is counted by the error's message (the test fails on any); the counts are printed.
 //!
 //! Needs the GTA install and its key material.
+mod inputs;
+
 use std::collections::BTreeMap;
 
-use primase_testdata::{Game, install, keys};
+use inputs::{Game, install, keys};
 use rage_engine_formats::archive::archive_set::Install;
 use rage_engine_formats::archive::keys::Keys;
 use rage_engine_formats::ycd::ClipDictionary;

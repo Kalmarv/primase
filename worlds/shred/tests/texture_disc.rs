@@ -1,11 +1,13 @@
 //! Oracle: the game's independently stored prefetch and streamed mip copies.
 //! BCn output is also expanded through the codec so every encoded level is exercised.
+mod inputs;
+
+use inputs::{Depth, Game, Query, depth, expect_found, install, seed};
 use primase_core::{ColorSpace, TexRole, Texture};
 use primase_shred::read::{
     pak::Pak,
     texture::{Error, Payload, Residency, TextureCatalog},
 };
-use primase_testdata::{Depth, Game, Query, depth, expect_found, install, seed};
 use primase_texcodec::{Decoder, TexDecoder};
 use std::path::{Path, PathBuf};
 

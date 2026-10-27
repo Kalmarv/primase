@@ -3,6 +3,8 @@
 //! names it fails here, and so does a bump without the table of that version. The current table is written to the scratch root
 //! (`dxbc-lifted.hashes`, the path is in the failure) when they differ; it replaces the committed one in the commit that bumps the
 //! version.
+mod inputs;
+
 use std::path::Path;
 
 use iridia::gate;
@@ -30,7 +32,7 @@ fn what_the_lifter_makes_of_its_fixtures_is_the_versions() {
     let current = gate::table("primase-dxbc", LIFTER_VERSION, &outcomes);
     let committed = std::fs::read_to_string(dir.join("lifted.hashes")).unwrap_or_default();
     if let Err(what) = gate::check(&committed, &current) {
-        let new = primase_testdata::scratch().join("dxbc-lifted.hashes");
+        let new = inputs::scratch().join("dxbc-lifted.hashes");
         std::fs::write(&new, &current).unwrap();
         panic!("{what}; the current table is {}", new.display());
     }

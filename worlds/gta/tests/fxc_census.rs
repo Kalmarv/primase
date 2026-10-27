@@ -5,6 +5,8 @@
 //! lift's refusals are counted, not failures, but a program that lifts must validate and write WGSL. Needs
 //! `oracles.corpus.gta/legacy-effects`, a folder of Legacy's `.fxc` files (the Enhanced edition has none: see
 //! `sgd2.rs`).
+mod inputs;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -27,11 +29,7 @@ fn files(root: &Path, out: &mut Vec<PathBuf>) {
 
 #[test]
 fn every_effect_of_the_install() {
-    let Some(root) = primase_testdata::oracle(
-        primase_testdata::OracleSet::Corpus,
-        primase_testdata::Game::Gta,
-        "legacy-effects",
-    ) else {
+    let Some(root) = inputs::oracle(inputs::OracleSet::Corpus, inputs::Game::Gta, "legacy-effects") else {
         return;
     };
     let mut paths = Vec::new();
@@ -115,9 +113,9 @@ fn every_effect_of_the_install() {
 #[test]
 fn the_enhanced_shader_database() {
     use rage_engine_formats::sgd2;
-    let Some(path) = primase_testdata::oracle(
-        primase_testdata::OracleSet::Corpus,
-        primase_testdata::Game::Gta,
+    let Some(path) = inputs::oracle(
+        inputs::OracleSet::Corpus,
+        inputs::Game::Gta,
         "shader-database.awc",
     ) else {
         return;

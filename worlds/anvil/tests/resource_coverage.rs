@@ -1,8 +1,10 @@
 //! Index-only, every forge and every type, including unknowns. Runs in the ordinary test suite.
 //! Counts stored entries (patch duplicates included), never decoded bytes or active placements.
+mod inputs;
+
 use anvil_formats::{forge::Forge, listing::KINDS};
+use inputs::{Game, install, scratch};
 use primase_anvil::read::coverage;
-use primase_testdata::{Game, install, scratch};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};

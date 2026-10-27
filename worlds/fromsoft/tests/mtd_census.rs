@@ -1,16 +1,18 @@
 //! Independent MTD values, including every decoded string and stored parameter.
+mod inputs;
+
+use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
 use primase_fromsoft::{
     Archive, Binder,
     dcx::Decoder,
     mtd::{MaterialDefinition, Value},
 };
-use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[allow(unsafe_code)]
 fn native(
-    path: primase_testdata::OodleLibrary,
+    path: inputs::OodleLibrary,
 ) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
     // SAFETY: caller explicitly supplies a trusted version-6 native library.
     unsafe {

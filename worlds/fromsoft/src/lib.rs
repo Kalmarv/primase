@@ -62,3 +62,8 @@ pub(crate) fn invalid(format: &'static str, offset: usize, detail: impl ToString
 pub mod btl;
 pub mod edge;
 pub mod tpf;
+
+/// The real-data inputs this crate's unit tests read (tests/inputs/mod.rs).
+#[cfg(test)]
+#[path = "../tests/inputs/mod.rs"]
+mod inputs;

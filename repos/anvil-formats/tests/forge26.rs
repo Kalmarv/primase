@@ -1,12 +1,14 @@
 //! Version-26 forges and compression-version-1 data blocks (Shaun White Skateboarding's PC layout): a forge and
 //! blocks laid out here by hand (the LZO2A chunk a hand-worked stream), their refusals, and the hand-checked rows of a
 //! real forge (`installs.shaunwhite/DataPC.forge`) with every entry's blocks decoded.
+mod inputs;
+
 use std::fs::File;
 use std::io::Cursor;
 
 use anvil_formats::data::{BLOCK_MAGIC, Error as DataError, read_block, read_entry};
 use anvil_formats::forge::{Error, FILEDATA_HEADER, Forge};
-use primase_testdata::{Game, install_file};
+use inputs::{Game, install_file};
 
 const HEADER: usize = 1046;
 const D2: usize = HEADER + 40;

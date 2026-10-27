@@ -4,6 +4,8 @@
 //! stay GTA shaders (`gta.shader`; `lower-gta-pbr` lowers, so no `pbr.material` exists yet).
 //!
 //! Needs `installs.gta` and `keys.gta`; reads a corner of Legion Square.
+mod inputs;
+
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Instance, Lods};
 use primase_gta::components::{GtaBones, GtaShader};
@@ -12,8 +14,8 @@ use primase_gta::read::source::GtaSource;
 #[test]
 fn the_reader_keeps_levels_of_detail_bones_and_shaders_as_stored() {
     let (Some(dir), Some(keys)) = (
-        primase_testdata::install(primase_testdata::Game::Gta),
-        primase_testdata::keys(primase_testdata::Game::Gta),
+        inputs::install(inputs::Game::Gta),
+        inputs::keys(inputs::Game::Gta),
     ) else {
         return;
     };
@@ -42,8 +44,8 @@ fn the_reader_keeps_levels_of_detail_bones_and_shaders_as_stored() {
 #[test]
 fn the_reader_declares_every_name_it_emits() {
     let (Some(dir), Some(keys)) = (
-        primase_testdata::install(primase_testdata::Game::Gta),
-        primase_testdata::keys(primase_testdata::Game::Gta),
+        inputs::install(inputs::Game::Gta),
+        inputs::keys(inputs::Game::Gta),
     ) else {
         return;
     };
@@ -87,8 +89,8 @@ fn the_reader_reads_the_shader_database_with_the_load_when_asked() {
     use primase_gta::convert::{EMITTED_NAMES, GtaOptions, GtaReader, SHADER_NAMES};
     use primase_gta::passes::resolve_shaders::RESOLVE_GTA_SHADERS;
     let (Some(install), Some(keys)) = (
-        primase_testdata::install(primase_testdata::Game::Gta),
-        primase_testdata::keys(primase_testdata::Game::Gta),
+        inputs::install(inputs::Game::Gta),
+        inputs::keys(inputs::Game::Gta),
     ) else {
         return;
     };

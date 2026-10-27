@@ -7,12 +7,14 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use std::path::Path;
 
+use inputs::{Game, install};
 use primase_core::{Texture, World};
 use primase_monogame::xnb::Xnb;
 use primase_stuntboost::read_level;
-use primase_testdata::{Game, install};
 
 fn files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     for entry in std::fs::read_dir(dir).unwrap() {

@@ -3,6 +3,8 @@
 //! words bound as the bake binds them, and the programs of another form are refused naming what differs. Needs the Sekiro shader corpus (`oracles.corpus/sekiro/shaders`);
 //! skipped without it. `derive-fromsoft-detail` on the Wolf's outfits read from the install needs the Sekiro install and
 //! Oodle; skipped without them.
+mod inputs;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -32,11 +34,7 @@ fn find(root: &Path, name: &str) -> std::io::Result<Option<PathBuf>> {
 
 /// The Sekiro program `name`, or `None` without the corpus; an error where the corpus lacks it.
 fn program(name: &str) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
-    let Some(root) = primase_testdata::oracle(
-        primase_testdata::OracleSet::Corpus,
-        primase_testdata::Game::Sekiro,
-        "shaders",
-    ) else {
+    let Some(root) = inputs::oracle(inputs::OracleSet::Corpus, inputs::Game::Sekiro, "shaders") else {
         return Ok(None);
     };
     let path = find(&root, name)?.ok_or_else(|| format!("{name} is not in the shader corpus"))?;
@@ -552,8 +550,8 @@ fn the_pass_on_the_wolfs_outfits() -> TestResult {
     use primase_core::detail::DetailedMaterial;
     use primase_fromsoft::materials::Material;
     let (Some(root), Some(dll)) = (
-        primase_testdata::install(primase_testdata::Game::Sekiro),
-        primase_testdata::oodle(primase_testdata::Tool::Oodle6),
+        inputs::install(inputs::Game::Sekiro),
+        inputs::oodle(inputs::Tool::Oodle6),
     ) else {
         return Ok(());
     };

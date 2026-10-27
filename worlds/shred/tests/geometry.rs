@@ -376,9 +376,9 @@ fn hand_worked_world_and_mirror() {
     assert_eq!(w.column::<MaterialId>().unwrap().len(), 2);
     let meshes = w.column::<Mesh>().unwrap();
     let first = meshes.iter().next().unwrap().1;
-    let mut gate = primase_core::gate::GateReport::new(
+    let mut gate = primase_testdata::gate::GateReport::new(
         "hand-worked quartet/frame/index ranges",
-        primase_core::gate::Tolerance::Exact,
+        primase_testdata::gate::Tolerance::Exact,
     );
     assert_eq!(first.primitives().len(), 2);
     assert_eq!(

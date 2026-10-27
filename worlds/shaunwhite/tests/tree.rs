@@ -1,12 +1,14 @@
 //! RealTreeMesh trunks and branches: a body built byte by byte read back, and level 01's three trees read whole
 //! (`installs.shaunwhite`) and placed as meshes.
+mod inputs;
+
+use inputs::{Game, install};
 use primase_core::pass::{Conservation, PassManager, PassRegistry, RunReport};
 use primase_core::{Instance, Mesh, Name, Semantic, Stream, World};
 use primase_shaunwhite::components::{MeshFormat, RealTree};
 use primase_shaunwhite::passes::register;
 use primase_shaunwhite::read::level::read_level;
 use primase_shaunwhite::read::tree::{REAL_TREE_MESH, RING, SUB_REAL_TREE_MESH, Tree};
-use primase_testdata::{Game, install};
 
 fn put(b: &mut Vec<u8>, at: usize, v: u32) {
     if b.len() < at + 4 {

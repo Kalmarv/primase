@@ -3,9 +3,10 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use std::path::{Path, PathBuf};
 
-use primase_core::gate::compare_json;
 use primase_core::{
     ColorSpace, Instance, NormalConvention, NormalGreen, NormalX, NormalZ, Source, TexFormat, TexRole,
     Texture, Transform, World,
@@ -15,6 +16,7 @@ use primase_reskate::interchange::tables::{
     self, CurveRec, CurveTable, LightRec, PlacementRec, SoupTable, flags,
 };
 use primase_reskate::{read, write};
+use primase_testdata::gate::compare_json;
 use serde_json::{Value, json};
 
 /// A fresh folder under the target directory's tmp.
@@ -1234,9 +1236,9 @@ fn norm(msg: &str) -> String {
 /// The configured reference validator (`tools.scene_skate`), run through `tools.dotnet` when it is an assembly; `None`
 /// when either is not configured.
 fn validator() -> Option<Vec<std::path::PathBuf>> {
-    let v = primase_testdata::tool(primase_testdata::Tool::SceneSkate)?;
+    let v = inputs::tool(inputs::Tool::SceneSkate)?;
     if v.extension().is_some_and(|e| e == "dll") {
-        Some(vec![primase_testdata::tool(primase_testdata::Tool::Dotnet)?, v])
+        Some(vec![inputs::tool(inputs::Tool::Dotnet)?, v])
     } else {
         Some(vec![v])
     }

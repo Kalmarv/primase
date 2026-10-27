@@ -1,3 +1,5 @@
+mod inputs;
+
 use anvil_formats::shaunwhite::light::{self, OMNI_LIGHT, SKY_LIGHT, SPOT_LIGHT, SUN_LIGHT};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{Ambient, AmbientLight, Environment, Light, LightKind, Linear, Transform, World};
@@ -221,7 +223,7 @@ fn point_scale_is_a_number_or_sun_lux() {
 /// the lux the level's baked lighting leaves a dark surface (the colour times lux per stored unit).
 #[test]
 fn levels_state_their_sky_ambient_in_the_suns_unit() {
-    use primase_testdata::{Game, install_file};
+    use inputs::{Game, install_file};
     let files = [
         install_file(Game::ShaunWhite, "DataPC_01.forge"),
         install_file(Game::ShaunWhite, "DataPC_02.forge"),

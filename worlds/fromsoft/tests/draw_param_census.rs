@@ -6,6 +6,8 @@
 //! its fields) and prints the rest.
 //!
 //! Runs where the install, its keys and the Oodle library are configured; otherwise it does nothing.
+mod inputs;
+
 use primase_core::World;
 use primase_fromsoft::sekiro::{self, DrawParams, source::DrawParam};
 use primase_fromsoft::{Game, Install, Keys, dcx::Decoder};
@@ -172,7 +174,7 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>, map: &str) -> Re
 
 #[test]
 fn the_fields_the_maps_store() -> Result<()> {
-    let Some(dll) = primase_testdata::oodle(primase_testdata::Tool::Oodle6) else {
+    let Some(dll) = inputs::oodle(inputs::Tool::Oodle6) else {
         return Ok(());
     };
     let dll = common::oodle(dll)?;
@@ -183,16 +185,16 @@ fn the_fields_the_maps_store() -> Result<()> {
     for (game, data, maps) in [
         (
             Game::Sekiro,
-            primase_testdata::Game::Sekiro,
+            inputs::Game::Sekiro,
             &["m11_01_00_00", "m20_00_00_00"][..],
         ),
         (
             Game::EldenRing,
-            primase_testdata::Game::Elden,
+            inputs::Game::Elden,
             &["m10_00_00_00", "m12_02_00_00"][..],
         ),
     ] {
-        let (Some(root), keys) = (primase_testdata::install(data), primase_testdata::keys(data)) else {
+        let (Some(root), keys) = (inputs::install(data), inputs::keys(data)) else {
             continue;
         };
         let keys = match (game, keys) {

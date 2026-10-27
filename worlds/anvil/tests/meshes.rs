@@ -1,6 +1,8 @@
 //! Real Meshes read into a world through a stated frame and lowered to core meshes, under the pass manager with its
 //! checks on (Riders Republic build 25394987). Counts, splits and bounds as a separate read-only decode found them
 //! (games/riders-republic docs/recon/mesh-second-fixture.md).
+mod inputs;
+
 use std::fs::File;
 use std::path::Path;
 
@@ -8,13 +10,13 @@ use anvil_formats::archive::MAX_RECORD;
 use anvil_formats::data::{Resource, read_entry};
 use anvil_formats::forge::Forge;
 use anvil_formats::mesh::{self, StoredMesh};
+use inputs::{Game, install_file};
 use primase_anvil::components::AnvilMesh;
 use primase_anvil::passes::{LOWER_ANVIL_MESH, LowerAnvilMesh, Static16Normal};
 use primase_anvil::read::meshes::{Error, read_meshes};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, Pass, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::{Instance, Mesh, Semantic, Stream, World};
-use primase_testdata::{Game, install_file};
 
 /// The entry's buffers as read in the diagnostic frame (the stored numbers unconverted, not a claim that they are
 /// metres): the world, the prototype's buffers.

@@ -1,10 +1,12 @@
 //! The game's levels: the vertex alpha of blended and alpha-tested materials, with the shader's vertex red read as its
 //! tint weight and not as a colour.
 #![allow(clippy::unwrap_used, reason = "explicit gate assertions")]
+mod inputs;
+
+use inputs::{Game, install_file};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Entity, Mesh, Name, Semantic, Stream, World};
-use primase_testdata::{Game, install_file};
 
 /// Every primitive's `COLOR_0` alpha, as stored bits, in mesh and primitive order.
 fn alphas(w: &World) -> Vec<Vec<u32>> {

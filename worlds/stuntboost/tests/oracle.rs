@@ -13,13 +13,15 @@
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
+mod inputs;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use inputs::{Game, OracleSet, install, oracle};
 use primase_stuntboost::components::names::parse;
 use primase_stuntboost::components::{StuntboostBake, StuntboostCollision};
 use primase_stuntboost::read::derived;
-use primase_testdata::{Game, OracleSet, install, oracle};
 use serde_json::Value;
 
 /// Every dumped part: (level, part, its JSON).

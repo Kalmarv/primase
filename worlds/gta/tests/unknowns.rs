@@ -6,8 +6,11 @@
 //!
 //! Needs `installs.gta` and `keys.gta`.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod inputs;
+
 use std::collections::BTreeMap;
 
+use inputs::{Game, debug, install, keys};
 use iridia_interface::{ConstantRole, InputRole, OutputRole, RenderState, Stage};
 use primase_core::World;
 use primase_core::pass::{Options, PassLog};
@@ -15,7 +18,6 @@ use primase_core::{shader::Shader, shader::ShaderBinding, shader::TextureSource}
 use primase_gta::components::{GtaEffectTechniques, GtaMaterialEffect, GtaShader, GtaShaderTable};
 use primase_gta::passes::resolve_shaders::RESOLVE_GTA_SHADERS;
 use primase_gta::read::source::GtaSource;
-use primase_testdata::{Game, debug, install, keys};
 
 #[test]
 fn what_is_left_unknown_on_a_region() {

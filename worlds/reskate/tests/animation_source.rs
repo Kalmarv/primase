@@ -1,5 +1,8 @@
 //! Light source proof using the existing off-board idle fixture: list all, decode one, then map onto render bones.
+mod inputs;
+
 use frostbite_formats::folder::{Folder, Source};
+use inputs::{Game, Tool, install_file, tool};
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{Clip, JointMap, Mesh, Skeleton, Texture, World};
 use primase_foundations::compress::oodle::{Oodle, Version};
@@ -10,7 +13,6 @@ use primase_reskate::{
     },
     read::animation,
 };
-use primase_testdata::{Game, Tool, install_file, tool};
 
 #[test]
 #[ignore = "installed skate clip proof; default pair fixtures need no game files or native decoder"]

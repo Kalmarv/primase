@@ -7,6 +7,8 @@
 //!
 //! Also the Materials of a sample of every MaterialTemplate (up to `PER_TEMPLATE` each), read without meshes: bound
 //! with the pixel stage only.
+mod inputs;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use anvil_formats::archive::{Archive, At};
@@ -15,6 +17,7 @@ use anvil_formats::material::{MATERIAL, StoredMaterial};
 use anvil_formats::mesh::MESH;
 use anvil_formats::rider::{HAIR_COLOURS, colours};
 use anvil_formats::skeleton::SKELETON;
+use inputs::{Game, install};
 use iridia_interface::Stage;
 use primase_anvil::components::{AnvilMaterial, AnvilMesh};
 use primase_anvil::passes::{MESH_LAYOUT_FIELD, RESOLVE_ANVIL_SHADERS};
@@ -25,7 +28,6 @@ use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassLog};
 use primase_core::shader::ShaderBinding;
 use primase_core::{Component, Entity, Name, World};
-use primase_testdata::{Game, install};
 
 const PER_TEMPLATE: usize = 4;
 const PER_FORGE: usize = 600;

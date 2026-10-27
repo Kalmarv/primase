@@ -2,12 +2,15 @@
 //! hair baked at their maps' size and held against the program's arithmetic (its dump read: the zones' colour by the
 //! strand map, the roughness, the occlusion and the normal) evaluated by hand on the same texels, the colours told
 //! apart as the names say, and the Materials that need what the bake states of the vertex colour counted.
+mod inputs;
+
 use std::collections::BTreeMap;
 
 use anvil_formats::archive::Archive;
 use anvil_formats::build_table::BUILD_TABLE;
 use anvil_formats::rider::{HAIR_COLOURS, colours};
 use anvil_formats::skeleton::SKELETON;
+use inputs::{Game, install};
 use iridia_exec::{
     Grid, Input, Invocation, Layout, Lod, PixelShader, ProgramShader, evaluate::Constants, evaluate_raw_with,
 };
@@ -21,7 +24,6 @@ use primase_core::pass::{Options, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial};
 use primase_core::{Entity, Name, Texture, World};
 use primase_foundations::{sampling::Address, sampling::Levels, sampling::Transfer, sampling::footprint_lod};
-use primase_testdata::{Game, install};
 
 fn open() -> Option<Archive> {
     let dir = install(Game::Riders)?;

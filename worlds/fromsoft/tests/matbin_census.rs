@@ -2,12 +2,14 @@
 //! material binder the install holds (`matbin.jsonl` of `oracles.soulsformats.elden/format`, one record per member in member
 //! order): the shader and source paths and key, every parameter's name, key, type and value (floats as bit patterns)
 //! and every sampler's type, path, key and two trailing floats.
+mod inputs;
+
+use inputs::{OracleSet, Query, Tool, expect_found, oodle, oracle};
 use primase_fromsoft::{
     Binder, Game,
     dcx::Decoder,
     matbin::{Material, Value},
 };
-use primase_testdata::{OracleSet, Query, Tool, expect_found, oodle, oracle};
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 /// A binder's members: name and decoded bytes.
@@ -50,7 +52,7 @@ fn value_text(v: &Value) -> (u32, Vec<String>, usize) {
 fn material_binaries_match_an_independent_reading() -> Result<()> {
     let (Some(archive), Some(oracle), Some(dll)) = (
         common::archive(Game::EldenRing)?,
-        oracle(OracleSet::SoulsFormats, primase_testdata::Game::Elden, "format"),
+        oracle(OracleSet::SoulsFormats, inputs::Game::Elden, "format"),
         oodle(Tool::Oodle6),
     ) else {
         return Ok(());
@@ -164,7 +166,7 @@ fn material_binaries_match_an_independent_reading() -> Result<()> {
         println!("MISMATCH {f}");
     }
     expect_found(
-        Query::Oracle(OracleSet::SoulsFormats, primase_testdata::Game::Elden, "format"),
+        Query::Oracle(OracleSet::SoulsFormats, inputs::Game::Elden, "format"),
         "material binary records in matbin.jsonl",
         materials,
     );

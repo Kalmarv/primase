@@ -1,6 +1,8 @@
 //! Semantic coverage of embedded Entity components, not another resource-index inventory.
 //! Reads Entity/EntityGroup/GridCellDataBlock bodies one at a time. Patch copies are counted separately;
 //! grid membership is the union of stored lists and group memberships, not an active world-state selection.
+mod inputs;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -11,8 +13,8 @@ use anvil_formats::{
     grid::{GRID_CELL_DATA_BLOCK, StoredGridCellDataBlock},
     water::WATER_COMPONENT,
 };
+use inputs::{Game, install, scratch};
 use primase_anvil::read::component_types::component_name;
-use primase_testdata::{Game, install, scratch};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 

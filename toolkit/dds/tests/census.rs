@@ -2,9 +2,11 @@
 //! `oracles.scripts.sekiro/pbr`): every file reads, round-trips through the DX10 writer to the same texture, and a
 //! legacy DXT file's payload is written back byte for byte by the legacy writer, header differences measured.
 #![allow(clippy::unwrap_used)]
-use primase_core::gate::{GateReport, Tolerance};
+mod inputs;
+
+use inputs::{Game, OracleSet, Query, expect_found, resolve};
 use primase_dds::{read, write_dx10, write_legacy};
-use primase_testdata::{Game, OracleSet, Query, expect_found, resolve};
+use primase_testdata::gate::{GateReport, Tolerance};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,

@@ -1,10 +1,12 @@
 //! A forge entry's data blocks: entries laid out here by hand (zstd frames built by hand too), their refusals, and two
 //! real Mesh resources whose sizes, checksums, names and class ids were hand-checked in a separate read-only decode.
+mod inputs;
+
 use std::fs::File;
 
 use anvil_formats::data::{BLOCK_MAGIC, Error, Resource, read_entry};
 use anvil_formats::forge::Forge;
-use primase_testdata::{Game, install_file};
+use inputs::{Game, install_file};
 
 const BOUND: usize = 1 << 20;
 

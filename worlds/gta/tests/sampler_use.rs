@@ -11,8 +11,11 @@
 //!
 //! Needs `installs.gta` and `keys.gta`.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod inputs;
+
 use std::collections::{BTreeMap, BTreeSet};
 
+use inputs::{Game, install, keys};
 use iridia_interface::ResourceKind;
 use primase_core::World;
 use primase_core::shader::Shader;
@@ -20,7 +23,6 @@ use primase_gta::components::{GtaEffect, GtaEffectTechniques, GtaShaderTable};
 use primase_gta::passes::sampler_state;
 use primase_gta::passes::sampler_use::{self, Through};
 use primase_gta::read::source::GtaSource;
-use primase_testdata::{Game, install, keys};
 use rage_engine_formats::sgd2_table::ProgramTable;
 
 /// The name of the constant buffer and of the constant at a byte offset of the buffer at a bind point.

@@ -10,6 +10,9 @@
 //! are printed.
 //!
 //! Needs the GTA install and its key material.
+mod inputs;
+
+use inputs::{Game, install, keys};
 use primase_core::asset::{Asset, Role};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::rig::{RigInstance, SkinInstance};
@@ -18,7 +21,6 @@ use primase_core::state::StateAxis;
 use primase_core::{Instance, World};
 use primase_gta::components::{GtaPedPart, GtaSkeleton};
 use primase_gta::read::source::GtaSource;
-use primase_testdata::{Game, install, keys};
 use rage_engine_formats::archive::listing::Storage;
 
 fn assert_verifies(w: &World, what: &str) {

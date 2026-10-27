@@ -751,7 +751,6 @@ dependencies = [
  "iridia-exec",
  "iridia-interface",
  "naga",
- "primase-core",
  "primase-testdata",
 ]
 
@@ -1232,7 +1231,6 @@ dependencies = [
  "half",
  "libloading 0.9.0",
  "lz4_flex",
- "primase-core",
  "primase-foundations",
  "primase-oozextract",
  "primase-testdata",
@@ -1521,6 +1519,7 @@ dependencies = [
 name = "primase-testdata"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "thiserror",
  "toml",
 ]
@@ -1534,6 +1533,7 @@ dependencies = [
  "half",
  "primase-core",
  "primase-foundations",
+ "primase-testdata",
  "thiserror",
 ]
 

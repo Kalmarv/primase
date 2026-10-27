@@ -7,11 +7,13 @@
 //!   for, every sampler naming a parameter, every constant buffer parameter naming one, and every shader's GLSL
 //!   declaring the samplers, the vertex attributes and the uniform array its tables list.
 
+mod inputs;
+
 use std::path::{Path, PathBuf};
 
+use inputs::{Game, install_file};
 use primase_monogame::mgfx::{Effect, Profile, Stage};
 use primase_monogame::xnb::Xnb;
-use primase_testdata::{Game, install_file};
 
 fn effects(dir: &Path, out: &mut Vec<PathBuf>) {
     let mut entries: Vec<_> = std::fs::read_dir(dir)

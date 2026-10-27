@@ -13,10 +13,12 @@
 //! their front side `C` of GTA's; at every vertex our bitangent `cross(N, T) * w` is `C` of GTA's binormal.
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
+use inputs::{Game, OracleSet, install, keys, oracle};
 use primase_core::{Instance, Mesh, Semantic, Stream, World};
 use primase_gta::components::GtaArchetype;
 use primase_gta::read::assets::attach_assets;
-use primase_testdata::{Game, OracleSet, install, keys, oracle};
 use rage_engine_formats::archive::archive_set::{ArchiveSet, Install, MapState};
 use rage_engine_formats::archive::keys::Keys;
 use rage_engine_formats::map::{ArchetypeDef, ArchetypeKind};

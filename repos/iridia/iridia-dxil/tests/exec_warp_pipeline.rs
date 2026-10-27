@@ -6,11 +6,13 @@
 //! the same, the traversal and its rounding are each implementation's own).
 //!
 //! Needs the WARP oracle program with the `d3d12rtp` case form (the configured `Tool::Warp`) and the scratch folder.
+mod inputs;
+
+use inputs::{Tool, own_scratch, tool};
 use iridia::{HitGroup, HitGroupKind};
 use iridia_dxil::lift;
 use iridia_exec::{Geometry, Instance, InstanceFlags, Pipeline, PipelineResources, Scene, ShaderTable};
 use iridia_exec::{Sample, Sampler, Store};
-use primase_testdata::{Tool, own_scratch, tool};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -313,7 +315,7 @@ fn pipelines_agree_with_warp() {
         let cases = scratch.join(format!("pipeline{}.cases.txt", variant.replace('.', "_")));
         let out = scratch.join(format!("pipeline{}.warp.jsonl", variant.replace('.', "_")));
         std::fs::write(&cases, text).unwrap();
-        let _oracle = primase_testdata::warp_exclusive();
+        let _oracle = inputs::warp_exclusive();
         let run = std::process::Command::new(&warp)
             .arg(&cases)
             .arg(&out)

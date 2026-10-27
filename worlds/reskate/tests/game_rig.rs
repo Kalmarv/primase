@@ -6,14 +6,16 @@
 //! `AITrajectory` (the animation rig turns it a quarter turn about y, the render skeleton turns its children instead;
 //! their model poses agree).
 
+mod inputs;
+
 use frostbite_formats::folder::{Folder, Source};
+use inputs::{Game, Tool, install_file, tool};
 use primase_animation::pose::{affine, locals, model_transforms};
 use primase_core::{Skeleton, World};
 use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_reskate::game::rig::{DofTarget, SkateAnimRig, insert_rig, render_map};
 use primase_reskate::game::skeleton::{SkateSkeletonAsset, read_skeleton};
 use primase_reskate::read::game::read_rig;
-use primase_testdata::{Game, Tool, install_file, tool};
 
 type R = Result<(), Box<dyn std::error::Error>>;
 

@@ -5,10 +5,13 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use frostbite_formats::MESHSET;
 use frostbite_formats::bundle::Kind;
 use frostbite_formats::folder::{Folder, Source};
 use frostbite_formats::scope::Scope;
+use inputs::{Game, Tool, install_file, tool};
 use primase_core::World;
 use primase_core::pass::{Pass, PassLog};
 use primase_foundations::compress::oodle::{Oodle, Version};
@@ -18,7 +21,6 @@ use primase_frostbite::read::entry::read_entry;
 use primase_frostbite::read::geometry::read_geometry;
 use primase_frostbite::read::program::{materials, resolve_materials};
 use primase_frostbite::read::skeleton::read_skeletons;
-use primase_testdata::{Game, Tool, install_file, tool};
 
 const GLOBALS_BUNDLE: &str = "win32/configurations/gameconfigurations/delmargameconfiguration";
 const HAT: &str = "hatbucket/2023/gen_hat_hatbucket_cas_main_bundlereftable";

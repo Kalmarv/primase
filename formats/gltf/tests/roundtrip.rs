@@ -7,6 +7,7 @@
 #![allow(clippy::unwrap_used)]
 
 mod common;
+mod inputs;
 
 use std::collections::BTreeMap;
 
@@ -706,7 +707,7 @@ fn load_mesh_files_restores_meshes() {
 /// purpose: readers generate them, and game meshes often have none).
 #[test]
 fn khronos_validator_accepts_output() {
-    let Some(validator) = primase_testdata::tool(primase_testdata::Tool::GltfValidator) else {
+    let Some(validator) = inputs::tool(inputs::Tool::GltfValidator) else {
         return;
     };
     let dir = scratch("validator");

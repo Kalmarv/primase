@@ -7,11 +7,13 @@
 //!   independent of any reader, the asset's own poses agree with it: every model pose is its parent's composed with
 //!   its local pose, and every inverse model pose composed with the model pose is the identity, within f32 rounding.
 
+mod inputs;
+
 use frostbite_formats::folder::{Folder, Source};
+use inputs::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_core::{Rest, Skeleton, World};
 use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_reskate::game::skeleton::{SkateSkeletonAsset, check_poses, read_skeleton};
-use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 
 type R = Result<(), Box<dyn std::error::Error>>;
 

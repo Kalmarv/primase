@@ -19,10 +19,13 @@
 // Test code: helpers outside #[test] functions unwrap too (clippy.toml allows it only inside them).
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use inputs::{Game, install, keys};
 use primase_core::convert::{Finished, Report, Writer, convert};
 use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, RunReport, Target};
 use primase_core::pbr::PbrMaterial;
@@ -32,7 +35,6 @@ use primase_reskate::EncodingOptions;
 use primase_reskate::components::{MarkerKind, SkateMarker, Snap, SnapMode};
 use primase_reskate::passes::LowerLayeredPbr;
 use primase_reskate::passes::layered::{BlendOpacity, LowerLayeredReskate, OverlayLimit};
-use primase_testdata::{Game, install, keys};
 use serde_json::Value;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -353,7 +355,7 @@ fn layered_terrain_builds_with_vertex_blend_overlays() -> Result<()> {
     );
     stand_the_spawn_at_a_height(&mut w);
     let o = EncodingOptions {
-        out_root: primase_testdata::scratch().join("reskate-layered"),
+        out_root: inputs::scratch().join("reskate-layered"),
         name: Some("vespucci".into()),
         ..EncodingOptions::default()
     };

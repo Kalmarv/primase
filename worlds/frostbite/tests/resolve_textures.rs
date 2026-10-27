@@ -9,6 +9,8 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
@@ -16,6 +18,7 @@ use frostbite_formats::MESHSET;
 use frostbite_formats::bundle::Kind;
 use frostbite_formats::folder::{Folder, Source};
 use frostbite_formats::scope::Scope;
+use inputs::{Game, Tool, install_file, tool};
 use primase_core::pass::{Pass, PassLog};
 use primase_core::shader::{ShaderBinding, TextureSource};
 use primase_core::{Entity, Texture, TextureLayers, TextureShape, World};
@@ -26,7 +29,6 @@ use primase_frostbite::read::entry::read_entry;
 use primase_frostbite::read::program::{materials, resolve_materials};
 use primase_frostbite::read::textures::TextureIndex;
 use primase_frostbite::read::textures::resolve_textures;
-use primase_testdata::{Game, Tool, install_file, tool};
 use primase_texcodec::{Decoder, TexDecoder};
 
 /// The slot kind a texture of this shape is counted under, and its short name.

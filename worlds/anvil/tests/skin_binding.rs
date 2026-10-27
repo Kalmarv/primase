@@ -1,5 +1,7 @@
 //! What a character's meshes bind to, on Riders Republic's forges read with the game's component registry: the
 //! SkeletonComponents' rigs against the meshes of their Entities' Visuals.
+mod inputs;
+
 use std::collections::HashMap;
 
 use anvil_formats::archive::{Archive, At};
@@ -9,7 +11,7 @@ use anvil_formats::lod::StoredLodSelector;
 use anvil_formats::mesh::StoredMesh;
 use anvil_formats::rig::StoredRig;
 use anvil_formats::skeleton::StoredSkeleton;
-use primase_testdata::{Game, install};
+use inputs::{Game, install};
 
 fn open() -> Option<Archive> {
     let dir = install(Game::Riders)?;

@@ -1,5 +1,7 @@
 //! What a character's meshes bind to: a SkeletonComponent read from an Entity laid out by hand, and the census of
 //! Riders Republic's forges for a Mesh's `MeshBone` records and skin stream against the bone names of the Skeletons.
+mod inputs;
+
 use std::collections::{HashMap, HashSet};
 
 use anvil_formats::archive::{Archive, At};
@@ -7,7 +9,7 @@ use anvil_formats::entity::{BOUNDING_VOLUME, ComponentBody, Refusal, SKELETON_CO
 use anvil_formats::listing::Kind;
 use anvil_formats::mesh::StoredMesh;
 use anvil_formats::skeleton::StoredSkeleton;
-use primase_testdata::{Game, install};
+use inputs::{Game, install};
 
 /// The component registry the bodies built by hand are read with: the one type they hold.
 fn is_component_type(kind: u32) -> bool {

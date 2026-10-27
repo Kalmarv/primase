@@ -1,6 +1,9 @@
 //! Exact material constraints and stored-record variants. Full forward colour is not an albedo derivation.
 #![allow(clippy::unwrap_used, reason = "explicit fixture and gate assertions")]
+mod inputs;
+
 use anvil_formats::shaunwhite::shaders::{Database, Effect, Key, Payload, Record};
+use inputs::{Game, install_file};
 use iridia_interface::{ConstantRole, OutputRole, Stage};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{Mesh, Primitive, Semantic, Stream, Topology, World};
@@ -9,7 +12,6 @@ use primase_shaunwhite::components::{
     MaterialRef, MaterialState, MeshFormat, ShaderInputs, ShaderLibrary, ShaderPasses,
 };
 use primase_shaunwhite::passes::{RECORD_FIELD, material_key};
-use primase_testdata::{Game, install_file};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 

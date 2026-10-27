@@ -5,6 +5,7 @@
 #![allow(clippy::unwrap_used)]
 
 mod common;
+mod inputs;
 
 use common::scratch;
 use primase_core::{
@@ -411,7 +412,7 @@ fn unnormalised_weights_are_refused_and_a_rigless_placement_is_counted() {
 /// influences name joint 0, as it expects).
 #[test]
 fn khronos_validator_accepts_characters() {
-    let Some(validator) = primase_testdata::tool(primase_testdata::Tool::GltfValidator) else {
+    let Some(validator) = inputs::tool(inputs::Tool::GltfValidator) else {
         return;
     };
     let dir = scratch("characters-validator");

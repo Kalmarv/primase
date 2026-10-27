@@ -7,3 +7,8 @@ pub mod passes;
 pub mod read;
 
 pub use passes::register;
+
+/// The real-data inputs this crate's unit tests read (tests/inputs/mod.rs).
+#[cfg(test)]
+#[path = "../tests/inputs/mod.rs"]
+mod inputs;

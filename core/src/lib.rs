@@ -33,7 +33,6 @@ pub mod detail;
 mod environment;
 pub use environment::{Ambient, AmbientLight, Environment};
 pub mod frame;
-pub mod gate;
 pub mod json;
 pub mod layered;
 pub mod ledger;

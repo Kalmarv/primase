@@ -11,17 +11,19 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use primase_core::gate::{GateReport, Tolerance};
+use inputs::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_reskate::postcompile::fb::bundle;
 use primase_reskate::postcompile::fb::folder::{Folder, Source};
 use primase_reskate::postcompile::fb::toc;
 use primase_reskate::postcompile::fb::{MESHSET, db, depot, lookup};
 use primase_reskate::postcompile::meshset;
-use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
+use primase_testdata::gate::{GateReport, Tolerance};
 use serde_json::{Value, json};
 
 type R<T = ()> = Result<T, Box<dyn std::error::Error>>;

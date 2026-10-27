@@ -9,9 +9,11 @@
     reason = "test I/O: real-data gates"
 )]
 
-use primase_core::gate::{GateReport, Tolerance};
+mod inputs;
+
+use inputs::{Game, OracleSet, Query, expect_found, oracle};
 use primase_foundations::compress::reference;
-use primase_testdata::{Game, OracleSet, Query, expect_found, oracle};
+use primase_testdata::gate::{GateReport, Tolerance};
 
 #[test]
 fn oozextract_decodes_the_lznib_streams_as_the_game_library_does()

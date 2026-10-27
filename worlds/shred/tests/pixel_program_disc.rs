@@ -1,6 +1,9 @@
 //! Every packaged pixel program of the disc classified from its microcode, and the reader's materials carrying the
 //! class: the sky domes are unlit after lowering, the panorama cards (a different program) are not.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod inputs;
+
+use inputs::{Game, install};
 use primase_core::{
     convert::Reader,
     frame::{Axis, SourceFrame},
@@ -16,7 +19,6 @@ use primase_shred::{
         pixel_program::classify,
     },
 };
-use primase_testdata::{Game, install};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},

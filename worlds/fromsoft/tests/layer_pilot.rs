@@ -18,10 +18,12 @@
 //! place. Float differences are reported per target. A vertex program's system-value outputs (the position, the clip
 //! distances) are not in our executor's register view of a vertex run, and no pixel input reads them: they are counted,
 //! not compared.
+mod inputs;
+
+use inputs::{Game, OracleSet, oracle};
 use iridia_exec::Raw;
 use primase_foundations::parallel::Threads;
 use primase_fromsoft::layer_bake::{Encoded, PipelineState, TARGETS};
-use primase_testdata::{Game, OracleSet, oracle};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::Path;

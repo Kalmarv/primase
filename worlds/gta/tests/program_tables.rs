@@ -15,13 +15,15 @@
 //!
 //! The counts are printed. Needs `installs.gta` and `keys.gta`.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod inputs;
+
 use std::collections::{BTreeMap, BTreeSet};
 
+use inputs::{Game, OracleSet, install, keys, oracle};
 use iridia_interface::{D3dClass, ResourceKind};
 use primase_gta::components::{GtaEffect, GtaEffectParameters, GtaShaderTable};
 use primase_gta::passes::resolve_shaders::value_bytes;
 use primase_gta::read::source::GtaSource;
-use primase_testdata::{Game, OracleSet, install, keys, oracle};
 use rage_engine_formats::sgd2;
 use rage_engine_formats::sgd2_table;
 

@@ -9,6 +9,8 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use frostbite_formats::fbmod::{self, Body, ChunkInfo, Entry, EntryKind, Fbmod, ResInfo, Stored};
 
 type R<T = ()> = Result<T, Box<dyn std::error::Error>>;
@@ -290,7 +292,7 @@ fn fbmod_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) -> std:
 #[test]
 #[allow(unsafe_code)]
 fn real_files_round_trip() -> R {
-    use primase_testdata::{Game, OracleSet, Query, Tool, expect_found, resolve, tool};
+    use inputs::{Game, OracleSet, Query, Tool, expect_found, resolve, tool};
     let mods = Query::Oracle(OracleSet::Baseline, Game::Skate, "fbmod");
     let Some(dir) = resolve(mods) else {
         return Ok(());

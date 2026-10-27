@@ -4,12 +4,14 @@
 //! a string its NUL). Failures are counted by message, unreached bytes by block type.
 //!
 //! Needs `installs.gta` and `keys.gta`.
+mod inputs;
+
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::sync::Mutex;
 
+use inputs::{Game, install, keys};
 use primase_foundations::hash::joaat_exact;
-use primase_testdata::{Game, install, keys};
 use rage_engine_formats::archive::archive_set::Install;
 use rage_engine_formats::archive::keys::Keys;
 use rage_engine_formats::archive::rpf::EntryKind;

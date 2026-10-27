@@ -263,8 +263,8 @@ impl Compressor for Oodle {
 )]
 mod tests {
     use super::*;
-    use primase_core::gate::{GateReport, Tolerance};
-    use primase_testdata::{Tool, tool};
+    use crate::inputs::{Tool, tool};
+    use primase_testdata::gate::{GateReport, Tolerance};
     /// Installed DLL oracle versus independently implemented oozextract; tests
     /// synthetic Kraken compression for all three ABI versions when configured.
     #[test]
@@ -348,7 +348,7 @@ mod tests {
             src.truncate(n);
             src
         };
-        let dump = primase_testdata::debug("oodle.dump").map(|name| primase_testdata::scratch().join(name));
+        let dump = crate::inputs::debug("oodle.dump").map(|name| crate::inputs::scratch().join(name));
         // which compressor numbers give which decoder type, for a 20000-byte input of names
         let probe = sample("utf16-names", 20000);
         let mut lzb16 = Vec::new();

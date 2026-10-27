@@ -13,10 +13,12 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
+use inputs::{Game, Tool, install_file, tool};
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{Ambient, AmbientLight, Environment, World};
 use primase_foundations::color::srgb_to_linear_f32;
-use primase_testdata::{Game, Tool, install_file, tool};
 use primase_unity::TypeTreePackage;
 use primase_unity::components::UnityRenderSettings;
 use primase_unity::lower_ambient::{LowerUnityAmbient, UnityAmbientProbe, probe_average};

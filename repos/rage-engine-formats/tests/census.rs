@@ -7,12 +7,14 @@
 //! | [path, "bin", block, stored, size, encrypted] | [path, "res", block, stored, system, graphics]]}` with archive and
 //! entry paths lowercase, relative to the install, joined by `\`. Needs `installs.gta` (the install) and `keys.gta`
 //! (key material, see `Keys::from_dir`); the debug key `gta.archive_filter` limits the archives to paths containing that text.
+mod inputs;
+
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use primase_testdata::{Game, OracleSet, install, keys};
+use inputs::{Game, OracleSet, install, keys};
 use rage_engine_formats::archive::keys::Keys;
 use rage_engine_formats::archive::rpf::{Archive, EntryKind};
 
@@ -172,11 +174,11 @@ fn every_archive_reads_and_every_entry_decodes() {
         return;
     };
     let keys = Keys::from_dir(&key_dir, None).expect("key material");
-    let filter = primase_testdata::debug("gta.archive_filter")
+    let filter = inputs::debug("gta.archive_filter")
         .unwrap_or_default()
         .to_lowercase();
     let mut oracle = BTreeMap::new();
-    if let Some(listing) = primase_testdata::oracle(OracleSet::CodeWalker, Game::Gta, "listing.jsonl") {
+    if let Some(listing) = inputs::oracle(OracleSet::CodeWalker, Game::Gta, "listing.jsonl") {
         for line in std::fs::read_to_string(listing).expect("listing").lines() {
             let o: OracleArchive = serde_json::from_str(line).expect("listing line");
             oracle.insert(o.path.clone(), o);

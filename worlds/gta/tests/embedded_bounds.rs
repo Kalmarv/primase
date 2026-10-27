@@ -13,6 +13,9 @@
 //! corners of its box placed by CodeWalker; the foliage and river leaves are left out.
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
+use inputs::{Game, OracleSet, install, keys, oracle};
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{Collision, Instance, Surfaces, World};
 use primase_gta::components::GtaArchetype;
@@ -20,7 +23,6 @@ use primase_gta::components::collision::GtaMaterials;
 use primase_gta::passes::collision::{FlaggedVolumes, LowerGtaEmbeddedCollision};
 use primase_gta::read::assets::attach_assets;
 use primase_gta::read::collision::material_names;
-use primase_testdata::{Game, OracleSet, install, keys, oracle};
 use rage_engine_formats::archive::archive_set::{ArchiveSet, Install, MapState};
 use rage_engine_formats::archive::keys::Keys;
 use rage_engine_formats::map::{ArchetypeDef, ArchetypeKind};

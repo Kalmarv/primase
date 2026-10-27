@@ -21,17 +21,19 @@
 //! tangents of both handedness signs.
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use std::collections::BTreeMap;
 
+use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
 use primase_fromsoft::flver::Model;
 use primase_fromsoft::{Archive, Binder, dcx::Decoder};
-use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 use serde_json::Value as Json;
 
 #[allow(unsafe_code)]
 mod native {
     pub fn load(
-        path: primase_testdata::OodleLibrary,
+        path: crate::inputs::OodleLibrary,
     ) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
         // SAFETY: caller explicitly supplies a trusted version-6 native library.
         unsafe {

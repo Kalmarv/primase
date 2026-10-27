@@ -396,17 +396,17 @@ mod tests {
         use sha2::{Digest, Sha256};
         use std::sync::Arc;
         // the oracle's folder: reflectance.json and the program and textures it names, by paths relative to it
-        let Some(folder) = primase_testdata::oracle(
-            primase_testdata::OracleSet::Scripts,
-            primase_testdata::Game::Sekiro,
+        let Some(folder) = crate::inputs::oracle(
+            crate::inputs::OracleSet::Scripts,
+            crate::inputs::Game::Sekiro,
             "reflectance",
         ) else {
             return Ok(());
         };
         let oracle: serde_json::Value =
-            serde_json::from_slice(&primase_testdata::read_input(folder.join("reflectance.json"))?)?;
+            serde_json::from_slice(&crate::inputs::read_input(folder.join("reflectance.json"))?)?;
         let read = |path: &str, expected: &str| -> std::result::Result<Vec<u8>, Box<dyn std::error::Error>> {
-            let bytes = primase_testdata::read_input(folder.join(path))?;
+            let bytes = crate::inputs::read_input(folder.join(path))?;
             assert_eq!(
                 Sha256::digest(&bytes)
                     .iter()

@@ -1,12 +1,14 @@
 //! Metadata census for the permutation decision, not a claim about the engine's draw calls.
 //! Reads material definitions and bundle inventories only: no images, spline decode or shader lift.
+mod inputs;
+
+use inputs::{Game as Data, Tool, install, keys, oodle};
 use primase_fromsoft::{
     Binder, Game, Install, Keys,
     dcx::Decoder,
     materials::{Definition, MaterialView, ParameterValue},
     metaparam::Metaparam,
 };
-use primase_testdata::{Game as Data, Tool, install, keys, oodle};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 mod common;
@@ -226,7 +228,7 @@ fn pixelkill_permutation_inventory_across_materials() -> Result<()> {
     let (Some(root), Some(key_dir), Some(dll)) =
         (install(Data::Elden), keys(Data::Elden), oodle(Tool::Oodle6))
     else {
-        println!("PIXELKILL_SKIP=PRIMASE_DATA Elden install/keys/oodle6 not configured");
+        println!("PIXELKILL_SKIP=GAME_DATA Elden install/keys/oodle6 not configured");
         return Ok(());
     };
     let codec = common::oodle(dll)?;

@@ -1,13 +1,14 @@
 //! Full original VS on Microsoft REF -> independent passthrough PS -> float readback.
 //! The derived graph is evaluated separately on the same raw mesh UV/material controls.
 #![allow(clippy::unwrap_used)]
+mod inputs;
 mod support;
 use anvil_formats::shaunwhite::shaders::Payload;
+use inputs::{Game, Tool, install_file, own_scratch, tool};
 use iridia_exec::{PixelShader, ProgramShader, Sample};
 use iridia_interface::{Attribute, ConstantRole};
-use primase_core::{gate::GateReport, gate::Tolerance};
 use primase_shaunwhite::shaders::base_uv::derive;
-use primase_testdata::{Game, Tool, install_file, own_scratch, tool};
+use primase_testdata::gate::{GateReport, Tolerance};
 use std::process::Command;
 
 #[test]

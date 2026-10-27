@@ -14,8 +14,11 @@
 //!
 //! The counts are printed. Needs `installs.gta` and `keys.gta`.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod inputs;
+
 use std::collections::{BTreeMap, BTreeSet};
 
+use inputs::{Game, install, keys};
 use iridia_exec::ProgramShader;
 use iridia_exec::{
     Grid, Input, Invocation, Layout, PixelShader, View, Views, evaluate::Constants, evaluate_raw,
@@ -26,7 +29,6 @@ use primase_gta::components::{GtaEffect, GtaStage};
 use primase_gta::passes::gbuffer;
 use primase_gta::passes::resolve_shaders::split_program_name;
 use primase_gta::read::source::GtaSource;
-use primase_testdata::{Game, install, keys};
 
 /// Whether the lifted program has a `discard` anywhere in its body.
 fn has_discard(bytecode: &[u8]) -> bool {

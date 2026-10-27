@@ -3,6 +3,8 @@
 //! buffers of real programs equal the D3D Shader Disassembler's, and the executor's outputs for the programs it takes equal the
 //! reference values recorded with each program. Oracles: Microsoft's fxc/D3D disassembly text and recorded reference outputs;
 //! nothing here is ours.
+mod inputs;
+
 use std::collections::BTreeMap;
 
 use dxbc_reader::decode;
@@ -53,11 +55,7 @@ const PINNED_REFUSALS: &[(&str, usize)] = &[];
 /// reason, not failed.
 #[test]
 fn independent_disassembly_counts() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(root) = primase_testdata::oracle(
-        primase_testdata::OracleSet::Corpus,
-        primase_testdata::Game::General,
-        "dxbc",
-    ) else {
+    let Some(root) = inputs::oracle(inputs::OracleSet::Corpus, inputs::Game::General, "dxbc") else {
         return Ok(());
     };
     let mut count = 0;
@@ -362,9 +360,9 @@ fn disassembled_immediates(text: &str) -> Vec<[String; 4]> {
 /// views, and its immediate constant buffer equal to the disassembly's (each value printed as the disassembler prints it).
 #[test]
 fn pack_against_microsoft_disassembly() {
-    let Some(root) = primase_testdata::oracle(
-        primase_testdata::OracleSet::D3dDisassembler,
-        primase_testdata::Game::Riders,
+    let Some(root) = inputs::oracle(
+        inputs::OracleSet::D3dDisassembler,
+        inputs::Game::Riders,
         "shader-pack",
     ) else {
         return;

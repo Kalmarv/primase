@@ -1,6 +1,8 @@
 //! The crowd's skin palette, its TextureMap decoded, on Riders Republic's forges.
+mod inputs;
+
 use anvil_formats::archive::Archive;
-use primase_testdata::{Game, install};
+use inputs::{Game, install};
 
 /// The four tones of the crowd's skin palette, as the notes decode its 8 x 4 texture (bottom row of each 2 x 2 cell).
 #[test]

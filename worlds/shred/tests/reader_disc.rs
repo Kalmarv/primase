@@ -3,6 +3,9 @@
 //! collision with no texture pixels; `load` decodes the pixels of the part the roots reach; `load_all` decodes the
 //! whole world in place.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod inputs;
+
+use inputs::{Game, install};
 use primase_core::{
     Collider, Collision, Instance, Mesh, Surfaces, Texture,
     convert::{self, Reader},
@@ -17,7 +20,6 @@ use primase_shred::{
         pak::Pak,
     },
 };
-use primase_testdata::{Game, install};
 use std::collections::BTreeSet;
 
 #[test]

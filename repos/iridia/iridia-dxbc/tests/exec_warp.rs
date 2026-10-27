@@ -15,14 +15,15 @@
 //! leaves `exp`, `log`, `sin`, `cos`, `rsqrt` and `rcp` within a few units in the last place: lanes are classed by how
 //! far apart they are, and only a lane further apart than 1e-3 relative fails.
 mod common;
+mod inputs;
 use common::case;
+use inputs::{Game, Tool, debug, tool};
 use iridia::{
     InterpMode, InterpSampling, Program, ResourceKind, SampleType, ScalarType, StorageTarget, SystemValue,
     TextureDim,
 };
 use iridia_exec::{Dim, ImageLoad, ImageQuery, ImageSample, ProgramShader, QueryKind};
 use iridia_exec::{PixelShader, Sampler};
-use primase_testdata::{Game, Tool, debug, tool};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -394,7 +395,7 @@ fn run_program(
     bytes: &[u8],
     cases: u32,
     all: bool,
-    tools: &(PathBuf, PathBuf, primase_testdata::OwnScratch),
+    tools: &(PathBuf, PathBuf, inputs::OwnScratch),
     t: &mut Tally,
 ) {
     let (fxc, warp, scratch) = tools;
@@ -535,7 +536,7 @@ fn run_program(
     let cases_path = scratch.join(format!("{tag}.cases.txt"));
     let results_path = scratch.join(format!("{tag}.warp.jsonl"));
     std::fs::write(&cases_path, text).unwrap();
-    let _oracle = primase_testdata::warp_exclusive();
+    let _oracle = inputs::warp_exclusive();
     let run = std::process::Command::new(warp)
         .arg(&cases_path)
         .arg(&results_path)
@@ -645,7 +646,7 @@ fn corpus(game: Game) {
     else {
         return;
     };
-    let scratch = primase_testdata::own_scratch("warp");
+    let scratch = inputs::own_scratch("warp");
     let all = debug("shader.warp_all").is_some_and(|v| v == "1");
     let tools = (fxc, warp, scratch);
     let mut t = Tally::default();

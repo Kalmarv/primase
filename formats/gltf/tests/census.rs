@@ -13,16 +13,18 @@
 // Test code: helpers outside #[test] functions unwrap too (clippy.toml allows it only inside them).
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use std::path::{Path, PathBuf};
 
-use primase_core::gate::{GateReport, Tolerance};
+use inputs::{Game, OracleSet, Query, expect_found, resolve};
 use primase_core::{
     Binding, BindingId, Deformation, Influences, Joint, JointId, Mesh, Name, Primitive, Rest, Semantic,
     Skeleton, Skin, Slot, Stream, Transform, WeightRule, World,
 };
 use primase_glb::Gltf;
 use primase_gltf::{GroupBy, WriteOptions, write};
-use primase_testdata::{Game, OracleSet, Query, expect_found, resolve};
+use primase_testdata::gate::{GateReport, Tolerance};
 
 /// A model folder's document: its `.glb`, else its `.gltf` with the buffers beside it.
 fn model(dir: &Path) -> Result<Gltf, String> {

@@ -8,7 +8,9 @@
 //! Three `.ymt` files (`slod_human` among them) are not resources (plain binaries): counted, not read.
 //!
 //! Needs the GTA install and its key material.
-use primase_testdata::{Game, install, keys};
+mod inputs;
+
+use inputs::{Game, install, keys};
 use rage_engine_formats::archive::archive_set::Install;
 use rage_engine_formats::archive::keys::Keys;
 use rage_engine_formats::archive::listing::Storage;

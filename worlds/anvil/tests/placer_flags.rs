@@ -5,9 +5,12 @@
 //! prototype carries its selector's switch distances (each level's far limit, rising), its finest level the
 //! prototype's own where the selector's first levels hold no reference: the dependencies fill them (the `_LOD0` and
 //! `_LOD1` meshes), so level 0 is present.
+mod inputs;
+
 use anvil_formats::archive::{Archive, At};
 use anvil_formats::entity::{ComponentBody, ENTITY, StoredEntity, query};
 use anvil_formats::lod::{LOD_SELECTOR, StoredLodSelector};
+use inputs::{Game, install};
 use primase_anvil::components::{
     AnvilCollisionFilter, AnvilEntityState, AnvilFake, AnvilLodDistances, AnvilLods,
 };
@@ -16,7 +19,6 @@ use primase_anvil::read::placements::{InstancedCollision, InstancedLevels, Place
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{Instance, World};
-use primase_testdata::{Game, install};
 
 const ORDER: [&str; 4] = [
     "DataPC_MAD_USNAT_patch_01.forge",

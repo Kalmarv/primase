@@ -45,3 +45,8 @@ pub const SOURCES: &[(&str, &[u8])] = &[
     ("foundations/sampling.rs", include_bytes!("sampling.rs")),
     ("foundations/vertex.rs", include_bytes!("vertex.rs")),
 ];
+
+/// The real-data inputs this crate's unit tests read (tests/inputs/mod.rs).
+#[cfg(test)]
+#[path = "../tests/inputs/mod.rs"]
+mod inputs;

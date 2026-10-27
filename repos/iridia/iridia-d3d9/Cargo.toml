@@ -14,7 +14,6 @@ iridia.workspace = true
 naga.workspace = true
 
 [dev-dependencies]
-primase-core.workspace = true
 iridia-exec.workspace = true
 primase-testdata.workspace = true
 

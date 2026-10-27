@@ -3,8 +3,11 @@
 //! per pixel, baked over one period of its own UV, against the notes' formula worked here (the stripes in f32, as the
 //! program compares them; the rest in f64) at every texel, and its texture references carrying its UV transform over
 //! the period.
+mod inputs;
+
 use anvil_formats::archive::{Archive, At};
 use anvil_formats::material::{MATERIAL, StoredMaterial};
+use inputs::{Game, install};
 use primase_anvil::components::{AnvilMaterial, AnvilTextureMap, MaterialBinding, MaterialValue};
 use primase_anvil::passes::BAKE_ANVIL_MATERIAL;
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
@@ -13,7 +16,6 @@ use primase_core::pass::{Options, PassLog};
 use primase_core::pbr::{PbrMaterial, UvTransform};
 use primase_core::{Entity, Texture, World};
 use primase_foundations::{sampling::Address, sampling::Transfer, sampling::footprint_lod};
-use primase_testdata::{Game, install};
 
 const SIZE: u32 = 128;
 

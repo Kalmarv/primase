@@ -1,8 +1,10 @@
 //! Independent Pillow channel-statistics oracle for the source DDS census.
 //! BC interpolation conventions may differ by one UNORM8 step. BC4's Pillow
 //! grayscale expansion is compared on R only, not its replicated G/B channels.
+mod inputs;
+
+use inputs::{Game, OracleSet, oracle};
 use primase_core::TexFormat;
-use primase_testdata::{Game, OracleSet, oracle};
 use primase_texcodec::TexDecoder;
 use serde::Deserialize;
 #[derive(Deserialize)]

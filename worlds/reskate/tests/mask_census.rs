@@ -1,12 +1,14 @@
 //! Independent RGBA-byte hashes for caller-provided PNGs and explicit material factors.
 //! This covers converter inputs, not a full scene bridge or native rendering.
+mod inputs;
+
+use inputs::{Game, OracleSet, oracle};
 use primase_core::pbr::{PbrMaterial, TextureRef};
 use primase_core::{ColorSpace, Instance, Mesh, Primitive, TexFormat, TexRole, Texture, World};
 use primase_reskate::{
     components::SkateMaterial,
     passes::{RaiseOptions, raise_skate},
 };
-use primase_testdata::{Game, OracleSet, oracle};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;

@@ -1,5 +1,8 @@
 //! Real MeshShapes read into a world through a stated frame, lowered to collision and drawn, under the pass manager
 //! with its checks on (Riders Republic build 25394987).
+mod inputs;
+
+use inputs::{Game, install_file};
 use primase_anvil::components::AnvilMeshShape;
 use primase_anvil::passes::{LowerAnvilCollision, SurfaceBy};
 use primase_anvil::read::shapes::read_mesh_shapes;
@@ -7,7 +10,6 @@ use primase_core::frame::{Axis, SourceFrame};
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::{Collision, Instance, Mesh, Name, Surfaces, Transform, World};
 use primase_meshops::DrawCollision;
-use primase_testdata::{Game, install_file};
 
 #[test]
 fn real_shapes_read_lower_and_draw() {

@@ -4,9 +4,12 @@
 //! (`render_map`, `map-clip{rests=source,reparented=refuse}`). Exact: at every time checked, each render bone composes to
 //! the model-space transform of its animation joint under the same clip, within 1e-5.
 
+mod inputs;
+
 use std::collections::BTreeMap;
 
 use frostbite_formats::folder::{Folder, Source};
+use inputs::{Game, Tool, install_file, tool};
 use primase_animation::pose::{evaluate, locals, model_transforms};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{Clip, JointMap, Skeleton, World};
@@ -15,7 +18,6 @@ use primase_reskate::game::clip::SkateClip;
 use primase_reskate::game::rig::{insert_rig, render_map};
 use primase_reskate::game::skeleton::read_skeleton;
 use primase_reskate::read::game::{read_clip, read_rig};
-use primase_testdata::{Game, Tool, install_file, tool};
 
 type R = Result<(), Box<dyn std::error::Error>>;
 

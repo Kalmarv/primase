@@ -13,10 +13,12 @@
 //!   (and indices of 255 in lanes with weight): a layout of those three the reader does not know. They are counted,
 //!   not skipped: a fourth fails.
 //!
-//! The counts are printed. Needs the GTA install and its key material (`primase_testdata::install` and `keys`).
+//! The counts are printed. Needs the GTA install and its key material (`inputs::install` and `keys`).
+mod inputs;
+
 use std::collections::BTreeSet;
 
-use primase_testdata::{Game, install, keys};
+use inputs::{Game, install, keys};
 use rage_engine_formats::archive::archive_set::Install;
 use rage_engine_formats::archive::keys::Keys;
 use rage_engine_formats::drawable::{Drawable, DrawableDictionary, Fragment, Geometry};

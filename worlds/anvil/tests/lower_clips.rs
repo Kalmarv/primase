@@ -2,12 +2,15 @@
 //! unread and one of a bone the rig lacks, the root-motion pair), and on real Entities of Riders Republic's forges that
 //! own a SkeletonComponent and an AnimComponent, placed through the Placer and lowered under the pass manager with its
 //! checks on.
+mod inputs;
+
 use anvil_formats::animation::StoredAnimation;
 use anvil_formats::animation::StoredEvents;
 use anvil_formats::animation::StoredTrack;
 use anvil_formats::animation::Times;
 use anvil_formats::archive::Archive;
 use anvil_formats::listing::Kind;
+use inputs::{Game, install};
 use primase_anvil::components::{AnvilClip, AnvilClipBinding};
 use primase_anvil::passes::{
     LOWER_ANVIL_CLIPS, LowerAnvilClips, LowerAnvilLods, LowerAnvilMesh, LowerAnvilRig, LowerAnvilSkin,
@@ -20,7 +23,6 @@ use primase_core::pass::{Options, PassManager, PassRegistry, Pipeline, RunReport
 use primase_core::rig::RigInstance;
 use primase_core::skeleton::{Joint, JointId, Rest, Skeleton};
 use primase_core::{Entity, Name, Transform, World};
-use primase_testdata::{Game, install};
 
 fn floats(v: &[f32]) -> Vec<u8> {
     v.iter().flat_map(|x| x.to_le_bytes()).collect()

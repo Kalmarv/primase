@@ -6,10 +6,12 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use std::collections::{BTreeMap, HashMap};
 
-use primase_core::gate::{GateReport, Tolerance, compare_json};
-use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
+use inputs::{Game, OracleSet, Tool, install_file, oracle, tool};
+use primase_testdata::gate::{GateReport, Tolerance, compare_json};
 use primase_unity::{SerializedFile, TypeTreePackage};
 use serde_json::{Value as Json, json};
 use sha2::{Digest, Sha256};

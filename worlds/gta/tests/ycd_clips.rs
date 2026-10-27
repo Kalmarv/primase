@@ -10,8 +10,11 @@
 //! rotation track's first key is nearer the rest rotation as stored than as its inverse. The counts are printed.
 //!
 //! Needs the GTA install and its key material.
+mod inputs;
+
 use std::collections::BTreeMap;
 
+use inputs::{Game, install, keys};
 use primase_core::Entity;
 use primase_core::asset::{Asset, Role};
 use primase_core::clip::{Clip, ClipTarget, Property};
@@ -19,7 +22,6 @@ use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::skeleton::{Rest, Skeleton};
 use primase_gta::components::GtaAnimation;
 use primase_gta::read::source::GtaSource;
-use primase_testdata::{Game, install, keys};
 use rage_engine_formats::archive::keys::Keys;
 use rage_engine_formats::archive::listing::Storage;
 use rage_engine_formats::ycd::ClipDictionary;

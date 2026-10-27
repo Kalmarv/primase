@@ -1,5 +1,7 @@
 //! A MeshShape body's section run: bodies laid out here by hand, their refusals, and two real MeshShapes whose
 //! prefixes, section runs and tails were hand-checked in a separate read-only decode.
+mod inputs;
+
 use std::fs::File;
 
 use anvil_formats::data::{Resource, read_entry};
@@ -7,7 +9,7 @@ use anvil_formats::forge::Forge;
 use anvil_formats::mesh_shape::{
     COUNTS, EDGE_FACES, Error, FACE_EDGES, FACES, MESH_SHAPE, MeshShape, NO_FACE, POSITIONS,
 };
-use primase_testdata::{Game, install_file};
+use inputs::{Game, install_file};
 
 /// A body: the prefix (a u32 holding its first four bytes, a byte, run length), the sections (type, marker, payload; size = 8 + payload), a tail.
 fn body(version: u32, flag: u8, run: Option<u32>, sections: &[(u16, u16, &[u8])], tail: &[u8]) -> Vec<u8> {

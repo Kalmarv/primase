@@ -3,10 +3,12 @@
 //! they are vertex-weighted (version 1, a colour attribute) for a destination that blends by vertex weights.
 //!
 //! Needs `installs.gta` and `keys.gta`.
+mod inputs;
+
+use inputs::{Game, install, keys};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{LayeredMaterial, World};
 use primase_gta::read::source::GtaSource;
-use primase_testdata::{Game, install, keys};
 use serde_json::Value;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;

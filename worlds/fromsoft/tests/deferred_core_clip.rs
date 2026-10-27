@@ -1,4 +1,6 @@
 //! Opt-in installed proof of read-plan/load-one. Never launches a game executable.
+mod inputs;
+
 use primase_core::convert::Reader;
 use primase_core::{Asset, Clip, ClipKey, Name, Role};
 use primase_fromsoft::{Install, sekiro};
@@ -9,10 +11,10 @@ use primase_havok::world::HavokAnimation;
 #[allow(unsafe_code)]
 fn a_plan_loads_one_clip_as_read_on_its_original_entity()
 -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let Some(root) = primase_testdata::install(primase_testdata::Game::Sekiro) else {
+    let Some(root) = inputs::install(inputs::Game::Sekiro) else {
         return Ok(());
     };
-    let Some(codec) = primase_testdata::oodle(primase_testdata::Tool::Oodle6) else {
+    let Some(codec) = inputs::oodle(inputs::Tool::Oodle6) else {
         return Ok(());
     };
     // SAFETY: the test configuration supplies the trusted installed codec.

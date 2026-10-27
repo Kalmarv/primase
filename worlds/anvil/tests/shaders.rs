@@ -3,10 +3,12 @@
 //! pixel program lifted by iridia-dxbc, the refusals counted by their message (numbers taken out), most first: what the
 //! lift lacks, by how many pixel shaders it stops. A count, not an oracle. Run by hand: `cargo test -p primase-anvil --test shaders -- --ignored --nocapture`.
 
+mod inputs;
+
 use std::collections::BTreeMap;
 
 use anvil_formats::shader_pack::containers;
-use primase_testdata::{Game, install};
+use inputs::{Game, install};
 
 /// A message with its digits taken out, so one feature counts once.
 fn kind(message: &str) -> String {

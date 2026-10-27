@@ -1,9 +1,9 @@
 //! D3D pixels exact against bcdec; independent C# and Pillow values within one channel level.
-use primase_core::{
-    TexFormat,
-    gate::{GateReport, Tolerance},
-};
-use primase_testdata::{Game, OracleSet, Tool, oracle, tool};
+mod inputs;
+
+use inputs::{Game, OracleSet, Tool, oracle, tool};
+use primase_core::TexFormat;
+use primase_testdata::gate::{GateReport, Tolerance};
 use primase_texcodec::{Bcdec, Decoder, TexDecoder};
 use std::{
     collections::BTreeMap,

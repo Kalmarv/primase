@@ -1,12 +1,14 @@
 //! The grid overview ([`primase_anvil::read::overview`]) on Riders Republic's forges (`installs.riders`): every
 //! grid's layout and cells from the tables, the block counts as the notes and the reader's own listings give them.
+mod inputs;
+
+use inputs::{Game, install};
 use primase_anvil::read::convert::{
     AnvilOptions, AnvilReader, CellSelection, Edition, ForgeFile, GridSelection,
 };
 use primase_anvil::read::overview::{Counts, grids_of};
 use primase_anvil::read::placements::{InstancedCollision, InstancedLevels};
 use primase_core::frame::SourceFrame;
-use primase_testdata::{Game, install};
 
 fn forges(dir: &std::path::Path, files: [(&str, Edition); 2]) -> Vec<ForgeFile> {
     files

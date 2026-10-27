@@ -13,12 +13,14 @@
 //!
 //! Needs the WARP oracle program with the `d3d11ts` case form (the configured `Tool::Warp`), `tools.fxc` and the
 //! scratch folder. Every program is compiled here from the HLSL below, so the cases are the whole of the input.
+mod inputs;
+
+use inputs::{Tool, own_scratch, tool};
 use iridia::TessTopology;
 use iridia_dxbc::lift;
 use iridia_exec::Constants;
 use iridia_exec::tessellation::TessellationShader;
 use iridia_exec::{Sample, Sampler};
-use primase_testdata::{Tool, own_scratch, tool};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -357,7 +359,7 @@ fn tessellated_patches_are_the_ones_warp_makes() {
                 let cases_path = dir.join(format!("{tag}.cases.txt"));
                 let results_path = dir.join(format!("{tag}.results.jsonl"));
                 std::fs::write(&cases_path, text).unwrap();
-                let _oracle = primase_testdata::warp_exclusive();
+                let _oracle = inputs::warp_exclusive();
                 let run = std::process::Command::new(&warp)
                     .arg(&cases_path)
                     .arg(&results_path)

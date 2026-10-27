@@ -2,10 +2,12 @@
 //! census counts them (docs/types.md "Skeleton": 1,138 consumed exactly), with this reader's own counts: the bones,
 //! the pose groups, poses and pose bones, the IKData and Reflex3 constraints, and the bone tree's invariants (a parent
 //! and the root name bones of the skeleton, each bone's key low half its position, every rotation of unit length).
+mod inputs;
+
 use anvil_formats::archive::Archive;
 use anvil_formats::listing::Kind;
 use anvil_formats::skeleton::StoredSkeleton;
-use primase_testdata::{Game, install};
+use inputs::{Game, install};
 
 #[test]
 fn every_skeleton_reads_and_its_tree_holds() {

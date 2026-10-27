@@ -1,6 +1,9 @@
 //! The disc's level archives: manifest from MAIN.DB and the archives' names, SCP nodes and spot chunks, spawns,
 //! splines and lights.
 //! Counts are those of the recon census (`scratch/scene`), recounted here by this reader.
+mod inputs;
+
+use inputs::{Game, Query, expect_found, install, install_file};
 use primase_core::{Marker, frame::SourceFrame};
 use primase_shred::read::database::Database;
 use primase_shred::{
@@ -13,7 +16,6 @@ use primase_shred::{
         scp_tables,
     },
 };
-use primase_testdata::{Game, Query, expect_found, install, install_file};
 use std::path::{Path, PathBuf};
 
 fn paks(dir: &Path) -> Vec<PathBuf> {

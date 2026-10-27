@@ -1,8 +1,11 @@
 //! MAD_Tex1_Graffiti_Mode_DecalFX's placed Material (Riders Republic build 25394987; docs/material-spec.md §27.10)
 //! lowered by `lower-anvil-material`: its team colour to the 2.2 as the base colour, its atlas's alpha at the logo's
 //! cell (worked by hand from its shader's cell formula), cut out at its AlphaTestValue over 255.
+mod inputs;
+
 use anvil_formats::archive::{Archive, At};
 use anvil_formats::material::{MATERIAL, StoredMaterial};
+use inputs::{Game, install};
 use primase_anvil::components::{AnvilMaterial, MaterialBinding, MaterialValue};
 use primase_anvil::passes::{AlphaChoice, Decals1Cutout, LowerAnvilMaterial, ShaderUv};
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
@@ -10,7 +13,6 @@ use primase_core::frame::SourceFrame;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::{AlphaMode, PbrMaterial, UvTransform};
 use primase_core::{Name, NormalGreen, Texture, World};
-use primase_testdata::{Game, install};
 
 /// The value at `cb3` row `row` of `m`: a scalar's (in `.x`) or a vector's.
 fn row(m: &AnvilMaterial, row: u32) -> [f64; 4] {

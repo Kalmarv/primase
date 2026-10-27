@@ -1,5 +1,8 @@
 //! Source census, not a visibility oracle. Native/hash proof and hand-worked fixtures cover interpretation;
 //! this checks all ten installed base maps and every layer PAK whose quartet namespace names that map.
+mod inputs;
+
+use inputs::{Game, install, install_file};
 use primase_core::{Instance, convert::Reader, frame::SourceFrame};
 use primase_shred::{
     components::{SessionGraph, SourcePlacement},
@@ -9,7 +12,6 @@ use primase_shred::{
         pak::Pak,
     },
 };
-use primase_testdata::{Game, install, install_file};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[test]

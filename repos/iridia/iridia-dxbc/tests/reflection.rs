@@ -1,4 +1,6 @@
 #![allow(clippy::unwrap_used)]
+mod inputs;
+
 use iridia::{BufferKind, ConstantType, D3dClass, ResourceKind, ScalarType, Value};
 mod common;
 use std::collections::BTreeMap;
@@ -177,11 +179,7 @@ fn leaves<'a>(
 
 #[test]
 fn reflected_bindings_match_independent_disassembly() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(root) = primase_testdata::oracle(
-        primase_testdata::OracleSet::Corpus,
-        primase_testdata::Game::General,
-        "dxbc",
-    ) else {
+    let Some(root) = inputs::oracle(inputs::OracleSet::Corpus, inputs::Game::General, "dxbc") else {
         return Ok(());
     };
     let (mut shaders, mut fields, mut bindings, mut inputs) = (0, 0, 0, 0);

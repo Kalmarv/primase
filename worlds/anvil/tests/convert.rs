@@ -2,8 +2,11 @@
 //! or a list selects, the objects they list (each cell's `GridCellDataBlock` count, as hand-counted in the notes:
 //! docs/placement.md §5 for WhiteRoom, docs/skate-plan.md §0 for the CITYSCHOOL campus), the marks of where each was
 //! listed, the reader's namespaces and the load step. `select-anvil-listed` is tested on a world laid out by hand.
+mod inputs;
+
 use std::collections::BTreeSet;
 
+use inputs::{Game, install};
 use primase_anvil::components::{
     AnvilBounds, AnvilCollisionFilter, AnvilListed, AnvilMesh, AnvilTerrain, ListedBy,
 };
@@ -16,7 +19,6 @@ use primase_core::convert::{Reader, check_emits};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Pass, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::{Entity, Instance, Name, Transform, World};
-use primase_testdata::{Game, install};
 
 fn whiteroom(dir: &std::path::Path) -> AnvilOptions {
     AnvilOptions {

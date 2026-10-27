@@ -9,6 +9,8 @@
 //! (`oracles.baseline.sekiro/ktx2-tiles`) when configured, against the bounds the README states.
 #![cfg(all(feature = "ktx2", feature = "fixture"))]
 #![allow(clippy::unwrap_used)]
+mod inputs;
+
 use basisu::{DecodeFlags, TargetFormat, Transcoder};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -364,11 +366,7 @@ fn the_synthetic_export_decodes_and_keeps_its_bounds() -> R<()> {
 
 #[test]
 fn a_real_export_decodes_and_keeps_the_measured_bounds() -> R<()> {
-    let Some(dir) = primase_testdata::oracle(
-        primase_testdata::OracleSet::Baseline,
-        primase_testdata::Game::Sekiro,
-        "ktx2-tiles",
-    ) else {
+    let Some(dir) = inputs::oracle(inputs::OracleSet::Baseline, inputs::Game::Sekiro, "ktx2-tiles") else {
         return Ok(());
     };
     let a = audit(&dir)?;

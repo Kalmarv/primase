@@ -4,7 +4,7 @@
 use iridia::{ResourceKind, ShaderFormat};
 use iridia_d3d9::{lift, read};
 use iridia_exec::{PixelShader, ProgramShader, Sample};
-use primase_core::gate::{GateReport, Tolerance};
+use primase_testdata::gate::{GateReport, Tolerance};
 
 fn program(body: &[u32]) -> Vec<u8> {
     [&[0xffff_0300][..], body, &[0xffff][..]]

@@ -12,6 +12,8 @@
 //! whose install is not configured prints nothing. Run it as one job: `cargo test -p primase-checks --test
 //! binding_census -- --nocapture --test-threads=1`.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::too_many_lines)]
+mod inputs;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use iridia_interface::{ConstantRole, InputRole, OutputRole, RenderState};
@@ -181,10 +183,10 @@ fn print(v: &Value) {
 
 #[test]
 fn gta_vespucci() {
+    use inputs::{Game, install, keys};
     use primase_gta::components::GtaShader;
     use primase_gta::passes::resolve_shaders::RESOLVE_GTA_SHADERS;
     use primase_gta::read::source::GtaSource;
-    use primase_testdata::{Game, install, keys};
     let (Some(dir), Some(keys)) = (install(Game::Gta), keys(Game::Gta)) else {
         return;
     };
@@ -220,6 +222,7 @@ fn gta_vespucci() {
 
 #[test]
 fn rr_scenes() {
+    use inputs::{Game, install};
     use primase_anvil::components::AnvilMaterial;
     use primase_anvil::passes::RESOLVE_ANVIL_SHADERS;
     use primase_anvil::read::convert::{
@@ -229,7 +232,6 @@ fn rr_scenes() {
     use primase_core::Instance;
     use primase_core::convert::Reader;
     use primase_core::frame::SourceFrame;
-    use primase_testdata::{Game, install};
     let Some(dir) = install(Game::Riders) else {
         return;
     };
@@ -361,7 +363,7 @@ fn unity_scene(game: &str, label: &str, data: &std::path::Path, tpk: &std::path:
 
 #[test]
 fn unity_levels() {
-    use primase_testdata::{Game, Tool, install_file, tool};
+    use inputs::{Game, Tool, install_file, tool};
     let Some(tpk) = tool(Tool::UnityTpk) else {
         return;
     };
@@ -406,9 +408,9 @@ fn oodle(path: std::path::PathBuf) -> primase_foundations::compress::oodle::Oodl
 
 #[test]
 fn fromsoft_areas() {
+    use inputs::{Game, Tool, install, keys, tool};
     use primase_fromsoft::materials::Material;
     use primase_fromsoft::{Game as FsGame, Install, Keys, dcx::Decoder, sekiro};
-    use primase_testdata::{Game, Tool, install, keys, tool};
     let Some(dll) = tool(Tool::Oodle6) else {
         return;
     };
@@ -474,11 +476,11 @@ fn fromsoft_areas() {
 
 #[test]
 fn stuntboost_bed() {
+    use inputs::{Game, install};
     use primase_monogame::mgfx::Effect;
     use primase_monogame::xnb::Xnb;
     use primase_stuntboost::components::StuntboostMaterial;
     use primase_stuntboost::read::level::read_level;
-    use primase_testdata::{Game, install};
     let Some(root) = install(Game::Stuntboost) else {
         return;
     };

@@ -7,8 +7,11 @@
 //!
 //! Needs `installs.riders`.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod inputs;
+
 use std::collections::{BTreeMap, BTreeSet};
 
+use inputs::{Game, install};
 use iridia_interface::Stage;
 use primase_anvil::passes::RESOLVE_ANVIL_SHADERS;
 use primase_anvil::read::convert::{
@@ -20,7 +23,6 @@ use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassLog};
 use primase_core::{Instance, World};
 use primase_core::{shader::Shader, shader::ShaderBinding};
-use primase_testdata::{Game, install};
 
 #[test]
 fn how_the_programs_read_the_engine_buffers() {
@@ -110,7 +112,7 @@ fn how_the_programs_read_the_engine_buffers() {
         );
     }
     {
-        let dump = primase_testdata::scratch().join("anvil-engine-use");
+        let dump = inputs::scratch().join("anvil-engine-use");
         std::fs::create_dir_all(&dump).unwrap();
         for (stage, (_, bytes)) in smallest {
             let lifted = iridia_dxbc::lift(&bytes).unwrap();

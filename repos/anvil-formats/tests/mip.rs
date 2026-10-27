@@ -1,12 +1,14 @@
 //! Real CompiledMips read as stored (Riders Republic build 25394987): the four a separate read-only decode checked
 //! (games/riders-republic docs/recon/compiled-mip-reader-request.md, f9925f0).
+mod inputs;
+
 use std::fs::File;
 
 use anvil_formats::archive::MAX_RECORD;
 use anvil_formats::data::{Resource, read_entry};
 use anvil_formats::forge::Forge;
 use anvil_formats::mip::{COMPILED_MIP, StoredMip};
-use primase_testdata::{Game, install_file};
+use inputs::{Game, install_file};
 
 #[test]
 fn four_mips_read_their_envelopes() {

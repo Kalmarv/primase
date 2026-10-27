@@ -3,14 +3,16 @@
 //! meshes without encoding a texture): a GTA region converted to a ReSkate map runs,
 //! up to the writer, with the ReSkate passes its documented recipe gives.
 
+mod inputs;
+
 use std::sync::{Arc, Mutex};
 
+use inputs::{Game, install, keys};
 use primase_core::World;
 use primase_core::convert::{Finished, Report, Writer, convert};
 use primase_core::pass::{PassManager, PassRegistry, Target};
 use primase_gta::convert::{GtaOptions, GtaReader};
 use primase_reskate::{AssembledMaterial, EncodingOptions, assembled_materials};
-use primase_testdata::{Game, install, keys};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 

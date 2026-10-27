@@ -1,7 +1,10 @@
 //! The grass system on Riders Republic's forges (`installs.riders`): the setup Entity of the whole-world cell, its 46
 //! models and its library, and the terrain nodes' group rasters, as the notes count them (docs/grass.md §2, §3).
+mod inputs;
+
 use std::collections::BTreeMap;
 
+use inputs::{Game, install};
 use primase_anvil::components::{AnvilGrass, AnvilGrassModel, AnvilMesh, AnvilTerrain, AnvilTerrainGroups};
 use primase_anvil::read::convert::{
     AnvilOptions, AnvilReader, CellSelection, Edition, ForgeFile, GridSelection, TerrainSelection,
@@ -10,7 +13,6 @@ use primase_anvil::read::placements::{InstancedCollision, InstancedLevels};
 use primase_core::convert::Reader;
 use primase_core::frame::SourceFrame;
 use primase_core::{Instance, World};
-use primase_testdata::{Game, install};
 
 fn usnat(
     dir: &std::path::Path,

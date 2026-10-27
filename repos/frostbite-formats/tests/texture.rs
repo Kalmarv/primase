@@ -8,11 +8,13 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use frostbite_formats::bundle;
 use frostbite_formats::folder::{Folder, Source};
 use frostbite_formats::texture::{self, Storage, TextureHeader};
+use inputs::{Game, Tool, install_file, tool};
 use primase_foundations::compress::oodle::{Oodle, Version};
-use primase_testdata::{Game, Tool, install_file, tool};
 use std::collections::BTreeMap;
 
 type R = Result<(), Box<dyn std::error::Error>>;

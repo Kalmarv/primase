@@ -2,6 +2,8 @@
 //! Sekiro's binding rules (`resolve`) and the `resolve-fromsoft-shaders` pass, on one layered program built to
 //! Sekiro's naming (tests/fixtures/layered.hlsl, compiled with fxc): the constants, texture slots and outputs a
 //! layered material's binding holds, worked out from the HLSL, fxc's listing of its buffers and the material.
+mod inputs;
+
 use iridia_exec::PixelShader;
 use iridia_exec::ProgramShader;
 use iridia_interface::{

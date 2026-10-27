@@ -2,10 +2,12 @@
 //! (read::ddecal), against the notes' census (docs/entity-grammar.md §9.2, §9.3): 5,490 components, 20,209 model
 //! references, 1,355,338 records, every item naming a model it lists (34,477 items over the base forge and its patch),
 //! every record's window inside the texture (offset + width <= 1); every DDecalModel read.
+mod inputs;
+
 use anvil_formats::archive::{Archive, At};
 use anvil_formats::ddecal::{DDECAL_MODEL, HOUDINI_DECAL_INSTANCER, StoredDecalModel, StoredDeferredDecals};
 use anvil_formats::entity::{ComponentBody, ENTITY, StoredEntity};
-use primase_testdata::{Game, install};
+use inputs::{Game, install};
 
 #[test]
 fn every_deferred_decal_of_the_base_forge_reads() {

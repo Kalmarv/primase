@@ -3,6 +3,8 @@
 //! (`oracles.soulsformats.elden/census`). A FLVER the reference refuses (a record with `error`) must be refused by ours
 //! too, except a SpeedTree FLVER: the reference refuses every one of Elden Ring's (an index out of range), ours
 //! reads their stored members; they are counted.
+mod inputs;
+
 use primase_fromsoft::{Binder, Game, NameDictionary, bhd::PathHash, dcx::Decoder, flver::Model};
 
 use sha2::{Digest, Sha256};
@@ -12,7 +14,7 @@ mod common;
 #[allow(unsafe_code)]
 mod native {
     pub fn load(
-        path: primase_testdata::OodleLibrary,
+        path: crate::inputs::OodleLibrary,
     ) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
         // SAFETY: caller explicitly supplies a trusted version-6 native library.
         unsafe {
@@ -303,7 +305,7 @@ fn visit(
 }
 #[test]
 fn all_flver_models() -> Result<()> {
-    let Some(dll) = primase_testdata::oodle(primase_testdata::Tool::Oodle6) else {
+    let Some(dll) = inputs::oodle(inputs::Tool::Oodle6) else {
         return Ok(());
     };
     let dll = native::load(dll)?;
@@ -314,29 +316,13 @@ fn all_flver_models() -> Result<()> {
     for (game, oracle, names) in [
         (
             Game::Sekiro,
-            primase_testdata::oracle(
-                primase_testdata::OracleSet::SoulsFormats,
-                primase_testdata::Game::Sekiro,
-                "census",
-            ),
-            primase_testdata::oracle(
-                primase_testdata::OracleSet::Uxm,
-                primase_testdata::Game::Sekiro,
-                "dictionary.txt",
-            ),
+            inputs::oracle(inputs::OracleSet::SoulsFormats, inputs::Game::Sekiro, "census"),
+            inputs::oracle(inputs::OracleSet::Uxm, inputs::Game::Sekiro, "dictionary.txt"),
         ),
         (
             Game::EldenRing,
-            primase_testdata::oracle(
-                primase_testdata::OracleSet::SoulsFormats,
-                primase_testdata::Game::Elden,
-                "census",
-            ),
-            primase_testdata::oracle(
-                primase_testdata::OracleSet::Uxm,
-                primase_testdata::Game::Elden,
-                "dictionary.txt",
-            ),
+            inputs::oracle(inputs::OracleSet::SoulsFormats, inputs::Game::Elden, "census"),
+            inputs::oracle(inputs::OracleSet::Uxm, inputs::Game::Elden, "dictionary.txt"),
         ),
     ] {
         let (Some(archive), Some(oracle), Some(names)) = (common::archive(game)?, oracle, names) else {

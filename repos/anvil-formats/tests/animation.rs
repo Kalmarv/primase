@@ -1,11 +1,13 @@
 //! Every Animation of Riders Republic's forges read to its last byte: the resource's longer header (file header 1 and
 //! its table), the body's header, mappings and tracks, with the counts the census of the six forges (build 25394987)
 //! gives.
+mod inputs;
+
 use std::collections::BTreeMap;
 
 use anvil_formats::animation::{ANIMATION, StoredAnimation};
 use anvil_formats::archive::{Archive, At};
-use primase_testdata::{Game, install};
+use inputs::{Game, install};
 
 #[test]
 fn every_animation_reads_to_its_last_byte() {

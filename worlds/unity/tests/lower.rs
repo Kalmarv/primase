@@ -13,15 +13,17 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use inputs::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_core::Texture;
 use primase_core::World;
 use primase_core::pbr::{AlphaMode, PbrMaterial, UvTransform};
 use primase_foundations::color::linear_to_srgb;
 use primase_image::{Samples, read_png};
-use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_texcodec::{Decoder, TexDecoder};
 use primase_unity::TypeTreePackage;
 use primase_unity::components::UnityMaterial;

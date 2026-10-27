@@ -3,9 +3,11 @@
 //! for the lzo2a rows, through `tests/oracles/lzo2a.c`). Each row is
 //! `codec<TAB>input<TAB>reference`, a relative path relative to the TSV's folder; bytes stay outside the repository.
 //! Codec names: lz4, deflate, zlib, zlib-unterminated, lzo2a. Oodle uses the DLL module's gate instead.
-use primase_core::gate::{GateReport, Tolerance};
+mod inputs;
+
+use inputs::{Game, OracleSet, oracle};
 use primase_foundations::compress::{Decompressor, Deflate, Lz4, Lzo2a, Zlib, ZlibUnterminated};
-use primase_testdata::{Game, OracleSet, oracle};
+use primase_testdata::gate::{GateReport, Tolerance};
 #[test]
 fn corpus() -> Result<(), Box<dyn std::error::Error>> {
     let Some(path) = oracle(OracleSet::Corpus, Game::General, "codecs.tsv") else {
@@ -42,8 +44,8 @@ fn corpus() -> Result<(), Box<dyn std::error::Error>> {
             Err(e) => report.fail(fields[1], e.to_string()),
         }
     }
-    primase_testdata::expect_found(
-        primase_testdata::Query::Oracle(OracleSet::Corpus, Game::General, "codecs.tsv"),
+    inputs::expect_found(
+        inputs::Query::Oracle(OracleSet::Corpus, Game::General, "codecs.tsv"),
         "streams",
         rows,
     );

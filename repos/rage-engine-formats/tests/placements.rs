@@ -9,10 +9,12 @@
 //! - `known`: the pairs in [`KNOWN`], placements two packs both author.
 //!
 //! Needs `installs.gta` and `keys.gta`.
+mod inputs;
+
 use std::collections::BTreeMap;
 use std::fs::File;
 
-use primase_testdata::{Game, install, keys};
+use inputs::{Game, install, keys};
 use rage_engine_formats::archive::archive_set::MapState;
 use rage_engine_formats::archive::archive_set::{ArchiveSet, Install};
 use rage_engine_formats::archive::keys::Keys;

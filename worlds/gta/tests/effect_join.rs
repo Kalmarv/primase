@@ -9,12 +9,14 @@
 //! Needs `installs.gta` and `keys.gta`; the debug key `gta.region` (`x0,y0,x1,y1`) names the region, Vespucci
 //! Beach by default.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod inputs;
+
 use std::collections::BTreeSet;
 
+use inputs::{Game, debug, install, keys};
 use primase_core::World;
 use primase_gta::components::{GtaEffect, GtaMaterialEffect, GtaShader, GtaStage};
 use primase_gta::read::source::GtaSource;
-use primase_testdata::{Game, debug, install, keys};
 
 #[test]
 fn every_material_of_a_region_joins_its_effect() {

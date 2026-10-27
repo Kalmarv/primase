@@ -14,9 +14,11 @@
 //! message, and the test fails on any. The counts are printed.
 //!
 //! Needs the GTA install and its key material; the comparison also the oracle.
+mod inputs;
+
 use std::collections::{BTreeMap, HashMap};
 
-use primase_testdata::{Game, OracleSet, install, keys, oracle};
+use inputs::{Game, OracleSet, install, keys, oracle};
 use rage_engine_formats::archive::archive_set::Install;
 use rage_engine_formats::archive::keys::Keys;
 use rage_engine_formats::ycd::{Animation, ClipDictionary};

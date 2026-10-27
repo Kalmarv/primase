@@ -4,9 +4,11 @@
 //! against the same dump by sekiro_scene.rs. Not covered here: other part kinds (enemies, collisions, dummies) and map
 //! offsets, which the dump doesn't hold (an open coverage gap, CONTRIBUTING's real-data table). Elden Ring's layouts
 //! are checked whole, every part of every kind, against SoulsFormatsNEXT's reading of them.
-use primase_core::gate::{GateReport, Tolerance};
+mod inputs;
+
 use primase_fromsoft::msb::PartKind;
 use primase_fromsoft::{Archive, dcx::Decoder, msb::MapLayout};
+use primase_testdata::gate::{GateReport, Tolerance};
 
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -14,7 +16,7 @@ mod common;
 #[allow(unsafe_code)]
 mod native {
     pub fn load(
-        path: primase_testdata::OodleLibrary,
+        path: crate::inputs::OodleLibrary,
     ) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
         // SAFETY: caller explicitly supplies a trusted version-6 native library.
         unsafe {
@@ -44,17 +46,13 @@ fn bytes(v: &[f32]) -> Vec<u8> {
 
 #[test]
 fn stored_parts_match_an_independent_reading() -> Result<()> {
-    let Some(root) = primase_testdata::install(primase_testdata::Game::Sekiro) else {
+    let Some(root) = inputs::install(inputs::Game::Sekiro) else {
         return Ok(());
     };
-    let Some(dump) = primase_testdata::oracle(
-        primase_testdata::OracleSet::SoulsFormats,
-        primase_testdata::Game::Sekiro,
-        "m11_01",
-    ) else {
+    let Some(dump) = inputs::oracle(inputs::OracleSet::SoulsFormats, inputs::Game::Sekiro, "m11_01") else {
         return Ok(());
     };
-    let Some(dll) = primase_testdata::oodle(primase_testdata::Tool::Oodle6) else {
+    let Some(dll) = inputs::oodle(inputs::Tool::Oodle6) else {
         return Ok(());
     };
     let dll = native::load(dll)?;
@@ -127,16 +125,12 @@ fn every_layout_matches_an_independent_reading() -> Result<()> {
     use primase_fromsoft::Game;
     for (game, format) in [(
         Game::EldenRing,
-        primase_testdata::oracle(
-            primase_testdata::OracleSet::SoulsFormats,
-            primase_testdata::Game::Elden,
-            "format",
-        ),
+        inputs::oracle(inputs::OracleSet::SoulsFormats, inputs::Game::Elden, "format"),
     )] {
         let (Some(archive), Some(oracle), Some(dll)) = (
             common::archive(game)?,
             format,
-            primase_testdata::oodle(primase_testdata::Tool::Oodle6),
+            inputs::oodle(inputs::Tool::Oodle6),
         ) else {
             continue;
         };

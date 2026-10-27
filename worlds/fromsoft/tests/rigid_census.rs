@@ -6,10 +6,12 @@
 //! matrices against our f64 evaluation. The census is complete in both directions: the models the
 //! dump lists (and the ones it could not dump, with why) are exactly the models its MSB parts place, which are exactly
 //! the models our MSB reader's parts place.
+mod inputs;
+
+use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
 use primase_core::pass::PassLog;
 use primase_fromsoft::msb::{MapLayout, PartKind};
 use primase_fromsoft::{Archive, Binder, dcx::Decoder, flver::Model, rigid::lower_model};
-use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 use std::collections::BTreeSet;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[test]

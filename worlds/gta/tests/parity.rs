@@ -17,16 +17,18 @@
 //! reach), written to `gta-parity/list.txt` under the scratch folder.
 //!
 //! Needs `installs.gta` and `keys.gta`.
+mod inputs;
+
 use std::collections::BTreeSet;
 use std::fs::File;
 
 mod codewalker;
 
 use codewalker::{check_drawable, check_ytd};
+use inputs::{Game, OracleSet, install, keys, oracle};
 use primase_core::Instance;
 use primase_gta::components::{GtaArchetype, GtaEntity};
 use primase_gta::read::source::GtaSource;
-use primase_testdata::{Game, OracleSet, install, keys, oracle};
 use rage_engine_formats::archive::archive_set::{ArchiveSet, Install, MapState};
 use rage_engine_formats::archive::keys::Keys;
 use rage_engine_formats::drawable::{Drawable, DrawableDictionary, Fragment};
@@ -248,7 +250,7 @@ fn parity_list() {
     let (Some(dir), Some(key_dir)) = (install(Game::Gta), keys(Game::Gta)) else {
         return;
     };
-    let out = primase_testdata::scratch();
+    let out = inputs::scratch();
     let source = GtaSource::open(&dir, &key_dir).expect("install");
     let (install, keys) = open(&dir, &key_dir);
     let set = ArchiveSet::build(install, &keys, MapState::Online).expect("archive set");
@@ -386,8 +388,8 @@ fn parity_with_codewalker() {
             failed += 1;
         }
     }
-    primase_testdata::expect_found(
-        primase_testdata::Query::Oracle(OracleSet::CodeWalker, Game::Gta, "parity"),
+    inputs::expect_found(
+        inputs::Query::Oracle(OracleSet::CodeWalker, Game::Gta, "parity"),
         "dumped files",
         files,
     );

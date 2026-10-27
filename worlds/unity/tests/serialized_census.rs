@@ -2,7 +2,9 @@
 
 #![allow(clippy::unwrap_used)]
 
-use primase_testdata::{Game, OracleSet, install_file, oracle};
+mod inputs;
+
+use inputs::{Game, OracleSet, install_file, oracle};
 use std::collections::BTreeMap;
 
 use primase_unity::SerializedFile;

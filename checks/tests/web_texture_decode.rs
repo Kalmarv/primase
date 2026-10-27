@@ -1,8 +1,10 @@
 //! `prepare-web-textures` decodes a texture's stored level directly (`primase_image::texture_level_rgba8`) where the
 //! web writer used to decode the PNG the glTF writer made of it: on every texture of a real scene
 //! (`oracles.baseline.sekiro/scene`, slice A's skate scene), the two give the same RGBA bytes.
+mod inputs;
+
+use inputs::{Game, OracleSet, oracle};
 use primase_core::{Texture, World};
-use primase_testdata::{Game, OracleSet, oracle};
 
 #[test]
 fn direct_decoding_is_the_png_round_trip() -> Result<(), Box<dyn std::error::Error>> {

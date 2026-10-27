@@ -7,6 +7,8 @@
 // Test code: helpers outside #[test] functions unwrap too (clippy.toml allows it only inside them).
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use std::path::PathBuf;
 
 use primase_core::{Semantic, Stream};
@@ -293,11 +295,7 @@ fn check_model(root: &std::path::Path, name: &str) -> Seen {
 }
 
 fn root() -> Option<PathBuf> {
-    primase_testdata::oracle(
-        primase_testdata::OracleSet::Khronos,
-        primase_testdata::Game::General,
-        "sample-assets",
-    )
+    inputs::oracle(inputs::OracleSet::Khronos, inputs::Game::General, "sample-assets")
 }
 
 macro_rules! model {

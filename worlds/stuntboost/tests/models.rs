@@ -8,8 +8,10 @@
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
+mod inputs;
+
+use inputs::{Game, install};
 use primase_stuntboost::{model_gltf, model_image, models};
-use primase_testdata::{Game, install};
 
 #[test]
 fn m1_every_model_unwraps_and_the_skinned_ones_hold_their_joints_and_clips() {

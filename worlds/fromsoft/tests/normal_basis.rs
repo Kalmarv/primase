@@ -1,7 +1,9 @@
 //! Consumer basis proof. The sample manifest contains independent stored frames,
 //! not an exporter-selected green convention. Curl verdicts are measurements only.
+mod inputs;
+
+use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
 use primase_fromsoft::{flver::tangent_to_scene, sekiro::normals::consumer_basis};
-use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 mod common;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {

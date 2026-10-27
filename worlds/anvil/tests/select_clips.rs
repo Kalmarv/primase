@@ -2,12 +2,15 @@
 //! bound, a clip the entity already plays left out, the options), and on real Entities of Riders Republic's forges whose
 //! rigs are given the library's clips through the Placer, then chosen and lowered under the pass manager with its checks
 //! on.
+mod inputs;
+
 use std::sync::Arc;
 
 use anvil_formats::animation::StoredAnimation;
 use anvil_formats::animation::StoredEvents;
 use anvil_formats::archive::{Archive, At};
 use anvil_formats::listing::Kind;
+use inputs::{Game, install};
 use primase_anvil::components::{
     AnvilClip, AnvilClipBinding, AnvilClipCandidates, AnvilRigOccurrence, ClipCandidate, LibraryClip,
 };
@@ -20,7 +23,6 @@ use primase_core::clip::{Clip, ClipBinding, Extrapolation, Interpolation};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Options, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::{Entity, Name, World};
-use primase_testdata::{Game, install};
 
 fn animation() -> StoredAnimation {
     StoredAnimation {

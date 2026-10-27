@@ -3,8 +3,11 @@
 //! 32768` of a core point, its `divide by 32k` 1/32768 and `offset by 16k` -16384), its normal map at 16 times them;
 //! then `lower-anvil-world-uv` on a triangle placed twice: a copy for the second placement, each with its placement's
 //! coordinates.
+mod inputs;
+
 use anvil_formats::archive::{Archive, At};
 use anvil_formats::material::{MATERIAL, StoredMaterial};
+use inputs::{Game, install};
 use primase_anvil::components::{AnvilMaterial, AnvilWorldUv};
 use primase_anvil::passes::{AlphaChoice, Decals1Cutout, LowerAnvilMaterial, LowerAnvilWorldUv, ShaderUv};
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
@@ -12,7 +15,6 @@ use primase_core::frame::SourceFrame;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::{PbrMaterial, UvTransform};
 use primase_core::{Instance, Mesh, NormalGreen, Primitive, Semantic, Stream, Topology, Transform, World};
-use primase_testdata::{Game, install};
 use std::collections::BTreeMap;
 
 #[test]

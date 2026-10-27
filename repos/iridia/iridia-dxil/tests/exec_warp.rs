@@ -9,13 +9,15 @@
 //! and `tools.dxc` (for the oracle's vertex shader); it works in a folder `warp/p<pid>` of its own under the scratch folder (two runs at once do not share files). The vertex shader is
 //! generated from the container's interface ([`iridia_dxil::interface`]): every input varying read from
 //! `cbuffer Case : register(b0, space1) { uint4 r[32]; }`, row by register.
+mod inputs;
+
+use inputs::{OwnScratch, Tool, own_scratch, tool};
 use iridia::{D3dClass, Interface, InterpMode, InterpSampling, Program, ResourceId, ScalarType, SystemValue};
 use iridia_exec::{
     Backend, Element, Executable, ImageLoad, ImageQuery, ImageSample, ProgramShader, QueryKind, Resources,
     Runner,
 };
 use iridia_exec::{PixelShader, Sample};
-use primase_testdata::{OwnScratch, Tool, own_scratch, tool};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -268,7 +270,7 @@ fn compare(
     let cases_file = scratch.join(format!("{stem}.lifted.cases.txt"));
     let results = scratch.join(format!("{stem}.lifted.warp.jsonl"));
     std::fs::write(&cases_file, text).unwrap();
-    let _oracle = primase_testdata::warp_exclusive();
+    let _oracle = inputs::warp_exclusive();
     let run = std::process::Command::new(warp)
         .arg(&cases_file)
         .arg(&results)

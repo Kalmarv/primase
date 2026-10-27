@@ -4,6 +4,8 @@
 //! piece and asset part the reference lists is accounted for (a placement, or a model the archive lacks or whose face
 //! sets use no vertex; SpeedTree models are placed like any other), and each placement stands at the part's stored position, moved by
 //! its parent tile's offset where a parent places it: translation exact, with the core frame's z reversed.
+mod inputs;
+
 use primase_core::{Instance, Source, Transform, World};
 use primase_fromsoft::{Game, Install, Keys, dcx::Decoder, sekiro};
 
@@ -34,14 +36,10 @@ fn reference_parts(oracle: &std::path::Path, maps: &[&str]) -> Result<BTreeMap<S
 #[test]
 fn every_placed_part_is_accounted_for() -> Result<()> {
     let (Some(root), Some(keys), Some(oracle), Some(dll)) = (
-        primase_testdata::install(primase_testdata::Game::Elden),
-        primase_testdata::keys(primase_testdata::Game::Elden),
-        primase_testdata::oracle(
-            primase_testdata::OracleSet::SoulsFormats,
-            primase_testdata::Game::Elden,
-            "format",
-        ),
-        primase_testdata::oodle(primase_testdata::Tool::Oodle6),
+        inputs::install(inputs::Game::Elden),
+        inputs::keys(inputs::Game::Elden),
+        inputs::oracle(inputs::OracleSet::SoulsFormats, inputs::Game::Elden, "format"),
+        inputs::oodle(inputs::Tool::Oodle6),
     ) else {
         return Ok(());
     };

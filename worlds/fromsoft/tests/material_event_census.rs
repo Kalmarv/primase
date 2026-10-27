@@ -1,8 +1,10 @@
 //! Every discovered Elden Ring character TAE's authored event 198, without interpreting its unknown ramp fields.
 //! Main character names are exhaustively probed (c0000..c9999); companion binders come from the dictionary and
 //! authored marker members. No HKX, material texture or shader is decoded. One binder is held at a time.
+mod inputs;
+
+use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use primase_fromsoft::{Binder, Game, Install, Keys, NameDictionary, dcx::Decoder, sekiro, tae::Tae};
-use primase_testdata::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 mod common;
@@ -42,7 +44,7 @@ fn every_elden_character_material_event198_payload() -> Result<()> {
     let (Some(root), Some(key_dir), Some(dll)) =
         (install(Data::Elden), keys(Data::Elden), oodle(Tool::Oodle6))
     else {
-        println!("TAE198_SKIP=PRIMASE_DATA Elden install/keys/oodle6 not configured");
+        println!("TAE198_SKIP=GAME_DATA Elden install/keys/oodle6 not configured");
         return Ok(());
     };
     let codec = common::oodle(dll)?;

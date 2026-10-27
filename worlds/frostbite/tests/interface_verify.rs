@@ -9,14 +9,16 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use frostbite_formats::bundle::Kind;
 use frostbite_formats::bytecode::RTYPE;
 use frostbite_formats::folder::{Folder, Source};
+use inputs::{Game, Tool, install_file, tool};
 use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_frostbite::bytecode;
-use primase_testdata::{Game, Tool, install_file, tool};
 
 #[test]
 fn every_compiled_programs_interface_verifies_or_is_counted_by_rule() {

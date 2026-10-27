@@ -4,13 +4,15 @@
 //! arithmetic), every mesh's dynamic flag, palette and vertex count, and every vertex's position, bone indices and
 //! weights as stored (exact). Every texture its materials bind is read (some are kept in other characters' and shared
 //! packages). Then the character lowered with its skin verifies: `core.skin` and `core.mesh` hold together.
+mod inputs;
+
 use std::collections::BTreeSet;
 
+use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
 use primase_core::frame::{Axis, SourceFrame};
 use primase_core::{Skeleton, World};
 use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::rigid::SourceModel;
-use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 

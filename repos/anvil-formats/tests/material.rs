@@ -1,12 +1,14 @@
 //! Real Materials and a TextureSet read as stored, their references resolved within their forge (Riders Republic
 //! build 25394987; games/riders-republic docs/recon/material-reference-envelope.md, e244d10).
+mod inputs;
+
 use std::fs::File;
 
 use anvil_formats::archive::MAX_RECORD;
 use anvil_formats::data::{Resource, read_entry};
 use anvil_formats::forge::Forge;
 use anvil_formats::material::{MATERIAL, MATERIAL_TEMPLATE, StoredReferences, TEXTURE_MAP, TEXTURE_SET};
-use primase_testdata::{Game, install_file};
+use inputs::{Game, install_file};
 
 #[test]
 fn materials_and_a_texture_set_read_their_references() {

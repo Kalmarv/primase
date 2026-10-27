@@ -1,6 +1,9 @@
 //! The ten levels' `vfx_level_load_<level>` scripts of the decrypted scripts archive: every call has literal
 //! arguments and is read, each script sets fog exactly once, and `ShredReader` puts MIKE's parameters in its world.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod inputs;
+
+use inputs::{Game, OracleSet, install, oracle};
 use primase_core::{convert::Reader, frame::SourceFrame};
 use primase_shred::{
     components::{LevelParams, ScriptValue},
@@ -10,7 +13,6 @@ use primase_shred::{
         pak::Pak,
     },
 };
-use primase_testdata::{Game, OracleSet, install, oracle};
 
 const LEVELS: [&str; 10] = [
     "charlie", "delta", "echo", "foxtrot", "india", "juliet", "mike", "november", "oscar", "papa",

@@ -1,4 +1,7 @@
 //! All five explicitly selected animation containers. No motion/network decoding is claimed.
+mod inputs;
+
+use inputs::{Game, Query, expect_found, install};
 use primase_core::frame::{Axis, SourceFrame};
 use primase_shred::{
     components::ReferenceRig,
@@ -7,7 +10,6 @@ use primase_shred::{
         reference_rig::{Archive, read_reference_rigs},
     },
 };
-use primase_testdata::{Game, Query, expect_found, install};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[test]

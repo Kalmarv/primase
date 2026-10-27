@@ -13,9 +13,12 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use inputs::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_reskate::postcompile::fb::bundle;
 use primase_reskate::postcompile::fb::ebx::{
@@ -27,7 +30,6 @@ use primase_reskate::postcompile::levelroot::{
     self, DONOR_BUNDLE, DONOR_EBX, DONOR_TOC, Donor, DonorField, outside_pointers, point_at_strings,
     repair_document,
 };
-use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 
 type R<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -396,7 +398,7 @@ fn studio_level_root_is_repaired() -> R {
     let e = levelroot::check(&src).expect_err("Studio's level root points out of its document");
     assert!(e.to_string().contains("(a boxed value)"), "{e}");
 
-    let scratch = primase_testdata::scratch().join("reskate-levelroot");
+    let scratch = inputs::scratch().join("reskate-levelroot");
     #[allow(clippy::disallowed_methods, reason = "test scratch folder")]
     if scratch.exists() {
         std::fs::remove_dir_all(&scratch)?;

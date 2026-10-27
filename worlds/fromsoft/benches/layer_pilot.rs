@@ -7,10 +7,13 @@
 //! the oracle set it measures nothing.
 #![allow(clippy::unwrap_used)]
 
+#[path = "../tests/inputs/mod.rs"]
+mod inputs;
+
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use inputs::{Game, OracleSet, oracle};
 use primase_foundations::parallel::Threads;
 use primase_fromsoft::layer_bake::{Encoded, PipelineState};
-use primase_testdata::{Game, OracleSet, oracle};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::Path;

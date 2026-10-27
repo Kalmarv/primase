@@ -5,8 +5,11 @@
 //! vertex lies on the ground mesh `lower-anvil-terrain` draws with the same choices. And every DDecalModel of the
 //! Riders Republic forge (build 25394987) through the pass: 69 by name (the patch's one model replaces the base's
 //! MAD_DD_Orange_Line_01A: 70 with it), 16 drawn, 53 of the terrain family left out.
+mod inputs;
+
 use anvil_formats::archive::{Archive, At};
 use anvil_formats::ddecal::{DDECAL_MODEL, StoredDecalModel};
+use inputs::{Game, install};
 use primase_anvil::components::{
     AnvilDecalModel, AnvilDeferredDecals, AnvilTerrain, AnvilTextureMap, DeferredDecal, TerrainTile,
 };
@@ -22,7 +25,6 @@ use primase_core::{
     ColorSpace, Entity, Instance, Mesh, NormalGreen, Semantic, Stream, TexFormat, TexRole, Texture,
     Transform, World,
 };
-use primase_testdata::{Game, install};
 
 const FRAME: SourceFrame = SourceFrame::ENU;
 /// A height value's metres: range 2^23 at level 1 (2^23 x 2^(1 - 28)).

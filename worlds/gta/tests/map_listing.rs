@@ -6,6 +6,8 @@
 //! (`slod`) does not follow the entities' levels in the game's own files, so it is counted, not asserted.
 //!
 //! Needs `installs.gta` and `keys.gta`.
+mod inputs;
+
 use primase_foundations::parallel::Threads;
 use primase_gta::read::region::{States, archive_sets, list_maps};
 use rage_engine_formats::archive::archive_set::Install;
@@ -16,8 +18,8 @@ use rage_engine_formats::meta::Meta;
 #[test]
 fn every_listed_header_is_the_decoded_files() {
     let (Some(dir), Some(keys)) = (
-        primase_testdata::install(primase_testdata::Game::Gta),
-        primase_testdata::keys(primase_testdata::Game::Gta),
+        inputs::install(inputs::Game::Gta),
+        inputs::keys(inputs::Game::Gta),
     ) else {
         return;
     };

@@ -1,11 +1,13 @@
 //! A BuildTable laid out by hand (two columns, two rows, resources), and the census of every BuildTable of Riders
 //! Republic's forges read to its last byte: counts of columns, rows, properties and links, and that the rider part
 //! tables name what they should.
+mod inputs;
+
 use anvil_formats::archive::{Archive, At};
 use anvil_formats::build_table::BUILD_TABLE;
 use anvil_formats::build_table::BuildLink;
 use anvil_formats::build_table::StoredBuildTable;
-use primase_testdata::{Game, install};
+use inputs::{Game, install};
 
 fn u32s(v: &[u32]) -> Vec<u8> {
     v.iter().flat_map(|x| x.to_le_bytes()).collect()

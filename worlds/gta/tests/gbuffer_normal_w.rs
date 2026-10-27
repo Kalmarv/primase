@@ -18,8 +18,11 @@
 //! So the lane is not a role of its own in the vocabulary: it is the low-order bits of the normal's lanes, left Unknown
 //! with this evidence. Needs `installs.gta` and `keys.gta`.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod inputs;
+
 use std::collections::{BTreeMap, BTreeSet};
 
+use inputs::{Game, install, keys};
 use iridia_exec::ProgramShader;
 use iridia_exec::{
     Grid, Input, Invocation, Layout, PixelShader, View, Views, evaluate::Constants, evaluate_raw,
@@ -29,7 +32,6 @@ use primase_core::shader::Shader;
 use primase_gta::components::{GtaEffect, GtaStage};
 use primase_gta::passes::resolve_shaders::split_program_name;
 use primase_gta::read::source::GtaSource;
-use primase_testdata::{Game, install, keys};
 
 /// A program lifted and ready to run, or why not.
 fn executor(bytecode: &[u8]) -> Result<ProgramShader, String> {

@@ -1,13 +1,15 @@
 //! The ten levels' own `change_fog` calls through `lower-shred-fog`: each level gets linear fog whose distances and
 //! colour are the script's literals.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod inputs;
+
+use inputs::{Game, OracleSet, oracle};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{Atmosphere, FogFalloff, World};
 use primase_shred::read::{
     level_params::{ScriptInputs, read_level_params},
     pak::Pak,
 };
-use primase_testdata::{Game, OracleSet, oracle};
 
 const LEVELS: [&str; 10] = [
     "charlie", "delta", "echo", "foxtrot", "india", "juliet", "mike", "november", "oscar", "papa",

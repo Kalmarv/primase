@@ -2,12 +2,14 @@
 //! against a deterministic pixel-shuffled control, and RGB LUT axis affinity.
 //! These content properties check this disc; the layout itself comes from the
 //! published NVIDIA VTC description and RSX consumer, plus hand-worked fixtures.
+mod inputs;
+
+use inputs::{Depth, Game, Query, depth, expect_found, install, seed};
 use primase_core::{ColorSpace, TexRole};
 use primase_shred::read::{
     pak::Pak,
     texture::{Payload, Residency, TextureCatalog},
 };
-use primase_testdata::{Depth, Game, Query, depth, expect_found, install, seed};
 use primase_texcodec::{Decoder, TexDecoder, gcm::Volume};
 use std::path::{Path, PathBuf};
 

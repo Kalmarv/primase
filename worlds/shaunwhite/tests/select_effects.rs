@@ -1,9 +1,11 @@
 //! Levels 02 and 03 of the game: dropping the effects removes level 02's light-paint ribbons and keeps level 03's water.
 #![allow(clippy::unwrap_used, reason = "explicit gate assertions")]
+mod inputs;
+
+use inputs::{Game, install_file};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{Instance, Mesh, Name, World};
 use primase_shaunwhite::components::MaterialRef;
-use primase_testdata::{Game, install_file};
 
 /// The names of the placed meshes of `w`.
 fn placed(w: &World) -> Vec<String> {

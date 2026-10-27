@@ -14,12 +14,14 @@
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
+mod inputs;
+
 use std::collections::BTreeMap;
 
+use inputs::{Game, Tool, install, oodle};
 use primase_fromsoft::{Archive, Binder, dcx::Decoder};
 use primase_havok::animation::{Tracks, container};
 use primase_havok::{Compendium, Tagfile};
-use primase_testdata::{Game, Tool, install, oodle};
 
 /// The files the census expects not to read cleanly, by file name, and why.
 const KNOWN: [(&str, &str); 1] = [(r"c1090\hkx\a000_205000.hkx", "unsupported SDK version")];
@@ -28,7 +30,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 #[allow(unsafe_code)]
 fn native(
-    path: &primase_testdata::OodleLibrary,
+    path: &inputs::OodleLibrary,
 ) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
     // SAFETY: caller explicitly supplies a trusted native version-6 decoder.
     unsafe {

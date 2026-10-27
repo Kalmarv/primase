@@ -1,0 +1,17 @@
+[package]
+name = "primase-testdata"
+description = "Real-data inputs for tests: each consumer declares the game files, tools and oracle outputs its tests read; one machine-wide TOML file (GAME_DATA) says where they are, and what is not configured skips; gate reports for comparing against an oracle"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+toml.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

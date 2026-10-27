@@ -4,11 +4,13 @@
 //!
 //! Needs `installs.gta` and `keys.gta`; the debug key `gta.archive_filter` limits the archives to paths containing that
 //! text.
+mod inputs;
+
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::sync::Mutex;
 
-use primase_testdata::{Game, install, keys};
+use inputs::{Game, install, keys};
 use rage_engine_formats::archive::archive_set::Install;
 use rage_engine_formats::archive::keys::Keys;
 use rage_engine_formats::archive::rpf::EntryKind;
@@ -59,7 +61,7 @@ fn every_ybn_reads() {
     let (Some(dir), Some(key_dir)) = (install(Game::Gta), keys(Game::Gta)) else {
         return;
     };
-    let filter = primase_testdata::debug("gta.archive_filter").unwrap_or_default();
+    let filter = inputs::debug("gta.archive_filter").unwrap_or_default();
     let keys = Keys::from_dir(&key_dir, None).expect("key material");
     let install = Install::open(&dir, &keys).expect("install");
     let tally = Mutex::new(Tally::default());

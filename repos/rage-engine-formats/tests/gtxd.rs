@@ -6,9 +6,11 @@
 //! data, read with the vehicles); every other difference fails the gate.
 //!
 //! Needs `installs.gta` and `keys.gta`.
+mod inputs;
+
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_testdata::{Game, OracleSet, install, keys, oracle};
+use inputs::{Game, OracleSet, install, keys, oracle};
 use rage_engine_formats::archive::archive_set::{ArchiveSet, Install, MapState};
 use rage_engine_formats::archive::keys::Keys;
 use rage_engine_formats::gtxd::TextureParents;

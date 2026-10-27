@@ -1,12 +1,14 @@
 //! The census of every Entity of Riders Republic's forges, read with the game's component registry: which Animations
 //! each AnimComponent lists, and that each one resolves to an Animation resource.
+mod inputs;
+
 use std::collections::BTreeMap;
 
 use anvil_formats::animation::ANIMATION;
 use anvil_formats::archive::{Archive, At};
 use anvil_formats::entity::{ANIM_COMPONENT, ComponentBody, StoredEntity};
 use anvil_formats::listing::Kind;
-use primase_testdata::{Game, install};
+use inputs::{Game, install};
 
 /// Every AnimComponent of the Entities.
 #[test]

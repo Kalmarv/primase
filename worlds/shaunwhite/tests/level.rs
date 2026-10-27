@@ -1,7 +1,10 @@
 //! Level 01 read whole (`installs.shaunwhite`): its cells' entities placed with their meshes, materials and textures,
 //! its start and spawn markers read, the content selection run over it, and the material and collision lowerings. The counts
 //! are printed; the checks are what must hold of any level read.
+mod inputs;
+
 use anvil_formats::shaunwhite::light::LightShape;
+use inputs::{Game, install};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{Conservation, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::pbr::{AlphaMode, PbrMaterial, Shading};
@@ -15,7 +18,6 @@ use primase_shaunwhite::components::{
 };
 use primase_shaunwhite::passes::register;
 use primase_shaunwhite::read::level::read_level;
-use primase_testdata::{Game, install};
 
 /// Runs `text` with the manager's checks on: every component verifies after the pass, and the placements, primitives,
 /// triangles and textures a pass drops are exactly the ones it declares.

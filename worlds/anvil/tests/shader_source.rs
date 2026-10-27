@@ -2,10 +2,12 @@
 //! A shader of an install by name (read::shader_source): the container of MAD_Tex1_TerrainBlend's pixel permutation
 //! at body offset 0x081AB2 of `DataPC_MAD_USNAT.forge` entry 61916 (the template the shader oracle reads, there by
 //! offset through `template::shaders`) is the one its name returns, its key lists, and it parses as a pixel program.
+mod inputs;
+
 use anvil_formats::archive::{Archive, At};
 use anvil_formats::shader_source::{ShaderName, ShaderSource};
 use anvil_formats::template::{self, Stage};
-use primase_testdata::{Game, install};
+use inputs::{Game, install};
 
 #[test]
 fn a_shader_by_name_is_the_permutations_container() {

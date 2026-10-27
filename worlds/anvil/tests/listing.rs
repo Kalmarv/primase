@@ -2,14 +2,16 @@
 //! Materials, on Riders Republic's WhiteRoom forges (`installs.riders`). The oracle for the placed mesh is
 //! RRAssetStudio's read of it (`oracles.rrassetstudio.riders/meshes`, optional): its vertex and triangle counts. The
 //! listing's rows are the hand-checked rows of `installs.riders/DataPC_MAD_WhiteRoom_patch_01.forge` (tests/forge.rs).
+mod inputs;
+
 use anvil_formats::archive::{Archive, At, Error as ArchiveError};
 use anvil_formats::forge::Forge;
 use anvil_formats::listing::{KINDS, Kind};
+use inputs::{Game, OracleSet, install, install_file, oracle};
 use primase_anvil::components::{AnvilLods, AnvilMesh};
 use primase_anvil::read::placements::{Error, InstancedLevels, Placed, Placer};
 use primase_core::frame::SourceFrame;
 use primase_core::{Instance, World};
-use primase_testdata::{Game, OracleSet, install, install_file, oracle};
 use serde_json::Value;
 
 /// The patch's listing is its tables' rows, in order, each with the kind its type id names: the hand-checked rows 0

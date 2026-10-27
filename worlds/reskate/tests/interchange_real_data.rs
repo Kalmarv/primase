@@ -5,7 +5,7 @@
 //! - Agreement: the reference accepts a folder exactly when our reader does; when both refuse, the causes are
 //!   compared as text (a different cause is reported, not failed).
 //! - For accepted folders: every binary table written back byte-identical; the manifest equal as parsed JSON
-//!   (`primase_core::gate::compare_json`: integers exactly, other numbers as f64 or else as f32, counted); every
+//!   (`primase_testdata::gate::compare_json`: integers exactly, other numbers as f64 or else as f32, counted); every
 //!   referenced file copied byte-identical; the reference validator accepts the output with the same summary and the
 //!   same warnings.
 //!
@@ -16,14 +16,16 @@
 //! Outputs go to `scratch.root` (default: the OS temp folder) and are deleted when they pass.
 //! The debug key `scene.filter` keeps only folders whose path contains it.
 
+mod inputs;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use inputs::{Game, OracleSet, Query, Tool, debug, expect_found, resolve, scratch, tool};
 use primase_core::World;
-use primase_core::gate::{GateReport, Tolerance, compare_json};
 use primase_reskate::{read, write};
-use primase_testdata::{Game, OracleSet, Query, Tool, debug, expect_found, resolve, scratch, tool};
+use primase_testdata::gate::{GateReport, Tolerance, compare_json};
 use serde_json::Value;
 
 fn scene_folders(root: &Path, out: &mut Vec<PathBuf>) {

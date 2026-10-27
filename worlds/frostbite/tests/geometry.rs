@@ -6,6 +6,8 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use std::collections::BTreeMap;
 
 use frostbite_formats::MESHSET;
@@ -13,13 +15,13 @@ use frostbite_formats::bundle::Kind;
 use frostbite_formats::folder::{Folder, Source};
 use frostbite_formats::meshset::{self, Decl, Element, Lod, Section, format, usage};
 use half::f16;
+use inputs::{Game, Tool, install, install_file, tool};
 use primase_core::{Lods, Mesh, Semantic, Stream, World};
 use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_frostbite::components::{FrostbiteMeshSet, FrostbiteVertexElements};
 use primase_frostbite::geometry;
 use primase_frostbite::read::entry::read_entry;
 use primase_frostbite::read::geometry::read_geometry;
-use primase_testdata::{Game, Tool, install, install_file, tool};
 
 fn half(v: f32) -> [u8; 2] {
     f16::from_f32(v).to_bits().to_le_bytes()

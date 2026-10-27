@@ -13,17 +13,19 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use frostbite_formats::ebx::{self, Pointer, Value};
 use frostbite_formats::fbmod::{self, Body, Fbmod};
 use frostbite_formats::folder::{Folder, Source};
 use frostbite_formats::texture;
+use inputs::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_core::TexFormat;
 use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_reskate::costume::textures::{Donor, HeaderUnknowns, Replacement, guid_text, retexture};
 use primase_reskate::costume::thumbnail::{CdnContentHash, Choices};
 use primase_reskate::costume::{ADDITION, costume_presets, morphs, presets, thumbnail};
 use primase_reskate::postcompile::meshset;
-use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_texcodec::{Bcdec, TexDecoder};
 use sha1::Digest;
 

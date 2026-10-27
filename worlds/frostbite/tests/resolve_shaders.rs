@@ -10,6 +10,8 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use frostbite_formats::MESHSET;
@@ -17,6 +19,7 @@ use frostbite_formats::bundle::Kind;
 use frostbite_formats::folder::{Folder, Source};
 use frostbite_formats::permutation::Kind as PermutationKind;
 use frostbite_formats::scope::Scope;
+use inputs::{Game, Tool, install_file, tool};
 use iridia_interface::{ConstantRole, InputRole};
 use primase_core::World;
 use primase_core::pass::{Pass, PassLog};
@@ -26,7 +29,6 @@ use primase_frostbite::components::{FrostbiteMaterial, FrostbitePermutation, Fro
 use primase_frostbite::passes::ResolveFrostbiteShaders;
 use primase_frostbite::read::entry::read_entry;
 use primase_frostbite::read::program::{materials, resolve_materials};
-use primase_testdata::{Game, Tool, install_file, tool};
 
 /// A verify message with its digits taken out, so equal rules count together.
 fn cut_numbers(why: &str) -> String {

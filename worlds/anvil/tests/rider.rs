@@ -1,6 +1,8 @@
 //! A rider put together from chosen parts of Riders Republic's customization BuildTables: the gender rows of the part
 //! tables name male and female meshes, a part whose mesh weights a bone the rig lacks is refused with the reason, and
 //! the rider (rig, parts, clips chosen by coverage) lowers under the pass manager with its checks on.
+mod inputs;
+
 use std::collections::{BTreeMap, HashSet};
 
 use anvil_formats::archive::{Archive, At};
@@ -10,6 +12,7 @@ use anvil_formats::mesh::MATERIAL;
 use anvil_formats::mesh::{MESH, StoredMesh};
 use anvil_formats::rider::{BEARD_COLOURS, HAIR_COLOURS, colours};
 use anvil_formats::skeleton::{SKELETON, StoredSkeleton};
+use inputs::{Game, install};
 use primase_anvil::components::AnvilMesh;
 use primase_anvil::passes::{
     LowerAnvilClips, LowerAnvilMesh, LowerAnvilRig, LowerAnvilSkin, OwnTransform, SelectAnvilClips,
@@ -24,7 +27,6 @@ use primase_core::frame::SourceFrame;
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::rig::{RigInstance, SkinInstance};
 use primase_core::{Instance, World};
-use primase_testdata::{Game, install};
 
 fn open() -> Option<Archive> {
     let dir = install(Game::Riders)?;

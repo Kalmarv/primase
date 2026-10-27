@@ -3,11 +3,14 @@
 //! with their patches decode; Waterfall's selects its TextureSet's slot 3, a HeightMap. The Area 52 Tex2 Materials
 //! m_MAD_MAT_TIL_Concrete_BareGraffitiBlend_A, Concrete_PanelsHeatDamagedBlend_A and Roof_WornBitumenBlend_A are read
 //! and lowered: which bindings resolve, from where.
+mod inputs;
+
 use std::collections::BTreeMap;
 
 use anvil_formats::archive::{Archive, At};
 use anvil_formats::material::MATERIAL;
 use anvil_formats::template::{self, MATERIAL_TEMPLATE, SHADER_CUSTOM_TEXTURE_OPERATOR};
+use inputs::{Game, install};
 use primase_anvil::components::{AnvilMaterial, TextureFrom};
 use primase_anvil::passes::{AlphaChoice, Decals1Cutout, LowerAnvilMaterial, ShaderUv};
 use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
@@ -15,7 +18,6 @@ use primase_core::frame::SourceFrame;
 use primase_core::layered::LayeredMaterial;
 use primase_core::pass::{Pass, PassLog};
 use primase_core::{Name, NormalGreen, World};
-use primase_testdata::{Game, install};
 
 const ORDER: [&str; 4] = [
     "DataPC_MAD_USNAT_patch_01.forge",

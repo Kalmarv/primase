@@ -1,5 +1,7 @@
 //! Collision layouts cross-checked with AnvilToolkit 1.3.7's AC2 schema and hand-worked fixtures. Three real cells
 //! exercise meshes, inline lists and convex hulls; a fixed InertComponent range was hand-checked separately.
+mod inputs;
+
 use std::fs::File;
 
 use anvil_formats::shaunwhite::collision::{
@@ -7,7 +9,7 @@ use anvil_formats::shaunwhite::collision::{
     MultiInertComponent, Shape,
 };
 use anvil_formats::{data::read_entry, forge::Forge, objects::read_objects};
-use primase_testdata::{Game, Query, expect_found, install_file};
+use inputs::{Game, Query, expect_found, install_file};
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 

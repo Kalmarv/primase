@@ -7,15 +7,17 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use frostbite_formats::bundle::Kind;
 use frostbite_formats::bytecode::{self as stored, RTYPE};
 use frostbite_formats::folder::{Folder, Source};
+use inputs::{Game, Tool, install_file, tool};
 use iridia_interface::Stage;
 use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_frostbite::bytecode;
-use primase_testdata::{Game, Tool, install_file, tool};
 
 #[test]
 fn every_compiled_program_of_the_install() {

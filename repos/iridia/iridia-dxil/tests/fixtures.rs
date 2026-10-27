@@ -1,6 +1,8 @@
 //! Synthetic gates on our own dxc-built fixtures (`tests/fixtures/*.hlsl`, compiled with the command at the top of
 //! each): the lifted interface, execution (`iridia_exec::ProgramShader`) against outputs derived from the HLSL by
 //! hand, every truncation refused, and a seeded mutation run that must never panic.
+mod inputs;
+
 use iridia::{
     ConstantType, InterpMode, InterpSampling, ResourceKind, SampleType, ScalarType, SystemValue, TextureDim,
     Value,
@@ -231,7 +233,7 @@ impl Rng {
 /// require that parsing and, when it parses, evaluating return without panicking.
 #[test]
 fn mutations_never_panic() {
-    let runs: usize = primase_testdata::debug("dxil.fuzz_runs")
+    let runs: usize = inputs::debug("dxil.fuzz_runs")
         .and_then(|v| v.parse().ok())
         .unwrap_or(3000);
     let mut rng = Rng(0x5eed_d0c5_1a7e_c0de);

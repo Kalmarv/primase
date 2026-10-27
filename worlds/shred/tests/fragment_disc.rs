@@ -1,7 +1,9 @@
 //! Independently RUN RPCS3 disassembly, indexed by raw microcode hash. Repeated
 //! packaged programs are byte-compared to an already checked distinct program.
+mod inputs;
+
+use inputs::{Depth, Game, OracleSet, Query, depth, expect_found, install, oracle, scratch, seed};
 use primase_shred::read::pak::Pak;
-use primase_testdata::{Depth, Game, OracleSet, Query, depth, expect_found, install, oracle, scratch, seed};
 use rsx_reader::{
     cgbinary::{Stage, parse_prefix},
     fragment::{self, Control, Register, SourceKind, flow},

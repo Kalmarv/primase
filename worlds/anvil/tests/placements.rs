@@ -1,9 +1,12 @@
 //! Real Entities placed into a world through an archive of Riders Republic's forges (searched patch first: a stated
 //! order), then their meshes and levels lowered under the pass manager with its checks on. Instance counts and scales
 //! as the Riders Republic placement notes give them (docs/placement.md §14).
+mod inputs;
+
 use anvil_formats::archive::{Archive, At};
 use anvil_formats::entity::{ComponentBody, ENTITY, ENTITY_GROUP, StoredEntity, StoredEntityGroup};
 use anvil_formats::shape::{BOX_SHAPE, CAPSULE_SHAPE, REFERENCE_LIST_SHAPE, SPHERE_SHAPE};
+use inputs::{Game, install};
 use primase_anvil::components::{
     AnvilCollisionShape, AnvilLods, AnvilMaterialOverrides, AnvilMesh, AnvilMeshShape, ShapeGeometry,
 };
@@ -12,7 +15,6 @@ use primase_anvil::read::placements::{InstancedLevels, Placed, Placer};
 use primase_core::frame::SourceFrame;
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::{Instance, Lods, Mesh, Name, Transform, World};
-use primase_testdata::{Game, install};
 
 /// The cube root of a transform's determinant: its uniform scale where it is one.
 fn scale(t: &Transform) -> f64 {

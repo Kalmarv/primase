@@ -15,9 +15,11 @@
 //!   order); that reader ignores overlay flags and takes the last copy in file-system order.
 //!
 //! Needs `installs.gta` and `keys.gta`.
+mod inputs;
+
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_testdata::{Game, OracleSet, install, keys, oracle};
+use inputs::{Game, OracleSet, install, keys, oracle};
 use rage_engine_formats::archive::archive_set::MapState;
 use rage_engine_formats::archive::archive_set::{ArchiveSet, Install};
 use rage_engine_formats::archive::keys::Keys;

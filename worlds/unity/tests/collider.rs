@@ -10,11 +10,13 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use std::collections::BTreeMap;
 
-use primase_core::gate::{GateReport, Tolerance};
+use inputs::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_core::{Name, Transform, World};
-use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
+use primase_testdata::gate::{GateReport, Tolerance};
 use primase_unity::TypeTreePackage;
 use primase_unity::components::UNITY;
 use primase_unity::components::{UnityCollider, UnityColliderShape, UnityTreeInstance};

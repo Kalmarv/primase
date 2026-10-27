@@ -3,7 +3,6 @@ resolver = "3"
 members = [
     "repos/primase-foundations",
     "core",
-    "toolkit/testdata",
     "toolkit/texcodec",
     "toolkit/dds",
     "toolkit/image",
@@ -45,6 +44,7 @@ members = [
     "repos/iridia/iridia-dxbc",
     "repos/iridia/iridia-dxil",
     "repos/rage-engine-formats",
+    "repos/primase-testdata",
 ]
 # the oozextract fork: upstream's sources and lints, not one of our crates (README there)
 exclude = ["repos/primase-oozextract"]
@@ -76,7 +76,7 @@ ruzstd = { version = "=0.7.3", default-features = false, features = ["std", "has
 libloading = { version = "=0.9.0", default-features = false, features = ["std"] }
 oozextract = { package = "primase-oozextract", version = "=0.5.6", path = "repos/primase-oozextract", default-features = false, features = ["verbose_errors"] }
 primase-core = { path = "core" }
-primase-testdata = { path = "toolkit/testdata" }
+primase-testdata = { path = "repos/primase-testdata" }
 primase-texcodec = { path = "toolkit/texcodec" }
 primase-dds = { path = "toolkit/dds" }
 primase-image = { path = "toolkit/image" }

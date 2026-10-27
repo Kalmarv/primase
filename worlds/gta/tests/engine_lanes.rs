@@ -12,13 +12,15 @@
 //!
 //! The lane counts are asserted; the program-level statements are the doc's. Needs `installs.gta` and `keys.gta`.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod inputs;
+
 use std::collections::{BTreeMap, BTreeSet};
 
+use inputs::{Game, install, keys};
 use primase_core::World;
 use primase_core::shader::Shader;
 use primase_gta::components::{GtaEffect, GtaShaderTable};
 use primase_gta::read::source::GtaSource;
-use primase_testdata::{Game, install, keys};
 
 /// The lanes of rows a program reads, from its WGSL (the emitter writes only what the program uses; the lifted IR also
 /// holds an access per lane it never uses): (space, register, row, lane) directly taken, rows used otherwise (a whole
