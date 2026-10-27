@@ -1,4 +1,4 @@
-//! The corpus oracle set's `gta/shader-database.awc` (toolkit/testdata's registry): GTA V Enhanced's shader database
+//! The corpus oracle set's `gta/shader-database.awc` (in GAME_DATA's `oracles`): GTA V Enhanced's shader database
 //! (`sga_win32_60_final.awc` of `common/shaders/fxdb`), decrypted and unpacked as the install stores it
 //! ([`primase_gta::read::source::GtaSource::shader_database_bytes`]). The bytes are the game's own.
 //!

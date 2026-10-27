@@ -112,7 +112,7 @@ primase_testdata::inputs! {
         Query::Oracle(OracleSet::Corpus, Game::Sekiro, "shaders") => {
             status: Live,
             gate: false,
-            about: r#"a folder (searched recursively) of the DXBC containers of Sekiro's extracted pixel and vertex programs (`.ppo`, `.vpo`), lifted, validated and written as WGSL, the refusals counted by reason; toolkit/dxbc/tests/lift_corpus.rs; the detail-blend programs' equations derived and proven, worlds/fromsoft/tests/detail_derive.rs"#,
+            about: r#"a folder (searched recursively) of the DXBC containers of Sekiro's extracted pixel and vertex programs (`.ppo`, `.vpo`), lifted, validated and written as WGSL, the refusals counted by reason; https://github.com/Kalmarv/iridia/blob/main/iridia-dxbc/tests/lift_corpus.rs; the detail-blend programs' equations derived and proven, worlds/fromsoft/tests/detail_derive.rs"#,
             source: r#"the user's own install: the programs extracted from its shader archives"#,
         },
         Query::Oracle(OracleSet::Scripts, Game::Sekiro, "dds") => {

@@ -1,4 +1,4 @@
-//! LZ4 streams for `corpus/general/codecs.tsv` (toolkit/testdata's registry): the LZ4 blocks of Riders Republic's
+//! LZ4 streams for `corpus/general/codecs.tsv` (in GAME_DATA's `oracles`): the LZ4 blocks of Riders Republic's
 //! terrain chunks (TNLChunk blocks 1 and 8, each a raw LZ4 block of one tile), cut as stored from the forges given and
 //! written as `<n>.lz4`, the first `--limit` (default 64) in forge and entry order. The bytes are the game's own;
 //! `https://github.com/Kalmarv/primase-foundations/blob/main/tests/oracles/codecs.py` decodes them with the `lz4` package for the references.

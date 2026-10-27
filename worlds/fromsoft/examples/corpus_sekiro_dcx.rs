@@ -1,4 +1,4 @@
-//! The corpus oracle set's `sekiro/dcx` (toolkit/testdata's registry): KRAK-compressed DCX files exactly as Sekiro's
+//! The corpus oracle set's `sekiro/dcx` (in GAME_DATA's `oracles`): KRAK-compressed DCX files exactly as Sekiro's
 //! archives store them, read from the install with the user's keys and written as `<hash>.dcx` (the entry's path
 //! hash, hex): the first `--limit` of them (default 256) in hash order whose stored size is at most `--max-bytes`
 //! (default 4 MiB). The bytes are the game's own; the test decodes them with the game's Oodle library and with

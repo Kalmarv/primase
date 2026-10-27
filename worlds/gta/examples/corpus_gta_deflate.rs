@@ -1,4 +1,4 @@
-//! Raw deflate streams for `corpus/general/codecs.tsv` (toolkit/testdata's registry): compressed binary files of GTA
+//! Raw deflate streams for `corpus/general/codecs.tsv` (in GAME_DATA's `oracles`): compressed binary files of GTA
 //! V's archives as stored, decrypted with the install's keys ([`primase_gta::read::source::GtaSource::stored`]), written
 //! as `<n>.deflate`: the first `--limit` (default 64) in the listing's order whose stream is at most `--max-bytes`
 //! (default 1 MiB), nested archives left out. The bytes are the game's own; `https://github.com/Kalmarv/primase-foundations/blob/main/tests/oracles/codecs.py`

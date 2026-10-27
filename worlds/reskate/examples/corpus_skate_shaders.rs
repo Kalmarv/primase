@@ -1,4 +1,4 @@
-//! The corpus oracle set's `skate/shaders` (toolkit/testdata's registry): the DXBC containers (DXIL programs) of the
+//! The corpus oracle set's `skate/shaders` (in GAME_DATA's `oracles`): the DXBC containers (DXIL programs) of the
 //! CompiledBytecode resources of every superbundle TOC of skate.'s `Data` (a program in several TOCs' bundles written
 //! once), each as `<resource name>#<n>.dxbc` with the name's slashes as underscores. The bytes are the game's own.
 //!

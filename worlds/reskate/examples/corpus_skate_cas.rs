@@ -1,4 +1,4 @@
-//! The corpus oracle set's `skate/cas` (toolkit/testdata's registry): CAS frames of one Oodle-compressed block each
+//! The corpus oracle set's `skate/cas` (in GAME_DATA's `oracles`): CAS frames of one Oodle-compressed block each
 //! (block kinds 0x11, 0x15 and 0x19), cut as stored from the entries of skate.'s `Data`, written as `<n>.casblock`.
 //! At most `--per-toc` (default 16) entries' first such block are taken from each superbundle TOC, in its listing
 //! order, so the corpus spans the TOCs. The bytes are the game's own; the test decodes them with the game's Oodle

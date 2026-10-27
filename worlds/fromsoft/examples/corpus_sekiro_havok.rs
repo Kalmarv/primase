@@ -1,4 +1,4 @@
-//! The corpus oracle set's `sekiro/havok` (toolkit/testdata's registry): one area's high-resolution map collision
+//! The corpus oracle set's `sekiro/havok` (in GAME_DATA's `oracles`): one area's high-resolution map collision
 //! binder (`/map/<area>/h<area>.hkxbhd` and `.hkxbdt`) written loose, each member out of its DCX envelope under its own
 //! name: the area's Havok 2016.2 tagfiles and the compendium they share. The bytes are the game's own;
 //! https://github.com/Kalmarv/havok-formats/blob/main/tests/corpus.rs reads every body and compressed mesh of them.

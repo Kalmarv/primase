@@ -1,4 +1,4 @@
-//! The corpus oracle set's `elden/shaders` (toolkit/testdata's registry): every DXBC container (DXIL program) of Elden
+//! The corpus oracle set's `elden/shaders` (in GAME_DATA's `oracles`): every DXBC container (DXIL program) of Elden
 //! Ring's shader binders, each `/shader/*.shaderbnd.dcx` and `/shader/*.shaderbdlebnd.dcx` (a bundle of one binder per
 //! material: `shaderbdle`, its DLC halves and `speedtree`) the path dictionary names and the archives hold, development
 //! patches left out: a binder's container written as `<binder>/<member>`, a bundle's as
