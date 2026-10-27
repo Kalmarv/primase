@@ -2,15 +2,15 @@
 //! this checks all ten installed base maps and every layer PAK whose quartet namespace names that map.
 mod inputs;
 
-use inputs::{Game, install, install_file};
 use primase_core::{Instance, convert::Reader, frame::SourceFrame};
 use primase_shred::{
     components::{SessionGraph, SourcePlacement},
-    read::{
-        convert::ShredReader,
-        database::{Database, Value},
-        pak::Pak,
-    },
+    read::convert::ShredReader,
+};
+use inputs::{Game, install, install_file};
+use rme_formats::{
+    database::{Database, Value},
+    pak::Pak,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -87,8 +87,10 @@ fn ten_maps_keep_every_placement_and_their_complete_graphs() {
         let Value::Text(level_id) = &row.values[id] else {
             panic!("level id not text")
         };
-        let graph =
-            SessionGraph::from_main_db(&bytes, level_id.parse().expect("level id")).expect("session graph");
+        let graph = primase_shred::components::Stored(
+            rme_formats::session::SessionGraph::from_main_db(&bytes, level_id.parse().expect("level id"))
+                .expect("session graph"),
+        );
         let task_hashes: BTreeSet<_> = graph
             .tasks
             .iter()

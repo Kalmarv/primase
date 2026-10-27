@@ -3,15 +3,12 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod inputs;
 
-use inputs::{Game, OracleSet, install, oracle};
 use primase_core::{convert::Reader, frame::SourceFrame};
-use primase_shred::{
-    components::{LevelParams, ScriptValue},
-    read::{
-        convert::ShredReader,
-        level_params::{ScriptInputs, read_level_params},
-        pak::Pak,
-    },
+use primase_shred::{components::LevelParams, read::convert::ShredReader};
+use inputs::{Game, OracleSet, install, oracle};
+use rme_formats::{
+    level_params::{ScriptInputs, ScriptValue, read_level_params},
+    pak::Pak,
 };
 
 const LEVELS: [&str; 10] = [
@@ -45,7 +42,7 @@ fn every_level_script_reads_whole_and_sets_fog_once() {
             level,
         })
         .unwrap();
-        let params = params.unwrap_or_else(|| panic!("{level}: {:?}", report.lines()));
+        let params = params.unwrap_or_else(|| panic!("{level}: {:?}", report));
         assert!(report.unread.is_empty(), "{level}: {:?}", report.unread);
         assert_eq!(report.read, params.calls.len());
         assert!(!params.calls.is_empty());
@@ -68,7 +65,8 @@ fn every_level_script_reads_whole_and_sets_fog_once() {
         .0
         .unwrap()
     };
-    let fog = |p: &LevelParams| numbers(&p.calls_to("change_fog").next().unwrap().args);
+    let fog =
+        |p: &rme_formats::level_params::LevelParams| numbers(&p.calls_to("change_fog").next().unwrap().args);
     assert_eq!(
         fog(&read("charlie")),
         [

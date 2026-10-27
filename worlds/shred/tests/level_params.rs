@@ -1,19 +1,12 @@
-//! A level script written out byte by byte (little-endian Lua 5.1, as the game's scripts are) inside a hand-framed
-//! PAK: the calls with literal arguments are read in order, a call with a variable argument is reported, a script with
-//! control flow is not read, and a missing script is a report line, not an error.
+//! The reader puts a level's script parameters in the world as a resource and logs what it read. The script reader
+//! itself is tested in `rme-formats`.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 use primase_core::{
     convert::{self, Reader},
     frame::SourceFrame,
 };
-use primase_shred::{
-    components::{LevelParams, ScriptCall, ScriptValue},
-    read::{
-        convert::ShredReader,
-        level_params::{ScriptInputs, read_level_params},
-        pak::Pak,
-    },
-};
+use primase_shred::{components::LevelParams, read::convert::ShredReader};
+use rme_formats::{level_params::ScriptInputs, pak::Pak};
 
 /// `ESC Lua`, 0x51, format 0, little-endian (1), int 4, size_t 4, instruction 4, number 8, not integral.
 const HEADER: &[u8] = &[0x1b, b'L', b'u', b'a', 0x51, 0, 1, 4, 4, 4, 8, 0];
@@ -117,88 +110,6 @@ fn pak(entries: &[(&str, &[u8])]) -> Pak {
 }
 
 #[test]
-fn reads_literal_calls_in_order_and_reports_the_rest() {
-    let pak = pak(&[("script\\vfx_level_load_zulu.lua", &script())]);
-    let (params, report) = read_level_params(&ScriptInputs {
-        scripts: &pak,
-        level: "zulu",
-    })
-    .unwrap();
-    let number = |n| ScriptValue::Number(n);
-    assert_eq!(
-        params.unwrap(),
-        LevelParams {
-            level: "zulu".into(),
-            script: "script\\vfx_level_load_zulu.lua".into(),
-            calls: vec![
-                ScriptCall {
-                    function: "change_fog".into(),
-                    args: vec![number(400.0), number(700.0)]
-                },
-                ScriptCall {
-                    function: "enable_fog".into(),
-                    args: vec![]
-                },
-                ScriptCall {
-                    function: "set_back_light".into(),
-                    args: vec![
-                        number(0.5),
-                        ScriptValue::Text("x".into()),
-                        ScriptValue::Bool(true),
-                        ScriptValue::Nil
-                    ]
-                },
-            ]
-        }
-    );
-    assert_eq!(report.read, 3);
-    assert_eq!(
-        report.unread,
-        [(14, "an argument that is not a literal".to_string())]
-    );
-    assert!(!report.branching);
-}
-
-#[test]
-fn a_level_without_a_script_is_a_report_line() {
-    let pak = pak(&[("script\\vfx_level_load_zulu.lua", &script())]);
-    let (params, report) = read_level_params(&ScriptInputs {
-        scripts: &pak,
-        level: "yankee",
-    })
-    .unwrap();
-    assert!(params.is_none() && report.script.is_none());
-    assert!(
-        report.lines()[0]
-            .1
-            .contains("no vfx_level_load script for level yankee")
-    );
-}
-
-#[test]
-fn a_script_with_control_flow_is_not_read() {
-    let pak = pak(&[("script\\vfx_level_load_zulu.lua", &branching_script())]);
-    let (params, report) = read_level_params(&ScriptInputs {
-        scripts: &pak,
-        level: "zulu",
-    })
-    .unwrap();
-    assert!(params.is_none() && report.branching && report.read == 0);
-    assert!(report.lines()[0].1.contains("control flow"));
-}
-
-#[test]
-fn a_script_that_is_not_a_chunk_is_refused_by_name() {
-    let pak = pak(&[("script\\vfx_level_load_zulu.lua", b"print('hi')")]);
-    let e = read_level_params(&ScriptInputs {
-        scripts: &pak,
-        level: "zulu",
-    })
-    .unwrap_err();
-    assert!(e.to_string().contains("vfx_level_load_zulu.lua"), "{e}");
-}
-
-#[test]
 fn the_reader_puts_the_parameters_in_the_world_as_a_resource() {
     let scripts = pak(&[("script\\vfx_level_load_zulu.lua", &script())]);
     let mut reader = ShredReader::new(vec![], SourceFrame::WORLD).with_scripts(ScriptInputs {
@@ -216,4 +127,32 @@ fn the_reader_puts_the_parameters_in_the_world_as_a_resource() {
             .any(|(k, v)| k == "shred level params" && v.contains("3 calls read as data, 1 not read"))
     );
     assert_eq!(reader.params.read, 3);
+}
+
+#[test]
+fn a_missing_or_branching_script_is_a_report_line() {
+    let scripts = pak(&[("script\\vfx_level_load_zulu.lua", &script())]);
+    let mut reader = ShredReader::new(vec![], SourceFrame::WORLD).with_scripts(ScriptInputs {
+        scripts: &scripts,
+        level: "yankee",
+    });
+    let (world, lines) = reader.read().unwrap();
+    assert!(world.resource::<LevelParams>().is_none());
+    assert!(
+        lines.iter().any(
+            |(k, v)| k == "shred level params" && v.contains("no vfx_level_load script for level yankee")
+        )
+    );
+    let scripts = pak(&[("script\\vfx_level_load_zulu.lua", &branching_script())]);
+    let mut reader = ShredReader::new(vec![], SourceFrame::WORLD).with_scripts(ScriptInputs {
+        scripts: &scripts,
+        level: "zulu",
+    });
+    let (world, lines) = reader.read().unwrap();
+    assert!(world.resource::<LevelParams>().is_none());
+    assert!(
+        lines
+            .iter()
+            .any(|(k, v)| k == "shred level params" && v.contains("control flow"))
+    );
 }

@@ -3,9 +3,9 @@ use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::pbr::{AlphaMode, PbrMaterial};
 use primase_core::{ColorSpace, Entity, Name, NormalConvention, TexFormat, TexRole, Texture, World};
 use primase_shred::components::{
-    EncodedTexture, MaterialKey, MaterialParameter, MaterialSampler, MaterialTextures, SamplerNameSource,
-    SamplerTexture, ShredMaterial, SourceTexture, TextureCopy, TextureResidency,
+    EncodedTexture, MaterialTextures, SamplerTexture, SourceTexture, Stored, TextureCopy, TextureResidency,
 };
+use rme_formats::material::{MaterialKey, MaterialParameter, MaterialSampler, SamplerNameSource};
 
 fn run(w: &mut World, normals: &str) -> Result<RunReport, String> {
     run_options(w, normals, "named")
@@ -31,7 +31,7 @@ fn material(w: &mut World, family: &str, names: &[&str], parameters: &[(&str, [f
     let e = w.spawn();
     w.insert(
         e,
-        ShredMaterial {
+        Stored(rme_formats::material::ShredMaterial {
             key: MaterialKey {
                 bank: "environments".into(),
                 id: 4,
@@ -60,7 +60,7 @@ fn material(w: &mut World, family: &str, names: &[&str], parameters: &[(&str, [f
                     unknown_state: [0; 5],
                 })
                 .collect(),
-        },
+        }),
     );
     w.insert(
         e,
@@ -351,9 +351,12 @@ fn shared_source_and_role_reuse_one_view_across_materials() {
 fn a_program_that_only_scales_its_texture_is_unlit_whatever_the_material_is_called() {
     use primase_core::pbr::Shading;
     use primase_shred::components::PixelProgram;
-    let scaled = |unit| PixelProgram::ScaledTexture {
-        unit,
-        uniforms: vec!["GlobalBrightness".into()],
+    use rme_formats::pixel_program::PixelProgram as Class;
+    let scaled = |unit| {
+        Stored(Class::ScaledTexture {
+            unit,
+            uniforms: vec!["GlobalBrightness".into()],
+        })
     };
     let build = |w: &mut World, family: &str, class: Option<PixelProgram>, tint: [f32; 4]| {
         let m = material(w, family, &["Color_Map"], &[("GlobalBrightness", tint)]);
@@ -368,7 +371,7 @@ fn a_program_that_only_scales_its_texture_is_unlit_whatever_the_material_is_call
     let sky = build(&mut w, "env_skydome", Some(scaled(0)), [0.5, 0.25, 1.0, 0.0]);
     let renamed = build(&mut w, "env_texture", Some(scaled(0)), [1.0; 4]);
     let by_name = build(&mut w, "env_skydome", None, [1.0; 4]);
-    let other = build(&mut w, "env_skydome", Some(PixelProgram::Unclassified), [1.0; 4]);
+    let other = build(&mut w, "env_skydome", Some(Stored(Class::Unclassified)), [1.0; 4]);
     let wrong_unit = build(&mut w, "env_skydome", Some(scaled(2)), [1.0; 4]);
     let bright = build(&mut w, "env_icon", Some(scaled(0)), [2.0, 1.0, 1.0, 0.0]);
     let report = run(&mut w, "omit").unwrap();

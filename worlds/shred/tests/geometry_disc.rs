@@ -1,13 +1,14 @@
 //! Structural census against the game's own tables and AABBs, not a second decoder as semantic oracle.
 mod inputs;
 
-use inputs::{Game, Query, expect_found, install};
 use primase_core::{
     Instance, Mesh, Semantic, Stream,
     frame::{Axis, SourceFrame},
 };
 use primase_shred::components::SourceSkin;
-use primase_shred::read::{level, pak::Pak};
+use primase_shred::read::level;
+use inputs::{Game, Query, expect_found, install};
+use rme_formats::pak::Pak;
 use std::path::{Path, PathBuf};
 
 fn archives(dir: &Path, out: &mut Vec<PathBuf>) {

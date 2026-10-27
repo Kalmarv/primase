@@ -6,7 +6,7 @@ mod inputs;
 use inputs::{Game, OracleSet, oracle};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{Atmosphere, FogFalloff, World};
-use primase_shred::read::{
+use rme_formats::{
     level_params::{ScriptInputs, read_level_params},
     pak::Pak,
 };
@@ -38,12 +38,12 @@ fn every_level_gets_its_scripts_linear_fog() {
             .args
             .iter()
             .map(|a| match a {
-                primase_shred::components::ScriptValue::Number(n) => *n,
+                rme_formats::level_params::ScriptValue::Number(n) => *n,
                 other => panic!("{other:?}"),
             })
             .collect();
         let mut w = World::new();
-        w.insert_resource(params);
+        w.insert_resource(primase_shred::components::Stored(params));
         let mut report = RunReport::default();
         PassManager::new(registry_clone())
             .with_pass_checks(true)

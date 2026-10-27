@@ -1,23 +1,30 @@
 //! Reader I/O and assembly of exactly the PAKs supplied by the program.
-use super::{
-    pak::Pak,
-    scene::{self, Scene, Unread},
-    scp_locators,
-    scp_tables::{self, Chain},
-};
 use crate::{
     Result,
     components::{
         Locator, MaterialId, MaterialNamespace, MeshId, Occluder, RefusedMesh, SceneLight, SourcePlacement,
-        SourceSkeleton, SourceSkin, Spline, Spot, SpotCamera, VertexInput, VertexInputs,
+        SourceSkeleton, SourceSkin, Spline, Spot, SpotCamera, VertexInputs,
     },
     invalid,
 };
 use primase_core::{
-    Curve, Entity, Instance, Marker, Mesh, Primitive, Semantic, Source, Stream, Topology, World,
+    Curve, Entity, Instance, Marker, Mesh, Primitive, Semantic, Source, Stream, Topology, Transform, World,
     frame::SourceFrame,
 };
+use rme_formats::{
+    Affine,
+    attributes::VertexInput,
+    pak::Pak,
+    scene::{self, Unread},
+    scp_locators,
+    scp_tables::{self, Chain},
+};
 use std::collections::BTreeMap;
+
+/// The core transform of a matrix in the source frame.
+pub(crate) fn transform(m: &Affine) -> Transform {
+    Transform { cols: m.cols }
+}
 
 /// Coverage counts are occurrences, including repeated copies packaged in different PAKs.
 #[derive(Clone, Debug, Default)]
@@ -36,7 +43,7 @@ pub struct LevelReport {
     pub refused: usize,
     pub submeshes: usize,
     pub placements: usize,
-    /// Nodes read from the SCP node tables (kept in `scene::Scene::tables`, not in the World).
+    /// Nodes read from the SCP node tables (kept in `rme_formats::scene::Scene::tables`, not in the World).
     pub nodes: usize,
     /// Spot chunks, as `shred.spot` entities, and how many of them are `Teleport` markers.
     pub spots: usize,
@@ -192,53 +199,6 @@ impl LevelReport {
     }
 }
 
-/// Quartet stems are raw archive names, not host filesystem paths.
-pub fn quartets(pak: &Pak) -> Result<BTreeMap<Vec<u8>, [usize; 4]>> {
-    let mut groups: BTreeMap<Vec<u8>, [Option<usize>; 4]> = BTreeMap::new();
-    for (i, e) in pak.entries().iter().enumerate() {
-        if e.attributes == 1 {
-            continue;
-        }
-        let Some(dot) = e.name.iter().rposition(|&c| c == b'.') else {
-            continue;
-        };
-        let slot = match &e.name[dot + 1..] {
-            b"scp" => 0,
-            b"mlp" => 1,
-            b"mmp" => 2,
-            b"mgp" => 3,
-            _ => continue,
-        };
-        let group = groups.entry(e.name[..dot].to_vec()).or_insert([None; 4]);
-        if group[slot].replace(i).is_some() {
-            return Err(invalid(e.offset, "duplicate quartet extension"));
-        }
-    }
-    groups
-        .into_iter()
-        .map(|(name, g)| {
-            if let [Some(a), Some(b), Some(c), Some(d)] = g {
-                Ok((name, [a, b, c, d]))
-            } else {
-                Err(invalid(
-                    0,
-                    format!("incomplete quartet {:?}", String::from_utf8_lossy(&name)),
-                ))
-            }
-        })
-        .collect()
-}
-
-pub fn decode_quartet(pak: &Pak, entries: [usize; 4]) -> Result<Scene> {
-    let [a, b, c, d] = entries;
-    scene::decode(
-        &pak.payload(a)?,
-        &pak.payload(b)?,
-        &pak.payload(c)?,
-        &pak.payload(d)?,
-    )
-}
-
 /// Builds a World from every quartet in the caller's PAK list. No base/layer or difficulty selection occurs here.
 /// `frame` is required: the caller states it. Native SHRED is left-handed, Y-up (a right-handed caller mirrors Z);
 /// north and physical units are not established.
@@ -247,7 +207,7 @@ pub fn read_level(paks: &[(&str, &Pak)], frame: SourceFrame) -> Result<(World, L
     let mut report = LevelReport::default();
     let mut materials = BTreeMap::<(u32, Vec<u8>), Entity>::new();
     for &(label, pak) in paks {
-        for (name, entries) in quartets(pak)? {
+        for (name, entries) in scene::quartets(pak)? {
             // Nonzero IDs are globally disjoint across material banks. ID zero
             // occurs in all three: retain its authored namespace rather than
             // merging actor, character and environment defaults in one world.
@@ -257,7 +217,7 @@ pub fn read_level(paks: &[(&str, &Pak)], frame: SourceFrame) -> Result<(World, L
                 .unwrap_or(&name)
                 .to_vec();
             let material_key = |id| (id, if id == 0 { namespace.clone() } else { Vec::new() });
-            let scene = decode_quartet(pak, entries)?;
+            let scene = scene::decode_quartet(pak, entries)?;
             report.quartets += 1;
             report
                 .unread
@@ -447,7 +407,7 @@ pub fn read_level(paks: &[(&str, &Pak)], frame: SourceFrame) -> Result<(World, L
                 }
             }
             for (i, placement) in scene.placements.into_iter().enumerate() {
-                let transform = frame.transform(&placement.transform);
+                let transform = frame.transform(&transform(&placement.transform));
                 if transform.cols.iter().flatten().any(|x| !x.is_finite()) {
                     return Err(invalid(0, "transform overflow in requested frame"));
                 }
@@ -485,7 +445,7 @@ pub fn read_level(paks: &[(&str, &Pak)], frame: SourceFrame) -> Result<(World, L
             report.nodes += tables.nodes.len();
             report.chain_stops += usize::from(matches!(tables.chain, Chain::Stopped { .. }));
             for chunk in tables.spots {
-                let transform = frame.transform(&chunk.world);
+                let transform = frame.transform(&transform(&chunk.world));
                 if transform.cols.iter().flatten().any(|x| !x.is_finite()) {
                     return Err(invalid(chunk.section, "spot matrix overflow in requested frame"));
                 }
@@ -589,7 +549,7 @@ pub fn read_level(paks: &[(&str, &Pak)], frame: SourceFrame) -> Result<(World, L
                 );
             }
             for light in tables.lights {
-                let transform = frame.transform(&light.world);
+                let transform = frame.transform(&transform(&light.world));
                 if transform.cols.iter().flatten().any(|x| !x.is_finite()) {
                     return Err(invalid(light.section, "light matrix overflow in requested frame"));
                 }
@@ -624,7 +584,10 @@ pub fn read_level(paks: &[(&str, &Pak)], frame: SourceFrame) -> Result<(World, L
                 );
             }
             for cam in tables.cameras {
-                let (camera, target) = (frame.transform(&cam.camera), frame.transform(&cam.target));
+                let (camera, target) = (
+                    frame.transform(&transform(&cam.camera)),
+                    frame.transform(&transform(&cam.target)),
+                );
                 if camera
                     .cols
                     .iter()
@@ -666,7 +629,7 @@ pub fn read_level(paks: &[(&str, &Pak)], frame: SourceFrame) -> Result<(World, L
                 );
             }
             for loc in tables.locators {
-                let transform = frame.transform(&loc.world);
+                let transform = frame.transform(&transform(&loc.world));
                 if transform.cols.iter().flatten().any(|x| !x.is_finite()) {
                     return Err(invalid(loc.section, "locator matrix overflow in requested frame"));
                 }
@@ -710,7 +673,7 @@ pub fn read_level(paks: &[(&str, &Pak)], frame: SourceFrame) -> Result<(World, L
                 );
             }
             for occ in tables.occluders {
-                let transform = frame.transform(&occ.world);
+                let transform = frame.transform(&transform(&occ.world));
                 if transform.cols.iter().flatten().any(|x| !x.is_finite()) {
                     return Err(invalid(
                         occ.section,

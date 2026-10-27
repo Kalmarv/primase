@@ -1,72 +1,23 @@
 //! Source material banks, without destination or shading policy.
+use super::Stored;
 use primase_core::{Component, Entity, Geometry, JsonError, Linear, world::Linearity};
 use serde::Serialize;
 
-/// IDs are local to a bank: ID zero occurs in all three banks.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-pub struct MaterialKey {
-    pub bank: String,
-    pub id: u32,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct MaterialParameter {
-    pub hash: u32,
-    /// Only named by an exact sdbm join against this material's fragment program.
-    pub name: Option<String>,
-    /// Original descriptor word. The high bits' semantics remain unknown.
-    pub source_encoding: u32,
-    /// Four stored f32 values, including unused lanes, in source order.
-    pub value: [f32; 4],
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct MaterialSampler {
-    /// Descriptor ordinal; no claim that this is a hardware texture unit.
-    pub slot: u32,
-    pub hash: u32,
-    /// Exact sdbm join against an engine string; not Cg reflection or inferred use.
-    pub name: Option<String>,
-    pub name_source: Option<SamplerNameSource>,
-    /// Empty is a source empty binding, not a generated default texture.
-    pub texture: String,
-    /// Descriptor +0, +4, +8, +12, +20. State semantics are not yet decoded.
-    pub unknown_state: [u32; 5],
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-pub enum SamplerNameSource {
-    ExecutableStringSdbm,
-}
-
 /// A bank material, retained as authored. No PBR conversion or render-state guesses.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct ShredMaterial {
-    pub key: MaterialKey,
-    /// Header +0x1c, +0x28, +0x2c, +0x3c, respectively.
-    pub unknown_header: [u32; 4],
-    pub vertex_shader: String,
-    pub fragment_shader: String,
-    pub parameters: Vec<MaterialParameter>,
-    pub samplers: Vec<MaterialSampler>,
-}
+pub type ShredMaterial = Stored<rme_formats::material::ShredMaterial>;
 
-/// What a material's pixel program does, from its microcode and not its name (`read::pixel_program`).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub enum PixelProgram {
-    /// Not classified: anything but the case below. This does not say the program is lit.
-    Unclassified,
-    /// Samples texture unit `unit` at the first texture coordinate and only copies or multiplies the sample with the
-    /// uniforms `uniforms` (by their program names): no normal, light, fog or other interpolant is read.
-    ScaledTexture { unit: u32, uniforms: Vec<String> },
-}
+/// What a material's pixel program does, from its microcode and not its name (`rme_formats::pixel_program`).
+pub type PixelProgram = Stored<rme_formats::pixel_program::PixelProgram>;
+
+/// The banks that hold a material id and the one chosen for it, with why.
+pub type MaterialResolution = Stored<rme_formats::library::MaterialResolution>;
 
 impl Component for PixelProgram {
     const NAME: &'static str = "shred.pixel_program";
     const GEOMETRY: Geometry = Geometry::None;
     const VERSION: u32 = 1;
     fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, JsonError> {
-        primase_core::json::to_value(self).map(Some)
+        primase_core::json::to_value(&self.0).map(Some)
     }
 }
 
@@ -75,28 +26,13 @@ impl Component for ShredMaterial {
     const GEOMETRY: Geometry = Geometry::None;
     const VERSION: u32 = 2;
     fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, JsonError> {
-        primase_core::json::to_value(self).map(Some)
+        primase_core::json::to_value(&self.0).map(Some)
     }
 }
 
 /// Source quartet namespace. It disambiguates ID zero before material banks load.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct MaterialNamespace(pub Vec<u8>);
-
-/// Why a bank was selected. Namespace inference is supported by every nonzero
-/// material reference on the disc, but is not a native-loader observation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-pub enum BankEvidence {
-    UniqueId,
-    InferredQuartetNamespace,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct MaterialResolution {
-    pub candidates: Vec<MaterialKey>,
-    pub selected: Option<MaterialKey>,
-    pub evidence: Option<BankEvidence>,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SamplerTexture {
@@ -159,7 +95,16 @@ macro_rules! material_component {
     };
 }
 material_component!(MaterialNamespace, "shred.material_namespace");
-material_component!(MaterialResolution, "shred.material_resolution");
+impl Component for MaterialResolution {
+    const NAME: &'static str = "shred.material_resolution";
+    const GEOMETRY: Geometry = Geometry::None;
+    fn apply_linear(&self, _: &Linear) -> Linearity<Self> {
+        Linearity::Invariant
+    }
+    fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, JsonError> {
+        primase_core::json::to_value(&self.0).map(Some)
+    }
+}
 
 impl Component for MaterialTextures {
     const NAME: &'static str = "shred.material_textures";

@@ -1464,19 +1464,15 @@ dependencies = [
 name = "primase-shred"
 version = "0.1.0"
 dependencies = [
- "half",
- "lua51-bytecode",
  "morpheme-formats",
  "primase-core",
  "primase-foundations",
  "primase-havok",
  "primase-testdata",
  "primase-texcodec",
- "quantydb-sqlite",
- "rsx-reader",
+ "rme-formats",
  "serde",
  "serde_json",
- "sha2",
  "thiserror",
 ]
 
@@ -1534,6 +1530,7 @@ dependencies = [
  "primase-core",
  "primase-foundations",
  "primase-testdata",
+ "rsx-reader",
  "thiserror",
 ]
 
@@ -1665,6 +1662,23 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "rme-formats"
+version = "0.1.0"
+dependencies = [
+ "half",
+ "lua51-bytecode",
+ "morpheme-formats",
+ "primase-foundations",
+ "primase-testdata",
+ "quantydb-sqlite",
+ "rsx-reader",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
 
 [[package]]
 name = "rsx-reader"

@@ -1,6 +1,6 @@
 [package]
 name = "rsx-reader"
-description = "RSX shader program containers"
+description = "PS3 RSX shader program containers (CgBinary, fragment programs) and the CellGcmTexture descriptor"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

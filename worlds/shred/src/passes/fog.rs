@@ -13,9 +13,10 @@
 //!
 //! Core's fog is a fraction by camera distance only, so this pass keeps `Linear { a1, a2 }` with the stored colour and
 //! names what it drops. `a9` is not read by the shader; the script's blend is not modelled.
-use crate::components::{LevelParams, ScriptCall, ScriptValue};
+use crate::components::LevelParams;
 use primase_core::pass::{OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Atmosphere, Fog, FogFalloff, Resource, World};
+use rme_formats::level_params::{ScriptCall, ScriptValue};
 
 pub const LOWER_SHRED_FOG: PassSpec = PassSpec {
     name: "lower-shred-fog",

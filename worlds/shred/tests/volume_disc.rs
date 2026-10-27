@@ -4,13 +4,14 @@
 //! published NVIDIA VTC description and RSX consumer, plus hand-worked fixtures.
 mod inputs;
 
-use inputs::{Depth, Game, Query, depth, expect_found, install, seed};
 use primase_core::{ColorSpace, TexRole};
-use primase_shred::read::{
+use primase_shred::read::texture;
+use inputs::{Depth, Game, Query, depth, expect_found, install, seed};
+use primase_texcodec::{Decoder, TexDecoder, gcm::Volume};
+use rme_formats::{
     pak::Pak,
     texture::{Payload, Residency, TextureCatalog},
 };
-use primase_texcodec::{Decoder, TexDecoder, gcm::Volume};
 use std::path::{Path, PathBuf};
 
 fn archives(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -136,8 +137,7 @@ fn every_volume_and_its_stored_copy_and_spatial_coherence() {
             .enumerate()
             .filter(|(_, r)| r.header.gcm.dimension == 3)
         {
-            let v = c
-                .decode_volume(index, Payload::Primary, ColorSpace::Linear, TexRole::Color)
+            let v = texture::decode_volume(&c, index, Payload::Primary, ColorSpace::Linear, TexRole::Color)
                 .unwrap_or_else(|e| panic!("{label} {:?}: {e}", String::from_utf8_lossy(&r.path)));
             count += 1;
             assert_eq!(v.levels.len(), 1);
@@ -186,9 +186,14 @@ fn every_volume_and_its_stored_copy_and_spatial_coherence() {
                     .enumerate()
                     .filter(|(_, other)| other.path == r.path && other.residency == Residency::Streamed)
                 {
-                    let full = c
-                        .decode_volume(full_index, Payload::Primary, ColorSpace::Linear, TexRole::Color)
-                        .unwrap();
+                    let full = texture::decode_volume(
+                        &c,
+                        full_index,
+                        Payload::Primary,
+                        ColorSpace::Linear,
+                        TexRole::Color,
+                    )
+                    .unwrap();
                     assert_eq!(v, full, "volume prefetch {label}");
                     copies += 1;
                 }

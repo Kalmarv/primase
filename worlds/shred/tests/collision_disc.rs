@@ -5,7 +5,6 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod inputs;
 
-use inputs::{Game, Query, expect_found, install, install_file};
 use primase_core::{
     Collider, Collision, Instance, Mesh, Shape, Source, Transform, World,
     frame::{Axis, SourceFrame},
@@ -17,11 +16,12 @@ use primase_havok::packfile::{
 use primase_shred::{
     components::{CollisionSurfaces, DynamicShape, RigidBody},
     read::{
-        collision::{self, CollisionReport, SurfaceTable},
+        collision::{self, CollisionReport},
         level,
-        pak::Pak,
     },
 };
+use inputs::{Game, Query, expect_found, install, install_file};
+use rme_formats::{pak::Pak, surfaces::SurfaceTable};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 

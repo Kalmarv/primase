@@ -15,8 +15,6 @@
 //! core's primitives, so nothing is tessellated. Havok's convex radius (a skin around every convex shape) is not
 //! added to any of them. A `ConvexTranslate` offsets its child; a list and a MOPP tree hold their children. Only
 //! meshes carry a surface: every other leaf is surface 0 (`default`).
-use super::pak::Pak;
-use crate::read::database::{Database, Value};
 use crate::{
     Error, Result,
     components::{CollisionSurface, CollisionSurfaces, DynamicShape, RigidBody as BodyData},
@@ -29,6 +27,7 @@ use primase_havok::packfile::{
     Packfile,
     physics::{self, ExtendedMesh, RigidBody, Shape},
 };
+use rme_formats::{pak::Pak, surfaces::SurfaceTable};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The surface field of a triangle's material word: bits 3..=8.
@@ -37,133 +36,103 @@ pub const SURFACE_MASK: u32 = 0x3F;
 /// How deep a body's shape tree may go (the data's is 3).
 const MAX_DEPTH: usize = 16;
 
-/// MAIN.DB's `surfaces` table: the name of each id (`surfaces.id`, 0..n in order), which is the index into the
-/// world's zero-flag `core.surfaces` rows that [`read_collision`] sets. Flagged material identities append rows.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SurfaceTable(pub Vec<String>);
-
-impl SurfaceTable {
-    pub fn from_main_db(db: &[u8]) -> Result<Self> {
-        let table = Database::open(db)
-            .and_then(|d| d.table("surfaces"))
-            .map_err(|e| invalid(0, format!("MAIN.DB: {e}")))?;
-        let (Some(id), Some(name)) = (table.column("id"), table.column("NAME")) else {
-            return Err(invalid(0, "MAIN.DB surfaces has no id and NAME columns"));
-        };
-        let mut names = Vec::new();
-        for row in &table.rows {
-            let (Some(Value::Text(i)), Some(Value::Text(n))) = (row.values.get(id), row.values.get(name))
-            else {
-                return Err(invalid(
-                    0,
-                    format!("MAIN.DB surfaces row {}: id and NAME are not text", row.rowid),
-                ));
-            };
-            if i.parse::<usize>().ok() != Some(names.len()) {
-                return Err(invalid(
-                    0,
-                    format!(
-                        "MAIN.DB surfaces row {}: id {i:?} is not {}",
-                        row.rowid,
-                        names.len()
-                    ),
-                ));
-            }
-            names.push(n.clone());
+/// The world's zero-flag `core.surfaces` rows named by the table, in id order.
+fn to_world(table: &SurfaceTable) -> Result<Surfaces> {
+    let mut s = Surfaces::default();
+    for (i, name) in table.0.iter().enumerate() {
+        if usize::from(s.index(name).map_err(|e| invalid(0, e))?) != i {
+            return Err(invalid(
+                0,
+                format!("MAIN.DB surfaces: name {name:?} repeats (row {i})"),
+            ));
         }
-        Ok(Self(names))
     }
+    Ok(s)
+}
 
-    fn to_world(&self) -> Result<Surfaces> {
-        let mut s = Surfaces::default();
-        for (i, name) in self.0.iter().enumerate() {
-            if usize::from(s.index(name).map_err(|e| invalid(0, e))?) != i {
-                return Err(invalid(
-                    0,
-                    format!("MAIN.DB surfaces: name {name:?} repeats (row {i})"),
-                ));
-            }
-        }
-        Ok(s)
+/// The surfaces and their source identities the world holds after reading: the table's rows, then one row for each
+/// (database id, flag word) pair in `pairs` the table's rows do not already carry.
+fn catalog(
+    table: &SurfaceTable,
+    world: &World,
+    pairs: BTreeSet<(u16, u32)>,
+) -> Result<(Surfaces, CollisionSurfaces)> {
+    let base = to_world(table)?;
+    if table.0.len() > 64 {
+        return Err(invalid(0, "MAIN.DB has more than 64 surface ids"));
     }
-
-    fn catalog(&self, world: &World, pairs: BTreeSet<(u16, u32)>) -> Result<(Surfaces, CollisionSurfaces)> {
-        let base = self.to_world()?;
-        if self.0.len() > 64 {
-            return Err(invalid(0, "MAIN.DB has more than 64 surface ids"));
-        }
-        let mut sources = CollisionSurfaces(
-            self.0
-                .iter()
-                .enumerate()
-                .map(|(id, name)| {
-                    (
-                        id as u16,
-                        CollisionSurface {
-                            database_id: id as u16,
-                            database_name: name.clone(),
-                            flags: 0,
-                        },
-                    )
-                })
-                .collect(),
-        );
-        let mut surfaces = match (
-            world.resource::<Surfaces>(),
-            world.resource::<CollisionSurfaces>(),
-        ) {
-            (None, None) => base,
-            (Some(held), None) if *held == base => held.clone(),
-            (Some(held), Some(origins)) => {
-                // Reading into a lowered/renamed table would mix source and destination state.
-                if held.0.len() != origins.0.len() || !held.0.starts_with(&base.0) {
-                    return Err(invalid(0, "existing collision surfaces are not the source table"));
+    let mut sources = CollisionSurfaces(
+        table
+            .0
+            .iter()
+            .enumerate()
+            .map(|(id, name)| {
+                (
+                    id as u16,
+                    CollisionSurface {
+                        database_id: id as u16,
+                        database_name: name.clone(),
+                        flags: 0,
+                    },
+                )
+            })
+            .collect(),
+    );
+    let mut surfaces = match (
+        world.resource::<Surfaces>(),
+        world.resource::<CollisionSurfaces>(),
+    ) {
+        (None, None) => base,
+        (Some(held), None) if *held == base => held.clone(),
+        (Some(held), Some(origins)) => {
+            // Reading into a lowered/renamed table would mix source and destination state.
+            if held.0.len() != origins.0.len() || !held.0.starts_with(&base.0) {
+                return Err(invalid(0, "existing collision surfaces are not the source table"));
+            }
+            for (i, surface) in held.0.iter().enumerate() {
+                let source = origins
+                    .0
+                    .get(&(i as u16))
+                    .ok_or_else(|| invalid(0, "existing collision surface has no source identity"))?;
+                if table.0.get(usize::from(source.database_id)) != Some(&source.database_name)
+                    || *surface != primase_core::Surface::new(surface_name(source))
+                {
+                    return Err(invalid(
+                        0,
+                        "existing collision surface identity differs from MAIN.DB",
+                    ));
                 }
-                for (i, surface) in held.0.iter().enumerate() {
-                    let source = origins
-                        .0
-                        .get(&(i as u16))
-                        .ok_or_else(|| invalid(0, "existing collision surface has no source identity"))?;
-                    if self.0.get(usize::from(source.database_id)) != Some(&source.database_name)
-                        || *surface != primase_core::Surface::new(surface_name(source))
-                    {
-                        return Err(invalid(
-                            0,
-                            "existing collision surface identity differs from MAIN.DB",
-                        ));
-                    }
-                }
-                primase_core::Resource::verify(origins, world).map_err(|e| invalid(0, e))?;
-                sources = origins.clone();
-                held.clone()
             }
-            _ => {
-                return Err(invalid(
-                    0,
-                    "the world's core.surfaces is not MAIN.DB's source table",
-                ));
-            }
-        };
-        let known: BTreeSet<_> = sources.0.values().map(|s| (s.database_id, s.flags)).collect();
-        for (id, flags) in pairs.difference(&known).copied() {
-            let name = self
-                .0
-                .get(usize::from(id))
-                .ok_or_else(|| invalid(0, "material surface past MAIN.DB"))?;
-            let source = CollisionSurface {
-                database_id: id,
-                database_name: name.clone(),
-                flags,
-            };
-            let name = surface_name(&source);
-            if surfaces.0.iter().any(|s| s.name == name) {
-                return Err(invalid(0, format!("collision surface name {name:?} repeats")));
-            }
-            let index = surfaces.index(&name).map_err(|e| invalid(0, e))?;
-            sources.0.insert(index, source);
+            primase_core::Resource::verify(origins, world).map_err(|e| invalid(0, e))?;
+            sources = origins.clone();
+            held.clone()
         }
-        Ok((surfaces, sources))
+        _ => {
+            return Err(invalid(
+                0,
+                "the world's core.surfaces is not MAIN.DB's source table",
+            ));
+        }
+    };
+    let known: BTreeSet<_> = sources.0.values().map(|s| (s.database_id, s.flags)).collect();
+    for (id, flags) in pairs.difference(&known).copied() {
+        let name = table
+            .0
+            .get(usize::from(id))
+            .ok_or_else(|| invalid(0, "material surface past MAIN.DB"))?;
+        let source = CollisionSurface {
+            database_id: id,
+            database_name: name.clone(),
+            flags,
+        };
+        let name = surface_name(&source);
+        if surfaces.0.iter().any(|s| s.name == name) {
+            return Err(invalid(0, format!("collision surface name {name:?} repeats")));
+        }
+        let index = surfaces.index(&name).map_err(|e| invalid(0, e))?;
+        sources.0.insert(index, source);
     }
+    Ok((surfaces, sources))
 }
 
 fn surface_name(source: &CollisionSurface) -> String {
@@ -336,7 +305,7 @@ pub fn read_collision(
             }
         }
     }
-    let (table, origins) = surfaces.catalog(world, pairs)?;
+    let (table, origins) = catalog(surfaces, world, pairs)?;
     let catalog = origins
         .0
         .iter()
@@ -512,7 +481,7 @@ mod tests {
     fn material_indices_select_distinct_pairs_and_repeated_pairs_share_a_surface() {
         let table = SurfaceTable(vec!["default".into(), "hazard".into()]);
         let pairs = BTreeSet::from([(0, 0x1000), (0, 1)]);
-        let (surfaces, origins) = table.catalog(&World::new(), pairs).unwrap();
+        let (surfaces, origins) = catalog(&table, &World::new(), pairs).unwrap();
         assert_eq!(
             surfaces.0.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
             [
@@ -571,25 +540,21 @@ mod tests {
     #[test]
     fn additional_reads_append_sorted_new_pairs_without_changing_existing_indices() {
         let table = SurfaceTable(vec!["default".into()]);
-        let (surfaces, origins) = table
-            .catalog(&World::new(), BTreeSet::from([(0, 0x1000)]))
-            .unwrap();
+        let (surfaces, origins) = catalog(&table, &World::new(), BTreeSet::from([(0, 0x1000)])).unwrap();
         let mut world = World::new();
         world.insert_resource(surfaces);
         world.insert_resource(origins);
-        let (surfaces, origins) = table
-            .catalog(&world, BTreeSet::from([(0, 1), (0, 0x1000)]))
-            .unwrap();
+        let (surfaces, origins) = catalog(&table, &world, BTreeSet::from([(0, 1), (0, 0x1000)])).unwrap();
         assert_eq!(surfaces.0.len(), 3);
         assert_eq!(origins.0[&1].flags, 0x1000);
         assert_eq!(origins.0[&2].flags, 1);
         world.resource_mut::<Surfaces>().unwrap().0[0].name = "renamed".into();
-        assert!(table.catalog(&world, BTreeSet::new()).is_err());
+        assert!(catalog(&table, &world, BTreeSet::new()).is_err());
     }
 
     #[test]
     fn authored_names_cannot_alias_generated_surface_names() {
         let table = SurfaceTable(vec!["default".into(), "default [shred-flags=0x00000001]".into()]);
-        assert!(table.catalog(&World::new(), BTreeSet::from([(0, 1)])).is_err());
+        assert!(catalog(&table, &World::new(), BTreeSet::from([(0, 1)])).is_err());
     }
 }

@@ -1,0 +1,27 @@
+[package]
+name = "rme-formats"
+description = "Readers for Tony Hawk's SHRED (PS3): PAK v4 archives, CSTR blocks, level geometry and SCP tables, material banks, textures, MAIN.DB rows, level scripts and reference rigs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+primase-foundations = { workspace = true, features = ["compress"] }
+rsx-reader.workspace = true
+morpheme-formats.workspace = true
+lua51-bytecode.workspace = true
+quantydb-sqlite.workspace = true
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+half.workspace = true
+
+[dev-dependencies]
+primase-testdata.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+
+[lints]
+workspace = true

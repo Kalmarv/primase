@@ -3,7 +3,8 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{Atmosphere, FogFalloff, World};
-use primase_shred::components::{LevelParams, ScriptCall, ScriptValue};
+use primase_shred::components::{LevelParams, Stored};
+use rme_formats::level_params::{ScriptCall, ScriptValue};
 
 fn call(function: &str, args: &[f64]) -> ScriptCall {
     ScriptCall {
@@ -13,11 +14,11 @@ fn call(function: &str, args: &[f64]) -> ScriptCall {
 }
 
 fn params(calls: Vec<ScriptCall>) -> LevelParams {
-    LevelParams {
+    Stored(rme_formats::level_params::LevelParams {
         level: "zulu".into(),
         script: r"script\vfx_level_load_zulu.lua".into(),
         calls,
-    }
+    })
 }
 
 fn run(w: &mut World, scale: &str) -> Result<RunReport, String> {

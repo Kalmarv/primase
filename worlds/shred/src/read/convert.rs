@@ -1,16 +1,19 @@
 //! Conversion adapter; the caller owns archive selection, the source-frame assertion and every optional input.
 use super::{
-    collision::{self, CollisionReport, SurfaceTable},
+    collision::{self, CollisionReport},
     level::{self, LevelReport},
-    level_params::{self, ParamsReport, ScriptInputs},
     material_join::{MaterialInputs, MaterialLibrary, MaterialReport},
-    pak::Pak,
 };
-use crate::components::SessionGraph;
+use crate::components::{SessionGraph, Stored};
 use primase_core::{
     Entity, Mesh, World,
     convert::{self, Reader, Report},
     frame::SourceFrame,
+};
+use rme_formats::{
+    level_params::{self, ParamsReport, ScriptInputs},
+    pak::Pak,
+    surfaces::SurfaceTable,
 };
 use std::collections::BTreeSet;
 
@@ -114,11 +117,11 @@ impl Reader for ShredReader<'_> {
             lines.extend(self.collision.lines());
         }
         if let Some(inputs) = &self.scripts {
-            let (params, report) = level_params::read_level_params(inputs)?;
+            let (params, report) = level_params::read_level_params(inputs).map_err(crate::Error::from)?;
             self.params = report;
-            lines.extend(self.params.lines());
+            lines.extend(params_lines(&self.params));
             if let Some(params) = params {
-                world.insert_resource(params);
+                world.insert_resource(Stored(params));
             }
         }
         if let Some(inputs) = &self.material_inputs {
@@ -176,4 +179,26 @@ impl ShredReader<'_> {
             None => Ok(vec![]),
         }
     }
+}
+
+/// The log lines of a level-script read.
+fn params_lines(report: &ParamsReport) -> Report {
+    let text = match (&report.script, report.branching) {
+        (None, _) => format!("no vfx_level_load script for level {}", report.level),
+        (Some(s), true) => {
+            format!("{s} has control flow or nested functions; none of its calls are read")
+        }
+        (Some(s), false) => {
+            let mut t = format!(
+                "{s}: {} calls read as data, {} not read",
+                report.read,
+                report.unread.len()
+            );
+            for (pc, why) in &report.unread {
+                t.push_str(&format!("; instruction {pc}: {why}"));
+            }
+            t
+        }
+    };
+    vec![("shred level params".into(), text)]
 }

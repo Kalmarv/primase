@@ -2,13 +2,14 @@
 //! BCn output is also expanded through the codec so every encoded level is exercised.
 mod inputs;
 
-use inputs::{Depth, Game, Query, depth, expect_found, install, seed};
 use primase_core::{ColorSpace, TexRole, Texture};
-use primase_shred::read::{
-    pak::Pak,
-    texture::{Error, Payload, Residency, TextureCatalog},
-};
+use primase_shred::read::texture::{self, Error};
+use inputs::{Depth, Game, Query, depth, expect_found, install, seed};
 use primase_texcodec::{Decoder, TexDecoder};
+use rme_formats::{
+    pak::Pak,
+    texture::{Payload, Residency, TextureCatalog},
+};
 use std::path::{Path, PathBuf};
 
 fn archives(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -92,7 +93,7 @@ fn texture_pairs_and_independently_stored_mip_tails() {
                 missing += 1;
                 continue;
             }
-            let images = match c.decode(i, Payload::Primary, ColorSpace::Linear, TexRole::Color) {
+            let images = match texture::decode(&c, i, Payload::Primary, ColorSpace::Linear, TexRole::Color) {
                 Ok(x) => x,
                 Err(Error::Gcm(primase_texcodec::gcm::Error::Dimension { dimension: 3, .. })) => {
                     volumes += 1;
@@ -113,9 +114,14 @@ fn texture_pairs_and_independently_stored_mip_tails() {
                     .enumerate()
                     .filter(|(_, other)| other.path == r.path && other.residency == Residency::Streamed)
                 {
-                    let full_images = c
-                        .decode(full_index, Payload::Primary, ColorSpace::Linear, TexRole::Color)
-                        .unwrap();
+                    let full_images = texture::decode(
+                        &c,
+                        full_index,
+                        Payload::Primary,
+                        ColorSpace::Linear,
+                        TexRole::Color,
+                    )
+                    .unwrap();
                     let first = r.header.tail_first_mip() as usize;
                     assert_eq!(images.len(), full_images.len());
                     for (tail, full) in images.iter().zip(&full_images) {
@@ -137,9 +143,14 @@ fn texture_pairs_and_independently_stored_mip_tails() {
                         text_non_cube += 1;
                     }
                     if full.cube_tail.is_some() {
-                        let alias = c
-                            .decode(full_index, Payload::CubeTail, ColorSpace::Linear, TexRole::Color)
-                            .unwrap();
+                        let alias = texture::decode(
+                            &c,
+                            full_index,
+                            Payload::CubeTail,
+                            ColorSpace::Linear,
+                            TexRole::Color,
+                        )
+                        .unwrap();
                         assert_eq!(alias, images, "cube alias {label}");
                         cube_aliases += 1;
                     }

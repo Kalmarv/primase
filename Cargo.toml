@@ -15,9 +15,10 @@ members = [
     "repos/dx/rsx-reader",
     "toolkit/havok",
     "repos/morpheme-formats",
-    "repos/frostbite-formats",
+    "repos/rme-formats",
     "repos/lua51-bytecode",
-    "repos/anvil-formats",
+    "repos/dx/dxbc-reader",
+    "repos/iridia/iridia-dxbc",
     "repos/iridia/iridia-d3d9",
     "repos/iridia/iridia-interface",
     "repos/iridia/iridia",
@@ -39,12 +40,12 @@ members = [
     "worlds/monogame",
     "worlds/anvil",
     "worlds/shaunwhite",
-    "repos/dx/dxbc-reader",
+    "repos/anvil-formats",
     "repos/dx/dxil-reader",
-    "repos/iridia/iridia-dxbc",
+    "repos/frostbite-formats",
     "repos/iridia/iridia-dxil",
-    "repos/rage-engine-formats",
     "repos/primase-testdata",
+    "repos/rage-engine-formats",
 ]
 # the oozextract fork: upstream's sources and lints, not one of our crates (README there)
 exclude = ["repos/primase-oozextract"]
@@ -90,10 +91,10 @@ rsx-reader = { path = "repos/dx/rsx-reader" }
 primase-cache = { path = "toolkit/cache" }
 primase-havok = { path = "toolkit/havok" }
 morpheme-formats = { path = "repos/morpheme-formats" }
-frostbite-formats = { path = "repos/frostbite-formats" }
+rme-formats = { path = "repos/rme-formats" }
 lua51-bytecode = { path = "repos/lua51-bytecode" }
+dxbc-reader = { path = "repos/dx/dxbc-reader" }
 iridia-dxbc = { path = "repos/iridia/iridia-dxbc" }
-anvil-formats = { path = "repos/anvil-formats" }
 iridia-d3d9 = { path = "repos/iridia/iridia-d3d9" }
 iridia-interface = { path = "repos/iridia/iridia-interface" }
 iridia = { path = "repos/iridia/iridia" }
@@ -112,8 +113,9 @@ primase-monogame = { path = "worlds/monogame" }
 primase-anvil = { path = "worlds/anvil" }
 primase-shaunwhite = { path = "worlds/shaunwhite" }
 primase-shred = { path = "worlds/shred" }
-dxbc-reader = { path = "repos/dx/dxbc-reader" }
+anvil-formats = { path = "repos/anvil-formats" }
 dxil-reader = { path = "repos/dx/dxil-reader" }
+frostbite-formats = { path = "repos/frostbite-formats" }
 rage-engine-formats = { path = "repos/rage-engine-formats" }
 
 thiserror = { version = "=2.0.21", default-features = false, features = ["std"] }

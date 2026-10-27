@@ -22,6 +22,16 @@ pub enum Error {
     Invalid { offset: usize, detail: String },
 }
 
+impl From<rme_formats::Error> for Error {
+    fn from(e: rme_formats::Error) -> Self {
+        match e {
+            rme_formats::Error::Io(e) => Self::Io(e),
+            rme_formats::Error::Field(e) => Self::Field(e),
+            rme_formats::Error::Invalid { offset, detail } => Self::Invalid { offset, detail },
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 pub(crate) fn invalid(offset: usize, detail: impl ToString) -> Error {

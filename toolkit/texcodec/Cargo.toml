@@ -11,6 +11,7 @@ publish.workspace = true
 [dependencies]
 primase-foundations.workspace = true
 primase-core.workspace = true
+rsx-reader.workspace = true
 thiserror.workspace = true
 
 bcdec_rs.workspace = true

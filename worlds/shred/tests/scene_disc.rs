@@ -3,18 +3,18 @@
 //! Counts are those of the recon census (`scratch/scene`), recounted here by this reader.
 mod inputs;
 
-use inputs::{Game, Query, expect_found, install, install_file};
 use primase_core::{Marker, frame::SourceFrame};
-use primase_shred::read::database::Database;
 use primase_shred::{
     components::{Locator, Occluder, SceneLight, Spline, Spot, SpotCamera},
-    read::{
-        level,
-        manifest::{self, Difficulty, Manifest},
-        names,
-        pak::Pak,
-        scp_tables,
-    },
+    read::{level, manifest as manifest_join, names},
+};
+use inputs::{Game, Query, expect_found, install, install_file};
+use rme_formats::{
+    database::Database,
+    manifest::{self, Difficulty, Manifest},
+    names as rme_names,
+    pak::Pak,
+    scp_tables,
 };
 use std::path::{Path, PathBuf};
 
@@ -313,7 +313,7 @@ fn manifest_nodes_spot_chunks_and_spawns() {
         assert_eq!(r.splines, world.iter::<Spline>().count());
         let named = names::name_splines(&mut world, &[]);
         named_guides += named;
-        let rails = names::flythrough_rails(&db, &{
+        let rails = rme_names::flythrough_rails(&db, &{
             let mut c = level_name.chars();
             c.next().unwrap().to_ascii_uppercase().to_string() + c.as_str()
         })
@@ -338,7 +338,7 @@ fn manifest_nodes_spot_chunks_and_spawns() {
         let drops = manifest::drop_spots(&db, &db_name)
             .unwrap()
             .expect("dropspots table");
-        let hits = manifest::resolve_drop_spots(&world, &drops);
+        let hits = manifest_join::resolve_drop_spots(&world, &drops);
         let named = hits.iter().filter(|(_, e)| !e.is_empty()).count();
         assert_eq!((drops.len(), named), (rows, resolved), "{level_name} drop spots");
         // a drop spot's chunk is a Teleport everywhere it resolves

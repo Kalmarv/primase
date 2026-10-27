@@ -1,25 +1,11 @@
-//! Source containers, material banks, vertex attributes, quartet geometry, World assembly and conversion adapter.
-pub mod attributes;
+//! World assembly and the conversion adapter over `rme-formats`' readers: level geometry, collision, source materials
+//! and their texture graph, reference rigs and name joins.
 pub mod collision;
 pub mod convert;
-pub mod cstr;
-pub mod database;
 pub mod level;
-pub mod level_params;
 pub mod manifest;
 pub mod material;
 pub mod material_join;
 pub mod names;
-pub mod pak;
-pub mod pixel_program;
 pub mod reference_rig;
-pub mod scene;
-pub mod scp_cameras;
-pub mod scp_lights;
-pub mod scp_locators;
-pub mod scp_occluders;
-pub mod scp_splines;
-pub mod scp_tables;
-pub mod session;
-mod skin;
 pub mod texture;

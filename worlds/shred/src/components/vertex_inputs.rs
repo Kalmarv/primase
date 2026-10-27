@@ -1,13 +1,7 @@
 //! Source vertex inputs whose shader-specific meaning is not assigned a core semantic.
 use primase_core::{Component, Entity, Geometry, Linear, Mesh, World, frame::SourceFrame, world::Linearity};
+use rme_formats::attributes::VertexInput;
 use std::collections::BTreeMap;
-
-/// Decoded source lanes, padded with zero to four components. Values retain their source encoding's meaning.
-#[derive(Clone, Debug, PartialEq)]
-pub struct VertexInput {
-    pub lanes: u8,
-    pub values: Vec<[f32; 4]>,
-}
 
 /// Original shader inputs per primitive. `stored_uv0..3` retain all authored UV sets even when a submesh
 /// remaps or does not bind them; `attr14/15` are the two CMP basis vectors (individual tangent roles unproven);

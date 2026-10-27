@@ -3,7 +3,6 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod inputs;
 
-use inputs::{Game, install};
 use primase_core::{
     convert::Reader,
     frame::{Axis, SourceFrame},
@@ -15,9 +14,12 @@ use primase_shred::{
     read::{
         convert::ShredReader,
         material_join::{MaterialInputs, TexturePreference},
-        pak::Pak,
-        pixel_program::classify,
     },
+};
+use inputs::{Game, install};
+use rme_formats::{
+    pak::Pak,
+    pixel_program::{PixelProgram as Class, classify},
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -170,8 +172,8 @@ fn charlies_sky_domes_are_unlit_and_nothing_with_another_program_is() {
     for (e, m) in world.iter::<ShredMaterial>() {
         let unlit = world.get::<PbrMaterial>(e).unwrap().shading == Shading::Unlit;
         let scaled = matches!(
-            world.get::<PixelProgram>(e),
-            Some(PixelProgram::ScaledTexture { .. })
+            world.get::<PixelProgram>(e).map(|p| &**p),
+            Some(Class::ScaledTexture { .. })
         );
         assert_eq!(
             unlit,

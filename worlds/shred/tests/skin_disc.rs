@@ -1,15 +1,16 @@
 //! Full source skin census; source counts and signed face checks accompany native-writer/hand-worked fixtures.
 mod inputs;
 
-use inputs::{Game, Query, expect_found, install};
 use primase_core::{
     Instance, Mesh, Semantic, Stream,
     frame::{Axis, SourceFrame},
 };
 use primase_shred::{
     components::{SourceSkeleton, SourceSkin},
-    read::{level, pak::Pak},
+    read::level,
 };
+use inputs::{Game, Query, expect_found, install};
+use rme_formats::pak::Pak;
 use std::path::{Path, PathBuf};
 
 fn archives(dir: &Path, out: &mut Vec<PathBuf>) {

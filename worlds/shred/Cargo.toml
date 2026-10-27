@@ -10,21 +10,17 @@ publish.workspace = true
 
 [dependencies]
 primase-core.workspace = true
+rme-formats.workspace = true
 primase-texcodec.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-primase-foundations = { workspace = true, features = ["compress"] }
+primase-foundations.workspace = true
 primase-havok.workspace = true
-rsx-reader.workspace = true
 morpheme-formats.workspace = true
-lua51-bytecode.workspace = true
-quantydb-sqlite.workspace = true
 thiserror.workspace = true
-half.workspace = true
 
 [dev-dependencies]
 primase-testdata.workspace = true
-sha2.workspace = true
 
 [lints]
 workspace = true

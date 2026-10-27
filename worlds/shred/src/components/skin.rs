@@ -1,32 +1,11 @@
 //! Authored processed-skin data. The runtime bind/pose convention is not assigned a core meaning.
-use primase_core::{
-    Component, Entity, Geometry, Linear, Mesh, Transform, World, frame::SourceFrame, world::Linearity,
-};
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct SourceBone {
-    pub words: [u32; 2],
-    pub name: Vec<u8>,
-    /// Original SCP matrix; its space and the two words' runtime roles remain unproved.
-    pub matrix: Transform,
-}
+use primase_core::{Component, Entity, Geometry, Linear, Mesh, World, frame::SourceFrame, world::Linearity};
+use rme_formats::skin::{SourceBone, SourceSkinVertex};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SourceSkeleton {
     pub frame: SourceFrame,
     pub bones: Vec<SourceBone>,
-}
-
-/// One source vertex's palette and quantized weights. 255 is an inactive bone, with zero weight.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SourceSkinVertex {
-    pub bones: [u8; 4],
-    pub weights: [u8; 4],
-    /// Original float bits, including stock NaNs; a core normal stream is omitted where these are nonfinite.
-    pub normal_bits: [u32; 3],
-    /// Source +28, whose output colour role is unproved.
-    pub extra: u32,
-    pub padding: [u8; 8],
 }
 
 /// Source binding data aligned with the mesh's primitives. No rest, inverse bind or deformation is invented.

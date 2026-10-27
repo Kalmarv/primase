@@ -1,6 +1,7 @@
-//! Sony CellGcmTexture byte layout and RSX texture storage (no GPU memory access).
+//! RSX texture storage described by a `CellGcmTexture` (no GPU memory access): level layout and decoding into core
+//! textures. The descriptor itself is read by `rsx_reader::gcm`.
 //!
-//! Descriptor fields are big endian; DXT blocks retain their little-endian BCn encoding.
+//! DXT blocks retain their little-endian BCn encoding.
 //! LN (0x20) selects constant base pitch; UN (0x40) selects *unnormalized* coordinates
 //! and does not change pixel storage. Compressed levels are block-linear even without LN.
 //! Cubes are +X, -X, +Y, -Y, +Z, -Z, each with its mip chain; non-LN faces start
@@ -10,19 +11,18 @@
 //! <https://github.com/ps3dev/PSL1GHT/blob/master/ppu/include/rsx/gcm_sys.h>
 //! (`gcmTexture`, `GCM_TEXTURE_REMAP_MODE`) and
 //! <https://github.com/RPCS3/rpcs3/blob/979a52415003fd7a74ddd216e1a5782b3731281f/rpcs3/Emu/RSX/Common/TextureUtils.cpp>
-//! (`get_subresources_layout_impl`). [`CellGcmTexture::decode_volume`] handles 3D
+//! (`get_subresources_layout_impl`). [`decode_volume`] handles 3D
 //! storage explicitly; the 2D/cube API never flattens a volume into images.
 
 use crate::{Decoder, TexDecoder};
 use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
+use rsx_reader::gcm::CellGcmTexture;
 use thiserror::Error;
 mod volume;
-pub use volume::{Volume, VolumeLevel, VolumeSubresource};
+pub use volume::{Volume, VolumeLevel, VolumeSubresource, decode_volume, volume_layout};
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("CellGcmTexture requires 24 bytes, got {0}")]
-    DescriptorLength(usize),
     #[error("unsupported GCM texture format 0x{0:02x}")]
     Format(u8),
     #[error("GCM texture dimension {dimension}, depth {depth} is incompatible with this decoding API")]
@@ -39,24 +39,6 @@ pub enum Error {
     Decode(#[from] crate::Error),
 }
 pub type Result<T> = std::result::Result<T, Error>;
-
-/// The 24-byte descriptor, including GPU address metadata. `offset` and `location`
-/// are preserved but never used to index the supplied texture payload.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CellGcmTexture {
-    pub format: u8,
-    pub mipmap: u8,
-    pub dimension: u8,
-    pub cubemap: u8,
-    pub remap: u32,
-    pub width: u16,
-    pub height: u16,
-    pub depth: u16,
-    pub location: u8,
-    pub pad: u8,
-    pub pitch: u32,
-    pub offset: u32,
-}
 
 /// One encoded level's range, relative to the supplied payload's start.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -77,170 +59,136 @@ fn mul(a: usize, b: usize) -> Result<usize> {
     a.checked_mul(b).ok_or(Error::Overflow)
 }
 
-impl CellGcmTexture {
-    /// Parse exactly one descriptor as data; validate supported storage when decoding.
-    pub fn parse(data: &[u8]) -> Result<Self> {
-        let b: &[u8; 24] = data.try_into().map_err(|_| Error::DescriptorLength(data.len()))?;
-        let u16_at = |i| u16::from_be_bytes([b[i], b[i + 1]]);
-        let u32_at = |i| u32::from_be_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
-        Ok(Self {
-            format: b[0],
-            mipmap: b[1],
-            dimension: b[2],
-            cubemap: b[3],
-            remap: u32_at(4),
-            width: u16_at(8),
-            height: u16_at(10),
-            depth: u16_at(12),
-            location: b[14],
-            pad: b[15],
-            pitch: u32_at(16),
-            offset: u32_at(20),
-        })
+fn source_format(d: CellGcmTexture) -> Result<TexFormat> {
+    match d.format & !0x60 {
+        0x81 => Ok(TexFormat::R8Unorm),
+        0x85 => Ok(TexFormat::Rgba8Unorm),
+        0x86 => Ok(TexFormat::Bc1),
+        0x88 => Ok(TexFormat::Bc3),
+        _ => Err(Error::Format(d.format)),
     }
+}
 
-    pub fn linear(self) -> bool {
-        self.format & 0x20 != 0
+/// Layout of a complete chain (`first_mip = 0`) or a separately stored tail.
+/// A tail starts at byte zero, retains the descriptor's base pitch for LN,
+/// and aligns its cube faces independently. No address relocation is applied.
+pub fn layout(d: CellGcmTexture, first_mip: u8) -> Result<Vec<Subresource>> {
+    let format = source_format(d)?;
+    if d.dimension != 2 || d.depth > 1 {
+        return Err(Error::Dimension {
+            dimension: d.dimension,
+            depth: d.depth,
+        });
     }
-    pub fn unnormalized_coordinates(self) -> bool {
-        self.format & 0x40 != 0
+    if d.width == 0 || d.height == 0 {
+        return Err(Error::Invalid("zero extent"));
     }
-
-    fn source_format(self) -> Result<TexFormat> {
-        match self.format & !0x60 {
-            0x81 => Ok(TexFormat::R8Unorm),
-            0x85 => Ok(TexFormat::Rgba8Unorm),
-            0x86 => Ok(TexFormat::Bc1),
-            0x88 => Ok(TexFormat::Bc3),
-            _ => Err(Error::Format(self.format)),
+    if d.cubemap > 1 || (d.cubemap == 1 && d.width != d.height) {
+        return Err(Error::Invalid("cube flag or nonsquare cube"));
+    }
+    if d.mipmap == 0 || u32::from(d.mipmap) > d.width.max(d.height).ilog2() + 1 || first_mip >= d.mipmap {
+        return Err(Error::Invalid("mip count or first mip"));
+    }
+    if !d.linear()
+        && !format.is_block_compressed()
+        && (!d.width.is_power_of_two() || !d.height.is_power_of_two())
+    {
+        return Err(Error::Invalid(
+            "uncompressed swizzled extent must be power of two",
+        ));
+    }
+    validate_remap(d.remap)?;
+    let (bw, bh) = format.block_dims();
+    let bytes = format.block_bytes() as usize;
+    let base_row = mul(u32::from(d.width).div_ceil(bw) as usize, bytes)?;
+    if d.linear() && ((d.pitch as usize) < base_row || !(d.pitch as usize).is_multiple_of(bytes)) {
+        return Err(Error::Invalid("base pitch smaller than row or not a whole block"));
+    }
+    let mut offset = 0;
+    let mut levels = Vec::new();
+    for face in 0..if d.cubemap == 1 { 6 } else { 1 } {
+        if face > 0 && !d.linear() {
+            offset = add(offset, 127)? & !127;
+        }
+        for mip in first_mip..d.mipmap {
+            let width = u32::from(d.width >> mip).max(1);
+            let height = u32::from(d.height >> mip).max(1);
+            let row = mul(width.div_ceil(bw) as usize, bytes)?;
+            let pitch = if d.linear() { d.pitch as usize } else { row };
+            let size = mul(pitch, height.div_ceil(bh) as usize)?;
+            levels.push(Subresource {
+                face,
+                mip,
+                width,
+                height,
+                offset,
+                size,
+                pitch,
+            });
+            offset = add(offset, size)?;
         }
     }
+    Ok(levels)
+}
 
-    /// Layout of a complete chain (`first_mip = 0`) or a separately stored tail.
-    /// A tail starts at byte zero, retains the descriptor's base pitch for LN,
-    /// and aligns its cube faces independently. No address relocation is applied.
-    pub fn layout(self, first_mip: u8) -> Result<Vec<Subresource>> {
-        let format = self.source_format()?;
-        if self.dimension != 2 || self.depth > 1 {
-            return Err(Error::Dimension {
-                dimension: self.dimension,
-                depth: self.depth,
+/// Produce core textures (one per face) with top-first rows and straight RGBA.
+/// Caller supplies colour meaning; no colour transfer or normal reconstruction
+/// is done. The caller can attach its normal convention to the returned textures.
+/// Identity-remapped BC1/BC3 stay compressed; other remaps expand to RGBA8.
+/// The payload must end exactly after the final level (no final-face padding).
+pub fn decode(
+    d: CellGcmTexture,
+    data: &[u8],
+    first_mip: u8,
+    color_space: ColorSpace,
+    role: TexRole,
+) -> Result<Vec<Texture>> {
+    let layout = layout(d, first_mip)?;
+    let last = layout.last().ok_or(Error::Invalid("empty layout"))?;
+    let expected = add(last.offset, last.size)?;
+    if data.len() != expected {
+        return Err(Error::Length {
+            expected,
+            actual: data.len(),
+        });
+    }
+    let source = source_format(d)?;
+    let keep_bc = source.is_block_compressed() && d.remap == 0xaae4;
+    let format = if keep_bc { source } else { TexFormat::Rgba8Unorm };
+    let mut faces: Vec<Texture> = Vec::new();
+    for level in &layout {
+        if faces.len() == level.face as usize {
+            faces.push(Texture {
+                width: level.width,
+                height: level.height,
+                format,
+                levels: Vec::new(),
+                color_space,
+                role,
+                normal: None,
             });
         }
-        if self.width == 0 || self.height == 0 {
-            return Err(Error::Invalid("zero extent"));
-        }
-        if self.cubemap > 1 || (self.cubemap == 1 && self.width != self.height) {
-            return Err(Error::Invalid("cube flag or nonsquare cube"));
-        }
-        if self.mipmap == 0
-            || u32::from(self.mipmap) > self.width.max(self.height).ilog2() + 1
-            || first_mip >= self.mipmap
-        {
-            return Err(Error::Invalid("mip count or first mip"));
-        }
-        if !self.linear()
-            && !format.is_block_compressed()
-            && (!self.width.is_power_of_two() || !self.height.is_power_of_two())
-        {
-            return Err(Error::Invalid(
-                "uncompressed swizzled extent must be power of two",
-            ));
-        }
-        validate_remap(self.remap)?;
-        let (bw, bh) = format.block_dims();
-        let bytes = format.block_bytes() as usize;
-        let base_row = mul(u32::from(self.width).div_ceil(bw) as usize, bytes)?;
-        if self.linear() && ((self.pitch as usize) < base_row || !(self.pitch as usize).is_multiple_of(bytes))
-        {
-            return Err(Error::Invalid("base pitch smaller than row or not a whole block"));
-        }
-        let mut offset = 0;
-        let mut levels = Vec::new();
-        for face in 0..if self.cubemap == 1 { 6 } else { 1 } {
-            if face > 0 && !self.linear() {
-                offset = add(offset, 127)? & !127;
-            }
-            for mip in first_mip..self.mipmap {
-                let width = u32::from(self.width >> mip).max(1);
-                let height = u32::from(self.height >> mip).max(1);
-                let row = mul(width.div_ceil(bw) as usize, bytes)?;
-                let pitch = if self.linear() { self.pitch as usize } else { row };
-                let size = mul(pitch, height.div_ceil(bh) as usize)?;
-                levels.push(Subresource {
-                    face,
-                    mip,
-                    width,
-                    height,
-                    offset,
-                    size,
-                    pitch,
-                });
-                offset = add(offset, size)?;
-            }
-        }
-        Ok(levels)
-    }
-
-    /// Produce core textures (one per face) with top-first rows and straight RGBA.
-    /// Caller supplies colour meaning; no colour transfer or normal reconstruction
-    /// is done. The caller can attach its normal convention to the returned textures.
-    /// Identity-remapped BC1/BC3 stay compressed; other remaps expand to RGBA8.
-    /// The payload must end exactly after the final level (no final-face padding).
-    pub fn decode(
-        self,
-        data: &[u8],
-        first_mip: u8,
-        color_space: ColorSpace,
-        role: TexRole,
-    ) -> Result<Vec<Texture>> {
-        let layout = self.layout(first_mip)?;
-        let last = layout.last().ok_or(Error::Invalid("empty layout"))?;
-        let expected = add(last.offset, last.size)?;
-        if data.len() != expected {
-            return Err(Error::Length {
-                expected,
-                actual: data.len(),
-            });
-        }
-        let source = self.source_format()?;
-        let keep_bc = source.is_block_compressed() && self.remap == 0xaae4;
-        let format = if keep_bc { source } else { TexFormat::Rgba8Unorm };
-        let mut faces: Vec<Texture> = Vec::new();
-        for level in &layout {
-            if faces.len() == level.face as usize {
-                faces.push(Texture {
-                    width: level.width,
-                    height: level.height,
-                    format,
-                    levels: Vec::new(),
-                    color_space,
-                    role,
-                    normal: None,
-                });
-            }
-            let src = &data[level.offset..level.offset + level.size];
-            let mut packed = crate::buffer(source.level_size(level.width, level.height))?;
-            let bytes = source.block_bytes() as usize;
-            if !self.linear() && !source.is_block_compressed() {
-                for y in 0..level.height {
-                    for x in 0..level.width {
-                        let from = morton(x, y, level.width, level.height) * bytes;
-                        let to = (y as usize * level.width as usize + x as usize) * bytes;
-                        packed[to..to + bytes].copy_from_slice(&src[from..from + bytes]);
-                    }
-                }
-            } else {
-                let row = level.width.div_ceil(source.block_dims().0) as usize * bytes;
-                for (y, dst) in packed.chunks_exact_mut(row).enumerate() {
-                    dst.copy_from_slice(&src[y * level.pitch..y * level.pitch + row]);
+        let src = &data[level.offset..level.offset + level.size];
+        let mut packed = crate::buffer(source.level_size(level.width, level.height))?;
+        let bytes = source.block_bytes() as usize;
+        if !d.linear() && !source.is_block_compressed() {
+            for y in 0..level.height {
+                for x in 0..level.width {
+                    let from = morton(x, y, level.width, level.height) * bytes;
+                    let to = (y as usize * level.width as usize + x as usize) * bytes;
+                    packed[to..to + bytes].copy_from_slice(&src[from..from + bytes]);
                 }
             }
-            let pixels = expand_level(source, level.width, level.height, packed, self.remap)?;
-            faces[level.face as usize].levels.push(pixels);
+        } else {
+            let row = level.width.div_ceil(source.block_dims().0) as usize * bytes;
+            for (y, dst) in packed.chunks_exact_mut(row).enumerate() {
+                dst.copy_from_slice(&src[y * level.pitch..y * level.pitch + row]);
+            }
         }
-        Ok(faces)
+        let pixels = expand_level(source, level.width, level.height, packed, d.remap)?;
+        faces[level.face as usize].levels.push(pixels);
     }
+    Ok(faces)
 }
 
 // Interleave the available low x/y bits; a rectangular surface's remaining

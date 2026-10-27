@@ -8,8 +8,9 @@ use primase_shred::{
     components::{
         MaterialId, MaterialNamespace, MeshId, RefusedMesh, SourceSkeleton, SourceSkin, VertexInputs,
     },
-    read::{convert::ShredReader, level, pak::Pak, scene},
+    read::{convert::ShredReader, level},
 };
+use rme_formats::{pak::Pak, scene};
 use std::collections::BTreeSet;
 
 fn word(b: &mut [u8], at: usize, n: u32) {
@@ -254,7 +255,7 @@ impl Fixture {
             mgp: vec![],
         }
     }
-    fn decode(&self) -> primase_shred::Result<scene::Scene> {
+    fn decode(&self) -> rme_formats::Result<scene::Scene> {
         scene::decode(&self.scp, &self.mlp, &self.mmp, &self.mgp)
     }
     fn pak(&self) -> Pak {
@@ -326,13 +327,16 @@ fn zero_material_ids_are_scoped_by_quartet_namespace_in_one_world() {
 /// Literal placement words survive frame conversion and keep both graph and prototype reachable.
 #[test]
 fn placement_source_identity_survives_a_subset_without_selecting_a_session() {
-    use primase_shred::components::{SessionGraph, SourcePlacement};
+    use primase_shred::components::{SessionGraph, SourcePlacement, Stored};
     let mut f = Fixture::new();
     let off = u32::from_be_bytes(f.scp[20..24].try_into().expect("placement offset")) as usize;
     word(&mut f.scp, off + 12, 0x00411041); // sdbm("AB")
     word(&mut f.scp, off + 24, 0x12345678); // unknown stays exact
     let p = f.pak();
-    let graph = SessionGraph::from_main_db(include_bytes!("fixtures/sessions.db"), 7).expect("graph");
+    let graph = Stored(
+        rme_formats::session::SessionGraph::from_main_db(include_bytes!("fixtures/sessions.db"), 7)
+            .expect("graph"),
+    );
     let mut reader = ShredReader::new(vec![("fixture", &p)], SourceFrame::WORLD).with_sessions(graph);
     let (world, _) = reader.read().expect("fixture read");
     assert_eq!(world.iter::<Instance>().count(), 3);
@@ -460,40 +464,6 @@ fn a_pass_on_the_read_world_sees_meshes_and_its_change_survives_load() {
 }
 
 #[test]
-fn precise_refusals_and_eof() {
-    let mut f = Fixture::new();
-    word(&mut f.mlp, 0, 0);
-    assert!(f.decode().unwrap_err().to_string().contains("mlp: bad magic"));
-    let mut f = Fixture::new();
-    f.mmp[96..98].copy_from_slice(&6u16.to_be_bytes());
-    assert!(
-        f.decode()
-            .unwrap_err()
-            .to_string()
-            .contains("mmp: index out of range")
-    );
-    let mut f = Fixture::new();
-    word(&mut f.mlp, 84 + 192 + 96 + 32, 6);
-    assert!(f.decode().is_err());
-    let mut f = Fixture::new();
-    word(&mut f.mlp, 84 + 192 + 36, 0);
-    assert!(f.decode().unwrap_err().to_string().contains("partition gap"));
-    let mut f = Fixture::new();
-    word(&mut f.scp, 72 + 8, 999);
-    assert!(f.decode().unwrap_err().to_string().contains("missing mesh"));
-    let mut f = Fixture::new();
-    f.mmp.push(1);
-    assert!(f.decode().unwrap_err().to_string().contains("uncovered bytes"));
-    let f = Fixture::new();
-    for n in 0..f.mlp.len() {
-        assert!(
-            scene::decode(&f.scp, &f.mlp[..n], &f.mmp, &f.mgp).is_err(),
-            "truncated MLP {n}"
-        );
-    }
-}
-
-#[test]
 fn embedded_mesh_does_not_hide_rigid_sibling() {
     let mut f = Fixture::new();
     // First model has index-only MMP and a stride-36 stream descriptor; its payload remains explicitly unread.
@@ -608,44 +578,6 @@ fn processed_nan_normals_preserve_bits_and_omit_only_the_affected_primitive() {
 }
 
 #[test]
-fn processed_refusals_and_malformed_data() {
-    let mut fixture = Fixture::processed();
-    word(&mut fixture.mlp, 84 + 0xb4, 0);
-    let scene = fixture.decode().unwrap();
-    assert!(
-        scene.models[0]
-            .refusal
-            .unwrap()
-            .1
-            .contains("processed skin format")
-    );
-    assert!(scene.models[1].refusal.is_none());
-    for (offset, bytes, reason) in [
-        (84 + 432 + 64, vec![3], "bone palette"),
-        (84 + 432 + 64 + 4, vec![0, 0], "batch vertex count"),
-        (84 + 432 + 128 + 12, vec![127], "weights must sum"),
-        (84 + 432 + 128 + 48, vec![0x7c, 0], "processed UV"),
-        (84 + 432 + 640 - 64 + 4, vec![0, 1], "terminal/size"),
-    ] {
-        let mut fixture = Fixture::processed();
-        fixture.mlp[offset..offset + bytes.len()].copy_from_slice(&bytes);
-        assert!(
-            fixture.decode().unwrap_err().to_string().contains(reason),
-            "{reason}"
-        );
-    }
-    let mut fixture = Fixture::processed();
-    word(&mut fixture.scp, 0x20, 0);
-    assert!(
-        fixture
-            .decode()
-            .unwrap_err()
-            .to_string()
-            .contains("no source skeleton")
-    );
-}
-
-#[test]
 fn source_clockwise_faces_become_core_counterclockwise_in_either_frame() {
     let f = Fixture::new();
     assert_eq!(&f.decode().unwrap().models[0].indices[..3], &[0, 2, 1]);
@@ -688,60 +620,6 @@ fn source_clockwise_faces_become_core_counterclockwise_in_either_frame() {
             }
         }
     }
-}
-
-/// Oracle: literal signed CMP words, IEEE half values and native declaration offsets worked by hand.
-#[test]
-fn every_packed_layout_family_and_source_lanes() {
-    for (mask, stride) in [
-        (0x80005, 0),
-        (0x80007, 4),
-        (0x80025, 4),
-        (0x80027, 8),
-        (0x8003d, 12),
-        (0x8003f, 16),
-        (0x80065, 8),
-        (0x80067, 12),
-        (0x8007d, 16),
-        (0x800e5, 12),
-        (0x800fd, 20),
-        (0x800ff, 24),
-        (0x801e5, 16),
-        (0x801fd, 24),
-        (0x801ff, 28),
-        (0x807fd, 40),
-    ] {
-        let f = Fixture::attributes(mask, stride);
-        let scene = f.decode().unwrap();
-        let a = &scene.models[0].attributes;
-        assert_eq!(a.normals, vec![[0., 0., 32704. / 32767.]; 6]);
-        assert_eq!(a.zero_normals, 0);
-        assert_eq!(
-            a.colors.as_ref().map(|c| c[0]),
-            (mask & 2 != 0).then_some([1., 128. / 255., 0., 64. / 255.])
-        );
-        for (i, uv) in [[0.5, -1.], [2., 0.25], [-2., 0.75], [1., 0.]]
-            .into_iter()
-            .enumerate()
-        {
-            assert_eq!(
-                a.uvs[i].as_ref().map(|v| v[0]),
-                (mask & (1 << (i + 5)) != 0).then_some(uv)
-            );
-        }
-        if mask & 8 != 0 {
-            assert_eq!(a.raw["attr15"].values[0], [32736. / 32767., 0., 0., 0.]);
-        }
-        if mask & 16 != 0 {
-            assert_eq!(a.raw["attr14"].values[0], [0., 32736. / 32767., 0., 0.]);
-        }
-        if mask & 0x600 != 0 {
-            assert_eq!(a.raw["attr12"].values[0], [1., -2., 0.5, 0.]);
-            assert_eq!(a.raw["attr13"].values[0], [2., 3., 4., 0.]);
-        }
-    }
-    let n = primase_shred::read::attributes::cmp(0x80000400); // x=-1024, y=0, z=-512.
-    assert_eq!(n, [-32768. / 32767., 0., -32768. / 32767.]);
 }
 
 #[test]

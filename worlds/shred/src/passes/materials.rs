@@ -12,6 +12,7 @@ use primase_core::{
     ColorSpace, Component, Entity, Name, NormalConvention, TexFormat, TexRole, Texture, World,
 };
 use primase_texcodec::{Decoder, TexDecoder};
+use rme_formats::pixel_program::PixelProgram as ProgramClass;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// An explicit approximation of the source's unproved normal encoding. `ag`
@@ -446,7 +447,7 @@ impl Pass for LowerShredMaterials {
                     "opaque alpha without decoded blend/test enable state",
                 );
             }
-            if let Some(PixelProgram::ScaledTexture { unit, uniforms }) = &program {
+            if let Some(ProgramClass::ScaledTexture { unit, uniforms }) = program.as_deref() {
                 let colour_slot = m
                     .samplers
                     .iter()

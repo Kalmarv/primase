@@ -5,7 +5,6 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod inputs;
 
-use inputs::{Game, install};
 use primase_core::{
     Collider, Collision, Instance, Mesh, Surfaces, Texture,
     convert::{self, Reader},
@@ -14,12 +13,12 @@ use primase_core::{
 use primase_shred::{
     components::{DynamicShape, MaterialId, MaterialTextures, RigidBody, ShredMaterial},
     read::{
-        collision::SurfaceTable,
         convert::ShredReader,
         material_join::{MaterialInputs, TexturePreference},
-        pak::Pak,
     },
 };
+use inputs::{Game, install};
+use rme_formats::{pak::Pak, surfaces::SurfaceTable};
 use std::collections::BTreeSet;
 
 #[test]

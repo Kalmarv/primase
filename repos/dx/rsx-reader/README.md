@@ -1,4 +1,8 @@
-# RSX shader containers
+# RSX shader containers and texture descriptors
+
+`gcm::CellGcmTexture::parse` reads the 24-byte big-endian libgcm texture descriptor (format, mip count,
+dimension, cube flag, component remap, extents, pitch and the GPU address fields) as data. It refuses only a
+descriptor of the wrong length; whether the described storage can be decoded is the caller's question.
 
 `cgbinary::parse` reads exactly one big-endian revision-6 CgBinaryProgram;
 `parse_prefix` reads its advertised size when a caller owns concatenation/padding.

@@ -1,25 +1,43 @@
 //! Source identities survive frame conversion; no material semantics are inferred from IDs.
 use primase_core::{Component, Geometry, Linear, Transform, world::Linearity};
 use serde::Serialize;
+use std::ops::{Deref, DerefMut};
 mod reference_rig;
 pub use reference_rig::ReferenceRig;
 mod skin;
-pub use skin::{SourceBone, SourceSkeleton, SourceSkin, SourceSkinVertex};
+pub use skin::{SourceSkeleton, SourceSkin};
 mod vertex_inputs;
-pub use vertex_inputs::{VertexInput, VertexInputs};
+pub use vertex_inputs::VertexInputs;
 mod session;
-pub use session::{SessionGraph, SessionIdentifier, SessionRow, SourcePlacement};
+pub use session::{SessionGraph, SourcePlacement};
 
 mod collision;
 mod level_params;
 mod material;
 pub use collision::{CollisionSurface, CollisionSurfaces, DynamicShape, MOTION_FIXED, RigidBody};
-pub use level_params::{LevelParams, ScriptCall, ScriptValue};
+pub use level_params::LevelParams;
 pub use material::{
-    BankEvidence, EncodedTexture, MaterialKey, MaterialNamespace, MaterialParameter, MaterialResolution,
-    MaterialSampler, MaterialTextures, PixelProgram, SamplerNameSource, SamplerTexture, ShredMaterial,
-    SourceTexture, TextureCopy, TextureResidency,
+    EncodedTexture, MaterialNamespace, MaterialResolution, MaterialTextures, PixelProgram, SamplerTexture,
+    ShredMaterial, SourceTexture, TextureCopy, TextureResidency,
 };
+
+/// A record of `rme-formats` held as a component or resource of a world. It serialises as the record does.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct Stored<T>(pub T);
+
+impl<T> Deref for Stored<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+impl<T> DerefMut for Stored<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.0
+    }
+}
 
 /// A model ID is scoped to its PAK and quartet, never globally deduplicated.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

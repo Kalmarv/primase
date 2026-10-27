@@ -1,8 +1,10 @@
-//! Hand-worked headers, section placement and literal pixels; no reference decoder of ours.
+//! Decoding the stored pixels of hand-worked texture copies into core textures; no reference decoder of ours. The
+//! headers and the catalog are tested in `rme-formats`.
 use primase_core::{ColorSpace, TexRole};
-use primase_shred::read::{
+use primase_shred::read::texture::{self, Error};
+use rme_formats::{
     pak::Pak,
-    texture::{Error, Payload, Residency, TextureCatalog, TextureHeader},
+    texture::{Error as CatalogError, Payload, TextureCatalog},
 };
 
 fn word(b: &mut [u8], offset: usize, value: u32) {
@@ -68,7 +70,7 @@ fn pak(rows: &[(&str, Option<&[u8]>)]) -> Pak {
 }
 
 #[test]
-fn all_copies_across_archives_and_opaque_words() {
+fn every_copy_decodes_to_the_literal_pixels() {
     let h = header();
     let pixels = [255, 1, 2, 3].repeat(5);
     let a = pak(&[
@@ -85,26 +87,14 @@ fn all_copies_across_archives_and_opaque_words() {
         ("art\\paint.txp", Some(&pixels)),
     ]);
     let c = TextureCatalog::new(&[("a", &a), ("b", &b)]).unwrap();
-    assert_eq!(c.resolve("art/paint").count(), 3);
-    assert_eq!(c.resolve("ART/paint").count(), 0);
-    assert_eq!(c.archive_label(1), Some("b"));
-    assert_eq!(c.records()[0].residency, Residency::Streamed);
-    assert_eq!(c.records()[1].residency, Residency::Prefetch);
-    assert_eq!(c.records()[0].header.raw, h.as_slice());
-    assert_eq!(
-        c.records()[0].header.opaque_words,
-        [(16, 0x12345678), (28, 0x10203040), (32, 0x50607080)]
-    );
     for i in 0..3 {
-        let image = c
-            .decode(i, Payload::Primary, ColorSpace::Linear, TexRole::Color)
-            .unwrap();
+        let image = texture::decode(&c, i, Payload::Primary, ColorSpace::Linear, TexRole::Color).unwrap();
         assert_eq!(image[0].levels, [[1, 2, 3, 255].repeat(4), vec![1, 2, 3, 255]]);
     }
 }
 
 #[test]
-fn local_split_missing_and_ambiguous_pixels() {
+fn an_absent_or_unknown_payload_is_a_catalog_error() {
     let h = header();
     let pixels = [0; 20];
     let a = pak(&[
@@ -115,31 +105,16 @@ fn local_split_missing_and_ambiguous_pixels() {
         ("ui.txp", Some(&pixels)),
     ]);
     let c = TextureCatalog::new(&[("a", &a)]).unwrap();
-    assert!(c.records()[0].pixels.is_some());
-    assert!(c.records()[1].pixels.is_none());
-    assert!(matches!(
-        c.decode(1, Payload::Primary, ColorSpace::Linear, TexRole::Color),
-        Err(Error::Copy { .. })
-    ));
-    assert!(matches!(
-        c.decode(99, Payload::Primary, ColorSpace::Linear, TexRole::Color),
-        Err(Error::Copy { .. })
-    ));
-    let a = pak(&[
-        ("MAIN", None),
-        ("ui.thp", Some(&h)),
-        ("ui.txp", Some(&pixels)),
-        ("LOCAL", None),
-        ("ui.txp", Some(&pixels)),
-    ]);
-    assert!(matches!(
-        TextureCatalog::new(&[("a", &a)]),
-        Err(Error::Copy { .. })
-    ));
+    for texture in [1, 99] {
+        assert!(matches!(
+            texture::decode(&c, texture, Payload::Primary, ColorSpace::Linear, TexRole::Color),
+            Err(Error::Catalog(CatalogError::Copy { .. }))
+        ));
+    }
 }
 
 #[test]
-fn cube_tail_is_explicit_and_prefetch_cutoff_uses_smaller_axis() {
+fn a_cube_tail_decodes_to_six_faces() {
     let mut h = header();
     h[63] = 1;
     let pixels = [0; 660]; // each 2x2+1x1 ARGB chain 20 bytes, stride128; last unpadded.
@@ -150,43 +125,22 @@ fn cube_tail_is_explicit_and_prefetch_cutoff_uses_smaller_axis() {
         ("cube_m1.txp", Some(&pixels)),
     ]);
     let c = TextureCatalog::new(&[("a", &a)]).unwrap();
-    assert!(c.records()[0].cube_tail.is_some());
     assert_eq!(
-        c.decode(0, Payload::CubeTail, ColorSpace::Linear, TexRole::Color)
+        texture::decode(&c, 0, Payload::CubeTail, ColorSpace::Linear, TexRole::Color)
             .unwrap()
             .len(),
         6
     );
-    let mut parsed = TextureHeader::parse(&h).unwrap();
-    parsed.gcm.width = 512;
-    parsed.gcm.height = 256;
-    parsed.gcm.mipmap = 10;
-    assert_eq!(parsed.tail_first_mip(), 1);
-    parsed.gcm.mipmap = 1;
-    assert_eq!(parsed.tail_first_mip(), 0);
 }
 
 #[test]
-fn header_and_gcm_refusals_are_named() {
-    let h = header();
-    assert!(matches!(
-        TextureHeader::parse(&h[..83]),
-        Err(Error::Header { .. })
-    ));
-    for offset in [0, 4, 8, 12, 20, 52, 56] {
-        let mut bad = h.clone();
-        bad[offset] ^= 1;
-        assert!(
-            matches!(TextureHeader::parse(&bad), Err(Error::Header { .. })),
-            "{offset}"
-        );
-    }
-    let mut h = h;
+fn the_2d_decoder_refuses_a_volume() {
+    let mut h = header();
     h[62] = 3;
     let a = pak(&[("MAIN", None), ("v.thp", Some(&h)), ("v.txp", Some(&[0; 20]))]);
     let c = TextureCatalog::new(&[("a", &a)]).unwrap();
     assert!(matches!(
-        c.decode(0, Payload::Primary, ColorSpace::Linear, TexRole::Color),
+        texture::decode(&c, 0, Payload::Primary, ColorSpace::Linear, TexRole::Color),
         Err(Error::Gcm(primase_texcodec::gcm::Error::Dimension { .. }))
     ));
 }

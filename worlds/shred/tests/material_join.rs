@@ -2,14 +2,13 @@
 use primase_core::{ColorSpace, TexRole, Texture, World};
 use primase_shred::{
     components::{
-        BankEvidence, EncodedTexture, MaterialId, MaterialKey, MaterialNamespace, MaterialSampler,
-        MaterialTextures, ShredMaterial, SourceTexture,
+        EncodedTexture, MaterialId, MaterialNamespace, MaterialTextures, ShredMaterial, SourceTexture,
     },
-    read::{
-        material,
-        material_join::{MaterialLibrary, TexturePreference},
-        pak::Pak,
-    },
+    read::material_join::{MaterialLibrary, TexturePreference},
+};
+use rme_formats::{
+    material::{MaterialKey, MaterialSampler, ShredMaterial as Record},
+    pak::Pak,
 };
 
 fn word(b: &mut [u8], at: usize, v: u32) {
@@ -69,8 +68,8 @@ fn pak(rows: &[(&str, Option<&[u8]>)]) -> Pak {
     }
     Pak::from_bytes(b).expect("hand-worked PAK framing")
 }
-fn material(bank: &str, id: u32, paths: &[&str]) -> ShredMaterial {
-    ShredMaterial {
+fn material(bank: &str, id: u32, paths: &[&str]) -> Record {
+    Record {
         key: MaterialKey {
             bank: bank.into(),
             id,
@@ -106,24 +105,6 @@ fn unique_ids_and_namespace_inference_keep_all_candidates() {
         &[],
     )
     .unwrap();
-    let r = library.resolve(7, None);
-    assert_eq!(r.evidence, Some(BankEvidence::UniqueId));
-    assert_eq!(r.selected.unwrap().bank, "environments");
-    for (prefix, bank) in [
-        ("levels", "environments"),
-        ("actors", "actors"),
-        ("characters", "characters"),
-    ] {
-        let r = library.resolve(0, Some(prefix.as_bytes()));
-        assert_eq!(r.candidates.len(), 3);
-        assert_eq!(r.selected.unwrap().bank, bank);
-        assert_eq!(r.evidence, Some(BankEvidence::InferredQuartetNamespace));
-    }
-    let r = library.resolve(0, Some(b"unknown"));
-    assert_eq!(r.candidates.len(), 3);
-    assert!(r.selected.is_none());
-    assert!(r.evidence.is_none());
-    assert!(library.resolve(99, None).candidates.is_empty());
     let mut world = World::new();
     let env = world.spawn();
     world.insert(env, MaterialId(0));
@@ -148,10 +129,6 @@ fn unique_ids_and_namespace_inference_keep_all_candidates() {
     assert_eq!(world.get::<ShredMaterial>(env).unwrap().key.bank, "environments");
     assert_eq!(world.get::<ShredMaterial>(actor).unwrap().key.bank, "actors");
     assert!(world.get::<ShredMaterial>(unknown).is_none());
-    assert!(
-        MaterialLibrary::from_materials(vec![material("actors", 1, &[]), material("actors", 1, &[])], &[])
-            .is_err()
-    );
 }
 
 #[test]
@@ -275,13 +252,4 @@ fn unsupported_volume_keeps_bytes_but_malformed_supported_pixels_are_errors() {
     lib.attach(&mut world, TexturePreference::FullChainThenPrefetch)
         .unwrap();
     assert!(lib.load(&mut world).is_err());
-}
-
-#[test]
-fn engine_dictionary_names_are_exact_hashes() {
-    for name in ["Color_Map", "Normal_Map", "Spec_Map", "Effect_Map"] {
-        let h = primase_foundations::hash::sdbm(name.as_bytes());
-        assert_eq!(material::sampler_name(h), Some(name));
-    }
-    assert_eq!(material::sampler_name(999), None);
 }

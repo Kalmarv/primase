@@ -1,6 +1,7 @@
 //! Oracle: hand-worked libgcm descriptors, Morton grids, pitch rows and BC blocks.
 use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
-use primase_texcodec::gcm::{CellGcmTexture, Error, apply_remap};
+use primase_texcodec::gcm::{self, Error, apply_remap};
+use rsx_reader::gcm::CellGcmTexture;
 
 fn descriptor(format: u8, width: u16, height: u16, mips: u8) -> CellGcmTexture {
     CellGcmTexture {
@@ -19,24 +20,7 @@ fn descriptor(format: u8, width: u16, height: u16, mips: u8) -> CellGcmTexture {
     }
 }
 fn decode(d: CellGcmTexture, bytes: &[u8]) -> Vec<Texture> {
-    d.decode(bytes, 0, ColorSpace::Linear, TexRole::Color)
-        .expect("fixture")
-}
-
-#[test]
-fn descriptor_endian_and_metadata() {
-    let bytes = [
-        0xe5, 2, 2, 0, 0, 0, 0xaa, 0xe4, 0x12, 0x34, 1, 0x23, 0, 1, 1, 7, 0, 0, 0x50, 0, 0x12, 0x34, 0x56,
-        0x78,
-    ];
-    let d = CellGcmTexture::parse(&bytes).expect("descriptor");
-    assert_eq!((d.width, d.height, d.depth), (0x1234, 0x123, 1));
-    assert_eq!((d.pitch, d.offset, d.location, d.pad), (0x5000, 0x12345678, 1, 7));
-    assert!(d.linear() && d.unnormalized_coordinates());
-    assert!(matches!(
-        CellGcmTexture::parse(&bytes[..23]),
-        Err(Error::DescriptorLength(23))
-    ));
+    gcm::decode(d, bytes, 0, ColorSpace::Linear, TexRole::Color).expect("fixture")
 }
 
 #[test]
@@ -85,9 +69,7 @@ fn linear_padding_and_constant_pitch_mips() {
         [1, 2, 3, 9, 4, 5, 6, 10, 7, 8, 9, 11, 10, 11, 12, 12]
     );
     assert_eq!(image[0].levels[1], [14, 15, 16, 13]);
-    let tail = d
-        .decode(&bytes[24..], 1, ColorSpace::Linear, TexRole::Color)
-        .expect("tail");
+    let tail = gcm::decode(d, &bytes[24..], 1, ColorSpace::Linear, TexRole::Color).expect("tail");
     assert_eq!((tail[0].width, tail[0].height), (1, 1));
     assert_eq!(tail[0].levels[0], image[0].levels[1]);
 }
@@ -130,7 +112,7 @@ fn bc3_passthrough_and_expansion() {
 fn cube_faces_align_between_chains_only() {
     let mut d = descriptor(0x86, 4, 4, 2);
     d.cubemap = 1;
-    let layout = d.layout(0).expect("layout");
+    let layout = gcm::layout(d, 0).expect("layout");
     assert_eq!(
         layout.iter().map(|s| s.offset).collect::<Vec<_>>(),
         [0, 8, 128, 136, 256, 264, 384, 392, 512, 520, 640, 648]
@@ -147,10 +129,10 @@ fn cube_faces_align_between_chains_only() {
     d.width = 256;
     d.height = 256;
     d.mipmap = 9;
-    let layout = d.layout(0).expect("layout");
+    let layout = gcm::layout(d, 0).expect("layout");
     assert_eq!(layout[9].offset, 43776);
     assert_eq!(layout.last().map(|s| s.offset + s.size), Some(262584));
-    let tail = d.layout(1).expect("tail");
+    let tail = gcm::layout(d, 1).expect("tail");
     assert_eq!(tail[8].offset, 11008);
     assert_eq!(tail.last().map(|s| s.offset + s.size), Some(65976));
 }
@@ -160,7 +142,7 @@ fn linear_cube_faces_are_contiguous_and_un_does_not_change_pixels() {
     let mut d = descriptor(0xe5, 1, 1, 1);
     d.cubemap = 1;
     d.pitch = 8;
-    let layout = d.layout(0).expect("linear cube");
+    let layout = gcm::layout(d, 0).expect("linear cube");
     assert_eq!(
         layout.iter().map(|s| s.offset).collect::<Vec<_>>(),
         [0, 8, 16, 24, 32, 40]
@@ -205,37 +187,37 @@ fn channel_selectors_and_constants() {
 #[test]
 fn explicit_refusals() {
     let mut d = descriptor(0x87, 4, 4, 1);
-    assert!(matches!(d.layout(0), Err(Error::Format(0x87))));
+    assert!(matches!(gcm::layout(d, 0), Err(Error::Format(0x87))));
     d.format = 0x85;
     d.dimension = 3;
     d.depth = 4;
-    assert!(matches!(d.layout(0), Err(Error::Dimension { .. })));
+    assert!(matches!(gcm::layout(d, 0), Err(Error::Dimension { .. })));
     d.dimension = 2;
     d.depth = 1;
     d.width = 3;
-    assert!(matches!(d.layout(0), Err(Error::Invalid(_))));
+    assert!(matches!(gcm::layout(d, 0), Err(Error::Invalid(_))));
     d.width = 4;
     d.mipmap = 4;
-    assert!(matches!(d.layout(0), Err(Error::Invalid(_))));
+    assert!(matches!(gcm::layout(d, 0), Err(Error::Invalid(_))));
     d.mipmap = 1;
     d.format = 0xa5;
     d.pitch = 15;
-    assert!(matches!(d.layout(0), Err(Error::Invalid(_))));
+    assert!(matches!(gcm::layout(d, 0), Err(Error::Invalid(_))));
     d.pitch = 16;
     assert!(matches!(
-        d.decode(&[0; 63], 0, ColorSpace::Linear, TexRole::Color),
+        gcm::decode(d, &[0; 63], 0, ColorSpace::Linear, TexRole::Color),
         Err(Error::Length {
             expected: 64,
             actual: 63
         })
     ));
     assert!(matches!(
-        d.decode(&[0; 65], 0, ColorSpace::Linear, TexRole::Color),
+        gcm::decode(d, &[0; 65], 0, ColorSpace::Linear, TexRole::Color),
         Err(Error::Length {
             expected: 64,
             actual: 65
         })
     ));
     d.width = 0;
-    assert!(matches!(d.layout(0), Err(Error::Invalid(_))));
+    assert!(matches!(gcm::layout(d, 0), Err(Error::Invalid(_))));
 }
