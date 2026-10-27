@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used)]
 //! The container reader reads to the exact end and refuses the layouts the corpora never have. Containers are built by hand
-//! (the format's own rules) and the committed fixtures of both bytecodes (`iridia-dxbc`'s and `dxil-reader`'s) are read
+//! (the format's own rules) and the committed fixtures of both bytecodes (`dxbc-reader`'s and `dxil-reader`'s) are read
 //! as containers of real compilers.
 use std::path::Path;
 
@@ -118,9 +118,9 @@ fn every_truncation_is_refused() {
 
 #[test]
 fn the_committed_fixtures_of_both_bytecodes_are_read_to_their_end() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let mut read = 0;
-    for crate_dir in ["iridia/iridia-dxbc", "dx/dxil-reader"] {
+    for crate_dir in ["dxbc-reader", "dxil-reader"] {
         for entry in std::fs::read_dir(root.join(crate_dir).join("tests/fixtures")).unwrap() {
             let path = entry.unwrap().path();
             if !path.extension().is_some_and(|e| e == "dxbc" || e == "dxil") {
