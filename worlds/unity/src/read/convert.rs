@@ -10,7 +10,7 @@ use primase_core::convert::{Notice, NoticeKind, Reader, Report, Result};
 use primase_core::{Entity, Mesh, World};
 
 use crate::level::{LevelOptions, LevelReport, read_character, read_level_with};
-use crate::player::{ObjRef, Player};
+use unity_formats::player::{ObjRef, Player};
 
 /// The stage notices name.
 const STAGE: &str = "unity reader";

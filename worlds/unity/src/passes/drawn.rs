@@ -21,14 +21,14 @@ use std::collections::BTreeMap;
 use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::{Entity, Instance, MaterialVariants, Mesh, MeshFile, World};
 
-use crate::components::RenderPipeline;
 use crate::components::{UnityCamera, UnityMaterial, UnityMesh, UnityRenderSettings, UnityRenderer};
 use crate::passes::lower::modelled;
-use crate::shader::procedural;
+use unity_formats::player::RenderPipeline;
+use unity_formats::shader::procedural;
 
 /// Whether a material is on a shader the lowering does not model whose draw pass under `pipeline` blends additively.
 fn additive_unmodelled(m: &UnityMaterial, pipeline: &RenderPipeline) -> bool {
-    use crate::shader::blend_mode::{ONE, SRC_ALPHA};
+    use unity_formats::shader::blend_mode::{ONE, SRC_ALPHA};
     !modelled(m.shader.as_deref())
         && m.draw_pass(pipeline)
             .and_then(|p| m.blend_factors(p))
@@ -171,12 +171,13 @@ mod tests {
     use super::*;
     use crate::components::UnityObject;
     use primase_core::MeshFile;
+    use unity_formats::player::ObjRef;
 
     fn obj(path_id: i64) -> UnityObject {
-        UnityObject {
+        UnityObject::from(&ObjRef {
             file: "level2".into(),
             path_id,
-        }
+        })
     }
 
     /// A placement of a mesh with no materials (none left out for its shaders) by a renderer on `layer`.

@@ -14,8 +14,9 @@ use primase_core::{
     Instance, Light, LightKind, Mesh, Name, Primitive, Semantic, Stream, Topology, Transform, World,
 };
 use primase_lighting::{FillAmbientLights, FillCells, FillGrid};
-use primase_unity::components::{UnityAmbient, UnityRenderSettings};
+use primase_unity::components::UnityRenderSettings;
 use primase_unity::lower_ambient::{LowerUnityAmbient, UnityAmbientProbe};
+use unity_formats::scene::UnityAmbient;
 
 /// SkateBIRD's `add_fill` and its surface index, as the program has them.
 mod program {

@@ -1,29 +1,14 @@
 //! Unity players' data files read into the world.
 //!
-//! The reader (`read/`, its modules re-exported here):
-//! - [`serialized`]: the SerializedFile container (`globalgamemanagers`, `*.assets`, `levelN`): header, types, the
-//!   object table, script references, external files. Strict, and version-gated: only container versions verified
-//!   against real data are read.
-//! - [`tpk`]: a type tree package (the TPK format), the class layouts per Unity version that a player build strips
-//!   from its files. The caller supplies the package; none is bundled.
-//! - [`typetree`]: decoding an object's bytes by its class's type tree into a [`Value`] tree.
-//! - [`resource`]: streamed resources (`.resS`), the bulk data that objects point at.
-//! - [`player`]: a player's data folder: its files, pointers resolved across them.
-//! - [`scene`]: a scene's hierarchy (GameObjects, Transforms to world matrices) and its drawn mesh renderers.
+//! The files are read by `unity_formats` (SerializedFile, type trees, TPK, streamed resources, a scene's hierarchy,
+//! materials, shader state, terrains, the pipeline's settings). The reader modules here (`read/`, re-exported):
 //! - [`level`]: a scene into the world, Unity's frame converted; [`components`] the `unity.*` dialect. Its report
 //!   serialises ([`level::LevelReport::to_json`]).
 //! - [`convert`]: a scene as a conversion's reader ([`convert::UnityReader`]: the level read, a part its roots' closure).
-//! - [`listing`]: a player's objects by class and name from its object tables, the names read from the objects' first
-//!   bytes; [`player::Player::scenes`] the build's scene list (`levelN` to scene name).
 //! - [`asset`]: one mesh, texture or material read into a world as a preview.
 //! - [`mesh`]: meshes (vertex streams, compressed meshes, index buffers, submeshes).
 //! - [`texture`]: textures (formats, mip chains, rows flipped top first, normal map conventions).
-//! - [`material`]: materials as stored (shader, saved properties, keywords).
 //! - [`program`]: a shader's compiled programs (variants, constant-buffer layouts, bind slots, code).
-//! - [`terrain`]: terrains as stored (heightmap, holes, splat layers and alphamaps, trees).
-//!
-//! [`shader`]: a Shader's render state as stored, which the reader decodes, `unity.material` carries and the passes
-//! choose by.
 //!
 //! [`bind`]: a variant of a material's compiled programs (`unity.programs`, [`program::read_programs`]) bound for
 //! evaluation on the CPU: its constant layout, the material's properties and Unity's built-in lighting globals in it,
@@ -46,25 +31,18 @@ pub mod bind;
 pub mod blend_tree;
 pub mod clipdata;
 pub mod components;
+#[cfg(test)]
+mod fixture;
 pub mod humanoid;
 pub mod passes;
 mod read;
-pub mod shader;
 pub mod state_pose;
 
 pub use passes::{
     draw_keywords, drawn, lower, lower_ambient, lower_animator, lower_collision, lower_lights, lower_terrain,
     resolve_shaders,
 };
-pub use read::serialized::{ObjectInfo, SerializedFile};
-pub use read::tpk::TypeTreePackage;
-pub use read::typetree::TypeTree;
-pub use read::value::Value;
-pub use read::version::UnityVersion;
-pub use read::{
-    asset, clip, convert, level, listing, material, mesh, pipeline, player, program, resource, scene,
-    serialized, terrain, texture, tpk, typetree, value, version,
-};
+pub use read::{asset, clip, convert, level, mesh, program, texture};
 
 /// Registers the Unity passes by their declarations: `unity-drawn`, `lower-unity-pbr`, `lower-unity-terrain`,
 /// `lower-unity-collision`, `lower-unity-lights`, `lower-unity-animator`, `resolve-unity-shaders` and
@@ -88,23 +66,8 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("{0}")]
-    Invalid(String),
-    #[error("not supported: {0}")]
-    Unsupported(String),
-    #[error("{}: {source}", path.display())]
-    Io {
-        path: std::path::PathBuf,
-        source: std::io::Error,
-    },
-}
-
-pub type Result<T, E = Error> = std::result::Result<T, E>;
-
-pub(crate) fn invalid(msg: impl Into<String>) -> Error {
-    Error::Invalid(msg.into())
+pub(crate) fn invalid(msg: impl Into<String>) -> unity_formats::Error {
+    unity_formats::Error::Invalid(msg.into())
 }
 
 #[cfg(test)]

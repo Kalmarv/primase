@@ -25,12 +25,12 @@ use primase_core::pbr::{AlphaMode, PbrMaterial, UvTransform};
 use primase_foundations::color::linear_to_srgb;
 use primase_image::{Samples, read_png};
 use primase_texcodec::{Decoder, TexDecoder};
-use primase_unity::TypeTreePackage;
 use primase_unity::components::UnityMaterial;
 use primase_unity::level::read_level;
 use primase_unity::lower::LowerUnityPbr;
-use primase_unity::player::Player;
 use serde_json::Value as Json;
+use unity_formats::TypeTreePackage;
+use unity_formats::player::Player;
 
 /// Our base colour as the port encodes it: RGBA8 pixels of level 0 and their size.
 fn base_image(w: &World, p: &PbrMaterial) -> (u32, u32, Vec<u8>) {

@@ -26,6 +26,7 @@ primase-reskate.workspace = true
 primase-stuntboost.workspace = true
 primase-monogame.workspace = true
 primase-unity.workspace = true
+unity-formats.workspace = true
 primase-web = { workspace = true, features = ["fixture"] }
 primase-foundations = { workspace = true, features = ["compress", "reference-decoder"] }
 primase-testdata.workspace = true

@@ -18,9 +18,10 @@
 use primase_foundations::compress::{Decompressor, Lz4};
 
 use crate::components::{ConstantBuffer, Field, Parameters, Shape, StructField, TextureParam};
-use crate::read::player::{ObjRef, Player};
-use crate::read::value::{Array, Value};
-use crate::{Result, invalid};
+use crate::invalid;
+use unity_formats::Result;
+use unity_formats::player::{ObjRef, Player};
+use unity_formats::value::{Array, Value};
 
 /// One compiled variant: the blob entry holding its code, its keywords, its GPU program type (Unity's
 /// `ShaderGpuProgramType`: 17 a D3D11 pixel program before 2021.2, 18 an SM 5.0 one after) and its shader
@@ -276,7 +277,7 @@ fn parameters(v: &Value, names: &std::collections::BTreeMap<i64, String>) -> Res
 const PARAMETER_BLOB_MAGIC: u32 = 0x0C0A_75BA;
 
 /// A length-prefixed string of a parameter blob: its length, its bytes, padding to four.
-fn blob_string(r: &mut super::Reader<'_>) -> Result<String> {
+fn blob_string(r: &mut unity_formats::reader::Reader<'_>) -> Result<String> {
     let n = usize::try_from(r.u32()?).map_err(|_| invalid("parameter blob: a string length"))?;
     let bytes = r.take(n)?;
     r.align(4)?;
@@ -285,7 +286,7 @@ fn blob_string(r: &mut super::Reader<'_>) -> Result<String> {
 
 /// A field of a constant buffer or struct: its name, then type, rows, columns, whether it is a matrix, array size and
 /// byte offset (each a word).
-fn blob_field(r: &mut super::Reader<'_>) -> Result<Field> {
+fn blob_field(r: &mut unity_formats::reader::Reader<'_>) -> Result<Field> {
     let name = blob_string(r)?;
     let kind = i64::from(r.u32()?);
     let (rows, columns, matrix) = (r.u32()?, r.u32()?, r.u32()?);
@@ -317,7 +318,7 @@ fn blob_field(r: &mut super::Reader<'_>) -> Result<Field> {
 /// the 3,280 entries of Sledding Game's `level1` shaders (3,272 read to the last byte; the 8 refused hold a kind 2,
 /// a structured buffer of the DOTS instancing, whose payload is not read).
 pub fn parameter_blob(entry: &[u8]) -> Result<Parameters> {
-    let mut r = super::Reader::new(entry, false);
+    let mut r = unity_formats::reader::Reader::new(entry, false);
     if r.u32()? != PARAMETER_BLOB_MAGIC {
         return Err(invalid("parameter blob: not the 2021.2 format"));
     }
@@ -688,7 +689,7 @@ impl ShaderPrograms {
             .position(|&x| x == platform)
             .ok_or_else(|| invalid(format!("shader {}: no blob for platform {platform}", self.name)))?;
         let table = cache.get(self, p, 0)?;
-        let mut r = super::Reader::new(&table, false);
+        let mut r = unity_formats::reader::Reader::new(&table, false);
         let count = usize::try_from(r.i32()?).map_err(|_| invalid("shader blob: a negative entry count"))?;
         if index as usize >= count {
             return Err(invalid(format!(
@@ -733,14 +734,14 @@ impl ShaderPrograms {
     /// The code of a program record (`entry`): the record's version, program type, a 12-byte header, (2016.2+) 4
     /// more, keywords, code.
     fn code_of(entry: &[u8]) -> Result<Vec<u8>> {
-        let mut r = super::Reader::new(entry, false);
+        let mut r = unity_formats::reader::Reader::new(entry, false);
         let version = r.i32()?;
         let _program_type = r.i32()?;
         r.take(12)?;
         if version >= 201_608_170 {
             r.take(4)?;
         }
-        let strings = |r: &mut super::Reader<'_>| -> Result<()> {
+        let strings = |r: &mut unity_formats::reader::Reader<'_>| -> Result<()> {
             let n =
                 usize::try_from(r.i32()?).map_err(|_| invalid("shader blob: a negative keyword count"))?;
             for _ in 0..n {
@@ -822,7 +823,7 @@ pub fn read_programs(
     player: &Player,
     w: &mut primase_core::World,
     shaders: &[&str],
-    pipeline: &crate::components::RenderPipeline,
+    pipeline: &unity_formats::player::RenderPipeline,
 ) -> Result<ProgramsReport> {
     use crate::components::{UnityMaterial, UnityProgramVariant, UnityPrograms};
     let mut report = ProgramsReport::default();
@@ -846,7 +847,7 @@ pub fn read_programs(
         .collect();
     for (e, m) in materials {
         let mut leave = |why: &str| *report.left_out.entry(why.to_owned()).or_default() += 1;
-        let data = crate::material::UnityMaterialData::read(
+        let data = unity_formats::material::UnityMaterialData::read(
             player,
             &ObjRef {
                 file: m.material.file.clone(),

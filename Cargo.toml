@@ -16,6 +16,7 @@ members = [
     "toolkit/havok",
     "repos/morpheme-formats",
     "repos/rme-formats",
+    "repos/unity-formats",
     "repos/lua51-bytecode",
     "repos/dx/dxbc-reader",
     "repos/iridia/iridia-dxbc",
@@ -92,6 +93,7 @@ primase-cache = { path = "toolkit/cache" }
 primase-havok = { path = "toolkit/havok" }
 morpheme-formats = { path = "repos/morpheme-formats" }
 rme-formats = { path = "repos/rme-formats" }
+unity-formats = { path = "repos/unity-formats" }
 lua51-bytecode = { path = "repos/lua51-bytecode" }
 dxbc-reader = { path = "repos/dx/dxbc-reader" }
 iridia-dxbc = { path = "repos/iridia/iridia-dxbc" }

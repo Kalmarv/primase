@@ -13,16 +13,14 @@
 //! not left in a transform, and a surface lit through its normal map is lit the same way.
 #![allow(clippy::unwrap_used)]
 
-mod inputs;
-
 use std::collections::BTreeMap;
 
-use inputs::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_core::{Semantic, Stream};
-use primase_unity::TypeTreePackage;
+use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_unity::mesh::UnityMeshData;
-use primase_unity::player::{ObjRef, Player};
 use serde_json::Value as Json;
+use unity_formats::TypeTreePackage;
+use unity_formats::player::{ObjRef, Player};
 
 fn v3(j: &Json) -> [f64; 3] {
     std::array::from_fn(|k| j[k].as_f64().unwrap())

@@ -1,5 +1,5 @@
 //! SkateBIRD's script fields, decoded from the bytes a MonoBehaviour stores after its base fields
-//! ([`primase_unity::components::UnityBehaviour::data`]; a stripped player has no type tree for them). Each layout is
+//! ([`unity_formats::scene::UnityBehaviour::data`]; a stripped player has no type tree for them). Each layout is
 //! named for the player's Unity version it was measured on. Bytes that are not that layout (another length, a bool
 //! that is neither 0 nor 1, padding that is not zero, a string past the end) are refused with what was found, never
 //! guessed at; another build's layout is a new named layout.

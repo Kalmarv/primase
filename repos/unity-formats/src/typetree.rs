@@ -8,8 +8,8 @@
 
 use std::sync::Arc;
 
-use super::Reader;
-use crate::read::value::{Array, Value};
+use crate::reader::Reader;
+use crate::value::{Array, Value};
 use crate::{Error, Result, invalid};
 
 /// The meta flag that aligns the position to 4 bytes after the node.

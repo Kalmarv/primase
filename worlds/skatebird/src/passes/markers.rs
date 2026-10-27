@@ -285,7 +285,8 @@ impl Pass for PlaceSkatebirdMarkers {
 mod tests {
     use super::*;
     use primase_core::Collision;
-    use primase_unity::components::UnityObject;
+    use primase_unity::components::Stored;
+    use unity_formats::player::ObjRef;
 
     /// A ResetPosition's transform as the reader gives it for a Unity yaw `a` (degrees) at `at` (core frame): its
     /// forward, Unity's +Z, is the -Z column.
@@ -308,10 +309,10 @@ mod tests {
             e,
             SkatebirdResetPosition {
                 starting_position: starting,
-                behaviour: UnityObject {
+                behaviour: Stored(ObjRef {
                     file: "level2".into(),
                     path_id: 1,
-                },
+                }),
                 path: name.into(),
             },
         );

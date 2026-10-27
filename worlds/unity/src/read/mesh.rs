@@ -20,10 +20,11 @@ use primase_foundations::vertex::{
 use primase_meshops::compact_primitive;
 
 use crate::components::UNITY;
-use crate::read::player::{ObjRef, Player};
-use crate::read::resource::StreamingInfo;
-use crate::read::value::{Array, Value};
-use crate::{Error, Result, invalid};
+use crate::invalid;
+use unity_formats::player::{ObjRef, Player, SkinWeights};
+use unity_formats::resource::StreamingInfo;
+use unity_formats::value::{Array, Value};
+use unity_formats::{Error, Result};
 
 /// Unity's shader channels, in the order of `m_Channels`.
 pub const CHANNELS: [&str; 14] = [
@@ -64,35 +65,6 @@ pub struct SubMesh {
     /// Unity's MeshTopology (0: triangles).
     pub topology: i64,
     pub base_vertex: u32,
-}
-
-/// How many bone influences a vertex may have under a quality level (`QualitySettings`' `skinWeights`: 1, 2, 4 or
-/// 255 for unlimited).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SkinWeights {
-    Bones(u32),
-    Unlimited,
-}
-
-impl SkinWeights {
-    /// The setting `value` as stored.
-    pub fn from_setting(value: i64) -> Result<SkinWeights> {
-        match value {
-            1 | 2 | 4 => Ok(SkinWeights::Bones(value as u32)),
-            255 => Ok(SkinWeights::Unlimited),
-            v => Err(Error::Unsupported(format!("skinWeights {v}"))),
-        }
-    }
-}
-
-impl std::fmt::Display for SkinWeights {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SkinWeights::Bones(1) => write!(f, "1 bone"),
-            SkinWeights::Bones(n) => write!(f, "{n} bones"),
-            SkinWeights::Unlimited => write!(f, "unlimited"),
-        }
-    }
 }
 
 /// Bone influences per vertex, as a mesh stores them: vertex `v`'s weights and bone slots are

@@ -16,7 +16,8 @@ use primase_core::{Clip, ClipBinding, Entity, RigInstance, Skeleton, World};
 use crate::animator::UnityAnimatorController;
 use crate::blend_tree::Parameters;
 use crate::components::UnityObject;
-use crate::{Error, Result, invalid};
+use crate::invalid;
+use unity_formats::{Error, Result};
 
 /// What a state of one clip plays: the clip, and how the state's time maps to the clip's. Made from the controller alone (no
 /// world), so a program can list a controller's states and which of them it can play.
@@ -172,6 +173,8 @@ mod tests {
 
     use super::*;
     use crate::animator::{BlendNode, Layer, State, StateMachine};
+    use crate::components::Stored;
+    use unity_formats::player::ObjRef;
 
     fn leaf(clip: u32) -> BlendNode {
         BlendNode {
@@ -218,10 +221,10 @@ mod tests {
 
     fn controller(states: Vec<State>) -> UnityAnimatorController {
         UnityAnimatorController {
-            controller: UnityObject {
+            controller: Stored(ObjRef {
                 file: "f".into(),
                 path_id: 1,
-            },
+            }),
             name: "c".into(),
             layers: vec![Layer {
                 state_machine: 0,
@@ -248,10 +251,10 @@ mod tests {
             // clip 1 is the one bound to the rig; slot 0 is a null pointer
             clips: vec![
                 None,
-                Some(UnityObject {
+                Some(Stored(ObjRef {
                     file: "f".into(),
                     path_id: 9,
-                }),
+                })),
             ],
             behaviours: vec![],
             tos: vec![(7, "Turning".into())],
@@ -303,10 +306,10 @@ mod tests {
         );
         w.insert(
             clip,
-            UnityObject {
+            Stored(ObjRef {
                 file: "f".into(),
                 path_id: 9,
-            },
+            }),
         );
         let binding = w.spawn();
         w.insert(
@@ -355,10 +358,10 @@ mod tests {
         assert_eq!(
             m,
             StateMotion {
-                clip: UnityObject {
+                clip: Stored(ObjRef {
                     file: "f".into(),
                     path_id: 9
-                },
+                }),
                 speed: 2.0,
                 cycle_offset: 0.25
             }

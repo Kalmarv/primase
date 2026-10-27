@@ -6,16 +6,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::{Curve, Entity, Name, Source, Transform, World};
-use primase_unity::components::{
-    UNITY, UnityBehaviour, UnityCollider, UnityLight, UnityObject, UnityRenderer,
-};
+use primase_unity::components::{UNITY, UnityCollider, UnityLight, UnityObject, UnityRenderer};
 use primase_unity::level::{OffAxes, transform_of};
-use primase_unity::player::Player;
-use primase_unity::scene::Scene;
+use unity_formats::player::Player;
+use unity_formats::scene::Scene;
+use unity_formats::scene::UnityBehaviour;
 
 use crate::components::{SkatebirdRail, SkatebirdRailNode, SkatebirdRole, SkatebirdScript, SkatebirdUnder};
 use crate::read::scripts::{self, GrindableRail, PPtr};
 use crate::{Error, Result};
+use primase_unity::components::Stored;
+use unity_formats::player::ObjRef;
 
 /// What [`read_scripted`] read.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -109,7 +110,7 @@ pub fn read_scripted(player: &Player, level: &str, w: &mut World) -> Result<Scri
         let path = scene.transform_of(*go).map(|t| scene.path(t)).unwrap_or_default();
         roles.entry(*go).or_default().push(SkatebirdScript {
             role,
-            behaviour: b.behaviour.clone(),
+            behaviour: UnityObject::from(&b.behaviour),
             enabled: b.enabled,
             path,
         });
@@ -212,20 +213,22 @@ pub fn read_scripted(player: &Player, level: &str, w: &mut World) -> Result<Scri
             let t = UNITY.transform(&transform_of(&scene.world_of(tp)?));
             points.push(t.cols[3]);
             let reference = |p: Option<PPtr>| {
-                p.map(|p| UnityObject {
-                    file: if p.file_id == 0 {
-                        scene.file.clone()
-                    } else {
-                        format!("external {}", p.file_id)
-                    },
-                    path_id: p.path_id,
+                p.map(|p| {
+                    Stored(ObjRef {
+                        file: if p.file_id == 0 {
+                            scene.file.clone()
+                        } else {
+                            format!("external {}", p.file_id)
+                        },
+                        path_id: p.path_id,
+                    })
                 })
             };
             kept.push((
                 tp,
                 b,
                 SkatebirdRailNode {
-                    behaviour: b.behaviour.clone(),
+                    behaviour: UnityObject::from(&b.behaviour),
                     path: scene.path(tp),
                     third: reference(r.third),
                     fourth: reference(r.fourth),

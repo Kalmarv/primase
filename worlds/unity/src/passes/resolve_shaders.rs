@@ -556,7 +556,7 @@ fn stencil_op(op: u8) -> Option<StencilOp> {
 
 /// A state value that is a whole number in `0..=max`: the material's property where one is bound
 /// ([`UnityMaterial::state_value`]).
-fn whole(m: &UnityMaterial, v: &crate::shader::ShaderValue, max: u8) -> Option<u8> {
+fn whole(m: &UnityMaterial, v: &unity_formats::shader::ShaderValue, max: u8) -> Option<u8> {
     let x = m.state_value(v);
     (x.fract() == 0.0 && (0.0..=f32::from(max)).contains(&x)).then_some(x as u8)
 }
@@ -564,11 +564,14 @@ fn whole(m: &UnityMaterial, v: &crate::shader::ShaderValue, max: u8) -> Option<u
 /// What a target's blend states: `Ok(None)` for no blending (`Blend One Zero`, both equations, `Add`), `Err(())` for a
 /// value the vocabulary has none for (`SrcAlphaSaturate`, a logical operation), and `Ok(None)` too where a factor is
 /// not a whole `BlendMode` (the property is unset: nothing is stated).
-fn target_blend(m: &UnityMaterial, t: &crate::shader::ShaderTargetBlend) -> Result<Option<Blend>, ()> {
+fn target_blend(
+    m: &UnityMaterial,
+    t: &unity_formats::shader::ShaderTargetBlend,
+) -> Result<Option<Blend>, ()> {
     let equation = |src, dst, op| -> Option<Result<BlendEquation, ()>> {
         let (src, dst, op) = (
-            whole(m, src, crate::shader::blend_mode::LAST)?,
-            whole(m, dst, crate::shader::blend_mode::LAST)?,
+            whole(m, src, unity_formats::shader::blend_mode::LAST)?,
+            whole(m, dst, unity_formats::shader::blend_mode::LAST)?,
             whole(m, op, u8::MAX)?,
         );
         Some(match (blend_factor(src), blend_factor(dst), blend_op(op)) {
@@ -601,12 +604,13 @@ fn target_blend(m: &UnityMaterial, t: &crate::shader::ShaderTargetBlend) -> Resu
 /// no-op face.
 fn stencil_face(
     m: &UnityMaterial,
-    common: &crate::shader::ShaderStencilOp,
-    own: &crate::shader::ShaderStencilOp,
+    common: &unity_formats::shader::ShaderStencilOp,
+    own: &unity_formats::shader::ShaderStencilOp,
 ) -> Option<Option<StencilFace>> {
-    let fields =
-        |o: &crate::shader::ShaderStencilOp| [&o.pass, &o.fail, &o.z_fail, &o.comp].map(|v| whole(m, v, 8));
-    let stated = |o: &crate::shader::ShaderStencilOp| {
+    let fields = |o: &unity_formats::shader::ShaderStencilOp| {
+        [&o.pass, &o.fail, &o.z_fail, &o.comp].map(|v| whole(m, v, 8))
+    };
+    let stated = |o: &unity_formats::shader::ShaderStencilOp| {
         o.pass.property.is_some()
             || o.fail.property.is_some()
             || o.z_fail.property.is_some()
@@ -1216,16 +1220,18 @@ fn resolve_texture(
 )]
 mod tests {
     use super::*;
-    use crate::components::{ConstantBuffer, Field, StructField, TextureParam, UnityObject};
-    use crate::shader::fixture;
+    use crate::components::Stored;
+    use crate::components::{ConstantBuffer, Field, StructField, TextureParam};
+    use crate::fixture;
     use iridia_interface::ResourceId;
+    use unity_formats::player::ObjRef;
 
     fn material() -> UnityMaterial {
         UnityMaterial {
-            material: UnityObject {
+            material: Stored(ObjRef {
                 file: "level1".into(),
                 path_id: 1,
-            },
+            }),
             shader: Some("S".into()),
             shader_state: Vec::new(),
             textures: vec![

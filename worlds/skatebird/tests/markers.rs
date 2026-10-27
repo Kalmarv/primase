@@ -6,14 +6,12 @@
 
 #![allow(clippy::unwrap_used)]
 
-mod inputs;
-
-use inputs::{Game, Tool, install_file, tool};
 use primase_core::{Name, Source, Transform, World};
 use primase_skatebird::components::{SkatebirdMissionGiver, SkatebirdResetPosition};
-use primase_unity::TypeTreePackage;
+use primase_testdata::{Game, Tool, install_file, tool};
 use primase_unity::level::{LevelOptions, read_level_with};
-use primase_unity::player::Player;
+use unity_formats::TypeTreePackage;
+use unity_formats::player::Player;
 
 const LEVELS: [&str; 8] = [
     "level1", "level2", "level3", "level4", "level5", "level7", "level12", "level13",

@@ -86,10 +86,11 @@ use primase_core::{DrawLayer, DrawOrder, MaterialUsage, VertexColor};
 use primase_foundations::{color::linear_to_srgb, color::srgb_to_linear};
 use primase_texcodec::TexDecoder;
 
-use crate::components::RenderPipeline;
 use crate::components::{UnityMaterial, UnityRenderSettings, UnityTexEnv, UnityTexture};
-use crate::shader::SubShader;
-use crate::{Result, invalid};
+use crate::invalid;
+use unity_formats::Result;
+use unity_formats::player::RenderPipeline;
+use unity_formats::shader::SubShader;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Family {
@@ -409,7 +410,7 @@ const GEOMETRY_LAST: i32 = 2500;
 /// One Zero (opaque: the surface replaces what is behind); SrcAlpha OneMinusSrcAlpha is alpha blending (`Some(None)`);
 /// any other blending is drawn as alpha blending, named for the count (`Some(Some(name))`).
 fn blending(factors: Option<(u8, u8)>) -> Option<Option<&'static str>> {
-    use crate::shader::blend_mode::{
+    use unity_formats::shader::blend_mode::{
         DST_COLOR, ONE, ONE_MINUS_SRC_ALPHA, ONE_MINUS_SRC_COLOR, SRC_ALPHA, SRC_COLOR, ZERO,
     };
     let Some((src, dst)) = factors else {
@@ -1112,15 +1113,16 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
-    use crate::components::UnityObject;
-    use crate::shader::fixture;
+    use crate::components::Stored;
+    use crate::fixture;
+    use unity_formats::player::ObjRef;
 
     fn material(path_id: i64, shader: Option<&str>, keywords: &[&str]) -> UnityMaterial {
         UnityMaterial {
-            material: UnityObject {
+            material: Stored(ObjRef {
                 file: "sharedassets1.assets".into(),
                 path_id,
-            },
+            }),
             shader: shader.map(Into::into),
             shader_state: Vec::new(),
             textures: Vec::new(),
@@ -1287,7 +1289,7 @@ mod tests {
     /// after a GrabPass stays opaque. A material's own `RenderType` tag overrides its subshader's.
     #[test]
     fn built_in_shaders_state_their_blending_in_the_base_pass() {
-        use crate::shader::PassKind;
+        use unity_formats::shader::PassKind;
         let legacy = |tags: &[(&str, &str)], src, dst| {
             fixture::sub(
                 tags,
@@ -1386,7 +1388,7 @@ mod tests {
             &[("RenderPipeline", "UniversalPipeline"), ("QUEUE", "Transparent")],
             vec![
                 fixture::pass(
-                    crate::shader::PassKind::Normal,
+                    unity_formats::shader::PassKind::Normal,
                     Some("UniversalForward"),
                     fixture::value(1.0, Some("_SrcBlend")),
                     fixture::value(0.0, Some("_DstBlend")),
@@ -1473,10 +1475,10 @@ mod tests {
         w.insert(
             e,
             UnityTexture {
-                texture: UnityObject {
+                texture: Stored(ObjRef {
                     file: "sharedassets1.assets".into(),
                     path_id: 100,
-                },
+                }),
                 format: 4,
                 srgb: false,
                 usage: 0,
@@ -1576,7 +1578,7 @@ mod tests {
     /// read from the material, Standard's fixed `Cull Back`; without a draw pass the material's `_Cull`.
     #[test]
     fn double_sided_follows_the_draw_pass_culling() {
-        use crate::shader::PassKind;
+        use unity_formats::shader::PassKind;
         let mut leaves_pass = fixture::own(Some("FORWARDBASE"), 1.0, 0.0);
         leaves_pass.cull = fixture::value(0.0, None);
         let leaves = stated(

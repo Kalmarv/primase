@@ -617,6 +617,8 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
+    use primase_unity::components::Stored;
+    use unity_formats::player::ObjRef;
 
     /// Five lit values of albedo a and unit normal n recover both: x and y from the differences of opposite lights,
     /// z from the light along it; a black texel has no normal.
@@ -641,10 +643,10 @@ mod tests {
 
     fn material(textures: Vec<UnityTexEnv>) -> UnityMaterial {
         UnityMaterial {
-            material: primase_unity::components::UnityObject {
+            material: Stored(ObjRef {
                 file: "sharedassets1.assets".into(),
                 path_id: 1,
-            },
+            }),
             shader: Some(VORONOI.into()),
             shader_state: Vec::new(),
             textures,

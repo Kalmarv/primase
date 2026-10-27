@@ -21,7 +21,8 @@ use primase_texcodec::{Decoder, TexDecoder};
 
 use crate::components::UNITY;
 use crate::components::{UnityMaterial, UnityTerrain, UnityTerrainLayer};
-use crate::{Result, invalid};
+use crate::invalid;
+use unity_formats::Result;
 
 fn rgba8(t: &Texture) -> Result<Vec<u8>> {
     Decoder::default()

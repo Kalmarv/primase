@@ -7,10 +7,11 @@ pub use convert::SkatebirdReader;
 pub use scripted::{ScriptedReport, read_scripted};
 
 use primase_core::{Name, Source, World};
-use primase_unity::components::{UNITY, UnityBehaviour};
+use primase_unity::components::{UNITY, UnityObject};
 use primase_unity::level::{OffAxes, transform_of};
-use primase_unity::player::Player;
-use primase_unity::scene::Scene;
+use unity_formats::player::Player;
+use unity_formats::scene::Scene;
+use unity_formats::scene::UnityBehaviour;
 
 use crate::Result;
 use crate::components::{SkatebirdMissionGiver, SkatebirdResetPosition};
@@ -95,7 +96,7 @@ pub fn read_markers(player: &Player, level: &str, w: &mut World) -> Result<Marke
                     e,
                     SkatebirdResetPosition {
                         starting_position,
-                        behaviour: b.behaviour,
+                        behaviour: UnityObject::from(&b.behaviour),
                         path,
                     },
                 );
@@ -108,7 +109,7 @@ pub fn read_markers(player: &Player, level: &str, w: &mut World) -> Result<Marke
                     e,
                     SkatebirdMissionGiver {
                         title,
-                        behaviour: b.behaviour,
+                        behaviour: UnityObject::from(&b.behaviour),
                         path,
                     },
                 );

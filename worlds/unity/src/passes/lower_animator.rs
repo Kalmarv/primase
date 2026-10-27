@@ -43,9 +43,9 @@ use primase_core::{
     ControllerParameterKind, ControllerState, Entity, LayerBlending, Motion, RigInstance, World,
 };
 
-use crate::Result;
 use crate::animator::{BlendNode, Parameter, State, UnityAnimator, UnityAnimatorController};
 use crate::components::UnityObject;
+use unity_formats::Result;
 
 /// The kind of a stored parameter (1 float, 3 int, 4 bool, 9 trigger) as core's; `None` for a kind core has no word
 /// for.
@@ -494,10 +494,10 @@ mod tests {
     const FLY: u32 = 33;
 
     fn object(path_id: i64) -> UnityObject {
-        UnityObject {
+        UnityObject::from(&unity_formats::player::ObjRef {
             file: "fixture.assets".to_owned(),
             path_id,
-        }
+        })
     }
 
     fn node(blend_type: i64, event: u32, children: Vec<u32>, thresholds: Vec<f32>, clip: u32) -> BlendNode {

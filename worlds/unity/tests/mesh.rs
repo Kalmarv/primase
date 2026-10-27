@@ -10,18 +10,16 @@
 
 #![allow(clippy::unwrap_used)]
 
-mod inputs;
-
 use std::collections::BTreeMap;
 
-use inputs::{Game, OracleSet, Tool, install_file, oracle, tool};
-use primase_testdata::gate::{GateReport, Tolerance};
-use primase_unity::TypeTreePackage;
-use primase_unity::Value;
+use primase_core::gate::{GateReport, Tolerance};
+use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_unity::mesh::UnityMeshData;
-use primase_unity::player::{ObjRef, Player};
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
+use unity_formats::TypeTreePackage;
+use unity_formats::Value;
+use unity_formats::player::{ObjRef, Player};
 
 fn digest_f32(v: impl Iterator<Item = f32>) -> String {
     let b: Vec<u8> = v.flat_map(|x| x.to_le_bytes()).collect();

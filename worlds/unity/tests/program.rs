@@ -8,15 +8,13 @@
 
 #![allow(clippy::unwrap_used)]
 
-mod inputs;
-
-use inputs::{Game, OracleSet, Tool, install_file, oracle, tool};
-use primase_testdata::gate::{GateReport, Tolerance};
-use primase_unity::TypeTreePackage;
-use primase_unity::player::{ObjRef, Player};
+use primase_core::gate::{GateReport, Tolerance};
+use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_unity::program::{D3D11_PROGRAM_TYPES, ShaderPrograms, Stage};
 use serde_json::{Value as Json, json};
 use sha2::{Digest, Sha256};
+use unity_formats::TypeTreePackage;
+use unity_formats::player::{ObjRef, Player};
 
 #[test]
 fn shader_programs_match_the_oracle() {

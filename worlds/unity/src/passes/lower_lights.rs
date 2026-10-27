@@ -53,9 +53,9 @@ use primase_core::state::Condition;
 use primase_core::{Entity, Light, LightKind, World};
 use primase_foundations::color::srgb_to_linear;
 
-use crate::Result;
-use crate::components::RenderPipeline;
 use crate::components::{UnityLight, UnityRenderSettings};
+use unity_formats::Result;
+use unity_formats::player::RenderPipeline;
 
 /// The calibration option's value (`candela-per-unit`): finite and above 0. Shared with `lower-unity-ambient`.
 pub(crate) fn parse_candela_per_unit(v: &str) -> std::result::Result<f32, String> {
@@ -313,17 +313,18 @@ impl Pass for LowerUnityLights {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::UnityObject;
+    use crate::components::Stored;
+    use unity_formats::player::ObjRef;
 
     fn light(w: &mut World, kind: i64) -> Entity {
         let e = w.spawn();
         w.insert(
             e,
             UnityLight {
-                light: UnityObject {
+                light: Stored(ObjRef {
                     file: "level1".into(),
                     path_id: i64::from(e.index()) + 1,
-                },
+                }),
                 kind,
                 color: [1.0; 4],
                 intensity: 2.0,
@@ -472,7 +473,7 @@ mod tests {
             (
                 Some(RenderPipeline::Other(vec![
                     "built-in".into(),
-                    crate::components::URP_ASSET.into(),
+                    unity_formats::player::URP_ASSET.into(),
                 ])),
                 "no sun: none named and the pipeline is not URP",
             ),

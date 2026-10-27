@@ -8,9 +8,36 @@
 //! path id) and an array is its count and elements. The class's later fields (batching, post-processing, the GPU
 //! resident drawer) are not read, and the layout past the first of them is not verified.
 
-use crate::components::UnityUrpSettings;
-use crate::read::Reader;
+use crate::reader::Reader;
+use serde::Serialize;
+
 use crate::{Result, invalid};
+
+/// The lighting and shadow settings of a Universal Render Pipeline asset as stored (`UniversalRenderPipelineAsset`,
+/// asset version 13; [`crate::pipeline`] holds the verified layout): the light modes as `LightRenderingMode`
+/// numbers them (0 disabled, 1 per pixel, 2 per vertex), the shadow cascade count (1 to 4), the settings that decide
+/// which of a pass's keywords the pipeline sets.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct UnityUrpSettings {
+    pub main_light_mode: i64,
+    pub main_light_shadows: bool,
+    pub additional_lights_mode: i64,
+    pub additional_light_shadows: bool,
+    pub reflection_probe_blending: bool,
+    pub reflection_probe_box_projection: bool,
+    pub reflection_probe_atlas: bool,
+    pub shadow_distance: f32,
+    pub shadow_cascades: u8,
+    pub soft_shadows: bool,
+    pub mixed_lighting: bool,
+    pub light_cookies: bool,
+    pub light_layers: bool,
+    pub lod_cross_fade: bool,
+    /// `ShEvalMode`: 0 auto, 1 per vertex, 2 mixed, 3 per pixel.
+    pub sh_eval_mode: i64,
+    /// `LightProbeSystem`: 0 legacy light probes, 1 probe volumes.
+    pub light_probe_system: i64,
+}
 
 /// The asset version the layout below is verified for.
 const ASSET_VERSION: i32 = 13;

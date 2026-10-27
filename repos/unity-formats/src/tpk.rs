@@ -6,9 +6,9 @@ use primase_foundations::compress::{Decompressor, LZ4_MAX_RATIO, Lz4};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use super::Reader;
-use crate::read::typetree::{Node, TypeTree};
-use crate::read::version::UnityVersion;
+use crate::reader::Reader;
+use crate::typetree::{Node, TypeTree};
+use crate::version::UnityVersion;
 use crate::{Error, Result, invalid};
 
 const MAGIC: u32 = 0x2A4B_5054;

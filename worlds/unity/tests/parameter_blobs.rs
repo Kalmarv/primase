@@ -5,17 +5,16 @@
 //! asserted. Needs the Sledding Game install and the type tree package.
 #![allow(clippy::unwrap_used)]
 
-mod inputs;
-
 use std::collections::BTreeSet;
 
-use inputs::{Game, Tool, install_file, tool};
 use primase_core::World;
-use primase_unity::TypeTreePackage;
-use primase_unity::components::{RenderPipeline, UnityMaterial, UnityPrograms, UnityRenderSettings};
+use primase_testdata::{Game, Tool, install_file, tool};
+use primase_unity::components::{UnityMaterial, UnityPrograms, UnityRenderSettings};
 use primase_unity::level::{LevelOptions, read_level_with};
-use primase_unity::player::Player;
 use primase_unity::program::read_programs;
+use unity_formats::TypeTreePackage;
+use unity_formats::player::Player;
+use unity_formats::player::RenderPipeline;
 
 #[test]
 fn the_variants_parameters_come_from_their_blobs() {

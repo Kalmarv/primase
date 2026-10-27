@@ -12,6 +12,7 @@ publish.workspace = true
 primase-foundations.workspace = true
 primase-core.workspace = true
 primase-unity.workspace = true
+unity-formats.workspace = true
 primase-meshops.workspace = true
 iridia.workspace = true
 iridia-exec.workspace = true

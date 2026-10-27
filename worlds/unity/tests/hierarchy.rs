@@ -18,20 +18,18 @@
 
 #![allow(clippy::unwrap_used)]
 
-mod inputs;
-
-use inputs::{Game, OracleSet, Tool, install_file, oracle, tool};
+use primase_core::gate::{GateReport, Tolerance};
 use primase_core::ledger::Measure;
 use primase_core::{Instance, Mesh, Semantic, Stream, Transform, World};
-use primase_testdata::gate::{GateReport, Tolerance};
-use primase_unity::TypeTreePackage;
+use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_unity::components::UNITY;
 use primase_unity::components::{UnityBehaviours, UnityMesh, UnityRenderer, UnityTreeInstance};
 use primase_unity::level::{read_level, transform_of};
 use primase_unity::mesh::UnityMeshData;
-use primase_unity::player::{ObjRef, Player};
-use primase_unity::scene::Scene;
 use serde_json::{Value as Json, json};
+use unity_formats::TypeTreePackage;
+use unity_formats::player::{ObjRef, Player};
+use unity_formats::scene::Scene;
 
 fn obj(r: &ObjRef) -> Json {
     json!([r.file, r.path_id])
@@ -74,7 +72,7 @@ fn renderers_match_the_scan() {
             }
         }
     }
-    let coarser = |r: &primase_unity::scene::Renderer| {
+    let coarser = |r: &unity_formats::scene::Renderer| {
         rest.contains(&r.renderer.path_id) && !zero.contains(&r.renderer.path_id)
     };
     let inactive = all.iter().filter(|r| !r.off.is_empty()).count() as u64;

@@ -49,21 +49,23 @@ use crate::components::{
     ColliderMesh, UNITY, UnityBehaviours, UnityCamera, UnityCollider, UnityColliderShape, UnityLight,
     UnityMaterial, UnityMesh, UnityObject, UnityPhysicMaterial, UnityRenderSettings, UnityRenderer,
     UnityShadowQuality, UnityTerrain, UnityTerrainCollider, UnityTerrainLayer, UnityTexEnv, UnityTexture,
-    UnityTree, UnityTreeInstance, UnityUrpSettings,
+    UnityTree, UnityTreeInstance,
 };
+use crate::invalid;
 use crate::read::clip::{ClipData, controller_clips, path_hash};
-use crate::read::material::{ShaderData, UnityMaterialData};
-use crate::read::mesh::{MeshSkin, SkinWeights, UnityMeshData};
-use crate::read::player::{ObjRef, Player, QualityLevel};
-use crate::read::scene::{ColliderComponent, ColliderShape};
-use crate::read::scene::{
+use crate::read::mesh::{MeshSkin, UnityMeshData};
+use crate::read::texture::UnityTexture as UnityTextureData;
+use unity_formats::Result;
+use unity_formats::material::{ShaderData, UnityMaterialData};
+use unity_formats::pipeline::UnityUrpSettings;
+use unity_formats::player::{ObjRef, Player, QualityLevel, SkinWeights};
+use unity_formats::scene::{ColliderComponent, ColliderShape};
+use unity_formats::scene::{
     IDENTITY, LodGroup, Matrix, OffFlag, Renderer, RendererSkin, Scene, SceneJoint, Skipped,
 };
-use crate::read::terrain::{TerrainData, TerrainLayerData};
-use crate::read::texture::UnityTexture as UnityTextureData;
-use crate::read::value::Value;
-use crate::shader::procedural;
-use crate::{Result, invalid};
+use unity_formats::shader::procedural;
+use unity_formats::terrain::{TerrainData, TerrainLayerData};
+use unity_formats::value::Value;
 
 /// A prototype's or form's provenance: the Unity mesh it was read from, and the slice a static-batched renderer draws.
 pub(crate) fn mesh_source(mesh: &ObjRef, submeshes: Option<(u32, u32)>) -> Source {
@@ -93,8 +95,8 @@ fn unity_renderer(r: &Renderer) -> UnityRenderer {
 
 /// A terrain tree's matrix: T(terrain position + position x size) Ry(rotation) S(width, height, width).
 fn tree_matrix(
-    t: &crate::read::scene::TerrainComponent,
-    tree: &crate::read::terrain::TreeInstance,
+    t: &unity_formats::scene::TerrainComponent,
+    tree: &unity_formats::terrain::TreeInstance,
     size: [f64; 3],
 ) -> Matrix {
     let (s, c) = f64::from(tree.rotation).sin_cos();
@@ -919,7 +921,7 @@ impl Builder<'_> {
                 if !data.contains_key(clip) {
                     let read = match ClipData::read(self.player, clip) {
                         Ok(d) => Some(d),
-                        Err(crate::Error::Unsupported(why)) => {
+                        Err(unity_formats::Error::Unsupported(why)) => {
                             self.notice(&format!("animation clips not read: {why}"), 1);
                             None
                         }
@@ -1085,7 +1087,7 @@ impl Builder<'_> {
                 self.report.avatars += 1;
                 Some(e)
             }
-            Err(crate::Error::Unsupported(why)) => {
+            Err(unity_formats::Error::Unsupported(why)) => {
                 self.notice(&format!("avatars not read: {why}"), 1);
                 None
             }
@@ -1112,7 +1114,7 @@ impl Builder<'_> {
                 self.report.controllers += 1;
                 Some(e)
             }
-            Err(crate::Error::Unsupported(why)) => {
+            Err(unity_formats::Error::Unsupported(why)) => {
                 self.notice(&format!("animator controllers not read: {why}"), 1);
                 None
             }
@@ -1147,7 +1149,7 @@ impl Builder<'_> {
                 w.insert(e, pixels);
                 None
             }
-            Err(crate::Error::Unsupported(why)) => {
+            Err(unity_formats::Error::Unsupported(why)) => {
                 let why = why.rsplit(": ").next().unwrap_or(&why).to_owned();
                 *self.report.textures_not_decoded.entry(why.clone()).or_default() += 1;
                 Some(why)
@@ -1217,7 +1219,7 @@ impl Builder<'_> {
     /// renderers' LODGroup roles go into `roles`.
     fn trees(
         &mut self,
-        t: &crate::read::scene::TerrainComponent,
+        t: &unity_formats::scene::TerrainComponent,
         td: &TerrainData,
         prefabs: &mut BTreeMap<String, Scene>,
         roles: &mut BTreeMap<ObjRef, Role>,
@@ -1260,7 +1262,7 @@ impl Builder<'_> {
                 let mut r = r.clone();
                 // `<terrain>/tree<i>:<prefab>/<renderer's path in the prefab, its root included>`
                 r.path = format!("{name}/tree{i}:{prefab_path}/{}", r.path);
-                r.world = crate::read::scene::mul(&m, &r.world);
+                r.world = unity_formats::scene::mul(&m, &r.world);
                 out.push((i, r));
             }
         }
@@ -1376,7 +1378,7 @@ impl Builder<'_> {
     /// prefab's colliders (every one, flagged) at the tree's matrix times their matrix relative to the prefab root.
     fn tree_colliders(
         &mut self,
-        t: &crate::read::scene::TerrainComponent,
+        t: &unity_formats::scene::TerrainComponent,
         td: &TerrainData,
         prefabs: &mut BTreeMap<String, Scene>,
     ) -> Result<Vec<(usize, ColliderComponent)>> {
@@ -1409,7 +1411,7 @@ impl Builder<'_> {
             for c in cs {
                 let mut c = c.clone();
                 c.path = format!("{name}/tree{i}:{prefab_path}/{}", c.path);
-                c.world = crate::read::scene::mul(&m, &c.world);
+                c.world = unity_formats::scene::mul(&m, &c.world);
                 out.push((i, c));
             }
         }
@@ -2328,7 +2330,7 @@ fn urp_settings(player: &Player, quality: Option<&str>) -> Result<Option<UnityUr
         return Ok(None);
     };
     let (_, bytes) = player.behaviour(&asset)?;
-    crate::read::pipeline::read_urp_settings(&bytes).map(Some)
+    unity_formats::pipeline::read_urp_settings(&bytes).map(Some)
 }
 
 /// The five fields of a PhysicMaterial, by the two names a type tree gives them: Unity 6 and its kin prefix them

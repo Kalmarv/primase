@@ -9,7 +9,8 @@ use primase_core::{
 };
 
 use crate::components::UNITY;
-use crate::{Error, Result, invalid};
+use crate::invalid;
+use unity_formats::{Error, Result};
 
 /// One curve binding of a clip (`genericBindings`).
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -10,9 +10,9 @@ use std::path::Path;
 
 use primase_core::World;
 use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, Pipeline, RunReport};
-use primase_unity::TypeTreePackage;
 use primase_unity::level::{LevelOptions, read_level_with};
-use primase_unity::player::Player;
+use unity_formats::TypeTreePackage;
+use unity_formats::player::Player;
 
 const USAGE: &str = "usage: unity_export <Game>_Data <type tree package> <level> <output folder> [--web] [--ktx2]                      [--quality <level>]";
 

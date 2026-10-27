@@ -30,10 +30,10 @@
 //! batched with others), the lightmap and shadowmask keywords.
 use primase_core::{Entity, World};
 
-use crate::components::{
-    RenderPipeline, UnityFog, UnityLight, UnityRenderSettings, UnityRenderer, UnityShadowQuality,
-    UnityUrpSettings,
-};
+use crate::components::{UnityLight, UnityRenderSettings, UnityRenderer, UnityShadowQuality};
+use unity_formats::pipeline::UnityUrpSettings;
+use unity_formats::player::RenderPipeline;
+use unity_formats::scene::UnityFog;
 
 /// Unity's `LightType::Directional`.
 const DIRECTIONAL: i64 = 1;

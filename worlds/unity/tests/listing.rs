@@ -12,17 +12,15 @@
 
 #![allow(clippy::unwrap_used)]
 
-mod inputs;
-
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use inputs::{Game, OracleSet, Tool, install_file, oracle, tool};
-use primase_testdata::gate::{GateReport, Tolerance};
-use primase_unity::TypeTreePackage;
-use primase_unity::listing::list;
-use primase_unity::player::Player;
+use primase_core::gate::{GateReport, Tolerance};
+use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use serde_json::Value as Json;
+use unity_formats::TypeTreePackage;
+use unity_formats::listing::list;
+use unity_formats::player::Player;
 
 /// Class names the oracle's table gives otherwise than the player's own Unity version does: classes Unity renamed or
 /// added after UnityPy 1.25.4's class table (ours is the type tree package's for the player's version), by (ours,

@@ -11,10 +11,11 @@ use primase_core::{
 };
 use primase_texcodec::{Decoder, flip_vertical};
 
-use crate::read::player::{ObjRef, Player};
-use crate::read::resource::StreamingInfo;
-use crate::read::value::Value;
-use crate::{Error, Result, invalid};
+use crate::invalid;
+use unity_formats::player::{ObjRef, Player};
+use unity_formats::resource::StreamingInfo;
+use unity_formats::value::Value;
+use unity_formats::{Error, Result};
 
 /// Unity's TextureUsageMode for a normal map stored as DXT5nm: X in alpha, Y in green.
 pub const USAGE_NORMAL_DXT5NM: i64 = 3;

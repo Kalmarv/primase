@@ -9,17 +9,15 @@
 
 #![allow(clippy::unwrap_used)]
 
-mod inputs;
-
 use std::collections::BTreeSet;
 
-use inputs::{Game, Tool, install_file, tool};
 use primase_core::convert::{NoticeKind, Reader, check_emits, check_load_emits};
 use primase_core::{Entity, Instance, World};
-use primase_unity::TypeTreePackage;
+use primase_testdata::{Game, Tool, install_file, tool};
 use primase_unity::convert::UnityReader;
 use primase_unity::level::read_level;
-use primase_unity::player::Player;
+use unity_formats::TypeTreePackage;
+use unity_formats::player::Player;
 
 #[test]
 fn the_reader_reads_the_level_and_loads_parts_of_it() {

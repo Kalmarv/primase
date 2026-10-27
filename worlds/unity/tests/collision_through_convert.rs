@@ -9,8 +9,10 @@ use std::rc::Rc;
 use primase_core::convert::{Finished, Reader, Report, Result, WholeWorld, Writer, convert_parts};
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, Target};
 use primase_core::{Collider, Entity, Name, Shape, Transform, World};
-use primase_unity::components::{UnityCollider, UnityColliderOf, UnityColliderShape, UnityObject};
+use primase_unity::components::Stored;
+use primase_unity::components::{UnityCollider, UnityColliderOf, UnityColliderShape};
 use primase_unity::lower_collision::LowerUnityCollision;
+use unity_formats::player::ObjRef;
 
 /// One sphere collider, named, at (10, 0, 0).
 struct OneSphere;
@@ -26,10 +28,10 @@ impl Reader for OneSphere {
         w.insert(
             e,
             UnityCollider {
-                collider: UnityObject {
+                collider: Stored(ObjRef {
                     file: "level1".into(),
                     path_id: 1,
-                },
+                }),
                 layer: 0,
                 shape: UnityColliderShape::Sphere {
                     center: [0.0; 3],

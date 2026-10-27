@@ -4,24 +4,47 @@ use primase_core::frame::{Axis, SourceFrame};
 use primase_core::{Component, Entity, JsonError, World};
 use serde::{Serialize, Serializer};
 
-use crate::shader::{PassKind, ShaderPass, SubShader};
+use unity_formats::pipeline::UnityUrpSettings;
+use unity_formats::player::{ObjRef, RenderPipeline};
+use unity_formats::scene::{UnityAmbient, UnityBehaviour, UnityFog};
+use unity_formats::shader::{PassKind, ShaderPass, SubShader};
+
+/// A record read from a player's files, carried as a component: serialises as the record does.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct Stored<T>(pub T);
+
+impl<T> std::ops::Deref for Stored<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+impl<T> std::ops::DerefMut for Stored<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.0
+    }
+}
 
 /// Unity's frame: left-handed, +Y up, +Z forward, metres. Into the world (right-handed, +Y up, -Z north): x, y, -z,
 /// so Unity's forward is north; a mirroring frame (the mesh reader reverses triangle winding).
 pub const UNITY: SourceFrame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::NegZ], 1.0);
 
 /// Which object of the player an entity was read from: its file (lower-case name) and path id.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct UnityObject {
-    pub file: String,
-    pub path_id: i64,
-}
+pub type UnityObject = Stored<ObjRef>;
 
-impl Component for UnityObject {
+impl Component for Stored<ObjRef> {
     const NAME: &'static str = "unity.object";
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
+    }
+}
+
+impl From<&ObjRef> for UnityObject {
+    fn from(r: &ObjRef) -> Self {
+        Stored(r.clone())
     }
 }
 
@@ -360,9 +383,9 @@ impl Component for UnityPrograms {
 
 /// A number a material stores, in the dialect's JSON view: a JSON number, or `"inf"`, `"-inf"` or `"nan"` for the
 /// non-finite values a shader property may store as a sentinel (JSON has none; the dialect keeps what was stored).
-struct Stored(f32);
+struct Number(f32);
 
-impl Serialize for Stored {
+impl Serialize for Number {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         match self.0 {
             x if x.is_finite() => s.serialize_f32(x),
@@ -374,15 +397,15 @@ impl Serialize for Stored {
 }
 
 fn stored_pair<S: Serializer>(v: &[f32; 2], s: S) -> Result<S::Ok, S::Error> {
-    [Stored(v[0]), Stored(v[1])].serialize(s)
+    [Number(v[0]), Number(v[1])].serialize(s)
 }
 
 fn stored_floats<S: Serializer>(v: &[(String, f32)], s: S) -> Result<S::Ok, S::Error> {
-    s.collect_seq(v.iter().map(|(k, x)| (k, Stored(*x))))
+    s.collect_seq(v.iter().map(|(k, x)| (k, Number(*x))))
 }
 
 fn stored_colors<S: Serializer>(v: &[(String, [f32; 4])], s: S) -> Result<S::Ok, S::Error> {
-    s.collect_seq(v.iter().map(|(k, c)| (k, c.map(Stored))))
+    s.collect_seq(v.iter().map(|(k, c)| (k, c.map(Number))))
 }
 
 /// A texture property of a material: whether it names an object (`referenced`: a texture is set), its texture entity
@@ -470,14 +493,14 @@ pub fn queue_tag(v: &str) -> Option<i32> {
 }
 
 /// A material as Unity stores it: its shader's name and render state (its subshaders, as
-/// [`crate::material::ShaderData`]), saved properties in stored order (colours gamma-encoded, as stored; a non-finite
+/// [`unity_formats::material::ShaderData`]), saved properties in stored order (colours gamma-encoded, as stored; a non-finite
 /// number a shader property stores as a sentinel kept as stored, [`UnityMaterial::float`] and [`UnityMaterial::color`]
 /// giving it to no lowering), keywords, tags and render queue.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct UnityMaterial {
     pub material: UnityObject,
     pub shader: Option<String>,
-    pub shader_state: Vec<crate::shader::SubShader>,
+    pub shader_state: Vec<unity_formats::shader::SubShader>,
     pub textures: Vec<UnityTexEnv>,
     #[serde(serialize_with = "stored_floats")]
     pub floats: Vec<(String, f32)>,
@@ -508,12 +531,12 @@ impl UnityMaterial {
         })
     }
 
-    /// A pass's blend factors (source, destination) as `BlendMode` values ([`crate::shader::blend_mode`]), each the
+    /// A pass's blend factors (source, destination) as `BlendMode` values ([`unity_formats::shader::blend_mode`]), each the
     /// bound property's value where it has one ([`Self::state_value`]); `None` when one is not a `BlendMode`.
     pub fn blend_factors(&self, pass: &ShaderPass) -> Option<(u8, u8)> {
-        let mode = |v: &crate::shader::ShaderValue| {
+        let mode = |v: &unity_formats::shader::ShaderValue| {
             let x = self.state_value(v);
-            (x.fract() == 0.0 && (0.0..=f32::from(crate::shader::blend_mode::LAST)).contains(&x))
+            (x.fract() == 0.0 && (0.0..=f32::from(unity_formats::shader::blend_mode::LAST)).contains(&x))
                 .then_some(x as u8)
         };
         Some((mode(&pass.src_blend)?, mode(&pass.dst_blend)?))
@@ -546,7 +569,7 @@ impl UnityMaterial {
 
     /// A shader render-state value: the bound material property's float where it names one the material has, else
     /// the shader's own value.
-    pub fn state_value(&self, v: &crate::shader::ShaderValue) -> f32 {
+    pub fn state_value(&self, v: &unity_formats::shader::ShaderValue) -> f32 {
         v.property
             .as_deref()
             .and_then(|p| self.float(p))
@@ -622,17 +645,6 @@ impl Component for UnityMaterial {
     }
 }
 
-/// A MonoBehaviour as stored: its script (namespace and class) and the script's serialized fields, kept as bytes
-/// (a stripped build has no type tree for them).
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct UnityBehaviour {
-    pub behaviour: UnityObject,
-    pub script: String,
-    pub enabled: bool,
-    #[serde(skip)]
-    pub data: Vec<u8>,
-}
-
 /// The MonoBehaviours of a GameObject the world carries without understanding them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct UnityBehaviours(pub Vec<UnityBehaviour>);
@@ -695,7 +707,7 @@ pub struct UnityTerrainCollider {
     pub tree_colliders: bool,
 }
 
-/// A tree a terrain places (see [`crate::terrain::TreeInstance`]).
+/// A tree a terrain places (see [`unity_formats::terrain::TreeInstance`]).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct UnityTree {
     pub position: [f32; 3],
@@ -704,44 +716,6 @@ pub struct UnityTree {
     pub rotation: f32,
     pub color: u32,
     pub prototype: usize,
-}
-
-/// The highest stored height sample: 0..=32766 is 0..1 of the terrain's height (`TerrainData.GetHeight`).
-pub const MAX_HEIGHT: i16 = 32766;
-
-/// What a heightmap must be to be read: `resolution` x `resolution` samples (at least 2 x 2: one cell), each
-/// 0..=[`MAX_HEIGHT`], and, where it has holes, one per cell ((resolution - 1)^2).
-pub fn check_heightmap(
-    resolution: u32,
-    heights: &[i16],
-    holes: Option<&[u8]>,
-) -> std::result::Result<(), String> {
-    if resolution < 2 {
-        return Err(format!(
-            "resolution {resolution}: a heightmap has at least 2 x 2 samples"
-        ));
-    }
-    let n = resolution as usize;
-    let samples = n.checked_mul(n).ok_or("the heightmap's sample count overflows")?;
-    if heights.len() != samples {
-        return Err(format!("{} heights for resolution {resolution}", heights.len()));
-    }
-    if let Some((i, h)) = heights
-        .iter()
-        .enumerate()
-        .find(|(_, h)| !(0..=MAX_HEIGHT).contains(*h))
-    {
-        return Err(format!(
-            "height sample {i} (row {}, column {}) is {h}, outside 0..={MAX_HEIGHT}",
-            i / n,
-            i % n
-        ));
-    }
-    let cells = (n - 1) * (n - 1);
-    match holes {
-        Some(h) if h.len() != cells => Err(format!("{} holes for {cells} cells", h.len())),
-        _ => Ok(()),
-    }
 }
 
 /// A terrain as Unity stores it, on the entity that places it: its heightmap (row z, column x, 0..=32766 for 0..1 of
@@ -797,7 +771,7 @@ impl Component for UnityTerrain {
 
     /// Its heightmap as the reader requires it ([`check_heightmap`]).
     fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
-        check_heightmap(self.resolution, &self.heights, self.holes.as_deref())
+        unity_formats::terrain::check_heightmap(self.resolution, &self.heights, self.holes.as_deref())
     }
 }
 
@@ -854,7 +828,7 @@ impl Component for UnityTreeInstance {
 }
 
 /// A light as Unity stores it, on an entity placed by its Transform (Unity's light shines along its local +Z: the
-/// world's -Z after the frame conversion). See [`crate::scene::LightComponent`] for the fields.
+/// world's -Z after the frame conversion). See [`unity_formats::scene::LightComponent`] for the fields.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct UnityLight {
     pub light: UnityObject,
@@ -904,61 +878,6 @@ impl Component for UnityCamera {
     }
 }
 
-/// A scene's ambient lighting as RenderSettings stores it: `mode` (`m_AmbientMode`: 0 skybox, 1 trilight, a gradient
-/// of the sky, equator and ground colours, 3 flat, the sky colour alone, 4 custom), the three colours as stored,
-/// `intensity` (`m_AmbientIntensity`) and the ambient probe as stored (`m_AmbientProbe`, Unity's SphericalHarmonicsL2:
-/// nine coefficients per channel, red 0..8, green 9..17, blue 18..26; `None` when the RenderSettings store none). The
-/// probe is what the editor last generated: all zeros when it never did, and not necessarily from the colours stored
-/// beside it.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct UnityAmbient {
-    pub mode: i64,
-    pub sky: [f32; 4],
-    pub equator: [f32; 4],
-    pub ground: [f32; 4],
-    pub intensity: f32,
-    pub probe: Option<[f32; 27]>,
-}
-
-/// The scene's fog as RenderSettings stores it: whether it is on (`m_Fog`), its `mode` (`m_FogMode`: 1 linear, 2
-/// exponential, 3 exponential squared), its colour, `density` (exponential modes) and the linear mode's `start` and
-/// `end`.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct UnityFog {
-    pub enabled: bool,
-    pub mode: i64,
-    pub color: [f32; 4],
-    pub density: f32,
-    pub start: f32,
-    pub end: f32,
-}
-
-/// The lighting and shadow settings of a Universal Render Pipeline asset as stored (`UniversalRenderPipelineAsset`,
-/// asset version 13; [`crate::read::pipeline`] holds the verified layout): the light modes as `LightRenderingMode`
-/// numbers them (0 disabled, 1 per pixel, 2 per vertex), the shadow cascade count (1 to 4), the settings that decide
-/// which of a pass's keywords the pipeline sets.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct UnityUrpSettings {
-    pub main_light_mode: i64,
-    pub main_light_shadows: bool,
-    pub additional_lights_mode: i64,
-    pub additional_light_shadows: bool,
-    pub reflection_probe_blending: bool,
-    pub reflection_probe_box_projection: bool,
-    pub reflection_probe_atlas: bool,
-    pub shadow_distance: f32,
-    pub shadow_cascades: u8,
-    pub soft_shadows: bool,
-    pub mixed_lighting: bool,
-    pub light_cookies: bool,
-    pub light_layers: bool,
-    pub lod_cross_fade: bool,
-    /// `ShEvalMode`: 0 auto, 1 per vertex, 2 mixed, 3 per pixel.
-    pub sh_eval_mode: i64,
-    /// `LightProbeSystem`: 0 legacy light probes, 1 probe volumes.
-    pub light_probe_system: i64,
-}
-
 /// The shadow settings of a quality level (`QualitySettings`): `shadows` 0 for none, 1 for hard shadows only and 2 for
 /// all, the distance shadows are drawn to, the built-in pipeline's cascade count.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -966,22 +885,6 @@ pub struct UnityShadowQuality {
     pub shadows: i64,
     pub distance: f32,
     pub cascades: i64,
-}
-
-/// The script class of Universal Render Pipeline's asset (`m_Namespace.m_ClassName` of its MonoScript).
-pub const URP_ASSET: &str = "UnityEngine.Rendering.Universal.UniversalRenderPipelineAsset";
-
-/// The render pipeline a player draws with: GraphicsSettings' default pipeline asset (`m_CustomRenderPipeline`), or a
-/// quality level's own (`customRenderPipeline`) where it sets one. Which quality level runs is the user's choice, so
-/// the pipeline is known only when every level gives the same kind.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
-pub enum RenderPipeline {
-    /// No pipeline asset for any quality level: Unity's built-in renderer.
-    BuiltIn,
-    /// A Universal Render Pipeline asset ([`URP_ASSET`]) for every quality level.
-    Universal,
-    /// Anything else, or a mix: each level's asset script class (`built-in` for none), sorted, each once.
-    Other(Vec<String>),
 }
 
 /// The scene's RenderSettings as far as they are read, with the player's render pipeline (`unity.render_settings`, a
@@ -1115,7 +1018,9 @@ impl Component for UnityCollider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shader::fixture;
+    use crate::components::Stored;
+    use crate::fixture;
+    use unity_formats::player::ObjRef;
 
     fn variant(tier: usize, model: i64, keywords: &[&str], code: u8) -> UnityProgramVariant {
         UnityProgramVariant {
@@ -1182,10 +1087,10 @@ mod tests {
     #[test]
     fn a_meshs_submeshes_follow_its_primitives() {
         let m = UnityMesh {
-            mesh: UnityObject {
+            mesh: Stored(ObjRef {
                 file: "level1".into(),
                 path_id: 7,
-            },
+            }),
             submeshes: Some((2, 3)),
             drawn: vec![2, 3, 4],
         };
@@ -1242,10 +1147,10 @@ mod tests {
 
     fn material(render_queue: i64, subshaders: Vec<SubShader>) -> UnityMaterial {
         UnityMaterial {
-            material: UnityObject {
+            material: Stored(ObjRef {
                 file: "sharedassets1.assets".into(),
                 path_id: 1,
-            },
+            }),
             shader: Some("Shader Graphs/Example".into()),
             shader_state: subshaders,
             textures: Vec::new(),
@@ -1306,7 +1211,7 @@ mod tests {
     /// forward pass, not its shadow caster; none under another pipeline.
     #[test]
     fn the_draw_pass_is_the_pipelines_surface_pass() {
-        use crate::shader::PassKind;
+        use unity_formats::shader::PassKind;
         let b = RenderPipeline::BuiltIn;
         let u = RenderPipeline::Universal;
         let picked = |passes: Vec<ShaderPass>, p: &RenderPipeline| {

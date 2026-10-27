@@ -1,12 +1,12 @@
 //! Unity materials as stored: the shader's name and render state (decoded into [`crate::shader`]'s types), and the saved
 //! properties (textures with their tiling and offset, floats, integers, colours), keywords, tags and render queue. What
-//! they mean depends on the shader; lowering to `pbr.material` is [`crate::lower`].
+//! they mean depends on the shader.
 
-use crate::read::player::{ObjRef, Player};
-use crate::read::value::{Array, Value};
+use crate::player::{ObjRef, Player};
 use crate::shader::{
     PassKind, PassState, ShaderPass, ShaderStencilOp, ShaderTargetBlend, ShaderValue, SubShader,
 };
+use crate::value::{Array, Value};
 use crate::{Result, invalid};
 
 /// A texture property: the texture (`None`: no texture set) and its tiling (`_ST`) with Unity's bottom-left origin.

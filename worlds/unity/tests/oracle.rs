@@ -6,15 +6,13 @@
 
 #![allow(clippy::unwrap_used)]
 
-mod inputs;
-
 use std::collections::{BTreeMap, HashMap};
 
-use inputs::{Game, OracleSet, Tool, install_file, oracle, tool};
-use primase_testdata::gate::{GateReport, Tolerance, compare_json};
-use primase_unity::{SerializedFile, TypeTreePackage};
+use primase_core::gate::{GateReport, Tolerance, compare_json};
+use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use serde_json::{Value as Json, json};
 use sha2::{Digest, Sha256};
+use unity_formats::{SerializedFile, TypeTreePackage};
 
 fn bytes_json(b: &[u8]) -> Json {
     let h: String = Sha256::digest(b).iter().map(|x| format!("{x:02x}")).collect();

@@ -6,14 +6,12 @@
 
 #![allow(clippy::unwrap_used)]
 
-mod inputs;
-
-use inputs::{Game, OracleSet, Tool, install_file, oracle, tool};
-use primase_testdata::gate::{GateReport, Tolerance};
-use primase_unity::TypeTreePackage;
-use primase_unity::player::Player;
-use primase_unity::scene::{LightComponent, Scene};
+use primase_core::gate::{GateReport, Tolerance};
+use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use serde_json::{Value as Json, json};
+use unity_formats::TypeTreePackage;
+use unity_formats::player::Player;
+use unity_formats::scene::{LightComponent, Scene};
 
 fn record(l: &LightComponent) -> Json {
     let f = |x: f32| json!(f64::from(x));
@@ -178,9 +176,9 @@ fn lights_lower_to_core() {
 fn the_sun_matches_the_independent_reader() {
     use primase_core::{Environment, Name, World};
     use primase_unity::components::UnityLight;
-    use primase_unity::components::{RenderPipeline, URP_ASSET};
     use primase_unity::level::read_level;
     use primase_unity::lower_lights::lower_unity_lights;
+    use unity_formats::player::{RenderPipeline, URP_ASSET};
     let (Some(data), Some(tpk), Some(scan), Some(oracle)) = (
         install_file(Game::Sledding, "Sledding Game_Data"),
         tool(Tool::UnityTpk),

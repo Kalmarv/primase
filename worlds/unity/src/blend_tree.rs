@@ -24,7 +24,8 @@
 use std::collections::BTreeMap;
 
 use crate::animator::{BlendNode, UnityAnimatorController, name_hash};
-use crate::{Error, Result, invalid};
+use crate::invalid;
+use unity_formats::{Error, Result};
 
 /// The values of a controller's parameters, by the CRC-32 of the parameter's name, as the controller's blend trees and
 /// transitions name them. A value is finite: a NaN or an infinity is refused where it is set or read from the controller,
@@ -254,6 +255,8 @@ fn freeform_cartesian(node: &BlendNode, parameters: &Parameters) -> Result<Vec<f
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::Stored;
+    use unity_formats::player::ObjRef;
 
     const NONE: u32 = u32::MAX;
 
@@ -439,10 +442,10 @@ mod tests {
         );
 
         let controller = |default: f32| UnityAnimatorController {
-            controller: crate::components::UnityObject {
+            controller: Stored(ObjRef {
                 file: "f".into(),
                 path_id: 1,
-            },
+            }),
             name: "c".into(),
             layers: vec![],
             state_machines: vec![],

@@ -26,7 +26,8 @@ use primase_meshops::convex_hull;
 
 use crate::components::UNITY;
 use crate::components::{UnityCollider, UnityColliderOf, UnityColliderShape, UnityTerrain};
-use crate::{Result, invalid};
+use crate::invalid;
+use unity_formats::Result;
 
 type M3 = [[f64; 3]; 3];
 
@@ -368,15 +369,17 @@ impl Pass for LowerUnityCollision {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{ColliderMesh, UnityObject};
+    use crate::components::ColliderMesh;
+    use crate::components::Stored;
     use primase_core::pass::Pass;
+    use unity_formats::player::ObjRef;
 
     fn collider(shape: UnityColliderShape) -> UnityCollider {
         UnityCollider {
-            collider: UnityObject {
+            collider: Stored(ObjRef {
                 file: "level1".into(),
                 path_id: 1,
-            },
+            }),
             layer: 0,
             shape,
             trigger: false,
@@ -608,9 +611,11 @@ mod tests {
     /// d (1, 1); in the world Unity's z is -z, so the corners are (100, 1, 50), (101, 2, 50), (100, 3, 49), (101, 4, 49).
     /// The one-cell terrain described above, with its collider enabled, in `w`.
     fn one_cell_terrain(w: &mut World) -> Entity {
-        let obj = |path_id| UnityObject {
-            file: "level1".into(),
-            path_id,
+        let obj = |path_id| {
+            Stored(ObjRef {
+                file: "level1".into(),
+                path_id,
+            })
         };
         let terrain = w.spawn();
         w.insert(terrain, transform(I, [100.0, 0.0, 50.0]));

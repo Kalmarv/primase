@@ -4,22 +4,21 @@
 //! counts.
 #![allow(clippy::unwrap_used)]
 
-mod inputs;
-
 use std::collections::BTreeSet;
 
-use inputs::{Game, Tool, install_file, tool};
 use primase_core::pass::{Options, PassLog};
 use primase_core::shader::ShaderBinding;
 use primase_core::{Component, World};
-use primase_unity::TypeTreePackage;
+use primase_testdata::{Game, Tool, install_file, tool};
 use primase_unity::components::{
-    RenderPipeline, UnityLight, UnityMaterial, UnityPrograms, UnityRenderSettings, UnityRenderer,
+    UnityLight, UnityMaterial, UnityPrograms, UnityRenderSettings, UnityRenderer,
 };
 use primase_unity::level::{LevelOptions, read_level_with};
-use primase_unity::player::Player;
 use primase_unity::program::read_programs;
 use primase_unity::resolve_shaders::RESOLVE_UNITY_SHADERS;
+use unity_formats::TypeTreePackage;
+use unity_formats::player::Player;
+use unity_formats::player::RenderPipeline;
 
 fn census(label: &str, data: &std::path::Path, tpk: &std::path::Path, level: &str) {
     let started = std::time::Instant::now();
@@ -174,7 +173,7 @@ fn a_levels_materials_are_bound_or_left_with_a_reason() {
 /// a keyword their feature enables is still set per frame, so the stored variants keep both states.
 #[test]
 fn a_urp_assets_settings_agree_with_the_variants_the_player_keeps() {
-    use primase_unity::components::UnityUrpSettings;
+    use unity_formats::pipeline::UnityUrpSettings;
     let Some(tpk) = tool(Tool::UnityTpk) else {
         return;
     };
@@ -194,7 +193,7 @@ fn a_urp_assets_settings_agree_with_the_variants_the_player_keeps() {
             let (_, bytes) = player.behaviour(&asset).unwrap();
             (
                 l.name.clone(),
-                primase_unity::pipeline::read_urp_settings(&bytes).unwrap(),
+                unity_formats::pipeline::read_urp_settings(&bytes).unwrap(),
             )
         })
         .collect();

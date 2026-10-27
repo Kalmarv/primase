@@ -7,10 +7,47 @@
 //! one byte per cell, 0 a hole (none stored: no holes). Alphamaps hold four layer weights per texel (RGBA), texel
 //! row 0 at z = 0 as Unity stores rows.
 
-use crate::components::check_heightmap;
-use crate::read::player::{ObjRef, Player};
-use crate::read::value::{Array, Value};
+use crate::player::{ObjRef, Player};
+use crate::value::{Array, Value};
 use crate::{Result, invalid};
+
+/// The highest stored height sample: 0..=32766 is 0..1 of the terrain's height (`TerrainData.GetHeight`).
+pub const MAX_HEIGHT: i16 = 32766;
+
+/// What a heightmap must be to be read: `resolution` x `resolution` samples (at least 2 x 2: one cell), each
+/// 0..=[`MAX_HEIGHT`], and, where it has holes, one per cell ((resolution - 1)^2).
+pub fn check_heightmap(
+    resolution: u32,
+    heights: &[i16],
+    holes: Option<&[u8]>,
+) -> std::result::Result<(), String> {
+    if resolution < 2 {
+        return Err(format!(
+            "resolution {resolution}: a heightmap has at least 2 x 2 samples"
+        ));
+    }
+    let n = resolution as usize;
+    let samples = n.checked_mul(n).ok_or("the heightmap's sample count overflows")?;
+    if heights.len() != samples {
+        return Err(format!("{} heights for resolution {resolution}", heights.len()));
+    }
+    if let Some((i, h)) = heights
+        .iter()
+        .enumerate()
+        .find(|(_, h)| !(0..=MAX_HEIGHT).contains(*h))
+    {
+        return Err(format!(
+            "height sample {i} (row {}, column {}) is {h}, outside 0..={MAX_HEIGHT}",
+            i / n,
+            i % n
+        ));
+    }
+    let cells = (n - 1) * (n - 1);
+    match holes {
+        Some(h) if h.len() != cells => Err(format!("{} holes for {cells} cells", h.len())),
+        _ => Ok(()),
+    }
+}
 
 /// A tree placed on a terrain: position as 0..1 of the terrain's size, scales, rotation about y (radians), colour,
 /// and its prototype's index.
@@ -208,7 +245,6 @@ impl TerrainLayerData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::MAX_HEIGHT;
 
     /// A heightmap has at least one cell, its samples within 0..=32766, and one hole per cell where it has holes;
     /// resolution 0 and 1 are refused before any cell count is taken.

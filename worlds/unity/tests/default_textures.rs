@@ -5,11 +5,9 @@
 //! engine. Needs the installs and the type tree package.
 #![allow(clippy::unwrap_used)]
 
-mod inputs;
-
-use inputs::{Game, Tool, install_file, tool};
-use primase_unity::TypeTreePackage;
-use primase_unity::player::{ObjRef, Player};
+use primase_testdata::{Game, Tool, install_file, tool};
+use unity_formats::TypeTreePackage;
+use unity_formats::player::{ObjRef, Player};
 
 const NAMES: [&str; 8] = [
     "white",

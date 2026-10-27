@@ -6,15 +6,13 @@
 
 #![allow(clippy::unwrap_used)]
 
-mod inputs;
-
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
-use inputs::{Game, Tool, install_file, tool};
-use primase_testdata::gate::{GateReport, Tolerance};
-use primase_unity::resource::{StreamingInfo, streaming_infos};
-use primase_unity::{Error, SerializedFile, TypeTree, TypeTreePackage};
+use primase_core::gate::{GateReport, Tolerance};
+use primase_testdata::{Game, Tool, install_file, tool};
+use unity_formats::resource::{StreamingInfo, streaming_infos};
+use unity_formats::{Error, SerializedFile, TypeTree, TypeTreePackage};
 
 fn files(dir: &Path, out: &mut Vec<PathBuf>) {
     let mut entries: Vec<_> = std::fs::read_dir(dir)

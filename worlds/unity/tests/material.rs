@@ -6,14 +6,12 @@
 
 #![allow(clippy::unwrap_used)]
 
-mod inputs;
-
-use inputs::{Game, OracleSet, Tool, install_file, oracle, tool};
-use primase_testdata::gate::{GateReport, Tolerance};
-use primase_unity::TypeTreePackage;
-use primase_unity::material::{UnityMaterialData, shader_name};
-use primase_unity::player::{ObjRef, Player};
+use primase_core::gate::{GateReport, Tolerance};
+use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use serde_json::{Value as Json, json};
+use unity_formats::TypeTreePackage;
+use unity_formats::material::{UnityMaterialData, shader_name};
+use unity_formats::player::{ObjRef, Player};
 
 fn obj(r: &Option<ObjRef>) -> Json {
     r.as_ref().map_or(Json::Null, |r| json!([r.file, r.path_id]))
@@ -78,8 +76,8 @@ fn materials_match_the_oracle() {
 /// as [value, bound property or null]): every material's shader exactly.
 #[test]
 fn shader_state_matches_the_oracle() {
-    use primase_unity::material::ShaderData;
-    use primase_unity::shader::ShaderValue;
+    use unity_formats::material::ShaderData;
+    use unity_formats::shader::ShaderValue;
     let (Some(data), Some(tpk), Some(oracle)) = (
         install_file(Game::Sledding, "Sledding Game_Data"),
         tool(Tool::UnityTpk),

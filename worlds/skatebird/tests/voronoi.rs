@@ -7,18 +7,16 @@
 
 #![allow(clippy::unwrap_used)]
 
-mod inputs;
-
 use std::collections::BTreeSet;
 
-use inputs::{Game, Tool, debug, install_file, tool};
 use primase_core::convert::Reader;
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{Name, Texture, World};
 use primase_skatebird::SkatebirdReader;
-use primase_unity::TypeTreePackage;
-use primase_unity::player::Player;
+use primase_testdata::{Game, Tool, debug, install_file, tool};
 use sha2::{Digest, Sha256};
+use unity_formats::TypeTreePackage;
+use unity_formats::player::Player;
 
 /// The lab's lowering of a Unity level, with the Voronoi bake after the materials.
 const PASSES: [&str; 5] = [

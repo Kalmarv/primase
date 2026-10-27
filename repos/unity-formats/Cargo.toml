@@ -1,0 +1,21 @@
+[package]
+name = "unity-formats"
+description = "Unity players' data files: SerializedFile containers, type trees, streamed resources and the objects of a scene"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+primase-foundations = { workspace = true, features = ["compress"] }
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+primase-testdata.workspace = true
+
+[lints]
+workspace = true

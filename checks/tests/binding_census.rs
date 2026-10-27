@@ -293,14 +293,15 @@ fn rr_scenes() {
 // ---- Unity: SkateBIRD level1, Sledding Game level1 ----
 
 fn unity_scene(game: &str, label: &str, data: &std::path::Path, tpk: &std::path::Path, level: &str) {
-    use primase_unity::TypeTreePackage;
     use primase_unity::components::{
-        RenderPipeline, UnityLight, UnityMaterial, UnityPrograms, UnityRenderSettings, UnityRenderer,
+        UnityLight, UnityMaterial, UnityPrograms, UnityRenderSettings, UnityRenderer,
     };
     use primase_unity::level::{LevelOptions, read_level_with};
-    use primase_unity::player::Player;
     use primase_unity::program::read_programs;
     use primase_unity::resolve_shaders::RESOLVE_UNITY_SHADERS;
+    use unity_formats::TypeTreePackage;
+    use unity_formats::player::Player;
+    use unity_formats::player::RenderPipeline;
     let player = Player::open(
         data,
         TypeTreePackage::parse(&std::fs::read(tpk).unwrap()).unwrap(),

@@ -7,8 +7,8 @@ mod inputs;
 use inputs::{Game, OracleSet, install_file, oracle};
 use std::collections::BTreeMap;
 
-use primase_unity::SerializedFile;
 use serde::Deserialize;
+use unity_formats::SerializedFile;
 
 #[derive(Deserialize)]
 struct Census {

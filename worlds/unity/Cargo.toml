@@ -11,6 +11,7 @@ publish.workspace = true
 [dependencies]
 iridia-interface.workspace = true
 primase-core.workspace = true
+unity-formats.workspace = true
 primase-animation.workspace = true
 primase-foundations = { workspace = true, features = ["compress"] }
 primase-meshops.workspace = true

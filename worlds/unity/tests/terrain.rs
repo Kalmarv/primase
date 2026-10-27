@@ -7,16 +7,14 @@
 
 #![allow(clippy::unwrap_used)]
 
-mod inputs;
-
-use inputs::{Game, OracleSet, Tool, install_file, oracle, tool};
-use primase_testdata::gate::{GateReport, Tolerance};
-use primase_unity::TypeTreePackage;
-use primase_unity::player::{ObjRef, Player};
-use primase_unity::scene::Scene;
-use primase_unity::terrain::{TerrainData, TerrainLayerData};
-use primase_unity::value::Value;
+use primase_core::gate::{GateReport, Tolerance};
+use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use serde_json::{Value as Json, json};
+use unity_formats::TypeTreePackage;
+use unity_formats::player::{ObjRef, Player};
+use unity_formats::scene::Scene;
+use unity_formats::terrain::{TerrainData, TerrainLayerData};
+use unity_formats::value::Value;
 
 fn obj(r: &Option<ObjRef>) -> Json {
     r.as_ref().map_or(Json::Null, |r| json!([r.file, r.path_id]))
@@ -387,8 +385,7 @@ fn terrain_geometry_matches_the_port() {
                         .enumerate()
                         .map(|(l, m)| f64::from(weights[at * 4 + l]) / 255.0 * m[c])
                         .sum();
-                    let baked = (primase_foundations::color::linear_to_srgb(lin).clamp(0.0, 1.0) * 255.0)
-                        .round() as u8;
+                    let baked = (primase_foundations::color::linear_to_srgb(lin).clamp(0.0, 1.0) * 255.0).round() as u8;
                     worst_formula = worst_formula.max(baked.abs_diff(theirs));
                 }
             }

@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use crate::Result;
-use crate::read::player::{ObjRef, Player};
+use crate::player::{ObjRef, Player};
 
 /// One object of a listing.
 #[derive(Clone, Debug, PartialEq, Eq)]

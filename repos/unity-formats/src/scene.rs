@@ -11,10 +11,51 @@
 
 use std::collections::BTreeMap;
 
-use crate::components::{UnityAmbient, UnityBehaviour, UnityFog, UnityObject};
-use crate::read::player::{ObjRef, Player};
-use crate::read::value::{Array, Value};
+use serde::Serialize;
+
+use crate::player::{ObjRef, Player};
+use crate::value::{Array, Value};
 use crate::{Result, invalid};
+
+/// A MonoBehaviour as stored: its script (namespace and class) and the script's serialized fields, kept as bytes
+/// (a stripped build has no type tree for them).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct UnityBehaviour {
+    pub behaviour: ObjRef,
+    pub script: String,
+    pub enabled: bool,
+    #[serde(skip)]
+    pub data: Vec<u8>,
+}
+
+/// A scene's ambient lighting as RenderSettings stores it: `mode` (`m_AmbientMode`: 0 skybox, 1 trilight, a gradient
+/// of the sky, equator and ground colours, 3 flat, the sky colour alone, 4 custom), the three colours as stored,
+/// `intensity` (`m_AmbientIntensity`) and the ambient probe as stored (`m_AmbientProbe`, Unity's SphericalHarmonicsL2:
+/// nine coefficients per channel, red 0..8, green 9..17, blue 18..26; `None` when the RenderSettings store none). The
+/// probe is what the editor last generated: all zeros when it never did, and not necessarily from the colours stored
+/// beside it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct UnityAmbient {
+    pub mode: i64,
+    pub sky: [f32; 4],
+    pub equator: [f32; 4],
+    pub ground: [f32; 4],
+    pub intensity: f32,
+    pub probe: Option<[f32; 27]>,
+}
+
+/// The scene's fog as RenderSettings stores it: whether it is on (`m_Fog`), its `mode` (`m_FogMode`: 1 linear, 2
+/// exponential, 3 exponential squared), its colour, `density` (exponential modes) and the linear mode's `start` and
+/// `end`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct UnityFog {
+    pub enabled: bool,
+    pub mode: i64,
+    pub color: [f32; 4],
+    pub density: f32,
+    pub start: f32,
+    pub end: f32,
+}
 
 /// A 4x4 matrix, rows of columns (`m[row][col]`), column vectors: Unity's `Matrix4x4` layout, in f64.
 pub type Matrix = [[f64; 4]; 4];
@@ -283,7 +324,7 @@ impl Scene {
             path_id: pid,
         };
         let name_of =
-            |o: &crate::read::serialized::ObjectInfo| player.class_name(&r(file, o.path_id)).unwrap_or("");
+            |o: &crate::serialized::ObjectInfo| player.class_name(&r(file, o.path_id)).unwrap_or("");
         let mut nodes = BTreeMap::new();
         let mut rects: BTreeMap<i64, Value> = BTreeMap::new();
         let mut game_objects = BTreeMap::new();
@@ -431,7 +472,7 @@ impl Scene {
                 None => String::new(),
             };
             out.push(UnityBehaviour {
-                behaviour: UnityObject::from(&r),
+                behaviour: r.clone(),
                 script,
                 enabled: base
                     .get("m_Enabled")

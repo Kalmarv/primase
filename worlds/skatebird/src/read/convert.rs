@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use primase_core::convert::{Notice, NoticeKind, Reader, Report, Result};
 use primase_core::{Entity, World};
 use primase_unity::convert::{UnityReader, mesh_box};
-use primase_unity::player::Player;
+use unity_formats::player::Player;
 
 /// Scene `level` (`level1`) of `player` (see the module documentation).
 pub struct SkatebirdReader<'a> {

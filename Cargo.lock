@@ -1183,6 +1183,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "toml",
+ "unity-formats",
 ]
 
 [[package]]
@@ -1492,6 +1493,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror",
+ "unity-formats",
 ]
 
 [[package]]
@@ -1556,6 +1558,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror",
+ "unity-formats",
 ]
 
 [[package]]
@@ -2076,6 +2079,17 @@ name = "unicode-width"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
+
+[[package]]
+name = "unity-formats"
+version = "0.1.0"
+dependencies = [
+ "primase-foundations",
+ "primase-testdata",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
 
 [[package]]
 name = "utf8parse"

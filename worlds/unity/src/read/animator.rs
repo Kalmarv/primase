@@ -7,9 +7,10 @@ use crate::animator::{
     Transition, UnityAnimatorController, UnityAvatar, Xform,
 };
 use crate::components::UnityObject;
-use crate::read::player::{ObjRef, Player};
-use crate::read::value::{Array, Value};
-use crate::{Result, invalid};
+use crate::invalid;
+use unity_formats::Result;
+use unity_formats::player::{ObjRef, Player};
+use unity_formats::value::{Array, Value};
 
 /// A field reader over one object: errors name `what` and the field.
 struct Fields<'a> {
@@ -701,7 +702,9 @@ impl UnityAnimatorController {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::Stored;
     use std::sync::Arc;
+    use unity_formats::player::ObjRef;
 
     fn s(fields: &[(&str, Value)]) -> Value {
         Value::Struct(fields.iter().map(|(k, v)| (Arc::from(*k), v.clone())).collect())
@@ -883,10 +886,10 @@ mod tests {
             mirror: false,
         };
         let controller = |clip: u32, to: i64, machine: i64, param_index: i64| UnityAnimatorController {
-            controller: UnityObject {
+            controller: Stored(ObjRef {
                 file: "f".into(),
                 path_id: 1,
-            },
+            }),
             name: "c".into(),
             layers: vec![Layer {
                 state_machine: machine,
@@ -916,10 +919,10 @@ mod tests {
             default_bools: vec![],
             // the second slot is a null pointer: it still counts as a clip index
             clips: vec![
-                Some(UnityObject {
+                Some(Stored(ObjRef {
                     file: "f".into(),
                     path_id: 2,
-                }),
+                })),
                 None,
             ],
             behaviours: vec![],

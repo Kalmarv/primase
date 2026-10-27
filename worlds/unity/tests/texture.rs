@@ -21,10 +21,10 @@ use primase_core::{ColorSpace, Texture};
 use primase_image::{Samples, read_png};
 use primase_testdata::gate::{GateReport, Tolerance};
 use primase_texcodec::{Bcdec, Decoder, TexDecoder};
-use primase_unity::TypeTreePackage;
-use primase_unity::player::{ObjRef, Player};
 use primase_unity::texture::UnityTexture;
 use serde_json::Value as Json;
+use unity_formats::TypeTreePackage;
+use unity_formats::player::{ObjRef, Player};
 
 /// Per TextureFormat: textures, textures equal, channels compared and differing, the largest difference and where.
 #[derive(Default)]
@@ -111,7 +111,7 @@ fn textures_match_the_oracle() {
         let ours = match u.texture() {
             Ok(x) => x,
             // the header is right; pixels the reader does not decode on purpose are counted, any other failure fails
-            Err(primase_unity::Error::Unsupported(why))
+            Err(unity_formats::Error::Unsupported(why))
                 if NOT_DECODED
                     .iter()
                     .any(|p| why.rsplit(": ").next().unwrap().starts_with(p)) =>

@@ -10,26 +10,62 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use crate::components::{RenderPipeline, URP_ASSET, UnityObject};
-use crate::read::mesh::SkinWeights;
-use crate::read::serialized::SerializedFile;
-use crate::read::tpk::TypeTreePackage;
-use crate::read::typetree::TypeTree;
-use crate::read::value::{Array, Value};
+use serde::Serialize;
+
+use crate::serialized::SerializedFile;
+use crate::tpk::TypeTreePackage;
+use crate::typetree::TypeTree;
+use crate::value::{Array, Value};
 use crate::{Error, Result, invalid};
 
 /// An object of the player: its file (lower-case name) and path id.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 pub struct ObjRef {
     pub file: String,
     pub path_id: i64,
 }
 
-impl From<&ObjRef> for UnityObject {
-    fn from(r: &ObjRef) -> Self {
-        UnityObject {
-            file: r.file.clone(),
-            path_id: r.path_id,
+/// The script class of Universal Render Pipeline's asset (`m_Namespace.m_ClassName` of its MonoScript).
+pub const URP_ASSET: &str = "UnityEngine.Rendering.Universal.UniversalRenderPipelineAsset";
+
+/// The render pipeline a player draws with: GraphicsSettings' default pipeline asset (`m_CustomRenderPipeline`), or a
+/// quality level's own (`customRenderPipeline`) where it sets one. Which quality level runs is the user's choice, so
+/// the pipeline is known only when every level gives the same kind.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub enum RenderPipeline {
+    /// No pipeline asset for any quality level: Unity's built-in renderer.
+    BuiltIn,
+    /// A Universal Render Pipeline asset ([`URP_ASSET`]) for every quality level.
+    Universal,
+    /// Anything else, or a mix: each level's asset script class (`built-in` for none), sorted, each once.
+    Other(Vec<String>),
+}
+
+/// How many bone influences a vertex may have under a quality level (`QualitySettings`' `skinWeights`: 1, 2, 4 or
+/// 255 for unlimited).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SkinWeights {
+    Bones(u32),
+    Unlimited,
+}
+
+impl SkinWeights {
+    /// The setting `value` as stored.
+    pub fn from_setting(value: i64) -> Result<SkinWeights> {
+        match value {
+            1 | 2 | 4 => Ok(SkinWeights::Bones(value as u32)),
+            255 => Ok(SkinWeights::Unlimited),
+            v => Err(Error::Unsupported(format!("skinWeights {v}"))),
+        }
+    }
+}
+
+impl std::fmt::Display for SkinWeights {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SkinWeights::Bones(1) => write!(f, "1 bone"),
+            SkinWeights::Bones(n) => write!(f, "{n} bones"),
+            SkinWeights::Unlimited => write!(f, "unlimited"),
         }
     }
 }
@@ -233,7 +269,7 @@ impl Player {
         let o = f
             .object(r.path_id)
             .ok_or_else(|| invalid(format!("{}: no object {}", r.file, r.path_id)))?;
-        if o.class_id != crate::read::serialized::MONO_BEHAVIOUR {
+        if o.class_id != crate::serialized::MONO_BEHAVIOUR {
             return Err(invalid(format!("{}/{}: not a MonoBehaviour", r.file, r.path_id)));
         }
         let d = f.decode_with(o, &*self.tree(&r.file, f, o.class_id)?)?;
@@ -274,7 +310,7 @@ impl Player {
         };
         let default = asset(graphics.get("m_CustomRenderPipeline"))?;
         let mut levels = Vec::new();
-        if let Some(Value::Array(crate::read::value::Array::Values(qs))) = one("QualitySettings")?
+        if let Some(Value::Array(crate::value::Array::Values(qs))) = one("QualitySettings")?
             .as_ref()
             .and_then(|q| q.get("m_QualitySettings"))
         {

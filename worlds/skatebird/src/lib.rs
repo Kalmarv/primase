@@ -39,7 +39,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
-    Unity(#[from] primase_unity::Error),
+    Unity(#[from] unity_formats::Error),
     /// A script's stored fields are not a layout this crate knows for the player's Unity version.
     #[error("{0}")]
     Layout(String),

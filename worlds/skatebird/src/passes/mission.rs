@@ -88,15 +88,16 @@ impl Pass for OmitSkatebirdMissionProps {
 mod tests {
     use super::*;
     use primase_core::{Name, Transform};
-    use primase_unity::components::UnityObject;
+    use primase_unity::components::Stored;
+    use unity_formats::player::ObjRef;
 
     fn script(role: SkatebirdRole, path: &str) -> SkatebirdScript {
         SkatebirdScript {
             role,
-            behaviour: UnityObject {
+            behaviour: Stored(ObjRef {
                 file: "level1".into(),
                 path_id: 1,
-            },
+            }),
             enabled: true,
             path: path.into(),
         }

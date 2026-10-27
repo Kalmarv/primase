@@ -10,19 +10,17 @@
 
 #![allow(clippy::unwrap_used)]
 
-mod inputs;
-
 use std::collections::BTreeMap;
 
-use inputs::{Game, OracleSet, Tool, install_file, oracle, tool};
+use primase_core::gate::{GateReport, Tolerance};
 use primase_core::{Name, Transform, World};
-use primase_testdata::gate::{GateReport, Tolerance};
-use primase_unity::TypeTreePackage;
+use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_unity::components::UNITY;
 use primase_unity::components::{UnityCollider, UnityColliderShape, UnityTreeInstance};
 use primase_unity::level::read_level;
-use primase_unity::player::Player;
 use serde_json::{Value as Json, json};
+use unity_formats::TypeTreePackage;
+use unity_formats::player::Player;
 
 /// The farthest a displacement of at most half of `step` per coordinate can move through the linear map `m` (rows):
 /// each output coordinate by at most step / 2 times its row's absolute sum, so in length by step / 2 times the norm of

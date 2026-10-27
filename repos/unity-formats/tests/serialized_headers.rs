@@ -1,7 +1,7 @@
 //! Hand-worked container headers: empty metadata and one object at a padded data boundary.
 #![allow(clippy::unwrap_used)]
 
-use primase_unity::SerializedFile;
+use unity_formats::SerializedFile;
 
 fn header(version: u32, metadata: &[u8], data: &[u8]) -> Vec<u8> {
     let header_size = if version == 21 { 20 } else { 48 };

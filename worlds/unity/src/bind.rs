@@ -21,7 +21,8 @@ use primase_foundations::color::srgb_to_linear;
 use primase_foundations::{sampling::Address, sampling::Transfer};
 
 use crate::components::{Shape, UnityMaterial, UnityProgramVariant, UnityTexture};
-use crate::{Result, invalid};
+use crate::invalid;
+use unity_formats::Result;
 
 /// A program bound to its layout.
 #[derive(Debug)]
@@ -222,9 +223,10 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
-    use crate::components::UnityObject;
+    use crate::components::Stored;
     use iridia_exec::{Image, Lod};
     use primase_core::{TexFormat, TexRole};
+    use unity_formats::player::ObjRef;
 
     fn texture(width: u32, height: u32, levels: &[&[[u8; 4]]], space: ColorSpace) -> Texture {
         Texture {
@@ -243,10 +245,10 @@ mod tests {
 
     fn unity(wrap: [i64; 2], filter: i64, mip_bias: f32) -> UnityTexture {
         UnityTexture {
-            texture: UnityObject {
+            texture: Stored(ObjRef {
                 file: "sharedassets0.assets".into(),
                 path_id: 1,
-            },
+            }),
             format: 4,
             srgb: false,
             usage: 0,

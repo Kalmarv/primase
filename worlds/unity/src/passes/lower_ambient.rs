@@ -34,7 +34,8 @@ use super::lower_lights::parse_candela_per_unit;
 use primase_core::{Ambient, AmbientLight, Environment, World};
 use primase_foundations::color::srgb_to_linear_f32;
 
-use crate::components::{UnityAmbient, UnityRenderSettings};
+use crate::components::UnityRenderSettings;
+use unity_formats::scene::UnityAmbient;
 
 /// What [`LowerUnityAmbient`] makes of a skybox (0) or custom (4) ambient. No default: the program chooses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
