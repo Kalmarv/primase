@@ -478,8 +478,8 @@ fn fromsoft_areas() {
 #[test]
 fn stuntboost_bed() {
     use inputs::{Game, install};
-    use primase_monogame::mgfx::Effect;
-    use primase_monogame::xnb::Xnb;
+    use monogame_formats::mgfx::Effect;
+    use monogame_formats::xnb::Xnb;
     use primase_stuntboost::components::StuntboostMaterial;
     use primase_stuntboost::read::level::read_level;
     let Some(root) = install(Game::Stuntboost) else {

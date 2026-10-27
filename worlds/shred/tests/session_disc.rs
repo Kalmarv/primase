@@ -2,12 +2,12 @@
 //! this checks all ten installed base maps and every layer PAK whose quartet namespace names that map.
 mod inputs;
 
+use inputs::{Game, install, install_file};
 use primase_core::{Instance, convert::Reader, frame::SourceFrame};
 use primase_shred::{
     components::{SessionGraph, SourcePlacement},
     read::convert::ShredReader,
 };
-use inputs::{Game, install, install_file};
 use rme_formats::{
     database::{Database, Value},
     pak::Pak,

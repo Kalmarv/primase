@@ -18,10 +18,12 @@
 
 #![allow(clippy::unwrap_used)]
 
-use primase_core::gate::{GateReport, Tolerance};
+mod inputs;
+
+use inputs::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_core::ledger::Measure;
 use primase_core::{Instance, Mesh, Semantic, Stream, Transform, World};
-use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
+use primase_testdata::gate::{GateReport, Tolerance};
 use primase_unity::components::UNITY;
 use primase_unity::components::{UnityBehaviours, UnityMesh, UnityRenderer, UnityTreeInstance};
 use primase_unity::level::{read_level, transform_of};

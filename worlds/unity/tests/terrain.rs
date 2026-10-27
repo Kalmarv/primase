@@ -7,8 +7,10 @@
 
 #![allow(clippy::unwrap_used)]
 
-use primase_core::gate::{GateReport, Tolerance};
-use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
+mod inputs;
+
+use inputs::{Game, OracleSet, Tool, install_file, oracle, tool};
+use primase_testdata::gate::{GateReport, Tolerance};
 use serde_json::{Value as Json, json};
 use unity_formats::TypeTreePackage;
 use unity_formats::player::{ObjRef, Player};
@@ -385,7 +387,8 @@ fn terrain_geometry_matches_the_port() {
                         .enumerate()
                         .map(|(l, m)| f64::from(weights[at * 4 + l]) / 255.0 * m[c])
                         .sum();
-                    let baked = (primase_foundations::color::linear_to_srgb(lin).clamp(0.0, 1.0) * 255.0).round() as u8;
+                    let baked = (primase_foundations::color::linear_to_srgb(lin).clamp(0.0, 1.0) * 255.0)
+                        .round() as u8;
                     worst_formula = worst_formula.max(baked.abs_diff(theirs));
                 }
             }

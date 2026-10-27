@@ -3,12 +3,12 @@
 //! Counts are those of the recon census (`scratch/scene`), recounted here by this reader.
 mod inputs;
 
+use inputs::{Game, Query, expect_found, install, install_file};
 use primase_core::{Marker, frame::SourceFrame};
 use primase_shred::{
     components::{Locator, Occluder, SceneLight, Spline, Spot, SpotCamera},
     read::{level, manifest as manifest_join, names},
 };
-use inputs::{Game, Query, expect_found, install, install_file};
 use rme_formats::{
     database::Database,
     manifest::{self, Difficulty, Manifest},

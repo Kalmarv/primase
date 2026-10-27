@@ -12,6 +12,7 @@ publish.workspace = true
 iridia-interface.workspace = true
 primase-core.workspace = true
 primase-monogame.workspace = true
+monogame-formats.workspace = true
 primase-glb.workspace = true
 primase-image.workspace = true
 serde.workspace = true

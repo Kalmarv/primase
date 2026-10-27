@@ -1,4 +1,4 @@
-//! STUNTBOOST read over the MonoGame reader (`primase-monogame`): a level's parts (level, room, sky), every node with
+//! STUNTBOOST read over the MonoGame reader (`monogame-formats`): a level's parts (level, room, sky), every node with
 //! its name parsed by the game's own rules, the meshes, materials and baked atlases, as stored, in the
 //! core frame in metres at a scale the program states ([`read::read_level`], [Frame](crate#frame)); then lowerings
 //! whose every choice is the program's ([`passes`]): collision with surfaces from the physics materials, the spawns
@@ -46,7 +46,7 @@ pub enum Error {
         source: std::io::Error,
     },
     #[error(transparent)]
-    Monogame(#[from] primase_monogame::xnb::Error),
+    Monogame(#[from] monogame_formats::xnb::Error),
     #[error(transparent)]
     Glb(#[from] primase_glb::Error),
     #[error(transparent)]

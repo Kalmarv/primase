@@ -957,6 +957,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "monogame-formats"
+version = "0.1.0"
+dependencies = [
+ "primase-foundations",
+ "thiserror",
+]
+
+[[package]]
 name = "morpheme-formats"
 version = "0.1.0"
 dependencies = [
@@ -1162,6 +1170,7 @@ dependencies = [
  "frostbite-formats",
  "iridia-interface",
  "meshopt",
+ "monogame-formats",
  "primase-animation",
  "primase-anvil",
  "primase-core",
@@ -1399,7 +1408,7 @@ version = "0.1.0"
 dependencies = [
  "iridia",
  "iridia-mojo",
- "primase-foundations",
+ "monogame-formats",
  "thiserror",
 ]
 
@@ -1503,6 +1512,7 @@ dependencies = [
  "iridia",
  "iridia-exec",
  "iridia-interface",
+ "monogame-formats",
  "primase-core",
  "primase-glb",
  "primase-image",
@@ -1546,6 +1556,7 @@ dependencies = [
  "iridia-interface",
  "primase-animation",
  "primase-core",
+ "primase-foundations",
  "primase-gltf",
  "primase-image",
  "primase-meshops",

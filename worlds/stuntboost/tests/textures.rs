@@ -12,8 +12,8 @@ mod inputs;
 use std::path::Path;
 
 use inputs::{Game, install};
+use monogame_formats::xnb::Xnb;
 use primase_core::{Texture, World};
-use primase_monogame::xnb::Xnb;
 use primase_stuntboost::read_level;
 
 fn files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {

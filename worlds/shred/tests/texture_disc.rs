@@ -2,9 +2,9 @@
 //! BCn output is also expanded through the codec so every encoded level is exercised.
 mod inputs;
 
+use inputs::{Depth, Game, Query, depth, expect_found, install, seed};
 use primase_core::{ColorSpace, TexRole, Texture};
 use primase_shred::read::texture::{self, Error};
-use inputs::{Depth, Game, Query, depth, expect_found, install, seed};
 use primase_texcodec::{Decoder, TexDecoder};
 use rme_formats::{
     pak::Pak,

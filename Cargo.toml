@@ -17,6 +17,7 @@ members = [
     "repos/morpheme-formats",
     "repos/rme-formats",
     "repos/unity-formats",
+    "repos/monogame-formats",
     "repos/lua51-bytecode",
     "repos/dx/dxbc-reader",
     "repos/iridia/iridia-dxbc",
@@ -94,6 +95,7 @@ primase-havok = { path = "toolkit/havok" }
 morpheme-formats = { path = "repos/morpheme-formats" }
 rme-formats = { path = "repos/rme-formats" }
 unity-formats = { path = "repos/unity-formats" }
+monogame-formats = { path = "repos/monogame-formats" }
 lua51-bytecode = { path = "repos/lua51-bytecode" }
 dxbc-reader = { path = "repos/dx/dxbc-reader" }
 iridia-dxbc = { path = "repos/iridia/iridia-dxbc" }

@@ -12,8 +12,8 @@ mod inputs;
 use std::path::{Path, PathBuf};
 
 use inputs::{Game, install_file};
-use primase_monogame::mgfx::{Effect, Profile, Stage};
-use primase_monogame::xnb::Xnb;
+use monogame_formats::mgfx::{Effect, Profile, Stage};
+use monogame_formats::xnb::Xnb;
 
 fn effects(dir: &Path, out: &mut Vec<PathBuf>) {
     let mut entries: Vec<_> = std::fs::read_dir(dir)

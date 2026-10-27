@@ -1,6 +1,7 @@
 //! Real reader/load/pass integration, not an independent shaded-render oracle.
 mod inputs;
 
+use inputs::{Game, install};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{Instance, Texture, World, convert::Reader, frame::SourceFrame};
@@ -11,7 +12,6 @@ use primase_shred::{
         material_join::{MaterialInputs, TexturePreference},
     },
 };
-use inputs::{Game, install};
 use rme_formats::pak::Pak;
 use std::collections::{BTreeMap, BTreeSet};
 

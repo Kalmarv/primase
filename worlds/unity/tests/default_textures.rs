@@ -5,7 +5,9 @@
 //! engine. Needs the installs and the type tree package.
 #![allow(clippy::unwrap_used)]
 
-use primase_testdata::{Game, Tool, install_file, tool};
+mod inputs;
+
+use inputs::{Game, Tool, install_file, tool};
 use unity_formats::TypeTreePackage;
 use unity_formats::player::{ObjRef, Player};
 

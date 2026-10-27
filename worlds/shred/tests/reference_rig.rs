@@ -1,9 +1,12 @@
 //! Reference rigs in a world: the recorded source frame converts the matrices, and a malformed bundle changes
 //! neither the world nor the report. The record's own reading is tested in `rme-formats`.
 use morpheme_formats::{Joint, Rig};
-use primase_core::{Transform, World, frame::{Axis, SourceFrame}};
-use primase_testdata::gate::{GateReport, Tolerance};
+use primase_core::{
+    Transform, World,
+    frame::{Axis, SourceFrame},
+};
 use primase_shred::{components::ReferenceRig, read::reference_rig::append_bundle};
+use primase_testdata::gate::{GateReport, Tolerance};
 use rme_formats::reference_rig::{ReferenceRig as Record, Report};
 
 fn source(frame: SourceFrame) -> ReferenceRig {

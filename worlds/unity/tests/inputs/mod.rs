@@ -70,12 +70,6 @@ primase_testdata::inputs! {
             about: r#"optional: that exporter's terrain pieces unpacked (raw arrays, `index.json`, its layer means; schema in `worlds/unity/tests/terrain.rs`)"#,
             source: r#"another exporter's terrain, unpacked by a script kept with the private oracle tools"#,
         },
-        Query::Oracle(OracleSet::UnityPy, Game::Skatebird, "census.json") => {
-            status: Live,
-            gate: true,
-            about: r#"an independent UnityPy object-table census of that folder (JSON; schema in `worlds/unity/tests/serialized_census.rs`)"#,
-            source: r#"independent: UnityPy, through dump scripts kept with the private oracle tools"#,
-        },
         Query::Oracle(OracleSet::UnityPy, Game::Skatebird, "listing.json") => {
             status: Live,
             gate: true,

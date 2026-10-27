@@ -3,6 +3,7 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod inputs;
 
+use inputs::{Game, install};
 use primase_core::{
     convert::Reader,
     frame::{Axis, SourceFrame},
@@ -16,7 +17,6 @@ use primase_shred::{
         material_join::{MaterialInputs, TexturePreference},
     },
 };
-use inputs::{Game, install};
 use rme_formats::{
     pak::Pak,
     pixel_program::{PixelProgram as Class, classify},

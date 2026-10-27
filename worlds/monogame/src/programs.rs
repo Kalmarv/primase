@@ -10,7 +10,7 @@
 use iridia::{Program, Stage};
 use iridia_mojo::{Attribute, Constant, Hints, Sampler};
 
-use crate::mgfx::{Effect, Profile, Shader, Stage as ShaderStage};
+use monogame_formats::mgfx::{Effect, Profile, Shader, Stage as ShaderStage};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -147,4 +147,130 @@ pub fn program(effect: &Effect<'_>, index: usize) -> Result<Program, Error> {
         ShaderStage::Pixel => Stage::Pixel,
     };
     Ok(iridia_mojo::lift(source, stage, &hints(effect, shader)?)?)
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    clippy::unwrap_used,
+    reason = "fixtures, not untrusted bytes"
+)]
+mod tests {
+    use monogame_formats::mgfx::{
+        Attribute, ConstantBuffer, Effect, Parameter, Pass, Profile, Sampler, SamplerKind, Shader, Stage,
+        Technique,
+    };
+
+    use super::{Error as ProgramError, program};
+
+    fn parameter(class: u8, ty: u8, name: &str, columns: u8, defaults: Option<Vec<f32>>) -> Parameter {
+        Parameter {
+            class,
+            ty,
+            name: name.into(),
+            semantic: String::new(),
+            rows: 1,
+            columns,
+            elements: Vec::new(),
+            members: Vec::new(),
+            defaults,
+        }
+    }
+
+    /// A small effect: one constant buffer holding one parameter, a vertex shader with two attributes and a pixel
+    /// shader with a sampler, one technique with one pass.
+    fn effect() -> Effect<'static> {
+        let shader = |stage, code: &'static [u8]| Shader {
+            stage,
+            source_file: String::new(),
+            entry_point: String::new(),
+            code,
+            samplers: Vec::new(),
+            constant_buffers: Vec::new(),
+            attributes: Vec::new(),
+        };
+        let mut pixel = shader(
+            Stage::Pixel,
+            b"void main() {}
+",
+        );
+        pixel.constant_buffers = vec![0];
+        pixel.samplers = vec![Sampler {
+            kind: SamplerKind::Sampler2D,
+            texture_slot: 3,
+            sampler_slot: 3,
+            state: None,
+            name: "ps_s0".into(),
+            parameter: 1,
+        }];
+        let mut vertex = shader(
+            Stage::Vertex,
+            b"void main() { }
+",
+        );
+        vertex.attributes = [("vs_v0", 0u8, 0u8), ("vs_v1", 2, 1)]
+            .into_iter()
+            .map(|(name, usage, index)| Attribute {
+                name: name.into(),
+                usage,
+                index,
+                location: i16::from(index),
+            })
+            .collect();
+        Effect {
+            profile: Profile::OpenGl,
+            key: 0x1234_5678,
+            constant_buffers: vec![ConstantBuffer {
+                name: "ps_uniforms_vec4".into(),
+                size: 16,
+                parameters: vec![(0, 0)],
+            }],
+            shaders: vec![pixel, vertex],
+            parameters: vec![
+                parameter(1, 3, "Tint", 4, Some(vec![0.25, 0.5, 0.75, 1.0])),
+                parameter(3, 7, "Albedo", 1, None),
+            ],
+            techniques: vec![Technique {
+                name: "Render".into(),
+                passes: vec![Pass {
+                    name: "Pass".into(),
+                    vertex_shader: Some(1),
+                    pixel_shader: Some(0),
+                }],
+            }],
+        }
+    }
+
+    #[test]
+    fn a_program_is_not_made_of_tables_that_do_not_hold_what_they_name() {
+        let good = effect();
+        // the pixel shader (0) reads buffer 0, whose parameter is made one the effect does not have
+        let mut effect = good.clone();
+        effect.constant_buffers[0].parameters[0].0 = 9;
+        assert!(matches!(
+            program(&effect, 0),
+            Err(ProgramError::NoSuchParameter(9, 2))
+        ));
+        // a sampler's parameter
+        let mut effect = good.clone();
+        effect.shaders[0].samplers[0].parameter = 7;
+        assert!(matches!(
+            program(&effect, 0),
+            Err(ProgramError::NoSuchParameter(7, 2))
+        ));
+        // a constant buffer the shader reads
+        let mut effect = good.clone();
+        effect.shaders[0].constant_buffers[0] = 3;
+        assert!(matches!(
+            program(&effect, 0),
+            Err(ProgramError::NoSuchConstantBuffer(3, 1))
+        ));
+        // a vertex usage MonoGame does not have
+        let mut effect = good;
+        effect.shaders[1].attributes[0].usage = 99;
+        let error = program(&effect, 1).unwrap_err().to_string();
+        assert!(error.contains("vs_v0") && error.contains("usage 99"), "{error}");
+    }
 }

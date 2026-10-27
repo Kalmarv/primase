@@ -25,6 +25,7 @@ primase-meshops.workspace = true
 primase-reskate.workspace = true
 primase-stuntboost.workspace = true
 primase-monogame.workspace = true
+monogame-formats.workspace = true
 primase-unity.workspace = true
 unity-formats.workspace = true
 primase-web = { workspace = true, features = ["fixture"] }

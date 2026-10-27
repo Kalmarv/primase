@@ -8,11 +8,11 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod inputs;
 
+use inputs::{Game, Query, expect_found, install};
 use primase_havok::packfile::{
     Packfile,
     physics::{self, ConvexVertices, ExtendedMesh, RigidBody, Shape},
 };
-use inputs::{Game, Query, expect_found, install};
 use rme_formats::pak::Pak;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

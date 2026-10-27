@@ -18,6 +18,7 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
 use iridia_interface::Filters;
+use monogame_formats::xnb::Xnb;
 use primase_core::frame::{Axis, SourceFrame};
 use primase_core::pbr::Wrap;
 use primase_core::{
@@ -25,7 +26,6 @@ use primase_core::{
     Transform, World,
 };
 use primase_glb::Gltf;
-use primase_monogame::xnb::Xnb;
 use serde_json::Value;
 
 use crate::components::names;

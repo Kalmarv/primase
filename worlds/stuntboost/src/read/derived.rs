@@ -17,7 +17,7 @@
 
 use std::collections::BTreeMap;
 
-use primase_monogame::xnb::{Content, Xnb};
+use monogame_formats::xnb::{Content, Xnb};
 
 use crate::{Error, Result};
 

@@ -719,39 +719,6 @@ mod tests {
     }
 
     #[test]
-    fn a_program_is_not_made_of_tables_that_do_not_hold_what_they_name() {
-        use crate::programs::{Error as ProgramError, program};
-        let bytes = effect(VERSION, 0, 0);
-        let good = Effect::parse(&bytes).unwrap();
-        // the pixel shader (0) reads buffer 0, whose parameter is made one the effect does not have
-        let mut effect = good.clone();
-        effect.constant_buffers[0].parameters[0].0 = 9;
-        assert!(matches!(
-            program(&effect, 0),
-            Err(ProgramError::NoSuchParameter(9, 2))
-        ));
-        // a sampler's parameter
-        let mut effect = good.clone();
-        effect.shaders[0].samplers[0].parameter = 7;
-        assert!(matches!(
-            program(&effect, 0),
-            Err(ProgramError::NoSuchParameter(7, 2))
-        ));
-        // a constant buffer the shader reads
-        let mut effect = good.clone();
-        effect.shaders[0].constant_buffers[0] = 3;
-        assert!(matches!(
-            program(&effect, 0),
-            Err(ProgramError::NoSuchConstantBuffer(3, 1))
-        ));
-        // a vertex usage MonoGame does not have
-        let mut effect = good;
-        effect.shaders[1].attributes[0].usage = 99;
-        let error = program(&effect, 1).unwrap_err().to_string();
-        assert!(error.contains("vs_v0") && error.contains("usage 99"), "{error}");
-    }
-
-    #[test]
     fn every_truncation_is_refused() {
         let bytes = effect(VERSION, 0, 0);
         for n in 0..bytes.len() {

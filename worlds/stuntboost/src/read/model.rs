@@ -25,9 +25,9 @@
 
 use std::path::Path;
 
+use monogame_formats::xnb::Xnb;
 use primase_glb::Gltf;
 use primase_image::{Image, Samples};
-use primase_monogame::xnb::Xnb;
 
 use super::level::{bytes_of, content, export_dir, export_path, format, image_levels, string_of};
 use crate::{Error, Result};

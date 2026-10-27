@@ -2,6 +2,7 @@
 //! explicitly inferred from the exhaustive nonzero namespace join, not a native oracle.
 mod inputs;
 
+use inputs::{Game, install};
 use primase_core::{Instance, Mesh, Texture, convert::Reader, frame::SourceFrame};
 use primase_shred::{
     components::{EncodedTexture, MaterialId, MaterialTextures, ShredMaterial, SourceTexture},
@@ -10,7 +11,6 @@ use primase_shred::{
         material_join::{MaterialInputs, TexturePreference},
     },
 };
-use inputs::{Game, install};
 use rme_formats::pak::Pak;
 use std::collections::BTreeSet;
 

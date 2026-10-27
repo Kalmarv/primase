@@ -6,11 +6,13 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
-use primase_core::gate::{GateReport, Tolerance};
-use primase_testdata::{Game, Tool, install_file, tool};
+use inputs::{Game, Tool, install_file, tool};
+use primase_testdata::gate::{GateReport, Tolerance};
 use unity_formats::resource::{StreamingInfo, streaming_infos};
 use unity_formats::{Error, SerializedFile, TypeTree, TypeTreePackage};
 

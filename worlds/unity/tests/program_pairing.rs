@@ -12,9 +12,11 @@
 //! one consistent family. Prints the counts. Duplicate variants (the same blob listed twice) are one.
 #![allow(clippy::unwrap_used)]
 
+mod inputs;
+
 use std::collections::BTreeSet;
 
-use primase_testdata::{Game, Tool, install_file, tool};
+use inputs::{Game, Tool, install_file, tool};
 use unity_formats::TypeTreePackage;
 use unity_formats::listing;
 use unity_formats::player::Player;
