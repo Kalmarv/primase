@@ -12,9 +12,9 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use frostbite_formats::cas;
+use frostbite_formats::folder::{Folder, Source};
 use primase_foundations::compress::oodle::{Oodle, Version};
-use primase_frostbite::cas;
-use primase_frostbite::folder::{Folder, Source};
 
 type BoxError = Box<dyn std::error::Error>;
 

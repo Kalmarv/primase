@@ -14,6 +14,7 @@ primase-core.workspace = true
 primase-glb.workspace = true
 primase-exactsum.workspace = true
 primase-foundations = { workspace = true, features = ["compress"] }
+frostbite-formats.workspace = true
 primase-frostbite.workspace = true
 sha1.workspace = true
 sha2.workspace = true

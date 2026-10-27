@@ -8,15 +8,17 @@
 
 use std::collections::BTreeMap;
 
+use frostbite_formats::MESHSET;
+use frostbite_formats::bundle::Kind;
+use frostbite_formats::folder::{Folder, Source};
+use frostbite_formats::meshset::{self, Decl, Element, Lod, Section, format, usage};
 use half::f16;
-use primase_core::{Lods, Mesh, Semantic, Stream, World};
 use primase_foundations::compress::oodle::{Oodle, Version};
-use primase_frostbite::MESHSET;
-use primase_frostbite::bundle::Kind;
+use primase_core::{Lods, Mesh, Semantic, Stream, World};
 use primase_frostbite::components::{FrostbiteMeshSet, FrostbiteVertexElements};
-use primase_frostbite::folder::{Folder, Source};
 use primase_frostbite::geometry;
-use primase_frostbite::meshset::{self, Decl, Element, Lod, Section, format, usage};
+use primase_frostbite::read::entry::read_entry;
+use primase_frostbite::read::geometry::read_geometry;
 use primase_testdata::{Game, Tool, install, install_file, tool};
 
 fn half(v: f32) -> [u8; 2] {
@@ -245,12 +247,11 @@ fn the_stock_meshes_decode_and_agree_with_the_reference() {
                 .filter(|e| e.kind == Kind::Res && e.resource_type == Some(MESHSET))
             {
                 let mut w = World::new();
-                let made = src.read_entry(bundle, &entry, &mut w).unwrap();
+                let made = read_entry(&src, bundle, &entry, &mut w).unwrap();
                 let id = made[0];
                 // a mesh whose chunks the bundle and its TOC hold; the others are counted
-                let forms = src
-                    .read_geometry(bundle, id, &mut w)
-                    .unwrap_or_else(|e| panic!("{}: {e}", entry.name));
+                let forms =
+                    read_geometry(&src, bundle, id, &mut w).unwrap_or_else(|e| panic!("{}: {e}", entry.name));
                 decoded += 1;
                 with_lods += usize::from(w.get::<Lods>(id).is_some());
                 for &f in &forms {

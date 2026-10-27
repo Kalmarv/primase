@@ -13,12 +13,12 @@
 
 #![allow(clippy::unwrap_used)]
 
-use primase_core::TexFormat;
+use frostbite_formats::ebx::{self, Pointer, Value};
+use frostbite_formats::fbmod::{self, Body, Fbmod};
+use frostbite_formats::folder::{Folder, Source};
+use frostbite_formats::texture;
 use primase_foundations::compress::oodle::{Oodle, Version};
-use primase_frostbite::ebx::{self, Pointer, Value};
-use primase_frostbite::fbmod::{self, Body, Fbmod};
-use primase_frostbite::folder::{Folder, Source};
-use primase_frostbite::texture;
+use primase_core::TexFormat;
 use primase_reskate::costume::textures::{Donor, HeaderUnknowns, Replacement, guid_text, retexture};
 use primase_reskate::costume::thumbnail::{CdnContentHash, Choices};
 use primase_reskate::costume::{ADDITION, costume_presets, morphs, presets, thumbnail};
@@ -139,7 +139,7 @@ fn studio_presets_are_repaired_and_retextured() -> R {
             assert!(b.import_offsets.contains(gone[0]));
             assert!(!b.type_info_offsets.iter().any(|o| b.import_offsets.contains(o)));
             assert_eq!((&a.imports, &a.import_offsets), (&b.imports, &b.import_offsets));
-            let objects = |d: &primase_frostbite::ebx::Document| {
+            let objects = |d: &frostbite_formats::ebx::Document| {
                 d.instances.iter().map(|i| i.object.clone()).collect::<Vec<_>>()
             };
             assert_eq!(objects(a), objects(b));
@@ -373,7 +373,7 @@ fn body_shape_targets_are_made_neutral() -> R {
         let mesh = m
             .entries
             .iter()
-            .find(|e| matches!(&e.body, Body::Res(r) if r.res_type == primase_frostbite::MESHSET))
+            .find(|e| matches!(&e.body, Body::Res(r) if r.res_type == frostbite_formats::MESHSET))
             .unwrap();
         let set = meshset::read(&m.payload(mesh.index().unwrap(), Some(&oodle))?)?;
         let lods: Vec<Vec<u8>> = set

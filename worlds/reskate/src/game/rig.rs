@@ -16,8 +16,8 @@
 
 use std::collections::BTreeMap;
 
+use frostbite_formats::ebx::{Document, Object, Pointer, Value};
 use primase_core::{Component, Entity, Joint, JointId, JsonError, Name, Rest, Skeleton, World};
-use primase_frostbite::ebx::{Document, Object, Pointer, Value};
 use serde::Serialize;
 use serde_json::Value as Json;
 

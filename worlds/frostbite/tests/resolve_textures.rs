@@ -12,17 +12,20 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
+use frostbite_formats::MESHSET;
+use frostbite_formats::bundle::Kind;
+use frostbite_formats::folder::{Folder, Source};
+use frostbite_formats::scope::Scope;
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_core::pass::{Pass, PassLog};
 use primase_core::shader::{ShaderBinding, TextureSource};
 use primase_core::{Entity, Texture, TextureLayers, TextureShape, World};
-use primase_foundations::compress::oodle::{Oodle, Version};
-use primase_frostbite::MESHSET;
-use primase_frostbite::bundle::Kind;
 use primase_frostbite::components::{FrostbiteMaterial, FrostbiteTexture};
-use primase_frostbite::folder::{Folder, Source};
 use primase_frostbite::passes::ResolveFrostbiteShaders;
-use primase_frostbite::program::Scope;
-use primase_frostbite::textures::TextureIndex;
+use primase_frostbite::read::entry::read_entry;
+use primase_frostbite::read::program::{materials, resolve_materials};
+use primase_frostbite::read::textures::TextureIndex;
+use primase_frostbite::read::textures::resolve_textures;
 use primase_testdata::{Game, Tool, install_file, tool};
 use primase_texcodec::{Decoder, TexDecoder};
 
@@ -95,17 +98,17 @@ fn census(every_toc: bool) {
         scope_bundles.extend(globals.bundles.iter().cloned());
         scope_bundles.extend(root.bundles.iter().cloned());
         let scope = Scope::new(&scope_bundles);
-        let all = src.materials(&scope).unwrap();
+        let all = materials(&src, &scope).unwrap();
         let mut w = World::new();
         for entry in bundle
             .entries()
             .filter(|e| e.kind == Kind::Res && e.resource_type == Some(MESHSET))
         {
-            let made = src.read_entry(bundle, &entry, &mut w).unwrap();
-            src.resolve_materials(&scope, &all, made[0], &mut w).unwrap();
+            let made = read_entry(&src, bundle, &entry, &mut w).unwrap();
+            resolve_materials(&src, &scope, &all, made[0], &mut w).unwrap();
         }
         let t = Instant::now();
-        let report = src.resolve_textures(&index, &mut w);
+        let report = resolve_textures(&src, &index, &mut w);
         read_time += t.elapsed().as_secs_f64();
         references += report.references;
         linked += report.linked;

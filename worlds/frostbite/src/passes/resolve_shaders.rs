@@ -8,11 +8,11 @@
 //!   the choice is left to the consumer, as is the choice among a program's permutations. A row with none is left
 //!   unbound, counted. Vertex-only and compute programs are not bound.
 //! - **Variants.** Each distinct permutation of a drawing program (a program lists up to 72, many the same one: the
-//!   listing has one entry per leaf of its selector tree, [`crate::selector`]) is one vertex stage and one pixel stage
+//!   listing has one entry per leaf of its selector tree, [`frostbite_formats::selector`]) is one vertex stage and one pixel stage
 //!   under a [`VariantKey`] of `frostbite.variant`, its value the permutation's index among the binding's (dense, from
 //!   0). The key's parts describe it: `program` (the program's place in the material's row), `outputs` (the pixel
 //!   stage's output count) and `permutation` (the permutation's id). They never identify it. Which option values
-//!   reach a permutation is not kept here: the tree is on the program entity ([`crate::selector::Selector`]), walked
+//!   reach a permutation is not kept here: the tree is on the program entity ([`frostbite_formats::selector::Selector`]), walked
 //!   for it. A permutation whose stages the world does not hold is left out, counted.
 //! - **Inputs.** A vertex input is the element of the permutation's input layout its semantic index and name find
 //!   ([`InputLayout::resolve`]); the element's usage names the stream: 1 the position, 2 and 4 the blend indices and
@@ -20,7 +20,7 @@
 //!   program than in its format, and an input without an element are `Unknown` with the reason. A pixel input is the
 //!   vertex stage's output.
 //! - **Constants.** A constant buffer at b0, b1 or b4 is the first group of the permutation's set 1, set 0 and pass
-//!   binding ([`crate::binding::Bindings`]); its placed parameters are constants at their entries' offsets, sized by
+//!   binding ([`frostbite_formats::binding::Bindings`]); its placed parameters are constants at their entries' offsets, sized by
 //!   the entries (`kind / 4` bytes). The parameters of set 0 (b1) are the material's: the depot block's parameter of
 //!   the same name, type and count gives the words ([`ConstantRole::Material`]); those of set 1 and the pass binding
 //!   (b0, b4) are the engine's and `Unknown`, as is a parameter the block does not hold. Bytes of a buffer no placed
@@ -41,7 +41,7 @@
 //!   after the header, then each joint's three rows); every other buffer of a vertex stage, and every buffer of a program the probe finds nothing in, is `Unknown`
 //!   with the reason.
 //! - **Textures.** A slot the binding sets name is the depot block's parameter of that name, and the parameter's link
-//!   ([`FrostbiteMaterial::textures`], made by [`Source::resolve_textures`](crate::folder::Source::resolve_textures))
+//!   ([`FrostbiteMaterial::textures`], made by [`Source::resolve_textures`](frostbite_formats::folder::Source::resolve_textures))
 //!   gives the texture entity: `Texture` with the default sampler state (the sampler is not decoded). The texture is a
 //!   2D map (`core.texture`) or an array, a cube or a volume (`core.texture_layers`), as the reader made it, and it
 //!   has to be the dimension the slot reads (a 2D map for a plain 2D slot, an array for an arrayed one, and so on).
@@ -78,16 +78,16 @@ use primase_core::{
 
 use super::buffer_tables::{MatrixLayout, SkinInputs, TableRoles, probe_tables_with};
 use super::clip_position::{ClipRows, cut_out, shader_clip_rows, state_clip_roles};
-use crate::binding::{Bindings, Group};
 use crate::components::{
     FrostbiteBindings, FrostbiteInputLayout, FrostbiteMaterial, FrostbiteMeshSet, FrostbitePermutation,
     FrostbiteProgram, FrostbiteSkeleton, FrostbiteSkeletonLink, FrostbiteVertexElements, MaterialDepot,
     MaterialTexture, TextureLink,
 };
-use crate::depot;
 use crate::geometry::Raw;
-use crate::inputlayout::{Found, InputLayout, dxgi_components};
-use crate::permutation::Kind;
+use frostbite_formats::binding::{Bindings, Group};
+use frostbite_formats::depot;
+use frostbite_formats::inputlayout::{Found, InputLayout, dxgi_components};
+use frostbite_formats::permutation::Kind;
 
 /// See the module documentation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -935,8 +935,8 @@ fn merge_unknown_runs(constants: Vec<ConstantBinding>, log: &mut PassLog) -> Vec
 )]
 mod tests {
     use super::*;
-    use crate::binding::{Entry, Param};
-    use crate::depot::{Block, TEXTURE};
+    use frostbite_formats::binding::{Entry, Param};
+    use frostbite_formats::depot::{Block, TEXTURE};
     use iridia_interface::Attribute;
 
     const FLOAT: u32 = 0x2bb6_5c2d;
@@ -1243,7 +1243,7 @@ mod tests {
 
     #[test]
     fn a_vertex_element_is_the_stream_its_usage_names_when_the_program_reads_no_more_than_it_holds() {
-        use crate::inputlayout::Element;
+        use frostbite_formats::inputlayout::Element;
         let element = |dxgi: u32| Element {
             first: 0,
             last: 0,
@@ -1284,7 +1284,7 @@ mod tests {
 
     #[test]
     fn a_mesh_skinned_by_joints_is_noted_by_the_range_of_joints_it_is_weighted_to() {
-        use crate::meshset::{format, usage};
+        use frostbite_formats::meshset::{format, usage};
         let joints = |lanes: &[[u16; 4]]| Raw {
             usage: usage::BLEND_INDICES,
             format: format::USHORT4,
@@ -1319,7 +1319,7 @@ mod tests {
 
     #[test]
     fn a_skeleton_is_chosen_by_the_joints_the_bone_lists_need_and_never_clipped() {
-        use crate::skeleton::{SkeletonJoint, name_hash};
+        use frostbite_formats::skeleton::{SkeletonJoint, name_hash};
         let skeleton = |n: usize| FrostbiteSkeleton {
             name: format!("s{n}"),
             joints: (0..n)

@@ -5,9 +5,9 @@
 
 #![allow(clippy::unwrap_used)]
 
-use primase_frostbite::bundle::{self, Asset, Kind, Manifest};
-use primase_frostbite::toc::{self, Loc, TocChunk};
-use primase_frostbite::{MESHSET, db, depot, lookup};
+use frostbite_formats::bundle::{self, Asset, Kind, Manifest};
+use frostbite_formats::toc::{self, Loc, TocChunk};
+use frostbite_formats::{MESHSET, db, depot, lookup};
 
 type R<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -212,7 +212,7 @@ fn synthetic_program_lookup_round_trip() -> R {
 
 /// Counts read from a file are checked against the bytes present before anything is reserved: a huge count in a
 /// short buffer is an error, not an allocation.
-fn refused(r: Result<(), primase_frostbite::Error>) {
+fn refused(r: Result<(), frostbite_formats::Error>) {
     let e = r.expect_err("a corrupt count must be an error").to_string();
     assert!(
         e.contains("entries of at least"),

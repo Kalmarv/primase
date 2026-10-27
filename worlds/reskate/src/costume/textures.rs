@@ -24,11 +24,11 @@
 //! Replacements that share a role share one asset: every donor texture the caller maps to the same replacement is
 //! redirected to the one asset made for it.
 
+use frostbite_formats::ebx::{Document, ImportReference, Value};
+use frostbite_formats::fbmod::Fbmod;
+use frostbite_formats::folder::{EbxEntry, Source};
+use frostbite_formats::texture::{self, TextureHeader};
 use primase_foundations::compress::oodle::Oodle;
-use primase_frostbite::ebx::{Document, ImportReference, Value};
-use primase_frostbite::fbmod::Fbmod;
-use primase_frostbite::folder::{EbxEntry, Source};
-use primase_frostbite::texture::{self, TextureHeader};
 use std::collections::BTreeMap;
 
 use super::asset::{Base, assign_identity, derived, derived_rid, read_donor, write_checked};

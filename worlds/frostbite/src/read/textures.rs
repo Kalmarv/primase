@@ -1,14 +1,14 @@
 //! The textures of a material's depot block, read into a world: [`TextureIndex`] is built from the TOCs a consumer
-//! chooses, and [`Source::resolve_textures`] gives every texture parameter of every `frostbite.material` of a world its
+//! chooses, and [`resolve_textures`] gives every texture parameter of every `frostbite.material` of a world its
 //! texture entity.
 //!
 //! **The chain.** A texture parameter of a depot block holds a flag and two GUIDs
-//! ([`crate::depot::Param::texture_ref`]). The first matches no EBX document of the install (0 of 987 references on
+//! ([`frostbite_formats::depot::Param::texture_ref`]). The first matches no EBX document of the install (0 of 987 references on
 //! a sample of 15 bundles). The second is the file GUID of an EBX document (987 of 987; a `TextureAsset`, or for 294 a
 //! `TextureArrayAsset`) whose `Resource` field is the id of a `Texture` resource (987 of 987), and that resource is
-//! read as any texture resource is ([`Source::read_entry`]: a core texture of the levels the header's chunk holds, and its header). The
+//! read as any texture resource is ([`read_entry`]: a core texture of the levels the header's chunk holds, and its header). The
 //! streamable texture set of a material does not hold the link (neither the resource id nor the GUID occurs in its
-//! bytes, 0 of 987): it lists the material's texture parameters ([`crate::lookup`]).
+//! bytes, 0 of 987): it lists the material's texture parameters ([`frostbite_formats::lookup`]).
 //!
 //! **Where the assets lie.** The material's own bundle holds the asset and its resource for 353 of the 987, and the
 //! other 634 only in other bundles of the install (`items.toc`, `buildkititems.toc`, `customization.toc`), so a
@@ -25,12 +25,13 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use primase_core::{Entity, World};
 
-use super::folder::Source;
-use super::listing::Bundle;
-use crate::bundle::Kind;
+use super::entry::read_entry;
 use crate::components::{FrostbiteMaterial, MaterialTexture, TextureLink};
-use crate::ebx::Value;
-use crate::{Result, TEXTURE, ebx};
+use frostbite_formats::bundle::Kind;
+use frostbite_formats::ebx::Value;
+use frostbite_formats::folder::Source;
+use frostbite_formats::listing::Bundle;
+use frostbite_formats::{Result, TEXTURE, ebx};
 
 /// A texture parameter of a material: its name hash and the second GUID of its reference.
 type Reference = (u64, [u8; 16]);
@@ -100,7 +101,7 @@ impl TextureIndex {
     }
 }
 
-/// What [`Source::resolve_textures`] did: the texture references of the world's materials, how many became a texture
+/// What [`resolve_textures`] did: the texture references of the world's materials, how many became a texture
 /// entity, and for the others the reason (the same reason the reference's [`TextureLink::Missing`] states).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TextureReport {
@@ -117,127 +118,129 @@ fn category(why: &str) -> &str {
     why.rsplit_once("): ").map_or(why, |(_, rest)| rest)
 }
 
-impl Source<'_> {
-    /// Links every texture parameter of every `frostbite.material` of `w` to a texture entity: the asset of the
-    /// parameter's second GUID found in `index`, its `Resource` id's `Texture` resource read into `w` (once for each
-    /// resource, however many parameters name it). A reference that does not lead to a texture is a
-    /// [`TextureLink::Missing`] with the reason, and the longer text with the entry's name is in the material's
-    /// `unresolved`. The links of a material replace those of an earlier call.
-    pub fn resolve_textures(&self, index: &TextureIndex, w: &mut World) -> TextureReport {
-        let mut report = TextureReport::default();
-        let mut by_resource: HashMap<u64, std::result::Result<Entity, String>> = HashMap::new();
-        let mut by_asset: HashMap<[u8; 16], std::result::Result<u64, String>> = HashMap::new();
-        let materials: Vec<(Entity, Vec<Reference>)> = w
-            .iter::<FrostbiteMaterial>()
-            .map(|(e, m)| {
-                let refs = m.depot.as_ref().map_or_else(Vec::new, |d| {
-                    d.parameters
-                        .iter()
-                        .filter_map(|p| {
-                            let t = p.texture_ref(&d.block.data)?;
-                            Some((p.name, <[u8; 16]>::try_from(&t[17..33]).ok()?))
-                        })
-                        .collect()
-                });
-                (e, refs)
-            })
-            .collect();
-        for (material, refs) in materials {
-            let mut links = Vec::with_capacity(refs.len());
-            let mut notes = Vec::new();
-            for (name, guid) in refs {
-                report.references += 1;
-                let found = if guid == [0; 16] {
-                    Err((
-                        "no texture is assigned (the second GUID is zero)".to_owned(),
-                        None,
-                    ))
-                } else {
-                    let rid = by_asset
-                        .entry(guid)
-                        .or_insert_with(|| self.asset_resource(index, &guid))
-                        .clone();
-                    match rid {
-                        Err(why) => Err((why, None)),
-                        Ok(rid) => by_resource
-                            .entry(rid)
-                            .or_insert_with(|| self.read_texture(index, rid, w))
-                            .clone()
-                            .map_err(|why| (category(&why).to_owned(), Some(why))),
+/// Links every texture parameter of every `frostbite.material` of `w` to a texture entity: the asset of the
+/// parameter's second GUID found in `index`, its `Resource` id's `Texture` resource read into `w` (once for each
+/// resource, however many parameters name it). A reference that does not lead to a texture is a
+/// [`TextureLink::Missing`] with the reason, and the longer text with the entry's name is in the material's
+/// `unresolved`. The links of a material replace those of an earlier call.
+pub fn resolve_textures(src: &Source<'_>, index: &TextureIndex, w: &mut World) -> TextureReport {
+    let mut report = TextureReport::default();
+    let mut by_resource: HashMap<u64, std::result::Result<Entity, String>> = HashMap::new();
+    let mut by_asset: HashMap<[u8; 16], std::result::Result<u64, String>> = HashMap::new();
+    let materials: Vec<(Entity, Vec<Reference>)> = w
+        .iter::<FrostbiteMaterial>()
+        .map(|(e, m)| {
+            let refs = m.depot.as_ref().map_or_else(Vec::new, |d| {
+                d.parameters
+                    .iter()
+                    .filter_map(|p| {
+                        let t = p.texture_ref(&d.block.data)?;
+                        Some((p.name, <[u8; 16]>::try_from(&t[17..33]).ok()?))
+                    })
+                    .collect()
+            });
+            (e, refs)
+        })
+        .collect();
+    for (material, refs) in materials {
+        let mut links = Vec::with_capacity(refs.len());
+        let mut notes = Vec::new();
+        for (name, guid) in refs {
+            report.references += 1;
+            let found = if guid == [0; 16] {
+                Err((
+                    "no texture is assigned (the second GUID is zero)".to_owned(),
+                    None,
+                ))
+            } else {
+                let rid = by_asset
+                    .entry(guid)
+                    .or_insert_with(|| asset_resource(src, index, &guid))
+                    .clone();
+                match rid {
+                    Err(why) => Err((why, None)),
+                    Ok(rid) => by_resource
+                        .entry(rid)
+                        .or_insert_with(|| read_texture(src, index, rid, w))
+                        .clone()
+                        .map_err(|why| (category(&why).to_owned(), Some(why))),
+                }
+            };
+            links.push(MaterialTexture {
+                name,
+                guid,
+                link: match found {
+                    Ok(entity) => {
+                        report.linked += 1;
+                        TextureLink::Texture(entity)
                     }
-                };
-                links.push(MaterialTexture {
-                    name,
-                    guid,
-                    link: match found {
-                        Ok(entity) => {
-                            report.linked += 1;
-                            TextureLink::Texture(entity)
-                        }
-                        Err((why, long)) => {
-                            *report.missing.entry(why.clone()).or_default() += 1;
-                            notes.push(format!(
-                                "texture {name:#018x}: {}",
-                                long.as_deref().unwrap_or(&why)
-                            ));
-                            TextureLink::Missing(why)
-                        }
-                    },
-                });
-            }
-            if let Some(m) = w.get_mut::<FrostbiteMaterial>(material) {
-                m.unresolved.retain(|u| !u.starts_with("texture "));
-                m.unresolved.extend(notes);
-                m.textures = links;
-            }
+                    Err((why, long)) => {
+                        *report.missing.entry(why.clone()).or_default() += 1;
+                        notes.push(format!(
+                            "texture {name:#018x}: {}",
+                            long.as_deref().unwrap_or(&why)
+                        ));
+                        TextureLink::Missing(why)
+                    }
+                },
+            });
         }
-        report.textures = by_resource.values().filter(|r| r.is_ok()).count();
-        report
+        if let Some(m) = w.get_mut::<FrostbiteMaterial>(material) {
+            m.unresolved.retain(|u| !u.starts_with("texture "));
+            m.unresolved.extend(notes);
+            m.textures = links;
+        }
     }
+    report.textures = by_resource.values().filter(|r| r.is_ok()).count();
+    report
+}
 
-    /// The `Resource` id of the texture document with file GUID `guid`, or why there is none.
-    fn asset_resource(&self, index: &TextureIndex, guid: &[u8; 16]) -> std::result::Result<u64, String> {
-        let &(b, i) = index
-            .assets
-            .get(guid)
-            .ok_or("the GUID is the file GUID of no texture document of the index")?;
-        let entry = index.bundles[b as usize].ebx(i as usize);
-        let doc = self
-            .payload(entry.file, entry.size as usize)
-            .and_then(|bytes| ebx::read(&bytes))
-            .map_err(|e| format!("the texture asset {} is unreadable: {e}", entry.name))?;
-        match doc
-            .instances
+/// The `Resource` id of the texture document with file GUID `guid`, or why there is none.
+fn asset_resource(
+    src: &Source<'_>,
+    index: &TextureIndex,
+    guid: &[u8; 16],
+) -> std::result::Result<u64, String> {
+    let &(b, i) = index
+        .assets
+        .get(guid)
+        .ok_or("the GUID is the file GUID of no texture document of the index")?;
+    let entry = index.bundles[b as usize].ebx(i as usize);
+    let doc = src
+        .payload(entry.file, entry.size as usize)
+        .and_then(|bytes| ebx::read(&bytes))
+        .map_err(|e| format!("the texture asset {} is unreadable: {e}", entry.name))?;
+    match doc
+        .instances
+        .first()
+        .and_then(|i| i.object.as_ref())
+        .and_then(|o| o.field("Resource"))
+    {
+        Some(Value::Resource(rid)) => Ok(*rid),
+        _ => Err(format!("the document is a {} with no Resource", doc.root_type)),
+    }
+}
+
+/// The `Texture` resource `rid` of the index read into `w`, or why it could not be.
+fn read_texture(
+    src: &Source<'_>,
+    index: &TextureIndex,
+    rid: u64,
+    w: &mut World,
+) -> std::result::Result<Entity, String> {
+    let &(b, i) = index
+        .textures
+        .get(&rid)
+        .ok_or("the asset's Texture resource is in no bundle of the index")?;
+    let bundle = &index.bundles[b as usize];
+    let entry = bundle.resource(i as usize);
+    debug_assert_eq!(entry.kind, Kind::Res);
+    match read_entry(src, bundle, &entry, w) {
+        Ok(made) => made
             .first()
-            .and_then(|i| i.object.as_ref())
-            .and_then(|o| o.field("Resource"))
-        {
-            Some(Value::Resource(rid)) => Ok(*rid),
-            _ => Err(format!("the document is a {} with no Resource", doc.root_type)),
-        }
-    }
-
-    /// The `Texture` resource `rid` of the index read into `w`, or why it could not be.
-    fn read_texture(
-        &self,
-        index: &TextureIndex,
-        rid: u64,
-        w: &mut World,
-    ) -> std::result::Result<Entity, String> {
-        let &(b, i) = index
-            .textures
-            .get(&rid)
-            .ok_or("the asset's Texture resource is in no bundle of the index")?;
-        let bundle = &index.bundles[b as usize];
-        let entry = bundle.resource(i as usize);
-        debug_assert_eq!(entry.kind, Kind::Res);
-        match self.read_entry(bundle, &entry, w) {
-            Ok(made) => made
-                .first()
-                .copied()
-                .ok_or_else(|| "the Texture resource made no entity".to_owned()),
-            Err(e) => Err(e.to_string()),
-        }
+            .copied()
+            .ok_or_else(|| "the Texture resource made no entity".to_owned()),
+        Err(e) => Err(e.to_string()),
     }
 }
 

@@ -28,12 +28,12 @@
 //! documents carry the same text in mixed case (`Thumbnail/Tool/Own_...`), and nothing established that the game reads
 //! the difference: that is a choice of this module, not a finding. Nothing else of the mod changes.
 
-use primase_core::TexFormat;
+use frostbite_formats::ebx::{self, Document, ImportReference, Pointer, Value};
+use frostbite_formats::fbmod::{Body, Fbmod};
+use frostbite_formats::folder::{EbxEntry, Source};
+use frostbite_formats::texture::TextureHeader;
 use primase_foundations::compress::oodle::Oodle;
-use primase_frostbite::ebx::{self, Document, ImportReference, Pointer, Value};
-use primase_frostbite::fbmod::{Body, Fbmod};
-use primase_frostbite::folder::{EbxEntry, Source};
-use primase_frostbite::texture::TextureHeader;
+use primase_core::TexFormat;
 use primase_texcodec::{Encoder, TexEncoder};
 use sha1::{Digest, Sha1};
 use std::collections::BTreeMap;
@@ -103,10 +103,10 @@ pub struct Thumbnailed {
     pub thumbnails: Vec<MadeThumbnail>,
 }
 
-/// The `NameHash` of a CDN document: the case-sensitive [`djb2`](primase_frostbite::djb2) of the name of the texture
+/// The `NameHash` of a CDN document: the case-sensitive [`djb2`](frostbite_formats::djb2) of the name of the texture
 /// asset it refers to. The game's stock CDN documents carry it for their textures' `Name`.
 pub fn name_hash(name: &str) -> u32 {
-    primase_frostbite::djb2(name)
+    frostbite_formats::djb2(name)
 }
 
 /// The item document Studio added: its entry's index and the document.

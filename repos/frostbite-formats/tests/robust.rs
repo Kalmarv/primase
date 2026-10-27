@@ -3,8 +3,8 @@
 
 #![allow(clippy::unwrap_used)]
 
-use primase_frostbite::db::{self, MAX_DEPTH, Node};
-use primase_frostbite::meshset;
+use frostbite_formats::db::{self, MAX_DEPTH, Node};
+use frostbite_formats::meshset;
 
 /// `levels` unnamed objects, one inside the next, the innermost empty: a node tag (2, unnamed) and the varint size of
 /// what it holds.

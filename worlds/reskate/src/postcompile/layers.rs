@@ -1,6 +1,6 @@
 //! The layering gate: whether a compiled level draws every layer the way skate.'s renderer keeps it apart, checked
 //! on what the Patch holds after every post-compile step ([`Level`]), with each section's class from the
-//! fixed-function state of its material's programs ([`primase_frostbite::permutation::FixedState`]).
+//! fixed-function state of its material's programs ([`frostbite_formats::permutation::FixedState`]).
 //!
 //! **How skate. draws layers** (measured: the programs' pipeline states as the game hands them to D3D12, and a fixture
 //! of every case compiled by Studio and looked at in the game; the limits name their evidence). Opaque and alpha-tested
@@ -29,13 +29,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_frostbite::MESHSET;
-use primase_frostbite::bundle::Kind;
-use primase_frostbite::folder::Source;
-use primase_frostbite::listing::Bundle;
-use primase_frostbite::lookup::{self, ProgramRecord};
-use primase_frostbite::permutation::FixedState;
-use primase_frostbite::program::Scope;
+use frostbite_formats::MESHSET;
+use frostbite_formats::bundle::Kind;
+use frostbite_formats::folder::Source;
+use frostbite_formats::listing::Bundle;
+use frostbite_formats::lookup::{self, ProgramRecord};
+use frostbite_formats::permutation::FixedState;
+use frostbite_formats::scope::Scope;
+use primase_frostbite::read::program::program_states;
 use primase_meshops::layers::{
     Frame, Index, Over, Poly, Tri, area, clip_all, disjoint, dot, edges, subtract,
 };
@@ -884,7 +885,7 @@ impl Stock {
                     break;
                 };
                 if let std::collections::btree_map::Entry::Vacant(e) = states.entry(p) {
-                    e.insert(game.program_states(&scope, record)?);
+                    e.insert(program_states(game, &scope, record)?);
                 }
                 all.extend(states[&p].iter().copied());
             }

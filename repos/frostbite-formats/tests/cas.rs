@@ -8,11 +8,10 @@
     reason = "test I/O: real-data gates"
 )]
 
-use primase_core::gate::{GateReport, Tolerance};
+use frostbite_formats::cas::Cas;
+use frostbite_formats::cas::{CasRaw, blocks};
 use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_foundations::compress::{Compressor, Decompressor, reference};
-use primase_frostbite::Cas;
-use primase_frostbite::cas::{CasRaw, blocks};
 use primase_testdata::{Game, OracleSet, Tool, oracle, tool};
 
 type R<T = ()> = Result<T, Box<dyn std::error::Error>>;
@@ -20,19 +19,19 @@ type R<T = ()> = Result<T, Box<dyn std::error::Error>>;
 /// Raw blocks round trip at zero, one, and both sides of the 64 KiB block boundary, and a decode of any other size is refused.
 #[test]
 fn raw_round_trips() -> R {
-    let mut report = GateReport::new("cas raw synthetic", Tolerance::Exact);
     for size in [0, 1, 15, 65535, 65536, 65537, 131072] {
         let input: Vec<u8> = (0..size).map(|i| (i * 31 + i / 17) as u8).collect();
         let encoded = CasRaw.compress(&input)?;
         let cas = Cas::default();
-        report.compare_bytes(format!("cas/{size}"), &cas.decompress(&encoded, size)?, &input);
+        assert!(
+            cas.decompress(&encoded, size)? == input,
+            "cas/{size}: the decoded bytes differ from the input"
+        );
         assert!(cas.decompress(&encoded, size + 1).is_err());
         if size > 0 {
             assert!(cas.decompress(&encoded, size - 1).is_err());
         }
     }
-    println!("{report}");
-    report.assert_passed();
     Ok(())
 }
 
@@ -77,11 +76,13 @@ fn dll_cross_checks() -> R {
         #[allow(unsafe_code)]
         let dll = unsafe { Oodle::load(path, version)? };
         let cas = Cas { oodle: Some(&dll) };
-        let mut report = GateReport::new(oodle.key(), Tolerance::Exact);
+        let mut mismatched = Vec::new();
         for n in [0, 1, 65535, 65536, 65537, 131072, 262143, 262144, 262145, 524288] {
             let src: Vec<u8> = (0..n).map(|i| ((i * 17 + i / 256) % 251) as u8).collect();
             let framed = cas.compress(&src)?;
-            report.compare_bytes(format!("cas/{n}"), &cas.decompress(&framed, n)?, &src);
+            if cas.decompress(&framed, n)? != src {
+                mismatched.push(format!("cas/{n}"));
+            }
         }
         if oodle == Tool::Oodle9
             && let Some(folder) = oracle(OracleSet::Corpus, Game::Skate, "cas")
@@ -99,16 +100,17 @@ fn dll_cross_checks() -> R {
                     } else {
                         reference::decode(block.payload, block.decoded_size)?
                     };
-                    report.compare_bytes(
-                        file.path().display().to_string(),
-                        &cas.decompress(&bytes, block.decoded_size)?,
-                        &expected,
-                    );
+                    if cas.decompress(&bytes, block.decoded_size)? != expected {
+                        mismatched.push(file.path().display().to_string());
+                    }
                 }
             }
         }
-        println!("{report}");
-        report.assert_passed();
+        assert!(
+            mismatched.is_empty(),
+            "{}: the decoded bytes differ for {mismatched:?}",
+            oodle.key()
+        );
     }
     Ok(())
 }

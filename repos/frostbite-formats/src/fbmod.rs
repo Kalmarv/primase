@@ -14,13 +14,14 @@
 //! the stored (encoded) payload. Layout after FrostyToolsuite's `FrostyModReader`, `BaseModResource`, `ResResource` and
 //! `ChunkResource`; the bytes are Studio's, read to the exact end.
 //!
-//! Decoding a payload needs the game's Oodle library, which is reader I/O: [`crate::read::fbmod`]. [`write`] is the reader's counterpart: an unmodified file read and written again is byte-identical. The SHA-1 of a
+//! Decoding a payload needs the game's Oodle library, which the caller loads ([`Fbmod::payload`]). [`write`] is the reader's counterpart: an unmodified file read and written again is byte-identical. The SHA-1 of a
 //! payload is recomputed on writing (and checked on reading), so it is not a field.
 
-use crate::cas::CasRaw;
+use crate::cas::{self, Cas, CasRaw};
 use crate::{Result, bad, capacity, past_end};
 use primase_foundations::bytes::Endian;
-use primase_foundations::compress::Compressor;
+use primase_foundations::compress::oodle::Oodle;
+use primase_foundations::compress::{Compressor, Decompressor};
 use sha1::{Digest, Sha1};
 
 const W: &str = "fbmod";
@@ -507,5 +508,20 @@ impl Fbmod {
             }
         }
         used.len() - next
+    }
+}
+
+impl Fbmod {
+    /// Payload `i` decoded; `oodle` is needed only for Oodle blocks.
+    pub fn payload(&self, i: usize, oodle: Option<&Oodle>) -> Result<Vec<u8>> {
+        let raw = self
+            .payloads
+            .get(i)
+            .ok_or_else(|| bad("fbmod", 0, format!("payload {i} of {}", self.payloads.len())))?;
+        let size = cas::blocks(raw)?
+            .iter()
+            .try_fold(0usize, |s, b| s.checked_add(b.decoded_size))
+            .ok_or_else(|| bad("fbmod", 0, format!("payload {i} size")))?;
+        Ok(Cas { oodle }.decompress(raw, size)?)
     }
 }

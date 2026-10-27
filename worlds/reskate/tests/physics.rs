@@ -1,5 +1,5 @@
 //! The PhysicsResource layout ReSkate Studio writes (`primase_reskate::physics`) over primase's encoding
-//! (`primase_frostbite::physics`).
+//! (`frostbite_formats::physics`).
 //!
 //! - `studio_output_is_reproduced` (`oracles.studio.skate/physics`: `oracle.json`, every collision object's input
 //!   mesh, and `<mesh>_<slot>.bin`, ReSkate Studio 20261012's PhysicsResource of each): each object welded and encoded
@@ -8,7 +8,7 @@
 
 #![allow(clippy::unwrap_used)]
 
-use primase_frostbite::physics::{self, KIND_MESH, mesh_shape, weld};
+use frostbite_formats::physics::{self, KIND_MESH, mesh_shape, weld};
 use primase_reskate::physics::studio_resource;
 use primase_testdata::{Game, OracleSet, oracle};
 use serde_json::Value;

@@ -1,4 +1,4 @@
-//! Gates of the PhysicsResource reader, writer and mesh encoder (`primase_frostbite::physics`).
+//! Gates of the PhysicsResource reader, writer and mesh encoder (`frostbite_formats::physics`).
 //!
 //! - Synthetic: a cube's encoding (welding, edges, faces) worked by hand; every face of a bumpy grid inside the box
 //!   its leaf of the tree decodes to; a refused corrupt resource.
@@ -9,11 +9,11 @@
 
 #![allow(clippy::unwrap_used)]
 
-use primase_foundations::compress::oodle::{Oodle, Version};
-use primase_frostbite::folder::{Folder, Source};
-use primase_frostbite::physics::{
+use frostbite_formats::folder::{Folder, Source};
+use frostbite_formats::physics::{
     self, Edge, KIND_BOX, KIND_CONVEX, KIND_MESH, Part, PhysicsResource, mesh_shape, weld,
 };
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_testdata::{Game, Tool, install_file, tool};
 
 type R<T = ()> = Result<T, Box<dyn std::error::Error>>;

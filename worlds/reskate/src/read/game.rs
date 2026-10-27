@@ -1,12 +1,12 @@
-//! The game's own assets read from its data folder ([`primase_frostbite::folder`]): the I/O of [`crate::game`], whose
+//! The game's own assets read from its data folder ([`frostbite_formats::folder`]): the I/O of [`crate::game`], whose
 //! modules read the documents this one finds (a rig and the documents it imports; a clip, its resource and its
 //! channel map).
 
 use std::collections::BTreeMap;
 
+use frostbite_formats::ebx::{Document, Pointer, Value};
+use frostbite_formats::folder::{EbxEntry, Source};
 use primase_core::{Entity, World};
-use primase_frostbite::ebx::{Document, Pointer, Value};
-use primase_frostbite::folder::{EbxEntry, Source};
 
 use crate::game::clip::{clip_from, insert_clip};
 use crate::game::rig::{AnimRig, rig_from};

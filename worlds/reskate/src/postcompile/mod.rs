@@ -16,8 +16,8 @@ pub mod vblend;
 pub mod vbrecord;
 
 /// The Frostbite containers (`primase-frostbite`).
-pub use primase_frostbite as fb;
-pub(crate) use primase_frostbite::bad;
+pub use frostbite_formats as fb;
+pub(crate) use frostbite_formats::bad;
 /// The MeshSet resource reader, which lives with the engine's containers.
-pub use primase_frostbite::meshset;
-pub use primase_frostbite::{Error, Result};
+pub use frostbite_formats::meshset;
+pub use frostbite_formats::{Error, Result};

@@ -1,4 +1,4 @@
-//! Gates of the MeshSet reader and writer (`primase_frostbite::meshset`).
+//! Gates of the MeshSet reader and writer (`frostbite_formats::meshset`).
 //!
 //! - `the_games_own_meshsets_round_trip` (`installs.skate/Data`, `tools.oodle9`): every MeshSet of every TOC (all
 //!   three LOD record forms, both headers, the development mesh with data after its relocation table) reads with its
@@ -9,10 +9,10 @@
 
 #![allow(clippy::unwrap_used)]
 
+use frostbite_formats::MESHSET;
+use frostbite_formats::folder::{Folder, Source};
+use frostbite_formats::meshset::{self, LOD_MAP, LOD_MASKS, LOD_PLAIN};
 use primase_foundations::compress::oodle::{Oodle, Version};
-use primase_frostbite::MESHSET;
-use primase_frostbite::folder::{Folder, Source};
-use primase_frostbite::meshset::{self, LOD_MAP, LOD_MASKS, LOD_PLAIN};
 use primase_testdata::{Game, Tool, install_file, tool};
 
 type R<T = ()> = Result<T, Box<dyn std::error::Error>>;

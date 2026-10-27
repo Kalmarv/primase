@@ -1,4 +1,4 @@
-//! The game's own assets, read from its data folder (`Data`, through [`primase_frostbite::folder`]): what skate. itself
+//! The game's own assets, read from its data folder (`Data`, through [`frostbite_formats::folder`]): what skate. itself
 //! poses and animates characters with, for programs that preview or build for it.
 //!
 //! Frame: the game's data is in core's frame (metres, right-handed, +Y up), read with no conversion: primase's
@@ -12,8 +12,8 @@ pub mod eclipse;
 pub mod rig;
 pub mod skeleton;
 
+use frostbite_formats::ebx::Value;
 use primase_core::Transform;
-use primase_frostbite::ebx::Value;
 
 /// A `Vec3` object's `x`, `y`, `z`, as f32 (the game stores f32; the EBX reader widens them).
 fn vec3(v: &Value, what: &str) -> Result<[f32; 3], String> {

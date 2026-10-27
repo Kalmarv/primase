@@ -4,11 +4,11 @@ use primase_core::{Component, Entity, Geometry, World};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::bundle::{FileRef, Kind};
-use crate::depot::{Depot, Param};
-use crate::ebx::Document;
-use crate::hex;
-use crate::texture::TextureHeader;
+use frostbite_formats::bundle::{FileRef, Kind};
+use frostbite_formats::depot::{Depot, Param};
+use frostbite_formats::ebx::Document;
+use frostbite_formats::hex;
+use frostbite_formats::texture::TextureHeader;
 
 /// Where an entry was read from: its superbundle TOC (relative to the data folder), its bundle, the kind of entry and
 /// its name as the bundle's manifest states it (a chunk's is its GUID as stored), its type where it is a resource,
@@ -67,7 +67,7 @@ impl Component for FrostbiteEbx {
     const NAME: &'static str = "frostbite.ebx";
     const GEOMETRY: Geometry = Geometry::None;
     fn to_json(&self) -> Result<Option<Value>, primase_core::JsonError> {
-        self.document.to_json().map(Some)
+        crate::ebx_json::to_json(&self.document).map(Some)
     }
     fn payload_bytes(&self) -> u64 {
         self.document.payload.len() as u64
@@ -245,12 +245,12 @@ impl Component for FrostbiteBytecode {
     }
 }
 
-/// A shader permutation read ([`crate::permutation`]): its kind, its own id, the ids it names (the shared data, the
+/// A shader permutation read ([`frostbite_formats::permutation`]): its kind, its own id, the ids it names (the shared data, the
 /// input layout), the names of the CompiledBytecode resources its programs are, and the `core.shader` entities read
 /// from them (in the same order).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FrostbitePermutation {
-    pub permutation: crate::permutation::Permutation,
+    pub permutation: frostbite_formats::permutation::Permutation,
     pub shaders: Vec<Entity>,
 }
 
@@ -274,14 +274,14 @@ impl Component for FrostbitePermutation {
         let p = &self.permutation;
         Ok(Some(json!({
             "kind": match p.kind {
-                crate::permutation::Kind::Raster => "raster",
-                crate::permutation::Kind::Compute => "compute",
+                frostbite_formats::permutation::Kind::Raster => "raster",
+                frostbite_formats::permutation::Kind::Compute => "compute",
             },
             "id": p.id.to_string(),
             "shared_data": p.shared_data.to_string(),
             "input_layout": p.input_layout.map(|i| i.to_string()),
             "unknown_18": p.unknown_18,
-            "bytecode": p.bytecode.iter().map(crate::permutation::bytecode_name).collect::<Vec<_>>(),
+            "bytecode": p.bytecode.iter().map(frostbite_formats::permutation::bytecode_name).collect::<Vec<_>>(),
         })))
     }
 }
@@ -295,7 +295,7 @@ pub struct FrostbiteProgram {
     pub index: u32,
     pub record_key: u64,
     /// The program's 168-byte record as stored.
-    pub record: [u8; crate::lookup::RECORD_LEN],
+    pub record: [u8; frostbite_formats::lookup::RECORD_LEN],
     pub permutations: Vec<Entity>,
 }
 
@@ -319,8 +319,8 @@ impl Component for FrostbiteProgram {
 /// program indices).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FrostbitePrograms {
-    pub records: Vec<crate::lookup::ProgramRecord>,
-    pub lookup: crate::lookup::ProgramLookup,
+    pub records: Vec<frostbite_formats::lookup::ProgramRecord>,
+    pub lookup: frostbite_formats::lookup::ProgramLookup,
 }
 
 impl Component for FrostbitePrograms {
@@ -348,16 +348,16 @@ impl Component for FrostbitePrograms {
         Ok(Some(json!({ "records": records, "rows": rows })))
     }
     fn payload_bytes(&self) -> u64 {
-        (self.records.len() * crate::lookup::RECORD_LEN + self.lookup.head.len()) as u64
+        (self.records.len() * frostbite_formats::lookup::RECORD_LEN + self.lookup.head.len()) as u64
     }
 }
 
-/// A MeshSet read ([`crate::meshset`]): its LODs and sections as stored (vertex layouts, where each section's vertices
+/// A MeshSet read ([`frostbite_formats::meshset`]): its LODs and sections as stored (vertex layouts, where each section's vertices
 /// and indices lie in its LOD's chunk, the section's material key), and the material of each distinct key where one
-/// was resolved ([`crate::program::Scope`]). The vertices themselves are not read.
+/// was resolved ([`frostbite_formats::scope::Scope`]). The vertices themselves are not read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FrostbiteMeshSet {
-    pub meshset: crate::meshset::MeshSet,
+    pub meshset: frostbite_formats::meshset::MeshSet,
     /// Each distinct section key's `frostbite.material` entity, once resolved.
     pub materials: std::collections::BTreeMap<u64, Entity>,
 }
@@ -369,7 +369,7 @@ impl Component for FrostbiteMeshSet {
         out.extend(self.materials.values());
     }
     fn to_json(&self) -> Result<Option<Value>, primase_core::JsonError> {
-        let element = |e: &crate::meshset::Element| json!({ "usage": e.usage, "format": e.format, "offset": e.offset, "stream": e.stream });
+        let element = |e: &frostbite_formats::meshset::Element| json!({ "usage": e.usage, "format": e.format, "offset": e.offset, "stream": e.stream });
         let lods: Vec<Value> = (self.meshset.lods.iter())
             .map(|l| {
                 json!({
@@ -411,7 +411,7 @@ pub struct FrostbiteMaterial {
     /// The streamable texture set the key's lookup row names, and its resource name where a bundle holds it.
     pub texture_set: Option<(u64, Option<String>)>,
     /// What each texture parameter of the depot block leads to, in the block's order, once
-    /// [`Source::resolve_textures`](crate::folder::Source::resolve_textures) has run (empty before it).
+    /// [`Source::resolve_textures`](frostbite_formats::folder::Source::resolve_textures) has run (empty before it).
     pub textures: Vec<MaterialTexture>,
     pub unresolved: Vec<String>,
 }
@@ -439,7 +439,7 @@ pub enum TextureLink {
 pub struct MaterialDepot {
     pub resource: String,
     pub bundle: String,
-    pub block: crate::depot::Block,
+    pub block: frostbite_formats::depot::Block,
     pub parameters: Vec<Param>,
 }
 
@@ -580,20 +580,20 @@ impl Component for FrostbiteVertexElements {
     }
 }
 
-/// A permutation's binding sets as its shared data names them ([`crate::permutation::SharedData`]): the pass binding and
-/// the three sets read, so a shader's registers resolve to parameters ([`crate::binding::Bindings`]). On the
+/// A permutation's binding sets as its shared data names them ([`frostbite_formats::permutation::SharedData`]): the pass binding and
+/// the three sets read, so a shader's registers resolve to parameters ([`frostbite_formats::binding::Bindings`]). On the
 /// permutation's entity.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FrostbiteBindings {
-    pub shared: crate::permutation::SharedData,
-    pub pass: Option<crate::binding::Set>,
-    pub sets: [Option<crate::binding::Set>; 3],
+    pub shared: frostbite_formats::permutation::SharedData,
+    pub pass: Option<frostbite_formats::binding::Set>,
+    pub sets: [Option<frostbite_formats::binding::Set>; 3],
 }
 
 impl FrostbiteBindings {
-    /// The register rule's view of the sets ([`crate::binding::Bindings`]).
-    pub fn bindings(&self) -> crate::binding::Bindings<'_> {
-        crate::binding::Bindings {
+    /// The register rule's view of the sets ([`frostbite_formats::binding::Bindings`]).
+    pub fn bindings(&self) -> frostbite_formats::binding::Bindings<'_> {
+        frostbite_formats::binding::Bindings {
             pass: self.pass.as_ref(),
             sets: [
                 self.sets[0].as_ref(),
@@ -608,7 +608,7 @@ impl Component for FrostbiteBindings {
     const NAME: &'static str = "frostbite.bindings";
     const GEOMETRY: Geometry = Geometry::None;
     fn to_json(&self) -> Result<Option<Value>, primase_core::JsonError> {
-        let set = |s: &Option<crate::binding::Set>| {
+        let set = |s: &Option<frostbite_formats::binding::Set>| {
             s.as_ref().map(|s| {
                 json!({
                     "id": s.id.to_string(),
@@ -629,17 +629,19 @@ impl Component for FrostbiteBindings {
         })))
     }
     fn payload_bytes(&self) -> u64 {
-        let size = |s: &crate::binding::Set| s.groups.iter().map(|g| 24 * g.params.len() as u64).sum::<u64>();
+        let size = |s: &frostbite_formats::binding::Set| {
+            s.groups.iter().map(|g| 24 * g.params.len() as u64).sum::<u64>()
+        };
         (self.pass.iter().chain(self.sets.iter().flatten()))
             .map(size)
             .sum()
     }
 }
 
-/// A raster permutation's input layout ([`crate::inputlayout`]): the vertex elements its vertex program reads. On the
+/// A raster permutation's input layout ([`frostbite_formats::inputlayout`]): the vertex elements its vertex program reads. On the
 /// permutation's entity.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FrostbiteInputLayout(pub crate::inputlayout::InputLayout);
+pub struct FrostbiteInputLayout(pub frostbite_formats::inputlayout::InputLayout);
 
 impl Component for FrostbiteInputLayout {
     const NAME: &'static str = "frostbite.input_layout";
@@ -658,13 +660,13 @@ impl Component for FrostbiteInputLayout {
     }
 }
 
-/// A skeleton asset's joints ([`crate::skeleton`]), as stored, on the entity of its EBX document: names, hashes and the
+/// A skeleton asset's joints ([`frostbite_formats::skeleton`]), as stored, on the entity of its EBX document: names, hashes and the
 /// hierarchy. It has no rest transforms.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FrostbiteSkeleton {
     /// The asset's `Name`.
     pub name: String,
-    pub joints: Vec<crate::skeleton::SkeletonJoint>,
+    pub joints: Vec<frostbite_formats::skeleton::SkeletonJoint>,
 }
 
 impl Component for FrostbiteSkeleton {
@@ -672,7 +674,7 @@ impl Component for FrostbiteSkeleton {
     const GEOMETRY: Geometry = Geometry::None;
     fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
         for (i, j) in self.joints.iter().enumerate() {
-            if j.name_hash != crate::skeleton::name_hash(&j.name) {
+            if j.name_hash != frostbite_formats::skeleton::name_hash(&j.name) {
                 return Err(format!("joint {i} {:?}: hash {:#x}", j.name, j.name_hash));
             }
             let count = self.joints.len() as u32;
@@ -684,7 +686,7 @@ impl Component for FrostbiteSkeleton {
                 return Err(format!("joint {i} {:?}: a link past the {count} joints", j.name));
             }
         }
-        crate::skeleton::verify_hierarchy(&self.joints)
+        frostbite_formats::skeleton::verify_hierarchy(&self.joints)
     }
     fn to_json(&self) -> Result<Option<Value>, primase_core::JsonError> {
         Ok(Some(json!({

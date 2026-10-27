@@ -19,7 +19,6 @@
 pub mod carry;
 mod decode;
 mod encode;
-mod json;
 
 pub use decode::{read, read_file_guid};
 pub use encode::write;

@@ -6,7 +6,7 @@ use primase_animation::{
 use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, RunReport};
 use primase_core::{Clip, ClipTarget, Entity, JointMap, Name, Skeleton, Skin, World};
 use primase_fromsoft::{Install, NameDictionary, dcx::Decoder, sekiro};
-use primase_frostbite::folder::{Folder, Source};
+use frostbite_formats::folder::{Folder, Source};
 use primase_reskate::{
     game::{clip::LowerSkateClips, rig::render_map},
     read::animation,

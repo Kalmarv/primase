@@ -11,10 +11,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use frostbite_formats::bundle::Kind;
+use frostbite_formats::bytecode::RTYPE;
+use frostbite_formats::folder::{Folder, Source};
 use primase_foundations::compress::oodle::{Oodle, Version};
-use primase_frostbite::bundle::Kind;
-use primase_frostbite::folder::{Folder, Source};
-use primase_frostbite::{bytecode, bytecode::RTYPE};
+use primase_frostbite::bytecode;
 use primase_testdata::{Game, Tool, install_file, tool};
 
 #[test]

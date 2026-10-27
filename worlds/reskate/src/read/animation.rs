@@ -4,11 +4,11 @@ use crate::game::{
     rig::insert_rig,
     skeleton::read_skeleton,
 };
-use primase_core::{Entity, World};
-use primase_frostbite::{
+use frostbite_formats::{
     bundle,
     folder::{EbxEntry, Source},
 };
+use primase_core::{Entity, World};
 use serde::{Deserialize, Serialize};
 
 pub const RIG_TOC: &str = "Win32/globals.toc";

@@ -1,6 +1,6 @@
 [package]
 name = "primase-frostbite"
-description = "Frostbite containers: superbundle TOCs, bundle regions and manifests, the native DB, data folders, shader block depots, shader lookup tables and EBX documents"
+description = "Frostbite in a world: the entries of a data folder read into components, and the passes that give them core meanings"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,8 +9,8 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+frostbite-formats.workspace = true
 iridia-interface.workspace = true
-primase-foundations = { workspace = true, features = ["compress"] }
 primase-core.workspace = true
 half.workspace = true
 iridia-dxil.workspace = true
@@ -18,8 +18,6 @@ iridia.workspace = true
 iridia-exec.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha1.workspace = true
-thiserror.workspace = true
 
 [dev-dependencies]
 primase-foundations = { workspace = true, features = ["compress", "reference-decoder"] }

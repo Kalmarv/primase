@@ -5,45 +5,23 @@
 
 #![allow(clippy::unwrap_used)]
 
+use frostbite_formats::MESHSET;
+use frostbite_formats::bundle::Kind;
+use frostbite_formats::folder::{Folder, Source};
+use frostbite_formats::scope::Scope;
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_core::World;
 use primase_core::pass::{Pass, PassLog};
-use primase_foundations::compress::oodle::{Oodle, Version};
-use primase_frostbite::MESHSET;
-use primase_frostbite::bundle::Kind;
 use primase_frostbite::components::{FrostbiteMeshSet, FrostbiteSkeleton, FrostbiteSkeletonLink};
-use primase_frostbite::folder::{Folder, Source};
 use primase_frostbite::passes::ResolveFrostbiteShaders;
-use primase_frostbite::program::Scope;
-use primase_frostbite::skeleton::{SkeletonJoint, name_hash, verify_hierarchy};
+use primase_frostbite::read::entry::read_entry;
+use primase_frostbite::read::geometry::read_geometry;
+use primase_frostbite::read::program::{materials, resolve_materials};
+use primase_frostbite::read::skeleton::read_skeletons;
 use primase_testdata::{Game, Tool, install_file, tool};
 
 const GLOBALS_BUNDLE: &str = "win32/configurations/gameconfigurations/delmargameconfiguration";
 const HAT: &str = "hatbucket/2023/gen_hat_hatbucket_cas_main_bundlereftable";
-
-fn joint(name: &str, parent: Option<u32>) -> SkeletonJoint {
-    SkeletonJoint {
-        name: name.to_owned(),
-        name_hash: name_hash(name),
-        parent,
-        child: None,
-        sibling: None,
-        kind: 1,
-    }
-}
-
-#[test]
-fn a_joint_name_is_hashed_with_fnv1_and_the_parents_may_not_lead_back() {
-    // the hashes the skeleton asset of the game stores for three of its joints
-    assert_eq!(name_hash("Reference"), 3_124_388_676);
-    assert_eq!(name_hash("AITrajectory"), 1_180_344_196);
-    assert_eq!(name_hash("Head"), 806_557_287);
-    let chain = [joint("a", None), joint("b", Some(0)), joint("c", Some(1))];
-    assert!(verify_hierarchy(&chain).is_ok());
-    let cycle = [joint("a", Some(2)), joint("b", Some(0)), joint("c", Some(1))];
-    assert!(verify_hierarchy(&cycle).unwrap_err().contains("lead back"));
-    let past = [joint("a", Some(5))];
-    assert!(verify_hierarchy(&past).is_err());
-}
 
 #[test]
 fn the_hat_buckets_meshes_are_linked_to_the_character_skeleton_by_their_bone_lists() {
@@ -69,10 +47,10 @@ fn the_hat_buckets_meshes_are_linked_to_the_character_skeleton_by_their_bone_lis
     scope_bundles.extend(globals.bundles.iter().cloned());
     scope_bundles.extend(root.bundles.iter().cloned());
     let scope = Scope::new(&scope_bundles);
-    let materials = src.materials(&scope).unwrap();
+    let materials = materials(&src, &scope).unwrap();
     let mut w = World::new();
     // every skeleton asset of the scope: nine of the configuration bundle and the level's skateboard
-    let skeletons = src.read_skeletons(&scope, &mut w).unwrap();
+    let skeletons = read_skeletons(&src, &scope, &mut w).unwrap();
     assert_eq!(skeletons.len(), 10);
     assert_eq!(w.iter::<FrostbiteSkeleton>().count(), 10);
     let in_config = config
@@ -112,10 +90,9 @@ fn the_hat_buckets_meshes_are_linked_to_the_character_skeleton_by_their_bone_lis
         .entries()
         .filter(|e| e.kind == Kind::Res && e.resource_type == Some(MESHSET))
     {
-        let made = src.read_entry(hat, &entry, &mut w).unwrap();
-        src.resolve_materials(&scope, &materials, made[0], &mut w)
-            .unwrap();
-        meshes.extend(src.read_geometry(hat, made[0], &mut w).unwrap());
+        let made = read_entry(&src, hat, &entry, &mut w).unwrap();
+        resolve_materials(&src, &scope, &materials, made[0], &mut w).unwrap();
+        meshes.extend(read_geometry(&src, hat, made[0], &mut w).unwrap());
     }
     let set = w.iter::<FrostbiteMeshSet>().next().unwrap().1;
     assert_eq!(set.meshset.lods.len(), 6);

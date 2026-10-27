@@ -636,7 +636,7 @@ pub const DECLARED: &[Declared] = &[
         query: Query::Oracle(OracleSet::Baseline, Game::Skate, "fbmod"),
         status: Status::Live,
         gate: false,
-        about: r#"a folder of `.fbmod` files (searched recursively); each is read, written again byte for byte and every payload decoded (`tools.oodle9` for Oodle blocks); worlds/frostbite/tests/fbmod.rs. The costume files among them (top level, with Studio's `<name>.readback.glb` beside them when present) also gate the costume steps with `installs.skate/Data`: worlds/reskate/tests/costume.rs"#,
+        about: r#"a folder of `.fbmod` files (searched recursively); each is read, written again byte for byte and every payload decoded (`tools.oodle9` for Oodle blocks); repos/frostbite-formats/tests/fbmod.rs. The costume files among them (top level, with Studio's `<name>.readback.glb` beside them when present) also gate the costume steps with `installs.skate/Data`: worlds/reskate/tests/costume.rs"#,
         source: r#"ReSkate Studio 2026-10-12 `cosmetic-mesh-import` output: our own producer's files, a round-trip baseline, not an oracle"#,
     },
     Declared {
@@ -820,7 +820,7 @@ pub const DECLARED: &[Declared] = &[
         query: Query::Oracle(OracleSet::Corpus, Game::Skate, "ebx"),
         status: Status::Live,
         gate: false,
-        about: r#"a folder of EBX documents as the game wrote them, mirroring their asset paths (searched recursively); every field's value must survive a rewrite, and the byte layout is compared with the reference writer; worlds/frostbite/tests/ebx.rs"#,
+        about: r#"a folder of EBX documents as the game wrote them, mirroring their asset paths (searched recursively); every field's value must survive a rewrite, and the byte layout is compared with the reference writer; repos/frostbite-formats/tests/ebx.rs"#,
         source: r#"the game's own EBX documents"#,
     },
     Declared {

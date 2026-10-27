@@ -16,16 +16,12 @@ members = [
     "repos/dx/rsx-reader",
     "toolkit/havok",
     "repos/morpheme-formats",
-    "repos/rage-engine-formats",
+    "repos/frostbite-formats",
     "repos/lua51-bytecode",
-    "repos/dx/dxbc-reader",
-    "repos/iridia/iridia-dxbc",
     "repos/iridia/iridia-d3d9",
     "repos/iridia/iridia-interface",
     "repos/iridia/iridia",
     "repos/iridia/iridia-exec",
-    "repos/dx/dxil-reader",
-    "repos/iridia/iridia-dxil",
     "repos/iridia/iridia-mojo",
     "toolkit/cache",
     "formats/gltf",
@@ -43,6 +39,11 @@ members = [
     "worlds/monogame",
     "worlds/anvil",
     "worlds/shaunwhite",
+    "repos/dx/dxbc-reader",
+    "repos/dx/dxil-reader",
+    "repos/iridia/iridia-dxbc",
+    "repos/iridia/iridia-dxil",
+    "repos/rage-engine-formats",
 ]
 # the oozextract fork: upstream's sources and lints, not one of our crates (README there)
 exclude = ["repos/primase-oozextract"]
@@ -88,15 +89,13 @@ rsx-reader = { path = "repos/dx/rsx-reader" }
 primase-cache = { path = "toolkit/cache" }
 primase-havok = { path = "toolkit/havok" }
 morpheme-formats = { path = "repos/morpheme-formats" }
-rage-engine-formats = { path = "repos/rage-engine-formats" }
+frostbite-formats = { path = "repos/frostbite-formats" }
 lua51-bytecode = { path = "repos/lua51-bytecode" }
-dxbc-reader = { path = "repos/dx/dxbc-reader" }
 iridia-dxbc = { path = "repos/iridia/iridia-dxbc" }
 iridia-d3d9 = { path = "repos/iridia/iridia-d3d9" }
 iridia-interface = { path = "repos/iridia/iridia-interface" }
 iridia = { path = "repos/iridia/iridia" }
 iridia-exec = { path = "repos/iridia/iridia-exec" }
-dxil-reader = { path = "repos/dx/dxil-reader" }
 iridia-dxil = { path = "repos/iridia/iridia-dxil" }
 iridia-mojo = { path = "repos/iridia/iridia-mojo" }
 primase-frostbite = { path = "worlds/frostbite" }
@@ -111,6 +110,9 @@ primase-monogame = { path = "worlds/monogame" }
 primase-anvil = { path = "worlds/anvil" }
 primase-shaunwhite = { path = "worlds/shaunwhite" }
 primase-shred = { path = "worlds/shred" }
+dxbc-reader = { path = "repos/dx/dxbc-reader" }
+dxil-reader = { path = "repos/dx/dxil-reader" }
+rage-engine-formats = { path = "repos/rage-engine-formats" }
 
 thiserror = { version = "=2.0.21", default-features = false, features = ["std"] }
 serde = { version = "1", default-features = false, features = ["std", "derive"] }

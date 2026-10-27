@@ -8,13 +8,15 @@
 
 use std::collections::BTreeMap;
 
-use primase_core::World;
+use frostbite_formats::MESHSET;
+use frostbite_formats::bundle::Kind;
+use frostbite_formats::folder::{Folder, Source};
+use frostbite_formats::scope::Scope;
 use primase_foundations::compress::oodle::{Oodle, Version};
-use primase_frostbite::MESHSET;
-use primase_frostbite::bundle::Kind;
+use primase_core::World;
 use primase_frostbite::components::{FrostbiteMaterial, FrostbiteMeshSet, FrostbiteProgram};
-use primase_frostbite::folder::{Folder, Source};
-use primase_frostbite::program::Scope;
+use primase_frostbite::read::entry::read_entry;
+use primase_frostbite::read::program::{materials, resolve_materials};
 use primase_testdata::{Game, Tool, install_file, tool};
 
 #[test]
@@ -50,15 +52,14 @@ fn item_meshsets_resolve_their_materials() {
         bundles.extend(globals.bundles.iter().cloned());
         bundles.extend(root.bundles.iter().cloned());
         let scope = Scope::new(&bundles);
-        let materials = src.materials(&scope).unwrap();
+        let materials = materials(&src, &scope).unwrap();
         for entry in bundle
             .entries()
             .filter(|e| e.kind == Kind::Res && e.resource_type == Some(MESHSET))
         {
             let mut w = World::new();
-            let made = src.read_entry(bundle, &entry, &mut w).unwrap();
-            src.resolve_materials(&scope, &materials, made[0], &mut w)
-                .unwrap();
+            let made = read_entry(&src, bundle, &entry, &mut w).unwrap();
+            resolve_materials(&src, &scope, &materials, made[0], &mut w).unwrap();
             let set = w.get::<FrostbiteMeshSet>(made[0]).unwrap();
             meshsets += 1;
             sections += set.meshset.lods.iter().map(|l| l.sections.len()).sum::<usize>();

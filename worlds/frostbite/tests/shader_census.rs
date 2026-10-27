@@ -9,11 +9,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use frostbite_formats::bundle::Kind;
+use frostbite_formats::bytecode::{self as stored, RTYPE};
+use frostbite_formats::folder::{Folder, Source};
 use iridia_interface::Stage;
 use primase_foundations::compress::oodle::{Oodle, Version};
-use primase_frostbite::bundle::Kind;
-use primase_frostbite::folder::{Folder, Source};
-use primase_frostbite::{bytecode, bytecode::RTYPE};
+use primase_frostbite::bytecode;
 use primase_testdata::{Game, Tool, install_file, tool};
 
 #[test]
@@ -53,9 +54,9 @@ fn every_compiled_program_of_the_install() {
                 resources += 1;
                 let payload = src.payload(e.file, e.size as usize).unwrap();
                 // the payload's containers must be found to the end whatever their interfaces say
-                let spans = bytecode::containers(&payload).unwrap_or_else(|err| panic!("{}: {err}", e.name));
+                let spans = stored::containers(&payload).unwrap_or_else(|err| panic!("{}: {err}", e.name));
                 containers += spans.len();
-                let tag = bytecode::tag(&payload)
+                let tag = stored::tag(&payload)
                     .map_or_else(String::new, |t| String::from_utf8_lossy(&t).into_owned());
                 *tags.entry(tag).or_default() += 1;
                 let programs = match bytecode::read(&payload) {

@@ -8,10 +8,10 @@
 //! hash, and the server skeleton and gameplay bone maps: kept as read in [`SkateSkeletonAsset`]. Nothing is derived
 //! or checked against anything else here; [`check_poses`] states how the stored poses relate.
 
+use frostbite_formats::ebx::{Document, Value};
 use primase_core::{
     Component, Entity, Joint, JointId, JsonError, Name, Rest, Skeleton, Source, Transform, World,
 };
-use primase_frostbite::ebx::{Document, Value};
 use serde::Serialize;
 use serde_json::Value as Json;
 
@@ -73,7 +73,7 @@ impl Component for SkateSkeletonAsset {
     }
 }
 
-fn array<'a>(o: &'a primase_frostbite::ebx::Object, field: &str) -> Result<&'a [Value], String> {
+fn array<'a>(o: &'a frostbite_formats::ebx::Object, field: &str) -> Result<&'a [Value], String> {
     match o.field(field) {
         Some(Value::Array(a, _)) => Ok(a),
         _ => Err(format!("SkeletonAsset has no array {field}")),
@@ -88,7 +88,7 @@ fn int(v: &Value, what: &str) -> Result<i64, String> {
     }
 }
 
-fn ints(o: &primase_frostbite::ebx::Object, field: &str) -> Result<Vec<i64>, String> {
+fn ints(o: &frostbite_formats::ebx::Object, field: &str) -> Result<Vec<i64>, String> {
     array(o, field)?
         .iter()
         .enumerate()
@@ -96,7 +96,7 @@ fn ints(o: &primase_frostbite::ebx::Object, field: &str) -> Result<Vec<i64>, Str
         .collect()
 }
 
-fn poses(o: &primase_frostbite::ebx::Object, field: &str) -> Result<Vec<Transform>, String> {
+fn poses(o: &frostbite_formats::ebx::Object, field: &str) -> Result<Vec<Transform>, String> {
     array(o, field)?
         .iter()
         .enumerate()
@@ -104,7 +104,7 @@ fn poses(o: &primase_frostbite::ebx::Object, field: &str) -> Result<Vec<Transfor
         .collect()
 }
 
-fn gameplay(o: &primase_frostbite::ebx::Object, field: &str) -> Result<Vec<(i64, i64)>, String> {
+fn gameplay(o: &frostbite_formats::ebx::Object, field: &str) -> Result<Vec<(i64, i64)>, String> {
     array(o, field)?
         .iter()
         .enumerate()

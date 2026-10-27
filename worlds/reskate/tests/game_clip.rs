@@ -6,11 +6,11 @@
 
 use std::collections::BTreeMap;
 
+use frostbite_formats::folder::{Folder, Source};
 use primase_animation::pose::{evaluate, locals, model_transforms};
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{Clip, JointMap, Skeleton, World};
-use primase_foundations::compress::oodle::{Oodle, Version};
-use primase_frostbite::folder::{Folder, Source};
 use primase_reskate::game::clip::SkateClip;
 use primase_reskate::game::rig::{insert_rig, render_map};
 use primase_reskate::game::skeleton::read_skeleton;

@@ -6,15 +6,13 @@ use primase_core::JsonError;
 use serde::Serialize;
 use serde::ser::{SerializeMap, SerializeSeq, Serializer};
 
-use super::{Document, Object, Pointer, Value};
-use crate::hex;
+use frostbite_formats::ebx::{Document, Object, Pointer, Value};
+use frostbite_formats::hex;
 
-impl Document {
-    /// The document as JSON: `file_guid`, `root_type`, `imports` and `instances` (each its `type`, whether it is
-    /// `exported` with its `guid`, and its `values`). Hexadecimal text is the bytes as stored.
-    pub fn to_json(&self) -> Result<serde_json::Value, JsonError> {
-        primase_core::json::to_value(&DocumentView(self))
-    }
+/// The document as JSON: `file_guid`, `root_type`, `imports` and `instances` (each its `type`, whether it is
+/// `exported` with its `guid`, and its `values`). Hexadecimal text is the bytes as stored.
+pub fn to_json(document: &Document) -> Result<serde_json::Value, JsonError> {
+    primase_core::json::to_value(&DocumentView(document))
 }
 
 struct DocumentView<'a>(&'a Document);
@@ -60,7 +58,7 @@ impl Serialize for InstancesView<'_> {
     }
 }
 
-struct InstanceView<'a>(&'a Document, usize, &'a super::Instance);
+struct InstanceView<'a>(&'a Document, usize, &'a frostbite_formats::ebx::Instance);
 
 impl Serialize for InstanceView<'_> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {

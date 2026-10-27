@@ -1,9 +1,9 @@
 //! The PhysicsResource layout ReSkate Studio 20261012 writes (its compile-map's collision, `reskate_cli`
 //! FUN_140160250): version 2, the word at 0x08 set, its collision template's 0x4C-byte body, and its template's part
-//! ids. The format itself (reading, writing, encoding a triangle mesh as a shape) is `primase_frostbite::physics`;
+//! ids. The format itself (reading, writing, encoding a triangle mesh as a shape) is `frostbite_formats::physics`;
 //! this is only what Studio puts in the fields the format leaves to the writer.
 
-use primase_frostbite::physics::{Part, PhysicsResource, Shape};
+use frostbite_formats::physics::{Part, PhysicsResource, Shape};
 
 /// The 0x4C-byte body Studio writes into every PhysicsResource (its collision template's): a unit quaternion,
 /// zeros, 1.0, 1, 0, -1, -1, -1, 0, 0, 0x100.

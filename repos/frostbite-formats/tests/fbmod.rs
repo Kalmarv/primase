@@ -9,7 +9,7 @@
 
 #![allow(clippy::unwrap_used)]
 
-use primase_frostbite::fbmod::{self, Body, ChunkInfo, Entry, EntryKind, Fbmod, ResInfo, Stored};
+use frostbite_formats::fbmod::{self, Body, ChunkInfo, Entry, EntryKind, Fbmod, ResInfo, Stored};
 
 type R<T = ()> = Result<T, Box<dyn std::error::Error>>;
 

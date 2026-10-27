@@ -6,14 +6,16 @@
 
 #![allow(clippy::unwrap_used)]
 
-use primase_core::{ColorSpace, Component, Texture, TextureLayers, TextureShape, World};
+use frostbite_formats::bundle::Kind;
+use frostbite_formats::folder::{Folder, Source};
+use frostbite_formats::listing::resource_type_name;
+use frostbite_formats::{depot, ebx, texture};
 use primase_foundations::compress::oodle::{Oodle, Version};
-use primase_frostbite::bundle::Kind;
+use primase_core::{ColorSpace, Component, Texture, TextureLayers, TextureShape, World};
 use primase_frostbite::components::{FrostbiteDepot, FrostbiteEbx, FrostbiteEntry, FrostbiteTexture};
-use primase_frostbite::entry::{format_colour_space, tex_format};
-use primase_frostbite::folder::{Folder, Source};
-use primase_frostbite::listing::resource_type_name;
-use primase_frostbite::{depot, ebx, texture};
+use primase_frostbite::ebx_json;
+use primase_frostbite::read::entry::read_entry;
+use primase_frostbite::read::entry::{format_colour_space, tex_format};
 use primase_testdata::{Game, Tool, install_file, tool};
 use primase_texcodec::{Decoder, TexDecoder};
 use serde_json::json;
@@ -25,7 +27,7 @@ const RFL2: &[u8] = include_bytes!("fixtures/ebx/rfl2.ebx");
 
 #[test]
 fn an_ebx_document_shows_its_values_as_json() -> R {
-    let j = ebx::read(REFL)?.to_json()?;
+    let j = ebx_json::to_json(&ebx::read(REFL)?)?;
     assert_eq!(j["file_guid"], "a0".repeat(16));
     assert_eq!(j["root_type"], "Root");
     assert_eq!(j["imports"], json!([]));
@@ -45,7 +47,7 @@ fn an_ebx_document_shows_its_values_as_json() -> R {
     assert_eq!(child["values"]["count"], 42);
     assert_eq!(child["values"]["items"][1]["values"]["value"], 200);
     // the document with an import and a boxed value
-    let j = ebx::read(RFL2)?.to_json()?;
+    let j = ebx_json::to_json(&ebx::read(RFL2)?)?;
     assert_eq!(
         j["imports"][0],
         json!({ "file_guid": "b1".repeat(16), "class_guid": "b2".repeat(16) })
@@ -61,12 +63,12 @@ fn a_value_json_cannot_hold_is_not_dropped() -> R {
     let object = doc.instances[0].object.as_mut().unwrap();
     *object.field_mut("label").unwrap() = ebx::Value::Str(vec![0xff, 0x41]);
     assert_eq!(
-        doc.to_json()?["instances"][0]["values"]["label"],
+        ebx_json::to_json(&doc)?["instances"][0]["values"]["label"],
         json!({ "bytes": "ff41" })
     );
     let object = doc.instances[0].object.as_mut().unwrap();
     *object.field_mut("scale").unwrap() = ebx::Value::Float(f64::NAN);
-    assert!(doc.to_json().is_err());
+    assert!(ebx_json::to_json(&doc).is_err());
     Ok(())
 }
 
@@ -103,7 +105,7 @@ fn texture_formats_map_to_core_layouts() {
         .filter(|&f| format_colour_space(f) == Some(ColorSpace::Srgb))
         .collect();
     assert_eq!(srgb, [20, 24, 55, 57, 59, 61, 67]);
-    assert_eq!(resource_type_name(primase_frostbite::TEXTURE), Some("Texture"));
+    assert_eq!(resource_type_name(frostbite_formats::TEXTURE), Some("Texture"));
     assert_eq!(resource_type_name(depot::RTYPE), Some("ShaderBlockDepotResource"));
     assert_eq!(resource_type_name(0), None);
 }
@@ -203,7 +205,7 @@ fn the_stock_items_toc_lists_and_reads() -> R {
         .collect();
     let mut w = World::new();
     let (b, e) = all.iter().find(|(_, e)| e.kind == Kind::Ebx).unwrap();
-    let doc = src.read_entry(b, e, &mut w)?[0];
+    let doc = read_entry(&src, b, e, &mut w)?[0];
     assert_eq!(w.get::<FrostbiteEntry>(doc).unwrap().name, e.name);
     let component = w.get::<FrostbiteEbx>(doc).unwrap();
     assert_eq!(src.ebx_type(e)?, component.document.root_type);
@@ -212,7 +214,7 @@ fn the_stock_items_toc_lists_and_reads() -> R {
     let (b, e) = all
         .iter()
         .find(|(b, e)| {
-            e.resource_type == Some(primase_frostbite::TEXTURE)
+            e.resource_type == Some(frostbite_formats::TEXTURE)
                 && texture::read(&src.payload(e.file, e.size as usize).unwrap()).is_ok_and(|h| {
                     h.kind == 0
                         && h.slices <= 1
@@ -221,7 +223,7 @@ fn the_stock_items_toc_lists_and_reads() -> R {
                 })
         })
         .unwrap();
-    let t = src.read_entry(b, e, &mut w)?[0];
+    let t = read_entry(&src, b, e, &mut w)?[0];
     let pixels = w.get::<Texture>(t).unwrap();
     let header = &w.get::<FrostbiteTexture>(t).unwrap().header;
     assert_eq!(
@@ -238,7 +240,7 @@ fn the_stock_items_toc_lists_and_reads() -> R {
         .iter()
         .find(|(_, e)| e.resource_type == Some(depot::RTYPE))
         .unwrap();
-    let d = src.read_entry(b, e, &mut w)?[0];
+    let d = read_entry(&src, b, e, &mut w)?[0];
     let d = w.get::<FrostbiteDepot>(d).unwrap();
     assert_eq!(d.parameters.len(), d.depot.blocks.len());
 
@@ -248,7 +250,7 @@ fn the_stock_items_toc_lists_and_reads() -> R {
         .iter()
         .find(|(_, e)| e.kind == Kind::Res && resource_type_name(e.resource_type.unwrap()).is_none())
         .unwrap();
-    let err = src.read_entry(b, e, &mut w).unwrap_err().to_string();
+    let err = read_entry(&src, b, e, &mut w).unwrap_err().to_string();
     assert!(err.contains(&e.name) && err.contains("is not read"), "{err}");
     assert_eq!(w.iter::<FrostbiteEntry>().count(), before);
     Ok(())
@@ -278,11 +280,11 @@ fn a_streamed_texture_reads_its_whole_chain_from_the_toc() -> R {
         .iter()
         .flat_map(|b| b.entries().map(move |e| (b, e)))
         .find(|(_, e)| {
-            e.resource_type == Some(primase_frostbite::TEXTURE) && e.name.ends_with("/metal_steel_02_2x2m_c")
+            e.resource_type == Some(frostbite_formats::TEXTURE) && e.name.ends_with("/metal_steel_02_2x2m_c")
         })
         .unwrap();
     let mut w = World::new();
-    let t = src.read_entry(bundle, &entry, &mut w)?[0];
+    let t = read_entry(&src, bundle, &entry, &mut w)?[0];
     let header = w.get::<FrostbiteTexture>(t).unwrap().header.clone();
     assert_eq!(
         (header.width, header.height, header.mip_count, header.first_mip),
@@ -313,7 +315,7 @@ fn a_streamed_texture_reads_its_whole_chain_from_the_toc() -> R {
         .bundles
         .iter()
         .flat_map(|b| b.entries().map(move |e| (b, e)))
-        .filter(|(_, e)| e.resource_type == Some(primase_frostbite::TEXTURE))
+        .filter(|(_, e)| e.resource_type == Some(frostbite_formats::TEXTURE))
         .step_by(7)
     {
         let h = texture::read(&src.payload(e.file, e.size as usize)?)?;
@@ -321,9 +323,7 @@ fn a_streamed_texture_reads_its_whole_chain_from_the_toc() -> R {
             continue;
         }
         let mut w = World::new();
-        let t = src
-            .read_entry(b, &e, &mut w)
-            .map_err(|err| format!("{}: {err}", e.name))?[0];
+        let t = read_entry(&src, b, &e, &mut w).map_err(|err| format!("{}: {err}", e.name))?[0];
         assert_eq!(
             w.get::<Texture>(t).unwrap().levels.len(),
             usize::from(h.mip_count),
@@ -389,7 +389,7 @@ fn arrays_cubes_and_volumes_read_as_layered_textures() -> R {
         for bundle in &listing.bundles {
             for e in bundle
                 .entries()
-                .filter(|e| e.kind == Kind::Res && e.resource_type == Some(primase_frostbite::TEXTURE))
+                .filter(|e| e.kind == Kind::Res && e.resource_type == Some(frostbite_formats::TEXTURE))
             {
                 let h = texture::read(&src.payload(e.file, e.size as usize)?)?;
                 let Some(format) = tex_format(h.format) else {
@@ -406,9 +406,7 @@ fn arrays_cubes_and_volumes_read_as_layered_textures() -> R {
                     continue;
                 }
                 let mut w = World::new();
-                let t = src
-                    .read_entry(bundle, &e, &mut w)
-                    .map_err(|err| format!("{}: {err}", e.name))?[0];
+                let t = read_entry(&src, bundle, &e, &mut w).map_err(|err| format!("{}: {err}", e.name))?[0];
                 assert!(w.verify_components().is_empty(), "{}", e.name);
                 assert!(!w.has::<Texture>(t), "{}", e.name);
                 let layers = w.get::<TextureLayers>(t).unwrap();

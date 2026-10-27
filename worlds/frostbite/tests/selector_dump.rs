@@ -52,17 +52,19 @@
 
 use std::fmt::Write as _;
 
+use frostbite_formats::MESHSET;
+use frostbite_formats::bundle::Kind;
+use frostbite_formats::folder::{Folder, Source};
+use frostbite_formats::lookup::{self, RECORD_LEN};
+use frostbite_formats::scope::Scope;
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_core::shader::Shader;
 use primase_core::{Entity, World};
-use primase_foundations::compress::oodle::{Oodle, Version};
-use primase_frostbite::MESHSET;
-use primase_frostbite::bundle::Kind;
 use primase_frostbite::components::{
     FrostbiteInputLayout, FrostbiteMaterial, FrostbiteMeshSet, FrostbitePermutation, FrostbiteProgram,
 };
-use primase_frostbite::folder::{Folder, Source};
-use primase_frostbite::lookup::{self, RECORD_LEN};
-use primase_frostbite::program::Scope;
+use primase_frostbite::read::entry::read_entry;
+use primase_frostbite::read::program::{self, resolve_materials};
 use primase_testdata::{Game, Tool, install_file, tool};
 
 fn hex(b: &[u8]) -> String {
@@ -169,18 +171,18 @@ fn dump_program_records_and_their_materials() {
         scope_bundles.extend(globals.bundles.iter().cloned());
         scope_bundles.extend(root.bundles.iter().cloned());
         let scope = Scope::new(&scope_bundles);
-        let all = src.materials(&scope).unwrap();
+        let all = program::materials(&src, &scope).unwrap();
         let mut w = World::new();
         let mut sets = Vec::new();
         for entry in bundle
             .entries()
             .filter(|e| e.kind == Kind::Res && e.resource_type == Some(MESHSET))
         {
-            let made = src.read_entry(bundle, &entry, &mut w).unwrap();
-            src.resolve_materials(&scope, &all, made[0], &mut w).unwrap();
+            let made = read_entry(&src, bundle, &entry, &mut w).unwrap();
+            resolve_materials(&src, &scope, &all, made[0], &mut w).unwrap();
             sets.push(made[0]);
         }
-        let usages = |d: &primase_frostbite::meshset::Decl| {
+        let usages = |d: &frostbite_formats::meshset::Decl| {
             let mut u: Vec<u8> = d.elements.iter().map(|e| e.usage).collect();
             u.sort_unstable();
             u.dedup();

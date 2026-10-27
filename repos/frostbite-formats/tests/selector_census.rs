@@ -18,10 +18,10 @@
 
 use std::collections::BTreeMap;
 
+use frostbite_formats::folder::{Folder, Source};
+use frostbite_formats::lookup;
+use frostbite_formats::selector::{Selector, Target};
 use primase_foundations::compress::oodle::{Oodle, Version};
-use primase_frostbite::folder::{Folder, Source};
-use primase_frostbite::lookup;
-use primase_frostbite::selector::{Selector, Target};
 use primase_testdata::{Game, Tool, install_file, tool};
 
 fn u32le(b: &[u8], at: usize) -> usize {

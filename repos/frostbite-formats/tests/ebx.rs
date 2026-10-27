@@ -17,7 +17,7 @@
 
 #![allow(clippy::unwrap_used)]
 
-use primase_frostbite::ebx::{self, Document, Pointer, Value, carry};
+use frostbite_formats::ebx::{self, Document, Pointer, Value, carry};
 
 const REFL: &[u8] = include_bytes!("fixtures/ebx/refl.ebx");
 const RFL2: &[u8] = include_bytes!("fixtures/ebx/rfl2.ebx");

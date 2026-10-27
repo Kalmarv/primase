@@ -30,10 +30,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use frostbite_formats::cas::CasRaw;
 use half::f16;
 use primase_foundations::compress::Compressor;
 use primase_foundations::compress::oodle::Oodle;
-use primase_frostbite::cas::CasRaw;
 use sha1::{Digest, Sha1};
 
 use crate::postcompile::fb::bundle::{self, FileRef, Manifest};

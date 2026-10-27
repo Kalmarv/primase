@@ -31,8 +31,8 @@ use std::collections::BTreeMap;
 use half::f16;
 use primase_core::{Semantic, Stream};
 
-use crate::meshset::{Lod, Section, format, usage};
-use crate::{Error, Result};
+use frostbite_formats::meshset::{Lod, Section, format, usage};
+use frostbite_formats::{Error, Result};
 
 /// One vertex element kept as stored: its usage and format as the declaration states them, its size in bytes and the
 /// bytes of every vertex of the section in order.

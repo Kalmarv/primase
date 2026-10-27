@@ -10,12 +10,12 @@
 //! How the game evaluates between keys is not established (the M4 in-game check), so reading takes no choice: the
 //! lowering pass states one (`interpolation=linear`, rotations by slerp), reported as an approximation.
 
+use frostbite_formats::ebx::{Object, Pointer, Value};
 use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{
     Channel, Clip, ClipTarget, Component, Entity, Extrapolation, Interpolation, JsonError, Name, Property,
     Skeleton, World,
 };
-use primase_frostbite::ebx::{Object, Pointer, Value};
 
 use serde::Serialize;
 use serde_json::Value as Json;
@@ -111,7 +111,7 @@ impl Component for SkateClip {
     }
 }
 
-fn object(doc: &primase_frostbite::ebx::Document, i: usize) -> Result<&Object, String> {
+fn object(doc: &frostbite_formats::ebx::Document, i: usize) -> Result<&Object, String> {
     doc.instances
         .get(i)
         .and_then(|x| x.object.as_ref())
@@ -142,7 +142,7 @@ impl ClipTiming {
 }
 
 /// Read only EBX timing. Unknown codecs remain errors with their actual codec value; no track decode occurs here.
-pub fn timing_from(doc: &primase_frostbite::ebx::Document) -> Result<ClipTiming, String> {
+pub fn timing_from(doc: &frostbite_formats::ebx::Document) -> Result<ClipTiming, String> {
     if doc.root_type != "ClipControllerAsset" {
         return Err(format!("{} is not a ClipControllerAsset", doc.root_type));
     }
@@ -187,7 +187,7 @@ fn checked_timing(fps: f32, end: f64, looping: bool) -> Result<ClipTiming, Strin
 /// documents it imports by `imported` (the reader's I/O, [`crate::read::game`]).
 pub fn clip_from(
     name: &str,
-    doc: &primase_frostbite::ebx::Document,
+    doc: &frostbite_formats::ebx::Document,
     resource: &dyn Fn(u64) -> Result<(u32, Vec<u8>), String>,
     imported: &Imports<'_>,
     skeleton: Entity,

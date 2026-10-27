@@ -5,8 +5,8 @@
 
 use std::sync::Arc;
 
-use super::folder::Source;
 use crate::bundle::{self, Asset, FileRef, Kind, Manifest};
+use crate::folder::Source;
 use crate::toc::{Toc, TocChunk};
 use crate::{Error, Result, depot, hex, lookup};
 
@@ -148,8 +148,8 @@ pub fn resource_type_name(rtype: u32) -> Option<&'static str> {
 }
 
 /// The resource types this crate names and the names the game's executable holds for them (the id is the djb2-xor hash
-/// of the lowercased name: [`type_id`]). A texture, a ShaderBlockDepotResource and a CompiledBytecode are read
-/// ([`Source::read_entry`]); the others are named only.
+/// of the lowercased name: [`type_id`]). Some of the types have a reader in this crate ([`crate::texture`],
+/// [`crate::depot`], [`crate::bytecode`], [`crate::permutation`] and others); the rest are only named.
 pub const TYPE_NAMES: &[(u32, &str)] = &[
     (crate::TEXTURE, "Texture"),
     (crate::MESHSET, "MeshSet"),

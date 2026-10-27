@@ -3,10 +3,10 @@
 //! fields the caller chooses, a document written once and checked, and the three entries (EBX, texture resource, chunk)
 //! added as Studio adds a costume's, so the Studio contract for them lives here once.
 
-use primase_frostbite::ebx::{self, Document, Value};
-use primase_frostbite::fbmod::{Body, ChunkInfo, Entry, Fbmod, ResInfo, Stored};
-use primase_frostbite::folder::{EbxEntry, Source};
-use primase_frostbite::texture::{self, TextureHeader};
+use frostbite_formats::ebx::{self, Document, Value};
+use frostbite_formats::fbmod::{Body, ChunkInfo, Entry, Fbmod, ResInfo, Stored};
+use frostbite_formats::folder::{EbxEntry, Source};
+use frostbite_formats::texture::{self, TextureHeader};
 use sha2::{Digest, Sha256};
 
 use super::textures::Donor;
@@ -95,7 +95,7 @@ pub(super) fn read_donor(src: &Source, donor: &Donor, entry: &EbxEntry) -> Resul
         return Err(what("its first instance has no Resource"));
     };
     let res = src.resource(donor.toc, donor.bundle, rid)?;
-    if res.rtype != primase_frostbite::TEXTURE {
+    if res.rtype != frostbite_formats::TEXTURE {
         return Err(what(&format!(
             "its resource is of type {:#x}, not a texture",
             res.rtype
@@ -204,7 +204,7 @@ impl Base {
         pixels: &[u8],
     ) -> Result<[Entry; 3]> {
         let resource = Body::Res(ResInfo {
-            res_type: primase_frostbite::TEXTURE,
+            res_type: frostbite_formats::TEXTURE,
             rid,
             meta: meta.to_vec(),
         });

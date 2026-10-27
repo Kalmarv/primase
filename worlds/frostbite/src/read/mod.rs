@@ -1,11 +1,7 @@
-//! The reader: a data folder's files on disk.
+//! The reader: a data folder's entries as entities of a world.
 
-pub mod cas_codec;
 pub mod entry;
-pub mod fbmod;
-pub mod folder;
-mod geometry;
-pub mod listing;
+pub mod geometry;
 pub mod program;
-mod skeleton;
+pub mod skeleton;
 pub mod textures;

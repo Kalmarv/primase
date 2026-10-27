@@ -8,10 +8,10 @@
 
 #![allow(clippy::unwrap_used)]
 
+use frostbite_formats::bundle;
+use frostbite_formats::folder::{Folder, Source};
+use frostbite_formats::texture::{self, Storage, TextureHeader};
 use primase_foundations::compress::oodle::{Oodle, Version};
-use primase_frostbite::bundle;
-use primase_frostbite::folder::{Folder, Source};
-use primase_frostbite::texture::{self, Storage, TextureHeader};
 use primase_testdata::{Game, Tool, install_file, tool};
 use std::collections::BTreeMap;
 
@@ -128,7 +128,7 @@ fn every_texture_of_the_items_toc_reads_and_writes_back() -> R {
             continue;
         };
         for (i, a) in m.res.iter().enumerate() {
-            if a.rtype != primase_frostbite::TEXTURE || !seen.insert(a.rid) {
+            if a.rtype != frostbite_formats::TEXTURE || !seen.insert(a.rid) {
                 continue;
             }
             let bytes = src.payload(files[first + m.ebx.len() + i], a.size as usize)?;

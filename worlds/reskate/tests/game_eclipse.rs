@@ -6,10 +6,10 @@
 
 #![allow(clippy::unwrap_used)]
 
+use frostbite_formats::bundle;
+use frostbite_formats::ebx::Value;
+use frostbite_formats::folder::{Folder, Source};
 use primase_foundations::compress::oodle::{Oodle, Version};
-use primase_frostbite::bundle;
-use primase_frostbite::ebx::Value;
-use primase_frostbite::folder::{Folder, Source};
 use primase_reskate::game::eclipse::{Track, decode};
 use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};
 use serde_json::Value as Json;
@@ -25,7 +25,7 @@ const CLIPS: [&str; 3] = [
 ];
 const TOLERANCE: f64 = 1e-6;
 
-fn uint(o: &primase_frostbite::ebx::Object, field: &str) -> Result<usize, String> {
+fn uint(o: &frostbite_formats::ebx::Object, field: &str) -> Result<usize, String> {
     match o.field(field) {
         Some(Value::UInt(u)) => usize::try_from(*u).map_err(|e| e.to_string()),
         other => Err(format!("{field} is {other:?}")),

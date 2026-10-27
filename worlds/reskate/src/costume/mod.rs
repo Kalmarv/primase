@@ -12,10 +12,10 @@ pub mod presets;
 pub mod textures;
 pub mod thumbnail;
 
+use frostbite_formats::ebx::{self, Document};
+use frostbite_formats::fbmod::{Body, Fbmod};
+pub use frostbite_formats::{Error, Result};
 use primase_foundations::compress::oodle::Oodle;
-use primase_frostbite::ebx::{self, Document};
-use primase_frostbite::fbmod::{Body, Fbmod};
-pub use primase_frostbite::{Error, Result};
 
 /// The user string Studio gives the entries it adds for a costume.
 pub const ADDITION: &str = "reskate-cosmetic-addition";

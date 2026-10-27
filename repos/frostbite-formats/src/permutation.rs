@@ -14,11 +14,6 @@
 //! hold a vertex and a pixel program, or a vertex program alone; a compute permutation one program. The word at 0x18
 //! of a raster permutation is kept as stored (it is 0 in every one seen).
 
-use iridia_interface::{
-    Blend, BlendEquation, BlendFactor, BlendOp, Compare, Cull, DepthBias, DepthState, Fill, RenderState,
-    Stencil, StencilFace, StencilOp, TargetState,
-};
-
 use crate::{Rd, Result, bad};
 
 const W: &str = "shader permutation";
@@ -156,7 +151,6 @@ pub const SHARED_COMPUTE: u32 = 0x879B_A711;
 /// 0x88 ff 00 00 00         0xb4 u32 1, 2 or 4   0xb8 u32 offset of a tail of 16-byte entries and the relocations
 /// ```
 ///
-/// [`FixedState::render_state`] gives it as core's [`RenderState`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SharedData {
     pub id: u64,
@@ -212,6 +206,73 @@ pub fn read_shared(rtype: u32, d: &[u8], meta: &[u8; 16]) -> Result<SharedData> 
     })
 }
 
+/// A comparison, in D3D12's order less one (`Never` is 0).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Compare {
+    Never,
+    Less,
+    Equal,
+    LessEqual,
+    Greater,
+    NotEqual,
+    GreaterEqual,
+    Always,
+}
+
+/// A stencil operation, in D3D12's order less one (`Keep` is 0).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum StencilOp {
+    Keep,
+    Zero,
+    Replace,
+    /// Increment, clamped at the maximum.
+    IncrementSaturate,
+    /// Decrement, clamped at zero.
+    DecrementSaturate,
+    Invert,
+    /// Increment, wrapping to zero.
+    Increment,
+    /// Decrement, wrapping to the maximum.
+    Decrement,
+}
+
+/// A blend operation, in D3D12's order less one (`Add` is 0).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BlendOp {
+    Add,
+    Subtract,
+    ReverseSubtract,
+    Min,
+    Max,
+}
+
+/// Which triangles are culled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Cull {
+    None,
+    Front,
+    Back,
+}
+
+/// How a triangle is filled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Fill {
+    Solid,
+    Wireframe,
+}
+
+/// What the stencil test does for one facing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct StencilFace {
+    /// On a failed stencil test.
+    pub fail: StencilOp,
+    /// On a passed stencil test and a failed depth test.
+    pub depth_fail: StencilOp,
+    /// On both passed.
+    pub pass: StencilOp,
+    pub compare: Compare,
+}
+
 /// The fixed-function pipeline state a raster permutation's shared data packs ([`SharedData::fixed_state`]), field by
 /// field as stored. The layouts are the game's own: `Skate.exe` (build sha256 `fbce74d5e28ef525`) prints the same
 /// packed opcodes as JSON in its rc2 IR filter (`fb::rc2::IrJsonFilter`; the rasterizer, depth-stencil and blend
@@ -233,8 +294,7 @@ pub fn read_shared(rtype: u32, d: &[u8], meta: &[u8; 16]) -> Result<SharedData> 
 ///
 /// Compares (`Never` .. `Always`) and stencil ops (`Keep`, `Zero`, `Replace`, `IncrementSaturate`,
 /// `DecrementSaturate`, `Invert`, `Increment`, `Decrement`) are D3D12's, in D3D12's order less one. Blend factors are
-/// the game's `RenderBlendMode` codes (0 `Zero` .. 16 `InvSource1Alpha`), kept as stored: core's
-/// [`iridia_interface::BlendFactor`] has no constant, saturate or second-source factor. The printed record has no
+/// the game's `RenderBlendMode` codes (0 `Zero` .. 16 `InvSource1Alpha`), kept as stored. The printed record has no
 /// colour blend operation (only the alpha one); bits 5-7 of the destination byte are refused unless zero.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FixedState {
@@ -292,11 +352,11 @@ const STENCIL_OPS: [StencilOp; 8] = [
     StencilOp::Keep,
     StencilOp::Zero,
     StencilOp::Replace,
-    StencilOp::IncrementClamp,
-    StencilOp::DecrementClamp,
+    StencilOp::IncrementSaturate,
+    StencilOp::DecrementSaturate,
     StencilOp::Invert,
-    StencilOp::IncrementWrap,
-    StencilOp::DecrementWrap,
+    StencilOp::Increment,
+    StencilOp::Decrement,
 ];
 const BLEND_OPS: [BlendOp; 5] = [
     BlendOp::Add,
@@ -405,93 +465,6 @@ impl SharedData {
             alpha_to_coverage: blend >> 5 & 1 != 0,
             independent_blend: blend >> 6 & 1 != 0,
             targets,
-        })
-    }
-}
-
-/// Blend factors in the game's `RenderBlendMode` order, as far as core names them (codes 10 to 16: saturate, constant
-/// and second-source factors, have no core name).
-const FACTORS: [BlendFactor; 10] = [
-    BlendFactor::Zero,
-    BlendFactor::One,
-    BlendFactor::SrcColour,
-    BlendFactor::OneMinusSrcColour,
-    BlendFactor::SrcAlpha,
-    BlendFactor::OneMinusSrcAlpha,
-    BlendFactor::DstColour,
-    BlendFactor::OneMinusDstColour,
-    BlendFactor::DstAlpha,
-    BlendFactor::OneMinusDstAlpha,
-];
-
-impl FixedState {
-    /// The state as core's [`RenderState`], as D3D12 receives it. Checked against the game itself: the 24,218
-    /// pipeline descriptions `Skate.exe` handed D3D12 during a boot (captured at `D3D12Core`'s pipeline creation)
-    /// have every depth-bias clamp 0 and the decal row's colour blend operation `Add`, neither of which these bytes
-    /// state; so the clamp is 0 and a blended target's colour operation `Add`. A disabled depth test is D3D12's: no
-    /// test and no write. The stencil reference is set per draw (none stated). Refused: a blend factor core does not
-    /// name (codes 10 to 16) on a blended target.
-    pub fn render_state(&self) -> Result<RenderState> {
-        const W: &str = "fixed state";
-        let factor = |code: u8| -> Result<BlendFactor> {
-            FACTORS
-                .get(usize::from(code))
-                .copied()
-                .ok_or_else(|| bad(W, 0, format!("blend mode {code} has no core factor")))
-        };
-        let mut targets = [None; 8];
-        for (slot, t) in targets.iter_mut().zip(&self.targets) {
-            let blend = if t.blend {
-                Some(Blend {
-                    colour: BlendEquation {
-                        source: factor(t.source)?,
-                        destination: factor(t.destination)?,
-                        op: BlendOp::Add,
-                    },
-                    alpha: BlendEquation {
-                        source: factor(t.source_alpha)?,
-                        destination: factor(t.destination_alpha)?,
-                        op: t.alpha_op,
-                    },
-                })
-            } else {
-                None
-            };
-            *slot = Some(TargetState {
-                blend,
-                write_mask: t.write_mask & 0xf,
-            });
-        }
-        Ok(RenderState {
-            blend: targets[0].and_then(|t| t.blend),
-            depth: Some(if self.depth_test {
-                DepthState {
-                    test: self.depth_compare,
-                    write: self.depth_write,
-                }
-            } else {
-                DepthState {
-                    test: Compare::Always,
-                    write: false,
-                }
-            }),
-            cull: Some(self.cull),
-            alpha_test: None,
-            targets,
-            stencil: self.stencil_test.then_some(Stencil {
-                read_mask: self.stencil_read_mask,
-                write_mask: self.stencil_write_mask,
-                reference: None,
-                front: self.front,
-                back: self.back,
-            }),
-            depth_bias: Some(DepthBias {
-                constant: f32::from(self.depth_bias),
-                slope_scaled: self.slope_scaled_depth_bias,
-                clamp: 0.0,
-            }),
-            fill: Some(self.fill),
-            front_counter_clockwise: Some(self.front_counter_clockwise),
         })
     }
 }

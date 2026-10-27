@@ -15,8 +15,8 @@
 //! Refused, naming what: any other layout, a section the mesh does not have or whose vertex count differs, a span
 //! outside the block.
 
+use frostbite_formats::fbmod::{Body, Fbmod};
 use primase_foundations::compress::oodle::Oodle;
-use primase_frostbite::fbmod::{Body, Fbmod};
 
 use super::textures::guid_text;
 use super::{Error, Result};
@@ -137,7 +137,7 @@ pub struct Neutralised {
 /// their GUIDs.
 pub fn neutralise(m: &mut Fbmod, oodle: Option<&Oodle>) -> Result<Neutralised> {
     let mut meshes = m.entries.iter().filter_map(|e| match (&e.body, e.index()) {
-        (Body::Res(r), Some(i)) if r.res_type == primase_frostbite::MESHSET => Some(i),
+        (Body::Res(r), Some(i)) if r.res_type == frostbite_formats::MESHSET => Some(i),
         _ => None,
     });
     let (Some(mesh), None) = (meshes.next(), meshes.next()) else {
