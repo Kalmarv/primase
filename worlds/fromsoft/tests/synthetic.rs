@@ -161,6 +161,7 @@ fn aes_known_vector_and_ranges() {
         padded_size: 48,
         logical_size: 48,
         sha: None,
+        index_offset: 0,
         aes: Some(AesKey {
             key,
             ranges: vec![Range { start: -1, end: -1 }, Range { start: 16, end: 32 }],
@@ -334,6 +335,15 @@ fn split_binder_shares_file_table_and_checks_both_files() {
     assert_eq!(result.files[0].bytes, b"twenty payload bytes");
     assert_eq!(result.files[0].name.as_deref(), Some("a"));
     assert_eq!(Binder::split_names(&header).unwrap(), ["a"]);
+    // a file the caller does not keep is still checked, and listed with no bytes
+    let kept = Binder::read_split_where(&header, &payload, &decoder(), &|name| name == "a").unwrap();
+    assert_eq!(kept.files[0].bytes, b"twenty payload bytes");
+    let left = Binder::read_split_where(&header, &payload, &decoder(), &|_| false).unwrap();
+    assert_eq!(left.files[0].name.as_deref(), Some("a"));
+    assert!(left.files[0].bytes.is_empty());
+    for n in 0..payload.len() {
+        assert!(Binder::read_split_where(&header, &payload[..n], &decoder(), &|_| false).is_err());
+    }
     for n in 0..90 {
         assert!(Binder::split_names(&header[..n]).is_err());
     }

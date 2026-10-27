@@ -95,10 +95,12 @@ impl Catalog {
         }
         for (path, names) in groups {
             let payload = format!("{}bdt", &path[..path.len() - 3]);
-            let binder = Binder::read_split(
+            // only the packages this read binds are copied out of the payload: it holds hundreds
+            let binder = Binder::read_split_where(
                 &archive.read(path, decoder)?,
                 &archive.read(&payload, decoder)?,
                 decoder,
+                &|name| names.contains(package_stem(name).as_str()),
             )?;
             for f in binder.files {
                 let name = package_stem(f.name.as_deref().unwrap_or(""));
