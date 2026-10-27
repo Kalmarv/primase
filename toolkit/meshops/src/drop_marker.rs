@@ -271,6 +271,15 @@ mod tests {
     use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
     use primase_core::{Collision, Instance};
 
+    /// A world with the one collision surface (`concrete`, id 0) that [`floor`]'s triangles refer to.
+    fn world() -> World {
+        let mut w = World::new();
+        w.insert_resource(primase_core::Surfaces(vec![primase_core::Surface::new(
+            "concrete",
+        )]));
+        w
+    }
+
     /// A placed 10 m square of collision at height `h` (core +Y) centred on ground (`east`, `north`).
     fn floor(w: &mut World, east: f32, north: f32, h: f32) {
         let proto = w.spawn();
@@ -312,10 +321,7 @@ mod tests {
 
     #[test]
     fn the_marker_stands_on_the_highest_collision_under_a_point() {
-        let mut w = World::new();
-        w.insert_resource(primase_core::Surfaces(vec![primase_core::Surface::new(
-            "concrete",
-        )]));
+        let mut w = world();
         floor(&mut w, 10.0, 20.0, 2.0);
         floor(&mut w, 10.0, 20.0, 7.5);
         floor(&mut w, 40.0, 20.0, 30.0);
@@ -330,7 +336,7 @@ mod tests {
     /// highest is 3 m.
     #[test]
     fn the_centre_is_the_placements_median_ground_position() {
-        let mut w = World::new();
+        let mut w = world();
         floor(&mut w, 0.0, 0.0, 1.0);
         floor(&mut w, 4.0, 2.0, 1.0);
         floor(&mut w, 2.0, 4.0, 3.0);
@@ -344,7 +350,7 @@ mod tests {
     /// 2 m under it, refused.
     #[test]
     fn a_stated_point_keeps_its_height_and_faces_its_yaw() {
-        let mut w = World::new();
+        let mut w = world();
         floor(&mut w, 10.0, 20.0, 2.0);
         floor(&mut w, 10.0, 20.0, 7.5);
         run(
@@ -362,14 +368,14 @@ mod tests {
             (f[0] - 1.0).abs() < 1e-6 && f[1].abs() < 1e-6 && f[2].abs() < 1e-6,
             "{f:?}"
         );
-        let mut w = World::new();
+        let mut w = world();
         floor(&mut w, 10.0, 20.0, 2.0);
         assert!(run(&mut w, "drop-marker{kind=spawn,name=s,x=11,y=5,z=-21}").is_err());
     }
 
     #[test]
     fn refusals() {
-        let mut w = World::new();
+        let mut w = world();
         floor(&mut w, 10.0, 20.0, 2.0);
         // over no collision
         assert!(
