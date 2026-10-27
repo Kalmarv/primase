@@ -117,13 +117,19 @@ fn source_light_records_and_their_lowering() {
 #[test]
 fn spawn_region_values_are_read_without_map_offset_or_rounding() {
     use fromsoft_formats::msb::{Generation, MapLayout, Section};
-    let mut bytes = vec![0u8; 100];
-    bytes[..8].copy_from_slice(&96u64.to_le_bytes());
-    bytes[8..12].copy_from_slice(&8u32.to_le_bytes());
-    bytes[96..98].copy_from_slice(&65u16.to_le_bytes());
-    for (i, v) in [1f32, 2., 3., 4., 5., 6.].into_iter().enumerate() {
-        bytes[20 + i * 4..24 + i * 4].copy_from_slice(&v.to_le_bytes());
-    }
+    // a spawn region (type 8) named "A": the header, then the name; Sekiro's header is 96 bytes, Elden Ring's 104
+    // (the pointer to its extra block at +96)
+    let region = |generation: &Generation| {
+        let header = generation.region_header;
+        let mut bytes = vec![0u8; header + 4];
+        bytes[..8].copy_from_slice(&(header as u64).to_le_bytes());
+        bytes[8..12].copy_from_slice(&8u32.to_le_bytes());
+        bytes[header..header + 2].copy_from_slice(&65u16.to_le_bytes());
+        for (i, v) in [1f32, 2., 3., 4., 5., 6.].into_iter().enumerate() {
+            bytes[20 + i * 4..24 + i * 4].copy_from_slice(&v.to_le_bytes());
+        }
+        bytes
+    };
     let mut layout = MapLayout {
         generation: &Generation::SEKIRO,
         models: vec![],
@@ -132,14 +138,15 @@ fn spawn_region_values_are_read_without_map_offset_or_rounding() {
         sections: vec![Section {
             name: "POINT_PARAM_ST".into(),
             version: 35,
-            records: vec![bytes],
+            records: vec![region(&Generation::SEKIRO)],
             offsets: vec![],
         }],
     };
     let p = layout.spawn_points().unwrap();
     assert_eq!(p[0].name, "A");
-    // Elden Ring's spawn points are the same region type in the same header
+    // Elden Ring's spawn points are the same region type, with the position and rotation at the same offsets
     layout.generation = &Generation::ELDEN_RING;
+    layout.sections[0].records = vec![region(&Generation::ELDEN_RING)];
     let elden = layout.spawn_points().unwrap();
     assert_eq!(
         (
