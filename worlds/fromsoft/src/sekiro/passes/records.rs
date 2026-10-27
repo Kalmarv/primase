@@ -8,8 +8,10 @@
 //! stored place with its record (`fromsoft.unplaced_part`). Each event is an entity of its own named as stored with its
 //! record (`fromsoft.event`: type, event ID, the part and region it names, entity ID, the type's data as bytes).
 //! Nothing in a type's data is decoded. `leave-out` takes region type words and part kind words.
-use crate::msb::{Event, Region, UnplacedPart, euler_transform};
+use crate::components::stored::{Event, Region, Stored, UnplacedPart};
+use crate::pose::placed;
 use crate::sekiro::source::{MapRecords, ReadScope};
+use fromsoft_formats::msb::{self, euler_matrix};
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Component, Marker, Name, Record, Resource, Source, Transform, World};
 use std::collections::BTreeSet;
@@ -47,7 +49,7 @@ impl LowerFromSoftMapRecords {
 }
 
 /// The word for a region's kind: the type's name, else `type_<code>`.
-fn kind(region: &Region) -> String {
+fn kind(region: &msb::Region) -> String {
     region
         .type_name
         .map_or_else(|| format!("type_{}", region.type_code), str::to_owned)
@@ -107,7 +109,8 @@ impl Pass for LowerFromSoftMapRecords {
                 log.count(&format!("{word} regions left out"), 1);
                 continue;
             }
-            let transform = euler_transform(region.position, region.rotation_degrees, [1.; 3], region.index)
+            let transform = euler_matrix(region.position, region.rotation_degrees, [1.; 3], region.index)
+                .map(placed)
                 .map_err(|e| e.to_string())?;
             let e = world.spawn();
             world.insert(
@@ -128,7 +131,7 @@ impl Pass for LowerFromSoftMapRecords {
                     kind: word.clone(),
                 },
             );
-            world.insert(e, region);
+            world.insert(e, Stored(region));
             log.place(e);
             log.count(&format!("{word} regions"), 1);
             log.approximate(
@@ -141,7 +144,8 @@ impl Pass for LowerFromSoftMapRecords {
                 log.count(&format!("{} parts left out", part.kind), 1);
                 continue;
             }
-            let transform = euler_transform(part.position, part.rotation_degrees, [1.; 3], part.index)
+            let transform = euler_matrix(part.position, part.rotation_degrees, [1.; 3], part.index)
+                .map(placed)
                 .map_err(|e| e.to_string())?;
             let e = world.spawn();
             world.insert(
@@ -163,7 +167,7 @@ impl Pass for LowerFromSoftMapRecords {
                 },
             );
             log.count(&format!("{} parts", part.kind), 1);
-            world.insert(e, part);
+            world.insert(e, Stored(part));
             log.place(e);
         }
         for event in records.events {
@@ -180,7 +184,7 @@ impl Pass for LowerFromSoftMapRecords {
                     kind: word.clone(),
                 },
             );
-            world.insert(e, event);
+            world.insert(e, Stored(event));
             log.place(e);
             log.count(&format!("{word} events"), 1);
         }
@@ -191,10 +195,10 @@ impl Pass for LowerFromSoftMapRecords {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::msb::RegionShape;
+    use fromsoft_formats::msb::RegionShape;
 
-    fn region(index: usize, name: &str, code: u32, name_word: Option<&'static str>) -> Region {
-        Region {
+    fn region(index: usize, name: &str, code: u32, name_word: Option<&'static str>) -> msb::Region {
+        msb::Region {
             index,
             name: name.to_owned(),
             type_code: code,
@@ -216,7 +220,7 @@ mod tests {
                 region(2, "Gust", 6, Some("wind_sfx")),
                 region(3, "Odd", 77, None),
             ],
-            events: vec![Event {
+            events: vec![msb::Event {
                 index: 0,
                 name: "Chest".to_owned(),
                 event_id: 5,
@@ -227,7 +231,7 @@ mod tests {
                 entity_id: 9,
                 type_data: vec![3],
             }],
-            parts: vec![UnplacedPart {
+            parts: vec![msb::UnplacedPart {
                 index: 4,
                 name: "c1000_0000".to_owned(),
                 kind: "enemy",

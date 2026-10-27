@@ -4,14 +4,19 @@
 use super::collision::{attach, beyond, crop, game_of, owned, push, surface_of};
 use super::settings::{HitClass, Metres, joined};
 use crate::pose::FRAME;
-use crate::pose::posed;
-use crate::sekiro::source::{MaterialSlots, ObjectBodies, ObjectBody, ObjectGeometry, Resolution};
+use crate::sekiro::{
+    source::MaterialSlots, source::ObjectBodies, source::ObjectBody, source::ObjectGeometry,
+};
 use crate::{components::models::SourceModel, materials::Material};
+use fromsoft_formats::affine::posed;
+use fromsoft_formats::collision::{BodyGeometry, shape_to_file};
+use fromsoft_formats::game::Resolution;
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::state::Condition;
 use primase_core::{
     Collision, Component, Entity, Instance, Name, Surfaces, Transform, World, world::Resource,
 };
+use primase_havok::ConvexCore;
 use primase_meshops::vector::Vec3;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -586,10 +591,32 @@ impl Pass for LowerFromSoftPartCollision {
     }
 }
 
+/// A body's triangles as its file stores them, in the file frame: a mesh's as stored; a convex shape's core tessellated
+/// as the intersection of its planes offset by the radius ([`ConvexCore::expanded_triangles`]: sharp where the shape is
+/// rounded, a capsule a box around its core), posed by the body. The convex tessellation is an approximation.
+pub fn body_triangles(geometry: &BodyGeometry) -> fromsoft_formats::Result<Vec<[[f32; 3]; 3]>> {
+    match geometry {
+        BodyGeometry::Mesh(soup) => Ok(soup.triangles.clone()),
+        BodyGeometry::Convex {
+            core,
+            instance,
+            position,
+            orientation,
+            ..
+        } => {
+            let pose = shape_to_file(instance.as_ref(), *position, *orientation);
+            Ok(ConvexCore::from_shape(core)?
+                .expanded_triangles()?
+                .into_iter()
+                .map(|t| t.map(|v| posed(&pose, v)))
+                .collect())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use primase_havok::ConvexCore;
 
     fn mesh(name: &str, motion_type: u64, materials: Vec<i32>) -> ObjectBody {
         ObjectBody {

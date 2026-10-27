@@ -6,9 +6,10 @@ use super::{
     reflectance::Reflectance,
 };
 use crate::{
-    Result, invalid,
+    invalid,
     layer_bake::{Inputs, SECOND_UV_APPROXIMATION, grouping},
 };
+use fromsoft_formats::Result;
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef};
 use primase_core::{
     ColorSpace, Entity, Mesh, Name, Primitive, Semantic, Stream, TexFormat, TexRole, Texture, World,
@@ -432,7 +433,7 @@ mod tests {
         // intentionally have no public Deserialize contract.
         let src = &oracle["source"];
         let def = &src["definition"];
-        let definition = crate::mtd::MaterialDefinition {
+        let definition = fromsoft_formats::mtd::MaterialDefinition {
             shader: def["shader"].as_str().unwrap().into(),
             description: def["description"].as_str().unwrap().into(),
             parameters: def["parameters"]
@@ -441,14 +442,16 @@ mod tests {
                 .iter()
                 .map(|p| {
                     let value = &p["value"];
-                    crate::mtd::Parameter {
+                    fromsoft_formats::mtd::Parameter {
                         name: p["name"].as_str().unwrap().into(),
                         value: if let Some(b) = value["Bool"].as_bool() {
-                            crate::mtd::Value::Bool(b)
+                            fromsoft_formats::mtd::Value::Bool(b)
                         } else if let Some(v) = value.get("Int") {
-                            crate::mtd::Value::Int(serde_json::from_value(v.clone()).unwrap())
+                            fromsoft_formats::mtd::Value::Int(serde_json::from_value(v.clone()).unwrap())
                         } else {
-                            crate::mtd::Value::Float(serde_json::from_value(value["Float"].clone()).unwrap())
+                            fromsoft_formats::mtd::Value::Float(
+                                serde_json::from_value(value["Float"].clone()).unwrap(),
+                            )
                         },
                     }
                 })
@@ -457,7 +460,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .iter()
-                .map(|t| crate::mtd::Texture {
+                .map(|t| fromsoft_formats::mtd::Texture {
                     kind: t["kind"].as_str().unwrap().into(),
                     path: t["path"].as_str().unwrap().into(),
                     uv_number: t["uv_number"].as_i64().unwrap() as i32,
@@ -469,7 +472,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .iter()
-                .map(|b| crate::mtd::BlockLength {
+                .map(|b| fromsoft_formats::mtd::BlockLength {
                     start: b["start"].as_u64().unwrap() as usize,
                     kind: b["kind"].as_u64().unwrap() as u32,
                     declared: b["declared"].as_u64().unwrap() as usize,
@@ -478,7 +481,7 @@ mod tests {
                 .collect(),
         };
         let source = crate::materials::resolve(
-            &crate::flver::Material {
+            &fromsoft_formats::flver::Material {
                 name: "jar".into(),
                 mtd: format!("{}.mtd", src["mtd"].as_str().unwrap()),
                 gx: vec![],
@@ -486,7 +489,7 @@ mod tests {
                     .as_object()
                     .unwrap()
                     .iter()
-                    .map(|(kind, b)| crate::flver::Texture {
+                    .map(|(kind, b)| fromsoft_formats::flver::Texture {
                         kind: kind.clone(),
                         path: format!("{}.dds", b["texture"].as_str().unwrap()),
                         scale: serde_json::from_value(b["scale"].clone()).unwrap(),
@@ -604,7 +607,7 @@ mod tests {
     fn equal_bake_inputs_share_images_but_keep_referenced_source_gx() {
         let mut world = World::default();
         let mut source = crate::materials::resolve(
-            &crate::flver::Material {
+            &fromsoft_formats::flver::Material {
                 name: "fixture".into(),
                 mtd: "fixture.mtd".into(),
                 textures: vec![],
@@ -615,7 +618,7 @@ mod tests {
         );
         source.layered = Some(crate::materials::LayeredMaterial {
             mtd: source.mtd.clone(),
-            definition: crate::mtd::MaterialDefinition {
+            definition: fromsoft_formats::mtd::MaterialDefinition {
                 shader: "M[Multiple]".into(),
                 description: String::new(),
                 parameters: vec![],
@@ -625,7 +628,7 @@ mod tests {
             bindings: BTreeMap::new(),
         });
         let original_a = world.spawn();
-        source.gx = vec![crate::flver::GxItem {
+        source.gx = vec![fromsoft_formats::flver::GxItem {
             id: *b"GXMD",
             version: 123,
             data: vec![1, 2, 3, 4],
@@ -742,7 +745,7 @@ mod tests {
     #[test]
     fn assembled_channels_preserve_conventions_factors_and_absence() {
         let mut source = crate::materials::resolve(
-            &crate::flver::Material {
+            &fromsoft_formats::flver::Material {
                 name: "fixture".into(),
                 mtd: "fixture.mtd".into(),
                 textures: vec![],

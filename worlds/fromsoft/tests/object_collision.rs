@@ -3,16 +3,14 @@
 //! fields as the file's own type information names them, floats as their bits). Every body's name, motion type and
 //! shape class must be Havoc's; a convex shape's stored core (vertices, planes, faces, convex radius), a capsule's
 //! segment and the body's pose must be Havoc's bit for bit; and the convex tessellation must lie on Havoc's planes
-//! offset by the radius (the intersection [`primase_fromsoft::collision::BodyGeometry::triangles`] claims), within
+//! offset by the radius (the intersection [`primase_fromsoft::sekiro::objects::body_triangles`] claims), within
 //! 0.1 mm. A compressed mesh's triangles and materials have no independent reference (Havoc gives the mesh tree as
 //! stored, and no third-party decoder reads Sekiro's Havok 2016.2): those bodies are counted as uncovered.
 //!
 //! Havoc's reading gives a name's UTF-8 bytes as one character each (`本` read as `æ\u{9c}¬`): such a name is compared
 //! with its characters taken back to bytes and read as UTF-8, and counted.
-mod inputs;
-
-use inputs::{Game, OracleSet, oracle};
-use primase_fromsoft::collision::{self, BodyGeometry};
+use fromsoft_formats::collision::{self, BodyGeometry};
+use primase_testdata::{Game, OracleSet, oracle};
 use serde_json::Value;
 use std::fs;
 
@@ -259,7 +257,7 @@ fn castle_object_bodies() -> Result<()> {
                 [p[0], p[1], p[2]].map(f64::from),
                 [q[0], q[1], q[2], q[3]].map(f64::from),
             );
-            for t in ours.geometry.triangles()? {
+            for t in primase_fromsoft::sekiro::objects::body_triangles(&ours.geometry)? {
                 for v in t {
                     let v = v.map(f64::from);
                     let residual = posed

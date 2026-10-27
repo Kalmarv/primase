@@ -10,19 +10,18 @@
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
-mod inputs;
-
-use inputs::{Game, Tool, install, oodle};
 use primase_core::frame::{Axis, SourceFrame};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{
     Asset, Clip, ClipTarget, JointMap, Name, Property, Provenance, Rest, Role, RootSpace, Skeleton, World,
 };
-use primase_fromsoft::Install;
-use primase_fromsoft::dcx::Decoder;
-use primase_fromsoft::sekiro::{CharacterOptions, read_character_with, read_parts_with};
+
+use fromsoft_formats::dcx::Decoder;
 use havok_formats::spline::{Absent, Fallback};
+use primase_fromsoft::sekiro::{CharacterOptions, read_character_with, read_parts_with};
 use primase_havok::world::HavokAnimation;
+use primase_testdata::{Game, Tool, install, oodle};
+mod common;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -34,20 +33,19 @@ fn a_characters_animations_read_lower_and_map_onto_its_model() -> Result<()> {
     let (Some(install), Some(dll)) = (install(Game::Sekiro), oodle(Tool::Oodle6)) else {
         return Ok(());
     };
+    let Some(sekiro) = common::sekiro(&install)? else {
+        return Ok(());
+    };
     // SAFETY: explicitly supplied trusted native decoder.
-    let dll = unsafe {
-        primase_foundations::compress::oodle::Oodle::open(
-            dll.path(),
-            primase_foundations::compress::oodle::Version::V6,
-        )
-    }?;
+    let dll =
+        unsafe { primase_foundations::compress::oodle::Oodle::open(dll.path(), primase_foundations::compress::oodle::Version::V6) }?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1 << 30,
     };
     let mut w = World::new();
     let report = read_character_with(
-        &Install::sekiro(&install),
+        &sekiro,
         "c1010",
         &decoder,
         CharacterOptions {
@@ -123,7 +121,7 @@ fn a_characters_animations_read_lower_and_map_onto_its_model() -> Result<()> {
     for (e, events) in w.iter::<primase_fromsoft::sekiro::character_data::ClipEvents>() {
         let name = &w.get::<Name>(e).unwrap().0;
         assert_eq!(
-            primase_fromsoft::tae::clip_animation_id(name),
+            fromsoft_formats::tae::clip_animation_id(name),
             Some(events.animation),
             "{name} carries the record {}",
             events.animation
@@ -262,20 +260,19 @@ fn the_players_animations_come_from_the_binders_its_markers_name() -> Result<()>
     let (Some(install), Some(dll)) = (install(Game::Sekiro), oodle(Tool::Oodle6)) else {
         return Ok(());
     };
+    let Some(sekiro) = common::sekiro(&install)? else {
+        return Ok(());
+    };
     // SAFETY: explicitly supplied trusted native decoder.
-    let dll = unsafe {
-        primase_foundations::compress::oodle::Oodle::open(
-            dll.path(),
-            primase_foundations::compress::oodle::Version::V6,
-        )
-    }?;
+    let dll =
+        unsafe { primase_foundations::compress::oodle::Oodle::open(dll.path(), primase_foundations::compress::oodle::Version::V6) }?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1 << 30,
     };
     let mut w = World::new();
     let (reports, animations) = read_parts_with(
-        &Install::sekiro(&install),
+        &sekiro,
         &["am_m_9120_l", "bd_m_9120_l", "hd_m_9120_l", "lg_m_9120_l"],
         &decoder,
         &CharacterOptions {

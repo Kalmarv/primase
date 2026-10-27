@@ -1,15 +1,13 @@
 //! Area extras as the source stores them: bank-zero BTL lights where they stand (`fromsoft.light`), every hang-edge
 //! segment and the spawn points inside the region (`fromsoft.area_extras`). Their interpretation (light units, marker
 //! and curve meanings, ledge chaining) belongs to passes and programs.
+use crate::invalid;
+use crate::pose::placed;
 use crate::sekiro::source::{AreaExtras, HangSegment, LightKind, LightSource, SpawnPoint};
-use crate::{
-    Archive, Binder, Error, Result,
-    btl::{Kind, LightBank},
-    dcx::Decoder,
-    edge::{Edges, Kind as EdgeKind},
-    invalid,
-    msb::{MapLayout, euler_transform},
-};
+use fromsoft_formats::btl::Kind;
+use fromsoft_formats::edge::Kind as EdgeKind;
+use fromsoft_formats::msb::{MapLayout, euler_matrix};
+use fromsoft_formats::{Archive, Result, dcx::Decoder};
 use primase_core::{Source, Transform, World};
 
 #[derive(Debug, Default)]
@@ -45,8 +43,11 @@ fn unit(v: [f32; 3]) -> Result<[f32; 3]> {
 }
 /// A BTL light where it stands: its stored position and rotation through the map offset `map` (world frame), and
 /// its record.
-pub fn light_record(light: &crate::btl::Light, map: &Transform) -> Result<(Transform, LightSource)> {
-    let transform = map.compose(&euler_transform(light.position, light.rotation, [1.; 3], 0)?);
+pub fn light_record(
+    light: &fromsoft_formats::btl::Light,
+    map: &Transform,
+) -> Result<(Transform, LightSource)> {
+    let transform = map.compose(&placed(euler_matrix(light.position, light.rotation, [1.; 3], 0)?));
     let record = LightSource {
         name: light.name.clone(),
         kind: match light.kind {
@@ -84,7 +85,7 @@ pub fn assemble(
     let map = layout
         .map_offsets
         .first()
-        .map(|o| o.transform())
+        .map(|o| o.matrix().map(crate::pose::placed))
         .transpose()?
         .unwrap_or(Transform {
             cols: [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [0.; 3]],
@@ -92,12 +93,10 @@ pub fn assemble(
     let inside =
         |p: [f32; 3]| region.is_none_or(|r| p[0] >= r[0] && p[0] < r[2] && -p[2] >= r[1] && -p[2] < r[3]);
     let reflect = |p: [f32; 3]| [p[0], p[1], -p[2]];
-    let light_path = format!("{folder}/{area}_0000.btl.dcx");
-    match archive.read(&light_path, decoder) {
-        Err(Error::Missing(_)) => report.missing_light_bank = true,
-        Err(e) => return Err(e),
-        Ok(bytes) => {
-            for light in LightBank::read(&bytes)?.lights {
+    match fromsoft_formats::area::light_bank(archive, decoder, folder, area)? {
+        None => report.missing_light_bank = true,
+        Some(bank) => {
+            for light in bank.lights {
                 let (transform, record) = light_record(&light, &map)?;
                 if !inside(transform.cols[3]) {
                     report.lights_outside_region += 1;
@@ -111,26 +110,12 @@ pub fn assemble(
             }
         }
     }
-    let edge_path = format!("{folder}/{area}");
     let mut hang_segments = vec![];
-    match archive.read(&format!("{edge_path}.edgebhd"), decoder) {
-        Err(Error::Missing(_)) => report.missing_edge_binder = true,
-        Err(e) => return Err(e),
-        Ok(header) => {
-            let binder = Binder::read_split(
-                &header,
-                &archive.read(&format!("{edge_path}.edgebdt"), decoder)?,
-                decoder,
-            )?;
-            for file in binder.files {
-                let Some(name) = file.name.as_deref().filter(|s| {
-                    let lower = crate::names::fold(s);
-                    lower.strip_suffix(".dcx").unwrap_or(&lower).ends_with(".edge")
-                }) else {
-                    continue;
-                };
-                let name = name.rsplit(['/', '\\']).next().unwrap_or(name).to_owned();
-                for edge in Edges::read(&decoder.decode_if_dcx(&file.bytes)?)?.edges {
+    match fromsoft_formats::area::edge_files(archive, decoder, folder, area)? {
+        None => report.missing_edge_binder = true,
+        Some(files) => {
+            for (name, edges) in files {
+                for edge in edges.edges {
                     let other = match edge.kind {
                         EdgeKind::Hang => None,
                         EdgeKind::Grapple => Some("grapple"),

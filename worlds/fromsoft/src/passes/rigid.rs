@@ -5,9 +5,10 @@
 //! transform), not established from the game. Dynamic vertices are already in model bind space. Multi-influence or non-unit explicit weights requested for rigid
 //! lowering are refused. Dynamic meshes are animated at runtime: their model-space bind pose is preserved and
 //! counted, not submitted to this rigid-only transformation.
-use crate::flver::{Mesh, Model};
-use crate::pose::{ID, Matrix, StaticBones, affine_point, bone_matrices, static_bones};
+use crate::pose::{ID, StaticBones, bone_matrices, static_bones};
 pub use crate::pose::{posed_bounds, posed_positions};
+use fromsoft_formats::affine::{Matrix, affine_point};
+use fromsoft_formats::flver::{Mesh, Model};
 use primase_core::{
     Component, Entity, Linear, Name, World,
     pass::{Pass, PassLog, PassSpec},

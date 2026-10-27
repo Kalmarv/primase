@@ -7,7 +7,8 @@
 //! Source normal maps carry [`SOURCE`] against the stored tangents the geometry pass keeps: `normalize-normals`
 //! converts them for a writer that reads supplied tangents (glTF), and `uv-frame-normals` re-expresses them for a
 //! target that derives its frame from texture coordinates. Neither choice belongs to the source.
-use crate::{Result, invalid};
+use crate::invalid;
+use fromsoft_formats::Result;
 use primase_core::{NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ};
 
 /// Whether this family's static normal basis was observed in installed shaders.

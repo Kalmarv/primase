@@ -1,11 +1,9 @@
+use fromsoft_formats::flver::{Bone, FaceSet, Material, Member, Mesh, Model, Vertex};
 use primase_core::{
     World,
     pass::{Pass, PassLog},
 };
-use primase_fromsoft::{
-    flver::{Bone, FaceSet, Material, Member, Mesh, Model, Vertex},
-    rigid::{ApplyRigidSkinning, RigidModel, SourceModel, lower_model},
-};
+use primase_fromsoft::rigid::{ApplyRigidSkinning, RigidModel, SourceModel, lower_model};
 /// One bone and one static mesh whose layout stores a normal with a W (`UByte4`), so NORMAL.w names each vertex's bone.
 fn model() -> Model {
     Model {

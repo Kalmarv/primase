@@ -1,5 +1,5 @@
 //! The area's draw-param file: the graphics environment (lighting, fog, tone, sky) the game applies there, a GPARAM
-//! ([`crate::gparam`]) in `/param/drawparam/`, kept as stored for `lower-fromsoft-environment` to interpret.
+//! ([`fromsoft_formats::gparam`]) in `/param/drawparam/`, kept as stored for `lower-fromsoft-environment` to interpret.
 //!
 //! Where it is. Both games keep the files of a map in `/param/drawparam/<mNN_NN>_<id>.gparam.dcx` (the map's first two
 //! blocks, then a four-digit ID: Sekiro's `m11_01_0720`; Elden Ring's `m10_00_0100`, and for its open-world tiles the
@@ -22,7 +22,8 @@
 //! times of day is kept as every one of its samples, in stored order; a program that wants one hour runs
 //! `sample-fromsoft-draw-params`.
 use super::super::source::{DrawField, DrawGroup, DrawParam, SetChosen};
-use crate::{
+use fromsoft_formats::area::{draw_param_path, draw_params};
+use fromsoft_formats::{
     Archive, Game, Result,
     dcx::Decoder,
     gparam::{Gparam, Unread},
@@ -102,32 +103,6 @@ pub struct Report {
     pub slots: BTreeMap<String, usize>,
     /// The game's layered files (`_weatherbase` ...) exist and are not read.
     pub layers_not_read: bool,
-}
-
-/// The stem the files of an area's map share: `m11_01` for `m11_01_00_00`; Elden Ring's open-world tiles share
-/// `m60_00` and `m61_00`. `None` for a name that is not an area's.
-fn map_stem(game: Game, area: &str) -> Option<String> {
-    let first = area.get(..3)?;
-    let second = area.get(4..6)?;
-    Some(match (game, first) {
-        (Game::EldenRing, "m60" | "m61") => format!("{first}_00"),
-        _ => format!("{first}_{second}"),
-    })
-}
-
-fn path(stem: &str) -> String {
-    format!("/param/drawparam/{stem}.gparam.dcx")
-}
-
-/// The draw-param files the archive holds for `area`'s map, by stem, in ID order: every `<map>_<0000..9999>`.
-pub fn available(archive: &Archive, game: Game, area: &str) -> Vec<String> {
-    let Some(map) = map_stem(game, area) else {
-        return Vec::new();
-    };
-    (0..10_000)
-        .map(|id| format!("{map}_{id:04}"))
-        .filter(|stem| archive.contains(&path(stem)))
-        .collect()
 }
 
 /// The value ID a part's graphics config gives a group, for the four groups that have one.
@@ -273,7 +248,7 @@ pub(super) fn read(
     };
     let mut report = Report {
         asked: true,
-        available: available(archive, game, area),
+        available: draw_params(archive, game, area),
         layers_not_read: game == Game::EldenRing,
         ..Report::default()
     };
@@ -294,7 +269,7 @@ pub(super) fn read(
         report.missing = Some(stem.clone());
         return Ok((None, report));
     }
-    let bytes = archive.read(&path(stem), decoder)?;
+    let bytes = archive.read(&draw_param_path(stem), decoder)?;
     report.bytes = bytes.len();
     let gparam = match Gparam::read(&bytes) {
         Ok(gparam) => gparam,
@@ -463,7 +438,7 @@ impl Report {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gparam::{Field, Group, Value, Values};
+    use fromsoft_formats::gparam::{Field, Group, Value, Values};
 
     #[test]
     fn every_stored_time_sample_of_a_chosen_set_is_kept_in_stored_order() {
@@ -782,28 +757,5 @@ mod tests {
         assert!(find(&notices, "draw-param extras").is_some());
         assert!(find(&notices, "draw-param opaque block").is_some());
         assert!(find(&notices, "draw-param layers of the game's weather").is_some());
-    }
-
-    #[test]
-    fn a_map_names_its_files_by_its_first_two_blocks_and_open_world_tiles_share_one_set() {
-        assert_eq!(map_stem(Game::Sekiro, "m11_01_00_00").as_deref(), Some("m11_01"));
-        assert_eq!(
-            map_stem(Game::EldenRing, "m10_00_00_00").as_deref(),
-            Some("m10_00")
-        );
-        assert_eq!(
-            map_stem(Game::EldenRing, "m12_02_00_00").as_deref(),
-            Some("m12_02")
-        );
-        assert_eq!(
-            map_stem(Game::EldenRing, "m60_44_36_00").as_deref(),
-            Some("m60_00")
-        );
-        assert_eq!(
-            map_stem(Game::EldenRing, "m61_50_50_00").as_deref(),
-            Some("m61_00")
-        );
-        assert_eq!(map_stem(Game::Sekiro, "m6").as_deref(), None);
-        assert_eq!(path("m11_01_0720"), "/param/drawparam/m11_01_0720.gparam.dcx");
     }
 }

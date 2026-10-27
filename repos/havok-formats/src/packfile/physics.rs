@@ -32,7 +32,7 @@
 //! | | namedMaterials | `+0x50` | empty |
 //! | | materialIndices16 | `+0x5C` | one per triangle, each < the material count |
 //! | hkpConvexVerticesShape | radius, aabb half extents, centre | `+0x10`, `+0x20`, `+0x30` | every vertex inside the aabb |
-//! | | rotatedVertices (FourVectors, 48 B: x[4], y[4], z[4]) | `+0x40` | |
+//! | | rotatedVertices (FourVectors, 48 B: `x[4]`, `y[4]`, `z[4]`) | `+0x40` | |
 //! | | vertex count | `+0x4C` | fits the FourVectors (`4 n-3 ..= 4 n`) |
 //! | | planeEquations (16 B) | `+0x54` | stored, **not exact hull faces** (normals not unit, some violated) |
 //! | hkpBoxShape | radius, half extents | `+0x10`, `+0x20` | |

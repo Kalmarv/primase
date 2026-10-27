@@ -1,11 +1,12 @@
 //! FLVER materials resolved with their MTD definitions as source records ([`resolve`]); the records themselves are
 //! components ([`Material`]). Complete MTD parameters and resolved slots survive for a later layered bake.
-use crate::Game;
 pub use crate::components::materials::{
     Binding, Definition, DefinitionRef, LayeredMaterial, Material, MaterialView, ParameterValue, SkipClass,
     identity_digest,
 };
-use crate::{
+use fromsoft_formats::Game;
+use fromsoft_formats::names::stem;
+use fromsoft_formats::{
     flver,
     mtd::{MaterialDefinition, Value},
 };
@@ -24,10 +25,6 @@ pub fn address(tiling: flver::Tiling) -> Option<iridia_interface::AddressMode> {
     }
 }
 
-pub fn stem(path: &str) -> String {
-    let leaf = path.rsplit(['/', '\\']).next().unwrap_or(path);
-    crate::names::fold(leaf.rsplit_once('.').map_or(leaf, |x| x.0))
-}
 fn leaf_stem(path: &str) -> String {
     let leaf = path.rsplit(['/', '\\']).next().unwrap_or(path);
     leaf.rsplit_once('.').map_or(leaf, |x| x.0).to_owned()
@@ -453,9 +450,9 @@ mod tests {
     /// A material of `class` stating `g_AlphaRef` as `aref` (none where `None`), cut at `cutoff` by the read-time rule.
     fn material(class: &str, aref: Option<i32>, cutoff: f32) -> Material {
         let parameters = aref
-            .map(|a| crate::mtd::Parameter {
+            .map(|a| fromsoft_formats::mtd::Parameter {
                 name: "g_AlphaRef".into(),
-                value: crate::mtd::Value::Int(vec![a, 0]),
+                value: fromsoft_formats::mtd::Value::Int(vec![a, 0]),
             })
             .into_iter()
             .collect();

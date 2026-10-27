@@ -1,10 +1,8 @@
 //! Material defaults and the proven facts of MaterialEx event routing. This pass deliberately
 //! emits no MaterialParameter channels: event 198's value-at-time envelope is not established.
 //! In particular, payload bytes 8/28/32 are NOT named target/fade/duration here.
-use crate::{
-    Game,
-    materials::{LayeredMaterial, Material, ParameterValue},
-};
+use crate::materials::{LayeredMaterial, Material, ParameterValue};
+use fromsoft_formats::Game;
 use primase_core::pass::{OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Clip, ClipEvents, Component, EventValue, EventValueData, MaterialParameters, World};
 // Preserve the public data paths; their definitions belong to components, not to this pass.
@@ -18,7 +16,7 @@ const REFUSAL: &str = "fromsoft.material_events: ";
 pub const ALL_MATERIALS_INFERENCE: &str = "inferred MaterialEx material_id -1 targets all materials of the event's character (reported routing only; no channel applied)";
 
 fn parameter_value(
-    parameter: &crate::metaparam::MtdParam,
+    parameter: &fromsoft_formats::metaparam::MtdParam,
     stated: Option<ParameterValue>,
 ) -> Result<Vec<f32>, String> {
     let width = match parameter.value_type {
@@ -358,7 +356,7 @@ mod tests {
     }
     #[test]
     fn material_value_overrides_metadata_default_without_turning_a_kill_amount_into_a_boolean() {
-        let parameter = crate::metaparam::MtdParam {
+        let parameter = fromsoft_formats::metaparam::MtdParam {
             name: "float_2".into(),
             start: 45,
             sequence_index: 0,
@@ -437,7 +435,7 @@ mod tests {
         let mut world = World::new();
         let shader = world.spawn();
         let material = world.spawn();
-        let parameter = crate::metaparam::MtdParam {
+        let parameter = fromsoft_formats::metaparam::MtdParam {
             name: "float_2".into(),
             start: 45,
             sequence_index: 0,
@@ -448,7 +446,7 @@ mod tests {
             key: PIXEL_KILL_KEY,
             default: [0.; 5],
         };
-        let metadata = crate::metaparam::Metaparam {
+        let metadata = fromsoft_formats::metaparam::Metaparam {
             constant_buffer_size: 192,
             shader_id: 0,
             flags: 0,
@@ -478,14 +476,14 @@ mod tests {
             LayeredMaterial {
                 mtd: "fixture".into(),
                 bindings: Default::default(),
-                definition: crate::mtd::MaterialDefinition {
+                definition: fromsoft_formats::mtd::MaterialDefinition {
                     shader: "fixture".into(),
                     description: String::new(),
                     textures: vec![],
                     block_lengths: vec![],
-                    parameters: vec![crate::mtd::Parameter {
+                    parameters: vec![fromsoft_formats::mtd::Parameter {
                         name: "float_2".into(),
-                        value: crate::mtd::Value::Float(vec![0.5]),
+                        value: fromsoft_formats::mtd::Value::Float(vec![0.5]),
                     }],
                 },
             },

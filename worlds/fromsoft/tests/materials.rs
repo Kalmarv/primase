@@ -1,8 +1,9 @@
-use primase_fromsoft::preview::{named_surface, preview};
-use primase_fromsoft::{
-    flver, materials,
+use fromsoft_formats::{
+    flver,
     mtd::{MaterialDefinition, Parameter, Texture, Value},
 };
+use primase_fromsoft::materials;
+use primase_fromsoft::preview::{named_surface, preview};
 fn definition() -> MaterialDefinition {
     MaterialDefinition {
         shader: "M[Multiple].sps".into(),
@@ -190,8 +191,8 @@ fn numeric_slot_ties_prefer_the_selected_mtd_declaration() {
 /// where it states none, and the MTD-only bindings state none.
 #[test]
 fn the_stored_tiling_types_become_the_bindings_addressing() {
+    use fromsoft_formats::flver::Tiling;
     use iridia_interface::AddressMode;
-    use primase_fromsoft::flver::Tiling;
     let mut src = source();
     src.textures = vec![
         flver::Texture {
@@ -230,7 +231,7 @@ fn the_stored_tiling_types_become_the_bindings_addressing() {
 /// samples differently is another.
 #[test]
 fn material_identity_compares_the_addressing_as_sampled() {
-    use primase_fromsoft::flver::Tiling;
+    use fromsoft_formats::flver::Tiling;
     let identity = |u, v| {
         let mut src = source();
         src.textures = vec![flver::Texture {

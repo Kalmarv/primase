@@ -1,9 +1,8 @@
 //! Consumer basis proof. The sample manifest contains independent stored frames,
 //! not an exporter-selected green convention. Curl verdicts are measurements only.
-mod inputs;
-
-use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
-use primase_fromsoft::{flver::tangent_to_scene, sekiro::normals::consumer_basis};
+use primase_fromsoft::geometry::tangent_to_scene;
+use primase_fromsoft::sekiro::normals::consumer_basis;
+use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 mod common;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
@@ -198,9 +197,13 @@ fn gx_emissive_basis_rebuilds_z_independent_of_blue() {
 
 #[test]
 fn castle_gx_emissive_geometry() -> Result<()> {
+    use fromsoft_formats::dcx::Decoder;
     use primase_core::{Instance, Mesh, Name, World};
-    use primase_fromsoft::{dcx::Decoder, materials::Material, sekiro};
+    use primase_fromsoft::{materials::Material, sekiro};
     let Some(root) = install(Game::Sekiro) else {
+        return Ok(());
+    };
+    let Some(root) = common::sekiro(&root)? else {
         return Ok(());
     };
     let Some(dll) = oodle(Tool::Oodle6) else {
@@ -212,7 +215,7 @@ fn castle_gx_emissive_geometry() -> Result<()> {
         max_output: 1024 * 1024 * 1024,
     };
     let mut world = World::default();
-    let report = sekiro::read_area(root, "m11_01", &decoder, &sekiro::Options::default(), &mut world)?;
+    let report = sekiro::read_game_area(&root, "m11_01", &decoder, &sekiro::Options::default(), &mut world)?;
     common::run(&mut world, common::LEGACY_GEOMETRY)?;
     let mut parts = 0;
     let mut triangles = 0;

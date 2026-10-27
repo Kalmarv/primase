@@ -4,8 +4,8 @@ use crate::layer_bake::resolve::{
     PALETTE_ROWS_RULE, Unbound, render_state, resolve, resolve_vertex_for_geometry,
 };
 use crate::materials::Material;
-use crate::metaparam::Metaparam;
 use crate::sekiro::source::{MaterialShader, Payloads, ShaderBundle, ShaderPrograms, TexturePayloads};
+use fromsoft_formats::metaparam::Metaparam;
 use iridia::ProgramGraph;
 use iridia::output_uses::bind_output_uses;
 use iridia_exec::PixelShader;
@@ -96,7 +96,7 @@ fn draws(world: &World) -> BTreeMap<Entity, (u64, u64)> {
 }
 
 /// The bound texture's component, a DDS read as stored with the colour space the slot's role gives it.
-fn texture(payloads: &Payloads, stem: &str, srgb: bool) -> crate::Result<Option<Texture>> {
+fn texture(payloads: &Payloads, stem: &str, srgb: bool) -> fromsoft_formats::Result<Option<Texture>> {
     let Some(bytes) = payloads.get(stem) else {
         return Ok(None);
     };
@@ -223,7 +223,7 @@ fn run(
     let mut program_names = BTreeMap::new();
     for (name, code) in programs {
         program_names
-            .entry(crate::names::fold(name))
+            .entry(fromsoft_formats::names::fold(name))
             .or_insert((name, code));
     }
     for (material_entity, source, kind) in candidates {
@@ -238,11 +238,11 @@ fn run(
         let bundle_entity = world.get::<MaterialShader>(material_entity).map(|m| m.0);
         let bundle = bundle_entity.and_then(|e| world.get::<ShaderBundle>(e));
         // the game whose program it is: its bundle's (Sekiro's layered programs the reader kept are Sekiro's)
-        let game = bundle.map_or(crate::Game::Sekiro, |b| b.game);
+        let game = bundle.map_or(fromsoft_formats::Game::Sekiro, |b| b.game);
         let requested = material.pass_program();
         // the layered programs the reader kept (DXBC), else the one the shader's bundle holds under that name
         let found = program_names
-            .get(&crate::names::fold(&requested))
+            .get(&fromsoft_formats::names::fold(&requested))
             .map(|&(name, code)| (name.clone(), ShaderFormat::Dxbc, code.clone()))
             .or_else(|| {
                 bundle

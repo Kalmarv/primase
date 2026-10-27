@@ -4,15 +4,14 @@
 //! arithmetic), every mesh's dynamic flag, palette and vertex count, and every vertex's position, bone indices and
 //! weights as stored (exact). Every texture its materials bind is read (some are kept in other characters' and shared
 //! packages). Then the character lowered with its skin verifies: `core.skin` and `core.mesh` hold together.
-mod inputs;
-
 use std::collections::BTreeSet;
 
-use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
+use fromsoft_formats::dcx::Decoder;
 use primase_core::frame::{Axis, SourceFrame};
 use primase_core::{Skeleton, World};
-use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::rigid::SourceModel;
+use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
+mod common;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -22,6 +21,9 @@ fn characters_read_as_soulsformats_reads_them() -> Result<()> {
     let Some(install) = install(Game::Sekiro) else {
         return Ok(());
     };
+    let Some(install) = common::sekiro(&install)? else {
+        return Ok(());
+    };
     let Some(dll) = oodle(Tool::Oodle6) else {
         return Ok(());
     };
@@ -29,12 +31,8 @@ fn characters_read_as_soulsformats_reads_them() -> Result<()> {
         return Ok(());
     };
     // SAFETY: explicitly supplied trusted native decoder.
-    let dll = unsafe {
-        primase_foundations::compress::oodle::Oodle::open(
-            dll.path(),
-            primase_foundations::compress::oodle::Version::V6,
-        )
-    }?;
+    let dll =
+        unsafe { primase_foundations::compress::oodle::Oodle::open(dll.path(), primase_foundations::compress::oodle::Version::V6) }?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1 << 30,
@@ -48,7 +46,13 @@ fn characters_read_as_soulsformats_reads_them() -> Result<()> {
     for id in ids {
         let dir = oracle.join(&id);
         let mut world = World::new();
-        let report = primase_fromsoft::sekiro::read_character(&install, &id, &decoder, &mut world)?;
+        let report = primase_fromsoft::sekiro::read_character_with(
+            &install,
+            &id,
+            &decoder,
+            Default::default(),
+            &mut world,
+        )?;
         // every texture its materials bind is read, wherever the game keeps it
         let payloads = world
             .resource::<primase_fromsoft::sekiro::source::TexturePayloads>()
@@ -195,16 +199,15 @@ fn a_character_converts_as_one_part_per_asset() -> Result<()> {
     let Some(install) = install(Game::Sekiro) else {
         return Ok(());
     };
+    let Some(install) = common::sekiro(&install)? else {
+        return Ok(());
+    };
     let Some(dll) = oodle(Tool::Oodle6) else {
         return Ok(());
     };
     // SAFETY: explicitly supplied trusted native decoder.
-    let dll = unsafe {
-        primase_foundations::compress::oodle::Oodle::open(
-            dll.path(),
-            primase_foundations::compress::oodle::Version::V6,
-        )
-    }?;
+    let dll =
+        unsafe { primase_foundations::compress::oodle::Oodle::open(dll.path(), primase_foundations::compress::oodle::Version::V6) }?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1 << 30,
@@ -215,7 +218,7 @@ fn a_character_converts_as_one_part_per_asset() -> Result<()> {
     let manager = primase_core::pass::PassManager::new(reg).with_pass_checks(true);
     let kept = std::rc::Rc::default();
     primase_core::convert::convert_parts(
-        &mut primase_fromsoft::sekiro::CharacterReader::new(primase_fromsoft::Install::sekiro(install), "c1010", decoder),
+        &mut primase_fromsoft::sekiro::CharacterReader::new(install, "c1010", decoder),
         &mut primase_core::convert::PlannedParts::default(),
         Box::new(Kept(std::rc::Rc::clone(&kept))),
         &manager,
@@ -251,6 +254,9 @@ fn the_finest_face_set_and_the_stored_normals_survive_lowering() -> Result<()> {
     let Some(install) = install(Game::Sekiro) else {
         return Ok(());
     };
+    let Some(install) = common::sekiro(&install)? else {
+        return Ok(());
+    };
     let Some(dll) = oodle(Tool::Oodle6) else {
         return Ok(());
     };
@@ -258,12 +264,8 @@ fn the_finest_face_set_and_the_stored_normals_survive_lowering() -> Result<()> {
         return Ok(());
     };
     // SAFETY: explicitly supplied trusted native decoder.
-    let dll = unsafe {
-        primase_foundations::compress::oodle::Oodle::open(
-            dll.path(),
-            primase_foundations::compress::oodle::Version::V6,
-        )
-    }?;
+    let dll =
+        unsafe { primase_foundations::compress::oodle::Oodle::open(dll.path(), primase_foundations::compress::oodle::Version::V6) }?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1 << 30,
@@ -275,7 +277,13 @@ fn the_finest_face_set_and_the_stored_normals_survive_lowering() -> Result<()> {
     for id in ids {
         let dir = oracle.join(&id);
         let mut world = World::new();
-        primase_fromsoft::sekiro::read_character(&install, &id, &decoder, &mut world)?;
+        primase_fromsoft::sekiro::read_character_with(
+            &install,
+            &id,
+            &decoder,
+            Default::default(),
+            &mut world,
+        )?;
         let model = world.iter::<SourceModel>().next().ok_or("no model")?.1.0.clone();
         let mut r = primase_core::pass::RunReport::default();
         let mut reg = primase_core::pass::PassRegistry::new();
@@ -326,7 +334,7 @@ fn the_finest_face_set_and_the_stored_normals_survive_lowering() -> Result<()> {
                 .iter()
                 .position(|f| f.is_lod0())
                 .ok_or("no level 0")?;
-            let part = model.decode(i, face_set)?.ok_or("empty part")?;
+            let part = primase_fromsoft::geometry::decode(&model, i, face_set)?.ok_or("empty part")?;
             let Some(primase_core::Stream::F32x3(lowered)) = p.streams.get(&primase_core::Semantic::Normal)
             else {
                 return Err(format!("{id} mesh {i}: no normals").into());

@@ -1,23 +1,20 @@
-//! Reading one FromSoftware map ([`read_area`] for Sekiro, [`read_game_area`] for any game): its placed models,
+//! Reading one FromSoftware map ([`read_game_area`]): its placed models,
 //! materials, texture files, layered-shader programs, collision files and bodies, lights, hang edges and spawn points,
 //! selected and in the world frame, as source records. What differs between the games and is not stated by their files
-//! (where a map keeps its files, how objects are found, tile parents) is [`crate::Game`]'s; what Elden Ring's read does
+//! (where a map keeps its files, how objects are found, tile parents) is [`fromsoft_formats::Game`]'s; what Elden Ring's read does
 //! not cover yet (world states, materials without a definition) is in its notices.
 use super::{animation, collision, draw_param, extras, objects, shaders, shadows, states, textures};
 use crate::sekiro::source::{self, Region};
-use crate::{
+use crate::{invalid, materials};
+use fromsoft_formats::{
     Archive, Binder, Game, Install, Result,
     dcx::Decoder,
     flver::Model,
-    invalid, materials,
     msb::{MapLayout, PartKind},
     mtd::MaterialDefinition,
 };
 use primase_core::{Instance, Name, Source, Transform, World};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::Path,
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Default)]
 pub struct Options {
@@ -29,7 +26,7 @@ pub struct Options {
     /// Which world states to bring in ([`states`]): none (default, every part present) or the event-flag rules of the
     /// block's script, as axes and conditions for `resolve-state`.
     pub states: StateClasses,
-    /// Whether the larger maps above the map (Elden Ring's open-world tiles: [`crate::Game::parent_maps`]) also place
+    /// Whether the larger maps above the map (Elden Ring's open-world tiles: [`fromsoft_formats::Game::parent_maps`]) also place
     /// their parts that belong to it: none (default: the map's own layout only) or included, moved into the map's frame.
     pub parents: Parents,
     /// The area's draw-param file ([`draw_param`]): none (default: the graphics environment is not read) or the file
@@ -73,7 +70,7 @@ pub struct GrassTypes {
     /// Each row id the configs name (a negative id names none), and how many parts name it.
     pub named: BTreeMap<i32, usize>,
     /// The named rows the param holds.
-    pub types: BTreeMap<i32, crate::param::GrassType>,
+    pub types: BTreeMap<i32, fromsoft_formats::param::GrassType>,
     /// Named rows the param does not hold.
     pub missing: Vec<i32>,
     /// Slots (a part names six) that name id 0 where the param holds no row 0: a slot that names none, not a row
@@ -497,7 +494,7 @@ fn grass_types(
     install: &Install,
     archive: &Archive,
     decoder: &Decoder<'_>,
-    parts: &[crate::msb::PartGrass],
+    parts: &[fromsoft_formats::msb::PartGrass],
 ) -> GrassTypes {
     let mut out = GrassTypes {
         parts: parts.len(),
@@ -506,8 +503,8 @@ fn grass_types(
     for id in parts.iter().flat_map(|p| p.ids).filter(|id| *id >= 0) {
         *out.named.entry(id).or_default() += 1;
     }
-    let param = super::params::read_param(install, archive, decoder, "GrassTypeParam.param")
-        .and_then(|param| crate::param::GrassParam::from_param(&param));
+    let param = fromsoft_formats::game_params::read_param(install, archive, decoder, "GrassTypeParam.param")
+        .and_then(|param| fromsoft_formats::param::GrassParam::from_param(&param));
     match param {
         Err(why) => out.unresolved = Some(why.to_string()),
         Ok(param) => {
@@ -574,7 +571,7 @@ struct Prototype {
     model: Model,
     materials: Vec<materials::Material>,
     bounds: Option<[[f32; 3]; 2]>,
-    collision: Vec<(String, crate::game::Resolution, Vec<u8>)>,
+    collision: Vec<(String, fromsoft_formats::game::Resolution, Vec<u8>)>,
     /// An object model's animation binder, if it has one and the read was asked for it.
     animation: Option<Vec<u8>>,
 }
@@ -629,9 +626,9 @@ pub(super) fn material_definitions(
     let mut definitions = BTreeMap::new();
     for f in Binder::read(&archive.read("/mtd/allmaterialbnd.mtdbnd.dcx", decoder)?, decoder)?.files {
         let name = f.name.as_deref().unwrap_or("");
-        if crate::names::fold(name).ends_with(".mtd") {
+        if fromsoft_formats::names::fold(name).ends_with(".mtd") {
             definitions.insert(
-                materials::stem(name),
+                fromsoft_formats::names::stem(name),
                 MaterialDefinition::read(&decoder.decode_if_dcx(&f.bytes)?)?,
             );
         }
@@ -669,46 +666,30 @@ fn material_binaries(
         }
         for f in Binder::read(&archive.read(path, decoder)?, decoder)?.files {
             let name = f.name.as_deref().unwrap_or("");
-            if !crate::names::fold(name).ends_with(".matbin") {
+            if !fromsoft_formats::names::fold(name).ends_with(".matbin") {
                 continue;
             }
-            let material = crate::matbin::Material::read(&decoder.decode_if_dcx(&f.bytes)?)
+            let material = fromsoft_formats::matbin::Material::read(&decoder.decode_if_dcx(&f.bytes)?)
                 .map_err(|e| invalid("material binary", 0, format!("{name}: {e}")))?;
             definitions
-                .entry(materials::stem(name))
+                .entry(fromsoft_formats::names::stem(name))
                 .or_insert(materials::Definition::Matbin(material));
         }
     }
     Ok(definitions)
 }
 
-pub fn read_area(
-    install: impl AsRef<Path>,
-    area: &str,
-    decoder: &Decoder<'_>,
-    options: &Options,
-    destination: &mut World,
-) -> Result<Report> {
-    read_game_area(
-        &Install::sekiro(install.as_ref()),
-        area,
-        decoder,
-        options,
-        destination,
-    )
-}
-
 /// A placement the read considers: its model's key, the part as stored (from the map's layout or a larger map's),
 /// the map whose layout holds it, and the offset (source x, z) from that map's frame into the read map's.
 struct Placed {
     key: String,
-    part: crate::msb::Part,
+    part: fromsoft_formats::msb::Part,
     map: String,
     offset: [f64; 2],
 }
 
-/// [`read_area`] for `install`'s game: what differs is [`crate::Game`]'s. Elden Ring's read does not read world states
-/// yet (`states` other than none is refused); materials without a definition are counted in the report's notices.
+/// Read the map `area` of `install` into `destination` as `options` says: what differs between the games is
+/// [`fromsoft_formats::Game`]'s. Elden Ring's read does not read world states yet (`states` other than none is refused); materials without a definition are counted in the report's notices.
 pub fn read_game_area(
     install: &Install,
     area: &str,
@@ -877,10 +858,11 @@ pub fn read_game_area_staged(
                     .rsplit(['/', '\\'])
                     .next()
                     .is_some_and(|s| {
-                        crate::names::fold(s) == crate::names::fold(leaf)
+                        fromsoft_formats::names::fold(s) == fromsoft_formats::names::fold(leaf)
                             || dcx
-                                && s.strip_suffix(".dcx")
-                                    .is_some_and(|s| crate::names::fold(s) == crate::names::fold(leaf))
+                                && s.strip_suffix(".dcx").is_some_and(|s| {
+                                    fromsoft_formats::names::fold(s) == fromsoft_formats::names::fold(leaf)
+                                })
                     })
             })
         };
@@ -902,7 +884,7 @@ pub fn read_game_area_staged(
                         let name = f.name.as_deref().unwrap_or("");
                         let leaf = name.rsplit(['/', '\\']).next().unwrap_or(name);
                         let leaf = leaf.strip_suffix(".dcx").unwrap_or(leaf);
-                        crate::names::fold(leaf) == crate::names::fold(&source.member)
+                        fromsoft_formats::names::fold(leaf) == fromsoft_formats::names::fold(&source.member)
                     })
                     .map(|f| decoder.decode_if_dcx(&f.bytes))
                     .transpose()?,
@@ -916,7 +898,7 @@ pub fn read_game_area_staged(
             Model::read(&f.bytes).map_err(|e| invalid("FromSoftware model", 0, format!("{key}: {e}")))?;
         // the packages named after the textures the model's materials name, read once each
         for m in &model.materials {
-            let defined = definitions.get(&materials::stem(&m.mtd));
+            let defined = definitions.get(&fromsoft_formats::names::stem(&m.mtd));
             let paths = defined
                 .map(|d| {
                     d.textures()
@@ -928,7 +910,7 @@ pub fn read_game_area_staged(
                 .into_iter()
                 .chain(m.textures.iter().map(|t| t.path.clone()));
             for path in paths {
-                let stem = materials::stem(&path);
+                let stem = fromsoft_formats::names::stem(&path);
                 if path.trim().is_empty() || catalog.entries.contains_key(&stem) {
                     continue;
                 }
@@ -945,9 +927,12 @@ pub fn read_game_area_staged(
             .materials
             .iter()
             .map(|m| {
-                materials::resolve_definition(m, definitions.get(&materials::stem(&m.mtd)), game, |n| {
-                    catalog.entries.contains_key(n)
-                })
+                materials::resolve_definition(
+                    m,
+                    definitions.get(&fromsoft_formats::names::stem(&m.mtd)),
+                    game,
+                    |n| catalog.entries.contains_key(n),
+                )
             })
             .collect();
         let bounds =
@@ -971,7 +956,7 @@ pub fn read_game_area_staged(
             let mut part = p.part.clone();
             part.position[0] = (f64::from(part.position[0]) - p.offset[0]) as f32;
             part.position[2] = (f64::from(part.position[2]) - p.offset[1]) as f32;
-            Ok((p.key.clone(), part.transform()?))
+            Ok((p.key.clone(), crate::pose::placed(part.matrix()?)))
         })
         .collect::<Result<Vec<_>>>()?;
     let bounds = prototypes.iter().map(|(k, p)| (k.clone(), p.bounds)).collect();
@@ -1026,8 +1011,9 @@ pub fn read_game_area_staged(
     let mut states = match options.states {
         StateClasses::None => None,
         StateClasses::Event => {
-            let script =
-                crate::emevd::Script::read(&archive.read(&format!("/event/{area}.emevd.dcx"), decoder)?)?;
+            let script = fromsoft_formats::emevd::Script::read(
+                &archive.read(&format!("/event/{area}.emevd.dcx"), decoder)?,
+            )?;
             let mut s = states::States::read(&script);
             s.spawn_axes(&mut world);
             Some(s)
@@ -1316,7 +1302,7 @@ mod tests {
     /// is read (here a folder that isn't an install).
     #[test]
     fn a_region_states_a_usable_margin() {
-        let decoder = crate::read::dcx::Decoder {
+        let decoder = fromsoft_formats::dcx::Decoder {
             oodle: None,
             max_output: 1,
         };
@@ -1328,8 +1314,12 @@ mod tests {
                 }),
                 ..Options::default()
             };
-            let e = super::read_area(
-                "/nonexistent",
+            let e = super::read_game_area(
+                &fromsoft_formats::Install::new(
+                    "/nonexistent",
+                    fromsoft_formats::Game::Sekiro,
+                    fromsoft_formats::Keys::none(),
+                ),
                 "m11_01",
                 &decoder,
                 &options,

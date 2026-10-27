@@ -1,15 +1,17 @@
 //! Shader bundles of the materials a read keeps: every program of the bundle of each shader a material's definition
 //! names (one `<shader>.shaderbdle` binder per shader, in one of the game's bundle binders:
-//! [`crate::Game::shader_binders`]), as [`source::ShaderBundle`] on an entity of its own, linked from the materials by
-//! `fromsoft.material_shader`. Each program's container is of the game's format ([`crate::Game::shader_format`]:
+//! [`fromsoft_formats::Game::shader_binders`]), as [`source::ShaderBundle`] on an entity of its own, linked from the materials by
+//! `fromsoft.material_shader`. Each program's container is of the game's format ([`fromsoft_formats::Game::shader_format`]:
 //! DXBC or DXIL) and its shader kind agrees with its file's extension.
 //! The `fromsoft.shader_programs` resource, the layered materials' G-buffer pixel programs the layer bake reads, is
 //! taken from the same bundles.
 use super::super::source::{self, ShaderBundle, ShaderProgram, ShaderStage};
+use crate::game::Shading;
+use crate::invalid;
 use crate::materials::LayeredMaterial;
-use crate::metaparam::Metaparam;
-use crate::names::fold;
-use crate::{Archive, Binder, Game, Result, dcx::Decoder, invalid};
+use fromsoft_formats::metaparam::Metaparam;
+use fromsoft_formats::names::fold;
+use fromsoft_formats::{Archive, Binder, Game, Result, dcx::Decoder};
 use iridia_interface::ShaderFormat;
 use primase_core::{Entity, World};
 use std::collections::{BTreeMap, BTreeSet};
@@ -33,7 +35,7 @@ pub(super) struct Bundles {
 /// The default textures (stems) of the slots `material` binds nothing to, as its shader's metaparam `meta` states them
 /// (a slot's `default_texture`: `SYSTEX_Dummy_a`, `_n`, `_m`, `SYSTEX_Dummy_BlackAlpha_a`), where `game`'s engine binds
 /// them there: Elden Ring's ([`crate::layer_bake::resolve::resolve`] binds what a read keeps of them, by the same rule:
-/// [`crate::metaparam::unbound_slots`]). Empty for another game and for a material without a definition.
+/// [`fromsoft_formats::metaparam::unbound_slots`]). Empty for another game and for a material without a definition.
 pub(crate) fn unbound_defaults(
     game: Game,
     material: &crate::materials::Material,
@@ -42,7 +44,7 @@ pub(crate) fn unbound_defaults(
     if game != Game::EldenRing || material.definition.is_none() {
         return Vec::new();
     }
-    crate::metaparam::unbound_slots(material.bindings.keys(), meta)
+    fromsoft_formats::metaparam::unbound_slots(material.bindings.keys(), meta)
         .map(|(_, stem)| stem)
         .collect()
 }
@@ -336,12 +338,12 @@ mod tests {
     fn layered_payload_keeps_one_stored_spelling_for_two_requested_spellings() {
         let material = |shader: &str| LayeredMaterial {
             mtd: "layered.mtd".into(),
-            definition: crate::mtd::MaterialDefinition {
+            definition: fromsoft_formats::mtd::MaterialDefinition {
                 shader: format!("{shader}.spx"),
                 description: String::new(),
-                parameters: vec![crate::mtd::Parameter {
+                parameters: vec![fromsoft_formats::mtd::Parameter {
                     name: "GXFT_SATStaticSwitch".into(),
-                    value: crate::mtd::Value::Int(vec![0]),
+                    value: fromsoft_formats::mtd::Value::Int(vec![0]),
                 }],
                 textures: Vec::new(),
                 block_lengths: Vec::new(),
@@ -382,7 +384,7 @@ mod tests {
             bindings: BTreeMap::new(),
             layered: None,
             shader: "character_AMSN".into(),
-            definition: Some(Definition::Mtd(crate::mtd::MaterialDefinition {
+            definition: Some(Definition::Mtd(fromsoft_formats::mtd::MaterialDefinition {
                 shader: r"N:\NTC\data\Material\sat\OutputData\SPX\character_AMSN.spx".into(),
                 description: String::new(),
                 parameters: Vec::new(),

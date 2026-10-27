@@ -443,7 +443,7 @@ impl Pass for SelectFromSoftOutfit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::param::NpcRow;
+    use fromsoft_formats::param::NpcRow;
     use primase_core::pass::{PassManager, PassRegistry, RunReport};
     use primase_core::{LodForm, Primitive, Semantic, Stream, Topology};
 

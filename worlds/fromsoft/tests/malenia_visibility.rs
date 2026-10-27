@@ -1,19 +1,18 @@
 //! A causal probe, not an assumption that TAE masks hide the flower. No textures or shaders are read.
-//! With GAME_DATA configured, prints source FLVER groups, all 233 records, and the authored
+//! With PRIMASE_DATA configured, prints source FLVER groups, all 233 records, and the authored
 //! scale samples of the flower's influencing bones (plus their ancestors). Run with --nocapture.
-mod inputs;
-
-use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
-use primase_core::convert::Reader;
-use primase_core::pass::{PassManager, PassRegistry, RunReport};
-use primase_core::{Clip, ClipTarget, Property, Skeleton, World};
-use primase_fromsoft::{
+use fromsoft_formats::{
     Binder, Game, Install, Keys,
     dcx::Decoder,
     flver::Model,
-    sekiro,
     tae::{Header, Tae},
 };
+use primase_core::convert::Reader;
+use primase_core::pass::{PassManager, PassRegistry, RunReport};
+use primase_core::{Clip, ClipTarget, Property, Skeleton, World};
+use primase_fromsoft::game::Shading;
+use primase_fromsoft::sekiro;
+use primase_testdata::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 mod common;
@@ -88,7 +87,7 @@ fn malenia_pixelkill_hash_and_alpha_permutation_discard() -> Result<()> {
         oodle(Tool::Oodle6),
         oracle(OracleSet::Baseline, Data::Elden, "malenia-binding-report.json"),
     ) else {
-        println!("MALENIA_SKIP=GAME_DATA Elden install/keys/oodle6/binding report not configured");
+        println!("MALENIA_SKIP=PRIMASE_DATA Elden install/keys/oodle6/binding report not configured");
         return Ok(());
     };
     let codec = common::oodle(dll)?;
@@ -249,7 +248,7 @@ fn malenia_dynamic_parameter_defaults_and_rest_model_transforms() -> Result<()> 
     let (Some(root), Some(key_dir), Some(dll)) =
         (install(Data::Elden), keys(Data::Elden), oodle(Tool::Oodle6))
     else {
-        println!("MALENIA_SKIP=GAME_DATA Elden install/keys/oodle6 not configured");
+        println!("MALENIA_SKIP=PRIMASE_DATA Elden install/keys/oodle6 not configured");
         return Ok(());
     };
     let codec = common::oodle(dll)?;
@@ -294,7 +293,7 @@ fn malenia_dynamic_parameter_defaults_and_rest_model_transforms() -> Result<()> 
                 if !name.to_ascii_lowercase().ends_with(".metaparam") {
                     continue;
                 }
-                match primase_fromsoft::metaparam::Metaparam::read(&member.bytes) {
+                match fromsoft_formats::metaparam::Metaparam::read(&member.bytes) {
                     Ok(meta) => println!(
                         "MALENIA_DYNAMIC_DEFAULTS={}",
                         json!({"shader":stem,"flags":meta.flags,
@@ -375,7 +374,7 @@ fn malenia_named_material_defaults_and_actual_npc_resident_slots() -> Result<()>
     let (Some(root), Some(key_dir), Some(dll)) =
         (install(Data::Elden), keys(Data::Elden), oodle(Tool::Oodle6))
     else {
-        println!("MALENIA_SKIP=GAME_DATA Elden install/keys/oodle6 not configured");
+        println!("MALENIA_SKIP=PRIMASE_DATA Elden install/keys/oodle6 not configured");
         return Ok(());
     };
     let codec = common::oodle(dll)?;
@@ -389,7 +388,7 @@ fn malenia_named_material_defaults_and_actual_npc_resident_slots() -> Result<()>
         Keys::from_folder(key_dir, Game::EldenRing)?,
     );
     let archive = install.open()?;
-    let npcs = sekiro::read_param(&install, &archive, &decoder, "NpcParam.param")?;
+    let npcs = fromsoft_formats::game_params::read_param(&install, &archive, &decoder, "NpcParam.param")?;
     if npcs.param_type != "NPC_PARAM_ST" || npcs.data_version != 9 || npcs.row_size != 736 {
         return Err("unrecognised ER NPC layout for resident material slots".into());
     }
@@ -409,7 +408,8 @@ fn malenia_named_material_defaults_and_actual_npc_resident_slots() -> Result<()>
             "behavior_variation_id":word(&row.data,4)? as i32})
         );
     }
-    let extras = sekiro::read_param(&install, &archive, &decoder, "MaterialExParam.param")?;
+    let extras =
+        fromsoft_formats::game_params::read_param(&install, &archive, &decoder, "MaterialExParam.param")?;
     for row in extras.rows.iter().filter(|row| referenced.contains(&row.id)) {
         if row.data.len() != 96 {
             return Err("unrecognised resident MaterialEx layout".into());
@@ -469,7 +469,7 @@ fn malenia_named_material_defaults_and_actual_npc_resident_slots() -> Result<()>
             if !found.insert(stem.clone()) {
                 continue;
             }
-            let definition = primase_fromsoft::matbin::Material::read(&decoder.decode_if_dcx(&file.bytes)?)?;
+            let definition = fromsoft_formats::matbin::Material::read(&decoder.decode_if_dcx(&file.bytes)?)?;
             let controls: Vec<_> = definition
                 .params
                 .iter()
@@ -489,8 +489,9 @@ fn malenia_named_material_defaults_and_actual_npc_resident_slots() -> Result<()>
             json!({"definition":stem,"materials":materials})
         );
     }
-    if let Some(root) = inputs::install(Data::Sekiro) {
-        let install = Install::sekiro(root);
+    if let Some(root) = primase_testdata::install(Data::Sekiro)
+        && let Some(install) = common::sekiro(root)?
+    {
         let archive = install.open()?;
         let binder = Binder::read(
             &archive.read("/mtd/allmaterialbnd.mtdbnd.dcx", &decoder)?,
@@ -504,7 +505,7 @@ fn malenia_named_material_defaults_and_actual_npc_resident_slots() -> Result<()>
                 continue;
             }
             let definition =
-                primase_fromsoft::mtd::MaterialDefinition::read(&decoder.decode_if_dcx(&file.bytes)?)?;
+                fromsoft_formats::mtd::MaterialDefinition::read(&decoder.decode_if_dcx(&file.bytes)?)?;
             let values: Vec<_> = definition
                 .parameters
                 .iter()
@@ -534,7 +535,7 @@ fn malenia_material_ex_defaults_and_event198_target() -> Result<()> {
     let (Some(root), Some(key_dir), Some(dll)) =
         (install(Data::Elden), keys(Data::Elden), oodle(Tool::Oodle6))
     else {
-        println!("MALENIA_SKIP=GAME_DATA Elden install/keys/oodle6 not configured");
+        println!("MALENIA_SKIP=PRIMASE_DATA Elden install/keys/oodle6 not configured");
         return Ok(());
     };
     let codec = common::oodle(dll)?;
@@ -548,7 +549,8 @@ fn malenia_material_ex_defaults_and_event198_target() -> Result<()> {
         Keys::from_folder(key_dir, Game::EldenRing)?,
     );
     let archive = install.open()?;
-    let materials = sekiro::read_param(&install, &archive, &decoder, "MaterialExParam.param")?;
+    let materials =
+        fromsoft_formats::game_params::read_param(&install, &archive, &decoder, "MaterialExParam.param")?;
     if materials.param_type != "MATERIAL_EX_PARAM_ST"
         || materials.data_version != 4
         || materials.row_size != 96
@@ -559,7 +561,7 @@ fn malenia_material_ex_defaults_and_event198_target() -> Result<()> {
         )
         .into());
     }
-    let npcs = sekiro::read_param(&install, &archive, &decoder, "NpcParam.param")?;
+    let npcs = fromsoft_formats::game_params::read_param(&install, &archive, &decoder, "NpcParam.param")?;
     let mut targets: BTreeSet<i32> = [10300, 10301, 21200, 21201, 21202, 21203, 21204]
         .into_iter()
         .collect();
@@ -617,7 +619,7 @@ fn malenia_draw_flags_material_records_and_all_tae_controls() -> Result<()> {
     let (Some(root), Some(key_dir), Some(dll)) =
         (install(Data::Elden), keys(Data::Elden), oodle(Tool::Oodle6))
     else {
-        println!("MALENIA_SKIP=GAME_DATA Elden install/keys/oodle6 not configured");
+        println!("MALENIA_SKIP=PRIMASE_DATA Elden install/keys/oodle6 not configured");
         return Ok(());
     };
     let codec = common::oodle(dll)?;
@@ -631,7 +633,7 @@ fn malenia_draw_flags_material_records_and_all_tae_controls() -> Result<()> {
         Keys::from_folder(key_dir, Game::EldenRing)?,
     );
     let archive = install.open()?;
-    let npc = sekiro::read_npc_param(&install, &archive, &decoder)?;
+    let npc = fromsoft_formats::game_params::read_npc_param(&install, &archive, &decoder)?;
     for row in npc.rows.iter().filter(|row| row.id / 10000 == 2120) {
         println!(
             "MALENIA_NPC={}",
@@ -710,7 +712,7 @@ fn malenia_source_mesh_groups_tae233_and_petal_bone_scales() -> Result<()> {
     let (Some(root), Some(key_dir), Some(dll)) =
         (install(Data::Elden), keys(Data::Elden), oodle(Tool::Oodle6))
     else {
-        println!("MALENIA_SKIP=GAME_DATA Elden install/keys/oodle6 not configured");
+        println!("MALENIA_SKIP=PRIMASE_DATA Elden install/keys/oodle6 not configured");
         return Ok(());
     };
     let codec = common::oodle(dll)?;
@@ -878,7 +880,7 @@ fn malenia_source_mesh_groups_tae233_and_petal_bone_scales() -> Result<()> {
         .parse("lower-havok-clips{absent=neutral,rate=1,clips=all,root-motion=leave}")?;
     let mut decoded = 0;
     for (entity, entry) in &listing {
-        let id = primase_fromsoft::tae::clip_animation_id(&entry.name);
+        let id = fromsoft_formats::tae::clip_animation_id(&entry.name);
         let control = entry.name == "a000_002000" || entry.name == "a000_003029";
         let mut world = match reader.load(&plans, &[*entity].into()) {
             Ok((world, _)) => world,

@@ -4,4 +4,5 @@ pub mod clip_source;
 pub mod material_events;
 pub mod materials;
 pub mod models;
+pub mod stored;
 pub mod visibility;

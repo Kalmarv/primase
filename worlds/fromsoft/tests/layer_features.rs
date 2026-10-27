@@ -1,9 +1,7 @@
 //! The reader keeps layered parts' Byte4C UV members raw, keyed by member index, not by storage slot.
+use fromsoft_formats::flver::{Member, Mesh, Model, Vertex};
 use primase_core::{Semantic, Stream};
-use primase_fromsoft::{
-    flver::{Member, Mesh, Model, Vertex},
-    sekiro::source::{SECOND_COLOUR, byte4_uv_members, layer_streams},
-};
+use primase_fromsoft::sekiro::{source::SECOND_COLOUR, source::byte4_uv_members, source::layer_streams};
 
 #[test]
 fn semantic_indices_are_not_uv_storage_slots() {

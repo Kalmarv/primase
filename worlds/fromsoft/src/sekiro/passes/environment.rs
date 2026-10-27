@@ -45,14 +45,14 @@ const VOLUMETRIC_NOT_DRAWN: &str = "volumetric fog kept in core.atmosphere's vol
 
 fn float(group: &crate::sekiro::source::DrawGroup, key: &str) -> Option<f32> {
     match group.value(key) {
-        Some(crate::gparam::Value::Float(x)) if (*x as f32).is_finite() => Some(*x as f32),
+        Some(fromsoft_formats::gparam::Value::Float(x)) if (*x as f32).is_finite() => Some(*x as f32),
         _ => None,
     }
 }
 
 fn vec4(group: &crate::sekiro::source::DrawGroup, key: &str) -> Option<[f32; 4]> {
     match group.value(key) {
-        Some(crate::gparam::Value::Vec4(c)) if c.iter().all(|x| x.is_finite()) => Some(*c),
+        Some(fromsoft_formats::gparam::Value::Vec4(c)) if c.iter().all(|x| x.is_finite()) => Some(*c),
         _ => None,
     }
 }
@@ -61,7 +61,7 @@ fn vec4(group: &crate::sekiro::source::DrawGroup, key: &str) -> Option<[f32; 4]>
 fn volumetric(group: &crate::sekiro::source::DrawGroup) -> (VolumetricFog, usize) {
     let v = VolumetricFog {
         enabled: match group.value("VolumetricFog Enable") {
-            Some(crate::gparam::Value::Bool(b)) => Some(*b),
+            Some(fromsoft_formats::gparam::Value::Bool(b)) => Some(*b),
             _ => None,
         },
         game_scale: float(group, "VolumetricFog GameScale"),
@@ -78,7 +78,7 @@ fn volumetric(group: &crate::sekiro::source::DrawGroup) -> (VolumetricFog, usize
         sky_colour: vec4(group, "VolumetricFog SkyLight SkyColor"),
         sky_start_dist: float(group, "VolumetricFog SkyLight StartDist"),
         directional_light_bank: match group.value("VolumetricFog DirLight LightBankId") {
-            Some(crate::gparam::Value::Uint(b)) => u32::try_from(*b).ok(),
+            Some(fromsoft_formats::gparam::Value::Uint(b)) => u32::try_from(*b).ok(),
             _ => None,
         },
         directional_direct_colour: vec4(group, "VolumetricFog DirLight DirectColor"),
@@ -125,8 +125,8 @@ pub const LOWER_FROMSOFT_ENVIRONMENT: PassSpec = PassSpec {
 
 /// A colour's red, green and blue and its fourth float, if the value is a four-float vector of finite, non-negative
 /// components.
-fn colour(value: Option<&crate::gparam::Value>) -> Option<([f32; 3], f32)> {
-    let crate::gparam::Value::Vec4(c) = value? else {
+fn colour(value: Option<&fromsoft_formats::gparam::Value>) -> Option<([f32; 3], f32)> {
+    let fromsoft_formats::gparam::Value::Vec4(c) = value? else {
         return None;
     };
     c.iter()
@@ -221,18 +221,19 @@ impl Pass for LowerFromSoftEnvironment {
         let mut lowered = std::collections::BTreeMap::<&str, usize>::new();
         if let Some(set) = env.group(LIGHT_SET) {
             let angle = match set.value(ANGLE) {
-                Some(crate::gparam::Value::Vec2(a)) if a.iter().all(|x| x.is_finite()) => Some(*a),
+                Some(fromsoft_formats::gparam::Value::Vec2(a)) if a.iter().all(|x| x.is_finite()) => Some(*a),
                 _ => None,
             };
             match (angle, colour(set.value(DIFFUSE))) {
                 (Some(angle), Some((rgb, weight))) if weight > 0. && rgb.iter().any(|x| *x > 0.) => {
                     // the angle is stored in radians (-0.349066 and -1.570796 are -20 and -90 degrees)
-                    let transform = crate::msb::euler_transform(
+                    let transform = fromsoft_formats::msb::euler_matrix(
                         [0.; 3],
                         [angle[0].to_degrees(), angle[1].to_degrees(), 0.],
                         [1.; 3],
                         0,
                     )
+                    .map(crate::pose::placed)
                     .map_err(|e| format!("the sun's angle: {e}"))?;
                     let e = world.spawn();
                     world.insert(
@@ -348,8 +349,8 @@ impl Pass for LowerFromSoftEnvironment {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gparam::Value;
     use crate::sekiro::source::{DrawField, DrawGroup, SetChosen};
+    use fromsoft_formats::gparam::Value;
 
     fn field(key: &str, value: Value) -> DrawField {
         DrawField {

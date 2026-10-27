@@ -1,16 +1,17 @@
 //! The corpus oracle set's `sekiro/dcx` (toolkit/testdata's registry): KRAK-compressed DCX files exactly as Sekiro's
-//! archives store them, read from the install with the published keys and written as `<hash>.dcx` (the entry's path
+//! archives store them, read from the install with the user's keys and written as `<hash>.dcx` (the entry's path
 //! hash, hex): the first `--limit` of them (default 256) in hash order whose stored size is at most `--max-bytes`
 //! (default 4 MiB). The bytes are the game's own; the test decodes them with the game's Oodle library and with
 //! oozextract, independently of this program. With `--compression DFLT` it writes the zlib-compressed envelopes instead,
 //! the zlib streams `repos/primase-compress/tests/oracles/codecs.py` cuts for `corpus/general/codecs.tsv`.
 //!
-//! `cargo run --release -p primase-fromsoft --example corpus_sekiro_dcx -- <Sekiro install> <out>
-//! [--limit N] [--max-bytes N] [--compression KRAK|DFLT]`, `<out>` being `<oracles.root>/corpus/sekiro/dcx`.
+//! `cargo run --release -p primase-fromsoft --example corpus_sekiro_dcx -- <Sekiro install> <keys> <out>
+//! [--limit N] [--max-bytes N] [--compression KRAK|DFLT]`, `<keys>` the folder of `Data1.pem` to `Data5.pem`
+//! (`keys.sekiro`), `<out>` being `<oracles.root>/corpus/sekiro/dcx`.
 
 use std::path::PathBuf;
 
-use primase_fromsoft::{Archive, dcx};
+use fromsoft_formats::{Archive, dcx};
 
 type BoxError = Box<dyn std::error::Error>;
 
@@ -34,13 +35,14 @@ fn main() -> Result<(), BoxError> {
             s => paths.push(PathBuf::from(s)),
         }
     }
-    let [install, out] = paths.as_slice() else {
+    let [install, keys, out] = paths.as_slice() else {
         return Err(
-            "usage: corpus_sekiro_dcx <Sekiro install> <out> [--limit N] [--max-bytes N] [--compression KRAK|DFLT]"
+            "usage: corpus_sekiro_dcx <Sekiro install> <keys> <out> [--limit N] [--max-bytes N] [--compression KRAK|DFLT]"
                 .into(),
         );
     };
-    let archive = Archive::open(install)?;
+    let game = fromsoft_formats::Game::Sekiro;
+    let archive = Archive::open_game(install, game, &fromsoft_formats::Keys::from_folder(keys, game)?)?;
     std::fs::create_dir_all(out)?;
     let mut written = 0usize;
     for (&hash, indexed) in &archive.entries {

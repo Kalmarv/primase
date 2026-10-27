@@ -10,7 +10,8 @@
 //! corners 0 and 1 (raw 0 and 2048) and never on a texel's own coordinate, which it would quantise.
 use super::binding::{FrozenFrame, Inputs, TEXTURE_SCROLL_POLICY, frozen_words};
 use super::resolve::{layer_channels, register};
-use crate::{Result, invalid};
+use crate::invalid;
+use fromsoft_formats::Result;
 use iridia::{Interface, Varying};
 use iridia_exec::ProgramShader;
 use iridia_exec::{Input, Lane, PixelShader, Sampler};

@@ -1,10 +1,10 @@
 //! Event-flag rules from a synthetic script: matching by entity ID and by group, both flag polarities, several rules
 //! on one part, calls that cannot be decided, other functions and direct instructions; and the conditions they give,
 //! resolved by core's resolve-state.
+use fromsoft_formats::emevd::{Event, Instruction, Parameter, Script};
+use fromsoft_formats::msb::{Part, PartKind};
 use primase_core::state::{Literal, ResolveState, StateAxis};
 use primase_core::{Instance, Transform, World, pass::Pass, pass::PassLog};
-use primase_fromsoft::emevd::{Event, Instruction, Parameter, Script};
-use primase_fromsoft::msb::{Part, PartKind};
 use primase_fromsoft::sekiro::states::States;
 
 fn call(args: &[i32]) -> Instruction {

@@ -1,13 +1,14 @@
 //! Placement shadow controls. The raw MSB flags stay on the placement beside
 //! their common meaning; point-light, static and cascade-specific renderer
 //! controls remain source data only.
-use crate::msb::ShadowFlags;
+use crate::components::stored::Stored;
+use fromsoft_formats::msb;
 use primase_core::{Entity, ShadowCast, Shadows, World, pass::PassLog};
 
 /// Attach a selected placement's source controls and their core meaning.
 /// Explicit false stays false. A shadow-only flag with casting disabled is
 /// contradictory: casting is left unknown and counted, never resolved.
-pub(crate) fn attach(world: &mut World, placement: Entity, source: ShadowFlags, log: &mut PassLog) {
+pub(crate) fn attach(world: &mut World, placement: Entity, source: msb::ShadowFlags, log: &mut PassLog) {
     let cast = match (source.cast, source.only) {
         (false, false) => Some(ShadowCast::Off),
         (true, false) => Some(ShadowCast::On),
@@ -17,7 +18,7 @@ pub(crate) fn attach(world: &mut World, placement: Entity, source: ShadowFlags, 
             None
         }
     };
-    world.insert(placement, source);
+    world.insert(placement, Stored(source));
     world.insert(
         placement,
         Shadows {
@@ -32,6 +33,7 @@ pub(crate) fn attach(world: &mut World, placement: Entity, source: ShadowFlags, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::stored::ShadowFlags;
     use primase_core::{Instance, Mesh};
 
     #[test]
@@ -56,7 +58,7 @@ mod tests {
                 },
             );
             world.insert(e, primase_core::Transform::IDENTITY);
-            let raw = ShadowFlags {
+            let raw = msb::ShadowFlags {
                 cast,
                 receive,
                 only,
@@ -77,7 +79,7 @@ mod tests {
         );
         world.insert(untouched, primase_core::Transform::IDENTITY);
         for (e, raw, expected) in placed {
-            assert_eq!(world.get::<ShadowFlags>(e), Some(&raw));
+            assert_eq!(world.get::<ShadowFlags>(e), Some(&Stored(raw)));
             assert_eq!(
                 world.get::<Shadows>(e),
                 Some(&Shadows {

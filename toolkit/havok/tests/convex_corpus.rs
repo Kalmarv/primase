@@ -2,6 +2,7 @@
 //! f32 rounding: every vertex lies inside all planes and on at least three
 //! planes within 0.01 mm. This gate does not claim reference tessellation parity.
 use havok_formats::Tagfile;
+use havok_formats::convex::ConvexShape;
 use primase_havok::ConvexCore;
 #[test]
 fn object_half_spaces() -> Result<(), Box<dyn std::error::Error>> {
@@ -44,7 +45,7 @@ fn object_half_spaces() -> Result<(), Box<dyn std::error::Error>> {
                         *other.entry(shape.type_name().into()).or_default() += 1;
                         continue;
                     }
-                    let core = ConvexCore::read(shape)?;
+                    let core = ConvexCore::from_shape(&ConvexShape::read(shape)?)?;
                     let output = core
                         .expanded_triangles()
                         .map_err(|e| format!("{} body {bi}: {e}", file.display()))?;

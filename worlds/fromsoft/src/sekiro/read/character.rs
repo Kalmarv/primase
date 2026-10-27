@@ -1,16 +1,16 @@
 //! FromSoftware characters read by themselves, each into a world as an asset ([`primase_core::Asset`]), whichever the
-//! game ([`crate::Game`] states what differs: where the textures are, what the materials resolve against, the shader
+//! game ([`fromsoft_formats::Game`] states what differs: where the textures are, what the materials resolve against, the shader
 //! bundles): a character, `chr/<id>.chrbnd` (its FLVER and the textures it embeds) and, when the install has them, its
-//! texture binders ([`crate::Game::character_texture_binders`]: Sekiro's `chr/<id>.texbnd`, Elden Ring's high and low
-//! resolution pair) ([`read_character`]); or the parts a request names, `parts/<name>.partsbnd` each ([`read_parts`]:
+//! texture binders ([`fromsoft_formats::Game::character_texture_binders`]: Sekiro's `chr/<id>.texbnd`, Elden Ring's high and low
+//! resolution pair) ([`read_character_with`]); or the parts a request names, `parts/<name>.partsbnd` each ([`read_parts_with`]:
 //! Sekiro's player `c1000` is an empty stub, the Wolf the game draws is parts worn together, each part with a FLVER and
 //! a skeleton of its own). The materials of an asset also bind textures it does not hold, which it reads from where
 //! the game keeps them: the texture binders of each other character a material names (in its definition's name or a
 //! texture path: Sekiro's c1010's bodies use `c1019_body_merge`, whose textures are in `chr/c1019.texbnd`, a character
-//! with no model), the packages every character shares ([`crate::Game::character_shared_textures`]: Sekiro's
+//! with no model), the packages every character shares ([`fromsoft_formats::Game::character_shared_textures`]: Sekiro's
 //! `parts/common_body.tpf` (hair, fabric, metal, seams, `FC_A_0000_*`) and `other/systex.tpf`; Elden Ring's
 //! `parts/common_body.tpf` (`AAT100_*`, `AAT500_*`), `other/systex.tpf` and `other/decaltex.tpf`) and, where the game names
-//! packages after their textures ([`crate::Game::texture_package`]: Elden Ring's `aet210_112_a` is in
+//! packages after their textures ([`fromsoft_formats::Game::texture_package`]: Elden Ring's `aet210_112_a` is in
 //! `asset/aet/aet210/aet210_112.tpf`), the package of each texture no source above held. A part's materials also bind the full-resolution
 //! textures of the parts they were authored for (a `_l` part holds `_l` copies): the part's full sibling
 //! (`parts/bd_m_9120.partsbnd` for `bd_m_9120_l`) and the other parts its texture paths name (`fc_m_0200` for the face
@@ -38,7 +38,7 @@
 //!   shader-program payloads they bind, which assets read into one world share;
 //! - for a character, the display mask marks of its meshes (`fromsoft.mesh_masks`: the `#<k>#` in each mesh's material
 //!   name) and, when it has any, the NPC param's rows (`fromsoft.npc_rows`, from where the game keeps its params
-//!   ([`crate::Game::params`]): each row's id and its 32 `modelDispMask` bits), which `raise-fromsoft-display-masks`
+//!   ([`fromsoft_formats::Game::params`]): each row's id and its 32 `modelDispMask` bits), which `raise-fromsoft-display-masks`
 //!   and `select-fromsoft-outfit` turn into a choice of outfit;
 //! - a root holding `core.asset` (the skeleton as its rig, the prototype as its part, and its clips when its
 //!   animations are read) and `core.source` (`chr/<id>`, `parts/<name>`; `parts/<name>/<form>` for a form not named
@@ -52,10 +52,9 @@
 //! (`.clm2`) that go with a form are kept on its prototype (`fromsoft.cloth`), and so is a part's collision (the form's
 //! `_collidable.hkx`, read as an object's collision file is: `fromsoft.object_collision`, every body as stored, which
 //! `lower-fromsoft-part-collision` turns into `core.collision` on the prototype); a character whose masks need the NPC param
-//! also reads each row's descriptive fields (`fromsoft.npc_stats`, [`crate::param::NpcStats`]). What the files hold that it
+//! also reads each row's descriptive fields (`fromsoft.npc_stats`, [`fromsoft_formats::param::NpcStats`]). What the files hold that it
 //! does not read is a notice: the other members of the binders, by name.
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
 
 use primase_core::convert::{Notice, NoticeKind, Reader, Report as ConvertReport, Result as ConvertResult};
 use primase_core::{Asset, Entity, Name, Role, Source, World};
@@ -66,7 +65,8 @@ use super::{shaders, textures};
 use crate::components::models::{SkeletonOf, SourceModel};
 use crate::sekiro::character_data;
 use crate::sekiro::source;
-use crate::{Archive, Binder, Game, Install, Result, dcx::Decoder, flver::Model, invalid, materials};
+use crate::{invalid, materials};
+use fromsoft_formats::{Archive, Binder, Game, Install, Result, dcx::Decoder, flver::Model};
 
 /// What reading a character or part found.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -280,7 +280,7 @@ fn part_name(name: &str) -> Result<&str> {
 /// The character ids `text` names, lowercased: `c` and four digits, not inside a longer word or number (`c1019` in
 /// `c1019_body_merge_SSS.mtd` and in `N:/NTC/data/Model/chr/c1019/tex/c1019_body_merge_a.tif`).
 fn named_characters(text: &str) -> Vec<String> {
-    let lower = crate::names::fold(text);
+    let lower = fromsoft_formats::names::fold(text);
     let b = lower.as_bytes();
     (0..b.len())
         .filter(|&i| {
@@ -295,7 +295,7 @@ fn named_characters(text: &str) -> Vec<String> {
 /// The part ids `text` names, lowercased: two letters, a letter and four digits joined by underscores, not inside a
 /// longer word or number (`fc_m_0200` in `N:/NTC/data/Model/parts/Face/FC_M_0200/tex/FC_M_0200_Skin_A_a.tif`).
 fn named_parts(text: &str) -> Vec<String> {
-    let lower = crate::names::fold(text);
+    let lower = fromsoft_formats::names::fold(text);
     let b = lower.as_bytes();
     let shape = |w: &[u8]| {
         w.len() == 9
@@ -352,14 +352,14 @@ fn display_marks(material: &str) -> Result<Vec<u32>> {
 }
 
 /// The member of `binder` whose file name is `leaf`.
-fn member<'b>(binder: &'b Binder, leaf: &str) -> Option<&'b crate::BinderFile> {
+fn member<'b>(binder: &'b Binder, leaf: &str) -> Option<&'b fromsoft_formats::BinderFile> {
     binder.files.iter().find(|f| {
         f.name
             .as_deref()
             .unwrap_or("")
             .rsplit(['/', '\\'])
             .next()
-            .is_some_and(|s| crate::names::fold(s) == crate::names::fold(leaf))
+            .is_some_and(|s| fromsoft_formats::names::fold(s) == fromsoft_formats::names::fold(leaf))
     })
 }
 
@@ -371,7 +371,7 @@ const LEVEL_SUFFIXES: [&str; 2] = ["_l", "_m"];
 /// A binder member's file name after its last separator, lowercased, without its extension.
 fn member_stem(name: &str) -> String {
     let file = name.rsplit(['/', '\\']).next().unwrap_or(name);
-    let file = crate::names::fold(file);
+    let file = fromsoft_formats::names::fold(file);
     match file.rsplit_once('.') {
         Some((stem, _)) => stem.to_owned(),
         None => file,
@@ -410,7 +410,7 @@ struct Form<'b> {
     name: String,
     /// The name without the part's level suffix ([`form_base`]).
     base: String,
-    flver: &'b crate::BinderFile,
+    flver: &'b fromsoft_formats::BinderFile,
 }
 
 /// What a request names: a character, from `chr/<id>.chrbnd`, or a part, from `parts/<name>.partsbnd`.
@@ -475,7 +475,7 @@ impl Item<'_> {
                     .filter(|f| {
                         f.name
                             .as_deref()
-                            .is_some_and(|n| crate::names::fold(n).ends_with(".flver"))
+                            .is_some_and(|n| fromsoft_formats::names::fold(n).ends_with(".flver"))
                     })
                     .map(|f| {
                         let name = member_stem(f.name.as_deref().unwrap_or(""));
@@ -534,9 +534,9 @@ struct Reading<'a> {
     /// Each material entity made and the shader its definition names.
     material_shaders: Vec<(Entity, String)>,
     /// The NPC param's rows, once a character with display masks is read.
-    npc_rows: Option<Vec<crate::param::NpcRow>>,
+    npc_rows: Option<Vec<fromsoft_formats::param::NpcRow>>,
     /// The descriptive fields of those rows, or why they were not read.
-    npc_stats: Option<std::result::Result<Vec<crate::param::NpcStats>, String>>,
+    npc_stats: Option<std::result::Result<Vec<fromsoft_formats::param::NpcStats>, String>>,
     /// Each form read so far and the binder it is of: two of one name are refused.
     forms: BTreeMap<String, String>,
     animation_clips: Option<Vec<String>>,
@@ -668,13 +668,15 @@ impl<'a> Reading<'a> {
         };
         report.masked_meshes = marks.iter().flatten().filter(|m| !m.is_empty()).count();
         if report.masked_meshes > 0 && self.npc_rows.is_none() {
-            let param = super::params::read_param(&self.install, archive, decoder, "NpcParam.param")?;
-            self.npc_rows =
-                Some(crate::param::NpcParam::from_param(&param, &self.install.game.npc_param())?.rows);
+            let param =
+                fromsoft_formats::game_params::read_param(&self.install, archive, decoder, "NpcParam.param")?;
+            self.npc_rows = Some(
+                fromsoft_formats::param::NpcParam::from_param(&param, &self.install.game.npc_param())?.rows,
+            );
             // the descriptive fields come from the same file; a layout they do not match is said, and the rows' masks
             // (which refused it above if it were another) still stand
             self.npc_stats = Some(
-                crate::param::NpcStats::from_param(&param, &self.install.game.npc_stats())
+                fromsoft_formats::param::NpcStats::from_param(&param, &self.install.game.npc_stats())
                     .map_err(|e| e.to_string()),
             );
         }
@@ -688,7 +690,7 @@ impl<'a> Reading<'a> {
         for m in &model.materials {
             named.extend(named_characters(&m.mtd));
             named.extend(m.textures.iter().flat_map(|t| named_characters(&t.path)));
-            if let Some(d) = definitions.get(&materials::stem(&m.mtd)) {
+            if let Some(d) = definitions.get(&fromsoft_formats::names::stem(&m.mtd)) {
                 named.extend(
                     d.textures()
                         .into_iter()
@@ -732,7 +734,7 @@ impl<'a> Reading<'a> {
             for m in &model.materials {
                 owners.extend(named_parts(&m.mtd));
                 owners.extend(m.textures.iter().flat_map(|t| named_parts(&t.path)));
-                if let Some(d) = definitions.get(&materials::stem(&m.mtd)) {
+                if let Some(d) = definitions.get(&fromsoft_formats::names::stem(&m.mtd)) {
                     owners.extend(
                         d.textures()
                             .into_iter()
@@ -761,7 +763,7 @@ impl<'a> Reading<'a> {
         let mut packages = BTreeSet::new();
         for m in &model.materials {
             let defined: Vec<String> = definitions
-                .get(&materials::stem(&m.mtd))
+                .get(&fromsoft_formats::names::stem(&m.mtd))
                 .map(|d| {
                     d.textures()
                         .into_iter()
@@ -774,7 +776,7 @@ impl<'a> Reading<'a> {
                 .map(String::as_str)
                 .chain(m.textures.iter().map(|t| t.path.as_str()))
             {
-                let stem = materials::stem(path);
+                let stem = fromsoft_formats::names::stem(path);
                 if !catalog.entries.contains_key(&stem)
                     && let Some(package) = self.game.texture_package(&stem)
                     && textures::has(archive, &package)
@@ -802,10 +804,12 @@ impl<'a> Reading<'a> {
                 || f.bytes.starts_with(b"TPF\0")
                 || own_animations.is_some_and(|a| std::ptr::eq(f, a));
             if !read && member_form(&member_stem(member_name), &bases).unwrap_or(0) == index {
-                let leaf = crate::names::fold(member_name.rsplit(['/', '\\']).next().unwrap_or(member_name));
+                let leaf = fromsoft_formats::names::fold(
+                    member_name.rsplit(['/', '\\']).next().unwrap_or(member_name),
+                );
                 // a cloth companion is read as stored; one that does not read is named with its reason
                 if leaf.ends_with(".clm2") {
-                    match crate::clm2::Clm2::read(&decoder.decode_if_dcx(&f.bytes)?) {
+                    match fromsoft_formats::clm2::Clm2::read(&decoder.decode_if_dcx(&f.bytes)?) {
                         Ok(clm2) => cloth.push(character_data::ClothFile {
                             file: leaf,
                             meshes: clm2.meshes,
@@ -819,7 +823,7 @@ impl<'a> Reading<'a> {
                     let mut found = super::objects::Report::default();
                     match super::objects::bodies(
                         &leaf,
-                        source::Resolution::High,
+                        fromsoft_formats::game::Resolution::High,
                         &decoder.decode_if_dcx(&f.bytes)?,
                         &mut found,
                     ) {
@@ -846,9 +850,12 @@ impl<'a> Reading<'a> {
             .materials
             .iter()
             .map(|m| {
-                materials::resolve_definition(m, definitions.get(&materials::stem(&m.mtd)), self.game, |n| {
-                    catalog.entries.contains_key(n)
-                })
+                materials::resolve_definition(
+                    m,
+                    definitions.get(&fromsoft_formats::names::stem(&m.mtd)),
+                    self.game,
+                    |n| catalog.entries.contains_key(n),
+                )
             })
             .collect();
         let wanted_shaders: BTreeSet<String> = resolved
@@ -878,17 +885,20 @@ impl<'a> Reading<'a> {
             .layered_programs(resolved.iter().filter_map(|m| m.layered.as_ref()))?;
         report.missing_shader_bundles = wanted_shaders
             .iter()
-            .map(|s| crate::names::fold(s))
+            .map(|s| fromsoft_formats::names::fold(s))
             .filter(|s| self.bundles.missing.contains(s))
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
-        let wanted_keys: BTreeSet<_> = wanted_shaders.iter().map(|s| crate::names::fold(s)).collect();
+        let wanted_keys: BTreeSet<_> = wanted_shaders
+            .iter()
+            .map(|s| fromsoft_formats::names::fold(s))
+            .collect();
         report.unread_metaparams = self
             .bundles
             .unread_metaparams
             .iter()
-            .filter(|s| wanted_keys.contains(&crate::names::fold(s)))
+            .filter(|s| wanted_keys.contains(&fromsoft_formats::names::fold(s)))
             .cloned()
             .collect();
         report.textures = payloads.len();
@@ -993,7 +1003,7 @@ impl<'a> Reading<'a> {
         // remains readable if params are unavailable; event lowering reports that refusal.
         use crate::components::material_events::MaterialExRows;
         let material_rows = if self.game == Game::EldenRing {
-            super::params::read_param(
+            fromsoft_formats::game_params::read_param(
                 &self.install,
                 &self.archive,
                 self.decoder,
@@ -1017,25 +1027,9 @@ impl<'a> Reading<'a> {
     }
 }
 
-/// Read character `id` (`c1010`) of the install at `install` into `destination`, which must be empty (see the module
-/// documentation).
-pub fn read_character(
-    install: impl AsRef<Path>,
-    id: &str,
-    decoder: &Decoder<'_>,
-    destination: &mut World,
-) -> Result<CharacterReport> {
-    read_character_with(
-        &Install::sekiro(install.as_ref()),
-        id,
-        decoder,
-        CharacterOptions::default(),
-        destination,
-    )
-}
-
-/// [`read_character`] for any install (the game is the install's: [`crate::Game`] states what differs) with what else to
-/// read ([`CharacterOptions`]).
+/// Read character `id` (`c1010`) of `install` into `destination`, which must be empty (see the module
+/// documentation), with what else to read ([`CharacterOptions`]). The game is the install's
+/// ([`fromsoft_formats::Game`] states what differs).
 pub fn read_character_with(
     install: &Install,
     id: &str,
@@ -1064,7 +1058,7 @@ pub fn read_character_with(
 }
 
 /// The forms of part `part` (`wp_a_0761_l`, from `parts/<name>.partsbnd` of `archive`) by name, in binder order, as
-/// [`read_parts`] reads them, without reading their models: `wp_a_0761_l` and `wp_a_0761_1_l`. A part not in the
+/// [`read_parts_with`] reads them, without reading their models: `wp_a_0761_l` and `wp_a_0761_1_l`. A part not in the
 /// archives, or whose binder holds no FLVER, is refused, the refusal naming what it holds.
 pub fn part_forms(archive: &Archive, decoder: &Decoder<'_>, part: &str) -> Result<Vec<String>> {
     let item = Item::Part(part_name(part)?);
@@ -1102,43 +1096,27 @@ pub fn part_textures(
     let mut out = Vec::new();
     for f in &binder.files {
         let name = f.name.as_deref().unwrap_or("");
-        if !crate::names::fold(name).ends_with(".tpf") {
+        if !fromsoft_formats::names::fold(name).ends_with(".tpf") {
             continue;
         }
-        let package = crate::tpf::Package::read(&decoder.decode_if_dcx(&f.bytes)?)?;
+        let package = fromsoft_formats::tpf::Package::read(&decoder.decode_if_dcx(&f.bytes)?)?;
         for t in &package.textures {
-            out.push((t.name.clone(), t.image()?));
+            out.push((t.name.clone(), super::textures::tpf_image(t)?));
         }
     }
     Ok(out)
 }
 
-/// Read the parts `parts` (`bd_m_9120_l`, each from `parts/<name>.partsbnd`) of the install at `install` into
-/// `destination`, which must be empty. Each form of a part (each FLVER its binder holds, see the module documentation)
-/// is an asset of its own, read as [`read_character`] reads a character: its own skeleton (its FLVER's bones, as
-/// stored), its own prototype with its bindings (`fromsoft.flver` as stored, the skeleton it binds to) and its
-/// materials; the world's materials, textures and shader programs are shared by the forms that bind them (a texture
-/// two forms both bind must hold the same bytes in both). Nothing joins the parts: the Wolf is the parts worn
-/// together, which a program assembles with a pass (`assemble-character`). A part named twice or not in the archives,
-/// or a form of the name of one already read, is refused. The reports are the forms', in request order and then
-/// binder order.
-pub fn read_parts(
-    install: impl AsRef<Path>,
-    parts: &[&str],
-    decoder: &Decoder<'_>,
-    destination: &mut World,
-) -> Result<Vec<CharacterReport>> {
-    Ok(read_parts_with(
-        &Install::sekiro(install.as_ref()),
-        parts,
-        decoder,
-        &CharacterOptions::default(),
-        destination,
-    )?
-    .0)
-}
-
-/// [`read_parts`] with what else to read ([`CharacterOptions`]): with `animations` the animation binders of that
+/// Read the parts `parts` (`bd_m_9120_l`, each from `parts/<name>.partsbnd`) of `install` into `destination`, which
+/// must be empty. Each form of a part (each FLVER its binder holds, see the module documentation) is an asset of its
+/// own, read as [`read_character_with`] reads a character: its own skeleton (its FLVER's bones, as stored), its own
+/// prototype with its bindings (`fromsoft.flver` as stored, the skeleton it binds to) and its materials; the world's
+/// materials, textures and shader programs are shared by the forms that bind them (a texture two forms both bind must
+/// hold the same bytes in both). Nothing joins the parts: the Wolf is the parts worn together, which a program
+/// assembles with a pass (`assemble-character`). A part named twice or not in the archives, or a form of the name of
+/// one already read, is refused. The reports are the forms', in request order and then binder order.
+///
+/// With what else to read ([`CharacterOptions`]): with `animations` the animation binders of that
 /// character too, as the members (clips) of an asset of their own named `<id> animations`, whose read is the second
 /// value (the player's `c0000` has no model of its own: its animations drive the parts worn together); with
 /// `form_animations` each form's own animation binder, as its asset's clips, whose read is its report's.
@@ -1260,7 +1238,7 @@ fn eager_clip_roots(
     Ok((animations, report))
 }
 
-/// The assets [`read_character`] and [`read_parts`] read as a [`Reader`] for [`primase_core::convert`]: the read world
+/// The assets [`read_character_with`] and [`read_parts_with`] read as a [`Reader`] for [`primase_core::convert`]: the read world
 /// holds model data and optional clip plan entities. Loading takes the roots' closure,
 /// scopes material payloads and decodes reached clip plans as raw Havok/FromSoft data
 /// on their original ids. Choosing lowering and skeleton mapping is the program's work.
@@ -1345,7 +1323,7 @@ impl<'a> CharacterReader<'a> {
         self
     }
 
-    /// The parts `parts` (`bd_m_9120_l`) of the install at `install`, each an asset of its own ([`read_parts`]).
+    /// The parts `parts` (`bd_m_9120_l`) of the install at `install`, each an asset of its own ([`read_parts_with`]).
     pub fn parts(install: Install, parts: &[&str], decoder: Decoder<'a>) -> CharacterReader<'a> {
         CharacterReader {
             install,
@@ -1554,7 +1532,7 @@ mod tests {
             format: 0,
             files: ["walk.hkx", "run.hkx"]
                 .into_iter()
-                .map(|name| crate::BinderFile {
+                .map(|name| fromsoft_formats::BinderFile {
                     id: None,
                     name: Some(name.into()),
                     flags: 0,
@@ -1563,7 +1541,11 @@ mod tests {
                 .collect(),
         };
         let mut reader = CharacterReader::animations(
-            Install::sekiro("not opened"),
+            fromsoft_formats::Install::new(
+                "not opened",
+                fromsoft_formats::Game::Sekiro,
+                fromsoft_formats::Keys::none(),
+            ),
             "c1010",
             Decoder {
                 oodle: None,
@@ -1577,7 +1559,11 @@ mod tests {
     #[test]
     fn clip_scopes_share_one_archive_and_refuse_another_install_identity() {
         let archive = std::sync::Arc::new(Archive::empty(Game::Sekiro));
-        let install = Install::sekiro(std::path::PathBuf::new());
+        let install = fromsoft_formats::Install::new(
+            std::path::PathBuf::new(),
+            fromsoft_formats::Game::Sekiro,
+            fromsoft_formats::Keys::none(),
+        );
         let decoder = Decoder {
             oodle: None,
             max_output: 1024,
@@ -1592,8 +1578,17 @@ mod tests {
         drop(second);
         assert_eq!(std::sync::Arc::strong_count(&archive), 1);
         assert!(
-            CharacterReader::animations_in(Install::sekiro("another install"), "c1010", decoder, archive)
-                .is_err()
+            CharacterReader::animations_in(
+                fromsoft_formats::Install::new(
+                    "another install",
+                    fromsoft_formats::Game::Sekiro,
+                    fromsoft_formats::Keys::none()
+                ),
+                "c1010",
+                decoder,
+                archive
+            )
+            .is_err()
         );
     }
 
@@ -1747,7 +1742,7 @@ mod tests {
             format: 0,
             files: names
                 .iter()
-                .map(|n| crate::BinderFile {
+                .map(|n| fromsoft_formats::BinderFile {
                     id: None,
                     name: Some((*n).to_owned()),
                     flags: 0,

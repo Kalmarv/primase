@@ -3,14 +3,15 @@
 //! name: the area's Havok 2016.2 tagfiles and the compendium they share. The bytes are the game's own;
 //! repos/havok-formats/tests/corpus.rs reads every body and compressed mesh of them.
 //!
-//! `cargo run --release -p primase-fromsoft --example corpus_sekiro_havok -- <Sekiro install> <oo2core_6_win64.dll>
-//! <out> [--area m11_00_00_00]`: the install, the game's own Oodle library (in its folder), and
-//! `<oracles.root>/corpus/sekiro/havok`. The default area is Ashina Castle.
+//! `cargo run --release -p primase-fromsoft --example corpus_sekiro_havok -- <Sekiro install> <keys>
+//! <oo2core_6_win64.dll> <out> [--area m11_00_00_00]`: the install, the folder of its archive keys (`Data1.pem` to
+//! `Data5.pem`, `keys.sekiro`), the game's own Oodle library (in its folder), and `<oracles.root>/corpus/sekiro/havok`.
+//! The default area is Ashina Castle.
 
 use std::path::PathBuf;
 
+use fromsoft_formats::{Archive, Binder, Game, dcx::Decoder};
 use primase_foundations::compress::oodle::{Oodle, Version};
-use primase_fromsoft::{Archive, Binder, Game, dcx::Decoder};
 
 type BoxError = Box<dyn std::error::Error>;
 
@@ -25,16 +26,17 @@ fn main() -> Result<(), BoxError> {
             s => paths.push(PathBuf::from(s)),
         }
     }
-    let [install, dll, out] = paths.as_slice() else {
+    let [install, keys, dll, out] = paths.as_slice() else {
         return Err(
-            "usage: corpus_sekiro_havok <Sekiro install> <oo2core_6_win64.dll> <out> [--area m11_00_00_00]"
+            "usage: corpus_sekiro_havok <Sekiro install> <keys> <oo2core_6_win64.dll> <out> [--area m11_00_00_00]"
                 .into(),
         );
     };
     let suffix = area
         .strip_prefix('m')
         .ok_or_else(|| format!("{area}: an area is named m<..>"))?;
-    let archive = Archive::open(install)?;
+    let game = Game::Sekiro;
+    let archive = Archive::open_game(install, game, &fromsoft_formats::Keys::from_folder(keys, game)?)?;
     // SAFETY: the caller names the game's own Oodle library.
     #[allow(unsafe_code)]
     let oodle = unsafe { Oodle::load(dll, Version::V6)? };

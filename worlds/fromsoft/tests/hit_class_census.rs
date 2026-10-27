@@ -7,15 +7,13 @@
 //! per class: `game map class count name surface`.
 //!
 //! Runs where the install, its keys and the Oodle library are configured; otherwise it does nothing.
-mod inputs;
-
+use fromsoft_formats::{Game, Install, Keys, dcx::Decoder};
 use primase_core::{Entity, World};
 use primase_fromsoft::sekiro::{
     self,
     collision::{class_name, known_surface},
     source::MapCollision,
 };
-use primase_fromsoft::{Game, Install, Keys, dcx::Decoder};
 use std::collections::BTreeMap;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -64,7 +62,7 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>, map: &str) -> Re
 
 #[test]
 fn the_classes_the_maps_use() -> Result<()> {
-    let Some(dll) = inputs::oodle(inputs::Tool::Oodle6) else {
+    let Some(dll) = primase_testdata::oodle(primase_testdata::Tool::Oodle6) else {
         return Ok(());
     };
     let dll = common::oodle(dll)?;
@@ -75,20 +73,19 @@ fn the_classes_the_maps_use() -> Result<()> {
     for (game, data, maps) in [
         (
             Game::Sekiro,
-            inputs::Game::Sekiro,
+            primase_testdata::Game::Sekiro,
             &["m11_01_00_00", "m20_00_00_00", "m25_00_00_00"][..],
         ),
         (
             Game::EldenRing,
-            inputs::Game::Elden,
+            primase_testdata::Game::Elden,
             &["m10_00_00_00", "m12_02_00_00", "m14_00_00_00", "m60_39_54_00"][..],
         ),
     ] {
-        let (Some(root), keys) = (inputs::install(data), inputs::keys(data)) else {
+        let (Some(root), keys) = (primase_testdata::install(data), primase_testdata::keys(data)) else {
             continue;
         };
         let keys = match (game, keys) {
-            (Game::Sekiro, _) => Keys::published(Game::Sekiro).ok_or("Sekiro's keys")?,
             (_, Some(folder)) => Keys::from_folder(folder, game)?,
             (_, None) => continue,
         };

@@ -1,69 +1,21 @@
-//! Read-only FromSoftware (Sekiro, Elden Ring) BHD5/BDT archives, DCX envelopes, BND4 binders and the formats in them.
+//! FromSoftware (Sekiro, Elden Ring) data in primase: the area and character readers that build a World from what
+//! `fromsoft-formats` reads, the components they make and the passes that lower them.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
-pub mod bhd;
-mod bytes;
-pub mod clm2;
-pub mod collision;
-mod elden;
-pub mod emevd;
-pub mod flver;
-pub mod fmg;
+mod components;
 pub mod game;
-pub mod gparam;
-mod keys;
-pub mod matbin;
 pub mod materials;
-pub mod metaparam;
-pub mod msb;
-pub mod mtd;
-mod names;
-pub mod param;
 mod passes;
 mod pose;
-mod read;
 pub mod sekiro;
-pub mod tae;
-pub use archive::{Archive, Install, Keys, NameDictionary};
-pub use binder::{Binder, BinderFile};
-pub use game::Game;
-mod components;
 pub use components::clip_source;
+pub use components::stored;
 pub use passes::{
     clip_events, detail_derive, detail_probe, display_masks, entity_names, geometry, layer_bake,
     material_events, preview, probe_accept, rigid,
 };
-pub use read::{archive, binder, dcx};
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("{format} at {offset:#x}: {detail}")]
-    Invalid {
-        format: &'static str,
-        offset: usize,
-        detail: String,
-    },
-    #[error("{0}")]
-    Havok(#[from] havok_formats::Error),
-    #[error("I/O: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("compression: {0}")]
-    Compression(#[from] primase_foundations::compress::Error),
-    #[error("entry hash {0:08x} not found")]
-    Missing(u64),
-}
-pub type Result<T> = std::result::Result<T, Error>;
-pub(crate) fn invalid(format: &'static str, offset: usize, detail: impl ToString) -> Error {
-    Error::Invalid {
-        format,
-        offset,
-        detail: detail.to_string(),
-    }
-}
-pub mod btl;
-pub mod edge;
-pub mod tpf;
 
-/// The real-data inputs this crate's unit tests read (tests/inputs/mod.rs).
-#[cfg(test)]
-#[path = "../tests/inputs/mod.rs"]
-mod inputs;
+/// A refusal of this crate's own (a record that does not fit what a pass needs), as the format readers make theirs.
+pub(crate) fn invalid(format: &'static str, offset: usize, detail: impl ToString) -> fromsoft_formats::Error {
+    fromsoft_formats::Error::invalid(format, offset, detail)
+}

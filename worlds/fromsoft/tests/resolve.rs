@@ -2,8 +2,7 @@
 //! Sekiro's binding rules (`resolve`) and the `resolve-fromsoft-shaders` pass, on one layered program built to
 //! Sekiro's naming (tests/fixtures/layered.hlsl, compiled with fxc): the constants, texture slots and outputs a
 //! layered material's binding holds, worked out from the HLSL, fxc's listing of its buffers and the material.
-mod inputs;
-
+use fromsoft_formats::mtd::{self, MaterialDefinition, Parameter, Value};
 use iridia_exec::PixelShader;
 use iridia_exec::ProgramShader;
 use iridia_interface::{
@@ -17,15 +16,14 @@ use primase_core::{
     World,
 };
 use primase_core::{shader::Shader, shader::ShaderBinding, shader::TextureSource};
-use primase_foundations::sampling::Address;
 use primase_fromsoft::layer_bake::resolve::{
     SECOND_COLOUR, UNBOUND_MATERIAL_FIELDS, Unbound, render_state, resolve,
 };
 use primase_fromsoft::materials::{Binding, LayeredMaterial, Material};
-use primase_fromsoft::mtd::{self, MaterialDefinition, Parameter, Value};
 use primase_fromsoft::sekiro::source::{
     MaterialShader, ShaderBundle, ShaderProgram, ShaderPrograms, ShaderStage, TexturePayloads,
 };
+use primase_foundations::sampling::Address;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 mod common;
@@ -177,7 +175,7 @@ fn a_program_with_a_sat_array_keeps_its_named_parameters() {
             &shader,
             program,
             &material().view(),
-            primase_fromsoft::Game::Sekiro,
+            fromsoft_formats::Game::Sekiro,
             None,
             Unbound::Preview,
             &mut |_, _| Ok(None),
@@ -211,7 +209,7 @@ fn snp_bound(
         &shader,
         World::default().spawn(),
         &m.view(),
-        primase_fromsoft::Game::Sekiro,
+        fromsoft_formats::Game::Sekiro,
         None,
         Unbound::Preview,
         &mut |_, _| Ok(None),
@@ -266,7 +264,7 @@ fn a_layered_program_is_bound_by_sekiros_rules() {
         &shader,
         program,
         &material().view(),
-        primase_fromsoft::Game::Sekiro,
+        fromsoft_formats::Game::Sekiro,
         None,
         Unbound::Preview,
         &mut |stem, srgb| {
@@ -449,7 +447,7 @@ fn leaving_unbound_slots_invents_nothing() {
         &shader,
         program,
         &material().view(),
-        primase_fromsoft::Game::Sekiro,
+        fromsoft_formats::Game::Sekiro,
         None,
         Unbound::Leave,
         &mut |_, _| Ok(None),
@@ -533,7 +531,7 @@ fn the_pass_binds_every_layered_material_to_shared_shader_and_texture_entities()
     world.insert(
         bundle,
         ShaderBundle {
-            game: primase_fromsoft::Game::Sekiro,
+            game: fromsoft_formats::Game::Sekiro,
             name: "M[Multiple]".into(),
             programs: vec![ShaderProgram {
                 name: "M[Multiple]_Gbuf.vpo".into(),
@@ -694,14 +692,14 @@ fn the_bake_binds_a_frozen_frame_to_the_roles() {
         &shader,
         program,
         &layered.view(),
-        primase_fromsoft::Game::Sekiro,
+        fromsoft_formats::Game::Sekiro,
         None,
         Unbound::Preview,
         &mut |stem, _| Ok((stem == "grass_a").then_some(grass)),
     )
     .unwrap()
     .stage;
-    let view = || -> primase_fromsoft::Result<_> {
+    let view = || -> fromsoft_formats::Result<_> {
         Ok(std::sync::Arc::new(wrapped_texture(2, 2, &[200; 16], true)?))
     };
     let prepared = Prepared::from_binding(
@@ -1359,7 +1357,7 @@ fn the_pass_chooses_the_vertex_permutation_by_the_primitives_streams() {
         world.insert(
             bundle,
             ShaderBundle {
-                game: primase_fromsoft::Game::Sekiro,
+                game: fromsoft_formats::Game::Sekiro,
                 name: "M[Multiple]".into(),
                 programs,
                 parameters: None,
@@ -1461,7 +1459,7 @@ fn the_material_buffers_engine_named_fields_come_from_the_definition() {
             &shader,
             program,
             &layered.view(),
-            primase_fromsoft::Game::Sekiro,
+            fromsoft_formats::Game::Sekiro,
             None,
             Unbound::Preview,
             &mut |_, _| Ok(None),
@@ -1569,7 +1567,7 @@ fn an_alpha_tested_programs_discard_makes_fc_alpha_refs_x_its_reference() {
             shader,
             program,
             &material.view(),
-            primase_fromsoft::Game::Sekiro,
+            fromsoft_formats::Game::Sekiro,
             None,
             Unbound::Preview,
             &mut |_, _| Ok(None),
@@ -1636,7 +1634,7 @@ fn both_bakes_freeze_the_alpha_test_off_by_the_binding() {
             &shader,
             program,
             &material.view(),
-            primase_fromsoft::Game::Sekiro,
+            fromsoft_formats::Game::Sekiro,
             None,
             Unbound::Preview,
             &mut |_, _| Ok(None),
@@ -1679,7 +1677,7 @@ fn both_bakes_freeze_the_alpha_test_off_by_the_binding() {
         &shader,
         program,
         &plain.view(),
-        primase_fromsoft::Game::Sekiro,
+        fromsoft_formats::Game::Sekiro,
         None,
         Unbound::Preview,
         &mut |_, _| Ok(None),
@@ -1710,7 +1708,7 @@ fn both_bakes_freeze_the_alpha_test_off_by_the_binding() {
 /// albedo `Texture2D_7` at slot 1 and a detail fabric `Texture2D_2`, tiled 51 by 17, at slot 7).
 #[test]
 fn a_textures_tiling_is_the_uv_group_of_its_own_texture_number() {
-    use primase_fromsoft::metaparam::{Metaparam, Texture as MetaTexture};
+    use fromsoft_formats::metaparam::{Metaparam, Texture as MetaTexture};
     let shader = executor(PROGRAM);
     let record = |name: &str, slot: u8, uv_group: &str| MetaTexture {
         name: name.into(),
@@ -1754,7 +1752,7 @@ fn a_textures_tiling_is_the_uv_group_of_its_own_texture_number() {
         &shader,
         World::default().spawn(),
         &m.view(),
-        primase_fromsoft::Game::Sekiro,
+        fromsoft_formats::Game::Sekiro,
         Some(&metaparam),
         Unbound::Preview,
         &mut |_, _| Ok(None),
@@ -1781,7 +1779,7 @@ fn a_textures_tiling_is_the_uv_group_of_its_own_texture_number() {
 /// `Texture2D_2`, whose uv group is 51 by 17: captured `18, 6, -8.5, -2.5` and `51, 17, -25, -8`). Both games' rule.
 #[test]
 fn a_textures_tiling_is_the_flvers_then_the_stored_then_the_uv_groups() {
-    use primase_fromsoft::metaparam::{Metaparam, Texture as MetaTexture};
+    use fromsoft_formats::metaparam::{Metaparam, Texture as MetaTexture};
     let shader = executor(PROGRAM);
     let record = |name: &str, slot: u8, uv_group: &str| MetaTexture {
         name: name.into(),
@@ -1842,11 +1840,11 @@ fn a_textures_tiling_is_the_flvers_then_the_stored_then_the_uv_groups() {
         (32, bits(&[51., 17., -25., -8.])),
         (128, bits(&[18., 6., -8.5, -2.5])),
     ];
-    assert_eq!(rows([1.; 2], primase_fromsoft::Game::Sekiro), scarf);
-    assert_eq!(rows([1.; 2], primase_fromsoft::Game::EldenRing), scarf);
+    assert_eq!(rows([1.; 2], fromsoft_formats::Game::Sekiro), scarf);
+    assert_eq!(rows([1.; 2], fromsoft_formats::Game::EldenRing), scarf);
     // a FLVER scale other than 1 comes first
     assert_eq!(
-        rows([2., 3.], primase_fromsoft::Game::Sekiro)[1],
+        rows([2., 3.], fromsoft_formats::Game::Sekiro)[1],
         (128, bits(&[2., 3., -0.5, -1.]))
     );
 }
@@ -1855,7 +1853,7 @@ fn a_textures_tiling_is_the_flvers_then_the_stored_then_the_uv_groups() {
 /// metaparam does not declare is still Unknown.
 #[test]
 fn a_missing_sat_parameter_takes_the_bundles_metaparam_default() {
-    use primase_fromsoft::metaparam::{CaParam, Metaparam, MtdParam};
+    use fromsoft_formats::metaparam::{CaParam, Metaparam, MtdParam};
     let shader = executor(PROGRAM);
     let program = World::default().spawn();
     let metaparam = Metaparam {
@@ -1887,7 +1885,7 @@ fn a_missing_sat_parameter_takes_the_bundles_metaparam_default() {
         &shader,
         program,
         &material().view(),
-        primase_fromsoft::Game::Sekiro,
+        fromsoft_formats::Game::Sekiro,
         Some(&metaparam),
         Unbound::Preview,
         &mut |_, _| Ok(None),
@@ -1922,7 +1920,7 @@ fn a_missing_sat_parameter_takes_the_bundles_metaparam_default() {
         &shader,
         program,
         &material().view(),
-        primase_fromsoft::Game::Sekiro,
+        fromsoft_formats::Game::Sekiro,
         Some(&by_ca),
         Unbound::Preview,
         &mut |_, _| Ok(None),
@@ -1945,7 +1943,7 @@ fn a_missing_sat_parameter_takes_the_bundles_metaparam_default() {
 /// it takes the metaparam default's, else 1, counted under the path that writes it.
 #[test]
 fn a_colour_stated_without_its_intensity_takes_the_defaults_counted() {
-    use primase_fromsoft::metaparam::{Metaparam, MtdParam};
+    use fromsoft_formats::metaparam::{Metaparam, MtdParam};
     let shader = executor(PROGRAM);
     let program = World::default().spawn();
     let mut layered = material();
@@ -1994,7 +1992,7 @@ fn a_colour_stated_without_its_intensity_takes_the_defaults_counted() {
             &shader,
             program,
             &layered.view(),
-            primase_fromsoft::Game::Sekiro,
+            fromsoft_formats::Game::Sekiro,
             metaparam,
             Unbound::Preview,
             &mut |_, _| Ok(None),
@@ -2020,7 +2018,7 @@ fn a_colour_stated_without_its_intensity_takes_the_defaults_counted() {
         &shader,
         program,
         &material().view(),
-        primase_fromsoft::Game::Sekiro,
+        fromsoft_formats::Game::Sekiro,
         Some(&metaparam),
         Unbound::Preview,
         &mut |_, _| Ok(None),
@@ -2045,7 +2043,7 @@ fn a_colour_stated_without_its_intensity_takes_the_defaults_counted() {
             &shader,
             program,
             &layered.view(),
-            primase_fromsoft::Game::Sekiro,
+            fromsoft_formats::Game::Sekiro,
             Some(&srgb),
             Unbound::Preview,
             &mut |_, _| Ok(None),
@@ -2106,7 +2104,7 @@ fn the_pass_binds_the_other_sat_materials_through_their_bundle() {
         dds(4, 4),
     )])));
     let bundle = |name: &str, program: &str| ShaderBundle {
-        game: primase_fromsoft::Game::Sekiro,
+        game: fromsoft_formats::Game::Sekiro,
         name: name.into(),
         programs: vec![ShaderProgram {
             name: program.into(),
@@ -2195,7 +2193,7 @@ fn a_fixed_function_materials_textures_are_bound_by_their_kind_names() {
         &shader,
         program,
         &layered.view(),
-        primase_fromsoft::Game::Sekiro,
+        fromsoft_formats::Game::Sekiro,
         None,
         Unbound::Preview,
         &mut |stem, srgb| {
@@ -2331,7 +2329,7 @@ fn the_dither_and_camera_fade_fields_are_object_roles() {
         &shader,
         program,
         &material().view(),
-        primase_fromsoft::Game::Sekiro,
+        fromsoft_formats::Game::Sekiro,
         None,
         Unbound::Preview,
         &mut |_, _| Ok(None),
@@ -2375,7 +2373,7 @@ fn the_scene_depth_is_a_frame_texture() {
         &shader,
         program,
         &material().view(),
-        primase_fromsoft::Game::Sekiro,
+        fromsoft_formats::Game::Sekiro,
         None,
         Unbound::Preview,
         &mut |_, _| Ok(None),

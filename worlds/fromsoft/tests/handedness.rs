@@ -21,27 +21,20 @@
 //! tangents of both handedness signs.
 #![allow(clippy::unwrap_used)]
 
-mod inputs;
-
 use std::collections::BTreeMap;
 
-use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
-use primase_fromsoft::flver::Model;
-use primase_fromsoft::{Archive, Binder, dcx::Decoder};
+use fromsoft_formats::flver::Model;
+use fromsoft_formats::{Archive, Binder, dcx::Decoder};
+use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 use serde_json::Value as Json;
 
 #[allow(unsafe_code)]
 mod native {
     pub fn load(
-        path: crate::inputs::OodleLibrary,
+        path: primase_testdata::OodleLibrary,
     ) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
         // SAFETY: caller explicitly supplies a trusted version-6 native library.
-        unsafe {
-            primase_foundations::compress::oodle::Oodle::open(
-                path.path(),
-                primase_foundations::compress::oodle::Version::V6,
-            )
-        }
+        unsafe { primase_foundations::compress::oodle::Oodle::open(path.path(), primase_foundations::compress::oodle::Version::V6) }
     }
 }
 
@@ -110,7 +103,15 @@ fn mirror_is_undone_in_the_geometry() {
         oodle: Some(&dll),
         max_output: 512 * 1024 * 1024,
     };
-    let archive = Archive::open(root).unwrap();
+    let Some(sekiro_keys) = primase_testdata::keys(primase_testdata::Game::Sekiro) else {
+        return;
+    };
+    let archive = Archive::open_game(
+        root,
+        fromsoft_formats::Game::Sekiro,
+        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro).unwrap(),
+    )
+    .unwrap();
     let text = std::fs::read_to_string(frames.join("frames.jsonl")).unwrap();
     let (mut models, mut triangles, mut culled, mut corners_checked) = (0, 0, 0, 0);
     let (mut zero_area, mut signs) = (0, [false; 2]);
@@ -145,7 +146,8 @@ fn mirror_is_undone_in_the_geometry() {
             let Some(face_set) = m.faces.iter().position(|f| f.is_lod0()) else {
                 continue;
             };
-            let Some(mut part) = lowered.decode(source_mesh, face_set).unwrap() else {
+            let Some(mut part) = primase_fromsoft::geometry::decode(&lowered, source_mesh, face_set).unwrap()
+            else {
                 continue;
             };
             part.repair_winding().unwrap();

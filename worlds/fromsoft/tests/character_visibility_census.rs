@@ -1,15 +1,13 @@
 //! Source visibility coverage for every dictionary-named character in both games. No HKX tracks,
 //! meshes, textures or shaders are decoded. A zero counts events, not a claim about bone-scale animation.
-mod inputs;
-
-use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
-use primase_core::convert::Reader;
-use primase_fromsoft::{
+use fromsoft_formats::{
     Binder, Game, Install, Keys, NameDictionary,
     dcx::Decoder,
-    sekiro,
     tae::{Tae, clip_animation_id},
 };
+use primase_core::convert::Reader;
+use primase_fromsoft::sekiro;
+use primase_testdata::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use serde_json::json;
 use std::collections::BTreeSet;
 mod common;
@@ -30,15 +28,10 @@ fn every_sekiro_and_elden_character_reports_its_clip_visibility_event_coverage()
         else {
             continue;
         };
-        let key = match game {
-            Game::Sekiro => Keys::published(game).ok_or("published keys absent")?,
-            Game::EldenRing => {
-                let Some(folder) = keys(data) else {
-                    continue;
-                };
-                Keys::from_folder(folder, game)?
-            }
+        let Some(folder) = keys(data) else {
+            continue;
         };
+        let key = Keys::from_folder(folder, game)?;
         let install = Install::new(root, game, key);
         let archive = std::sync::Arc::new(install.open()?);
         let dictionary = NameDictionary::read_for(names, game)?;

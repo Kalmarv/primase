@@ -6,9 +6,9 @@
 //! from lower slots, so neither the lowest nor the eighth slot is the one to draw with.
 use crate::layer_bake::resolve::{ENGINE_DITHER_NEUTRAL, ENGINE_DITHER_TEXTURE};
 use crate::materials::{Definition, Material, engine_alpha_reference};
-use crate::metaparam::texture_number;
 use crate::passes::program_reads::{self, Reads, SlotRead};
 use crate::sekiro::source::{MaterialShader, ShaderBundle, ShaderStage};
+use fromsoft_formats::metaparam::texture_number;
 use iridia::output_uses::{AlphaExpr, AlphaTest, Known, alpha_tests};
 use iridia_interface::{ResourceId, ResourceKind};
 use primase_core::{Entity, World};
@@ -296,7 +296,7 @@ fn programs(bundle: &ShaderBundle, name: String) -> Result<Programs, Unread> {
                 SlotFacts {
                     number: texture_number(&t.name),
                     default_stem: (!t.default_texture.is_empty())
-                        .then(|| crate::materials::stem(&t.default_texture)),
+                        .then(|| fromsoft_formats::names::stem(&t.default_texture)),
                 },
             )
         })

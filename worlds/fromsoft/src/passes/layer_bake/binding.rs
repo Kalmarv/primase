@@ -2,7 +2,8 @@ use super::resolve::{self, Unbound, resolve, textures_of};
 use super::sampler::addressing;
 use super::state::{AlphaState, PipelineState, PixelState, SlotTexture, TARGETS, VertexState};
 use super::vertex::VertexStage;
-use crate::{Result, invalid, materials::LayeredMaterial};
+use crate::{invalid, materials::LayeredMaterial};
+use fromsoft_formats::Result;
 use iridia::Interface;
 use iridia_exec::ProgramShader;
 use iridia_exec::SampledTexture;
@@ -13,8 +14,8 @@ use iridia_interface::{
     AddressMode, ConstantRole, FrameParameter, MatrixLines, ObjectParameter, ViewParameter,
 };
 use primase_core::Entity;
-use primase_core::{shader::StageBinding, shader::TextureSource};
 use primase_foundations::parallel::Threads;
+use primase_core::{shader::StageBinding, shader::TextureSource};
 use primase_foundations::sampling::Address;
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -115,10 +116,10 @@ pub(crate) struct OutputRgb {
     pub bits: [u32; 3],
     pub mask: u8,
 }
-fn lifting(e: iridia_dxbc::Error) -> crate::Error {
+fn lifting(e: iridia_dxbc::Error) -> fromsoft_formats::Error {
     invalid("layer lift", e.at * 4, e.detail)
 }
-fn evaluation(e: iridia_exec::Error) -> crate::Error {
+fn evaluation(e: iridia_exec::Error) -> fromsoft_formats::Error {
     invalid("layer bake", e.at, e.detail)
 }
 /// A DXBC pixel program's container lifted and ready to run.
@@ -126,7 +127,7 @@ pub(crate) fn executor(bytecode: &[u8]) -> Result<ProgramShader> {
     ProgramShader::new(iridia_dxbc::lift(bytecode).map_err(lifting)?).map_err(evaluation)
 }
 
-/// A program's container of `format` (a game's: [`crate::Game::shader_format`]) lifted and ready to run: DXBC
+/// A program's container of `format` (a game's: [`fromsoft_formats::Game::shader_format`]) lifted and ready to run: DXBC
 /// ([`executor`]) or DXIL.
 pub(crate) fn program_executor(
     format: iridia_interface::ShaderFormat,
@@ -498,7 +499,7 @@ impl Prepared {
             &shader,
             program,
             &material.view(),
-            crate::Game::Sekiro,
+            fromsoft_formats::Game::Sekiro,
             None,
             Unbound::Preview,
             &mut |stem, srgb| {
@@ -1033,8 +1034,7 @@ fn channels(
         }
         for &c in &color[..3] {
             albedo.push(
-                (primase_foundations::color::linear_to_srgb((c as f64).clamp(0., 1.)) * 255.)
-                    .round_ties_even() as u8,
+                (primase_foundations::color::linear_to_srgb((c as f64).clamp(0., 1.)) * 255.).round_ties_even() as u8,
             );
         }
         albedo.push(if let Some(AlphaState { image, scale }) = &state.alpha {
@@ -1191,7 +1191,7 @@ mod tests {
         interface.resources = vec![texture(0, "material_Texture2D_8")];
         let material = LayeredMaterial {
             mtd: "period fixture".into(),
-            definition: crate::mtd::MaterialDefinition {
+            definition: fromsoft_formats::mtd::MaterialDefinition {
                 shader: String::new(),
                 description: String::new(),
                 parameters: vec![],
@@ -1495,8 +1495,7 @@ mod tests {
         for (pixel, (colour, _)) in raw.pixels[2].iter().enumerate() {
             for (c, &bits) in colour[..3].iter().enumerate() {
                 let linear = f64::from(f32::from_bits(bits)).clamp(0., 1.);
-                let byte =
-                    (primase_foundations::color::linear_to_srgb(linear) * 255.).round_ties_even() as u8;
+                let byte = (primase_foundations::color::linear_to_srgb(linear) * 255.).round_ties_even() as u8;
                 assert_eq!(bake.albedo[pixel * 4 + c], byte, "pixel {pixel} lane {c}");
             }
         }

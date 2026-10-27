@@ -6,12 +6,11 @@
 //! matrices against our f64 evaluation. The census is complete in both directions: the models the
 //! dump lists (and the ones it could not dump, with why) are exactly the models its MSB parts place, which are exactly
 //! the models our MSB reader's parts place.
-mod inputs;
-
-use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
+use fromsoft_formats::msb::{MapLayout, PartKind};
+use fromsoft_formats::{Archive, Binder, dcx::Decoder, flver::Model};
 use primase_core::pass::PassLog;
-use primase_fromsoft::msb::{MapLayout, PartKind};
-use primase_fromsoft::{Archive, Binder, dcx::Decoder, flver::Model, rigid::lower_model};
+use primase_fromsoft::rigid::lower_model;
+use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 use std::collections::BTreeSet;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[test]
@@ -27,17 +26,20 @@ fn full_castle_rigid_vertices() -> Result<()> {
         return Ok(());
     };
     // SAFETY: explicitly supplied trusted native decoder.
-    let dll = unsafe {
-        primase_foundations::compress::oodle::Oodle::open(
-            dll.path(),
-            primase_foundations::compress::oodle::Version::V6,
-        )
-    }?;
+    let dll =
+        unsafe { primase_foundations::compress::oodle::Oodle::open(dll.path(), primase_foundations::compress::oodle::Version::V6) }?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1024 * 1024 * 1024,
     };
-    let archive = Archive::open(root)?;
+    let Some(sekiro_keys) = primase_testdata::keys(primase_testdata::Game::Sekiro) else {
+        return Ok(());
+    };
+    let archive = Archive::open_game(
+        root,
+        fromsoft_formats::Game::Sekiro,
+        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro)?,
+    )?;
     let jsonl = |name: &str| -> Result<Vec<serde_json::Value>> {
         std::fs::read_to_string(oracle.join(name))?
             .lines()

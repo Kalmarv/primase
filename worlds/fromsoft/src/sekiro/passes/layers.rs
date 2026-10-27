@@ -2,7 +2,8 @@
 //! part keeps its raw per-vertex shader inputs (`fromsoft.layer_inputs`); grouping and baking are the bake pass's.
 use crate::layer_bake::grouping::{self, Features};
 use crate::sekiro::source::{LayerInputs, Payloads, PrototypeSource, TexturePayloads};
-use crate::{Result, invalid, materials::Material};
+use crate::{invalid, materials::Material};
+use fromsoft_formats::Result;
 use iridia_exec::PixelShader;
 use iridia_exec::ProgramShader;
 use iridia_interface::Stage;

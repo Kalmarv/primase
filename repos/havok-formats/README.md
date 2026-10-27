@@ -49,7 +49,7 @@ within a bound derived from the two decoders' different dequantization arithmeti
 `hclSimClothData` (particles, fixed particles, rest poses, and the link, bend-link, compressible-link and local-range
 constraint sets; any other constraint set is kept by its class name), `hknpRagdollData` (its skeleton, bone-to-body map and
 body tags) and `hknpConstraintCinfo` (bodies, flags, ids and the class of its constraint data; atoms are not read). A field the
-file lacks is an error naming it. The field names are those `worlds/fromsoft/tests/havok_census.rs` printed (`CLASS`); its
+file lacks is an error naming it. The field names are those `repos/fromsoft-formats/tests/havok_census.rs` printed (`CLASS`); its
 `PHYSICS` lines are the reader's check against the install.
 
 The `tests-a0b6470ed/havok_census.log` failures split into cloth `null pointer` and ragdoll

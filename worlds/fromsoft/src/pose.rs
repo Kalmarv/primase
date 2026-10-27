@@ -1,29 +1,20 @@
 //! Pure pose arithmetic shared by the reader and the passes, with no I/O: they both use it and never each other.
 //! The source frame, placements' points, a FLVER skeleton's bone matrices (static posing) and Havok body poses.
-use crate::flver::{Bone, Model};
+use fromsoft_formats::affine::{Matrix, affine_point, affine_vector, compose};
+use fromsoft_formats::flver::{Bone, Model};
 use primase_core::Transform;
 use primase_core::frame::{Axis, SourceFrame};
 
 /// FromSoft's source frame: x, y and z negated, in metres.
 pub(crate) const FRAME: SourceFrame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::NegZ], 1.);
 
-pub(crate) type Matrix = [[f64; 3]; 4];
+/// A place a file states in its own frame (columns, as [`fromsoft_formats::msb::euler_matrix`] gives them) in the
+/// world frame: the frame's handedness conversion.
+pub(crate) fn placed(cols: [[f32; 3]; 4]) -> Transform {
+    FRAME.transform(&Transform { cols })
+}
+
 pub(crate) const ID: Matrix = [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [0.; 3]];
-pub(crate) fn affine_vector(m: &Matrix, p: [f64; 3]) -> [f64; 3] {
-    std::array::from_fn(|a| (0..3).map(|i| m[i][a] * p[i]).sum())
-}
-pub(crate) fn affine_point(m: &Matrix, p: [f64; 3]) -> [f64; 3] {
-    let v = affine_vector(m, p);
-    std::array::from_fn(|i| v[i] + m[3][i])
-}
-pub(crate) fn compose(parent: &Matrix, local: &Matrix) -> Matrix {
-    [
-        affine_vector(parent, local[0]),
-        affine_vector(parent, local[1]),
-        affine_vector(parent, local[2]),
-        affine_point(parent, local[3]),
-    ]
-}
 fn local(b: &Bone) -> Matrix {
     let [x, y, z] = b.rotation.map(f64::from);
     let (sx, cx) = x.sin_cos();
@@ -266,7 +257,7 @@ pub(crate) enum StaticBones {
 
 impl StaticBones {
     /// The bone vertex `v` follows (by NORMAL.w it may name none; an unbound mesh's vertices follow none).
-    pub(crate) fn of(self, v: &crate::flver::Vertex) -> Option<usize> {
+    pub(crate) fn of(self, v: &fromsoft_formats::flver::Vertex) -> Option<usize> {
         match self {
             StaticBones::PerVertex => usize::try_from(v.normal_w).ok(),
             StaticBones::Node(bone) => Some(bone),
@@ -337,35 +328,6 @@ pub fn posed_bounds(source: &Model) -> Result<Option<[[f32; 3]; 2]>, String> {
     Ok(min[0].is_finite().then_some([min, max]))
 }
 
-/// A body pose as the columns of its affine map (rotation by the unit quaternion `q`, then translation by `p`).
-pub fn pose_columns(p: [f32; 3], q: [f32; 4]) -> [[f32; 3]; 4] {
-    let [x, y, z, w] = q;
-    let xx = x * x;
-    let yy = y * y;
-    let zz = z * z;
-    let xy = x * y;
-    let xz = x * z;
-    let yz = y * z;
-    let xw = x * w;
-    let yw = y * w;
-    let zw = z * w;
-    [
-        [1. - 2. * (yy + zz), 2. * (xy + zw), 2. * (xz - yw)],
-        [2. * (xy - zw), 1. - 2. * (zz + xx), 2. * (yz + xw)],
-        [2. * (xz + yw), 2. * (yz - xw), 1. - 2. * (yy + xx)],
-        p,
-    ]
-}
-
-/// `v` through the affine map with columns `c`.
-pub fn posed(c: &[[f32; 3]; 4], v: [f32; 3]) -> [f32; 3] {
-    std::array::from_fn(|i| v[0] * c[0][i] + v[1] * c[1][i] + v[2] * c[2][i] + c[3][i])
-}
-
-pub(crate) fn pose(v: [f32; 3], p: [f32; 4], q: [f32; 4]) -> [f32; 3] {
-    posed(&pose_columns([p[0], p[1], p[2]], q), v)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -416,8 +378,8 @@ mod tests {
         }
     }
 
-    fn dummy(position: [f32; 3], parent_bone: i16, attach_bone: i16) -> crate::flver::Dummy {
-        crate::flver::Dummy {
+    fn dummy(position: [f32; 3], parent_bone: i16, attach_bone: i16) -> fromsoft_formats::flver::Dummy {
+        fromsoft_formats::flver::Dummy {
             position,
             forward: [0.0, 0.0, 1.0],
             upward: [0.0, 1.0, 0.0],

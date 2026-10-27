@@ -1,9 +1,9 @@
-use primase_foundations::compress::{Compressor, Zlib};
-use primase_fromsoft::{
+use fromsoft_formats::{
     Binder, NameDictionary,
     bhd::{AesKey, Entry, Header, Range, RecordLayout, unwrap_rsa},
     dcx::Decoder,
 };
+use primase_foundations::compress::{Compressor, Zlib};
 fn u32le(b: &mut [u8], p: usize, x: u32) {
     b[p..p + 4].copy_from_slice(&x.to_le_bytes());
 }
@@ -236,7 +236,7 @@ fn dictionary_normalizes_and_deduplicates() {
     let d = NameDictionary::parse("# comment\nA\\B\n/a/b\n").expect("synthetic fixture");
     assert_eq!(d.names.len(), 1);
     assert_eq!(
-        d.names[&u64::from(primase_fromsoft::archive::path_hash("/a/b"))],
+        d.names[&u64::from(fromsoft_formats::archive::path_hash("/a/b"))],
         vec!["/a/b"]
     );
     assert!(NameDictionary::parse("é").is_err());
@@ -285,7 +285,7 @@ fn binder_hash_table_and_nested_dcx() {
     u32le(&mut b, 104, 1);
     b[108..112].copy_from_slice(&[16, 8, 8, 0]);
     u32le(&mut b, 112, 1);
-    u32le(&mut b, 120, primase_fromsoft::archive::path_hash("a"));
+    u32le(&mut b, 120, fromsoft_formats::archive::path_hash("a"));
     assert_eq!(Binder::read(&b, &decoder()).expect("hash table").files.len(), 1);
     for p in [56, 96, 104, 108, 112, 116, 124] {
         let mut bad = b.clone();
@@ -361,7 +361,7 @@ fn tpf() -> Vec<u8> {
 }
 #[test]
 fn tpf_pc_records_and_strict_bounds() {
-    use primase_fromsoft::tpf::{Package, TextureKind};
+    use fromsoft_formats::tpf::{Package, TextureKind};
     let b = tpf();
     let p = Package::read(&b).expect("package");
     assert_eq!(p.textures[0].name, "a");
@@ -384,7 +384,7 @@ fn tpf_pc_records_and_strict_bounds() {
 }
 #[test]
 fn tpf_retains_extra_metadata_words() {
-    use primase_fromsoft::tpf::Package;
+    use fromsoft_formats::tpf::Package;
     let mut b = tpf();
     b.splice(36..36, [0; 12]);
     u32le(&mut b, 16, 52);
@@ -400,7 +400,7 @@ fn tpf_retains_extra_metadata_words() {
 }
 #[test]
 fn tpf_zero_alignment_has_two_data_size_conventions() {
-    use primase_fromsoft::tpf::Package;
+    use fromsoft_formats::tpf::Package;
     let mut b = tpf();
     b.splice(40..40, [0; 272]);
     u32le(&mut b, 16, 312);
@@ -412,8 +412,8 @@ fn tpf_zero_alignment_has_two_data_size_conventions() {
 }
 #[test]
 fn tpf_import_uses_shared_dds_metadata() {
+    use fromsoft_formats::tpf::{Texture, TextureKind};
     use primase_core::{ColorSpace, TexFormat, TexRole, Texture as Image};
-    use primase_fromsoft::tpf::{Texture, TextureKind};
     let image = Image {
         width: 4,
         height: 4,
@@ -432,15 +432,18 @@ fn tpf_import_uses_shared_dds_metadata() {
         extra: None,
         dds: primase_dds::write_dx10(&image).expect("DDS"),
     };
-    assert_eq!(record.image().expect("image"), image);
+    assert_eq!(
+        primase_fromsoft::sekiro::tpf_image(&record).expect("image"),
+        image
+    );
     record.kind = TextureKind::Cube;
-    assert!(record.image().is_err());
+    assert!(primase_fromsoft::sekiro::tpf_image(&record).is_err());
 }
 
 /// The archive path hash: a known Sekiro path, with backslashes and capitals and as the dictionary writes it.
 #[test]
 fn path_hash_reference_values() {
-    use primase_fromsoft::archive::path_hash;
+    use fromsoft_formats::archive::path_hash;
     assert_eq!(path_hash(r"map\MapStudio\m11_01_00_00.msb"), 0xfbbb5962);
     assert_eq!(path_hash("/map/mapstudio/m11_01_00_00.msb"), 0xfbbb5962);
 }
@@ -449,7 +452,7 @@ fn path_hash_reference_values() {
 /// index (SoulsFormatsNEXT's census of it, `oracles.soulsformats.elden/census`).
 #[test]
 fn path_hash64_reference_values() {
-    use primase_fromsoft::archive::path_hash64;
+    use fromsoft_formats::archive::path_hash64;
     assert_eq!(
         path_hash64("/material/allmaterial.matbinbnd.dcx"),
         0x37411a0f9b62fc73

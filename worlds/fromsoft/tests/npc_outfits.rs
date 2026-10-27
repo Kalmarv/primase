@@ -5,7 +5,7 @@
 //!   `RegulationDecryptor` and its definition applied at the regulation's version): the file's header facts, every
 //!   row's id and all 32 `modelDispMask` cells of every row, against ours.
 //! - The rows' link to characters: every Enemy and DummyEnemy part of the maps (SoulsFormats' MSBS and MSBE, in the
-//!   same oracle sets) against [`sekiro::npc_placements`]'s model name and NPC row.
+//!   same oracle sets) against [`fromsoft_formats::game_params::npc_placements`]'s model name and NPC row.
 //! - Three Sekiro characters' outfits through the passes (`raise-fromsoft-display-masks`, `select-fromsoft-outfit`,
 //!   `resolve-state`) against the manifests of the old C# exporter (`oracles.baseline.sekiro/outfits`, our own earlier
 //!   output: it detects a change of the selection and checks no correctness): each mesh's material and mark, the masks
@@ -15,20 +15,18 @@
 //!   parts name: the meshes drawn are those SoulsFormats' cells of the row show, and each mask is traced to the row.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
-mod inputs;
-
 use std::collections::{BTreeMap, BTreeSet};
 
-use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
+use fromsoft_formats::dcx::Decoder;
+use fromsoft_formats::param::NpcParam;
+use fromsoft_formats::{Game, Install, Keys, NameDictionary};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{Entity, World};
-use primase_fromsoft::dcx::Decoder;
-use primase_fromsoft::param::NpcParam;
 use primase_fromsoft::rigid::SourceModel;
 use primase_fromsoft::sekiro::lowered::SourceMeshes;
 use primase_fromsoft::sekiro::source::{MeshMasks, NpcRows};
 use primase_fromsoft::sekiro::{self, CharacterOptions};
-use primase_fromsoft::{Game, Install, Keys, NameDictionary};
+use primase_testdata::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use serde_json::Value;
 
 mod common;
@@ -54,16 +52,17 @@ fn oracle_mask(fields: &Value) -> Result<u32> {
 }
 
 /// A configured install of `game` with the decoder's library, or `None` when the configuration lacks one.
-fn configured(game: Game) -> Result<Option<(Install, inputs::OodleLibrary)>> {
+fn configured(game: Game) -> Result<Option<(Install, primase_testdata::OodleLibrary)>> {
     let Some(dll) = oodle(Tool::Oodle6) else {
         return Ok(None);
     };
-    Ok(match game {
-        Game::Sekiro => install(Data::Sekiro).map(|dir| (Install::sekiro(dir), dll)),
-        Game::EldenRing => match (install(Data::Elden), keys(Data::Elden)) {
-            (Some(dir), Some(k)) => Some((Install::new(dir, game, Keys::from_folder(k, game)?), dll)),
-            _ => None,
-        },
+    let data = match game {
+        Game::Sekiro => Data::Sekiro,
+        Game::EldenRing => Data::Elden,
+    };
+    Ok(match (install(data), keys(data)) {
+        (Some(dir), Some(k)) => Some((Install::new(dir, game, Keys::from_folder(k, game)?), dll)),
+        _ => None,
     })
 }
 
@@ -92,7 +91,7 @@ fn the_sekiro_npc_param_reads_as_soulsformats_reads_it() -> Result<()> {
         max_output: 1 << 30,
     };
     let archive = install.open()?;
-    let param = sekiro::read_param(&install, &archive, &decoder, "NpcParam.param")?;
+    let param = fromsoft_formats::game_params::read_param(&install, &archive, &decoder, "NpcParam.param")?;
     let o = json(oracle.join("npcparam.json"))?;
     assert_eq!(Some(param.param_type.as_str()), o["paramType"].as_str());
     assert_eq!(Some(u64::from(param.data_version)), o["dataVersion"].as_u64());
@@ -250,7 +249,7 @@ fn sekiro_outfits_agree_with_the_old_route_and_with_soulsformats() -> Result<()>
     let (Some((install, dll)), Some(oracle), Some(old)) = (
         configured(Game::Sekiro)?,
         oracle(OracleSet::SoulsFormats, Data::Sekiro, "npc"),
-        inputs::oracle(OracleSet::Baseline, Data::Sekiro, "outfits"),
+        primase_testdata::oracle(OracleSet::Baseline, Data::Sekiro, "outfits"),
     ) else {
         return Ok(());
     };
@@ -376,7 +375,7 @@ fn sekiro_outfits_agree_with_the_old_route_and_with_soulsformats() -> Result<()>
     Ok(())
 }
 
-/// Every Enemy and DummyEnemy part of Sekiro's maps as [`sekiro::npc_placements`] reads them is SoulsFormats'. A row's
+/// Every Enemy and DummyEnemy part of Sekiro's maps as [`fromsoft_formats::game_params::npc_placements`] reads them is SoulsFormats'. A row's
 /// id is the character number times 10000 plus a variant for most parts; these are the exceptions, which is why
 /// `select-fromsoft-outfit` takes the character as an option instead of deriving it.
 #[test]
@@ -394,22 +393,23 @@ fn sekiro_placements_name_the_rows_soulsformats_reads() -> Result<()> {
         max_output: 1 << 30,
     };
     let archive = install.open()?;
-    let rows: BTreeSet<i32> = sekiro::read_npc_param(&install, &archive, &decoder)?
+    let rows: BTreeSet<i32> = fromsoft_formats::game_params::read_npc_param(&install, &archive, &decoder)?
         .rows
         .iter()
         .map(|r| r.id)
         .collect();
-    let ours: Vec<(String, String, String, i32)> = sekiro::npc_placements(&archive, &decoder, &names)?
-        .into_iter()
-        .map(|p| {
-            (
-                format!("/map/mapstudio/{}.msb.dcx", p.map),
-                p.part,
-                p.model,
-                p.row,
-            )
-        })
-        .collect();
+    let ours: Vec<(String, String, String, i32)> =
+        fromsoft_formats::game_params::npc_placements(&archive, &decoder, &names)?
+            .into_iter()
+            .map(|p| {
+                (
+                    format!("/map/mapstudio/{}.msb.dcx", p.map),
+                    p.part,
+                    p.model,
+                    p.row,
+                )
+            })
+            .collect();
     let mut theirs = Vec::new();
     for line in std::fs::read_to_string(oracle.join("enemies.jsonl"))?.lines() {
         let part: Value = serde_json::from_str(line.trim_start_matches('\u{feff}'))?;
@@ -527,7 +527,7 @@ fn the_elden_ring_npc_param_and_placements_read_as_soulsformats_reads_them() -> 
     };
     let o = elden_oracle(&oracle)?;
     let archive = install.open()?;
-    let param = sekiro::read_param(&install, &archive, &decoder, "NpcParam.param")?;
+    let param = fromsoft_formats::game_params::read_param(&install, &archive, &decoder, "NpcParam.param")?;
     let h = &o.header;
     assert_eq!(Some(param.param_type.as_str()), h["paramType"].as_str());
     assert_eq!(Some(u64::from(param.data_version)), h["dataVersion"].as_u64());
@@ -545,17 +545,18 @@ fn the_elden_ring_npc_param_and_placements_read_as_soulsformats_reads_them() -> 
     let distinct: BTreeSet<u32> = npc.rows.iter().map(|r| r.display_mask).collect();
     assert!(distinct.len() > 100, "{} distinct mask words", distinct.len());
 
-    let mut ours: Vec<(String, String, String, i32)> = sekiro::npc_placements(&archive, &decoder, &names)?
-        .into_iter()
-        .map(|p| {
-            (
-                format!("/map/mapstudio/{}.msb.dcx", p.map),
-                p.part,
-                p.model,
-                p.row,
-            )
-        })
-        .collect();
+    let mut ours: Vec<(String, String, String, i32)> =
+        fromsoft_formats::game_params::npc_placements(&archive, &decoder, &names)?
+            .into_iter()
+            .map(|p| {
+                (
+                    format!("/map/mapstudio/{}.msb.dcx", p.map),
+                    p.part,
+                    p.model,
+                    p.row,
+                )
+            })
+            .collect();
     let mut theirs = o.parts;
     ours.sort();
     theirs.sort();

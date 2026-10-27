@@ -1,5 +1,6 @@
 //! Bounded common-repeat policy for static bakes, not runtime sampler state.
-use crate::{Result, invalid};
+use crate::invalid;
+use fromsoft_formats::Result;
 
 /// Find a common repeat within sixteen UV units. A repeat is accepted when
 /// each sampled scale is within one percent of an integer repeat count.

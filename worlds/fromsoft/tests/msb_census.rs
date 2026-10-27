@@ -4,11 +4,9 @@
 //! against the same dump by sekiro_scene.rs. Not covered here: other part kinds (enemies, collisions, dummies) and map
 //! offsets, which the dump doesn't hold (an open coverage gap, CONTRIBUTING's real-data table). Elden Ring's layouts
 //! are checked whole, every part of every kind, against SoulsFormatsNEXT's reading of them.
-mod inputs;
-
-use primase_fromsoft::msb::PartKind;
-use primase_fromsoft::{Archive, dcx::Decoder, msb::MapLayout};
-use primase_testdata::gate::{GateReport, Tolerance};
+use fromsoft_formats::msb::PartKind;
+use fromsoft_formats::{Archive, dcx::Decoder, msb::MapLayout};
+use primase_core::gate::{GateReport, Tolerance};
 
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -16,15 +14,10 @@ mod common;
 #[allow(unsafe_code)]
 mod native {
     pub fn load(
-        path: crate::inputs::OodleLibrary,
+        path: primase_testdata::OodleLibrary,
     ) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
         // SAFETY: caller explicitly supplies a trusted version-6 native library.
-        unsafe {
-            primase_foundations::compress::oodle::Oodle::open(
-                path.path(),
-                primase_foundations::compress::oodle::Version::V6,
-            )
-        }
+        unsafe { primase_foundations::compress::oodle::Oodle::open(path.path(), primase_foundations::compress::oodle::Version::V6) }
     }
 }
 
@@ -46,13 +39,17 @@ fn bytes(v: &[f32]) -> Vec<u8> {
 
 #[test]
 fn stored_parts_match_an_independent_reading() -> Result<()> {
-    let Some(root) = inputs::install(inputs::Game::Sekiro) else {
+    let Some(root) = primase_testdata::install(primase_testdata::Game::Sekiro) else {
         return Ok(());
     };
-    let Some(dump) = inputs::oracle(inputs::OracleSet::SoulsFormats, inputs::Game::Sekiro, "m11_01") else {
+    let Some(dump) = primase_testdata::oracle(
+        primase_testdata::OracleSet::SoulsFormats,
+        primase_testdata::Game::Sekiro,
+        "m11_01",
+    ) else {
         return Ok(());
     };
-    let Some(dll) = inputs::oodle(inputs::Tool::Oodle6) else {
+    let Some(dll) = primase_testdata::oodle(primase_testdata::Tool::Oodle6) else {
         return Ok(());
     };
     let dll = native::load(dll)?;
@@ -60,10 +57,17 @@ fn stored_parts_match_an_independent_reading() -> Result<()> {
         oodle: Some(&dll),
         max_output: 512 * 1024 * 1024,
     };
-    let archive = Archive::open(root)?;
+    let Some(sekiro_keys) = primase_testdata::keys(primase_testdata::Game::Sekiro) else {
+        return Ok(());
+    };
+    let archive = Archive::open_game(
+        root,
+        fromsoft_formats::Game::Sekiro,
+        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro)?,
+    )?;
     let map = MapLayout::read(&archive.read(AREA, &decoder)?)?;
     // the parts the dump holds, by name: map pieces and objects
-    let mut ours: BTreeMap<&str, &primase_fromsoft::msb::Part> = BTreeMap::new();
+    let mut ours: BTreeMap<&str, &fromsoft_formats::msb::Part> = BTreeMap::new();
     for p in &map.parts {
         if matches!(p.kind, PartKind::MapPiece | PartKind::Object) {
             assert!(
@@ -122,15 +126,19 @@ fn stored_parts_match_an_independent_reading() -> Result<()> {
 /// file order (name, position and rotation; a repeated name renamed as the reference renames it, over every region).
 #[test]
 fn every_layout_matches_an_independent_reading() -> Result<()> {
-    use primase_fromsoft::Game;
+    use fromsoft_formats::Game;
     for (game, format) in [(
         Game::EldenRing,
-        inputs::oracle(inputs::OracleSet::SoulsFormats, inputs::Game::Elden, "format"),
+        primase_testdata::oracle(
+            primase_testdata::OracleSet::SoulsFormats,
+            primase_testdata::Game::Elden,
+            "format",
+        ),
     )] {
         let (Some(archive), Some(oracle), Some(dll)) = (
             common::archive(game)?,
             format,
-            inputs::oodle(inputs::Tool::Oodle6),
+            primase_testdata::oodle(primase_testdata::Tool::Oodle6),
         ) else {
             continue;
         };

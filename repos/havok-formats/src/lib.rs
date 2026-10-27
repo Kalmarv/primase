@@ -1,7 +1,7 @@
 //! Bounds-checked readers of Havok binary data: `TAG0` tagfiles and their `TCM0` type compendia ([`Tagfile`],
 //! [`Compendium`]), the older 7.1.0 packfile container ([`packfile`]), and the objects read from them: hknp compressed
-//! meshes ([`compressed_mesh`]), cloth and ragdoll data ([`cloth`]), skeletons, bindings and spline compressed
-//! animation ([`animation`], [`spline`]).
+//! meshes ([`compressed_mesh`]), convex shapes ([`convex`]), cloth and ragdoll data ([`cloth`]), skeletons, bindings
+//! and spline compressed animation ([`animation`], [`spline`]).
 //!
 //! Type indices are one-based; zero denotes a null type or object reference. Every read is checked: a file that is
 //! shorter than it says, or refers outside itself, is an [`Error`] naming the offset, never a panic.
@@ -9,6 +9,7 @@
 
 pub mod animation;
 pub mod cloth;
+pub mod convex;
 mod mesh;
 pub mod packfile;
 mod section;

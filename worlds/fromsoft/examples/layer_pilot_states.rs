@@ -9,19 +9,20 @@
 //! is written at each `--caps` size cap and in three layer-weight variants: 0 the defaults, 1 mixed weights and a tint,
 //! 2 every weight one and detail zero.
 //!
-//! `cargo run --release -p primase-fromsoft --example layer_pilot_states -- <Sekiro install> <oo2core_6_win64.dll>
-//! <out> [--area m11_01] [--region west,south,east,north] [--cases 5] [--caps 32,128]`. It writes `<out>/cases.json`
-//! and, per case, cap and variant, `<out>/<case>-<cap>-<variant>/` holding the state's `state.json` and the files it
-//! names (its schema: [`primase_fromsoft::layer_bake::SCHEMA`]).
+//! `cargo run --release -p primase-fromsoft --example layer_pilot_states -- <Sekiro install> <keys>
+//! <oo2core_6_win64.dll> <out> [--area m11_01] [--region west,south,east,north] [--cases 5] [--caps 32,128]`, `<keys>`
+//! the folder of the install's archive keys (`Data1.pem` to `Data5.pem`, `keys.sekiro`). It writes
+//! `<out>/cases.json` and, per case, cap and variant, `<out>/<case>-<cap>-<variant>/` holding the state's `state.json`
+//! and the files it names (its schema: [`primase_fromsoft::layer_bake::SCHEMA`]).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use fromsoft_formats::dcx::Decoder;
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_core::convert::Reader;
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::{LodChoice, SelectLod};
-use primase_foundations::compress::oodle::{Oodle, Version};
-use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::layer_bake::{ALPHA_TEST_POLICY, Inputs};
 use primase_fromsoft::materials::SkipClass;
 use primase_fromsoft::rigid::ApplyRigidSkinning;
@@ -76,9 +77,9 @@ fn main() -> Result<(), BoxError> {
             s => paths.push(PathBuf::from(s)),
         }
     }
-    let [install, dll, out] = paths.as_slice() else {
+    let [install, keys, dll, out] = paths.as_slice() else {
         return Err(
-            "usage: layer_pilot_states <Sekiro install> <oo2core_6_win64.dll> <out> [--area m11_01] \
+            "usage: layer_pilot_states <Sekiro install> <keys> <oo2core_6_win64.dll> <out> [--area m11_01] \
                     [--region west,south,east,north] [--cases 5] [--caps 32,128]"
                 .into(),
         );
@@ -92,7 +93,10 @@ fn main() -> Result<(), BoxError> {
         region: region.map(|rect| sekiro::Region { rect, margin: 30.0 }),
         ..Default::default()
     };
-    let (mut world, _) = AreaReader::new(install, &area, decoder, options).read()?;
+    let game = fromsoft_formats::Game::Sekiro;
+    let install =
+        fromsoft_formats::Install::new(install, game, fromsoft_formats::Keys::from_folder(keys, game)?);
+    let (mut world, _) = AreaReader::of(install, &area, decoder, options).read()?;
     // lowered as the conversion lowers it, up to the shader binding the bake reads
     let skip = [SkipClass::Sky, SkipClass::LightVolume, SkipClass::Shadow].into();
     let lower = Pipeline {

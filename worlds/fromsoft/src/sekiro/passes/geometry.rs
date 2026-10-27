@@ -17,7 +17,7 @@
 //! these files.
 use super::blockers::BlockerCards;
 use crate::components::models::{RigidModel, SkeletonOf, SourceModel};
-use crate::flver::{FaceSetKind, Model, Part};
+use crate::geometry::Part;
 use crate::materials::{self, Material};
 use crate::pose::{StaticBones, static_bones};
 use crate::sekiro::components::lowered::{SourceMeshes, UvTiling};
@@ -25,6 +25,7 @@ use crate::sekiro::source::{
     FaceCull, LayerInputs, MaterialShader, MaterialSlots, MeshMasks, PrototypeSource, ShaderBundle,
     ShaderStage,
 };
+use fromsoft_formats::flver::{FaceSetKind, Model};
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::world::Resource;
 use primase_core::{
@@ -350,7 +351,8 @@ impl LowerFromSoftGeometry {
         material: &Material,
         log: &mut PassLog,
     ) -> Result<Option<Part>, String> {
-        let Some(mut part) = model.decode(mesh, face_set).map_err(|e| e.to_string())? else {
+        let Some(mut part) = crate::geometry::decode(model, mesh, face_set).map_err(|e| e.to_string())?
+        else {
             return Ok(None);
         };
         if self.uv_tiling == Tiling::Apply {
@@ -693,7 +695,7 @@ fn bind_static_meshes(model: &Model, log: &mut PassLog) -> Result<(Model, Vec<Op
 /// The UV sets beyond the first, as `TexCoord(n)` in the order the vertex layout stores them (a four component UV member
 /// is two sets), and the first vertex colour as `Color(0)`, of the vertices `vertices` of a mesh: what a material
 /// binary's programs read besides the first UV set. A set or colour the mesh's vertices do not all have is not kept.
-fn source_streams(mesh: &[crate::flver::Vertex], vertices: &[u32]) -> Vec<(Semantic, Stream)> {
+fn source_streams(mesh: &[fromsoft_formats::flver::Vertex], vertices: &[u32]) -> Vec<(Semantic, Stream)> {
     let at = |v: &u32| &mesh[*v as usize];
     let sets = vertices.iter().map(|v| at(v).uvs.len()).min().unwrap_or(0);
     let mut out = Vec::new();

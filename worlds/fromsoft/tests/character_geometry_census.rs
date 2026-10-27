@@ -1,11 +1,10 @@
 //! Every dictionary-named character binder: drawable source mesh count, or an explicit reason for zero.
 //! Reads FLVERs only, never textures, shader bakes or animation tracks. This is source geometry coverage,
 //! not a claim that every material will lower or a rendered draw count. Patch/archive lookup uses Install's policy.
-mod inputs;
-
-use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
+use fromsoft_formats::{Game, Install, Keys, NameDictionary, dcx::Decoder};
 use primase_core::convert::Reader;
-use primase_fromsoft::{Game, Install, Keys, NameDictionary, dcx::Decoder, sekiro};
+use primase_fromsoft::sekiro;
+use primase_testdata::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use serde_json::json;
 use std::collections::BTreeSet;
 mod common;
@@ -26,19 +25,14 @@ fn every_character_has_source_geometry_or_a_named_empty_reason() -> Result<()> {
         else {
             continue;
         };
-        let key = match game {
-            Game::Sekiro => Keys::published(game).ok_or("published keys")?,
-            Game::EldenRing => {
-                let Some(folder) = keys(data) else {
-                    continue;
-                };
-                Keys::from_folder(folder, game)?
-            }
+        let Some(folder) = keys(data) else {
+            continue;
         };
+        let key = Keys::from_folder(folder, game)?;
         let install = Install::new(root, game, key);
         let archive = std::sync::Arc::new(install.open()?);
         let dictionary = NameDictionary::read_for(names, game)?;
-        let placements = sekiro::npc_placements(&archive, &decoder, &dictionary)?;
+        let placements = fromsoft_formats::game_params::npc_placements(&archive, &decoder, &dictionary)?;
         let models: BTreeSet<_> = dictionary
             .names
             .values()
@@ -76,7 +70,7 @@ fn every_character_has_source_geometry_or_a_named_empty_reason() -> Result<()> {
                     "listed": 0, "decoded": 0, "reason": "no character animation binder"})
                 );
             }
-            let geometry = sekiro::character_mesh_count(&archive, &decoder, model);
+            let geometry = fromsoft_formats::equipment::character_mesh_count(&archive, &decoder, model);
             let mut row = json!({"game": game.name(), "character": model, "scope": "source meshes with vertices and triangles"});
             match geometry {
                 Ok(count) if count > 0 => row["drawable_source_meshes"] = json!(count),
@@ -109,7 +103,14 @@ fn every_character_has_source_geometry_or_a_named_empty_reason() -> Result<()> {
                     } else {
                         "real-miss"
                     });
-                    match sekiro::npc_outfits(&install, &archive, &decoder, &dictionary, model, None) {
+                    match fromsoft_formats::equipment::npc_outfits(
+                        &install,
+                        &archive,
+                        &decoder,
+                        &dictionary,
+                        model,
+                        None,
+                    ) {
                         Ok(outfits) => {
                             row["authored_readable_outfits"] =
                                 json!(outfits.iter().filter(|o| !o.parts.is_empty()).count());

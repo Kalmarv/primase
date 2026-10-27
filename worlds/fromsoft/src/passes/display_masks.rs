@@ -43,7 +43,7 @@ fn timeline(source: &ClipVisibility, duration: f32) -> Result<Vec<Channel>, Stri
         if change.start <= duration {
             times.push(change.start);
         }
-        if !change.latched && change.end < crate::tae::OPEN_END && change.end <= duration {
+        if !change.latched && change.end < fromsoft_formats::tae::OPEN_END && change.end <= duration {
             times.push(change.end);
         }
     }
@@ -61,7 +61,7 @@ fn timeline(source: &ClipVisibility, duration: f32) -> Result<Vec<Channel>, Stri
             let mut value = -1.;
             for change in &source.changes {
                 if time >= change.start
-                    && (change.latched || change.end >= crate::tae::OPEN_END || time < change.end)
+                    && (change.latched || change.end >= fromsoft_formats::tae::OPEN_END || time < change.end)
                 {
                     if change.hide & bit != 0 {
                         value = 0.;
@@ -191,7 +191,7 @@ impl Pass for LowerFromSoftDisplayMasks {
                         .iter()
                         .filter(|change| {
                             !change.latched
-                                && change.end < crate::tae::OPEN_END
+                                && change.end < fromsoft_formats::tae::OPEN_END
                                 && change.start <= clip.duration
                                 && change.start < change.end
                                 && (change.show | change.hide) != 0
@@ -315,7 +315,7 @@ mod tests {
         assert_eq!(sample(channel, 4.), 0.);
         let mut open = source();
         open.changes.truncate(1);
-        open.changes[0].end = crate::tae::OPEN_END;
+        open.changes[0].end = fromsoft_formats::tae::OPEN_END;
         assert_eq!(sample(&timeline(&open, 200.).unwrap()[0], 150.), 1.);
     }
     #[test]

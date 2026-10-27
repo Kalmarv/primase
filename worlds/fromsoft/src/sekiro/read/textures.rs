@@ -1,8 +1,20 @@
-use crate::{Archive, Binder, Result, dcx::Decoder, invalid, materials::stem, tpf::Package};
+use crate::invalid;
+use fromsoft_formats::names::stem;
+use fromsoft_formats::tpf::{self, Package, TextureKind};
+use fromsoft_formats::{Archive, Binder, Result, dcx::Decoder};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+
+/// A TPF texture's image: a 2D DDS through the shared container reader, retaining encoded mips and colour-space
+/// metadata. Roles and normal conventions belong to bindings. Cube and volume images are refused.
+pub fn tpf_image(texture: &tpf::Texture) -> Result<primase_core::Texture> {
+    if texture.kind != TextureKind::Image2D {
+        return Err(invalid("TPF", 0, "cube/volume image import is not supported"));
+    }
+    primase_dds::read(&texture.dds).map_err(|e| invalid("TPF DDS", 0, e))
+}
 fn package_stem(path: &str) -> String {
-    let lower = crate::names::fold(path);
+    let lower = fromsoft_formats::names::fold(path);
     stem(lower.strip_suffix(".dcx").unwrap_or(&lower))
 }
 pub(super) enum Location {
@@ -57,7 +69,7 @@ impl Catalog {
     pub fn add(&mut self, bytes: &[u8]) -> Result<()> {
         for t in Package::read(bytes)?.textures {
             self.entries
-                .entry(crate::names::fold(&t.name))
+                .entry(fromsoft_formats::names::fold(&t.name))
                 .or_insert_with(|| Location::Inline(t.dds.into()));
         }
         Ok(())
@@ -97,7 +109,7 @@ impl Catalog {
                 let t = package
                     .textures
                     .iter()
-                    .find(|t| crate::names::fold(&t.name) == name)
+                    .find(|t| fromsoft_formats::names::fold(&t.name) == name)
                     .or_else(|| {
                         if package.textures.len() == 1 {
                             package.textures.first()

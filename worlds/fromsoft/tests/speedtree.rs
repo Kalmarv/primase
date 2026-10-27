@@ -6,7 +6,7 @@
 //! - UV0: `TEXCOORD6.xy` (exact), with the texture scroll the identity;
 //! - the normal: `TEXCOORD0.xyz`, normalized (within 1e-6);
 //! - the tangent: of the ordinary programs' convention, `w (TEXCOORD3.xyz × TEXCOORD0.xyz)` with `w` its `TEXCOORD3.w`
-//!   ([`primase_fromsoft::flver::speedtree_layout`]), normalized (within 1e-6).
+//!   ([`fromsoft_formats::flver::speedtree_layout`]), normalized (within 1e-6).
 //!
 //! The per-instance stream the game supplies is an identity instance: `POSITION` (0, 0, 0, 1) (no translation, scale
 //! 1), `TEXCOORD1` (1, 0, 0) and `TEXCOORD0` (0, 1, 0) the basis vectors x and y (the programs take the third as their
@@ -18,30 +18,24 @@
 //! Each mesh's normal and tangent are the members its program reads as them, as `lower-fromsoft-geometry` takes them
 //! with `speedtree-frame=program` ([`program_frame`], [`Model::set_speedtree_frame`]); the meshes where those are not
 //! its layout's pair are listed. Billboard cards are the `billboard` material class, and their decode is refused.
-mod inputs;
-
+use fromsoft_formats::flver::{Model, SpeedTreeLayout, is_speedtree, speedtree_layout};
+use fromsoft_formats::{Binder, Game, NameDictionary, dcx::Decoder};
 use iridia_exec::{Backend, Element, Executable, ImageSample, Resources, Runner};
 use iridia_interface::{ResourceKind, ShaderFormat};
-use primase_fromsoft::flver::{Model, SpeedTreeLayout, is_speedtree, speedtree_layout, tangent_to_scene};
+use primase_fromsoft::geometry::tangent_to_scene;
 use primase_fromsoft::materials::{self, Definition, SkipClass};
 use primase_fromsoft::sekiro::passes::geometry::program_frame;
 use primase_fromsoft::sekiro::source::{ShaderBundle, ShaderProgram, ShaderStage};
-use primase_fromsoft::{Binder, Game, NameDictionary, dcx::Decoder};
 use std::collections::BTreeMap;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 mod common;
 #[allow(unsafe_code)]
 mod native {
     pub fn load(
-        path: crate::inputs::OodleLibrary,
+        path: primase_testdata::OodleLibrary,
     ) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
         // SAFETY: caller explicitly supplies a trusted version-6 native library.
-        unsafe {
-            primase_foundations::compress::oodle::Oodle::open(
-                path.path(),
-                primase_foundations::compress::oodle::Version::V6,
-            )
-        }
+        unsafe { primase_foundations::compress::oodle::Oodle::open(path.path(), primase_foundations::compress::oodle::Version::V6) }
     }
 }
 
@@ -196,8 +190,12 @@ struct Counts {
 fn speedtree_models_are_what_their_programs_draw() -> Result<()> {
     let (Some(archive), Some(dll), Some(names)) = (
         common::archive(Game::EldenRing)?,
-        inputs::oodle(inputs::Tool::Oodle6),
-        inputs::oracle(inputs::OracleSet::Uxm, inputs::Game::Elden, "dictionary.txt"),
+        primase_testdata::oodle(primase_testdata::Tool::Oodle6),
+        primase_testdata::oracle(
+            primase_testdata::OracleSet::Uxm,
+            primase_testdata::Game::Elden,
+            "dictionary.txt",
+        ),
     ) else {
         return Ok(());
     };
@@ -213,8 +211,8 @@ fn speedtree_models_are_what_their_programs_draw() -> Result<()> {
         for f in Binder::read(&archive.read(path, &decoder)?, &decoder)?.files {
             let name = f.name.as_deref().unwrap_or("");
             if name.to_ascii_lowercase().ends_with(".matbin") {
-                let m = primase_fromsoft::matbin::Material::read(&decoder.decode_if_dcx(&f.bytes)?)?;
-                shaders.insert(materials::stem(name), m);
+                let m = fromsoft_formats::matbin::Material::read(&decoder.decode_if_dcx(&f.bytes)?)?;
+                shaders.insert(fromsoft_formats::names::stem(name), m);
             }
         }
     }
@@ -263,7 +261,7 @@ fn speedtree_models_are_what_their_programs_draw() -> Result<()> {
                 let mesh = &model.meshes[index];
                 let source = &model.materials[mesh.material];
                 let definition = shaders
-                    .get(&materials::stem(&source.mtd))
+                    .get(&fromsoft_formats::names::stem(&source.mtd))
                     .ok_or_else(|| format!("{id}: no material binary {}", source.mtd))?;
                 let shader = definition.shader.rsplit(['/', '\\']).next().unwrap_or("");
                 let shader = shader.rsplit_once('.').map_or(shader, |s| s.0).to_owned();
@@ -279,7 +277,10 @@ fn speedtree_models_are_what_their_programs_draw() -> Result<()> {
                     // the billboard program's material, of the class left out, and no geometry of its own
                     assert_eq!(shader, "SpeedTree_billboard", "{id} mesh {index}");
                     assert_eq!(resolved.skip, Some(SkipClass::Billboard), "{id} mesh {index}");
-                    assert!(model.decode(index, 0).is_err(), "{id} mesh {index}");
+                    assert!(
+                        primase_fromsoft::geometry::decode(&model, index, 0).is_err(),
+                        "{id} mesh {index}"
+                    );
                     counts.billboards += 1;
                     continue;
                 }
@@ -310,7 +311,7 @@ fn speedtree_models_are_what_their_programs_draw() -> Result<()> {
                 let outputs =
                     run(&programs[&shader], &model, index).map_err(|e| format!("{id} mesh {index}: {e}"))?;
                 for face_set in 0..mesh.faces.len() {
-                    let Some(part) = model.decode(index, face_set)? else {
+                    let Some(part) = primase_fromsoft::geometry::decode(&model, index, face_set)? else {
                         continue;
                     };
                     for (j, &k) in part.source_vertices.iter().enumerate() {

@@ -1,24 +1,17 @@
 //! MSB part entity IDs and entity group IDs, exact as stored, against an independent reader (SoulsFormats' MSBS):
 //! `entities.jsonl` in `oracles.scripts.sekiro/state` holds, per map file, every part's index, name, entity ID and
 //! eight group IDs. Every map file it lists is read; a part count, name or value that differs fails the gate.
-mod inputs;
-
-use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
-use primase_fromsoft::{Archive, dcx::Decoder, msb::MapLayout};
-use primase_testdata::gate::{GateReport, Tolerance};
+use fromsoft_formats::{Archive, dcx::Decoder, msb::MapLayout};
+use primase_core::gate::{GateReport, Tolerance};
+use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[allow(unsafe_code)]
 mod native {
     pub fn load(
-        path: crate::inputs::OodleLibrary,
+        path: primase_testdata::OodleLibrary,
     ) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
         // SAFETY: caller explicitly supplies a trusted version-6 native library.
-        unsafe {
-            primase_foundations::compress::oodle::Oodle::open(
-                path.path(),
-                primase_foundations::compress::oodle::Version::V6,
-            )
-        }
+        unsafe { primase_foundations::compress::oodle::Oodle::open(path.path(), primase_foundations::compress::oodle::Version::V6) }
     }
 }
 fn ints(v: &serde_json::Value) -> Result<Vec<i32>> {
@@ -42,7 +35,14 @@ fn part_entities_match_an_independent_reader() -> Result<()> {
         oodle: Some(&dll),
         max_output: 512 * 1024 * 1024,
     };
-    let archive = Archive::open(root)?;
+    let Some(sekiro_keys) = primase_testdata::keys(primase_testdata::Game::Sekiro) else {
+        return Ok(());
+    };
+    let archive = Archive::open_game(
+        root,
+        fromsoft_formats::Game::Sekiro,
+        &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro)?,
+    )?;
     let mut gate = GateReport::new("MSB part entity IDs and groups", Tolerance::Exact);
     let (mut maps, mut parts, mut with_entity, mut with_group) = (0, 0, 0, 0);
     for line in std::fs::read_to_string(oracle.join("entities.jsonl"))?.lines() {

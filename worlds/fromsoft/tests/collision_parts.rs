@@ -54,7 +54,7 @@ fn world() -> (World, [Entity; 4]) {
         ObjectBodies {
             files: vec![primase_fromsoft::sekiro::source::ObjectCollisionFile {
                 file: "o000001.hkx".into(),
-                resolution: primase_fromsoft::sekiro::source::Resolution::High,
+                resolution: fromsoft_formats::game::Resolution::High,
                 bodies: vec![ObjectBody {
                     name: "body".into(),
                     motion_type: 0,

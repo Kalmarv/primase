@@ -1,5 +1,6 @@
 //! Typed source identities and records the area reader keeps for the passes that interpret them. They describe what
 //! the source stores and how it names it, never a target format's fields.
+use fromsoft_formats::game::Resolution;
 use primase_core::json::{JsonError, to_value};
 use primase_core::{Component, Entity, Resource, Semantic, Stream};
 use serde::Serialize;
@@ -193,14 +194,6 @@ impl ObjectGeometry {
     }
 }
 
-/// Which detail a stored collision file is: Sekiro's object HKX and Elden Ring's `_h` asset files are high, Elden
-/// Ring's `_l` asset files (which every collidable asset has) low.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Resolution {
-    High,
-    Low,
-}
-
 /// One stored collision file of an object prototype: its file name, its resolution and every body as stored.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ObjectCollisionFile {
@@ -296,7 +289,7 @@ pub struct Region {
 /// own tables (its HitMtrl classes), read it here, so a program need not restate it.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ReadScope {
-    pub game: crate::Game,
+    pub game: fromsoft_formats::Game,
     pub area: String,
     pub region: Option<Region>,
     pub states: bool,
@@ -402,11 +395,11 @@ impl Resource for AreaExtras {
 /// read region are not kept (counted); events have no place of their own and are all kept.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct MapRecords {
-    pub regions: Vec<crate::msb::Region>,
-    pub events: Vec<crate::msb::Event>,
+    pub regions: Vec<fromsoft_formats::msb::Region>,
+    pub events: Vec<fromsoft_formats::msb::Event>,
     /// The parts of the kinds the read does not place as models (enemies, player starts, dummies, connect
     /// collisions) whose position lies inside the read region.
-    pub parts: Vec<crate::msb::UnplacedPart>,
+    pub parts: Vec<fromsoft_formats::msb::UnplacedPart>,
     /// The region type code of spawn points in the layout's generation, which `lower-fromsoft-extras` makes markers
     /// of: the records pass leaves those regions to it.
     pub spawn_region: Option<u32>,
@@ -439,7 +432,7 @@ pub enum SetChosen {
 pub struct DrawField {
     pub key: String,
     pub name: String,
-    pub value: crate::gparam::Value,
+    pub value: fromsoft_formats::gparam::Value,
     pub time: Option<f32>,
 }
 
@@ -457,7 +450,7 @@ pub struct DrawGroup {
 
 impl DrawGroup {
     /// The value of the field with key `key`: its first stored sample.
-    pub fn value(&self, key: &str) -> Option<&crate::gparam::Value> {
+    pub fn value(&self, key: &str) -> Option<&fromsoft_formats::gparam::Value> {
         self.fields.iter().find(|f| f.key == key).map(|f| &f.value)
     }
 }
@@ -590,7 +583,7 @@ pub struct LayerLayout {
 }
 
 impl LayerLayout {
-    pub fn of(model: &crate::flver::Model, mesh: usize) -> crate::Result<Self> {
+    pub fn of(model: &fromsoft_formats::flver::Model, mesh: usize) -> fromsoft_formats::Result<Self> {
         use crate::invalid;
         let m = model
             .meshes
@@ -633,10 +626,10 @@ impl LayerLayout {
 /// The FLVER Byte4C UV members of one mesh as `(member index, values per selected vertex)`, in member order.
 /// `vertices` are the source vertex indices of the selected (compacted) vertices.
 pub fn byte4_uv_members(
-    model: &crate::flver::Model,
+    model: &fromsoft_formats::flver::Model,
     mesh: usize,
     vertices: &[u32],
-) -> crate::Result<Vec<(u8, Vec<[u8; 4]>)>> {
+) -> fromsoft_formats::Result<Vec<(u8, Vec<[u8; 4]>)>> {
     use crate::invalid;
     let layout = LayerLayout::of(model, mesh)?;
     let m = &model.meshes[mesh];
@@ -658,7 +651,7 @@ pub fn byte4_uv_members(
                         .map(|(_, b)| *b)
                         .ok_or_else(|| invalid("FLVER layer inputs", slot, "missing declared Byte4C payload"))
                 })
-                .collect::<crate::Result<Vec<_>>>()?;
+                .collect::<fromsoft_formats::Result<Vec<_>>>()?;
             Ok((index, values))
         })
         .collect()
@@ -670,10 +663,10 @@ pub fn byte4_uv_members(
 /// no second UV set or no second colour gets no such stream: what the engine feeds the program then is not known, and
 /// is not made up here.
 pub fn layer_streams(
-    model: &crate::flver::Model,
+    model: &fromsoft_formats::flver::Model,
     mesh: usize,
     vertices: &[u32],
-) -> crate::Result<Vec<(Semantic, Stream)>> {
+) -> fromsoft_formats::Result<Vec<(Semantic, Stream)>> {
     use crate::invalid;
     let layout = LayerLayout::of(model, mesh)?;
     if layout
@@ -707,7 +700,7 @@ pub fn layer_streams(
                     .map(|uv| [uv[0], uv[1]])
                     .ok_or_else(|| invalid("FLVER layer inputs", slot, "missing declared second UV set"))
             })
-            .collect::<crate::Result<Vec<_>>>()?;
+            .collect::<fromsoft_formats::Result<Vec<_>>>()?;
         streams.push((Semantic::TexCoord(1), Stream::F32x2(uv)));
     }
     if let Some(at) = layout.second_colour {
@@ -720,7 +713,7 @@ pub fn layer_streams(
                     .copied()
                     .ok_or_else(|| invalid("FLVER layer inputs", at, "missing declared second colour"))
             })
-            .collect::<crate::Result<Vec<_>>>()?;
+            .collect::<fromsoft_formats::Result<Vec<_>>>()?;
         streams.push((SECOND_COLOUR, Stream::F32x4(colour)));
     }
     Ok(streams)
@@ -779,7 +772,7 @@ pub struct ShaderProgram {
     pub code: std::sync::Arc<[u8]>,
 }
 
-/// A shader's bundle (`<shader>.shaderbdle` of one of the game's bundle binders, [`crate::Game::shader_binders`]) on an
+/// A shader's bundle (`<shader>.shaderbdle` of one of the game's bundle binders, [`fromsoft_formats::Game::shader_binders`]) on an
 /// entity of its own, named as the shader (`M[Multiple]`): every program it stores, in its order, for every pass the game draws the shader with
 /// (forward, depth, shadow, velocity, G-buffer...), and the shader's parameter definition (`parameters`, `None` where
 /// the bundle's metaparam is of a version the reader does not read: `Report::unread_metaparams` names them). A
@@ -788,15 +781,17 @@ pub struct ShaderProgram {
 pub struct ShaderBundle {
     pub name: String,
     /// The game whose binders hold it: its programs' format and G-buffer layout are that game's.
-    pub game: crate::Game,
+    pub game: fromsoft_formats::Game,
     pub programs: Vec<ShaderProgram>,
-    pub parameters: Option<crate::metaparam::Metaparam>,
+    pub parameters: Option<fromsoft_formats::metaparam::Metaparam>,
 }
 impl ShaderBundle {
     /// The program stored under `name`, following the game's case-insensitive path lookup. The record keeps its spelling.
     pub fn program(&self, name: &str) -> Option<&ShaderProgram> {
-        let name = crate::names::fold(name);
-        self.programs.iter().find(|p| crate::names::fold(&p.name) == name)
+        let name = fromsoft_formats::names::fold(name);
+        self.programs
+            .iter()
+            .find(|p| fromsoft_formats::names::fold(&p.name) == name)
     }
     /// The programs of one stage, in stored order.
     pub fn stage(&self, stage: ShaderStage) -> impl Iterator<Item = &ShaderProgram> {
@@ -832,7 +827,7 @@ impl Component for MaterialShader {
 /// The display mask marks of each FLVER mesh of a character's model (`fromsoft.mesh_masks`, on the prototype), by mesh
 /// index: the numbers `#<k>#` in the name of the mesh's material, in the order they stand there (none: the mesh
 /// carries no mark). The game shows a marked mesh when `modelDispMask<k>` of the NPC's row is set
-/// ([`NpcRow`](crate::param::NpcRow)); whether a mesh with several marks needs all or one of them is not established,
+/// ([`NpcRow`](fromsoft_formats::param::NpcRow)); whether a mesh with several marks needs all or one of them is not established,
 /// so they are kept as stored.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct MeshMasks(pub Vec<Vec<u32>>);
@@ -850,7 +845,7 @@ impl Component for MeshMasks {
 /// The NPC param's rows as the reader reads them (`fromsoft.npc_rows`): every row's id and its 32 display mask bits.
 /// Which character a row dresses is the program's statement, given to the pass that selects an outfit.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
-pub struct NpcRows(pub Vec<crate::param::NpcRow>);
+pub struct NpcRows(pub Vec<fromsoft_formats::param::NpcRow>);
 impl Resource for NpcRows {
     const NAME: &'static str = "fromsoft.npc_rows";
     fn to_json(&self) -> Result<Option<Value>, JsonError> {

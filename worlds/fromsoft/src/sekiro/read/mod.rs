@@ -12,7 +12,6 @@ pub mod extras;
 pub mod material_events;
 pub mod messages;
 pub mod objects;
-pub mod params;
 pub(super) mod shaders;
 pub(super) mod shadows;
 pub mod states;

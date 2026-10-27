@@ -1,14 +1,8 @@
 //! Metadata census for the permutation decision, not a claim about the engine's draw calls.
 //! Reads material definitions and bundle inventories only: no images, spline decode or shader lift.
-mod inputs;
-
-use inputs::{Game as Data, Tool, install, keys, oodle};
-use primase_fromsoft::{
-    Binder, Game, Install, Keys,
-    dcx::Decoder,
-    materials::{Definition, MaterialView, ParameterValue},
-    metaparam::Metaparam,
-};
+use fromsoft_formats::{Binder, Game, Install, Keys, dcx::Decoder, metaparam::Metaparam};
+use primase_fromsoft::materials::{Definition, MaterialView, ParameterValue};
+use primase_testdata::{Game as Data, Tool, install, keys, oodle};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 mod common;
@@ -105,9 +99,9 @@ fn census(game: Game, install: Install, decoder: &Decoder<'_>) -> Result<()> {
             }
             let bytes = decoder.decode_if_dcx(&file.bytes)?;
             let definition = if game == Game::Sekiro {
-                Definition::Mtd(primase_fromsoft::mtd::MaterialDefinition::read(&bytes)?)
+                Definition::Mtd(fromsoft_formats::mtd::MaterialDefinition::read(&bytes)?)
             } else {
-                Definition::Matbin(primase_fromsoft::matbin::Material::read(&bytes)?)
+                Definition::Matbin(fromsoft_formats::matbin::Material::read(&bytes)?)
             };
             definitions.insert(id, definition);
         }
@@ -228,7 +222,7 @@ fn pixelkill_permutation_inventory_across_materials() -> Result<()> {
     let (Some(root), Some(key_dir), Some(dll)) =
         (install(Data::Elden), keys(Data::Elden), oodle(Tool::Oodle6))
     else {
-        println!("PIXELKILL_SKIP=GAME_DATA Elden install/keys/oodle6 not configured");
+        println!("PIXELKILL_SKIP=PRIMASE_DATA Elden install/keys/oodle6 not configured");
         return Ok(());
     };
     let codec = common::oodle(dll)?;
@@ -245,8 +239,10 @@ fn pixelkill_permutation_inventory_across_materials() -> Result<()> {
         ),
         &decoder,
     )?;
-    if let Some(root) = install(Data::Sekiro) {
-        census(Game::Sekiro, Install::sekiro(root), &decoder)?;
+    if let Some(root) = install(Data::Sekiro)
+        && let Some(sekiro) = common::sekiro(root)?
+    {
+        census(Game::Sekiro, sekiro, &decoder)?;
     } else {
         println!("PIXELKILL_SKIP=Sekiro control not configured");
     }

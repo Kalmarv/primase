@@ -9,14 +9,12 @@
     reason = "test I/O: real-data gates"
 )]
 
-mod inputs;
-
-use inputs::{Game, OracleSet, Tool, oracle, tool};
+use fromsoft_formats::dcx::{Compression, Envelope};
 use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_foundations::compress::reference;
 use primase_foundations::compress::{Compressor, Decompressor};
-use primase_fromsoft::dcx::{Compression, Envelope};
-use primase_testdata::gate::{GateReport, Tolerance};
+use primase_core::gate::{GateReport, Tolerance};
+use primase_testdata::{Game, OracleSet, Tool, oracle, tool};
 
 type BoxError = Box<dyn std::error::Error>;
 

@@ -1,7 +1,8 @@
 //! MaterialEx row and event-payload reading. Typed source facts and all original bytes
 //! travel together; this module assigns no transition or application meaning to a word.
 use crate::components::material_events::{MaterialExRow, MaterialExRows};
-use crate::{Game, Result, invalid, param::Param};
+use crate::invalid;
+use fromsoft_formats::{Game, Result, param::Param};
 use primase_core::{EventValue, EventValueData};
 
 /// Only the ER v4 / 96-byte layout independently inspected in the installed rows is read.
@@ -108,7 +109,7 @@ mod tests {
             data_version: 4,
             unk06: 1,
             row_size: 96,
-            rows: vec![crate::param::Row {
+            rows: vec![fromsoft_formats::param::Row {
                 id: 10300,
                 name: None,
                 data: bytes.clone(),

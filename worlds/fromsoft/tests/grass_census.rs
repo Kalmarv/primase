@@ -9,11 +9,9 @@
 //!   spacing <s> lod_range <r>`; `missing <map> <id>` for a row the param does not hold.
 //!
 //! Runs where the install, its keys (regulation.key) and the Oodle library are configured; otherwise it does nothing.
-mod inputs;
-
+use fromsoft_formats::{Game, Install, Keys, dcx::Decoder};
 use primase_core::World;
 use primase_fromsoft::sekiro;
-use primase_fromsoft::{Game, Install, Keys, dcx::Decoder};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 mod common;
@@ -26,7 +24,7 @@ const NOWHERE: sekiro::Region = sekiro::Region {
 
 #[test]
 fn the_grass_the_maps_name() -> Result<()> {
-    let Some(dll) = inputs::oodle(inputs::Tool::Oodle6) else {
+    let Some(dll) = primase_testdata::oodle(primase_testdata::Tool::Oodle6) else {
         return Ok(());
     };
     let dll = common::oodle(dll)?;
@@ -34,8 +32,8 @@ fn the_grass_the_maps_name() -> Result<()> {
         oodle: Some(&dll),
         max_output: 1 << 30,
     };
-    let data = inputs::Game::Elden;
-    let (Some(root), Some(folder)) = (inputs::install(data), inputs::keys(data)) else {
+    let data = primase_testdata::Game::Elden;
+    let (Some(root), Some(folder)) = (primase_testdata::install(data), primase_testdata::keys(data)) else {
         return Ok(());
     };
     let install = Install::new(root, Game::EldenRing, Keys::from_folder(folder, Game::EldenRing)?);

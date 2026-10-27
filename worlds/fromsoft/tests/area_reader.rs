@@ -4,20 +4,18 @@
 //!
 //! Needs `installs.sekiro` and `tools.oodle6`.
 #![allow(clippy::unwrap_used)]
-mod inputs;
-
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
-use inputs::{Game, Tool, install, oodle};
+use fromsoft_formats::dcx::Decoder;
 use primase_core::convert::{Finished, Reader, Result, WholeWorld, Writer, check_emits, convert_parts};
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, Target};
 use primase_core::{Instance, World};
-use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::rigid::SourceModel;
 use primase_fromsoft::sekiro::convert::AreaReader;
 use primase_fromsoft::sekiro::{self, world_bounds};
+use primase_testdata::{Game, Tool, install, oodle};
 mod common;
 
 /// Every part's placements.
@@ -40,6 +38,9 @@ fn slice_a_reads_through_the_convert_loop() {
     let (Some(root), Some(dll)) = (install(Game::Sekiro), oodle(Tool::Oodle6)) else {
         return;
     };
+    let Some(sekiro) = common::sekiro(&root).unwrap() else {
+        return;
+    };
     let dll = common::oodle(dll).unwrap();
     let decoder = Decoder {
         oodle: Some(&dll),
@@ -52,7 +53,7 @@ fn slice_a_reads_through_the_convert_loop() {
         }),
         ..Default::default()
     };
-    let mut reader = AreaReader::new(&root, "m11_01", decoder, options.clone());
+    let mut reader = AreaReader::of(sekiro.clone(), "m11_01", decoder, options.clone());
     let (world, report) = reader.read().unwrap();
     check_emits(&world, reader.emits(), "the read").unwrap();
     assert!(report.iter().any(|(k, _)| k == "sekiro area"), "{report:?}");
@@ -75,7 +76,7 @@ fn slice_a_reads_through_the_convert_loop() {
     // through the convert loop, the whole world as one part
     let written = Rc::new(RefCell::new(Vec::new()));
     convert_parts(
-        &mut AreaReader::new(&root, "m11_01", decoder, options),
+        &mut AreaReader::of(sekiro, "m11_01", decoder, options),
         &mut WholeWorld::default(),
         Box::new(Placements(written.clone())),
         &PassManager::new(PassRegistry::new()),
@@ -97,6 +98,9 @@ fn the_reader_declares_every_name_it_emits() {
     let (Some(root), Some(dll)) = (install(Game::Sekiro), oodle(Tool::Oodle6)) else {
         return;
     };
+    let Some(sekiro) = common::sekiro(&root).unwrap() else {
+        return;
+    };
     let dll = common::oodle(dll).unwrap();
     let decoder = Decoder {
         oodle: Some(&dll),
@@ -115,7 +119,7 @@ fn the_reader_declares_every_name_it_emits() {
             ..Default::default()
         };
         declared.extend(primase_fromsoft::sekiro::convert::emitted_names(&options));
-        let mut reader = AreaReader::new(&root, "m11_01", decoder, options);
+        let mut reader = AreaReader::of(sekiro.clone(), "m11_01", decoder, options);
         let (world, _) = reader.read().unwrap();
         let all: BTreeSet<_> = world.iter::<Instance>().map(|(e, _)| e).collect();
         let (loaded, _) = reader.load(&world, &all).unwrap();

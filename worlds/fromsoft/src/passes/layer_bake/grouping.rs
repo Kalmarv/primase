@@ -1,7 +1,8 @@
 //! Named static approximation: at most three area-weighted layer levels,
 //! quantized to 1/64. This approximates a continuously varying shader input;
 //! it is not a property of FLVER or the game's material system.
-use crate::{Result, invalid};
+use crate::invalid;
+use fromsoft_formats::Result;
 use primase_core::{Primitive, Topology};
 
 pub type Features = [f32; 8];

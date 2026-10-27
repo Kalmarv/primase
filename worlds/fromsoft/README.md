@@ -1,38 +1,9 @@
 # primase-fromsoft
 
-Read-only FromSoftware archive access (Sekiro, Elden Ring): raw RSA BHD5 envelopes, bucket indexes, AES-128-ECB
-entry ranges, DCX DFLT/KRAK envelopes, and BND4 file tables.
-
-What differs between the games and is not stated by their files is data in one descriptor, `Game` (`game.rs`), with
-each game's table in its own module (`sekiro`, `elden`): its archive set (`ArchiveSet`: the BHD5/BDT pairs, whether
-each is required, the path hash, the BHD5 file-record layout and where its keys come from). Formats are read by what
-their bytes state.
-
-| | Sekiro | Elden Ring |
-|---|---|---|
-| pairs (shard) | Data1..Data5 (1..5) | Data0..Data3 (0..3), DLC (4, optional), sd/sd (5), sd/sd_dlc02 (6, optional): UXM's archive list order |
-| path hash | base 37, u32 (`path_hash`) | base 133, u64 (`path_hash64`) |
-| file record | u32 hash, u32 padded size, u64 offset, SHA and AES offsets, u64 logical size | u64 hash, u32 padded and u32 logical size, u64 offset, SHA and AES offsets |
-| keys | published, built in | supplied by the caller (`Keys::from_folder`: one PKCS#1 PEM per pair, `Data0.pem`, `sd.pem`, ...) |
-
-`Archive::open(root)` indexes Sekiro's five pairs with the built-in keys; `Archive::open_game(root, game, &keys)`
-indexes any game's (an optional pair the install lacks is listed in `absent`). Entry hashes are u64 throughout
-(Sekiro's zero-extended). `read_hash(hash, decoder)` and `read(path, decoder)` return decrypted, decoded bytes.
-`read_stored(hash)` returns decrypted stored bytes including padding. `Header::read(plain, &record)` and
-`unwrap_rsa` expose the lower-level index operations; `Entry::decrypt` applies only its listed ranges. SHA metadata
-is parsed and retained, not authenticated.
-
-`Decoder { oodle, max_output }` takes an optional borrowed, caller-loaded Oodle
-library and an explicit decompressed-byte ceiling. KRAK needs the native decoder;
-DFLT does not. `Binder::read(bytes, &decoder)` returns IDs, names, flags, and
-member bytes, including decoded nested DCX. Names are UTF-16 or ASCII; non-ASCII
-legacy Shift-JIS names are rejected. Unsupported layouts and unaccounted bytes
-are errors. BDT padding for non-DCX entries is retained for reference-reader
-parity: a zero BHD logical size does not imply an empty entry.
-
-`NameDictionary::read(path)` reads a caller-supplied UTF-8 Sekiro path list, `read_for(path, game)` any game's,
-keyed by its path hash. Hash collisions retain all distinct normalized candidates. No dictionary, native library,
-key or game asset is distributed with this crate.
+What primase makes of FromSoftware's data (Sekiro, Elden Ring): the area and character readers that build a world
+from what `fromsoft-formats` (`repos/fromsoft-formats`) reads, the components they make, and the passes that lower
+them. The archives, binders and formats themselves, and the archive keys a caller supplies, are described in
+`repos/fromsoft-formats/README.md`.
 
 ## Gates
 
@@ -41,7 +12,8 @@ a NIST AES vector, encrypted ranges, nested envelopes, hash tables, truncations,
 and single-byte mutations. Real gates skip when their environment variables
 are unset. Use `cargo test -p primase-fromsoft -- --nocapture`.
 
-- `installs.sekiro`: directory containing the five BHD/BDT pairs.
+- `installs.sekiro`, `keys.sekiro`: directory containing the five BHD/BDT pairs, and the folder of their keys (`Data1.pem`
+  to `Data5.pem`).
 - `tools.oodle6`: explicitly trusted version-6 native library.
 - `oracles.uxm.sekiro/dictionary.txt`: optional path dictionary for the named-count gate.
 - `oracles.soulsformats.sekiro/census`: directory of independent reference decoder
@@ -185,7 +157,7 @@ geometric/stored-normal agreement, `Part::drop_degenerates` retains the vertices
 and `Part::apply_uv_scale` applies a material's main-layer UV scale. `lower-fromsoft-geometry` makes each of these
 choices explicit. None of them bakes layered materials or splits parts into baked weight levels.
 
-The archive oracle directory (`oracles.soulsformats.sekiro/census`, `oracles.soulsformats.elden/census`; `tests/flver_census.rs`
+The archive oracle directory (`oracles.soulsformats.sekiro/census`, `oracles.soulsformats.elden/census`; `repos/fromsoft-formats/tests/flver_census.rs`
 runs one body for each game) adds `flver/models.jsonl`, one record per FLVER2
 found in the archive and its binders (a FLVER the reference refuses: `id`, `sha256` and `error`; ours must refuse
 it too), `id` the shard/hex hash followed by
@@ -259,7 +231,7 @@ patterns). Repeated names follow the reference's convention: later uses become
 
 `btl::LightBank::read` reads versions 16 (Sekiro) and 18 (Elden Ring), which share the 232-byte light record, and
 keeps the stored version; other versions are refused. Elden Ring's banks are checked against SoulsFormatsNEXT's BTL
-(`btl.jsonl`, `tests/btl_census.rs`): one record per bank the install holds, `path`, then either `error` (the
+(`btl.jsonl`, `repos/fromsoft-formats/tests/btl_census.rs`): one record per bank the install holds, `path`, then either `error` (the
 reference refuses it; ours must refuse it too) or `version` and `lights` (`name`, `type`, `diffuse`/`specular` RGB,
 `diffuse_power`, `specular_power`, `cast_shadows`, `cone_angle`, `position`, `rotation`, `radius`; floats as bit
 patterns).
@@ -360,7 +332,7 @@ glTF's default of 1, and is counted as an approximation. Material identity is ch
 any reference exporter's string formatting or key hashing.
 
 `oracles.soulsformats.sekiro/materials` is SoulsFormats' reading of every MTD in
-`/mtd/allmaterialbnd.mtdbnd.dcx`, in binder order, made by the dump harness's `mtd` mode (`tests/mtd_census.rs`).
+`/mtd/allmaterialbnd.mtdbnd.dcx`, in binder order, made by the dump harness's `mtd` mode (`repos/fromsoft-formats/tests/mtd_census.rs`).
 `mtd.jsonl` lists each one's binder name, decoded SHA256, shader, description,
 typed parameters and every texture declaration; the gate compares them exactly,
 f32 values by their bits. `mtd-boundaries.jsonl` lists each file's blocks as
@@ -384,7 +356,7 @@ and bytes after the last referenced item are kept as the unreferenced tail; any 
 SoulsFormatsNEXT's MATBIN over every material binder of the install (`matbin.jsonl` of `oracles.soulsformats.elden/format`:
 one record per member in member order, `binder` (archive path), `name`, `shader`, `source`, `key`, `params` (`name`,
 `key`, `type`, `value` as strings: bools 0/1, ints decimal, floats as bit patterns; the reference keeps three floats of
-a float3) and `samplers` (`type`, `path`, `key`, `unknown`); `tests/matbin_census.rs`). The reference reads a short
+a float3) and `samplers` (`type`, `path`, `key`, `unknown`); `repos/fromsoft-formats/tests/matbin_census.rs`). The reference reads a short
 value's declared size past the next item; the gate compares the stored prefix and counts such values. The area read
 does not resolve materials against them yet.
 
@@ -400,7 +372,7 @@ are zero). Checked against SoulsFormatsNEXT ee1dd61's `METAPARAM` over every bun
 (`metaparam.jsonl` of `oracles.soulsformats.elden/format`: one record per bundle, `binder`, `bundle`, `name`, the header
 words `unk30`, `cbuffer_size`, `flags`, `unk40`, `gxmd_key`, `ca_block_size`, `unk50`, `ca_param_components`,
 `shader_id`, then `textures`, `render_passes`, `ca_params` and `mtd_params` with floats as bit patterns;
-`tests/metaparam_census.rs`). Elden Ring stores colour MtdParams as type 13 where Sekiro stores 12.
+`repos/fromsoft-formats/tests/metaparam_census.rs`). Elden Ring stores colour MtdParams as type 13 where Sekiro stores 12.
 
 ## Area reading and its passes
 
@@ -532,7 +504,7 @@ Havok skeleton named `<model> havok skeleton` and `havok.animation` clips, count
 `Report::object_animation` and the read's notices; they are not lowered onto the placements
 yet (the placed objects keep their rest pose), and the clip entities of different models
 share their file names (`a000_003000`), told apart by their `core.provenance`.
-`tests/object_animation_census.rs` (install-gated) prints what the object binders hold for
+`repos/fromsoft-formats/tests/object_animation_census.rs` (install-gated) prints what the object binders hold for
 both games (Elden Ring's with its own keys), checking Elden Ring's assets for a binder beside
 them too.
 `tests/draw_param_census.rs` (install-gated) prints every draw-param field the chosen
@@ -576,7 +548,7 @@ A character's or part's files are kept beyond the model and its clips:
   `lower-fromsoft-part-collision{convex=...,leave-out-motion=...}` lowers the bodies of a prototype no placement uses
   (as `lower-fromsoft-object-collision` does the placed ones) into `core.collision` on the prototype itself, in its own space.
   A file that does not read is named in `unread` with its reason.
-- `tests/havok_census.rs` (install-gated) prints, for twenty characters of each game, the classes of every Havok member of
+- `repos/fromsoft-formats/tests/havok_census.rs` (install-gated) prints, for twenty characters of each game, the classes of every Havok member of
   their chrbnd, anibnd, behbnd and texbnd binders (`HAVOK`, `CLASS` with the stored field names of the cloth, ragdoll,
   rigid body, constraint and physics classes, `HAVOKERR`) and every binder member by kind, extension and whether a
   reader keeps it (`EXT`). `havok_formats::cloth::read` (cloth data, ragdoll data, constraint infos) is written from those lines and the census prints what it reads of every such file (`PHYSICS`, or `PHYSICSERR` with the reason); the character reader does not keep its output yet.
@@ -865,7 +837,7 @@ map by their base value modulo 100 to core surface names where the class's surfa
 is known.
 
 Elden Ring's collision is Havok 2018.1 (`havok-formats`'s `SDK_VERSIONS`). Its stored compressed meshes are
-checked against HKLib ac40bc9 (`havok.jsonl` of `oracles.soulsformats.elden/format`, `tests/havok_census.rs`): one record
+checked against HKLib ac40bc9 (`havok.jsonl` of `oracles.soulsformats.elden/format`, `repos/fromsoft-formats/tests/havok_census.rs`): one record
 per file, `file` (`<binder path>:<member>`), then `error` or `shapes`, each `kind`, `bits_per_key`, `sections`
 (`codec` as six f32 bit patterns, `first_packed_vertex`, `packed_vertices`, `first_shared_vertex`,
 `first_primitive`, `primitives`), `packed_vertices`, `shared_vertices`, `shared_vertices_index`, `primitives` (four

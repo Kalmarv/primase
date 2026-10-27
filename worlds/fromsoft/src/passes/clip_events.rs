@@ -1,5 +1,6 @@
 //! Map reader-typed source events to core in identical order. This pass parses no bytes.
-use crate::{Game, sekiro::character_data::ClipEvents as SourceEvents};
+use crate::sekiro::character_data::ClipEvents as SourceEvents;
+use fromsoft_formats::Game;
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Clip, ClipEvent, ClipEvents, Component, World};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,7 +126,7 @@ mod tests {
                 additive: None,
             },
         );
-        let event = crate::tae::Event {
+        let event = fromsoft_formats::tae::Event {
             kind: 198,
             unk04: 0,
             start: 0.,
@@ -135,7 +136,7 @@ mod tests {
         let source = SourceEvents {
             file: "fixture.tae".into(),
             animation: 1,
-            header: crate::tae::Header::None,
+            header: fromsoft_formats::tae::Header::None,
             file_name: None,
             authored_events: vec![event.clone()],
             events: vec![event],

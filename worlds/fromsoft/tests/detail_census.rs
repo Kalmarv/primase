@@ -28,6 +28,7 @@ mod inputs;
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use fromsoft_formats::{Binder, Game, Install, Keys, dcx::Decoder};
 use iridia_interface::Stage;
 use primase_core::World;
 use primase_core::{shader::Shader, shader::ShaderBinding};
@@ -36,7 +37,6 @@ use primase_fromsoft::detail_probe::ProgramProbe;
 use primase_fromsoft::materials::{Definition, LayeredMaterial, Material};
 use primase_fromsoft::sekiro::passes::detail::{family, proof_seed};
 use primase_fromsoft::sekiro::{self, CharacterOptions};
-use primase_fromsoft::{Binder, Game, Install, Keys, dcx::Decoder};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 mod common;

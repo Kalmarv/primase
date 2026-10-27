@@ -1,7 +1,7 @@
 //! A source material as the reader resolved it from its FLVER entry and definition (an MTD or a material binary:
 //! `fromsoft.material`), its layered definition (`fromsoft.layered_material`) and its bindings: what the source states,
 //! no choice made.
-use crate::{
+use fromsoft_formats::{
     flver,
     mtd::{MaterialDefinition, Value},
 };
@@ -53,7 +53,7 @@ impl SkipClass {
 #[serde(untagged)]
 pub enum Definition {
     Mtd(MaterialDefinition),
-    Matbin(crate::matbin::Material),
+    Matbin(fromsoft_formats::matbin::Material),
 }
 impl Definition {
     /// The shader's path as stored (`.spx` / `.fx`).
@@ -88,8 +88,8 @@ impl Definition {
                     _ => None,
                 }),
             Definition::Matbin(m) => match m.param(name)? {
-                crate::matbin::Value::Int(x) => Some(*x),
-                crate::matbin::Value::Int2(x) => Some(x[0]),
+                fromsoft_formats::matbin::Value::Int(x) => Some(*x),
+                fromsoft_formats::matbin::Value::Int2(x) => Some(x[0]),
                 _ => None,
             },
         }
@@ -155,7 +155,7 @@ impl LayeredMaterial {
         self.view().depth_write_disabled()
     }
     /// [`MaterialView::program_name`].
-    pub fn program_name(&self) -> crate::Result<String> {
+    pub fn program_name(&self) -> fromsoft_formats::Result<String> {
         self.view().program_name()
     }
     /// [`MaterialView::is_forward`].
@@ -190,7 +190,7 @@ pub enum ParameterValue {
 #[derive(Clone, Copy, Debug)]
 pub enum DefinitionRef<'a> {
     Mtd(&'a MaterialDefinition),
-    Matbin(&'a crate::matbin::Material),
+    Matbin(&'a fromsoft_formats::matbin::Material),
 }
 impl<'a> DefinitionRef<'a> {
     /// The shader's path as stored.
@@ -208,7 +208,7 @@ impl<'a> DefinitionRef<'a> {
     /// Parameter `name`'s value, where the definition states it (a material binary's value stored shorter than its type
     /// is not one).
     pub fn parameter(self, name: &str) -> Option<ParameterValue> {
-        use crate::matbin::Value as B;
+        use fromsoft_formats::matbin::Value as B;
         match self {
             DefinitionRef::Mtd(d) => d
                 .parameters
@@ -244,10 +244,10 @@ impl<'a> DefinitionRef<'a> {
         self.texture_kinds().contains(&kind)
     }
     /// The tiling scale the definition stores for its texture slot of `Texture2D_N` number `n`
-    /// ([`crate::metaparam::texture_number`]), where it stores one that is not zero: the two floats after an MTD
+    /// ([`fromsoft_formats::metaparam::texture_number`]), where it stores one that is not zero: the two floats after an MTD
     /// texture's path (Sekiro), the two after a material binary sampler's key (Elden Ring).
     pub fn stored_scale(self, n: u32) -> Option<[f32; 2]> {
-        let number = crate::metaparam::texture_number;
+        let number = fromsoft_formats::metaparam::texture_number;
         let scale = match self {
             DefinitionRef::Mtd(d) => d
                 .textures
@@ -314,7 +314,7 @@ impl MaterialView<'_> {
     /// three layered shaders have both (no plain program discards); in a capture of the running game the contents of the
     /// pixel stage's material buffer for a plain program have `FC_AlphaRef.x` = -100 and the alpha-tested one's 0.502 =
     /// 128 / 255 of `g_AlphaRef`.
-    pub fn program_name(&self) -> crate::Result<String> {
+    pub fn program_name(&self) -> fromsoft_formats::Result<String> {
         if self.definition.parameter("GXFT_SATStaticSwitch").is_none() {
             return Err(crate::invalid("layer shader", 0, "missing static switch"));
         }
@@ -403,13 +403,13 @@ impl Material {
     /// The material's identity record: the JSON of every field, the addressing as the engine samples it
     /// ([`Material::with_effective_addressing`]: a stated repeat and an unstated addressing are one). The reader keeps
     /// one entity per record, so two source materials are one when their records are equal.
-    pub fn identity(&self) -> crate::Result<String> {
+    pub fn identity(&self) -> fromsoft_formats::Result<String> {
         primase_core::json::to_value(&self.with_effective_addressing())
             .map(|v| v.to_string())
             .map_err(|e| crate::invalid("Sekiro material", 0, e))
     }
     /// A short name for [`Material::identity`], for what is derived from the material ([`identity_digest`]).
-    pub fn identity_digest(&self) -> crate::Result<String> {
+    pub fn identity_digest(&self) -> fromsoft_formats::Result<String> {
         Ok(identity_digest(&self.identity()?))
     }
 }

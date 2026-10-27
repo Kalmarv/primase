@@ -1,5 +1,5 @@
 //! A prototype's FLVER model as the reader keeps it, and as `fromsoft-apply-rigid-skinning` posed it.
-use crate::flver::Model;
+use fromsoft_formats::flver::Model;
 use primase_core::Component;
 
 /// A prototype's FLVER as the file stores it (`fromsoft.flver`): skeleton, every mesh with its face sets (levels of
@@ -56,7 +56,7 @@ impl Component for SkeletonOf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::flver::{FaceSet, Mesh};
+    use fromsoft_formats::flver::{FaceSet, Mesh};
 
     /// The world size estimate counts a model's indices (a model with no vertices is its faces alone).
     #[test]

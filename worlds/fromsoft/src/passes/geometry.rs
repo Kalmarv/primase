@@ -1,7 +1,10 @@
-//! The repairs a geometry lowering may choose for a decoded FLVER part (its UV tiling applied, degenerate triangles
-//! dropped, its winding inferred from the stored normals). `lower-fromsoft-geometry` makes each choice explicit.
-use crate::flver::Part;
-use crate::{Result, invalid};
+//! A FLVER face set decoded as a mesh in the world frame ([`decode`], [`Part`]), and the repairs a geometry lowering
+//! may choose for it (its UV tiling applied, degenerate triangles dropped, its winding inferred from the stored
+//! normals). `lower-fromsoft-geometry` makes each choice explicit.
+mod part;
+use crate::invalid;
+use fromsoft_formats::Result;
+pub use part::{Part, decode, tangent_to_scene};
 use primase_meshops::vector::Vec3;
 
 impl Part {

@@ -38,12 +38,10 @@
 //! (`sekiro::read_map_records`) and lowered by the same pass the lab runs.
 //!
 //! Runs where the install, its keys and the Oodle library are configured; otherwise it does nothing.
-mod inputs;
-
+use fromsoft_formats::msb::{Event, MapLayout, Region};
+use fromsoft_formats::{Archive, Binder, Game, Install, Keys, NameDictionary, dcx::Decoder};
 use primase_core::World;
-use primase_fromsoft::msb::{Event, MapLayout, Region};
 use primase_fromsoft::sekiro::{ExtrasReport, read_map_records};
-use primase_fromsoft::{Archive, Binder, Game, Install, Keys, NameDictionary, dcx::Decoder};
 use std::collections::{BTreeMap, BTreeSet};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -261,7 +259,7 @@ fn area_census(
     common::run(&mut world, "lower-fromsoft-map-records{leave-out=}")?;
     let word = |named: Option<&str>, code: u32| named.map_or_else(|| format!("type_{code}"), str::to_owned);
     let mut part_records: BTreeMap<&str, usize> = BTreeMap::new();
-    for (_, part) in world.iter::<primase_fromsoft::msb::UnplacedPart>() {
+    for (_, part) in world.iter::<primase_fromsoft::stored::UnplacedPart>() {
         *part_records.entry(part.kind).or_default() += 1;
     }
     for (kind, n) in &parts {
@@ -278,11 +276,11 @@ fn area_census(
 
     // regions and events, by type
     let mut region_records: BTreeMap<String, usize> = BTreeMap::new();
-    for (_, r) in world.iter::<Region>() {
+    for (_, r) in world.iter::<primase_fromsoft::stored::Region>() {
         *region_records.entry(word(r.type_name, r.type_code)).or_default() += 1;
     }
     let mut event_records: BTreeMap<String, usize> = BTreeMap::new();
-    for (_, e) in world.iter::<Event>() {
+    for (_, e) in world.iter::<primase_fromsoft::stored::Event>() {
         *event_records.entry(word(e.type_name, e.type_code)).or_default() += 1;
     }
     let mut regions: BTreeMap<(String, u32), Vec<&Region>> = BTreeMap::new();
@@ -409,7 +407,7 @@ fn census(
 
 #[test]
 fn what_the_maps_store_and_what_primase_keeps() -> Result<()> {
-    let Some(dll) = inputs::oodle(inputs::Tool::Oodle6) else {
+    let Some(dll) = primase_testdata::oodle(primase_testdata::Tool::Oodle6) else {
         return Ok(());
     };
     let dll = common::oodle(dll)?;
@@ -418,18 +416,17 @@ fn what_the_maps_store_and_what_primase_keeps() -> Result<()> {
         max_output: 1 << 30,
     };
     for (game, data) in [
-        (Game::Sekiro, inputs::Game::Sekiro),
-        (Game::EldenRing, inputs::Game::Elden),
+        (Game::Sekiro, primase_testdata::Game::Sekiro),
+        (Game::EldenRing, primase_testdata::Game::Elden),
     ] {
-        let (Some(root), keys) = (inputs::install(data), inputs::keys(data)) else {
+        let (Some(root), keys) = (primase_testdata::install(data), primase_testdata::keys(data)) else {
             continue;
         };
         let keys = match (game, keys) {
-            (Game::Sekiro, _) => Keys::published(Game::Sekiro).ok_or("Sekiro's keys")?,
             (_, Some(folder)) => Keys::from_folder(folder, game)?,
             (_, None) => continue,
         };
-        let names = inputs::oracle(inputs::OracleSet::Uxm, data, "dictionary.txt")
+        let names = primase_testdata::oracle(primase_testdata::OracleSet::Uxm, data, "dictionary.txt")
             .map(|path| NameDictionary::read_for(path, game))
             .transpose()?;
         census(game, &Install::new(root, game, keys), names.as_ref(), &decoder)?;

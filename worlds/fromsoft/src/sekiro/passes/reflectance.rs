@@ -1,5 +1,6 @@
 //! Interpretation of Sekiro's encoded G-buffer3, separate from shader execution.
-use crate::{layer_bake::OutputRgb, materials::Material, mtd::Value};
+use crate::{layer_bake::OutputRgb, materials::Material};
+use fromsoft_formats::mtd::Value;
 use primase_core::pass::PassLog;
 use primase_core::pbr::Specular;
 
@@ -88,18 +89,18 @@ mod tests {
     use super::*;
     fn source(family: &str, switch: i32) -> Material {
         crate::materials::resolve(
-            &crate::flver::Material {
+            &fromsoft_formats::flver::Material {
                 name: "fixture".into(),
                 mtd: "fixture.mtd".into(),
                 textures: vec![],
                 gx: vec![],
             },
-            Some(&crate::mtd::MaterialDefinition {
+            Some(&fromsoft_formats::mtd::MaterialDefinition {
                 shader: family.into(),
                 description: String::new(),
                 textures: vec![],
                 block_lengths: vec![],
-                parameters: vec![crate::mtd::Parameter {
+                parameters: vec![fromsoft_formats::mtd::Parameter {
                     name: "GXFT_SATStaticSwitch".into(),
                     value: Value::Int(vec![switch]),
                 }],

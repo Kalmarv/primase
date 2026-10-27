@@ -12,8 +12,6 @@
 //! whose install is not configured prints nothing. Run it as one job: `cargo test -p primase-checks --test
 //! binding_census -- --nocapture --test-threads=1`.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::too_many_lines)]
-mod inputs;
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use iridia_interface::{ConstantRole, InputRole, OutputRole, RenderState};
@@ -183,10 +181,10 @@ fn print(v: &Value) {
 
 #[test]
 fn gta_vespucci() {
-    use inputs::{Game, install, keys};
     use primase_gta::components::GtaShader;
     use primase_gta::passes::resolve_shaders::RESOLVE_GTA_SHADERS;
     use primase_gta::read::source::GtaSource;
+    use primase_testdata::{Game, install, keys};
     let (Some(dir), Some(keys)) = (install(Game::Gta), keys(Game::Gta)) else {
         return;
     };
@@ -222,7 +220,6 @@ fn gta_vespucci() {
 
 #[test]
 fn rr_scenes() {
-    use inputs::{Game, install};
     use primase_anvil::components::AnvilMaterial;
     use primase_anvil::passes::RESOLVE_ANVIL_SHADERS;
     use primase_anvil::read::convert::{
@@ -232,6 +229,7 @@ fn rr_scenes() {
     use primase_core::Instance;
     use primase_core::convert::Reader;
     use primase_core::frame::SourceFrame;
+    use primase_testdata::{Game, install};
     let Some(dir) = install(Game::Riders) else {
         return;
     };
@@ -293,15 +291,14 @@ fn rr_scenes() {
 // ---- Unity: SkateBIRD level1, Sledding Game level1 ----
 
 fn unity_scene(game: &str, label: &str, data: &std::path::Path, tpk: &std::path::Path, level: &str) {
+    use primase_unity::TypeTreePackage;
     use primase_unity::components::{
-        UnityLight, UnityMaterial, UnityPrograms, UnityRenderSettings, UnityRenderer,
+        RenderPipeline, UnityLight, UnityMaterial, UnityPrograms, UnityRenderSettings, UnityRenderer,
     };
     use primase_unity::level::{LevelOptions, read_level_with};
+    use primase_unity::player::Player;
     use primase_unity::program::read_programs;
     use primase_unity::resolve_shaders::RESOLVE_UNITY_SHADERS;
-    use unity_formats::TypeTreePackage;
-    use unity_formats::player::Player;
-    use unity_formats::player::RenderPipeline;
     let player = Player::open(
         data,
         TypeTreePackage::parse(&std::fs::read(tpk).unwrap()).unwrap(),
@@ -364,7 +361,7 @@ fn unity_scene(game: &str, label: &str, data: &std::path::Path, tpk: &std::path:
 
 #[test]
 fn unity_levels() {
-    use inputs::{Game, Tool, install_file, tool};
+    use primase_testdata::{Game, Tool, install_file, tool};
     let Some(tpk) = tool(Tool::UnityTpk) else {
         return;
     };
@@ -398,20 +395,15 @@ fn fromsoft_run(world: &mut World) -> RunReport {
 #[allow(unsafe_code)]
 fn oodle(path: std::path::PathBuf) -> primase_foundations::compress::oodle::Oodle {
     // SAFETY: the test configuration names a trusted native library.
-    unsafe {
-        primase_foundations::compress::oodle::Oodle::load(
-            path,
-            primase_foundations::compress::oodle::Version::V6,
-        )
-        .unwrap()
-    }
+    unsafe { primase_foundations::compress::oodle::Oodle::load(path, primase_foundations::compress::oodle::Version::V6).unwrap() }
 }
 
 #[test]
 fn fromsoft_areas() {
-    use inputs::{Game, Tool, install, keys, tool};
     use primase_fromsoft::materials::Material;
-    use primase_fromsoft::{Game as FsGame, Install, Keys, dcx::Decoder, sekiro};
+    use primase_fromsoft::sekiro;
+    use fromsoft_formats::{Game as FsGame, Install, Keys, dcx::Decoder};
+    use primase_testdata::{Game, Tool, install, keys, tool};
     let Some(dll) = tool(Tool::Oodle6) else {
         return;
     };
@@ -426,10 +418,11 @@ fn fromsoft_areas() {
         let log = &report.steps.last().unwrap().log;
         print(&tally(&world, game, scene, materials, log));
     };
-    if let Some(root) = install(Game::Sekiro) {
+    if let (Some(root), Some(keys)) = (install(Game::Sekiro), keys(Game::Sekiro)) {
+        let install = Install::new(root, FsGame::Sekiro, Keys::from_folder(keys, FsGame::Sekiro).unwrap());
         let mut world = World::default();
-        sekiro::read_area(
-            &root,
+        sekiro::read_game_area(
+            &install,
             "m11_01",
             &decoder,
             &sekiro::Options {
@@ -477,11 +470,11 @@ fn fromsoft_areas() {
 
 #[test]
 fn stuntboost_bed() {
-    use inputs::{Game, install};
-    use monogame_formats::mgfx::Effect;
-    use monogame_formats::xnb::Xnb;
+    use primase_monogame::mgfx::Effect;
+    use primase_monogame::xnb::Xnb;
     use primase_stuntboost::components::StuntboostMaterial;
     use primase_stuntboost::read::level::read_level;
+    use primase_testdata::{Game, install};
     let Some(root) = install(Game::Stuntboost) else {
         return;
     };

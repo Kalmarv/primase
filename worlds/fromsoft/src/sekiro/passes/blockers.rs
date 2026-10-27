@@ -1,6 +1,6 @@
 //! Interior-blocker recognition is a per-mesh material policy. Preserve the source
 //! records outside `core.mesh`, so no renderer accidentally draws the cards.
-use crate::{flver, materials::Material};
+use crate::materials::Material;
 use primase_core::{Transform, world::Resource};
 use std::collections::BTreeMap;
 
@@ -35,7 +35,7 @@ pub struct Card {
     pub indices: Vec<u32>,
 }
 impl Card {
-    pub fn from_part(part: flver::Part, material: Material) -> Self {
+    pub fn from_part(part: crate::geometry::Part, material: Material) -> Self {
         Self {
             source_mesh: part.source_mesh,
             material,

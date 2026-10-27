@@ -3,9 +3,11 @@
 //! numeric slot named twice prefers the texture the MTD declares), the material's SAT parameters and texture tiling
 //! as the constants' own words, the engine's per-view, per-frame and per-object values as roles (never values), and
 //! the G-buffer layout of the outputs.
+use crate::game::Shading;
+use crate::invalid;
 use crate::materials::{Binding, LayeredMaterial, MaterialView, ParameterValue};
-use crate::metaparam::Metaparam;
-use crate::{Result, invalid};
+use fromsoft_formats::Result;
+use fromsoft_formats::metaparam::Metaparam;
 use iridia::matrix::{Unshown, state_lines};
 use iridia::{D3dClass, Interface, Program, Resource, ScalarType, SystemValue};
 use iridia_exec::ProgramShader;
@@ -149,10 +151,10 @@ pub const ENGINE_SCENE_DEPTH_TEXTURE: &str = "g_DepthTexture";
 /// maps do; in Sekiro's m11_01 no binding changes role. No runtime capture confirms it yet (the Sekiro D3D11 capture
 /// records render-target and depth formats only, not the views a program samples).
 ///
-/// The index is [`crate::metaparam::texture_number`]'s, the one parse of a binding key's slot the reader's unbound rule
-/// ([`crate::metaparam::unbound_slots`]) also uses, so a key binds the same slot on both sides.
+/// The index is [`fromsoft_formats::metaparam::texture_number`]'s, the one parse of a binding key's slot the reader's unbound rule
+/// ([`fromsoft_formats::metaparam::unbound_slots`]) also uses, so a key binds the same slot on both sides.
 pub(crate) fn slot_name(kind: &str) -> Option<(u32, &str)> {
-    let slot = crate::metaparam::texture_number(kind)?;
+    let slot = fromsoft_formats::metaparam::texture_number(kind)?;
     let rest = kind.split_once("Texture2D_")?.1;
     let roles = rest.trim_start_matches(|c: char| c.is_ascii_digit());
     let mut segments = roles.split('_').filter(|s| !s.is_empty());
@@ -207,9 +209,9 @@ pub(crate) fn textures_of(interface: &Interface) -> impl Iterator<Item = &Resour
         .filter(|r| matches!(r.kind, ResourceKind::Texture { .. }))
 }
 
-/// A program resource's `Texture2D_<n>` number, by the one parse of it ([`crate::metaparam::texture_number`]).
+/// A program resource's `Texture2D_<n>` number, by the one parse of it ([`fromsoft_formats::metaparam::texture_number`]).
 fn texture_slot(resource: &Resource) -> Option<u32> {
-    crate::metaparam::texture_number(&resource.provenance.name)
+    fromsoft_formats::metaparam::texture_number(&resource.provenance.name)
 }
 
 /// A resource's D3D register.
@@ -286,7 +288,7 @@ pub fn render_state(material: &LayeredMaterial) -> RenderState {
 }
 
 /// Bind the pixel program `shader` (entity `entity`) of `material` (an MTD's or a material binary's, [`MaterialView`]),
-/// a program of `game` (its G-buffer layout: [`crate::Game::gbuffer`]). `metaparam` is the parameter definition of its
+/// a program of `game` (its G-buffer layout: [`fromsoft_formats::Game::gbuffer`]). `metaparam` is the parameter definition of its
 /// shader's bundle, which states the default of a parameter the material does not, where each parameter sits in an
 /// array-addressed program, and each texture's uv group. `texture` finds the entity of a texture by stem and colour
 /// space (`true`: sRGB, the albedo maps), or `None` when the reader holds no such file.
@@ -300,7 +302,7 @@ pub fn resolve(
     shader: &ProgramShader,
     entity: Entity,
     material: &MaterialView<'_>,
-    game: crate::Game,
+    game: fromsoft_formats::Game,
     metaparam: Option<&Metaparam>,
     unbound: Unbound,
     texture: &mut dyn FnMut(&str, bool) -> Result<Option<Entity>>,
@@ -427,7 +429,7 @@ pub fn resolve(
         let (role, binding) = role_and_binding(material, &slots, named)?;
         let found = match binding {
             Some(b) => texture(&b.texture, role == "AlbedoMap")?,
-            None if game == crate::Game::EldenRing => {
+            None if game == fromsoft_formats::Game::EldenRing => {
                 let found = match default_texture(material, metaparam, resource) {
                     Some(d) => {
                         let found = texture(&d, role == "AlbedoMap")?;
@@ -842,7 +844,7 @@ pub fn resolve(
             let role = match value {
                 Ok(mut value) => {
                     value.truncate(fit as usize / 4);
-                    if game == crate::Game::EldenRing {
+                    if game == fromsoft_formats::Game::EldenRing {
                         let policy = match p.name.as_str() {
                             "P_ChrCustomize__Eye__snp_0_float3_2" => Some(EYE_COLOUR_DEFAULT_POLICY),
                             "P_ChrCustomize__Eye__snp_0_float_0" => Some(EYE_SCALAR_DEFAULT_POLICY),
@@ -897,10 +899,10 @@ pub fn resolve(
     })
 }
 
-/// The outputs' roles: of a G-buffer program the game's G-buffer layout ([`crate::Game::gbuffer`]), the lanes of each
+/// The outputs' roles: of a G-buffer program the game's G-buffer layout ([`fromsoft_formats::Game::gbuffer`]), the lanes of each
 /// target the program declares; a forward program's render target 0 is the finished colour, and its others (target 1,
 /// drawn to a target the capture does not name) Unknown with that.
-fn output_bindings(interface: &Interface, forward: bool, game: crate::Game) -> Vec<OutputBinding> {
+fn output_bindings(interface: &Interface, forward: bool, game: fromsoft_formats::Game) -> Vec<OutputBinding> {
     let layout = game.gbuffer();
     let mut out = Vec::new();
     for v in &interface.outputs {
@@ -966,10 +968,13 @@ impl ParameterPath {
 }
 
 /// Whether the parameter `name` is a colour, four lanes and an intensity: by the metaparam's type where it declares the
-/// parameter ([`crate::metaparam::MtdParam::is_colour`]), else by its name (`_color_`). The two agree on every colour of
+/// parameter ([`fromsoft_formats::metaparam::MtdParam::is_colour`]), else by its name (`_color_`). The two agree on every colour of
 /// Elden Ring's metaparams (3,028) and material binaries (46,000).
-fn is_colour(name: &str, declared: Option<&crate::metaparam::MtdParam>) -> bool {
-    declared.map_or_else(|| name.contains("_color_"), crate::metaparam::MtdParam::is_colour)
+fn is_colour(name: &str, declared: Option<&fromsoft_formats::metaparam::MtdParam>) -> bool {
+    declared.map_or_else(
+        || name.contains("_color_"),
+        fromsoft_formats::metaparam::MtdParam::is_colour,
+    )
 }
 
 /// A colour's intensity, both paths' one rule: where the material states it, its fifth lane where `value` has five (Elden
@@ -980,7 +985,7 @@ fn intensity(
     material: &MaterialView<'_>,
     name: &str,
     value: &[f32],
-    declared: Option<&crate::metaparam::MtdParam>,
+    declared: Option<&fromsoft_formats::metaparam::MtdParam>,
     path: ParameterPath,
     policies: &mut BTreeMap<String, u64>,
 ) -> f32 {
@@ -1032,13 +1037,13 @@ const SEKIRO_COLOUR_DOMAIN_UNKNOWN: &str =
 /// a particular program or material name. Both named and SAT paths use this rule for finite nonnegative values;
 /// other unresolved roles remain unknown. This is not a census of all materials.
 fn folded_colour(
-    game: crate::Game,
-    declared: Option<&crate::metaparam::MtdParam>,
+    game: fromsoft_formats::Game,
+    declared: Option<&fromsoft_formats::metaparam::MtdParam>,
     value: &[f32],
     intensity: f32,
 ) -> std::result::Result<Vec<f32>, &'static str> {
     let srgb = declared.is_some_and(|p| p.srgb);
-    if game == crate::Game::Sekiro
+    if game == fromsoft_formats::Game::Sekiro
         && srgb
         && (!intensity.is_finite()
             || intensity < 0.
@@ -1514,8 +1519,8 @@ fn normalised(reason: &str) -> String {
 }
 
 /// The uv group of the metaparam's record for program texture `resource`, where it names one: the record of the same
-/// `Texture2D_N` ([`crate::metaparam::texture_number`] of its name), both games' rule. A record's
-/// [`crate::metaparam::Texture::slot`] is its register, not that number: Sekiro's `Character_AMSN_[DetailBlend]`
+/// `Texture2D_N` ([`fromsoft_formats::metaparam::texture_number`] of its name), both games' rule. A record's
+/// [`fromsoft_formats::metaparam::Texture::slot`] is its register, not that number: Sekiro's `Character_AMSN_[DetailBlend]`
 /// metaparam records `Texture2D_7_AlbedoMap` (the base albedo, register 1) in group_1 and `Texture2D_2_AlbedoMap` (a
 /// detail fabric, register 7) in group_3, and finding the record by its slot swapped their tilings.
 fn uv_group(metaparam: Option<&Metaparam>, n: Option<u32>) -> Option<&str> {
@@ -1523,7 +1528,7 @@ fn uv_group(metaparam: Option<&Metaparam>, n: Option<u32>) -> Option<&str> {
     metaparam?
         .textures
         .iter()
-        .find(|t| crate::metaparam::texture_number(&t.name) == Some(n) && !t.uv_group.is_empty())
+        .find(|t| fromsoft_formats::metaparam::texture_number(&t.name) == Some(n) && !t.uv_group.is_empty())
         .map(|t| t.uv_group.as_str())
 }
 
@@ -1571,7 +1576,7 @@ fn tiling(
     )
 }
 
-/// [`tiling`] for the texture slot `Texture2D_<n>` (`n`: [`crate::metaparam::texture_number`] of the binding's key or
+/// [`tiling`] for the texture slot `Texture2D_<n>` (`n`: [`fromsoft_formats::metaparam::texture_number`] of the binding's key or
 /// the resource's name) with `flver` the scale the FLVER's texture of the slot stores: the one rule, for a lowering that
 /// draws the material without its program (the texture transform it gives a map is this row's: the program samples
 /// `uv * scale + offset`).
@@ -1598,7 +1603,7 @@ pub(crate) fn slot_tiling(
 }
 
 /// The texture Elden Ring binds when the material leaves `resource` unbound: the shader metaparam's default for
-/// the same `Texture2D_N`, by its stem, where [`crate::metaparam::unbound_slots`] (the reader's rule too) takes the slot
+/// the same `Texture2D_N`, by its stem, where [`fromsoft_formats::metaparam::unbound_slots`] (the reader's rule too) takes the slot
 /// as unbound. The reader retains the authored texture payload, so its stored texels and the slot's colour transfer
 /// determine the value. The Stormveil capture (ercap3) ties the empty DetailBlend slots' uploaded mip hashes to these
 /// system textures. An explicit binding still takes precedence if its payload is missing.
@@ -1608,7 +1613,7 @@ fn default_texture(
     resource: &Resource,
 ) -> Option<String> {
     let n = texture_slot(resource)?;
-    crate::metaparam::unbound_slots(material.bindings.keys(), metaparam?)
+    fromsoft_formats::metaparam::unbound_slots(material.bindings.keys(), metaparam?)
         .find(|(slot, _)| *slot == n)
         .map(|(_, stem)| stem)
 }
@@ -1636,8 +1641,8 @@ pub(crate) fn centred([u, v]: [f32; 2]) -> [f32; 4] {
 ///
 /// Sekiro's named fields and this path use the same scoped encoding ([`folded_colour`]).
 fn sat_words(
-    game: crate::Game,
-    p: &crate::metaparam::MtdParam,
+    game: fromsoft_formats::Game,
+    p: &fromsoft_formats::metaparam::MtdParam,
     value: &[f32],
     intensity: f32,
 ) -> std::result::Result<Vec<u32>, &'static str> {
@@ -1645,7 +1650,7 @@ fn sat_words(
         return folded_colour(game, Some(p), value, intensity)
             .map(|lanes| lanes.into_iter().map(f32::to_bits).collect());
     }
-    if game == crate::Game::EldenRing && p.value_type == 0 {
+    if game == fromsoft_formats::Game::EldenRing && p.value_type == 0 {
         return Ok(value.iter().map(|&v| (v as i32) as u32).collect());
     }
     Ok(value.iter().map(|v| v.to_bits()).collect())
@@ -1654,8 +1659,8 @@ fn sat_words(
 #[cfg(test)]
 mod tests {
     use super::{centred, sat_words, slot_name, texture_slot};
-    use crate::Game;
-    use crate::metaparam::MtdParam;
+    use fromsoft_formats::Game;
+    use fromsoft_formats::metaparam::MtdParam;
 
     #[test]
     fn sparse_tangent_labels_keep_their_layout_semantic_indices() {

@@ -48,21 +48,16 @@ pub fn run(world: &mut World, pipeline: &str) -> Result<RunReport, Box<dyn std::
 /// The threads the configuration lets a heavy test's work use (`[run] threads`), as the world states them
 /// (`core.threads`).
 pub fn threads() -> primase_foundations::parallel::Threads {
-    primase_foundations::parallel::Threads::new(crate::inputs::threads().get()).expect("at least one thread")
+    primase_foundations::parallel::Threads::new(primase_testdata::threads().get()).expect("at least one thread")
 }
 
 /// The version-6 Oodle codec: the configured game library on Windows, oozextract elsewhere.
 #[allow(unsafe_code)]
 pub fn oodle(
-    library: crate::inputs::OodleLibrary,
+    library: primase_testdata::OodleLibrary,
 ) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
     // SAFETY: the test configuration names a trusted native library.
-    unsafe {
-        primase_foundations::compress::oodle::Oodle::open(
-            library.path(),
-            primase_foundations::compress::oodle::Version::V6,
-        )
-    }
+    unsafe { primase_foundations::compress::oodle::Oodle::open(library.path(), primase_foundations::compress::oodle::Version::V6) }
 }
 
 /// One quad on the ground, u along +x and v along +z, with Sekiro's stored frame for its most common class: the
@@ -123,20 +118,37 @@ pub fn image_passes(world: &mut primase_core::World, pipeline: &str) -> primase_
     report
 }
 
-/// A configured game's archives (`installs.sekiro`, or `installs.elden` with `keys.elden`), or `None` when the
-/// configuration lacks them.
+/// A configured game's archives (`installs.sekiro` with `keys.sekiro`, or `installs.elden` with `keys.elden`), or
+/// `None` when the configuration lacks them.
 pub fn archive(
-    game: primase_fromsoft::Game,
-) -> Result<Option<primase_fromsoft::Archive>, Box<dyn std::error::Error>> {
-    use crate::inputs::{Game as Data, install, keys};
-    use primase_fromsoft::{Archive, Game, Keys};
-    Ok(match game {
-        Game::Sekiro => install(Data::Sekiro).map(Archive::open).transpose()?,
-        Game::EldenRing => match (install(Data::Elden), keys(Data::Elden)) {
-            (Some(dir), Some(keys)) => Some(Archive::open_game(dir, game, &Keys::from_folder(keys, game)?)?),
-            _ => None,
-        },
+    game: fromsoft_formats::Game,
+) -> Result<Option<fromsoft_formats::Archive>, Box<dyn std::error::Error>> {
+    use fromsoft_formats::{Archive, Game, Keys};
+    use primase_testdata::{Game as Data, install, keys};
+    let data = match game {
+        Game::Sekiro => Data::Sekiro,
+        Game::EldenRing => Data::Elden,
+    };
+    Ok(match (install(data), keys(data)) {
+        (Some(dir), Some(keys)) => Some(Archive::open_game(dir, game, &Keys::from_folder(keys, game)?)?),
+        _ => None,
     })
+}
+
+/// The Sekiro install at `root` with the configuration's archive keys (`keys.sekiro`), or `None` when the
+/// configuration lacks them.
+pub fn sekiro(
+    root: impl Into<std::path::PathBuf>,
+) -> Result<Option<fromsoft_formats::Install>, Box<dyn std::error::Error>> {
+    use fromsoft_formats::{Game, Install, Keys};
+    let Some(keys) = primase_testdata::keys(primase_testdata::Game::Sekiro) else {
+        return Ok(None);
+    };
+    Ok(Some(Install::new(
+        root,
+        Game::Sekiro,
+        Keys::from_folder(keys, Game::Sekiro)?,
+    )))
 }
 
 /// The reference readers (SoulsFormats) rename repeated entries in file order: the second and later uses of a name (and every blank

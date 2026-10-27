@@ -1,5 +1,6 @@
 use crate::invalid;
-use havok_formats::{Result, Value};
+use havok_formats::Result;
+use havok_formats::convex::{ConvexKind, ConvexShape};
 use primase_core::vector::{cross, dot, sub, unit};
 
 /// The most vertices a convex core may hold. Every stage of the tessellation is superlinear in the count (the plane
@@ -23,78 +24,37 @@ pub struct ConvexCore {
     pub radius: f32,
 }
 impl ConvexCore {
-    pub fn read(shape: Value<'_, '_>) -> Result<Self> {
-        let radius = shape.field("convexRadius")?.float()?;
-        let stored = shape.field("vertices")?.array()?;
-        if stored.len() > MAX_VERTICES {
+    /// The core of a stored convex shape ([`ConvexShape`]): a polytope's and a sphere's as stored, a vertex-only
+    /// shape's the convex hull of its vertices. More than [`MAX_VERTICES`] vertices or [`MAX_PLANES`] planes, values
+    /// that are not finite, a negative radius, faces and planes of different counts or a face of fewer than three
+    /// vertices are refused.
+    pub fn from_shape(shape: &ConvexShape) -> Result<Self> {
+        if shape.vertices.len() > MAX_VERTICES {
             return Err(invalid(
                 shape.offset,
                 format!(
                     "{} convex vertices, more than the {MAX_VERTICES} read",
-                    stored.len()
+                    shape.vertices.len()
                 ),
             ));
         }
-        let mut vertices = Vec::with_capacity(stored.len());
-        for i in 0..stored.len() {
-            let v = stored.get(i)?.vector::<4>()?;
-            vertices.push([v[0], v[1], v[2]]);
-        }
-        if shape.type_name() == "hknpConvexShape" {
-            return Self::hull_of(vertices, radius);
-        }
-        if shape.type_name() == "hknpSphereShape" {
-            // its one vertex is the centre; the radius is the sphere's
-            if vertices.len() != 1 {
-                return Err(invalid(shape.offset, "a sphere shape without exactly one vertex"));
-            }
-            let core = Self {
-                vertices,
-                planes: Vec::new(),
-                faces: Vec::new(),
-                radius,
-            };
-            core.validate()?;
-            return Ok(core);
-        }
-        let stored = shape.field("planes")?.array()?;
-        if stored.len() > MAX_PLANES {
+        if shape.planes.len() > MAX_PLANES {
             return Err(invalid(
                 shape.offset,
-                format!("{} convex planes, more than the {MAX_PLANES} read", stored.len()),
+                format!(
+                    "{} convex planes, more than the {MAX_PLANES} read",
+                    shape.planes.len()
+                ),
             ));
         }
-        let mut planes = Vec::with_capacity(stored.len());
-        for i in 0..stored.len() {
-            planes.push(stored.get(i)?.vector::<4>()?);
-        }
-        let indices = shape.field("indices")?.array()?;
-        let stored = shape.field("faces")?.array()?;
-        let mut faces = Vec::with_capacity(stored.len());
-        for i in 0..stored.len() {
-            let face = stored.get(i)?;
-            let start = usize::try_from(face.field("firstIndex")?.unsigned()?)
-                .map_err(|_| invalid(face.offset, "face index overflow"))?;
-            let count = usize::try_from(face.field("numIndices")?.unsigned()?)
-                .map_err(|_| invalid(face.offset, "face size overflow"))?;
-            let end = start
-                .checked_add(count)
-                .filter(|&e| e <= indices.len())
-                .ok_or_else(|| invalid(face.offset, "face exceeds index array"))?;
-            let mut polygon = Vec::with_capacity(count);
-            for k in start..end {
-                polygon.push(
-                    usize::try_from(indices.get(k)?.unsigned()?)
-                        .map_err(|_| invalid(face.offset, "vertex index overflow"))?,
-                );
-            }
-            faces.push(polygon);
+        if shape.kind == ConvexKind::Vertices {
+            return Self::hull_of(shape.vertices.clone(), shape.radius);
         }
         let core = Self {
-            vertices,
-            planes,
-            faces,
-            radius,
+            vertices: shape.vertices.clone(),
+            planes: shape.planes.clone(),
+            faces: shape.faces.clone(),
+            radius: shape.radius,
         };
         core.validate()?;
         Ok(core)

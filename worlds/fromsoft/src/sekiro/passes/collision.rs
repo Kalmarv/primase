@@ -2,8 +2,8 @@
 //! HitMtrl class becomes and how far around the read region to keep are `lower-fromsoft-collision`'s options. Raw
 //! collision is never roof-smoothed here.
 use super::settings::{HitClass, HitFilters, Metres, joined};
-use crate::Game;
 use crate::sekiro::source::{CollisionSource, MapCollision, ReadScope};
+use fromsoft_formats::Game;
 use primase_core::convert::PartScope;
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::state::{Clause, Condition};

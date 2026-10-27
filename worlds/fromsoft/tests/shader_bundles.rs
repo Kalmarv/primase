@@ -3,20 +3,21 @@
 //!
 //! Needs `installs.sekiro` and `tools.oodle6`.
 #![allow(clippy::unwrap_used)]
-mod inputs;
-
-use inputs::{Game, Tool, install, oodle};
+use fromsoft_formats::dcx::Decoder;
 use primase_core::{Name, World};
-use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::materials::Material;
 use primase_fromsoft::sekiro::source::{MaterialShader, ShaderBundle, ShaderStage};
-use primase_fromsoft::sekiro::{self, read_area};
+use primase_fromsoft::sekiro::{self, read_game_area};
+use primase_testdata::{Game, Tool, install, oodle};
 use std::collections::BTreeMap;
 mod common;
 
 #[test]
 fn slice_a_keeps_the_bundle_of_every_shader_its_materials_name() {
     let (Some(root), Some(dll)) = (install(Game::Sekiro), oodle(Tool::Oodle6)) else {
+        return;
+    };
+    let Some(root) = common::sekiro(&root).unwrap() else {
         return;
     };
     let dll = common::oodle(dll).unwrap();
@@ -32,7 +33,7 @@ fn slice_a_keeps_the_bundle_of_every_shader_its_materials_name() {
         ..Default::default()
     };
     let mut world = World::new();
-    let report = read_area(&root, "m11_01", &decoder, &options, &mut world).unwrap();
+    let report = read_game_area(&root, "m11_01", &decoder, &options, &mut world).unwrap();
     println!("{report:?}");
     let mut by_stage: BTreeMap<ShaderStage, usize> = BTreeMap::new();
     let mut bytes = 0;
@@ -76,11 +77,11 @@ fn slice_a_keeps_the_bundle_of_every_shader_its_materials_name() {
 /// Needs `installs.elden`, `keys.elden` and `tools.oodle6`.
 #[test]
 fn elden_ring_materials_link_their_shader_model_6_bundles() {
+    use fromsoft_formats::{Game as FromSoft, Install, Keys};
     use iridia_interface::ShaderFormat;
-    use primase_fromsoft::{Game as FromSoft, Install, Keys};
     let (Some(root), Some(keys), Some(dll)) = (
         install(Game::Elden),
-        inputs::keys(Game::Elden),
+        primase_testdata::keys(Game::Elden),
         oodle(Tool::Oodle6),
     ) else {
         return;

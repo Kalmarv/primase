@@ -35,9 +35,9 @@ use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::time::Instant;
 
+use fromsoft_formats::{Game, Install, Keys, NameDictionary, dcx::Decoder};
 use primase_core::World;
 use primase_fromsoft::sekiro::{Options, read_game_area_staged};
-use primase_fromsoft::{Game, Install, Keys, NameDictionary, dcx::Decoder};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 mod common;
@@ -263,7 +263,6 @@ fn what_an_area_read_holds_at_each_stage() -> Result<()> {
             continue;
         };
         let keys = match (game, keys) {
-            (Game::Sekiro, _) => Keys::published(Game::Sekiro).ok_or("Sekiro's keys")?,
             (_, Some(folder)) => Keys::from_folder(folder, game)?,
             (_, None) => continue,
         };

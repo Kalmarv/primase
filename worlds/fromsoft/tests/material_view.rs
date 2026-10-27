@@ -1,8 +1,8 @@
 //! The material view the binding rules read ([`primase_fromsoft::materials::MaterialView`]): an MTD's and a material
 //! binary's parameters in one vocabulary, and the program names they select.
-use primase_fromsoft::matbin::{self, Param, Sampler, Value as B};
+use fromsoft_formats::matbin::{self, Param, Sampler, Value as B};
+use fromsoft_formats::mtd::{MaterialDefinition, Parameter, Texture, Value as M};
 use primase_fromsoft::materials::{DefinitionRef, MaterialView, ParameterValue};
-use primase_fromsoft::mtd::{MaterialDefinition, Parameter, Texture, Value as M};
 use std::collections::BTreeMap;
 
 fn param(name: &str, value: B) -> Param {

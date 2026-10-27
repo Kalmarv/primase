@@ -8,11 +8,10 @@
 //! change that alters the bake there updates it, with the measurement that shows why.
 #![allow(clippy::unwrap_used)]
 
-mod inputs;
-
-use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
+use fromsoft_formats::dcx::Decoder;
 use primase_core::{Name, Texture, World};
-use primase_fromsoft::{dcx::Decoder, sekiro};
+use primase_fromsoft::sekiro;
+use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 use sha2::{Digest, Sha256};
 mod common;
 
@@ -31,12 +30,12 @@ const SMOKE_CELL: usize = 4;
 
 /// The baked textures of `region` of m11_01: their count and the digest of the lot.
 fn baked_digest(
-    install: &std::path::Path,
+    install: &fromsoft_formats::Install,
     dll: &primase_foundations::compress::oodle::Oodle,
     region: [f32; 4],
 ) -> (usize, String) {
     let mut world = World::default();
-    sekiro::read_area(
+    sekiro::read_game_area(
         install,
         "m11_01",
         &Decoder {
@@ -107,11 +106,14 @@ fn the_baked_textures_of_m11_01() {
     ) else {
         return;
     };
+    let Some(install) = common::sekiro(&install).unwrap() else {
+        return;
+    };
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(reference.join("scene.json")).unwrap()).unwrap();
     let region: [f32; 4] = serde_json::from_value(manifest["region"].clone()).unwrap();
     let dll = common::oodle(dll).unwrap();
-    if inputs::depth() == inputs::Depth::Smoke {
+    if primase_testdata::depth() == primase_testdata::Depth::Smoke {
         let cell = common::cells(region)[SMOKE_CELL];
         let (count, total) = baked_digest(&install, &dll, cell);
         println!("smoke: cell {SMOKE_CELL} {cell:?}: {count} baked textures, digest {total}");
@@ -124,7 +126,7 @@ fn the_baked_textures_of_m11_01() {
     }
     let (count, total) = baked_digest(&install, &dll, region);
     println!("{count} baked textures, digest {total}");
-    if let Some(expected) = inputs::debug("fromsoft.bake_digest") {
+    if let Some(expected) = primase_testdata::debug("fromsoft.bake_digest") {
         assert_eq!(total, expected, "the baked textures differ from the digest given");
     }
 }

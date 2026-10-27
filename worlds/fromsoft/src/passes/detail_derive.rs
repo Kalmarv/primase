@@ -2461,6 +2461,7 @@ fn roles_of(probe: &mut ProgramProbe, outputs: Outputs) -> Result<SlotRoles, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::Shading;
     use iridia::Label;
     use iridia_interface::{D3dSignature, ScalarType, SystemValue, Value, Varying, VaryingProvenance};
 
@@ -2496,7 +2497,7 @@ mod tests {
 
     /// The binding of Sekiro's G-buffer layout, every lane of the five targets (`Unknown` where it has no role).
     fn bindings() -> Vec<OutputBinding> {
-        crate::Game::Sekiro
+        fromsoft_formats::Game::Sekiro
             .gbuffer()
             .into_iter()
             .map(|(n, lanes, role)| OutputBinding {
@@ -2588,7 +2589,7 @@ mod tests {
     /// register and lane, the gloss's lane, and no reflectance.
     #[test]
     fn a_metallic_layout_holds_the_mix_as_a_metallic_factor() {
-        let bindings: Vec<OutputBinding> = crate::Game::EldenRing
+        let bindings: Vec<OutputBinding> = fromsoft_formats::Game::EldenRing
             .gbuffer()
             .into_iter()
             .map(|(n, lanes, role)| OutputBinding {

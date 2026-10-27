@@ -9,6 +9,7 @@
 //! the program reads them as named fields or through `SAT_MtdParam` ([`MaterialForm`]). The engine's own textures read as
 //! the bake reads them ([`ProgramProbe::engine`]). The inputs are frozen as stated in [`ProgramProbe::frozen`], the
 //! texture coordinate sets take the probe's coordinate unless explicitly overridden by ProgramProbe::set_input.
+use crate::game::Shading;
 use std::collections::BTreeMap;
 
 use iridia::output_uses::bind_output_uses;
@@ -18,12 +19,13 @@ use iridia_interface::{ConstantRole, OutputBinding, RenderState};
 use primase_core::World;
 use primase_core::{shader::StageBinding, shader::TextureSource};
 
+use crate::invalid;
 use crate::layer_bake::resolve::{
     ProgramTexture, Unbound, program_texture, register, render_state, resolve, textures_of,
 };
 use crate::layer_bake::{self, FrozenFrame};
 use crate::materials::{LayeredMaterial, MaterialView};
-use crate::{Result, invalid};
+use fromsoft_formats::Result;
 
 /// How a program reads its material's parameters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,7 +127,7 @@ impl ProgramProbe {
     fn unstated() -> LayeredMaterial {
         LayeredMaterial {
             mtd: "probe".into(),
-            definition: crate::mtd::MaterialDefinition {
+            definition: fromsoft_formats::mtd::MaterialDefinition {
                 shader: String::new(),
                 description: String::new(),
                 parameters: Vec::new(),
@@ -147,18 +149,22 @@ impl ProgramProbe {
     /// set.
     pub fn with_material(bytes: &[u8], material: &LayeredMaterial) -> Result<Self> {
         Self::bind(
-            crate::Game::Sekiro,
+            fromsoft_formats::Game::Sekiro,
             bytes,
             &material.view(),
             &render_state(material),
         )
     }
 
-    /// `game`'s pixel program `bytes` (the game's [`crate::Game::shader_format`]: Sekiro's DXBC, Elden Ring's DXIL) bound
+    /// `game`'s pixel program `bytes` (the game's [`fromsoft_formats::Game::shader_format`]: Sekiro's DXBC, Elden Ring's DXIL) bound
     /// as the bake binds it for `material`, whichever record defines the material (an MTD or a material binary). A
     /// material drawn forward (blended) has no G-buffer program and is refused; the render state is that of an opaque
     /// material, which a G-buffer material is.
-    pub fn with_view(game: crate::Game, bytes: &[u8], material: &MaterialView<'_>) -> Result<Self> {
+    pub fn with_view(
+        game: fromsoft_formats::Game,
+        bytes: &[u8],
+        material: &MaterialView<'_>,
+    ) -> Result<Self> {
         if material.is_forward() {
             return Err(invalid(
                 "detail probe",
@@ -170,7 +176,7 @@ impl ProgramProbe {
     }
 
     fn bind(
-        game: crate::Game,
+        game: fromsoft_formats::Game,
         bytes: &[u8],
         material: &MaterialView<'_>,
         state: &RenderState,

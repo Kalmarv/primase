@@ -1,10 +1,12 @@
 //! Object collision as the objects store it: each object prototype's collision files (`fromsoft.object_collision`:
 //! Sekiro's main HKX, Elden Ring's `_h` and `_l` asset files) with their resolution, meshes as their posed triangles,
 //! convex shapes as their stored core and radius.
-use crate::collision::BodyGeometry;
 use crate::pose::FRAME;
-use crate::sekiro::source::{ObjectBody, ObjectCollisionFile, ObjectGeometry, Resolution};
-use crate::{Result, collision};
+use crate::sekiro::{source::ObjectBody, source::ObjectCollisionFile, source::ObjectGeometry};
+use fromsoft_formats::collision::BodyGeometry;
+use fromsoft_formats::game::Resolution;
+use fromsoft_formats::{Result, collision};
+use primase_havok::ConvexCore;
 use std::collections::BTreeMap;
 
 /// What the reader found of the kept object prototypes' collision.
@@ -51,7 +53,7 @@ pub fn bodies(
                     position,
                     orientation,
                 } => ObjectGeometry::Convex {
-                    core,
+                    core: ConvexCore::from_shape(&core)?,
                     capsule,
                     // an extern shape's placement and the body's pose, then the file frame's reflection into the
                     // world frame's axes
@@ -59,14 +61,14 @@ pub fn bodies(
                         .map(|c| FRAME.point(c)),
                 },
             };
-            ObjectBody {
+            Ok(ObjectBody {
                 name: body.name,
                 motion_type: body.motion_type,
                 shape: body.shape,
                 geometry,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<_>>()?;
     Ok(ObjectCollisionFile {
         file: file.to_owned(),
         resolution,

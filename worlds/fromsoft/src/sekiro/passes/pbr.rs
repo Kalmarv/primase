@@ -6,14 +6,14 @@
 mod coverage;
 mod gx;
 use crate::layer_bake::resolve::{centred, slot_tiling};
-use crate::metaparam::texture_number;
 use crate::preview::{Preview, is_emissive, preview_with};
 use crate::sekiro::source::{MaterialShader, ShaderBundle};
 use crate::{
-    Result, invalid,
+    invalid,
     materials::{Binding, Material},
-    mtd::Value,
 };
+use fromsoft_formats::metaparam::texture_number;
+use fromsoft_formats::{Result, mtd::Value};
 use primase_core::pass::PassLog;
 use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform};
 use primase_core::{
@@ -1015,7 +1015,7 @@ mod tests {
     fn unbaked_layers_use_the_readers_preview_textures_only_when_asked() {
         let mut world = World::new();
         let mut m = crate::materials::resolve(
-            &crate::flver::Material {
+            &fromsoft_formats::flver::Material {
                 name: "fixture".into(),
                 mtd: "fixture.mtd".into(),
                 gx: vec![],
@@ -1036,7 +1036,7 @@ mod tests {
         );
         m.layered = Some(crate::materials::LayeredMaterial {
             mtd: m.mtd.clone(),
-            definition: crate::mtd::MaterialDefinition {
+            definition: fromsoft_formats::mtd::MaterialDefinition {
                 shader: "M[Multiple].spx".into(),
                 description: String::new(),
                 parameters: vec![],
@@ -1110,7 +1110,7 @@ mod tests {
         let mut world = World::new();
         let material = |name: &str| {
             crate::materials::resolve(
-                &crate::flver::Material {
+                &fromsoft_formats::flver::Material {
                     name: name.into(),
                     mtd: format!("{name}.mtd"),
                     gx: vec![],
@@ -1137,19 +1137,19 @@ mod tests {
     #[test]
     fn a_named_normal_or_metallic_texture_the_install_lacks_is_named_in_its_approximations() {
         let mut world = World::new();
-        let slot = |kind: &str, path: &str| crate::flver::Texture {
+        let slot = |kind: &str, path: &str| fromsoft_formats::flver::Texture {
             path: path.into(),
             kind: kind.into(),
             ..Default::default()
         };
-        let declared = |kind: &str| crate::mtd::Texture {
+        let declared = |kind: &str| fromsoft_formats::mtd::Texture {
             kind: kind.into(),
             uv_number: 1,
             shader_data_index: 0,
             path: String::new(),
             extra: vec![],
         };
-        let definition = crate::mtd::MaterialDefinition {
+        let definition = fromsoft_formats::mtd::MaterialDefinition {
             shader: "MetallicTex".into(),
             description: String::new(),
             parameters: vec![],
@@ -1161,7 +1161,7 @@ mod tests {
             block_lengths: vec![],
         };
         let m = crate::materials::resolve(
-            &crate::flver::Material {
+            &fromsoft_formats::flver::Material {
                 name: "named".into(),
                 mtd: "named.mtd".into(),
                 gx: vec![],
@@ -1187,7 +1187,7 @@ mod tests {
         // a metallic map alone missing, the normal held: the packing runs on the normal and the metal is the factor
         let mut held = World::new();
         let m = crate::materials::resolve(
-            &crate::flver::Material {
+            &fromsoft_formats::flver::Material {
                 name: "metal".into(),
                 mtd: "metal.mtd".into(),
                 gx: vec![],

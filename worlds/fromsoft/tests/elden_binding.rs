@@ -15,15 +15,15 @@
 //! - the outputs carry Elden Ring's G-buffer roles only ([`Game::gbuffer`]).
 //!
 //! It prints how many materials were bound and why the others were not.
-mod inputs;
-
+use fromsoft_formats::metaparam::texture_number;
+use fromsoft_formats::{Game, Install, Keys, dcx::Decoder};
 use iridia_interface::ConstantRole;
 use primase_core::World;
 use primase_core::{shader::Shader, shader::ShaderBinding, shader::TextureSource};
+use primase_fromsoft::game::Shading;
 use primase_fromsoft::materials::{Definition, Material, ParameterValue};
-use primase_fromsoft::metaparam::texture_number;
+use primase_fromsoft::sekiro;
 use primase_fromsoft::sekiro::source::{MaterialShader, ShaderBundle};
-use primase_fromsoft::{Game, Install, Keys, dcx::Decoder, sekiro};
 use std::collections::{BTreeMap, BTreeSet};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 mod common;
@@ -39,9 +39,9 @@ fn floats(value: &ParameterValue) -> Vec<f32> {
 #[test]
 fn elden_ring_materials_bind_as_their_definitions_state() -> Result<()> {
     let (Some(root), Some(keys), Some(dll)) = (
-        inputs::install(inputs::Game::Elden),
-        inputs::keys(inputs::Game::Elden),
-        inputs::oodle(inputs::Tool::Oodle6),
+        primase_testdata::install(primase_testdata::Game::Elden),
+        primase_testdata::keys(primase_testdata::Game::Elden),
+        primase_testdata::oodle(primase_testdata::Tool::Oodle6),
     ) else {
         return Ok(());
     };

@@ -8,11 +8,11 @@ mod inputs;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use fromsoft_formats::mtd::{MaterialDefinition, Parameter, Value};
 use primase_core::detail::{GlossScale, ReflectanceTerm, WeightStep};
 use primase_fromsoft::detail_derive::{BOUND_UNITS, DetailSlots, derive};
 use primase_fromsoft::detail_probe::ProgramProbe;
 use primase_fromsoft::materials::LayeredMaterial;
-use primase_fromsoft::mtd::{MaterialDefinition, Parameter, Value};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 mod common;
@@ -555,15 +555,18 @@ fn the_pass_on_the_wolfs_outfits() -> TestResult {
     ) else {
         return Ok(());
     };
+    let Some(root) = common::sekiro(&root)? else {
+        return Ok(());
+    };
     let dll = common::oodle(dll)?;
-    let decoder = primase_fromsoft::dcx::Decoder {
+    let decoder = fromsoft_formats::dcx::Decoder {
         oodle: Some(&dll),
         max_output: 1 << 30,
     };
     let mut census = BTreeMap::new();
     for (outfit, parts) in OUTFITS {
         let mut world = primase_core::World::default();
-        primase_fromsoft::sekiro::read_parts(&root, parts, &decoder, &mut world)?;
+        primase_fromsoft::sekiro::read_parts_with(&root, parts, &decoder, &Default::default(), &mut world)?;
         let report = common::run(
             &mut world,
             "lower-fromsoft-geometry{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw,speedtree-frame=program}, \

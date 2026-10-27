@@ -64,7 +64,7 @@ fn far_placements_are_declared_drops() {
 /// A layered source material (no texture bound), `skip` its skip class.
 fn layered(skip: Option<materials::SkipClass>) -> Material {
     let mut m = materials::resolve(
-        &crate::flver::Material {
+        &fromsoft_formats::flver::Material {
             name: "fixture".into(),
             mtd: "fixture.mtd".into(),
             gx: vec![],
@@ -76,7 +76,7 @@ fn layered(skip: Option<materials::SkipClass>) -> Material {
     m.skip = skip;
     m.layered = Some(LayeredMaterial {
         mtd: m.mtd.clone(),
-        definition: crate::mtd::MaterialDefinition {
+        definition: fromsoft_formats::mtd::MaterialDefinition {
             shader: "M[Multiple].spx".into(),
             description: String::new(),
             parameters: vec![],
@@ -276,15 +276,15 @@ fn a_lowered_material_carries_what_its_source_class_states_about_its_surfaces() 
     use primase_core::pass::{PassManager, Pipeline, RunReport};
     use primase_core::{DrawLayer, MaterialUsage};
     // the reader's class from each shader family, as resolve gives it
-    let source = |shader: &str, parameters: Vec<crate::mtd::Parameter>| {
+    let source = |shader: &str, parameters: Vec<fromsoft_formats::mtd::Parameter>| {
         materials::resolve(
-            &crate::flver::Material {
+            &fromsoft_formats::flver::Material {
                 name: "fixture".into(),
                 mtd: "fixture.mtd".into(),
                 gx: vec![],
                 textures: vec![],
             },
-            Some(&crate::mtd::MaterialDefinition {
+            Some(&fromsoft_formats::mtd::MaterialDefinition {
                 shader: shader.into(),
                 description: String::new(),
                 parameters,
@@ -294,9 +294,9 @@ fn a_lowered_material_carries_what_its_source_class_states_about_its_surfaces() 
             |_| false,
         )
     };
-    let int = |name: &str, v: i32| crate::mtd::Parameter {
+    let int = |name: &str, v: i32| fromsoft_formats::mtd::Parameter {
         name: name.into(),
-        value: crate::mtd::Value::Int(vec![v]),
+        value: fromsoft_formats::mtd::Value::Int(vec![v]),
     };
     let mut world = World::new();
     let mut drawn = Vec::new();
@@ -367,13 +367,13 @@ fn a_lowered_material_carries_what_its_source_class_states_about_its_surfaces() 
 fn sekiros_rivers_and_waterfalls_are_water_by_their_shader_family() {
     let class = |shader: &str| {
         materials::resolve(
-            &crate::flver::Material {
+            &fromsoft_formats::flver::Material {
                 name: "fixture".into(),
                 mtd: "fixture.mtd".into(),
                 gx: vec![],
                 textures: vec![],
             },
-            Some(&crate::mtd::MaterialDefinition {
+            Some(&fromsoft_formats::mtd::MaterialDefinition {
                 shader: shader.into(),
                 description: String::new(),
                 parameters: vec![],
@@ -401,27 +401,29 @@ fn sekiros_rivers_and_waterfalls_are_water_by_their_shader_family() {
 /// (c2200's emissive body and wing overlays); lowered, it glows with its own colour and is blended, counted.
 #[test]
 fn an_additive_blend_is_a_light_volume_in_sekiro_and_an_additive_surface_in_elden_ring() {
-    use crate::Game;
+    use fromsoft_formats::Game;
     use primase_core::pass::{PassManager, Pipeline, RunReport};
     use primase_core::pbr::AlphaMode;
     let resolve = |game: Game, shader: &str, blend: i32| {
         materials::resolve_definition(
-            &crate::flver::Material {
+            &fromsoft_formats::flver::Material {
                 name: "fixture".into(),
                 mtd: "fixture.mtd".into(),
                 gx: vec![],
                 textures: vec![],
             },
-            Some(&materials::Definition::Mtd(crate::mtd::MaterialDefinition {
-                shader: shader.into(),
-                description: String::new(),
-                parameters: vec![crate::mtd::Parameter {
-                    name: "g_BlendMode".into(),
-                    value: crate::mtd::Value::Int(vec![blend]),
-                }],
-                textures: vec![],
-                block_lengths: vec![],
-            })),
+            Some(&materials::Definition::Mtd(
+                fromsoft_formats::mtd::MaterialDefinition {
+                    shader: shader.into(),
+                    description: String::new(),
+                    parameters: vec![fromsoft_formats::mtd::Parameter {
+                        name: "g_BlendMode".into(),
+                        value: fromsoft_formats::mtd::Value::Int(vec![blend]),
+                    }],
+                    textures: vec![],
+                    block_lengths: vec![],
+                },
+            )),
             game,
             |_| false,
         )
@@ -732,8 +734,13 @@ fn the_fromsoft_passes_register_by_name() {
 /// A two-bone model (a root and an arm raised 1 m and turned a quarter about X) with one static mesh whose vertices
 /// name a bone by NORMAL.w, in a layout whose normal member (`kind`) does or does not carry a W, and whose node is
 /// `node`.
-fn static_arm(normal_kind: u32, palette: Vec<u32>, normal_w: i32, node: i32) -> crate::flver::Model {
-    use crate::flver::{Bone, FaceSet, Member, Mesh as FlverMesh, Model, Vertex};
+fn static_arm(
+    normal_kind: u32,
+    palette: Vec<u32>,
+    normal_w: i32,
+    node: i32,
+) -> fromsoft_formats::flver::Model {
+    use fromsoft_formats::flver::{Bone, FaceSet, Member, Mesh as FlverMesh, Model, Vertex};
     let member = |semantic, kind, offset| Member {
         unknown: 0,
         stored: true,
@@ -753,7 +760,7 @@ fn static_arm(normal_kind: u32, palette: Vec<u32>, normal_w: i32, node: i32) -> 
         version: 0x2001a,
         speedtree: false,
         layouts: vec![vec![member(0, 2, 0), member(3, normal_kind, 12)]],
-        materials: vec![crate::flver::Material {
+        materials: vec![fromsoft_formats::flver::Material {
             name: "fixture".into(),
             mtd: "fixture.mtd".into(),
             gx: vec![],
@@ -794,7 +801,7 @@ fn static_arm(normal_kind: u32, palette: Vec<u32>, normal_w: i32, node: i32) -> 
 
 /// `model` as one prototype of a world, with its material and, when `bound`, its skeleton (as the character reader
 /// makes it).
-fn arm_world(model: crate::flver::Model, bound: bool) -> (World, Entity) {
+fn arm_world(model: fromsoft_formats::flver::Model, bound: bool) -> (World, Entity) {
     use crate::components::models::{SkeletonOf, SourceModel};
     let mut world = World::new();
     let material = world.spawn();

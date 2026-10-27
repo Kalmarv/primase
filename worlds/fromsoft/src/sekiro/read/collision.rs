@@ -1,15 +1,15 @@
 //! Map collision as the area stores it: the reader keeps, whole, every file of the area's high-resolution collision
 //! binder that MSB collision parts name (`fromsoft.map_collision`); `lower-fromsoft-collision` lowers it.
+use crate::invalid;
 use crate::pose::FRAME;
 use crate::sekiro::source::{CollisionPart, MapCollision};
-use crate::{
+use fromsoft_formats::{
     Archive, Binder, Result, collision,
     dcx::Decoder,
-    invalid,
     msb::{MapLayout, PartKind},
 };
-use primase_core::{Name, Transform, World};
 use havok_formats::Compendium;
+use primase_core::{Name, Transform, World};
 use std::collections::BTreeMap;
 
 /// What the reader found of the area's map collision.
@@ -36,7 +36,7 @@ pub struct Report {
 }
 
 fn leaf(name: &str) -> String {
-    let name = crate::names::fold(name);
+    let name = fromsoft_formats::names::fold(name);
     name.rsplit(['/', '\\'])
         .next()
         .unwrap_or(&name)
@@ -49,9 +49,12 @@ fn leaf(name: &str) -> String {
 /// The `h` is matched in either case, as the game's names are not case-sensitive: Elden Ring's m60_53_37_00 names one
 /// of its six collision models `H533700`.
 fn collision_file(area: &str, model: &str) -> Option<String> {
-    let model = crate::names::fold(model);
+    let model = fromsoft_formats::names::fold(model);
     let suffix = model.strip_prefix('h')?;
-    Some(crate::names::fold(&format!("h{}_{suffix}.hkx", &area[1..])))
+    Some(fromsoft_formats::names::fold(&format!(
+        "h{}_{suffix}.hkx",
+        &area[1..]
+    )))
 }
 
 /// Read every collision file the area's MSB collision parts name, of every hit filter, as `fromsoft.map_collision`
@@ -111,7 +114,7 @@ pub fn read(
     let transform = layout
         .map_offsets
         .first()
-        .map(|o| o.transform())
+        .map(|o| o.matrix().map(crate::pose::placed))
         .transpose()?
         .unwrap_or(Transform::IDENTITY);
     let mut files = binder
@@ -161,7 +164,7 @@ pub fn read(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::msb::Generation;
+    use fromsoft_formats::msb::Generation;
 
     /// An area with no collision part reads no collision and opens no binder: the archive holds none.
     #[test]
@@ -179,7 +182,7 @@ mod tests {
             max_output: 1 << 20,
         };
         let report = read(
-            &Archive::empty(crate::Game::EldenRing),
+            &Archive::empty(fromsoft_formats::Game::EldenRing),
             &decoder,
             "/map/m60/m60_22_22_01",
             "m60_22_22_01",

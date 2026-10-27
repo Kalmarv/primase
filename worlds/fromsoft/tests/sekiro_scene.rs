@@ -2,13 +2,12 @@
 //! SoulsFormats dump of the area (`oracles.soulsformats.sekiro/m11_01`: MSB parts with their matrices, every placed
 //! model's FLVER in model space) and material fixtures worked out by hand from that dump's FLVER materials and MTD
 //! names.
-mod inputs;
-
-use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
+use fromsoft_formats::dcx::Decoder;
 use primase_core::frame::{Axis, SourceFrame};
 use primase_core::{Instance, Mesh, Source, Transform, World};
 use primase_fromsoft::materials::Material;
-use primase_fromsoft::{dcx::Decoder, sekiro, sekiro::source::PrototypeSource};
+use primase_fromsoft::sekiro::{self, source::PrototypeSource};
+use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -115,6 +114,9 @@ fn whole_area_placements_in_both_directions() -> Result<()> {
     let Some(root) = install(Game::Sekiro) else {
         return Ok(());
     };
+    let Some(root) = common::sekiro(&root)? else {
+        return Ok(());
+    };
     let Some(dll) = oodle(Tool::Oodle6) else {
         return Ok(());
     };
@@ -127,7 +129,7 @@ fn whole_area_placements_in_both_directions() -> Result<()> {
         max_output: 1024 * 1024 * 1024,
     };
     let mut world = World::default();
-    let report = sekiro::read_area(root, "m11_01", &decoder, &sekiro::Options::default(), &mut world)?;
+    let report = sekiro::read_game_area(&root, "m11_01", &decoder, &sekiro::Options::default(), &mut world)?;
     let parts = dump_parts(&dump)?;
     // the models the dump could not read as rigid geometry are the ones the read did not find
     let undumped: std::collections::BTreeSet<String> = jsonl(&dump.join("missing-rigid.jsonl"))?
@@ -219,6 +221,9 @@ fn installed_area_against_soulsformats() -> Result<()> {
     let Some(root) = install(Game::Sekiro) else {
         return Ok(());
     };
+    let Some(root) = common::sekiro(&root)? else {
+        return Ok(());
+    };
     let Some(dll) = oodle(Tool::Oodle6) else {
         return Ok(());
     };
@@ -231,8 +236,8 @@ fn installed_area_against_soulsformats() -> Result<()> {
         max_output: 512 * 1024 * 1024,
     };
     let mut world = World::default();
-    let report = sekiro::read_area(
-        root,
+    let report = sekiro::read_game_area(
+        &root,
         "m11_01",
         &decoder,
         &sekiro::Options {

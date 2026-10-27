@@ -3,11 +3,12 @@
 //! decodes to, by hand from the layout's own statements (the normal `n * 0.5 + 0.50048876`, the gloss the square of the
 //! smoothness over 0.95, Sekiro's reflectance its square root).
 #![allow(clippy::unwrap_used)]
+use fromsoft_formats::Game;
 use iridia_interface::{NormalEncoding, NormalSpace, ScalarEncoding};
 use iridia_interface::{
     surface::Base, surface::Emission, surface::Place, surface::Roughness, surface::Surface, surface::Term,
 };
-use primase_fromsoft::Game;
+use primase_fromsoft::game::Shading;
 
 /// The game's G-buffer as a surface, and each output's target.
 fn surface(game: Game) -> (Surface, Vec<u32>) {

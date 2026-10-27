@@ -14,7 +14,8 @@ use iridia_exec::{Input, Lane, View, Views, evaluate::Constants};
 use primase_foundations::sampling::Address;
 use serde_json::json;
 
-use crate::{Result, invalid};
+use crate::invalid;
+use fromsoft_formats::Result;
 use iridia_exec::SampledTexture;
 
 /// The pixel program's outputs a bake reads, as (output register, component mask): the G-buffer normal, the second

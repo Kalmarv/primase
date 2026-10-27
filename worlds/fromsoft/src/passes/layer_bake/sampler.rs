@@ -13,7 +13,8 @@ use iridia_exec::{Filtering, Image, Lod, SampledTexture, SamplerUse, Unstated};
 use iridia_interface::{AddressMode, SamplerState};
 use primase_foundations::{sampling::Address, sampling::Levels, sampling::Subtexel, sampling::Transfer};
 
-use crate::{Result, invalid};
+use crate::invalid;
+use fromsoft_formats::Result;
 
 /// The policy's filtering: the base mip, bilinear with Direct3D 11's sub-texel precision, whatever level of detail
 /// the program states.

@@ -14,9 +14,9 @@
 //! by name as any other. Markers of other characters (`delayload_c0000_c1020.txt`) name no binder of this one and stay
 //! unread.
 //!
-//! A binder's event file (`c1010.tae`, an object's `o252050.tae`) is read too ([`crate::tae`]): the record of each
+//! A binder's event file (`c1010.tae`, an object's `o252050.tae`) is read too ([`fromsoft_formats::tae`]): the record of each
 //! animation read is put on its entity as `fromsoft.clip_events` (the events with their times and parameter bytes as
-//! stored), found by the animation's number (`a000_003000` is the record numbered 3000; [`crate::tae::clip_animation_id`]).
+//! stored), found by the animation's number (`a000_003000` is the record numbered 3000; [`fromsoft_formats::tae::clip_animation_id`]).
 //! The report counts the records no animation matches and the animations no record matches, so a numbering that does not
 //! hold shows as counts, not as silence.
 //!
@@ -34,14 +34,14 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use primase_core::{Entity, Name, Origin, Provenance, World};
 use havok_formats::animation::{Container, Skeleton, container};
-use primase_havok::world::{HavokAnimation, insert_animation, insert_skeleton};
 use havok_formats::{Compendium, Tagfile};
+use primase_core::{Entity, Name, Origin, Provenance, World};
+use primase_havok::world::{HavokAnimation, insert_animation, insert_skeleton};
 
 use crate::sekiro::character_data::ClipEvents;
-use crate::tae::{self, Tae};
-use crate::{Archive, Binder, Result, dcx::Decoder};
+use fromsoft_formats::tae::{self, Tae};
+use fromsoft_formats::{Archive, Binder, Result, dcx::Decoder};
 
 pub use crate::components::clip_source::ClipSource;
 
@@ -169,13 +169,18 @@ impl ClipReader {
         };
         list_members(&mut listing, id, &binder);
         Self {
-            archive: Some(Arc::new(Archive::empty(crate::Game::Sekiro))),
+            archive: Some(Arc::new(Archive::empty(fromsoft_formats::Game::Sekiro))),
             binders: BTreeMap::from([(binder_path(id), binder)]),
             listings: BTreeMap::from([(id.into(), listing)]),
             ..Default::default()
         }
     }
-    fn binder(&mut self, install: &crate::Install, decoder: &Decoder<'_>, path: &str) -> Result<()> {
+    fn binder(
+        &mut self,
+        install: &fromsoft_formats::Install,
+        decoder: &Decoder<'_>,
+        path: &str,
+    ) -> Result<()> {
         if self.binders.contains_key(path) {
             return Ok(());
         }
@@ -189,7 +194,7 @@ impl ClipReader {
     }
     pub(super) fn listing(
         &mut self,
-        install: &crate::Install,
+        install: &fromsoft_formats::Install,
         decoder: &Decoder<'_>,
         id: &str,
     ) -> Result<Option<ClipListing>> {
@@ -227,7 +232,7 @@ impl ClipReader {
     }
     pub(super) fn plan(
         &mut self,
-        install: &crate::Install,
+        install: &fromsoft_formats::Install,
         decoder: &Decoder<'_>,
         id: &str,
         chosen: Option<&[String]>,
@@ -336,7 +341,7 @@ impl ClipReader {
     }
     pub(super) fn load(
         &mut self,
-        install: &crate::Install,
+        install: &fromsoft_formats::Install,
         decoder: &Decoder<'_>,
         source: &ClipSource,
         target: Entity,
@@ -557,7 +562,7 @@ pub struct AnimationReport {
     pub tae_files: usize,
     /// Animation records those files hold.
     pub tae_animations: usize,
-    /// Of those, the ones no animation read is numbered as (see [`crate::tae::clip_animation_id`]): events of an
+    /// Of those, the ones no animation read is numbered as (see [`fromsoft_formats::tae::clip_animation_id`]): events of an
     /// animation the binders do not hold, or a numbering the rule does not match.
     pub tae_unmatched: usize,
     /// Animations read that no record of the event files is numbered as.
@@ -576,7 +581,7 @@ pub struct Animations {
 
 /// The file's name after its last separator, lowercased.
 fn file_name(name: &str) -> String {
-    crate::names::fold(name.rsplit(['/', '\\']).next().unwrap_or(name))
+    fromsoft_formats::names::fold(name.rsplit(['/', '\\']).next().unwrap_or(name))
 }
 
 /// The file's name after its last separator, lowercased, without its extension.
@@ -626,7 +631,7 @@ fn read_compendium(binder: &Binder, decoder: &Decoder<'_>) -> Result<Option<Comp
     match binder.files.iter().find(|file| {
         file.name
             .as_deref()
-            .is_some_and(|name| crate::names::fold(name).ends_with(".compendium"))
+            .is_some_and(|name| fromsoft_formats::names::fold(name).ends_with(".compendium"))
     }) {
         Some(file) => Ok(Some(Compendium::read(&decoder.decode_if_dcx(&file.bytes)?)?)),
         None => Ok(None),
@@ -660,7 +665,7 @@ fn hold_with_compendium(
     };
     for f in &binder.files {
         let name = f.name.as_deref().unwrap_or("");
-        let lower = crate::names::fold(name);
+        let lower = fromsoft_formats::names::fold(name);
         if lower.ends_with(".compendium") {
             continue;
         }
@@ -719,7 +724,7 @@ fn hold_with_compendium(
 /// `parts/wp_a_0761_l.partsbnd`) into `w` with the same raw parsing as the character reader's load, its skeleton named after `name` (the form):
 /// it names no companion binders (a marker member is unread).
 pub(super) fn read_member(
-    game: crate::Game,
+    game: fromsoft_formats::Game,
     bytes: &[u8],
     decoder: &Decoder<'_>,
     name: &str,
@@ -739,7 +744,7 @@ pub(super) fn read_member(
 
 /// The animation binder of a placed object's model (Sekiro's `obj/o001010`, Elden Ring's `aeg007_310`), decoded, if it
 /// has one: a `.anibnd` member of the model's own binder. In Sekiro's install that is where they are (233 of its 1395
-/// object binders hold one, and no object has a binder of its own beside it: `tests/object_animation_census.rs`); a
+/// object binders hold one, and no object has a binder of its own beside it: `repos/fromsoft-formats/tests/object_animation_census.rs`); a
 /// model without the member is static. The member holds `skeleton.hkx`, the animations (`a000_000500.hkx`), their
 /// compendium and the object's event file (`o252050.tae`), which [`read_member`] reads as a character's binder.
 pub(super) fn object_binder(decoder: &Decoder<'_>, binder: &Binder) -> Result<Option<Vec<u8>>> {
@@ -758,7 +763,7 @@ fn insert(
     mut held: Vec<Held>,
     id: &str,
     report: AnimationReport,
-    game: crate::Game,
+    game: fromsoft_formats::Game,
     w: &mut World,
 ) -> Result<Animations> {
     let mut out = Animations {
@@ -904,7 +909,7 @@ mod tests {
 
     #[test]
     fn root_loads_reuse_parsed_metadata_and_keep_named_unread_members() {
-        let file = |name: &str| crate::BinderFile {
+        let file = |name: &str| fromsoft_formats::BinderFile {
             id: None,
             name: Some(name.into()),
             flags: 0,
@@ -946,7 +951,7 @@ mod tests {
 
     #[test]
     fn listing_does_not_decode_hkx_and_selected_decode_keeps_only_dependencies() {
-        let file = |name: &str| crate::BinderFile {
+        let file = |name: &str| fromsoft_formats::BinderFile {
             id: None,
             name: Some(name.into()),
             flags: 0,
@@ -1036,7 +1041,7 @@ mod tests {
         let binder = Binder {
             version: [0; 8],
             format: 0,
-            files: vec![crate::BinderFile {
+            files: vec![fromsoft_formats::BinderFile {
                 id: None,
                 name: Some("walk.hkx".into()),
                 flags: 0,
@@ -1071,7 +1076,7 @@ mod tests {
         let binder = Binder {
             version: [0; 8],
             format: 0,
-            files: vec![crate::BinderFile {
+            files: vec![fromsoft_formats::BinderFile {
                 id: None,
                 name: Some("walk.hkx".into()),
                 flags: 0,
@@ -1088,7 +1093,7 @@ mod tests {
         let root = publish_listing(&listing, &mut world).unwrap();
         let entity = world.get::<primase_core::Asset>(root).unwrap().members[0].0;
         let mut reader = ClipReader {
-            archive: Some(Arc::new(Archive::empty(crate::Game::Sekiro))),
+            archive: Some(Arc::new(Archive::empty(fromsoft_formats::Game::Sekiro))),
             binders: BTreeMap::from([(source.binder.clone(), binder)]),
             listings: BTreeMap::from([("c1010".into(), listing)]),
             ..Default::default()
@@ -1099,7 +1104,11 @@ mod tests {
         };
         let why = reader
             .load(
-                &crate::Install::sekiro("unused"),
+                &fromsoft_formats::Install::new(
+                    "unused",
+                    fromsoft_formats::Game::Sekiro,
+                    fromsoft_formats::Keys::none(),
+                ),
                 &decoder,
                 &source,
                 entity,

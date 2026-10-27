@@ -1,7 +1,8 @@
 //! Read TAE parameter bytes using the credited template for the source game.
 //! Smithbox cbd477a8; Vawser, Katalash, Meowmaritus and contributors (MIT;
 //! assets/names/SMITHBOX-LICENSE). Unknown fields keep their bytes and a named refusal.
-use crate::{Game, sekiro::character_data::DecodedEvent};
+use crate::sekiro::character_data::DecodedEvent;
+use fromsoft_formats::Game;
 use primase_core::{EventValue, EventValueData, NameOrigin};
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
@@ -182,7 +183,7 @@ fn values(template: &Template, bytes: &[u8]) -> Result<Vec<EventValue>, String> 
 
 /// One typed descriptor per raw event, in identical order. Event 198's observed structural
 /// fields are appended without guessing its transition envelope.
-pub fn decode(game: Game, events: &[crate::tae::Event]) -> Vec<DecodedEvent> {
+pub fn decode(game: Game, events: &[fromsoft_formats::tae::Event]) -> Vec<DecodedEvent> {
     events
         .iter()
         .map(|event| {
@@ -280,14 +281,14 @@ mod tests {
     #[test]
     fn reading_keeps_unknown_rows_and_material_structural_facts() {
         let events = vec![
-            crate::tae::Event {
+            fromsoft_formats::tae::Event {
                 kind: 987654,
                 unk04: 0,
                 start: 0.,
                 end: 1.,
                 parameters: vec![4, 5],
             },
-            crate::tae::Event {
+            fromsoft_formats::tae::Event {
                 kind: 198,
                 unk04: 0,
                 start: 0.,

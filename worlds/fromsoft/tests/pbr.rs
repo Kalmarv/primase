@@ -1,12 +1,12 @@
 //! Synthetic DDS fixtures assert independent channel values and baked-binding
 //! identity, not merely that lowering ran without an error.
+use fromsoft_formats::{
+    flver,
+    mtd::{MaterialDefinition, Texture as Slot},
+};
 use primase_core::pbr::{PbrMaterial, TextureRef, UvTransform};
 use primase_core::{ColorSpace, TexFormat, TexRole, Texture, World};
-use primase_fromsoft::{
-    flver, materials,
-    mtd::{MaterialDefinition, Texture as Slot},
-    sekiro::pbr,
-};
+use primase_fromsoft::{materials, sekiro::pbr};
 use std::collections::BTreeMap;
 
 /// The water colour the tests state (the earlier skate exporter's).

@@ -14,14 +14,12 @@
 //! - `NPC <game> <row> ...`: the first rows' descriptive fields.
 //!
 //! Runs where the install, its keys and the Oodle library are configured; otherwise it does nothing.
-mod inputs;
-
+use fromsoft_formats::tae::Tae;
+use fromsoft_formats::{Binder, Game, Install, Keys, dcx::Decoder};
 use primase_core::convert::Reader;
 use primase_core::{Skeleton, Sockets, World};
 use primase_fromsoft::sekiro::character_data::{Cloth, Dummies, NpcStatRows};
 use primase_fromsoft::sekiro::{self, CharacterOptions};
-use primase_fromsoft::tae::Tae;
-use primase_fromsoft::{Binder, Game, Install, Keys, dcx::Decoder};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 mod common;
@@ -128,7 +126,7 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>, ids: &[&str]) ->
         let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
         let used: Vec<_> = dummies.iter().filter(|d| d.use_upward_vector).collect();
         let off =
-            |f: &dyn Fn(&primase_fromsoft::flver::Dummy) -> bool| dummies.iter().filter(|d| f(d)).count();
+            |f: &dyn Fn(&fromsoft_formats::flver::Dummy) -> bool| dummies.iter().filter(|d| f(d)).count();
         println!(
             "DUMMYDIR {} {id} dummies {} forward_not_unit {} forward_zero {} use_upward {} upward_not_unit {} \
              not_perpendicular {} max_abs_dot {:.4}",
@@ -177,7 +175,7 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>, ids: &[&str]) ->
 
 #[test]
 fn what_the_characters_hold() -> Result<()> {
-    let Some(dll) = inputs::oodle(inputs::Tool::Oodle6) else {
+    let Some(dll) = primase_testdata::oodle(primase_testdata::Tool::Oodle6) else {
         return Ok(());
     };
     let dll = common::oodle(dll)?;
@@ -188,20 +186,19 @@ fn what_the_characters_hold() -> Result<()> {
     for (game, data, ids) in [
         (
             Game::Sekiro,
-            inputs::Game::Sekiro,
+            primase_testdata::Game::Sekiro,
             &["c1010", "c1100", "c1000", "c1320"][..],
         ),
         (
             Game::EldenRing,
-            inputs::Game::Elden,
+            primase_testdata::Game::Elden,
             &["c3000", "c2010", "c4290"][..],
         ),
     ] {
-        let (Some(root), keys) = (inputs::install(data), inputs::keys(data)) else {
+        let (Some(root), keys) = (primase_testdata::install(data), primase_testdata::keys(data)) else {
             continue;
         };
         let keys = match (game, keys) {
-            (Game::Sekiro, _) => Keys::published(Game::Sekiro).ok_or("Sekiro's keys")?,
             (_, Some(folder)) => Keys::from_folder(folder, game)?,
             (_, None) => continue,
         };

@@ -2,7 +2,7 @@
 //! agree. Semantics checked against DSAnimStudio f1bff06c TaeActionSimulationEnvironment.cs
 //! (GPL-3.0, reference only; no code copied). No seek/playback evaluator lives in the reader.
 use crate::components::visibility::{ClipVisibility, MaskChange};
-use crate::tae::Event;
+use fromsoft_formats::tae::Event;
 
 pub fn decode(character: &str, events: &[Event]) -> ClipVisibility {
     let mut out = ClipVisibility {
@@ -125,7 +125,7 @@ mod tests {
     }
     #[test]
     fn imported_records_keep_mask_facts_and_import_cycles_are_refused() {
-        use crate::tae::{Animation, Header, Tae};
+        use fromsoft_formats::tae::{Animation, Header, Tae};
         let own = Animation {
             id: 1,
             header: Header::None,

@@ -6,11 +6,9 @@
 //! its fields) and prints the rest.
 //!
 //! Runs where the install, its keys and the Oodle library are configured; otherwise it does nothing.
-mod inputs;
-
+use fromsoft_formats::{Game, Install, Keys, dcx::Decoder};
 use primase_core::World;
 use primase_fromsoft::sekiro::{self, DrawParams, source::DrawParam};
-use primase_fromsoft::{Game, Install, Keys, dcx::Decoder};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 mod common;
@@ -55,7 +53,7 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>, map: &str) -> Re
     }
     for stem in time_files {
         let bytes = archive.read(&format!("/param/drawparam/{stem}.gparam.dcx"), decoder)?;
-        let data = primase_fromsoft::gparam::Gparam::read(&bytes)?;
+        let data = fromsoft_formats::gparam::Gparam::read(&bytes)?;
         let mut tracks = 0;
         for group in &data.groups {
             for field in &group.fields {
@@ -174,7 +172,7 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>, map: &str) -> Re
 
 #[test]
 fn the_fields_the_maps_store() -> Result<()> {
-    let Some(dll) = inputs::oodle(inputs::Tool::Oodle6) else {
+    let Some(dll) = primase_testdata::oodle(primase_testdata::Tool::Oodle6) else {
         return Ok(());
     };
     let dll = common::oodle(dll)?;
@@ -185,20 +183,19 @@ fn the_fields_the_maps_store() -> Result<()> {
     for (game, data, maps) in [
         (
             Game::Sekiro,
-            inputs::Game::Sekiro,
+            primase_testdata::Game::Sekiro,
             &["m11_01_00_00", "m20_00_00_00"][..],
         ),
         (
             Game::EldenRing,
-            inputs::Game::Elden,
+            primase_testdata::Game::Elden,
             &["m10_00_00_00", "m12_02_00_00"][..],
         ),
     ] {
-        let (Some(root), keys) = (inputs::install(data), inputs::keys(data)) else {
+        let (Some(root), keys) = (primase_testdata::install(data), primase_testdata::keys(data)) else {
             continue;
         };
         let keys = match (game, keys) {
-            (Game::Sekiro, _) => Keys::published(Game::Sekiro).ok_or("Sekiro's keys")?,
             (_, Some(folder)) => Keys::from_folder(folder, game)?,
             (_, None) => continue,
         };

@@ -1,26 +1,25 @@
 //! Real selected-area assembly, including split geometry and authoritative PBR.
-mod inputs;
-
-use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
+use fromsoft_formats::dcx::Decoder;
 use primase_core::pass::RunReport;
 use primase_core::pbr::PbrMaterial;
 use primase_core::{DrawLayer, DrawOrder, Entity, MaterialUsage, Mesh, Name, Texture, World};
 use primase_fromsoft::materials::Material;
+use primase_fromsoft::sekiro;
 use primase_fromsoft::sekiro::source::{FaceCull, MaterialSlots, PrototypeSource};
-use primase_fromsoft::{dcx::Decoder, sekiro};
+use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
 use std::collections::BTreeMap;
 mod common;
 /// One read and bake of `region` of m11_01, its layers baked at most `max_size` pixels on an edge, its source
 /// materials spawned in reverse when `reverse`.
 fn bake(
-    install: &std::path::Path,
+    install: &fromsoft_formats::Install,
     dll: &primase_foundations::compress::oodle::Oodle,
     region: [f32; 4],
     max_size: u32,
     reverse: bool,
 ) -> Result<(World, sekiro::Report, RunReport), Box<dyn std::error::Error>> {
     let mut world = World::default();
-    let report = sekiro::read_area(
+    let report = sekiro::read_game_area(
         install,
         "m11_01",
         &Decoder {
@@ -56,7 +55,7 @@ fn bake(
 /// and counted by the lowering; baked textures within the size cap `max_size`; and the same names, textures,
 /// materials and parts when the source materials are spawned in reverse. Returns (water, foliage, decal) counts.
 fn region_holds(
-    install: &std::path::Path,
+    install: &fromsoft_formats::Install,
     dll: &primase_foundations::compress::oodle::Oodle,
     region: [f32; 4],
     max_size: u32,
@@ -205,14 +204,17 @@ fn region_holds(
 }
 
 /// The baseline scene's region of m11_01, baked as the conversion bakes it, holds what any region's bake holds
-/// ([`region_holds`]). The smoke gate ([`inputs::depth`]) bakes a sample of the region's cells
-/// ([`common::cells`]: [`SMOKE_CELLS`] of nine, drawn with [`inputs::seed`], printed and named in every
+/// ([`region_holds`]). The smoke gate ([`primase_testdata::depth`]) bakes a sample of the region's cells
+/// ([`common::cells`]: [`SMOKE_CELLS`] of nine, drawn with [`primase_testdata::seed`], printed and named in every
 /// failure) at [`SMOKE_MAX_SIZE`], so it checks nothing that depends on the resolution (the baked pixels, which
 /// variants share their content); the full gate bakes the whole region at the conversion's 512 and checks its
 /// counts, as measured.
 #[test]
 fn baked_slice_assembly() -> Result<(), Box<dyn std::error::Error>> {
     let Some(install) = install(Game::Sekiro) else {
+        return Ok(());
+    };
+    let Some(install) = common::sekiro(&install)? else {
         return Ok(());
     };
     let Some(dll) = oodle(Tool::Oodle6) else {
@@ -224,8 +226,8 @@ fn baked_slice_assembly() -> Result<(), Box<dyn std::error::Error>> {
     let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(reference.join("scene.json"))?)?;
     let region: [f32; 4] = serde_json::from_value(manifest["region"].clone())?;
     let dll = common::oodle(dll)?;
-    if inputs::depth() == inputs::Depth::Smoke {
-        let seed = inputs::seed();
+    if primase_testdata::depth() == primase_testdata::Depth::Smoke {
+        let seed = primase_testdata::seed();
         let cells = common::cells(region);
         let sample = common::sample(seed, cells.len(), SMOKE_CELLS);
         println!(

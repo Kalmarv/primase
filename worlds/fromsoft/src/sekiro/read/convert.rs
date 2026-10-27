@@ -9,16 +9,15 @@
 //! read's region rule uses. What the read left out or could not find ([`super::area::Report::notices`]) is the
 //! reader's notices; a load takes nothing from the source and notices nothing.
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
 
 use primase_core::convert::{Notice, Reader, Report, Result};
 use primase_core::{Entity, World};
 
 use super::area::{Options, read_game_area};
-use crate::Install;
-use crate::dcx::Decoder;
 use crate::materials::Material;
 use crate::sekiro::source::{ShaderPrograms, TexturePayloads};
+use fromsoft_formats::Install;
+use fromsoft_formats::dcx::Decoder;
 
 /// Every component and resource an area's read and load can put in a world across its options, by name (the names in the namespaces
 /// [`Reader::emits`] states): what a coverage report lists of this reader. The reader's honesty test (real data:
@@ -76,17 +75,6 @@ pub struct AreaReader<'a> {
 }
 
 impl<'a> AreaReader<'a> {
-    /// The area `area` (`m11_01` or `m11_01_00_00`) of the install at `install`, read as `options` says, archives
-    /// decoded with `decoder`.
-    pub fn new(
-        install: impl Into<PathBuf>,
-        area: &str,
-        decoder: Decoder<'a>,
-        options: Options,
-    ) -> AreaReader<'a> {
-        Self::of(Install::sekiro(install), area, decoder, options)
-    }
-
     /// The map `area` of `install` (any game's: [`read_game_area`]), read as `options` says.
     pub fn of(install: Install, area: &str, decoder: Decoder<'a>, options: Options) -> AreaReader<'a> {
         AreaReader {
@@ -239,8 +227,12 @@ mod tests {
 
     #[test]
     fn a_read_missing_a_model_gives_the_conversion_its_notices_once() {
-        let mut reader = AreaReader::new(
-            "install",
+        let mut reader = AreaReader::of(
+            fromsoft_formats::Install::new(
+                "install",
+                fromsoft_formats::Game::Sekiro,
+                fromsoft_formats::Keys::none(),
+            ),
             "m11_01",
             Decoder {
                 oodle: None,
@@ -276,8 +268,12 @@ mod tests {
     fn a_part_loads_only_the_source_files_its_materials_bind() {
         use crate::materials::Binding;
         use std::sync::Arc;
-        let mut reader = AreaReader::new(
-            "install",
+        let mut reader = AreaReader::of(
+            fromsoft_formats::Install::new(
+                "install",
+                fromsoft_formats::Game::Sekiro,
+                fromsoft_formats::Keys::none(),
+            ),
             "m11_01",
             Decoder {
                 oodle: None,
@@ -288,7 +284,7 @@ mod tests {
         let mut world = World::new();
         let mut material = |texture: &str| {
             let mut m = crate::materials::resolve(
-                &crate::flver::Material {
+                &fromsoft_formats::flver::Material {
                     name: "fixture".into(),
                     mtd: "fixture.mtd".into(),
                     gx: vec![],

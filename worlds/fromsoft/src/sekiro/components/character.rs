@@ -5,9 +5,9 @@ use primase_core::{Component, Resource};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::flver::Dummy;
-use crate::param::NpcStats;
-use crate::tae::{Event, Header};
+use fromsoft_formats::flver::Dummy;
+use fromsoft_formats::param::NpcStats;
+use fromsoft_formats::tae::{Event, Header};
 
 /// A model's dummy polygons (`fromsoft.dummies`, on the prototype), in file order, as the FLVER stores them: the file's
 /// frame, positions in the space of the parent bone where there is one. [`Sockets`](primase_core::Sockets) on the
@@ -25,7 +25,7 @@ impl Component for Dummies {
     }
 }
 
-/// One cloth companion file of a model ([`crate::clm2::Clm2`]), by its member name (`wp_a_0427_c.clm2`).
+/// One cloth companion file of a model ([`fromsoft_formats::clm2::Clm2`]), by its member name (`wp_a_0427_c.clm2`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ClothFile {
     pub file: String,
@@ -122,7 +122,7 @@ impl Resource for NpcStatRows {
 /// it never opens message binders or guesses a row from a character model number.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct NpcNames {
-    pub game: crate::Game,
+    pub game: fromsoft_formats::Game,
     pub language: String,
     pub names: std::collections::BTreeMap<i32, String>,
     /// Missing optional binders and duplicate message ids, with both source paths.

@@ -2,6 +2,7 @@
 //! proven, as its `pbr.detail` beside the baked `pbr.material`, which stays the fallback. Both games' families: Sekiro's
 //! `Character_AMSN_[DetailBlend]` (DXBC programs holding an F0) and Elden Ring's `C[DetailBlend]` and `C[DetailBlend][Rich]`
 //! (DXIL programs holding a metallic factor); the other Elden Ring families are refused by name ([`family`]).
+use crate::game::Shading;
 use std::collections::BTreeMap;
 
 use iridia_interface::{AddressMode, Stage};
@@ -12,11 +13,11 @@ use primase_core::pbr::{TextureRef, UvTransform, Wrap};
 use primase_core::{Component, Entity, Mesh, Semantic, Stream, World};
 use primase_core::{shader::Shader, shader::ShaderBinding, shader::TextureSource};
 
-use crate::Game;
 use crate::detail_derive::{derive_equation, slot_transform};
 use crate::detail_probe::ProgramProbe;
 use crate::materials::{Definition, LayeredMaterial, Material};
 use crate::sekiro::components::lowered::UvTiling;
+use fromsoft_formats::Game;
 
 /// `derive-fromsoft-detail`: for each material whose shader is Sekiro's `Character_AMSN_[DetailBlend]` or Elden Ring's
 /// `C[DetailBlend]` (plain, `[Rich]`, and their `_cloth` variants, whose pixel programs are the same) and which a
@@ -43,7 +44,7 @@ const FAMILY: &str = "Character_AMSN_[DetailBlend]";
 const ELDEN_FAMILY: &str = "C[DetailBlend]";
 
 /// The count of a metallic-factor material: its PBR model states no dielectric reflectance, so the viewer's stands (glTF's
-/// 0.04). The source's lighting reads `F0 = lerp(0.04, albedo, metallic)` ([`crate::Game::gbuffer`]), which agrees, but no
+/// 0.04). The source's lighting reads `F0 = lerp(0.04, albedo, metallic)` ([`fromsoft_formats::Game::gbuffer`]), which agrees, but no
 /// measurement has settled it.
 pub const GLTF_DIELECTRIC: &str = "detail-blend materials whose dielectric reflectance is the viewer's (glTF's 0.04): the source's lighting reads F0 = lerp(0.04, albedo, metallic), which no measurement has settled";
 

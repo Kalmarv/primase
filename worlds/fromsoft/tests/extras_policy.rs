@@ -1,9 +1,7 @@
+use fromsoft_formats::btl::{Kind, Light as BtlLight};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{Light, LightKind, Transform, World};
-use primase_fromsoft::{
-    btl::{Kind, Light as BtlLight},
-    sekiro::{light_record, passes, source::LightSource},
-};
+use primase_fromsoft::sekiro::{light_record, passes, source::LightSource};
 fn light() -> BtlLight {
     BtlLight {
         name: "fixture".into(),
@@ -118,7 +116,7 @@ fn source_light_records_and_their_lowering() {
 
 #[test]
 fn spawn_region_values_are_read_without_map_offset_or_rounding() {
-    use primase_fromsoft::msb::{Generation, MapLayout, Section};
+    use fromsoft_formats::msb::{Generation, MapLayout, Section};
     let mut bytes = vec![0u8; 100];
     bytes[..8].copy_from_slice(&96u64.to_le_bytes());
     bytes[8..12].copy_from_slice(&8u32.to_le_bytes());

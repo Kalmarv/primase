@@ -11,8 +11,8 @@
 
 use std::path::PathBuf;
 
+use fromsoft_formats::{Archive, Binder, Game, Keys, NameDictionary, dcx::Decoder};
 use primase_foundations::compress::oodle::{Oodle, Version};
-use primase_fromsoft::{Archive, Binder, Game, Keys, NameDictionary, dcx::Decoder};
 
 type BoxError = Box<dyn std::error::Error>;
 

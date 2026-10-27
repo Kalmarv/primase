@@ -42,7 +42,8 @@ pub fn matches(reference: &Value, material: &Material) -> bool {
 
 #[test]
 fn partial_bindings_do_not_identify_a_material() {
-    use primase_fromsoft::{flver, materials, mtd};
+    use primase_fromsoft::materials;
+use fromsoft_formats::{flver, mtd};
     let source = flver::Material {
         name: "part".into(),
         mtd: "test.mtd".into(),

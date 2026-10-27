@@ -1,11 +1,10 @@
 //! Existing character fixture: reader planning and one strict root load, without models/materials.
-mod inputs;
-
-use inputs::{Game, Tool, install, oodle};
+use fromsoft_formats::dcx::Decoder;
 use primase_core::convert::Reader;
 use primase_core::{ClipKey, Name};
-use primase_fromsoft::{Install, dcx::Decoder, sekiro};
+use primase_fromsoft::sekiro;
 use primase_havok::world::HavokAnimation;
+use primase_testdata::{Game, Tool, install, oodle};
 mod common;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -14,12 +13,15 @@ fn an_existing_character_lists_every_clip_and_decodes_only_one() -> Result<()> {
     let (Some(root), Some(library)) = (install(Game::Sekiro), oodle(Tool::Oodle6)) else {
         return Ok(());
     };
+    let Some(root) = common::sekiro(&root)? else {
+        return Ok(());
+    };
     let codec = common::oodle(library)?;
     let decoder = Decoder {
         oodle: Some(&codec),
         max_output: 1 << 30,
     };
-    let mut reader = sekiro::CharacterReader::animations(Install::sekiro(root), "c1010", decoder);
+    let mut reader = sekiro::CharacterReader::animations(root, "c1010", decoder);
     let (plans, _) = reader.read().map_err(|error| error.to_string())?;
     let chosen = plans
         .iter::<Name>()

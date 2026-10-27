@@ -3,7 +3,8 @@
 //! An MSB enemy's explicit NpcParam row may name game FMG text; a model number alone
 //! never chooses one NPC row or invents a connection to an FMG entry.
 use super::clip_events::{game_option, game_text};
-use crate::{Game, msb::UnplacedPart};
+use crate::components::stored::UnplacedPart;
+use fromsoft_formats::Game;
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Clip, Component, DisplayName, Name, NameOrigin, World};
 use std::collections::BTreeMap;
@@ -249,6 +250,8 @@ impl Pass for NameFromSoftEntities {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::stored::Stored;
+    use fromsoft_formats::msb;
     #[test]
     fn bundled_labels_keep_source_ids_and_credited_origins() {
         assert_eq!(character(Game::Sekiro, "C1010"), Some("Ashina Soldier"));
@@ -281,7 +284,7 @@ mod tests {
         world.insert(e, Name("enemy_0001".into()));
         world.insert(
             e,
-            UnplacedPart {
+            Stored(msb::UnplacedPart {
                 index: 0,
                 name: "enemy_0001".into(),
                 kind: "enemy",
@@ -292,7 +295,7 @@ mod tests {
                 scale: [1.0; 3],
                 entity_id: 0,
                 entity_group_ids: [0; 8],
-            },
+            }),
         );
         let pass = NameFromSoftEntities { game: Game::Sekiro };
         world.insert_resource(crate::sekiro::character_data::NpcNames {

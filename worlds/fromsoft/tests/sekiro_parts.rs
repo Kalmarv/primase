@@ -4,18 +4,17 @@
 //! vertex's position, bone indices and weights as stored. Then the parts assembled (`assemble-character`): the
 //! assembled skeleton against a hierarchy and rests rebuilt from the oracle's own bone records, and every part's
 //! vertices at the assembled rest against their own rest.
-mod inputs;
-
 use std::collections::{BTreeMap, BTreeSet};
 
-use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
+use fromsoft_formats::dcx::Decoder;
 use primase_animation::deform::{Vertices, skin};
 use primase_animation::pose::{Affine, locals, model_transforms, transform};
 use primase_core::frame::{Axis, SourceFrame};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{Asset, Entity, JointMap, Mesh, Name, Role, Skeleton, Skin, WeightRule, World};
-use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::rigid::SourceModel;
+use primase_testdata::{Game, OracleSet, Tool, install, oodle, oracle};
+mod common;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -90,6 +89,9 @@ fn read(
     let Some(install) = install(Game::Sekiro) else {
         return Ok(None);
     };
+    let Some(sekiro) = common::sekiro(&install)? else {
+        return Ok(None);
+    };
     let Some(dll) = oodle(Tool::Oodle6) else {
         return Ok(None);
     };
@@ -97,17 +99,14 @@ fn read(
         return Ok(None);
     };
     // SAFETY: explicitly supplied trusted native decoder.
-    let dll = unsafe {
-        primase_foundations::compress::oodle::Oodle::open(
-            dll.path(),
-            primase_foundations::compress::oodle::Version::V6,
-        )
-    }?;
+    let dll =
+        unsafe { primase_foundations::compress::oodle::Oodle::open(dll.path(), primase_foundations::compress::oodle::Version::V6) }?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1 << 30,
     };
-    let reports = primase_fromsoft::sekiro::read_parts(&install, &PARTS, &decoder, world)?;
+    let reports =
+        primase_fromsoft::sekiro::read_parts_with(&sekiro, &PARTS, &decoder, &Default::default(), world)?.0;
     Ok(Some((oracle, reports)))
 }
 

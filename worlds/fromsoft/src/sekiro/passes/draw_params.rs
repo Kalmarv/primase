@@ -5,8 +5,8 @@
 //! hour. Between two keys, floats and float vectors are interpolated linearly over the 24-hour day (key 24 is key 0);
 //! every other type holds the preceding key. That is a preview policy, not the engine's curve (none is established), and
 //! it is counted by name. Sets the read left unresolved are not part of the scene's environment and stay as stored.
-use crate::gparam::Value;
 use crate::sekiro::source::{DrawField, DrawParam, SetChosen};
+use fromsoft_formats::gparam::Value;
 use primase_core::Resource;
 use primase_core::World;
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};

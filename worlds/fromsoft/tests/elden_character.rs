@@ -22,14 +22,12 @@
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
-mod inputs;
-
-use inputs::{Game as Data, Tool, install, keys, oodle};
+use fromsoft_formats::dcx::Decoder;
+use fromsoft_formats::{Game, Install, Keys};
 use primase_core::{Asset, Role, Skeleton, World};
-use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::materials::Material;
 use primase_fromsoft::sekiro::{CharacterOptions, read_character_with};
-use primase_fromsoft::{Game, Install, Keys};
+use primase_testdata::{Game as Data, Tool, install, keys, oodle};
 
 mod common;
 
