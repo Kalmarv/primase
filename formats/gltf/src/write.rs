@@ -151,7 +151,7 @@ pub struct WriteOptions {
     /// How many threads encode the images ([`primase_core::parallel`]): with more than one and no [`Selection`], every
     /// image a material binds is encoded up front, at most this many at once, the same bytes in the same order as one
     /// at a time. Default one.
-    pub threads: primase_core::parallel::Threads,
+    pub threads: primase_foundations::parallel::Threads,
     /// Image encodings shared with the caller's other writes (a tiled writer writing many documents of one world):
     /// each texture's PNG taken from it when it holds one of the same content, else encoded and kept. `None`: each
     /// write encodes its own. The same bytes either way.
@@ -615,7 +615,7 @@ fn preencode(
         .collect();
     // the largest first, so the longest encodings do not start last; each image's bytes are its own either way
     todo.sort_by_key(|(e, t)| (std::cmp::Reverse(u64::from(t.width) * u64::from(t.height)), *e));
-    match primase_core::parallel::map(options.threads, &todo, |_, (_, t)| {
+    match primase_foundations::parallel::map(options.threads, &todo, |_, (_, t)| {
         primase_image::texture_level_png(t, 0).map_err(|e| e.to_string())
     }) {
         Ok(done) => todo.iter().map(|(e, _)| *e).zip(done).collect(),

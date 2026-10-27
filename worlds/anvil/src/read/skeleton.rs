@@ -32,7 +32,7 @@
 
 pub use crate::components::{StoredBone, StoredPose, StoredPoseBone, StoredPoseGroup, StoredSkeleton};
 use crate::read::fields::{BodyError, LE, body_error, count, end, expect, f32s, object, reference};
-use primase_bytes::Field;
+use primase_foundations::bytes::Field;
 
 /// A record type: the CRC-32 of `Skeleton`.
 pub const SKELETON: u32 = 0x24AE_CB7C;
@@ -53,17 +53,17 @@ pub enum Error {
 }
 body_error!(Error, Error::Body);
 
-/// The body's cursor ([`primase_bytes::Cursor`]), with this record's grammar as methods.
-struct Cursor<'a>(primase_bytes::Cursor<'a>);
+/// The body's cursor ([`primase_foundations::bytes::Cursor`]), with this record's grammar as methods.
+struct Cursor<'a>(primase_foundations::bytes::Cursor<'a>);
 
 impl<'a> Cursor<'a> {
     fn new(b: &'a [u8]) -> Self {
-        Cursor(primase_bytes::Cursor::new(b))
+        Cursor(primase_foundations::bytes::Cursor::new(b))
     }
 }
 
 impl<'a> std::ops::Deref for Cursor<'a> {
-    type Target = primase_bytes::Cursor<'a>;
+    type Target = primase_foundations::bytes::Cursor<'a>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }

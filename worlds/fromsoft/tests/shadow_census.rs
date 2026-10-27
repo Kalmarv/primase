@@ -78,9 +78,16 @@ fn source_shadow_flags() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[allow(unsafe_code)]
-fn native(path: primase_testdata::OodleLibrary) -> primase_compress::Result<primase_compress::oodle::Oodle> {
+fn native(
+    path: primase_testdata::OodleLibrary,
+) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
     // SAFETY: the caller explicitly supplies a trusted native version-6 library.
-    unsafe { primase_compress::oodle::Oodle::open(path.path(), primase_compress::oodle::Version::V6) }
+    unsafe {
+        primase_foundations::compress::oodle::Oodle::open(
+            path.path(),
+            primase_foundations::compress::oodle::Version::V6,
+        )
+    }
 }
 
 /// The oracle map is m11_01. Every selected placement must name an oracle part;

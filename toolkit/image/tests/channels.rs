@@ -112,7 +112,7 @@ fn callback_failure_does_not_change_source() {
 /// row's, as the serial one's.
 #[test]
 fn the_threaded_mapping_is_the_serial_one() {
-    use primase_core::parallel::Threads;
+    use primase_foundations::parallel::Threads;
     use primase_image::map_rgba8_levels_with;
     let mut s = 12345u32;
     let mut noise = |n: usize| -> Vec<u8> {

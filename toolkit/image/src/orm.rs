@@ -17,7 +17,7 @@ use primase_core::pbr::PbrMaterial;
 use primase_core::{ColorSpace, Component, Entity, Name, TexFormat, TexRole, Texture, World};
 
 use crate::{Image, Samples, mip_chain, texture_level_rgba8_with};
-use primase_core::parallel::{Threads, rows_mut};
+use primase_foundations::parallel::{Threads, rows_mut};
 
 /// Which map the packed image takes its size and stored levels from (`size=`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -266,7 +266,7 @@ impl Pass for PackOrm {
                     let mut tally = Tally::default();
                     let image = self
                         .pack(
-                            Threads::of(world),
+                            primase_core::parallel::threads(world),
                             source(mr.texture, "metallic-roughness")?,
                             source(ao.texture, "occlusion")?,
                             &mut tally,

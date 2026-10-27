@@ -14,8 +14,10 @@ use std::ops::Range;
 
 use half::f16;
 use primase_core::{Deltas, MorphFrame, MorphId, MorphTarget, Morphs, Primitive, Semantic, Stream, Topology};
+use primase_foundations::vertex::{
+    Element, Format, Stream as VertexStream, decode_stream_raw, resolve_layout,
+};
 use primase_meshops::compact_primitive;
-use primase_vertex::{Element, Format, Stream as VertexStream, decode_stream_raw, resolve_layout};
 
 use crate::components::UNITY;
 use crate::read::player::{ObjRef, Player};

@@ -21,7 +21,7 @@
 )]
 
 use crate::read::fields::{BodyError, LE, body_error, check, end};
-use primase_bytes::{Cursor, Field};
+use primase_foundations::bytes::{Cursor, Field};
 
 /// A record type: the CRC-32 of `TerrainNodeLayer`.
 pub const TERRAIN_NODE_LAYER: u32 = 0xDCE0_537E;

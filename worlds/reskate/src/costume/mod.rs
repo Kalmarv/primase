@@ -12,7 +12,7 @@ pub mod presets;
 pub mod textures;
 pub mod thumbnail;
 
-use primase_compress::oodle::Oodle;
+use primase_foundations::compress::oodle::Oodle;
 use primase_frostbite::ebx::{self, Document};
 use primase_frostbite::fbmod::{Body, Fbmod};
 pub use primase_frostbite::{Error, Result};

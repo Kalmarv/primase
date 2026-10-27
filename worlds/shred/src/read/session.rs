@@ -68,7 +68,7 @@ fn rows(table: &Table) -> Result<Vec<SessionRow>> {
                     .filter(|s| !s.is_empty())
                     .map(|name| SessionIdentifier {
                         name: name.into(),
-                        hash: primase_hash::sdbm(name.as_bytes()),
+                        hash: primase_foundations::hash::sdbm(name.as_bytes()),
                     })
                     .collect();
             }

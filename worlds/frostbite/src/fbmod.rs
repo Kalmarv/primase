@@ -19,8 +19,8 @@
 
 use crate::cas::CasRaw;
 use crate::{Result, bad, capacity, past_end};
-use primase_bytes::Endian;
-use primase_compress::Compressor;
+use primase_foundations::bytes::Endian;
+use primase_foundations::compress::Compressor;
 use sha1::{Digest, Sha1};
 
 const W: &str = "fbmod";
@@ -142,9 +142,9 @@ pub struct Fbmod {
     pub payloads: Vec<Vec<u8>>,
 }
 
-/// The mod's bytes read in order ([`primase_bytes::Cursor`], little-endian), a read past them refused as the mod's.
+/// The mod's bytes read in order ([`primase_foundations::bytes::Cursor`], little-endian), a read past them refused as the mod's.
 struct Cur<'a> {
-    c: primase_bytes::Cursor<'a>,
+    c: primase_foundations::bytes::Cursor<'a>,
 }
 
 impl<'a> Cur<'a> {
@@ -205,7 +205,7 @@ fn sha1(data: &[u8]) -> [u8; 20] {
 /// of the file, and bytes after them.
 pub fn read(bytes: &[u8]) -> Result<Fbmod> {
     let mut c = Cur {
-        c: primase_bytes::Cursor::new(bytes),
+        c: primase_foundations::bytes::Cursor::new(bytes),
     };
     if c.arr::<8>()? != MAGIC {
         return Err(bad(W, 0, "not a FROSTY mod"));

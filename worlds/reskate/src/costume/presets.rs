@@ -6,7 +6,7 @@
 //! listed among the imports only. The value stored there is a valid import pointer (odd, its index an import of the
 //! document), so the type-info listing is the error: [`repair_slots`] removes it, nothing else.
 
-use primase_compress::oodle::Oodle;
+use primase_foundations::compress::oodle::Oodle;
 use primase_frostbite::ebx::{Document, FieldType};
 use primase_frostbite::fbmod::Fbmod;
 

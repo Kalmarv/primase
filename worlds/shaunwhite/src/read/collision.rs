@@ -12,7 +12,7 @@
     clippy::cast_possible_truncation
 )]
 
-use primase_bytes::{Cursor, Endian, Field, FieldError};
+use primase_foundations::bytes::{Cursor, Endian, Field, FieldError};
 
 const LE: Endian = Endian::Little;
 pub const MESH_SHAPE: u32 = 0xB22B_3E61;

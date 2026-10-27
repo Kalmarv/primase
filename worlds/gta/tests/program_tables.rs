@@ -239,8 +239,8 @@ fn the_effects_parameter_records_hold_codewalkers_offsets() {
         for (name, old, offset) in params {
             asked += 1;
             let (old_hash, hash) = (
-                primase_hash::joaat(old.as_bytes()),
-                primase_hash::joaat(name.as_bytes()),
+                primase_foundations::hash::joaat(old.as_bytes()),
+                primase_foundations::hash::joaat(name.as_bytes()),
             );
             if !read.contains(&old_hash) {
                 continue;

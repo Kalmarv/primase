@@ -35,7 +35,7 @@ fn run(world: &World, technique: &str) -> (World, PassLog) {
 /// point with a texture tag is `DiffuseTex`, the sampler heap's record sharing the bind point is not a texture): where
 /// the material stores a `DiffuseTex` texture, that slot is bound to it.
 fn diffuse_is_bound(w: &World) {
-    let key = primase_hash::joaat(b"DiffuseTex");
+    let key = primase_foundations::hash::joaat(b"DiffuseTex");
     let (mut checked, mut missing) = (0usize, 0usize);
     for (e, b) in w.iter::<ShaderBinding>() {
         let Some(GtaParam::Texture {

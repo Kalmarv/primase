@@ -20,10 +20,10 @@
     clippy::cast_possible_truncation
 )]
 
-use primase_bytes::{Cursor, Endian, Field, FieldError};
 use primase_core::{
     ColorSpace, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat, TexRole, Texture,
 };
+use primase_foundations::bytes::{Cursor, Endian, Field, FieldError};
 
 const LE: Endian = Endian::Little;
 

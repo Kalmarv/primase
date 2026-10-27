@@ -30,7 +30,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use primase_core::parallel::{self, Threads};
+use primase_foundations::parallel::{self, Threads};
 
 use primase_core::{ColorSpace, Entity, TexFormat, TexRole, Texture, World};
 use primase_image::sampling::{Address, Levels, Transfer};
@@ -553,7 +553,7 @@ pub fn bake(
     s: &Splat,
     tile_colour: ColorSpace,
 ) -> Result<Vec<(Texture, Baked)>, String> {
-    let threads = Threads::of(w);
+    let threads = primase_core::parallel::threads(w);
     let mut baker = Baker::new(w, t, s, tile_colour)?;
     let mut results = Vec::with_capacity(rects.len());
     for &[x0, y0, x1, y1] in rects {

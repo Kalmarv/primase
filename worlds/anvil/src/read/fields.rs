@@ -1,11 +1,11 @@
-//! What every anvil body reader shares over [`primase_bytes::Cursor`]: the byte order (little-endian throughout), the
+//! What every anvil body reader shares over [`primase_foundations::bytes::Cursor`]: the byte order (little-endian throughout), the
 //! grammar's fixed values, counts and embedded references, and one error for a body that doesn't read
 //! ([`BodyError`]), each reader's own error naming its record ("grid", "skeleton", ...) in front of it.
 //!
 //! The numbers themselves are the cursor's (`c.u32(LE).field("what")?`): a failed read names its field and its exact
-//! offset ([`primase_bytes::FieldError`]).
+//! offset ([`primase_foundations::bytes::FieldError`]).
 
-use primase_bytes::{BoundsError, Cursor, Endian, Field, FieldError};
+use primase_foundations::bytes::{BoundsError, Cursor, Endian, Field, FieldError};
 
 use crate::read::reference::{self, Reference};
 
@@ -56,8 +56,8 @@ impl BodyError {
 /// A reader's error from a failed field read, through its [`BodyError`] variant.
 macro_rules! body_error {
     ($error:ty, $variant:path) => {
-        impl From<primase_bytes::FieldError> for $error {
-            fn from(e: primase_bytes::FieldError) -> Self {
+        impl From<primase_foundations::bytes::FieldError> for $error {
+            fn from(e: primase_foundations::bytes::FieldError) -> Self {
                 $variant(crate::read::fields::BodyError::from(e))
             }
         }

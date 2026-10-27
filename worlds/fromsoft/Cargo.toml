@@ -11,7 +11,7 @@ publish.workspace = true
 iridia-interface.workspace = true
 primase-cache.workspace = true
 dxcontainer.workspace = true
-primase-bytes.workspace = true
+primase-foundations = { workspace = true, features = ["compress"] }
 iridia-dxbc.workspace = true
 primase-dxil.workspace = true
 iridia.workspace = true
@@ -26,17 +26,14 @@ encoding_rs.workspace = true
 primase-core.workspace = true
 primase-animation.workspace = true
 primase-dds.workspace = true
-primase-vertex.workspace = true
 primase-meshops.workspace = true
-primase-compress.workspace = true
 thiserror.workspace = true
 half.workspace = true
 aes.workspace = true
 num-bigint.workspace = true
 sha2.workspace = true
 [dev-dependencies]
-primase-hash.workspace = true
-primase-compress = { workspace = true, features = ["reference-decoder"] }
+primase-foundations = { workspace = true, features = ["compress", "reference-decoder"] }
 primase-testdata.workspace = true
 sha2.workspace = true
 criterion.workspace = true

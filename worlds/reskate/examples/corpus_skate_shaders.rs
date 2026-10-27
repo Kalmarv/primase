@@ -8,7 +8,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use primase_compress::oodle::{Oodle, Version};
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_frostbite::bundle::Kind;
 use primase_frostbite::bytecode;
 use primase_frostbite::folder::{Folder, Source};

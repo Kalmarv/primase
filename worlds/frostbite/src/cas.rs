@@ -1,5 +1,5 @@
 //! Frostbite CAS: sequence of eight-byte headers and exactly sized payloads.
-use primase_compress::{Compressor, Error, Result};
+use primase_foundations::compress::{Compressor, Error, Result};
 
 pub(crate) fn invalid(offset: usize, detail: impl ToString) -> Error {
     Error::Invalid {

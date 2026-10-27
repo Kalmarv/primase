@@ -164,7 +164,6 @@
 use std::collections::BTreeMap;
 
 use primase_core::layered::{Channel, Composition, Layer, LayerWeights, Source, WeightMapping};
-use primase_core::parallel::Threads;
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef, UvTransform};
 use primase_core::{
@@ -172,6 +171,7 @@ use primase_core::{
     Name, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, Semantic, Stream, TexFormat, TexRole,
     Texture, VertexColor, World,
 };
+use primase_foundations::parallel::Threads;
 use primase_image::{Rgba8Texel, TextureMetadata, map_rgba8_levels, map_rgba8_levels_with, srgb8_to_linear};
 
 use super::decals::DECAL_QUEUE;
@@ -1201,7 +1201,7 @@ fn derived(
         .ok_or("a texture entity without a texture")?;
     let srgb = srgb(w, source);
     map_rgba8_levels_with(
-        Threads::of(w),
+        primase_core::parallel::threads(w),
         t,
         0..t.levels.len(),
         TextureMetadata {

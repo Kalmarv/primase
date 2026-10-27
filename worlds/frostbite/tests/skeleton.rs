@@ -5,9 +5,9 @@
 
 #![allow(clippy::unwrap_used)]
 
-use primase_compress::oodle::{Oodle, Version};
 use primase_core::World;
 use primase_core::pass::{Pass, PassLog};
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_frostbite::MESHSET;
 use primase_frostbite::bundle::Kind;
 use primase_frostbite::components::{FrostbiteMeshSet, FrostbiteSkeleton, FrostbiteSkeletonLink};

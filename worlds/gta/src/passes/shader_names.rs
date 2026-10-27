@@ -661,7 +661,7 @@ pub fn effect(hash: u32) -> Option<&'static str> {
     EFFECTS
         .iter()
         .copied()
-        .find(|n| primase_hash::joaat(n.as_bytes()) == hash)
+        .find(|n| primase_foundations::hash::joaat(n.as_bytes()) == hash)
 }
 
 /// The hash a listed name stands for: its joaat, or for a `hash_XXXXXXXX` entry (a parameter the list knows only by
@@ -672,7 +672,7 @@ fn hash_of(name: &str) -> u32 {
         .and_then(|h| u32::from_str_radix(h, 16).ok())
     {
         Some(h) => h,
-        None => primase_hash::joaat(name.as_bytes()),
+        None => primase_foundations::hash::joaat(name.as_bytes()),
     }
 }
 

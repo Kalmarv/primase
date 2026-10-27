@@ -11,7 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_compress::oodle::{Oodle, Version};
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_frostbite::bundle::Kind;
 use primase_frostbite::folder::{Folder, Source};
 use primase_frostbite::{bytecode, bytecode::RTYPE};

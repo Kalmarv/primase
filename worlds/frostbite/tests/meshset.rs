@@ -9,7 +9,7 @@
 
 #![allow(clippy::unwrap_used)]
 
-use primase_compress::oodle::{Oodle, Version};
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_frostbite::MESHSET;
 use primase_frostbite::folder::{Folder, Source};
 use primase_frostbite::meshset::{self, LOD_MAP, LOD_MASKS, LOD_PLAIN};

@@ -19,8 +19,8 @@ use super::scp_locators::{self, Locator};
 use super::scp_occluders::{self, Occluder};
 use super::scp_splines::{self, Spline, SplineKind};
 use crate::{Result, invalid};
-use primase_bytes::{Endian, Field, View};
 use primase_core::Transform;
+use primase_foundations::bytes::{Endian, Field, View};
 
 /// A node's links are `0x70`-byte records.
 const NODE: usize = 0x70;
@@ -137,14 +137,14 @@ pub const CLASS_NAMES: [&str; 14] = [
 pub fn class_name(hash: u32) -> Option<&'static str> {
     CLASS_NAMES
         .into_iter()
-        .find(|n| primase_hash::sdbm(n.as_bytes()) == hash)
+        .find(|n| primase_foundations::hash::sdbm(n.as_bytes()) == hash)
 }
 
 /// `Rectangle` (a centred unit box in the chunk's frame) or `Grid`.
 pub fn shape_name(hash: u32) -> Option<&'static str> {
     ["Rectangle", "Grid"]
         .into_iter()
-        .find(|n| primase_hash::sdbm(n.as_bytes()) == hash)
+        .find(|n| primase_foundations::hash::sdbm(n.as_bytes()) == hash)
 }
 
 pub(super) fn matrix(v: View<'_>, at: usize) -> Result<Transform> {
@@ -165,7 +165,7 @@ pub(super) fn matrix(v: View<'_>, at: usize) -> Result<Transform> {
 }
 
 fn table(total: usize, count: usize, at: usize, stride: usize, what: &str) -> Result<()> {
-    primase_bytes::checked_span(at, count, stride, total)
+    primase_foundations::bytes::checked_span(at, count, stride, total)
         .map(|_| ())
         .map_err(|e| invalid(at, format!("scp: {what} table: {e}")))
 }

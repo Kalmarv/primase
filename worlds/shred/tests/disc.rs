@@ -35,7 +35,7 @@ fn disc_archives_and_every_cstr() {
         let p = Pak::open(path).unwrap_or_else(|e| panic!("{} seed={seed}: {e}", path.display()));
         entries += p.entries().len();
         for (i, e) in p.entries().iter().enumerate() {
-            assert_eq!(e.hash, primase_hash::sdbm(&e.name));
+            assert_eq!(e.hash, primase_foundations::hash::sdbm(&e.name));
             if e.attributes == 2 {
                 let d = cstr::decode(p.encoded(i).unwrap(), e.size).unwrap_or_else(|err| {
                     panic!(

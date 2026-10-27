@@ -96,7 +96,7 @@ fn pak(entries: &[(&str, &[u8])]) -> Pak {
     let mut at = 16 + 32 * entries.len() as u32 + names.len() as u32;
     for ((n, payload), off) in entries.iter().zip(&offsets) {
         for w in [
-            primase_hash::sdbm(n.as_bytes()),
+            primase_foundations::hash::sdbm(n.as_bytes()),
             *off,
             0,
             0,

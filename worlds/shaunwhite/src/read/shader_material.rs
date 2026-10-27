@@ -3,7 +3,7 @@
 //! bits29/30@44/45. Runtime bit28 is not serialized. These are not the shader define bit positions.
 use super::material::{Error, Material};
 use crate::components::MaterialShader;
-use primase_bytes::{Endian, View};
+use primase_foundations::bytes::{Endian, View};
 const LE: Endian = Endian::Little;
 
 /// Read source controls without choosing a pass, frame, vertex layout or shader permutation.

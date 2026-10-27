@@ -15,7 +15,7 @@ ktx2 = ["primase-web/ktx2"]
 
 [dev-dependencies]
 primase-core.workspace = true
-primase-compress.workspace = true
+primase-foundations = { workspace = true, features = ["compress"] }
 primase-fromsoft.workspace = true
 primase-image.workspace = true
 primase-reskate.workspace = true

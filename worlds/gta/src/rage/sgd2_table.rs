@@ -263,14 +263,16 @@ impl ProgramTable {
     /// Where in the names the one a hash is the joaat of stands.
     fn name_position(&self, hash: u32) -> Option<usize> {
         self.names.iter().position(|n| {
-            primase_hash::joaat(n.as_bytes()) == hash || primase_hash::joaat_exact(n.as_bytes()) == hash
+            primase_foundations::hash::joaat(n.as_bytes()) == hash
+                || primase_foundations::hash::joaat_exact(n.as_bytes()) == hash
         })
     }
 
     /// The name a hash is the joaat of, in the name's own case or lowercase.
     pub fn name_of(&self, hash: u32) -> Option<&str> {
         self.names.iter().map(String::as_str).find(|n| {
-            primase_hash::joaat(n.as_bytes()) == hash || primase_hash::joaat_exact(n.as_bytes()) == hash
+            primase_foundations::hash::joaat(n.as_bytes()) == hash
+                || primase_foundations::hash::joaat_exact(n.as_bytes()) == hash
         })
     }
 }
@@ -358,9 +360,9 @@ mod tests {
     /// Two resources, a cbuffer of two constants at register 10 space 1 and a texture, and the names.
     fn table() -> Vec<u8> {
         let (a, b, t) = (
-            primase_hash::joaat(b"specularfresnel"),
-            primase_hash::joaat(b"bumpiness"),
-            primase_hash::joaat(b"diffusetex"),
+            primase_foundations::hash::joaat(b"specularfresnel"),
+            primase_foundations::hash::joaat(b"bumpiness"),
+            primase_foundations::hash::joaat(b"diffusetex"),
         );
         let mut x = Vec::new();
         x.extend(2u16.to_le_bytes());
@@ -371,11 +373,11 @@ mod tests {
             2,
             1,
             48,
-            primase_hash::joaat(b"megashader_locals"),
+            primase_foundations::hash::joaat(b"megashader_locals"),
             0,
         ));
         x.extend(resource(0, 0, 1, 0, t, t));
-        x.extend(constant(9, 0, a, primase_hash::joaat(b"fresnel")));
+        x.extend(constant(9, 0, a, primase_foundations::hash::joaat(b"fresnel")));
         x.extend(constant(9, 28, b, b));
         x.extend(b"megashader_locals\0specularFresnel\0bumpiness\0DiffuseTex\0");
         x
@@ -417,7 +419,10 @@ mod tests {
     #[test]
     fn constants_follow_the_names_not_the_records() {
         // a buffer "late" listed before one "early": the records of the one whose names come first are first
-        let (early, late) = (primase_hash::joaat(b"early"), primase_hash::joaat(b"late"));
+        let (early, late) = (
+            primase_foundations::hash::joaat(b"early"),
+            primase_foundations::hash::joaat(b"late"),
+        );
         let mut x = Vec::new();
         x.extend(2u16.to_le_bytes());
         x.extend(3u32.to_le_bytes());
@@ -462,8 +467,8 @@ mod tests {
     #[test]
     fn an_effects_parameter_records_are_found_by_their_shape() {
         let (old, new) = (
-            primase_hash::joaat(b"specularfresnel"),
-            primase_hash::joaat(b"fresnel"),
+            primase_foundations::hash::joaat(b"specularfresnel"),
+            primase_foundations::hash::joaat(b"fresnel"),
         );
         let mut rest = vec![0xAB; 12];
         rest.extend(constant(0x0409, 0, old, new));

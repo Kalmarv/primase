@@ -606,7 +606,7 @@ impl ArchiveSet {
                     continue;
                 }
                 tables.entry(ext.to_string()).or_default().insert(
-                    primase_hash::joaat(stem.as_bytes()),
+                    primase_foundations::hash::joaat(stem.as_bytes()),
                     FileRef {
                         archive: ai,
                         entry: ei,
@@ -640,7 +640,7 @@ impl ArchiveSet {
     pub fn live(&self, ext: &str, name: &str) -> Option<FileRef> {
         self.tables
             .get(ext)?
-            .get(&primase_hash::joaat(name.as_bytes()))
+            .get(&primase_foundations::hash::joaat(name.as_bytes()))
             .copied()
     }
 

@@ -20,7 +20,7 @@
 
 use std::ops::Range;
 
-use primase_bytes::{Field, FieldError, View};
+use primase_foundations::bytes::{Field, FieldError, View};
 
 use crate::read::fields::LE;
 

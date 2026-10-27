@@ -97,7 +97,7 @@ impl From<BodyError> for Error {
     }
 }
 
-use primase_bytes::Field;
+use primase_foundations::bytes::Field;
 
 /// A record type: the CRC-32 of `Animation`.
 pub const ANIMATION: u32 = 0x0FA3_067F;
@@ -295,17 +295,17 @@ impl StoredTrack {
     }
 }
 
-/// The body's cursor ([`primase_bytes::Cursor`]), with this record's grammar as methods.
-struct Cursor<'a>(primase_bytes::Cursor<'a>);
+/// The body's cursor ([`primase_foundations::bytes::Cursor`]), with this record's grammar as methods.
+struct Cursor<'a>(primase_foundations::bytes::Cursor<'a>);
 
 impl<'a> Cursor<'a> {
     fn new(b: &'a [u8]) -> Self {
-        Cursor(primase_bytes::Cursor::new(b))
+        Cursor(primase_foundations::bytes::Cursor::new(b))
     }
 }
 
 impl<'a> std::ops::Deref for Cursor<'a> {
-    type Target = primase_bytes::Cursor<'a>;
+    type Target = primase_foundations::bytes::Cursor<'a>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -338,7 +338,7 @@ impl<'a> Cursor<'a> {
             if self.bytes().get(start) != Some(&0) {
                 continue;
             }
-            let mut probe = primase_bytes::Cursor::new(self.bytes());
+            let mut probe = primase_foundations::bytes::Cursor::new(self.bytes());
             probe.seek(found.checked_add(4)?).ok()?;
             let valid = (|| -> Result<bool, BodyError> {
                 probe.u32(LE).field("track data")?;

@@ -8,7 +8,7 @@
     clippy::indexing_slicing,
     clippy::cast_possible_truncation
 )]
-use primase_compress::{DEFLATE_MAX_RATIO, Deflate};
+use primase_foundations::compress::{DEFLATE_MAX_RATIO, Deflate};
 
 use crate::{Result, invalid};
 
@@ -249,7 +249,7 @@ pub fn inflate(body: &[u8], system: PageFlags, graphics: PageFlags) -> Result<Re
     if zero_filled > 0 {
         // the body ends inside the last page only
         if u64::try_from(zero_filled).map_or(true, |short| short >= last) {
-            return Err(primase_compress::Error::Size {
+            return Err(primase_foundations::compress::Error::Size {
                 expected: size,
                 actual: data.len(),
             }

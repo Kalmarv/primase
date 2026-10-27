@@ -327,7 +327,7 @@ pub fn resolve_drop_spots<'a>(
             let mut hits = Vec::new();
             for variant in [r.spot_name.clone(), r.spot_name.to_ascii_lowercase()] {
                 for e in by_name
-                    .get(&primase_hash::sdbm(variant.as_bytes()))
+                    .get(&primase_foundations::hash::sdbm(variant.as_bytes()))
                     .into_iter()
                     .flatten()
                 {

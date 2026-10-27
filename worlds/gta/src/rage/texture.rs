@@ -14,7 +14,7 @@ use crate::rage::le::LE;
 use crate::rage::resource::Resource;
 use crate::rage::sga::BufferFormat;
 use crate::{Result, invalid};
-use primase_bytes::View;
+use primase_foundations::bytes::View;
 
 /// A texture as stored.
 #[derive(Clone, Debug, PartialEq)]
@@ -205,7 +205,7 @@ impl TextureDictionary {
                     q => Some(Texture::read(r, q)?),
                 };
                 if let Some(t) = &t
-                    && primase_hash::joaat(t.name.as_bytes()) != hash
+                    && primase_foundations::hash::joaat(t.name.as_bytes()) != hash
                 {
                     return Err(err(pointer, format!("{}: name hash {hash:#010x} listed", t.name)));
                 }

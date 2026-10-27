@@ -13,7 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
-use primase_compress::oodle::Oodle;
+use primase_foundations::compress::oodle::Oodle;
 
 use crate::postcompile::fb::folder::{Folder, Source};
 use crate::postcompile::layers::{self, Check, Limits};

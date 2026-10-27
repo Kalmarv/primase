@@ -6,7 +6,7 @@ use super::{
     ImportReference, Instance, Object, Pointer, ReflectionGroup, TypeDescriptor, TypeRef, Value,
 };
 use crate::{Result, bad};
-use primase_bytes::Endian;
+use primase_foundations::bytes::Endian;
 
 const RIFF: u32 = 0x4646_4952; // "RIFF" read little-endian
 const EBX: u32 = 0x4542_5800;
@@ -24,11 +24,11 @@ pub(crate) fn align_up(v: usize, a: usize) -> usize {
     if a <= 1 { v } else { v.div_ceil(a) * a }
 }
 
-/// The document's cursor ([`primase_bytes::Cursor`]), with its strings, counts and extents as methods.
-struct Cursor<'a>(primase_bytes::Cursor<'a>);
+/// The document's cursor ([`primase_foundations::bytes::Cursor`]), with its strings, counts and extents as methods.
+struct Cursor<'a>(primase_foundations::bytes::Cursor<'a>);
 
 impl<'a> std::ops::Deref for Cursor<'a> {
-    type Target = primase_bytes::Cursor<'a>;
+    type Target = primase_foundations::bytes::Cursor<'a>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -42,7 +42,7 @@ impl std::ops::DerefMut for Cursor<'_> {
 
 impl<'a> Cursor<'a> {
     fn new(d: &'a [u8]) -> Self {
-        Cursor(primase_bytes::Cursor::new(d))
+        Cursor(primase_foundations::bytes::Cursor::new(d))
     }
     fn nonnegative(&mut self, what: &'static str) -> Result<usize> {
         let at = self.position();

@@ -9,10 +9,10 @@
     reason = "test I/O: real-data gates"
 )]
 
-use primase_compress::oodle::{Oodle, Version};
-use primase_compress::reference;
-use primase_compress::{Compressor, Decompressor};
 use primase_core::gate::{GateReport, Tolerance};
+use primase_foundations::compress::oodle::{Oodle, Version};
+use primase_foundations::compress::reference;
+use primase_foundations::compress::{Compressor, Decompressor};
 use primase_fromsoft::dcx::{Compression, Envelope};
 use primase_testdata::{Game, OracleSet, Tool, oracle, tool};
 

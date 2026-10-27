@@ -1095,7 +1095,7 @@ fn heap_state(
     }
     match name.strip_prefix("gDynamicSamplerIndex_") {
         Some(material) => {
-            let stored = inputs.param(primase_hash::joaat(material.as_bytes()));
+            let stored = inputs.param(primase_foundations::hash::joaat(material.as_bytes()));
             counts.add(if matches!(stored, Some(GtaParam::Sampler(_))) {
                 "samplers the material chooses (it stores a sampler value, which names no state), left unstated"
             } else {

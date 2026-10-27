@@ -15,7 +15,7 @@ use crate::{Result, invalid};
 fn name_is(s: &Struct, names: &[&str]) -> Result<usize> {
     names
         .iter()
-        .position(|n| primase_hash::joaat_exact(n.as_bytes()) == s.name)
+        .position(|n| primase_foundations::hash::joaat_exact(n.as_bytes()) == s.name)
         .ok_or_else(|| {
             invalid(
                 "META",

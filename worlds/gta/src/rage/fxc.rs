@@ -17,7 +17,7 @@
 )]
 use crate::rage::le::LE;
 use crate::{Result, invalid};
-use primase_bytes::Field;
+use primase_foundations::bytes::Field;
 
 /// The magic: `rgxe`, as the first four bytes.
 pub const MAGIC: u32 = 0x6578_6772;
@@ -156,17 +156,17 @@ impl Fxc {
     }
 }
 
-/// The file's cursor ([`primase_bytes::Cursor`]), with this format's grammar as methods.
-struct Cursor<'a>(primase_bytes::Cursor<'a>);
+/// The file's cursor ([`primase_foundations::bytes::Cursor`]), with this format's grammar as methods.
+struct Cursor<'a>(primase_foundations::bytes::Cursor<'a>);
 
 impl<'a> Cursor<'a> {
     fn new(data: &'a [u8]) -> Self {
-        Cursor(primase_bytes::Cursor::new(data))
+        Cursor(primase_foundations::bytes::Cursor::new(data))
     }
 }
 
 impl<'a> std::ops::Deref for Cursor<'a> {
-    type Target = primase_bytes::Cursor<'a>;
+    type Target = primase_foundations::bytes::Cursor<'a>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }

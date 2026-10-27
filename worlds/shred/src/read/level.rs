@@ -683,8 +683,8 @@ pub fn read_level(paks: &[(&str, &Pak)], frame: SourceFrame) -> Result<(World, L
                 );
                 report.locators += 1;
                 // The class and kind hashes are sdbm of the names the record carries; a waypoint is a marker.
-                if loc.class == primase_hash::sdbm(scp_locators::CLASS_LOCATOR.as_bytes())
-                    && loc.kind == primase_hash::sdbm(scp_locators::KIND_WAYPOINT.as_bytes())
+                if loc.class == primase_foundations::hash::sdbm(scp_locators::CLASS_LOCATOR.as_bytes())
+                    && loc.kind == primase_foundations::hash::sdbm(scp_locators::KIND_WAYPOINT.as_bytes())
                 {
                     report.waypoints += 1;
                     world.insert(

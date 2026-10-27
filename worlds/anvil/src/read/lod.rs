@@ -26,7 +26,7 @@
 
 use crate::read::fields::LE;
 use crate::read::reference::{self, Reference};
-use primase_bytes::{Cursor, Field, FieldError};
+use primase_foundations::bytes::{Cursor, Field, FieldError};
 
 /// A record type: equals the CRC-32 of the ASCII string `LODSelector` (the name a label).
 pub const LOD_SELECTOR: u32 = 0x51DC_6B80;

@@ -6,7 +6,7 @@
 
 #![allow(clippy::unwrap_used)]
 
-use primase_compress::oodle::{Oodle, Version};
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_frostbite::bundle;
 use primase_frostbite::ebx::Value;
 use primase_frostbite::folder::{Folder, Source};

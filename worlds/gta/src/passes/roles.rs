@@ -38,7 +38,7 @@ impl Pass for ClassifyGtaTextureRoles {
         &["core.texture"]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        let palette = primase_hash::joaat(b"TintPaletteTex");
+        let palette = primase_foundations::hash::joaat(b"TintPaletteTex");
         let (mut palettes, mut other): (BTreeSet<Entity>, BTreeSet<Entity>) = Default::default();
         for (_, s) in w.iter::<GtaShader>() {
             for (name, p) in &s.params {
@@ -109,7 +109,7 @@ mod tests {
                     .iter()
                     .map(|(n, t)| {
                         (
-                            primase_hash::joaat(n.as_bytes()),
+                            primase_foundations::hash::joaat(n.as_bytes()),
                             GtaParam::Texture {
                                 name: Some((*n).to_owned()),
                                 texture: Some(*t),

@@ -14,7 +14,7 @@
 )]
 
 use crate::read::fields::{BodyError, LE, body_error, count, expect, object};
-use primase_bytes::{Cursor, Field};
+use primase_foundations::bytes::{Cursor, Field};
 
 pub use crate::components::{
     GrassModelSettings, StoredGrassGroup, StoredGrassLibrary, StoredGrassModel, StoredGrassRule,

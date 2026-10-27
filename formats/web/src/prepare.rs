@@ -20,10 +20,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use primase_core::layered::{Channel, LayeredMaterial, Source};
-use primase_core::parallel::Threads;
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef};
 use primase_core::{Component, Entity, Name, Resource, TexRole, Texture, World};
+use primase_foundations::parallel::Threads;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -598,7 +598,7 @@ impl PrepareWebTextures {
         // pure, so each is the one the loop would make where it makes one (it takes it from the batch, else makes it
         // then). A batch is two preparations per thread, so what is held at once (each with its PNG, its texture and its
         // encoding) is bounded by the threads, not by the world's textures.
-        let threads = Threads::of(w);
+        let threads = primase_core::parallel::threads(w);
         let batch = if threads.get() < 2 { 1 } else { 2 * threads.get() };
         let entries: Vec<((Entity, Role), Entity)> = of_role.iter().map(|(&k, &t)| (k, t)).collect();
         let result = (|| -> Result<(), String> {
@@ -616,7 +616,7 @@ impl PrepareWebTextures {
                     let jobs: Vec<&((Entity, Role), Entity)> =
                         chunk.iter().filter(|&&((_, role), t)| !held(t, role)).collect();
                     crate::ktx2::init();
-                    let made = primase_core::parallel::map(threads, &jobs, |_, &&((_, role), t)| {
+                    let made = primase_foundations::parallel::map(threads, &jobs, |_, &&((_, role), t)| {
                         self.make(w, &policies, t, role)
                     })
                     .map_err(|e| e.to_string())?;
@@ -1147,7 +1147,7 @@ mod tests {
                         *b = seed as u8;
                     }
                 }
-                w.insert_resource(primase_core::parallel::Threads::new(threads).unwrap());
+                w.insert_resource(primase_foundations::parallel::Threads::new(threads).unwrap());
                 let mut log = PassLog::default();
                 p.run(&mut w, &mut log).unwrap();
                 let textures: Vec<(Entity, Texture)> =

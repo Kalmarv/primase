@@ -1,5 +1,5 @@
 //! MTD material definitions, with bounded nested blocks and strict Shift-JIS.
-use primase_bytes::Endian;
+use primase_foundations::bytes::Endian;
 
 use crate::{Result, invalid};
 
@@ -39,7 +39,7 @@ pub struct MaterialDefinition {
 }
 struct Cursor<'a> {
     /// The file, read in order (little-endian).
-    c: primase_bytes::Cursor<'a>,
+    c: primase_foundations::bytes::Cursor<'a>,
     stack: Vec<(usize, usize, u32)>,
     blocks: Vec<BlockLength>,
 }
@@ -130,7 +130,7 @@ impl MaterialDefinition {
     /// made: typed counts/markers determine boundaries, always within the file.
     pub fn read(data: &[u8]) -> Result<Self> {
         let mut c = Cursor {
-            c: primase_bytes::Cursor::new(data),
+            c: primase_foundations::bytes::Cursor::new(data),
             stack: vec![],
             blocks: vec![],
         };

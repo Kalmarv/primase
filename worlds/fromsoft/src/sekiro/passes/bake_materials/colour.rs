@@ -142,8 +142,7 @@ mod tests {
 
     #[test]
     fn material_colour_is_not_silently_promoted_to_albedo() {
-        let p =
-            iridia_dxbc::lift(include_bytes!("../../../../tests/fixtures/colour_material.dxbc")).unwrap();
+        let p = iridia_dxbc::lift(include_bytes!("../../../../tests/fixtures/colour_material.dxbc")).unwrap();
         let stage = binding(&p);
         assert_eq!(
             refusal(&p, &stage),

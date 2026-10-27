@@ -6,7 +6,7 @@
 )]
 use super::cstr;
 use crate::{Result, invalid};
-use primase_bytes::{Endian::Big, Field, View};
+use primase_foundations::bytes::{Endian::Big, Field, View};
 use std::{borrow::Cow, ops::Range, path::Path};
 
 #[derive(Debug)]
@@ -77,7 +77,7 @@ impl Pak {
                 .position(|&b| b == 0)
                 .ok_or_else(|| invalid(strstart + name_off, "unterminated name"))?;
             let name = &tail[..len];
-            if primase_hash::sdbm(name) != hash {
+            if primase_foundations::hash::sdbm(name) != hash {
                 return Err(invalid(at, "name hash mismatch"));
             }
             let attributes = v.u32(at + 8, Big).field("attributes")?;

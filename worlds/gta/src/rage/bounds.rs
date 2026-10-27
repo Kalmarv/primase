@@ -18,7 +18,7 @@ use crate::rage::le;
 use crate::rage::le::LE;
 use crate::rage::resource::Resource;
 use crate::{Result, invalid};
-use primase_bytes::View;
+use primase_foundations::bytes::View;
 
 fn err(at: u64, detail: impl ToString) -> crate::Error {
     invalid("phBound", at, detail)

@@ -5,8 +5,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
-use primase_core::parallel::Threads;
 use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
+use primase_foundations::parallel::Threads;
 use primase_texcodec::{Decoder, TexDecoder};
 
 use crate::pausemap::{PYRAMID_TOP, Pyramid};
@@ -555,7 +555,7 @@ fn parallel_png<T: Sync>(
     jobs: &[T],
     encode: impl Fn(&T) -> Vec<u8> + Sync,
 ) -> Vec<Vec<u8>> {
-    primase_core::parallel::map(threads, jobs, |_, j| encode(j))
+    primase_foundations::parallel::map(threads, jobs, |_, j| encode(j))
         .unwrap_or_else(|p| panic!("encoding a texture file: {p}"))
 }
 

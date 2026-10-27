@@ -37,14 +37,14 @@ fn rows_and_relationship_expressions_stay_authored() {
         ["Boundary", "Marker"]
     );
     // Case-sensitive sdbm, independently hand-evaluated for the short token 'AB'.
-    assert_eq!(primase_hash::sdbm(b"AB"), 0x00411041);
+    assert_eq!(primase_foundations::hash::sdbm(b"AB"), 0x00411041);
     assert_eq!(
         row(&graph.tasks, 8).identifiers[0].hash,
-        primase_hash::sdbm(b"Active_Icon")
+        primase_foundations::hash::sdbm(b"Active_Icon")
     );
     assert_ne!(
         row(&graph.tasks, 8).identifiers[0].hash,
-        primase_hash::sdbm(b"active_icon")
+        primase_foundations::hash::sdbm(b"active_icon")
     );
     assert!(SessionGraph::from_main_db(DB, 8).is_err());
     assert!(SessionGraph::from_main_db(&DB[..30], 7).is_err());

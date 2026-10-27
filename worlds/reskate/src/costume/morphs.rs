@@ -15,7 +15,7 @@
 //! Refused, naming what: any other layout, a section the mesh does not have or whose vertex count differs, a span
 //! outside the block.
 
-use primase_compress::oodle::Oodle;
+use primase_foundations::compress::oodle::Oodle;
 use primase_frostbite::fbmod::{Body, Fbmod};
 
 use super::textures::guid_text;

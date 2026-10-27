@@ -77,7 +77,7 @@ fn main() -> Result<(), BoxError> {
         scene_name: Some(scene_name),
         selection: None,
         all_variants: false,
-        threads: primase_core::parallel::Threads::ONE,
+        threads: primase_foundations::parallel::Threads::ONE,
         images: None,
         verified: false,
     };

@@ -46,7 +46,7 @@
 
 use std::collections::BTreeMap;
 
-use primase_bytes::{Cursor, Endian, Field, FieldError};
+use primase_foundations::bytes::{Cursor, Endian, Field, FieldError};
 
 use super::scene::RESOURCE_REF;
 

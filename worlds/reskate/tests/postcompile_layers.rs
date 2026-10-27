@@ -17,7 +17,7 @@
 mod common;
 
 use common::R;
-use primase_compress::oodle::{Oodle, Version};
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_reskate::postcompile::fb::folder::{Folder, Source};
 use primase_reskate::postcompile::layers::{self, Check, Limits};
 use primase_testdata::{Game, OracleSet, Tool, install_file, oracle, tool};

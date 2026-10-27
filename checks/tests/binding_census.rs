@@ -393,9 +393,15 @@ fn fromsoft_run(world: &mut World) -> RunReport {
 }
 
 #[allow(unsafe_code)]
-fn oodle(path: std::path::PathBuf) -> primase_compress::oodle::Oodle {
+fn oodle(path: std::path::PathBuf) -> primase_foundations::compress::oodle::Oodle {
     // SAFETY: the test configuration names a trusted native library.
-    unsafe { primase_compress::oodle::Oodle::load(path, primase_compress::oodle::Version::V6).unwrap() }
+    unsafe {
+        primase_foundations::compress::oodle::Oodle::load(
+            path,
+            primase_foundations::compress::oodle::Version::V6,
+        )
+        .unwrap()
+    }
 }
 
 #[test]

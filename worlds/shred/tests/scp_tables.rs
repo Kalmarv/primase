@@ -68,7 +68,7 @@ fn fixture() -> Vec<u8> {
         word(
             &mut b,
             c + 0x10,
-            primase_hash::sdbm(format!("spot{k}").as_bytes()),
+            primase_foundations::hash::sdbm(format!("spot{k}").as_bytes()),
         );
         word(&mut b, c + 0x14, id);
         word(&mut b, c + 0x18, 0x1000);
@@ -76,12 +76,12 @@ fn fixture() -> Vec<u8> {
             &mut b,
             c + 0x1c,
             if k == 0 {
-                primase_hash::sdbm(class.as_bytes())
+                primase_foundations::hash::sdbm(class.as_bytes())
             } else {
                 0xdead_beef
             },
         );
-        word(&mut b, c + 0x20, primase_hash::sdbm(b"Rectangle"));
+        word(&mut b, c + 0x20, primase_foundations::hash::sdbm(b"Rectangle"));
         word(&mut b, c + 0x24, 0x41);
         word(&mut b, c + 0x28, 0x42);
         matrix(
@@ -121,7 +121,12 @@ fn nodes_links_matrices_and_spot_chunks() {
     assert_eq!(shape_name(s.shape), Some("Rectangle"));
     assert_eq!(
         (s.name, s.id, s.parent, s.pair),
-        (primase_hash::sdbm(b"spot0"), 0x1001, 0x1000, [0x41, 0x42])
+        (
+            primase_foundations::hash::sdbm(b"spot0"),
+            0x1001,
+            0x1000,
+            [0x41, 0x42]
+        )
     );
     // a chunk whose own id is a node's id knows the node; the other is only a chunk
     assert_eq!(s.node, Some(1));

@@ -5,12 +5,12 @@
 
 use std::collections::BTreeMap;
 
-use primase_core::parallel::Threads;
 use primase_core::pbr::{PbrMaterial, TextureRef};
 use primase_core::{
     ColorSpace, Entity, Instance, Mesh, Primitive, Semantic, Stream, TexFormat, TexRole, Texture, Topology,
     World,
 };
+use primase_foundations::parallel::Threads;
 use primase_reskate::passes::{LightCalibration, RaiseOptions, raise_skate};
 
 fn noise(n: usize, seed: u32) -> Vec<u8> {

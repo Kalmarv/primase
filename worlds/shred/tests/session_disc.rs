@@ -154,7 +154,7 @@ fn ten_maps_keep_every_placement_and_their_complete_graphs() {
                     .find(|(_, p)| p.index == index && p.quartet.ends_with(b"challengesession"))
                     .expect("picked icon")
                     .1;
-                assert_eq!(source.name, primase_hash::sdbm(name.as_bytes()));
+                assert_eq!(source.name, primase_foundations::hash::sdbm(name.as_bytes()));
             }
         }
     }

@@ -3,7 +3,7 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
 use lua51_bytecode::{Call, Chunk, Constant, Op, Value, calls};
-use primase_bytes::Endian;
+use primase_foundations::bytes::Endian;
 
 fn cat(parts: &[&[u8]]) -> Vec<u8> {
     parts.concat()

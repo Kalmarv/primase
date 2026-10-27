@@ -178,7 +178,7 @@ impl GtaSource {
     /// Every live map file of both map states as its header states it ([`crate::read::region::list_maps`]): one entry
     /// per file, with the states it is live in (a file both states mount once, with both), sorted by path then file.
     /// On `threads` threads: the same list on any count.
-    pub fn list_maps(&self, threads: primase_core::parallel::Threads) -> Result<Vec<MapEntry>> {
+    pub fn list_maps(&self, threads: primase_foundations::parallel::Threads) -> Result<Vec<MapEntry>> {
         let mut by_file: std::collections::BTreeMap<
             (String, crate::read::archive::archive_set::FileRef),
             MapEntry,

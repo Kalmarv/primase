@@ -36,7 +36,7 @@ pub(crate) fn parts(container: &[u8]) -> Result<Vec<dxcontainer::Chunk<'_>>> {
 
 /// A program part's header (`DXIL` and the `STAT` reflection part share it) and its bitcode.
 pub fn program(data: &[u8]) -> Result<Part<'_>> {
-    let view = primase_bytes::View::new(data);
+    let view = primase_foundations::bytes::View::new(data);
     let word = |at: usize| -> Result<u32> {
         view.array::<4>(at)
             .map(u32::from_le_bytes)

@@ -36,8 +36,8 @@
 )]
 
 use crate::read::fields::LE;
-use primase_bytes::{Cursor, Field, FieldError};
 use primase_core::TexFormat;
+use primase_foundations::bytes::{Cursor, Field, FieldError};
 
 pub use crate::read::material::TEXTURE_MAP;
 

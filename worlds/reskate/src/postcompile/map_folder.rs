@@ -221,7 +221,7 @@ fn glb_weights(glb: &MapGlb, primitive: usize) -> Result<Vec<f32>> {
     let data = g.buffer_view(view).map_err(|e| fail(e.to_string()))?;
     let past = |e: String| fail(format!("_RESKATE_BLEND runs past its buffer view: {e}"));
     let int = |k: &str| usize::try_from(a[k].as_u64().unwrap_or(0)).map_err(|e| past(e.to_string()));
-    let span = primase_bytes::checked_span(int("byteOffset")?, int("count")?, 4, data.len())
+    let span = primase_foundations::bytes::checked_span(int("byteOffset")?, int("count")?, 4, data.len())
         .map_err(|e| past(e.to_string()))?;
     let weights: Vec<f32> = data[span]
         .as_chunks::<4>()
@@ -253,8 +253,9 @@ fn glb_weights(glb: &MapGlb, primitive: usize) -> Result<Vec<f32>> {
     }
     let idata = g.buffer_view(iview).map_err(|e| fail(e.to_string()))?;
     let iint = |k: &str| usize::try_from(ia[k].as_u64().unwrap_or(0)).map_err(|e| past(e.to_string()));
-    let ispan = primase_bytes::checked_span(iint("byteOffset")?, iint("count")?, size, idata.len())
-        .map_err(|e| fail(format!("indices run past their buffer view: {e}")))?;
+    let ispan =
+        primase_foundations::bytes::checked_span(iint("byteOffset")?, iint("count")?, size, idata.len())
+            .map_err(|e| fail(format!("indices run past their buffer view: {e}")))?;
     let mut used = vec![false; weights.len()];
     for c in idata[ispan].chunks_exact(size) {
         let i = match size {

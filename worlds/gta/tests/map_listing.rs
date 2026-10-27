@@ -6,7 +6,7 @@
 //! (`slod`) does not follow the entities' levels in the game's own files, so it is counted, not asserted.
 //!
 //! Needs `installs.gta` and `keys.gta`.
-use primase_core::parallel::Threads;
+use primase_foundations::parallel::Threads;
 use primase_gta::rage::map::MapData;
 use primase_gta::rage::meta::Meta;
 use primase_gta::read::archive::archive_set::Install;

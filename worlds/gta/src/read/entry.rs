@@ -99,7 +99,7 @@ impl GtaSource {
     /// The archive set and state a file's textures resolve through: the state whose archive set has it live, Story's
     /// when neither does.
     pub(crate) fn lookup_of(&self, ext: &str, stem: &str, file: FileRef) -> (Lookup<'_>, bool) {
-        let hash = primase_hash::joaat(stem.as_bytes());
+        let hash = primase_foundations::hash::joaat(stem.as_bytes());
         let live = |l: Lookup<'_>| l.set.tables.get(ext).and_then(|t| t.get(&hash)) == Some(&file);
         if !live(self.story()) && live(self.online()) {
             (self.online(), true)
@@ -164,7 +164,7 @@ impl GtaSource {
         let (install, keys) = (self.install(), self.keys());
         let (lookup, online) = self.lookup_of(ext, stem, file);
         report.state = if online { "online" } else { "story" };
-        let stem_hash = primase_hash::joaat(stem.as_bytes());
+        let stem_hash = primase_foundations::hash::joaat(stem.as_bytes());
         let resource = decode(install, keys, file)?;
         // the drawables the file holds: its own, or a dictionary's entries by name hash
         let (asset_type, assets): (i32, Vec<u32>) = match ext {

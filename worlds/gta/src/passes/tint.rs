@@ -313,12 +313,12 @@ mod tests {
             GtaShader {
                 drawable: "d".into(),
                 index: 0,
-                name: primase_hash::joaat(b"default_tnt"),
+                name: primase_foundations::hash::joaat(b"default_tnt"),
                 preset: 0,
                 render_bucket: 0,
                 bucket_mask: 0,
                 params: vec![(
-                    primase_hash::joaat(b"TintPaletteTex"),
+                    primase_foundations::hash::joaat(b"TintPaletteTex"),
                     crate::components::GtaParam::Texture {
                         name: None,
                         texture: Some(pal),

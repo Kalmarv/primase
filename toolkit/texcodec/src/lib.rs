@@ -5,7 +5,7 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 use primase_core::TexFormat;
-use primase_core::parallel::{Panicked, Threads, rows_mut};
+use primase_foundations::parallel::{Panicked, Threads, rows_mut};
 use thiserror::Error;
 mod blocks;
 mod encode;

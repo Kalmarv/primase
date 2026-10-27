@@ -12,7 +12,7 @@ mod common;
 /// materials spawned in reverse when `reverse`.
 fn bake(
     install: &std::path::Path,
-    dll: &primase_compress::oodle::Oodle,
+    dll: &primase_foundations::compress::oodle::Oodle,
     region: [f32; 4],
     max_size: u32,
     reverse: bool,
@@ -55,7 +55,7 @@ fn bake(
 /// materials and parts when the source materials are spawned in reverse. Returns (water, foliage, decal) counts.
 fn region_holds(
     install: &std::path::Path,
-    dll: &primase_compress::oodle::Oodle,
+    dll: &primase_foundations::compress::oodle::Oodle,
     region: [f32; 4],
     max_size: u32,
     at: &str,

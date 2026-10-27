@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use primase_compress::oodle::Oodle;
+use primase_foundations::compress::oodle::Oodle;
 
 use crate::postcompile::fb::folder::Folder;
 use crate::postcompile::finish::{Finished, finish};

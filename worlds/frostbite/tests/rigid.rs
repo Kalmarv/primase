@@ -16,8 +16,8 @@
 
 #![allow(clippy::unwrap_used)]
 
-use primase_compress::oodle::{Oodle, Version};
 use primase_core::{Semantic, Stream};
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_frostbite::folder::{Folder, Source};
 use primase_frostbite::{MESHSET, geometry, meshset, rigid, tangent};
 use primase_testdata::{Game, Tool, install_file, tool};

@@ -50,7 +50,7 @@ use crate::rage::le;
 use crate::rage::le::LE;
 use crate::rage::ycd::{Animation, Sequence};
 use crate::{Result, invalid};
-use primase_bytes::View;
+use primase_foundations::bytes::View;
 
 fn err(at: usize, detail: impl ToString) -> crate::Error {
     invalid("ycd channels", u64::try_from(at).unwrap_or(u64::MAX), detail)

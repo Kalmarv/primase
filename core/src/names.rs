@@ -25,7 +25,6 @@ use crate::marker::{Curve, Marker};
 use crate::material_parameters::MaterialParameters;
 use crate::material_usage::MaterialUsage;
 use crate::morphs::Morphs;
-use crate::parallel::Threads;
 use crate::pass::memo::Memo;
 use crate::pbr::PbrMaterial;
 use crate::primitive_keys::PrimitiveKeys;
@@ -41,6 +40,7 @@ use crate::state::{Condition, PrimitiveCondition, StateAssignment, StateAxis, St
 use crate::texture_layers::TextureLayers;
 use crate::vertex_color::VertexColor;
 use crate::world::{Component, Resource};
+use primase_foundations::parallel::Threads;
 
 /// What a name of core's names: a component (on entities) or a resource (one per world).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

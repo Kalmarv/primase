@@ -237,14 +237,14 @@ pub fn compressed_mesh(data: Value<'_, '_>) -> Result<CompressedMesh> {
                     .ok_or_else(|| invalid(section.offset, "packed vertex index overflow"))?;
                 let value = u32::try_from(packed.get(index)?.unsigned()?)
                     .map_err(|_| invalid(section.offset, "packed vertex exceeds u32"))?;
-                primase_vertex::packed_position32(value, scale, offset)
+                primase_foundations::vertex::packed_position32(value, scale, offset)
                     .map_err(|e| invalid(section.offset, e.to_string()))
             } else {
                 let index = (index - local_count)
                     .checked_add(shared_base)
                     .ok_or_else(|| invalid(section.offset, "shared vertex index overflow"))?;
                 let index = shared_indices.get(index)?.unsigned()? as usize;
-                primase_vertex::packed_position64(shared.get(index)?.unsigned()?, min, max)
+                primase_foundations::vertex::packed_position64(shared.get(index)?.unsigned()?, min, max)
                     .map_err(|e| invalid(section.offset, e.to_string()))
             }
         };

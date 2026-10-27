@@ -206,7 +206,7 @@ fn err(offset: u64, detail: impl ToString) -> crate::Error {
 }
 
 use crate::rage::le::LE;
-use primase_bytes::View;
+use primase_foundations::bytes::View;
 
 /// `len` bytes of `d` at `offset`, if it holds them.
 fn span(d: &[u8], offset: usize, len: usize) -> Option<&[u8]> {
@@ -952,7 +952,7 @@ fn read_c_string(r: &Resource, pointer: u64) -> Result<String> {
 impl Struct {
     /// The field of this name (the identifier, hashed).
     pub fn get(&self, name: &str) -> Result<&Value> {
-        let h = primase_hash::joaat_exact(name.as_bytes());
+        let h = primase_foundations::hash::joaat_exact(name.as_bytes());
         self.fields
             .iter()
             .find(|(n, _)| *n == h)
@@ -1057,7 +1057,7 @@ impl Struct {
 mod tests {
     use super::*;
     use crate::rage::resource::PageFlags;
-    use primase_hash::joaat_exact as joaat;
+    use primase_foundations::hash::joaat_exact as joaat;
 
     fn put(d: &mut [u8], o: usize, b: &[u8]) {
         d[o..o + b.len()].copy_from_slice(b);

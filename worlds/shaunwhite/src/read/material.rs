@@ -62,7 +62,7 @@
 )]
 
 use crate::components::LayerState;
-use primase_bytes::{Endian, Field, FieldError, View};
+use primase_foundations::bytes::{Endian, Field, FieldError, View};
 
 const LE: Endian = Endian::Little;
 

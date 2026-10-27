@@ -7,8 +7,8 @@
 //! their model poses agree).
 
 use primase_animation::pose::{affine, locals, model_transforms};
-use primase_compress::oodle::{Oodle, Version};
 use primase_core::{Skeleton, World};
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_frostbite::folder::{Folder, Source};
 use primase_reskate::game::rig::{DofTarget, SkateAnimRig, insert_rig, render_map};
 use primase_reskate::game::skeleton::{SkateSkeletonAsset, read_skeleton};

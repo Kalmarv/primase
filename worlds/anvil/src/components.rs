@@ -1437,7 +1437,7 @@ pub struct StoredAnimation {
 #[derive(Debug, thiserror::Error)]
 pub enum AnimationError {
     #[error("animation body: {0}")]
-    Short(#[from] primase_bytes::FieldError),
+    Short(#[from] primase_foundations::bytes::FieldError),
     #[error("animation {what}: {found:#x} at {at}, not {read}")]
     Value {
         what: &'static str,

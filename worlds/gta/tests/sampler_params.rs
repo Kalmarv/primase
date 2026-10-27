@@ -34,7 +34,7 @@ fn a_materials_sampler_value_is_not_an_index_of_the_effects_records() {
         .unwrap();
     let (mut world, _): (World, _) = source.load_all(&read).unwrap();
     source.add_shader_database(&mut world).unwrap();
-    let key = primase_hash::joaat(b"DiffuseSampler");
+    let key = primase_foundations::hash::joaat(b"DiffuseSampler");
     // by the value: (primitives, of them tiling), over the primitives whose value's record clamps on both axes
     let mut clamping: BTreeMap<u8, (usize, usize)> = BTreeMap::new();
     let mut beyond_table = 0usize;

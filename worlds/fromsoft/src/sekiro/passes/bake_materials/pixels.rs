@@ -6,10 +6,10 @@ use iridia_exec::{
 };
 use iridia_interface::{NormalSpace, OutputBinding, OutputRole};
 use iridia_interface::{surface::Base, surface::Place, surface::Surface};
-use primase_core::parallel::Threads;
 use primase_core::pbr::{PbrMaterial, UvTransform, Wrap};
 use primase_core::{ColorSpace, Texture, World};
 use primase_core::{shader::Shader, shader::StageBinding, shader::TextureSource};
+use primase_foundations::parallel::Threads;
 use primase_image::sampling::{Address, Levels, Transfer};
 use primase_texcodec::TexDecoder;
 use std::{collections::BTreeMap, sync::Arc};
@@ -311,7 +311,7 @@ pub(super) fn bake(prepared: Prepared<'_>, world: &World) -> Result<Baked, Strin
     } = prepared;
     let textures = iridia_exec::Views::refusing(textures.iter().map(|(&slot, t)| (slot, t.view())).collect());
     let raw = evaluate_raw_with(
-        Threads::of(world),
+        primase_core::parallel::threads(world),
         &shader,
         &constants,
         &textures,
@@ -333,7 +333,7 @@ pub(super) fn bake(prepared: Prepared<'_>, world: &World) -> Result<Baked, Strin
         base_alpha,
         size,
     }
-    .surfaces(&raw, Threads::of(world))?;
+    .surfaces(&raw, primase_core::parallel::threads(world))?;
     let mut result = Baked {
         size,
         requested_size,
@@ -383,7 +383,7 @@ impl Decode<'_> {
     /// first failing texel's error, as one thread meets it.
     fn surfaces(&self, raw: &Raw, threads: Threads) -> Result<Surfaces, String> {
         let rows: Vec<u32> = (0..self.size).collect();
-        let decoded = primase_core::parallel::map(threads, &rows, |_, &y| self.row(raw, y))
+        let decoded = primase_foundations::parallel::map(threads, &rows, |_, &y| self.row(raw, y))
             .map_err(|p| format!("decoding row {}: {}", rows[p.item], p.message))?;
         let mut all = Surfaces {
             specular: self.surface.reflectance.map(|_| Vec::new()),

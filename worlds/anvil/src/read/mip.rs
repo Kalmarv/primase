@@ -14,7 +14,7 @@
 )]
 
 use crate::read::fields::LE;
-use primase_bytes::{Cursor, Field, FieldError};
+use primase_foundations::bytes::{Cursor, Field, FieldError};
 
 /// A record type: equals the CRC-32 of the ASCII string `CompiledMip` (the name a label).
 pub const COMPILED_MIP: u32 = 0x1D4B_87A3;

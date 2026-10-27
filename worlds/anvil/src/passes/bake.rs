@@ -1125,7 +1125,7 @@ impl BakeAnvilMaterial {
         }
         let textures = iridia_exec::Views::refusing(textures);
         let raw = evaluate_raw_with(
-            primase_core::parallel::Threads::of(w),
+            primase_core::parallel::threads(w),
             &shader,
             &constants,
             &textures,

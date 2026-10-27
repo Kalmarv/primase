@@ -9,7 +9,7 @@
 
 #![allow(clippy::unwrap_used)]
 
-use primase_compress::oodle::{Oodle, Version};
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_frostbite::folder::{Folder, Source};
 use primase_frostbite::physics::{
     self, Edge, KIND_BOX, KIND_CONVEX, KIND_MESH, Part, PhysicsResource, mesh_shape, weld,

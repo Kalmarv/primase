@@ -59,7 +59,7 @@ pub struct WriterOptions {
     pub pause: Option<SkatePausePicture>,
     /// How many PNG files are encoded at once (the program's choice, [`crate::MapSink::with_threads`]): the same files
     /// on any count.
-    pub threads: primase_core::parallel::Threads,
+    pub threads: primase_foundations::parallel::Threads,
 }
 
 impl WriterOptions {
@@ -602,8 +602,9 @@ fn prims(parts: &BTreeMap<usize, Acc>, mats: &MatLib, order: &[usize]) -> (Vec<G
             lifts.push(a.lift.clone());
             continue;
         }
-        for c in primase_vertex::split_by_vertex_budget(&a.idx, a.pos.len() / 3, MAX_SECTION_VERTS)
-            .expect("valid indices")
+        for c in
+            primase_foundations::vertex::split_by_vertex_budget(&a.idx, a.pos.len() / 3, MAX_SECTION_VERTS)
+                .expect("valid indices")
         {
             let take = |src: &[f32], n: usize| {
                 c.vertices

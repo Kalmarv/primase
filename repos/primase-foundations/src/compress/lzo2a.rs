@@ -12,7 +12,7 @@
 //! Strict as the crate's other codecs: the end-of-stream code is required, every input byte must be consumed by then,
 //! a match may not reach before the output's start, and the output must be exactly the expected size.
 
-use crate::{Decompressor, Error, Result, invalid};
+use crate::compress::{Decompressor, Error, Result, invalid};
 
 const CODEC: &str = "lzo2a";
 

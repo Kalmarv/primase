@@ -33,8 +33,12 @@ fn a_characters_animations_read_lower_and_map_onto_its_model() -> Result<()> {
         return Ok(());
     };
     // SAFETY: explicitly supplied trusted native decoder.
-    let dll =
-        unsafe { primase_compress::oodle::Oodle::open(dll.path(), primase_compress::oodle::Version::V6) }?;
+    let dll = unsafe {
+        primase_foundations::compress::oodle::Oodle::open(
+            dll.path(),
+            primase_foundations::compress::oodle::Version::V6,
+        )
+    }?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1 << 30,
@@ -257,8 +261,12 @@ fn the_players_animations_come_from_the_binders_its_markers_name() -> Result<()>
         return Ok(());
     };
     // SAFETY: explicitly supplied trusted native decoder.
-    let dll =
-        unsafe { primase_compress::oodle::Oodle::open(dll.path(), primase_compress::oodle::Version::V6) }?;
+    let dll = unsafe {
+        primase_foundations::compress::oodle::Oodle::open(
+            dll.path(),
+            primase_foundations::compress::oodle::Version::V6,
+        )
+    }?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1 << 30,

@@ -11,10 +11,9 @@ publish.workspace = true
 [dependencies]
 iridia-interface.workspace = true
 primase-anvil.workspace = true
-primase-bytes.workspace = true
+primase-foundations.workspace = true
 primase-core.workspace = true
 iridia-d3d9.workspace = true
-primase-hash.workspace = true
 iridia.workspace = true
 thiserror.workspace = true
 

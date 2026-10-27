@@ -22,8 +22,8 @@
     clippy::cast_possible_truncation
 )]
 
-use primase_bytes::{Field, FieldError, View};
-use primase_compress::{Decompressor, Lzo2a, Zstd};
+use primase_foundations::bytes::{Field, FieldError, View};
+use primase_foundations::compress::{Decompressor, Lzo2a, Zstd};
 
 use crate::read::fields::LE;
 
@@ -78,7 +78,7 @@ pub enum Error {
     Decode {
         at: usize,
         #[source]
-        source: primase_compress::Error,
+        source: primase_foundations::compress::Error,
     },
     #[error("{0}")]
     Short(#[from] FieldError),
@@ -271,7 +271,7 @@ pub fn read_block(bytes: &[u8], at: usize, max_decoded: usize) -> Result<(Block,
         let stored = View::new(bytes)
             .slice(from, stored_len)
             .field("chunk stored bytes")?;
-        let computed = primase_hash::adler32(CHECKSUM_INIT, stored);
+        let computed = primase_foundations::hash::adler32(CHECKSUM_INIT, stored);
         if computed != chunk.checksum {
             return Err(Error::Checksum {
                 at,
@@ -307,7 +307,7 @@ pub fn read_block(bytes: &[u8], at: usize, max_decoded: usize) -> Result<(Block,
 pub fn read_entry(payload: &[u8], max_decoded: usize) -> Result<Entry, Error> {
     let (metadata, next) = read_block(payload, 0, max_decoded)?;
     let (resource, end) = read_block(payload, next, max_decoded)?;
-    primase_bytes::checked_span(end, 0, 1, payload.len()).field("entry")?;
+    primase_foundations::bytes::checked_span(end, 0, 1, payload.len()).field("entry")?;
     let rest = payload.len().saturating_sub(end);
     if rest != 0 {
         return Err(Error::Trailing(rest));

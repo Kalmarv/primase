@@ -12,10 +12,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
-use primase_compress::oodle::{Oodle, Version};
 use primase_core::pass::{Pass, PassLog};
 use primase_core::shader::{ShaderBinding, TextureSource};
 use primase_core::{Entity, Texture, TextureLayers, TextureShape, World};
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_frostbite::MESHSET;
 use primase_frostbite::bundle::Kind;
 use primase_frostbite::components::{FrostbiteMaterial, FrostbiteTexture};

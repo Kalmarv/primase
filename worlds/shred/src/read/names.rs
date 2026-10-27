@@ -22,7 +22,7 @@ fn guide_names() -> &'static BTreeMap<u32, String> {
         for set in &letters {
             for n in 0..40 {
                 let name = format!("NavGuide_{set}{n}");
-                m.insert(primase_hash::sdbm(name.as_bytes()), name);
+                m.insert(primase_foundations::hash::sdbm(name.as_bytes()), name);
             }
         }
         m
@@ -66,7 +66,7 @@ pub fn name_splines(world: &mut World, extra: &[String]) -> usize {
     for name in extra {
         for variant in [name.clone(), name.to_ascii_lowercase()] {
             by_hash
-                .entry(primase_hash::sdbm(variant.as_bytes()))
+                .entry(primase_foundations::hash::sdbm(variant.as_bytes()))
                 .or_insert(name);
         }
     }

@@ -42,7 +42,7 @@ fn material(w: &mut World, family: &str, names: &[&str], parameters: &[(&str, [f
             parameters: parameters
                 .iter()
                 .map(|&(name, value)| MaterialParameter {
-                    hash: primase_hash::sdbm(name.as_bytes()),
+                    hash: primase_foundations::hash::sdbm(name.as_bytes()),
                     name: Some(name.into()),
                     source_encoding: 0x100ad,
                     value,
@@ -53,7 +53,7 @@ fn material(w: &mut World, family: &str, names: &[&str], parameters: &[(&str, [f
                 .enumerate()
                 .map(|(i, &name)| MaterialSampler {
                     slot: i as u32,
-                    hash: primase_hash::sdbm(name.as_bytes()),
+                    hash: primase_foundations::hash::sdbm(name.as_bytes()),
                     name: Some(name.into()),
                     name_source: Some(SamplerNameSource::ExecutableStringSdbm),
                     texture: format!("{name}.source"),

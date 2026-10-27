@@ -17,7 +17,7 @@ pub enum Error {
     #[error("I/O: {0}")]
     Io(#[from] std::io::Error),
     #[error(transparent)]
-    Field(#[from] primase_bytes::FieldError),
+    Field(#[from] primase_foundations::bytes::FieldError),
     #[error("at {offset:#x}: {detail}")]
     Invalid { offset: usize, detail: String },
 }

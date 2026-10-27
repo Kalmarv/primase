@@ -30,7 +30,7 @@ const SMOKE_CELL: usize = 4;
 /// The baked textures of `region` of m11_01: their count and the digest of the lot.
 fn baked_digest(
     install: &std::path::Path,
-    dll: &primase_compress::oodle::Oodle,
+    dll: &primase_foundations::compress::oodle::Oodle,
     region: [f32; 4],
 ) -> (usize, String) {
     let mut world = World::default();

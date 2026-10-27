@@ -25,9 +25,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use primase_compress::oodle::{Oodle, Version};
 use primase_core::World;
 use primase_core::shader::Shader;
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_frostbite::MESHSET;
 use primase_frostbite::binding::PASS_BINDING;
 use primase_frostbite::bundle::Kind;

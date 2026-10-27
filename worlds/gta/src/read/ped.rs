@@ -86,7 +86,7 @@ impl GtaSource {
         };
         let (ydd, yft) = (need("ydd")?, need("yft")?);
         let stem = base.rsplit('\\').next().unwrap_or(base);
-        let stem_hash = primase_hash::joaat(stem.as_bytes());
+        let stem_hash = primase_foundations::hash::joaat(stem.as_bytes());
         let info = PedVariations::from_root(&Meta::read(&install.resource(ymt, keys)?)?.root()?)?;
         let dictionary = DrawableDictionary::read_resource(&decode(install, keys, ydd)?)?;
         let entries = info.entries(&dictionary.hashes)?;

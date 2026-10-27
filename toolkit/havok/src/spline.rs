@@ -46,7 +46,7 @@
 
 use crate::animation::{Animation, Tracks};
 use crate::{Error, Result, invalid};
-use primase_bytes::Endian;
+use primase_foundations::bytes::Endian;
 
 /// The knots and degree a spline track's control points are evaluated with.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -192,11 +192,11 @@ struct Mask {
 const STATIC: [u8; 4] = [0x01, 0x02, 0x04, 0x08];
 const SPLINE: [u8; 4] = [0x10, 0x20, 0x40, 0x80];
 
-/// The block data's cursor ([`primase_bytes::Cursor`], little-endian), with its floats and padding as methods.
-struct Reader<'a>(primase_bytes::Cursor<'a>);
+/// The block data's cursor ([`primase_foundations::bytes::Cursor`], little-endian), with its floats and padding as methods.
+struct Reader<'a>(primase_foundations::bytes::Cursor<'a>);
 
 impl<'a> std::ops::Deref for Reader<'a> {
-    type Target = primase_bytes::Cursor<'a>;
+    type Target = primase_foundations::bytes::Cursor<'a>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -211,7 +211,7 @@ impl std::ops::DerefMut for Reader<'_> {
 impl<'a> Reader<'a> {
     /// A reader of `bytes` at `at`.
     fn at(bytes: &'a [u8], at: usize) -> Result<Self> {
-        let mut c = primase_bytes::Cursor::new(bytes);
+        let mut c = primase_foundations::bytes::Cursor::new(bytes);
         c.seek(at)?;
         Ok(Reader(c))
     }

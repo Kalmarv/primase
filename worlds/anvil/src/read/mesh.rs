@@ -52,7 +52,7 @@
 )]
 
 use crate::read::fields::LE;
-use primase_bytes::{Field, FieldError, View};
+use primase_foundations::bytes::{Field, FieldError, View};
 use std::ops::Range;
 
 pub use crate::components::{StoredMeshBone, StoredSkin};
@@ -387,17 +387,17 @@ struct Head {
     bounds: [[f32; 3]; 2],
 }
 
-/// The body's cursor ([`primase_bytes::Cursor`]), with this record's grammar as methods.
-struct Cursor<'a>(primase_bytes::Cursor<'a>);
+/// The body's cursor ([`primase_foundations::bytes::Cursor`]), with this record's grammar as methods.
+struct Cursor<'a>(primase_foundations::bytes::Cursor<'a>);
 
 impl<'a> Cursor<'a> {
     fn new(b: &'a [u8]) -> Self {
-        Cursor(primase_bytes::Cursor::new(b))
+        Cursor(primase_foundations::bytes::Cursor::new(b))
     }
 }
 
 impl<'a> std::ops::Deref for Cursor<'a> {
-    type Target = primase_bytes::Cursor<'a>;
+    type Target = primase_foundations::bytes::Cursor<'a>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -635,7 +635,7 @@ impl StoredMesh {
             .and_then(|w| w.try_into().ok())
             .map_or(0, u32::from_le_bytes);
         let count = usize::try_from(count).unwrap_or(usize::MAX);
-        primase_bytes::checked_span(RECORDS, count, 81, body.len()).field("81-byte records")?;
+        primase_foundations::bytes::checked_span(RECORDS, count, 81, body.len()).field("81-byte records")?;
         let records_81 = (0..count)
             .map(|_| c.array::<81>().field("81-byte record"))
             .collect::<Result<Vec<_>, _>>()?;

@@ -48,7 +48,7 @@ fn pak(rows: &[(&str, Option<&[u8]>)]) -> Pak {
     for ((n, data), off) in rows.iter().zip(offsets) {
         let size = data.map_or(0, |v| v.len());
         for v in [
-            primase_hash::sdbm(n.as_bytes()),
+            primase_foundations::hash::sdbm(n.as_bytes()),
             off as u32,
             u32::from(data.is_none()),
             if data.is_none() { 0 } else { 16 },
@@ -280,7 +280,7 @@ fn unsupported_volume_keeps_bytes_but_malformed_supported_pixels_are_errors() {
 #[test]
 fn engine_dictionary_names_are_exact_hashes() {
     for name in ["Color_Map", "Normal_Map", "Spec_Map", "Effect_Map"] {
-        let h = primase_hash::sdbm(name.as_bytes());
+        let h = primase_foundations::hash::sdbm(name.as_bytes());
         assert_eq!(material::sampler_name(h), Some(name));
     }
     assert_eq!(material::sampler_name(999), None);

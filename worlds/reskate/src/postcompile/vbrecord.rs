@@ -36,7 +36,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
 
-use primase_compress::oodle::Oodle;
+use primase_foundations::compress::oodle::Oodle;
 
 use crate::postcompile::fb::MESHSET;
 use crate::postcompile::fb::folder::{Folder, Source};

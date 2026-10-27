@@ -274,7 +274,7 @@ fn triangles(sec: &meshset::Section, lod: &meshset::Lod, geo: &[u8], name: &str)
     }
     let start = lod.vertex_bytes as usize + sec.start_index as usize * size;
     let count = sec.primitives as usize * 3;
-    let span = primase_bytes::checked_span(start, count, size, geo.len())
+    let span = primase_foundations::bytes::checked_span(start, count, size, geo.len())
         .map_err(|e| bad(W, sec.at, format!("{name}: section indices: {e}")))?;
     let idx: Vec<u32> = geo[span]
         .chunks_exact(size)

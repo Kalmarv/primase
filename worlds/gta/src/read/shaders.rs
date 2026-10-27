@@ -89,7 +89,7 @@ pub fn add_used_shader_effects(w: &mut World, db: &Sgd2<'_>) -> ShaderTable {
 pub fn add_shader_effects(w: &mut World, db: &Sgd2<'_>, only: Option<&BTreeSet<u32>>) -> ShaderTable {
     let mut table = ShaderTable::default();
     let wanted = |effect: &sgd2::Effect<'_>| {
-        only.is_none_or(|hashes| hashes.contains(&primase_hash::joaat(effect.name.as_bytes())))
+        only.is_none_or(|hashes| hashes.contains(&primase_foundations::hash::joaat(effect.name.as_bytes())))
     };
     // the programs the wanted effects list, by group
     let mut needed: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); sgd2::GROUP_STAGES.len()];
@@ -280,7 +280,7 @@ pub fn join_materials(w: &mut World, effects: &[Entity]) -> EffectJoin {
     for &e in effects {
         if let Some(effect) = w.get::<GtaEffect>(e) {
             by_hash
-                .entry(primase_hash::joaat(effect.name.as_bytes()))
+                .entry(primase_foundations::hash::joaat(effect.name.as_bytes()))
                 .or_default()
                 .push(e);
         }

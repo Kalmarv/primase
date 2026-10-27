@@ -18,7 +18,7 @@
 use crate::components::WaterPatch;
 use crate::read::fields::{BodyError, LE, body_error, count, end, expect, object, reference};
 use crate::read::reference::Reference;
-use primase_bytes::{Cursor, Field};
+use primase_foundations::bytes::{Cursor, Field};
 
 /// A component type: WaterComponent.
 pub const WATER_COMPONENT: u32 = 0x996D_F94F;

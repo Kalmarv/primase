@@ -300,8 +300,12 @@ fn real_files_round_trip() -> R {
         return Ok(());
     };
     // SAFETY: the gate configuration names the user's own trusted game DLL.
-    let oodle =
-        Some(unsafe { primase_compress::oodle::Oodle::load(dll, primase_compress::oodle::Version::V9)? });
+    let oodle = Some(unsafe {
+        primase_foundations::compress::oodle::Oodle::load(
+            dll,
+            primase_foundations::compress::oodle::Version::V9,
+        )?
+    });
     let mut files = Vec::new();
     fbmod_files(&dir, &mut files)?;
     files.sort();

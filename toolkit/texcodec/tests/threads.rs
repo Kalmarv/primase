@@ -5,7 +5,7 @@
 #![allow(clippy::unwrap_used)]
 
 use primase_core::TexFormat;
-use primase_core::parallel::Threads;
+use primase_foundations::parallel::Threads;
 use primase_texcodec::{Decoder, Encoder, TexDecoder, TexEncoder};
 
 fn bytes(n: usize, seed: u32) -> Vec<u8> {

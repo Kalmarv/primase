@@ -6,8 +6,8 @@
 
 #![allow(clippy::unwrap_used)]
 
-use primase_compress::oodle::{Oodle, Version};
 use primase_core::{ColorSpace, Component, Texture, TextureLayers, TextureShape, World};
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_frostbite::bundle::Kind;
 use primase_frostbite::components::{FrostbiteDepot, FrostbiteEbx, FrostbiteEntry, FrostbiteTexture};
 use primase_frostbite::entry::{format_colour_space, tex_format};

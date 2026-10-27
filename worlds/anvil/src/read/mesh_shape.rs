@@ -25,7 +25,7 @@
 
 use crate::read::fields::LE;
 use crate::read::reference;
-use primase_bytes::{Field, FieldError, View};
+use primase_foundations::bytes::{Field, FieldError, View};
 
 /// A record type: equals the CRC-32 of the ASCII string `MeshShape` (the name a label).
 pub const MESH_SHAPE: u32 = 0xB22B_3E61;

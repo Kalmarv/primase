@@ -8,7 +8,7 @@
     clippy::cast_possible_truncation
 )]
 
-use primase_bytes::{BoundsError, Cursor, Endian::Big, View};
+use primase_foundations::bytes::{BoundsError, Cursor, Endian::Big, View};
 use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]

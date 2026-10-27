@@ -1,7 +1,7 @@
 //! Validated per-mip decoding and channel mapping; source recipes remain with callers.
 use crate::{Error, Result, sample_count};
-use primase_core::parallel::{Threads, rows_mut};
 use primase_core::{ColorSpace, NormalConvention, TexFormat, TexRole, Texture};
+use primase_foundations::parallel::{Threads, rows_mut};
 use primase_texcodec::{Decoder, TexDecoder};
 use std::ops::Range;
 

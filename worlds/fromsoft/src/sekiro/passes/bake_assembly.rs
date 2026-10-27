@@ -136,7 +136,7 @@ pub(super) fn assemble(
     // Each group's reasons and the materials it made, applied once the bake has removed the materials nothing kept:
     // an attributed material has to be alive after the pass (`PassLog::approximated_on`).
     let mut records: Vec<(Vec<Entity>, primase_core::pass::PassLog)> = Vec::new();
-    let threads = primase_core::parallel::Threads::of(world);
+    let threads = primase_core::parallel::threads(world);
     for (group_index, group) in bake.groups.iter().enumerate() {
         // What this group's bake approximates, and the materials it makes: merged into the report at the group's end,
         // each reason on the materials it concerns.
@@ -538,7 +538,7 @@ mod tests {
         ] {
             let public = prepared.bake(32, prepared.period, inputs)?;
             let captured = prepared.bake_with_reflectance(
-                primase_core::parallel::Threads::ONE,
+                primase_foundations::parallel::Threads::ONE,
                 32,
                 prepared.period,
                 inputs,

@@ -370,7 +370,7 @@ fn quads_give_the_scalar_outputs_and_their_footprints() {
             };
             for n in [2, 8] {
                 let many = iridia_exec::evaluate_raw_with(
-                    primase_core::parallel::Threads::new(n).unwrap(),
+                    primase_foundations::parallel::Threads::new(n).unwrap(),
                     shader.as_ref(),
                     &c,
                     &textures,

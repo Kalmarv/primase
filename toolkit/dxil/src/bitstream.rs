@@ -3,7 +3,7 @@
 //! checked against the bits that remain before anything is allocated, and nesting, abbreviations and the total
 //! number of operands are capped, so a crafted file errors instead of exhausting memory.
 use crate::{Result, error};
-use primase_bytes::View;
+use primase_foundations::bytes::View;
 
 /// Limits on what one bitstream may contain.
 const MAX_DEPTH: usize = 32;

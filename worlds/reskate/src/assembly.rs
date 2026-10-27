@@ -406,7 +406,7 @@ fn writer_options(s: &Scene, a: &EncodingOptions) -> Result<WriterOptions> {
         trainer_note: s.trainer_note.clone(),
         warnings: s.warnings.clone(),
         pause: None,
-        threads: primase_core::parallel::Threads::ONE,
+        threads: primase_foundations::parallel::Threads::ONE,
     })
 }
 

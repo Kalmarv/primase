@@ -47,7 +47,7 @@ pub enum Error {
     #[error("I/O: {0}")]
     Io(#[from] std::io::Error),
     #[error("compression: {0}")]
-    Compression(#[from] primase_compress::Error),
+    Compression(#[from] primase_foundations::compress::Error),
     #[error("entry hash {0:08x} not found")]
     Missing(u64),
 }

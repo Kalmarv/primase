@@ -2,7 +2,7 @@
 //! player build strips from its files. Format versions 1 and 2, type tree data, uncompressed or LZ4 (LZMA and
 //! Brotli packages are refused: re-pack them uncompressed).
 
-use primase_compress::{Decompressor, LZ4_MAX_RATIO, Lz4};
+use primase_foundations::compress::{Decompressor, LZ4_MAX_RATIO, Lz4};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 

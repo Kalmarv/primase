@@ -15,7 +15,7 @@
 //! An entry of a program holds Unity's program record: its version, GPU program type, then (from 2016.2) a header the
 //! reader skips, keyword strings (empty in current players: the parsed form names them), and the code as a byte array.
 
-use primase_compress::{Decompressor, Lz4};
+use primase_foundations::compress::{Decompressor, Lz4};
 
 use crate::components::{ConstantBuffer, Field, Parameters, Shape, StructField, TextureParam};
 use crate::read::player::{ObjRef, Player};

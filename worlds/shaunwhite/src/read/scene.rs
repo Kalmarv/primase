@@ -16,9 +16,9 @@
 //! A LODSelector's body holds five LODDescriptors, each its id, class `0xA360319A`, the object of that level (u32),
 //! its switch distance (f32) and a flag byte; the first is the nearest level.
 
-use primase_bytes::{Field, FieldError, View};
+use primase_foundations::bytes::{Field, FieldError, View};
 
-const LE: primase_bytes::Endian = primase_bytes::Endian::Little;
+const LE: primase_foundations::bytes::Endian = primase_foundations::bytes::Endian::Little;
 
 pub const ENTITY: u32 = 0x0984_415E;
 pub const VISUAL: u32 = 0xEC65_8D29;

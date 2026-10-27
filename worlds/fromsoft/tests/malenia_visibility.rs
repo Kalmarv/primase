@@ -75,8 +75,8 @@ fn malenia_pixelkill_hash_and_alpha_permutation_discard() -> Result<()> {
         let utf16: Vec<_> = name.encode_utf16().flat_map(u16::to_le_bytes).collect();
         println!(
             "MALENIA_PARAMETER_HASH={}",
-            json!({"name":name,"crc32_utf8":primase_hash::crc32(name.as_bytes()),
-            "crc32_utf16le":primase_hash::crc32(&utf16),"petal_override_key":4002817437u32})
+            json!({"name":name,"crc32_utf8":primase_foundations::hash::crc32(name.as_bytes()),
+            "crc32_utf16le":primase_foundations::hash::crc32(&utf16),"petal_override_key":4002817437u32})
         );
     }
     // the lab's binding report of the c2120 read (our own output: a regression baseline), declared in the registry

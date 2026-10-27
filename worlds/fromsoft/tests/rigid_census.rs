@@ -25,8 +25,12 @@ fn full_castle_rigid_vertices() -> Result<()> {
         return Ok(());
     };
     // SAFETY: explicitly supplied trusted native decoder.
-    let dll =
-        unsafe { primase_compress::oodle::Oodle::open(dll.path(), primase_compress::oodle::Version::V6) }?;
+    let dll = unsafe {
+        primase_foundations::compress::oodle::Oodle::open(
+            dll.path(),
+            primase_foundations::compress::oodle::Version::V6,
+        )
+    }?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1024 * 1024 * 1024,

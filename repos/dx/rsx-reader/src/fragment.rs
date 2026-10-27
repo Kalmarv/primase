@@ -2,7 +2,7 @@
 //! 16 bits before field extraction. Inline constants occupy one further slot.
 //! This reads instructions; it neither executes nor lowers them.
 use crate::cgbinary::Error;
-use primase_bytes::{Endian::Big, View};
+use primase_foundations::bytes::{Endian::Big, View};
 use std::fmt::Write;
 
 macro_rules! opcodes {

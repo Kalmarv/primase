@@ -8,12 +8,12 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::sync::Mutex;
 
+use primase_foundations::hash::joaat_exact;
 use primase_gta::rage::map::{MapData, MapTypes};
 use primase_gta::rage::meta::Meta;
 use primase_gta::read::archive::archive_set::Install;
 use primase_gta::read::archive::keys::Keys;
 use primase_gta::read::archive::rpf::EntryKind;
-use primase_hash::joaat_exact;
 use primase_testdata::{Game, install, keys};
 
 /// The enums `map` documents, value by value, as the files' enum descriptions must name them.

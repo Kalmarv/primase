@@ -262,7 +262,7 @@ fn per_pixel_channels_and_over_are_version_2() {
     let (bytes, _) = write(&w, &WriteOptions::default()).unwrap();
     // the mask encoded up front on several threads: the same bytes
     let threads = WriteOptions {
-        threads: primase_core::parallel::Threads::new(4).unwrap(),
+        threads: primase_foundations::parallel::Threads::new(4).unwrap(),
         ..WriteOptions::default()
     };
     assert!(write(&w, &threads).unwrap().0 == bytes);

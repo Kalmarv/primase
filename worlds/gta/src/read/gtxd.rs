@@ -92,8 +92,8 @@ impl TextureParents {
             };
             for (child, parent) in pairs(&root, &path)? {
                 let (c, p) = (
-                    primase_hash::joaat(child.to_lowercase().as_bytes()),
-                    primase_hash::joaat(parent.to_lowercase().as_bytes()),
+                    primase_foundations::hash::joaat(child.to_lowercase().as_bytes()),
+                    primase_foundations::hash::joaat(parent.to_lowercase().as_bytes()),
                 );
                 match t.parents.get(&c) {
                     Some(&kept) if kept != p => t.conflicts.push(Conflict {

@@ -31,8 +31,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use half::f16;
-use primase_compress::Compressor;
-use primase_compress::oodle::Oodle;
+use primase_foundations::compress::Compressor;
+use primase_foundations::compress::oodle::Oodle;
 use primase_frostbite::cas::CasRaw;
 use sha1::{Digest, Sha1};
 
@@ -907,7 +907,7 @@ fn vertex_normals(
     let size = usize::from(lod.index_size);
     let start = lod.vertex_bytes as usize + sec.start_index as usize * size;
     let count = sec.primitives as usize * 3;
-    let span = primase_bytes::checked_span(start, count, size, geo.len())
+    let span = primase_foundations::bytes::checked_span(start, count, size, geo.len())
         .map_err(|e| bad(W, sec.at, format!("{mesh}: section indices: {e}")))?;
     let idx: Vec<usize> = geo[span]
         .chunks_exact(size)

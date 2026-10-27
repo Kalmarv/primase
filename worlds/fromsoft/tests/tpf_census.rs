@@ -12,9 +12,14 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 mod native {
     pub fn load(
         path: primase_testdata::OodleLibrary,
-    ) -> primase_compress::Result<primase_compress::oodle::Oodle> {
+    ) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
         // SAFETY: caller explicitly supplies a trusted version-6 native library.
-        unsafe { primase_compress::oodle::Oodle::open(path.path(), primase_compress::oodle::Version::V6) }
+        unsafe {
+            primase_foundations::compress::oodle::Oodle::open(
+                path.path(),
+                primase_foundations::compress::oodle::Version::V6,
+            )
+        }
     }
 }
 fn sha(bytes: &[u8]) -> String {

@@ -320,8 +320,8 @@ fn the_files_on_any_thread_count_are_the_serial_ones() {
     );
     for n in [2, 8] {
         let e2 = encoding(&format!("threads_{n}"));
-        let mut sink =
-            MapSink::new(Path::new(""), &e2).with_threads(primase_core::parallel::Threads::new(n).unwrap());
+        let mut sink = MapSink::new(Path::new(""), &e2)
+            .with_threads(primase_foundations::parallel::Threads::new(n).unwrap());
         sink.part(&map_of(slabs())).unwrap();
         let r2 = sink.finish().unwrap();
         assert_eq!(files(&r2.out_dir), serial, "{n} threads");

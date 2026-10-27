@@ -65,7 +65,7 @@ pub fn containers(pack: &[u8]) -> Result<Vec<&[u8]>, Error> {
     if left != 16 {
         return Err(Error::Trailer { left });
     }
-    if pack.get(at..) != Some(primase_hash::md5(pack.get(..at).unwrap_or_default()).as_slice()) {
+    if pack.get(at..) != Some(primase_foundations::hash::md5(pack.get(..at).unwrap_or_default()).as_slice()) {
         return Err(Error::Digest);
     }
     Ok(out)

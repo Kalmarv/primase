@@ -283,7 +283,11 @@ impl Fixture {
             .enumerate()
         {
             let at = 16 + i * 32;
-            word(&mut bytes, at, primase_hash::sdbm(paths[i].as_bytes()));
+            word(
+                &mut bytes,
+                at,
+                primase_foundations::hash::sdbm(paths[i].as_bytes()),
+            );
             word(&mut bytes, at + 4, name_offsets[i] as u32);
             word(&mut bytes, at + 12, 16);
             let len = bytes.len() as u32;

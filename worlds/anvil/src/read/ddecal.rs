@@ -22,7 +22,7 @@
     clippy::cast_possible_truncation
 )]
 
-use primase_bytes::{Cursor, Field};
+use primase_foundations::bytes::{Cursor, Field};
 
 use crate::read::fields::{BodyError, body_error, count, end, expect, object, reference};
 use crate::read::reference::{self, Reference};

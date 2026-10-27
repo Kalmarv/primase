@@ -22,7 +22,7 @@
 
 use std::path::Path;
 
-use primase_compress::oodle::Oodle;
+use primase_foundations::compress::oodle::Oodle;
 
 use crate::postcompile::fb::bundle;
 use crate::postcompile::fb::ebx::{self, BoxedValueRecord, Document, FieldType, Value};

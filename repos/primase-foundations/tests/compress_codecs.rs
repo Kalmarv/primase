@@ -1,4 +1,4 @@
-use primase_compress::*;
+use primase_foundations::compress::*;
 use primase_core::gate::{GateReport, Tolerance};
 
 /// Literal-only LZ4 and independently generated Python zlib fixtures; round trips
@@ -120,7 +120,7 @@ fn zstd_one_exact_frame() -> Result<()> {
 /// bound, a missing end, trailing input and a damaged stream are refused.
 #[test]
 fn deflate_of_an_unstated_size_is_bounded_by_its_output() -> Result<()> {
-    use primase_compress::DEFLATE_MAX_RATIO;
+    use primase_foundations::compress::DEFLATE_MAX_RATIO;
     let data: Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
     let packed = Deflate.compress(&data)?;
     assert_eq!(Deflate.decompress_up_to(&packed, data.len())?, data);

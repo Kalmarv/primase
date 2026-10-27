@@ -77,7 +77,13 @@ fn split(file: &str) -> (String, Option<u32>, String) {
     (family, switch, rest.join("_"))
 }
 
-fn install_and_decoder() -> Result<Option<(std::path::PathBuf, Install, primase_compress::oodle::Oodle)>> {
+fn install_and_decoder() -> Result<
+    Option<(
+        std::path::PathBuf,
+        Install,
+        primase_foundations::compress::oodle::Oodle,
+    )>,
+> {
     let (Some(root), Some(keys), Some(dll)) = (
         primase_testdata::install(primase_testdata::Game::Elden),
         primase_testdata::keys(primase_testdata::Game::Elden),

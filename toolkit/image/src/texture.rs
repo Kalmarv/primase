@@ -1,10 +1,10 @@
 use crate::{Error, Image, Result, Samples, read_png, write_png};
-use primase_core::parallel::Threads;
 use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::{
     ColorSpace, Entity, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat, TexRole,
     Texture, TextureFile, World,
 };
+use primase_foundations::parallel::Threads;
 use primase_texcodec::{Decoder, TexDecoder};
 use std::{
     collections::BTreeMap,
@@ -152,9 +152,11 @@ pub fn normalize_normals(world: &mut World) -> Result<PassLog> {
         }
     }
     // each texture converted on its own (at most the stated threads at once), the counts added in the textures' order
-    let converted = primase_core::parallel::map(Threads::of(world), &todo, |_, &(_, t, convention)| {
-        convert_normals(t, convention)
-    })
+    let converted = primase_foundations::parallel::map(
+        primase_core::parallel::threads(world),
+        &todo,
+        |_, &(_, t, convention)| convert_normals(t, convention),
+    )
     .map_err(|e| Error::Invalid(e.to_string()))?;
     let mut changes = Vec::<(Entity, Texture)>::with_capacity(todo.len());
     for (&(e, t, convention), converted) in todo.iter().zip(converted) {

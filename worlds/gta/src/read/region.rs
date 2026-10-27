@@ -40,7 +40,7 @@ use crate::read::archive::archive_set::{ArchiveSet, FileRef, Install, MapState};
 use crate::read::archive::keys::Keys;
 use crate::read::assets::{Lookup, Payload};
 use crate::{Result, invalid};
-use primase_core::parallel::Threads;
+use primase_foundations::parallel::Threads;
 
 /// Which map states to read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -161,15 +161,16 @@ pub fn list_maps(set: &ArchiveSet, keys: &Keys, threads: Threads) -> Result<Vec<
         .into_iter()
         .flat_map(|t| t.values().copied())
         .collect();
-    let entities = primase_hash::joaat_exact(b"entities");
-    let outlines = primase_core::parallel::map(threads, &files, |_, &f| -> Result<(MapHeader, usize)> {
-        let (root, counts) = meta(set, keys, f)?.root_outline()?;
-        let count = *counts
-            .get(&entities)
-            .ok_or_else(|| invalid("CMapData", 0, format!("{}: no entities array", set.path(f))))?;
-        Ok((MapHeader::from_root(&root)?, count))
-    })
-    .map_err(|e| invalid("map listing", 0, e.to_string()))?;
+    let entities = primase_foundations::hash::joaat_exact(b"entities");
+    let outlines =
+        primase_foundations::parallel::map(threads, &files, |_, &f| -> Result<(MapHeader, usize)> {
+            let (root, counts) = meta(set, keys, f)?.root_outline()?;
+            let count = *counts
+                .get(&entities)
+                .ok_or_else(|| invalid("CMapData", 0, format!("{}: no entities array", set.path(f))))?;
+            Ok((MapHeader::from_root(&root)?, count))
+        })
+        .map_err(|e| invalid("map listing", 0, e.to_string()))?;
     let mut listed = Vec::with_capacity(files.len());
     for (&f, outline) in files.iter().zip(outlines) {
         let (header, count) = outline?;

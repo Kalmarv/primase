@@ -9,11 +9,9 @@ repository.workspace = true
 publish.workspace = true
 [dependencies]
 iridia-interface.workspace = true
-primase-bytes.workspace = true
+primase-foundations = { workspace = true, features = ["compress"] }
 primase-core.workspace = true
-primase-compress.workspace = true
 primase-dxil.workspace = true
-primase-hash.workspace = true
 primase-image.workspace = true
 primase-meshops.workspace = true
 iridia.workspace = true

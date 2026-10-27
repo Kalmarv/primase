@@ -39,7 +39,7 @@
 )]
 
 use crate::read::fields::LE;
-use primase_bytes::Cursor;
+use primase_foundations::bytes::Cursor;
 
 /// A record type: equals the CRC-32 of the ASCII string `MaterialTemplate` (the name a label).
 pub use crate::read::material::MATERIAL_TEMPLATE;
@@ -469,7 +469,7 @@ impl Descriptor {
     /// The CRC-32 of its second string (equal to a Material texture-property key in the census's join).
     pub fn key(&self) -> u32 {
         let [_, label, _] = &self.strings;
-        primase_hash::crc32(label)
+        primase_foundations::hash::crc32(label)
     }
 }
 

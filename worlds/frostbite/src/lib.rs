@@ -9,7 +9,7 @@
 //! every writer is the counterpart of the reader: an unmodified Patch read and written again is byte-identical.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
-use primase_bytes::Endian;
+use primase_foundations::bytes::Endian;
 
 pub mod binding;
 pub mod bundle;
@@ -58,7 +58,7 @@ pub enum Error {
         source: std::io::Error,
     },
     #[error("cas: {0}")]
-    Cas(#[from] primase_compress::Error),
+    Cas(#[from] primase_foundations::compress::Error),
     #[error("{0}")]
     Missing(String),
     /// An entry of a kind or form no reader here reads, named.
@@ -98,22 +98,28 @@ pub fn bad(what: &'static str, offset: usize, detail: impl Into<String>) -> Erro
 
 /// A read past the data ([`primase_bytes`]): `what`'s error at the read's offset, naming how many bytes it wanted and
 /// the `total` there are (a span whose end overflows the address space wants all it names).
-pub(crate) fn past_end(what: &'static str, e: primase_bytes::BoundsError, total: usize) -> Error {
+pub(crate) fn past_end(
+    what: &'static str,
+    e: primase_foundations::bytes::BoundsError,
+    total: usize,
+) -> Error {
     let at = usize::try_from(e.absolute()).unwrap_or(usize::MAX);
     let length = match e {
-        primase_bytes::BoundsError::OutOfBounds { length, .. } => length,
-        primase_bytes::BoundsError::LengthOverflow { count, stride, .. } => count.saturating_mul(stride),
+        primase_foundations::bytes::BoundsError::OutOfBounds { length, .. } => length,
+        primase_foundations::bytes::BoundsError::LengthOverflow { count, stride, .. } => {
+            count.saturating_mul(stride)
+        }
     };
     bad(what, at, format!("{length} bytes past the end ({total} bytes)"))
 }
 
-/// A read past a document's bytes through [`primase_bytes::Cursor`] (the EBX decoder's): its error at the read's
+/// A read past a document's bytes through [`primase_foundations::bytes::Cursor`] (the EBX decoder's): its error at the read's
 /// offset.
-impl From<primase_bytes::BoundsError> for Error {
-    fn from(e: primase_bytes::BoundsError) -> Self {
+impl From<primase_foundations::bytes::BoundsError> for Error {
+    fn from(e: primase_foundations::bytes::BoundsError) -> Self {
         match e {
-            primase_bytes::BoundsError::OutOfBounds { total, .. } => past_end("read", e, total),
-            primase_bytes::BoundsError::LengthOverflow { count, stride, .. } => bad(
+            primase_foundations::bytes::BoundsError::OutOfBounds { total, .. } => past_end("read", e, total),
+            primase_foundations::bytes::BoundsError::LengthOverflow { count, stride, .. } => bad(
                 "read",
                 usize::try_from(e.absolute()).unwrap_or(usize::MAX),
                 format!("{count} entries of {stride} bytes overflow"),
@@ -135,39 +141,39 @@ impl<'a> Rd<'a> {
     }
 
     pub fn bytes(&self, at: usize, n: usize) -> Result<&'a [u8]> {
-        primase_bytes::View::new(self.data)
+        primase_foundations::bytes::View::new(self.data)
             .slice(at, n)
             .map_err(|e| past_end(self.what, e, self.data.len()))
     }
 
     pub fn arr<const N: usize>(&self, at: usize) -> Result<[u8; N]> {
-        primase_bytes::View::new(self.data)
+        primase_foundations::bytes::View::new(self.data)
             .array(at)
             .map_err(|e| past_end(self.what, e, self.data.len()))
     }
 
     pub fn u8(&self, at: usize) -> Result<u8> {
-        primase_bytes::View::new(self.data)
+        primase_foundations::bytes::View::new(self.data)
             .u8(at)
             .map_err(|e| past_end(self.what, e, self.data.len()))
     }
     pub fn u16le(&self, at: usize) -> Result<u16> {
-        self.number(at, Endian::Little, primase_bytes::View::u16)
+        self.number(at, Endian::Little, primase_foundations::bytes::View::u16)
     }
     pub fn u32le(&self, at: usize) -> Result<u32> {
-        self.number(at, Endian::Little, primase_bytes::View::u32)
+        self.number(at, Endian::Little, primase_foundations::bytes::View::u32)
     }
     pub fn u64le(&self, at: usize) -> Result<u64> {
-        self.number(at, Endian::Little, primase_bytes::View::u64)
+        self.number(at, Endian::Little, primase_foundations::bytes::View::u64)
     }
     pub fn u32be(&self, at: usize) -> Result<u32> {
-        self.number(at, Endian::Big, primase_bytes::View::u32)
+        self.number(at, Endian::Big, primase_foundations::bytes::View::u32)
     }
     pub fn i32be(&self, at: usize) -> Result<i32> {
-        self.number(at, Endian::Big, primase_bytes::View::i32)
+        self.number(at, Endian::Big, primase_foundations::bytes::View::i32)
     }
     pub fn u64be(&self, at: usize) -> Result<u64> {
-        self.number(at, Endian::Big, primase_bytes::View::u64)
+        self.number(at, Endian::Big, primase_foundations::bytes::View::u64)
     }
     /// A number at `at` in byte order `e`, read by `read`.
     fn number<T>(
@@ -175,12 +181,12 @@ impl<'a> Rd<'a> {
         at: usize,
         e: Endian,
         read: fn(
-            &primase_bytes::View<'a>,
+            &primase_foundations::bytes::View<'a>,
             usize,
             Endian,
-        ) -> std::result::Result<T, primase_bytes::BoundsError>,
+        ) -> std::result::Result<T, primase_foundations::bytes::BoundsError>,
     ) -> Result<T> {
-        read(&primase_bytes::View::new(self.data), at, e)
+        read(&primase_foundations::bytes::View::new(self.data), at, e)
             .map_err(|err| past_end(self.what, err, self.data.len()))
     }
     /// A zero-terminated Latin-1 string starting at `at`.
@@ -207,7 +213,7 @@ pub fn latin1(s: &str, what: &'static str) -> Result<Vec<u8>> {
 /// Capacity for `count` entries that each take at least `min_bytes` of the `remaining` input bytes: refused before
 /// anything is reserved when they cannot fit, so a corrupt count returns an error instead of exhausting memory.
 pub fn capacity(what: &'static str, count: usize, min_bytes: usize, remaining: usize) -> Result<usize> {
-    match primase_bytes::checked_span(0, count, min_bytes, remaining) {
+    match primase_foundations::bytes::checked_span(0, count, min_bytes, remaining) {
         Ok(_) => Ok(count),
         _ => Err(bad(
             what,

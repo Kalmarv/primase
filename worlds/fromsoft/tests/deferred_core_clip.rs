@@ -16,8 +16,12 @@ fn a_plan_loads_one_clip_as_read_on_its_original_entity()
         return Ok(());
     };
     // SAFETY: the test configuration supplies the trusted installed codec.
-    let codec =
-        unsafe { primase_compress::oodle::Oodle::open(codec.path(), primase_compress::oodle::Version::V6) }?;
+    let codec = unsafe {
+        primase_foundations::compress::oodle::Oodle::open(
+            codec.path(),
+            primase_foundations::compress::oodle::Version::V6,
+        )
+    }?;
     let decoder = primase_fromsoft::dcx::Decoder {
         oodle: Some(&codec),
         max_output: 1 << 30,

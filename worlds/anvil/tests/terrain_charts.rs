@@ -417,7 +417,7 @@ fn the_options_state_the_threshold_and_refuse_what_cannot_chart() {
 /// ground: every texture byte for byte, the same pieces and log, charts or none.
 #[test]
 fn the_bake_on_any_thread_count_is_the_serial_one() {
-    use primase_core::parallel::Threads;
+    use primase_foundations::parallel::Threads;
     for steep in [
         Steep::None,
         Steep::Chart {

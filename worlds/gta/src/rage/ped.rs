@@ -58,7 +58,7 @@ fn structs<'a>(s: &'a Struct, name: &str) -> Result<Vec<&'a Struct>> {
 }
 
 fn named(s: &Struct, want: &str) -> Result<()> {
-    if primase_hash::joaat_exact(want.as_bytes()) == s.name {
+    if primase_foundations::hash::joaat_exact(want.as_bytes()) == s.name {
         Ok(())
     } else {
         Err(err(format!("structure {:#010x} where {want} belongs", s.name)))
@@ -221,7 +221,7 @@ impl PedVariations {
             for drawable in 0..component.drawables.len() {
                 let mut found = ENTRY_SUFFIXES.iter().flat_map(|&suffix| {
                     let name = entry_name(slot, drawable, suffix)?;
-                    let hash = primase_hash::joaat(name.as_bytes());
+                    let hash = primase_foundations::hash::joaat(name.as_bytes());
                     let entry = hashes.iter().position(|&h| h == hash)?;
                     Some(PedEntry {
                         slot,
@@ -257,7 +257,7 @@ impl PedVariations {
 )]
 mod tests {
     use super::*;
-    use primase_hash::joaat_exact as h;
+    use primase_foundations::hash::joaat_exact as h;
 
     fn st(name: &str, fields: Vec<(&str, Value)>) -> Struct {
         Struct {
@@ -345,7 +345,7 @@ mod tests {
                 distribution: 255
             }
         );
-        let hash = |n: &str| primase_hash::joaat(n.as_bytes());
+        let hash = |n: &str| primase_foundations::hash::joaat(n.as_bytes());
         let hashes = [hash("uppr_000_m"), hash("head_001_r"), hash("head_000_r")];
         let entries = info.entries(&hashes).unwrap();
         assert_eq!(

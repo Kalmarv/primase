@@ -27,7 +27,7 @@ use primase_core::frame::SourceFrame;
 
 use crate::components::{AnvilFloorHeight, FloorBlock};
 use crate::read::fields::LE;
-use primase_bytes::{Field, FieldError, View};
+use primase_foundations::bytes::{Field, FieldError, View};
 
 /// A record type: the CRC-32 of `FloorHeightData`.
 pub const FLOOR_HEIGHT_DATA: u32 = 0x92AD_A771;

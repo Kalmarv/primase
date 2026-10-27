@@ -9,8 +9,8 @@
 use std::collections::BTreeMap;
 
 use iridia_interface::Stage;
-use primase_compress::oodle::{Oodle, Version};
 use primase_core::World;
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_frostbite::bundle::Kind;
 use primase_frostbite::components::{FrostbiteInputLayout, FrostbitePermutation};
 use primase_frostbite::folder::{Folder, Source};

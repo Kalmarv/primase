@@ -1,7 +1,7 @@
 //! CSTR v1: exact block framing, stored blocks or RFC 1951 raw DEFLATE.
 use crate::{Result, invalid};
-use primase_bytes::{Endian::Big, Field, View};
-use primase_compress::{Decompressor, Deflate};
+use primase_foundations::bytes::{Endian::Big, Field, View};
+use primase_foundations::compress::{Decompressor, Deflate};
 
 /// Decoded bytes and block counts (including stored blocks).
 #[derive(Debug)]

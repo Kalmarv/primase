@@ -24,9 +24,14 @@ const SEKIRO_SKATE_TABLE: &str = include_str!("fixtures/sekiro-human__skate-rend
 #[allow(unsafe_code)]
 fn fromsoft_oodle(
     library: primase_testdata::OodleLibrary,
-) -> primase_compress::Result<primase_compress::oodle::Oodle> {
+) -> primase_foundations::compress::Result<primase_foundations::compress::oodle::Oodle> {
     // SAFETY: the test configuration names a trusted native library.
-    unsafe { primase_compress::oodle::Oodle::open(library.path(), primase_compress::oodle::Version::V6) }
+    unsafe {
+        primase_foundations::compress::oodle::Oodle::open(
+            library.path(),
+            primase_foundations::compress::oodle::Version::V6,
+        )
+    }
 }
 
 const LOWER: &str = "lower-fromsoft-geometry{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw,speedtree-frame=program},select-lod{form=finest}";
@@ -168,8 +173,12 @@ fn existing_soldier_and_skate_idle_transfer_both_ways_and_skin_rebinds() -> Resu
     let folder = Folder::open(data)?;
     // SAFETY: explicitly configured trusted game decoder.
     #[allow(unsafe_code)]
-    let skate_codec =
-        unsafe { primase_compress::oodle::Oodle::load(skate_dll, primase_compress::oodle::Version::V9) }?;
+    let skate_codec = unsafe {
+        primase_foundations::compress::oodle::Oodle::load(
+            skate_dll,
+            primase_foundations::compress::oodle::Version::V9,
+        )
+    }?;
     let src = Source {
         folder: &folder,
         base: Some(&folder),
@@ -258,8 +267,12 @@ fn every_sekiro_human_candidate_reports_pairs_ratios_and_skin_fit() -> Result<()
     let folder = Folder::open(data)?;
     // SAFETY: explicitly configured trusted game decoder.
     #[allow(unsafe_code)]
-    let skate_codec =
-        unsafe { primase_compress::oodle::Oodle::load(skate_dll, primase_compress::oodle::Version::V9) }?;
+    let skate_codec = unsafe {
+        primase_foundations::compress::oodle::Oodle::load(
+            skate_dll,
+            primase_foundations::compress::oodle::Version::V9,
+        )
+    }?;
     let src = Source {
         folder: &folder,
         base: Some(&folder),

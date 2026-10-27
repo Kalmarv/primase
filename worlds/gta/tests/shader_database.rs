@@ -177,7 +177,7 @@ fn a_material_joins_the_effect_its_name_hashes_to() {
         );
         m
     };
-    let hash = |n: &str| primase_hash::joaat(n.as_bytes());
+    let hash = |n: &str| primase_foundations::hash::joaat(n.as_bytes());
     let a = material(&mut w, hash("default"));
     let b = material(&mut w, hash("default"));
     let c = material(&mut w, hash("default_tnt"));

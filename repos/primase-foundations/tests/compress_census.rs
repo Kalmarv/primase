@@ -3,7 +3,7 @@
 //! for the lzo2a rows, through `tests/oracles/lzo2a.c`). Each row is
 //! `codec<TAB>input<TAB>reference`, a relative path relative to the TSV's folder; bytes stay outside the repository.
 //! Codec names: lz4, deflate, zlib, zlib-unterminated, lzo2a. Oodle uses the DLL module's gate instead.
-use primase_compress::{Decompressor, Deflate, Lz4, Lzo2a, Zlib, ZlibUnterminated};
+use primase_foundations::compress::{Decompressor, Deflate, Lz4, Lzo2a, Zlib, ZlibUnterminated};
 use primase_core::gate::{GateReport, Tolerance};
 use primase_testdata::{Game, OracleSet, oracle};
 #[test]

@@ -725,7 +725,7 @@ fn fields(m: &Module, t: TypeId) -> Result<Vec<Note>> {
 
 /// D3D signature elements of an `ISG1`/`OSG1` part, mapped for `stage`.
 fn signature(part: &[u8], stage: Stage, output: bool) -> Result<Vec<Varying>> {
-    let v = primase_bytes::View::new(part);
+    let v = primase_foundations::bytes::View::new(part);
     let word = |at: usize| -> Result<u32> {
         v.array::<4>(at)
             .map(u32::from_le_bytes)

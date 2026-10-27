@@ -44,7 +44,7 @@
 use crate::rage::fxc::ProgramStage;
 use crate::rage::le::LE;
 use crate::{Result, invalid};
-use primase_bytes::Field;
+use primase_foundations::bytes::Field;
 
 /// The magic `SGD2`.
 pub const MAGIC: [u8; 4] = *b"SGD2";
@@ -112,17 +112,17 @@ impl<'a> Sgd2<'a> {
     }
 }
 
-/// The file's cursor ([`primase_bytes::Cursor`]), with this format's grammar as methods.
-struct Cursor<'a>(primase_bytes::Cursor<'a>);
+/// The file's cursor ([`primase_foundations::bytes::Cursor`]), with this format's grammar as methods.
+struct Cursor<'a>(primase_foundations::bytes::Cursor<'a>);
 
 impl<'a> Cursor<'a> {
     fn new(data: &'a [u8]) -> Self {
-        Cursor(primase_bytes::Cursor::new(data))
+        Cursor(primase_foundations::bytes::Cursor::new(data))
     }
 }
 
 impl<'a> std::ops::Deref for Cursor<'a> {
-    type Target = primase_bytes::Cursor<'a>;
+    type Target = primase_foundations::bytes::Cursor<'a>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }

@@ -200,7 +200,7 @@ pub struct OodleLibrary(Option<PathBuf>);
 
 impl OodleLibrary {
     /// The configured game library: `Some` on Windows, where it is the codec; `None` elsewhere, where oozextract is
-    /// (`primase_compress::oodle::Oodle::open` takes it as it is).
+    /// (`primase_foundations::compress::oodle::Oodle::open` takes it as it is).
     pub fn path(&self) -> Option<&Path> {
         self.0.as_deref()
     }

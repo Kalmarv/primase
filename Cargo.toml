@@ -1,19 +1,16 @@
 [workspace]
 resolver = "3"
 members = [
+    "repos/primase-foundations",
     "core",
     "toolkit/testdata",
-    "repos/primase-bytes",
     "toolkit/texcodec",
     "toolkit/dds",
     "toolkit/image",
-    "repos/primase-vertex",
     "toolkit/meshops",
     "toolkit/animation",
     "toolkit/lighting",
-    "repos/primase-compress",
     "toolkit/glb",
-    "repos/primase-hash",
     "toolkit/exactsum",
     "repos/dx/dxcontainer",
     "repos/dx/rsx-reader",
@@ -59,6 +56,7 @@ publish = false
 # Every third-party crate is pinned here, default features off, and used through `workspace = true`.
 # Adding one: see CONTRIBUTING.md "Dependencies".
 [workspace.dependencies]
+primase-foundations = { path = "repos/primase-foundations" }
 toml = { version = "=1.1.8", default-features = false, features = ["parse", "serde", "std"] }
 basisu_c_sys = { version = "=0.9.1", default-features = false, features = ["std", "encoder", "extra", "transcode_default"] }
 basisu = { version = "=0.1.0", default-features = false, features = ["std", "zstd"] }
@@ -75,17 +73,13 @@ libloading = { version = "=0.9.0", default-features = false, features = ["std"] 
 oozextract = { package = "primase-oozextract", version = "=0.5.6", path = "repos/primase-oozextract", default-features = false, features = ["verbose_errors"] }
 primase-core = { path = "core" }
 primase-testdata = { path = "toolkit/testdata" }
-primase-bytes = { path = "repos/primase-bytes" }
 primase-texcodec = { path = "toolkit/texcodec" }
 primase-dds = { path = "toolkit/dds" }
 primase-image = { path = "toolkit/image" }
-primase-vertex = { path = "repos/primase-vertex" }
 primase-meshops = { path = "toolkit/meshops" }
 primase-animation = { path = "toolkit/animation" }
 primase-lighting = { path = "toolkit/lighting" }
-primase-compress = { path = "repos/primase-compress" }
 primase-glb = { path = "toolkit/glb" }
-primase-hash = { path = "repos/primase-hash" }
 primase-exactsum = { path = "toolkit/exactsum" }
 dxcontainer = { path = "repos/dx/dxcontainer" }
 rsx-reader = { path = "repos/dx/rsx-reader" }

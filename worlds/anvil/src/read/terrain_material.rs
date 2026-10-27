@@ -23,7 +23,7 @@
 
 use crate::read::fields::{BodyError, LE, body_error, count, end, reference};
 use crate::read::reference::{self, Reference};
-use primase_bytes::{Cursor, Field, View};
+use primase_foundations::bytes::{Cursor, Field, View};
 
 /// A record type: the CRC-32 of `TerrainMaterialBank`.
 pub const TERRAIN_MATERIAL_BANK: u32 = 0x4BE9_4285;

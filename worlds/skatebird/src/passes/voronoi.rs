@@ -42,10 +42,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use iridia_exec::{Input, Lane, PixelShader};
-use primase_core::parallel::Threads;
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial, Specular, TextureRef, UvTransform};
 use primase_core::{ColorSpace, Entity, Name, NormalConvention, TexFormat, TexRole, Texture, World};
+use primase_foundations::parallel::Threads;
 use primase_image::linear_to_srgb;
 use primase_unity::bind::{bind, constants, directional_light, sampled_texture};
 use primase_unity::components::{UnityMaterial, UnityPrograms, UnityTexEnv, UnityTexture};
@@ -455,7 +455,7 @@ impl LowerSkatebirdVoronoi {
             n.clamp(1, self.max_texels)
         };
         let shared = colour.is_some() && colour == bump && tiling(m, "_MainTex") == tiling(m, "_BumpMap");
-        let threads = Threads::of(w);
+        let threads = primase_core::parallel::threads(w);
         let mut baked = BTreeMap::new();
         if let Some(n) = colour {
             let t = texels(n);

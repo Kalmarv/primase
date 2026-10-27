@@ -32,7 +32,7 @@ use crate::rage::resource::Resource;
 use crate::rage::sga::BufferFormat;
 use crate::rage::texture::{Texture, TextureDictionary};
 use crate::{Result, invalid};
-use primase_bytes::View;
+use primase_foundations::bytes::View;
 
 fn err(at: u64, detail: impl ToString) -> crate::Error {
     invalid("drawable", at, detail)

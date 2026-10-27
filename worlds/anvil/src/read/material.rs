@@ -21,7 +21,7 @@ use crate::components::MaterialFlags;
 use crate::read::fields::LE;
 pub use crate::read::mesh::MATERIAL;
 use crate::read::reference::{self, Reference};
-use primase_bytes::{Cursor, Field, FieldError};
+use primase_foundations::bytes::{Cursor, Field, FieldError};
 
 /// A record type: equals the CRC-32 of the ASCII string `TextureSet` (the name a label).
 pub const TEXTURE_SET: u32 = 0xD70E_6670;

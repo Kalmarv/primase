@@ -155,8 +155,8 @@ fn headers_of(install: &Install) -> Result<(), Box<dyn std::error::Error>> {
 }
 #[allow(unsafe_code)]
 mod native {
-    use primase_compress::oodle::{Oodle, Version};
-    pub fn load(path: primase_testdata::OodleLibrary) -> primase_compress::Result<Oodle> {
+    use primase_foundations::compress::oodle::{Oodle, Version};
+    pub fn load(path: primase_testdata::OodleLibrary) -> primase_foundations::compress::Result<Oodle> {
         // SAFETY: the gate requires an explicitly supplied, trusted version-6 DLL.
         unsafe { Oodle::open(path.path(), Version::V6) }
     }

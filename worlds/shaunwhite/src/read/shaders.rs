@@ -19,7 +19,7 @@
 use std::collections::BTreeSet;
 
 use iridia_interface::Stage;
-use primase_bytes::{Cursor, Endian, Field, FieldError, View, checked_span};
+use primase_foundations::bytes::{Cursor, Endian, Field, FieldError, View, checked_span};
 
 use crate::shaders::{Database, Effect, Key, Payload, Record, SamplerBinding, Source, State};
 
@@ -295,7 +295,7 @@ pub fn read(bytes: &[u8]) -> Result<Database> {
             *d |= b;
         }
         let data = r.bytes(n, "source bytes")?;
-        let actual = primase_hash::crc32(data);
+        let actual = primase_foundations::hash::crc32(data);
         if actual != crc32 {
             return Err(invalid(
                 at,

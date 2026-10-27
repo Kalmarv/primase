@@ -1462,7 +1462,7 @@ pub fn build_geometry(p: &ProtoDef) -> Result<Option<SrcMesh>> {
         if let Some(n) = &g.nrm {
             for v in 0..nv {
                 let q = w_at(n, v * 3);
-                let r = primase_vertex::renormalize_stored_normal([q.x, q.y, q.z])
+                let r = primase_foundations::vertex::renormalize_stored_normal([q.x, q.y, q.z])
                     .map_err(|e| Error::Scene(e.to_string()))?;
                 part.nrm[v * 3..v * 3 + 3].copy_from_slice(&r);
             }

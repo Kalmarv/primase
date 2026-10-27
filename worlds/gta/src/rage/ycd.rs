@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use crate::rage::le::LE;
 use crate::rage::resource::Resource;
 use crate::{Result, invalid};
-use primase_bytes::View;
+use primase_foundations::bytes::View;
 
 /// The resource version of Enhanced's clip dictionaries (ycd).
 pub const VERSION: u32 = 46;

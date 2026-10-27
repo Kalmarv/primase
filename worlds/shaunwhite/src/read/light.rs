@@ -8,7 +8,7 @@
 )]
 
 use crate::components::{LightFlare, LightShape, LightSource, SkySettings};
-use primase_bytes::{Cursor, Endian, Field, FieldError};
+use primase_foundations::bytes::{Cursor, Endian, Field, FieldError};
 
 const LE: Endian = Endian::Little;
 pub const OMNI_LIGHT: u32 = 0x3447_80D6;

@@ -55,9 +55,9 @@ fn fixture() -> Vec<u8> {
     }
     header(&mut b, LOCATORS, 0x0005_0002, LOCATORS_SIZE, 1);
     let r = LOCATORS + 0x10;
-    word(&mut b, r, primase_hash::sdbm(b"RMLocator"));
+    word(&mut b, r, primase_foundations::hash::sdbm(b"RMLocator"));
     word(&mut b, r + 4, 0xabcd);
-    word(&mut b, r + 8, primase_hash::sdbm(b"Waypoint"));
+    word(&mut b, r + 8, primase_foundations::hash::sdbm(b"Waypoint"));
     word(&mut b, r + 12, 0x20);
     matrix(&mut b, LOCATORS + 0x20, [7., 8., 9.]);
     word(&mut b, END, 0xffff_ffff);
@@ -83,9 +83,9 @@ fn cameras_and_locators_as_authored() {
     assert_eq!(
         (l.class, l.name, l.kind),
         (
-            primase_hash::sdbm(b"RMLocator"),
+            primase_foundations::hash::sdbm(b"RMLocator"),
             0xabcd,
-            primase_hash::sdbm(b"Waypoint")
+            primase_foundations::hash::sdbm(b"Waypoint")
         )
     );
     assert_eq!(l.world.cols[3], [7., 8., 9.]);

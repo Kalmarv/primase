@@ -24,7 +24,7 @@
 
 use crate::read::fields::{BodyError, LE, body_error, count, end, expect, f32s, reference};
 use crate::read::reference::{self, Reference};
-use primase_bytes::{Cursor, Field};
+use primase_foundations::bytes::{Cursor, Field};
 
 /// A record type: the CRC-32 of `SphereShape`.
 pub const SPHERE_SHAPE: u32 = 0xFA3F_7A18;

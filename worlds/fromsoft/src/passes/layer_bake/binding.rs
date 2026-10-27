@@ -13,8 +13,8 @@ use iridia_interface::{
     AddressMode, ConstantRole, FrameParameter, MatrixLines, ObjectParameter, ViewParameter,
 };
 use primase_core::Entity;
-use primase_core::parallel::Threads;
 use primase_core::{shader::StageBinding, shader::TextureSource};
+use primase_foundations::parallel::Threads;
 use primase_image::sampling::Address;
 use std::{collections::BTreeMap, sync::Arc};
 

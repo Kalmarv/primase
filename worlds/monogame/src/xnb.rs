@@ -19,7 +19,7 @@
     clippy::cast_possible_truncation
 )]
 
-use primase_bytes::{BoundsError, Cursor, Endian};
+use primase_foundations::bytes::{BoundsError, Cursor, Endian};
 
 /// The compression a compressed XNB's flags name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

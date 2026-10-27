@@ -22,7 +22,7 @@ fn stem(name: &str) -> String {
         .to_ascii_lowercase()
 }
 fn override_key(name: &str) -> u32 {
-    primase_hash::crc32(&name.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<_>>())
+    primase_foundations::hash::crc32(&name.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<_>>())
 }
 fn pixelkill(key: u32) -> bool {
     key == override_key("C[PixelKill]_Int") || key == override_key("C[PixelKill][ID1]_Int")

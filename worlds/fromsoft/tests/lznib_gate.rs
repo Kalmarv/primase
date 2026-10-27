@@ -9,8 +9,8 @@
     reason = "test I/O: real-data gates"
 )]
 
-use primase_compress::reference;
 use primase_core::gate::{GateReport, Tolerance};
+use primase_foundations::compress::reference;
 use primase_testdata::{Game, OracleSet, Query, expect_found, oracle};
 
 #[test]

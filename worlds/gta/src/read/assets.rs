@@ -135,7 +135,7 @@ impl Lookup<'_> {
     pub fn texture_dictionaries(&self, txd: u32) -> Vec<u32> {
         std::iter::once(txd)
             .chain(self.parents.chain(txd))
-            .chain(RESIDENT.map(|name| primase_hash::joaat(name.as_bytes())))
+            .chain(RESIDENT.map(|name| primase_foundations::hash::joaat(name.as_bytes())))
             .collect()
     }
 
@@ -445,7 +445,10 @@ impl Ctx<'_> {
     }
 
     pub(crate) fn texture_entity(&mut self, w: &mut World, source: &str, t: &Texture) -> Result<Entity> {
-        let key = (source.to_string(), primase_hash::joaat(t.name.as_bytes()));
+        let key = (
+            source.to_string(),
+            primase_foundations::hash::joaat(t.name.as_bytes()),
+        );
         if let Some(&e) = self.textures.get(&key) {
             return Ok(e);
         }
@@ -507,7 +510,7 @@ impl Ctx<'_> {
         txd: u32,
         name: &str,
     ) -> Result<Option<Entity>> {
-        let h = primase_hash::joaat(name.to_lowercase().as_bytes());
+        let h = primase_foundations::hash::joaat(name.to_lowercase().as_bytes());
         if let Some(own) = &drawable.textures
             && let Some(t) = own
                 .hashes
@@ -950,7 +953,7 @@ mod tests {
         use crate::read::archive::archive_set::{ArchiveSet, FileRef};
         use crate::read::assets::{AssetNames, Lookup};
         use crate::read::gtxd::TextureParents;
-        let hash = |name: &str| primase_hash::joaat(name.as_bytes());
+        let hash = |name: &str| primase_foundations::hash::joaat(name.as_bytes());
         let set = ArchiveSet::made_up(
             &["own.ytd", "parent.ytd", "vehshare.ytd", "mapdetail.ytd"],
             &[

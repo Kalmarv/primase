@@ -10,7 +10,7 @@ use aes::{
     cipher::{Array, BlockCipherDecrypt, KeyInit},
 };
 use num_bigint::BigUint;
-use primase_core::parallel::Threads;
+use primase_foundations::parallel::Threads;
 /// Half-open byte range. (-1,-1) in an archive is an explicitly disabled range.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Range {
@@ -275,7 +275,7 @@ pub fn unwrap_rsa_with(threads: Threads, input: &[u8], modulus: &[u8], exponent:
         .enumerate()
         .map(|(g, blocks)| (g * BLOCKS_PER_TASK, blocks))
         .collect();
-    let done = primase_core::parallel::map(threads, &groups, |_, &(first, blocks)| {
+    let done = primase_foundations::parallel::map(threads, &groups, |_, &(first, blocks)| {
         let mut out = vec![0; blocks.len() * 255];
         for (k, (b, slot)) in blocks.iter().zip(out.as_chunks_mut::<255>().0).enumerate() {
             unwrap(first + k, b, slot)?;

@@ -8,10 +8,10 @@
 //! <oo2core_6_win64.dll> <out>`
 use std::path::{Path, PathBuf};
 
-use primase_compress::oodle::{Oodle, Version};
 use primase_core::convert::{Result, convert_parts};
 use primase_core::pass::{PassManager, PassRegistry, Pipeline};
 use primase_core::{LodChoice, SelectLod};
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_fromsoft::dcx::Decoder;
 use primase_fromsoft::materials::SkipClass;
 use primase_fromsoft::rigid::ApplyRigidSkinning;

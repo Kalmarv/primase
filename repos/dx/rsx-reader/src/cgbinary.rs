@@ -1,6 +1,6 @@
 //! Big-endian revision-6 CgBinaryProgram containers, with offsets relative to
 //! their own header. See the crate README for the layout sources and scope.
-use primase_bytes::{Endian::Big, View};
+use primase_foundations::bytes::{Endian::Big, View};
 use std::ops::Range;
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]

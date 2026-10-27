@@ -1,6 +1,6 @@
 //! The CAS codec: a stream of blocks ([`crate::cas`]) decoded to its bytes, the Oodle ones through the caller's handle to the
 //! game's library.
-use primase_compress::{Compressor, Decompressor, Error, Result, Zlib, oodle::Oodle};
+use primase_foundations::compress::{Compressor, Decompressor, Error, Result, Zlib, oodle::Oodle};
 
 use crate::cas::{append, blocks, buffer, check_size, invalid};
 

@@ -27,8 +27,12 @@ fn characters_read_as_soulsformats_reads_them() -> Result<()> {
         return Ok(());
     };
     // SAFETY: explicitly supplied trusted native decoder.
-    let dll =
-        unsafe { primase_compress::oodle::Oodle::open(dll.path(), primase_compress::oodle::Version::V6) }?;
+    let dll = unsafe {
+        primase_foundations::compress::oodle::Oodle::open(
+            dll.path(),
+            primase_foundations::compress::oodle::Version::V6,
+        )
+    }?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1 << 30,
@@ -193,8 +197,12 @@ fn a_character_converts_as_one_part_per_asset() -> Result<()> {
         return Ok(());
     };
     // SAFETY: explicitly supplied trusted native decoder.
-    let dll =
-        unsafe { primase_compress::oodle::Oodle::open(dll.path(), primase_compress::oodle::Version::V6) }?;
+    let dll = unsafe {
+        primase_foundations::compress::oodle::Oodle::open(
+            dll.path(),
+            primase_foundations::compress::oodle::Version::V6,
+        )
+    }?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1 << 30,
@@ -248,8 +256,12 @@ fn the_finest_face_set_and_the_stored_normals_survive_lowering() -> Result<()> {
         return Ok(());
     };
     // SAFETY: explicitly supplied trusted native decoder.
-    let dll =
-        unsafe { primase_compress::oodle::Oodle::open(dll.path(), primase_compress::oodle::Version::V6) }?;
+    let dll = unsafe {
+        primase_foundations::compress::oodle::Oodle::open(
+            dll.path(),
+            primase_foundations::compress::oodle::Version::V6,
+        )
+    }?;
     let decoder = Decoder {
         oodle: Some(&dll),
         max_output: 1 << 30,

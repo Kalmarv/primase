@@ -73,8 +73,8 @@
 use std::collections::BTreeMap;
 use std::f32::consts::TAU;
 
-use primase_bytes::{Endian, Field, FieldError, View};
 use primase_core::{Primitive, Semantic, Stream, Topology};
+use primase_foundations::bytes::{Endian, Field, FieldError, View};
 
 const LE: Endian = Endian::Little;
 pub const REAL_TREE_MESH: u32 = 0xCD0D_35E6;

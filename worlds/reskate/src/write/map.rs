@@ -254,7 +254,7 @@ pub fn write_map(world: &World, dir: &Path, a: &EncodingOptions) -> Result<Build
 pub struct MapSink {
     dir: PathBuf,
     encoding: EncodingOptions,
-    threads: primase_core::parallel::Threads,
+    threads: primase_foundations::parallel::Threads,
     taken: Option<Taken>,
     cells: GatheredCells,
 }
@@ -716,7 +716,7 @@ impl MapSink {
         MapSink {
             dir: dir.to_owned(),
             encoding: encoding.clone(),
-            threads: primase_core::parallel::Threads::ONE,
+            threads: primase_foundations::parallel::Threads::ONE,
             taken: None,
             cells: GatheredCells::default(),
         }
@@ -724,7 +724,7 @@ impl MapSink {
 
     /// The texture files encoded on `threads` threads, that many at a time (at most that many textures' pixels waiting):
     /// the same files on any count.
-    pub fn with_threads(mut self, threads: primase_core::parallel::Threads) -> MapSink {
+    pub fn with_threads(mut self, threads: primase_foundations::parallel::Threads) -> MapSink {
         self.threads = threads;
         self
     }

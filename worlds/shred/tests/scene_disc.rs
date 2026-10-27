@@ -221,8 +221,8 @@ fn manifest_nodes_spot_chunks_and_spawns() {
     let (mut cameras, mut locators, mut waypoints) = (0usize, 0usize, 0usize);
     let mut occluder_shapes = std::collections::BTreeMap::<u32, usize>::new();
     let occluder_names: std::collections::BTreeSet<u32> = (0..1000)
-        .map(|n| primase_hash::sdbm(format!("RMOccluder{n}").as_bytes()))
-        .chain([primase_hash::sdbm(b"RMOccluder")])
+        .map(|n| primase_foundations::hash::sdbm(format!("RMOccluder{n}").as_bytes()))
+        .chain([primase_foundations::hash::sdbm(b"RMOccluder")])
         .collect();
     let mut occluders_named = 0usize;
     let (mut named_guides, mut named_rails) = (0usize, 0usize);
@@ -280,7 +280,10 @@ fn manifest_nodes_spot_chunks_and_spawns() {
             locators += 1;
             assert_eq!(
                 (l.class, l.kind),
-                (primase_hash::sdbm(b"RMLocator"), primase_hash::sdbm(b"Waypoint"))
+                (
+                    primase_foundations::hash::sdbm(b"RMLocator"),
+                    primase_foundations::hash::sdbm(b"Waypoint")
+                )
             );
             assert_eq!(world.get::<Marker>(e).map(|m| m.kind.as_str()), Some("waypoint"));
             waypoints += 1;
@@ -431,5 +434,5 @@ fn manifest_nodes_spot_chunks_and_spawns() {
             (0xf3f7_4aad, 585),
         ]
     );
-    assert!(scp_tables::class_name(primase_hash::sdbm(b"Teleport")).is_some());
+    assert!(scp_tables::class_name(primase_foundations::hash::sdbm(b"Teleport")).is_some());
 }

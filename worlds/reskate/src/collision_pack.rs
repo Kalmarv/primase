@@ -177,7 +177,7 @@ impl<'a> Pack<'a> {
             let chunks: Vec<(Vec<f32>, Vec<u32>)> = if pos.len() / 3 <= MAX_PIECE_VERTS {
                 vec![(pos, idx)]
             } else {
-                primase_vertex::split_by_vertex_budget(&idx, pos.len() / 3, MAX_PIECE_VERTS)
+                primase_foundations::vertex::split_by_vertex_budget(&idx, pos.len() / 3, MAX_PIECE_VERTS)
                     .expect("valid indices")
                     .into_iter()
                     .map(|c| {

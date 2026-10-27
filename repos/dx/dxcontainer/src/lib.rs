@@ -16,7 +16,7 @@
     clippy::cast_possible_truncation
 )]
 
-use primase_bytes::View;
+use primase_foundations::bytes::View;
 
 /// What is wrong with a container, and where (a byte offset in it).
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -138,9 +138,9 @@ pub fn checksum(container: &[u8]) -> Option<[u8; 16]> {
     let data = container.get(20..)?;
     let bits = u32::try_from(data.len()).ok()?.wrapping_mul(8);
     let (blocks, rest) = data.as_chunks::<64>();
-    let mut state = primase_hash::MD5_INIT;
+    let mut state = primase_foundations::hash::MD5_INIT;
     for block in blocks {
-        primase_hash::md5_block(&mut state, block);
+        primase_foundations::hash::md5_block(&mut state, block);
     }
     let mut last = [0u8; 64];
     if rest.len() < 56 {
@@ -150,11 +150,11 @@ pub fn checksum(container: &[u8]) -> Option<[u8; 16]> {
         let mut first = [0u8; 64];
         first.get_mut(..rest.len())?.copy_from_slice(rest);
         *first.get_mut(rest.len())? = 0x80;
-        primase_hash::md5_block(&mut state, &first);
+        primase_foundations::hash::md5_block(&mut state, &first);
     }
     last.get_mut(..4)?.copy_from_slice(&bits.to_le_bytes());
     last.get_mut(60..)?
         .copy_from_slice(&((bits >> 2) | 1).to_le_bytes());
-    primase_hash::md5_block(&mut state, &last);
-    Some(primase_hash::md5_bytes(state))
+    primase_foundations::hash::md5_block(&mut state, &last);
+    Some(primase_foundations::hash::md5_bytes(state))
 }

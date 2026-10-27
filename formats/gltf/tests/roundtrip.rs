@@ -783,7 +783,7 @@ fn memory_textures_embed_exact_pixels_and_require_normal_conversion() {
         let many = write(
             &distinct,
             &WriteOptions {
-                threads: primase_core::parallel::Threads::new(n).unwrap(),
+                threads: primase_foundations::parallel::Threads::new(n).unwrap(),
                 ..options()
             },
         )

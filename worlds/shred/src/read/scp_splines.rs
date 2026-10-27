@@ -11,7 +11,7 @@
 use super::scene::Unread;
 use super::scp_tables::Section;
 use crate::{Result, invalid};
-use primase_bytes::{Endian, Field, View};
+use primase_foundations::bytes::{Endian, Field, View};
 
 const RECORD: usize = 56;
 

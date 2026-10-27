@@ -15,7 +15,7 @@
 use crate::rage::le::LE;
 use crate::read::xml::Element;
 use crate::{Result, invalid};
-use primase_bytes::{Cursor, Field};
+use primase_foundations::bytes::{Cursor, Field};
 
 const MAGIC: &[u8; 4] = b"RBF0";
 

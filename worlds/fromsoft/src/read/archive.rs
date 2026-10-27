@@ -11,7 +11,7 @@ use crate::{
     game::{ArchivePair, KeySource},
     invalid,
 };
-use primase_core::parallel::Threads;
+use primase_foundations::parallel::Threads;
 use std::{
     collections::BTreeMap,
     io::{Read, Seek, SeekFrom},

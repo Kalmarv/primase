@@ -476,8 +476,8 @@ fn dependencies() {
                     to.path
                 );
                 assert!(
-                    dev || !(to.name == "primase-compress" && enables(spec, "reference-decoder")),
-                    "{} enables primase-compress's `reference-decoder` in [{section}]: the second Kraken decoder is a test aid, \
+                    dev || !(to.name == "primase-foundations" && enables(spec, "reference-decoder")),
+                    "{} enables primase-foundations's `reference-decoder` in [{section}]: the second Kraken decoder is a test aid, \
                      only a dev-dependency may turn it on, so no production crate links it",
                     m.path
                 );

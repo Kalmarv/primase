@@ -30,7 +30,7 @@
 use crate::read::component_types::is_component_type;
 use crate::read::fields::{BodyError, LE, body_error, count, end, expect, object, reference};
 use crate::read::reference::{self, Reference};
-use primase_bytes::{Field, View};
+use primase_foundations::bytes::{Field, View};
 
 /// A record type: equals the CRC-32 of the ASCII string `Entity` (the name a label).
 pub const ENTITY: u32 = 0x0984_415E;
@@ -485,15 +485,19 @@ pub struct StoredEntity {
     pub hierarchy: Option<Vec<u8>>,
 }
 
-/// The body's cursor ([`primase_bytes::Cursor`]), with this record's grammar as methods.
-struct Cursor<'a>(primase_bytes::Cursor<'a>);
+/// The body's cursor ([`primase_foundations::bytes::Cursor`]), with this record's grammar as methods.
+struct Cursor<'a>(primase_foundations::bytes::Cursor<'a>);
 
 impl<'a> Cursor<'a> {
     fn new(b: &'a [u8]) -> Self {
-        Cursor(primase_bytes::Cursor::new(b))
+        Cursor(primase_foundations::bytes::Cursor::new(b))
     }
     /// A cursor over `b` at `at`, refused past its end (naming `what`).
-    fn at(b: &'a [u8], at: usize, what: &'static str) -> Result<Self, primase_bytes::FieldError> {
+    fn at(
+        b: &'a [u8],
+        at: usize,
+        what: &'static str,
+    ) -> Result<Self, primase_foundations::bytes::FieldError> {
         let mut c = Cursor::new(b);
         c.seek(at).field(what)?;
         Ok(c)
@@ -501,7 +505,7 @@ impl<'a> Cursor<'a> {
 }
 
 impl<'a> std::ops::Deref for Cursor<'a> {
-    type Target = primase_bytes::Cursor<'a>;
+    type Target = primase_foundations::bytes::Cursor<'a>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }

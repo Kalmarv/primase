@@ -44,11 +44,11 @@
 
 use std::collections::BTreeMap;
 
-use primase_bytes::{Field, FieldError, View};
 use primase_core::morphs::Deltas;
 use primase_core::{Primitive, Semantic, Stream, Topology};
+use primase_foundations::bytes::{Field, FieldError, View};
 
-const LE: primase_bytes::Endian = primase_bytes::Endian::Little;
+const LE: primase_foundations::bytes::Endian = primase_foundations::bytes::Endian::Little;
 
 /// CRC-32 of `CompiledMesh`.
 pub const COMPILED_MESH: u32 = 0xFC9E_1595;

@@ -5,7 +5,7 @@ use crate::{
     dcx::{Decoder, Envelope},
     invalid,
 };
-use primase_compress::{DEFLATE_MAX_RATIO, Decompressor, Zlib};
+use primase_foundations::compress::{DEFLATE_MAX_RATIO, Decompressor, Zlib};
 /// How many times over the file's bytes a binder's records may decode to (compressed files hold fewer bytes than they
 /// make; the real binders of the games decode to a small multiple of their size).
 const DECODED_TIMES: usize = 64;

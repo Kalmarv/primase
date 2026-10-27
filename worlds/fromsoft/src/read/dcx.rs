@@ -1,6 +1,6 @@
 //! DCX DFLT, KRAK and ZSTD envelopes. Only documented header permutations are accepted.
 use crate::{Result, bytes::View, invalid};
-use primase_compress::{Decompressor, Zlib, Zstd, oodle::Oodle};
+use primase_foundations::compress::{Decompressor, Zlib, Zstd, oodle::Oodle};
 /// The compression a DCX envelope names at offset 40 (`KRAK`, `DFLT`), or `None` for bytes that are not one.
 pub fn compression(data: &[u8]) -> Option<[u8; 4]> {
     if !data.starts_with(b"DCX\0") {

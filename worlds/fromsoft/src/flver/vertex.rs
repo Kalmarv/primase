@@ -1,7 +1,7 @@
 use super::Member;
 use crate::{Result, bytes::View, invalid};
 use half::f16;
-use primase_vertex::Format;
+use primase_foundations::vertex::Format;
 
 /// Decoded attributes in file coordinates. Repeated attributes retain stream order.
 #[derive(Clone, Debug, Default)]

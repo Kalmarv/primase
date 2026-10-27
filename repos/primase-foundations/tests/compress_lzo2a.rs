@@ -1,7 +1,7 @@
 //! LZO2A on hand-worked streams: each fixture's bytes were laid out by hand from lzo2a_d.ch of LZO 2.10 (the flag
 //! bits least significant first, taken into the bit buffer a byte at a time when needed), so each covers one kind of
 //! step and the end code; then the refusals the decoder must make.
-use primase_compress::{Decompressor, Lzo2a};
+use primase_foundations::compress::{Decompressor, Lzo2a};
 
 /// Flags 0 0 0 (three literals) then 1 1 (a two-byte match code) in the first flag byte 0x18; the code 0x20 0x00 is
 /// length field 1 with distance 0: the end of the stream.

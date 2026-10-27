@@ -6,7 +6,7 @@ use crate::{Absent, Error, PixelShader, Views};
 use iridia::{ConstantType, D3dClass, Interface, Member, ResourceKind};
 use std::collections::BTreeMap;
 
-use primase_core::parallel::Threads;
+use primase_foundations::parallel::Threads;
 
 fn error(at: usize, detail: impl Into<String>) -> Error {
     Error {
@@ -457,7 +457,7 @@ pub fn evaluate_raw_with(
         Invocation::Scalar => (0..grid.size).collect(),
         Invocation::Quads => (0..grid.size).step_by(2).collect(),
     };
-    let done = primase_core::parallel::map(threads, &rows, |_, &y| row(y))
+    let done = primase_foundations::parallel::map(threads, &rows, |_, &y| row(y))
         .map_err(|p| error(0, format!("row {}: {}", rows[p.item], p.message)))?;
     let mut pixels: Vec<Vec<([u32; 4], u8)>> =
         targets.iter().map(|_| vec![([0; 4], 0); size * size]).collect();

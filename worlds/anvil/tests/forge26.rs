@@ -79,7 +79,7 @@ fn block(chunks: &[(u16, &[u8])]) -> Vec<u8> {
         b.extend_from_slice(&(stored.len() as u16).to_le_bytes());
     }
     for (_, stored) in chunks {
-        b.extend_from_slice(&primase_hash::adler32(0, stored).to_le_bytes());
+        b.extend_from_slice(&primase_foundations::hash::adler32(0, stored).to_le_bytes());
         b.extend_from_slice(stored);
     }
     b

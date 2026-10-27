@@ -24,7 +24,7 @@
 //! Replacements that share a role share one asset: every donor texture the caller maps to the same replacement is
 //! redirected to the one asset made for it.
 
-use primase_compress::oodle::Oodle;
+use primase_foundations::compress::oodle::Oodle;
 use primase_frostbite::ebx::{Document, ImportReference, Value};
 use primase_frostbite::fbmod::Fbmod;
 use primase_frostbite::folder::{EbxEntry, Source};

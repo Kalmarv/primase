@@ -1,0 +1,34 @@
+[package]
+name = "primase-foundations"
+description = "Checked byte reading, game-file hashes, vertex layouts, an ordered parallel map, and the compression codecs games store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+half.workspace = true
+lz4_flex = { workspace = true, optional = true }
+flate2 = { workspace = true, optional = true }
+ruzstd = { workspace = true, optional = true }
+libloading = { workspace = true, optional = true }
+oozextract = { workspace = true, optional = true }
+
+[features]
+# the codecs (lz4, deflate/zlib, zstd, LZO2A, Oodle): only crates that decompress pay for them
+compress = ["dep:lz4_flex", "dep:flate2", "dep:ruzstd", "dep:libloading", "dep:oozextract"]
+# oozextract as a second Kraken decoder (`reference`) on Windows, for the gates that hold the game's Oodle library to
+# it (off Windows it is the decoder). Only a [dev-dependencies] entry may enable it, so no production crate on Windows
+# uses it (checks/tests/architecture.rs `dependencies`).
+reference-decoder = ["compress"]
+
+[dev-dependencies]
+primase-testdata.workspace = true
+primase-core.workspace = true
+primase-foundations = { workspace = true, features = ["compress", "reference-decoder"] }
+
+[lints]
+workspace = true

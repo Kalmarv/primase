@@ -1,5 +1,5 @@
 //! GTA's byte order, and little-endian numbers decoded from fixed-size arrays already read. The checked reads at an
-//! offset are [`primase_bytes::View`]'s: bytes a file says are there and are not (an offset past the slice, an offset
+//! offset are [`primase_foundations::bytes::View`]'s: bytes a file says are there and are not (an offset past the slice, an offset
 //! that does not fit) are the format's error ([`crate::Error::Invalid`]), never a panic.
 #![deny(
     clippy::arithmetic_side_effects,
@@ -7,8 +7,8 @@
     clippy::cast_possible_truncation
 )]
 /// GTA's resources are little-endian: the byte order of every positional read
-/// (`primase_bytes::View::new(d).u32(o, LE)`).
-pub(crate) const LE: primase_bytes::Endian = primase_bytes::Endian::Little;
+/// (`primase_foundations::bytes::View::new(d).u32(o, LE)`).
+pub(crate) const LE: primase_foundations::bytes::Endian = primase_foundations::bytes::Endian::Little;
 
 /// Two little-endian f32 of an 8-byte array.
 pub(crate) fn f32x2_of(c: &[u8; 8]) -> [f32; 2] {
@@ -94,7 +94,7 @@ pub(crate) fn u16x8_of(c: &[u8; 16]) -> [u16; 8] {
 )]
 mod tests {
     use super::LE;
-    use primase_bytes::View;
+    use primase_foundations::bytes::View;
 
     /// Reads inside the slice return its bytes; one byte past, or an offset that does not fit, is the format's error,
     /// naming the offset and how many bytes there are.

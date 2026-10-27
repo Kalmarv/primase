@@ -2586,7 +2586,7 @@ mod shape_tests {
         b.extend(1u32.to_le_bytes());
         b.extend((data.len() as u32).to_le_bytes());
         b.extend((data.len() as u32).to_le_bytes());
-        b.extend(primase_hash::adler32(0, data).to_le_bytes());
+        b.extend(primase_foundations::hash::adler32(0, data).to_le_bytes());
         b.extend(data);
         b
     }

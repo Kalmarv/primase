@@ -3,8 +3,8 @@
 //! layouts, encoding words, sentinels, gaps, overlaps and nonzero padding are errors.
 use crate::components::{MaterialKey, MaterialParameter, MaterialSampler, SamplerNameSource, ShredMaterial};
 use crate::{Result, invalid};
-use primase_bytes::{Endian::Big, Field, View};
 use primase_core::{Entity, World};
+use primase_foundations::bytes::{Endian::Big, Field, View};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Reflected names from the bound fragment program, indexed by the source hash.
@@ -280,7 +280,7 @@ pub fn fragment_uniform_names(b: &[u8]) -> Result<UniformNames> {
                 continue;
             }
             for n in [name.as_str(), name.split('[').next().unwrap_or(&name)] {
-                let h = primase_hash::sdbm(n.as_bytes());
+                let h = primase_foundations::hash::sdbm(n.as_bytes());
                 if let Some(old) = out.insert(h, n.into())
                     && old != n
                 {

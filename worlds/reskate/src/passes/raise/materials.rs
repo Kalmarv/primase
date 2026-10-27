@@ -293,7 +293,7 @@ pub(super) fn prepare(world: &World, materials: &[(Entity, PbrMaterial)]) -> Res
             // any texel rounded: an OR over the texels, which no thread's order changes
             let quantized = std::sync::atomic::AtomicBool::new(false);
             let texture = primase_image::map_rgba8_levels_with(
-                primase_core::parallel::Threads::of(world),
+                primase_core::parallel::threads(world),
                 source,
                 0..source.levels.len(),
                 primase_image::TextureMetadata {

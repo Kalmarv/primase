@@ -1,4 +1,4 @@
-use primase_compress::{Compressor, Zlib};
+use primase_foundations::compress::{Compressor, Zlib};
 use primase_fromsoft::{
     Binder, NameDictionary,
     bhd::{AesKey, Entry, Header, Range, RecordLayout, unwrap_rsa},

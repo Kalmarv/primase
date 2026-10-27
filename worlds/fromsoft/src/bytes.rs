@@ -1,4 +1,4 @@
-use primase_bytes::{BoundsError, Endian};
+use primase_foundations::bytes::{BoundsError, Endian};
 
 use crate::{Result, invalid};
 pub(crate) struct View<'a> {
@@ -20,27 +20,27 @@ impl<'a> View<'a> {
         invalid(self.format, o, detail)
     }
     pub fn slice(&self, o: usize, n: usize) -> Result<&'a [u8]> {
-        primase_bytes::View::new(self.data)
+        primase_foundations::bytes::View::new(self.data)
             .slice(o, n)
             .map_err(|e| self.short(o, e))
     }
     pub fn u8(&self, o: usize) -> Result<u8> {
-        primase_bytes::View::new(self.data)
+        primase_foundations::bytes::View::new(self.data)
             .u8(o)
             .map_err(|e| self.short(o, e))
     }
     pub fn u16(&self, o: usize) -> Result<u16> {
-        primase_bytes::View::new(self.data)
+        primase_foundations::bytes::View::new(self.data)
             .u16(o, self.endian())
             .map_err(|e| self.short(o, e))
     }
     pub fn u32(&self, o: usize) -> Result<u32> {
-        primase_bytes::View::new(self.data)
+        primase_foundations::bytes::View::new(self.data)
             .u32(o, self.endian())
             .map_err(|e| self.short(o, e))
     }
     pub fn u64(&self, o: usize) -> Result<u64> {
-        primase_bytes::View::new(self.data)
+        primase_foundations::bytes::View::new(self.data)
             .u64(o, self.endian())
             .map_err(|e| self.short(o, e))
     }

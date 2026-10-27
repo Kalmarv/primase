@@ -1,8 +1,8 @@
 //! Synthetic outputs from an independent C# f32 arithmetic harness.
-use primase_vertex::*;
+use primase_foundations::vertex::*;
 #[test]
 fn csharp_arithmetic_bits() {
-    let bytes = include_bytes!("fixtures/arithmetic.bin");
+    let bytes = include_bytes!("fixtures/vertex/arithmetic.bin");
     let mut cursor = 0;
     for raw in i16::MIN..=i16::MAX {
         assert_eq!(&snorm16(raw).to_le_bytes(), &bytes[cursor..cursor + 4]);
@@ -145,7 +145,7 @@ fn topology_boundaries_and_joint_parity() {
 
 #[test]
 fn csharp_quantization_exact() {
-    let mut words = include_bytes!("fixtures/quantization.bin")
+    let mut words = include_bytes!("fixtures/vertex/quantization.bin")
         .as_chunks::<4>()
         .0
         .iter()
@@ -202,7 +202,7 @@ fn configurable_vertex_budget() {
 
 #[test]
 fn stored_normal_csharp_thresholds() {
-    let mut words = include_bytes!("fixtures/stored-normals.bin")
+    let mut words = include_bytes!("fixtures/vertex/stored-normals.bin")
         .as_chunks::<4>()
         .0
         .iter()

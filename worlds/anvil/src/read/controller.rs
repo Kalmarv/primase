@@ -189,7 +189,10 @@ impl Controller {
     /// Match the complete suffix, rejecting duplicate candidates instead of choosing a fog/sky property by its
     /// final name alone (several cloud and fog objects each have Albedo and Density).
     pub fn value(&self, path: &[&str], time: f32) -> Result<Option<[f32; 4]>, String> {
-        let ids: Vec<_> = path.iter().map(|s| primase_hash::crc32(s.as_bytes())).collect();
+        let ids: Vec<_> = path
+            .iter()
+            .map(|s| primase_foundations::hash::crc32(s.as_bytes()))
+            .collect();
         let mut matches = self.tracks.iter().filter(|t| t.path.ends_with(&ids));
         let value = matches.next().map(|t| t.at(time)).transpose()?;
         if matches.next().is_some() {
@@ -283,7 +286,7 @@ mod tests {
         b.extend([255; 2]);
         b.extend([0; 8]);
         b.extend([1, 0, 0]);
-        b.extend(primase_hash::crc32(b"Density").to_le_bytes());
+        b.extend(primase_foundations::hash::crc32(b"Density").to_le_bytes());
         b.extend([0; 25]);
         b.push(3);
         b.extend([0; 2]);

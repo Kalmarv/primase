@@ -10,8 +10,7 @@ publish.workspace = true
 
 [dependencies]
 iridia-interface.workspace = true
-primase-bytes.workspace = true
-primase-compress.workspace = true
+primase-foundations = { workspace = true, features = ["compress"] }
 primase-core.workspace = true
 half.workspace = true
 primase-dxil.workspace = true
@@ -23,7 +22,7 @@ sha1.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-primase-compress = { workspace = true, features = ["reference-decoder"] }
+primase-foundations = { workspace = true, features = ["compress", "reference-decoder"] }
 primase-testdata.workspace = true
 primase-texcodec.workspace = true
 

@@ -13,14 +13,12 @@ iridia-interface.workspace = true
 dxcontainer.workspace = true
 thiserror.workspace = true
 primase-core.workspace = true
-primase-compress.workspace = true
-primase-hash.workspace = true
+primase-foundations = { workspace = true, features = ["compress"] }
 primase-image.workspace = true
 iridia-dxbc.workspace = true
 iridia.workspace = true
 iridia-exec.workspace = true
 primase-meshops.workspace = true
-primase-bytes.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]

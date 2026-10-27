@@ -28,8 +28,8 @@
 //! documents carry the same text in mixed case (`Thumbnail/Tool/Own_...`), and nothing established that the game reads
 //! the difference: that is a choice of this module, not a finding. Nothing else of the mod changes.
 
-use primase_compress::oodle::Oodle;
 use primase_core::TexFormat;
+use primase_foundations::compress::oodle::Oodle;
 use primase_frostbite::ebx::{self, Document, ImportReference, Pointer, Value};
 use primase_frostbite::fbmod::{Body, Fbmod};
 use primase_frostbite::folder::{EbxEntry, Source};

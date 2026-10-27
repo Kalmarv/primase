@@ -14,7 +14,7 @@
 
 use crate::evaluate::Constants;
 use crate::{Error, Evaluation, Grid, Input, PixelShader, Views, evaluate_with};
-use primase_core::parallel::Threads;
+use primase_foundations::parallel::Threads;
 use std::collections::BTreeMap;
 
 fn error(detail: impl Into<String>) -> Error {

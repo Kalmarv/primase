@@ -19,7 +19,7 @@
 //! distances) are not in our executor's register view of a vertex run, and no pixel input reads them: they are counted,
 //! not compared.
 use iridia_exec::Raw;
-use primase_core::parallel::Threads;
+use primase_foundations::parallel::Threads;
 use primase_fromsoft::layer_bake::{Encoded, PipelineState, TARGETS};
 use primase_testdata::{Game, OracleSet, oracle};
 use serde_json::Value;

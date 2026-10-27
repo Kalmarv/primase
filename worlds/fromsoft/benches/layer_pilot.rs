@@ -8,7 +8,7 @@
 #![allow(clippy::unwrap_used)]
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use primase_core::parallel::Threads;
+use primase_foundations::parallel::Threads;
 use primase_fromsoft::layer_bake::{Encoded, PipelineState};
 use primase_testdata::{Game, OracleSet, oracle};
 use sha2::{Digest, Sha256};

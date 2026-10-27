@@ -42,7 +42,7 @@ use crate::components::{
 };
 use crate::read::fields::{BodyError, LE, body_error, count, expect};
 use crate::read::reference::{self, Reference};
-use primase_bytes::{Field, View};
+use primase_foundations::bytes::{Field, View};
 
 /// A record type: the CRC-32 of `BuildTable`.
 pub const BUILD_TABLE: u32 = 0x22EC_BE63;
@@ -86,17 +86,17 @@ pub enum Error {
 }
 body_error!(Error, Error::Body);
 
-/// The body's cursor ([`primase_bytes::Cursor`]), with this record's grammar as methods.
-struct Cursor<'a>(primase_bytes::Cursor<'a>);
+/// The body's cursor ([`primase_foundations::bytes::Cursor`]), with this record's grammar as methods.
+struct Cursor<'a>(primase_foundations::bytes::Cursor<'a>);
 
 impl<'a> Cursor<'a> {
     fn new(b: &'a [u8]) -> Self {
-        Cursor(primase_bytes::Cursor::new(b))
+        Cursor(primase_foundations::bytes::Cursor::new(b))
     }
 }
 
 impl<'a> std::ops::Deref for Cursor<'a> {
-    type Target = primase_bytes::Cursor<'a>;
+    type Target = primase_foundations::bytes::Cursor<'a>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }

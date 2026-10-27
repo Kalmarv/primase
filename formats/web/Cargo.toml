@@ -15,6 +15,7 @@ fixture = []
 ktx2 = ["dep:basisu_c_sys", "dep:primase-image", "dep:primase-cache"]
 
 [dependencies]
+primase-foundations.workspace = true
 basisu_c_sys = { workspace = true, optional = true }
 primase-image = { workspace = true, optional = true }
 primase-cache = { workspace = true, optional = true }

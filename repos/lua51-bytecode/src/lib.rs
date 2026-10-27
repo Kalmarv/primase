@@ -26,7 +26,7 @@ mod instruction;
 
 pub use calls::{Call, Value, calls};
 pub use instruction::{Instruction, Layout, Op, Operand};
-use primase_bytes::{BoundsError, Cursor, Endian};
+use primase_foundations::bytes::{BoundsError, Cursor, Endian};
 
 /// What is wrong with a chunk, and where (a byte offset in it).
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]

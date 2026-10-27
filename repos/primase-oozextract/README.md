@@ -1,7 +1,7 @@
 # oozextract (primase's copy)
 
 oozextract 0.5.6 (https://github.com/lvlvllvlvllvlvl/oozextract, tag `v0.5.6`, commit 78f0e1d), a Rust Kraken / Mermaid /
-Selkie / Leviathan / LZNA / Bitknit decompressor, with the changes below. It is `primase-compress`'s Oodle decoder off
+Selkie / Leviathan / LZNA / Bitknit decompressor, with the changes below. It is `primase-foundations`'s Oodle decoder off
 Windows (`[patch.crates-io]` in the workspace manifest); on Windows the game's own library decodes and the gates hold this
 copy equal to it. The crate is not a workspace member: its tests run with `cargo test` in this folder.
 
@@ -18,7 +18,7 @@ declared-MIT, unverified.
   213 MB: their plain bytes), 541 MB with no licence file in the upstream repository and the corpus files under their own
   licences. The four tests that read them (`read`, `read_from_slice`, `read_async`, `read_stream`) are `#[ignore]`d; with the
   two folders from the `v0.5.6` tag placed here, `cargo test -- --ignored` runs them. The decoders are held against the game
-  library's own output by the gates in primase-compress and worlds/fromsoft instead.
+  library's own output by the gates in primase-foundations and worlds/fromsoft instead.
 - `decode_bytes_type12` (`src/decoder/mod.rs`): a Huffman chunk whose code lengths name a single symbol returns the chunk's
   declared size, not `src - src_end`. 0.5.6 reported such a chunk as using 0 bytes and refused it ("Expected 0 == 3 for
   chunk type 4"); the game's library decodes it. Test: `single_symbol_huffman_chunk_uses_its_declared_size`.
@@ -27,5 +27,5 @@ declared-MIT, unverified.
   Sekiro's archives and the game's Oodle 6 library's output for them (all 50 decode to the same bytes), not from
   another decoder's source. Tests: `lzb16_commands`, `lzb16_refuses_a_match_before_its_history`. Its block size (16 KiB,
   with the two-byte quantum header) and the long length forms are checked against the game library's own compressor 4,
-  which writes decoder type 2: 60 inputs of 1 to 600000 bytes, all exact (primase-compress `lzb16_cross_check`); and
+  which writes decoder type 2: 60 inputs of 1 to 600000 bytes, all exact (primase-foundations `lzb16_cross_check`); and
   Sekiro's 7829 and Elden Ring's 71312 Kraken-framed streams decode to the library's bytes (`krak_archive`).

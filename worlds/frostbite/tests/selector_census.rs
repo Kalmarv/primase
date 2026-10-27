@@ -18,7 +18,7 @@
 
 use std::collections::BTreeMap;
 
-use primase_compress::oodle::{Oodle, Version};
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_frostbite::folder::{Folder, Source};
 use primase_frostbite::lookup;
 use primase_frostbite::selector::{Selector, Target};

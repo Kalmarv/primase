@@ -35,7 +35,7 @@
 )]
 
 use crate::read::fields::LE;
-use primase_bytes::{Cursor, Field, FieldError};
+use primase_foundations::bytes::{Cursor, Field, FieldError};
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};

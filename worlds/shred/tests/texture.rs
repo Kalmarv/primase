@@ -45,7 +45,7 @@ fn pak(rows: &[(&str, Option<&[u8]>)]) -> Pak {
     for ((name, data), name_offset) in rows.iter().zip(offsets) {
         let size = data.map_or(0, |d| d.len());
         for n in [
-            primase_hash::sdbm(name.as_bytes()),
+            primase_foundations::hash::sdbm(name.as_bytes()),
             name_offset as u32,
             u32::from(data.is_none()),
             if data.is_none() { 0 } else { 16 },

@@ -71,7 +71,7 @@ fn frame_change_keeps_fronts_and_bitangents() {
     let proto = w.spawn();
     let def = ArchetypeDef {
         kind: ArchetypeKind::Base,
-        name: primase_hash::joaat(stem.as_bytes()),
+        name: primase_foundations::hash::joaat(stem.as_bytes()),
         lod_dist: 100.0,
         flags: 0,
         special_attribute: 0,
@@ -85,7 +85,7 @@ fn frame_change_keeps_fronts_and_bitangents() {
         drawable_dictionary: 0,
         physics_dictionary: 0,
         asset_type: 2,
-        asset_name: primase_hash::joaat(stem.as_bytes()),
+        asset_name: primase_foundations::hash::joaat(stem.as_bytes()),
         time_flags: None,
         extensions: 0,
         interior: None,

@@ -29,7 +29,7 @@
 )]
 use std::collections::BTreeMap;
 
-use primase_bytes::{BoundsError, Endian::Big, View};
+use primase_foundations::bytes::{BoundsError, Endian::Big, View};
 
 use crate::{Error, Result, invalid};
 

@@ -13,8 +13,8 @@
 
 #![allow(clippy::unwrap_used)]
 
-use primase_compress::oodle::{Oodle, Version};
 use primase_core::TexFormat;
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_frostbite::ebx::{self, Pointer, Value};
 use primase_frostbite::fbmod::{self, Body, Fbmod};
 use primase_frostbite::folder::{Folder, Source};

@@ -30,7 +30,7 @@
     clippy::cast_possible_truncation
 )]
 
-use primase_compress::{Decompressor, Lz4};
+use primase_foundations::compress::{Decompressor, Lz4};
 
 /// A tile's side, in samples.
 pub const SIDE: usize = 132;
@@ -197,7 +197,7 @@ pub enum Error {
     #[error("coded block: height sums overflow")]
     Overflow,
     #[error("LZ4 tile: {0}")]
-    Lz4(#[from] primase_compress::Error),
+    Lz4(#[from] primase_foundations::compress::Error),
 }
 
 /// Bits of `bytes`, most significant first, from bit `at`.

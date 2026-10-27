@@ -91,7 +91,7 @@ fn all_material_banks_and_source_reference_census() {
     for m in &all {
         for p in &m.parameters {
             if let Some(n) = &p.name {
-                assert_eq!(primase_hash::sdbm(n.as_bytes()), p.hash);
+                assert_eq!(primase_foundations::hash::sdbm(n.as_bytes()), p.hash);
                 named += 1;
             } else {
                 unnamed += 1;
@@ -99,7 +99,7 @@ fn all_material_banks_and_source_reference_census() {
         }
         for s in &m.samplers {
             if let Some(name) = &s.name {
-                assert_eq!(primase_hash::sdbm(name.as_bytes()), s.hash);
+                assert_eq!(primase_foundations::hash::sdbm(name.as_bytes()), s.hash);
                 assert_eq!(
                     s.name_source,
                     Some(primase_shred::components::SamplerNameSource::ExecutableStringSdbm)

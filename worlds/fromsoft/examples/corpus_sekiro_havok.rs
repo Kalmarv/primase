@@ -9,7 +9,7 @@
 
 use std::path::PathBuf;
 
-use primase_compress::oodle::{Oodle, Version};
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_fromsoft::{Archive, Binder, Game, dcx::Decoder};
 
 type BoxError = Box<dyn std::error::Error>;

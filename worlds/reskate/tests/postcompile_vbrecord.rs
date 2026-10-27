@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use common::{BAM, R, ROOT, all_files, index_buffer, meshes, rows, stream};
-use primase_compress::oodle::{Oodle, Version};
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_reskate::postcompile::fb::folder::{Folder, Source};
 use primase_reskate::postcompile::finish::finish;
 use primase_reskate::postcompile::map_folder;

@@ -3,7 +3,7 @@
 //! Oracle: the layout written here, and the inputs it was written from.
 use std::io::Write;
 
-use primase_compress::{Compressor, Deflate};
+use primase_foundations::compress::{Compressor, Deflate};
 use primase_gta::rage::resource::PageFlags;
 use primase_gta::read::archive::keys::Keys;
 use primase_gta::read::archive::rpf::{Archive, EntryKind};

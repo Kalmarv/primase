@@ -111,7 +111,7 @@ pub fn classes(w: &World) -> Result<BTreeMap<Entity, ShaderClass>, String> {
 
 /// A shader parameter by its Enhanced name.
 pub fn param<'a>(s: &'a GtaShader, name: &str) -> Option<&'a GtaParam> {
-    let h = primase_hash::joaat(name.as_bytes());
+    let h = primase_foundations::hash::joaat(name.as_bytes());
     s.params.iter().find(|(n, _)| *n == h).map(|(_, p)| p)
 }
 
@@ -1254,15 +1254,15 @@ mod tests {
             GtaShader {
                 drawable: "d".into(),
                 index: 0,
-                name: primase_hash::joaat(b"normal_spec"),
+                name: primase_foundations::hash::joaat(b"normal_spec"),
                 preset: 0,
                 render_bucket: 0,
                 bucket_mask: 0,
                 params: vec![
-                    (primase_hash::joaat(b"DiffuseTex"), tex(diffuse)),
-                    (primase_hash::joaat(b"BumpTex"), tex(bump)),
+                    (primase_foundations::hash::joaat(b"DiffuseTex"), tex(diffuse)),
+                    (primase_foundations::hash::joaat(b"BumpTex"), tex(bump)),
                     (
-                        primase_hash::joaat(b"Bumpiness"),
+                        primase_foundations::hash::joaat(b"Bumpiness"),
                         GtaParam::Floats(vec![0.5, 0.0, 0.0, 0.0]),
                     ),
                 ],
@@ -1334,7 +1334,7 @@ mod tests {
                 GtaShader {
                     drawable: "d".into(),
                     index: 0,
-                    name: primase_hash::joaat(effect),
+                    name: primase_foundations::hash::joaat(effect),
                     preset: 0,
                     render_bucket,
                     bucket_mask: 0,
@@ -1408,13 +1408,13 @@ mod tests {
             GtaShader {
                 drawable: "d".into(),
                 index: 0,
-                name: primase_hash::joaat(b"normal_spec_tnt"),
+                name: primase_foundations::hash::joaat(b"normal_spec_tnt"),
                 preset: 0,
                 render_bucket: 0,
                 bucket_mask: 0,
                 params: vec![
-                    (primase_hash::joaat(b"DiffuseTex"), tex(diffuse)),
-                    (primase_hash::joaat(b"TintPaletteTex"), tex(palette)),
+                    (primase_foundations::hash::joaat(b"DiffuseTex"), tex(diffuse)),
+                    (primase_foundations::hash::joaat(b"TintPaletteTex"), tex(palette)),
                 ],
             },
         );
@@ -1473,7 +1473,7 @@ mod tests {
                 GtaShader {
                     drawable: "d".into(),
                     index: 0,
-                    name: primase_hash::joaat(effect),
+                    name: primase_foundations::hash::joaat(effect),
                     preset: 0,
                     render_bucket: 0,
                     bucket_mask: 0,
@@ -1519,17 +1519,17 @@ mod tests {
         let shader = |r0: [f32; 3], r1: [f32; 3]| GtaShader {
             drawable: "d".into(),
             index: 0,
-            name: primase_hash::joaat(b"emissive"),
+            name: primase_foundations::hash::joaat(b"emissive"),
             preset: 0,
             render_bucket: 0,
             bucket_mask: 0,
             params: vec![
                 (
-                    primase_hash::joaat(b"globalAnimUV0"),
+                    primase_foundations::hash::joaat(b"globalAnimUV0"),
                     GtaParam::Floats(r0.to_vec()),
                 ),
                 (
-                    primase_hash::joaat(b"globalAnimUV1"),
+                    primase_foundations::hash::joaat(b"globalAnimUV1"),
                     GtaParam::Floats(r1.to_vec()),
                 ),
             ],
@@ -1636,7 +1636,7 @@ mod tests {
                 GtaShader {
                     drawable: "d".into(),
                     index: 0,
-                    name: primase_hash::joaat(effect),
+                    name: primase_foundations::hash::joaat(effect),
                     preset: 0,
                     render_bucket: 0,
                     bucket_mask: 0,
@@ -1746,12 +1746,12 @@ mod tests {
             GtaShader {
                 drawable: "d".into(),
                 index: 0,
-                name: primase_hash::joaat(b"emissive"),
+                name: primase_foundations::hash::joaat(b"emissive"),
                 preset: 0,
                 render_bucket: 0,
                 bucket_mask: 0,
                 params: vec![(
-                    primase_hash::joaat(b"DiffuseTex"),
+                    primase_foundations::hash::joaat(b"DiffuseTex"),
                     crate::components::GtaParam::Texture {
                         name: None,
                         texture: Some(t),

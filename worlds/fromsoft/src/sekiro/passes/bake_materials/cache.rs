@@ -325,8 +325,8 @@ fn frame(b: &Product) -> Result<Vec<u8>, String> {
 }
 
 fn unframe(value: &[u8]) -> Option<Product> {
-    let mut cursor = primase_bytes::Cursor::new(value);
-    let len = usize::try_from(cursor.u64(primase_bytes::Endian::Little).ok()?).ok()?;
+    let mut cursor = primase_foundations::bytes::Cursor::new(value);
+    let len = usize::try_from(cursor.u64(primase_foundations::bytes::Endian::Little).ok()?).ok()?;
     let m: Metadata = serde_json::from_slice(cursor.take(len).ok()?).ok()?;
     if m.version != BAKE_VERSION || !(1..=4096).contains(&m.size) {
         return None;

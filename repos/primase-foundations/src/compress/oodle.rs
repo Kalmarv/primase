@@ -1,7 +1,7 @@
 //! Oodle, from a caller-selected, trusted game library (no discovery) where the game ships one for the platform
 //! (Windows), else from oozextract: [`Oodle::open`] picks. The game's library stays the reference; the gates hold
 //! oozextract to it (`reference`).
-use crate::{Compressor, Decompressor, Result, buffer, check_size, invalid};
+use crate::compress::{Compressor, Decompressor, Result, buffer, check_size, invalid};
 use std::{ffi::c_void, path::Path};
 type Decode = unsafe extern "C" fn(
     *const u8,
@@ -145,11 +145,11 @@ impl Decompressor for Oodle {
         let library = match &self.backend {
             Backend::Library(library) => library,
             Backend::Portable => {
-                return crate::reference::decode(input, expected).map_err(|e| invalid("oodle", 0, e));
+                return crate::compress::reference::decode(input, expected).map_err(|e| invalid("oodle", 0, e));
             }
         };
-        let src_len = isize::try_from(input.len()).map_err(|_| crate::Error::Limit)?;
-        let dst_len = isize::try_from(expected).map_err(|_| crate::Error::Limit)?;
+        let src_len = isize::try_from(input.len()).map_err(|_| crate::compress::Error::Limit)?;
+        let dst_len = isize::try_from(expected).map_err(|_| crate::compress::Error::Limit)?;
         let mut out = buffer(expected)?;
         // SAFETY: slices are live, non-overlapping and sized as passed; fuzz-safe
         // decode enabled, no callbacks or external dictionary, synchronous phases.
@@ -209,7 +209,7 @@ impl Oodle {
             }
         };
         let compressor = codec.0;
-        let n = isize::try_from(input.len()).map_err(|_| crate::Error::Limit)?;
+        let n = isize::try_from(input.len()).map_err(|_| crate::compress::Error::Limit)?;
         // SAFETY: pure size query with the codec's enum and validated positive length.
         let cap = unsafe {
             match library.capacity {
@@ -286,7 +286,7 @@ mod tests {
                 if n != 0 {
                     report.compare_bytes(
                         format!("ooz/{n}"),
-                        &crate::reference::decode(&compressed, n)?,
+                        &crate::compress::reference::decode(&compressed, n)?,
                         &src,
                     );
                 }
@@ -385,7 +385,7 @@ mod tests {
                     let compressed = dll.compress_as(Codec(id), &src)?;
                     let item = format!("compressor {id} {shape}/{n}");
                     checked += 1;
-                    let problem = match crate::reference::decode(&compressed, n) {
+                    let problem = match crate::compress::reference::decode(&compressed, n) {
                         Ok(b) if b == src => None,
                         Ok(_) => Some("oozextract decodes other bytes".to_owned()),
                         Err(e) => Some(e.to_string().lines().next().unwrap_or_default().to_owned()),
@@ -438,12 +438,12 @@ mod tests {
                 .map(|i| ((i * 17 + i / 256 + j) % 251) as u8)
                 .collect();
             let compressed = dll.compress(&part)?;
-            assert_eq!(crate::reference::decode(&compressed, part.len())?, part);
+            assert_eq!(crate::compress::reference::decode(&compressed, part.len())?, part);
             raw.extend(part);
             encoded.extend(compressed);
         }
         assert_eq!(dll.decompress(&encoded, raw.len())?, raw);
-        assert_eq!(crate::reference::decode(&encoded, raw.len())?, raw);
+        assert_eq!(crate::compress::reference::decode(&encoded, raw.len())?, raw);
         Ok(())
     }
 }

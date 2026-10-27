@@ -202,7 +202,7 @@ fn on_any_thread_count_the_bake_is_the_serial_one() {
     let inputs = BTreeMap::from([(("TEXCOORD".to_owned(), 0), Input::GridUv)]);
     let run = |n: usize| {
         let e = iridia_exec::evaluate_periodic_with(
-            primase_core::parallel::Threads::new(n).unwrap(),
+            primase_foundations::parallel::Threads::new(n).unwrap(),
             &s,
             &Constants::new(&Layout::default()),
             &Views::refusing(BTreeMap::new()),

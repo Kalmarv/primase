@@ -4,13 +4,13 @@
 
 #![allow(clippy::unwrap_used)]
 
-use primase_core::parallel::Threads;
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
 use primase_core::pbr::{PbrMaterial, TextureRef};
 use primase_core::{
     ColorSpace, Entity, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, TexFormat, TexRole,
     Texture, World,
 };
+use primase_foundations::parallel::Threads;
 use primase_image::{MissingLevels, NormalizeNormals, OrmSize, PackOrm};
 
 fn noise(n: usize, seed: u32) -> Vec<u8> {

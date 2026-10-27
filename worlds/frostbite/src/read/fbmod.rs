@@ -5,8 +5,8 @@ use crate::Cas;
 use crate::cas;
 use crate::fbmod::Fbmod;
 use crate::{Result, bad};
-use primase_compress::Decompressor;
-use primase_compress::oodle::Oodle;
+use primase_foundations::compress::Decompressor;
+use primase_foundations::compress::oodle::Oodle;
 
 impl Fbmod {
     /// Payload `i` decoded; `oodle` is needed only for Oodle blocks.

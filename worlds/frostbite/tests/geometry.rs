@@ -9,8 +9,8 @@
 use std::collections::BTreeMap;
 
 use half::f16;
-use primase_compress::oodle::{Oodle, Version};
 use primase_core::{Lods, Mesh, Semantic, Stream, World};
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_frostbite::MESHSET;
 use primase_frostbite::bundle::Kind;
 use primase_frostbite::components::{FrostbiteMeshSet, FrostbiteVertexElements};

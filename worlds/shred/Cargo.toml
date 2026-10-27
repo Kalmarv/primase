@@ -13,9 +13,7 @@ primase-core.workspace = true
 primase-texcodec.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-primase-bytes.workspace = true
-primase-compress.workspace = true
-primase-hash.workspace = true
+primase-foundations = { workspace = true, features = ["compress"] }
 primase-havok.workspace = true
 rsx-reader.workspace = true
 morpheme-formats.workspace = true

@@ -325,7 +325,7 @@ fn kept_by_the_alpha_tested_program(w: &World, m: &AnvilMaterial, size: u32) -> 
         (("COLOR".to_owned(), 0), constant([0.0, 1.0, 1.0, 1.0])),
     ]);
     let raw = evaluate_raw_with(
-        primase_core::parallel::Threads::of(w),
+        primase_core::parallel::threads(w),
         &shader,
         &constants,
         &textures,

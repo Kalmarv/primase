@@ -52,9 +52,9 @@
 
 use std::fmt::Write as _;
 
-use primase_compress::oodle::{Oodle, Version};
 use primase_core::shader::Shader;
 use primase_core::{Entity, World};
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_frostbite::MESHSET;
 use primase_frostbite::bundle::Kind;
 use primase_frostbite::components::{

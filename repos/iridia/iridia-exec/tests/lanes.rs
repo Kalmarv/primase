@@ -11,7 +11,7 @@ use iridia_exec::{
     Error, Execution, Grid, Image, Input, Invocation, Layout, PixelShader, ProgramShader, Raw, Sampler, View,
     Views, evaluate_raw_with,
 };
-use primase_core::parallel::Threads;
+use primase_foundations::parallel::Threads;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 

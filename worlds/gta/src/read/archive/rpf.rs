@@ -15,7 +15,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
-use primase_compress::{DEFLATE_MAX_RATIO, Decompressor, Deflate};
+use primase_foundations::compress::{DEFLATE_MAX_RATIO, Decompressor, Deflate};
 
 use crate::rage::resource::{self, PageFlags, Resource};
 use crate::read::archive::keys::Keys;

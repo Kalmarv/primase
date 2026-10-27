@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use primase_compress::oodle::{Oodle, Version};
+use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_reskate::postcompile::fb::bundle;
 use primase_reskate::postcompile::fb::ebx::{
     self, BoxedRef, BoxedValueRecord, Document, FieldValue, Instance, Object, TypeDescriptor, Value,

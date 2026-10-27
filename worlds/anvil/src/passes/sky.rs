@@ -424,7 +424,10 @@ mod tests {
     }
     fn track(path: &[&str], value: [f32; 4]) -> Track {
         Track {
-            path: path.iter().map(|s| primase_hash::crc32(s.as_bytes())).collect(),
+            path: path
+                .iter()
+                .map(|s| primase_foundations::hash::crc32(s.as_bytes()))
+                .collect(),
             kind: 0x8BE9_C203,
             times: vec![0, 2880],
             values: vec![value, value],

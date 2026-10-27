@@ -37,9 +37,9 @@ pub struct Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// A read past the animation data ([`primase_bytes::Cursor`]): the error at the read's offset.
-impl From<primase_bytes::BoundsError> for Error {
-    fn from(e: primase_bytes::BoundsError) -> Self {
+/// A read past the animation data ([`primase_foundations::bytes::Cursor`]): the error at the read's offset.
+impl From<primase_foundations::bytes::BoundsError> for Error {
+    fn from(e: primase_foundations::bytes::BoundsError) -> Self {
         invalid(
             usize::try_from(e.absolute()).unwrap_or(usize::MAX),
             "the block runs past the animation data",

@@ -48,7 +48,7 @@ fn chunked(chunks: &[(usize, &[u8])]) -> Vec<u8> {
         b.extend_from_slice(&len(stored.len()));
     }
     for (_, stored) in chunks {
-        b.extend_from_slice(&primase_hash::adler32(0, stored).to_le_bytes());
+        b.extend_from_slice(&primase_foundations::hash::adler32(0, stored).to_le_bytes());
         b.extend_from_slice(stored);
     }
     b
@@ -61,7 +61,7 @@ fn good(decoded: &[u8], stored: &[u8]) -> Vec<u8> {
         1,
         u32::try_from(decoded.len()).expect("a test length"),
         stored,
-        primase_hash::adler32(0, stored),
+        primase_foundations::hash::adler32(0, stored),
     )
 }
 
@@ -126,7 +126,7 @@ fn what_is_not_established_is_refused() {
         e.extend(second);
         e
     };
-    let sum = primase_hash::adler32(0, &frame);
+    let sum = primase_foundations::hash::adler32(0, &frame);
     let n = u32::try_from(res.len()).unwrap();
     assert!(matches!(
         read_entry(&entry(block(3, 5, 1, n, &frame, sum)), BOUND),
@@ -145,7 +145,7 @@ fn what_is_not_established_is_refused() {
         Err(Error::Checksum { .. })
     ));
     // the checksum is from 0, not the standard 1
-    let standard = primase_hash::adler32(1, &frame);
+    let standard = primase_foundations::hash::adler32(1, &frame);
     assert!(matches!(
         read_entry(&entry(block(2, 5, 1, n, &frame, standard)), BOUND),
         Err(Error::Checksum { .. })
