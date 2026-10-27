@@ -24,6 +24,8 @@ fn definition() -> MaterialDefinition {
 }
 fn source() -> flver::Material {
     flver::Material {
+        string_bytes: 0,
+        index: 0,
         name: "synthetic".into(),
         mtd: "wood.mtd".into(),
         textures: vec![],

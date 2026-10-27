@@ -65,6 +65,8 @@ fn far_placements_are_declared_drops() {
 fn layered(skip: Option<materials::SkipClass>) -> Material {
     let mut m = materials::resolve(
         &fromsoft_formats::flver::Material {
+            string_bytes: 0,
+            index: 0,
             name: "fixture".into(),
             mtd: "fixture.mtd".into(),
             gx: vec![],
@@ -279,6 +281,8 @@ fn a_lowered_material_carries_what_its_source_class_states_about_its_surfaces() 
     let source = |shader: &str, parameters: Vec<fromsoft_formats::mtd::Parameter>| {
         materials::resolve(
             &fromsoft_formats::flver::Material {
+                string_bytes: 0,
+                index: 0,
                 name: "fixture".into(),
                 mtd: "fixture.mtd".into(),
                 gx: vec![],
@@ -368,6 +372,8 @@ fn sekiros_rivers_and_waterfalls_are_water_by_their_shader_family() {
     let class = |shader: &str| {
         materials::resolve(
             &fromsoft_formats::flver::Material {
+                string_bytes: 0,
+                index: 0,
                 name: "fixture".into(),
                 mtd: "fixture.mtd".into(),
                 gx: vec![],
@@ -407,6 +413,8 @@ fn an_additive_blend_is_a_light_volume_in_sekiro_and_an_additive_surface_in_elde
     let resolve = |game: Game, shader: &str, blend: i32| {
         materials::resolve_definition(
             &fromsoft_formats::flver::Material {
+                string_bytes: 0,
+                index: 0,
                 name: "fixture".into(),
                 mtd: "fixture.mtd".into(),
                 gx: vec![],
@@ -761,6 +769,8 @@ fn static_arm(
         speedtree: false,
         layouts: vec![vec![member(0, 2, 0), member(3, normal_kind, 12)]],
         materials: vec![fromsoft_formats::flver::Material {
+            string_bytes: 0,
+            index: 0,
             name: "fixture".into(),
             mtd: "fixture.mtd".into(),
             gx: vec![],

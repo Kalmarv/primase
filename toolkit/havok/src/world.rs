@@ -1006,7 +1006,6 @@ mod tests {
     fn with_motion(w: &mut World, e: Entity) {
         let mut a = w.get::<HavokAnimation>(e).unwrap().clone();
         a.extracted_motion = Some(ReferenceFrame {
-            frame_type: 0,
             up: [0.0, 1.0, 0.0, 0.0],
             forward: [0.0, 0.0, 1.0, 0.0],
             duration: 2.0,

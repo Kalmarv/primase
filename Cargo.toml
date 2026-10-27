@@ -48,7 +48,7 @@ encoding_rs = { version = "=0.8.42", default-features = false, features = ["allo
 meshopt = { version = "=0.6.2", default-features = false }
 aes = { version = "=0.9.3", default-features = false }
 num-bigint = { version = "=0.5.1", default-features = false, features = ["std"] }
-fromsoft-formats = { git = "https://github.com/Kalmarv/fromsoft-formats", rev = "9055655205c8be29c165dfe70f5173a5f02d1423" }
+fromsoft-formats = { git = "https://github.com/Kalmarv/fromsoft-formats", rev = "d4067f440ccaf2f32a71d4153c529117f473e1b5" }
 primase-fromsoft = { path = "worlds/fromsoft" }
 lz4_flex = { version = "=0.14.0", default-features = false, features = ["std", "safe-encode", "safe-decode", "checked-decode"] }
 flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
@@ -66,24 +66,24 @@ primase-animation = { path = "toolkit/animation" }
 primase-lighting = { path = "toolkit/lighting" }
 primase-glb = { path = "toolkit/glb" }
 primase-exactsum = { path = "toolkit/exactsum" }
-dxcontainer = { git = "https://github.com/Kalmarv/dx", rev = "ee5dce9e8d52ccdf54864245ecca2cc0ee8a53bf" }
-rsx-reader = { git = "https://github.com/Kalmarv/dx", rev = "ee5dce9e8d52ccdf54864245ecca2cc0ee8a53bf" }
+dxcontainer = { git = "https://github.com/Kalmarv/dx", rev = "91c6b5e1ddcb71472414c92759911949428bba93" }
+rsx-reader = { git = "https://github.com/Kalmarv/dx", rev = "91c6b5e1ddcb71472414c92759911949428bba93" }
 primase-cache = { path = "toolkit/cache" }
-havok-formats = { git = "https://github.com/Kalmarv/havok-formats", rev = "850a3edbbd563471fc7f4a7d5e56f04592babc89" }
+havok-formats = { git = "https://github.com/Kalmarv/havok-formats", rev = "d02a031aa67c3893a1ff7225703c5ef8923127ee" }
 primase-havok = { path = "toolkit/havok" }
 morpheme-formats = { git = "https://github.com/Kalmarv/morpheme-formats", rev = "3bed1179a9ef237865e9b8fefe306484c735a2e2" }
-rme-formats = { git = "https://github.com/Kalmarv/rme-formats", rev = "4a6e2e3dda68d3dd6a475c65af32934ed51ae034" }
+rme-formats = { git = "https://github.com/Kalmarv/rme-formats", rev = "36ed8c7e5d88981499c8d2ae821b7b3ec712cc1e" }
 unity-formats = { git = "https://github.com/Kalmarv/unity-formats", rev = "6f0a1fc6753f4f7fa75aed838c716580afc10de5" }
 monogame-formats = { git = "https://github.com/Kalmarv/monogame-formats", rev = "914dda828e636d8f2688498354653ffebd819599" }
 lua51-bytecode = { git = "https://github.com/Kalmarv/lua51-bytecode", rev = "07acfdfb6fd703a166e9f185604f7f1623f51ca0" }
-dxbc-reader = { git = "https://github.com/Kalmarv/dx", rev = "ee5dce9e8d52ccdf54864245ecca2cc0ee8a53bf" }
-iridia-dxbc = { git = "https://github.com/Kalmarv/iridia", rev = "0e6c4771b966d7d2344f7ea747f0a1ee9dee9bdd" }
-iridia-d3d9 = { git = "https://github.com/Kalmarv/iridia", rev = "0e6c4771b966d7d2344f7ea747f0a1ee9dee9bdd" }
-iridia-interface = { git = "https://github.com/Kalmarv/iridia", rev = "0e6c4771b966d7d2344f7ea747f0a1ee9dee9bdd" }
-iridia = { git = "https://github.com/Kalmarv/iridia", rev = "0e6c4771b966d7d2344f7ea747f0a1ee9dee9bdd" }
-iridia-exec = { git = "https://github.com/Kalmarv/iridia", rev = "0e6c4771b966d7d2344f7ea747f0a1ee9dee9bdd" }
-iridia-dxil = { git = "https://github.com/Kalmarv/iridia", rev = "0e6c4771b966d7d2344f7ea747f0a1ee9dee9bdd" }
-iridia-mojo = { git = "https://github.com/Kalmarv/iridia", rev = "0e6c4771b966d7d2344f7ea747f0a1ee9dee9bdd" }
+dxbc-reader = { git = "https://github.com/Kalmarv/dx", rev = "91c6b5e1ddcb71472414c92759911949428bba93" }
+iridia-dxbc = { git = "https://github.com/Kalmarv/iridia", rev = "6669cc18459d4bc0e468827cb468d37c8d6bcff9" }
+iridia-d3d9 = { git = "https://github.com/Kalmarv/iridia", rev = "6669cc18459d4bc0e468827cb468d37c8d6bcff9" }
+iridia-interface = { git = "https://github.com/Kalmarv/iridia", rev = "6669cc18459d4bc0e468827cb468d37c8d6bcff9" }
+iridia = { git = "https://github.com/Kalmarv/iridia", rev = "6669cc18459d4bc0e468827cb468d37c8d6bcff9" }
+iridia-exec = { git = "https://github.com/Kalmarv/iridia", rev = "6669cc18459d4bc0e468827cb468d37c8d6bcff9" }
+iridia-dxil = { git = "https://github.com/Kalmarv/iridia", rev = "6669cc18459d4bc0e468827cb468d37c8d6bcff9" }
+iridia-mojo = { git = "https://github.com/Kalmarv/iridia", rev = "6669cc18459d4bc0e468827cb468d37c8d6bcff9" }
 primase-frostbite = { path = "worlds/frostbite" }
 primase-gltf = { path = "formats/gltf" }
 primase-web = { path = "formats/web" }
@@ -96,8 +96,8 @@ primase-monogame = { path = "worlds/monogame" }
 primase-anvil = { path = "worlds/anvil" }
 primase-shaunwhite = { path = "worlds/shaunwhite" }
 primase-shred = { path = "worlds/shred" }
-anvil-formats = { git = "https://github.com/Kalmarv/anvil-formats", rev = "039ab87775795ac49a1067eaf9d84a2fad0a38da" }
-dxil-reader = { git = "https://github.com/Kalmarv/dx", rev = "ee5dce9e8d52ccdf54864245ecca2cc0ee8a53bf" }
+anvil-formats = { git = "https://github.com/Kalmarv/anvil-formats", rev = "c2e1ac37d8ba8c0a5acc161a769bbfd2ab0f1db7" }
+dxil-reader = { git = "https://github.com/Kalmarv/dx", rev = "91c6b5e1ddcb71472414c92759911949428bba93" }
 frostbite-formats = { git = "https://github.com/Kalmarv/frostbite-formats", rev = "9dbc4584a9f0a40a529dccf6c57d9fcc0d70fe80" }
 rage-engine-formats = { git = "https://github.com/Kalmarv/rage-engine-formats", rev = "55ddde5ce56b7e552749f3ba84a60f796f5d982a" }
 

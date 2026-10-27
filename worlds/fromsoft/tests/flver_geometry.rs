@@ -23,6 +23,8 @@ fn fixture() -> Vec<u8> {
     b[73] = 1;
     put(&mut b, 128, 408);
     put(&mut b, 132, 410);
+    // the material's string byte count: two empty UTF-16 strings, terminators only
+    put(&mut b, 144, 4);
     put(&mut b, 192, 1);
     put(&mut b, 196, 400);
     put(&mut b, 200, 1);

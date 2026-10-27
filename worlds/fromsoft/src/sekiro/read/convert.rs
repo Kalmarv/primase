@@ -285,6 +285,8 @@ mod tests {
         let mut material = |texture: &str| {
             let mut m = crate::materials::resolve(
                 &fromsoft_formats::flver::Material {
+                    string_bytes: 0,
+                    index: 0,
                     name: "fixture".into(),
                     mtd: "fixture.mtd".into(),
                     gx: vec![],

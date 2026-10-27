@@ -35,6 +35,8 @@ fn source(shader: &str) -> materials::Material {
             .collect(),
     };
     let src = flver::Material {
+        string_bytes: 0,
+        index: 0,
         name: "fixture".into(),
         mtd: "fixture.mtd".into(),
         gx: vec![],

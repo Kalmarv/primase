@@ -19,6 +19,8 @@ fn model() -> Model {
             index: 0,
         }]],
         materials: vec![Material {
+            string_bytes: 0,
+            index: 0,
             name: "test".into(),
             mtd: String::new(),
             textures: vec![],

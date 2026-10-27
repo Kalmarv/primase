@@ -1016,6 +1016,8 @@ mod tests {
         let mut world = World::new();
         let mut m = crate::materials::resolve(
             &fromsoft_formats::flver::Material {
+                string_bytes: 0,
+                index: 0,
                 name: "fixture".into(),
                 mtd: "fixture.mtd".into(),
                 gx: vec![],
@@ -1111,6 +1113,8 @@ mod tests {
         let material = |name: &str| {
             crate::materials::resolve(
                 &fromsoft_formats::flver::Material {
+                    string_bytes: 0,
+                    index: 0,
                     name: name.into(),
                     mtd: format!("{name}.mtd"),
                     gx: vec![],
@@ -1162,6 +1166,8 @@ mod tests {
         };
         let m = crate::materials::resolve(
             &fromsoft_formats::flver::Material {
+                string_bytes: 0,
+                index: 0,
                 name: "named".into(),
                 mtd: "named.mtd".into(),
                 gx: vec![],
@@ -1188,6 +1194,8 @@ mod tests {
         let mut held = World::new();
         let m = crate::materials::resolve(
             &fromsoft_formats::flver::Material {
+                string_bytes: 0,
+                index: 0,
                 name: "metal".into(),
                 mtd: "metal.mtd".into(),
                 gx: vec![],

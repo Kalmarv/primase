@@ -90,6 +90,8 @@ mod tests {
     fn source(family: &str, switch: i32) -> Material {
         crate::materials::resolve(
             &fromsoft_formats::flver::Material {
+                string_bytes: 0,
+                index: 0,
                 name: "fixture".into(),
                 mtd: "fixture.mtd".into(),
                 textures: vec![],

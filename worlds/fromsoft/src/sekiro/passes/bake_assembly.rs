@@ -482,6 +482,8 @@ mod tests {
         };
         let source = crate::materials::resolve(
             &fromsoft_formats::flver::Material {
+                string_bytes: 0,
+                index: 0,
                 name: "jar".into(),
                 mtd: format!("{}.mtd", src["mtd"].as_str().unwrap()),
                 gx: vec![],
@@ -608,6 +610,8 @@ mod tests {
         let mut world = World::default();
         let mut source = crate::materials::resolve(
             &fromsoft_formats::flver::Material {
+                string_bytes: 0,
+                index: 0,
                 name: "fixture".into(),
                 mtd: "fixture.mtd".into(),
                 textures: vec![],
@@ -746,6 +750,8 @@ mod tests {
     fn assembled_channels_preserve_conventions_factors_and_absence() {
         let mut source = crate::materials::resolve(
             &fromsoft_formats::flver::Material {
+                string_bytes: 0,
+                index: 0,
                 name: "fixture".into(),
                 mtd: "fixture.mtd".into(),
                 textures: vec![],
