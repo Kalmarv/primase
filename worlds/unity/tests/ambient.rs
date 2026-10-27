@@ -7,9 +7,10 @@
 //! (an approximation) or the stored probe's average (flat, an approximation; none for an all-zero probe), as the
 //! program chooses. A player without that scene (another game) is skipped.
 //!
-//! As read (Sledding Game on Unity 6000.3.12f1): skybox (mode 0), its stored colours Unity's defaults (reported
-//! under `stored-gradient`), its probe's average 0.1792, 0.2244, 0.3062 (Unity's `m_IndirectSpecularColor`):
-//! `probe=probe-average` is the choice that lights the lodge as the game does on average.
+//! As read (Sledding Game on Unity 6000.3.12f1, Steam build 26054124): trilight (mode 1), no skybox material, the
+//! colours sky 0.6392, 0.9581, 1.0189, equator 0.7065, 0.9223, 1.0189, ground 0.3532, 0.4612, 0.5094 (alpha 1.5),
+//! intensity 1: every probe choice lowers to their gradient. Earlier builds stored skybox (mode 0) with Unity's
+//! default colours and a probe averaging 0.1792, 0.2244, 0.3062, where `probe=probe-average` was the choice.
 
 #![allow(clippy::unwrap_used)]
 

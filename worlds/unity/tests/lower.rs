@@ -9,13 +9,15 @@
 //! exactly; the base colour (our texture x factor, encoded as the port encodes it) against the port's image, the largest
 //! channel difference reported by shader family: within 1 for the shaders modelled (the port's BC1-3 decoder rounds
 //! palettes otherwise, see the texture gate), and for shaders not modelled too, listed per material, except where the
-//! port picks other properties (named). Differences in rule are counted by name.
+//! port picks other properties (named). Differences in rule are counted by name. The port materials not among our
+//! level's are exactly those an independent reader's scan (`oracles.unitypy.sledding/scan.json`) finds drawn only by
+//! BruteForce's runtime snow (instances `src` `addsnow`), by no renderer, tree or terrain.
 
 #![allow(clippy::unwrap_used)]
 
 mod inputs;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use inputs::{Game, OracleSet, Tool, install_file, oracle, tool};
@@ -76,11 +78,12 @@ struct Images {
 
 #[test]
 fn lowering_matches_the_port() {
-    let (Some(data), Some(tpk), Some(port_dir), Some(joined)) = (
+    let (Some(data), Some(tpk), Some(port_dir), Some(joined), Some(scan)) = (
         install_file(Game::Sledding, "Sledding Game_Data"),
         tool(Tool::UnityTpk),
         oracle(OracleSet::Port, Game::Sledding, "level1"),
         oracle(OracleSet::Port, Game::Sledding, "materials.json"),
+        oracle(OracleSet::UnityPy, Game::Sledding, "scan.json"),
     ) else {
         return;
     };
@@ -286,13 +289,43 @@ fn lowering_matches_the_port() {
         .map(|(_, n)| n)
         .sum();
     println!("port materials not among our level's: {missing:?}");
-    // the one the port exported that no renderer or terrain of the level references (an independent reader finds
-    // none; the port picked it up elsewhere): anything else missing is ours to explain
-    assert_eq!(
-        missing,
-        vec!["SnowURP01_medium_coverage_on_objects_1c6c4e".to_owned()],
-        "port materials missing from our level"
+    // the ones the port exported that no renderer, tree or terrain of the level references, only the runtime snow the
+    // scan adds (BruteForce's BF_AddSnow draws its object's mesh with its own material): anything else missing is ours
+    // to explain
+    let scan: Json = serde_json::from_slice(&std::fs::read(&scan).unwrap()).unwrap();
+    let material = |r: &Json| (r[0].as_str().unwrap().to_owned(), r[1].as_i64().unwrap());
+    let (mut snow, mut drawn) = (BTreeSet::new(), BTreeSet::new());
+    for i in scan["instances"].as_array().unwrap() {
+        let mats = i["mats"].as_array().unwrap().iter().map(material);
+        if i["src"] == "addsnow" {
+            snow.extend(mats);
+        } else {
+            drawn.extend(mats);
+        }
+    }
+    drawn.extend(
+        scan["terrains"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| material(&t["mat"])),
     );
+    let snow_only: Vec<String> = joined
+        .iter()
+        .filter(|j| {
+            let key = (
+                j["file"].as_str().unwrap().to_owned(),
+                j["path_id"].as_i64().unwrap(),
+            );
+            snow.contains(&key) && !drawn.contains(&key)
+        })
+        .map(|j| j["key"].as_str().unwrap().to_owned())
+        .collect();
+    assert!(
+        !snow_only.is_empty(),
+        "the scan's runtime snow draws no port material"
+    );
+    assert_eq!(missing, snow_only, "port materials missing from our level");
     assert_eq!(
         compared as u64 + skipped + missing.len() as u64,
         joined.len() as u64
@@ -349,7 +382,6 @@ fn draw_order_follows_the_render_queue() {
 #[test]
 fn water_and_trees_state_their_usage() {
     use primase_core::{MaterialUsage, Name};
-    use std::collections::BTreeSet;
     let (Some(data), Some(tpk)) = (
         install_file(Game::Sledding, "Sledding Game_Data"),
         tool(Tool::UnityTpk),

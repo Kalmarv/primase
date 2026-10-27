@@ -1,7 +1,9 @@
 //! Light gate against an independent reader's scan (`oracles.unitypy.sledding/scan.json`: `lights`, the shining lights
-//! other than the sun, and `sun`, the shining directional light; each `path`, `type`, `color`, `intensity`, `range`,
-//! `spot_angle`, `inner_spot_angle`, `shadows`, `M` rounded to 6 decimals), for the player `installs.sledding/Sledding
-//! Game_Data` read with `tools.unity_tpk`: every light's fields exactly, its world matrix within the scan's rounding
+//! other than directional ones, and `sun`, the last shining directional light in the level's object order; each
+//! `path`, `type`, `color`, `intensity`, `range`, `spot_angle`, `inner_spot_angle`, `shadows`, `M` rounded to 6
+//! decimals) and `oracles.unitypy.sledding/sun.json` (`shining_directional_lights`: every one, its `path_id` and
+//! `path`), for the player `installs.sledding/Sledding Game_Data` read with `tools.unity_tpk`: the shining directional
+//! lights as a set; every light the scan records, its fields exactly, its world matrix within the scan's rounding
 //! (5e-7).
 
 #![allow(clippy::unwrap_used)]
@@ -25,14 +27,17 @@ fn record(l: &LightComponent) -> Json {
 
 #[test]
 fn lights_match_the_scan() {
-    let (Some(data), Some(tpk), Some(scan)) = (
+    let (Some(data), Some(tpk), Some(scan), Some(sun_oracle)) = (
         install_file(Game::Sledding, "Sledding Game_Data"),
         tool(Tool::UnityTpk),
         oracle(OracleSet::UnityPy, Game::Sledding, "scan.json"),
+        oracle(OracleSet::UnityPy, Game::Sledding, "sun.json"),
     ) else {
         return;
     };
     let scan: Json = serde_json::from_slice(&std::fs::read(&scan).unwrap()).unwrap();
+    let sun_oracle: Json = serde_json::from_slice(&std::fs::read(&sun_oracle).unwrap()).unwrap();
+    assert_eq!(sun_oracle["level"], scan["level"], "the oracles' level");
     let player = Player::open(
         &data,
         TypeTreePackage::parse(&std::fs::read(&tpk).unwrap()).unwrap(),
@@ -45,17 +50,31 @@ fn lights_match_the_scan() {
     let (suns, others): (Vec<_>, Vec<_>) = lights.iter().partition(|l| l.kind == 1);
     let theirs = scan["lights"].as_array().unwrap();
     assert_eq!(others.len(), theirs.len(), "lights other than directional");
-    assert_eq!(suns.len(), 1, "one shining directional light");
+    let mut ours_directional: Vec<(i64, &str)> =
+        suns.iter().map(|l| (l.light.path_id, l.path.as_str())).collect();
+    let mut theirs_directional: Vec<(i64, &str)> = sun_oracle["shining_directional_lights"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| (l["path_id"].as_i64().unwrap(), l["path"].as_str().unwrap()))
+        .collect();
+    ours_directional.sort_unstable();
+    theirs_directional.sort_unstable();
+    assert_eq!(ours_directional, theirs_directional, "shining directional lights");
+    // the scan keeps one directional light (the last in the level's object order): ours of its path
+    let scan_sun = (!scan["sun"].is_null()).then(|| {
+        let sun = suns
+            .iter()
+            .find(|l| l.path == scan["sun"]["path"])
+            .expect("the scan's sun among ours");
+        (*sun, &scan["sun"])
+    });
     let mut fields = GateReport::new(
         "lights: path, type, colour, intensity, range, angles, shadows",
         Tolerance::Exact,
     );
     let mut matrices = GateReport::new("lights: world matrix", Tolerance::Abs(5e-7));
-    for (l, t) in others
-        .iter()
-        .chain(&suns)
-        .zip(theirs.iter().chain([&scan["sun"]]))
-    {
+    for (l, t) in others.iter().copied().zip(theirs).chain(scan_sun) {
         let want = json!({"path": t["path"], "type": t["type"], "color": t["color"], "intensity": t["intensity"],
             "range": t["range"], "spot_angle": t["spot_angle"], "inner_spot_angle": t["inner_spot_angle"],
             "shadows": t["shadows"]});
@@ -173,7 +192,8 @@ fn lights_lower_to_core() {
 /// and `main_light`, the light URP's `GetBrightestDirectionalLightIndex` makes its main light among the shining
 /// directional lights, `rule` `named`, `brightest` or `none`, with its `path`, `path_id` and `baked`): the light
 /// RenderSettings names as we read it, the player's pipeline, and the environment sun the lowering makes: the named
-/// directional light, else under URP the brightest one unless it is fully baked, else none.
+/// directional light, else under URP the brightest one unless it is fully baked, else none. The ambient RenderSettings
+/// stores (mode, trilight colours, intensity) exactly as the scan's `render_settings` records it.
 #[test]
 fn the_sun_matches_the_independent_reader() {
     use primase_core::{Environment, Name, World};
@@ -204,13 +224,35 @@ fn the_sun_matches_the_independent_reader() {
         .unwrap()
         .unwrap();
     let named = settings.sun.clone();
-    // the level's ambient as stored (read with UnityPy): skybox mode, its trilight colours, intensity 1
+    // the level's ambient as stored, against the scan's RenderSettings record: mode, trilight colours, intensity
     let ambient = settings.ambient.unwrap();
-    assert_eq!(ambient.mode, 0);
-    assert_eq!(ambient.sky, [0.212, 0.227, 0.259, 1.0]);
-    assert_eq!(ambient.equator, [0.114, 0.125, 0.133, 1.0]);
-    assert_eq!(ambient.ground, [0.047, 0.043, 0.035, 1.0]);
-    assert_eq!(ambient.intensity, 1.0);
+    let stored = &scan["render_settings"];
+    let rgba = |c: &Json| ["r", "g", "b", "a"].map(|k| c[k].as_f64().unwrap());
+    assert_eq!(
+        ambient.mode,
+        stored["ambient_mode"].as_i64().unwrap(),
+        "ambient mode"
+    );
+    assert_eq!(
+        ambient.sky.map(f64::from),
+        rgba(&stored["ambient_sky"]),
+        "ambient sky"
+    );
+    assert_eq!(
+        ambient.equator.map(f64::from),
+        rgba(&stored["ambient_equator"]),
+        "ambient equator"
+    );
+    assert_eq!(
+        ambient.ground.map(f64::from),
+        rgba(&stored["ambient_ground"]),
+        "ambient ground"
+    );
+    assert_eq!(
+        f64::from(ambient.intensity),
+        stored["ambient_intensity"].as_f64().unwrap(),
+        "ambient intensity"
+    );
     let path_id = oracle["m_Sun"]["m_PathID"].as_i64().unwrap();
     assert_eq!(named.as_ref().map_or(0, |r| r.path_id), path_id, "m_Sun");
     let pipelines: Vec<String> = oracle["pipelines"]
