@@ -517,10 +517,15 @@ converts frames; it does not lower:
   header's slot at +112: four value ids) names the value set inside the groups
   of the file in force (`LightSet ParamEditor`, `FogParamEditor`,
   `LightScattering : ParamEditor`, `Env Map:Editor`), and a collision part's
-  scene config (+120: four signed bytes, which Elden Ring's SoulsFormats names
-  the hundreds digits of the files to use) is counted, not used. How the engine
-  picks one file from those, the weather and the events is not established, so
-  the file is the caller's. The id most of the area's kept placements and its
+  scene config (+120: four signed bytes) names a file: the first byte is the
+  hundreds digit of its id (the slot) and, in Elden Ring, the byte at +32 the last
+  two (the sub id); the file of that id exists for all 1,304 Sekiro and 3,209 of
+  the 3,266 Elden Ring collisions. `DrawParams::Collision(<part name>)`
+  reads the file one collision names; the ids the area's collisions name are
+  `Report::collision_ids` and the area's own events that switch a file (Sekiro's
+  `2003:88`, Elden Ring's `2012:11`/`2012:12`) are `Report::switches`, not applied.
+  How the engine picks one file from the collision under the player, the events and
+  the weather is not established, so the file is the caller's. The id most of the area's kept placements and its
   collision parts name is read per group; a group no part names an id for is read
   at its one set, else at id 0, else not (counted). Every group and field of the
   file is read, in `gparam.rs`'s versions 3, 5 (Sekiro, Elden Ring) and 6; the

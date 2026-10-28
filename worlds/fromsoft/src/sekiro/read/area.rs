@@ -36,8 +36,8 @@ pub struct Options {
     /// Whether the larger maps above the map (Elden Ring's open-world tiles: [`fromsoft_formats::Game::parent_maps`]) also place
     /// their parts that belong to it: none (default: the map's own layout only) or included, moved into the map's frame.
     pub parents: Parents,
-    /// The area's draw-param file ([`draw_param`]): none (default: the graphics environment is not read) or the file
-    /// of this stem, one of [`fromsoft_formats::area::draw_params`].
+    /// The area's draw-param file ([`draw_param`]): none (default: the graphics environment is not read), the file
+    /// of this stem (one of [`fromsoft_formats::area::draw_params`]) or the file one collision part's scene config names.
     pub draw_param: draw_param::DrawParams,
     /// Whether the animation binder of each kept object model (Sekiro's objects, Elden Ring's assets: doors, lifts) is
     /// read into the world beside the model: its Havok skeleton and clips, named after the model. Off by default: the
@@ -600,7 +600,16 @@ pub fn read_area_draw_param(
     let layout = MapLayout::read(&archive.read(&format!("/map/mapstudio/{area}.msb.dcx"), decoder)?)?;
     let parts: BTreeSet<usize> = collision_parts(&layout).collect();
     let configs = environment_configs(&layout, choice, &parts)?;
-    draw_param::read(archive, decoder, archive.game(), &area, choice, &configs)
+    let collisions = collision_draw_params(&layout, choice)?;
+    draw_param::read(
+        archive,
+        decoder,
+        archive.game(),
+        &area,
+        choice,
+        &configs,
+        &collisions,
+    )
 }
 
 /// The layout's collision parts, by part index.
@@ -610,6 +619,28 @@ fn collision_parts(layout: &MapLayout) -> impl Iterator<Item = usize> + '_ {
         .iter()
         .filter(|p| p.kind == PartKind::Collision)
         .map(|p| p.index)
+}
+
+/// The draw-param file ids the collision parts of `layout` name through their scene configs, by part name (a name two
+/// parts share keeps the later one): none when no file is read.
+fn collision_draw_params(
+    layout: &MapLayout,
+    choice: &draw_param::DrawParams,
+) -> Result<BTreeMap<String, fromsoft_formats::area::DrawParamId>> {
+    if *choice == draw_param::DrawParams::None {
+        return Ok(BTreeMap::new());
+    }
+    let configs: BTreeMap<usize, _> = layout
+        .gparam_configs()?
+        .into_iter()
+        .map(|c| (c.part, c))
+        .collect();
+    Ok(layout
+        .parts
+        .iter()
+        .filter(|p| p.kind == PartKind::Collision)
+        .filter_map(|p| Some((p.name.clone(), configs.get(&p.index)?.draw_param_id()?)))
+        .collect())
 }
 
 /// The graphics configs of `parts` (part indices of `layout`) that choose the value sets of the draw-param file
@@ -1691,8 +1722,16 @@ pub fn read_game_area_staged(
     }
     stage("environment");
     let configs = environment_configs(&layout, &options.draw_param, &environment_parts)?;
-    let (environment, draw_param_report) =
-        draw_param::read(&archive, decoder, game, &area, &options.draw_param, &configs)?;
+    let collisions = collision_draw_params(&layout, &options.draw_param)?;
+    let (environment, draw_param_report) = draw_param::read(
+        &archive,
+        decoder,
+        game,
+        &area,
+        &options.draw_param,
+        &configs,
+        &collisions,
+    )?;
     if let Some(environment) = environment {
         world.insert_resource(environment);
     }

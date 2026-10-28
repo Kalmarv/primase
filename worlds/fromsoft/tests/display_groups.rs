@@ -101,6 +101,10 @@ fn the_academys_draw_groups_become_axes_and_conditions() -> Result<()> {
     assert_eq!(resolve(&world, "on")?, report.placements);
     // the notices name the parts the axes cannot decide
     let notices = report.notices();
-    assert!(notices.iter().any(|n| n.reason.starts_with("placements under no draw group")));
+    assert!(
+        notices
+            .iter()
+            .any(|n| n.reason.starts_with("placements under no draw group"))
+    );
     Ok(())
 }

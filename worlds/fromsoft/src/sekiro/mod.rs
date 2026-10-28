@@ -25,7 +25,7 @@ pub use read::character::{
 };
 pub use read::clip_events::decode as decode_clip_events;
 pub use read::collision::Report as CollisionReport;
-pub use read::draw_param::{DrawParams, Report as DrawParamReport};
+pub use read::draw_param::{CollisionChoice, DrawParams, Report as DrawParamReport};
 pub use read::effect_lights::Report as EffectLightsReport;
 pub use read::effects::{
     EffectCache, EffectLibrary, Report as EffectsReport, binders_for_area, binders_for_clip, read_effect, read_for_clip,
