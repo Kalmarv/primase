@@ -1298,7 +1298,6 @@ dependencies = [
  "primase-meshops",
  "primase-testdata",
  "primase-texcodec",
- "quick-xml",
  "serde",
  "serde_json",
  "sha2",
