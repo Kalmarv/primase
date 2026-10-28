@@ -616,3 +616,21 @@ fn arrays_cubes_and_volumes_read_as_layered_textures() -> R {
     assert!(wanted.iter().all(Option::is_none), "not found: {wanted:?}");
     Ok(())
 }
+
+/// The component shows every view the document answers by itself: enumeration members and file offsets, no import names.
+#[test]
+fn the_component_shows_members_and_offsets() -> R {
+    let document = ebx::read(REFL)?;
+    let full = ebx_json::to_json_with(
+        &document,
+        &ebx_json::JsonOptions {
+            enum_members: true,
+            import_names: None,
+            offsets: true,
+        },
+    )?;
+    let shown = FrostbiteEbx { document }.to_json()?.unwrap();
+    assert_eq!(shown, full);
+    assert!(shown.get("data_start").is_some());
+    Ok(())
+}

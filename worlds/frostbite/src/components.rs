@@ -57,7 +57,10 @@ impl Component for FrostbiteEntry {
     }
 }
 
-/// An EBX document read into typed values, as stored ([`Document::to_json`] shows it).
+/// An EBX document read into typed values, as stored. Its JSON is [`crate::ebx_json::to_json_with`] with every view the
+/// document answers by itself: an enumeration value with its member's name, and the file offsets of the payload, of each
+/// instance and of each field. Import names are not shown: they need a table built from every bundle of the data folder
+/// ([`frostbite_formats::names::GuidNames`]), which a component does not hold; pass one to `to_json_with` for them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrostbiteEbx {
     pub document: Document,
@@ -67,7 +70,12 @@ impl Component for FrostbiteEbx {
     const NAME: &'static str = "frostbite.ebx";
     const GEOMETRY: Geometry = Geometry::None;
     fn to_json(&self) -> Result<Option<Value>, primase_core::JsonError> {
-        crate::ebx_json::to_json(&self.document).map(Some)
+        let options = crate::ebx_json::JsonOptions {
+            enum_members: true,
+            import_names: None,
+            offsets: true,
+        };
+        crate::ebx_json::to_json_with(&self.document, &options).map(Some)
     }
     fn payload_bytes(&self) -> u64 {
         self.document.payload.len() as u64
