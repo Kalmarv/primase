@@ -151,14 +151,21 @@ pub enum ObjectParameter {
     TextureScroll(u8),
     /// The matrices of a skinned draw's joints, each a 3 x 4 transform (the object-to-world transform of the joint
     /// the pose gives, in the engine's own palette order), its lines as the binding states ([`MatrixLines`]): what a
-    /// skinning program blends by the vertex's joint indices and weights.
+    /// skinning program blends by the vertex's joint indices and weights. Where the program also reads
+    /// [`ObjectParameter::ClothCancelPalette`], a joint's transform is the product of the two; a consumer that has
+    /// each joint's whole object-to-world transform states it here and the identity there.
     BonePalette,
-    /// The matrices of a second, short palette a skinned program takes the position through before
+    /// The matrices of a second palette a vertex program takes the vertex through before
     /// [`ObjectParameter::BonePalette`] (the engine's name for it is the cloth-cancel matrices): each a 3 x 4
-    /// transform held as the binding states ([`MatrixLines`]), chosen by the same joint index plus the instance's
-    /// matrix base ([`ObjectParameter::MatrixBase`]).
-    /// What it holds when the draw simulates no cloth is not established; a consumer that feeds the identity makes
-    /// the first step leave the position as it is.
+    /// transform held as the binding states ([`MatrixLines`]), chosen by the same index as the bone palette's (the
+    /// vertex's joint index plus the instance's matrix base, [`ObjectParameter::MatrixBase`]), so as long as it. The
+    /// vertex's transform is `BonePalette[j] * ClothCancelPalette[j]`: the position, and the normal and tangent by
+    /// the 3 x 3 part, go through this matrix first (blended over the vertex's joints by their weights where the
+    /// program blends joints, as Elden Ring's character programs that skin do; those that take one joint per vertex
+    /// do the same with that joint). How an engine splits a joint's transform between the two palettes is not
+    /// established: in a captured Elden Ring frame, 3,746 of the 12,230 recorded entries of skinned draws' palettes
+    /// were the identity, and 7,940 were not. A consumer that states each joint's whole transform in the bone palette
+    /// feeds the identity here, which leaves the first step without effect.
     ClothCancelPalette,
     /// The instance's environment data word (an unsigned integer the engine writes per instance; the layered programs
     /// scale it by 1/255 into the alpha lane of a G-buffer target).
