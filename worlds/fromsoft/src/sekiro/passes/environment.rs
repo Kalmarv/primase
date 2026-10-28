@@ -6,25 +6,31 @@
 //! `tests/draw_param_census.rs`) is not guessed into one.
 //!
 //! The light set's fields (`LightSet ParamEditor`; the keys are the files' own):
-//! - `Directional Light Angle0` (two floats) and `Directional Light DiffColor0` (four): the sun's direction and its
-//!   diffuse colour. The census (`tests/draw_param_census.rs`, m11_01 and m20_00) shows the angle in radians (-0.349066
-//!   and -1.570796 are -20 and -90 degrees); its axis convention is not established. It is read as the X and Y Euler
-//!   rotations of a light that shines along its local -Z, placed as the map's other FromSoft rotations are
-//!   (`msb::euler_transform`; BTL spot lights are placed so): a stated approximation, counted.
+//! - `Directional Light Angle0` (two floats, radians) and `Directional Light DiffColor0` (four): the sun's direction and
+//!   its diffuse colour, as a frame of the running game (Sekiro 1.06, m11_01 at 18:00) shows them reaching the deferred
+//!   sun program `GXLightAcc_DDirLightShadowed1` (its `cbLight` light sets): the angle `(rx, ry)` is the direction
+//!   towards the light `(sin ry cos rx, -sin rx, cos ry cos rx)` in the file's frame (the program lights a surface by
+//!   `saturate(dot(normal, direction))` and takes its half vector from it), so the light travels the opposite way; the
+//!   colour `(r, g, b, w)` is the radiance `(r^2 w, g^2 w, b^2 w)` (the program's constant is `(r^2 w, g^2 w, b^2 w, w^2)`,
+//!   the same squaring as BTL light records). Both held on every directional and specular colour of the frame's two light
+//!   sets, to float precision. The sun's light is the squared colour, its intensity the weight `w` times the program's
+//!   calibration (`lux-per-unit`: the lux of a radiance of 1). A sun whose colour is black or whose weight is 0 (or not
+//!   finite, or negative) is none, counted. Elden Ring stores the same fields and is lowered the same way; no Elden Ring
+//!   frame has shown its light set reaching a program yet (stated in [`Pass::approximates`]).
+//! - `Directional Light Hemi Color Up` and `Hemi Color Down`: the ambient's sky and ground colours, read as linear (no
+//!   frame has shown how they reach a program); the equator colour is not stored and is taken as their mean (counted).
+//!   The ambient's intensity is `lux-per-unit`, at the scale of a directional light's (the same approximation
+//!   `lower-unity-ambient` states). The census files store no `Hemi Color` field at all, so a Sekiro read has no ambient
+//!   from this pass.
+//!
+//! The fills (`Angle1`, `LocalLight` lights) are counted as not lowered. Later files of a map (`_0010` ...) store only the
+//! fields they change.
 //!
 //! The `VolumetricFog ParamEditor` group's fields the census shows (`VolumetricFog Global FixedDensity`, the height
 //! density keys, `SkyLight SkyColor`, `DirLight DirectColor`, `GameScale` ...) are kept in `core.atmosphere`'s
 //! `volumetric` with the file's own names and values, unconverted: the densities are in a unit the group's `GameScale`
 //! sets and no source establishes, so the omission is counted and the renderer draws nothing from it. This is the
-//! faithful carrying of the values, not a distance-fog approximation. A colour is taken as
-//!   linear RGB and its fourth float as the light's intensity multiplier (2.0 on m11_01's main light, 0 to 0.3 on its
-//!   fills: counted), times the program's calibration (`lux-per-unit`). A sun whose colour is black or whose multiplier
-//!   is 0 (or not finite, or negative) is none, counted. The census files store no `Hemi Color` field at all, so a
-//!   Sekiro read has no ambient from this pass; the fills (`Angle1`, `LocalLight` lights) are counted as not lowered.
-//!   Later files of a map (`_0010` ...) store only the fields they change.
-//! - `Directional Light Hemi Color Up` and `Hemi Color Down`: the ambient's sky and ground colours; the equator colour is
-//!   not stored and is taken as their mean (counted). The ambient's intensity is `lux-per-unit`, at the scale of a
-//!   directional light's (the same approximation `lower-unity-ambient` states).
+//! faithful carrying of the values, not a distance-fog approximation.
 use super::settings::Factor;
 use crate::sekiro::source::DrawParam;
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
@@ -123,8 +129,8 @@ pub const LOWER_FROMSOFT_ENVIRONMENT: PassSpec = PassSpec {
     make: |g| Ok(Box::new(LowerFromSoftEnvironment::from_given(g)?)),
 };
 
-/// A colour's red, green and blue and its fourth float, if the value is a four-float vector of finite, non-negative
-/// components.
+/// A colour's red, green and blue and its fourth float as stored, if the value is a four-float vector of finite,
+/// non-negative components.
 fn colour(value: Option<&fromsoft_formats::gparam::Value>) -> Option<([f32; 3], f32)> {
     let fromsoft_formats::gparam::Value::Vec4(c) = value? else {
         return None;
@@ -132,6 +138,14 @@ fn colour(value: Option<&fromsoft_formats::gparam::Value>) -> Option<([f32; 3], 
     c.iter()
         .all(|x| x.is_finite() && *x >= 0.)
         .then_some(([c[0], c[1], c[2]], c[3]))
+}
+
+/// The direction the sun's light travels, in the file's frame, from its stored angle `(rx, ry)` in radians: the
+/// opposite of the direction towards the light, `(sin ry cos rx, -sin rx, cos ry cos rx)`.
+fn travel(angle: [f32; 2]) -> [f32; 3] {
+    let (sx, cx) = angle[0].sin_cos();
+    let (sy, cy) = angle[1].sin_cos();
+    [-sy * cx, sx, -cy * cx]
 }
 
 /// Why the fields of a group are not lowered, by the group's key: what core has no place for.
@@ -189,7 +203,7 @@ impl Pass for LowerFromSoftEnvironment {
         ]
     }
     fn approximates(&self) -> &'static str {
-        "the sun's angle (radians) read as Euler rotations of a light shining along -Z; stored colours as linear; intensity the colour's fourth float by the calibration; the ambient's equator the mean of its hemispheres"
+        "the sun's intensity at the calibrated lux per unit of radiance; Elden Ring's light set read with the transfer a Sekiro frame shows; hemisphere colours as linear; the ambient's equator the mean of its hemispheres"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         let Some(env) = world.resource::<DrawParam>().cloned() else {
@@ -226,21 +240,14 @@ impl Pass for LowerFromSoftEnvironment {
             };
             match (angle, colour(set.value(DIFFUSE))) {
                 (Some(angle), Some((rgb, weight))) if weight > 0. && rgb.iter().any(|x| *x > 0.) => {
-                    // the angle is stored in radians (-0.349066 and -1.570796 are -20 and -90 degrees)
-                    let transform = fromsoft_formats::msb::euler_matrix(
-                        [0.; 3],
-                        [angle[0].to_degrees(), angle[1].to_degrees(), 0.],
-                        [1.; 3],
-                        0,
-                    )
-                    .map(crate::pose::placed)
-                    .map_err(|e| format!("the sun's angle: {e}"))?;
+                    let transform = Transform::facing([0.; 3], crate::pose::FRAME.direction(travel(angle)))
+                        .ok_or("the sun's angle gives no direction")?;
                     let e = world.spawn();
                     world.insert(
                         e,
                         Light {
                             kind: LightKind::Directional,
-                            color: rgb,
+                            color: rgb.map(|c| c * c),
                             intensity: lux * weight,
                             range: None,
                             cast_shadows: None,
@@ -254,12 +261,7 @@ impl Pass for LowerFromSoftEnvironment {
                     *lowered.entry(LIGHT_SET).or_default() += 2;
                     log.count("suns lowered", 1);
                     log.approximate(
-                        "the sun's angle (radians, pitch then yaw) read as X and Y Euler rotations of a light shining along its local -Z (the light set's axis convention is not established)",
-                        1,
-                    );
-                    log.approximate("stored light colours read as linear RGB", 1);
-                    log.approximate(
-                        "the colour's fourth float read as the light's intensity multiplier (2.0 on the main light of m11_01, 0 to 0.3 on its fills), at the calibrated lux per unit",
+                        "the sun's intensity at the calibrated lux per unit of radiance",
                         1,
                     );
                 }
@@ -285,6 +287,10 @@ impl Pass for LowerFromSoftEnvironment {
                     });
                     *lowered.entry(LIGHT_SET).or_default() += 2;
                     log.count("gradient ambients lowered", 1);
+                    log.approximate(
+                        "hemisphere colours read as linear (no frame of the game has shown how they reach a program)",
+                        1,
+                    );
                     log.approximate(
                         "the ambient's equator colour taken as the mean of its hemispheres",
                         1,
@@ -429,7 +435,7 @@ mod tests {
     #[test]
     fn the_light_set_becomes_the_sun_and_a_gradient_ambient_and_the_rest_is_counted() {
         let mut w = world_with(vec![
-            light_set([std::f32::consts::FRAC_PI_2, 0.], [1.0, 0.5, 0.25, 1.0]),
+            light_set([-std::f32::consts::FRAC_PI_2, 0.], [1.0, 0.5, 0.25, 1.0]),
             group("FogParamEditor", 0, vec![field("Fog-Dist", Value::Float(3.0))]),
             group(
                 "Tone Map[Yebis]",
@@ -445,8 +451,9 @@ mod tests {
         let sun = env.sun.expect("a sun");
         let light = w.get::<Light>(sun).unwrap();
         assert_eq!(light.kind, LightKind::Directional);
-        assert_eq!((light.color, light.intensity), ([1.0, 0.5, 0.25], 100.0));
-        // an X rotation of pi/2 radians (stored in radians) turns the light to shine straight down
+        // the colour squared, the weight times the calibration
+        assert_eq!((light.color, light.intensity), ([1.0, 0.25, 0.0625], 100.0));
+        // rx = -pi/2: the light is straight above, so it shines straight down
         close(shines(&w, sun), [0., -1., 0.]);
         assert_eq!(w.get::<Name>(sun).unwrap().0, "sun");
         assert_eq!(
@@ -494,24 +501,43 @@ mod tests {
             2
         );
         assert_eq!(log.omitted.len(), 3, "{:?}", log.omitted);
-        assert_eq!(log.approximations.len(), 5, "{:?}", log.approximations);
+        assert_eq!(log.approximations.len(), 4, "{:?}", log.approximations);
     }
 
     #[test]
-    fn a_yaw_turns_the_sun_about_the_vertical_and_zero_angles_shine_along_minus_z() {
+    fn zero_angles_put_the_light_at_plus_z_of_the_file_and_a_yaw_turns_it_about_the_vertical() {
+        // (0, 0): towards the light is +Z of the file, so the light travels along its -Z, the world's +Z
         let mut w = world_with(vec![light_set([0., 0.], [1.; 4])]);
         run(&mut w, 1.0);
         let sun = w.resource::<Environment>().unwrap().sun.unwrap();
-        close(shines(&w, sun), [0., 0., -1.]);
-        // yaw 90 about Y: -Z turns to -X in the source frame; the world frame mirrors z only, so -Z stays on the Z axis
+        close(shines(&w, sun), [0., 0., 1.]);
+        // ry = pi/2: towards the light is +X, so the light travels along -X (the frame keeps x)
         let mut w = world_with(vec![light_set([0., std::f32::consts::FRAC_PI_2], [1.; 4])]);
         run(&mut w, 1.0);
         let sun = w.resource::<Environment>().unwrap().sun.unwrap();
-        let d = shines(&w, sun);
-        assert!(
-            d[1].abs() < 1e-5 && (d[0].abs() - 1.0).abs() < 1e-5 && d[2].abs() < 1e-5,
-            "{d:?}"
-        );
+        close(shines(&w, sun), [-1., 0., 0.]);
+    }
+
+    #[test]
+    // the file stores -3.141593 (f32 0xc0490fdc), one unit in the last place from -pi: the stored value, not pi
+    #[allow(clippy::approx_constant)]
+    fn the_light_set_of_a_frame_of_the_game_gives_the_constants_its_sun_program_read() {
+        // Sekiro 1.06, Ashina Castle gate: m11_01_0000's light set (value id 0) at 18:00 is the second light set of the
+        // frame's `cbLight`, which `GXLightAcc_DDirLightShadowed1` read as the direction towards the light and the
+        // radiance (the w lane of its colour is w^2, not a radiance)
+        let mut w = world_with(vec![light_set(
+            [-0.436332, -3.141593],
+            [1.0, 0.784314, 0.588235, 1.25],
+        )]);
+        run(&mut w, 1.0);
+        let sun = w.resource::<Environment>().unwrap().sun.unwrap();
+        let light = w.get::<Light>(sun).unwrap();
+        let radiance = light.color.map(|c| c * light.intensity);
+        for (got, frame) in radiance.iter().zip([1.25f32, 0.7689356, 0.4325255]) {
+            assert!((got - frame).abs() <= 1e-6 * frame.abs().max(1.0), "{radiance:?}");
+        }
+        let towards = crate::pose::FRAME.direction_to_source(shines(&w, sun).map(|x| -x));
+        close(towards, [3.529293e-07, 0.422618, -0.9063079]);
     }
 
     #[test]
@@ -526,7 +552,10 @@ mod tests {
         let light = w.get::<Light>(sun).unwrap();
         assert_eq!(
             (light.color, light.intensity),
-            ([0.687284, 0.757668, 0.828053], 200.0)
+            (
+                [0.687284f32 * 0.687284, 0.757668 * 0.757668, 0.828053 * 0.828053],
+                200.0
+            )
         );
         // a pitch of -20 degrees tilts the light by 20 degrees about the horizontal: it shines along Z, a little vertically
         let d = shines(&w, sun);

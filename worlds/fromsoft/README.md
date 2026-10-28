@@ -632,11 +632,13 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
 - `lower-fromsoft-environment{lux-per-unit=...}` lowers `fromsoft.draw_param` to
   the core environment: the light set's first directional light (`Directional
   Light Angle0`, `DiffColor0`) a directional `core.light` named as the sun by
-  `core.environment`, its angle read as the X and Y Euler rotations of a light
-  shining along -Z as BTL lights are placed (the light set's convention is not
-  established; counted), its colour as linear RGB at the program's calibration
-  (`lux-per-unit`, no default); the hemisphere colours (`Hemi Color Up`, `Down`)
-  the gradient ambient, its equator their mean (counted), at the same
+  `core.environment`: as a Sekiro frame shows them reaching the deferred sun
+  program, the angle `(rx, ry)` is the direction towards the light
+  `(sin ry cos rx, -sin rx, cos ry cos rx)` and the colour `(r, g, b, w)` the
+  radiance `(r^2 w, g^2 w, b^2 w)` (Elden Ring lowered the same way, not yet
+  checked on its frame), at the program's calibration (`lux-per-unit`, lux per
+  unit of radiance, no default); the hemisphere colours (`Hemi Color Up`,
+  `Down`, read as linear) the gradient ambient, its equator their mean (counted), at the same
   calibration. A black or unusable light is no sun, counted. Every other field
   read is counted by group and why it is not lowered (core states no fog, sky or
   tone; the light set's specular, occlusion, second and local lights have no
