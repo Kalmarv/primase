@@ -26,6 +26,7 @@ pub mod records;
 pub(super) mod reflectance;
 pub mod resolve_shaders;
 pub mod settings;
+pub mod sky;
 pub mod visibility;
 pub use crate::layer_bake::resolve::Unbound;
 pub use crate::sekiro::components::lowered::UvTiling;
@@ -93,6 +94,7 @@ pub fn register(registry: &mut PassRegistry) {
         &draw_params::SAMPLE_FROMSOFT_DRAW_PARAMS,
         &environment::LOWER_FROMSOFT_ENVIRONMENT,
         &lights::LOWER_FROMSOFT_LIGHTS,
+        &sky::LOWER_FROMSOFT_SKY,
     ] {
         registry.add(spec);
     }

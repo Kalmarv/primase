@@ -33,4 +33,4 @@ pub use read::messages::npc_names_into_world;
 pub use read::objects::Report as ObjectCollisionReport;
 pub use read::textures::tpf_image;
 pub use read::visibility::decode as decode_visibility;
-pub use read::{convert, states};
+pub use read::{convert, sky, states};

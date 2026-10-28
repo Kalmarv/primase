@@ -720,6 +720,7 @@ fn the_fromsoft_passes_register_by_name() {
         "lower-fromsoft-materials",
         "lower-fromsoft-object-collision",
         "lower-fromsoft-part-collision",
+        "lower-fromsoft-sky",
         "name-fromsoft-entities",
         "preserve-fromsoft-display-masks",
         "raise-fromsoft-display-masks",
@@ -735,6 +736,7 @@ fn the_fromsoft_passes_register_by_name() {
         "fromsoft-apply-rigid-skinning",
         "lower-fromsoft-extras",
         "lower-fromsoft-display-masks",
+        "lower-fromsoft-sky",
         "raise-fromsoft-display-masks",
     ];
     for name in names {

@@ -109,16 +109,22 @@ fn the_reader_declares_every_name_it_emits() {
         oodle: Some(&dll),
         max_output: 1024 * 1024 * 1024,
     };
-    // read without states and with the event-flag states (the only read that emits conditions and state axes)
+    // read without states, with the event-flag states and with the sky (the reads that emit conditions and state
+    // axes, the sky's anchors and parts)
     let mut seen = BTreeSet::new();
     let mut declared = BTreeSet::new();
-    for states in [sekiro::StateClasses::None, sekiro::StateClasses::Event] {
+    for (states, sky) in [
+        (sekiro::StateClasses::None, sekiro::sky::Sky::None),
+        (sekiro::StateClasses::Event, sekiro::sky::Sky::None),
+        (sekiro::StateClasses::None, sekiro::sky::Sky::Include),
+    ] {
         let options = sekiro::Options {
             region: Some(sekiro::Region {
                 rect: [-170.0, 180.0, -50.0, 300.0],
                 margin: 30.0,
             }),
             states,
+            sky,
             ..Default::default()
         };
         declared.extend(primase_fromsoft::sekiro::convert::emitted_names(&options));

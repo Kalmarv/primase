@@ -25,6 +25,37 @@ impl Component for PrototypeSource {
     }
 }
 
+/// What a placement of the sky is ([`SkyPart`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkyRole {
+    /// A sky dome (`m9000xx`), one per sky state.
+    Dome,
+    /// A dome's ring of far mountains (`m9001xx`, `m900200`), drawn with its dome.
+    Ring,
+    /// The moon (the object `o005900`), placed towards the light by the game every frame.
+    Moon,
+}
+
+/// A placement of the sky the area read brought in (`fromsoft.sky_part`, [`crate::sekiro::read::sky`]): what it is, and
+/// for a dome or ring the value of the `fromsoft.sky` state axis it is drawn in (its `core.condition` says the same).
+/// `lower-fromsoft-sky` lowers it: the moon's anchor, the draw order of the sky's materials.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct SkyPart {
+    pub role: SkyRole,
+    pub state: Option<u32>,
+}
+impl Component for SkyPart {
+    const NAME: &'static str = "fromsoft.sky_part";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
+        primase_core::world::Linearity::Invariant
+    }
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        to_value(self).map(Some)
+    }
+}
+
 /// The material entity (holding `fromsoft.material`) of each material index of a prototype's `fromsoft.flver`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct MaterialSlots(pub Vec<Entity>);

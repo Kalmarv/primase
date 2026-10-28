@@ -4,7 +4,7 @@
 //! (where a map keeps its files, how objects are found, tile parents) is [`fromsoft_formats::Game`]'s; what Elden Ring's read does
 //! not cover yet (world states, materials without a definition) is in its notices.
 use super::{
-    animation, collision, draw_param, effect_lights, extras, objects, shaders, shadows, states, textures,
+    animation, collision, draw_param, effect_lights, extras, objects, shaders, shadows, sky, states, textures,
 };
 use crate::sekiro::source::{self, Region};
 use crate::{invalid, materials};
@@ -52,6 +52,9 @@ pub struct Options {
     /// effect row at the model's dummy polygons; off by default (it reads the effect binders and the params).
     /// `lower-fromsoft-lights` lowers them, in the BTL lights' unit.
     pub effect_lights: bool,
+    /// Whether the sky is read with the area ([`sky`]): none (default) or the sky map's domes, rings and moon and the
+    /// area's own unplaced domes, the states as the `fromsoft.sky` axis with no default (Sekiro's only).
+    pub sky: sky::Sky,
 }
 /// What a read of the object models' animation binders found.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -188,6 +191,8 @@ pub struct Report {
     pub grass_parts: usize,
     /// The grass types those parts name.
     pub grass: GrassTypes,
+    /// The sky read with the area ([`Options::sky`]).
+    pub sky: sky::Report,
 }
 impl Report {
     /// What the read left out or could not find, as notices for a conversion's report.
@@ -393,6 +398,7 @@ impl Report {
             }
         }
         out.extend(self.draw_param.notices());
+        out.extend(self.sky.notices());
         let grass = &self.grass;
         if grass.parts > 0 {
             if let Some(why) = &grass.unresolved {
@@ -794,11 +800,13 @@ struct Prototype {
 
 /// Which placements (model key, transform) the read keeps, in order, by index; counted into `report` by why the
 /// others are not: a model the archive does not hold, a model whose face sets use no vertex (`bounds` holds `None`),
-/// an extent outside the region.
+/// an extent outside the region. A placement `everywhere` marks (the sky, which the game draws around the camera
+/// wherever it is) is kept whatever the region.
 fn select_placements(
     placements: &[(String, Transform)],
     bounds: &BTreeMap<String, Option<[[f32; 3]; 2]>>,
     options: &Options,
+    everywhere: &[bool],
     report: &mut Report,
 ) -> Vec<usize> {
     let mut kept = Vec::new();
@@ -806,7 +814,11 @@ fn select_placements(
         match bounds.get(key) {
             None => report.skipped_missing += 1,
             Some(None) => report.skipped_empty += 1,
-            Some(Some(b)) if !inside(b, transform, options) => report.skipped_outside += 1,
+            Some(Some(b))
+                if !everywhere.get(i).copied().unwrap_or(false) && !inside(b, transform, options) =>
+            {
+                report.skipped_outside += 1
+            }
             Some(Some(_)) => kept.push(i),
         }
     }
@@ -896,12 +908,14 @@ fn material_binaries(
 }
 
 /// A placement the read considers: its model's key, the part as stored (from the map's layout or a larger map's),
-/// the map whose layout holds it, and the offset (source x, z) from that map's frame into the read map's.
+/// the map whose layout holds it, the offset (source x, z) from that map's frame into the read map's, and whether it is
+/// part of the sky ([`Options::sky`]).
 struct Placed {
     key: String,
     part: fromsoft_formats::msb::Part,
     map: String,
     offset: [f64; 2],
+    sky: bool,
 }
 
 /// Read the map `area` of `install` into `destination` as `options` says: what differs between the games is
@@ -939,6 +953,13 @@ pub fn read_game_area_staged(
             || r[1] >= r[3]
     }) {
         return Err(invalid("FromSoftware map", 0, "invalid region"));
+    }
+    if game != Game::Sekiro && options.sky != sky::Sky::None {
+        return Err(invalid(
+            "FromSoftware map",
+            0,
+            format!("{}: the sky is not read yet", game.name()),
+        ));
     }
     if game != Game::Sekiro && options.states != StateClasses::None {
         return Err(invalid(
@@ -982,6 +1003,11 @@ pub fn read_game_area_staged(
             maps.push((parent, parent_layout, offset, Some(format!("{area}-"))));
         }
     }
+    if options.sky == sky::Sky::Include {
+        let path = format!("/map/mapstudio/{}.msb.dcx", sky::SKY_MAP);
+        let sky_layout = MapLayout::read(&archive.read(&path, decoder)?)?;
+        maps.push((sky::SKY_MAP.to_owned(), sky_layout, [0.; 2], None));
+    }
     // map pieces, then objects (assets), each in layout order, the map's own before its parents'
     for objects in [false, true] {
         for (map, map_layout, offset, prefix) in &maps {
@@ -992,6 +1018,7 @@ pub fn read_game_area_staged(
                 {
                     continue;
                 }
+                let in_sky = map == sky::SKY_MAP;
                 let kind = match p.kind {
                     PartKind::MapPiece if !objects => map.as_str(),
                     PartKind::Object | PartKind::Asset if objects => object,
@@ -1004,7 +1031,11 @@ pub fn read_game_area_staged(
                     | PartKind::ConnectCollision
                         if !objects =>
                     {
-                        *report.unplaced_parts.entry(unplaced_word(p.kind)).or_default() += 1;
+                        if in_sky {
+                            report.sky.other_parts.push(p.name.clone());
+                        } else {
+                            *report.unplaced_parts.entry(unplaced_word(p.kind)).or_default() += 1;
+                        }
                         continue;
                     }
                     _ => continue,
@@ -1020,10 +1051,33 @@ pub fn read_game_area_staged(
                     part: p.clone(),
                     map: map.clone(),
                     offset: *offset,
+                    sky: in_sky,
                 });
             }
         }
     }
+    // the area's own domes, which no layout places, at the origin
+    if options.sky == sky::Sky::Include {
+        let folder = game.map_folder(&area)?;
+        for model in sky::area_domes(&layout, |digits| {
+            archive.contains(&format!("{folder}/{area}_{digits}.mapbnd.dcx"))
+        }) {
+            let key = format!("{area}/{model}");
+            requests.insert(key.clone());
+            placements.push(Placed {
+                key,
+                part: sky::unplaced_part(&model),
+                map: area.clone(),
+                offset: [0.; 2],
+                sky: true,
+            });
+        }
+    }
+    let sky_keys: BTreeSet<String> = placements
+        .iter()
+        .filter(|p| p.sky)
+        .map(|p| p.key.clone())
+        .collect();
     stage("models of every placement");
     let mut prototypes = BTreeMap::new();
     // The binders and models are read a few at a time, on the install's threads, and joined in key order: what one
@@ -1133,12 +1187,43 @@ pub fn read_game_area_staged(
         })
         .collect::<Result<Vec<_>>>()?;
     let bounds = prototypes.iter().map(|(k, p)| (k.clone(), p.bounds)).collect();
-    let selected: Vec<(String, usize, Transform)> = select_placements(&placed, &bounds, options, &mut report)
-        .into_iter()
-        .map(|i| (placed[i].0.clone(), i, placed[i].1))
-        .collect();
+    let everywhere: Vec<bool> = placements.iter().map(|p| p.sky).collect();
+    let selected: Vec<(String, usize, Transform)> =
+        select_placements(&placed, &bounds, options, &everywhere, &mut report)
+            .into_iter()
+            .map(|i| (placed[i].0.clone(), i, placed[i].1))
+            .collect();
     let used: BTreeSet<&String> = selected.iter().map(|(key, _, _)| key).collect();
     prototypes.retain(|key, _| used.contains(key));
+    // the sky's states and what each kept sky placement is, from its model and its materials
+    let sky_plan = if options.sky == sky::Sky::Include {
+        let items: Vec<sky::Item> = selected
+            .iter()
+            .filter(|(_, index, _)| placements[*index].sky)
+            .map(|(key, index, _)| {
+                let p = &placements[*index];
+                let (_, model) = key.split_once('/').expect("key");
+                sky::Item {
+                    index: *index,
+                    map: p.map.clone(),
+                    model: model.to_owned(),
+                    object: key.starts_with(&format!("{object}/")),
+                    entity: p.part.entity_id,
+                    mtds: prototypes
+                        .get(key)
+                        .map(|proto| proto.materials.iter().map(|m| m.mtd.clone()).collect())
+                        .unwrap_or_default(),
+                }
+            })
+            .collect();
+        let mut plan = sky::plan(&items).map_err(|e| invalid("FromSoftware sky", 0, e))?;
+        plan.report
+            .other_parts
+            .extend(std::mem::take(&mut report.sky.other_parts));
+        Some(plan)
+    } else {
+        None
+    };
 
     stage("wanted textures and shader bundles");
     let mut wanted = BTreeSet::new();
@@ -1234,9 +1319,11 @@ pub fn read_game_area_staged(
                 };
                 slots.push(e);
             }
-            let far = key
-                .strip_prefix(&format!("{area}/"))
-                .is_some_and(|model| game.far_model(model));
+            // the sky's models are of the backdrop series by name, and are the sky
+            let far = !sky_keys.contains(&key)
+                && key
+                    .strip_prefix(&format!("{area}/"))
+                    .is_some_and(|model| game.far_model(model));
             if options.effect_lights && key.starts_with(&format!("{object}/")) {
                 let (dummies, left_out) = effect_lights::ModelDummies::of(&proto.model)
                     .map_err(|e| invalid("FromSoftware model", 0, format!("{key}: {e}")))?;
@@ -1304,7 +1391,7 @@ pub fn read_game_area_staged(
     let environment_parts: BTreeSet<usize> = selected
         .iter()
         .map(|(_, index, _)| &placements[*index])
-        .filter(|p| p.map == area)
+        .filter(|p| p.map == area && !p.sky)
         .map(|p| p.part.index)
         .chain(collision_parts(&layout))
         .collect();
@@ -1319,11 +1406,29 @@ pub fn read_game_area_staged(
     } else {
         BTreeMap::new()
     };
+    let sky_axis = sky_plan
+        .as_ref()
+        .filter(|plan| !plan.values.is_empty())
+        .map(|plan| sky::spawn_axis(&mut world, &plan.values));
     for (key, index, transform) in selected {
-        let Placed { part, map, .. } = &placements[index];
+        let Placed {
+            part,
+            map,
+            sky: in_sky,
+            ..
+        } = &placements[index];
+        // a sky part of no known role, or a ring no dome pairs with, is not placed (counted in the plan's report)
+        let sky_part = match (*in_sky, &sky_plan) {
+            (true, Some(plan)) => match plan.parts.get(&index) {
+                Some(&part) => Some(part),
+                None => continue,
+            },
+            _ => None,
+        };
         let (prototype, far) = proto_entities[&key];
         let e = world.spawn();
-        if let Some(s) = states.as_mut()
+        if !in_sky
+            && let Some(s) = states.as_mut()
             && let Some(clause) = s.clause(part)
         {
             world.insert(e, primase_core::state::Condition(vec![clause]));
@@ -1337,6 +1442,9 @@ pub fn read_game_area_staged(
         );
         world.insert(e, transform);
         world.insert(e, Source(format!("{map}:{}", part.name)));
+        if let Some((role, state)) = sky_part {
+            sky::attach(&mut world, e, sky_axis, role, state);
+        }
         shadows::attach(&mut world, e, part.shadows, &mut report.shadows);
         report.placements += 1;
         report.far_placements += usize::from(far);
@@ -1384,7 +1492,7 @@ pub fn read_game_area_staged(
         let models: Vec<effect_lights::PlacedModel<'_>> = placements
             .iter()
             .enumerate()
-            .filter(|(_, p)| p.key.starts_with(&format!("{object}/")))
+            .filter(|(_, p)| p.key.starts_with(&format!("{object}/")) && !p.sky)
             .filter_map(|(index, p)| {
                 let placement = match (selected_models.get(&index), object_dummies.get(&p.key)) {
                     (Some(transform), Some(dummies)) => effect_lights::Placement::Placed {
@@ -1433,6 +1541,9 @@ pub fn read_game_area_staged(
         states: states.is_some(),
     });
     report.states = states.map(|s| s.report);
+    if let Some(plan) = sky_plan {
+        report.sky = plan.report;
+    }
     report.area = area;
     *destination = world;
     stage("done");
@@ -1516,7 +1627,7 @@ mod tests {
             ..Options::default()
         };
         assert_eq!(
-            select_placements(&placements, &bounds, &options, &mut report),
+            select_placements(&placements, &bounds, &options, &[false; 5], &mut report),
             [3]
         );
         assert_eq!(

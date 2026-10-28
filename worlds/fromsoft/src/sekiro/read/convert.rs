@@ -27,6 +27,7 @@ pub const EMITTED_NAMES: &[&str] = &[
     "core.instance",
     "core.name",
     "core.shadows",
+    "core.sky_anchor",
     "core.source",
     "core.state_axis",
     "core.transform",
@@ -45,11 +46,13 @@ pub const EMITTED_NAMES: &[&str] = &[
     "fromsoft.shader_bundle",
     "fromsoft.shader_programs",
     "fromsoft.shadow_flags",
+    "fromsoft.sky_part",
     "fromsoft.texture_payloads",
 ];
 
 /// Coverage declaration for the requested read. A draw-param resource is optional:
-/// `DrawParams::None` deliberately reads no GPARAM, even if the area stores one.
+/// `DrawParams::None` deliberately reads no GPARAM, even if the area stores one; the sky's names
+/// (`core.sky_anchor`, `fromsoft.sky_part`) only with the sky read (`sky: include`).
 /// A requested but missing/unreadable file is still declared and explained by the read's notices.
 pub fn emitted_names(options: &Options) -> Vec<&'static str> {
     EMITTED_NAMES
@@ -57,6 +60,9 @@ pub fn emitted_names(options: &Options) -> Vec<&'static str> {
         .copied()
         .filter(|name| {
             *name != "fromsoft.draw_param" || options.draw_param != super::draw_param::DrawParams::None
+        })
+        .filter(|name| {
+            !matches!(*name, "core.sky_anchor" | "fromsoft.sky_part") || options.sky != super::sky::Sky::None
         })
         .collect()
 }

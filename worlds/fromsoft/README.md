@@ -629,6 +629,14 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
   lowered. Lights of a region that starts disabled and lights of a config the effect's first
   state does not choose are left out, counted by reason (`include-disabled=on` lowers them); a
   light dark at the lowered value is left out, counted.
+- `lower-fromsoft-sky` lowers the sky a Sekiro read brought in (`Options::sky: Include`, `read/sky.rs`): the sky
+  map `m89_00_00_99`'s domes (one per sky state), their rings of far mountains and the moon (the object `o005900`),
+  and the area's own domes no layout places. The read makes the states the values of one global axis,
+  `fromsoft.sky`, with no default (the game's choice is not read yet; a program assigns one or a viewer switches),
+  gives each dome and ring the condition of its state and `core.sky_anchor` horizontal (the game moves the sky map's
+  parts to the camera's x and z every frame); the pass anchors the moon towards the environment's sun at 25 units
+  (the game's), drops a moon with no sun (counted), and puts the sky's materials on the sky layer in the frame's
+  order (dome, moon, rings). Off unless asked: a target's pipeline that leaves out `sky` gets none of it.
 - `lower-fromsoft-environment{lux-per-unit=...}` lowers `fromsoft.draw_param` to
   the core environment: the light set's first directional light (`Directional
   Light Angle0`, `DiffColor0`) a directional `core.light` named as the sun by
@@ -759,6 +767,7 @@ unless an option asks), **unread** (no reader opens it). A row's owner is the pr
 | Far view (Elden Ring LOD tiles) | `Parents::Include` parts, `FILES` | the larger tiles' parts for the small tile are read (`Options::parents`); distant-terrain files beyond them: unread | `read/area.rs` / Objects. `FILES` lists the unread patterns |
 | Events (`EVENT_PARAM_ST`) of every type (treasure, generator, obj_act, navmesh, patrol_info, …) | `EVENTS` | read-header: type, event ID, the part and region named, entity ID read; the type's data kept as bytes. `map_offset` (Sekiro) is decoded and used | `msb::MapLayout::map_events`, `lower-fromsoft-map-records` / Other world data rows, Properties (no place of their own) |
 | Event scripts (`.emevd`) | one per area | Sekiro: read and interpreted for part presence (`states=event`); Elden Ring: unread (refused) | `emevd.rs`, `read/states.rs` / State axes |
+| Sky (Sekiro's sky map `m89_00_00_99`, the moon `o005900`, the areas' own unplaced domes) | its layout | read with `Options::sky` (off by default): the states as the `fromsoft.sky` axis without a default; which state the game draws is unread | `read/sky.rs`, `lower-fromsoft-sky` / Objects, State axes |
 | Draw-param environment | `draw_param_census` | read for the file the caller names; the file choice from the weather and events, and Elden Ring's `_weatherbase`/`_weatheroutdoor`/`_commonevent` layers: unread | `read/draw_param.rs`, `lower-fromsoft-environment` / Environment, Properties |
 | Textures (`.tpf`, Sekiro's `.tpfbhd`), shader bundles, materials | per area | read | `read/textures.rs`, `read/shaders.rs` / Shaded and Game shader views |
 
