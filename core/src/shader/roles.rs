@@ -196,6 +196,13 @@ pub enum ObjectParameter {
     /// The second per-model flag of the dithered transparency, set together with [`ObjectParameter::DitherAlphaEnabled`]
     /// (a program reads both, and fades only where both are on).
     DitherEnabled,
+    /// The factor the engine fades an instance's visibility by (one value): 1 where it is fully shown, 0 where it is gone. A
+    /// program applies it where its pass keeps the instance's visibility: multiplied into the alpha it writes or tests (an
+    /// alpha test, also one steered through the depth output), stored as the alpha of the image a pass writes, as the weight
+    /// of the surface against the scene behind it where the program blends itself, and, in a pass that has no alpha, into the
+    /// emission it writes. A consumer that draws the instance as fully shown feeds 1. The camera fade and the dither roles are
+    /// other mechanisms: they discard by noise, they do not scale a value.
+    Fade,
 }
 /// A value of the frame being drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]

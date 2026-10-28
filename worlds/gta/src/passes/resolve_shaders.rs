@@ -29,7 +29,7 @@
 //!   one past the end of the buffer it declares, is left out, counted. A constant the effect renames (its parameter records:
 //!   [`GtaEffectParameters`]) is a material parameter, bound to the words the material stores under the new name
 //!   (`Material`), or `Unknown` where it stores none; the engine's world, view and projection matrices have the roles
-//!   [`engine_role`] names, and the screen size's two pairs ([`engine_parts`], each bound where read); every other engine
+//!   [`engine_role`] names, the screen size's two pairs and `globalScalars` lane x, the fade (`ObjectParameter::Fade`) ([`engine_parts`], each bound where read); every other engine
 //!   constant is `Unknown` with its name.
 //! - **Textures.** A texture the program declares is the table record at its register and space that has a texture tag
 //!   (the sampler heap's and the constant buffers' records share register and space numbers with it). The material
@@ -436,12 +436,31 @@ pub fn select_pass<'a>(techniques: &'a GtaEffectTechniques, name: &str) -> Resul
 /// The engine constants whose register packs more than one value: the byte offset, the bytes and the role of each
 /// part. `globalScreenSize` is `(x, y, z, w)` with x, y scaling a coordinate into pixels (the render target's size)
 /// and z, w the uv-space steps of whole texels (its reciprocals); that z, w are `1 / x` and `1 / y` is the natural
-/// reading of their use (`tests/engine_lanes.rs`: no program shown multiplies them together).
-pub fn engine_parts(name: &str) -> Option<[(u32, u32, ConstantRole); 2]> {
+/// reading of their use (`tests/engine_lanes.rs`: no program shown multiplies them together). `globalScalars` is
+/// `(x, y, z, w)` with x the factor the engine fades an instance's visibility by ([`ObjectParameter::Fade`]) and the lanes
+/// after it unresolved ([`engine_reason`]). Lane x is read by 4,386 programs of the shader database (4,372 pixel, 14
+/// compute, no vertex; one per bytecode hash, `tests/global_scalars_x.rs`): 4,224 pixel programs multiply it into an alpha
+/// lane or an alpha-test discard, 112 reflection G-buffer programs (no alpha lane) into the emission, 27 `PS_LinearDepth`
+/// programs into an alpha test steering the depth, 9 `PS_Textured*` programs into the weight of the lit colour against the
+/// scene behind it (alpha 1), and 14 mirror-reflection compute programs store it as the alpha of the reflection image.
+pub fn engine_parts(name: &str) -> Option<Vec<(u32, u32, ConstantRole)>> {
     Some(match name {
-        "globalScreenSize" => [
+        "globalScreenSize" => vec![
             (0, 8, ConstantRole::View(ViewParameter::ViewportSize)),
             (8, 8, ConstantRole::View(ViewParameter::InverseViewportSize)),
+        ],
+        "globalScalars" => vec![
+            (0, 4, ConstantRole::Object(ObjectParameter::Fade)),
+            (
+                4,
+                12,
+                ConstantRole::Unknown {
+                    why: format!(
+                        "engine constant globalScalars lanes y to w: {}",
+                        engine_reason("globalScalars")?
+                    ),
+                },
+            ),
         ],
         _ => return None,
     })
@@ -964,7 +983,7 @@ pub fn engine_reason(name: &str) -> Option<&'static str> {
             "engine frame scalars: in the vertex programs lane y divides the clip depth of a see-through fade (VS_Transform_SeeThrough) and lane z is subtracted from a squared-distance fade of the vertex colour (VS_TransformD); in the pixel programs lane z is multiplied as 1 - z into a wetness term and stored as the top bit of the state byte of target 0 w (floor(128 z)); no game-free meaning established"
         }
         "globalScalars" => {
-            "engine frame scalars: lanes y and z are passed on to the pixel stage (VS_decalFx); in the pixel programs lane x multiplies the alpha (the diffuse alpha times the vertex alpha, before the alpha test), and lanes z and y multiply the vertex colour's x and y into the ambient terms of targets 0 w and 3; no game-free meaning established"
+            "lanes y and z are passed on to the pixel stage (VS_decalFx); in the pixel programs lanes z and y multiply the vertex colour's x and y into the ambient terms of targets 0 w and 3; no game-free meaning established (lane x is the fade, engine_parts)"
         }
         "gStippleAlpha" => {
             "a word whose low two bits are bits 6 and 7 of the state byte the G-buffer programs write to target 0 w ((word << 6) & 192); no game-free meaning established"
@@ -1920,11 +1939,20 @@ mod tests {
         assert_eq!(engine_role("globalScreenSize"), None);
         assert_eq!(
             engine_parts("globalScreenSize"),
-            Some([
+            Some(vec![
                 (0, 8, ConstantRole::View(ViewParameter::ViewportSize)),
                 (8, 8, ConstantRole::View(ViewParameter::InverseViewportSize)),
             ])
         );
+        // globalScalars: lane x alone is the fade; the other lanes keep their reason
+        assert_eq!(engine_role("globalScalars"), None);
+        let scalars = engine_parts("globalScalars").unwrap();
+        assert_eq!(scalars.len(), 2);
+        assert_eq!(scalars[0], (0, 4, ConstantRole::Object(ObjectParameter::Fade)));
+        assert!(matches!(
+            &scalars[1],
+            (4, 12, ConstantRole::Unknown { why }) if why.contains("lanes y to w") && why.contains("VS_decalFx")
+        ));
         assert_eq!(
             engine_role("globalAnimUV1"),
             Some(ConstantRole::Object(ObjectParameter::TextureTransformRow(1)))
