@@ -138,8 +138,8 @@ fn a_steady_effect_light_lowers_to_the_record_the_game_uploaded() {
     assert_eq!(light.range, Some(1.5));
 }
 
-/// A BTL spot as its bank stores it: the full vertical angle `cone`, the horizontal one (record offset 184) in the
-/// auxiliary words, the rotation in radians.
+/// A BTL spot as its bank stores it: the full vertical angle `cone`, the horizontal one (record offset 184), the
+/// rotation in radians.
 fn btl_spot(position: [f32; 3], rotation: [f32; 3], cone: f32, width: f32) -> BtlLight {
     BtlLight {
         name: "live".into(),
@@ -153,7 +153,18 @@ fn btl_spot(position: [f32; 3], rotation: [f32; 3], cone: f32, width: f32) -> Bt
         position,
         rotation,
         radius: 30.,
-        auxiliary: [(184, width.to_bits())].into(),
+        flicker_interval: [0.; 2],
+        flicker_brightness: 1.,
+        event_id: -1,
+        near_clip: 1.,
+        shadow_model_cull_flip: false,
+        sharpness: 1.,
+        horizontal_angle: width,
+        near_distance: 0.,
+        enable_distance: 0.,
+        volume_density: 0.,
+        exposure_weight: 0.,
+        auxiliary: Default::default(),
     }
 }
 

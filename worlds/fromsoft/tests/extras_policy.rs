@@ -15,6 +15,17 @@ fn light() -> BtlLight {
         position: [1., 2., 3.],
         rotation: [0.; 3],
         radius: 5.,
+        flicker_interval: [0.; 2],
+        flicker_brightness: 1.,
+        event_id: -1,
+        near_clip: 1.,
+        shadow_model_cull_flip: false,
+        sharpness: 1.,
+        horizontal_angle: 0.,
+        near_distance: 0.,
+        enable_distance: 0.,
+        volume_density: 0.,
+        exposure_weight: 0.,
         auxiliary: Default::default(),
     }
 }
