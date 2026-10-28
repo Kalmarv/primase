@@ -266,12 +266,37 @@ pub enum RootMotionUse {
 /// SDK headers found, 2009 `NORMAL = 0, ADDITIVE = 1` and Skyrim SE's `kNormal, kAdditive`, state no side, and no source
 /// found names a later `ADDITIVE_DEPRECATED`). Any other blend hint is left out and reported as unsupported (`omit`).
 /// `root-motion` is [`RootMotionUse`]: what is not lowered of an animation's extracted motion is counted.
+///
+/// The optional `blend-hint-1` and `blend-hint-2` (each [`AdditiveUse`]) state what is done with the animations of those
+/// blend hints: `child` lowers them as above, `leave` leaves them out and counts them. Without them hint 1 is lowered
+/// and hint 2 is left out (the files say neither what 2 means nor which side 1 composes on: the 3 Sekiro bindings with 2
+/// are all `c9520`'s, and Elden Ring stores none). Only the child-space composition `core.clip` states exists; a parent-space
+/// one would need a core composition of its own, and is not an option until a game run shows which hints use it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LowerHavokClips {
     pub absent: Fallback,
     pub rate: u32,
     pub clips: Clips,
     pub root_motion: RootMotionUse,
+    /// What is done with blend hint 1 animations (`blend-hint-1`; `child` when not given).
+    pub blend_hint_1: AdditiveUse,
+    /// What is done with blend hint 2 animations (`blend-hint-2`; `leave` when not given).
+    pub blend_hint_2: AdditiveUse,
+}
+
+/// What `lower-havok-clips` does with the animations of one additive blend hint (options `blend-hint-1` and
+/// `blend-hint-2`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AdditiveUse {
+    /// Lowered as deltas from the identity, composed as `core.clip` states (`R = R_base * R_clip`, `T = T_base + T_clip`).
+    Child,
+    /// Left out and reported as unsupported.
+    Leave,
+}
+
+impl Choice for AdditiveUse {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("child", AdditiveUse::Child), ("leave", AdditiveUse::Leave)];
 }
 
 /// `absent`'s values: a [`Fallback`] by the name the option gives it.
@@ -293,7 +318,8 @@ impl Choice for RootMotionUse {
     ];
 }
 
-/// `lower-havok-clips`' declaration ([`PassRegistry::add`]): every option required (see [`LowerHavokClips`]).
+/// `lower-havok-clips`' declaration ([`PassRegistry::add`]): `absent`, `rate`, `clips` and `root-motion` required,
+/// `blend-hint-1` and `blend-hint-2` optional (see [`LowerHavokClips`]).
 pub const LOWER_HAVOK_CLIPS: PassSpec = PassSpec {
     name: "lower-havok-clips",
     options: &[
@@ -315,6 +341,18 @@ pub const LOWER_HAVOK_CLIPS: PassSpec = PassSpec {
         OptionSpec::choice::<RootMotionUse>(
             "root-motion",
             "what of an animation's extracted motion is lowered: none (counted), its path, or its path and turn",
+        ),
+        OptionSpec::optional_choice::<AdditiveUse>(
+            "blend-hint-1",
+            "what is done with the animations whose blend hint is 1 (additive): lowered as deltas composed as core.clip \
+             states (child), or left out and counted (leave)",
+            "child",
+        ),
+        OptionSpec::optional_choice::<AdditiveUse>(
+            "blend-hint-2",
+            "what is done with the animations whose blend hint is 2 (additive in 2014 and later SDKs; Sekiro's c9520 \
+             stores three): lowered as for hint 1 (child), or left out and counted (leave)",
+            "leave",
         ),
     ],
     make: lower_havok_clips,
@@ -342,6 +380,12 @@ fn lower_havok_clips(g: &Given) -> std::result::Result<Box<dyn Pass>, String> {
         rate,
         clips,
         root_motion: g.choice::<RootMotionUse>("root-motion"),
+        blend_hint_1: g
+            .optional_choice::<AdditiveUse>("blend-hint-1")
+            .unwrap_or(AdditiveUse::Child),
+        blend_hint_2: g
+            .optional_choice::<AdditiveUse>("blend-hint-2")
+            .unwrap_or(AdditiveUse::Leave),
     }))
 }
 
@@ -570,7 +614,7 @@ impl Pass for LowerHavokClips {
         "lower-havok-clips"
     }
     fn options(&self) -> Options {
-        Options::from([
+        let mut options = Options::from([
             ("absent".to_owned(), FallbackOption(self.absent).text().to_owned()),
             ("rate".to_owned(), self.rate.to_string()),
             ("root-motion".to_owned(), self.root_motion.text().to_owned()),
@@ -581,7 +625,15 @@ impl Pass for LowerHavokClips {
                     Clips::Named(n) => n.join(";"),
                 },
             ),
-        ])
+        ]);
+        // an optional option is printed only when it differs from what no value means
+        if self.blend_hint_1 != AdditiveUse::Child {
+            options.insert("blend-hint-1".to_owned(), self.blend_hint_1.text().to_owned());
+        }
+        if self.blend_hint_2 != AdditiveUse::Leave {
+            options.insert("blend-hint-2".to_owned(), self.blend_hint_2.text().to_owned());
+        }
+        options
     }
     fn requires(&self) -> &[&'static str] {
         &[HavokAnimation::NAME]
@@ -623,8 +675,26 @@ impl Pass for LowerHavokClips {
                 .ok_or_else(|| format!("{name}: no havok.animation"))?;
             let additive = match a.blend_hint {
                 0 => false,
-                // the track values of a blend hint 1 animation are deltas from the identity (see the pass's documentation)
-                1 => true,
+                // the track values of a blend hint 1 or 2 animation are deltas from the identity (see the pass's
+                // documentation); the program says whether each hint is lowered
+                hint @ (1 | 2) => {
+                    let chosen = if hint == 1 {
+                        self.blend_hint_1
+                    } else {
+                        self.blend_hint_2
+                    };
+                    if chosen == AdditiveUse::Leave {
+                        let why = if hint == 1 {
+                            "animations with blend hint 1, left out as blend-hint-1=leave says".to_owned()
+                        } else {
+                            "animations with blend hint 2, whose values are not known to be absolute or deltas"
+                                .to_owned()
+                        };
+                        log.omit(&why, 1);
+                        continue;
+                    }
+                    true
+                }
                 hint => {
                     log.omit(
                         &format!("animations with blend hint {hint}, whose values are not known to be absolute or deltas"),
@@ -683,7 +753,7 @@ impl Pass for LowerHavokClips {
         if additive_lowered > 0 {
             log.approximate(
                 concat!(
-                    "additive animations (blend hint 1) lowered as deltas from the identity, composed as core.clip states; ",
+                    "additive animations (blend hint 1, or 2 when chosen) lowered as deltas from the identity, composed as core.clip states; ",
                     "a component a track does not state is taken as no delta, and the side a Havok delta composes on ",
                     "is not verified"
                 ),
@@ -921,6 +991,53 @@ mod tests {
         )
         .unwrap();
         assert_eq!(w.get::<Clip>(e).unwrap().additive, None);
+    }
+
+    #[test]
+    fn the_program_chooses_what_is_done_with_the_animations_of_blend_hints_one_and_two() {
+        let frame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::PosZ], 1.0);
+        let base = [("absent", "neutral"), ("rate", "1"), ("clips", "all")];
+        // hint 2 is left out unless the program says child, and is then lowered as hint 1 is
+        let (mut w, e, _) = world(frame, 2);
+        let log = run(&mut w, &base).unwrap();
+        assert!(!w.has::<Clip>(e));
+        assert_eq!(
+            log.omitted["animations with blend hint 2, whose values are not known to be absolute or deltas"],
+            1
+        );
+        let (mut w, e, _) = world(frame, 2);
+        let log = run(&mut w, &[base[0], base[1], base[2], ("blend-hint-2", "child")]).unwrap();
+        assert_eq!(
+            w.get::<Clip>(e).unwrap().additive,
+            Some(AdditiveReference::Identity)
+        );
+        assert!(log.omitted.is_empty(), "{:?}", log.omitted);
+        // hint 1 is lowered unless the program says leave
+        let (mut w, e, _) = world(frame, 1);
+        let log = run(&mut w, &[base[0], base[1], base[2], ("blend-hint-1", "leave")]).unwrap();
+        assert!(!w.has::<Clip>(e));
+        assert_eq!(
+            log.omitted["animations with blend hint 1, left out as blend-hint-1=leave says"],
+            1
+        );
+        // the choices are checked, and printed back only where they differ from no value
+        let options: Options = [
+            ("absent", "neutral"),
+            ("rate", "1"),
+            ("clips", "all"),
+            ("root-motion", "leave"),
+            ("blend-hint-2", "child"),
+        ]
+        .iter()
+        .map(|(k, v)| ((*k).into(), (*v).into()))
+        .collect();
+        let pass = LOWER_HAVOK_CLIPS.instance(&options).unwrap();
+        let printed = pass.options();
+        assert_eq!(printed.get("blend-hint-2").map(String::as_str), Some("child"));
+        assert!(!printed.contains_key("blend-hint-1"));
+        let mut bad = options.clone();
+        bad.insert("blend-hint-1".into(), "parent".into());
+        assert!(LOWER_HAVOK_CLIPS.instance(&bad).is_err());
     }
 
     #[test]
