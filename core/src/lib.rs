@@ -41,6 +41,8 @@ pub mod names;
 pub use lod::{LodChoice, LodForm, Lods, SELECT_LOD, SelectLod};
 mod marker;
 pub use marker::{Curve, Marker, kind_is_valid};
+pub mod particles;
+pub use particles::ParticleSystem;
 mod spawn;
 pub use spawn::{PLACE_SPAWN, PlaceSpawn, SpawnAt, centre_ground};
 mod collider;
