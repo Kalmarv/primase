@@ -30,6 +30,7 @@ use crate::pbr::PbrMaterial;
 use crate::primitive_keys::PrimitiveKeys;
 use crate::priority::Priority;
 use crate::provenance::Provenance;
+use crate::render_graph::RenderGraph;
 use crate::rig::{
     Attachment, JointMap, JointPlacement, MorphWeights, RigInstance, RigPose, SkinInstance, Sockets,
 };
@@ -73,7 +74,7 @@ declared! {
         RigPose, SkinInstance, MorphWeights, Sockets, Attachment, JointMap, JointPlacement, Clip, ClipBinding, Asset, Shader, ShaderBinding,
         TextureLayers, MaterialPrograms, ProgramFacts, ClipKey, ClipLength, ClipEvents, Controller, ControllerBinding,
         DrawGroups, DrawGroupDefaults, ContentNote, Record, DisplayName, PrimitiveKeys, MaterialParameters, SkyAnchor;
-    resources: PartScope, PartitionPlan, Environment, Atmosphere, StateAssignment, Surfaces, Threads, Memo,
+    resources: PartScope, PartitionPlan, Environment, Atmosphere, StateAssignment, Surfaces, Threads, Memo, RenderGraph,
 }
 
 #[cfg(test)]

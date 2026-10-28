@@ -208,7 +208,8 @@ pub enum DrawBucket {
     /// Surfaces lit as they are drawn, after the deferred light (the blended ones, water).
     Forward,
     /// The sky: its dome, the sun's and moon's discs, cloud layers and far scenery drawn as part of the sky, each by its
-    /// own material, after the deferred light and the fog that is composited over it.
+    /// own material, after the deferred light and the fog that is composited over it: the draws whose material's
+    /// `core.draw_order` layer is [`crate::DrawLayer::Sky`].
     Sky,
     /// The shadow casters of a light.
     ShadowCaster,
@@ -222,8 +223,19 @@ pub enum DrawBucket {
 pub enum SceneView {
     /// The frame's camera.
     Camera,
-    /// Cascade `n` of the sun's shadow (its matrix is the role `ViewParameter::ShadowCascadeMatrix(n)`).
-    ShadowCascade(u8),
+    /// Cascade `cascade` of the sun's shadow (its matrix the role `ViewParameter::ShadowCascadeMatrix(cascade)`), drawn
+    /// into `region` of the depth target: an atlas holds several cascades side by side (Sekiro's four 2048 x 2048
+    /// quarters of one 4096 x 4096 target).
+    ShadowCascade { cascade: u8, region: Region },
+}
+
+/// A rectangle of a target's texels at its mip 0: its top-left corner `x`, `y` and its `width` and `height`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct Region {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
 }
 
 /// Another feature's place in the frame.
@@ -266,6 +278,26 @@ impl RenderGraph {
                 return Err(format!(
                     "{what} uses {} as depth",
                     self.targets[d.view.target as usize].name
+                ));
+            }
+        }
+        Ok(())
+    }
+    /// A shadow cascade's region: not empty, drawn into a depth target, and inside it where its size is fixed.
+    fn region_ok(&self, o: &Outputs, region: &Region, what: &str) -> Result<(), String> {
+        let depth = o
+            .depth
+            .as_ref()
+            .ok_or_else(|| format!("{what} draws a shadow cascade with no depth target"))?;
+        if region.width == 0 || region.height == 0 {
+            return Err(format!("{what} draws a shadow cascade into an empty region"));
+        }
+        if let TargetSize::Fixed { width, height, .. } = self.targets[depth.view.target as usize].size {
+            let right = region.x.checked_add(region.width);
+            let bottom = region.y.checked_add(region.height);
+            if right.is_none_or(|r| r > width) || bottom.is_none_or(|b| b > height) {
+                return Err(format!(
+                    "{what} draws a shadow cascade outside its depth target ({width} x {height})"
                 ));
             }
         }
@@ -322,9 +354,13 @@ impl RenderGraph {
                         }
                     }
                 }
-                PassWork::Scene { outputs, .. } | PassWork::Slot { outputs, .. } => {
-                    self.outputs_ok(outputs, &what)?
+                PassWork::Scene { outputs, view, .. } => {
+                    self.outputs_ok(outputs, &what)?;
+                    if let SceneView::ShadowCascade { region, .. } = view {
+                        self.region_ok(outputs, region, &what)?;
+                    }
                 }
+                PassWork::Slot { outputs, .. } => self.outputs_ok(outputs, &what)?,
                 PassWork::Clear { target, value } => {
                     self.view_ok(target, &what)?;
                     if !value.iter().all(|x| x.is_finite()) {
@@ -471,5 +507,55 @@ mod tests {
         g.picture = Some(5);
         g.passes.clear();
         assert_eq!(g.check(), Err("the picture names target 5 of 2".into()));
+    }
+
+    /// Sekiro's shadow atlas (a recorded frame: one 4096 x 4096 R16 depth target, its cascades' draws in the four
+    /// 2048 x 2048 quarters): a cascade's region must be inside the atlas.
+    #[test]
+    fn a_shadow_cascade_draws_into_a_region_of_its_atlas() {
+        let mut atlas = target("shadow", TargetFormat::Depth16);
+        atlas.size = TargetSize::Fixed {
+            width: 4096,
+            height: 4096,
+            depth: 1,
+        };
+        let cascade = |region: Region| RenderPass {
+            name: "cascade".into(),
+            shared: true,
+            work: PassWork::Scene {
+                bucket: DrawBucket::ShadowCaster,
+                view: SceneView::ShadowCascade { cascade: 3, region },
+                outputs: Outputs {
+                    colour: Vec::new(),
+                    depth: Some(DepthView {
+                        view: view(0),
+                        read_only_depth: false,
+                        read_only_stencil: false,
+                    }),
+                },
+            },
+        };
+        let quarter = Region {
+            x: 2048,
+            y: 2048,
+            width: 2048,
+            height: 2048,
+        };
+        let mut g = RenderGraph {
+            targets: vec![atlas],
+            passes: vec![cascade(quarter)],
+            picture: None,
+        };
+        assert_eq!(g.check(), Ok(()));
+        g.passes[0] = cascade(Region { x: 2049, ..quarter });
+        assert_eq!(
+            g.check(),
+            Err("pass cascade draws a shadow cascade outside its depth target (4096 x 4096)".into())
+        );
+        g.passes[0] = cascade(Region { width: 0, ..quarter });
+        assert_eq!(
+            g.check(),
+            Err("pass cascade draws a shadow cascade into an empty region".into())
+        );
     }
 }
