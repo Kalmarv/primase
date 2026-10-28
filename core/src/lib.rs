@@ -58,6 +58,7 @@ mod pass_options;
 pub mod pbr;
 pub mod print;
 pub mod provenance;
+pub mod render_graph;
 pub mod rig;
 pub mod shader;
 pub mod skeleton;
