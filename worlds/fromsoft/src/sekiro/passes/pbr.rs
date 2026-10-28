@@ -1153,6 +1153,7 @@ mod tests {
             shader_data_index: 0,
             path: String::new(),
             extra: vec![],
+            version: 5,
         };
         let definition = fromsoft_formats::mtd::MaterialDefinition {
             shader: "MetallicTex".into(),

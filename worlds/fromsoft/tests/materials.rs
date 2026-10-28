@@ -20,6 +20,7 @@ fn definition() -> MaterialDefinition {
             shader_data_index: 8,
             path: "fixed_wood_a.dds".into(),
             extra: vec![],
+            version: 5,
         }],
     }
 }
@@ -130,6 +131,7 @@ fn water_previews_its_own_normal_map_without_a_base_colour() {
             shader_data_index: 3,
             path: "m99_water_n.dds".into(),
             extra: vec![],
+            version: 5,
         },
         Texture {
             kind: "Texture2D_0_MaskMap".into(),
@@ -137,6 +139,7 @@ fn water_previews_its_own_normal_map_without_a_base_colour() {
             shader_data_index: 0,
             path: "m10_waterformmask_3m.dds".into(),
             extra: vec![],
+            version: 5,
         },
     ];
     let mut s = source();

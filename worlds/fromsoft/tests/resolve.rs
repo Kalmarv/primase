@@ -74,6 +74,7 @@ fn texture_kind(kind: &str) -> mtd::Texture {
         shader_data_index: 0,
         path: String::new(),
         extra: Vec::new(),
+        version: 5,
     }
 }
 fn bound(stem: &str, scale: [f32; 2], address: [Option<AddressMode>; 2]) -> Binding {

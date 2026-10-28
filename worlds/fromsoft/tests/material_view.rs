@@ -47,6 +47,7 @@ fn mtd(parameters: Vec<(&str, M)>) -> MaterialDefinition {
             shader_data_index: 0,
             path: String::new(),
             extra: Vec::new(),
+            version: 5,
         }],
         block_lengths: Vec::new(),
         padding: Vec::new(),

@@ -32,6 +32,7 @@ fn source(shader: &str) -> materials::Material {
                 shader_data_index: 0,
                 path: String::new(),
                 extra: vec![],
+                version: 5,
             })
             .collect(),
     };

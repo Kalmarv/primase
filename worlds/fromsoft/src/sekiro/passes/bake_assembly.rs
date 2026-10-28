@@ -466,6 +466,7 @@ mod tests {
                     uv_number: t["uv_number"].as_i64().unwrap() as i32,
                     shader_data_index: t["shader_data_index"].as_i64().unwrap() as i32,
                     extra: serde_json::from_value(t["extra"].clone()).unwrap(),
+                    version: 5,
                 })
                 .collect(),
             block_lengths: def["block_lengths"]
