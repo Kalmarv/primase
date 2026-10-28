@@ -21,7 +21,6 @@ use unity_formats::TypeTreePackage;
 use unity_formats::listing::list;
 use unity_formats::mesh::UnityMeshData;
 use unity_formats::player::{BundleSpec, NodeSelection, Player};
-use unity_formats::scene::Scene;
 use unity_formats::texture::UnityTexture;
 
 fn package() -> Option<TypeTreePackage> {
@@ -133,9 +132,9 @@ fn addressables_bundles_beside_the_loose_files() {
 }
 
 /// PEAK: one level of `levels192-207.assetbundle` with the files its pointers name (its shared assets and other levels'
-/// in the bundle), not the bundle's other levels, beside the loose files of the player. The scene's hierarchy and
-/// renderers read from the bundle, and meshes and textures of its shared assets read with their data. (`read_level`
-/// itself stops on this level at an AnimatorController of PEAK's, which this reader does not read: not a bundle matter.)
+/// in the bundle), not the bundle's other levels, beside the loose files of the player. The level reads into a world
+/// (`read_level`: its Animators' controllers include `Scout`, whose empty layer has an entry node without a destination),
+/// and meshes and textures of its shared assets read with their data.
 #[test]
 fn one_level_of_peaks_bundle_reads() {
     let (Some(data), Some(package)) = (install_file(Game::Peak, "PEAK_Data"), package()) else {
@@ -165,10 +164,13 @@ fn one_level_of_peaks_bundle_reads() {
         bundled.len() < 8,
         "a level and what it points at, not the bundle: {bundled:?}"
     );
-    let scene = Scene::read(&player, "buildplayer-level_207").unwrap();
-    let (renderers, skipped) = scene.renderers(&player).unwrap();
-    eprintln!("PEAK {level}: {} renderers, skipped {skipped:?}", renderers.len());
-    assert!(!renderers.is_empty());
+    let mut w = World::new();
+    let report = read_level(&player, "buildplayer-level_207", &mut w).unwrap();
+    eprintln!(
+        "PEAK {level}: {} renderers, {} materials, {} textures, {} controllers",
+        report.renderers, report.materials, report.textures, report.controllers
+    );
+    assert!(report.renderers > 0);
     let meshes = list(&player, Some(&["Mesh"])).unwrap();
     assert!(!meshes.entries.is_empty());
     for e in meshes.entries.iter().take(5) {
