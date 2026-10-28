@@ -11,6 +11,7 @@ pub mod blockers;
 pub mod collision;
 pub mod detail;
 pub mod draw_params;
+pub mod effects;
 pub mod environment;
 pub mod extras;
 pub mod far;
@@ -95,6 +96,7 @@ pub fn register(registry: &mut PassRegistry) {
         &environment::LOWER_FROMSOFT_ENVIRONMENT,
         &lights::LOWER_FROMSOFT_LIGHTS,
         &sky::LOWER_FROMSOFT_SKY,
+        &effects::LOWER_FROMSOFT_EFFECTS,
     ] {
         registry.add(spec);
     }

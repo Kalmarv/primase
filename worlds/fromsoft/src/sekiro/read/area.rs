@@ -4,7 +4,7 @@
 //! (where a map keeps its files, how objects are found, tile parents) is [`fromsoft_formats::Game`]'s; what Elden Ring's read does
 //! not cover yet (world states, materials without a definition) is in its notices.
 use super::{
-    animation, collision, draw_param, effect_lights, extras, objects, shaders, shadows, sky, states, textures,
+    animation, collision, draw_param, effect_lights, effects, extras, objects, shaders, shadows, sky, states, textures,
 };
 use crate::sekiro::source::{self, Region};
 use crate::{invalid, materials};
@@ -60,6 +60,10 @@ pub struct Options {
     /// off by default. Its programs are read from the install's engine binders; its steps are the game's, as recorded
     /// frames of the running game show them, whatever the area.
     pub render_graph: bool,
+    /// Whether the effects themselves are read where they stand ([`effects`]): the same routes as `effect_lights`, but the whole
+    /// effect (`fromsoft.effect` on an entity placed there, the effect files and the textures they name) rather than its lights;
+    /// off by default. `lower-fromsoft-effects` lowers them to `core.particles`.
+    pub effects: bool,
 }
 /// What a read of the object models' animation binders found.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -130,6 +134,8 @@ pub struct Report {
     pub extras: extras::Report,
     /// The effect lights placed and what was left ([`Options::effect_lights`]).
     pub effect_lights: effect_lights::Report,
+    /// The effects placed and what was left ([`Options::effects`]).
+    pub effects: effects::Report,
     /// The placed map collision files read.
     pub collision: collision::Report,
     /// The kept object prototypes' collision files read.
@@ -1395,7 +1401,7 @@ pub fn read_game_area_staged(
                 && key
                     .strip_prefix(&format!("{area}/"))
                     .is_some_and(|model| game.far_model(model));
-            if options.effect_lights && key.starts_with(&format!("{object}/")) {
+            if (options.effect_lights || options.effects) && key.starts_with(&format!("{object}/")) {
                 let (dummies, left_out) = effect_lights::ModelDummies::of(&proto.model)
                     .map_err(|e| invalid("FromSoftware model", 0, format!("{key}: {e}")))?;
                 report.effect_lights.dummies_left_out += left_out;
@@ -1468,7 +1474,7 @@ pub fn read_game_area_staged(
         .collect();
     stage("spawn placements");
     // the kept placements of the object models, by placement index
-    let selected_models: BTreeMap<usize, Transform> = if options.effect_lights {
+    let selected_models: BTreeMap<usize, Transform> = if options.effect_lights || options.effects {
         selected
             .iter()
             .filter(|(key, _, _)| key.starts_with(&format!("{object}/")))
@@ -1576,7 +1582,7 @@ pub fn read_game_area_staged(
             &mut world,
         )?;
     }
-    if options.effect_lights {
+    if options.effect_lights || options.effects {
         stage("effect lights");
         // every object or asset part of the layouts read, kept or not: the census of what the rows reach is of all of them
         let models: Vec<effect_lights::PlacedModel<'_>> = placements
@@ -1604,17 +1610,32 @@ pub fn read_game_area_staged(
             })
             .collect();
         let dummies_left_out = report.effect_lights.dummies_left_out;
-        report.effect_lights = effect_lights::assemble(
-            install,
-            &archive,
-            decoder,
-            &area,
-            &layout,
-            options.region.map(|r| r.rect),
-            &models,
-            &mut world,
-        )?;
+        if options.effect_lights {
+            report.effect_lights = effect_lights::assemble(
+                install,
+                &archive,
+                decoder,
+                &area,
+                &layout,
+                options.region.map(|r| r.rect),
+                &models,
+                &mut world,
+            )?;
+        }
         report.effect_lights.dummies_left_out = dummies_left_out;
+        if options.effects {
+            stage("effects");
+            report.effects = effects::assemble(
+                install,
+                &archive,
+                decoder,
+                &area,
+                &layout,
+                options.region.map(|r| r.rect),
+                &models,
+                &mut world,
+            )?;
+        }
     }
     stage("environment");
     let configs = environment_configs(&layout, &options.draw_param, &environment_parts)?;

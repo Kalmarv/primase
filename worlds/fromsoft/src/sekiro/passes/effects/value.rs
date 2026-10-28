@@ -14,12 +14,26 @@ pub struct Notes {
     pub lost: BTreeMap<String, u32>,
     /// Things carried approximately (a Hermite sampled into a line), with how many times.
     pub approximated: BTreeMap<String, u32>,
+    /// What was made, by kind (`draw of action 603`), so that placed and lost add up to what the file holds.
+    pub placed: BTreeMap<String, u32>,
 }
 
 impl Notes {
     /// Counts one loss.
     pub fn lose(&mut self, reason: impl Into<String>) {
         *self.lost.entry(reason.into()).or_default() += 1;
+    }
+
+    /// Counts `n` losses of one reason.
+    pub fn lose_n(&mut self, reason: impl Into<String>, n: u32) {
+        if n > 0 {
+            *self.lost.entry(reason.into()).or_default() += n;
+        }
+    }
+
+    /// Counts one thing made.
+    pub fn place(&mut self, what: impl Into<String>) {
+        *self.placed.entry(what.into()).or_default() += 1;
     }
 
     /// Counts one approximation.
@@ -34,6 +48,9 @@ impl Notes {
         }
         for (k, n) in &other.approximated {
             *self.approximated.entry(k.clone()).or_default() += n;
+        }
+        for (k, n) in &other.placed {
+            *self.placed.entry(k.clone()).or_default() += n;
         }
     }
 }
@@ -190,6 +207,165 @@ fn variations(p: &Property, inputs: &mut Inputs, notes: &mut Notes) -> Vec<Varia
 pub fn value(p: &Property, argument: Argument, inputs: &mut Inputs, notes: &mut Notes) -> Value {
     let variation = variations(p, inputs, notes);
     Value { argument, curve: curve(p, notes), variation }
+}
+
+/// The first component of a property read at argument 0: what a scalar parameter that is not a function of time stands
+/// for (a constant, or the first value of a function).
+pub fn number(p: &Property) -> f32 {
+    p.value_at(0.0).first().copied().filter(|v| v.is_finite()).unwrap_or(0.0)
+}
+
+/// The first component of a value at argument 0.
+pub fn number_of(v: &Value) -> f32 {
+    v.curve.value_at(0.0)[0]
+}
+
+/// A texture, model or animation number a property names: a positive whole number.
+pub fn id(p: &Property) -> Option<i32> {
+    let n = number(p);
+    (n >= 1.0 && n < 2_147_483_000.0).then(|| n.round() as i32)
+}
+
+/// A whole number of an integer-valued property (a count, a limit): the value at argument 0 rounded; `None` for a negative
+/// one (the files' "no limit" is -1).
+pub fn count(p: &Property) -> Option<u32> {
+    let n = number(p);
+    (n >= 0.0 && n < 4_294_967_000.0).then(|| n.round() as u32)
+}
+
+/// `v` with every key value and handle multiplied by `k` (a unit change, a sign), and its variations kept meaning the same
+/// change of the scaled quantity.
+pub fn scaled(mut v: Value, k: f32) -> Value {
+    for key in &mut v.curve.keys {
+        for c in 0..4 {
+            key.value[c] *= k;
+            key.handle_in[c] *= k;
+            key.handle_out[c] *= k;
+        }
+    }
+    for var in &mut v.variation {
+        match var {
+            // a delta is a magnitude and a fraction is relative to the base: neither changes with the sign
+            Variation::Delta { max, .. } => {
+                for m in max.iter_mut() {
+                    *m *= k.abs();
+                }
+            }
+            Variation::Fraction { .. } | Variation::Scaled { .. } => {}
+            Variation::Range { min, max, .. } => {
+                let (lo, hi) = (min.map(|x| x * k), max.map(|x| x * k));
+                for c in 0..4 {
+                    min[c] = lo[c].min(hi[c]);
+                    max[c] = lo[c].max(hi[c]);
+                }
+            }
+        }
+    }
+    v
+}
+
+/// `-v`.
+pub fn negated(v: Value) -> Value {
+    scaled(v, -1.0)
+}
+
+/// `v + c` for every component of every key.
+pub fn shifted(mut v: Value, c: f32) -> Value {
+    let width = usize::from(v.curve.width.clamp(1, 4));
+    for key in &mut v.curve.keys {
+        for slot in key.value.iter_mut().take(width) {
+            *slot += c;
+        }
+    }
+    v
+}
+
+/// The value of a fixed `v` (a constant without variation): its first key's components.
+fn fixed(v: &Value) -> Option<[f32; 4]> {
+    v.is_fixed().then(|| v.curve.value_at(0.0))
+}
+
+/// `a` and `b` combined component by component with `f`, where either is a constant exactly (a key-wise change), else sampled
+/// into a linear curve at the keys of both and four pieces between them, counted. `a`'s variations are kept, `b`'s are dropped
+/// (counted) when `b` varies.
+fn combine(a: Value, b: Value, f: fn(f32, f32) -> f32, what: &str, notes: &mut Notes) -> Value {
+    if let Some(k) = fixed(&b) {
+        let mut out = a;
+        for key in &mut out.curve.keys {
+            for c in 0..4 {
+                key.value[c] = f(key.value[c], k[c.min(usize::from(b.curve.width.clamp(1, 4)) - 1)]);
+            }
+        }
+        // handles of a combined bezier are only right for a product by a constant; counted otherwise
+        if out.curve.interpolation == Interpolation::Bezier {
+            notes.approximate(format!("a {what} of a Bezier property and a constant, handles kept"));
+        }
+        return out;
+    }
+    if let Some(k) = fixed(&a) {
+        let mut out = b;
+        for key in &mut out.curve.keys {
+            for c in 0..4 {
+                key.value[c] = f(k[c.min(usize::from(a.curve.width.clamp(1, 4)) - 1)], key.value[c]);
+            }
+        }
+        if out.curve.interpolation == Interpolation::Bezier {
+            notes.approximate(format!("a {what} of a Bezier property and a constant, handles kept"));
+        }
+        return out;
+    }
+    if a.argument != b.argument {
+        notes.approximate(format!("a {what} of properties read at different arguments, taken at the first's"));
+    }
+    let mut times: Vec<f32> = a.curve.keys.iter().chain(&b.curve.keys).map(|k| k.at).collect();
+    times.sort_by(f32::total_cmp);
+    times.dedup();
+    let width = a.curve.width.max(b.curve.width).clamp(1, 4);
+    let sample = |t: f32| -> [f32; 4] {
+        let (x, y) = (a.curve.value_at(t), b.curve.value_at(t));
+        let mut out = [0.0; 4];
+        for (c, slot) in out.iter_mut().enumerate().take(usize::from(width)) {
+            *slot = f(x[c.min(usize::from(a.curve.width.clamp(1, 4)) - 1)], y[c.min(usize::from(b.curve.width.clamp(1, 4)) - 1)]);
+        }
+        out
+    };
+    let mut keys = Vec::new();
+    for (i, &t0) in times.iter().enumerate() {
+        keys.push(Key { at: t0, value: sample(t0), handle_in: [0.0; 4], handle_out: [0.0; 4] });
+        if let Some(&t1) = times.get(i + 1) {
+            for q in 1..4 {
+                let t = t0 + (t1 - t0) * q as f32 / 4.0;
+                keys.push(Key { at: t, value: sample(t), handle_in: [0.0; 4], handle_out: [0.0; 4] });
+            }
+        }
+    }
+    if !b.variation.is_empty() {
+        notes.approximate(format!("a {what} of two varying properties, the second's random variation dropped"));
+    }
+    notes.approximate(format!("a {what} of two varying properties sampled into a linear curve"));
+    Value {
+        argument: a.argument,
+        curve: Curve { width, interpolation: Interpolation::Linear, looped: false, keys },
+        variation: a.variation,
+    }
+}
+
+/// `a * b`.
+pub fn product(a: Value, b: Value, notes: &mut Notes) -> Value {
+    if a.curve.width == 1 && b.curve.width == 1 {
+        if let Some(k) = fixed(&b) {
+            return scaled(a, k[0]);
+        }
+        if let Some(k) = fixed(&a) {
+            return scaled(b, k[0]);
+        }
+    }
+    combine(a, b, |x, y| x * y, "product", notes)
+}
+
+/// `a + b`.
+pub fn sum(a: Value, b: Value, notes: &mut Notes) -> Value {
+    combine(a, b, |x, y| x + y, "sum", notes)
 }
 
 #[cfg(test)]

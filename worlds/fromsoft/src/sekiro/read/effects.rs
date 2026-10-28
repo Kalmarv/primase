@@ -1,0 +1,409 @@
+//! Effects where they stand (`fromsoft.effect`): the effects the map's SFX regions name and the effects the kept objects and
+//! assets spawn through their model effect row (the routes `fromsoft.effect_light` is read through, see
+//! [`super::effect_lights`]), with the effect files as stored (`fromsoft.effect_file`) and the textures they name
+//! (`fromsoft.effect_resource`, a `core.texture` each). Their interpretation belongs to `lower-fromsoft-effects`.
+//!
+//! The effect files are looked for in the binder of the area's map (`sfxbnd_<mNN>`, and Elden Ring's `sfxbnd_<full map name>`
+//! where there is one), then `sfxbnd_commoneffects` and Elden Ring's `commoneffects_dlc02`; the copies of an effect in several
+//! binders are byte-identical. A texture is looked for in the same binders, in that order.
+use super::effect_lights::{ModelDummies, PlacedModel, Placement, map_transform, row_of};
+use super::textures::tpf_image;
+use crate::pose::placed;
+use crate::sekiro::components::effect::{Effect, EffectFile, EffectResource, ResourceKind};
+use crate::sekiro::source::EffectPlace;
+use fromsoft_formats::fxr::actions::Typed;
+use fromsoft_formats::fxr::resources::{ResourceKind as FileKind, Resources};
+use fromsoft_formats::fxr::{self, Fxr, TypedNode};
+use fromsoft_formats::msb::{MapLayout, euler_matrix};
+use fromsoft_formats::param::ModelSfxParam;
+use fromsoft_formats::tpf::Package;
+use fromsoft_formats::{Archive, Binder, Game, Install, Result, dcx::Decoder};
+use primase_core::{Entity, Name, Source, Transform, World};
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+
+/// What the read of the effects found and left.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Report {
+    /// Whether the read was asked for ([`crate::sekiro::Options::effects`]).
+    pub asked: bool,
+    /// SFX regions inside the read region and those outside it.
+    pub regions: usize,
+    pub regions_outside: usize,
+    /// Effects placed through the regions and through the model rows.
+    pub region_effects: usize,
+    pub model_effects: usize,
+    /// Placed objects (Sekiro) or assets (Elden Ring) whose model effect row was named, and parts of models that cannot name
+    /// one.
+    pub parts_with_row: usize,
+    pub parts_without_row: usize,
+    /// Parts with a row that are not placed, by reason.
+    pub parts_not_placed: BTreeMap<String, usize>,
+    /// Effect files read (the placed ones and the ones they spawn), textures read into the world, and the numbers a file named
+    /// that no binder searched held (by kind), and models and animations named (not read).
+    pub files: usize,
+    pub textures: usize,
+    pub missing: BTreeMap<String, usize>,
+    pub models_named: usize,
+    pub animations_named: usize,
+    /// References that placed nothing, by reason (counted once per effect file or row), and the placements left unplaced
+    /// because their effect file was not found.
+    pub refused: BTreeMap<String, usize>,
+    pub unplaced: usize,
+    /// Why the model effect param could not be read, if it could not.
+    pub param_unresolved: Option<String>,
+}
+
+impl Report {
+    fn refuse(&mut self, reason: impl ToString) {
+        *self.refused.entry(reason.to_string()).or_default() += 1;
+    }
+}
+
+/// An effect to put where a transform says.
+#[derive(Clone, Debug)]
+pub struct Wanted {
+    pub effect: i32,
+    pub transform: Transform,
+    pub place: EffectPlace,
+    pub starts_disabled: bool,
+    /// The label of the entity's `core.source`.
+    pub label: String,
+}
+
+struct Loaded {
+    binder: Binder,
+    effects: BTreeMap<i32, usize>,
+    resources: Resources,
+}
+
+/// The effect binders an area's effects and textures are looked for in.
+pub struct EffectLibrary<'a> {
+    archive: &'a Archive,
+    decoder: &'a Decoder<'a>,
+    game: Game,
+    paths: Vec<String>,
+    loaded: Vec<Option<Loaded>>,
+    files: BTreeMap<i32, std::result::Result<Option<Arc<Fxr>>, String>>,
+}
+
+/// The binders to search for an area's effects, those the archive holds: the area's own, then the common ones.
+pub fn binders_for_area(game: Game, area: &str) -> Vec<String> {
+    let mut paths = vec![format!("/sfx/sfxbnd_{}.ffxbnd.dcx", area.get(..3).unwrap_or(area))];
+    if game == Game::EldenRing {
+        paths.push(format!("/sfx/sfxbnd_{area}.ffxbnd.dcx"));
+    }
+    paths.push("/sfx/sfxbnd_commoneffects.ffxbnd.dcx".to_owned());
+    if game == Game::EldenRing {
+        paths.push("/sfx/sfxbnd_commoneffects_dlc02.ffxbnd.dcx".to_owned());
+    }
+    paths
+}
+
+impl<'a> EffectLibrary<'a> {
+    /// A library over the binders `paths` (in search order) that the archive holds.
+    pub fn new(archive: &'a Archive, decoder: &'a Decoder<'a>, game: Game, mut paths: Vec<String>) -> Self {
+        paths.retain(|p| archive.contains(p));
+        let loaded = paths.iter().map(|_| None).collect();
+        EffectLibrary { archive, decoder, game, paths, loaded, files: BTreeMap::new() }
+    }
+
+    fn load(&mut self, i: usize) -> Result<&Loaded> {
+        if self.loaded[i].is_none() {
+            let bytes = self.archive.read(&self.paths[i], self.decoder)?;
+            let binder = Binder::read(&bytes, self.decoder)?;
+            let effects = binder
+                .files
+                .iter()
+                .enumerate()
+                .filter_map(|(k, f)| Some((fxr::member_id(f.name.as_deref()?)?, k)))
+                .collect();
+            let resources = Resources::index(&binder)?;
+            self.loaded[i] = Some(Loaded { binder, effects, resources });
+        }
+        Ok(self.loaded[i].as_ref().expect("loaded above"))
+    }
+
+    /// The effect `id`: the first binder searched that holds it, `Ok(None)` where none does, `Err` with the reason where the
+    /// file does not read.
+    pub fn effect(&mut self, id: i32) -> Result<std::result::Result<Option<Arc<Fxr>>, String>> {
+        if !self.files.contains_key(&id) {
+            let mut result = Ok(None);
+            for i in 0..self.paths.len() {
+                let loaded = self.load(i)?;
+                if let Some(&k) = loaded.effects.get(&id) {
+                    result = Fxr::read(&loaded.binder.files[k].bytes).map(|f| Some(Arc::new(f))).map_err(|e| e.to_string());
+                    break;
+                }
+            }
+            self.files.insert(id, result);
+        }
+        Ok(self.files[&id].clone())
+    }
+
+    /// The decoded image of the texture of `kind` and number `id` in the first binder that holds it.
+    pub fn texture(&mut self, kind: fxr::resources::TextureKind, id: i32) -> Result<Option<primase_core::Texture>> {
+        for i in 0..self.paths.len() {
+            let game = self.game;
+            let decoder = self.decoder;
+            let loaded = self.load(i)?;
+            if let Some(k) = loaded.resources.texture(game, kind, id) {
+                let bytes = decoder.decode_if_dcx(&loaded.binder.files[k].bytes)?;
+                let package = Package::read(&bytes)?;
+                let Some(texture) = package.textures.first() else { continue };
+                return tpf_image(texture).map(Some);
+            }
+        }
+        Ok(None)
+    }
+}
+
+/// Every effect named by the actions of `node`'s tree: its resources, by kind and number.
+fn resources_of(node: &TypedNode, out: &mut BTreeSet<(ResourceKind, i32)>) {
+    let mut note = |a: &Typed| {
+        for r in a.resources() {
+            let Some(id) = r.id.filter(|&id| id > 0) else { continue };
+            let kind = match r.kind {
+                FileKind::Texture(k) => ResourceKind::of_texture(k),
+                FileKind::Model => ResourceKind::Model,
+                FileKind::Animation => ResourceKind::Animation,
+                FileKind::Sound => continue,
+            };
+            out.insert((kind, id));
+        }
+    };
+    for a in &node.actions {
+        note(a);
+    }
+    for c in &node.configs {
+        for a in &c.actions {
+            note(a);
+        }
+    }
+    for child in &node.children {
+        resources_of(child, out);
+    }
+}
+
+/// Reads the files the `wanted` effects need into `world` and places the effects: the effect files (once each, with the effects
+/// they spawn), the textures they name, and one `fromsoft.effect` entity per wanted effect at its transform.
+pub fn place_all(
+    library: &mut EffectLibrary<'_>,
+    wanted: Vec<Wanted>,
+    world: &mut World,
+    report: &mut Report,
+) -> Result<()> {
+    let game = library.game;
+    // the effect files: the wanted ones with the effects they spawn
+    let mut files: BTreeMap<i32, Arc<Fxr>> = BTreeMap::new();
+    let mut stack: Vec<i32> = wanted.iter().map(|w| w.effect).collect();
+    stack.sort_unstable();
+    stack.dedup();
+    let mut queued: BTreeSet<i32> = stack.iter().copied().collect();
+    while let Some(id) = stack.pop() {
+        match library.effect(id)? {
+            Ok(Some(fx)) => {
+                for spawned in fx.spawned() {
+                    if queued.insert(spawned) {
+                        stack.push(spawned);
+                    }
+                }
+                files.insert(id, fx);
+            }
+            Ok(None) => report.refuse("effect not in the binders searched (the area's, the common ones)"),
+            Err(why) => report.refuse(format!("effect file refused: {why}")),
+        }
+    }
+    for (id, fx) in &files {
+        let e = world.spawn();
+        world.insert(e, EffectFile { effect: *id, game, file: Arc::clone(fx) });
+        world.insert(e, Source(format!("fxr {id}")));
+    }
+    report.files += files.len();
+    // the files the effects name
+    let mut named: BTreeSet<(ResourceKind, i32)> = BTreeSet::new();
+    for fx in files.values() {
+        let tree = fx.typed(game).map_err(|e| crate::invalid("effect file", 0, format!("effect {}: {e}", fx.id)))?;
+        resources_of(&tree, &mut named);
+    }
+    for (kind, id) in named {
+        match kind.texture() {
+            Some(texture_kind) => match library.texture(texture_kind, id)? {
+                Some(texture) => {
+                    let e = world.spawn();
+                    world.insert(e, texture);
+                    world.insert(e, EffectResource { kind, id });
+                    world.insert(e, Name(format!("sfx texture {id} ({kind:?})")));
+                    report.textures += 1;
+                }
+                None => *report.missing.entry(format!("{kind:?} not in the binders searched")).or_default() += 1,
+            },
+            None if kind == ResourceKind::Model => report.models_named += 1,
+            None => report.animations_named += 1,
+        }
+    }
+    // the placements
+    for w in wanted {
+        if !files.contains_key(&w.effect) {
+            report.unplaced += 1;
+            continue;
+        }
+        let e = world.spawn();
+        world.insert(e, w.transform);
+        world.insert(e, Source(w.label));
+        world.insert(e, Effect { effect: w.effect, place: w.place, starts_disabled: w.starts_disabled });
+    }
+    Ok(())
+}
+
+/// The effects of an area to place: the SFX regions of `layout` inside `region` (by position, as the lights are), then the
+/// effects of the model rows of `models`. `param` is the model effect param.
+fn wanted_for_area(
+    game: Game,
+    layout: &MapLayout,
+    region: Option<[f32; 4]>,
+    models: &[PlacedModel<'_>],
+    param: Option<&ModelSfxParam>,
+    report: &mut Report,
+) -> Result<Vec<Wanted>> {
+    let mut out = Vec::new();
+    let map = map_transform(layout)?;
+    let inside = |p: [f32; 3]| region.is_none_or(|r| p[0] >= r[0] && p[0] < r[2] && -p[2] >= r[1] && -p[2] < r[3]);
+    for r in layout.map_regions()? {
+        let Some(sfx) = layout.sfx_region(&r)? else { continue };
+        if !inside(r.position) {
+            report.regions_outside += 1;
+            continue;
+        }
+        report.regions += 1;
+        report.region_effects += 1;
+        let pose = placed(euler_matrix(r.position, r.rotation_degrees, [1.; 3], 0)?);
+        out.push(Wanted {
+            effect: sfx.effect_id,
+            transform: map.compose(&pose),
+            place: EffectPlace::Region { region: r.name.clone() },
+            starts_disabled: sfx.start_disabled,
+            label: format!("{}/fxr {}", r.name, sfx.effect_id),
+        });
+    }
+    if let Some(param) = param {
+        for m in models {
+            model_effects(game, param, m, &mut out, report);
+        }
+    }
+    Ok(out)
+}
+
+/// The effects of one placed model: each used slot of its row at each dummy polygon the slot names.
+fn model_effects(game: Game, param: &ModelSfxParam, m: &PlacedModel<'_>, out: &mut Vec<Wanted>, report: &mut Report) {
+    let row_id = match row_of(game, m.model, m.relative_id) {
+        Err(()) => {
+            report.parts_without_row += 1;
+            return;
+        }
+        Ok(None) => return,
+        Ok(Some(id)) => id,
+    };
+    let mut rows = param.rows_with(row_id);
+    let (Some(row), None) = (rows.next(), rows.next()) else {
+        if param.rows_with(row_id).next().is_some() {
+            report.refuse("model effect row stored twice");
+        } else if game == Game::EldenRing {
+            report.refuse("model effect row named but absent from the param");
+        }
+        return;
+    };
+    report.parts_with_row += 1;
+    let (transform, dummies): (&Transform, &ModelDummies) = match &m.placement {
+        Placement::Placed { transform, dummies } => (transform, dummies),
+        Placement::Unplaced(why) => {
+            *report.parts_not_placed.entry((*why).to_owned()).or_default() += 1;
+            return;
+        }
+    };
+    for (slot, s) in row.slots.iter().enumerate() {
+        if s.effect_id <= 0 {
+            continue;
+        }
+        let Some(places) = dummies.0.get(&s.dummy_id) else {
+            report.refuse("slot's dummy polygon absent from the model");
+            continue;
+        };
+        for dummy in places {
+            report.model_effects += 1;
+            out.push(Wanted {
+                effect: s.effect_id,
+                transform: transform.compose(&placed(dummy.map(|c| c.map(|x| x as f32)))),
+                place: EffectPlace::Model {
+                    part: m.part.to_owned(),
+                    model: m.model.to_owned(),
+                    row: row_id,
+                    slot,
+                    dummy: s.dummy_id,
+                },
+                starts_disabled: false,
+                label: format!("{}/slot {slot}/fxr {}", m.part, s.effect_id),
+            });
+        }
+    }
+}
+
+/// Reads the effects of the area into `world`: the SFX regions of `layout` inside `region`, then the effects of `models`.
+#[allow(clippy::too_many_arguments)]
+pub fn assemble(
+    install: &Install,
+    archive: &Archive,
+    decoder: &Decoder<'_>,
+    area: &str,
+    layout: &MapLayout,
+    region: Option<[f32; 4]>,
+    models: &[PlacedModel<'_>],
+    world: &mut World,
+) -> Result<Report> {
+    let mut report = Report { asked: true, ..Report::default() };
+    let game = install.game;
+    let param = if models.is_empty() {
+        None
+    } else {
+        match fromsoft_formats::game_params::read_model_sfx_param(install, archive, decoder) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                report.param_unresolved = Some(e.to_string());
+                None
+            }
+        }
+    };
+    let wanted = wanted_for_area(game, layout, region, models, param.as_ref(), &mut report)?;
+    let mut library = EffectLibrary::new(archive, decoder, game, binders_for_area(game, area));
+    place_all(&mut library, wanted, world, &mut report)?;
+    Ok(report)
+}
+
+/// One effect by its number, standing at the origin (an effect viewer's world): the effect file, the effects it spawns and the
+/// textures they name, and an entity placing the effect at the identity transform. `binders` are searched in order
+/// ([`binders_for_area`] for a map's, or the one binder the caller knows holds the effect).
+pub fn read_effect(
+    archive: &Archive,
+    decoder: &Decoder<'_>,
+    game: Game,
+    binders: Vec<String>,
+    effect: i32,
+    world: &mut World,
+) -> Result<(Report, Option<Entity>)> {
+    let mut report = Report { asked: true, ..Report::default() };
+    let before: BTreeSet<Entity> = world.entities().collect();
+    let mut library = EffectLibrary::new(archive, decoder, game, binders);
+    let wanted = vec![Wanted {
+        effect,
+        transform: Transform::IDENTITY,
+        place: EffectPlace::Standalone,
+        starts_disabled: false,
+        label: format!("fxr {effect}"),
+    }];
+    place_all(&mut library, wanted, world, &mut report)?;
+    let placed = world
+        .iter::<Effect>()
+        .map(|(e, _)| e)
+        .find(|e| !before.contains(e));
+    Ok((report, placed))
+}

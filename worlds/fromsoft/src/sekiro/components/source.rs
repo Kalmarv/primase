@@ -421,6 +421,8 @@ pub enum EffectPlace {
         slot: usize,
         dummy: i32,
     },
+    /// An effect read by its number alone and placed at the origin (an effect viewer's world).
+    Standalone,
 }
 
 /// The shape of an effect light.

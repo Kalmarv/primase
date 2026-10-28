@@ -18,7 +18,7 @@
 use serde::Serialize;
 use serde_json::Value as Json;
 
-use crate::{Component, Entity, JsonError, World};
+use crate::{Component, Entity, JsonError, Transform, World};
 
 /// What a [`Value`] is a function of.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -332,10 +332,11 @@ pub enum Axis {
 pub enum Shape {
     /// The frame's origin.
     Point,
-    /// A disc in the XY plane; `edge` is 0 for uniform over the area and 1 for on the rim.
-    Disk { radius: Value, edge: Value },
-    /// A rectangle in the XY plane.
-    Rectangle { size: [Value; 2], edge: Value },
+    /// A disc in the XY plane; `concentration` is 0 for uniform over the area, 1 for all at the centre and -1 for all on the
+    /// rim.
+    Disk { radius: Value, concentration: Value },
+    /// A rectangle in the XY plane, with the same `concentration` toward its centre.
+    Rectangle { size: [Value; 2], concentration: Value },
     /// A sphere's surface, or its volume.
     Sphere { radius: Value, volume: bool },
     /// A box's surface, or its volume.
@@ -345,23 +346,16 @@ pub enum Shape {
 }
 
 /// Which way an emitted particle first heads, before the spread.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub enum Heading {
-    /// Out of the shape (along the frame's +Z for a point, disc or rectangle; away from the centre for a sphere, cylinder
-    /// or box; for a box volume along a random local axis).
-    Shape,
-    /// World +Y.
-    WorldUp,
-    /// World -Y.
-    WorldDown,
-    /// World +Z.
-    WorldForward,
-    /// The frame's +Y.
-    FrameUp,
-    /// The frame's -Y.
-    FrameDown,
-    /// The frame's +Z.
-    FrameForward,
+    /// Out of the shape (along the frame's axis the shape faces for a point, disc or rectangle; away from the centre for a
+    /// sphere, cylinder or box; for a box volume along a random local axis). A source states the axis in `Shape` terms:
+    /// the source's pass puts a point's, disc's and rectangle's facing in `facing`.
+    Shape { facing: [f32; 3] },
+    /// A fixed direction in the world (a unit vector).
+    World([f32; 3]),
+    /// A fixed direction in the emitter's frame (a unit vector).
+    Frame([f32; 3]),
 }
 
 /// How a particle's first heading is scattered.
@@ -369,12 +363,13 @@ pub enum Heading {
 pub enum Spread {
     /// Not at all.
     None,
-    /// Inside a cone of half-angle `angle` (degrees); `bias` 0 spreads uniformly over the cone's area and 1 toward its rim.
-    Cone { angle: Value, bias: Value },
+    /// Inside a cone of half-angle `angle` (degrees); `concentration` 0 spreads uniformly over the cone's area, 1 puts every
+    /// particle on the axis and -1 on the cone's edge.
+    Cone { angle: Value, concentration: Value },
     /// Inside an elliptical cone of half-angles `x` and `y`.
-    Ellipse { x: Value, y: Value, bias: Value },
+    Ellipse { x: Value, y: Value, concentration: Value },
     /// Inside a rectangular cone of half-angles `x` and `y`.
-    Rectangle { x: Value, y: Value, bias: Value },
+    Rectangle { x: Value, y: Value, concentration: Value },
 }
 
 /// What drives a particle along its heading.
@@ -419,18 +414,19 @@ pub struct Movement {
     pub turns: Option<Turns>,
     /// Following the emitter.
     pub drag: Option<Drag>,
-    /// How strongly force fields move the particle: a speed it takes from them (`speed`) and an acceleration (`acceleration`),
-    /// each a multiplier of the field's push; `None` when the particle ignores them.
+    /// How force fields move the particle; `None` when the particle ignores them.
     pub fields: Option<FieldResponse>,
 }
 
-/// A particle's response to the force fields of the system.
+/// A particle's response to the force fields of the system: the speed it takes along a field's direction (`speed` times
+/// `speed_multiplier`) and the acceleration (`acceleration` times `acceleration_multiplier`), functions of the emitter's
+/// active time; the part a source does not state is a constant 0 (and its multiplier 1).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct FieldResponse {
-    /// Multiplier of a field's speed contribution.
     pub speed: Value,
-    /// Multiplier of a field's acceleration contribution.
+    pub speed_multiplier: Value,
     pub acceleration: Value,
+    pub acceleration_multiplier: Value,
 }
 
 /// The law every particle of an emitter follows.
@@ -442,8 +438,9 @@ pub struct Law {
     pub attachment: Attachment,
     /// The movement; `None` for a particle that stays where it is made.
     pub movement: Option<Movement>,
-    /// A multiplier of every particle's speed, a function of the emitter's active time.
-    pub speed_scale: Value,
+    /// The speed (metres per second, along the heading) given to a particle when it is emitted, for a particle whose drive is
+    /// an acceleration; a function of the emitter's active time.
+    pub initial_speed: Value,
     /// Multipliers of every particle's size along its three axes, functions of the time it was emitted; a uniform one has the
     /// first in all three.
     pub size_scale: [Value; 3],
@@ -522,14 +519,22 @@ pub enum Channels {
     Alpha,
 }
 
-/// Fading a draw out with distance from the camera: invisible nearer than `near` and farther than `far`, fading in over
-/// `near_fade` and out over `far_fade`.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+/// Limiting a draw by its distance from the camera. `near` and `far` are each a pair of distances in metres: for `near`
+/// `[hidden_at, full_at]` (invisible at or nearer than the first, fully visible at or beyond the second, linear between); for
+/// `far` `[full_at, hidden_at]`. `cut_near` and `cut_far` are hard limits (hidden nearer, hidden farther). `None` is no limit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub struct DistanceFade {
-    pub near: f32,
-    pub near_fade: f32,
-    pub far: f32,
-    pub far_fade: f32,
+    pub near: Option<[f32; 2]>,
+    pub far: Option<[f32; 2]>,
+    pub cut_near: Option<f32>,
+    pub cut_far: Option<f32>,
+}
+
+impl DistanceFade {
+    /// Whether it limits nothing.
+    pub fn is_none(&self) -> bool {
+        *self == DistanceFade::default()
+    }
 }
 
 /// Fading a draw out where it meets geometry (a soft particle): over `distance` metres of depth behind its surface.
@@ -573,6 +578,8 @@ pub struct Quad {
     pub lit: Option<Lit>,
     /// A bloom tint added to what is drawn, or `None` for none.
     pub bloom: Option<[f32; 4]>,
+    /// Whether the texture's colour is multiplied by its alpha first.
+    pub premultiply_alpha: bool,
     /// Pushes the draw toward (negative) or away from the camera in depth, metres.
     pub depth_bias: Value,
 }
@@ -663,6 +670,8 @@ pub enum MeshOrientation {
     World,
     /// Along its heading.
     Heading,
+    /// Facing away from the camera's image plane (the model's front toward the camera).
+    CameraPlane,
     /// Toward the camera about the vertical axis.
     CameraYaw,
 }
@@ -673,24 +682,49 @@ pub struct Trail {
     pub map: Option<Map>,
     pub blend: Blend,
     pub orientation: TrailOrientation,
-    /// Width in metres along the trail, a function of the segment's age.
+    /// Width in metres, a function of the particle's age, times `width_scale`, a function of the time it was emitted.
     pub width: Value,
-    /// Seconds between segment starts, how long a segment lives, how many are alive, and how many cuts a segment is subdivided
-    /// into.
+    pub width_scale: Value,
+    /// Seconds between segment starts, how long a segment lives, how many are alive, and how many cuts a completed segment is
+    /// subdivided into.
     pub segment_interval: f32,
     pub segment_life: f32,
     pub max_segments: u32,
     pub subdivisions: u32,
-    /// Texture repeats along the strip; whether the texture is attached to the strip (moving with it) or to the world.
-    pub texture_repeats: f32,
+    /// The fraction of the texture's width used per segment (for the whole trail when `attached_uv`), the speed the texture
+    /// slides along (u per second), and the random offset of each segment's texture (u as a fraction, v a function of the age).
+    pub texture_fraction: Value,
+    pub scroll_u: Value,
+    pub variance_u: f32,
+    pub variance_v: Value,
+    /// Whether the texture is attached to the strip (sliding with its source) or stays where each segment was made.
     pub attached_uv: bool,
+    /// Whether each segment's opacity follows the speed of the source when the segment was made.
+    pub dynamic_opacity: bool,
+    /// Where along the trail (a fraction of its length from the start, and from the end) opacity has fully faded in and out,
+    /// functions of the age: 0 is no fade.
+    pub fade_start: Value,
+    pub fade_end: Value,
+    pub alpha_fade_threshold: Value,
+    pub alpha_cutoff: Value,
     pub atlas: Option<Atlas>,
     pub tint: Vec<Term>,
     /// Seconds over which the trail fades after its particle ends.
     pub fade_out: f32,
+    /// A refraction of what is behind the strip, by a normal map and an intensity (a function of the emitter's active time).
+    pub distortion: Option<TrailDistortion>,
+    pub lit: Option<Lit>,
+    pub premultiply_alpha: bool,
     pub soft: Option<SoftEdge>,
-    pub distance: Option<DistanceFade>,
+    pub distance: DistanceFade,
     pub bloom: Option<[f32; 4]>,
+}
+
+/// The refraction a trail makes of what is behind it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TrailDistortion {
+    pub normal_map: Option<Map>,
+    pub intensity: Value,
 }
 
 /// How a trail's strip faces.
@@ -709,15 +743,17 @@ pub enum TrailOrientation {
 pub struct Streak {
     pub map: Option<Map>,
     pub blend: Blend,
-    /// Width and length in metres (a plain line has no width), functions of the age (length: of the emission time).
+    /// Width in metres (a plain line has no width), a function of the time it was emitted, and its multiplier (age).
     pub width: Option<Value>,
+    /// Length in metres, a function of the time it was emitted, and its multiplier (age).
     pub length: Value,
-    /// Colour at the start and end of the streak, multiplied in with the tint.
+    /// Colour at the leading and trailing end, multiplied in with the tint (functions of the emitter's active time).
     pub start_colour: Value,
     pub end_colour: Value,
     pub tint: Vec<Term>,
+    pub alpha_cutoff: Value,
     pub soft: Option<SoftEdge>,
-    pub distance: Option<DistanceFade>,
+    pub distance: DistanceFade,
     pub bloom: Option<[f32; 4]>,
 }
 
@@ -727,35 +763,48 @@ pub struct Refraction {
     pub mode: RefractionMode,
     pub shape: RefractionShape,
     pub orientation: Orientation,
-    /// A normal or mask texture that shapes the distortion.
-    pub map: Option<Map>,
+    /// The normal map that pushes (for [`RefractionMode::Push`]) and the mask that limits the sheet.
+    pub normal_map: Option<Map>,
     pub mask: Option<Map>,
-    /// Size of the sheet (width, height, depth for a volume).
+    /// The sheet's offset from the particle and its size along three axes (metres, functions of the age), whether one size
+    /// serves all, and each particle's random size factor between this and 1 per axis.
+    pub offset: [Value; 3],
     pub size: [Value; 3],
-    /// Strength of the push (metres of apparent displacement at the sheet) and, for a stir, the speed in degrees per second.
-    pub strength: Value,
-    pub speed: Value,
+    pub uniform: bool,
+    pub size_variance: [f32; 3],
+    /// Strength of the push (a function of the age); for a stir its speed in degrees per second; the fraction of the sheet's
+    /// inscribed ellipse the effect covers.
+    pub intensity: Value,
+    pub stir_speed: Value,
+    pub radius: Value,
+    /// The normal map's texture offset, scroll speed (per second) and scale along u and v.
+    pub normal_offset: [Value; 2],
+    pub normal_scroll: [Value; 2],
+    pub normal_scale: [Value; 2],
     pub tint: Vec<Term>,
     pub blend: Blend,
-    pub soft: Option<SoftEdge>,
-    pub distance: Option<DistanceFade>,
+    pub alpha_cutoff: Value,
+    pub distance: DistanceFade,
 }
 
 /// How a refraction sheet bends what is behind it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum RefractionMode {
-    /// Swirls the picture.
+    /// Swirls the picture, turning at `stir_speed`.
     Stir,
-    /// Pushes it by the texture's normal.
+    /// Pushes it by the normal map.
     Push,
+    /// Twists it about the sheet's centre while its edge stays.
+    Twist,
 }
 
 /// The sheet's silhouette.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum RefractionShape {
     Rectangle,
-    Sphere,
-    Cylinder,
+    /// Half an ellipsoid.
+    Hemiellipsoid,
+    Ellipsoid,
 }
 
 /// A blur of the picture away from a point.
@@ -764,13 +813,17 @@ pub struct RadialBlur {
     /// A mask that limits where the blur applies.
     pub mask: Option<Map>,
     pub blend: Blend,
-    /// Size of the affected area in metres, the blur's strength, and the fraction of the way to the centre that samples reach.
+    /// The area's offset from the particle and its size along two axes (metres, functions of the age), whether one size serves
+    /// both.
+    pub offset: [Value; 3],
     pub size: [Value; 2],
-    pub strength: Value,
-    pub falloff: Value,
+    pub uniform: bool,
+    /// The blur's strength (a function of the age) and how many times it is applied.
+    pub radius: Value,
+    pub iterations: u32,
     pub tint: Vec<Term>,
-    pub soft: Option<SoftEdge>,
-    pub distance: Option<DistanceFade>,
+    pub alpha_cutoff: Value,
+    pub distance: DistanceFade,
 }
 
 /// A light that follows the particle or the emitter.
@@ -796,24 +849,47 @@ pub enum LightKind {
     Spot { inner: f32, outer: f32 },
 }
 
-/// A lens flare: bright shapes along the line from the light through the screen centre.
+/// A lens flare: up to four textured layers placed along the line between the source and the screen's centre.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Flare {
-    /// Layers placed at offsets along the line.
     pub layers: Vec<FlareLayer>,
     pub blend: Blend,
-    /// Whether the flare is hidden when its source is behind geometry.
-    pub occluded: bool,
+    /// The diameter of the source sphere, whose visible fraction sets the opacity, and the seconds the opacity takes to follow it.
+    pub source_size: f32,
+    pub opacity_transition: f32,
 }
 
-/// One shape of a [`Flare`].
+/// How a flare layer's offset vector is found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum Reflection {
+    /// No offset: the flare sits at the source.
+    None,
+    /// The source's screen position reflected through the screen's centre.
+    Radial,
+    /// The source's screen position flipped horizontally.
+    Horizontal,
+}
+
+/// One layer of a [`Flare`]: `count` flares of one texture.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct FlareLayer {
     pub map: Option<Map>,
-    /// Where along the line (0 at the source, 1 at the opposite edge), size in screen fractions, and colour.
-    pub offset: Value,
-    pub size: Value,
-    pub tint: Value,
+    pub count: u32,
+    /// Width and height (constants), whether the width serves both, and each flare's random factor between this and 1 per axis.
+    pub width: Value,
+    pub height: Value,
+    pub uniform: bool,
+    pub scale_variation: [f32; 2],
+    /// Colour (clamped to 0..1) and a multiplier of it (unrestricted).
+    pub colour: Value,
+    pub colour_multiplier: [f32; 4],
+    pub reflection: Reflection,
+    /// A scalar multiplier of the offset vector, and each flare's random factor between this and 1 on it.
+    pub offset: f32,
+    pub offset_variation: f32,
+    /// The radius of a sphere around the source within which the layer is attenuated (negative: none).
+    pub attenuation_radius: f32,
+    pub bloom: Option<[f32; 4]>,
 }
 
 /// What a force field pushes with.
@@ -844,25 +920,26 @@ pub enum ForceVolume {
 pub struct ForceField {
     pub kind: ForceKind,
     pub volume: ForceVolume,
-    /// The direction in the emitter's frame and the strengths (metres per second as a speed; per second squared as an
-    /// acceleration), functions of the field's active time.
+    /// For a wind: the direction in the emitter's frame (a unit vector); a gravity pulls toward the volume's centre.
     pub direction: [f32; 3],
-    pub speed: Value,
-    pub acceleration: Value,
+    /// The strength, a function of the field's active time, times a constant multiplier and a random factor between the two
+    /// bounds (a gravity takes their average).
+    pub strength: Value,
+    pub multiplier: f32,
+    pub random_multiplier: [f32; 2],
     /// Seconds over which it fades out when its emitter ends.
     pub fade_out: f32,
-    /// Parameters of the turbulence (noise scale in metres and rate in hertz); 0 for the others.
-    pub noise_scale: f32,
-    pub noise_rate: f32,
 }
 
-/// Ripples where the emitter's frame touches water.
+/// Ripples where the emitter's frame touches water: the water is pushed down to `depth` over `descent` seconds in the shape of
+/// `map`, held for `duration` seconds and released.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Ripples {
     pub map: Option<Map>,
-    pub size: Value,
-    pub strength: Value,
-    pub life: f32,
+    pub depth: f32,
+    pub size: f32,
+    pub descent: f32,
+    pub duration: f32,
 }
 
 /// What an emitter draws for each particle (or, for a light, field or ripple, instead of particles).
@@ -889,9 +966,8 @@ pub struct Emitter {
     pub name: Option<String>,
     /// The emitter this one hangs from; always an earlier one. `None` hangs it from the system's frame.
     pub parent: Option<u32>,
-    /// Placement in the parent's frame: translation (metres) and rotation (a unit quaternion x, y, z, w).
-    pub translation: [f32; 3],
-    pub rotation: [f32; 4],
+    /// Placement in the parent's frame (metres), in the world's frame.
+    pub placement: Transform,
     /// Random placement jitter: translation by up to this much either way (metres), rotation about each axis (degrees).
     pub jitter_translation: [f32; 3],
     pub jitter_rotation: [f32; 3],
@@ -936,14 +1012,22 @@ pub enum Pick {
 /// How an emitter moves in its parent's frame over its active time.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct NodeMotion {
-    /// Speed along the emitter's +Z (metres per second) and acceleration along it, and acceleration along its +Y.
+    /// The direction of `speed` and `acceleration` in the emitter's own frame (a unit vector).
+    pub forward: [f32; 3],
+    /// Speed along `forward` (metres per second) times its multiplier, and acceleration along it (metres per second squared)
+    /// times its multiplier, functions of the active time.
     pub speed: Value,
+    pub speed_multiplier: Value,
     pub acceleration: Value,
+    pub acceleration_multiplier: Value,
+    /// Acceleration along the emitter frame's +Y (metres per second squared), or along the world's +Y when `lift_in_world`.
     pub lift: Value,
-    /// A displacement of the emitter in its parent's frame, a function of the active time.
+    pub lift_in_world: bool,
+    /// A displacement of the emitter in its parent's frame (metres), a function of the active time.
     pub displacement: Option<Value>,
-    /// Spin about its three axes, degrees per second.
+    /// Spin about the emitter's three axes (degrees per second) times a multiplier, functions of the active time.
     pub spin: [Value; 3],
+    pub spin_multiplier: [Value; 3],
     /// Whether the emitter turns to face its motion.
     pub align: bool,
     pub turns: Option<Turns>,
@@ -1013,13 +1097,9 @@ impl Component for ParticleSystem {
             {
                 return Err(at(&format!("parent {p} is not an earlier emitter")));
             }
-            let finite = e.translation.iter().chain(&e.rotation).chain(&e.jitter_translation).chain(&e.jitter_rotation);
+            let finite = e.placement.cols.iter().flatten().chain(&e.jitter_translation).chain(&e.jitter_rotation);
             if !finite.chain([&e.delay, &e.order]).all(|v| v.is_finite()) {
                 return Err(at("a placement that is not finite"));
-            }
-            let norm = e.rotation.iter().map(|v| v * v).sum::<f32>().sqrt();
-            if (norm - 1.0).abs() > 1e-3 {
-                return Err(at(&format!("rotation {:?} is not a unit quaternion", e.rotation)));
             }
             if e.states.iter().any(|&s| s >= self.states.max(1)) {
                 return Err(at("a state the system does not have"));
@@ -1051,7 +1131,7 @@ impl Component for ParticleSystem {
 impl Emitter {
     fn check(&self, inputs: usize) -> Result<(), String> {
         let mut values: Vec<(&str, &Value)> = vec![
-            ("speed scale", &self.law.speed_scale),
+            ("initial speed", &self.law.initial_speed),
             ("tint", &self.law.tint),
             ("size scale x", &self.law.size_scale[0]),
             ("size scale y", &self.law.size_scale[1]),
@@ -1065,6 +1145,65 @@ impl Emitter {
             Spawn::Periodic { interval, count, .. } => values.extend([("interval", interval), ("count", count)]),
             Spawn::Distance { step, count, .. } => values.extend([("step", step), ("count", count)]),
         }
+        match &self.shape {
+            Shape::Point => {}
+            Shape::Disk { radius, concentration } => values.extend([("radius", radius), ("concentration", concentration)]),
+            Shape::Rectangle { size, concentration } => {
+                values.extend(size.iter().map(|v| ("size", v)));
+                values.push(("concentration", concentration));
+            }
+            Shape::Sphere { radius, .. } => values.push(("radius", radius)),
+            Shape::Box { size, .. } => values.extend(size.iter().map(|v| ("size", v))),
+            Shape::Cylinder { radius, height, .. } => values.extend([("radius", radius), ("height", height)]),
+        }
+        match &self.spread {
+            Spread::None => {}
+            Spread::Cone { angle, concentration } => values.extend([("angle", angle), ("concentration", concentration)]),
+            Spread::Ellipse { x, y, concentration } | Spread::Rectangle { x, y, concentration } => {
+                values.extend([("angle", x), ("angle", y), ("concentration", concentration)]);
+            }
+        }
+        if let Some(m) = &self.law.movement {
+            match &m.drive {
+                Drive::None => {}
+                Drive::Speed { speed, multiplier } => values.extend([("speed", speed), ("speed multiplier", multiplier)]),
+                Drive::Acceleration { acceleration, multiplier } => {
+                    values.extend([("acceleration", acceleration), ("acceleration multiplier", multiplier)]);
+                }
+            }
+            values.push(("gravity", &m.gravity));
+            if let Some(t) = &m.turns {
+                values.push(("turn angle", &t.max_angle));
+            }
+            if let Some(d) = &m.drag {
+                values.push(("drag", &d.factor));
+            }
+            if let Some(f) = &m.fields {
+                values.extend([
+                    ("field speed", &f.speed),
+                    ("field speed multiplier", &f.speed_multiplier),
+                    ("field acceleration", &f.acceleration),
+                    ("field acceleration multiplier", &f.acceleration_multiplier),
+                ]);
+            }
+        }
+        if let Some(n) = &self.motion {
+            values.extend([
+                ("node speed", &n.speed),
+                ("node speed multiplier", &n.speed_multiplier),
+                ("node acceleration", &n.acceleration),
+                ("node acceleration multiplier", &n.acceleration_multiplier),
+                ("node lift", &n.lift),
+            ]);
+            values.extend(n.displacement.iter().map(|v| ("node displacement", v)));
+            values.extend(n.spin.iter().chain(&n.spin_multiplier).map(|v| ("node spin", v)));
+            if let Some(t) = &n.turns {
+                values.push(("node turn angle", &t.max_angle));
+            }
+            if let Some(d) = &n.drag {
+                values.push(("node drag", &d.factor));
+            }
+        }
         for (what, v) in values {
             v.check(what, inputs)?;
         }
@@ -1075,102 +1214,181 @@ impl Emitter {
     }
 }
 
+fn push_map(out: &mut Vec<Entity>, m: &Option<Map>) {
+    out.extend(m.iter().map(|m| m.texture));
+}
+
 impl Draw {
     fn references(&self, out: &mut Vec<Entity>) {
-        let mut map = |m: &Option<Map>| out.extend(m.iter().map(|m| m.texture));
         match self {
             Draw::Quad(q) => {
-                map(&q.map);
+                push_map(out, &q.map);
                 if let Some(l) = &q.lit {
-                    map(&l.normal_map);
-                    map(&l.specular_map);
+                    push_map(out, &l.normal_map);
+                    push_map(out, &l.specular_map);
                 }
             }
             Draw::LayeredQuad(q) => {
-                map(&q.quad.map);
+                push_map(out, &q.quad.map);
+                if let Some(l) = &q.quad.lit {
+                    push_map(out, &l.normal_map);
+                    push_map(out, &l.specular_map);
+                }
                 for l in &q.layers {
-                    map(&l.map);
+                    push_map(out, &l.map);
                 }
             }
-            Draw::Point(p) => map(&p.map),
+            Draw::Point(p) => push_map(out, &p.map),
             Draw::Mesh(m) => {
                 out.push(m.mesh);
                 out.extend(m.clip.iter().map(|c| c.clip));
             }
-            Draw::Trail(t) => map(&t.map),
-            Draw::Streak(s) => map(&s.map),
-            Draw::Refraction(r) => {
-                map(&r.map);
-                map(&r.mask);
-            }
-            Draw::RadialBlur(b) => map(&b.mask),
-            Draw::Flare(f) => {
-                for l in &f.layers {
-                    map(&l.map);
+            Draw::Trail(t) => {
+                push_map(out, &t.map);
+                if let Some(d) = &t.distortion {
+                    push_map(out, &d.normal_map);
+                }
+                if let Some(l) = &t.lit {
+                    push_map(out, &l.normal_map);
+                    push_map(out, &l.specular_map);
                 }
             }
-            Draw::Ripples(r) => map(&r.map),
+            Draw::Streak(s) => push_map(out, &s.map),
+            Draw::Refraction(r) => {
+                push_map(out, &r.normal_map);
+                push_map(out, &r.mask);
+            }
+            Draw::RadialBlur(b) => push_map(out, &b.mask),
+            Draw::Flare(f) => {
+                for l in &f.layers {
+                    push_map(out, &l.map);
+                }
+            }
+            Draw::Ripples(r) => push_map(out, &r.map),
             Draw::Light(_) | Draw::Field(_) => {}
         }
     }
 
-    fn check(&self, inputs: usize) -> Result<(), String> {
-        let terms = |t: &[Term]| -> Result<(), String> {
-            for term in t {
-                term.value.check("tint", inputs)?;
-            }
-            Ok(())
-        };
+    /// Every value of the draw, named for an error.
+    fn values<'a>(&'a self, out: &mut Vec<(&'static str, &'a Value)>) {
+        fn terms<'a>(out: &mut Vec<(&'static str, &'a Value)>, t: &'a [Term]) {
+            out.extend(t.iter().map(|t| ("tint", &t.value)));
+        }
+        fn atlas<'a>(out: &mut Vec<(&'static str, &'a Value)>, a: &'a Option<Atlas>) {
+            out.extend(a.iter().map(|a| ("atlas cell", &a.cell)));
+        }
+        fn quad_values<'a>(out: &mut Vec<(&'static str, &'a Value)>, q: &'a Quad) {
+            out.extend(q.size.iter().map(|v| ("size", v)));
+            out.extend(q.offset.iter().map(|v| ("offset", v)));
+            out.extend(q.rotation.iter().map(|v| ("rotation", v)));
+            out.extend(q.spin.iter().map(|v| ("spin", v)));
+            out.extend([("alpha fade threshold", &q.alpha_fade_threshold), ("alpha cutoff", &q.alpha_cutoff)]);
+            out.push(("depth bias", &q.depth_bias));
+            terms(out, &q.tint);
+            atlas(out, &q.atlas);
+        }
         match self {
-            Draw::Quad(q) => {
-                for (i, v) in q.size.iter().enumerate() {
-                    v.check(&format!("size {i}"), inputs)?;
-                }
-                terms(&q.tint)?;
-                if let Some(a) = &q.atlas {
-                    a.cell.check("atlas cell", inputs)?;
-                    if a.columns == 0 || a.cells == 0 {
-                        return Err("an atlas of no cells".into());
-                    }
-                }
-                if let Orientation::World(n) | Orientation::Frame(n) = q.orientation
-                    && !n.iter().all(|v| v.is_finite())
-                {
-                    return Err("an orientation that is not finite".into());
-                }
-                Ok(())
-            }
+            Draw::Quad(q) => quad_values(out, q),
             Draw::LayeredQuad(q) => {
-                terms(&q.quad.tint)?;
-                if q.layers.is_empty() {
-                    return Err("a layered quad of no layers".into());
+                quad_values(out, &q.quad);
+                for l in &q.layers {
+                    out.push(("layer tint", &l.tint));
+                    out.extend(l.scroll.iter().map(|v| ("layer scroll", v)));
+                    out.extend(l.offset.iter().map(|v| ("layer offset", v)));
+                    out.extend(l.scale.iter().map(|v| ("layer scale", v)));
                 }
-                Ok(())
             }
             Draw::Point(p) => {
-                p.size.check("size", inputs)?;
-                terms(&p.tint)
+                out.extend([("size", &p.size), ("alpha cutoff", &p.alpha_cutoff)]);
+                terms(out, &p.tint);
             }
-            Draw::Mesh(m) => terms(&m.tint),
+            Draw::Mesh(m) => {
+                out.extend(m.size.iter().map(|v| ("size", v)));
+                out.extend(m.rotation.iter().map(|v| ("rotation", v)));
+                out.extend(m.spin.iter().map(|v| ("spin", v)));
+                out.extend(m.scroll.iter().map(|v| ("scroll", v)));
+                out.extend(m.offset.iter().map(|v| ("offset", v)));
+                terms(out, &m.tint);
+                atlas(out, &m.atlas);
+            }
             Draw::Trail(t) => {
-                t.width.check("width", inputs)?;
-                if !(t.segment_interval.is_finite() && t.segment_life.is_finite()) {
-                    return Err("a trail time that is not finite".into());
-                }
-                terms(&t.tint)
+                out.extend([
+                    ("width", &t.width),
+                    ("width scale", &t.width_scale),
+                    ("texture fraction", &t.texture_fraction),
+                    ("scroll", &t.scroll_u),
+                    ("variance", &t.variance_v),
+                    ("fade start", &t.fade_start),
+                    ("fade end", &t.fade_end),
+                    ("alpha fade threshold", &t.alpha_fade_threshold),
+                    ("alpha cutoff", &t.alpha_cutoff),
+                ]);
+                out.extend(t.distortion.iter().map(|d| ("distortion", &d.intensity)));
+                terms(out, &t.tint);
+                atlas(out, &t.atlas);
             }
             Draw::Streak(s) => {
-                s.length.check("length", inputs)?;
-                terms(&s.tint)
+                out.extend([("length", &s.length), ("start colour", &s.start_colour), ("end colour", &s.end_colour), ("alpha cutoff", &s.alpha_cutoff)]);
+                out.extend(s.width.iter().map(|w| ("width", w)));
+                terms(out, &s.tint);
             }
-            Draw::Refraction(r) => terms(&r.tint),
-            Draw::RadialBlur(b) => terms(&b.tint),
-            Draw::Light(l) => {
-                l.colour.check("colour", inputs)?;
-                l.intensity.check("intensity", inputs)
+            Draw::Refraction(r) => {
+                out.extend(r.offset.iter().map(|v| ("offset", v)));
+                out.extend(r.size.iter().map(|v| ("size", v)));
+                out.extend([("intensity", &r.intensity), ("stir speed", &r.stir_speed), ("radius", &r.radius), ("alpha cutoff", &r.alpha_cutoff)]);
+                out.extend(r.normal_offset.iter().chain(&r.normal_scroll).chain(&r.normal_scale).map(|v| ("normal map", v)));
+                terms(out, &r.tint);
             }
-            Draw::Flare(_) | Draw::Field(_) | Draw::Ripples(_) => Ok(()),
+            Draw::RadialBlur(b) => {
+                out.extend(b.offset.iter().map(|v| ("offset", v)));
+                out.extend(b.size.iter().map(|v| ("size", v)));
+                out.extend([("radius", &b.radius), ("alpha cutoff", &b.alpha_cutoff)]);
+                terms(out, &b.tint);
+            }
+            Draw::Light(l) => out.extend([("colour", &l.colour), ("intensity", &l.intensity), ("range", &l.range)]),
+            Draw::Flare(f) => {
+                for l in &f.layers {
+                    out.extend([("flare width", &l.width), ("flare height", &l.height), ("flare colour", &l.colour)]);
+                }
+            }
+            Draw::Field(f) => out.push(("force", &f.strength)),
+            Draw::Ripples(_) => {}
         }
+    }
+
+    fn check(&self, inputs: usize) -> Result<(), String> {
+        let mut values = Vec::new();
+        self.values(&mut values);
+        for (what, v) in values {
+            v.check(what, inputs)?;
+        }
+        let atlas = match self {
+            Draw::Quad(q) => q.atlas.as_ref(),
+            Draw::LayeredQuad(q) => q.quad.atlas.as_ref(),
+            Draw::Mesh(m) => m.atlas.as_ref(),
+            Draw::Trail(t) => t.atlas.as_ref(),
+            _ => None,
+        };
+        if atlas.is_some_and(|a| a.columns == 0 || a.cells == 0) {
+            return Err("an atlas of no cells".into());
+        }
+        if let Draw::Quad(q) = self
+            && let Orientation::World(n) | Orientation::Frame(n) = q.orientation
+            && !n.iter().all(|v| v.is_finite())
+        {
+            return Err("an orientation that is not finite".into());
+        }
+        if let Draw::Trail(t) = self
+            && !(t.segment_interval.is_finite() && t.segment_life.is_finite() && t.fade_out.is_finite())
+        {
+            return Err("a trail time that is not finite".into());
+        }
+        if let Draw::LayeredQuad(q) = self
+            && q.layers.is_empty()
+        {
+            return Err("a layered quad of no layers".into());
+        }
+        Ok(())
     }
 }
 

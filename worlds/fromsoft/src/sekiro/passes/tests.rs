@@ -711,6 +711,7 @@ fn the_fromsoft_passes_register_by_name() {
         "lower-fromsoft-clip-events",
         "lower-fromsoft-collision",
         "lower-fromsoft-display-masks",
+        "lower-fromsoft-effects",
         "lower-fromsoft-environment",
         "lower-fromsoft-extras",
         "lower-fromsoft-geometry",

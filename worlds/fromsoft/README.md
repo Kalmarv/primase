@@ -456,6 +456,13 @@ converts frames; it does not lower:
   lacks) and the references that placed nothing by reason; Sekiro's rows at
   `num * 1000 + 1..=4` (which one an object uses is not stored in the object) are
   counted, not read;
+- with `Options::effects`, the effects themselves are read where they stand, by the same routes (SFX regions;
+  the effect rows of placed objects and assets): a `fromsoft.effect` on an entity placed at the region's pose or at
+  the model's dummy polygon, the effect files as stored (`fromsoft.effect_file`, one per effect, with the effects
+  they spawn) and the textures they name (`fromsoft.effect_resource` on a `core.texture` each, looked for in the
+  area's binder and the common ones). `Report::effects` counts the regions, the effects placed by each route, the
+  files and textures read and what no binder held, by reason. Models and animations the effects name are counted,
+  not read. `read_effect` reads one effect by its number, at the origin (an effect viewer's world);
 - lights are `fromsoft.light` records where they stand (stored colours, powers,
   cone, radius and tangent); hang-edge segments and spawn points are the
   `fromsoft.area_extras` resource; what the read covered (game, area, region,
@@ -598,6 +605,17 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
   `speedtree-frame=program|authored` (a SpeedTree mesh's normal and tangent from the
   members its material's G-buffer vertex program reads, or its layout's pair). Motion-blur
   face sets, vertex colours and UV sets beyond UV0 are not lowered and are counted.
+- `lower-fromsoft-effects{candela-per-power=...}` makes `core.particles` from the placed `fromsoft.effect` records and the
+  effect files and textures the read kept: each node of the effect's tree becomes an emitter (one per config its states
+  choose, the node's children hanging from the first), with the emitter action as its spawn, the shape and direction
+  actions as where and which way particles start, the movement actions as their law, and the appearance as the draw
+  (billboards and multi-texture billboards, point sprites, lines, trails, mesh particles, distortion, radial blur,
+  lights, force fields, lens flares, water ripples; a GPU particle system as an ordinary emitter and quad). The effects an
+  effect spawns (`SFXReference`) are systems of their own that its emitters name; a cycle is cut where it closes. A
+  Hermite property is sampled into a line (counted); the fxr project's reading of the parameters is the meaning used
+  (sourced, not checked in a running game); what core has no place for (the flicker of a light, sounds, the conditions
+  between states, a node's response to forces) is counted by reason. `candela-per-power` scales the light draws as
+  `lower-fromsoft-lights` scales its lights. The records stay.
 - `lower-fromsoft-lights{candela-per-power=...,spot-blend=...}` makes `core.light` from the BTL
   records: colour the stored byte over 255 squared (the game's own transfer, read back from
   a running game: the lighting shader's diffuse colour of every light is `(byte / 255)^2 *
@@ -764,6 +782,7 @@ unless an option asks), **unread** (no reader opens it). A row's owner is the pr
 | Decals | material slots of class `decal` (`Report::material_classes`) | read as materials (`MeshDecal`), drawn on the decal layer, queue order a convention (approximation, noticed). Decal *placements* beyond the material slots: none known in the MSB | `lower-fromsoft-materials` / Shaded view |
 | Water | slots of class `water`; collision class soup `water` | read as a material (the program's water colour and normal map; depth, refraction and flow not evaluated) and as a collision soup | `lower-fromsoft-materials`, `lower-fromsoft-collision` / Shaded, Collision |
 | Lights, bank 0 (`<area>_0000.btl.dcx`) | `FILES _NNNN.btl` | read | `read/extras.rs`, `lower-fromsoft-lights` / Lights |
+| Effects (every FXR action: emitters, particles, trails, distortion, blur, lights, forces): the same routes | `REGIONS` type 5, `PARTS`, `ModelSfxParam`/`AssetModelSfxParam`, the `sfx` binders | read with `Options::effects` (off by default) as `fromsoft.effect`, `fromsoft.effect_file`, `fromsoft.effect_resource`; models and animations named are counted, not read | `read/effects.rs`, `lower-fromsoft-effects` / Effects |
 | Effect lights (FXR point and spot lights): SFX regions, and the effects placed objects and assets spawn through their model effect param row | `REGIONS` type 5, `PARTS`, `ModelSfxParam`/`AssetModelSfxParam`, the `sfx` binders | read with `Options::effect_lights` (off by default) as `fromsoft.effect_light`; light shafts (no instance) and every other effect action unread | `read/effect_lights.rs`, `lower-fromsoft-lights` / Lights. Per-area counts in `tests/effect_lights_census.rs` |
 | Light banks other than 0 | `FILES _NNNN.btl` | unread (the reader opens `_0000` only) | none. `FILES` says how many banks exist per area |
 | Light probes / global illumination data | no pattern the code names; `FILES` lists the unread patterns | unread | none. Decided by the largest unread `FILES` pattern with a name that says probe or GI |

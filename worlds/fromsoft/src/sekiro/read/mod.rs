@@ -8,6 +8,7 @@ pub mod collision;
 pub mod convert;
 pub mod draw_param;
 pub mod effect_lights;
+pub mod effects;
 pub mod equipment;
 pub mod extras;
 pub mod material_events;
