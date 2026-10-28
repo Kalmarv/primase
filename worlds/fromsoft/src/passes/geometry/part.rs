@@ -215,6 +215,7 @@ mod tests {
                     flags: 0,
                     strip: false,
                     cull: true,
+                    unknown_06: 0,
                     indices: vec![2, 0, 1],
                 }],
             }],

@@ -79,6 +79,7 @@ mod tests {
                     flags: 0,
                     strip: false,
                     cull: true,
+                    unknown_06: 0,
                     indices: vec![0, 1, 2, 2, 1, 3],
                 }],
             }],

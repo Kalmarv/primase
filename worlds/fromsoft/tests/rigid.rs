@@ -32,6 +32,12 @@ fn model() -> Model {
             rotation: [0.; 3],
             scale: [2., 3., 4.],
             parent: -1,
+            child: -1,
+            next_sibling: -1,
+            previous_sibling: -1,
+            bounds_min: [f32::MAX; 3],
+            bounds_max: [-f32::MAX; 3],
+            flags: 0,
         }],
         meshes: vec![Mesh {
             dynamic: false,
@@ -92,6 +98,12 @@ fn hierarchy_rotation_reflection_and_invalid_hierarchy() {
         rotation: [0., std::f32::consts::FRAC_PI_2, 0.],
         scale: [1.; 3],
         parent: -1,
+        child: -1,
+        next_sibling: -1,
+        previous_sibling: -1,
+        bounds_min: [f32::MAX; 3],
+        bounds_max: [-f32::MAX; 3],
+        flags: 0,
     });
     let v = m.meshes[0].vertices[0].clone();
     m.meshes[0].vertices.resize(3, v);
@@ -99,6 +111,7 @@ fn hierarchy_rotation_reflection_and_invalid_hierarchy() {
         flags: 0,
         strip: false,
         cull: true,
+        unknown_06: 0,
         indices: vec![0, 1, 2],
     });
     let out = lower_model(&m, &mut PassLog::default()).unwrap();

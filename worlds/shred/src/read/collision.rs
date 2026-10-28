@@ -211,13 +211,13 @@ fn leaves(pack: &Packfile<'_>, root: usize) -> Result<Vec<Leaf>> {
             return Err(invalid(at, "shape tree deeper than 16"));
         }
         match Shape::read(pack, at).map_err(|e| invalid(at, e))? {
-            Shape::Mopp { child } => stack.push((child, offset, depth + 1)),
+            Shape::Mopp { child, .. } => stack.push((child, offset, depth + 1)),
             Shape::ConvexTranslate { child, translation } => {
                 stack.push((child, moved(offset, translation), depth + 1));
             }
             // pushed in reverse so the children come out in stored order
             Shape::List { children } => {
-                stack.extend(children.into_iter().rev().map(|c| (c, offset, depth + 1)))
+                stack.extend(children.into_iter().rev().map(|c| (c.shape, offset, depth + 1)))
             }
             shape => out.push(Leaf { shape, offset }),
         }
@@ -500,6 +500,11 @@ mod tests {
             aabb_half_extents: [1.0; 3],
             aabb_center: [0.0; 3],
             welding: vec![0; 3],
+            welding_type: 0,
+            default_collision_filter_info: 0,
+            cached_num_child_shapes: 3,
+            triangle_radius: 0.001,
+            user_data: 0,
             subparts: vec![Subpart {
                 vertices: vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
                 triangles: vec![[0, 1, 2]; 3],

@@ -339,6 +339,12 @@ mod tests {
             rotation: [0.0, yaw, 0.1],
             scale: [1.0, 1.5, 1.0],
             parent,
+            child: -1,
+            next_sibling: -1,
+            previous_sibling: -1,
+            bounds_min: [f32::MAX; 3],
+            bounds_max: [-f32::MAX; 3],
+            flags: 0,
         }
     }
 
@@ -404,6 +410,12 @@ mod tests {
             rotation: [0.0; 3],
             scale: [1.0; 3],
             parent,
+            child: -1,
+            next_sibling: -1,
+            previous_sibling: -1,
+            bounds_min: [f32::MAX; 3],
+            bounds_max: [-f32::MAX; 3],
+            flags: 0,
         };
         let model = Model {
             bones: vec![
@@ -493,6 +505,12 @@ mod tests {
             rotation: [0.0; 3],
             scale: [1.0; 3],
             parent: -1,
+            child: -1,
+            next_sibling: -1,
+            previous_sibling: -1,
+            bounds_min: [f32::MAX; 3],
+            bounds_max: [-f32::MAX; 3],
+            flags: 0,
         };
         let mut turned = dummy([0.0; 3], -1, 0);
         turned.forward = [0.5, 0.0, 0.0];

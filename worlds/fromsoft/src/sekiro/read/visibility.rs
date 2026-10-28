@@ -131,12 +131,14 @@ mod tests {
             header: Header::None,
             file_name: None,
             events: vec![event(233, 0., 1., 3, 1)],
+            event_groups: vec![],
         };
         let alias = Animation {
             id: 2,
             header: Header::ImportOther { from: 1, unknown: 0 },
             file_name: None,
             events: vec![],
+            event_groups: vec![],
         };
         let mut tae = Tae {
             id: 1,

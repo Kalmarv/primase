@@ -11,7 +11,7 @@ mod inputs;
 
 use havok_formats::packfile::{
     CLASS_SIGNATURES, Packfile,
-    physics::{self, ConvexVertices, ExtendedMesh, RigidBody, Shape},
+    physics::{self, ConvexVertices, ExtendedMesh, MoppCode, RigidBody, Shape},
 };
 use inputs::{Game, Query, expect_found, install};
 use rme_formats::pak::Pak;
@@ -71,6 +71,13 @@ fn every_packfile_parses_and_the_census_matches() {
     let mut filters = BTreeMap::<u32, usize>::new();
     let mut storage_indices = BTreeSet::<u16>::new();
     let (mut records, mut stored_user_data) = (0, 0);
+    // the members the packfile view reads beyond the first census: the body's motion, the mesh's tail, the convex
+    // faces, the MOPP codes and the list shapes' child records
+    let (mut dynamic_quality, mut max_penetration, mut gravity_one) = (0, 0, 0);
+    let (mut cached_equal, mut cached_less, mut cached_sum, mut welded_tail_ok, mut mesh_user_data) =
+        (0, 0, 0, 0, 0);
+    let (mut with_faces, mut planes_equal, mut planes_more, mut convex_user_data) = (0, 0, 0, 0);
+    let (mut mopp_codes, mut mopp_bytes, mut list_children, mut list_filtered) = (0, 0, 0, 0);
     let mut signed = BTreeSet::new();
     for (label, bytes) in &blobs {
         let fail = |e: havok_formats::Error| -> ! { panic!("{label}: {e}") };
@@ -99,14 +106,30 @@ fn every_packfile_parses_and_the_census_matches() {
             let b = RigidBody::read(&pack, body).unwrap_or_else(|e| fail(e));
             bodies += 1;
             fixed += usize::from(b.motion_type == physics::MOTION_FIXED);
+            dynamic_quality += usize::from(b.quality_type == 4);
+            max_penetration += usize::from(b.allowed_penetration_depth > 3.4e38);
+            gravity_one += usize::from(b.gravity_factor == 1.0);
+            assert_eq!(b.quality_type == 0, b.motion_type == physics::MOTION_FIXED, "{label}");
+            assert_eq!(b.allowed_penetration_depth > 3.4e38, b.motion_type == physics::MOTION_FIXED, "{label}");
             *filters.entry(b.collision_filter_info).or_default() += 1;
             storage_indices.insert(b.storage_index);
             // the shape tree resolves to shapes this module reads
             let mut stack = vec![b.shape];
             while let Some(s) = stack.pop() {
                 match Shape::read(&pack, s).unwrap_or_else(|e| fail(e)) {
-                    Shape::Mopp { child } | Shape::ConvexTranslate { child, .. } => stack.push(child),
-                    Shape::List { children } => stack.extend(children),
+                    Shape::Mopp { child, code } => {
+                        let code = MoppCode::read(&pack, code).unwrap_or_else(|e| fail(e));
+                        mopp_codes += 1;
+                        mopp_bytes += code.code.len();
+                        assert_eq!(code.build_type, 0, "{label}");
+                        stack.push(child);
+                    }
+                    Shape::ConvexTranslate { child, .. } => stack.push(child),
+                    Shape::List { children } => {
+                        list_children += children.len();
+                        list_filtered += children.iter().filter(|c| c.collision_filter_info != 0).count();
+                        stack.extend(children.into_iter().map(|c| c.shape));
+                    }
                     _ => leaf_shapes += 1,
                 }
             }
@@ -114,6 +137,14 @@ fn every_packfile_parses_and_the_census_matches() {
         for o in pack.objects_of("hkpStorageExtendedMeshShape").collect::<Vec<_>>() {
             let m = ExtendedMesh::read(&pack, o).unwrap_or_else(|e| fail(e));
             meshes += 1;
+            let cached = m.cached_num_child_shapes as usize;
+            cached_equal += usize::from(cached == m.triangle_count());
+            cached_less += usize::from(cached < m.triangle_count());
+            cached_sum += cached;
+            welded_tail_ok += usize::from(
+                (m.welding_type, m.default_collision_filter_info, m.triangle_radius) == (0, 0, 0.001),
+            );
+            mesh_user_data += usize::from(m.user_data == 1);
             subparts += m.subparts.len();
             triangles += m.triangle_count();
             for s in &m.subparts {
@@ -137,6 +168,10 @@ fn every_packfile_parses_and_the_census_matches() {
             let c = ConvexVertices::read(&pack, o).unwrap_or_else(|e| fail(e));
             convex += 1;
             convex_vertices += c.vertices.len();
+            with_faces += usize::from(!c.faces.is_empty());
+            planes_equal += usize::from(!c.faces.is_empty() && c.planes.len() == c.faces.len());
+            planes_more += usize::from(c.planes.len() > c.faces.len() && !c.faces.is_empty());
+            convex_user_data += usize::from(c.user_data == 1);
             assert!(
                 inside(&c.vertices, c.aabb_center, c.aabb_half_extents, 0.06),
                 "{label}: convex {o:#x} has a vertex outside its stored AABB"
@@ -152,6 +187,18 @@ fn every_packfile_parses_and_the_census_matches() {
         (1_758, 6_445, 646_081, 855_428)
     );
     assert_eq!((convex, convex_vertices), (8_780, 473_820));
+    assert_eq!((dynamic_quality, max_penetration, gravity_one), (10_768, 2_021, 12_789));
+    assert_eq!(
+        (cached_equal, cached_less, cached_sum, welded_tail_ok, mesh_user_data),
+        (1_277, 481, 637_321, 1_758, 45)
+    );
+    assert_eq!(
+        (with_faces, planes_equal, planes_more, convex_user_data),
+        (8_751, 4_178, 4_573, 583)
+    );
+    // reached through the bodies' shape trees: every MOPP shape, and the ten lists
+    assert_eq!((mopp_codes, list_children, list_filtered), (1_705, 41, 0));
+    eprintln!("MOPP code {mopp_bytes} bytes");
     let count = |n: &str| classes.get(n).copied().unwrap_or(0);
     for (name, n) in [
         ("hkpRigidBody", 12_789),
