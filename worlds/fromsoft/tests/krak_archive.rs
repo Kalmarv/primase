@@ -146,7 +146,9 @@ impl Census {
 /// The census of a whole install, from the original corpus census of every Kraken envelope at any depth (walked to the
 /// last byte: Sekiro's one truncated archive entry is not a stream).
 fn whole_install(game: Game) -> Census {
-    let map = |pairs: &[(&str, usize)]| pairs.iter().map(|(k, v)| ((*k).to_owned(), *v)).collect();
+    let map = |pairs: &[(&str, usize)]| -> BTreeMap<String, usize> {
+        pairs.iter().map(|(k, v)| ((*k).to_owned(), *v)).collect()
+    };
     match game {
         Game::Sekiro => Census {
             top: 7_829,
