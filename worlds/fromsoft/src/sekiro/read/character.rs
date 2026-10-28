@@ -1594,6 +1594,7 @@ mod tests {
         let binder = Binder {
             version: [0; 8],
             format: 0,
+            layout: Default::default(),
             files: ["walk.hkx", "run.hkx"]
                 .into_iter()
                 .map(|name| fromsoft_formats::BinderFile {
@@ -1601,6 +1602,7 @@ mod tests {
                     name: Some(name.into()),
                     flags: 0,
                     bytes: vec![0xff],
+                    wrap: None,
                 })
                 .collect(),
         };
@@ -1804,6 +1806,7 @@ mod tests {
         Binder {
             version: [0; 8],
             format: 0,
+            layout: Default::default(),
             files: names
                 .iter()
                 .map(|n| fromsoft_formats::BinderFile {
@@ -1811,6 +1814,7 @@ mod tests {
                     name: Some((*n).to_owned()),
                     flags: 0,
                     bytes: Vec::new(),
+                    wrap: None,
                 })
                 .collect(),
         }

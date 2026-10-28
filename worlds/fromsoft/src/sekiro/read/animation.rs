@@ -61,6 +61,7 @@ fn metadata_binder(binder: &Binder) -> Binder {
     Binder {
         version: binder.version,
         format: binder.format,
+        layout: binder.layout,
         files: binder
             .files
             .iter()
@@ -327,6 +328,7 @@ impl ClipReader {
             let selected = Binder {
                 version: self.binders[path].version,
                 format: self.binders[path].format,
+                layout: self.binders[path].layout,
                 files: vec![file.clone()],
             };
             let mut clip = hold_with_compendium(
@@ -918,12 +920,14 @@ mod tests {
             name: Some(name.into()),
             flags: 0,
             bytes: vec![0xff],
+            wrap: None,
         };
         let mut reader = ClipReader::test_binder(
             "c1010",
             Binder {
                 version: [0; 8],
                 format: 0,
+                layout: Default::default(),
                 files: vec![file("walk.hkx"), file("run.hkx"), file("unknown.bin")],
             },
         );
@@ -960,10 +964,12 @@ mod tests {
             name: Some(name.into()),
             flags: 0,
             bytes: vec![0xff, 0x01],
+            wrap: None,
         }; // deliberately not a readable HKX
         let binder = Binder {
             version: [0; 8],
             format: 0,
+            layout: Default::default(),
             files: vec![
                 file("skeleton.hkx"),
                 file("A000_000001.hkx"),
@@ -996,6 +1002,7 @@ mod tests {
         let companion = Binder {
             version: binder.version,
             format: binder.format,
+            layout: binder.layout,
             files: vec![binder.files[2].clone()],
         };
         list_members(&mut listing, "c1010_div00", &companion);
@@ -1045,11 +1052,13 @@ mod tests {
         let binder = Binder {
             version: [0; 8],
             format: 0,
+            layout: Default::default(),
             files: vec![fromsoft_formats::BinderFile {
                 id: None,
                 name: Some("walk.hkx".into()),
                 flags: 0,
                 bytes: vec![0xff],
+                wrap: None,
             }],
         };
         let mut listing = ClipListing {
@@ -1080,11 +1089,13 @@ mod tests {
         let binder = Binder {
             version: [0; 8],
             format: 0,
+            layout: Default::default(),
             files: vec![fromsoft_formats::BinderFile {
                 id: None,
                 name: Some("walk.hkx".into()),
                 flags: 0,
                 bytes: vec![0xff],
+                wrap: None,
             }],
         };
         let mut listing = ClipListing {
