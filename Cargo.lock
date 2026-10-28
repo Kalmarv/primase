@@ -573,8 +573,8 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "fromsoft-formats"
-version = "0.8.0"
-source = "git+https://github.com/Kalmarv/fromsoft-formats?rev=17e4d7cd14831e4d769efb97928ce80808d2c8b7#17e4d7cd14831e4d769efb97928ce80808d2c8b7"
+version = "0.9.0"
+source = "git+https://github.com/Kalmarv/fromsoft-formats?rev=d626de56c7291c1ec1f6dd36e806265b7488ea4c#d626de56c7291c1ec1f6dd36e806265b7488ea4c"
 dependencies = [
  "aes",
  "encoding_rs",
@@ -726,8 +726,8 @@ dependencies = [
 
 [[package]]
 name = "havok-formats"
-version = "0.7.0"
-source = "git+https://github.com/Kalmarv/havok-formats?rev=093b01c6ecbfb23e3840b1aae4f4e1ab5cb2a4f5#093b01c6ecbfb23e3840b1aae4f4e1ab5cb2a4f5"
+version = "0.8.0"
+source = "git+https://github.com/Kalmarv/havok-formats?rev=e21c26cd12b4eca9070912eb8786b648f02571fa#e21c26cd12b4eca9070912eb8786b648f02571fa"
 dependencies = [
  "primase-foundations",
  "thiserror",
