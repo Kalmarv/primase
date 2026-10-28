@@ -1716,6 +1716,8 @@
 		<u8 name="Weapon Model Type">
 			<entry value="0" name="Right Weapon"/>
 			<entry value="1" name="Left Weapon"/>
+			<entry value="2" name="Mortal Blade"/>
+			<entry value="3" name="Grappling Hook"/>
 		</u8>
 		<u8 assert="0"/>
 		<u8 assert="0"/>
