@@ -47,6 +47,8 @@ mod collider;
 pub use collider::{Collider, Diagonal, Heightfield, Shape};
 mod draw_order;
 pub use draw_order::{DrawLayer, DrawOrder};
+mod sky_anchor;
+pub use sky_anchor::SkyAnchor;
 mod material_usage;
 pub use material_usage::MaterialUsage;
 mod vertex_color;

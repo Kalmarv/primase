@@ -36,6 +36,7 @@ use crate::rig::{
 use crate::shader::{MaterialPrograms, ProgramFacts, Shader, ShaderBinding};
 use crate::skeleton::Skeleton;
 use crate::skin::Skin;
+use crate::sky_anchor::SkyAnchor;
 use crate::state::{Condition, PrimitiveCondition, StateAssignment, StateAxis, StateOverride};
 use crate::texture_layers::TextureLayers;
 use crate::vertex_color::VertexColor;
@@ -71,7 +72,7 @@ declared! {
         PbrMaterial, DetailedMaterial, Priority, Provenance, StateAxis, Condition, PrimitiveCondition, StateOverride, VertexColor, Skeleton, Skin, Morphs, RigInstance,
         RigPose, SkinInstance, MorphWeights, Sockets, Attachment, JointMap, JointPlacement, Clip, ClipBinding, Asset, Shader, ShaderBinding,
         TextureLayers, MaterialPrograms, ProgramFacts, ClipKey, ClipLength, ClipEvents, Controller, ControllerBinding,
-        DrawGroups, DrawGroupDefaults, ContentNote, Record, DisplayName, PrimitiveKeys, MaterialParameters;
+        DrawGroups, DrawGroupDefaults, ContentNote, Record, DisplayName, PrimitiveKeys, MaterialParameters, SkyAnchor;
     resources: PartScope, PartitionPlan, Environment, Atmosphere, StateAssignment, Surfaces, Threads, Memo,
 }
 

@@ -315,15 +315,24 @@ Up is +Y. A consumer may start elsewhere (a view the user asked for); without a 
 
 ## Draw order
 
-A material may carry `extras.primase["core.draw_order"]` = `{"version": 2, "value": {"layer", "queue", "depth_write"}}`: where
+A material may carry `extras.primase["core.draw_order"]` = `{"version": 3, "value": {"layer", "queue", "depth_write"}}`: where
 its surfaces come in the source's draw sequence. `queue` is an integer across every layer, lower drawn first, on the
-conventional render-queue scale (opaque 2000, alpha tested 2450, transparent 3000, or the source's own values).
-Surfaces with the same queue draw in node order, then primitive order. `layer` is `opaque`, `cutout`, `decal` or
+conventional render-queue scale (opaque 2000, alpha tested 2450, sky 2900, transparent 3000, or the source's own values).
+Surfaces with the same queue draw in node order, then primitive order. `layer` is `opaque`, `cutout`, `decal`, `sky` or
 `transparent`. A `decal` surface is drawn over the surface beneath it, coplanar or nearly so: a consumer offsets its
-depth towards the viewer and doesn't cast its shadow. Without the extra, a material draws by its alpha mode and is
+depth towards the viewer and doesn't cast its shadow. A `sky` surface (a dome, a moon, far backdrops, clouds) is drawn
+after the opaque surfaces are lit and fogged and before the blended ones, depth tested so that it shows only where
+nothing nearer is, casting no shadow and taking no fog or lighting from the consumer; version 2 had no `sky`. Without the extra, a material draws by its alpha mode and is
 never a decal. `depth_write` says whether the source draws the surface writing depth (a blended surface may); version 1
 had none, and a consumer reading it takes the convention: opaque and alpha-tested surfaces write depth, decals and
 blended ones do not.
+
+A placement (a node) of the sky may carry `extras.primase["core.sky_anchor"]` = `{"version": 1, "value": ...}`: how the
+source moves it with the view every frame. `"horizontal"`: the node's transform plus the view's x and z (it follows
+the view across the ground, keeping its height). `{"towards_light": {"light", "distance"}}`: it stands `distance` from
+the view towards the directional light `light` (that light's entity id, as entity references are written), facing the view, its +Z towards
+the light and its +Y the world's up made perpendicular to that; its own transform is not used. Its transform as
+written is where it stands for a view at the origin.
 
 ## Material usage
 

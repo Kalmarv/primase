@@ -18,13 +18,20 @@ pub enum DrawLayer {
     /// Drawn over the surface beneath it, coplanar or nearly so (a game's decal bucket): a consumer biases its depth
     /// and does not cast its shadow.
     Decal,
+    /// The sky: a dome, the moon's or the sun's disc, far backdrops and cloud layers. It is drawn after the opaque
+    /// surfaces are lit and the frame's fog and atmosphere are composited over them, before the blended surfaces,
+    /// depth tested against the scene so that it shows only where nothing nearer was drawn, and it casts no shadow.
+    /// The sky's own programs give its colour, fog included: a consumer adds no fog or lighting of its own to it.
+    /// Where it stands is often relative to the view ([`crate::SkyAnchor`]).
+    Sky,
     /// Blended.
     Transparent,
 }
 
 /// `core.draw_order`: where a material's surfaces come in the source's draw sequence. `queue` is that sequence across
-/// every layer, lower first, on core's own scale: [`DrawOrder::OPAQUE`] 2000, [`DrawOrder::CUTOUT`] 2450 and
-/// [`DrawOrder::TRANSPARENT`] 3000 are where a layer's surfaces come by default, and a lowering places a source's
+/// every layer, lower first, on core's own scale: [`DrawOrder::OPAQUE`] 2000, [`DrawOrder::CUTOUT`] 2450,
+/// [`DrawOrder::SKY`] 2900 and [`DrawOrder::TRANSPARENT`] 3000 are where a layer's surfaces come by default (the sky
+/// has no alpha mode that implies it: a source states it), and a lowering places a source's
 /// own sequence on this scale (a source whose numbers are already on it keeps them). One scale for every layer, so a
 /// source can order a surface of one layer among another's. Within one queue, surfaces draw in entity order, then
 /// primitive order: the source order readers keep.
@@ -45,6 +52,8 @@ impl DrawOrder {
     /// Core's default queues of the layers, which a material's alpha mode implies where the source states no order.
     pub const OPAQUE: i32 = 2000;
     pub const CUTOUT: i32 = 2450;
+    /// The sky's default queue: after every opaque, alpha-tested and decal surface, before the blended ones.
+    pub const SKY: i32 = 2900;
     pub const TRANSPARENT: i32 = 3000;
 
     /// A draw order with the conventional depth write of its layer (glTF's): opaque and alpha-tested surfaces write
@@ -74,8 +83,8 @@ impl DrawOrder {
 impl Component for DrawOrder {
     const NAME: &'static str = "core.draw_order";
     const GEOMETRY: crate::Geometry = crate::Geometry::None;
-    /// 2: `depth_write`.
-    const VERSION: u32 = 2;
+    /// 2: `depth_write`. 3: the `sky` layer.
+    const VERSION: u32 = 3;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
