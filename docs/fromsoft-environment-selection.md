@@ -49,3 +49,21 @@ then identify the active weather id, event overrides and blend/precedence rule. 
 independently before applying a proven ordering. A weather file's presence alone cannot decide
 which layer wins. A moving Timeline/day-night UI can later re-read with recorded hour choices;
 this change implements static data evaluation only.
+
+## Which draw-param file (selection tables)
+
+A draw-param file id is a slot (hundreds digit) and a sub id (last two digits). What names them, per the installs' own
+data (fromsoft-formats `area::DrawParamId`, `gparam_events`, `gparam_params`; the counts are asserted in the crate's
+`tests/gparam_census.rs` and `tests/weather_census.rs`):
+
+- A collision part's scene config: first scene byte = slot, Elden Ring's byte at +32 = sub id. The file exists for all
+  1,304 Sekiro and 3,209 of the 3,266 Elden Ring collisions. `DrawParams::Collision(<part>)` reads that file.
+- The area's events: Sekiro `2003:88` (area, block, sub id, seconds), Elden Ring `2012:11`/`2012:12` (override on/off).
+  `DrawParamReport::switches` lists them; none is applied.
+- Elden Ring's `GparamRefSettingsParam` (rows keyed by decimal map number) says which map's files a map uses: the caves
+  and tunnels (`m31`, `m32`) use `m30_00`'s; `area::draw_params` follows it.
+- Elden Ring's weather: `WeatherParam.GparamId` names `m00_00_<id>_weatheroutdoor`; `WeatherLotParam` chooses weathers by
+  weight. Not read into the world; how a lot is chosen per map and hour is not established.
+
+Not established (needs a running game or the engine): how the collision under the player, the event sub id, the weather
+and an override combine into the one file in force. The read applies none of them unless the caller chooses a file.
