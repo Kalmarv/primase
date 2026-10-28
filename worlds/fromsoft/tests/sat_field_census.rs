@@ -13,7 +13,7 @@
 mod inputs;
 
 use fromsoft_formats::dcx::Decoder;
-use fromsoft_formats::{Game, Install, Keys};
+use fromsoft_formats::{Game, Keys};
 use iridia_interface::ResourceKind;
 use primase_core::World;
 use primase_core::shader::ConstantRole;
@@ -112,7 +112,7 @@ fn every_program_with_material_fields_binds_the_materials_parameters() -> Result
         inputs::install(inputs::Game::Elden),
         inputs::keys(inputs::Game::Elden),
     ) {
-        let install = Install::new(
+        let install = common::install(
             root,
             Game::EldenRing,
             Keys::from_folder(keys, Game::EldenRing, Game::EldenRing.param_key_sha256())?,

@@ -205,7 +205,7 @@ fn what_the_characters_hold() -> Result<()> {
             (_, Some(folder)) => Keys::from_folder(folder, game, game.param_key_sha256())?,
             (_, None) => continue,
         };
-        let install = Install::new(root, game, keys);
+        let install = common::install(root, game, keys);
         census(game, &install, &decoder, ids)?;
     }
     Ok(())

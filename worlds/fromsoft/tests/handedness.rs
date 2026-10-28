@@ -21,12 +21,13 @@
 //! tangents of both handedness signs.
 #![allow(clippy::unwrap_used)]
 
+mod common;
 mod inputs;
 
 use std::collections::BTreeMap;
 
 use fromsoft_formats::flver::Model;
-use fromsoft_formats::{Archive, Binder, dcx::Decoder};
+use fromsoft_formats::{Binder, dcx::Decoder};
 use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
 use serde_json::Value as Json;
 
@@ -113,7 +114,7 @@ fn mirror_is_undone_in_the_geometry() {
     let Some(sekiro_keys) = inputs::keys(inputs::Game::Sekiro) else {
         return;
     };
-    let archive = Archive::open_game(
+    let archive = common::open_game(
         root,
         fromsoft_formats::Game::Sekiro,
         &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro, None).unwrap(),

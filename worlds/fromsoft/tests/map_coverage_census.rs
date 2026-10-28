@@ -432,7 +432,7 @@ fn what_the_maps_store_and_what_primase_keeps() -> Result<()> {
         let names = inputs::oracle(inputs::OracleSet::Uxm, data, "dictionary.txt")
             .map(|path| NameDictionary::read_for(path, game))
             .transpose()?;
-        census(game, &Install::new(root, game, keys), names.as_ref(), &decoder)?;
+        census(game, &common::install(root, game, keys), names.as_ref(), &decoder)?;
     }
     Ok(())
 }

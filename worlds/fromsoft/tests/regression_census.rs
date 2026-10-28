@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 use std::time::Instant;
 
 use fromsoft_formats::dcx::Decoder;
-use fromsoft_formats::{Game, Install, Keys};
+use fromsoft_formats::{Game, Keys};
 use iridia_interface::Stage;
 use primase_animation::game_skin;
 use primase_core::pass::PassLog;
@@ -284,7 +284,7 @@ fn what_the_readers_and_passes_make_of_the_characters_is_the_baseline() -> Resul
         inputs::install(inputs::Game::Elden),
         inputs::keys(inputs::Game::Elden),
     ) {
-        let install = Install::new(
+        let install = common::install(
             root,
             Game::EldenRing,
             Keys::from_folder(keys, Game::EldenRing, Game::EldenRing.param_key_sha256())?,

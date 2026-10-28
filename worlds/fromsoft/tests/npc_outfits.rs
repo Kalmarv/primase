@@ -65,7 +65,7 @@ fn configured(game: Game) -> Result<Option<(Install, inputs::OodleLibrary)>> {
     };
     Ok(match (install(data), keys(data)) {
         (Some(dir), Some(k)) => Some((
-            Install::new(dir, game, Keys::from_folder(k, game, game.param_key_sha256())?),
+            common::install(dir, game, Keys::from_folder(k, game, game.param_key_sha256())?),
             dll,
         )),
         _ => None,

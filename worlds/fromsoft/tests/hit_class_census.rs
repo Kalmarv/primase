@@ -92,7 +92,7 @@ fn the_classes_the_maps_use() -> Result<()> {
             (_, Some(folder)) => Keys::from_folder(folder, game, game.param_key_sha256())?,
             (_, None) => continue,
         };
-        let install = Install::new(root, game, keys);
+        let install = common::install(root, game, keys);
         for map in maps {
             let classes = census(game, &install, &decoder, map)?;
             // a class the program lowers as water must be a class the install uses, or the choice is untested

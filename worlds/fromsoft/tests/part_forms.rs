@@ -8,7 +8,7 @@ use primase_fromsoft::game::ParamKey;
 use std::collections::BTreeMap;
 
 use fromsoft_formats::dcx::Decoder;
-use fromsoft_formats::{Game, Install, Keys};
+use fromsoft_formats::{Game, Keys};
 use inputs::Tool;
 use primase_core::{Asset, Name, Role, Source, World};
 use primase_fromsoft::sekiro::{CharacterOptions, CharacterReport, part_forms, read_parts_with};
@@ -172,7 +172,7 @@ fn a_part_binders_forms_are_assets_of_their_own() -> Result<()> {
         inputs::install(inputs::Game::Elden),
         inputs::keys(inputs::Game::Elden),
     ) {
-        let install = Install::new(
+        let install = common::install(
             root,
             Game::EldenRing,
             Keys::from_folder(keys, Game::EldenRing, Game::EldenRing.param_key_sha256())?,

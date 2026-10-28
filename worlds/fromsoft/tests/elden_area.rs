@@ -6,7 +6,7 @@
 //! its parent tile's offset where a parent places it: translation exact, with the core frame's z reversed.
 mod inputs;
 
-use fromsoft_formats::{Game, Install, Keys, dcx::Decoder};
+use fromsoft_formats::{Game, Keys, dcx::Decoder};
 use primase_core::{Instance, Source, Transform, World};
 use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::sekiro;
@@ -45,7 +45,7 @@ fn every_placed_part_is_accounted_for() -> Result<()> {
     ) else {
         return Ok(());
     };
-    let install = Install::new(
+    let install = common::install(
         root,
         Game::EldenRing,
         Keys::from_folder(keys, Game::EldenRing, Game::EldenRing.param_key_sha256())?,

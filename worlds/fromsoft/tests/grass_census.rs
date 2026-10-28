@@ -11,7 +11,7 @@
 //! Runs where the install, its keys (regulation.key) and the Oodle library are configured; otherwise it does nothing.
 mod inputs;
 
-use fromsoft_formats::{Game, Install, Keys, dcx::Decoder};
+use fromsoft_formats::{Game, Keys, dcx::Decoder};
 use primase_core::World;
 use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::sekiro;
@@ -39,7 +39,7 @@ fn the_grass_the_maps_name() -> Result<()> {
     let (Some(root), Some(folder)) = (inputs::install(data), inputs::keys(data)) else {
         return Ok(());
     };
-    let install = Install::new(
+    let install = common::install(
         root,
         Game::EldenRing,
         Keys::from_folder(folder, Game::EldenRing, Game::EldenRing.param_key_sha256())?,

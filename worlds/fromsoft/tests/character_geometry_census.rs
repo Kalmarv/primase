@@ -3,7 +3,7 @@
 //! not a claim that every material will lower or a rendered draw count. Patch/archive lookup uses Install's policy.
 mod inputs;
 
-use fromsoft_formats::{Game, Install, Keys, NameDictionary, dcx::Decoder};
+use fromsoft_formats::{Game, Keys, NameDictionary, dcx::Decoder};
 use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use primase_core::convert::Reader;
 use primase_fromsoft::game::ParamKey;
@@ -32,7 +32,7 @@ fn every_character_has_source_geometry_or_a_named_empty_reason() -> Result<()> {
             continue;
         };
         let key = Keys::from_folder(folder, game, game.param_key_sha256())?;
-        let install = Install::new(root, game, key);
+        let install = common::install(root, game, key);
         let archive = std::sync::Arc::new(install.open()?);
         let dictionary = NameDictionary::read_for(names, game)?;
         let placements = fromsoft_formats::game_params::npc_placements(&archive, &decoder, &dictionary)?;

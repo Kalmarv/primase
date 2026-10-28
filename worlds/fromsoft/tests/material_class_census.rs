@@ -118,7 +118,7 @@ fn the_shader_families_the_maps_use() -> Result<()> {
             (_, Some(folder)) => Keys::from_folder(folder, game, game.param_key_sha256())?,
             (_, None) => continue,
         };
-        let install = Install::new(root, game, keys);
+        let install = common::install(root, game, keys);
         for map in maps {
             census(game, &install, &decoder, map)?;
         }

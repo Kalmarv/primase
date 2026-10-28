@@ -124,19 +124,38 @@ pub fn image_passes(world: &mut primase_core::World, pipeline: &str) -> primase_
     report
 }
 
+/// The install at `root`, its archive indexes unwrapped on the configured threads (`[run] threads`): an Elden Ring
+/// install opens in about 5 s on one thread and 0.5 s on 16, to the same archive.
+pub fn install(
+    root: impl Into<std::path::PathBuf>,
+    game: fromsoft_formats::Game,
+    keys: fromsoft_formats::Keys,
+) -> fromsoft_formats::Install {
+    fromsoft_formats::Install::new(root, game, keys).with_threads(crate::inputs::threads())
+}
+
+/// [`fromsoft_formats::Archive::open_game`] on the configured threads, as [`install`].
+pub fn open_game(
+    root: impl AsRef<std::path::Path>,
+    game: fromsoft_formats::Game,
+    keys: &fromsoft_formats::Keys,
+) -> fromsoft_formats::Result<fromsoft_formats::Archive> {
+    fromsoft_formats::Archive::open_game_with(crate::inputs::threads(), root, game, keys)
+}
+
 /// A configured game's archives (`installs.sekiro` with `keys.sekiro`, or `installs.elden` with `keys.elden`), or
 /// `None` when the configuration lacks them.
 pub fn archive(
     game: fromsoft_formats::Game,
 ) -> Result<Option<fromsoft_formats::Archive>, Box<dyn std::error::Error>> {
     use crate::inputs::{Game as Data, install, keys};
-    use fromsoft_formats::{Archive, Game, Keys};
+    use fromsoft_formats::{Game, Keys};
     let data = match game {
         Game::Sekiro => Data::Sekiro,
         Game::EldenRing => Data::Elden,
     };
     Ok(match (install(data), keys(data)) {
-        (Some(dir), Some(keys)) => Some(Archive::open_game(
+        (Some(dir), Some(keys)) => Some(open_game(
             dir,
             game,
             &Keys::from_folder(keys, game, game.param_key_sha256())?,
@@ -150,11 +169,11 @@ pub fn archive(
 pub fn sekiro(
     root: impl Into<std::path::PathBuf>,
 ) -> Result<Option<fromsoft_formats::Install>, Box<dyn std::error::Error>> {
-    use fromsoft_formats::{Game, Install, Keys};
+    use fromsoft_formats::{Game, Keys};
     let Some(keys) = crate::inputs::keys(crate::inputs::Game::Sekiro) else {
         return Ok(None);
     };
-    Ok(Some(Install::new(
+    Ok(Some(install(
         root,
         Game::Sekiro,
         Keys::from_folder(keys, Game::Sekiro, None)?,

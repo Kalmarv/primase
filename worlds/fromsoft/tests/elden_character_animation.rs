@@ -140,7 +140,7 @@ fn elden_ring_clips_move_onto_the_model_by_the_games_own_rule() -> Result<()> {
         oodle: Some(&dll),
         max_output: 1 << 30,
     };
-    let install = Install::new(
+    let install = common::install(
         dir,
         Game::EldenRing,
         Keys::from_folder(keys, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
@@ -176,7 +176,7 @@ fn elden_ring_divisions_are_read_from_the_blf_markers_and_a_refusal_names_its_bo
         oodle: Some(&dll),
         max_output: 1 << 30,
     };
-    let install = Install::new(
+    let install = common::install(
         dir,
         Game::EldenRing,
         Keys::from_folder(keys, Game::EldenRing, Game::EldenRing.param_key_sha256())?,

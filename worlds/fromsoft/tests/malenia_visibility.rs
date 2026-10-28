@@ -3,7 +3,7 @@
 //! scale samples of the flower's influencing bones (plus their ancestors). Run with --nocapture.
 mod inputs;
 
-use fromsoft_formats::{Binder, Game, Install, Keys, dcx::Decoder, flver::Model, tae::Tae};
+use fromsoft_formats::{Binder, Game, Keys, dcx::Decoder, flver::Model, tae::Tae};
 use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use primase_core::convert::Reader;
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
@@ -93,7 +93,7 @@ fn malenia_pixelkill_hash_and_alpha_permutation_discard() -> Result<()> {
         oodle: Some(&codec),
         max_output: 1 << 30,
     };
-    let install = Install::new(
+    let install = common::install(
         root,
         Game::EldenRing,
         Keys::from_folder(key_dir, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
@@ -254,7 +254,7 @@ fn malenia_dynamic_parameter_defaults_and_rest_model_transforms() -> Result<()> 
         oodle: Some(&codec),
         max_output: 1 << 30,
     };
-    let install = Install::new(
+    let install = common::install(
         root,
         Game::EldenRing,
         Keys::from_folder(key_dir, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
@@ -380,7 +380,7 @@ fn malenia_named_material_defaults_and_actual_npc_resident_slots() -> Result<()>
         oodle: Some(&codec),
         max_output: 1 << 30,
     };
-    let install = Install::new(
+    let install = common::install(
         root,
         Game::EldenRing,
         Keys::from_folder(key_dir, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
@@ -541,7 +541,7 @@ fn malenia_material_ex_defaults_and_event198_target() -> Result<()> {
         oodle: Some(&codec),
         max_output: 1 << 30,
     };
-    let install = Install::new(
+    let install = common::install(
         root,
         Game::EldenRing,
         Keys::from_folder(key_dir, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
@@ -625,7 +625,7 @@ fn malenia_draw_flags_material_records_and_all_tae_controls() -> Result<()> {
         oodle: Some(&codec),
         max_output: 1 << 30,
     };
-    let install = Install::new(
+    let install = common::install(
         root,
         Game::EldenRing,
         Keys::from_folder(key_dir, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
@@ -717,7 +717,7 @@ fn malenia_source_mesh_groups_tae233_and_petal_bone_scales() -> Result<()> {
         oodle: Some(&codec),
         max_output: 1 << 30,
     };
-    let install = Install::new(
+    let install = common::install(
         root,
         Game::EldenRing,
         Keys::from_folder(key_dir, Game::EldenRing, Game::EldenRing.param_key_sha256())?,

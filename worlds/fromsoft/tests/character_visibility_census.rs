@@ -3,7 +3,7 @@
 mod inputs;
 
 use fromsoft_formats::{
-    Binder, Game, Install, Keys, NameDictionary,
+    Binder, Game, Keys, NameDictionary,
     dcx::Decoder,
     tae::{self, Tae, clip_animation_id},
 };
@@ -35,7 +35,7 @@ fn every_sekiro_and_elden_character_reports_its_clip_visibility_event_coverage()
             continue;
         };
         let key = Keys::from_folder(folder, game, game.param_key_sha256())?;
-        let install = Install::new(root, game, key);
+        let install = common::install(root, game, key);
         let archive = std::sync::Arc::new(install.open()?);
         let dictionary = NameDictionary::read_for(names, game)?;
         let characters: BTreeSet<_> = dictionary

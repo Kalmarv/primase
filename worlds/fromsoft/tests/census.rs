@@ -1,11 +1,11 @@
 //! The archives of each game read against an independent census of the same install (SoulsFormats for Sekiro,
 //! SoulsFormatsNEXT for Elden Ring, each with UXM's keys and path hash): the decrypted indexes, every entry's decoded
 //! bytes and every top-level binder member. Private corpus paths are caller-supplied; no game data is bundled.
+mod common;
 mod inputs;
 
 use fromsoft_formats::{
     Game, Keys, NameDictionary,
-    archive::Archive,
     bhd::{Header, unwrap_rsa},
 };
 use primase_fromsoft::game::ParamKey;
@@ -69,7 +69,7 @@ fn headers() -> Result<(), Box<dyn std::error::Error>> {
 
 fn headers_of(install: &Install) -> Result<(), Box<dyn std::error::Error>> {
     let set = install.game.archives();
-    let archive = Archive::open_game(&install.root, install.game, &install.keys)?;
+    let archive = common::open_game(&install.root, install.game, &install.keys)?;
     let mut report = GateReport::new(
         format!("{} RSA BHD oracle", install.game.name()),
         Tolerance::Exact,
@@ -176,7 +176,7 @@ fn whole_install_of(
     use std::collections::BTreeMap;
     let decoder = *decoder;
     let oracle = &install.oracle;
-    let archive = Archive::open_game(&install.root, install.game, &install.keys)?;
+    let archive = common::open_game(&install.root, install.game, &install.keys)?;
     let stem = |shard: u8| archive.pair(shard).map_or("?", |p| p.stem);
     let entry_text = std::fs::read_to_string(oracle.join("entries.tsv"))?;
     let member_text = std::fs::read_to_string(oracle.join("binders.tsv"))?;

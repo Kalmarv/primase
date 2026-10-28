@@ -94,7 +94,7 @@ fn install_and_decoder() -> Result<
     ) else {
         return Ok(None);
     };
-    let install = Install::new(
+    let install = common::install(
         root.clone(),
         Game::EldenRing,
         Keys::from_folder(keys, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
@@ -211,7 +211,7 @@ fn detail_blend_materials_of_characters_by_program() -> Result<()> {
                     println!("SKIPPED sekiro: no install or keys configured");
                     continue;
                 };
-                Install::new(root, Game::Sekiro, Keys::from_folder(keys, Game::Sekiro, None)?)
+                common::install(root, Game::Sekiro, Keys::from_folder(keys, Game::Sekiro, None)?)
             }
         };
         // program -> (materials, fit, reasons)

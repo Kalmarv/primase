@@ -267,7 +267,7 @@ fn what_an_area_read_holds_at_each_stage() -> Result<()> {
             (_, Some(folder)) => Keys::from_folder(folder, game, game.param_key_sha256())?,
             (_, None) => continue,
         };
-        let install = Install::new(root, game, keys);
+        let install = common::install(root, game, keys);
         // the dictionary is not needed by the read; it is listed so a census names what it could not have read
         let _ = inputs::oracle(inputs::OracleSet::Uxm, data, "dictionary.txt")
             .map(|path| NameDictionary::read_for(path, game));

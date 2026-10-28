@@ -1,9 +1,10 @@
 //! MSB part entity IDs and entity group IDs, exact as stored, against an independent reader (SoulsFormats' MSBS):
 //! `entities.jsonl` in `oracles.scripts.sekiro/state` holds, per map file, every part's index, name, entity ID and
 //! eight group IDs. Every map file it lists is read; a part count, name or value that differs fails the gate.
+mod common;
 mod inputs;
 
-use fromsoft_formats::{Archive, dcx::Decoder, msb::MapLayout};
+use fromsoft_formats::{dcx::Decoder, msb::MapLayout};
 use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
 use primase_testdata::gate::{GateReport, Tolerance};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -45,7 +46,7 @@ fn part_entities_match_an_independent_reader() -> Result<()> {
     let Some(sekiro_keys) = inputs::keys(inputs::Game::Sekiro) else {
         return Ok(());
     };
-    let archive = Archive::open_game(
+    let archive = common::open_game(
         root,
         fromsoft_formats::Game::Sekiro,
         &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro, None)?,

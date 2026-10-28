@@ -7,7 +7,7 @@
 mod inputs;
 
 use fromsoft_formats::msb::PartKind;
-use fromsoft_formats::{Archive, dcx::Decoder, msb::MapLayout};
+use fromsoft_formats::{dcx::Decoder, msb::MapLayout};
 use primase_testdata::gate::{GateReport, Tolerance};
 
 use std::collections::BTreeMap;
@@ -63,7 +63,7 @@ fn stored_parts_match_an_independent_reading() -> Result<()> {
     let Some(sekiro_keys) = inputs::keys(inputs::Game::Sekiro) else {
         return Ok(());
     };
-    let archive = Archive::open_game(
+    let archive = common::open_game(
         root,
         fromsoft_formats::Game::Sekiro,
         &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro, None)?,

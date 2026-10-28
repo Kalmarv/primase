@@ -235,7 +235,7 @@ fn pixelkill_permutation_inventory_across_materials() -> Result<()> {
     };
     census(
         Game::EldenRing,
-        Install::new(
+        common::install(
             root,
             Game::EldenRing,
             Keys::from_folder(key_dir, Game::EldenRing, Game::EldenRing.param_key_sha256())?,

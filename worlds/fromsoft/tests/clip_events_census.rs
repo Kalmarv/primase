@@ -38,7 +38,7 @@ fn events_stored_shorter_than_their_template_keep_the_fields_they_store() -> Res
         ) else {
             continue;
         };
-        let archive: Archive = Archive::open_game(root, game, &Keys::from_folder(folder, game, None)?)?;
+        let archive: Archive = common::open_game(root, game, &Keys::from_folder(folder, game, None)?)?;
         let dictionary = NameDictionary::read_for(names, game)?;
         let paths: BTreeSet<&str> = dictionary
             .names

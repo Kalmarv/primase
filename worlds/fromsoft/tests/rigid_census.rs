@@ -6,10 +6,11 @@
 //! matrices against our f64 evaluation. The census is complete in both directions: the models the
 //! dump lists (and the ones it could not dump, with why) are exactly the models its MSB parts place, which are exactly
 //! the models our MSB reader's parts place.
+mod common;
 mod inputs;
 
 use fromsoft_formats::msb::{MapLayout, PartKind};
-use fromsoft_formats::{Archive, Binder, dcx::Decoder, flver::Model};
+use fromsoft_formats::{Binder, dcx::Decoder, flver::Model};
 use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
 use primase_core::pass::PassLog;
 use primase_fromsoft::rigid::lower_model;
@@ -41,7 +42,7 @@ fn full_castle_rigid_vertices() -> Result<()> {
     let Some(sekiro_keys) = inputs::keys(inputs::Game::Sekiro) else {
         return Ok(());
     };
-    let archive = Archive::open_game(
+    let archive = common::open_game(
         root,
         fromsoft_formats::Game::Sekiro,
         &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro, None)?,

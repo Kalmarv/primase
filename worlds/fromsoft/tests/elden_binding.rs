@@ -18,7 +18,7 @@
 mod inputs;
 
 use fromsoft_formats::metaparam::texture_number;
-use fromsoft_formats::{Game, Install, Keys, dcx::Decoder};
+use fromsoft_formats::{Game, Keys, dcx::Decoder};
 use primase_core::World;
 use primase_core::shader::ConstantRole;
 use primase_core::{shader::Shader, shader::ShaderBinding, shader::TextureSource};
@@ -48,7 +48,7 @@ fn elden_ring_materials_bind_as_their_definitions_state() -> Result<()> {
     ) else {
         return Ok(());
     };
-    let install = Install::new(
+    let install = common::install(
         root,
         Game::EldenRing,
         Keys::from_folder(keys, Game::EldenRing, Game::EldenRing.param_key_sha256())?,

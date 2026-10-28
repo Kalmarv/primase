@@ -3,6 +3,7 @@
 //! (`emevd.jsonl` in `oracles.scripts.sekiro/state`: per script the decompressed file's sha256 and every event's id,
 //! rest behaviour, instructions as bank, id, argument bytes and layer, parameter substitutions, linked files and
 //! strings) must equal ours exactly, and it must list the same scripts as the census found.
+mod common;
 mod inputs;
 
 use std::collections::BTreeMap;
@@ -59,7 +60,7 @@ fn every_script_reads_and_matches_an_independent_reader() -> Result<()> {
     let Some(sekiro_keys) = inputs::keys(inputs::Game::Sekiro) else {
         return Ok(());
     };
-    let archive = Archive::open_game(
+    let archive = common::open_game(
         root,
         fromsoft_formats::Game::Sekiro,
         &fromsoft_formats::Keys::from_folder(sekiro_keys, fromsoft_formats::Game::Sekiro, None)?,
