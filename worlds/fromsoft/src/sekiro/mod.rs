@@ -16,8 +16,8 @@ pub use passes::object_collision as objects;
 pub use passes::{blockers, layers, lights, normals, pbr, settings};
 pub use read::animation::{AnimationReport, Animations, ClipSource, read_clip_skeleton};
 pub use read::area::{
-    GrassTypes, ObjectAnimations, Options, Parents, Report, StateClasses, read_game_area,
-    read_game_area_staged, world_bounds,
+    GrassTypes, ObjectAnimations, Options, Parents, Report, StateClasses, read_area_draw_param,
+    read_game_area, read_game_area_staged, world_bounds,
 };
 pub use read::character::{
     CharacterOptions, CharacterReader, CharacterReport, animation_notices, character_display_masks,

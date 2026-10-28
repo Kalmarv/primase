@@ -5,34 +5,25 @@
 //! density, an exposure as a multiplier or as stops). It asserts only what is stated (a file read has groups, a group
 //! its fields) and prints the rest.
 //!
+//! Each file is read as the area reader reads it with a region no placement reaches
+//! ([`sekiro::read_area_draw_param`]: against the collision parts' graphics configs), without reading the area's models.
+//!
 //! Runs where the install, its keys and the Oodle library are configured; otherwise it does nothing.
 mod inputs;
 
-use fromsoft_formats::{Game, Install, Keys, dcx::Decoder};
-use primase_core::World;
+use fromsoft_formats::{Archive, Game, Keys, dcx::Decoder};
 use primase_fromsoft::game::ParamKey;
-use primase_fromsoft::sekiro::{self, DrawParams, source::DrawParam};
+use primase_fromsoft::sekiro::{self, DrawParams};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 mod common;
 
-/// A rectangle no map reaches: the census reads the draw-param file and places no model.
-const NOWHERE: sekiro::Region = sekiro::Region {
-    rect: [1.0e6, 1.0e6, 1.0e6 + 1.0, 1.0e6 + 1.0],
-    margin: 0.0,
-};
-
-fn census(game: Game, install: &Install, decoder: &Decoder<'_>, map: &str) -> Result<()> {
+fn census(game: Game, archive: &Archive, decoder: &Decoder<'_>, map: &str) -> Result<()> {
     // the first read names the files the archive holds; each is then read in turn
     let mut files = {
-        let mut world = World::default();
-        let options = sekiro::Options {
-            region: Some(NOWHERE),
-            draw_param: DrawParams::File(format!("{}_0000", &map[..6])),
-            ..Default::default()
-        };
-        sekiro::read_game_area(install, map, decoder, &options, &mut world)?
-            .draw_param
+        let first = DrawParams::File(format!("{}_0000", &map[..6]));
+        sekiro::read_area_draw_param(archive, decoder, map, &first)?
+            .1
             .available
     };
     if files.is_empty() {
@@ -42,7 +33,6 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>, map: &str) -> Re
     files.truncate(8);
     // Inspect original time tracks before the area reader selects one value. Known weather/event
     // layer names are observed only, never silently merged into the active environment.
-    let archive = install.open()?;
     let mut time_files: std::collections::BTreeSet<_> = files.iter().cloned().collect();
     for prefix in std::iter::once(map[..6].to_owned()).chain(files.iter().cloned()) {
         for layer in ["weatherbase", "weatheroutdoor", "commonevent", "capturemap"] {
@@ -93,17 +83,12 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>, map: &str) -> Re
         );
     }
     for file in files {
-        let mut world = World::default();
-        let options = sekiro::Options {
-            region: Some(NOWHERE),
-            draw_param: DrawParams::File(file.clone()),
-            ..Default::default()
-        };
-        let report = sekiro::read_game_area(install, map, decoder, &options, &mut world)?;
+        let (draw, report) =
+            sekiro::read_area_draw_param(archive, decoder, map, &DrawParams::File(file.clone()))?;
         // what the reader found and left of the file: the groups it could not choose a value set for, the fields it
         // read at no set, the other times of day, the blocks it does not interpret. It says whether an empty file is
         // empty or unread.
-        let r = &report.draw_param;
+        let r = &report;
         println!(
             "{} {file} REPORT version {} groups {} fields {} unchosen_groups {:?} unchosen_fields {} fields_without_set {} \
              time_variants {} zero_id_groups {:?} unread {:?}",
@@ -142,9 +127,7 @@ fn census(game: Game, install: &Install, decoder: &Decoder<'_>, map: &str) -> Re
                 game.name()
             );
         }
-        let draw = world
-            .resource::<DrawParam>()
-            .ok_or_else(|| format!("{file}: no draw param read"))?;
+        let draw = draw.ok_or_else(|| format!("{file}: no draw param read"))?;
         // a census states what it finds: a file with no group, or a group with no field, is a line, not a failure
         if draw.groups.is_empty() {
             println!("{} {file} NO-GROUPS", game.name());
@@ -202,9 +185,10 @@ fn the_fields_the_maps_store() -> Result<()> {
             (_, Some(folder)) => Keys::from_folder(folder, game, game.param_key_sha256())?,
             (_, None) => continue,
         };
-        let install = Install::new(root, game, keys);
+        // one archive for the game's maps, its indexes unwrapped on the configured threads
+        let archive = common::install(root, game, keys).open()?;
         for map in maps {
-            census(game, &install, &decoder, map)?;
+            census(game, &archive, &decoder, map)?;
         }
     }
     Ok(())

@@ -528,6 +528,49 @@ fn grass_types(
     out
 }
 
+/// The draw-param file `choice` names for `area`, as [`read_game_area`] reads it when its region reaches no placement:
+/// against the graphics configs of the area's collision parts alone (those are read whole, whatever the region). It
+/// reads the area's layout and the file, no model, so a census of an area's draw-param files costs a layout read per
+/// file rather than an area read.
+pub fn read_area_draw_param(
+    archive: &Archive,
+    decoder: &Decoder<'_>,
+    area: &str,
+    choice: &draw_param::DrawParams,
+) -> Result<(Option<source::DrawParam>, draw_param::Report)> {
+    let area = area_name(area)?;
+    let layout = MapLayout::read(&archive.read(&format!("/map/mapstudio/{area}.msb.dcx"), decoder)?)?;
+    let parts: BTreeSet<usize> = collision_parts(&layout).collect();
+    let configs = environment_configs(&layout, choice, &parts)?;
+    draw_param::read(archive, decoder, archive.game(), &area, choice, &configs)
+}
+
+/// The layout's collision parts, by part index.
+fn collision_parts(layout: &MapLayout) -> impl Iterator<Item = usize> + '_ {
+    layout
+        .parts
+        .iter()
+        .filter(|p| p.kind == PartKind::Collision)
+        .map(|p| p.index)
+}
+
+/// The graphics configs of `parts` (part indices of `layout`) that choose the value sets of the draw-param file
+/// `choice` names: none when no file is read.
+fn environment_configs(
+    layout: &MapLayout,
+    choice: &draw_param::DrawParams,
+    parts: &BTreeSet<usize>,
+) -> Result<Vec<fromsoft_formats::msb::PartGparam>> {
+    if *choice == draw_param::DrawParams::None {
+        return Ok(Vec::new());
+    }
+    Ok(layout
+        .gparam_configs()?
+        .into_iter()
+        .filter(|c| parts.contains(&c.part))
+        .collect())
+}
+
 fn area_name(area: &str) -> Result<String> {
     let value = if area.len() == 6 {
         format!("{area}_00_00")
@@ -1102,13 +1145,7 @@ pub fn read_game_area_staged(
         .map(|(_, index, _)| &placements[*index])
         .filter(|p| p.map == area)
         .map(|p| p.part.index)
-        .chain(
-            layout
-                .parts
-                .iter()
-                .filter(|p| p.kind == PartKind::Collision)
-                .map(|p| p.index),
-        )
+        .chain(collision_parts(&layout))
         .collect();
     stage("spawn placements");
     for (key, index, transform) in selected {
@@ -1169,15 +1206,7 @@ pub fn read_game_area_staged(
         )?;
     }
     stage("environment");
-    let configs: Vec<_> = if options.draw_param == draw_param::DrawParams::None {
-        Vec::new()
-    } else {
-        layout
-            .gparam_configs()?
-            .into_iter()
-            .filter(|c| environment_parts.contains(&c.part))
-            .collect()
-    };
+    let configs = environment_configs(&layout, &options.draw_param, &environment_parts)?;
     let (environment, draw_param_report) =
         draw_param::read(&archive, decoder, game, &area, &options.draw_param, &configs)?;
     if let Some(environment) = environment {
