@@ -597,23 +597,13 @@ fn binder_path(stem: &str) -> String {
 }
 
 /// The binders a binder's marker members name as this character's (`<id>_<set>.txt` or `.blf` with an archive binder of
-/// that name), in the binder's order, each once.
+/// that name), in the binder's order, each once: [`Binder::division_markers`] filtered by what the archive holds.
 fn companions(archive: &Archive, id: &str, binder: &Binder) -> Vec<String> {
-    let prefix = format!("{id}_");
-    let mut out: Vec<String> = Vec::new();
-    for f in &binder.files {
-        let Some(name) = f.name.as_deref() else {
-            continue;
-        };
-        let file = file_name(name);
-        let Some(set) = file.strip_suffix(".txt").or_else(|| file.strip_suffix(".blf")) else {
-            continue;
-        };
-        if set.starts_with(&prefix) && archive.contains(&binder_path(set)) && !out.iter().any(|o| o == set) {
-            out.push(set.to_owned());
-        }
-    }
-    out
+    binder
+        .division_markers(&format!("{id}_"))
+        .into_iter()
+        .filter(|set| archive.contains(&binder_path(set)))
+        .collect()
 }
 
 /// What one binder holds: its skeletons, its animation containers by file stem, each with where it was read from, and
