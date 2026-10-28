@@ -1,0 +1,43 @@
+# cargo-nextest runs every test as its own process, all binaries at once, where `cargo test` runs one binary after
+# another: a real-data suite spends most of its time in a few single-threaded binaries, so it finishes in about the time
+# of its longest tests instead of the sum of them all. `cargo nextest run` does not run doctests: `cargo test --doc`.
+
+[profile.default]
+# The slots double as a memory budget: a light test takes one, a test that holds gigabytes of an install takes one per
+# gigabyte of its peak (the overrides below), so the tests running at once hold about 16 GB at most. Unweighted, the
+# real-data gate on a 32 GB desktop ran out of memory: a decoder's buffer reservation was refused (Compression(Limit)).
+test-threads = 16
+# a real-data census can take minutes: report it as slow after one, never kill it for time
+slow-timeout = { period = "60s" }
+# every failure is printed at the end as well as where it happened, so a long run's failures are easy to find
+failure-output = "immediate-final"
+fail-fast = false
+
+# Peak working set of each binary's test processes in the real-data gate ([run] threads = '4'), rounded up to whole GB.
+# Remeasure when a heavy test changes: the sampler is a working-set reading every 2 s.
+[[profile.default.overrides]]
+filter = "binary(hit_class_census)"
+threads-required = 9
+
+[[profile.default.overrides]]
+filter = "binary(f_collision) | binary(area_reader)"
+threads-required = 8
+
+[[profile.default.overrides]]
+filter = "binary(baked_area) | binary(layer_bake_digest)"
+threads-required = 6
+
+[[profile.default.overrides]]
+filter = "binary(sekiro_scene) | binary(interchange_real_data)"
+threads-required = 5
+
+[[profile.default.overrides]]
+filter = "binary(normal_basis)"
+threads-required = 3
+
+[[profile.default.overrides]]
+filter = """
+binary(grass_census) | binary(census) | binary(elden_binding) | binary(scene_disc) | binary(elden_area)
+| binary(character_census) | binary(elden_character) | binary(elden_character_animation)
+"""
+threads-required = 2

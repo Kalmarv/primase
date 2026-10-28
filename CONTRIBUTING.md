@@ -317,6 +317,12 @@ commit a populated configuration. A query whose key is not configured prints one
 key; `[run] require = 'gate'` makes the inputs a change must have fail instead, so run the real-data tests a change
 affects with it and a skipped affected test counts as a failure, not a pass.
 
+The real-data tests run fastest under [cargo-nextest](https://nexte.st) (`cargo nextest run --release -p <crate>`): it
+runs every test as its own process across all the binaries at once, where `cargo test` runs one binary after another.
+`.config/nextest.toml` weights each test that holds gigabytes of an install by its peak memory, so the tests running at
+once stay within about 16 GB; nextest does not run doctests (`cargo test --doc`). `[run] threads` sets how many threads
+one heavy test's own work may use.
+
 Each crate declares what its tests read in its own `tests/inputs/mod.rs`; the table beside it,
 `tests/inputs/README.md`, is made from those declarations and checked against them (`tests/real_data_inputs.rs`), and
 asking for an undeclared input fails. primase-testdata is only ever a dev-dependency, so normal builds carry no TOML
