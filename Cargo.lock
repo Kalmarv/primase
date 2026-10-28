@@ -573,8 +573,8 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "fromsoft-formats"
-version = "0.9.0"
-source = "git+https://github.com/Kalmarv/fromsoft-formats?rev=d626de56c7291c1ec1f6dd36e806265b7488ea4c#d626de56c7291c1ec1f6dd36e806265b7488ea4c"
+version = "0.10.0"
+source = "git+https://github.com/Kalmarv/fromsoft-formats?rev=eafc2ff4aaff45b1782c8531ae987a361fe99016#eafc2ff4aaff45b1782c8531ae987a361fe99016"
 dependencies = [
  "aes",
  "encoding_rs",
@@ -589,8 +589,8 @@ dependencies = [
 
 [[package]]
 name = "frostbite-formats"
-version = "0.2.1"
-source = "git+https://github.com/Kalmarv/frostbite-formats?rev=d962737ddee4b1d908f0f1625f84e17ddf0d6f46#d962737ddee4b1d908f0f1625f84e17ddf0d6f46"
+version = "0.2.2"
+source = "git+https://github.com/Kalmarv/frostbite-formats?rev=9999cc28a8329382949078b878bdf6d69dfa5938#9999cc28a8329382949078b878bdf6d69dfa5938"
 dependencies = [
  "half",
  "primase-foundations",
@@ -726,8 +726,8 @@ dependencies = [
 
 [[package]]
 name = "havok-formats"
-version = "0.8.0"
-source = "git+https://github.com/Kalmarv/havok-formats?rev=e21c26cd12b4eca9070912eb8786b648f02571fa#e21c26cd12b4eca9070912eb8786b648f02571fa"
+version = "0.8.1"
+source = "git+https://github.com/Kalmarv/havok-formats?rev=252cec530cae8563abe865571ce2899a93458af9#252cec530cae8563abe865571ce2899a93458af9"
 dependencies = [
  "primase-foundations",
  "thiserror",
@@ -1669,8 +1669,8 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rage-engine-formats"
-version = "0.1.0"
-source = "git+https://github.com/Kalmarv/rage-engine-formats?rev=80c78cf628c2bbd94365816e36cd870bc768bb8b#80c78cf628c2bbd94365816e36cd870bc768bb8b"
+version = "0.1.1"
+source = "git+https://github.com/Kalmarv/rage-engine-formats?rev=cefd7cac0c898959ad71526efc31f445471f895c#cefd7cac0c898959ad71526efc31f445471f895c"
 dependencies = [
  "aes",
  "indexmap",
@@ -2125,8 +2125,8 @@ checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
 
 [[package]]
 name = "unity-formats"
-version = "0.1.0"
-source = "git+https://github.com/Kalmarv/unity-formats?rev=f6e02ee5ceab50e839d14f1cafe794812a0cfecf#f6e02ee5ceab50e839d14f1cafe794812a0cfecf"
+version = "0.2.0"
+source = "git+https://github.com/Kalmarv/unity-formats?rev=96610beca1d59964a1c05402a2249980824dca30#96610beca1d59964a1c05402a2249980824dca30"
 dependencies = [
  "half",
  "primase-foundations",
