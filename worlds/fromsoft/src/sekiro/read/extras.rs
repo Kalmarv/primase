@@ -47,7 +47,12 @@ pub fn light_record(
     light: &fromsoft_formats::btl::Light,
     map: &Transform,
 ) -> Result<(Transform, LightSource)> {
-    let transform = map.compose(&placed(euler_matrix(light.position, light.rotation, [1.; 3], 0)?));
+    // the rotation is stored in radians (every Elden Ring spot light's lies in -pi..pi, and a running game's spot
+    // records point along `Ry * Rx * Rz` of the stored angles as radians)
+    let degrees = light.rotation.map(|a| f64::from(a).to_degrees() as f32);
+    let transform = map.compose(&placed(euler_matrix(light.position, degrees, [1.; 3], 0)?));
+    // the auxiliary words the lowering reads: the horizontal cone angle (offset 184) and the exposure weight (224)
+    let word = |offset: usize| light.auxiliary.get(&offset).map_or(0., |w| f32::from_bits(*w));
     let record = LightSource {
         name: light.name.clone(),
         kind: match light.kind {
@@ -61,6 +66,8 @@ pub fn light_record(
         specular_power: light.specular_power,
         cast_shadows: light.cast_shadows,
         cone_angle: light.cone_angle,
+        cone_width: word(184),
+        exposure_weight: word(224),
         radius: light.radius,
         tangent: unit(transform.cols[0])?,
     };

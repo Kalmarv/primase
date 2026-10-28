@@ -8,9 +8,11 @@
 //! The lowering of a stored light is a `Light` whose colour times intensity is the radiance the game's shader receives,
 //! at a `candela-per-power` of 1: `colour^2 * power`, the same for a BTL light's bytes and power and an effect light's
 //! stored colour and `alpha * diffuse multiplier`. A relative difference above 1e-6 fails.
+use fromsoft_formats::btl::{Kind, Light as BtlLight};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{Light, Transform, World};
-use primase_fromsoft::sekiro::passes;
+use primase_fromsoft::sekiro::light_record;
+use primase_fromsoft::sekiro::passes::{self, lights::spot_half_angles};
 use primase_fromsoft::sekiro::source::{
     EffectLight, EffectPlace, EffectShape, EffectValue, LightKind, LightSource,
 };
@@ -30,6 +32,8 @@ fn btl(diffuse: [u8; 3], power: f32, radius: f32) -> LightSource {
         specular_power: 0.,
         cast_shadows: false,
         cone_angle: 0.,
+        cone_width: 0.,
+        exposure_weight: 0.,
         radius,
         tangent: [1., 0., 0.],
     }
@@ -132,4 +136,107 @@ fn a_steady_effect_light_lowers_to_the_record_the_game_uploaded() {
     let [light] = &lights[..] else { panic!() };
     assert_record(light, [0.030_757_403, 0.040_676_665, 0.05], "effect 300");
     assert_eq!(light.range, Some(1.5));
+}
+
+/// A BTL spot as its bank stores it: the full vertical angle `cone`, the horizontal one (record offset 184) in the
+/// auxiliary words, the rotation in radians.
+fn btl_spot(position: [f32; 3], rotation: [f32; 3], cone: f32, width: f32) -> BtlLight {
+    BtlLight {
+        name: "live".into(),
+        kind: Kind::Spot,
+        diffuse: [200, 225, 255],
+        diffuse_power: 0.5,
+        specular: [200, 225, 255],
+        specular_power: 1.,
+        cast_shadows: false,
+        cone_angle: cone,
+        position,
+        rotation,
+        radius: 30.,
+        auxiliary: [(184, width.to_bits())].into(),
+    }
+}
+
+/// Spot lights of Ashina Castle (`m11_01_00_00_0000` lights 2 and 3, `m11_02_00_00_0000` lights 0, 4 and 5), their
+/// records read back from the spot buffer: the two scale rows of the `ViewToLightSpaceMatrix` (rows 0 and 1, the
+/// horizontal and the vertical axis of the cone) have the lengths below, `cot` of half the stored angle of that
+/// axis: the horizontal axis's is the stored word at offset 184, the vertical axis's the cone angle at offset 44.
+/// (`cone`, `width`) -> (horizontal scale, vertical scale).
+#[test]
+fn btl_spot_angles_are_full_angles_per_axis() {
+    let cases: [(f32, f32, f64, f64); 5] = [
+        (30., 30., 3.732_050_3, 3.732_050_5),
+        (8., 90., 1.000_000_2, 14.300_667),
+        (30., 20., 5.671_281_9, 3.732_050_8),
+        (50., 10., 11.430_053_4, 2.144_507_0),
+        (20., 25., 4.510_708_8, 5.671_282_1),
+    ];
+    for (cone, width, horizontal, vertical) in cases {
+        let [h, v] = spot_half_angles(cone, width).expect("a cone");
+        for (half, scale, axis) in [(h, horizontal, "horizontal"), (v, vertical, "vertical")] {
+            let got = 1. / half.tan();
+            assert!(
+                (got - scale).abs() <= 1e-6 * scale,
+                "cone {cone} width {width} {axis}: cot(half angle) {got}, the game's scale {scale}"
+            );
+        }
+    }
+}
+
+/// What the game's loader code does with a stored width of 0 (the width is 0 on most banks' lights; no live spot of the
+/// readbacks has one): the horizontal axis takes the cone angle, and a spot with neither angle is switched off. Read from
+/// the executable's code, not from a record.
+#[test]
+fn a_missing_spot_width_takes_the_cone_angle() {
+    assert_eq!(spot_half_angles(30., 0.), spot_half_angles(30., 30.));
+    assert_eq!(spot_half_angles(0., 20.), spot_half_angles(20., 20.));
+    assert_eq!(spot_half_angles(0., 0.), None);
+}
+
+/// The same two lights' axes: the records' `forward` (row 3 of the matrix), `right` and `up` (rows 0 and 1) in the map
+/// frame, from the stored rotation in radians. The world frame mirrors z, so a record's z component is negated: the
+/// beam is the transform's local -Z, and its local X and Y are the cone's horizontal and vertical axes.
+#[test]
+fn btl_spot_axes_are_the_records() {
+    let cases = [
+        (
+            btl_spot(
+                [-196.624, -10.8612, 219.919],
+                [1.220_838_2, -1.447_076_4, 0.],
+                30.,
+                30.,
+            ),
+            [-0.340_237_8, -0.939_387_1, 0.042_310_3],
+            [0.123_404_5, 0., 0.992_356_4],
+            [-0.932_206_8, 0.342_858_5, 0.115_924_6],
+        ),
+        (
+            btl_spot(
+                [-353.334, -22.1065, 235.501],
+                [0.296_149_9, 0.727_452_3, 0.],
+                8.,
+                90.,
+            ),
+            [0.636_021, -0.291_839_9, 0.714_357_6],
+            [0.746_871_1, 0., -0.664_969],
+            [0.194_064_5, 0.956_467_2, 0.217_966_8],
+        ),
+    ];
+    for (light, forward, right, up) in cases {
+        let (t, _) = light_record(&light, &IDENTITY).unwrap();
+        let mirrored = |v: [f32; 3]| [v[0], v[1], -v[2]];
+        let beam = t.cols[2].map(|x| -x);
+        for (got, want, what) in [
+            (beam, mirrored(forward), "beam"),
+            (t.cols[0], mirrored(right), "horizontal axis"),
+            (t.cols[1], mirrored(up), "vertical axis"),
+        ] {
+            for k in 0..3 {
+                assert!(
+                    (got[k] - want[k]).abs() < 2e-6,
+                    "{what}: {got:?}, the game's record {want:?}"
+                );
+            }
+        }
+    }
 }

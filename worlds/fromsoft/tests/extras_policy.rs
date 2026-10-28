@@ -56,7 +56,8 @@ fn source_light_records_and_their_lowering() {
         (2., 5., 30.)
     );
     let mut turned = light();
-    turned.rotation = [0., 90., 0.];
+    // the rotation is stored in radians: a yaw of a quarter turn
+    turned.rotation = [0., std::f32::consts::FRAC_PI_2, 0.];
     let (t, record) = light_record(&turned, &IDENTITY).unwrap();
     assert!((-t.cols[2][0] - 1.).abs() < 1e-6 && t.cols[2][2].abs() < 1e-6);
     assert!((record.tangent[2] - 1.).abs() < 1e-6, "{:?}", record.tangent);
@@ -81,9 +82,11 @@ fn source_light_records_and_their_lowering() {
     assert_eq!(spot.cast_shadows, Some(true));
     assert_eq!(
         spot.kind,
+        // a stored cone angle of 30 is the full angle of the edge (a running game's spot records scale each axis by
+        // cot(angle / 2), `engine_light_records.rs`): a half-angle of 15 degrees
         LightKind::Spot {
-            inner_cone: 60f32.to_radians() / 2. * 0.85,
-            outer_cone: 60f32.to_radians() / 2.
+            inner_cone: 30f32.to_radians() / 2. * 0.85,
+            outer_cone: 30f32.to_radians() / 2.
         }
     );
     // the game's transfer, the square of byte / 255, not the sRGB curve (0.2158605 for 128): a running game's lighting

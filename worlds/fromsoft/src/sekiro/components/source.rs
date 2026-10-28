@@ -313,10 +313,12 @@ impl Resource for ReadScope {
 
 /// What a BTL light record stores (`fromsoft.light`), on an entity placed where the light is: its transform is the
 /// stored position and rotation through the map offset, in the world frame, so a spot shines along its local -Z.
-/// Colours are the stored bytes (their transfer function is an interpretation), powers the stored multipliers
-/// (their unit is not established), `cone_angle` the stored half-angle in degrees, `radius` the stored reach in
-/// metres. `tangent` is the light's local +X in the world frame, kept so it survives a pass that re-bases the
-/// transform.
+/// Colours are the stored bytes (the game squares them), powers the stored multipliers (the unit of one record's
+/// `colour^2 * power`), `cone_angle` the stored full angle in degrees of a spot's vertical axis and `cone_width` the
+/// full angle of its horizontal axis (record offset 184; 0 where the file stores none, and the game then uses
+/// `cone_angle` for both), `exposure_weight` the float at record offset 224 (the weight of the game's per-frame
+/// exposure term on the light's colour; 0 on every Elden Ring light), `radius` the stored reach in metres.
+/// `tangent` is the light's local +X in the world frame, kept so it survives a pass that re-bases the transform.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct LightSource {
     pub name: String,
@@ -327,6 +329,8 @@ pub struct LightSource {
     pub specular_power: f32,
     pub cast_shadows: bool,
     pub cone_angle: f32,
+    pub cone_width: f32,
+    pub exposure_weight: f32,
     pub radius: f32,
     pub tangent: [f32; 3],
 }

@@ -603,8 +603,16 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
   a running game: the lighting shader's diffuse colour of every light is `(byte / 255)^2 *
   power`, not the sRGB curve), intensity the diffuse power times the program's calibration
   (no default), range the stored radius (at least `min-range`), a spot's cone from the
-  stored angle with an inner cone at `1 - spot-blend` (no default: the cone falloff
-  is not established). The records stay. It also lowers the `fromsoft.effect_light` records
+  stored full angles in degrees (the vertical axis's `cone_angle`, the horizontal axis's
+  `cone_width`, record offset 184, each taking the other's where it is 0; the game's spot
+  light scales each axis by `cot(angle / 2)`, read back from five live spot records, so the
+  stored value is the full angle of the cone's edge) as the circle of the same area, with an
+  inner cone at `1 - spot-blend` (no default: the game's falloff is `1 - (tan a / tan edge)^2`,
+  with no inner cone). A BTL light's rotation is stored in radians; a spot shines along the
+  rotated local +Z of the game frame (the transform's local -Z in the mirrored world frame).
+  A spot with no angle in either axis is left off, as the game leaves it; the record's
+  exposure weight (offset 224, a term of the game's per-frame exposure; 0 on every Elden
+  Ring light) is not lowered, counted. The records stay. It also lowers the `fromsoft.effect_light` records
   (read with `Options::effect_lights`) in the same unit: the game uploads a BTL light and an
   effect light as the same record, so an effect light's colour is its stored red, green and
   blue squared (every component of every light of both installs is a whole number of 255ths,
@@ -614,7 +622,8 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
   multiplier is used as stored (the game's code has no tenth; the fxr library's tenth is its
   own convention; read from the code, not yet checked on a live spot, counted); a point's range
   is its radius, a spot's its far plane and its cone the wider half-angle of its elliptic base
-  (axis: the effect's local +Z, inferred). The relation is in `tests/engine_light_records.rs`
+  (axis: the effect's local +Z, inferred; the game's code builds the frustum from `2 * atan(radius
+  / 2 / far)` per axis, not yet checked on a live effect spot). The relation is in `tests/engine_light_records.rs`
   against the records a running Sekiro uploaded (5 BTL lights and 1 steady effect light, to float
   rounding). What an effect light does over time, the flicker, fade-out and specular, is not
   lowered. Lights of a region that starts disabled and lights of a config the effect's first

@@ -265,6 +265,8 @@ fn an_effect_light_and_a_btl_light_of_one_brightness_are_one_light() {
             specular_power: 0.,
             cast_shadows: false,
             cone_angle: 0.,
+            cone_width: 0.,
+            exposure_weight: 0.,
             radius: 4.,
             tangent: [1., 0., 0.],
         },

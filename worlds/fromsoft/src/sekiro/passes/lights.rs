@@ -18,6 +18,28 @@ fn engine_linear(component: f64) -> f32 {
     (component * component) as f32
 }
 
+/// A BTL spot light's half-angles in radians, `[horizontal, vertical]`, as the game's loader builds them from the two
+/// stored full angles in degrees: the vertical axis takes `cone_angle`, the horizontal axis `cone_width` (record
+/// offset 184), each taking the other's where it is not above the loader's epsilon (1.1920929e-7 rad); `None` where
+/// neither is, a spot the game leaves switched off. The game's lighting program scales a light-space axis by
+/// `cot(half angle)` and shades with `max(0, 1 - x^2 - y^2)` of the scaled coordinates, so the stored value is the full
+/// angle of the cone's edge along that axis: read back from a running game, the five spot records of two maps hold
+/// scale rows of exactly `cot(angle / 2)` for the stored angle of each axis (`tests/engine_light_records.rs`).
+pub fn spot_half_angles(cone_angle: f32, cone_width: f32) -> Option<[f64; 2]> {
+    const EPSILON: f32 = 1.192_092_9e-7;
+    const RADIANS: f32 = 0.017_453_292;
+    let mut vertical = cone_angle * RADIANS;
+    let mut horizontal = cone_width * RADIANS;
+    if horizontal < EPSILON {
+        horizontal = vertical;
+    }
+    if vertical < EPSILON {
+        vertical = horizontal;
+    }
+    (horizontal >= EPSILON && vertical >= EPSILON && horizontal.is_finite() && vertical.is_finite())
+        .then(|| [f64::from(horizontal) / 2., f64::from(vertical) / 2.])
+}
+
 /// Which value of an effect light's colour and multiplier properties is lowered (`brightness=`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Brightness {
@@ -46,14 +68,16 @@ impl Choice for Disabled {
 }
 
 /// Options: `candela-per-power` (required: candela per unit of the stored diffuse power; no default, it is a
-/// calibration), `spot-blend` (required: the inner cone as `1 - blend` of the outer; BTL's cone falloff is not
-/// established, so the blend is the program's assumption) and `min-range` (metres; a light's range is its stored
+/// calibration), `spot-blend` (required: the inner cone as `1 - blend` of the outer; the game's spot has no inner cone,
+/// its falloff is `1 - (tan a / tan edge)^2` of the angle `a` from the axis, so the blend is the program's choice
+/// of where a core spot's falloff starts) and `min-range` (metres; a light's range is its stored
 /// radius, at least this; default 0, the radius as stored).
 ///
 /// Colour is the stored component squared, the game's own transfer (a BTL light's diffuse bytes over 255, an effect
 /// light's stored red, green and blue; every component of every effect light of both installs is a whole number of
 /// 255ths, the representation of a byte); intensity the diffuse power times `candela-per-power`; a spot's outer
-/// cone is the stored angle, its full cone clamped to 1-179 degrees; shadows as stored. The light keeps its
+/// cone is the stored full angle (the vertical axis's; the horizontal axis's is `cone_width`, the circle of the same
+/// area replacing the game's pyramid), its full cone clamped to 1-179 degrees; shadows as stored. The light keeps its
 /// placement (a spot shines along its local -Z) and its `fromsoft.light` record (raw powers, radius, specular
 /// values and tangent). Directional lights are left unlowered, counted.
 ///
@@ -159,7 +183,7 @@ pub const LOWER_FROMSOFT_LIGHTS: PassSpec = PassSpec {
         OptionSpec::required(
             "spot-blend",
             "0.15",
-            "0 to 1: a spot cone's blend (BTL's cone falloff is not established)",
+            "0 to 1: a spot cone's blend (the game's falloff, 1 - (tan a / tan edge)^2, has no inner cone)",
         ),
         OptionSpec::optional(
             "min-range",
@@ -211,14 +235,30 @@ impl LowerFromSoftLights {
                 }
                 LightKind::Point => primase_core::LightKind::Point,
                 LightKind::Spot => {
-                    let full = 2. * source.cone_angle;
-                    if !full.is_finite() {
+                    if !source.cone_angle.is_finite() || !source.cone_width.is_finite() {
                         return Err(format!("{e:?}: non-finite cone angle"));
                     }
-                    if !(1. ..=179.).contains(&full) {
+                    let Some([horizontal, vertical]) = spot_half_angles(source.cone_angle, source.cone_width)
+                    else {
+                        log.count(
+                            "spot lights without a cone angle, which the game leaves off, left out",
+                            1,
+                        );
+                        continue;
+                    };
+                    // the game's cone is a pyramid of two half-angles; a core spot has one: the circle of the same
+                    // area on the unit-distance plane
+                    let circle = if horizontal == vertical {
+                        horizontal
+                    } else {
+                        log.approximate("spot cone of two angles as the circle of the same area", 1);
+                        (horizontal.tan() * vertical.tan()).sqrt().atan()
+                    };
+                    let (least, most) = (1f64.to_radians(), 179f64.to_radians());
+                    if !(least..=most).contains(&(2. * circle)) {
                         log.approximate("spot cones clamped to 1-179 degrees", 1);
                     }
-                    let outer = full.clamp(1., 179.).to_radians() / 2.;
+                    let outer = ((2. * circle).clamp(least, most) / 2.) as f32;
                     log.approximate("spot inner cone from the fixed blend", 1);
                     primase_core::LightKind::Spot {
                         inner_cone: outer * (1. - self.spot_blend.get()),
@@ -232,6 +272,12 @@ impl LowerFromSoftLights {
             }
             if source.radius < self.min_range.get() {
                 log.count("ranges raised to the minimum", 1);
+            }
+            if source.exposure_weight != 0. {
+                log.approximate(
+                    "lights with an exposure weight, the game's per-frame exposure term not lowered",
+                    1,
+                );
             }
             log.approximate("colour bytes squared, the game's transfer", 1);
             log.approximate("intensity by the calibrated power", 1);
