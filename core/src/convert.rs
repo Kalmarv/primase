@@ -337,6 +337,166 @@ impl PartScope {
     }
 }
 
+/// A part loaded for its passes ([`load_part`]): its world with its [`PartScope`] in it, and what loading it reported.
+#[derive(Debug)]
+pub struct LoadedPart {
+    pub world: World,
+    /// The reader's report on loading it.
+    pub load: Report,
+    /// Every entity as loaded, before anything was handed on to it: what its passes then make is told apart from it.
+    loaded: BTreeSet<Entity>,
+}
+
+/// A part loaded and prepared ([`prepare_part`]): what a writer would get, and the part's report.
+#[derive(Debug)]
+pub struct PreparedPart {
+    /// The part's output ([`PartScope::output`]): the closure of its roots and of what its passes placed for it.
+    pub world: World,
+    /// Its roots, context, load and passes' reports, and what it kept of what its passes made; `ordinal` is 0 and the
+    /// writer's checks (`unsupported`) are empty: a part prepared on its own has no place in a conversion's order and no
+    /// writer.
+    pub report: PartReport,
+}
+
+/// The part of the planning `world` that `part` asks for (its roots, what it shares and its context), loaded through
+/// `reader`, held to the reader's namespaces ([`check_load_emits`]) and verified (`when` names the step in an error).
+/// The reader's notices go to `notices`.
+fn load_checked(
+    reader: &mut dyn Reader,
+    world: &World,
+    part: &Part,
+    manager: &PassManager,
+    when: &str,
+    notices: &mut Vec<Notice>,
+) -> Result<(World, Report)> {
+    let asked = asked(&part.roots, &part.shared, &part.context)?;
+    let loaded = reader.load(world, &asked);
+    notices.extend(reader.notices());
+    let (loaded, report) = loaded?;
+    check_load_emits(world, &loaded, reader.emits())?;
+    // what was loaded is checked before any pass reads it
+    manager.verify(&loaded, when)?;
+    Ok((loaded, report))
+}
+
+/// `loaded` (a part as [`load_checked`] loaded it) with what `hand_on` gives it (a conversion's decisions) and then its
+/// [`PartScope`], which records where the part's own entities begin.
+fn scoped(mut loaded: World, part: Part, load: Report, hand_on: impl FnOnce(&mut World)) -> LoadedPart {
+    let entities: BTreeSet<Entity> = loaded.entities().collect();
+    hand_on(&mut loaded);
+    let first_made = Some(loaded.next_index());
+    let Part {
+        roots,
+        shared,
+        context,
+        whole,
+        area,
+    } = part;
+    loaded.insert_resource(PartScope {
+        roots,
+        shared,
+        context,
+        whole,
+        area,
+        first_made,
+        placed: BTreeMap::new(),
+    });
+    LoadedPart {
+        world: loaded,
+        load,
+        loaded: entities,
+    }
+}
+
+/// Load `part` of the planning `world` (what the program's selection left, geometry not loaded) through `reader`,
+/// ready for its passes: what conversion does with each part before running them, for a program that loads parts in
+/// an order of its own, as many times as it likes (a viewer keeping the parts around its camera). The reader's notices
+/// go to `notices`.
+pub fn load_part(
+    reader: &mut dyn Reader,
+    world: &World,
+    part: Part,
+    manager: &PassManager,
+    notices: &mut Vec<Notice>,
+) -> Result<LoadedPart> {
+    let (loaded, load) = load_checked(reader, world, &part, manager, "load", notices)?;
+    Ok(scoped(loaded, part, load, |_| {}))
+}
+
+/// Run the program's `passes` on a loaded part (their report in `explicit`) and keep only its output
+/// ([`PartScope::output`]): the closure of its roots and of what the passes placed for it. Content made from its context
+/// is left to the part that owns that context, and what nothing kept reaches (materials of dropped geometry, of a
+/// discarded level of detail) is dropped; both are counted in `kept` by their components, with the entities the passes
+/// placed. The scope is taken out of the part.
+pub fn prepare_loaded(
+    loaded: LoadedPart,
+    manager: &PassManager,
+    passes: &Pipeline,
+    explicit: &mut RunReport,
+    kept: &mut BTreeMap<String, u64>,
+) -> Result<World> {
+    let LoadedPart {
+        world: mut part,
+        loaded,
+        ..
+    } = loaded;
+    manager.run_part(&mut part, passes, explicit)?;
+    let scope = part
+        .remove_resource::<PartScope>()
+        .ok_or("the part's scope was taken out by its passes")?;
+    let PartOutput {
+        keep,
+        placed,
+        from_context,
+    } = scope.output(&part);
+    let names: Vec<String> = part.component_names().into_iter().map(str::to_owned).collect();
+    let kinds = |e: Entity| {
+        names
+            .iter()
+            .filter(|n| part.entity_has_named(e, n))
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(" + ")
+    };
+    for e in part.entities().filter(|e| !loaded.contains(e)) {
+        let what = if placed.contains(&e) {
+            "entities the passes placed"
+        } else if from_context.contains(&e) {
+            "entities placed from context, left to the part that owns their source"
+        } else if keep.contains(&e) {
+            continue;
+        } else {
+            "made entities nothing keeps, dropped"
+        };
+        *kept.entry(format!("{what} ({})", kinds(e))).or_default() += 1;
+    }
+    part.retain(&keep);
+    manager.verify(&part, "the passes")?;
+    Ok(part)
+}
+
+/// [`load_part`] then [`prepare_loaded`]: `part` of the planning `world` loaded through `reader` and prepared by
+/// `passes`, as conversion prepares each part before handing it to its writer. The reader's notices go to `notices`.
+pub fn prepare_part(
+    reader: &mut dyn Reader,
+    world: &World,
+    part: Part,
+    manager: &PassManager,
+    passes: &Pipeline,
+    notices: &mut Vec<Notice>,
+) -> Result<PreparedPart> {
+    let mut report = PartReport {
+        roots: part.roots.clone(),
+        shared: part.shared.clone(),
+        context: part.context.clone(),
+        ..PartReport::default()
+    };
+    let loaded = load_part(reader, world, part, manager, notices)?;
+    report.load = loaded.load.clone();
+    let world = prepare_loaded(loaded, manager, passes, &mut report.explicit, &mut report.kept)?;
+    Ok(PreparedPart { world, report })
+}
+
 impl Resource for PartScope {
     const NAME: &'static str = "core.part_scope";
     fn references(&self, out: &mut Vec<Entity>) {
@@ -1235,25 +1395,19 @@ fn run(
             {
                 let ordinal = kept.len();
                 stages.enter(format!("summary {ordinal}: load"));
-                let asked = asked(&roots, &shared, &context)?;
-                let loaded = reader.load(&world, &asked);
-                report.reported.extend(reader.notices());
-                let (mut part, loaded) = loaded?;
-                report.summary_loads.extend(loaded);
-                check_load_emits(&world, &part, reader.emits())?;
-                // what was loaded is checked before any summary pass reads it, as the second traversal does
-                manager.verify(&part, &format!("summary {ordinal}: load"))?;
-                stages.enter(format!("summary {ordinal}: passes"));
-                let first_made = Some(part.next_index());
-                part.insert_resource(PartScope {
+                let part = Part {
                     roots,
                     shared,
                     context,
                     whole,
                     area,
-                    first_made,
-                    placed: BTreeMap::new(),
-                });
+                };
+                let when = format!("summary {ordinal}: load");
+                let (loaded, load) =
+                    load_checked(reader, &world, &part, manager, &when, &mut report.reported)?;
+                report.summary_loads.extend(load.iter().cloned());
+                stages.enter(format!("summary {ordinal}: passes"));
+                let mut part = scoped(loaded, part, load, |_| {}).world;
                 let mut r = RunReport::default();
                 let ran = manager.run_part(&mut part, s.summarize, &mut r);
                 tally(&mut report.counts, &r);
@@ -1301,88 +1455,48 @@ fn run(
     {
         let ordinal = report.part_reports.len();
         stages.enter(format!("part {ordinal}: load"));
-        let asked = asked(&roots, &shared, &context)?;
-        let loaded = reader.load(&world, &asked);
-        report.reported.extend(reader.notices());
-        let (mut part, loaded) = loaded?;
-        report.loads.extend(loaded.iter().cloned());
+        let part = Part {
+            roots,
+            shared,
+            context,
+            whole,
+            area,
+        };
+        let (loaded, load) = load_checked(reader, &world, &part, manager, "load", &mut report.reported)?;
+        report.loads.extend(load.iter().cloned());
         let mut size = PartSize {
-            roots: roots.len(),
-            loaded: sizes(&part),
+            roots: part.roots.len(),
+            loaded: sizes(&loaded),
             ..PartSize::default()
         };
-        check_load_emits(&world, &part, reader.emits())?;
-        // what was loaded is checked before the part's passes use it
-        manager.verify(&part, "load")?;
         stages.enter(format!("part {ordinal}: passes"));
         // the part's report is published before its passes run, so a failure keeps what ran
         report.part_reports.push(PartReport {
             ordinal,
-            roots: roots.clone(),
-            shared: shared.clone(),
-            context: context.clone(),
-            load: loaded,
+            roots: part.roots.clone(),
+            shared: part.shared.clone(),
+            context: part.context.clone(),
+            load: load.clone(),
             ..PartReport::default()
         });
         let part_report = report.part_reports.last_mut().expect("pushed");
-        let loaded: BTreeSet<Entity> = part.entities().collect();
-        if let Some((registry, decided)) = &decided {
-            registry.hand_on(decided, &mut part);
-        }
-        let first_made = Some(part.next_index());
-        part.insert_resource(PartScope {
-            roots: roots.clone(),
-            shared: shared.clone(),
-            context: context.clone(),
-            whole,
-            area,
-            first_made,
-            placed: BTreeMap::new(),
+        let loaded = scoped(loaded, part, load, |part| {
+            if let Some((registry, decided)) = &decided {
+                registry.hand_on(decided, part);
+            }
         });
-        manager.run_part(&mut part, passes, &mut part_report.explicit)?;
-        // the part's output (PartScope::output, what the passes declared): the closure of its roots and of what the
-        // passes placed for it, content made from its context left to the owner. What the passes left unreferenced of
-        // what was loaded (materials of dropped geometry, of a discarded level of detail) is not part of it, nor is what
-        // they made that nothing kept reaches: dropped, and named in the counts by its components, as are the placed
-        // entities
-        let scope = part
-            .remove_resource::<PartScope>()
-            .expect("the part's scope, put in above");
-        let PartOutput {
-            keep,
-            placed,
-            from_context,
-        } = scope.output(&part);
-        let names: Vec<String> = part.component_names().into_iter().map(str::to_owned).collect();
-        let kinds = |e: Entity| {
-            names
-                .iter()
-                .filter(|n| part.entity_has_named(e, n))
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-                .join(" + ")
-        };
-        for e in part.entities().filter(|e| !loaded.contains(e)) {
-            let what = if placed.contains(&e) {
-                "entities the passes placed"
-            } else if from_context.contains(&e) {
-                "entities placed from context, left to the part that owns their source"
-            } else if keep.contains(&e) {
-                continue;
-            } else {
-                "made entities nothing keeps, dropped"
-            };
-            *part_report
-                .kept
-                .entry(format!("{what} ({})", kinds(e)))
-                .or_default() += 1;
-        }
+        let prepared = prepare_loaded(
+            loaded,
+            manager,
+            passes,
+            &mut part_report.explicit,
+            &mut part_report.kept,
+        );
         for (k, v) in &part_report.kept {
             *report.counts.entry(format!("convert: {k}")).or_default() += v;
         }
-        part.retain(&keep);
+        let part = prepared?;
         stages.enter(format!("part {ordinal}: target check"));
-        manager.verify(&part, "the passes")?;
         (part_report.unsupported, part_report.unsupported_resources) = check_target(&target, &part)?;
         let explicit = part_report.explicit.clone();
         tally(&mut report.counts, &explicit);
@@ -1434,24 +1548,17 @@ fn gather(
     {
         let ordinal = report.gather_runs.len();
         stages.enter(format!("gather {ordinal}: load"));
-        let asked = asked(&roots, &shared, &context)?;
-        let loaded = reader.load(world, &asked);
-        report.reported.extend(reader.notices());
-        let (mut part, loaded) = loaded?;
-        report.gather_loads.extend(loaded);
-        check_load_emits(world, &part, reader.emits())?;
-        manager.verify(&part, &format!("gather {ordinal}: load"))?;
-        registry.hand_on(decided, &mut part);
-        let first_made = Some(part.next_index());
-        part.insert_resource(PartScope {
+        let part = Part {
             roots,
             shared,
             context,
             whole,
             area,
-            first_made,
-            placed: BTreeMap::new(),
-        });
+        };
+        let when = format!("gather {ordinal}: load");
+        let (loaded, load) = load_checked(reader, world, &part, manager, &when, &mut report.reported)?;
+        report.gather_loads.extend(load.iter().cloned());
+        let mut part = scoped(loaded, part, load, |part| registry.hand_on(decided, part)).world;
         stages.enter(format!("gather {ordinal}: passes"));
         let mut r = RunReport::default();
         let ran = manager.run_part(&mut part, g.gather, &mut r);

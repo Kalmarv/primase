@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use primase_core::convert::{
     ConvertError, Finished, Notice, NoticeKind, Part, PartScope, PartSize, PartSource, PartitionGroup,
-    PartitionPlan, PlannedParts, Reader, Report, Result, Writer, convert, convert_parts,
+    PartitionPlan, PlannedParts, Reader, Report, Result, Writer, convert, convert_parts, prepare_part,
 };
 use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, PassSpec, Pipeline, Target};
 use primase_core::{Component, Entity, Instance, Name, Resource, World};
@@ -620,6 +620,64 @@ fn planned_parts_load_their_context_and_write_only_what_they_own() {
     )
     .unwrap_err();
     assert!(e.to_string().contains("no core.partition_plan"), "{e}");
+    events();
+}
+
+/// A part prepared on its own ([`prepare_part`]), in whatever order and as often as the program asks, is what conversion
+/// hands its writer for that part: loaded with its context, prepared by the passes, only what it owns kept, with the
+/// same report of what it kept and dropped.
+#[test]
+fn parts_prepared_on_their_own_in_any_order_are_what_conversion_writes() {
+    let (m, select, passes) = manager("toy-select, toy-partition");
+    let (w, written) = writer(target());
+    let converted = convert_parts(
+        &mut reader(3),
+        &mut PlannedParts::default(),
+        w,
+        &m,
+        &select,
+        &passes,
+    )
+    .unwrap();
+    events();
+    let got = written.borrow().clone();
+    // the program's own loop: read, select, plan, then the parts last first, each twice
+    let mut toy = reader(3);
+    let (mut world, _) = toy.read().unwrap();
+    m.run(&mut world, &select, &mut Default::default()).unwrap();
+    let mut planned = PlannedParts::default();
+    planned.plan(&world, &|p| toy.prototype_box(&world, p)).unwrap();
+    let mut parts = Vec::new();
+    while let Some(part) = planned.next_part().unwrap() {
+        parts.push(part);
+    }
+    assert_eq!(parts.len(), 2);
+    for _ in 0..2 {
+        for (n, part) in parts.iter().enumerate().rev() {
+            let mut notices = Vec::new();
+            let prepared = prepare_part(&mut toy, &world, part.clone(), &m, &passes, &mut notices).unwrap();
+            let p = &prepared.world;
+            assert_eq!(
+                Got {
+                    placements: p.iter::<Instance>().map(|(e, _)| e).collect(),
+                    named: p.iter::<Name>().count(),
+                    mesh: p.iter::<ToyMesh>().next().is_some(),
+                    raw: p.iter::<ToyRaw>().next().is_some(),
+                },
+                got[n],
+                "part {n}"
+            );
+            assert!(p.resource::<PartScope>().is_none(), "the scope is taken out");
+            let theirs = &converted.part_reports[n];
+            assert_eq!(prepared.report.kept, theirs.kept, "part {n}");
+            assert_eq!(prepared.report.context, theirs.context, "part {n}");
+            assert_eq!(prepared.report.load, theirs.load, "part {n}");
+            assert_eq!(prepared.report.explicit.steps.len(), theirs.explicit.steps.len());
+        }
+    }
+    // the first part asked its context to be loaded with it, each time
+    assert_eq!(toy.loads.len(), 4);
+    assert!(toy.loads.iter().filter(|l| l.len() == 3).count() == 2);
     events();
 }
 
