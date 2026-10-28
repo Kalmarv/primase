@@ -1,11 +1,11 @@
-//! `lower-fromsoft-lights` on effect lights (`fromsoft.effect_light`) made by hand: the colour, the brightness
-//! (alpha times the stored multiplier, a spot's times the sourced tenth, the settled or the first keyframe), the range
-//! and cone, the lights left out by reason, and the options that opt in. The reader and the real-data counts are in
-//! `effect_lights_census.rs`.
+//! `lower-fromsoft-lights` on effect lights (`fromsoft.effect_light`) made by hand: the colour (squared, as the game's
+//! shader takes it), the brightness (alpha times the stored multiplier, in BTL power, the settled or the first
+//! keyframe), the range and cone, the lights left out by reason, and the options. The readings of a running game that
+//! fix the unit are in `engine_light_records.rs`; the reader and the real-data counts are in `effect_lights_census.rs`.
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{Light, LightKind, Transform, World};
+use primase_fromsoft::sekiro::passes;
 use primase_fromsoft::sekiro::source::{EffectLight, EffectPlace, EffectShape, EffectValue, LightSource};
-use primase_fromsoft::sekiro::{lights::SPOT_MULTIPLIER_UNIT, passes};
 
 const IDENTITY: Transform = Transform {
     cols: [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [0.; 3]],
@@ -92,19 +92,19 @@ fn lights(world: &World) -> Vec<Light> {
 }
 
 #[test]
-fn an_effect_light_is_lowered_at_the_programs_unit() {
-    // colour 128/255 as sRGB, alpha 0.5, multiplier 6.4 settled (a fade-in from 0): 0.5 * 6.4 * 3 * 2
+fn an_effect_light_is_lowered_in_btl_power() {
+    // colour 128/255 squared, alpha 0.5, multiplier 6.4 settled (a fade-in from 0): 0.5 * 6.4 * 2
     let l = point([1., 128. / 255., 0., 0.5], fade_in(6.4), 3.);
     let (world, report) = lowered(
         vec![l],
-        &format!("lower-fromsoft-lights{{{BASE},effect-power-per-unit=3}}"),
+        &format!("lower-fromsoft-lights{{{BASE},brightness=settled}}"),
     )
     .unwrap();
     let all = lights(&world);
     let [light] = &all[..] else { panic!() };
     assert_eq!(light.kind, LightKind::Point);
     assert!(
-        (f64::from(light.intensity) - 0.5 * 6.4 * 3. * 2.).abs() < 1e-5,
+        (f64::from(light.intensity) - 0.5 * 6.4 * 2.).abs() < 1e-5,
         "{}",
         light.intensity
     );
@@ -112,13 +112,16 @@ fn an_effect_light_is_lowered_at_the_programs_unit() {
     assert_eq!(light.cast_shadows, Some(true));
     assert_eq!(light.color[0], 1.);
     assert_eq!(light.color[2], 0.);
-    // exact sRGB, as the BTL lights' bytes
-    assert!((light.color[1] - 0.2158605).abs() < 1e-7);
+    // the square, as the BTL lights' bytes
+    assert!((light.color[1] - (128. / 255. * 128. / 255.)).abs() < 1e-7);
     // the record stays
     assert_eq!(world.iter::<EffectLight>().count(), 1);
     let log = &report.steps[0].log;
     assert_eq!(log.counts["effect lights lowered"], 1);
-    assert_eq!(log.approximations["effect light colour read as sRGB"], 1);
+    assert_eq!(
+        log.approximations["effect light colour squared, the game's transfer"],
+        1
+    );
 }
 
 #[test]
@@ -134,7 +137,7 @@ fn the_first_keyframe_is_lowered_with_brightness_initial_and_a_dark_light_is_lef
         },
         3.,
     );
-    let pipeline = |extra: &str| format!("lower-fromsoft-lights{{{BASE},effect-power-per-unit=1{extra}}}");
+    let pipeline = |extra: &str| format!("lower-fromsoft-lights{{{BASE}{extra}}}");
     // settled: the fade-in is lit, the flash is dark
     let (world, report) = lowered(vec![fading.clone(), flash.clone()], &pipeline("")).unwrap();
     assert_eq!(lights(&world).len(), 1);
@@ -167,7 +170,7 @@ fn a_looping_property_is_lowered_at_its_first_keyframe_and_counted() {
     );
     let (world, report) = lowered(
         vec![looping],
-        &format!("lower-fromsoft-lights{{{BASE},effect-power-per-unit=1}}"),
+        &format!("lower-fromsoft-lights{{{BASE},brightness=settled}}"),
     )
     .unwrap();
     assert!((f64::from(lights(&world)[0].intensity) - 2. * 2.).abs() < 1e-5);
@@ -178,11 +181,11 @@ fn a_looping_property_is_lowered_at_its_first_keyframe_and_counted() {
 }
 
 #[test]
-fn a_spot_takes_the_sourced_tenth_and_the_wider_half_angle() {
+fn a_spot_takes_its_multiplier_as_stored_and_the_wider_half_angle() {
     // far 10 m, base half-extents 10 and 5 m: half-angles 45 and 26.57 degrees; the wider is lowered
     let (world, report) = lowered(
         vec![spot(40., 10., 10., 5.)],
-        &format!("lower-fromsoft-lights{{{BASE},effect-power-per-unit=1}}"),
+        &format!("lower-fromsoft-lights{{{BASE},brightness=settled}}"),
     )
     .unwrap();
     let all = lights(&world);
@@ -197,7 +200,7 @@ fn a_spot_takes_the_sourced_tenth_and_the_wider_half_angle() {
     };
     assert!((outer_cone - outer).abs() < 1e-6, "{outer_cone}");
     assert!((inner_cone - outer * 0.75).abs() < 1e-6);
-    assert!((f64::from(light.intensity) - 40. * SPOT_MULTIPLIER_UNIT * 2.).abs() < 1e-5);
+    assert!((f64::from(light.intensity) - 40. * 2.).abs() < 1e-5);
     assert_eq!(light.range, Some(10.));
     let log = &report.steps[0].log;
     assert_eq!(
@@ -208,7 +211,10 @@ fn a_spot_takes_the_sourced_tenth_and_the_wider_half_angle() {
         log.approximations["effect spot axis along the effect's local +Z"],
         1
     );
-    assert_eq!(SPOT_MULTIPLIER_UNIT, 0.1);
+    assert_eq!(
+        log.approximations["effect spot multiplier as stored, no tenth (the game's code; not checked on a live spot)"],
+        1
+    );
 }
 
 #[test]
@@ -220,7 +226,7 @@ fn disabled_and_unchosen_lights_are_left_out_by_reason_unless_included() {
     let on = point([1.; 4], constant(&[1.]), 2.);
     let (world, report) = lowered(
         vec![off.clone(), unchosen.clone(), on.clone()],
-        &format!("lower-fromsoft-lights{{{BASE},effect-power-per-unit=1}}"),
+        &format!("lower-fromsoft-lights{{{BASE},brightness=settled}}"),
     )
     .unwrap();
     assert_eq!(lights(&world).len(), 1);
@@ -235,15 +241,16 @@ fn disabled_and_unchosen_lights_are_left_out_by_reason_unless_included() {
     );
     let (world, _) = lowered(
         vec![off, unchosen, on],
-        &format!("lower-fromsoft-lights{{{BASE},effect-power-per-unit=1,include-disabled=on}}"),
+        &format!("lower-fromsoft-lights{{{BASE},include-disabled=on}}"),
     )
     .unwrap();
     assert_eq!(lights(&world).len(), 3);
 }
 
 #[test]
-fn effect_lights_are_counted_not_lowered_without_a_calibration() {
-    // a BTL record keeps the pass fed (the BTL pass requires one), as in every read area
+fn an_effect_light_and_a_btl_light_of_one_brightness_are_one_light() {
+    // the game's shader takes a BTL light's bytes^2 * power and an effect light's colour^2 * alpha * multiplier as one
+    // field: the same colour and the same number lower to the same light at any candela-per-power
     let mut world = World::default();
     let btl = world.spawn();
     world.insert(btl, IDENTITY);
@@ -252,8 +259,8 @@ fn effect_lights_are_counted_not_lowered_without_a_calibration() {
         LightSource {
             name: "b".into(),
             kind: primase_fromsoft::sekiro::source::LightKind::Point,
-            diffuse: [255; 3],
-            diffuse_power: 1.,
+            diffuse: [255, 128, 0],
+            diffuse_power: 2.5,
             specular: [0; 3],
             specular_power: 0.,
             cast_shadows: false,
@@ -264,7 +271,7 @@ fn effect_lights_are_counted_not_lowered_without_a_calibration() {
     );
     let e = world.spawn();
     world.insert(e, IDENTITY);
-    world.insert(e, point([1.; 4], constant(&[1.]), 2.));
+    world.insert(e, point([1., 128. / 255., 0., 1.], constant(&[2.5]), 4.));
     let mut registry = PassRegistry::new();
     passes::register(&mut registry);
     let manager = PassManager::new(registry);
@@ -279,27 +286,40 @@ fn effect_lights_are_counted_not_lowered_without_a_calibration() {
             &mut report,
         )
         .unwrap();
-    assert_eq!(lights(&world).len(), 1);
+    let all = lights(&world);
+    let [a, b] = &all[..] else { panic!("{}", all.len()) };
+    // the effect's colour is stored as an f32 (128/255 rounded), the BTL's as a byte: equal to f32 rounding
+    for i in 0..3 {
+        assert!(
+            (a.color[i] - b.color[i]).abs() < 1e-7,
+            "{:?} {:?}",
+            a.color,
+            b.color
+        );
+    }
+    assert_eq!(a.intensity, b.intensity);
+    assert_eq!(a.range, b.range);
     let log = &report.steps[0].log;
     assert_eq!(log.counts["lights lowered"], 1);
-    assert_eq!(
-        log.counts["effect lights without an effect-power calibration, not lowered"],
-        1
-    );
+    assert_eq!(log.counts["effect lights lowered"], 1);
 }
 
 #[test]
-fn the_effect_options_need_the_calibration_and_refuse_bad_values() {
+fn the_effect_options_refuse_bad_values() {
     let one = || vec![point([1.; 4], constant(&[1.]), 2.)];
     for pipeline in [
-        format!("lower-fromsoft-lights{{{BASE},brightness=initial}}"),
-        format!("lower-fromsoft-lights{{{BASE},include-disabled=on}}"),
-        format!("lower-fromsoft-lights{{{BASE},effect-power-per-unit=-1}}"),
-        format!("lower-fromsoft-lights{{{BASE},effect-power-per-unit=nan}}"),
-        format!("lower-fromsoft-lights{{{BASE},effect-power-per-unit=1,brightness=middle}}"),
+        format!("lower-fromsoft-lights{{{BASE},brightness=middle}}"),
+        format!("lower-fromsoft-lights{{{BASE},include-disabled=maybe}}"),
+        format!("lower-fromsoft-lights{{{BASE},effect-power-per-unit=1}}"),
     ] {
         assert!(lowered(one(), &pipeline).is_err(), "{pipeline}");
     }
-    // the BTL pass's own declaration is unchanged: the two required options alone are a complete pipeline step
-    assert!(lowered(one(), &format!("lower-fromsoft-lights{{{BASE}}}")).is_ok());
+    // the effect options alone are complete pipeline steps, and so are the two required options
+    for pipeline in [
+        format!("lower-fromsoft-lights{{{BASE}}}"),
+        format!("lower-fromsoft-lights{{{BASE},brightness=initial}}"),
+        format!("lower-fromsoft-lights{{{BASE},include-disabled=on}}"),
+    ] {
+        assert!(lowered(one(), &pipeline).is_ok(), "{pipeline}");
+    }
 }

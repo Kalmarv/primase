@@ -86,11 +86,12 @@ fn source_light_records_and_their_lowering() {
             outer_cone: 60f32.to_radians() / 2.
         }
     );
-    // exact sRGB, not a 2.2 power
+    // the game's transfer, the square of byte / 255, not the sRGB curve (0.2158605 for 128): a running game's lighting
+    // records hold `(byte / 255)^2 * power` for every BTL light read (`engine_light_records.rs`)
     assert_eq!(spot.color[0], 0.);
     assert_eq!(spot.color[2], 1.);
-    assert!((spot.color[1] - 0.2158605).abs() < 1e-7);
-    assert!((f64::from(spot.color[1]) - (128f64 / 255.).powf(2.2)).abs() > 0.003);
+    assert!((f64::from(spot.color[1]) - (128f64 / 255.) * (128f64 / 255.)).abs() < 1e-7);
+    assert!((spot.color[1] - 0.2158605).abs() > 0.03);
     assert_eq!(lights[1].kind, LightKind::Point);
     assert_eq!(lights[1].range, Some(0.5));
     // the raw record stays beside the core light
@@ -99,7 +100,7 @@ fn source_light_records_and_their_lowering() {
     assert_eq!(log.counts["lights lowered"], 2);
     assert_eq!(log.counts["directional lights not lowered"], 1);
     assert_eq!(log.counts["ranges raised to the minimum"], 1);
-    assert_eq!(log.approximations["colour bytes read as sRGB"], 2);
+    assert_eq!(log.approximations["colour bytes squared, the game's transfer"], 2);
     assert_eq!(log.approximations["spot inner cone from the fixed blend"], 1);
 
     // the calibration is the program's: no default, and bad numbers are refused

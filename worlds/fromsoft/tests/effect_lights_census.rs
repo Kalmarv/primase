@@ -248,7 +248,7 @@ fn the_effect_lights_of_three_areas_are_placed_as_the_census_counts() -> Result<
 
         // the lowering: every light is lowered or counted by reason
         let m = common::manager().with_conservation(primase_core::ledger::Conservation::Enforce);
-        let pipeline = "lower-fromsoft-lights{candela-per-power=1,spot-blend=0.15,effect-power-per-unit=1}";
+        let pipeline = "lower-fromsoft-lights{candela-per-power=1,spot-blend=0.15}";
         let mut run = RunReport::default();
         m.run(&mut world, &m.registry.parse(pipeline)?, &mut run)?;
         let log = &run.steps[0].log;
@@ -263,27 +263,10 @@ fn the_effect_lights_of_three_areas_are_placed_as_the_census_counts() -> Result<
             area.map,
             log.counts
         );
-        assert_eq!(
-            counted("effect lights without an effect-power calibration, not lowered"),
-            0
-        );
         println!(
             "{}: {} effect lights lowered, {out} left out",
             area.map,
             counted("effect lights lowered")
-        );
-        let ones = m
-            .registry
-            .parse("lower-fromsoft-lights{candela-per-power=1,spot-blend=0.15}")?;
-        let (mut again, _) = read(area, &decoder, &install)?;
-        let mut run = RunReport::default();
-        m.run(&mut again, &ones, &mut run)?;
-        assert_eq!(
-            run.steps[0].log.counts["effect lights without an effect-power calibration, not lowered"]
-                as usize,
-            lights.len(),
-            "{}",
-            area.map
         );
     }
     Ok(())

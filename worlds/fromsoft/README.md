@@ -599,33 +599,27 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
   members its material's G-buffer vertex program reads, or its layout's pair). Motion-blur
   face sets, vertex colours and UV sets beyond UV0 are not lowered and are counted.
 - `lower-fromsoft-lights{candela-per-power=...,spot-blend=...}` makes `core.light` from the BTL
-  records: colour bytes read as sRGB, intensity by the program's calibration (no
-  default), range the stored radius (at least `min-range`), a spot's cone from the
+  records: colour the stored byte over 255 squared (the game's own transfer, read back from
+  a running game: the lighting shader's diffuse colour of every light is `(byte / 255)^2 *
+  power`, not the sRGB curve), intensity the diffuse power times the program's calibration
+  (no default), range the stored radius (at least `min-range`), a spot's cone from the
   stored angle with an inner cone at `1 - spot-blend` (no default: the cone falloff
-  is not established). The records stay. With `effect-power-per-unit=...` it also
-  lowers the `fromsoft.effect_light` records: colour the stored red, green and blue as
-  sRGB (every component of every light of both installs is a whole number of 255ths,
-  the representation of BTL's bytes), intensity the colour's alpha times the stored
-  diffuse multiplier (a spot's times 1/10, the fxr library's convention: sourced, the
-  constant `lights::SPOT_MULTIPLIER_UNIT`) times `effect-power-per-unit` times
-  `candela-per-power`, at the settled value of those properties (`brightness=initial`:
-  the first keyframe); a point's range its radius, a spot's its far plane and its cone
-  the wider half-angle of its elliptic base (axis: the effect's local +Z, inferred).
-  **`effect-power-per-unit` has no default: the data gives an estimate, not a unit.**
-  Per area, the median of the settled alpha times multiplier of the placed live point
-  lights against the median power of the area's BTL point lights has ratios from 1.6
-  to 320 (median 16, quartiles 8 and 33) over the 68 Elden Ring areas read with both
-  kinds and 0.25 to 64 (median 4) over Sekiro's 9: BTL powers are authored per area, the effects' multipliers are not.
-  Lights of both kinds within 1.5 m of each other (taken to be one fixture: pairs
-  farther apart have ratios two to three times larger) give a median ratio of 5 with
-  quartiles 3.2 and 10 (1,227 pairs in those areas; Sekiro's 35 pairs have the same median, quartiles 2.5 and 6.4), i.e. about 0.2 BTL
-  powers per unit of effect brightness with a spread of a factor of 2 to 3 either way,
-  an inference from that assumption. The unit is therefore a calibration, as BTL's own.
-  Without the option effect
-  lights are counted as not lowered. Lights of a region that starts disabled and
-  lights of a config the effect's first state does not choose are left out, counted
-  by reason (`include-disabled=on` lowers them); a light dark at the lowered value is
-  left out, counted.
+  is not established). The records stay. It also lowers the `fromsoft.effect_light` records
+  (read with `Options::effect_lights`) in the same unit: the game uploads a BTL light and an
+  effect light as the same record, so an effect light's colour is its stored red, green and
+  blue squared (every component of every light of both installs is a whole number of 255ths,
+  the representation of BTL's bytes) and its brightness, the colour's alpha times the stored
+  diffuse multiplier at the settled value of those properties (`brightness=initial`: the
+  first keyframe), is a BTL power and takes `candela-per-power` and no other factor. A spot's
+  multiplier is used as stored (the game's code has no tenth; the fxr library's tenth is its
+  own convention; read from the code, not yet checked on a live spot, counted); a point's range
+  is its radius, a spot's its far plane and its cone the wider half-angle of its elliptic base
+  (axis: the effect's local +Z, inferred). The relation is in `tests/engine_light_records.rs`
+  against the records a running Sekiro uploaded (5 BTL lights and 1 steady effect light, to float
+  rounding). What an effect light does over time, the flicker, fade-out and specular, is not
+  lowered. Lights of a region that starts disabled and lights of a config the effect's first
+  state does not choose are left out, counted by reason (`include-disabled=on` lowers them); a
+  light dark at the lowered value is left out, counted.
 - `lower-fromsoft-environment{lux-per-unit=...}` lowers `fromsoft.draw_param` to
   the core environment: the light set's first directional light (`Directional
   Light Angle0`, `DiffColor0`) a directional `core.light` named as the sun by
@@ -738,7 +732,7 @@ unless an option asks), **unread** (no reader opens it). A row's owner is the pr
 | Decals | material slots of class `decal` (`Report::material_classes`) | read as materials (`MeshDecal`), drawn on the decal layer, queue order a convention (approximation, noticed). Decal *placements* beyond the material slots: none known in the MSB | `lower-fromsoft-materials` / Shaded view |
 | Water | slots of class `water`; collision class soup `water` | read as a material (the program's water colour and normal map; depth, refraction and flow not evaluated) and as a collision soup | `lower-fromsoft-materials`, `lower-fromsoft-collision` / Shaded, Collision |
 | Lights, bank 0 (`<area>_0000.btl.dcx`) | `FILES _NNNN.btl` | read | `read/extras.rs`, `lower-fromsoft-lights` / Lights |
-| Effect lights (FXR point and spot lights): SFX regions, and the effects placed objects and assets spawn through their model effect param row | `REGIONS` type 5, `PARTS`, `ModelSfxParam`/`AssetModelSfxParam`, the `sfx` binders | read with `Options::effect_lights` (off by default) as `fromsoft.effect_light`; light shafts (no instance) and every other effect action unread | `read/effect_lights.rs`, `lower-fromsoft-lights{effect-power-per-unit=..}` / Lights. Per-area counts in `tests/effect_lights_census.rs` |
+| Effect lights (FXR point and spot lights): SFX regions, and the effects placed objects and assets spawn through their model effect param row | `REGIONS` type 5, `PARTS`, `ModelSfxParam`/`AssetModelSfxParam`, the `sfx` binders | read with `Options::effect_lights` (off by default) as `fromsoft.effect_light`; light shafts (no instance) and every other effect action unread | `read/effect_lights.rs`, `lower-fromsoft-lights` / Lights. Per-area counts in `tests/effect_lights_census.rs` |
 | Light banks other than 0 | `FILES _NNNN.btl` | unread (the reader opens `_0000` only) | none. `FILES` says how many banks exist per area |
 | Light probes / global illumination data | no pattern the code names; `FILES` lists the unread patterns | unread | none. Decided by the largest unread `FILES` pattern with a name that says probe or GI |
 | Environment-map points and boxes (regions `environment_map_point`, `environment_map_effect_box`, `environment_map_output`) | `REGIONS` | read-header | `lower-fromsoft-map-records` / Markers. The part's `env_map` id and the draw-param `Env Map:Editor` group are read (`msb::PartGparam`) |

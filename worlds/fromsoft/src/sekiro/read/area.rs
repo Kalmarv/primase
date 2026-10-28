@@ -49,7 +49,7 @@ pub struct Options {
     /// Whether the point and spot lights of effect files (FXR) are read where they stand ([`effect_lights`]): the
     /// map's SFX regions, and the effects the kept objects (Sekiro) and assets (Elden Ring) spawn through their model
     /// effect row at the model's dummy polygons; off by default (it reads the effect binders and the params).
-    /// `lower-fromsoft-lights` lowers them when it is given `effect-power-per-unit`.
+    /// `lower-fromsoft-lights` lowers them, in the BTL lights' unit.
     pub effect_lights: bool,
 }
 /// What a read of the object models' animation binders found.
