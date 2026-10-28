@@ -117,6 +117,121 @@ fn a_type_reference_shows_the_type_of_its_efix_slot() -> R {
 
 /// A Frostbite format ordinal has a core layout exactly where the texture reader knows its storage, and the two
 /// agree on a level's size.
+/// An enumeration shows its member beside its value when asked; the default view is unchanged.
+#[test]
+fn an_enumeration_value_shows_its_member_when_asked() -> R {
+    let mut doc = ebx::read(REFL)?;
+    let member = |name: &str, value: u32| ebx::FieldDescriptor {
+        name: name.to_string(),
+        name_hash: 0,
+        encoded_type: 0,
+        class_ref: 0,
+        data_offset: value,
+    };
+    let first = i32::try_from(doc.fields.len())?;
+    doc.fields
+        .extend([member("Plain", 0), member("Minus7", (-7i32).cast_unsigned())]);
+    let mode = u16::try_from(doc.types.len())?;
+    doc.types.push(ebx::TypeDescriptor {
+        name: "Mode".to_string(),
+        name_hash: 0,
+        field_index: first,
+        field_count: 2,
+        encoded_type: 0,
+        size: 4,
+        alignment: 4,
+        guid: [9; 16],
+        signature: 0,
+    });
+    let id = doc.fields.iter().position(|f| f.name == "id").unwrap();
+    doc.fields[id].encoded_type = (ebx::FieldType::Enumeration as u16) << 4;
+    doc.fields[id].class_ref = mode;
+    let plain = ebx_json::to_json(&doc)?;
+    assert_eq!(plain["instances"][0]["values"]["id"], -7);
+    let shown = ebx_json::to_json_with(
+        &doc,
+        &ebx_json::JsonOptions {
+            enum_members: true,
+            ..Default::default()
+        },
+    )?;
+    assert_eq!(
+        shown["instances"][0]["values"]["id"],
+        json!({ "value": -7, "member": "Minus7" })
+    );
+    // a value no member has shows a null member
+    *doc.instances[0].object.as_mut().unwrap().field_mut("id").unwrap() = ebx::Value::Int(5);
+    let shown = ebx_json::to_json_with(
+        &doc,
+        &ebx_json::JsonOptions {
+            enum_members: true,
+            ..Default::default()
+        },
+    )?;
+    assert_eq!(
+        shown["instances"][0]["values"]["id"],
+        json!({ "value": 5, "member": null })
+    );
+    Ok(())
+}
+
+/// An import shows the name of the document its file GUID names, where the table has it.
+#[test]
+fn an_import_shows_the_name_of_its_document() -> R {
+    let doc = ebx::read(RFL2)?;
+    let mut names = frostbite_formats::names::GuidNames::new();
+    names.insert([0xb1; 16], "levels/some/document");
+    let shown = ebx_json::to_json_with(
+        &doc,
+        &ebx_json::JsonOptions {
+            import_names: Some(&names),
+            ..Default::default()
+        },
+    )?;
+    assert_eq!(
+        shown["imports"][0],
+        json!({ "file_guid": "b1".repeat(16), "class_guid": "b2".repeat(16), "name": "levels/some/document" })
+    );
+    // the default view has no name
+    assert_eq!(ebx_json::to_json(&doc)?["imports"][0].get("name"), None);
+    Ok(())
+}
+
+/// Offsets are positions in the file: the bytes there hold the value the view shows.
+#[test]
+fn field_offsets_point_at_the_values_in_the_file() -> R {
+    let doc = ebx::read(REFL)?;
+    let j = ebx_json::to_json_with(
+        &doc,
+        &ebx_json::JsonOptions {
+            offsets: true,
+            ..Default::default()
+        },
+    )?;
+    assert_eq!(j["data_start"], doc.data_start);
+    let at = |v: &serde_json::Value| usize::try_from(v.as_u64().unwrap()).unwrap();
+    // the scalar fields of the root: 42 of the child and 200 of its second item stand at their offsets
+    let child = &j["instances"][1];
+    assert_eq!(
+        child["offset"],
+        doc.data_start + doc.instances[1].data_offset as usize
+    );
+    assert_eq!(REFL[at(&child["offsets"]["count"])], 42);
+    let second = &child["offsets"]["items"]["elements"][1];
+    assert_eq!(REFL[at(&second["value"])], 200);
+    // an instance's offsets are the instance start plus each field's offset
+    let root = &j["instances"][0];
+    let id = doc.fields.iter().find(|f| f.name == "id").unwrap();
+    assert_eq!(
+        at(&root["offsets"]["id"]),
+        doc.data_start + doc.instances[0].data_offset as usize + id.data_offset as usize
+    );
+    // without the option there are no offsets
+    let plain = ebx_json::to_json(&doc)?;
+    assert!(plain.get("data_start").is_none() && plain["instances"][0].get("offsets").is_none());
+    Ok(())
+}
+
 #[test]
 fn texture_formats_map_to_core_layouts() {
     for format in 0..128 {
