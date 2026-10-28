@@ -49,8 +49,8 @@ fn model() -> Model {
                 position: [1., 1., 1.],
                 normal: [0., 1., 0.],
                 normal_w: 0,
-                tangents: vec![[1., 0., 0., 1.]],
-                tangent_indices: vec![0],
+                tangents: [[1., 0., 0., 1.]].into(),
+                tangent_indices: [0].into(),
                 ..Default::default()
             }],
             faces: vec![],
@@ -62,7 +62,7 @@ fn rigid_points_normals_tangents_and_declared_pass() {
     let m = model();
     let mut world = World::default();
     let e = world.spawn();
-    world.insert(e, SourceModel(m.clone()));
+    world.insert(e, SourceModel::new(m.clone()));
     let mut log = PassLog::default();
     let pass = ApplyRigidSkinning;
     assert_eq!(pass.requires(), ["fromsoft.flver"]);
@@ -132,9 +132,9 @@ fn non_rigid_weights_counted_and_world_not_partially_changed() {
     bad.meshes[0].vertices[0].bone_weights = [0.5, 0.5, 0., 0.];
     let mut world = World::default();
     let a = world.spawn();
-    world.insert(a, SourceModel(model()));
+    world.insert(a, SourceModel::new(model()));
     let b = world.spawn();
-    world.insert(b, SourceModel(bad.clone()));
+    world.insert(b, SourceModel::new(bad.clone()));
     let mut log = PassLog::default();
     assert!(ApplyRigidSkinning.run(&mut world, &mut log).is_err());
     assert_eq!(log.counts["refused non-rigid vertices"], 1);

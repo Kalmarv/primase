@@ -10,6 +10,7 @@ use fromsoft_formats::{
 };
 use havok_formats::Compendium;
 use primase_core::{Name, Transform, World};
+use primase_foundations::parallel::Threads;
 use std::collections::BTreeMap;
 
 /// What the reader found of the area's map collision.
@@ -81,6 +82,7 @@ pub fn read(
     layout: &MapLayout,
     mut states: Option<&mut super::states::States>,
     f_collision: bool,
+    threads: Threads,
     world: &mut World,
 ) -> Result<Report> {
     let mut report = Report::default();
@@ -142,53 +144,81 @@ pub fn read(
         .filter(|f| f.name.as_deref().is_some_and(|n| leaf(n).ends_with(".hkx")))
         .collect::<Vec<_>>();
     files.sort_by_key(|f| leaf(f.name.as_deref().unwrap_or("")));
+    // the files some part names, in name order, each with the bytes of its `f` partner; a file whose name an earlier
+    // one took is not named any more
+    let mut wanted = Vec::new();
     for file in files {
         let name = leaf(file.name.as_deref().unwrap_or(""));
         let Some(parts) = named.remove(&name) else {
             report.unnamed_files += 1;
             continue;
         };
-        let raw = collision::read_map(&decoder.decode_if_dcx(&file.bytes)?, Some(&comp))?;
-        report.files += 1;
-        report.triangles += raw.triangles.len();
-        report.unbound_triangles += raw.unmapped;
-        report.unkeyed_triangle_data += raw.unkeyed_triangle_data;
-        report.unread_custom_primitives += raw.unread_custom_primitives;
-        for shape in &raw.unread_bodies {
-            *report.unread_bodies.entry(shape.clone()).or_default() += 1;
+        let f_partner = f_binder.as_mut().and_then(|f| f.take_bytes(&name));
+        wanted.push((file, name, parts, f_partner));
+    }
+    let f_compendium = f_binder.as_ref().and_then(|f| f.compendium.as_ref());
+    // The files are decoded and read a few at a time, on the given threads, and put in the world in name order: what a
+    // file adds to the report and the world is the same whatever the order they were read in.
+    let mut wanted = wanted.into_iter();
+    loop {
+        let wave: Vec<_> = wanted.by_ref().take(threads.get().saturating_mul(2)).collect();
+        if wave.is_empty() {
+            break;
         }
-        let to_world = |triangles: Vec<[[f32; 3]; 3]>| -> Vec<[[f32; 3]; 3]> {
-            triangles
-                .into_iter()
-                .map(|t| t.map(|v| transform.apply(FRAME.point(v))))
-                .collect()
-        };
-        let f_triangles = match f_binder.as_mut().map(|f| f.take(&name)).transpose()?.flatten() {
-            Some(soup) => {
-                report.f_files += 1;
-                report.f_triangles += soup.triangles.len();
-                if soup.triangles.is_empty() {
-                    report.empty_f_files.push(name.clone());
-                }
-                to_world(soup.triangles)
+        let read = primase_foundations::parallel::map(threads, &wave, |_, (file, _, _, f_partner)| {
+            let raw = decoder
+                .decode_if_dcx(&file.bytes)
+                .and_then(|bytes| collision::read_map(&bytes, Some(&comp)));
+            let f_soup = f_partner
+                .as_ref()
+                .map(|(f_name, bytes)| FBinder::soup(f_name, bytes, f_compendium))
+                .transpose();
+            (raw, f_soup)
+        })
+        .map_err(|e| invalid("collision", 0, e.to_string()))?;
+        for ((_, name, parts, _), (raw, f_soup)) in wave.into_iter().zip(read) {
+            let raw = raw?;
+            report.files += 1;
+            report.triangles += raw.triangles.len();
+            report.unbound_triangles += raw.unmapped;
+            report.unkeyed_triangle_data += raw.unkeyed_triangle_data;
+            report.unread_custom_primitives += raw.unread_custom_primitives;
+            for shape in &raw.unread_bodies {
+                *report.unread_bodies.entry(shape.clone()).or_default() += 1;
             }
-            None => Vec::new(),
-        };
-        let e = world.spawn();
-        world.insert(e, Name(name.clone()));
-        world.insert(
-            e,
-            MapCollision {
-                file: name,
-                parts,
-                triangles: to_world(raw.triangles),
-                f_triangles,
-                materials: raw.materials,
-                invalid_material_keys: raw.invalid_material_keys,
-                dead_primitives: raw.dead_primitives,
-                unread_bodies: raw.unread_bodies,
-            },
-        );
+            let to_world = |triangles: Vec<[[f32; 3]; 3]>| -> Vec<[[f32; 3]; 3]> {
+                triangles
+                    .into_iter()
+                    .map(|t| t.map(|v| transform.apply(FRAME.point(v))))
+                    .collect()
+            };
+            let f_triangles = match f_soup? {
+                Some(soup) => {
+                    report.f_files += 1;
+                    report.f_triangles += soup.triangles.len();
+                    if soup.triangles.is_empty() {
+                        report.empty_f_files.push(name.clone());
+                    }
+                    to_world(soup.triangles)
+                }
+                None => Vec::new(),
+            };
+            let e = world.spawn();
+            world.insert(e, Name(name.clone()));
+            world.insert(
+                e,
+                MapCollision {
+                    file: name,
+                    parts,
+                    triangles: to_world(raw.triangles),
+                    f_triangles,
+                    materials: raw.materials,
+                    invalid_material_keys: raw.invalid_material_keys,
+                    dead_primitives: raw.dead_primitives,
+                    unread_bodies: raw.unread_bodies,
+                },
+            );
+        }
     }
     report.missing_files = named.into_keys().collect();
     report.unpaired_f_files = f_binder.map_or(0, |f| f.files.len());
@@ -228,14 +258,17 @@ impl FBinder {
         Ok(Some(FBinder { files, compendium }))
     }
 
-    /// The triangles of the file for the `h` file `h_name` (`h<area>_<model>.hkx`: `f<area>_<model>.hkx`), if the
-    /// binder holds one; every body of it must be an extern mesh.
-    fn take(&mut self, h_name: &str) -> Result<Option<collision::Soup>> {
+    /// The name and bytes of the file for the `h` file `h_name` (`h<area>_<model>.hkx`: `f<area>_<model>.hkx`), if the
+    /// binder holds one; taken out of the binder.
+    fn take_bytes(&mut self, h_name: &str) -> Option<(String, Vec<u8>)> {
         let f_name = format!("f{}", h_name.strip_prefix('h').unwrap_or(h_name));
-        let Some(bytes) = self.files.remove(&f_name) else {
-            return Ok(None);
-        };
-        let soup = collision::read_map(&bytes, self.compendium.as_ref())?;
+        let bytes = self.files.remove(&f_name)?;
+        Some((f_name, bytes))
+    }
+
+    /// The triangles of the `f` file `f_name` that `bytes` holds; every body of it must be an extern mesh.
+    fn soup(f_name: &str, bytes: &[u8], compendium: Option<&Compendium>) -> Result<collision::Soup> {
+        let soup = collision::read_map(bytes, compendium)?;
         if let Some(shape) = soup.unread_bodies.first() {
             return Err(invalid(
                 "collision",
@@ -243,7 +276,7 @@ impl FBinder {
                 format!("{f_name}: a body of {shape}, not an extern mesh"),
             ));
         }
-        Ok(Some(soup))
+        Ok(soup)
     }
 }
 
@@ -275,6 +308,7 @@ mod tests {
             &layout,
             None,
             false,
+            Threads::ONE,
             &mut world,
         )
         .unwrap();

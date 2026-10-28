@@ -16,6 +16,7 @@ use fromsoft_formats::{
     mtd::MaterialDefinition,
 };
 use primase_core::{Instance, Name, Source, Transform, World};
+use primase_foundations::parallel::Threads;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Default)]
@@ -626,6 +627,129 @@ fn inside(bounds: &[[f32; 3]; 2], t: &Transform, o: &Options) -> bool {
     max[0] >= r[0] - margin && min[0] < r[2] + margin && max[2] >= r[1] - margin && min[2] < r[3] + margin
 }
 
+/// A model key's binder as the archive holds it, and what is read from it without the reader's state: the parts of
+/// a read that are the same whatever the keys before it did, so that several keys can be read at once. Errors a key's
+/// read would meet after reading its binder are kept as values, to be raised in the order one thread would meet them.
+struct Fetched {
+    /// Whether the key names an object (an asset) model rather than a map piece.
+    is_object: bool,
+    /// `None`: the archive holds no binder for the key.
+    binder: Option<FetchedBinder>,
+}
+struct FetchedBinder {
+    binder: Binder,
+    /// The object's animation binder, if asked for and present.
+    animation: Result<Option<Vec<u8>>>,
+    /// `None`: the binder holds no member for the model.
+    model: Option<FetchedModel>,
+}
+struct FetchedModel {
+    collision: Result<Vec<(String, fromsoft_formats::game::Resolution, Vec<u8>)>>,
+    model: Result<Model>,
+    bounds: Result<Option<[[f32; 3]; 2]>>,
+}
+
+/// The binder of the model `key` (`<kind>/<model>`), its animation binder, collision files, parsed model and extent.
+fn fetch_model(
+    archive: &Archive,
+    decoder: &Decoder<'_>,
+    game: Game,
+    object: &str,
+    options: &Options,
+    key: &str,
+) -> Result<Fetched> {
+    let (kind, model) = key.split_once('/').expect("constructed key");
+    let is_object = kind == object;
+    let (path, leaf, collision_files) = if is_object {
+        let o = game.object_model(model)?;
+        (o.binder, o.flver, o.collision)
+    } else {
+        let name = format!(
+            "{kind}_{}",
+            model
+                .strip_prefix('m')
+                .ok_or_else(|| invalid("FromSoftware model", 0, "map model prefix"))?
+        );
+        (
+            format!("{}/{name}.mapbnd.dcx", game.map_folder(kind)?),
+            format!("{name}.flver"),
+            Vec::new(),
+        )
+    };
+    if !archive.contains(&path) {
+        return Ok(Fetched {
+            is_object,
+            binder: None,
+        });
+    }
+    let binder = Binder::read(&archive.read(&path, decoder)?, decoder)?;
+    let animation = if is_object && options.object_animations {
+        animation::object_binder(decoder, &binder)
+    } else {
+        Ok(None)
+    };
+    // a member by file name; `dcx`: also its compressed form
+    let member = |leaf: &str, dcx: bool| {
+        binder
+            .member(leaf)
+            .or_else(|| dcx.then(|| binder.member(&format!("{leaf}.dcx"))).flatten())
+    };
+    let Some(f) = member(&leaf, false) else {
+        return Ok(Fetched {
+            is_object,
+            binder: Some(FetchedBinder {
+                binder,
+                animation,
+                model: None,
+            }),
+        });
+    };
+    // each collision file where it is: a member of the model's binder, or of a binder of its own
+    let collision = (|| {
+        let mut collision = Vec::new();
+        for source in &collision_files {
+            let bytes = match &source.binder {
+                None => member(&source.member, true)
+                    .map(|f| decoder.decode_if_dcx(&f.bytes))
+                    .transpose()?,
+                Some(path) if archive.contains(path) => Binder::read(&archive.read(path, decoder)?, decoder)?
+                    .files
+                    .into_iter()
+                    .find(|f| {
+                        let name = f.name.as_deref().unwrap_or("");
+                        let leaf = name.rsplit(['/', '\\']).next().unwrap_or(name);
+                        let leaf = leaf.strip_suffix(".dcx").unwrap_or(leaf);
+                        fromsoft_formats::names::fold(leaf) == fromsoft_formats::names::fold(&source.member)
+                    })
+                    .map(|f| decoder.decode_if_dcx(&f.bytes))
+                    .transpose()?,
+                Some(_) => None,
+            };
+            if let Some(bytes) = bytes {
+                collision.push((source.member.clone(), source.resolution, bytes));
+            }
+        }
+        Ok(collision)
+    })();
+    let model = Model::read(&f.bytes).map_err(|e| invalid("FromSoftware model", 0, format!("{key}: {e}")));
+    let bounds = match &model {
+        Ok(model) => world_bounds(model).map_err(|e| invalid("FromSoftware model", 0, format!("{key}: {e}"))),
+        Err(_) => Ok(None),
+    };
+    Ok(Fetched {
+        is_object,
+        binder: Some(FetchedBinder {
+            binder,
+            animation,
+            model: Some(FetchedModel {
+                collision,
+                model,
+                bounds,
+            }),
+        }),
+    })
+}
+
 /// A read model: the FLVER as stored, its resolved materials, its posed extent in the world frame, and for an object
 /// its collision files' names, resolutions and decoded bytes.
 struct Prototype {
@@ -871,132 +995,100 @@ pub fn read_game_area_staged(
     }
     stage("models of every placement");
     let mut prototypes = BTreeMap::new();
-    for key in requests {
-        let (kind, model) = key.split_once('/').expect("constructed key");
-        let is_object = kind == object;
-        let (path, leaf, collision_files) = if is_object {
-            let o = game.object_model(model)?;
-            (o.binder, o.flver, o.collision)
-        } else {
-            let name = format!(
-                "{kind}_{}",
-                model.strip_prefix('m').ok_or_else(|| invalid(
-                    "FromSoftware model",
-                    0,
-                    "map model prefix"
-                ))?
-            );
-            (
-                format!("{}/{name}.mapbnd.dcx", game.map_folder(kind)?),
-                format!("{name}.flver"),
-                Vec::new(),
-            )
-        };
-        if !archive.contains(&path) {
-            report.missing_models.push(key);
-            continue;
-        }
-        let binder = Binder::read(&archive.read(&path, decoder)?, decoder)?;
-        if is_object {
-            for f in &binder.files {
-                if f.bytes.starts_with(b"TPF\0") {
-                    catalog.add(&f.bytes)?;
-                }
-            }
-        }
-        // the object's animation binder, held as bytes until the model is known to be kept
-        let animation = if is_object && options.object_animations {
-            animation::object_binder(decoder, &binder)?
-        } else {
-            None
-        };
-        // a member by file name; `dcx`: also its compressed form
-        let member = |leaf: &str, dcx: bool| {
-            binder
-                .member(leaf)
-                .or_else(|| dcx.then(|| binder.member(&format!("{leaf}.dcx"))).flatten())
-        };
-        let Some(f) = member(&leaf, false) else {
-            report.missing_models.push(key);
-            continue;
-        };
-        // each collision file where it is: a member of the model's binder, or of a binder of its own
-        let mut collision = Vec::new();
-        for source in &collision_files {
-            let bytes = match &source.binder {
-                None => member(&source.member, true)
-                    .map(|f| decoder.decode_if_dcx(&f.bytes))
-                    .transpose()?,
-                Some(path) if archive.contains(path) => Binder::read(&archive.read(path, decoder)?, decoder)?
-                    .files
-                    .into_iter()
-                    .find(|f| {
-                        let name = f.name.as_deref().unwrap_or("");
-                        let leaf = name.rsplit(['/', '\\']).next().unwrap_or(name);
-                        let leaf = leaf.strip_suffix(".dcx").unwrap_or(leaf);
-                        fromsoft_formats::names::fold(leaf) == fromsoft_formats::names::fold(&source.member)
-                    })
-                    .map(|f| decoder.decode_if_dcx(&f.bytes))
-                    .transpose()?,
-                Some(_) => None,
-            };
-            if let Some(bytes) = bytes {
-                collision.push((source.member.clone(), source.resolution, bytes));
-            }
-        }
-        let model =
-            Model::read(&f.bytes).map_err(|e| invalid("FromSoftware model", 0, format!("{key}: {e}")))?;
-        // the packages named after the textures the model's materials name, read once each
-        for m in &model.materials {
-            let defined = definitions.get(&fromsoft_formats::names::stem(&m.mtd));
-            let paths = defined
-                .map(|d| {
-                    d.textures()
-                        .into_iter()
-                        .map(|t| t.1.to_owned())
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default()
-                .into_iter()
-                .chain(m.textures.iter().map(|t| t.path.clone()));
-            for path in paths {
-                let stem = fromsoft_formats::names::stem(&path);
-                if path.trim().is_empty() || catalog.entries.contains_key(&stem) {
-                    continue;
-                }
-                if let Some(package) = game.texture_package(&stem)
-                    && texture_packages.insert(package.clone())
-                    && archive.contains(&package)
-                {
-                    catalog.add(&archive.read(&package, decoder)?)?;
-                    report.texture_packages += 1;
-                }
-            }
-        }
-        let materials = model
-            .materials
-            .iter()
-            .map(|m| {
-                materials::resolve_definition(
-                    m,
-                    definitions.get(&fromsoft_formats::names::stem(&m.mtd)),
-                    game,
-                    |n| catalog.entries.contains_key(n),
-                )
-            })
-            .collect();
-        let bounds =
-            world_bounds(&model).map_err(|e| invalid("FromSoftware model", 0, format!("{key}: {e}")))?;
-        prototypes.insert(
-            key,
-            Prototype {
-                model,
-                materials,
-                bounds,
-                collision,
+    // The binders and models are read a few at a time, on the install's threads, and joined in key order: what one
+    // key's read puts in the texture catalog, the report and the set of packages read decides what the keys after it
+    // find there, so that part of each key's work stays here, in the order one thread would do it.
+    let keys: Vec<String> = requests.into_iter().collect();
+    let threads = Threads(install.threads);
+    for wave in keys.chunks(threads.get().saturating_mul(2)) {
+        let fetched = primase_foundations::parallel::map(threads, wave, |_, key| {
+            fetch_model(&archive, decoder, game, object, options, key)
+        })
+        .map_err(|e| invalid("FromSoftware model", 0, e.to_string()))?;
+        for (key, fetched) in wave.iter().zip(fetched) {
+            let key = key.clone();
+            let Fetched { is_object, binder } = fetched?;
+            let Some(FetchedBinder {
+                binder,
                 animation,
-            },
-        );
+                model,
+            }) = binder
+            else {
+                report.missing_models.push(key);
+                continue;
+            };
+            if is_object {
+                for f in &binder.files {
+                    if f.bytes.starts_with(b"TPF\0") {
+                        catalog.add(&f.bytes)?;
+                    }
+                }
+            }
+            drop(binder);
+            // the object's animation binder, held as bytes until the model is known to be kept
+            let animation = animation?;
+            let Some(FetchedModel {
+                collision,
+                model,
+                bounds,
+            }) = model
+            else {
+                report.missing_models.push(key);
+                continue;
+            };
+            let collision = collision?;
+            let model = model?;
+            // the packages named after the textures the model's materials name, read once each
+            for m in &model.materials {
+                let defined = definitions.get(&fromsoft_formats::names::stem(&m.mtd));
+                let paths = defined
+                    .map(|d| {
+                        d.textures()
+                            .into_iter()
+                            .map(|t| t.1.to_owned())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+                    .into_iter()
+                    .chain(m.textures.iter().map(|t| t.path.clone()));
+                for path in paths {
+                    let stem = fromsoft_formats::names::stem(&path);
+                    if path.trim().is_empty() || catalog.entries.contains_key(&stem) {
+                        continue;
+                    }
+                    if let Some(package) = game.texture_package(&stem)
+                        && texture_packages.insert(package.clone())
+                        && archive.contains(&package)
+                    {
+                        catalog.add(&archive.read(&package, decoder)?)?;
+                        report.texture_packages += 1;
+                    }
+                }
+            }
+            let materials = model
+                .materials
+                .iter()
+                .map(|m| {
+                    materials::resolve_definition(
+                        m,
+                        definitions.get(&fromsoft_formats::names::stem(&m.mtd)),
+                        game,
+                        |n| catalog.entries.contains_key(n),
+                    )
+                })
+                .collect();
+            let bounds = bounds?;
+            prototypes.insert(
+                key,
+                Prototype {
+                    model,
+                    materials,
+                    bounds,
+                    collision,
+                    animation,
+                },
+            );
+        }
     }
     stage("select placements");
     // a larger map's part moves into the read map's frame by its centre's offset there, in f64 rounded once
@@ -1109,7 +1201,7 @@ pub fn read_game_area_staged(
         let e = world.spawn();
         world.insert(e, Name(key.split_once('/').expect("key").1.to_owned()));
         report.prototype_boxes.insert(e, proto.bounds);
-        world.insert(e, crate::components::models::SourceModel(proto.model));
+        world.insert(e, crate::components::models::SourceModel::new(proto.model));
         world.insert(e, source::MaterialSlots(slots));
         world.insert(e, source::PrototypeSource { id: key.clone(), far });
         if key.starts_with(&format!("{object}/")) {
@@ -1222,6 +1314,7 @@ pub fn read_game_area_staged(
         &layout,
         states.as_mut(),
         options.f_collision,
+        threads,
         &mut world,
     )?;
     stage("extras");

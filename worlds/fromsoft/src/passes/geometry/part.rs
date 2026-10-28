@@ -202,12 +202,13 @@ mod tests {
                     .map(|i| Vertex {
                         position: [i as f32, (i == 1) as u8 as f32, 0.0],
                         normal: [0.0, 1.0, 0.0],
-                        tangents: vec![
+                        tangents: [
                             [1.0, 0.0, 0.0, 1.0],
                             [0.0, 1.0, 0.0, 1.0],
                             [0.0, 0.0, 1.0, if i == 1 { -1.0 } else { 1.0 }],
-                        ],
-                        tangent_indices: vec![0, 1, 4],
+                        ]
+                        .into(),
+                        tangent_indices: [0, 1, 4].into(),
                         ..Vertex::default()
                     })
                     .collect(),

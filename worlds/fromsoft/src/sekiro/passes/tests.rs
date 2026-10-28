@@ -847,7 +847,7 @@ fn arm_world(model: fromsoft_formats::flver::Model, bound: bool) -> (World, Enti
         world.insert(skeleton, crate::pose::skeleton(&model));
         world.insert(prototype, SkeletonOf(skeleton));
     }
-    world.insert(prototype, SourceModel(model));
+    world.insert(prototype, SourceModel::new(model));
     (world, prototype)
 }
 

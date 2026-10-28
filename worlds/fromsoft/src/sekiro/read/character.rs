@@ -934,7 +934,7 @@ impl<'a> Reading<'a> {
                 }
             }
         }
-        w.insert(prototype, SourceModel(model));
+        w.insert(prototype, SourceModel::new(model));
         w.insert(prototype, source::MaterialSlots(slots));
         if let Some(marks) = marks {
             w.insert(prototype, source::MeshMasks(marks));

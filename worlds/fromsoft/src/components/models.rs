@@ -1,11 +1,21 @@
 //! A prototype's FLVER model as the reader keeps it, and as `fromsoft-apply-rigid-skinning` posed it.
+use std::sync::Arc;
+
 use fromsoft_formats::flver::Model;
 use primase_core::Component;
 
 /// A prototype's FLVER as the file stores it (`fromsoft.flver`): skeleton, every mesh with its face sets (levels of
-/// detail and motion-blur variants), original material indices and every vertex channel, in the file's frame.
+/// detail and motion-blur variants), original material indices and every vertex channel, in the file's frame. The
+/// model is shared, not owned: a copy of the component (a part's load copies every component it keeps) is a count, not
+/// the model's vertices.
 #[derive(Clone, Debug)]
-pub struct SourceModel(pub Model);
+pub struct SourceModel(pub Arc<Model>);
+impl SourceModel {
+    /// `model`, shared from here on.
+    pub fn new(model: Model) -> Self {
+        Self(Arc::new(model))
+    }
+}
 impl Component for SourceModel {
     const NAME: &'static str = "fromsoft.flver";
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
@@ -17,7 +27,13 @@ impl Component for SourceModel {
 }
 /// The same model statically posed by [`lower_model`] (`fromsoft.rigid_model`), beside the source it came from.
 #[derive(Clone, Debug)]
-pub struct RigidModel(pub Model);
+pub struct RigidModel(pub Arc<Model>);
+impl RigidModel {
+    /// `model`, shared from here on.
+    pub fn new(model: Model) -> Self {
+        Self(Arc::new(model))
+    }
+}
 impl Component for RigidModel {
     const NAME: &'static str = "fromsoft.rigid_model";
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
@@ -85,7 +101,7 @@ mod tests {
             }],
         };
         assert_eq!(model.resident_bytes(), 24);
-        assert_eq!(SourceModel(model.clone()).payload_bytes(), 24);
-        assert_eq!(RigidModel(model).payload_bytes(), 24);
+        assert_eq!(SourceModel::new(model.clone()).payload_bytes(), 24);
+        assert_eq!(RigidModel::new(model).payload_bytes(), 24);
     }
 }

@@ -66,7 +66,7 @@ impl Pass for ApplyRigidSkinning {
             })
             .collect::<Result<Vec<_>, _>>()?;
         for (e, m) in staged {
-            world.insert(e, RigidModel(m));
+            world.insert(e, RigidModel::new(m));
         }
         Ok(())
     }
