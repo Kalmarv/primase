@@ -158,10 +158,11 @@ fn cross3(u: [f64; 3], v: [f64; 3]) -> [f64; 3] {
 }
 
 /// The rotation of a dummy whose stored forward and upward directions are `forward` and `upward`, as the columns of its
-/// local X, Y and Z axes: forward along -Z and upward along +Y (what every sample of the install shows, perpendicular to
-/// within 0.0006), X completing the right-handed set. The stored vectors are not unit length (the censuses found lengths
-/// of 0.057 to 0.3, the dummies' scale), so both are normalised first and the second made exactly perpendicular to the
-/// first. `None` where either has no direction (zero or not finite) or they are parallel.
+/// local X, Y and Z axes: forward along -Z and upward along +Y (a convention: the files do not say which local axis a
+/// socket faces along), X completing the right-handed set. Most dummies store the two nearly perpendicular; 164 of
+/// Sekiro's and 4,216 of Elden Ring's are further off (the cosine above 0.01, up to 0.70). The stored vectors are not
+/// unit length (the censuses found lengths of 0.057 to 0.3, the dummies' scale), so both are normalised first and the
+/// second made exactly perpendicular to the first. `None` where either has no direction (zero or not finite) or they are parallel.
 pub(crate) fn dummy_axes(forward: [f64; 3], upward: [f64; 3]) -> Option<[[f64; 3]; 3]> {
     let z = unit(forward)?.map(|x| -x);
     let u = unit(upward)?;
@@ -494,7 +495,7 @@ mod tests {
 
     /// Directions the file stores at 0.05 to 0.3 of a unit give the same frame as unit ones: forward along -Z, upward
     /// along +Y, the frame orthonormal; a direction with none (zero, not a number) or parallel ones give none; an
-    /// upward slightly off perpendicular (as the install's are, to 0.0006) is made exactly perpendicular.
+    /// upward slightly off perpendicular (as most of the install's are) is made exactly perpendicular.
     #[test]
     fn a_dummys_frame_is_built_from_normalised_directions() {
         let near = |a: [f64; 3], b: [f64; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-12);

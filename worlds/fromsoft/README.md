@@ -693,7 +693,9 @@ drop-fromsoft-far, fromsoft-apply-rigid-skinning,
 lower-fromsoft-geometry{pose=rigid,uv-tiling=apply,winding=normals,degenerates=drop,leave-out=sky+light-volume+shadow+billboard,blocker-cards=record,speedtree-frame=program},
 select-lod{form=finest}`. On m11_01 it reproduces that reader's placements, meshes
 (streams, indices, material identities), collision, lights, joined ledges and
-travel markers exactly.
+travel markers exactly. The hit classes it leaves out, 29 and 40, are Sekiro's: 29 is "None" (its row is
+byte-identical to row 0) and 40 "Cloud". In Elden Ring class 29 is real collision (236,710 triangles in 1,539
+files), so an Elden Ring composition does not take this `leave-out`.
 
 `tests/sekiro_scene.rs` checks reads against a SoulsFormats dump of the area
 (`oracles.soulsformats.sekiro/m11_01`). The whole-area read, before any pass, places
