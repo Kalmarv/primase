@@ -49,6 +49,15 @@ impl StateMotion {
             .ok()
             .and_then(|m| controller.state_machines.get(m))
             .ok_or_else(|| invalid(format!("layer {layer} runs state machine {}", l.state_machine)))?;
+        if machine.states.is_empty() {
+            // an empty layer (PEAK's Scout and Ambience have one) plays nothing: there is no state to pose
+            return Err(invalid(format!(
+                "layer {layer}{} has no states: it plays nothing",
+                controller
+                    .name_of(l.binding)
+                    .map_or_else(String::new, |n| format!(" {n:?}"))
+            )));
+        }
         let s = machine.states.get(state).ok_or_else(|| {
             invalid(format!(
                 "state {state} of {} in layer {layer}",
@@ -401,6 +410,13 @@ mod tests {
         let c = controller(vec![state(1.0, 0.0)]);
         assert!(state_pose(&w, &c, 0, 3, rig, &p, 0.0).is_err());
         assert!(state_pose(&w, &c, 2, 0, rig, &p, 0.0).is_err());
+        // a layer with no states plays nothing: an error naming the layer, not an index error
+        let empty = controller(vec![]);
+        let e = state_pose(&w, &empty, 0, 0, rig, &p, 0.0)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("layer 0 has no states: it plays nothing"), "{e}");
+        assert!(StateMotion::of(&empty, 0, 0, &p).is_err());
         // a rig the clip is not bound to
         let mut other = World::new();
         let skeleton = other.spawn();

@@ -152,7 +152,7 @@ mod tests {
             ],
             layers: vec![ControllerLayer {
                 name: "layer".into(),
-                default_state: 0,
+                default_state: Some(0),
                 default_weight: 0.25,
                 blending: LayerBlending::Other(17),
                 states: vec![ControllerState {
@@ -214,6 +214,12 @@ mod tests {
         let c = controller();
         assert!(motion(&c, 1, 0, &[1.0, 0.0, 1.0]).is_err());
         assert!(motion(&c, 0, 1, &[1.0, 0.0, 1.0]).is_err());
+        // a layer with no states plays nothing: its state 0 is outside it, named by the layer
+        let mut empty = c.clone();
+        empty.layers[0].states.clear();
+        empty.layers[0].default_state = None;
+        let e = motion(&empty, 0, 0, &[1.0, 0.0, 1.0]).unwrap_err().0;
+        assert!(e.contains("state 0 outside layer \"layer\""), "{e}");
         for values in [
             vec![],
             vec![f64::NAN, 0.0, 1.0],

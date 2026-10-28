@@ -47,7 +47,9 @@ It has `Geometry::None`; primitive remapping does not alter material defaults.
 - `parameters`: ordered `{name, kind, default}`. Names are nonempty and unique. `kind` is `Float`,
   `Int`, `Bool` or `Trigger`; the f64 default is finite, integral for Int, exactly 0/1 for Bool/Trigger.
 - `layers`: ordered `{name, states, default_state, default_weight, blending}`. Each layer has a
-  nonempty name, a valid default-state index and a finite f32 default weight. Weight is retained as
+  nonempty name, a finite f32 default weight and a default state: an index of its states, or `null`
+  exactly when the layer has no states (an empty layer plays nothing; a source's empty layers are kept
+  so the layer indices line up with the source's). Weight is retained as
   stored, without clamping. `blending` is `Override`, `Additive`, or `{"Other": i64}`.
 - Each state has `{name, motion, speed, speed_parameter, cycle_offset, cycle_offset_parameter}`.
   Name is nonempty; speed (f64) and offset (f32) are finite. Negative speed and offsets outside

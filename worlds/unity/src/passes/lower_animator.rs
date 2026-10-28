@@ -9,7 +9,10 @@
 //! - layers: the state machine the layer runs, its `m_DefaultWeight` and its `m_LayerBlendingMode`. Unity's
 //!   `AnimatorLayerBlendingMode` declares `Override` then `Additive`, so 0 and 1 are those; any other code stays
 //!   `LayerBlending::Other(n)`, never guessed as an override. The layer's name is its binding hash's entry in the name
-//!   table, or `layer {i}` where the table has none (the lab's name for it before this pass);
+//!   table, or `layer {i}` where the table has none (the lab's name for it before this pass). A layer whose state
+//!   machine has no states (PEAK's `Scout` and `Ambience` controllers have one: the entry node of its machine leads
+//!   nowhere) is lowered as an empty layer, `default_state` `None`: it plays nothing, and the layers after it keep
+//!   their indices;
 //! - states: their motion, their `m_Speed` with the speed parameter they name, their `m_CycleOffset` with its
 //!   parameter. A state name the table lacks is `state {i}`, as the lab named it;
 //! - motion: a tree of one leaf is the `core.clip` that leaf's clip object is bound to on this rig (`core.clip_binding`
@@ -34,8 +37,8 @@
 //! A controller missing a fact core requires is not lowered at all, and is counted in the pass log instead of guessed: a
 //! parameter without a name in the file's table (a parameter cannot be set by a name the file does not have), a parameter
 //! kind other than the four, a default that is missing or not finite, two parameters of one name, a controller without a
-//! name, a layer whose state machine is absent or has no states, a default state outside its layer, or a weight, speed
-//! or cycle offset that is not finite.
+//! name, a layer whose state machine is absent, a default state outside the states of a layer that has some, or a
+//! weight, speed or cycle offset that is not finite.
 
 use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::{
@@ -316,15 +319,22 @@ fn controller_for(
             );
             return None;
         };
-        let Some(default_state) = usize::try_from(machine.default_state)
-            .ok()
-            .filter(|d| *d < machine.states.len())
-        else {
-            log.omit(
-                "controllers not lowered: a layer's default state is outside its states",
-                1,
-            );
-            return None;
+        // a machine with no states has no state to start in: its layer plays nothing, and its stored default state (0)
+        // names no state
+        let default_state = if machine.states.is_empty() {
+            None
+        } else {
+            let Some(default_state) = usize::try_from(machine.default_state)
+                .ok()
+                .filter(|d| *d < machine.states.len())
+            else {
+                log.omit(
+                    "controllers not lowered: a layer's default state is outside its states",
+                    1,
+                );
+                return None;
+            };
+            Some(default_state)
         };
         if !layer.default_weight.is_finite() {
             log.omit(
@@ -692,7 +702,7 @@ mod tests {
         assert_eq!(value.parameters[2].default, 1.0);
         let layer = &value.layers[0];
         assert_eq!(layer.name, "base");
-        assert_eq!(layer.default_state, 1);
+        assert_eq!(layer.default_state, Some(1));
         assert_eq!(layer.default_weight, 0.75);
         assert_eq!(layer.blending, LayerBlending::Override);
         assert_eq!(layer.states[0].name, "Idle");
@@ -732,6 +742,53 @@ mod tests {
         assert_eq!(log.counts["states"], 3);
         assert_eq!(log.counts["states whose motion is Unsupported (named)"], 1);
         assert_eq!(log.counts["controller bindings"], 1);
+    }
+
+    /// A layer whose machine has no states lowers as an empty layer (no default state, no states) beside the others, which
+    /// keep their indices; a default state outside a machine that has states still drops the controller.
+    #[test]
+    fn an_empty_layer_is_lowered_and_a_stray_default_state_is_not() {
+        let (mut w, _, controller_entity) = world();
+        let controller = w.get_mut::<UnityAnimatorController>(controller_entity).unwrap();
+        // the machine PEAK's Scout and Ambience run in their empty layer: no states, a default state of 0
+        controller.state_machines.push(StateMachine {
+            default_state: 0,
+            any_state_transitions: vec![],
+            selectors: vec![],
+            synchronized_layer_count: 0,
+            states: vec![],
+        });
+        controller.layers = vec![
+            layer(0, BASE, 0, 0.75),
+            layer(1, 999, 0, 1.0),
+            layer(0, 998, 1, 0.5),
+        ];
+        let log = lower_unity_animator(&mut w).unwrap();
+        let (entity, value) = w.iter::<Controller>().next().expect("lowered");
+        assert_eq!(value.layers.len(), 3);
+        assert_eq!(value.layers[0].default_state, Some(1));
+        assert_eq!(value.layers[1].name, "layer 1");
+        assert!(value.layers[1].states.is_empty());
+        assert_eq!(value.layers[1].default_state, None);
+        assert_eq!(value.layers[1].default_weight, 1.0);
+        assert_eq!(value.layers[2].default_state, Some(1));
+        w.get::<Controller>(entity).unwrap().verify(entity, &w).unwrap();
+        assert_eq!(log.counts["controllers lowered"], 1);
+        assert_eq!(log.counts["layers"], 3);
+        assert_eq!(log.counts["states"], 6);
+
+        // a machine that has states and a default state outside them is still not lowered
+        let (mut w, _, controller_entity) = world();
+        w.get_mut::<UnityAnimatorController>(controller_entity)
+            .unwrap()
+            .state_machines[0]
+            .default_state = 3;
+        let log = lower_unity_animator(&mut w).unwrap();
+        assert_eq!(w.iter::<Controller>().count(), 0);
+        assert_eq!(
+            log.omitted["controllers not lowered: a layer's default state is outside its states"],
+            1
+        );
     }
 
     #[test]

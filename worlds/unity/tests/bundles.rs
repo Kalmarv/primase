@@ -15,8 +15,9 @@ mod inputs;
 use std::path::PathBuf;
 
 use inputs::{Game, Tool, install_file, tool};
-use primase_core::World;
+use primase_core::{Controller, World};
 use primase_unity::level::read_level;
+use primase_unity::passes::lower_animator::lower_unity_animator;
 use unity_formats::TypeTreePackage;
 use unity_formats::listing::list;
 use unity_formats::mesh::UnityMeshData;
@@ -171,6 +172,33 @@ fn one_level_of_peaks_bundle_reads() {
         report.renderers, report.materials, report.textures, report.controllers
     );
     assert!(report.renderers > 0);
+    // the Animators' controllers lower, the empty layers of `Scout` (its seventh) and `Ambience` (its first) among them:
+    // a layer with no states and no default state, not a reason to leave the controller out. The level names `Scout` once
+    // and `Ambience` four times among its Animators (an independent census of its scene's Animators).
+    lower_unity_animator(&mut w).unwrap();
+    let lowered: Vec<_> = w
+        .iter::<Controller>()
+        .filter(|(_, c)| c.name == "Scout" || c.name == "Ambience")
+        .map(|(_, c)| c.clone())
+        .collect();
+    let scout = lowered
+        .iter()
+        .find(|c| c.name == "Scout")
+        .expect("Scout is lowered");
+    assert_eq!(scout.layers.len(), 7);
+    assert!(scout.layers[6].states.is_empty() && scout.layers[6].default_state.is_none());
+    for c in &lowered {
+        assert!(
+            c.layers
+                .iter()
+                .any(|l| l.states.is_empty() && l.default_state.is_none()),
+            "{}: its empty layer",
+            c.name
+        );
+        for l in c.layers.iter().filter(|l| !l.states.is_empty()) {
+            assert!(l.default_state.is_some(), "{}: {}", c.name, l.name);
+        }
+    }
     let meshes = list(&player, Some(&["Mesh"])).unwrap();
     assert!(!meshes.entries.is_empty());
     for e in meshes.entries.iter().take(5) {

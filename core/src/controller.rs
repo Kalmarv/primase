@@ -62,7 +62,9 @@ pub struct ControllerState {
 pub struct ControllerLayer {
     pub name: String,
     pub states: Vec<ControllerState>,
-    pub default_state: usize,
+    /// The state the layer starts in: an index of `states`. `None` exactly when the layer has no states: such a layer
+    /// plays nothing (a source's empty layer, kept so the layers still line up with the source's).
+    pub default_state: Option<usize>,
     /// As stored; finite, never silently clamped to a consumer's supported range.
     pub default_weight: f32,
     pub blending: LayerBlending,
@@ -163,8 +165,14 @@ impl Component for Controller {
             if !layer.default_weight.is_finite() {
                 return Err(format!("layer {layer_index}: non-finite weight"));
             }
-            if layer.default_state >= layer.states.len() {
-                return Err(format!("layer {layer_index}: default state is out of range"));
+            match layer.default_state {
+                Some(default) if default >= layer.states.len() => {
+                    return Err(format!("layer {layer_index}: default state is out of range"));
+                }
+                None if !layer.states.is_empty() => {
+                    return Err(format!("layer {layer_index}: has states but no default state"));
+                }
+                _ => {}
             }
             for (state_index, state) in layer.states.iter().enumerate() {
                 if state.name.trim().is_empty() {
@@ -284,7 +292,7 @@ mod tests {
             ],
             layers: vec![ControllerLayer {
                 name: "base".into(),
-                default_state: 0,
+                default_state: Some(0),
                 default_weight: 0.75,
                 blending: LayerBlending::Override,
                 states: vec![ControllerState {
@@ -353,8 +361,16 @@ mod tests {
             assert!(bad.verify(e, &w).is_err());
         }
         let mut bad = c.clone();
-        bad.layers[0].default_state = 1;
+        bad.layers[0].default_state = Some(1);
         assert!(bad.verify(e, &w).is_err());
+        // states without a default state are refused
+        let mut bad = c.clone();
+        bad.layers[0].default_state = None;
+        assert!(
+            bad.verify(e, &w)
+                .unwrap_err()
+                .contains("has states but no default state")
+        );
         let mut bad = c.clone();
         bad.layers[0].default_weight = f32::NAN;
         assert!(bad.verify(e, &w).is_err());
@@ -387,6 +403,29 @@ mod tests {
         assert!(c.verify(e, &w).is_err());
         c.layers[0].states[0].motion = Motion::Unsupported("Direct blend is not lowered".into());
         assert!(c.verify(e, &w).is_ok());
+    }
+    /// A layer with no states plays nothing and has no default state; both halves of that are required, and it survives
+    /// JSON as a null.
+    #[test]
+    fn an_empty_layer_has_no_default_state() {
+        let (w, e, mut c) = fixture();
+        let mut empty = c.layers[0].clone();
+        empty.name = "empty".into();
+        empty.states.clear();
+        empty.default_state = None;
+        c.layers.push(empty);
+        assert!(c.verify(e, &w).is_ok());
+        let json = c.to_json().unwrap().unwrap();
+        assert_eq!(json["layers"][0]["default_state"], 0);
+        assert!(json["layers"][1]["default_state"].is_null());
+        assert_eq!(serde_json::from_value::<Controller>(json).unwrap(), c);
+        // a default state with no states to be in is out of range
+        c.layers[1].default_state = Some(0);
+        assert!(
+            c.verify(e, &w)
+                .unwrap_err()
+                .contains("default state is out of range")
+        );
     }
     #[test]
     fn controller_and_binding_json_round_trip_keep_entity_ids_and_layer_modes() {
