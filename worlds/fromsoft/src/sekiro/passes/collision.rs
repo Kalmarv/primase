@@ -63,69 +63,10 @@ fn elden_surface(class: i32) -> Option<&'static str> {
     })
 }
 
-/// The name of a HitMtrl class's row in `game`'s HitMtrlParam (Smithbox's English names; Paramdex's for Sekiro), where
-/// it has one: what a counted class is called.
+/// The name of a HitMtrl class's row in `game`'s HitMtrlParam (the community's English names: Smithbox's, Paramdex's for
+/// Sekiro), where it has one: what a counted class is called. The table is `fromsoft_formats::collision::hit_class_name`'s.
 pub fn class_name(game: Game, class: i32) -> Option<&'static str> {
-    Some(match (game, class) {
-        (Game::Sekiro, 1) => "Stone",
-        (Game::Sekiro, 3) => "Dirt",
-        (Game::Sekiro, 4) => "Wood",
-        (Game::Sekiro, 5) => "Grass",
-        (Game::Sekiro, 6) => "Gravel",
-        (Game::Sekiro, 7) => "Bamboo",
-        (Game::Sekiro, 8) => "Tree",
-        (Game::Sekiro, 9 | 10) => "Straw",
-        (Game::Sekiro, 11) => "Iron",
-        (Game::Sekiro, 12) => "Flesh",
-        (Game::Sekiro, 13) => "Sand",
-        (Game::Sekiro, 14) => "Bone",
-        (Game::Sekiro, 15) => "Ash",
-        (Game::Sekiro, 16) => "Tiles",
-        (Game::Sekiro, 17) => "Cloth",
-        (Game::Sekiro, 18) => "Dead Leaves",
-        (Game::Sekiro, 19) => "Bell",
-        (Game::Sekiro, 20) => "Water Puddle",
-        (Game::Sekiro, 21) => "Water (Walkable)",
-        (Game::Sekiro, 22) => "Water (Diveable)",
-        (Game::Sekiro, 23) => "Poison Swamp",
-        (Game::Sekiro, 24) => "Poison Swamp (with slowing)",
-        (Game::Sekiro, 27) => "Mud",
-        (Game::Sekiro, 28) => "Tatami",
-        (Game::Sekiro, 29) => "None",
-        (Game::Sekiro, 30) => "Snow",
-        (Game::Sekiro, 31) => "Bush",
-        (Game::Sekiro, 32) => "Wood Indoors",
-        (Game::Sekiro, 33) => "Autumn Leaves",
-        (Game::Sekiro, 34) => "Ice",
-        (Game::Sekiro, 35) => "Water Slope",
-        (Game::Sekiro, 36) => "Water Slope (swimming)",
-        (Game::Sekiro, 37) => "Grass In Water",
-        (Game::Sekiro, 38) => "Grass In Water (swimming)",
-        (Game::Sekiro, 40) => "Cloud",
-        (Game::Sekiro, 45) => "Underwater Dirt",
-        (Game::Sekiro, 46) => "Underwater Stone",
-        (Game::Sekiro, 47) => "Underwater Wood",
-        (Game::Sekiro, 80) => "Miasma",
-        (Game::EldenRing, 0) => "None",
-        (Game::EldenRing, 1) => "Stock",
-        (Game::EldenRing, 2) => "Rock",
-        (Game::EldenRing, 3) => "Sand",
-        (Game::EldenRing, 4) => "Wood",
-        (Game::EldenRing, 5) => "Dirt",
-        (Game::EldenRing, 6) => "Ore",
-        (Game::EldenRing, 7) => "Lava",
-        (Game::EldenRing, 8) => "Scarlet Tree",
-        (Game::EldenRing, 11) => "Iron Grate",
-        (Game::EldenRing, 12) => "Scarlet Mushroom",
-        (Game::EldenRing, 14) => "Bone",
-        (Game::EldenRing, 21) => "Water",
-        (Game::EldenRing, 23) => "Shallow Poison Swamp",
-        (Game::EldenRing, 24) => "Poison Swamp",
-        (Game::EldenRing, 44) => "Rain Dirt",
-        (Game::EldenRing, 46) => "Scarlet Swamp",
-        (Game::EldenRing, 49) => "Lake of Rot",
-        _ => return None,
-    })
+    fromsoft_formats::collision::hit_class_name(game, class)
 }
 
 /// The surface a triangle of HitMtrl ID `material` is lowered with in `game`: its class's known surface, else `default`,
