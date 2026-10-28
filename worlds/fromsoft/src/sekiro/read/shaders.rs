@@ -94,7 +94,13 @@ impl Bundles {
             if !archive.contains(path) {
                 continue;
             }
-            for file in Binder::read(&archive.read(path, decoder)?, decoder)?.files {
+            // only the wanted bundles are decoded and copied out of the binder: it holds hundreds
+            let binder = Binder::read_where(&archive.read(path, decoder)?, decoder, &|name| {
+                fold(leaf(Some(name)))
+                    .strip_suffix(".shaderbdle")
+                    .is_some_and(|key| wanted.contains(key))
+            })?;
+            for file in binder.files {
                 let name = leaf(file.name.as_deref());
                 let key = fold(name);
                 let Some(shader_key) = key.strip_suffix(".shaderbdle") else {
