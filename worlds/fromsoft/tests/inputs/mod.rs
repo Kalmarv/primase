@@ -220,8 +220,8 @@ primase_testdata::inputs! {
         Query::Oracle(OracleSet::Uxm, Game::Elden, "dictionary.txt") => {
             status: Live,
             gate: false,
-            about: r#"caller-provided UTF-8 Elden Ring path dictionary"#,
-            source: r#"third-party: UXM's Elden Ring path dictionary"#,
+            about: r#"caller-provided UTF-8 Elden Ring path dictionary (names all 97,118 entries of the base archives)"#,
+            source: r#"third-party: UXM-Selective-Unpack 9501be8's Elden Ring path dictionary, then a `#smithbox-er-file-dictionary` section of the 87 paths of Smithbox 3485939's `ER-File-Dictionary.json` (MIT; a list of archive paths, taken as data) that hash onto the 87 archive entries UXM's list leaves unnamed"#,
         },
         Query::Oracle(OracleSet::Uxm, Game::Sekiro, "dictionary.txt") => {
             status: Live,
