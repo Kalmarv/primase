@@ -9,6 +9,7 @@ use fromsoft_formats::names::stem;
 use fromsoft_formats::{
     flver,
     mtd::{MaterialDefinition, Value},
+    shader::Profile,
 };
 use std::collections::BTreeMap;
 
@@ -41,6 +42,41 @@ enum Pattern {
     Prefix(&'static str),
     Contains(&'static str),
     Suffix(&'static str),
+    /// A name Elden Ring's shader grammar covers ([`Profile`]) is judged by its parts; one it does not cover
+    /// (`GXFlver_Shadow`, `SpeedTree_billboard`) by the pattern as written.
+    Grammar(fn(&Profile) -> bool, &'static Pattern),
+}
+
+impl Pattern {
+    fn matches(self, name: &str) -> bool {
+        match self {
+            Self::Prefix(p) => name.starts_with(p),
+            Self::Contains(p) => name.contains(p),
+            Self::Suffix(p) => name.ends_with(p),
+            Self::Grammar(test, written) => {
+                Profile::parse(name).map_or_else(|| written.matches(name), |profile| test(&profile))
+            }
+        }
+    }
+}
+
+/// A map shader of a sky family: `M[Sky9]`, `M[Sky]_Cloudiness_A`, `M[Sky_Lake_B]` (category `M`, first brackets begin
+/// `Sky`).
+fn sky_family(profile: &Profile) -> bool {
+    profile.is_map() && profile.base_type.starts_with("Sky")
+}
+
+/// A shadow proxy: the stem ends with the suffix `Shadow` (`C[AMSN]_Shadow`).
+fn shadow_suffix(profile: &Profile) -> bool {
+    profile.suffixes.last().is_some_and(|s| s == "Shadow")
+}
+
+/// A stem with a `[Translucency]` bracket: the first brackets or a tag, or a suffix that holds one (a suffix may hold
+/// brackets: `Glow[Int]`).
+fn translucency(profile: &Profile) -> bool {
+    profile.base_type == "Translucency"
+        || profile.has_tag("Translucency")
+        || profile.suffixes.iter().any(|s| s.contains("[Translucency]"))
 }
 /// The class a rule gives.
 #[derive(Clone, Copy, Debug)]
@@ -103,7 +139,7 @@ const SEKIRO_CLASSES: &ClassTable = &[
 const ELDEN_CLASSES: &ClassTable = &[
     (
         Target::Shader,
-        Pattern::Prefix("M[Sky"),
+        Pattern::Grammar(sky_family, &Pattern::Prefix("M[Sky")),
         Class::Skip(SkipClass::Sky),
     ),
     (
@@ -118,7 +154,7 @@ const ELDEN_CLASSES: &ClassTable = &[
     ),
     (
         Target::Shader,
-        Pattern::Suffix("_Shadow"),
+        Pattern::Grammar(shadow_suffix, &Pattern::Suffix("_Shadow")),
         Class::Skip(SkipClass::Shadow),
     ),
     (
@@ -128,7 +164,11 @@ const ELDEN_CLASSES: &ClassTable = &[
     ),
     (Target::Shader, Pattern::Contains("Water"), Class::Water),
     (Target::Shader, Pattern::Contains("MeshDecal"), Class::Decal),
-    (Target::Shader, Pattern::Contains("[Translucency]"), Class::Leaves),
+    (
+        Target::Shader,
+        Pattern::Grammar(translucency, &Pattern::Contains("[Translucency]")),
+        Class::Leaves,
+    ),
 ];
 
 /// The class table of `game`.
@@ -217,12 +257,7 @@ pub fn resolve_definition(
             Target::Shader => m.shader.as_str(),
             Target::Material => m.mtd.as_str(),
         };
-        let found = match pattern {
-            Pattern::Prefix(p) => name.starts_with(p),
-            Pattern::Contains(p) => name.contains(p),
-            Pattern::Suffix(p) => name.ends_with(p),
-        };
-        found.then_some(*class)
+        pattern.matches(name).then_some(*class)
     });
     match class {
         Some(Class::Skip(skip @ (SkipClass::Sky | SkipClass::LightVolume))) => m.skip = Some(skip),
@@ -641,5 +676,89 @@ mod tests {
             AlphaMode::Blend
         );
         assert_eq!([alpha_reference(0), alpha_reference(-5)], [None, None]);
+    }
+
+    /// Elden Ring's class table gives a shader name the class its rules gave when they were plain string patterns: the
+    /// three bound to the shader grammar (`M[Sky`, `_Shadow`, `[Translucency]`) judge a stem the grammar covers by its parts
+    /// and one it does not (`GXFlver_Shadow`, `Fujir_SkyWithLerpClouds`, an open bracket) by the pattern as written. The
+    /// rows are stems of the install's material binaries, then forms the install has none of; the expected class of each
+    /// is what the string rules gave it, worked out by a separate Python reading of those rules.
+    #[test]
+    fn elden_rings_classes_are_those_the_string_rules_gave() {
+        let class = |shader: &str| {
+            let m = resolve_definition(
+                &flver::Material {
+                    string_bytes: 0,
+                    index: 0,
+                    name: "fixture".into(),
+                    mtd: "fixture.mtd".into(),
+                    gx: vec![],
+                    textures: vec![],
+                },
+                Some(&Definition::Mtd(MaterialDefinition {
+                    shader: shader.into(),
+                    description: String::new(),
+                    parameters: Vec::new(),
+                    textures: Vec::new(),
+                    block_lengths: Vec::new(),
+                    padding: Vec::new(),
+                })),
+                Game::EldenRing,
+                |_| false,
+            );
+            match m.skip {
+                Some(SkipClass::Sky) => "sky".to_owned(),
+                Some(SkipClass::LightVolume) => "light".to_owned(),
+                Some(SkipClass::Shadow) => "shadow".to_owned(),
+                Some(SkipClass::Billboard) => "billboard".to_owned(),
+                Some(other) => panic!("{shader}: {other:?}"),
+                None => m.class,
+            }
+        };
+        for (shader, expected) in [
+            ("M[Sky9]", "sky"),
+            ("M[Sky]_Cloudiness_A", "sky"),
+            ("M[Sky][Realistic]_A", "sky"),
+            ("M[Sky_Lake_B]", "sky"),
+            ("M[SkyWater]", "sky"),
+            ("M[Clouds5]", "sky"),
+            ("M[Atmosphere][Clouds]_001", "sky"),
+            ("M[DistantClouds_Cloth]_002", "sky"),
+            ("Fujir_SkyWithLerpClouds", "sky"),
+            ("M[LightShaft]_001", "light"),
+            ("M[WorldTree_LightShaft_003]", "light"),
+            ("C[AMSN]_Shadow", "shadow"),
+            ("GXFlver_Shadow", "shadow"),
+            ("SpeedTree_billboard", "billboard"),
+            ("M[Water][river]", "water"),
+            ("M[MuddyWater]", "water"),
+            ("M[Waterfall2]_Transparent", "water"),
+            ("M[CutScene][WaterSurface]", "water"),
+            ("GXFlver_WaterBumpTri", "water"),
+            ("M[AMSN]_MeshDecalBlend", "decal"),
+            ("M[AMSN_V]_MeshDecalBlend_Emissive_Glow", "decal"),
+            ("M[Flame_001]_MeshDecalBlend", "decal"),
+            ("M[AMSN_V][Ov_N][Translucency]", "leaves"),
+            ("M[AMSN_V][Ov_N][Translucency]_Edge", "leaves"),
+            ("M[AMSN_V][Translucency]", "leaves"),
+            ("M[AMSN_V][Mb4_ColorAdjust][3Mask_ch18][Translucency]", "leaves"),
+            ("M[AMSN]", "opaque"),
+            ("M[AMSN_V][Ov_N]", "opaque"),
+            ("C[DetailBlend][Rich]", "opaque"),
+            ("C[c2200]_Body", "opaque"),
+            ("GXFlver_ColDif", "opaque"),
+            // forms the install has none of: a bracket left open, a category that only ends like the map's, a suffix that
+            // only ends like `Shadow`, a bracket as a suffix's text, the bracket as the first brackets
+            ("M[SkyX", "sky"),
+            ("MM[Sky]", "opaque"),
+            ("C[AMSN]_Foo_Shadow", "shadow"),
+            ("C[AMSN]_NoShadow", "opaque"),
+            ("C[AMSN][Shadow]", "opaque"),
+            ("M[AMSN]_Glow[Translucency]", "leaves"),
+            ("M[Translucency]", "leaves"),
+            ("M[Translucency]x", "leaves"),
+        ] {
+            assert_eq!(class(shader), expected, "{shader}");
+        }
     }
 }

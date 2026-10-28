@@ -18,6 +18,7 @@ use crate::detail_probe::ProgramProbe;
 use crate::materials::{Definition, LayeredMaterial, Material};
 use crate::sekiro::components::lowered::UvTiling;
 use fromsoft_formats::Game;
+use fromsoft_formats::shader::Profile;
 
 /// `derive-fromsoft-detail`: for each material whose shader is Sekiro's `Character_AMSN_[DetailBlend]` or Elden Ring's
 /// `C[DetailBlend]` (plain, `[Rich]`, and their `_cloth` variants, whose pixel programs are the same) and which a
@@ -40,8 +41,11 @@ pub const DERIVE_FROMSOFT_DETAIL: PassSpec = PassSpec {
 /// The Sekiro shader family whose programs the detail equation is derived from.
 const FAMILY: &str = "Character_AMSN_[DetailBlend]";
 
-/// The Elden Ring shader family: `C[DetailBlend]` and its variants.
+/// The Elden Ring shader family: `C[DetailBlend]` and its variants (category `C`, first brackets `DetailBlend`).
 const ELDEN_FAMILY: &str = "C[DetailBlend]";
+
+/// Why a detail-blend variant none of the others names is refused.
+const NO_TERM: &str = "its family is none the model has a term for";
 
 /// The count of a metallic-factor material: its PBR model states no dielectric reflectance, so the viewer's stands (glTF's
 /// 0.04). The source's lighting reads `F0 = lerp(0.04, albedo, metallic)` ([`fromsoft_formats::Game::gbuffer`]), which agrees, but no
@@ -57,16 +61,25 @@ pub fn family(shader: &str) -> Option<Result<Game, &'static str>> {
     if shader == FAMILY {
         return Some(Ok(Game::Sekiro));
     }
-    let rest = shader.strip_prefix(ELDEN_FAMILY)?;
-    Some(match rest {
-        "" | "[Rich]" | "_cloth" | "[Rich]_cloth" => Ok(Game::EldenRing),
-        r if r.starts_with("[S2]") => Err(
+    let Some(profile) = Profile::parse(shader) else {
+        // outside the shader grammar (a bracket left open, a character after the last bracket): a name that begins as the
+        // family does is one of its variants none of which is derived
+        return shader.starts_with(ELDEN_FAMILY).then_some(Err(NO_TERM));
+    };
+    if profile.category != "C" || profile.base_type != "DetailBlend" {
+        return None;
+    }
+    let tags: Vec<&str> = profile.tags.iter().map(String::as_str).collect();
+    let suffixes: Vec<&str> = profile.suffixes.iter().map(String::as_str).collect();
+    Some(match (tags.as_slice(), suffixes.as_slice()) {
+        ([] | ["Rich"], [] | ["cloth"]) => Ok(Game::EldenRing),
+        (["S2", ..], _) => Err(
             "its [S2] family has an overlay layer drawn by its own alpha and a back face, which the model has no term for",
         ),
-        r if r.starts_with("_SSS") => {
+        ([], [suffix, ..]) if suffix.starts_with("SSS") => {
             Err("its _SSS family writes a subsurface lane, which the model has no term for")
         }
-        _ => Err("its family is none the model has a term for"),
+        _ => Err(NO_TERM),
     })
 }
 
@@ -364,5 +377,28 @@ mod tests {
         }
         assert_eq!(family("C[AMSN]"), None);
         assert_eq!(family("Character_AMSN"), None);
+        // another category with the same brackets is none of them, and a name outside the shader grammar that begins as the
+        // family does is refused as any other variant is
+        assert_eq!(family("CS[DetailBlend]"), None);
+        assert_eq!(family("M[DetailBlend]"), None);
+        for shader in ["C[DetailBlend]rope", "C[DetailBlend][Rich", "C[DetailBlend]_"] {
+            let Some(Err(reason)) = family(shader) else {
+                panic!("{shader} is not refused by name");
+            };
+            assert!(reason.contains("has a term for"), "{shader}: {reason}");
+        }
+        // the variants are told apart by their tags and suffixes as the grammar splits them
+        for (shader, expected) in [
+            ("C[DetailBlend][Rich]_SSS", "has a term for"),
+            ("C[DetailBlend][S2]_SSS", "[S2] family"),
+            ("C[DetailBlend]_SSS_Glow", "_SSS family"),
+            ("C[DetailBlend]_cloth_Glow", "has a term for"),
+            ("C[DetailBlend][Rich][S2]", "has a term for"),
+        ] {
+            let Some(Err(reason)) = family(shader) else {
+                panic!("{shader} is not refused by name");
+            };
+            assert!(reason.contains(expected), "{shader}: {reason}");
+        }
     }
 }
