@@ -170,6 +170,36 @@ pub(crate) fn dummy_axes(forward: [f64; 3], upward: [f64; 3]) -> Option<[[f64; 3
     Some([cross3(y, z), y, z])
 }
 
+/// Where a dummy polygon stands in its model's space at rest, as an affine map in the file's frame: its position taken
+/// in the space of its parent bone (`worlds`, [`bone_matrices`]) where it has one, and the rotation of its frame
+/// ([`dummy_axes`], through the same bone) where it uses its upward vector and the directions have one, else the
+/// identity (as [`dummy_sockets`] takes it). `None` where it names a bone the model lacks or the position is not finite.
+pub(crate) fn dummy_in_model(worlds: &[Matrix], d: &fromsoft_formats::flver::Dummy) -> Option<Matrix> {
+    if d.position.iter().any(|x| !x.is_finite()) {
+        return None;
+    }
+    let parent = usize::try_from(d.parent_bone).ok();
+    let at = d.position.map(f64::from);
+    let t = match parent {
+        Some(p) => affine_point(worlds.get(p)?, at),
+        None if d.parent_bone == -1 => at,
+        None => return None,
+    };
+    let direction = |v: [f32; 3]| {
+        let v = v.map(f64::from);
+        match parent {
+            Some(p) => Some(affine_vector(worlds.get(p)?, v)),
+            None => Some(v),
+        }
+    };
+    let axes = d
+        .use_upward_vector
+        .then(|| dummy_axes(direction(d.forward)?, direction(d.upward)?))
+        .flatten();
+    let [x, y, z] = axes.unwrap_or([[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]]);
+    Some([x, y, z, t])
+}
+
 /// A model's dummy polygons as sockets on its skeleton (`core.sockets`; joint `i` is bone `i`, see [`skeleton`]), each
 /// where the dummy stands in the model at rest and following the bone it is attached to: the dummy's position is taken
 /// in the space of its parent bone where it has one (SoulsFormatsNEXT: "initially transformed to" it) and in the

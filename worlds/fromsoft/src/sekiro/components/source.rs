@@ -349,6 +349,89 @@ impl Component for LightSource {
     }
 }
 
+/// A light property of an effect (`fromsoft.effect_light`) as the effect file stores it: its components at the first
+/// keyframe (`initial`: the constant itself for a constant) and where the property settles (`settled`: the last
+/// keyframe of a function that does not loop, the constant for a constant; `None` for a function that loops).
+/// `keyframes` is 0 for a constant. Modifiers (random variation, dependence on an outside value) are not applied:
+/// `modifiers` counts them.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct EffectValue {
+    pub initial: Vec<f32>,
+    pub settled: Option<Vec<f32>>,
+    pub keyframes: usize,
+    pub modifiers: usize,
+}
+
+/// Where an effect light was placed from.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub enum EffectPlace {
+    /// A map SFX region (type 5), by name: the effect stands at the region's pose.
+    Region { region: String },
+    /// A placed object (Sekiro) or asset (Elden Ring): the effect stands at the model's dummy polygon `dummy` (its
+    /// `reference_id`) as the param row `row`'s slot `slot` says.
+    Model {
+        part: String,
+        model: String,
+        row: i32,
+        slot: usize,
+        dummy: i32,
+    },
+}
+
+/// The shape of an effect light.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub enum EffectShape {
+    /// A point light reaching `radius` metres.
+    Point { radius: EffectValue },
+    /// A spot light: an elliptic cone from the point to a base at `far` metres, of half-extents `radius_x` and
+    /// `radius_y` there, with the tip cut off at `near`. The spot's axis is the effect's local +Z (the file frame).
+    Spot {
+        near: EffectValue,
+        far: EffectValue,
+        radius_x: EffectValue,
+        radius_y: EffectValue,
+    },
+}
+
+/// What a point or spot light action of an effect file (FXR) stores (`fromsoft.effect_light`), on an entity placed where
+/// the light stands: the placement ([`EffectPlace`]) composed with the static node transforms above the light, in the
+/// world frame. Values are as stored: colours are floats (8-bit values over 255 in every light of both installs),
+/// `diffuse_multiplier` the stored multiplier (`None` in Dark Souls III's layout, which has none) of which a spot's is
+/// ten times the unit a point's is in (the fxr project's reading of the files), `diffuse` carries the colour's
+/// alpha. `starts_disabled` is the SFX region's flag; `chosen_in_state_0` whether the node's state-config map
+/// chooses the light's config in the effect's first state. The light's flicker and fade-out are kept, not applied.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct EffectLight {
+    pub effect: i32,
+    pub place: EffectPlace,
+    pub shape: EffectShape,
+    pub diffuse: EffectValue,
+    pub diffuse_multiplier: Option<EffectValue>,
+    pub specular: EffectValue,
+    pub specular_multiplier: Option<EffectValue>,
+    pub separate_specular: bool,
+    pub shadows: bool,
+    pub flickers: bool,
+    pub fade_out_frames: i32,
+    pub starts_disabled: bool,
+    pub chosen_in_state_0: bool,
+    /// The static node transforms the placement was composed with.
+    pub static_transforms: usize,
+    /// The effects that spawned this light's effect, the named one first (empty: the effect the route names holds it).
+    pub via: Vec<i32>,
+}
+impl Component for EffectLight {
+    const NAME: &'static str = "fromsoft.effect_light";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    /// Placed by its entity's transform.
+    fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
+        primase_core::world::Linearity::Invariant
+    }
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        to_value(self).map(Some)
+    }
+}
+
 /// One MSB spawn point inside the read region: its name as stored, position in the world frame (metres) and stored
 /// rotation in degrees (its facing convention is not established).
 #[derive(Clone, Debug, PartialEq, Serialize)]

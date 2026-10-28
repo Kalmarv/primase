@@ -3,7 +3,9 @@
 //! selected and in the world frame, as source records. What differs between the games and is not stated by their files
 //! (where a map keeps its files, how objects are found, tile parents) is [`fromsoft_formats::Game`]'s; what Elden Ring's read does
 //! not cover yet (world states, materials without a definition) is in its notices.
-use super::{animation, collision, draw_param, extras, objects, shaders, shadows, states, textures};
+use super::{
+    animation, collision, draw_param, effect_lights, extras, objects, shaders, shadows, states, textures,
+};
 use crate::sekiro::source::{self, Region};
 use crate::{invalid, materials};
 use fromsoft_formats::{
@@ -44,6 +46,11 @@ pub struct Options {
     /// of extern meshes) is read with it, as [`crate::sekiro::source::MapCollision::f_triangles`]: off by default
     /// (the read keeps the `h` binder's files only); `lower-fromsoft-collision{f-meshes=on}` lowers them.
     pub f_collision: bool,
+    /// Whether the point and spot lights of effect files (FXR) are read where they stand ([`effect_lights`]): the
+    /// map's SFX regions, and the effects the kept objects (Sekiro) and assets (Elden Ring) spawn through their model
+    /// effect row at the model's dummy polygons; off by default (it reads the effect binders and the params).
+    /// `lower-fromsoft-lights` lowers them when it is given `effect-power-per-unit`.
+    pub effect_lights: bool,
 }
 /// What a read of the object models' animation binders found.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -112,6 +119,8 @@ pub struct Report {
     /// and names the renderer-specific controls kept only as `fromsoft.shadow_flags`.
     pub shadows: primase_core::pass::PassLog,
     pub extras: extras::Report,
+    /// The effect lights placed and what was left ([`Options::effect_lights`]).
+    pub effect_lights: effect_lights::Report,
     /// The placed map collision files read.
     pub collision: collision::Report,
     /// The kept object prototypes' collision files read.
@@ -754,7 +763,7 @@ pub fn read_game_area(
 
 /// [`read_game_area`], telling `stage` the name of each stage as it starts, in order: `definitions and texture
 /// catalog`, `models of every placement`, `select placements`, `wanted textures and shader bundles`, `load textures`,
-/// `spawn prototypes`, `spawn placements`, `collision`, `extras`, `environment`, and `done` when the read returns. A
+/// `spawn prototypes`, `spawn placements`, `collision`, `extras`, `effect lights` (with `effect_lights` asked), `environment`, and `done` when the read returns. A
 /// caller can bracket the stages with it (a memory census, a progress display); it changes nothing in the read.
 pub fn read_game_area_staged(
     install: &Install,
@@ -1061,6 +1070,8 @@ pub fn read_game_area_staged(
         }
     };
     let mut proto_entities = BTreeMap::new();
+    // the dummy polygons of the object models, for the effect lights they spawn
+    let mut object_dummies = BTreeMap::new();
     let mut material_entities = BTreeMap::new();
     let mut material_shaders = Vec::new();
     for (key, proto) in prototypes {
@@ -1089,6 +1100,12 @@ pub fn read_game_area_staged(
         let far = key
             .strip_prefix(&format!("{area}/"))
             .is_some_and(|model| game.far_model(model));
+        if options.effect_lights && key.starts_with(&format!("{object}/")) {
+            let (dummies, left_out) = effect_lights::ModelDummies::of(&proto.model)
+                .map_err(|e| invalid("FromSoftware model", 0, format!("{key}: {e}")))?;
+            report.effect_lights.dummies_left_out += left_out;
+            object_dummies.insert(key.clone(), dummies);
+        }
         let e = world.spawn();
         world.insert(e, Name(key.split_once('/').expect("key").1.to_owned()));
         report.prototype_boxes.insert(e, proto.bounds);
@@ -1157,6 +1174,16 @@ pub fn read_game_area_staged(
         .chain(collision_parts(&layout))
         .collect();
     stage("spawn placements");
+    // the kept placements of the object models, by placement index
+    let selected_models: BTreeMap<usize, Transform> = if options.effect_lights {
+        selected
+            .iter()
+            .filter(|(key, _, _)| key.starts_with(&format!("{object}/")))
+            .map(|(_, index, transform)| (*index, *transform))
+            .collect()
+    } else {
+        BTreeMap::new()
+    };
     for (key, index, transform) in selected {
         let Placed { part, map, .. } = &placements[index];
         let (prototype, far) = proto_entities[&key];
@@ -1214,6 +1241,46 @@ pub fn read_game_area_staged(
             &mut report.extras,
             &mut world,
         )?;
+    }
+    if options.effect_lights {
+        stage("effect lights");
+        // every object or asset part of the layouts read, kept or not: the census of what the rows reach is of all of them
+        let models: Vec<effect_lights::PlacedModel<'_>> = placements
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.key.starts_with(&format!("{object}/")))
+            .filter_map(|(index, p)| {
+                let placement = match (selected_models.get(&index), object_dummies.get(&p.key)) {
+                    (Some(transform), Some(dummies)) => effect_lights::Placement::Placed {
+                        transform: *transform,
+                        dummies,
+                    },
+                    _ => effect_lights::Placement::Unplaced(match bounds.get(&p.key) {
+                        None => "model not in the archive",
+                        Some(None) => "model uses no vertex",
+                        Some(Some(_)) => "placement outside the region",
+                    }),
+                };
+                Some(effect_lights::PlacedModel {
+                    part: &p.part.name,
+                    model: p.key.split_once('/')?.1,
+                    relative_id: p.part.sfx_param_relative_id,
+                    placement,
+                })
+            })
+            .collect();
+        let dummies_left_out = report.effect_lights.dummies_left_out;
+        report.effect_lights = effect_lights::assemble(
+            install,
+            &archive,
+            decoder,
+            &area,
+            &layout,
+            options.region.map(|r| r.rect),
+            &models,
+            &mut world,
+        )?;
+        report.effect_lights.dummies_left_out = dummies_left_out;
     }
     stage("environment");
     let configs = environment_configs(&layout, &options.draw_param, &environment_parts)?;
