@@ -291,6 +291,24 @@ scripts' decode, are checked against `oracles.scripts.sekiro/state` (`tests/msb_
 
 The area's placements are checked against a SoulsFormats dump of its MSB in `tests/sekiro_scene.rs` (below).
 
+### Draw groups
+
+`sekiro::Options::display_groups` (default `None`) set to `Axes` makes the parts' draw groups a presence axis
+(`sekiro::groups`), for both games. A map piece, object or asset stores up to 256 draw groups; the community documents
+that it is drawn while one of them is among the active display groups, which are the display groups of the collision the
+player stands on. The read makes one bool `core.state_axis` per draw group of a kept placement
+(`fromsoft.display_group.<n>`, class `display_group`, **no default**: which groups are active is the program's state) and
+gives each placement the condition "one of its draw groups is displayed" (ANDed with the event-flag clause when `states`
+are read). `resolve-state` then keeps what a program's groups draw: `assign=fromsoft.display_group.3:on;...`, or
+`assign-class=display_group:on` for every group. A placement under no draw group at all (a zero array, which the stock
+files store on 317,870 Elden Ring assets and 654 Sekiro parts) has no condition and is present in every state: that is a
+choice, not a finding. A game run (Elden Ring 1.17.2, `m10_00`, loose layout) showed only that zeroing the draw groups of
+every map piece and asset that had some hides the scenery. `Report::display_groups` counts the placements conditioned and
+left present, those under groups none of the map's own collisions displays, how the layout's drawn parts meet its
+collisions' display groups (`GroupCensus`), and each collision's display groups (the groups to assign for "the player
+stands on this collision"). `tests/display_groups.rs` reads the Academy of Raya Lucaria with it.
+
+
 ## Material definitions and preview lowering
 
 `mtd::MaterialDefinition::read` validates typed structure, markers, counts

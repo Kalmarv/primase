@@ -11,6 +11,7 @@ pub mod effect_lights;
 pub mod effects;
 pub mod equipment;
 pub mod extras;
+pub mod groups;
 pub mod material_events;
 pub mod messages;
 pub mod objects;

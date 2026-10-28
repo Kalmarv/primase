@@ -4,7 +4,8 @@
 //! (where a map keeps its files, how objects are found, tile parents) is [`fromsoft_formats::Game`]'s; what Elden Ring's read does
 //! not cover yet (world states, materials without a definition) is in its notices.
 use super::{
-    animation, collision, draw_param, effect_lights, effects, extras, objects, shaders, shadows, sky, states, textures,
+    animation, collision, draw_param, effect_lights, effects, extras, groups, objects, shaders, shadows, sky, states,
+    textures,
 };
 use crate::sekiro::source::{self, Region};
 use crate::{invalid, materials};
@@ -29,6 +30,9 @@ pub struct Options {
     /// Which world states to bring in ([`states`]): none (default, every part present) or the event-flag rules of the
     /// block's script, as axes and conditions for `resolve-state`.
     pub states: StateClasses,
+    /// Whether the parts' draw groups become presence axes ([`groups`]): none (default, every part present) or one axis
+    /// per draw group of a kept placement and a condition on each placement, for `resolve-state`.
+    pub display_groups: groups::DisplayGroups,
     /// Whether the larger maps above the map (Elden Ring's open-world tiles: [`fromsoft_formats::Game::parent_maps`]) also place
     /// their parts that belong to it: none (default: the map's own layout only) or included, moved into the map's frame.
     pub parents: Parents,
@@ -181,6 +185,9 @@ pub struct Report {
     pub texture_packages: usize,
     /// With `states: Event`: the rules read and the parts decided or left at their default.
     pub states: Option<states::Report>,
+    /// With `display_groups: Axes`: the axes made, the placements conditioned or left present, and how the layout's draw
+    /// groups meet its collisions' display groups.
+    pub display_groups: Option<groups::Report>,
     /// Placements of the models in `missing_models`.
     pub skipped_missing: usize,
     /// Placements of read models whose face sets use no vertex.
@@ -385,6 +392,18 @@ impl Report {
                 undecided,
                 NoticeKind::Approximation,
                 "parts an uninterpreted script instruction names, kept at their default presence",
+            ),
+            (
+                self.display_groups.as_ref().map_or(0, |g| g.unconditioned),
+                NoticeKind::Approximation,
+                "placements under no draw group (a zero array or no draw block), present in every state: whether the \
+                 game draws such a part is not known",
+            ),
+            (
+                self.display_groups.as_ref().map_or(0, |g| g.unmet),
+                NoticeKind::Approximation,
+                "placements under draw groups none of the map's collisions displays: drawn only when other display \
+                 groups are active",
             ),
             (
                 self.extras.regions_dropped_outside,
@@ -1010,6 +1029,22 @@ pub fn read_game_area_staged(
             maps.push((parent, parent_layout, offset, Some(format!("{area}-"))));
         }
     }
+    let mut display_groups = match options.display_groups {
+        groups::DisplayGroups::None => None,
+        groups::DisplayGroups::Axes => Some(groups::Groups::read(
+            maps.iter().map(|(name, layout, _, _)| (name.as_str(), layout)),
+            &area,
+        )?),
+    };
+    // an overlay layout (`_99`) has no collision of its own: its parts' groups are met by its base map's collisions
+    if let Some(g) = display_groups.as_mut()
+        && let Some(base) = area.strip_suffix("_99").map(|stem| format!("{stem}_00"))
+    {
+        let path = format!("/map/mapstudio/{base}.msb.dcx");
+        if archive.contains(&path) {
+            g.add_collisions_of(&base, &MapLayout::read(&archive.read(&path, decoder)?)?)?;
+        }
+    }
     // the sky map the read brings in, in the area's frame, and Elden Ring's weathers of the area
     let mut sky_map: Option<String> = None;
     let mut weathers: Option<sky::Weathers> = None;
@@ -1500,6 +1535,17 @@ pub fn read_game_area_staged(
             };
             sky::spawn_axis(&mut world, &plan.values, source)
         });
+    if let Some(g) = display_groups.as_mut() {
+        // one axis per draw group of a kept placement, in group order
+        let numbers: BTreeSet<u8> = selected
+            .iter()
+            .flat_map(|(_, index, _)| {
+                let p = &placements[*index];
+                g.numbers(&p.map, p.part.index).iter().copied()
+            })
+            .collect();
+        g.spawn_axes(&mut world, numbers);
+    }
     for (key, index, transform) in selected {
         let Placed {
             part,
@@ -1517,11 +1563,17 @@ pub fn read_game_area_staged(
         };
         let (prototype, far) = proto_entities[&key];
         let e = world.spawn();
-        if !in_sky
-            && let Some(s) = states.as_mut()
-            && let Some(clause) = s.clause(part)
-        {
-            world.insert(e, primase_core::state::Condition(vec![clause]));
+        let condition = if in_sky {
+            None
+        } else {
+            let event = states.as_mut().and_then(|s| s.clause(part));
+            match display_groups.as_mut() {
+                Some(g) => g.condition(map, part.index, event),
+                None => event.map(|clause| primase_core::state::Condition(vec![clause])),
+            }
+        };
+        if let Some(condition) = condition {
+            world.insert(e, condition);
         }
         world.insert(
             e,
@@ -1659,6 +1711,7 @@ pub fn read_game_area_staged(
     if let Some(plan) = sky_plan {
         report.sky = plan.report;
     }
+    report.display_groups = display_groups.map(|g| g.report);
     report.area = area;
     *destination = world;
     stage("done");
