@@ -654,7 +654,7 @@ pub fn resolve(
         "SC_PreExposure",
         0,
         4,
-        ConstantRole::Frame(FrameParameter::Exposure),
+        ConstantRole::Frame(FrameParameter::PreExposure),
     )?;
     // the program's `SAT_MtdParam` (Elden Ring's): its buffer, the buffer's size and the words its members occupy. Each
     // member is a component of a parameter the program reads (`<parameter>_<component>`, at the parameter's start word);

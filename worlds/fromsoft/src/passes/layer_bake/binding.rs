@@ -341,9 +341,9 @@ pub(crate) fn frozen_words(
             policies.insert("global time at the program's sample time".into(), 1);
             bits(&[frame.time])
         }
-        ConstantRole::Frame(FrameParameter::Exposure) => {
+        ConstantRole::Frame(FrameParameter::PreExposure) => {
             policies.insert("unit pre-exposure for static material bake".into(), 1);
-            bits(&[frame.exposure])
+            bits(&[frame.pre_exposure])
         }
         ConstantRole::Frame(FrameParameter::TimeOfDay) => {
             policies.insert("time of day left at frozen zero".into(), 1);
@@ -392,8 +392,8 @@ pub const TEXTURE_SCROLL_POLICY: &str = "texture scroll frozen to the identity: 
 pub struct FrozenFrame {
     /// Seconds of global time (`Frame(Time)`), which scrolls some layers' texture coordinates.
     pub time: f32,
-    /// `Frame(Exposure)`: material radiance is baked at unit exposure, not a runtime camera's pre-exposure.
-    pub exposure: f32,
+    /// `Frame(PreExposure)`: material radiance is baked unscaled (1), not at a running frame's pre-exposure.
+    pub pre_exposure: f32,
     /// `Frame(ColourSlot)`: the first.
     pub colour_slot: f32,
     /// `View(CameraPosition)`: overhead.
@@ -429,7 +429,7 @@ impl FrozenFrame {
         inverse_view_projection[15] = 1.;
         Self {
             time,
-            exposure: 1.,
+            pre_exposure: 1.,
             colour_slot: 0.,
             camera_position: [0., 1000., 0., 1.],
             inverse_view_projection,

@@ -161,7 +161,7 @@ fn malenia_pixelkill_hash_and_alpha_permutation_discard() -> Result<()> {
                             "Object(World)" => {
                                 vec![1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.]
                             }
-                            "Frame(Exposure)" => vec![1.],
+                            "Frame(PreExposure)" => vec![1.],
                             _ => Vec::new(), // capture's unset/unknown lanes and disabled frame effects remain zero
                         }
                     };

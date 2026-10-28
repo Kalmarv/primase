@@ -206,8 +206,12 @@ pub enum FrameParameter {
     Time,
     /// The time of day in the game's own unit.
     TimeOfDay,
-    /// The exposure the frame's output is scaled by.
-    Exposure,
+    /// The pre-exposure: the factor the renderer multiplies the radiance it writes into the frame's light targets by (a
+    /// light's contribution, the ambient, a material's emission), so that the targets hold radiance times this factor; 1
+    /// where a renderer does not pre-expose. What the frame's exposure and tone stages do with it is theirs: they are passes
+    /// of their own, with their own bindings. A program that multiplies its emission by this value writes pre-exposed
+    /// radiance; a consumer that lights in unscaled radiance and exposes once at the end gives it 1.
+    PreExposure,
     /// An index into a palette of colours a draw selects from.
     ColourSlot,
     /// The direction the dominant directional light travels (xyz): a surface is lit by `saturate(dot(normal, -xyz))`.

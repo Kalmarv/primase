@@ -27,7 +27,7 @@
 //!   ([`iridia::WordsRead`]: the words its outputs, discards and writes are made of; a program reads a
 //!   few rows of buffers of some hundred; the rest are counted as left out, a buffer indexed by a computed value is one
 //!   `Unknown` constant). The rows the notes establish have roles where the vocabulary has one: `cb1[37]`
-//!   (`1/W, 1/H, W, H`) the `InverseViewportSize` in its lanes x, y and the `ViewportSize` in z, w, `cb1[39].x` the `Exposure`, `cb2[8..12]` and `cb2[12..16]` the object's `WorldViewProjection` and its `PreviousFrame` one,
+//!   (`1/W, 1/H, W, H`) the `InverseViewportSize` in its lanes x, y and the `ViewportSize` in z, w, `cb1[39].x` the `PreExposure` (the multiplier the lighting passes scale their output by), `cb2[8..12]` and `cb2[12..16]` the object's `WorldViewProjection` and its `PreviousFrame` one,
 //!   `cb2[18].y` the Material's alpha-test
 //!   reference (`AlphaTestValue / 255` where `AlphaTestEnabled`, else 0); the rest are `Unknown` with the notes' reason
 //!   where they state one.
@@ -451,7 +451,7 @@ fn engine_tile(register: u32, row: u32, alpha_test_reference: f32) -> Vec<(u32, 
             (2, 2, ConstantRole::View(ViewParameter::ViewportSize)),
         ],
         // the multiplier the lighting passes scale their output by (`cb1[39].x`, 1 in every copy)
-        (1, 39) => vec![(0, 1, ConstantRole::Frame(FrameParameter::Exposure))],
+        (1, 39) => vec![(0, 1, ConstantRole::Frame(FrameParameter::PreExposure))],
         // the alpha-test reference of the G-buffer pass: the Material's `AlphaTestValue / 255` where `AlphaTestEnabled`
         // is on, else 0 (shaders.md §6.2): a fragment is discarded where its alpha minus this is below 0
         (2, 18) => vec![(1, 1, ConstantRole::Material(bits(&[alpha_test_reference])))],
@@ -2003,7 +2003,7 @@ mod key_tests {
         );
         assert_eq!(
             engine_tile(1, 39, 0.0).remove(0),
-            (0, 1, ConstantRole::Frame(FrameParameter::Exposure))
+            (0, 1, ConstantRole::Frame(FrameParameter::PreExposure))
         );
         assert!(engine_tile(0, 4, 0.0).is_empty());
         // the clip matrix and the previous frame's are four rows each, whichever row a program reads

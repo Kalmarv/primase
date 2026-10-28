@@ -295,7 +295,7 @@ fn a_layered_program_is_bound_by_sekiros_rules() {
         engine("FC_ColorSlotNo", 80, 4, Frame(FrameParameter::ColourSlot)),
         engine("FC_GlobalTime", 84, 4, Frame(FrameParameter::Time)),
         engine("FC_TimeOfDay", 88, 4, Frame(FrameParameter::TimeOfDay)),
-        engine("SC_PreExposure", 92, 4, Frame(FrameParameter::Exposure)),
+        engine("SC_PreExposure", 92, 4, Frame(FrameParameter::PreExposure)),
         engine("SC_RenderCameraPos", 96, 16, View(ViewParameter::CameraPosition)),
         engine(
             "FC_MatrixInvViewProj",
