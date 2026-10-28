@@ -784,6 +784,7 @@ mod tests {
                 skeleton,
                 spline: SplineAnimation {
                     blocks: vec![vec![moving, idle]],
+                    floats: vec![vec![]],
                     unreadable: vec![],
                     duration: 2.0,
                     num_frames: 3,
