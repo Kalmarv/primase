@@ -750,6 +750,37 @@ fn fetch_model(
     })
 }
 
+/// What spawning a prototype needs from it that depends on no other prototype, so that several can be worked out at
+/// once: its materials' identity records and, for an object, its collision bodies with what they add to the report. A
+/// failure is kept as a value and raised where the spawn would meet it.
+struct Prepared {
+    identities: Vec<Result<String>>,
+    collision: Option<Result<(Vec<source::ObjectCollisionFile>, objects::Report)>>,
+}
+
+fn prepare(key: &str, proto: &Prototype) -> Prepared {
+    let collision = (!proto.collision.is_empty()).then(|| {
+        let mut tally = objects::Report::default();
+        proto
+            .collision
+            .iter()
+            .map(|(file, resolution, bytes)| {
+                objects::bodies(file, *resolution, bytes, &mut tally)
+                    .map_err(|e| invalid("object collision", 0, format!("{key}: {file}: {e}")))
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(|files| (files, tally))
+    });
+    Prepared {
+        identities: proto
+            .materials
+            .iter()
+            .map(materials::Material::identity)
+            .collect(),
+        collision,
+    }
+}
+
 /// A read model: the FLVER as stored, its resolved materials, its posed extent in the world frame, and for an object
 /// its collision files' names, resolutions and decoded bytes.
 struct Prototype {
@@ -1166,84 +1197,96 @@ pub fn read_game_area_staged(
     let mut object_dummies = BTreeMap::new();
     let mut material_entities = BTreeMap::new();
     let mut material_shaders = Vec::new();
-    for (key, proto) in prototypes {
-        let mut slots = Vec::with_capacity(proto.materials.len());
-        for m in proto.materials {
-            let identity = m.identity()?;
-            let e = if let Some(e) = material_entities.get(&identity) {
-                *e
-            } else {
-                let e = world.spawn();
-                world.insert(e, Name(m.mtd.clone()));
-                if let Some(layered) = &m.layered {
-                    world.insert(e, layered.clone());
-                }
-                // linked to the bundle of the shader its definition (an MTD or a material binary) names, as read above
-                if m.definition.is_some() {
-                    material_shaders.push((e, m.shader.clone()));
-                }
-                world.insert(e, m);
-                material_entities.insert(identity, e);
-                report.materials += 1;
-                e
-            };
-            slots.push(e);
-        }
-        let far = key
-            .strip_prefix(&format!("{area}/"))
-            .is_some_and(|model| game.far_model(model));
-        if options.effect_lights && key.starts_with(&format!("{object}/")) {
-            let (dummies, left_out) = effect_lights::ModelDummies::of(&proto.model)
-                .map_err(|e| invalid("FromSoftware model", 0, format!("{key}: {e}")))?;
-            report.effect_lights.dummies_left_out += left_out;
-            object_dummies.insert(key.clone(), dummies);
-        }
-        let e = world.spawn();
-        world.insert(e, Name(key.split_once('/').expect("key").1.to_owned()));
-        report.prototype_boxes.insert(e, proto.bounds);
-        world.insert(e, crate::components::models::SourceModel::new(proto.model));
-        world.insert(e, source::MaterialSlots(slots));
-        world.insert(e, source::PrototypeSource { id: key.clone(), far });
-        if key.starts_with(&format!("{object}/")) {
-            report.object_collision.models += 1;
-            report.object_animation.asked = options.object_animations;
-            if options.object_animations {
-                let model = key.split_once('/').expect("key").1;
-                match proto.animation {
-                    None => report.object_animation.still += 1,
-                    Some(bytes) => {
-                        report.object_animation.animated += 1;
-                        match animation::read_member(install.game, &bytes, decoder, model, &mut world) {
-                            Ok(read) => {
-                                report.object_animation.bones += read.report.bones;
-                                report.object_animation.clips += read.report.animations;
-                                report.object_animation.events += read.report.events;
-                                report.object_animation.tae_unmatched += read.report.tae_unmatched;
-                                for (why, files) in read.report.refused {
-                                    *report.object_animation.refused.entry(why).or_default() += files.len();
+    // a wave of prototypes at a time has what depends on no other worked out on the install's threads, and is spawned
+    // in key order
+    let mut queue: std::collections::VecDeque<_> = prototypes.into_iter().collect();
+    while !queue.is_empty() {
+        let wave: Vec<(String, Prototype)> = queue
+            .drain(..threads.get().saturating_mul(2).min(queue.len()))
+            .collect();
+        let prepared =
+            primase_foundations::parallel::map(threads, &wave, |_, (key, proto)| prepare(key, proto))
+                .map_err(|e| invalid("FromSoftware model", 0, e.to_string()))?;
+        for ((key, proto), prepared) in wave.into_iter().zip(prepared) {
+            let Prepared {
+                identities,
+                collision,
+            } = prepared;
+            let mut slots = Vec::with_capacity(proto.materials.len());
+            for (m, identity) in proto.materials.into_iter().zip(identities) {
+                let identity = identity?;
+                let e = if let Some(e) = material_entities.get(&identity) {
+                    *e
+                } else {
+                    let e = world.spawn();
+                    world.insert(e, Name(m.mtd.clone()));
+                    if let Some(layered) = &m.layered {
+                        world.insert(e, layered.clone());
+                    }
+                    // linked to the bundle of the shader its definition (an MTD or a material binary) names, as read above
+                    if m.definition.is_some() {
+                        material_shaders.push((e, m.shader.clone()));
+                    }
+                    world.insert(e, m);
+                    material_entities.insert(identity, e);
+                    report.materials += 1;
+                    e
+                };
+                slots.push(e);
+            }
+            let far = key
+                .strip_prefix(&format!("{area}/"))
+                .is_some_and(|model| game.far_model(model));
+            if options.effect_lights && key.starts_with(&format!("{object}/")) {
+                let (dummies, left_out) = effect_lights::ModelDummies::of(&proto.model)
+                    .map_err(|e| invalid("FromSoftware model", 0, format!("{key}: {e}")))?;
+                report.effect_lights.dummies_left_out += left_out;
+                object_dummies.insert(key.clone(), dummies);
+            }
+            let e = world.spawn();
+            world.insert(e, Name(key.split_once('/').expect("key").1.to_owned()));
+            report.prototype_boxes.insert(e, proto.bounds);
+            world.insert(e, crate::components::models::SourceModel::new(proto.model));
+            world.insert(e, source::MaterialSlots(slots));
+            world.insert(e, source::PrototypeSource { id: key.clone(), far });
+            if key.starts_with(&format!("{object}/")) {
+                report.object_collision.models += 1;
+                report.object_animation.asked = options.object_animations;
+                if options.object_animations {
+                    let model = key.split_once('/').expect("key").1;
+                    match proto.animation {
+                        None => report.object_animation.still += 1,
+                        Some(bytes) => {
+                            report.object_animation.animated += 1;
+                            match animation::read_member(install.game, &bytes, decoder, model, &mut world) {
+                                Ok(read) => {
+                                    report.object_animation.bones += read.report.bones;
+                                    report.object_animation.clips += read.report.animations;
+                                    report.object_animation.events += read.report.events;
+                                    report.object_animation.tae_unmatched += read.report.tae_unmatched;
+                                    for (why, files) in read.report.refused {
+                                        *report.object_animation.refused.entry(why).or_default() +=
+                                            files.len();
+                                    }
+                                }
+                                Err(why) => {
+                                    report.object_animation.unreadable.push(format!("{model}: {why}"))
                                 }
                             }
-                            Err(why) => report.object_animation.unreadable.push(format!("{model}: {why}")),
                         }
                     }
                 }
             }
+            if let Some(collision) = collision {
+                let (files, tally) = collision?;
+                report.object_collision.absorb(tally);
+                report.object_collision.models_with_collision += 1;
+                world.insert(e, source::ObjectBodies { files });
+            }
+            proto_entities.insert(key, (e, far));
+            report.prototypes += 1;
+            report.far_prototypes += usize::from(far);
         }
-        if !proto.collision.is_empty() {
-            let files = proto
-                .collision
-                .iter()
-                .map(|(file, resolution, bytes)| {
-                    objects::bodies(file, *resolution, bytes, &mut report.object_collision)
-                        .map_err(|e| invalid("object collision", 0, format!("{key}: {file}: {e}")))
-                })
-                .collect::<Result<Vec<_>>>()?;
-            report.object_collision.models_with_collision += 1;
-            world.insert(e, source::ObjectBodies { files });
-        }
-        proto_entities.insert(key, (e, far));
-        report.prototypes += 1;
-        report.far_prototypes += usize::from(far);
     }
     world.insert_resource(source::TexturePayloads(payloads));
     world.insert_resource(source::ShaderPrograms(programs));

@@ -22,6 +22,19 @@ pub struct Report {
     pub unread_custom_primitives: usize,
 }
 
+impl Report {
+    /// Adds what a read of some prototypes' collision found (its counts of bodies and unread primitives) to this one's.
+    pub fn absorb(&mut self, other: Report) {
+        for (motion, n) in other.bodies_by_motion {
+            *self.bodies_by_motion.entry(motion).or_default() += n;
+        }
+        for (shape, n) in other.bodies_by_shape {
+            *self.bodies_by_shape.entry(shape).or_default() += n;
+        }
+        self.unread_custom_primitives += other.unread_custom_primitives;
+    }
+}
+
 /// An object's collision `file` (decoded `bytes`) of `resolution`: every body as stored, in the prototype's space.
 pub fn bodies(
     file: &str,
