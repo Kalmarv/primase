@@ -18,6 +18,10 @@ fail-fast = false
 # system trims it to a fraction of what the test commits. Remeasure when a heavy test changes.
 
 [[profile.default.overrides]]
+filter = "binary(effect_lights_census)"
+threads-required = 17
+
+[[profile.default.overrides]]
 filter = "binary(area_reader) | binary(normal_basis)"
 threads-required = 12
 
