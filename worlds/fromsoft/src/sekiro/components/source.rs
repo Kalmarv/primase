@@ -76,6 +76,10 @@ pub struct CollisionPart {
 /// reflection of the source's, so a stored triangle faces away from its stored winding), and per triangle its
 /// HitMtrlParam ID as the shape key binds it (-1: the key binds none). The parts name it in MSB order, of every hit
 /// filter. Selecting parts, mapping HitMtrl IDs to surfaces and cropping are `lower-fromsoft-collision`'s.
+///
+/// With [`crate::sekiro::Options::f_collision`] the file of the area's `f` collision binder for the same model
+/// (`f11_01_00_00_009500.hkx` beside `h11_01_00_00_009500.hkx`: one extern mesh body per stored body) is read too, as
+/// `f_triangles`, in the same frame.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct MapCollision {
     /// The member's file name (`h11_01_00_00_009500.hkx`).
@@ -83,6 +87,10 @@ pub struct MapCollision {
     pub parts: Vec<CollisionPart>,
     pub triangles: Vec<[[f32; 3]; 3]>,
     pub materials: Vec<i32>,
+    /// The triangles of the `f` binder's file for the same model, in the world frame like `triangles`, each in its
+    /// stored order: they store no shape key and no HitMtrl ID. Empty where the read did not ask for them or the
+    /// binder holds no file for the model.
+    pub f_triangles: Vec<[[f32; 3]; 3]>,
     /// Shape-key rows the file marks invalid (all ones): they identify no primitive.
     pub invalid_material_keys: usize,
     /// Compressed-mesh primitives the file marks dead.
@@ -140,9 +148,9 @@ impl Component for MapCollision {
             ..self.clone()
         })
     }
-    /// 36 bytes per triangle and 4 per material.
+    /// 36 bytes per triangle (the `f` ones included) and 4 per material.
     fn payload_bytes(&self) -> u64 {
-        self.triangles.len() as u64 * 36 + self.materials.len() as u64 * 4
+        (self.triangles.len() + self.f_triangles.len()) as u64 * 36 + self.materials.len() as u64 * 4
     }
     fn verify(&self, _e: Entity, _w: &primase_core::World) -> Result<(), String> {
         if self.materials.len() != self.triangles.len() {

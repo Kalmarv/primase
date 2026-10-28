@@ -5,7 +5,7 @@ use super::settings::{HitClass, HitFilters, Metres, joined};
 use crate::sekiro::source::{CollisionSource, MapCollision, ReadScope};
 use fromsoft_formats::Game;
 use primase_core::convert::PartScope;
-use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::state::{Clause, Condition};
 use primase_core::{Collision, Component, Entity, Name, Surfaces, Transform, World, world::Resource};
 use std::collections::{BTreeMap, BTreeSet};
@@ -245,7 +245,11 @@ pub(super) fn beyond(v: &[[f32; 3]; 3], (r, reach): ([f32; 4], f32)) -> bool {
 /// placed collision is ground); `water`, HitMtrl classes lowered into separate `water` soups with the `default`
 /// surface; `leave_out`, classes not lowered, counted (a class in both is refused); `reach`, leaving out, counted, the
 /// triangles whose centre lies more than that many metres outside the read region (`fromsoft.read_scope`), or `None`
-/// for no crop. Options, all required: `hit-filters=` and `water=`/`leave-out=` classes joined by `+` (empty: none),
+/// for no crop; `f-meshes`, whether the `f` binder's meshes the read brought in with the files
+/// ([`MapCollision::f_triangles`]; `Options::f_collision`) are lowered, into a soup of their own (`f`, `f_state<n>`
+/// with the file's condition) with the `default` surface, never into `game`: they store no HitMtrl, and are not known
+/// to be ground. Optional: absent is `off`, and they are counted as left out. Options, all required but `f-meshes`:
+/// `hit-filters=` and `water=`/`leave-out=` classes joined by `+` (empty: none),
 /// `reach=N|none`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LowerFromSoftCollision {
@@ -253,6 +257,20 @@ pub struct LowerFromSoftCollision {
     pub water: BTreeSet<HitClass>,
     pub leave_out: BTreeSet<HitClass>,
     pub reach: Option<Metres>,
+    pub f_meshes: FMeshes,
+}
+
+/// Whether `lower-fromsoft-collision` lowers the `f` binder's meshes (`f-meshes=`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FMeshes {
+    /// Not lowered, counted.
+    Off,
+    /// Lowered into the `f` soups.
+    On,
+}
+
+impl primase_core::pass::Choice for FMeshes {
+    const VALUES: &'static [(&'static str, Self)] = &[("off", FMeshes::Off), ("on", FMeshes::On)];
 }
 
 /// What a HitMtrl class's triangles become instead of ground.
@@ -272,6 +290,7 @@ impl LowerFromSoftCollision {
             water: HitClass::parse_set("water", g.required("water"))?,
             leave_out: HitClass::parse_set("leave-out", g.required("leave-out"))?,
             reach: Metres::parse_or_none("reach", g.required("reach"))?,
+            f_meshes: g.optional_choice::<FMeshes>("f-meshes").unwrap_or(FMeshes::Off),
         })
     }
 
@@ -313,6 +332,11 @@ pub const LOWER_FROMSOFT_COLLISION: PassSpec = PassSpec {
             "metres, at least 0: the triangles whose centre lies further outside the read region are left out \
              (counted), or none for no crop",
         ),
+        OptionSpec::optional_choice::<FMeshes>(
+            "f-meshes",
+            "lower the f collision binder's meshes (read with Options::f_collision) into soups of their own",
+            "off: they are left out, counted",
+        ),
     ],
     make: |g| Ok(Box::new(LowerFromSoftCollision::from_given(g)?)),
 };
@@ -322,12 +346,17 @@ impl Pass for LowerFromSoftCollision {
         "lower-fromsoft-collision"
     }
     fn options(&self) -> Options {
-        Options::from([
+        let mut options = Options::from([
             ("hit-filters".to_owned(), self.hit_filters.to_string()),
             ("water".to_owned(), joined(self.water.iter().copied())),
             ("leave-out".to_owned(), joined(self.leave_out.iter().copied())),
             ("reach".to_owned(), Metres::text_or_none(self.reach)),
-        ])
+        ]);
+        // an option a program may leave out is printed only when it is stated, so the pipelines that never state it print as before
+        if self.f_meshes == FMeshes::On {
+            options.insert("f-meshes".to_owned(), self.f_meshes.text().to_owned());
+        }
+        options
     }
     fn requires(&self) -> &[&'static str] {
         &[MapCollision::NAME]
@@ -352,7 +381,7 @@ impl Pass for LowerFromSoftCollision {
         true
     }
     fn approximates(&self) -> &'static str {
-        "triangles whose shape key binds no HitMtrl, and HitMtrl classes without a known surface, as the default surface"
+        "triangles whose shape key binds no HitMtrl, HitMtrl classes without a known surface and the f binder's meshes          (which store no HitMtrl), as the default surface"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         let crop = crop(world, self.reach)?;
@@ -374,8 +403,9 @@ impl Pass for LowerFromSoftCollision {
         let mut index = |name: &str| surfaces.index(name).map_err(|e| e.to_string());
         let mut solid = Collision::default();
         let mut water = Collision::default();
-        // soups of files present only in some states, by condition
-        let mut conditioned: BTreeMap<String, (Condition, Collision, Collision)> = BTreeMap::new();
+        let mut f_soup = Collision::default();
+        // soups of files present only in some states, by condition: ground, water and f meshes
+        let mut conditioned: BTreeMap<String, (Condition, Collision, Collision, Collision)> = BTreeMap::new();
         let mut consumed = Vec::new();
         for (e, record) in records {
             let clauses: Vec<Option<Clause>> = record
@@ -404,13 +434,18 @@ impl Pass for LowerFromSoftCollision {
                 );
                 continue;
             }
-            let (solid, water) = match super::any_of(&clauses) {
-                None => (&mut solid, &mut water),
+            let (solid, water, f_soup) = match super::any_of(&clauses) {
+                None => (&mut solid, &mut water, &mut f_soup),
                 Some(c) => {
-                    let entry = conditioned
-                        .entry(super::condition_key(&c))
-                        .or_insert_with(|| (c, Collision::default(), Collision::default()));
-                    (&mut entry.1, &mut entry.2)
+                    let entry = conditioned.entry(super::condition_key(&c)).or_insert_with(|| {
+                        (
+                            c,
+                            Collision::default(),
+                            Collision::default(),
+                            Collision::default(),
+                        )
+                    });
+                    (&mut entry.1, &mut entry.2, &mut entry.3)
                 }
             };
             for (vertices, &material) in record.triangles.iter().zip(&record.materials) {
@@ -430,6 +465,20 @@ impl Pass for LowerFromSoftCollision {
                     }
                 }
             }
+            for vertices in &record.f_triangles {
+                if self.f_meshes == FMeshes::Off {
+                    log.count("f-mesh triangles of lowered files, left out (f-meshes=off)", 1);
+                } else if crop.is_some_and(|c| beyond(vertices, c)) {
+                    log.count("triangles beyond the reach around the read region, left out", 1);
+                } else {
+                    push(f_soup, *vertices, index("default")?)?;
+                    log.approximate(
+                        "f-mesh triangles, which store no HitMtrl, given the default surface",
+                        1,
+                    );
+                    log.count("f-mesh triangles", 1);
+                }
+            }
             log.count("collision files lowered", 1);
             consumed.push(e);
         }
@@ -439,7 +488,8 @@ impl Pass for LowerFromSoftCollision {
         world.insert_resource(surfaces);
         attach(world, solid, "game", false, None, log);
         attach(world, water, "water", true, None, log);
-        for (n, (condition, solid, water)) in conditioned.into_values().enumerate() {
+        attach(world, f_soup, "f", false, None, log);
+        for (n, (condition, solid, water, f_soup)) in conditioned.into_values().enumerate() {
             log.count("soups present only in some world states", 1);
             attach(
                 world,
@@ -454,6 +504,14 @@ impl Pass for LowerFromSoftCollision {
                 water,
                 &format!("water_state{n}"),
                 true,
+                Some(&condition),
+                log,
+            );
+            attach(
+                world,
+                f_soup,
+                &format!("f_state{n}"),
+                false,
                 Some(&condition),
                 log,
             );
@@ -476,6 +534,7 @@ mod tests {
                 condition: None,
             }],
             triangles,
+            f_triangles: Vec::new(),
             materials,
             invalid_material_keys: 0,
             dead_primitives: 0,
@@ -642,6 +701,7 @@ mod tests {
             water: BTreeSet::new(),
             leave_out: BTreeSet::new(),
             reach: None,
+            f_meshes: FMeshes::Off,
         };
         pass.run(&mut w, &mut PassLog::default()).unwrap();
         assert_eq!(w.iter::<Condition>().count(), 0);
@@ -673,6 +733,7 @@ mod tests {
                 water: HitClass::set([21]).unwrap(),
                 leave_out: BTreeSet::new(),
                 reach: None,
+                f_meshes: FMeshes::Off,
             };
             let mut log = PassLog::default();
             pass.run(&mut w, &mut log).unwrap();
@@ -718,6 +779,7 @@ mod tests {
             water: BTreeSet::new(),
             leave_out: BTreeSet::new(),
             reach: None,
+            f_meshes: FMeshes::Off,
         };
         let mut quiet = PassLog::default();
         only_8.run(&mut w.clone(), &mut quiet).unwrap();
@@ -727,6 +789,7 @@ mod tests {
             water: BTreeSet::new(),
             leave_out: BTreeSet::new(),
             reach: None,
+            f_meshes: FMeshes::Off,
         };
         let mut log = PassLog::default();
         with_15.run(&mut w, &mut log).unwrap();
@@ -736,5 +799,64 @@ mod tests {
         );
         // the file's own triangles are lowered all the same
         assert_eq!(log.counts["collision files lowered"], 2);
+    }
+
+    /// A file's `f` meshes are lowered only when the program says so, into a soup of their own with the default surface:
+    /// never into ground, cropped like the rest, and counted either way.
+    #[test]
+    fn the_f_binders_meshes_are_a_soup_of_their_own_when_the_program_asks_and_left_out_otherwise() {
+        let with_f = || {
+            let mut w = world();
+            let (a, _) = w.iter::<MapCollision>().find(|(_, m)| m.file == "a.hkx").unwrap();
+            w.get_mut::<MapCollision>(a).unwrap().f_triangles = vec![NEAR, NEAR, FAR];
+            w
+        };
+        let options = |f: Option<&str>| {
+            let mut o = Options::from([
+                ("hit-filters".into(), "8".into()),
+                ("water".into(), "".into()),
+                ("leave-out".into(), "".into()),
+                ("reach".into(), "50".into()),
+            ]);
+            if let Some(f) = f {
+                o.insert("f-meshes".into(), f.into());
+            }
+            o
+        };
+        // absent is off: no f soup, the file's three f triangles counted as left out
+        let mut w = with_f();
+        let pass = LOWER_FROMSOFT_COLLISION.instance(&options(None)).unwrap();
+        assert!(!pass.options().contains_key("f-meshes"));
+        let mut log = PassLog::default();
+        pass.run(&mut w, &mut log).unwrap();
+        assert!(!soups(&w).contains_key("f"));
+        assert_eq!(
+            log.counts["f-mesh triangles of lowered files, left out (f-meshes=off)"],
+            3
+        );
+        // on: two f triangles inside the reach, one beyond it, all in the default surface and apart from the ground
+        let mut w = with_f();
+        let pass = LOWER_FROMSOFT_COLLISION.instance(&options(Some("on"))).unwrap();
+        assert_eq!(pass.options()["f-meshes"], "on");
+        let mut log = PassLog::default();
+        pass.run(&mut w, &mut log).unwrap();
+        let soups = soups(&w);
+        assert_eq!(soups["f"], ["default", "default"]);
+        assert_eq!(
+            soups["game"].len(),
+            4,
+            "the ground is what it was: 5 triangles, 1 beyond the reach"
+        );
+        assert_eq!(log.counts["f-mesh triangles"], 2);
+        assert_eq!(
+            log.approximations["f-mesh triangles, which store no HitMtrl, given the default surface"],
+            2
+        );
+        // anything but off or on is refused
+        assert!(
+            LOWER_FROMSOFT_COLLISION
+                .instance(&options(Some("maybe")))
+                .is_err()
+        );
     }
 }

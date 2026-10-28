@@ -11,7 +11,7 @@ use primase_core::convert::{
 };
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, Target};
 use primase_core::{Collision, Entity, Instance, Surfaces, Transform, World};
-use primase_fromsoft::sekiro::collision::LowerFromSoftCollision;
+use primase_fromsoft::sekiro::collision::{FMeshes, LowerFromSoftCollision};
 use primase_fromsoft::sekiro::objects::{ConvexBodies, ConvexSurface, LowerFromSoftObjectCollision};
 use primase_fromsoft::sekiro::settings::HitFilters;
 use primase_fromsoft::sekiro::source::{
@@ -40,6 +40,7 @@ fn world() -> (World, [Entity; 4]) {
                     condition: None,
                 }],
                 triangles: vec![tri(x), tri(x + 2.)],
+                f_triangles: Vec::new(),
                 materials: vec![104, 1],
                 invalid_material_keys: 0,
                 dead_primitives: 0,
@@ -155,6 +156,7 @@ fn convert(parts: &mut dyn PartSource) -> Vec<BTreeMap<String, Vec<Tri>>> {
                 water: BTreeSet::new(),
                 leave_out: BTreeSet::new(),
                 reach: None,
+                f_meshes: FMeshes::Off,
             }),
             Box::new(LowerFromSoftObjectCollision {
                 resolution: primase_fromsoft::sekiro::objects::ResolutionChoice::High,

@@ -40,6 +40,10 @@ pub struct Options {
     /// ([`crate::sekiro::source::MapRecords`]): off by default (the read keeps the parts, the collision, the lights
     /// and the spawn points, and counts the rest in its notices); `lower-fromsoft-map-records` lowers them.
     pub map_records: bool,
+    /// Whether each map collision file's partner in the area's `f` collision binder (the file of the same model, made
+    /// of extern meshes) is read with it, as [`crate::sekiro::source::MapCollision::f_triangles`]: off by default
+    /// (the read keeps the `h` binder's files only); `lower-fromsoft-collision{f-meshes=on}` lowers them.
+    pub f_collision: bool,
 }
 /// What a read of the object models' animation binders found.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -338,6 +342,11 @@ impl Report {
                 self.collision.unnamed_files,
                 NoticeKind::Selection,
                 "collision files of the area's binder no MSB part names, not read",
+            ),
+            (
+                self.collision.unpaired_f_files,
+                NoticeKind::Selection,
+                "f collision files whose model no read collision file names, not read",
             ),
             (
                 usize::from(self.states.is_none()),
@@ -1185,6 +1194,7 @@ pub fn read_game_area_staged(
         &area,
         &layout,
         states.as_mut(),
+        options.f_collision,
         &mut world,
     )?;
     stage("extras");

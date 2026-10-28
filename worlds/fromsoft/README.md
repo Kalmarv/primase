@@ -425,7 +425,10 @@ converts frames; it does not lower:
 - each high-resolution map collision file that MSB collision parts name, of every
   hit filter, is a `fromsoft.map_collision` entity: the naming parts (name, hit
   filter, clause with states read), every triangle in the world frame and its
-  HitMtrl ID as the shape key binds it (-1: none);
+  HitMtrl ID as the shape key binds it (-1: none); with `Options::f_collision`
+  the file of the same model in the area's `f` collision binder (`f<area>.hkxbhd`:
+  extern meshes, `hknpExternMeshShape` over `hkGeometry`, no HitMtrl) is read with
+  it, as `f_triangles` in the same frame;
 - each object prototype with collision carries every stored collision file with its
   resolution (`fromsoft.object_collision`: Sekiro's main HKX in the object's binder, high;
   Elden Ring's `aegnnn_mmm_h.hkx` and `aegnnn_mmm_l.hkx` in the asset's `_h`/`_l`
@@ -603,7 +606,11 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
   a surface counted by itself with its row's name, `class_name`); `water=` and
   `leave-out=` take HitMtrl classes (an ID modulo 100), `reach=N` crops N metres
   around the read region (every option required: empty classes for none, `reach=none`). The records it lowered are consumed; files only other
-  filters' parts name stay as source.
+  filters' parts name stay as source. `f-meshes=on` (optional; absent is `off`, the
+  triangles counted as left out) lowers the `f` meshes a read with `f_collision` brought
+  in into soups of their own (`f`, `f_state<n>`), never into `game`, with the `default`
+  surface (counted as an approximation: they store no HitMtrl); `tests/f_collision.rs`
+  checks them against the `game` soup of the same area.
 - `lower-fromsoft-object-collision{resolution=high|low|high-else-low,convex=tessellate|rounded:<metres>|leave-out}` places every
   placed object prototype's bodies of the files of the chosen resolution (a prototype
   without one is counted; extern shape instances are convex bodies of their own) with each placement into an `objects` soup
@@ -680,6 +687,7 @@ unless an option asks), **unread** (no reader opens it). A row's owner is the pr
 | Objects (Sekiro kind 1) and assets (Elden Ring kind 13) | Sekiro 1395 objbnds, Elden Ring 12657 geombnds (object census) | read; animations `object_animations` only, not lowered onto placements | `read/area.rs`, `read/animation.rs` / Objects; clips listed under Clips |
 | Enemies, player starts, dummy objects/assets/enemies, connect collisions (parts) | `PARTS` kinds | **dropped** without `Options::map_records`; with it, read as markers (kind = the part's word) with `fromsoft.unplaced_part` | `msb::MapLayout::unplaced_parts`, `lower-fromsoft-map-records` / Markers, Properties. An enemy's NPC row is read; its think/patrol/talk data is not |
 | Map collision, high resolution (`h<area>.hkxbhd`) | `FILES h<area>` | read | `read/collision.rs`, `lower-fromsoft-collision` / Collision |
+| Map collision, `f` binder (`f<area>.hkxbhd`: one extern mesh body per stored body) | Sekiro 1,145 files in 9 areas, Elden Ring 1,850 in 603 (`fromsoft-formats` `tests/extern_mesh_census.rs`) | read with `Options::f_collision` (off by default) as `MapCollision::f_triangles`, beside the `h` file of the same model | `read/collision.rs`, `lower-fromsoft-collision{f-meshes=on}` / Collision (group `f`) |
 | Map collision, low resolution (`l<area>.hkxbhd`) | `FILES l<area>` | unread (no option selects it) | none. Decided by the `FILES`/`MEMBERS` lines: the same Havok layout as the high file, if its members are `.hkx` |
 | Object and asset collision | Elden Ring: `object_animation_census`/collision census | read (high; Elden Ring's low where no high) | `read/objects.rs`, `lower-fromsoft-object-collision` / Collision |
 | Part collision (a character form's `_collidable.hkx`) | character census | read | `read/character.rs`, `lower-fromsoft-part-collision` / Collision |

@@ -11,7 +11,7 @@ use primase_foundations::compress::oodle::{Oodle, Version};
 use primase_fromsoft::materials::SkipClass;
 use primase_fromsoft::rigid::ApplyRigidSkinning;
 use primase_fromsoft::sekiro;
-use primase_fromsoft::sekiro::collision::LowerFromSoftCollision;
+use primase_fromsoft::sekiro::collision::{FMeshes, LowerFromSoftCollision};
 use primase_fromsoft::sekiro::convert::AreaReader;
 use primase_fromsoft::sekiro::extras::LowerFromSoftExtras;
 use primase_fromsoft::sekiro::lights::LowerFromSoftLights;
@@ -56,7 +56,8 @@ fn main() -> Result<()> {
     #[rustfmt::skip]
     let lower = Pipeline {
         passes: vec![
-            Box::new(LowerFromSoftCollision { hit_filters, water: water.clone(), leave_out: leave_out.clone(), reach }),
+            Box::new(LowerFromSoftCollision { hit_filters, water: water.clone(), leave_out: leave_out.clone(), reach,
+                f_meshes: FMeshes::Off }),
             Box::new(LowerFromSoftObjectCollision { resolution: ResolutionChoice::High, convex: ConvexBodies::Tessellate, leave_out: &water | &leave_out,
                 leave_out_motion: [2].into(), convex_surface: ConvexSurface::Render, reach }),
             Box::new(DropFromSoftFar),

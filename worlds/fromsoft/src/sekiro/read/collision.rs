@@ -21,6 +21,17 @@ pub struct Report {
     pub parts_by_filter: BTreeMap<u8, usize>,
     /// Files of the binder no MSB collision part names: not read.
     pub unnamed_files: usize,
+    /// With `f_collision`: whether the area has an `f` collision binder.
+    pub f_binder: bool,
+    /// With `f_collision`: the `f` binder's files read (one per read `h` file that has a file of the same model).
+    pub f_files: usize,
+    /// With `f_collision`: the read `h` files whose `f` file holds no triangle (it counts in `f_files`).
+    pub empty_f_files: Vec<String>,
+    /// With `f_collision`: files of the `f` binder no read `h` file pairs with (no MSB part names their model): not
+    /// read.
+    pub unpaired_f_files: usize,
+    /// With `f_collision`: the triangles of the `f` files read ([`MapCollision::f_triangles`]).
+    pub f_triangles: usize,
     pub triangles: usize,
     /// Triangles whose shape key binds no HitMtrl.
     pub unbound_triangles: usize,
@@ -61,6 +72,7 @@ fn collision_file(area: &str, model: &str) -> Option<String> {
 /// entities in file-name order; with `states`, each part's clause. An area whose MSB has no collision part has nothing
 /// to read, and its binder is not opened: Elden Ring's m60_22_22_01 holds three map pieces and no collision part, and
 /// no archive holds an `h60_22_22_01.hkxbhd`.
+#[allow(clippy::too_many_arguments)]
 pub fn read(
     archive: &Archive,
     decoder: &Decoder<'_>,
@@ -68,6 +80,7 @@ pub fn read(
     area: &str,
     layout: &MapLayout,
     mut states: Option<&mut super::states::States>,
+    f_collision: bool,
     world: &mut World,
 ) -> Result<Report> {
     let mut report = Report::default();
@@ -117,6 +130,12 @@ pub fn read(
         .map(|o| o.matrix().map(crate::pose::placed))
         .transpose()?
         .unwrap_or(Transform::IDENTITY);
+    let mut f_binder = if f_collision {
+        FBinder::read(archive, decoder, folder, area)?
+    } else {
+        None
+    };
+    report.f_binder = f_binder.is_some();
     let mut files = binder
         .files
         .iter()
@@ -138,6 +157,23 @@ pub fn read(
         for shape in &raw.unread_bodies {
             *report.unread_bodies.entry(shape.clone()).or_default() += 1;
         }
+        let to_world = |triangles: Vec<[[f32; 3]; 3]>| -> Vec<[[f32; 3]; 3]> {
+            triangles
+                .into_iter()
+                .map(|t| t.map(|v| transform.apply(FRAME.point(v))))
+                .collect()
+        };
+        let f_triangles = match f_binder.as_mut().map(|f| f.take(&name)).transpose()?.flatten() {
+            Some(soup) => {
+                report.f_files += 1;
+                report.f_triangles += soup.triangles.len();
+                if soup.triangles.is_empty() {
+                    report.empty_f_files.push(name.clone());
+                }
+                to_world(soup.triangles)
+            }
+            None => Vec::new(),
+        };
         let e = world.spawn();
         world.insert(e, Name(name.clone()));
         world.insert(
@@ -145,11 +181,8 @@ pub fn read(
             MapCollision {
                 file: name,
                 parts,
-                triangles: raw
-                    .triangles
-                    .into_iter()
-                    .map(|t| t.map(|v| transform.apply(FRAME.point(v))))
-                    .collect(),
+                triangles: to_world(raw.triangles),
+                f_triangles,
                 materials: raw.materials,
                 invalid_material_keys: raw.invalid_material_keys,
                 dead_primitives: raw.dead_primitives,
@@ -158,7 +191,60 @@ pub fn read(
         );
     }
     report.missing_files = named.into_keys().collect();
+    report.unpaired_f_files = f_binder.map_or(0, |f| f.files.len());
     Ok(report)
+}
+
+/// The members of an area's `f` collision binder (`f<area>.hkxbhd`, absent from some areas), decoded, by file name:
+/// each is the extern mesh of the `h` file of the same model ([`collision::read_map`] reads it).
+struct FBinder {
+    files: BTreeMap<String, Vec<u8>>,
+    compendium: Option<Compendium>,
+}
+
+impl FBinder {
+    /// The area's `f` binder, or `None` where the archive holds none.
+    fn read(archive: &Archive, decoder: &Decoder<'_>, folder: &str, area: &str) -> Result<Option<Self>> {
+        let base = format!("{folder}/f{}", &area[1..]);
+        let (header, payload) = (format!("{base}.hkxbhd"), format!("{base}.hkxbdt"));
+        if !archive.contains(&header) {
+            return Ok(None);
+        }
+        let binder = Binder::read_split(
+            &archive.read(&header, decoder)?,
+            &archive.read(&payload, decoder)?,
+            decoder,
+        )?;
+        let mut files = BTreeMap::new();
+        let mut compendium = None;
+        for member in &binder.files {
+            let name = leaf(member.name.as_deref().unwrap_or(""));
+            if name.ends_with(".compendium") {
+                compendium = Some(Compendium::read(&decoder.decode_if_dcx(&member.bytes)?)?);
+            } else if name.ends_with(".hkx") {
+                files.insert(name, decoder.decode_if_dcx(&member.bytes)?);
+            }
+        }
+        Ok(Some(FBinder { files, compendium }))
+    }
+
+    /// The triangles of the file for the `h` file `h_name` (`h<area>_<model>.hkx`: `f<area>_<model>.hkx`), if the
+    /// binder holds one; every body of it must be an extern mesh.
+    fn take(&mut self, h_name: &str) -> Result<Option<collision::Soup>> {
+        let f_name = format!("f{}", h_name.strip_prefix('h').unwrap_or(h_name));
+        let Some(bytes) = self.files.remove(&f_name) else {
+            return Ok(None);
+        };
+        let soup = collision::read_map(&bytes, self.compendium.as_ref())?;
+        if let Some(shape) = soup.unread_bodies.first() {
+            return Err(invalid(
+                "collision",
+                0,
+                format!("{f_name}: a body of {shape}, not an extern mesh"),
+            ));
+        }
+        Ok(Some(soup))
+    }
 }
 
 #[cfg(test)]
@@ -188,6 +274,7 @@ mod tests {
             "m60_22_22_01",
             &layout,
             None,
+            false,
             &mut world,
         )
         .unwrap();
