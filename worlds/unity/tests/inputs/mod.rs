@@ -8,6 +8,8 @@ primase_testdata::inputs! {
     games {
         Skatebird = "skatebird",
         Sledding = "sledding",
+        Peak = "peak",
+        Bigwalk = "bigwalk",
     }
     installs {
         Skatebird {
@@ -17,6 +19,16 @@ primase_testdata::inputs! {
         },
         Sledding {
             about: "Sledding Game's install folder (`Sledding Game_Data`: a Unity 6000.3 player)",
+            source: "the user's own install",
+            gate: true,
+        },
+        Peak {
+            about: "PEAK's install folder (`PEAK_Data`: a Unity 6000.3.15f1 player with level AssetBundles)",
+            source: "the user's own install",
+            gate: true,
+        },
+        Bigwalk {
+            about: "Big Walk's install folder (`Big Walk_Data`: a Unity 6000.3.17f1 player in one `data.unity3d` bundle)",
             source: "the user's own install",
             gate: true,
         },
@@ -50,6 +62,18 @@ primase_testdata::inputs! {
             status: Live,
             gate: true,
             about: r#"a Unity player's data folder (`<Game>_Data`, holding `globalgamemanagers` and the `levelN` / `*.assets` files)"#,
+            source: r#"the user's own install"#,
+        },
+        Query::Install(Game::Peak, Some("PEAK_Data")) => {
+            status: Live,
+            gate: true,
+            about: r#"PEAK's data folder (`PEAK_Data`: loose player files and `StreamingAssets/maps`, the AssetBundles of its 208 levels), one level of it read by `worlds/unity/tests/bundles.rs`"#,
+            source: r#"the user's own install"#,
+        },
+        Query::Install(Game::Bigwalk, Some("Big Walk_Data")) => {
+            status: Live,
+            gate: true,
+            about: r#"Big Walk's data folder (`Big Walk_Data`: its `data.unity3d` holds the player's own serialized files), read by `worlds/unity/tests/bundles.rs`"#,
             source: r#"the user's own install"#,
         },
         Query::Oracle(OracleSet::Port, Game::Sledding, "level1") => {

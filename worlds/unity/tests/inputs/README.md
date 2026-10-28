@@ -12,6 +12,8 @@ What this crate's real-data tests read, as tests/inputs/mod.rs declares them: th
 | --- | --- | --- | --- |
 | `installs.skatebird` | yes | SkateBIRD's install folder (`SkateBIRD_Data`: a Unity 2019.4.20f1 player) | the user's own install |
 | `installs.sledding` | yes | Sledding Game's install folder (`Sledding Game_Data`: a Unity 6000.3 player) | the user's own install |
+| `installs.peak` | yes | PEAK's install folder (`PEAK_Data`: a Unity 6000.3.15f1 player with level AssetBundles) | the user's own install |
+| `installs.bigwalk` | yes | Big Walk's install folder (`Big Walk_Data`: a Unity 6000.3.17f1 player in one `data.unity3d` bundle) | the user's own install |
 | `tools.unity_tpk` | yes | a type tree package (TPK, uncompressed or LZ4) with the class layouts for the Unity players read | input data: class layouts for the player's Unity version (repacked with a script kept with the private oracle tools) |
 | `scratch.root` | - | where real-data tests write their outputs (the OS temporary folder when unset) | - |
 
@@ -28,6 +30,8 @@ What this crate's real-data tests read, as tests/inputs/mod.rs declares them: th
 | --- | --- | --- | --- | --- |
 | `installs.skatebird/SkateBIRD_Data` | live | yes | SkateBIRD's data folder (`SkateBIRD_Data`, a Unity 2019.4.20f1 player: SerializedFile version 21 containers), read with `tools.unity_tpk`; `worlds/unity/tests/serialized_census.rs`, `worlds/skatebird/tests/markers.rs` | the user's own install |
 | `installs.sledding/Sledding Game_Data` | live | yes | a Unity player's data folder (`<Game>_Data`, holding `globalgamemanagers` and the `levelN` / `*.assets` files) | the user's own install |
+| `installs.peak/PEAK_Data` | live | yes | PEAK's data folder (`PEAK_Data`: loose player files and `StreamingAssets/maps`, the AssetBundles of its 208 levels), one level of it read by `worlds/unity/tests/bundles.rs` | the user's own install |
+| `installs.bigwalk/Big Walk_Data` | live | yes | Big Walk's data folder (`Big Walk_Data`: its `data.unity3d` holds the player's own serialized files), read by `worlds/unity/tests/bundles.rs` | the user's own install |
 | `oracles.port.sledding/level1` | live | yes | optional: another exporter's output folder for that game's `level1` and its materials joined to their objects (JSON; schema in `worlds/unity/tests/lower.rs`) | another exporter's output: an appearance baseline, not a reading of the source |
 | `oracles.port.sledding/materials.json` | live | yes | optional: another exporter's output folder for that game's `level1` and its materials joined to their objects (JSON; schema in `worlds/unity/tests/lower.rs`) | another exporter's output, joined by a script kept with the private oracle tools |
 | `oracles.port.sledding/terrain` | live | yes | optional: that exporter's terrain pieces unpacked (raw arrays, `index.json`, its layer means; schema in `worlds/unity/tests/terrain.rs`) | another exporter's terrain, unpacked by a script kept with the private oracle tools |

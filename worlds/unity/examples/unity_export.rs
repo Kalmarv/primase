@@ -1,20 +1,26 @@
 //! A Unity level end to end: read, lowered, written as one GLB and as web tiles.
 //!
-//! Usage: `unity_export <Game>_Data <type tree package> <level> <output folder> [--web] [--ktx2] [--quality <level>]`.
+//! Usage: `unity_export <Game>_Data <type tree package> <level> <output folder> [--web] [--ktx2] [--quality <level>]
+//! [--bundle <file>]...`.
 //! `--quality` names the quality level whose skin weights limit the skinned meshes, needed where the game's levels differ.
+//! `--bundle` adds a UnityFS bundle's serialized files to the player: a level of an AssetBundle (PEAK's
+//! `levels0-31.assetbundle`: the level is the node's name, `BuildPlayer-Level_5`) is read with the files its pointers
+//! name (its shared assets, other levels' shared assets in the bundle) and not the bundle's other levels; a bundle
+//! that has no node of the level's name (Big Walk's `data.unity3d`, the player's own files) is read whole.
 //! Writes `<output>/<level>.glb`; with `--web`, the web tile set in `<output>/web` (`--ktx2`: textures as KTX2).
 //! Prints every pass's counts and approximations. A ReSkate map of a Unity level is a program's recipe (raising,
 //! surfaces, spawn and travel points are its choices), composed with `primase-reskate` in the consumer program.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use primase_core::World;
 use primase_core::pass::{Pass, PassLog, PassManager, PassRegistry, Pipeline, RunReport};
 use primase_unity::level::{LevelOptions, read_level_with};
 use unity_formats::TypeTreePackage;
-use unity_formats::player::Player;
+use unity_formats::bundle::Bundle;
+use unity_formats::player::{BundleSpec, NodeSelection, Player};
 
-const USAGE: &str = "usage: unity_export <Game>_Data <type tree package> <level> <output folder> [--web] [--ktx2]                      [--quality <level>]";
+const USAGE: &str = "usage: unity_export <Game>_Data <type tree package> <level> <output folder> [--web] [--ktx2]                      [--quality <level>] [--bundle <file>]...";
 
 fn show(pass: &str, log: &PassLog) {
     println!("{pass}: {:?}", log.counts);
@@ -24,7 +30,8 @@ fn show(pass: &str, log: &PassLog) {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (mut paths, mut web, mut ktx2, mut quality) = (Vec::new(), false, false, None);
+    let (mut paths, mut web, mut ktx2, mut quality, mut bundle_files) =
+        (Vec::new(), false, false, None, Vec::<PathBuf>::new());
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -36,6 +43,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .ok_or_else(|| format!("--quality needs a level; {USAGE}"))?,
                 )
             }
+            "--bundle" => bundle_files.push(
+                args.next()
+                    .ok_or_else(|| format!("--bundle needs a file; {USAGE}"))?
+                    .into(),
+            ),
             _ if arg.starts_with("--") => return Err(format!("unknown option {arg}; {USAGE}").into()),
             _ => paths.push(arg),
         }
@@ -47,10 +59,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("--ktx2 needs --web; {USAGE}").into());
     }
     let out = Path::new(out);
-    let player = Player::open(Path::new(data), TypeTreePackage::parse(&std::fs::read(tpk)?)?)?;
+    // the files of a player are named in lower case
+    let file = level.to_lowercase();
+    // a bundle holding the level as a node is read for that node and the files it points at, others whole
+    let mut seeds: Vec<Option<String>> = Vec::new();
+    for path in &bundle_files {
+        let bundle = Bundle::open(path)?;
+        seeds.push(
+            bundle
+                .nodes()
+                .iter()
+                .find(|n| {
+                    n.is_serialized() && n.path.rsplit('/').next().unwrap_or(&n.path).to_lowercase() == file
+                })
+                .map(|n| n.path.clone()),
+        );
+    }
+    let closures: Vec<[&str; 1]> = seeds.iter().flatten().map(|s| [s.as_str()]).collect();
+    let mut next = closures.iter();
+    let specs: Vec<BundleSpec> = bundle_files
+        .iter()
+        .zip(&seeds)
+        .map(|(path, seed)| BundleSpec {
+            path,
+            nodes: match seed {
+                Some(_) => NodeSelection::Closure(next.next().map_or(&[], |c| c.as_slice())),
+                None => NodeSelection::All,
+            },
+        })
+        .collect();
+    let player = Player::open_with_bundles(
+        Path::new(data),
+        TypeTreePackage::parse(&std::fs::read(tpk)?)?,
+        &specs,
+    )?;
     let mut w = World::new();
     let started = std::time::Instant::now();
-    let report = read_level_with(&player, level, &LevelOptions { quality }, &mut w)?;
+    let report = read_level_with(&player, &file, &LevelOptions { quality }, &mut w)?;
     println!(
         "read {level}: {} renderers, {} tree renderers, {} prototypes, {} primitives, {} materials, {} \
          textures, {} terrains, {} lights (sun named: {}), {} colliders ({} by trees); axes {:?}, conditioned {:?}, \n         LODGroups {:?}, {} LOD forms",
