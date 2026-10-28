@@ -102,6 +102,7 @@ mod tests {
                 description: String::new(),
                 textures: vec![],
                 block_lengths: vec![],
+                padding: vec![],
                 parameters: vec![fromsoft_formats::mtd::Parameter {
                     name: "GXFT_SATStaticSwitch".into(),
                     value: Value::Int(vec![switch]),

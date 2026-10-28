@@ -1,6 +1,8 @@
-//! Every Kraken DCX envelope in a game's archives (`installs.sekiro`; `installs.elden` with `keys.elden`): the game's Oodle 6
-//! library and oozextract, the decoder where there is no game library, decode each to the same bytes. A stream oozextract
-//! refuses is a failure named by archive entry. The game's library is needed, so this runs where it exists (Windows).
+//! Every Kraken DCX envelope in a game's archives (`installs.sekiro`; `installs.elden` with `keys.elden`): its payload walks
+//! exactly ([`oodle_framing::walk`]) in blocks that each restart the decoder, Kraken or LZB16, and the game's Oodle 6
+//! library and oozextract, the decoder where there is no game library, decode it to the same bytes. A stream that is
+//! framed otherwise or that oozextract refuses is a failure named by archive entry. The game's library is needed, so this
+//! runs where it exists (Windows).
 //!
 //! `[run] gate = 'smoke'` checks a seeded sample (one entry in sixteen), `'full'` every entry. The debug key `oodle.dump`
 //! names a folder under the scratch root where the payload and the library's output of each failing entry are kept.
@@ -19,6 +21,7 @@ use fromsoft_formats::dcx::{Compression, Envelope};
 use inputs::{Depth, Game as Data, OracleSet, Tool, debug, depth, oracle, scratch, seed, tool};
 use primase_foundations::compress::Decompressor;
 use primase_foundations::compress::oodle::{Oodle, Version};
+use primase_foundations::compress::oodle_framing::{self, DecoderType};
 use primase_foundations::compress::reference;
 use primase_testdata::gate::{GateReport, Tolerance};
 mod common;
@@ -27,6 +30,27 @@ type BoxError = Box<dyn std::error::Error>;
 
 /// The sample's stride in smoke mode.
 const STRIDE: u64 = 16;
+
+/// How a payload's framing differs from that of every Kraken payload of both games: blocks that consume exactly the
+/// payload (the walk also refuses the checksum bit), each restarting the decoder, Kraken or LZB16 only.
+fn framing_fault(payload: &[u8], decoded_size: usize) -> Option<String> {
+    let framing = match oodle_framing::walk(payload, decoded_size) {
+        Ok(framing) => framing,
+        Err(e) => return Some(e.to_string()),
+    };
+    if framing.restart_bits() != framing.block_count() {
+        return Some(format!(
+            "{} of {} blocks restart the decoder",
+            framing.restart_bits(),
+            framing.block_count()
+        ));
+    }
+    framing
+        .decoders()
+        .into_iter()
+        .find(|d| !matches!(d, DecoderType::Kraken | DecoderType::Lzb16))
+        .map(|d| format!("a {d:?} block"))
+}
 
 fn gate(game: Game, data: Data) -> std::result::Result<(), BoxError> {
     let Some(archive) = common::archive(game)? else {
@@ -52,7 +76,7 @@ fn gate(game: Game, data: Data) -> std::result::Result<(), BoxError> {
     let smoke = depth() == Depth::Smoke;
     println!("depth {} seed {seed}", if smoke { "smoke" } else { "full" });
     let mut report = GateReport::new(
-        format!("{game:?} KRAK DCX: DLL 6 vs oozextract"),
+        format!("{game:?} KRAK DCX: framing, DLL 6 vs oozextract"),
         Tolerance::Exact,
     );
     let mut streams = 0usize;
@@ -73,6 +97,10 @@ fn gate(game: Game, data: Data) -> std::result::Result<(), BoxError> {
             entry.shard,
             names.get(&hash).map_or("?", String::as_str)
         );
+        if let Some(fault) = framing_fault(envelope.payload, envelope.decoded_size) {
+            report.fail(item, format!("framing: {fault}"));
+            continue;
+        }
         let expected = dll.decompress(envelope.payload, envelope.decoded_size)?;
         match reference::decode(envelope.payload, envelope.decoded_size) {
             Ok(decoded) if decoded == expected => report.record(item, 0.),

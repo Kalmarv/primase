@@ -49,6 +49,7 @@ fn mtd(parameters: Vec<(&str, M)>) -> MaterialDefinition {
             extra: Vec::new(),
         }],
         block_lengths: Vec::new(),
+        padding: Vec::new(),
     }
 }
 

@@ -1197,6 +1197,7 @@ mod tests {
                 parameters: vec![],
                 textures: vec![],
                 block_lengths: vec![],
+                padding: vec![],
             },
             bindings: BTreeMap::from([
                 ("Texture2D_8_AlbedoMap".into(), binding([0.5, 0.25])),

@@ -9,6 +9,7 @@ fn definition() -> MaterialDefinition {
         shader: "M[Multiple].sps".into(),
         description: String::new(),
         block_lengths: vec![],
+        padding: vec![],
         parameters: vec![Parameter {
             name: "GXFT_SATStaticSwitch".into(),
             value: Value::Int(vec![0]),

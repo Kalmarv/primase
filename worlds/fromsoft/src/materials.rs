@@ -466,6 +466,7 @@ mod tests {
                 parameters,
                 textures: Vec::new(),
                 block_lengths: Vec::new(),
+                padding: Vec::new(),
             })),
             gx: Vec::new(),
             shader: String::new(),

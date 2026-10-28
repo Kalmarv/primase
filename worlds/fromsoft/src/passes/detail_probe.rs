@@ -135,6 +135,7 @@ impl ProgramProbe {
                 parameters: Vec::new(),
                 textures: Vec::new(),
                 block_lengths: Vec::new(),
+                padding: Vec::new(),
             },
             bindings: BTreeMap::new(),
         }

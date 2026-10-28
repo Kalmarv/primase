@@ -481,6 +481,7 @@ mod tests {
                     description: String::new(),
                     textures: vec![],
                     block_lengths: vec![],
+                    padding: vec![],
                     parameters: vec![fromsoft_formats::mtd::Parameter {
                         name: "float_2".into(),
                         value: fromsoft_formats::mtd::Value::Float(vec![0.5]),

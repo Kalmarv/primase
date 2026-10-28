@@ -479,6 +479,8 @@ mod tests {
                     consumed: b["consumed"].as_u64().unwrap() as usize,
                 })
                 .collect(),
+            // the oracle predates the field; no Sekiro MTD has non-zero padding
+            padding: Vec::new(),
         };
         let source = crate::materials::resolve(
             &fromsoft_formats::flver::Material {
@@ -504,8 +506,10 @@ mod tests {
         );
         // the oracle predates Binding::available (the area's catalog holding the texture): the catalog above holds
         // every texture, so each binding is available; and Binding::address (the addressing the FLVER texture record
-        // stores): the records built above state none, so each is unstated on both axes
+        // stores): the records built above state none, so each is unstated on both axes; and MaterialDefinition::padding
+        // (non-zero alignment padding): no Sekiro MTD has any
         let mut expected = src["layered"].clone();
+        expected["definition"]["padding"] = serde_json::json!([]);
         for binding in expected["bindings"].as_object_mut().unwrap().values_mut() {
             binding["available"] = serde_json::Value::Bool(true);
             binding["address"] = serde_json::json!([null, null]);
@@ -628,6 +632,7 @@ mod tests {
                 parameters: vec![],
                 textures: vec![],
                 block_lengths: vec![],
+                padding: vec![],
             },
             bindings: BTreeMap::new(),
         });

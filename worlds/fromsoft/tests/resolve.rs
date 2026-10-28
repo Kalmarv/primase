@@ -117,6 +117,7 @@ fn material() -> LayeredMaterial {
                 texture_kind("A_Texture2D_2_NormalMap"),
             ],
             block_lengths: Vec::new(),
+            padding: Vec::new(),
         },
         bindings: BTreeMap::from([
             (
@@ -2185,6 +2186,7 @@ fn a_fixed_function_materials_textures_are_bound_by_their_kind_names() {
             ],
             textures: vec![texture_kind("g_DiffuseTexture"), texture_kind("g_BumpmapTexture")],
             block_lengths: Vec::new(),
+            padding: Vec::new(),
         },
         bindings: BTreeMap::from([
             ("g_DiffuseTexture".into(), bound("brick_a", [2., 3.], [None; 2])),

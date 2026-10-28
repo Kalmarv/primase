@@ -14,15 +14,15 @@ mod inputs;
 use fromsoft_formats::dcx::{Compression, Envelope};
 use inputs::{Game, OracleSet, Tool, oracle, tool};
 use primase_foundations::compress::oodle::{Oodle, Version};
+use primase_foundations::compress::oodle_framing::{self, BLOCK_SIZE, DecoderType};
 use primase_foundations::compress::reference;
 use primase_foundations::compress::{Compressor, Decompressor};
 use primase_testdata::gate::{GateReport, Tolerance};
 
 type BoxError = Box<dyn std::error::Error>;
 
-/// Kraken's output quantum: each starts a fresh decoder.
-const QUANTUM: usize = 262144;
-/// One quantum of a KRAK payload: its bytes (header included), its output size, and whether it is stored.
+/// One quantum of a KRAK payload (a Kraken block holds one): its bytes (block header included), its output size, and
+/// whether it is stored.
 struct Quantum<'a> {
     bytes: &'a [u8],
     size: usize,
@@ -38,45 +38,26 @@ fn krak_payload(bytes: &[u8]) -> Result<(usize, &[u8]), BoxError> {
     Ok((envelope.decoded_size, envelope.payload))
 }
 
-/// The payload's quanta, each independent (a decoder restart, no checksum): a Kraken block (`8c 06` and a
-/// three-byte compressed-size header) or a stored one (`cc 06` and the quantum's bytes as they are).
+/// The payload's quanta, each independent: its blocks as [`oodle_framing::walk`] frames them (which refuses the checksum
+/// bit and bytes left after the last block), every one a Kraken block that restarts the decoder, compressed or stored.
 fn quanta(src: &[u8], expected: usize) -> std::result::Result<Vec<Quantum<'_>>, BoxError> {
-    let mut out = Vec::new();
-    let mut pos = 0;
-    for i in 0..expected.div_ceil(QUANTUM) {
-        let start = pos;
-        let size = (expected - i * QUANTUM).min(QUANTUM);
-        let stored = match src.get(pos..pos + 2) {
-            Some([0x8c, 0x06]) => false,
-            Some([0xcc, 0x06]) => true,
-            _ => return Err("gate requires independent Kraken or stored quantum, no checksum".into()),
-        };
-        pos += 2;
-        if stored {
-            pos += size;
-        } else {
-            let header = src.get(pos..pos + 3).ok_or("short quantum header")?;
-            let v = (usize::from(header[0]) << 16) | (usize::from(header[1]) << 8) | usize::from(header[2]);
-            pos += 3;
-            pos += if v & 0x3ffff == 0x3ffff {
-                if v >> 18 != 1 {
-                    return Err("unknown quantum special header".into());
-                }
-                1
-            } else {
-                (v & 0x3ffff) + 1
-            };
-        }
-        out.push(Quantum {
-            bytes: src.get(start..pos).ok_or("short quantum payload")?,
-            size,
-            stored,
-        });
-    }
-    if pos != src.len() {
-        return Err("trailing quantum bytes".into());
-    }
-    Ok(out)
+    let framing = oodle_framing::walk(src, expected)?;
+    let ends = framing.blocks.iter().skip(1).map(|b| b.offset).chain([src.len()]);
+    framing
+        .blocks
+        .iter()
+        .zip(ends)
+        .map(|(block, end)| {
+            if !block.restart || block.decoder != DecoderType::Kraken {
+                return Err("gate requires independent Kraken or stored quantum".into());
+            }
+            Ok(Quantum {
+                bytes: src.get(block.offset..end).ok_or("block outside the payload")?,
+                size: block.decoded,
+                stored: block.stored,
+            })
+        })
+        .collect()
 }
 
 #[test]
@@ -113,7 +94,7 @@ fn loose_krak_dcx() -> std::result::Result<(), BoxError> {
         let (expected, src) = krak_payload(&b).map_err(|e| format!("{}: {e}", file.display()))?;
         let got = dll.decompress(src, expected)?;
         let quanta = quanta(src, expected).map_err(|e| format!("{}: {e}", file.display()))?;
-        for (i, (quantum, reference)) in quanta.iter().zip(got.chunks(QUANTUM)).enumerate() {
+        for (i, (quantum, reference)) in quanta.iter().zip(got.chunks(BLOCK_SIZE)).enumerate() {
             if quantum.stored {
                 stored.compare_bytes(
                     format!("{}/quantum/{i}", file.display()),

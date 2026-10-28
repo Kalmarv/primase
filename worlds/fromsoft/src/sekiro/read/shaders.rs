@@ -347,6 +347,7 @@ mod tests {
                 }],
                 textures: Vec::new(),
                 block_lengths: Vec::new(),
+                padding: Vec::new(),
             },
             bindings: BTreeMap::new(),
         };
@@ -390,6 +391,7 @@ mod tests {
                 parameters: Vec::new(),
                 textures: Vec::new(),
                 block_lengths: Vec::new(),
+                padding: Vec::new(),
             })),
         };
         let stored = ShaderBundle {

@@ -79,6 +79,7 @@ fn material() -> LayeredMaterial {
                 .collect(),
             textures: Vec::new(),
             block_lengths: Vec::new(),
+            padding: Vec::new(),
         },
         bindings: Default::default(),
     }

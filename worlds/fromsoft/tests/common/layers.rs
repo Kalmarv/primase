@@ -72,6 +72,7 @@ use fromsoft_formats::{flver, mtd};
         }],
         textures: vec![],
         block_lengths: vec![],
+        padding: vec![],
     };
     let material = materials::resolve(&source, Some(&definition), |_| true);
     let mut reference = serde_json::json!({"mtd":"test", "bindings":[

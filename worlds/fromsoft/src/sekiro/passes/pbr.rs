@@ -1044,6 +1044,7 @@ mod tests {
                 parameters: vec![],
                 textures: vec![],
                 block_lengths: vec![],
+                padding: vec![],
             },
             bindings: BTreeMap::new(),
         });
@@ -1163,6 +1164,7 @@ mod tests {
                 declared("Texture2D_4_MetallicMap"),
             ],
             block_lengths: vec![],
+            padding: vec![],
         };
         let m = crate::materials::resolve(
             &fromsoft_formats::flver::Material {

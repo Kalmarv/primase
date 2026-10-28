@@ -23,6 +23,7 @@ fn source(shader: &str) -> materials::Material {
         description: String::new(),
         parameters: vec![],
         block_lengths: vec![],
+        padding: vec![],
         textures: slots
             .iter()
             .map(|(kind, _)| Slot {

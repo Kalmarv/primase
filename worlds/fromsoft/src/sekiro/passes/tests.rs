@@ -84,6 +84,7 @@ fn layered(skip: Option<materials::SkipClass>) -> Material {
             parameters: vec![],
             textures: vec![],
             block_lengths: vec![],
+            padding: vec![],
         },
         bindings: BTreeMap::new(),
     });
@@ -294,6 +295,7 @@ fn a_lowered_material_carries_what_its_source_class_states_about_its_surfaces() 
                 parameters,
                 textures: vec![],
                 block_lengths: vec![],
+                padding: vec![],
             }),
             |_| false,
         )
@@ -385,6 +387,7 @@ fn sekiros_rivers_and_waterfalls_are_water_by_their_shader_family() {
                 parameters: vec![],
                 textures: vec![],
                 block_lengths: vec![],
+                padding: vec![],
             }),
             |_| false,
         )
@@ -430,6 +433,7 @@ fn an_additive_blend_is_a_light_volume_in_sekiro_and_an_additive_surface_in_elde
                     }],
                     textures: vec![],
                     block_lengths: vec![],
+                    padding: vec![],
                 },
             )),
             game,
