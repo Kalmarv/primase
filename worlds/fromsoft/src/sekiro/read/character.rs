@@ -247,6 +247,10 @@ pub struct CharacterOptions {
     /// textures from the effect binders of the character ([`super::effects::binders_for_clip`]), and a
     /// `fromsoft.clip_effect_uses` on the clip.
     pub clip_effects: bool,
+    /// With `clip_effects`: the member of an effect family that Elden Ring's animation events name by the family's number (`420`:
+    /// the files `420000`, `420001`, `420002`, `420007`; [`super::effects::read_for_clip`]). Which member the game picks is not
+    /// stored in any param, so with `None` those events are counted as lost, not guessed; `Some(0)` is the base file of each.
+    pub effect_variant: Option<u32>,
 }
 
 /// A character id as the game names its files: `c` and four digits.
@@ -1288,6 +1292,13 @@ impl<'a> CharacterReader<'a> {
         self
     }
 
+    /// With the clip effects: the member of an effect family that Elden Ring's events name by its number
+    /// ([`CharacterOptions::effect_variant`]).
+    pub fn with_effect_variant(mut self, variant: u32) -> Self {
+        self.options.effect_variant = Some(variant);
+        self
+    }
+
     /// Clip-only scope of this reader: the same authored plan entities and load
     /// path, without opening model, material or texture binders. `read` parses no
     /// animation tracks; `load` decodes only the reached clip entities.
@@ -1514,6 +1525,7 @@ impl Reader for CharacterReader<'_> {
                     self.install.game,
                     &mut part,
                     entity,
+                    self.options.effect_variant,
                     &mut self.effect_cache,
                 )?;
                 report.push((
