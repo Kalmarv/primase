@@ -65,5 +65,7 @@ data (fromsoft-formats `area::DrawParamId`, `gparam_events`, `gparam_params`; th
 - Elden Ring's weather: `WeatherParam.GparamId` names `m00_00_<id>_weatheroutdoor`; `WeatherLotParam` chooses weathers by
   weight. Not read into the world; how a lot is chosen per map and hour is not established.
 
-Not established (needs a running game or the engine): how the collision under the player, the event sub id, the weather
+Observed in a running Elden Ring (`m10_00`, spawn): the slot that reaches the screen is the one the collision under the player
+names (changing that one collision's slot changes the picture; one launch). Not established (needs a running game or the
+engine): whether it is re-read on another floor, and how that collision, the event sub id, the weather
 and an override combine into the one file in force. The read applies none of them unless the caller chooses a file.
