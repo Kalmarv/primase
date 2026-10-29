@@ -77,13 +77,13 @@ unity-formats = { git = "https://github.com/Kalmarv/unity-formats", rev = "85b2a
 monogame-formats = { git = "https://github.com/Kalmarv/monogame-formats", rev = "05cc99b09f9d9b897ce1360ceffdbab5222ecc08" }
 lua51-bytecode = { git = "https://github.com/Kalmarv/lua51-bytecode", rev = "cfa3a7001c3f8d240a2360b7598609d420d99243" }
 dxbc-reader = { git = "https://github.com/Kalmarv/dx", rev = "c32a3689c6bd26a0ee0777664091f4e04843927e" }
-iridia-dxbc = { git = "https://github.com/Kalmarv/iridia", rev = "50664d509282ac30de6d84b5f6e82ce6d00ebe78" }
-iridia-d3d9 = { git = "https://github.com/Kalmarv/iridia", rev = "50664d509282ac30de6d84b5f6e82ce6d00ebe78" }
-iridia-interface = { git = "https://github.com/Kalmarv/iridia", rev = "50664d509282ac30de6d84b5f6e82ce6d00ebe78" }
-iridia = { git = "https://github.com/Kalmarv/iridia", rev = "50664d509282ac30de6d84b5f6e82ce6d00ebe78" }
-iridia-exec = { git = "https://github.com/Kalmarv/iridia", rev = "50664d509282ac30de6d84b5f6e82ce6d00ebe78" }
-iridia-dxil = { git = "https://github.com/Kalmarv/iridia", rev = "50664d509282ac30de6d84b5f6e82ce6d00ebe78" }
-iridia-mojo = { git = "https://github.com/Kalmarv/iridia", rev = "50664d509282ac30de6d84b5f6e82ce6d00ebe78" }
+iridia-dxbc = { git = "https://github.com/Kalmarv/iridia", rev = "4f0c1dcd0723ca9ca47a14dab9222774daa90545" }
+iridia-d3d9 = { git = "https://github.com/Kalmarv/iridia", rev = "4f0c1dcd0723ca9ca47a14dab9222774daa90545" }
+iridia-interface = { git = "https://github.com/Kalmarv/iridia", rev = "4f0c1dcd0723ca9ca47a14dab9222774daa90545" }
+iridia = { git = "https://github.com/Kalmarv/iridia", rev = "4f0c1dcd0723ca9ca47a14dab9222774daa90545" }
+iridia-exec = { git = "https://github.com/Kalmarv/iridia", rev = "4f0c1dcd0723ca9ca47a14dab9222774daa90545" }
+iridia-dxil = { git = "https://github.com/Kalmarv/iridia", rev = "4f0c1dcd0723ca9ca47a14dab9222774daa90545" }
+iridia-mojo = { git = "https://github.com/Kalmarv/iridia", rev = "4f0c1dcd0723ca9ca47a14dab9222774daa90545" }
 primase-frostbite = { path = "worlds/frostbite" }
 primase-gltf = { path = "formats/gltf" }
 primase-web = { path = "formats/web" }
