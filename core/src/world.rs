@@ -7,6 +7,7 @@
 use std::any::{Any, TypeId};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::sync::Arc;
 
 use crate::json::JsonError;
 
@@ -335,10 +336,12 @@ pub struct Opaque {
     pub data: OpaqueData,
 }
 
-/// The storage of one component type: entity -> value, ordered by entity.
+/// The storage of one component type: entity -> value, ordered by entity. Each value is a shared handle: a clone of the
+/// column (of the world) shares every value with it, and writing a value that is shared copies it first, so neither side
+/// sees the other's writes ([`Column::get_shared`]).
 #[derive(Clone, Debug)]
 pub struct Column<T> {
-    values: BTreeMap<Entity, T>,
+    values: BTreeMap<Entity, Arc<T>>,
 }
 
 impl<T> Default for Column<T> {
@@ -351,11 +354,13 @@ impl<T> Default for Column<T> {
 
 impl<T> Column<T> {
     pub fn get(&self, e: Entity) -> Option<&T> {
-        self.values.get(&e)
+        self.values.get(&e).map(Arc::as_ref)
     }
 
-    pub fn get_mut(&mut self, e: Entity) -> Option<&mut T> {
-        self.values.get_mut(&e)
+    /// `e`'s value as a shared handle: the column's own, not a copy. A later write through the column copies the value
+    /// first, so the handle keeps what it was given.
+    pub fn get_shared(&self, e: Entity) -> Option<Arc<T>> {
+        self.values.get(&e).cloned()
     }
 
     pub fn contains(&self, e: Entity) -> bool {
@@ -372,23 +377,32 @@ impl<T> Column<T> {
 
     /// Entities and values in ascending entity order.
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = (Entity, &T)> + ExactSizeIterator {
-        self.values.iter().map(|(e, v)| (*e, v))
-    }
-
-    pub fn iter_mut(&mut self) -> impl DoubleEndedIterator<Item = (Entity, &mut T)> + ExactSizeIterator {
-        self.values.iter_mut().map(|(e, v)| (*e, v))
+        self.values.iter().map(|(e, v)| (*e, v.as_ref()))
     }
 
     pub fn entities(&self) -> impl DoubleEndedIterator<Item = Entity> + ExactSizeIterator + '_ {
         self.values.keys().copied()
     }
+}
 
-    fn insert(&mut self, e: Entity, value: T) -> Option<T> {
-        self.values.insert(e, value)
+impl<T: Clone> Column<T> {
+    /// `e`'s value to write: a value another clone of the column still shares is copied first.
+    pub fn get_mut(&mut self, e: Entity) -> Option<&mut T> {
+        self.values.get_mut(&e).map(Arc::make_mut)
     }
 
+    /// Every value to write, in ascending entity order: each one still shared is copied first.
+    pub fn iter_mut(&mut self) -> impl DoubleEndedIterator<Item = (Entity, &mut T)> + ExactSizeIterator {
+        self.values.iter_mut().map(|(e, v)| (*e, Arc::make_mut(v)))
+    }
+
+    fn insert(&mut self, e: Entity, value: T) -> Option<T> {
+        self.values.insert(e, Arc::new(value)).map(Arc::unwrap_or_clone)
+    }
+
+    /// The value taken out: the column's own where nothing else shares it, else a copy.
     fn remove(&mut self, e: Entity) -> Option<T> {
-        self.values.remove(&e)
+        self.values.remove(&e).map(Arc::unwrap_or_clone)
     }
 }
 
@@ -475,7 +489,7 @@ impl<T: Component> AnyColumn for Column<T> {
         T::GEOMETRY
     }
     fn json(&self, e: Entity) -> Option<Result<Option<serde_json::Value>, JsonError>> {
-        self.values.get(&e).map(Component::to_json)
+        self.values.get(&e).map(|v| v.to_json())
     }
     fn verify(&self, w: &World) -> Vec<(Entity, String)> {
         let mut out = Vec::new();
@@ -506,7 +520,7 @@ impl<T: Component> AnyColumn for Column<T> {
         }
     }
     fn payload_bytes(&self) -> u64 {
-        self.values.values().map(Component::payload_bytes).sum()
+        self.values.values().map(|v| v.payload_bytes()).sum()
     }
     fn clone_box(&self) -> Box<dyn AnyColumn> {
         Box::new(self.clone())
@@ -565,7 +579,7 @@ impl<T: Component> AnyColumn for Column<T> {
         let v = *(value as Box<dyn Any>)
             .downcast::<T>()
             .expect("a value remapped by this column");
-        self.values.insert(e, v);
+        self.values.insert(e, Arc::new(v));
     }
     fn copy_entity(&mut self, from: Entity, to: Entity) {
         if let Some(v) = self.values.get(&from).cloned() {
@@ -585,7 +599,7 @@ impl<T: Component> AnyColumn for Column<T> {
         for (e, v) in &mut self.values {
             match v.restate(resolved) {
                 Restated::Unchanged => {}
-                Restated::Replaced(restated) => *v = restated,
+                Restated::Replaced(restated) => *v = Arc::new(restated),
                 Restated::Absent => absent.push(*e),
             }
         }
@@ -1612,6 +1626,13 @@ impl World {
         self.column::<T>()?.get(e)
     }
 
+    /// `e`'s `T` as a shared handle: the world's own value, not a copy ([`Column::get_shared`]). A later write to it
+    /// through the world copies it first, so the handle keeps what it was given; a holder that only reads (a renderer
+    /// uploading a texture) keeps the bytes without a second copy.
+    pub fn get_shared<T: Component>(&self, e: Entity) -> Option<Arc<T>> {
+        self.column::<T>()?.get_shared(e)
+    }
+
     pub fn get_mut<T: Component>(&mut self, e: Entity) -> Option<&mut T> {
         self.column_mut_existing::<T>()?.get_mut(e)
     }
@@ -2053,20 +2074,23 @@ impl<T> ColumnMut<'_, T> {
     pub fn get(&self, e: Entity) -> Option<&T> {
         self.0.get(e)
     }
-    pub fn get_mut(&mut self, e: Entity) -> Option<&mut T> {
-        self.0.get_mut(e)
-    }
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = (Entity, &T)> + ExactSizeIterator {
         self.0.iter()
-    }
-    pub fn iter_mut(&mut self) -> impl DoubleEndedIterator<Item = (Entity, &mut T)> + ExactSizeIterator {
-        self.0.iter_mut()
     }
     pub fn len(&self) -> usize {
         self.0.len()
     }
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+}
+
+impl<T: Clone> ColumnMut<'_, T> {
+    pub fn get_mut(&mut self, e: Entity) -> Option<&mut T> {
+        self.0.get_mut(e)
+    }
+    pub fn iter_mut(&mut self) -> impl DoubleEndedIterator<Item = (Entity, &mut T)> + ExactSizeIterator {
+        self.0.iter_mut()
     }
 }
 
@@ -2096,6 +2120,104 @@ mod tests {
     struct R(i32);
     impl Resource for R {
         const NAME: &'static str = "test.r";
+    }
+
+    #[test]
+    fn a_shared_value_is_the_world_s_own_and_keeps_what_it_was_given() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, A(1));
+        let shared = w.get_shared::<A>(e).unwrap();
+        assert!(
+            std::ptr::eq(shared.as_ref(), w.get::<A>(e).unwrap()),
+            "the handle is the world's value, not a copy"
+        );
+        w.get_mut::<A>(e).unwrap().0 = 2;
+        assert_eq!(
+            *shared,
+            A(1),
+            "a write through the world copies the shared value first"
+        );
+        assert_eq!(w.get::<A>(e), Some(&A(2)));
+        let unshared = w.get::<A>(e).unwrap() as *const A;
+        w.get_mut::<A>(e).unwrap().0 = 3;
+        assert_eq!(
+            w.get::<A>(e).unwrap() as *const A,
+            unshared,
+            "a value nothing shares is written in place"
+        );
+        assert_eq!(w.get_shared::<B>(e), None);
+    }
+
+    #[test]
+    fn a_clone_of_the_world_shares_its_values_until_either_writes() {
+        let mut w = World::new();
+        let es: Vec<Entity> = (0..3).map(|_| w.spawn()).collect();
+        for (i, &e) in es.iter().enumerate() {
+            w.insert(e, A(i as u32));
+        }
+        let mut clone = w.clone();
+        for &e in &es {
+            assert!(
+                std::ptr::eq(w.get::<A>(e).unwrap(), clone.get::<A>(e).unwrap()),
+                "shared after the clone"
+            );
+        }
+        clone.get_mut::<A>(es[0]).unwrap().0 = 10;
+        assert_eq!(w.get::<A>(es[0]), Some(&A(0)), "the original keeps its value");
+        assert!(!std::ptr::eq(
+            w.get::<A>(es[0]).unwrap(),
+            clone.get::<A>(es[0]).unwrap()
+        ));
+        assert!(
+            std::ptr::eq(w.get::<A>(es[1]).unwrap(), clone.get::<A>(es[1]).unwrap()),
+            "an unwritten value stays shared"
+        );
+        // every value written through a column after the clone: the original sees none of it
+        for (_, a) in clone.column_mut::<A>().unwrap().iter_mut() {
+            a.0 += 100;
+        }
+        assert_eq!(w.iter::<A>().map(|(_, a)| a.0).collect::<Vec<_>>(), [0, 1, 2]);
+        assert_eq!(
+            clone.iter::<A>().map(|(_, a)| a.0).collect::<Vec<_>>(),
+            [110, 101, 102]
+        );
+        for (_, a) in w.column_mut::<A>().unwrap().iter_mut() {
+            a.0 += 1;
+        }
+        assert_eq!(w.iter::<A>().map(|(_, a)| a.0).collect::<Vec<_>>(), [1, 2, 3]);
+        assert_eq!(
+            clone.iter::<A>().map(|(_, a)| a.0).collect::<Vec<_>>(),
+            [110, 101, 102]
+        );
+    }
+
+    #[test]
+    fn removing_or_replacing_a_shared_value_leaves_its_sharers_theirs() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, A(7));
+        let shared = w.get_shared::<A>(e).unwrap();
+        let clone = w.clone();
+        assert_eq!(
+            w.remove::<A>(e),
+            Some(A(7)),
+            "a shared value is taken out as a copy"
+        );
+        assert_eq!(*shared, A(7));
+        assert_eq!(clone.get::<A>(e), Some(&A(7)));
+        assert_eq!(w.get::<A>(e), None);
+        w.insert(e, A(8));
+        assert_eq!(
+            w.insert(e, A(9)),
+            Some(A(8)),
+            "the value replaced is returned whole"
+        );
+        assert_eq!(clone.get::<A>(e), Some(&A(7)));
+        // a value nothing else shares is moved out, not copied
+        let f = w.spawn();
+        w.insert(f, B("only"));
+        assert_eq!(w.remove::<B>(f), Some(B("only")));
     }
 
     #[test]
