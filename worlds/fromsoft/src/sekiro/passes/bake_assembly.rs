@@ -417,6 +417,12 @@ mod tests {
             );
             Ok(bytes)
         };
+        // MaterialDefinition's texture blocks: the oracle predates their version, which its extra floats give (only a
+        // version-5 block stores them; every texture it records has two)
+        let block_version = |t: &serde_json::Value| -> u32 {
+            assert!(!t["extra"].as_array().unwrap().is_empty(), "{t}");
+            5
+        };
         let shader = read(
             oracle["shader"].as_str().unwrap(),
             oracle["shader_sha256"].as_str().unwrap(),
@@ -466,7 +472,7 @@ mod tests {
                     uv_number: t["uv_number"].as_i64().unwrap() as i32,
                     shader_data_index: t["shader_data_index"].as_i64().unwrap() as i32,
                     extra: serde_json::from_value(t["extra"].clone()).unwrap(),
-                    version: 5,
+                    version: block_version(t),
                 })
                 .collect(),
             block_lengths: def["block_lengths"]
@@ -508,9 +514,12 @@ mod tests {
         // the oracle predates Binding::available (the area's catalog holding the texture): the catalog above holds
         // every texture, so each binding is available; and Binding::address (the addressing the FLVER texture record
         // stores): the records built above state none, so each is unstated on both axes; and MaterialDefinition::padding
-        // (non-zero alignment padding): no Sekiro MTD has any
+        // (non-zero alignment padding): no Sekiro MTD has any; and the texture blocks' version (block_version above)
         let mut expected = src["layered"].clone();
         expected["definition"]["padding"] = serde_json::json!([]);
+        for texture in expected["definition"]["textures"].as_array_mut().unwrap() {
+            texture["version"] = block_version(texture).into();
+        }
         for binding in expected["bindings"].as_object_mut().unwrap().values_mut() {
             binding["available"] = serde_json::Value::Bool(true);
             binding["address"] = serde_json::json!([null, null]);
