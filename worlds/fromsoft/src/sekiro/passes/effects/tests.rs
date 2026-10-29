@@ -457,6 +457,7 @@ fn a_clips_effect_uses_become_spawns_of_the_lowered_systems_at_the_sockets_named
                 "an effect a goods or magic param row names (events 114 and 115)".to_owned(),
                 2,
             )],
+            read: Vec::new(),
         },
     );
     let mut log = PassLog::default();
@@ -514,6 +515,7 @@ fn effect_uses_on_something_that_is_not_a_lowered_clip_are_counted_and_make_noth
         ClipEffectUses {
             uses: vec![use_of(0, 300, Some(1), false, false, 0.0, None)],
             lost: Vec::new(),
+            read: Vec::new(),
         },
     );
     let mut log = PassLog::default();

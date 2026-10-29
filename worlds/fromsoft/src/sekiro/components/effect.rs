@@ -140,11 +140,15 @@ pub struct EffectUse {
 
 /// The effects the events of a clip start (`fromsoft.clip_effect_uses`, on the clip): the read keeps the effects' files, this
 /// says which events start them and how, and `lower-fromsoft-effects` makes of it what a player can follow
-/// (`core.clip_effects`). `lost` counts, by reason, the events that name an effect this could not say.
+/// (`core.clip_effects`). `lost` counts, by reason, the events that name an effect this could not say. `read` holds the
+/// entities the read made for the uses (their effect files, the effects those spawn and the textures they name): the uses
+/// name effects by number, so these are what keeps the files with the clip where only the clip is taken (a subset of a world
+/// by the clip's closure, as a reader's load of one clip makes).
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct ClipEffectUses {
     pub uses: Vec<EffectUse>,
     pub lost: Vec<(String, u32)>,
+    pub read: Vec<primase_core::Entity>,
 }
 impl Component for ClipEffectUses {
     const NAME: &'static str = "fromsoft.clip_effect_uses";
@@ -154,6 +158,9 @@ impl Component for ClipEffectUses {
     }
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         to_value(self).map(Some)
+    }
+    fn references(&self, out: &mut Vec<primase_core::Entity>) {
+        out.extend(self.read.iter().copied());
     }
 }
 
@@ -264,6 +271,7 @@ pub fn clip_effect_uses(source: &SourceEvents) -> ClipEffectUses {
             .into_iter()
             .map(|(reason, n)| (reason.to_owned(), n))
             .collect(),
+        read: Vec::new(),
     }
 }
 

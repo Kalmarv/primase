@@ -291,14 +291,21 @@ fn resources_of(node: &TypedNode, out: &mut BTreeSet<(ResourceKind, i32)>) {
     }
 }
 
+/// What [`read_files`] read: the files by number, and every entity it made (the files' and the textures').
+pub struct FilesRead {
+    pub files: BTreeMap<i32, Arc<Fxr>>,
+    pub entities: Vec<Entity>,
+}
+
 /// Reads the files the effects `roots` need into `world`: the effect files (once each, with the effects they spawn, an
-/// `fromsoft.effect_file` entity each) and the textures they name (a `core.texture` each). The files read, by number.
+/// `fromsoft.effect_file` entity each) and the textures they name (a `core.texture` each).
 pub fn read_files(
     library: &mut EffectLibrary<'_>,
     roots: Vec<i32>,
     world: &mut World,
     report: &mut Report,
-) -> Result<BTreeMap<i32, Arc<Fxr>>> {
+) -> Result<FilesRead> {
+    let mut entities = Vec::new();
     let game = library.game;
     // the effect files: the roots with the effects they spawn
     let mut files: BTreeMap<i32, Arc<Fxr>> = BTreeMap::new();
@@ -322,6 +329,7 @@ pub fn read_files(
     }
     for (id, fx) in &files {
         let e = world.spawn();
+        entities.push(e);
         world.insert(
             e,
             EffectFile {
@@ -346,6 +354,7 @@ pub fn read_files(
             Some(texture_kind) => match library.texture(texture_kind, id)? {
                 Some(texture) => {
                     let e = world.spawn();
+                    entities.push(e);
                     world.insert(e, texture);
                     world.insert(e, EffectResource { kind, id });
                     world.insert(e, Name(format!("sfx texture {id} ({kind:?})")));
@@ -362,7 +371,7 @@ pub fn read_files(
             None => report.animations_named += 1,
         }
     }
-    Ok(files)
+    Ok(FilesRead { files, entities })
 }
 
 /// Reads the files the `wanted` effects need into `world` ([`read_files`]) and places the effects: one `fromsoft.effect`
@@ -373,7 +382,7 @@ pub fn place_all(
     world: &mut World,
     report: &mut Report,
 ) -> Result<()> {
-    let files = read_files(library, wanted.iter().map(|w| w.effect).collect(), world, report)?;
+    let files = read_files(library, wanted.iter().map(|w| w.effect).collect(), world, report)?.files;
     for w in wanted {
         if !files.contains_key(&w.effect) {
             report.unplaced += 1;
@@ -569,7 +578,8 @@ pub fn read_for_clip(
         let roots: Vec<i32> = found.uses.iter().map(|u| u.effect).collect();
         let read = read_files(&mut library, roots, world, &mut report);
         *cache = library.into_cache();
-        let files = read?;
+        let FilesRead { files, entities } = read?;
+        found.read = entities;
         let before = found.uses.len();
         found.uses.retain(|u| files.contains_key(&u.effect));
         let unmatched = u32::try_from(before - found.uses.len()).unwrap_or(u32::MAX);
