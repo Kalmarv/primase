@@ -618,7 +618,13 @@ A character's or part's files are kept beyond the model and its clips:
   part and character binders is named so) is `havok.cloth` on its prototype (`primase_havok::cloth`): its cloth data
   read whole and the skeleton their transform sets are, each bone joined to the part skeleton's joint of the same name
   (`CharacterReport::havok_cloth_data`, `havok_cloth_bones`, `havok_cloth_bones_unjoined`); a tagfile that does not
-  read is named unread with its reason. `tests/part_cloth.rs` checks a Sekiro and an Elden Ring part.
+  read is named unread with its reason. Its display buffers (the meshes whose vertices the cloth sets) are bound to
+  the FLVER meshes: a display buffer is the mesh whose node bone has its name, with its vertex count and its first
+  face set's triangle count, the buffer's vertex `i` the mesh's vertex `i` (every display buffer of both installs is so
+  bound; `CharacterReport::havok_cloth_displays`, and a buffer bound to none is a notice by name).
+  `lower-fromsoft-geometry` then says, per primitive of a bound mesh, which display buffer vertex each of its vertices
+  is (`havok.cloth_vertices`), for a program that runs the cloth and draws what it sets. `tests/part_cloth.rs` checks
+  a Sekiro and an Elden Ring part.
 - A character whose display masks need the NPC param also reads each row's descriptive fields from the same file
   (`param::NpcStats`: `behaviorVariationId`, `nameId`, `turnVellocity` (sic, degrees a second), `hitHeight`, `hitRadius`,
   `weight`, `hitYOffset`, `hp`, `mp`, `getSoul`, at the offsets `Game::npc_stats` states from Paramdex's

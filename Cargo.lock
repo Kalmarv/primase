@@ -1386,6 +1386,8 @@ dependencies = [
  "primase-core",
  "primase-foundations",
  "primase-testdata",
+ "serde",
+ "serde_json",
  "thiserror",
 ]
 

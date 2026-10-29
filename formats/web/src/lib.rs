@@ -635,6 +635,9 @@ pub fn target() -> primase_core::pass::Target {
         // one world state: drawing or leaving out a conditional placement would be choosing one
         .illegal(primase_core::state::Condition::NAME)
         .illegal(primase_core::state::StateOverride::NAME)
+        // a model's Havok cloth and the vertices it sets: carried, the cloth's summary into the extras
+        .carry("havok.cloth")
+        .carry("havok.cloth_vertices")
         .carry_unknown()
 }
 /// Plan `world`'s tiles. Geometry may still be in files: each cell's content is read from its world when it is

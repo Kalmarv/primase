@@ -63,6 +63,9 @@ fn target_for(preview: bool) -> Target {
         .legal(MorphWeights::NAME)
         .legal(Clip::NAME)
         .legal(ClipBinding::NAME)
+        // a model's Havok cloth and the vertices it sets: carried, the cloth's summary into the extras
+        .carry("havok.cloth")
+        .carry("havok.cloth_vertices")
         .carry_unknown();
     let t = state(t, Condition::NAME);
     let t = state(t, PrimitiveCondition::NAME);

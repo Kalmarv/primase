@@ -100,6 +100,10 @@ pub struct CharacterReport {
     pub havok_cloth_data: usize,
     pub havok_cloth_bones: usize,
     pub havok_cloth_bones_unjoined: usize,
+    /// The cloth's display buffers bound to the model's meshes (each mesh's vertices the cloth sets), and the ones
+    /// bound to none, each named with why (as `havok.cloth` names them).
+    pub havok_cloth_displays: usize,
+    pub havok_cloth_displays_unbound: Vec<String>,
     /// The model's collision files read (`fromsoft.object_collision`: a part's `_collidable.hkx`) and the bodies in them.
     pub collision_files: usize,
     pub collision_bodies: usize,
@@ -137,6 +141,10 @@ impl CharacterReport {
             (
                 &self.missing_default_textures,
                 "metaparam default named but not in the catalog",
+            ),
+            (
+                &self.havok_cloth_displays_unbound,
+                "Havok cloth display buffers bound to no mesh of the model (their vertices are not set; named below)",
             ),
         ] {
             if !items.is_empty() {
@@ -424,6 +432,26 @@ struct Form<'b> {
     /// The name without the part's level suffix ([`form_base`]).
     base: String,
     flver: &'b fromsoft_formats::BinderFile,
+}
+
+/// The model's meshes as its Havok cloth binds its display buffers to them: each named by its node bone (the bone the
+/// mesh stands for; a mesh with none has an empty name, which no buffer has), with its vertex count and its first face
+/// set's triangles. In both games' files each display buffer is the mesh of its name, vertex count and first face set's
+/// triangle count ([`primase_havok::cloth::bind_displays`]).
+fn cloth_meshes(model: &Model) -> Vec<primase_havok::cloth::ModelMesh> {
+    model
+        .meshes
+        .iter()
+        .map(|m| primase_havok::cloth::ModelMesh {
+            name: usize::try_from(m.node)
+                .ok()
+                .and_then(|n| model.bones.get(n))
+                .map(|b| b.name.clone())
+                .unwrap_or_default(),
+            vertices: m.vertices.len(),
+            triangles: m.faces.first().map(|f| f.triangulate()).unwrap_or_default(),
+        })
+        .collect()
 }
 
 /// Whether binder member `leaf` (folded) is a model's Havok cloth tagfile: `<model>_c.hkx`, or `<model>_c_l.hkx` in a
@@ -972,11 +1000,21 @@ impl<'a> Reading<'a> {
         // reason, as a cloth companion is
         let havok_cloth = match havok_cloth {
             Some((leaf, bytes)) => {
-                match primase_havok::cloth::read_cloth(&leaf, &bytes, skeleton, &joints, crate::pose::FRAME) {
+                let meshes = cloth_meshes(&model);
+                match primase_havok::cloth::read_cloth(
+                    &leaf,
+                    &bytes,
+                    skeleton,
+                    &joints,
+                    crate::pose::FRAME,
+                    &meshes,
+                ) {
                     Ok(Some(c)) => {
                         report.havok_cloth_data = c.physics.cloths.len();
                         report.havok_cloth_bones = c.joints.len();
                         report.havok_cloth_bones_unjoined = c.joints.iter().filter(|j| j.is_none()).count();
+                        report.havok_cloth_displays = c.displays.len();
+                        report.havok_cloth_displays_unbound = c.unbound.clone();
                         Some(c)
                     }
                     Ok(None) => {

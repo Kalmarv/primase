@@ -8,7 +8,10 @@ turns what it reads into geometry and world data:
   and the pass `lower-havok-clips` that samples the animations a program asks for into `core.clip`s.
 - `cloth`: a model's Havok cloth as it is stored (`havok.cloth`): the tagfile's cloth data read whole, the skeleton
   its transform sets are (each cloth data's one transform set is its file's one skeleton, bone for bone, in all of
-  Sekiro's 610 and Elden Ring's 2,692 cloth data), and the joints of the model's `core.skeleton` of the same names.
+  Sekiro's 610 and Elden Ring's 2,692 cloth data), the joints of the model's `core.skeleton` of the same names, and
+  its display buffers bound to the model's meshes the reader names (`bind_displays`: the mesh of the buffer's name,
+  vertex count and triangle count). `havok.cloth_vertices` on a lowered mesh says which display buffer vertex each
+  vertex of a primitive is, and follows the primitive through every edit (a vertex blended from several is refused).
   It is read for a program that runs the cloth (havok-cloth steps it); nothing lowers it.
 
 ## Convex cores

@@ -32,6 +32,7 @@ use primase_core::{
     Asset, Binding, BindingId, Component, Deformation, Entity, Influences, Instance, LodForm, Lods, Mesh,
     Primitive, Semantic, Skeleton, Skin, Slot, Source, Stream, Topology, Transform, WeightRule, World,
 };
+use primase_havok::cloth::{ClothPrimitive, ClothVertices, HavokCloth};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The lower bound of the divisor the games' skinning vertex programs divide the four weights of a vertex by. Read
@@ -121,7 +122,9 @@ choice! {
 /// the game switches by distance). Positions, unit normals, stored tangents (handedness reflected) and UV0 in the
 /// world frame; a layered material's Byte4C members as raw `Color(n)` streams, its second UV set as `TexCoord(1)` and
 /// its second vertex colour as `Color(9)`, all listed by `fromsoft.layer_inputs` (a mesh that stores no second UV set or
-/// colour gets no such stream).
+/// colour gets no such stream). A prototype whose Havok cloth (`havok.cloth`) binds display buffers to its meshes gets,
+/// on each level's entity, which display buffer vertex each vertex of a bound mesh's primitives is
+/// (`havok.cloth_vertices`): the FLVER vertex, as a display buffer's vertices are its mesh's.
 ///
 /// Every field is the program's choice, stated (no default): `pose`, which model is lowered (the posed one
 /// `fromsoft-apply-rigid-skinning` made, or the stored one); `uv_tiling` (multiply UV0 by the material's tiling,
@@ -251,13 +254,37 @@ struct Level {
     source_mesh: Vec<u32>,
     /// Per primitive, its influences when its prototype keeps a skin.
     skin: Vec<Option<Influences>>,
+    /// Per primitive, the Havok cloth display that holds its FLVER mesh (`havok.cloth`, [`HavokCloth::display_of`])
+    /// and each of its vertices' FLVER vertex, which is that display buffer's vertex of the same index.
+    cloth: Vec<Option<ClothPrimitive>>,
 }
 
 impl Level {
     /// Its primitives on `e` as a mesh, with their face-set cull, any layer inputs, their FLVER meshes when `sources`
     /// (a prototype whose meshes carry display mask marks), and its skin (bound by `palette`: the skeleton and its
     /// slots) when its primitives have influences.
-    fn insert(self, world: &mut World, e: Entity, palette: Option<&(Entity, Vec<Slot>)>, sources: bool) {
+    ///
+    /// Where the prototype holds a Havok cloth (`cloth`, the entity holding its `havok.cloth`) and a display of it holds
+    /// a primitive's mesh, which display buffer vertex each vertex of the primitive is (`havok.cloth_vertices`).
+    fn insert(
+        self,
+        world: &mut World,
+        e: Entity,
+        palette: Option<&(Entity, Vec<Slot>)>,
+        sources: bool,
+        cloth: Option<Entity>,
+    ) {
+        if let Some(cloth) = cloth
+            && self.cloth.iter().any(Option::is_some)
+        {
+            world.insert(
+                e,
+                ClothVertices {
+                    cloth,
+                    primitives: self.cloth,
+                },
+            );
+        }
         if let Some((skeleton, slots)) = palette
             && self.skin.iter().any(Option::is_some)
         {
@@ -308,6 +335,8 @@ struct Lowered {
     /// The joints (by index) whose rest has no inverse, which hold the identity as their inverse bind: no vertex may
     /// weight them.
     unbound: Vec<usize>,
+    /// The prototype, when it holds a Havok cloth that holds any of its meshes.
+    cloth: Option<Entity>,
 }
 
 /// Every joint of the skeleton held by `skeleton` as a palette slot, its inverse bind the inverse of the joint's rest
@@ -475,8 +504,11 @@ impl LowerFromSoftGeometry {
             model
         };
         let wide = model.bones.len() > 256;
+        let cloth = world.get::<HavokCloth>(prototype);
         let mut mesh_levels = Vec::new();
         for (index, mesh) in model.meshes.iter().enumerate() {
+            // the cloth display that holds this mesh, vertex for vertex
+            let display = cloth.and_then(|c| u32::try_from(index).ok().and_then(|i| c.display_of(i)));
             if out.palette.is_some() && mesh.dynamic && !mesh.palette.is_empty() {
                 return Err(format!(
                     "{prototype:?}: mesh {index} is palette-relative in a model bound to a skeleton: not established for these files"
@@ -613,9 +645,17 @@ impl LowerFromSoftGeometry {
                 out.inputs.push(members);
                 out.cull.push(f.cull);
                 out.source_mesh.push(index as u32);
+                out.cloth.push(display.map(|display| ClothPrimitive {
+                    display,
+                    vertices: part.source_vertices.clone(),
+                }));
                 log.count(&format!("level {level} primitives"), 1);
             }
             mesh_levels.push(levels);
+        }
+        if out.levels.values().any(|l| l.cloth.iter().any(Option::is_some)) {
+            out.cloth = Some(prototype);
+            log.count("prototypes whose Havok cloth sets vertices of their meshes", 1);
         }
         // A coarser form holds the meshes that have a face set of its level; the others are not in it.
         for level in out.levels.keys().filter(|&&l| l > 0) {
@@ -759,6 +799,7 @@ impl Pass for LowerFromSoftGeometry {
             SourceMeshes::NAME,
             UvTiling::NAME,
             BlockerCards::NAME,
+            ClothVertices::NAME,
         ]
     }
     /// The posed model it lowered; the source model stays.
@@ -859,14 +900,15 @@ impl Pass for LowerFromSoftGeometry {
             }
             let finest = out.levels.remove(&0).unwrap_or_default();
             let palette = out.palette.take();
+            let cloth = out.cloth;
             let sources = world.has::<MeshMasks>(prototype);
             let mut forms = Vec::new();
             for (level, lowered) in out.levels {
                 let form = world.spawn();
-                lowered.insert(world, form, palette.as_ref(), sources);
+                lowered.insert(world, form, palette.as_ref(), sources, cloth);
                 forms.push(LodForm { detail: level, form });
             }
-            finest.insert(world, prototype, palette.as_ref(), sources);
+            finest.insert(world, prototype, palette.as_ref(), sources, cloth);
             if palette.is_some() {
                 log.count("prototypes lowered with their skin", 1);
             }
