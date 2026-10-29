@@ -88,15 +88,26 @@ impl TargetFormat {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TargetSize {
-    /// The view's size times `numerator / denominator`, each side rounded down, at least 1 (a half-resolution target:
-    /// 1/2). A volume's depth is stated in `depth`.
+    /// The view's size times `numerator / denominator`, each side rounded as `rounding` says, at least 1 (a
+    /// half-resolution target: 1/2). A volume's depth is stated in `depth`.
     View {
         numerator: u32,
         denominator: u32,
         depth: u32,
+        rounding: Rounding,
     },
     /// A fixed size whatever the view.
     Fixed { width: u32, height: u32, depth: u32 },
+}
+
+/// How a view-relative size that is not a whole number of texels is rounded, side by side.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Rounding {
+    /// Down to the whole texel below.
+    Down,
+    /// Up to the whole texel above: a part of a texel counts as one (1080 / 16 is 68 texels).
+    Up,
 }
 
 /// A target's shape.
@@ -183,6 +194,9 @@ pub enum PassWork {
         stages: Vec<StageBinding>,
         state: RenderState,
         outputs: Outputs,
+        /// The rectangle of the outputs the draw covers (its viewport), where it is not the whole of them: a copy into
+        /// one cascade's quarter of a shadow atlas.
+        region: Option<Region>,
     },
     /// A dispatch of a compute program: `groups` thread groups, writing the targets its unordered-access resources name.
     Compute {
@@ -335,6 +349,30 @@ impl RenderGraph {
         }
         Ok(())
     }
+    /// A full-screen draw's region: not empty, and inside every output whose size is fixed.
+    fn screen_region_ok(&self, o: &Outputs, region: &Region, what: &str) -> Result<(), String> {
+        if region.width == 0 || region.height == 0 {
+            return Err(format!("{what} draws into an empty region"));
+        }
+        let views = o
+            .colour
+            .iter()
+            .map(|(_, v)| v)
+            .chain(o.depth.as_ref().map(|d| &d.view));
+        for v in views {
+            if let TargetSize::Fixed { width, height, .. } = self.targets[v.target as usize].size {
+                let right = region.x.checked_add(region.width);
+                let bottom = region.y.checked_add(region.height);
+                if right.is_none_or(|r| r > width) || bottom.is_none_or(|b| b > height) {
+                    return Err(format!(
+                        "{what} draws outside its target {} ({width} x {height})",
+                        self.targets[v.target as usize].name
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
     /// A shadow cascade's region: not empty, drawn into a depth target, and inside it where its size is fixed.
     fn region_ok(&self, o: &Outputs, region: &Region, what: &str) -> Result<(), String> {
         let depth = o
@@ -395,12 +433,16 @@ impl RenderGraph {
                 vertices,
                 outputs,
                 stages,
+                region,
                 ..
             } => {
                 if *vertices == 0 {
                     return Err(format!("{what} draws no vertex"));
                 }
                 self.outputs_ok(outputs, &what)?;
+                if let Some(region) = region {
+                    self.screen_region_ok(outputs, region, &what)?;
+                }
                 self.stage_targets_ok(&stages.iter().collect::<Vec<_>>(), &what)?;
             }
             PassWork::Compute {
@@ -468,6 +510,7 @@ impl RenderGraph {
                     numerator,
                     denominator,
                     depth,
+                    ..
                 } if numerator == 0 || denominator == 0 || depth == 0 => {
                     return Err(format!("target {} has a zero size factor", t.name));
                 }
@@ -595,6 +638,7 @@ mod tests {
                 numerator: 1,
                 denominator: 1,
                 depth: 1,
+                rounding: Rounding::Down,
             },
             shape: TargetShape::Plane,
             mips: 1,
@@ -820,6 +864,7 @@ mod tests {
                     colour: vec![(0, view(0))],
                     depth: None,
                 },
+                region: None,
             },
         };
         let mut g = RenderGraph {
@@ -840,6 +885,60 @@ mod tests {
         assert_eq!(
             g.check(),
             Err("pass composite Pixel texture slot 0 names mip 1 of target fog (1 mips)".into())
+        );
+    }
+
+    /// Sekiro's cascade copies (a recorded frame: four full-screen draws into the four 2048 x 2048 quarters of the 4096 x
+    /// 4096 shadow atlas, each by its viewport): a full-screen draw's region is inside its fixed-size outputs.
+    #[test]
+    fn a_full_screen_draw_covers_a_region_inside_its_outputs() {
+        let mut atlas = target("shadow", TargetFormat::Depth16);
+        atlas.size = TargetSize::Fixed {
+            width: 4096,
+            height: 4096,
+            depth: 1,
+        };
+        let copy = |region: Option<Region>| RenderPass {
+            name: "copy cascade".into(),
+            shared: true,
+            presence: Presence::Always,
+            runs: Runs::Once,
+            work: PassWork::Screen {
+                vertices: 3,
+                stages: Vec::new(),
+                state: RenderState::default(),
+                outputs: Outputs {
+                    colour: Vec::new(),
+                    depth: Some(DepthView {
+                        view: view(0),
+                        read_only_depth: false,
+                        read_only_stencil: false,
+                    }),
+                },
+                region,
+            },
+        };
+        let quarter = Region {
+            x: 2048,
+            y: 0,
+            width: 2048,
+            height: 2048,
+        };
+        let mut g = RenderGraph {
+            targets: vec![atlas],
+            passes: vec![copy(None), copy(Some(quarter))],
+            picture: None,
+        };
+        assert_eq!(g.check(), Ok(()));
+        g.passes[1] = copy(Some(Region { y: 2049, ..quarter }));
+        assert_eq!(
+            g.check(),
+            Err("pass copy cascade draws outside its target shadow (4096 x 4096)".into())
+        );
+        g.passes[1] = copy(Some(Region { height: 0, ..quarter }));
+        assert_eq!(
+            g.check(),
+            Err("pass copy cascade draws into an empty region".into())
         );
     }
 }
