@@ -379,7 +379,7 @@ impl StageBinding {
             }
         }
         self.verify_samplers(interface, place).map_err(at)?;
-        self.verify_buffers(interface, place).map_err(at)?;
+        self.verify_buffers(w, interface, place).map_err(at)?;
         self.verify_constant_buffers(interface).map_err(at)
     }
 
@@ -478,10 +478,16 @@ impl StageBinding {
         Some(c.size.max(bound) / 48)
     }
 
-    /// The buffer slots: each a buffer of the shader, bound once, a matrix table of 16-byte elements, and an instance
-    /// table whose records fit its stride and name a matrix table of this stage; a stage that states any buffer states
-    /// every buffer of its program.
-    fn verify_buffers(&self, interface: &Interface, place: BindingPlace) -> Result<(), String> {
+    /// The buffer slots: each a buffer of the shader, bound once, a matrix table of 16-byte elements, an instance
+    /// table whose records fit its stride and name a matrix table of this stage, and a light table that agrees with
+    /// itself and its buffer's elements, in a world whose lights of its kind have their unit (`core.light_unit`, which
+    /// its colours are in); a stage that states any buffer states every buffer of its program.
+    fn verify_buffers(
+        &self,
+        w: &crate::World,
+        interface: &Interface,
+        place: BindingPlace,
+    ) -> Result<(), String> {
         let kind = |id: ResourceId| match interface.resource(id).map(|r| &r.kind) {
             Some(ResourceKind::Buffer(kind)) => Some(*kind),
             _ => None,
@@ -511,6 +517,24 @@ impl StageBinding {
                     ));
                 }
                 BufferSource::Graph(_) => {}
+                BufferSource::Lights(table) => {
+                    let stride = match buffer {
+                        BufferKind::Structured { stride } => Some(stride),
+                        _ => None,
+                    };
+                    table
+                        .verify(stride)
+                        .map_err(|why| format!("buffer slot {}: {why}", b.resource.0))?;
+                    if w.resource::<crate::LightUnit>().is_none()
+                        && w.iter::<crate::components::Light>().any(|(_, l)| table.holds(l))
+                    {
+                        return Err(format!(
+                            "buffer slot {} is a light table in a world whose lights have no core.light_unit: its \
+                             colours have no value",
+                            b.resource.0
+                        ));
+                    }
+                }
                 BufferSource::Table(
                     BufferTable::ObjectMatrices { rows }
                     | BufferTable::HeaderedMatrices { rows }

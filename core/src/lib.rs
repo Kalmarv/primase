@@ -34,6 +34,8 @@ pub mod convert;
 pub mod detail;
 mod environment;
 pub use environment::{Ambient, AmbientLight, Environment};
+mod light_unit;
+pub use light_unit::LightUnit;
 pub mod frame;
 pub mod json;
 pub mod layered;

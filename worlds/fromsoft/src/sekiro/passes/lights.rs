@@ -8,7 +8,7 @@
 use super::settings::{Factor, Fraction, Metres};
 use crate::sekiro::source::{EffectLight, EffectShape, EffectValue, LightKind, LightSource};
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
-use primase_core::{Component, Light, Transform, World};
+use primase_core::{Component, Light, LightUnit, Resource, Transform, World};
 
 /// The game's transfer from a stored colour component in 0 to 1 (a BTL byte over 255, an effect colour's red, green or
 /// blue) to the linear value its lighting shader multiplies by the power: the square. Read back from a running game: the
@@ -67,8 +67,8 @@ impl Choice for Disabled {
     const VALUES: &'static [(&'static str, Self)] = &[("off", Disabled::Skip), ("on", Disabled::Include)];
 }
 
-/// Options: `candela-per-power` (required: candela per unit of the stored diffuse power; no default, it is a
-/// calibration), `spot-blend` (required: the inner cone as `1 - blend` of the outer; the game's spot has no inner cone,
+/// Options: `candela-per-power` (required: candela per unit of the stored diffuse power, above 0; no default, it is a
+/// calibration, and the world's `core.light_unit` states it), `spot-blend` (required: the inner cone as `1 - blend` of the outer; the game's spot has no inner cone,
 /// its falloff is `1 - (tan a / tan edge)^2` of the angle `a` from the axis, so the blend is the program's choice
 /// of where a core spot's falloff starts) and `min-range` (metres; a light's range is its stored
 /// radius, at least this; default 0, the radius as stored).
@@ -178,7 +178,7 @@ pub const LOWER_FROMSOFT_LIGHTS: PassSpec = PassSpec {
         OptionSpec::required(
             "candela-per-power",
             "1",
-            "at least 0: the candela of one unit of BTL power, the program's calibration",
+            "above 0: the candela of one unit of BTL power, the program's calibration (the world's core.light_unit)",
         ),
         OptionSpec::required(
             "spot-blend",
@@ -460,14 +460,34 @@ impl Pass for LowerFromSoftLights {
         true
     }
     fn provides(&self) -> &[&'static str] {
-        &[Light::NAME]
+        &[Light::NAME, LightUnit::NAME]
     }
     fn approximates(&self) -> &'static str {
         "power by the program's calibration; spot inner cone from a fixed blend; specular values not lowered; effect lights: an elliptic spot cone as its wider half-angle, specular, flicker and fade-out not lowered"
     }
+    /// The lights, and the world's `core.light_unit` at `candela-per-power` where any is lowered (a light table packs
+    /// their colours back into the stored values with it); a unit already stated at another factor is refused.
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         let btl = self.lower_btl(world, log)?;
         let effects = self.lower_effects(world, log)?;
+        if !btl.is_empty() || !effects.is_empty() {
+            let unit = LightUnit {
+                candela_per_unit: self.candela_per_power.get() as f32,
+            };
+            unit.verify(world)
+                .map_err(|why| format!("candela-per-power as the lights' unit: {why}"))?;
+            match world.resource::<LightUnit>() {
+                Some(stated) if stated != &unit => {
+                    return Err(format!(
+                        "the world's lights are already in a unit of {} candela, not {}",
+                        stated.candela_per_unit, unit.candela_per_unit
+                    ));
+                }
+                _ => {
+                    world.insert_resource(unit);
+                }
+            }
+        }
         for (e, light) in btl {
             world.insert(e, light);
             log.count("lights lowered", 1);

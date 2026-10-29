@@ -382,6 +382,18 @@ pub enum LightKind {
     Spot,
     Directional,
 }
+/// A light record that `lower-fromsoft-lights` lowered (a `core.light` on its entity) is in the unit the lowering states,
+/// the world's `core.light_unit`: a world that holds one without the other has lost the unit its light tables pack in.
+fn lowered_light_has_its_unit(e: Entity, w: &primase_core::World) -> Result<(), String> {
+    if w.has::<primase_core::Light>(e) && w.resource::<primase_core::LightUnit>().is_none() {
+        return Err(
+            "a lowered light in a world with no core.light_unit, the unit lower-fromsoft-lights states"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 impl Component for LightSource {
     const NAME: &'static str = "fromsoft.light";
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
@@ -391,6 +403,10 @@ impl Component for LightSource {
     }
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         to_value(self).map(Some)
+    }
+    /// A lowered light has the world's `core.light_unit`.
+    fn verify(&self, e: Entity, w: &primase_core::World) -> Result<(), String> {
+        lowered_light_has_its_unit(e, w)
     }
 }
 
@@ -476,6 +492,10 @@ impl Component for EffectLight {
     }
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         to_value(self).map(Some)
+    }
+    /// A lowered light has the world's `core.light_unit`.
+    fn verify(&self, e: Entity, w: &primase_core::World) -> Result<(), String> {
+        lowered_light_has_its_unit(e, w)
     }
 }
 

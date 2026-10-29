@@ -17,6 +17,9 @@
 //! Everything else is `Unknown` with what was examined, or `Missing` (the renderer's own textures: noise, look-up tables,
 //! the textures a frame keeps from an earlier one that no recorded frame writes). The scene's draws are steps of a
 //! bucket, drawn by the materials' own bindings; the effects are the effects slot, in the places the frames draw them.
+//! Sekiro's light records are `core` light tables the consumer packs from the scene's lights ([`lights`]), and their
+//! counts are light-count constants.
+mod lights;
 mod table;
 
 use crate::game::Shading;
@@ -35,8 +38,8 @@ use primase_core::render_graph::{
 };
 use primase_core::shader::{
     BufferBinding, BufferSource, ConstantBinding, ConstantRole, FrameParameter, InputBinding, InputRole,
-    OutputBinding, OutputRole, SamplerBinding, ScreenTriangleValue, Shader, StageBinding, TextureBinding,
-    TextureSource, VariantKey, ViewParameter,
+    LightValue, OutputBinding, OutputRole, SamplerBinding, ScreenTriangleValue, Shader, StageBinding,
+    TextureBinding, TextureSource, VariantKey, ViewParameter,
 };
 use primase_core::{Name, World};
 use std::collections::{BTreeMap, BTreeSet};
@@ -70,9 +73,13 @@ pub struct Report {
     pub textures_through_several_samplers: usize,
     /// Texture reads of the programs whose texture or sampler is not one register (an array indexed at run time).
     pub untraced_reads: usize,
-    /// Buffer slots bound `Unknown`: the renderer's own buffers (its light parameters) and those the frames bind nothing
-    /// at.
+    /// Buffer slots bound `Unknown`: the renderer's own buffers (Elden Ring's light parameters) and those the frames bind
+    /// nothing at.
     pub unknown_buffers: usize,
+    /// Buffer slots bound as the scene's lights (Sekiro's light records), and the fields of their tables `core.light`
+    /// does not give (one per field per slot).
+    pub light_tables: usize,
+    pub unknown_light_fields: usize,
     /// Constants with no core role (the renderer's own parameters), and those with one.
     pub unknown_constants: usize,
     pub constants: usize,
@@ -132,6 +139,10 @@ impl Report {
             ),
             (self.unknown_constants, "render graph constants with no core role"),
             (
+                self.unknown_light_fields,
+                "render graph light-record fields core.light does not give (written 0)",
+            ),
+            (
                 self.unknown_inputs,
                 "render graph vertex inputs whose vertex buffer no recorded frame holds",
             ),
@@ -175,13 +186,37 @@ impl Report {
     }
 }
 
-/// A program of the graph: its `core.shader` entity, interface, value graph (or why there is none) and which sampler
-/// each of its textures is read through.
+/// A program of the graph: its `core.shader` entity, interface, value graph (or why there is none), which sampler
+/// each of its textures is read through, and the names its own reflection gives its shader-resource registers.
 struct Program {
     entity: primase_core::Entity,
     interface: Interface,
     graph: std::result::Result<ProgramGraph, String>,
     pairs: SamplerPairs,
+    resource_names: BTreeMap<u32, String>,
+}
+
+/// The names a DXBC program's `RDEF` part gives its shader-resource registers (texture buffers, textures, structured
+/// and byte-address buffers), by register; empty for a DXIL program and a DXBC one without the part. iridia's lift
+/// names a compute program's resources by register only (it reads the part of pixel and vertex programs), so the
+/// graph takes a buffer's name from here where the part has one.
+fn resource_names(
+    format: iri::ShaderFormat,
+    bytes: &[u8],
+) -> std::result::Result<BTreeMap<u32, String>, String> {
+    if format != iri::ShaderFormat::Dxbc {
+        return Ok(BTreeMap::new());
+    }
+    let Some(rdef) = dxbc_reader::rdef(bytes).map_err(|e| e.to_string())? else {
+        return Ok(BTreeMap::new());
+    };
+    // D3D_SHADER_INPUT_TYPE: 1 tbuffer, 2 texture, 5 structured, 7 byte-address (the shader-resource classes)
+    Ok(rdef
+        .bindings
+        .into_iter()
+        .filter(|b| matches!(b.kind, 1 | 2 | 5 | 7) && b.count == 1)
+        .map(|b| (b.register, b.name))
+        .collect())
 }
 
 /// Read the game's render graph: its programs from the install's engine binders, its steps from the game's table, as the
@@ -239,6 +274,8 @@ pub(crate) fn read(
                 )
             })?;
             report.untraced_reads = report.untraced_reads.saturating_add(pairs.untraced);
+            let resource_names = resource_names(game.shader_format(), &file.bytes)
+                .map_err(|e| invalid(FORMAT, 0, format!("{full}: its reflection: {e}")))?;
             let entity = world.spawn();
             world.insert(entity, Name(full.clone()));
             world.insert(
@@ -256,6 +293,7 @@ pub(crate) fn read(
                     interface,
                     graph,
                     pairs,
+                    resource_names,
                 },
             );
         }
@@ -1002,36 +1040,55 @@ impl Lower<'_> {
                         source,
                     });
                 }
-                ResourceKind::Buffer(_) => {
-                    let source = match slot {
-                        Some(table::Slot {
-                            graph_buffer: Some(b),
-                            ..
-                        }) => BufferSource::Graph(*b),
-                        Some(table::Slot {
-                            engine_buffer: Some(what),
-                            ..
-                        }) => {
-                            report.unknown_buffers = report.unknown_buffers.saturating_add(1);
-                            BufferSource::Unknown {
-                                why: format!(
-                                    "the renderer's own buffer the recorded frames bind here ({what})"
-                                ),
-                            }
+                ResourceKind::Buffer(kind) => {
+                    let light = match kind {
+                        iri::BufferKind::Structured { stride } => {
+                            let name = p.resource_names.get(&d.register).filter(|_| d.space == 0);
+                            lights::table(self.game, name.unwrap_or(&r.provenance.name), *stride)
                         }
-                        Some(_) => {
-                            report.unknown_buffers = report.unknown_buffers.saturating_add(1);
-                            BufferSource::Unknown {
-                                why: "the recorded frames bind a texture at this buffer register".into(),
-                            }
+                        _ => None,
+                    };
+                    let source = match (light, slot) {
+                        (Some(table), _) => {
+                            report.light_tables = report.light_tables.saturating_add(1);
+                            let unknown = table
+                                .fields
+                                .iter()
+                                .filter(|f| matches!(f.value, LightValue::Unknown { .. }))
+                                .count();
+                            report.unknown_light_fields = report.unknown_light_fields.saturating_add(unknown);
+                            BufferSource::Lights(table)
                         }
-                        None => {
-                            report.unbound_slots = report.unbound_slots.saturating_add(1);
-                            report.unknown_buffers = report.unknown_buffers.saturating_add(1);
-                            BufferSource::Unknown {
-                                why: format!("the recorded frames bind nothing at t{}", d.register),
+                        (None, slot) => match slot {
+                            Some(table::Slot {
+                                graph_buffer: Some(b),
+                                ..
+                            }) => BufferSource::Graph(*b),
+                            Some(table::Slot {
+                                engine_buffer: Some(what),
+                                ..
+                            }) => {
+                                report.unknown_buffers = report.unknown_buffers.saturating_add(1);
+                                BufferSource::Unknown {
+                                    why: format!(
+                                        "the renderer's own buffer the recorded frames bind here ({what})"
+                                    ),
+                                }
                             }
-                        }
+                            Some(_) => {
+                                report.unknown_buffers = report.unknown_buffers.saturating_add(1);
+                                BufferSource::Unknown {
+                                    why: "the recorded frames bind a texture at this buffer register".into(),
+                                }
+                            }
+                            None => {
+                                report.unbound_slots = report.unbound_slots.saturating_add(1);
+                                report.unknown_buffers = report.unknown_buffers.saturating_add(1);
+                                BufferSource::Unknown {
+                                    why: format!("the recorded frames bind nothing at t{}", d.register),
+                                }
+                            }
+                        },
                     };
                     buffers.push(BufferBinding {
                         resource: r.id,
@@ -1147,7 +1204,10 @@ impl Lower<'_> {
                     report.constants = report.constants.saturating_add(1);
                     continue;
                 }
-                let role = constant_role(&c.name).unwrap_or_else(|| {
+                let counted = lights::count(self.game, &c.name)
+                    .filter(|_| size == 4)
+                    .map(|kind| ConstantRole::Frame(FrameParameter::LightCount(kind)));
+                let role = counted.or_else(|| constant_role(&c.name)).unwrap_or_else(|| {
                     report.unknown_constants = report.unknown_constants.saturating_add(1);
                     ConstantRole::Unknown {
                         why: format!(

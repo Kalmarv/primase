@@ -250,6 +250,9 @@ pub enum FrameParameter {
     /// channel of the lit colour, scaled by how much the surface faces an ambient direction it also reads), and a w that
     /// scales the ambient terms a vertex carries, growing from 1 (no change) with distance.
     DirectionalAmbientColour,
+    /// How many records the frame's light table of this kind holds ([`BufferSource::Lights`]): one unsigned 32-bit
+    /// integer, the number of lights the consumer packed ([`super::PackedLights::lights`]).
+    LightCount(super::LightTableKind),
 }
 /// What a constant of a buffer stands for.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -399,6 +402,9 @@ pub enum BufferSource {
     /// One of the frame's own buffers: only in the binding of a step of the frame's `core.render_graph`
     /// ([`crate::render_graph::RenderGraph::buffers`]), whose buffers these are. A material's binding never states one.
     Graph(crate::render_graph::BufferId),
+    /// The scene's lights of one kind, one record each in the table's layout, which the consumer packs from the world's
+    /// `core.light`s for the frame's view ([`super::LightTable::pack`]).
+    Lights(super::LightTable),
 }
 /// A table of the draw's data a program reads from a buffer.
 #[derive(Clone, Debug, PartialEq, Serialize)]

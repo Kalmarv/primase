@@ -121,6 +121,7 @@ same-width named `MaterialParameters` default. All values are finite. The channe
 material as an entity reference. New targets follow the clip's ordinary ordered-key, duration and
 extrapolation checks. They are not joint additive deltas; additive clips cannot contain them.
 
+
 ## Particle systems
 
 `core.particles` is one particle effect in game-neutral terms: `{seed, emitters, inputs, states, warmup, time_scale,

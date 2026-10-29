@@ -6,6 +6,7 @@
 mod binding;
 pub mod encoding;
 mod facts;
+mod lights;
 mod program;
 pub mod roles;
 mod select_variant;
@@ -15,6 +16,7 @@ pub(crate) use binding::BindingPlace;
 pub use binding::{SamplerBinding, ShaderBinding, StageBinding, TextureBinding, TextureSource};
 pub use encoding::{LaneAffine, NormalEncoding, NormalSpace, ScalarEncoding};
 pub use facts::{MaterialPrograms, ProgramFacts, ProgramResourceFacts};
+pub use lights::{LightField, LightTable, LightTableKind, LightValue, PackedLights};
 pub use program::Shader;
 pub use roles::{
     Attribute, BufferBinding, BufferSource, BufferTable, ConstantBinding, ConstantRole, FrameParameter,
