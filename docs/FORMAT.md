@@ -150,3 +150,22 @@ after it (its emitters are stopped); `socket` is null (the rig's origin) or the 
 `follow` says whether the system moves with that socket as the clip moves it, else it stays where it started; `event` is the
 index of the starting event in the clip's `core.clip_events`, where the source says. A player begins each spawn at its start
 on the clip's clock.
+
+## Lights as a program reads them
+
+| Name | Kind | Fields | Invariants |
+| --- | --- | --- | --- |
+| `core.light_unit` | resource | `candela_per_unit: f32` | Finite and above 0. Written by the lowering that makes the world's point and spot `core.light`s from a source's own light values: such a light's intensity is its source value times this factor. |
+
+A shader binding's buffer slot may hold `{"lights": table}` (`BufferSource::Lights`): the scene's
+lights of one `kind` (`point` or `spot`), one record of `stride` bytes per `core.light` of that kind,
+at most `capacity` records, each holding `fields` (`{offset, value}`) as 32-bit floats. A value is
+`view_position` (3), `range` (1), `inverse_range_squared` (1), `colour` (3: colour times intensity over
+`core.light_unit`'s factor), `view_to_cone` (16, spots only), `view_bounding_sphere` (4),
+`view_depth_min` / `view_depth_max` (1), `{"constant": {value, why}}` (1) or
+`{"unknown": {floats, name, why}}`. Fields lie inside the record on whole floats and never overlap; a
+structured buffer's element size equals the stride; constants are finite; constants and unknowns say
+why. A binding with a light table in a world that holds `core.light`s of the table's kind but no
+`core.light_unit` is refused. `LightTable::pack` is the one packing of the world's lights into the records for a view; it
+writes 0 for unknown fields and lists them. The constant role `{"frame": {"light_count": kind}}` is the
+number of records the consumer packed, one unsigned 32-bit integer.
