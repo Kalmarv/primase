@@ -30,6 +30,7 @@ use havok_formats::cloth::OperatorKind;
 use inputs::{Game as Data, Tool, install, keys, oodle};
 use primase_core::frame::{Axis, SourceFrame};
 use primase_core::{Asset, Component, Entity, JointId, Role, Skeleton, World};
+use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::sekiro::{CharacterOptions, CharacterReport, read_parts_with};
 use primase_havok::cloth::{ClothVertices, HavokCloth};
 
