@@ -97,6 +97,8 @@ pub enum TargetFormat {
     Rgba8UnormSrgb,
     Rg8Unorm,
     R8Unorm,
+    /// One unsigned 8-bit integer.
+    R8Uint,
     /// Depth as a 32-bit float with an 8-bit stencil.
     Depth32Stencil8,
     /// Depth as a 32-bit float.
@@ -192,6 +194,9 @@ pub enum Presence {
 pub enum Trigger {
     /// A local light that casts shadows is in view: the frame draws its shadow casters and lights with its shadow.
     LocalShadowCasters,
+    /// The frame draws water: the steps that draw for it (its interaction maps, the screen-space reflections whose
+    /// prepass draws the water) run.
+    Water,
 }
 
 /// How many times a step runs where the frame has it.
