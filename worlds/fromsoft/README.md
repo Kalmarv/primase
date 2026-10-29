@@ -614,6 +614,11 @@ A character's or part's files are kept beyond the model and its clips:
   same way with `object_animations`.
 - The cloth companion files (`.clm2`, `clm2::Clm2`: for each mesh of the FLVER a list of `[i16, i16]` entries whose
   meaning SoulsFormatsNEXT does not know) that go with a form are `fromsoft.cloth` on its prototype, as stored.
+- A model's Havok cloth tagfile (`<model>_c.hkx`, a Sekiro `_l` part's `<model>_c_l.hkx`; every cloth tagfile of the
+  part and character binders is named so) is `havok.cloth` on its prototype (`primase_havok::cloth`): its cloth data
+  read whole and the skeleton their transform sets are, each bone joined to the part skeleton's joint of the same name
+  (`CharacterReport::havok_cloth_data`, `havok_cloth_bones`, `havok_cloth_bones_unjoined`); a tagfile that does not
+  read is named unread with its reason. `tests/part_cloth.rs` checks a Sekiro and an Elden Ring part.
 - A character whose display masks need the NPC param also reads each row's descriptive fields from the same file
   (`param::NpcStats`: `behaviorVariationId`, `nameId`, `turnVellocity` (sic, degrees a second), `hitHeight`, `hitRadius`,
   `weight`, `hitYOffset`, `hp`, `mp`, `getSoul`, at the offsets `Game::npc_stats` states from Paramdex's

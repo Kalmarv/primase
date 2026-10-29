@@ -49,7 +49,9 @@
 //! chooses no level of detail, outfit or pose. A part's bones are stored with the parent they have in that part: a
 //! bone whose parent the part does not hold is a root there. The FLVER's dummy polygons (attach points) are kept as stored
 //! on the prototype (`fromsoft.dummies`) and placed as `core.sockets` on its skeleton; the cloth companion files
-//! (`.clm2`) that go with a form are kept on its prototype (`fromsoft.cloth`), and so is a part's collision (the form's
+//! (`.clm2`) that go with a form are kept on its prototype (`fromsoft.cloth`), and so is its Havok cloth (the form's
+//! `_c.hkx`, a `_l` part's `_c_l.hkx`: `havok.cloth`, the cloth data read whole and joined to the skeleton's joints by
+//! name, [`primase_havok::cloth`]) and a part's collision (the form's
 //! `_collidable.hkx`, read as an object's collision file is: `fromsoft.object_collision`, every body as stored, which
 //! `lower-fromsoft-part-collision` turns into `core.collision` on the prototype); a character whose masks need the NPC param
 //! also reads each row's descriptive fields (`fromsoft.npc_stats`, [`fromsoft_formats::param::NpcStats`]). What the files hold that it
@@ -92,6 +94,12 @@ pub struct CharacterReport {
     pub dummies_unplaced: usize,
     /// The model's cloth companion files read (`fromsoft.cloth`).
     pub cloth_files: usize,
+    /// The model's Havok cloth (`havok.cloth`, from its `_c.hkx`): the cloth data its tagfile holds, and the bones of
+    /// the skeleton their transform sets are and of those the ones the model's skeleton has no joint of the same name
+    /// for. All 0 for a model with no cloth tagfile.
+    pub havok_cloth_data: usize,
+    pub havok_cloth_bones: usize,
+    pub havok_cloth_bones_unjoined: usize,
     /// The model's collision files read (`fromsoft.object_collision`: a part's `_collidable.hkx`) and the bodies in them.
     pub collision_files: usize,
     pub collision_bodies: usize,
@@ -416,6 +424,14 @@ struct Form<'b> {
     /// The name without the part's level suffix ([`form_base`]).
     base: String,
     flver: &'b fromsoft_formats::BinderFile,
+}
+
+/// Whether binder member `leaf` (folded) is a model's Havok cloth tagfile: `<model>_c.hkx`, or `<model>_c_l.hkx` in a
+/// `_l` part. Every cloth tagfile of the games' part and character binders is named so (Sekiro's 18 `_c.hkx` and 18
+/// `_c_l.hkx` part members and 95 character members; Elden Ring's 1,124 part and 182 character members); a part's
+/// collision (`_collidable.hkx`) is not.
+fn is_cloth_tagfile(leaf: &str) -> bool {
+    leaf.ends_with("_c.hkx") || leaf.ends_with("_c_l.hkx")
 }
 
 /// What a request names: a character, from `chr/<id>.chrbnd`, or a part, from `parts/<name>.partsbnd`.
@@ -806,6 +822,7 @@ impl<'a> Reading<'a> {
         let bases: Vec<&str> = forms.iter().map(|f| f.base.as_str()).collect();
         let mut cloth = Vec::new();
         let mut collision = Vec::new();
+        let mut havok_cloth: Option<(String, Vec<u8>)> = None;
         for f in &binder.files {
             let member_name = f.name.as_deref().unwrap_or("");
             let read = forms.iter().any(|g| std::ptr::eq(f, g.flver))
@@ -823,6 +840,18 @@ impl<'a> Reading<'a> {
                             meshes: clm2.meshes,
                         }),
                         Err(e) => report.unread.push(format!("{leaf} ({e})")),
+                    }
+                    continue;
+                }
+                // the model's Havok cloth (`bd_m_9040_c.hkx`, a `_l` part's `bd_m_9040_c_l.hkx`, a character's
+                // `c1010_c.hkx`): read once the model's skeleton is made, which it follows; a second one is named
+                if is_cloth_tagfile(&leaf) {
+                    if havok_cloth.is_some() {
+                        report
+                            .unread
+                            .push(format!("{leaf} (a second cloth tagfile of the model)"));
+                    } else {
+                        havok_cloth = Some((leaf, decoder.decode_if_dcx(&f.bytes)?));
                     }
                     continue;
                 }
@@ -938,7 +967,31 @@ impl<'a> Reading<'a> {
         let key = item.form_key(name);
         let skeleton = w.spawn();
         w.insert(skeleton, Name(format!("{name} skeleton")));
-        w.insert(skeleton, crate::pose::skeleton(&model));
+        let joints = crate::pose::skeleton(&model);
+        // the Havok cloth follows the model's skeleton by its bones' names; one that does not read is named with its
+        // reason, as a cloth companion is
+        let havok_cloth = match havok_cloth {
+            Some((leaf, bytes)) => {
+                match primase_havok::cloth::read_cloth(&leaf, &bytes, skeleton, &joints, crate::pose::FRAME) {
+                    Ok(Some(c)) => {
+                        report.havok_cloth_data = c.physics.cloths.len();
+                        report.havok_cloth_bones = c.joints.len();
+                        report.havok_cloth_bones_unjoined = c.joints.iter().filter(|j| j.is_none()).count();
+                        Some(c)
+                    }
+                    Ok(None) => {
+                        report.unread.push(format!("{leaf} (no cloth data)"));
+                        None
+                    }
+                    Err(e) => {
+                        report.unread.push(format!("{leaf} ({e})"));
+                        None
+                    }
+                }
+            }
+            None => None,
+        };
+        w.insert(skeleton, joints);
         let prototype = w.spawn();
         w.insert(prototype, Name(name.to_owned()));
         w.insert(prototype, Source(key.clone()));
@@ -969,6 +1022,9 @@ impl<'a> Reading<'a> {
         }
         if !cloth.is_empty() {
             w.insert(prototype, character_data::Cloth(cloth));
+        }
+        if let Some(c) = havok_cloth {
+            w.insert(prototype, c);
         }
         if !collision.is_empty() {
             w.insert(prototype, source::ObjectBodies { files: collision });
