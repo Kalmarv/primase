@@ -2371,10 +2371,11 @@ fn the_dither_and_camera_fade_fields_are_object_roles() {
     }
 }
 
-/// The scene depth a forward program reads (fog, foam, water: the hardware depth at `t56`) is the frame's own image, bound as a
-/// frame texture the consumer supplies; the other engine textures stay counted zeros.
+/// The scene depth a forward program reads (fog, foam, water: the hardware depth at `t56`) and the shadow map a shadowed one
+/// compares against (`t32`) are the frame's own images, bound as frame textures the consumer supplies; the other engine
+/// textures stay counted zeros.
 #[test]
-fn the_scene_depth_is_a_frame_texture() {
+fn the_scene_depth_and_the_shadow_map_are_frame_textures() {
     const FORWARD: &[u8] = include_bytes!("fixtures/forward.dxbc");
     let shader = executor(FORWARD);
     let program = World::default().spawn();
@@ -2407,6 +2408,10 @@ fn the_scene_depth_is_a_frame_texture() {
     assert_eq!(
         source("g_DepthTexture"),
         TextureSource::Frame(FrameTexture::SceneDepth)
+    );
+    assert_eq!(
+        source("g_ShadowTexture"),
+        TextureSource::Frame(FrameTexture::ShadowMap)
     );
     assert!(matches!(source("g_SSAOTexture"), TextureSource::Default { value, .. } if value == [0.; 4]));
 }

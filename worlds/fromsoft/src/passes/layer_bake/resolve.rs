@@ -144,6 +144,11 @@ pub const ENGINE_DITHER_NEUTRAL: f64 = 0.5;
 /// linearised with `FC_DepthComputeParam`: view depth `-z / (x - depth)`): the frame's, bound as one.
 pub const ENGINE_SCENE_DEPTH_TEXTURE: &str = "g_DepthTexture";
 
+/// The name of the shadow map the shadowed forward programs (`…_FwdSdw.ppo`) compare a surface's depth in the light's space
+/// against (`t32`, a 2D texture read by `sample_c_lz` through the comparison sampler `SS_Shadow` at `s12`): the frame's,
+/// bound as one.
+pub const ENGINE_SHADOW_TEXTURE: &str = "g_ShadowTexture";
+
 /// `<index>` and role of a texture kind named `…Texture2D_<index>_<Role>…`: the first named segment after the index, past
 /// a blend shader's `GSBlendMap` prefix (`…Texture2D_2_GSBlendMap_AlbedoMap_1` is an albedo map, as both games' blend
 /// shaders name their slots; a slot named only `GSBlendMap` is the blend map) and past the empty segments of a kind such
@@ -388,16 +393,21 @@ pub fn resolve(
         let individual_2d =
             resource.count == 1 && dim == iridia_interface::TextureDim::D2 && !arrayed && !multisampled;
         let register = register(resource)?;
-        // the engine's own texture: the dither noise a neutral grey (the fade is off), the scene depth the frame's, any
-        // other zero; each is counted by name
+        // the engine's own texture: the dither noise a neutral grey (the fade is off), the scene depth and the shadow map
+        // the frame's, any other zero; each zero is counted by name
         let named = match program_texture(material, resource) {
             ProgramTexture::Material(named) => named,
             ProgramTexture::Engine(name) => {
-                if name == ENGINE_SCENE_DEPTH_TEXTURE {
+                let frame = match name {
+                    ENGINE_SCENE_DEPTH_TEXTURE => Some(FrameTexture::SceneDepth),
+                    ENGINE_SHADOW_TEXTURE => Some(FrameTexture::ShadowMap),
+                    _ => None,
+                };
+                if let Some(frame) = frame {
                     bindings.push(TextureBinding {
                         resource: resource.id,
                         sampler: None,
-                        source: TextureSource::Frame(FrameTexture::SceneDepth),
+                        source: TextureSource::Frame(frame),
                     });
                     continue;
                 }
