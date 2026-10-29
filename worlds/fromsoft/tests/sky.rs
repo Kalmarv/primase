@@ -330,9 +330,66 @@ fn elden_rings_sky_is_read_as_weathers() -> Result<(), Box<dyn std::error::Error
     }
     seen.sort();
     assert_eq!(seen, LIMGRAVE_ASSETS.map(|(n, _)| n.to_owned()));
-    // the pass keeps their materials' order and removes the records
+    // each asset's material slots, by part name
+    let slots: Vec<(String, Vec<primase_core::Entity>)> = world
+        .iter::<SkyPart>()
+        .map(|(e, _)| {
+            let name = world.get::<Source>(e).unwrap().0.clone();
+            let prototype = world.get::<primase_core::Instance>(e).unwrap().prototype;
+            let slots = world
+                .get::<primase_fromsoft::sekiro::source::MaterialSlots>(prototype)
+                .map(|s| s.0.clone())
+                .unwrap_or_default();
+            (name, slots)
+        })
+        .collect();
+    // the pass puts the sky spheres' and cloud layers' materials (their binaries name M[Sky9], M[Clouds5],
+    // M[Atmosphere][Clouds]..., M[DistantClouds]_001) on the sky layer without depth writes, leaves the Erdtree light
+    // shafts' (M[WorldTree_LightShaft]...) and removes the records
     common::run(&mut world, "lower-fromsoft-sky")?;
     assert!(world.iter::<SkyPart>().next().is_none());
     assert!(world.iter::<SkyAnchor>().next().is_none());
+    let sky_order = primase_core::DrawOrder {
+        layer: primase_core::DrawLayer::Sky,
+        queue: primase_core::DrawOrder::SKY,
+        depth_write: false,
+    };
+    for (name, materials) in &slots {
+        let model = &name["m60_00_00_99:".len().."m60_00_00_99:AEG096_010".len()];
+        let shafts = matches!(model, "AEG096_411" | "AEG096_414");
+        if model == "AEG094_104" {
+            continue;
+        }
+        assert!(!materials.is_empty(), "{name}");
+        for &m in materials {
+            let material = world.get::<primase_fromsoft::materials::Material>(m).unwrap();
+            if material.skip == Some(primase_fromsoft::materials::SkipClass::Shadow) {
+                continue;
+            }
+            let order = world.get::<primase_core::DrawOrder>(m);
+            if shafts {
+                assert!(
+                    material.shader.starts_with("M[WorldTree_LightShaft"),
+                    "{name}: {}",
+                    material.shader
+                );
+                assert_ne!(order, Some(&sky_order), "{name}: {}", material.shader);
+            } else {
+                assert!(
+                    [
+                        "M[Sky9]",
+                        "M[Clouds5]",
+                        "M[Atmosphere][Clouds]",
+                        "M[DistantClouds]"
+                    ]
+                    .iter()
+                    .any(|p| material.shader.starts_with(p)),
+                    "{name}: {}",
+                    material.shader
+                );
+                assert_eq!(order, Some(&sky_order), "{name}: {}", material.shader);
+            }
+        }
+    }
     Ok(())
 }

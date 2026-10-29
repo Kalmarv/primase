@@ -1,8 +1,8 @@
 //! `lower-fromsoft-sky`: the sky the area read brought in ([`crate::sekiro::read::sky`], `fromsoft.sky_part`) lowered
 //! to core's sky: the moon's `core.sky_anchor` (towards the sun, at the game's distance) and the draw order of the sky's
 //! materials (core's sky layer, in the order the game draws them). The domes' and rings' anchors and every part's
-//! states are the read's already. Elden Ring's weather assets keep their materials' own order: where the game draws
-//! them is not established.
+//! states are the read's already. Elden Ring's weather assets put their sky programs' materials on the sky layer, by
+//! inference (see [`LowerFromSoftSky`]).
 use crate::materials::{Material, SkipClass};
 use crate::sekiro::read::sky::MOON_DISTANCE;
 use crate::sekiro::source::{MaterialSlots, SkyPart, SkyRole};
@@ -20,8 +20,14 @@ use std::collections::{BTreeMap, BTreeSet};
 /// the primitives of their meshes and level-of-detail forms; shadow proxies aside) gets `core.draw_order` on the sky
 /// layer, writing depth as the game's do, queued in the order a recorded frame draws them: the dome
 /// ([`DrawOrder::SKY`]), the moon (+1), the rings (+2). A material that a placement outside the sky also draws keeps
-/// its own order, counted. An Elden Ring weather asset's materials are left as they are, counted: no recorded frame has
-/// placed its draws yet. Then `fromsoft.sky_part` is removed. No options: what it lowers is the game's.
+/// its own order, counted.
+///
+/// An Elden Ring weather asset's materials of a sky program (the material table's sky class: `M[Sky9]`,
+/// `M[Clouds5]`, `M[Atmosphere][Clouds][EnvmapCapture]`) go on the sky layer at [`DrawOrder::SKY`] without writing
+/// depth, in the source's order; its other materials (the Erdtree's light shafts) keep their own, counted. This is
+/// inferred, not seen in a frame: the programs are the sky's by name, the spheres (53 and 86 km across) lie past any
+/// far plane, and the cloud shells lie outside the sky sphere yet show in front of it, which a sphere writing depth
+/// would forbid. Then `fromsoft.sky_part` is removed. No options: what it lowers is the game's.
 #[derive(Clone, Copy, Debug)]
 pub struct LowerFromSoftSky;
 
@@ -32,16 +38,16 @@ pub const LOWER_FROMSOFT_SKY: PassSpec = PassSpec {
     make: |_| Ok(Box::new(LowerFromSoftSky)),
 };
 
-/// Where a sky role's surfaces come in the sky layer: the order of a recorded frame's draws (dome, moon, far
-/// mountains); none for a weather asset, whose draws no recorded frame has placed.
-fn queue(role: SkyRole) -> Option<i32> {
-    let step = match role {
-        SkyRole::Dome => 0,
-        SkyRole::Moon => 1,
-        SkyRole::Ring => 2,
-        SkyRole::Weather => return None,
-    };
-    Some(DrawOrder::SKY + step)
+/// Where a sky role's surfaces come in the sky layer and whether they write depth: Sekiro's in the order of a recorded
+/// frame's draws (dome, moon, far mountains), writing depth as they do there; an Elden Ring weather asset's at the
+/// layer's start, writing none (see [`LowerFromSoftSky`]).
+fn order(role: SkyRole) -> (i32, bool) {
+    match role {
+        SkyRole::Dome => (DrawOrder::SKY, true),
+        SkyRole::Moon => (DrawOrder::SKY + 1, true),
+        SkyRole::Ring => (DrawOrder::SKY + 2, true),
+        SkyRole::Weather => (DrawOrder::SKY, false),
+    }
 }
 
 /// The material entities prototype `p` draws with: its source slots and the materials of its mesh's and its forms'
@@ -92,7 +98,7 @@ impl Pass for LowerFromSoftSky {
                         .is_some_and(|l| l.kind == LightKind::Directional)
             });
         // the materials each role of the sky draws with, and the prototypes the sky places
-        let mut wanted = BTreeMap::<Entity, i32>::new();
+        let mut wanted = BTreeMap::<Entity, (i32, bool)>::new();
         let mut sky_prototypes = BTreeSet::new();
         for (e, part) in &parts {
             let Some(prototype) = world.get::<Instance>(*e).map(|i| i.prototype) else {
@@ -101,23 +107,22 @@ impl Pass for LowerFromSoftSky {
                 ));
             };
             sky_prototypes.insert(prototype);
-            let Some(order) = queue(part.role) else {
-                log.count(
-                    "weather assets whose materials keep their own layer (their draw phase is not established)",
-                    1,
-                );
-                continue;
-            };
+            let wants = order(part.role);
             for m in materials_of(world, prototype) {
-                if world
-                    .get::<Material>(m)
-                    .is_some_and(|m| m.skip == Some(SkipClass::Shadow))
-                {
+                let skip = world.get::<Material>(m).and_then(|m| m.skip);
+                if skip == Some(SkipClass::Shadow) {
+                    continue;
+                }
+                if part.role == SkyRole::Weather && skip != Some(SkipClass::Sky) {
+                    log.count(
+                        "weather asset materials of no sky program, left in their own layer",
+                        1,
+                    );
                     continue;
                 }
                 // a material two roles share draws where the earlier one does
-                let q = wanted.entry(m).or_insert(order);
-                *q = (*q).min(order);
+                let q = wanted.entry(m).or_insert(wants);
+                *q = (*q).min(wants);
             }
         }
         // the materials the rest of the world draws with
@@ -129,7 +134,7 @@ impl Pass for LowerFromSoftSky {
             .into_iter()
             .flat_map(|p| materials_of(world, p))
             .collect();
-        for (m, q) in wanted {
+        for (m, (queue, depth_write)) in wanted {
             if others.contains(&m) {
                 log.count(
                     "sky materials other placements draw too, left in their own layer",
@@ -141,8 +146,8 @@ impl Pass for LowerFromSoftSky {
                 m,
                 DrawOrder {
                     layer: DrawLayer::Sky,
-                    queue: q,
-                    depth_write: true,
+                    queue,
+                    depth_write,
                 },
             );
             log.count("sky materials on the sky layer", 1);
@@ -273,22 +278,58 @@ mod tests {
         assert_eq!(log.counts["sky materials on the sky layer"], 3);
     }
 
-    /// An Elden Ring weather asset keeps its materials' order and gets no anchor; its record goes, counted.
-    #[test]
-    fn a_weather_asset_keeps_its_materials_order() {
-        let mut w = World::new();
+    /// A material of `shader` with the skip class `skip`, as the material table gives it.
+    fn material(w: &mut World, shader: &str, skip: Option<SkipClass>) -> Entity {
         let m = w.spawn();
-        let p = prototype(&mut w, &[m]);
-        let asset = placement(&mut w, p, SkyRole::Weather);
+        w.insert(
+            m,
+            Material {
+                mtd: format!("{shader}_material"),
+                definition: None,
+                gx: Vec::new(),
+                shader: shader.into(),
+                class: "opaque".into(),
+                skip,
+                cutoff: 0.5,
+                bindings: BTreeMap::new(),
+                layered: None,
+            },
+        );
+        m
+    }
+
+    /// An Elden Ring weather asset's sky-program materials go on the sky layer at its start without writing depth; a
+    /// material of another program (the Erdtree's light shafts) keeps its order, counted; no anchor; the record goes.
+    #[test]
+    fn a_weather_asset_draws_its_sky_programs_on_the_sky_layer() {
+        let mut w = World::new();
+        let sphere = material(&mut w, "M[Sky9]", Some(SkipClass::Sky));
+        let clouds = material(&mut w, "M[Clouds5]", Some(SkipClass::Sky));
+        let shaft = material(&mut w, "M[WorldTree_LightShaft]", Some(SkipClass::LightVolume));
+        let sky_p = prototype(&mut w, &[sphere, clouds]);
+        let tree_p = prototype(&mut w, &[shaft]);
+        let asset = placement(&mut w, sky_p, SkyRole::Weather);
+        placement(&mut w, tree_p, SkyRole::Weather);
         let mut log = PassLog::default();
         LowerFromSoftSky.run(&mut w, &mut log).unwrap();
-        assert!(w.get::<DrawOrder>(m).is_none());
+        for m in [sphere, clouds] {
+            assert_eq!(
+                w.get::<DrawOrder>(m),
+                Some(&DrawOrder {
+                    layer: DrawLayer::Sky,
+                    queue: DrawOrder::SKY,
+                    depth_write: false
+                })
+            );
+        }
+        assert!(w.get::<DrawOrder>(shaft).is_none());
         assert!(w.get::<SkyAnchor>(asset).is_none() && w.get::<SkyPart>(asset).is_none());
         assert!(w.is_alive(asset));
         assert_eq!(
-            log.counts["weather assets whose materials keep their own layer (their draw phase is not established)"],
+            log.counts["weather asset materials of no sky program, left in their own layer"],
             1
         );
+        assert_eq!(log.counts["sky materials on the sky layer"], 2);
     }
 
     /// Without a sun the moon has nowhere to stand: it is despawned, counted; the materials still go on the layer.

@@ -36,8 +36,8 @@ pub enum SkyRole {
     /// The moon (the object `o005900`), placed towards the light by the game every frame.
     Moon,
     /// An Elden Ring asset of an area's sky map that the weather shows (`WeatherAssetReplaceParam`): a sky sphere, a
-    /// cloud layer, the rainbow. Placed where the sky map's layout places it; where in the frame the game draws it is
-    /// not established.
+    /// cloud layer, the Erdtree's light shafts. Placed where the sky map's layout places it; where in the frame the
+    /// game draws it is not established (`lower-fromsoft-sky` puts its sky programs on the sky layer by inference).
     Weather,
 }
 

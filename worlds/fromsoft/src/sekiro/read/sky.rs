@@ -40,7 +40,8 @@
 //! that show it as its condition ([`crate::sekiro::source::SkyRole::Weather`]). An asset the area's rows name for no
 //! value (another region's sky) is not read; the sky map's parts that no row of it names (its far view of the land,
 //! the Erdtree) are not read either, counted. Whether the game moves the sky spheres with the camera is not
-//! established: they are placed where the layout places them, and get no anchor.
+//! established: they are placed where the layout places them, and get no anchor. `lower-fromsoft-sky` puts their sky
+//! programs' materials on core's sky layer (an inference its documentation gives).
 use crate::sekiro::source::{SkyPart, SkyRole};
 use fromsoft_formats::msb::{MapLayout, Part, PartKind};
 use fromsoft_formats::param::{WeatherAssetParam, asset_model_name};
@@ -399,9 +400,9 @@ impl Report {
             out.push(Notice::new(
                 stage,
                 NoticeKind::Approximation,
-                "weather assets of the sky map placed where its layout places them, with no anchor and in their \
-                 materials' own draw layer: whether the game moves them with the camera, and where in the frame it \
-                 draws them, are not established",
+                "weather assets of the sky map placed where its layout places them, with no anchor: whether the game \
+                 moves them with the camera, and where in the frame it draws them, are not established (the sky pass \
+                 puts their sky programs on the sky layer by inference)",
                 self.weather_assets as u64,
             ));
         }
