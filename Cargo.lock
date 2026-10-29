@@ -592,8 +592,8 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "fromsoft-formats"
-version = "0.10.0"
-source = "git+https://github.com/Kalmarv/fromsoft-formats?rev=cb272ef3fe26bc2de7718d609b295a254f33bce6#cb272ef3fe26bc2de7718d609b295a254f33bce6"
+version = "0.10.1"
+source = "git+https://github.com/Kalmarv/fromsoft-formats?rev=f1b0b568fe5804286ff9b57bf30788cd7a678852#f1b0b568fe5804286ff9b57bf30788cd7a678852"
 dependencies = [
  "aes",
  "encoding_rs",
