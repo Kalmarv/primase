@@ -64,6 +64,7 @@ use super::area::game_material_definitions;
 use super::{shaders, textures};
 use crate::components::models::{SkeletonOf, SourceModel};
 use crate::sekiro::character_data;
+use crate::sekiro::effect_data::TraceOffsets;
 use crate::sekiro::source;
 use crate::{invalid, materials};
 use fromsoft_formats::{Archive, Binder, Game, Install, Result, dcx::Decoder, flver::Model};
@@ -247,10 +248,12 @@ pub struct CharacterOptions {
     /// textures from the effect binders of the character ([`super::effects::binders_for_clip`]), and a
     /// `fromsoft.clip_effect_uses` on the clip.
     pub clip_effects: bool,
-    /// With `clip_effects`: the member of an effect family that Elden Ring's animation events name by the family's number (`420`:
-    /// the files `420000`, `420001`, `420002`, `420007`; [`super::effects::read_for_clip`]). Which member the game picks is not
-    /// stored in any param, so with `None` those events are counted as lost, not guessed; `Some(0)` is the base file of each.
-    pub effect_variant: Option<u32>,
+    /// With `clip_effects`: what Elden Ring's handler of a blade event (type 118) adds to the event's effect number, per hand
+    /// ([`TraceOffsets`], [`super::effects::read_for_clip`]). The game keeps it in the character's data, from the special
+    /// effects active on the character (probably the sum of their `traceSfxIdOffsetType`; not decoded); none active is the
+    /// default, 0 and 0 (the base trails `401001` and `401002`). State it to read the trail of an enchanted weapon (`10` for
+    /// `401001`: the file `401011`).
+    pub trace_offsets: TraceOffsets,
 }
 
 /// A character id as the game names its files: `c` and four digits.
@@ -1292,10 +1295,10 @@ impl<'a> CharacterReader<'a> {
         self
     }
 
-    /// With the clip effects: the member of an effect family that Elden Ring's events name by its number
-    /// ([`CharacterOptions::effect_variant`]).
-    pub fn with_effect_variant(mut self, variant: u32) -> Self {
-        self.options.effect_variant = Some(variant);
+    /// With the clip effects: the offsets the blade events of Elden Ring add to their effect numbers, per hand
+    /// ([`CharacterOptions::trace_offsets`]).
+    pub fn with_trace_offsets(mut self, right: i32, left: i32) -> Self {
+        self.options.trace_offsets = TraceOffsets { right, left };
         self
     }
 
@@ -1525,7 +1528,7 @@ impl Reader for CharacterReader<'_> {
                     self.install.game,
                     &mut part,
                     entity,
-                    self.options.effect_variant,
+                    self.options.trace_offsets,
                     &mut self.effect_cache,
                 )?;
                 report.push((

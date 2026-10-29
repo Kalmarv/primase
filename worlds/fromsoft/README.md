@@ -472,10 +472,12 @@ converts frames; it does not lower:
   `sfxbnd_<cNNNN>` first, then `commoneffects` and `commoneffects_dlc02`; in Sekiro `commoneffects`, then every map binder,
   as its bosses start the effects of their map's binder), read once per reader (`EffectCache`). Events that name
   an effect another way (goods and magic rows, throw and foot indexes), and effects on a weapon's dummy polygon, are counted
-  in `lost`. The player's attack animations in Elden Ring start `400` to `422`, which are families (`420` is the files
-  `420000`, `420001`, `420002`, `420007`; `410` and `403` have none), and no param says which member the game picks:
-  with `CharacterOptions::effect_variant` (`with_effect_variant`) set, an event is read as the family's member
-  `number * 1000 + variant` where a binder holds it; unset, or where it does not, the event is counted in `lost`.
+  in `lost`. An event's number is the effect's number as the game takes it: one that is no file of the binders searched is
+  counted in `lost` ("no effect file with this id"), not read as another (Elden Ring's player animations start `400` to
+  `422` in 3,009 events, none of them a file; the engine's handler of event 96 passes the number on unchanged). The one number
+  the engine changes is a blade's (event 118, Elden Ring): its handler adds the offset the character's data keeps for the hand
+  to the event's number (`401001` + 10 is the file `401011`), and `CharacterOptions::trace_offsets` (`with_trace_offsets`)
+  states those offsets per hand, 0 and 0 (no special effect on the weapon) by default.
   `lower-fromsoft-effects` lowers the effects to unplaced systems and the uses to `core.clip_effects` on the clip,
   a spawn each, at the socket `dummy <reference id>` of the model; `Report::clip_uses` counts the uses;
 - lights are `fromsoft.light` records where they stand (stored colours, powers,

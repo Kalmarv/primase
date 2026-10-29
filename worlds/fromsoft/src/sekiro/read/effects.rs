@@ -11,7 +11,7 @@ use super::textures::tpf_image;
 use crate::pose::placed;
 use crate::sekiro::character_data::ClipEvents as SourceEvents;
 use crate::sekiro::components::effect::{
-    ClipEffectUses, Effect, EffectFile, EffectResource, ResourceKind, clip_effect_uses,
+    Effect, EffectFile, EffectResource, ResourceKind, TraceOffsets, apply_trace_offsets, clip_effect_uses,
 };
 use crate::sekiro::source::EffectPlace;
 use fromsoft_formats::fxr::actions::Typed;
@@ -515,16 +515,19 @@ pub fn assemble(
 /// Reads the effects the events of clip `clip` start (its `fromsoft.clip_events` in `world`) from the effect binders of its
 /// character ([`binders_for_clip`]): the effect files and the textures they name ([`read_files`]), and on the clip a
 /// `fromsoft.clip_effect_uses` saying which events start which effect. A clip with no events, or whose events start no effect,
-/// is left as it is. `cache` keeps the binders read from one clip to the next. An Elden Ring event whose number is no effect
-/// file but is a family's (`420` for `420000` and its variants, [`resolve_families`]) is read as the family's member `variant`
-/// states, and counted as lost where none is stated or the family has no such member.
+/// is left as it is. `cache` keeps the binders read from one clip to the next.
+///
+/// An event's number is the effect's number, as the game takes it: an event whose number is no file of the binders searched is
+/// counted as lost ("no effect file with this id"), not read as another. The one number the game changes is a blade's
+/// (event 118) in Elden Ring: the handler adds the offset the character's data keeps for the hand ([`TraceOffsets`], stated
+/// by the caller; none active is 0) to the event's number before it starts the effect, and that is the number read here.
 pub fn read_for_clip(
     archive: &Archive,
     decoder: &Decoder<'_>,
     game: Game,
     world: &mut World,
     clip: Entity,
-    variant: Option<u32>,
+    trace_offsets: TraceOffsets,
     cache: &mut EffectCache,
 ) -> Result<Report> {
     let mut report = Report {
@@ -538,77 +541,28 @@ pub fn read_for_clip(
     if found.uses.is_empty() && found.lost.is_empty() {
         return Ok(report);
     }
+    if game == Game::EldenRing {
+        apply_trace_offsets(&mut found.uses, trace_offsets);
+    }
     let binders = binders_for_clip(game, &source.file);
     if !found.uses.is_empty() {
         let mut library = EffectLibrary::with_cache(archive, decoder, game, binders, std::mem::take(cache));
-        let read = resolve_families(&mut library, game, variant, &mut found).and_then(|()| {
-            let roots: Vec<i32> = found.uses.iter().map(|u| u.effect).collect();
-            read_files(&mut library, roots, world, &mut report).map(|_| ())
-        });
+        let roots: Vec<i32> = found.uses.iter().map(|u| u.effect).collect();
+        let read = read_files(&mut library, roots, world, &mut report);
         *cache = library.into_cache();
-        read?;
+        let files = read?;
+        let before = found.uses.len();
+        found.uses.retain(|u| files.contains_key(&u.effect));
+        let unmatched = u32::try_from(before - found.uses.len()).unwrap_or(u32::MAX);
+        if unmatched > 0 {
+            found
+                .lost
+                .push(("no effect file with this id".to_owned(), unmatched));
+        }
     }
     report.clip_uses = found.uses.len();
     world.insert(clip, found);
     Ok(report)
-}
-
-/// The numbers of Elden Ring's animation events that name a family of effect files, not one: the player's attack animations
-/// start `400` to `422`, no file of any binder, while the common binders hold `401000`, `401001`, `401002`, `411000`...`411007`,
-/// `420000`...`420007` (`number * 1000 + variant`; `400001` to `400003` for `400`; none for `410` and `403`).
-const FAMILY_NUMBERS: std::ops::RangeInclusive<i32> = 400..=499;
-
-/// Where an event's number is a family ([`FAMILY_NUMBERS`], Elden Ring, no file of that number), makes it the family's member
-/// `variant` names (`effect * 1000 + variant`) when a binder holds that file, and moves the event from `found.uses` to
-/// `found.lost` when `variant` is `None` or the member does not exist. Which member the game picks is not stored in any param
-/// (no field of the weapon, bullet, attack or special-effect params holds a family member's number apart from the weapons'
-/// `traceSfxId` `401000`), so it is the caller's to state.
-fn resolve_families(
-    library: &mut EffectLibrary<'_>,
-    game: Game,
-    variant: Option<u32>,
-    found: &mut ClipEffectUses,
-) -> Result<()> {
-    if game != Game::EldenRing {
-        return Ok(());
-    }
-    let mut unstated = 0_u32;
-    let mut missing = 0_u32;
-    let mut kept = Vec::with_capacity(found.uses.len());
-    for mut u in std::mem::take(&mut found.uses) {
-        if !FAMILY_NUMBERS.contains(&u.effect) || matches!(library.effect(u.effect)?, Ok(Some(_))) {
-            kept.push(u);
-            continue;
-        }
-        let Some(v) = variant else {
-            unstated += 1;
-            continue;
-        };
-        let member = i32::try_from(v)
-            .ok()
-            .and_then(|v| u.effect.checked_mul(1000)?.checked_add(v));
-        match member {
-            Some(member) if matches!(library.effect(member)?, Ok(Some(_))) => {
-                u.effect = member;
-                kept.push(u);
-            }
-            _ => missing += 1,
-        }
-    }
-    found.uses = kept;
-    if unstated > 0 {
-        found.lost.push((
-            "an effect family (an Elden Ring event number 400 to 499: no file of that number, the files number * 1000 + variant) with no variant stated".to_owned(),
-            unstated,
-        ));
-    }
-    if missing > 0 {
-        found.lost.push((
-            "an effect family (an Elden Ring event number 400 to 499) without the member the stated variant names".to_owned(),
-            missing,
-        ));
-    }
-    Ok(())
 }
 
 /// One effect by its number, standing at the origin (an effect viewer's world): the effect file, the effects it spawns and the

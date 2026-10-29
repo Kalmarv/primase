@@ -413,6 +413,7 @@ fn use_of(
         kind: 96,
         effect,
         dummy,
+        source: None,
         follow,
         repeating,
         start,

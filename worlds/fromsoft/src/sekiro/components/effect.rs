@@ -125,6 +125,9 @@ pub struct EffectUse {
     pub effect: i32,
     /// The reference id of the dummy polygon the effect stands at, where the event names one.
     pub dummy: Option<i32>,
+    /// The event's `Dummy Poly Source`, where it has one: 0 the character's own dummy polygons (a weapon's are among them
+    /// as `10000 + n` for the right hand and `20000 + n` for the left), 1 the left hand's weapon, 2 the right hand's.
+    pub source: Option<i32>,
     /// Whether the effect follows the dummy polygon as the animation moves it.
     pub follow: bool,
     /// Whether the event keeps the effect going for its length (else the effect plays out).
@@ -248,6 +251,7 @@ pub fn clip_effect_uses(source: &SourceEvents) -> ClipEffectUses {
             kind,
             effect,
             dummy,
+            source: whole(values, "Dummy Poly Source").and_then(|from| i32::try_from(from).ok()),
             follow: flag(values, "Follow Dummy Poly"),
             repeating: flag(values, "Is Repeat"),
             start: event.start,
@@ -260,6 +264,43 @@ pub fn clip_effect_uses(source: &SourceEvents) -> ClipEffectUses {
             .into_iter()
             .map(|(reason, n)| (reason.to_owned(), n))
             .collect(),
+    }
+}
+
+/// What Elden Ring adds to the effect number of a blade event (type 118) before it starts the effect: the number the character's
+/// data keeps for the hand the blade is in. The engine's handler of the event reads it at the character's data (`+0x1e8` for the
+/// right hand, `+0x1f0` for the left) and adds it to the event's number; the stock events name `401001`, `401002`, `405000`,
+/// `411002`..., and the effect files `401004` to `401007`, `401010` to `401012`, `401020`, `401021`, `401030`... are numbers
+/// those plus an offset reach. Where the offset comes from is not decoded: the special-effect param's `traceSfxIdOffsetType` is
+/// the field the community's param documentation names for the blade trail's offset (1 to 6, 9 to 12, 14 to 21 and 24 to 28 in the
+/// stock params; the plain sum gives a file for `401001` plus 1, 3 to 6, 9 to 11, 19 and 20 but not plus 2), so the number is
+/// stated, not derived. With no special effect on the weapon, both are 0 (the default).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TraceOffsets {
+    /// For a blade in the right hand (`Dummy Poly Source` 2, or a right-hand weapon dummy polygon `10000 + n`).
+    pub right: i32,
+    /// For a blade in the left hand (`Dummy Poly Source` 1, or a left-hand weapon dummy polygon `20000 + n`).
+    pub left: i32,
+}
+
+/// Adds the hand's offset of `offsets` to the number of each blade event (type 118) of `uses`, as Elden Ring's handler does:
+/// the right hand's for `Dummy Poly Source` 2, the left's for 1. For source 0 the handler asks the character which hand the
+/// action is in (a runtime state); here the weapon dummy polygon block stands for it, `10000..20000` the right and
+/// `20000..30000` the left, and a blade on any other dummy polygon gets no offset. Events of other types keep their number.
+pub fn apply_trace_offsets(uses: &mut [EffectUse], offsets: TraceOffsets) {
+    for u in uses.iter_mut().filter(|u| u.kind == 118) {
+        let hand = match u.source {
+            Some(2) => Some(offsets.right),
+            Some(1) => Some(offsets.left),
+            _ => match u.dummy {
+                Some(10_000..20_000) => Some(offsets.right),
+                Some(20_000..30_000) => Some(offsets.left),
+                _ => None,
+            },
+        };
+        if let Some(offset) = hand {
+            u.effect = u.effect.saturating_add(offset);
+        }
     }
 }
 
@@ -384,6 +425,37 @@ mod tests {
         // the weapon's dummy polygon, the goods and magic row, the throw index and the type the files do not bear out
         assert_eq!(found.lost.len(), 4);
         assert!(found.lost.iter().all(|(_, n)| *n == 1));
+    }
+
+    #[test]
+    fn a_blade_events_number_gets_the_offset_of_its_hand_and_other_events_keep_theirs() {
+        let blade = |effect: i32, dummy: i32, source: Option<i32>| EffectUse {
+            event: 0,
+            kind: 118,
+            effect,
+            dummy: Some(dummy),
+            source,
+            follow: false,
+            repeating: false,
+            start: 0.0,
+            end: None,
+        };
+        let mut uses = vec![
+            blade(401_001, 10_300, Some(0)),
+            blade(401_001, 20_300, Some(0)),
+            blade(401_002, 300, Some(2)),
+            blade(401_002, 300, Some(1)),
+            blade(401_001, 60, Some(0)),
+            EffectUse {
+                kind: 96,
+                ..blade(430, 10_300, Some(0))
+            },
+        ];
+        apply_trace_offsets(&mut uses, TraceOffsets { right: 10, left: 20 });
+        let numbers: Vec<i32> = uses.iter().map(|u| u.effect).collect();
+        assert_eq!(numbers, [401_011, 401_021, 401_012, 401_022, 401_001, 430]);
+        apply_trace_offsets(&mut uses, TraceOffsets::default());
+        assert_eq!(uses.iter().map(|u| u.effect).collect::<Vec<_>>(), numbers);
     }
 
     #[test]
