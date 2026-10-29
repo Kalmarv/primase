@@ -208,8 +208,9 @@ pub enum DrawBucket {
     /// Surfaces lit as they are drawn, after the deferred light (the blended ones, water).
     Forward,
     /// The sky: its dome, the sun's and moon's discs, cloud layers and far scenery drawn as part of the sky, each by its
-    /// own material, after the deferred light and the fog that is composited over it: the draws whose material's
-    /// `core.draw_order` layer is [`crate::DrawLayer::Sky`].
+    /// own material, after the deferred light: the draws whose material's `core.draw_order` layer is
+    /// [`crate::DrawLayer::Sky`]. Where its step stands against the source's fog composite (before it, so the fog lies
+    /// over the sky, or after it) is the graph's order of steps, as the source draws it.
     Sky,
     /// The shadow casters of a light.
     ShadowCaster,

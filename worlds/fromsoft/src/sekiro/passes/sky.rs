@@ -26,8 +26,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// `M[Clouds9]`, `M[Atmosphere][Clouds][EnvmapCapture]`) go on the sky layer at [`DrawOrder::SKY`], writing depth, in
 /// the source's order; its other materials (the Erdtree's light shafts) keep their own, counted. A recorded frame of
 /// Stormveil draws its cloud layer (`AEG096_603`, `M[Clouds9]`) so: after the opaque surfaces are lit and composited
-/// and before the blended surfaces, with a pipeline that tests and writes depth and blends by source alpha. One
-/// difference from core's sky layer: that frame composites its volumetric fog after the sky, over it. The sky spheres'
+/// and before the blended surfaces, with a pipeline that tests and writes depth and blends by source alpha; that frame
+/// composites its volumetric fog after the sky, over it (Sekiro's composites it before its sky). The sky spheres'
 /// own draws are not yet observed: that they draw as the cloud layer does is inferred from the program family. Then
 /// `fromsoft.sky_part` is removed. No options: what it lowers is the game's.
 #[derive(Clone, Copy, Debug)]

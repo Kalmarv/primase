@@ -647,7 +647,7 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
   camera's x and z; any other (the Erdtree's light shafts) is placed where the layout places it, as that frame draws
   one. The pass puts the sky-program materials on the sky layer at its start, writing depth, as that frame draws the
   cloud layer (after the lit opaque surfaces, before the blended ones; that frame composites its volumetric fog over
-  the sky, which core's sky layer does not), and leaves the other materials in their own layer, counted. The sky
+  the sky, where Sekiro's composites it before its sky: a render graph states either by its order), and leaves the other materials in their own layer, counted. The sky
   spheres' own draws are not yet observed (inferred from the program family). The sky map's parts no row names (its
   far view of the land) are not read, counted.
 - `lower-fromsoft-environment{lux-per-unit=...}` lowers `fromsoft.draw_param` to

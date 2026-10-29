@@ -19,9 +19,11 @@ pub enum DrawLayer {
     /// and does not cast its shadow.
     Decal,
     /// The sky: a dome, the moon's or the sun's disc, far backdrops and cloud layers. It is drawn after the opaque
-    /// surfaces are lit and the frame's fog and atmosphere are composited over them, before the blended surfaces,
-    /// depth tested against the scene so that it shows only where nothing nearer was drawn, and it casts no shadow.
-    /// The sky's own programs give its colour, fog included: a consumer adds no fog or lighting of its own to it.
+    /// surfaces are lit and before the blended surfaces, depth tested against the scene so that it shows only where
+    /// nothing nearer was drawn, and it casts no shadow. The sky's own programs give its colour: a consumer adds no
+    /// fog or lighting of its own to it. Whether the source's own fog composite (a volumetric fog laid over the lit
+    /// picture) comes before the sky or over it is the source's: its `core.render_graph` states it by the order of its
+    /// passes (Sekiro composites it before the sky, Elden Ring over it, in a recorded frame of each).
     /// Where it stands is often relative to the view ([`crate::SkyAnchor`]).
     Sky,
     /// Blended.
