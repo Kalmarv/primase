@@ -4,8 +4,8 @@
 //! (where a map keeps its files, how objects are found, tile parents) is [`fromsoft_formats::Game`]'s; what Elden Ring's read does
 //! not cover yet (world states, materials without a definition) is in its notices.
 use super::{
-    animation, collision, draw_param, effect_lights, effects, extras, groups, objects, shaders, shadows, sky, states,
-    textures,
+    animation, collision, draw_param, effect_lights, effects, extras, groups, objects, shaders, shadows, sky,
+    states, textures,
 };
 use crate::sekiro::source::{self, Region};
 use crate::{invalid, materials};

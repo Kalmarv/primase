@@ -315,7 +315,11 @@ pub struct PlacedModel<'a> {
 /// The row of `model` in the model effect param: Sekiro's `oNNNNNN` is `NNNNNN * 1000`, Elden Ring's `AEGnnn_mmm` with
 /// relative id `r` is `(nnn * 1000 + mmm) * 1000 + r`. `Ok(None)`: the asset names no row (-1); `Err`: the model's name is
 /// of no such form.
-pub(super) fn row_of(game: Game, model: &str, relative_id: Option<i16>) -> std::result::Result<Option<i32>, ()> {
+pub(super) fn row_of(
+    game: Game,
+    model: &str,
+    relative_id: Option<i16>,
+) -> std::result::Result<Option<i32>, ()> {
     match game {
         Game::Sekiro => {
             let digits = model.strip_prefix('o').and_then(|m| m.get(..6)).ok_or(())?;

@@ -85,18 +85,30 @@ fn the_effects_of_three_areas_are_placed_with_their_files_and_lowered() -> Resul
         println!("{}: {r:?}", area.map);
         let map = area.map;
         assert!(r.asked && r.param_unresolved.is_none(), "{map}: {r:?}");
-        assert_eq!((r.regions, r.regions_outside), (area.regions, 0), "{map}: SFX regions");
+        assert_eq!(
+            (r.regions, r.regions_outside),
+            (area.regions, 0),
+            "{map}: SFX regions"
+        );
         assert_eq!(r.region_effects, area.regions, "{map}");
         assert_eq!(r.model_effects, area.attachments, "{map}: model attachments");
 
         // one entity per placed effect, at a place, with its file in the world
         let placed: Vec<_> = world.iter::<Effect>().map(|(e, p)| (e, p.clone())).collect();
-        assert_eq!(placed.len() + r.unplaced, r.region_effects + r.model_effects, "{map}: placed + unplaced = reached");
+        assert_eq!(
+            placed.len() + r.unplaced,
+            r.region_effects + r.model_effects,
+            "{map}: placed + unplaced = reached"
+        );
         assert!(!placed.is_empty(), "{map}");
         let files: BTreeSet<i32> = world.iter::<EffectFile>().map(|(_, f)| f.effect).collect();
         assert_eq!(files.len(), r.files, "{map}: effect files");
         for (e, p) in &placed {
-            assert!(files.contains(&p.effect), "{map}: effect {} placed without its file", p.effect);
+            assert!(
+                files.contains(&p.effect),
+                "{map}: effect {} placed without its file",
+                p.effect
+            );
             let t = world.get::<Transform>(*e).ok_or("an effect without a place")?;
             assert!(t.cols.iter().flatten().all(|x| x.is_finite()));
         }
@@ -122,7 +134,11 @@ fn the_effects_of_three_areas_are_placed_with_their_files_and_lowered() -> Resul
             .get("effects of regions that start disabled, left out")
             .copied()
             .unwrap_or(0) as usize;
-        assert_eq!(lowered + disabled, placed.len(), "{map}: lowered + left out = placed");
+        assert_eq!(
+            lowered + disabled,
+            placed.len(),
+            "{map}: lowered + left out = placed"
+        );
         println!("{map}: {lowered} placed effects lowered, {disabled} left out as starting disabled");
     }
     Ok(())

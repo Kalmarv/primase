@@ -91,9 +91,11 @@ fn every_installed_effect_lowers_and_its_draws_add_up() -> Result<()> {
         (Game::Sekiro, Data::Sekiro, SEKIRO_APPEARANCES, 2_669usize),
         (Game::EldenRing, Data::Elden, ELDEN_APPEARANCES, 11_912),
     ] {
-        let (Some(root), Some(names), Some(folder)) =
-            (install(data), oracle(OracleSet::Uxm, data, "dictionary.txt"), keys(data))
-        else {
+        let (Some(root), Some(names), Some(folder)) = (
+            install(data),
+            oracle(OracleSet::Uxm, data, "dictionary.txt"),
+            keys(data),
+        ) else {
             continue;
         };
         let key = Keys::from_folder(folder, game, game.param_key_sha256())?;
@@ -122,9 +124,14 @@ fn every_installed_effect_lowers_and_its_draws_add_up() -> Result<()> {
         let mut world = World::default();
         let probe = world.spawn();
         let (mut drawn, mut unchosen): (BTreeMap<i16, u32>, BTreeMap<i16, u32>) = Default::default();
-        let (mut emitters, mut lost, mut approximated) = (0usize, BTreeMap::<String, u32>::new(), BTreeMap::<String, u32>::new());
+        let (mut emitters, mut lost, mut approximated) = (
+            0usize,
+            BTreeMap::<String, u32>::new(),
+            BTreeMap::<String, u32>::new(),
+        );
         for (id, file) in &files {
-            let lowered = lower(file, game, 0, &mut Everything).map_err(|e| format!("{game:?} effect {id}: {e}"))?;
+            let lowered =
+                lower(file, game, 0, &mut Everything).map_err(|e| format!("{game:?} effect {id}: {e}"))?;
             lowered
                 .system
                 .verify(probe, &world)
@@ -150,10 +157,17 @@ fn every_installed_effect_lowers_and_its_draws_add_up() -> Result<()> {
         for &(action, held) in expected {
             let made = drawn.get(&action).copied().unwrap_or(0);
             let left = unchosen.get(&action).copied().unwrap_or(0);
-            assert_eq!(made + left, held, "{game:?}: appearance action {action}: {made} drawn + {left} unchosen of {held}");
+            assert_eq!(
+                made + left,
+                held,
+                "{game:?}: appearance action {action}: {made} drawn + {left} unchosen of {held}"
+            );
         }
         let types: BTreeSet<i16> = expected.iter().map(|(t, _)| *t).collect();
-        assert!(drawn.keys().chain(unchosen.keys()).all(|t| types.contains(t)), "{game:?}: {drawn:?} {unchosen:?}");
+        assert!(
+            drawn.keys().chain(unchosen.keys()).all(|t| types.contains(t)),
+            "{game:?}: {drawn:?} {unchosen:?}"
+        );
         assert!(emitters > files.len(), "{game:?}: {emitters} emitters");
         println!(
             "FS_EFFECTS_LOWERED={}",

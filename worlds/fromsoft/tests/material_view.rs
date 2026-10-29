@@ -122,7 +122,10 @@ fn a_material_binary_is_drawn_forward_where_it_blends_or_states_forward_renderin
         definition: DefinitionRef::Matbin(&stated),
         bindings: &bindings,
     };
-    assert_eq!((v.plain_pass_program(), v.pass()), ("M[AMSN_V]_Fwd.ppo".into(), "Fwd"));
+    assert_eq!(
+        (v.plain_pass_program(), v.pass()),
+        ("M[AMSN_V]_Fwd.ppo".into(), "Fwd")
+    );
     // forward rendering stated false, and an additive blend (4) alone, which no recorded frame draws: the G-buffer's
     let opaque = binary(vec![
         param("g_BlendMode", B::Int(0)),
