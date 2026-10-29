@@ -60,10 +60,10 @@ use unity_formats::material::{ShaderData, UnityMaterialData};
 use unity_formats::mesh::{MeshSkin, UnityMeshData};
 use unity_formats::pipeline::UnityUrpSettings;
 use unity_formats::player::{ObjRef, Player, QualityLevel, SkinWeights};
-use unity_formats::scene::{ColliderComponent, ColliderShape};
 use unity_formats::scene::{
-    IDENTITY, LodGroup, Matrix, OffFlag, Renderer, RendererSkin, Scene, SceneJoint, Skipped,
+    Animator, IDENTITY, LodGroup, Matrix, OffFlag, Renderer, RendererSkin, Scene, SceneJoint, Skipped,
 };
+use unity_formats::scene::{ColliderComponent, ColliderShape};
 use unity_formats::shader::procedural;
 use unity_formats::terrain::{TerrainData, TerrainLayerData};
 use unity_formats::texture::UnityTexture as UnityTextureData;
@@ -273,6 +273,42 @@ fn chain_of(scene: &Scene, joints: &mut BTreeMap<i64, SceneJoint>, t: i64) -> Re
         at = joints[&t].father;
     }
     Ok(chain)
+}
+
+/// The Animator each of the Transforms `ts` belongs to, as its GameObject's Transform: the nearest Animator at or above
+/// it that has a controller (the one [`build_rigs`] extends a rig up to, whose clips name the Transforms between), else
+/// the nearest Animator at all; a Transform under no Animator has none. An Animator nested in another's hierarchy so
+/// owns its own rig, whatever the order of the file's object table: PEAK's portrait `Scout` inside the passport UI's
+/// Animator, the seated scouts inside the helicopter's. In PEAK's level 207 no clip of an outer Animator names a
+/// Transform under a nested Animator but one UI button (its 45 outer Animators' tracks against their nested
+/// Transforms' path hashes).
+fn owners(
+    scene: &Scene,
+    animators: &[Animator],
+    ts: impl Iterator<Item = i64>,
+) -> Result<BTreeMap<i64, i64>> {
+    let all: BTreeSet<i64> = animators
+        .iter()
+        .filter_map(|a| scene.transform_of(a.game_object))
+        .collect();
+    let with_controller: BTreeSet<i64> = animators
+        .iter()
+        .filter(|a| a.controller.is_some())
+        .filter_map(|a| scene.transform_of(a.game_object))
+        .collect();
+    let mut joints = BTreeMap::new();
+    let mut out = BTreeMap::new();
+    for t in ts {
+        let chain = chain_of(scene, &mut joints, t)?;
+        let owner = chain
+            .iter()
+            .find(|x| with_controller.contains(x))
+            .or_else(|| chain.iter().find(|x| all.contains(x)));
+        if let Some(&owner) = owner {
+            out.insert(t, owner);
+        }
+    }
+    Ok(out)
 }
 
 /// The skeletons of skinned renderers' bones. A renderer's joints are its bones and its root bone with the Transforms
@@ -768,8 +804,9 @@ impl Builder<'_> {
     /// The clips of every Animator of `scene` that has a controller and animates joints of the skeletons in `joint_of`
     /// (a Transform's skeleton, rig and joint): each clip lowered for each skeleton its Animator holds (a joint's path
     /// below the Animator's GameObject is its CRC-32, as a clip names its targets) as a `core.clip`, and bound to the
-    /// rig by a `core.clip_binding`. What a clip drives that is no joint, and clips that cannot be read, are counted in
-    /// the notices.
+    /// rig by a `core.clip_binding`. A joint or blend shape renderer is its nearest Animator's (see [`owners`]), not
+    /// that of every Animator above it. What a clip drives that is no joint, and clips that cannot be read, are counted
+    /// in the notices.
     fn bind_clips(
         &mut self,
         w: &mut World,
@@ -782,15 +819,22 @@ impl Builder<'_> {
         let mut made: BTreeMap<(ObjRef, Entity, Option<ObjRef>, MorphKey), Option<Entity>> = BTreeMap::new();
         let mut bound: BTreeSet<(Entity, Entity)> = BTreeSet::new();
         let mut controllers: BTreeMap<ObjRef, Vec<ObjRef>> = BTreeMap::new();
-        for animator in scene.animators_under(self.player, root)? {
+        let animators = scene.animators_under(self.player, root)?;
+        let owner = owners(
+            scene,
+            &animators,
+            joint_of.keys().chain(morph_renderers.keys()).copied(),
+        )?;
+        for animator in animators {
             let Some(tp) = scene.transform_of(animator.game_object) else {
                 continue;
             };
-            // the joints below the Animator's GameObject, by skeleton, each by the hash of its path
+            let owns = |t: i64| owner.get(&t) == Some(&tp);
+            // the joints this Animator owns, by skeleton, each by the hash of its path below the Animator's GameObject
             let mut rigs: BTreeMap<Entity, Rig> = BTreeMap::new();
             // by rig: the rig's skeleton (rigs of one skeleton share its clips) and its joints by path hash
             for (&t, &(skeleton, rig, joint)) in joint_of {
-                let Some(path) = scene.path_below(t, tp) else {
+                let Some(path) = scene.path_below(t, tp).filter(|_| owns(t)) else {
                     continue;
                 };
                 let hashes = &mut rigs
@@ -873,10 +917,10 @@ impl Builder<'_> {
                     }
                 }
             }
-            // the blend shapes below the Animator's GameObject, by the hash of their renderer's path and of their name
+            // the blend shapes this Animator owns, by the hash of their renderer's path and of their name
             let mut morphs: BTreeMap<(u32, u32), (Entity, Entity, MorphId)> = BTreeMap::new();
             for (&t, m) in morph_renderers {
-                let Some(path) = scene.path_below(t, tp) else {
+                let Some(path) = scene.path_below(t, tp).filter(|_| owns(t)) else {
                     continue;
                 };
                 for &(hash, id) in &m.shapes {

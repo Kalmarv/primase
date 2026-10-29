@@ -12,10 +12,12 @@
 
 mod inputs;
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use inputs::{Game, Tool, install_file, tool};
 use primase_core::{Controller, World};
+use primase_unity::animator::UnityAnimatorController;
 use primase_unity::level::read_level;
 use primase_unity::passes::lower_animator::lower_unity_animator;
 use unity_formats::TypeTreePackage;
@@ -134,8 +136,8 @@ fn addressables_bundles_beside_the_loose_files() {
 
 /// PEAK: one level of `levels192-207.assetbundle` with the files its pointers name (its shared assets and other levels'
 /// in the bundle), not the bundle's other levels, beside the loose files of the player. The level reads into a world
-/// (`read_level`: its Animators' controllers include `Scout`, whose empty layer has an entry node without a destination),
-/// and meshes and textures of its shared assets read with their data.
+/// (`read_level`: its Animators' controllers include `Scout`, whose empty layer has an entry node without a destination,
+/// and each lowers for the Animator nearest its rig), and meshes and textures of its shared assets read with their data.
 #[test]
 fn one_level_of_peaks_bundle_reads() {
     let (Some(data), Some(package)) = (install_file(Game::Peak, "PEAK_Data"), package()) else {
@@ -172,29 +174,25 @@ fn one_level_of_peaks_bundle_reads() {
         report.renderers, report.materials, report.textures, report.controllers
     );
     assert!(report.renderers > 0);
-    // the Animators' controllers lower, the empty layers of `Scout` (its seventh) and `Ambience` (its first) among them:
-    // a layer with no states and no default state, not a reason to leave the controller out. The level names `Scout` once
-    // and `Ambience` four times among its Animators (an independent census of its scene's Animators).
-    lower_unity_animator(&mut w).unwrap();
-    let lowered: Vec<_> = w
-        .iter::<Controller>()
-        .filter(|(_, c)| c.name == "Scout" || c.name == "Ambience")
-        .map(|(_, c)| c.clone())
+    // every controller read lowers, each for the Animator nearest its rig: `Scout` (the passport's portrait, inside the
+    // passport UI's Animator) and `Scout Sit 2` and `Scout Sit 3` (inside the helicopter's) among them. `Scout`'s seventh
+    // layer is empty: no states and no default state, not a reason to leave the controller out. The level names `Scout`
+    // once among its 600 Animators (an independent census of its scene's Animators by controller name).
+    let read: BTreeSet<String> = w
+        .iter::<UnityAnimatorController>()
+        .map(|(_, c)| c.name.clone())
         .collect();
-    let scout = lowered
-        .iter()
-        .find(|c| c.name == "Scout")
-        .expect("Scout is lowered");
+    let log = lower_unity_animator(&mut w).unwrap();
+    assert!(log.omitted.is_empty(), "{log:?}");
+    let lowered: BTreeSet<String> = w.iter::<Controller>().map(|(_, c)| c.name.clone()).collect();
+    assert_eq!(lowered, read);
+    for name in ["Scout", "Scout Sit 2", "Scout Sit 3"] {
+        assert!(lowered.contains(name), "{name} in {lowered:?}");
+    }
+    let (_, scout) = w.iter::<Controller>().find(|(_, c)| c.name == "Scout").unwrap();
     assert_eq!(scout.layers.len(), 7);
     assert!(scout.layers[6].states.is_empty() && scout.layers[6].default_state.is_none());
-    for c in &lowered {
-        assert!(
-            c.layers
-                .iter()
-                .any(|l| l.states.is_empty() && l.default_state.is_none()),
-            "{}: its empty layer",
-            c.name
-        );
+    for (_, c) in w.iter::<Controller>() {
         for l in c.layers.iter().filter(|l| !l.states.is_empty()) {
             assert!(l.default_state.is_some(), "{}: {}", c.name, l.name);
         }
