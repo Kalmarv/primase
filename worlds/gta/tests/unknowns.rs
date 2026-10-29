@@ -222,7 +222,7 @@ fn what_is_left_unknown_on_a_region() {
                 let kind = match &t.source {
                     TextureSource::Texture { .. } => continue,
                     TextureSource::Default { .. } => "default (white)",
-                    TextureSource::Missing => "missing",
+                    TextureSource::Missing { .. } => "missing",
                     TextureSource::Frame(_) => "frame (the consumer's)",
                     TextureSource::Target { .. } => "a render graph target",
                 };

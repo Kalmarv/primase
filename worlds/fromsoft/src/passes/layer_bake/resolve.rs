@@ -478,7 +478,9 @@ pub fn resolve(
                     why,
                 }
             }
-            (None, Unbound::Leave) => TextureSource::Missing,
+            (None, Unbound::Leave) => TextureSource::Missing {
+                why: "the material binds no texture and unbound=leave supplies no default".into(),
+            },
         };
         bindings.push(TextureBinding {
             resource: resource.id,

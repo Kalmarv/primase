@@ -992,11 +992,20 @@ impl Lower<'_> {
                                 .unwrap_or_else(|| "a buffer bound at a texture register".to_owned());
                             let n = report.engine_textures.entry(what).or_default();
                             *n = n.saturating_add(1);
-                            TextureSource::Missing
+                            TextureSource::Missing {
+                                why: format!(
+                                    "engine texture: {}",
+                                    slot.engine
+                                        .as_deref()
+                                        .unwrap_or("a buffer bound at a texture register")
+                                ),
+                            }
                         }
                         None => {
                             report.unbound_slots = report.unbound_slots.saturating_add(1);
-                            TextureSource::Missing
+                            TextureSource::Missing {
+                                why: "the render graph slot names no target or engine image".into(),
+                            }
                         }
                     };
                     let reads = p.pairs.textures.get(&(d.space, d.register));

@@ -31,8 +31,9 @@ pub enum TextureSource {
     Default { value: [f32; 4], why: String },
     /// An image of the frame being drawn, which the consumer supplies.
     Frame(FrameTexture),
-    /// Nothing is bound and the source says no default: a consumer must not invent one.
-    Missing,
+    /// Nothing is bound and the source says no default: a consumer must not invent one. The reason retains the
+    /// source's resource identity and the missing evidence, so consumers can explain the refusal.
+    Missing { why: String },
     /// A view of one of the frame's own targets: only in the binding of a step of the frame's `core.render_graph`
     /// ([`crate::render_graph`]), whose targets these are. A material's binding never states one. It is read through the
     /// program's samplers, whose states the stage states ([`StageBinding::samplers`]): a sampler's state belongs to the
@@ -339,6 +340,14 @@ impl StageBinding {
             )));
         }
         for (n, t) in self.textures.iter().enumerate() {
+            if let TextureSource::Missing { why } = &t.source
+                && why.trim().is_empty()
+            {
+                return Err(at(format!(
+                    "texture slot {} is missing without a reason",
+                    t.resource.0
+                )));
+            }
             let Some(ResourceKind::Texture { dim, arrayed, .. }) =
                 interface.resource(t.resource).map(|r| &r.kind)
             else {
@@ -1229,6 +1238,28 @@ mod tests {
         w.insert(m, binding(s, t));
         (w, s, t, m)
     }
+    #[test]
+    fn an_unfilled_texture_retains_its_reason_and_cannot_omit_it() {
+        let (w, _, _, material) = world();
+        let mut binding = w.get::<ShaderBinding>(material).unwrap().clone();
+        let reason = "engine texture t3 space 0: the runtime image is not stored in the material";
+        binding.stages[0].textures[0].source = TextureSource::Missing { why: reason.into() };
+        assert_eq!(binding.verify(material, &w), Ok(()));
+        let json = serde_json::to_value(&binding).unwrap();
+        assert_eq!(
+            json["stages"][0]["textures"][0]["source"]["missing"]["why"],
+            reason
+        );
+        for why in ["", "  \n"] {
+            binding.stages[0].textures[0].source = TextureSource::Missing { why: why.into() };
+            let error = binding.verify(material, &w).unwrap_err();
+            assert!(
+                error.contains("texture slot 1 is missing without a reason"),
+                "{error}"
+            );
+        }
+    }
+
     /// An output's encoding of power or root 0, or of a scale that isn't finite, is refused, naming the output.
     #[test]
     fn an_encoding_of_no_power_no_root_or_no_finite_scale_is_refused() {

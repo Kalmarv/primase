@@ -714,12 +714,22 @@ impl ResolveGtaShaders {
                     let source = match texture_record(table, bind.register, bind.space)
                         .and_then(|i| table.resources.get(i))
                     {
-                        Some(t) => texture_source(world, inputs, t, sampling.state, counts),
+                        Some(t) => {
+                            texture_source(world, inputs, t, table.name_of(t.name), sampling.state, counts)
+                        }
                         None => {
                             counts.add("texture slots with no table record, left Missing");
-                            TextureSource::Missing
+                            TextureSource::Missing {
+                                why: format!(
+                                    "texture t{} space {}: the program declares no texture table record",
+                                    bind.register, bind.space
+                                ),
+                            }
                         }
                     };
+                    if let TextureSource::Missing { why } = &source {
+                        counts.add(&format!("texture slots left unfilled: {why}"));
+                    }
                     textures.push(TextureBinding {
                         resource: r.id,
                         sampler: sampling.resource,
@@ -976,7 +986,7 @@ fn output_bindings(
 pub fn engine_reason(name: &str) -> Option<&'static str> {
     Some(match name {
         "globalScalars2" => {
-            "engine frame scalars: in the vertex programs lane y divides the clip depth of a see-through fade (VS_Transform_SeeThrough) and lane z is subtracted from a squared-distance fade of the vertex colour (VS_TransformD); in the pixel programs lane z is multiplied as 1 - z into a wetness term and stored as the top bit of the state byte of target 0 w (floor(128 z)); no game-free meaning established"
+            "engine frame scalars: lane x enters the sine phase of vertex motion (VS_PedTransformD) and see-through visibility; lane y enables see-through geometry where positive and divides its clip w (VS_Transform_SeeThrough); lane z biases both ambient vertex-colour fades, saturate(f-z) and saturate(1-f-z), where f=saturate(distance_squared*0.000004) (VS_TransformD), and pixel programs use 1-z in wetness and floor(128*z) in the state byte of target 0 w; lane w has no established output use in these samples; no CPU writer or stored frame value established"
         }
         "globalScalars" => {
             "lanes y and z are passed on to the pixel stage (VS_decalFx); in the pixel programs lanes z and y multiply the vertex colour's x and y into the ambient terms of targets 0 w and 3; no game-free meaning established (lane x is the fade, engine_parts)"
@@ -1214,6 +1224,7 @@ fn texture_source(
     world: &World,
     inputs: &Inputs<'_>,
     t: &TableResource,
+    name: Option<&str>,
     sampler: SamplerState,
     counts: &mut Counts,
 ) -> TextureSource {
@@ -1223,7 +1234,15 @@ fn texture_source(
     match inputs.param(key) {
         None if !renamed => {
             counts.add("texture slots that are the engine's (the material stores none under their name), left Missing");
-            TextureSource::Missing
+            TextureSource::Missing {
+                why: format!(
+                    "engine texture {} (hash {:08x}) at t{} space {}: the material stores no parameter under this unrenamed table name; the runtime binding is not stored in the material",
+                    name.unwrap_or("unnamed"),
+                    t.name,
+                    t.register,
+                    t.space
+                ),
+            }
         }
         Some(GtaParam::Texture {
             texture: Some(texture),
@@ -1237,7 +1256,14 @@ fn texture_source(
                 }
             } else {
                 counts.add("texture parameters whose texture is not loaded, left Missing");
-                TextureSource::Missing
+                TextureSource::Missing {
+                    why: format!(
+                        "texture {} at t{} space {}: the material references an unloaded texture",
+                        name.unwrap_or("unnamed"),
+                        t.register,
+                        t.space
+                    ),
+                }
             }
         }
         Some(GtaParam::Texture { texture: None, .. }) | None => match inputs.unset {
@@ -1250,12 +1276,26 @@ fn texture_source(
             }
             UnsetTexture::Leave => {
                 counts.add("texture parameters with no texture, left Missing");
-                TextureSource::Missing
+                TextureSource::Missing {
+                    why: format!(
+                        "texture {} at t{} space {}: no texture parameter value and unset-textures=leave supplies no default",
+                        name.unwrap_or("unnamed"),
+                        t.register,
+                        t.space
+                    ),
+                }
             }
         },
         Some(_) => {
             counts.add("texture parameters stored as another kind of value, left Missing");
-            TextureSource::Missing
+            TextureSource::Missing {
+                why: format!(
+                    "texture {} at t{} space {}: the parameter has a non-texture value",
+                    name.unwrap_or("unnamed"),
+                    t.register,
+                    t.space
+                ),
+            }
         }
     }
 }
@@ -1441,6 +1481,20 @@ impl Pass for ResolveGtaShaders {
                 continue;
             }
             counts.add("materials bound");
+            let missing: BTreeSet<_> = stages
+                .iter()
+                .flat_map(|s| &s.textures)
+                .filter_map(|t| {
+                    if let TextureSource::Missing { why } = &t.source {
+                        Some(why)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            for why in missing {
+                counts.add(&format!("materials with unfilled texture: {why}"));
+            }
             if let Some(why) = fallback {
                 counts.add(&format!(
                     "materials bound to {technique}, {why}: the effect has no technique {}",

@@ -918,6 +918,20 @@ impl Pass for ResolveAnvilShaders {
                 bound.push(binding);
             }
             bound.sort_by_key(|s| s.stage);
+            let missing: BTreeSet<_> = bound
+                .iter()
+                .flat_map(|s| &s.textures)
+                .filter_map(|t| {
+                    if let TextureSource::Missing { why } = &t.source {
+                        Some(why)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            for why in missing {
+                bump(&format!("materials with unfilled texture: {why}"), 1, &mut counts);
+            }
             world.insert(material, MaterialPrograms(facts));
             world.insert(
                 material,
@@ -1004,6 +1018,30 @@ fn program(
     made
 }
 
+/// Engine resources named by the compiled terrain and emissive programs' use (surface recipes retain the
+/// same register contract). These are runtime GPU views, not the serialized terrain tile textures.
+pub fn engine_texture_reason(register: u32) -> String {
+    let use_of_slot = match register {
+        13 => "terrain page addresses",
+        14 => "terrain page levels",
+        15 => "terrain height atlas",
+        16 => "terrain sediment IDs (integer page metadata)",
+        17 => "terrain colour atlas",
+        18 => "terrain material properties atlas (roughness, specular occlusion and node block 7)",
+        19 => "terrain ambient occlusion atlas",
+        20 => "terrain sediment texture array",
+        23 => "exposure image (the emissive program divides emission by its x lane)",
+        45 => "terrain detail colour cache",
+        46 => "terrain detail normal cache",
+        48 | 49 => "terrain virtual-cache auxiliary atlas (sampled at the same page coordinates as t45/t46)",
+        50 | 51 => "terrain virtual-cache page table (Texture3D<uint>)",
+        _ => "resource whose runtime producer is not established from the program",
+    };
+    format!(
+        "engine texture t{register}: {use_of_slot}; the material stores no binding and no runtime image is available from its data"
+    )
+}
+
 impl ResolveAnvilShaders {
     #[allow(clippy::too_many_arguments)]
     fn stage_binding(
@@ -1073,15 +1111,31 @@ impl ResolveAnvilShaders {
             let bound = slot.and_then(|s| m.textures.iter().find(|t| t.shader_slot == s));
             let source = match (bound, dim) {
                 (None, _) => {
-                    bump("texture slots that are the engine's, left Missing", counts);
-                    TextureSource::Missing
+                    bump(
+                        "texture slots with no stored material binding, left Missing",
+                        counts,
+                    );
+                    TextureSource::Missing {
+                        why: if register < 75 {
+                            engine_texture_reason(register)
+                        } else {
+                            format!(
+                                "texture t{register}: no material descriptor for slot {}",
+                                register - 75
+                            )
+                        },
+                    }
                 }
                 (Some(_), d) if d != TextureDim::D2 => {
                     bump(
                         "texture bindings of a dimension other than 2D, left Missing",
                         counts,
                     );
-                    TextureSource::Missing
+                    TextureSource::Missing {
+                        why: format!(
+                            "material texture t{register}: the stored binding is not a supported 2D texture"
+                        ),
+                    }
                 }
                 (Some(b), _) => match b.texture.and_then(|e| textures.entity(world, e)) {
                     Some(texture) => {
@@ -1104,11 +1158,18 @@ impl ResolveAnvilShaders {
                         }
                         UnsetTexture::Leave => {
                             bump("texture bindings with no texture, left Missing", counts);
-                            TextureSource::Missing
+                            TextureSource::Missing {
+                                why: format!(
+                                    "material texture t{register}: the texture is absent and unset-textures=leave supplies no default"
+                                ),
+                            }
                         }
                     },
                 },
             };
+            if let TextureSource::Missing { why } = &source {
+                bump(&format!("texture slots left unfilled: {why}"), counts);
+            }
             bindings.push(TextureBinding {
                 resource: r.id,
                 sampler: None,

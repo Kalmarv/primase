@@ -137,7 +137,7 @@ fn tally(world: &World, game: &str, scene: &str, materials: usize, log: &PassLog
                         bump(&mut textures, format!("default: {}", reason(why)))
                     }
                     TextureSource::Frame(_) => bump(&mut textures, "the frame's texture"),
-                    TextureSource::Missing => bump(&mut textures, "missing"),
+                    TextureSource::Missing { .. } => bump(&mut textures, "missing"),
                     TextureSource::Target { .. } => bump(&mut textures, "a render graph target"),
                 }
             }

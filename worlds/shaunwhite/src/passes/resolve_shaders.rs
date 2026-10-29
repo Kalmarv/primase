@@ -231,7 +231,9 @@ fn binding(
                         *unresolved
                             .entry(format!("texture {parameter}: {why}"))
                             .or_default() += 1;
-                        TextureSource::Missing
+                        TextureSource::Missing {
+                            why: format!("texture {parameter}: {why}"),
+                        }
                     });
                 let paired = interface
                     .resources

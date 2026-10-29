@@ -947,7 +947,9 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
                         && !(world.has::<Texture>(*texture)
                             || world.has::<primase_core::TextureFile>(*texture))
                     {
-                        t.source = TextureSource::Missing;
+                        t.source = TextureSource::Missing {
+                            why: "the bound entity has no texture component".into(),
+                        };
                         *counts
                             .entry("texture bindings of an entity with no texture, left Missing".into())
                             .or_default() += 1;
@@ -1042,7 +1044,12 @@ impl ResolveUnityShaders {
                                         .into(),
                                 )
                                 .or_default() += 1;
-                            TextureSource::Missing
+                            TextureSource::Missing {
+                                why: format!(
+                                    "engine resource t{}: the shader parameter table names no texture property",
+                                    b.register
+                                ),
+                            }
                         }
                         Some(t) => {
                             resolve_texture(m, defaults, &variant.keywords, self.linear, &t.name, counts)
@@ -1170,7 +1177,13 @@ fn resolve_texture(
             }
             None => format!("texture parameters the material has no property of, left Missing: {name}"),
         });
-        return TextureSource::Missing;
+        return TextureSource::Missing {
+            why: format!(
+                "texture {name}: {}",
+                engine_texture_reason(name)
+                    .unwrap_or("the material has no property and no frame role is established")
+            ),
+        };
     };
     match (referenced, texture) {
         (true, Some(texture)) => {
@@ -1182,7 +1195,9 @@ fn resolve_texture(
         }
         (true, None) => {
             bump("texture properties naming a texture the world does not hold, left Missing".into());
-            TextureSource::Missing
+            TextureSource::Missing {
+                why: format!("texture {name}: the property references a texture the world does not hold"),
+            }
         }
         (false, _) => match defaults.iter().find(|(p, _)| p == name) {
             Some((_, d)) => match default_colour(d, linear) {
@@ -1204,12 +1219,16 @@ fn resolve_texture(
                     bump(format!(
                         "unset texture properties whose shader default \"{d}\" is not valued, left Missing"
                     ));
-                    TextureSource::Missing
+                    TextureSource::Missing {
+                        why: format!("texture {name}: shader default {d:?} is not valued"),
+                    }
                 }
             },
             None => {
                 bump("unset texture properties whose shader declares no default, left Missing".into());
-                TextureSource::Missing
+                TextureSource::Missing {
+                    why: format!("texture {name}: the shader declares no default"),
+                }
             }
         },
     }
@@ -1527,18 +1546,24 @@ mod tests {
         // referenced, but the world holds no texture for it
         assert_eq!(
             resolve_texture(&m, &defaults, &[], true, "_MainTex", &mut counts),
-            TextureSource::Missing
+            TextureSource::Missing {
+                why: "texture _MainTex: the property references a texture the world does not hold".into()
+            }
         );
         // unset, with a default this pass does not value
         assert_eq!(
             resolve_texture(&m, &defaults, &[], true, "_BumpMap", &mut counts),
-            TextureSource::Missing
+            TextureSource::Missing {
+                why: "texture _BumpMap: shader default \"bump\" is not valued".into()
+            }
         );
         assert!(counts.keys().any(|k| k.contains("\"bump\" is not valued")));
         // a property the material does not have
         assert_eq!(
             resolve_texture(&m, &defaults, &[], true, "_Other", &mut counts),
-            TextureSource::Missing
+            TextureSource::Missing {
+                why: "texture _Other: the material has no property and no frame role is established".into()
+            }
         );
         let mut unset = material();
         unset.textures.push(UnityTexEnv {

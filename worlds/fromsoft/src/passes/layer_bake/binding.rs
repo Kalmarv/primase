@@ -850,7 +850,7 @@ impl Prepared {
                         "a material texture slot is bound to a render graph target",
                     ));
                 }
-                TextureSource::Missing => continue,
+                TextureSource::Missing { .. } => continue,
             };
             textures.insert(register, source);
         }

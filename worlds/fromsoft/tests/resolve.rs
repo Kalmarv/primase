@@ -465,7 +465,7 @@ fn leaving_unbound_slots_invents_nothing() {
             .stage
             .textures
             .iter()
-            .all(|t| t.source == TextureSource::Missing)
+            .all(|t| matches!(t.source, TextureSource::Missing { .. }))
     );
     // the tiling is the engine's row whatever is bound: the bound slot's FLVER scale, the unbound slot's 1
     let tiling: Vec<_> = constants(&resolution.stage, &shader)

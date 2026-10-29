@@ -635,7 +635,9 @@ fn texture_source(
 ) -> TextureSource {
     let Some((group, i)) = named else {
         log.count("texture slots no binding set entry names, left Missing", 1);
-        return TextureSource::Missing;
+        return TextureSource::Missing {
+            why: "no binding set entry names the texture slot".into(),
+        };
     };
     let name = group.params[i].name;
     match links.iter().find(|t| t.name == name).map(|t| &t.link) {
@@ -649,7 +651,13 @@ fn texture_source(
                     ),
                     1,
                 );
-                return TextureSource::Missing;
+                return TextureSource::Missing {
+                    why: format!(
+                        "the texture is {} and the slot reads {}",
+                        describe(have),
+                        describe(slot)
+                    ),
+                };
             }
             log.count(
                 "texture slots bound to the texture of the depot block's reference",
@@ -665,7 +673,9 @@ fn texture_source(
                 &format!("texture slots left Missing, the reference leads nowhere: {why}"),
                 1,
             );
-            TextureSource::Missing
+            TextureSource::Missing {
+                why: format!("the texture reference leads nowhere: {why}"),
+            }
         }
         None => {
             let held = depot.is_some_and(|d| {
@@ -681,7 +691,14 @@ fn texture_source(
                 },
                 1,
             );
-            TextureSource::Missing
+            TextureSource::Missing {
+                why: if held {
+                    "the depot reference was not resolved by the texture step"
+                } else {
+                    "the material depot holds no reference for the named slot"
+                }
+                .into(),
+            }
         }
     }
 }
@@ -1079,7 +1096,7 @@ mod tests {
             ),
             (None, "texture slots no binding set entry names, left Missing"),
         ] {
-            assert_eq!(
+            assert!(matches!(
                 texture_source(
                     named,
                     Some(&d),
@@ -1088,8 +1105,8 @@ mod tests {
                     &|_| None,
                     &mut log
                 ),
-                TextureSource::Missing
-            );
+                TextureSource::Missing { why } if !why.is_empty()
+            ));
             assert_eq!(log.counts[why], 1);
         }
         assert_eq!(
@@ -1139,7 +1156,9 @@ mod tests {
             ),
         ] {
             let source = texture_source(Some((&g, 0)), Some(&d), &links, slot, &|_| Some(have), &mut log);
-            assert_eq!(source, TextureSource::Missing);
+            assert!(
+                matches!(source, TextureSource::Missing { why } if why == format!("the texture is {} and the slot reads {}", describe(have), describe(slot)))
+            );
             assert_eq!(log.counts[why], 1);
         }
     }

@@ -195,7 +195,7 @@ fn the_pass_binds_the_stock_materials_it_can_choose() {
                 }
                 for t in &s.textures {
                     let key = match t.source {
-                        TextureSource::Missing => "missing",
+                        TextureSource::Missing { .. } => "missing",
                         _ => "another source",
                     };
                     *textures.entry(key).or_default() += 1;

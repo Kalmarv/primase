@@ -279,7 +279,7 @@ fn detail(
                     "slot t{slot}, the {role} the equation reads, is the frame's {frame:?}, not a material texture"
                 ));
             }
-            TextureSource::Missing => {
+            TextureSource::Missing { .. } => {
                 return Err(format!(
                     "slot t{slot}, the {role} the equation reads, is missing and the source states no default"
                 ));

@@ -135,7 +135,7 @@ fn census(every_toc: bool) {
                                 .map_or("texture, 2D map", |l| shape_name(l.shape).0);
                             *slots.entry(kind.to_owned()).or_default() += 1;
                         }
-                        TextureSource::Missing => *slots.entry("missing".to_owned()).or_default() += 1,
+                        TextureSource::Missing { .. } => *slots.entry("missing".to_owned()).or_default() += 1,
                         _ => *slots.entry("another source".to_owned()).or_default() += 1,
                     }
                 }

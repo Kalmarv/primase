@@ -65,7 +65,7 @@ fn diffuse_is_bound(w: &World) {
                 checked += 1;
                 match &t.source {
                     TextureSource::Texture { texture, .. } if texture == diffuse => {}
-                    TextureSource::Missing => missing += 1,
+                    TextureSource::Missing { .. } => missing += 1,
                     other => panic!("the diffuse slot of {e:?} is {other:?}"),
                 }
             }
