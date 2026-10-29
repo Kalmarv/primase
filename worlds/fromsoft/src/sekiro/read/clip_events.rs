@@ -40,8 +40,9 @@ struct Decoded {
 /// Sequential little-endian scalar fields exactly as the template states them. Anonymous fields get a structural
 /// field_N label; duplicate source labels remain duplicates. A record that stores fewer bytes than the template's fields
 /// need (1.5% of the stock events: 4,627 of Sekiro's, 268 of Elden Ring's) keeps the fields it stores, and says which it
-/// lacks unless they are zero-asserted or padding. A float field whose word is not a finite float (events 708, 730 and 156
-/// of Sekiro: 5,405 fields) keeps the four bytes and says so. An asserted-against field, a boolean that is neither 0 nor
+/// lacks unless they are zero-asserted or padding. A float field whose word is not a finite float (events 708 and 156 of
+/// Sekiro: 4,557 fields; the bundled template types event 730's two words as integers, which they are) keeps the four bytes
+/// and says so. An asserted-against field, a boolean that is neither 0 nor
 /// 1 or non-zero bytes after the template's fields refuse all the typed values together; bytes survive.
 fn values(template: &EventTemplate, bytes: &[u8]) -> Result<Decoded, String> {
     let decoded = template.decode(bytes).map_err(|e| e.to_string())?;

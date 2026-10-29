@@ -1739,8 +1739,8 @@
 		<s32 assert="0"/>
 	</event>
 	<event id="730" name="Action Flag [730]">
-		<f32/>
-		<f32/>
+		<s32/>
+		<s32/>
 	</event>
 	<event id="731" name="Action Flag [731]">
 		<s32/>
