@@ -176,6 +176,8 @@ impl Kind {
 struct Tally {
     bound: u64,
     without_program: u64,
+    /// Forward materials whose bundle holds no shadowed permutation, drawn with the plain forward program.
+    plain_for_shadowed: u64,
     without_vertex: u64,
     skinned: u64,
     mixed: u64,
@@ -242,14 +244,25 @@ fn run(
         let game = bundle.map_or(fromsoft_formats::Game::Sekiro, |b| b.game);
         let requested = material.pass_program();
         // the layered programs the reader kept (DXBC), else the one the shader's bundle holds under that name
-        let found = program_names
-            .get(&fromsoft_formats::names::fold(&requested))
-            .map(|&(name, code)| (name.clone(), ShaderFormat::Dxbc, code.clone()))
-            .or_else(|| {
-                bundle
-                    .and_then(|b| b.program(&requested))
-                    .map(|p| (p.name.clone(), p.format, p.code.clone()))
-            });
+        let lookup = |name: &str| {
+            program_names
+                .get(&fromsoft_formats::names::fold(name))
+                .map(|&(name, code)| (name.clone(), ShaderFormat::Dxbc, code.clone()))
+                .or_else(|| {
+                    bundle
+                        .and_then(|b| b.program(name))
+                        .map(|p| (p.name.clone(), p.format, p.code.clone()))
+                })
+        };
+        // the shadowed forward permutation where the bundle holds it, else the plain pass's program (counted)
+        let found = lookup(&requested).or_else(|| {
+            let plain = material.plain_pass_program();
+            let found = (plain != requested).then(|| lookup(&plain)).flatten();
+            if found.is_some() {
+                t.plain_for_shadowed += 1;
+            }
+            found
+        });
         let Some((name, format, bytes)) = found else {
             world.insert(
                 material_entity,
@@ -507,6 +520,12 @@ fn run(
             log.count(
                 &format!("{which} materials whose program the reader or the shader's bundle does not hold"),
                 t.without_program,
+            );
+        }
+        if t.plain_for_shadowed > 0 {
+            log.count(
+                &format!("{which} forward materials drawn with the plain forward program (the bundle holds no FwdSdw)"),
+                t.plain_for_shadowed,
             );
         }
         if t.without_vertex > 0 {

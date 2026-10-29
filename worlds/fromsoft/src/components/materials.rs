@@ -343,9 +343,23 @@ impl MaterialView<'_> {
                 Some(ParameterValue::Bool(true))
             )
     }
-    /// The pass the material is drawn in, as its programs' file names spell it: `Fwd` for a forward material, `Gbuf`.
+    /// The pass the material is drawn in, as its programs' file names spell it: `Fwd` for a forward material, `Gbuf`. The
+    /// vertex program is named by it (`<shader>_Fwd.vpo`: the bundles hold no shadow permutation of a vertex program);
+    /// the pixel program by [`MaterialView::pixel_pass`].
     pub fn pass(&self) -> &'static str {
         if self.is_forward() { "Fwd" } else { "Gbuf" }
+    }
+    /// The pass the material's pixel program is named by: [`MaterialView::pass`], but for a forward material of Elden
+    /// Ring (a material binary), which is drawn with the shadowed forward permutation `FwdSdw`: every forward colour draw
+    /// of the recorded Elden Ring frames is (86 draws, 15 families). What picks Sekiro's is not in the data read: its
+    /// frames draw the sky dome and moon with `_FwdSdw` (12 draws) and the far mountains, cloud and ground fog with `_Fwd`
+    /// (80), though the dome's and the far mountains' MTD parameters (but for the alpha test), map parts (shadow flags,
+    /// LOD row, draw and display groups) and FLVER GX items are the same; a Sekiro material keeps the plain `Fwd`.
+    pub fn pixel_pass(&self) -> &'static str {
+        match (self.is_forward(), self.definition) {
+            (true, DefinitionRef::Matbin(_)) => "FwdSdw",
+            _ => self.pass(),
+        }
     }
     /// The G-buffer pixel program file the material's shader, its static switch where it states one and its alpha
     /// reference select: `<shader>[_<switch>]_Gbuf[_[A]].ppo`. A layered shader has a switch (all 34 of each of Sekiro's
@@ -355,13 +369,14 @@ impl MaterialView<'_> {
     pub fn gbuffer_program(&self) -> String {
         self.program_in("Gbuf")
     }
-    /// The pixel program the material is drawn with ([`MaterialView::pass`]'s): `<shader>[_<switch>]_<pass>[_[A]].ppo`.
-    /// Of a pass the engine also draws with shadow permutations (`FwdSdw`, `FwdSSdw`) the plain one: what picks them is not
-    /// in the data read. In the recorded frames Elden Ring draws every forward draw with `_FwdSdw` (86 draws of 15
-    /// families). Sekiro draws its sky dome and moon with `_FwdSdw` (12 draws) and its far mountains, cloud and ground fog
-    /// with `_Fwd` (80), though the dome's and the far mountains' MTD parameters (but for the alpha test), map parts
-    /// (shadow flags, LOD row, draw and display groups) and FLVER GX items are the same.
+    /// The pixel program the material is drawn with ([`MaterialView::pixel_pass`]'s):
+    /// `<shader>[_<switch>]_<pass>[_[A]].ppo`.
     pub fn pass_program(&self) -> String {
+        self.program_in(self.pixel_pass())
+    }
+    /// The pixel program of the plain pass ([`MaterialView::pass`]'s), which a bundle without the shadowed permutation
+    /// [`MaterialView::pass_program`] names is drawn with instead.
+    pub fn plain_pass_program(&self) -> String {
         self.program_in(self.pass())
     }
     fn program_in(&self, pass: &str) -> String {

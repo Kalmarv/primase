@@ -103,18 +103,25 @@ fn a_material_binary_is_drawn_forward_where_it_blends_or_states_forward_renderin
         };
         (v.blend_mode(), v.is_forward(), v.pass_program())
     };
-    // blend mode 2 stated: the forward program (Elden Ring's lakes, ocean and bonfires are drawn with it)
+    // blend mode 2 stated: the shadowed forward program (every forward colour draw of the recorded Elden Ring frames is)
     let blended = binary(vec![
         param("g_BlendMode", B::Int(2)),
         param("g_AlphaRef", B::Int2([0, 0])),
     ]);
-    assert_eq!(view(&blended), (Some(2), true, "M[AMSN_V]_Fwd.ppo".into()));
+    assert_eq!(view(&blended), (Some(2), true, "M[AMSN_V]_FwdSdw.ppo".into()));
     // opaque, stating forward rendering (the skysphere `M[Sky9]`, the cloud shell `M[Clouds9]`): forward
     let stated = binary(vec![
         param("g_BlendMode", B::Int(0)),
         param("g_GX_ForwardRendering", B::Bool(true)),
     ]);
-    assert_eq!(view(&stated), (Some(0), true, "M[AMSN_V]_Fwd.ppo".into()));
+    assert_eq!(view(&stated), (Some(0), true, "M[AMSN_V]_FwdSdw.ppo".into()));
+    // the plain forward program, which a bundle without the shadowed one is drawn with, and the vertex program's pass
+    let v = MaterialView {
+        mtd: "m",
+        definition: DefinitionRef::Matbin(&stated),
+        bindings: &bindings,
+    };
+    assert_eq!((v.plain_pass_program(), v.pass()), ("M[AMSN_V]_Fwd.ppo".into(), "Fwd"));
     // forward rendering stated false, and an additive blend (4) alone, which no recorded frame draws: the G-buffer's
     let opaque = binary(vec![
         param("g_BlendMode", B::Int(0)),
