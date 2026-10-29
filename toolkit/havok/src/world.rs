@@ -269,8 +269,8 @@ pub enum RootMotionUse {
 ///
 /// The optional `blend-hint-1` and `blend-hint-2` (each [`AdditiveUse`]) state what is done with the animations of those
 /// blend hints: `child` lowers them as above, `leave` leaves them out and counts them. Without them hint 1 is lowered
-/// and hint 2 is left out (the files say neither what 2 means nor which side 1 composes on: the 3 Sekiro bindings with 2
-/// are all `c9520`'s, and Elden Ring stores none). Only the child-space composition `core.clip` states exists; a parent-space
+/// and hint 2 is left out (the files say neither what 2 means nor which side 1 composes on: the few bindings with 2
+/// that the files checked hold are all one character's). Only the child-space composition `core.clip` states exists; a parent-space
 /// one would need a core composition of its own, and is not an option until a game run shows which hints use it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LowerHavokClips {
@@ -350,8 +350,8 @@ pub const LOWER_HAVOK_CLIPS: PassSpec = PassSpec {
         ),
         OptionSpec::optional_choice::<AdditiveUse>(
             "blend-hint-2",
-            "what is done with the animations whose blend hint is 2 (additive in 2014 and later SDKs; Sekiro's c9520 \
-             stores three): lowered as for hint 1 (child), or left out and counted (leave)",
+            "what is done with the animations whose blend hint is 2 (additive in 2014 and later SDKs; few files store \
+             one): lowered as for hint 1 (child), or left out and counted (leave)",
             "leave",
         ),
     ],

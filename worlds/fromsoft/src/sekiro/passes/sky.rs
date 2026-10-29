@@ -1,11 +1,10 @@
-//! `lower-fromsoft-sky`: the sky the area read brought in ([`crate::sekiro::read::sky`], `fromsoft.sky_part`) lowered
+//! `lower-fromsoft-sky`: the sky the area read brought in (with its `sky` option; `fromsoft.sky_part`) lowered
 //! to core's sky: the moon's `core.sky_anchor` (towards the sun, at the game's distance) and the draw order of the sky's
 //! materials (core's sky layer, in the order the game draws them). The domes' and rings' anchors and every part's
 //! states are the read's already. Elden Ring's weather assets put their sky programs' materials on the sky layer (see
 //! [`LowerFromSoftSky`]).
 use crate::materials::{Material, SkipClass};
-use crate::sekiro::read::sky::MOON_DISTANCE;
-use crate::sekiro::source::{MaterialSlots, SkyPart, SkyRole};
+use crate::sekiro::source::{MOON_DISTANCE, MaterialSlots, SkyPart, SkyRole};
 use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::{
     Component, DrawLayer, DrawOrder, Entity, Environment, Instance, Light, LightKind, Lods, Mesh, SkyAnchor,

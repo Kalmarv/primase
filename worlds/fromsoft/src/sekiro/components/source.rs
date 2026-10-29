@@ -25,6 +25,9 @@ impl Component for PrototypeSource {
     }
 }
 
+/// The moon's distance from the camera, as the game's in-game step stores it.
+pub const MOON_DISTANCE: f32 = 25.0;
+
 /// What a placement of the sky is ([`SkyPart`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]

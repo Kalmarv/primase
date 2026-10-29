@@ -2,9 +2,9 @@
 //! program that runs the cloth (a viewer stepping it per frame) or keeps it for a destination that has cloth.
 //!
 //! Reading takes no choice. The file's cloth data are read whole (`havok_formats::cloth::read`), and so is the skeleton
-//! its animation container holds: each cloth data's one transform set is that skeleton, bone for bone (in both games'
-//! files every transform set has the name and bone count of its file's one skeleton: Sekiro's 610 and Elden Ring's
-//! 2,692), so a runner fills transform `i` with the world transform of bone `i`. What ties the cloth to the world's
+//! its animation container holds: each cloth data's one transform set is that skeleton, bone for bone (in every file
+//! checked, every transform set has the name and bone count of its file's one skeleton; the counts are the sources'
+//! census), so a runner fills transform `i` with the world transform of bone `i`. What ties the cloth to the world's
 //! model is the joints of the `core.skeleton` it follows of the same names ([`HavokCloth::joints`]); the bones and
 //! joints keep their own hierarchies, which a model's part file may cut (a part's FLVER makes a root of a bone whose
 //! parent it does not hold), so a runner composes the cloth skeleton's bones through the cloth skeleton's parents.
@@ -219,9 +219,8 @@ impl HavokCloth {
 /// The display buffers of `physics` bound to the model's `meshes`, and the ones bound to none, each named with why.
 ///
 /// A display buffer ([`DISPLAY_BUFFER`]) holds the mesh of its name with its vertex count and, as the first face set's
-/// triangle count, its triangle count: in both games' files exactly one mesh of the model is so (Sekiro's 586 display
-/// buffers, Elden Ring's 2,313 of 2,325), and where two are (twelve of Elden Ring's, pairs of meshes of one name and
-/// counts) the cloth data's display buffers of that name and counts take them in mesh order by `subType` (which,
+/// triangle count, its triangle count: in the files checked exactly one mesh of the model is so for nearly every display
+/// buffer, and where two are (pairs of meshes of one name and counts) the cloth data's display buffers of that name and counts take them in mesh order by `subType` (which,
 /// wherever the meshes differ, is the order they follow). A mesh one cloth data's display buffer holds is not bound
 /// again for a later cloth data (the files of two characters name one mesh in two cloth data, of which the game runs
 /// one by a rule not established): that buffer is left unbound, named.

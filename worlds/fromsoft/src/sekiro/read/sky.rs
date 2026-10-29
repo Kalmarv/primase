@@ -62,8 +62,6 @@ pub const SKY_MAP: &str = "m89_00_00_99";
 pub const MOON: &str = "o005900";
 /// The state axis of the sky.
 pub const AXIS: &str = "fromsoft.sky";
-/// The moon's distance from the camera, as the game's in-game step stores it.
-pub const MOON_DISTANCE: f32 = 25.0;
 /// Elden Ring's open-world sky map, and where its frame's origin lies in metres from the corner of the tile grid (the
 /// centre of the level-2 tile `m60_10_08_02`).
 pub const OPEN_WORLD_SKY_MAP: &str = "m60_00_00_99";
