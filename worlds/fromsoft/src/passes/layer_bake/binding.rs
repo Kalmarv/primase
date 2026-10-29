@@ -713,6 +713,13 @@ impl Prepared {
                         "a material texture slot is bound to a frame image",
                     ));
                 }
+                TextureSource::Target { .. } => {
+                    return Err(invalid(
+                        "layer binding",
+                        0,
+                        "a material texture slot is bound to a render graph target",
+                    ));
+                }
                 TextureSource::Missing => continue,
             };
             textures.insert(register, source);

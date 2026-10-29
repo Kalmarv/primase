@@ -68,7 +68,7 @@ pub(super) fn refusal(program: &Program, stage: &StageBinding) -> &'static str {
                     Some(t) => match t.source {
                         TextureSource::Texture { .. } | TextureSource::Default { .. } => {}
                         TextureSource::Frame(_) => scene = true,
-                        TextureSource::Missing => unknown = true,
+                        TextureSource::Missing | TextureSource::Target { .. } => unknown = true,
                     },
                     None => unknown = true,
                 }

@@ -33,6 +33,21 @@ pub enum TextureSource {
     Frame(FrameTexture),
     /// Nothing is bound and the source says no default: a consumer must not invent one.
     Missing,
+    /// A view of one of the frame's own targets, read through the sampler state the source binds with it: only in the
+    /// binding of a step of the frame's `core.render_graph` ([`crate::render_graph`]), whose targets these are. A
+    /// material's binding never states one.
+    Target {
+        view: crate::render_graph::TargetView,
+        sampler: SamplerState,
+    },
+}
+/// Where a stage binding stands, which decides what its texture slots may bind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BindingPlace {
+    /// A material's `core.shader_binding`.
+    Material,
+    /// A step of the frame's `core.render_graph`, which may bind the graph's targets.
+    GraphStep,
 }
 /// One texture slot: the texture resource of the shader, the sampler resource it is read through when the program
 /// has one, and what is bound.
@@ -127,7 +142,8 @@ impl StageBinding {
         out
     }
 
-    fn verify(&self, w: &crate::World) -> Result<(), String> {
+    /// The binding agrees with its program: a material's ([`BindingPlace::Material`]) binds no target of a render graph.
+    pub(crate) fn verify_in(&self, w: &crate::World, place: BindingPlace) -> Result<(), String> {
         let shader = w
             .get::<Shader>(self.shader)
             .ok_or_else(|| format!("the {:?} stage's shader entity has no core.shader", self.stage))?;
@@ -277,6 +293,12 @@ impl StageBinding {
                 .any(|before| before.resource == t.resource)
             {
                 return Err(at(format!("texture slot {} is bound twice", t.resource.0)));
+            }
+            if place == BindingPlace::Material && matches!(t.source, TextureSource::Target { .. }) {
+                return Err(at(format!(
+                    "texture slot {} binds a render graph target, which only a step of a core.render_graph may",
+                    t.resource.0
+                )));
             }
             if let TextureSource::Frame(frame) = &t.source
                 && *dim != frame.dim()
@@ -551,7 +573,7 @@ impl Component for ShaderBinding {
                     });
                 }
             }
-            s.verify(w)?;
+            s.verify_in(w, BindingPlace::Material)?;
         }
         self.state.verify()
     }
@@ -1286,6 +1308,28 @@ mod tests {
         assert_eq!(b.verify(m, &w), Ok(()));
         assert_eq!(FrameTexture::LightProbeVolume.dim(), TextureDim::D3);
         assert_eq!(FrameTexture::ShadowMap.dim(), TextureDim::D2);
+    }
+    /// A render graph's target is a texture only a step of the graph binds: a material's binding that states one is
+    /// refused, and the same stage verifies in a graph step's place.
+    #[test]
+    fn a_material_binds_no_render_graph_target() {
+        let (w, _, _, m) = world();
+        let mut b = w.get::<ShaderBinding>(m).unwrap().clone();
+        b.stages[0].textures[0].source = TextureSource::Target {
+            view: crate::render_graph::TargetView {
+                target: 0,
+                mip: 0,
+                first_layer: 0,
+                layers: 0,
+            },
+            sampler: SamplerState::default(),
+        };
+        let err = b.verify(m, &w).unwrap_err();
+        assert!(
+            err.contains("binds a render graph target, which only a step of a core.render_graph may"),
+            "{err}"
+        );
+        assert_eq!(b.stages[0].verify_in(&w, BindingPlace::GraphStep), Ok(()));
     }
     /// A texture of several images fits a slot read as the dimension its shape is, and no other.
     #[test]

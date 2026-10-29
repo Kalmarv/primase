@@ -208,6 +208,12 @@ pub(super) fn prepare<'a>(
                 return Err(format!("frame texture {frame:?} cannot be baked as a material"));
             }
             TextureSource::Missing => return Err(format!("sampled texture t{slot} is missing")),
+            TextureSource::Target { view, .. } => {
+                return Err(format!(
+                    "render graph target {} cannot be baked as a material",
+                    view.target
+                ));
+            }
         };
         textures.insert(slot, value);
     }

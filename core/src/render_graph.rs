@@ -12,9 +12,9 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::shader::StageBinding;
+use crate::shader::{BindingPlace, StageBinding, TextureSource};
 use crate::{Entity, JsonError, Resource, World};
-use iridia_interface::{RenderState, ResourceId};
+use iridia_interface::{Interface, RenderState, ResourceId, ResourceKind, TextureDim};
 
 /// A target's index in [`RenderGraph::targets`].
 pub type TargetId = u32;
@@ -121,15 +121,63 @@ pub struct RenderPass {
     /// Run once a frame for every view (what the step makes does not depend on the eye: shadow cascades, look-up tables,
     /// the light lists of a view-independent volume), rather than once per view.
     pub shared: bool,
+    /// Whether the frame has the step: a step the source draws only in some frames stands in its place in the order
+    /// all the same, so that a frame without it skips it and one with it draws it there.
+    pub presence: Presence,
+    /// How many times the step runs where the frame has it.
+    pub runs: Runs,
     pub work: PassWork,
+}
+
+/// Whether a frame has a step.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Presence {
+    /// Every frame has it.
+    Always,
+    /// A frame has it where the condition holds, as the source's recorded frames show.
+    When(Trigger),
+    /// Some frames have it and what decides it is not known: the recorded frames that had it (the source's names for
+    /// them), so that a consumer can say why it drew or skipped the step. Never empty.
+    Unknown { frames: Vec<String> },
+}
+
+/// What makes the source draw a step that only some frames have.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Trigger {
+    /// A local light that casts shadows is in view: the frame draws its shadow casters and lights with its shadow.
+    LocalShadowCasters,
+}
+
+/// How many times a step runs where the frame has it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Runs {
+    /// Once.
+    Once,
+    /// Once for each item of the frame that `items` says, each run with that item's own values (its constants are the
+    /// roles its binding states); `seen` is how many runs the source's recorded frames had, one count per frame that
+    /// had the step.
+    Each { items: Items, seen: Vec<u32> },
+}
+
+/// What one run of a repeated step is for.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Items {
+    /// Not identified: the source's recorded frames run the step a varying number of times, and what one run draws
+    /// for is not established; `why` says what was examined.
+    Unknown { why: String },
 }
 
 /// What a step does.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PassWork {
-    /// A draw of `vertices` procedural vertices (3 or 4: a full-screen triangle or quad; the vertex program makes them
-    /// from their index) through `stages` (a vertex and a pixel program), with `state`, into `outputs`.
+    /// A draw of `vertices` vertices that cover the view (3: a triangle larger than the view; 4: a quad) through
+    /// `stages` (a vertex and a pixel program), with `state`, into `outputs`. The vertex program makes them from their
+    /// index, or reads them from the inputs its binding states as [`crate::shader::InputRole::ScreenTriangle`].
     Screen {
         vertices: u32,
         stages: Vec<StageBinding>,
@@ -154,6 +202,9 @@ pub enum PassWork {
     Copy { from: TargetView, to: TargetView },
     /// Where another feature draws, into these outputs (its own programs and data).
     Slot { slot: FeatureSlot, outputs: Outputs },
+    /// Steps that run together, in order: the unit a repeated step ([`Runs::Each`]) runs once per item, where the
+    /// source runs several steps for each item (a copy, then a draw that reads it). Never empty.
+    Group { steps: Vec<RenderPass> },
 }
 
 /// The render targets and depth a draw writes.
@@ -304,8 +355,109 @@ impl RenderGraph {
         }
         Ok(())
     }
+    /// The views a stage's texture slots bind of the graph's targets name a target and a mip it has.
+    fn stage_targets_ok(&self, stages: &[&StageBinding], what: &str) -> Result<(), String> {
+        for s in stages {
+            for t in &s.textures {
+                if let TextureSource::Target { view, .. } = &t.source {
+                    self.view_ok(
+                        view,
+                        &format!("{what} {:?} texture slot {}", s.stage, t.resource.0),
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+    /// One step: its presence and runs stated, its views and outputs well formed, a group's steps each in turn.
+    fn pass_ok(&self, p: &RenderPass) -> Result<(), String> {
+        let what = format!("pass {}", p.name);
+        if let Presence::Unknown { frames } = &p.presence
+            && frames.is_empty()
+        {
+            return Err(format!("{what} is in some frames, and names none"));
+        }
+        if let Runs::Each { items, seen } = &p.runs {
+            if seen.is_empty() {
+                return Err(format!(
+                    "{what} runs once per item and states no count it was seen with"
+                ));
+            }
+            let Items::Unknown { why } = items;
+            if why.trim().is_empty() {
+                return Err(format!(
+                    "{what} runs once per item of an unknown kind with no why"
+                ));
+            }
+        }
+        match &p.work {
+            PassWork::Screen {
+                vertices,
+                outputs,
+                stages,
+                ..
+            } => {
+                if *vertices == 0 {
+                    return Err(format!("{what} draws no vertex"));
+                }
+                self.outputs_ok(outputs, &what)?;
+                self.stage_targets_ok(&stages.iter().collect::<Vec<_>>(), &what)?;
+            }
+            PassWork::Compute {
+                writes,
+                groups,
+                stage,
+            } => {
+                for (_, v) in writes {
+                    self.view_ok(v, &what)?;
+                }
+                if let Groups::Cover { target, mip, group } = groups {
+                    self.view_ok(
+                        &TargetView {
+                            target: *target,
+                            mip: *mip,
+                            first_layer: 0,
+                            layers: 0,
+                        },
+                        &what,
+                    )?;
+                    if group.contains(&0) {
+                        return Err(format!("{what} covers with an empty group"));
+                    }
+                }
+                self.stage_targets_ok(&[stage], &what)?;
+            }
+            PassWork::Scene { outputs, view, .. } => {
+                self.outputs_ok(outputs, &what)?;
+                if let SceneView::ShadowCascade { region, .. } = view {
+                    self.region_ok(outputs, region, &what)?;
+                }
+            }
+            PassWork::Slot { outputs, .. } => self.outputs_ok(outputs, &what)?,
+            PassWork::Clear { target, value } => {
+                self.view_ok(target, &what)?;
+                if !value.iter().all(|x| x.is_finite()) {
+                    return Err(format!("{what} clears to a value that is not finite"));
+                }
+            }
+            PassWork::Copy { from, to } => {
+                self.view_ok(from, &what)?;
+                self.view_ok(to, &what)?;
+            }
+            PassWork::Group { steps } => {
+                if steps.is_empty() {
+                    return Err(format!("{what} is a group of no step"));
+                }
+                for s in steps {
+                    self.pass_ok(s)?;
+                }
+            }
+        }
+        Ok(())
+    }
     /// The targets are well formed (a size and at least one mip), every view names a target and a mip it has, colour and
-    /// depth go to targets of their kind, and the picture is a target.
+    /// depth go to targets of their kind, a step in some frames names them, a repeated step states its counts, and the
+    /// picture is a target.
     pub fn check(&self) -> Result<(), String> {
         for t in &self.targets {
             if t.mips == 0 {
@@ -326,53 +478,7 @@ impl RenderGraph {
             }
         }
         for p in &self.passes {
-            let what = format!("pass {}", p.name);
-            match &p.work {
-                PassWork::Screen {
-                    vertices, outputs, ..
-                } => {
-                    if *vertices == 0 {
-                        return Err(format!("{what} draws no vertex"));
-                    }
-                    self.outputs_ok(outputs, &what)?;
-                }
-                PassWork::Compute { writes, groups, .. } => {
-                    for (_, v) in writes {
-                        self.view_ok(v, &what)?;
-                    }
-                    if let Groups::Cover { target, mip, group } = groups {
-                        self.view_ok(
-                            &TargetView {
-                                target: *target,
-                                mip: *mip,
-                                first_layer: 0,
-                                layers: 0,
-                            },
-                            &what,
-                        )?;
-                        if group.contains(&0) {
-                            return Err(format!("{what} covers with an empty group"));
-                        }
-                    }
-                }
-                PassWork::Scene { outputs, view, .. } => {
-                    self.outputs_ok(outputs, &what)?;
-                    if let SceneView::ShadowCascade { region, .. } = view {
-                        self.region_ok(outputs, region, &what)?;
-                    }
-                }
-                PassWork::Slot { outputs, .. } => self.outputs_ok(outputs, &what)?,
-                PassWork::Clear { target, value } => {
-                    self.view_ok(target, &what)?;
-                    if !value.iter().all(|x| x.is_finite()) {
-                        return Err(format!("{what} clears to a value that is not finite"));
-                    }
-                }
-                PassWork::Copy { from, to } => {
-                    self.view_ok(from, &what)?;
-                    self.view_ok(to, &what)?;
-                }
-            }
+            self.pass_ok(p)?;
         }
         if let Some(p) = self.picture {
             self.view_ok(
@@ -388,15 +494,62 @@ impl RenderGraph {
         Ok(())
     }
 
+    /// The stage bindings of the steps, a group's steps' included, each with its step's name.
+    fn stages(&self) -> Vec<(&str, &StageBinding)> {
+        fn walk<'a>(passes: &'a [RenderPass], out: &mut Vec<(&'a str, &'a StageBinding)>) {
+            for p in passes {
+                match &p.work {
+                    PassWork::Screen { stages, .. } => {
+                        out.extend(stages.iter().map(|s| (p.name.as_str(), s)))
+                    }
+                    PassWork::Compute { stage, .. } => out.push((p.name.as_str(), stage)),
+                    PassWork::Group { steps } => walk(steps, out),
+                    PassWork::Scene { .. }
+                    | PassWork::Clear { .. }
+                    | PassWork::Copy { .. }
+                    | PassWork::Slot { .. } => {}
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&self.passes, &mut out);
+        out
+    }
+
     /// The `core.shader` entities the passes' programs are on.
     fn shaders(&self) -> impl Iterator<Item = Entity> + '_ {
-        self.passes.iter().flat_map(|p| -> Vec<Entity> {
-            match &p.work {
-                PassWork::Screen { stages, .. } => stages.iter().map(|s| s.shader).collect(),
-                PassWork::Compute { stage, .. } => vec![stage.shader],
-                _ => Vec::new(),
+        self.stages().into_iter().map(|(_, s)| s.shader)
+    }
+
+    /// A stage's texture slots that bind a target read it as the target's shape: a plane as a 2D texture, an array of
+    /// planes as an arrayed one, a volume as a 3D texture, a cube as a cube.
+    fn target_dims_ok(&self, step: &str, s: &StageBinding, interface: &Interface) -> Result<(), String> {
+        for t in &s.textures {
+            let TextureSource::Target { view, .. } = &t.source else {
+                continue;
+            };
+            let Some(target) = self.targets.get(view.target as usize) else {
+                continue;
+            };
+            let Some(ResourceKind::Texture { dim, arrayed, .. }) =
+                interface.resource(t.resource).map(|r| &r.kind)
+            else {
+                continue;
+            };
+            let shape = match target.shape {
+                TargetShape::Plane => (TextureDim::D2, false),
+                TargetShape::Array { .. } => (TextureDim::D2, true),
+                TargetShape::Volume => (TextureDim::D3, false),
+                TargetShape::Cube => (TextureDim::Cube, false),
+            };
+            if (*dim, *arrayed) != shape {
+                return Err(format!(
+                    "pass {step} {:?} texture slot {} is a {dim:?} texture (arrayed {arrayed}) and binds target {}, a {:?}",
+                    s.stage, t.resource.0, target.name, target.shape
+                ));
             }
-        })
+        }
+        Ok(())
     }
 }
 
@@ -405,14 +558,16 @@ impl Resource for RenderGraph {
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
-    /// [`RenderGraph::check`], and every program a `core.shader` of the world.
+    /// [`RenderGraph::check`], and every step's stage binding verified against its program as a material's is, with the
+    /// graph's targets allowed as textures (a slot reads a target as the target's shape).
     fn verify(&self, w: &World) -> Result<(), String> {
         self.check()?;
-        if let Some(e) = self
-            .shaders()
-            .find(|&e| w.get::<crate::shader::Shader>(e).is_none())
-        {
-            return Err(format!("a pass's program {e:?} is not a core.shader"));
+        for (step, s) in self.stages() {
+            s.verify_in(w, BindingPlace::GraphStep)
+                .map_err(|e| format!("pass {step}: {e}"))?;
+            if let Some(shader) = w.get::<crate::shader::Shader>(s.shader) {
+                self.target_dims_ok(step, s, &shader.interface)?;
+            }
         }
         Ok(())
     }
@@ -466,6 +621,8 @@ mod tests {
             passes: vec![RenderPass {
                 name: "clear".into(),
                 shared: false,
+                presence: Presence::Always,
+                runs: Runs::Once,
                 work: PassWork::Clear {
                     target: view(0),
                     value: [0.0; 4],
@@ -523,6 +680,8 @@ mod tests {
         let cascade = |region: Region| RenderPass {
             name: "cascade".into(),
             shared: true,
+            presence: Presence::Always,
+            runs: Runs::Once,
             work: PassWork::Scene {
                 bucket: DrawBucket::ShadowCaster,
                 view: SceneView::ShadowCascade { cascade: 3, region },
@@ -557,6 +716,130 @@ mod tests {
         assert_eq!(
             g.check(),
             Err("pass cascade draws a shadow cascade into an empty region".into())
+        );
+    }
+
+    /// A step only some frames have names them, a repeated step states the counts it was seen with and why its items
+    /// are unknown, and a group holds steps, each checked in turn.
+    #[test]
+    fn a_step_in_some_frames_and_a_repeated_group_state_their_evidence() {
+        let clear = |name: &str| RenderPass {
+            name: name.into(),
+            shared: false,
+            presence: Presence::Always,
+            runs: Runs::Once,
+            work: PassWork::Clear {
+                target: view(0),
+                value: [0.0; 4],
+            },
+        };
+        let mut g = RenderGraph {
+            targets: vec![target("light", TargetFormat::Rg11B10Float)],
+            passes: vec![clear("a")],
+            picture: Some(0),
+        };
+        g.passes[0].presence = Presence::Unknown { frames: Vec::new() };
+        assert_eq!(g.check(), Err("pass a is in some frames, and names none".into()));
+        g.passes[0].presence = Presence::Unknown {
+            frames: vec!["frame 1".into()],
+        };
+        assert_eq!(g.check(), Ok(()));
+        g.passes[0].runs = Runs::Each {
+            items: Items::Unknown {
+                why: "regions".into(),
+            },
+            seen: Vec::new(),
+        };
+        assert_eq!(
+            g.check(),
+            Err("pass a runs once per item and states no count it was seen with".into())
+        );
+        g.passes[0].runs = Runs::Each {
+            items: Items::Unknown { why: " ".into() },
+            seen: vec![3],
+        };
+        assert_eq!(
+            g.check(),
+            Err("pass a runs once per item of an unknown kind with no why".into())
+        );
+        g.passes[0].runs = Runs::Each {
+            items: Items::Unknown {
+                why: "regions".into(),
+            },
+            seen: vec![3, 12],
+        };
+        assert_eq!(g.check(), Ok(()));
+        // a group: not empty, and its steps are checked as the graph's own
+        g.passes[0].work = PassWork::Group { steps: Vec::new() };
+        assert_eq!(g.check(), Err("pass a is a group of no step".into()));
+        let mut inner = clear("b");
+        inner.work = PassWork::Clear {
+            target: view(4),
+            value: [0.0; 4],
+        };
+        g.passes[0].work = PassWork::Group {
+            steps: vec![clear("c"), inner],
+        };
+        assert_eq!(g.check(), Err("pass b names target 4 of 1".into()));
+    }
+
+    /// A step's texture slot that binds one of the graph's targets names a target and a mip the graph has.
+    #[test]
+    fn a_step_reads_targets_the_graph_has() {
+        let mut w = World::new();
+        let program = w.spawn();
+        let read = |target: TargetId, mip: u32| crate::shader::TextureBinding {
+            resource: ResourceId(0),
+            sampler: None,
+            source: TextureSource::Target {
+                view: TargetView { mip, ..view(target) },
+                sampler: iridia_interface::SamplerState::default(),
+            },
+        };
+        let stage = |target: TargetId, mip: u32| StageBinding {
+            stage: iridia_interface::Stage::Pixel,
+            variant: None,
+            shader: program,
+            inputs: Vec::new(),
+            constants: Vec::new(),
+            textures: vec![read(target, mip)],
+            buffers: Vec::new(),
+            constant_buffers: Vec::new(),
+            outputs: Vec::new(),
+        };
+        let screen = |target: TargetId, mip: u32| RenderPass {
+            name: "composite".into(),
+            shared: false,
+            presence: Presence::Always,
+            runs: Runs::Once,
+            work: PassWork::Screen {
+                vertices: 3,
+                stages: vec![stage(target, mip)],
+                state: RenderState::default(),
+                outputs: Outputs {
+                    colour: vec![(0, view(0))],
+                    depth: None,
+                },
+            },
+        };
+        let mut g = RenderGraph {
+            targets: vec![
+                target("light", TargetFormat::Rg11B10Float),
+                target("fog", TargetFormat::Rgba16Float),
+            ],
+            passes: vec![screen(1, 0)],
+            picture: Some(0),
+        };
+        assert_eq!(g.check(), Ok(()));
+        g.passes[0] = screen(2, 0);
+        assert_eq!(
+            g.check(),
+            Err("pass composite Pixel texture slot 0 names target 2 of 2".into())
+        );
+        g.passes[0] = screen(1, 1);
+        assert_eq!(
+            g.check(),
+            Err("pass composite Pixel texture slot 0 names mip 1 of target fog (1 mips)".into())
         );
     }
 }

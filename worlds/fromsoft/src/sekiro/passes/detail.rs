@@ -271,6 +271,12 @@ fn detail(
                     "slot t{slot}, the {role} the equation reads, is missing and the source states no default"
                 ));
             }
+            TextureSource::Target { view, .. } => {
+                return Err(format!(
+                    "slot t{slot}, the {role} the equation reads, is render graph target {}, not a material texture",
+                    view.target
+                ));
+            }
         };
         let measured = slot_transform(&probe, slot)?;
         let transform = UvTransform {

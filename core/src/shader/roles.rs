@@ -44,11 +44,25 @@ pub enum InputRole {
     Previous,
     /// The pipeline supplies it (the varying's system value says which).
     System,
+    /// A corner of the triangle a full-screen step of a render graph draws, which covers the view: the value of the
+    /// corner it holds. The three corners, in vertex order, are at the clip-space positions (-1, 1, 1, 1), (3, 1, 1, 1)
+    /// and (-1, -3, 1, 1), with the texture coordinates (0, 0), (2, 0) and (0, 2): (0, 0) at the view's top-left
+    /// corner, 1 a whole view to the right and down.
+    ScreenTriangle(ScreenTriangleValue),
     /// Nothing known: the source's own meaning is not resolved, and why.
     Unknown {
         /// What was examined and why no role follows.
         why: String,
     },
+}
+/// What an input of a full-screen triangle holds of each corner ([`InputRole::ScreenTriangle`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScreenTriangleValue {
+    /// The corner's clip-space position (four lanes).
+    Position,
+    /// The corner's texture coordinate (two lanes).
+    TextureCoordinate,
 }
 /// The lanes `first..first + count` of an input: `count` components of the vertex attribute `semantic`, from component
 /// `component` (the attribute's own components: x 0, y 1, z 2, w 3), each in the encoding the input's scalar type has, as
