@@ -348,8 +348,6 @@ fn named_parts(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// The numbers `#<k>#` in a material name, in order: a `#`, one or more digits, a `#`. The scan continues after the
-/// closing `#`, so `#20#_Material #89` marks 20 and not 89. A number beyond `u32` is refused.
 /// Authored display-mask groups per model, in mesh order, from the character
 /// reader's existing extraction. Empty mesh groups and repeated marks are kept.
 /// This query chooses no NPC row, group visibility or fallback outfit; those
@@ -361,27 +359,20 @@ pub fn character_display_masks(world: &World) -> Vec<(Entity, Vec<Vec<u32>>)> {
         .collect()
 }
 
-fn display_marks(material: &str) -> Result<Vec<u32>> {
-    let mut marks = Vec::new();
-    let mut rest = material;
-    while let Some(open) = rest.find('#') {
-        let after = &rest[open + 1..];
-        let digits = after.bytes().take_while(u8::is_ascii_digit).count();
-        if digits > 0 && after.as_bytes().get(digits) == Some(&b'#') {
-            let k = after[..digits].parse::<u32>().map_err(|_| {
-                invalid(
-                    "FromSoftware character",
-                    0,
-                    format!("material {material:?}: mark {} is too large", &after[..digits]),
-                )
-            })?;
-            marks.push(k);
-            rest = &after[digits + 1..];
-        } else {
-            rest = after;
-        }
-    }
-    Ok(marks)
+/// The display-mask groups a material name carries, in order of position: every `#kk#` in it, `kk` two decimal digits
+/// (`#05#`, `c1200_Mukade#00#`, `#07##08#`; `#05#06#` marks 5 and 6, the middle `#` closing one mark and opening the
+/// next). The game tests a group `k` by looking for the text `#%02d#` of `k` anywhere in the name (the model's
+/// display-mask routine, read from the decrypted executable of build 1.06), so a one-digit `#5#`, a three-digit `#123#`
+/// and a `#` without a closing `#` mark nothing: three characters carry six one-digit materials (`c1210`, `c1400`,
+/// `c1550`: `#0#`, `#1#`, `#2#`, `#7#` to `#9#`) that no group controls.
+fn display_marks(material: &str) -> Vec<u32> {
+    let b = material.as_bytes();
+    (0..b.len().saturating_sub(3))
+        .filter(|&i| {
+            b[i] == b'#' && b[i + 1].is_ascii_digit() && b[i + 2].is_ascii_digit() && b[i + 3] == b'#'
+        })
+        .map(|i| u32::from(b[i + 1] - b'0') * 10 + u32::from(b[i + 2] - b'0'))
+        .collect()
 }
 
 /// The level suffixes a part binder's name may end in after the part (`bd_m_9120_l`, `wp_a_0300_m`): of the part
@@ -712,7 +703,7 @@ impl<'a> Reading<'a> {
                                 format!("a mesh names material {}, which does not exist", m.material),
                             )
                         })?;
-                        display_marks(&material.name)
+                        Ok(display_marks(&material.name))
                     })
                     .collect::<Result<Vec<_>>>()?,
             ),
@@ -1984,16 +1975,34 @@ mod tests {
     }
 
     #[test]
-    fn display_marks_are_the_numbers_between_hashes() {
-        assert_eq!(display_marks("#00#").unwrap(), [0]);
-        assert_eq!(display_marks("#20#_Material #89").unwrap(), [20]);
-        assert_eq!(display_marks("#11#c1050_head").unwrap(), [11]);
-        assert_eq!(display_marks("#15#_2_em").unwrap(), [15]);
-        assert_eq!(display_marks("#07##08#").unwrap(), [7, 8]);
-        for none in ["", "kimono2", "Material #91", "##", "#a#", "# 4#", "#12", "1side"] {
-            assert!(display_marks(none).unwrap().is_empty(), "{none}");
+    fn display_marks_are_the_two_digit_numbers_between_hashes() {
+        assert_eq!(display_marks("#00#"), [0]);
+        assert_eq!(display_marks("#20#_Material #89"), [20]);
+        assert_eq!(display_marks("#11#c1050_head"), [11]);
+        assert_eq!(display_marks("#15#_2_em"), [15]);
+        assert_eq!(display_marks("#07##08#"), [7, 8]);
+        // the game looks for "#kk#" anywhere in the name, so a mark can share its `#` with the next, and can follow text
+        assert_eq!(display_marks("#05#06#"), [5, 6]);
+        assert_eq!(display_marks("c1200_Mukade#00#"), [0]);
+        assert_eq!(display_marks("Material #01#"), [1]);
+        // the game's text is `#%02d#`: one digit (Sekiro's c1210 `#0#`, c1400 `#1#`, c1550 `#7#`), three digits and unclosed marks match no group
+        for none in [
+            "",
+            "kimono2",
+            "Material #91",
+            "##",
+            "#a#",
+            "# 4#",
+            "#12",
+            "1side",
+            "#0#",
+            "#1#",
+            "#7#",
+            "#123#",
+            "#99999999999#",
+        ] {
+            assert!(display_marks(none).is_empty(), "{none}");
         }
-        assert!(display_marks("#99999999999#").is_err());
     }
 
     #[test]
