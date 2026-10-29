@@ -1592,8 +1592,8 @@ dependencies = [
 
 [[package]]
 name = "primase-testdata"
-version = "0.1.2"
-source = "git+https://github.com/Kalmarv/primase-testdata?rev=4fce41eecd06019bc44310de919313119cda4c34#4fce41eecd06019bc44310de919313119cda4c34"
+version = "0.1.3"
+source = "git+https://github.com/Kalmarv/primase-testdata?rev=fcb06c6dd160a2fc4ee6720c5eb95880bbad6410#fcb06c6dd160a2fc4ee6720c5eb95880bbad6410"
 dependencies = [
  "blake3",
  "serde_json",
@@ -2156,8 +2156,8 @@ checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
 
 [[package]]
 name = "unity-formats"
-version = "0.2.0"
-source = "git+https://github.com/Kalmarv/unity-formats?rev=aa1c81aa3545ddcd22e611cdea6dfaac97010d34#aa1c81aa3545ddcd22e611cdea6dfaac97010d34"
+version = "0.2.1"
+source = "git+https://github.com/Kalmarv/unity-formats?rev=85b2abebbf2bbb9f576595e7521f8d09ce9d3438#85b2abebbf2bbb9f576595e7521f8d09ce9d3438"
 dependencies = [
  "half",
  "primase-foundations",

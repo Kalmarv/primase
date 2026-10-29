@@ -57,7 +57,7 @@ ruzstd = { version = "=0.7.3", default-features = false, features = ["std", "has
 libloading = { version = "=0.9.0", default-features = false, features = ["std"] }
 oozextract = { version = "=0.5.7", default-features = false, features = ["verbose_errors"] }
 primase-core = { path = "core" }
-primase-testdata = { git = "https://github.com/Kalmarv/primase-testdata", rev = "4fce41eecd06019bc44310de919313119cda4c34" }
+primase-testdata = { git = "https://github.com/Kalmarv/primase-testdata", rev = "fcb06c6dd160a2fc4ee6720c5eb95880bbad6410" }
 primase-texcodec = { path = "toolkit/texcodec" }
 primase-dds = { path = "toolkit/dds" }
 primase-image = { path = "toolkit/image" }
@@ -73,7 +73,7 @@ havok-formats = { git = "https://github.com/Kalmarv/havok-formats", rev = "f681d
 primase-havok = { path = "toolkit/havok" }
 morpheme-formats = { git = "https://github.com/Kalmarv/morpheme-formats", rev = "40467a65f41d052534d90c18d980ef3329967de7" }
 rme-formats = { git = "https://github.com/Kalmarv/rme-formats", rev = "6d51f9f02ba40ae7770ba57fce0346669a6b8f49" }
-unity-formats = { git = "https://github.com/Kalmarv/unity-formats", rev = "aa1c81aa3545ddcd22e611cdea6dfaac97010d34" }
+unity-formats = { git = "https://github.com/Kalmarv/unity-formats", rev = "85b2abebbf2bbb9f576595e7521f8d09ce9d3438" }
 monogame-formats = { git = "https://github.com/Kalmarv/monogame-formats", rev = "05cc99b09f9d9b897ce1360ceffdbab5222ecc08" }
 lua51-bytecode = { git = "https://github.com/Kalmarv/lua51-bytecode", rev = "cfa3a7001c3f8d240a2360b7598609d420d99243" }
 dxbc-reader = { git = "https://github.com/Kalmarv/dx", rev = "c32a3689c6bd26a0ee0777664091f4e04843927e" }
