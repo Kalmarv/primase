@@ -72,6 +72,31 @@ impl Ambient {
     }
 }
 
+/// The hour of the day the scene shows (`core.time_of_day`, a world resource), 0 to 24 (24 is midnight again): the hour a
+/// lowering chose for a scene whose source varies over the day (its environment stored at several hours, a program's
+/// material keyed by the hour), the program's hour where it chose one, else the source's stated default, counted where
+/// it is a default. A program of the source reads it as [`crate::shader::FrameParameter::TimeOfDay`]. A world no
+/// lowering chose an hour for has none, and a consumer gives such a program no hour.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct TimeOfDay {
+    /// Hours since midnight; finite, 0 to 24.
+    pub hour: f32,
+}
+
+impl Resource for TimeOfDay {
+    const NAME: &'static str = "core.time_of_day";
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        crate::json::to_value(self).map(Some)
+    }
+    /// A finite hour from 0 to 24.
+    fn verify(&self, _w: &World) -> Result<(), String> {
+        if !(self.hour.is_finite() && (0.0..=24.0).contains(&self.hour)) {
+            return Err(format!("hour {} is not a finite number from 0 to 24", self.hour));
+        }
+        Ok(())
+    }
+}
+
 impl Resource for Environment {
     const NAME: &'static str = "core.environment";
     /// 2: `ambient`.
@@ -104,6 +129,18 @@ mod tests {
     use super::*;
     use crate::Transform;
     use std::collections::BTreeSet;
+
+    /// The hour is held to the day: finite, 0 to 24, both ends included.
+    #[test]
+    fn the_time_of_day_is_an_hour_of_the_day() {
+        let w = World::new();
+        for good in [0.0, 12.5, 24.0] {
+            assert_eq!(TimeOfDay { hour: good }.verify(&w), Ok(()), "{good}");
+        }
+        for bad in [-0.5, 24.5, f32::NAN, f32::INFINITY] {
+            assert!(TimeOfDay { hour: bad }.verify(&w).is_err(), "{bad}");
+        }
+    }
 
     /// A sun, a point light and a mesh-less placement-like entity; the environment names the sun.
     fn world() -> (World, Entity, Entity) {

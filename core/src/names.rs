@@ -19,7 +19,7 @@ use crate::convert::{PartScope, PartitionPlan};
 use crate::detail::DetailedMaterial;
 use crate::draw_groups::{DrawGroupDefaults, DrawGroups};
 use crate::draw_order::DrawOrder;
-use crate::environment::Environment;
+use crate::environment::{Environment, TimeOfDay};
 use crate::layered::LayeredMaterial;
 use crate::light_unit::{DirectionalLightUnit, LightUnit};
 use crate::lod::Lods;
@@ -79,7 +79,7 @@ declared! {
         DrawGroups, DrawGroupDefaults, ContentNote, Record, DisplayName, PrimitiveKeys, MaterialParameters, SkyAnchor,
         ParticleSystem;
     resources: PartScope, PartitionPlan, Environment, Atmosphere, StateAssignment, Surfaces, Threads, Memo, RenderGraph,
-        LightUnit, DirectionalLightUnit,
+        LightUnit, DirectionalLightUnit, TimeOfDay,
 }
 
 #[cfg(test)]

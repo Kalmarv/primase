@@ -6,12 +6,13 @@
 //! every other type holds the preceding key. That is a preview policy, not the engine's curve (none is established), and
 //! it is counted by name. Sets the read left unresolved are not part of the scene's environment and stay as stored.
 //! `lower-fromsoft-environment` samples the same way at the read's default hour where no program chose one
-//! ([`sample_at`]).
+//! ([`sample_at`]). The hour is the scene's: the pass states it as the world's `core.time_of_day`, which the programs that
+//! key their values by the hour read.
 use crate::sekiro::source::{DrawField, DrawParam, SetChosen};
 use fromsoft_formats::gparam::Value;
 use primase_core::Resource;
-use primase_core::World;
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
+use primase_core::{TimeOfDay, World};
 
 /// What a lowering counts for each field it interpolated.
 pub const INTERPOLATED: &str = "draw-param field interpolated linearly between its stored hours over the 24-hour day (angles included): a preview policy, not the engine's curve";
@@ -69,6 +70,9 @@ impl Pass for SampleFromSoftDrawParams {
     fn modifies(&self) -> &[&'static str] {
         &[DrawParam::NAME]
     }
+    fn provides(&self) -> &[&'static str] {
+        &[TimeOfDay::NAME]
+    }
     /// An area read without a draw-param file holds no environment: nothing to sample, the step recorded as skipped.
     fn may_lack_inputs(&self) -> bool {
         true
@@ -77,6 +81,7 @@ impl Pass for SampleFromSoftDrawParams {
         "floats and float vectors between two stored hours interpolated linearly, angles too; other types hold the preceding hour"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
+        world.insert_resource(TimeOfDay { hour: self.hour });
         let Some(env) = world.resource_mut::<DrawParam>() else {
             log.count("areas with no draw-param environment", 1);
             return Ok(());
@@ -289,6 +294,13 @@ mod tests {
                 SetChosen::OnlySet,
             );
             let report = run(&mut w, hour).unwrap();
+            // the program's hour is the scene's
+            assert_eq!(
+                w.resource::<TimeOfDay>(),
+                Some(&TimeOfDay {
+                    hour: hour.parse().unwrap()
+                })
+            );
             assert_eq!(
                 values(&w),
                 [(

@@ -30,7 +30,9 @@
 //!
 //! A field stored at several hours of the day, where the program sampled none (`sample-fromsoft-draw-params`), is
 //! lowered at the read's default hour, sampled the same way, and the choice is counted with where the hour comes from
-//! ([`crate::sekiro::read::draw_param::default_hour`]: neither game's data states the hour a map is entered at).
+//! ([`crate::sekiro::read::draw_param::default_hour`]: neither game's data states the hour a map is entered at). That
+//! hour is the scene's then: where no program stated one (`core.time_of_day`), the pass states the default hour, counted
+//! with its source, for the programs that key their values by the hour (Elden Ring's sky).
 //!
 //! The `VolumetricFog ParamEditor` group's fields the census shows (`VolumetricFog Global FixedDensity`, the height
 //! density keys, `SkyLight SkyColor`, `DirLight DirectColor`, `GameScale` ...) are kept in `core.atmosphere`'s
@@ -42,7 +44,7 @@ use crate::sekiro::source::DrawParam;
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{
     Ambient, AmbientLight, Atmosphere, Component, DirectionalLightUnit, Environment, Light, LightKind,
-    LightSpecular, Name, Resource, Source, Transform, VolumetricFog, World,
+    LightSpecular, Name, Resource, Source, TimeOfDay, Transform, VolumetricFog, World,
 };
 
 const LIGHT_SET: &str = "LightSet ParamEditor";
@@ -206,6 +208,7 @@ impl Pass for LowerFromSoftEnvironment {
             Environment::NAME,
             Atmosphere::NAME,
             DirectionalLightUnit::NAME,
+            TimeOfDay::NAME,
         ]
     }
     fn approximates(&self) -> &'static str {
@@ -230,6 +233,18 @@ impl Pass for LowerFromSoftEnvironment {
                 samples.values().filter(|n| **n > 1).count() as u64
             })
             .sum::<u64>();
+        // no program chose the scene's hour: it is the read's default, stated for the programs that read the hour
+        if world.resource::<TimeOfDay>().is_none() {
+            let default = &env.default_hour;
+            world.insert_resource(TimeOfDay { hour: default.hour });
+            log.approximate(
+                &format!(
+                    "the scene's hour of the day stated as the default hour {}:00, {} (`sample-fromsoft-draw-params` chooses another)",
+                    default.hour, default.source
+                ),
+                1,
+            );
+        }
         if several > 0 {
             let default = env.default_hour.clone();
             super::draw_params::sample_at(&mut env, default.hour, log)?;
@@ -459,6 +474,30 @@ mod tests {
         );
         // the stored environment keeps every sample
         assert_eq!(w.resource::<DrawParam>().unwrap().groups[0].fields.len(), 6);
+        // and the scene's hour is the default one, counted with its source
+        assert_eq!(w.resource::<TimeOfDay>(), Some(&TimeOfDay { hour: 18.0 }));
+        assert_eq!(
+            log.approximations[&format!(
+                "the scene's hour of the day stated as the default hour 18:00, {} (`sample-fromsoft-draw-params` chooses another)",
+                default.source
+            )],
+            1
+        );
+    }
+
+    /// A program that chose the hour (`sample-fromsoft-draw-params`, which states it) keeps it: the environment pass
+    /// states no default hour and counts none.
+    #[test]
+    fn the_programs_hour_is_kept() {
+        let mut w = world_with(vec![group(LIGHT_SET, 7, vec![])]);
+        w.insert_resource(TimeOfDay { hour: 6.5 });
+        let log = run(&mut w, 1.0);
+        assert_eq!(w.resource::<TimeOfDay>(), Some(&TimeOfDay { hour: 6.5 }));
+        assert!(
+            !log.approximations.keys().any(|k| k.contains("default hour")),
+            "{:?}",
+            log.approximations
+        );
     }
 
     /// The pass as a pipeline runs it, so what it adds is checked against what it declares.
@@ -571,7 +610,15 @@ mod tests {
             2
         );
         assert_eq!(log.omitted.len(), 3, "{:?}", log.omitted);
-        assert_eq!(log.approximations.len(), 4, "{:?}", log.approximations);
+        // no program chose the hour: the scene's is the read's default, counted
+        assert!(
+            log.approximations
+                .keys()
+                .any(|k| k.starts_with("the scene's hour of the day stated as the default hour 18:00")),
+            "{:?}",
+            log.approximations
+        );
+        assert_eq!(log.approximations.len(), 5, "{:?}", log.approximations);
     }
 
     #[test]

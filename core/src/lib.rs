@@ -33,7 +33,7 @@ pub mod components;
 pub mod convert;
 pub mod detail;
 mod environment;
-pub use environment::{Ambient, AmbientLight, Environment};
+pub use environment::{Ambient, AmbientLight, Environment, TimeOfDay};
 mod light_unit;
 pub use light_unit::{DirectionalLightUnit, LightUnit};
 pub mod frame;

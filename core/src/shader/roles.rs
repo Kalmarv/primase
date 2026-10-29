@@ -253,7 +253,10 @@ pub enum ObjectParameter {
 pub enum FrameParameter {
     /// Seconds since a start the game defines.
     Time,
-    /// The time of day in the game's own unit.
+    /// The hour of the day the scene shows, one value, 0 to 24: the world's [`crate::TimeOfDay`]. A program of a source
+    /// that keys values by the hour reads it (Elden Ring's `FC_TimeOfDay`, which its sky programs take modulo 24 to blend
+    /// their material's colours by the hour). A world that states no hour gives such a program no value: a consumer
+    /// refuses the draw rather than show one hour as another.
     TimeOfDay,
     /// The pre-exposure: the factor the renderer multiplies the radiance it writes into the frame's light targets by (a
     /// light's contribution, the ambient, a material's emission), so that the targets hold radiance times this factor; 1
