@@ -154,10 +154,19 @@ impl Component for ClipEffectUses {
     }
 }
 
-/// The event types that name an effect, for an event whose fields were not read.
-const EFFECT_EVENTS: &[i32] = &[
-    95, 96, 99, 100, 101, 104, 108, 109, 110, 112, 114, 115, 116, 117, 118, 119, 120, 121, 122, 792, 961,
-];
+/// The event types whose first field is an effect number in the stock files: of the events that name a positive number, type
+/// 96's name an effect that exists in all but 3 of 7,586 in Sekiro and 16,885 of 20,078 in Elden Ring (the rest are the DLC's),
+/// type 118's 182 of 182 and 2,692 of 2,723, type 120's 1,472 of 1,473 in Elden Ring.
+const EFFECT_NUMBERS: &[i32] = &[96, 118, 120];
+
+/// The event types the community template gives an `FFX ID` field that the stock files do not show to hold effect numbers: type
+/// 112's field holds one of 6 (Sekiro) or 15 (Elden Ring) small numbers, 110's the numbers 1 to 10, 119's (Elden Ring) is an
+/// effect that no binder holds in 247 of 249, 116's (Elden Ring, 6 events) names 3 that exist; the others (95, 99, 100, 101, 104,
+/// 108, 109, 121, 122, 961) hold no number above 0 in either game. They are counted, not used.
+const UNPROVEN: &[i32] = &[95, 99, 100, 101, 104, 108, 109, 110, 112, 116, 119, 121, 122, 961];
+
+/// The event types that name an effect some way, for an event whose fields were not read.
+const EFFECT_EVENTS: &[i32] = &[96, 118, 120, 114, 115, 117, 792];
 
 fn field<'a>(values: &'a [EventValue], name: &str) -> Option<&'a EventValueData> {
     values.iter().find(|v| v.name == name).map(|v| &v.value)
@@ -174,12 +183,12 @@ fn flag(values: &[EventValue], name: &str) -> bool {
     matches!(field(values, name), Some(EventValueData::Bool(true)))
 }
 
-/// The effects the events of `source` start, by the community template's field names: an event type with a field `FFX ID`
-/// (or, for the type that names one effect for each kind of player, `FFX ID: For All`) names the effect directly, at the dummy
-/// polygon of its `Dummy Poly ID` (a blade's `Dummy Poly - Blade Base ID`), following it when `Follow Dummy Poly` is set.
-/// What names an effect another way is counted, not guessed: the goods and magic events (the effect is a row of a param), the
-/// throw and foot events (an index into one), and an effect on a weapon's dummy polygon (the weapon's model is not in the
-/// read).
+/// The effects the events of `source` start, by the community template's field names: an event of a type whose first field is
+/// an effect number ([`EFFECT_NUMBERS`]) names the effect directly, at the dummy polygon of its `Dummy Poly ID` (a blade's
+/// `Dummy Poly - Blade Base ID`), following it when `Follow Dummy Poly` is set. What names an effect another way, or does not
+/// show it does, is counted, not guessed: the goods and magic events (the effect is a row of a param), the throw and foot
+/// events (an index into one), the types the template names an effect in that the stock files do not bear out ([`UNPROVEN`]),
+/// and an effect on a weapon's dummy polygon (the weapon's model is not in the read).
 pub fn clip_effect_uses(source: &SourceEvents) -> ClipEffectUses {
     let mut uses = Vec::new();
     let mut lost: BTreeMap<&'static str, u32> = BTreeMap::new();
@@ -211,6 +220,15 @@ pub fn clip_effect_uses(source: &SourceEvents) -> ClipEffectUses {
         if named <= 0 {
             continue;
         }
+        if UNPROVEN.contains(&event.kind) {
+            *lost
+                .entry("events of types the stock files do not show to hold effect numbers (95, 99 to 101, 104, 108 to 110, 112, 116, 119, 121, 122, 961)")
+                .or_default() += 1;
+            continue;
+        }
+        if !EFFECT_NUMBERS.contains(&event.kind) {
+            continue;
+        }
         let Ok(effect) = i32::try_from(named) else {
             *lost.entry("an effect number past 32 bits").or_default() += 1;
             continue;
@@ -231,7 +249,7 @@ pub fn clip_effect_uses(source: &SourceEvents) -> ClipEffectUses {
             effect,
             dummy,
             follow: flag(values, "Follow Dummy Poly"),
-            repeating: matches!(kind, 99 | 119) || flag(values, "Is Repeat"),
+            repeating: flag(values, "Is Repeat"),
             start: event.start,
             end: (!event.open_ended()).then_some(event.end),
         });
@@ -314,11 +332,12 @@ mod tests {
             value("Dummy Poly Source", EventValueData::I64(2)),
             value("Dummy Poly - Blade Base ID", EventValueData::I64(60)),
         ];
-        let repeating = {
-            let mut v = spawn(4001, 10, true);
-            v.push(value("Is Repeat", EventValueData::Bool(true)));
-            v
-        };
+        let mut repeating = spawn(4001, 10, true);
+        repeating.push(value("Is Repeat", EventValueData::Bool(true)));
+        let floor = vec![
+            value("FFX ID", EventValueData::I64(1)),
+            value("Dummy Poly ID", EventValueData::I64(5)),
+        ];
         let used = source(vec![
             event(96, 0.5, 0.6, spawn(4000, 220, true)),
             event(118, 0.7, 0.9, blade),
@@ -336,11 +355,12 @@ mod tests {
                 1.3,
                 vec![value("Throw Direction SFX Index", EventValueData::I64(2))],
             ),
-            event(116, 1.4, f32::MAX, repeating),
+            event(96, 1.4, f32::MAX, repeating),
+            event(112, 1.5, 1.6, floor),
             event(
                 67,
-                1.5,
-                1.6,
+                1.7,
+                1.8,
                 vec![value("SpEffect ID", EventValueData::I64(9000))],
             ),
         ]);
@@ -361,7 +381,8 @@ mod tests {
         assert_eq!((found.uses[0].start, found.uses[0].end), (0.5, Some(0.6)));
         // an event with no end of its own has none here
         assert_eq!(found.uses[2].end, None);
-        assert_eq!(found.lost.len(), 3);
+        // the weapon's dummy polygon, the goods and magic row, the throw index and the type the files do not bear out
+        assert_eq!(found.lost.len(), 4);
         assert!(found.lost.iter().all(|(_, n)| *n == 1));
     }
 

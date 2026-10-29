@@ -464,8 +464,9 @@ converts frames; it does not lower:
   files and textures read and what no binder held, by reason. Models and animations the effects name are counted,
   not read. `read_effect` reads one effect by its number, at the origin (an effect viewer's world);
 - with `CharacterOptions::clip_effects` (`CharacterReader::with_clip_effects`), each animation clip, as it loads, also reads
-  the effects its events start: the events whose community template names a `FFX ID` (types 95, 96, 99, 100, 101, 104, 108,
-  109, 110, 112, 116, 118, 119, 120, 121, 122 and 961) give `fromsoft.clip_effect_uses` on the clip (the event, the effect,
+  the effects its events start: the events of types 96, 118 and 120, whose first field the stock files bear out as an effect
+  number (types 110, 112, 116 and 119, which the community template also gives an `FFX ID`, hold small numbers or effects no
+  binder has, and are counted), give `fromsoft.clip_effect_uses` on the clip (the event, the effect,
   the dummy polygon's reference id, whether it follows the dummy, whether the event keeps it going for its length, the
   event's times), and the effect files and textures come from `commoneffects` (and `commoneffects_dlc02`). Events that name
   an effect another way (goods and magic rows, throw and foot indexes), and effects on a weapon's dummy polygon, are counted
