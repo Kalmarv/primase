@@ -261,6 +261,12 @@ pub const CLOTH_OFF_POLICY: &str =
 pub const NO_HOUR: &str =
     "the program reads the hour of the day, and the scene states none (no core.time_of_day)";
 
+/// Whether `error` is a bake's refusal of a program that reads the hour of a scene that states none ([`NO_HOUR`]):
+/// a refusal of that one program, which a bake of many counts and passes over.
+pub fn refuses_unstated_hour(error: &fromsoft_formats::Error) -> bool {
+    matches!(error, fromsoft_formats::Error::Invalid { detail, .. } if detail == NO_HOUR)
+}
+
 /// Whether `program` (lifted from the program `interface` describes) reads any word of the constant `c`: the words its
 /// results are made of ([`iridia::WordsRead`]), found by the D3D bind point of `c`'s buffer, since a program lifted again
 /// may number its resources otherwise than the stored interface. Every word is read where the value graph cannot be

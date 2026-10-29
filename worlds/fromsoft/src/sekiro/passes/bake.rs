@@ -169,6 +169,10 @@ impl Pass for BakeFromSoftLayers {
             ("bake groups without gloss", report.missing_gloss_materials),
             ("bake groups with emission", report.emissive_materials),
             ("bake groups without emission", report.missing_emissive_materials),
+            (
+                "bake groups refused: the program reads an unstated hour",
+                report.refused_groups,
+            ),
         ] {
             log.count(k, v as u64);
         }

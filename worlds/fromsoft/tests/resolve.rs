@@ -731,6 +731,146 @@ fn the_bake_refuses_a_program_that_reads_an_unstated_hour() {
     assert!(error.contains(NO_HOUR), "{error}");
 }
 
+/// The grouped layer bake passes over a group whose program reads the hour of a scene that states none: the pass runs,
+/// the group is counted and its parts keep their source material and layer inputs, the refusal recorded on that
+/// material ([`NO_HOUR`]). With the hour stated the same group is baked.
+#[test]
+fn the_layer_bake_refuses_a_group_whose_program_reads_an_unstated_hour() {
+    use primase_fromsoft::layer_bake::NO_HOUR;
+    use primase_fromsoft::sekiro::source::{FaceCull, LayerInputs, MaterialSlots, PrototypeSource};
+    // one placed prototype drawing one triangle with the layered material `PROGRAM` reads the hour in
+    let area = |hour: Option<f32>| {
+        let mut world = World::default();
+        if let Some(hour) = hour {
+            world.insert_resource(primase_core::TimeOfDay { hour });
+        }
+        let m = world.spawn();
+        world.insert(
+            m,
+            Material {
+                mtd: "layered.mtd".into(),
+                definition: Some(primase_fromsoft::materials::Definition::Mtd(
+                    material().definition.clone(),
+                )),
+                gx: Vec::new(),
+                shader: "M[Multiple]".into(),
+                class: "opaque".into(),
+                skip: None,
+                cutoff: 0.5,
+                bindings: BTreeMap::new(),
+                layered: Some(material()),
+            },
+        );
+        world.insert_resource(ShaderPrograms(BTreeMap::from([(
+            "M[Multiple]_27_Gbuf.ppo".to_owned(),
+            Arc::from(PROGRAM),
+        )])));
+        world.insert_resource(TexturePayloads(BTreeMap::from([(
+            "grass_a".to_owned(),
+            dds(4, 4),
+        )])));
+        let bundle = world.spawn();
+        world.insert(
+            bundle,
+            ShaderBundle {
+                game: fromsoft_formats::Game::Sekiro,
+                name: "M[Multiple]".into(),
+                programs: Vec::new(),
+                parameters: None,
+            },
+        );
+        world.insert(m, MaterialShader(bundle));
+        let colours: Vec<Semantic> = (1..=6).map(Semantic::Color).collect();
+        let mut streams = BTreeMap::from([
+            (
+                Semantic::Position,
+                Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0., 0., 1.]]),
+            ),
+            (Semantic::Normal, Stream::F32x3(vec![[0., 1., 0.]; 3])),
+            (
+                Semantic::TexCoord(0),
+                Stream::F32x2(vec![[0., 0.], [1., 0.], [0., 1.]]),
+            ),
+        ]);
+        for &colour in &colours {
+            streams.insert(colour, Stream::U8x4(vec![[128, 64, 32, 255]; 3]));
+        }
+        let mesh = world.spawn();
+        world.insert(
+            mesh,
+            Mesh::new(vec![Primitive {
+                topology: Topology::Triangles,
+                streams,
+                indices: Some(vec![0, 1, 2]),
+                material: Some(m),
+            }]),
+        );
+        world.insert(
+            mesh,
+            LayerInputs {
+                primitives: vec![colours],
+            },
+        );
+        world.insert(
+            mesh,
+            PrototypeSource {
+                id: "obj/o000001".into(),
+                far: false,
+            },
+        );
+        world.insert(
+            mesh,
+            FaceCull {
+                primitives: vec![true],
+            },
+        );
+        // the prototype's material slots, as the reader keeps them: the source material stays after a bake
+        world.insert(mesh, MaterialSlots(vec![m]));
+        let placement = world.spawn();
+        world.insert(
+            placement,
+            Instance {
+                prototype: mesh,
+                variant: 0,
+            },
+        );
+        world.insert(placement, Transform::IDENTITY);
+        let run = common::run(
+            &mut world,
+            "resolve-fromsoft-shaders{unbound-textures=preview}, bake-fromsoft-layers{max-size=4,sample-time=0}",
+        )
+        .unwrap();
+        let log = run.steps[1].log.clone();
+        (world, m, mesh, log)
+    };
+    let refused = "bake groups refused: the program reads an unstated hour";
+
+    let (world, m, mesh, log) = area(None);
+    assert_eq!(log.counts[refused], 1);
+    assert_eq!(log.counts["source materials baked"], 0);
+    assert_eq!(log.counts["layer input streams consumed"], 0);
+    let (what, on) = log
+        .approximated_on
+        .iter()
+        .find(|(what, _)| what.contains(NO_HOUR))
+        .expect("the refusal is recorded");
+    assert!(
+        what.starts_with("program bake refused; source material and layer inputs retained"),
+        "{what}"
+    );
+    assert_eq!(on.iter().copied().collect::<Vec<_>>(), vec![m]);
+    assert_eq!(world.get::<Mesh>(mesh).unwrap().primitives()[0].material, Some(m));
+    assert!(world.has::<LayerInputs>(mesh));
+
+    // stated, the hour is given and the group baked: midnight, as the fixture writes the sum of its frame constants
+    // (here the unit exposure and the hour) to the gloss, which the lowering holds to 0..1
+    let (world, m, mesh, log) = area(Some(0.0));
+    assert_eq!(log.counts[refused], 0);
+    assert_eq!(log.counts["source materials baked"], 1);
+    assert!(!log.approximations.keys().any(|what| what.contains(NO_HOUR)));
+    assert_ne!(world.get::<Mesh>(mesh).unwrap().primitives()[0].material, Some(m));
+}
+
 /// [`PROGRAM`]'s bake of [`material`] at `frame`, its albedo a grey texture.
 fn frozen_frame_bake(
     frame: primase_fromsoft::layer_bake::FrozenFrame,

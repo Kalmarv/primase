@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     invalid,
-    layer_bake::{Inputs, SECOND_UV_APPROXIMATION, grouping},
+    layer_bake::{Inputs, SECOND_UV_APPROXIMATION, grouping, refuses_unstated_hour},
 };
 use fromsoft_formats::Result;
 use primase_core::pbr::{AlphaMode, PbrMaterial, TextureRef};
@@ -116,6 +116,26 @@ fn source_variant(
     Ok(entity)
 }
 
+/// The source materials `group`'s parts draw with, as the world holds them before the bake.
+fn source_materials(
+    world: &World,
+    prototypes: &BTreeMap<String, Entity>,
+    group: &super::layers::MaterialGroups,
+) -> Result<BTreeSet<Entity>> {
+    group
+        .parts
+        .iter()
+        .map(|source| {
+            prototypes
+                .get(&source.prototype)
+                .and_then(|&entity| world.get::<Mesh>(entity))
+                .and_then(|mesh| mesh.primitives().get(source.part))
+                .and_then(|primitive| primitive.material)
+                .ok_or_else(|| invalid("area bake", source.part, "missing source material"))
+        })
+        .collect()
+}
+
 /// Bake every group at its reference size capped at `max_size`, its programs sampled at `sample_time` seconds, and
 /// replace the grouped parts by their levels' parts ([`World::rebuild_primitives`], every per-primitive component
 /// following). Returns the report and the primitives (prototype, index after the rebuild) the baked parts became.
@@ -143,7 +163,22 @@ pub(super) fn assemble(
         // each reason on the materials it concerns.
         let mut group_log = primase_core::pass::PassLog::default();
         let mut made: Vec<Entity> = Vec::new();
-        let prepared = bake.prepare(world, group_index, sample_time)?;
+        let prepared = match bake.prepare(world, group_index, sample_time) {
+            Ok(prepared) => prepared,
+            // a program that reads the hour of a scene that states none: this group is not baked, its parts keep their
+            // source material and layer inputs (as an unplaced prototype's do), the refusal recorded on each of its
+            // source materials as the material bake records one; the other groups are baked
+            Err(e) if refuses_unstated_hour(&e) => {
+                report.refused_groups += 1;
+                let what = format!("program bake refused; source material and layer inputs retained: {e}");
+                for material in source_materials(world, prototypes, group)? {
+                    group_log.approximate_on(material, &what, 1);
+                }
+                records.push((Vec::new(), group_log));
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
         let size = prepared.bake_size(max_size)?;
         let mut templates = Vec::new();
         for (level, center) in group.centers.iter().enumerate() {

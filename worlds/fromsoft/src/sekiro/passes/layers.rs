@@ -319,5 +319,8 @@ pub struct BakeReport {
     pub missing_gloss_materials: usize,
     pub emissive_materials: usize,
     pub missing_emissive_materials: usize,
+    /// Groups not baked because their program reads the hour of a scene that states none
+    /// ([`crate::layer_bake::NO_HOUR`]): their parts keep their source material and layer inputs.
+    pub refused_groups: usize,
     pub policies: primase_core::pass::PassLog,
 }
