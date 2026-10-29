@@ -332,6 +332,11 @@ pub enum SceneView {
     /// into `region` of the depth target: an atlas holds several cascades side by side (Sekiro's four 2048 x 2048
     /// quarters of one 4096 x 4096 target).
     ShadowCascade { cascade: u8, region: Region },
+    /// A local light's view of the shadow casters around it, drawn into a region of the depth target that each run
+    /// places itself (its viewport): a step that runs once per region of a local lights' shadow atlas
+    /// ([`Runs::Each`]), Elden Ring's 64 x 64 regions of its 4096 x 4096 atlas. Which light and which face a run is for
+    /// is not stated.
+    LocalShadow,
 }
 
 /// A rectangle of a target's texels at its mip 0: its top-left corner `x`, `y` and its `width` and `height`.
@@ -526,8 +531,14 @@ impl RenderGraph {
             }
             PassWork::Scene { outputs, view, .. } => {
                 self.outputs_ok(outputs, &what)?;
-                if let SceneView::ShadowCascade { region, .. } = view {
-                    self.region_ok(outputs, region, &what)?;
+                match view {
+                    SceneView::ShadowCascade { region, .. } => self.region_ok(outputs, region, &what)?,
+                    SceneView::LocalShadow if outputs.depth.is_none() => {
+                        return Err(format!(
+                            "{what} draws a local light's shadow with no depth target"
+                        ));
+                    }
+                    SceneView::LocalShadow | SceneView::Camera => {}
                 }
             }
             PassWork::Slot { outputs, .. } => self.outputs_ok(outputs, &what)?,
