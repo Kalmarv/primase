@@ -27,7 +27,7 @@ use fromsoft_formats::{Archive, Binder, Game, Result, dcx::Decoder};
 use iridia::ProgramGraph;
 use iridia::matrix::lines_at;
 use iridia_interface as iri;
-use iridia_interface::{D3dClass, Interface, ResourceId, ResourceKind, Stage, SystemValue};
+use iridia_interface::{D3dClass, Interface, ResourceKind, Stage, SystemValue};
 use primase_core::render_graph::{
     BufferSize, DepthView, DrawBucket, FeatureSlot, Groups, Items, Outputs, PassWork, Presence, Region,
     RenderBuffer, RenderGraph, RenderPass, RenderTarget, Rounding, Runs, SceneView, TargetFormat,
