@@ -431,6 +431,7 @@ mod tests {
                 range: None,
                 cast_shadows: None,
                 radius: None,
+                specular: None,
             },
         );
         w.insert_resource(Environment {

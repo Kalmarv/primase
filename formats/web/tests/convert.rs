@@ -128,6 +128,7 @@ impl Pass for LightPlacements {
                     range: None,
                     cast_shadows: None,
                     radius: None,
+                    specular: None,
                 },
             );
             let mut at = Transform::IDENTITY;

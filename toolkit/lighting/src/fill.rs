@@ -343,6 +343,7 @@ impl Pass for FillAmbientLights {
                     range: Some(g.reach as f32),
                     cast_shadows: Some(false),
                     radius: None,
+                    specular: None,
                 },
             );
             log.place(e);

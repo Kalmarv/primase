@@ -976,8 +976,9 @@ pub enum LightKind {
 /// transform's local -Z (a point light shines everywhere); `color` linear RGB; `intensity` in candela for point and spot
 /// lights, in lux for a directional one; `range` the distance where it stops (`None`: unlimited, an inverse-square
 /// falloff to infinity); `radius` the size of the emitter, the radius of the sphere (or disc, for a spot) the light
-/// leaves from, in metres (`None`: a point, glTF's punctual light, which has no size). A game's own light model stays
-/// in its dialect; this is what a writer emits.
+/// leaves from, in metres (`None`: a point, glTF's punctual light, which has no size); `specular` the colour and
+/// intensity of the light's highlights where the source states its own (`None`: the light's own colour and intensity,
+/// as glTF's punctual light, which has one). A game's own light model stays in its dialect; this is what a writer emits.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Light {
     pub kind: LightKind,
@@ -988,22 +989,40 @@ pub struct Light {
     pub cast_shadows: Option<bool>,
     /// The emitter's radius, metres; `None`: a point.
     pub radius: Option<f32>,
+    /// The highlights' own colour and intensity; `None`: the light's [`Light::color`] and [`Light::intensity`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub specular: Option<LightSpecular>,
+}
+
+/// The colour and intensity a [`Light`]'s specular highlights take where the source states them apart from its diffuse
+/// light: linear RGB, and an intensity in the light's own unit (candela for a point or spot light, lux for a directional
+/// one). A light whose source states no diffuse light at all has intensity 0 and its highlights here.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct LightSpecular {
+    pub color: [f32; 3],
+    pub intensity: f32,
 }
 
 impl Component for Light {
     const NAME: &'static str = "core.light";
     const GEOMETRY: crate::Geometry = crate::Geometry::None;
-    /// 2: `cast_shadows`; 3: `radius`.
-    const VERSION: u32 = 3;
+    /// 2: `cast_shadows`; 3: `radius`; 4: `specular`.
+    const VERSION: u32 = 4;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
-    /// Finite, non-negative colour and intensity, a positive range, a finite non-negative radius, and a spot's cones
-    /// within 0 <= inner <= outer <= pi / 2.
+    /// Finite, non-negative colour and intensity (the specular's too), a positive range, a finite non-negative radius,
+    /// and a spot's cones within 0 <= inner <= outer <= pi / 2.
     fn verify(&self, _e: Entity, _w: &crate::World) -> Result<(), String> {
         finite(self.color.iter().copied().chain([self.intensity]), "light")?;
         if self.color.iter().any(|&c| c < 0.0) || self.intensity < 0.0 {
             return Err("a negative colour or intensity".into());
+        }
+        if let Some(s) = &self.specular {
+            finite(s.color.iter().copied().chain([s.intensity]), "light specular")?;
+            if s.color.iter().any(|&c| c < 0.0) || s.intensity < 0.0 {
+                return Err("a negative specular colour or intensity".into());
+            }
         }
         if self.range.is_some_and(|r| !(r.is_finite() && r > 0.0)) {
             return Err("a range that is not positive".into());
@@ -1933,6 +1952,7 @@ mod tests {
             range: Some(5.0),
             cast_shadows: None,
             radius: None,
+            specular: None,
         };
         assert_eq!(spot(0.2, 0.6).verify(e, &w), Ok(()));
         let sized = |r: f32| Light {

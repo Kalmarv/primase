@@ -60,6 +60,8 @@
 //!   "receive": ...}`, each key only when stated: a placement's `core.shadows` on its node, each field its own else
 //!   its prototype's (`cast` `"off"`, `"on"` or `"only"`, a shadow proxy that is not drawn; absent casts; `receive` a
 //!   boolean), and a light's `cast_shadows` on the light's node (`"off"` or `"on"`). Materials state none.
+//! - **A light's own specular** (`core.light`'s `specular`): `KHR_lights_punctual` has one colour and intensity, the
+//!   light's own; its highlights' are not written, counted (`lights_specular_unwritten`).
 //! - **Unlit materials** (`Shading::Unlit`) carry `KHR_materials_unlit` (in `extensionsUsed`, not required), their
 //!   other slots written as glTF's fallback for a viewer without it.
 //! - **Samplers**: a texture's wrap and its stated filters (`magFilter`; `minFilter` from the minification and mip
@@ -297,6 +299,9 @@ pub struct WriteReport {
     /// Lights not written because their transform is sheared: a glTF node matrix must decompose into translation,
     /// rotation and scale, and `bake-nonrigid` has no geometry of a light's to bake it into.
     pub lights_sheared_skipped: u64,
+    /// Lights written whose own specular colour and intensity (`core.light`'s `specular`) `KHR_lights_punctual` has no
+    /// form for: written with their colour and intensity alone.
+    pub lights_specular_unwritten: u64,
     /// Placements whose prototype has no `core.mesh` (nothing to draw).
     pub placements_without_mesh: u64,
     /// Placements (as `placements` counts them) not written because their prototype has levels of detail
@@ -418,14 +423,16 @@ impl fmt::Display for WriteReport {
         writeln!(
             f,
             "placements {}: mirrored {}, degenerate skipped {}, without mesh {}, with levels of detail (not \
-             written) {}; prototypes unplaced {}; lights sheared (not written) {}",
+             written) {}; prototypes unplaced {}; lights sheared (not written) {}, lights whose own specular is \
+             not written {}",
             self.placements,
             self.placements_mirrored,
             self.placements_degenerate_skipped,
             self.placements_without_mesh,
             self.placements_with_lods,
             self.prototypes_unplaced,
-            self.lights_sheared_skipped
+            self.lights_sheared_skipped,
+            self.lights_specular_unwritten
         )?;
         writeln!(
             f,
@@ -840,6 +847,9 @@ impl Writer<'_> {
                 node.insert("extras".into(), extras);
             }
             lights.push(self.light(e, l)?);
+            if l.specular.is_some() {
+                self.report.lights_specular_unwritten += 1;
+            }
             self.handled.insert(e);
             nodes.push(Value::Object(node));
             roots.push(nodes.len() - 1);

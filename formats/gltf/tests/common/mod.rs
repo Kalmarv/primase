@@ -478,6 +478,7 @@ pub fn build(dir: &Path) -> Built {
             range: Some(12.0),
             cast_shadows: None,
             radius: None,
+            specular: None,
         },
     );
     let mut t = Transform::IDENTITY;
@@ -496,6 +497,7 @@ pub fn build(dir: &Path) -> Built {
             range: Some(10.0),
             cast_shadows: None,
             radius: None,
+            specular: None,
         },
     );
 

@@ -118,6 +118,7 @@ mod tests {
                 range: None,
                 cast_shadows: Some(true),
                 radius: None,
+                specular: None,
             },
         );
         w.insert(sun, Transform::IDENTITY);
@@ -131,6 +132,7 @@ mod tests {
                 range: Some(5.0),
                 cast_shadows: None,
                 radius: None,
+                specular: None,
             },
         );
         w.insert_resource(Environment {

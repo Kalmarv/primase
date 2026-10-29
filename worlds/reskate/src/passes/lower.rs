@@ -280,6 +280,7 @@ pub fn lower_light(l: &SkateLight) -> Result<(Light, Transform), String> {
         cast_shadows: Some(l.cast_shadow),
         // the emitter's size, metres (a light placed at identity: no scale to undo); 0 is a point
         radius: (l.radius > 0.0).then_some(l.radius),
+        specular: None,
     };
     let transform =
         Transform::facing(l.position, l.direction).ok_or("a light direction that is zero or not finite")?;

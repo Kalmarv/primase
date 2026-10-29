@@ -131,6 +131,7 @@ fn world() -> World {
             range: Some(8.0),
             cast_shadows: None,
             radius: None,
+            specular: None,
         },
     );
     let mut t = Transform::IDENTITY;
@@ -149,6 +150,7 @@ fn world() -> World {
             range: None,
             cast_shadows: None,
             radius: None,
+            specular: None,
         },
     );
     w

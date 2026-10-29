@@ -288,6 +288,7 @@ fn own_geometry_soups_lights_and_kept_mirrors() {
             range: None,
             cast_shadows: None,
             radius: None,
+            specular: None,
         },
     );
     w.insert(

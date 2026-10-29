@@ -119,6 +119,7 @@ impl Pass for LowerAnvilLights {
                 range: Some(source.stored.range),
                 cast_shadows: None,
                 radius: None,
+                specular: None,
             };
             world.insert(entity, light);
             world.remove::<AnvilSpotLight>(entity);

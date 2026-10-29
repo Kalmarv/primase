@@ -34,6 +34,7 @@ fn parts_without_meshes_materials_or_textures_are_prepared() {
             range: None,
             cast_shadows: None,
             radius: None,
+            specular: None,
         },
     );
     light.insert(e, Transform::IDENTITY);

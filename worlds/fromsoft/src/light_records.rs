@@ -1,9 +1,15 @@
-//! The engine's light records as `core` light tables ([`BufferSource::Lights`]): Sekiro's `PointLight` (208 bytes) and
-//! `SpotLight` (192 bytes), the structured buffers its light-organize, tile-lighting, per-light and forward programs
-//! read, each field by what the programs' code does with it (fxc's disassembly of every program of the install that
-//! declares them: 79 renderer and effect programs, 852 forward materials). A byte no program reads (`SpecColor.w`,
-//! `TransLightParam.z`, the pads, the spot's `ShadingMode`) has no field. Elden Ring declares the same two structures,
-//! but what its programs read of them is not yet read: its buffers stay unknown.
+//! The engine's light records as `core` light tables ([`BufferSource::Lights`]): the `PointLight` (208 bytes) and
+//! `SpotLight` (192 bytes) structured buffers the light-organize, tile-lighting, per-light and forward programs read,
+//! each field by what the programs' code does with it. Sekiro's from fxc's disassembly of every program of the install
+//! that declares them (79 renderer and effect programs, 852 forward materials) and the recorded frames' records of the
+//! Ashina bank's lights. Elden Ring declares the same two structures at the same offsets (dxc's reflection of its 99
+//! programs that declare them), its light-organize program bounds its loops over them by the same two counts (dxc's
+//! disassembly of `GXLightOrganize8`), and its point records, read back from the running game at Stormveil (four
+//! dispatches of 16 point lights, five of them BTL lights the reader lowers), hold each field below as Sekiro's do: the
+//! view position, `1 / range^2`, the range, the colour and the specular colour exactly, `LightType` 0. No Elden Ring
+//! spot record was read back: its spot table is the declaration's alone. A byte no program reads (`SpecColor.w`, which
+//! Elden Ring's records hold as the specular colour's luma, `TransLightParam.z`, the pads, the spot's `ShadingMode`)
+//! has no field.
 //!
 //! Sekiro's per-tile light lists ([`BufferSource::LightLists`]): `g_LightLookupBuffer` (12-byte records, one per tile)
 //! and `g_LightIndices` (4-byte entries), which the light-organize program writes and the tile-lighting pass and every
@@ -22,12 +28,22 @@ const CAPACITY: u32 = 1024;
 const WRAP: &str = "1 / a size of the light in the engine's own model: the tile-lighting and forward programs soften \
     the diffuse wrap and widen the specular lobe by the distance times it; the recorded records of bank lights hold 1 / \
     the bank's word at offset 164; core.light's radius is not established to be that size";
+const ELDEN_WRAP: &str = "1 / the light's sharpness, its BTL record's word at offset 164 (every BTL light's record read \
+    back at Stormveil: 1/8, 1/1.5, 1/0.5), which the tile-lighting and forward programs read as Sekiro's do; \
+    core.light's radius is not established to be that size";
 const TRANSLUCENCY: &str = "the translucency term's strength (x) and exponent over 32 (y), which the tile-lighting pass \
     and the translucent (`Tr`) forward materials add to a light's diffuse; core.light has no translucency";
 const LIGHT_TYPE: &str = "0 in every record of the recorded frames; the organize program marks a light for the \
     tile-lighting pass only when it is 0";
 const SHADOW: &str = "a shadowed light's place in the shadow atlas, which only the shadowed (`Sdw`) program variants \
     read; the recorded frames hold no shadowed light (the fields are 0)";
+const ELDEN_LIGHT_TYPE: &str = "0 in every point record read back at Stormveil (16 lights in each of four \
+    dispatches); the light-organize program reads it, as Sekiro's does";
+const ELDEN_SHADOW: &str = "a shadowed light's place in the shadow atlas, which only the shadowed (`Sdw`) program \
+    variants read; the records read back at Stormveil hold no shadowed light, and an unshadowed light's record keeps \
+    there what the buffer held before (the game writes no value)";
+const ELDEN_SPOT: &str = "Elden Ring's spot record by its programs' declaration alone (no spot light was in the frames \
+    read back): ";
 
 fn field(offset: u32, value: LightValue) -> LightField {
     LightField { offset, value }
@@ -51,8 +67,8 @@ fn bits(offset: u32, shift: u8, bits: u8) -> ListBits {
 }
 
 /// What a program's structured buffer `name` of `stride`-byte elements holds in `game` when it is the scene's lights
-/// ([`table`]) or one of the per-tile light lists ([`lists`]); `None` for any other buffer, and for every Elden Ring
-/// buffer.
+/// ([`table`]) or one of the per-tile light lists ([`lists`]); `None` for any other buffer, and for Elden Ring's lists,
+/// whose encoding is not read.
 pub(crate) fn source(game: Game, name: &str, stride: u32) -> Option<BufferSource> {
     table(game, name, stride)
         .map(BufferSource::Lights)
@@ -114,15 +130,16 @@ const TILE_PASS_FLAG: &str = "the organize program sets it where the light's vol
     set on every entry, every light is visited, its own range still bounding what it lights";
 
 /// The light table a program's structured buffer `name` of `stride`-byte elements is, in `game`; `None` for any other
-/// buffer, and for every Elden Ring buffer.
+/// buffer. Both games' records take the light's own specular ([`LightValue::SpecularColour`]): a BTL light's record
+/// holds its specular bytes squared times its specular power, apart from its diffuse ones (every BTL light read back
+/// from both games' frames).
 pub(crate) fn table(game: Game, name: &str, stride: u32) -> Option<LightTable> {
-    if game != Game::Sekiro {
-        return None;
-    }
-    let light_type = || LightValue::Constant {
-        value: 0.0,
-        why: LIGHT_TYPE.into(),
+    let (wrap, light_type_why, shadow, spot_prefix) = match game {
+        Game::Sekiro => (WRAP, LIGHT_TYPE, SHADOW, ""),
+        Game::EldenRing => (ELDEN_WRAP, ELDEN_LIGHT_TYPE, ELDEN_SHADOW, ELDEN_SPOT),
     };
+    let light_type = |why: String| LightValue::Constant { value: 0.0, why };
+    let spot = |why: &str| format!("{spot_prefix}{why}");
     match (name, stride) {
         ("g_LightBuffer", 208) => Some(LightTable {
             kind: LightTableKind::Point,
@@ -132,14 +149,14 @@ pub(crate) fn table(game: Game, name: &str, stride: u32) -> Option<LightTable> {
                 field(0, LightValue::ViewPosition),
                 field(12, LightValue::InverseRangeSquared),
                 field(16, LightValue::Colour),
-                field(28, unknown(1, "DiffColor.w", WRAP)),
-                field(32, LightValue::Colour),
+                field(28, unknown(1, "DiffColor.w", wrap)),
+                field(32, LightValue::SpecularColour),
                 field(48, unknown(2, "TransLightParam.xy", TRANSLUCENCY)),
                 field(60, LightValue::Range),
-                field(64, light_type()),
-                field(80, unknown(4, "ProjParam", SHADOW)),
-                field(96, unknown(4, "ShadowCenterPos", SHADOW)),
-                field(112, unknown(24, "ViewportScaleOffset", SHADOW)),
+                field(64, light_type(light_type_why.into())),
+                field(80, unknown(4, "ProjParam", shadow)),
+                field(96, unknown(4, "ShadowCenterPos", shadow)),
+                field(112, unknown(24, "ViewportScaleOffset", shadow)),
             ],
         }),
         ("g_SpotLightBuffer", 192) => Some(LightTable {
@@ -150,16 +167,44 @@ pub(crate) fn table(game: Game, name: &str, stride: u32) -> Option<LightTable> {
                 field(0, LightValue::ViewPosition),
                 field(12, LightValue::Range),
                 field(16, LightValue::Colour),
-                field(28, unknown(1, "DiffColor.w", WRAP)),
-                field(32, LightValue::Colour),
-                field(48, unknown(2, "TransLightParam.xy", TRANSLUCENCY)),
+                field(
+                    28,
+                    LightValue::Unknown {
+                        floats: 1,
+                        name: "DiffColor.w".into(),
+                        why: spot(wrap),
+                    },
+                ),
+                field(32, LightValue::SpecularColour),
+                field(
+                    48,
+                    LightValue::Unknown {
+                        floats: 2,
+                        name: "TransLightParam.xy".into(),
+                        why: spot(TRANSLUCENCY),
+                    },
+                ),
                 field(64, LightValue::ViewToCone),
-                field(128, light_type()),
+                field(128, light_type(spot(light_type_why))),
                 field(132, LightValue::ViewDepthMin),
                 field(136, LightValue::ViewDepthMax),
                 field(144, LightValue::ViewBoundingSphere),
-                field(160, unknown(1, "ShadowParam.x", SHADOW)),
-                field(176, unknown(4, "ViewportScaleOffset", SHADOW)),
+                field(
+                    160,
+                    LightValue::Unknown {
+                        floats: 1,
+                        name: "ShadowParam.x".into(),
+                        why: spot(shadow),
+                    },
+                ),
+                field(
+                    176,
+                    LightValue::Unknown {
+                        floats: 4,
+                        name: "ViewportScaleOffset".into(),
+                        why: spot(shadow),
+                    },
+                ),
             ],
         }),
         _ => None,
@@ -169,12 +214,17 @@ pub(crate) fn table(game: Game, name: &str, stride: u32) -> Option<LightTable> {
 /// The frame parameter a 4-byte constant `name` is in `game`: `cbLightAccParam`'s `g_lightCount` and `g_spotLightCount`
 /// (the bounds of the organize program's loops over the two light buffers), and `cbSceneParam`'s `FC_LightTile_Width`
 /// and `FC_LightTile_NumCellX` (a pixel's tile is its position over the width, its record the tile's row times the
-/// cells per row plus its column, in the tile-lighting pass and the forward materials); `None` otherwise, and for every
-/// Elden Ring constant.
+/// cells per row plus its column, in the tile-lighting pass and the forward materials); `None` otherwise. Elden Ring's
+/// counts are the same (its light-organize program's loops over the two buffers end at them: dxc's disassembly of
+/// `GXLightOrganize8`); its lists and their tile constants are not read, so its tile constants are not bound.
 pub(crate) fn frame_constant(game: Game, name: &str) -> Option<FrameParameter> {
     match (game, name) {
-        (Game::Sekiro, "g_lightCount") => Some(FrameParameter::LightCount(LightTableKind::Point)),
-        (Game::Sekiro, "g_spotLightCount") => Some(FrameParameter::LightCount(LightTableKind::Spot)),
+        (Game::Sekiro | Game::EldenRing, "g_lightCount") => {
+            Some(FrameParameter::LightCount(LightTableKind::Point))
+        }
+        (Game::Sekiro | Game::EldenRing, "g_spotLightCount") => {
+            Some(FrameParameter::LightCount(LightTableKind::Spot))
+        }
         (Game::Sekiro, "FC_LightTile_Width") => Some(FrameParameter::LightTileSize),
         (Game::Sekiro, "FC_LightTile_NumCellX") => Some(FrameParameter::LightTilesPerRow),
         _ => None,
@@ -185,20 +235,32 @@ pub(crate) fn frame_constant(game: Game, name: &str) -> Option<FrameParameter> {
 mod tests {
     use super::*;
 
-    /// Both tables agree with themselves and their buffers' element sizes; Elden Ring has none yet.
+    /// Both games' tables agree with themselves and their buffers' element sizes, and lie at the same offsets; both take
+    /// the light's own specular. Elden Ring's counts are bound, its tile constants not.
     #[test]
-    fn sekiros_light_tables_agree_with_their_buffers() {
+    fn the_light_tables_agree_with_their_buffers() {
         for (name, stride) in [("g_LightBuffer", 208), ("g_SpotLightBuffer", 192)] {
-            let t = table(Game::Sekiro, name, stride).expect(name);
-            assert_eq!(t.verify(Some(stride)), Ok(()), "{name}");
-            assert!(table(Game::EldenRing, name, stride).is_none());
+            let sekiro = table(Game::Sekiro, name, stride).expect(name);
+            let elden = table(Game::EldenRing, name, stride).expect(name);
+            for t in [&sekiro, &elden] {
+                assert_eq!(t.verify(Some(stride)), Ok(()), "{name}");
+                assert!(
+                    t.fields
+                        .iter()
+                        .any(|f| f.offset == 32 && f.value == LightValue::SpecularColour)
+                );
+            }
+            let offsets = |t: &LightTable| t.fields.iter().map(|f| f.offset).collect::<Vec<_>>();
+            assert_eq!(offsets(&sekiro), offsets(&elden), "{name}");
             assert!(table(Game::Sekiro, name, stride + 16).is_none());
         }
-        assert_eq!(
-            frame_constant(Game::Sekiro, "g_lightCount"),
-            Some(FrameParameter::LightCount(LightTableKind::Point))
-        );
-        assert_eq!(frame_constant(Game::EldenRing, "g_lightCount"), None);
+        for game in [Game::Sekiro, Game::EldenRing] {
+            assert_eq!(
+                frame_constant(game, "g_lightCount"),
+                Some(FrameParameter::LightCount(LightTableKind::Point))
+            );
+        }
+        assert_eq!(frame_constant(Game::EldenRing, "FC_LightTile_Width"), None);
     }
 
     /// Both list parts agree with themselves and their buffers' element sizes; Elden Ring has none yet.

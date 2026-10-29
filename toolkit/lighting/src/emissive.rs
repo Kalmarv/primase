@@ -1172,6 +1172,7 @@ impl Pass for EmissiveLights {
                         range: Some(range),
                         cast_shadows: p.shadows,
                         radius: Some((s.radius * scale1) as f32),
+                        specular: None,
                     },
                     format!("{name} light {k}"),
                 ));

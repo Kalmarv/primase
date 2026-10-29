@@ -252,6 +252,7 @@ impl Pass for LowerFromSoftEnvironment {
                             range: None,
                             cast_shadows: None,
                             radius: None,
+                            specular: None,
                         },
                     );
                     world.insert(e, transform);
@@ -683,6 +684,7 @@ mod tests {
                 range: None,
                 cast_shadows: None,
                 radius: None,
+                specular: None,
             },
         );
         w.insert_resource(Environment {

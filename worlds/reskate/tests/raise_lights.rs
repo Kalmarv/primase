@@ -43,6 +43,7 @@ fn raise_then_lower_restores_core_lights() {
                 range: Some(20.0),
                 cast_shadows: None,
                 radius: Some(0.15),
+                specular: None,
             },
             spot_transform(),
         ),
@@ -54,6 +55,7 @@ fn raise_then_lower_restores_core_lights() {
                 range: None,
                 cast_shadows: None,
                 radius: None,
+                specular: None,
             },
             Transform {
                 cols: [
@@ -205,6 +207,7 @@ fn raise_skate_calibrates_light_energy() {
                 range: None,
                 cast_shadows: None,
                 radius: None,
+                specular: None,
             },
         );
         w.insert(e, Transform::IDENTITY);

@@ -1,5 +1,9 @@
 # regression census of primase-fromsoft (tests/regression_census.rs): world.field=count
 # replace this file in the commit that changes any number, with the reason in the message
+elden-c3000.buffers.pixel.Unknown: g_LightIndices: a buffer of the renderer's own a material binding does not state=2
+elden-c3000.buffers.pixel.Unknown: g_LightLookupBuffer: a buffer of the renderer's own a material binding does not state=2
+elden-c3000.buffers.pixel.the scene's lights, Point=2
+elden-c3000.buffers.pixel.the scene's lights, Spot=2
 elden-c3000.constants.pixel.AlphaReference=5
 elden-c3000.constants.pixel.Frame(ColourSlot)=33
 elden-c3000.constants.pixel.Frame(PreExposure)=5

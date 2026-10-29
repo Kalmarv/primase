@@ -161,6 +161,7 @@ fn the_sky_is_read_as_states_and_its_moon_stands_towards_the_sun() -> Result<(),
             range: None,
             cast_shadows: None,
             radius: None,
+            specular: None,
         },
     );
     world.insert(sun, Transform::IDENTITY);

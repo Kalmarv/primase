@@ -709,6 +709,9 @@ const WITH_FORMS: &str =
 /// What a tile leaves out of a light whose transform is sheared.
 const SHEARED_LIGHT: &str = "lights with a sheared transform, not written: a glTF node matrix must decompose into translation, \
                              rotation and scale";
+/// What a tile approximates of a light with its own specular.
+const LIGHT_SPECULAR: &str = "lights with their own specular colour and intensity (core.light's specular), written \
+                              with their colour and intensity alone: KHR_lights_punctual has one";
 /// What a tile leaves out of a parametric collider.
 const COLLIDER: &str = "parametric colliders (core.collider), not written as collision records: the viewer draws \
                         collision from triangles (tessellate-colliders makes them)";
@@ -817,6 +820,17 @@ pub fn plan_with_geometry(
             .with_memory(options.encoding_memory),
         images_memo: primase_gltf::ImageMemo::new(options.image_memory),
     };
+    // the index's sun has one colour and intensity, as a tile's lights
+    if let Some(e) = sun_entity
+        && world.get::<Light>(e).is_some_and(|l| l.specular.is_some())
+    {
+        plan.omit(
+            NoticeKind::Approximation,
+            LIGHT_SPECULAR.into(),
+            1,
+            &entity_name(world, e),
+        );
+    }
     // every placement owned by one cell, as a placement (its first role): what it draws or collides with, and whether
     // its transform is degenerate, is what its cell's world holds when the cell is written
     let mut filed = BTreeSet::new();
@@ -1200,6 +1214,14 @@ impl TilePlan {
                             &entity_name(world, e),
                         );
                     } else {
+                        if light.specular.is_some() {
+                            self.omit(
+                                NoticeKind::Approximation,
+                                LIGHT_SPECULAR.into(),
+                                1,
+                                &entity_name(world, e),
+                            );
+                        }
                         content.lights.push(cw.lights.len());
                         cw.lights.push(SceneLight {
                             name: world

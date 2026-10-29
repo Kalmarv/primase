@@ -156,6 +156,7 @@ pub fn lower_unity_lights(w: &mut World, candela_per_unit: f32) -> Result<PassLo
                     }
                 },
                 radius: None,
+                specular: None,
             },
         );
         log.count(

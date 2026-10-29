@@ -244,6 +244,7 @@ impl Pass for LowerGtaLights {
                     range: Some((l.falloff * scale).max(0.5)),
                     cast_shadows: None,
                     radius: None,
+                    specular: None,
                 };
                 if !light.intensity.is_finite() || !l.falloff.is_finite() || !at.iter().all(|v| v.is_finite())
                 {

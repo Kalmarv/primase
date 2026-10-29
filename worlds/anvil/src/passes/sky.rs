@@ -314,6 +314,7 @@ impl Pass for LowerAnvilSky {
                     range: None,
                     cast_shadows: None,
                     radius: None,
+                    specular: None,
                 },
             );
             world.insert(

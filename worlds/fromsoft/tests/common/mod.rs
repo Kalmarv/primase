@@ -4,6 +4,8 @@ use primase_core::World;
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_fromsoft::game::ParamKey;
 
+pub mod lights;
+
 /// Binder file paths from a clip-only plan's asset provenance, in authored order.
 /// This includes companion binders that have events but no clip members.
 pub fn clip_binders(plans: &World) -> Vec<String> {

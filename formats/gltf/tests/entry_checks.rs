@@ -31,6 +31,7 @@ fn light(kind: LightKind) -> Light {
         range: None,
         cast_shadows: None,
         radius: None,
+        specular: None,
     }
 }
 

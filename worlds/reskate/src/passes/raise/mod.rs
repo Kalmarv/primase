@@ -899,6 +899,12 @@ pub fn raise_skate(world: &mut World, options: &RaiseOptions) -> Result<PassLog>
                 },
             ),
         };
+        if l.specular.is_some() {
+            log.approximate(
+                "lights' own specular colour and intensity not raised: a skate light has one colour and energy",
+                1,
+            );
+        }
         let t = world.get::<Transform>(*e).copied().unwrap_or(Transform::IDENTITY);
         let d = t.cols[2].map(|x| -x);
         let len = d.iter().map(|x| x * x).sum::<f32>().sqrt();

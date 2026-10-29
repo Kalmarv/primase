@@ -53,8 +53,12 @@ pub enum LightValue {
     /// One float: `1 / range^2`.
     InverseRangeSquared,
     /// Three floats: the light's colour times its intensity over the world's [`LightUnit::candela_per_unit`], the value
-    /// the source stored. A program that reads a separate specular colour reads this too: a `core.light` lights both.
+    /// the source stored.
     Colour,
+    /// Three floats: the light's specular colour times its specular intensity over the world's
+    /// [`LightUnit::candela_per_unit`] ([`Light::specular`]); for a light that states no specular of its own, its colour
+    /// as [`LightValue::Colour`] packs it (counted: [`PackedLights::specular_from_colour`]).
+    SpecularColour,
     /// Sixteen floats, four vectors of four at 16-byte steps: a spot's cone. The dot product of vector k with a view-space
     /// position `(x, y, z, 1)` is component k of the position in the cone's space: components 0 and 1 are the position's
     /// offsets along the cone's horizontal and vertical axes, over the tangent of the outer cone angle; component 3 is its
@@ -84,7 +88,7 @@ impl LightValue {
     /// The 32-bit floats the field takes.
     pub fn floats(&self) -> u32 {
         match self {
-            LightValue::ViewPosition | LightValue::Colour => 3,
+            LightValue::ViewPosition | LightValue::Colour | LightValue::SpecularColour => 3,
             LightValue::Range
             | LightValue::InverseRangeSquared
             | LightValue::ViewDepthMin
@@ -109,6 +113,9 @@ pub struct PackedLights {
     /// The fields the packing wrote 0 into because `core.light` does not give them ([`LightValue::Unknown`]), by the
     /// source's name.
     pub unknown: Vec<String>,
+    /// Packed lights whose [`LightValue::SpecularColour`] fields took their colour, the light stating no specular of its
+    /// own (0 where the table has no such field).
+    pub specular_from_colour: usize,
 }
 
 type Vec3 = [f64; 3];
@@ -237,13 +244,26 @@ impl LightTable {
             lights: Vec::with_capacity(lights.len()),
             left_out,
             unknown: Vec::new(),
+            specular_from_colour: 0,
         };
+        let reads_specular = self.fields.iter().any(|f| f.value == LightValue::SpecularColour);
         for f in &self.fields {
             if let LightValue::Unknown { name, .. } = &f.value {
                 out.unknown.push(name.clone());
             }
         }
+        let colour = |color: [f32; 3], intensity: f32| -> Result<Vec<f64>, String> {
+            let unit = unit_value
+                .ok_or("the world's lights have no core.light_unit: a light record's colour has no value")?;
+            Ok(color
+                .iter()
+                .map(|c| f64::from(*c) * f64::from(intensity) / unit)
+                .collect())
+        };
         for (n, (_, e, light, t, at)) in lights.into_iter().enumerate() {
+            if reads_specular && light.specular.is_none() {
+                out.specular_from_colour += 1;
+            }
             let range = light
                 .range
                 .map(f64::from)
@@ -270,16 +290,11 @@ impl LightTable {
                     LightValue::ViewPosition => at.to_vec(),
                     LightValue::Range => vec![range],
                     LightValue::InverseRangeSquared => vec![1.0 / (range * range)],
-                    LightValue::Colour => {
-                        let unit = unit_value.ok_or(
-                            "the world's lights have no core.light_unit: a light record's colour has no value",
-                        )?;
-                        light
-                            .color
-                            .iter()
-                            .map(|c| f64::from(*c) * f64::from(light.intensity) / unit)
-                            .collect()
-                    }
+                    LightValue::Colour => colour(light.color, light.intensity)?,
+                    LightValue::SpecularColour => match &light.specular {
+                        Some(s) => colour(s.color, s.intensity)?,
+                        None => colour(light.color, light.intensity)?,
+                    },
                     LightValue::ViewToCone => {
                         let (right, up, beam, tan, _) = cone.ok_or("a cone for a light that is no spot")?;
                         let mut m = Vec::with_capacity(16);
@@ -615,6 +630,7 @@ pub fn pack_light_lists(
 mod tests {
     use super::*;
     use crate::World;
+    use crate::components::LightSpecular;
 
     fn floats(bytes: &[u8]) -> Vec<f32> {
         bytes
@@ -676,6 +692,7 @@ mod tests {
                     range: Some(4.0),
                     cast_shadows: None,
                     radius: None,
+                    specular: None,
                 },
             );
             e
@@ -725,6 +742,64 @@ mod tests {
         assert_eq!(f[11], 0.0, "a byte no field covers is zero");
     }
 
+    /// Two point lights of colour (0.5, 0.25, 1) and intensity 8 in a world whose unit is 2 candela: one with its own
+    /// specular, colour (1, 0.5, 0) at intensity 4, packs specular (2, 1, 0); the other, which states none, packs its
+    /// colour (2, 1, 4) there, and is the one counted. Both pack colour (2, 1, 4).
+    #[test]
+    fn a_light_packs_its_own_specular_and_one_without_packs_its_colour() {
+        let mut w = World::new();
+        w.insert_resource(LightUnit {
+            candela_per_unit: 2.0,
+        });
+        let place = |w: &mut World, z: f32, specular: Option<LightSpecular>| {
+            let e = w.spawn();
+            w.insert(
+                e,
+                Transform {
+                    cols: [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [0., 0., z]],
+                },
+            );
+            w.insert(
+                e,
+                Light {
+                    kind: LightKind::Point,
+                    color: [0.5, 0.25, 1.0],
+                    intensity: 8.0,
+                    range: Some(4.0),
+                    cast_shadows: None,
+                    radius: None,
+                    specular,
+                },
+            );
+            e
+        };
+        let own = place(
+            &mut w,
+            0.0,
+            Some(LightSpecular {
+                color: [1.0, 0.5, 0.0],
+                intensity: 4.0,
+            }),
+        );
+        let plain = place(&mut w, -5.0, None);
+        let t = table(
+            LightTableKind::Point,
+            24,
+            vec![(0, LightValue::Colour), (12, LightValue::SpecularColour)],
+        );
+        let packed = t.pack(&w, &VIEW).unwrap();
+        assert_eq!(packed.lights, vec![own, plain]);
+        assert_eq!(packed.specular_from_colour, 1);
+        let f = floats(&packed.bytes);
+        let want = [2.0, 1.0, 4.0, 2.0, 1.0, 0.0, 2.0, 1.0, 4.0, 2.0, 1.0, 4.0];
+        for (i, v) in want.into_iter().enumerate() {
+            close(f[i], v, &format!("float {i}"));
+        }
+        // a table with no specular field counts none
+        let colour_only = table(LightTableKind::Point, 12, vec![(0, LightValue::Colour)]);
+        assert_eq!(colour_only.pack(&w, &VIEW).unwrap().specular_from_colour, 0);
+    }
+
     /// A spot at world (0, 0, 0) with an identity placement, so its beam is world -Z (view +Z, from the camera at
     /// view depth 10), outer cone 30 degrees, range 6: the cone's vectors are worked below, axis by axis; its
     /// sphere for an outer angle of 30 degrees has radius 6 / (2 cos^2 30) = 4 and centre 4 along the beam (view depth
@@ -754,6 +829,7 @@ mod tests {
                 range: Some(6.0),
                 cast_shadows: None,
                 radius: None,
+                specular: None,
             },
         );
         let t = table(

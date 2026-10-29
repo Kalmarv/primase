@@ -1086,6 +1086,7 @@ fn lights_are_punctual_nodes_in_their_cell_and_bump_the_minor_version() {
                 range: Some(12.0),
                 cast_shadows: None,
                 radius: None,
+                specular: None,
             },
         );
         w.insert(
@@ -1456,6 +1457,7 @@ fn the_sun_is_indexed_scene_wide_and_bumps_the_minor_version() {
             range: None,
             cast_shadows: Some(true),
             radius: None,
+            specular: None,
         },
     );
     w.insert(sun, Name("Sun".into()));
@@ -1758,6 +1760,7 @@ fn the_environments_ambient_is_reported_once_as_not_written() {
             range: None,
             cast_shadows: Some(true),
             radius: None,
+            specular: None,
         },
     );
     w.insert(sun, Transform::IDENTITY);
@@ -2155,6 +2158,7 @@ fn a_sheared_light_is_left_out_and_reported() {
                 range: None,
                 cast_shadows: None,
                 radius: None,
+                specular: None,
             },
         );
         let skew = if sheared { 0.5 } else { 0.0 };

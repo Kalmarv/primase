@@ -10,11 +10,12 @@
 //! The expected counts are an independent script's over the same frames and bank (kept with the private oracle tools):
 //! 55 point records and 1 spot record stand on a bank light, 105 point records on none; their positions, ranges and
 //! types all match; the colour of 49 point records is the packed one and of 6 the packed one scaled by one factor below
-//! 1 (three distant lights the engine fades, in two frames each), and 11 point records carry a specular colour equal to
-//! the colour (the others' banks store a separate specular colour, which the lowering does not lower). The spot's cone
-//! vectors 0, 1 and 3, its bounding sphere and its depth range match; its vector 2 does not, as the light has a near
-//! plane of 15 and a `core.light` none; its specular is its bank's own. The fields only the shadowed program variants
-//! read are 0 in every recorded record: the frames hold no shadowed light, so those stay unknown.
+//! 1 (three distant lights the engine fades, in two frames each); the specular colour of all 55 and of the spot is the
+//! packed one, the light's own specular (`(specular byte / 255)^2 * specular power`, which the engine does not fade),
+//! and no packed light falls back to its colour there. The spot's cone vectors 0, 1 and 3, its bounding sphere and its
+//! depth range match; its vector 2 does not, as the light has a near plane of 15 and a `core.light` none. The fields
+//! only the shadowed program variants read are 0 in every recorded record: the frames hold no shadowed light, so those
+//! stay unknown.
 //!
 //! The organize step's own constants carry the counts and the view where the frames hold them: `g_lightCount` (+272) and
 //! `g_spotLightCount` (+280) as the light counts, `g_ViewMatrix` (+64) as the view, its lines unshown as not read
@@ -27,33 +28,18 @@ mod inputs;
 use fromsoft_formats::{Binder, dcx::Decoder};
 use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
 use iridia_interface::{MatrixLines, Unshown};
+use primase_core::World;
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
-use primase_core::render_graph::{PassWork, RenderGraph, RenderPass};
+use primase_core::render_graph::RenderGraph;
 use primase_core::shader::{
-    BufferSource, ConstantBinding, ConstantRole, FrameParameter, LightIndices, LightListPart, LightLookup, LightTable,
-    LightTableKind, LightValue, ListBits, ShaderBinding, ViewParameter, pack_light_lists,
+    BufferSource, ConstantRole, FrameParameter, LightIndices, LightListPart, LightLookup, LightTableKind,
+    ListBits, ShaderBinding, ViewParameter, pack_light_lists,
 };
-use primase_core::{Name, World};
 use primase_fromsoft::sekiro;
 use std::collections::BTreeMap;
 use std::io::BufRead;
 mod common;
-
-/// The capture proxies' hash of a program's bytes: FNV-1a 64 from the seed 1469598103934665603.
-fn fnv1a64(bytes: &[u8]) -> u64 {
-    bytes.iter().fold(1_469_598_103_934_665_603_u64, |h, b| {
-        (h ^ u64::from(*b)).wrapping_mul(0x0000_0100_0000_01b3)
-    })
-}
-
-fn floats(bytes: &[u8]) -> Vec<f32> {
-    bytes
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|b| f32::from_le_bytes(*b))
-        .collect()
-}
+use common::lights::{Tally, compare, floats, fnv1a64, near, organize_tables};
 
 /// One frame's organize dispatch as the capture recorded it: its world-to-view matrix (three rows of four), its point
 /// and spot records as floats, and the lists it wrote where the capture read them back after it.
@@ -167,7 +153,13 @@ fn recorded(
 /// and name a record of their kind ([`Recorded`]'s counts), the tiles' counts sum to the entries the organize program
 /// handed out, every entry's slices and flag are printed, and how many of the frame's lights the game's lists leave out
 /// of a tile on average (ours list every light in every tile).
-fn check_lists(frame: &str, lookup: &LightLookup, indices: &LightIndices, lists: &RecordedLists, records: [usize; 2]) {
+fn check_lists(
+    frame: &str,
+    lookup: &LightLookup,
+    indices: &LightIndices,
+    lists: &RecordedLists,
+    records: [usize; 2],
+) {
     let tiles: Vec<&[u8]> = lists.lookup.chunks_exact(lookup.stride as usize).collect();
     let entries: Vec<&[u8]> = lists.indices.chunks_exact(indices.stride as usize).collect();
     let (mut listed, mut flagged, mut all_slices) = (0u64, 0u64, 0u64);
@@ -180,7 +172,11 @@ fn check_lists(frame: &str, lookup: &LightLookup, indices: &LightIndices, lists:
             for _ in 0..value(tile, *bits) {
                 let entry = entries[at];
                 let index = value(entry, indices.index) as usize;
-                assert!(index < records[k], "{frame}: a {kind:?} entry names record {index} of {}", records[k]);
+                assert!(
+                    index < records[k],
+                    "{frame}: a {kind:?} entry names record {index} of {}",
+                    records[k]
+                );
                 flagged += u64::from(indices.constants.iter().all(|c| value(entry, c.bits) == c.value));
                 all_slices += u64::from(value(entry, indices.slices) == indices.slices.max());
                 at += 1;
@@ -198,114 +194,11 @@ fn check_lists(frame: &str, lookup: &LightLookup, indices: &LightIndices, lists:
         culled as f64 / tiles.len() as f64,
         records[0] + records[1]
     );
-    assert_eq!(listed, u64::from(lists.entries), "{frame}: the tiles' counts against the organize count");
-}
-
-/// The light tables the graph's `GXLightOrganize16` step binds, by kind, and its constants.
-fn organize_tables(
-    passes: &[RenderPass],
-    world: &World,
-    out: &mut BTreeMap<&'static str, LightTable>,
-    constants: &mut Vec<ConstantBinding>,
-) {
-    for p in passes {
-        match &p.work {
-            PassWork::Compute { stage, .. }
-                if world
-                    .get::<Name>(stage.shader)
-                    .is_some_and(|n| n.0.ends_with("GXLightOrganize16.cpo")) =>
-            {
-                constants.extend(stage.constants.iter().cloned());
-                for b in &stage.buffers {
-                    if let BufferSource::Lights(t) = &b.source {
-                        let kind = match t.kind {
-                            LightTableKind::Point => "point",
-                            LightTableKind::Spot => "spot",
-                        };
-                        out.insert(kind, t.clone());
-                    }
-                }
-            }
-            PassWork::Group { steps } => organize_tables(steps, world, out, constants),
-            _ => {}
-        }
-    }
-}
-
-/// How a packed field compares with the recorded one: per `<kind> <field>`, the matched and the differing records.
-#[derive(Default)]
-struct Tally(BTreeMap<String, [usize; 2]>);
-impl Tally {
-    fn add(&mut self, key: String, same: bool) {
-        self.0.entry(key).or_default()[usize::from(!same)] += 1;
-    }
-    fn get(&self, key: &str) -> [usize; 2] {
-        self.0.get(key).copied().unwrap_or_default()
-    }
-}
-
-fn near(a: f32, b: f32, abs: f64) -> bool {
-    (f64::from(a) - f64::from(b)).abs() <= abs
-}
-
-fn relative(a: f32, b: f32, rel: f64) -> bool {
-    (f64::from(a) - f64::from(b)).abs() <= rel * f64::from(b).abs().max(1e-9)
-}
-
-/// Each field of `table` in a packed record against the recorded one it stands on.
-fn compare(kind: &str, table: &LightTable, packed: &[f32], recorded: &[f32], tally: &mut Tally) {
-    for f in &table.fields {
-        let at = f.offset as usize / 4;
-        let n = f.value.floats() as usize;
-        let (p, r) = (&packed[at..at + n], &recorded[at..at + n]);
-        let name = |what: &str| format!("{kind} {what} at {}", f.offset);
-        match &f.value {
-            LightValue::ViewPosition | LightValue::ViewDepthMin | LightValue::ViewDepthMax => {
-                tally.add(name("view"), p.iter().zip(r).all(|(a, b)| near(*a, *b, 1e-3)));
-            }
-            LightValue::Range | LightValue::InverseRangeSquared => {
-                tally.add(name("range"), relative(p[0], r[0], 1e-5));
-            }
-            LightValue::Constant { .. } => tally.add(name("constant"), p == r),
-            LightValue::Colour => {
-                let exact = p.iter().zip(r).all(|(a, b)| relative(*b, *a, 1e-5));
-                // the recorded colour the packed one times one factor below 1, the same in every channel
-                let factors: Vec<f64> = p
-                    .iter()
-                    .zip(r)
-                    .filter(|(a, _)| **a > 0.0)
-                    .map(|(a, b)| f64::from(*b) / f64::from(*a))
-                    .collect();
-                let scaled = !exact
-                    && !factors.is_empty()
-                    && factors
-                        .iter()
-                        .all(|k| *k < 1.0 && (k - factors[0]).abs() <= 1e-5 * factors[0]);
-                tally.add(name("colour exact"), exact);
-                tally.add(name("colour scaled"), scaled);
-            }
-            LightValue::ViewToCone => {
-                for v in 0..4 {
-                    let (pv, rv) = (&p[4 * v..4 * v + 4], &r[4 * v..4 * v + 4]);
-                    let scale = rv.iter().fold(0f32, |m, x| m.max(x.abs())) as f64;
-                    tally.add(
-                        name(&format!("cone vector {v}")),
-                        pv.iter()
-                            .zip(rv)
-                            .all(|(a, b)| near(*a, *b, 1e-4 * scale.max(1.0))),
-                    );
-                }
-            }
-            LightValue::ViewBoundingSphere => {
-                tally.add(name("sphere"), p.iter().zip(r).all(|(a, b)| near(*a, *b, 1e-3)));
-            }
-            // the shadowed variants' fields: the frames hold no shadowed light, every one is 0
-            LightValue::Unknown { name: field, why, .. } if why.contains("Sdw") => {
-                tally.add(format!("{kind} {field} zero"), r.iter().all(|x| *x == 0.0));
-            }
-            _ => {}
-        }
-    }
+    assert_eq!(
+        listed,
+        u64::from(lists.entries),
+        "{frame}: the tiles' counts against the organize count"
+    );
 }
 
 #[test]
@@ -357,7 +250,13 @@ fn sekiros_light_tables_pack_the_recorded_records() -> Result<(), Box<dyn std::e
     let graph = world.resource::<RenderGraph>().ok_or("no core.render_graph")?;
     let mut tables = BTreeMap::new();
     let mut constants = Vec::new();
-    organize_tables(&graph.passes, &world, &mut tables, &mut constants);
+    organize_tables(
+        &graph.passes,
+        &world,
+        "GXLightOrganize16.cpo",
+        &mut tables,
+        &mut constants,
+    );
     let (Some(points), Some(spots)) = (tables.get("point"), tables.get("spot")) else {
         return Err("the organize step binds no point and spot light tables".into());
     };
@@ -447,11 +346,18 @@ fn sekiros_light_tables_pack_the_recorded_records() -> Result<(), Box<dyn std::e
     let mut tally = Tally::default();
     let mut on_none = [0usize; 2];
     let mut list_frames = 0usize;
+    let mut specular_from_colour = 0usize;
     for frame in &table_frames {
         let rec = recorded(&frames, frame, organize)?;
         if let Some(lists) = &rec.lists {
             list_frames += 1;
-            check_lists(frame, &lookup, &index_list, lists, [rec.points.len(), rec.spots.len()]);
+            check_lists(
+                frame,
+                &lookup,
+                &index_list,
+                lists,
+                [rec.points.len(), rec.spots.len()],
+            );
         }
         // the game's view takes the map frame to view space; the world frame mirrors the map's z
         let mut view = [[0.0, 0.0, 0.0, 1.0]; 4];
@@ -466,6 +372,7 @@ fn sekiros_light_tables_pack_the_recorded_records() -> Result<(), Box<dyn std::e
             let kind = if k == 0 { "point" } else { "spot" };
             let packed = table.pack(&world, &view)?;
             packed_counts[k] = packed.lights.len() as u32;
+            specular_from_colour += packed.specular_from_colour;
             let stride = table.stride as usize;
             let packed: Vec<Vec<f32>> = (0..packed.lights.len())
                 .map(|i| floats(&packed.bytes[stride * i..stride * (i + 1)]))
@@ -502,6 +409,9 @@ fn sekiros_light_tables_pack_the_recorded_records() -> Result<(), Box<dyn std::e
         on_none[0], on_none[1]
     );
     assert_eq!(on_none, [105, 0]);
+    // every bank light states its own specular: none packs its colour there
+    println!("packed lights whose specular is their colour: {specular_from_colour}");
+    assert_eq!(specular_from_colour, 0);
     // every point record on a bank light: its position, 1 / range^2, range and type are the packed ones
     for key in [
         "point view at 0",
@@ -513,7 +423,7 @@ fn sekiros_light_tables_pack_the_recorded_records() -> Result<(), Box<dyn std::e
     }
     assert_eq!(tally.get("point colour exact at 16"), [49, 6]);
     assert_eq!(tally.get("point colour scaled at 16"), [6, 49]);
-    assert_eq!(tally.get("point colour exact at 32"), [11, 44]);
+    assert_eq!(tally.get("point colour exact at 32"), [55, 0]);
     for key in [
         "point ProjParam zero",
         "point ShadowCenterPos zero",
@@ -521,11 +431,12 @@ fn sekiros_light_tables_pack_the_recorded_records() -> Result<(), Box<dyn std::e
     ] {
         assert_eq!(tally.get(key), [55, 0], "{key}");
     }
-    // the spot: its cone but for the near plane, its sphere and depths; its specular colour is its bank's own
+    // the spot: its cone but for the near plane, its sphere and depths, its colours
     for key in [
         "spot view at 0",
         "spot range at 12",
         "spot colour exact at 16",
+        "spot colour exact at 32",
         "spot cone vector 0 at 64",
         "spot cone vector 1 at 64",
         "spot cone vector 3 at 64",
@@ -539,6 +450,5 @@ fn sekiros_light_tables_pack_the_recorded_records() -> Result<(), Box<dyn std::e
         assert_eq!(tally.get(key), [1, 0], "{key}");
     }
     assert_eq!(tally.get("spot cone vector 2 at 64"), [0, 1]);
-    assert_eq!(tally.get("spot colour exact at 32"), [0, 1]);
     Ok(())
 }

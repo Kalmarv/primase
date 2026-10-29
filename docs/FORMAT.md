@@ -156,12 +156,15 @@ on the clip's clock.
 | Name | Kind | Fields | Invariants |
 | --- | --- | --- | --- |
 | `core.light_unit` | resource | `candela_per_unit: f32` | Finite and above 0. Written by the lowering that makes the world's point and spot `core.light`s from a source's own light values: such a light's intensity is its source value times this factor. |
+| `core.light` (version 4) | component | `specular: {color: [f32; 3], intensity: f32}`, optional | Finite and non-negative. The colour and intensity of the light's highlights where the source states them apart from its diffuse light (a FromSoftware BTL light's specular bytes and power), in the light's own unit; absent, they are the light's `color` and `intensity` (glTF's punctual light). A light with only highlights has intensity 0 and this. Absent from the JSON when absent. BREAKING for code that builds a `Light`: the field is new. |
 
 A shader binding's buffer slot may hold `{"lights": table}` (`BufferSource::Lights`): the scene's
 lights of one `kind` (`point` or `spot`), one record of `stride` bytes per `core.light` of that kind,
 at most `capacity` records, each holding `fields` (`{offset, value}`) as 32-bit floats. A value is
 `view_position` (3), `range` (1), `inverse_range_squared` (1), `colour` (3: colour times intensity over
-`core.light_unit`'s factor), `view_to_cone` (16, spots only), `view_bounding_sphere` (4),
+`core.light_unit`'s factor), `specular_colour` (3: the light's `specular` colour times its intensity over the same
+factor; a light with no `specular` packs its `colour` there, and the packing counts it), `view_to_cone` (16, spots
+only), `view_bounding_sphere` (4),
 `view_depth_min` / `view_depth_max` (1), `{"constant": {value, why}}` (1) or
 `{"unknown": {floats, name, why}}`. Fields lie inside the record on whole floats and never overlap; a
 structured buffer's element size equals the stride; constants are finite; constants and unknowns say

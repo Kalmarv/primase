@@ -110,6 +110,7 @@ mod program {
                             range: Some((spacing * 1.5) as f32),
                             cast_shadows: Some(false),
                             radius: None,
+                            specular: None,
                         },
                     );
                     log.count("ambient fill lights", 1);

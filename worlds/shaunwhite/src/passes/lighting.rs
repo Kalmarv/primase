@@ -286,6 +286,7 @@ impl Pass for LowerShaunwhiteLighting {
                 range: kind.1,
                 cast_shadows: Some(l.flags[1]),
                 radius: None,
+                specular: None,
             };
             if !light.intensity.is_finite() || light.color.iter().any(|v| !v.is_finite()) {
                 return Err("converted light overflows".into());

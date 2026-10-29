@@ -8,7 +8,7 @@
 use super::settings::{Factor, Fraction, Metres};
 use crate::sekiro::source::{EffectLight, EffectShape, EffectValue, LightKind, LightSource};
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
-use primase_core::{Component, Light, LightUnit, Resource, Transform, World};
+use primase_core::{Component, Light, LightSpecular, LightUnit, Resource, Transform, World};
 
 /// The game's transfer from a stored colour component in 0 to 1 (a BTL byte over 255, an effect colour's red, green or
 /// blue) to the linear value its lighting shader multiplies by the power: the square. Read back from a running game: the
@@ -75,7 +75,10 @@ impl Choice for Disabled {
 ///
 /// Colour is the stored component squared, the game's own transfer (a BTL light's diffuse bytes over 255, an effect
 /// light's stored red, green and blue; every component of every effect light of both installs is a whole number of
-/// 255ths, the representation of a byte); intensity the diffuse power times `candela-per-power`; a spot's outer
+/// 255ths, the representation of a byte); intensity the diffuse power times `candela-per-power`; a BTL light's
+/// specular (`core.light`'s `specular`) its specular bytes squared and its specular power times `candela-per-power`, as
+/// the game's light records hold the two apart (Elden Ring's Stormveil and Sekiro's Ashina bank lights, read back from the
+/// running games, hold exactly these); a spot's outer
 /// cone is the stored full angle (the vertical axis's; the horizontal axis's is `cone_width`, the circle of the same
 /// area replacing the game's pyramid), its full cone clamped to 1-179 degrees; shadows as stored. The light keeps its
 /// placement (a spot shines along its local -Z) and its `fromsoft.light` record (raw powers, radius, specular
@@ -267,7 +270,13 @@ impl LowerFromSoftLights {
                 }
             };
             let intensity = f64::from(source.diffuse_power) * self.candela_per_power.get();
-            if !intensity.is_finite() || intensity < 0. || !source.radius.is_finite() {
+            let specular_intensity = f64::from(source.specular_power) * self.candela_per_power.get();
+            if !intensity.is_finite()
+                || intensity < 0.
+                || !specular_intensity.is_finite()
+                || specular_intensity < 0.
+                || !source.radius.is_finite()
+            {
                 return Err(format!("{e:?}: invalid light power or radius"));
             }
             if source.radius < self.min_range.get() {
@@ -281,7 +290,6 @@ impl LowerFromSoftLights {
             }
             log.approximate("colour bytes squared, the game's transfer", 1);
             log.approximate("intensity by the calibrated power", 1);
-            log.approximate("specular colour and power not lowered", 1);
             lowered.push((
                 e,
                 Light {
@@ -291,6 +299,12 @@ impl LowerFromSoftLights {
                     range: Some(source.radius.max(self.min_range.get())),
                     cast_shadows: Some(source.cast_shadows),
                     radius: None,
+                    // the record's own specular colour and power, as its diffuse ones: the game's light records hold
+                    // each colour squared times its power, apart
+                    specular: Some(LightSpecular {
+                        color: source.specular.map(|c| engine_linear(f64::from(c) / 255.)),
+                        intensity: specular_intensity as f32,
+                    }),
                 },
             ));
         }
@@ -423,6 +437,8 @@ impl LowerFromSoftLights {
                     range: Some(range.max(self.min_range.get())),
                     cast_shadows: Some(source.shadows),
                     radius: None,
+                    // the effect's own specular is not lowered (the approximation above): its highlights take its colour
+                    specular: None,
                 },
             ));
         }
