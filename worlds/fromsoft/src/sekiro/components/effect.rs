@@ -451,6 +451,32 @@ pub fn weapon_trace_uses(source: &SourceEvents, weapons: &[WeaponTraces], found:
     }
 }
 
+/// The first of the global ids of the dummy polygons of an Elden Ring character's body part (its `bd_` armour): the part's
+/// polygon `n` is `2000 + n`, the places the hold rows hang a weapon or its scabbard at (the Uchigatana's scabbard, with the
+/// sword drawn in the right hand, at `2069`, the body part's polygon 69 on the left hip). Of the game's armour parts only the
+/// body parts carry dummy polygons (760 of the 834 `bd_` binders; none of the 552 `hd_`, 334 `am_`, 404 `lg_` and 142
+/// `hr_`), and the part moves the points where it has them: `bd_m_1360_l`'s polygon 31 stands 3.7 cm further out than the
+/// character's own. :observed[every armour part binder the path dictionary names] Of the hold rows' slots, 581 name a
+/// polygon below 1000 (the character's own) and 194 one of `2000` to `2999`, and no other thousand occurs; the engine's
+/// table of global id bases holds `1000` to `4000` beside the hand slots' (see [`HandSlot`]).
+/// :observed[every slot of every `WepAbsorpPosParam` row; the table in the 1.07.3 image] That `2000` is the body part's
+/// is a reading of these, not of the engine's mapping. :inferred The rows also name `2116` and `2117`, which no body part of
+/// the game has (the character's own model has both); where the game puts what they hold is not known.
+pub const BODY_PART_DUMMIES: i32 = 2_000;
+
+/// The global id of polygon `local` of part `part` of an Elden Ring character, as its sockets are named: a held weapon's
+/// by its slot ([`HandSlot::global_id`]), the body part's (`bd_...`) by [`BODY_PART_DUMMIES`], any other part's (Sekiro's
+/// parts, which carry their dummy polygons as the character's own) by its number.
+pub fn part_dummy_id(game: Game, part: &str, held: Option<HandSlot>, local: i32) -> i32 {
+    match held {
+        Some(slot) => slot.global_id(local),
+        None if game == Game::EldenRing && part.to_ascii_lowercase().starts_with("bd_") => {
+            BODY_PART_DUMMIES + local.rem_euclid(1_000)
+        }
+        None => local,
+    }
+}
+
 /// Where a held weapon is: the hand and which of the four weapons that hand holds (the engine numbers them 1 to 4 here, 0 to 3).
 ///
 /// An animation event names a dummy polygon of a held weapon by a global id, the slot's base plus the polygon's number in the
@@ -958,5 +984,20 @@ mod tests {
             assert_eq!(ResourceKind::of_texture(kind).texture(), Some(kind));
         }
         assert_eq!(ResourceKind::Model.texture(), None);
+    }
+
+    /// An Elden Ring part's polygons are named by their global ids: a held weapon's by its slot, the body part's in the
+    /// 2000s (whatever its case), any other part's and all of Sekiro's by their own numbers.
+    #[test]
+    fn a_parts_polygons_are_named_by_their_global_ids() {
+        let right = HandSlot {
+            left: false,
+            index: 0,
+        };
+        assert_eq!(part_dummy_id(Game::EldenRing, "wp_a_0550_l", Some(right), 301), 10_301);
+        assert_eq!(part_dummy_id(Game::EldenRing, "bd_m_1360_l", None, 69), 2_069);
+        assert_eq!(part_dummy_id(Game::EldenRing, "BD_M_1360_L", None, 69), 2_069);
+        assert_eq!(part_dummy_id(Game::EldenRing, "fg_a_7001", None, 15), 15);
+        assert_eq!(part_dummy_id(Game::Sekiro, "bd_m_9040_l", None, 147), 147);
     }
 }

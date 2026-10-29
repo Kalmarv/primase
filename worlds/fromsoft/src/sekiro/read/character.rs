@@ -1037,9 +1037,13 @@ impl<'a> Reading<'a> {
                 Item::Part(part) => self.weapon_slots.get(part).copied(),
                 Item::Character(_) => None,
             };
-            let made = match held {
-                Some(slot) => crate::pose::dummy_sockets_numbered(&model, |id| slot.global_id(id)),
-                None => crate::pose::dummy_sockets(&model),
+            // a part's polygons named by their global ids (a held weapon's by its slot, Elden Ring's body part's in the
+            // 2000s), the character's by their own numbers
+            let made = match item {
+                Item::Part(part) => crate::pose::dummy_sockets_numbered(&model, |id| {
+                    crate::sekiro::effect_data::part_dummy_id(self.game, part, held, id)
+                }),
+                Item::Character(_) => crate::pose::dummy_sockets(&model),
             };
             if let Ok((sockets, left_out)) = made {
                 report.dummies_unplaced = left_out.len();

@@ -11,14 +11,17 @@
 //! - `two-handed-left`: the left's in both hands (`leftBoth_<n>`), the right's hung (`rightHang_<n>`).
 //!
 //! The character's rig is the one rig (not a held weapon's) whose skeleton has the socket (`dummy <id>`, the player's
-//! dummy polygons carried onto the assembled skeleton by `assemble-character`). A model the grip puts at no dummy
-//! polygon, or at one no rig has, stays where it is, counted; a socket two rigs have is refused. The rig's
+//! dummy polygons carried onto the assembled skeleton by `assemble-character`). Elden Ring's hold rows name a body part's
+//! polygon `n` as `2000 + n` (its sockets are so named, [`crate::sekiro::effect_data::BODY_PART_DUMMIES`]). A model the
+//! grip puts at no dummy polygon, or at one no rig has, stays where it is, counted, and one at a body part's polygon the
+//! worn body part does not have is named (the rows name 2116 and 2117, which no body part has; where the game puts such a
+//! model is not known, so it is not placed); a socket two rigs have is refused. The rig's
 //! `core.transform` is where the attachment puts it with the character's rig in its pose as read (its `core.rig_pose`,
 //! else its rest).
 //!
 //! The model's frame at its socket ([`HOLD_TURN`]) is a reading of the community's tools, not checked against the
 //! game: reported as an approximation on every model it places.
-use crate::sekiro::effect_data::{HeldWeapon, Holds};
+use crate::sekiro::effect_data::{BODY_PART_DUMMIES, HeldWeapon, Holds};
 use primase_animation::pose::{affine, compose, locals, model_transforms, transform};
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{
@@ -172,6 +175,15 @@ impl Pass for HoldFromSoftWeapons {
                 .collect();
             let (holder, holder_skeleton, socket) = match holders.as_slice() {
                 [one] => one.clone(),
+                [] if (BODY_PART_DUMMIES..BODY_PART_DUMMIES + 1_000).contains(&dummy) => {
+                    log.omit(
+                        &format!(
+                            "held weapon models at a body part's dummy polygon the worn body part does not have, not placed (where the game puts them is not known): {label} at {dummy}"
+                        ),
+                        1,
+                    );
+                    continue;
+                }
                 [] => {
                     log.omit(
                         "held weapon models whose dummy polygon no character rig has, left where they are",
@@ -443,6 +455,58 @@ mod tests {
             .options()["grip"],
             "two-handed-right"
         );
+    }
+
+    /// Elden Ring's scabbard with the sword drawn hangs at a body part's polygon (`2069`: the body part's polygon 69, named
+    /// so on the character's skeleton), not at the character's own polygon 69; where the skeleton has no `dummy 2069` it is
+    /// not placed, named, even where the character has a polygon 69.
+    #[test]
+    fn a_body_part_polygon_is_found_by_its_global_id_and_one_the_body_part_lacks_is_named() {
+        let socket = |id: u32, name: &str, z: f32| Socket {
+            id: SocketId(id),
+            name: name.into(),
+            joint: JointId(0),
+            offset: translate([0.0, 0.9, z]),
+        };
+        let scabbard_at = |w: &mut World, at: i32| {
+            let root = w
+                .iter::<HeldWeapon>()
+                .find(|(r, _)| w.get::<Name>(*r).is_some_and(|n| n.0 == "wp_a_0300_1_l"))
+                .unwrap()
+                .0;
+            w.get_mut::<HeldWeapon>(root).unwrap().holds.right = Some(at);
+        };
+        let character = |w: &World| {
+            w.iter::<Sockets>()
+                .find(|(_, s)| s.0.iter().any(|k| k.name == "dummy 20"))
+                .unwrap()
+                .0
+        };
+
+        // the body part's polygon, beside the character's own of the same number
+        let (mut w, [_, _, scabbard, _]) = world();
+        let c = character(&w);
+        w.get_mut::<Sockets>(c).unwrap().0.extend([socket(2, "dummy 69", -0.1), socket(3, "dummy 2069", -0.3)]);
+        scabbard_at(&mut w, 2069);
+        let report = run(&mut w, "hold-fromsoft-weapons{grip=one-handed}").unwrap();
+        assert_eq!(w.get::<Attachment>(scabbard).unwrap().socket, SocketId(3));
+        assert_eq!(w.get::<Transform>(scabbard).unwrap().cols[3], [10.0, 0.9, -0.3]);
+        assert_eq!(report.steps[0].log.omitted.len(), 1, "{:?}", report.steps[0].log.omitted);
+
+        // no body part polygon of that number: not placed, though the character has its own 69
+        let (mut w, [_, _, scabbard, _]) = world();
+        let c = character(&w);
+        w.get_mut::<Sockets>(c).unwrap().0.push(socket(2, "dummy 69", -0.1));
+        scabbard_at(&mut w, 2069);
+        let report = run(&mut w, "hold-fromsoft-weapons{grip=one-handed}").unwrap();
+        assert!(w.get::<Attachment>(scabbard).is_none());
+        assert_eq!(w.get::<Transform>(scabbard), Some(&Transform::IDENTITY));
+        let log = &report.steps[0].log;
+        assert_eq!(
+            log.omitted["held weapon models at a body part's dummy polygon the worn body part does not have, not placed (where the game puts them is not known): wp_a_0300_1_l at 2069"],
+            1
+        );
+        assert_eq!(log.counts["held weapon models attached at their dummy polygon"], 1);
     }
 
     #[test]

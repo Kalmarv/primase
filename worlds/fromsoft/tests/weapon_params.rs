@@ -4,7 +4,8 @@
 //! (`c0000.flver`). A wrong offset would read other bytes as these numbers and miss on most rows; the counts are the
 //! test's expectations. In Sekiro every check holds on every row; in Elden Ring 14 of 3,533 models have no binder,
 //! 3,464 of the 3,636 rows name a hold row the param has, and 195 of the 776 dummy polygons the hold rows name are not
-//! the player model's (the Uchigatana's hang positions 2069 and 2070 among them, which no `c0000.flver` polygon is).
+//! the player model's: 194 of them a body part's polygon, `2000 + n` (the Uchigatana's hang positions 2069 and 2070
+//! among them), with `n` a polygon of the player's model, and one, 408, none.
 //!
 //! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6` (and for Elden Ring the regulation key in the keys
 //! folder); a game that is not configured is skipped.
@@ -15,6 +16,7 @@ use fromsoft_formats::flver::Model;
 use fromsoft_formats::{Binder, Game, Install, Keys, dcx::Decoder};
 use inputs::{Game as Data, Tool, install, keys, oodle};
 use primase_fromsoft::sekiro::WeaponParams;
+use primase_fromsoft::sekiro::effect_data::BODY_PART_DUMMIES;
 use std::collections::BTreeSet;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -32,6 +34,8 @@ struct Census {
     /// Dummy polygons the hold rows name (every model, every way), and those the player's model has.
     hold_dummies: usize,
     hold_dummies_found: usize,
+    /// Of the others, those that are a body part's polygon (`2000 + n`) whose number `n` the player's model has.
+    hold_dummies_body: usize,
     /// Weapon rows naming a trace effect in some slot.
     with_trace: usize,
 }
@@ -101,6 +105,10 @@ fn the_weapon_params_name_parts_hold_rows_and_dummy_polygons_that_exist() -> Res
                     c.hold_dummies += 1;
                     if dummies.contains(&d) {
                         c.hold_dummies_found += 1;
+                    } else if (BODY_PART_DUMMIES..BODY_PART_DUMMIES + 1_000).contains(&d)
+                        && dummies.contains(&(d - BODY_PART_DUMMIES))
+                    {
+                        c.hold_dummies_body += 1;
                     }
                 }
             }
@@ -115,6 +123,7 @@ fn the_weapon_params_name_parts_hold_rows_and_dummy_polygons_that_exist() -> Res
                 hold_rows: 33,
                 hold_dummies: 38,
                 hold_dummies_found: 38,
+                hold_dummies_body: 0,
                 with_trace: 38,
             }
         } else {
@@ -126,6 +135,7 @@ fn the_weapon_params_name_parts_hold_rows_and_dummy_polygons_that_exist() -> Res
                 hold_rows: 70,
                 hold_dummies: 776,
                 hold_dummies_found: 581,
+                hold_dummies_body: 194,
                 with_trace: 3_052,
             }
         };

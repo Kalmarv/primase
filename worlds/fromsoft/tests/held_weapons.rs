@@ -1,11 +1,11 @@
 //! Weapons held where the game holds them: the player's parts read with a weapon row in the right hand, the character's
-//! own model's dummy polygons placed on them (where weapons stand: Elden Ring's parts carry none of them), the body
+//! own model's dummy polygons placed on them (where weapons stand, with Elden Ring's body part's in the 2000s), the body
 //! assembled without the weapon (`leave-out=`), every asset placed, and `hold-fromsoft-weapons{grip=one-handed}`
 //! attaching each weapon model's rig to the dummy polygon its `WepAbsorpPosParam` row names. Sekiro's Kusabimaru (row
 //! 8000000, hold row 5000): the blade (model 0) at dummy polygon 20 (the right hand's `R_Weapon`), the scabbard (model 1)
 //! at 147 (`Sheath`), model 2 at 149 (`LargeSheath`). Elden Ring's Uchigatana (9000000, hold row 29): the blade at 20, the
-//! scabbard at 2069, which the player's model does not have (counted, left where it is). The blade's polygon 301 is the
-//! socket `dummy 10301` its effects name.
+//! scabbard, with the sword drawn, at 2069: the body part `bd_m_1360_l`'s polygon 69, on the left hip. The blade's polygon
+//! 301 is the socket `dummy 10301` its effects name.
 //!
 //! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}` and `tools.oodle6`; a game that is not configured is skipped.
 mod common;
@@ -72,7 +72,7 @@ fn the_player_holds_a_weapon_at_the_dummy_polygons_its_rows_name() -> Result<()>
             Data::Elden,
             &["hd_m_1360_l", "bd_m_1360_l", "am_m_1360_l", "lg_m_1360_l"][..],
             9_000_000,
-            vec![(0, Some("dummy 20".to_owned())), (1, None)],
+            vec![(0, Some("dummy 20".to_owned())), (1, Some("dummy 2069".to_owned()))],
         ),
     ] {
         let (Some(root), Some(folder)) = (install(data), keys(data)) else {
