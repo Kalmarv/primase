@@ -46,11 +46,19 @@ It has `Geometry::None`; primitive remapping does not alter material defaults.
 - `name`: nonempty string.
 - `parameters`: ordered `{name, kind, default}`. Names are nonempty and unique. `kind` is `Float`,
   `Int`, `Bool` or `Trigger`; the f64 default is finite, integral for Int, exactly 0/1 for Bool/Trigger.
-- `layers`: ordered `{name, states, default_state, default_weight, blending}`. Each layer has a
-  nonempty name, a finite f32 default weight and a default state: an index of its states, or `null`
-  exactly when the layer has no states (an empty layer plays nothing; a source's empty layers are kept
-  so the layer indices line up with the source's). Weight is retained as
-  stored, without clamping. `blending` is `Override`, `Additive`, or `{"Other": i64}`.
+- `layers`: ordered `{name, states, default_state, default_weight, weight_parameter, blending, mask}`. Each
+  layer has a nonempty name, a finite f32 default weight and a default state: an index of its states, or
+  `null` exactly when the layer has no states (an empty layer plays nothing; a source's empty layers are kept
+  so the layer indices line up with the source's). Weight is retained as stored, without clamping.
+  `weight_parameter` is `null` or the index of a Float/Int parameter whose value is the layer's weight
+  instead of `default_weight`. `blending` is `Override`, `Additive`, or `{"Other": i64}`. `mask` is `null`
+  (every joint at full strength), `{"Joints": [{skeleton, joint, weight}, ...]}` or `{"Unsupported":
+  reason}`. A joint is named as a clip channel names it, by the entity holding its `core.skeleton` and its
+  `JointId`; each pair appears once, the joint exists in that skeleton, and the weight is finite in 0 to
+  1 (a source's weight outside that range is not lowered, never clamped). A joint a mask does not list has
+  weight 0. `Unsupported` carries a nonempty reason for a mask the source states and core has no form
+  for. `weight_parameter` and `mask` are required in the JSON (`null` for none): a stored controller
+  without them is refused, so an absent mask never reads as an unmasked layer.
 - Each state has `{name, motion, speed, speed_parameter, cycle_offset, cycle_offset_parameter}`.
   Name is nonempty; speed (f64) and offset (f32) are finite. Negative speed and offsets outside
   [0,1] are retained. Optional numeric parameter indices name Float/Int parameters only.
@@ -61,9 +69,16 @@ nonempty, with finite, strictly increasing f32 thresholds and a Float/Int parame
 referenced clip has `core.clip`; Unsupported has a nonempty explanation and is never an implicit
 choice of one of its source children. The reference visitor visits clips through every nested tree.
 
-Transitions and body/skeleton layer masks remain in the Unity dialect for now; the projection does
-not claim to evaluate or discard them. Other source dialects follow the same retention rule.
-Evaluation and layering policy belong to the animation toolkit, not to these data types.
+Layers compose in order, the first at the bottom: a layer plays its selected state's clip over the pose
+below it (a joint or channel the clip does not drive keeps the pose below; a delta clip composes onto
+it) and the result is the pose below mixed toward that one, per joint, by the layer's weight times the
+joint's weight in its mask. Other channels follow the same rule by the layer's weight alone; a discrete
+value (a draw group) and a value with nothing below it to mix with take the layer's only at weight 1.
+`Additive` requires the clip to state itself a delta (`core.clip`'s `additive`); `Other` blending and an
+`Unsupported` mask are refused by name. The rule is documented in `core/src/controller.rs`; the
+arithmetic is the animation toolkit's (`primase_animation::layers`, `controller::layer_stack`).
+Transitions between states, the events and fades that turn a layer on or off, synchronised layers and IK
+remain in the source dialect; the projection does not claim to evaluate or discard them.
 
 `core.controller_binding` has `{controller: entity, rig: entity}`. The first holds `core.controller`,
 the second `core.rig_instance`. Both are declared entity references. Controller and binding have

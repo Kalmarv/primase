@@ -21,7 +21,7 @@ pub use content::{ContentNote, DisplayName, NameOrigin, Record};
 mod controller;
 pub use controller::{
     Controller, ControllerBinding, ControllerLayer, ControllerParameter, ControllerParameterKind,
-    ControllerState, LayerBlending, Motion,
+    ControllerState, LayerBlending, LayerMask, MaskedJoint, Motion,
 };
 mod draw_groups;
 pub use draw_groups::{DrawGroupDefaults, DrawGroups};

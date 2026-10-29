@@ -1,7 +1,7 @@
 //! `unity.avatar`, `unity.animator_controller` and `unity.animator`: Unity's Animator side as components. The avatar and
 //! the controller are the records `unity_formats::animator` reads; the Animator pairs them with a rig by entity.
 
-use primase_core::{Component, Entity, JsonError};
+use primase_core::{Component, Entity, JointId, JsonError};
 use serde::Serialize;
 use unity_formats::animator::{UnityAnimatorController as Controller, UnityAvatar as Avatar};
 
@@ -72,6 +72,10 @@ pub struct UnityAnimator {
     pub apply_root_motion: bool,
     pub controller: Option<Entity>,
     pub avatar: Option<Entity>,
+    /// The rig's joints by the CRC-32 of their path below the Animator's GameObject, which is how a layer's skeleton mask
+    /// (and a clip's binding) names a transform; a hash two joints share names the last. Not in the JSON form.
+    #[serde(skip)]
+    pub joints: Vec<(u32, JointId)>,
 }
 
 impl Component for UnityAnimator {

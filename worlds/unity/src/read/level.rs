@@ -934,7 +934,7 @@ impl Builder<'_> {
                 }
                 _ => None,
             };
-            for &rig in rigs.keys() {
+            for (&rig, (_, hashes, _)) in &rigs {
                 if !w.has::<UnityAnimator>(rig) {
                     w.insert(
                         rig,
@@ -944,6 +944,7 @@ impl Builder<'_> {
                             apply_root_motion: animator.apply_root_motion,
                             controller: controller_entity,
                             avatar,
+                            joints: hashes.iter().map(|(&hash, &joint)| (hash, joint)).collect(),
                         },
                     );
                 }

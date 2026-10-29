@@ -24,9 +24,19 @@
 //!   overrides), whose 1D thresholds repeat (core's ascend strictly, Unity's need not), or whose blend tree contains
 //!   itself.
 //!
+//! - layer masks: a layer with no skeleton mask and every part of the body mask has none (`None`); a skeleton mask is the
+//!   listed transforms (`LayerMask::Joints`: each path's CRC-32 resolved on the rig by the joint paths its `unity.animator`
+//!   holds, weights as stored, a path that is no joint of the rig left out and counted), and a joint it does not list has
+//!   weight 0. A layer whose mask or rule core cannot state is `LayerMask::Unsupported` with why, counted, and the toolkit
+//!   refuses to apply it by name: a body mask that is not all parts (which joints they are is the avatar's human map's), a
+//!   skeleton mask weight outside 0 to 1, and states of a layer above the first with `m_WriteDefaultValues` (Unity's manual:
+//!   the state "writes the default values for properties that are not animated by its motion", where core's layer rule keeps
+//!   the pose below for a joint the clip does not drive). A Unity weight is set by script, so no layer has a weight
+//!   parameter.
+//!
 //! What stays in the dialect, as [`primase_core::Controller`] states it: transitions, any-state transitions, entry and
-//! exit selectors, the body and skeleton masks, synchronised layers, tags, IK, looping and `m_WriteDefaultValues` are
-//! facts of `unity.animator_controller`; the pass neither applies them nor drops them. The controller keeps its
+//! exit selectors, synchronised layers, tags, IK, looping and `m_WriteDefaultValues` where no layer rule needs it are facts
+//! of `unity.animator_controller`; the pass neither applies them nor drops them. The controller keeps its
 //! `unity.animator_controller` and the rig its `unity.animator`.
 //!
 //! Placement: one `core.controller` per (controller, rig) pair, on an entity of its own — a controller shared by two
@@ -43,13 +53,14 @@
 use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::{
     Clip, ClipBinding, Controller, ControllerBinding, ControllerLayer, ControllerParameter,
-    ControllerParameterKind, ControllerState, Entity, LayerBlending, Motion, RigInstance, World,
+    ControllerParameterKind, ControllerState, Entity, LayerBlending, LayerMask, MaskedJoint, Motion,
+    RigInstance, World,
 };
 
 use crate::animator::{UnityAnimator, UnityAnimatorController};
 use crate::components::UnityObject;
 use unity_formats::Result;
-use unity_formats::animator::{BlendNode, Parameter, State};
+use unity_formats::animator::{BlendNode, Layer, Parameter, State, StateMachine};
 
 /// The kind of a stored parameter (1 float, 3 int, 4 bool, 9 trigger) as core's; `None` for a kind core has no word
 /// for.
@@ -279,6 +290,95 @@ fn state(
     })
 }
 
+/// Whether a layer's body mask enables every part. The humanoid parts take 51 bits: all of the first two words and the low 19
+/// of the third (a census of the controllers of PEAK, SkateBIRD, Sledding Game and Big Walk: 124 of 127 layers store
+/// `ffffffff ffffffff 0007ffff`, the other three are partial masks); a third word with more bits set is read as the same
+/// all-parts mask.
+fn all_body_parts(mask: [u32; 3]) -> bool {
+    mask[0] == u32::MAX && mask[1] == u32::MAX && mask[2] & 0x7_ffff == 0x7_ffff
+}
+
+/// The mask a layer states for `rig`, as core states it: `None` where the layer drives every joint at full strength, the
+/// listed joints where it names transforms, and a named refusal ([`LayerMask::Unsupported`], counted) for what core's layer rule
+/// cannot state:
+/// - a body mask other than all parts: the humanoid parts it enables are bones of the avatar's human map, which this pass
+///   does not read;
+/// - a skeleton mask weight outside 0 to 1 (never clamped);
+/// - states that write default values on a layer above the first: Unity then writes the default pose to the joints a
+///   state's clip does not animate, where core's rule keeps the pose below (Unity's manual: "Write Defaults: whether the
+///   AnimatorStates writes the default values for properties that are not animated by its motion").
+fn layer_mask(
+    layer: &Layer,
+    machine: &StateMachine,
+    index: usize,
+    rig: Entity,
+    w: &World,
+    log: &mut PassLog,
+) -> Option<LayerMask> {
+    let mut why: Vec<String> = Vec::new();
+    if !all_body_parts(layer.body_mask) {
+        why.push(format!(
+            "its humanoid body mask ({:08x} {:08x} {:08x}) is not all parts, and which joints they are is the avatar's human map",
+            layer.body_mask[0], layer.body_mask[1], layer.body_mask[2]
+        ));
+    }
+    if index > 0 && machine.states.iter().any(|s| s.write_default_values) {
+        why.push(
+            "its states write default values (m_WriteDefaultValues) for the joints they do not animate, where core's layer \
+             rule keeps the pose below"
+                .to_owned(),
+        );
+    }
+    if layer
+        .skeleton_mask
+        .iter()
+        .any(|(_, weight)| !weight.is_finite() || !(0.0..=1.0).contains(weight))
+    {
+        why.push("a skeleton mask weight is outside 0 to 1".to_owned());
+    }
+    if !why.is_empty() {
+        let why = why.join("; ");
+        log.omit(&format!("layer masks not lowered: {why}"), 1);
+        return Some(LayerMask::Unsupported(why));
+    }
+    if layer.skeleton_mask.is_empty() {
+        return None;
+    }
+    // a mask names transforms by the CRC-32 of their path below the Animator's GameObject
+    let animator = w.get::<UnityAnimator>(rig);
+    let skeleton = w.get::<RigInstance>(rig).map(|r| r.skeleton);
+    let (Some(animator), Some(skeleton)) = (animator.filter(|a| !a.joints.is_empty()), skeleton) else {
+        let why =
+            "its skeleton mask names transforms by path, and the rig's joint paths were not read".to_owned();
+        log.omit(&format!("layer masks not lowered: {why}"), 1);
+        return Some(LayerMask::Unsupported(why));
+    };
+    let mut joints: Vec<MaskedJoint> = Vec::new();
+    let mut unresolved = 0;
+    for &(hash, weight) in &layer.skeleton_mask {
+        match animator.joints.iter().rfind(|(h, _)| *h == hash) {
+            Some(&(_, joint)) => match joints.iter_mut().find(|m| m.joint == joint) {
+                Some(twice) => twice.weight = weight,
+                None => joints.push(MaskedJoint {
+                    skeleton,
+                    joint,
+                    weight,
+                }),
+            },
+            None => unresolved += 1,
+        }
+    }
+    if unresolved > 0 {
+        log.count(
+            "skeleton mask paths that are no joint of the rig (left out of the mask)",
+            unresolved,
+        );
+    }
+    log.count("layers with a skeleton mask", 1);
+    log.count("joints in skeleton masks", joints.len() as u64);
+    Some(LayerMask::Joints(joints))
+}
+
 /// The controller `controller` states for `rig`: `None` when a fact [`Controller`] requires is not in the file, counted
 /// in `log` with what was missing.
 fn controller_for(
@@ -360,11 +460,13 @@ fn controller_for(
             states,
             default_state,
             default_weight: layer.default_weight,
+            weight_parameter: None,
             blending: match layer.blending_mode {
                 0 => LayerBlending::Override,
                 1 => LayerBlending::Additive,
                 other => LayerBlending::Other(other),
             },
+            mask: layer_mask(layer, machine, index, rig, w, log),
         });
     }
     Some(Controller {
@@ -565,7 +667,7 @@ mod tests {
         Layer {
             state_machine: machine,
             synchronized_layer: -1,
-            body_mask: [0; 3],
+            body_mask: [u32::MAX; 3],
             skeleton_mask: vec![],
             binding: name,
             blending_mode: blending,
@@ -658,6 +760,7 @@ mod tests {
                 apply_root_motion: false,
                 controller: Some(controller_entity),
                 avatar: None,
+                joints: vec![],
             },
         );
         for (path_id, name) in [(100, "idle"), (101, "walk")] {
@@ -892,5 +995,109 @@ mod tests {
         assert!(registry.describe("lower-unity-animator").is_some());
         assert!(!registry.requires_options("lower-unity-animator"));
         assert!(registry.make("lower-unity-animator", &Options::new()).is_ok());
+    }
+
+    /// A layer states its mask or core names why it cannot: a skeleton mask is the rig's joints it lists at their weights (a
+    /// path that is no joint of the rig left out and counted), a body mask that is not every part, a weight outside 0 to 1,
+    /// and states that write default values on a layer above the first are each `Unsupported` with the reason, counted; the
+    /// first layer with write defaults, and a layer with neither, have none.
+    #[test]
+    fn a_layers_mask_is_lowered_or_named_as_unsupported() {
+        use primase_core::{Joint, JointId, MaskedJoint, Rest};
+        let (mut w, rig, controller_entity) = world();
+        let skeleton = w.get::<RigInstance>(rig).unwrap().skeleton;
+        let rest = Rest::Trs {
+            translation: [0.0; 3],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale: [1.0; 3],
+        };
+        w.insert(
+            skeleton,
+            Skeleton {
+                joints: (0..2)
+                    .map(|i| Joint {
+                        id: JointId(i),
+                        name: format!("j{i}"),
+                        parent: None,
+                        rest,
+                    })
+                    .collect(),
+            },
+        );
+        w.get_mut::<UnityAnimator>(rig).unwrap().joints = vec![(0xAAAA, JointId(0)), (0xBBBB, JointId(1))];
+        let controller = w.get_mut::<UnityAnimatorController>(controller_entity).unwrap();
+        let mut masked = layer(0, 21, 0, 1.0);
+        masked.skeleton_mask = vec![(0xBBBB, 0.25), (0xCCCC, 1.0), (0xAAAA, 1.0)];
+        let mut partial_body = layer(0, 21, 0, 1.0);
+        partial_body.body_mask = [0x0000_00ff, u32::MAX, 0x7_ffff];
+        let mut bad_weight = layer(0, 21, 0, 1.0);
+        bad_weight.skeleton_mask = vec![(0xAAAA, 1.5)];
+        // the machine's states write defaults (the fixture's), so every layer above the first is refused for that
+        controller.layers = vec![
+            layer(0, 21, 0, 1.0),
+            masked.clone(),
+            partial_body.clone(),
+            bad_weight.clone(),
+        ];
+        let log = lower_unity_animator(&mut w).unwrap();
+        let (_, value) = w.iter::<Controller>().next().unwrap();
+        assert_eq!(
+            value.layers[0].mask, None,
+            "the first layer with write defaults has no mask"
+        );
+        for layer in &value.layers[1..] {
+            let Some(LayerMask::Unsupported(why)) = &layer.mask else {
+                panic!("{:?}", layer.mask)
+            };
+            assert!(why.contains("write default values"), "{why}");
+        }
+        assert!(
+            matches!(&value.layers[2].mask, Some(LayerMask::Unsupported(why)) if why.contains("humanoid body mask (000000ff ffffffff 0007ffff)"))
+        );
+        assert!(
+            matches!(&value.layers[3].mask, Some(LayerMask::Unsupported(why)) if why.contains("outside 0 to 1"))
+        );
+        assert_eq!(log.omitted.values().sum::<u64>(), 3);
+        // with the states not writing defaults the masks are the layers' own
+        let controller = w.get_mut::<UnityAnimatorController>(controller_entity).unwrap();
+        for s in &mut controller.state_machines[0].states {
+            s.write_default_values = false;
+        }
+        let log = lower_unity_animator(&mut w).unwrap();
+        let (_, value) = w.iter::<Controller>().next().unwrap();
+        assert_eq!(value.layers[0].mask, None);
+        assert_eq!(
+            value.layers[1].mask,
+            Some(LayerMask::Joints(vec![
+                MaskedJoint {
+                    skeleton,
+                    joint: JointId(1),
+                    weight: 0.25
+                },
+                MaskedJoint {
+                    skeleton,
+                    joint: JointId(0),
+                    weight: 1.0
+                },
+            ]))
+        );
+        assert!(
+            matches!(&value.layers[2].mask, Some(LayerMask::Unsupported(why)) if !why.contains("write default"))
+        );
+        assert!(
+            matches!(&value.layers[3].mask, Some(LayerMask::Unsupported(why)) if why == "a skeleton mask weight is outside 0 to 1")
+        );
+        assert_eq!(
+            log.counts["skeleton mask paths that are no joint of the rig (left out of the mask)"],
+            1
+        );
+        assert_eq!(log.counts["joints in skeleton masks"], 2);
+        // a mask that names paths of a rig whose joint paths were not read is refused, not read as no mask
+        w.get_mut::<UnityAnimator>(rig).unwrap().joints.clear();
+        lower_unity_animator(&mut w).unwrap();
+        let (_, value) = w.iter::<Controller>().next().unwrap();
+        assert!(
+            matches!(&value.layers[1].mask, Some(LayerMask::Unsupported(why)) if why.contains("joint paths were not read"))
+        );
     }
 }

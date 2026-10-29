@@ -137,7 +137,7 @@ impl Trs {
         ]
     }
 
-    fn rest(&self) -> Rest {
+    pub(crate) fn rest(&self) -> Rest {
         Rest::Trs {
             translation: self.translation.map(|x| x as f32),
             rotation: self.rotation.map(|x| x as f32),
@@ -637,7 +637,7 @@ pub fn blend(parts: &[(&Evaluated, f64)]) -> Result<Evaluated> {
 }
 
 /// Weighted transforms (weights summing to 1) as one: see [`blend`].
-fn blend_trs(parts: &[(Trs, f64)]) -> Result<Trs> {
+pub(crate) fn blend_trs(parts: &[(Trs, f64)]) -> Result<Trs> {
     let anchor = parts[0].0.rotation;
     let mut out = Trs {
         translation: [0.0; 3],

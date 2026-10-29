@@ -1,7 +1,28 @@
-//! A clip-selection state machine and its rig binding. Evaluation belongs to the animation toolkit.
-//! Source-specific transitions and body/skeleton layer masks remain in the source dialect; this
-//! projection does not claim to apply them or silently replace them with unmasked transitions.
-use crate::{Clip, Component, Entity, Geometry, JsonError, RigInstance, World};
+//! A layered clip-selection controller and its rig binding: the clips a source's states choose, the layers they play
+//! in, and how a layer applies to the rig's joints (its weight, which a controller parameter may set, and its mask).
+//! The animation toolkit evaluates it.
+//!
+//! Meaning (core's rule for layers; a source whose engine composes otherwise keeps that in its dialect):
+//! - Layers compose in order, the first at the bottom. A layer plays its selected state's clip over the pose below it
+//!   (`core.clip`'s own rule: a joint or channel the clip does not drive keeps the pose below, a delta clip is
+//!   composed onto it), and the result is the pose below mixed toward that one, per joint, by the layer's weight times
+//!   the joint's weight in its [`LayerMask`]. A morph, control, draw-group, material or root-motion channel follows the
+//!   same rule: the layer does not change one its clip does not drive, and mixes one it drives by its weight. A
+//!   discrete value (a draw group), and a value with nothing below it to mix with, take the layer's only at weight 1;
+//!   at a weight between 0 and 1 that is a refusal, never a guess.
+//! - The weight is the numeric parameter's value where [`ControllerLayer::weight_parameter`] names one, else
+//!   [`ControllerLayer::default_weight`]; the toolkit refuses a weight outside 0..=1 instead of clamping it. A layer of
+//!   weight 0 contributes nothing, whatever its states hold.
+//! - [`LayerBlending::Override`] plays the clip as it stands. [`LayerBlending::Additive`] requires the clip to state
+//!   itself a delta (`Clip::additive`): a clip that does not is refused by name, not taken as a delta by assumption.
+//!   [`LayerBlending::Other`] is refused.
+//! - A mask lists the joints the layer drives and their weights; a joint not listed has weight 0. A layer with no mask
+//!   drives every joint at full strength. A mask core has no form for stays named ([`LayerMask::Unsupported`]) and the
+//!   layer is refused by name.
+//!
+//! What stays in the source dialect: transitions between states, the events and fades that turn a layer on or off,
+//! synchronised layers and IK. This projection neither applies them nor replaces them with something else.
+use crate::{Clip, Component, Entity, Geometry, JointId, JsonError, RigInstance, Skeleton, World};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -57,6 +78,40 @@ pub struct ControllerState {
     pub cycle_offset_parameter: Option<usize>,
 }
 
+/// One joint's weight in a layer's mask, named as `core.clip` names a joint channel's target: by the skeleton and the
+/// joint's identity in it (never by name). A controller may therefore be bound to any rig whose skeleton an entry names;
+/// the entries of another skeleton do not apply to it.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaskedJoint {
+    pub skeleton: Entity,
+    #[serde(deserialize_with = "joint_id")]
+    pub joint: JointId,
+    /// Finite, 0 to 1; a source's weight outside that range is not lowered (never clamped).
+    pub weight: f32,
+}
+
+fn joint_id<'de, D: serde::Deserializer<'de>>(d: D) -> Result<JointId, D::Error> {
+    u32::deserialize(d).map(JointId)
+}
+
+/// An `Option` field that must be present in the JSON (`null` for none): serde fills an absent one in as `None`
+/// otherwise, and for a mask that would read as "unmasked".
+fn stated<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<T>, D::Error> {
+    Option::<T>::deserialize(d)
+}
+
+/// Which joints a layer drives, and how strongly (see the module documentation).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum LayerMask {
+    /// The listed joints at their weights; a joint not listed has weight 0. Each (skeleton, joint) once.
+    Joints(Vec<MaskedJoint>),
+    /// A mask the source states and core has no form for, or a layer rule it cannot state (the way
+    /// [`Motion::Unsupported`] names a motion): a non-empty reason. The layer is refused by name, never applied unmasked.
+    Unsupported(String),
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ControllerLayer {
@@ -65,9 +120,18 @@ pub struct ControllerLayer {
     /// The state the layer starts in: an index of `states`. `None` exactly when the layer has no states: such a layer
     /// plays nothing (a source's empty layer, kept so the layers still line up with the source's).
     pub default_state: Option<usize>,
-    /// As stored; finite, never silently clamped to a consumer's supported range.
+    /// As stored; finite, never silently clamped to a consumer's supported range. The weight the layer has when no
+    /// parameter sets one (`weight_parameter`).
     pub default_weight: f32,
+    /// A numeric controller parameter (an index of `parameters`) whose value is the layer's weight, where the source
+    /// binds the weight to one; `None`: `default_weight`.
+    #[serde(deserialize_with = "stated")]
+    pub weight_parameter: Option<usize>,
     pub blending: LayerBlending,
+    /// Which joints the layer drives; `None`: every joint at full strength. Stored as a `null` when none: a stored
+    /// controller without the field is refused, so an absent mask never reads as an unmasked layer.
+    #[serde(deserialize_with = "stated")]
+    pub mask: Option<LayerMask>,
 }
 
 /// `core.controller`: states and the clip motions their parameters choose. Transitions and
@@ -130,6 +194,11 @@ impl Component for Controller {
                 Motion::Unsupported(_) => {}
             }
         }
+        for layer in &self.layers {
+            if let Some(LayerMask::Joints(joints)) = &layer.mask {
+                out.extend(joints.iter().map(|j| j.skeleton));
+            }
+        }
     }
     fn verify(&self, _e: Entity, w: &World) -> Result<(), String> {
         if self.name.trim().is_empty() {
@@ -164,6 +233,46 @@ impl Component for Controller {
             }
             if !layer.default_weight.is_finite() {
                 return Err(format!("layer {layer_index}: non-finite weight"));
+            }
+            if let Some(parameter) = layer.weight_parameter {
+                self.numeric_parameter(parameter)
+                    .map_err(|why| format!("layer {layer_index}: weight {why}"))?;
+            }
+            match &layer.mask {
+                None => {}
+                Some(LayerMask::Unsupported(why)) if why.trim().is_empty() => {
+                    return Err(format!("layer {layer_index}: unsupported mask has no reason"));
+                }
+                Some(LayerMask::Unsupported(_)) => {}
+                Some(LayerMask::Joints(joints)) => {
+                    let mut seen = BTreeSet::new();
+                    for masked in joints {
+                        if !masked.weight.is_finite() || !(0.0..=1.0).contains(&masked.weight) {
+                            return Err(format!(
+                                "layer {layer_index}: mask weight {} is not in 0 to 1",
+                                masked.weight
+                            ));
+                        }
+                        if !seen.insert((masked.skeleton, masked.joint)) {
+                            return Err(format!(
+                                "layer {layer_index}: joint {:?} is masked twice",
+                                masked.joint
+                            ));
+                        }
+                        let skeleton = w.get::<Skeleton>(masked.skeleton).ok_or_else(|| {
+                            format!(
+                                "layer {layer_index}: mask skeleton {:?} holds no core.skeleton",
+                                masked.skeleton
+                            )
+                        })?;
+                        if skeleton.index_of(masked.joint).is_none() {
+                            return Err(format!(
+                                "layer {layer_index}: masked joint {:?} is not in skeleton {:?}",
+                                masked.joint, masked.skeleton
+                            ));
+                        }
+                    }
+                }
             }
             match layer.default_state {
                 Some(default) if default >= layer.states.len() => {
@@ -294,7 +403,9 @@ mod tests {
                 name: "base".into(),
                 default_state: Some(0),
                 default_weight: 0.75,
+                weight_parameter: None,
                 blending: LayerBlending::Override,
+                mask: None,
                 states: vec![ControllerState {
                     name: "idle".into(),
                     speed: -1.,
@@ -426,6 +537,105 @@ mod tests {
                 .unwrap_err()
                 .contains("default state is out of range")
         );
+    }
+    fn skeleton_of(w: &mut World, joints: u32) -> Entity {
+        let e = w.spawn();
+        w.insert(
+            e,
+            Skeleton {
+                joints: (0..joints)
+                    .map(|i| crate::Joint {
+                        id: JointId(i),
+                        name: format!("j{i}"),
+                        parent: i.checked_sub(1).map(JointId),
+                        rest: crate::Rest::Trs {
+                            translation: [0.; 3],
+                            rotation: [0., 0., 0., 1.],
+                            scale: [1.; 3],
+                        },
+                    })
+                    .collect(),
+            },
+        );
+        e
+    }
+    fn masked(skeleton: Entity, joint: u32, weight: f32) -> MaskedJoint {
+        MaskedJoint {
+            skeleton,
+            joint: JointId(joint),
+            weight,
+        }
+    }
+    /// A mask names joints as a clip does, by skeleton and joint id; it is checked against those skeletons, and an
+    /// invalid weight, a repeated joint, a skeleton that is none, a joint that is not in it, a reasonless refusal or a
+    /// weight parameter that is not numeric is refused.
+    #[test]
+    fn a_layer_mask_is_checked_against_the_skeletons_it_names() {
+        let (mut w, e, mut c) = fixture();
+        let a = skeleton_of(&mut w, 3);
+        let b = skeleton_of(&mut w, 2);
+        c.layers[0].mask = Some(LayerMask::Joints(vec![
+            masked(a, 0, 1.),
+            masked(a, 2, 0.25),
+            masked(b, 0, 0.),
+        ]));
+        c.layers[0].weight_parameter = Some(0);
+        assert!(c.verify(e, &w).is_ok());
+        let mut refs = Vec::new();
+        c.references(&mut refs);
+        assert!(refs.contains(&a) && refs.contains(&b));
+        for (mask, why) in [
+            (vec![masked(a, 0, 1.), masked(a, 0, 0.5)], "masked twice"),
+            (vec![masked(a, 0, 1.0001)], "not in 0 to 1"),
+            (vec![masked(a, 0, -0.5)], "not in 0 to 1"),
+            (vec![masked(a, 0, f32::NAN)], "not in 0 to 1"),
+            (vec![masked(a, 3, 1.)], "is not in skeleton"),
+            (vec![masked(b, 2, 1.)], "is not in skeleton"),
+            (vec![masked(e, 0, 1.)], "holds no core.skeleton"),
+        ] {
+            let mut bad = c.clone();
+            bad.layers[0].mask = Some(LayerMask::Joints(mask));
+            let err = bad.verify(e, &w).unwrap_err();
+            assert!(err.contains(why), "{err}");
+        }
+        let mut bad = c.clone();
+        bad.layers[0].mask = Some(LayerMask::Unsupported(" ".into()));
+        assert!(bad.verify(e, &w).unwrap_err().contains("no reason"));
+        bad.layers[0].mask = Some(LayerMask::Unsupported("a humanoid body mask".into()));
+        assert!(bad.verify(e, &w).is_ok());
+        for index in [2, 3, 4] {
+            let mut bad = c.clone();
+            bad.layers[0].weight_parameter = Some(index);
+            assert!(bad.verify(e, &w).unwrap_err().contains("weight"));
+        }
+    }
+    /// The mask and the weight parameter survive JSON, `null` when none, and a stored controller without either field
+    /// is refused rather than read as an unmasked layer.
+    #[test]
+    fn a_layer_mask_round_trips_and_its_absence_is_not_unmasked() {
+        let (mut w, _, mut c) = fixture();
+        let a = skeleton_of(&mut w, 2);
+        c.layers[0].weight_parameter = Some(0);
+        c.layers[0].mask = Some(LayerMask::Joints(vec![masked(a, 1, 0.5)]));
+        let json = c.to_json().unwrap().unwrap();
+        assert_eq!(serde_json::from_value::<Controller>(json.clone()).unwrap(), c);
+        c.layers[0].mask = Some(LayerMask::Unsupported("why".into()));
+        let json = c.to_json().unwrap().unwrap();
+        assert_eq!(
+            json["layers"][0]["mask"],
+            serde_json::json!({"Unsupported": "why"})
+        );
+        assert_eq!(serde_json::from_value::<Controller>(json).unwrap(), c);
+        c.layers[0].mask = None;
+        c.layers[0].weight_parameter = None;
+        let json = c.to_json().unwrap().unwrap();
+        assert!(json["layers"][0]["mask"].is_null() && json["layers"][0]["weight_parameter"].is_null());
+        assert_eq!(serde_json::from_value::<Controller>(json.clone()).unwrap(), c);
+        for field in ["mask", "weight_parameter"] {
+            let mut stripped = json.clone();
+            stripped["layers"][0].as_object_mut().unwrap().remove(field);
+            assert!(serde_json::from_value::<Controller>(stripped).is_err(), "{field}");
+        }
     }
     #[test]
     fn controller_and_binding_json_round_trip_keep_entity_ids_and_layer_modes() {
