@@ -28,6 +28,10 @@
 //! The fills (`Angle1`, `LocalLight` lights) and a sun's sharpness are counted as not lowered. Later files of a map (`_0010` ...) store only the
 //! fields they change.
 //!
+//! A field stored at several hours of the day, where the program sampled none (`sample-fromsoft-draw-params`), is
+//! lowered at the read's default hour, sampled the same way, and the choice is counted with where the hour comes from
+//! ([`crate::sekiro::read::draw_param::default_hour`]: neither game's data states the hour a map is entered at).
+//!
 //! The `VolumetricFog ParamEditor` group's fields the census shows (`VolumetricFog Global FixedDensity`, the height
 //! density keys, `SkyLight SkyColor`, `DirLight DirectColor`, `GameScale` ...) are kept in `core.atmosphere`'s
 //! `volumetric` with the file's own names and values, unconverted: the densities are in a unit the group's `GameScale`
@@ -208,11 +212,12 @@ impl Pass for LowerFromSoftEnvironment {
         "the sun's intensity at the calibrated lux per unit of radiance; Elden Ring's light set read with the transfer a Sekiro frame shows; hemisphere colours as linear; the ambient's equator the mean of its hemispheres"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
-        let Some(env) = world.resource::<DrawParam>().cloned() else {
+        let Some(mut env) = world.resource::<DrawParam>().cloned() else {
             log.count("areas with no draw-param environment", 1);
             return Ok(());
         };
-        // a field stored at several hours has one value here, its first stored sample, unless the program sampled an hour
+        // a field still stored at several hours (the program sampled no hour) is lowered at the read's default hour,
+        // sampled as `sample-fromsoft-draw-params` samples; the stored environment is left as it is
         let several = env
             .groups
             .iter()
@@ -226,8 +231,13 @@ impl Pass for LowerFromSoftEnvironment {
             })
             .sum::<u64>();
         if several > 0 {
+            let default = env.default_hour.clone();
+            super::draw_params::sample_at(&mut env, default.hour, log)?;
             log.approximate(
-                "draw-param fields stored at several hours of the day lowered at their first stored sample (`sample-fromsoft-draw-params` chooses an hour)",
+                &format!(
+                    "draw-param fields stored at several hours of the day lowered at the default hour {}:00, {} (`sample-fromsoft-draw-params` chooses another)",
+                    default.hour, default.source
+                ),
                 several,
             );
         }
@@ -407,8 +417,48 @@ mod tests {
             file: "m11_01_0720".into(),
             version: 5,
             groups,
+            default_hour: crate::sekiro::read::draw_param::default_hour(fromsoft_formats::Game::Sekiro),
         });
         w
+    }
+
+    /// A light set stored at several hours, and no hour sampled: the sun is the read's default hour's (Sekiro's 18:00,
+    /// between the keys at 12 and 22 here), not the first stored sample's (black at hour 0: no sun), and the choice is
+    /// counted with where the hour comes from.
+    #[test]
+    fn a_light_set_stored_at_several_hours_is_lowered_at_the_default_hour() {
+        let at = |key: &str, time: f32, value: Value| DrawField {
+            time: Some(time),
+            ..field(key, value)
+        };
+        let mut w = world_with(vec![group(
+            LIGHT_SET,
+            7,
+            vec![
+                at(ANGLE, 0.0, Value::Vec2([-1.0, 0.0])),
+                at(DIFFUSE, 0.0, Value::Vec4([0.0, 0.0, 0.0, 1.0])),
+                at(ANGLE, 12.0, Value::Vec2([-1.0, 0.0])),
+                at(DIFFUSE, 12.0, Value::Vec4([1.0, 1.0, 1.0, 1.0])),
+                at(ANGLE, 22.0, Value::Vec2([-1.0, 0.0])),
+                at(DIFFUSE, 22.0, Value::Vec4([0.5, 0.5, 0.5, 2.0])),
+            ],
+        )]);
+        let log = run(&mut w, 1.0);
+        let sun = w.resource::<Environment>().unwrap().sun.expect("a sun");
+        // 18:00 is 0.6 of the way from 12 to 22: colour 0.7, weight 1.6
+        let light = w.get::<Light>(sun).unwrap();
+        close(light.color, [0.49; 3]);
+        assert!((light.intensity - 1.6).abs() < 1e-5, "{}", light.intensity);
+        let default = crate::sekiro::read::draw_param::default_hour(fromsoft_formats::Game::Sekiro);
+        assert_eq!(
+            log.approximations[&format!(
+                "draw-param fields stored at several hours of the day lowered at the default hour 18:00, {} (`sample-fromsoft-draw-params` chooses another)",
+                default.source
+            )],
+            2
+        );
+        // the stored environment keeps every sample
+        assert_eq!(w.resource::<DrawParam>().unwrap().groups[0].fields.len(), 6);
     }
 
     /// The pass as a pipeline runs it, so what it adds is checked against what it declares.

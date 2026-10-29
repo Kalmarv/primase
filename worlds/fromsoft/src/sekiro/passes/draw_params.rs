@@ -5,6 +5,8 @@
 //! hour. Between two keys, floats and float vectors are interpolated linearly over the 24-hour day (key 24 is key 0);
 //! every other type holds the preceding key. That is a preview policy, not the engine's curve (none is established), and
 //! it is counted by name. Sets the read left unresolved are not part of the scene's environment and stay as stored.
+//! `lower-fromsoft-environment` samples the same way at the read's default hour where no program chose one
+//! ([`sample_at`]).
 use crate::sekiro::source::{DrawField, DrawParam, SetChosen};
 use fromsoft_formats::gparam::Value;
 use primase_core::Resource;
@@ -79,62 +81,68 @@ impl Pass for SampleFromSoftDrawParams {
             log.count("areas with no draw-param environment", 1);
             return Ok(());
         };
-        for group in &mut env.groups {
-            if group.chosen == SetChosen::Unresolved {
+        sample_at(env, self.hour, log)
+    }
+}
+
+/// `env` at `hour` (0 to 24): each field of a resolved set stored at several hours becomes one sample at that hour,
+/// interpolated or held as the module documentation states, each counted in `log`.
+pub(crate) fn sample_at(env: &mut DrawParam, hour: f32, log: &mut PassLog) -> Result<(), String> {
+    for group in &mut env.groups {
+        if group.chosen == SetChosen::Unresolved {
+            continue;
+        }
+        let why = |reason: String| format!("{} {}: {reason}", group.key, group.id);
+        let mut fields: Vec<DrawField> = Vec::new();
+        let mut taken = vec![false; group.fields.len()];
+        for first in 0..group.fields.len() {
+            if taken[first] {
                 continue;
             }
-            let why = |reason: String| format!("{} {}: {reason}", group.key, group.id);
-            let mut fields: Vec<DrawField> = Vec::new();
-            let mut taken = vec![false; group.fields.len()];
-            for first in 0..group.fields.len() {
-                if taken[first] {
-                    continue;
-                }
-                let key = &group.fields[first].key;
-                let same: Vec<usize> = (first..group.fields.len())
-                    .filter(|&i| group.fields[i].key == *key)
-                    .collect();
-                for &i in &same {
-                    taken[i] = true;
-                }
-                if same.len() == 1 {
-                    fields.push(group.fields[first].clone());
-                    continue;
-                }
-                let samples = same
-                    .iter()
-                    .map(|&i| {
-                        let field = &group.fields[i];
-                        match field.time {
-                            Some(time) if time.is_finite() && (0.0..=24.0).contains(&time) => {
-                                Ok((time.rem_euclid(24.0), &field.value))
-                            }
-                            _ => Err(why(format!(
-                                "{}: a stored hour that is missing or outside 0 to 24",
-                                field.key
-                            ))),
-                        }
-                    })
-                    .collect::<Result<Vec<_>, String>>()?;
-                let (value, how) = sample(samples, self.hour).map_err(|e| why(format!("{key}: {e}")))?;
-                match how {
-                    How::Stored => {}
-                    How::Interpolated => log.approximate(INTERPOLATED, 1),
-                    How::Held => log.approximate(HELD, 1),
-                }
-                let template = &group.fields[first];
-                fields.push(DrawField {
-                    key: template.key.clone(),
-                    name: template.name.clone(),
-                    value,
-                    time: Some(self.hour),
-                });
-                log.count("draw-param fields sampled at the hour", 1);
+            let key = &group.fields[first].key;
+            let same: Vec<usize> = (first..group.fields.len())
+                .filter(|&i| group.fields[i].key == *key)
+                .collect();
+            for &i in &same {
+                taken[i] = true;
             }
-            group.fields = fields;
+            if same.len() == 1 {
+                fields.push(group.fields[first].clone());
+                continue;
+            }
+            let samples = same
+                .iter()
+                .map(|&i| {
+                    let field = &group.fields[i];
+                    match field.time {
+                        Some(time) if time.is_finite() && (0.0..=24.0).contains(&time) => {
+                            Ok((time.rem_euclid(24.0), &field.value))
+                        }
+                        _ => Err(why(format!(
+                            "{}: a stored hour that is missing or outside 0 to 24",
+                            field.key
+                        ))),
+                    }
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            let (value, how) = sample(samples, hour).map_err(|e| why(format!("{key}: {e}")))?;
+            match how {
+                How::Stored => {}
+                How::Interpolated => log.approximate(INTERPOLATED, 1),
+                How::Held => log.approximate(HELD, 1),
+            }
+            let template = &group.fields[first];
+            fields.push(DrawField {
+                key: template.key.clone(),
+                name: template.name.clone(),
+                value,
+                time: Some(hour),
+            });
+            log.count("draw-param fields sampled at the hour", 1);
         }
-        Ok(())
+        group.fields = fields;
     }
+    Ok(())
 }
 
 /// How a sampled value came from the stored ones.
@@ -239,6 +247,7 @@ mod tests {
                 chosen,
                 fields,
             }],
+            default_hour: crate::sekiro::read::draw_param::default_hour(fromsoft_formats::Game::Sekiro),
         });
         w
     }

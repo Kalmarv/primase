@@ -627,6 +627,19 @@ pub struct DrawParam {
     /// The file's GPARAM version.
     pub version: u32,
     pub groups: Vec<DrawGroup>,
+    /// The hour a field stored at several hours is lowered at where the program samples none.
+    pub default_hour: DefaultHour,
+}
+
+/// The hour of the day a read's environment is lowered at where the program chooses none
+/// (`sample-fromsoft-draw-params`), and where it comes from: the game's own hour of entering the map where its data
+/// states one, a stated default where it does not ([`crate::sekiro::read::draw_param::default_hour`]).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DefaultHour {
+    /// The hour, 0 to 24.
+    pub hour: f32,
+    /// Where it comes from, in a few words (the read's notices show it).
+    pub source: String,
 }
 impl Resource for DrawParam {
     const NAME: &'static str = "fromsoft.draw_param";

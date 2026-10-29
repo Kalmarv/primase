@@ -27,8 +27,9 @@
 //! and a group with several sets and no ID 0 is not selected. FogVolume sets are all retained as unresolved
 //! local-volume source data; they are never selected through the part's FogParamEditor slot. A field stored at several
 //! times of day is kept as every one of its samples, in stored order; a program that wants one hour runs
-//! `sample-fromsoft-draw-params`.
-use super::super::source::{DrawField, DrawGroup, DrawParam, SetChosen};
+//! `sample-fromsoft-draw-params`, and where it runs none the environment is lowered at the game's default hour
+//! ([`default_hour`]).
+use super::super::source::{DefaultHour, DrawField, DrawGroup, DrawParam, SetChosen};
 use fromsoft_formats::area::{DrawParamId, draw_param_path, draw_params};
 use fromsoft_formats::emevd::Script;
 use fromsoft_formats::gparam_events::{self, Switch};
@@ -52,6 +53,30 @@ const FOG: &str = "FogParamEditor";
 const FOG_VOLUME: &str = "FogVolume ParamEditor";
 const LIGHT_SCATTERING: &str = "LightScattering : ParamEditor";
 const ENV_MAP: &str = "Env Map:Editor";
+
+/// The hour of the day a read of `game` is lowered at where the program samples none, and where it comes from. Neither
+/// game's data states the hour a map is entered at (`tests/time_of_day_census.rs`, every event script of the installs):
+/// - Sekiro has no clock. Its scripts set a period of the day by story event (`2003:81` and `2002:13`, the schema's
+///   morning, noon, afternoon, evening and night), and no param maps a period to an hour, so that mapping is the
+///   executable's. A file's time-of-day keys are hours (0, 2, 4, 6, 12, 18 and 22 in `m11_01_0000`'s light set), and
+///   the first, hour 0, is black in some sets: no sun, a state no frame of the game has shown. A running game on
+///   `m11_01` showed the sun of the 18:00 keys (its `cbLight` equal to `DiffColor0` and `SpecColor0` at 18:00, to float
+///   precision): 18 is that observed hour.
+/// - Elden Ring keeps a clock that passes through every hour; its scripts set it only in story and NPC events (nine
+///   `2001:4` calls, at 3:30, 8:00, 10:30, 22:30 and 23:45), none on entering a map: 12, noon, is chosen.
+pub fn default_hour(game: Game) -> DefaultHour {
+    let (hour, source) = match game {
+        Game::Sekiro => (
+            18.0,
+            "observed on m11_01 in one running game (cbLight equal to the 18:00 keys); the period-to-hour mapping is in the executable",
+        ),
+        _ => (12.0, "no entering hour in the data; noon chosen"),
+    };
+    DefaultHour {
+        hour,
+        source: source.to_owned(),
+    }
+}
 
 /// What a read does about the area's draw-param files.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -173,7 +198,13 @@ fn dominant(ids: impl Iterator<Item = i32>) -> Option<Dominant> {
 }
 
 /// The groups of `gparam` at the value sets `configs` (the area's parts) name, counted into `report`.
-pub(super) fn select(gparam: &Gparam, stem: &str, configs: &[PartGparam], report: &mut Report) -> DrawParam {
+pub(super) fn select(
+    game: Game,
+    gparam: &Gparam,
+    stem: &str,
+    configs: &[PartGparam],
+    report: &mut Report,
+) -> DrawParam {
     let mut groups = Vec::new();
     for group in &gparam.groups {
         let ids = group.ids();
@@ -262,6 +293,7 @@ pub(super) fn select(gparam: &Gparam, stem: &str, configs: &[PartGparam], report
         file: stem.to_owned(),
         version: gparam.version,
         groups,
+        default_hour: default_hour(game),
     }
 }
 
@@ -362,7 +394,7 @@ pub(super) fn read(
             return Ok((None, report));
         }
     };
-    let source = select(&gparam, &stem, configs, &mut report);
+    let source = select(game, &gparam, &stem, configs, &mut report);
     Ok((Some(source), report))
 }
 
@@ -555,6 +587,22 @@ mod tests {
     use super::*;
     use fromsoft_formats::gparam::{Field, Group, Value, Values};
 
+    /// Each game's read states its default hour and where it comes from: Sekiro's the hour a running game showed,
+    /// Elden Ring's a chosen noon.
+    #[test]
+    fn a_read_states_its_games_default_hour() {
+        let sekiro = default_hour(Game::Sekiro);
+        assert_eq!(sekiro.hour, 18.0);
+        assert!(
+            sekiro.source.starts_with("observed on m11_01"),
+            "{}",
+            sekiro.source
+        );
+        let elden = default_hour(Game::EldenRing);
+        assert_eq!(elden.hour, 12.0);
+        assert_eq!(elden.source, "no entering hour in the data; noon chosen");
+    }
+
     #[test]
     fn every_stored_time_sample_of_a_chosen_set_is_kept_in_stored_order() {
         let gparam = Gparam {
@@ -569,7 +617,13 @@ mod tests {
             )],
         };
         let mut report = Report::default();
-        let source = select(&gparam, "fixture", &[config(7, -1, -1)], &mut report);
+        let source = select(
+            Game::Sekiro,
+            &gparam,
+            "fixture",
+            &[config(7, -1, -1)],
+            &mut report,
+        );
         let light = source.group(LIGHT_SET).unwrap();
         assert_eq!(
             light
@@ -660,7 +714,7 @@ mod tests {
             config(-1, -1, -1),
         ];
         let mut report = Report::default();
-        let source = select(&file(), "m11_01_0000", &configs, &mut report);
+        let source = select(Game::Sekiro, &file(), "m11_01_0000", &configs, &mut report);
         assert_eq!((source.file.as_str(), source.version), ("m11_01_0000", 5));
         let light = source.group(LIGHT_SET).unwrap();
         assert_eq!((light.id, light.chosen), (7, SetChosen::ByParts));
@@ -708,7 +762,7 @@ mod tests {
             unread: Unread::default(),
         };
         let mut report = Report::default();
-        let source = select(&only, "x", &[config(1, 1, 1)], &mut report);
+        let source = select(Game::Sekiro, &only, "x", &[config(1, 1, 1)], &mut report);
         let g = source.group("Fog volume").unwrap();
         assert_eq!((g.id, g.chosen), (4, SetChosen::OnlySet));
         // the parts' tie
@@ -736,7 +790,13 @@ mod tests {
                 asked: true,
                 ..Default::default()
             };
-            let source = select(&fog_volume, "m10_00_0000", &[config(-1, fog, -1)], &mut report);
+            let source = select(
+                Game::EldenRing,
+                &fog_volume,
+                "m10_00_0000",
+                &[config(-1, fog, -1)],
+                &mut report,
+            );
             assert!(source.group(FOG_VOLUME).is_none());
             assert_eq!(
                 source.groups.iter().map(|g| (g.id, g.chosen)).collect::<Vec<_>>(),
@@ -776,7 +836,7 @@ mod tests {
             unread: Unread::default(),
         };
         let mut report = Report::default();
-        let source = select(&g, "x", &[config(1, -1, -1)], &mut report);
+        let source = select(Game::Sekiro, &g, "x", &[config(1, -1, -1)], &mut report);
         assert_eq!(source.group(LIGHT_SET).unwrap().fields.len(), 1);
         assert_eq!(report.fields_without_set, 1);
     }
@@ -796,7 +856,13 @@ mod tests {
             asked: true,
             ..Report::default()
         };
-        let source = select(&shells, "m20_00_0010", &[config(7, 0, 9)], &mut report);
+        let source = select(
+            Game::Sekiro,
+            &shells,
+            "m20_00_0010",
+            &[config(7, 0, 9)],
+            &mut report,
+        );
         assert!(source.groups.is_empty());
         assert_eq!((report.groups, report.fields, report.empty_groups), (0, 0, 3));
         // the groups are left, but no field of them is: nothing is unchosen
@@ -815,7 +881,7 @@ mod tests {
         assert_eq!(n.count, 3);
         // a group with fields it leaves is told apart, with the IDs it stores
         let mut mixed = Report::default();
-        select(&file(), "x", &[config(7, 0, 9)], &mut mixed);
+        select(Game::Sekiro, &file(), "x", &[config(7, 0, 9)], &mut mixed);
         assert_eq!(mixed.unchosen_sets["Bloom"], (vec![2, 5], 1));
         assert_eq!(mixed.empty_groups, 0);
     }
@@ -844,7 +910,7 @@ mod tests {
             ..Report::default()
         };
         report.scenes.insert("[2, -1, -1, -1]".into(), 4);
-        select(&file(), "m11_01_0000", &configs, &mut report);
+        select(Game::Sekiro, &file(), "m11_01_0000", &configs, &mut report);
         let notices = report.notices();
         let n = &notices[find(&notices, "draw-param files of the area's map other than").unwrap()];
         assert_eq!((n.kind, n.count), (NoticeKind::Selection, 1));
