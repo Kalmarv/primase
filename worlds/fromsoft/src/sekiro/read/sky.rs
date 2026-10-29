@@ -51,7 +51,7 @@
 //! shared program family.
 use crate::sekiro::source::{SkyPart, SkyRole};
 use fromsoft_formats::msb::{MapLayout, Part, PartKind};
-use fromsoft_formats::param::{WeatherAssetParam, asset_model_name};
+use fromsoft_formats::weather_assets::{WeatherAssetParam, asset_model_name};
 use primase_core::state::{Clause, Condition, Domain, Literal, Scope, StateAxis};
 use primase_core::{Entity, Name, SkyAnchor, World};
 use std::collections::{BTreeMap, BTreeSet};
@@ -571,7 +571,7 @@ pub fn attach(world: &mut World, e: Entity, axis: Option<Entity>, role: SkyRole,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fromsoft_formats::param::WeatherAssetRow;
+    use fromsoft_formats::weather_assets::WeatherAssetRow;
 
     fn item(index: usize, map: &str, model: &str, entity: i32, mtd: &str) -> Item {
         Item {
