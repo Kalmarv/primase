@@ -109,6 +109,12 @@ pub fn motion(controller: &Controller, layer: usize, state: usize, values: &[f64
                 state.name
             )));
         }
+        Motion::Pending(_) => {
+            return Err(Error(format!(
+                "state {:?}: its clip is not loaded yet",
+                state.name
+            )));
+        }
         Motion::Unsupported(reason) => {
             return Err(Error(format!(
                 "state {:?}: unsupported motion: {reason}",

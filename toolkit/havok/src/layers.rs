@@ -23,7 +23,9 @@
 //!   both installs), so the layer starts in state 0 and which state the game picks is its own (the player's hand pose group
 //!   follows its equipment). A clip generator alone is one state. A clip state is the `core.clip` of that animation name bound
 //!   to the rig that drives the rig's skeleton ([`clip_for`]); any other generator, a child that is not a clip, and a clip
-//!   the world lacks or cannot place is a state with `Motion::Unsupported` naming why;
+//!   the world lacks or cannot place is a state with `Motion::Unsupported` naming why. A clip the world lists and has not
+//!   loaded (a reader that decodes clips on demand: an entity with a `core.name` and `core.clip_key` and no `core.clip`) is
+//!   `Motion::Pending` on that entity; the pass runs again after the clip is loaded and states the `Motion::Clip`;
 //! - **masks**: a bone weight array is the layer's mask: each bone of the array with a weight above 0 is a masked joint of
 //!   the rig's skeleton (through the joint map when the clips were mapped from the Havok skeleton to a model's; a bone the map
 //!   does not pair is left out and counted), and a bone the array does not list, including those past its end, has weight 0.
@@ -40,9 +42,9 @@ use havok_formats::behavior::{
 };
 use primase_core::pass::{Pass, PassLog, PassRegistry, PassSpec};
 use primase_core::{
-    Clip, ClipTarget, Component, Controller, ControllerBinding, ControllerLayer, ControllerParameter,
-    ControllerParameterKind, ControllerState, Entity, JointId, JointMap, LayerBlending, LayerMask,
-    MaskedJoint, Motion, RigInstance, World,
+    Clip, ClipKey, ClipTarget, Component, Controller, ControllerBinding, ControllerLayer,
+    ControllerParameter, ControllerParameterKind, ControllerState, Entity, JointId, JointMap, LayerBlending,
+    LayerMask, MaskedJoint, Motion, Name, RigInstance, World,
 };
 
 /// A clip a layer's generator chooses among, or the other thing a selector's child is.
@@ -316,19 +318,29 @@ fn target_of(w: &World, havok: Entity) -> Result<Target, String> {
     }
 }
 
-/// The `core.clip` named `animation` that drives the joints of `skeleton`: `Err` says why there is none (a named refusal).
-fn clip_for(w: &World, animation: &str, skeleton: Entity) -> Result<Entity, String> {
+/// The motion a clip state of `animation` has for the rig of `skeleton`: the `core.clip` of that name that drives the
+/// skeleton's joints, a [`Motion::Pending`] on the one clip entity of that name the world lists and has not loaded
+/// (`core.name` and `core.clip_key`, no `core.clip`), or `Err` saying why there is none (a named refusal).
+fn clip_for(w: &World, animation: &str, skeleton: Entity) -> Result<Motion, String> {
     let named: Vec<Entity> = w
         .iter::<Clip>()
         .filter(|(_, c)| c.name == animation)
         .map(|(e, _)| e)
         .collect();
     let [clip] = named[..] else {
-        return Err(if named.is_empty() {
-            format!("the world has no clip named {animation}")
-        } else {
-            format!("{} clips are named {animation}", named.len())
-        });
+        if !named.is_empty() {
+            return Err(format!("{} clips are named {animation}", named.len()));
+        }
+        let listed: Vec<Entity> = w
+            .iter::<ClipKey>()
+            .map(|(e, _)| e)
+            .filter(|e| !w.has::<Clip>(*e) && w.get::<Name>(*e).is_some_and(|n| n.0 == animation))
+            .collect();
+        return match listed[..] {
+            [] => Err(format!("the world has no clip named {animation}")),
+            [entity] => Ok(Motion::Pending(entity)),
+            _ => Err(format!("{} listed clips are named {animation}", listed.len())),
+        };
     };
     let drives = w.get::<Clip>(clip).is_some_and(|c| {
         c.channels
@@ -336,7 +348,7 @@ fn clip_for(w: &World, animation: &str, skeleton: Entity) -> Result<Entity, Stri
             .any(|ch| matches!(&ch.target, ClipTarget::Joint { skeleton: s, .. } if *s == skeleton))
     });
     if drives {
-        Ok(clip)
+        Ok(Motion::Clip(clip))
     } else {
         Err(format!(
             "clip {animation} drives no joint of the rig's skeleton (it is not mapped onto it)"
@@ -347,7 +359,15 @@ fn clip_for(w: &World, animation: &str, skeleton: Entity) -> Result<Entity, Stri
 fn state_of(child: &LayerChild, w: &World, target: &Target, log: &mut PassLog) -> ControllerState {
     let (name, motion, speed) = match child {
         LayerChild::Clip { animation, speed } => match clip_for(w, animation, target.skeleton) {
-            Ok(clip) => (animation.clone(), Motion::Clip(clip), *speed),
+            Ok(motion) => {
+                if matches!(motion, Motion::Pending(_)) {
+                    log.count(
+                        "layer states whose clip is listed and not loaded yet (pending)",
+                        1,
+                    );
+                }
+                (animation.clone(), motion, *speed)
+            }
             Err(why) => {
                 log.count(
                     "layer states whose clip is not in the world for the rig (named)",
@@ -877,6 +897,61 @@ mod tests {
             log.omitted["behaviour graphs not bound to a rig: no rig poses the Havok skeleton and 2 different joint maps leave it"],
             1
         );
+    }
+
+    #[test]
+    fn a_clip_the_world_lists_and_has_not_loaded_is_pending_until_it_is() {
+        let (mut w, havok, model, rig) = world();
+        let mut b = layers();
+        b.layers[0] = layer(selector(&["hand_a", "hand_listed", "hand_twice"]));
+        w.insert(havok, HavokBehaviorLayers(b));
+        let listed = |w: &mut World, name: &str, key: &str| {
+            let e = w.spawn();
+            w.insert(e, Name(name.into()));
+            w.insert(e, ClipKey(key.into()));
+            e
+        };
+        let wanted = listed(&mut w, "hand_listed", "opaque:1");
+        listed(&mut w, "hand_twice", "opaque:2");
+        listed(&mut w, "hand_twice", "opaque:3");
+        let log = run(&mut w);
+        let binding = w.get::<ControllerBinding>(rig).unwrap().clone();
+        let c = w.get::<Controller>(binding.controller).unwrap().clone();
+        let basis = &c.layers[0];
+        assert!(matches!(basis.states[0].motion, Motion::Clip(_)));
+        assert_eq!(basis.states[1].motion, Motion::Pending(wanted));
+        assert!(
+            matches!(&basis.states[2].motion, Motion::Unsupported(why) if why.contains("2 listed clips are named hand_twice"))
+        );
+        assert_eq!(
+            log.counts["layer states whose clip is listed and not loaded yet (pending)"],
+            1
+        );
+        Component::verify(&c, binding.controller, &w).unwrap();
+        let mut refs = Vec::new();
+        Component::references(&c, &mut refs);
+        assert!(refs.contains(&wanted));
+        // loaded in place on the listed entity and bound to the rig, the state plays it after the next run
+        let loaded = clip(&mut w, "hand_listed", model);
+        let decoded = w.get::<Clip>(loaded).unwrap().clone();
+        w.despawn(loaded);
+        w.insert(wanted, decoded);
+        let bound = w.spawn();
+        w.insert(
+            bound,
+            ClipBinding {
+                clip: wanted,
+                rig: Some(rig),
+                meshes: vec![],
+            },
+        );
+        let log = run(&mut w);
+        assert!(
+            !log.counts
+                .contains_key("layer states whose clip is listed and not loaded yet (pending)")
+        );
+        let c = w.get::<Controller>(binding.controller).unwrap();
+        assert_eq!(c.layers[0].states[1].motion, Motion::Clip(wanted));
     }
 
     #[test]

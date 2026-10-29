@@ -58,6 +58,12 @@ pub enum LayerBlending {
 #[serde(deny_unknown_fields)]
 pub enum Motion {
     Clip(Entity),
+    /// A clip the source lists and has not loaded yet (the entity holds no `core.clip`, or not yet the one this state
+    /// plays): the state plays it once it is loaded and the lowering that made this controller has run again, which states
+    /// a [`Motion::Clip`]. Until then a consumer refuses the state by name, like [`Motion::Unsupported`], and may ask the
+    /// source to load the entity. Not verified against the entity's components: it may hold `core.clip` already, between
+    /// the load and that lowering.
+    Pending(Entity),
     Blend1D {
         parameter: usize,
         children: Vec<(f32, Motion)>,
@@ -189,7 +195,7 @@ impl Component for Controller {
             .collect();
         while let Some(motion) = pending.pop() {
             match motion {
-                Motion::Clip(clip) => out.push(*clip),
+                Motion::Clip(clip) | Motion::Pending(clip) => out.push(*clip),
                 Motion::Blend1D { children, .. } => pending.extend(children.iter().map(|(_, motion)| motion)),
                 Motion::Unsupported(_) => {}
             }
@@ -320,6 +326,7 @@ impl Component for Controller {
                             }
                             pending.extend(children.iter().map(|(_, motion)| motion));
                         }
+                        Motion::Pending(_) => {}
                         Motion::Unsupported(why) => {
                             if why.trim().is_empty() {
                                 return Err("unsupported motion has no reason".into());

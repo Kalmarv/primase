@@ -64,10 +64,13 @@ It has `Geometry::None`; primitive remapping does not alter material defaults.
   [0,1] are retained. Optional numeric parameter indices name Float/Int parameters only.
 
 A motion is externally tagged JSON: `{"Clip": entity}`, `{"Blend1D": {"parameter": index,
-"children": [[threshold, motion], ...]}}`, or `{"Unsupported": reason}`. Blend1D children are
-nonempty, with finite, strictly increasing f32 thresholds and a Float/Int parameter index. Every
-referenced clip has `core.clip`; Unsupported has a nonempty explanation and is never an implicit
-choice of one of its source children. The reference visitor visits clips through every nested tree.
+"children": [[threshold, motion], ...]}}`, `{"Pending": entity}` or `{"Unsupported": reason}`. Blend1D
+children are nonempty, with finite, strictly increasing f32 thresholds and a Float/Int parameter index.
+Every `Clip` has `core.clip`. `Pending` names a clip entity the source lists and has not loaded yet: the
+state plays it once it holds `core.clip` (the lowering that made the controller runs again then, and
+states a `Clip`); until then a consumer refuses the state by name, as it does an `Unsupported` one.
+Unsupported has a nonempty explanation and is never an implicit choice of one of its source children.
+The reference visitor visits clips and pending clips through every nested tree.
 
 Layers compose in order, the first at the bottom: a layer plays its selected state's clip over the pose
 below it (a joint or channel the clip does not drive keeps the pose below; a delta clip composes onto
