@@ -477,7 +477,11 @@ converts frames; it does not lower:
   `422` in 3,009 events, none of them a file; the engine's handler of event 96 passes the number on unchanged). The one number
   the engine changes is a blade's (event 118, Elden Ring): its handler adds the offset the character's data keeps for the hand
   to the event's number (`401001` + 10 is the file `401011`), and `CharacterOptions::trace_offsets` (`with_trace_offsets`)
-  states those offsets per hand, 0 and 0 (no special effect on the weapon) by default.
+  states those offsets per hand, 0 and 0 (no special effect on the weapon) by default. The weapons held are a stated input too
+  (`CharacterOptions::equipped_weapons`, `with_equipped_weapons`: the part, `wp_a_<equipModelId>`, of each hand slot, read among
+  the parts): a weapon read for a slot has its dummy polygons named as the events name them (`dummy 10300` for polygon 300 of
+  the right hand's first weapon; `HandSlot`). Where the weapon stands on the character is not read yet: that placement has to
+  come from the engine's own data, and the sockets stay on the weapon's skeleton until it does.
   `lower-fromsoft-effects` lowers the effects to unplaced systems and the uses to `core.clip_effects` on the clip,
   a spawn each, at the socket `dummy <reference id>` of the model; `Report::clip_uses` counts the uses;
 - lights are `fromsoft.light` records where they stand (stored colours, powers,

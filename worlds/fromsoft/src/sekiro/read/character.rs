@@ -64,7 +64,7 @@ use super::area::game_material_definitions;
 use super::{shaders, textures};
 use crate::components::models::{SkeletonOf, SourceModel};
 use crate::sekiro::character_data;
-use crate::sekiro::effect_data::TraceOffsets;
+use crate::sekiro::effect_data::{EquippedWeapons, TraceOffsets};
 use crate::sekiro::source;
 use crate::{invalid, materials};
 use fromsoft_formats::{Archive, Binder, Game, Install, Result, dcx::Decoder, flver::Model};
@@ -254,6 +254,12 @@ pub struct CharacterOptions {
     /// default, 0 and 0 (the base trails `401001` and `401002`). State it to read the trail of an enchanted weapon (`10` for
     /// `401001`: the file `401011`).
     pub trace_offsets: TraceOffsets,
+    /// The weapons held, by slot ([`EquippedWeapons`]): each is read as the part it names (read it among the parts), with its
+    /// dummy polygons named by the global ids animation events use (`dummy 10300` for polygon 300 of the right hand's first
+    /// weapon), so the events that name them find their sockets. Where a weapon is placed on the character is not read: that
+    /// attachment is not implemented (it is to come from the engine's own data), and until then the weapon's sockets are
+    /// on the weapon's own skeleton, not the character's.
+    pub equipped_weapons: EquippedWeapons,
 }
 
 /// A character id as the game names its files: `c` and four digits.
@@ -539,6 +545,8 @@ struct Reading<'a> {
     /// Each form read so far and the binder it is of: two of one name are refused.
     forms: BTreeMap<String, String>,
     animation_clips: Option<Vec<String>>,
+    /// The parts held as weapons and the slot each is in ([`CharacterOptions::equipped_weapons`]).
+    weapon_slots: BTreeMap<String, crate::sekiro::effect_data::HandSlot>,
 }
 
 impl<'a> Reading<'a> {
@@ -560,6 +568,7 @@ impl<'a> Reading<'a> {
             npc_stats: None,
             forms: BTreeMap::new(),
             animation_clips: None,
+            weapon_slots: BTreeMap::new(),
         })
     }
 
@@ -938,7 +947,15 @@ impl<'a> Reading<'a> {
         report.dummies = model.dummies.len();
         if !model.dummies.is_empty() {
             w.insert(prototype, character_data::Dummies(model.dummies.clone()));
-            if let Ok((sockets, left_out)) = crate::pose::dummy_sockets(&model) {
+            let held = match item {
+                Item::Part(part) => self.weapon_slots.get(part).copied(),
+                Item::Character(_) => None,
+            };
+            let made = match held {
+                Some(slot) => crate::pose::dummy_sockets_numbered(&model, |id| slot.global_id(id)),
+                None => crate::pose::dummy_sockets(&model),
+            };
+            if let Ok((sockets, left_out)) = made {
                 report.dummies_unplaced = left_out.len();
                 if !sockets.0.is_empty() {
                     w.insert(skeleton, sockets);
@@ -1140,6 +1157,12 @@ pub fn read_parts_with(
     }
     let mut reading = Reading::open(install, decoder)?;
     reading.animation_clips = options.animation_clips.clone();
+    reading.weapon_slots = options
+        .equipped_weapons
+        .slots()
+        .into_iter()
+        .map(|(slot, part)| (part.to_owned(), slot))
+        .collect();
     let mut reports = Vec::new();
     for p in parts {
         reports.extend(reading.read(Item::Part(p), None, options.form_animations, destination)?);
@@ -1292,6 +1315,12 @@ impl<'a> CharacterReader<'a> {
     /// Also read the effects the events of each clip start as the clip loads.
     pub fn with_clip_effects(mut self) -> Self {
         self.options.clip_effects = true;
+        self
+    }
+
+    /// The weapons held, by hand slot ([`CharacterOptions::equipped_weapons`]).
+    pub fn with_equipped_weapons(mut self, weapons: EquippedWeapons) -> Self {
+        self.options.equipped_weapons = weapons;
         self
     }
 

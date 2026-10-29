@@ -267,6 +267,88 @@ pub fn clip_effect_uses(source: &SourceEvents) -> ClipEffectUses {
     }
 }
 
+/// Where a held weapon is: the hand and which of the four weapons that hand holds (the engine numbers them 1 to 4 here, 0 to 3).
+///
+/// An animation event names a dummy polygon of a held weapon by a global id, the slot's base plus the polygon's number in the
+/// weapon's own model: the right hand's weapons `10000`, `11000`, `12000` and `13000`, the left hand's `20000`, `21000`,
+/// `22000` and `23000` (Elden Ring's engine keeps the bases in a table and adds `number % 1000`; the same table gives `1000` to
+/// `4000` for four other kinds of polygon set, which no stock event names). :observed[the engine's mapping function and its table]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct HandSlot {
+    pub left: bool,
+    /// 0 to 3.
+    pub index: u8,
+}
+
+impl HandSlot {
+    /// The first of the global ids of the slot's polygons.
+    pub fn base(self) -> i32 {
+        (if self.left { 20_000 } else { 10_000 }) + 1_000 * i32::from(self.index.min(3))
+    }
+
+    /// The global id of the polygon `local` of the model held in this slot.
+    pub fn global_id(self, local: i32) -> i32 {
+        self.base() + local.rem_euclid(1_000)
+    }
+
+    /// The slot and the model's own polygon number a global id names, where it names a weapon's polygon.
+    pub fn of_global_id(id: i32) -> Option<(HandSlot, i32)> {
+        let (left, rest) = match id {
+            10_000..14_000 => (false, id - 10_000),
+            20_000..24_000 => (true, id - 20_000),
+            _ => return None,
+        };
+        Some((
+            HandSlot {
+                left,
+                index: u8::try_from(rest / 1_000).ok()?,
+            },
+            rest % 1_000,
+        ))
+    }
+}
+
+/// The weapons a scene holds, as the parts (`wp_a_0100`, from the weapon param row's `equipModelId`: [`weapon_part_name`])
+/// read for each hand slot. Which weapon a character holds is state of the player, not of any animation or param: it is stated.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EquippedWeapons {
+    pub right: [Option<String>; 4],
+    pub left: [Option<String>; 4],
+}
+
+impl EquippedWeapons {
+    /// The weapon in the right hand's first slot only (the usual one-weapon scene).
+    pub fn right_hand(part: &str) -> Self {
+        let mut w = Self::default();
+        w.right[0] = Some(part.to_owned());
+        w
+    }
+
+    /// Every weapon stated, with its slot, in slot order (right hand first).
+    pub fn slots(&self) -> Vec<(HandSlot, &str)> {
+        let mut out = Vec::new();
+        for (left, list) in [(false, &self.right), (true, &self.left)] {
+            for (index, part) in list.iter().enumerate() {
+                if let Some(part) = part {
+                    out.push((
+                        HandSlot {
+                            left,
+                            index: index as u8,
+                        },
+                        part.as_str(),
+                    ));
+                }
+            }
+        }
+        out
+    }
+}
+
+/// The part a weapon param row's `equipModelId` names: `parts/wp_a_<id as four digits>`.
+pub fn weapon_part_name(equip_model_id: i32) -> String {
+    format!("wp_a_{equip_model_id:04}")
+}
+
 /// What Elden Ring adds to the effect number of a blade event (type 118) before it starts the effect: the number the character's
 /// data keeps for the hand the blade is in. The engine's handler of the event reads it at the character's data (`+0x1e8` for the
 /// right hand, `+0x1f0` for the left) and adds it to the event's number; the stock events name `401001`, `401002`, `405000`,
@@ -425,6 +507,23 @@ mod tests {
         // the weapon's dummy polygon, the goods and magic row, the throw index and the type the files do not bear out
         assert_eq!(found.lost.len(), 4);
         assert!(found.lost.iter().all(|(_, n)| *n == 1));
+    }
+
+    #[test]
+    fn hand_slots_number_a_weapons_polygons_as_the_engine_does() {
+        let right = HandSlot {
+            left: false,
+            index: 0,
+        };
+        let left2 = HandSlot { left: true, index: 1 };
+        assert_eq!((right.global_id(300), left2.global_id(1_120)), (10_300, 21_120));
+        assert_eq!(HandSlot::of_global_id(10_300), Some((right, 300)));
+        assert_eq!(HandSlot::of_global_id(21_120), Some((left2, 120)));
+        assert_eq!(HandSlot::of_global_id(300), None);
+        assert_eq!(HandSlot::of_global_id(14_000), None);
+        let weapons = EquippedWeapons::right_hand("wp_a_0100");
+        assert_eq!(weapons.slots(), [(right, "wp_a_0100")]);
+        assert_eq!(weapon_part_name(100), "wp_a_0100");
     }
 
     #[test]

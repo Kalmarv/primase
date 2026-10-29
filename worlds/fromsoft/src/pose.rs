@@ -219,6 +219,15 @@ pub(crate) fn dummy_socket_name(reference_id: i32) -> String {
 /// Also the indices of the dummies that were left out: one that names a bone the model does not have, or no bone at all
 /// to follow, or a bone with no inverse, or a position that is not finite.
 pub(crate) fn dummy_sockets(model: &Model) -> Result<(primase_core::Sockets, Vec<usize>), String> {
+    dummy_sockets_numbered(model, |id| id)
+}
+
+/// [`dummy_sockets`] with each socket named by `number(reference id)`: a held weapon's polygons are named by the global ids
+/// animation events use (`HandSlot::global_id`), not by the number in the weapon's own model.
+pub(crate) fn dummy_sockets_numbered(
+    model: &Model,
+    number: impl Fn(i32) -> i32,
+) -> Result<(primase_core::Sockets, Vec<usize>), String> {
     let worlds = bone_matrices(&model.bones)?;
     let bone = |i: i16| usize::try_from(i).ok();
     let mut sockets = Vec::new();
@@ -273,7 +282,7 @@ pub(crate) fn dummy_sockets(model: &Model) -> Result<(primase_core::Sockets, Vec
         .matrix();
         sockets.push(primase_core::Socket {
             id: primase_core::SocketId(i as u32),
-            name: dummy_socket_name(i32::from(d.reference_id)),
+            name: dummy_socket_name(number(i32::from(d.reference_id))),
             joint: primase_core::JointId(joint as u32),
             offset,
         });
