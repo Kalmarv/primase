@@ -358,13 +358,13 @@ pub const LOWER_HAVOK_CLIPS: PassSpec = PassSpec {
         OptionSpec::optional_choice::<AdditiveUse>(
             "blend-hint-1",
             "what is done with the animations whose blend hint is 1 (additive): lowered as deltas composed on the parent \
-             side (parent, as observed in Sekiro), on the child side (child), or left out and counted (leave)",
+             side (parent, the default: what a recorded game run shows; see the pass), on the child side (child), or left out and counted (leave)",
             "parent",
         ),
         OptionSpec::optional_choice::<AdditiveUse>(
             "blend-hint-2",
             "what is done with the animations whose blend hint is 2 (additive in 2014 and later SDKs; few files store \
-             one): lowered as deltas composed on the child side (child, as observed in Sekiro), on the parent side \
+             one): lowered as deltas composed on the child side (child, the default: what a recorded game run shows; see the pass), on the parent side \
              (parent), or left out and counted (leave)",
             "child",
         ),
