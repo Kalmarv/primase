@@ -320,14 +320,28 @@ impl MaterialView<'_> {
         }
         Ok(self.gbuffer_program())
     }
-    /// Whether the game draws the material in its forward pass (blended, after the lighting) rather than the G-buffer pass:
-    /// an MTD's `g_BlendMode` 2, the alpha-blended materials. The capture of Sekiro running drew every one the MTDs could
-    /// be matched to (cloud and ground fog, the moon, the sky dome, GXFlver `_al`) with `<shader>_Fwd[_[A]].ppo` and
-    /// every opaque material with `_Gbuf`; the other blend modes (3, 4, 5) were matched to no draw and keep the G-buffer
-    /// program. A material binary's never is: what Elden Ring draws forward is not established, so its materials keep the
-    /// G-buffer program.
+    /// Whether the game draws the material in its forward pass (after the lighting, its target 0 the finished colour)
+    /// rather than the G-buffer pass: a definition (an MTD or a material binary) that states `g_GX_ForwardRendering`
+    /// true, or `g_BlendMode` 2 (alpha blended). Checked against every draw of recorded frames, by the shader family of
+    /// the program each drew with (a draw names no material, so a family's MTDs or binaries stand for it):
+    /// - Sekiro, 9 frames of 4 sessions: every family drawn only forward has every MTD this rule calls forward (the sky
+    ///   dome's 10 and the far mountains' 13, `g_BlendMode` 0 with `g_GX_ForwardRendering`; the moon, the ground fog's 8;
+    ///   the cloud fog's 7 of 9, whose other 2 are `g_BlendMode` 4 and drawn by no frame), and of the families drawn only
+    ///   through the G-buffer one MTD is called forward (a character's hair, `g_BlendMode` 2, in no frame).
+    /// - Elden Ring, 7 frames: every family drawn only forward has every binary this rule calls forward (the cloud shell
+    ///   `M[Clouds9]` 13, `M[A]_NoLight` 37, the lakes, ocean, bonfire, Erdtree light shaft and gargoyle walls), but for
+    ///   the character creator's hair planes (`P[ChrCustomize]`, `g_BlendMode` 0, drawn in several passes of their own),
+    ///   and no family drawn only through the G-buffer has a binary stating `g_GX_ForwardRendering`; a family drawn both
+    ///   ways mixes binaries of `g_BlendMode` 0 and 2.
+    ///
+    /// The other blend modes (3, 4, 5) without `g_GX_ForwardRendering` were drawn by no frame and keep the G-buffer
+    /// program.
     pub fn is_forward(&self) -> bool {
-        matches!(self.definition, DefinitionRef::Mtd(_)) && self.blend_mode() == Some(2)
+        self.blend_mode() == Some(2)
+            || matches!(
+                self.definition.parameter("g_GX_ForwardRendering"),
+                Some(ParameterValue::Bool(true))
+            )
     }
     /// The pass the material is drawn in, as its programs' file names spell it: `Fwd` for a forward material, `Gbuf`.
     pub fn pass(&self) -> &'static str {
@@ -342,7 +356,10 @@ impl MaterialView<'_> {
         self.program_in("Gbuf")
     }
     /// The pixel program the material is drawn with ([`MaterialView::pass`]'s): `<shader>[_<switch>]_<pass>[_[A]].ppo`.
-    /// Of a pass the engine also draws with shadow permutations (`FwdSdw`, `FwdSSdw`: a per-instance choice) the plain one.
+    /// Of a pass the engine also draws with shadow permutations (`FwdSdw`, `FwdSSdw`) the plain one: which of them a draw
+    /// takes is chosen per instance, not by the material. The recorded frames draw one family both ways (Elden Ring's
+    /// lake and ocean, `_Fwd` and `_FwdSdw` alike) and two families of the same forward parameters differently (Sekiro's
+    /// far mountains `_Fwd_[A]`, its sky dome `_FwdSdw`).
     pub fn pass_program(&self) -> String {
         self.program_in(self.pass())
     }

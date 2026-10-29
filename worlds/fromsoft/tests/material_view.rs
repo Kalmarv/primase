@@ -93,7 +93,7 @@ fn a_material_binarys_values_read_in_the_shared_vocabulary() {
 }
 
 #[test]
-fn a_material_binary_is_drawn_with_its_gbuffer_program_whatever_its_blend_mode() {
+fn a_material_binary_is_drawn_forward_where_it_blends_or_states_forward_rendering() {
     let bindings = BTreeMap::new();
     let view = |m: &matbin::Material| -> (Option<i32>, bool, String) {
         let v = MaterialView {
@@ -103,18 +103,63 @@ fn a_material_binary_is_drawn_with_its_gbuffer_program_whatever_its_blend_mode()
         };
         (v.blend_mode(), v.is_forward(), v.pass_program())
     };
-    // blend mode 2 stated: still the G-buffer program (what Elden Ring draws forward is not established)
+    // blend mode 2 stated: the forward program (Elden Ring's lakes, ocean and bonfires are drawn with it)
     let blended = binary(vec![
         param("g_BlendMode", B::Int(2)),
         param("g_AlphaRef", B::Int2([0, 0])),
     ]);
-    assert_eq!(view(&blended), (Some(2), false, "M[AMSN_V]_Gbuf.ppo".into()));
+    assert_eq!(view(&blended), (Some(2), true, "M[AMSN_V]_Fwd.ppo".into()));
+    // opaque, stating forward rendering (the skysphere `M[Sky9]`, the cloud shell `M[Clouds9]`): forward
+    let stated = binary(vec![
+        param("g_BlendMode", B::Int(0)),
+        param("g_GX_ForwardRendering", B::Bool(true)),
+    ]);
+    assert_eq!(view(&stated), (Some(0), true, "M[AMSN_V]_Fwd.ppo".into()));
+    // forward rendering stated false, and an additive blend (4) alone, which no recorded frame draws: the G-buffer's
+    let opaque = binary(vec![
+        param("g_BlendMode", B::Int(0)),
+        param("g_GX_ForwardRendering", B::Bool(false)),
+    ]);
+    assert_eq!(view(&opaque), (Some(0), false, "M[AMSN_V]_Gbuf.ppo".into()));
+    let added = binary(vec![param("g_BlendMode", B::Int(4))]);
+    assert_eq!(view(&added), (Some(4), false, "M[AMSN_V]_Gbuf.ppo".into()));
     // unstated is not 0; an alpha reference selects the alpha-tested permutation; a switch names the program
     let tested = binary(vec![
         param("g_AlphaRef", B::Int2([64, 0])),
         param("GXFT_SATStaticSwitch", B::Int(3)),
     ]);
     assert_eq!(view(&tested), (None, false, "M[AMSN_V]_3_Gbuf_[A].ppo".into()));
+}
+
+/// Sekiro's sky dome and far mountains are opaque (`g_BlendMode` 0) and state `g_GX_ForwardRendering`: the recorded
+/// frames draw them forward, so their pixel program is the forward one, with the switch and alpha test as before.
+#[test]
+fn an_opaque_mtd_stating_forward_rendering_is_drawn_forward() {
+    let bindings = BTreeMap::new();
+    let program = |d: &MaterialDefinition| -> (bool, String) {
+        let v = MaterialView {
+            mtd: "m",
+            definition: DefinitionRef::Mtd(d),
+            bindings: &bindings,
+        };
+        (v.is_forward(), v.pass_program())
+    };
+    let dome = mtd(vec![
+        ("g_BlendMode", M::Int(vec![0])),
+        ("g_AlphaRef", M::Int(vec![0, 0])),
+        ("GXFT_SATStaticSwitch", M::Int(vec![1])),
+        ("g_GX_ForwardRendering", M::Bool(true)),
+    ]);
+    assert_eq!(program(&dome), (true, "M[ARSN]_1_Fwd.ppo".into()));
+    let mountains = mtd(vec![
+        ("g_BlendMode", M::Int(vec![0])),
+        ("g_AlphaRef", M::Int(vec![64, 0])),
+        ("g_GX_ForwardRendering", M::Bool(true)),
+    ]);
+    assert_eq!(program(&mountains), (true, "M[ARSN]_Fwd_[A].ppo".into()));
+    // the same opaque MTD without it keeps the G-buffer program
+    let wall = mtd(vec![("g_BlendMode", M::Int(vec![0]))]);
+    assert_eq!(program(&wall), (false, "M[ARSN]_Gbuf.ppo".into()));
 }
 
 #[test]
