@@ -142,6 +142,7 @@ fn address_name(address: Address) -> &'static str {
         Address::Clamp => "clamp",
         Address::Mirror => "mirror",
         Address::MirrorOnce => "mirror-once",
+        Address::Border => "border",
     }
 }
 
@@ -151,6 +152,7 @@ fn address_of(value: &serde_json::Value) -> Result<Address> {
         Some("clamp") => Address::Clamp,
         Some("mirror") => Address::Mirror,
         Some("mirror-once") => Address::MirrorOnce,
+        Some("border") => Address::Border,
         _ => return Err(invalid("layer bake state", 0, format!("addressing {value}"))),
     })
 }

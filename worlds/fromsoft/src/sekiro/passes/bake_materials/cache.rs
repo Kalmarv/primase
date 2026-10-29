@@ -50,8 +50,20 @@ fn image(mut k: KeyBuilder, t: &SampledTexture) -> KeyBuilder {
                 Address::Clamp => "clamp",
                 Address::Mirror => "mirror",
                 Address::MirrorOnce => "mirror-once",
+                Address::Border => "border",
             },
         );
+    }
+    // a border colour and a level range are keyed where stated, so a key without them is as before
+    if let Some(colour) = t.sampler().border {
+        for c in colour {
+            k = k.f32("border", c);
+        }
+    }
+    if let Some(range) = t.sampler().lod {
+        for l in range {
+            k = k.f32("lod", l);
+        }
     }
     for (tag, value) in [
         ("lod-bias", t.sampler().mip_lod_bias),
@@ -430,17 +442,7 @@ mod tests {
             ] {
                 let program = iridia_dxbc::lift(bytes).unwrap();
                 let entity = world.spawn();
-                let mut binding = StageBinding {
-                    stage,
-                    variant: None,
-                    shader: entity,
-                    inputs: vec![],
-                    constants: vec![],
-                    textures: vec![],
-                    buffers: vec![],
-                    constant_buffers: vec![],
-                    outputs: vec![],
-                };
+                let mut binding = StageBinding::new(stage, entity);
                 for r in &program.interface.resources {
                     match &r.kind {
                         ResourceKind::ConstantBuffer { layout } => binding.constants.push(ConstantBinding {

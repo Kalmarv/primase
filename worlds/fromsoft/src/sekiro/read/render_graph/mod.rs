@@ -6,8 +6,10 @@
 //! two): each step in the order the frames draw it, with the frames that had it (a step only some frames have stands in
 //! its place all the same, with what triggers it where the frames show it, or the frames that had it), how many times
 //! it ran, its programs (by their names in the game's engine binders), what each of its texture and buffer registers
-//! read (one of the frame's targets or buffers, or the renderer's own texture), its outputs and its pipeline state. The
-//! programs are the install's: read here from `/shader/<folder>.shaderbnd.dcx` by name, each a `core.shader`.
+//! read (one of the frame's targets or buffers, or the renderer's own texture), the sampler state it bound at each
+//! sampler register, its outputs and its pipeline state. The programs are the install's: read here from
+//! `/shader/<folder>.shaderbnd.dcx` by name, each a `core.shader`, and which sampler each texture is read through is
+//! read from the program's own instructions ([`crate::passes::sampler_pairs`]).
 //!
 //! What each program reads gets a role only where it is known: a target or buffer the frame makes; the renderer's own
 //! named constants that `core` has words for (the camera's matrices and position, the target size, the time, the
@@ -19,6 +21,7 @@ mod table;
 
 use crate::game::Shading;
 use crate::invalid;
+use crate::passes::sampler_pairs::{self, SamplerPairs};
 use fromsoft_formats::names::fold;
 use fromsoft_formats::{Archive, Binder, Game, Result, dcx::Decoder};
 use iridia::ProgramGraph;
@@ -32,8 +35,8 @@ use primase_core::render_graph::{
 };
 use primase_core::shader::{
     BufferBinding, BufferSource, ConstantBinding, ConstantRole, FrameParameter, InputBinding, InputRole,
-    OutputBinding, OutputRole, ScreenTriangleValue, Shader, StageBinding, TextureBinding, TextureSource,
-    VariantKey, ViewParameter,
+    OutputBinding, OutputRole, SamplerBinding, ScreenTriangleValue, Shader, StageBinding, TextureBinding,
+    TextureSource, VariantKey, ViewParameter,
 };
 use primase_core::{Name, World};
 use std::collections::{BTreeMap, BTreeSet};
@@ -58,6 +61,15 @@ pub struct Report {
     pub engine_textures: BTreeMap<String, usize>,
     /// Declared texture or buffer registers the recorded frames bind nothing at.
     pub unbound_slots: usize,
+    /// Sampler states stated (a declared sampler register and the state every run of its step binds there), and the
+    /// declared sampler registers with none: the frames bind nothing there, or different states in different runs.
+    pub samplers: usize,
+    pub unbound_samplers: usize,
+    /// Texture slots the program reads through more than one sampler: their binding names none (each sampler's state is
+    /// stated).
+    pub textures_through_several_samplers: usize,
+    /// Texture reads of the programs whose texture or sampler is not one register (an array indexed at run time).
+    pub untraced_reads: usize,
     /// Buffer slots bound `Unknown`: the renderer's own buffers (its light parameters) and those the frames bind nothing
     /// at.
     pub unknown_buffers: usize,
@@ -127,6 +139,14 @@ impl Report {
                 self.undeclared_writes,
                 "render graph unordered-access writes the program does not declare",
             ),
+            (
+                self.unbound_samplers,
+                "render graph sampler registers with no recorded state",
+            ),
+            (
+                self.untraced_reads,
+                "render graph texture reads whose texture or sampler is not one register",
+            ),
         ];
         for (n, what) in unknown {
             if n > 0 {
@@ -155,11 +175,13 @@ impl Report {
     }
 }
 
-/// A program of the graph: its `core.shader` entity, interface and value graph (or why there is none).
+/// A program of the graph: its `core.shader` entity, interface, value graph (or why there is none) and which sampler
+/// each of its textures is read through.
 struct Program {
     entity: primase_core::Entity,
     interface: Interface,
     graph: std::result::Result<ProgramGraph, String>,
+    pairs: SamplerPairs,
 }
 
 /// Read the game's render graph: its programs from the install's engine binders, its steps from the game's table, as the
@@ -209,6 +231,14 @@ pub(crate) fn read(
                 .map_err(|e| invalid(FORMAT, 0, format!("{full}: {e}")))?;
             let graph = lifted.graph();
             let interface = lifted.interface.clone();
+            let pairs = sampler_pairs::pairs(game.shader_format(), &file.bytes).map_err(|e| {
+                invalid(
+                    FORMAT,
+                    0,
+                    format!("{full}: which sampler each texture is read through: {e}"),
+                )
+            })?;
+            report.untraced_reads = report.untraced_reads.saturating_add(pairs.untraced);
             let entity = world.spawn();
             world.insert(entity, Name(full.clone()));
             world.insert(
@@ -225,6 +255,7 @@ pub(crate) fn read(
                     entity,
                     interface,
                     graph,
+                    pairs,
                 },
             );
         }
@@ -433,6 +464,67 @@ fn compare(n: u32) -> std::result::Result<iri::Compare, String> {
     })
 }
 
+/// A sampler the table records (D3D's numbers) as the interface's state. The filter (`D3D12_FILTER`): bit 0 a linear
+/// mip filter, bit 2 linear magnification, bit 4 linear minification, bit 6 anisotropic, bits 7 and 8 the reduction (0
+/// a plain filter, 1 a comparison against `compare`; a minimum or maximum, which the state does not state, is refused).
+/// The border colour and the level range are stated as recorded; the anisotropy where the filter is anisotropic, the
+/// bias where it is not zero.
+fn sampler_state(s: &table::Sampler) -> std::result::Result<iri::SamplerState, String> {
+    let f = s.filter;
+    if f & !0x1d5 != 0 {
+        return Err(format!(
+            "sampler filter {f:#x}, which has bits D3D does not define"
+        ));
+    }
+    let level = |bit: u32| {
+        if f >> bit & 1 == 1 {
+            iri::Filter::Linear
+        } else {
+            iri::Filter::Nearest
+        }
+    };
+    let address = |a: u32| -> std::result::Result<iri::AddressMode, String> {
+        Ok(match a {
+            1 => iri::AddressMode::Repeat,
+            2 => iri::AddressMode::Mirror,
+            3 => iri::AddressMode::Clamp,
+            4 => iri::AddressMode::Border,
+            5 => iri::AddressMode::MirrorOnce,
+            other => return Err(format!("sampler address mode {other}")),
+        })
+    };
+    let compare = match f >> 7 & 3 {
+        0 => None,
+        1 => Some(compare(s.compare)?),
+        _ => return Err(format!("sampler filter {f:#x}: a minimum or maximum filter")),
+    };
+    let max_anisotropy = if f & 0x40 != 0 {
+        Some(u8::try_from(s.anisotropy).map_err(|_| format!("sampler anisotropy {}", s.anisotropy))?)
+    } else {
+        None
+    };
+    let [u, v, w] = s.address;
+    let state = iri::SamplerState {
+        wrap: [Some(address(u)?), Some(address(v)?), Some(address(w)?)],
+        filters: iri::Filters {
+            mag: Some(level(2)),
+            min: Some(level(4)),
+            mip: Some(if f & 1 == 1 {
+                iri::MipFilter::Linear
+            } else {
+                iri::MipFilter::Nearest
+            }),
+        },
+        max_anisotropy,
+        compare,
+        mip_lod_bias: (s.lod_bias != 0.0).then_some(s.lod_bias),
+        border: Some(s.border),
+        lod: Some(s.lod),
+    };
+    state.verify()?;
+    Ok(state)
+}
+
 fn stencil_op(n: u32) -> std::result::Result<iri::StencilOp, String> {
     Ok(match n {
         1 => iri::StencilOp::Keep,
@@ -577,6 +669,13 @@ struct Lower<'a> {
     programs: &'a BTreeMap<String, Program>,
 }
 
+/// What a step binds at its programs' registers: its texture and buffer slots and its sampler slots.
+#[derive(Clone, Copy)]
+struct Slots<'a> {
+    textures: &'a [table::Slot],
+    samplers: &'a [table::SamplerSlot],
+}
+
 impl Lower<'_> {
     fn program(&self, name: &str) -> std::result::Result<&Program, String> {
         self.programs
@@ -713,13 +812,17 @@ impl Lower<'_> {
                 parts: Vec::new(),
             })
         };
+        let slots = Slots {
+            textures: &sc.textures,
+            samplers: &sc.samplers,
+        };
         for (i, v) in sc.vertex.iter().enumerate() {
             let p = self.program(&v.program)?;
             let mut b = self.stage(
                 p,
                 &v.program,
                 Stage::Vertex,
-                &sc.textures,
+                slots,
                 Some(&v.data),
                 &target_names,
                 report,
@@ -729,7 +832,7 @@ impl Lower<'_> {
         }
         for (i, name) in sc.pixel.iter().enumerate() {
             let p = self.program(name)?;
-            let mut b = self.stage(p, name, Stage::Pixel, &sc.textures, None, &target_names, report)?;
+            let mut b = self.stage(p, name, Stage::Pixel, slots, None, &target_names, report)?;
             b.variant = key(i, sc.pixel.len());
             stages.push(b);
         }
@@ -748,7 +851,10 @@ impl Lower<'_> {
             p,
             &c.program,
             Stage::Compute,
-            &c.textures,
+            Slots {
+                textures: &c.textures,
+                samplers: &c.samplers,
+            },
             None,
             &BTreeMap::new(),
             report,
@@ -784,28 +890,79 @@ impl Lower<'_> {
     }
 
     /// One program's binding in a step: what the frames bind at each texture and buffer register it declares (the
-    /// step's slots for its stage, and for this program where the slots name one), its named constants, its vertex
-    /// inputs as the step's vertex data shows them, and its outputs, the step's render targets.
+    /// step's slots for its stage, and for this program where the slots name one), the sampler each texture is read
+    /// through where it is one, the state the frames bind at each sampler register it declares, its named constants,
+    /// its vertex inputs as the step's vertex data shows them, and its outputs, the step's render targets.
     #[allow(clippy::too_many_arguments)]
     fn stage(
         &self,
         p: &Program,
         name: &str,
         stage: Stage,
-        slots: &[table::Slot],
+        slots: Slots<'_>,
         vertex_data: Option<&str>,
         target_names: &BTreeMap<u32, String>,
         report: &mut Report,
     ) -> std::result::Result<StageBinding, String> {
         let interface = &p.interface;
         let slot_at = |space: u32, register: u32| {
-            slots.iter().find(|s| {
+            slots.textures.iter().find(|s| {
                 stage_of(&s.stage).is_ok_and(|st| st == stage)
                     && s.program.as_deref().is_none_or(|p| p == name)
                     && s.space == space
                     && s.register == register
             })
         };
+        // the program's sampler resource at a register
+        let sampler_at = |space: u32, register: u32| {
+            interface
+                .resources
+                .iter()
+                .find(|r| {
+                    matches!(r.kind, ResourceKind::Sampler { .. })
+                        && r.provenance.d3d.is_some_and(|d| {
+                            d.class == D3dClass::Sampler && d.space == space && d.register == register
+                        })
+                })
+                .map(|r| r.id)
+        };
+        let mut samplers = Vec::new();
+        for r in &interface.resources {
+            let ResourceKind::Sampler { comparison } = r.kind else {
+                continue;
+            };
+            let Some(d) = r.provenance.d3d.filter(|d| d.class == D3dClass::Sampler) else {
+                continue;
+            };
+            let recorded = slots.samplers.iter().find(|s| {
+                stage_of(&s.stage).is_ok_and(|st| st == stage)
+                    && s.program.as_deref().is_none_or(|p| p == name)
+                    && s.space == d.space
+                    && s.register == d.register
+            });
+            let Some(recorded) = recorded else {
+                report.unbound_samplers = report.unbound_samplers.saturating_add(1);
+                continue;
+            };
+            let state = sampler_state(&recorded.state).map_err(|e| format!("s{}: {e}", d.register))?;
+            if comparison != state.compare.is_some() {
+                return Err(format!(
+                    "s{}: the program declares a {} sampler and the frames bind a {} one",
+                    d.register,
+                    if comparison { "comparison" } else { "plain" },
+                    if state.compare.is_some() {
+                        "comparison"
+                    } else {
+                        "plain"
+                    }
+                ));
+            }
+            report.samplers = report.samplers.saturating_add(1);
+            samplers.push(SamplerBinding {
+                resource: r.id,
+                state,
+            });
+        }
         let mut textures = Vec::new();
         let mut buffers = Vec::new();
         for r in &interface.resources {
@@ -816,10 +973,7 @@ impl Lower<'_> {
             match &r.kind {
                 ResourceKind::Texture { .. } => {
                     let source = match slot {
-                        Some(table::Slot { target: Some(v), .. }) => TextureSource::Target {
-                            view: view(v),
-                            sampler: iri::SamplerState::default(),
-                        },
+                        Some(table::Slot { target: Some(v), .. }) => TextureSource::Target { view: view(v) },
                         Some(slot) => {
                             let what = slot
                                 .engine
@@ -834,9 +988,17 @@ impl Lower<'_> {
                             TextureSource::Missing
                         }
                     };
+                    let reads = p.pairs.textures.get(&(d.space, d.register));
+                    if reads.is_some_and(|t| t.samplers.len() > 1) {
+                        report.textures_through_several_samplers =
+                            report.textures_through_several_samplers.saturating_add(1);
+                    }
                     textures.push(TextureBinding {
                         resource: r.id,
-                        sampler: None,
+                        sampler: p
+                            .pairs
+                            .sampler_of((d.space, d.register))
+                            .and_then(|(space, register)| sampler_at(space, register)),
                         source,
                     });
                 }
@@ -946,15 +1108,13 @@ impl Lower<'_> {
             }
         }
         Ok(StageBinding {
-            stage,
-            variant: None,
-            shader: p.entity,
             inputs,
             constants,
             textures,
+            samplers,
             buffers,
-            constant_buffers: Vec::new(),
             outputs,
+            ..StageBinding::new(stage, p.entity)
         })
     }
 

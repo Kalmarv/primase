@@ -8,7 +8,6 @@ use primase_core::{World, shader::StageBinding};
 pub fn binding(db: &Database, record: u32) -> StageBinding {
     let shader = World::new().spawn();
     StageBinding {
-        stage: Stage::Pixel,
         variant: Some(VariantKey {
             field: "shaunwhite.shader.record".into(),
             value: record,
@@ -26,13 +25,7 @@ pub fn binding(db: &Database, record: u32) -> StageBinding {
                 },
             ],
         }),
-        shader,
-        inputs: vec![],
-        constants: vec![],
-        textures: vec![],
-        buffers: vec![],
-        constant_buffers: vec![],
-        outputs: vec![],
+        ..StageBinding::new(Stage::Pixel, shader)
     }
 }
 pub fn material(

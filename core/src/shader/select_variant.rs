@@ -196,15 +196,8 @@ mod tests {
 
     fn stage(w: &mut World, stage: Stage, variant: Option<VariantKey>) -> StageBinding {
         StageBinding {
-            stage,
             variant,
-            shader: w.spawn(),
-            inputs: Vec::new(),
-            constants: Vec::new(),
-            textures: Vec::new(),
-            buffers: Vec::new(),
-            constant_buffers: Vec::new(),
-            outputs: Vec::new(),
+            ..StageBinding::new(stage, w.spawn())
         }
     }
 

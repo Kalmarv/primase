@@ -457,7 +457,7 @@ dependencies = [
 [[package]]
 name = "dxbc-reader"
 version = "0.3.0"
-source = "git+https://github.com/Kalmarv/dx?rev=e42b5ff7559e364c1c8a8977ece6460cd8797205#e42b5ff7559e364c1c8a8977ece6460cd8797205"
+source = "git+https://github.com/Kalmarv/dx?rev=6b3595b70afc1cf906f047e74102ce5967c822c3#6b3595b70afc1cf906f047e74102ce5967c822c3"
 dependencies = [
  "dxcontainer",
  "thiserror",
@@ -466,7 +466,7 @@ dependencies = [
 [[package]]
 name = "dxcontainer"
 version = "0.3.0"
-source = "git+https://github.com/Kalmarv/dx?rev=e42b5ff7559e364c1c8a8977ece6460cd8797205#e42b5ff7559e364c1c8a8977ece6460cd8797205"
+source = "git+https://github.com/Kalmarv/dx?rev=6b3595b70afc1cf906f047e74102ce5967c822c3#6b3595b70afc1cf906f047e74102ce5967c822c3"
 dependencies = [
  "primase-foundations",
  "thiserror",
@@ -475,7 +475,7 @@ dependencies = [
 [[package]]
 name = "dxil-reader"
 version = "0.3.0"
-source = "git+https://github.com/Kalmarv/dx?rev=e42b5ff7559e364c1c8a8977ece6460cd8797205#e42b5ff7559e364c1c8a8977ece6460cd8797205"
+source = "git+https://github.com/Kalmarv/dx?rev=6b3595b70afc1cf906f047e74102ce5967c822c3#6b3595b70afc1cf906f047e74102ce5967c822c3"
 dependencies = [
  "dxcontainer",
  "primase-foundations",
@@ -574,7 +574,7 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 [[package]]
 name = "fromsoft-formats"
 version = "0.10.0"
-source = "git+https://github.com/Kalmarv/fromsoft-formats?rev=f7116560a9a4a397d60c297f5a98790e43793f54#f7116560a9a4a397d60c297f5a98790e43793f54"
+source = "git+https://github.com/Kalmarv/fromsoft-formats?rev=a0262e237f3ec30fc3333d86a09aee69f07d70cd#a0262e237f3ec30fc3333d86a09aee69f07d70cd"
 dependencies = [
  "aes",
  "encoding_rs",
@@ -764,7 +764,7 @@ dependencies = [
 [[package]]
 name = "iridia"
 version = "0.3.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=5d4eb58f4cfbae209ed972221dbdb1253b8c5d40#5d4eb58f4cfbae209ed972221dbdb1253b8c5d40"
+source = "git+https://github.com/Kalmarv/iridia?rev=ef932827bf428ae16541084af30c8e7c563fd73b#ef932827bf428ae16541084af30c8e7c563fd73b"
 dependencies = [
  "iridia-interface",
  "primase-naga",
@@ -775,7 +775,7 @@ dependencies = [
 [[package]]
 name = "iridia-d3d9"
 version = "0.3.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=5d4eb58f4cfbae209ed972221dbdb1253b8c5d40#5d4eb58f4cfbae209ed972221dbdb1253b8c5d40"
+source = "git+https://github.com/Kalmarv/iridia?rev=ef932827bf428ae16541084af30c8e7c563fd73b#ef932827bf428ae16541084af30c8e7c563fd73b"
 dependencies = [
  "iridia",
  "iridia-interface",
@@ -785,7 +785,7 @@ dependencies = [
 [[package]]
 name = "iridia-dxbc"
 version = "0.3.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=5d4eb58f4cfbae209ed972221dbdb1253b8c5d40#5d4eb58f4cfbae209ed972221dbdb1253b8c5d40"
+source = "git+https://github.com/Kalmarv/iridia?rev=ef932827bf428ae16541084af30c8e7c563fd73b#ef932827bf428ae16541084af30c8e7c563fd73b"
 dependencies = [
  "dxbc-reader",
  "dxcontainer",
@@ -796,7 +796,7 @@ dependencies = [
 [[package]]
 name = "iridia-dxil"
 version = "0.3.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=5d4eb58f4cfbae209ed972221dbdb1253b8c5d40#5d4eb58f4cfbae209ed972221dbdb1253b8c5d40"
+source = "git+https://github.com/Kalmarv/iridia?rev=ef932827bf428ae16541084af30c8e7c563fd73b#ef932827bf428ae16541084af30c8e7c563fd73b"
 dependencies = [
  "dxcontainer",
  "dxil-reader",
@@ -808,7 +808,7 @@ dependencies = [
 [[package]]
 name = "iridia-exec"
 version = "0.3.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=5d4eb58f4cfbae209ed972221dbdb1253b8c5d40#5d4eb58f4cfbae209ed972221dbdb1253b8c5d40"
+source = "git+https://github.com/Kalmarv/iridia?rev=ef932827bf428ae16541084af30c8e7c563fd73b#ef932827bf428ae16541084af30c8e7c563fd73b"
 dependencies = [
  "half",
  "iridia",
@@ -821,7 +821,7 @@ dependencies = [
 [[package]]
 name = "iridia-interface"
 version = "0.3.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=5d4eb58f4cfbae209ed972221dbdb1253b8c5d40#5d4eb58f4cfbae209ed972221dbdb1253b8c5d40"
+source = "git+https://github.com/Kalmarv/iridia?rev=ef932827bf428ae16541084af30c8e7c563fd73b#ef932827bf428ae16541084af30c8e7c563fd73b"
 dependencies = [
  "serde",
 ]
@@ -829,7 +829,7 @@ dependencies = [
 [[package]]
 name = "iridia-mojo"
 version = "0.3.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=5d4eb58f4cfbae209ed972221dbdb1253b8c5d40#5d4eb58f4cfbae209ed972221dbdb1253b8c5d40"
+source = "git+https://github.com/Kalmarv/iridia?rev=ef932827bf428ae16541084af30c8e7c563fd73b#ef932827bf428ae16541084af30c8e7c563fd73b"
 dependencies = [
  "iridia",
  "primase-naga",
@@ -1257,7 +1257,7 @@ dependencies = [
 [[package]]
 name = "primase-foundations"
 version = "0.2.1"
-source = "git+https://github.com/Kalmarv/primase-foundations?rev=e895f966130651bd78c47505b53322cc3f58083a#e895f966130651bd78c47505b53322cc3f58083a"
+source = "git+https://github.com/Kalmarv/primase-foundations?rev=6201129940a970d87392ab2ee59cd0c9c04ed7e4#6201129940a970d87392ab2ee59cd0c9c04ed7e4"
 dependencies = [
  "flate2",
  "half",
@@ -1266,6 +1266,7 @@ dependencies = [
  "oozextract",
  "ruzstd",
  "thiserror",
+ "zlib-rs",
 ]
 
 [[package]]
@@ -1274,6 +1275,7 @@ version = "0.1.0"
 dependencies = [
  "aes",
  "criterion",
+ "dxbc-reader",
  "dxcontainer",
  "dxil-reader",
  "encoding_rs",
@@ -1728,7 +1730,7 @@ dependencies = [
 [[package]]
 name = "rsx-reader"
 version = "0.3.0"
-source = "git+https://github.com/Kalmarv/dx?rev=e42b5ff7559e364c1c8a8977ece6460cd8797205#e42b5ff7559e364c1c8a8977ece6460cd8797205"
+source = "git+https://github.com/Kalmarv/dx?rev=6b3595b70afc1cf906f047e74102ce5967c822c3#6b3595b70afc1cf906f047e74102ce5967c822c3"
 dependencies = [
  "primase-foundations",
  "thiserror",

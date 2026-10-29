@@ -65,10 +65,6 @@ fn fixture(count: u32) -> (DerivedAlbedo, MaterialRef) {
     let mut world = World::new();
     let entity = world.spawn();
     let binding = StageBinding {
-        stage: Stage::Pixel,
-        variant: None,
-        shader: entity,
-        inputs: vec![],
         constants: vec![ConstantBinding {
             resource,
             offset: 0,
@@ -79,10 +75,7 @@ fn fixture(count: u32) -> (DerivedAlbedo, MaterialRef) {
             },
             lines: None,
         }],
-        textures: vec![],
-        buffers: vec![],
-        constant_buffers: vec![],
-        outputs: vec![],
+        ..StageBinding::new(Stage::Pixel, entity)
     };
     let derived = DerivedAlbedo {
         reencode: program.clone(),

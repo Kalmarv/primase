@@ -2,7 +2,7 @@
 //! and buffers, then its steps in order, each with the frames that had it, how many times it ran, and what it did as
 //! the recorded frames show it. Programs are named as the game's engine binders hold them (`<folder>/<file>`: the file
 //! in `/shader/<folder>.shaderbnd.dcx`); states are the D3D numbers the frames recorded (D3D11's and D3D12's enums share
-//! them); a texture or buffer slot is named by its stage, space and register.
+//! them); a texture, buffer or sampler slot is named by its stage, space and register.
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
@@ -193,6 +193,7 @@ pub(crate) struct Screen {
     /// The pixel programs: one, or the variants the runs drew with.
     pub pixel: Vec<String>,
     pub textures: Vec<Slot>,
+    pub samplers: Vec<SamplerSlot>,
     pub outputs: Outputs,
     pub state: State,
     /// The draw's viewport where it is not the whole of its outputs: x, y, width, height.
@@ -216,6 +217,7 @@ pub(crate) struct Compute {
     /// The thread groups the frames dispatched.
     pub groups: Option<[u32; 3]>,
     pub textures: Vec<Slot>,
+    pub samplers: Vec<SamplerSlot>,
     pub writes: Vec<Write>,
 }
 
@@ -235,6 +237,40 @@ pub(crate) struct Slot {
     pub graph_buffer: Option<u32>,
     pub engine: Option<String>,
     pub engine_buffer: Option<String>,
+}
+
+/// The sampler state the frames bind at one sampler register the step's programs declare: the same in every run of the
+/// step in every recorded frame (a register they bind different states at, or nothing at, has no slot).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SamplerSlot {
+    pub stage: String,
+    /// The program the slot is for, where the step draws with more than one for its stage; `None`: every program of
+    /// the stage.
+    #[serde(default)]
+    pub program: Option<String>,
+    pub space: u32,
+    pub register: u32,
+    pub state: Sampler,
+}
+
+/// A sampler as D3D11's `D3D11_SAMPLER_DESC` and D3D12's `D3D12_SAMPLER_DESC` state it (their enums share the numbers).
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Sampler {
+    /// `D3D12_FILTER`.
+    pub filter: u32,
+    /// `D3D12_TEXTURE_ADDRESS_MODE` along u, v and w.
+    pub address: [u32; 3],
+    pub lod_bias: f32,
+    /// `MaxAnisotropy`.
+    pub anisotropy: u32,
+    /// `D3D12_COMPARISON_FUNC`.
+    pub compare: u32,
+    /// `BorderColor`.
+    pub border: [f32; 4],
+    /// `MinLOD` and `MaxLOD`.
+    pub lod: [f32; 2],
 }
 
 /// An unordered-access register a dispatch writes: a target's view or one of the graph's buffers.

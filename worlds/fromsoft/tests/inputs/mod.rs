@@ -118,8 +118,14 @@ primase_testdata::inputs! {
         Query::Oracle(OracleSet::Scripts, Game::Elden, "frames") => {
             status: Live,
             gate: false,
-            about: r#"a folder of recorded Elden Ring frames, one folder per session (`<run>/cap/capture.jsonl`: the capture proxy's pipeline states, each with its programs named by the FNV-1a 64 of their bytes; `<run>/cap/frame_<n>.jsonl`: one frame's D3D12 draws and dispatches in order, each naming its pipeline state); the render graph's table names the frames it comes from (`<run> frame_<n>`); worlds/fromsoft/tests/render_graph.rs"#,
+            about: r#"a folder of recorded Elden Ring frames, one folder per session (`<run>/cap/capture.jsonl`: the capture proxy's pipeline states, each with its programs named by the proxy's hash of their bytes (FNV-1a 64 from the seed 1469598103934665603), and its draws and dispatches, each with its programs and the root tables it bound, sampler descriptors included; `<run>/cap/frame_<n>.jsonl`: one frame's D3D12 draws and dispatches in order, each naming its pipeline state); the render graph's table names the frames it comes from (`<run> frame_<n>`); worlds/fromsoft/tests/render_graph.rs"#,
             source: r#"our own capture proxies' records of the running game (D3D11 for Sekiro, D3D12 for Elden Ring), kept with the private oracle tools: the game's own calls as it drew, read by the test's own parser, separate from the script that wrote the tables"#,
+        },
+        Query::Oracle(OracleSet::Scripts, Game::Elden, "sampler-pairs.json") => {
+            status: Live,
+            gate: false,
+            about: r#"a JSON file: per program of the render graph's Elden Ring table (`<folder>/<file>` in `/shader/<folder>.shaderbnd.dcx`), the sampler registers each texture register is sampled, gathered or queried through (`sampled`) and the texture registers it loads (`loaded`), read off DXC's listing of the program (handles followed from createHandle through annotateHandle); worlds/fromsoft/tests/render_graph.rs"#,
+            source: r#"independent: Microsoft's DXC 10.0.26100.0 (`dxc -dumpbin`) over the programs extracted from the user's install, its listing parsed by a script kept with the private oracle tools; not the reader the graph uses"#,
         },
         Query::Oracle(OracleSet::Scripts, Game::Sekiro, "dds") => {
             status: Live,
@@ -130,7 +136,7 @@ primase_testdata::inputs! {
         Query::Oracle(OracleSet::Scripts, Game::Sekiro, "frames") => {
             status: Live,
             gate: false,
-            about: r#"a folder of recorded Sekiro frames, one folder per session (`<run>/cap/frame_<n>/events.jsonl`: the capture proxy's D3D11 calls of one frame in order, each draw or dispatch with its programs named by the FNV-1a 64 of their bytes); the render graph's table names the frames it comes from (`<run> frame_<n>`); worlds/fromsoft/tests/render_graph.rs"#,
+            about: r#"a folder of recorded Sekiro frames, one folder per session (`<run>/cap/frame_<n>/events.jsonl`: the capture proxy's D3D11 calls of one frame in order, each draw or dispatch with its programs named by the proxy's hash of their bytes (FNV-1a 64 from the seed 1469598103934665603) and the sampler objects it bound per stage, and the sampler objects' descriptions); the render graph's table names the frames it comes from (`<run> frame_<n>`); worlds/fromsoft/tests/render_graph.rs"#,
             source: r#"our own capture proxies' records of the running game (D3D11 for Sekiro, D3D12 for Elden Ring), kept with the private oracle tools: the game's own calls as it drew, read by the test's own parser, separate from the script that wrote the tables"#,
         },
         Query::Oracle(OracleSet::Scripts, Game::Sekiro, "normal-curl.json") => {
@@ -150,6 +156,12 @@ primase_testdata::inputs! {
             gate: true,
             about: r#"a folder: `reflectance.json`, naming one layered material's G-buffer program (path, sha256, the dielectric literal's offset and bits) and its DDS inputs (paths, sha256), every path relative to the folder, and the program and DDS files it names; the static bake must reproduce the traced reflectance at every texel while the other lowered channels stay unchanged; `worlds/fromsoft/src/sekiro/passes/bake_assembly.rs`"#,
             source: r#"the game's own shader program and textures from the user's install, with the literal's offset read from the program's bytes; the file only names and hashes them"#,
+        },
+        Query::Oracle(OracleSet::Scripts, Game::Sekiro, "sampler-pairs.json") => {
+            status: Live,
+            gate: false,
+            about: r#"a JSON file: per program of the render graph's Sekiro table (`<folder>/<file>` in `/shader/<folder>.shaderbnd.dcx`), the sampler registers each texture register is sampled, gathered or queried through (`sampled`) and the texture registers it loads (`loaded`), read off fxc's disassembly of the program; worlds/fromsoft/tests/render_graph.rs"#,
+            source: r#"independent: Microsoft's fxc disassembler (D3DDisassemble of d3dcompiler_47, Windows Kits 10.0.26100.0) over the programs extracted from the user's install, its listing parsed by a script kept with the private oracle tools; not the reader the graph uses"#,
         },
         Query::Oracle(OracleSet::Scripts, Game::Sekiro, "shadow") => {
             status: Live,

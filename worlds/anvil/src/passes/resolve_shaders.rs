@@ -1136,15 +1136,12 @@ impl ResolveAnvilShaders {
                 .or_default() += unshown as u64;
         }
         StageBinding {
-            stage,
             variant,
-            shader,
             inputs,
             constants,
             textures: bindings,
-            buffers: Vec::new(),
-            constant_buffers: Vec::new(),
             outputs,
+            ..StageBinding::new(stage, shader)
         }
     }
 }

@@ -767,15 +767,11 @@ impl ResolveGtaShaders {
             Vec::new()
         };
         Ok(StageBinding {
-            stage,
-            variant: None,
-            shader,
             inputs: in_roles,
             constants,
             textures,
-            buffers: Vec::new(),
-            constant_buffers: Vec::new(),
             outputs,
+            ..StageBinding::new(stage, shader)
         })
     }
 }

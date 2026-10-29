@@ -483,10 +483,6 @@ mod tests {
         let shader = primase_core::World::default().spawn();
         ShaderBinding {
             stages: vec![StageBinding {
-                stage: Stage::Pixel,
-                variant: None,
-                shader,
-                inputs: Vec::new(),
                 constants: reference
                     .map(|r| ConstantBinding {
                         resource: ResourceId(0),
@@ -501,10 +497,7 @@ mod tests {
                     })
                     .into_iter()
                     .collect(),
-                textures: Vec::new(),
-                buffers: Vec::new(),
-                constant_buffers: Vec::new(),
-                outputs: Vec::new(),
+                ..StageBinding::new(Stage::Pixel, shader)
             }],
             state: RenderState::default(),
         }

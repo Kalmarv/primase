@@ -1071,15 +1071,11 @@ impl ResolveUnityShaders {
             Vec::new()
         };
         StageBinding {
-            stage,
-            variant: None,
-            shader,
             inputs,
             constants,
             textures,
-            buffers: Vec::new(),
-            constant_buffers: Vec::new(),
             outputs,
+            ..StageBinding::new(stage, shader)
         }
     }
 }

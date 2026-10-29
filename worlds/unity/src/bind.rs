@@ -213,8 +213,8 @@ pub fn sampled_texture(t: &Texture, unity: &UnityTexture) -> Result<SampledTextu
         .and_then(|l| l.rows_reversed().map_err(Into::into))
         .map_err(|e| invalid(format!("decoding a texture to sample: {e}")))?;
     let sampler = SamplerUse {
-        address: [address(0)?, address(1)?],
         mip_lod_bias: Some(unity.mip_bias),
+        ..SamplerUse::addressed([address(0)?, address(1)?])
     };
     SampledTexture::new(levels, transfer, sampler, filtering).map_err(invalid)
 }

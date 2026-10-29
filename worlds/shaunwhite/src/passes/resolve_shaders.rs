@@ -128,7 +128,6 @@ fn binding(
     unresolved: &mut BTreeMap<String, u64>,
 ) -> StageBinding {
     let mut b = StageBinding {
-        stage: Stage::Pixel,
         variant: Some(VariantKey {
             field: RECORD_FIELD.into(),
             value: record,
@@ -143,13 +142,7 @@ fn binding(
                 },
             ],
         }),
-        shader,
-        inputs: Vec::new(),
-        constants: Vec::new(),
-        textures: Vec::new(),
-        buffers: Vec::new(),
-        constant_buffers: Vec::new(),
-        outputs: Vec::new(),
+        ..StageBinding::new(Stage::Pixel, shader)
     };
     for v in &interface.inputs {
         let why = format!(

@@ -453,7 +453,7 @@ impl RenderGraph {
     fn stage_targets_ok(&self, stages: &[&StageBinding], what: &str) -> Result<(), String> {
         for s in stages {
             for t in &s.textures {
-                if let TextureSource::Target { view, .. } = &t.source {
+                if let TextureSource::Target { view } = &t.source {
                     self.view_ok(
                         view,
                         &format!("{what} {:?} texture slot {}", s.stage, t.resource.0),
@@ -665,7 +665,7 @@ impl RenderGraph {
     /// planes as an arrayed one, a volume as a 3D texture, a cube as a cube.
     fn target_dims_ok(&self, step: &str, s: &StageBinding, interface: &Interface) -> Result<(), String> {
         for t in &s.textures {
-            let TextureSource::Target { view, .. } = &t.source else {
+            let TextureSource::Target { view } = &t.source else {
                 continue;
             };
             let Some(target) = self.targets.get(view.target as usize) else {
@@ -937,19 +937,11 @@ mod tests {
             sampler: None,
             source: TextureSource::Target {
                 view: TargetView { mip, ..view(target) },
-                sampler: iridia_interface::SamplerState::default(),
             },
         };
         let stage = |target: TargetId, mip: u32| StageBinding {
-            stage: iridia_interface::Stage::Pixel,
-            variant: None,
-            shader: program,
-            inputs: Vec::new(),
-            constants: Vec::new(),
             textures: vec![read(target, mip)],
-            buffers: Vec::new(),
-            constant_buffers: Vec::new(),
-            outputs: Vec::new(),
+            ..StageBinding::new(iridia_interface::Stage::Pixel, program)
         };
         let screen = |target: TargetId, mip: u32| RenderPass {
             name: "composite".into(),
@@ -1069,18 +1061,11 @@ mod tests {
             runs: Runs::Once,
             work: PassWork::Compute {
                 stage: StageBinding {
-                    stage: iridia_interface::Stage::Compute,
-                    variant: None,
-                    shader: program,
-                    inputs: Vec::new(),
-                    constants: Vec::new(),
-                    textures: Vec::new(),
                     buffers: vec![crate::shader::BufferBinding {
                         resource: ResourceId(1),
                         source: BufferSource::Graph(buffer),
                     }],
-                    constant_buffers: Vec::new(),
-                    outputs: Vec::new(),
+                    ..StageBinding::new(iridia_interface::Stage::Compute, program)
                 },
                 groups: Groups::Fixed([120, 68, 1]),
                 writes: Vec::new(),

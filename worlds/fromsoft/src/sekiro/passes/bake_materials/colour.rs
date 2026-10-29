@@ -109,13 +109,6 @@ mod tests {
 
     fn binding(program: &Program) -> StageBinding {
         StageBinding {
-            stage: Stage::Pixel,
-            variant: None,
-            shader: World::default().spawn(),
-            inputs: vec![],
-            textures: vec![],
-            buffers: vec![],
-            constant_buffers: vec![],
             constants: program
                 .interface
                 .resources
@@ -138,6 +131,7 @@ mod tests {
                 lanes: 15,
                 role: OutputRole::Colour,
             }],
+            ..StageBinding::new(Stage::Pixel, World::default().spawn())
         }
     }
 

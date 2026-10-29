@@ -59,6 +59,9 @@ pub fn state(d: &SamplerDesc) -> SamplerState {
             None
         },
         mip_lod_bias: (d.mip_lod_bias != 0.0).then_some(d.mip_lod_bias),
+        // the record holds no border colour this reads, and its maximum level is not carried (above)
+        border: None,
+        lod: None,
     }
 }
 
@@ -103,6 +106,9 @@ pub fn named(constant: &str) -> Option<SamplerState> {
         max_anisotropy,
         compare: None,
         mip_lod_bias: None,
+        // the name says black or white, not the alpha: the colour is not carried
+        border: None,
+        lod: None,
     })
 }
 

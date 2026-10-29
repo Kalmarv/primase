@@ -13,6 +13,7 @@ primase-cache.workspace = true
 dxcontainer.workspace = true
 primase-foundations = { workspace = true, features = ["compress"] }
 dxil-reader.workspace = true
+dxbc-reader.workspace = true
 iridia-dxbc.workspace = true
 iridia-dxil.workspace = true
 iridia.workspace = true

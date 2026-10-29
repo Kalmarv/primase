@@ -12,3 +12,4 @@ pub mod preview;
 pub mod probe_accept;
 pub(crate) mod program_reads;
 pub mod rigid;
+pub(crate) mod sampler_pairs;

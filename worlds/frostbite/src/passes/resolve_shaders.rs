@@ -489,15 +489,12 @@ fn stage_binding(
         Vec::new()
     };
     StageBinding {
-        stage,
-        variant: None,
-        shader,
         inputs,
         constants,
         textures,
         buffers,
-        constant_buffers: Vec::new(),
         outputs,
+        ..StageBinding::new(stage, shader)
     }
 }
 

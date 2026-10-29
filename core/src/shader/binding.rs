@@ -33,13 +33,11 @@ pub enum TextureSource {
     Frame(FrameTexture),
     /// Nothing is bound and the source says no default: a consumer must not invent one.
     Missing,
-    /// A view of one of the frame's own targets, read through the sampler state the source binds with it: only in the
-    /// binding of a step of the frame's `core.render_graph` ([`crate::render_graph`]), whose targets these are. A
-    /// material's binding never states one.
-    Target {
-        view: crate::render_graph::TargetView,
-        sampler: SamplerState,
-    },
+    /// A view of one of the frame's own targets: only in the binding of a step of the frame's `core.render_graph`
+    /// ([`crate::render_graph`]), whose targets these are. A material's binding never states one. It is read through the
+    /// program's samplers, whose states the stage states ([`StageBinding::samplers`]): a sampler's state belongs to the
+    /// sampler, which one texture may be read through several of.
+    Target { view: crate::render_graph::TargetView },
 }
 /// Where a stage binding stands, which decides what its texture slots may bind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,13 +47,23 @@ pub(crate) enum BindingPlace {
     /// A step of the frame's `core.render_graph`, which may bind the graph's targets.
     GraphStep,
 }
-/// One texture slot: the texture resource of the shader, the sampler resource it is read through when the program
-/// has one, and what is bound.
+/// One texture slot: the texture resource of the shader, the sampler resource it is read through, and what is bound.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct TextureBinding {
     pub resource: ResourceId,
+    /// The sampler resource of the shader the program reads this texture through, where it reads it through exactly
+    /// one. `None` where the program only loads it (no sampler), reads it through several (each sampler's state is the
+    /// stage's, [`StageBinding::samplers`]), or the source does not say.
     pub sampler: Option<ResourceId>,
     pub source: TextureSource,
+}
+/// The state of one sampler resource of a program, as the source binds it ([`StageBinding::samplers`]).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct SamplerBinding {
+    /// The sampler resource of the shader.
+    pub resource: ResourceId,
+    /// Its filters, addressing, border colour, comparison and level range, each as the source states it.
+    pub state: SamplerState,
 }
 /// One shader program in a material, with the role of everything it reads and writes.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -71,6 +79,11 @@ pub struct StageBinding {
     pub inputs: Vec<InputBinding>,
     pub constants: Vec<ConstantBinding>,
     pub textures: Vec<TextureBinding>,
+    /// The state of each sampler resource of the program, where the source binds the program's samplers itself (a step
+    /// of the frame's `core.render_graph`): each a sampler of the shader, once. A sampler with no entry has no state the
+    /// source states. A material's binding states none: its sampler states are its textures'
+    /// ([`TextureSource::Texture`]).
+    pub samplers: Vec<SamplerBinding>,
     /// The buffers the program indexes at run time (tables of the draw's matrices and instances). A stage that states
     /// any states every buffer resource of its program (a table, or [`BufferSource::Unknown`] with why); empty for a
     /// source that states none, whose buffers a consumer takes as [`StageBinding::buffer`] says: unknown, with the
@@ -98,6 +111,32 @@ impl ShaderBinding {
     }
 }
 impl StageBinding {
+    /// The `stage` program `shader` with nothing bound yet: no variant, inputs, constants, textures, samplers, buffers,
+    /// constant buffers or outputs. A source fills what it states: `StageBinding { textures, ..StageBinding::new(stage,
+    /// shader) }`.
+    pub fn new(stage: Stage, shader: Entity) -> StageBinding {
+        StageBinding {
+            stage,
+            variant: None,
+            shader,
+            inputs: Vec::new(),
+            constants: Vec::new(),
+            textures: Vec::new(),
+            samplers: Vec::new(),
+            buffers: Vec::new(),
+            constant_buffers: Vec::new(),
+            outputs: Vec::new(),
+        }
+    }
+
+    /// The state the stage states for sampler `resource` ([`StageBinding::samplers`]).
+    pub fn sampler_state(&self, resource: ResourceId) -> Option<&SamplerState> {
+        self.samplers
+            .iter()
+            .find(|s| s.resource == resource)
+            .map(|s| &s.state)
+    }
+
     /// The constants whose role is [`ConstantRole::Unknown`], by name (or offset when the source names none) and why.
     /// A consumer that evaluates the stage uses it to refuse, or to say which values it left out, where zero is not a
     /// neutral value (a scale, say): it never reads an unknown constant as zero without naming it.
@@ -142,7 +181,8 @@ impl StageBinding {
         out
     }
 
-    /// The binding agrees with its program: a material's ([`BindingPlace::Material`]) binds no target of a render graph.
+    /// The binding agrees with its program: a material's ([`BindingPlace::Material`]) binds no target of a render graph
+    /// and states no sampler of its own.
     pub(crate) fn verify_in(&self, w: &crate::World, place: BindingPlace) -> Result<(), String> {
         let shader = w
             .get::<Shader>(self.shader)
@@ -338,8 +378,40 @@ impl StageBinding {
                 }
             }
         }
+        self.verify_samplers(interface, place).map_err(at)?;
         self.verify_buffers(interface, place).map_err(at)?;
         self.verify_constant_buffers(interface).map_err(at)
+    }
+
+    /// The samplers' states: each a sampler of the shader, once, and a state that agrees with itself
+    /// ([`SamplerState::verify`]); a material's binding states none (its states are its textures').
+    fn verify_samplers(&self, interface: &Interface, place: BindingPlace) -> Result<(), String> {
+        if place == BindingPlace::Material
+            && let Some(first) = self.samplers.first()
+        {
+            return Err(format!(
+                "sampler {} states its own state, which only a step of a core.render_graph may (a material's sampler states are its textures')",
+                first.resource.0
+            ));
+        }
+        for (n, s) in self.samplers.iter().enumerate() {
+            if !matches!(
+                interface.resource(s.resource).map(|r| &r.kind),
+                Some(ResourceKind::Sampler { .. })
+            ) {
+                return Err(format!("resource {} is not a sampler", s.resource.0));
+            }
+            if self.samplers[..n]
+                .iter()
+                .any(|before| before.resource == s.resource)
+            {
+                return Err(format!("sampler {} is stated twice", s.resource.0));
+            }
+            s.state
+                .verify()
+                .map_err(|why| format!("sampler {}: {why}", s.resource.0))?;
+        }
+        Ok(())
     }
 
     /// What buffer `resource` of the program holds: its entry, or, where the source states no buffers for the stage,
@@ -680,9 +752,6 @@ mod tests {
     fn binding(shader: Entity, texture: Entity) -> ShaderBinding {
         ShaderBinding {
             stages: vec![StageBinding {
-                stage: Stage::Pixel,
-                variant: None,
-                shader,
                 inputs: vec![InputBinding {
                     label: Label {
                         name: "TEXCOORD".into(),
@@ -721,8 +790,6 @@ mod tests {
                         },
                     },
                 }],
-                buffers: Vec::new(),
-                constant_buffers: Vec::new(),
                 outputs: vec![
                     OutputBinding {
                         label: Label {
@@ -744,6 +811,7 @@ mod tests {
                         },
                     },
                 ],
+                ..StageBinding::new(Stage::Pixel, shader)
             }],
             state: RenderState::default(),
         }
@@ -784,15 +852,8 @@ mod tests {
     fn buffer_binding(shader: Entity, buffers: Vec<BufferBinding>) -> ShaderBinding {
         ShaderBinding {
             stages: vec![StageBinding {
-                stage: Stage::Vertex,
-                variant: None,
-                shader,
-                inputs: Vec::new(),
-                constants: Vec::new(),
-                textures: Vec::new(),
                 buffers,
-                constant_buffers: Vec::new(),
-                outputs: Vec::new(),
+                ..StageBinding::new(Stage::Vertex, shader)
             }],
             state: RenderState::default(),
         }
@@ -1351,7 +1412,6 @@ mod tests {
                 first_layer: 0,
                 layers: 0,
             },
-            sampler: SamplerState::default(),
         };
         let err = b.verify(m, &w).unwrap_err();
         assert!(
@@ -1359,6 +1419,58 @@ mod tests {
             "{err}"
         );
         assert_eq!(b.stages[0].verify_in(&w, BindingPlace::GraphStep), Ok(()));
+    }
+    /// A sampler's state is stated by a graph step, for a sampler of the shader, once, with a state that agrees with
+    /// itself; a material's binding states none (its sampler states are its textures'), and a stated state is found by
+    /// its sampler.
+    #[test]
+    fn a_graph_step_states_its_samplers() {
+        let (w, _, _, m) = world();
+        let mut b = w.get::<ShaderBinding>(m).unwrap().clone();
+        let shadow = SamplerState {
+            wrap: [Some(AddressMode::Border); 3],
+            compare: Some(iridia_interface::Compare::LessEqual),
+            border: Some([0.0; 4]),
+            lod: Some([0.0, 0.0]),
+            ..SamplerState::default()
+        };
+        b.stages[0].samplers = vec![SamplerBinding {
+            resource: ResourceId(2),
+            state: shadow,
+        }];
+        assert_eq!(b.stages[0].verify_in(&w, BindingPlace::GraphStep), Ok(()));
+        assert_eq!(b.stages[0].sampler_state(ResourceId(2)), Some(&shadow));
+        assert_eq!(b.stages[0].sampler_state(ResourceId(1)), None);
+        let err = b.verify(m, &w).unwrap_err();
+        assert!(
+            err.contains("sampler 2 states its own state, which only a step of a core.render_graph may"),
+            "{err}"
+        );
+        let step = |samplers: Vec<SamplerBinding>| {
+            let mut s = b.stages[0].clone();
+            s.samplers = samplers;
+            s.verify_in(&w, BindingPlace::GraphStep)
+        };
+        let at = |resource: u32, state: SamplerState| SamplerBinding {
+            resource: ResourceId(resource),
+            state,
+        };
+        // the texture is no sampler
+        let err = step(vec![at(1, shadow)]).unwrap_err();
+        assert!(err.contains("resource 1 is not a sampler"), "{err}");
+        let err = step(vec![at(2, shadow), at(2, SamplerState::default())]).unwrap_err();
+        assert!(err.contains("sampler 2 is stated twice"), "{err}");
+        let reversed = SamplerState {
+            lod: Some([1.0, 0.0]),
+            ..shadow
+        };
+        let err = step(vec![at(2, reversed)]).unwrap_err();
+        assert!(err.contains("sampler 2: level range"), "{err}");
+        // the state belongs to the sampler: it serializes with it
+        let json = serde_json::to_value(&b.stages[0].samplers[0]).unwrap();
+        assert_eq!(json["resource"], serde_json::json!(2));
+        assert_eq!(json["state"]["border"], serde_json::json!([0.0, 0.0, 0.0, 0.0]));
+        assert_eq!(json["state"]["compare"], serde_json::json!("less_equal"));
     }
     /// A texture of several images fits a slot read as the dimension its shape is, and no other.
     #[test]

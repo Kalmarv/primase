@@ -891,15 +891,11 @@ pub fn resolve(
     });
     Ok(Resolution {
         stage: StageBinding {
-            stage: Stage::Pixel,
-            variant: None,
-            shader: entity,
             inputs,
             constants,
             textures: bindings,
-            buffers: Vec::new(),
-            constant_buffers: Vec::new(),
             outputs,
+            ..StageBinding::new(Stage::Pixel, entity)
         },
         policies,
     })
@@ -1432,15 +1428,10 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> 
     let palette_bound = !constant_buffers.is_empty();
     Ok(VertexBinding {
         stage: StageBinding {
-            stage: Stage::Vertex,
-            variant: None,
-            shader: entity,
             inputs,
             constants,
-            textures: Vec::new(),
-            buffers: Vec::new(),
             constant_buffers,
-            outputs: Vec::new(),
+            ..StageBinding::new(Stage::Vertex, entity)
         },
         undecided,
         palette_rows,
