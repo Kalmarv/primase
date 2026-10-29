@@ -380,6 +380,9 @@ fn recorded_state(
     }
 }
 
+/// Sampler states by program name, stage (`vertex`, `pixel`, `compute`) and register.
+type SamplerStates = BTreeMap<(String, &'static str, u32), Vec<SamplerState>>;
+
 /// The sampler states the frames bind: per program name, stage (`vertex`, `pixel`, `compute`) and register, every
 /// state some draw or dispatch of the frames' sessions binds there.
 fn frame_sampler_states(
@@ -387,7 +390,7 @@ fn frame_sampler_states(
     root: &std::path::Path,
     frames: &[String],
     names: &BTreeMap<u64, String>,
-) -> Result<BTreeMap<(String, &'static str, u32), Vec<SamplerState>>, Box<dyn std::error::Error>> {
+) -> Result<SamplerStates, Box<dyn std::error::Error>> {
     let hash = |v: &serde_json::Value| v.as_str().and_then(|h| u64::from_str_radix(h, 16).ok());
     let f = |v: &serde_json::Value| v.as_f64().unwrap();
     let u = |v: &serde_json::Value| v.as_u64().unwrap();
