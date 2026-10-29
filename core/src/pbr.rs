@@ -140,7 +140,9 @@ impl Default for Specular {
 /// A baked metal-rough material (component `pbr.material`).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PbrMaterial {
-    /// Linear RGBA, each channel within 0-1 (verified), multiplied into `base_color_texture`.
+    /// Linear RGBA multiplied into `base_color_texture`: RGB finite and >= 0, past 1 where the source's colour is
+    /// (an HDR colour a shader multiplies as it is, as Unity's `_BaseColor` may be); alpha within 0-1 (verified). A
+    /// consumer that cannot hold a channel past 1 refuses it or says so by name, never clamping it silently.
     pub base_color: [f32; 4],
     /// sRGB colour, alpha in A.
     pub base_color_texture: Option<TextureRef>,
@@ -188,8 +190,12 @@ impl Component for PbrMaterial {
     /// coordinate transform.
     fn verify(&self, _e: Entity, _w: &crate::World) -> Result<(), String> {
         let unit = |x: f32| (0.0..=1.0).contains(&x);
-        if !self.base_color.iter().all(|&c| unit(c)) {
-            return Err(format!("base colour {:?} is not within 0-1", self.base_color));
+        let [r, g, b, a] = self.base_color;
+        if ![r, g, b].iter().all(|&c| c.is_finite() && c >= 0.0) || !unit(a) {
+            return Err(format!(
+                "base colour {:?} is not finite and >= 0 with alpha within 0-1",
+                self.base_color
+            ));
         }
         for (name, x) in [
             ("metallic", self.metallic),
@@ -356,13 +362,26 @@ mod tests {
             let err = m.verify(e, &w).unwrap_err();
             assert!(err.contains(what), "{what}: {err}");
         };
-        refused(
-            PbrMaterial {
-                base_color: [1.5, 0.0, 0.0, 1.0],
-                ..ok.clone()
-            },
-            "base colour",
-        );
+        // a colour past 1 is the source's (an HDR colour), held as it is
+        let bright = PbrMaterial {
+            base_color: [26.5, 0.5, 0.0, 1.0],
+            ..ok.clone()
+        };
+        assert_eq!(bright.verify(e, &w), Ok(()));
+        for base_color in [
+            [-0.1, 0.0, 0.0, 1.0],
+            [f32::INFINITY, 0.0, 0.0, 1.0],
+            [0.0, f32::NAN, 0.0, 1.0],
+            [1.0, 1.0, 1.0, 1.5],
+        ] {
+            refused(
+                PbrMaterial {
+                    base_color,
+                    ..ok.clone()
+                },
+                "base colour",
+            );
+        }
         refused(
             PbrMaterial {
                 metallic: -0.1,

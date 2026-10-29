@@ -63,6 +63,27 @@ fn sampler(doc: &Value) -> (Filters, [Wrap; 2]) {
     primase_glb::sampler_filters(&doc["samplers"][t["sampler"].as_u64().unwrap() as usize]).unwrap()
 }
 
+/// A base colour past 1 (the source's HDR colour, which `pbr.material` holds) has no glTF form: written at 1 and said
+/// with the material's name and the colour it holds, never clamped silently.
+#[test]
+fn a_base_colour_past_one_is_written_at_one_and_said_by_name() {
+    let (mut w, m) = world(Shading::Lit, Filters::default());
+    w.get_mut::<PbrMaterial>(m).unwrap().base_color = [26.5, 0.5, 0.0, 1.0];
+    w.insert(m, primase_core::Name("bright".into()));
+    let (doc, report) = write(&w);
+    let factor: Vec<f64> = doc["materials"][0]["pbrMetallicRoughness"]["baseColorFactor"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_f64().unwrap())
+        .collect();
+    assert_eq!(factor, [1.0, 0.5, 0.0, 1.0]);
+    assert_eq!(
+        report.base_colours_past_one,
+        std::collections::BTreeMap::from([("bright: [26.5, 0.5, 0.0, 1.0]".to_owned(), 1)])
+    );
+}
+
 #[test]
 fn unlit_is_written_and_read_back() {
     let none = Filters::default();

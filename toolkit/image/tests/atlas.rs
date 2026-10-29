@@ -424,6 +424,9 @@ fn what_one_material_cannot_hold_is_refused_naming_it() {
     assert!(err.contains("double sidedness"), "{err}");
     let err = two(&|w, _, b| w.get_mut::<PbrMaterial>(b).unwrap().emissive_strength = 2.0);
     assert!(err.contains("emissive strength"), "{err}");
+    // a base colour past 1 that would be baked into 8-bit texels (the factors differ)
+    let err = two(&|w, _, b| w.get_mut::<PbrMaterial>(b).unwrap().base_color = [3.0, 1.0, 1.0, 1.0]);
+    assert!(err.contains("base colour past 1") && err.contains("3.0"), "{err}");
     let err = two(&|w, _, b| {
         let m = w.get_mut::<PbrMaterial>(b).unwrap();
         m.base_color_texture.as_mut().unwrap().texcoord = 1;

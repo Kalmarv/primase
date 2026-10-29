@@ -47,6 +47,9 @@
 //!   dropped silently; a component whose view would lose a value (a non-finite float) is an error. The
 //!   environment's ambient light has no glTF form: it is data in the scene's extras, lighting nothing, counted
 //!   (`ambient_unlit`).
+//! - **A base colour past 1** (`pbr.material` holds the source's HDR colour as it is): glTF's `baseColorFactor` is
+//!   0-1, so its channels past 1 are written as 1, and each such material is said by name with its colour
+//!   (`base_colours_past_one`).
 //! - **Levels of detail**: glTF draws one mesh per node and the writer chooses no form, so a placement of a prototype
 //!   with other forms (`core.lods` listing any) is not written, counted (`placements_with_lods`); a pipeline that wants
 //!   it drawn chooses one form per prototype first (`select-lod`). The forms are not prototypes of their own. A
@@ -362,6 +365,9 @@ pub struct WriteReport {
     /// `core.environment`'s ambient, 1 when the world has one: glTF has no ambient light, so nothing is lit by it
     /// (the scene's extras still carry it as data, unless the selection omits the environment).
     pub ambient_unlit: u64,
+    /// Materials whose base colour has a channel past 1, which glTF's `baseColorFactor` (0-1) cannot hold: written
+    /// with those channels at 1, by `"<material name>: <base colour>"`.
+    pub base_colours_past_one: BTreeMap<String, u64>,
     /// Entities with components that are not written and not counted by any field above (markers, standalone
     /// collision, ...; see the module docs). Never with a [`Selection`].
     pub entities_unwritten: u64,
@@ -481,6 +487,11 @@ impl fmt::Display for WriteReport {
             self.morph_channels_unaligned
         )?;
         writeln!(f, "ambient not lit (no glTF form) {}", self.ambient_unlit)?;
+        writeln!(
+            f,
+            "base colours past 1, written at 1 (glTF's factor is 0-1) {:?}",
+            self.base_colours_past_one
+        )?;
         write!(
             f,
             "entities not written {}: components {:?}",
@@ -1457,10 +1468,21 @@ impl Writer<'_> {
             return Ok(None);
         };
         let mut m = Map::new();
-        m.insert("name".into(), Value::String(self.name_of(e, "material")));
+        let name = self.name_of(e, "material");
+        m.insert("name".into(), Value::String(name.clone()));
         let mut pmr = Map::new();
         if pbr.base_color != [1.0; 4] {
-            pmr.insert("baseColorFactor".into(), self.factors(e, &pbr.base_color)?);
+            let mut factor = pbr.base_color;
+            if factor.iter().any(|&c| c > 1.0) {
+                // glTF's factor is 0-1: written at 1, said with the material and the colour it holds
+                *self
+                    .report
+                    .base_colours_past_one
+                    .entry(format!("{name}: {:?}", pbr.base_color))
+                    .or_default() += 1;
+                factor = factor.map(|c| c.min(1.0));
+            }
+            pmr.insert("baseColorFactor".into(), self.factors(e, &factor)?);
         }
         if let Some(t) = self.texture_info(pbr.base_color_texture, &mut sets)? {
             pmr.insert("baseColorTexture".into(), t);

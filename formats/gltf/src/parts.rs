@@ -305,6 +305,9 @@ fn omissions(report: &WriteReport, include_unplaced: bool) -> Vec<(NoticeKind, S
               reason: &dyn Fn(&str) -> String| {
         out.extend(map.iter().map(|(k, &n)| (Unsupported, reason(k), n)));
     };
+    by(&mut out, &report.base_colours_past_one, &|k| {
+        format!("base colour past 1, written at 1 (glTF's baseColorFactor is 0-1): {k}")
+    });
     by(&mut out, &report.textures_skipped, &|k| {
         format!("textures not written ({k}): their slots left empty")
     });

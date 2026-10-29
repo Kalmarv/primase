@@ -1026,6 +1026,20 @@ pub fn lower_unity_pbr(w: &mut World) -> Result<PassLog> {
         w.iter::<UnityMaterial>().map(|(e, m)| (e, m.clone())).collect();
     for (e, m) in materials {
         let p = l.lower(w, &m)?;
+        if p.base_color.iter().any(|&c| c > 1.0) {
+            // an HDR colour: held as stored, as the shader multiplies it (core holds a base colour past 1)
+            let name = w.get::<Name>(e).map_or_else(
+                || format!("{} #{}", m.material.0.file, m.material.0.path_id),
+                |n| n.0.clone(),
+            );
+            l.log.count(
+                &format!(
+                    "base colours past 1 (HDR), held as stored: {name}: {:?}",
+                    p.base_color
+                ),
+                1,
+            );
+        }
         // where it comes in the draw sequence: Unity's render queue; the layer its lowered alpha mode is
         let (queue, from) = m.render_queue(l.pipeline.as_ref());
         l.log.count(&format!("draw order from {from}"), 1);
@@ -1716,6 +1730,22 @@ mod tests {
 
     fn close(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-5
+    }
+
+    /// A colour property storing more than 1 (PEAK's HDR `_BaseColor`s) is the base colour as it is, past 1, as the
+    /// shader multiplies it: verified by core, and counted with the material and the colour.
+    #[test]
+    fn a_base_colour_stored_past_one_is_held_as_stored() {
+        let mut w = World::new();
+        let mut m = material(7, Some("Standard"), &[]);
+        m.colors = vec![("_Color".into(), [12.0, 0.5, 0.0, 1.0])];
+        let (ps, log) = lowered(&mut w, vec![m]);
+        let c = ps[0].base_color;
+        assert!(close(c[0], srgb_to_linear(12.0) as f32) && c[0] > 1.0, "{c:?}");
+        let e = w.iter::<PbrMaterial>().next().unwrap().0;
+        assert_eq!(primase_core::Component::verify(&ps[0], e, &w), Ok(()));
+        let said = format!("base colours past 1 (HDR), held as stored: sharedassets1.assets #7: {c:?}");
+        assert_eq!(log.counts.get(&said), Some(&1), "{:?}", log.counts);
     }
 
     const BLINN_PHONG: &str = "Blinn-Phong as GGX: roughness (2 / (128 _Shininess + 2))^(1/4), _SpecColor the \

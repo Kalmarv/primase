@@ -527,6 +527,19 @@ impl PackTextureAtlas {
         for slot in SLOTS {
             let present = mats.iter().any(|m| slot_ref(m, slot).is_some());
             let baked = mats.iter().any(|m| !same_factor(&mats[0], m, slot));
+            if baked
+                && slot == TextureSlot::BaseColor
+                && let Some((m, &e)) = mats
+                    .iter()
+                    .zip(set)
+                    .find(|(m, _)| m.base_color.iter().any(|&c| c > 1.0))
+            {
+                return Err(format!(
+                    "material {} has a base colour past 1 ({:?}), which cannot be multiplied into 8-bit texels",
+                    label(w, e),
+                    m.base_color
+                ));
+            }
             if !present && !baked {
                 continue;
             }
