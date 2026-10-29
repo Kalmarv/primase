@@ -95,8 +95,8 @@ dependencies = [
 
 [[package]]
 name = "anvil-formats"
-version = "0.1.1"
-source = "git+https://github.com/Kalmarv/anvil-formats?rev=0116497caf8d6265e40b0e008b4b86c06e6d2931#0116497caf8d6265e40b0e008b4b86c06e6d2931"
+version = "0.1.2"
+source = "git+https://github.com/Kalmarv/anvil-formats?rev=9504711959f9443aa95ae1d2d80686238528e4a4#9504711959f9443aa95ae1d2d80686238528e4a4"
 dependencies = [
  "dxcontainer",
  "primase-foundations",
@@ -194,6 +194,19 @@ name = "bitflags"
 version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
+
+[[package]]
+name = "blake3"
+version = "1.8.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d9e454fc11f76977dc803893aff6304ed33d6a26efae8696573bea74baa27ae"
+dependencies = [
+ "arrayvec",
+ "cc",
+ "cfg-if",
+ "constant_time_eq",
+ "cpufeatures",
+]
 
 [[package]]
 name = "block-buffer"
@@ -367,6 +380,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
+name = "constant_time_eq"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
+
+[[package]]
 name = "core_detect"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -456,8 +475,8 @@ dependencies = [
 
 [[package]]
 name = "dxbc-reader"
-version = "0.3.0"
-source = "git+https://github.com/Kalmarv/dx?rev=6b3595b70afc1cf906f047e74102ce5967c822c3#6b3595b70afc1cf906f047e74102ce5967c822c3"
+version = "0.4.0"
+source = "git+https://github.com/Kalmarv/dx?rev=c32a3689c6bd26a0ee0777664091f4e04843927e#c32a3689c6bd26a0ee0777664091f4e04843927e"
 dependencies = [
  "dxcontainer",
  "thiserror",
@@ -465,8 +484,8 @@ dependencies = [
 
 [[package]]
 name = "dxcontainer"
-version = "0.3.0"
-source = "git+https://github.com/Kalmarv/dx?rev=6b3595b70afc1cf906f047e74102ce5967c822c3#6b3595b70afc1cf906f047e74102ce5967c822c3"
+version = "0.4.0"
+source = "git+https://github.com/Kalmarv/dx?rev=c32a3689c6bd26a0ee0777664091f4e04843927e#c32a3689c6bd26a0ee0777664091f4e04843927e"
 dependencies = [
  "primase-foundations",
  "thiserror",
@@ -474,8 +493,8 @@ dependencies = [
 
 [[package]]
 name = "dxil-reader"
-version = "0.3.0"
-source = "git+https://github.com/Kalmarv/dx?rev=6b3595b70afc1cf906f047e74102ce5967c822c3#6b3595b70afc1cf906f047e74102ce5967c822c3"
+version = "0.4.0"
+source = "git+https://github.com/Kalmarv/dx?rev=c32a3689c6bd26a0ee0777664091f4e04843927e#c32a3689c6bd26a0ee0777664091f4e04843927e"
 dependencies = [
  "dxcontainer",
  "primase-foundations",
@@ -574,10 +593,11 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 [[package]]
 name = "fromsoft-formats"
 version = "0.10.0"
-source = "git+https://github.com/Kalmarv/fromsoft-formats?rev=a0262e237f3ec30fc3333d86a09aee69f07d70cd#a0262e237f3ec30fc3333d86a09aee69f07d70cd"
+source = "git+https://github.com/Kalmarv/fromsoft-formats?rev=cb272ef3fe26bc2de7718d609b295a254f33bce6#cb272ef3fe26bc2de7718d609b295a254f33bce6"
 dependencies = [
  "aes",
  "encoding_rs",
+ "flate2",
  "half",
  "havok-formats",
  "num-bigint",
@@ -585,12 +605,13 @@ dependencies = [
  "serde",
  "sha2",
  "thiserror",
+ "zstd",
 ]
 
 [[package]]
 name = "frostbite-formats"
-version = "0.2.2"
-source = "git+https://github.com/Kalmarv/frostbite-formats?rev=9999cc28a8329382949078b878bdf6d69dfa5938#9999cc28a8329382949078b878bdf6d69dfa5938"
+version = "0.3.0"
+source = "git+https://github.com/Kalmarv/frostbite-formats?rev=413a70b3f90c0c8bbb7377df09d1c3edcb743a86#413a70b3f90c0c8bbb7377df09d1c3edcb743a86"
 dependencies = [
  "half",
  "primase-foundations",
@@ -726,8 +747,8 @@ dependencies = [
 
 [[package]]
 name = "havok-formats"
-version = "0.8.1"
-source = "git+https://github.com/Kalmarv/havok-formats?rev=252cec530cae8563abe865571ce2899a93458af9#252cec530cae8563abe865571ce2899a93458af9"
+version = "0.9.0"
+source = "git+https://github.com/Kalmarv/havok-formats?rev=f681dd1375a6d05666cc998c581defe47d326063#f681dd1375a6d05666cc998c581defe47d326063"
 dependencies = [
  "primase-foundations",
  "thiserror",
@@ -763,8 +784,8 @@ dependencies = [
 
 [[package]]
 name = "iridia"
-version = "0.3.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=ef932827bf428ae16541084af30c8e7c563fd73b#ef932827bf428ae16541084af30c8e7c563fd73b"
+version = "0.4.0"
+source = "git+https://github.com/Kalmarv/iridia?rev=50664d509282ac30de6d84b5f6e82ce6d00ebe78#50664d509282ac30de6d84b5f6e82ce6d00ebe78"
 dependencies = [
  "iridia-interface",
  "primase-naga",
@@ -774,8 +795,8 @@ dependencies = [
 
 [[package]]
 name = "iridia-d3d9"
-version = "0.3.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=ef932827bf428ae16541084af30c8e7c563fd73b#ef932827bf428ae16541084af30c8e7c563fd73b"
+version = "0.4.0"
+source = "git+https://github.com/Kalmarv/iridia?rev=50664d509282ac30de6d84b5f6e82ce6d00ebe78#50664d509282ac30de6d84b5f6e82ce6d00ebe78"
 dependencies = [
  "iridia",
  "iridia-interface",
@@ -784,8 +805,8 @@ dependencies = [
 
 [[package]]
 name = "iridia-dxbc"
-version = "0.3.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=ef932827bf428ae16541084af30c8e7c563fd73b#ef932827bf428ae16541084af30c8e7c563fd73b"
+version = "0.4.0"
+source = "git+https://github.com/Kalmarv/iridia?rev=50664d509282ac30de6d84b5f6e82ce6d00ebe78#50664d509282ac30de6d84b5f6e82ce6d00ebe78"
 dependencies = [
  "dxbc-reader",
  "dxcontainer",
@@ -795,8 +816,8 @@ dependencies = [
 
 [[package]]
 name = "iridia-dxil"
-version = "0.3.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=ef932827bf428ae16541084af30c8e7c563fd73b#ef932827bf428ae16541084af30c8e7c563fd73b"
+version = "0.4.0"
+source = "git+https://github.com/Kalmarv/iridia?rev=50664d509282ac30de6d84b5f6e82ce6d00ebe78#50664d509282ac30de6d84b5f6e82ce6d00ebe78"
 dependencies = [
  "dxcontainer",
  "dxil-reader",
@@ -807,8 +828,8 @@ dependencies = [
 
 [[package]]
 name = "iridia-exec"
-version = "0.3.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=ef932827bf428ae16541084af30c8e7c563fd73b#ef932827bf428ae16541084af30c8e7c563fd73b"
+version = "0.4.0"
+source = "git+https://github.com/Kalmarv/iridia?rev=50664d509282ac30de6d84b5f6e82ce6d00ebe78#50664d509282ac30de6d84b5f6e82ce6d00ebe78"
 dependencies = [
  "half",
  "iridia",
@@ -820,16 +841,16 @@ dependencies = [
 
 [[package]]
 name = "iridia-interface"
-version = "0.3.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=ef932827bf428ae16541084af30c8e7c563fd73b#ef932827bf428ae16541084af30c8e7c563fd73b"
+version = "0.4.0"
+source = "git+https://github.com/Kalmarv/iridia?rev=50664d509282ac30de6d84b5f6e82ce6d00ebe78#50664d509282ac30de6d84b5f6e82ce6d00ebe78"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "iridia-mojo"
-version = "0.3.0"
-source = "git+https://github.com/Kalmarv/iridia?rev=ef932827bf428ae16541084af30c8e7c563fd73b#ef932827bf428ae16541084af30c8e7c563fd73b"
+version = "0.4.0"
+source = "git+https://github.com/Kalmarv/iridia?rev=50664d509282ac30de6d84b5f6e82ce6d00ebe78#50664d509282ac30de6d84b5f6e82ce6d00ebe78"
 dependencies = [
  "iridia",
  "primase-naga",
@@ -913,8 +934,8 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "lua51-bytecode"
-version = "0.1.1"
-source = "git+https://github.com/Kalmarv/lua51-bytecode?rev=ac973a0ed6719561e3663b2632acc8b21c6c9a66#ac973a0ed6719561e3663b2632acc8b21c6c9a66"
+version = "0.2.0"
+source = "git+https://github.com/Kalmarv/lua51-bytecode?rev=cfa3a7001c3f8d240a2360b7598609d420d99243#cfa3a7001c3f8d240a2360b7598609d420d99243"
 dependencies = [
  "primase-foundations",
  "thiserror",
@@ -981,8 +1002,8 @@ dependencies = [
 
 [[package]]
 name = "monogame-formats"
-version = "0.1.0"
-source = "git+https://github.com/Kalmarv/monogame-formats?rev=690d34826b9d6e79fc29e1bf758084805a7a9487#690d34826b9d6e79fc29e1bf758084805a7a9487"
+version = "0.1.1"
+source = "git+https://github.com/Kalmarv/monogame-formats?rev=05cc99b09f9d9b897ce1360ceffdbab5222ecc08#05cc99b09f9d9b897ce1360ceffdbab5222ecc08"
 dependencies = [
  "primase-foundations",
  "thiserror",
@@ -990,8 +1011,8 @@ dependencies = [
 
 [[package]]
 name = "morpheme-formats"
-version = "0.1.0"
-source = "git+https://github.com/Kalmarv/morpheme-formats?rev=e70416a8d7dfbb8b532f3959867e332ac4695e3b#e70416a8d7dfbb8b532f3959867e332ac4695e3b"
+version = "0.1.1"
+source = "git+https://github.com/Kalmarv/morpheme-formats?rev=40467a65f41d052534d90c18d980ef3329967de7#40467a65f41d052534d90c18d980ef3329967de7"
 dependencies = [
  "primase-foundations",
  "thiserror",
@@ -1110,6 +1131,12 @@ name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
+
+[[package]]
+name = "pkg-config"
+version = "0.3.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "png"
@@ -1256,8 +1283,8 @@ dependencies = [
 
 [[package]]
 name = "primase-foundations"
-version = "0.2.1"
-source = "git+https://github.com/Kalmarv/primase-foundations?rev=6201129940a970d87392ab2ee59cd0c9c04ed7e4#6201129940a970d87392ab2ee59cd0c9c04ed7e4"
+version = "0.3.0"
+source = "git+https://github.com/Kalmarv/primase-foundations?rev=f9cf4ece1de77fce9d703c63347dd70b728b7c0e#f9cf4ece1de77fce9d703c63347dd70b728b7c0e"
 dependencies = [
  "flate2",
  "half",
@@ -1565,9 +1592,10 @@ dependencies = [
 
 [[package]]
 name = "primase-testdata"
-version = "0.1.0"
-source = "git+https://github.com/Kalmarv/primase-testdata?rev=d0258530ca9ca0ca74e957716ae8683e7facc8a7#d0258530ca9ca0ca74e957716ae8683e7facc8a7"
+version = "0.1.1"
+source = "git+https://github.com/Kalmarv/primase-testdata?rev=b719ce1f1e64c0af0d624a5445cc4871a2cf9977#b719ce1f1e64c0af0d624a5445cc4871a2cf9977"
 dependencies = [
+ "blake3",
  "serde_json",
  "thiserror",
  "toml",
@@ -1672,8 +1700,8 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rage-engine-formats"
-version = "0.1.1"
-source = "git+https://github.com/Kalmarv/rage-engine-formats?rev=cefd7cac0c898959ad71526efc31f445471f895c#cefd7cac0c898959ad71526efc31f445471f895c"
+version = "0.2.0"
+source = "git+https://github.com/Kalmarv/rage-engine-formats?rev=6866413a19f4c25dc9270fe8bc0849518c220ca4#6866413a19f4c25dc9270fe8bc0849518c220ca4"
 dependencies = [
  "aes",
  "indexmap",
@@ -1715,8 +1743,8 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rme-formats"
-version = "0.2.0"
-source = "git+https://github.com/Kalmarv/rme-formats?rev=3efc3e999415764887199ce475f41737a0c0e43f#3efc3e999415764887199ce475f41737a0c0e43f"
+version = "0.3.0"
+source = "git+https://github.com/Kalmarv/rme-formats?rev=6d51f9f02ba40ae7770ba57fce0346669a6b8f49#6d51f9f02ba40ae7770ba57fce0346669a6b8f49"
 dependencies = [
  "half",
  "lua51-bytecode",
@@ -1730,8 +1758,8 @@ dependencies = [
 
 [[package]]
 name = "rsx-reader"
-version = "0.3.0"
-source = "git+https://github.com/Kalmarv/dx?rev=6b3595b70afc1cf906f047e74102ce5967c822c3#6b3595b70afc1cf906f047e74102ce5967c822c3"
+version = "0.4.0"
+source = "git+https://github.com/Kalmarv/dx?rev=c32a3689c6bd26a0ee0777664091f4e04843927e#c32a3689c6bd26a0ee0777664091f4e04843927e"
 dependencies = [
  "primase-foundations",
  "thiserror",
@@ -2129,7 +2157,7 @@ checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
 [[package]]
 name = "unity-formats"
 version = "0.2.0"
-source = "git+https://github.com/Kalmarv/unity-formats?rev=96610beca1d59964a1c05402a2249980824dca30#96610beca1d59964a1c05402a2249980824dca30"
+source = "git+https://github.com/Kalmarv/unity-formats?rev=aa1c81aa3545ddcd22e611cdea6dfaac97010d34#aa1c81aa3545ddcd22e611cdea6dfaac97010d34"
 dependencies = [
  "half",
  "primase-foundations",
@@ -2253,6 +2281,34 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+
+[[package]]
+name = "zstd"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e91ee311a569c327171651566e07972200e76fcfe2242a4fa446149a3881c08a"
+dependencies = [
+ "zstd-safe",
+]
+
+[[package]]
+name = "zstd-safe"
+version = "7.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64d80649ab6db9d9f6f9c80a40becd948eda4714a0a5ac8c4d157a32231c7882"
+dependencies = [
+ "zstd-sys",
+]
+
+[[package]]
+name = "zstd-sys"
+version = "2.1.2+zstd.1.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "481ada9c543b2323cbb7bbdbb5249177fbf0188ed959ed2c15e4b22421c84ed3"
+dependencies = [
+ "cc",
+ "pkg-config",
+]
 
 [[package]]
 name = "zune-core"
