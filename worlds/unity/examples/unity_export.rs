@@ -132,7 +132,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             choice: primase_core::LodChoice::Finest,
         }),
         Box::new(primase_unity::drawn::UnityDrawn),
-        Box::new(primase_unity::lower::LowerUnityPbr),
+        // colours as the player's programs read them, in the colour space its PlayerSettings state
+        Box::new(primase_unity::lower::LowerUnityPbr {
+            colour_space: player
+                .colour_space()?
+                .ok_or("the player has no PlayerSettings stating its colour space")?
+                .into(),
+        }),
         Box::new(primase_unity::lower_terrain::LowerUnityTerrain),
         Box::new(primase_unity::lower_collision::LowerUnityCollision),
         // URP's intensity has no unit: taken at face value as candela (lux), the calibration this program states

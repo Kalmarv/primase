@@ -10,6 +10,8 @@ use unity_formats::program::Parameters;
 use unity_formats::scene::{UnityAmbient, UnityBehaviour, UnityFog};
 use unity_formats::shader::{PassKind, ShaderPass, SubShader};
 
+use crate::colour::{ColourSpace, as_programs_read};
+
 /// A record read from a player's files, carried as a component: serialises as the record does.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
@@ -433,7 +435,8 @@ pub fn queue_tag(v: &str) -> Option<i32> {
 /// A material as Unity stores it: its shader's name and render state (its subshaders, as
 /// [`unity_formats::material::ShaderData`]), saved properties in stored order (colours gamma-encoded, as stored; a non-finite
 /// number a shader property stores as a sentinel kept as stored, [`UnityMaterial::float`] and [`UnityMaterial::color`]
-/// giving it to no lowering), keywords, tags and render queue.
+/// giving it to no lowering), the colour properties its shader declares `[HDR]` (whose stored value the programs read
+/// as it is: [`UnityMaterial::color_as_read`]), keywords, tags and render queue.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct UnityMaterial {
     pub material: UnityObject,
@@ -445,6 +448,9 @@ pub struct UnityMaterial {
     pub ints: Vec<(String, i64)>,
     #[serde(serialize_with = "stored_colors")]
     pub colors: Vec<(String, [f32; 4])>,
+    /// The colour properties its shader declares `[HDR]` (`ShaderPropertyFlags.HDR`,
+    /// [`unity_formats::program::colour_properties`]), in the shader's order; empty without a shader.
+    pub hdr_colors: Vec<String>,
     pub keywords: Vec<String>,
     pub tags: Vec<(String, String)>,
     pub render_queue: i64,
@@ -533,6 +539,18 @@ impl UnityMaterial {
             .filter(|v| v.iter().all(|x| x.is_finite()))
     }
 
+    /// What a player in colour space `space` hands its programs of colour property `name` ([`Self::color`]):
+    /// [`crate::colour::as_programs_read`] by whether its shader declares it `[HDR]`; `None` where it is unset.
+    pub fn color_as_read(&self, name: &str, space: ColourSpace) -> Option<[f32; 4]> {
+        self.color(name).map(|c| self.stored_as_read(name, c, space))
+    }
+
+    /// [`Self::color_as_read`] of colour property `name` storing `stored` (a value the material leaves unset, the
+    /// shader's default).
+    pub fn stored_as_read(&self, name: &str, stored: [f32; 4], space: ColourSpace) -> [f32; 4] {
+        as_programs_read(stored, self.hdr_colors.iter().any(|h| h == name), space)
+    }
+
     /// The float and colour properties holding a non-finite number, as stored.
     pub fn non_finite(&self) -> usize {
         self.floats.iter().filter(|(_, v)| !v.is_finite()).count()
@@ -558,8 +576,8 @@ impl UnityMaterial {
 impl Component for UnityMaterial {
     const NAME: &'static str = "unity.material";
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
-    /// 2: `shader_state`; 3: each shader pass's `kind`; 4: each texture property's `referenced`.
-    const VERSION: u32 = 4;
+    /// 2: `shader_state`; 3: each shader pass's `kind`; 4: each texture property's `referenced`; 5: `hdr_colors`.
+    const VERSION: u32 = 5;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         primase_core::json::to_value(self).map(Some)
     }
@@ -1096,6 +1114,7 @@ mod tests {
             floats: Vec::new(),
             ints: Vec::new(),
             colors: Vec::new(),
+            hdr_colors: Vec::new(),
             keywords: Vec::new(),
             tags: Vec::new(),
             render_queue,

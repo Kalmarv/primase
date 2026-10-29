@@ -13,8 +13,9 @@
 //!   A material with none for a stage's variants is counted and the stage left out (no fragment variant: the
 //!   material is left unbound).
 //! - **Constants.** Each constant-buffer field the variant's parameters name, at its byte offset: a float or int
-//!   property of the material by the field's name; a colour property (`colour-space=linear`: converted from its
-//!   gamma-encoded storage to linear, as Unity sets colours in a linear-colour-space player; `gamma`: as stored); a
+//!   property of the material by the field's name; a colour property as the player's programs read it
+//!   ([`crate::colour`]: `colour-space=linear`, a plain property converted from its gamma-encoded storage by Unity's
+//!   `GammaToLinearSpace`, an `[HDR]` one as stored; `gamma`: every colour as stored); a
 //!   texture's `<name>_ST` tiling (scale x, y, offset x, y); Unity's own matrices and camera position as the roles of
 //!   [`builtin`]; its vectors that pack several values (the screen size, the projection's flip and planes, the time) part
 //!   by part ([`builtin_parts`]: each part's own role, the derived ones `Unknown`); anything else `Unknown` with the
@@ -70,6 +71,7 @@ use primase_core::{
     shader::TextureSource,
 };
 
+use crate::colour::ColourSpace;
 use crate::components::{UnityMaterial, UnityProgramVariant, UnityPrograms, UnityTexEnv};
 use crate::passes::draw_keywords::{SceneKeywords, receivers};
 use unity_formats::program::{Parameters, Shape};
@@ -81,17 +83,23 @@ pub struct ResolveUnityShaders {
     keywords: Vec<String>,
     /// Whether the scene's state gives each material its renderer keywords too.
     scene: bool,
-    linear: bool,
+    /// The player's colour space.
+    colour_space: ColourSpace,
 }
 
 impl ResolveUnityShaders {
-    pub fn new(tier: usize, keywords: Vec<String>, linear: bool) -> Self {
+    pub fn new(tier: usize, keywords: Vec<String>, colour_space: ColourSpace) -> Self {
         ResolveUnityShaders {
             tier,
             keywords,
             scene: false,
-            linear,
+            colour_space,
         }
+    }
+
+    /// Whether the player works in the linear colour space.
+    fn linear(&self) -> bool {
+        self.colour_space == ColourSpace::Linear
     }
 
     /// Also give each material the keywords the scene's own state gives its draws ([`SceneKeywords`]).
@@ -116,25 +124,9 @@ impl ResolveUnityShaders {
                 _ => named.push(k.to_owned()),
             }
         }
-        let pass = Self::new(
-            tier,
-            named,
-            g.choice::<ColourSpace>("colour-space") == ColourSpace::Linear,
-        );
+        let pass = Self::new(tier, named, g.choice::<ColourSpace>("colour-space"));
         Ok(if scene { pass.with_scene_keywords() } else { pass })
     }
-}
-
-/// Option `colour-space`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ColourSpace {
-    Linear,
-    Gamma,
-}
-
-impl Choice for ColourSpace {
-    const VALUES: &'static [(&'static str, Self)] =
-        &[("linear", ColourSpace::Linear), ("gamma", ColourSpace::Gamma)];
 }
 
 /// `resolve-unity-shaders`' declaration ([`primase_core::pass::PassRegistry::add`]): the variant and colour space
@@ -150,7 +142,7 @@ pub const RESOLVE_UNITY_SHADERS: PassSpec = PassSpec {
         ),
         OptionSpec::choice::<ColourSpace>(
             "colour-space",
-            "whether the player sets colour properties linear (converted from storage) or as stored",
+            "the player's colour space (its PlayerSettings): linear converts a plain colour property from storage, gamma              reads every colour as stored",
         ),
     ],
     make: |g| Ok(Box::new(ResolveUnityShaders::from_given(g)?)),
@@ -290,18 +282,14 @@ fn words(values: &[f32]) -> Vec<u32> {
     values.iter().map(|v| v.to_bits()).collect()
 }
 
-/// The material's value for a constant-buffer field, if it has one.
-fn material_value(m: &UnityMaterial, name: &str, linear: bool) -> Option<Vec<u32>> {
+/// The material's value for a constant-buffer field, if it has one: a colour as a player in colour space `space` hands
+/// it to its programs.
+fn material_value(m: &UnityMaterial, name: &str, space: ColourSpace) -> Option<Vec<u32>> {
     if let Some(v) = m.float(name) {
         return Some(words(&[v]));
     }
-    if let Some(c) = m.color(name) {
-        let l = |x: f32| primase_foundations::color::srgb_to_linear(f64::from(x)) as f32;
-        return Some(words(&if linear {
-            [l(c[0]), l(c[1]), l(c[2]), c[3]]
-        } else {
-            c
-        }));
+    if let Some(c) = m.color_as_read(name, space) {
+        return Some(words(&c));
     }
     if let Some((_, i)) = m.ints.iter().find(|(k, _)| k == name) {
         return Some(words(&[*i as f32]));
@@ -332,7 +320,7 @@ pub fn buffer_constants(
     resource: iridia_interface::ResourceId,
     size: u32,
     m: &UnityMaterial,
-    linear: bool,
+    space: ColourSpace,
     reads: Option<&WordsRead>,
     counts: &mut BTreeMap<String, u64>,
 ) -> Vec<ConstantBinding> {
@@ -346,7 +334,7 @@ pub fn buffer_constants(
         for f in &cb.fields {
             let bytes = field_bytes(f.shape, f.array_size);
             let whole = |role| vec![(0, bytes, role)];
-            let parts = if let Some(mut w) = material_value(m, &f.name, linear) {
+            let parts = if let Some(mut w) = material_value(m, &f.name, space) {
                 w.truncate(bytes as usize / 4);
                 bump("constants set from the material's properties");
                 whole(ConstantRole::Material(w))
@@ -774,16 +762,7 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
                     }
                 },
             ),
-            (
-                "colour-space".to_owned(),
-                if self.linear {
-                    ColourSpace::Linear
-                } else {
-                    ColourSpace::Gamma
-                }
-                .text()
-                .to_owned(),
-            ),
+            ("colour-space".to_owned(), self.colour_space.text().to_owned()),
         ])
     }
     fn requires(&self) -> &[&'static str] {
@@ -1029,7 +1008,7 @@ impl ResolveUnityShaders {
                         r.id,
                         layout.size,
                         m,
-                        self.linear,
+                        self.colour_space,
                         reads,
                         counts,
                     ));
@@ -1052,7 +1031,7 @@ impl ResolveUnityShaders {
                             }
                         }
                         Some(t) => {
-                            resolve_texture(m, defaults, &variant.keywords, self.linear, &t.name, counts)
+                            resolve_texture(m, defaults, &variant.keywords, self.linear(), &t.name, counts)
                         }
                     };
                     textures.push(TextureBinding {
@@ -1275,6 +1254,7 @@ mod tests {
             floats: vec![("_Cutoff".into(), 0.25)],
             ints: vec![("_Mode".into(), 2)],
             colors: vec![("_BaseColor".into(), [0.5, 1.0, 0.0, 0.75])],
+            hdr_colors: Vec::new(),
             keywords: Vec::new(),
             tags: Vec::new(),
             render_queue: -1,
@@ -1333,7 +1313,7 @@ mod tests {
             ResourceId(7),
             192,
             &material(),
-            true,
+            ColourSpace::Linear,
             None,
             &mut counts,
         );
@@ -1372,7 +1352,7 @@ mod tests {
             ResourceId(7),
             192,
             &material(),
-            false,
+            ColourSpace::Gamma,
             None,
             &mut BTreeMap::new(),
         );
@@ -1387,7 +1367,7 @@ mod tests {
             ResourceId(8),
             32,
             &material(),
-            true,
+            ColourSpace::Linear,
             None,
             &mut BTreeMap::new(),
         );
@@ -1492,7 +1472,7 @@ mod tests {
             ResourceId(1),
             64,
             &material(),
-            true,
+            ColourSpace::Linear,
             Some(&reads),
             &mut counts,
         );
@@ -1528,7 +1508,7 @@ mod tests {
             ResourceId(1),
             64,
             &material(),
-            true,
+            ColourSpace::Linear,
             None,
             &mut BTreeMap::new(),
         );
@@ -1843,7 +1823,7 @@ mod tests {
         assert!(make(&[("tier", "1")]).is_err());
         assert!(make(&[("tier", "x"), ("keywords", "none"), ("colour-space", "linear")]).is_err());
         let p = make(&[("tier", "1"), ("keywords", "A+B"), ("colour-space", "gamma")]).unwrap();
-        let typed = ResolveUnityShaders::new(1, vec!["A".into(), "B".into()], false);
+        let typed = ResolveUnityShaders::new(1, vec!["A".into(), "B".into()], ColourSpace::Gamma);
         assert_eq!(p.options(), primase_core::pass::Pass::options(&typed));
         assert_eq!(p.options()["keywords"], "A+B");
         let scene = make(&[("tier", "1"), ("keywords", "B+scene"), ("colour-space", "linear")]).unwrap();

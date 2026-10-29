@@ -13,21 +13,27 @@ use std::collections::BTreeSet;
 
 use inputs::{Game, Tool, debug, install_file, tool};
 use primase_core::convert::Reader;
-use primase_core::pass::{PassManager, PassRegistry, RunReport};
+use primase_core::pass::{Choice, PassManager, PassRegistry, RunReport};
 use primase_core::{Name, Texture, World};
 use primase_skatebird::SkatebirdReader;
+use primase_unity::colour::ColourSpace;
 use sha2::{Digest, Sha256};
 use unity_formats::TypeTreePackage;
 use unity_formats::player::Player;
 
-/// The lab's lowering of a Unity level, with the Voronoi bake after the materials.
-const PASSES: [&str; 5] = [
-    "resolve-state{assign-class=lod:lod0}",
-    "select-lod{form=default}",
-    "unity-drawn",
-    "lower-unity-pbr",
-    "lower-skatebird-voronoi{keywords=DIRECTIONAL,tier=3,cells=2,max-texels=256}",
-];
+/// The lab's lowering of a Unity level, with the Voronoi bake after the materials, in the player's colour space
+/// `space` (`linear` or `gamma`, its PlayerSettings').
+fn passes(space: &str) -> [String; 5] {
+    [
+        "resolve-state{assign-class=lod:lod0}".to_owned(),
+        "select-lod{form=default}".to_owned(),
+        "unity-drawn".to_owned(),
+        format!("lower-unity-pbr{{colour-space={space}}}"),
+        format!(
+            "lower-skatebird-voronoi{{keywords=DIRECTIONAL,tier=3,colour-space={space},cells=2,max-texels=256}}"
+        ),
+    ]
+}
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -56,7 +62,15 @@ fn the_baked_maps_of_a_level() {
     primase_core::register(&mut registry);
     primase_unity::register(&mut registry);
     primase_skatebird::register(&mut registry);
-    let pipelines: Vec<_> = PASSES.iter().map(|text| registry.parse(text).unwrap()).collect();
+    let space: ColourSpace = player
+        .colour_space()
+        .unwrap()
+        .expect("SkateBIRD's PlayerSettings state its colour space")
+        .into();
+    let pipelines: Vec<_> = passes(space.text())
+        .iter()
+        .map(|text| registry.parse(text).unwrap())
+        .collect();
     let manager = PassManager::new(registry);
     let started = std::time::Instant::now();
     let mut report = RunReport::default();

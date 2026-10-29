@@ -3,8 +3,9 @@
 //!
 //! - [`bind`]: the program (its DXBC, whose reflection Unity strips) with the constant layout its parameters record
 //!   (field name, buffer slot, byte offset), and its texture slots by property name.
-//! - [`constants`]: the material's floats, colours (gamma-encoded as stored, set linear, as Unity sets them in a
-//!   linear-space player) and texture tilings (`<property>_ST`: scale x and y, offset x and y) into that layout; the
+//! - [`constants`]: the material's floats, colours (as the player's programs read them, [`crate::colour`]: in a
+//!   linear-space player a plain property converted from its gamma-encoded storage, an `[HDR]` one as stored) and
+//!   texture tilings (`<property>_ST`: scale x and y, offset x and y) into that layout; the
 //!   fields no property sets stay zero, named in what it returns.
 //! - [`directional_light`]: the built-in renderer's forward globals for one directional light and nothing else (the
 //!   caller's choice of light; ambient, probes and shadows stated off), returning the fields it set so the caller
@@ -17,9 +18,9 @@ use std::collections::BTreeMap;
 
 use iridia_exec::{Field, Filtering, Layout, SampledTexture, SamplerUse, evaluate::Constants};
 use primase_core::{ColorSpace, Texture};
-use primase_foundations::color::srgb_to_linear;
 use primase_foundations::{sampling::Address, sampling::Transfer};
 
+use crate::colour::ColourSpace;
 use crate::components::{UnityMaterial, UnityProgramVariant, UnityTexture};
 use crate::invalid;
 use unity_formats::Result;
@@ -97,8 +98,9 @@ pub struct MaterialConstants {
     pub unset: Vec<String>,
 }
 
-/// The material's properties in `b`'s layout (see the module documentation).
-pub fn constants(b: &Bound, m: &UnityMaterial) -> Result<MaterialConstants> {
+/// The material's properties in `b`'s layout (see the module documentation), its colours as a player in colour space
+/// `space` hands them to its programs.
+pub fn constants(b: &Bound, m: &UnityMaterial, space: ColourSpace) -> Result<MaterialConstants> {
     let mut c = Constants::new(&b.layout);
     let mut set = std::collections::BTreeSet::new();
     let mut put = |c: &mut Constants, name: &str, values: &[f32]| -> Result<()> {
@@ -113,9 +115,8 @@ pub fn constants(b: &Bound, m: &UnityMaterial) -> Result<MaterialConstants> {
         }
     }
     for (name, _) in &m.colors {
-        if let Some(v) = m.color(name) {
-            let l = |x: f32| srgb_to_linear(f64::from(x)) as f32;
-            put(&mut c, name, &[l(v[0]), l(v[1]), l(v[2]), v[3]])?;
+        if let Some(v) = m.color_as_read(name, space) {
+            put(&mut c, name, &v)?;
         }
     }
     for t in &m.textures {
@@ -301,7 +302,7 @@ mod tests {
             .unwrap()
             .sample([0.5, 0.5], Lod::Level(0.0))
             .unwrap();
-        assert!((s[0] - srgb_to_linear(128.0 / 255.0) as f32).abs() < 1e-6);
+        assert!((s[0] - primase_foundations::color::srgb_to_linear(128.0 / 255.0) as f32).abs() < 1e-6);
         assert!((s[3] - 128.0 / 255.0).abs() < 1e-6);
     }
 

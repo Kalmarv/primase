@@ -11,6 +11,9 @@
 //! - [`texture`]: textures (formats, mip chains, rows flipped top first, normal map conventions).
 //! - [`program`]: a shader's compiled programs (variants, constant-buffer layouts, bind slots, code).
 //!
+//! [`colour`]: what a player's programs read of a stored colour (Unity's gamma-to-linear conversion, an `[HDR]`
+//! property's stored value, the player's colour space).
+//!
 //! [`bind`]: a variant of a material's compiled programs (`unity.programs`, [`program::read_programs`]) bound for
 //! evaluation on the CPU: its constant layout, the material's properties and Unity's built-in lighting globals in it,
 //! its textures as Unity samples them.
@@ -31,6 +34,7 @@ pub mod animator;
 pub mod bind;
 pub mod blend_tree;
 pub mod clipdata;
+pub mod colour;
 pub mod components;
 #[cfg(test)]
 mod fixture;
@@ -47,9 +51,10 @@ pub use read::{asset, convert, level, mesh, program, texture};
 
 /// Registers the Unity passes by their declarations: `unity-drawn`, `lower-unity-pbr`, `lower-unity-terrain`,
 /// `lower-unity-collision`, `lower-unity-lights`, `lower-unity-animator`, `resolve-unity-shaders` and
-/// `lower-unity-ambient`. All but `resolve-unity-shaders`, `lower-unity-lights` and `lower-unity-ambient` take no
-/// option: each lowers by Unity's own rules (its module says which), not by a choice a program makes.
-/// `resolve-unity-shaders` requires the variant and colour space; `lower-unity-lights` the calibration of URP's unitless
+/// `lower-unity-ambient`. All but `lower-unity-pbr`, `resolve-unity-shaders`, `lower-unity-lights` and
+/// `lower-unity-ambient` take no option: each lowers by Unity's own rules (its module says which), not by a choice a
+/// program makes. `lower-unity-pbr` requires the player's colour space (its PlayerSettings'); `resolve-unity-shaders`
+/// the variant and colour space; `lower-unity-lights` the calibration of URP's unitless
 /// intensity (`candela-per-unit`, no default); `lower-unity-ambient` that same calibration and the program's choice for
 /// an ambient whose probe is not read (`probe`, no default).
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
@@ -95,6 +100,7 @@ mod tests {
         let required = [
             "lower-unity-ambient",
             "lower-unity-lights",
+            "lower-unity-pbr",
             "resolve-unity-shaders",
         ];
         for name in names {

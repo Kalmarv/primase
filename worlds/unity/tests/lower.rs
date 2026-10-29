@@ -9,7 +9,10 @@
 //! exactly; the base colour (our texture x factor, encoded as the port encodes it) against the port's image, the largest
 //! channel difference reported by shader family: within 1 for the shaders modelled (the port's BC1-3 decoder rounds
 //! palettes otherwise, see the texture gate), and for shaders not modelled too, listed per material, except where the
-//! port picks other properties (named). Differences in rule are counted by name. The port materials not among our
+//! port picks other properties (named). A base colour declared `[HDR]` (BruteForce's snow `_Color`), whose stored value
+//! Unity hands the programs as it is, the port converts from gamma as it does any colour: such a material's port image
+//! is compared, within 1, with the level lowered with no property `[HDR]` instead. Differences in rule are counted by
+//! name. The port materials not among our
 //! level's are exactly those an independent reader's scan (`oracles.unitypy.sledding/scan.json`) finds drawn only by
 //! BruteForce's runtime snow (instances `src` `addsnow`), by no renderer, tree or terrain.
 
@@ -95,11 +98,25 @@ fn lowering_matches_the_port() {
     let mut w = World::new();
     read_level(&player, "level1", &mut w).unwrap();
     as_stored(&mut w);
-    let log = lower(&mut w);
+    let log = lower(&mut w, &player);
     println!(
         "lowering: {:?}\napproximations: {:#?}",
         log.counts, log.approximations
     );
+    // the port converts every colour property from gamma to linear, one declared [HDR] too, whose stored value Unity
+    // hands the programs as it is: the level lowered with no property [HDR] is the port's reading of those colours
+    let mut plain = World::new();
+    read_level(&player, "level1", &mut plain).unwrap();
+    as_stored(&mut plain);
+    let entities: Vec<_> = plain.iter::<UnityMaterial>().map(|(e, _)| e).collect();
+    for e in entities {
+        plain.get_mut::<UnityMaterial>(e).unwrap().hdr_colors.clear();
+    }
+    lower(&mut plain, &player);
+    let as_plain: BTreeMap<(String, i64), primase_core::Entity> = plain
+        .iter::<UnityMaterial>()
+        .map(|(e, m)| ((m.material.file.clone(), m.material.path_id), e))
+        .collect();
     let joined: Json = serde_json::from_slice(&std::fs::read(&joined).unwrap()).unwrap();
     let ours: BTreeMap<(String, i64), (primase_core::Entity, &UnityMaterial)> = w
         .iter::<UnityMaterial>()
@@ -215,6 +232,34 @@ fn lowering_matches_the_port() {
             panic!("16-bit image")
         };
         let (width, height, mine) = base_image(&w, p);
+        let p_plain: &PbrMaterial = plain.get(as_plain[&key]).unwrap();
+        if p_plain.base_color != p.base_color {
+            // an [HDR] base colour: the port's image is the plain reading's, to within its rounding
+            let (_, _, as_port) = base_image(&plain, p_plain);
+            let opaque = port_alpha == "opaque";
+            let max = as_port
+                .iter()
+                .zip(&theirs)
+                .enumerate()
+                .filter(|(i, _)| !(opaque && i % 4 == 3))
+                .map(|(_, (a, b))| a.abs_diff(*b))
+                .max()
+                .unwrap_or(0);
+            if max > 1 || (png.width, png.height) != (width, height) {
+                fields_differ.push(format!(
+                    "{}: the port's base colour is not the plain reading of its [HDR] colour (largest difference {max})",
+                    j["key"]
+                ));
+            } else {
+                *rules
+                    .entry(
+                        "port converts an [HDR] base colour from gamma (Unity hands its stored value to the programs)"
+                            .into(),
+                    )
+                    .or_default() += 1;
+            }
+            continue;
+        }
         let img = images.entry(family.clone()).or_default();
         img.materials += 1;
         if (png.width, png.height) != (width, height) {
@@ -359,7 +404,7 @@ fn draw_order_follows_the_render_queue() {
     let mut w = World::new();
     read_level(&player, "level1", &mut w).unwrap();
     as_stored(&mut w);
-    lower(&mut w);
+    lower(&mut w, &player);
     let water: Vec<_> = w
         .iter::<UnityMaterial>()
         .filter(|(e, m)| {
@@ -396,7 +441,7 @@ fn water_and_trees_state_their_usage() {
     let mut w = World::new();
     read_level(&player, "level1", &mut w).unwrap();
     as_stored(&mut w);
-    lower(&mut w);
+    lower(&mut w, &player);
     let used: BTreeSet<(String, MaterialUsage)> = w
         .iter::<MaterialUsage>()
         .map(|(e, u)| (w.get::<Name>(e).unwrap().0.clone(), *u))
@@ -434,7 +479,7 @@ fn lit_slots_sample_through_the_base_maps_tiling() {
     let mut w = World::new();
     read_level(&player, "level1", &mut w).unwrap();
     as_stored(&mut w);
-    lower(&mut w);
+    lower(&mut w, &player);
     let tiling = |m: &UnityMaterial, name: &str| {
         m.textures
             .iter()
@@ -466,14 +511,19 @@ fn lit_slots_sample_through_the_base_maps_tiling() {
     assert!(slots > 0);
 }
 
-/// `lower-unity-pbr` through the manager, so its declared effects are checked too; its log.
-fn lower(w: &mut World) -> primase_core::pass::PassLog {
+/// `lower-unity-pbr` through the manager, so its declared effects are checked too, in `player`'s colour space; its log.
+fn lower(w: &mut World, player: &Player) -> primase_core::pass::PassLog {
+    let colour_space = player
+        .colour_space()
+        .unwrap()
+        .expect("the player's PlayerSettings state its colour space")
+        .into();
     let mut run = primase_core::pass::RunReport::default();
     primase_core::pass::PassManager::new(primase_core::pass::PassRegistry::new())
         .run(
             w,
             &primase_core::pass::Pipeline {
-                passes: vec![Box::new(LowerUnityPbr)],
+                passes: vec![Box::new(LowerUnityPbr { colour_space })],
             },
             &mut run,
         )

@@ -60,6 +60,7 @@ use unity_formats::material::{ShaderData, UnityMaterialData};
 use unity_formats::mesh::{MeshSkin, UnityMeshData};
 use unity_formats::pipeline::UnityUrpSettings;
 use unity_formats::player::{ObjRef, Player, QualityLevel, SkinWeights};
+use unity_formats::program::colour_properties;
 use unity_formats::scene::{
     Animator, IDENTITY, LodGroup, Matrix, OffFlag, Renderer, RendererSkin, Scene, SceneJoint, Skipped,
 };
@@ -702,7 +703,8 @@ pub(crate) struct Builder<'a> {
     layers: BTreeMap<ObjRef, Entity>,
     collider_meshes: BTreeMap<ObjRef, std::sync::Arc<ColliderMesh>>,
     physic_materials: BTreeMap<ObjRef, UnityPhysicMaterial>,
-    shaders: BTreeMap<ObjRef, ShaderData>,
+    /// Each shader read: its name and render state, and its colour properties declared `[HDR]`.
+    shaders: BTreeMap<ObjRef, (ShaderData, Vec<String>)>,
     /// The off flags' state axes, and LOD axes by group (and tree instance).
     axes: OffAxes,
     lod_axes: BTreeMap<(ObjRef, Option<(Entity, usize)>), Entity>,
@@ -1465,13 +1467,20 @@ impl Builder<'_> {
         Ok(out)
     }
 
-    fn shader(&mut self, r: &ObjRef) -> Result<ShaderData> {
+    /// Shader `r`'s name and render state, and the colour properties it declares `[HDR]`.
+    fn shader(&mut self, r: &ObjRef) -> Result<(ShaderData, Vec<String>)> {
         if let Some(s) = self.shaders.get(r) {
             return Ok(s.clone());
         }
-        let s = ShaderData::read(self.player, r)?;
-        self.shaders.insert(r.clone(), s.clone());
-        Ok(s)
+        let data = ShaderData::read(self.player, r)?;
+        let hdr = colour_properties(self.player, r)?
+            .into_iter()
+            .filter(|p| p.hdr())
+            .map(|p| p.name)
+            .collect();
+        let read = (data, hdr);
+        self.shaders.insert(r.clone(), read.clone());
+        Ok(read)
     }
 
     pub(crate) fn material(&mut self, w: &mut World, r: &ObjRef) -> Result<Entity> {
@@ -1480,9 +1489,9 @@ impl Builder<'_> {
         }
         let m = UnityMaterialData::read(self.player, r)?;
         let shader = m.shader.as_ref().map(|s| self.shader(s)).transpose()?;
-        let (shader, shader_state) = match shader {
-            Some(s) => (Some(s.name), s.subshaders),
-            None => (None, Vec::new()),
+        let (shader, shader_state, hdr_colors) = match shader {
+            Some((s, hdr)) => (Some(s.name), s.subshaders, hdr),
+            None => (None, Vec::new(), Vec::new()),
         };
         let mut textures = Vec::with_capacity(m.textures.len());
         for (name, env) in &m.textures {
@@ -1515,6 +1524,7 @@ impl Builder<'_> {
                 floats: m.floats,
                 ints: m.ints,
                 colors: m.colors,
+                hdr_colors,
                 keywords: m.keywords,
                 tags: m.tags,
                 render_queue: m.render_queue,

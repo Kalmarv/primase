@@ -9,7 +9,9 @@
 //! pattern never repeats, so no texture holds it exactly over a surface.
 //!
 //! The program's choices, all required options (no defaults): the variant (`keywords`, the renderer's global keywords
-//! Unity draws it with, `;`-separated, and `tier`, the hardware tier; [`UnityPrograms::variant`]), the block (`cells`,
+//! Unity draws it with, `;`-separated, and `tier`, the hardware tier; [`UnityPrograms::variant`]), the player's colour
+//! space (`colour-space`, its PlayerSettings': what the program reads of the material's colours,
+//! [`primase_unity::colour`]), the block (`cells`,
 //! K >= 2 cells a side) and the resolution (`max-texels`, at most this many texels per cell; a map larger is baked at
 //! it, counted). The evaluation grid, (K + 1) x texels a side, is at most 4096, an option beyond it refused.
 //!
@@ -42,12 +44,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use iridia_exec::{Input, Lane, PixelShader};
-use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{PbrMaterial, Specular, TextureRef, UvTransform};
 use primase_core::{ColorSpace, Entity, Name, NormalConvention, TexFormat, TexRole, Texture, World};
 use primase_foundations::color::linear_to_srgb;
 use primase_foundations::parallel::Threads;
 use primase_unity::bind::{bind, constants, directional_light, sampled_texture};
+use primase_unity::colour::ColourSpace;
 use primase_unity::components::{UnityMaterial, UnityPrograms, UnityTexEnv, UnityTexture};
 
 /// The shader this pass bakes.
@@ -252,19 +255,27 @@ fn slot(texture: Entity, m: &UnityMaterial, property: &str, cells: u32) -> Textu
 type Omitted = String;
 
 /// The `Bumped Specular Voronoi` materials baked (module documentation), with the program's stated variant (`keywords`,
-/// `tier`), block (`cells`) and resolution (`max_texels`). Made only by [`LowerSkatebirdVoronoi::new`] or from options
+/// `tier`), the player's colour space (`colour_space`, which decides what the program reads of the material's colours),
+/// block (`cells`) and resolution (`max_texels`). Made only by [`LowerSkatebirdVoronoi::new`] or from options
 /// ([`LOWER_SKATEBIRD_VORONOI`]), which check them: its fields are private, read through its accessors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LowerSkatebirdVoronoi {
     keywords: Vec<String>,
     tier: usize,
+    colour_space: ColourSpace,
     cells: u32,
     max_texels: u32,
 }
 
 impl LowerSkatebirdVoronoi {
     /// The pass with its stated options, checked: K at least 2, texels at least 1, the grid within 4096.
-    pub fn new(keywords: Vec<String>, tier: usize, cells: u32, max_texels: u32) -> Result<Self, String> {
+    pub fn new(
+        keywords: Vec<String>,
+        tier: usize,
+        colour_space: ColourSpace,
+        cells: u32,
+        max_texels: u32,
+    ) -> Result<Self, String> {
         if cells < 2 {
             return Err(format!("cells={cells}: a block that tiles needs at least 2"));
         }
@@ -283,6 +294,7 @@ impl LowerSkatebirdVoronoi {
         Ok(LowerSkatebirdVoronoi {
             keywords,
             tier,
+            colour_space,
             cells,
             max_texels,
         })
@@ -296,6 +308,11 @@ impl LowerSkatebirdVoronoi {
     /// The hardware tier the variant is stated in.
     pub fn tier(&self) -> usize {
         self.tier
+    }
+
+    /// The player's colour space.
+    pub fn colour_space(&self) -> ColourSpace {
+        self.colour_space
     }
 
     /// K: cells a side of the baked block.
@@ -324,6 +341,7 @@ impl LowerSkatebirdVoronoi {
         Self::new(
             keywords,
             number("tier")? as usize,
+            g.choice::<ColourSpace>("colour-space"),
             number("cells")?,
             number("max-texels")?,
         )
@@ -346,7 +364,7 @@ impl LowerSkatebirdVoronoi {
             )));
         };
         let bound = bind(VORONOI, variant).map_err(|err| err.to_string())?;
-        let mut mc = constants(&bound, m).map_err(|err| err.to_string())?;
+        let mut mc = constants(&bound, m, self.colour_space).map_err(|err| err.to_string())?;
         // the albedo baked without `_Color`: the material's base colour factor keeps it
         mc.constants
             .set("_Color", &[1.0; 4])
@@ -554,6 +572,10 @@ pub const LOWER_SKATEBIRD_VORONOI: PassSpec = PassSpec {
             "the renderer's keywords the variant is stated with, joined by ; (possibly none)",
         ),
         OptionSpec::required("tier", "3", "the hardware tier the variant is stated in"),
+        OptionSpec::choice::<ColourSpace>(
+            "colour-space",
+            "the player's colour space (its PlayerSettings): linear converts a plain colour property from storage, gamma              reads every colour as stored",
+        ),
         OptionSpec::required("cells", "2", "K: cells a side of the baked block, at least 2"),
         OptionSpec::required(
             "max-texels",
@@ -572,6 +594,7 @@ impl Pass for LowerSkatebirdVoronoi {
         Options::from([
             ("keywords".to_owned(), self.keywords.join(";")),
             ("tier".to_owned(), self.tier.to_string()),
+            ("colour-space".to_owned(), self.colour_space.text().to_owned()),
             ("cells".to_owned(), self.cells.to_string()),
             ("max-texels".to_owned(), self.max_texels.to_string()),
         ])
@@ -653,6 +676,7 @@ mod tests {
             floats: Vec::new(),
             ints: Vec::new(),
             colors: Vec::new(),
+            hdr_colors: Vec::new(),
             keywords: Vec::new(),
             tags: Vec::new(),
             render_queue: -1,
@@ -716,11 +740,13 @@ mod tests {
         let all = [
             ("keywords", "DIRECTIONAL"),
             ("tier", "3"),
+            ("colour-space", "linear"),
             ("cells", "2"),
             ("max-texels", "1024"),
         ];
         let make = |o: &Options| LOWER_SKATEBIRD_VORONOI.instance(o);
-        let pass = LowerSkatebirdVoronoi::new(vec!["DIRECTIONAL".into()], 3, 2, 1024).unwrap();
+        let pass =
+            LowerSkatebirdVoronoi::new(vec!["DIRECTIONAL".into()], 3, ColourSpace::Linear, 2, 1024).unwrap();
         assert_eq!(make(&o(&all)).unwrap().options(), pass.options());
         assert_eq!(
             (pass.keywords(), pass.tier(), pass.cells(), pass.max_texels()),
@@ -742,13 +768,14 @@ mod tests {
         assert!(with("max-texels", "0").is_err());
         assert!(with("max-texels", "2048").is_err());
         // no overflow on the grid check: refused, not wrapped or panicking
-        assert!(LowerSkatebirdVoronoi::new(Vec::new(), 0, u32::MAX, 1).is_err());
-        assert!(LowerSkatebirdVoronoi::new(Vec::new(), 0, 2, u32::MAX).is_err());
+        assert!(LowerSkatebirdVoronoi::new(Vec::new(), 0, ColourSpace::Linear, u32::MAX, 1).is_err());
+        assert!(LowerSkatebirdVoronoi::new(Vec::new(), 0, ColourSpace::Linear, 2, u32::MAX).is_err());
+        assert!(with("colour-space", "srgb").is_err());
         assert!(with("tier", "x").is_err());
         assert!(with("extra", "1").is_err());
         assert_eq!(
             with("keywords", "").unwrap().options(),
-            LowerSkatebirdVoronoi::new(Vec::new(), 3, 2, 1024)
+            LowerSkatebirdVoronoi::new(Vec::new(), 3, ColourSpace::Linear, 2, 1024)
                 .unwrap()
                 .options()
         );

@@ -56,7 +56,10 @@
 //! nothing (`Cull Off`, its own or bound to a property such as URP Lit's `_Cull`); without a draw pass, where the
 //! material's `_Cull` is 0.
 //!
-//! Colour properties are gamma-encoded as stored and become linear. The base map's tiling becomes every slot's
+//! Colour properties become what the player's programs read of them ([`crate::colour`]): in a linear colour space
+//! player (option `colour-space=linear`, the player's PlayerSettings) a plain property's stored gamma-encoded value
+//! through Unity's `GammaToLinearSpace` (the sRGB curve below 1, `pow(v, 2.2)` from 1 up), an `[HDR]` one's as
+//! stored; in a gamma one (`colour-space=gamma`) every colour as stored. The base map's tiling becomes every slot's
 //! [`UvTransform`] (origin moved to top-left): URP Lit's vertex pass computes one coordinate,
 //! `TRANSFORM_TEX(texcoord, _BaseMap)` (`LitForwardPass.hlsl`), and its surface input samples the base, metallic,
 //! normal, occlusion and emission maps with it (`InitializeStandardLitSurfaceData`, `LitInput.hlsl`), so the other
@@ -76,7 +79,7 @@
 
 use std::collections::BTreeMap;
 
-use primase_core::pass::{Pass, PassLog, PassSpec};
+use primase_core::pass::{Choice, OptionSpec, Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode, PbrMaterial, Specular, TextureRef, UvTransform, Wrap};
 use primase_core::{
     ColorSpace, Entity, Name, NormalBasis, NormalConvention, NormalGreen, NormalX, NormalZ, TexRole, Texture,
@@ -86,6 +89,7 @@ use primase_core::{DrawLayer, DrawOrder, MaterialUsage, VertexColor};
 use primase_foundations::{color::linear_to_srgb, color::srgb_to_linear};
 use primase_texcodec::TexDecoder;
 
+use crate::colour::ColourSpace;
 use crate::components::{UnityMaterial, UnityRenderSettings, UnityTexEnv, UnityTexture};
 use crate::invalid;
 use unity_formats::Result;
@@ -246,12 +250,6 @@ fn other_base(m: &UnityMaterial) -> (&'static str, Option<&'static str>) {
     )
 }
 
-/// A gamma-encoded colour as linear RGB and its alpha.
-fn linear(c: [f32; 4]) -> [f32; 4] {
-    let l = |x: f32| srgb_to_linear(f64::from(x)) as f32;
-    [l(c[0]), l(c[1]), l(c[2]), c[3]]
-}
-
 fn byte(x: f64) -> u8 {
     (x.clamp(0.0, 1.0) * 255.0).round() as u8
 }
@@ -400,6 +398,8 @@ struct Lowering {
     derived: BTreeMap<(Entity, Derived), Entity>,
     /// The player's render pipeline (`unity.render_settings`), which decides the pass a material draws with.
     pipeline: Option<RenderPipeline>,
+    /// The player's colour space, which decides what its programs read of a stored colour.
+    space: ColourSpace,
 }
 
 /// The last render queue Unity draws with the opaque objects (`RenderQueue.GeometryLast`; `RenderQueueRange.opaque`
@@ -645,6 +645,11 @@ impl Lowering {
         Ok(Some(r))
     }
 
+    /// What the programs read of colour property `name`, its shader's `default` where the material leaves it unset.
+    fn colour(&self, m: &UnityMaterial, name: &str, default: [f32; 4]) -> [f32; 4] {
+        m.stored_as_read(name, m.color(name).unwrap_or(default), self.space)
+    }
+
     fn lower(&mut self, w: &mut World, m: &UnityMaterial) -> Result<PbrMaterial> {
         // a property storing a non-finite sentinel reads as unset (its default), counted
         let non_finite = m.non_finite() as u64;
@@ -670,7 +675,9 @@ impl Lowering {
             | Family::UnlitColor => ("_MainTex", Some("_Color")),
             Family::Other => other_base(m),
         };
-        p.base_color = linear(color.and_then(|c| m.color(c)).unwrap_or([1.0; 4]));
+        p.base_color = color
+            .and_then(|c| m.color_as_read(c, self.space))
+            .unwrap_or([1.0; 4]);
         let tiling = tiling(m, tex);
         // Unlit/Color samples no texture: a `_MainTex` left from another shader is not its
         if fam != Family::UnlitColor
@@ -912,7 +919,7 @@ impl Lowering {
         match legacy {
             Legacy::BlinnPhong => {
                 p.roughness = blinn_phong_roughness(f("_Shininess", 0.078125));
-                let c = linear(m.color("_SpecColor").unwrap_or([0.5, 0.5, 0.5, 1.0]));
+                let c = self.colour(m, "_SpecColor", [0.5, 0.5, 0.5, 1.0]);
                 p.specular = Some(Specular {
                     factor: 1.0,
                     // the gloss, `_MainTex`'s alpha (A is the strength `KHR_materials_specular` reads)
@@ -935,7 +942,7 @@ impl Lowering {
                 self.log.count("Lambert as diffuse only (specular factor 0)", 1);
                 // `o.Emission = c.rgb * tex2D(_Illum, IN.uv_Illum).a`, c = `_MainTex` x `_Color` (`_Emission` scales
                 // the lightmapper's meta pass only)
-                let c = linear(m.color("_Color").unwrap_or([1.0; 4]));
+                let c = self.colour(m, "_Color", [1.0; 4]);
                 (p.emissive, p.emissive_strength) = emission(&mut self.log, [c[0], c[1], c[2]]);
                 let base = m.texture("_MainTex");
                 let illum = m.texture("_Illum");
@@ -964,7 +971,7 @@ impl Lowering {
 
     /// Unlit/Color: `_Color` drawn as it is, unlit: emitted over a black surface without specular.
     fn unlit_color(&mut self, m: &UnityMaterial, p: &mut PbrMaterial) {
-        let c = linear(m.color("_Color").unwrap_or([1.0; 4]));
+        let c = self.colour(m, "_Color", [1.0; 4]);
         (p.emissive, p.emissive_strength) = emission(&mut self.log, [c[0], c[1], c[2]]);
         p.base_color = [0.0, 0.0, 0.0, c[3]];
         p.specular = Some(NO_SPECULAR);
@@ -994,7 +1001,7 @@ impl Lowering {
             p.normal_scale = f("_BumpScale", 1.0);
         }
         if m.keyword("_EMISSION") {
-            let c = linear(m.color("_EmissionColor").unwrap_or([0.0, 0.0, 0.0, 1.0]));
+            let c = self.colour(m, "_EmissionColor", [0.0, 0.0, 0.0, 1.0]);
             (p.emissive, p.emissive_strength) = emission(&mut self.log, [c[0], c[1], c[2]]);
             if let Some(env) = m.texture("_EmissionMap") {
                 p.emissive_texture = self.color(w, env, tiling)?;
@@ -1013,28 +1020,30 @@ impl Lowering {
     }
 }
 
-/// Lower every `unity.material` to a `pbr.material` on the same entity (see the module documentation).
-pub fn lower_unity_pbr(w: &mut World) -> Result<PassLog> {
+/// Lower every `unity.material` to a `pbr.material` on the same entity (see the module documentation), its colours as
+/// a player in colour space `space` hands them to its programs.
+pub fn lower_unity_pbr(w: &mut World, space: ColourSpace) -> Result<PassLog> {
     let mut l = Lowering {
         log: PassLog::default(),
         derived: BTreeMap::new(),
         pipeline: w
             .resource::<UnityRenderSettings>()
             .and_then(|s| s.pipeline.clone()),
+        space,
     };
     let materials: Vec<(Entity, UnityMaterial)> =
         w.iter::<UnityMaterial>().map(|(e, m)| (e, m.clone())).collect();
     for (e, m) in materials {
         let p = l.lower(w, &m)?;
         if p.base_color.iter().any(|&c| c > 1.0) {
-            // an HDR colour: held as stored, as the shader multiplies it (core holds a base colour past 1)
+            // an HDR colour: held as the programs read it, as the shader multiplies it (core holds a base colour past 1)
             let name = w.get::<Name>(e).map_or_else(
                 || format!("{} #{}", m.material.0.file, m.material.0.path_id),
                 |n| n.0.clone(),
             );
             l.log.count(
                 &format!(
-                    "base colours past 1 (HDR), held as stored: {name}: {:?}",
+                    "base colours past 1 (HDR), held as the programs read them: {name}: {:?}",
                     p.base_color
                 ),
                 1,
@@ -1075,20 +1084,33 @@ pub fn lower_unity_pbr(w: &mut World) -> Result<PassLog> {
     Ok(l.log)
 }
 
-/// [`lower_unity_pbr`] as a pass.
+/// [`lower_unity_pbr`] as a pass, for a player in colour space `colour_space`.
 #[derive(Debug, Clone, Copy)]
-pub struct LowerUnityPbr;
+pub struct LowerUnityPbr {
+    pub colour_space: ColourSpace,
+}
 
-/// `lower-unity-pbr`'s declaration ([`primase_core::pass::PassRegistry::add`]): no options, it lowers by Unity's own rules.
+/// `lower-unity-pbr`'s declaration ([`primase_core::pass::PassRegistry::add`]): it lowers by Unity's own rules, in the
+/// colour space the player states (required: the player's, read from its PlayerSettings).
 pub const LOWER_UNITY_PBR: PassSpec = PassSpec {
     name: "lower-unity-pbr",
-    options: &[],
-    make: |_| Ok(Box::new(LowerUnityPbr)),
+    options: &[OptionSpec::choice::<ColourSpace>(
+        "colour-space",
+        "the player's colour space (its PlayerSettings): linear converts a plain colour property from storage, gamma          reads every colour as stored",
+    )],
+    make: |g| {
+        Ok(Box::new(LowerUnityPbr {
+            colour_space: g.choice::<ColourSpace>("colour-space"),
+        }))
+    },
 };
 
 impl Pass for LowerUnityPbr {
     fn name(&self) -> &'static str {
         "lower-unity-pbr"
+    }
+    fn options(&self) -> primase_core::pass::Options {
+        primase_core::pass::Options::from([("colour-space".to_owned(), self.colour_space.text().to_owned())])
     }
     fn requires(&self) -> &[&'static str] {
         &["unity.material"]
@@ -1116,7 +1138,7 @@ impl Pass for LowerUnityPbr {
          occlusion and emission; blend modes, detail and parallax maps not represented"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
-        let r = lower_unity_pbr(w).map_err(|e| e.to_string())?;
+        let r = lower_unity_pbr(w, self.colour_space).map_err(|e| e.to_string())?;
         log.absorb(r);
         Ok(())
     }
@@ -1127,6 +1149,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
+    use crate::colour::gamma_to_linear;
     use crate::components::Stored;
     use crate::fixture;
     use unity_formats::player::ObjRef;
@@ -1143,6 +1166,7 @@ mod tests {
             floats: Vec::new(),
             ints: Vec::new(),
             colors: Vec::new(),
+            hdr_colors: Vec::new(),
             keywords: keywords.iter().map(|k| k.to_string()).collect(),
             tags: Vec::new(),
             render_queue: -1,
@@ -1182,7 +1206,7 @@ mod tests {
                 e
             })
             .collect();
-        let log = lower_unity_pbr(&mut w).unwrap();
+        let log = lower_unity_pbr(&mut w, ColourSpace::Linear).unwrap();
         for (e, (m, want)) in entities.iter().zip(&cases) {
             assert_eq!(usage(m), *want, "{:?}", m.material);
             assert_eq!(w.get::<MaterialUsage>(*e).copied(), *want, "{:?}", m.material);
@@ -1228,7 +1252,7 @@ mod tests {
                 e
             })
             .collect();
-        let log = lower_unity_pbr(&mut w).unwrap();
+        let log = lower_unity_pbr(&mut w, ColourSpace::Linear).unwrap();
         (
             es.iter()
                 .map(|e| w.get::<PbrMaterial>(*e).unwrap().alpha_mode)
@@ -1565,7 +1589,7 @@ mod tests {
         let (a, b) = (w.spawn(), w.spawn());
         w.insert(a, mapped);
         w.insert(b, plain);
-        lower_unity_pbr(&mut w).unwrap();
+        lower_unity_pbr(&mut w, ColourSpace::Linear).unwrap();
         let p = w.get::<PbrMaterial>(a).unwrap().clone();
         let main = Some(UvTransform::from_bottom_left([0.1; 2], [0.0, 0.9]));
         for (slot, r) in [
@@ -1637,7 +1661,7 @@ mod tests {
                     e
                 })
                 .collect();
-            lower_unity_pbr(&mut w).unwrap();
+            lower_unity_pbr(&mut w, ColourSpace::Linear).unwrap();
             es.iter()
                 .map(|e| w.get::<PbrMaterial>(*e).unwrap().double_sided)
                 .collect::<Vec<_>>()
@@ -1669,7 +1693,7 @@ mod tests {
                 e
             })
             .collect();
-        let log = lower_unity_pbr(&mut w).unwrap();
+        let log = lower_unity_pbr(&mut w, ColourSpace::Linear).unwrap();
         let marks: Vec<Option<VertexColor>> = es.iter().map(|e| w.get::<VertexColor>(*e).copied()).collect();
         assert_eq!(marks, [Some(VertexColor::Ignored), None, None]);
         assert_eq!(
@@ -1705,8 +1729,17 @@ mod tests {
         }
     }
 
-    /// Lower `materials` (built-in pipeline) in `w`: each one's `pbr.material`, and the log.
+    /// Lower `materials` (built-in pipeline, a linear colour space player) in `w`: each one's `pbr.material`, and the log.
     fn lowered(w: &mut World, materials: Vec<UnityMaterial>) -> (Vec<PbrMaterial>, PassLog) {
+        lowered_in(w, materials, ColourSpace::Linear)
+    }
+
+    /// [`lowered`] in a player of colour space `space`.
+    fn lowered_in(
+        w: &mut World,
+        materials: Vec<UnityMaterial>,
+        space: ColourSpace,
+    ) -> (Vec<PbrMaterial>, PassLog) {
         w.insert_resource(UnityRenderSettings {
             pipeline: Some(RenderPipeline::BuiltIn),
             ..Default::default()
@@ -1719,7 +1752,7 @@ mod tests {
                 e
             })
             .collect();
-        let log = lower_unity_pbr(w).unwrap();
+        let log = lower_unity_pbr(w, space).unwrap();
         (
             es.iter()
                 .map(|e| w.get::<PbrMaterial>(*e).unwrap().clone())
@@ -1732,20 +1765,61 @@ mod tests {
         (a - b).abs() < 1e-5
     }
 
-    /// A colour property storing more than 1 (PEAK's HDR `_BaseColor`s) is the base colour as it is, past 1, as the
-    /// shader multiplies it: verified by core, and counted with the material and the colour.
+    /// A plain colour property storing more than 1 is the base colour a linear player's programs read, past 1: Unity's
+    /// `GammaToLinearSpace`, `pow(v, 2.2)` from 1 up (12 -> 237.8), the sRGB curve below (0.5 -> 0.214); verified by
+    /// core, and counted with the material and the colour.
     #[test]
-    fn a_base_colour_stored_past_one_is_held_as_stored() {
+    fn a_plain_base_colour_stored_past_one_is_unity_s_linear_colour() {
         let mut w = World::new();
         let mut m = material(7, Some("Standard"), &[]);
         m.colors = vec![("_Color".into(), [12.0, 0.5, 0.0, 1.0])];
         let (ps, log) = lowered(&mut w, vec![m]);
         let c = ps[0].base_color;
-        assert!(close(c[0], srgb_to_linear(12.0) as f32) && c[0] > 1.0, "{c:?}");
+        assert_eq!(c, [12f64.powf(2.2) as f32, srgb_to_linear(0.5) as f32, 0.0, 1.0]);
         let e = w.iter::<PbrMaterial>().next().unwrap().0;
         assert_eq!(primase_core::Component::verify(&ps[0], e, &w), Ok(()));
-        let said = format!("base colours past 1 (HDR), held as stored: sharedassets1.assets #7: {c:?}");
+        let said = format!(
+            "base colours past 1 (HDR), held as the programs read them: sharedassets1.assets #7: {c:?}"
+        );
         assert_eq!(log.counts.get(&said), Some(&1), "{:?}", log.counts);
+    }
+
+    /// A colour property its shader declares `[HDR]` (PEAK's `W/Peak_Standard` `_BaseColor`, M_Rock_Crystal's stored
+    /// value) is read by a linear player's programs as stored, in range or past 1; a plain one beside it is converted
+    /// (URP Lit's `_EmissionColor` is `[HDR]`, here its `_BaseColor` too). A gamma player reads every colour as stored.
+    #[test]
+    fn an_hdr_colour_property_and_a_gamma_player_s_colours_are_read_as_stored() {
+        let stored = [11.984_314, 0.0, 0.866_145_3, 0.988_235_3];
+        let lit = |hdr: &[&str]| {
+            let mut m = material(9, Some("Universal Render Pipeline/Lit"), &["_EMISSION"]);
+            m.colors = vec![
+                ("_BaseColor".into(), stored),
+                ("_EmissionColor".into(), [0.5, 0.25, 0.0, 1.0]),
+            ];
+            m.hdr_colors = hdr.iter().map(|h| (*h).to_owned()).collect();
+            m
+        };
+        let (ps, _) = lowered(&mut World::new(), vec![lit(&["_BaseColor", "_EmissionColor"])]);
+        assert_eq!(ps[0].base_color, stored);
+        assert_eq!((ps[0].emissive, ps[0].emissive_strength), ([0.5, 0.25, 0.0], 1.0));
+        let (ps, _) = lowered(&mut World::new(), vec![lit(&["_EmissionColor"])]);
+        assert_eq!(
+            ps[0].base_color,
+            [
+                gamma_to_linear(11.984_314),
+                0.0,
+                gamma_to_linear(0.866_145_3),
+                0.988_235_3
+            ]
+        );
+        assert!(
+            (ps[0].base_color[0] - 236.020_13).abs() < 1e-4,
+            "{:?}",
+            ps[0].base_color
+        );
+        let (ps, _) = lowered_in(&mut World::new(), vec![lit(&[])], ColourSpace::Gamma);
+        assert_eq!(ps[0].base_color, stored);
+        assert_eq!(ps[0].emissive, [0.5, 0.25, 0.0]);
     }
 
     const BLINN_PHONG: &str = "Blinn-Phong as GGX: roughness (2 / (128 _Shininess + 2))^(1/4), _SpecColor the \
