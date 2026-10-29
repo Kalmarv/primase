@@ -70,7 +70,10 @@ impl Inputs {
             return i;
         }
         let i = u32::try_from(self.list.len()).unwrap_or(u32::MAX);
-        self.list.push(Input { name: format!("external value {n}"), default: 0.0 });
+        self.list.push(Input {
+            name: format!("external value {n}"),
+            default: 0.0,
+        });
         self.index.insert(n, i);
         i
     }
@@ -90,7 +93,12 @@ fn pad(v: &[f32]) -> [f32; 4] {
 }
 
 fn key(at: f32, value: &[f32]) -> Key {
-    Key { at, value: pad(value), handle_in: [0.0; 4], handle_out: [0.0; 4] }
+    Key {
+        at,
+        value: pad(value),
+        handle_in: [0.0; 4],
+        handle_out: [0.0; 4],
+    }
 }
 
 /// The base curve of a property.
@@ -99,16 +107,31 @@ pub fn curve(p: &Property, notes: &mut Notes) -> Curve {
     if let Some(c) = p.constant() {
         return Curve::constant(&c);
     }
-    let Some(k) = p.keyframes() else { return Curve::constant(&vec![0.0; usize::from(width)]) };
-    let mut keys: Vec<Key> = k.positions.iter().zip(&k.values).map(|(&at, v)| key(at, v)).collect();
+    let Some(k) = p.keyframes() else {
+        return Curve::constant(&vec![0.0; usize::from(width)]);
+    };
+    let mut keys: Vec<Key> = k
+        .positions
+        .iter()
+        .zip(&k.values)
+        .map(|(&at, v)| key(at, v))
+        .collect();
     let interpolation = match p.function {
         Function::Stepped => Interpolation::Step,
         Function::Linear => Interpolation::Linear,
         Function::Bezier => {
             if let Some(t) = &k.tangents {
                 for (i, key) in keys.iter_mut().enumerate() {
-                    key.handle_out = pad(&t.first.get(i).map(|v| v.iter().map(|x| x / 3.0).collect::<Vec<_>>()).unwrap_or_default());
-                    key.handle_in = pad(&t.second.get(i).map(|v| v.iter().map(|x| x / 3.0).collect::<Vec<_>>()).unwrap_or_default());
+                    key.handle_out = pad(&t
+                        .first
+                        .get(i)
+                        .map(|v| v.iter().map(|x| x / 3.0).collect::<Vec<_>>())
+                        .unwrap_or_default());
+                    key.handle_in = pad(&t
+                        .second
+                        .get(i)
+                        .map(|v| v.iter().map(|x| x / 3.0).collect::<Vec<_>>())
+                        .unwrap_or_default());
                 }
             }
             Interpolation::Bezier
@@ -123,7 +146,12 @@ pub fn curve(p: &Property, notes: &mut Notes) -> Curve {
         }
     };
     // a looping function whose argument is cut at its last key
-    Curve { width, interpolation, looped: p.looped, keys }
+    Curve {
+        width,
+        interpolation,
+        looped: p.looped,
+        keys,
+    }
 }
 
 /// A Hermite property as linear keys: each segment cut into as many pieces as it takes for the line to stay within the
@@ -148,8 +176,15 @@ fn sample_hermite(p: &Property, positions: &[f32], width: u8, notes: &mut Notes)
                 .map(|i| {
                     let (x0, x1) = (a + step * i as f32, a + step * (i + 1) as f32);
                     let mid = eval((x0 + x1) * 0.5);
-                    let line: Vec<f32> = eval(x0).iter().zip(eval(x1)).map(|(p, q)| (p + q) * 0.5).collect();
-                    mid.iter().zip(&line).map(|(m, l)| (m - l).abs()).fold(0.0f32, f32::max)
+                    let line: Vec<f32> = eval(x0)
+                        .iter()
+                        .zip(eval(x1))
+                        .map(|(p, q)| (p + q) * 0.5)
+                        .collect();
+                    mid.iter()
+                        .zip(&line)
+                        .map(|(m, l)| (m - l).abs())
+                        .fold(0.0f32, f32::max)
                 })
                 .fold(0.0f32, f32::max);
             if worst <= HERMITE_TOLERANCE * range {
@@ -167,7 +202,10 @@ fn sample_hermite(p: &Property, positions: &[f32], width: u8, notes: &mut Notes)
         }
     }
     if out.is_empty() {
-        out.push(key(positions.first().copied().unwrap_or(0.0), &eval(positions.first().copied().unwrap_or(0.0))));
+        out.push(key(
+            positions.first().copied().unwrap_or(0.0),
+            &eval(positions.first().copied().unwrap_or(0.0)),
+        ));
     }
     notes.approximate("a Hermite property sampled into a linear curve");
     let _ = width;
@@ -187,16 +225,36 @@ fn variations(p: &Property, inputs: &mut Inputs, notes: &mut Notes) -> Vec<Varia
         };
         let stream = |seeds: &[i32]| seeds.first().map_or(0, |&s| s as u32);
         match kind {
-            ModifierKind::RandomDelta { seeds, max } => out.push(Variation::Delta { max: pad(&max), stream: stream(&seeds) }),
+            ModifierKind::RandomDelta { seeds, max } => out.push(Variation::Delta {
+                max: pad(&max),
+                stream: stream(&seeds),
+            }),
             ModifierKind::RandomRange { seeds, min, max } => {
-                out.push(Variation::Range { min: pad(&min), max: pad(&max), stream: stream(&seeds) });
+                out.push(Variation::Range {
+                    min: pad(&min),
+                    max: pad(&max),
+                    stream: stream(&seeds),
+                });
             }
             ModifierKind::RandomFraction { seeds, max } => {
-                out.push(Variation::Fraction { max: pad(&max), stream: stream(&seeds) });
+                out.push(Variation::Fraction {
+                    max: pad(&max),
+                    stream: stream(&seeds),
+                });
             }
-            ModifierKind::ExternalValue1 { external_value, factor } | ModifierKind::ExternalValue2 { external_value, factor } => {
+            ModifierKind::ExternalValue1 {
+                external_value,
+                factor,
+            }
+            | ModifierKind::ExternalValue2 {
+                external_value,
+                factor,
+            } => {
                 let input = inputs.input(external_value);
-                out.push(Variation::Scaled { input, factor: curve(&factor, notes) });
+                out.push(Variation::Scaled {
+                    input,
+                    factor: curve(&factor, notes),
+                });
             }
         }
     }
@@ -206,13 +264,21 @@ fn variations(p: &Property, inputs: &mut Inputs, notes: &mut Notes) -> Vec<Varia
 /// A property as a core value that is a function of `argument`.
 pub fn value(p: &Property, argument: Argument, inputs: &mut Inputs, notes: &mut Notes) -> Value {
     let variation = variations(p, inputs, notes);
-    Value { argument, curve: curve(p, notes), variation }
+    Value {
+        argument,
+        curve: curve(p, notes),
+        variation,
+    }
 }
 
 /// The first component of a property read at argument 0: what a scalar parameter that is not a function of time stands
 /// for (a constant, or the first value of a function).
 pub fn number(p: &Property) -> f32 {
-    p.value_at(0.0).first().copied().filter(|v| v.is_finite()).unwrap_or(0.0)
+    p.value_at(0.0)
+        .first()
+        .copied()
+        .filter(|v| v.is_finite())
+        .unwrap_or(0.0)
 }
 
 /// The first component of a value at argument 0.
@@ -298,7 +364,9 @@ fn combine(a: Value, b: Value, f: fn(f32, f32) -> f32, what: &str, notes: &mut N
         }
         // handles of a combined bezier are only right for a product by a constant; counted otherwise
         if out.curve.interpolation == Interpolation::Bezier {
-            notes.approximate(format!("a {what} of a Bezier property and a constant, handles kept"));
+            notes.approximate(format!(
+                "a {what} of a Bezier property and a constant, handles kept"
+            ));
         }
         return out;
     }
@@ -310,12 +378,16 @@ fn combine(a: Value, b: Value, f: fn(f32, f32) -> f32, what: &str, notes: &mut N
             }
         }
         if out.curve.interpolation == Interpolation::Bezier {
-            notes.approximate(format!("a {what} of a Bezier property and a constant, handles kept"));
+            notes.approximate(format!(
+                "a {what} of a Bezier property and a constant, handles kept"
+            ));
         }
         return out;
     }
     if a.argument != b.argument {
-        notes.approximate(format!("a {what} of properties read at different arguments, taken at the first's"));
+        notes.approximate(format!(
+            "a {what} of properties read at different arguments, taken at the first's"
+        ));
     }
     let mut times: Vec<f32> = a.curve.keys.iter().chain(&b.curve.keys).map(|k| k.at).collect();
     times.sort_by(f32::total_cmp);
@@ -325,27 +397,49 @@ fn combine(a: Value, b: Value, f: fn(f32, f32) -> f32, what: &str, notes: &mut N
         let (x, y) = (a.curve.value_at(t), b.curve.value_at(t));
         let mut out = [0.0; 4];
         for (c, slot) in out.iter_mut().enumerate().take(usize::from(width)) {
-            *slot = f(x[c.min(usize::from(a.curve.width.clamp(1, 4)) - 1)], y[c.min(usize::from(b.curve.width.clamp(1, 4)) - 1)]);
+            *slot = f(
+                x[c.min(usize::from(a.curve.width.clamp(1, 4)) - 1)],
+                y[c.min(usize::from(b.curve.width.clamp(1, 4)) - 1)],
+            );
         }
         out
     };
     let mut keys = Vec::new();
     for (i, &t0) in times.iter().enumerate() {
-        keys.push(Key { at: t0, value: sample(t0), handle_in: [0.0; 4], handle_out: [0.0; 4] });
+        keys.push(Key {
+            at: t0,
+            value: sample(t0),
+            handle_in: [0.0; 4],
+            handle_out: [0.0; 4],
+        });
         if let Some(&t1) = times.get(i + 1) {
             for q in 1..4 {
                 let t = t0 + (t1 - t0) * q as f32 / 4.0;
-                keys.push(Key { at: t, value: sample(t), handle_in: [0.0; 4], handle_out: [0.0; 4] });
+                keys.push(Key {
+                    at: t,
+                    value: sample(t),
+                    handle_in: [0.0; 4],
+                    handle_out: [0.0; 4],
+                });
             }
         }
     }
     if !b.variation.is_empty() {
-        notes.approximate(format!("a {what} of two varying properties, the second's random variation dropped"));
+        notes.approximate(format!(
+            "a {what} of two varying properties, the second's random variation dropped"
+        ));
     }
-    notes.approximate(format!("a {what} of two varying properties sampled into a linear curve"));
+    notes.approximate(format!(
+        "a {what} of two varying properties sampled into a linear curve"
+    ));
     Value {
         argument: a.argument,
-        curve: Curve { width, interpolation: Interpolation::Linear, looped: false, keys },
+        curve: Curve {
+            width,
+            interpolation: Interpolation::Linear,
+            looped: false,
+            keys,
+        },
         variation: a.variation,
     }
 }
@@ -373,7 +467,12 @@ mod tests {
     use super::*;
     use fromsoft_formats::fxr::ValueKind;
 
-    fn keyed(function: Function, positions: &[f32], values: &[f32], tangents: Option<(&[f32], &[f32])>) -> Property {
+    fn keyed(
+        function: Function,
+        positions: &[f32],
+        values: &[f32],
+        tangents: Option<(&[f32], &[f32])>,
+    ) -> Property {
         let n = positions.len();
         let mut fields = vec![n as u32];
         let lo = values.iter().copied().fold(f32::INFINITY, f32::min);
@@ -384,16 +483,29 @@ mod tests {
         if let Some((a, b)) = tangents {
             fields.extend(a.iter().chain(b).map(|v| v.to_bits()));
         }
-        Property { kind: ValueKind::Scalar, function, looped: false, type_b: 0, fields, modifiers: Vec::new() }
+        Property {
+            kind: ValueKind::Scalar,
+            function,
+            looped: false,
+            type_b: 0,
+            fields,
+            modifiers: Vec::new(),
+        }
     }
 
     #[test]
     fn linear_and_stepped_keys_carry_over() {
         let mut notes = Notes::default();
-        let c = curve(&keyed(Function::Linear, &[0.0, 2.0], &[1.0, 5.0], None), &mut notes);
+        let c = curve(
+            &keyed(Function::Linear, &[0.0, 2.0], &[1.0, 5.0], None),
+            &mut notes,
+        );
         assert_eq!(c.interpolation, Interpolation::Linear);
         assert_eq!(c.value_at(1.0)[0], 3.0);
-        let s = curve(&keyed(Function::Stepped, &[0.0, 2.0], &[1.0, 5.0], None), &mut notes);
+        let s = curve(
+            &keyed(Function::Stepped, &[0.0, 2.0], &[1.0, 5.0], None),
+            &mut notes,
+        );
         assert_eq!(s.interpolation, Interpolation::Step);
         assert_eq!(s.value_at(1.9)[0], 1.0);
         assert!(notes.lost.is_empty() && notes.approximated.is_empty());
@@ -402,7 +514,12 @@ mod tests {
     #[test]
     fn a_bezier_matches_the_files_function() {
         let mut notes = Notes::default();
-        let p = keyed(Function::Bezier, &[0.0, 1.0], &[0.0, 1.0], Some((&[0.3, 0.0], &[0.0, 0.6])));
+        let p = keyed(
+            Function::Bezier,
+            &[0.0, 1.0],
+            &[0.0, 1.0],
+            Some((&[0.3, 0.0], &[0.0, 0.6])),
+        );
         let c = curve(&p, &mut notes);
         for x in [0.0, 0.2, 0.5, 0.9, 1.0] {
             assert!((c.value_at(x)[0] - p.value_at(x)[0]).abs() < 1e-5, "{x}");
@@ -414,13 +531,21 @@ mod tests {
         let mut notes = Notes::default();
         let q = std::f32::consts::FRAC_PI_4;
         for (s1, s2) in [(q, q), (0.0, 0.0), (1.2, 0.1), (0.1, 1.5)] {
-            let p = keyed(Function::Hermite, &[0.0, 2.0, 3.0], &[0.0, 10.0, 4.0], Some((&[s1, s1, 0.0], &[s2, s2, 0.0])));
+            let p = keyed(
+                Function::Hermite,
+                &[0.0, 2.0, 3.0],
+                &[0.0, 10.0, 4.0],
+                Some((&[s1, s1, 0.0], &[s2, s2, 0.0])),
+            );
             let c = curve(&p, &mut notes);
             assert_eq!(c.interpolation, Interpolation::Linear);
             for i in 0..=60 {
                 let x = i as f32 * 0.05;
                 let (got, want) = (c.value_at(x)[0], p.value_at(x)[0]);
-                assert!((got - want).abs() <= 0.02 * 10.0, "{s1} {s2} at {x}: {got} against {want}");
+                assert!(
+                    (got - want).abs() <= 0.02 * 10.0,
+                    "{s1} {s2} at {x}: {got} against {want}"
+                );
             }
         }
         assert_eq!(notes.approximated.values().sum::<u32>(), 4);
@@ -430,7 +555,12 @@ mod tests {
     fn modifiers_become_variations_and_external_values_inputs() {
         use fromsoft_formats::fxr::Modifier;
         let mut p = Property::constant_of(&[10.0]);
-        p.modifiers.push(Modifier { type_a: 0xD050, type_b: 0, fields: vec![7, 0.5f32.to_bits()], properties: Vec::new() });
+        p.modifiers.push(Modifier {
+            type_a: 0xD050,
+            type_b: 0,
+            fields: vec![7, 0.5f32.to_bits()],
+            properties: Vec::new(),
+        });
         p.modifiers.push(Modifier {
             type_a: 0xE060,
             type_b: 0,

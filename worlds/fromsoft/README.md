@@ -463,6 +463,14 @@ converts frames; it does not lower:
   area's binder and the common ones). `Report::effects` counts the regions, the effects placed by each route, the
   files and textures read and what no binder held, by reason. Models and animations the effects name are counted,
   not read. `read_effect` reads one effect by its number, at the origin (an effect viewer's world);
+- with `CharacterOptions::clip_effects` (`CharacterReader::with_clip_effects`), each animation clip, as it loads, also reads
+  the effects its events start: the events whose community template names a `FFX ID` (types 95, 96, 99, 100, 101, 104, 108,
+  109, 110, 112, 116, 118, 119, 120, 121, 122 and 961) give `fromsoft.clip_effect_uses` on the clip (the event, the effect,
+  the dummy polygon's reference id, whether it follows the dummy, whether the event keeps it going for its length, the
+  event's times), and the effect files and textures come from `commoneffects` (and `commoneffects_dlc02`). Events that name
+  an effect another way (goods and magic rows, throw and foot indexes), and effects on a weapon's dummy polygon, are counted
+  in `lost`. `lower-fromsoft-effects` lowers the effects to unplaced systems and the uses to `core.clip_effects` on the clip,
+  a spawn each, at the socket `dummy <reference id>` of the model; `Report::clip_uses` counts the uses;
 - lights are `fromsoft.light` records where they stand (stored colours, powers,
   cone, radius and tangent); hang-edge segments and spawn points are the
   `fromsoft.area_extras` resource; what the read covered (game, area, region,

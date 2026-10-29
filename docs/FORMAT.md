@@ -138,3 +138,14 @@ a system stepped to a time gives the same particles anywhere. Units are metres, 
 accounting: the reasons a source's pass could not carry something, with how many, never state. The JSON view is the
 serialization of these types and is not read back; `references` lists the textures, meshes and systems the draws and emitters
 name. Core defines the description; stepping and drawing it belongs to a consumer.
+
+## Clip effects
+
+`core.clip_effects`, on a clip, has `{origin, spawns, lost}`: the particle systems the clip starts while it plays. Origin is
+null or a nonempty provenance string; `lost` counts, by nonempty reason, what the lowering could not carry. Each spawn has
+`{system, start, end, socket, follow, event}`: `system` is an entity that holds a `core.particles` and no `core.transform` (the
+spawn places it); `start` is a finite, nonnegative clip time in seconds and `end` null (the system plays out) or a time at or
+after it (its emitters are stopped); `socket` is null (the rig's origin) or the nonempty name of a socket of the clip's rig;
+`follow` says whether the system moves with that socket as the clip moves it, else it stays where it started; `event` is the
+index of the starting event in the clip's `core.clip_events`, where the source says. A player begins each spawn at its start
+on the clip's clock.

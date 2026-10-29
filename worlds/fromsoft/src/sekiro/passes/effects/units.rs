@@ -27,11 +27,14 @@ pub fn blend(mode: i32, notes: &mut Notes) -> Blend {
         4 => Blend::Additive,
         5 => Blend::Subtractive,
         0 | 7 => {
-            notes.approximate("blend modes 0 and 7 as additive (the project's reading: seemingly identical to add)");
+            notes.approximate(
+                "blend modes 0 and 7 as additive (the project's reading: seemingly identical to add)",
+            );
             Blend::Additive
         }
         6 => {
-            notes.approximate("blend mode 6 as normal (the project's reading: seemingly identical to normal)");
+            notes
+                .approximate("blend mode 6 as normal (the project's reading: seemingly identical to normal)");
             Blend::Alpha
         }
         _ => {
@@ -148,7 +151,14 @@ pub fn attachment(mode: i32, notes: &mut Notes) -> Attachment {
 /// The distance limits of an appearance (`minFadeDistance`, `minDistance`, `maxFadeDistance`, `maxDistance` and the two hard
 /// thresholds; -1 is no limit). A particle nearer than `min_distance` is hidden and its opacity reaches 1 at
 /// `min_fade_distance`; farther than `max_distance` hidden, opacity 1 up to `max_fade_distance`.
-pub fn distance_fade(min_fade: f32, min: f32, max_fade: f32, max: f32, cut_min: f32, cut_max: f32) -> DistanceFade {
+pub fn distance_fade(
+    min_fade: f32,
+    min: f32,
+    max_fade: f32,
+    max: f32,
+    cut_min: f32,
+    cut_max: f32,
+) -> DistanceFade {
     let on = |v: f32| v >= 0.0;
     DistanceFade {
         near: (on(min) && on(min_fade)).then_some([min, min_fade]),

@@ -5,6 +5,7 @@
 use crate::asset::Asset;
 use crate::atmosphere::Atmosphere;
 use crate::clip::{Clip, ClipBinding};
+use crate::clip_effects::ClipEffects;
 use crate::clip_events::ClipEvents;
 use crate::clip_identity::{ClipKey, ClipLength};
 use crate::collider::{Collider, Heightfield};
@@ -73,7 +74,7 @@ declared! {
         TextureFile, MeshFile, MaterialVariants, Tile, DrawOrder, LayeredMaterial, Lods, Marker, Curve, MaterialUsage,
         PbrMaterial, DetailedMaterial, Priority, Provenance, StateAxis, Condition, PrimitiveCondition, StateOverride, VertexColor, Skeleton, Skin, Morphs, RigInstance,
         RigPose, SkinInstance, MorphWeights, Sockets, Attachment, JointMap, JointPlacement, Clip, ClipBinding, Asset, Shader, ShaderBinding,
-        TextureLayers, MaterialPrograms, ProgramFacts, ClipKey, ClipLength, ClipEvents, Controller, ControllerBinding,
+        TextureLayers, MaterialPrograms, ProgramFacts, ClipKey, ClipLength, ClipEvents, ClipEffects, Controller, ControllerBinding,
         DrawGroups, DrawGroupDefaults, ContentNote, Record, DisplayName, PrimitiveKeys, MaterialParameters, SkyAnchor,
         ParticleSystem;
     resources: PartScope, PartitionPlan, Environment, Atmosphere, StateAssignment, Surfaces, Threads, Memo, RenderGraph,

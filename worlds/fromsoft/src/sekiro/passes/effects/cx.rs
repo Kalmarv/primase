@@ -123,7 +123,14 @@ impl<'r> Cx<'r> {
     /// The colour factors of an appearance: its three colour multipliers (the first two clamped to 0 to 1, read at the age and
     /// the emission time, the third unrestricted), the brightness multiplier of the red, green and blue and the alpha multiplier
     /// (both read at the emitter's active time). A factor that is the constant 1 is left out.
-    pub fn tint(&mut self, c1: &Property, c2: &Property, c3: &Property, rgb: &Property, alpha: &Property) -> Vec<Term> {
+    pub fn tint(
+        &mut self,
+        c1: &Property,
+        c2: &Property,
+        c3: &Property,
+        rgb: &Property,
+        alpha: &Property,
+    ) -> Vec<Term> {
         let terms = vec![
             self.term(c1, Argument::Age, true, Channels::Rgba),
             self.term(c2, Argument::EmissionTime, true, Channels::Rgba),

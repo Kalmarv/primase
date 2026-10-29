@@ -7,15 +7,15 @@
 use super::cx::Cx;
 use super::units;
 use super::value::{self, Notes};
+use fromsoft_formats::fxr::Property;
 use fromsoft_formats::fxr::actions as a;
 use fromsoft_formats::fxr::actions::Typed;
-use fromsoft_formats::fxr::Property;
 use fromsoft_formats::fxr::resources::TextureKind;
 use primase_core::particles::{
-    Argument, Atlas, Blend, Channels, Draw, DistanceFade, Flare, FlareLayer, ForceField, ForceKind, ForceVolume, Layer,
-    LayeredQuad, LightDraw, LightKind, Lit, Map, MeshClip, MeshParticle, Orientation, Point, Quad,
-    RadialBlur, Refraction, RefractionMode, RefractionShape, Reflection, Ripples, SoftEdge, Streak, Term, Trail,
-    TrailDistortion, Value,
+    Argument, Atlas, Blend, Channels, DistanceFade, Draw, Flare, FlareLayer, ForceField, ForceKind,
+    ForceVolume, Layer, LayeredQuad, LightDraw, LightKind, Lit, Map, MeshClip, MeshParticle, Orientation,
+    Point, Quad, RadialBlur, Reflection, Refraction, RefractionMode, RefractionShape, Ripples, SoftEdge,
+    Streak, Term, Trail, TrailDistortion, Value,
 };
 
 /// 255 stored levels to a fraction.
@@ -58,7 +58,13 @@ struct QuadIn<'a> {
 }
 
 impl Cx<'_> {
-    fn atlas(&mut self, columns: i32, total: i32, frame: (&Property, &Property), interpolate: bool) -> Option<Atlas> {
+    fn atlas(
+        &mut self,
+        columns: i32,
+        total: i32,
+        frame: (&Property, &Property),
+        interpolate: bool,
+    ) -> Option<Atlas> {
         if columns <= 1 && total <= 1 {
             return None;
         }
@@ -73,7 +79,15 @@ impl Cx<'_> {
         })
     }
 
-    fn lit(&mut self, lighting: i32, normal_map: i32, specular: i32, glossiness: f32, specularity: f32, shadow: f32) -> Option<Lit> {
+    fn lit(
+        &mut self,
+        lighting: i32,
+        normal_map: i32,
+        specular: i32,
+        glossiness: f32,
+        specularity: f32,
+        shadow: f32,
+    ) -> Option<Lit> {
         if !units::lit(lighting, &mut self.notes) {
             return None;
         }
@@ -111,7 +125,14 @@ impl Cx<'_> {
             None => self.scalar(0.0),
         };
         let atlas = self.atlas(q.columns, q.total_frames, q.frame, q.interpolate);
-        let lit = self.lit(q.lighting, q.normal_map, q.specular, q.glossiness, q.specularity, q.shadow);
+        let lit = self.lit(
+            q.lighting,
+            q.normal_map,
+            q.specular,
+            q.glossiness,
+            q.specularity,
+            q.shadow,
+        );
         let soft = self.soft(q.depth_blend);
         Quad {
             map: q.map,
@@ -238,9 +259,27 @@ impl Cx<'_> {
                 });
                 let mut layers = Vec::new();
                 let sources = [
-                    (b.layer1, &b.layer1_color, [&b.layer1_speed_u, &b.layer1_speed_v], [&b.layer1_offset_u, &b.layer1_offset_v], [&b.layer1_scale_u, &b.layer1_scale_v]),
-                    (b.layer2, &b.layer2_color, [&b.layer2_speed_u, &b.layer2_speed_v], [&b.layer2_offset_u, &b.layer2_offset_v], [&b.layer2_scale_u, &b.layer2_scale_v]),
-                    (b.layer3, &b.layer3_color, [&b.layer3_speed_u, &b.layer3_speed_v], [&b.layer3_offset_u, &b.layer3_offset_v], [&b.layer3_scale_u, &b.layer3_scale_v]),
+                    (
+                        b.layer1,
+                        &b.layer1_color,
+                        [&b.layer1_speed_u, &b.layer1_speed_v],
+                        [&b.layer1_offset_u, &b.layer1_offset_v],
+                        [&b.layer1_scale_u, &b.layer1_scale_v],
+                    ),
+                    (
+                        b.layer2,
+                        &b.layer2_color,
+                        [&b.layer2_speed_u, &b.layer2_speed_v],
+                        [&b.layer2_offset_u, &b.layer2_offset_v],
+                        [&b.layer2_scale_u, &b.layer2_scale_v],
+                    ),
+                    (
+                        b.layer3,
+                        &b.layer3_color,
+                        [&b.layer3_speed_u, &b.layer3_speed_v],
+                        [&b.layer3_offset_u, &b.layer3_offset_v],
+                        [&b.layer3_scale_u, &b.layer3_scale_v],
+                    ),
                 ];
                 for (texture, colour, speed, offset, scale) in sources {
                     let map = self.map_word(TextureKind::Albedo, texture);
@@ -258,7 +297,13 @@ impl Cx<'_> {
                 let map = self.map_prop(TextureKind::Albedo, &p.texture);
                 let blend = units::blend(value::number(&p.blend_mode).round() as i32, &mut self.notes);
                 let size = self.age(&p.size);
-                let tint = self.tint(&p.color1, &p.color2, &p.color3, &p.rgb_multiplier, &p.alpha_multiplier);
+                let tint = self.tint(
+                    &p.color1,
+                    &p.color2,
+                    &p.color3,
+                    &p.rgb_multiplier,
+                    &p.alpha_multiplier,
+                );
                 let cutoff = self.active(&p.alpha_threshold);
                 Draw::Point(Point {
                     map,
@@ -282,7 +327,13 @@ impl Cx<'_> {
                 let blend = units::blend(value::number(&l.blend_mode).round() as i32, &mut self.notes);
                 let (length, mult) = (self.emitted(&l.length), self.age(&l.length_multiplier));
                 let length = value::product(length, mult, &mut self.notes);
-                let tint = self.line_tint(&l.color1, &l.color2, &l.color3, &l.rgb_multiplier, &l.alpha_multiplier);
+                let tint = self.line_tint(
+                    &l.color1,
+                    &l.color2,
+                    &l.color3,
+                    &l.rgb_multiplier,
+                    &l.alpha_multiplier,
+                );
                 let (start, end) = (self.active(&l.start_color), self.active(&l.end_color));
                 let cutoff = self.active(&l.alpha_threshold);
                 Draw::Streak(Streak {
@@ -312,7 +363,13 @@ impl Cx<'_> {
                 let width = value::product(width, wm, &mut self.notes);
                 let (length, lm) = (self.emitted(&l.length), self.age(&l.length_multiplier));
                 let length = value::product(length, lm, &mut self.notes);
-                let tint = self.line_tint(&l.color1, &l.color2, &l.color3, &l.rgb_multiplier, &l.alpha_multiplier);
+                let tint = self.line_tint(
+                    &l.color1,
+                    &l.color2,
+                    &l.color3,
+                    &l.rgb_multiplier,
+                    &l.alpha_multiplier,
+                );
                 let (start, end) = (self.active(&l.start_color), self.active(&l.end_color));
                 let cutoff = self.active(&l.alpha_threshold);
                 Draw::Streak(Streak {
@@ -344,7 +401,11 @@ impl Cx<'_> {
                 let clip = (m.anibnd > 0)
                     .then(|| self.resolver.animation(m.anibnd))
                     .flatten()
-                    .map(|clip| MeshClip { clip, speed: m.animation_speed, looped: m.loop_animation });
+                    .map(|clip| MeshClip {
+                        clip,
+                        speed: m.animation_speed,
+                        looped: m.loop_animation,
+                    });
                 let blend = units::blend(value::number(&m.blend_mode).round() as i32, &mut self.notes);
                 let size = self.size3(&m.size_x, &m.size_y, &m.size_z, m.uniform_scale);
                 let rotation = self.rotation([&m.rotation_x, &m.rotation_y, &m.rotation_z]);
@@ -353,10 +414,24 @@ impl Cx<'_> {
                     (&m.angular_speed_y, &m.angular_speed_multiplier_y),
                     (&m.angular_speed_z, &m.angular_speed_multiplier_z),
                 ]);
-                let tint = self.tint(&m.color1, &m.color2, &m.color3, &m.rgb_multiplier, &m.alpha_multiplier);
-                let scroll = [self.scroll(&m.speed_u, &m.speed_multiplier_u), self.scroll(&m.speed_v, &m.speed_multiplier_v)];
+                let tint = self.tint(
+                    &m.color1,
+                    &m.color2,
+                    &m.color3,
+                    &m.rgb_multiplier,
+                    &m.alpha_multiplier,
+                );
+                let scroll = [
+                    self.scroll(&m.speed_u, &m.speed_multiplier_u),
+                    self.scroll(&m.speed_v, &m.speed_multiplier_v),
+                ];
                 let offset = [self.fixed(&m.offset_u), self.fixed(&m.offset_v)];
-                let atlas = self.atlas(m.columns, m.total_frames, (&m.frame_index, &m.frame_index_offset), false);
+                let atlas = self.atlas(
+                    m.columns,
+                    m.total_frames,
+                    (&m.frame_index, &m.frame_index_offset),
+                    false,
+                );
                 Draw::Mesh(MeshParticle {
                     mesh,
                     clip,
@@ -391,8 +466,13 @@ impl Cx<'_> {
                 let clip = (m.anibnd > 0)
                     .then(|| self.resolver.animation(m.anibnd))
                     .flatten()
-                    .map(|clip| MeshClip { clip, speed: m.animation_speed, looped: m.loop_animation });
-                self.notes.approximate("a rich model's blend mode taken as normal (its blend word is unnamed)");
+                    .map(|clip| MeshClip {
+                        clip,
+                        speed: m.animation_speed,
+                        looped: m.loop_animation,
+                    });
+                self.notes
+                    .approximate("a rich model's blend mode taken as normal (its blend word is unnamed)");
                 let size = self.size3(&m.size_x, &m.size_y, &m.size_z, m.uniform_scale);
                 let rotation = self.rotation([&m.rotation_x, &m.rotation_y, &m.rotation_z]);
                 let spin = self.spin([
@@ -400,8 +480,17 @@ impl Cx<'_> {
                     (&m.angular_speed_y, &m.angular_speed_multiplier_y),
                     (&m.angular_speed_z, &m.angular_speed_multiplier_z),
                 ]);
-                let tint = self.tint(&m.color1, &m.color2, &m.color3, &m.rgb_multiplier, &m.alpha_multiplier);
-                let scroll = [self.scroll(&m.speed_u, &m.speed_multiplier_u), self.scroll(&m.speed_v, &m.speed_multiplier_v)];
+                let tint = self.tint(
+                    &m.color1,
+                    &m.color2,
+                    &m.color3,
+                    &m.rgb_multiplier,
+                    &m.alpha_multiplier,
+                );
+                let scroll = [
+                    self.scroll(&m.speed_u, &m.speed_multiplier_u),
+                    self.scroll(&m.speed_v, &m.speed_multiplier_v),
+                ];
                 let offset = [self.fixed(&m.offset_u), self.fixed(&m.offset_v)];
                 Draw::Mesh(MeshParticle {
                     mesh,
@@ -571,16 +660,29 @@ impl Cx<'_> {
             Typed::SpotLight(l) => {
                 let colour = self.light_colour(&l.diffuse_color);
                 let intensity = self.active(&l.diffuse_multiplier);
-                let (far, rx, ry) = (value::number(&l.far), value::number(&l.radius_x), value::number(&l.radius_y));
+                let (far, rx, ry) = (
+                    value::number(&l.far),
+                    value::number(&l.radius_x),
+                    value::number(&l.radius_y),
+                );
                 let range = self.active(&l.far);
-                let half = if far > 0.0 { rx.max(ry).atan2(far).to_degrees() } else { 45.0 };
-                self.notes.approximate("an effect spot light's cone as the wider half-angle of its elliptic base");
-                self.notes.approximate("an effect spot light's inner cone as a fixed share of the outer");
+                let half = if far > 0.0 {
+                    rx.max(ry).atan2(far).to_degrees()
+                } else {
+                    45.0
+                };
+                self.notes
+                    .approximate("an effect spot light's cone as the wider half-angle of its elliptic base");
+                self.notes
+                    .approximate("an effect spot light's inner cone as a fixed share of the outer");
                 if l.jitter_and_flicker {
                     self.notes.lose("the flicker and jitter of an effect light");
                 }
                 Draw::Light(LightDraw {
-                    kind: LightKind::Spot { inner: half * 0.85, outer: half },
+                    kind: LightKind::Spot {
+                        inner: half * 0.85,
+                        outer: half,
+                    },
                     colour,
                     intensity,
                     range,
@@ -588,8 +690,38 @@ impl Cx<'_> {
                     fade_out: units::frames(l.fade_out_time),
                 })
             }
-            Typed::WindForce(f) => self.field(ForceKind::Wind, &f.force, f.shape, FieldShape::of(f.sphere_radius, f.box_size, f.cylinder_height, f.cylinder_radius, f.square_prism_height, f.square_prism_apothem), f.force_multiplier, [f.force_random_multiplier_min, f.force_random_multiplier_max], f.fade_out_time),
-            Typed::GravityForce(f) => self.field(ForceKind::Gravity, &f.force, f.shape, FieldShape::of(f.sphere_radius, f.box_size, f.cylinder_height, f.cylinder_radius, f.square_prism_height, f.square_prism_apothem), f.force_multiplier, [f.force_random_multiplier_min, f.force_random_multiplier_max], f.fade_out_time),
+            Typed::WindForce(f) => self.field(
+                ForceKind::Wind,
+                &f.force,
+                f.shape,
+                FieldShape::of(
+                    f.sphere_radius,
+                    f.box_size,
+                    f.cylinder_height,
+                    f.cylinder_radius,
+                    f.square_prism_height,
+                    f.square_prism_apothem,
+                ),
+                f.force_multiplier,
+                [f.force_random_multiplier_min, f.force_random_multiplier_max],
+                f.fade_out_time,
+            ),
+            Typed::GravityForce(f) => self.field(
+                ForceKind::Gravity,
+                &f.force,
+                f.shape,
+                FieldShape::of(
+                    f.sphere_radius,
+                    f.box_size,
+                    f.cylinder_height,
+                    f.cylinder_radius,
+                    f.square_prism_height,
+                    f.square_prism_apothem,
+                ),
+                f.force_multiplier,
+                [f.force_random_multiplier_min, f.force_random_multiplier_max],
+                f.fade_out_time,
+            ),
             Typed::WaterInteraction(w) => Draw::Ripples(Ripples {
                 map: self.map_word(TextureKind::Detail, w.texture),
                 depth: w.depth,
@@ -604,7 +736,14 @@ impl Cx<'_> {
 
     /// A line's colour factors: its two clamped multipliers and its third (all read at the age for the first two, at the
     /// active time for the third, which the project also clamps), and the brightness and alpha multipliers.
-    fn line_tint(&mut self, c1: &Property, c2: &Property, c3: &Property, rgb: &Property, alpha: &Property) -> Vec<Term> {
+    fn line_tint(
+        &mut self,
+        c1: &Property,
+        c2: &Property,
+        c3: &Property,
+        rgb: &Property,
+        alpha: &Property,
+    ) -> Vec<Term> {
         let terms = vec![
             self.term(c1, Argument::Age, true, Channels::Rgba),
             self.term(c2, Argument::Age, true, Channels::Rgba),
@@ -655,7 +794,8 @@ impl Cx<'_> {
                 key.handle_out[c] = 0.0;
             }
         }
-        self.notes.approximate("an effect light's colour squared at the keys of its curve (the game's transfer)");
+        self.notes
+            .approximate("an effect light's colour squared at the keys of its curve (the game's transfer)");
         v
     }
 
@@ -665,7 +805,8 @@ impl Cx<'_> {
             1 | 3 => RefractionMode::Push,
             2 => RefractionMode::Twist,
             _ => {
-                self.notes.lose("a distortion mode the project does not name, taken as a normal-map push");
+                self.notes
+                    .lose("a distortion mode the project does not name, taken as a normal-map push");
                 RefractionMode::Push
             }
         };
@@ -674,7 +815,8 @@ impl Cx<'_> {
             1 => RefractionShape::Hemiellipsoid,
             2 => RefractionShape::Ellipsoid,
             _ => {
-                self.notes.lose("a distortion shape the project does not name, taken as a rectangle");
+                self.notes
+                    .lose("a distortion shape the project does not name, taken as a rectangle");
                 RefractionShape::Rectangle
             }
         };
@@ -689,9 +831,15 @@ impl Cx<'_> {
         let stir = self.age(&d.stir_speed);
         let stir_speed = value::scaled(stir, 180.0 / std::f32::consts::PI);
         let radius = self.age(&d.radius);
-        let normal_offset = [self.fixed(&d.normal_map_offset_u), self.fixed(&d.normal_map_offset_v)];
+        let normal_offset = [
+            self.fixed(&d.normal_map_offset_u),
+            self.fixed(&d.normal_map_offset_v),
+        ];
         let normal_scroll = [self.age(&d.normal_map_speed_u), self.age(&d.normal_map_speed_v)];
-        let normal_scale = [self.fixed(&d.normal_map_scale_u), self.fixed(&d.normal_map_scale_v)];
+        let normal_scale = [
+            self.fixed(&d.normal_map_scale_u),
+            self.fixed(&d.normal_map_scale_v),
+        ];
         let tint = self.single_colour(&d.color, &d.rgb_multiplier, &d.alpha_multiplier);
         let cutoff = self.active(&d.alpha_threshold);
         Draw::Refraction(Refraction {
@@ -736,8 +884,11 @@ impl Cx<'_> {
         let variance_v = self.age(t.variance_v);
         let intensity = self.active(t.distortion_intensity);
         let normal_map = self.map_word(TextureKind::Normal, t.normal_map);
-        let distortion = (!intensity.is_fixed() || value::number_of(&intensity) != 0.0)
-            .then_some(TrailDistortion { normal_map, intensity });
+        let distortion =
+            (!intensity.is_fixed() || value::number_of(&intensity) != 0.0).then_some(TrailDistortion {
+                normal_map,
+                intensity,
+            });
         let lit = self.lit(t.lighting, 0, t.specular, t.glossiness, t.specularity, t.shadow);
         Draw::Trail(Trail {
             map: t.map,
@@ -783,16 +934,26 @@ impl Cx<'_> {
     ) -> Draw {
         let volume = match shape {
             0 => ForceVolume::Boundless,
-            1 => ForceVolume::Sphere { radius: dims.sphere_radius },
-            2 => ForceVolume::Box { half: dims.box_size.map(|s| s * 0.5) },
-            3 => ForceVolume::Cylinder { radius: dims.cylinder_radius, half_height: dims.cylinder_height * 0.5 },
+            1 => ForceVolume::Sphere {
+                radius: dims.sphere_radius,
+            },
+            2 => ForceVolume::Box {
+                half: dims.box_size.map(|s| s * 0.5),
+            },
+            3 => ForceVolume::Cylinder {
+                radius: dims.cylinder_radius,
+                half_height: dims.cylinder_height * 0.5,
+            },
             4 => {
                 // the project's apothem is the half-width of a square; a prism is a box
                 self.notes.approximate("a square-prism force volume as a box");
-                ForceVolume::Box { half: [dims.prism_apothem, dims.prism_height * 0.5, dims.prism_apothem] }
+                ForceVolume::Box {
+                    half: [dims.prism_apothem, dims.prism_height * 0.5, dims.prism_apothem],
+                }
             }
             _ => {
-                self.notes.lose("a force volume shape the project does not name, taken as boundless");
+                self.notes
+                    .lose("a force volume shape the project does not name, taken as boundless");
                 ForceVolume::Boundless
             }
         };
@@ -811,13 +972,84 @@ impl Cx<'_> {
     fn flare(&mut self, f: &a::LensFlare) -> Draw {
         let blend = units::blend(f.blend_mode, &mut self.notes);
         let layers = [
-            (f.layer1, &f.layer1_width, &f.layer1_height, &f.layer1_color, f.layer1_count, [f.layer1_scale_variation_x, f.layer1_scale_variation_y], f.layer1_uniform_scale, f.layer1_color_multiplier, f.layer1_reflection, f.layer1_offset, f.layer1_offset_variation, f.layer1_attenuation_radius, f.layer1_bloom_color),
-            (f.layer2, &f.layer2_width, &f.layer2_height, &f.layer2_color, f.layer2_count, [f.layer2_scale_variation_x, f.layer2_scale_variation_y], f.layer2_uniform_scale, f.layer2_color_multiplier, f.layer2_reflection, f.layer2_offset, f.layer2_offset_variation, f.layer2_attenuation_radius, f.layer2_bloom_color),
-            (f.layer3, &f.layer3_width, &f.layer3_height, &f.layer3_color, f.layer3_count, [f.layer3_scale_variation_x, f.layer3_scale_variation_y], f.layer3_uniform_scale, f.layer3_color_multiplier, f.layer3_reflection, f.layer3_offset, f.layer3_offset_variation, f.layer3_attenuation_radius, f.layer3_bloom_color),
-            (f.layer4, &f.layer4_width, &f.layer4_height, &f.layer4_color, f.layer4_count, [f.layer4_scale_variation_x, f.layer4_scale_variation_y], f.layer4_uniform_scale, f.layer4_color_multiplier, f.layer4_reflection, f.layer4_offset, f.layer4_offset_variation, f.layer4_attenuation_radius, f.layer4_bloom_color),
+            (
+                f.layer1,
+                &f.layer1_width,
+                &f.layer1_height,
+                &f.layer1_color,
+                f.layer1_count,
+                [f.layer1_scale_variation_x, f.layer1_scale_variation_y],
+                f.layer1_uniform_scale,
+                f.layer1_color_multiplier,
+                f.layer1_reflection,
+                f.layer1_offset,
+                f.layer1_offset_variation,
+                f.layer1_attenuation_radius,
+                f.layer1_bloom_color,
+            ),
+            (
+                f.layer2,
+                &f.layer2_width,
+                &f.layer2_height,
+                &f.layer2_color,
+                f.layer2_count,
+                [f.layer2_scale_variation_x, f.layer2_scale_variation_y],
+                f.layer2_uniform_scale,
+                f.layer2_color_multiplier,
+                f.layer2_reflection,
+                f.layer2_offset,
+                f.layer2_offset_variation,
+                f.layer2_attenuation_radius,
+                f.layer2_bloom_color,
+            ),
+            (
+                f.layer3,
+                &f.layer3_width,
+                &f.layer3_height,
+                &f.layer3_color,
+                f.layer3_count,
+                [f.layer3_scale_variation_x, f.layer3_scale_variation_y],
+                f.layer3_uniform_scale,
+                f.layer3_color_multiplier,
+                f.layer3_reflection,
+                f.layer3_offset,
+                f.layer3_offset_variation,
+                f.layer3_attenuation_radius,
+                f.layer3_bloom_color,
+            ),
+            (
+                f.layer4,
+                &f.layer4_width,
+                &f.layer4_height,
+                &f.layer4_color,
+                f.layer4_count,
+                [f.layer4_scale_variation_x, f.layer4_scale_variation_y],
+                f.layer4_uniform_scale,
+                f.layer4_color_multiplier,
+                f.layer4_reflection,
+                f.layer4_offset,
+                f.layer4_offset_variation,
+                f.layer4_attenuation_radius,
+                f.layer4_bloom_color,
+            ),
         ];
         let mut out = Vec::new();
-        for (texture, width, height, colour, count, variation, uniform, multiplier, reflection, offset, offset_variation, attenuation, bloom) in layers {
+        for (
+            texture,
+            width,
+            height,
+            colour,
+            count,
+            variation,
+            uniform,
+            multiplier,
+            reflection,
+            offset,
+            offset_variation,
+            attenuation,
+            bloom,
+        ) in layers
+        {
             if texture <= 0 {
                 continue;
             }
@@ -827,7 +1059,8 @@ impl Cx<'_> {
                 1 => Reflection::Radial,
                 2 => Reflection::Horizontal,
                 _ => {
-                    self.notes.lose("a flare reflection mode the project does not name, taken as none");
+                    self.notes
+                        .lose("a flare reflection mode the project does not name, taken as none");
                     Reflection::None
                 }
             };
@@ -851,7 +1084,12 @@ impl Cx<'_> {
         if out.is_empty() {
             self.notes.lose("a lens flare without a layer");
         }
-        Draw::Flare(Flare { layers: out, blend, source_size: f.source_size, opacity_transition: f.opacity_transition_duration })
+        Draw::Flare(Flare {
+            layers: out,
+            blend,
+            source_size: f.source_size,
+            opacity_transition: f.opacity_transition_duration,
+        })
     }
 }
 
@@ -905,12 +1143,30 @@ struct FieldShape {
 }
 
 impl FieldShape {
-    fn of(sphere_radius: f32, box_size: [f32; 3], cylinder_height: f32, cylinder_radius: f32, prism_height: f32, prism_apothem: f32) -> Self {
-        FieldShape { sphere_radius, box_size, cylinder_height, cylinder_radius, prism_height, prism_apothem }
+    fn of(
+        sphere_radius: f32,
+        box_size: [f32; 3],
+        cylinder_height: f32,
+        cylinder_radius: f32,
+        prism_height: f32,
+        prism_apothem: f32,
+    ) -> Self {
+        FieldShape {
+            sphere_radius,
+            box_size,
+            cylinder_height,
+            cylinder_radius,
+            prism_height,
+            prism_apothem,
+        }
     }
 }
 
 /// Counts a lowering's notes into a one-line summary for the pass's log (the reasons are the keys).
 pub fn summary(notes: &Notes) -> String {
-    format!("{} lost, {} approximated", notes.lost.values().sum::<u32>(), notes.approximated.values().sum::<u32>())
+    format!(
+        "{} lost, {} approximated",
+        notes.lost.values().sum::<u32>(),
+        notes.approximated.values().sum::<u32>()
+    )
 }

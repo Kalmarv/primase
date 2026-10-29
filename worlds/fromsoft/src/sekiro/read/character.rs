@@ -243,6 +243,9 @@ pub struct CharacterOptions {
     /// skeleton of its own and each animation as `havok.animation`, the members (clips) of the form's asset. Otherwise
     /// it is named on the form's report as not read.
     pub form_animations: bool,
+    /// Also read, as each clip loads, the effects its events start ([`super::effects::read_for_clip`]): their files and
+    /// textures from the common effect binders, and a `fromsoft.clip_effect_uses` on the clip.
+    pub clip_effects: bool,
 }
 
 /// A character id as the game names its files: `c` and four digits.
@@ -1275,6 +1278,12 @@ impl<'a> CharacterReader<'a> {
         self
     }
 
+    /// Also read the effects the events of each clip start as the clip loads.
+    pub fn with_clip_effects(mut self) -> Self {
+        self.options.clip_effects = true;
+        self
+    }
+
     /// Clip-only scope of this reader: the same authored plan entities and load
     /// path, without opening model, material or texture binders. `read` parses no
     /// animation tracks; `load` decodes only the reached clip entities.
@@ -1492,6 +1501,23 @@ impl Reader for CharacterReader<'_> {
                 ),
             ));
             self.last_load_reports.insert(entity, read);
+            if self.options.clip_effects {
+                let archive = self.install.open()?;
+                let effects = super::effects::read_for_clip(
+                    &archive,
+                    &self.decoder,
+                    self.install.game,
+                    &mut part,
+                    entity,
+                )?;
+                report.push((
+                    "fromsoft clip effects".into(),
+                    format!(
+                        "{}: {} effects started by events, {} effect files and {} textures read; effects not in the common binders: {:?}",
+                        source.key, effects.clip_uses, effects.files, effects.textures, effects.refused
+                    ),
+                ));
+            }
         }
         super::convert::scope_sources(&mut part)?;
         // Remove any metadata-only skeleton a refused/duplicate source did not reference.

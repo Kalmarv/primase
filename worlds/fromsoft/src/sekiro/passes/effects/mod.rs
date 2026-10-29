@@ -1,7 +1,9 @@
 //! `lower-fromsoft-effects`: the effects an area or a viewer read (`fromsoft.effect`, placed by their transforms) as
-//! `core.particles`. The read keeps the effect files as stored (`fromsoft.effect_file`) and the textures and models they name
+//! `core.particles`, and the effects a character's animation events start (`fromsoft.clip_effect_uses`) as `core.clip_effects`.
+//! The read keeps the effect files as stored (`fromsoft.effect_file`) and the textures and models they name
 //! (`fromsoft.effect_resource`); this pass turns each placed effect's node tree into emitters ([`lower`]), the effects it
-//! spawns into systems of their own that its emitters name, and counts what the core description has no place for.
+//! spawns into systems of their own that its emitters name, and counts what the core description has no place for. An effect
+//! a clip's event starts is a system of its own, not placed; the clip's `core.clip_effects` says when and where it plays.
 //!
 //! What the fxr project says of a parameter is the meaning used (sourced); the lowering's approximations, and the actions and
 //! parameters it leaves out, are in the pass log by reason, with the files' own numbers (`Notes`).
@@ -14,13 +16,13 @@ pub mod value;
 
 use super::lights::Disabled;
 use super::settings::Factor;
-use crate::sekiro::components::effect::{Effect, EffectFile, EffectResource, ResourceKind};
+use crate::sekiro::components::effect::{ClipEffectUses, Effect, EffectFile, EffectResource, ResourceKind};
 pub use cx::{NoFiles, Resolver};
 use fromsoft_formats::fxr::resources::TextureKind;
 pub use lower::{Lowered, NO_LIMIT, lower};
 use primase_core::particles::{Draw, ParticleSystem};
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
-use primase_core::{Component, Entity, World};
+use primase_core::{Clip, ClipEffects, ClipSpawn, Component, Entity, World};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Options: `candela-per-power` (required: candela per unit of the stored diffuse power, the program's calibration, as for
@@ -37,7 +39,11 @@ pub struct LowerFromSoftEffects {
 impl LowerFromSoftEffects {
     /// The lowering at the program's calibration, seed 0, regions that start disabled left out.
     pub fn new(candela_per_power: Factor) -> Self {
-        LowerFromSoftEffects { candela_per_power, seed: 0, include_disabled: Disabled::Skip }
+        LowerFromSoftEffects {
+            candela_per_power,
+            seed: 0,
+            include_disabled: Disabled::Skip,
+        }
     }
     /// The seed of every system's random draws.
     pub fn with_seed(mut self, seed: u64) -> Self {
@@ -60,9 +66,15 @@ impl LowerFromSoftEffects {
     }
 
     fn from_given(g: &Given) -> Result<Self, String> {
-        let mut pass = Self::new(Factor::parse("candela-per-power", g.required("candela-per-power"))?);
+        let mut pass = Self::new(Factor::parse(
+            "candela-per-power",
+            g.required("candela-per-power"),
+        )?);
         if let Some(text) = g.optional("seed") {
-            pass = pass.with_seed(text.parse::<u64>().map_err(|_| format!("seed={text} is not a whole number"))?);
+            pass = pass.with_seed(
+                text.parse::<u64>()
+                    .map_err(|_| format!("seed={text} is not a whole number"))?,
+            );
         }
         if let Some(d) = g.optional_choice::<Disabled>("include-disabled") {
             pass = pass.with_include_disabled(d);
@@ -80,7 +92,12 @@ pub const LOWER_FROMSOFT_EFFECTS: PassSpec = PassSpec {
             "1",
             "at least 0: the candela of one unit of stored light power, the program's calibration (as lower-fromsoft-lights)",
         ),
-        OptionSpec::optional("seed", "0", "a whole number: the seed of every system's random draws", "0"),
+        OptionSpec::optional(
+            "seed",
+            "0",
+            "a whole number: the seed of every system's random draws",
+            "0",
+        ),
         OptionSpec::optional_choice::<Disabled>(
             "include-disabled",
             "lower the effects of regions that start disabled",
@@ -161,12 +178,16 @@ impl Pass for LowerFromSoftEffects {
         "lower-fromsoft-effects"
     }
     fn options(&self) -> Options {
-        let mut options = Options::from([("candela-per-power".to_owned(), self.candela_per_power.to_string())]);
+        let mut options =
+            Options::from([("candela-per-power".to_owned(), self.candela_per_power.to_string())]);
         if self.seed != 0 {
             options.insert("seed".to_owned(), self.seed.to_string());
         }
         if self.include_disabled != Disabled::Skip {
-            options.insert("include-disabled".to_owned(), self.include_disabled.text().to_owned());
+            options.insert(
+                "include-disabled".to_owned(),
+                self.include_disabled.text().to_owned(),
+            );
         }
         options
     }
@@ -178,18 +199,24 @@ impl Pass for LowerFromSoftEffects {
         true
     }
     fn provides(&self) -> &[&'static str] {
-        &[ParticleSystem::NAME]
+        &[ParticleSystem::NAME, ClipEffects::NAME]
     }
     fn approximates(&self) -> &'static str {
         "the fxr project's reading of the parameters (not yet checked against a running game); Hermite properties sampled into lines; a GPU particle system as an ordinary emitter; level-of-detail ranges as ascending distances; soft-particle depth as a fixed distance; effect light colours squared at the keys of their curves"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         // the files the read kept
-        let files: BTreeMap<i32, EffectFile> = world.iter::<EffectFile>().map(|(_, f)| (f.effect, f.clone())).collect();
+        let files: BTreeMap<i32, EffectFile> = world
+            .iter::<EffectFile>()
+            .map(|(_, f)| (f.effect, f.clone()))
+            .collect();
         let mut resources: BTreeMap<(ResourceKind, i32), Entity> = BTreeMap::new();
         for (e, r) in world.iter::<EffectResource>() {
             if resources.insert((r.kind, r.id), e).is_some() {
-                return Err(format!("{e:?}: the effect resource {:?} {} is held by two entities", r.kind, r.id));
+                return Err(format!(
+                    "{e:?}: the effect resource {:?} {} is held by two entities",
+                    r.kind, r.id
+                ));
             }
         }
         // the placements, and the effects they need with the effects those spawn
@@ -208,7 +235,18 @@ impl Pass for LowerFromSoftEffects {
             }
             placements.push((e, p.effect));
         }
+        // the effects the events of clips start
+        let clip_uses: Vec<(Entity, ClipEffectUses)> = world
+            .iter::<ClipEffectUses>()
+            .map(|(e, u)| (e, u.clone()))
+            .collect();
         let mut wanted: BTreeSet<i32> = placements.iter().map(|(_, id)| *id).collect();
+        wanted.extend(
+            clip_uses
+                .iter()
+                .flat_map(|(_, u)| u.uses.iter().map(|u| u.effect))
+                .filter(|id| files.contains_key(id)),
+        );
         let mut stack: Vec<i32> = wanted.iter().copied().collect();
         while let Some(id) = stack.pop() {
             let Some(f) = files.get(&id) else { continue };
@@ -219,6 +257,7 @@ impl Pass for LowerFromSoftEffects {
             }
         }
         if wanted.is_empty() {
+            self.clip_effects(world, log, &clip_uses, &BTreeMap::new());
             return Ok(());
         }
         // an entity for each effect's system first (a system names the systems it spawns by them), then each effect lowered once
@@ -230,10 +269,23 @@ impl Pass for LowerFromSoftEffects {
         for &id in &wanted {
             let Some(f) = files.get(&id) else { continue };
             // an effect may name another unless that one reaches it and has the lower number: a cycle is cut where it closes downward
-            let forbidden: BTreeSet<i32> = wanted.iter().copied().filter(|&other| other <= id && reaches(&files, other, id)).collect();
-            let mut finder = Finder { resources: &resources, systems: &systems, forbidden };
-            let l = lower::lower(&f.file, f.game, mix(self.seed, u64::try_from(id).unwrap_or(0)), &mut finder)
-                .map_err(|e| format!("effect {id}: {e}"))?;
+            let forbidden: BTreeSet<i32> = wanted
+                .iter()
+                .copied()
+                .filter(|&other| other <= id && reaches(&files, other, id))
+                .collect();
+            let mut finder = Finder {
+                resources: &resources,
+                systems: &systems,
+                forbidden,
+            };
+            let l = lower::lower(
+                &f.file,
+                f.game,
+                mix(self.seed, u64::try_from(id).unwrap_or(0)),
+                &mut finder,
+            )
+            .map_err(|e| format!("effect {id}: {e}"))?;
             for (reason, n) in &l.notes.lost {
                 log.omit(reason, u64::from(*n));
             }
@@ -256,7 +308,70 @@ impl Pass for LowerFromSoftEffects {
                 log.count("placed effects lowered", 1);
             }
         }
+        let started: BTreeMap<i32, Entity> = systems
+            .iter()
+            .filter(|(id, _)| lowered.contains_key(*id))
+            .map(|(id, e)| (*id, *e))
+            .collect();
+        self.clip_effects(world, log, &clip_uses, &started);
         Ok(())
+    }
+}
+
+impl LowerFromSoftEffects {
+    /// `core.clip_effects` on each clip that has effect uses: a spawn for each use whose effect was lowered (`systems`, by number),
+    /// standing at the socket the model's dummy polygon is (named as the model's sockets are) and following it where the event
+    /// says; the uses with no lowered effect, and what the read could not name, counted.
+    fn clip_effects(
+        &self,
+        world: &mut World,
+        log: &mut PassLog,
+        clip_uses: &[(Entity, ClipEffectUses)],
+        systems: &BTreeMap<i32, Entity>,
+    ) {
+        for (clip, found) in clip_uses {
+            for (reason, n) in &found.lost {
+                log.omit(reason, u64::from(*n));
+            }
+            if !world.has::<Clip>(*clip) {
+                log.omit(
+                    "effect uses on a clip that is not lowered",
+                    found.uses.len() as u64,
+                );
+                continue;
+            }
+            let mut effects = ClipEffects {
+                origin: Some("effects started by animation events".to_owned()),
+                spawns: Vec::new(),
+                lost: found.lost.clone(),
+            };
+            for u in &found.uses {
+                let Some(&system) = systems.get(&u.effect) else {
+                    log.omit("animation events naming an effect the read did not find", 1);
+                    effects
+                        .lost
+                        .push(("an effect the read did not find".to_owned(), 1));
+                    continue;
+                };
+                if u.kind == 118 {
+                    log.approximate(
+                        "an effect along a blade stands at the blade's base dummy polygon",
+                        1,
+                    );
+                }
+                let socket = u.dummy.map(crate::pose::dummy_socket_name);
+                effects.spawns.push(ClipSpawn {
+                    system,
+                    start: u.start,
+                    end: if u.repeating { u.end } else { None },
+                    follow: u.follow && socket.is_some(),
+                    socket,
+                    event: Some(u.event),
+                });
+                log.count("effects started by animation events", 1);
+            }
+            world.insert(*clip, effects);
+        }
     }
 }
 

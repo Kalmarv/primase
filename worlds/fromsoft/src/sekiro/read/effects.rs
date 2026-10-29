@@ -9,7 +9,8 @@
 use super::effect_lights::{ModelDummies, PlacedModel, Placement, map_transform, row_of};
 use super::textures::tpf_image;
 use crate::pose::placed;
-use crate::sekiro::components::effect::{Effect, EffectFile, EffectResource, ResourceKind};
+use crate::sekiro::character_data::ClipEvents as SourceEvents;
+use crate::sekiro::components::effect::{Effect, EffectFile, EffectResource, ResourceKind, clip_effect_uses};
 use crate::sekiro::source::EffectPlace;
 use fromsoft_formats::fxr::actions::Typed;
 use fromsoft_formats::fxr::resources::{ResourceKind as FileKind, Resources};
@@ -52,6 +53,8 @@ pub struct Report {
     pub unplaced: usize,
     /// Why the model effect param could not be read, if it could not.
     pub param_unresolved: Option<String>,
+    /// The effects the events of a clip start ([`read_for_clip`]).
+    pub clip_uses: usize,
 }
 
 impl Report {
@@ -89,7 +92,10 @@ pub struct EffectLibrary<'a> {
 
 /// The binders to search for an area's effects, those the archive holds: the area's own, then the common ones.
 pub fn binders_for_area(game: Game, area: &str) -> Vec<String> {
-    let mut paths = vec![format!("/sfx/sfxbnd_{}.ffxbnd.dcx", area.get(..3).unwrap_or(area))];
+    let mut paths = vec![format!(
+        "/sfx/sfxbnd_{}.ffxbnd.dcx",
+        area.get(..3).unwrap_or(area)
+    )];
     if game == Game::EldenRing {
         paths.push(format!("/sfx/sfxbnd_{area}.ffxbnd.dcx"));
     }
@@ -105,7 +111,14 @@ impl<'a> EffectLibrary<'a> {
     pub fn new(archive: &'a Archive, decoder: &'a Decoder<'a>, game: Game, mut paths: Vec<String>) -> Self {
         paths.retain(|p| archive.contains(p));
         let loaded = paths.iter().map(|_| None).collect();
-        EffectLibrary { archive, decoder, game, paths, loaded, files: BTreeMap::new() }
+        EffectLibrary {
+            archive,
+            decoder,
+            game,
+            paths,
+            loaded,
+            files: BTreeMap::new(),
+        }
     }
 
     fn load(&mut self, i: usize) -> Result<&Loaded> {
@@ -119,7 +132,11 @@ impl<'a> EffectLibrary<'a> {
                 .filter_map(|(k, f)| Some((fxr::member_id(f.name.as_deref()?)?, k)))
                 .collect();
             let resources = Resources::index(&binder)?;
-            self.loaded[i] = Some(Loaded { binder, effects, resources });
+            self.loaded[i] = Some(Loaded {
+                binder,
+                effects,
+                resources,
+            });
         }
         Ok(self.loaded[i].as_ref().expect("loaded above"))
     }
@@ -132,7 +149,9 @@ impl<'a> EffectLibrary<'a> {
             for i in 0..self.paths.len() {
                 let loaded = self.load(i)?;
                 if let Some(&k) = loaded.effects.get(&id) {
-                    result = Fxr::read(&loaded.binder.files[k].bytes).map(|f| Some(Arc::new(f))).map_err(|e| e.to_string());
+                    result = Fxr::read(&loaded.binder.files[k].bytes)
+                        .map(|f| Some(Arc::new(f)))
+                        .map_err(|e| e.to_string());
                     break;
                 }
             }
@@ -142,7 +161,11 @@ impl<'a> EffectLibrary<'a> {
     }
 
     /// The decoded image of the texture of `kind` and number `id` in the first binder that holds it.
-    pub fn texture(&mut self, kind: fxr::resources::TextureKind, id: i32) -> Result<Option<primase_core::Texture>> {
+    pub fn texture(
+        &mut self,
+        kind: fxr::resources::TextureKind,
+        id: i32,
+    ) -> Result<Option<primase_core::Texture>> {
         for i in 0..self.paths.len() {
             let game = self.game;
             let decoder = self.decoder;
@@ -150,7 +173,9 @@ impl<'a> EffectLibrary<'a> {
             if let Some(k) = loaded.resources.texture(game, kind, id) {
                 let bytes = decoder.decode_if_dcx(&loaded.binder.files[k].bytes)?;
                 let package = Package::read(&bytes)?;
-                let Some(texture) = package.textures.first() else { continue };
+                let Some(texture) = package.textures.first() else {
+                    continue;
+                };
                 return tpf_image(texture).map(Some);
             }
         }
@@ -162,7 +187,9 @@ impl<'a> EffectLibrary<'a> {
 fn resources_of(node: &TypedNode, out: &mut BTreeSet<(ResourceKind, i32)>) {
     let mut note = |a: &Typed| {
         for r in a.resources() {
-            let Some(id) = r.id.filter(|&id| id > 0) else { continue };
+            let Some(id) = r.id.filter(|&id| id > 0) else {
+                continue;
+            };
             let kind = match r.kind {
                 FileKind::Texture(k) => ResourceKind::of_texture(k),
                 FileKind::Model => ResourceKind::Model,
@@ -185,18 +212,18 @@ fn resources_of(node: &TypedNode, out: &mut BTreeSet<(ResourceKind, i32)>) {
     }
 }
 
-/// Reads the files the `wanted` effects need into `world` and places the effects: the effect files (once each, with the effects
-/// they spawn), the textures they name, and one `fromsoft.effect` entity per wanted effect at its transform.
-pub fn place_all(
+/// Reads the files the effects `roots` need into `world`: the effect files (once each, with the effects they spawn, an
+/// `fromsoft.effect_file` entity each) and the textures they name (a `core.texture` each). The files read, by number.
+pub fn read_files(
     library: &mut EffectLibrary<'_>,
-    wanted: Vec<Wanted>,
+    roots: Vec<i32>,
     world: &mut World,
     report: &mut Report,
-) -> Result<()> {
+) -> Result<BTreeMap<i32, Arc<Fxr>>> {
     let game = library.game;
-    // the effect files: the wanted ones with the effects they spawn
+    // the effect files: the roots with the effects they spawn
     let mut files: BTreeMap<i32, Arc<Fxr>> = BTreeMap::new();
-    let mut stack: Vec<i32> = wanted.iter().map(|w| w.effect).collect();
+    let mut stack: Vec<i32> = roots;
     stack.sort_unstable();
     stack.dedup();
     let mut queued: BTreeSet<i32> = stack.iter().copied().collect();
@@ -216,14 +243,23 @@ pub fn place_all(
     }
     for (id, fx) in &files {
         let e = world.spawn();
-        world.insert(e, EffectFile { effect: *id, game, file: Arc::clone(fx) });
+        world.insert(
+            e,
+            EffectFile {
+                effect: *id,
+                game,
+                file: Arc::clone(fx),
+            },
+        );
         world.insert(e, Source(format!("fxr {id}")));
     }
     report.files += files.len();
     // the files the effects name
     let mut named: BTreeSet<(ResourceKind, i32)> = BTreeSet::new();
     for fx in files.values() {
-        let tree = fx.typed(game).map_err(|e| crate::invalid("effect file", 0, format!("effect {}: {e}", fx.id)))?;
+        let tree = fx
+            .typed(game)
+            .map_err(|e| crate::invalid("effect file", 0, format!("effect {}: {e}", fx.id)))?;
         resources_of(&tree, &mut named);
     }
     for (kind, id) in named {
@@ -236,13 +272,29 @@ pub fn place_all(
                     world.insert(e, Name(format!("sfx texture {id} ({kind:?})")));
                     report.textures += 1;
                 }
-                None => *report.missing.entry(format!("{kind:?} not in the binders searched")).or_default() += 1,
+                None => {
+                    *report
+                        .missing
+                        .entry(format!("{kind:?} not in the binders searched"))
+                        .or_default() += 1
+                }
             },
             None if kind == ResourceKind::Model => report.models_named += 1,
             None => report.animations_named += 1,
         }
     }
-    // the placements
+    Ok(files)
+}
+
+/// Reads the files the `wanted` effects need into `world` ([`read_files`]) and places the effects: one `fromsoft.effect`
+/// entity per wanted effect at its transform.
+pub fn place_all(
+    library: &mut EffectLibrary<'_>,
+    wanted: Vec<Wanted>,
+    world: &mut World,
+    report: &mut Report,
+) -> Result<()> {
+    let files = read_files(library, wanted.iter().map(|w| w.effect).collect(), world, report)?;
     for w in wanted {
         if !files.contains_key(&w.effect) {
             report.unplaced += 1;
@@ -251,7 +303,14 @@ pub fn place_all(
         let e = world.spawn();
         world.insert(e, w.transform);
         world.insert(e, Source(w.label));
-        world.insert(e, Effect { effect: w.effect, place: w.place, starts_disabled: w.starts_disabled });
+        world.insert(
+            e,
+            Effect {
+                effect: w.effect,
+                place: w.place,
+                starts_disabled: w.starts_disabled,
+            },
+        );
     }
     Ok(())
 }
@@ -268,9 +327,12 @@ fn wanted_for_area(
 ) -> Result<Vec<Wanted>> {
     let mut out = Vec::new();
     let map = map_transform(layout)?;
-    let inside = |p: [f32; 3]| region.is_none_or(|r| p[0] >= r[0] && p[0] < r[2] && -p[2] >= r[1] && -p[2] < r[3]);
+    let inside =
+        |p: [f32; 3]| region.is_none_or(|r| p[0] >= r[0] && p[0] < r[2] && -p[2] >= r[1] && -p[2] < r[3]);
     for r in layout.map_regions()? {
-        let Some(sfx) = layout.sfx_region(&r)? else { continue };
+        let Some(sfx) = layout.sfx_region(&r)? else {
+            continue;
+        };
         if !inside(r.position) {
             report.regions_outside += 1;
             continue;
@@ -281,7 +343,9 @@ fn wanted_for_area(
         out.push(Wanted {
             effect: sfx.effect_id,
             transform: map.compose(&pose),
-            place: EffectPlace::Region { region: r.name.clone() },
+            place: EffectPlace::Region {
+                region: r.name.clone(),
+            },
             starts_disabled: sfx.start_disabled,
             label: format!("{}/fxr {}", r.name, sfx.effect_id),
         });
@@ -295,7 +359,13 @@ fn wanted_for_area(
 }
 
 /// The effects of one placed model: each used slot of its row at each dummy polygon the slot names.
-fn model_effects(game: Game, param: &ModelSfxParam, m: &PlacedModel<'_>, out: &mut Vec<Wanted>, report: &mut Report) {
+fn model_effects(
+    game: Game,
+    param: &ModelSfxParam,
+    m: &PlacedModel<'_>,
+    out: &mut Vec<Wanted>,
+    report: &mut Report,
+) {
     let row_id = match row_of(game, m.model, m.relative_id) {
         Err(()) => {
             report.parts_without_row += 1;
@@ -360,7 +430,10 @@ pub fn assemble(
     models: &[PlacedModel<'_>],
     world: &mut World,
 ) -> Result<Report> {
-    let mut report = Report { asked: true, ..Report::default() };
+    let mut report = Report {
+        asked: true,
+        ..Report::default()
+    };
     let game = install.game;
     let param = if models.is_empty() {
         None
@@ -379,6 +452,37 @@ pub fn assemble(
     Ok(report)
 }
 
+/// Reads the effects the events of clip `clip` start (its `fromsoft.clip_events` in `world`) from the common effect binders: the
+/// effect files and the textures they name ([`read_files`]), and on the clip a `fromsoft.clip_effect_uses` saying which events
+/// start which effect. A clip with no events, or whose events start no effect, is left as it is.
+pub fn read_for_clip(
+    archive: &Archive,
+    decoder: &Decoder<'_>,
+    game: Game,
+    world: &mut World,
+    clip: Entity,
+) -> Result<Report> {
+    let mut report = Report {
+        asked: true,
+        ..Report::default()
+    };
+    let Some(source) = world.get::<SourceEvents>(clip) else {
+        return Ok(report);
+    };
+    let found = clip_effect_uses(source);
+    if found.uses.is_empty() && found.lost.is_empty() {
+        return Ok(report);
+    }
+    let roots: Vec<i32> = found.uses.iter().map(|u| u.effect).collect();
+    if !roots.is_empty() {
+        let mut library = EffectLibrary::new(archive, decoder, game, binders_for_area(game, ""));
+        read_files(&mut library, roots, world, &mut report)?;
+    }
+    report.clip_uses = found.uses.len();
+    world.insert(clip, found);
+    Ok(report)
+}
+
 /// One effect by its number, standing at the origin (an effect viewer's world): the effect file, the effects it spawns and the
 /// textures they name, and an entity placing the effect at the identity transform. `binders` are searched in order
 /// ([`binders_for_area`] for a map's, or the one binder the caller knows holds the effect).
@@ -390,7 +494,10 @@ pub fn read_effect(
     effect: i32,
     world: &mut World,
 ) -> Result<(Report, Option<Entity>)> {
-    let mut report = Report { asked: true, ..Report::default() };
+    let mut report = Report {
+        asked: true,
+        ..Report::default()
+    };
     let before: BTreeSet<Entity> = world.entities().collect();
     let mut library = EffectLibrary::new(archive, decoder, game, binders);
     let wanted = vec![Wanted {

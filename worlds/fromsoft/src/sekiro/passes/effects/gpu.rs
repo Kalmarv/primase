@@ -9,8 +9,8 @@ use super::value::Notes;
 use fromsoft_formats::fxr::actions as a;
 use fromsoft_formats::fxr::resources::TextureKind;
 use primase_core::particles::{
-    Anchor, Atlas, Attachment, Axis, Channels, Draw, Drive, Follow, Heading, Law, Movement, Orientation, Quad, Shape, Spawn,
-    Spread, Term, Value, Variation,
+    Anchor, Atlas, Attachment, Axis, Channels, Draw, Drive, Follow, Heading, Law, Movement, Orientation,
+    Quad, Shape, Spawn, Spread, Term, Value, Variation,
 };
 
 /// What a GPU particle action lowers to: the parts of an emitter it defines.
@@ -73,7 +73,11 @@ macro_rules! gpu_in {
             emitter_shape: g.emitter_shape,
             emitter_size: g.emitter_size,
             interval: (g.emission_interval_min, g.emission_interval_max),
-            count: (g.emission_particle_count, g.emission_particle_count_min, g.emission_particle_count_max),
+            count: (
+                g.emission_particle_count,
+                g.emission_particle_count_min,
+                g.emission_particle_count_max,
+            ),
             limit: g.limit_emission_count.then_some(g.emission_count_limit),
             duration: g.particle_duration,
             duration_multiplier: g.particle_duration_multiplier,
@@ -118,7 +122,11 @@ macro_rules! gpu_in {
 fn ranged(base: f32, lo: f32, hi: f32, stream: u32) -> Value {
     let mut v = Value::constant(&[base]);
     if lo != 0.0 || hi != 0.0 {
-        v.variation.push(Variation::Range { min: [lo, 0.0, 0.0, 0.0], max: [hi, 0.0, 0.0, 0.0], stream });
+        v.variation.push(Variation::Range {
+            min: [lo, 0.0, 0.0, 0.0],
+            max: [hi, 0.0, 0.0, 0.0],
+            stream,
+        });
     }
     v
 }
@@ -155,8 +163,18 @@ impl Cx<'_> {
         }
         notes.lose("the rotation, angular speed and growth of GPU particles");
         // emission: a count that varies by emission, every interval between the bounds
-        let interval = ranged(0.0, units::frames(g.interval.0), units::frames(g.interval.1.max(g.interval.0)), 0);
-        let count = ranged(g.count.0 as f32, g.count.1 as f32, g.count.2.max(g.count.1) as f32, 1);
+        let interval = ranged(
+            0.0,
+            units::frames(g.interval.0),
+            units::frames(g.interval.1.max(g.interval.0)),
+            0,
+        );
+        let count = ranged(
+            g.count.0 as f32,
+            g.count.1 as f32,
+            g.count.2.max(g.count.1) as f32,
+            1,
+        );
         let spawn = Spawn::Periodic {
             interval,
             count,
@@ -167,7 +185,14 @@ impl Cx<'_> {
         let shape = match g.emitter_shape {
             0 | 3 => {
                 notes.approximate("a GPU particle line emitter as a box thin on two axes");
-                Shape::Box { size: [Value::constant(&[size[0]]), Value::constant(&[0.0]), Value::constant(&[0.0])], volume: true }
+                Shape::Box {
+                    size: [
+                        Value::constant(&[size[0]]),
+                        Value::constant(&[0.0]),
+                        Value::constant(&[0.0]),
+                    ],
+                    volume: true,
+                }
             }
             4 => {
                 notes.approximate("a GPU particle cylinder emitter's radius and height taken from its size");
@@ -178,10 +203,16 @@ impl Cx<'_> {
                     axis: Axis::Y,
                 }
             }
-            1 | 2 | 5 => Shape::Box { size: size.map(|s| Value::constant(&[s])), volume: true },
+            1 | 2 | 5 => Shape::Box {
+                size: size.map(|s| Value::constant(&[s])),
+                volume: true,
+            },
             _ => {
                 notes.lose("a GPU emitter shape the project does not name, taken as a box");
-                Shape::Box { size: size.map(|s| Value::constant(&[s])), volume: true }
+                Shape::Box {
+                    size: size.map(|s| Value::constant(&[s])),
+                    volume: true,
+                }
             }
         };
         // speed: the vector speed plus a random part, as a speed along the heading its direction gives
@@ -191,7 +222,9 @@ impl Cx<'_> {
             let n = norm(mid);
             Heading::Frame(units::dir([mid[0] / n, mid[1] / n, mid[2] / n]))
         } else {
-            Heading::Shape { facing: units::FORWARD }
+            Heading::Shape {
+                facing: units::FORWARD,
+            }
         };
         let speed = Value::constant(&[norm(mid)]);
         let acc_mid = [0, 1, 2].map(|i| 0.5 * (g.acceleration.0[i] + g.acceleration.1[i]));
@@ -201,31 +234,64 @@ impl Cx<'_> {
         let gravity = self.age(g.gravity);
         let drag_factor = self.age(g.follow);
         let movement = Movement {
-            drive: if norm(mid) > 1e-6 { Drive::Speed { speed, multiplier: Value::constant(&[1.0]) } } else { Drive::None },
+            drive: if norm(mid) > 1e-6 {
+                Drive::Speed {
+                    speed,
+                    multiplier: Value::constant(&[1.0]),
+                }
+            } else {
+                Drive::None
+            },
             gravity,
             turns: None,
-            drag: Some(primase_core::particles::Drag { factor: drag_factor, rotation: false }),
+            drag: Some(primase_core::particles::Drag {
+                factor: drag_factor,
+                rotation: false,
+            }),
             fields: None,
         };
         let lifetime = units::frames(g.duration) * g.duration_multiplier;
         let law = Law {
             lifetime: (lifetime > 0.0).then(|| Value::constant(&[lifetime])),
-            attachment: Attachment { anchor: Anchor::Parent, follow: Follow::None },
+            attachment: Attachment {
+                anchor: Anchor::Parent,
+                follow: Follow::None,
+            },
             movement: Some(movement),
             initial_speed: Value::constant(&[0.0]),
-            size_scale: [Value::constant(&[1.0]), Value::constant(&[1.0]), Value::constant(&[1.0])],
+            size_scale: [
+                Value::constant(&[1.0]),
+                Value::constant(&[1.0]),
+                Value::constant(&[1.0]),
+            ],
             tint: Value::constant(&[1.0; 4]),
         };
         // appearance: a camera-facing quad of the size between the bounds
         let map = self.map_word(TextureKind::Albedo, g.texture);
         let sx = (g.size.0[0] + 0.5 * (g.size.1[0] + g.size.2[0])) * g.size_multiplier;
-        let sy = if g.uniform { sx } else { (g.size.0[1] + 0.5 * (g.size.1[1] + g.size.2[1])) * g.size_multiplier };
+        let sy = if g.uniform {
+            sx
+        } else {
+            (g.size.0[1] + 0.5 * (g.size.1[1] + g.size.2[1])) * g.size_multiplier
+        };
         let blend = units::blend(g.blend, &mut self.notes);
         let colour = self.age(g.colour);
         let mut tint = vec![
-            Term { value: colour, clamp: false, channels: Channels::Rgba },
-            Term { value: Value::constant(&[g.rgb]), clamp: false, channels: Channels::Rgb },
-            Term { value: Value::constant(&[g.alpha]), clamp: false, channels: Channels::Alpha },
+            Term {
+                value: colour,
+                clamp: false,
+                channels: Channels::Rgba,
+            },
+            Term {
+                value: Value::constant(&[g.rgb]),
+                clamp: false,
+                channels: Channels::Rgb,
+            },
+            Term {
+                value: Value::constant(&[g.alpha]),
+                clamp: false,
+                channels: Channels::Alpha,
+            },
         ];
         if g.colour_range.0 != [0.0; 4] || g.colour_range.1 != [0.0; 4] {
             self.notes.lose("the random colour variation of GPU particles");
@@ -272,6 +338,13 @@ impl Cx<'_> {
             premultiply_alpha: false,
             depth_bias: zero(),
         };
-        Gpu { spawn, shape, heading, spread: Spread::None, law, draw: Draw::Quad(quad) }
+        Gpu {
+            spawn,
+            shape,
+            heading,
+            spread: Spread::None,
+            law,
+            draw: Draw::Quad(quad),
+        }
     }
 }

@@ -85,7 +85,12 @@ impl Curve {
             width: values.len().clamp(1, 4) as u8,
             interpolation: Interpolation::Linear,
             looped: false,
-            keys: vec![Key { at: 0.0, value, handle_in: [0.0; 4], handle_out: [0.0; 4] }],
+            keys: vec![Key {
+                at: 0.0,
+                value,
+                handle_in: [0.0; 4],
+                handle_out: [0.0; 4],
+            }],
         }
     }
 
@@ -93,7 +98,9 @@ impl Curve {
     /// loop). Components past [`Curve::width`] are 0.
     pub fn value_at(&self, x: f32) -> [f32; 4] {
         let keys = &self.keys;
-        let (Some(first), Some(last)) = (keys.first(), keys.last()) else { return [0.0; 4] };
+        let (Some(first), Some(last)) = (keys.first(), keys.last()) else {
+            return [0.0; 4];
+        };
         let x = if self.looped {
             if last.at <= 0.0 {
                 return first.value;
@@ -117,12 +124,21 @@ impl Curve {
         }
         let u = (x - a.at) / d;
         let mut out = [0.0; 4];
-        for (c, slot) in out.iter_mut().enumerate().take(usize::from(self.width.clamp(1, 4))) {
+        for (c, slot) in out
+            .iter_mut()
+            .enumerate()
+            .take(usize::from(self.width.clamp(1, 4)))
+        {
             *slot = match self.interpolation {
                 Interpolation::Step => a.value[c],
                 Interpolation::Linear => a.value[c] + (b.value[c] - a.value[c]) * u,
                 Interpolation::Bezier => {
-                    let (p0, p1, p2, p3) = (a.value[c], a.value[c] + a.handle_out[c], b.value[c] - b.handle_in[c], b.value[c]);
+                    let (p0, p1, p2, p3) = (
+                        a.value[c],
+                        a.value[c] + a.handle_out[c],
+                        b.value[c] - b.handle_in[c],
+                        b.value[c],
+                    );
                     let k = 1.0 - u;
                     k * (k * k * p0 + 3.0 * u * (k * p1 + u * p2)) + u * u * u * p3
                 }
@@ -140,7 +156,13 @@ impl Curve {
         }
         let mut previous = f32::NEG_INFINITY;
         for (i, k) in self.keys.iter().enumerate() {
-            if !(k.at.is_finite() && k.value.iter().chain(&k.handle_in).chain(&k.handle_out).all(|v| v.is_finite())) {
+            if !(k.at.is_finite()
+                && k.value
+                    .iter()
+                    .chain(&k.handle_in)
+                    .chain(&k.handle_out)
+                    .all(|v| v.is_finite()))
+            {
                 return Err(format!("{what}: key {i} is not finite"));
             }
             if k.at < previous {
@@ -161,7 +183,11 @@ pub enum Variation {
     /// `base + (2u - 1) * max * base`: the base varies by up to the fraction `max` of itself.
     Fraction { max: [f32; 4], stream: u32 },
     /// `base + min + u * (max - min)`: a random addition in a range.
-    Range { min: [f32; 4], max: [f32; 4], stream: u32 },
+    Range {
+        min: [f32; 4],
+        max: [f32; 4],
+        stream: u32,
+    },
     /// `base * factor(input)`: the base scaled by a curve of an [`Input`]'s current value.
     Scaled { input: u32, factor: Curve },
 }
@@ -180,7 +206,11 @@ pub struct Value {
 impl Value {
     /// A constant that does not vary.
     pub fn constant(values: &[f32]) -> Value {
-        Value { argument: Argument::Constant, curve: Curve::constant(values), variation: Vec::new() }
+        Value {
+            argument: Argument::Constant,
+            curve: Curve::constant(values),
+            variation: Vec::new(),
+        }
     }
 
     /// Whether the value is a constant that does not vary.
@@ -236,7 +266,11 @@ impl Value {
     /// The value at argument `x` for the draw `scope` of `emitter` in a system of `seed`, with the system's inputs read
     /// through `input` (by index): the curve, then the variations in order.
     pub fn eval(&self, x: f32, seed: u64, emitter: u32, scope: u64, input: &dyn Fn(u32) -> f32) -> [f32; 4] {
-        let at = if self.argument == Argument::Constant { 0.0 } else { x };
+        let at = if self.argument == Argument::Constant {
+            0.0
+        } else {
+            x
+        };
         let mut v = self.curve.value_at(at);
         let width = usize::from(self.curve.width.clamp(1, 4));
         for var in &self.variation {
@@ -314,9 +348,19 @@ pub enum Spawn {
     /// One particle, once, when the emitter becomes active.
     Once,
     /// `count` particles every `interval` seconds, `total` times at most, never more than `max_alive` alive.
-    Periodic { interval: Value, count: Value, total: Option<u32>, max_alive: Option<u32> },
+    Periodic {
+        interval: Value,
+        count: Value,
+        total: Option<u32>,
+        max_alive: Option<u32>,
+    },
     /// `count` particles each time the emitter has moved `step` metres from where it last emitted.
-    Distance { step: Value, count: Value, total: Option<u32>, max_alive: Option<u32> },
+    Distance {
+        step: Value,
+        count: Value,
+        total: Option<u32>,
+        max_alive: Option<u32>,
+    },
 }
 
 /// Which axis a cylinder runs along.
@@ -342,7 +386,12 @@ pub enum Shape {
     /// A box's surface, or its volume.
     Box { size: [Value; 3], volume: bool },
     /// A cylinder's surface, or its volume.
-    Cylinder { radius: Value, height: Value, volume: bool, axis: Axis },
+    Cylinder {
+        radius: Value,
+        height: Value,
+        volume: bool,
+        axis: Axis,
+    },
 }
 
 /// Which way an emitted particle first heads, before the spread.
@@ -367,9 +416,17 @@ pub enum Spread {
     /// particle on the axis and -1 on the cone's edge.
     Cone { angle: Value, concentration: Value },
     /// Inside an elliptical cone of half-angles `x` and `y`.
-    Ellipse { x: Value, y: Value, concentration: Value },
+    Ellipse {
+        x: Value,
+        y: Value,
+        concentration: Value,
+    },
     /// Inside a rectangular cone of half-angles `x` and `y`.
-    Rectangle { x: Value, y: Value, concentration: Value },
+    Rectangle {
+        x: Value,
+        y: Value,
+        concentration: Value,
+    },
 }
 
 /// What drives a particle along its heading.
@@ -846,7 +903,10 @@ pub struct LightDraw {
 pub enum LightKind {
     Point,
     /// A cone along the frame's +Z; angles in degrees from the axis.
-    Spot { inner: f32, outer: f32 },
+    Spot {
+        inner: f32,
+        outer: f32,
+    },
 }
 
 /// A lens flare: up to four textured layers placed along the line between the source and the screen's centre.
@@ -910,9 +970,16 @@ pub enum ForceKind {
 pub enum ForceVolume {
     /// Everywhere.
     Boundless,
-    Box { half: [f32; 3] },
-    Sphere { radius: f32 },
-    Cylinder { radius: f32, half_height: f32 },
+    Box {
+        half: [f32; 3],
+    },
+    Sphere {
+        radius: f32,
+    },
+    Cylinder {
+        radius: f32,
+        half_height: f32,
+    },
 }
 
 /// A force field: pushes the particles whose [`Movement::fields`] listen, inside its volume.
@@ -1096,7 +1163,13 @@ impl Component for ParticleSystem {
             {
                 return Err(at(&format!("parent {p} is not an earlier emitter")));
             }
-            let finite = e.placement.cols.iter().flatten().chain(&e.jitter_translation).chain(&e.jitter_rotation);
+            let finite = e
+                .placement
+                .cols
+                .iter()
+                .flatten()
+                .chain(&e.jitter_translation)
+                .chain(&e.jitter_rotation);
             if !finite.chain([&e.delay, &e.order]).all(|v| v.is_finite()) {
                 return Err(at("a placement that is not finite"));
             }
@@ -1111,7 +1184,10 @@ impl Component for ParticleSystem {
         if !(self.warmup.is_finite() && self.warmup >= 0.0) {
             return Err(format!("a warm-up of {} seconds", self.warmup));
         }
-        if self.max_view_distance.is_some_and(|d| !(d.is_finite() && d > 0.0)) {
+        if self
+            .max_view_distance
+            .is_some_and(|d| !(d.is_finite() && d > 0.0))
+        {
             return Err("a view distance that is not a positive number".into());
         }
         if let Some(v) = &self.time_scale {
@@ -1140,12 +1216,17 @@ impl Emitter {
         }
         match &self.spawn {
             Spawn::Once => {}
-            Spawn::Periodic { interval, count, .. } => values.extend([("interval", interval), ("count", count)]),
+            Spawn::Periodic { interval, count, .. } => {
+                values.extend([("interval", interval), ("count", count)])
+            }
             Spawn::Distance { step, count, .. } => values.extend([("step", step), ("count", count)]),
         }
         match &self.shape {
             Shape::Point => {}
-            Shape::Disk { radius, concentration } => values.extend([("radius", radius), ("concentration", concentration)]),
+            Shape::Disk {
+                radius,
+                concentration,
+            } => values.extend([("radius", radius), ("concentration", concentration)]),
             Shape::Rectangle { size, concentration } => {
                 values.extend(size.iter().map(|v| ("size", v)));
                 values.push(("concentration", concentration));
@@ -1156,7 +1237,9 @@ impl Emitter {
         }
         match &self.spread {
             Spread::None => {}
-            Spread::Cone { angle, concentration } => values.extend([("angle", angle), ("concentration", concentration)]),
+            Spread::Cone { angle, concentration } => {
+                values.extend([("angle", angle), ("concentration", concentration)])
+            }
             Spread::Ellipse { x, y, concentration } | Spread::Rectangle { x, y, concentration } => {
                 values.extend([("angle", x), ("angle", y), ("concentration", concentration)]);
             }
@@ -1164,9 +1247,17 @@ impl Emitter {
         if let Some(m) = &self.law.movement {
             match &m.drive {
                 Drive::None => {}
-                Drive::Speed { speed, multiplier } => values.extend([("speed", speed), ("speed multiplier", multiplier)]),
-                Drive::Acceleration { acceleration, multiplier } => {
-                    values.extend([("acceleration", acceleration), ("acceleration multiplier", multiplier)]);
+                Drive::Speed { speed, multiplier } => {
+                    values.extend([("speed", speed), ("speed multiplier", multiplier)])
+                }
+                Drive::Acceleration {
+                    acceleration,
+                    multiplier,
+                } => {
+                    values.extend([
+                        ("acceleration", acceleration),
+                        ("acceleration multiplier", multiplier),
+                    ]);
                 }
             }
             values.push(("gravity", &m.gravity));
@@ -1280,7 +1371,10 @@ impl Draw {
             out.extend(q.offset.iter().map(|v| ("offset", v)));
             out.extend(q.rotation.iter().map(|v| ("rotation", v)));
             out.extend(q.spin.iter().map(|v| ("spin", v)));
-            out.extend([("alpha fade threshold", &q.alpha_fade_threshold), ("alpha cutoff", &q.alpha_cutoff)]);
+            out.extend([
+                ("alpha fade threshold", &q.alpha_fade_threshold),
+                ("alpha cutoff", &q.alpha_cutoff),
+            ]);
             out.push(("depth bias", &q.depth_bias));
             terms(out, &q.tint);
             atlas(out, &q.atlas);
@@ -1326,15 +1420,31 @@ impl Draw {
                 atlas(out, &t.atlas);
             }
             Draw::Streak(s) => {
-                out.extend([("length", &s.length), ("start colour", &s.start_colour), ("end colour", &s.end_colour), ("alpha cutoff", &s.alpha_cutoff)]);
+                out.extend([
+                    ("length", &s.length),
+                    ("start colour", &s.start_colour),
+                    ("end colour", &s.end_colour),
+                    ("alpha cutoff", &s.alpha_cutoff),
+                ]);
                 out.extend(s.width.iter().map(|w| ("width", w)));
                 terms(out, &s.tint);
             }
             Draw::Refraction(r) => {
                 out.extend(r.offset.iter().map(|v| ("offset", v)));
                 out.extend(r.size.iter().map(|v| ("size", v)));
-                out.extend([("intensity", &r.intensity), ("stir speed", &r.stir_speed), ("radius", &r.radius), ("alpha cutoff", &r.alpha_cutoff)]);
-                out.extend(r.normal_offset.iter().chain(&r.normal_scroll).chain(&r.normal_scale).map(|v| ("normal map", v)));
+                out.extend([
+                    ("intensity", &r.intensity),
+                    ("stir speed", &r.stir_speed),
+                    ("radius", &r.radius),
+                    ("alpha cutoff", &r.alpha_cutoff),
+                ]);
+                out.extend(
+                    r.normal_offset
+                        .iter()
+                        .chain(&r.normal_scroll)
+                        .chain(&r.normal_scale)
+                        .map(|v| ("normal map", v)),
+                );
                 terms(out, &r.tint);
             }
             Draw::RadialBlur(b) => {
@@ -1343,10 +1453,18 @@ impl Draw {
                 out.extend([("radius", &b.radius), ("alpha cutoff", &b.alpha_cutoff)]);
                 terms(out, &b.tint);
             }
-            Draw::Light(l) => out.extend([("colour", &l.colour), ("intensity", &l.intensity), ("range", &l.range)]),
+            Draw::Light(l) => out.extend([
+                ("colour", &l.colour),
+                ("intensity", &l.intensity),
+                ("range", &l.range),
+            ]),
             Draw::Flare(f) => {
                 for l in &f.layers {
-                    out.extend([("flare width", &l.width), ("flare height", &l.height), ("flare colour", &l.colour)]);
+                    out.extend([
+                        ("flare width", &l.width),
+                        ("flare height", &l.height),
+                        ("flare colour", &l.colour),
+                    ]);
                 }
             }
             Draw::Field(f) => out.push(("force", &f.strength)),
@@ -1395,11 +1513,21 @@ mod tests {
     use super::*;
 
     fn key(at: f32, v: f32) -> Key {
-        Key { at, value: [v, 0.0, 0.0, 0.0], handle_in: [0.0; 4], handle_out: [0.0; 4] }
+        Key {
+            at,
+            value: [v, 0.0, 0.0, 0.0],
+            handle_in: [0.0; 4],
+            handle_out: [0.0; 4],
+        }
     }
 
     fn curve(interpolation: Interpolation, keys: Vec<Key>) -> Curve {
-        Curve { width: 1, interpolation, looped: false, keys }
+        Curve {
+            width: 1,
+            interpolation,
+            looped: false,
+            keys,
+        }
     }
 
     #[test]
@@ -1408,7 +1536,10 @@ mod tests {
         assert_eq!(lin.value_at(-5.0)[0], 0.0);
         assert_eq!(lin.value_at(1.0)[0], 5.0);
         assert_eq!(lin.value_at(9.0)[0], 10.0);
-        let step = curve(Interpolation::Step, vec![key(0.0, 1.0), key(2.0, 2.0), key(4.0, 3.0)]);
+        let step = curve(
+            Interpolation::Step,
+            vec![key(0.0, 1.0), key(2.0, 2.0), key(4.0, 3.0)],
+        );
         assert_eq!(step.value_at(1.9)[0], 1.0);
         assert_eq!(step.value_at(2.0)[0], 2.0);
         let mut looped = lin.clone();
@@ -1442,7 +1573,13 @@ mod tests {
         assert_eq!(a, unit(7, 1, 2, 3, 0));
         assert!((0.0..1.0).contains(&a));
         // any key changes the draw
-        for other in [unit(8, 1, 2, 3, 0), unit(7, 2, 2, 3, 0), unit(7, 1, 3, 3, 0), unit(7, 1, 2, 4, 0), unit(7, 1, 2, 3, 1)] {
+        for other in [
+            unit(8, 1, 2, 3, 0),
+            unit(7, 2, 2, 3, 0),
+            unit(7, 1, 3, 3, 0),
+            unit(7, 1, 2, 4, 0),
+            unit(7, 1, 2, 3, 1),
+        ] {
             assert_ne!(a, other);
         }
         // roughly uniform over many scopes
@@ -1454,8 +1591,14 @@ mod tests {
     #[test]
     fn variations_apply_in_order_within_their_bounds() {
         let mut v = Value::constant(&[10.0]);
-        v.variation.push(Variation::Delta { max: [2.0; 4], stream: 0 });
-        v.variation.push(Variation::Fraction { max: [0.1; 4], stream: 1 });
+        v.variation.push(Variation::Delta {
+            max: [2.0; 4],
+            stream: 0,
+        });
+        v.variation.push(Variation::Fraction {
+            max: [0.1; 4],
+            stream: 1,
+        });
         let none = |_: u32| 0.0;
         for scope in 0..200 {
             let x = v.eval(0.0, 5, 0, scope, &none)[0];
@@ -1478,7 +1621,10 @@ mod tests {
         assert!(v.is_fixed());
         assert_eq!(v.curve.value_at(9.0)[..2], [1.0, 2.0]);
         let mut w = v.clone();
-        w.variation.push(Variation::Delta { max: [0.1; 4], stream: 3 });
+        w.variation.push(Variation::Delta {
+            max: [0.1; 4],
+            stream: 3,
+        });
         assert!(!w.is_fixed());
     }
 }

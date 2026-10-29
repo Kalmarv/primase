@@ -2,12 +2,12 @@
 //! rest at the project's defaults), and of the pass on a world holding them. The real-data census (every installed effect
 //! lowered, accounting checked) is in `tests/` of the crate.
 use super::*;
-use crate::sekiro::components::effect::{Effect, EffectFile};
+use crate::sekiro::components::effect::{ClipEffectUses, Effect, EffectFile, EffectUse};
 use crate::sekiro::source::EffectPlace;
 use fromsoft_formats::Game;
 use fromsoft_formats::fxr::{Action, Config, Fxr, Node, Property, State};
 use primase_core::particles::{Anchor, Blend, Drive, Follow, Heading, Shape, Spawn, Spread, Termination};
-use primase_core::{Component, Entity, Transform, World};
+use primase_core::{Clip, ClipEffects, Component, Entity, Extrapolation, Transform, World};
 use std::sync::Arc;
 
 fn f(v: f32) -> u32 {
@@ -46,13 +46,22 @@ fn map(configs: &[u32]) -> Action {
 }
 
 fn node(id: i16, actions: Vec<Action>, configs: Vec<Config>, children: Vec<Node>) -> Node {
-    Node { id, actions, configs, children }
+    Node {
+        id,
+        actions,
+        configs,
+        children,
+    }
 }
 
 fn fx(id: i32, states: usize, root: Node) -> Fxr {
     Fxr {
         id,
-        states: (0..states).map(|_| State { conditions: Vec::new() }).collect(),
+        states: (0..states)
+            .map(|_| State {
+                conditions: Vec::new(),
+            })
+            .collect(),
         root,
         references: Vec::new(),
         external_values: Vec::new(),
@@ -68,11 +77,23 @@ fn torch() -> Config {
         actions: vec![
             with(action(128), vec![constant(5.0)], vec![f(0.5), 0, 1, f(0.0)]),
             with(action(129), vec![constant(2.0)], vec![1]),
-            with(action(300), vec![constant(0.25), constant(2.0), constant(8.0), constant(-1.0)], vec![1]),
+            with(
+                action(300),
+                vec![constant(0.25), constant(2.0), constant(8.0), constant(-1.0)],
+                vec![1],
+            ),
             with(action(400), vec![], vec![1]),
             with(action(501), vec![constant(20.0), constant(0.0)], vec![]),
-            with(action(55), vec![constant(9.8), constant(1.0), constant(1.0)], vec![0, f(0.0)]),
-            with(action(600), vec![constant(5.0), constant(4.0), constant(0.3)], vec![]),
+            with(
+                action(55),
+                vec![constant(9.8), constant(1.0), constant(1.0)],
+                vec![0, f(0.0)],
+            ),
+            with(
+                action(600),
+                vec![constant(5.0), constant(4.0), constant(0.3)],
+                vec![],
+            ),
         ],
     }
 }
@@ -102,7 +123,12 @@ fn a_basic_node_becomes_one_emitter_with_its_slots_lowered() {
     assert_eq!(e.delay, 0.5);
     assert_eq!(e.duration, Some(5.0));
     match &e.spawn {
-        Spawn::Periodic { interval, count, total, max_alive } => {
+        Spawn::Periodic {
+            interval,
+            count,
+            total,
+            max_alive,
+        } => {
             assert_eq!(interval.curve.value_at(0.0)[0], 0.25);
             assert_eq!(count.curve.value_at(0.0)[0], 2.0);
             assert_eq!((*total, *max_alive), (Some(8), None));
@@ -115,7 +141,10 @@ fn a_basic_node_becomes_one_emitter_with_its_slots_lowered() {
         Spread::Cone { angle, .. } => assert_eq!(angle.curve.value_at(0.0)[0], 20.0),
         other => panic!("{other:?}"),
     }
-    assert_eq!(e.law.lifetime.as_ref().map(|v| v.curve.value_at(0.0)[0]), Some(2.0));
+    assert_eq!(
+        e.law.lifetime.as_ref().map(|v| v.curve.value_at(0.0)[0]),
+        Some(2.0)
+    );
     let m = e.law.movement.as_ref().unwrap();
     assert!(matches!(m.drive, Drive::Acceleration { .. }));
     assert_eq!(m.gravity.curve.value_at(0.0)[0], 9.8);
@@ -124,9 +153,15 @@ fn a_basic_node_becomes_one_emitter_with_its_slots_lowered() {
         other => panic!("{other:?}"),
     }
     // no file was found for texture 5: counted
-    assert_eq!(l.notes.lost.get("a texture that is not in the effect binders"), Some(&1));
+    assert_eq!(
+        l.notes.lost.get("a texture that is not in the effect binders"),
+        Some(&1)
+    );
     // the unknown action 130 is in no hand-built config; a point sprite's colour factors that are 1 are left out
-    assert_eq!(s.lost.iter().map(|(_, n)| *n).sum::<u32>(), l.notes.lost.values().sum::<u32>());
+    assert_eq!(
+        s.lost.iter().map(|(_, n)| *n).sum::<u32>(),
+        l.notes.lost.values().sum::<u32>()
+    );
     // the system the lowering made is one the world accepts
     let mut world = World::new();
     let e = world.spawn();
@@ -137,9 +172,17 @@ fn a_basic_node_becomes_one_emitter_with_its_slots_lowered() {
 fn a_node_with_two_configs_is_two_emitters_by_state() {
     let second = Config {
         id: 1004,
-        actions: vec![with(action(128), vec![constant(-1.0)], vec![f(0.0), 0, 1, f(0.0)]), with(action(399), vec![], vec![])],
+        actions: vec![
+            with(action(128), vec![constant(-1.0)], vec![f(0.0), 0, 1, f(0.0)]),
+            with(action(399), vec![], vec![]),
+        ],
     };
-    let root = node(2000, vec![], vec![], vec![node(2200, vec![map(&[0, 1])], vec![torch(), second], vec![])]);
+    let root = node(
+        2000,
+        vec![],
+        vec![],
+        vec![node(2200, vec![map(&[0, 1])], vec![torch(), second], vec![])],
+    );
     let l = lower(&fx(1, 2, root), Game::Sekiro, 0, &mut NoFiles).unwrap();
     assert_eq!(l.system.states, 2);
     assert_eq!(l.system.emitters.len(), 2);
@@ -180,9 +223,19 @@ fn children_hang_from_their_parents_emitter_and_a_proxy_names_the_spawned_effect
     // a reference to an effect the resolver does not know is counted
     let mut reference = action(132);
     reference.fields1 = vec![78];
-    let root = node(2000, vec![], vec![], vec![node(2001, vec![reference], vec![], vec![])]);
+    let root = node(
+        2000,
+        vec![],
+        vec![],
+        vec![node(2001, vec![reference], vec![], vec![])],
+    );
     let l = lower(&fx(3, 1, root), Game::Sekiro, 0, &mut One(target)).unwrap();
-    assert_eq!(l.notes.lost.get("a spawned effect that is not in the effect binders or closes a cycle"), Some(&1));
+    assert_eq!(
+        l.notes
+            .lost
+            .get("a spawned effect that is not in the effect binders or closes a cycle"),
+        Some(&1)
+    );
     assert!(l.system.emitters[0].spawns.is_empty());
 }
 
@@ -207,8 +260,16 @@ fn the_root_sets_the_systems_time_view_distance_and_termination() {
 fn a_static_node_transform_places_the_emitter_in_cores_frame() {
     let mut place = action(35);
     place.fields1 = vec![f(1.0), f(2.0), f(3.0), f(0.0), f(0.0), f(0.0)];
-    let cfg = Config { id: 1004, actions: vec![place, with(action(399), vec![], vec![])] };
-    let root = node(2000, vec![], vec![], vec![node(2200, vec![map(&[0])], vec![cfg], vec![])]);
+    let cfg = Config {
+        id: 1004,
+        actions: vec![place, with(action(399), vec![], vec![])],
+    };
+    let root = node(
+        2000,
+        vec![],
+        vec![],
+        vec![node(2200, vec![map(&[0])], vec![cfg], vec![])],
+    );
     let l = lower(&fx(5, 1, root), Game::Sekiro, 0, &mut NoFiles).unwrap();
     let t = l.system.emitters[0].placement;
     assert_eq!(t.cols[3], [1.0, 2.0, -3.0]);
@@ -219,12 +280,23 @@ fn a_static_node_transform_places_the_emitter_in_cores_frame() {
 fn world_with(effect: Fxr, starts_disabled: bool) -> (World, Entity) {
     let mut world = World::new();
     let file = world.spawn();
-    world.insert(file, EffectFile { effect: effect.id, game: Game::Sekiro, file: Arc::new(effect.clone()) });
+    world.insert(
+        file,
+        EffectFile {
+            effect: effect.id,
+            game: Game::Sekiro,
+            file: Arc::new(effect.clone()),
+        },
+    );
     let place = world.spawn();
     world.insert(place, Transform::IDENTITY);
     world.insert(
         place,
-        Effect { effect: effect.id, place: EffectPlace::Region { region: "r".into() }, starts_disabled },
+        Effect {
+            effect: effect.id,
+            place: EffectPlace::Region { region: "r".into() },
+            starts_disabled,
+        },
     );
     (world, place)
 }
@@ -242,7 +314,10 @@ fn the_pass_puts_a_system_on_each_placed_effect_and_logs_what_it_lost() {
     assert_eq!(system.emitters.len(), 1);
     assert_eq!(log.counts.get("placed effects lowered"), Some(&1));
     assert_eq!(log.counts.get("effects lowered"), Some(&1));
-    assert!(log.omitted.contains_key("a texture that is not in the effect binders"));
+    assert!(
+        log.omitted
+            .contains_key("a texture that is not in the effect binders")
+    );
     assert!(system.verify(place, &world).is_ok());
 }
 
@@ -252,9 +327,16 @@ fn the_pass_leaves_out_regions_that_start_disabled_unless_asked() {
     let mut log = PassLog::default();
     pass().run(&mut world, &mut log).unwrap();
     assert!(world.get::<ParticleSystem>(place).is_none());
-    assert_eq!(log.omitted.get("effects of regions that start disabled, left out"), Some(&1));
+    assert_eq!(
+        log.omitted
+            .get("effects of regions that start disabled, left out"),
+        Some(&1)
+    );
     let mut log = PassLog::default();
-    pass().with_include_disabled(Disabled::Include).run(&mut world, &mut log).unwrap();
+    pass()
+        .with_include_disabled(Disabled::Include)
+        .run(&mut world, &mut log)
+        .unwrap();
     assert!(world.get::<ParticleSystem>(place).is_some());
 }
 
@@ -264,25 +346,50 @@ fn a_spawn_cycle_is_cut_where_it_closes_and_a_spawned_effect_gets_a_system_of_it
     a.fields1 = vec![2];
     let mut b = action(132);
     b.fields1 = vec![1];
-    let mut one = fx(1, 1, node(2000, vec![], vec![], vec![node(2001, vec![a], vec![], vec![])]));
+    let mut one = fx(
+        1,
+        1,
+        node(2000, vec![], vec![], vec![node(2001, vec![a], vec![], vec![])]),
+    );
     one.references = vec![2];
-    let mut two = fx(2, 1, node(2000, vec![], vec![], vec![node(2001, vec![b], vec![], vec![])]));
+    let mut two = fx(
+        2,
+        1,
+        node(2000, vec![], vec![], vec![node(2001, vec![b], vec![], vec![])]),
+    );
     two.references = vec![1];
     let mut world = World::new();
     for e in [one, two] {
         let file = world.spawn();
-        world.insert(file, EffectFile { effect: e.id, game: Game::Sekiro, file: Arc::new(e) });
+        world.insert(
+            file,
+            EffectFile {
+                effect: e.id,
+                game: Game::Sekiro,
+                file: Arc::new(e),
+            },
+        );
     }
     let place = world.spawn();
     world.insert(place, Transform::IDENTITY);
-    world.insert(place, Effect { effect: 1, place: EffectPlace::Region { region: "r".into() }, starts_disabled: false });
+    world.insert(
+        place,
+        Effect {
+            effect: 1,
+            place: EffectPlace::Region { region: "r".into() },
+            starts_disabled: false,
+        },
+    );
     let mut log = PassLog::default();
     pass().run(&mut world, &mut log).unwrap();
     // effect 1 names effect 2's system; effect 2 may not name effect 1's (it can reach it): counted
     let s = world.get::<ParticleSystem>(place).unwrap();
     assert_eq!(s.emitters[0].spawns.len(), 1);
     assert_eq!(log.counts.get("effects lowered"), Some(&2));
-    assert!(log.omitted.contains_key("a spawned effect that is not in the effect binders or closes a cycle"));
+    assert!(
+        log.omitted
+            .contains_key("a spawned effect that is not in the effect binders or closes a cycle")
+    );
     // the named system is one of the world's, with its own emitters
     let named = s.emitters[0].spawns[0];
     assert!(world.get::<ParticleSystem>(named).is_some());
@@ -290,4 +397,129 @@ fn a_spawn_cycle_is_cut_where_it_closes_and_a_spawned_effect_gets_a_system_of_it
     s.references(&mut refs);
     assert_eq!(refs, vec![named]);
     assert_eq!(ParticleSystem::NAME, "core.particles");
+}
+
+fn use_of(
+    event: u32,
+    effect: i32,
+    dummy: Option<i32>,
+    follow: bool,
+    repeating: bool,
+    start: f32,
+    end: Option<f32>,
+) -> EffectUse {
+    EffectUse {
+        event,
+        kind: 96,
+        effect,
+        dummy,
+        follow,
+        repeating,
+        start,
+        end,
+    }
+}
+
+#[test]
+fn a_clips_effect_uses_become_spawns_of_the_lowered_systems_at_the_sockets_named_as_the_model_names_them() {
+    let mut world = World::new();
+    let file = world.spawn();
+    world.insert(
+        file,
+        EffectFile {
+            effect: 300,
+            game: Game::Sekiro,
+            file: Arc::new(simple()),
+        },
+    );
+    let clip = world.spawn();
+    world.insert(
+        clip,
+        Clip {
+            name: "a000_003000".into(),
+            duration: 2.0,
+            extrapolation: Extrapolation::Hold,
+            channels: Vec::new(),
+            root_motion: None,
+            additive: None,
+        },
+    );
+    world.insert(
+        clip,
+        ClipEffectUses {
+            uses: vec![
+                use_of(4, 300, Some(220), true, false, 0.5, Some(0.6)),
+                use_of(7, 300, None, true, true, 1.0, Some(1.5)),
+                use_of(9, 301, Some(10), false, false, 1.2, None),
+            ],
+            lost: vec![(
+                "an effect a goods or magic param row names (events 114 and 115)".to_owned(),
+                2,
+            )],
+        },
+    );
+    let mut log = PassLog::default();
+    pass().run(&mut world, &mut log).unwrap();
+    let effects = world.get::<ClipEffects>(clip).unwrap();
+    assert_eq!(effects.verify(clip, &world), Ok(()));
+    assert_eq!(effects.spawns.len(), 2);
+    let (first, second) = (&effects.spawns[0], &effects.spawns[1]);
+    // both spawn the one system effect 300 was lowered to, which no transform places
+    assert_eq!(first.system, second.system);
+    assert!(world.get::<ParticleSystem>(first.system).is_some());
+    assert!(world.get::<Transform>(first.system).is_none());
+    // a use with a dummy stands at that dummy's socket and follows it where the event says; one with none stands at the origin
+    assert_eq!(
+        (first.socket.as_deref(), first.follow, first.event),
+        (Some("dummy 220"), true, Some(4))
+    );
+    assert_eq!((first.start, first.end), (0.5, None));
+    assert_eq!(
+        (second.socket.as_deref(), second.follow, second.event),
+        (None, false, Some(7))
+    );
+    // a repeating event stops the effect at its end; a one-shot one lets it play out
+    assert_eq!(second.end, Some(1.5));
+    // the effect the read did not find, and what the read could not name, are counted
+    assert_eq!(
+        log.omitted
+            .get("animation events naming an effect the read did not find"),
+        Some(&1)
+    );
+    assert_eq!(
+        log.omitted
+            .get("an effect a goods or magic param row names (events 114 and 115)"),
+        Some(&2)
+    );
+    assert_eq!(log.counts.get("effects started by animation events"), Some(&2));
+    assert_eq!(effects.lost.len(), 2);
+}
+
+#[test]
+fn effect_uses_on_something_that_is_not_a_lowered_clip_are_counted_and_make_nothing() {
+    let mut world = World::new();
+    let file = world.spawn();
+    world.insert(
+        file,
+        EffectFile {
+            effect: 300,
+            game: Game::Sekiro,
+            file: Arc::new(simple()),
+        },
+    );
+    let not_a_clip = world.spawn();
+    world.insert(
+        not_a_clip,
+        ClipEffectUses {
+            uses: vec![use_of(0, 300, Some(1), false, false, 0.0, None)],
+            lost: Vec::new(),
+        },
+    );
+    let mut log = PassLog::default();
+    pass().run(&mut world, &mut log).unwrap();
+    assert!(world.get::<ClipEffects>(not_a_clip).is_none());
+    assert_eq!(
+        log.omitted.get("effect uses on a clip that is not lowered"),
+        Some(&1)
+    );
 }

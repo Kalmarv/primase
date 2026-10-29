@@ -201,6 +201,12 @@ pub(crate) fn dummy_in_model(worlds: &[Matrix], d: &fromsoft_formats::flver::Dum
     Some([x, y, z, t])
 }
 
+/// The name of the socket a dummy polygon with reference id `reference_id` is (what an animation event that names a dummy
+/// polygon finds it by).
+pub(crate) fn dummy_socket_name(reference_id: i32) -> String {
+    format!("dummy {reference_id}")
+}
+
 /// A model's dummy polygons as sockets on its skeleton (`core.sockets`; joint `i` is bone `i`, see [`skeleton`]), each
 /// where the dummy stands in the model at rest and following the bone it is attached to: the dummy's position is taken
 /// in the space of its parent bone where it has one (SoulsFormatsNEXT: "initially transformed to" it) and in the
@@ -267,7 +273,7 @@ pub(crate) fn dummy_sockets(model: &Model) -> Result<(primase_core::Sockets, Vec
         .matrix();
         sockets.push(primase_core::Socket {
             id: primase_core::SocketId(i as u32),
-            name: format!("dummy {}", d.reference_id),
+            name: dummy_socket_name(i32::from(d.reference_id)),
             joint: primase_core::JointId(joint as u32),
             offset,
         });

@@ -15,8 +15,8 @@ use fromsoft_formats::fxr::actions::Typed;
 use fromsoft_formats::fxr::{Fxr, StaticTransform, TypedConfig, TypedNode};
 use primase_core::Transform;
 use primase_core::particles::{
-    Anchor, Attachment, Axis, Drag, Drive, Emitter, FieldResponse, Follow, Law, Movement, NodeMotion, ParticleSystem, Pick,
-    Shape, Spawn, Spread, Termination, Turns, Value,
+    Anchor, Attachment, Axis, Drag, Drive, Emitter, FieldResponse, Follow, Law, Movement, NodeMotion,
+    ParticleSystem, Pick, Shape, Spawn, Spread, Termination, Turns, Value,
 };
 
 /// An effect lowered, with what the lowering counted.
@@ -46,10 +46,14 @@ pub fn lower(fx: &Fxr, game: Game, seed: u64, resolver: &mut dyn Resolver) -> Re
         system: Settings::default(),
     };
     if fx.states.iter().any(|s| !s.conditions.is_empty()) {
-        walk.cx.notes.lose("the conditions that move an effect between its states");
+        walk.cx
+            .notes
+            .lose("the conditions that move an effect between its states");
     }
     walk.node(&tree, None, None, "root".to_owned());
-    let Walk { cx, emitters, system, .. } = walk;
+    let Walk {
+        cx, emitters, system, ..
+    } = walk;
     let end = end_time(&emitters);
     let notes = cx.notes;
     let lost = notes.lost.iter().map(|(k, n)| (k.clone(), *n)).collect();
@@ -79,7 +83,12 @@ struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { warmup: 0.0, time_scale: None, max_view_distance: None, termination: Termination::Natural }
+        Settings {
+            warmup: 0.0,
+            time_scale: None,
+            max_view_distance: None,
+            termination: Termination::Natural,
+        }
     }
 }
 
@@ -131,16 +140,19 @@ impl<'a> Parts<'a> {
                 | Typed::SphereEmitterShape(_)
                 | Typed::BoxEmitterShape(_)
                 | Typed::CylinderEmitterShape(_) => put(&mut p.shape, action, notes),
-                Typed::NoSpread(_) | Typed::CircularSpread(_) | Typed::EllipticalSpread(_) | Typed::RectangularSpread(_) => {
-                    put(&mut p.spread, action, notes)
-                }
+                Typed::NoSpread(_)
+                | Typed::CircularSpread(_)
+                | Typed::EllipticalSpread(_)
+                | Typed::RectangularSpread(_) => put(&mut p.spread, action, notes),
                 Typed::ParticleAcceleration(_)
                 | Typed::ParticleSpeed(_)
                 | Typed::ParticleSpeedRandomTurns(_)
                 | Typed::ParticleSpeedPartialFollow(_)
                 | Typed::ParticleAccelerationRandomTurns(_)
                 | Typed::ParticleAccelerationPartialFollow(_) => put(&mut p.particle_movement, action, notes),
-                Typed::ParticleForceSpeed(_) | Typed::ParticleForceAcceleration(_) => put(&mut p.particle_force, action, notes),
+                Typed::ParticleForceSpeed(_) | Typed::ParticleForceAcceleration(_) => {
+                    put(&mut p.particle_force, action, notes)
+                }
                 Typed::NodeAcceleration(_)
                 | Typed::Unk11(_)
                 | Typed::NodeTranslation(_)
@@ -153,12 +165,16 @@ impl<'a> Parts<'a> {
                 | Typed::NodeSpeedRandomTurns(_)
                 | Typed::NodeSpeedPartialFollow(_)
                 | Typed::NodeSpeedSpin(_) => put(&mut p.node_movement, action, notes),
-                Typed::StaticNodeTransform(_) | Typed::RandomNodeTransform(_) => put(&mut p.transform, action, notes),
+                Typed::StaticNodeTransform(_) | Typed::RandomNodeTransform(_) => {
+                    put(&mut p.transform, action, notes)
+                }
                 other if is_appearance(other) => put(&mut p.appearance, action, notes),
                 Typed::SelectAllNodes(_) | Typed::SelectRandomNode(_) => put(&mut p.selector, action, notes),
                 Typed::LevelsOfDetailThresholds(x) => put(&mut p.thresholds, x, notes),
                 Typed::NodeSound(_) => notes.lose("a node sound"),
-                Typed::NodeForceSpeed(_) | Typed::NodeForceAcceleration(_) => notes.lose("a node's response to force fields"),
+                Typed::NodeForceSpeed(_) | Typed::NodeForceAcceleration(_) => {
+                    notes.lose("a node's response to force fields")
+                }
                 Typed::Unk130(_) => notes.lose("action 130, in every basic config (unknown)"),
                 _ => notes.lose("an action in a config that the lowering does not read"),
             }
@@ -200,7 +216,9 @@ fn chosen(n: &TypedNode, states: u32, notes: &mut Notes) -> Vec<(usize, Vec<u32>
         Some(map) => {
             let mut out: Vec<(usize, Vec<u32>)> = Vec::new();
             for (s, &c) in map.iter().enumerate() {
-                let (Ok(c), Ok(s)) = (usize::try_from(c), u32::try_from(s)) else { continue };
+                let (Ok(c), Ok(s)) = (usize::try_from(c), u32::try_from(s)) else {
+                    continue;
+                };
                 if c >= n.configs.len() {
                     continue;
                 }
@@ -213,7 +231,10 @@ fn chosen(n: &TypedNode, states: u32, notes: &mut Notes) -> Vec<(usize, Vec<u32>
                 if !out.iter().any(|(k, _)| *k == c) {
                     notes.lose("a config that no state chooses");
                     for action in config.actions.iter().filter(|a| is_appearance(a)) {
-                        notes.lose(format!("appearance action {} in a config that no state chooses", action.id()));
+                        notes.lose(format!(
+                            "appearance action {} in a config that no state chooses",
+                            action.id()
+                        ));
                     }
                 }
             }
@@ -253,7 +274,10 @@ impl Walk<'_> {
                         e.lod_range = lod;
                         match self.cx.resolver.effect(r.sfx) {
                             Some(entity) => e.spawns.push(entity),
-                            None => self.cx.notes.lose("a spawned effect that is not in the effect binders or closes a cycle"),
+                            None => self
+                                .cx
+                                .notes
+                                .lose("a spawned effect that is not in the effect binders or closes a cycle"),
                         }
                         frame = Some(self.push(e));
                     }
@@ -275,17 +299,27 @@ impl Walk<'_> {
                     }
                 }
                 if n.configs.len() > 1 && self.states > 1 {
-                    self.cx.notes.approximate("the children of a node with several configs hang from its first state's config");
+                    self.cx.notes.approximate(
+                        "the children of a node with several configs hang from its first state's config",
+                    );
                 }
                 if n.id == LEVELS_OF_DETAIL && n.children.len() > 5 {
-                    self.cx.notes.lose("a level-of-detail node with more than five children");
+                    self.cx
+                        .notes
+                        .lose("a level-of-detail node with more than five children");
                 }
                 for (i, child) in n.children.iter().enumerate() {
                     let range = match (n.id, thresholds) {
                         (LEVELS_OF_DETAIL, Some(t)) => {
                             let upper = t.get(i).copied().unwrap_or(NO_LIMIT);
-                            let lower = if i == 0 { 0.0 } else { t.get(i - 1).copied().unwrap_or(0.0) };
-                            self.cx.notes.approximate("level-of-detail ranges taken as ascending distance thresholds");
+                            let lower = if i == 0 {
+                                0.0
+                            } else {
+                                t.get(i - 1).copied().unwrap_or(0.0)
+                            };
+                            self.cx
+                                .notes
+                                .approximate("level-of-detail ranges taken as ascending distance thresholds");
                             Some([lower, upper])
                         }
                         _ => lod,
@@ -306,7 +340,9 @@ impl Walk<'_> {
         for action in &n.actions {
             match action {
                 Typed::SimulateTermination(_) => termination = termination.or(Some(Termination::Natural)),
-                Typed::FadeTermination(f) => termination = termination.or(Some(Termination::Fade(value::number(&f.duration)))),
+                Typed::FadeTermination(f) => {
+                    termination = termination.or(Some(Termination::Fade(value::number(&f.duration))))
+                }
                 Typed::InstantTermination(_) => termination = termination.or(Some(Termination::Instant)),
                 Typed::Unk10500(u) => {
                     let rate = self.cx.active(&u.rate_of_time);
@@ -318,12 +354,27 @@ impl Walk<'_> {
                     }
                     self.system.warmup = units::frames(u.initial_simulation_time).max(0.0);
                 }
-                Typed::Unk10100(_) | Typed::Unk10400(_) => self.cx.notes.lose("the unknown root actions 10100 and 10400"),
+                Typed::Unk10100(_) | Typed::Unk10400(_) => {
+                    self.cx.notes.lose("the unknown root actions 10100 and 10400")
+                }
                 Typed::StateConfigMap(_) => {}
-                _ => self.cx.notes.lose("an action on the root node that the lowering does not read"),
+                _ => self
+                    .cx
+                    .notes
+                    .lose("an action on the root node that the lowering does not read"),
             }
         }
-        if n.actions.iter().filter(|a| matches!(a, Typed::SimulateTermination(_) | Typed::FadeTermination(_) | Typed::InstantTermination(_))).count() > 1 {
+        if n.actions
+            .iter()
+            .filter(|a| {
+                matches!(
+                    a,
+                    Typed::SimulateTermination(_) | Typed::FadeTermination(_) | Typed::InstantTermination(_)
+                )
+            })
+            .count()
+            > 1
+        {
             self.cx.notes.lose("more than one termination action on the root");
         }
         self.system.termination = termination.unwrap_or(Termination::Natural);
@@ -433,13 +484,22 @@ impl Walk<'_> {
                 _ => Pick::All,
             });
         } else if parts.selector.is_some() {
-            self.cx.notes.lose("a node selector on a node that is not a node emitter");
+            self.cx
+                .notes
+                .lose("a node selector on a node that is not a node emitter");
         }
         let limits = parts.thresholds.map(|t| {
             if let Some(d) = Some(value::number(&t.duration)).filter(|d| *d >= 0.0) {
                 e.duration = Some(d);
             }
-            [t.threshold0, t.threshold1, t.threshold2, t.threshold3, t.threshold4].map(|v| v as f32)
+            [
+                t.threshold0,
+                t.threshold1,
+                t.threshold2,
+                t.threshold3,
+                t.threshold4,
+            ]
+            .map(|v| v as f32)
         });
         (e, limits)
     }
@@ -456,11 +516,16 @@ impl Walk<'_> {
 
     fn shape(&mut self, s: &Typed) -> (Shape, primase_core::particles::Heading) {
         use primase_core::particles::Heading;
-        let facing = Heading::Shape { facing: units::FORWARD };
+        let facing = Heading::Shape {
+            facing: units::FORWARD,
+        };
         match s {
             Typed::PointEmitterShape(p) => (Shape::Point, units::heading(p.direction, &mut self.cx.notes)),
             Typed::DiskEmitterShape(d) => (
-                Shape::Disk { radius: self.cx.active(&d.radius), concentration: self.cx.active(&d.distribution) },
+                Shape::Disk {
+                    radius: self.cx.active(&d.radius),
+                    concentration: self.cx.active(&d.distribution),
+                },
                 units::heading(d.direction, &mut self.cx.notes),
             ),
             Typed::RectangleEmitterShape(r) => (
@@ -470,10 +535,20 @@ impl Walk<'_> {
                 },
                 units::heading(r.direction, &mut self.cx.notes),
             ),
-            Typed::SphereEmitterShape(r) => (Shape::Sphere { radius: self.cx.active(&r.radius), volume: r.emit_inside }, facing),
+            Typed::SphereEmitterShape(r) => (
+                Shape::Sphere {
+                    radius: self.cx.active(&r.radius),
+                    volume: r.emit_inside,
+                },
+                facing,
+            ),
             Typed::BoxEmitterShape(b) => (
                 Shape::Box {
-                    size: [self.cx.active(&b.size_x), self.cx.active(&b.size_y), self.cx.active(&b.size_z)],
+                    size: [
+                        self.cx.active(&b.size_x),
+                        self.cx.active(&b.size_y),
+                        self.cx.active(&b.size_z),
+                    ],
                     volume: b.emit_inside,
                 },
                 units::heading(b.direction, &mut self.cx.notes),
@@ -493,7 +568,10 @@ impl Walk<'_> {
 
     fn spread(&mut self, s: &Typed) -> Spread {
         match s {
-            Typed::CircularSpread(c) => Spread::Cone { angle: self.cx.active(&c.angle), concentration: self.cx.active(&c.distribution) },
+            Typed::CircularSpread(c) => Spread::Cone {
+                angle: self.cx.active(&c.angle),
+                concentration: self.cx.active(&c.distribution),
+            },
             Typed::EllipticalSpread(c) => Spread::Ellipse {
                 x: self.cx.active(&c.angle_x),
                 y: self.cx.active(&c.angle_y),
@@ -550,44 +628,68 @@ impl Walk<'_> {
         };
         let (drive, gravity, turn, follow) = match m {
             Typed::ParticleAcceleration(x) => (
-                Drive::Acceleration { acceleration: self.cx.age(&x.acceleration), multiplier: self.cx.age(&x.acceleration_multiplier) },
+                Drive::Acceleration {
+                    acceleration: self.cx.age(&x.acceleration),
+                    multiplier: self.cx.age(&x.acceleration_multiplier),
+                },
                 self.cx.age(&x.gravity),
                 None,
                 None,
             ),
             Typed::ParticleSpeed(x) => (
-                Drive::Speed { speed: self.cx.age(&x.speed), multiplier: self.cx.age(&x.speed_multiplier) },
+                Drive::Speed {
+                    speed: self.cx.age(&x.speed),
+                    multiplier: self.cx.age(&x.speed_multiplier),
+                },
                 self.cx.age(&x.gravity),
                 None,
                 None,
             ),
             Typed::ParticleSpeedRandomTurns(x) => (
-                Drive::Speed { speed: self.cx.age(&x.speed), multiplier: self.cx.age(&x.speed_multiplier) },
+                Drive::Speed {
+                    speed: self.cx.age(&x.speed),
+                    multiplier: self.cx.age(&x.speed_multiplier),
+                },
                 self.cx.age(&x.gravity),
                 Some(turns(self, &x.max_turn_angle, x.turn_interval)),
                 None,
             ),
             Typed::ParticleSpeedPartialFollow(x) => (
-                Drive::Speed { speed: self.cx.age(&x.speed), multiplier: self.cx.age(&x.speed_multiplier) },
+                Drive::Speed {
+                    speed: self.cx.age(&x.speed),
+                    multiplier: self.cx.age(&x.speed_multiplier),
+                },
                 self.cx.age(&x.gravity),
                 Some(turns(self, &x.max_turn_angle, x.turn_interval)),
                 Some(drag(self, &x.follow_factor, x.follow_rotation)),
             ),
             Typed::ParticleAccelerationRandomTurns(x) => (
-                Drive::Acceleration { acceleration: self.cx.age(&x.acceleration), multiplier: self.cx.age(&x.acceleration_multiplier) },
+                Drive::Acceleration {
+                    acceleration: self.cx.age(&x.acceleration),
+                    multiplier: self.cx.age(&x.acceleration_multiplier),
+                },
                 self.cx.age(&x.gravity),
                 Some(turns(self, &x.max_turn_angle, x.turn_interval)),
                 None,
             ),
             Typed::ParticleAccelerationPartialFollow(x) => (
-                Drive::Acceleration { acceleration: self.cx.age(&x.acceleration), multiplier: self.cx.age(&x.acceleration_multiplier) },
+                Drive::Acceleration {
+                    acceleration: self.cx.age(&x.acceleration),
+                    multiplier: self.cx.age(&x.acceleration_multiplier),
+                },
                 self.cx.age(&x.gravity),
                 Some(turns(self, &x.max_turn_angle, x.turn_interval)),
                 Some(drag(self, &x.follow_factor, x.follow_rotation)),
             ),
             _ => return None,
         };
-        Some(Movement { drive, gravity, turns: turn, drag: follow, fields })
+        Some(Movement {
+            drive,
+            gravity,
+            turns: turn,
+            drag: follow,
+            fields,
+        })
     }
 
     /// How an emitter moves in its parent's frame; `None` for an action the core description has no motion for.
@@ -651,7 +753,11 @@ impl Walk<'_> {
                 out.align = x.unk_align_with_motion != 0;
                 self.spin(
                     &mut out,
-                    [(&x.angular_speed_x, &x.angular_speed_multiplier_x), (&x.angular_speed_y, &x.angular_speed_multiplier_y), (&x.angular_speed_z, &x.angular_speed_multiplier_z)],
+                    [
+                        (&x.angular_speed_x, &x.angular_speed_multiplier_x),
+                        (&x.angular_speed_y, &x.angular_speed_multiplier_y),
+                        (&x.angular_speed_z, &x.angular_speed_multiplier_z),
+                    ],
                 );
             }
             Typed::NodeSpeed(x) => {
@@ -683,13 +789,21 @@ impl Walk<'_> {
                 out.align = x.unk_align_with_motion != 0;
                 self.spin(
                     &mut out,
-                    [(&x.angular_speed_x, &x.angular_speed_multiplier_x), (&x.angular_speed_y, &x.angular_speed_multiplier_y), (&x.angular_speed_z, &x.angular_speed_multiplier_z)],
+                    [
+                        (&x.angular_speed_x, &x.angular_speed_multiplier_x),
+                        (&x.angular_speed_y, &x.angular_speed_multiplier_y),
+                        (&x.angular_speed_z, &x.angular_speed_multiplier_z),
+                    ],
                 );
             }
             Typed::NodeSpin(x) => {
                 self.spin(
                     &mut out,
-                    [(&x.angular_speed_x, &x.angular_speed_multiplier_x), (&x.angular_speed_y, &x.angular_speed_multiplier_y), (&x.angular_speed_z, &x.angular_speed_multiplier_z)],
+                    [
+                        (&x.angular_speed_x, &x.angular_speed_multiplier_x),
+                        (&x.angular_speed_y, &x.angular_speed_multiplier_y),
+                        (&x.angular_speed_z, &x.angular_speed_multiplier_z),
+                    ],
                 );
             }
             Typed::NodeTranslation(x) => {
@@ -717,7 +831,11 @@ impl Walk<'_> {
     }
 
     /// A node's spin about its three axes (degrees per second times a multiplier), signed for the mirrored frame.
-    fn spin(&mut self, out: &mut NodeMotion, s: [(&fromsoft_formats::fxr::Property, &fromsoft_formats::fxr::Property); 3]) {
+    fn spin(
+        &mut self,
+        out: &mut NodeMotion,
+        s: [(&fromsoft_formats::fxr::Property, &fromsoft_formats::fxr::Property); 3],
+    ) {
         for (i, (speed, multiplier)) in s.into_iter().enumerate() {
             let sign = if i < 2 { -1.0 } else { 1.0 };
             let (a, b) = (self.cx.active(speed), self.cx.active(multiplier));
@@ -739,20 +857,32 @@ fn blank(parent: Option<u32>, name: Option<String>) -> Emitter {
         placement: Transform::IDENTITY,
         jitter_translation: [0.0; 3],
         jitter_rotation: [0.0; 3],
-        attachment: Attachment { anchor: Anchor::Parent, follow: Follow::Frame },
+        attachment: Attachment {
+            anchor: Anchor::Parent,
+            follow: Follow::Frame,
+        },
         delay: 0.0,
         duration: None,
         motion: None,
         spawn: Spawn::Once,
         shape: Shape::Point,
-        heading: primase_core::particles::Heading::Shape { facing: units::FORWARD },
+        heading: primase_core::particles::Heading::Shape {
+            facing: units::FORWARD,
+        },
         spread: Spread::None,
         law: Law {
             lifetime: None,
-            attachment: Attachment { anchor: Anchor::Parent, follow: Follow::Frame },
+            attachment: Attachment {
+                anchor: Anchor::Parent,
+                follow: Follow::Frame,
+            },
             movement: None,
             initial_speed: Value::constant(&[0.0]),
-            size_scale: [Value::constant(&[1.0]), Value::constant(&[1.0]), Value::constant(&[1.0])],
+            size_scale: [
+                Value::constant(&[1.0]),
+                Value::constant(&[1.0]),
+                Value::constant(&[1.0]),
+            ],
             tint: Value::constant(&[1.0; 4]),
         },
         draw: None,
@@ -766,7 +896,11 @@ fn blank(parent: Option<u32>, name: Option<String>) -> Emitter {
 
 /// The static node transform (an offset and rotations in degrees, as stored) as a placement in core's frame.
 fn transform(offset: [f32; 3], rotation_degrees: [f32; 3]) -> Transform {
-    let m = StaticTransform { offset, rotation_degrees }.matrix();
+    let m = StaticTransform {
+        offset,
+        rotation_degrees,
+    }
+    .matrix();
     placed(m.map(|c| c.map(|x| x as f32)))
 }
 
@@ -775,7 +909,10 @@ fn end_time(emitters: &[Emitter]) -> Option<f32> {
     let mut starts: Vec<f32> = Vec::with_capacity(emitters.len());
     let mut end = 0.0f32;
     for e in emitters {
-        let base = e.parent.and_then(|p| starts.get(usize::try_from(p).ok()?).copied()).unwrap_or(0.0);
+        let base = e
+            .parent
+            .and_then(|p| starts.get(usize::try_from(p).ok()?).copied())
+            .unwrap_or(0.0);
         let start = base + e.delay;
         starts.push(start);
         if e.draw.is_none() && e.spawns.is_empty() {
@@ -784,15 +921,24 @@ fn end_time(emitters: &[Emitter]) -> Option<f32> {
         let emits_until = match (&e.spawn, e.duration) {
             (Spawn::Once, _) => start,
             (_, Some(d)) => start + d,
-            (Spawn::Periodic { interval, total: Some(n), .. }, None) if interval.is_fixed() => {
-                start + value::number_of(interval) * *n as f32
-            }
+            (
+                Spawn::Periodic {
+                    interval,
+                    total: Some(n),
+                    ..
+                },
+                None,
+            ) if interval.is_fixed() => start + value::number_of(interval) * *n as f32,
             _ => return None,
         };
         let life = match &e.law.lifetime {
             Some(v) if v.is_fixed() => value::number_of(v),
             Some(_) => return None,
-            None if matches!(e.draw, Some(primase_core::particles::Draw::Light(_)) | Some(primase_core::particles::Draw::Field(_))) => {
+            None if matches!(
+                e.draw,
+                Some(primase_core::particles::Draw::Light(_)) | Some(primase_core::particles::Draw::Field(_))
+            ) =>
+            {
                 0.0
             }
             None => return None,
@@ -825,16 +971,18 @@ mod tests {
     #[test]
     fn the_end_of_a_system_is_when_its_last_particle_dies() {
         let mut once = blank(None, None);
-        once.draw = Some(primase_core::particles::Draw::Point(primase_core::particles::Point {
-            map: None,
-            blend: primase_core::particles::Blend::Alpha,
-            size: Value::constant(&[1.0]),
-            tint: Vec::new(),
-            alpha_cutoff: Value::constant(&[0.0]),
-            soft: None,
-            distance: Default::default(),
-            bloom: None,
-        }));
+        once.draw = Some(primase_core::particles::Draw::Point(
+            primase_core::particles::Point {
+                map: None,
+                blend: primase_core::particles::Blend::Alpha,
+                size: Value::constant(&[1.0]),
+                tint: Vec::new(),
+                alpha_cutoff: Value::constant(&[0.0]),
+                soft: None,
+                distance: Default::default(),
+                bloom: None,
+            },
+        ));
         once.delay = 1.0;
         once.law.lifetime = Some(Value::constant(&[2.0]));
         assert_eq!(end_time(std::slice::from_ref(&once)), Some(3.0));

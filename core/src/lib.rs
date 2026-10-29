@@ -12,6 +12,8 @@ pub use atmosphere::{Atmosphere, Exposure, Fog, FogFalloff, VolumetricFog};
 pub mod clip;
 mod clip_identity;
 pub use clip_identity::{ClipKey, ClipLength};
+mod clip_effects;
+pub use clip_effects::{ClipEffects, ClipSpawn};
 mod clip_events;
 pub use clip_events::{ClipEvent, ClipEvents, EventValue, EventValueData};
 mod content;
