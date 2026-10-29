@@ -1,7 +1,7 @@
 //! Draw groups as an optional presence axis. A map piece, object or asset stores up to 256 draw groups; the community
 //! documents that a part is drawn while one of its groups is among the *display groups* that are active, the active
-//! ones being those of the collision the player stands on (a collision's own display groups; the other part kinds store
-//! display groups that do nothing). With `display_groups: Axes` the read makes one bool axis per draw group any kept
+//! ones being those of the collision the player stands on (a collision's own display groups). The running game does not
+//! follow that alone: a part's own display groups take part too (below). With `display_groups: Axes` the read makes one bool axis per draw group any kept
 //! placement is under, `fromsoft.display_group.<n>` (class `display_group`, scope global, **no default**: which groups
 //! are active is the program's state, not the file's), and gives each placement the condition "one of its draw groups
 //! is displayed" (an OR of one-literal clauses, ANDed with the event-flag clause when `states` are read).
@@ -14,13 +14,18 @@
 //! and every collision the display group 200 and, in another arm, 201: the scenery was gone in both, so the collisions' display
 //! groups meeting the parts' alone do not draw them, and adding the same group to the collisions' draw groups (see
 //! [`CollisionGroups::draw`], the other set that nearly every part's bits fall inside) did not either (that run's view also
-//! changed, so it is not conclusive). What the game tests is not established.
+//! changed, so it is not conclusive). What the game tests is not established. Another picture (same layout, every map
+//! piece's and asset's draw groups zero and display groups the single group 9, which both group arrays of the collision
+//! under the spawn hold) draws the scenery that zero draw groups alone hide: a part's own display groups are a second
+//! term, which these axes do not model (they are the draw groups' only; `fromsoft_formats::msb::DrawInfo::shown_by` is the
+//! reading that fits every picture, and `MapLayout::zero_draw_census` counts the parts that only it can decide).
 //!
 //! A part with no draw group set (a zero array, or no draw block) carries no condition and is present in every state.
 //! That is a choice, not a finding: a game run (Elden Ring 1.17.2, `m10_00`, loose layout) showed that setting every
 //! map piece's and asset's draw groups to zero hides the scenery that had non-zero groups, but whether the 317,870
 //! Elden Ring assets and 654 Sekiro parts that store zero draw groups in the stock files are drawn by another rule was not
-//! observed. The counts of the parts the axes cannot decide are in the report.
+//! observed for a single part; of them 235,081 and 271 store display groups of their own, which the picture above draws when
+//! they match. The counts of the parts the axes cannot decide are in the report.
 //!
 //! An overlay layout (`m10_00_00_99`) stores no collision of its own: the draw groups of its parts are met by the display
 //! groups of the collisions of its base map (1,279 of the 1,298 parts of `m10_00_00_99` with draw groups meet those of

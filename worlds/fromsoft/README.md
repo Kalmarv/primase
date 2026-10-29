@@ -306,7 +306,9 @@ choice, not a finding. A game run (Elden Ring 1.17.2, `m10_00`, loose layout) sh
 every map piece and asset that had some hides the scenery. `Report::display_groups` counts the placements conditioned and
 left present, those under groups none of the map's own collisions displays, how the layout's drawn parts meet its
 collisions' display groups (`GroupCensus`), and each collision's display groups (the groups to assign for "the player
-stands on this collision"). `tests/display_groups.rs` reads the Academy of Raya Lucaria with it.
+stands on this collision"). The running game does not draw a part by its draw groups against the collisions' display groups
+alone, and a part's own display groups take part too (a layout with every part's draw groups zero and display groups set to a
+group the floor collision holds draws the scenery): these axes carry only the draw groups, a documented limit. `tests/display_groups.rs` reads the Academy of Raya Lucaria with it.
 
 
 ## Material definitions and preview lowering
