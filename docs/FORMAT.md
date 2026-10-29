@@ -120,3 +120,21 @@ group is 0 through 63. A visibility channel never interpolates states or removes
 same-width named `MaterialParameters` default. All values are finite. The channel declares every
 material as an entity reference. New targets follow the clip's ordinary ordered-key, duration and
 extrapolation checks. They are not joint additive deltas; additive clips cannot contain them.
+
+## Particle systems
+
+`core.particles` is one particle effect in game-neutral terms: `{seed, emitters, inputs, states, warmup, time_scale,
+max_view_distance, termination, end, lost}`. It is placed by the `core.transform` of its entity; a system with no transform is
+not placed in the world and is only started by an emitter of another system (`spawns`, entity references). Emitters are a
+tree in a flat list with parents before children. Each emitter has a placement, an attachment (what frame it follows), a
+delay and duration, an optional motion of its own, a spawn schedule (once, periodic, by distance moved), a shape, a heading,
+a spread, a law of the particles (lifetime, movement, size scale, tint) and the form each particle is drawn as (billboard,
+point sprite, mesh, trail, streak, refraction or radial-blur sheet, light, lens flare, force field, water ripples).
+
+A number that changes is a `Value`: an argument (`Constant`, particle `Age`, emitter `ActiveTime`, `EmissionTime`), a curve of one
+to four components (steps, lines or cubic Beziers over ascending finite keys) and random variations that name a stream (and
+an input of the system). Random draws are keyed by `(seed, emitter, scope, stream, component)`, never by processing order, so
+a system stepped to a time gives the same particles anywhere. Units are metres, seconds, degrees and linear colour. `lost` is
+accounting: the reasons a source's pass could not carry something, with how many, never state. The JSON view is the
+serialization of these types and is not read back; `references` lists the textures, meshes and systems the draws and emitters
+name. Core defines the description; stepping and drawing it belongs to a consumer.

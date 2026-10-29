@@ -25,6 +25,7 @@ use crate::marker::{Curve, Marker};
 use crate::material_parameters::MaterialParameters;
 use crate::material_usage::MaterialUsage;
 use crate::morphs::Morphs;
+use crate::particles::ParticleSystem;
 use crate::pass::memo::Memo;
 use crate::pbr::PbrMaterial;
 use crate::primitive_keys::PrimitiveKeys;
@@ -73,7 +74,8 @@ declared! {
         PbrMaterial, DetailedMaterial, Priority, Provenance, StateAxis, Condition, PrimitiveCondition, StateOverride, VertexColor, Skeleton, Skin, Morphs, RigInstance,
         RigPose, SkinInstance, MorphWeights, Sockets, Attachment, JointMap, JointPlacement, Clip, ClipBinding, Asset, Shader, ShaderBinding,
         TextureLayers, MaterialPrograms, ProgramFacts, ClipKey, ClipLength, ClipEvents, Controller, ControllerBinding,
-        DrawGroups, DrawGroupDefaults, ContentNote, Record, DisplayName, PrimitiveKeys, MaterialParameters, SkyAnchor;
+        DrawGroups, DrawGroupDefaults, ContentNote, Record, DisplayName, PrimitiveKeys, MaterialParameters, SkyAnchor,
+        ParticleSystem;
     resources: PartScope, PartitionPlan, Environment, Atmosphere, StateAssignment, Surfaces, Threads, Memo, RenderGraph,
 }
 

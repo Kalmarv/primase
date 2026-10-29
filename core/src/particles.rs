@@ -1089,7 +1089,6 @@ impl Component for ParticleSystem {
     /// Emitters in order with parents before children, curves with ascending finite keys, variations naming an input the
     /// system has, an `end` that is finite, and finite numbers throughout the placement.
     fn verify(&self, _e: Entity, _w: &World) -> Result<(), String> {
-        let n = self.emitters.len();
         for (i, e) in self.emitters.iter().enumerate() {
             let at = |what: &str| format!("emitter {i}: {what}");
             if let Some(p) = e.parent
@@ -1123,7 +1122,6 @@ impl Component for ParticleSystem {
         {
             return Err(format!("a fade of {t} seconds"));
         }
-        let _ = n;
         Ok(())
     }
 }
