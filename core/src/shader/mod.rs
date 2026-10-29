@@ -20,7 +20,7 @@ pub use lights::{
     LightField, LightIndices, LightListPart, LightLookup, LightTable, LightTableKind, LightValue, ListBits,
     ListConstant, ListUnknown, PackedLightLists, PackedLights, pack_light_lists,
 };
-pub use program::Shader;
+pub use program::{LiftedShader, Shader};
 pub use roles::{
     Attribute, BufferBinding, BufferSource, BufferTable, ConstantBinding, ConstantRole, FrameParameter,
     FrameTexture, InputBinding, InputRole, KeyPart, LaneStream, ObjectMatrix, ObjectParameter, Occluded,
@@ -29,3 +29,6 @@ pub use roles::{
 };
 pub use select_variant::{SELECT_VARIANT, SelectVariant};
 pub use surface::Surface;
+
+mod specialise;
+pub use specialise::{ShaderSpecialisations, StageSpecialisation};

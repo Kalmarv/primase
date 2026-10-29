@@ -12,3 +12,6 @@ pub use collision::{KillSurface, LOWER_STUNTBOOST_COLLISION, LowerStuntboostColl
 pub use hidden::{OMIT_STUNTBOOST_HIDDEN, OmitStuntboostHidden};
 pub use materials::{Baked, LOWER_STUNTBOOST_MATERIALS, LowerStuntboostMaterials, Transparent};
 pub use spawns::{LOWER_STUNTBOOST_SPAWNS, LowerStuntboostSpawns, OtherSpawns, Spawn, Start, spawns};
+
+pub mod resolve_shaders;
+pub use resolve_shaders::{RESOLVE_STUNTBOOST_SHADERS, ResolveStuntboostShaders};

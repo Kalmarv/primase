@@ -2,7 +2,9 @@
 //! the scale the program read the level with ([Frame](crate#frame)).
 use std::collections::BTreeMap;
 
+mod effects;
 pub mod names;
+pub use effects::StuntboostEffect;
 
 use iridia_interface::Filters;
 use primase_core::{Component, Entity, JsonError};
@@ -569,5 +571,26 @@ impl Component for StuntboostShortcuts {
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)
+    }
+}
+
+/// The source material and the node's multiplier for a lowered transparent draw material.
+/// This keeps the game's draw binding available after the portable material is copied.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct StuntboostColourDraw {
+    pub material: Entity,
+    pub multiplier: f32,
+}
+impl Component for StuntboostColourDraw {
+    const NAME: &'static str = "stuntboost.colour_draw";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.push(self.material);
+    }
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        to_json(self)
+    }
+    fn apply_linear(&self, _: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
+        primase_core::world::Linearity::Invariant
     }
 }

@@ -33,6 +33,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
         &passes::LOWER_STUNTBOOST_SPAWNS,
         &passes::LOWER_STUNTBOOST_MATERIALS,
         &passes::OMIT_STUNTBOOST_HIDDEN,
+        &passes::RESOLVE_STUNTBOOST_SHADERS,
     ] {
         reg.add(spec);
     }
@@ -74,7 +75,17 @@ mod tests {
             "lower-stuntboost-spawns",
             "omit-stuntboost-hidden",
         ];
-        assert_eq!(format!("{reg:?}"), format!("{names:?}"));
+        assert_eq!(
+            format!("{reg:?}"),
+            format!(
+                "{:?}",
+                names
+                    .into_iter()
+                    .chain(["resolve-stuntboost-shaders"])
+                    .collect::<Vec<_>>()
+            )
+        );
+        assert!(reg.make("resolve-stuntboost-shaders", &Options::new()).is_ok());
         for name in names {
             assert!(reg.requires_options(name), "{name}");
             assert!(reg.describe(name).is_some_and(|d| d.starts_with(name)), "{name}");

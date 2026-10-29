@@ -130,6 +130,28 @@ impl StageBinding {
         }
     }
 
+    /// The exact uniform words the source states for this material. Runtime roles and unknown
+    /// fields contribute no words, including padding: a consumer may specialise only this map.
+    pub fn known_words(&self) -> std::collections::BTreeMap<(ResourceId, u32), u32> {
+        let mut out = std::collections::BTreeMap::new();
+        for constant in &self.constants {
+            let words = match &constant.role {
+                ConstantRole::Material(words) | ConstantRole::Default { words, .. } => words,
+                _ => continue,
+            };
+            for (index, word) in words.iter().enumerate() {
+                if let Ok(index) = u32::try_from(index)
+                    && let Some(offset) = index.checked_mul(4)
+                    && offset < constant.size
+                    && let Some(offset) = constant.offset.checked_add(offset)
+                {
+                    out.insert((constant.resource, offset), *word);
+                }
+            }
+        }
+        out
+    }
+
     /// The state the stage states for sampler `resource` ([`StageBinding::samplers`]).
     pub fn sampler_state(&self, resource: ResourceId) -> Option<&SamplerState> {
         self.samplers

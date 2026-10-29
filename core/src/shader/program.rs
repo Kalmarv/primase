@@ -9,13 +9,38 @@ use iridia_interface::{Interface, ShaderFormat};
 
 /// `core.shader`: one shader program, on its own entity. The bytecode (or source text) is kept exactly as the game
 /// stored it, in its [`ShaderFormat`]; what the program exposes, its stage, varyings and resources, is in primase's
-/// vocabulary ([`Interface`]). The program's operations are not stored: they are lifted from the bytecode on demand,
-/// so what is derived is never saved. A material's `core.shader_binding` refers to the entity.
+/// vocabulary ([`Interface`]). Its operations may be supplied separately as [`LiftedShader`] when lifting
+/// needs container metadata; otherwise consumers lift these bytes on demand. A material's
+/// `core.shader_binding` refers to the entity.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Shader {
     pub format: ShaderFormat,
     pub bytecode: Vec<u8>,
     pub interface: Interface,
+}
+
+/// An exact lift of the accompanying [`Shader`], supplied by its reader or resolver when lifting
+/// needs container metadata absent from the shader bytes. Any format may use this transport.
+/// This is neither a replacement shader nor a material specialization: no constants or branches
+/// may be frozen here. The original bytes and interface remain on `Shader`; derivations belong
+/// to [`super::ShaderSpecialisations`] or a consumer's explicit derivation mechanism.
+/// Consumers may use this instead of re-lifting.
+#[derive(Clone, Debug)]
+pub struct LiftedShader(pub std::sync::Arc<iridia::Program>);
+
+impl Component for LiftedShader {
+    const NAME: &'static str = "core.lifted_shader";
+    const GEOMETRY: crate::Geometry = crate::Geometry::None;
+    fn verify(&self, e: Entity, w: &crate::World) -> Result<(), String> {
+        let shader = w.get::<Shader>(e).ok_or("lifted shader has no original shader")?;
+        if self.0.interface != shader.interface || self.0.stage != shader.interface.stage {
+            return Err("lifted shader differs from the original shader interface".into());
+        }
+        self.0.validate().map(|_| ()).map_err(|e| format!("{e:?}"))
+    }
+    fn apply_linear(&self, _l: &crate::Linear) -> crate::world::Linearity<Self> {
+        crate::world::Linearity::Invariant
+    }
 }
 
 /// What [`Shader::to_json`] shows: the bytecode by its size (it is bulk data), the rest in full.
@@ -110,7 +135,7 @@ mod tests {
             inputs: vec![varying("TEXCOORD", 0, 2)],
             outputs: vec![varying("SV_Target", 0, 4)],
             resources: vec![buffer(0, 16, 0)],
-            facts: Default::default(),
+            facts: iridia_interface::StageFacts::None,
         }
     }
 
@@ -160,5 +185,52 @@ mod tests {
         let mut empty = shader(interface());
         empty.bytecode.clear();
         assert!(empty.verify(e, &w).is_err());
+    }
+}
+
+#[cfg(test)]
+mod lifted_tests {
+    use super::*;
+    #[test]
+    fn an_exact_lift_requires_its_original_interface() {
+        let program = iridia::Program {
+            module: naga::front::wgsl::parse_str("@fragment fn main() {}").unwrap(),
+            stage: iridia::Stage::Pixel,
+            entry: "main".into(),
+            interface: Interface {
+                stage: iridia::Stage::Pixel,
+                inputs: vec![],
+                outputs: vec![],
+                resources: vec![],
+                facts: iridia_interface::StageFacts::None,
+            },
+            bindings: vec![],
+            conventions: iridia::Conventions::D3D,
+            modes: Default::default(),
+            notes: vec![],
+            provenance: iridia::Provenance {
+                format: ShaderFormat::Glsl,
+                target: "fixture".into(),
+                lifter: "fixture".into(),
+                lifter_version: 1,
+                source_hash: None,
+                instruction_count: None,
+            },
+        };
+        let mut world = crate::World::new();
+        let e = world.spawn();
+        let lifted = LiftedShader(std::sync::Arc::new(program));
+        assert!(lifted.verify(e, &world).is_err());
+        world.insert(
+            e,
+            Shader {
+                format: ShaderFormat::Glsl,
+                bytecode: b"void main() {}".to_vec(),
+                interface: lifted.0.interface.clone(),
+            },
+        );
+        assert!(lifted.verify(e, &world).is_ok());
+        world.get_mut::<Shader>(e).unwrap().interface.stage = iridia::Stage::Vertex;
+        assert!(lifted.verify(e, &world).is_err());
     }
 }

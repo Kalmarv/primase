@@ -41,7 +41,8 @@ use primase_core::pbr::{AlphaMode, PbrMaterial, Shading, TextureRef};
 use primase_core::{Component, Entity, Instance, MaterialVariants, Mesh, Name, World};
 
 use crate::components::{
-    StuntboostDirectLight, StuntboostDraw, StuntboostMaterial, StuntboostNode, StuntboostTextureRef,
+    StuntboostColourDraw, StuntboostDirectLight, StuntboostDraw, StuntboostMaterial, StuntboostNode,
+    StuntboostTextureRef,
 };
 
 /// How a bake material's atlas lowers.
@@ -124,7 +125,12 @@ impl Pass for LowerStuntboostMaterials {
     /// The materials' `pbr.material`; with `transparent=blend`, the blended copies (each with `core.name`) and the
     /// prototypes' `core.material_variants`.
     fn provides(&self) -> &[&'static str] {
-        &[PbrMaterial::NAME, MaterialVariants::NAME, Name::NAME]
+        &[
+            PbrMaterial::NAME,
+            MaterialVariants::NAME,
+            Name::NAME,
+            StuntboostColourDraw::NAME,
+        ]
     }
     /// A transparent node's placement takes its variant; a prototype's variants gain the blended ones.
     fn modifies(&self) -> &[&'static str] {
@@ -261,6 +267,7 @@ fn transparent_nodes(w: &mut World, log: &mut PassLog) {
                                 let name = w.get::<Name>(m).map_or("", |n| n.0.as_str()).to_owned();
                                 let c = w.spawn();
                                 w.insert(c, pbr);
+                                w.insert(c, StuntboostColourDraw {material: m, multiplier: alpha});
                                 w.insert(c, Name(format!("{name} (transparent {alpha})")));
                                 log.count(
                                     if brighter {

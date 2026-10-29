@@ -77,6 +77,18 @@ Every piece of code has one of these roles. Each rule is checked by the normal g
 Programs are not in this repository: they live with their consumers and hold the recipe, the settings, custom steps and
 the stages after writing.
 
+A reader or source pass may attach `LiftedShader` to a `Shader` entity when lifting needs the source container's
+side tables. It is the exact program in the shared `iridia` IR, with the original shader's interface and
+stage; it neither selects material features nor replaces the original bytes. Core depends on the IR,
+never its format lifters. A consumer may use this stated lift directly. Bytecode-only sources may keep
+letting a consumer lift their bytes, or supply the same component after resolving their container.
+
+`ShaderSpecialisations` is a material's explicit request for derived feature programs. A source pass
+writes it from the exact lift and the material's stated binding words through iridia's specialiser.
+Only words deciding fully stated branches or resource choices become constants; ordinary data stays
+uniform. Each stage records its selected words, removed resources and refusal, alongside the exact
+lift. A consumer uses a successful derived stage and retains the original as provenance.
+
 Readers read, writers write, and what breaks a rule today is listed in `architecture.toml` as a break to remove,
 each with its reason and what removes it (`removed_when`). The test fails on a violation not listed, on a break that
 no longer occurs (delete its entry), and on any entry it hasn't seen before (`breaks_only_go`, by identity): the list

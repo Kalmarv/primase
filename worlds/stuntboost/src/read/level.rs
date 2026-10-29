@@ -480,6 +480,7 @@ pub fn read_level(install: &Path, level: &str, metres_per_unit: f64, w: &mut Wor
             &mut images,
         )?;
     }
+    crate::read::effects::read_effects(install, metres_per_unit, level, w)?;
     Ok(report)
 }
 
@@ -620,7 +621,6 @@ fn read_part(
         for (k, v) in m.as_object().into_iter().flatten() {
             if ![
                 "name",
-                "pbrMetallicRoughness",
                 "emissiveFactor",
                 "doubleSided",
                 "alphaMode",
@@ -643,6 +643,9 @@ fn read_part(
             "baseColorTexture",
         )?;
         let direct_light = texture_ref(specular, &name, "specularColorTexture")?;
+        if let Some(texture) = pbr.and_then(|p| p.get("metallicRoughnessTexture")) {
+            other.insert("metallicRoughnessTexture".into(), texture.clone());
+        }
         let material = StuntboostMaterial {
             shading,
             name: name.clone(),
