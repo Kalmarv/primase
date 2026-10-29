@@ -559,7 +559,7 @@ fn check_sampler_states(
 fn read_and_verify(
     install: &fromsoft_formats::Install,
     area: &str,
-    region: [f64; 4],
+    region: [f32; 4],
     decoder: &Decoder<'_>,
 ) -> Result<(World, sekiro::Report), Box<dyn std::error::Error>> {
     let mut world = World::default();
