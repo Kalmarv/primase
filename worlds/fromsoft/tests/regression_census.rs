@@ -153,6 +153,7 @@ fn count(world: &World, logs: &[(String, PassLog)]) -> BTreeMap<String, u64> {
                 let what = match &b.source {
                     BufferSource::Table(t) => role_class(&format!("{t:?}")),
                     BufferSource::Unknown { why } => role_class(&format!("Unknown {{ why: {why:?} }}")),
+                    BufferSource::Graph(_) => "a render graph buffer".to_owned(),
                 };
                 add(format!("buffers.{side}.{what}"), 1);
             }

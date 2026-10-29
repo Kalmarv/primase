@@ -12,17 +12,21 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::shader::{BindingPlace, StageBinding, TextureSource};
+use crate::shader::{BindingPlace, BufferSource, StageBinding, TextureSource};
 use crate::{Entity, JsonError, Resource, World};
 use iridia_interface::{Interface, RenderState, ResourceId, ResourceKind, TextureDim};
 
 /// A target's index in [`RenderGraph::targets`].
 pub type TargetId = u32;
+/// A buffer's index in [`RenderGraph::buffers`].
+pub type BufferId = u32;
 
 /// `core.render_graph`: see the module documentation.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct RenderGraph {
     pub targets: Vec<RenderTarget>,
+    /// The buffers the frame's own steps write and read (the light lists a compute step builds for the lighting steps).
+    pub buffers: Vec<RenderBuffer>,
     pub passes: Vec<RenderPass>,
     /// The target that holds the finished picture, before any interface the game draws over it.
     pub picture: Option<TargetId>,
@@ -43,6 +47,35 @@ pub struct RenderTarget {
     pub history: bool,
     /// One image for the frame, shared by every view (a shadow atlas, a look-up table), rather than one per view.
     pub shared: bool,
+}
+
+/// One buffer the frame makes (or keeps from the frame before): its steps write it as an unordered-access view and read
+/// it as a shader resource, the step that writes it named in the graph's order ([`PassWork::Compute::buffer_writes`]).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct RenderBuffer {
+    /// What it holds, as the step that writes it says (`GXLightOrganize16 u0`).
+    pub name: String,
+    pub size: BufferSize,
+    /// The bytes of one element, where the source's views of it state one (a structured buffer's stride).
+    pub stride: Option<u32>,
+    /// The elements the source's views of it span, where they state a count.
+    pub elements: Option<u64>,
+    /// The frame reads what the previous frame left in it.
+    pub history: bool,
+    /// One buffer for the frame, shared by every view, rather than one per view.
+    pub shared: bool,
+}
+
+/// A buffer's size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BufferSize {
+    /// The same whatever the view.
+    Fixed { bytes: u64 },
+    /// The bytes the source's recorded frames had, drawn at the view size `view` (width, height): how the size follows
+    /// the view is not established (the light lists of a tiled renderer grow with the number of screen tiles). A
+    /// consumer drawing at another size states what it allocates.
+    Recorded { bytes: u64, view: [u32; 2] },
 }
 
 /// How a target stores a texel.
@@ -203,6 +236,8 @@ pub enum PassWork {
         stage: StageBinding,
         groups: Groups,
         writes: Vec<(ResourceId, TargetView)>,
+        /// The graph's buffers it writes, by the program's unordered-access resource.
+        buffer_writes: Vec<(ResourceId, BufferId)>,
     },
     /// The scene's draws of a bucket through their materials' programs, into `outputs`, seen from `view`.
     Scene {
@@ -214,6 +249,10 @@ pub enum PassWork {
     Clear { target: TargetView, value: [f32; 4] },
     /// Copy one target's view into another's of the same size and format.
     Copy { from: TargetView, to: TargetView },
+    /// Set every element of a buffer to a value (its 32-bit words, as an unordered-access clear writes them).
+    ClearBuffer { buffer: BufferId, value: [u32; 4] },
+    /// Copy one buffer into another of the same size.
+    CopyBuffer { from: BufferId, to: BufferId },
     /// Where another feature draws, into these outputs (its own programs and data).
     Slot { slot: FeatureSlot, outputs: Outputs },
     /// Steps that run together, in order: the unit a repeated step ([`Runs::Each`]) runs once per item, where the
@@ -393,7 +432,14 @@ impl RenderGraph {
         }
         Ok(())
     }
-    /// The views a stage's texture slots bind of the graph's targets name a target and a mip it has.
+    fn buffer_ok(&self, b: BufferId, what: &str) -> Result<(), String> {
+        if b as usize >= self.buffers.len() {
+            return Err(format!("{what} names buffer {b} of {}", self.buffers.len()));
+        }
+        Ok(())
+    }
+    /// The views a stage's texture slots bind of the graph's targets name a target and a mip it has, and the graph's
+    /// buffers its buffer slots bind are the graph's.
     fn stage_targets_ok(&self, stages: &[&StageBinding], what: &str) -> Result<(), String> {
         for s in stages {
             for t in &s.textures {
@@ -402,6 +448,11 @@ impl RenderGraph {
                         view,
                         &format!("{what} {:?} texture slot {}", s.stage, t.resource.0),
                     )?;
+                }
+            }
+            for b in &s.buffers {
+                if let BufferSource::Graph(id) = b.source {
+                    self.buffer_ok(id, &format!("{what} {:?} buffer slot {}", s.stage, b.resource.0))?;
                 }
             }
         }
@@ -449,9 +500,13 @@ impl RenderGraph {
                 writes,
                 groups,
                 stage,
+                buffer_writes,
             } => {
                 for (_, v) in writes {
                     self.view_ok(v, &what)?;
+                }
+                for (_, b) in buffer_writes {
+                    self.buffer_ok(*b, &what)?;
                 }
                 if let Groups::Cover { target, mip, group } = groups {
                     self.view_ok(
@@ -486,6 +541,11 @@ impl RenderGraph {
                 self.view_ok(from, &what)?;
                 self.view_ok(to, &what)?;
             }
+            PassWork::ClearBuffer { buffer, .. } => self.buffer_ok(*buffer, &what)?,
+            PassWork::CopyBuffer { from, to } => {
+                self.buffer_ok(*from, &what)?;
+                self.buffer_ok(*to, &what)?;
+            }
             PassWork::Group { steps } => {
                 if steps.is_empty() {
                     return Err(format!("{what} is a group of no step"));
@@ -497,9 +557,9 @@ impl RenderGraph {
         }
         Ok(())
     }
-    /// The targets are well formed (a size and at least one mip), every view names a target and a mip it has, colour and
-    /// depth go to targets of their kind, a step in some frames names them, a repeated step states its counts, and the
-    /// picture is a target.
+    /// The targets are well formed (a size and at least one mip), and the buffers (some bytes), every view names a target
+    /// and a mip it has and every buffer reference a buffer, colour and depth go to targets of their kind, a step in some
+    /// frames names them, a repeated step states its counts, and the picture is a target.
     pub fn check(&self) -> Result<(), String> {
         for t in &self.targets {
             if t.mips == 0 {
@@ -518,6 +578,25 @@ impl RenderGraph {
                     return Err(format!("target {} has a zero size", t.name));
                 }
                 _ => {}
+            }
+        }
+        for b in &self.buffers {
+            let bytes = match b.size {
+                BufferSize::Fixed { bytes } | BufferSize::Recorded { bytes, .. } => bytes,
+            };
+            if bytes == 0 {
+                return Err(format!("buffer {} has no byte", b.name));
+            }
+            if let BufferSize::Recorded { view, .. } = b.size
+                && view.contains(&0)
+            {
+                return Err(format!("buffer {} was recorded at an empty view", b.name));
+            }
+            if b.stride == Some(0) || b.elements == Some(0) {
+                return Err(format!(
+                    "buffer {} states elements of no byte or no element",
+                    b.name
+                ));
             }
         }
         for p in &self.passes {
@@ -550,6 +629,8 @@ impl RenderGraph {
                     PassWork::Scene { .. }
                     | PassWork::Clear { .. }
                     | PassWork::Copy { .. }
+                    | PassWork::ClearBuffer { .. }
+                    | PassWork::CopyBuffer { .. }
                     | PassWork::Slot { .. } => {}
                 }
             }
@@ -662,6 +743,7 @@ mod tests {
                 target("light", TargetFormat::Rg11B10Float),
                 target("depth", TargetFormat::Depth32Stencil8),
             ],
+            buffers: Vec::new(),
             passes: vec![RenderPass {
                 name: "clear".into(),
                 shared: false,
@@ -747,6 +829,7 @@ mod tests {
         };
         let mut g = RenderGraph {
             targets: vec![atlas],
+            buffers: Vec::new(),
             passes: vec![cascade(quarter)],
             picture: None,
         };
@@ -779,6 +862,7 @@ mod tests {
         };
         let mut g = RenderGraph {
             targets: vec![target("light", TargetFormat::Rg11B10Float)],
+            buffers: Vec::new(),
             passes: vec![clear("a")],
             picture: Some(0),
         };
@@ -872,6 +956,7 @@ mod tests {
                 target("light", TargetFormat::Rg11B10Float),
                 target("fog", TargetFormat::Rgba16Float),
             ],
+            buffers: Vec::new(),
             passes: vec![screen(1, 0)],
             picture: Some(0),
         };
@@ -926,6 +1011,7 @@ mod tests {
         };
         let mut g = RenderGraph {
             targets: vec![atlas],
+            buffers: Vec::new(),
             passes: vec![copy(None), copy(Some(quarter))],
             picture: None,
         };
@@ -940,5 +1026,82 @@ mod tests {
             g.check(),
             Err("pass copy cascade draws into an empty region".into())
         );
+    }
+
+    /// Sekiro's light lists (a recorded frame at 1920 x 1080: GXLightOrganize16 writes four buffers, 522,240 bytes the
+    /// first, that the tiled lighting reads): a buffer has bytes, a step names buffers the graph has, and a buffer's clear
+    /// and copy name buffers too.
+    #[test]
+    fn steps_write_and_read_buffers_the_graph_has() {
+        let mut w = World::new();
+        let program = w.spawn();
+        let lists = RenderBuffer {
+            name: "GXLightOrganize16 u0".into(),
+            size: BufferSize::Recorded {
+                bytes: 522_240,
+                view: [1920, 1080],
+            },
+            stride: None,
+            elements: None,
+            history: false,
+            shared: false,
+        };
+        let organize = |buffer: BufferId| RenderPass {
+            name: "GXLightOrganize16".into(),
+            shared: false,
+            presence: Presence::Always,
+            runs: Runs::Once,
+            work: PassWork::Compute {
+                stage: StageBinding {
+                    stage: iridia_interface::Stage::Compute,
+                    variant: None,
+                    shader: program,
+                    inputs: Vec::new(),
+                    constants: Vec::new(),
+                    textures: Vec::new(),
+                    buffers: vec![crate::shader::BufferBinding {
+                        resource: ResourceId(1),
+                        source: BufferSource::Graph(buffer),
+                    }],
+                    constant_buffers: Vec::new(),
+                    outputs: Vec::new(),
+                },
+                groups: Groups::Fixed([120, 68, 1]),
+                writes: Vec::new(),
+                buffer_writes: vec![(ResourceId(0), buffer)],
+            },
+        };
+        let step = |work: PassWork| RenderPass {
+            name: "lists".into(),
+            shared: false,
+            presence: Presence::Always,
+            runs: Runs::Once,
+            work,
+        };
+        let mut g = RenderGraph {
+            targets: Vec::new(),
+            buffers: vec![lists.clone(), lists.clone()],
+            passes: vec![
+                step(PassWork::ClearBuffer {
+                    buffer: 0,
+                    value: [0; 4],
+                }),
+                organize(0),
+                step(PassWork::CopyBuffer { from: 0, to: 1 }),
+            ],
+            picture: None,
+        };
+        assert_eq!(g.check(), Ok(()));
+        g.passes[1] = organize(2);
+        assert_eq!(
+            g.check(),
+            Err("pass GXLightOrganize16 names buffer 2 of 2".into())
+        );
+        g.passes[1] = organize(0);
+        g.passes[2] = step(PassWork::CopyBuffer { from: 0, to: 5 });
+        assert_eq!(g.check(), Err("pass lists names buffer 5 of 2".into()));
+        g.passes.truncate(2);
+        g.buffers[1].size = BufferSize::Fixed { bytes: 0 };
+        assert_eq!(g.check(), Err("buffer GXLightOrganize16 u0 has no byte".into()));
     }
 }

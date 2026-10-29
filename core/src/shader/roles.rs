@@ -396,6 +396,9 @@ pub enum BufferSource {
         /// Why nothing is known of the contents.
         why: String,
     },
+    /// One of the frame's own buffers: only in the binding of a step of the frame's `core.render_graph`
+    /// ([`crate::render_graph::RenderGraph::buffers`]), whose buffers these are. A material's binding never states one.
+    Graph(crate::render_graph::BufferId),
 }
 /// A table of the draw's data a program reads from a buffer.
 #[derive(Clone, Debug, PartialEq, Serialize)]

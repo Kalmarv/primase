@@ -338,7 +338,7 @@ impl StageBinding {
                 }
             }
         }
-        self.verify_buffers(interface).map_err(at)?;
+        self.verify_buffers(interface, place).map_err(at)?;
         self.verify_constant_buffers(interface).map_err(at)
     }
 
@@ -409,7 +409,7 @@ impl StageBinding {
     /// The buffer slots: each a buffer of the shader, bound once, a matrix table of 16-byte elements, and an instance
     /// table whose records fit its stride and name a matrix table of this stage; a stage that states any buffer states
     /// every buffer of its program.
-    fn verify_buffers(&self, interface: &Interface) -> Result<(), String> {
+    fn verify_buffers(&self, interface: &Interface, place: BindingPlace) -> Result<(), String> {
         let kind = |id: ResourceId| match interface.resource(id).map(|r| &r.kind) {
             Some(ResourceKind::Buffer(kind)) => Some(*kind),
             _ => None,
@@ -432,6 +432,13 @@ impl StageBinding {
                     ));
                 }
                 BufferSource::Unknown { .. } => {}
+                BufferSource::Graph(_) if place == BindingPlace::Material => {
+                    return Err(format!(
+                        "buffer slot {} binds a render graph buffer, which only a step of a core.render_graph may",
+                        b.resource.0
+                    ));
+                }
+                BufferSource::Graph(_) => {}
                 BufferSource::Table(
                     BufferTable::ObjectMatrices { rows }
                     | BufferTable::HeaderedMatrices { rows }
@@ -822,6 +829,28 @@ mod tests {
                 matrices: ResourceId(table),
             }),
         }
+    }
+    /// A render graph's buffer is a buffer only a step of the graph binds: a material's binding that states one is refused,
+    /// and the same stage verifies in a graph step's place.
+    #[test]
+    fn a_material_binds_no_render_graph_buffer() {
+        let mut w = World::new();
+        let (s, m) = (w.spawn(), w.spawn());
+        w.insert(s, buffer_shader());
+        let graph = |resource: u32| BufferBinding {
+            resource: ResourceId(resource),
+            source: BufferSource::Graph(0),
+        };
+        let b = buffer_binding(s, vec![graph(10), graph(11), graph(12)]);
+        w.insert(m, b.clone());
+        let err = w.get::<ShaderBinding>(m).unwrap().verify(m, &w).unwrap_err();
+        assert!(
+            err.contains(
+                "buffer slot 10 binds a render graph buffer, which only a step of a core.render_graph may"
+            ),
+            "{err}"
+        );
+        assert_eq!(b.stages[0].verify_in(&w, BindingPlace::GraphStep), Ok(()));
     }
     /// The buffer slots: a matrix table and the instance records that index it verify, each rule broken once is named,
     /// and the roles serialize under their own names.
