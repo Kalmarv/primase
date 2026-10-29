@@ -12,7 +12,9 @@
 //!   the Sekiro-derived rule; unverified on Elden Ring", and is not evidence of Elden Ring's behaviour;
 //! - no texture the material binary declares is bound as an engine texture (a program resource without a
 //!   `Texture2D_<n>` name falls to that branch: they are listed by name);
-//! - the outputs carry Elden Ring's G-buffer roles only ([`Game::gbuffer`]).
+//! - the outputs carry Elden Ring's G-buffer roles only ([`Game::gbuffer`]), or, for a material drawn forward
+//!   ([`MaterialView::is_forward`](primase_fromsoft::materials::MaterialView::is_forward)), the finished colour on
+//!   render target 0 and an unknown role on any other target.
 //!
 //! It prints how many materials were bound and why the others were not.
 mod inputs;
@@ -20,7 +22,7 @@ mod inputs;
 use fromsoft_formats::metaparam::texture_number;
 use fromsoft_formats::{Game, Keys, dcx::Decoder};
 use primase_core::World;
-use primase_core::shader::ConstantRole;
+use primase_core::shader::{ConstantRole, OutputRole};
 use primase_core::{shader::Shader, shader::ShaderBinding, shader::TextureSource};
 use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::game::Shading;
@@ -297,16 +299,36 @@ fn elden_ring_materials_bind_as_their_definitions_state() -> Result<()> {
                     }
                 }
             }
-            // outputs: Elden Ring's roles only
+            // outputs: Elden Ring's G-buffer roles only, or a forward program's colour and unknown targets
+            let forward = m.view().is_some_and(|v| v.is_forward());
             for o in &pixel.outputs {
-                if !layout
-                    .iter()
-                    .any(|(_, lanes, role)| *lanes == o.lanes && *role == o.role)
-                {
+                let held = if forward {
+                    o.lanes == 0b1111
+                        && match &o.role {
+                            OutputRole::Colour => true,
+                            OutputRole::Unknown { why } => why.starts_with("a forward program's target "),
+                            _ => false,
+                        }
+                } else {
+                    layout
+                        .iter()
+                        .any(|(_, lanes, role)| *lanes == o.lanes && *role == o.role)
+                };
+                if !held {
                     failures.push(what(format!(
-                        "output {:?} {:?} not Elden Ring's",
+                        "output {:?} {:?} not Elden Ring's (forward {forward})",
                         o.label, o.role
                     )));
+                }
+            }
+            if forward {
+                let colours = pixel
+                    .outputs
+                    .iter()
+                    .filter(|o| o.role == OutputRole::Colour)
+                    .count();
+                if colours != 1 {
+                    failures.push(what(format!("a forward program with {colours} colour outputs")));
                 }
             }
         }
