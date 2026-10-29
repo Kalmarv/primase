@@ -21,7 +21,7 @@ fn source() -> [u8; 32] {
 /// Bump whenever the same inputs can produce different bytes or counts: bake/alpha/decode policy,
 /// interpreter arithmetic, sampling, texture decoding, vertex input derivation, or lifter behaviour.
 /// Lifter and program versions also participate automatically below. This is also the payload version.
-const BAKE_VERSION: u32 = 2;
+const BAKE_VERSION: u32 = 3;
 
 fn json<T: serde::Serialize>(k: KeyBuilder, tag: &str, value: &T) -> Result<KeyBuilder, String> {
     Ok(k.bytes(tag, &serde_json::to_vec(value).map_err(|e| e.to_string())?))

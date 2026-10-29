@@ -3,9 +3,17 @@
 //! texel by texel from what the program itself sampled, becomes the baked albedo's alpha, and the material a mask at
 //! the reference. The program keeps its test off in the bake ([`crate::layer_bake::ALPHA_TEST_POLICY`]), so every
 //! texel's colour is baked, and the cut is the game's own expression rather than one slot's alpha.
+//!
+//! The compare is evaluated in a run of the program with its test on (the reference word the material's), and it is
+//! the cut only where it is the discard's own test: at every texel the program discards exactly where the value is
+//! below the reference ([`Compare::carry`]). A value no texture the bake binds varies (the engine's dither noise at
+//! its neutral grey, constants and literals) is one value over the surface: it keeps every texel or none, and is no
+//! cut.
+use super::pixels::BoundTexture;
 use crate::layer_bake::resolve;
 use iridia::Interface;
 use iridia::output_uses::{AlphaExpr, alpha_tests};
+use iridia_exec::evaluate::Constants;
 use iridia_exec::{
     AtomicAdd, Error, Execution, ImageAtomic, ImageLoad, ImageQuery, ImageSample, ImageStore, Load,
     PixelShader, ProgramShader, Sample, Sampler, Store,
@@ -16,8 +24,23 @@ use std::collections::BTreeMap;
 
 /// What a material's notes and the bake's log count where the bake carries the cut ([`Compare`]).
 pub const CARRIED_ALPHA_TEST: &str = "alpha test carried from the program's own compare: the value its discard \
-     compares, evaluated from the program's samples with the alpha test off, is the baked albedo's alpha, cut at the \
-     material's reference (quantized to UNORM8)";
+     compares, evaluated from the program's samples in a run at its reference whose discards it matches at every \
+     texel, is the baked albedo's alpha, cut at the material's reference, each texel quantized to UNORM8 on the side \
+     of it the program puts the texel";
+
+/// What a material's notes and the bake's log count where the program's compare is one value over the surface and the
+/// program, run at its reference, keeps every texel: the material is not cut, as the game cuts none of it.
+pub const UNCUT_ALPHA_TEST: &str = "alpha-tested material not cut: the value its program's discard compares is one \
+     value over the surface (no texture it reads varies), and the program, run at its reference, keeps every texel";
+
+/// What the bake makes of the program's compare over its grid ([`Compare::carry`]).
+#[derive(Debug, PartialEq)]
+pub(super) enum Carried {
+    /// The albedo's alpha per texel, on the side of the reference the program's discard puts it once quantized.
+    Cut(Vec<f32>),
+    /// One value over the surface that the program keeps everywhere: no cut.
+    Uncut,
+}
 
 /// The one test of a program against its alpha reference, ready to be evaluated: the tested expression, the reference
 /// and where it lives, and the bind slot of every texture and constant buffer the expression reads.
@@ -28,6 +51,8 @@ pub(super) struct Compare {
     /// (the bake's constants hold the test-off value there).
     pub reference: f32,
     reference_word: (ResourceId, u32),
+    /// The bind slot of the reference word's buffer.
+    reference_slot: u32,
     /// The bind slot of each texture and constant buffer resource the expression reads.
     slots: BTreeMap<ResourceId, u32>,
     /// The output register the evaluation writes the tested value to: one past the program's own.
@@ -68,6 +93,10 @@ impl Compare {
         if !tested.is_exact() {
             return Err(format!("the tested value {tested} is not an exact expression"));
         }
+        let buffer = interface
+            .resource(reference_word.0)
+            .ok_or("the alpha reference's buffer is not in the interface")?;
+        let reference_slot = resolve::register(buffer).map_err(|e| e.to_string())?;
         let mut slots = BTreeMap::new();
         for leaf in tested.leaves() {
             let resource = match leaf {
@@ -90,9 +119,99 @@ impl Compare {
             tested,
             reference,
             reference_word,
+            reference_slot,
             slots,
             register,
         }))
+    }
+
+    /// The bake's constants with the test on: the reference word the material's reference, the rest as given.
+    pub(super) fn test_on(&self, constants: &Constants) -> Result<Constants, String> {
+        let mut on = constants.clone();
+        on.set_words(
+            self.reference_slot,
+            self.reference_word.1,
+            &[self.reference.to_bits()],
+        )
+        .map_err(|e| format!("the alpha reference's word: {e}"))?;
+        Ok(on)
+    }
+
+    /// Whether the tested value is one value over the surface: every texture it reads bound to a single value
+    /// (`textures`, by slot), its words constants.
+    pub(super) fn constant(&self, textures: &BTreeMap<u32, BoundTexture>) -> bool {
+        self.tested.leaves().into_iter().all(|leaf| match leaf {
+            AlphaExpr::Texel { resource, .. } => self
+                .slots
+                .get(&resource)
+                .and_then(|slot| textures.get(slot))
+                .is_some_and(|t| matches!(t, BoundTexture::Constant(_))),
+            _ => true,
+        })
+    }
+
+    /// The cut the compare makes over the bake's grid, from its value per texel (`values`) and whether the program,
+    /// run at its reference, discarded the texel (`discarded`), both in row-major order; `constant` where the value is
+    /// one value over the surface ([`Compare::constant`]). The compare is the discard's test only where the two agree at
+    /// every texel; otherwise the error says at how many they differ. One value kept everywhere is no cut, discarded
+    /// everywhere an error. A cut's texels are moved to the side of the reference the program puts them on: a UNORM8
+    /// alpha at or above the reference where it keeps the texel, below where it discards it, so the quantized mask is
+    /// the program's.
+    pub(super) fn carry(
+        &self,
+        values: &[f32],
+        discarded: &[bool],
+        constant: bool,
+    ) -> Result<Carried, String> {
+        if values.len() != discarded.len() {
+            return Err(format!(
+                "{} tested values for {} texels",
+                values.len(),
+                discarded.len()
+            ));
+        }
+        let differ = values
+            .iter()
+            .zip(discarded)
+            .filter(|&(&v, &d)| (v < self.reference) != d)
+            .count();
+        if differ > 0 {
+            return Err(format!(
+                "the program, run at its reference {}, does not discard where {} is below it at {differ} of {} \
+                 texels: the compare is not its discard's test",
+                self.reference,
+                self.tested,
+                values.len()
+            ));
+        }
+        let discards = discarded.iter().filter(|&&d| d).count();
+        if constant {
+            return match (discards, values.first()) {
+                (0, _) => Ok(Carried::Uncut),
+                (_, Some(v)) => Err(format!(
+                    "the program discards every texel: {} is {v} over the whole surface, below the reference {}",
+                    self.tested, self.reference
+                )),
+                (_, None) => Err("no texel was tested".into()),
+            };
+        }
+        // the lowest UNORM8 alpha a mask at the reference keeps
+        let kept = (1..=255u8)
+            .find(|&b| f32::from(b) / 255. >= self.reference)
+            .ok_or_else(|| {
+                format!(
+                    "the reference {} is above every alpha a texture holds",
+                    self.reference
+                )
+            })?;
+        let (below, at) = (f32::from(kept - 1) / 255., f32::from(kept) / 255.);
+        Ok(Carried::Cut(
+            values
+                .iter()
+                .zip(discarded)
+                .map(|(&v, &d)| if d { v.min(below) } else { v.max(at) })
+                .collect(),
+        ))
     }
 
     /// The tested value of one invocation: its leaves the words of `buffers` (the reference word the material's
@@ -308,36 +427,14 @@ mod tests {
     /// A program whose discard tests the product of two textures' alphas, a value it writes to no target
     /// (`tests/fixtures/alpha_product.hlsl`), bound with its reference stated as such a test: the compare is that product
     /// against the reference, and the evaluation writes it per texel, from what each texel sampled: the first texture's
-    /// alpha 0.2 and 1 in its two columns, the second's 0.5 everywhere. A comparison the binding states of an output
-    /// alpha is the lowering's to carry, not this.
+    /// alpha 0.2 and 1 in its two columns, the second's 0.5 everywhere. Run with its test on, the program discards the
+    /// texels whose product is below the reference and no other, so the compare is its discard's test and the cut is
+    /// carried. A comparison the binding states of an output alpha is the lowering's to carry, not this.
     #[test]
     fn the_carried_value_is_what_the_programs_discard_compares() {
-        let shader = crate::layer_bake::program_executor(
-            ShaderFormat::Dxbc,
-            include_bytes!("../../../../tests/fixtures/alpha_product.dxbc"),
-        )
-        .unwrap();
+        let shader = fixture();
         let interface = shader.interface().clone();
-        let buffer = interface
-            .resources
-            .iter()
-            .find(|r| r.provenance.name == "cbMtdParam")
-            .unwrap()
-            .id;
-        let stage = |compared| StageBinding {
-            constants: vec![ConstantBinding {
-                resource: buffer,
-                offset: 80,
-                size: 4,
-                name: Some("FC_AlphaRef".into()),
-                role: ConstantRole::AlphaReference {
-                    value: 0.25,
-                    compared,
-                },
-                lines: None,
-            }],
-            ..StageBinding::new(Stage::Pixel, primase_core::World::default().spawn())
-        };
+        let stage = |compared| fixture_stage(&interface, compared);
         assert!(
             Compare::of(&shader, &interface, &stage(AlphaComparison::Output))
                 .unwrap()
@@ -385,6 +482,159 @@ mod tests {
         assert!(raw.discarded.iter().all(|d| !d));
         let tested: Vec<f32> = raw.pixels[0].iter().map(|(w, _)| f32::from_bits(w[0])).collect();
         assert_eq!(tested, [0.2 * 0.5, 0.5, 0.2 * 0.5, 0.5]);
+        // the test on: the program's own discards, where the product is below 0.25
+        let on = evaluate_raw_with(
+            Threads::ONE,
+            &Tested {
+                program: &shader,
+                compare: &compare,
+            },
+            &compare.test_on(&constants).unwrap(),
+            &views,
+            &inputs,
+            Grid {
+                size: 2,
+                period: [1.; 2],
+            },
+            &[(compare.register, 1)],
+            Invocation::Scalar,
+        )
+        .unwrap();
+        assert_eq!(on.discarded, [true, false, true, false]);
+        let values: Vec<f32> = on.pixels[0].iter().map(|(w, _)| f32::from_bits(w[0])).collect();
+        assert_eq!(values, tested);
+        let textures = BTreeMap::from([
+            (
+                0,
+                BoundTexture::Image(std::sync::Arc::new(
+                    crate::layer_bake::wrapped_texture(1, 1, &[255; 4], false).unwrap(),
+                )),
+            ),
+            (1, BoundTexture::Constant([1., 1., 1., 0.5])),
+        ]);
+        assert!(!compare.constant(&textures));
+        assert_eq!(
+            compare.carry(&values, &on.discarded, false),
+            Ok(Carried::Cut(vec![0.2 * 0.5, 0.5, 0.2 * 0.5, 0.5]))
+        );
+    }
+
+    /// The program of `tests/fixtures/alpha_product.hlsl`.
+    fn fixture() -> ProgramShader {
+        crate::layer_bake::program_executor(
+            ShaderFormat::Dxbc,
+            include_bytes!("../../../../tests/fixtures/alpha_product.dxbc"),
+        )
+        .unwrap()
+    }
+
+    /// The fixture's pixel stage, its reference 0.25 stated as a test `compared` so.
+    fn fixture_stage(interface: &Interface, compared: AlphaComparison) -> StageBinding {
+        let buffer = interface
+            .resources
+            .iter()
+            .find(|r| r.provenance.name == "cbMtdParam")
+            .unwrap()
+            .id;
+        StageBinding {
+            constants: vec![ConstantBinding {
+                resource: buffer,
+                offset: 80,
+                size: 4,
+                name: Some("FC_AlphaRef".into()),
+                role: ConstantRole::AlphaReference {
+                    value: 0.25,
+                    compared,
+                },
+                lines: None,
+            }],
+            ..StageBinding::new(Stage::Pixel, primase_core::World::default().spawn())
+        }
+    }
+
+    /// A compare of `tested` against `reference`, for the cut's own rules.
+    fn compare(tested: AlphaExpr, reference: f32) -> Compare {
+        Compare {
+            tested,
+            reference,
+            reference_word: (ResourceId(0), 4),
+            reference_slot: 0,
+            slots: BTreeMap::new(),
+            register: 0,
+        }
+    }
+
+    /// Each texel lands on the side of the reference the program's discard puts it, once quantized to UNORM8: a texel
+    /// it discards just below a reference of 128/255 stays below (127/255), not rounded up onto it, and one it keeps at
+    /// the reference stays at it. Where the program's discard and the compare differ at any texel, the compare is not
+    /// the discard's test and nothing is carried.
+    #[test]
+    fn the_cut_is_the_side_the_programs_discard_puts_each_texel() {
+        let reference = 128. / 255.;
+        let c = compare(AlphaExpr::Literal(0.), reference);
+        let values = [reference - 1e-4, reference, 0.9, 0.1];
+        assert_eq!(
+            c.carry(&values, &[true, false, false, true], false),
+            Ok(Carried::Cut(vec![127. / 255., reference, 0.9, 0.1]))
+        );
+        let differ = c.carry(&values, &[false, false, false, true], false).unwrap_err();
+        assert!(differ.contains("at 1 of 4 texels"), "{differ}");
+        assert!(c.carry(&values, &[true, false], false).is_err());
+        // a reference no UNORM8 alpha reaches keeps no texel a texture can hold
+        assert!(
+            compare(AlphaExpr::Literal(0.), 1.5)
+                .carry(&[2.], &[false], false)
+                .is_err()
+        );
+    }
+
+    /// `M[AMSN_V][Mb4][3Mask][Ov_N2][beach]_Gbuf_[A]` discards where `FC_AlphaRef.y * (dither - 0.5) + 1 <
+    /// FC_AlphaRef.x`, at a reference of 1 (`g_AlphaRef` 255): no texture of the surface reaches the value, and with
+    /// the dither at its neutral grey it is 1 at every texel, which the program keeps. One value kept everywhere is no
+    /// cut, not a mask at the reference; one discarded everywhere is refused.
+    #[test]
+    fn one_value_over_the_surface_kept_everywhere_is_no_cut() {
+        // a texture's alpha the program samples, standing for the dither noise
+        let shader = fixture();
+        let interface = shader.interface().clone();
+        let fixture = Compare::of(
+            &shader,
+            &interface,
+            &fixture_stage(&interface, AlphaComparison::Unwritten),
+        )
+        .unwrap()
+        .unwrap();
+        let dither = fixture
+            .tested
+            .leaves()
+            .into_iter()
+            .find(|l| matches!(l, AlphaExpr::Texel { .. }))
+            .unwrap();
+        let AlphaExpr::Texel { resource, .. } = dither else {
+            unreachable!("a texel")
+        };
+        let slot = fixture.slots[&resource];
+        let tested = AlphaExpr::Add(
+            Box::new(AlphaExpr::Multiply(
+                Box::new(AlphaExpr::Word {
+                    buffer: ResourceId(0),
+                    word: 5,
+                }),
+                Box::new(AlphaExpr::Add(
+                    Box::new(dither),
+                    Box::new(AlphaExpr::Literal(-0.5)),
+                )),
+            )),
+            Box::new(AlphaExpr::Literal(1.)),
+        );
+        let mut c = compare(tested, 1.);
+        c.slots.insert(resource, slot);
+        let neutral = BTreeMap::from([(slot, BoundTexture::Constant([0.5; 4]))]);
+        assert!(c.constant(&neutral));
+        assert_eq!(c.carry(&[1.; 4], &[false; 4], true), Ok(Carried::Uncut));
+        let discards = c.carry(&[0.9; 4], &[true; 4], true).unwrap_err();
+        assert!(discards.contains("discards every texel"), "{discards}");
+        assert!(!c.constant(&BTreeMap::new()));
     }
 
     /// The tested value is the expression's arithmetic on its leaves, single precision, and an expression with a part

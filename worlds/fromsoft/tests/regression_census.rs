@@ -16,7 +16,8 @@
 //! lines of the baseline. Phase times of each world are printed (`--nocapture`).
 //!
 //! Beside the counts, one rule is checked outright: every drawn material whose pixel program tests its alpha (a stated
-//! alpha reference above 0) is drawn as a mask, or blended where its class blends, whether or not its colour bakes. The
+//! alpha reference above 0) is drawn as a mask, or blended where its class blends, whether or not its colour bakes, or
+//! opaque where the bake found that test to keep every texel (a value no texture varies, kept at the reference). The
 //! failure names each material drawn without its test.
 mod inputs;
 
@@ -34,6 +35,7 @@ use primase_core::shader::{BufferSource, LightListPart};
 use primase_core::shader::{ConstantRole, ShaderBinding};
 use primase_core::{Mesh, Skin, World};
 use primase_fromsoft::materials::Material;
+use primase_fromsoft::sekiro::passes::bake_materials::UNCUT_ALPHA_TEST;
 use primase_fromsoft::sekiro::{self, CharacterOptions};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -249,9 +251,16 @@ fn alpha_reference(binding: &ShaderBinding) -> Option<f32> {
 }
 
 /// The drawn materials whose program tests its alpha and which are drawn without that test: neither a mask nor blended
-/// (a blended class draws its alpha as coverage), by name and program. The alpha test is a fact of the material, whether
-/// or not its colour bakes.
-fn uncut(world: &World) -> Vec<String> {
+/// (a blended class draws its alpha as coverage), by name and program, but for those the bake found the program's test
+/// keeps whole ([`UNCUT_ALPHA_TEST`] in its log, `logs`). The alpha test is a fact of the material, whether or not its
+/// colour bakes.
+fn uncut(world: &World, logs: &[(String, PassLog)]) -> Vec<String> {
+    let kept: std::collections::BTreeSet<_> = logs
+        .iter()
+        .filter_map(|(_, log)| log.approximated_on.get(UNCUT_ALPHA_TEST))
+        .flatten()
+        .copied()
+        .collect();
     let drawn: std::collections::BTreeSet<_> = world
         .iter::<Mesh>()
         .flat_map(|(_, m)| m.primitives().iter().filter_map(|p| p.material))
@@ -262,7 +271,9 @@ fn uncut(world: &World) -> Vec<String> {
             let binding = world.get::<ShaderBinding>(material)?;
             let reference = alpha_reference(binding)?;
             let mode = world.get::<PbrMaterial>(material).map(|p| p.alpha_mode);
-            if matches!(mode, Some(AlphaMode::Mask { .. } | AlphaMode::Blend)) {
+            if matches!(mode, Some(AlphaMode::Mask { .. } | AlphaMode::Blend))
+                || (mode == Some(AlphaMode::Opaque) && kept.contains(&material))
+            {
                 return None;
             }
             let program = binding
@@ -304,7 +315,7 @@ fn census(
         at.elapsed().as_secs_f32(),
         started.elapsed().as_secs_f32()
     );
-    let uncut = uncut(&world)
+    let uncut = uncut(&world, &logs)
         .into_iter()
         .map(|m| format!("{name}: {m}"))
         .collect();

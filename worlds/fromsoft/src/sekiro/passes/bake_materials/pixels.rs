@@ -1,6 +1,6 @@
 //! Execute the resolved pixel stage and decode only the roles its binding declares, through primase's one reading of a
 //! program's outputs as a surface (`primase_core::shader::surface`).
-use super::cut::{self, CARRIED_ALPHA_TEST, Compare};
+use super::cut::{self, CARRIED_ALPHA_TEST, Carried, Compare, UNCUT_ALPHA_TEST};
 use crate::layer_bake::{self, FrozenFrame};
 use iridia_exec::{
     Grid, Input, Invocation, Lane, PixelShader, Raw, SampledTexture, SamplerUse, Unstated, evaluate_raw_with,
@@ -339,6 +339,8 @@ pub(super) fn bake(prepared: Prepared<'_>, world: &World) -> Result<Baked, Strin
         cut,
         sample_time: _,
     } = prepared;
+    // whether the compare is one value over the surface: every texture it reads bound to one value
+    let constant = cut.as_ref().is_some_and(|compare| compare.constant(&textures));
     let textures = iridia_exec::Views::refusing(textures.iter().map(|(&slot, t)| (slot, t.view())).collect());
     let raw = evaluate_raw_with(
         primase_core::parallel::threads(world),
@@ -358,12 +360,18 @@ pub(super) fn bake(prepared: Prepared<'_>, world: &World) -> Result<Baked, Strin
         return Err("program still discards texels with alpha test disabled".into());
     }
     let mut policies = policies;
-    // the program's own compare, evaluated over the same grid from the same inputs, constants and textures
+    // the program's own compare, evaluated over the same grid from the same inputs and textures, its test on
     let tested = cut.as_ref().and_then(|compare| {
-        match tested_values(world, &shader, compare, &constants, &textures, &inputs, size) {
-            Ok(values) => {
+        match tested_values(world, &shader, compare, &constants, &textures, &inputs, size)
+            .and_then(|(values, discarded)| compare.carry(&values, &discarded, constant))
+        {
+            Ok(Carried::Cut(values)) => {
                 policies.insert(CARRIED_ALPHA_TEST.into(), 1);
                 Some((compare.reference, values))
+            }
+            Ok(Carried::Uncut) => {
+                policies.insert(UNCUT_ALPHA_TEST.into(), 1);
+                None
             }
             Err(why) => {
                 policies.insert(format!("{UNCARRIED_ALPHA_TEST}: {why}"), 1);
@@ -404,8 +412,9 @@ pub(super) fn bake(prepared: Prepared<'_>, world: &World) -> Result<Baked, Strin
     Ok(result)
 }
 
-/// The value the program's alpha test compares with its reference at every texel of the bake's grid, in row-major
-/// order: the program run once a texel ([`cut::Tested`]), each run's samples its own.
+/// The value the program's alpha test compares with its reference at every texel of the bake's grid, and whether the
+/// program discarded the texel, in row-major order: the program run once a texel with its test on (the bake's
+/// `constants` but for the material's reference, [`Compare::test_on`]) ([`cut::Tested`]), each run's samples its own.
 fn tested_values(
     world: &World,
     shader: &iridia_exec::ProgramShader,
@@ -414,14 +423,14 @@ fn tested_values(
     textures: &iridia_exec::Views,
     inputs: &BTreeMap<(String, u32), Input>,
     size: u32,
-) -> Result<Vec<f32>, String> {
+) -> Result<(Vec<f32>, Vec<bool>), String> {
     let raw = evaluate_raw_with(
         primase_core::parallel::threads(world),
         &cut::Tested {
             program: shader,
             compare,
         },
-        constants,
+        &compare.test_on(constants)?,
         textures,
         inputs,
         Grid {
@@ -435,7 +444,7 @@ fn tested_values(
     let [values] = raw.pixels.as_slice() else {
         return Err("the tested value's target is missing".into());
     };
-    values
+    let values = values
         .iter()
         .map(|&(words, written)| {
             let value = f32::from_bits(words[0]);
@@ -445,7 +454,8 @@ fn tested_values(
                 Ok(value)
             }
         })
-        .collect()
+        .collect::<Result<_, _>>()?;
+    Ok((values, raw.discarded))
 }
 
 /// The surface channels a bake decodes from its evaluation, texel by texel in row-major order.

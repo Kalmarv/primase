@@ -4,6 +4,9 @@ mod colour;
 mod cut;
 mod pixels;
 
+pub use cut::{CARRIED_ALPHA_TEST, UNCUT_ALPHA_TEST};
+pub use pixels::UNCARRIED_ALPHA_TEST;
+
 use super::settings::{PixelCap, Seconds};
 use crate::materials::Material;
 use iridia_interface::Stage;
@@ -18,9 +21,12 @@ use std::collections::BTreeSet;
 /// keep its source UV tiling. The source material and shader binding remain available to a game-program renderer.
 /// The alpha test is the material's either way: a program that discards against its reference keeps its test off in the
 /// bake, and where the lowering could not cut the material (its test is an expression of several samples), the bake
-/// evaluates the value the program compares texel by texel, from the program's own samples, writes it into the albedo's
-/// alpha and makes the material a mask at the reference, counted on it (`cut::CARRIED_ALPHA_TEST`); where it cannot,
-/// the reason is counted and the material stays uncut.
+/// evaluates the value the program compares texel by texel, from the program's own samples in a run with its test on,
+/// writes it into the albedo's alpha and makes the material a mask at the reference, counted on it
+/// (`cut::CARRIED_ALPHA_TEST`), each texel on the side of the reference the program's own discard puts it. A value
+/// that is one value over the surface and kept everywhere is no cut (`cut::UNCUT_ALPHA_TEST`); where the program's
+/// discard does not follow the value, or the bake cannot evaluate it, the reason is counted and the material stays
+/// uncut.
 /// Unsupported programs retain their lowered material, with a refusal reason. Layer-weight materials belong to
 /// `bake-fromsoft-layers`, which groups their vertex weights; this pass does not replace that result with one weight.
 /// The square bake requests the largest bound source texture edge, limited by `max-size`. Allocation and cap
