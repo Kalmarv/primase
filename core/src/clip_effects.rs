@@ -29,8 +29,13 @@ pub struct ClipSpawn {
     /// The clip time it is stopped at, if the source stops it; `None` lets it play out.
     pub end: Option<f32>,
     /// The name of the socket of the clip's rig the system stands at (a socket's name is the source's: provenance, but the one
-    /// handle a clip has on a rig's sockets); `None` stands it at the rig's origin.
+    /// handle a clip has on a rig's sockets); `None` stands it at the rig's origin. A name the rig's skeleton does not hold
+    /// is looked for on the rigs attached to it (`core.attachment`: what the rig holds, a weapon in a hand), the attached
+    /// rig standing where its attachment places it and in its own pose.
     pub socket: Option<String>,
+    /// A second socket of the rig, for a system that runs between two (a weapon's trail from the hilt to the tip): the
+    /// system stands midway between `socket` and this one, in `socket`'s frame. `None` stands it at `socket`.
+    pub toward: Option<String>,
     /// Whether the system follows its socket as the clip moves it, else it stays where it started.
     pub follow: bool,
     /// The index in the clip's `core.clip_events` of the event that starts it, where the source says.
@@ -85,6 +90,12 @@ impl Component for ClipEffects {
             {
                 return Err(format!("spawn {i}: a socket name that is empty"));
             }
+            if spawn.toward.is_some() && spawn.socket.is_none() {
+                return Err(format!("spawn {i}: a second socket with no first"));
+            }
+            if spawn.toward.as_ref().is_some_and(|t| t.trim().is_empty()) {
+                return Err(format!("spawn {i}: a second socket name that is empty"));
+            }
         }
         Ok(())
     }
@@ -137,6 +148,7 @@ mod tests {
                 start: 0.25,
                 end: Some(0.5),
                 socket: Some("dummy 100".into()),
+                toward: None,
                 follow: true,
                 event: Some(3),
             }],
@@ -182,6 +194,15 @@ mod tests {
         }
         let mut bad = effects.clone();
         bad.spawns[0].socket = Some(" ".into());
+        assert!(bad.verify(clip, &world).is_err());
+        // a second socket with no first, or an empty one
+        let mut bad = effects.clone();
+        bad.spawns[0].toward = Some("dummy 101".into());
+        assert_eq!(bad.verify(clip, &world), Ok(()));
+        bad.spawns[0].socket = None;
+        assert!(bad.verify(clip, &world).is_err());
+        bad.spawns[0].socket = Some("dummy 100".into());
+        bad.spawns[0].toward = Some(String::new());
         assert!(bad.verify(clip, &world).is_err());
         let mut bad = effects;
         bad.lost.push((String::new(), 1));

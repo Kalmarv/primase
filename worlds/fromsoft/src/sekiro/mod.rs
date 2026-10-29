@@ -38,4 +38,5 @@ pub use read::objects::Report as ObjectCollisionReport;
 pub use read::render_graph::Report as RenderGraphReport;
 pub use read::textures::tpf_image;
 pub use read::visibility::decode as decode_visibility;
+pub use read::weapons::{WeaponParams, WeaponRow};
 pub use read::{convert, groups, sky, states};

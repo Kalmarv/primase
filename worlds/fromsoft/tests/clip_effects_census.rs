@@ -20,11 +20,16 @@ use std::collections::{BTreeMap, BTreeSet};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 /// What the script counts, by game: uses by event type, and the lost events by reason (goods and magic, throw and foot, types
-/// the files do not bear out, a weapon's dummy polygon).
-const SEKIRO: ([(i64, u32); 3], [u32; 4]) = ([(96, 7_586), (118, 174), (120, 4)], [103, 8_755, 2_949, 8]);
-const ELDEN: ([(i64, u32); 3], [u32; 4]) = (
-    [(96, 20_078), (118, 2_341), (120, 1_473)],
-    [1_209, 31_760, 1_754, 382],
+/// the files do not bear out, a weapon's dummy polygon, an additional spawn condition, a special-effect state). The two
+/// conditions were counted after the script: the 60 + 2,016 (Sekiro) and 154 + 1,622 (Elden Ring) events with one are all of
+/// type 96, and the script's 7,586 and 20,078 uses of type 96 are exactly the uses here and those events together.
+const SEKIRO: ([(i64, u32); 3], [u32; 6]) = (
+    [(96, 5_510), (118, 174), (120, 4)],
+    [103, 8_755, 2_949, 8, 60, 2_016],
+);
+const ELDEN: ([(i64, u32); 3], [u32; 6]) = (
+    [(96, 18_302), (118, 2_341), (120, 1_473)],
+    [1_209, 31_760, 1_754, 382, 154, 1_622],
 );
 
 #[test]
@@ -58,7 +63,7 @@ fn the_effects_events_start_are_what_their_stored_words_say() -> Result<()> {
             .filter(|p| p.contains(".anibnd") && archive.contains(p))
             .collect();
         let mut uses: BTreeMap<i64, u32> = BTreeMap::new();
-        let mut lost = [0u32; 4];
+        let mut lost = [0u32; 6];
         let mut events = 0usize;
         for path in paths {
             let binder = Binder::read(&archive.read(path, &decoder)?, &decoder)?;
@@ -96,6 +101,10 @@ fn the_effects_events_start_are_what_their_stored_words_say() -> Result<()> {
                             2
                         } else if reason.contains("weapon's dummy polygon") {
                             3
+                        } else if reason == primase_fromsoft::sekiro::effect_data::SPAWN_CONDITION {
+                            4
+                        } else if reason == primase_fromsoft::sekiro::effect_data::STATE_CONDITION {
+                            5
                         } else {
                             panic!("{game:?}: lost for a reason the script does not count: {reason}");
                         };
@@ -104,6 +113,7 @@ fn the_effects_events_start_are_what_their_stored_words_say() -> Result<()> {
                 }
             }
         }
+        println!("FS_CLIP_EFFECT_USES={game:?} {uses:?} {lost:?}");
         let expected: BTreeMap<i64, u32> = uses_expected.into_iter().collect();
         assert_eq!(uses, expected, "{game:?}: uses by event type");
         assert_eq!(lost, lost_expected, "{game:?}: lost by reason");
@@ -112,7 +122,6 @@ fn the_effects_events_start_are_what_their_stored_words_say() -> Result<()> {
             if game == Game::Sekiro { 336_787 } else { 1_310_023 },
             "{game:?}: events"
         );
-        println!("FS_CLIP_EFFECT_USES={game:?} {uses:?} {lost:?}");
     }
     Ok(())
 }

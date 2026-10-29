@@ -789,7 +789,8 @@ pub struct TrailDistortion {
 pub enum TrailOrientation {
     /// Toward the camera.
     Camera,
-    /// Flat in the plane of its emitter's frame.
+    /// Its width along its emitter frame's z axis: the segment that sweeps the strip lies along that axis (less what of it
+    /// runs along the trail).
     Frame,
     /// Flat to the world's up.
     World,

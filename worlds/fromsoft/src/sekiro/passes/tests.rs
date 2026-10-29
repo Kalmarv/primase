@@ -708,6 +708,7 @@ fn the_fromsoft_passes_register_by_name() {
         "drop-fromsoft-far",
         "drop-fromsoft-texture-transforms",
         "fromsoft-apply-rigid-skinning",
+        "hold-fromsoft-weapons",
         "lower-fromsoft-clip-events",
         "lower-fromsoft-collision",
         "lower-fromsoft-display-masks",

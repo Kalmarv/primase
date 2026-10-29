@@ -16,7 +16,9 @@ pub mod value;
 
 use super::lights::Disabled;
 use super::settings::Factor;
-use crate::sekiro::components::effect::{ClipEffectUses, Effect, EffectFile, EffectResource, ResourceKind};
+use crate::sekiro::components::effect::{
+    ClipEffectUses, Effect, EffectFile, EffectResource, ResourceKind, UseRoute,
+};
 pub use cx::{NoFiles, Resolver};
 use fromsoft_formats::fxr::resources::TextureKind;
 pub use lower::{Lowered, NO_LIMIT, lower};
@@ -353,9 +355,23 @@ impl LowerFromSoftEffects {
                         .push(("an effect the read did not find".to_owned(), 1));
                     continue;
                 };
-                if u.kind == 118 {
+                if matches!(u.route, UseRoute::WeaponTrace { .. }) {
+                    log.count(
+                        "held weapons' trails drawn while an attack event lasts (the weapon row's traceSfxId, not an event of the clip)",
+                        1,
+                    );
+                }
+                // an effect between two polygons (a blade's base and tip, a trace's head and tail) stands midway, in the first's
+                // frame: the game's trail covers the blade from hilt to tip (both games' videos); with no second polygon it stands
+                // at the first
+                if u.tail.is_some() {
                     log.approximate(
-                        "an effect along a blade stands at the blade's base dummy polygon",
+                        "an effect between two dummy polygons stands midway between them, in the first's frame",
+                        1,
+                    );
+                } else if u.kind == 118 || matches!(u.route, UseRoute::WeaponTrace { .. }) {
+                    log.approximate(
+                        "an effect along a blade with no second dummy polygon stands at its first",
                         1,
                     );
                 }
@@ -365,6 +381,10 @@ impl LowerFromSoftEffects {
                     start: u.start,
                     end: if u.repeating { u.end } else { None },
                     follow: u.follow && socket.is_some(),
+                    toward: u
+                        .tail
+                        .filter(|_| socket.is_some())
+                        .map(crate::pose::dummy_socket_name),
                     socket,
                     event: Some(u.event),
                 });

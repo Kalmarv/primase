@@ -29,6 +29,7 @@ pub mod resolve_shaders;
 pub mod settings;
 pub mod sky;
 pub mod visibility;
+pub mod weapons;
 pub use crate::layer_bake::resolve::Unbound;
 pub use crate::sekiro::components::lowered::UvTiling;
 pub use bake::BakeFromSoftLayers;
@@ -97,6 +98,7 @@ pub fn register(registry: &mut PassRegistry) {
         &lights::LOWER_FROMSOFT_LIGHTS,
         &sky::LOWER_FROMSOFT_SKY,
         &effects::LOWER_FROMSOFT_EFFECTS,
+        &weapons::HOLD_FROMSOFT_WEAPONS,
     ] {
         registry.add(spec);
     }

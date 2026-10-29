@@ -276,6 +276,10 @@ pub struct CharacterOptions {
     /// attachment is not implemented (it is to come from the engine's own data), and until then the weapon's sockets are
     /// on the weapon's own skeleton, not the character's.
     pub equipped_weapons: EquippedWeapons,
+    /// For parts: the character whose own model's dummy polygons are placed on the parts ([`own_sockets`]); with clip
+    /// effects or weapons, the animations' character is taken where this is not given (the player's `c0000`: its model
+    /// has no mesh, and holds the polygons effects and weapons stand at).
+    pub sockets_of: Option<String>,
 }
 
 /// A character id as the game names its files: `c` and four digits.
@@ -1242,15 +1246,38 @@ pub fn read_parts_with(
     }
     let mut reading = Reading::open(install, decoder)?;
     reading.animation_clips = options.animation_clips.clone();
-    reading.weapon_slots = options
-        .equipped_weapons
-        .slots()
-        .into_iter()
-        .map(|(slot, part)| (part.to_owned(), slot))
-        .collect();
+    let weapons = held_weapons(&reading, &options.equipped_weapons)?;
+    for w in &weapons {
+        if seen.contains(w.part.as_str()) {
+            return Err(invalid(
+                "FromSoftware part",
+                0,
+                format!(
+                    "{} is weapon row {}'s part, read for its hand slot: it is not named among the parts too",
+                    w.part, w.row.row
+                ),
+            ));
+        }
+    }
+    reading.weapon_slots = weapons.iter().map(|w| (w.part.clone(), w.slot)).collect();
+    // the character the clips are of: its own model (the player's `c0000` has no mesh) holds the dummy polygons the clips'
+    // effects and the held weapons stand at, which the parts need not carry (Elden Ring's do not), so with clip effects or
+    // weapons they are placed on the parts ([`own_sockets`])
+    let own = match options.sockets_of.as_deref().or(options.animations.as_deref()) {
+        Some(of) if options.clip_effects || !weapons.is_empty() => Some(character_id(of)?)
+            .filter(|of| textures::has(&reading.archive, &Item::Character(of).binder_path())),
+        _ => None,
+    };
     let mut reports = Vec::new();
     for p in parts {
         reports.extend(reading.read(Item::Part(p), None, options.form_animations, destination)?);
+    }
+    if let Some(of) = own {
+        reports.push(own_sockets(&reading, of, destination)?);
+    }
+    for w in &weapons {
+        reports.extend(reading.read(Item::Part(&w.part), None, options.form_animations, destination)?);
+        hold_forms(w, destination)?;
     }
     let animations = match options.animations.as_deref() {
         Some(of) => {
@@ -1269,6 +1296,195 @@ pub fn read_parts_with(
     };
     reading.finish(destination);
     Ok((reports, animations))
+}
+
+/// A weapon to read for a hand slot: its row, the part binder read for it and where its models stand.
+struct HeldPart {
+    slot: crate::sekiro::effect_data::HandSlot,
+    row: super::weapons::WeaponRow,
+    part: String,
+    holds: Vec<crate::sekiro::effect_data::Holds>,
+}
+
+/// The weapons `equipped` states: each row's part binder (the model's `wp_a_<id>_l` where the archives hold it, else
+/// `wp_a_<id>`, else `wp_a_<id>_m`: the level suffix chosen by which binder the archives hold, as an outfit's parts are)
+/// and the models of its hold row. A row the param lacks, a part no binder holds or one part in two slots is refused.
+fn held_weapons(reading: &Reading<'_>, equipped: &EquippedWeapons) -> Result<Vec<HeldPart>> {
+    if equipped.is_empty() {
+        return Ok(Vec::new());
+    }
+    let params = super::weapons::WeaponParams::read(&reading.install, &reading.archive, reading.decoder)?;
+    let mut out: Vec<HeldPart> = Vec::new();
+    for (slot, row) in equipped.slots() {
+        let weapon = params.weapon(row)?;
+        let base = weapon.part();
+        let part = [format!("{base}_l"), base.clone(), format!("{base}_m")]
+            .into_iter()
+            .find(|p| textures::has(&reading.archive, &Item::Part(p).binder_path()))
+            .ok_or_else(|| {
+                invalid(
+                    "FromSoftware weapon",
+                    0,
+                    format!("weapon row {row}: the archives hold no part binder of {base}"),
+                )
+            })?;
+        if out.iter().any(|h| h.part == part) {
+            return Err(invalid(
+                "FromSoftware weapon",
+                0,
+                format!("weapon row {row}: its part {part} is held in another slot already"),
+            ));
+        }
+        let holds = params.holds(weapon.hold_row)?;
+        out.push(HeldPart {
+            slot,
+            row: weapon,
+            part,
+            holds,
+        });
+    }
+    Ok(out)
+}
+
+/// The trace slots of the weapons `equipped` states, by hand slot ([`super::weapons::WeaponRow::traces`]); none read where
+/// no weapon is stated.
+fn weapon_traces(
+    install: &Install,
+    archive: &fromsoft_formats::Archive,
+    decoder: &Decoder<'_>,
+    equipped: &EquippedWeapons,
+) -> Result<Vec<crate::sekiro::effect_data::WeaponTraces>> {
+    if equipped.is_empty() {
+        return Ok(Vec::new());
+    }
+    let params = super::weapons::WeaponParams::read(install, archive, decoder)?;
+    equipped
+        .slots()
+        .into_iter()
+        .map(|(slot, row)| {
+            Ok(crate::sekiro::effect_data::WeaponTraces {
+                slot,
+                row,
+                traces: params.weapon(row)?.traces,
+            })
+        })
+        .collect()
+}
+
+/// The dummy polygons of character `of`'s own model as sockets of the parts read into `world`: each where the model places
+/// it on its attach bone (its frame in that bone's, [`crate::pose::dummy_sockets`]), on the joint of that name of the first
+/// part whose skeleton holds one and has no socket of that name already (a part's own dummy polygons stand first). The
+/// model is not assembled with the parts (the player's skeleton names joints the parts repeat), only its polygons are
+/// placed: its report counts them (`dummies`) and those no part has a joint for or a part already names
+/// (`dummies_unplaced`).
+fn own_sockets(reading: &Reading<'_>, of: &str, world: &mut World) -> Result<CharacterReport> {
+    let item = Item::Character(of);
+    let binder = Binder::read(
+        &reading.archive.read(&item.binder_path(), reading.decoder)?,
+        reading.decoder,
+    )?;
+    let forms = item.forms(&binder)?;
+    let form = forms
+        .first()
+        .ok_or_else(|| invalid("FromSoftware character", 0, format!("{of} holds no model")))?;
+    let model = Model::read(&form.flver.bytes)?;
+    let mut report = CharacterReport {
+        id: of.to_owned(),
+        binder: item.key(),
+        forms: forms.len(),
+        bones: model.bones.len(),
+        meshes: model.meshes.len(),
+        dummies: model.dummies.len(),
+        ..CharacterReport::default()
+    };
+    let (sockets, left_out) = crate::pose::dummy_sockets(&model)
+        .map_err(|e| invalid("FromSoftware character", 0, format!("{of}: {e}")))?;
+    let mut unplaced = left_out.len();
+    // the parts' skeletons, in read order
+    let skeletons: Vec<Entity> = world
+        .iter::<Asset>()
+        .filter(|(root, _)| {
+            world
+                .get::<Source>(*root)
+                .is_some_and(|s| s.0.starts_with("parts/"))
+        })
+        .filter_map(|(_, a)| a.members.iter().find(|m| m.1 == Role::Rig).map(|m| m.0))
+        .collect();
+    for socket in sockets.0 {
+        let Some(bone) = usize::try_from(socket.joint.0)
+            .ok()
+            .and_then(|i| model.bones.get(i))
+            .map(|b| b.name.as_str())
+        else {
+            unplaced += 1;
+            continue;
+        };
+        let target = skeletons.iter().copied().find_map(|e| {
+            let joint = world
+                .get::<primase_core::Skeleton>(e)?
+                .joints
+                .iter()
+                .find(|j| j.name == bone)?
+                .id;
+            let taken = world
+                .get::<primase_core::Sockets>(e)
+                .is_some_and(|s| s.0.iter().any(|k| k.name == socket.name));
+            (!taken).then_some((e, joint))
+        });
+        let Some((e, joint)) = target else {
+            unplaced += 1;
+            continue;
+        };
+        let mut placed = world.get::<primase_core::Sockets>(e).cloned().unwrap_or_default();
+        placed.0.push(primase_core::Socket {
+            id: primase_core::SocketId(placed.0.iter().map(|k| k.id.0 + 1).max().unwrap_or(0)),
+            joint,
+            ..socket
+        });
+        world.insert(e, placed);
+    }
+    report.dummies_unplaced = unplaced;
+    Ok(report)
+}
+
+/// Marks each form of the held part `held` read into `world` with where it stands: `fromsoft.held_weapon` on its asset's
+/// root, its model number from its name (`wp_a_0300_1_l` is model 1). A model past the ones the hold row has stands
+/// nowhere; a form not named as a model of the part is refused.
+fn hold_forms(held: &HeldPart, world: &mut World) -> Result<()> {
+    let key = format!("parts/{}", held.part);
+    let under = format!("{key}/");
+    let base = form_base(&held.part, &held.part);
+    let roots: Vec<(Entity, String)> = world
+        .iter::<Asset>()
+        .filter(|(root, _)| {
+            world
+                .get::<Source>(*root)
+                .is_some_and(|s| s.0 == key || s.0.starts_with(&under))
+        })
+        .filter_map(|(root, _)| Some((root, world.get::<Name>(root)?.0.clone())))
+        .collect();
+    for (root, form) in roots {
+        let model = super::weapons::model_of_form(&base, &form_base(&held.part, &form))
+            .and_then(|m| u8::try_from(m).ok())
+            .ok_or_else(|| {
+                invalid(
+                    "FromSoftware weapon",
+                    0,
+                    format!("form {form} of {} is not named as a model of it", held.part),
+                )
+            })?;
+        let holds = held.holds.get(usize::from(model)).copied().unwrap_or_default();
+        world.insert(
+            root,
+            crate::sekiro::effect_data::HeldWeapon {
+                slot: held.slot,
+                row: held.row.row,
+                model,
+                holds,
+            },
+        );
+    }
+    Ok(())
 }
 
 /// Compatibility for eager character helpers. Planning and each strict load use
@@ -1364,6 +1580,9 @@ pub struct CharacterReader<'a> {
     last_load_reports: BTreeMap<Entity, AnimationReport>,
     /// The effect binders read for clip effects, kept from one clip load to the next.
     effect_cache: super::effects::EffectCache,
+    /// The held weapons' trace slots ([`CharacterOptions::equipped_weapons`]), read from the weapon param at the first clip
+    /// load that reads clip effects.
+    weapon_traces: Option<Vec<crate::sekiro::effect_data::WeaponTraces>>,
 }
 
 /// What a [`CharacterReader`] reads.
@@ -1388,6 +1607,7 @@ impl<'a> CharacterReader<'a> {
             first_index: 0,
             last_load_reports: BTreeMap::new(),
             effect_cache: Default::default(),
+            weapon_traces: None,
         }
     }
 
@@ -1465,6 +1685,7 @@ impl<'a> CharacterReader<'a> {
             first_index: 0,
             last_load_reports: BTreeMap::new(),
             effect_cache: Default::default(),
+            weapon_traces: None,
         }
     }
 }
@@ -1476,6 +1697,10 @@ impl Reader for CharacterReader<'_> {
         // The adapter returns clip plans; direct read_character_with remains the explicit
         // eager API until consumers migrate. Loading, not read(), parses chosen tracks.
         let mut model_options = self.options.clone();
+        // the clips are listed apart; the parts still take the dummy polygons of the clips' character
+        if model_options.sockets_of.is_none() {
+            model_options.sockets_of = model_options.animations.clone();
+        }
         model_options.animations = None;
         model_options.animation_clips = None;
         let mut animation_line = None;
@@ -1636,6 +1861,14 @@ impl Reader for CharacterReader<'_> {
             self.last_load_reports.insert(entity, read);
             if self.options.clip_effects {
                 let archive = self.install.open()?;
+                if self.weapon_traces.is_none() {
+                    self.weapon_traces = Some(weapon_traces(
+                        &self.install,
+                        &archive,
+                        &self.decoder,
+                        &self.options.equipped_weapons,
+                    )?);
+                }
                 let effects = super::effects::read_for_clip(
                     &archive,
                     &self.decoder,
@@ -1643,6 +1876,7 @@ impl Reader for CharacterReader<'_> {
                     &mut part,
                     entity,
                     self.options.trace_offsets,
+                    self.weapon_traces.as_deref().unwrap_or_default(),
                     &mut self.effect_cache,
                 )?;
                 report.push((

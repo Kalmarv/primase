@@ -115,6 +115,17 @@ impl Component for EffectResource {
     }
 }
 
+/// What starts an effect a clip plays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum UseRoute {
+    /// The event names the effect (types 96, 118 and 120: its first field is the effect's number).
+    Event,
+    /// The trail of a held weapon: its `EquipParamWeapon` row's trace slot `slot` (`traceSfxId<n>` between the weapon's
+    /// dummy polygons `traceDmyIdHead<n>` and `traceDmyIdTail<n>`), drawn while an attack event (type 1, the attack's
+    /// window) lasts. No event of the clip names the effect.
+    WeaponTrace { row: i32, slot: u8 },
+}
+
 /// An effect an animation event starts.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct EffectUse {
@@ -123,8 +134,13 @@ pub struct EffectUse {
     /// The event's type number.
     pub kind: i64,
     pub effect: i32,
+    /// What names the effect: the event, or a held weapon's row during the event.
+    pub route: UseRoute,
     /// The reference id of the dummy polygon the effect stands at, where the event names one.
     pub dummy: Option<i32>,
+    /// The second dummy polygon of an effect that runs between two (a blade event's tip, a weapon trace's tail), where one
+    /// is named.
+    pub tail: Option<i32>,
     /// The event's `Dummy Poly Source`, where it has one: 0 the character's own dummy polygons (a weapon's are among them
     /// as `10000 + n` for the right hand and `20000 + n` for the left), 1 the left hand's weapon, 2 the right hand's.
     pub source: Option<i32>,
@@ -174,6 +190,20 @@ const EFFECT_NUMBERS: &[i32] = &[96, 118, 120];
 /// effect that no binder holds in 247 of 249, 116's (Elden Ring, 6 events) names 3 that exist; the others (95, 99, 100, 101, 104,
 /// 108, 109, 121, 122, 961) hold no number above 0 in either game. They are counted, not used.
 const UNPROVEN: &[i32] = &[95, 99, 100, 101, 104, 108, 109, 110, 112, 116, 119, 121, 122, 961];
+
+/// What an event whose `Additional Spawn Condition` is not 0 is counted as. The condition is a runtime state the read does
+/// not have (the template names the byte and no values): of Sekiro's player events of type 96, 36 of 2,532 hold one (2,
+/// 26 of them effect 600030 at the katana's tip), and the stock game draws no 600030 in the Wolf's first katana attack
+/// (`a050_300000`, filmed mod-free), so such an effect is left out, not played as if its condition held.
+pub const SPAWN_CONDITION: &str =
+    "effects whose event names an additional spawn condition (a runtime state not read)";
+
+/// What an event whose `State Info` is not 0 is counted as: the field names a special-effect type (the template's
+/// `SP_EFFECT_TYPE`), and the event applies only while the character has a special effect of that type, a runtime state the
+/// read does not have. Alternatives sit side by side this way (Sekiro's `a050_300020` starts 404000, 404010 and 404020 at
+/// one dummy polygon for one window, under states 153, 152 and 357), so playing them all would be wrong.
+pub const STATE_CONDITION: &str =
+    "effects whose event applies under a special-effect state (State Info, a runtime state not read)";
 
 /// The event types that name an effect some way, for an event whose fields were not read.
 const EFFECT_EVENTS: &[i32] = &[96, 118, 120, 114, 115, 117, 792];
@@ -243,6 +273,14 @@ pub fn clip_effect_uses(source: &SourceEvents) -> ClipEffectUses {
             *lost.entry("an effect number past 32 bits").or_default() += 1;
             continue;
         };
+        if whole(values, "Additional Spawn Condition").is_some_and(|c| c != 0) {
+            *lost.entry(SPAWN_CONDITION).or_default() += 1;
+            continue;
+        }
+        if whole(values, "State Info").is_some_and(|s| s != 0) {
+            *lost.entry(STATE_CONDITION).or_default() += 1;
+            continue;
+        }
         if whole(values, "Dummy Poly Source").is_some_and(|from| from != 0) {
             *lost
                 .entry("an effect on a weapon's dummy polygon (the weapon's model is not read)")
@@ -257,7 +295,11 @@ pub fn clip_effect_uses(source: &SourceEvents) -> ClipEffectUses {
             event: u32::try_from(index).unwrap_or(u32::MAX),
             kind,
             effect,
+            route: UseRoute::Event,
             dummy,
+            tail: whole(values, "Dummy Poly - Blade Tip ID")
+                .filter(|&id| id > 0)
+                .and_then(|id| i32::try_from(id).ok()),
             source: whole(values, "Dummy Poly Source").and_then(|from| i32::try_from(from).ok()),
             follow: flag(values, "Follow Dummy Poly"),
             repeating: flag(values, "Is Repeat"),
@@ -272,6 +314,103 @@ pub fn clip_effect_uses(source: &SourceEvents) -> ClipEffectUses {
             .map(|(reason, n)| (reason.to_owned(), n))
             .collect(),
         read: Vec::new(),
+    }
+}
+
+/// One trace slot of a weapon row: an effect and the weapon's dummy polygons it runs between (`traceDmyIdHead<n>`,
+/// `traceDmyIdTail<n>`; `None` for a number below 1, as the stock rows hold -1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct Trace {
+    pub effect: i32,
+    pub head: Option<i32>,
+    pub tail: Option<i32>,
+}
+
+/// The trace slots of a held weapon: its hand slot, its `EquipParamWeapon` row and the row's slots that name an effect, by
+/// slot number.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WeaponTraces {
+    pub slot: HandSlot,
+    pub row: i32,
+    pub traces: Vec<(usize, Trace)>,
+}
+
+/// The trails of held weapons a clip draws: for each attack event (type 1, whose length is the attack's window) a use of the
+/// first trace slot of the weapon in the right hand's first slot (else the first weapon held), standing at the weapon's
+/// head dummy polygon (named by its global id, [`HandSlot::global_id`]) and following it for the event's length. Which
+/// weapon and which slot an attack draws is not read (the attack's behaviour row names it): the weapons' other slots are
+/// counted in `lost`, as an attack event with no held weapon that has one is.
+pub fn weapon_trace_uses(source: &SourceEvents, weapons: &[WeaponTraces], found: &mut ClipEffectUses) {
+    let held = weapons
+        .iter()
+        .find(|w| !w.slot.left && w.slot.index == 0)
+        .or_else(|| weapons.first())
+        .and_then(|w| Some((w, w.traces.first()?)));
+    let mut attacks = 0u32;
+    let mut conditioned = 0u32;
+    for (index, event) in source.events.iter().enumerate().filter(|(_, e)| e.kind == 1) {
+        // an attack under a special-effect state is a runtime alternative (see STATE_CONDITION)
+        let state = source
+            .typed
+            .get(index)
+            .and_then(|t| whole(&t.values, "State Info"))
+            .unwrap_or(0);
+        if state != 0 {
+            conditioned += 1;
+            continue;
+        }
+        attacks += 1;
+        let Some((w, &(slot, trace))) = held else {
+            continue;
+        };
+        found.uses.push(EffectUse {
+            event: u32::try_from(index).unwrap_or(u32::MAX),
+            kind: 1,
+            effect: trace.effect,
+            route: UseRoute::WeaponTrace {
+                row: w.row,
+                slot: u8::try_from(slot).unwrap_or(u8::MAX),
+            },
+            dummy: trace.head.map(|h| w.slot.global_id(h)),
+            tail: trace.tail.map(|t| w.slot.global_id(t)),
+            source: None,
+            follow: true,
+            repeating: true,
+            start: event.start,
+            end: (!event.open_ended()).then_some(event.end),
+        });
+    }
+    let mut lost = |reason: &str, n: u32| {
+        if n > 0 {
+            found.lost.push((reason.to_owned(), n));
+        }
+    };
+    if held.is_some() {
+        lost(
+            "attack events under a special-effect state (State Info, a runtime state not read): no trail drawn",
+            conditioned,
+        );
+    }
+    if attacks == 0 {
+        return;
+    }
+    match held {
+        None => lost(
+            "attack events with no held weapon whose row names a trace (no trail drawn)",
+            attacks,
+        ),
+        Some((w, _)) => {
+            let others: usize = weapons.iter().map(|o| o.traces.len()).sum::<usize>() - 1;
+            if others > 0 {
+                lost(
+                    &format!(
+                        "trace slots of the held weapons other than row {}'s first (which an attack draws is not read)",
+                        w.row
+                    ),
+                    u32::try_from(others).unwrap_or(u32::MAX),
+                );
+            }
+        }
     }
 }
 
@@ -316,45 +455,88 @@ impl HandSlot {
     }
 }
 
-/// The weapons a scene holds, as the parts (`wp_a_0100`, from the weapon param row's `equipModelId`: [`weapon_part_name`])
-/// read for each hand slot. Which weapon a character holds is state of the player, not of any animation or param: it is stated.
+/// The weapons a character holds, by hand slot: each a row of the install's `EquipParamWeapon` (Sekiro's Kusabimaru
+/// `8000000`, Elden Ring's Uchigatana `9000000`), the equipment the game keeps for the player. Which weapons a character
+/// holds is the player's state, not an animation's or a param's: it is stated. The read reads each row's part
+/// (`parts/wp_a_<equipModelId>`) and where its models stand ([`HeldWeapon`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EquippedWeapons {
-    pub right: [Option<String>; 4],
-    pub left: [Option<String>; 4],
+    pub right: [Option<i32>; 4],
+    pub left: [Option<i32>; 4],
 }
 
 impl EquippedWeapons {
-    /// The weapon in the right hand's first slot only (the usual one-weapon scene).
-    pub fn right_hand(part: &str) -> Self {
+    /// The weapon row `row` in the right hand's first slot only (the usual one-weapon scene).
+    pub fn right_hand(row: i32) -> Self {
         let mut w = Self::default();
-        w.right[0] = Some(part.to_owned());
+        w.right[0] = Some(row);
         w
     }
 
     /// Every weapon stated, with its slot, in slot order (right hand first).
-    pub fn slots(&self) -> Vec<(HandSlot, &str)> {
+    pub fn slots(&self) -> Vec<(HandSlot, i32)> {
         let mut out = Vec::new();
         for (left, list) in [(false, &self.right), (true, &self.left)] {
-            for (index, part) in list.iter().enumerate() {
-                if let Some(part) = part {
+            for (index, row) in list.iter().enumerate() {
+                if let Some(row) = row {
                     out.push((
                         HandSlot {
                             left,
                             index: index as u8,
                         },
-                        part.as_str(),
+                        *row,
                     ));
                 }
             }
         }
         out
     }
+
+    /// Whether no weapon is stated.
+    pub fn is_empty(&self) -> bool {
+        self.slots().is_empty()
+    }
 }
 
-/// The part a weapon param row's `equipModelId` names: `parts/wp_a_<id as four digits>`.
-pub fn weapon_part_name(equip_model_id: i32) -> String {
-    format!("wp_a_{equip_model_id:04}")
+/// Where one model of a weapon stands on the character in each way of holding it: the character's dummy polygon (its
+/// reference id), from the weapon's `WepAbsorpPosParam` row (`right_<n>`, `left_<n>`, `both_<n>`, `leftHang_<n>`,
+/// `rightHang_<n>`, `leftBoth_<n>` for model `n`); `None` where the row names none (-1 or 0).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Holds {
+    /// Held in the right hand.
+    pub right: Option<i32>,
+    /// Held in the left hand.
+    pub left: Option<i32>,
+    /// The right hand's weapon held with both hands.
+    pub both: Option<i32>,
+    /// The left hand's weapon hung while the right's is held with both hands.
+    pub left_hang: Option<i32>,
+    /// The right hand's weapon hung while the left's is held with both hands.
+    pub right_hang: Option<i32>,
+    /// The left hand's weapon held with both hands.
+    pub left_both: Option<i32>,
+}
+
+/// A model of a weapon the character holds (`fromsoft.held_weapon`, on the root of the model's asset: a form of the
+/// weapon's part): the hand slot, the weapon row, the model's number in the part (`wp_a_0300_1` is model 1) and where each
+/// way of holding puts it. `hold-fromsoft-weapons` attaches it; `assemble-character{leave-out=...}` leaves it out of the
+/// character's body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct HeldWeapon {
+    pub slot: HandSlot,
+    pub row: i32,
+    pub model: u8,
+    pub holds: Holds,
+}
+impl Component for HeldWeapon {
+    const NAME: &'static str = "fromsoft.held_weapon";
+    const GEOMETRY: Geometry = Geometry::None;
+    fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
+        primase_core::world::Linearity::Invariant
+    }
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        to_value(self).map(Some)
+    }
 }
 
 /// What Elden Ring adds to the effect number of a blade event (type 118) before it starts the effect: the number the character's
@@ -529,9 +711,107 @@ mod tests {
         assert_eq!(HandSlot::of_global_id(21_120), Some((left2, 120)));
         assert_eq!(HandSlot::of_global_id(300), None);
         assert_eq!(HandSlot::of_global_id(14_000), None);
-        let weapons = EquippedWeapons::right_hand("wp_a_0100");
-        assert_eq!(weapons.slots(), [(right, "wp_a_0100")]);
-        assert_eq!(weapon_part_name(100), "wp_a_0100");
+        let weapons = EquippedWeapons::right_hand(8_000_000);
+        assert_eq!(weapons.slots(), [(right, 8_000_000)]);
+        assert!(!weapons.is_empty() && EquippedWeapons::default().is_empty());
+    }
+
+    /// An effect event with a spawn condition or under a special-effect state (runtime states not read) is counted, not used;
+    /// one with neither is used.
+    #[test]
+    fn an_effect_with_a_spawn_condition_is_counted_not_used() {
+        let condition = |c: i64| {
+            let mut v = spawn(600030, 10301, true);
+            v.push(value("Additional Spawn Condition", EventValueData::I64(c)));
+            v
+        };
+        let mut stated = spawn(404_000, 10300, true);
+        stated.push(value("State Info", EventValueData::I64(153)));
+        let found = clip_effect_uses(&source(vec![
+            event(96, 0.3, 0.6, condition(2)),
+            event(96, 0.8, 0.9, condition(0)),
+            event(96, 0.4, 0.5, stated),
+        ]));
+        assert_eq!(found.uses.len(), 1);
+        assert_eq!((found.uses[0].start, found.uses[0].route), (0.8, UseRoute::Event));
+        assert_eq!(
+            found.lost,
+            [(STATE_CONDITION.to_owned(), 1), (SPAWN_CONDITION.to_owned(), 1)]
+        );
+    }
+
+    /// Each attack event (type 1) draws the trail of the weapon in the right hand's first slot, its row's first trace slot,
+    /// at its head polygon by global id and for the event's length; the other slots, and attacks with no trace, are counted.
+    #[test]
+    fn attack_events_draw_the_held_weapons_trail_for_their_window() {
+        let right = HandSlot {
+            left: false,
+            index: 0,
+        };
+        let trace = |effect, head, tail| Trace { effect, head, tail };
+        let weapons = [WeaponTraces {
+            slot: right,
+            row: 8_000_000,
+            traces: vec![
+                (0, trace(401_000, Some(300), Some(301))),
+                (3, trace(401_001, None, None)),
+            ],
+        }];
+        let state = |s: i64| vec![value("State Info", EventValueData::I64(s))];
+        let clip = source(vec![
+            event(1, 0.433, 0.533, state(0)),
+            event(96, 0.5, 0.6, spawn(400, 80, true)),
+            event(1, 1.1, 1.2, Vec::new()),
+            // an attack under a special-effect state draws no trail, counted
+            event(1, 1.1, 1.2, state(358)),
+        ]);
+        let mut found = clip_effect_uses(&clip);
+        weapon_trace_uses(&clip, &weapons, &mut found);
+        let traces: Vec<_> = found
+            .uses
+            .iter()
+            .filter(|u| matches!(u.route, UseRoute::WeaponTrace { .. }))
+            .map(|u| (u.event, u.effect, u.dummy, u.tail, u.repeating, u.start, u.end))
+            .collect();
+        assert_eq!(
+            traces,
+            [
+                (0, 401_000, Some(10_300), Some(10_301), true, 0.433, Some(0.533)),
+                (2, 401_000, Some(10_300), Some(10_301), true, 1.1, Some(1.2)),
+            ]
+        );
+        assert!(found.uses.iter().any(|u| u.route
+            == UseRoute::WeaponTrace {
+                row: 8_000_000,
+                slot: 0
+            }));
+        assert!(
+            found
+                .lost
+                .iter()
+                .any(|(r, n)| r.contains("other than row 8000000's first") && *n == 1)
+        );
+        assert!(
+            found
+                .lost
+                .iter()
+                .any(|(r, n)| r.starts_with("attack events under a special-effect state") && *n == 1)
+        );
+        // no weapon held: the attacks are counted, nothing is drawn
+        let mut none = clip_effect_uses(&clip);
+        weapon_trace_uses(&clip, &[], &mut none);
+        assert!(none.uses.iter().all(|u| u.route == UseRoute::Event));
+        assert!(
+            none.lost
+                .iter()
+                .any(|(r, n)| r.starts_with("attack events with no held weapon") && *n == 2)
+        );
+        // a clip with no attack is left as it is
+        let quiet = source(vec![event(96, 0.5, 0.6, spawn(400, 80, true))]);
+        let mut found = clip_effect_uses(&quiet);
+        let before = found.clone();
+        weapon_trace_uses(&quiet, &weapons, &mut found);
+        assert_eq!(found, before);
     }
 
     #[test]
@@ -540,7 +820,9 @@ mod tests {
             event: 0,
             kind: 118,
             effect,
+            route: UseRoute::Event,
             dummy: Some(dummy),
+            tail: None,
             source,
             follow: false,
             repeating: false,

@@ -876,7 +876,11 @@ impl Cx<'_> {
     fn tracer(&mut self, t: TracerIn<'_>) -> Draw {
         let blend = units::blend(value::number(t.blend).round() as i32, &mut self.notes);
         let (width, width_scale) = (self.age(t.width), self.emitted(t.width_multiplier));
-        let (fade_start, fade_end) = (self.age(t.fade.0), self.age(t.fade.1));
+        // the fxr project: the fade endpoints are percentages of the trail's length (`startFadeEndpoint` 90 is 0.9 of it)
+        let (fade_start, fade_end) = (
+            value::scaled(self.age(t.fade.0), 0.01),
+            value::scaled(self.age(t.fade.1), 0.01),
+        );
         let tint = self.tint(t.colours[0], t.colours[1], t.colours[2], t.rgb, t.alpha);
         let (threshold, cutoff) = (self.age(t.fade_threshold), self.active(t.cutoff));
         let atlas = self.atlas(t.columns, t.total_frames, t.frame, false);

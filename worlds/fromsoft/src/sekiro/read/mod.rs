@@ -22,3 +22,4 @@ pub mod sky;
 pub mod states;
 pub(super) mod textures;
 pub mod visibility;
+pub mod weapons;

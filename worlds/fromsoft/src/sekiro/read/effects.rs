@@ -11,7 +11,8 @@ use super::textures::tpf_image;
 use crate::pose::placed;
 use crate::sekiro::character_data::ClipEvents as SourceEvents;
 use crate::sekiro::components::effect::{
-    Effect, EffectFile, EffectResource, ResourceKind, TraceOffsets, apply_trace_offsets, clip_effect_uses,
+    Effect, EffectFile, EffectResource, ResourceKind, TraceOffsets, WeaponTraces, apply_trace_offsets,
+    clip_effect_uses, weapon_trace_uses,
 };
 use crate::sekiro::source::EffectPlace;
 use fromsoft_formats::fxr::actions::Typed;
@@ -549,6 +550,11 @@ pub fn assemble(
 /// counted as lost ("no effect file with this id"), not read as another. The one number the game changes is a blade's
 /// (event 118) in Elden Ring: the handler adds the offset the character's data keeps for the hand ([`TraceOffsets`], stated
 /// by the caller; none active is 0) to the event's number before it starts the effect, and that is the number read here.
+///
+/// With held weapons (`weapons`, their rows' trace slots), each attack event of the clip also draws the held weapon's trail
+/// ([`weapon_trace_uses`]: the row's trace effect between its dummy polygons for the attack's window), a use no event of the
+/// clip names.
+#[allow(clippy::too_many_arguments)]
 pub fn read_for_clip(
     archive: &Archive,
     decoder: &Decoder<'_>,
@@ -556,6 +562,7 @@ pub fn read_for_clip(
     world: &mut World,
     clip: Entity,
     trace_offsets: TraceOffsets,
+    weapons: &[WeaponTraces],
     cache: &mut EffectCache,
 ) -> Result<Report> {
     let mut report = Report {
@@ -566,6 +573,7 @@ pub fn read_for_clip(
         return Ok(report);
     };
     let mut found = clip_effect_uses(source);
+    weapon_trace_uses(source, weapons, &mut found);
     if found.uses.is_empty() && found.lost.is_empty() {
         return Ok(report);
     }
