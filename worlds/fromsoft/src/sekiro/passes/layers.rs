@@ -129,7 +129,9 @@ impl<'a> AreaBake<'a> {
                 vertex: vertex.as_ref().map(|(program, binding)| (*program, binding)),
             },
             material,
-            &crate::layer_bake::FrozenFrame::static_bake(sample_time),
+            // the scene's hour of the day, which a program that reads it is baked at (refused where none is stated)
+            &crate::layer_bake::FrozenFrame::static_bake(sample_time)
+                .at_hour(world.resource::<primase_core::TimeOfDay>().map(|t| t.hour)),
             |entity: Entity, srgb, address| {
                 let t = world.get::<Texture>(entity).ok_or_else(|| {
                     invalid("area bake", group, "a bound texture entity without core.texture")

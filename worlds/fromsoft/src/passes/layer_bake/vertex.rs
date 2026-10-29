@@ -8,7 +8,7 @@
 //!
 //! The coordinate set is the packed `TEXCOORD0` of 16-bit shorts (`uv * 2048`), so the program is run on the exact
 //! corners 0 and 1 (raw 0 and 2048) and never on a texel's own coordinate, which it would quantise.
-use super::binding::{FrozenFrame, Inputs, TEXTURE_SCROLL_POLICY, frozen_words};
+use super::binding::{FrozenFrame, Inputs, TEXTURE_SCROLL_POLICY, read_words};
 use super::resolve::{layer_channels, register};
 use crate::invalid;
 use fromsoft_formats::Result;
@@ -147,7 +147,8 @@ impl VertexStage {
             let Some((_, rows)) = constants.iter_mut().find(|(s, _)| *s == slot) else {
                 continue;
             };
-            let Some(words) = frozen_words(&c.role, c.lines.as_ref(), frame, &mut policies)? else {
+            let Some(words) = read_words(lifted.program(), &vertex.interface, c, frame, &mut policies)?
+            else {
                 if let ConstantRole::Unknown { why } = &c.role {
                     return Err(invalid(
                         "vertex binding",

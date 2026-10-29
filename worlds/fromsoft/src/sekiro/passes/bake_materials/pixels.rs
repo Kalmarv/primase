@@ -8,7 +8,7 @@ use iridia_exec::{
 use primase_core::pbr::{AlphaMode, PbrMaterial, UvTransform, Wrap};
 use primase_core::shader::{NormalSpace, OutputBinding, OutputRole};
 use primase_core::shader::{surface::Base, surface::Place, surface::Surface};
-use primase_core::{ColorSpace, Texture, World};
+use primase_core::{ColorSpace, Texture, TimeOfDay, World};
 use primase_core::{shader::Shader, shader::StageBinding, shader::TextureSource};
 use primase_foundations::parallel::Threads;
 use primase_foundations::{sampling::Address, sampling::Levels, sampling::Transfer};
@@ -181,7 +181,8 @@ pub(super) fn prepare<'a>(
         return Err("neither metallic nor reflectance output role".into());
     }
     let mut policies = BTreeMap::new();
-    let frame = FrozenFrame::static_bake(time);
+    // the scene's hour of the day, which a program that reads it is baked at (refused where none is stated)
+    let frame = FrozenFrame::static_bake(time).at_hour(world.resource::<TimeOfDay>().map(|t| t.hour));
     let constants = layer_bake::program_constants(&shader, &core.interface, stage, &frame, &mut policies)
         .map_err(|e| e.to_string())?;
     // a material the lowering left uncut whose program tests its alpha: the bake carries the program's own compare

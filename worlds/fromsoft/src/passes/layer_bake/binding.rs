@@ -12,7 +12,7 @@ use iridia_exec::{
 };
 use iridia_interface::{AddressMode, MatrixLines};
 use primase_core::Entity;
-use primase_core::shader::{ConstantRole, FrameParameter, ObjectParameter, ViewParameter};
+use primase_core::shader::{ConstantBinding, ConstantRole, FrameParameter, ObjectParameter, ViewParameter};
 use primase_core::{shader::StageBinding, shader::TextureSource};
 use primase_foundations::parallel::Threads;
 use primase_foundations::sampling::Address;
@@ -218,7 +218,7 @@ pub(crate) fn program_constants(
             .resource(c.resource)
             .ok_or_else(|| invalid("layer binding", 0, "constant resource absent"))?;
         let slot = resolve::register(resource)?;
-        let Some(mut words) = frozen_words(&c.role, c.lines.as_ref(), frame, policies)? else {
+        let Some(mut words) = read_words(shader.program(), interface, c, frame, policies)? else {
             continue;
         };
         let Some(&(_, rows)) = shader.constant_buffers().iter().find(|(s, _)| *s == slot) else {
@@ -255,9 +255,47 @@ pub const BIND_POSE_POLICY: &str =
 pub const CLOTH_OFF_POLICY: &str =
     "cloth simulation off in the bake: the position goes through the palette, not the cloth's matrix";
 
+/// Why a bake refuses a program that reads the hour of the day (`FC_TimeOfDay`, [`FrameParameter::TimeOfDay`]) where
+/// the scene states none: the hour keys what such a program draws (Elden Ring's sky programs blend their material's
+/// colour keys by it), and a static bake has no hour of its own to give it ([`FrozenFrame::hour`]).
+pub const NO_HOUR: &str =
+    "the program reads the hour of the day, and the scene states none (no core.time_of_day)";
+
+/// Whether `program` (lifted from the program `interface` describes) reads any word of the constant `c`: the words its
+/// results are made of ([`iridia::WordsRead`]), found by the D3D bind point of `c`'s buffer, since a program lifted again
+/// may number its resources otherwise than the stored interface. Every word is read where the value graph cannot be
+/// built or the buffer's bind point is not stated.
+pub(crate) fn reads_constant(program: &iridia::Program, interface: &Interface, c: &ConstantBinding) -> bool {
+    let Some(point) = interface.resource(c.resource).and_then(|r| r.provenance.d3d) else {
+        return true;
+    };
+    program.graph().map_or(true, |graph| {
+        graph
+            .reads
+            .reads_at(point.space, point.register, c.offset, c.size)
+    })
+}
+
+/// [`frozen_words`] of the constant `c` of `program` (lifted from the program `interface` describes), but `None` for an
+/// hour of the day the program declares and never reads (Sekiro's programs declare `FC_TimeOfDay` and do not read it):
+/// only a program that reads the hour needs the scene's ([`NO_HOUR`]).
+pub(crate) fn read_words(
+    program: &iridia::Program,
+    interface: &Interface,
+    c: &ConstantBinding,
+    frame: &FrozenFrame,
+    policies: &mut BTreeMap<String, u64>,
+) -> Result<Option<Vec<u32>>> {
+    if c.role == ConstantRole::Frame(FrameParameter::TimeOfDay) && !reads_constant(program, interface, c) {
+        return Ok(None);
+    }
+    frozen_words(&c.role, c.lines.as_ref(), frame, policies)
+}
+
 /// The words a role's constant is frozen to by `frame`, counting the policy the freezing is (`policies`); `None` for a
-/// role the bake gives no value (the time of day, and an unknown one, counted by its reason): the words stay zero. A
-/// material's own words are the role's own. A role the bake has no value for is an error.
+/// role the bake gives no value (an unknown one, counted by its reason): the words stay zero. A material's own words are
+/// the role's own. The hour of the day is the scene's ([`FrozenFrame::hour`]); with none stated it is an error
+/// ([`NO_HOUR`]), as is a role the bake has no value for.
 pub(crate) fn frozen_words(
     role: &ConstantRole,
     lines: Option<&MatrixLines>,
@@ -379,10 +417,11 @@ pub(crate) fn frozen_words(
             policies.insert("unit exposure for static material bake".into(), 1);
             bits(&[1.0])
         }
-        ConstantRole::Frame(FrameParameter::TimeOfDay) => {
-            policies.insert("time of day left at frozen zero".into(), 1);
-            return Ok(None);
-        }
+        // the scene's hour, as a running frame states it (hours, which the programs take modulo 24)
+        ConstantRole::Frame(FrameParameter::TimeOfDay) => match frame.hour {
+            Some(hour) => bits(&[hour]),
+            None => return Err(invalid("layer binding", 0, NO_HOUR)),
+        },
         ConstantRole::Frame(FrameParameter::LightCount(_)) => {
             policies.insert(NO_LIGHTS_POLICY.into(), 1);
             vec![0]
@@ -496,9 +535,13 @@ pub struct FrozenFrame {
     pub view_matrix: [f32; 16],
     /// `View(ViewportSize)`: one by one pixel (`View(InverseViewportSize)` is its reciprocals).
     pub viewport_size: [f32; 2],
+    /// `Frame(TimeOfDay)`: the scene's hour of the day (`core.time_of_day`), `None` where the scene states none: a
+    /// program that reads the hour is then not baked ([`NO_HOUR`]).
+    pub hour: Option<f32>,
 }
 impl FrozenFrame {
-    /// The static bake's frame, its global time `time` seconds.
+    /// The static bake's frame, its global time `time` seconds, at no hour of the day ([`FrozenFrame::at_hour`]
+    /// states the scene's).
     pub fn static_bake(time: f32) -> Self {
         let mut inverse_view_projection = [0.; 16];
         inverse_view_projection[15] = 1.;
@@ -516,7 +559,13 @@ impl FrozenFrame {
             clip_plane: [0.; 4],
             view_matrix: IDENTITY,
             viewport_size: [1.; 2],
+            hour: None,
         }
+    }
+
+    /// This frame at the scene's hour of the day (`core.time_of_day`; `None` where it states none).
+    pub fn at_hour(self, hour: Option<f32>) -> Self {
+        Self { hour, ..self }
     }
 }
 
@@ -700,7 +749,7 @@ impl Prepared {
                 resolve::register(interface.resource(c.resource).ok_or_else(|| {
                     invalid("layer binding", 0, "a constant of a resource the shader lacks")
                 })?)?;
-            let Some(mut values) = frozen_words(&c.role, c.lines.as_ref(), frame, &mut policies)? else {
+            let Some(mut values) = read_words(lifted.program(), interface, c, frame, &mut policies)? else {
                 continue;
             };
             // the words inside a buffer the program reads (it reads no others)

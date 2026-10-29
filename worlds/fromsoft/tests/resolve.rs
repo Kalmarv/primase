@@ -685,11 +685,57 @@ fn the_unbound_textures_option_is_required_and_named() {
 
 /// The bake reads the binding: a frozen frame gives the engine's roles their values, the material's words reach the
 /// program, and what is left is counted. The fixture writes the sum of its frame constants to the second output's x,
-/// so the frozen time and exposure show in the bake's gloss: 0 (colour slot) + 1.5 (time) + 0 (time of day, left at
-/// zero) + 1 (unit exposure).
+/// so the frozen time, the scene's hour and the exposure show in the bake's gloss: 0 (colour slot) + 1.5 (time) + 6.5
+/// (the hour of the day the frame states) + 1 (unit exposure).
 #[test]
 fn the_bake_binds_a_frozen_frame_to_the_roles() {
-    use primase_fromsoft::layer_bake::{FrozenFrame, Inputs, Prepared, Programs, wrapped_texture};
+    use primase_fromsoft::layer_bake::{FrozenFrame, Inputs};
+    let prepared = frozen_frame_bake(FrozenFrame::static_bake(1.5).at_hour(Some(6.5))).unwrap();
+    for (policy, count) in [
+        ("global time at the program's sample time", 1),
+        ("unit pre-exposure for static material bake", 1),
+        ("missing material field left at frozen zero", 1),
+        ("preview default for missing NormalMap binding", 1),
+        ("opaque alpha because main albedo is missing", 1),
+        (
+            "instance record frozen to its zeros: environment data, matrix base and clip plane (the environment data reaches no baked lane)",
+            1,
+        ),
+        // the engine's buffer is 12 rows: 46 words set, the 3 padding words after the environment data not; 52 of the
+        // material's are read (two registers' tiling, the scale, the colour with its padding lane)
+        (
+            "buffer words left at frozen zero (including padding and unused fields)",
+            3 + 38,
+        ),
+    ] {
+        assert_eq!(prepared.policies.get(policy), Some(&count), "{policy}");
+    }
+    assert!(
+        !prepared.policies.keys().any(|p| p.contains("time of day")),
+        "{:?}",
+        prepared.policies
+    );
+    let bake = prepared.bake(2, [1.; 2], Inputs::default()).unwrap();
+    assert_eq!(bake.gloss, Some(vec![9.0; 4]));
+}
+
+/// A program that reads the hour of the day is not baked where the scene states none: a static bake has no hour of its
+/// own, and a frozen zero would draw it at midnight.
+#[test]
+fn the_bake_refuses_a_program_that_reads_an_unstated_hour() {
+    use primase_fromsoft::layer_bake::{FrozenFrame, NO_HOUR};
+    let error = frozen_frame_bake(FrozenFrame::static_bake(1.5))
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(error.contains(NO_HOUR), "{error}");
+}
+
+/// [`PROGRAM`]'s bake of [`material`] at `frame`, its albedo a grey texture.
+fn frozen_frame_bake(
+    frame: primase_fromsoft::layer_bake::FrozenFrame,
+) -> fromsoft_formats::Result<primase_fromsoft::layer_bake::Prepared> {
+    use primase_fromsoft::layer_bake::{Prepared, Programs, wrapped_texture};
     let shader = executor(PROGRAM);
     let mut world = World::default();
     let (program, grass) = (world.spawn(), world.spawn());
@@ -708,7 +754,7 @@ fn the_bake_binds_a_frozen_frame_to_the_roles() {
     let view = || -> fromsoft_formats::Result<_> {
         Ok(std::sync::Arc::new(wrapped_texture(2, 2, &[200; 16], true)?))
     };
-    let prepared = Prepared::from_binding(
+    Prepared::from_binding(
         Programs {
             shader: &shader,
             bytecode: PROGRAM,
@@ -716,7 +762,7 @@ fn the_bake_binds_a_frozen_frame_to_the_roles() {
             vertex: None,
         },
         &layered,
-        &FrozenFrame::static_bake(1.5),
+        &frame,
         |_, srgb, address| {
             assert!(srgb, "the albedo is the only bound texture");
             assert_eq!(address, [Address::Wrap, Address::Mirror]);
@@ -724,29 +770,6 @@ fn the_bake_binds_a_frozen_frame_to_the_roles() {
         },
         |_, _, _| Ok(None),
     )
-    .unwrap();
-    for (policy, count) in [
-        ("global time at the program's sample time", 1),
-        ("unit pre-exposure for static material bake", 1),
-        ("time of day left at frozen zero", 1),
-        ("missing material field left at frozen zero", 1),
-        ("preview default for missing NormalMap binding", 1),
-        ("opaque alpha because main albedo is missing", 1),
-        (
-            "instance record frozen to its zeros: environment data, matrix base and clip plane (the environment data reaches no baked lane)",
-            1,
-        ),
-        // the engine's buffer is 12 rows: 45 words set but the time of day, and the 3 padding words after the
-        // environment data; 52 of the material's are read (two registers' tiling, the scale, the colour with its padding lane)
-        (
-            "buffer words left at frozen zero (including padding and unused fields)",
-            1 + 3 + 38,
-        ),
-    ] {
-        assert_eq!(prepared.policies.get(policy), Some(&count), "{policy}");
-    }
-    let bake = prepared.bake(2, [1.; 2], Inputs::default()).unwrap();
-    assert_eq!(bake.gloss, Some(vec![2.5; 4]));
 }
 
 /// The vertex program's binding: its inputs as streams of the lowered geometry, the engine's constants it names as
