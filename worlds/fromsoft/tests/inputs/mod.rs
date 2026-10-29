@@ -115,11 +115,23 @@ primase_testdata::inputs! {
             about: r#"a folder (searched recursively) of the DXBC containers of Sekiro's extracted pixel and vertex programs (`.ppo`, `.vpo`), lifted, validated and written as WGSL, the refusals counted by reason; https://github.com/Kalmarv/iridia/blob/main/iridia-dxbc/tests/lift_corpus.rs; the detail-blend programs' equations derived and proven, worlds/fromsoft/tests/detail_derive.rs"#,
             source: r#"the user's own install: the programs extracted from its shader archives"#,
         },
+        Query::Oracle(OracleSet::Scripts, Game::Elden, "frames") => {
+            status: Live,
+            gate: false,
+            about: r#"a folder of recorded Elden Ring frames, one folder per session (`<run>/cap/capture.jsonl`: the capture proxy's pipeline states, each with its programs named by the FNV-1a 64 of their bytes; `<run>/cap/frame_<n>.jsonl`: one frame's D3D12 draws and dispatches in order, each naming its pipeline state); the render graph's table names the frames it comes from (`<run> frame_<n>`); worlds/fromsoft/tests/render_graph.rs"#,
+            source: r#"our own capture proxies' records of the running game (D3D11 for Sekiro, D3D12 for Elden Ring), kept with the private oracle tools: the game's own calls as it drew, read by the test's own parser, separate from the script that wrote the tables"#,
+        },
         Query::Oracle(OracleSet::Scripts, Game::Sekiro, "dds") => {
             status: Live,
             gate: true,
             about: r#"a folder holding the DDS decoding worker `DdsWorker.dll` and the libraries it loads; protocol in worlds/fromsoft/README.md; worlds/fromsoft/tests/tpf_pixels.rs"#,
             source: r#"independent: BCnEncoder.Net 2.2.1 (MIT OR Unlicense), through a thin decoding worker kept with the private oracle tools"#,
+        },
+        Query::Oracle(OracleSet::Scripts, Game::Sekiro, "frames") => {
+            status: Live,
+            gate: false,
+            about: r#"a folder of recorded Sekiro frames, one folder per session (`<run>/cap/frame_<n>/events.jsonl`: the capture proxy's D3D11 calls of one frame in order, each draw or dispatch with its programs named by the FNV-1a 64 of their bytes); the render graph's table names the frames it comes from (`<run> frame_<n>`); worlds/fromsoft/tests/render_graph.rs"#,
+            source: r#"our own capture proxies' records of the running game (D3D11 for Sekiro, D3D12 for Elden Ring), kept with the private oracle tools: the game's own calls as it drew, read by the test's own parser, separate from the script that wrote the tables"#,
         },
         Query::Oracle(OracleSet::Scripts, Game::Sekiro, "normal-curl.json") => {
             status: Live,

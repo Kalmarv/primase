@@ -13,6 +13,7 @@ pub mod extras;
 pub mod material_events;
 pub mod messages;
 pub mod objects;
+pub mod render_graph;
 pub(super) mod shaders;
 pub(super) mod shadows;
 pub mod sky;

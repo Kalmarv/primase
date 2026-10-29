@@ -56,6 +56,10 @@ pub struct Options {
     /// axis with no default: Sekiro's sky map's domes, rings and moon and the area's own unplaced domes; Elden Ring's
     /// assets of the area's sky map that its weathers show, each with the weathers that show it.
     pub sky: sky::Sky,
+    /// Whether the frame the game's renderer draws is read as the world's `core.render_graph` ([`super::render_graph`]):
+    /// off by default. Its programs are read from the install's engine binders; its steps are the game's, as recorded
+    /// frames of the running game show them, whatever the area.
+    pub render_graph: bool,
 }
 /// What a read of the object models' animation binders found.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -194,6 +198,8 @@ pub struct Report {
     pub grass: GrassTypes,
     /// The sky read with the area ([`Options::sky`]).
     pub sky: sky::Report,
+    /// The frame's render graph ([`Options::render_graph`]).
+    pub render_graph: super::render_graph::Report,
 }
 impl Report {
     /// What the read left out or could not find, as notices for a conversion's report.
@@ -400,6 +406,7 @@ impl Report {
         }
         out.extend(self.draw_param.notices());
         out.extend(self.sky.notices());
+        out.extend(self.render_graph.notices());
         let grass = &self.grass;
         if grass.parts > 0 {
             if let Some(why) = &grass.unresolved {
@@ -1617,6 +1624,10 @@ pub fn read_game_area_staged(
         world.insert_resource(environment);
     }
     report.draw_param = draw_param_report;
+    if options.render_graph {
+        stage("render graph");
+        super::render_graph::read(&mut world, &archive, decoder, game, &mut report.render_graph)?;
+    }
     world.insert_resource(source::ReadScope {
         game,
         area: area.clone(),
