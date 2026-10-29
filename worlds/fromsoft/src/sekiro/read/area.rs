@@ -1237,10 +1237,27 @@ pub fn read_game_area_staged(
     prototypes.retain(|key, _| used.contains(key));
     // the sky's states and what each kept sky placement is, from its model and its materials
     let sky_plan = if let Some(w) = &weathers {
-        let items: Vec<(usize, String)> = selected
+        // whether every material a prototype draws with (shadow proxies aside) is of the sky class
+        let sky_programs = |key: &str| {
+            prototypes.get(key).is_some_and(|proto| {
+                let mut drawn = proto
+                    .materials
+                    .iter()
+                    .filter(|m| m.skip != Some(materials::SkipClass::Shadow))
+                    .peekable();
+                drawn.peek().is_some() && drawn.all(|m| m.skip == Some(materials::SkipClass::Sky))
+            })
+        };
+        let items: Vec<(usize, String, bool)> = selected
             .iter()
             .filter(|(_, index, _)| placements[*index].sky)
-            .map(|(key, index, _)| (*index, key.split_once('/').expect("key").1.to_owned()))
+            .map(|(key, index, _)| {
+                (
+                    *index,
+                    key.split_once('/').expect("key").1.to_owned(),
+                    sky_programs(key.as_str()),
+                )
+            })
             .collect();
         Some(w.plan(&items, std::mem::take(&mut report.sky)))
     } else if options.sky == sky::Sky::Include && sky_map.is_some() {
@@ -1500,6 +1517,12 @@ pub fn read_game_area_staged(
                 variant: 0,
             },
         );
+        // an Elden Ring weather asset of sky programs stands relative to its sky map's origin, which the game moves to
+        // the camera's x and z (the anchor supplies it), not where the origin lies in the area's frame
+        let transform = match sky_part {
+            Some((source::SkyRole::WeatherSky, _)) => crate::pose::placed(part.matrix()?),
+            _ => transform,
+        };
         world.insert(e, transform);
         world.insert(e, Source(format!("{map}:{}", part.name)));
         if let Some((role, state)) = sky_part {

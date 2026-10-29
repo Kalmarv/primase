@@ -35,10 +35,14 @@ pub enum SkyRole {
     Ring,
     /// The moon (the object `o005900`), placed towards the light by the game every frame.
     Moon,
-    /// An Elden Ring asset of an area's sky map that the weather shows (`WeatherAssetReplaceParam`): a sky sphere, a
-    /// cloud layer, the Erdtree's light shafts. Placed where the sky map's layout places it; where in the frame the
-    /// game draws it is not established (`lower-fromsoft-sky` puts its sky programs on the sky layer by inference).
+    /// An Elden Ring asset of an area's sky map that the weather shows (`WeatherAssetReplaceParam`) and that draws with
+    /// some program other than the sky's (the Erdtree's light shafts): placed where the sky map's layout places it, as
+    /// a recorded frame draws one (`AEG096_611`, at the sky map's origin while the camera moved).
     Weather,
+    /// An Elden Ring weather asset drawn only with sky programs (every material of the material table's sky class: the
+    /// sky spheres, the cloud layers): the game draws it at the camera's x and z and its own height, as a recorded
+    /// frame draws the cloud layer `AEG096_603` at three camera positions; `core.sky_anchor` horizontal.
+    WeatherSky,
 }
 
 /// A placement of the sky the area read brought in (`fromsoft.sky_part`, [`crate::sekiro::read::sky`]): what it is, and

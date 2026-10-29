@@ -641,12 +641,15 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
   the tile's frame; `mAA_BB_00_99` for a legacy map) that its weathers show: the values of `fromsoft.sky` are the
   weathers and fire-ash states of the sky map's `WeatherAssetReplaceParam` rows that apply at the area's creation
   limit (`MapDefaultInfoParam`), `weather-<id>` and `weather-<id>-ashen`, with no default (the weather lot is not
-  read), and each asset is conditioned on the values that show it. They get no anchor (whether the game moves them
-  with the camera is not established). The pass puts their materials of a sky program (the material table's sky class:
-  `M[Sky9]`, `M[Clouds5]`, `M[Atmosphere][Clouds][EnvmapCapture]`) on the sky layer at its start without writing
-  depth, by inference (the programs' names, spheres 53 and 86 km across, cloud shells outside the sky sphere yet in
-  front of it), and leaves their other materials (the Erdtree's light shafts) in their own layer, counted. The sky
-  map's parts no row names (its far view of the land) are not read, counted.
+  read), and each asset is conditioned on the values that show it. An asset drawn only with sky programs (the
+  material table's sky class: `M[Sky9]`, `M[Clouds5]`, `M[Clouds9]`, `M[Atmosphere][Clouds]..`) stands relative to its
+  sky map's origin with `core.sky_anchor` horizontal, as a recorded Stormveil frame draws its cloud layer at the
+  camera's x and z; any other (the Erdtree's light shafts) is placed where the layout places it, as that frame draws
+  one. The pass puts the sky-program materials on the sky layer at its start, writing depth, as that frame draws the
+  cloud layer (after the lit opaque surfaces, before the blended ones; that frame composites its volumetric fog over
+  the sky, which core's sky layer does not), and leaves the other materials in their own layer, counted. The sky
+  spheres' own draws are not yet observed (inferred from the program family). The sky map's parts no row names (its
+  far view of the land) are not read, counted.
 - `lower-fromsoft-environment{lux-per-unit=...}` lowers `fromsoft.draw_param` to
   the core environment: the light set's first directional light (`Directional
   Light Angle0`, `DiffColor0`) a directional `core.light` named as the sun by
@@ -778,7 +781,7 @@ unless an option asks), **unread** (no reader opens it). A row's owner is the pr
 | Events (`EVENT_PARAM_ST`) of every type (treasure, generator, obj_act, navmesh, patrol_info, …) | `EVENTS` | read-header: type, event ID, the part and region named, entity ID read; the type's data kept as bytes. `map_offset` (Sekiro) is decoded and used | `msb::MapLayout::map_events`, `lower-fromsoft-map-records` / Other world data rows, Properties (no place of their own) |
 | Event scripts (`.emevd`) | one per area | Sekiro: read and interpreted for part presence (`states=event`); Elden Ring: unread (refused) | `emevd.rs`, `read/states.rs` / State axes |
 | Sky (Sekiro's sky map `m89_00_00_99`, the moon `o005900`, the areas' own unplaced domes) | its layout | read with `Options::sky` (off by default): the states as the `fromsoft.sky` axis without a default; which state the game draws is unread | `read/sky.rs`, `lower-fromsoft-sky` / Objects, State axes |
-| Sky (Elden Ring's sky maps' weather assets: sky spheres, cloud layers, the burning Erdtree) | `WeatherAssetReplaceParam`, `MapDefaultInfoParam`, the sky map's layout | read with `Options::sky`: the weathers as the `fromsoft.sky` axis without a default, each asset conditioned on the weathers that show it, placed where the layout places it, its sky programs on the sky layer (inferred); the weather lot, any camera following and the draw phase are unread | `read/sky.rs`, `lower-fromsoft-sky` / State axes, Draw order |
+| Sky (Elden Ring's sky maps' weather assets: sky spheres, cloud layers, the burning Erdtree) | `WeatherAssetReplaceParam`, `MapDefaultInfoParam`, the sky map's layout | read with `Options::sky`: the weathers as the `fromsoft.sky` axis without a default, each asset conditioned on the weathers that show it; sky-program assets anchored to the camera's x and z and drawn on the sky layer writing depth (observed for a cloud layer, inferred for the spheres), others placed where the layout places them; the weather lot is unread | `read/sky.rs`, `lower-fromsoft-sky` / State axes, Draw order |
 | Draw-param environment | `draw_param_census` | read for the file the caller names; the file choice from the weather and events, and Elden Ring's `_weatherbase`/`_weatheroutdoor`/`_commonevent` layers: unread | `read/draw_param.rs`, `lower-fromsoft-environment` / Environment, Properties |
 | Textures (`.tpf`, Sekiro's `.tpfbhd`), shader bundles, materials | per area | read | `read/textures.rs`, `read/shaders.rs` / Shaded and Game shader views |
 

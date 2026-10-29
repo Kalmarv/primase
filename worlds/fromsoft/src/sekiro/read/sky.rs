@@ -37,11 +37,18 @@
 //! So each (weather, fire-ash state) a row of the sky map gives for the area is a value of the `fromsoft.sky` axis,
 //! `weather-<WeatherParam id>` or `weather-<id>-ashen`, with no default (which weather the game draws is drawn by lot,
 //! `WeatherLotParam`, by a rule not read), and each asset of the sky map that some value shows is read with the values
-//! that show it as its condition ([`crate::sekiro::source::SkyRole::Weather`]). An asset the area's rows name for no
-//! value (another region's sky) is not read; the sky map's parts that no row of it names (its far view of the land,
-//! the Erdtree) are not read either, counted. Whether the game moves the sky spheres with the camera is not
-//! established: they are placed where the layout places them, and get no anchor. `lower-fromsoft-sky` puts their sky
-//! programs' materials on core's sky layer (an inference its documentation gives).
+//! that show it as its condition. An asset the area's rows name for no value (another region's sky) is not read; the
+//! sky map's parts that no row of it names (its far view of the land, the Erdtree) are not read either, counted.
+//!
+//! Where the game draws them, from a recorded frame of Stormveil (`m10_00_00_99`'s assets, the camera at three places a
+//! few metres apart): the cloud layer `AEG096_603`, drawn with `M[Clouds9]`, has the world matrix "translation
+//! (camera x, the sky map origin's height, camera z)", while the light shaft `AEG096_611` (`M[WorldTree_LightShaft]`)
+//! stays at the sky map's origin. So an asset whose materials are all of the sky class
+//! ([`crate::sekiro::source::SkyRole::WeatherSky`]) is read with its position relative to the sky map's origin and
+//! `core.sky_anchor` horizontal (the area's offset into the sky map is the camera's to supply); any other
+//! ([`crate::sekiro::source::SkyRole::Weather`]) is placed where the layout places it, moved into the area's frame.
+//! The spheres themselves are not yet seen drawn: that they follow as the cloud layer does is inferred from the
+//! shared program family.
 use crate::sekiro::source::{SkyPart, SkyRole};
 use fromsoft_formats::msb::{MapLayout, Part, PartKind};
 use fromsoft_formats::param::{WeatherAssetParam, asset_model_name};
@@ -269,10 +276,11 @@ impl Weathers {
         self.named.contains(&model.to_ascii_uppercase())
     }
 
-    /// The plan of the kept sky placements `items` (by index and model): each asset that some value shows, with those
-    /// values. The report counts the rest; `unread` is what the read left out of the sky map before ([`Report`]'s
-    /// `unshown_parts`, `unnamed_parts`, `unnamed_sky_models`).
-    pub fn plan(&self, items: &[(usize, String)], unread: Report) -> Plan {
+    /// The plan of the kept sky placements `items` (by index, model and whether all its materials are of the sky
+    /// class): each asset that some value shows, with those values, a [`SkyRole::WeatherSky`] when it draws with sky
+    /// programs only, else a [`SkyRole::Weather`]. The report counts the rest; `unread` is what the read left out of
+    /// the sky map before ([`Report`]'s `unshown_parts`, `unnamed_parts`, `unnamed_sky_models`).
+    pub fn plan(&self, items: &[(usize, String, bool)], unread: Report) -> Plan {
         let mut out = Plan {
             values: self.values.clone(),
             report: Report {
@@ -284,11 +292,16 @@ impl Weathers {
             },
             ..Plan::default()
         };
-        for (index, model) in items {
+        for (index, model, sky_programs) in items {
             match self.states_of(model) {
                 0 => out.report.unshown_parts += 1,
                 mask => {
-                    out.parts.insert(*index, (SkyRole::Weather, mask));
+                    let role = if *sky_programs {
+                        SkyRole::WeatherSky
+                    } else {
+                        SkyRole::Weather
+                    };
+                    out.parts.insert(*index, (role, mask));
                     out.report.weather_assets += 1;
                 }
             }
@@ -400,9 +413,9 @@ impl Report {
             out.push(Notice::new(
                 stage,
                 NoticeKind::Approximation,
-                "weather assets of the sky map placed where its layout places them, with no anchor: whether the game \
-                 moves them with the camera, and where in the frame it draws them, are not established (the sky pass \
-                 puts their sky programs on the sky layer by inference)",
+                "weather assets of the sky map: those drawn with sky programs anchored to the camera's x and z (as a \
+                 recorded frame draws a cloud layer), the others placed where the layout places them; where the frame \
+                 draws the sky spheres themselves is not yet observed",
                 self.weather_assets as u64,
             ));
         }
@@ -493,7 +506,9 @@ pub fn plan(items: &[Item]) -> Result<Plan, String> {
                 out.report.moons += 1;
             }
             Some(SkyRole::Ring) => {}
-            Some(SkyRole::Weather) | None => out.report.other_parts.push(item.model.clone()),
+            Some(SkyRole::Weather | SkyRole::WeatherSky) | None => {
+                out.report.other_parts.push(item.model.clone())
+            }
         }
     }
     for item in items
@@ -540,14 +555,15 @@ pub fn spawn_axis(world: &mut World, values: &[String], source: String) -> Entit
 }
 
 /// Put on the placement `e` what its plan says: `fromsoft.sky_part`; its condition, the axis at the values of `states`
-/// (none for 0, a part drawn in every state); for a Sekiro dome or ring `core.sky_anchor` horizontal. The moon's anchor
-/// waits for the sun (`lower-fromsoft-sky`); an Elden Ring weather asset gets none.
+/// (none for 0, a part drawn in every state); for a Sekiro dome or ring and an Elden Ring weather asset of sky programs
+/// `core.sky_anchor` horizontal. The moon's anchor waits for the sun (`lower-fromsoft-sky`); an Elden Ring weather
+/// asset of other programs gets none.
 pub fn attach(world: &mut World, e: Entity, axis: Option<Entity>, role: SkyRole, states: u64) {
     world.insert(e, SkyPart { role, states });
     if let Some(axis) = axis.filter(|_| states != 0) {
         world.insert(e, Condition(vec![Clause(vec![Literal { axis, values: states }])]));
     }
-    if matches!(role, SkyRole::Dome | SkyRole::Ring) {
+    if matches!(role, SkyRole::Dome | SkyRole::Ring | SkyRole::WeatherSky) {
         world.insert(e, SkyAnchor::Horizontal);
     }
 }
@@ -633,7 +649,8 @@ mod tests {
     }
 
     /// A dome and a ring on the axis at their value, anchored horizontally; the moon without condition or anchor; a
-    /// weather asset on the axis at every value that shows it, without anchor.
+    /// weather asset on the axis at every value that shows it, anchored horizontally when it draws with sky programs
+    /// only and without anchor otherwise.
     #[test]
     fn attached_parts_carry_their_state_and_anchor() {
         let mut w = World::new();
@@ -642,10 +659,12 @@ mod tests {
             &["m900000-Morning".into(), "m900020-Evening".into()],
             "test".into(),
         );
-        let (dome, moon, weather) = (w.spawn(), w.spawn(), w.spawn());
+        let (dome, moon, weather, cloud) = (w.spawn(), w.spawn(), w.spawn(), w.spawn());
         attach(&mut w, dome, Some(axis), SkyRole::Dome, 0b10);
         attach(&mut w, moon, Some(axis), SkyRole::Moon, 0);
         attach(&mut w, weather, Some(axis), SkyRole::Weather, 0b11);
+        attach(&mut w, cloud, Some(axis), SkyRole::WeatherSky, 0b01);
+        assert_eq!(w.get::<SkyAnchor>(cloud), Some(&SkyAnchor::Horizontal));
         assert_eq!(
             w.get::<Condition>(dome),
             Some(&Condition(vec![Clause(vec![Literal { axis, values: 0b10 }])]))
@@ -720,9 +739,9 @@ mod tests {
         assert_eq!(w.states_of("AEG096_864"), 0, "limit 1's");
         assert!(w.names("AEG096_864") && !w.names("AEG096_603") && !w.names("AEG004_114"));
         let items = [
-            (0, "AEG096_010".to_owned()),
-            (1, "AEG096_404".to_owned()),
-            (2, "AEG096_864".to_owned()),
+            (0, "AEG096_010".to_owned(), true),
+            (1, "AEG096_404".to_owned(), false),
+            (2, "AEG096_864".to_owned(), true),
         ];
         let plan = w.plan(
             &items,
@@ -731,7 +750,7 @@ mod tests {
                 ..Report::default()
             },
         );
-        assert_eq!(plan.parts[&0], (SkyRole::Weather, 0b101));
+        assert_eq!(plan.parts[&0], (SkyRole::WeatherSky, 0b101));
         assert_eq!(plan.parts[&1], (SkyRole::Weather, 0b10));
         assert!(!plan.parts.contains_key(&2));
         assert_eq!(

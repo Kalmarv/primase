@@ -1,8 +1,8 @@
 //! `lower-fromsoft-sky`: the sky the area read brought in ([`crate::sekiro::read::sky`], `fromsoft.sky_part`) lowered
 //! to core's sky: the moon's `core.sky_anchor` (towards the sun, at the game's distance) and the draw order of the sky's
 //! materials (core's sky layer, in the order the game draws them). The domes' and rings' anchors and every part's
-//! states are the read's already. Elden Ring's weather assets put their sky programs' materials on the sky layer, by
-//! inference (see [`LowerFromSoftSky`]).
+//! states are the read's already. Elden Ring's weather assets put their sky programs' materials on the sky layer (see
+//! [`LowerFromSoftSky`]).
 use crate::materials::{Material, SkipClass};
 use crate::sekiro::read::sky::MOON_DISTANCE;
 use crate::sekiro::source::{MaterialSlots, SkyPart, SkyRole};
@@ -22,12 +22,14 @@ use std::collections::{BTreeMap, BTreeSet};
 /// ([`DrawOrder::SKY`]), the moon (+1), the rings (+2). A material that a placement outside the sky also draws keeps
 /// its own order, counted.
 ///
-/// An Elden Ring weather asset's materials of a sky program (the material table's sky class: `M[Sky9]`,
-/// `M[Clouds5]`, `M[Atmosphere][Clouds][EnvmapCapture]`) go on the sky layer at [`DrawOrder::SKY`] without writing
-/// depth, in the source's order; its other materials (the Erdtree's light shafts) keep their own, counted. This is
-/// inferred, not seen in a frame: the programs are the sky's by name, the spheres (53 and 86 km across) lie past any
-/// far plane, and the cloud shells lie outside the sky sphere yet show in front of it, which a sphere writing depth
-/// would forbid. Then `fromsoft.sky_part` is removed. No options: what it lowers is the game's.
+/// An Elden Ring weather asset's materials of a sky program (the material table's sky class: `M[Sky9]`, `M[Clouds5]`,
+/// `M[Clouds9]`, `M[Atmosphere][Clouds][EnvmapCapture]`) go on the sky layer at [`DrawOrder::SKY`], writing depth, in
+/// the source's order; its other materials (the Erdtree's light shafts) keep their own, counted. A recorded frame of
+/// Stormveil draws its cloud layer (`AEG096_603`, `M[Clouds9]`) so: after the opaque surfaces are lit and composited
+/// and before the blended surfaces, with a pipeline that tests and writes depth and blends by source alpha. One
+/// difference from core's sky layer: that frame composites its volumetric fog after the sky, over it. The sky spheres'
+/// own draws are not yet observed: that they draw as the cloud layer does is inferred from the program family. Then
+/// `fromsoft.sky_part` is removed. No options: what it lowers is the game's.
 #[derive(Clone, Copy, Debug)]
 pub struct LowerFromSoftSky;
 
@@ -40,13 +42,13 @@ pub const LOWER_FROMSOFT_SKY: PassSpec = PassSpec {
 
 /// Where a sky role's surfaces come in the sky layer and whether they write depth: Sekiro's in the order of a recorded
 /// frame's draws (dome, moon, far mountains), writing depth as they do there; an Elden Ring weather asset's at the
-/// layer's start, writing none (see [`LowerFromSoftSky`]).
+/// layer's start, writing depth as the recorded cloud layer's pipeline does (see [`LowerFromSoftSky`]).
 fn order(role: SkyRole) -> (i32, bool) {
     match role {
         SkyRole::Dome => (DrawOrder::SKY, true),
         SkyRole::Moon => (DrawOrder::SKY + 1, true),
         SkyRole::Ring => (DrawOrder::SKY + 2, true),
-        SkyRole::Weather => (DrawOrder::SKY, false),
+        SkyRole::Weather | SkyRole::WeatherSky => (DrawOrder::SKY, true),
     }
 }
 
@@ -113,7 +115,8 @@ impl Pass for LowerFromSoftSky {
                 if skip == Some(SkipClass::Shadow) {
                     continue;
                 }
-                if part.role == SkyRole::Weather && skip != Some(SkipClass::Sky) {
+                if matches!(part.role, SkyRole::Weather | SkyRole::WeatherSky) && skip != Some(SkipClass::Sky)
+                {
                     log.count(
                         "weather asset materials of no sky program, left in their own layer",
                         1,
@@ -298,8 +301,9 @@ mod tests {
         m
     }
 
-    /// An Elden Ring weather asset's sky-program materials go on the sky layer at its start without writing depth; a
-    /// material of another program (the Erdtree's light shafts) keeps its order, counted; no anchor; the record goes.
+    /// An Elden Ring weather asset's sky-program materials go on the sky layer at its start, writing depth; a material
+    /// of another program (the Erdtree's light shafts) keeps its order, counted; the pass adds no anchor (the read
+    /// anchors a sky-program asset); the record goes.
     #[test]
     fn a_weather_asset_draws_its_sky_programs_on_the_sky_layer() {
         let mut w = World::new();
@@ -308,7 +312,7 @@ mod tests {
         let shaft = material(&mut w, "M[WorldTree_LightShaft]", Some(SkipClass::LightVolume));
         let sky_p = prototype(&mut w, &[sphere, clouds]);
         let tree_p = prototype(&mut w, &[shaft]);
-        let asset = placement(&mut w, sky_p, SkyRole::Weather);
+        let asset = placement(&mut w, sky_p, SkyRole::WeatherSky);
         placement(&mut w, tree_p, SkyRole::Weather);
         let mut log = PassLog::default();
         LowerFromSoftSky.run(&mut w, &mut log).unwrap();
@@ -318,7 +322,7 @@ mod tests {
                 Some(&DrawOrder {
                     layer: DrawLayer::Sky,
                     queue: DrawOrder::SKY,
-                    depth_write: false
+                    depth_write: true
                 })
             );
         }
