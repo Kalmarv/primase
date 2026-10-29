@@ -83,7 +83,6 @@ elden-c3000.log.resolve-fromsoft-shaders.approximation.engine texture g_Irradian
 elden-c3000.log.resolve-fromsoft-shaders.approximation.engine texture g_IrradianceVolumeY: not a material slot, left at zero=1
 elden-c3000.log.resolve-fromsoft-shaders.approximation.engine texture g_IrradianceVolumeZ: not a material slot, left at zero=1
 elden-c3000.log.resolve-fromsoft-shaders.approximation.engine texture g_SSAOTexture: not a material slot, left at zero=1
-elden-c3000.log.resolve-fromsoft-shaders.approximation.engine texture g_ShadowTexture: not a material slot, left at zero=1
 elden-c3000.log.resolve-fromsoft-shaders.approximation.engine texture g_VolumeFogN: not a material slot, left at zero=1
 elden-c3000.log.resolve-fromsoft-shaders.approximation.joint palette bound stated at N matrices (N,N bytes), the largest observed in a capture of Elden Ring (the engine binds N in one skinned dra=27
 elden-c3000.log.resolve-fromsoft-shaders.approximation.material slots bound to the metaparam's default texture (the material binds nothing there)=19
