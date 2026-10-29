@@ -73,7 +73,7 @@ havok-formats = { git = "https://github.com/Kalmarv/havok-formats", rev = "f681d
 primase-havok = { path = "toolkit/havok" }
 morpheme-formats = { git = "https://github.com/Kalmarv/morpheme-formats", rev = "40467a65f41d052534d90c18d980ef3329967de7" }
 rme-formats = { git = "https://github.com/Kalmarv/rme-formats", rev = "6d51f9f02ba40ae7770ba57fce0346669a6b8f49" }
-unity-formats = { git = "https://github.com/Kalmarv/unity-formats", rev = "85b2abebbf2bbb9f576595e7521f8d09ce9d3438" }
+unity-formats = { git = "https://github.com/Kalmarv/unity-formats", rev = "72c057749e7aae480d6c6afc117e2f46d1715f11", version = "0.2.2" }
 monogame-formats = { git = "https://github.com/Kalmarv/monogame-formats", rev = "05cc99b09f9d9b897ce1360ceffdbab5222ecc08" }
 lua51-bytecode = { git = "https://github.com/Kalmarv/lua51-bytecode", rev = "cfa3a7001c3f8d240a2360b7598609d420d99243" }
 dxbc-reader = { git = "https://github.com/Kalmarv/dx", rev = "c32a3689c6bd26a0ee0777664091f4e04843927e" }
