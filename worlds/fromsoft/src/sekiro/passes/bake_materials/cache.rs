@@ -14,13 +14,14 @@ fn source() -> [u8; 32] {
         ("pixels.rs", include_bytes!("pixels.rs")),
         ("cache.rs", include_bytes!("cache.rs")),
         ("colour.rs", include_bytes!("colour.rs")),
+        ("cut.rs", include_bytes!("cut.rs")),
     ])
 }
 
 /// Bump whenever the same inputs can produce different bytes or counts: bake/alpha/decode policy,
 /// interpreter arithmetic, sampling, texture decoding, vertex input derivation, or lifter behaviour.
 /// Lifter and program versions also participate automatically below. This is also the payload version.
-const BAKE_VERSION: u32 = 1;
+const BAKE_VERSION: u32 = 2;
 
 fn json<T: serde::Serialize>(k: KeyBuilder, tag: &str, value: &T) -> Result<KeyBuilder, String> {
     Ok(k.bytes(tag, &serde_json::to_vec(value).map_err(|e| e.to_string())?))
@@ -112,6 +113,7 @@ impl Prepared<'_> {
             source_size,
             alpha,
             base_alpha,
+            cut,
             sample_time,
         } = self;
         let mut k = KeyBuilder::new("fromsoft.material-bake")
@@ -185,6 +187,12 @@ impl Prepared<'_> {
                 }
             }
         }
+        // the alpha test the bake carries (its expression, reference, slots and register; the Debug text writes each
+        // float so it reads back to the same bits)
+        k = k.bool("alpha-test", cut.is_some());
+        if let Some(c) = cut {
+            k = k.str("alpha-test-compare", &format!("{c:?}"));
+        }
         Ok(k.u32("size", *size)
             .u32("requested-size", *requested_size)
             .u32("source-width", source_size[0])
@@ -201,6 +209,8 @@ pub(super) struct Product {
     pub orm: Vec<u8>,
     pub specular: Option<Vec<u8>>,
     pub emission: Option<(Vec<u8>, f32)>,
+    /// The cutoff of the alpha test the bake carried in the albedo's alpha: the material is a mask at it.
+    pub cut: Option<f32>,
     counts: BTreeMap<String, u64>,
     approximations: BTreeMap<String, u64>,
 }
@@ -251,6 +261,7 @@ impl Product {
             orm: baked.orm,
             specular: baked.specular,
             emission,
+            cut: baked.cut,
             counts: log.counts,
             approximations: log.approximations,
         })
@@ -309,6 +320,7 @@ struct Metadata {
     approximations: BTreeMap<String, u64>,
     specular: bool,
     emission_strength: Option<u32>,
+    cut: Option<u32>,
 }
 
 fn frame(b: &Product) -> Result<Vec<u8>, String> {
@@ -319,6 +331,7 @@ fn frame(b: &Product) -> Result<Vec<u8>, String> {
         approximations: b.approximations.clone(),
         specular: b.specular.is_some(),
         emission_strength: b.emission.as_ref().map(|(_, s)| s.to_bits()),
+        cut: b.cut.map(f32::to_bits),
     };
     let meta = serde_json::to_vec(&metadata).map_err(|e| e.to_string())?;
     let mut out = Vec::new();
@@ -362,7 +375,10 @@ fn unframe(value: &[u8]) -> Option<Product> {
     } else {
         None
     };
-    if cursor.remaining() != 0 {
+    if cursor.remaining() != 0
+        || m.cut
+            .is_some_and(|bits| !(f32::from_bits(bits) > 0. && f32::from_bits(bits) <= 1.))
+    {
         return None;
     }
     Some(Product {
@@ -372,6 +388,7 @@ fn unframe(value: &[u8]) -> Option<Product> {
         orm,
         specular,
         emission,
+        cut: m.cut.map(f32::from_bits),
         counts: m.counts,
         approximations: m.approximations,
     })

@@ -1,13 +1,14 @@
 //! Static texture-space material bake from resolved game programs. The binding owns the G-buffer layout.
 mod cache;
 mod colour;
+mod cut;
 mod pixels;
 
 use super::settings::{PixelCap, Seconds};
 use crate::materials::Material;
 use iridia_interface::Stage;
 use primase_core::pass::{OptionSpec, Options, Pass, PassLog, PassSpec};
-use primase_core::pbr::{PbrMaterial, Specular, TextureRef};
+use primase_core::pbr::{AlphaMode, PbrMaterial, Specular, TextureRef};
 use primase_core::shader::ShaderBinding;
 use primase_core::{ColorSpace, Component, Mesh, Name, TexFormat, TexRole, Texture, World};
 use std::collections::BTreeSet;
@@ -15,6 +16,11 @@ use std::collections::BTreeSet;
 /// `bake-fromsoft-materials{max-size=N,sample-time=S,cache=off|on}`: replace lowered surface channels with the resolved pixel
 /// program's outputs over UV0. Run after resolve and material lowering, before normal conversion. Geometry must
 /// keep its source UV tiling. The source material and shader binding remain available to a game-program renderer.
+/// The alpha test is the material's either way: a program that discards against its reference keeps its test off in the
+/// bake, and where the lowering could not cut the material (its test is an expression of several samples), the bake
+/// evaluates the value the program compares texel by texel, from the program's own samples, writes it into the albedo's
+/// alpha and makes the material a mask at the reference, counted on it (`cut::CARRIED_ALPHA_TEST`); where it cannot,
+/// the reason is counted and the material stays uncut.
 /// Unsupported programs retain their lowered material, with a refusal reason. Layer-weight materials belong to
 /// `bake-fromsoft-layers`, which groups their vertex weights; this pass does not replace that result with one weight.
 /// The square bake requests the largest bound source texture edge, limited by `max-size`. Allocation and cap
@@ -235,6 +241,10 @@ impl Pass for BakeFromSoftMaterials {
                 color_texture: Some(add(world, "f0", rgb, TexRole::Color, ColorSpace::Srgb, None)),
                 ..Specular::default()
             });
+            // the program's own alpha test, carried in the albedo's alpha: a mask at the material's reference
+            if let Some(cutoff) = baked.cut {
+                material.alpha_mode = AlphaMode::Mask { cutoff };
+            }
             if let Some((rgba, strength)) = baked.emission {
                 material.emissive_texture = Some(add(
                     world,

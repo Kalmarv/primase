@@ -14,6 +14,10 @@
 //! on a difference the test writes the new table to the scratch directory (`regression-census.txt`), prints each field with
 //! the baseline's value and the new one, and fails. The worlds whose install is missing are skipped, and so are their
 //! lines of the baseline. Phase times of each world are printed (`--nocapture`).
+//!
+//! Beside the counts, one rule is checked outright: every drawn material whose pixel program tests its alpha (a stated
+//! alpha reference above 0) is drawn as a mask, or blended where its class blends, whether or not its colour bakes. The
+//! failure names each material drawn without its test.
 mod inputs;
 
 use primase_fromsoft::game::ParamKey;
@@ -25,8 +29,9 @@ use fromsoft_formats::{Game, Keys};
 use iridia_interface::Stage;
 use primase_animation::game_skin;
 use primase_core::pass::PassLog;
-use primase_core::shader::ShaderBinding;
+use primase_core::pbr::{AlphaMode, PbrMaterial};
 use primase_core::shader::{BufferSource, LightListPart};
+use primase_core::shader::{ConstantRole, ShaderBinding};
 use primase_core::{Mesh, Skin, World};
 use primase_fromsoft::materials::Material;
 use primase_fromsoft::sekiro::{self, CharacterOptions};
@@ -125,6 +130,17 @@ fn count(world: &World, logs: &[(String, PassLog)]) -> BTreeMap<String, u64> {
         if binding.stage(Stage::Pixel).is_some() {
             add("materials.resolved".into(), 1);
         }
+        // the materials whose program tests its alpha, by what they are drawn as
+        if alpha_reference(binding).is_some() {
+            let mode = world
+                .get::<PbrMaterial>(material)
+                .map_or("no pbr.material", |p| match p.alpha_mode {
+                    AlphaMode::Opaque => "Opaque",
+                    AlphaMode::Mask { .. } => "Mask",
+                    AlphaMode::Blend => "Blend",
+                });
+            add(format!("materials.alpha_tested.{mode}"), 1);
+        }
         for stage in &binding.stages {
             let (programs, side) = match stage.stage {
                 Stage::Pixel => (&mut pixel_programs, "pixel"),
@@ -220,8 +236,50 @@ fn count(world: &World, logs: &[(String, PassLog)]) -> BTreeMap<String, u64> {
     c
 }
 
+/// The reference of the alpha test a binding's pixel program makes, where it makes one (a reference above 0).
+fn alpha_reference(binding: &ShaderBinding) -> Option<f32> {
+    binding
+        .stage(Stage::Pixel)?
+        .constants
+        .iter()
+        .find_map(|c| match c.role {
+            ConstantRole::AlphaReference { value, .. } if value > 0. => Some(value),
+            _ => None,
+        })
+}
+
+/// The drawn materials whose program tests its alpha and which are drawn without that test: neither a mask nor blended
+/// (a blended class draws its alpha as coverage), by name and program. The alpha test is a fact of the material, whether
+/// or not its colour bakes.
+fn uncut(world: &World) -> Vec<String> {
+    let drawn: std::collections::BTreeSet<_> = world
+        .iter::<Mesh>()
+        .flat_map(|(_, m)| m.primitives().iter().filter_map(|p| p.material))
+        .collect();
+    drawn
+        .into_iter()
+        .filter_map(|material| {
+            let binding = world.get::<ShaderBinding>(material)?;
+            let reference = alpha_reference(binding)?;
+            let mode = world.get::<PbrMaterial>(material).map(|p| p.alpha_mode);
+            if matches!(mode, Some(AlphaMode::Mask { .. } | AlphaMode::Blend)) {
+                return None;
+            }
+            let program = binding
+                .stage(Stage::Pixel)
+                .and_then(|s| world.get::<primase_core::Name>(s.shader))
+                .map_or("", |n| n.0.as_str());
+            let mtd = world.get::<Material>(material).map_or("", |m| m.mtd.as_str());
+            Some(format!("{mtd} ({program}, reference {reference}): {mode:?}"))
+        })
+        .collect()
+}
+
 /// Read one world and prepare it, printing the phase times, and its census with every field under `name`.
-fn census(name: &str, read: impl FnOnce(&mut World) -> Result<()>) -> Result<BTreeMap<String, u64>> {
+fn census(
+    name: &str,
+    read: impl FnOnce(&mut World) -> Result<()>,
+) -> Result<(BTreeMap<String, u64>, Vec<String>)> {
     let started = Instant::now();
     let mut world = World::default();
     read(&mut world)?;
@@ -246,10 +304,17 @@ fn census(name: &str, read: impl FnOnce(&mut World) -> Result<()>) -> Result<BTr
         at.elapsed().as_secs_f32(),
         started.elapsed().as_secs_f32()
     );
-    Ok(counts
+    let uncut = uncut(&world)
         .into_iter()
-        .map(|(field, n)| (format!("{name}.{field}"), n))
-        .collect())
+        .map(|m| format!("{name}: {m}"))
+        .collect();
+    Ok((
+        counts
+            .into_iter()
+            .map(|(field, n)| (format!("{name}.{field}"), n))
+            .collect(),
+        uncut,
+    ))
 }
 
 /// The baseline's lines `field=count`.
@@ -274,18 +339,24 @@ fn what_the_readers_and_passes_make_of_the_characters_is_the_baseline() -> Resul
         max_output: 1 << 30,
     };
     let mut now: BTreeMap<String, u64> = BTreeMap::new();
+    // the alpha-tested materials drawn without their test, every world's
+    let mut uncut: Vec<String> = Vec::new();
     let mut ran: Vec<&str> = Vec::new();
     if let Some(root) = inputs::install(inputs::Game::Sekiro)
         && let Some(root) = common::sekiro(root)?
     {
-        now.extend(census("wolf-default", |w| {
+        let (counts, cut) = census("wolf-default", |w| {
             sekiro::read_parts_with(&root, &WOLF, &decoder, &Default::default(), w)?;
             Ok(())
-        })?);
-        now.extend(census("wolf-ashina", |w| {
+        })?;
+        now.extend(counts);
+        uncut.extend(cut);
+        let (counts, cut) = census("wolf-ashina", |w| {
             sekiro::read_parts_with(&root, &WOLF_ASHINA, &decoder, &Default::default(), w)?;
             Ok(())
-        })?);
+        })?;
+        now.extend(counts);
+        uncut.extend(cut);
         ran.extend(["wolf-default.", "wolf-ashina."]);
     }
     if let (Some(root), Some(keys)) = (
@@ -297,15 +368,27 @@ fn what_the_readers_and_passes_make_of_the_characters_is_the_baseline() -> Resul
             Game::EldenRing,
             Keys::from_folder(keys, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
         );
-        now.extend(census("elden-c3000", |w| {
+        let (counts, cut) = census("elden-c3000", |w| {
             sekiro::read_character_with(&install, "c3000", &decoder, CharacterOptions::default(), w)?;
             Ok(())
-        })?);
+        })?;
+        now.extend(counts);
+        uncut.extend(cut);
         ran.push("elden-c3000.");
     }
     if ran.is_empty() {
         return Ok(());
     }
+    assert!(
+        uncut.is_empty(),
+        "{} drawn materials whose program tests its alpha are drawn without the test:
+{}",
+        uncut.len(),
+        uncut.join(
+            "
+"
+        )
+    );
     let baseline: BTreeMap<String, u64> = parse(BASELINE)
         .into_iter()
         .filter(|(field, _)| ran.iter().any(|w| field.starts_with(w)))

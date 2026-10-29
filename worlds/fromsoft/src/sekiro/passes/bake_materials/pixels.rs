@@ -1,10 +1,11 @@
 //! Execute the resolved pixel stage and decode only the roles its binding declares, through primase's one reading of a
 //! program's outputs as a surface (`primase_core::shader::surface`).
+use super::cut::{self, CARRIED_ALPHA_TEST, Compare};
 use crate::layer_bake::{self, FrozenFrame};
 use iridia_exec::{
     Grid, Input, Invocation, Lane, PixelShader, Raw, SampledTexture, SamplerUse, Unstated, evaluate_raw_with,
 };
-use primase_core::pbr::{PbrMaterial, UvTransform, Wrap};
+use primase_core::pbr::{AlphaMode, PbrMaterial, UvTransform, Wrap};
 use primase_core::shader::{NormalSpace, OutputBinding, OutputRole};
 use primase_core::shader::{surface::Base, surface::Place, surface::Surface};
 use primase_core::{ColorSpace, Texture, World};
@@ -24,8 +25,16 @@ pub(super) struct Baked {
     pub orm: Vec<u8>,
     pub specular: Option<Vec<u8>>,
     pub emission: Option<Vec<[f32; 3]>>,
+    /// The cutoff of the alpha test the bake carried in the albedo's alpha ([`cut`]): the material's reference.
+    pub cut: Option<f32>,
     pub policies: BTreeMap<String, u64>,
 }
+
+/// What a bake counts where the material's program tests its alpha, the lowering left it uncut, and the bake cannot
+/// carry the program's own compare either: why, after the colon. The material stays uncut.
+pub const UNCARRIED_ALPHA_TEST: &str =
+    "alpha-tested material not cut: the program's own compare is not carried";
+
 fn image(t: &Texture, sampler: SamplerUse) -> Result<Arc<SampledTexture>, String> {
     let level = t.levels.first().ok_or("bound texture has no mip")?;
     let rgba = primase_texcodec::Decoder::default()
@@ -105,6 +114,9 @@ pub(super) struct Prepared<'a> {
     pub source_size: [u32; 2],
     pub alpha: Option<(Arc<SampledTexture>, Option<UvTransform>)>,
     pub base_alpha: f32,
+    /// The program's own alpha test, carried in the albedo's alpha where the lowering left the material uncut
+    /// ([`cut`]).
+    pub cut: Option<Compare>,
     pub sample_time: f32,
 }
 
@@ -172,6 +184,15 @@ pub(super) fn prepare<'a>(
     let frame = FrozenFrame::static_bake(time);
     let constants = layer_bake::program_constants(&shader, &core.interface, stage, &frame, &mut policies)
         .map_err(|e| e.to_string())?;
+    // a material the lowering left uncut whose program tests its alpha: the bake carries the program's own compare
+    let cut = if previous.alpha_mode == AlphaMode::Opaque {
+        Compare::of(&shader, &core.interface, stage).unwrap_or_else(|why| {
+            policies.insert(format!("{UNCARRIED_ALPHA_TEST}: {why}"), 1);
+            None
+        })
+    } else {
+        None
+    };
     let mut textures = BTreeMap::new();
     let mut source_size = [0; 2];
     for t in &stage.textures {
@@ -292,6 +313,7 @@ pub(super) fn prepare<'a>(
         source_size,
         alpha,
         base_alpha: previous.base_color[3],
+        cut,
         sample_time: time,
     })
 }
@@ -313,6 +335,7 @@ pub(super) fn bake(prepared: Prepared<'_>, world: &World) -> Result<Baked, Strin
         source_size,
         alpha,
         base_alpha,
+        cut,
         sample_time: _,
     } = prepared;
     let textures = iridia_exec::Views::refusing(textures.iter().map(|(&slot, t)| (slot, t.view())).collect());
@@ -333,10 +356,25 @@ pub(super) fn bake(prepared: Prepared<'_>, world: &World) -> Result<Baked, Strin
     if raw.discarded.iter().any(|x| *x) {
         return Err("program still discards texels with alpha test disabled".into());
     }
+    let mut policies = policies;
+    // the program's own compare, evaluated over the same grid from the same inputs, constants and textures
+    let tested = cut.as_ref().and_then(|compare| {
+        match tested_values(world, &shader, compare, &constants, &textures, &inputs, size) {
+            Ok(values) => {
+                policies.insert(CARRIED_ALPHA_TEST.into(), 1);
+                Some((compare.reference, values))
+            }
+            Err(why) => {
+                policies.insert(format!("{UNCARRIED_ALPHA_TEST}: {why}"), 1);
+                None
+            }
+        }
+    });
     let surfaces = Decode {
         surface: &surface,
         alpha: alpha.as_ref(),
         base_alpha,
+        tested: tested.as_ref().map(|(_, values)| values.as_slice()),
         size,
     }
     .surfaces(&raw, primase_core::parallel::threads(world))?;
@@ -349,6 +387,7 @@ pub(super) fn bake(prepared: Prepared<'_>, world: &World) -> Result<Baked, Strin
         orm: surfaces.orm,
         specular: surfaces.specular,
         emission: surfaces.emission,
+        cut: tested.map(|(reference, _)| reference),
         policies,
     };
     if surface.reflectance.is_some() && surface.metallic.is_none() {
@@ -364,6 +403,50 @@ pub(super) fn bake(prepared: Prepared<'_>, world: &World) -> Result<Baked, Strin
     Ok(result)
 }
 
+/// The value the program's alpha test compares with its reference at every texel of the bake's grid, in row-major
+/// order: the program run once a texel ([`cut::Tested`]), each run's samples its own.
+fn tested_values(
+    world: &World,
+    shader: &iridia_exec::ProgramShader,
+    compare: &Compare,
+    constants: &iridia_exec::evaluate::Constants,
+    textures: &iridia_exec::Views,
+    inputs: &BTreeMap<(String, u32), Input>,
+    size: u32,
+) -> Result<Vec<f32>, String> {
+    let raw = evaluate_raw_with(
+        primase_core::parallel::threads(world),
+        &cut::Tested {
+            program: shader,
+            compare,
+        },
+        constants,
+        textures,
+        inputs,
+        Grid {
+            size,
+            period: [1.; 2],
+        },
+        &[(compare.register, 1)],
+        Invocation::Scalar,
+    )
+    .map_err(|e| e.to_string())?;
+    let [values] = raw.pixels.as_slice() else {
+        return Err("the tested value's target is missing".into());
+    };
+    values
+        .iter()
+        .map(|&(words, written)| {
+            let value = f32::from_bits(words[0]);
+            if written & 1 == 0 || !value.is_finite() {
+                Err("a texel's tested value is not written or not finite".to_owned())
+            } else {
+                Ok(value)
+            }
+        })
+        .collect()
+}
+
 /// The surface channels a bake decodes from its evaluation, texel by texel in row-major order.
 #[derive(Debug, Default, PartialEq)]
 struct Surfaces {
@@ -376,11 +459,13 @@ struct Surfaces {
 
 /// How a bake's evaluated targets decode into its surface channels: the surface its outputs are read as (each place a
 /// position among the evaluated targets, in the order the evaluation keeps them, with the terms [`prepare`] requires),
-/// the texture whose alpha (times `base_alpha`) is the albedo's, and the grid's side.
+/// the texture whose alpha (times `base_alpha`) is the albedo's, or the program's own tested value where the bake carries
+/// the alpha test (`tested`, a texel's at its place), and the grid's side.
 struct Decode<'a> {
     surface: &'a Surface,
     alpha: Option<&'a (Arc<SampledTexture>, Option<UvTransform>)>,
     base_alpha: f32,
+    tested: Option<&'a [f32]>,
     size: u32,
 }
 
@@ -437,12 +522,15 @@ impl Decode<'_> {
         let a = base.colour(values(raw, base.place(), p)?);
         out.albedo.extend(a.map(colour));
         let uv = [(p % size) as f32 + 0.5, (p / size) as f32 + 0.5].map(|x| x / size as f32);
-        let opacity = if let Some((t, transform)) = self.alpha {
-            layer_bake::sample(t, transform.map_or(uv, |t| t.apply(uv))).map_err(|e| e.to_string())?[3]
+        let alpha = if let Some(tested) = self.tested {
+            *tested.get(p).ok_or("a texel past the tested values")?
+        } else if let Some((t, transform)) = self.alpha {
+            self.base_alpha
+                * layer_bake::sample(t, transform.map_or(uv, |t| t.apply(uv))).map_err(|e| e.to_string())?[3]
         } else {
-            1.
+            self.base_alpha
         };
-        out.albedo.push(byte(opacity * self.base_alpha));
+        out.albedo.push(byte(alpha));
         let n = normal_term
             .decode(values(raw, normal_term.place, p)?)
             .ok_or("zero G-buffer normal")?;
@@ -556,6 +644,7 @@ mod tests {
             surface,
             alpha: None,
             base_alpha: 0.5,
+            tested: None,
             size,
         }
     }
