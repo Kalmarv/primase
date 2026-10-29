@@ -339,9 +339,9 @@ fn elden_rings_sky_is_read_as_weathers() -> Result<(), Box<dyn std::error::Error
         let drawn: Vec<_> = slots
             .iter()
             .map(|&m| material_of(&world, m))
-            .filter(|m| !is_shadow(*m))
+            .filter(|m| !is_shadow(m))
             .collect();
-        let follows = !drawn.is_empty() && drawn.iter().all(|m| is_sky(*m));
+        let follows = !drawn.is_empty() && drawn.iter().all(|m| is_sky(m));
         let model = &name[..10];
         match model {
             "AEG096_411" | "AEG096_414" => assert!(!follows, "{source}: a light shaft"),
