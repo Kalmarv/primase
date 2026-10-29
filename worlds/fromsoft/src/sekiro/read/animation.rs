@@ -39,6 +39,7 @@ use std::sync::Arc;
 use havok_formats::animation::{Container, Skeleton, container};
 use havok_formats::{Compendium, Tagfile};
 use primase_core::{Entity, Name, Origin, Provenance, World};
+use primase_havok::layers::{BehaviorLayers, HavokBehaviorLayers, read_layers};
 use primase_havok::world::{HavokAnimation, insert_animation, insert_skeleton};
 
 use crate::sekiro::character_data::ClipEvents;
@@ -150,6 +151,8 @@ pub(super) struct ClipReader {
     loaded_binders: std::collections::BTreeSet<String>,
     event_records: BTreeMap<(String, String), Vec<i64>>,
     metadata: BTreeMap<String, std::result::Result<CachedMetadata, String>>,
+    /// The layers of each character's behaviour graph, read once (`None`: it has none to read).
+    behaviours: BTreeMap<String, Option<BehaviorLayers>>,
 }
 #[derive(Debug)]
 struct CachedMetadata {
@@ -344,6 +347,43 @@ impl ClipReader {
         }
         Ok(held)
     }
+    /// The layers of the root layer generator of the character's behaviour graph (`chr/<id>.behbnd`: its member
+    /// `Behaviors/<id>.hkx`), read once for each character. `None` where the install has no such binder or member or the
+    /// graph's root is not a layer generator; an `Err` says why a graph was not read.
+    fn behaviour(
+        &mut self,
+        install: &fromsoft_formats::Install,
+        decoder: &Decoder<'_>,
+        id: &str,
+    ) -> std::result::Result<Option<BehaviorLayers>, String> {
+        if let Some(read) = self.behaviours.get(id) {
+            return Ok(read.clone());
+        }
+        if self.archive.is_none() {
+            self.archive = Some(Arc::new(install.open().map_err(|e| e.to_string())?));
+        }
+        let archive = self.archive.as_ref().expect("archive opened above");
+        let path = format!("/chr/{id}.behbnd.dcx");
+        let mut layers = None;
+        if archive.contains(&path) {
+            let binder = Binder::read(&archive.read(&path, decoder).map_err(|e| e.to_string())?, decoder)
+                .map_err(|e| e.to_string())?;
+            let wanted = format!("{id}.hkx");
+            let member = binder.files.iter().find(|f| {
+                f.name.as_deref().is_some_and(|n| {
+                    n.replace('\\', "/").to_lowercase().contains("/behaviors/") && file_name(n) == wanted
+                })
+            });
+            if let Some(f) = member {
+                let bytes = decoder.decode_if_dcx(&f.bytes).map_err(|e| e.to_string())?;
+                let tag = Tagfile::read(&bytes, None).map_err(|e| e.detail)?;
+                let document = havok_formats::behavior::Document::read(&tag).map_err(|e| e.detail)?;
+                layers = read_layers(&document).map_err(|e| e.detail)?;
+            }
+        }
+        self.behaviours.insert(id.to_owned(), layers.clone());
+        Ok(layers)
+    }
     pub(super) fn load(
         &mut self,
         install: &fromsoft_formats::Install,
@@ -395,7 +435,23 @@ impl ClipReader {
                     .or_insert_with(|| tae.animations.iter().map(|a| tae.number(a)).collect());
             }
         }
-        let result = insert(held, &source.character, report, install.game, world)?;
+        let mut result = insert(held, &source.character, report, install.game, world)?;
+        // the layers of the character's behaviour graph ride on the skeleton entity, once
+        if let Some(skeleton) = result.skeleton
+            && !world.has::<HavokBehaviorLayers>(skeleton)
+        {
+            match self.behaviour(install, decoder, &source.character) {
+                Ok(Some(layers)) => {
+                    world.insert(skeleton, HavokBehaviorLayers(layers));
+                }
+                Ok(None) => {}
+                Err(why) => refuse(
+                    &mut result.report,
+                    &format!("behaviour graph not read: {why}"),
+                    &format!("{}.behbnd", source.character),
+                ),
+            }
+        }
         let [decoded] = result.animations.as_slice() else {
             return Err(crate::invalid(
                 "FromSoftware animation",
