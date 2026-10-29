@@ -209,7 +209,7 @@ pub(crate) fn read(
     report.forward_phase = t.forward_phase.clone();
     let mut wanted: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for s in &t.steps {
-        programs_of(s, &mut wanted)?;
+        programs_of(s, &mut wanted).map_err(|e| invalid(FORMAT, 0, e))?;
     }
     let mut programs: BTreeMap<String, Program> = BTreeMap::new();
     for (folder, files) in &wanted {
