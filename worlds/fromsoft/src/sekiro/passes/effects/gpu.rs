@@ -331,7 +331,7 @@ impl Cx<'_> {
             alpha_fade_threshold: zero(),
             alpha_cutoff: zero(),
             soft: None,
-            distance: g.distance,
+            distance: units::limit(g.distance),
             octagonal: false,
             lit,
             bloom: g.bloom,

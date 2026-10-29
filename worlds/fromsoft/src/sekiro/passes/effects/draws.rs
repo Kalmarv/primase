@@ -150,7 +150,7 @@ impl Cx<'_> {
             alpha_fade_threshold: value::scaled(fade, BYTE),
             alpha_cutoff: value::scaled(cutoff, BYTE),
             soft,
-            distance: q.distance,
+            distance: units::limit(q.distance),
             octagonal: q.octagonal,
             lit,
             bloom: q.bloom,
@@ -244,7 +244,8 @@ impl Cx<'_> {
                     normal_map: 0,
                     specular: b.specular,
                     glossiness: b.glossiness,
-                    specularity: b.specularity,
+                    // the action stores no specularity (only `specular` and `glossiness`)
+                    specularity: 0.0,
                     shadow: b.shadow_darkness,
                     bloom: b.bloom.then_some(b.bloom_color),
                     distance: units::distance_fade(
@@ -312,14 +313,14 @@ impl Cx<'_> {
                     tint,
                     alpha_cutoff: value::scaled(cutoff, BYTE),
                     soft: None,
-                    distance: units::distance_fade(
+                    distance: units::limit(units::distance_fade(
                         p.min_fade_distance,
                         p.min_distance,
                         p.max_fade_distance,
                         p.max_distance,
                         p.min_distance_threshold,
                         p.max_distance_threshold,
-                    ),
+                    )),
                     bloom: p.bloom.then_some(p.bloom_color),
                 })
             }
@@ -447,14 +448,14 @@ impl Cx<'_> {
                     offset,
                     atlas,
                     soft: None,
-                    distance: units::distance_fade(
+                    distance: units::limit(units::distance_fade(
                         m.min_fade_distance,
                         m.min_distance,
                         m.max_fade_distance,
                         m.max_distance,
                         m.min_distance_threshold,
                         m.max_distance_threshold,
-                    ),
+                    )),
                     lit: false,
                 })
             }
@@ -507,14 +508,14 @@ impl Cx<'_> {
                     offset,
                     atlas: None,
                     soft: None,
-                    distance: units::distance_fade(
+                    distance: units::limit(units::distance_fade(
                         m.min_fade_distance,
                         m.min_distance,
                         m.max_fade_distance,
                         m.max_distance,
                         m.min_distance_threshold,
                         m.max_distance_threshold,
-                    ),
+                    )),
                     lit: false,
                 })
             }

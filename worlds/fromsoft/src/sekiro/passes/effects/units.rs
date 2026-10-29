@@ -168,6 +168,11 @@ pub fn distance_fade(
     }
 }
 
+/// The limits as the draws that may have none state them: `None` where nothing is limited.
+pub fn limit(distance: DistanceFade) -> Option<DistanceFade> {
+    (!distance.is_none()).then_some(distance)
+}
+
 /// Whether a lighting mode lights the particle (`LightingMode`: -1 unlit, 0 lit, -2 lit with an extra source; the project says
 /// values it does not name occur).
 pub fn lit(mode: i32, notes: &mut Notes) -> bool {
