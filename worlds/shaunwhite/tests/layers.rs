@@ -6,15 +6,21 @@
 mod inputs;
 
 use anvil_formats::shaunwhite::material::LayerState;
+use anvil_formats::shaunwhite::shaders::{Database, Effect, Key, Payload, Record};
 use primase_core::layered::{Channel, Composition, Source, mask_value};
 use primase_core::pass::{Conservation, PassManager, PassRegistry, RunReport};
 use primase_core::pbr::{PbrMaterial, UvTransform, Wrap};
+use primase_core::shader::{MaterialPrograms, ShaderBinding};
 use primase_core::{
     ColorSpace, Entity, LayeredMaterial, MaterialVariants, Mesh, Primitive, Semantic, Stream, TexFormat,
     TexRole, Texture, Topology, VertexColor, World,
 };
-use primase_shaunwhite::components::{MaterialRef, MaterialState, SlotRef};
+use primase_shaunwhite::components::{
+    MaterialRef, MaterialState, MeshFormat, ShaderInputs, ShaderLibrary, ShaderPasses, SlotRef, Stored,
+};
+use primase_shaunwhite::passes::material_key;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 fn run(w: &mut World, text: &str) -> RunReport {
     let mut registry = PassRegistry::new();
@@ -313,6 +319,93 @@ fn colourless_drawings_get_the_shader_one_and_variants_follow_their_primitive() 
     assert!(!w.get::<LayeredMaterial>(other).unwrap().reads(Semantic::Color(0)));
     run(&mut w, "lower-shaunwhite-material");
     assert_eq!(colour(&w, other, [0.; 4]), [0.125, 0.25, 0.25]);
+}
+
+/// The stored records of a material drawn both with and without a vertex colour (permutation bit 8 set and clear),
+/// resolved before the split: the material keeps the record for vertices with a colour, and the copy its drawings
+/// without one take keeps the other, with its own name in its shader inputs.
+#[test]
+fn a_split_material_and_its_copy_keep_the_shader_records_of_their_vertex_colour_mode() {
+    let (mut w, host, proto, _) = fixture();
+    let mut body = vec![0; 647];
+    body[0] = 1;
+    body[1..5].copy_from_slice(&1u32.to_le_bytes());
+    body[5..9].copy_from_slice(&0xb71f6261u32.to_le_bytes());
+    let fields = anvil_formats::shaunwhite::shader_material::read(&body).unwrap();
+    let key = material_key(w.get::<MaterialRef>(host).unwrap(), &fields)
+        .unwrap()
+        .1
+        | (2 << 20);
+    w.insert(host, Stored(fields));
+    w.insert(proto, MeshFormat { stride: 0, flags: 64 });
+    let mut p = w.get::<Mesh>(proto).unwrap().primitives()[0].clone();
+    p.streams.remove(&Semantic::Color(0));
+    let bare = w.spawn();
+    w.insert(bare, Mesh::new(vec![p]));
+    w.insert(bare, MeshFormat { stride: 0, flags: 0 });
+    // ps_3_0; mov oC0, c0; end
+    let pixel: Vec<u8> = [0xffff0300u32, 0x02000001, 0x800f0800, 0xa0e40000, 0xffff]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect();
+    let record = |permutation: u64, pixel_key: u64| Record {
+        key: Key {
+            kind: 4,
+            permutation,
+            dependencies: [0; 4],
+        },
+        offset: 0,
+        bytes: 0,
+        payload: Payload::Effect(Effect {
+            vertex: None,
+            pixel: Some(pixel.clone()),
+            vertex_key: 0,
+            pixel_key,
+            states: Vec::new(),
+            restore_states: Vec::new(),
+            samplers: Vec::new(),
+            additional_samplers: Vec::new(),
+            variables: Vec::new(),
+        }),
+    };
+    w.insert_resource(ShaderLibrary(Arc::new(Database {
+        sources: Vec::new(),
+        records: vec![record(key | (1 << 8), 1), record(key, 2)],
+        table_padding: 0,
+    })));
+    run(&mut w, "resolve-shaunwhite-shaders");
+    assert_eq!(
+        w.get::<ShaderPasses>(host).unwrap().0,
+        [0, 1],
+        "both modes before the split"
+    );
+    let report = run(&mut w, "lower-shaunwhite-layers{influence=restored}");
+    let copy = w.get::<Mesh>(bare).unwrap().primitives()[0].material.unwrap();
+    assert_ne!(copy, host);
+    for (material, record) in [(host, 0), (copy, 1)] {
+        assert_eq!(
+            w.get::<ShaderPasses>(material).map(|p| p.0.clone()),
+            Some(vec![record])
+        );
+        let stages = &w.get::<ShaderBinding>(material).unwrap().stages;
+        assert_eq!(stages.len(), 1);
+        assert_eq!(stages[0].variant.as_ref().unwrap().value, record);
+        let inputs = w.get::<ShaderInputs>(material).unwrap();
+        assert_eq!(inputs.bindings.stages.len(), 1);
+        assert_eq!(inputs.bindings.stages[0].variant.as_ref().unwrap().value, record);
+        assert_eq!(&inputs.material, w.get::<MaterialRef>(material).unwrap());
+        let facts = &w.get::<MaterialPrograms>(material).unwrap().0;
+        assert_eq!(facts.len(), 1);
+        assert!(
+            facts[0].name.starts_with(&format!("SDB2 record {record},")),
+            "{}",
+            facts[0].name
+        );
+    }
+    assert_eq!(
+        report.steps[0].log.counts["split materials given the shader records of their vertex-colour mode"],
+        1
+    );
 }
 
 #[test]

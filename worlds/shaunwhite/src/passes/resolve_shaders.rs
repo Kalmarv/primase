@@ -16,6 +16,149 @@ use primase_core::shader::*;
 use primase_core::{Component, Entity, Mesh, Morphs, Name, Resource as _, World};
 
 pub const RECORD_FIELD: &str = "shaunwhite.shader.record";
+/// The part of a stage's variant key that holds its stored record's permutation.
+const PERMUTATION_PART: &str = "SDB2 permutation";
+
+/// Whether a stored colour record is the variant for vertices that hold a colour: permutation bit 8, which a
+/// drawing's mesh format chooses (its flag 64). A material drawn both ways keeps the records of both.
+pub(crate) fn reads_vertex_colour(permutation: u64) -> bool {
+    permutation & (1 << 8) != 0
+}
+
+/// The name of a stored record's program facts.
+fn record_name(index: usize, permutation: u64) -> String {
+    format!("SDB2 record {index}, key {permutation:016x}")
+}
+
+/// The permutation of the record a fact named by [`record_name`] is of; `None` for a material's own fact.
+fn record_permutation(name: &str) -> Option<u64> {
+    let (_, key) = name.strip_prefix("SDB2 record ")?.split_once(", key ")?;
+    u64::from_str_radix(key, 16).ok()
+}
+
+/// The vertex-colour mode of a stage this pass bound ([`reads_vertex_colour`] of its record's permutation).
+fn stage_reads_vertex_colour(stage: &StageBinding) -> Option<bool> {
+    stage
+        .variant
+        .as_ref()?
+        .parts
+        .iter()
+        .find(|p| p.name == PERMUTATION_PART)
+        .map(|p| reads_vertex_colour(p.value))
+}
+
+/// Gives `copy`, a material split from `original` for its drawings whose vertices hold no colour (with
+/// `copy_material`, the copy's own fields), the shader components this pass gave `original`, each of the two keeping
+/// the stored records of its own vertex-colour mode ([`reads_vertex_colour`]): `original` those for vertices with a
+/// colour, `copy` those without. A material this pass left unresolved gives its copy the same reason; one this pass did
+/// not run on gives it nothing. A mode with no record keeps no binding, and its facts say why.
+pub(crate) fn split_colour_modes(
+    w: &mut World,
+    original: Entity,
+    copy: Entity,
+    copy_material: &MaterialRef,
+    log: &mut PassLog,
+) {
+    let Some(inputs) = w.get::<ShaderInputs>(original).cloned() else {
+        return;
+    };
+    let programs = w.get::<MaterialPrograms>(original).cloned().unwrap_or_default();
+    let Some(binding) = w.get::<ShaderBinding>(original).cloned() else {
+        w.insert(
+            copy,
+            ShaderInputs {
+                material: copy_material.clone(),
+                ..inputs
+            },
+        );
+        w.insert(copy, programs);
+        return;
+    };
+    let passes = w
+        .get::<ShaderPasses>(original)
+        .cloned()
+        .unwrap_or(ShaderPasses(Vec::new()));
+    for (entity, material, colour) in [
+        (original, inputs.material.clone(), true),
+        (copy, copy_material.clone(), false),
+    ] {
+        let mode = |stage: &&StageBinding| stage_reads_vertex_colour(stage) == Some(colour);
+        let stages: Vec<StageBinding> = binding.stages.iter().filter(mode).cloned().collect();
+        let records: BTreeSet<u32> = stages
+            .iter()
+            .filter_map(|s| s.variant.as_ref().map(|v| v.value))
+            .collect();
+        let mut facts: Vec<ProgramFacts> = programs
+            .0
+            .iter()
+            .filter(|f| record_permutation(&f.name).is_none_or(|k| reads_vertex_colour(k) == colour))
+            .cloned()
+            .collect();
+        if stages.is_empty() {
+            w.remove::<ShaderBinding>(entity);
+            w.remove::<ShaderPasses>(entity);
+            if facts.is_empty() {
+                facts.push(ProgramFacts::unavailable(
+                    &material.name,
+                    Stage::Pixel,
+                    None,
+                    format!(
+                        "no compatible stored colour record for vertices {} a colour",
+                        if colour { "with" } else { "without" }
+                    ),
+                ));
+            }
+            log.count(
+                "split materials with no stored colour record of their vertex-colour mode",
+                1,
+            );
+            w.insert(
+                entity,
+                ShaderInputs {
+                    material,
+                    bindings: ShaderBinding {
+                        stages: Vec::new(),
+                        state: inputs.bindings.state,
+                    },
+                    unresolved: BTreeMap::new(),
+                },
+            );
+        } else {
+            w.insert(
+                entity,
+                ShaderInputs {
+                    material,
+                    bindings: ShaderBinding {
+                        stages: inputs.bindings.stages.iter().filter(mode).cloned().collect(),
+                        state: inputs.bindings.state,
+                    },
+                    unresolved: inputs
+                        .unresolved
+                        .iter()
+                        .filter(|(record, _)| records.contains(record))
+                        .map(|(record, why)| (*record, why.clone()))
+                        .collect(),
+                },
+            );
+            w.insert(
+                entity,
+                ShaderPasses(passes.0.iter().copied().filter(|r| records.contains(r)).collect()),
+            );
+            w.insert(
+                entity,
+                ShaderBinding {
+                    stages,
+                    state: binding.state,
+                },
+            );
+        }
+        w.insert(entity, MaterialPrograms(facts));
+    }
+    log.count(
+        "split materials given the shader records of their vertex-colour mode",
+        1,
+    );
+}
 #[derive(Clone, Copy, Debug)]
 pub struct ResolveShaunwhiteShaders;
 pub const RESOLVE_SHAUNWHITE_SHADERS: PassSpec = PassSpec {
@@ -133,7 +276,7 @@ fn binding(
             value: record,
             parts: vec![
                 KeyPart {
-                    name: "SDB2 permutation".into(),
+                    name: PERMUTATION_PART.into(),
                     value: key,
                 },
                 KeyPart {
@@ -387,7 +530,7 @@ impl Pass for ResolveShaunwhiteShaders {
                     || k & key.0 != key.1
                     || (k >> 20) & 15 != 2
                     || k & ((1 << 33) | (1 << 35)) != 0
-                    || !colors.contains(&(k & (1 << 8) != 0))
+                    || !colors.contains(&reads_vertex_colour(k))
                 {
                     continue;
                 }
@@ -395,7 +538,7 @@ impl Pass for ResolveShaunwhiteShaders {
                     continue;
                 };
                 let Some(bytes) = &effect.pixel else { continue };
-                let name = format!("SDB2 record {index}, key {k:016x}");
+                let name = record_name(index, k);
                 let loaded = cache
                     .entry((effect.pixel_key, bytes.clone()))
                     .or_insert_with(|| {

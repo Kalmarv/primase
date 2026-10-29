@@ -4,6 +4,9 @@
 //! with only a diffuse layer is the same equation's first step: the texture interpolated towards the texture times
 //! the tint by the vertex red, so it is built here too (two layers) when it has a tint, a texture and a drawing with
 //! `COLOR_0`, and otherwise left to the ordinary lowering, whose texture times tint is then exact.
+//! A material drawn both with and without a vertex colour is split: its drawings without one take a copy, built
+//! without the vertex weights. When `resolve-shaunwhite-shaders` has run, the copy takes the material's shader
+//! components and each of the two keeps the stored records of its own vertex-colour mode.
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::layered::{Channel, Composition, Source};
@@ -15,8 +18,10 @@ use primase_core::{
 };
 
 use super::material::{drawn_with, radians, texture_ref, uv_transform};
-use crate::components::{MaterialRef, MaterialState};
+use super::resolve_shaders::split_colour_modes;
+use crate::components::{MaterialRef, MaterialState, ShaderInputs, ShaderPasses};
 use anvil_formats::shaunwhite::material::LayerState;
+use primase_core::shader::{MaterialPrograms, ShaderBinding};
 
 #[derive(Clone, Copy, Debug)]
 pub struct LowerShaunwhiteLayers;
@@ -221,10 +226,25 @@ impl Pass for LowerShaunwhiteLayers {
             MaterialRef::NAME,
             VertexColor::NAME,
             Name::NAME,
+            ShaderBinding::NAME,
+            ShaderInputs::NAME,
+            ShaderPasses::NAME,
+            MaterialPrograms::NAME,
         ]
     }
+    fn removes(&self) -> &[&'static str] {
+        // a split material's vertex-colour mode with no stored record keeps no binding
+        &[ShaderBinding::NAME, ShaderPasses::NAME]
+    }
     fn modifies(&self) -> &[&'static str] {
-        &[Mesh::NAME, MaterialVariants::NAME]
+        &[
+            Mesh::NAME,
+            MaterialVariants::NAME,
+            ShaderBinding::NAME,
+            ShaderInputs::NAME,
+            ShaderPasses::NAME,
+            MaterialPrograms::NAME,
+        ]
     }
     fn approximates(&self) -> &'static str {
         "full world influence selects the restored state; scalar/specular and lighting remain the ordinary material lowering's approximation"
@@ -307,6 +327,7 @@ impl Pass for LowerShaunwhiteLayers {
                 source.name = format!("{} / without vertex weights", m.name);
                 w.insert(other, source.clone());
                 w.insert(other, Name(source.name.clone()));
+                split_colour_modes(w, e, other, &source, log);
                 build(w, other, &source, state, false, log);
                 colourless.insert(e, other);
                 log.count("materials split for absent vertex colour", 1);
