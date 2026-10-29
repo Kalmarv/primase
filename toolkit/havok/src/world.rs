@@ -268,10 +268,12 @@ pub enum RootMotionUse {
 /// Sekiro game, one clip in a layer at weight 1 over the idle pose gives, on 47 bones in every snapshot of each run, its own
 /// rotation with hint 0, the clip's rotation times the idle's with hint 1 (`R_clip * R_base`, the parent side) and the
 /// idle's times the clip's with hint 2 (`R_base * R_clip`, the child side): HKLib's `ADDITIVE_PARENT_SPACE` and
-/// `ADDITIVE_CHILD_SPACE`. That is observed in Sekiro only. In Elden Ring's player graph a hint 1 clip that a layer samples left
-/// the two bones the clip moved (`Jaw`, `Lips_Lower`) at their reference rotation in the final pose, and no capture there
-/// yet separates the two sides (the engine wiki's `havok-clips` states what was captured); its runtime is not verified, so
-/// an Elden Ring program names each hint it lowers.
+/// `ADDITIVE_CHILD_SPACE`. That is observed in Sekiro only. In Elden Ring's player graph, with a layer sampling one clip at
+/// weight 1 at the stock spawn, a hint 0 clip reaches the final pose (its `Head`, `Jaw` and `Lips_Lower` rotations are the
+/// pose's), while a hint 1 clip and a hint 2 clip leave the bones they move (`Jaw`, `Lips_Lower`) at their reference
+/// rotation, in either composition space (the engine wiki's `havok-clips` states what was captured and where). So the
+/// Sekiro sides do not carry over to that layer, and no capture there separates the two sides for any other graph: an
+/// Elden Ring program names each hint it lowers, and `leave` is what the player's layer shows for its hint 1 and 2 clips.
 ///
 /// The optional `blend-hint-1` and `blend-hint-2` (each [`AdditiveUse`]) state what is done with the animations of those
 /// blend hints: `parent` lowers them as deltas composed on the parent side (`additive: IdentityParent`), `child` as deltas
