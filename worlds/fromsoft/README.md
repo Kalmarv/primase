@@ -468,7 +468,9 @@ converts frames; it does not lower:
   number (types 110, 112, 116 and 119, which the community template also gives an `FFX ID`, hold small numbers or effects no
   binder has, and are counted), give `fromsoft.clip_effect_uses` on the clip (the event, the effect,
   the dummy polygon's reference id, whether it follows the dummy, whether the event keeps it going for its length, the
-  event's times), and the effect files and textures come from `commoneffects` (and `commoneffects_dlc02`). Events that name
+  event's times), and the effect files and textures come from the character's binders (`binders_for_clip`: Elden Ring's
+  `sfxbnd_<cNNNN>` first, then `commoneffects` and `commoneffects_dlc02`; in Sekiro `commoneffects`, then every map binder,
+  as its bosses start the effects of their map's binder), read once per reader (`EffectCache`). Events that name
   an effect another way (goods and magic rows, throw and foot indexes), and effects on a weapon's dummy polygon, are counted
   in `lost`. `lower-fromsoft-effects` lowers the effects to unplaced systems and the uses to `core.clip_effects` on the clip,
   a spawn each, at the socket `dummy <reference id>` of the model; `Report::clip_uses` counts the uses;

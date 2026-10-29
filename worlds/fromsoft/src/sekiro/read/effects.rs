@@ -80,14 +80,46 @@ struct Loaded {
     resources: Resources,
 }
 
+/// What libraries have read, kept from one to the next: the binders (decoded and indexed, by path) and the effect files found
+/// (by number). A reader that loads many clips keeps one, so the common binder is read once, not once for each clip.
+#[derive(Default)]
+pub struct EffectCache {
+    binders: BTreeMap<String, Arc<Loaded>>,
+    /// The effects found or refused; one that no binder searched holds is not kept (a later library may search more).
+    files: BTreeMap<i32, std::result::Result<Option<Arc<Fxr>>, String>>,
+}
+
 /// The effect binders an area's effects and textures are looked for in.
 pub struct EffectLibrary<'a> {
     archive: &'a Archive,
     decoder: &'a Decoder<'a>,
     game: Game,
     paths: Vec<String>,
-    loaded: Vec<Option<Loaded>>,
-    files: BTreeMap<i32, std::result::Result<Option<Arc<Fxr>>, String>>,
+    cache: EffectCache,
+    /// The numbers none of this library's binders holds.
+    missing: BTreeSet<i32>,
+}
+
+/// The binders to search for the effects the animations of one character's `.tae` member (`c4130.tae`) start: Elden Ring's own
+/// character binder (`sfxbnd_c4130`) first where there is one, then the common ones, and in Sekiro every map binder after them
+/// (a Sekiro boss starts effects of the binder of the map it stands on, and no table of the files links the two). Only the
+/// binders the archive holds are searched ([`EffectLibrary`]).
+pub fn binders_for_clip(game: Game, file: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    let digits = file
+        .strip_prefix('c')
+        .map(|rest| rest.chars().take_while(char::is_ascii_digit).count())
+        .unwrap_or(0);
+    if game == Game::EldenRing && digits == 4 {
+        paths.push(format!("/sfx/sfxbnd_{}.ffxbnd.dcx", &file[..5]));
+    }
+    paths.push("/sfx/sfxbnd_commoneffects.ffxbnd.dcx".to_owned());
+    if game == Game::EldenRing {
+        paths.push("/sfx/sfxbnd_commoneffects_dlc02.ffxbnd.dcx".to_owned());
+    } else {
+        paths.extend((0..100).map(|n| format!("/sfx/sfxbnd_m{n:02}.ffxbnd.dcx")));
+    }
+    paths
 }
 
 /// The binders to search for an area's effects, those the archive holds: the area's own, then the common ones.
@@ -108,56 +140,82 @@ pub fn binders_for_area(game: Game, area: &str) -> Vec<String> {
 
 impl<'a> EffectLibrary<'a> {
     /// A library over the binders `paths` (in search order) that the archive holds.
-    pub fn new(archive: &'a Archive, decoder: &'a Decoder<'a>, game: Game, mut paths: Vec<String>) -> Self {
+    pub fn new(archive: &'a Archive, decoder: &'a Decoder<'a>, game: Game, paths: Vec<String>) -> Self {
+        Self::with_cache(archive, decoder, game, paths, EffectCache::default())
+    }
+
+    /// A library over the binders `paths` that the archive holds, starting from what `cache` already read ([`Self::into_cache`]).
+    pub fn with_cache(
+        archive: &'a Archive,
+        decoder: &'a Decoder<'a>,
+        game: Game,
+        mut paths: Vec<String>,
+        cache: EffectCache,
+    ) -> Self {
         paths.retain(|p| archive.contains(p));
-        let loaded = paths.iter().map(|_| None).collect();
         EffectLibrary {
             archive,
             decoder,
             game,
             paths,
-            loaded,
-            files: BTreeMap::new(),
+            cache,
+            missing: BTreeSet::new(),
         }
     }
 
-    fn load(&mut self, i: usize) -> Result<&Loaded> {
-        if self.loaded[i].is_none() {
-            let bytes = self.archive.read(&self.paths[i], self.decoder)?;
-            let binder = Binder::read(&bytes, self.decoder)?;
-            let effects = binder
-                .files
-                .iter()
-                .enumerate()
-                .filter_map(|(k, f)| Some((fxr::member_id(f.name.as_deref()?)?, k)))
-                .collect();
-            let resources = Resources::index(&binder)?;
-            self.loaded[i] = Some(Loaded {
-                binder,
-                effects,
-                resources,
-            });
+    /// What this library read, to start the next from.
+    pub fn into_cache(self) -> EffectCache {
+        self.cache
+    }
+
+    fn load(&mut self, i: usize) -> Result<Arc<Loaded>> {
+        let path = &self.paths[i];
+        if let Some(loaded) = self.cache.binders.get(path) {
+            return Ok(loaded.clone());
         }
-        Ok(self.loaded[i].as_ref().expect("loaded above"))
+        let bytes = self.archive.read(path, self.decoder)?;
+        let binder = Binder::read(&bytes, self.decoder)?;
+        let effects = binder
+            .files
+            .iter()
+            .enumerate()
+            .filter_map(|(k, f)| Some((fxr::member_id(f.name.as_deref()?)?, k)))
+            .collect();
+        let resources = Resources::index(&binder)?;
+        let loaded = Arc::new(Loaded {
+            binder,
+            effects,
+            resources,
+        });
+        self.cache.binders.insert(path.clone(), loaded.clone());
+        Ok(loaded)
     }
 
     /// The effect `id`: the first binder searched that holds it, `Ok(None)` where none does, `Err` with the reason where the
     /// file does not read.
     pub fn effect(&mut self, id: i32) -> Result<std::result::Result<Option<Arc<Fxr>>, String>> {
-        if !self.files.contains_key(&id) {
-            let mut result = Ok(None);
-            for i in 0..self.paths.len() {
-                let loaded = self.load(i)?;
-                if let Some(&k) = loaded.effects.get(&id) {
-                    result = Fxr::read(&loaded.binder.files[k].bytes)
-                        .map(|f| Some(Arc::new(f)))
-                        .map_err(|e| e.to_string());
-                    break;
-                }
-            }
-            self.files.insert(id, result);
+        if let Some(found) = self.cache.files.get(&id) {
+            return Ok(found.clone());
         }
-        Ok(self.files[&id].clone())
+        if self.missing.contains(&id) {
+            return Ok(Ok(None));
+        }
+        let mut result = Ok(None);
+        for i in 0..self.paths.len() {
+            let loaded = self.load(i)?;
+            if let Some(&k) = loaded.effects.get(&id) {
+                result = Fxr::read(&loaded.binder.files[k].bytes)
+                    .map(|f| Some(Arc::new(f)))
+                    .map_err(|e| e.to_string());
+                break;
+            }
+        }
+        if matches!(result, Ok(None)) {
+            self.missing.insert(id);
+        } else {
+            self.cache.files.insert(id, result.clone());
+        }
+        Ok(result)
     }
 
     /// The decoded image of the texture of `kind` and number `id` in the first binder that holds it.
@@ -452,15 +510,17 @@ pub fn assemble(
     Ok(report)
 }
 
-/// Reads the effects the events of clip `clip` start (its `fromsoft.clip_events` in `world`) from the common effect binders: the
-/// effect files and the textures they name ([`read_files`]), and on the clip a `fromsoft.clip_effect_uses` saying which events
-/// start which effect. A clip with no events, or whose events start no effect, is left as it is.
+/// Reads the effects the events of clip `clip` start (its `fromsoft.clip_events` in `world`) from the effect binders of its
+/// character ([`binders_for_clip`]): the effect files and the textures they name ([`read_files`]), and on the clip a
+/// `fromsoft.clip_effect_uses` saying which events start which effect. A clip with no events, or whose events start no effect,
+/// is left as it is. `cache` keeps the binders read from one clip to the next.
 pub fn read_for_clip(
     archive: &Archive,
     decoder: &Decoder<'_>,
     game: Game,
     world: &mut World,
     clip: Entity,
+    cache: &mut EffectCache,
 ) -> Result<Report> {
     let mut report = Report {
         asked: true,
@@ -473,10 +533,13 @@ pub fn read_for_clip(
     if found.uses.is_empty() && found.lost.is_empty() {
         return Ok(report);
     }
+    let binders = binders_for_clip(game, &source.file);
     let roots: Vec<i32> = found.uses.iter().map(|u| u.effect).collect();
     if !roots.is_empty() {
-        let mut library = EffectLibrary::new(archive, decoder, game, binders_for_area(game, ""));
-        read_files(&mut library, roots, world, &mut report)?;
+        let mut library = EffectLibrary::with_cache(archive, decoder, game, binders, std::mem::take(cache));
+        let read = read_files(&mut library, roots, world, &mut report);
+        *cache = library.into_cache();
+        read?;
     }
     report.clip_uses = found.uses.len();
     world.insert(clip, found);
@@ -513,4 +576,37 @@ pub fn read_effect(
         .map(|(e, _)| e)
         .find(|e| !before.contains(e));
     Ok((report, placed))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The binders searched for a character's clip effects, by the names of the install's binders: Elden Ring's own
+    /// `sfxbnd_c4130` before the common ones (and none for a member that is not a character's), Sekiro's common binder before
+    /// every map binder `sfxbnd_m00` to `sfxbnd_m99`.
+    #[test]
+    fn the_binders_of_a_characters_clip_effects_follow_the_games_naming() {
+        assert_eq!(
+            binders_for_clip(Game::EldenRing, "c4130.tae"),
+            [
+                "/sfx/sfxbnd_c4130.ffxbnd.dcx",
+                "/sfx/sfxbnd_commoneffects.ffxbnd.dcx",
+                "/sfx/sfxbnd_commoneffects_dlc02.ffxbnd.dcx",
+            ]
+        );
+        assert_eq!(
+            binders_for_clip(Game::EldenRing, "c0000_a00.tae")[0],
+            "/sfx/sfxbnd_c0000.ffxbnd.dcx"
+        );
+        assert_eq!(
+            binders_for_clip(Game::EldenRing, "").first().map(String::as_str),
+            Some("/sfx/sfxbnd_commoneffects.ffxbnd.dcx")
+        );
+        let sekiro = binders_for_clip(Game::Sekiro, "c1010.tae");
+        assert_eq!(sekiro.len(), 101);
+        assert_eq!(sekiro[0], "/sfx/sfxbnd_commoneffects.ffxbnd.dcx");
+        assert_eq!(sekiro[1], "/sfx/sfxbnd_m00.ffxbnd.dcx");
+        assert_eq!(sekiro[100], "/sfx/sfxbnd_m99.ffxbnd.dcx");
+    }
 }

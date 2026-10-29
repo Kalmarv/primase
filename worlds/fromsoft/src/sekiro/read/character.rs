@@ -244,7 +244,8 @@ pub struct CharacterOptions {
     /// it is named on the form's report as not read.
     pub form_animations: bool,
     /// Also read, as each clip loads, the effects its events start ([`super::effects::read_for_clip`]): their files and
-    /// textures from the common effect binders, and a `fromsoft.clip_effect_uses` on the clip.
+    /// textures from the effect binders of the character ([`super::effects::binders_for_clip`]), and a
+    /// `fromsoft.clip_effect_uses` on the clip.
     pub clip_effects: bool,
 }
 
@@ -1246,6 +1247,8 @@ pub struct CharacterReader<'a> {
     /// Eager adapters reserve the caller's existing ids through core's allocator.
     first_index: u32,
     last_load_reports: BTreeMap<Entity, AnimationReport>,
+    /// The effect binders read for clip effects, kept from one clip load to the next.
+    effect_cache: super::effects::EffectCache,
 }
 
 /// What a [`CharacterReader`] reads.
@@ -1269,6 +1272,7 @@ impl<'a> CharacterReader<'a> {
             clips: animation::ClipReader::default(),
             first_index: 0,
             last_load_reports: BTreeMap::new(),
+            effect_cache: Default::default(),
         }
     }
 
@@ -1332,6 +1336,7 @@ impl<'a> CharacterReader<'a> {
             clips: animation::ClipReader::default(),
             first_index: 0,
             last_load_reports: BTreeMap::new(),
+            effect_cache: Default::default(),
         }
     }
 }
@@ -1509,6 +1514,7 @@ impl Reader for CharacterReader<'_> {
                     self.install.game,
                     &mut part,
                     entity,
+                    &mut self.effect_cache,
                 )?;
                 report.push((
                     "fromsoft clip effects".into(),
