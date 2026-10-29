@@ -711,7 +711,6 @@ mod tests {
                 Some(SkipClass::LightVolume) => "light".to_owned(),
                 Some(SkipClass::Shadow) => "shadow".to_owned(),
                 Some(SkipClass::Billboard) => "billboard".to_owned(),
-                Some(other) => panic!("{shader}: {other:?}"),
                 None => m.class,
             }
         };

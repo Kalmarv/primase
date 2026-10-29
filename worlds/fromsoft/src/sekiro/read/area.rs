@@ -1594,7 +1594,7 @@ pub fn read_game_area_staged(
         };
         let (prototype, far) = proto_entities[&key];
         let e = world.spawn();
-        let condition = if in_sky {
+        let condition = if *in_sky {
             None
         } else {
             let event = states.as_mut().and_then(|s| s.clause(part));
