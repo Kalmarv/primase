@@ -4,6 +4,7 @@
 
 mod components;
 pub mod game;
+mod light_records;
 pub mod materials;
 mod passes;
 mod pose;

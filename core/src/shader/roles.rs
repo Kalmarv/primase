@@ -253,6 +253,12 @@ pub enum FrameParameter {
     /// How many records the frame's light table of this kind holds ([`BufferSource::Lights`]): one unsigned 32-bit
     /// integer, the number of lights the consumer packed ([`super::PackedLights::lights`]).
     LightCount(super::LightTableKind),
+    /// The side of a light-list tile in pixels ([`BufferSource::LightLists`]): one unsigned 32-bit integer, the size the
+    /// consumer packed its lists for.
+    LightTileSize,
+    /// How many light-list tiles a row of the screen holds: one unsigned 32-bit integer, the render target's width over
+    /// [`FrameParameter::LightTileSize`], rounded up.
+    LightTilesPerRow,
 }
 /// What a constant of a buffer stands for.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -405,6 +411,9 @@ pub enum BufferSource {
     /// The scene's lights of one kind, one record each in the table's layout, which the consumer packs from the world's
     /// `core.light`s for the frame's view ([`super::LightTable::pack`]).
     Lights(super::LightTable),
+    /// One of the two buffers of the frame's per-tile light lists, which say which lights a program visits at a pixel;
+    /// the consumer packs both with [`super::pack_light_lists`] from the lights it packed into the stage's light tables.
+    LightLists(super::LightListPart),
 }
 /// A table of the draw's data a program reads from a buffer.
 #[derive(Clone, Debug, PartialEq, Serialize)]

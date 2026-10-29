@@ -19,8 +19,8 @@ use iridia_interface::{
 use primase_core::Entity;
 use primase_core::shader::state_lines;
 use primase_core::shader::{
-    Attribute, ConstantBinding, ConstantRole, FrameParameter, FrameTexture, InputBinding, InputRole,
-    LaneStream, ObjectParameter, OutputBinding, OutputRole, ViewParameter,
+    Attribute, BufferBinding, BufferSource, ConstantBinding, ConstantRole, FrameParameter, FrameTexture,
+    InputBinding, InputRole, LaneStream, ObjectParameter, OutputBinding, OutputRole, ViewParameter,
 };
 use primase_core::{shader::Shader, shader::StageBinding, shader::TextureBinding, shader::TextureSource};
 use std::collections::{BTreeMap, BTreeSet};
@@ -598,6 +598,12 @@ pub fn resolve(
         4,
         ConstantRole::Frame(FrameParameter::ColourSlot),
     )?;
+    // where a pixel's light-list tile is (Sekiro's forward materials)
+    for name in ["FC_LightTile_Width", "FC_LightTile_NumCellX"] {
+        if let Some(parameter) = crate::light_records::frame_constant(game, name) {
+            constant(name, 0, 4, ConstantRole::Frame(parameter))?;
+        }
+    }
     // the dither and camera-fade fields an alpha-tested program reads from the per-draw buffers (cbMatDynParam and
     // cbModelParam, all 102 `_[A]` programs): the engine's per-draw state, never the material's (the MTD's
     // g_GX_DisableCameraFade only allows the fade). Each is a role; what a consumer freezes them to is its own
@@ -894,11 +900,45 @@ pub fn resolve(
             inputs,
             constants,
             textures: bindings,
+            buffers: light_buffers(interface, game),
             outputs,
             ..StageBinding::new(Stage::Pixel, entity)
         },
         policies,
     })
+}
+
+/// The buffers of a program that reads the scene's lights (Sekiro's forward materials): its light tables and per-tile
+/// light lists ([`crate::light_records`]), and every other buffer of it unknown, as a stage that states one buffer
+/// states all; none for a program that reads no light buffer.
+fn light_buffers(interface: &Interface, game: fromsoft_formats::Game) -> Vec<BufferBinding> {
+    let mut lit = false;
+    let buffers: Vec<BufferBinding> = interface
+        .resources
+        .iter()
+        .filter_map(|r| {
+            let ResourceKind::Buffer(kind) = &r.kind else {
+                return None;
+            };
+            let source = match kind {
+                iridia::BufferKind::Structured { stride } => {
+                    crate::light_records::source(game, &r.provenance.name, *stride)
+                }
+                _ => None,
+            };
+            lit |= source.is_some();
+            Some(BufferBinding {
+                resource: r.id,
+                source: source.unwrap_or_else(|| BufferSource::Unknown {
+                    why: format!(
+                        "{}: a buffer of the renderer's own a material binding does not state",
+                        r.provenance.name
+                    ),
+                }),
+            })
+        })
+        .collect();
+    if lit { buffers } else { Vec::new() }
 }
 
 /// The outputs' roles: of a G-buffer program the game's G-buffer layout ([`fromsoft_formats::Game::gbuffer`]), the lanes of each

@@ -347,6 +347,270 @@ impl LightTable {
     }
 }
 
+/// Where a value lies in a light list's record: `bits` bits from bit `shift` (0 the lowest) of the little-endian 32-bit
+/// unsigned word at byte `offset`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct ListBits {
+    pub offset: u32,
+    pub shift: u8,
+    pub bits: u8,
+}
+
+impl ListBits {
+    /// The largest value the bits hold.
+    pub fn max(&self) -> u32 {
+        if self.bits >= 32 {
+            u32::MAX
+        } else {
+            (1u32 << self.bits) - 1
+        }
+    }
+
+    fn mask(&self) -> u32 {
+        self.max() << self.shift
+    }
+
+    fn verify(&self, stride: u32, what: &str) -> Result<(), String> {
+        let end = u32::from(self.shift) + u32::from(self.bits);
+        if self.bits == 0 || end > 32 || !self.offset.is_multiple_of(4) || self.offset + 4 > stride {
+            return Err(format!(
+                "{what}: bits {}..{end} of the word at {} are not inside a {stride}-byte record",
+                self.shift, self.offset
+            ));
+        }
+        Ok(())
+    }
+
+    fn write(&self, record: &mut [u8], value: u32) {
+        let at = self.offset as usize;
+        let mut word = u32::from_le_bytes([record[at], record[at + 1], record[at + 2], record[at + 3]]);
+        word = (word & !self.mask()) | ((value & self.max()) << self.shift);
+        record[at..at + 4].copy_from_slice(&word.to_le_bytes());
+    }
+}
+
+/// A value of a light list's record the packing writes as stated: what it means to the source's programs.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ListConstant {
+    pub bits: ListBits,
+    pub value: u32,
+    pub why: String,
+}
+
+/// Bits of a light list's record the source's programs read that the packing cannot fill: the source's name, and why.
+/// The packing writes 0.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ListUnknown {
+    pub bits: ListBits,
+    pub name: String,
+    pub why: String,
+}
+
+/// One of the two buffers of the frame's per-tile light lists ([`super::BufferSource::LightLists`]): which lights a
+/// program visits at a pixel. The screen is cut into squares of [`super::FrameParameter::LightTileSize`] pixels, tile
+/// `(x, y)` (from the top left, `x = pixel x / size`) being record `x + y * LightTilesPerRow` of the lookup; the
+/// lookup's record says where the tile's entries start in the index list and how many lights of each kind follow, the
+/// kinds one after the other in the lookup's `counts` order; each entry names a light's record in the kind's light table
+/// ([`super::BufferSource::Lights`]) and the depth slices of the tile its volume reaches.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LightListPart {
+    Lookup(LightLookup),
+    Indices(LightIndices),
+}
+
+/// The lookup: one record of `stride` bytes per tile, at most `capacity`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct LightLookup {
+    pub stride: u32,
+    pub capacity: u32,
+    /// The tile's first entry in the index list.
+    pub first: ListBits,
+    /// How many lights of each kind the tile lists, in the order their entries follow each other.
+    pub counts: Vec<(LightTableKind, ListBits)>,
+    pub constants: Vec<ListConstant>,
+    pub unknown: Vec<ListUnknown>,
+}
+
+/// The index list: entries of `stride` bytes, at most `capacity`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct LightIndices {
+    pub stride: u32,
+    pub capacity: u32,
+    /// The light's record in its kind's table.
+    pub index: ListBits,
+    /// One bit per depth slice of the tile (bit k of the value is slice k): a program skips the entry at a pixel whose
+    /// slice's bit is clear.
+    pub slices: ListBits,
+    pub constants: Vec<ListConstant>,
+    pub unknown: Vec<ListUnknown>,
+}
+
+/// The frame's light lists packed: the lookup's records and the index list's entries, little-endian.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PackedLightLists {
+    pub lookup: Vec<u8>,
+    pub indices: Vec<u8>,
+    /// The records' bits the packing wrote 0 into ([`ListUnknown`]), by the source's name.
+    pub unknown: Vec<String>,
+}
+
+/// Fields of a record: whole words inside it, no two overlapping, constants that fit and say why, unknowns named.
+fn verify_record(
+    stride: u32,
+    capacity: u32,
+    fields: &[(ListBits, &str)],
+    constants: &[ListConstant],
+    unknown: &[ListUnknown],
+    what: &str,
+) -> Result<(), String> {
+    if stride == 0 || !stride.is_multiple_of(4) {
+        return Err(format!(
+            "a light {what} record of {stride} bytes, not whole words"
+        ));
+    }
+    if capacity == 0 {
+        return Err(format!("a light {what} that holds no records"));
+    }
+    let mut all: Vec<(ListBits, String)> = fields.iter().map(|(b, n)| (*b, (*n).to_owned())).collect();
+    for c in constants {
+        if c.why.trim().is_empty() || c.value > c.bits.max() {
+            return Err(format!(
+                "light {what} constant {} does not fit its bits or says not why",
+                c.value
+            ));
+        }
+        all.push((c.bits, format!("constant {}", c.value)));
+    }
+    for u in unknown {
+        if u.name.trim().is_empty() || u.why.trim().is_empty() {
+            return Err(format!(
+                "an unknown light {what} field has no name or says not why"
+            ));
+        }
+        all.push((u.bits, u.name.clone()));
+    }
+    for (i, (b, name)) in all.iter().enumerate() {
+        b.verify(stride, &format!("light {what} {name}"))?;
+        if let Some((_, other)) = all[..i]
+            .iter()
+            .find(|(o, _)| o.offset == b.offset && o.mask() & b.mask() != 0)
+        {
+            return Err(format!("light {what} fields {other} and {name} overlap"));
+        }
+    }
+    Ok(())
+}
+
+impl LightListPart {
+    /// The part agrees with itself and its buffer (`element_stride` the structured buffer's element size, `None` for
+    /// another kind of buffer): whole-word records of a capacity, every field inside one, none overlapping, the lookup
+    /// counting each kind once.
+    pub fn verify(&self, element_stride: Option<u32>) -> Result<(), String> {
+        let stride = match self {
+            LightListPart::Lookup(l) => {
+                let mut fields = vec![(l.first, "first entry")];
+                let mut kinds = Vec::new();
+                for (kind, bits) in &l.counts {
+                    if kinds.contains(kind) {
+                        return Err(format!("a light lookup that counts {kind:?} lights twice"));
+                    }
+                    kinds.push(*kind);
+                    fields.push((*bits, "count"));
+                }
+                if l.counts.is_empty() {
+                    return Err("a light lookup that counts no lights".into());
+                }
+                verify_record(l.stride, l.capacity, &fields, &l.constants, &l.unknown, "lookup")?;
+                l.stride
+            }
+            LightListPart::Indices(x) => {
+                verify_record(
+                    x.stride,
+                    x.capacity,
+                    &[(x.index, "index"), (x.slices, "slices")],
+                    &x.constants,
+                    &x.unknown,
+                    "index list",
+                )?;
+                x.stride
+            }
+        };
+        match element_stride {
+            Some(element) if element != stride => Err(format!(
+                "light list records of {stride} bytes in a buffer of {element}-byte elements"
+            )),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// The frame's light lists listing every light in every tile and every depth slice: each tile's record starts at entry
+/// 0 and counts every packed light of each kind (`counts`: the number of records the consumer packed in each kind's
+/// table), and the index list holds each kind's records in order, every slice bit set. A light's own record still
+/// bounds what it lights (its range), so a program shades as the source's culled lists would, visiting more entries.
+/// `tiles` is how many tiles the frame has (tiles per row times rows). Refused: a part that does not verify, more tiles
+/// or entries than the buffers hold, and a count or index its bits cannot hold.
+pub fn pack_light_lists(
+    lookup: &LightLookup,
+    indices: &LightIndices,
+    counts: &[(LightTableKind, u32)],
+    tiles: u32,
+) -> Result<PackedLightLists, String> {
+    LightListPart::Lookup(lookup.clone()).verify(None)?;
+    LightListPart::Indices(indices.clone()).verify(None)?;
+    if tiles == 0 || tiles > lookup.capacity {
+        return Err(format!(
+            "{tiles} tiles for a light lookup of {} records",
+            lookup.capacity
+        ));
+    }
+    let count_of =
+        |kind: LightTableKind| -> u32 { counts.iter().filter(|(k, _)| *k == kind).map(|(_, n)| *n).sum() };
+    let mut entries = Vec::new();
+    for (kind, bits) in &lookup.counts {
+        let n = count_of(*kind);
+        if n > bits.max() || n.saturating_sub(1) > indices.index.max() {
+            return Err(format!("{n} {kind:?} lights do not fit the light lists' bits"));
+        }
+        entries.extend(0..n);
+    }
+    if entries.len() as u64 > u64::from(indices.capacity) {
+        return Err(format!(
+            "{} light list entries for an index list of {}",
+            entries.len(),
+            indices.capacity
+        ));
+    }
+    let mut out = PackedLightLists {
+        lookup: vec![0; tiles as usize * lookup.stride as usize],
+        indices: vec![0; entries.len() * indices.stride as usize],
+        unknown: lookup
+            .unknown
+            .iter()
+            .chain(&indices.unknown)
+            .map(|u| u.name.clone())
+            .collect(),
+    };
+    for record in out.lookup.chunks_exact_mut(lookup.stride as usize) {
+        lookup.first.write(record, 0);
+        for (kind, bits) in &lookup.counts {
+            bits.write(record, count_of(*kind));
+        }
+        for c in &lookup.constants {
+            c.bits.write(record, c.value);
+        }
+    }
+    for (record, index) in out.indices.chunks_exact_mut(indices.stride as usize).zip(entries) {
+        indices.index.write(record, index);
+        indices.slices.write(record, indices.slices.max());
+        for c in &indices.constants {
+            c.bits.write(record, c.value);
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -564,5 +828,90 @@ mod tests {
             .verify(None)
             .is_err()
         );
+    }
+
+    fn bits(offset: u32, shift: u8, bits: u8) -> ListBits {
+        ListBits { offset, shift, bits }
+    }
+
+    /// A lookup of 12-byte records (the first entry in word 0, the point and spot counts in the low and high halves of
+    /// word 1, word 2 unknown) and an index list of 4-byte entries (the index in the low 16 bits, 15 slice bits from bit
+    /// 16, bit 31 a flag the source's programs require set).
+    fn lists() -> (LightLookup, LightIndices) {
+        (
+            LightLookup {
+                stride: 12,
+                capacity: 4,
+                first: bits(0, 0, 32),
+                counts: vec![
+                    (LightTableKind::Point, bits(4, 0, 16)),
+                    (LightTableKind::Spot, bits(4, 16, 16)),
+                ],
+                constants: Vec::new(),
+                unknown: vec![ListUnknown {
+                    bits: bits(8, 0, 32),
+                    name: "word 2".into(),
+                    why: "read only by a debug view".into(),
+                }],
+            },
+            LightIndices {
+                stride: 4,
+                capacity: 8,
+                index: bits(0, 0, 16),
+                slices: bits(0, 16, 15),
+                constants: vec![ListConstant {
+                    bits: bits(0, 31, 1),
+                    value: 1,
+                    why: "set for a light the tile pass lights".into(),
+                }],
+                unknown: Vec::new(),
+            },
+        )
+    }
+
+    fn words(bytes: &[u8]) -> Vec<u32> {
+        bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|w| u32::from_le_bytes(*w))
+            .collect()
+    }
+
+    /// Two point lights and a spot in three tiles: every tile starts at entry 0 and counts 2 points and 1 spot; the
+    /// entries are the points' records 0 and 1, then the spot's record 0, each with every slice bit and the flag set.
+    #[test]
+    fn every_light_is_listed_in_every_tile_and_slice() {
+        let (lookup, indices) = lists();
+        let packed = pack_light_lists(
+            &lookup,
+            &indices,
+            &[(LightTableKind::Spot, 1), (LightTableKind::Point, 2)],
+            3,
+        )
+        .unwrap();
+        assert_eq!(
+            words(&packed.lookup),
+            [0, 0x0001_0002, 0, 0, 0x0001_0002, 0, 0, 0x0001_0002, 0]
+        );
+        assert_eq!(words(&packed.indices), [0xffff_0000, 0xffff_0001, 0xffff_0000]);
+        assert_eq!(packed.unknown, ["word 2"]);
+    }
+
+    /// Refused: more tiles or entries than the buffers hold, a count its bits cannot hold, overlapping fields, a part
+    /// whose records are not its buffer's elements.
+    #[test]
+    fn light_lists_refuse_what_they_cannot_hold() {
+        let (lookup, indices) = lists();
+        assert!(pack_light_lists(&lookup, &indices, &[(LightTableKind::Point, 1)], 5).is_err());
+        assert!(pack_light_lists(&lookup, &indices, &[(LightTableKind::Point, 9)], 1).is_err());
+        let mut narrow = lookup.clone();
+        narrow.counts[0].1 = bits(4, 0, 2);
+        assert!(pack_light_lists(&narrow, &indices, &[(LightTableKind::Point, 4)], 1).is_err());
+        let mut overlap = indices.clone();
+        overlap.slices = bits(0, 15, 15);
+        assert!(LightListPart::Indices(overlap).verify(Some(4)).is_err());
+        assert!(LightListPart::Lookup(lookup).verify(Some(16)).is_err());
+        assert_eq!(LightListPart::Indices(indices).verify(Some(4)), Ok(()));
     }
 }

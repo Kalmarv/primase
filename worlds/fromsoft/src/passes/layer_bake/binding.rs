@@ -186,6 +186,15 @@ const ALPHA_TEST_OFF: f32 = -100.;
 /// never set in 10,244 of the draws (NaN or infinity) and other numbers in the rest, read only under the flag.
 pub const FADE_POLICY: &str = "dither and camera fades off in the bake (the flags and their parameters frozen to zero): the engine sets them per draw";
 
+/// The policy a consumer counts when it freezes the scene's lights out of a static material bake: no light is packed
+/// (each light count frozen to zero), and the light-list tile is frozen to [`NO_LIGHTS_TILE_SIZE`] pixels, one per row
+/// (a pixel's tile divides by the size, so it must not be zero); the lists hold nothing, so no tile names a light.
+pub const NO_LIGHTS_POLICY: &str = "scene lights off in the bake: light counts frozen to zero, the light-list tile to 32 pixels and one per row, the lists empty";
+
+/// The light-list tile size a static bake freezes ([`NO_LIGHTS_POLICY`]): Sekiro's own (`FC_LightTile_Width`, the
+/// recorded frames' 60 by 34 tiles over 1920 by 1080 pixels).
+pub const NO_LIGHTS_TILE_SIZE: u32 = 32;
+
 /// The policy a bake counts for an alpha-tested material (its `_Gbuf_[A]` program discards against `FC_AlphaRef`, bound as
 /// the [`ConstantRole::AlphaReference`] role): the test is off in the bake, every texel kept, and the cut carried as the
 /// material's mask at its reference (`crate::materials::alpha_cut`), the albedo's alpha sampled beside the program.
@@ -348,6 +357,18 @@ pub(crate) fn frozen_words(
         ConstantRole::Frame(FrameParameter::TimeOfDay) => {
             policies.insert("time of day left at frozen zero".into(), 1);
             return Ok(None);
+        }
+        ConstantRole::Frame(FrameParameter::LightCount(_)) => {
+            policies.insert(NO_LIGHTS_POLICY.into(), 1);
+            vec![0]
+        }
+        ConstantRole::Frame(FrameParameter::LightTileSize) => {
+            policies.insert(NO_LIGHTS_POLICY.into(), 1);
+            vec![NO_LIGHTS_TILE_SIZE]
+        }
+        ConstantRole::Frame(FrameParameter::LightTilesPerRow) => {
+            policies.insert(NO_LIGHTS_POLICY.into(), 1);
+            vec![1]
         }
         ConstantRole::Unknown { why } => {
             *policies.entry(why.clone()).or_default() += 1;

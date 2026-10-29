@@ -17,10 +17,12 @@
 //! Everything else is `Unknown` with what was examined, or `Missing` (the renderer's own textures: noise, look-up tables,
 //! the textures a frame keeps from an earlier one that no recorded frame writes). The scene's draws are steps of a
 //! bucket, drawn by the materials' own bindings; the effects are the effects slot, in the places the frames draw them.
-//! Sekiro's light records are `core` light tables the consumer packs from the scene's lights ([`lights`]), and their
-//! counts are light-count constants.
-mod lights;
+//! Sekiro's light records are `core` light tables the consumer packs from the scene's lights
+//! ([`crate::light_records`]), and their counts and tile constants frame parameters; the per-tile light lists a step
+//! reads are the frame's buffers the light-organize step writes.
 mod table;
+
+use crate::light_records as lights;
 
 use crate::game::Shading;
 use crate::invalid;
@@ -80,6 +82,9 @@ pub struct Report {
     /// does not give (one per field per slot).
     pub light_tables: usize,
     pub unknown_light_fields: usize,
+    /// Buffer slots bound as per-tile light lists the consumer packs (none where the frames show the organize step
+    /// writing them).
+    pub light_lists: usize,
     /// Constants with no core role (the renderer's own parameters), and those with one.
     pub unknown_constants: usize,
     pub constants: usize,
@@ -186,37 +191,13 @@ impl Report {
     }
 }
 
-/// A program of the graph: its `core.shader` entity, interface, value graph (or why there is none), which sampler
-/// each of its textures is read through, and the names its own reflection gives its shader-resource registers.
+/// A program of the graph: its `core.shader` entity, interface, value graph (or why there is none) and which sampler
+/// each of its textures is read through.
 struct Program {
     entity: primase_core::Entity,
     interface: Interface,
     graph: std::result::Result<ProgramGraph, String>,
     pairs: SamplerPairs,
-    resource_names: BTreeMap<u32, String>,
-}
-
-/// The names a DXBC program's `RDEF` part gives its shader-resource registers (texture buffers, textures, structured
-/// and byte-address buffers), by register; empty for a DXIL program and a DXBC one without the part. iridia's lift
-/// names a compute program's resources by register only (it reads the part of pixel and vertex programs), so the
-/// graph takes a buffer's name from here where the part has one.
-fn resource_names(
-    format: iri::ShaderFormat,
-    bytes: &[u8],
-) -> std::result::Result<BTreeMap<u32, String>, String> {
-    if format != iri::ShaderFormat::Dxbc {
-        return Ok(BTreeMap::new());
-    }
-    let Some(rdef) = dxbc_reader::rdef(bytes).map_err(|e| e.to_string())? else {
-        return Ok(BTreeMap::new());
-    };
-    // D3D_SHADER_INPUT_TYPE: 1 tbuffer, 2 texture, 5 structured, 7 byte-address (the shader-resource classes)
-    Ok(rdef
-        .bindings
-        .into_iter()
-        .filter(|b| matches!(b.kind, 1 | 2 | 5 | 7) && b.count == 1)
-        .map(|b| (b.register, b.name))
-        .collect())
 }
 
 /// Read the game's render graph: its programs from the install's engine binders, its steps from the game's table, as the
@@ -274,8 +255,6 @@ pub(crate) fn read(
                 )
             })?;
             report.untraced_reads = report.untraced_reads.saturating_add(pairs.untraced);
-            let resource_names = resource_names(game.shader_format(), &file.bytes)
-                .map_err(|e| invalid(FORMAT, 0, format!("{full}: its reflection: {e}")))?;
             let entity = world.spawn();
             world.insert(entity, Name(full.clone()));
             world.insert(
@@ -293,7 +272,6 @@ pub(crate) fn read(
                     interface,
                     graph,
                     pairs,
-                    resource_names,
                 },
             );
         }
@@ -688,7 +666,9 @@ fn render_state(s: &table::State, targets: usize) -> std::result::Result<iri::Re
 /// pre-exposure. `FC_ScreenSize` is its own (two roles). Every other constant is unknown, with its buffer's name.
 fn constant_role(name: &str) -> Option<ConstantRole> {
     Some(match name {
-        "FC_MatrixView" => ConstantRole::View(ViewParameter::View),
+        // cbLightAccParam's world-to-view matrix (three lines): the light-organize program turns each light's
+        // position by it before testing it against the tiles
+        "FC_MatrixView" | "g_ViewMatrix" => ConstantRole::View(ViewParameter::View),
         "FC_MatrixProj" => ConstantRole::View(ViewParameter::Projection),
         "FC_MatrixInvView" => ConstantRole::View(ViewParameter::InverseView),
         "FC_MatrixInvProj" => ConstantRole::View(ViewParameter::InverseProjection),
@@ -1041,15 +1021,27 @@ impl Lower<'_> {
                     });
                 }
                 ResourceKind::Buffer(kind) => {
-                    let light = match kind {
-                        iri::BufferKind::Structured { stride } => {
-                            let name = p.resource_names.get(&d.register).filter(|_| d.space == 0);
-                            lights::table(self.game, name.unwrap_or(&r.provenance.name), *stride)
+                    // the scene's lights where the frames bind no buffer of their own (the light lists are the
+                    // organize step's)
+                    let light = match (kind, slot) {
+                        (
+                            _,
+                            Some(table::Slot {
+                                graph_buffer: Some(_),
+                                ..
+                            }),
+                        ) => None,
+                        (iri::BufferKind::Structured { stride }, _) => {
+                            lights::source(self.game, &r.provenance.name, *stride)
                         }
                         _ => None,
                     };
                     let source = match (light, slot) {
-                        (Some(table), _) => {
+                        (Some(BufferSource::LightLists(part)), _) => {
+                            report.light_lists = report.light_lists.saturating_add(1);
+                            BufferSource::LightLists(part)
+                        }
+                        (Some(BufferSource::Lights(table)), _) => {
                             report.light_tables = report.light_tables.saturating_add(1);
                             let unknown = table
                                 .fields
@@ -1059,6 +1051,7 @@ impl Lower<'_> {
                             report.unknown_light_fields = report.unknown_light_fields.saturating_add(unknown);
                             BufferSource::Lights(table)
                         }
+                        (Some(other), _) => other,
                         (None, slot) => match slot {
                             Some(table::Slot {
                                 graph_buffer: Some(b),
@@ -1204,9 +1197,9 @@ impl Lower<'_> {
                     report.constants = report.constants.saturating_add(1);
                     continue;
                 }
-                let counted = lights::count(self.game, &c.name)
+                let counted = lights::frame_constant(self.game, &c.name)
                     .filter(|_| size == 4)
-                    .map(|kind| ConstantRole::Frame(FrameParameter::LightCount(kind)));
+                    .map(ConstantRole::Frame);
                 let role = counted.or_else(|| constant_role(&c.name)).unwrap_or_else(|| {
                     report.unknown_constants = report.unknown_constants.saturating_add(1);
                     ConstantRole::Unknown {

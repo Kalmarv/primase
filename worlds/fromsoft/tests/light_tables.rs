@@ -16,15 +16,23 @@
 //! plane of 15 and a `core.light` none; its specular is its bank's own. The fields only the shadowed program variants
 //! read are 0 in every recorded record: the frames hold no shadowed light, so those stay unknown.
 //!
+//! The organize step's own constants carry the counts and the view where the frames hold them: `g_lightCount` (+272) and
+//! `g_spotLightCount` (+280) as the light counts, `g_ViewMatrix` (+64) as the view, its lines unshown as not read
+//! (fxc's reflection marks it unused in this program: the records hold view-space positions already).
+//!
 //! Needs `installs.sekiro`, `tools.oodle6` and `oracles.scripts.sekiro/frames`.
 #![allow(clippy::unwrap_used)]
 mod inputs;
 
 use fromsoft_formats::{Binder, dcx::Decoder};
 use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
+use iridia_interface::{MatrixLines, Unshown};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::render_graph::{PassWork, RenderGraph, RenderPass};
-use primase_core::shader::{BufferSource, LightTable, LightTableKind, LightValue};
+use primase_core::shader::{
+    BufferSource, ConstantBinding, ConstantRole, FrameParameter, LightIndices, LightListPart, LightLookup, LightTable,
+    LightTableKind, LightValue, ListBits, ShaderBinding, ViewParameter, pack_light_lists,
+};
 use primase_core::{Name, World};
 use primase_fromsoft::sekiro;
 use std::collections::BTreeMap;
@@ -47,12 +55,28 @@ fn floats(bytes: &[u8]) -> Vec<f32> {
         .collect()
 }
 
-/// One frame's organize dispatch as the capture recorded it: its world-to-view matrix (three rows of four) and its
-/// point and spot records, as floats.
+/// One frame's organize dispatch as the capture recorded it: its world-to-view matrix (three rows of four), its point
+/// and spot records as floats, and the lists it wrote where the capture read them back after it.
 struct Recorded {
     view: [[f32; 4]; 3],
     points: Vec<Vec<f32>>,
     spots: Vec<Vec<f32>>,
+    lists: Option<RecordedLists>,
+}
+
+/// The organize dispatch's outputs as read back after it: the index list (u0), the lookup (u1) and the 4-byte count of
+/// entries it handed out (u2, which the frame zeroes before the dispatch).
+struct RecordedLists {
+    indices: Vec<u8>,
+    lookup: Vec<u8>,
+    entries: u32,
+}
+
+/// The value at `bits` of a record.
+fn value(record: &[u8], bits: ListBits) -> u32 {
+    let at = bits.offset as usize;
+    let word = u32::from_le_bytes([record[at], record[at + 1], record[at + 2], record[at + 3]]);
+    (word >> bits.shift) & bits.max()
 }
 
 /// The records of frame `frame` (`<run> frame_<n>`): the dispatch of the program hashed `organize`, its `cb0` blob's
@@ -65,7 +89,8 @@ fn recorded(
     let (run, n) = frame.split_once(' ').ok_or("a frame name with no run")?;
     let cap = root.join(run).join("cap");
     let file = std::fs::File::open(cap.join(n).join("events.jsonl"))?;
-    for line in std::io::BufReader::new(file).lines() {
+    let mut lines = std::io::BufReader::new(file).lines();
+    while let Some(line) = lines.next() {
         let Ok(e) = serde_json::from_str::<serde_json::Value>(&line?) else {
             continue;
         };
@@ -94,17 +119,95 @@ fn recorded(
             blob(&s["blob"])
         };
         let (pb, sb) = (srv(19)?, srv(20)?);
+        // the outputs read back right after the dispatch, by resource
+        let uav = |slot: u64| -> Option<String> {
+            cs["uav"]
+                .as_array()?
+                .iter()
+                .find(|u| u["slot"].as_u64() == Some(slot))?["res"]
+                .as_str()
+                .map(str::to_owned)
+        };
+        let wanted: Vec<Option<String>> = (0..3).map(uav).collect();
+        let mut read: [Option<Vec<u8>>; 3] = [None, None, None];
+        for line in lines.by_ref().take(16) {
+            let Ok(r) = serde_json::from_str::<serde_json::Value>(&line?) else {
+                continue;
+            };
+            if r["ev"] != "readback" {
+                continue;
+            }
+            for (k, want) in wanted.iter().enumerate() {
+                if want.is_some() && r["src"].as_str() == want.as_deref() {
+                    // a readback the capture logged but did not keep (sek1's frames keep none) leaves the lists unread
+                    let file = r["file"].as_str().ok_or("a readback with no file")?;
+                    read[k] = std::fs::read(cap.join(n).join(file)).ok();
+                }
+            }
+        }
+        let lists = match read {
+            [Some(indices), Some(lookup), Some(count)] if count.len() == 4 => Some(RecordedLists {
+                indices,
+                lookup,
+                entries: u32::from_le_bytes([count[0], count[1], count[2], count[3]]),
+            }),
+            _ => None,
+        };
         return Ok(Recorded {
             view,
             points: (0..points).map(|i| floats(&pb[208 * i..208 * (i + 1)])).collect(),
             spots: (0..spots).map(|i| floats(&sb[192 * i..192 * (i + 1)])).collect(),
+            lists,
         });
     }
     Err(format!("{frame}: no GXLightOrganize16 dispatch").into())
 }
 
-/// The light tables the graph's `GXLightOrganize16` step binds, by kind.
-fn organize_tables(passes: &[RenderPass], world: &World, out: &mut BTreeMap<&'static str, LightTable>) {
+/// The recorded lists of `frame`, read with the forward materials' parts: every tile's entries lie inside the index list
+/// and name a record of their kind ([`Recorded`]'s counts), the tiles' counts sum to the entries the organize program
+/// handed out, every entry's slices and flag are printed, and how many of the frame's lights the game's lists leave out
+/// of a tile on average (ours list every light in every tile).
+fn check_lists(frame: &str, lookup: &LightLookup, indices: &LightIndices, lists: &RecordedLists, records: [usize; 2]) {
+    let tiles: Vec<&[u8]> = lists.lookup.chunks_exact(lookup.stride as usize).collect();
+    let entries: Vec<&[u8]> = lists.indices.chunks_exact(indices.stride as usize).collect();
+    let (mut listed, mut flagged, mut all_slices) = (0u64, 0u64, 0u64);
+    let mut culled = 0u64;
+    for tile in &tiles {
+        let mut at = value(tile, lookup.first) as usize;
+        let mut in_tile = 0u64;
+        for (kind, bits) in &lookup.counts {
+            let k = usize::from(*kind == LightTableKind::Spot);
+            for _ in 0..value(tile, *bits) {
+                let entry = entries[at];
+                let index = value(entry, indices.index) as usize;
+                assert!(index < records[k], "{frame}: a {kind:?} entry names record {index} of {}", records[k]);
+                flagged += u64::from(indices.constants.iter().all(|c| value(entry, c.bits) == c.value));
+                all_slices += u64::from(value(entry, indices.slices) == indices.slices.max());
+                at += 1;
+                in_tile += 1;
+            }
+        }
+        listed += in_tile;
+        culled += (records[0] + records[1]) as u64 - in_tile;
+    }
+    println!(
+        "{frame}: {} tiles list {listed} entries (the organize count {}), {flagged} with bit 31 (the tile-lighting \
+         pass visits them), {all_slices} in every slice; the game leaves out {:.2} of {} lights per tile on average",
+        tiles.len(),
+        lists.entries,
+        culled as f64 / tiles.len() as f64,
+        records[0] + records[1]
+    );
+    assert_eq!(listed, u64::from(lists.entries), "{frame}: the tiles' counts against the organize count");
+}
+
+/// The light tables the graph's `GXLightOrganize16` step binds, by kind, and its constants.
+fn organize_tables(
+    passes: &[RenderPass],
+    world: &World,
+    out: &mut BTreeMap<&'static str, LightTable>,
+    constants: &mut Vec<ConstantBinding>,
+) {
     for p in passes {
         match &p.work {
             PassWork::Compute { stage, .. }
@@ -112,6 +215,7 @@ fn organize_tables(passes: &[RenderPass], world: &World, out: &mut BTreeMap<&'st
                     .get::<Name>(stage.shader)
                     .is_some_and(|n| n.0.ends_with("GXLightOrganize16.cpo")) =>
             {
+                constants.extend(stage.constants.iter().cloned());
                 for b in &stage.buffers {
                     if let BufferSource::Lights(t) = &b.source {
                         let kind = match t.kind {
@@ -122,7 +226,7 @@ fn organize_tables(passes: &[RenderPass], world: &World, out: &mut BTreeMap<&'st
                     }
                 }
             }
-            PassWork::Group { steps } => organize_tables(steps, world, out),
+            PassWork::Group { steps } => organize_tables(steps, world, out, constants),
             _ => {}
         }
     }
@@ -247,14 +351,72 @@ fn sekiros_light_tables_pack_the_recorded_records() -> Result<(), Box<dyn std::e
         &mut world,
         &manager
             .registry
-            .parse("lower-fromsoft-lights{candela-per-power=1,spot-blend=0.15}")?,
+            .parse("lower-fromsoft-lights{candela-per-power=1,spot-blend=0.15}, resolve-fromsoft-shaders{unbound-textures=preview}")?,
         &mut run,
     )?;
     let graph = world.resource::<RenderGraph>().ok_or("no core.render_graph")?;
     let mut tables = BTreeMap::new();
-    organize_tables(&graph.passes, &world, &mut tables);
+    let mut constants = Vec::new();
+    organize_tables(&graph.passes, &world, &mut tables, &mut constants);
     let (Some(points), Some(spots)) = (tables.get("point"), tables.get("spot")) else {
         return Err("the organize step binds no point and spot light tables".into());
+    };
+    // the organize step's counts and view, from its own reflection, where the frames hold them in cbLightAccParam
+    // (the counts at +272 and +280, the world-to-view matrix's three rows at +64)
+    let role_at = |offset: u32| {
+        constants
+            .iter()
+            .find(|c| c.offset == offset)
+            .map(|c| (c.name.clone(), c.role.clone(), c.lines.clone()))
+    };
+    assert_eq!(
+        role_at(272),
+        Some((
+            Some("g_lightCount".into()),
+            ConstantRole::Frame(FrameParameter::LightCount(LightTableKind::Point)),
+            None
+        ))
+    );
+    assert_eq!(
+        role_at(280),
+        Some((
+            Some("g_spotLightCount".into()),
+            ConstantRole::Frame(FrameParameter::LightCount(LightTableKind::Spot)),
+            None
+        ))
+    );
+    assert_eq!(
+        role_at(64),
+        Some((
+            Some("g_ViewMatrix".into()),
+            ConstantRole::View(ViewParameter::View),
+            Some(MatrixLines::Unshown(Unshown::NotRead))
+        ))
+    );
+    // the forward materials' light lists, as their bindings state them
+    let (mut lookup, mut index_list, mut lit) = (None::<LightLookup>, None::<LightIndices>, 0usize);
+    for (_, binding) in world.iter::<ShaderBinding>() {
+        for stage in &binding.stages {
+            let mut any = false;
+            for b in &stage.buffers {
+                match &b.source {
+                    BufferSource::LightLists(LightListPart::Lookup(l)) => {
+                        lookup.get_or_insert_with(|| l.clone());
+                        any = true;
+                    }
+                    BufferSource::LightLists(LightListPart::Indices(x)) => {
+                        index_list.get_or_insert_with(|| x.clone());
+                        any = true;
+                    }
+                    _ => {}
+                }
+            }
+            lit += usize::from(any);
+        }
+    }
+    println!("material stages with light lists: {lit}");
+    let (Some(lookup), Some(index_list)) = (lookup, index_list) else {
+        return Err("no material binding states light lists".into());
     };
     // the organize program's hash, from the install's binder
     let archive = install.open()?;
@@ -284,19 +446,26 @@ fn sekiros_light_tables_pack_the_recorded_records() -> Result<(), Box<dyn std::e
     };
     let mut tally = Tally::default();
     let mut on_none = [0usize; 2];
+    let mut list_frames = 0usize;
     for frame in &table_frames {
         let rec = recorded(&frames, frame, organize)?;
+        if let Some(lists) = &rec.lists {
+            list_frames += 1;
+            check_lists(frame, &lookup, &index_list, lists, [rec.points.len(), rec.spots.len()]);
+        }
         // the game's view takes the map frame to view space; the world frame mirrors the map's z
         let mut view = [[0.0, 0.0, 0.0, 1.0]; 4];
         for (row, v) in view.iter_mut().zip(rec.view) {
             *row = [v[0], v[1], -v[2], v[3]];
         }
+        let mut packed_counts = [0u32; 2];
         for (k, (table, records)) in [(points, &rec.points), (spots, &rec.spots)]
             .into_iter()
             .enumerate()
         {
             let kind = if k == 0 { "point" } else { "spot" };
             let packed = table.pack(&world, &view)?;
+            packed_counts[k] = packed.lights.len() as u32;
             let stride = table.stride as usize;
             let packed: Vec<Vec<f32>> = (0..packed.lights.len())
                 .map(|i| floats(&packed.bytes[stride * i..stride * (i + 1)]))
@@ -308,7 +477,23 @@ fn sekiros_light_tables_pack_the_recorded_records() -> Result<(), Box<dyn std::e
                 }
             }
         }
+        // our lists for the frame: every packed light in every one of the frame's tiles
+        if let Some(lists) = &rec.lists {
+            let tiles = (lists.lookup.len() / lookup.stride as usize) as u32;
+            let ours = pack_light_lists(
+                &lookup,
+                &index_list,
+                &[
+                    (LightTableKind::Point, packed_counts[0]),
+                    (LightTableKind::Spot, packed_counts[1]),
+                ],
+                tiles,
+            )?;
+            assert_eq!(ours.lookup.len(), lists.lookup.len(), "{frame}");
+        }
     }
+    println!("frames with recorded light lists: {list_frames}");
+    assert!(list_frames > 0, "no frame holds the organize step's lists");
     for (key, [same, differ]) in &tally.0 {
         println!("{key}: {same} match, {differ} differ");
     }

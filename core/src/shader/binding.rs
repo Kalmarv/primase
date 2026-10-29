@@ -479,9 +479,11 @@ impl StageBinding {
     }
 
     /// The buffer slots: each a buffer of the shader, bound once, a matrix table of 16-byte elements, an instance
-    /// table whose records fit its stride and name a matrix table of this stage, and a light table that agrees with
+    /// table whose records fit its stride and name a matrix table of this stage, a light table that agrees with
     /// itself and its buffer's elements, in a world whose lights of its kind have their unit (`core.light_unit`, which
-    /// its colours are in); a stage that states any buffer states every buffer of its program.
+    /// its colours are in), and light lists that agree with themselves and their buffers, a lookup and an index list
+    /// together, with a light table of each kind the lookup counts; a stage that states any buffer states every buffer
+    /// of its program.
     fn verify_buffers(
         &self,
         w: &crate::World,
@@ -492,6 +494,46 @@ impl StageBinding {
             Some(ResourceKind::Buffer(kind)) => Some(*kind),
             _ => None,
         };
+        let lists: Vec<&super::LightListPart> = self
+            .buffers
+            .iter()
+            .filter_map(|b| match &b.source {
+                BufferSource::LightLists(part) => Some(part),
+                _ => None,
+            })
+            .collect();
+        if !lists.is_empty() {
+            let lookups: Vec<_> = lists
+                .iter()
+                .filter_map(|p| match p {
+                    super::LightListPart::Lookup(l) => Some(l),
+                    super::LightListPart::Indices(_) => None,
+                })
+                .collect();
+            let [lookup] = lookups.as_slice() else {
+                return Err(format!(
+                    "light lists with {} lookups: a stage's lists are one lookup and one index list",
+                    lookups.len()
+                ));
+            };
+            if lists.len() != 2 {
+                return Err(format!(
+                    "{} light list buffers: a stage's lists are one lookup and one index list",
+                    lists.len()
+                ));
+            }
+            for (counted, _) in &lookup.counts {
+                if !self
+                    .buffers
+                    .iter()
+                    .any(|b| matches!(&b.source, BufferSource::Lights(t) if t.kind == *counted))
+                {
+                    return Err(format!(
+                        "light lists count {counted:?} lights and the stage binds no {counted:?} light table"
+                    ));
+                }
+            }
+        }
         for (n, b) in self.buffers.iter().enumerate() {
             let Some(buffer) = kind(b.resource) else {
                 return Err(format!("resource {} is not a buffer", b.resource.0));
@@ -517,6 +559,14 @@ impl StageBinding {
                     ));
                 }
                 BufferSource::Graph(_) => {}
+                BufferSource::LightLists(part) => {
+                    let stride = match buffer {
+                        BufferKind::Structured { stride } => Some(stride),
+                        _ => None,
+                    };
+                    part.verify(stride)
+                        .map_err(|why| format!("buffer slot {}: {why}", b.resource.0))?;
+                }
                 BufferSource::Lights(table) => {
                     let stride = match buffer {
                         BufferKind::Structured { stride } => Some(stride),

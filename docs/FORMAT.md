@@ -169,3 +169,16 @@ why. A binding with a light table in a world that holds `core.light`s of the tab
 `core.light_unit` is refused. `LightTable::pack` is the one packing of the world's lights into the records for a view; it
 writes 0 for unknown fields and lists them. The constant role `{"frame": {"light_count": kind}}` is the
 number of records the consumer packed, one unsigned 32-bit integer.
+
+A buffer slot may hold `{"light_lists": part}` (`BufferSource::LightLists`): one of the frame's per-tile
+light lists, which say which lights a program visits at a pixel. The screen is cut into squares of
+`{"frame": "light_tile_size"}` pixels, tile `(x, y)` being record `x + y * light_tiles_per_row` (both
+unsigned 32-bit constants) of the `{"lookup": {stride, capacity, first, counts, constants, unknown}}`,
+whose record holds the tile's first entry in the `{"indices": {stride, capacity, index, slices, constants,
+unknown}}` list and, per kind in `counts` order, how many of its lights follow. An entry holds a light's
+record in its kind's light table and one bit per depth slice its volume reaches. Each value is
+`{offset, shift, bits}` of a little-endian 32-bit word; fields lie inside the record and never overlap;
+constants fit their bits and say why; unknowns are named and say why. A stage's lists are one lookup and
+one index list, and the stage binds a light table of each kind the lookup counts. `pack_light_lists` is
+the one packing: every light in every tile and every slice (each light's own range still bounds what it
+lights).

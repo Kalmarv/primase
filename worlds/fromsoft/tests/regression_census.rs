@@ -25,8 +25,8 @@ use fromsoft_formats::{Game, Keys};
 use iridia_interface::Stage;
 use primase_animation::game_skin;
 use primase_core::pass::PassLog;
-use primase_core::shader::BufferSource;
 use primase_core::shader::ShaderBinding;
+use primase_core::shader::{BufferSource, LightListPart};
 use primase_core::{Mesh, Skin, World};
 use primase_fromsoft::materials::Material;
 use primase_fromsoft::sekiro::{self, CharacterOptions};
@@ -155,6 +155,12 @@ fn count(world: &World, logs: &[(String, PassLog)]) -> BTreeMap<String, u64> {
                     BufferSource::Unknown { why } => role_class(&format!("Unknown {{ why: {why:?} }}")),
                     BufferSource::Graph(_) => "a render graph buffer".to_owned(),
                     BufferSource::Lights(t) => format!("the scene's lights, {:?}", t.kind),
+                    BufferSource::LightLists(LightListPart::Lookup(_)) => {
+                        "the light lists' lookup".to_owned()
+                    }
+                    BufferSource::LightLists(LightListPart::Indices(_)) => {
+                        "the light lists' indices".to_owned()
+                    }
                 };
                 add(format!("buffers.{side}.{what}"), 1);
             }

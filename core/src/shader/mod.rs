@@ -16,7 +16,10 @@ pub(crate) use binding::BindingPlace;
 pub use binding::{SamplerBinding, ShaderBinding, StageBinding, TextureBinding, TextureSource};
 pub use encoding::{LaneAffine, NormalEncoding, NormalSpace, ScalarEncoding};
 pub use facts::{MaterialPrograms, ProgramFacts, ProgramResourceFacts};
-pub use lights::{LightField, LightTable, LightTableKind, LightValue, PackedLights};
+pub use lights::{
+    LightField, LightIndices, LightListPart, LightLookup, LightTable, LightTableKind, LightValue, ListBits,
+    ListConstant, ListUnknown, PackedLightLists, PackedLights, pack_light_lists,
+};
 pub use program::Shader;
 pub use roles::{
     Attribute, BufferBinding, BufferSource, BufferTable, ConstantBinding, ConstantRole, FrameParameter,
