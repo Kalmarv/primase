@@ -8,10 +8,14 @@
 //!
 //! The game draws in a frame whose origin it moves (the dispatches' camera positions are all in it, so the frame states
 //! no offset): the translation from it to the map's frame is the one, among those each pair of a recorded record and a
-//! lowered light proposes, that puts the most records on a light, and it is whole metres. A recorded record stands on a
-//! packed light where their view-space positions are within 0.01 m; the records of effect lights stand on none (effect
-//! lights are not read here). The expected counts are an independent script's over the same dispatches and the bank's own
-//! bytes (kept with the private oracle tools): the translation (-216, 40, 16); 16 point records and no spot record a
+//! lowered light proposes, that puts the most records on a light, and it is whole metres. That translation is the render
+//! origin of the session the capture was taken in, not a constant of the game: sessions of the stock game show
+//! (-88, 16, 16), and the shifted origin of this capture's session, (-216, 40, 16), appears in sessions with a character
+//! or map mod loaded. The capture is frozen, so its translation is a fixed fact of it, and the test expects it exactly.
+//! A recorded record stands on a packed light where their view-space positions are within 0.01 m; the records of effect
+//! lights stand on none (effect lights are not read here). The expected counts are an independent script's over the same
+//! dispatches and the bank's own bytes (kept with the private oracle tools): the translation (-216, 40, 16), that
+//! session's render origin; 16 point records and no spot record a
 //! dispatch; 20 point records (five lights in four dispatches) stand on a bank light and 44 on none; on the 20, the
 //! position, `1 / range^2`, the range, `LightType` 0, the colour and the specular colour are the packed ones, and no
 //! packed light falls back to its colour for its specular. The shadowed variants' fields of an unshadowed record hold
