@@ -234,7 +234,8 @@ fn clip_time(clip: &Clip, t: f64) -> f64 {
 /// replaces its joint's translation, rotation or scale (a joint it drives must have a TRS form, [`Trs::of`]).
 ///
 /// An additive clip ([`AdditiveReference::Identity`]: values that are deltas) is composed onto `base` joint by joint, as
-/// `core.clip` states: `T = T_base + T_clip`, `R = R_base * R_clip` (normalised), `S = S_base * S_clip`; a joint or a
+/// `core.clip` states: `T = T_base + T_clip`, `R = R_base * R_clip` (normalised), `S = S_base * S_clip`;
+/// [`AdditiveReference::IdentityParent`] composes the rotation the other way, `R = R_clip * R_base`. A joint or a
 /// property the clip does not drive keeps the base. One whose reference is a pose or a frame of a clip is evaluated by
 /// [`evaluate_relative`], which is given that reference; here it is an error (never a silent rest pose), as is an additive
 /// clip's morph, control, draw-group or material channel, which has no base to add to.
@@ -265,7 +266,16 @@ pub fn evaluate_relative(
 
 /// One property of a joint of an additive clip composed onto `current`: `T_base + (T_clip - T_ref)`,
 /// `R_base * R_ref^-1 * R_clip`, `S_base * S_clip / S_ref`, the reference zero, the identity and one for a delta clip.
-fn compose_additive(property: Property, current: &mut Trs, reference: Option<&Trs>, v: &[f64]) -> Result<()> {
+///
+/// `parent_side` composes the rotation of a delta clip on the parent's side, `R_clip * R_base` ([`AdditiveReference::IdentityParent`]);
+/// it has no reference.
+fn compose_additive(
+    property: Property,
+    current: &mut Trs,
+    reference: Option<&Trs>,
+    parent_side: bool,
+    v: &[f64],
+) -> Result<()> {
     match property {
         Property::Translation => {
             let r = reference.map_or([0.0; 3], |r| r.translation);
@@ -273,10 +283,12 @@ fn compose_additive(property: Property, current: &mut Trs, reference: Option<&Tr
         }
         Property::Rotation => {
             let r = reference.map_or([0.0, 0.0, 0.0, 1.0], |r| r.rotation);
-            let q = quat::mul(
-                quat::mul(current.rotation, quat::inverse(r)),
-                [v[0], v[1], v[2], v[3]],
-            );
+            let delta = [v[0], v[1], v[2], v[3]];
+            let q = if parent_side {
+                quat::mul(delta, current.rotation)
+            } else {
+                quat::mul(quat::mul(current.rotation, quat::inverse(r)), delta)
+            };
             current.rotation = quat::normalize(q)
                 .ok_or_else(|| Error("an additive rotation composes to a zero one".into()))?;
         }
@@ -306,7 +318,7 @@ fn evaluate_over(
 ) -> Result<Evaluated> {
     // the reference's joints, where the clip is relative to a pose
     let reference_locals = match (clip.additive, reference) {
-        (None, None) | (Some(AdditiveReference::Identity), None) => None,
+        (None, None) | (Some(AdditiveReference::Identity | AdditiveReference::IdentityParent), None) => None,
         (Some(AdditiveReference::Pose(_) | AdditiveReference::ClipFrame { .. }), Some(r)) => {
             Some(locals(skeleton, Some(r)))
         }
@@ -324,6 +336,7 @@ fn evaluate_over(
         }
     };
     let additive = clip.additive.is_some();
+    let parent_side = clip.additive == Some(AdditiveReference::IdentityParent);
     let t = clip_time(clip, t);
     let mut locals = locals(skeleton, base);
     let mut driven: BTreeMap<JointId, Trs> = BTreeMap::new();
@@ -389,7 +402,7 @@ fn evaluate_over(
                         ),
                         None => None,
                     };
-                    compose_additive(c.property, &mut trs, reference.as_ref(), &v)
+                    compose_additive(c.property, &mut trs, reference.as_ref(), parent_side, &v)
                         .map_err(|e| Error(format!("joint {joint:?}: {}", e.0)))?;
                 } else {
                     match c.property {
@@ -966,6 +979,49 @@ mod tests {
         let (t, r, _) = root_of(&evaluate(&all, skel, &s, Some(&base), 0.0).unwrap());
         assert!(near(&t, &[0.5, 0.0, 0.0]), "{t:?}");
         assert!(near(&r, &[f64::from(S), 0.0, 0.0, f64::from(S)]), "{r:?}");
+    }
+
+    /// Hand-worked, the two sides a clip of deltas composes on. The same clip, a quarter turn about x `K = (S, 0, 0, S)`, a
+    /// translation delta (0.5, 0, 0) and a scale delta of 3, on the root whose rest is (0, 1, 0) turned a quarter about z
+    /// `B = (0, 0, S, S)`: `AdditiveReference::Identity` gives `B * K = (0.5, 0.5, 0.5, 0.5)`, `IdentityParent` gives
+    /// `K * B = (0.5, -0.5, 0.5, 0.5)`; the translation (0.5, 1, 0) and the scale 3 are the same for both. Over a given base, a
+    /// quarter turn about y `B = (0, S, 0, S)` at the origin: `B * K = (0.5, 0.5, -0.5, 0.5)` and `K * B = (0.5, 0.5, 0.5, 0.5)`.
+    /// A joint the clip does not drive keeps its base on both sides, and the parent side takes no reference.
+    #[test]
+    fn a_clip_of_deltas_composes_on_the_side_its_reference_names() {
+        let s = skeleton();
+        let skel = Entity::from_index(5);
+        let channels: &[(Property, &[f32])] = &[
+            (Property::Translation, &[0.5, 0.0, 0.0]),
+            (Property::Rotation, &[S, 0.0, 0.0, S]),
+            (Property::Scale, &[3.0, 3.0, 3.0]),
+        ];
+        let child_side = joint_clip(skel, Some(AdditiveReference::Identity), channels);
+        let parent_side = joint_clip(skel, Some(AdditiveReference::IdentityParent), channels);
+        let (t, r, sc) = root_of(&evaluate(&child_side, skel, &s, None, 0.0).unwrap());
+        assert!(near(&t, &[0.5, 1.0, 0.0]) && near(&sc, &[3.0, 3.0, 3.0]));
+        assert!(near(&r, &[0.5, 0.5, 0.5, 0.5]), "B * K: {r:?}");
+        let e = evaluate(&parent_side, skel, &s, None, 0.0).unwrap();
+        let (t, r, sc) = root_of(&e);
+        assert!(near(&t, &[0.5, 1.0, 0.0]), "{t:?}");
+        assert!(near(&sc, &[3.0, 3.0, 3.0]), "{sc:?}");
+        assert!(near(&r, &[0.5, -0.5, 0.5, 0.5]), "K * B: {r:?}");
+        let child = e.pose.joints.iter().find(|(j, _)| *j == JointId(2)).unwrap().1;
+        assert_eq!(
+            child, s.joints[0].rest,
+            "a joint the clip does not drive keeps its base"
+        );
+        let base = RigPose {
+            joints: vec![(JointId(1), trs([0.0, 0.0, 0.0], [0.0, S, 0.0, S]))],
+            root_applied: None,
+        };
+        let (_, r, _) = root_of(&evaluate(&child_side, skel, &s, Some(&base), 0.0).unwrap());
+        assert!(near(&r, &[0.5, 0.5, -0.5, 0.5]), "B * K over a given base: {r:?}");
+        let (_, r, _) = root_of(&evaluate(&parent_side, skel, &s, Some(&base), 0.0).unwrap());
+        assert!(near(&r, &[0.5, 0.5, 0.5, 0.5]), "K * B over a given base: {r:?}");
+        // a delta clip has no reference to be given, on either side
+        let err = evaluate_relative(&parent_side, skel, &s, Some(&base), &base, 0.0).unwrap_err();
+        assert!(err.0.contains("no reference to be given"), "{}", err.0);
     }
 
     /// Hand-worked, a clip relative to a pose: the base root at the origin and unturned; the reference root at (0, 3, 0),

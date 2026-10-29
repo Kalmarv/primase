@@ -25,6 +25,8 @@
 //!   `R = R_base * R_ref^-1 * R_clip`, `S = S_base * S_clip / S_ref`; a channel the clip lacks adds nothing.
 //!   [`AdditiveReference::Identity`] is the reference of a clip whose values are already deltas (`T_ref = 0`, `R_ref` the
 //!   identity, `S_ref = 1`): `T = T_base + T_clip`, `R = R_base * R_clip`, `S = S_base * S_clip`.
+//!   [`AdditiveReference::IdentityParent`] is the same deltas composed on the other side, the parent's: `R = R_clip * R_base`
+//!   (`T` and `S` as for `Identity`: a sum and a product, which do not depend on the order).
 //! - Root motion is not a joint channel: [`RootMotion`] states the space it moves in and is applied (or not) by a pass.
 
 use std::collections::BTreeSet;
@@ -149,6 +151,11 @@ pub enum AdditiveReference {
     /// the composition). A source that stores additive animation as deltas lowers to this; no entity stands for the
     /// reference.
     Identity,
+    /// As [`AdditiveReference::Identity`] (deltas from zero, the identity and one), composed on the parent's side of the
+    /// base rotation: `R = R_clip * R_base`, where `Identity` has `R = R_base * R_clip`. Translations add and scales
+    /// multiply as for `Identity`. A source whose engine composes its additive animation this way (Sekiro's blend hint 1,
+    /// as HKLib's `ADDITIVE_PARENT_SPACE` names it) lowers to this.
+    IdentityParent,
     /// The `core.rig_pose` held by this entity.
     Pose(Entity),
     /// Another clip's (the `core.clip` held by `clip`) values at `time` seconds.
@@ -273,7 +280,7 @@ impl Component for Clip {
         match self.additive {
             Some(AdditiveReference::Pose(e)) => out.push(e),
             Some(AdditiveReference::ClipFrame { clip, .. }) => out.push(clip),
-            Some(AdditiveReference::Identity) | None => {}
+            Some(AdditiveReference::Identity | AdditiveReference::IdentityParent) | None => {}
         }
     }
     /// Duration finite and non-negative; each channel's property fits its target (joints take translation, rotation

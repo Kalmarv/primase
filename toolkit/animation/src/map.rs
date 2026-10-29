@@ -56,7 +56,7 @@ pub enum Reparented {
 /// joints' hierarchy is checked. Channels on joints the map does not list are refused or left out (`unmapped`). Morph
 /// and control channels are kept. Two maps from one skeleton are refused (which one is meant is not stated), and so is
 /// a clip bound (`core.clip_binding`) to a rig of the source skeleton: map, then bind. A clip of deltas
-/// ([`AdditiveReference::Identity`]) is mapped like any other (its values are unchanged, so it adds the same deltas to the
+/// ([`AdditiveReference::Identity`], or [`AdditiveReference::IdentityParent`] when no pair is re-keyed) is mapped like any other (its values are unchanged, so it adds the same deltas to the
 /// target's joints), holds no source rest for the joints it does not drive (it adds nothing there), and is refused where a
 /// pair's hierarchy differs and `reparented=model-space` re-keys it (the joint's key is taken from the source posed at its
 /// rest plus the deltas and kept as a delta from the target's rest, an approximation counted); a clip additive to a pose or
@@ -239,8 +239,11 @@ impl Pass for MapClip {
                     return Err("it drives several skeletons".to_owned());
                 }
                 // an additive clip's reference is a pose or a frame of a clip of the source skeleton: not remapped here; a clip
-                // of deltas ([`AdditiveReference::Identity`]) has none
-                let deltas = clip.additive == Some(AdditiveReference::Identity);
+                // of deltas ([`AdditiveReference::Identity`], [`AdditiveReference::IdentityParent`]) has none
+                let deltas = matches!(
+                    clip.additive,
+                    Some(AdditiveReference::Identity | AdditiveReference::IdentityParent)
+                );
                 if clip.additive.is_some() && !deltas {
                     return Err(
                         "it is additive to a pose or a frame of a clip, whose reference is not remapped"
@@ -270,6 +273,12 @@ impl Pass for MapClip {
                         .map(|(a, _)| *a)
                         .collect(),
                 };
+                if !baked.is_empty() && clip.additive == Some(AdditiveReference::IdentityParent) {
+                    return Err(
+                        "its deltas compose on the parent's side, which keying a joint of another hierarchy from the source's pose does not keep (use reparented=refuse)"
+                            .to_owned(),
+                    );
+                }
                 let clip_for_keys = clip.clone();
                 let mut mapped = clip.clone();
                 let mut dropped = 0u64;
@@ -879,6 +888,33 @@ mod tests {
             );
             assert!(matches!(m.target, ClipTarget::Joint { skeleton, .. } if skeleton == b));
         }
+    }
+
+    /// A clip of deltas that compose on the parent's side is mapped with its values and its reference unchanged where every pair
+    /// keeps its parent, and is left on the source skeleton, with the reason, where `reparented=model-space` would re-key a joint.
+    #[test]
+    fn a_clip_of_parent_side_deltas_is_mapped_unchanged_and_not_re_keyed() {
+        let (mut w, _, _, clip) = world(&[(1, 10), (2, 20), (3, 30)]);
+        w.get_mut::<Clip>(clip).unwrap().additive = Some(AdditiveReference::IdentityParent);
+        let before = w.get::<Clip>(clip).unwrap().channels.len();
+        let report = run(&mut w, "map-clip{unmapped=refuse,rests=source,reparented=refuse}").unwrap();
+        assert!(left_unmapped(&report).is_empty(), "{:?}", left_unmapped(&report));
+        let mapped = w.get::<Clip>(clip).unwrap();
+        assert_eq!(mapped.additive, Some(AdditiveReference::IdentityParent));
+        assert_eq!(
+            mapped.channels.len(),
+            before,
+            "no rest channels are added to a clip of deltas"
+        );
+        let (mut w, _, _, clip) = world(&[(1, 10), (2, 20), (3, 40)]);
+        w.get_mut::<Clip>(clip).unwrap().additive = Some(AdditiveReference::IdentityParent);
+        let report = run(
+            &mut w,
+            "map-clip{unmapped=refuse,rests=source,reparented=model-space}",
+        )
+        .unwrap();
+        let why = left_unmapped(&report);
+        assert!(why.len() == 1 && why[0].contains("parent's side"), "{why:?}");
     }
 
     /// A clip of deltas on a pair whose hierarchy differs (joint 3 maps to 40, under 10 and not under 3's parent's target 20):

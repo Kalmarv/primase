@@ -520,6 +520,12 @@ impl Pass for RetargetClip {
                 if skeletons.len() > 1 {
                     return Err("it drives several skeletons".to_owned());
                 }
+                if clip.additive == Some(AdditiveReference::IdentityParent) {
+                    return Err(
+                        "it is a clip of deltas that compose on the parent's side, which the retargeted deltas (kept for the child's side) do not keep"
+                            .to_owned(),
+                    );
+                }
                 let deltas = clip.additive == Some(AdditiveReference::Identity);
                 if clip.additive.is_some() && !deltas {
                     return Err(
@@ -1295,6 +1301,17 @@ mod tests {
         let report = run(&mut w, "retarget-clip{reference=aligned,translation=root}").unwrap();
         let why = left_unretargeted(&report);
         assert!(why.len() == 1 && why[0].contains("use reference=rest"), "{why:?}");
+    }
+
+    /// A clip of deltas that compose on the parent's side is left unretargeted, with the reason: the retargeted deltas are kept
+    /// for the child's side.
+    #[test]
+    fn a_clip_of_parent_side_deltas_is_left_unretargeted() {
+        let (mut w, _, clip) = world();
+        w.get_mut::<Clip>(clip).unwrap().additive = Some(AdditiveReference::IdentityParent);
+        let report = run(&mut w, "retarget-clip{reference=rest,translation=root}").unwrap();
+        let why = left_unretargeted(&report);
+        assert!(why.len() == 1 && why[0].contains("parent's side"), "{why:?}");
     }
 
     /// The reasons a pass left clips unretargeted, as reported (`PassLog::omit`, unsupported).
