@@ -171,8 +171,8 @@ impl LayeredMaterial {
         self.view().gbuffer_program()
     }
     /// [`MaterialView::pass_program`].
-    pub fn pass_program(&self) -> String {
-        self.view().pass_program()
+    pub fn pass_program(&self, receives_shadows: bool) -> String {
+        self.view().pass_program(receives_shadows)
     }
 }
 
@@ -349,15 +349,28 @@ impl MaterialView<'_> {
     pub fn pass(&self) -> &'static str {
         if self.is_forward() { "Fwd" } else { "Gbuf" }
     }
-    /// The pass the material's pixel program is named by: [`MaterialView::pass`], but for a forward material of Elden
-    /// Ring (a material binary), which is drawn with the shadowed forward permutation `FwdSdw`: every forward colour draw
-    /// of the recorded Elden Ring frames is (86 draws, 15 families). What picks Sekiro's is not in the data read: its
-    /// frames draw the sky dome and moon with `_FwdSdw` (12 draws) and the far mountains, cloud and ground fog with `_Fwd`
-    /// (80), though the dome's and the far mountains' MTD parameters (but for the alpha test), map parts (shadow flags,
-    /// LOD row, draw and display groups) and FLVER GX items are the same; a Sekiro material keeps the plain `Fwd`.
-    pub fn pixel_pass(&self) -> &'static str {
+    /// The pass the material's pixel program is named by where the placements drawing it do or do not receive shadows
+    /// (their layout part's shadow-receive flag): [`MaterialView::pass`], but the shadowed forward permutation `FwdSdw`
+    /// for a forward material of
+    /// - Elden Ring (a material binary), always: every forward colour draw of the recorded Elden Ring frames is (86 draws,
+    ///   15 families);
+    /// - Sekiro (an MTD) drawn by placements that receive shadows. Sekiro 1.06 picks the pass per draw job, not per
+    ///   material: its job setup (`FUN_14019a690`) gives a forward job pass 4 (`FwdSdw`; 5, `FwdSSdw`, in one shadow
+    ///   mode) when shadows are on and the job is not marked shadowless, else pass 0 (`Fwd`), and the pass alone picks
+    ///   the program (`FUN_1401dd1d0`: entry `(pass + 1) * 3 + alpha` of the material's set). A hardware breakpoint on
+    ///   that choice in the running game (one view of Ashina Outskirts, 6,000 calls) saw pass 0 draw the cloud and
+    ///   ground fog, whose parts do not receive shadows, and the sky dome and far mountains, which no part places (the
+    ///   sky draws them); and pass 4 draw a `GXFlver_ColDif` piece and the player's character, which receive them, with
+    ///   the same draw-list filter and the same material draw masks as the fog's. Of the 527 models with a forward
+    ///   material that nine of Sekiro's layouts place (counted per layout), 22 are placed not receiving shadows (21 of
+    ///   them fog or smoke, one a mesh decal) and 505 receiving; none is placed both ways.
+    ///
+    /// (The recorded frames name a program by the hash of its bytes, and the dome's, moon's and far mountains' `Fwd`,
+    /// `FwdSSdw` and `FwdSdw` programs are the same bytes: the frames do not tell those passes apart.)
+    pub fn pixel_pass(&self, receives_shadows: bool) -> &'static str {
         match (self.is_forward(), self.definition) {
             (true, DefinitionRef::Matbin(_)) => "FwdSdw",
+            (true, DefinitionRef::Mtd(_)) if receives_shadows => "FwdSdw",
             _ => self.pass(),
         }
     }
@@ -369,10 +382,10 @@ impl MaterialView<'_> {
     pub fn gbuffer_program(&self) -> String {
         self.program_in("Gbuf")
     }
-    /// The pixel program the material is drawn with ([`MaterialView::pixel_pass`]'s):
-    /// `<shader>[_<switch>]_<pass>[_[A]].ppo`.
-    pub fn pass_program(&self) -> String {
-        self.program_in(self.pixel_pass())
+    /// The pixel program the material is drawn with by placements that do or do not receive shadows
+    /// ([`MaterialView::pixel_pass`]'s): `<shader>[_<switch>]_<pass>[_[A]].ppo`.
+    pub fn pass_program(&self, receives_shadows: bool) -> String {
+        self.program_in(self.pixel_pass(receives_shadows))
     }
     /// The pixel program of the plain pass ([`MaterialView::pass`]'s), which a bundle without the shadowed permutation
     /// [`MaterialView::pass_program`] names is drawn with instead.

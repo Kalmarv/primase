@@ -421,7 +421,7 @@ mod tests {
         bundles.spawn(&mut world, &[(entity, material.shader.clone())]);
         let bundle_entity = world.get::<source::MaterialShader>(entity).unwrap().0;
         let bundle = world.get::<ShaderBundle>(bundle_entity).unwrap();
-        let requested = material.view().unwrap().pass_program();
+        let requested = material.view().unwrap().pass_program(false);
         assert_eq!(requested, "character_AMSN_Gbuf.ppo");
         assert_eq!(
             bundle.program(&requested).unwrap().name,

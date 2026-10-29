@@ -13,7 +13,9 @@ use iridia_exec::ProgramShader;
 use iridia_interface::{ShaderFormat, Stage};
 use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::shader::bind_output_uses;
-use primase_core::{ColorSpace, Component, Entity, Mesh, Name, Semantic, TexRole, Texture, World};
+use primase_core::{
+    ColorSpace, Component, Entity, Instance, MaterialVariants, Mesh, Name, Semantic, Shadows, TexRole, Texture, World,
+};
 use primase_core::{shader::MaterialPrograms, shader::ProgramFacts, shader::Shader, shader::ShaderBinding};
 use std::collections::BTreeMap;
 
@@ -38,10 +40,12 @@ use std::collections::BTreeMap;
 /// the primitives exist.
 ///
 /// A material the game draws in its forward pass (`g_BlendMode` 2, [`crate::materials::LayeredMaterial::is_forward`]) is bound to
-/// its `<shader>[_<switch>]_Fwd[_[A]].ppo` and `_Fwd[_Skin].vpo` instead (the plain forward permutation: the shadowed ones,
-/// `_FwdSdw` and `_FwdSSdw`, are the engine's per-instance choice), whose render target 0 is the finished colour; what the
-/// forward programs read from the engine (the scene depth and SSAO, the irradiance volumes, the IBL cube maps, the volume fog)
-/// is bound as engine textures at zero, counted by name, never a material's.
+/// its `<shader>[_<switch>]_<pass>[_[A]].ppo` and `_Fwd[_Skin].vpo` instead, whose render target 0 is the finished colour: the
+/// pass `FwdSdw` where the placements drawing it receive shadows (their `core.shadows` receive flag), else `Fwd`
+/// ([`crate::materials::MaterialView::pixel_pass`]; a material drawn by placements of both kinds, which no layout read
+/// has, is counted and given `Fwd`). What the forward programs read from the engine (the scene depth and SSAO, the
+/// irradiance volumes, the IBL cube maps, the volume fog) is bound as engine textures at zero, counted by name, never a
+/// material's.
 ///
 /// The binding's render state is [`render_state`]'s: what a capture of the running game settles from the material's MTD
 /// (depth test and write, the alpha blend of `g_BlendMode` 2), and nothing it does not.
@@ -94,6 +98,36 @@ fn draws(world: &World) -> BTreeMap<Entity, (u64, u64)> {
         }
     }
     draws
+}
+
+/// How many placements that receive shadows and how many that do not draw each material: `(receiving, not)`, through
+/// the placement's prototype's primitives (the material its variant selects where the prototype has
+/// `core.material_variants`). A placement stating no receive flag (the sky's, one a layout does not place) does not.
+fn receipts(world: &World) -> BTreeMap<Entity, (u64, u64)> {
+    let mut receipts = BTreeMap::<Entity, (u64, u64)>::new();
+    for (placement, instance) in world.iter::<Instance>() {
+        let Some(mesh) = world.get::<Mesh>(instance.prototype) else {
+            continue;
+        };
+        let variants = world.get::<MaterialVariants>(instance.prototype);
+        let receives = world.get::<Shadows>(placement).and_then(|s| s.receive) == Some(true);
+        for (i, primitive) in mesh.primitives().iter().enumerate() {
+            let variant = variants
+                .and_then(|v| v.0.get(i))
+                .and_then(|m| m.get(&instance.variant))
+                .copied();
+            let Some(material) = variant.or(primitive.material) else {
+                continue;
+            };
+            let entry = receipts.entry(material).or_default();
+            if receives {
+                entry.0 += 1;
+            } else {
+                entry.1 += 1;
+            }
+        }
+    }
+    receipts
 }
 
 /// The bound texture's component, a DDS read as stored with the colour space the slot's role gives it.
@@ -178,6 +212,8 @@ struct Tally {
     without_program: u64,
     /// Forward materials whose bundle holds no shadowed permutation, drawn with the plain forward program.
     plain_for_shadowed: u64,
+    /// Forward materials drawn by placements that receive shadows and by ones that do not, given the plain program.
+    receipt_mixed: u64,
     without_vertex: u64,
     skinned: u64,
     mixed: u64,
@@ -219,6 +255,7 @@ fn run(
     // each bundle's parameter definition, taken once per bundle entity
     let mut parameters: BTreeMap<Entity, Option<Metaparam>> = BTreeMap::new();
     let draws = draws(world);
+    let receipts = receipts(world);
     let mut tally: BTreeMap<&'static str, Tally> = BTreeMap::new();
     let mut policies: BTreeMap<String, u64> = BTreeMap::new();
     // the output lanes the program's discards or its target's blend show a use for, by role and program family
@@ -242,7 +279,16 @@ fn run(
         let bundle = bundle_entity.and_then(|e| world.get::<ShaderBundle>(e));
         // the game whose program it is: its bundle's (Sekiro's layered programs the reader kept are Sekiro's)
         let game = bundle.map_or(fromsoft_formats::Game::Sekiro, |b| b.game);
-        let requested = material.pass_program();
+        // an MTD's forward program is the shadowed one where every placement drawing it receives shadows
+        let (receiving, not) = receipts.get(&material_entity).copied().unwrap_or((0, 0));
+        if material.is_forward()
+            && matches!(material.definition, crate::materials::DefinitionRef::Mtd(_))
+            && receiving > 0
+            && not > 0
+        {
+            t.receipt_mixed += 1;
+        }
+        let requested = material.pass_program(receiving > 0 && not == 0);
         // the layered programs the reader kept (DXBC), else the one the shader's bundle holds under that name
         let lookup = |name: &str| {
             program_names
@@ -526,6 +572,12 @@ fn run(
             log.count(
                 &format!("{which} forward materials drawn with the plain forward program (the bundle holds no FwdSdw)"),
                 t.plain_for_shadowed,
+            );
+        }
+        if t.receipt_mixed > 0 {
+            log.count(
+                &format!("{which} forward materials drawn by placements receiving shadows and not (plain Fwd)"),
+                t.receipt_mixed,
             );
         }
         if t.without_vertex > 0 {

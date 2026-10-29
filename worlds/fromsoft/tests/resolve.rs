@@ -15,9 +15,9 @@ use primase_core::shader::{
     NormalSpace, ObjectParameter, OutputRole, ScalarEncoding, ViewParameter,
 };
 use primase_core::{
-    BindingId, ColorSpace, Deformation, Entity, Influences, Joint, JointId, Mesh, Name, Primitive, Rest,
-    Semantic, Skeleton, Skin, Slot, Stream, TexFormat, TexRole, Texture, Topology, Transform, WeightRule,
-    World,
+    BindingId, ColorSpace, Deformation, Entity, Influences, Instance, Joint, JointId, Mesh, Name, Primitive,
+    Rest, Semantic, Shadows, Skeleton, Skin, Slot, Stream, TexFormat, TexRole, Texture, Topology, Transform,
+    WeightRule, World,
 };
 use primase_core::{shader::Shader, shader::ShaderBinding, shader::TextureSource};
 use primase_foundations::sampling::Address;
@@ -2305,7 +2305,7 @@ fn a_blended_material_is_bound_to_its_forward_program() {
         ("g_AlphaRef", Value::Int(vec![128, 0])),
     ]);
     assert!(!opaque.is_forward());
-    assert_eq!(opaque.pass_program(), "M[Multiple]_27_Gbuf_[A].ppo");
+    assert_eq!(opaque.pass_program(true), "M[Multiple]_27_Gbuf_[A].ppo");
     let blended = with_params(&[
         ("GXFT_SATStaticSwitch", Value::Int(vec![27])),
         ("g_AlphaRef", Value::Int(vec![128, 0])),
@@ -2313,7 +2313,9 @@ fn a_blended_material_is_bound_to_its_forward_program() {
     ]);
     assert!(blended.is_forward());
     assert_eq!(blended.pass(), "Fwd");
-    assert_eq!(blended.pass_program(), "M[Multiple]_27_Fwd_[A].ppo");
+    assert_eq!(blended.pass_program(false), "M[Multiple]_27_Fwd_[A].ppo");
+    // drawn by placements that receive shadows: the shadowed permutation
+    assert_eq!(blended.pass_program(true), "M[Multiple]_27_FwdSdw_[A].ppo");
     // the G-buffer name stays what the layered readers ask for
     assert_eq!(blended.gbuffer_program(), "M[Multiple]_27_Gbuf_[A].ppo");
     // a blend mode the capture matched to no draw keeps the G-buffer program
@@ -2321,7 +2323,7 @@ fn a_blended_material_is_bound_to_its_forward_program() {
         ("GXFT_SATStaticSwitch", Value::Int(vec![27])),
         ("g_BlendMode", Value::Int(vec![4])),
     ]);
-    assert_eq!(additive.pass_program(), "M[Multiple]_27_Gbuf.ppo");
+    assert_eq!(additive.pass_program(true), "M[Multiple]_27_Gbuf.ppo");
 }
 
 /// The dither and camera-fade fields an alpha-tested program reads from the per-draw buffers are the engine's per-draw state
@@ -2407,4 +2409,111 @@ fn the_scene_depth_is_a_frame_texture() {
         TextureSource::Frame(FrameTexture::SceneDepth)
     );
     assert!(matches!(source("g_SSAOTexture"), TextureSource::Default { value, .. } if value == [0.; 4]));
+}
+
+/// Sekiro picks a forward material's pixel pass per draw job, not per material: `FwdSdw` where the placements drawing it
+/// receive shadows, `Fwd` where they do not (the fog's parts) and where no placement draws it (the sky's); a material
+/// placed both ways, which no layout read has, is counted and given `Fwd`.
+#[test]
+fn a_forward_materials_pass_is_chosen_by_whether_its_placements_receive_shadows() {
+    let mut world = World::default();
+    let mut definition = material().definition.clone();
+    definition.shader = "N:\\NTC\\data\\Material\\sat\\OutputData\\SPX\\MetallicValue.spx".into();
+    definition.parameters.retain(|p| p.name != "GXFT_SATStaticSwitch" && p.name != "g_BlendMode");
+    definition.parameters.push(Parameter {
+        name: "g_BlendMode".into(),
+        value: Value::Int(vec![2]),
+    });
+    world.insert_resource(ShaderPrograms(BTreeMap::new()));
+    world.insert_resource(TexturePayloads(BTreeMap::from([(
+        "grass_a".to_owned(),
+        dds(4, 4),
+    )])));
+    let bundle = world.spawn();
+    world.insert(
+        bundle,
+        ShaderBundle {
+            game: fromsoft_formats::Game::Sekiro,
+            name: "MetallicValue".into(),
+            programs: ["MetallicValue_Fwd.ppo", "MetallicValue_FwdSdw.ppo"]
+                .map(|name| ShaderProgram {
+                    name: name.into(),
+                    stage: ShaderStage::Pixel,
+                    format: ShaderFormat::Dxbc,
+                    code: Arc::from(PROGRAM),
+                })
+                .into(),
+            parameters: None,
+        },
+    );
+    // a material whose model the placements given place, each receiving shadows or not
+    let mut placed = |receive: &[bool]| {
+        let m = world.spawn();
+        world.insert(
+            m,
+            Material {
+                mtd: "M[A]_al".into(),
+                definition: Some(primase_fromsoft::materials::Definition::Mtd(definition.clone())),
+                gx: Vec::new(),
+                shader: "MetallicValue".into(),
+                class: "alpha".into(),
+                skip: None,
+                cutoff: 0.5,
+                bindings: material().bindings,
+                layered: None,
+            },
+        );
+        world.insert(m, MaterialShader(bundle));
+        let mesh = world.spawn();
+        world.insert(
+            mesh,
+            Mesh::new(vec![Primitive {
+                topology: Topology::Triangles,
+                streams: BTreeMap::from([(
+                    Semantic::Position,
+                    Stream::F32x3(vec![[0., 0., 0.], [1., 0., 0.], [0., 0., 1.]]),
+                )]),
+                indices: Some(vec![0, 1, 2]),
+                material: Some(m),
+            }]),
+        );
+        for &receive in receive {
+            let placement = world.spawn();
+            world.insert(
+                placement,
+                Instance {
+                    prototype: mesh,
+                    variant: 0,
+                },
+            );
+            world.insert(placement, Transform::IDENTITY);
+            world.insert(
+                placement,
+                Shadows {
+                    cast: None,
+                    receive: Some(receive),
+                },
+            );
+        }
+        m
+    };
+    let receiving = placed(&[true, true]);
+    let not = placed(&[false]);
+    let both = placed(&[true, false]);
+    let unplaced = placed(&[]);
+    let run = common::run(&mut world, "resolve-fromsoft-shaders{unbound-textures=preview}").unwrap();
+    let counts = &run.steps[0].log.counts;
+    assert_eq!(counts["other materials bound"], 4);
+    assert_eq!(
+        counts["other forward materials drawn by placements receiving shadows and not (plain Fwd)"],
+        1
+    );
+    let pixel = |m: Entity| {
+        let binding = world.get::<ShaderBinding>(m).unwrap();
+        world.get::<Name>(binding.stage(Stage::Pixel).unwrap().shader).unwrap().0.clone()
+    };
+    assert_eq!(pixel(receiving), "MetallicValue_FwdSdw.ppo");
+    assert_eq!(pixel(not), "MetallicValue_Fwd.ppo");
+    assert_eq!(pixel(both), "MetallicValue_Fwd.ppo");
+    assert_eq!(pixel(unplaced), "MetallicValue_Fwd.ppo");
 }

@@ -102,7 +102,9 @@ fn a_material_binary_is_drawn_forward_where_it_blends_or_states_forward_renderin
             definition: DefinitionRef::Matbin(m),
             bindings: &bindings,
         };
-        (v.blend_mode(), v.is_forward(), v.pass_program())
+        // whether the placements drawing it receive shadows does not matter to a material binary
+        assert_eq!(v.pass_program(true), v.pass_program(false));
+        (v.blend_mode(), v.is_forward(), v.pass_program(false))
     };
     // blend mode 2 stated: the shadowed forward program (every forward colour draw of the recorded Elden Ring frames is)
     let blended = binary(vec![
@@ -143,7 +145,9 @@ fn a_material_binary_is_drawn_forward_where_it_blends_or_states_forward_renderin
 }
 
 /// Sekiro's sky dome and far mountains are opaque (`g_BlendMode` 0) and state `g_GX_ForwardRendering`: the recorded
-/// frames draw them forward, so their pixel program is the forward one, with the switch and alpha test as before.
+/// frames draw them forward, so their pixel program is the forward one, with the switch and alpha test as before; the
+/// plain `Fwd` (the sky draws them, in a job without shadows), the shadowed `FwdSdw` where placements receiving shadows
+/// draw it.
 #[test]
 fn an_opaque_mtd_stating_forward_rendering_is_drawn_forward() {
     let bindings = BTreeMap::new();
@@ -153,7 +157,7 @@ fn an_opaque_mtd_stating_forward_rendering_is_drawn_forward() {
             definition: DefinitionRef::Mtd(d),
             bindings: &bindings,
         };
-        (v.is_forward(), v.pass_program())
+        (v.is_forward(), v.pass_program(false))
     };
     let dome = mtd(vec![
         ("g_BlendMode", M::Int(vec![0])),
@@ -162,6 +166,12 @@ fn an_opaque_mtd_stating_forward_rendering_is_drawn_forward() {
         ("g_GX_ForwardRendering", M::Bool(true)),
     ]);
     assert_eq!(program(&dome), (true, "M[ARSN]_1_Fwd.ppo".into()));
+    let receiving = MaterialView {
+        mtd: "m",
+        definition: DefinitionRef::Mtd(&dome),
+        bindings: &bindings,
+    };
+    assert_eq!(receiving.pass_program(true), "M[ARSN]_1_FwdSdw.ppo");
     let mountains = mtd(vec![
         ("g_BlendMode", M::Int(vec![0])),
         ("g_AlphaRef", M::Int(vec![64, 0])),
@@ -171,6 +181,12 @@ fn an_opaque_mtd_stating_forward_rendering_is_drawn_forward() {
     // the same opaque MTD without it keeps the G-buffer program
     let wall = mtd(vec![("g_BlendMode", M::Int(vec![0]))]);
     assert_eq!(program(&wall), (false, "M[ARSN]_Gbuf.ppo".into()));
+    let v = MaterialView {
+        mtd: "m",
+        definition: DefinitionRef::Mtd(&wall),
+        bindings: &bindings,
+    };
+    assert_eq!(v.pass_program(true), "M[ARSN]_Gbuf.ppo");
 }
 
 #[test]
@@ -188,7 +204,8 @@ fn an_mtds_values_and_programs_are_as_before() {
     };
     assert_eq!(v.blend_mode(), Some(2));
     assert!(v.is_forward());
-    assert_eq!(v.pass_program(), "M[ARSN]_7_Fwd_[A].ppo");
+    assert_eq!(v.pass_program(false), "M[ARSN]_7_Fwd_[A].ppo");
+    assert_eq!(v.pass_program(true), "M[ARSN]_7_FwdSdw_[A].ppo");
     assert_eq!(v.gbuffer_program(), "M[ARSN]_7_Gbuf_[A].ppo");
     assert_eq!(v.program_name().unwrap(), "M[ARSN]_7_Gbuf_[A].ppo");
     assert!(v.definition.declares("g_DiffuseTexture"));
