@@ -12,6 +12,7 @@ mod inputs;
 use fromsoft_formats::{Game, Keys, dcx::Decoder};
 use primase_core::pass::RunReport;
 use primase_core::{Texture, Transform, World};
+use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::sekiro::{
     self,
     effect_data::{Effect, EffectFile, EffectResource},

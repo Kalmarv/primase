@@ -40,7 +40,7 @@ pub fn lower(fx: &Fxr, game: Game, seed: u64, resolver: &mut dyn Resolver) -> Re
     let tree = fx.typed(game).map_err(|e| format!("effect {}: {e}", fx.id))?;
     let states = u32::try_from(fx.states.len().max(1)).unwrap_or(u32::MAX);
     let mut walk = Walk {
-        cx: Cx::new(game, resolver),
+        cx: Cx::new(resolver),
         emitters: Vec::new(),
         states,
         system: Settings::default(),

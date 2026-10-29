@@ -1,9 +1,8 @@
-//! The context of one effect's lowering: the game, what resolves the files an action names, the external values the
+//! The context of one effect's lowering: what resolves the files an action names, the external values the
 //! properties use so far, and the accounting of what was lost or approximated. The helpers here make the core values and
 //! terms the appearances are built of.
 
 use super::value::{self, Inputs, Notes};
-use fromsoft_formats::Game;
 use fromsoft_formats::fxr::Property;
 use fromsoft_formats::fxr::resources::TextureKind;
 use primase_core::Entity;
@@ -44,16 +43,14 @@ impl Resolver for NoFiles {
 
 /// The state of one lowering.
 pub struct Cx<'r> {
-    pub game: Game,
     pub resolver: &'r mut dyn Resolver,
     pub inputs: Inputs,
     pub notes: Notes,
 }
 
 impl<'r> Cx<'r> {
-    pub fn new(game: Game, resolver: &'r mut dyn Resolver) -> Self {
+    pub fn new(resolver: &'r mut dyn Resolver) -> Self {
         Cx {
-            game,
             resolver,
             inputs: Inputs::default(),
             notes: Notes::default(),

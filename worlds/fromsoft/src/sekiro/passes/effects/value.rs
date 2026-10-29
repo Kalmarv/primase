@@ -289,14 +289,14 @@ pub fn number_of(v: &Value) -> f32 {
 /// A texture, model or animation number a property names: a positive whole number.
 pub fn id(p: &Property) -> Option<i32> {
     let n = number(p);
-    (n >= 1.0 && n < 2_147_483_000.0).then(|| n.round() as i32)
+    (1.0..2_147_483_000.0).contains(&n).then(|| n.round() as i32)
 }
 
 /// A whole number of an integer-valued property (a count, a limit): the value at argument 0 rounded; `None` for a negative
 /// one (the files' "no limit" is -1).
 pub fn count(p: &Property) -> Option<u32> {
     let n = number(p);
-    (n >= 0.0 && n < 4_294_967_000.0).then(|| n.round() as u32)
+    (0.0..4_294_967_000.0).contains(&n).then(|| n.round() as u32)
 }
 
 /// `v` with every key value and handle multiplied by `k` (a unit change, a sign), and its variations kept meaning the same

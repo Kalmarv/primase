@@ -13,6 +13,7 @@ use fromsoft_formats::fxr::{self, Fxr};
 use fromsoft_formats::{Binder, Game, Keys, NameDictionary, dcx::Decoder};
 use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
 use primase_core::{Component, Entity, World};
+use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::sekiro::effects::{Resolver, lower};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};

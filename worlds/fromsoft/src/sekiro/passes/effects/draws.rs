@@ -6,7 +6,7 @@
 
 use super::cx::Cx;
 use super::units;
-use super::value::{self, Notes};
+use super::value;
 use fromsoft_formats::fxr::Property;
 use fromsoft_formats::fxr::actions as a;
 use fromsoft_formats::fxr::actions::Typed;
@@ -694,8 +694,8 @@ impl Cx<'_> {
             Typed::WindForce(f) => self.field(
                 ForceKind::Wind,
                 &f.force,
-                f.shape,
                 FieldShape::of(
+                    f.shape,
                     f.sphere_radius,
                     f.box_size,
                     f.cylinder_height,
@@ -710,8 +710,8 @@ impl Cx<'_> {
             Typed::GravityForce(f) => self.field(
                 ForceKind::Gravity,
                 &f.force,
-                f.shape,
                 FieldShape::of(
+                    f.shape,
                     f.sphere_radius,
                     f.box_size,
                     f.cylinder_height,
@@ -927,13 +927,12 @@ impl Cx<'_> {
         &mut self,
         kind: ForceKind,
         force: &Property,
-        shape: i32,
         dims: FieldShape,
         multiplier: f32,
         random: [f32; 2],
         fade_out: i32,
     ) -> Draw {
-        let volume = match shape {
+        let volume = match dims.shape {
             0 => ForceVolume::Boundless,
             1 => ForceVolume::Sphere {
                 radius: dims.sphere_radius,
@@ -1135,6 +1134,8 @@ struct TracerIn<'a> {
 
 /// The size fields of a force volume.
 struct FieldShape {
+    /// The volume kind (0 boundless, 1 sphere, 2 box, 3 cylinder, 4 square prism).
+    shape: i32,
     sphere_radius: f32,
     box_size: [f32; 3],
     cylinder_height: f32,
@@ -1145,6 +1146,7 @@ struct FieldShape {
 
 impl FieldShape {
     fn of(
+        shape: i32,
         sphere_radius: f32,
         box_size: [f32; 3],
         cylinder_height: f32,
@@ -1159,15 +1161,7 @@ impl FieldShape {
             cylinder_radius,
             prism_height,
             prism_apothem,
+            shape,
         }
     }
-}
-
-/// Counts a lowering's notes into a one-line summary for the pass's log (the reasons are the keys).
-pub fn summary(notes: &Notes) -> String {
-    format!(
-        "{} lost, {} approximated",
-        notes.lost.values().sum::<u32>(),
-        notes.approximated.values().sum::<u32>()
-    )
 }
