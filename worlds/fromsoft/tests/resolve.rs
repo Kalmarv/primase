@@ -2372,8 +2372,8 @@ fn the_dither_and_camera_fade_fields_are_object_roles() {
 }
 
 /// The scene depth a forward program reads (fog, foam, water: the hardware depth at `t56`) and the shadow map a shadowed one
-/// compares against (`t32`) are the frame's own images, bound as frame textures the consumer supplies; the other engine
-/// textures stay counted zeros.
+/// compares against (`t32`) are the frame's own images, bound as frame textures the consumer supplies; the volumetric fog
+/// (`t47`) is none (zero in-scatter, full transmittance); the other engine textures stay counted zeros.
 #[test]
 fn the_scene_depth_and_the_shadow_map_are_frame_textures() {
     const FORWARD: &[u8] = include_bytes!("fixtures/forward.dxbc");
@@ -2412,6 +2412,11 @@ fn the_scene_depth_and_the_shadow_map_are_frame_textures() {
     assert_eq!(
         source("g_ShadowTexture"),
         TextureSource::Frame(FrameTexture::ShadowMap)
+    );
+    assert!(
+        matches!(source("g_VolumeFog0"), TextureSource::Default { value, .. } if value == [0., 0., 0., 1.]),
+        "{:?}",
+        source("g_VolumeFog0")
     );
     assert!(matches!(source("g_SSAOTexture"), TextureSource::Default { value, .. } if value == [0.; 4]));
 }

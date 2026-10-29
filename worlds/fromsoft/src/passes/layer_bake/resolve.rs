@@ -149,6 +149,17 @@ pub const ENGINE_SCENE_DEPTH_TEXTURE: &str = "g_DepthTexture";
 /// bound as one.
 pub const ENGINE_SHADOW_TEXTURE: &str = "g_ShadowTexture";
 
+/// The name of the volumetric fog the forward programs read at the surface's screen position and depth (`t47`, a 3D
+/// texture): its `xyz` the light the fog scatters in, added to the surface's colour, and its `w` the transmittance, whose
+/// power by the scene's fog exponents scales that colour (`colour * exp2(log2(w) * k) + xyz`, then times the
+/// pre-exposure), in Sekiro's `MetallicValue_MeshDecal_FwdSdw.ppo` and Elden Ring's `M[Sky9]_FwdSdw.ppo` alike.
+pub const ENGINE_VOLUME_FOG_TEXTURE: &str = "g_VolumeFog0";
+
+/// What the volumetric fog answers where it is bound as the layer bind binds it: no fog, nothing scattered in and
+/// everything transmitted, so a surface keeps its own colour (zero, the default of the other engine textures, would
+/// transmit nothing and draw it black).
+pub const ENGINE_VOLUME_FOG_NEUTRAL: [f32; 4] = [0., 0., 0., 1.];
+
 /// `<index>` and role of a texture kind named `…Texture2D_<index>_<Role>…`: the first named segment after the index, past
 /// a blend shader's `GSBlendMap` prefix (`…Texture2D_2_GSBlendMap_AlbedoMap_1` is an albedo map, as both games' blend
 /// shaders name their slots; a slot named only `GSBlendMap` is the blend map) and past the empty segments of a kind such
@@ -393,8 +404,8 @@ pub fn resolve(
         let individual_2d =
             resource.count == 1 && dim == iridia_interface::TextureDim::D2 && !arrayed && !multisampled;
         let register = register(resource)?;
-        // the engine's own texture: the dither noise a neutral grey (the fade is off), the scene depth and the shadow map
-        // the frame's, any other zero; each zero is counted by name
+        // the engine's own texture: the dither noise a neutral grey (the fade is off), the volumetric fog none, the scene
+        // depth and the shadow map the frame's, any other zero; each default is counted by name
         let named = match program_texture(material, resource) {
             ProgramTexture::Material(named) => named,
             ProgramTexture::Engine(name) => {
@@ -411,13 +422,16 @@ pub fn resolve(
                     });
                     continue;
                 }
-                let (value, what) = if name == ENGINE_DITHER_TEXTURE {
-                    (
+                let (value, what) = match name {
+                    ENGINE_DITHER_TEXTURE => (
                         [ENGINE_DITHER_NEUTRAL as f32; 4],
                         "read only by the dithered alpha fade, which is off",
-                    )
-                } else {
-                    ([0.; 4], "not a material slot, left at zero")
+                    ),
+                    ENGINE_VOLUME_FOG_TEXTURE => (
+                        ENGINE_VOLUME_FOG_NEUTRAL,
+                        "no fog (nothing scattered in, everything transmitted)",
+                    ),
+                    _ => ([0.; 4], "not a material slot, left at zero"),
                 };
                 let why = format!("engine texture {name}: {what}");
                 *policies.entry(why.clone()).or_default() += 1;
