@@ -879,12 +879,7 @@ fn a_vertex_program_is_bound_to_streams_and_engine_roles() {
     // the record's own object-to-world transform (`float4x3 mWorld`, its first 48 bytes)
     assert_eq!(
         named("mWorld"),
-        (
-            "cbInstanceData".to_owned(),
-            0,
-            48,
-            Object(ObjectParameter::World)
-        )
+        ("cbInstanceData".to_owned(), 0, 48, Object(ObjectParameter::World))
     );
     // twelve constants of the table, the screen size as two bindings
     assert_eq!(stage.constants.len(), 13);
@@ -2439,7 +2434,9 @@ fn a_forward_materials_pass_is_chosen_by_whether_its_placements_receive_shadows(
     let mut world = World::default();
     let mut definition = material().definition.clone();
     definition.shader = "N:\\NTC\\data\\Material\\sat\\OutputData\\SPX\\MetallicValue.spx".into();
-    definition.parameters.retain(|p| p.name != "GXFT_SATStaticSwitch" && p.name != "g_BlendMode");
+    definition
+        .parameters
+        .retain(|p| p.name != "GXFT_SATStaticSwitch" && p.name != "g_BlendMode");
     definition.parameters.push(Parameter {
         name: "g_BlendMode".into(),
         value: Value::Int(vec![2]),
@@ -2530,7 +2527,11 @@ fn a_forward_materials_pass_is_chosen_by_whether_its_placements_receive_shadows(
     );
     let pixel = |m: Entity| {
         let binding = world.get::<ShaderBinding>(m).unwrap();
-        world.get::<Name>(binding.stage(Stage::Pixel).unwrap().shader).unwrap().0.clone()
+        world
+            .get::<Name>(binding.stage(Stage::Pixel).unwrap().shader)
+            .unwrap()
+            .0
+            .clone()
     };
     assert_eq!(pixel(receiving), "MetallicValue_FwdSdw.ppo");
     assert_eq!(pixel(not), "MetallicValue_Fwd.ppo");
