@@ -69,14 +69,28 @@
 //! (and, with `reference-pose=own`, each part's skeleton too: its skins bind to them) and every member of the parts'
 //! assets other than their rigs; the parts' own asset roots are removed.
 //!
-//! All six options are required. Approximations, reported: joints whose rests differ within the tolerance, the
-//! vertex displacement measure of `own`, and the inverse binds `assembled` moves.
+//! **Sockets.** The parts' sockets (`core.sockets`: a FromSoftware model's dummy polygons) are the character's: the
+//! assembled skeleton holds each part's sockets, each on the assembled joint its own joint is, at the offset it has in
+//! that joint, so what names a socket of the character (an effect a clip starts) finds it on the skeleton a clip poses.
+//! A name two parts (or one part twice) give sockets is one socket: where they stand alike (the same joint, the offsets
+//! within `tolerance=`) that is counted; where they do not, the first part's (in part order) is kept and the others are
+//! reported by part with how many, never dropped silently.
+//!
+//! **Held objects** (`leave-out=`, optional): an asset whose `core.source` is one given, or under one
+//! (`parts/wp_a_0300_l` takes `parts/wp_a_0300_l/wp_a_0300_1_l`), `+` between, is not a part: an object the character
+//! holds (a weapon) keeps its own rig, and what attaches it to the character (`core.attachment`) is the program's. Each
+//! one left out is counted.
+//!
+//! The six options other than `leave-out=` are required. Approximations, reported: joints whose rests differ within the
+//! tolerance, the vertex displacement measure of `own`, the inverse binds `assembled` moves, and sockets of one name two
+//! parts place differently.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{
-    Asset, Component, Entity, Joint, JointId, JointMap, Mesh, Name, Role, Skeleton, Skin, Slot, Source, World,
+    Asset, Component, Entity, Joint, JointId, JointMap, Mesh, Name, Role, Skeleton, Skin, Slot, Socket,
+    SocketId, Sockets, Source, World,
 };
 
 use crate::deform::{Vertices, influences, skin};
@@ -123,7 +137,8 @@ pub enum WeightedRests {
 }
 
 /// `assemble-character{correspondence=by-name|table, reference-pose=own|assembled, tolerance=<number>,
-/// unweighted-rests=report|refuse, weighted-rests=refuse|report, name=<word>}` (see the module documentation).
+/// unweighted-rests=report|refuse, weighted-rests=refuse|report, name=<word>[, leave-out=<source>+...]}` (see the module
+/// documentation).
 #[derive(Clone, Debug, PartialEq)]
 pub struct AssembleCharacter {
     pub correspondence: Correspondence,
@@ -134,6 +149,8 @@ pub struct AssembleCharacter {
     pub weighted_rests: WeightedRests,
     /// The assembled asset's name.
     pub name: String,
+    /// The `core.source` of each asset that is a held object, not a part (`leave-out=`).
+    pub leave_out: Vec<String>,
 }
 
 impl Choice for Correspondence {
@@ -164,7 +181,7 @@ impl Choice for WeightedRests {
     ];
 }
 
-/// `assemble-character`'s declaration ([`primase_core::pass::PassRegistry::add`]): every option required.
+/// `assemble-character`'s declaration ([`primase_core::pass::PassRegistry::add`]): every option but `leave-out` required.
 pub const ASSEMBLE_CHARACTER: PassSpec = PassSpec {
     name: "assemble-character",
     options: &[
@@ -190,6 +207,13 @@ pub const ASSEMBLE_CHARACTER: PassSpec = PassSpec {
             "a disagreeing rest of a weighted joint: refused, or reported with the part kept on its own rest",
         ),
         OptionSpec::required("name", "character", "the assembled character's name, not empty"),
+        OptionSpec::optional(
+            "leave-out",
+            "parts/wp_a_0300_l",
+            "the core.source of each asset that is an object the character holds, not a part of it (with the assets \
+             under it), `+` between",
+            "every asset that holds a rig is a part",
+        ),
     ],
     make: assemble_character,
 };
@@ -211,7 +235,27 @@ fn assemble_character(g: &Given) -> Result<Box<dyn Pass>, String> {
         unweighted_rests: g.choice::<UnweightedRests>("unweighted-rests"),
         weighted_rests: g.choice::<WeightedRests>("weighted-rests"),
         name: name.to_owned(),
+        leave_out: match g.optional("leave-out") {
+            Some(list) => {
+                let sources: Vec<String> = list.split('+').map(str::to_owned).collect();
+                if sources.iter().any(String::is_empty) {
+                    return Err(format!("leave-out={list}: an empty source"));
+                }
+                sources
+            }
+            None => Vec::new(),
+        },
     }))
+}
+
+/// Whether `source` is one of `held` or under one (`parts/x` holds `parts/x/y`).
+fn is_held(source: &str, held: &[String]) -> bool {
+    held.iter().any(|h| {
+        source == h
+            || source
+                .strip_prefix(h.as_str())
+                .is_some_and(|rest| rest.starts_with('/'))
+    })
 }
 
 /// One asset that holds a rig.
@@ -247,8 +291,10 @@ fn gap(a: &Affine, b: &Affine) -> f64 {
         .fold(0.0, f64::max)
 }
 
-fn gather(w: &World) -> Result<Vec<Part>, String> {
+/// The assets that hold a rig and are parts (not held objects, [`is_held`]), and how many held objects were left out.
+fn gather(w: &World, held: &[String]) -> Result<(Vec<Part>, u64), String> {
     let mut parts = Vec::new();
+    let mut left_out = 0u64;
     // the part asset that holds each entity: one entity cannot belong to two parts (it would be held twice by the
     // assembled asset, and its skin rebound once per holder)
     let mut held_by: BTreeMap<Entity, String> = BTreeMap::new();
@@ -267,6 +313,10 @@ fn gather(w: &World) -> Result<Vec<Part>, String> {
             [rig] => *rig,
             _ => return Err(format!("asset {label} has {} rigs: a part has one", rigs.len())),
         };
+        if w.get::<Source>(root).is_some_and(|s| is_held(&s.0, held)) {
+            left_out += 1;
+            continue;
+        }
         for (member, _) in &asset.members {
             if let Some(other) = held_by.insert(*member, label.clone()) {
                 return Err(format!(
@@ -311,7 +361,7 @@ fn gather(w: &World) -> Result<Vec<Part>, String> {
             parts.len()
         ));
     }
-    Ok(parts)
+    Ok((parts, left_out))
 }
 
 /// Which assembled joint each joint of each part is: `of[part][joint index]`.
@@ -604,6 +654,80 @@ impl AssembleCharacter {
         }
         Ok((found, detached))
     }
+
+    /// The parts' sockets on the assembled skeleton (see the module documentation): each on the assembled joint its own
+    /// joint is, its offset as stored; one a name, the first part's where two place a name otherwise (reported by part).
+    fn carry_sockets(
+        &self,
+        w: &World,
+        parts: &[Part],
+        of: &[Vec<usize>],
+        log: &mut PassLog,
+    ) -> Result<Vec<Socket>, String> {
+        let mut sockets: Vec<Socket> = Vec::new();
+        // each name's socket (an index into `sockets`) and the part it was taken from
+        let mut named: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+        let mut alike = 0u64;
+        // (the part kept, the part that places the name otherwise): the names
+        let mut otherwise: BTreeMap<(usize, usize), Vec<String>> = BTreeMap::new();
+        for (p, part) in parts.iter().enumerate() {
+            let Some(own) = w.get::<Sockets>(part.rig) else {
+                continue;
+            };
+            for s in &own.0 {
+                let j = part.skeleton.index_of(s.joint).ok_or_else(|| {
+                    format!(
+                        "{}: socket {} is on a joint its skeleton does not hold",
+                        part.label, s.name
+                    )
+                })?;
+                let joint = JointId(of[p][j] as u32);
+                match named.get(&s.name) {
+                    Some(&(k, first)) => {
+                        let kept = &sockets[k];
+                        if kept.joint == joint
+                            && gap(&affine(&kept.offset), &affine(&s.offset)) <= self.tolerance
+                        {
+                            alike += 1;
+                        } else {
+                            otherwise.entry((first, p)).or_default().push(s.name.clone());
+                        }
+                    }
+                    None => {
+                        named.insert(s.name.clone(), (sockets.len(), p));
+                        sockets.push(Socket {
+                            id: SocketId(sockets.len() as u32),
+                            name: s.name.clone(),
+                            joint,
+                            offset: s.offset,
+                        });
+                    }
+                }
+            }
+        }
+        for ((first, other), names) in otherwise {
+            const SHOWN: usize = 5;
+            let more = names.len().saturating_sub(SHOWN);
+            log.approximate(
+                &format!(
+                    "sockets of {} given the name of a socket of {} and placed otherwise, {}'s kept: {}{}",
+                    parts[other].label,
+                    parts[first].label,
+                    parts[first].label,
+                    names[..names.len().min(SHOWN)].join(", "),
+                    if more > 0 {
+                        format!(" and {more} more")
+                    } else {
+                        String::new()
+                    }
+                ),
+                names.len() as u64,
+            );
+        }
+        log.count("sockets on the assembled skeleton", sockets.len() as u64);
+        log.count("sockets two parts give one name and place alike", alike);
+        Ok(sockets)
+    }
 }
 
 impl Pass for AssembleCharacter {
@@ -611,7 +735,7 @@ impl Pass for AssembleCharacter {
         "assemble-character"
     }
     fn options(&self) -> Options {
-        Options::from([
+        let mut options = Options::from([
             ("correspondence".to_owned(), self.correspondence.text().to_owned()),
             ("reference-pose".to_owned(), self.reference_pose.text().to_owned()),
             ("tolerance".to_owned(), self.tolerance.to_string()),
@@ -621,7 +745,11 @@ impl Pass for AssembleCharacter {
             ),
             ("weighted-rests".to_owned(), self.weighted_rests.text().to_owned()),
             ("name".to_owned(), self.name.clone()),
-        ])
+        ]);
+        if !self.leave_out.is_empty() {
+            options.insert("leave-out".to_owned(), self.leave_out.join("+"));
+        }
+        options
     }
     fn requires(&self) -> &[&'static str] {
         &[Asset::NAME, Skeleton::NAME, Skin::NAME]
@@ -629,6 +757,7 @@ impl Pass for AssembleCharacter {
     fn provides(&self) -> &[&'static str] {
         &[
             Skeleton::NAME,
+            Sockets::NAME,
             JointMap::NAME,
             Asset::NAME,
             Name::NAME,
@@ -642,10 +771,10 @@ impl Pass for AssembleCharacter {
         true
     }
     fn approximates(&self) -> &'static str {
-        "parts whose rests for a joint differ within the tolerance related as one joint (with weighted-rests=report, beyond it too); with reference-pose=assembled, inverse binds moved to the assembled rest"
+        "parts whose rests for a joint differ within the tolerance related as one joint (with weighted-rests=report, beyond it too); with reference-pose=assembled, inverse binds moved to the assembled rest; of sockets two parts give one name and place otherwise, the first part's kept"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        let parts = gather(w)?;
+        let (parts, left_out) = gather(w, &self.leave_out)?;
         // every entity whose skin binds to a part's rig (its prototypes and their level-of-detail forms), and the
         // joints of the part that carry weight in each
         let mut prototypes: Vec<Vec<(Entity, BTreeSet<JointId>)>> = Vec::new();
@@ -785,6 +914,10 @@ impl Pass for AssembleCharacter {
         let assembled = w.spawn();
         w.insert(assembled, Name(format!("{} skeleton", self.name)));
         w.insert(assembled, skeleton);
+        let sockets = self.carry_sockets(w, &parts, &of, log)?;
+        if !sockets.is_empty() {
+            w.insert(assembled, Sockets(sockets));
+        }
         let mut asset = Asset {
             members: vec![(assembled, Role::Rig)],
         };
@@ -934,6 +1067,7 @@ impl Pass for AssembleCharacter {
             );
         }
         log.count("parts assembled", parts.len() as u64);
+        log.count("held objects left out (leave-out=)", left_out);
         log.count("assembled joints", asm.names.len() as u64);
         log.count(
             "assembled joints held by more than one part",
@@ -1693,6 +1827,148 @@ mod tests {
             !log.approximations.keys().any(|k| k.contains("of head kept")),
             "{:?}",
             log.approximations
+        );
+    }
+
+    /// The skeleton entity of the part asset named `label`.
+    fn skeleton_of(w: &World, label: &str) -> Entity {
+        let (_, asset) = w
+            .iter::<Asset>()
+            .find(|(root, _)| w.get::<Name>(*root).is_some_and(|n| n.0 == label))
+            .unwrap();
+        asset.members.iter().find(|m| m.1 == Role::Rig).unwrap().0
+    }
+
+    fn socket(id: u32, name: &str, joint: u32, offset: [f32; 3]) -> Socket {
+        Socket {
+            id: SocketId(id),
+            name: name.to_owned(),
+            joint: JointId(joint),
+            offset: primase_core::Transform {
+                cols: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], offset],
+            },
+        }
+    }
+
+    /// The parts' sockets are on the assembled skeleton, each on the joint its own corresponds to, at its offset: the
+    /// body's "dummy 20" on its L_Arm, the head's "dummy 85" on its Head. The head names a "dummy 20" too, on its Neck: on
+    /// another joint than the body's, so the body's (first) is kept and the head's reported by name and counted; its
+    /// "dummy 7" stands as the body's does (the Neck, the same offset), counted as alike.
+    #[test]
+    fn the_parts_sockets_are_carried_onto_the_assembled_skeleton_and_disagreements_reported() {
+        let (mut w, ..) = world(None, [0.0, 0.5, 0.0]);
+        let body = skeleton_of(&w, "body");
+        let head = skeleton_of(&w, "head");
+        w.insert(
+            body,
+            Sockets(vec![
+                socket(0, "dummy 20", 3, [0.1, 0.0, 0.0]),
+                socket(1, "dummy 7", 2, [0.0, 0.1, 0.0]),
+            ]),
+        );
+        w.insert(
+            head,
+            Sockets(vec![
+                socket(0, "dummy 85", 3, [0.0, 0.0, 0.2]),
+                socket(1, "dummy 20", 2, [0.1, 0.0, 0.0]),
+                socket(2, "dummy 7", 2, [0.0, 0.1, 0.0]),
+            ]),
+        );
+        let report = run(&mut w, OWN).unwrap();
+        let (rig, s) = assembled(&w);
+        let carried: Vec<(&str, &str, [f32; 3])> = w
+            .get::<Sockets>(rig)
+            .unwrap()
+            .0
+            .iter()
+            .map(|k| {
+                (
+                    k.name.as_str(),
+                    s.joints[k.joint.0 as usize].name.as_str(),
+                    [k.offset.cols[3][0], k.offset.cols[3][1], k.offset.cols[3][2]],
+                )
+            })
+            .collect();
+        assert_eq!(
+            carried,
+            [
+                ("dummy 20", "L_Arm", [0.1, 0.0, 0.0]),
+                ("dummy 7", "Neck", [0.0, 0.1, 0.0]),
+                ("dummy 85", "Head", [0.0, 0.0, 0.2]),
+            ]
+        );
+        assert_eq!(w.verify_components(), vec![]);
+        let log = &report.steps[0].log;
+        assert_eq!(log.counts["sockets on the assembled skeleton"], 3);
+        assert_eq!(log.counts["sockets two parts give one name and place alike"], 1);
+        assert_eq!(
+            log.approximations["sockets of head given the name of a socket of body and placed otherwise, body's kept: dummy 20"],
+            1
+        );
+    }
+
+    /// An asset whose source is one `leave-out=` names, or under one, is not a part: it keeps its own rig and members, and
+    /// the parts are assembled without it (here the body and the head; the held sword's asset and its form stay as read).
+    #[test]
+    fn held_objects_are_left_out_of_the_assembly() {
+        let (mut w, ..) = world(None, [0.0, 0.5, 0.0]);
+        part(
+            &mut w,
+            "sword",
+            &[("Blade", None, [0.0; 3])],
+            &[([0.0, 0.5, 0.0], 0)],
+        );
+        part(
+            &mut w,
+            "scabbard",
+            &[("Blade", None, [0.0; 3])],
+            &[([0.0, 0.3, 0.0], 0)],
+        );
+        for (label, source) in [
+            ("sword", "parts/wp_a_0300_l"),
+            ("scabbard", "parts/wp_a_0300_l/wp_a_0300_1_l"),
+        ] {
+            let root = w
+                .iter::<Asset>()
+                .find(|(r, _)| w.get::<Name>(*r).is_some_and(|n| n.0 == label))
+                .unwrap()
+                .0;
+            w.insert(root, Source(source.to_owned()));
+        }
+        let held = OWN.replace("name=hero}", "name=hero,leave-out=parts/wp_a_0300_l}");
+        let report = run(&mut w, &held).unwrap();
+        let log = &report.steps[0].log;
+        assert_eq!(log.counts["held objects left out (leave-out=)"], 2);
+        assert_eq!(log.counts["parts assembled"], 2);
+        // the two held assets and the character
+        assert_eq!(w.iter::<Asset>().count(), 3);
+        let character = w
+            .iter::<Asset>()
+            .find(|(r, _)| w.get::<Source>(*r).is_some_and(|s| s.0 == "assembled/hero"))
+            .unwrap()
+            .1;
+        let rig = character.members.iter().find(|m| m.1 == Role::Rig).unwrap().0;
+        assert!(
+            w.get::<Skeleton>(rig)
+                .unwrap()
+                .joints
+                .iter()
+                .all(|j| j.name != "Blade")
+        );
+        // a source that only begins like one given is not under it
+        assert!(!is_held("parts/wp_a_0300_lx", &["parts/wp_a_0300_l".to_owned()]));
+        assert!(is_held("parts/wp_a_0300_l/a", &["parts/wp_a_0300_l".to_owned()]));
+        // the option prints back as given, and an empty source is refused
+        let mut r = PassRegistry::new();
+        crate::register(&mut r);
+        let pipeline = r.parse(&held).unwrap();
+        assert_eq!(pipeline.passes[0].options()["leave-out"], "parts/wp_a_0300_l");
+        let empty = OWN.replace("name=hero}", "name=hero,leave-out=parts/a+}");
+        assert!(
+            r.parse(&empty)
+                .unwrap_err()
+                .to_string()
+                .contains("an empty source")
         );
     }
 }
