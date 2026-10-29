@@ -39,9 +39,9 @@ use primase_core::render_graph::{
     TargetShape, TargetSize, TargetView, Trigger,
 };
 use primase_core::shader::{
-    BufferBinding, BufferSource, ConstantBinding, ConstantRole, FrameParameter, InputBinding, InputRole,
-    LightValue, OutputBinding, OutputRole, SamplerBinding, ScreenTriangleValue, Shader, StageBinding,
-    TextureBinding, TextureSource, VariantKey, ViewParameter,
+    BufferBinding, BufferSource, ConstantBinding, ConstantRole, InputBinding, InputRole, LightValue,
+    OutputBinding, OutputRole, SamplerBinding, ScreenTriangleValue, Shader, StageBinding, TextureBinding,
+    TextureSource, VariantKey, ViewParameter,
 };
 use primase_core::{Name, World};
 use std::collections::{BTreeMap, BTreeSet};
@@ -661,24 +661,17 @@ fn render_state(s: &table::State, targets: usize) -> std::result::Result<iri::Re
     Ok(out)
 }
 
-/// The engine's named constants `core` has a role for, as the layered materials' bindings name them
-/// ([`crate::passes::layer_bake::resolve`]): the camera's matrices and position, the time, the time of day and the
-/// pre-exposure. `FC_ScreenSize` is its own (two roles). Every other constant is unknown, with its buffer's name.
+/// The engine's named constants `core` has a role for, as the materials' bindings name them
+/// ([`crate::layer_bake::resolve::engine_role`]: the camera's matrices and position, the time, the time of day,
+/// the pre-exposure and its inverse), and `cbLightAccParam`'s own name for the view matrix. `FC_ScreenSize` is its own
+/// (two roles). Every other constant is unknown, with its buffer's name.
 fn constant_role(name: &str) -> Option<ConstantRole> {
-    Some(match name {
+    match name {
         // cbLightAccParam's world-to-view matrix (three lines): the light-organize program turns each light's
         // position by it before testing it against the tiles
-        "FC_MatrixView" | "g_ViewMatrix" => ConstantRole::View(ViewParameter::View),
-        "FC_MatrixProj" => ConstantRole::View(ViewParameter::Projection),
-        "FC_MatrixInvView" => ConstantRole::View(ViewParameter::InverseView),
-        "FC_MatrixInvProj" => ConstantRole::View(ViewParameter::InverseProjection),
-        "FC_MatrixInvViewProj" => ConstantRole::View(ViewParameter::InverseViewProjection),
-        "SC_CameraPos" | "SC_RenderCameraPos" => ConstantRole::View(ViewParameter::CameraPosition),
-        "FC_GlobalTime" => ConstantRole::Frame(FrameParameter::Time),
-        "FC_TimeOfDay" => ConstantRole::Frame(FrameParameter::TimeOfDay),
-        "SC_PreExposure" => ConstantRole::Frame(FrameParameter::PreExposure),
-        _ => return None,
-    })
+        "g_ViewMatrix" => Some(ConstantRole::View(ViewParameter::View)),
+        name => crate::layer_bake::resolve::engine_role(name),
+    }
 }
 
 struct Lower<'a> {

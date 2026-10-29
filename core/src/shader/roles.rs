@@ -124,6 +124,24 @@ pub enum ViewParameter {
     ProjectionFlip,
     /// The previous frame's view-projection matrix (what a motion vector is measured against).
     PreviousViewProjection,
+    /// The part of the render target the view draws into, per axis: its drawn size over the target's size, two values. A
+    /// renderer that lowers its resolution from frame to frame draws into that part of a target of the full size, so a
+    /// program finds its texture coordinate on the screen as the pixel position times
+    /// [`ViewParameter::InverseViewportSize`] over this; a view that fills its target has 1, 1.
+    ResolutionScale,
+    /// Whether the view's projection is a perspective one, as an unsigned 32-bit integer word: 1 for a perspective
+    /// projection (clip w is the depth along the view axis), 0 for an orthographic one.
+    Perspective,
+    /// The far clip plane's distance minus the near clip plane's ([`ViewParameter::FarPlane`] minus
+    /// [`ViewParameter::NearPlane`]), in world units (one value).
+    DepthRange,
+    /// The device depth a perspective projection gives a point infinitely far away: a point at depth `d` along the view
+    /// axis (world units) gets the device depth `offset + scale / d` ([`ViewParameter::DeviceDepthScale`] is `scale`),
+    /// so a program takes the depth back as `scale / (device depth - offset)`. One value.
+    DeviceDepthOffset,
+    /// The scale of a perspective projection's device depth over the depth along the view axis: `scale` in
+    /// [`ViewParameter::DeviceDepthOffset`]'s `offset + scale / d`. One value.
+    DeviceDepthScale,
 }
 /// A transform built from the drawn object's object-to-world matrix.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
@@ -182,7 +200,8 @@ pub enum ObjectParameter {
     /// feeds the identity here, which leaves the first step without effect.
     ClothCancelPalette,
     /// The instance's environment data word (an unsigned integer the engine writes per instance; the layered programs
-    /// scale it by 1/255 into the alpha lane of a G-buffer target).
+    /// scale it by 1/255 into the alpha lane of a G-buffer target, and a program that reads a buffer of light sets takes
+    /// the set it names).
     EnvironmentData,
     /// The index of the instance's first matrix in the object-matrix palette, which the vertex program adds to the
     /// index it takes (the joint indices of a skinned vertex, the instance's own for a rigid one).
@@ -212,7 +231,7 @@ pub enum ObjectParameter {
     CameraFadeInverseRange,
     /// Whether the instance is drawn with dithered transparency (a per-draw flag): a program that reads it, with
     /// [`ObjectParameter::DitherEnabled`] set, discards a fragment by the dither noise against the amount the instance record
-    /// carries.
+    /// carries ([`ObjectParameter::Fade`]).
     DitherAlphaEnabled,
     /// The second per-model flag of the dithered transparency, set together with [`ObjectParameter::DitherAlphaEnabled`]
     /// (a program reads both, and fades only where both are on).
@@ -221,8 +240,10 @@ pub enum ObjectParameter {
     /// program applies it where its pass keeps the instance's visibility: multiplied into the alpha it writes or tests (an
     /// alpha test, also one steered through the depth output), stored as the alpha of the image a pass writes, as the weight
     /// of the surface against the scene behind it where the program blends itself, and, in a pass that has no alpha, into the
-    /// emission it writes. A consumer that draws the instance as fully shown feeds 1. The camera fade and the dither roles are
-    /// other mechanisms: they discard by noise, they do not scale a value.
+    /// emission it writes, or, under the dithered transparency's flags ([`ObjectParameter::DitherAlphaEnabled`]), as the
+    /// share of fragments a dithered test keeps (a fragment survives where the dither noise less one half plus this factor
+    /// reaches one half). A consumer that draws the instance as fully shown feeds 1. The camera fade and the dither flags
+    /// are other mechanisms: they switch the discard by noise on, they do not carry the factor.
     Fade,
 }
 /// A value of the frame being drawn.
@@ -240,12 +261,30 @@ pub enum FrameParameter {
     /// of their own, with their own bindings. A program that multiplies its emission by this value writes pre-exposed
     /// radiance; a consumer that lights in unscaled radiance and exposes once at the end gives it 1.
     PreExposure,
+    /// One over [`FrameParameter::PreExposure`]: the factor a program multiplies a value it reads back from the frame's
+    /// light targets by to take the pre-exposure off it. One value; 1 where the pre-exposure is 1.
+    InversePreExposure,
+    /// The frame's exposure: the factor its exposure stage multiplies the scene's radiance by before the tone curve (a
+    /// renderer's adapted exposure). One value; 1 where the frame is not exposed.
+    Exposure,
+    /// One over [`FrameParameter::Exposure`]: a program that multiplies a colour by it puts that colour on the screen at
+    /// the same brightness whatever the exposure. One value.
+    InverseExposure,
     /// An index into a palette of colours a draw selects from.
     ColourSlot,
     /// The direction the dominant directional light travels (xyz): a surface is lit by `saturate(dot(normal, -xyz))`.
     LightDirection,
-    /// The colour (rgb) of that light.
+    /// The unit direction from the scene towards the dominant directional light (xyz): the opposite of
+    /// [`FrameParameter::LightDirection`], so a surface is lit by `saturate(dot(normal, xyz))`.
+    DirectionToLight,
+    /// The colour (rgb) of that light as the source's programs read it: the scene's sun's (`core.environment`'s)
+    /// `color` times its `intensity` over the world's [`crate::DirectionalLightUnit::lux_per_unit`], the value the
+    /// source stored. A world with no sun or no such unit gives a consumer no value of it.
     LightColour,
+    /// The colour (rgb) of that light's highlights as the source's programs read it: as [`FrameParameter::LightColour`],
+    /// of the sun's `specular` colour and intensity where it states them ([`crate::LightSpecular`]), of its own
+    /// otherwise.
+    LightSpecularColour,
     /// The directional ambient light as four values: its colour (xyz: a lighting program adds each channel to the same
     /// channel of the lit colour, scaled by how much the surface faces an ambient direction it also reads), and a w that
     /// scales the ambient terms a vertex carries, growing from 1 (no change) with distance.
@@ -285,6 +324,15 @@ pub enum ConstantRole {
     /// Not resolved to a role, and why.
     Unknown {
         /// What was examined and why no role follows.
+        why: String,
+    },
+    /// A value of the engine's that no role of core states, set by the source's own policy: the 32-bit words the
+    /// constant takes, and why (as [`super::TextureSource::Default`] sets a texture slot the engine fills). Not the
+    /// material's: a consumer writes the words as they are.
+    Default {
+        /// The words, as [`ConstantRole::Material`]'s.
+        words: Vec<u32>,
+        /// The policy and the evidence for its words.
         why: String,
     },
 }
@@ -338,7 +386,8 @@ impl ConstantRole {
             ConstantRole::Material(_)
             | ConstantRole::Frame(_)
             | ConstantRole::AlphaReference { .. }
-            | ConstantRole::Unknown { .. } => false,
+            | ConstantRole::Unknown { .. }
+            | ConstantRole::Default { .. } => false,
         }
     }
 }

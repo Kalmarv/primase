@@ -235,6 +235,15 @@ pub(crate) fn program_constants(
     Ok(constants)
 }
 
+/// The policy a consumer counts when it runs a program that reads the camera's depth terms: the static bake's frame has
+/// no depth along a view axis, so they are left at frozen zero, as where they are unbound.
+pub const NO_DEPTH_POLICY: &str = "camera depth terms left at frozen zero: the static bake has no view depth";
+
+/// The policy a consumer counts when it runs a program that reads the direction towards the dominant light: the static
+/// bake lights nothing, so it is left at frozen zero, as where it is unbound.
+pub const NO_DIRECTIONAL_LIGHT_POLICY: &str =
+    "direction to the light left at frozen zero: the static bake lights nothing";
+
 /// The policy a consumer counts when it runs a skinning program: the pose is the bind pose, every joint's matrix the
 /// identity, so a vertex at weight one on any joint is where it is stored. What the layered pixel program is given
 /// (coordinates, layer weights, tint) does not depend on the pose.
@@ -289,6 +298,11 @@ pub(crate) fn frozen_words(
             policies.insert(INSTANCE_DATA_POLICY.into(), 1);
             vec![frame.matrix_base, 0, 0, 0]
         }
+        // the bake draws one record, the first
+        ConstantRole::Object(ObjectParameter::InstanceBase) => {
+            policies.insert(INSTANCE_DATA_POLICY.into(), 1);
+            vec![0]
+        }
         ConstantRole::Object(ObjectParameter::ClothSimulation) => {
             policies.insert(CLOTH_OFF_POLICY.into(), 1);
             vec![0]
@@ -327,6 +341,8 @@ pub(crate) fn frozen_words(
                 .collect()
         }
         ConstantRole::Object(ObjectParameter::InstanceColour) => bits(&frame.instance_colour),
+        // the bake draws the instance fully shown
+        ConstantRole::Object(ObjectParameter::Fade) => bits(&[1.0]),
         ConstantRole::Object(
             ObjectParameter::CameraFadeEnabled
             | ObjectParameter::CameraFadeEnd
@@ -354,6 +370,15 @@ pub(crate) fn frozen_words(
             policies.insert("unit pre-exposure for static material bake".into(), 1);
             bits(&[frame.pre_exposure])
         }
+        ConstantRole::Frame(FrameParameter::InversePreExposure) => {
+            policies.insert("unit pre-exposure for static material bake".into(), 1);
+            bits(&[1.0 / frame.pre_exposure])
+        }
+        // a bake's colours are not exposed
+        ConstantRole::Frame(FrameParameter::Exposure | FrameParameter::InverseExposure) => {
+            policies.insert("unit exposure for static material bake".into(), 1);
+            bits(&[1.0])
+        }
         ConstantRole::Frame(FrameParameter::TimeOfDay) => {
             policies.insert("time of day left at frozen zero".into(), 1);
             return Ok(None);
@@ -372,6 +397,35 @@ pub(crate) fn frozen_words(
         }
         ConstantRole::Unknown { why } => {
             *policies.entry(why.clone()).or_default() += 1;
+            return Ok(None);
+        }
+        // the source's own value for the engine's constant, with its reason counted
+        ConstantRole::Default { words, why } => {
+            *policies.entry(why.clone()).or_default() += 1;
+            words.clone()
+        }
+        // the bake fills its whole target
+        ConstantRole::View(ViewParameter::ResolutionScale) => bits(&[1., 1.]),
+        // the bake's frame has no depth along a view axis and no light: what a program computes from them is left at
+        // frozen zero, as where they are unbound
+        ConstantRole::View(
+            ViewParameter::Perspective
+            | ViewParameter::NearPlane
+            | ViewParameter::FarPlane
+            | ViewParameter::InverseFarPlane
+            | ViewParameter::DepthRange
+            | ViewParameter::DeviceDepthOffset
+            | ViewParameter::DeviceDepthScale,
+        ) => {
+            policies.insert(NO_DEPTH_POLICY.into(), 1);
+            return Ok(None);
+        }
+        ConstantRole::Frame(
+            FrameParameter::DirectionToLight
+            | FrameParameter::LightColour
+            | FrameParameter::LightSpecularColour,
+        ) => {
+            policies.insert(NO_DIRECTIONAL_LIGHT_POLICY.into(), 1);
             return Ok(None);
         }
         other => {

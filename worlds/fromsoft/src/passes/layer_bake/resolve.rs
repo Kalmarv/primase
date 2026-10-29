@@ -328,18 +328,7 @@ pub fn resolve(
 ) -> Result<Resolution> {
     let interface = PixelShader::interface(shader);
     let layout = Layout::of(shader).map_err(|e| invalid("layer binding", e.at, e.detail))?;
-    let buffer_of = |slot: u32| -> Option<(ResourceId, u32)> {
-        interface.resources.iter().find_map(|r| match &r.kind {
-            ResourceKind::ConstantBuffer { layout }
-                if r.provenance
-                    .d3d
-                    .is_some_and(|b| b.class == D3dClass::ConstantBuffer && b.register == slot) =>
-            {
-                Some((r.id, layout.size))
-            }
-            _ => None,
-        })
-    };
+    let buffer_of = |slot: u32| constant_buffer(interface, slot);
     let mut policies = BTreeMap::new();
     let mut constants = Vec::new();
     // the program's value graph, read once: what states a matrix's lines and an alpha test's reference
@@ -362,30 +351,8 @@ pub fn resolve(
         });
         iridia::output_uses::discard_compares(graph, buffer, field.offset, dither)
     };
-    // a constant of the layout, at `word` words into it, `size` bytes (cut where its buffer ends), by name
-    let mut constant = |name: &str, word: usize, size: u32, mut role: ConstantRole| -> Result<()> {
-        let Some(&iridia_exec::Field { buffer, offset, .. }) = layout.fields.get(name) else {
-            return Ok(());
-        };
-        let Some((resource, buffer_size)) = buffer_of(buffer) else {
-            return Ok(());
-        };
-        let start = (offset as usize + word) as u64 * 4;
-        let fit = u64::from(buffer_size).saturating_sub(start).min(u64::from(size)) as u32;
-        if fit == 0 {
-            return Ok(());
-        }
-        if let ConstantRole::Material(words) = &mut role {
-            words.truncate(fit as usize / 4);
-        }
-        constants.push(ConstantBinding {
-            resource,
-            offset: start as u32,
-            size: fit,
-            name: Some(name.to_owned()),
-            role,
-            lines: None,
-        });
+    let mut constant = |name: &str, word: usize, size: u32, role: ConstantRole| -> Result<()> {
+        bind_field(interface, &layout, &mut constants, name, word, size, role);
         Ok(())
     };
     let words = |values: &[f32]| ConstantRole::Material(values.iter().map(|v| v.to_bits()).collect());
@@ -603,7 +570,8 @@ pub fn resolve(
     )?;
     // the engine's values: roles, whatever a consumer freezes them to
     constant("mWorld", 0, 48, ConstantRole::Object(ObjectParameter::World))?;
-    // the instance record's environment data word: it reaches only G-buffer alpha lanes ([`super::INSTANCE_DATA_POLICY`])
+    // the instance record's environment data word: the layered programs scale it into G-buffer alpha lanes
+    // ([`super::INSTANCE_DATA_POLICY`]); Elden Ring's sky programs take the light set it names from cbLight
     constant(
         "envData",
         0,
@@ -615,6 +583,14 @@ pub fn resolve(
         0,
         16,
         ConstantRole::Object(ObjectParameter::InstanceColour),
+    )?;
+    // the instance record's dither amount: an alpha-tested program keeps a fragment where the dither noise less one half,
+    // scaled by 0.999, plus it reaches one half, under the dither flags below; 1 keeps every fragment, 0 none
+    constant(
+        "ditherFadeAlpha",
+        0,
+        4,
+        ConstantRole::Object(ObjectParameter::Fade),
     )?;
     constant(
         "FC_ColorSlotNo",
@@ -661,31 +637,73 @@ pub fn resolve(
         4,
         ConstantRole::Object(ObjectParameter::CameraFadeInverseRange),
     )?;
-    constant(
-        "FC_MatrixInvViewProj",
-        0,
-        64,
-        ConstantRole::View(ViewParameter::InverseViewProjection),
-    )?;
-    constant(
-        "SC_RenderCameraPos",
-        0,
-        16,
-        ConstantRole::View(ViewParameter::CameraPosition),
-    )?;
-    constant("FC_GlobalTime", 0, 4, ConstantRole::Frame(FrameParameter::Time))?;
-    constant(
-        "FC_TimeOfDay",
-        0,
-        4,
-        ConstantRole::Frame(FrameParameter::TimeOfDay),
-    )?;
-    constant(
-        "SC_PreExposure",
-        0,
-        4,
-        ConstantRole::Frame(FrameParameter::PreExposure),
-    )?;
+    // the engine's named values core has a role for, each whole
+    for (name, field) in &layout.fields {
+        if let Some(role) = engine_role(name) {
+            constant(name, 0, field.words * 4, role)?;
+        }
+    }
+    scene_values(game, &mut constant)?;
+    constants.extend(material_parameters(
+        interface,
+        &layout,
+        material,
+        game,
+        metaparam,
+        &mut policies,
+    )?);
+    // each engine value the source states by its own policy, counted by its reason
+    for c in &constants {
+        if let ConstantRole::Default { why, .. } = &c.role {
+            *policies.entry(why.clone()).or_default() += 1;
+        }
+    }
+    let outputs = output_bindings(interface, material.is_forward(), game);
+    let inputs = interface
+        .inputs
+        .iter()
+        .map(|v| InputBinding {
+            label: v.label.clone(),
+            role: InputRole::Previous,
+        })
+        .collect();
+    // a matrix's lines as the program applies it, or why it does not show them
+    let graph_or_why = graph.as_ref().map_err(String::as_str);
+    state_lines(&mut constants, |c| {
+        lines_at(graph_or_why, interface, c.resource, c.offset, c.size)
+    });
+    Ok(Resolution {
+        stage: StageBinding {
+            inputs,
+            constants,
+            textures: bindings,
+            buffers: light_buffers(interface, game),
+            outputs,
+            ..StageBinding::new(Stage::Pixel, entity)
+        },
+        policies,
+    })
+}
+
+/// The material's own parameters a program reads (a pixel or a vertex program: its `interface` and its constant
+/// `layout`), bound from the material's
+/// values: the fields a Sekiro program names one by one (`<shader>_snp_*`), else the members of an Elden Ring program's
+/// `SAT_MtdParam` the shader bundle's metaparam declares, each the material's value or the metaparam's default
+/// (counted), a colour's with its intensity. `policies` counts what they take.
+fn material_parameters(
+    interface: &Interface,
+    layout: &Layout,
+    material: &MaterialView<'_>,
+    game: fromsoft_formats::Game,
+    metaparam: Option<&Metaparam>,
+    policies: &mut BTreeMap<String, u64>,
+) -> Result<Vec<ConstantBinding>> {
+    let mut constants = Vec::new();
+    let mut constant = |name: &str, word: usize, size: u32, role: ConstantRole| -> Result<()> {
+        bind_field(interface, layout, &mut constants, name, word, size, role);
+        Ok(())
+    };
+    let words = |values: &[f32]| ConstantRole::Material(values.iter().map(|v| v.to_bits()).collect());
     // the program's `SAT_MtdParam` (Elden Ring's): its buffer, the buffer's size and the words its members occupy. Each
     // member is a component of a parameter the program reads (`<parameter>_<component>`, at the parameter's start word);
     // a parameter it does not read is not a member
@@ -749,7 +767,7 @@ pub fn resolve(
                         &p.default,
                         declared,
                         ParameterPath::Field,
-                        &mut policies,
+                        policies,
                     );
                     folded_colour(game, declared, &p.default, intensity)
                 } else {
@@ -788,14 +806,7 @@ pub fn resolve(
         };
         let mut values = floats(&param);
         if is_colour(name, declared) {
-            let intensity = intensity(
-                material,
-                name,
-                &values,
-                declared,
-                ParameterPath::Field,
-                &mut policies,
-            );
+            let intensity = intensity(material, name, &values, declared, ParameterPath::Field, policies);
             match folded_colour(game, declared, &values, intensity) {
                 Ok(colour) => values = colour,
                 Err(why) => {
@@ -848,14 +859,7 @@ pub fn resolve(
             };
             let colour = is_colour(&p.name, Some(p));
             let intensity = if colour {
-                intensity(
-                    material,
-                    &p.name,
-                    &value,
-                    Some(p),
-                    ParameterPath::Sat,
-                    &mut policies,
-                )
+                intensity(material, &p.name, &value, Some(p), ParameterPath::Sat, policies)
             } else {
                 1.
             };
@@ -905,32 +909,287 @@ pub fn resolve(
     if !named && sat_bound == 0 && !fields.is_empty() {
         *policies.entry(UNBOUND_MATERIAL_FIELDS.to_owned()).or_default() += 1;
     }
-    let outputs = output_bindings(interface, material.is_forward(), game);
-    let inputs = interface
-        .inputs
-        .iter()
-        .map(|v| InputBinding {
-            label: v.label.clone(),
-            role: InputRole::Previous,
-        })
-        .collect();
-    // a matrix's lines as the program applies it, or why it does not show them
-    let graph_or_why = graph.as_ref().map_err(String::as_str);
-    state_lines(&mut constants, |c| {
-        lines_at(graph_or_why, interface, c.resource, c.offset, c.size)
-    });
-    Ok(Resolution {
-        stage: StageBinding {
-            inputs,
-            constants,
-            textures: bindings,
-            buffers: light_buffers(interface, game),
-            outputs,
-            ..StageBinding::new(Stage::Pixel, entity)
-        },
-        policies,
+    Ok(constants)
+}
+
+/// The material's own parameters a vertex program reads ([`material_parameters`]: `shader`'s stored interface, and
+/// the constant layout of its program), for the vertex stage of a material whose pixel stage [`resolve`] binds.
+pub fn vertex_material_parameters(
+    shader: &Shader,
+    layout: &Layout,
+    material: &MaterialView<'_>,
+    game: fromsoft_formats::Game,
+    metaparam: Option<&Metaparam>,
+    policies: &mut BTreeMap<String, u64>,
+) -> Result<Vec<ConstantBinding>> {
+    material_parameters(&shader.interface, layout, material, game, metaparam, policies)
+}
+
+/// The constant buffer of `interface` at bind slot `slot`: its resource and its size in bytes.
+fn constant_buffer(interface: &Interface, slot: u32) -> Option<(ResourceId, u32)> {
+    interface.resources.iter().find_map(|r| match &r.kind {
+        ResourceKind::ConstantBuffer { layout }
+            if r.provenance
+                .d3d
+                .is_some_and(|b| b.class == D3dClass::ConstantBuffer && b.register == slot) =>
+        {
+            Some((r.id, layout.size))
+        }
+        _ => None,
     })
 }
+
+/// Binds `layout`'s constant `name`, from `word` words into it, `size` bytes of it (cut where its buffer ends; a
+/// material's words with it), as `role` into `constants`. A constant the layout does not name, or one past its
+/// buffer's end, is not bound.
+fn bind_field(
+    interface: &Interface,
+    layout: &Layout,
+    constants: &mut Vec<ConstantBinding>,
+    name: &str,
+    word: usize,
+    size: u32,
+    mut role: ConstantRole,
+) {
+    let Some(&iridia_exec::Field { buffer, offset, .. }) = layout.fields.get(name) else {
+        return;
+    };
+    let Some((resource, buffer_size)) = constant_buffer(interface, buffer) else {
+        return;
+    };
+    let start = (offset as usize + word) as u64 * 4;
+    let fit = u64::from(buffer_size).saturating_sub(start).min(u64::from(size)) as u32;
+    if fit == 0 {
+        return;
+    }
+    if let ConstantRole::Material(words) = &mut role {
+        words.truncate(fit as usize / 4);
+    }
+    constants.push(ConstantBinding {
+        resource,
+        offset: start as u32,
+        size: fit,
+        name: Some(name.to_owned()),
+        role,
+        lines: None,
+    });
+}
+
+/// The engine's named values core has a role for, as both games' programs name them: the camera's matrices and
+/// position, the time, the time of day, the pre-exposure, the exposure and their inverses. One table for the pixel and vertex
+/// programs' bindings and the render graph's passes.
+pub(crate) fn engine_role(name: &str) -> Option<ConstantRole> {
+    Some(match name {
+        "FC_MatrixView" => ConstantRole::View(ViewParameter::View),
+        "FC_MatrixProj" => ConstantRole::View(ViewParameter::Projection),
+        "FC_MatrixInvView" => ConstantRole::View(ViewParameter::InverseView),
+        "FC_MatrixInvProj" => ConstantRole::View(ViewParameter::InverseProjection),
+        "FC_MatrixInvViewProj" => ConstantRole::View(ViewParameter::InverseViewProjection),
+        "SC_CameraPos" | "SC_RenderCameraPos" => ConstantRole::View(ViewParameter::CameraPosition),
+        "FC_GlobalTime" => ConstantRole::Frame(FrameParameter::Time),
+        "FC_TimeOfDay" => ConstantRole::Frame(FrameParameter::TimeOfDay),
+        "SC_PreExposure" => ConstantRole::Frame(FrameParameter::PreExposure),
+        // one over it: 1 in every captured binding of both games, as the pre-exposure is (Sekiro's 950 `cbSceneParam`
+        // bindings of six sessions; Elden Ring's 706 of five)
+        "SC_InvPreExposure" => ConstantRole::Frame(FrameParameter::InversePreExposure),
+        // the adapted exposure and one over it (their product 1 in all 706 Elden Ring buffers of five sessions; the
+        // exposure itself from 1 to 37.7 there, with the scene and the hour)
+        "SC_SceneExposure" => ConstantRole::Frame(FrameParameter::Exposure),
+        "SC_InvSceneExposure" => ConstantRole::Frame(FrameParameter::InverseExposure),
+        _ => return None,
+    })
+}
+
+/// What the games' buffer `cbSceneParam` holds where no light buffer or camera matrix does.
+///
+/// Both games:
+/// - `FC_ScreenSize`: the drawn size in pixels, then their reciprocals. Elden Ring: the reciprocals in all 469
+///   perspective buffers of five captured sessions of the running game (624 distinct `cbSceneParam` buffers), the size
+///   `SC_BackBufferSize` times `SC_DynamicResolution_ScreenPercentage` in all 624; Sekiro: (1920, 1080, 1 / 1920,
+///   1 / 1080) in all 61 `cbSceneParam` bindings of a captured frame of the game running at 1920 x 1080. The forward programs (Sekiro's sky dome) find their
+///   screen coordinate as the pixel position times the reciprocals.
+/// - `FC_VolumeFogParam[4]`, the volumetric fog's parameters: no fog, as the frame's fog volume is bound as none
+///   ([`ENGINE_VOLUME_FOG_NEUTRAL`]); [`NO_FOG_PARAMETERS`] below.
+/// - the direction towards the light (`cbLight`'s `Vec_0` of each light set in Elden Ring, `FC_DirLightVec_0` in
+///   Sekiro): below.
+/// - `FC_DepthComputeParam` (`x`, `z`): the projection's two depth terms, device depth `x + z / depth`. Elden Ring:
+///   below; Sekiro: (-7.987022e-06, 0.08000064) beside a projection whose depth terms are those, in all 950
+///   `cbSceneParam` bindings of six captured sessions. Programs that read the scene's depth take the depth along the
+///   view axis back as `-z / (x - device depth)`.
+///
+/// Elden Ring's, in the same 624 buffers, each beside the projection and the sizes the same buffer states:
+/// - `SC_BackBufferSize`: the target's size in pixels, then their reciprocals (all 469 perspective buffers).
+/// - `SC_DynamicResolution_ScreenPercentage` (`xy`): the drawn size `FC_ScreenSize` over `SC_BackBufferSize`, per axis
+///   (all 624: 1, 1 at full resolution, 0.93 in a loading frame drawn at 2380 x 1340 of 2560 x 1440). The forward
+///   programs find their screen coordinate as the pixel position times the reciprocal size over it.
+/// - `FC_ProjectionType`: 1 in all 624. The programs take the depth along the view axis from clip w where it is not 0,
+///   from `FC_FarClipInfo` (an orthographic projection's) where it is.
+/// - `FC_FarClipInfo`: the far plane (where the projection's device depth reaches 0: 448 of the 453 perspective
+///   buffers whose projection has one), its reciprocal (all 469), and the far plane less the near one
+///   (`FC_FrustumNear`; 467 of 469).
+/// - `FC_DepthComputeParam` (`x`, `z`): the projection's two depth terms (453 of 469; the other 16 state a zero
+///   projection beside the same values).
+///
+/// `cbLight`'s `Vec_0` of each of its two light sets is the direction towards the light: Elden Ring's own sun program
+/// (`GXLightAcc_DDirLightShadowed1`) lights by `saturate(dot(normal, Vec_0))` and takes its half vector from
+/// `Vec_0` plus the direction to the eye, as Sekiro's does; the sky programs read only this of it, from the set the
+/// instance's `envData` names (`envData * 14` lines in). No capture holds an Elden Ring `cbLight` (it is copied into a
+/// buffer the CPU cannot read). Sekiro's `FC_DirLightVec_0` is the same direction: in a captured frame it is the
+/// draw-param light set's `Directional Light Angle0` (to float precision), and the moon's quad stands 25 units from the
+/// camera along it.
+///
+/// The instance record's `mulCol` is (1, 1, 1, 1), as its `aColor`, in the three sky draws captured (`M[Clouds9]`, two
+/// sessions); its `w` scales the sky programs' alpha.
+///
+/// The volumetric fog's parameters (`FC_VolumeFogParam[4]`) are the engine's own values for no fog, as the frame's fog
+/// volume is bound as none ([`ENGINE_VOLUME_FOG_NEUTRAL`]): the 14 buffers Elden Ring's deferred lighting passes of one
+/// captured frame bind hold the fog's far depth at the largest float, its exponents 1 and every other value 0. The
+/// forward programs of both games (Elden Ring's sky programs, Sekiro's sky dome) then leave a surface's colour as it is:
+/// they compute the fog themselves only past its far depth (`[1].w`), dividing by the exponents (`[1].xyz`), and take
+/// the fog volume's transmittance to the power of the exponents. No Sekiro capture binds the fog as off: Sekiro's values
+/// are these by its programs' code, an approximation counted by [`NO_FOG_POLICY`]. Elden Ring's fog light colours and
+/// direction (`SC_VolumeFogAmbientColor`, `DirColor`, `OppositeColor`, `LightDir`) are, with them, the game's own for no
+/// fog ([`NO_FOG_LIGHT`]): the same 14 buffers hold the ambient colour at 1 and the rest at 0. Where its fog is on (692
+/// of the 706 distinct buffers of five sessions) they change with the area and the hour, and their source for a scene,
+/// the draw-param fog groups, is not established, so a scene is given the fog off, counted by [`NO_FOG_LIGHT_POLICY`].
+/// `LightDir` is not the shadow's direction there: it is 28 to 86 degrees from `FC_ShadowDir` in the 656 buffers that hold
+/// both.
+pub const SCENE_VALUES_EVIDENCE: &str = "Elden Ring's cbSceneParam beside its own projection and sizes, in five \
+    captured sessions (624 buffers)";
+
+/// The fog parameters of no volumetric fog, as Elden Ring binds them where its fog is off ([`SCENE_VALUES_EVIDENCE`]):
+/// `FC_VolumeFogParam[0..4]`, the far depths the largest float, the exponents 1, the rest 0.
+const NO_FOG_PARAMETERS: [f32; 16] = [
+    0.,
+    0.,
+    0.,
+    f32::MAX,
+    1.,
+    1.,
+    1.,
+    f32::MAX,
+    0.,
+    0.,
+    0.,
+    0.,
+    0.,
+    0.,
+    0.,
+    0.,
+];
+
+/// Binds `game`'s scene values ([`SCENE_VALUES_EVIDENCE`]) through `constant` (a field's name, its first word, its
+/// bytes and its role).
+fn scene_values(
+    game: fromsoft_formats::Game,
+    constant: &mut dyn FnMut(&str, usize, u32, ConstantRole) -> Result<()>,
+) -> Result<()> {
+    let view = ConstantRole::View;
+    constant("FC_ScreenSize", 0, 8, view(ViewParameter::ViewportSize))?;
+    constant("FC_ScreenSize", 2, 8, view(ViewParameter::InverseViewportSize))?;
+    constant(
+        "FC_VolumeFogParam",
+        0,
+        64,
+        ConstantRole::Default {
+            words: NO_FOG_PARAMETERS.iter().map(|v| v.to_bits()).collect(),
+            why: NO_FOG_POLICY.into(),
+        },
+    )?;
+    if game == fromsoft_formats::Game::Sekiro {
+        constant(
+            "FC_DirLightVec_0",
+            0,
+            12,
+            ConstantRole::Frame(FrameParameter::DirectionToLight),
+        )?;
+    }
+    constant(
+        "FC_DepthComputeParam",
+        0,
+        4,
+        view(ViewParameter::DeviceDepthOffset),
+    )?;
+    constant(
+        "FC_DepthComputeParam",
+        2,
+        4,
+        view(ViewParameter::DeviceDepthScale),
+    )?;
+    if game == fromsoft_formats::Game::Sekiro {
+        return Ok(());
+    }
+    constant("SC_BackBufferSize", 0, 8, view(ViewParameter::ViewportSize))?;
+    constant(
+        "SC_BackBufferSize",
+        2,
+        8,
+        view(ViewParameter::InverseViewportSize),
+    )?;
+    constant(
+        "SC_DynamicResolution_ScreenPercentage",
+        0,
+        8,
+        view(ViewParameter::ResolutionScale),
+    )?;
+    constant("FC_ProjectionType", 0, 4, view(ViewParameter::Perspective))?;
+    constant("FC_FarClipInfo", 0, 4, view(ViewParameter::FarPlane))?;
+    constant("FC_FarClipInfo", 1, 4, view(ViewParameter::InverseFarPlane))?;
+    constant("FC_FarClipInfo", 2, 4, view(ViewParameter::DepthRange))?;
+    // the two light sets of cbLight (224 bytes each)
+    for set in [0, 56] {
+        constant(
+            "Vec_0",
+            set,
+            12,
+            ConstantRole::Frame(FrameParameter::DirectionToLight),
+        )?;
+    }
+    constant(
+        "mulCol",
+        0,
+        16,
+        ConstantRole::Object(ObjectParameter::InstanceColour),
+    )?;
+    for (name, words) in NO_FOG_LIGHT {
+        constant(
+            name,
+            0,
+            16,
+            ConstantRole::Default {
+                words: words.iter().map(|v| v.to_bits()).collect(),
+                why: NO_FOG_LIGHT_POLICY.into(),
+            },
+        )?;
+    }
+    Ok(())
+}
+
+/// Why Elden Ring's volumetric fog parameters are the engine's own for no fog ([`SCENE_VALUES_EVIDENCE`]).
+pub const NO_FOG_POLICY: &str = "volumetric fog parameters of no fog, as Elden Ring binds them where its fog is off \
+    (far depth the largest float, exponents 1, the rest 0), as the fog volume is bound as none";
+
+/// Elden Ring's volumetric fog light colours and direction where its fog is off ([`SCENE_VALUES_EVIDENCE`]): the
+/// ambient colour 1, the directional and opposite colours and the light's direction 0.
+pub const NO_FOG_LIGHT: [(&str, [f32; 4]); 4] = [
+    ("SC_VolumeFogAmbientColor", [1.0; 4]),
+    ("SC_VolumeFogDirColor", [0.0; 4]),
+    ("SC_VolumeFogOppositeColor", [0.0; 4]),
+    ("SC_VolumeFogLightDir", [0.0; 4]),
+];
+
+/// Why Elden Ring's volumetric fog light colours and direction are the game's own for no fog ([`SCENE_VALUES_EVIDENCE`]).
+pub const NO_FOG_LIGHT_POLICY: &str = "volumetric fog light colours and direction of no fog, as Elden Ring binds them \
+    where its fog is off (ambient 1, the rest 0): their source for a scene, the draw-param fog groups, is not established";
+
+/// The scene's clip plane where nothing is clipped: the plane every vertex is on the kept side of (the vertex programs'
+/// clip distance is the plane's dot product with the position, whose w is 1).
+pub const NO_CLIP_PLANE: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+
+/// Why the scene's clip plane is [`NO_CLIP_PLANE`]: the value the games bind where nothing is clipped.
+pub const NO_CLIP_PLANE_POLICY: &str = "the scene's clip plane as the games bind it where nothing is clipped (0, 0, 0, 1): \
+    all 950 cbSceneParam bindings of six captured Sekiro sessions, 640 of the 706 distinct Elden Ring ones of five \
+    (the other 66 hold 25 other planes)";
 
 /// The buffers of a program that reads the scene's lights (Sekiro's forward materials): its light tables and per-tile
 /// light lists ([`crate::light_records`]), and every other buffer of it unknown, as a stage that states one buffer
@@ -1407,52 +1666,59 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> 
                 }
                 continue;
             }
-            let role = match name.as_str() {
-                "FC_MatrixView" => ConstantRole::View(ViewParameter::View),
-                // the instance record's own fields the vertex program reads
-                "matricesData" => ConstantRole::Object(ObjectParameter::MatrixBase),
-                "userClipPlane" => ConstantRole::Object(ObjectParameter::ClipPlane),
-                // the cloth switch of the programs that have a cloth permutation
-                "VC_isEnableCloth" => ConstantRole::Object(ObjectParameter::ClothSimulation),
-                "FC_MatrixProj" => ConstantRole::View(ViewParameter::Projection),
-                // the matrix of a world with the camera at its origin, or of the world itself, as the program's run shows
-                "VC_MatrixViewProj" => match &camera {
-                    Ok(CameraForm::Relative) => {
-                        ConstantRole::View(ViewParameter::CameraRelativeViewProjection)
-                    }
-                    Ok(CameraForm::Plain) => ConstantRole::View(ViewParameter::ViewProjection),
-                    // a run that does not decide is not a finding: 15,483 of the 15,707 matrix-times-world programs of
-                    // Elden Ring's corpus are camera-relative (224 plain), so the matrix is taken as camera-relative,
-                    // as a policy the caller counts with the reason
-                    Err(why) => {
-                        undecided = Some(normalised(why));
-                        ConstantRole::View(ViewParameter::CameraRelativeViewProjection)
-                    }
-                },
-                "FC_MatrixInvView" => ConstantRole::View(ViewParameter::InverseView),
-                "FC_MatrixInvProj" => ConstantRole::View(ViewParameter::InverseProjection),
-                "FC_MatrixInvViewProj" => ConstantRole::View(ViewParameter::InverseViewProjection),
-                "SC_CameraPos" => ConstantRole::View(ViewParameter::CameraPosition),
-                // the object matrices: one per object, or the joints' palette when a vertex stream (a joint index)
-                // indexes them, as the program's value graph shows
-                "VC_aObjMatrix" => match palette() {
-                    Ok(true) => ConstantRole::Object(ObjectParameter::BonePalette),
-                    Ok(false) => ConstantRole::Object(ObjectParameter::World),
-                    Err(why) => ConstantRole::Unknown { why },
-                },
-                // the second palette the skinned programs of Elden Ring apply first, by its constant's own name
-                "VC_aClothCancelObjMatrix" => match palette() {
-                    Ok(true) => ConstantRole::Object(ObjectParameter::ClothCancelPalette),
-                    Ok(false) => ConstantRole::Unknown {
-                        why: "no vertex stream indexes it".into(),
+            let role = match engine_role(&name) {
+                Some(role) => role,
+                None => match name.as_str() {
+                    // the instance record's own fields the vertex program reads
+                    "matricesData" => ConstantRole::Object(ObjectParameter::MatrixBase),
+                    "userClipPlane" => ConstantRole::Object(ObjectParameter::ClipPlane),
+                    // the cloth switch of the programs that have a cloth permutation
+                    "VC_isEnableCloth" => ConstantRole::Object(ObjectParameter::ClothSimulation),
+                    // the record's world matrix (the forward programs' records carry it beside the palette's index)
+                    "mWorld" => ConstantRole::Object(ObjectParameter::World),
+                    // the draw's first entry in the instance index table: the program adds the instance number to it and
+                    // reads the record that entry names
+                    "VC_InstanceIdxOffset" => ConstantRole::Object(ObjectParameter::InstanceBase),
+                    // the scene's clip plane: none ([`NO_CLIP_PLANE_POLICY`])
+                    "VC_ClipPlane" => ConstantRole::Default {
+                        words: NO_CLIP_PLANE.iter().map(|v| v.to_bits()).collect(),
+                        why: NO_CLIP_PLANE_POLICY.into(),
                     },
-                    Err(why) => ConstantRole::Unknown { why },
-                },
-                // `_n` for texture coordinate set n: the program multiplies the set by `xy` (a scale) and adds `zw` (a scroll
-                // offset)
-                name => match texture_scroll_set(name) {
-                    Some(set) => ConstantRole::Object(ObjectParameter::TextureScroll(set)),
-                    None => continue,
+                    // the matrix of a world with the camera at its origin, or of the world itself, as the program's run shows
+                    "VC_MatrixViewProj" => match &camera {
+                        Ok(CameraForm::Relative) => {
+                            ConstantRole::View(ViewParameter::CameraRelativeViewProjection)
+                        }
+                        Ok(CameraForm::Plain) => ConstantRole::View(ViewParameter::ViewProjection),
+                        // a run that does not decide is not a finding: 15,483 of the 15,707 matrix-times-world programs of
+                        // Elden Ring's corpus are camera-relative (224 plain), so the matrix is taken as camera-relative,
+                        // as a policy the caller counts with the reason
+                        Err(why) => {
+                            undecided = Some(normalised(why));
+                            ConstantRole::View(ViewParameter::CameraRelativeViewProjection)
+                        }
+                    },
+                    // the object matrices: one per object, or the joints' palette when a vertex stream (a joint index)
+                    // indexes them, as the program's value graph shows
+                    "VC_aObjMatrix" => match palette() {
+                        Ok(true) => ConstantRole::Object(ObjectParameter::BonePalette),
+                        Ok(false) => ConstantRole::Object(ObjectParameter::World),
+                        Err(why) => ConstantRole::Unknown { why },
+                    },
+                    // the second palette the skinned programs of Elden Ring apply first, by its constant's own name
+                    "VC_aClothCancelObjMatrix" => match palette() {
+                        Ok(true) => ConstantRole::Object(ObjectParameter::ClothCancelPalette),
+                        Ok(false) => ConstantRole::Unknown {
+                            why: "no vertex stream indexes it".into(),
+                        },
+                        Err(why) => ConstantRole::Unknown { why },
+                    },
+                    // `_n` for texture coordinate set n: the program multiplies the set by `xy` (a scale) and adds `zw` (a scroll
+                    // offset)
+                    name => match texture_scroll_set(name) {
+                        Some(set) => ConstantRole::Object(ObjectParameter::TextureScroll(set)),
+                        None => continue,
+                    },
                 },
             };
             let size = size.ok_or_else(|| invalid("layer binding", 0, format!("{name} overflows")))?;

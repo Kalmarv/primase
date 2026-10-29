@@ -21,7 +21,7 @@ use crate::draw_groups::{DrawGroupDefaults, DrawGroups};
 use crate::draw_order::DrawOrder;
 use crate::environment::Environment;
 use crate::layered::LayeredMaterial;
-use crate::light_unit::LightUnit;
+use crate::light_unit::{DirectionalLightUnit, LightUnit};
 use crate::lod::Lods;
 use crate::marker::{Curve, Marker};
 use crate::material_parameters::MaterialParameters;
@@ -79,7 +79,7 @@ declared! {
         DrawGroups, DrawGroupDefaults, ContentNote, Record, DisplayName, PrimitiveKeys, MaterialParameters, SkyAnchor,
         ParticleSystem;
     resources: PartScope, PartitionPlan, Environment, Atmosphere, StateAssignment, Surfaces, Threads, Memo, RenderGraph,
-        LightUnit,
+        LightUnit, DirectionalLightUnit,
 }
 
 #[cfg(test)]

@@ -876,8 +876,18 @@ fn a_vertex_program_is_bound_to_streams_and_engine_roles() {
             Object(ObjectParameter::ClipPlane)
         )
     );
-    // eleven constants of the table, the screen size as two bindings
-    assert_eq!(stage.constants.len(), 12);
+    // the record's own object-to-world transform (`float4x3 mWorld`, its first 48 bytes)
+    assert_eq!(
+        named("mWorld"),
+        (
+            "cbInstanceData".to_owned(),
+            0,
+            48,
+            Object(ObjectParameter::World)
+        )
+    );
+    // twelve constants of the table, the screen size as two bindings
+    assert_eq!(stage.constants.len(), 13);
     assert!(stage.outputs.is_empty() && stage.textures.is_empty());
 }
 

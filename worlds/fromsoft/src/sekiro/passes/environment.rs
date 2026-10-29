@@ -6,15 +6,17 @@
 //! `tests/draw_param_census.rs`) is not guessed into one.
 //!
 //! The light set's fields (`LightSet ParamEditor`; the keys are the files' own):
-//! - `Directional Light Angle0` (two floats, radians) and `Directional Light DiffColor0` (four): the sun's direction and
-//!   its diffuse colour, as a frame of the running game (Sekiro 1.06, m11_01 at 18:00) shows them reaching the deferred
+//! - `Directional Light Angle0` (two floats, radians), `Directional Light DiffColor0` (four) and `Directional Light
+//!   SpecColor0` (four): the sun's direction, its diffuse colour and the colour of its highlights, as a frame of the running game (Sekiro 1.06, m11_01 at 18:00) shows them reaching the deferred
 //!   sun program `GXLightAcc_DDirLightShadowed1` (its `cbLight` light sets): the angle `(rx, ry)` is the direction
 //!   towards the light `(sin ry cos rx, -sin rx, cos ry cos rx)` in the file's frame (the program lights a surface by
 //!   `saturate(dot(normal, direction))` and takes its half vector from it), so the light travels the opposite way; the
 //!   colour `(r, g, b, w)` is the radiance `(r^2 w, g^2 w, b^2 w)` (the program's constant is `(r^2 w, g^2 w, b^2 w, w^2)`,
 //!   the same squaring as BTL light records). Both held on every directional and specular colour of the frame's two light
 //!   sets, to float precision. The sun's light is the squared colour, its intensity the weight `w` times the program's
-//!   calibration (`lux-per-unit`: the lux of a radiance of 1). A sun whose colour is black or whose weight is 0 (or not
+//!   calibration (`lux-per-unit`: the lux of a radiance of 1), and its highlights (`core.light`'s `specular`) the specular
+//!   colour read the same way; the calibration is the world's `core.directional_light_unit`, so a consumer gives a
+//!   program of the game the sun's stored values back. A sun whose colour is black or whose weight is 0 (or not
 //!   finite, or negative) is none, counted. Elden Ring stores the same fields and is lowered the same way; no Elden Ring
 //!   frame has shown its light set reaching a program yet (stated in [`Pass::approximates`]).
 //! - `Directional Light Hemi Color Up` and `Hemi Color Down`: the ambient's sky and ground colours, read as linear (no
@@ -23,7 +25,7 @@
 //!   `lower-unity-ambient` states). The census files store no `Hemi Color` field at all, so a Sekiro read has no ambient
 //!   from this pass.
 //!
-//! The fills (`Angle1`, `LocalLight` lights) are counted as not lowered. Later files of a map (`_0010` ...) store only the
+//! The fills (`Angle1`, `LocalLight` lights) and a sun's sharpness are counted as not lowered. Later files of a map (`_0010` ...) store only the
 //! fields they change.
 //!
 //! The `VolumetricFog ParamEditor` group's fields the census shows (`VolumetricFog Global FixedDensity`, the height
@@ -35,13 +37,14 @@ use super::settings::Factor;
 use crate::sekiro::source::DrawParam;
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{
-    Ambient, AmbientLight, Atmosphere, Component, Environment, Light, LightKind, Name, Resource, Source,
-    Transform, VolumetricFog, World,
+    Ambient, AmbientLight, Atmosphere, Component, DirectionalLightUnit, Environment, Light, LightKind,
+    LightSpecular, Name, Resource, Source, Transform, VolumetricFog, World,
 };
 
 const LIGHT_SET: &str = "LightSet ParamEditor";
 const ANGLE: &str = "Directional Light Angle0";
 const DIFFUSE: &str = "Directional Light DiffColor0";
+const SPECULAR: &str = "Directional Light SpecColor0";
 const HEMI_UP: &str = "Directional Light Hemi Color Up";
 const HEMI_DOWN: &str = "Directional Light Hemi Color Down";
 const VOLUMETRIC: &str = "VolumetricFog ParamEditor";
@@ -151,9 +154,7 @@ fn travel(angle: [f32; 2]) -> [f32; 3] {
 /// Why the fields of a group are not lowered, by the group's key: what core has no place for.
 fn why_not_lowered(group: &str) -> &'static str {
     match group {
-        LIGHT_SET => {
-            "specular, sharpness, occlusion, second directional and local lights: no core.light fields"
-        }
+        LIGHT_SET => "sharpness, occlusion, second directional and local lights: no core.light fields",
         VOLUMETRIC => {
             "a volumetric fog key this pass does not know: only the keys of the census are kept in core.atmosphere's volumetric fog"
         }
@@ -200,6 +201,7 @@ impl Pass for LowerFromSoftEnvironment {
             Source::NAME,
             Environment::NAME,
             Atmosphere::NAME,
+            DirectionalLightUnit::NAME,
         ]
     }
     fn approximates(&self) -> &'static str {
@@ -242,6 +244,11 @@ impl Pass for LowerFromSoftEnvironment {
                 (Some(angle), Some((rgb, weight))) if weight > 0. && rgb.iter().any(|x| *x > 0.) => {
                     let transform = Transform::facing([0.; 3], crate::pose::FRAME.direction(travel(angle)))
                         .ok_or("the sun's angle gives no direction")?;
+                    // its highlights, read as its diffuse colour is; none stored: its own colour and intensity
+                    let specular = colour(set.value(SPECULAR)).map(|(rgb, weight)| LightSpecular {
+                        color: rgb.map(|c| c * c),
+                        intensity: lux * weight,
+                    });
                     let e = world.spawn();
                     world.insert(
                         e,
@@ -252,14 +259,15 @@ impl Pass for LowerFromSoftEnvironment {
                             range: None,
                             cast_shadows: None,
                             radius: None,
-                            specular: None,
+                            specular,
                         },
                     );
                     world.insert(e, transform);
+                    world.insert_resource(DirectionalLightUnit { lux_per_unit: lux });
                     world.insert(e, Name("sun".into()));
                     world.insert(e, Source(format!("{} {} {}", env.file, LIGHT_SET, set.id)));
                     sun = Some(e);
-                    *lowered.entry(LIGHT_SET).or_default() += 2;
+                    *lowered.entry(LIGHT_SET).or_default() += 2 + usize::from(specular.is_some());
                     log.count("suns lowered", 1);
                     log.approximate(
                         "the sun's intensity at the calibrated lux per unit of radiance",
@@ -452,8 +460,19 @@ mod tests {
         let sun = env.sun.expect("a sun");
         let light = w.get::<Light>(sun).unwrap();
         assert_eq!(light.kind, LightKind::Directional);
-        // the colour squared, the weight times the calibration
+        // the colour squared, the weight times the calibration; its highlights the same of the specular colour
         assert_eq!((light.color, light.intensity), ([1.0, 0.25, 0.0625], 100.0));
+        assert_eq!(
+            light.specular,
+            Some(LightSpecular {
+                color: [1.0; 3],
+                intensity: 100.0
+            })
+        );
+        assert_eq!(
+            w.resource::<DirectionalLightUnit>(),
+            Some(&DirectionalLightUnit { lux_per_unit: 100.0 })
+        );
         // rx = -pi/2: the light is straight above, so it shines straight down
         close(shines(&w, sun), [0., -1., 0.]);
         assert_eq!(w.get::<Name>(sun).unwrap().0, "sun");
@@ -479,13 +498,13 @@ mod tests {
             ),
             (1, 1)
         );
-        // four of the light set's six fields are lowered; the rest, the fog and the tone are counted by group
+        // five of the light set's six fields are lowered; the rest, the fog and the tone are counted by group
         assert_eq!(
             log.omitted[&format!(
                 "draw-param fields of {LIGHT_SET} read, not lowered ({})",
                 why_not_lowered(LIGHT_SET)
             )],
-            2
+            1
         );
         assert_eq!(
             log.omitted[&format!(
@@ -524,18 +543,27 @@ mod tests {
     #[allow(clippy::approx_constant)]
     fn the_light_set_of_a_frame_of_the_game_gives_the_constants_its_sun_program_read() {
         // Sekiro 1.06, Ashina Castle gate: m11_01_0000's light set (value id 0) at 18:00 is the second light set of the
-        // frame's `cbLight`, which `GXLightAcc_DDirLightShadowed1` read as the direction towards the light and the
-        // radiance (the w lane of its colour is w^2, not a radiance)
-        let mut w = world_with(vec![light_set(
-            [-0.436332, -3.141593],
-            [1.0, 0.784314, 0.588235, 1.25],
-        )]);
+        // frame's `cbLight`, which `GXLightAcc_DDirLightShadowed1` read as the direction towards the light, the
+        // radiance and the highlights' radiance (`Spc_0`; the w lane of each colour is w^2, not a radiance)
+        let mut set = light_set([-0.436332, -3.141593], [1.0, 0.784314, 0.588235, 1.25]);
+        set.fields.retain(|f| f.key != SPECULAR);
+        set.fields
+            .push(field(SPECULAR, Value::Vec4([1.0, 0.784314, 0.588235, 1.0])));
+        let mut w = world_with(vec![set]);
         run(&mut w, 1.0);
         let sun = w.resource::<Environment>().unwrap().sun.unwrap();
         let light = w.get::<Light>(sun).unwrap();
         let radiance = light.color.map(|c| c * light.intensity);
         for (got, frame) in radiance.iter().zip([1.25f32, 0.7689356, 0.4325255]) {
             assert!((got - frame).abs() <= 1e-6 * frame.abs().max(1.0), "{radiance:?}");
+        }
+        let specular = light.specular.expect("the highlights");
+        let highlights = specular.color.map(|c| c * specular.intensity);
+        for (got, frame) in highlights.iter().zip([1.0f32, 0.6151484, 0.3460204]) {
+            assert!(
+                (got - frame).abs() <= 1e-6 * frame.abs().max(1.0),
+                "{highlights:?}"
+            );
         }
         let towards = crate::pose::FRAME.direction_to_source(shines(&w, sun).map(|x| -x));
         close(towards, [3.529293e-07, 0.422618, -0.9063079]);

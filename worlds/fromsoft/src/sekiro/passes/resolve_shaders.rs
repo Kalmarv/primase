@@ -2,6 +2,7 @@
 //! `core.shader_binding`.
 use crate::layer_bake::resolve::{
     PALETTE_ROWS_RULE, Unbound, render_state, resolve, resolve_vertex_for_geometry,
+    vertex_material_parameters,
 };
 use crate::materials::Material;
 use crate::sekiro::source::{MaterialShader, Payloads, ShaderBundle, ShaderPrograms, TexturePayloads};
@@ -9,15 +10,23 @@ use fromsoft_formats::metaparam::Metaparam;
 use iridia::ProgramGraph;
 use iridia::output_uses::output_uses;
 use iridia_exec::PixelShader;
-use iridia_exec::ProgramShader;
+use iridia_exec::{Layout, ProgramShader};
 use iridia_interface::{ShaderFormat, Stage};
 use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::shader::bind_output_uses;
 use primase_core::{
-    ColorSpace, Component, Entity, Instance, MaterialVariants, Mesh, Name, Semantic, Shadows, TexRole, Texture, World,
+    ColorSpace, Component, Entity, Instance, MaterialVariants, Mesh, Name, Semantic, Shadows, TexRole,
+    Texture, World,
 };
-use primase_core::{shader::MaterialPrograms, shader::ProgramFacts, shader::Shader, shader::ShaderBinding};
+use primase_core::{
+    shader::ConstantRole, shader::MaterialPrograms, shader::ProgramFacts, shader::Shader,
+    shader::ShaderBinding,
+};
 use std::collections::BTreeMap;
+
+/// Why a vertex program's material parameters are not bound: the executor refuses the program or its constant layout
+/// (a field name twice, as `SpeedTree_*_Gbuf.vpo`'s `m_fBranchTime`).
+const VERTEX_PARAMETERS_UNREAD: &str = "vertex programs whose material parameters are not bound: the executor refuses the program or its constant layout";
 
 /// `resolve-fromsoft-shaders{unbound-textures=preview|leave}`: for each material with a layered definition, bind its
 /// G-buffer pixel program (`<shader>_<switch>_Gbuf.ppo`, from `fromsoft.shader_programs`) as Sekiro's rules say
@@ -250,8 +259,10 @@ fn run(
         BTreeMap::new();
     // the textures spawned, by stem and colour space
     let mut textures: BTreeMap<(String, bool), Entity> = BTreeMap::new();
-    // the vertex programs, each its own entity with the interface read once, by file name
-    let mut vertex_shaders: BTreeMap<String, (Entity, Shader)> = BTreeMap::new();
+    // the vertex programs, each its own entity with the interface read once, by file name, with its constant layout as
+    // the executor reads it (or why it does not)
+    let mut vertex_shaders: BTreeMap<String, (Entity, Shader, std::result::Result<Layout, String>)> =
+        BTreeMap::new();
     // each bundle's parameter definition, taken once per bundle entity
     let mut parameters: BTreeMap<Entity, Option<Metaparam>> = BTreeMap::new();
     let draws = draws(world);
@@ -466,11 +477,31 @@ fn run(
                         interface,
                     };
                     world.insert(entity, shader.clone());
-                    vertex_shaders.insert(vertex_name.clone(), (entity, shader));
+                    let program = match format {
+                        ShaderFormat::Dxbc => iridia_dxbc::lift(&code).map_err(|e| e.to_string()),
+                        _ => iridia_dxil::lift(&code).map_err(|e| e.to_string()),
+                    }
+                    .and_then(|lifted| ProgramShader::new(lifted).map_err(|e| e.to_string()))
+                    .and_then(|program| Layout::of(&program).map_err(|e| e.to_string()));
+                    vertex_shaders.insert(vertex_name.clone(), (entity, shader, program));
                 }
-                let (entity, shader) = &vertex_shaders[&vertex_name];
-                let vertex = resolve_vertex_for_geometry(shader, *entity, world, material_entity)
+                let (entity, shader, layout) = &vertex_shaders[&vertex_name];
+                let mut vertex = resolve_vertex_for_geometry(shader, *entity, world, material_entity)
                     .map_err(|e| format!("{vertex_name}: {e}"))?;
+                // the material's own parameters the vertex program reads, bound as the pixel program's are
+                match layout {
+                    Ok(layout) => vertex.stage.constants.extend(
+                        vertex_material_parameters(shader, layout, &material, game, metaparam, &mut policies)
+                            .map_err(|e| format!("{vertex_name}: {e}"))?,
+                    ),
+                    Err(_) => log.omit(VERTEX_PARAMETERS_UNREAD, 1),
+                }
+                // each engine value its binding states by the source's own policy, counted by its reason
+                for c in &vertex.stage.constants {
+                    if let ConstantRole::Default { why, .. } = &c.role {
+                        *policies.entry(why.clone()).or_default() += 1;
+                    }
+                }
                 if let Some(why) = vertex.undecided {
                     // not a finding: the matrix is taken as camera-relative, as most programs of the corpus are
                     *policies
@@ -576,7 +607,9 @@ fn run(
         }
         if t.receipt_mixed > 0 {
             log.count(
-                &format!("{which} forward materials drawn by placements receiving shadows and not (plain Fwd)"),
+                &format!(
+                    "{which} forward materials drawn by placements receiving shadows and not (plain Fwd)"
+                ),
                 t.receipt_mixed,
             );
         }

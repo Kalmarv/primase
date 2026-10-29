@@ -308,6 +308,22 @@ impl StageBinding {
                     c.offset
                 )));
             }
+            if let ConstantRole::Default { words, why } = &c.role {
+                if words.len() as u64 * 4 > u64::from(c.size) {
+                    return Err(at(format!(
+                        "{} default words for a constant of {} bytes at {}",
+                        words.len(),
+                        c.size,
+                        c.offset
+                    )));
+                }
+                if why.trim().is_empty() {
+                    return Err(at(format!(
+                        "the default of the constant at {} says no why",
+                        c.offset
+                    )));
+                }
+            }
         }
         // the bytes of a constant buffer belong to one constant
         let mut spans: Vec<(u32, u32, u32)> = self
@@ -1344,6 +1360,24 @@ mod tests {
             (
                 Box::new(|b| b.stages[0].constants[0].role = ConstantRole::Material(vec![0; 5])),
                 "material words",
+            ),
+            (
+                Box::new(|b| {
+                    b.stages[0].constants[0].role = ConstantRole::Default {
+                        words: vec![0; 5],
+                        why: "a policy".into(),
+                    }
+                }),
+                "default words",
+            ),
+            (
+                Box::new(|b| {
+                    b.stages[0].constants[0].role = ConstantRole::Default {
+                        words: vec![0],
+                        why: " ".into(),
+                    }
+                }),
+                "says no why",
             ),
             (
                 Box::new(|b| b.stages[0].textures[0].resource = ResourceId(0)),

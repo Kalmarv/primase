@@ -171,6 +171,7 @@ on the clip's clock.
 | Name | Kind | Fields | Invariants |
 | --- | --- | --- | --- |
 | `core.light_unit` | resource | `candela_per_unit: f32` | Finite and above 0. Written by the lowering that makes the world's point and spot `core.light`s from a source's own light values: such a light's intensity is its source value times this factor. |
+| `core.directional_light_unit` | resource | `lux_per_unit: f32` | Finite and above 0. Written by the lowering that makes the scene's sun (`core.environment`'s) from a source's own light values: the sun's intensity is its source value times this factor. The constant roles `{"frame": "light_colour"}` and `{"frame": "light_specular_colour"}` are the sun's colour (its `specular` colour where it states one, for the second) times its intensity over this factor, three floats; `{"frame": "inverse_pre_exposure"}` is one over `{"frame": "pre_exposure"}`; `{"frame": "exposure"}` is the factor the frame's exposure stage multiplies the scene's radiance by before its tone curve, `{"frame": "inverse_exposure"}` one over it. |
 | `core.light` (version 4) | component | `specular: {color: [f32; 3], intensity: f32}`, optional | Finite and non-negative. The colour and intensity of the light's highlights where the source states them apart from its diffuse light (a FromSoftware BTL light's specular bytes and power), in the light's own unit; absent, they are the light's `color` and `intensity` (glTF's punctual light). A light with only highlights has intensity 0 and this. Absent from the JSON when absent. BREAKING for code that builds a `Light`: the field is new. |
 
 A shader binding's buffer slot may hold `{"lights": table}` (`BufferSource::Lights`): the scene's
@@ -200,3 +201,13 @@ constants fit their bits and say why; unknowns are named and say why. A stage's 
 one index list, and the stage binds a light table of each kind the lookup counts. `pack_light_lists` is
 the one packing: every light in every tile and every slice (each light's own range still bounds what it
 lights).
+
+A constant role may be `{"default": {words, why}}`: a value of the engine's that no role states, set by the
+source's own policy, as the 32-bit words a consumer writes as they are, with why (a texture slot's
+`{"default": {value, why}}` is its twin); the words fit the constant and the why is not empty. The consumer's own
+view and light give the view roles `resolution_scale` (two values: the part of the render target the view draws
+into, drawn size over target size), `perspective` (one unsigned 32-bit word: 1 for a perspective projection, 0 for an
+orthographic one), `depth_range` (far plane less near plane), `device_depth_offset` and `device_depth_scale` (a
+perspective projection's device depth is `offset + scale / d` at depth `d` along the view axis), and the frame role
+`direction_to_light` (the unit direction towards the dominant directional light, the opposite of
+`light_direction`).
