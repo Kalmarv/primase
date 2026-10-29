@@ -3,7 +3,7 @@
 //! makes its `core.clip_effects`. Sekiro's player, the Wolf's first light attack with the katana (`a050_300000`, the
 //! katana's motion category 50): event 96 starts effect 400 at the character's dummy polygon 85 from 0.8333 s, and effect
 //! 600030 at dummy polygon 10301 (polygon 301 of the right hand's first weapon) under a spawn condition, which is counted;
-//! with Kusabimaru held, each attack event draws its row's trail.
+//! with Kusabimaru held, each attack event draws its row's trail, through the run of the blade's polygons 300 and 301.
 //!
 //! Needs `installs.sekiro`, `keys.sekiro` and `tools.oodle6`; skipped when they are not configured.
 mod common;
@@ -136,11 +136,19 @@ fn a_loaded_clip_keeps_the_effect_files_it_read_and_lowers_to_its_spawns()
                     slot: 0,
                 }
         })
-        .map(|u| (u.effect, u.dummy, u.tail, u.start, u.end.unwrap_or(f32::NAN)))
+        .map(|u| {
+            (
+                u.effect,
+                u.dummy,
+                u.span.clone(),
+                u.start,
+                u.end.unwrap_or(f32::NAN),
+            )
+        })
         .collect();
     let expected: Vec<_> = attacks
         .iter()
-        .map(|&(start, end)| (401_000, Some(10_300), Some(10_301), start, end))
+        .map(|&(start, end)| (401_000, Some(10_300), vec![10_301], start, end))
         .collect();
     assert_eq!(traces, expected);
     lower(&mut loaded)?;
@@ -148,7 +156,12 @@ fn a_loaded_clip_keeps_the_effect_files_it_read_and_lowers_to_its_spawns()
     let trails = effects
         .spawns
         .iter()
-        .filter(|s| s.socket.as_deref() == Some("dummy 10300") && s.follow && s.end.is_some())
+        .filter(|s| {
+            s.socket.as_deref() == Some("dummy 10300")
+                && s.span == ["dummy 10301"]
+                && s.follow
+                && s.end.is_some()
+        })
         .count();
     assert_eq!(trails, attacks.len());
     // the trail's strips fade in and out over fractions of their length: 401000's tracers store 80 and 20, 50 and 20 (the

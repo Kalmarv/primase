@@ -10,7 +10,7 @@ use primase_core::json::{JsonError, to_value};
 use primase_core::{Component, EventValue, EventValueData, Geometry};
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 /// An effect file of the install, as stored, on an entity of its own (not placed): the lowering of an effect and of the
@@ -138,9 +138,9 @@ pub struct EffectUse {
     pub route: UseRoute,
     /// The reference id of the dummy polygon the effect stands at, where the event names one.
     pub dummy: Option<i32>,
-    /// The second dummy polygon of an effect that runs between two (a blade event's tip, a weapon trace's tail), where one
-    /// is named.
-    pub tail: Option<i32>,
+    /// The further dummy polygons an effect runs through after `dummy`, in order: a blade event's tip, or the rest of a
+    /// weapon trace's run ([`trace_run`]). Empty for an effect at one polygon.
+    pub span: Vec<i32>,
     /// The event's `Dummy Poly Source`, where it has one: 0 the character's own dummy polygons (a weapon's are among them
     /// as `10000 + n` for the right hand and `20000 + n` for the left), 1 the left hand's weapon, 2 the right hand's.
     pub source: Option<i32>,
@@ -297,9 +297,11 @@ pub fn clip_effect_uses(source: &SourceEvents) -> ClipEffectUses {
             effect,
             route: UseRoute::Event,
             dummy,
-            tail: whole(values, "Dummy Poly - Blade Tip ID")
+            span: whole(values, "Dummy Poly - Blade Tip ID")
                 .filter(|&id| id > 0)
-                .and_then(|id| i32::try_from(id).ok()),
+                .and_then(|id| i32::try_from(id).ok())
+                .into_iter()
+                .collect(),
             source: whole(values, "Dummy Poly Source").and_then(|from| i32::try_from(from).ok()),
             follow: flag(values, "Follow Dummy Poly"),
             repeating: flag(values, "Is Repeat"),
@@ -317,27 +319,55 @@ pub fn clip_effect_uses(source: &SourceEvents) -> ClipEffectUses {
     }
 }
 
-/// One trace slot of a weapon row: an effect and the weapon's dummy polygons it runs between (`traceDmyIdHead<n>`,
-/// `traceDmyIdTail<n>`; `None` for a number below 1, as the stock rows hold -1).
+/// One trace slot of a weapon row: an effect and the weapon's dummy polygons it runs through, from `traceDmyIdHead<n>` to
+/// `traceDmyIdTail<n>`, as stored (-1 for none; [`trace_run`] reads them as the game does).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct Trace {
     pub effect: i32,
-    pub head: Option<i32>,
-    pub tail: Option<i32>,
+    pub head: i32,
+    pub tail: i32,
 }
 
-/// The trace slots of a held weapon: its hand slot, its `EquipParamWeapon` row and the row's slots that name an effect, by
-/// slot number.
+/// The trace slots of a held weapon: its hand slot, its `EquipParamWeapon` row, the row's slots that name an effect, by
+/// slot number, and the reference ids of the dummy polygons of the weapon's model (its first, the blade's), which a
+/// trace's run walks ([`trace_run`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WeaponTraces {
     pub slot: HandSlot,
     pub row: i32,
     pub traces: Vec<(usize, Trace)>,
+    pub dummies: BTreeSet<i32>,
 }
 
+/// The dummy polygons of `dummies` (a weapon model's reference ids) a trace runs through, in order, as Elden Ring's trace
+/// slot takes them (its executable, decompiled), comparing the ids as unsigned numbers: none where head and tail are both
+/// -1; from the head up to the tail where the tail is not -1 and above the head; from the head up, unbounded, where the
+/// tail is -1; none otherwise (a tail at or below the head, so a tail of 0 and a head of -1 give none). The walk stops at
+/// the first id the model lacks, and the game makes no trail of a run of fewer than two. Sekiro's rows all name a tail
+/// above the head (300, 301), which this reads the same way; a head numbered as the character numbers a weapon's
+/// polygons (`10000 + n`) is no id of the weapon's model and finds none.
+pub fn trace_run(trace: &Trace, dummies: &BTreeSet<i32>) -> Vec<i32> {
+    // the ids' bits, as the game compares them
+    let (head, tail) = (trace.head as u32, trace.tail as u32);
+    let (first, end) = match (head, tail) {
+        (u32::MAX, u32::MAX) => return Vec::new(),
+        (_, u32::MAX) => (head, u32::MAX),
+        (_, _) if head < tail => (head, tail + 1),
+        _ => return Vec::new(),
+    };
+    (first..end)
+        .map(|id| id as i32)
+        .take_while(|id| dummies.contains(id))
+        .collect()
+}
+
+/// What an attack whose weapon trace runs through fewer than two of the weapon model's dummy polygons is counted as.
+pub const SHORT_TRACE: &str = "attack events whose weapon trace finds fewer than two of the weapon model's dummy polygons (the game draws no trail)";
+
 /// The trails of held weapons a clip draws: for each attack event (type 1, whose length is the attack's window) a use of the
-/// first trace slot of the weapon in the right hand's first slot (else the first weapon held), standing at the weapon's
-/// head dummy polygon (named by its global id, [`HandSlot::global_id`]) and following it for the event's length. Which
+/// first trace slot of the weapon in the right hand's first slot (else the first weapon held), running through the trace's
+/// run of the weapon's dummy polygons ([`trace_run`], named by their global ids, [`HandSlot::global_id`]) and following
+/// them for the event's length; a run of fewer than two is counted ([`SHORT_TRACE`]), as the game draws none. Which
 /// weapon and which slot an attack draws is not read (the attack's behaviour row names it): the weapons' other slots are
 /// counted in `lost`, as an attack event with no held weapon that has one is.
 pub fn weapon_trace_uses(source: &SourceEvents, weapons: &[WeaponTraces], found: &mut ClipEffectUses) {
@@ -348,6 +378,7 @@ pub fn weapon_trace_uses(source: &SourceEvents, weapons: &[WeaponTraces], found:
         .and_then(|w| Some((w, w.traces.first()?)));
     let mut attacks = 0u32;
     let mut conditioned = 0u32;
+    let mut short = 0u32;
     for (index, event) in source.events.iter().enumerate().filter(|(_, e)| e.kind == 1) {
         // an attack under a special-effect state is a runtime alternative (see STATE_CONDITION)
         let state = source
@@ -363,6 +394,11 @@ pub fn weapon_trace_uses(source: &SourceEvents, weapons: &[WeaponTraces], found:
         let Some((w, &(slot, trace))) = held else {
             continue;
         };
+        let run = trace_run(&trace, &w.dummies);
+        if run.len() < 2 {
+            short += 1;
+            continue;
+        }
         found.uses.push(EffectUse {
             event: u32::try_from(index).unwrap_or(u32::MAX),
             kind: 1,
@@ -371,8 +407,8 @@ pub fn weapon_trace_uses(source: &SourceEvents, weapons: &[WeaponTraces], found:
                 row: w.row,
                 slot: u8::try_from(slot).unwrap_or(u8::MAX),
             },
-            dummy: trace.head.map(|h| w.slot.global_id(h)),
-            tail: trace.tail.map(|t| w.slot.global_id(t)),
+            dummy: Some(w.slot.global_id(run[0])),
+            span: run[1..].iter().map(|&id| w.slot.global_id(id)).collect(),
             source: None,
             follow: true,
             repeating: true,
@@ -390,6 +426,7 @@ pub fn weapon_trace_uses(source: &SourceEvents, weapons: &[WeaponTraces], found:
             "attack events under a special-effect state (State Info, a runtime state not read): no trail drawn",
             conditioned,
         );
+        lost(SHORT_TRACE, short);
     }
     if attacks == 0 {
         return;
@@ -752,10 +789,8 @@ mod tests {
         let weapons = [WeaponTraces {
             slot: right,
             row: 8_000_000,
-            traces: vec![
-                (0, trace(401_000, Some(300), Some(301))),
-                (3, trace(401_001, None, None)),
-            ],
+            traces: vec![(0, trace(401_000, 300, 301)), (3, trace(401_001, -1, -1))],
+            dummies: BTreeSet::from([100, 300, 301, 302]),
         }];
         let state = |s: i64| vec![value("State Info", EventValueData::I64(s))];
         let clip = source(vec![
@@ -771,13 +806,23 @@ mod tests {
             .uses
             .iter()
             .filter(|u| matches!(u.route, UseRoute::WeaponTrace { .. }))
-            .map(|u| (u.event, u.effect, u.dummy, u.tail, u.repeating, u.start, u.end))
+            .map(|u| {
+                (
+                    u.event,
+                    u.effect,
+                    u.dummy,
+                    u.span.clone(),
+                    u.repeating,
+                    u.start,
+                    u.end,
+                )
+            })
             .collect();
         assert_eq!(
             traces,
             [
-                (0, 401_000, Some(10_300), Some(10_301), true, 0.433, Some(0.533)),
-                (2, 401_000, Some(10_300), Some(10_301), true, 1.1, Some(1.2)),
+                (0, 401_000, Some(10_300), vec![10_301], true, 0.433, Some(0.533)),
+                (2, 401_000, Some(10_300), vec![10_301], true, 1.1, Some(1.2)),
             ]
         );
         assert!(found.uses.iter().any(|u| u.route
@@ -806,12 +851,49 @@ mod tests {
                 .iter()
                 .any(|(r, n)| r.starts_with("attack events with no held weapon") && *n == 2)
         );
+        // a weapon whose model lacks the trace's second polygon draws no trail: its attacks are counted
+        let mut bare = weapons.clone();
+        bare[0].dummies = BTreeSet::from([300]);
+        let mut found = clip_effect_uses(&clip);
+        weapon_trace_uses(&clip, &bare, &mut found);
+        assert!(found.uses.iter().all(|u| u.route == UseRoute::Event));
+        assert!(found.lost.iter().any(|(r, n)| r == SHORT_TRACE && *n == 2));
         // a clip with no attack is left as it is
         let quiet = source(vec![event(96, 0.5, 0.6, spawn(400, 80, true))]);
         let mut found = clip_effect_uses(&quiet);
         let before = found.clone();
         weapon_trace_uses(&quiet, &weapons, &mut found);
         assert_eq!(found, before);
+    }
+
+    /// A trace runs from its head up to its tail, or up while the model has the next id where no tail is given; it stops at
+    /// the first id the model lacks, and a tail at or below the head gives none (Elden Ring's trace slot).
+    #[test]
+    fn a_trace_runs_through_the_weapons_dummy_polygons_from_its_head() {
+        let blade = BTreeSet::from([100, 120, 300, 301, 302, 303, 310]);
+        let run = |head, tail| {
+            trace_run(
+                &Trace {
+                    effect: 401_000,
+                    head,
+                    tail,
+                },
+                &blade,
+            )
+        };
+        // the Uchigatana's (300, -1): the guard to the tip
+        assert_eq!(run(300, -1), [300, 301, 302, 303]);
+        // Sekiro's (300, 301), and a tail past the model's last id stops at it
+        assert_eq!(run(300, 301), [300, 301]);
+        assert_eq!(run(300, 305), [300, 301, 302, 303]);
+        assert_eq!(run(310, -1), [310]);
+        // a tail at or below the head, 0 among them, gives none, as a head of -1 does
+        assert!(run(301, 300).is_empty());
+        assert!(run(301, 301).is_empty());
+        assert!(run(300, 0).is_empty());
+        assert!(run(-1, 301).is_empty());
+        assert!(run(-1, -1).is_empty());
+        assert!(run(10_300, -1).is_empty());
     }
 
     #[test]
@@ -822,7 +904,7 @@ mod tests {
             effect,
             route: UseRoute::Event,
             dummy: Some(dummy),
-            tail: None,
+            span: Vec::new(),
             source,
             follow: false,
             repeating: false,

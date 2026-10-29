@@ -361,15 +361,15 @@ impl LowerFromSoftEffects {
                         1,
                     );
                 }
-                // an effect between two polygons (a blade's base and tip, a trace's head and tail) stands midway, in the first's
-                // frame: the game's trail covers the blade from hilt to tip (both games' videos); with no second polygon it stands
-                // at the first
-                if u.tail.is_some() {
+                // a weapon trace runs through its run of the blade's polygons, as the game's trace slot takes them; a blade
+                // event runs from its base to its tip (the polygons between them, which the game may walk too, are not
+                // looked up for an event); with no second polygon it stands at the first
+                if u.kind == 118 && !u.span.is_empty() {
                     log.approximate(
-                        "an effect between two dummy polygons stands midway between them, in the first's frame",
+                        "a blade event runs from its base polygon straight to its tip (the polygons between are not looked up)",
                         1,
                     );
-                } else if u.kind == 118 || matches!(u.route, UseRoute::WeaponTrace { .. }) {
+                } else if u.kind == 118 {
                     log.approximate(
                         "an effect along a blade with no second dummy polygon stands at its first",
                         1,
@@ -381,10 +381,15 @@ impl LowerFromSoftEffects {
                     start: u.start,
                     end: if u.repeating { u.end } else { None },
                     follow: u.follow && socket.is_some(),
-                    toward: u
-                        .tail
-                        .filter(|_| socket.is_some())
-                        .map(crate::pose::dummy_socket_name),
+                    span: if socket.is_some() {
+                        u.span
+                            .iter()
+                            .copied()
+                            .map(crate::pose::dummy_socket_name)
+                            .collect()
+                    } else {
+                        Vec::new()
+                    },
                     socket,
                     event: Some(u.event),
                 });

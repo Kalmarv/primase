@@ -160,14 +160,17 @@ name. Core defines the description; stepping and drawing it belongs to a consume
 
 ## Clip effects
 
-`core.clip_effects`, on a clip, has `{origin, spawns, lost}`: the particle systems the clip starts while it plays. Origin is
-null or a nonempty provenance string; `lost` counts, by nonempty reason, what the lowering could not carry. Each spawn has
-`{system, start, end, socket, follow, event}`: `system` is an entity that holds a `core.particles` and no `core.transform` (the
-spawn places it); `start` is a finite, nonnegative clip time in seconds and `end` null (the system plays out) or a time at or
-after it (its emitters are stopped); `socket` is null (the rig's origin) or the nonempty name of a socket of the clip's rig;
-`follow` says whether the system moves with that socket as the clip moves it, else it stays where it started; `event` is the
-index of the starting event in the clip's `core.clip_events`, where the source says. A player begins each spawn at its start
-on the clip's clock.
+`core.clip_effects`, on a clip, has `{origin, spawns, lost}`: the particle systems the clip starts while it plays.
+Origin is null or a nonempty provenance string; `lost` counts, by nonempty reason, what the lowering could not carry.
+Each spawn has `{system, start, end, socket, span, follow, event}`: `system` is an entity that holds a `core.particles`
+and no `core.transform` (the spawn places it); `start` is a finite, nonnegative clip time in seconds and `end` null (the
+system plays out) or a time at or after it (its emitters are stopped); `socket` is null (the rig's origin) or the
+nonempty name of a socket of the clip's rig; `span` lists the further sockets the system runs through after `socket`, in
+order (empty where `socket` is null; each name nonempty, no socket twice): the system stands at each of them at once,
+and a trail it draws is the band they sweep, each socket's path joined to the next one's, its own width unused; `follow`
+says whether the system moves with that socket as the clip moves it, else it stays where it started; `event` is the
+index of the starting event in the clip's `core.clip_events`, where the source says. A player begins each spawn at its
+start on the clip's clock.
 
 ## Lights as a program reads them
 

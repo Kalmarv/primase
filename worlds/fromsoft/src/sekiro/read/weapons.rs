@@ -167,13 +167,12 @@ impl WeaponParams {
             let at = l.traces + 12 * n;
             let effect = word(at, "traceSfxId")?;
             if effect > 0 {
-                let dummy = |id: i32| (id > 0).then_some(id);
                 traces.push((
                     n,
                     Trace {
                         effect,
-                        head: dummy(word(at + 4, "traceDmyIdHead")?),
-                        tail: dummy(word(at + 8, "traceDmyIdTail")?),
+                        head: word(at + 4, "traceDmyIdHead")?,
+                        tail: word(at + 8, "traceDmyIdTail")?,
                     },
                 ));
             }
@@ -314,11 +313,8 @@ mod tests {
                 model: 300,
                 motion_category: 50,
                 hold_row: 5000,
-                // slot 1 names no effect; slot 2's dummy polygons are none
-                traces: vec![
-                    (0, trace(401000, Some(300), Some(301))),
-                    (2, trace(401001, None, None))
-                ],
+                // slot 1 names no effect; slot 2's dummy polygons are none (-1)
+                traces: vec![(0, trace(401000, 300, 301)), (2, trace(401001, -1, -1))],
             }
         );
         assert_eq!(weapon.part(), "wp_a_0300");

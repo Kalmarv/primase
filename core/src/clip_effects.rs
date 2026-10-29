@@ -33,9 +33,11 @@ pub struct ClipSpawn {
     /// is looked for on the rigs attached to it (`core.attachment`: what the rig holds, a weapon in a hand), the attached
     /// rig standing where its attachment places it and in its own pose.
     pub socket: Option<String>,
-    /// A second socket of the rig, for a system that runs between two (a weapon's trail from the hilt to the tip): the
-    /// system stands midway between `socket` and this one, in `socket`'s frame. `None` stands it at `socket`.
-    pub toward: Option<String>,
+    /// The further sockets the system runs through after `socket`, in order (a weapon's trail through its blade's sockets
+    /// from the hilt to the tip), looked up as `socket` is. The system stands at each of its sockets at once: a trail it
+    /// draws is the band its sockets sweep, the path of each joined to the path of the next, and the trail's own width
+    /// is not used. Empty stands it at `socket` alone.
+    pub span: Vec<String>,
     /// Whether the system follows its socket as the clip moves it, else it stays where it started.
     pub follow: bool,
     /// The index in the clip's `core.clip_events` of the event that starts it, where the source says.
@@ -90,11 +92,20 @@ impl Component for ClipEffects {
             {
                 return Err(format!("spawn {i}: a socket name that is empty"));
             }
-            if spawn.toward.is_some() && spawn.socket.is_none() {
-                return Err(format!("spawn {i}: a second socket with no first"));
+            if !spawn.span.is_empty() && spawn.socket.is_none() {
+                return Err(format!("spawn {i}: sockets it runs through with no first"));
             }
-            if spawn.toward.as_ref().is_some_and(|t| t.trim().is_empty()) {
-                return Err(format!("spawn {i}: a second socket name that is empty"));
+            if spawn.span.iter().any(|s| s.trim().is_empty()) {
+                return Err(format!("spawn {i}: a socket it runs through whose name is empty"));
+            }
+            let mut through = std::collections::BTreeSet::new();
+            if let Some(again) = spawn
+                .socket
+                .iter()
+                .chain(&spawn.span)
+                .find(|s| !through.insert(*s))
+            {
+                return Err(format!("spawn {i}: it runs through the socket {again} twice"));
             }
         }
         Ok(())
@@ -148,7 +159,7 @@ mod tests {
                 start: 0.25,
                 end: Some(0.5),
                 socket: Some("dummy 100".into()),
-                toward: None,
+                span: Vec::new(),
                 follow: true,
                 event: Some(3),
             }],
@@ -195,14 +206,18 @@ mod tests {
         let mut bad = effects.clone();
         bad.spawns[0].socket = Some(" ".into());
         assert!(bad.verify(clip, &world).is_err());
-        // a second socket with no first, or an empty one
+        // sockets it runs through: with a first, named, each once
         let mut bad = effects.clone();
-        bad.spawns[0].toward = Some("dummy 101".into());
+        bad.spawns[0].span = vec!["dummy 101".into(), "dummy 102".into()];
         assert_eq!(bad.verify(clip, &world), Ok(()));
         bad.spawns[0].socket = None;
         assert!(bad.verify(clip, &world).is_err());
         bad.spawns[0].socket = Some("dummy 100".into());
-        bad.spawns[0].toward = Some(String::new());
+        bad.spawns[0].span = vec![String::new()];
+        assert!(bad.verify(clip, &world).is_err());
+        bad.spawns[0].span = vec!["dummy 101".into(), "dummy 101".into()];
+        assert!(bad.verify(clip, &world).is_err());
+        bad.spawns[0].span = vec!["dummy 100".into()];
         assert!(bad.verify(clip, &world).is_err());
         let mut bad = effects;
         bad.lost.push((String::new(), 1));

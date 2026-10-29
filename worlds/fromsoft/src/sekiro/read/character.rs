@@ -1317,17 +1317,7 @@ fn held_weapons(reading: &Reading<'_>, equipped: &EquippedWeapons) -> Result<Vec
     let mut out: Vec<HeldPart> = Vec::new();
     for (slot, row) in equipped.slots() {
         let weapon = params.weapon(row)?;
-        let base = weapon.part();
-        let part = [format!("{base}_l"), base.clone(), format!("{base}_m")]
-            .into_iter()
-            .find(|p| textures::has(&reading.archive, &Item::Part(p).binder_path()))
-            .ok_or_else(|| {
-                invalid(
-                    "FromSoftware weapon",
-                    0,
-                    format!("weapon row {row}: the archives hold no part binder of {base}"),
-                )
-            })?;
+        let part = weapon_part(&reading.archive, &weapon)?;
         if out.iter().any(|h| h.part == part) {
             return Err(invalid(
                 "FromSoftware weapon",
@@ -1346,8 +1336,28 @@ fn held_weapons(reading: &Reading<'_>, equipped: &EquippedWeapons) -> Result<Vec
     Ok(out)
 }
 
-/// The trace slots of the weapons `equipped` states, by hand slot ([`super::weapons::WeaponRow::traces`]); none read where
-/// no weapon is stated.
+/// The part binder of `weapon`'s model the archives hold: `wp_a_<id>` with the level suffix `_l`, none or `_m`, the first
+/// held.
+fn weapon_part(archive: &fromsoft_formats::Archive, weapon: &super::weapons::WeaponRow) -> Result<String> {
+    let base = weapon.part();
+    [format!("{base}_l"), base.clone(), format!("{base}_m")]
+        .into_iter()
+        .find(|p| textures::has(archive, &Item::Part(p).binder_path()))
+        .ok_or_else(|| {
+            invalid(
+                "FromSoftware weapon",
+                0,
+                format!(
+                    "weapon row {}: the archives hold no part binder of {base}",
+                    weapon.row
+                ),
+            )
+        })
+}
+
+/// The trace slots of the weapons `equipped` states, by hand slot ([`super::weapons::WeaponRow::traces`]), each with the
+/// reference ids of the dummy polygons of the weapon's first model (the blade, model 0 of its part), which a trace's run
+/// walks; none read where no weapon is stated.
 fn weapon_traces(
     install: &Install,
     archive: &fromsoft_formats::Archive,
@@ -1362,10 +1372,32 @@ fn weapon_traces(
         .slots()
         .into_iter()
         .map(|(slot, row)| {
+            let weapon = params.weapon(row)?;
+            let part = weapon_part(archive, &weapon)?;
+            let item = Item::Part(&part);
+            let binder = Binder::read(&archive.read(&item.binder_path(), decoder)?, decoder)?;
+            let base = form_base(&part, &part);
+            let blade = item
+                .forms(&binder)?
+                .into_iter()
+                .find(|form| super::weapons::model_of_form(&base, &form.base) == Some(0))
+                .ok_or_else(|| {
+                    invalid(
+                        "FromSoftware weapon",
+                        0,
+                        format!("{part} holds no model 0 ({base}.flver)"),
+                    )
+                })?;
+            let dummies = Model::read(&blade.flver.bytes)?
+                .dummies
+                .iter()
+                .map(|d| i32::from(d.reference_id))
+                .collect();
             Ok(crate::sekiro::effect_data::WeaponTraces {
                 slot,
                 row,
-                traces: params.weapon(row)?.traces,
+                traces: weapon.traces,
+                dummies,
             })
         })
         .collect()

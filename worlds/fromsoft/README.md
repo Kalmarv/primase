@@ -501,7 +501,11 @@ converts frames; it does not lower:
   (`CharacterOptions::equipped_weapons`, `with_equipped_weapons`: the part, `wp_a_<equipModelId>`, of each hand slot, read among
   the parts): a weapon read for a slot has its dummy polygons named as the events name them (`dummy 10300` for polygon 300 of
   the right hand's first weapon; `HandSlot`). Where the weapon stands on the character is not read yet: that placement has to
-  come from the engine's own data, and the sockets stay on the weapon's skeleton until it does.
+  come from the engine's own data, and the sockets stay on the weapon's skeleton until it does. An attack event (type 1)
+  draws the trail of the first trace slot of the right hand's first weapon (`EquipParamWeapon`'s `traceSfxId<n>`), through
+  the run of the weapon model's dummy polygons the slot's head and tail give as the game takes them (`trace_run`, from
+  Elden Ring's executable: head to tail, or up from the head while the model has the next id where the tail is -1); a run
+  of fewer than two is counted in `lost`, as the game draws no trail of it;
   `lower-fromsoft-effects` lowers the effects to unplaced systems and the uses to `core.clip_effects` on the clip,
   a spawn each, at the socket `dummy <reference id>` of the model; `Report::clip_uses` counts the uses;
 - lights are `fromsoft.light` records where they stand (stored colours, powers,

@@ -414,7 +414,7 @@ fn use_of(
         effect,
         route: crate::sekiro::effect_data::UseRoute::Event,
         dummy,
-        tail: None,
+        span: Vec::new(),
         source: None,
         follow,
         repeating,
