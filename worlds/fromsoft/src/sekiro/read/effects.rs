@@ -91,6 +91,15 @@ pub struct EffectCache {
     files: BTreeMap<i32, std::result::Result<Option<Arc<Fxr>>, String>>,
 }
 
+impl std::fmt::Debug for EffectCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EffectCache")
+            .field("binders", &self.binders.len())
+            .field("files", &self.files.len())
+            .finish()
+    }
+}
+
 /// The effect binders an area's effects and textures are looked for in.
 pub struct EffectLibrary<'a> {
     archive: &'a Archive,
@@ -100,6 +109,16 @@ pub struct EffectLibrary<'a> {
     cache: EffectCache,
     /// The numbers none of this library's binders holds.
     missing: BTreeSet<i32>,
+}
+
+impl std::fmt::Debug for EffectLibrary<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EffectLibrary")
+            .field("game", &self.game)
+            .field("paths", &self.paths)
+            .field("missing", &self.missing.len())
+            .finish()
+    }
 }
 
 /// The binders to search for the effects the animations of one character's `.tae` member (`c4130.tae`) start: Elden Ring's own
