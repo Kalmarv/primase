@@ -9,6 +9,12 @@
 //! or `assign-class=display_group:on` (every group displayed: only the placements with no draw group at all differ from
 //! a read without the axes, none).
 //!
+//! Which program state matches the game's is not settled, so an axis is the *group*, not the collision property that
+//! switches it on. A game run (Elden Ring 1.17.2, `m10_00`, loose layout) gave every map piece and asset the draw group 200
+//! and every collision the display group 200 and, in another arm, 201: the scenery was gone in both, so the collisions' display
+//! groups meeting the parts' alone do not draw them. The collisions' draw groups, the other set that nearly every part's bits
+//! fall inside (see [`CollisionGroups::draw`]), are the remaining candidate.
+//!
 //! A part with no draw group set (a zero array, or no draw block) carries no condition and is present in every state.
 //! That is a choice, not a finding: a game run (Elden Ring 1.17.2, `m10_00`, loose layout) showed that setting every
 //! map piece's and asset's draw groups to zero hides the scenery that had non-zero groups, but whether the 317,870
