@@ -35,15 +35,21 @@ pub enum SkyRole {
     Ring,
     /// The moon (the object `o005900`), placed towards the light by the game every frame.
     Moon,
+    /// An Elden Ring asset of an area's sky map that the weather shows (`WeatherAssetReplaceParam`): a sky sphere, a
+    /// cloud layer, the rainbow. Placed where the sky map's layout places it; where in the frame the game draws it is
+    /// not established.
+    Weather,
 }
 
 /// A placement of the sky the area read brought in (`fromsoft.sky_part`, [`crate::sekiro::read::sky`]): what it is, and
-/// for a dome or ring the value of the `fromsoft.sky` state axis it is drawn in (its `core.condition` says the same).
-/// `lower-fromsoft-sky` lowers it: the moon's anchor, the draw order of the sky's materials.
+/// the values of the `fromsoft.sky` state axis it is drawn in, as a mask (bit `i` for value `i`; its `core.condition`
+/// says the same): one for a Sekiro dome or ring, the weathers that show it for an Elden Ring weather asset, none (0)
+/// for the moon, drawn in every state. `lower-fromsoft-sky` lowers it: the moon's anchor, the draw order of the sky's
+/// materials.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct SkyPart {
     pub role: SkyRole,
-    pub state: Option<u32>,
+    pub states: u64,
 }
 impl Component for SkyPart {
     const NAME: &'static str = "fromsoft.sky_part";

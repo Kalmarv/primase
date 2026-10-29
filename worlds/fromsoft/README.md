@@ -637,6 +637,13 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
   parts to the camera's x and z every frame); the pass anchors the moon towards the environment's sun at 25 units
   (the game's), drops a moon with no sun (counted), and puts the sky's materials on the sky layer in the frame's
   order (dome, moon, rings). Off unless asked: a target's pipeline that leaves out `sky` gets none of it.
+  Elden Ring's read with the sky brings in the assets of the area's sky map (`m60_00_00_99` for an open-world tile, in
+  the tile's frame; `mAA_BB_00_99` for a legacy map) that its weathers show: the values of `fromsoft.sky` are the
+  weathers and fire-ash states of the sky map's `WeatherAssetReplaceParam` rows that apply at the area's creation
+  limit (`MapDefaultInfoParam`), `weather-<id>` and `weather-<id>-ashen`, with no default (the weather lot is not
+  read), and each asset is conditioned on the values that show it. They get no anchor and keep their materials' order
+  (neither the game's camera following nor its draw phase for them is established); the pass only removes their
+  records, counted. The sky map's parts no row names (its far view of the land) are not read, counted.
 - `lower-fromsoft-environment{lux-per-unit=...}` lowers `fromsoft.draw_param` to
   the core environment: the light set's first directional light (`Directional
   Light Angle0`, `DiffColor0`) a directional `core.light` named as the sun by
@@ -768,6 +775,7 @@ unless an option asks), **unread** (no reader opens it). A row's owner is the pr
 | Events (`EVENT_PARAM_ST`) of every type (treasure, generator, obj_act, navmesh, patrol_info, …) | `EVENTS` | read-header: type, event ID, the part and region named, entity ID read; the type's data kept as bytes. `map_offset` (Sekiro) is decoded and used | `msb::MapLayout::map_events`, `lower-fromsoft-map-records` / Other world data rows, Properties (no place of their own) |
 | Event scripts (`.emevd`) | one per area | Sekiro: read and interpreted for part presence (`states=event`); Elden Ring: unread (refused) | `emevd.rs`, `read/states.rs` / State axes |
 | Sky (Sekiro's sky map `m89_00_00_99`, the moon `o005900`, the areas' own unplaced domes) | its layout | read with `Options::sky` (off by default): the states as the `fromsoft.sky` axis without a default; which state the game draws is unread | `read/sky.rs`, `lower-fromsoft-sky` / Objects, State axes |
+| Sky (Elden Ring's sky maps' weather assets: sky spheres, cloud layers, the burning Erdtree) | `WeatherAssetReplaceParam`, `MapDefaultInfoParam`, the sky map's layout | read with `Options::sky`: the weathers as the `fromsoft.sky` axis without a default, each asset conditioned on the weathers that show it, placed where the layout places it; the weather lot, any camera following and the draw phase are unread | `read/sky.rs`, `lower-fromsoft-sky` / State axes |
 | Draw-param environment | `draw_param_census` | read for the file the caller names; the file choice from the weather and events, and Elden Ring's `_weatherbase`/`_weatheroutdoor`/`_commonevent` layers: unread | `read/draw_param.rs`, `lower-fromsoft-environment` / Environment, Properties |
 | Textures (`.tpf`, Sekiro's `.tpfbhd`), shader bundles, materials | per area | read | `read/textures.rs`, `read/shaders.rs` / Shaded and Game shader views |
 

@@ -127,14 +127,11 @@ fn the_sky_is_read_as_states_and_its_moon_stands_towards_the_sun() -> Result<(),
                 assert!(world.get::<Condition>(e).is_none() && world.get::<SkyAnchor>(e).is_none());
             }
             role => {
-                let state = part.state.unwrap();
+                let states = part.states;
+                assert_eq!(states.count_ones(), 1, "{source}");
                 let c = world.get::<Condition>(e).unwrap();
                 assert_eq!((c.0.len(), c.0[0].0.len()), (1, 1), "{source}");
-                assert_eq!(
-                    (c.0[0].0[0].axis, c.0[0].0[0].values),
-                    (axis, 1u64 << state),
-                    "{source}"
-                );
+                assert_eq!((c.0[0].0[0].axis, c.0[0].0[0].values), (axis, states), "{source}");
                 assert_eq!(
                     world.get::<SkyAnchor>(e),
                     Some(&SkyAnchor::Horizontal),
@@ -147,7 +144,7 @@ fn the_sky_is_read_as_states_and_its_moon_stands_towards_the_sun() -> Result<(),
                     .iter()
                     .find(|(ring, _)| source == &format!("m89_00_00_99:{ring}"))
                 {
-                    assert_eq!(state, value(dome), "{source}");
+                    assert_eq!(states, 1 << value(dome), "{source}");
                 }
             }
         }
@@ -185,5 +182,157 @@ fn the_sky_is_read_as_states_and_its_moon_stands_towards_the_sun() -> Result<(),
         }]
     );
     assert!(world.iter::<SkyPart>().next().is_none());
+    Ok(())
+}
+
+/// Limgrave's tile `m60_42_36_00` (creation limit 0) with `m60_00_00_99`'s weathers, in (fire-ash state, weather)
+/// order.
+const LIMGRAVE_WEATHERS: [&str; 32] = [
+    "weather-0",
+    "weather-1",
+    "weather-10",
+    "weather-11",
+    "weather-20",
+    "weather-21",
+    "weather-30",
+    "weather-31",
+    "weather-40",
+    "weather-41",
+    "weather-50",
+    "weather-51",
+    "weather-52",
+    "weather-60",
+    "weather-82",
+    "weather-99",
+    "weather-0-ashen",
+    "weather-1-ashen",
+    "weather-10-ashen",
+    "weather-11-ashen",
+    "weather-20-ashen",
+    "weather-21-ashen",
+    "weather-30-ashen",
+    "weather-31-ashen",
+    "weather-40-ashen",
+    "weather-41-ashen",
+    "weather-50-ashen",
+    "weather-51-ashen",
+    "weather-52-ashen",
+    "weather-60-ashen",
+    "weather-82-ashen",
+    "weather-99-ashen",
+];
+
+/// The sky map's parts the tile's weathers show, and the mask of the values showing each.
+const LIMGRAVE_ASSETS: [(&str, u64); 11] = [
+    ("AEG094_104_0000", 0x7fff_0000),
+    ("AEG096_010_0000", 0x0007_0007),
+    ("AEG096_102_0000", 0x8000_8000),
+    ("AEG096_400_0000", 0x0001_0001),
+    ("AEG096_402_0000", 0x0004_0004),
+    ("AEG096_403_0000", 0x2008_2008),
+    ("AEG096_404_0000", 0x5ff0_5ff0),
+    ("AEG096_410_0000", 0x0000_203f),
+    ("AEG096_411_0000", 0x203f_203f),
+    ("AEG096_414_0000", 0x203f_203f),
+    ("AEG096_420_0000", 0x203f_0000),
+];
+
+/// Elden Ring's sky read with an open-world tile: the weathers of its sky map's `WeatherAssetReplaceParam` rows that
+/// apply at the tile's creation limit as the `fromsoft.sky` values, each shown asset placed with the values that show
+/// it as its condition and no anchor, where the sky map's layout places it moved into the tile's frame (the tile's
+/// centre stands at (128, 640) in the sky map's frame; source z reversed in core's); the sky map's other parts counted.
+///
+/// The expected values come from an independent walk of the params (typed by the Smithbox paramdefs) and of the sky
+/// map's layout, reading no output of this crate: limit 0 from `MapDefaultInfoParam` row 60423600, 32 weathers, 11
+/// assets shown (all at the sky map's origin), 32 parts other regions' rows name, 594 parts no row names, none of them
+/// an `AEG096` model.
+///
+/// Needs `installs.elden`, `keys.elden` and `tools.oodle6`.
+#[test]
+fn elden_rings_sky_is_read_as_weathers() -> Result<(), Box<dyn std::error::Error>> {
+    use fromsoft_formats::{Game as FsGame, Keys};
+    use primase_fromsoft::game::ParamKey;
+    let (Some(root), Some(keys), Some(dll)) = (
+        install(Game::Elden),
+        inputs::keys(Game::Elden),
+        oodle(Tool::Oodle6),
+    ) else {
+        return Ok(());
+    };
+    let install = common::install(
+        root,
+        FsGame::EldenRing,
+        Keys::from_folder(keys, FsGame::EldenRing, FsGame::EldenRing.param_key_sha256())?,
+    );
+    let dll = common::oodle(dll)?;
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: 1 << 30,
+    };
+    let mut world = World::default();
+    let report = sekiro::read_game_area(
+        &install,
+        "m60_42_36_00",
+        &decoder,
+        &sekiro::Options {
+            // a small region: the sky is kept whatever the region
+            region: Some(sekiro::Region {
+                rect: [-10.0, -10.0, 10.0, 10.0],
+                margin: 0.0,
+            }),
+            sky: sekiro::sky::Sky::Include,
+            ..Default::default()
+        },
+        &mut world,
+    )?;
+    let sky = &report.sky;
+    assert_eq!(
+        (sky.sky_map.as_deref(), sky.limit, sky.missing_sky_map.as_deref()),
+        (Some("m60_00_00_99"), Some(0), None)
+    );
+    assert_eq!(sky.states, LIMGRAVE_WEATHERS);
+    assert_eq!(
+        (sky.weather_assets, sky.unshown_parts, sky.unnamed_parts),
+        (11, 32, 594)
+    );
+    assert!(sky.unnamed_sky_models.is_empty(), "{:?}", sky.unnamed_sky_models);
+    assert_eq!((sky.domes, sky.rings, sky.moons), (0, 0, 0));
+    let axes: Vec<_> = world
+        .iter::<StateAxis>()
+        .filter(|(_, a)| a.key == "fromsoft.sky")
+        .collect();
+    assert_eq!(axes.len(), 1);
+    let (axis, a) = axes[0];
+    assert_eq!(a.default, None);
+    assert_eq!(
+        a.domain,
+        Domain::Enum(LIMGRAVE_WEATHERS.map(String::from).to_vec())
+    );
+    let mut seen = Vec::new();
+    for (e, part) in world.iter::<SkyPart>() {
+        let source = &world.get::<Source>(e).unwrap().0;
+        let name = source.strip_prefix("m60_00_00_99:").unwrap();
+        let &(_, mask) = LIMGRAVE_ASSETS
+            .iter()
+            .find(|(n, _)| *n == name)
+            .unwrap_or_else(|| panic!("{source}: not a shown asset"));
+        assert_eq!((part.role, part.states), (SkyRole::Weather, mask), "{source}");
+        let c = world.get::<Condition>(e).unwrap();
+        assert_eq!(
+            (c.0.len(), c.0[0].0.len(), c.0[0].0[0].axis, c.0[0].0[0].values),
+            (1, 1, axis, mask),
+            "{source}"
+        );
+        assert!(world.get::<SkyAnchor>(e).is_none(), "{source}");
+        let t = world.get::<Transform>(e).unwrap();
+        assert_eq!(t.cols[3], [-128.0, 0.0, 640.0], "{source}");
+        seen.push(name.to_owned());
+    }
+    seen.sort();
+    assert_eq!(seen, LIMGRAVE_ASSETS.map(|(n, _)| n.to_owned()));
+    // the pass keeps their materials' order and removes the records
+    common::run(&mut world, "lower-fromsoft-sky")?;
+    assert!(world.iter::<SkyPart>().next().is_none());
+    assert!(world.iter::<SkyAnchor>().next().is_none());
     Ok(())
 }

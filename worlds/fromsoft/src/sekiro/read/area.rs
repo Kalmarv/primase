@@ -52,8 +52,9 @@ pub struct Options {
     /// effect row at the model's dummy polygons; off by default (it reads the effect binders and the params).
     /// `lower-fromsoft-lights` lowers them, in the BTL lights' unit.
     pub effect_lights: bool,
-    /// Whether the sky is read with the area ([`sky`]): none (default) or the sky map's domes, rings and moon and the
-    /// area's own unplaced domes, the states as the `fromsoft.sky` axis with no default (Sekiro's only).
+    /// Whether the sky is read with the area ([`sky`]): none (default) or included, the states as the `fromsoft.sky`
+    /// axis with no default: Sekiro's sky map's domes, rings and moon and the area's own unplaced domes; Elden Ring's
+    /// assets of the area's sky map that its weathers show, each with the weathers that show it.
     pub sky: sky::Sky,
 }
 /// What a read of the object models' animation binders found.
@@ -954,13 +955,6 @@ pub fn read_game_area_staged(
     }) {
         return Err(invalid("FromSoftware map", 0, "invalid region"));
     }
-    if game != Game::Sekiro && options.sky != sky::Sky::None {
-        return Err(invalid(
-            "FromSoftware map",
-            0,
-            format!("{}: the sky is not read yet", game.name()),
-        ));
-    }
     if game != Game::Sekiro && options.states != StateClasses::None {
         return Err(invalid(
             "FromSoftware map",
@@ -1003,10 +997,41 @@ pub fn read_game_area_staged(
             maps.push((parent, parent_layout, offset, Some(format!("{area}-"))));
         }
     }
+    // the sky map the read brings in, in the area's frame, and Elden Ring's weathers of the area
+    let mut sky_map: Option<String> = None;
+    let mut weathers: Option<sky::Weathers> = None;
     if options.sky == sky::Sky::Include {
-        let path = format!("/map/mapstudio/{}.msb.dcx", sky::SKY_MAP);
-        let sky_layout = MapLayout::read(&archive.read(&path, decoder)?)?;
-        maps.push((sky::SKY_MAP.to_owned(), sky_layout, [0.; 2], None));
+        report.sky.asked = true;
+        let found = match game {
+            Game::Sekiro => Some((sky::SKY_MAP.to_owned(), [0.; 2])),
+            Game::EldenRing => sky::elden_sky_map(&area).map_err(|e| invalid("FromSoftware sky", 0, e))?,
+        };
+        let path = found
+            .as_ref()
+            .map(|(map, _)| format!("/map/mapstudio/{map}.msb.dcx"));
+        match (found, path) {
+            (Some((map, offset)), Some(path)) if archive.contains(&path) => {
+                if game == Game::EldenRing {
+                    let param =
+                        fromsoft_formats::game_params::read_weather_assets(install, &archive, decoder)?;
+                    let limits =
+                        fromsoft_formats::game_params::read_weather_asset_limits(install, &archive, decoder)?;
+                    // a map with no row sets no limit
+                    let limit = sky::map_number(&area).and_then(|n| limits.of(n)).unwrap_or(-1);
+                    weathers = Some(
+                        sky::Weathers::new(&map, limit, &param)
+                            .map_err(|e| invalid("FromSoftware sky", 0, e))?,
+                    );
+                }
+                let sky_layout = MapLayout::read(&archive.read(&path, decoder)?)?;
+                maps.push((map.clone(), sky_layout, offset, None));
+                sky_map = Some(map);
+            }
+            (found, _) => {
+                report.sky.missing_sky_map =
+                    Some(found.map_or_else(|| format!("{area}: none known"), |(map, _)| map));
+            }
+        }
     }
     // map pieces, then objects (assets), each in layout order, the map's own before its parents'
     for objects in [false, true] {
@@ -1018,7 +1043,7 @@ pub fn read_game_area_staged(
                 {
                     continue;
                 }
-                let in_sky = map == sky::SKY_MAP;
+                let in_sky = sky_map.as_ref() == Some(map);
                 let kind = match p.kind {
                     PartKind::MapPiece if !objects => map.as_str(),
                     PartKind::Object | PartKind::Asset if objects => object,
@@ -1043,6 +1068,21 @@ pub fn read_game_area_staged(
                 let Some(model) = p.model.map(|i| map_layout.models[i].name.as_str()) else {
                     continue;
                 };
+                // of Elden Ring's sky map, the assets some weather of the area shows
+                if in_sky && let Some(w) = &weathers {
+                    if !w.names(model) {
+                        report.sky.unnamed_parts += 1;
+                        let upper = model.to_ascii_uppercase();
+                        if upper.starts_with("AEG096_") && !report.sky.unnamed_sky_models.contains(&upper) {
+                            report.sky.unnamed_sky_models.push(upper);
+                        }
+                        continue;
+                    }
+                    if w.states_of(model) == 0 {
+                        report.sky.unshown_parts += 1;
+                        continue;
+                    }
+                }
                 let key = format!("{kind}/{model}");
                 requests.insert(key.clone());
                 report.parent_placements += usize::from(prefix.is_some());
@@ -1056,8 +1096,8 @@ pub fn read_game_area_staged(
             }
         }
     }
-    // the area's own domes, which no layout places, at the origin
-    if options.sky == sky::Sky::Include {
+    // Sekiro: the area's own domes, which no layout places, at the origin
+    if options.sky == sky::Sky::Include && game == Game::Sekiro {
         let folder = game.map_folder(&area)?;
         for model in sky::area_domes(&layout, |digits| {
             archive.contains(&format!("{folder}/{area}_{digits}.mapbnd.dcx"))
@@ -1196,7 +1236,14 @@ pub fn read_game_area_staged(
     let used: BTreeSet<&String> = selected.iter().map(|(key, _, _)| key).collect();
     prototypes.retain(|key, _| used.contains(key));
     // the sky's states and what each kept sky placement is, from its model and its materials
-    let sky_plan = if options.sky == sky::Sky::Include {
+    let sky_plan = if let Some(w) = &weathers {
+        let items: Vec<(usize, String)> = selected
+            .iter()
+            .filter(|(_, index, _)| placements[*index].sky)
+            .map(|(key, index, _)| (*index, key.split_once('/').expect("key").1.to_owned()))
+            .collect();
+        Some(w.plan(&items, std::mem::take(&mut report.sky)))
+    } else if options.sky == sky::Sky::Include && sky_map.is_some() {
         let items: Vec<sky::Item> = selected
             .iter()
             .filter(|(_, index, _)| placements[*index].sky)
@@ -1409,7 +1456,20 @@ pub fn read_game_area_staged(
     let sky_axis = sky_plan
         .as_ref()
         .filter(|plan| !plan.values.is_empty())
-        .map(|plan| sky::spawn_axis(&mut world, &plan.values));
+        .map(|plan| {
+            let source = match &weathers {
+                Some(w) => format!(
+                    "the weathers and fire-ash states of the WeatherAssetReplaceParam rows of the sky map {} that \
+                     apply on {area} (creation limit {}); the game's choice of one (WeatherLotParam) is not read",
+                    w.sky_map, w.limit
+                ),
+                None => format!(
+                    "the domes of the sky map {} and the area's own; the game's choice of one is not read",
+                    sky::SKY_MAP
+                ),
+            };
+            sky::spawn_axis(&mut world, &plan.values, source)
+        });
     for (key, index, transform) in selected {
         let Placed {
             part,
