@@ -16,7 +16,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use inputs::{Game, Tool, install_file, tool};
-use primase_core::{Controller, World};
+use primase_core::{Controller, LayerMask, World};
 use primase_unity::animator::UnityAnimatorController;
 use primase_unity::level::read_level;
 use primase_unity::passes::lower_animator::lower_unity_animator;
@@ -183,7 +183,47 @@ fn one_level_of_peaks_bundle_reads() {
         .map(|(_, c)| c.name.clone())
         .collect();
     let log = lower_unity_animator(&mut w).unwrap();
-    assert!(log.omitted.is_empty(), "{log:?}");
+    // the one thing the lowering leaves out: the layer masks of layers above a controller's first whose states write default
+    // values (`m_WriteDefaultValues`), where core's layer rule keeps the pose below. An independent count: UnityPy's reading
+    // of every controller the level's 630 Animators name (their layers above the first that have states, all of whose
+    // states write defaults) gives these layers per controller; of the 14 controllers the level binds to rigs, Scout has
+    // five and Helicopter_End two, each named by one Animator of the level, so seven, and every other controller bound
+    // has none (Ambience, PassportButton and PassportTab have such layers too, but their Animators drive no rig). The
+    // count is what the world's bindings come to by that table.
+    const WRITE_DEFAULT_LAYERS: [(&str, u64); 5] = [
+        ("Scout", 5),
+        ("Helicopter_End", 2),
+        ("Ambience", 3),
+        ("PassportButton", 1),
+        ("PassportTab", 1),
+    ];
+    let expected: u64 = w
+        .iter::<Controller>()
+        .map(|(_, c)| {
+            WRITE_DEFAULT_LAYERS
+                .iter()
+                .find(|(name, _)| *name == c.name)
+                .map_or(0, |(_, layers)| *layers)
+        })
+        .sum();
+    assert_eq!(expected, 7, "the census's layers by the level's bindings");
+    let reason = concat!(
+        "layer masks not lowered: its states write default values (m_WriteDefaultValues) for the joints they do not ",
+        "animate, where core's layer rule keeps the pose below"
+    );
+    assert_eq!(log.omitted.len(), 1, "{log:?}");
+    assert_eq!(log.omitted.get(reason), Some(&expected), "{log:?}");
+    let refused = w
+        .iter::<Controller>()
+        .flat_map(|(_, c)| c.layers.iter())
+        .filter(
+            |l| matches!(&l.mask, Some(LayerMask::Unsupported(why)) if why.contains("write default values")),
+        )
+        .count() as u64;
+    assert_eq!(
+        refused, expected,
+        "each omission is a layer's mask stated Unsupported"
+    );
     let lowered: BTreeSet<String> = w.iter::<Controller>().map(|(_, c)| c.name.clone()).collect();
     assert_eq!(lowered, read);
     for name in ["Scout", "Scout Sit 2", "Scout Sit 3"] {
