@@ -25,6 +25,7 @@ pub mod texture_switch;
 pub(super) mod textures;
 pub mod visibility;
 pub mod weapons;
+pub mod wind;
 
 pub mod weather;
 pub mod world_state;
