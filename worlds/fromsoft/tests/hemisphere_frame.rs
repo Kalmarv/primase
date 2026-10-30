@@ -9,7 +9,7 @@ use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{AmbientLight, Environment, World};
 use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::sekiro;
-use primase_fromsoft::sekiro::source::{DefaultHour, DrawField, DrawGroup, DrawParam, SetChosen};
+use primase_fromsoft::sekiro::source::{DefaultHour, DrawField, DrawGroup, DrawParam, FieldType, SetChosen};
 
 #[test]
 fn hemisphere_coefficients_match_the_captured_light_sets_bit_for_bit()
@@ -46,14 +46,17 @@ fn hemisphere_coefficients_match_the_captured_light_sets_bit_for_bit()
                     key: field.key.clone(),
                     name: field.name.clone(),
                     value: field.values.get(index)?,
+                    stored: FieldType::of(&field.values),
                     time: field.times.get(index).copied(),
                 })
             })
         })
         .collect();
     let draw = DrawParam {
+        game: Game::Sekiro,
         file: "m11_01_0000".into(),
         version: gparam.version,
+        time: gparam.time,
         groups: vec![DrawGroup {
             key: group.key.clone(),
             name: group.name.clone(),
