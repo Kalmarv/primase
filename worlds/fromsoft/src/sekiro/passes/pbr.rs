@@ -966,6 +966,7 @@ fn lower_materials(
             );
         }
     }
+    super::add_low_forms(world, cache.into_iter().map(|((stem, _), e)| (e, stem)), &mut log);
     Ok((log, previews))
 }
 

@@ -103,7 +103,13 @@ impl Pass for LowerFromSoftMaterials {
     }
     /// A lowered source material is named after its preview base map ([`crate::preview`]).
     fn modifies(&self) -> &[&'static str] {
-        &["pbr.material", "core.texture", "core.name", Mesh::NAME]
+        &[
+            "pbr.material",
+            "core.texture",
+            "core.texture_forms",
+            "core.name",
+            Mesh::NAME,
+        ]
     }
     fn approximates(&self) -> &'static str {
         "unevidenced metallic as dielectric 0; per-light gloss correction omitted; with layers=preview, unbaked layered materials from their main-layer preview; preview fallback colour"

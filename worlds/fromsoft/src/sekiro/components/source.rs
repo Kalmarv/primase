@@ -904,6 +904,16 @@ impl Resource for TexturePayloads {
     const NAME: &'static str = "fromsoft.texture_payloads";
 }
 
+/// The low-resolution twins of the source textures (`Options::low_textures`), as stored (DDS bytes), by the stem of the
+/// texture each is the twin of: the game's `<stem>_l`, a texture of its own (other sizes, sometimes another format).
+/// Present only where the read asked for them; kept for the passes that lower or bake materials, which give a texture
+/// its twin as a form (`core.texture_forms`); not serialised.
+#[derive(Clone, Debug, Default)]
+pub struct LowTexturePayloads(pub Payloads);
+impl Resource for LowTexturePayloads {
+    const NAME: &'static str = "fromsoft.low_texture_payloads";
+}
+
 /// The G-buffer pixel shader programs (`<shader>_<switch>_Gbuf.ppo`, DXBC as stored) of the selected layered
 /// materials, for passes that evaluate them. Not serialised.
 #[derive(Clone, Debug, Default)]

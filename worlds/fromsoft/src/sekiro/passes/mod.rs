@@ -18,6 +18,8 @@ pub mod far;
 pub mod geometry;
 pub mod layers;
 pub mod lights;
+mod low_forms;
+pub(crate) use low_forms::add_low_forms;
 pub mod materials;
 pub mod normals;
 pub mod object_collision;

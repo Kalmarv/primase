@@ -13,7 +13,9 @@ use iridia_interface::Stage;
 use primase_core::pass::{OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::pbr::{AlphaMode, PbrMaterial, Specular, TextureRef};
 use primase_core::shader::ShaderBinding;
-use primase_core::{ColorSpace, Component, Mesh, Name, TexFormat, TexRole, Texture, World};
+use primase_core::{
+    ColorSpace, Component, Mesh, Name, TexFormat, TexRole, Texture, TextureForm, TextureForms, World,
+};
 use std::collections::BTreeSet;
 
 /// `bake-fromsoft-materials{max-size=N,sample-time=S,cache=off|on}`: replace lowered surface channels with the resolved pixel
@@ -116,7 +118,7 @@ impl Pass for BakeFromSoftMaterials {
         &[Material::NAME]
     }
     fn provides(&self) -> &[&'static str] {
-        &[Texture::NAME, Name::NAME]
+        &[Texture::NAME, TextureForms::NAME, Name::NAME]
     }
     fn modifies(&self) -> &[&'static str] {
         &[PbrMaterial::NAME]
@@ -168,6 +170,7 @@ impl Pass for BakeFromSoftMaterials {
                 &material,
                 self.max_size.get(),
                 self.sample_time.get(),
+                pixels::Form::Own,
             )
             .map_err(cache::Error::Refused)
             .and_then(|prepared| cache::bake(prepared, world, memo.as_ref(), log))
@@ -183,6 +186,41 @@ impl Pass for BakeFromSoftMaterials {
                     continue;
                 }
             };
+            // where the read brought in low-resolution twins, the same program over the twins of every texture it
+            // reads (never a full texture standing in for a missing twin), given as each baked texture's form
+            let low = if pixels::binds_forms(world, stage, &material) {
+                match pixels::prepare(
+                    world,
+                    stage,
+                    binding.stage(Stage::Vertex),
+                    &material,
+                    self.max_size.get(),
+                    self.sample_time.get(),
+                    pixels::Form::Low,
+                )
+                .map_err(cache::Error::Refused)
+                .and_then(|prepared| cache::bake(prepared, world, memo.as_ref(), log))
+                {
+                    Ok(low) if low.same_outputs(&baked) => {
+                        log.count("materials baked over their low-resolution twins too", 1);
+                        Some(low)
+                    }
+                    Ok(_) => {
+                        log.count(
+                            "materials without a low-resolution bake: its outputs differ from the full bake's",
+                            1,
+                        );
+                        None
+                    }
+                    Err(cache::Error::Failed(e)) => return Err(e),
+                    Err(cache::Error::Refused(why)) => {
+                        log.count(&format!("materials without a low-resolution bake: {why}"), 1);
+                        None
+                    }
+                }
+            } else {
+                None
+            };
             let name = format!("baked_{}", source.identity_digest().map_err(|e| e.to_string())?);
             baked.report(log, entity);
             // The bake itself is the approximation this material carries, its text the pass's own declaration made
@@ -197,27 +235,55 @@ impl Pass for BakeFromSoftMaterials {
                 ),
                 1,
             );
-            let add = |world: &mut World, suffix: &str, bytes, role, color_space, normal| {
+            let low_size = low.as_ref().map_or(0, |l| l.size);
+            let add = |world: &mut World,
+                       suffix: &str,
+                       (bytes, low): (Vec<u8>, Option<Vec<u8>>),
+                       role,
+                       color_space,
+                       normal| {
+                let texture = |size, bytes| Texture {
+                    width: size,
+                    height: size,
+                    format: TexFormat::Rgba8Unorm,
+                    levels: vec![bytes],
+                    role,
+                    color_space,
+                    normal,
+                };
                 let e = world.spawn();
                 world.insert(e, Name(format!("{name}_{suffix}")));
-                world.insert(
-                    e,
-                    Texture {
-                        width: baked.size,
-                        height: baked.size,
-                        format: TexFormat::Rgba8Unorm,
-                        levels: vec![bytes],
-                        role,
-                        color_space,
-                        normal,
-                    },
-                );
+                world.insert(e, texture(baked.size, bytes));
+                if let Some(bytes) = low {
+                    let form = world.spawn();
+                    world.insert(form, Name(format!("{name}_{suffix}_l")));
+                    world.insert(form, texture(low_size, bytes));
+                    world.insert(
+                        e,
+                        TextureForms {
+                            detail: 0,
+                            forms: vec![TextureForm {
+                                detail: 1,
+                                texture: form,
+                            }],
+                        },
+                    );
+                }
                 TextureRef::new(e)
             };
+            let (mut low_albedo, mut low_normal, mut low_orm, mut low_f0, mut low_emission) =
+                (None, None, None, None, None);
+            if let Some(low) = low {
+                low_albedo = Some(low.albedo);
+                low_normal = Some(low.normal);
+                low_orm = Some(low.orm);
+                low_f0 = low.specular;
+                low_emission = low.emission.map(|(rgba, _)| rgba);
+            }
             material.base_color_texture = Some(add(
                 world,
                 "albedo",
-                baked.albedo,
+                (baked.albedo, low_albedo),
                 TexRole::Color,
                 ColorSpace::Srgb,
                 None,
@@ -226,7 +292,7 @@ impl Pass for BakeFromSoftMaterials {
             material.normal_texture = Some(add(
                 world,
                 "normal",
-                baked.normal,
+                (baked.normal, low_normal),
                 TexRole::Normal,
                 ColorSpace::Linear,
                 Some(super::normals::SOURCE),
@@ -235,7 +301,7 @@ impl Pass for BakeFromSoftMaterials {
             material.metallic_roughness_texture = Some(add(
                 world,
                 "orm",
-                baked.orm,
+                (baked.orm, low_orm),
                 TexRole::Mask,
                 ColorSpace::Linear,
                 None,
@@ -244,7 +310,14 @@ impl Pass for BakeFromSoftMaterials {
             material.metallic = if baked.specular.is_some() { 0. } else { 1. };
             material.specular = baked.specular.map(|rgb| Specular {
                 color: [25.; 3],
-                color_texture: Some(add(world, "f0", rgb, TexRole::Color, ColorSpace::Srgb, None)),
+                color_texture: Some(add(
+                    world,
+                    "f0",
+                    (rgb, low_f0.take()),
+                    TexRole::Color,
+                    ColorSpace::Srgb,
+                    None,
+                )),
                 ..Specular::default()
             });
             // the program's own alpha test, carried in the albedo's alpha: a mask at the material's reference
@@ -255,7 +328,7 @@ impl Pass for BakeFromSoftMaterials {
                 material.emissive_texture = Some(add(
                     world,
                     "emission",
-                    rgba,
+                    (rgba, low_emission),
                     TexRole::Color,
                     ColorSpace::Srgb,
                     None,

@@ -215,6 +215,13 @@ pub(super) struct Product {
     approximations: BTreeMap<String, u64>,
 }
 impl Product {
+    /// Whether `other` has the outputs this has: the same planes and the same alpha test (a bake of the same program
+    /// over another form of its textures has).
+    pub(super) fn same_outputs(&self, other: &Product) -> bool {
+        self.specular.is_some() == other.specular.is_some()
+            && self.emission.as_ref().map(|e| e.1) == other.emission.as_ref().map(|e| e.1)
+            && self.cut == other.cut
+    }
     fn finish(baked: Baked) -> Result<Self, String> {
         let mut log = PassLog::default();
         let allocation = format!(
@@ -567,6 +574,7 @@ mod tests {
                 &self.material,
                 size,
                 0.,
+                pixels::Form::Own,
             )
             .unwrap()
         }
@@ -581,6 +589,73 @@ mod tests {
             "primase-material-bake-{name}-{}-{nonce}",
             std::process::id()
         ))
+    }
+
+    /// A low-resolution bake reads the low form of every texture the program reads (here a 1 x 1 twin of the 2 x 2
+    /// texture, so it bakes 1 x 1 under a cap of 4), and is refused where a texture has none: a full texture never
+    /// stands in for a missing twin. Without forms no low bake is asked for.
+    #[test]
+    fn a_low_bake_reads_the_low_forms_and_needs_every_one() {
+        use primase_core::{TextureForm, TextureForms};
+        let mut f = Fixture::new();
+        assert!(!pixels::binds_forms(&f.world, &f.pixel, &f.material));
+        let refused = pixels::prepare(
+            &f.world,
+            &f.pixel,
+            Some(&f.vertex),
+            &f.material,
+            4,
+            0.,
+            pixels::Form::Low,
+        )
+        .err()
+        .unwrap();
+        assert_eq!(refused, pixels::NO_LOW_FORM);
+        let twin = f.world.spawn();
+        f.world.insert(
+            twin,
+            Texture {
+                width: 1,
+                height: 1,
+                format: TexFormat::Rgba8Unorm,
+                levels: vec![vec![200, 40, 90, 255]],
+                role: TexRole::Color,
+                color_space: ColorSpace::Linear,
+                normal: None,
+            },
+        );
+        f.world.insert(
+            f.texture,
+            TextureForms {
+                detail: 0,
+                forms: vec![TextureForm {
+                    detail: 1,
+                    texture: twin,
+                }],
+            },
+        );
+        assert!(pixels::binds_forms(&f.world, &f.pixel, &f.material));
+        let own = f.prepare(4);
+        assert_eq!((own.source_size, own.size), ([2, 2], 2));
+        let low = pixels::prepare(
+            &f.world,
+            &f.pixel,
+            Some(&f.vertex),
+            &f.material,
+            4,
+            0.,
+            pixels::Form::Low,
+        )
+        .unwrap();
+        assert_eq!((low.source_size, low.size), ([1, 1], 1));
+        let mut log = PassLog::default();
+        let full = bake(f.prepare(4), &f.world, None, &mut log).unwrap();
+        let low = bake(low, &f.world, None, &mut log).unwrap();
+        assert_eq!((full.size, low.size, low.albedo.len()), (2, 1, 4));
+        assert!(
+            full.same_outputs(&low),
+            "the same program over another form has the same outputs"
+        );
     }
 
     #[test]

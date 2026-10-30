@@ -8,7 +8,7 @@ use iridia_exec::{
 use primase_core::pbr::{AlphaMode, PbrMaterial, UvTransform, Wrap};
 use primase_core::shader::{NormalSpace, OutputBinding, OutputRole};
 use primase_core::shader::{surface::Base, surface::Place, surface::Surface};
-use primase_core::{ColorSpace, Texture, TimeOfDay, World};
+use primase_core::{ColorSpace, Entity, Texture, TextureForms, TimeOfDay, World};
 use primase_core::{shader::Shader, shader::StageBinding, shader::TextureSource};
 use primase_foundations::parallel::Threads;
 use primase_foundations::{sampling::Address, sampling::Levels, sampling::Transfer};
@@ -34,6 +34,46 @@ pub(super) struct Baked {
 /// carry the program's own compare either: why, after the colon. The material stays uncut.
 pub const UNCARRIED_ALPHA_TEST: &str =
     "alpha-tested material not cut: the program's own compare is not carried";
+
+/// Which of a bound texture's stored forms a bake reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Form {
+    /// The texture bound.
+    Own,
+    /// Its low-resolution form: the form at level 1 of its `core.texture_forms` (the game's `_l` twin).
+    Low,
+}
+
+/// Why a low-resolution bake is not made: a texture the program reads has no low-resolution form. The bake reads one
+/// form of every texture or none: a full texture never stands in for a missing twin.
+pub(super) const NO_LOW_FORM: &str = "a bound texture has no low-resolution form";
+
+/// The texture entity `e` stands for in `form`; `absent` is the refusal where that entity holds no texture.
+fn texture_in<'a>(world: &'a World, e: Entity, form: Form, absent: &str) -> Result<&'a Texture, String> {
+    let e = match form {
+        Form::Own => e,
+        Form::Low => world
+            .get::<TextureForms>(e)
+            .and_then(|f| f.forms.iter().find(|f| f.detail == 1))
+            .map(|f| f.texture)
+            .ok_or(NO_LOW_FORM)?,
+    };
+    world.get::<Texture>(e).ok_or_else(|| absent.to_owned())
+}
+
+/// Whether a texture `stage` binds or `material`'s base colour (its alpha) has stored forms: a read that brought in
+/// low-resolution twins, so a low-resolution bake is asked for.
+pub(super) fn binds_forms(world: &World, stage: &StageBinding, material: &PbrMaterial) -> bool {
+    stage
+        .textures
+        .iter()
+        .filter_map(|t| match &t.source {
+            TextureSource::Texture { texture, .. } => Some(*texture),
+            _ => None,
+        })
+        .chain(material.base_color_texture.map(|r| r.texture))
+        .any(|e| world.has::<TextureForms>(e))
+}
 
 fn image(t: &Texture, sampler: SamplerUse) -> Result<Arc<SampledTexture>, String> {
     let level = t.levels.first().ok_or("bound texture has no mip")?;
@@ -140,6 +180,7 @@ pub(super) fn prepare<'a>(
     previous: &PbrMaterial,
     cap: u32,
     time: f32,
+    form: Form,
 ) -> Result<Prepared<'a>, String> {
     let core = world
         .get::<Shader>(stage.shader)
@@ -204,9 +245,7 @@ pub(super) fn prepare<'a>(
         let slot = layer_bake::resolve::register(resource).map_err(|e| e.to_string())?;
         let value = match &t.source {
             TextureSource::Texture { texture, sampler } => {
-                let texture = world
-                    .get::<Texture>(*texture)
-                    .ok_or("bound texture has no pixels")?;
+                let texture = texture_in(world, *texture, form, "bound texture has no pixels")?;
                 source_size[0] = source_size[0].max(texture.width);
                 source_size[1] = source_size[1].max(texture.height);
                 let use_sampler = SamplerUse::of(sampler, Unstated::Assume(Address::Wrap))?;
@@ -289,7 +328,7 @@ pub(super) fn prepare<'a>(
             if r.texcoord != 0 {
                 return Err("alpha uses a secondary UV set".to_owned());
             }
-            let t = world.get::<Texture>(r.texture).ok_or("alpha texture is absent")?;
+            let t = texture_in(world, r.texture, form, "alpha texture is absent")?;
             let address = r.wrap.map(|w| match w {
                 Wrap::Repeat => Address::Wrap,
                 Wrap::Mirror => Address::Mirror,

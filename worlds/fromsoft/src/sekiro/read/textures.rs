@@ -26,12 +26,17 @@ pub(super) enum Location {
 #[derive(Default)]
 pub(super) struct Catalog {
     pub entries: BTreeMap<String, Location>,
+    /// The low-resolution twin of a texture, by the texture's stem: the game's `<stem>_l`, a texture of its own (other
+    /// sizes, sometimes another format), stored beside the texture (Sekiro's area binders) or in the `_l` package beside
+    /// its package (Elden Ring's assets). Found only where the read asks for them.
+    pub low: BTreeMap<String, Location>,
 }
 pub(super) fn has(archive: &Archive, path: &str) -> bool {
     archive.contains(path)
 }
 impl Catalog {
-    pub fn discover(archive: &Archive, decoder: &Decoder<'_>, area: &str) -> Result<Self> {
+    /// The area's textures (Sekiro's area binders, then the shared packages), and with `low` their `_l` twins too.
+    pub fn discover(archive: &Archive, decoder: &Decoder<'_>, area: &str, low: bool) -> Result<Self> {
         let mut catalog = Self::default();
         let mut seen = BTreeSet::new();
         for area in [area, "m11", "m10", "m13", "m15", "m17", "m20", "m25"] {
@@ -45,7 +50,13 @@ impl Catalog {
                 }
                 for name in Binder::split_names(&archive.read(&path, decoder)?)? {
                     let name = package_stem(&name);
-                    if name.ends_with("_l") {
+                    if let Some(stem) = name.strip_suffix("_l") {
+                        if low {
+                            catalog
+                                .low
+                                .entry(stem.to_owned())
+                                .or_insert_with(|| Location::Split(path.clone()));
+                        }
                         continue;
                     }
                     catalog
@@ -65,6 +76,52 @@ impl Catalog {
             }
         }
         Ok(catalog)
+    }
+    /// The textures of the `_l` package `bytes` as the low twins of the textures named without `_l`; a texture of it
+    /// not named `<stem>_l` is no twin and is left.
+    pub fn add_low(&mut self, bytes: &[u8]) -> Result<()> {
+        for t in Package::read(bytes)?.textures {
+            let name = fromsoft_formats::names::fold(&t.name);
+            if let Some(stem) = name.strip_suffix("_l") {
+                self.low
+                    .entry(stem.to_owned())
+                    .or_insert_with(|| Location::Inline(t.dds.into()));
+            }
+        }
+        Ok(())
+    }
+    /// The low twins of `wanted` the catalog holds ([`Catalog::low`]), by the texture's stem, and the wanted textures
+    /// that have none, by name.
+    pub fn load_low(
+        &self,
+        archive: &Archive,
+        decoder: &Decoder<'_>,
+        wanted: &BTreeSet<String>,
+    ) -> Result<(crate::sekiro::source::Payloads, Vec<String>)> {
+        let (held, missing): (Vec<String>, Vec<String>) =
+            wanted.iter().cloned().partition(|n| self.low.contains_key(n));
+        let twins = Catalog {
+            entries: self
+                .low
+                .iter()
+                .filter(|(n, _)| held.contains(*n))
+                .map(|(n, l)| {
+                    let location = match l {
+                        Location::Split(path) => Location::Split(path.clone()),
+                        Location::Inline(bytes) => Location::Inline(Arc::clone(bytes)),
+                    };
+                    (format!("{n}_l"), location)
+                })
+                .collect(),
+            low: BTreeMap::new(),
+        };
+        let wanted_twins: BTreeSet<String> = held.iter().map(|n| format!("{n}_l")).collect();
+        let loaded = twins.load(archive, decoder, &wanted_twins)?;
+        let payloads = loaded
+            .into_iter()
+            .map(|(name, bytes)| (name.strip_suffix("_l").unwrap_or(&name).to_owned(), bytes))
+            .collect();
+        Ok((payloads, missing))
     }
     pub fn add(&mut self, bytes: &[u8]) -> Result<()> {
         for t in Package::read(bytes)?.textures {

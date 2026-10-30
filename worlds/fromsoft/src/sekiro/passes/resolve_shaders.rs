@@ -171,6 +171,7 @@ impl Pass for ResolveFromSoftShaders {
             MaterialPrograms::NAME,
             ProgramFacts::NAME,
             Texture::NAME,
+            primase_core::TextureForms::NAME,
             Name::NAME,
         ]
     }
@@ -681,6 +682,7 @@ fn run(
     for (policy, count) in policies {
         log.approximate(&policy, count);
     }
+    super::add_low_forms(world, textures.into_iter().map(|((stem, _), e)| (e, stem)), log);
     Ok(())
 }
 

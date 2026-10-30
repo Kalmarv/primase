@@ -68,6 +68,13 @@ pub struct Options {
     /// effect (`fromsoft.effect` on an entity placed there, the effect files and the textures they name) rather than its lights;
     /// off by default. `lower-fromsoft-effects` lowers them to `core.particles`.
     pub effects: bool,
+    /// Whether each read texture's low-resolution twin is read too ([`source::LowTexturePayloads`]): the game's
+    /// `<stem>_l`, a texture of its own beside the texture (Sekiro's area binders) or in the `_l` package beside its
+    /// package (Elden Ring's assets). Off by default: the read is as it was. A texture with no twin keeps only itself
+    /// and is named in [`Report::missing_low_textures`]. The game holds both and picks one per placement; what decides
+    /// which is not measured, so the lowering gives a texture its twin as a form (`core.texture_forms`) and draws
+    /// neither in its place.
+    pub low_textures: bool,
 }
 /// What a read of the object models' animation binders found.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -183,6 +190,11 @@ pub struct Report {
     pub undefined_materials: usize,
     /// Texture packages read whole because a material names one of their textures (Elden Ring's asset packages).
     pub texture_packages: usize,
+    /// With `low_textures`: the low-resolution twins read ([`source::LowTexturePayloads`]), the `_l` packages read
+    /// for them, and the read textures that have no twin, by stem (they keep only themselves).
+    pub low_textures: usize,
+    pub low_texture_packages: usize,
+    pub missing_low_textures: Vec<String>,
     /// With `states: Event`: the rules read and the parts decided or left at their default.
     pub states: Option<states::Report>,
     /// With `display_groups: Axes`: the axes made, the placements conditioned or left present, and how the layout's draw
@@ -1034,7 +1046,7 @@ pub fn read_game_area_staged(
     // catalog: Sekiro's area discovery, or the game's common packages, then the packages its materials name
     let definitions = game_material_definitions(&archive, decoder, game)?;
     let mut catalog = if game.material_binders().is_empty() {
-        textures::Catalog::discover(&archive, decoder, &area[..3])?
+        textures::Catalog::discover(&archive, decoder, &area[..3], options.low_textures)?
     } else {
         let mut catalog = textures::Catalog::default();
         for path in game.common_textures() {
@@ -1266,6 +1278,16 @@ pub fn read_game_area_staged(
                     {
                         catalog.add(&archive.read(&package, decoder)?)?;
                         report.texture_packages += 1;
+                        // its low-resolution textures, in the `_l` package beside it
+                        if options.low_textures
+                            && let Some(low) = package
+                                .strip_suffix(".tpf.dcx")
+                                .map(|stem| format!("{stem}_l.tpf.dcx"))
+                            && archive.contains(&low)
+                        {
+                            catalog.add_low(&archive.read(&low, decoder)?)?;
+                            report.low_texture_packages += 1;
+                        }
                     }
                 }
             }
@@ -1403,6 +1425,14 @@ pub fn read_game_area_staged(
     report.missing_default_textures = missing;
     stage("load textures");
     let payloads = catalog.load(&archive, decoder, &wanted)?;
+    let low_payloads = if options.low_textures {
+        let (low, missing) = catalog.load_low(&archive, decoder, &wanted)?;
+        report.low_textures = low.len();
+        report.missing_low_textures = missing;
+        Some(low)
+    } else {
+        None
+    };
     let programs = bundles.layered_programs(layered.into_iter())?;
     report.textures = payloads.len();
     report.shader_programs = programs.len();
@@ -1519,6 +1549,9 @@ pub fn read_game_area_staged(
         }
     }
     world.insert_resource(source::TexturePayloads(payloads));
+    if let Some(low) = low_payloads {
+        world.insert_resource(source::LowTexturePayloads(low));
+    }
     world.insert_resource(source::ShaderPrograms(programs));
     bundles.spawn(&mut world, &material_shaders);
     report.shader_bundles = bundles.bundles.len();
