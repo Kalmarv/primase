@@ -27,6 +27,7 @@ use crate::light_records as lights;
 use crate::game::Shading;
 use crate::invalid;
 use crate::passes::sampler_pairs::{self, SamplerPairs};
+use crate::sekiro::source::draw_of;
 use fromsoft_formats::names::fold;
 use fromsoft_formats::{Archive, Binder, Game, Result, dcx::Decoder};
 use iridia::ProgramGraph;
@@ -51,18 +52,6 @@ const FORMAT: &str = "render graph";
 /// Why a scene step's order of draws is not stated: the recorded frames hold the draws in the order the game drew them,
 /// and the rule that ordered them is not read.
 const SORTING_NOT_READ: &str = "the recorded frames hold the draws in the order the game drew them; the rule that orders them is not read";
-
-/// The draw a scene step of `bucket` makes: one per bucket, named after it.
-pub(crate) fn draw_of(bucket: DrawBucket) -> &'static str {
-    match bucket {
-        DrawBucket::Deferred => "deferred",
-        DrawBucket::Decal => "decal",
-        DrawBucket::Forward => "forward",
-        DrawBucket::Sky => "sky",
-        DrawBucket::ShadowCaster => "shadow_caster",
-        DrawBucket::Velocity => "velocity",
-    }
-}
 
 /// What the draw of a scene step of `bucket` draws: the G-buffer's, the forward draws' and the sky's materials are the
 /// ones each material's `core.step_bindings` binds to the draw ([`crate::sekiro::passes::resolve_shaders`] by the

@@ -5,8 +5,9 @@ use crate::layer_bake::resolve::{
     vertex_material_parameters,
 };
 use crate::materials::{Material, SkipClass};
-use crate::sekiro::read::render_graph::draw_of;
-use crate::sekiro::source::{MaterialShader, Payloads, ShaderBundle, ShaderPrograms, TexturePayloads};
+use crate::sekiro::source::{
+    MaterialShader, Payloads, ShaderBundle, ShaderPrograms, TexturePayloads, draw_of,
+};
 use fromsoft_formats::metaparam::Metaparam;
 use iridia::ProgramGraph;
 use iridia::output_uses::output_uses;

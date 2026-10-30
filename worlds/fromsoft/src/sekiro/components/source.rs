@@ -2,6 +2,7 @@
 //! the source stores and how it names it, never a target format's fields.
 use fromsoft_formats::game::Resolution;
 use primase_core::json::{JsonError, to_value};
+use primase_core::render_graph::DrawBucket;
 use primase_core::{Component, Entity, Resource, Semantic, Stream};
 use serde::Serialize;
 use serde_json::Value;
@@ -22,6 +23,19 @@ impl Component for PrototypeSource {
     }
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         to_value(self).map(Some)
+    }
+}
+
+/// The draw a scene step of `bucket` makes in the render graph the reader builds from the recorded frames: one per
+/// bucket, named after it. Materials' `core.step_bindings` name the same draws.
+pub(crate) fn draw_of(bucket: DrawBucket) -> &'static str {
+    match bucket {
+        DrawBucket::Deferred => "deferred",
+        DrawBucket::Decal => "decal",
+        DrawBucket::Forward => "forward",
+        DrawBucket::Sky => "sky",
+        DrawBucket::ShadowCaster => "shadow_caster",
+        DrawBucket::Velocity => "velocity",
     }
 }
 

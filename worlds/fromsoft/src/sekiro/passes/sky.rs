@@ -5,8 +5,7 @@
 //! states are the read's already. Elden Ring's weather assets put their sky programs' materials on the sky layer (see
 //! [`LowerFromSoftSky`]).
 use crate::materials::{Material, SkipClass};
-use crate::sekiro::read::render_graph::draw_of;
-use crate::sekiro::source::{MOON_DISTANCE, MaterialSlots, SkyPart, SkyRole};
+use crate::sekiro::source::{MOON_DISTANCE, MaterialSlots, SkyPart, SkyRole, draw_of};
 use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::render_graph::{DrawBucket, RenderGraph, SceneMembers};
 use primase_core::{
