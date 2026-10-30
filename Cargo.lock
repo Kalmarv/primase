@@ -1494,8 +1494,10 @@ dependencies = [
 name = "primase-peak"
 version = "0.1.0"
 dependencies = [
+ "half",
  "primase-core",
  "primase-testdata",
+ "primase-texcodec",
  "primase-unity",
  "thiserror",
  "unity-formats",

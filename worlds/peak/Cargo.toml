@@ -1,6 +1,6 @@
 [package]
 name = "primase-peak"
-description = "PEAK over the Unity reader: what its own scripts hand every shader (its fog texture)"
+description = "PEAK over the Unity reader: what its own scripts hand every shader (its fog texture and light volume)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,6 +11,8 @@ publish.workspace = true
 [dependencies]
 primase-core.workspace = true
 primase-unity.workspace = true
+primase-texcodec.workspace = true
+half.workspace = true
 unity-formats.workspace = true
 thiserror.workspace = true
 

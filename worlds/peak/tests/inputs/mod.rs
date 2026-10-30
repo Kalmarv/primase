@@ -22,13 +22,24 @@ primase_testdata::inputs! {
             gate: true,
         },
     }
-    oracle_sets {}
+    oracle_sets {
+        UnityEditor = "unity-editor" {
+            about: "what Unity's own editor makes of bytes cut from a player as stored (a script's steps run by the engine on them)",
+            source: "independent: Unity's editor (6000.6.4f1, batchmode), through editor scripts kept with the private oracle tools",
+        },
+    }
     declared {
         Query::Install(Game::Peak, Some("PEAK_Data")) => {
             status: Live,
             gate: true,
             about: r#"PEAK's data folder (`PEAK_Data`), its scene `level4` read with `tools.unity_tpk`; `worlds/peak/tests/globals.rs`"#,
             source: r#"the user's own install"#,
+        },
+        Query::Oracle(OracleSet::UnityEditor, Game::Peak, "light-volume-level4") => {
+            status: Live,
+            gate: true,
+            about: r#"level4's light volume as the engine assembles it (`volume_rgba16f.bin`: the RGBAHalf Texture3D's level 0, 166,712,832 bytes, after `SetPixels` and `Apply` of its 572 BC6H and BC4 slices' `GetPixels`, as `Peak.CompressableLightMap.Decompress` does); `worlds/peak/tests/globals.rs`"#,
+            source: r#"Unity's editor 6000.6.4f1 (the player is 6000.3.15f1) on the slices cut out as stored by UnityPy, through scripts kept with the private oracle tools"#,
         },
     }
     debug {}
