@@ -129,3 +129,26 @@ fn a_speedtree_billboard_card_is_refused_as_geometry() {
     let m = Model::read(&b).unwrap();
     assert!(decode(&m, 0, 0).unwrap_err().to_string().contains("billboard"));
 }
+
+/// A colour member is the input of its semantic index, whatever its position: the fixture's one colour is `COLOR0` as
+/// stored and `COLOR1` with its index set to 1 (as most of Elden Ring's map meshes store their one colour).
+#[test]
+fn a_colour_is_placed_by_its_semantic_index() {
+    use primase_fromsoft::sekiro::source::LayerLayout;
+    let first = LayerLayout::of(&Model::read(&fixture()).unwrap(), 0).unwrap();
+    assert_eq!(
+        (first.first_colour, first.second_colour, first.colours),
+        (Some(0), None, 1)
+    );
+    let mut b = fixture();
+    // the colour member (the fourth, at 320 + 3 * 20): its semantic index
+    put(&mut b, 320 + 3 * 20 + 16, 1);
+    let m = Model::read(&b).unwrap();
+    let second = LayerLayout::of(&m, 0).unwrap();
+    assert_eq!(
+        (second.first_colour, second.second_colour, second.colours),
+        (None, Some(0), 1)
+    );
+    // the decoded colour is the same value either way
+    assert_eq!(m.meshes[0].vertices[0].colors[0], [1.0, 128.0 / 255.0, 0.0, 1.0]);
+}

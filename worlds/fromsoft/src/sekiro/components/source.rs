@@ -816,16 +816,20 @@ impl LayerInputs {
     }
 }
 
-/// Where one FLVER mesh keeps what the layered programs read as vertex inputs, by its element layout: UV storage
-/// slots count each UV set, so a Float4 or packed-short pair element (`TEXCOORD0`, uv0 in `xy` and uv1 in `zw`) takes
-/// two, and the colour elements count in the order the reader decodes them (`Vertex::colors`).
+/// Where one FLVER mesh keeps what the programs read as vertex inputs beyond position, normal and tangent, by its element
+/// layout: UV storage slots count each UV set, so a Float4 or packed-short pair element (`TEXCOORD0`, uv0 in `xy` and uv1
+/// in `zw`) takes two, and the colour elements count in the order the reader decodes them (`Vertex::colors`). A colour
+/// element is the input of its semantic index (`COLOR0`, `COLOR1`), not of its position: most of Elden Ring's map meshes
+/// store one colour, indexed 1.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LayerLayout {
     /// The Byte4C UV members: `(member index, UV storage slot)`, in member order.
     pub byte4: Vec<(u8, usize)>,
     /// The UV storage slot of the second UV set: slot 1, when neither slot 0 nor slot 1 is a Byte4C member.
     pub second_uv: Option<usize>,
-    /// The position among the mesh's colour elements of the one the FLVER indexes 1.
+    /// The position among the mesh's colour elements of the one the FLVER indexes 0 (`COLOR0`).
+    pub first_colour: Option<usize>,
+    /// The position among the mesh's colour elements of the one the FLVER indexes 1 (`COLOR1`).
     pub second_colour: Option<usize>,
     /// UV storage slots the mesh holds, and colour elements.
     pub uv_slots: usize,
@@ -855,9 +859,12 @@ impl LayerLayout {
                         }
                         layout.uv_slots += if matches!(member.kind, 3 | 0x16) { 2 } else { 1 };
                     }
-                    10 => {
-                        if member.index == 1 {
-                            layout.second_colour = Some(layout.colours);
+                    // a member the layout declares and the file does not store (a SpeedTree layout's) is not decoded
+                    10 if member.stored => {
+                        match member.index {
+                            0 => layout.first_colour = Some(layout.colours),
+                            1 => layout.second_colour = Some(layout.colours),
+                            _ => {}
                         }
                         layout.colours += 1;
                     }

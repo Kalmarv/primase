@@ -122,7 +122,8 @@ choice! {
 /// the game switches by distance). Positions, unit normals, stored tangents (handedness reflected) and UV0 in the
 /// world frame; a layered material's Byte4C members as raw `Color(n)` streams, its second UV set as `TexCoord(1)` and
 /// its second vertex colour as `Color(9)`, all listed by `fromsoft.layer_inputs` (a mesh that stores no second UV set or
-/// colour gets no such stream). A prototype whose Havok cloth (`havok.cloth`) binds display buffers to its meshes gets,
+/// colour gets no such stream); a material binary's mesh (Elden Ring's) its further UV sets and its vertex colours, each
+/// colour as the input its semantic index names (`COLOR0` as `Color(0)`, `COLOR1` as `Color(9)`). A prototype whose Havok cloth (`havok.cloth`) binds display buffers to its meshes gets,
 /// on each level's entity, which display buffer vertex each vertex of a bound mesh's primitives is
 /// (`havok.cloth_vertices`): the FLVER vertex, as a display buffer's vertices are its mesh's.
 ///
@@ -535,18 +536,22 @@ impl LowerFromSoftGeometry {
                 }
                 continue;
             }
+            // a material binary's mesh (Elden Ring's) keeps every UV set and its vertex colours: the programs the
+            // material is bound to read them (`source_streams`)
+            let source_streams_kept =
+                matches!(material.definition, Some(crate::materials::Definition::Matbin(_)));
             // a layered mesh keeps what its programs read (the Byte4C members, the second UV set and the second
             // colour: `layer_streams`); what is left of its colours and UV sets is not lowered
-            let layout = if material.layered.is_some() {
+            let layout = if material.layered.is_some() || source_streams_kept {
                 crate::sekiro::source::LayerLayout::of(model, index).map_err(|e| e.to_string())?
             } else {
                 Default::default()
             };
-            // a material binary's mesh (Elden Ring's) keeps every UV set and its first vertex colour: the programs the
-            // material is bound to read them (`source_streams`)
-            let source_streams_kept =
-                matches!(material.definition, Some(crate::materials::Definition::Matbin(_)));
-            let kept_colours = usize::from(layout.second_colour.is_some() || source_streams_kept);
+            let kept_colours = if source_streams_kept {
+                usize::from(layout.first_colour.is_some()) + usize::from(layout.second_colour.is_some())
+            } else {
+                usize::from(layout.second_colour.is_some())
+            };
             let kept_uvs = layout.byte4.len() + usize::from(layout.second_uv.is_some());
             if mesh.vertices.iter().any(|v| v.colors.len() > kept_colours) {
                 log.approximate(
@@ -595,7 +600,7 @@ impl LowerFromSoftGeometry {
                 let members = layer.iter().map(|(semantic, _)| *semantic).collect();
                 streams.extend(layer);
                 if source_streams_kept {
-                    streams.extend(source_streams(&mesh.vertices, &part.source_vertices));
+                    streams.extend(source_streams(&mesh.vertices, &layout, &part.source_vertices));
                 }
                 let skinned = out.palette.is_some();
                 if skinned {
@@ -733,9 +738,14 @@ fn bind_static_meshes(model: &Model, log: &mut PassLog) -> Result<(Model, Vec<Op
 }
 
 /// The UV sets beyond the first, as `TexCoord(n)` in the order the vertex layout stores them (a four component UV member
-/// is two sets), and the first vertex colour as `Color(0)`, of the vertices `vertices` of a mesh: what a material
-/// binary's programs read besides the first UV set. A set or colour the mesh's vertices do not all have is not kept.
-fn source_streams(mesh: &[fromsoft_formats::flver::Vertex], vertices: &[u32]) -> Vec<(Semantic, Stream)> {
+/// is two sets), and the vertex colours, each as the input its semantic index in `layout` names (`COLOR0` as `Color(0)`,
+/// `COLOR1` as [`crate::sekiro::source::SECOND_COLOUR`]), of the vertices `vertices` of a mesh: what a material binary's
+/// programs read besides the first UV set. A set or colour the mesh's vertices do not all have is not kept.
+fn source_streams(
+    mesh: &[fromsoft_formats::flver::Vertex],
+    layout: &crate::sekiro::source::LayerLayout,
+    vertices: &[u32],
+) -> Vec<(Semantic, Stream)> {
     let at = |v: &u32| &mesh[*v as usize];
     let sets = vertices.iter().map(|v| at(v).uvs.len()).min().unwrap_or(0);
     let mut out = Vec::new();
@@ -750,11 +760,19 @@ fn source_streams(mesh: &[fromsoft_formats::flver::Vertex], vertices: &[u32]) ->
             ),
         ));
     }
-    if vertices.iter().all(|v| !at(v).colors.is_empty()) {
-        out.push((
-            Semantic::Color(0),
-            Stream::F32x4(vertices.iter().map(|v| at(v).colors[0]).collect()),
-        ));
+    let colours = [
+        (layout.first_colour, Semantic::Color(0)),
+        (layout.second_colour, crate::sekiro::source::SECOND_COLOUR),
+    ];
+    for (position, semantic) in colours {
+        if let Some(k) = position
+            && vertices.iter().all(|v| at(v).colors.len() > k)
+        {
+            out.push((
+                semantic,
+                Stream::F32x4(vertices.iter().map(|v| at(v).colors[k]).collect()),
+            ));
+        }
     }
     out
 }
