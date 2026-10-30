@@ -22,6 +22,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Default)]
 pub struct Options {
+    /// Named current weather and fire-ash state, independently observed in Elden Ring.
+    /// Selects the installed sky membership; weather-layer composition is not yet traced.
+    pub weather: Option<super::weather::Snapshot>,
     /// Named, independently observed flags for the installed common event 100.
     /// Missing flags remain unknown; this supplies assignments, not axis defaults.
     pub world_state: Option<super::world_state::FlagSet>,
@@ -147,6 +150,8 @@ pub enum StateClasses {
 /// What a read found and kept. Counts are source records (placements, prototypes, materials, texture files).
 #[derive(Default, Debug)]
 pub struct Report {
+    /// The explicit weather input and the installed sky/global layer it names.
+    pub weather: Option<super::weather::Report>,
     pub world_state: Option<super::world_state::Report>,
     pub irradiance: super::irradiance::Report,
     /// The full area name read (`m11_01_00_00`).
@@ -1105,6 +1110,16 @@ pub fn read_game_area_staged(
     }
     let area = area_name(area)?;
     let archive = install.open()?;
+    let weather = options
+        .weather
+        .as_ref()
+        .map(|input| {
+            if options.sky != sky::Sky::Include {
+                return Err(invalid("weather", 0, "weather snapshots require sky=include"));
+            }
+            super::weather::read(install, &archive, decoder, input)
+        })
+        .transpose()?;
     let world_state = if let Some(input) = &options.world_state {
         if game != Game::Sekiro {
             return Err(invalid(
@@ -1127,6 +1142,7 @@ pub fn read_game_area_staged(
     };
     let layout = MapLayout::read(&archive.read(&format!("/map/mapstudio/{area}.msb.dcx"), decoder)?)?;
     let mut report = Report {
+        weather,
         world_state,
         ..Report::default()
     };
@@ -1982,6 +1998,13 @@ pub fn read_game_area_staged(
     }
     if let Some(plan) = sky_plan {
         report.sky = plan.report;
+    }
+    if let Some(weather) = &report.weather {
+        super::weather::assign(&mut world, weather).map_err(|e| invalid("weather", 0, e))?;
+        report.sky.selection = Some(format!(
+            "{}: {} ({})",
+            weather.input.name, weather.sky, weather.input.source
+        ));
     }
     if let Some(state) = report.world_state.as_mut() {
         super::world_state::assign(&mut world, &area, state).map_err(|e| invalid("world-state", 0, e))?;

@@ -336,6 +336,8 @@ pub struct Plan {
 /// What the sky's read found.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Report {
+    /// The named weather input selecting this sky, where independently supplied.
+    pub selection: Option<String>,
     /// Whether the read was asked for it.
     pub asked: bool,
     /// The axis' values.
@@ -386,7 +388,17 @@ impl Report {
                 .example(map.clone()),
             );
         }
-        if !self.states.is_empty() {
+        if let Some(selection) = &self.selection {
+            out.push(
+                Notice::new(
+                    stage,
+                    NoticeKind::Selection,
+                    "sky selected from the named current weather and the installed weather asset rows",
+                    1,
+                )
+                .example(selection.clone()),
+            );
+        } else if !self.states.is_empty() {
             out.push(self.states.iter().fold(
                 Notice::new(
                     stage,

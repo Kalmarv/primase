@@ -280,6 +280,12 @@ fn elden_rings_sky_is_read_as_weathers() -> Result<(), Box<dyn std::error::Error
         "m60_42_36_00",
         &decoder,
         &sekiro::Options {
+            weather: Some(sekiro::weather::Snapshot {
+                name: "installed clear-weather fixture".into(),
+                source: "independent regulation census: WeatherParam row 0 GparamId 0, WeatherAssetReplaceParam map60423600 limit0".into(),
+                weather: 0,
+                fire_ash: false,
+            }),
             // a small region: the sky is kept whatever the region
             region: Some(sekiro::Region {
                 rect: [-10.0, -10.0, 10.0, 10.0],
@@ -291,6 +297,20 @@ fn elden_rings_sky_is_read_as_weathers() -> Result<(), Box<dyn std::error::Error
         &mut world,
     )?;
     let sky = &report.sky;
+    let weather = report.weather.as_ref().expect("explicit weather read");
+    assert_eq!(
+        weather.weather_outdoor,
+        "/param/drawparam/m00_00_0000_weatheroutdoor.gparam.dcx"
+    );
+    assert_eq!(weather.sky, "weather-0");
+    assert_eq!(
+        world
+            .resource::<primase_core::state::StateAssignment>()
+            .expect("weather assignment")
+            .0["fromsoft.sky"],
+        0
+    );
+    assert!(sky.selection.is_some());
     assert_eq!(
         (sky.sky_map.as_deref(), sky.limit, sky.missing_sky_map.as_deref()),
         (Some("m60_00_00_99"), Some(0), None)

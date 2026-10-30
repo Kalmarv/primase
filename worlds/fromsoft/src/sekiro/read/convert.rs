@@ -64,7 +64,9 @@ pub fn emitted_names(options: &Options) -> Vec<&'static str> {
     EMITTED_NAMES
         .iter()
         .copied()
-        .filter(|name| *name != "core.state_assignment" || options.world_state.is_some())
+        .filter(|name| {
+            *name != "core.state_assignment" || options.world_state.is_some() || options.weather.is_some()
+        })
         .filter(|name| {
             *name != "fromsoft.draw_param" || options.draw_param != super::draw_param::DrawParams::None
         })
@@ -108,6 +110,14 @@ impl<'a> AreaReader<'a> {
     fn record(&mut self, r: &super::area::Report) -> Report {
         self.pending.extend(r.notices());
         let mut report = Report::new();
+        if let Some(weather) = &r.weather {
+            report.push((
+                "elden weather".into(),
+                serde_json::to_string(weather).expect("weather report contains only JSON values"),
+            ));
+            self.pending.push(Notice::new("fromsoft reader", primase_core::convert::NoticeKind::Unsupported,
+                "weather GPARAM layer merging (WeatherOutdoor, WeatherBase wetting weight, CommonEvent) is not traced; the collision-selected area's file is read without these layers", 1).example(weather.weather_outdoor.clone()));
+        }
         if let Some(state) = &r.world_state {
             report.push((
                 "sekiro world state".into(),

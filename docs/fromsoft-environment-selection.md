@@ -69,3 +69,18 @@ Observed in a running Elden Ring (`m10_00`, spawn): the slot that reaches the sc
 names (changing that one collision's slot changes the picture; one launch). Not established (needs a running game or the
 engine): whether it is re-read on another floor, and how that collision, the event sub id, the weather
 and an override combine into the one file in force. The read applies none of them unless the caller chooses a file.
+
+## Named current weather
+
+`Options::weather` accepts an Elden Ring snapshot with `name`, independent `source`, `weather`
+(the current WeatherParam row ID), and `fire_ash`. The installed WeatherParam row identifies the
+global WeatherOutdoor file; the installed WeatherAssetReplaceParam membership at the area's
+creation limit identifies the sky state. This writes a `core.state_assignment`, preserving the
+axis's unresolved default. Missing sky membership, unknown weather IDs and empty provenance are
+refused. A clock and map alone never choose a lottery result.
+
+The report names the selected WeatherOutdoor file, but refuses weather-layer composition:
+WeatherOutdoor, WeatherBase wetting weights and CommonEvent merging are not yet traced. Only
+the explicitly selected area's file is read. The lab exposes the snapshot as `weather`, and
+`environment_collision` names the independently observed collision whose scene slot/sub ID
+chooses the area file. No floor is inferred from the camera.
