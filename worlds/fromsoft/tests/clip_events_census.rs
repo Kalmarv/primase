@@ -343,7 +343,11 @@ fn the_players_events_that_begin_before_their_clip_lower_as_stored() -> Result<(
             let Some(name) = member.name.as_deref() else {
                 continue;
             };
-            let short = name.rsplit(['\\', '/']).next().unwrap_or(name).to_ascii_lowercase();
+            let short = name
+                .rsplit(['\\', '/'])
+                .next()
+                .unwrap_or(name)
+                .to_ascii_lowercase();
             if *path == "/chr/c0000.anibnd.dcx" && short.ends_with(".tae") {
                 let tae = Tae::read_member(&binder, member)?;
                 for animation in tae.animations.iter() {
@@ -356,7 +360,9 @@ fn the_players_events_that_begin_before_their_clip_lower_as_stored() -> Result<(
         }
     }
     let motion = |label: &str| -> Result<Motion> {
-        let (header, file) = animations.get(label).ok_or_else(|| format!("{label}: no event file record"))?;
+        let (header, file) = animations
+            .get(label)
+            .ok_or_else(|| format!("{label}: no event file record"))?;
         Ok(match header {
             Header::ImportOther { from, .. } => Motion::ImportsAll(*from),
             Header::Standard {
@@ -373,8 +379,16 @@ fn the_players_events_that_begin_before_their_clip_lower_as_stored() -> Result<(
         ("a000_004020", Motion::Own, 0.3),
         ("a000_004111", Motion::Imports(4020), 0.3),
         ("a000_004121", Motion::Imports(4020), 0.3),
-        ("a014_000100", Motion::Missing("a014_000100.hkt".into()), 0.266_666_68),
-        ("a016_000100", Motion::Missing("a016_000100.hkt".into()), 0.266_666_68),
+        (
+            "a014_000100",
+            Motion::Missing("a014_000100.hkt".into()),
+            0.266_666_68,
+        ),
+        (
+            "a016_000100",
+            Motion::Missing("a016_000100.hkt".into()),
+            0.266_666_68,
+        ),
         ("a044_036011", Motion::Own, 0.0),
         ("a231_036011", Motion::ImportsAll(44_036_011), 0.0),
         ("a231_036511", Motion::ImportsAll(44_036_511), 0.0),
