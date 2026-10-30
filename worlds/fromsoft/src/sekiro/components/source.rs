@@ -586,15 +586,86 @@ pub enum SetChosen {
     Unresolved,
 }
 
-/// One sample of a field of a draw-param group at the chosen value set: its key, name, value and stored time of day
-/// (version 5). A field stored at several hours is several samples of one key, in stored order; after
-/// `sample-fromsoft-draw-params` it is one, with the hour sampled as its `time`.
+/// One sample of a field of a draw-param group at the chosen value set: its key, name, value, the type its file stores
+/// it as and its stored time of day (version 5). A field stored at several hours is several samples of one key, in
+/// stored order; after `sample-fromsoft-draw-params` it is one, with the hour sampled as its `time`.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DrawField {
     pub key: String,
     pub name: String,
     pub value: fromsoft_formats::gparam::Value,
+    pub stored: FieldType,
     pub time: Option<f32>,
+}
+
+/// The type a draw-param file stores a field as: what a [`fromsoft_formats::gparam::Value`] alone does not say (an
+/// `Int` is any of four widths). The game's slot for a field is of the type it registers; a file's type is compared with
+/// it before the field is sampled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum FieldType {
+    I8,
+    I16,
+    I32,
+    I64,
+    U8,
+    U16,
+    U32,
+    U64,
+    F32,
+    F64,
+    Bool,
+    Vec2,
+    Vec3,
+    Vec4,
+    Rgba,
+    Text,
+}
+
+impl FieldType {
+    /// The type of `values`.
+    pub fn of(values: &fromsoft_formats::gparam::Values) -> Self {
+        use fromsoft_formats::gparam::Values as V;
+        match values {
+            V::I8(_) => FieldType::I8,
+            V::I16(_) => FieldType::I16,
+            V::I32(_) => FieldType::I32,
+            V::I64(_) => FieldType::I64,
+            V::U8(_) => FieldType::U8,
+            V::U16(_) => FieldType::U16,
+            V::U32(_) => FieldType::U32,
+            V::U64(_) => FieldType::U64,
+            V::F32(_) => FieldType::F32,
+            V::F64(_) => FieldType::F64,
+            V::Bool(_) => FieldType::Bool,
+            V::Vec2(_) => FieldType::Vec2,
+            V::Vec3(_) => FieldType::Vec3,
+            V::Vec4(_) => FieldType::Vec4,
+            V::Rgba(_) => FieldType::Rgba,
+            V::Text(_) => FieldType::Text,
+        }
+    }
+
+    /// The GPARAM type code: 1 to 15 in declaration order, text 16.
+    pub fn code(self) -> u8 {
+        self as u8 + 1
+    }
+
+    /// A test fixture's type for `value`: integers and floats of 32 bits.
+    #[cfg(test)]
+    pub(crate) fn fixture(value: &fromsoft_formats::gparam::Value) -> Self {
+        use fromsoft_formats::gparam::Value as V;
+        match value {
+            V::Int(_) => FieldType::I32,
+            V::Uint(_) => FieldType::U32,
+            V::Float(_) => FieldType::F32,
+            V::Bool(_) => FieldType::Bool,
+            V::Vec2(_) => FieldType::Vec2,
+            V::Vec3(_) => FieldType::Vec3,
+            V::Vec4(_) => FieldType::Vec4,
+            V::Rgba(_) => FieldType::Rgba,
+            V::Text(_) => FieldType::Text,
+        }
+    }
 }
 
 /// One draw-param group (`LightSet ParamEditor`, `FogParamEditor`, `Tone Map[Yebis]`) at the value set the area's parts
@@ -622,10 +693,15 @@ impl DrawGroup {
 /// is `lower-fromsoft-environment`'s.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DrawParam {
+    /// The game the file is of: whose rules sample its fields (`sample-fromsoft-draw-params`).
+    pub game: fromsoft_formats::Game,
     /// The file's stem (`m11_01_0720`).
     pub file: String,
     /// The file's GPARAM version.
     pub version: u32,
+    /// The time axis the file's header states (version 5): how the game turns its clock hour into the hour its
+    /// time-of-day keys are looked up at ([`fromsoft_formats::gparam::TimeAxis::sampling`]). `None` before version 5.
+    pub time: Option<fromsoft_formats::gparam::TimeAxis>,
     pub groups: Vec<DrawGroup>,
     /// The hour a field stored at several hours is lowered at where the program samples none.
     pub default_hour: DefaultHour,
@@ -636,7 +712,7 @@ pub struct DrawParam {
 /// states one, a stated default where it does not ([`crate::sekiro::read::draw_param::default_hour`]).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DefaultHour {
-    /// The hour, 0 to 24.
+    /// The hour of the game's clock, 0 to 24 (Elden Ring's; Sekiro, which keeps none, the hour its keys are stored at).
     pub hour: f32,
     /// Where it comes from, in a few words (the read's notices show it).
     pub source: String,

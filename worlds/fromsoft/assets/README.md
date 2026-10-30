@@ -22,3 +22,13 @@ and others (860 and 873 non-zero words, none a float) and 116 Elden Ring events 
 16-bit `Dummy Poly ID` is a 16-bit field and a word (Elden Ring's template and soulstruct split it so); 4 of the 29,350 events
 store 110 at byte 8, which the Sekiro template's word at byte 6 read as 7,208,960. Neither change moves a named field or an
 asserted one: every asserted field still holds on all stored events of both games.
+
+# Draw-param field registrations
+
+`draw_param_fields/elden_ring.tsv` and `sekiro.tsv` list each draw-param field key the game's executable registers (Elden
+Ring executable file version 2.7.2.0, Sekiro 1.06) with its GPARAM type code, its subtype and, for Elden Ring, the
+interpolate flag the registrar stores: what `sample-fromsoft-draw-params` needs to blend a field between two time-of-day
+keys as the game's slot for it does. They are facts read from the executables (each call of the field registrar, the
+descriptor it builds and its byte argument; each call of the enum-field templates), not community data. A key the
+installed files store at several hours and the tables lack is a name the executable does not contain: a field the game
+never reads. A character outside ASCII in a key is written `\u{hex}`.

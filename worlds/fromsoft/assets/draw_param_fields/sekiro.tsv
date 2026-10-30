@@ -1,0 +1,346 @@
+# The draw-param fields Sekiro registers (1.06), one per line: key, GPARAM type code, subtype,
+# interpolate flag (`-`: no Sekiro slot reads it).
+# Read from the executable: each call of the field registrar (the descriptor it builds: type and subtype; the
+# byte argument it stores as the field's interpolate flag) and each call of the enum-field templates (type 3,
+# subtype 22, interpolate 0). Every key the installed files store at several hours is here or is a name the
+# executable does not contain: a field the game never reads. A character outside ASCII is written \u{hex}.
+AOFields - 3DTexture - AO Strength	9	0	-
+AOFields - Depth Thresh	9	0	-
+AOFields - Distance Margin	9	0	-
+AOFields - Distance Max	9	0	-
+AOFields - Enable Draw	7	1	-
+AOFields - Enable UpScale	7	1	-
+AOFields - Global Strength	9	0	-
+AOFields - Sphere Occluder - Length Limit	9	0	-
+AOFields - Sphere Occluder - Light Cone Angle	9	0	-
+AOFields - Sphere Occluder - Light Cone Coefficient	9	0	-
+AntiAlias - AntiAliasType	3	22	-
+AntiAlias - CBFeedbackWeightFiltered	9	0	-
+AntiAlias - CBFeedbackWeightSampled	9	0	-
+AntiAlias - DlaaEpsilon	9	0	-
+AntiAlias - DlaaRamda	9	0	-
+AntiAlias - DlaaThreshold	9	0	-
+AntiAlias - EnableDitherSwitch	11	1	-
+AntiAlias - EnableMotionVectorDilation	11	1	-
+AntiAlias - EnableStencilMask	11	1	-
+AntiAlias - FBWeightBorderDepth(0)	9	0	-
+AntiAlias - FBWeightBorderDepth(1)	9	0	-
+AntiAlias - FBWeightBorderDepth(2)	9	0	-
+AntiAlias - FBWeightCancelByDepth(0)	9	0	-
+AntiAlias - FBWeightCancelByDepth(1)	9	0	-
+AntiAlias - FBWeightCancelByDepth(2)	9	0	-
+AntiAlias - FBWeightCancelByDepth(3)	9	0	-
+AntiAlias - FeedbackWeight	9	0	-
+AntiAlias - FeedbackWeightScale(0)	9	0	-
+AntiAlias - FeedbackWeightScale(1)	9	0	-
+AntiAlias - FeedbackWeightScale(2)	9	0	-
+AntiAlias - FeedbackWeightScale(None)	9	0	-
+AntiAlias - FxaaReduceMin	9	0	-
+AntiAlias - FxaaReduceMul	9	0	-
+AntiAlias - FxaaSpanMax	9	0	-
+AntiAlias - JitterCount	7	0	-
+AntiAlias - RejectedPixelBlurIntensity	9	0	-
+AntiAlias - SharpenIntensity	9	0	-
+AntiAlias - SharpenRangeMax	9	0	-
+AntiAlias - SharpenRangeMin	9	0	-
+AntiAlias - SubpixelFeedbackFactor	9	0	-
+AntiAlias - fFxaaAlpha	9	0	-
+Cloud Shadow Texture0: Id	7	0	-
+Cloud Shadow Texture0: Shadow Scale	9	0	-
+Cloud Shadow Texture0: UV Offset	12	0	-
+Cloud Shadow Texture0: UV Speed	12	0	-
+Cloud Shadow Texture0: UV Tilling Size:[m]	12	0	-
+Cloud Shadow Texture1: Id	7	0	-
+Cloud Shadow Texture1: Shadow Scale	9	0	-
+Cloud Shadow Texture1: UV Offset	12	0	-
+Cloud Shadow Texture1: UV Speed	12	0	-
+Cloud Shadow Texture1: UV Tilling Size:[m]	12	0	-
+Cloud Shadow-Enable	7	1	-
+Directional Enable LocalLight1	11	1	-
+Directional Enable LocalLight2	11	1	-
+Directional Light  LightMask Influence	9	0	-
+Directional Light Angle0	12	23	-
+Directional Light Angle1	12	23	-
+Directional Light DiffColor0	14	20	-
+Directional Light DiffColor1	14	20	-
+Directional Light Hemi Color Down	14	20	-
+Directional Light Hemi Color Up	14	20	-
+Directional Light LocalLight Angle1	12	23	-
+Directional Light LocalLight Angle2	12	23	-
+Directional Light LocalLight DiffColor1	14	20	-
+Directional Light LocalLight DiffColor2	14	20	-
+Directional Light LocalLight SpecColor1	14	20	-
+Directional Light LocalLight SpecColor2	14	20	-
+Directional Light Sharpness0	9	0	-
+Directional Light Sharpness1	9	0	-
+Directional Light SpecColor0	14	20	-
+Directional Light SpecColor1	14	20	-
+Directional Light SsaoWeight0	9	0	-
+Directional Light SsaoWeight1	9	0	-
+Directional Light SsaoWeight2	9	0	-
+Directional Light SsaoWeight3	9	0	-
+Directional LightLight1 FollowedCamera	11	1	-
+Directional LocalLight Light Sharpness1	9	0	-
+Directional LocalLight Light Sharpness2	9	0	-
+Directional Shadow Color	15	26	-
+Fog-Color	14	16	-
+Fog-Dist	9	0	-
+Fog-DistOffset	9	0	-
+Fog-HeightOffset	9	25	-
+Fog-fogAlpha	9	0	-
+Fog-fogContrast	9	0	-
+Fog-heightColor	14	16	-
+Fog-heightDist	9	0	-
+Fog-heightFogIntencity	9	0	-
+GS - BG Color-Data	14	16	-
+GS Presents - Chromatic Aberration Enable	3	1	-
+GS Presents - ColorH	9	0	-
+GS Presents - ColorS	9	0	-
+GS Presents - ColorV	9	0	-
+GS Presents - Contrast	9	0	-
+GS Presents - ExposureInfluenceRate AddColor	9	0	-
+GS Presents - Fade out begin ang	9	0	-
+GS Presents - Fade out end ang	9	0	-
+GS Presents - LightShaft Angle	12	23	-
+GS Presents - LightShaft Enable	11	1	-
+GS Presents - LightShaft EnableRefLight	11	1	-
+GS Presents - LightShaft HighQualitySkyMask	11	1	-
+GS Presents - LightShaft LightBankId	7	0	-
+GS Presents - LightShaft LightId	7	0	-
+GS Presents - LightShaft MaskDepthThreshold	9	0	-
+GS Presents - LightShaft ShaftBlurCount	7	0	-
+GS Presents - LightShaft ShaftBlurFallOff	9	0	-
+GS Presents - LightShaft ShaftBlurRange for Parallel	9	0	-
+GS Presents - LightShaft SkyColorSaturate	9	0	-
+GS Presents - LightShaft SkyColorThreshold	9	0	-
+GS Presents - LightShaft SkyMaskCenterPower	9	0	-
+GS Presents - LightShaft SkyMaskMode	3	22	-
+GS Presents - LightShaft SkyMaskSizeAngle	9	0	-
+GS Presents - Parallel mode begin ang	9	0	-
+GS Presents - Parallel mode end ang	9	0	-
+GS Presents - ShaftBlurRange	9	0	-
+GS Presents - Sky Add Color	14	21	-
+GS Presents - Sky Multiply Color	14	21	-
+GS Presents - ToneLateralDispersion[0]	9	0	-
+GS Presents - ToneLateralDispersion[1]	9	0	-
+GS Presents - ToneMap-AutoExposure Adaption Max	9	0	-
+GS Presents - ToneMap-AutoExposure Adaption Min	9	0	-
+GS Presents - ToneMap-AutoExposure Center Weight	9	0	-
+GS Presents - ToneMap-AutoExposure DarkAdapt Speed	9	0	-
+GS Presents - ToneMap-AutoExposure LightAdapt Speed	9	0	-
+GS Presents - ToneMap-AutoExposure Middle Gray	9	0	-
+GS Presents - ToneMap-Contrast	9	0	-
+GS Presents - ToneMap-Enable AutoExposure	3	1	-
+GS Presents - ToneMap-Exposure	9	0	-
+GS Presents - ToneMap-FreezeAdaptionFade	11	1	-
+GS Presents - ToneMap-ReinhardContrast	9	0	-
+GS Presents - ToneMap-ReinhardWhiteBalance	9	0	-
+GS Presents - ToneMap-ToneMapMode	3	22	-
+GS Presents - Vignetting Fov Dependence	9	0	-
+GS Presents - Vignetting Power	9	0	-
+GS Presents - Vignetting Range	9	0	-
+GS Presents - Vignetting Shape	9	0	-
+GSPresents-MotionBlur-Enable	5	1	-
+GSPresents-MotionBlur-Enable Average Inner Simulation Time	5	1	-
+GSPresents-MotionBlur-Enable Fixed Inner Simulation Time	5	1	-
+GSPresents-MotionBlur-bInnerTime	5	1	-
+Glow Filter - Blur Smoothness	9	0	-
+Glow Filter - Glow NumLevels	7	0	-
+Glow Filter-Glow - Blur AlphaScale	9	0	-
+Glow Filter-Glow - Blur RgbScale	9	0	-
+Glow Filter-Glow - BlurSampleScale	9	0	-
+Glow Filter-Glow Enable	3	1	-
+Gs Presents-Glare Luminance	9	0	-
+Gs Presents-Glare Threshold	9	0	-
+Gs Presents-GlareBloom Alpha	9	0	-
+Gs Presents-GlareBloom FeedbackWeight	9	0	-
+Gs Presents-GlareBloom GaussianRadiusScale	9	0	-
+Gs Presents-GlareBloom Smooth	9	0	-
+Gs Presents-GlareBloom Sturate Ctrl	9	0	-
+Gs Presents-GlareNumLevels	7	0	-
+Gs Presents\u{3010}Bloom\u{3011} Enable	3	1	-
+MotionBlur[GS Presents] Bidirectional Blur	11	1	-
+MotionBlur[GS Presents] Blur Cutoff threshold in Pixel	9	0	-
+MotionBlur[GS Presents] Blur Max Length	9	0	-
+MotionBlur[GS Presents] Blur ReccurenceCount	7	0	-
+MotionBlur[GS Presents] Motion Blur Intensity	9	0	-
+MotionBlur[GS Presents] Sample Count	7	0	-
+MotionBlur[GS Presents] Shutter Speed	9	0	-
+New Glow Filter-Glow - FinalColorScale	9	0	-
+None	11	1	-
+Object-FeedbackBlurFallOff	9	0	-
+Object-FeedbackBlurPower	9	0	-
+Object-FeedbackBlurRate	9	0	-
+SSAO - Edit-EnableUpScale	11	1	-
+SSAO - Edit-PreventGhost	11	1	-
+SSAO - Edit-UseNormal	11	1	-
+SSAO - Edit-UseReProj	11	1	-
+SSAO - Edit-Ver2 AO Offset	9	0	-
+SSAO - Edit-Ver2 AO Scale	9	0	-
+SSAO - Edit-Ver2 Depth Reject Rate	9	0	-
+SSAO - Edit-Ver2 DepthFadeRange	9	0	-
+SSAO - Edit-Ver2 DepthFadeStart	9	0	-
+SSAO - Edit-Ver2 Geom Bent Offset	9	0	-
+SSAO - Edit-Ver2 Kernel Scale Base Dist	9	0	-
+SSAO - Edit-Ver2 Kernel Scale Max	9	0	-
+SSAO - Edit-Ver2 Kernel Scale Min	9	0	-
+SSAO - Edit-Ver2 PrecisionDepth	9	0	-
+SSAO - Edit-Ver2 PrevFrame Depth Aware	9	0	-
+SSAO - Edit-Ver2 PrevFrame Strengh	9	0	-
+SSAO - Edit-Ver2 Sample Offset	9	0	-
+SSR Depth Fade Range	9	0	-
+SSR Depth Reject Threshold	9	0	-
+SSR Display Mip Offset	9	0	-
+SSR Display Mip Scale	9	0	-
+SSR Enable	11	1	-
+SSR Fade To Viewer Start	9	0	-
+SSR Fresnel Reject Threshold	9	0	-
+SSR Geom Crack Detect Factor	9	0	-
+SSR Ray Trace Step Scale Max	9	0	-
+SSR Ray Trace Step Scale Min	9	0	-
+SSR Shininess Reject Threshold	9	0	-
+SSR Tex Blur Sigma	9	0	-
+SSR Tex Blur Sigma for Mip	9	0	-
+SceneSetting-  LightCollect- Auto Compute Enable	5	1	-
+SceneSetting-  LightCollect- BaseDist	9	0	-
+SceneSetting-  LightCollect-DistMax	9	0	-
+SceneSetting-  LightCollect-DistScaler	9	0	-
+SceneSetting-  ReflectScene Assign DynamicLight	5	1	-
+Sea Wave  Enable	5	1	-
+Sea Wave  Enable Choppy	5	1	-
+Sea Wave Amplitude Scale	9	0	-
+Sea Wave Area Max	9	0	-
+Sea Wave Basis Height	9	0	-
+Sea Wave Blend Begin Depth	9	0	-
+Sea Wave Blend End Depth	9	0	-
+Sea Wave Border Bubble Depth	9	0	-
+Sea Wave Border Bubble Flat Scale	9	0	-
+Sea Wave Border Feed Depth	9	0	-
+Sea Wave Border Wave Scale	9	0	-
+Sea Wave BubbleMask: Id	7	0	-
+Sea Wave BubbleTex: Id	7	0	-
+Sea Wave BumpMap Tiling Size	9	0	-
+Sea Wave Deep Water	14	20	-
+Sea Wave Depth Limit	9	0	-
+Sea Wave Enable Average Inner Simulation Time	11	1	-
+Sea Wave Enable Fixed Inner Simulation Time	11	1	-
+Sea Wave FFT Tex Tiling Size	9	0	-
+Sea Wave Fix Fps	9	0	-
+Sea Wave Light: Id	7	0	-
+Sea Wave Normal: Id	7	0	-
+Sea Wave Reflectance	9	0	-
+Sea Wave Reflection Distortion Scale(far)	9	0	-
+Sea Wave Reflection Distortion Scale(near)	9	0	-
+Sea Wave Reflection Max	9	0	-
+Sea Wave Reflection Min	9	0	-
+Sea Wave Shallow Water	14	20	-
+Sea Wave Shininess	9	0	-
+Sea Wave Time Rate	9	0	-
+Sea Wave Transparent Depth	9	0	-
+Sea Wave Use Inner Simulation Time	11	1	-
+Sea Wave Wave Angle	9	0	-
+Sea Wave WaveAmp	9	0	-
+Sea Wave WaveNumberCoef	9	0	-
+Sea Wave Wavelength Scale	9	0	-
+Sea Wave WindAng	9	0	-
+Sea Wave WindSpeed	9	0	-
+ShadowParam - AlignTexel	11	1	-
+ShadowParam - Blur Count	7	0	-
+ShadowParam - Blur Radius	9	0	-
+ShadowParam - Depth Bias	3	0	-
+ShadowParam - DepthOffsetScale	9	0	-
+ShadowParam - DepthRate	9	0	-
+ShadowParam - DepthScale	9	0	-
+ShadowParam - KernelScale	9	0	-
+ShadowParam - Shadow: Cascade Dist 0->1	9	0	-
+ShadowParam - Shadow: Cascade Dist 1->2	9	0	-
+ShadowParam - Shadow: Cascade Dist 2->3	9	0	-
+ShadowParam - Shadow: Cascade Fade Range Scale	9	0	-
+ShadowParam - Shadow: Depth Offset	9	0	-
+ShadowParam - Shadow: Far Fade Dist	9	0	-
+ShadowParam - Shadow: Far Fade Start	9	0	-
+ShadowParam - Shadow: Near	9	0	-
+ShadowParam - Shadow: Shadow Map Resolution	3	22	-
+ShadowParam - Slope Scaled Depth Bias	9	0	-
+ShadowParam - TempAA Auto Jitter	11	1	-
+ShadowParam - Volume Depth	9	0	-
+VolumetricFog CancelInScatteringRateFromSSR	9	0	-
+VolumetricFog Config Dither	9	0	-
+VolumetricFog Config SampleCount	7	0	-
+VolumetricFog CullingBySceneDepth	11	1	-
+VolumetricFog DirLight AngleClip	9	0	-
+VolumetricFog DirLight DirectColor	14	20	-
+VolumetricFog DirLight EnableReproj	11	1	-
+VolumetricFog DirLight FeedbackWeight	9	0	-
+VolumetricFog DirLight HeightAtten	9	0	-
+VolumetricFog DirLight JitterCount	7	0	-
+VolumetricFog DirLight JitterXYSize	9	0	-
+VolumetricFog DirLight LightBankId	7	0	-
+VolumetricFog DirLight LightId	7	0	-
+VolumetricFog DirLight OppositeColor	14	20	-
+VolumetricFog DirLight ShadowDither	9	0	-
+VolumetricFog DirLight ShadowSampleCount	7	0	-
+VolumetricFog DirLight StartDist	9	0	-
+VolumetricFog DrawTiming	3	22	-
+VolumetricFog Enable	11	1	-
+VolumetricFog EnableAnalyticalFog	11	1	-
+VolumetricFog FarDepth	9	0	-
+VolumetricFog GameScale	9	0	-
+VolumetricFog Global AbsorptionScale	13	0	-
+VolumetricFog Global FixedDensity	9	0	-
+VolumetricFog Global HeightFogDensity Scale	9	0	-
+VolumetricFog Global HeightFogDistribution	9	0	-
+VolumetricFog Global HeightFogOffset	9	0	-
+VolumetricFog Global LocalLightDistScale	9	0	-
+VolumetricFog Global LocalLightScale	9	0	-
+VolumetricFog Global ScatteringG	9	0	-
+VolumetricFog NearDepth	9	0	-
+VolumetricFog NearOffset	9	0	-
+VolumetricFog SkyLight HeightAtten	9	0	-
+VolumetricFog SkyLight SkyColor	14	20	-
+VolumetricFog SkyLight StartDist	9	0	-
+VolumetricFog VolumeDepth	7	0	-
+VolumetricFog VolumeSliceSampleOffset	9	0	-
+VolumetricFog VolumeWidth	7	0	-
+WaterInteraction - ScreenSpace Max Resolution	7	0	-
+WaterInteraction - ScreenSpace TexelSize	9	0	-
+WaterInteraction - ScreenSpace Wave Attenuation	9	0	-
+WaterInteraction - ScreenSpace Wave Speed	9	0	-
+WaterInteraction-Enable	7	1	-
+Wet-AlbedoRate	9	0	-
+Wet-OverrideAlbedo	14	16	-
+Wet-OverrideShininess	9	0	-
+Wet-ShininessRate	9	0	-
+Yebis-Anti-Alias Enable	3	1	-
+Yebis-ColorGrading-Enable	3	1	-
+Yebis-FeedBackBlur-Enable	3	1	-
+Yebis-Feedback UnitTimeInSeconds	9	0	-
+Yebis-FeedbackWeight	9	0	-
+Yebis-LutSourceId	3	0	-
+[GS]Lens Simulation Param  Enable	5	1	-
+[GS]Lens Simulation Param ApertureShape	3	22	-
+[GS]Lens Simulation Param Av (\u{7d5e}\u{308a}\u{5024})	9	0	-
+[GS]Lens Simulation Param CoCBlurCount(1)	7	0	-
+[GS]Lens Simulation Param CoCBlurCount(2)	7	0	-
+[GS]Lens Simulation Param CoCBlurCountPreMask	7	0	-
+[GS]Lens Simulation Param CoCMode	3	22	-
+[GS]Lens Simulation Param DiaphragmRotate	9	0	-
+[GS]Lens Simulation Param FarCoCMode Linear	11	1	-
+[GS]Lens Simulation Param FarEnd	9	0	-
+[GS]Lens Simulation Param FarStart	9	0	-
+[GS]Lens Simulation Param FilmSize(mm)	9	0	-
+[GS]Lens Simulation Param FocusDist	9	0	-
+[GS]Lens Simulation Param HiResolutionBlur	11	1	-
+[GS]Lens Simulation Param Lens F	9	0	-
+[GS]Lens Simulation Param LinearCoCFactorFar	9	0	-
+[GS]Lens Simulation Param LinearCoCFactorNear	9	0	-
+[GS]Lens Simulation Param NearCoCMode Linear	11	1	-
+[GS]Lens Simulation Param NearEnd	9	0	-
+[GS]Lens Simulation Param NearFarSeparatedBlur	11	1	-
+[GS]Lens Simulation Param NearStart	9	0	-
+[GS]Lens Simulation Param PreTempAA	11	1	-
+[GS]Lens Simulation Param SkyMaskRate	9	0	-
+[GS]Lens Simulation Param TemporalFeedbackWeight	9	0	-
+[GS]Lens Simulation Param UseCameraFocus	5	1	-
+hadowParam - Shadow: Angle0	12	23	-
+shadowParam -   Shadow:  Shadow Light Id	7	0	-

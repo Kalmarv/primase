@@ -385,13 +385,14 @@ impl Pass for LowerFromSoftEnvironment {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sekiro::source::{DrawField, DrawGroup, SetChosen};
+    use crate::sekiro::source::{DrawField, DrawGroup, FieldType, SetChosen};
     use fromsoft_formats::gparam::Value;
 
     fn field(key: &str, value: Value) -> DrawField {
         DrawField {
             key: key.into(),
             name: key.into(),
+            stored: FieldType::fixture(&value),
             value,
             time: None,
         }
@@ -425,8 +426,10 @@ mod tests {
     fn world_with(groups: Vec<DrawGroup>) -> World {
         let mut w = World::new();
         w.insert_resource(DrawParam {
+            game: fromsoft_formats::Game::Sekiro,
             file: "m11_01_0720".into(),
             version: 5,
+            time: None,
             groups,
             default_hour: crate::sekiro::read::draw_param::default_hour(fromsoft_formats::Game::Sekiro),
         });

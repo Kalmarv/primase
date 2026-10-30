@@ -29,7 +29,7 @@
 //! times of day is kept as every one of its samples, in stored order; a program that wants one hour runs
 //! `sample-fromsoft-draw-params`, and where it runs none the environment is lowered at the game's default hour
 //! ([`default_hour`]).
-use super::super::source::{DefaultHour, DrawField, DrawGroup, DrawParam, SetChosen};
+use super::super::source::{DefaultHour, DrawField, DrawGroup, DrawParam, FieldType, SetChosen};
 use fromsoft_formats::area::{DrawParamId, draw_param_path, draw_params};
 use fromsoft_formats::emevd::Script;
 use fromsoft_formats::gparam_events::{self, Switch};
@@ -271,6 +271,7 @@ pub(super) fn select(
                         key: field.key.clone(),
                         name: field.name.clone(),
                         value,
+                        stored: FieldType::of(&field.values),
                         time: field.times.get(index).copied(),
                     });
                 }
@@ -290,8 +291,10 @@ pub(super) fn select(
     report.version = gparam.version;
     report.unread = gparam.unread;
     DrawParam {
+        game,
         file: stem.to_owned(),
         version: gparam.version,
+        time: gparam.time,
         groups,
         default_hour: default_hour(game),
     }
@@ -606,6 +609,7 @@ mod tests {
     #[test]
     fn every_stored_time_sample_of_a_chosen_set_is_kept_in_stored_order() {
         let gparam = Gparam {
+            time: None,
             version: 5,
             unread: Unread::default(),
             groups: vec![group(
@@ -669,6 +673,7 @@ mod tests {
 
     fn file() -> Gparam {
         Gparam {
+            time: None,
             version: 5,
             groups: vec![
                 // sets 3 and 7; the part majority names 7; a time-of-day twin of set 7
@@ -754,6 +759,7 @@ mod tests {
     #[test]
     fn a_group_with_one_set_is_read_whatever_the_parts_name_and_a_tie_takes_the_lowest() {
         let only = Gparam {
+            time: None,
             version: 5,
             groups: vec![group(
                 "Fog volume",
@@ -775,6 +781,7 @@ mod tests {
     fn fog_volume_keeps_every_set_and_time_without_inventing_a_part_selector() {
         // Elden m10_00_0000: the fog volume stores sets 100 and 101 and no ID 0
         let fog_volume = Gparam {
+            time: None,
             version: 5,
             groups: vec![group(
                 FOG_VOLUME,
@@ -825,6 +832,7 @@ mod tests {
     #[test]
     fn a_field_with_nothing_for_the_set_is_counted() {
         let g = Gparam {
+            time: None,
             version: 5,
             groups: vec![group(
                 LIGHT_SET,
@@ -844,6 +852,7 @@ mod tests {
     #[test]
     fn a_file_whose_groups_store_nothing_is_empty_not_unchosen() {
         let shells = Gparam {
+            time: None,
             version: 5,
             groups: vec![
                 group(LIGHT_SET, vec![]),
