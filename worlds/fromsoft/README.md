@@ -507,6 +507,15 @@ converts frames; it does not lower:
   of fewer than two is counted in `lost`, as the game draws no trail of it;
   `lower-fromsoft-effects` lowers the effects to unplaced systems and the uses to `core.clip_effects` on the clip,
   a spawn each, at the socket `dummy <reference id>` of the model; `Report::clip_uses` counts the uses;
+- which clip an Elden Ring attack plays is `sekiro::attack_clip`'s choice, by the game's rule (2.7.2.0's executable): a
+  `CustomManualSelectorGenerator` of the player's behaviour graph (`read_selector`, from `chr/<c>.behbnd`) of offset type
+  13, 14 or 16 takes one hand's active weapon (16: the left where the arm style is `LeftBoth`, else the right), and plays
+  the child named for the first of `spAtkcategory x 1000000 + animId`, `wepmotionCategory x 1000000 + animId` and the
+  hand's fallback (`23000000`, `48000000` + animId) the character has, else `a000_<animId>`, else child 0. The player's
+  state (`PlayerState`: each hand's slots, its active slot and the arm style) is read from a save
+  (`fromsoft_formats::save`); which selector plays is the player's request, stated by name, and `check_request` refuses
+  one the arm style contradicts (`AttackBoth` one-handed, `AttackRight` two-handed). Other offset types read other state
+  and are refused by name;
 - lights are `fromsoft.light` records where they stand (stored colours, powers,
   cone, radius and tangent); hang-edge segments and spawn points are the
   `fromsoft.area_extras` resource; what the read covered (game, area, region,

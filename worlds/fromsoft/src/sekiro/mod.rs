@@ -16,6 +16,7 @@ pub use passes::extras;
 pub use passes::object_collision as objects;
 pub use passes::{blockers, effects, layers, lights, normals, pbr, settings};
 pub use read::animation::{AnimationReport, Animations, ClipSource, read_clip_skeleton};
+pub use read::attack_clip;
 pub use read::area::{
     GrassTypes, ObjectAnimations, Options, Parents, Report, StateClasses, read_area_draw_param,
     read_game_area, read_game_area_staged, world_bounds,

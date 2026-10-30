@@ -27,6 +27,9 @@ pub struct WeaponLayout {
     pub motion_category: usize,
     /// `absorpParamId` (s32): the `WepAbsorpPosParam` row.
     pub hold_row: usize,
+    /// `spAtkcategory` (u16): the animation group a weapon's own moves come from before its motion category's
+    /// (`attack_clip`). Elden Ring only; `None` where it is not read.
+    pub sp_attack: Option<usize>,
     /// `traceSfxId0` (s32), the first of the eight trace slots: `traceSfxId<n>`, `traceDmyIdHead<n>`, `traceDmyIdTail<n>`
     /// (three s32 each, one slot after another).
     pub traces: usize,
@@ -57,6 +60,7 @@ pub fn layouts(game: Game) -> (WeaponLayout, HoldLayout) {
                 model: 188,
                 motion_category: 231,
                 hold_row: 372,
+                sp_attack: Some(238),
                 traces: 272,
             },
             HoldLayout {
@@ -73,6 +77,7 @@ pub fn layouts(game: Game) -> (WeaponLayout, HoldLayout) {
                 model: 184,
                 motion_category: 227,
                 hold_row: 368,
+                sp_attack: None,
                 traces: 268,
             },
             HoldLayout {
@@ -86,14 +91,16 @@ pub fn layouts(game: Game) -> (WeaponLayout, HoldLayout) {
     }
 }
 
-/// A weapon row: its part's model id, its motion category, its hold row and its trace slots that name an effect (a number
-/// above 0), with their slot numbers.
+/// A weapon row: its part's model id, its motion category, its hold row, its `spAtkcategory` (Elden Ring) and its trace
+/// slots that name an effect (a number above 0), with their slot numbers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WeaponRow {
     pub row: i32,
     pub model: u16,
     pub motion_category: u8,
     pub hold_row: i32,
+    /// `spAtkcategory`, where the layout reads it.
+    pub sp_attack_category: Option<u16>,
     pub traces: Vec<(usize, Trace)>,
 }
 
@@ -158,6 +165,16 @@ impl WeaponParams {
         })
     }
 
+    /// Params made of `weapons` and `holds` in `game`'s layouts, for tests that build their rows.
+    #[cfg(test)]
+    pub(crate) fn of(weapons: Param, holds: Param, game: Game) -> Self {
+        Self {
+            weapons,
+            holds,
+            layouts: layouts(game),
+        }
+    }
+
     /// Every row of `EquipParamWeapon`, as read.
     pub fn weapons(&self) -> Result<Vec<WeaponRow>> {
         self.weapons.rows.iter().map(|r| self.weapon_of(r)).collect()
@@ -186,6 +203,10 @@ impl WeaponParams {
             model: u16::from_le_bytes(bytes::<2>(row, l.model, "equipModelId")?),
             motion_category: bytes::<1>(row, l.motion_category, "wepmotionCategory")?[0],
             hold_row: word(l.hold_row, "absorpParamId")?,
+            sp_attack_category: match l.sp_attack {
+                Some(at) => Some(u16::from_le_bytes(bytes::<2>(row, at, "spAtkcategory")?)),
+                None => None,
+            },
             traces,
         })
     }
@@ -278,6 +299,27 @@ mod tests {
         }
     }
 
+    /// Elden Ring's rows read `spAtkcategory` at 238 beside the motion category at 231 (the Uchigatana's: 29 and 0).
+    #[test]
+    fn elden_rows_read_their_sp_attack_category() {
+        let (wl, hl) = layouts(Game::EldenRing);
+        let w = row(
+            9000000,
+            wl.size,
+            &[(wl.motion_category, &[29]), (238, &112u16.to_le_bytes())],
+        );
+        let params = WeaponParams {
+            weapons: param("EQUIP_PARAM_WEAPON_ST", wl.size, w),
+            holds: param("WEP_ABSORP_POS_PARAM_ST", hl.size, row(0, hl.size, &[])),
+            layouts: (wl, hl),
+        };
+        let weapon = params.weapon(9000000).unwrap();
+        assert_eq!(
+            (weapon.motion_category, weapon.sp_attack_category),
+            (29, Some(112))
+        );
+    }
+
     /// The fields come from their offsets: a weapon row's model id, motion category and hold row, and a hold row's dummy
     /// polygons by model (a number below 1 is none).
     #[test]
@@ -325,6 +367,7 @@ mod tests {
                 model: 300,
                 motion_category: 50,
                 hold_row: 5000,
+                sp_attack_category: None,
                 // slot 1 names no effect; slot 2's dummy polygons are none (-1)
                 traces: vec![(0, trace(401000, 300, 301)), (2, trace(401001, -1, -1))],
             }

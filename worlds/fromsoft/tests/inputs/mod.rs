@@ -63,6 +63,10 @@ primase_testdata::inputs! {
             about: "measurements by our own scripts over game data, separate from the readers they check (normal curl, texture statistics, shadow and state records, the eclipse reference)",
             source: "our own scripts kept with the private oracle tools: separate from the readers under test, not third-party; some producers are not recorded yet",
         },
+        Saves = "saves" {
+            about: "copies of the user's own character saves, taken from the game's save folder (never the live file), and independent readings of them",
+            source: "the user's own saves: a file copied from the save folder as stored",
+        },
         SoulsFormats = "soulsformats" {
             about: "SoulsFormats' readings of FromSoftware archives and files (rigid parts, skins, parts, census, frames, formats)",
             source: "independent: SoulsFormats 9c0da6b (Sekiro) and SoulsFormatsNEXT ee1dd61 (Elden Ring), through a thin dump harness kept with the private oracle tools",
@@ -73,6 +77,12 @@ primase_testdata::inputs! {
         },
     }
     declared {
+        Query::Oracle(OracleSet::Saves, Game::Elden, "ER0000.sl2") => {
+            status: Live,
+            gate: false,
+            about: r#"one Elden Ring PC save (`ER0000.sl2`) with one character, holding the Uchigatana in both hands in the right (arm style 3); worlds/fromsoft/tests/attack_clip.rs"#,
+            source: r#"the user's own save: copied from the game's save folder as stored, read only"#,
+        },
         Query::Oracle(OracleSet::Baseline, Game::Elden, "malenia-binding-report.json") => {
             status: Live,
             gate: false,
