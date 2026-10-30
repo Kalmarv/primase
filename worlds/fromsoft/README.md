@@ -1313,7 +1313,9 @@ axes receive the selected values. Reports retain the script hash, input flags an
 instructions and undecidable branches are errors. This does not guess the player's flags or select Elden Ring's weather.
 
 `Options::irradiance` reads Sekiro's irradiance regions and coefficient packages;
-`lower-fromsoft-irradiance` lowers the spatial first-order data. Low-resolution texture twins are opt-in source
+`lower-fromsoft-irradiance` lowers the spatial first-order data of the regions the game draws diffusely: a box's
+type data word 0x24 states its terms (0 diffuse and specular, 1 diffuse only, 2 specular only), and a box of any other
+value is refused by name. Low-resolution texture twins are opt-in source
 forms (`core.texture_forms`); choosing an image is explicit. `fromsoft-formats` exposes Elden Ring's switch
 parameters separately; the world reader does not select an image by distance.
 `sample-fromsoft-draw-params` follows the source time axis and blends slots at the caller's hour.

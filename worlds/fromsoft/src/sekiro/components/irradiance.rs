@@ -15,6 +15,9 @@ pub struct IrradianceRegion {
     pub priority: u8,
     pub diffuse_intensity: f32,
     pub specular_intensity: f32,
+    /// The type data's word 0x24, the terms the game draws the region with: 0 diffuse and specular, 1 diffuse only, 2
+    /// specular only (the region programs it drew each with in one recorded frame); other values are kept as stored.
+    pub terms: i32,
 }
 impl Component for IrradianceRegion {
     const NAME: &'static str = "fromsoft.irradiance_region";

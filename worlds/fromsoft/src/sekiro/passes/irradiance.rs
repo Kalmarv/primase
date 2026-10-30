@@ -3,6 +3,27 @@ use crate::sekiro::IrradianceRegion;
 use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::{Component, IrradianceVolume, TextureLayers, Transform, World};
 
+/// The terms the game draws a region with, by its type data's word 0x24 (`IrradianceRegion::terms`): 0 the diffuse
+/// and the specular, 1 the diffuse only, 2 the specular only. Any other value (`Err`, the reason) draws neither here.
+fn terms(r: &IrradianceRegion) -> Result<(bool, bool), String> {
+    match r.terms {
+        0 => Ok((true, true)),
+        1 => Ok((true, false)),
+        2 => Ok((false, true)),
+        word => {
+            let bits = if word & 0x100 != 0 {
+                " (bit 0x100 not understood)"
+            } else {
+                ""
+            };
+            Err(format!(
+                "irradiance box {}:{} package {:02}: terms word 0x24 is {word}, not 0, 1 or 2{bits}",
+                r.area, r.region.name, r.package
+            ))
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct LowerFromSoftIrradiance;
 pub const LOWER_FROMSOFT_IRRADIANCE: PassSpec = PassSpec {
@@ -26,6 +47,21 @@ impl Pass for LowerFromSoftIrradiance {
             .map(|(e, r)| (e, r.clone()))
             .collect();
         for (e, r) in boxes {
+            world.remove::<IrradianceVolume>(e);
+            let diffuse = match terms(&r) {
+                Ok((diffuse, _)) => diffuse,
+                Err(why) => {
+                    log.omit(&why, 1);
+                    continue;
+                }
+            };
+            if !diffuse {
+                log.count(
+                    "irradiance boxes the game draws only the reflection of (no diffuse)",
+                    1,
+                );
+                continue;
+            }
             let grids: Vec<_> = r
                 .coefficients
                 .iter()
@@ -41,7 +77,6 @@ impl Pass for LowerFromSoftIrradiance {
                 // normal offset uses one common sampling grid; its producer for
                 // these exceptions is unresolved. Retain source bytes and refuse
                 // this lowering rather than resize them or choose a channel.
-                world.remove::<IrradianceVolume>(e);
                 log.omit(
                     "irradiance coefficient grids differ; common normal-offset grid is unresolved",
                     1,

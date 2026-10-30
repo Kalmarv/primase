@@ -45,8 +45,29 @@ fn all_authored_boxes_join_complete_source_volume_groups() -> Result<(), Box<dyn
         "{:?}",
         world.verify_components()
     );
-    sekiro::passes::irradiance::LowerFromSoftIrradiance.run(&mut world, &mut PassLog::default())?;
-    assert_eq!(world.iter::<IrradianceVolume>().count(), 642);
+    // The terms word (type data 0x24) of the 107 boxes, as SoulsFormats reads them (UnkT24): 87 boxes of 0 (diffuse
+    // and specular), 2 of 1 (diffuse only: Env_Box000, Env_Box400), 17 of 2 (specular only: Env_Box900 to 917 but 902) and
+    // Env_Box902's 258, in each of the six packages.
+    let mut terms = std::collections::BTreeMap::new();
+    for (_, r) in world.iter::<IrradianceRegion>() {
+        *terms.entry(r.terms).or_insert(0) += 1;
+    }
+    assert_eq!(terms, [(0, 522), (1, 12), (2, 102), (258, 6)].into());
+    let mut log = PassLog::default();
+    sekiro::passes::irradiance::LowerFromSoftIrradiance.run(&mut world, &mut log)?;
+    assert_eq!(world.iter::<IrradianceVolume>().count(), 534);
+    assert_eq!(
+        log.counts["irradiance boxes the game draws only the reflection of (no diffuse)"],
+        102
+    );
+    let refused: Vec<_> = log
+        .omitted
+        .keys()
+        .filter(|why| why.contains("terms word"))
+        .collect();
+    assert_eq!(refused.len(), 6, "{refused:?}");
+    assert!(refused.iter().all(|why| why.contains(":Env_Box902_")
+        && why.ends_with("terms word 0x24 is 258, not 0, 1 or 2 (bit 0x100 not understood)")));
     assert!(
         world.verify_components().is_empty(),
         "{:?}",
@@ -125,7 +146,7 @@ fn all_authored_boxes_join_complete_source_volume_groups() -> Result<(), Box<dyn
     assert_eq!(axis.domain.parse("package-03"), Some(2));
     let mut log = PassLog::default();
     sekiro::passes::irradiance::LowerFromSoftIrradiance.run(&mut world, &mut log)?;
-    assert_eq!(world.iter::<IrradianceVolume>().count(), 1031);
+    assert_eq!(world.iter::<IrradianceVolume>().count(), 912);
     assert_eq!(
         log.omitted["irradiance coefficient grids differ; common normal-offset grid is unresolved"],
         6
@@ -134,7 +155,7 @@ fn all_authored_boxes_join_complete_source_volume_groups() -> Result<(), Box<dyn
     // groups. They remain complete source records, not resampled core volumes.
     let mut refused: Vec<_> = world
         .iter::<IrradianceRegion>()
-        .filter(|(e, _)| !world.has::<IrradianceVolume>(*e))
+        .filter(|(e, r)| matches!(r.terms, 0 | 1) && !world.has::<IrradianceVolume>(*e))
         .map(|(_, r)| {
             (
                 r.area.as_str(),

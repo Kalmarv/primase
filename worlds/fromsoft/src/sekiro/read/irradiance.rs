@@ -153,6 +153,7 @@ pub fn read(
                     priority: data[9],
                     diffuse_intensity: float(0x28),
                     specular_intensity: float(0x2c),
+                    terms: i32::from_le_bytes(data[0x24..0x28].try_into().expect("checked type data")),
                 },
             );
             used.insert(id);
