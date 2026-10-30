@@ -86,7 +86,9 @@ fn assert_material_sequences(path: &Path, world: &World) {
                     StoredShape::Mopp { child, .. } | StoredShape::ConvexTranslate { child, .. } => {
                         stack.push(child)
                     }
-                    StoredShape::List { children } => stack.extend(children.into_iter().rev().map(|c| c.shape)),
+                    StoredShape::List { children } => {
+                        stack.extend(children.into_iter().rev().map(|c| c.shape))
+                    }
                     leaf => {
                         if let StoredShape::ExtendedMesh(mesh) = leaf {
                             let pairs: Vec<_> = mesh

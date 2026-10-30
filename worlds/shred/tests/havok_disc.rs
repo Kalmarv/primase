@@ -109,8 +109,16 @@ fn every_packfile_parses_and_the_census_matches() {
             dynamic_quality += usize::from(b.quality_type == 4);
             max_penetration += usize::from(b.allowed_penetration_depth > 3.4e38);
             gravity_one += usize::from(b.gravity_factor == 1.0);
-            assert_eq!(b.quality_type == 0, b.motion_type == physics::MOTION_FIXED, "{label}");
-            assert_eq!(b.allowed_penetration_depth > 3.4e38, b.motion_type == physics::MOTION_FIXED, "{label}");
+            assert_eq!(
+                b.quality_type == 0,
+                b.motion_type == physics::MOTION_FIXED,
+                "{label}"
+            );
+            assert_eq!(
+                b.allowed_penetration_depth > 3.4e38,
+                b.motion_type == physics::MOTION_FIXED,
+                "{label}"
+            );
             *filters.entry(b.collision_filter_info).or_default() += 1;
             storage_indices.insert(b.storage_index);
             // the shape tree resolves to shapes this module reads
@@ -187,9 +195,18 @@ fn every_packfile_parses_and_the_census_matches() {
         (1_758, 6_445, 646_081, 855_428)
     );
     assert_eq!((convex, convex_vertices), (8_780, 473_820));
-    assert_eq!((dynamic_quality, max_penetration, gravity_one), (10_768, 2_021, 12_789));
     assert_eq!(
-        (cached_equal, cached_less, cached_sum, welded_tail_ok, mesh_user_data),
+        (dynamic_quality, max_penetration, gravity_one),
+        (10_768, 2_021, 12_789)
+    );
+    assert_eq!(
+        (
+            cached_equal,
+            cached_less,
+            cached_sum,
+            welded_tail_ok,
+            mesh_user_data
+        ),
         (1_277, 481, 637_321, 1_758, 45)
     );
     assert_eq!(
