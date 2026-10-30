@@ -6,7 +6,11 @@
 //! with the values that go with it (`LightVolume`), assembled as the game's own `Decompress` does
 //! ([`read::light_volume`]).
 //!
-//! The reader states facts only: a global a script sets from state the data does not hold is named unset, with why.
+//! It also names the globals no script sets when the level loads (the wind, which `FogConfig.SetFog` sets only while
+//! the player is inside a storm zone), for which Unity reads its value for a global never set, and states
+//! `_WeatherBlend`'s 0 (`FogConfig.Start`).
+//!
+//! The reader states facts only: a global whose value at load the stored scripts do not decide is named unset, with why.
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod read;

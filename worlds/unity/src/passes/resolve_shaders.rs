@@ -20,8 +20,10 @@
 //!   [`builtin`]; its vectors that pack several values (the screen size, the projection's flip and planes, the time) part
 //!   by part ([`builtin_parts`]: each part's own role, the derived ones `Unknown`); a field the material has no
 //!   property of that a game's script sets for every shader takes that global (`unity.shader_globals`,
-//!   [`UnityShaderGlobals`], filled by the game's reader) as `Default` words saying which field sets it, and one the
-//!   scripts set only from state the data does not hold is `Unknown` with why; anything else `Unknown` with the
+//!   [`UnityShaderGlobals`], filled by the game's reader) as `Default` words saying which field sets it, one no script
+//!   sets when the level loads as `Default` zeros (what Unity reads from a global never set: the editor oracle,
+//!   `primase-oracles/unity/global-textures`, a float and a float4 on 6000.6.4f1), and one whose value the stored
+//!   scripts do not decide is `Unknown` with why; anything else `Unknown` with the
 //!   reason, struct (instancing) fields included. Only the bytes the program reads are bound
 //!   ([`iridia::WordsRead`] of the lifted program: the words its outputs, discards and writes are made of; a
 //!   program whose value graph cannot be followed has every byte bound, counted): a field or part it does not read is
@@ -35,8 +37,10 @@
 //!   (`primase-oracles/unity/default-textures`: [`default_colour`], whose doc states the version and colour-space gap;
 //!   a player holds no default texture of the engine), counted by name (an empty or unknown name is the engine's
 //!   fallback grey); a default it does not value is `Missing`. A texture the material has no property of that a game's
-//!   script sets for every shader is that global's texture (`unity.shader_globals`), counted by name; one the scripts
-//!   set only from state the data does not hold is `Missing` with why. A texture of Unity's own that the material has
+//!   script sets for every shader is that global's texture (`unity.shader_globals`), counted by name; one no script
+//!   sets when the level loads samples Unity's grey for a global never set ([`NEVER_SET_TEXTURE`], in a Linear colour
+//!   space; `Missing` in Gamma, not measured), and one whose value the stored scripts do not decide is `Missing` with
+//!   why. A texture of Unity's own that the material has
 //!   no property of is the frame's ([`frame_texture`]: the camera's depth and colour, the main light's shadow map or
 //!   screen-space shadows, the occlusion, the nearest reflection probe, the light-probe volume), counted by name; the
 //!   other engine textures the parameters name are `Missing` with the reason, and a slot the parameters do not name is
@@ -366,8 +370,14 @@ pub fn buffer_constants(
                         why: format!("{}: set for every shader by {}", f.name, g.set_by),
                     })
                 }
+            } else if let Some(why) = globals.never_set.get(&f.name) {
+                bump("constants no script sets when the level loads, Unity's never-set 0");
+                whole(ConstantRole::Default {
+                    words: vec![0; bytes as usize / 4],
+                    why: format!("{}: {why}; Unity reads a global never set as 0", f.name),
+                })
             } else if let Some(why) = globals.unset.get(&f.name) {
-                bump("constants a game's script sets only from runtime state, Unknown");
+                bump("constants whose global the stored scripts do not decide, Unknown");
                 whole(ConstantRole::Unknown {
                     why: format!("{}: {why}", f.name),
                 })
@@ -515,6 +525,12 @@ fn default_colour(name: &str, linear: bool) -> Option<[f32; 4]> {
 /// The engine's fallback for a default texture name that is empty or no default: 128/255 (the oracle's `none` and
 /// `notadefault` properties).
 const FALLBACK: f32 = 128.0 / 255.0;
+
+/// What a program samples from a global texture no script set, never set or set to null (2D, 3D and cube alike), in a
+/// Linear colour space: the editor oracle's (`primase-oracles/unity/global-textures`, Unity 6000.6.4f1, a Linear
+/// colour space project on Direct3D 12), the engine's fallback grey, 128/255 decoded from sRGB (0.21582031 as sampled)
+/// with alpha 128/255. The newer editor's, not verified for the players' versions; not measured in Gamma.
+const NEVER_SET_TEXTURE: [f32; 4] = [0.215_820_31, 0.215_820_31, 0.215_820_31, 128.0 / 255.0];
 
 /// Whether `name` is valued as the engine's fallback ([`default_colour`]): an empty name or one that is no default.
 fn is_fallback(name: &str) -> bool {
@@ -1201,9 +1217,31 @@ fn resolve_texture(
                 sampler: SamplerState::default(),
             };
         }
+        if let Some(why) = globals.never_set.get(name) {
+            if linear {
+                bump(format!(
+                    "texture parameters no script sets when the level loads, Unity's never-set grey: {name}"
+                ));
+                return TextureSource::Default {
+                    value: NEVER_SET_TEXTURE,
+                    why: format!(
+                        "texture {name}: {why}; Unity samples a global texture never set as its fallback grey"
+                    ),
+                };
+            }
+            bump(format!(
+                "texture parameters no script sets when the level loads, Gamma colour space, left Missing: {name}"
+            ));
+            return TextureSource::Missing {
+                why: format!(
+                    "texture {name}: {why}; what Unity samples from a global never set is measured only in a Linear \
+                     colour space"
+                ),
+            };
+        }
         if let Some(why) = globals.unset.get(name) {
             bump(format!(
-                "texture parameters a game's script sets only from runtime state, left Missing: {name}"
+                "texture parameters whose global the stored scripts do not decide, left Missing: {name}"
             ));
             return TextureSource::Missing {
                 why: format!("texture {name}: {why}"),
@@ -1698,6 +1736,24 @@ mod tests {
                 why: "texture _WindTexture: set when the player enters a zone".into()
             }
         );
+        // no script sets it when the level loads: Unity's grey for a global never set, measured in Linear only
+        globals
+            .never_set
+            .insert("_WindTexture".into(), "set when the player enters a zone".into());
+        let why = "texture _WindTexture: set when the player enters a zone; Unity samples a global texture never set \
+                   as its fallback grey";
+        assert_eq!(
+            resolve("_WindTexture", &globals),
+            TextureSource::Default {
+                value: [0.215_820_31, 0.215_820_31, 0.215_820_31, 128.0 / 255.0],
+                why: why.into()
+            }
+        );
+        assert!(matches!(
+            resolve_texture(&m, &[], &[], false, "_WindTexture", &globals, &mut BTreeMap::new()),
+            TextureSource::Missing { why } if why.contains("measured only in a Linear colour space")
+        ));
+        globals.never_set.clear();
         // the material's own property (it references a texture this world does not hold)
         assert_eq!(
             resolve("_MainTex", &globals),
@@ -1736,6 +1792,17 @@ mod tests {
             role_at(&globals, 128),
             ConstantRole::Unknown {
                 why: "_Mystery: set at runtime".into()
+            }
+        );
+        globals.unset.clear();
+        globals
+            .never_set
+            .insert("_Mystery".into(), "set at runtime".into());
+        assert_eq!(
+            role_at(&globals, 128),
+            ConstantRole::Default {
+                words: vec![0; 4],
+                why: "_Mystery: set at runtime; Unity reads a global never set as 0".into()
             }
         );
         // a global whose texture leaves the world is unset, saying so

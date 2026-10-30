@@ -903,13 +903,16 @@ pub struct GlobalValue {
 /// What a game's scripts set for every shader, as far as their stored fields state it (`unity.shader_globals`, a world
 /// resource): filled by the game's own reader, which knows its scripts; Unity's reader knows none. A program's texture
 /// or constant the material has no property of takes the global of its name (`resolve-unity-shaders`). `unset` names
-/// the globals a script sets only from state the data does not hold (a zone the player enters), each with why: such a
-/// parameter is left Missing (Unknown) with that reason.
+/// the globals whose value at load the stored data does not decide (several scripts set them, which runs last is not
+/// stated), each with why: such a parameter is left Missing (Unknown) with that reason. `never_set` names those no
+/// script sets when the level loads, a script setting them only later from runtime state (a zone the player enters),
+/// each with why: until then Unity reads its value for a global never set.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct UnityShaderGlobals {
     pub textures: std::collections::BTreeMap<String, GlobalTexture>,
     pub values: std::collections::BTreeMap<String, GlobalValue>,
     pub unset: std::collections::BTreeMap<String, String>,
+    pub never_set: std::collections::BTreeMap<String, String>,
 }
 
 impl primase_core::Resource for UnityShaderGlobals {

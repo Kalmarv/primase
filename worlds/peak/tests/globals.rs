@@ -3,7 +3,8 @@
 //! same player, its MonoBehaviours' bytes decoded by the scripts' declarations and consumed to the last byte): level4
 //! stores one `Peak.FogShaderParams` (path id 621203), whose `fogTexture` is the 1024 x 1024 Texture2D `A_Texture 60`,
 //! and one `LightVolume` (path id 576878): brightness 3, ambienceStrength 1.25, ambienceMin 0.15, raySpacing 5, its
-//! light map 132 x 276 x 572 cells from (-325.631, -127.345, -474.081), 572 BC6H and 572 BC4 slices. The volume's
+//! light map 132 x 276 x 572 cells from (-325.631, -127.345, -474.081), 572 BC6H and 572 BC4 slices; and three
+//! `FogConfig`s (path ids 589045, 591109, 592076), whose `Start` sets `_WeatherBlend` to 0. The volume's
 //! bytes are the engine's own: Unity's editor running `Decompress`'s steps on those slices as stored
 //! (`oracles.unity-editor/peak/light-volume-level4`).
 
@@ -13,7 +14,7 @@ mod inputs;
 
 use inputs::{Game, OracleSet, Tool, install_file, oracle, tool};
 use primase_core::{Component, Name, TexFormat, Texture, TextureLayers, TextureShape, World};
-use primase_peak::read::{FOG_TEXTURE, LIGHT_MAP};
+use primase_peak::read::{FOG_TEXTURE, LIGHT_MAP, WEATHER_BLEND, WIND};
 use primase_peak::{GlobalsReport, read_globals};
 use primase_unity::components::UnityShaderGlobals;
 use unity_formats::TypeTreePackage;
@@ -31,6 +32,7 @@ fn level4_s_globals_are_its_scripts_fields() {
     .unwrap();
     let mut w = World::new();
     let report = read_globals(&player, "level4", &mut w).unwrap();
+    assert_eq!(report.fog_configs + report.fog_configs_off, 3, "{report:?}");
     assert_eq!(
         report,
         GlobalsReport {
@@ -38,10 +40,36 @@ fn level4_s_globals_are_its_scripts_fields() {
             fog_shader_params_off: 0,
             light_volumes: 1,
             light_volumes_off: 0,
+            ..report.clone()
         }
     );
     let globals = w.resource::<UnityShaderGlobals>().unwrap().clone();
     assert!(globals.unset.is_empty(), "{:?}", globals.unset);
+    // before the player moves no script sets the wind: Unity's values for a global never set
+    assert_eq!(
+        globals.never_set.keys().map(String::as_str).collect::<Vec<_>>(),
+        {
+            let mut wind = WIND.to_vec();
+            wind.sort_unstable();
+            wind
+        }
+    );
+    assert!(
+        globals
+            .never_set
+            .values()
+            .all(|why| why.starts_with("only FogConfig.SetFog sets it"))
+    );
+    assert!(report.fog_configs > 0, "{report:?}");
+    let blend = &globals.values[WEATHER_BLEND];
+    assert_eq!(blend.words, vec![0]);
+    assert!(
+        ["589045", "591109", "592076"].iter().any(|p| blend
+            .set_by
+            .starts_with(&format!("FogConfig.Start of level4/{p} "))),
+        "{}",
+        blend.set_by
+    );
 
     let fog = &globals.textures[FOG_TEXTURE];
     assert_eq!(fog.set_by, "Peak.FogShaderParams.fogTexture of level4/621203");

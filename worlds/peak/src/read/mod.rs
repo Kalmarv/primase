@@ -28,6 +28,24 @@ pub const LIGHT_VOLUME_VALUES: [&str; 6] = [
     "_GridOffset",
 ];
 
+/// The global `FogConfig.Start` sets (to 0) and its `SetFog` raises.
+pub const WEATHER_BLEND: &str = "_WeatherBlend";
+/// The globals only `FogConfig.SetFog` sets, which runs only while the observed character is inside a storm zone with
+/// its wind on (`StormVisual.LateUpdate`).
+pub const WIND: [&str; 11] = [
+    "_WindTexture",
+    "WindTint",
+    "WindSkyBrightnessValue",
+    "WindTextureInfluence",
+    "WindFogDensity",
+    "WindFogTextureDensity",
+    "WindMixInfluence",
+    "WindSpeed",
+    "WindRotationAxis",
+    "WindRotationAngle",
+    "WindSphereScale",
+];
+
 /// What [`read_globals`] read.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GlobalsReport {
@@ -39,6 +57,10 @@ pub struct GlobalsReport {
     pub light_volumes: usize,
     /// `LightVolume`s stored off.
     pub light_volumes_off: usize,
+    /// `FogConfig`s that run.
+    pub fog_configs: usize,
+    /// `FogConfig`s stored off.
+    pub fog_configs_off: usize,
 }
 
 /// A stored reference as the value [`Player::resolve`] reads.
@@ -73,8 +95,8 @@ fn of_script<'a>(
 /// `w`'s `unity.shader_globals`, after [`primase_unity::level::read_level`] read the level into the same world (the
 /// globals already there are kept). Script fields are decoded by [`scripts`]' named layouts; another layout is an
 /// error. Where the stored scene does not decide a global (several of its scripts run with different values, and
-/// which `Start` runs last is not stated; the one that runs sets nothing or no texture; every one is stored off), it is
-/// named unset, with why.
+/// which `Start` runs last is not stated; the one that runs sets no texture; every one is stored off), it is named
+/// unset, with why; one no script sets when the level loads is named never set, with why.
 ///
 /// - `FogTexture`: the `fogTexture` of the scene's `Peak.FogShaderParams` that runs, which its `Start` sets: the
 ///   Texture2D's entity, the one the level read made where a material samples it too.
@@ -84,6 +106,9 @@ fn of_script<'a>(
 ///   once: a second read keeps the entity), `brightness`, `ambienceStrength`, `ambienceMin` and `raySpacing`, and the
 ///   light map's `gridRes` and `gridOffset` (which `Start` copies into the component first) as four floats, the last
 ///   0.
+/// - `_WeatherBlend`: 0, which the `Start` of every `FogConfig` that runs sets.
+/// - [`WIND`]: never set when the level loads: only `FogConfig.SetFog` sets them, from runtime state (the character
+///   inside a storm zone whose wind is on), and no other script names them.
 pub fn read_globals(player: &Player, level: &str, w: &mut World) -> Result<GlobalsReport> {
     let scene = Scene::read(player, level)?;
     let version = player
@@ -175,13 +200,15 @@ pub fn read_globals(player: &Player, level: &str, w: &mut World) -> Result<Globa
             ),
         ),
         [] => {}
-        [(b, v)] if v.light_map.rgb_slices.is_empty() || v.light_map.alpha_slices.is_empty() => unset(
-            &mut globals,
-            format!(
+        [(b, v)] if v.light_map.rgb_slices.is_empty() || v.light_map.alpha_slices.is_empty() => {
+            let why = format!(
                 "the LightVolume of {}/{} holds no compressed light map: its Start sets nothing",
                 b.behaviour.file, b.behaviour.path_id
-            ),
-        ),
+            );
+            for name in std::iter::once(LIGHT_MAP).chain(LIGHT_VOLUME_VALUES) {
+                globals.never_set.insert(name.into(), why.clone());
+            }
+        }
         [(b, v)] => {
             let at = format!("{}/{}", b.behaviour.file, b.behaviour.path_id);
             let set_by = format!("LightVolume.lightMapData of {at}");
@@ -237,6 +264,56 @@ pub fn read_globals(player: &Player, level: &str, w: &mut World) -> Result<Globa
                 several.len()
             ),
         ),
+    }
+    // the FogConfigs: Start sets _WeatherBlend to 0, SetFog the wind only later
+    let mut first_running = None;
+    for (b, runs) in of_script(&scene, &behaviours, "FogConfig") {
+        scripts::fog_config(&version, &b.data)?;
+        if runs {
+            report.fog_configs += 1;
+            first_running.get_or_insert(&b.behaviour);
+        } else {
+            report.fog_configs_off += 1;
+        }
+    }
+    match first_running {
+        Some(by) => {
+            globals.unset.remove(WEATHER_BLEND);
+            globals.values.insert(
+                WEATHER_BLEND.into(),
+                GlobalValue {
+                    words: vec![0f32.to_bits()],
+                    set_by: format!(
+                        "FogConfig.Start of {}/{} (each of the scene's {} FogConfigs that run sets 0)",
+                        by.file, by.path_id, report.fog_configs
+                    ),
+                },
+            );
+        }
+        None if report.fog_configs_off > 0 => {
+            globals.unset.insert(
+                WEATHER_BLEND.into(),
+                format!(
+                    "the scene's {} FogConfigs are stored off: their Start sets it only if the game turns one on",
+                    report.fog_configs_off
+                ),
+            );
+        }
+        None => {
+            globals.never_set.insert(
+                WEATHER_BLEND.into(),
+                "the scene holds no FogConfig, the only script that sets it".into(),
+            );
+        }
+    }
+    let why = if report.fog_configs + report.fog_configs_off > 0 {
+        "only FogConfig.SetFog sets it, while the observed character is inside a storm zone whose wind is on \
+         (StormVisual.LateUpdate): no script sets it when the level loads"
+    } else {
+        "the scene holds no FogConfig, the only script that sets it"
+    };
+    for name in WIND {
+        globals.never_set.insert(name.into(), why.into());
     }
     w.insert_resource(globals);
     Ok(report)

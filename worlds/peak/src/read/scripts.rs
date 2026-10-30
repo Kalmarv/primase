@@ -11,8 +11,8 @@
 
 use crate::{Error, Result};
 
-/// The Unity version of the PEAK player these layouts were measured on (its level4): `Peak.FogShaderParams` and
-/// `LightVolume`.
+/// The Unity version of the PEAK player these layouts were measured on (its level4): `Peak.FogShaderParams`,
+/// `LightVolume` and `FogConfig`.
 pub const MEASURED: &str = "6000.3.15f1";
 
 fn refuse(what: &str, version: &str, detail: String) -> Error {
@@ -213,6 +213,53 @@ pub fn light_volume(version: &str, data: &[u8]) -> Result<LightVolume> {
     Ok(volume)
 }
 
+/// `FogConfig`'s wind texture, from its script bytes: on Unity [`MEASURED`] its serialized fields in declaration order
+/// (`windSkyBrightnessValue`, `windTextureInfluence`, `windTint`, `windTexture`, `windSphereScale`, `windSpeed`,
+/// `windFogDensity`, `WindFogTextureDensity`, `windMixInfluence`, `maxVal`, `straightDown`, `zone`,
+/// `useWindChillZoneIntensity`; the private `sinceSet` is not stored): 84 bytes, every byte read. Its `SetFog` hands
+/// the wind fields to every shader; its `Start` sets `_WeatherBlend` to 0.
+pub fn fog_config(version: &str, data: &[u8]) -> Result<PPtr> {
+    const WHAT: &str = "FogConfig";
+    if version != MEASURED {
+        return Err(refuse(WHAT, version, "another Unity version".into()));
+    }
+    let mut f = Fields { bytes: data, at: 0 };
+    let read = |f: &mut Fields| -> Option<PPtr> {
+        f.take(8)?; // windSkyBrightnessValue, windTextureInfluence
+        f.take(16)?; // windTint
+        let texture = f.pptr()?;
+        f.take(4)?; // windSphereScale
+        f.take(8)?; // windSpeed
+        f.take(16)?; // windFogDensity, WindFogTextureDensity, windMixInfluence, maxVal
+        f.bool()?; // straightDown
+        f.pptr()?; // zone
+        f.bool()?; // useWindChillZoneIntensity
+        Some(texture)
+    };
+    let texture = read(&mut f).ok_or_else(|| {
+        refuse(
+            WHAT,
+            version,
+            format!(
+                "{} script bytes end inside a field (or a bool is not 0 or 1)",
+                data.len()
+            ),
+        )
+    })?;
+    if f.at != data.len() {
+        return Err(refuse(
+            WHAT,
+            version,
+            format!(
+                "{} script bytes, {} past the fields",
+                data.len(),
+                data.len().saturating_sub(f.at)
+            ),
+        ));
+    }
+    Ok(texture)
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -328,5 +375,35 @@ mod tests {
         count[144..148].copy_from_slice(&1000i32.to_le_bytes());
         assert!(light_volume(MEASURED, &count).is_err());
         assert!(light_volume("2022.3.1f1", &d).is_err());
+    }
+
+    /// The wind texture is the fourth field; 84 bytes are read to the last, and a byte more or less is refused.
+    #[test]
+    fn fog_config_is_its_wind_fields() {
+        let mut d = vec![0u8; 24];
+        d.extend(0i32.to_le_bytes());
+        d.extend(60i64.to_le_bytes());
+        d.extend([0u8; 28]); // windSphereScale, windSpeed and four floats
+        d.extend([1, 0, 0, 0]);
+        d.extend(0i32.to_le_bytes());
+        d.extend(0i64.to_le_bytes());
+        d.extend([0, 0, 0, 0]);
+        assert_eq!(d.len(), 84);
+        assert_eq!(
+            fog_config(MEASURED, &d).unwrap(),
+            PPtr {
+                file_id: 0,
+                path_id: 60
+            }
+        );
+        let mut long = d.clone();
+        long.extend([0; 4]);
+        assert!(
+            fog_config(MEASURED, &long)
+                .unwrap_err()
+                .to_string()
+                .contains("4 past the fields")
+        );
+        assert!(fog_config(MEASURED, &d[..80]).is_err());
     }
 }
