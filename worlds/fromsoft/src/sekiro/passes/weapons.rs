@@ -12,20 +12,27 @@
 //!
 //! The character's rig is the one rig (not a held weapon's) whose skeleton has the socket (`dummy <id>`, the player's
 //! dummy polygons carried onto the assembled skeleton by `assemble-character`). Elden Ring's hold rows name a body part's
-//! polygon `n` as `2000 + n` (its sockets are so named, [`crate::sekiro::effect_data::BODY_PART_DUMMIES`]). A model the
-//! grip puts at no dummy polygon, or at one no rig has, stays where it is, counted, and one at a body part's polygon the
-//! worn body part does not have is named (the rows name 2116 and 2117, which no body part has; where the game puts such a
-//! model is not known, so it is not placed); a socket two rigs have is refused. The rig's
+//! polygon `n` as `2000 + n` (its sockets are so named, [`crate::sekiro::effect_data::BODY_PART_DUMMIES`]), and say how
+//! each slot shows its model ([`Shown`]): such a number shown in a hand is the character's own polygon `n` (the Caestus
+//! held in both hands shows its second fist, `2117`, on the left hand, where the character's polygon 117 is); shown on
+//! the body, the body part's. A model shown on the body at a polygon no worn part has (no body part polygon `2000 + n`
+//! on the character, no polygon `n` on a held weapon's model) is left out of the scene, counted: Leontiel's Greatsword's
+//! model 1 (`2116`) is not drawn in the game at rest, in the three holds one run reached (as equipped, the left hand's bow
+//! held in both hands, and after a second two-hand toggle); why, and whether the game shows it in other states (its
+//! skill), is not known. One a held weapon's model has, or shown in a way no stock slot uses,
+//! is refused. A model the grip puts at no dummy polygon, or at one no rig has, stays where it is, counted; a socket two
+//! rigs have is refused. The rig's
 //! `core.transform` is where the attachment puts it with the character's rig in its pose as read (its `core.rig_pose`,
 //! else its rest).
 //!
 //! The model's frame at its socket ([`HOLD_TURN`]) is a reading of the community's tools, not checked against the
 //! game: reported as an approximation on every model it places.
-use crate::sekiro::effect_data::{BODY_PART_DUMMIES, HeldWeapon, Holds};
+use crate::sekiro::effect_data::{BODY_PART_DUMMIES, HandSlot, HeldWeapon, Hold, Holds, Shown};
 use primase_animation::pose::{affine, compose, locals, model_transforms, transform};
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{
-    Asset, Attachment, Component, Entity, RigInstance, RigPose, Role, Skeleton, Sockets, Transform, World,
+    Asset, Attachment, ClipBinding, Component, Entity, RigInstance, RigPose, Role, Skeleton, Sockets,
+    Transform, World,
 };
 use std::collections::BTreeSet;
 
@@ -49,8 +56,8 @@ impl Choice for Grip {
 }
 
 impl Holds {
-    /// The dummy polygon a model of a weapon in the left hand's slots (`left`) or the right's stands at in `grip`.
-    pub fn in_grip(&self, left: bool, grip: Grip) -> Option<i32> {
+    /// Where a model of a weapon in the left hand's slots (`left`) or the right's stands in `grip`.
+    pub fn in_grip(&self, left: bool, grip: Grip) -> Option<Hold> {
         match (left, grip) {
             (false, Grip::OneHanded) => self.right,
             (false, Grip::TwoHandedRight) => self.both,
@@ -97,6 +104,38 @@ pub const HOLD_FROMSOFT_WEAPONS: PassSpec = PassSpec {
     },
 };
 
+/// Leave the held model whose asset's root is `root` (its rig instance `rig`) out of the scene: what only its asset reaches,
+/// its rig instance and what refers to them alone (the placements `place-assets` made of its parts), despawned and
+/// declared; what also refers to other entities (a clip binding of several meshes) stops naming them
+/// ([`primase_core::ledger::despawn`]).
+fn leave_out(w: &mut World, root: Entity, rig: Entity, log: &mut PassLog) {
+    let others: Vec<Entity> = w.iter::<Asset>().map(|(e, _)| e).filter(|e| *e != root).collect();
+    let shared = w.closure(others);
+    let mut gone: BTreeSet<Entity> = w.closure([root, rig]).difference(&shared).copied().collect();
+    loop {
+        let referring: Vec<Entity> = w
+            .entities()
+            .filter(|e| !gone.contains(e) && !shared.contains(e))
+            .filter(|e| {
+                let refs = w.references(*e);
+                !refs.is_empty() && refs.iter().all(|r| gone.contains(r))
+            })
+            .collect();
+        if referring.is_empty() {
+            break;
+        }
+        gone.extend(referring);
+    }
+    for e in gone {
+        primase_core::ledger::despawn(
+            w,
+            e,
+            log,
+            "held weapon models the game does not draw (shown on the body at a polygon no worn part has)",
+        );
+    }
+}
+
 /// The rig instances of `w`: each with the skeleton it poses.
 fn rigs(w: &World) -> Vec<(Entity, Entity)> {
     w.iter::<RigInstance>().map(|(e, r)| (e, r.skeleton)).collect()
@@ -119,15 +158,20 @@ impl Pass for HoldFromSoftWeapons {
     fn provides(&self) -> &[&'static str] {
         &[Attachment::NAME]
     }
+    /// A model left out of the scene stops being listed by the assets and clip bindings that name its entities.
     fn modifies(&self) -> &[&'static str] {
-        &[Transform::NAME]
+        &[Transform::NAME, Asset::NAME, ClipBinding::NAME]
+    }
+    /// A model the game does not draw where the grip puts it is left out of the scene.
+    fn despawns_entities(&self) -> bool {
+        true
     }
     fn approximates(&self) -> &'static str {
         "a held model's frame at its dummy polygon turned half about the polygon's upward direction, the community tools' reading, not checked against the game"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         // each held model: its asset's rig skeleton and what the read says of it
-        let mut held: Vec<(String, HeldWeapon, Entity)> = Vec::new();
+        let mut held: Vec<(Entity, String, HeldWeapon, Entity)> = Vec::new();
         for (root, h) in w.iter::<HeldWeapon>() {
             let label = w
                 .get::<primase_core::Name>(root)
@@ -141,12 +185,15 @@ impl Pass for HoldFromSoftWeapons {
                 .find(|(_, r)| *r == Role::Rig)
                 .map(|(e, _)| *e)
                 .ok_or_else(|| format!("{label}: a held weapon's asset with no rig"))?;
-            held.push((label, *h, skeleton));
+            held.push((root, label, *h, skeleton));
         }
-        let held_skeletons: BTreeSet<Entity> = held.iter().map(|(_, _, s)| *s).collect();
+        let held_skeletons: BTreeSet<Entity> = held.iter().map(|(_, _, _, s)| *s).collect();
+        let held_slots: BTreeSet<HandSlot> = held.iter().map(|(_, _, h, _)| h.slot).collect();
         let all = rigs(w);
         let mut attached = 0u64;
-        for (label, h, skeleton) in held {
+        let mut at_own = 0u64;
+        let mut left_out = 0u64;
+        for (root, label, h, skeleton) in held {
             let weapon_rig = match all
                 .iter()
                 .filter(|(_, s)| *s == skeleton)
@@ -157,33 +204,63 @@ impl Pass for HoldFromSoftWeapons {
                 [] => return Err(format!("{label}: its rig is not placed (run place-assets first)")),
                 more => return Err(format!("{label}: {} rigs pose its skeleton", more.len())),
             };
-            let Some(dummy) = h.holds.in_grip(h.slot.left, self.grip) else {
+            let Some(Hold { dummy, shown }) = h.holds.in_grip(h.slot.left, self.grip) else {
                 log.omit(
                     "held weapon models the grip puts at no dummy polygon, left where they are",
                     1,
                 );
                 continue;
             };
-            let name = crate::pose::dummy_socket_name(dummy);
-            let holders: Vec<(Entity, Entity, primase_core::Socket)> = all
-                .iter()
-                .filter(|(_, s)| !held_skeletons.contains(s))
-                .filter_map(|(rig, s)| {
-                    let socket = w.get::<Sockets>(*s)?.0.iter().find(|k| k.name == name)?.clone();
-                    Some((*rig, *s, socket))
-                })
-                .collect();
+            // the rigs whose skeleton has polygon `id`'s socket: the character's (`held` false), or the held weapons'
+            let holders_of = |id: i32, held: bool| -> Vec<(Entity, Entity, primase_core::Socket)> {
+                let name = crate::pose::dummy_socket_name(id);
+                all.iter()
+                    .filter(|(_, s)| held_skeletons.contains(s) == held)
+                    .filter_map(|(rig, s)| {
+                        let socket = w.get::<Sockets>(*s)?.0.iter().find(|k| k.name == name)?.clone();
+                        Some((*rig, *s, socket))
+                    })
+                    .collect()
+            };
+            // a body part's polygon `2000 + n`: where the slot shows the model says whose polygon `n` it is
+            let mut used = dummy;
+            let mut holders = holders_of(dummy, false);
+            if (BODY_PART_DUMMIES..BODY_PART_DUMMIES + 1_000).contains(&dummy) {
+                let n = dummy - BODY_PART_DUMMIES;
+                match shown {
+                    // in a hand: the character's own polygon `n` (the Caestus's second fist, 2117, on the left hand)
+                    Some(Shown::LeftHand | Shown::RightHand) => {
+                        (used, holders) = (n, holders_of(n, false));
+                        at_own += 1;
+                    }
+                    // on the body, a polygon no worn part has: the game does not draw it (Leontiel's Greatsword's
+                    // model 1, 2116, in the idle states held in one hand and in both)
+                    Some(Shown::Body) | None if holders.is_empty() => {
+                        let on_weapons: Vec<i32> = held_slots
+                            .iter()
+                            .map(|slot| slot.global_id(n))
+                            .filter(|id| !holders_of(*id, true).is_empty())
+                            .collect();
+                        if !on_weapons.is_empty() {
+                            return Err(format!(
+                                "{label}: shown on the body at {dummy}, a polygon no worn body part has and a held weapon's model has ({on_weapons:?}): what the game does with it is not known"
+                            ));
+                        }
+                        leave_out(w, root, weapon_rig, log);
+                        left_out += 1;
+                        continue;
+                    }
+                    Some(Shown::Body) | None => {}
+                    Some(Shown::Other(v)) => {
+                        return Err(format!(
+                            "{label}: at {dummy} shown as {v} (dispPosType), a value no stock slot uses: where the game puts it is not known"
+                        ));
+                    }
+                }
+            }
+            let name = crate::pose::dummy_socket_name(used);
             let (holder, holder_skeleton, socket) = match holders.as_slice() {
                 [one] => one.clone(),
-                [] if (BODY_PART_DUMMIES..BODY_PART_DUMMIES + 1_000).contains(&dummy) => {
-                    log.omit(
-                        &format!(
-                            "held weapon models at a body part's dummy polygon the worn body part does not have, not placed (where the game puts them is not known): {label} at {dummy}"
-                        ),
-                        1,
-                    );
-                    continue;
-                }
                 [] => {
                     log.omit(
                         "held weapon models whose dummy polygon no character rig has, left where they are",
@@ -224,6 +301,14 @@ impl Pass for HoldFromSoftWeapons {
             attached += 1;
         }
         log.count("held weapon models attached at their dummy polygon", attached);
+        log.count(
+            "held weapon models shown in a hand at a body part's polygon number (2000 + n), held at the character's own polygon n",
+            at_own,
+        );
+        log.count(
+            "held weapon models shown on the body at a polygon no worn part has, left out of the scene (the game does not draw them)",
+            left_out,
+        );
         if attached > 0 {
             log.approximate(
                 "a held model's frame at its dummy polygon turned half about the polygon's upward direction (the community tools' reading, not checked against the game)",
@@ -289,11 +374,11 @@ mod tests {
 
     fn holds(right: Option<i32>, both: Option<i32>, right_hang: Option<i32>) -> Holds {
         Holds {
-            right,
+            right: right.map(Hold::at),
             left: None,
-            both,
+            both: both.map(Hold::at),
             left_hang: None,
-            right_hang,
+            right_hang: right_hang.map(Hold::at),
             left_both: None,
         }
     }
@@ -417,7 +502,7 @@ mod tests {
             .find(|(r, _)| w.get::<Name>(*r).is_some_and(|n| n.0 == "wp_a_0300_l"))
             .unwrap()
             .0;
-        w.get_mut::<HeldWeapon>(root).unwrap().holds.right = Some(99);
+        w.get_mut::<HeldWeapon>(root).unwrap().holds.right = Some(Hold::at(99));
         let report = run(&mut w, "hold-fromsoft-weapons{grip=one-handed}").unwrap();
         assert!(w.get::<Attachment>(katana).is_none());
         assert_eq!(
@@ -458,23 +543,30 @@ mod tests {
     }
 
     /// Elden Ring's scabbard with the sword drawn hangs at a body part's polygon (`2069`: the body part's polygon 69, named
-    /// so on the character's skeleton), not at the character's own polygon 69; where the skeleton has no `dummy 2069` it is
-    /// not placed, named, even where the character has a polygon 69.
+    /// so on the character's skeleton, shown on the body), not at the character's own polygon 69. A body part polygon
+    /// number shown in a hand (the Caestus's second fist, `2117`) is the character's own polygon; one shown on the body
+    /// that no worn part has leaves the model out of the scene; one a held weapon's model has, or a way of showing no stock
+    /// slot uses, is refused.
     #[test]
-    fn a_body_part_polygon_is_found_by_its_global_id_and_one_the_body_part_lacks_is_named() {
+    fn a_body_part_polygon_number_is_taken_by_how_the_slot_shows_the_model() {
         let socket = |id: u32, name: &str, z: f32| Socket {
             id: SocketId(id),
             name: name.into(),
             joint: JointId(0),
             offset: translate([0.0, 0.9, z]),
         };
-        let scabbard_at = |w: &mut World, at: i32| {
-            let root = w
-                .iter::<HeldWeapon>()
+        let scabbard_root = |w: &World| {
+            w.iter::<HeldWeapon>()
                 .find(|(r, _)| w.get::<Name>(*r).is_some_and(|n| n.0 == "wp_a_0300_1_l"))
                 .unwrap()
-                .0;
-            w.get_mut::<HeldWeapon>(root).unwrap().holds.right = Some(at);
+                .0
+        };
+        let scabbard_at = |w: &mut World, dummy: i32, shown: Shown| {
+            let root = scabbard_root(w);
+            w.get_mut::<HeldWeapon>(root).unwrap().holds.right = Some(Hold {
+                dummy,
+                shown: Some(shown),
+            });
         };
         let character = |w: &World| {
             w.iter::<Sockets>()
@@ -482,31 +574,94 @@ mod tests {
                 .unwrap()
                 .0
         };
+        let with_sockets = |sockets: Vec<Socket>| {
+            let (mut w, models) = world();
+            let c = character(&w);
+            w.get_mut::<Sockets>(c).unwrap().0.extend(sockets);
+            (w, models)
+        };
 
-        // the body part's polygon, beside the character's own of the same number
-        let (mut w, [_, _, scabbard, _]) = world();
-        let c = character(&w);
-        w.get_mut::<Sockets>(c).unwrap().0.extend([socket(2, "dummy 69", -0.1), socket(3, "dummy 2069", -0.3)]);
-        scabbard_at(&mut w, 2069);
+        // on the body: the body part's polygon, beside the character's own of the same number
+        let (mut w, [_, _, scabbard, _]) =
+            with_sockets(vec![socket(2, "dummy 69", -0.1), socket(3, "dummy 2069", -0.3)]);
+        scabbard_at(&mut w, 2069, Shown::Body);
         let report = run(&mut w, "hold-fromsoft-weapons{grip=one-handed}").unwrap();
         assert_eq!(w.get::<Attachment>(scabbard).unwrap().socket, SocketId(3));
         assert_eq!(w.get::<Transform>(scabbard).unwrap().cols[3], [10.0, 0.9, -0.3]);
-        assert_eq!(report.steps[0].log.omitted.len(), 1, "{:?}", report.steps[0].log.omitted);
+        assert_eq!(
+            report.steps[0].log.omitted.len(),
+            1,
+            "{:?}",
+            report.steps[0].log.omitted
+        );
 
-        // no body part polygon of that number: not placed, though the character has its own 69
-        let (mut w, [_, _, scabbard, _]) = world();
-        let c = character(&w);
-        w.get_mut::<Sockets>(c).unwrap().0.push(socket(2, "dummy 69", -0.1));
-        scabbard_at(&mut w, 2069);
+        // in a hand: the character's own polygon of that number
+        let (mut w, [_, _, scabbard, _]) =
+            with_sockets(vec![socket(2, "dummy 117", -0.1), socket(3, "dummy 2117", -0.3)]);
+        scabbard_at(&mut w, 2117, Shown::LeftHand);
         let report = run(&mut w, "hold-fromsoft-weapons{grip=one-handed}").unwrap();
-        assert!(w.get::<Attachment>(scabbard).is_none());
-        assert_eq!(w.get::<Transform>(scabbard), Some(&Transform::IDENTITY));
+        assert_eq!(w.get::<Attachment>(scabbard).unwrap().socket, SocketId(2));
+        assert_eq!(w.get::<Transform>(scabbard).unwrap().cols[3], [10.0, 0.9, -0.1]);
         let log = &report.steps[0].log;
         assert_eq!(
-            log.omitted["held weapon models at a body part's dummy polygon the worn body part does not have, not placed (where the game puts them is not known): wp_a_0300_1_l at 2069"],
+            log.counts["held weapon models attached at their dummy polygon"],
+            2
+        );
+        assert_eq!(
+            log.counts["held weapon models shown in a hand at a body part's polygon number (2000 + n), held at the character's own polygon n"],
             1
         );
-        assert_eq!(log.counts["held weapon models attached at their dummy polygon"], 1);
+
+        // on the body at a polygon no worn part has (the character's own 69 aside): left out of the scene, all of it
+        let (mut w, [_, _, scabbard, _]) = with_sockets(vec![socket(2, "dummy 69", -0.1)]);
+        scabbard_at(&mut w, 2069, Shown::Body);
+        let root = scabbard_root(&w);
+        let skeleton = w.get::<RigInstance>(scabbard).unwrap().skeleton;
+        // something that refers to the model alone (here, attached to its rig)
+        let placement = w.spawn();
+        w.insert(
+            placement,
+            Attachment {
+                rig: scabbard,
+                socket: SocketId(0),
+                offset: Transform::IDENTITY,
+            },
+        );
+        let report = run(&mut w, "hold-fromsoft-weapons{grip=one-handed}").unwrap();
+        for e in [root, skeleton, scabbard, placement] {
+            assert!(!w.is_alive(e), "{e:?}");
+        }
+        assert!(w.iter::<HeldWeapon>().all(|(r, _)| r != root));
+        let log = &report.steps[0].log;
+        assert_eq!(
+            log.counts["held weapon models shown on the body at a polygon no worn part has, left out of the scene (the game does not draw them)"],
+            1
+        );
+        assert_eq!(
+            log.counts["held weapon models attached at their dummy polygon"],
+            1
+        );
+
+        // a held weapon's model has that polygon (as the hand slot names it): refused
+        let (mut w, [_, katana, _, _]) = world();
+        let blade = w.get::<RigInstance>(katana).unwrap().skeleton;
+        let slot = HandSlot {
+            left: false,
+            index: 0,
+        };
+        w.insert(
+            blade,
+            Sockets(vec![socket(0, &format!("dummy {}", slot.global_id(69)), 0.0)]),
+        );
+        scabbard_at(&mut w, 2069, Shown::Body);
+        let err = run(&mut w, "hold-fromsoft-weapons{grip=one-handed}").unwrap_err();
+        assert!(err.contains("a held weapon's model has"), "{err}");
+
+        // a way of showing no stock slot uses: refused
+        let (mut w, _) = with_sockets(vec![socket(3, "dummy 2069", -0.3)]);
+        scabbard_at(&mut w, 2069, Shown::Other(2));
+        let err = run(&mut w, "hold-fromsoft-weapons{grip=one-handed}").unwrap_err();
+        assert!(err.contains("shown as 2"), "{err}");
     }
 
     #[test]

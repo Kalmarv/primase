@@ -16,7 +16,7 @@ use fromsoft_formats::flver::Model;
 use fromsoft_formats::{Binder, Game, Install, Keys, dcx::Decoder};
 use inputs::{Game as Data, Tool, install, keys, oodle};
 use primase_fromsoft::sekiro::WeaponParams;
-use primase_fromsoft::sekiro::effect_data::BODY_PART_DUMMIES;
+use primase_fromsoft::sekiro::effect_data::{BODY_PART_DUMMIES, Shown};
 use std::collections::BTreeSet;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -38,6 +38,12 @@ struct Census {
     hold_dummies_body: usize,
     /// Weapon rows naming a trace effect in some slot.
     with_trace: usize,
+    /// How the slots show their model (Elden Ring's `dispPosType`), in the right hand, the left and on the body: of the
+    /// slots at a polygon below 1000, and at a body part's (`2000 + n`); slots shown otherwise; slots that do not say.
+    shown_own: [usize; 3],
+    shown_body_part: [usize; 3],
+    shown_other: usize,
+    shown_unsaid: usize,
 }
 
 #[test]
@@ -98,10 +104,23 @@ fn the_weapon_params_name_parts_hold_rows_and_dummy_polygons_that_exist() -> Res
         }
         for row in &holds {
             for h in params.holds(*row)? {
-                for d in [h.right, h.left, h.both, h.left_hang, h.right_hang, h.left_both]
+                for hold in [h.right, h.left, h.both, h.left_hang, h.right_hang, h.left_both]
                     .into_iter()
                     .flatten()
                 {
+                    let d = hold.dummy;
+                    let kinds = if d < 1_000 {
+                        &mut c.shown_own
+                    } else {
+                        &mut c.shown_body_part
+                    };
+                    match hold.shown {
+                        Some(Shown::RightHand) => kinds[0] += 1,
+                        Some(Shown::LeftHand) => kinds[1] += 1,
+                        Some(Shown::Body) => kinds[2] += 1,
+                        Some(Shown::Other(_)) => c.shown_other += 1,
+                        None => c.shown_unsaid += 1,
+                    }
                     c.hold_dummies += 1;
                     if dummies.contains(&d) {
                         c.hold_dummies_found += 1;
@@ -125,6 +144,10 @@ fn the_weapon_params_name_parts_hold_rows_and_dummy_polygons_that_exist() -> Res
                 hold_dummies_found: 38,
                 hold_dummies_body: 0,
                 with_trace: 38,
+                shown_own: [0; 3],
+                shown_body_part: [0; 3],
+                shown_other: 0,
+                shown_unsaid: 38,
             }
         } else {
             Census {
@@ -137,6 +160,10 @@ fn the_weapon_params_name_parts_hold_rows_and_dummy_polygons_that_exist() -> Res
                 hold_dummies_found: 581,
                 hold_dummies_body: 194,
                 with_trace: 3_052,
+                shown_own: [156, 96, 330],
+                shown_body_part: [0, 12, 182],
+                shown_other: 0,
+                shown_unsaid: 0,
             }
         };
         assert_eq!(c, expected, "{game:?}");

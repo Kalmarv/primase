@@ -456,12 +456,14 @@ pub fn weapon_trace_uses(source: &SourceEvents, weapons: &[WeaponTraces], found:
 /// sword drawn in the right hand, at `2069`, the body part's polygon 69 on the left hip). Of the game's armour parts only the
 /// body parts carry dummy polygons (760 of the 834 `bd_` binders; none of the 552 `hd_`, 334 `am_`, 404 `lg_` and 142
 /// `hr_`), and the part moves the points where it has them: `bd_m_1360_l`'s polygon 31 stands 3.7 cm further out than the
-/// character's own. :observed[every armour part binder the path dictionary names] Of the hold rows' slots, 581 name a
-/// polygon below 1000 (the character's own) and 194 one of `2000` to `2999`, and no other thousand occurs; the engine's
+/// character's own. :observed[every armour part binder the path dictionary names] Of the hold rows' 776 slots that name a
+/// polygon, 582 name one below 1000 (581 of them the character's own; `408` it lacks) and 194 one of `2000` to `2999`,
+/// and no other thousand occurs; the engine's
 /// table of global id bases holds `1000` to `4000` beside the hand slots' (see [`HandSlot`]).
 /// :observed[every slot of every `WepAbsorpPosParam` row; the table in the 1.07.3 image] That `2000` is the body part's
 /// is a reading of these, not of the engine's mapping. :inferred The rows also name `2116` and `2117`, which no body part of
-/// the game has (the character's own model has both); where the game puts what they hold is not known.
+/// the game has and the character's own model has, both on `L_Weapon`; how the game takes them goes by how the slot shows
+/// the model ([`Shown`]).
 pub const BODY_PART_DUMMIES: i32 = 2_000;
 
 /// The global id of polygon `local` of part `part` of an Elden Ring character, as its sockets are named: a held weapon's
@@ -561,23 +563,70 @@ impl EquippedWeapons {
     }
 }
 
-/// Where one model of a weapon stands on the character in each way of holding it: the character's dummy polygon (its
-/// reference id), from the weapon's `WepAbsorpPosParam` row (`right_<n>`, `left_<n>`, `both_<n>`, `leftHang_<n>`,
-/// `rightHang_<n>`, `leftBoth_<n>` for model `n`); `None` where the row names none (-1 or 0).
+/// How Elden Ring shows a weapon model in one way of holding it: the slot's `dispPosType_<way>_<n>` beside its dummy
+/// polygon in the `WepAbsorpPosParam` row. Of the stock rows' slots that name a polygon, `0` goes with the right hand's
+/// polygons (164 slots: 20, 115, 400...), `1` with the left hand's (102 of the character's own: 21, 116, 401...; and the
+/// 12 slots of `2117`) and `3` with the polygons a weapon hangs at (332 of the character's own: 30, 31, 147...; and the
+/// other 182 body part polygons, `2000 + n`, `2116` among them); no other value occurs. :observed[every slot of every `WepAbsorpPosParam` row that names a polygon] That they name the hand and
+/// the body is a reading of these and of two game frames: the Caestus held in both hands shows its second fist (`2117`,
+/// shown `1`) on the left hand, and Leontiel's Greatsword's model 1 (`2116`, shown `3`, a polygon no worn part has) is not
+/// drawn at rest in the holds one run reached; why is not known. :inferred
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum Shown {
+    /// `0`.
+    RightHand,
+    /// `1`.
+    LeftHand,
+    /// `3`.
+    Body,
+    /// A value the stock rows' slots do not use.
+    Other(u8),
+}
+
+impl Shown {
+    /// The kind of a `dispPosType` value.
+    pub fn of(value: u8) -> Self {
+        match value {
+            0 => Shown::RightHand,
+            1 => Shown::LeftHand,
+            3 => Shown::Body,
+            v => Shown::Other(v),
+        }
+    }
+}
+
+/// Where a model stands in one way of holding it: the character's dummy polygon (its reference id) and, in Elden Ring,
+/// how the slot shows it (Sekiro's rows have no such field).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct Hold {
+    pub dummy: i32,
+    pub shown: Option<Shown>,
+}
+
+impl Hold {
+    /// At polygon `dummy`, shown as the row does not say.
+    pub fn at(dummy: i32) -> Self {
+        Hold { dummy, shown: None }
+    }
+}
+
+/// Where one model of a weapon stands on the character in each way of holding it, from the weapon's `WepAbsorpPosParam`
+/// row (`right_<n>`, `left_<n>`, `both_<n>`, `leftHang_<n>`, `rightHang_<n>`, `leftBoth_<n>` for model `n`, and in Elden
+/// Ring their `dispPosType_<way>_<n>`); `None` where the row names no polygon (-1 or 0).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Holds {
     /// Held in the right hand.
-    pub right: Option<i32>,
+    pub right: Option<Hold>,
     /// Held in the left hand.
-    pub left: Option<i32>,
+    pub left: Option<Hold>,
     /// The right hand's weapon held with both hands.
-    pub both: Option<i32>,
+    pub both: Option<Hold>,
     /// The left hand's weapon hung while the right's is held with both hands.
-    pub left_hang: Option<i32>,
+    pub left_hang: Option<Hold>,
     /// The right hand's weapon hung while the left's is held with both hands.
-    pub right_hang: Option<i32>,
+    pub right_hang: Option<Hold>,
     /// The left hand's weapon held with both hands.
-    pub left_both: Option<i32>,
+    pub left_both: Option<Hold>,
 }
 
 /// A model of a weapon the character holds (`fromsoft.held_weapon`, on the root of the model's asset: a form of the
@@ -994,7 +1043,10 @@ mod tests {
             left: false,
             index: 0,
         };
-        assert_eq!(part_dummy_id(Game::EldenRing, "wp_a_0550_l", Some(right), 301), 10_301);
+        assert_eq!(
+            part_dummy_id(Game::EldenRing, "wp_a_0550_l", Some(right), 301),
+            10_301
+        );
         assert_eq!(part_dummy_id(Game::EldenRing, "bd_m_1360_l", None, 69), 2_069);
         assert_eq!(part_dummy_id(Game::EldenRing, "BD_M_1360_L", None, 69), 2_069);
         assert_eq!(part_dummy_id(Game::EldenRing, "fg_a_7001", None, 15), 15);

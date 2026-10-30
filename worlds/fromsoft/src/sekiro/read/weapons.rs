@@ -10,7 +10,7 @@
 //! one the player's model has).
 //!
 //! [`EquippedWeapons`]: crate::sekiro::effect_data::EquippedWeapons
-use crate::sekiro::effect_data::{Holds, Trace};
+use crate::sekiro::effect_data::{Hold, Holds, Shown, Trace};
 use fromsoft_formats::param::{Param, Row};
 use fromsoft_formats::{Archive, Game, Install, Result, dcx::Decoder};
 
@@ -37,13 +37,15 @@ pub const TRACE_SLOTS: usize = 8;
 
 /// Where a `WEP_ABSORP_POS_PARAM_ST` row keeps its dummy polygons: the row size, the first model's block (five s16: held
 /// in the right hand, in the left, with both hands, hung on the left, hung on the right; one block per model, `models` of
-/// them) and the first of the `leftBoth_<n>` s16s (held with both hands in the left, one per model).
+/// them), the first of the `leftBoth_<n>` s16s (held with both hands in the left, one per model) and, in Elden Ring, the
+/// first of the `dispPosType_<way>_<n>` u8s (six per model: right, left, right both, left both, right hung, left hung).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HoldLayout {
     pub size: usize,
     pub first: usize,
     pub models: usize,
     pub left_both: usize,
+    pub shown: Option<usize>,
 }
 
 /// The layouts of `game`'s two params.
@@ -62,6 +64,7 @@ pub fn layouts(game: Game) -> (WeaponLayout, HoldLayout) {
                 first: 8,
                 models: 4,
                 left_both: 52,
+                shown: Some(60),
             },
         ),
         _ => (
@@ -77,6 +80,7 @@ pub fn layouts(game: Game) -> (WeaponLayout, HoldLayout) {
                 first: 4,
                 models: 6,
                 left_both: 70,
+                shown: None,
             },
         ),
     }
@@ -221,13 +225,21 @@ impl WeaponParams {
         (0..l.models)
             .map(|m| {
                 let at = l.first + 10 * m;
+                // the slot's polygon and, where the row says, how it shows the model (way: the dispPosType's place)
+                let hold = |offset: usize, field: &str, way: usize| -> Result<Option<Hold>> {
+                    let shown = match l.shown {
+                        Some(first) => Some(Shown::of(bytes::<1>(r, first + 6 * m + way, "dispPosType")?[0])),
+                        None => None,
+                    };
+                    Ok(dummy(s16(r, offset, field)?).map(|dummy| Hold { dummy, shown }))
+                };
                 Ok(Holds {
-                    right: dummy(s16(r, at, "right_n")?),
-                    left: dummy(s16(r, at + 2, "left_n")?),
-                    both: dummy(s16(r, at + 4, "both_n")?),
-                    left_hang: dummy(s16(r, at + 6, "leftHang_n")?),
-                    right_hang: dummy(s16(r, at + 8, "rightHang_n")?),
-                    left_both: dummy(s16(r, l.left_both + 2 * m, "leftBoth_n")?),
+                    right: hold(at, "right_n", 0)?,
+                    left: hold(at + 2, "left_n", 1)?,
+                    both: hold(at + 4, "both_n", 2)?,
+                    left_hang: hold(at + 6, "leftHang_n", 5)?,
+                    right_hang: hold(at + 8, "rightHang_n", 4)?,
+                    left_both: hold(l.left_both + 2 * m, "leftBoth_n", 3)?,
                 })
             })
             .collect()
@@ -323,20 +335,64 @@ mod tests {
         assert_eq!(
             holds[0],
             Holds {
-                right: Some(20),
-                left: Some(21),
+                right: Some(Hold::at(20)),
+                left: Some(Hold::at(21)),
                 both: None,
                 left_hang: None,
-                right_hang: Some(147),
+                right_hang: Some(Hold::at(147)),
                 left_both: None,
             }
         );
         assert_eq!(
             (holds[1].right, holds[1].left, holds[1].left_both),
-            (Some(147), None, Some(9))
+            (Some(Hold::at(147)), None, Some(Hold::at(9)))
         );
         assert!(params.weapon(1).is_err());
         assert!(params.holds(1).is_err());
+    }
+
+    /// Elden Ring's rows say how each slot shows its model (`dispPosType_<way>_<n>`, six per model after the
+    /// `leftBoth_<n>`): model 1's both-hands slot at 2117 shown in the left hand, its right-hand slot at 2066 on the body.
+    #[test]
+    fn elden_rings_slots_say_how_they_show_the_model() {
+        let (wl, hl) = layouts(Game::EldenRing);
+        let shown = hl.shown.unwrap();
+        let h = row(
+            42,
+            hl.size,
+            &[
+                (hl.first, &115i16.to_le_bytes()),
+                (hl.first + 10, &2066i16.to_le_bytes()),
+                (hl.first + 14, &2117i16.to_le_bytes()),
+                (hl.left_both + 2, &2117i16.to_le_bytes()),
+                (shown, &[0]),
+                (shown + 6, &[3, 3, 1, 1, 3, 3]),
+            ],
+        );
+        let params = WeaponParams {
+            weapons: param("EQUIP_PARAM_WEAPON_ST", wl.size, row(1, wl.size, &[])),
+            holds: param("WEP_ABSORP_POS_PARAM_ST", hl.size, h),
+            layouts: (wl, hl),
+        };
+        let holds = params.holds(42).unwrap();
+        assert_eq!(holds.len(), 4);
+        let at = |dummy, shown| {
+            Some(Hold {
+                dummy,
+                shown: Some(shown),
+            })
+        };
+        assert_eq!(holds[0].right, at(115, Shown::RightHand));
+        assert_eq!(
+            (holds[1].right, holds[1].both, holds[1].left_both, holds[1].left),
+            (
+                at(2066, Shown::Body),
+                at(2117, Shown::LeftHand),
+                at(2117, Shown::LeftHand),
+                None
+            )
+        );
+        assert_eq!(Shown::of(2), Shown::Other(2));
     }
 
     #[test]
