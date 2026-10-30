@@ -147,6 +147,7 @@ fn an_existing_atmosphere_is_kept_and_the_unit_is_checked() {
         exposure: None,
         volumetric: None,
         auto_exposure: None,
+        tone_map: None,
     });
     run(&mut w, "1").unwrap();
     assert!(w.resource::<Atmosphere>().unwrap().fog.is_none());

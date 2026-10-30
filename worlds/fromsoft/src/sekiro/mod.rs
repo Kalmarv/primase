@@ -38,6 +38,7 @@ pub use read::extras::{Report as ExtrasReport, light_record, records as read_map
 pub use read::irradiance;
 pub use read::messages::npc_names_into_world;
 pub use read::objects::Report as ObjectCollisionReport;
+pub use read::post;
 pub use read::render_graph::Report as RenderGraphReport;
 pub use read::textures::tpf_image;
 pub use read::visibility::decode as decode_visibility;

@@ -8,7 +8,10 @@
 
 pub mod asset;
 mod atmosphere;
-pub use atmosphere::{Atmosphere, AutoExposure, Exposure, ExposureMeter, Fog, FogFalloff, VolumetricFog};
+pub use atmosphere::{
+    Atmosphere, AutoExposure, ColourLut, Exposure, ExposureMeter, Fog, FogFalloff, ReinhardCurve, ToneMap,
+    VolumetricFog,
+};
 pub mod clip;
 mod clip_identity;
 pub use clip_identity::{ClipKey, ClipLength};

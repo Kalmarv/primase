@@ -1,7 +1,9 @@
 //! What a source says about the air between the camera and the scene, and about how the camera sees it
 //! (`core.atmosphere`, a world resource beside `core.environment`): fog, exposure, the camera's auto exposure, and a
-//! source's volumetric fog in the source's own units (shown, not drawn). Sky, scattering and tone curves are not here
-//! until their meaning and units are established for a source.
+//! source's volumetric fog in the source's own units (shown, not drawn). A tabled tone curve and colour lookup describe the established display processing.
+
+mod post;
+pub use post::{ColourLut, ReinhardCurve, ToneMap};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -12,6 +14,8 @@ use crate::{JsonError, Resource, World};
 /// established its meaning). A scene-wide fact, kept by every part of a split world as `core.environment`'s ambient is.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Atmosphere {
+    /// The display processing after exposure and bloom, when fully established by a source.
+    pub tone_map: Option<ToneMap>,
     pub fog: Option<Fog>,
     pub exposure: Option<Exposure>,
     /// A froxel-volume fog as the source stores it, in the source's own units: shown, never drawn (see [`VolumetricFog`]).
@@ -280,6 +284,9 @@ impl Atmosphere {
     /// exposure any finite number of stops, an auto exposure's fields as [`AutoExposure`] states them, and not both an
     /// exposure and an auto exposure.
     fn check(&self) -> Result<(), String> {
+        if let Some(tone_map) = &self.tone_map {
+            tone_map.check()?;
+        }
         if let Some(fog) = &self.fog {
             if let Some(c) = (!fog.colour.iter().all(|x| x.is_finite() && *x >= 0.)).then_some(fog.colour) {
                 return Err(format!("fog colour {c:?} is not finite and at least 0"));
@@ -324,7 +331,7 @@ impl Atmosphere {
 
 impl Resource for Atmosphere {
     const NAME: &'static str = "core.atmosphere";
-    const VERSION: u32 = 3;
+    const VERSION: u32 = 4;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }
@@ -347,6 +354,7 @@ mod tests {
             exposure: Some(Exposure { stops: -1.5 }),
             volumetric: None,
             auto_exposure: None,
+            tone_map: None,
         }
     }
 
@@ -383,13 +391,13 @@ mod tests {
                         "falloff": {"Linear": {"start": 10.0, "end": 400.0}}},
                 "exposure": {"stops": -1.5},
                 "volumetric": null,
-                "auto_exposure": null
+                "auto_exposure": null, "tone_map": null
             }))
         );
         assert_eq!(
             Atmosphere::default().to_json().unwrap(),
             Some(
-                serde_json::json!({"fog": null, "exposure": null, "volumetric": null, "auto_exposure": null})
+                serde_json::json!({"fog": null, "exposure": null, "volumetric": null, "auto_exposure": null, "tone_map": null})
             )
         );
     }
@@ -477,6 +485,7 @@ mod tests {
                     exposure: None,
                     volumetric: None,
                     auto_exposure: None,
+                    tone_map: None,
                 },
                 "fog colour [0.1, -0.1, 0.1] is not finite and at least 0",
             ),
@@ -486,6 +495,7 @@ mod tests {
                     exposure: Some(Exposure { stops: f32::INFINITY }),
                     volumetric: None,
                     auto_exposure: None,
+                    tone_map: None,
                 },
                 "exposure inf stops is not finite",
             ),
