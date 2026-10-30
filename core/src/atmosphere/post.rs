@@ -24,7 +24,8 @@ pub struct ReinhardCurve {
 }
 
 /// A cubic RGB lookup, red fastest, then green, then blue. Before lookup, raise RGB to `input_power`;
-/// sample with trilinear filtering at texel centres, clamping to the cube's edges.
+/// sample with trilinear filtering at texel centres, clamping to the cube's edges. The values and filtered result are
+/// sRGB-encoded display RGB. Decode after filtering when writing to a target that encodes sRGB on write.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ColourLut {
     pub side: u32,

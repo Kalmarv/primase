@@ -1,6 +1,6 @@
 //! Named post and volumetric-fog records, exactly as one GPARAM stores them. No layers are merged and no time keys
 //! are interpolated here. In particular an absent Reinhard contrast is absent, not a renderer default.
-use fromsoft_formats::gparam::{Gparam, Value};
+use fromsoft_formats::gparam::{Gparam, TimeAxis, Value};
 use fromsoft_formats::{Archive, Result, dcx::Decoder};
 
 /// One authored value; the hour is absent in GPARAM versions without time keys.
@@ -51,6 +51,9 @@ pub struct Fog {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Records {
+    pub version: u32,
+    /// The stored keys' time axis, needed before treating a key as an hour of the game clock.
+    pub time: Option<TimeAxis>,
     pub tone: Tone,
     pub fog: Fog,
 }
@@ -123,6 +126,8 @@ impl Records {
         let grading = |key| track(data, "ColorGrading[Yebis]", key, int);
         let fog = |key, f| track(data, "VolumetricFog ParamEditor", key, f);
         Ok(Self {
+            version: data.version,
+            time: data.time,
             tone: Tone {
                 mode: track(data, "Tone Map[Yebis]", "GS Presents - ToneMap-ToneMapMode", int)?,
                 reinhard_contrast: tone("GS Presents - ToneMap-ReinhardContrast", float)?,
