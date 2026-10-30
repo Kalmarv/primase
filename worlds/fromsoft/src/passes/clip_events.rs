@@ -1,6 +1,12 @@
 //! Map reader-typed source events to core in identical order. This pass parses no bytes.
+//!
+//! An event core cannot carry (a time that is not finite, or an end before its start: the installs store 2 such events in
+//! Sekiro and 13 in Elden Ring) is left out by name, and the clip's other events are lowered; how the game plays such an
+//! event is not read. The refusals name source event indices; [`core_index`] gives the index an event has in
+//! `core.clip_events`.
 use crate::sekiro::character_data::ClipEvents as SourceEvents;
 use fromsoft_formats::Game;
+use fromsoft_formats::tae::Event;
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Clip, ClipEvent, ClipEvents, Component, World};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,6 +26,29 @@ pub(crate) fn game_text(game: Game) -> &'static str {
         Game::EldenRing => "elden",
     }
 }
+/// Why a source event has no entry in `core.clip_events`, or `None` when it is lowered: core carries an interval whose
+/// start is finite and whose end, where it has one, is finite and not before the start. A start below 0 is carried.
+pub fn left_out(event: &Event) -> Option<&'static str> {
+    if !event.start.is_finite() || !event.end.is_finite() {
+        Some("a time that is not finite")
+    } else if event.end < event.start {
+        Some("it ends before it starts, and how the game plays that is not read")
+    } else {
+        None
+    }
+}
+
+/// The index in the clip's `core.clip_events` of source event `index` of `events`, or `None` where it is left out
+/// ([`left_out`]) or past the end.
+pub fn core_index(events: &[Event], index: usize) -> Option<u32> {
+    let event = events.get(index)?;
+    if left_out(event).is_some() {
+        return None;
+    }
+    let before = events[..index].iter().filter(|e| left_out(e).is_none()).count();
+    u32::try_from(before).ok()
+}
+
 pub const LOWER_FROMSOFT_CLIP_EVENTS: PassSpec = PassSpec {
     name: "lower-fromsoft-clip-events",
     options: &[OptionSpec::required(
@@ -62,11 +91,12 @@ impl Pass for LowerFromSoftClipEvents {
             };
             for (index, event) in source.events.iter().enumerate() {
                 // a start below 0 is stored and kept as it is (core.clip_events carries it unchanged)
-                if !event.start.is_finite() || !event.end.is_finite() || event.end < event.start {
-                    return Err(format!(
-                        "{} event {index}: invalid source interval {}..{}",
-                        source.file, event.start, event.end
+                if let Some(reason) = left_out(event) {
+                    lowered.refusals.push(format!(
+                        "source event {index} TAE {} at {}..{}: left out of core.clip_events, {reason}",
+                        event.kind, event.start, event.end
                     ));
+                    continue;
                 }
                 let typed = source.typed.get(index);
                 if let Some(typed) = typed {
@@ -206,5 +236,67 @@ mod tests {
             (-1. / 30., Some(0.3))
         );
         assert!(lowered.verify(e, &world).is_ok());
+    }
+    /// An event that ends before it starts (c4310's `a000_008046` holds a type 129 at 0..-1/30) is left out by name; the
+    /// clip's other events lower, and the ones after it move down one index in core, as `core_index` says.
+    #[test]
+    fn an_event_that_ends_before_it_starts_is_left_out_by_name_and_the_rest_lower() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.insert(
+            e,
+            Clip {
+                name: "clip".into(),
+                duration: 1.,
+                extrapolation: primase_core::Extrapolation::Hold,
+                channels: vec![],
+                root_motion: None,
+                additive: None,
+            },
+        );
+        let event = |kind, start, end| fromsoft_formats::tae::Event {
+            kind,
+            unk04: 0,
+            start,
+            end,
+            parameters: vec![],
+        };
+        let events = vec![event(16, 0., 0.1), event(129, 0., -1. / 30.), event(96, 0.2, 0.3)];
+        world.insert(
+            e,
+            SourceEvents {
+                file: "c4310.tae".into(),
+                animation: 8046,
+                header: fromsoft_formats::tae::Header::None,
+                file_name: None,
+                authored_events: events.clone(),
+                typed: vec![DecodedEvent::default(); 3],
+                events: events.clone(),
+            },
+        );
+        LowerFromSoftClipEvents {
+            game: Game::EldenRing,
+        }
+        .run(&mut world, &mut PassLog::default())
+        .unwrap();
+        let lowered = world.get::<ClipEvents>(e).unwrap();
+        assert_eq!(
+            lowered.events.iter().map(|e| e.kind).collect::<Vec<_>>(),
+            [16, 96]
+        );
+        assert!(lowered.verify(e, &world).is_ok());
+        assert!(
+            lowered
+                .refusals
+                .iter()
+                .any(|r| r.starts_with("source event 1 TAE 129 at 0..-0.033")
+                    && r.contains("ends before it starts")),
+            "{:?}",
+            lowered.refusals
+        );
+        assert_eq!(
+            (0..4).map(|i| core_index(&events, i)).collect::<Vec<_>>(),
+            [Some(0), None, Some(1), None]
+        );
     }
 }

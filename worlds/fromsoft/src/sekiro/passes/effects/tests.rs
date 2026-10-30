@@ -462,6 +462,29 @@ fn a_clips_effect_uses_become_spawns_of_the_lowered_systems_at_the_sockets_named
             read: Vec::new(),
         },
     );
+    // the clip's source events: event 5 ends before it starts and has no core.clip_events entry, so source event 7 is core's
+    // event 6
+    let events: Vec<fromsoft_formats::tae::Event> = (0..10)
+        .map(|i| fromsoft_formats::tae::Event {
+            kind: 96,
+            unk04: 0,
+            start: 0.1 * i as f32,
+            end: if i == 5 { 0.0 } else { 0.1 * i as f32 + 0.1 },
+            parameters: Vec::new(),
+        })
+        .collect();
+    world.insert(
+        clip,
+        crate::sekiro::character_data::ClipEvents {
+            file: "c0000.tae".into(),
+            animation: 3000,
+            header: fromsoft_formats::tae::Header::None,
+            file_name: None,
+            authored_events: events.clone(),
+            typed: vec![crate::sekiro::character_data::DecodedEvent::default(); events.len()],
+            events,
+        },
+    );
     let mut log = PassLog::default();
     pass().run(&mut world, &mut log).unwrap();
     let effects = world.get::<ClipEffects>(clip).unwrap();
@@ -480,7 +503,7 @@ fn a_clips_effect_uses_become_spawns_of_the_lowered_systems_at_the_sockets_named
     assert_eq!((first.start, first.end), (0.5, None));
     assert_eq!(
         (second.socket.as_deref(), second.follow, second.event),
-        (None, false, Some(7))
+        (None, false, Some(6))
     );
     // a repeating event stops the effect at its end; a one-shot one lets it play out
     assert_eq!(second.end, Some(1.5));

@@ -12,11 +12,12 @@
 //! The installs also store events that begin before their clip: 6 in Sekiro and 26 in Elden Ring, every one at exactly
 //! -1/30 s. The player's Elden Ring animations hold 8 of them (type 16): the 2 animations with a motion file of their own
 //! load and lower to `core.clip_events` with the start as stored, and the other 6, which have none, are named with where
-//! their motion comes from.
+//! their motion comes from. 2 Sekiro and 13 Elden Ring events end before they start; each is left out by name, and its
+//! clip's other events lower.
 //!
 //! Needs `installs.{sekiro,elden}`, `keys.{sekiro,elden}`, `tools.oodle6` and `oracles.uxm.{sekiro,elden}/dictionary.txt`
 //! (the census), `installs.elden`, `keys.elden`, `tools.oodle6` and `oracles.uxm.elden/dictionary.txt` (the player's
-//! events); a game that is not configured is skipped.
+//! events), `installs.elden`, `keys.elden` and `tools.oodle6` (c4310's); a game that is not configured is skipped.
 mod inputs;
 
 use fromsoft_formats::tae::{Header, Tae};
@@ -151,7 +152,7 @@ fn events_stored_shorter_than_their_template_keep_the_fields_they_store() -> Res
 }
 
 /// The events of the installs that begin before their clip, by type: every one starts at exactly -1/30 s (the f32 the
-/// files store), none has a non-finite time, and they are these.
+/// files store), none has a non-finite time, and they are these; and the events that end before they start.
 #[test]
 fn the_events_that_begin_before_their_clip_all_start_one_frame_early() -> Result<()> {
     let Some(library) = oodle(Tool::Oodle6) else {
@@ -164,12 +165,16 @@ fn the_events_that_begin_before_their_clip_all_start_one_frame_early() -> Result
     };
     let mut early: BTreeMap<Game, BTreeMap<i32, usize>> = BTreeMap::new();
     let mut other_starts: Vec<(Game, String, f32)> = Vec::new();
+    let mut backwards: BTreeMap<Game, BTreeMap<i32, usize>> = BTreeMap::new();
     let mut nonfinite = 0usize;
     let walked = each_event_file(&decoder, |game, path, tae| {
         for animation in &tae.animations {
             for event in &animation.events {
                 if !event.start.is_finite() || !event.end.is_finite() {
                     nonfinite += 1;
+                }
+                if event.end < event.start {
+                    *backwards.entry(game).or_default().entry(event.kind).or_default() += 1;
                 }
                 if event.start < 0.0 {
                     *early.entry(game).or_default().entry(event.kind).or_default() += 1;
@@ -203,6 +208,13 @@ fn the_events_that_begin_before_their_clip_all_start_one_frame_early() -> Result
                 (787, 1),
             ]
             .into(),
+        };
+        assert_eq!(found, expected, "{}", game.name());
+        // and those that end before they start, which lower-fromsoft-clip-events leaves out by name
+        let found = backwards.remove(&game).unwrap_or_default();
+        let expected: BTreeMap<i32, usize> = match game {
+            Game::Sekiro => [(128, 1), (224, 1)].into(),
+            Game::EldenRing => [(0, 1), (129, 11), (601, 1)].into(),
         };
         assert_eq!(found, expected, "{}", game.name());
     }
@@ -400,5 +412,53 @@ fn the_players_events_that_begin_before_their_clip_lower_as_stored() -> Result<(
             .collect();
         assert_eq!(early, [(16, -1.0 / 30.0, Some(clips[name.as_str()]))], "{name}");
     }
+    Ok(())
+}
+
+/// c4310's `a000_008046` holds a type 129 event at 0..-1/30 s (its source event 9): `lower-fromsoft-clip-events` leaves
+/// that one out by name and lowers the clip's other events in order.
+#[test]
+fn an_event_that_ends_before_it_starts_is_left_out_and_its_clips_other_events_lower() -> Result<()> {
+    let Some(lowered) = lowered_clips("c4310", &["a000_008046"])? else {
+        return Ok(());
+    };
+    let (loaded, entity) = (&lowered.world, lowered.clips["a000_008046"]);
+    let source = loaded
+        .get::<primase_fromsoft::sekiro::character_data::ClipEvents>(entity)
+        .ok_or("no source events")?;
+    let events = loaded.get::<ClipEvents>(entity).ok_or("no core.clip_events")?;
+    assert_eq!(
+        (
+            source.events[9].kind,
+            source.events[9].start,
+            source.events[9].end
+        ),
+        (129, 0.0, -1.0 / 30.0)
+    );
+    let kept: Vec<(i64, f32)> = source
+        .events
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != 9)
+        .map(|(_, e)| (i64::from(e.kind), e.start))
+        .collect();
+    assert_eq!(
+        events
+            .events
+            .iter()
+            .map(|e| (e.kind, e.start))
+            .collect::<Vec<_>>(),
+        kept
+    );
+    let named: Vec<&String> = events
+        .refusals
+        .iter()
+        .filter(|r| r.contains("left out of core.clip_events"))
+        .collect();
+    assert_eq!(named.len(), 1, "{:?}", events.refusals);
+    assert!(
+        named[0].starts_with("source event 9 TAE 129 at 0..-0.033"),
+        "{named:?}"
+    );
     Ok(())
 }

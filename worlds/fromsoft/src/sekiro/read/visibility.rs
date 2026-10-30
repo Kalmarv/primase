@@ -15,6 +15,13 @@ pub fn decode(character: &str, events: &[Event]) -> ClipVisibility {
     {
         // The stock files hold such events (Elden Ring's c3370 and c3450: 711 from -1/30 s); whether the game applies one
         // from the clip's first frame, or when, is not read, so the read neither moves it to 0 nor plays it.
+        if let Some(reason) = crate::passes::clip_events::left_out(event) {
+            out.refusals.push(format!(
+                "TAE {} at {}..{}: {reason}",
+                event.kind, event.start, event.end
+            ));
+            continue;
+        }
         if event.start < 0. {
             out.refusals.push(format!(
                 "TAE {} at {}: begins before its clip, and how the game applies that is not read",
@@ -148,6 +155,14 @@ mod tests {
             decoded.refusals
         );
         assert!(decoded.refusals[0].contains("begins before its clip"));
+        // one that ends before it starts is refused by name too, not turned into an invalid change
+        let backwards = decode("c3370", &[event(711, 0.5, 0.3, 3, 1)]);
+        assert!(backwards.changes.is_empty());
+        assert!(
+            backwards.refusals[0].contains("ends before it starts"),
+            "{:?}",
+            backwards.refusals
+        );
     }
     #[test]
     fn imported_records_keep_mask_facts_and_import_cycles_are_refused() {

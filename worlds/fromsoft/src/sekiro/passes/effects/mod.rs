@@ -342,6 +342,11 @@ impl LowerFromSoftEffects {
                 );
                 continue;
             }
+            // a spawn names its event by its index in core.clip_events, which leaves out what core cannot carry
+            let events: Vec<fromsoft_formats::tae::Event> = world
+                .get::<crate::sekiro::character_data::ClipEvents>(*clip)
+                .map(|source| source.events.clone())
+                .unwrap_or_default();
             let mut effects = ClipEffects {
                 origin: Some("effects started by animation events".to_owned()),
                 spawns: Vec::new(),
@@ -391,7 +396,9 @@ impl LowerFromSoftEffects {
                         Vec::new()
                     },
                     socket,
-                    event: Some(u.event),
+                    event: usize::try_from(u.event)
+                        .ok()
+                        .and_then(|i| crate::passes::clip_events::core_index(&events, i)),
                 });
                 log.count("effects started by animation events", 1);
             }

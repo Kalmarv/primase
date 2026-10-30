@@ -212,6 +212,12 @@ pub const STATE_CONDITION: &str =
 pub const BEFORE_CLIP: &str =
     "effects whose event begins before its clip (a start below 0; how the game starts those is not read)";
 
+/// What an effect's event that `core.clip_events` leaves out (a time that is not finite, or an end before its start:
+/// [`crate::passes::clip_events::left_out`]) is counted as: the spawn could name no event, and how the game plays such an
+/// event is not read.
+pub const LEFT_OUT: &str =
+    "effects whose event core.clip_events leaves out (a time that is not finite, or an end before its start)";
+
 /// The event types that name an effect some way, for an event whose fields were not read.
 const EFFECT_EVENTS: &[i32] = &[96, 118, 120, 114, 115, 117, 792];
 
@@ -292,6 +298,10 @@ pub fn clip_effect_uses(source: &SourceEvents) -> ClipEffectUses {
             *lost
                 .entry("an effect on a weapon's dummy polygon (the weapon's model is not read)")
                 .or_default() += 1;
+            continue;
+        }
+        if crate::passes::clip_events::left_out(event).is_some() {
+            *lost.entry(LEFT_OUT).or_default() += 1;
             continue;
         }
         if event.start < 0.0 {
@@ -391,6 +401,7 @@ pub fn weapon_trace_uses(source: &SourceEvents, weapons: &[WeaponTraces], found:
     let mut conditioned = 0u32;
     let mut short = 0u32;
     let mut before = 0u32;
+    let mut left_out = 0u32;
     for (index, event) in source.events.iter().enumerate().filter(|(_, e)| e.kind == 1) {
         // an attack under a special-effect state is a runtime alternative (see STATE_CONDITION)
         let state = source
@@ -409,6 +420,10 @@ pub fn weapon_trace_uses(source: &SourceEvents, weapons: &[WeaponTraces], found:
         let run = trace_run(&trace, &w.dummies);
         if run.len() < 2 {
             short += 1;
+            continue;
+        }
+        if crate::passes::clip_events::left_out(event).is_some() {
+            left_out += 1;
             continue;
         }
         if event.start < 0.0 {
@@ -444,6 +459,7 @@ pub fn weapon_trace_uses(source: &SourceEvents, weapons: &[WeaponTraces], found:
         );
         lost(SHORT_TRACE, short);
         lost(BEFORE_CLIP, before);
+        lost(LEFT_OUT, left_out);
     }
     if attacks == 0 {
         return;
@@ -959,7 +975,7 @@ mod tests {
     }
 
     /// An effect event, or an attack whose window draws a trail, that begins before its clip is counted by name, not moved to
-    /// 0; one that begins at 0 is used.
+    /// 0, as is one that ends before it starts; one that begins at 0 is used.
     #[test]
     fn an_effect_whose_event_begins_before_its_clip_is_counted_not_used() {
         let weapons = [WeaponTraces {
@@ -983,11 +999,25 @@ mod tests {
             event(96, 0.0, 0.1, spawn(4001, 220, true)),
             event(1, -1.0 / 30.0, 1.0 / 30.0, Vec::new()),
             event(1, 0.5, 0.6, Vec::new()),
+            // ends before it starts: core.clip_events leaves it out, so no use names it
+            event(96, 0.5, 0.3, spawn(4002, 220, true)),
+            event(1, 0.9, 0.8, Vec::new()),
         ]);
         let mut found = clip_effect_uses(&clip);
         weapon_trace_uses(&clip, &weapons, &mut found);
         let used: Vec<_> = found.uses.iter().map(|u| (u.event, u.effect, u.start)).collect();
         assert_eq!(used, [(1, 4001, 0.0), (3, 401_000, 0.5)]);
+        assert_eq!(
+            found
+                .lost
+                .iter()
+                .filter(|(r, _)| r == LEFT_OUT)
+                .map(|(_, n)| n)
+                .sum::<u32>(),
+            2,
+            "{:?}",
+            found.lost
+        );
         assert_eq!(
             found
                 .lost
