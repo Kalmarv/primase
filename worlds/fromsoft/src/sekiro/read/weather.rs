@@ -45,8 +45,12 @@ impl Wetness {
 impl Resource for Wetness {
     const NAME: &'static str = "fromsoft.wetness";
 
-    fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, serde_json::Error> {
-        serde_json::to_value(self).map(Some)
+    fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, primase_core::json::JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+
+    fn verify(&self, _world: &World) -> std::result::Result<(), String> {
+        self.validate()
     }
 }
 
