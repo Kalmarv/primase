@@ -335,6 +335,7 @@ impl Pass for LowerAnvilSky {
                 exposure: None,
                 volumetric: None,
                 auto_exposure: None,
+                tone_map: None,
             });
             if self.sphere {
                 let material = world.spawn();
