@@ -63,3 +63,21 @@ material, neither its own nor any placement variant's: recorded as dropped primi
 triangles go with them, as the ledger counts), the triangles also counted. A mesh left with no primitive is removed
 with its per-primitive components (`World::remove_mesh`), the names it took recorded; the entity stays. Running it
 is a program's choice for a target that refuses primitives without a material; another recipe may give them one.
+
+## Example
+
+```rust
+use primase_meshops::{Mesh, compact};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mesh = Mesh {
+        positions: vec![[0.0, 0.0, 0.0].into(), [1.0, 0.0, 0.0].into(), [0.0, 1.0, 0.0].into(), [9.0, 9.0, 9.0].into()],
+        indices: vec![0, 1, 2],
+        ..Mesh::default()
+    };
+    assert_eq!(compact(&mesh)?.positions.len(), 3);
+    Ok(())
+}
+```
+
+This example needs no game files.

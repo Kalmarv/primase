@@ -551,3 +551,17 @@ a literal quartet checks placement words, frame conversion and graph/prototype c
 all placements and task/goal/session matches separately for all ten installed base maps with every layer PAK
 whose quartet namespace names that map. These are all authored layer occurrences, not a selected runtime set;
 the reader's dropped count is always zero.
+
+## Example
+
+```rust
+use primase_core::pass::PassRegistry;
+
+fn main() {
+    let mut passes = PassRegistry::new();
+    primase_shred::register(&mut passes);
+    println!("{}", passes.describe("lower-shred-materials").expect("registered pass"));
+}
+```
+
+This example needs no game files.

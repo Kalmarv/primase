@@ -33,3 +33,14 @@ its exact rule.
 Checks: hand-worked fixtures in each module's tests. Blender 4.3.2's importer is an independent consumer of the same
 deformation (eight influences, linear blend skinning), verified against hand-worked values by a sentinel glTF kept with
 the private oracle tools.
+
+## Example
+
+```rust
+fn main() {
+    let q = primase_animation::quat::slerp([0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 1.0], 0.5);
+    assert_eq!(primase_animation::quat::rotate(q, [1.0, 0.0, 0.0]), [1.0, 0.0, 0.0]);
+}
+```
+
+This example needs no game files.

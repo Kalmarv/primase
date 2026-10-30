@@ -32,3 +32,24 @@ Header references: [DDS header](https://learn.microsoft.com/en-us/windows/win32/
 
 Censuses deduplicate input files by SHA256 within each configured root, reporting
 path counts separately from checked distinct contents. All paths are read and hashed.
+
+## Example
+
+```rust
+use primase_core::{ColorSpace, TexFormat, TexRole, Texture};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let image = Texture {
+        width: 1, height: 1, format: TexFormat::Rgba8Unorm,
+        levels: vec![vec![255, 0, 0, 255]],
+        color_space: ColorSpace::Srgb, role: TexRole::Other, normal: None,
+    };
+    let bytes = primase_dds::write_dx10(&image)?;
+    let read = primase_dds::read(&bytes)?;
+    assert_eq!(read.levels, image.levels);
+    assert_eq!(read.color_space, image.color_space);
+    Ok(())
+}
+```
+
+This example needs no game files.

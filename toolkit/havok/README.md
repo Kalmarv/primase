@@ -6,6 +6,7 @@ turns what it reads into geometry and world data:
 - `ConvexCore`: a convex shape's stored core as triangles.
 - `world`: a Havok skeleton as `core.skeleton`, a spline compressed animation as it is stored (`havok.animation`),
   and the pass `lower-havok-clips` that samples the animations a program asks for into `core.clip`s.
+- `layers`: behaviour-graph layers retained as source data and lowered by `lower-havok-layers` to core controllers.
 - `cloth`: a model's Havok cloth as it is stored (`havok.cloth`): the tagfile's cloth data read whole, the skeleton
   its transform sets are (each cloth data's one transform set is its file's one skeleton, bone for bone, in all of
   Sekiro's 610 and Elden Ring's 2,692 cloth data), the joints of the model's `core.skeleton` of the same names, and
@@ -40,3 +41,17 @@ the plane bound of one plane, their convex polygon as two faces.
 CONTRIBUTING.md) holds loose self-contained object `.hkx` files for an
 independent half-space residual gate. Non-convex classes are counted
 separately, not silently claimed as decoded.
+
+## Example
+
+```rust
+use primase_core::pass::PassRegistry;
+
+fn main() {
+    let mut passes = PassRegistry::new();
+    primase_havok::register(&mut passes);
+    println!("{}", passes.describe("lower-havok-layers").expect("registered pass"));
+}
+```
+
+This example needs no game files.

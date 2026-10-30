@@ -73,3 +73,18 @@ The image takes the size and stored levels of the map `size` names; the other ma
 level of another size is resampled nearest (counted), and a level it does not store
 is box-filtered from its full level with `mip_chain` (`generate`, counted) or refused
 (`refuse`): occlusion is never replaced by white.
+
+## Example
+
+```rust
+use primase_image::{Image, Samples, read_png, write_png};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let image = Image { width: 1, height: 1, samples: Samples::U8(vec![255, 0, 0, 255]) };
+    let png = write_png(&image)?;
+    assert_eq!(read_png(&png)?.image, image);
+    Ok(())
+}
+```
+
+This example needs no game files.

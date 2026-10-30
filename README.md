@@ -22,14 +22,14 @@ data that prevents valid output. Compilation, stitching and other later stages r
 | [`worlds/unity`](worlds/unity/), [`worlds/skatebird`](worlds/skatebird/), [`worlds/peak`](worlds/peak/) | Unity players' data files, what SkateBIRD's own scripts say, and what PEAK's scripts hand every shader |
 | [`worlds/monogame`](worlds/monogame/), [`worlds/stuntboost`](worlds/stuntboost/) | MonoGame (XNA 4.0, FNA) content, and STUNTBOOST's levels |
 | [`worlds/shred`](worlds/shred/) | Tony Hawk: SHRED's archives and scenes |
-| [`worlds/reskate`](worlds/reskate/) | skate. maps: preparation passes, the map folder ReSkate Studio compiles, and the compile itself |
+| [`worlds/reskate`](worlds/reskate/) | skate. maps: preparation passes, the map folder ReSkate Studio compiles, and the compile and post-compile finishing |
 | [`formats/gltf`](formats/gltf/), [`formats/web`](formats/web/) | glTF 2.0 / GLB, and tiled glTF scenes for web viewers |
 
 ## Architecture
 
 | Layer | What belongs here |
 | --- | --- |
-| [`core`](core/) | Shared meanings: geometry, materials, lights, collision and world state; what a shader program's inputs, constants and outputs stand for (`core::shader`); the `World` store and pass/conversion machinery. |
+| [`core`](core/) | Shared meanings: geometry, materials, lights, collision and world state; what a shader program's inputs, constants and outputs stand for (`core::shader`); the `World` store, texture forms, irradiance volumes, auto exposure and pass/conversion machinery. |
 | [`toolkit`](toolkit/) | Reusable mechanisms, independent of a particular game or destination: texture codecs, DDS, images, mesh operations, animation, lighting, the GLB codec, Havok lowering, a disk cache. |
 | [`formats`](formats/) | Interchange formats and their writers. |
 | [`worlds`](worlds/) | Game, engine-family and destination knowledge: source readers, namespaced data and domain passes/writers. |
@@ -50,12 +50,12 @@ the world.
 | Repository | Crates | What |
 | --- | --- | --- |
 | [iridia](https://github.com/Kalmarv/iridia) | `iridia`, `iridia-interface`, `iridia-dxbc`, `iridia-dxil`, `iridia-d3d9`, `iridia-mojo`, `iridia-exec` | Compiled shaders (DXBC, DXIL, Direct3D 9, Mojo) lifted to one program form, run on the CPU, and read for what their code shows |
-| [dx](https://github.com/Kalmarv/dx) | `dxcontainer`, `dxbc-reader`, `dxil-reader`, `rsx-reader` | Direct3D shader bytecode (the container, DXBC and DXIL, with their reflection), and the PlayStation 3's RSX textures and shader programs |
+| [dx](https://github.com/Kalmarv/dx) | `dxcontainer`, `dxbc-reader`, `dxil-reader`, `rsx-reader` | Direct3D shader bytecode (the container, DXBC and DXIL, with their reflection), and the PlayStation 3's RSX textures and decoded vertex/fragment programs |
 | [fromsoft-formats](https://github.com/Kalmarv/fromsoft-formats), [rage-engine-formats](https://github.com/Kalmarv/rage-engine-formats), [frostbite-formats](https://github.com/Kalmarv/frostbite-formats), [anvil-formats](https://github.com/Kalmarv/anvil-formats), [unity-formats](https://github.com/Kalmarv/unity-formats), [monogame-formats](https://github.com/Kalmarv/monogame-formats), [rme-formats](https://github.com/Kalmarv/rme-formats) | one per engine | An engine's archives and file formats |
-| [havok-formats](https://github.com/Kalmarv/havok-formats), [morpheme-formats](https://github.com/Kalmarv/morpheme-formats), [lua51-bytecode](https://github.com/Kalmarv/lua51-bytecode) | one each | Middleware formats several engines share |
+| [havok-formats](https://github.com/Kalmarv/havok-formats), [havok-cloth](https://github.com/Kalmarv/havok-cloth), [morpheme-formats](https://github.com/Kalmarv/morpheme-formats), [lua51-bytecode](https://github.com/Kalmarv/lua51-bytecode) | one each | Middleware formats and cloth simulation several engines share |
 | [primase-foundations](https://github.com/Kalmarv/primase-foundations) | `primase-foundations` | Checked byte reads, game-file hashes, vertex decoding, texture sampling, and the compression codecs game files use |
 | [primase-naga](https://github.com/Kalmarv/primase-naga) | `primase-naga` | naga with the changes primase needs that upstream has not released |
-| [primase-testdata](https://github.com/Kalmarv/primase-testdata) | `primase-testdata` | The real-data test loader, a dev-dependency only |
+| [primase-testdata](https://github.com/Kalmarv/primase-testdata) | `primase-testdata` | The real-data test loader and input manifests, a dev-dependency only |
 
 The line between iridia and primase is the line between what a program is and what it means. iridia reports what a
 shader's code shows: its interface, Direct3D's fixed-function state, whether a matrix constant is read by rows or
@@ -82,7 +82,7 @@ primase depends on each of these at one git commit, and every repository that sh
 
 A consumer builds the passes it chooses through their typed constructors and supplies its reader, writer and
 explicit pipeline. This small sketch chooses to turn curves into polylines with a 1 cm tolerance; a real route also
-selects its source and destination preparation passes.
+selects its source and destination preparation passes. The sketch uses `primase-core` and `primase-meshops`.
 
 ```rust
 use primase_core::convert::{convert, ConvertReport, Reader, Result, Writer};
@@ -119,7 +119,7 @@ One program, five stages:
   chains ordered and budgeted, the collision laid out.
 - **Write.** `MapSink` encodes the prepared part as a map folder for ReSkate Studio. What it leaves out or
   approximates is a notice in the report; a value it cannot encode is an error.
-- **Compile.** `compile_map` runs ReSkate Studio on the folder, with every compile choice stated, into a playable mod.
+- **Compile.** `compile_map` runs ReSkate Studio on the folder, then finishes the mod against skate.'s data with its version-9 Oodle library; its result includes the post-compile report.
 
 `convert` drives the first four: it reads, runs the selection, loads the region, runs its preparation, checks it
 against what the writer writes, and writes it. This region is one part; a larger map is converted in parts
@@ -131,7 +131,7 @@ so a choice that is not valid fails while the pipeline is built, before anything
 fn main() -> Result<()> {
     // Ashina Castle (m11_01), the part within [west, south, east, north] metres, and placements reaching 30 m into it
     let region = [-170.0, 180.0, -50.0, 300.0];
-    let oodle = load_oodle(Path::new("C:/Games/Sekiro/oo2core_6_win64.dll"))?;
+    let oodle = load_oodle(Path::new("C:/Games/Sekiro/oo2core_6_win64.dll"), Version::V6)?;
     let decoder = Decoder { oodle: Some(&oodle), max_output: 1 << 30 };
     let options = sekiro::Options { region: Some(sekiro::Region { rect: region, margin: 30.0 }), ..Default::default() };
     let keys = Keys::from_folder("C:/Games/Sekiro/keys", Game::Sekiro, None)?;
@@ -151,7 +151,8 @@ fn main() -> Result<()> {
     #[rustfmt::skip]
     let lower = Pipeline {
         passes: vec![
-            Box::new(LowerFromSoftCollision { hit_filters, water: water.clone(), leave_out: leave_out.clone(), reach }),
+            Box::new(LowerFromSoftCollision { hit_filters, water: water.clone(), leave_out: leave_out.clone(), reach,
+                f_meshes: FMeshes::Off }),
             Box::new(LowerFromSoftObjectCollision { resolution: ResolutionChoice::High, convex: ConvexBodies::Tessellate, leave_out: &water | &leave_out,
                 leave_out_motion: [2].into(), convex_surface: ConvexSurface::Render, reach }),
             Box::new(DropFromSoftFar),
@@ -192,7 +193,10 @@ fn main() -> Result<()> {
             Box::new(PrepareReskateTextures),
             Box::new(PrepareReskateUvRepeats::new(RepeatDecals::Omit, RepeatBlended::Cutout)),
             Box::new(PrepareReskateOverlays::new(0.004)?.for_encoding(&e)?),
-            Box::new(PrepareReskateBlendOrder::new(200.0)?.for_encoding(&e)?),
+            Box::new(
+                PrepareReskateBlendOrder::new(200.0, primase_reskate::blend_order::ChainOrder::Tie)?
+                    .for_encoding(&e)?,
+            ),
             Box::new(PrepareReskateCollision::new(CollisionSurfaces::Coalesce, CollisionWeld::Millimetre, &e)?),
             Box::new(SummarizeReskateMap::for_encoding(&e)?),
             Box::new(PlanReskateBlendBudget::pool()),
@@ -206,8 +210,10 @@ fn main() -> Result<()> {
         println!("{notice}");
     }
 
-    // ReSkate Studio compiles the map folder into a mod.
+    // ReSkate Studio compiles the map folder into a mod, then the post-compile steps finish it (blend stage, level
+    // root, layering gate) against skate.'s data, read with skate.'s own Oodle library (version 9).
     let studio = Studio { cli: "C:/ReSkate/reskate_cli.exe".into(), game: "C:/Games/skate".into() };
+    let skate_oodle = load_oodle(Path::new("C:/Games/skate/oo2core_9_win64.dll"), Version::V9)?;
     let choices = CompileChoices {
         streaming: Some(Streaming::Cells),
         lods: true,
@@ -215,8 +221,15 @@ fn main() -> Result<()> {
         time_of_day: Some(TimeOfDay::Noon),
         pause_map: None,
     };
-    let compiled = compile_map(&studio, Path::new("out/ashina"), Path::new("out/staging"), "ashina", &choices)?;
-    println!("{} ({} warnings)", compiled.patch.display(), compiled.warnings);
+    let compiled =
+        compile_map(&studio, Path::new("out/ashina"), Path::new("out/staging"), "ashina", &choices, &skate_oodle)?;
+    println!(
+        "{} ({} warnings; layering gate {:.0} s, failing but not yet enforced: {:?})",
+        compiled.patch.display(),
+        compiled.warnings,
+        compiled.finished.gate_seconds,
+        compiled.finished.reported
+    );
     Ok(())
 }
 ```
@@ -234,6 +247,8 @@ surface, foliage drawn as plain surfaces, and markers snapped down to the ground
 
 Status: the library is being aligned with this model; remaining boundary exceptions are tracked in
 [`architecture.toml`](architecture.toml).
+
+Run real-data tests with `cargo test --profile gate`: the release-like `gate` profile keeps debug assertions enabled. [CONTRIBUTING](CONTRIBUTING.md#fixtures-and-real-data) describes the checks and `GAME_DATA` setup.
 
 See [CONTRIBUTING](CONTRIBUTING.md) for rules, checks and real-data setup, and [DESIGN](docs/DESIGN.md) for detail.
 

@@ -7,10 +7,9 @@ them. The archives, binders and formats themselves, and the archive keys a calle
 
 ## Gates
 
-Synthetic tests cover valid and malformed BHD5/DCX/BND4, RSA block geometry,
-a NIST AES vector, encrypted ranges, nested envelopes, hash tables, truncations,
-and single-byte mutations. Real gates skip when their environment variables
-are unset. Use `cargo test -p primase-fromsoft -- --nocapture`.
+Archive/container unit tests live in `fromsoft-formats`; this crate checks world reads and lowerings.
+Real-data tests skip when their declared inputs are not configured in `GAME_DATA`. Use
+`cargo test --profile gate -p primase-fromsoft -- --nocapture`; the gate profile keeps debug assertions enabled.
 
 - `installs.sekiro`, `keys.sekiro`: directory containing the five BHD/BDT pairs, and the folder of their keys (`Data1.pem`
   to `Data5.pem`).
@@ -54,13 +53,13 @@ DDS, name, format, dimensional kind, mip count, flags and optional metadata word
 Section padding must be zero; PC producers use both name-end-relative and
 first-payload-relative data sizes. Unknown platforms and compressed PC texture
 records return errors. UTF-16 and ASCII-compatible legacy names are supported.
-`tpf::Texture::image()` imports 2D DDS through `primase-dds`, preserving encoded
+`sekiro::tpf_image(&texture)` imports 2D DDS through `primase-dds`, preserving encoded
 mips and colour-space tags. Cube/volume payloads are retained by the container
 reader but explicitly rejected by this 2D import. Bindings assign semantic roles
 and normal conventions; package parsing does not infer them from a name.
 
 The TPF corpus gate reads its own oracle directory, `oracles.soulsformats.sekiro/tpf`,
-which is not built yet (a stated coverage gap; see CONTRIBUTING.md), with
+declared as a live gated input in [tests/inputs](tests/inputs/README.md), with
 `packages.jsonl`: one object per discovered package, with `id` (shard/hex
 hash, followed by `/b<index>` or `/s<index>` for single/split binder children),
 `area`, package size/SHA256, platform/flags/encoding, and a `textures` array.
@@ -125,7 +124,7 @@ is one level of detail (its one face set's flags: 0 to 2, and 3 for the billboar
 card), so the geometry lowers as an ordinary model's. The billboard cards (`Float4`
 UV2, `Float2` UV3, shader `SpeedTree_billboard`) are turned to the camera by their
 program, which also picks their atlas image by the view's angle: they have no position
-of their own, `Model::decode` refuses them, and their material is the `billboard` class
+of their own, `geometry::decode` refuses them, and their material is the `billboard` class
 (`leave-out=billboard`). `tests/speedtree.rs` runs every SpeedTree mesh's own G-buffer
 vertex program (lifted, on the executor) on each of its vertices with an identity
 instance at the finest level and the wind off (the wind block's fourth row's `y` set to
@@ -151,7 +150,7 @@ collision of the same assets checks the frame: the position as stored lies neare
 own collision (101 of the 106 with collision; for the other five the best of the 48
 signed axis permutations is within 0.02 m of it), mirrored in z farther (median 0.165 m against 0.064 m).
 
-`Model::decode(mesh, face_set)` compacts one face set's vertices in first-use order, converts through the
+`geometry::decode(&model, mesh, face_set)` compacts one face set's vertices in first-use order, converts through the
 core frame and normalizes stored normals; `Part::repair_winding` chooses the winding from the summed
 geometric/stored-normal agreement, `Part::drop_degenerates` retains the vertices of faces that fail the area check,
 and `Part::apply_uv_scale` applies a material's main-layer UV scale. `lower-fromsoft-geometry` makes each of these
@@ -413,8 +412,8 @@ models are placed like any other. `tests/elden_area.rs` accounts for every map
 piece and asset part of the Academy of Raya Lucaria (m14_00_00_00) and of the Shaded Castle tile with its parents
 against SoulsFormatsNEXT's layouts, translations exact.
 
-`sekiro::read_area` reads a selected map into an empty `World`. It takes an
-install root, a trusted decoder and options; it never guesses paths, and a failed
+`sekiro::read_game_area` reads a selected map into an empty `World`. It takes an
+explicit `Install`, map name, trusted decoder and options; it never guesses paths, and a failed
 read leaves the destination unchanged. The read selects source records and
 converts frames; it does not lower:
 
@@ -587,12 +586,13 @@ both games (Elden Ring's with its own keys), checking Elden Ring's assets for a 
 them too.
 `tests/draw_param_census.rs` (install-gated) prints every draw-param field the chosen
 maps store, group, key and value. Core states fog and exposure (`core.atmosphere`:
-`Atmosphere`, `Fog`, `FogFalloff`, `Exposure`, `VolumetricFog`); `lower-fromsoft-environment`
+`Atmosphere`, `Fog`, `FogFalloff`, `Exposure`, `AutoExposure`, `ExposureMeter`, `VolumetricFog`); `lower-fromsoft-environment`
 keeps the `VolumetricFog ParamEditor` fields the census shows in `Atmosphere::volumetric`
 with the file's own names and values, unconverted (the densities are in a unit the group's
 `GameScale` sets and no source establishes, so the pass counts them as not drawn). It
-fills no `Fog` or `Exposure`: the tone keys and the distance-fog meaning of the values are
-not established, so those fields are read and counted.
+fills no distance `Fog`: its units are not established. Elden Ring's `Tone Map[Yebis]` group lowers to
+`Atmosphere::auto_exposure` with the source meter, limits and adaptation; Sekiro's tone-map group remains
+not lowered because its filter has not been traced.
 
 A character's or part's files are kept beyond the model and its clips:
 
@@ -711,7 +711,8 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
 - `lower-fromsoft-sky` lowers the sky a Sekiro read brought in (`Options::sky: Include`, `read/sky.rs`): the sky
   map `m89_00_00_99`'s domes (one per sky state), their rings of far mountains and the moon (the object `o005900`),
   and the area's own domes no layout places. The read makes the states the values of one global axis,
-  `fromsoft.sky`, with no default (the game's choice is not read yet; a program assigns one or a viewer switches),
+  `fromsoft.sky`, with no default. `Options::world_state` can assign its value from supplied source flags;
+  otherwise a program assigns one or a viewer switches. The lowering
   gives each dome and ring the condition of its state and `core.sky_anchor` horizontal (the game moves the sky map's
   parts to the camera's x and z every frame); the pass anchors the moon towards the environment's sun at 25 units
   (the game's), drops a moon with no sun (counted), and puts the sky's materials on the sky layer in the frame's
@@ -738,11 +739,11 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
   radiance `(r^2 w, g^2 w, b^2 w)` (Elden Ring lowered the same way, not yet
   checked on its frame), at the program's calibration (`lux-per-unit`, lux per
   unit of radiance, no default); the hemisphere colours (`Hemi Color Up`,
-  `Down`, read as linear) the gradient ambient, its equator their mean (counted), at the same
+  `Down`, decoded as `(rgb * rgb) * w`) the gradient ambient, its equator their mean (counted), at the same
   calibration. A black or unusable light is no sun, counted. Every other field
-  read is counted by group and why it is not lowered (core states no fog, sky or
-  tone; the light set's specular, occlusion, second and local lights have no
-  `core.light` field). The record stays.
+  read is counted by group and why it is not lowered. The sun's specular colour is retained as `core.light`
+  highlights; Elden Ring's auto exposure and the source-unit volumetric fog are retained in `core.atmosphere`.
+  Secondary and local light-set lights, occlusion and unsupported tone effects remain not lowered. The record stays.
 - `lower-fromsoft-collision{hit-filters=...}` lowers the map collision files that
   parts of the chosen hit filters name (required) into `core.collision` soups
   (`game`, `water`, `game_state<n>` with the file's condition), each triangle with
@@ -846,7 +847,7 @@ unless an option asks), **unread** (no reader opens it). A row's owner is the pr
 | Effects (every FXR action: emitters, particles, trails, distortion, blur, lights, forces): the same routes | `REGIONS` type 5, `PARTS`, `ModelSfxParam`/`AssetModelSfxParam`, the `sfx` binders | read with `Options::effects` (off by default) as `fromsoft.effect`, `fromsoft.effect_file`, `fromsoft.effect_resource`; models and animations named are counted, not read | `read/effects.rs`, `lower-fromsoft-effects` / Effects |
 | Effect lights (FXR point and spot lights): SFX regions, and the effects placed objects and assets spawn through their model effect param row | `REGIONS` type 5, `PARTS`, `ModelSfxParam`/`AssetModelSfxParam`, the `sfx` binders | read with `Options::effect_lights` (off by default) as `fromsoft.effect_light`; light shafts (no instance) and every other effect action unread | `read/effect_lights.rs`, `lower-fromsoft-lights` / Lights. Per-area counts in `tests/effect_lights_census.rs` |
 | Light banks other than 0 | `FILES _NNNN.btl` | unread (the reader opens `_0000` only) | none. `FILES` says how many banks exist per area |
-| Light probes / global illumination data | no pattern the code names; `FILES` lists the unread patterns | unread | none. Decided by the largest unread `FILES` pattern with a name that says probe or GI |
+| Light probes / global illumination data | Sekiro's `<area>_envmap_NN.tpf.dcx` GIIV packages and environment-map-effect-box regions | read with `Options::irradiance`, off by default; every package remains a source state, selected by `Options::world_state` when supplied | `sekiro::irradiance`, `lower-fromsoft-irradiance` / Irradiance volumes |
 | Environment-map points and boxes (regions `environment_map_point`, `environment_map_effect_box`, `environment_map_output`) | `REGIONS` | read-header | `lower-fromsoft-map-records` / Markers. The part's `env_map` id and the draw-param `Env Map:Editor` group are read (`msb::PartGparam`) |
 | Environment cubemap textures | `FILES` patterns of texture binders | unread unless a material binds them | none |
 | Sound and effect regions (`sound`, `sfx`, `wind_sfx`, `wind_area`, `muffling_*`, `sound_region`, `sound_space_override`) | `REGIONS` | read-header: shape, place, entity ID read; sound id and effect id are in the type data, kept as bytes | `lower-fromsoft-map-records` / Markers. The `data_lengths` of a type decide whether a fixed record can be decoded |
@@ -860,7 +861,7 @@ unless an option asks), **unread** (no reader opens it). A row's owner is the pr
 | Far view (Elden Ring LOD tiles) | `Parents::Include` parts, `FILES` | the larger tiles' parts for the small tile are read (`Options::parents`); distant-terrain files beyond them: unread | `read/area.rs` / Objects. `FILES` lists the unread patterns |
 | Events (`EVENT_PARAM_ST`) of every type (treasure, generator, obj_act, navmesh, patrol_info, …) | `EVENTS` | read-header: type, event ID, the part and region named, entity ID read; the type's data kept as bytes. `map_offset` (Sekiro) is decoded and used | `msb::MapLayout::map_events`, `lower-fromsoft-map-records` / Other world data rows, Properties (no place of their own) |
 | Event scripts (`.emevd`) | one per area | Sekiro: read and interpreted for part presence (`states=event`); Elden Ring: unread (refused) | `emevd.rs`, `read/states.rs` / State axes |
-| Sky (Sekiro's sky map `m89_00_00_99`, the moon `o005900`, the areas' own unplaced domes) | its layout | read with `Options::sky` (off by default): the states as the `fromsoft.sky` axis without a default; which state the game draws is unread | `read/sky.rs`, `lower-fromsoft-sky` / Objects, State axes |
+| Sky (Sekiro's sky map `m89_00_00_99`, the moon `o005900`, the areas' own unplaced domes) | its layout | read with `Options::sky` (off by default): the states as the `fromsoft.sky` axis; `Options::world_state` selects from common event 100 with caller-supplied flags | `read/sky.rs`, `lower-fromsoft-sky` / Objects, State axes |
 | Sky (Elden Ring's sky maps' weather assets: sky spheres, cloud layers, the burning Erdtree) | `WeatherAssetReplaceParam`, `MapDefaultInfoParam`, the sky map's layout | read with `Options::sky`: the weathers as the `fromsoft.sky` axis without a default, each asset conditioned on the weathers that show it; sky-program assets anchored to the camera's x and z and drawn on the sky layer writing depth (observed for a cloud layer, inferred for the spheres), others placed where the layout places them; the weather lot is unread | `read/sky.rs`, `lower-fromsoft-sky` / State axes, Draw order |
 | Draw-param environment | `draw_param_census` | read for the file the caller names; the file choice from the weather and events, and Elden Ring's `_weatherbase`/`_weatheroutdoor`/`_commonevent` layers: unread | `read/draw_param.rs`, `lower-fromsoft-environment` / Environment, Properties |
 | Textures (`.tpf`, Sekiro's `.tpfbhd`), shader bundles, materials | per area | read | `read/textures.rs`, `read/shaders.rs` / Shaded and Game shader views |
@@ -1289,3 +1290,32 @@ while `bake groups` and the gloss/emission presence counters count bake-input
 groups. `bake levels` counts baked images' weight levels, not per-source
 material entities.
 UV scale, alpha policy and every other material field remain in the group key.
+
+## Example
+
+```rust
+use primase_core::pass::PassRegistry;
+
+fn main() {
+    let mut passes = PassRegistry::new();
+    primase_fromsoft::sekiro::passes::register(&mut passes);
+    println!("{}", passes.describe("lower-fromsoft-sky").expect("registered pass"));
+}
+```
+
+This example needs no game files.
+
+## Environment and source state
+
+`Options::world_state` accepts an explicitly sourced flag set for Sekiro. The installed common event 100 is evaluated
+in script order, its enabled map groups are joined to the actual sky domes, and the existing sky and irradiance
+axes receive the selected values. Reports retain the script hash, input flags and selected actions; unsupported
+instructions and undecidable branches are errors. This does not guess the player's flags or select Elden Ring's weather.
+
+`Options::irradiance` reads Sekiro's irradiance regions and coefficient packages;
+`lower-fromsoft-irradiance` lowers the spatial first-order data. Low-resolution texture twins are opt-in source
+forms (`core.texture_forms`); choosing an image is explicit. `fromsoft-formats` exposes Elden Ring's switch
+parameters separately; the world reader does not select an image by distance.
+`sample-fromsoft-draw-params` follows the source time axis and blends slots at the caller's hour.
+`lower-fromsoft-environment` lowers Elden Ring's tone-map exposure to `core.atmosphere`'s `AutoExposure`, including
+its meter and adaptation; source-unit volumetric fog remains descriptive.

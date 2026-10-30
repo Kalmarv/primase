@@ -19,3 +19,17 @@ glTF's (metres, right-handed, +Y up); nothing is converted.
   and the node's extras show the mesh's `core.mesh` view. That is what the glTF writer (`formats/gltf`) writes for
   an unplaced, material-less prototype. A test there checks
   that the two agree apart from the generator.
+
+## Example
+
+```rust
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let bytes = primase_glb::assemble(br#"{"asset":{"version":"2.0"}}"#, &[])?;
+    let chunks = primase_glb::parse(&bytes)?;
+    assert!(chunks.bin.is_none());
+    println!("{} JSON bytes", chunks.json.len());
+    Ok(())
+}
+```
+
+This example needs no game files.

@@ -55,3 +55,17 @@ exactly one part) and context reaching `clearance` past that region (so the
 clearance search sees every surface near its lights). Core's parts state their
 context's area but not the region a part owns. Trigger to build it: a destination
 that writes fill lights in parts. Every current user writes whole maps.
+
+## Example
+
+```rust
+use primase_core::pass::PassRegistry;
+
+fn main() {
+    let mut passes = PassRegistry::new();
+    primase_lighting::register(&mut passes);
+    println!("{}", passes.describe("fill-ambient-lights").expect("registered pass"));
+}
+```
+
+This example needs no game files.

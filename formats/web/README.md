@@ -273,3 +273,19 @@ is checked with hand-worked values (`ktx2::tests`).
 The p99 angle is an upper bound using 0.001-degree bins; max and mean use the
 unbinned angles. The geometry audit treats both PNG and KTX2 as dimension-only
 textures; these independent pixel audits supply the separate texture gate.
+
+## Example
+
+```rust
+use primase_core::World;
+use primase_web::{Options, TileSize, write};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let options = Options::new(TileSize::new(64.0)?);
+    let tiles = write(&World::new(), &options)?;
+    println!("{} notices", tiles.notices.len());
+    Ok(())
+}
+```
+
+This example needs no game files.
