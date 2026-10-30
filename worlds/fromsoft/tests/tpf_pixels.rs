@@ -138,8 +138,13 @@ fn area_pixels() -> Result<()> {
     }
     drop(csin);
     drop(pyin);
-    assert!(cs.wait()?.success());
-    assert!(py.wait()?.success());
+    let (cs_exit, py_exit) = (cs.wait()?, py.wait()?);
+    assert!(
+        cs_exit.success() && py_exit.success(),
+        "a reference worker failed (C# {cs_exit}, Pillow {py_exit}); {} textures failed, the first: {:?}",
+        failures.len(),
+        failures.first()
+    );
     println!("area references {path_count}, distinct DDS {}", hashes.len());
     // the reference decoder's refusals, pinned: a new reason, or more of one, fails
     for (why, n) in &unreferenced {
