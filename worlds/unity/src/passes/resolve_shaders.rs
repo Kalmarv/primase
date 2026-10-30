@@ -18,7 +18,10 @@
 //!   `GammaToLinearSpace`, an `[HDR]` one as stored; `gamma`: every colour as stored); a
 //!   texture's `<name>_ST` tiling (scale x, y, offset x, y); Unity's own matrices and camera position as the roles of
 //!   [`builtin`]; its vectors that pack several values (the screen size, the projection's flip and planes, the time) part
-//!   by part ([`builtin_parts`]: each part's own role, the derived ones `Unknown`); anything else `Unknown` with the
+//!   by part ([`builtin_parts`]: each part's own role, the derived ones `Unknown`); a field the material has no
+//!   property of that a game's script sets for every shader takes that global (`unity.shader_globals`,
+//!   [`UnityShaderGlobals`], filled by the game's reader) as `Default` words saying which field sets it, and one the
+//!   scripts set only from state the data does not hold is `Unknown` with why; anything else `Unknown` with the
 //!   reason, struct (instancing) fields included. Only the bytes the program reads are bound
 //!   ([`iridia::WordsRead`] of the lifted program: the words its outputs, discards and writes are made of; a
 //!   program whose value graph cannot be followed has every byte bound, counted): a field or part it does not read is
@@ -31,8 +34,10 @@
 //!   material leaves unset takes the shader's declared default, valued from the editor oracle
 //!   (`primase-oracles/unity/default-textures`: [`default_colour`], whose doc states the version and colour-space gap;
 //!   a player holds no default texture of the engine), counted by name (an empty or unknown name is the engine's
-//!   fallback grey); a default it does not value is `Missing`. A texture of Unity's own that the material has no
-//!   property of is the frame's ([`frame_texture`]: the camera's depth and colour, the main light's shadow map or
+//!   fallback grey); a default it does not value is `Missing`. A texture the material has no property of that a game's
+//!   script sets for every shader is that global's texture (`unity.shader_globals`), counted by name; one the scripts
+//!   set only from state the data does not hold is `Missing` with why. A texture of Unity's own that the material has
+//!   no property of is the frame's ([`frame_texture`]: the camera's depth and colour, the main light's shadow map or
 //!   screen-space shadows, the occlusion, the nearest reflection probe, the light-probe volume), counted by name; the
 //!   other engine textures the parameters name are `Missing` with the reason, and a slot the parameters do not name is
 //!   `Missing` (a 2021.2 player stores a variant's textures in its parameter blob, which
@@ -72,7 +77,7 @@ use primase_core::{
 };
 
 use crate::colour::ColourSpace;
-use crate::components::{UnityMaterial, UnityProgramVariant, UnityPrograms, UnityTexEnv};
+use crate::components::{UnityMaterial, UnityProgramVariant, UnityPrograms, UnityShaderGlobals, UnityTexEnv};
 use crate::passes::draw_keywords::{SceneKeywords, receivers};
 use unity_formats::program::{Parameters, Shape};
 
@@ -311,8 +316,9 @@ struct Declared {
 /// The constants of the constant buffer `resource` (of `size` bytes, register `slot`) from the variant's parameters:
 /// each named field and struct field, and `Unknown` over the bytes no field covers, where the program (`reads`) reads
 /// them. A field or part of a field the program does not read, and bytes it does not read between the fields, are left
-/// out, counted. A built-in vector that packs several values is bound part by part ([`builtin_parts`]). `reads` is
-/// `None` for a program whose reads could not be taken: every byte is then bound.
+/// out, counted. A built-in vector that packs several values is bound part by part ([`builtin_parts`]). A field the
+/// material has no property of takes the scripts' global of its name (`globals`). `reads` is `None` for a program
+/// whose reads could not be taken: every byte is then bound.
 #[allow(clippy::too_many_arguments)]
 pub fn buffer_constants(
     parameters: &Parameters,
@@ -321,6 +327,7 @@ pub fn buffer_constants(
     size: u32,
     m: &UnityMaterial,
     space: ColourSpace,
+    globals: &UnityShaderGlobals,
     reads: Option<&WordsRead>,
     counts: &mut BTreeMap<String, u64>,
 ) -> Vec<ConstantBinding> {
@@ -338,6 +345,32 @@ pub fn buffer_constants(
                 w.truncate(bytes as usize / 4);
                 bump("constants set from the material's properties");
                 whole(ConstantRole::Material(w))
+            } else if let Some(g) = globals.values.get(&f.name) {
+                if g.words.len() * 4 < bytes as usize {
+                    bump("constants a script sets with fewer words than the field holds, Unknown");
+                    whole(ConstantRole::Unknown {
+                        why: format!(
+                            "{}: {} sets {} words for every shader and the field holds {} bytes",
+                            f.name,
+                            g.set_by,
+                            g.words.len(),
+                            bytes
+                        ),
+                    })
+                } else {
+                    bump("constants a game's script sets for every shader");
+                    let mut words = g.words.clone();
+                    words.truncate(bytes as usize / 4);
+                    whole(ConstantRole::Default {
+                        words,
+                        why: format!("{}: set for every shader by {}", f.name, g.set_by),
+                    })
+                }
+            } else if let Some(why) = globals.unset.get(&f.name) {
+                bump("constants a game's script sets only from runtime state, Unknown");
+                whole(ConstantRole::Unknown {
+                    why: format!("{}: {why}", f.name),
+                })
             } else if let Some(role) = builtin(&f.name) {
                 bump("constants that are Unity's built-in matrices and camera position");
                 whole(role)
@@ -780,6 +813,10 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
             .iter::<UnityMaterial>()
             .filter(|(e, _)| !world.has::<UnityPrograms>(*e))
             .count() as u64;
+        let globals = world
+            .resource::<UnityShaderGlobals>()
+            .cloned()
+            .unwrap_or_default();
         let mut counts: BTreeMap<String, u64> = BTreeMap::new();
         counts.insert(
             "materials without unity.programs (no draw pass, shader object or D3D11 code)".into(),
@@ -899,6 +936,7 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
                                 None => Err("the program was not lifted"),
                             },
                             chosen.vertex.is_some(),
+                            &globals,
                             &mut counts,
                         ));
                     }
@@ -969,6 +1007,7 @@ impl ResolveUnityShaders {
         interface: &Interface,
         graph: Result<&ProgramGraph, &str>,
         vertex_bound: bool,
+        globals: &UnityShaderGlobals,
         counts: &mut BTreeMap<String, u64>,
     ) -> StageBinding {
         let reads = graph.ok().map(|g| &g.reads);
@@ -1009,6 +1048,7 @@ impl ResolveUnityShaders {
                         layout.size,
                         m,
                         self.colour_space,
+                        globals,
                         reads,
                         counts,
                     ));
@@ -1030,9 +1070,15 @@ impl ResolveUnityShaders {
                                 ),
                             }
                         }
-                        Some(t) => {
-                            resolve_texture(m, defaults, &variant.keywords, self.linear(), &t.name, counts)
-                        }
+                        Some(t) => resolve_texture(
+                            m,
+                            defaults,
+                            &variant.keywords,
+                            self.linear(),
+                            &t.name,
+                            globals,
+                            counts,
+                        ),
                     };
                     textures.push(TextureBinding {
                         resource: r.id,
@@ -1129,14 +1175,16 @@ fn engine_texture_reason(name: &str) -> Option<&'static str> {
     })
 }
 
-/// What a texture parameter named `name` samples: the property's texture, else the shader's default; the engine's
-/// own textures ([`frame_texture`]) are the frame's.
+/// What a texture parameter named `name` samples: the property's texture, else the shader's default; without a
+/// property, the scripts' global of its name (`globals`), else the engine's own textures ([`frame_texture`]) are the
+/// frame's.
 fn resolve_texture(
     m: &UnityMaterial,
     defaults: &[(String, String)],
     keywords: &[String],
     linear: bool,
     name: &str,
+    globals: &UnityShaderGlobals,
     counts: &mut BTreeMap<String, u64>,
 ) -> TextureSource {
     let mut bump = |what: String| *counts.entry(what).or_default() += 1;
@@ -1144,6 +1192,23 @@ fn resolve_texture(
         referenced, texture, ..
     }) = m.textures.iter().find(|t| t.name == name)
     else {
+        if let Some(g) = globals.textures.get(name) {
+            bump(format!(
+                "texture parameters a game's script sets for every shader: {name}"
+            ));
+            return TextureSource::Texture {
+                texture: g.texture,
+                sampler: SamplerState::default(),
+            };
+        }
+        if let Some(why) = globals.unset.get(name) {
+            bump(format!(
+                "texture parameters a game's script sets only from runtime state, left Missing: {name}"
+            ));
+            return TextureSource::Missing {
+                why: format!("texture {name}: {why}"),
+            };
+        }
         if let Some(frame) = frame_texture(name, keywords) {
             bump(format!(
                 "texture parameters that are the frame's {frame:?}: {name}"
@@ -1314,6 +1379,7 @@ mod tests {
             192,
             &material(),
             ColourSpace::Linear,
+            &UnityShaderGlobals::default(),
             None,
             &mut counts,
         );
@@ -1353,6 +1419,7 @@ mod tests {
             192,
             &material(),
             ColourSpace::Gamma,
+            &UnityShaderGlobals::default(),
             None,
             &mut BTreeMap::new(),
         );
@@ -1368,6 +1435,7 @@ mod tests {
             32,
             &material(),
             ColourSpace::Linear,
+            &UnityShaderGlobals::default(),
             None,
             &mut BTreeMap::new(),
         );
@@ -1473,6 +1541,7 @@ mod tests {
             64,
             &material(),
             ColourSpace::Linear,
+            &UnityShaderGlobals::default(),
             Some(&reads),
             &mut counts,
         );
@@ -1509,6 +1578,7 @@ mod tests {
             64,
             &material(),
             ColourSpace::Linear,
+            &UnityShaderGlobals::default(),
             None,
             &mut BTreeMap::new(),
         );
@@ -1525,14 +1595,30 @@ mod tests {
         let mut counts = BTreeMap::new();
         // referenced, but the world holds no texture for it
         assert_eq!(
-            resolve_texture(&m, &defaults, &[], true, "_MainTex", &mut counts),
+            resolve_texture(
+                &m,
+                &defaults,
+                &[],
+                true,
+                "_MainTex",
+                &UnityShaderGlobals::default(),
+                &mut counts
+            ),
             TextureSource::Missing {
                 why: "texture _MainTex: the property references a texture the world does not hold".into()
             }
         );
         // unset, with a default this pass does not value
         assert_eq!(
-            resolve_texture(&m, &defaults, &[], true, "_BumpMap", &mut counts),
+            resolve_texture(
+                &m,
+                &defaults,
+                &[],
+                true,
+                "_BumpMap",
+                &UnityShaderGlobals::default(),
+                &mut counts
+            ),
             TextureSource::Missing {
                 why: "texture _BumpMap: shader default \"bump\" is not valued".into()
             }
@@ -1540,7 +1626,15 @@ mod tests {
         assert!(counts.keys().any(|k| k.contains("\"bump\" is not valued")));
         // a property the material does not have
         assert_eq!(
-            resolve_texture(&m, &defaults, &[], true, "_Other", &mut counts),
+            resolve_texture(
+                &m,
+                &defaults,
+                &[],
+                true,
+                "_Other",
+                &UnityShaderGlobals::default(),
+                &mut counts
+            ),
             TextureSource::Missing {
                 why: "texture _Other: the material has no property and no frame role is established".into()
             }
@@ -1554,9 +1648,103 @@ mod tests {
             offset: [0.0; 2],
         });
         assert!(matches!(
-            resolve_texture(&unset, &defaults, &[], true, "_Other", &mut counts),
+            resolve_texture(&unset, &defaults, &[], true, "_Other", &UnityShaderGlobals::default(), &mut counts),
             TextureSource::Default { value, .. } if value == [1.0; 4]
         ));
+    }
+
+    /// A program's texture or constant the material has no property of takes the global a game's script sets: the
+    /// texture's entity, or the words with the field that sets them. One the scripts set only from runtime state is
+    /// left with why, and a property of the material stays the material's though a global of its name is set.
+    #[test]
+    fn a_parameter_without_a_property_takes_the_scripts_global() {
+        use crate::components::{GlobalTexture, GlobalValue};
+        use primase_core::Resource;
+        let mut w = World::new();
+        let fog = w.spawn();
+        let mut globals = UnityShaderGlobals::default();
+        let texture = |set_by: &str| GlobalTexture {
+            texture: fog,
+            set_by: set_by.into(),
+        };
+        globals
+            .textures
+            .insert("FogTexture".into(), texture("Fog.fogTexture of level4/9"));
+        globals.textures.insert("_MainTex".into(), texture("a script"));
+        globals
+            .unset
+            .insert("_WindTexture".into(), "set when the player enters a zone".into());
+        let value = |v: &[f32]| GlobalValue {
+            words: words(v),
+            set_by: "Volume.grid of level4/7".into(),
+        };
+        globals
+            .values
+            .insert("_Mystery".into(), value(&[1.0, 2.0, 3.0, 4.0]));
+        globals.values.insert("_Cutoff".into(), value(&[9.0]));
+        let (m, mut counts) = (material(), BTreeMap::new());
+        let mut resolve =
+            |name: &str, g: &UnityShaderGlobals| resolve_texture(&m, &[], &[], true, name, g, &mut counts);
+        assert_eq!(
+            resolve("FogTexture", &globals),
+            TextureSource::Texture {
+                texture: fog,
+                sampler: SamplerState::default()
+            }
+        );
+        assert_eq!(
+            resolve("_WindTexture", &globals),
+            TextureSource::Missing {
+                why: "texture _WindTexture: set when the player enters a zone".into()
+            }
+        );
+        // the material's own property (it references a texture this world does not hold)
+        assert_eq!(
+            resolve("_MainTex", &globals),
+            TextureSource::Missing {
+                why: "texture _MainTex: the property references a texture the world does not hold".into()
+            }
+        );
+        let role_at = |g: &UnityShaderGlobals, offset: u32| {
+            let c = buffer_constants(
+                &parameters(),
+                1,
+                ResourceId(7),
+                192,
+                &material(),
+                ColourSpace::Linear,
+                g,
+                None,
+                &mut BTreeMap::new(),
+            );
+            c.into_iter().find(|c| c.offset == offset).unwrap().role
+        };
+        assert_eq!(
+            role_at(&globals, 128),
+            ConstantRole::Default {
+                words: words(&[1.0, 2.0, 3.0, 4.0]),
+                why: "_Mystery: set for every shader by Volume.grid of level4/7".into()
+            }
+        );
+        assert_eq!(role_at(&globals, 16), ConstantRole::Material(words(&[0.25])));
+        // fewer words than the field holds are not stretched to it
+        globals.values.insert("_Mystery".into(), value(&[1.0]));
+        assert!(matches!(role_at(&globals, 128), ConstantRole::Unknown { .. }));
+        globals.values.remove("_Mystery");
+        globals.unset.insert("_Mystery".into(), "set at runtime".into());
+        assert_eq!(
+            role_at(&globals, 128),
+            ConstantRole::Unknown {
+                why: "_Mystery: set at runtime".into()
+            }
+        );
+        // a global whose texture leaves the world is unset, saying so
+        globals.retain_references(&|e| e != fog);
+        assert!(globals.textures.is_empty());
+        assert_eq!(
+            globals.unset["FogTexture"],
+            "its texture (set by Fog.fogTexture of level4/9) is not in this world"
+        );
     }
 
     #[test]
@@ -1593,7 +1781,7 @@ mod tests {
             offset: [0.0; 2],
         });
         assert!(matches!(
-            resolve_texture(&unset, &defaults, &[], false, "_Other", &mut counts),
+            resolve_texture(&unset, &defaults, &[], false, "_Other", &UnityShaderGlobals::default(), &mut counts),
             TextureSource::Default { value, .. } if value == [0.0; 4]
         ));
         assert_eq!(
@@ -1628,7 +1816,15 @@ mod tests {
         // a property the material has wins over the engine's name; one it has not is the frame's, counted
         let mut counts = BTreeMap::new();
         assert_eq!(
-            resolve_texture(&material(), &[], &none, true, "_CameraDepthTexture", &mut counts),
+            resolve_texture(
+                &material(),
+                &[],
+                &none,
+                true,
+                "_CameraDepthTexture",
+                &UnityShaderGlobals::default(),
+                &mut counts
+            ),
             TextureSource::Frame(FrameTexture::SceneDepth)
         );
         assert_eq!(

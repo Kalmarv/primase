@@ -20,6 +20,7 @@ members = [
     "worlds/reskate",
     "worlds/unity",
     "worlds/skatebird",
+    "worlds/peak",
     "worlds/stuntboost",
     "worlds/shred",
     "worlds/frostbite",
@@ -90,6 +91,7 @@ primase-web = { path = "formats/web" }
 primase-reskate = { path = "worlds/reskate" }
 primase-unity = { path = "worlds/unity" }
 primase-skatebird = { path = "worlds/skatebird" }
+primase-peak = { path = "worlds/peak" }
 primase-stuntboost = { path = "worlds/stuntboost" }
 primase-gta = { path = "worlds/gta" }
 primase-monogame = { path = "worlds/monogame" }

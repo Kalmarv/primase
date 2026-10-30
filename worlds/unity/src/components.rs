@@ -882,6 +882,63 @@ impl primase_core::Resource for UnityRenderSettings {
     }
 }
 
+/// A texture a game's script hands every shader (`Shader.SetGlobalTexture`): its entity (`core.texture` or
+/// `core.texture_layers`) and the stored field it comes from.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct GlobalTexture {
+    pub texture: Entity,
+    /// The script and field, and the object storing them (`Peak.FogShaderParams.fogTexture of level4/621203`).
+    pub set_by: String,
+}
+
+/// A value a game's script hands every shader (`Shader.SetGlobalFloat`, `SetGlobalVector`, `SetGlobalInt`): the 32-bit
+/// words the constant takes, as [`primase_core::shader::ConstantRole::Material`]'s, and the stored field they come from.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct GlobalValue {
+    pub words: Vec<u32>,
+    /// As [`GlobalTexture::set_by`].
+    pub set_by: String,
+}
+
+/// What a game's scripts set for every shader, as far as their stored fields state it (`unity.shader_globals`, a world
+/// resource): filled by the game's own reader, which knows its scripts; Unity's reader knows none. A program's texture
+/// or constant the material has no property of takes the global of its name (`resolve-unity-shaders`). `unset` names
+/// the globals a script sets only from state the data does not hold (a zone the player enters), each with why: such a
+/// parameter is left Missing (Unknown) with that reason.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct UnityShaderGlobals {
+    pub textures: std::collections::BTreeMap<String, GlobalTexture>,
+    pub values: std::collections::BTreeMap<String, GlobalValue>,
+    pub unset: std::collections::BTreeMap<String, String>,
+}
+
+impl primase_core::Resource for UnityShaderGlobals {
+    const NAME: &'static str = "unity.shader_globals";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+    fn references(&self, out: &mut Vec<Entity>) {
+        out.extend(self.textures.values().map(|t| t.texture));
+    }
+    /// A global whose texture leaves the world is set to nothing it can name: it becomes unset, saying so.
+    fn retain_references(&mut self, keep: &dyn Fn(Entity) -> bool) {
+        let gone: Vec<String> = self
+            .textures
+            .iter()
+            .filter(|(_, t)| !keep(t.texture))
+            .map(|(name, _)| name.clone())
+            .collect();
+        for name in gone {
+            if let Some(t) = self.textures.remove(&name) {
+                self.unset.insert(
+                    name,
+                    format!("its texture (set by {}) is not in this world", t.set_by),
+                );
+            }
+        }
+    }
+}
+
 /// A mesh collider's source geometry as stored (Unity's frame): every submesh's triangles, base vertex applied.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct ColliderMesh {

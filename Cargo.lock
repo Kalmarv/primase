@@ -1491,6 +1491,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "primase-peak"
+version = "0.1.0"
+dependencies = [
+ "primase-core",
+ "primase-testdata",
+ "primase-unity",
+ "thiserror",
+ "unity-formats",
+]
+
+[[package]]
 name = "primase-reskate"
 version = "0.1.0"
 dependencies = [

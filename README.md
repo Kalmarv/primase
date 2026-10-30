@@ -19,7 +19,7 @@ data that prevents valid output. Compilation, stitching and other later stages r
 | [`worlds/gta`](worlds/gta/) | Grand Theft Auto V from an install |
 | [`worlds/frostbite`](worlds/frostbite/) | Frostbite data folders (skate.) |
 | [`worlds/anvil`](worlds/anvil/), [`worlds/shaunwhite`](worlds/shaunwhite/) | Anvil forge archives (Riders Republic), and Shaun White Skateboarding over them |
-| [`worlds/unity`](worlds/unity/), [`worlds/skatebird`](worlds/skatebird/) | Unity players' data files, and what SkateBIRD's own scripts say |
+| [`worlds/unity`](worlds/unity/), [`worlds/skatebird`](worlds/skatebird/), [`worlds/peak`](worlds/peak/) | Unity players' data files, what SkateBIRD's own scripts say, and what PEAK's scripts hand every shader |
 | [`worlds/monogame`](worlds/monogame/), [`worlds/stuntboost`](worlds/stuntboost/) | MonoGame (XNA 4.0, FNA) content, and STUNTBOOST's levels |
 | [`worlds/shred`](worlds/shred/) | Tony Hawk: SHRED's archives and scenes |
 | [`worlds/reskate`](worlds/reskate/) | skate. maps: preparation passes, the map folder ReSkate Studio compiles, and the compile itself |

@@ -1195,35 +1195,10 @@ impl Builder<'_> {
         if let Some(&e) = self.textures.get(r) {
             return Ok(e);
         }
-        let t = UnityTextureData::read(self.player, r)?;
-        let e = w.spawn();
-        w.insert(e, Name(t.name.clone()));
-        let not_decoded = match texture(&t) {
-            Ok(pixels) => {
-                w.insert(e, pixels);
-                None
-            }
-            Err(unity_formats::Error::Unsupported(why)) => {
-                let why = why.rsplit(": ").next().unwrap_or(&why).to_owned();
-                *self.report.textures_not_decoded.entry(why.clone()).or_default() += 1;
-                Some(why)
-            }
-            Err(err) => return Err(err),
-        };
-        w.insert(
-            e,
-            UnityTexture {
-                texture: UnityObject::from(r),
-                format: t.format,
-                srgb: t.srgb,
-                usage: t.usage,
-                wrap: t.wrap,
-                filter: t.filter,
-                mip_bias: t.mip_bias,
-                aniso: t.aniso,
-                not_decoded,
-            },
-        );
+        let (e, not_decoded) = spawn_texture(self.player, r, w)?;
+        if let Some(why) = not_decoded {
+            *self.report.textures_not_decoded.entry(why).or_default() += 1;
+        }
         self.textures.insert(r.clone(), e);
         self.report.textures += 1;
         Ok(e)
@@ -1591,6 +1566,50 @@ fn skin_limit(
 /// differently needs [`read_level_with`] and a quality level.
 pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelReport> {
     read_level_with(player, level, &LevelOptions::default(), w)
+}
+
+/// The Texture2D `r` of `player` as a new entity: its `core.name`, its pixels (`core.texture`) where they decode, and
+/// its `unity.texture`; with why its pixels were not decoded.
+fn spawn_texture(player: &Player, r: &ObjRef, w: &mut World) -> Result<(Entity, Option<String>)> {
+    let t = UnityTextureData::read(player, r)?;
+    let e = w.spawn();
+    w.insert(e, Name(t.name.clone()));
+    let not_decoded = match texture(&t) {
+        Ok(pixels) => {
+            w.insert(e, pixels);
+            None
+        }
+        Err(unity_formats::Error::Unsupported(why)) => {
+            Some(why.rsplit(": ").next().unwrap_or(&why).to_owned())
+        }
+        Err(err) => return Err(err),
+    };
+    w.insert(
+        e,
+        UnityTexture {
+            texture: UnityObject::from(r),
+            format: t.format,
+            srgb: t.srgb,
+            usage: t.usage,
+            wrap: t.wrap,
+            filter: t.filter,
+            mip_bias: t.mip_bias,
+            aniso: t.aniso,
+            not_decoded: not_decoded.clone(),
+        },
+    );
+    Ok((e, not_decoded))
+}
+
+/// The Texture2D `r` of `player` as an entity of `w`, as the level read makes one: the entity already standing for it
+/// (its `unity.texture` names `r`, as the level read's do), else a new one. For a texture a game's script names, which
+/// no material does.
+pub fn texture_entity(player: &Player, r: &ObjRef, w: &mut World) -> Result<Entity> {
+    let stored = UnityObject::from(r);
+    if let Some((e, _)) = w.iter::<UnityTexture>().find(|(_, t)| t.texture == stored) {
+        return Ok(e);
+    }
+    Ok(spawn_texture(player, r, w)?.0)
 }
 
 /// [`read_level`] told `options`.

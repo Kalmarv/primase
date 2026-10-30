@@ -156,7 +156,8 @@ core/         world, core components (among them what a shader program's values 
 toolkit/      texcodec (TexFormat decoders/encoders and gates), dds, image (PNG, JPEG, sRGB, mips), glb, meshops
               (weld, split, meshopt), animation, lighting, exactsum, havok (Havok data lowered), cache
 worlds/       one crate per game, engine family or destination: fromsoft, gta, frostbite, anvil, shaunwhite, unity,
-              skatebird, monogame, stuntboost, shred, reskate (the skate. map writer, its preparation and compile)
+              skatebird, peak, monogame, stuntboost, shred, reskate (the skate. map writer, its preparation and
+              compile)
 formats/      gltf, web (later: usd, stl/3mf, obj, ...; skate-scene interchange v1: worlds/reskate)
 checks/       the architecture rules' tests and tests spanning crates
 examples/     programs using the library (primase has no command line; programs live in their own repos)

@@ -29,6 +29,10 @@ path = "worlds/gta"
 reason = "the GTA reader reads untrusted archive and resource bytes"
 
 [[parse_crate]]
+path = "worlds/peak"
+reason = "the PEAK reader decodes its scripts' stored field bytes"
+
+[[parse_crate]]
 path = "worlds/anvil"
 reason = "the forge reader reads untrusted archive headers and tables"
 
