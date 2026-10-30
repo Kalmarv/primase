@@ -770,6 +770,51 @@ impl Component for FaceCull {
 
 pub use crate::layer_bake::resolve::SECOND_COLOUR;
 
+/// The tangent set a primitive lowered from a SpeedTree mesh keeps its stored tangent `T` in (`xyz`, and `w` the
+/// member's `w`, each unpacked as its programs unpack it, `x * 2 - 1`): the tangent Elden Ring's SpeedTree vertex
+/// programs take, where its `Tangent(0)` is the frame in the ordinary programs' convention
+/// (`fromsoft_formats::flver::Vertex`'s, `T × N`), which does not give `T` back.
+pub const SPEEDTREE_TANGENT: u8 = 1;
+
+/// Per primitive of a prototype, what the FLVER layout of the SpeedTree mesh it was lowered from declares to the game's
+/// SpeedTree vertex programs; `None` for a primitive of any other mesh. The primitive's streams hold the stored members
+/// decoded (the rest position, UV0, the normal and, in [`SPEEDTREE_TANGENT`], the tangent); this states which input of
+/// the program each of them is, as `TEXCOORD<n>` indices, and which inputs the game supplies per instance at draw time:
+/// the layout's members the file does not store.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct SpeedTreeInputs {
+    pub primitives: Vec<Option<SpeedTreeMesh>>,
+}
+/// One SpeedTree mesh's program inputs ([`SpeedTreeInputs`]).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SpeedTreeMesh {
+    /// The input of the rest position (`xyz`; its `w`, and the `zw` of the UV input, are the coarser level's position).
+    pub position: u32,
+    /// The input of UV0 (`xy`).
+    pub uv: u32,
+    /// The inputs of the normal and of the tangent, the members the program reads as them (unsigned normalized bytes).
+    pub normal: u32,
+    pub tangent: u32,
+    /// The members the file does not store, which the game supplies per instance: each its FLVER semantic and index.
+    pub instance: Vec<(u32, u32)>,
+}
+impl Component for SpeedTreeInputs {
+    const NAME: &'static str = "fromsoft.speedtree_inputs";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::PerPrimitive;
+    /// Which input each member is, not positions or directions.
+    fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
+        primase_core::world::Linearity::Invariant
+    }
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        to_value(self).map(Some)
+    }
+    fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
+        Some(
+            primase_core::remap_list(&self.primitives, from).map(|primitives| SpeedTreeInputs { primitives }),
+        )
+    }
+}
+
 /// Per primitive of a prototype, the streams it carries only because the layered M[Multiple] shaders read them as
 /// vertex inputs, in the order lowered: the FLVER Byte4C UV members (member `n` is `Color(n)`, UNORM8 exactly as
 /// stored: layer weights, snow, tint and detail), the second UV set (`TexCoord(1)`, the `zw` of the packed first

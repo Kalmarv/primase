@@ -23,9 +23,9 @@ pub use lights::{
 pub use program::{LiftedShader, Shader};
 pub use roles::{
     Attribute, BufferBinding, BufferSource, BufferTable, ConstantBinding, ConstantRole, FrameParameter,
-    FrameTexture, InputBinding, InputRole, KeyPart, LaneStream, ObjectMatrix, ObjectParameter, Occluded,
-    OutputBinding, OutputRole, OutputUses, ScreenTriangleValue, SkinPrefix, VariantKey, ViewParameter,
-    bind_output_uses, state_lines,
+    FrameTexture, InputBinding, InputRole, InstanceLanes, InstanceValue, KeyPart, LaneStream, ObjectMatrix,
+    ObjectParameter, Occluded, OutputBinding, OutputRole, OutputUses, ScreenTriangleValue, SkinPrefix,
+    VariantKey, ViewParameter, bind_output_uses, state_lines,
 };
 pub use select_variant::{SELECT_VARIANT, SelectVariant};
 pub use surface::Surface;

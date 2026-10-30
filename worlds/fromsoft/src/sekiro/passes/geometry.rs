@@ -17,15 +17,15 @@
 //! these files.
 use super::blockers::BlockerCards;
 use crate::components::models::{RigidModel, SkeletonOf, SourceModel};
-use crate::geometry::Part;
+use crate::geometry::{Part, tangent_to_scene};
 use crate::materials::{self, Material};
 use crate::pose::{StaticBones, static_bones};
 use crate::sekiro::components::lowered::{SourceMeshes, UvTiling};
 use crate::sekiro::source::{
-    FaceCull, LayerInputs, MaterialShader, MaterialSlots, MeshMasks, PrototypeSource, ShaderBundle,
-    ShaderStage,
+    FaceCull, LayerInputs, MaterialShader, MaterialSlots, MeshMasks, PrototypeSource, SPEEDTREE_TANGENT,
+    ShaderBundle, ShaderStage, SpeedTreeInputs, SpeedTreeMesh,
 };
-use fromsoft_formats::flver::{FaceSetKind, Model};
+use fromsoft_formats::flver::{FaceSetKind, Model, SpeedTreeLayout, Vertex, speedtree_layout};
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::world::Resource;
 use primase_core::{
@@ -253,6 +253,8 @@ struct Level {
     cull: Vec<bool>,
     /// Per primitive, the FLVER mesh it was lowered from.
     source_mesh: Vec<u32>,
+    /// Per primitive, what its SpeedTree mesh declares to the game's SpeedTree programs (`None` for any other mesh).
+    speedtree: Vec<Option<SpeedTreeMesh>>,
     /// Per primitive, its influences when its prototype keeps a skin.
     skin: Vec<Option<Influences>>,
     /// Per primitive, the Havok cloth display that holds its FLVER mesh (`havok.cloth`, [`HavokCloth::display_of`])
@@ -320,6 +322,14 @@ impl Level {
                 e,
                 LayerInputs {
                     primitives: self.inputs,
+                },
+            );
+        }
+        if self.speedtree.iter().any(Option::is_some) {
+            world.insert(
+                e,
+                SpeedTreeInputs {
+                    primitives: self.speedtree,
                 },
             );
         }
@@ -518,6 +528,24 @@ impl LowerFromSoftGeometry {
             let entity = *slots
                 .get(mesh.material)
                 .ok_or_else(|| format!("{prototype:?}: mesh {index} material slot {}", mesh.material))?;
+            // a SpeedTree mesh's program inputs, by the frame its vertices were given: the program's, or with
+            // speedtree-frame=authored the layout's pair
+            let speedtree = match model.speedtree_frame(index).map_err(|e| e.to_string())? {
+                Some(authored) => {
+                    let frame = match self.speedtree_frame {
+                        SpeedTreeFrame::Authored => authored,
+                        SpeedTreeFrame::Program => world
+                            .get::<MaterialShader>(entity)
+                            .and_then(|s| frames.get(&s.0))
+                            .copied()
+                            .ok_or_else(|| {
+                                format!("{prototype:?}: SpeedTree mesh {index}: no program frame")
+                            })?,
+                    };
+                    speedtree_mesh(model, index, frame).map_err(|e| format!("{prototype:?}: {e}"))?
+                }
+                None => None,
+            };
             let material = world
                 .get::<Material>(entity)
                 .ok_or_else(|| format!("{prototype:?}: slot {} has no fromsoft.material", mesh.material))?;
@@ -602,6 +630,12 @@ impl LowerFromSoftGeometry {
                 if source_streams_kept {
                     streams.extend(source_streams(&mesh.vertices, &layout, &part.source_vertices));
                 }
+                if let Some((_, tangent)) = &speedtree {
+                    streams.insert(
+                        Semantic::Tangent(SPEEDTREE_TANGENT),
+                        Stream::F32x4(stored_tangents(&mesh.vertices, *tangent, &part.source_vertices)?),
+                    );
+                }
                 let skinned = out.palette.is_some();
                 if skinned {
                     // a dynamic vertex's influences as stored; a static one's the bone it follows, at 1
@@ -650,6 +684,8 @@ impl LowerFromSoftGeometry {
                 out.inputs.push(members);
                 out.cull.push(f.cull);
                 out.source_mesh.push(index as u32);
+                out.speedtree
+                    .push(speedtree.as_ref().map(|(inputs, _)| inputs.clone()));
                 out.cloth.push(display.map(|display| ClothPrimitive {
                     display,
                     vertices: part.source_vertices.clone(),
@@ -737,6 +773,74 @@ fn bind_static_meshes(model: &Model, log: &mut PassLog) -> Result<(Model, Vec<Op
     Ok((posed, bones))
 }
 
+/// What mesh `index` of `model` declares to Elden Ring's SpeedTree vertex programs, its vertices' normal and tangent
+/// being the members at the inputs `frame` (`TEXCOORD<n>`), and which of its stored members ([`Vertex::speedtree`]) is
+/// that tangent; `None` for a mesh of an ordinary model and a billboard card. Every stored member of a SpeedTree layout
+/// is a UV member, the program's `TEXCOORD` input of its index ([`speedtree_layout`]).
+fn speedtree_mesh(
+    model: &Model,
+    index: usize,
+    [normal, tangent]: [u32; 2],
+) -> Result<Option<(SpeedTreeMesh, usize)>, String> {
+    if !model.speedtree {
+        return Ok(None);
+    }
+    let Some(members) = model.meshes[index]
+        .layouts
+        .first()
+        .and_then(|&l| model.layouts.get(l))
+    else {
+        return Ok(None);
+    };
+    let SpeedTreeLayout::Geometry { position, uv, .. } =
+        speedtree_layout(members).map_err(|e| e.to_string())?
+    else {
+        return Ok(None);
+    };
+    let stored: Vec<_> = members.iter().filter(|m| m.stored).collect();
+    let input = |k: usize| {
+        stored
+            .get(k)
+            .map(|m| m.index)
+            .ok_or_else(|| format!("SpeedTree mesh {index}: stored member {k}"))
+    };
+    let member = stored
+        .iter()
+        .position(|m| m.semantic == 5 && m.index == tangent)
+        .ok_or_else(|| format!("SpeedTree mesh {index}: its layout stores no TEXCOORD{tangent}"))?;
+    Ok(Some((
+        SpeedTreeMesh {
+            position: input(position)?,
+            uv: input(uv)?,
+            normal,
+            tangent,
+            instance: members
+                .iter()
+                .filter(|m| !m.stored)
+                .map(|m| (m.semantic, m.index))
+                .collect(),
+        },
+        member,
+    )))
+}
+
+/// The stored tangent of the vertices `vertices` of a SpeedTree mesh, its stored member `member`, each lane unpacked as
+/// the programs unpack it (`x * 2 - 1`) and carried into the scene's frame as every tangent is ([`tangent_to_scene`]:
+/// its direction of unit length, `w` negated by the frame's mirror, so the ordinary tangent the programs derive,
+/// `w (T x N)`, is the scene's): [`SPEEDTREE_TANGENT`].
+fn stored_tangents(mesh: &[Vertex], member: usize, vertices: &[u32]) -> Result<Vec<[f32; 4]>, String> {
+    vertices
+        .iter()
+        .map(|&v| {
+            let lanes = mesh[v as usize]
+                .speedtree
+                .get(member)
+                .ok_or_else(|| format!("a SpeedTree vertex without stored member {member}"))?;
+            Ok(tangent_to_scene(lanes.map(|x| x * 2. - 1.)))
+        })
+        .collect()
+}
+
 /// The UV sets beyond the first, as `TexCoord(n)` in the order the vertex layout stores them (a four component UV member
 /// is two sets), and the vertex colours, each as the input its semantic index in `layout` names (`COLOR0` as `Color(0)`,
 /// `COLOR1` as [`crate::sekiro::source::SECOND_COLOUR`]), of the vertices `vertices` of a mesh: what a material binary's
@@ -814,6 +918,7 @@ impl Pass for LowerFromSoftGeometry {
             Lods::NAME,
             LayerInputs::NAME,
             FaceCull::NAME,
+            SpeedTreeInputs::NAME,
             SourceMeshes::NAME,
             UvTiling::NAME,
             BlockerCards::NAME,
@@ -947,5 +1052,96 @@ impl Pass for LowerFromSoftGeometry {
             world.insert_resource(cards);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{speedtree_mesh, stored_tangents, tangent_to_scene};
+    use crate::sekiro::source::SpeedTreeMesh;
+    use fromsoft_formats::flver::{Member, Mesh, Model, Vertex};
+
+    /// A member of a SpeedTree layout: stream 0 for the stored ones, the instance stream (modifier 0x8000) for the others.
+    fn member(stored: bool, kind: u32, semantic: u32, index: u32) -> Member {
+        Member {
+            unknown: if stored { 0 } else { 0x8000_0001 },
+            stored,
+            offset: 0,
+            kind,
+            semantic,
+            index,
+        }
+    }
+
+    /// A SpeedTree mesh declares its rest position, UV0, normal and tangent inputs (the frame its vertices were given)
+    /// and the members the game supplies per instance; its stored tangent is unpacked as the programs unpack it. An
+    /// ordinary model's mesh declares nothing.
+    #[test]
+    fn a_speedtree_mesh_declares_its_program_inputs() {
+        let layout = vec![
+            member(false, 3, 0, 0),
+            member(false, 3, 5, 0),
+            member(false, 3, 5, 1),
+            member(true, 0x2e, 5, 2),
+            member(true, 0x2e, 5, 3),
+            member(true, 0x2e, 5, 4),
+            member(true, 0x13, 5, 5),
+            member(true, 0x13, 5, 6),
+        ];
+        let vertex = Vertex {
+            speedtree: vec![
+                [0.0; 4],
+                [0.0; 4],
+                [0.0; 4],
+                [1.0, 0.5, 0.0, 1.0],
+                [0.0, 1.0, 0.5, 0.25],
+            ],
+            ..Vertex::default()
+        };
+        let mut model = Model {
+            bones: Vec::new(),
+            dummies: Vec::new(),
+            version: 0x2001a,
+            speedtree: true,
+            layouts: vec![layout],
+            materials: Vec::new(),
+            meshes: vec![Mesh {
+                dynamic: false,
+                material: 0,
+                node: -1,
+                palette: Vec::new(),
+                layouts: vec![0],
+                vertices: vec![vertex],
+                faces: Vec::new(),
+            }],
+        };
+        let (inputs, member) = speedtree_mesh(&model, 0, [5, 6]).unwrap().unwrap();
+        assert_eq!(
+            inputs,
+            SpeedTreeMesh {
+                position: 2,
+                uv: 3,
+                normal: 5,
+                tangent: 6,
+                instance: vec![(0, 0), (5, 0), (5, 1)],
+            }
+        );
+        assert_eq!(member, 4);
+        assert_eq!(
+            stored_tangents(&model.meshes[0].vertices, member, &[0]).unwrap(),
+            vec![tangent_to_scene([-1.0, 1.0, 0.0, -0.5])],
+            "unpacked, then carried into the scene's frame"
+        );
+        let [x, y, z, w] = tangent_to_scene([-1.0, 1.0, 0.0, -0.5]);
+        assert_eq!(w, 0.5, "the frame's mirror negates w");
+        assert!((x + 0.5f32.sqrt()).abs() < 1e-6 && (y - 0.5f32.sqrt()).abs() < 1e-6 && z == 0.0);
+        // a program that reads another member as its tangent: that member is the one kept
+        assert_eq!(speedtree_mesh(&model, 0, [6, 5]).unwrap().unwrap().1, 3);
+        assert!(
+            speedtree_mesh(&model, 0, [5, 7]).is_err(),
+            "an input the layout does not store"
+        );
+        model.speedtree = false;
+        assert_eq!(speedtree_mesh(&model, 0, [5, 6]).unwrap(), None);
     }
 }

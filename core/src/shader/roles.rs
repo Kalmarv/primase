@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use iridia_interface::{AlphaComparison, Label, MatrixLines, OutputUse, ResourceId};
 
-use super::encoding::{NormalEncoding, NormalSpace, ScalarEncoding};
+use super::encoding::{LaneAffine, NormalEncoding, NormalSpace, ScalarEncoding};
 
 /// A vertex attribute a program's input reads: what the drawn mesh's stream holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -44,6 +44,21 @@ pub enum InputRole {
     Previous,
     /// The pipeline supplies it (the varying's system value says which).
     System,
+    /// Lanes of vertex attributes as [`InputRole::Lanes`] states them, each component stored through `map` (`v * scale +
+    /// bias` of the attribute's own value `v`) and read by the program as a float: a signed unit vector the source stores
+    /// in unsigned normalized bytes is [`LaneAffine::UNORM`], which the program unpacks as `x * 2 - 1`. A lane no entry
+    /// fills is not stated.
+    Mapped {
+        /// The attributes' components and the lanes they fill.
+        lanes: Vec<LaneStream>,
+        /// The map each component is stored through.
+        map: LaneAffine,
+    },
+    /// Values of the drawn instance the source feeds through a vertex input, the same for every vertex of the instance:
+    /// an instance stream the engine fills at draw time, not a stream of the mesh. Each entry is a value and the lanes it
+    /// fills; a lane no entry fills is not stated. A consumer whose vertices already hold the instance's transform (a
+    /// scene in world space) feeds the identity instance.
+    Instance(Vec<InstanceLanes>),
     /// A corner of the triangle a full-screen step of a render graph draws, which covers the view: the value of the
     /// corner it holds. The three corners, in vertex order, are at the clip-space positions (-1, 1, 1, 1), (3, 1, 1, 1)
     /// and (-1, -3, 1, 1), with the texture coordinates (0, 0), (2, 0) and (0, 2): (0, 0) at the view's top-left
@@ -80,6 +95,32 @@ pub struct LaneStream {
     /// byte of an input named BINORMAL0, as `(byte - 127) / 127` where the other permutations read TANGENT0.w; inferred
     /// from the program's decode of it, not captured from the game).
     pub component: u8,
+}
+/// The lanes `first..first + count` of an input that hold one value of the drawn instance ([`InputRole::Instance`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+pub struct InstanceLanes {
+    /// The value.
+    pub value: InstanceValue,
+    /// The first lane (0 for x).
+    pub first: u8,
+    /// How many lanes, from `first`, it fills: the value's own components, from its first.
+    pub count: u8,
+}
+/// A value of the drawn instance an instance stream carries ([`InputRole::Instance`]). The program places a vertex at
+/// `translation + scale * (axis 0, axis 1, axis 2) * p` for the position `p` it takes from the mesh.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum InstanceValue {
+    /// The instance's translation in world space (three components).
+    Translation,
+    /// The instance's uniform scale (one component).
+    Scale,
+    /// Axis `n` of the instance's rotation (0 x, 1 y, 2 z) in world space, a unit vector (three components).
+    Axis(u8),
+    /// How far the instance's geometry is blended from the coarser level of detail the mesh also stores toward its own
+    /// position (one component): 1 draws the mesh's own position, 0 the coarser one.
+    LodBlend,
 }
 /// A camera or view-wide value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
@@ -245,6 +286,11 @@ pub enum ObjectParameter {
     /// reaches one half). A consumer that draws the instance as fully shown feeds 1. The camera fade and the dither flags
     /// are other mechanisms: they switch the discard by noise on, they do not carry the factor.
     Fade,
+    /// Whether the wind leaves the instance's vertices still (one value): above zero, the program places each vertex where
+    /// its rest position and the instance put it; at zero or below, it moves it by the wind state the program's other
+    /// wind constants carry. A consumer that draws the vegetation still states this and says so; one that animates it
+    /// needs those constants as well.
+    WindOff,
 }
 /// A value of the frame being drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]

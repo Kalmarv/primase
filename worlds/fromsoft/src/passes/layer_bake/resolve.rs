@@ -20,7 +20,8 @@ use primase_core::Entity;
 use primase_core::shader::state_lines;
 use primase_core::shader::{
     Attribute, BufferBinding, BufferSource, ConstantBinding, ConstantRole, FrameParameter, FrameTexture,
-    InputBinding, InputRole, LaneStream, ObjectParameter, OutputBinding, OutputRole, ViewParameter,
+    InputBinding, InputRole, InstanceLanes, InstanceValue, LaneStream, ObjectParameter, OutputBinding,
+    OutputRole, ViewParameter,
 };
 use primase_core::{shader::Shader, shader::StageBinding, shader::TextureBinding, shader::TextureSource};
 use std::collections::{BTreeMap, BTreeSet};
@@ -1469,19 +1470,34 @@ fn tangent_set(interface: &Interface, index: u32) -> Option<u8> {
 }
 
 /// Bind then validate further tangent sets against every primitive drawing this material. A shared material
-/// cannot silently use a vector absent from one of its layouts, including set 0.
+/// cannot silently use a vector absent from one of its layouts, including set 0. A material that SpeedTree meshes draw
+/// binds its program's inputs by what their layouts declare ([`speedtree_inputs`]).
 pub fn resolve_vertex_for_geometry(
     shader: &Shader,
     entity: Entity,
     world: &primase_core::World,
     material: Entity,
 ) -> Result<VertexBinding> {
+    use crate::sekiro::source::SpeedTreeInputs;
     let mut binding = resolve_vertex(shader, entity)?;
-    let primitives: Vec<_> = world
+    let drawn: Vec<_> = world
         .iter::<primase_core::Mesh>()
-        .flat_map(|(_, m)| m.primitives())
-        .filter(|p| p.material == Some(material))
+        .flat_map(|(e, m)| m.primitives().iter().enumerate().map(move |(i, p)| (e, i, p)))
+        .filter(|(_, _, p)| p.material == Some(material))
         .collect();
+    let speedtree: Vec<_> = drawn
+        .iter()
+        .map(|&(e, i, _)| {
+            world
+                .get::<SpeedTreeInputs>(e)
+                .and_then(|s| s.primitives.get(i))
+                .and_then(Option::as_ref)
+        })
+        .collect();
+    if speedtree.iter().any(Option::is_some) {
+        speedtree_inputs(&mut binding.stage.inputs, &speedtree);
+    }
+    let primitives: Vec<_> = drawn.iter().map(|&(_, _, p)| p).collect();
     for input in &mut binding.stage.inputs {
         let InputRole::Stream(Attribute::Tangent(set)) = &input.role else {
             continue;
@@ -1502,6 +1518,82 @@ pub fn resolve_vertex_for_geometry(
         }
     }
     Ok(binding)
+}
+
+/// The inputs of a SpeedTree vertex program whose material the meshes `meshes` draw (each primitive's
+/// [`crate::sekiro::source::SpeedTreeMesh`], `None` for a primitive of an ordinary mesh), as Elden Ring's SpeedTree
+/// programs read them (with the per-instance stream an identity instance and the wind off, each outputs the decoded
+/// position, UV0, normal and tangent: `tests/speedtree.rs`):
+/// - the members the file does not store, which the game supplies per instance at draw time, as the instance's values:
+///   `POSITION0` its translation (`xyz`) and scale (`w`), `TEXCOORD0` its axis y (`xyz`) and the level-of-detail blend
+///   (`w`), `TEXCOORD1` its axis x (the programs take axis z as their cross product);
+/// - the stored members as the lowered streams that hold them decoded: the rest position (`xyz`; its `w`, and the `zw`
+///   of UV0's input, are the coarser level's position, which the lowering does not keep), UV0 (`xy`), and the normal and
+///   the stored tangent ([`crate::sekiro::source::SPEEDTREE_TANGENT`]) as the unsigned normalized bytes the program
+///   unpacks ([`LaneAffine::UNORM`]; the normal's `w` is not kept);
+/// - any other stored member (the wind's per-vertex data, read only while the wind moves the vertices) and any other
+///   instance member `Unknown`.
+///
+/// Meshes of differing declarations, or a primitive of an ordinary mesh beside them, leave those inputs `Unknown`.
+fn speedtree_inputs(inputs: &mut [InputBinding], meshes: &[Option<&crate::sekiro::source::SpeedTreeMesh>]) {
+    use crate::sekiro::source::SPEEDTREE_TANGENT;
+    use primase_core::shader::LaneAffine;
+    let mesh = match meshes {
+        [Some(first), rest @ ..] if rest.iter().all(|m| *m == Some(*first)) => *first,
+        _ => {
+            for input in inputs.iter_mut().filter(|i| i.role != InputRole::System) {
+                input.role = InputRole::Unknown {
+                    why: "the material is drawn by SpeedTree meshes whose layouts declare different inputs, or by \
+                          ordinary meshes beside them"
+                        .into(),
+                };
+            }
+            return;
+        }
+    };
+    let lanes = |semantic, count| LaneStream {
+        semantic,
+        first: 0,
+        count,
+        component: 0,
+    };
+    let value = |value, first, count| InstanceLanes { value, first, count };
+    for input in inputs.iter_mut().filter(|i| i.role != InputRole::System) {
+        let name = input.label.name.to_ascii_uppercase();
+        let index = input.label.index;
+        let per_instance = mesh.instance.iter().any(|&(semantic, i)| {
+            i == index && matches!((semantic, name.as_str()), (0, "POSITION") | (5, "TEXCOORD"))
+        });
+        input.role = match (name.as_str(), index) {
+            ("POSITION", 0) if per_instance => InputRole::Instance(vec![
+                value(InstanceValue::Translation, 0, 3),
+                value(InstanceValue::Scale, 3, 1),
+            ]),
+            ("TEXCOORD", 0) if per_instance => InputRole::Instance(vec![
+                value(InstanceValue::Axis(1), 0, 3),
+                value(InstanceValue::LodBlend, 3, 1),
+            ]),
+            ("TEXCOORD", 1) if per_instance => InputRole::Instance(vec![value(InstanceValue::Axis(0), 0, 3)]),
+            _ if per_instance => InputRole::Unknown {
+                why: "a member of the instance stream the game supplies at draw time whose value is not established".into(),
+            },
+            ("TEXCOORD", i) if i == mesh.position => InputRole::Lanes(vec![lanes(Attribute::Position, 3)]),
+            ("TEXCOORD", i) if i == mesh.uv => InputRole::Lanes(vec![lanes(Attribute::TexCoord(0), 2)]),
+            ("TEXCOORD", i) if i == mesh.normal => InputRole::Mapped {
+                lanes: vec![lanes(Attribute::Normal, 3)],
+                map: LaneAffine::UNORM,
+            },
+            ("TEXCOORD", i) if i == mesh.tangent => InputRole::Mapped {
+                lanes: vec![lanes(Attribute::Tangent(SPEEDTREE_TANGENT), 4)],
+                map: LaneAffine::UNORM,
+            },
+            _ => InputRole::Unknown {
+                why: "a stored SpeedTree member other than the rest position, UV0, normal and tangent (the wind's \
+                      per-vertex data): not lowered"
+                    .into(),
+            },
+        };
+    }
 }
 
 /// Bind a layered shader's vertex program (`<shader>_Gbuf.vpo`, the G-buffer pass of an unskinned draw, or `<shader>_Gbuf_Skin.vpo`
@@ -1681,6 +1773,9 @@ pub fn resolve_vertex(shader: &Shader, entity: Entity) -> Result<VertexBinding> 
                     // the draw's first entry in the instance index table: the program adds the instance number to it and
                     // reads the record that entry names
                     "VC_InstanceIdxOffset" => ConstantRole::Object(ObjectParameter::InstanceBase),
+                    // the SpeedTree wind's switch (`VC_SpeedTreeWind`'s `u_sGlobal.m_fSkip`): above zero, every
+                    // SpeedTree program leaves the vertex where the instance puts its rest position
+                    "m_fSkip" => ConstantRole::Object(ObjectParameter::WindOff),
                     // the scene's clip plane: none ([`NO_CLIP_PLANE_POLICY`])
                     "VC_ClipPlane" => ConstantRole::Default {
                         words: NO_CLIP_PLANE.iter().map(|v| v.to_bits()).collect(),
@@ -1993,6 +2088,108 @@ mod tests {
     use super::{centred, sat_words, slot_name, texture_slot};
     use fromsoft_formats::Game;
     use fromsoft_formats::metaparam::MtdParam;
+
+    /// A SpeedTree program's inputs as its mesh's layout declares them: the members the file does not store as the
+    /// instance's values, the stored ones as the decoded streams that hold them, the wind's member and an undeclared
+    /// instance member `Unknown`; the instance index stays the pipeline's. Meshes that declare differently leave every
+    /// input but the instance index `Unknown`.
+    #[test]
+    fn speedtree_inputs_are_bound_by_the_layouts_declaration() {
+        use crate::sekiro::source::{SPEEDTREE_TANGENT, SpeedTreeMesh};
+        use primase_core::shader::{
+            Attribute, InputBinding, InputRole, InstanceLanes, InstanceValue, LaneAffine, LaneStream,
+        };
+        let input = |name: &str, index: u32, role: InputRole| InputBinding {
+            label: iridia_interface::Label {
+                name: name.into(),
+                index,
+            },
+            role,
+        };
+        let layered = |name: &str, index: u32| input(name, index, InputRole::Stream(Attribute::Color(1)));
+        let fresh = || {
+            vec![
+                layered("POSITION", 0),
+                layered("TEXCOORD", 0),
+                layered("TEXCOORD", 1),
+                layered("TEXCOORD", 2),
+                layered("TEXCOORD", 3),
+                layered("TEXCOORD", 4),
+                layered("TEXCOORD", 5),
+                layered("TEXCOORD", 6),
+                layered("TEXCOORD", 7),
+                input("SV_InstanceID", 0, InputRole::System),
+            ]
+        };
+        let mesh = SpeedTreeMesh {
+            position: 2,
+            uv: 3,
+            normal: 5,
+            tangent: 6,
+            instance: vec![(0, 0), (5, 0), (5, 1), (5, 7)],
+        };
+        let mut inputs = fresh();
+        super::speedtree_inputs(&mut inputs, &[Some(&mesh), Some(&mesh)]);
+        let value = |value, first, count| InstanceLanes { value, first, count };
+        let lanes = |semantic, count| LaneStream {
+            semantic,
+            first: 0,
+            count,
+            component: 0,
+        };
+        let roles: Vec<_> = inputs.iter().map(|i| i.role.clone()).collect();
+        assert_eq!(
+            roles[..5],
+            [
+                InputRole::Instance(vec![
+                    value(InstanceValue::Translation, 0, 3),
+                    value(InstanceValue::Scale, 3, 1)
+                ]),
+                InputRole::Instance(vec![
+                    value(InstanceValue::Axis(1), 0, 3),
+                    value(InstanceValue::LodBlend, 3, 1)
+                ]),
+                InputRole::Instance(vec![value(InstanceValue::Axis(0), 0, 3)]),
+                InputRole::Lanes(vec![lanes(Attribute::Position, 3)]),
+                InputRole::Lanes(vec![lanes(Attribute::TexCoord(0), 2)]),
+            ]
+        );
+        assert!(matches!(roles[5], InputRole::Unknown { .. }), "the wind's member");
+        assert_eq!(
+            roles[6],
+            InputRole::Mapped {
+                lanes: vec![lanes(Attribute::Normal, 3)],
+                map: LaneAffine::UNORM
+            }
+        );
+        assert_eq!(
+            roles[7],
+            InputRole::Mapped {
+                lanes: vec![lanes(Attribute::Tangent(SPEEDTREE_TANGENT), 4)],
+                map: LaneAffine::UNORM
+            }
+        );
+        assert!(
+            matches!(roles[8], InputRole::Unknown { .. }),
+            "an instance member of no established value"
+        );
+        assert_eq!(roles[9], InputRole::System);
+
+        let other = SpeedTreeMesh {
+            normal: 4,
+            ..mesh.clone()
+        };
+        for meshes in [vec![Some(&mesh), Some(&other)], vec![Some(&mesh), None]] {
+            let mut inputs = fresh();
+            super::speedtree_inputs(&mut inputs, &meshes);
+            assert!(
+                inputs[..9]
+                    .iter()
+                    .all(|i| matches!(i.role, InputRole::Unknown { .. }))
+            );
+            assert_eq!(inputs[9].role, InputRole::System);
+        }
+    }
 
     #[test]
     fn sparse_tangent_labels_keep_their_layout_semantic_indices() {
