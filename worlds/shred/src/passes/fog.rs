@@ -133,6 +133,7 @@ impl Pass for LowerShredFog {
             fog: Some(fog),
             exposure: None,
             volumetric: None,
+            auto_exposure: None,
         });
         log.count("fog set from change_fog", 1);
         if a8 < 1.0 {

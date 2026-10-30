@@ -334,6 +334,7 @@ impl Pass for LowerAnvilSky {
                 fog: environment.fog.clone(),
                 exposure: None,
                 volumetric: None,
+                auto_exposure: None,
             });
             if self.sphere {
                 let material = world.spawn();

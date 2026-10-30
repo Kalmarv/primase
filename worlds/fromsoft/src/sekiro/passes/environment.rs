@@ -36,6 +36,21 @@
 //! hour is the scene's then: where no program stated one (`core.time_of_day`), the pass states the default hour, counted
 //! with its source, for the programs that key their values by the hour (Elden Ring's sky).
 //!
+//! Elden Ring's `Tone Map[Yebis]` auto exposure is `core.atmosphere`'s `auto_exposure`, as the game's tone map filter
+//! (Elden Ring 2.7.2.0, its code read and its readbacks fitted) computes it. The filter copies `ToneMap-Exposure`,
+//! `Enable AutoExposure`, the `AutoExposure` speeds, `Middle Gray`, `Center Weight`, `Adaption Max` and `Min`, and
+//! `FreezeAdaptionFade` from the group. Its GPU passes meter the frame as [`primase_core::ExposureMeter`]'s centre-weighted
+//! log2 mean states (the weight's horizontal scale the centre weight, its vertical the centre weight times the frame's
+//! height over width), and adapt the metered value by `1 - 10^(-speed * t)` a frame, `t` a time the game keeps per
+//! frame (seconds by its 1/30 default and its values in captured frames: not named). On the CPU the exposure is
+//! `2^Exposure / d * 2^-c`, `c` the soft-clamped difference from middle grey ([`primase_core::AutoExposure::correction`])
+//! and `d` a field of the filter its constructor sets to 1 and no Tone Map field writes (21 readbacks of two runs fit
+//! the rule with `d = 1` to 1e-4 stops), so `stops` is `Exposure` as stored. With auto exposure off or the fade frozen
+//! the difference is taken as 0: the exposure is the stored one, stated as a frozen auto exposure. The scene's light is
+//! metered in the game's radiance unit, `core.directional_light_unit`'s. Only the darkening side of the soft clamp (a
+//! frame below middle grey) has been seen in a frame; the brightening side is read from the code (counted). Sekiro's
+//! tone map filter is not traced, so its group stays not lowered.
+//!
 //! The `VolumetricFog ParamEditor` group's fields the census shows (`VolumetricFog Global FixedDensity`, the height
 //! density keys, `SkyLight SkyColor`, `DirLight DirectColor`, `GameScale` ...) are kept in `core.atmosphere`'s
 //! `volumetric` with the file's own names and values, unconverted: the densities are in a unit the group's `GameScale`
@@ -45,8 +60,9 @@ use super::settings::Factor;
 use crate::sekiro::source::DrawParam;
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{
-    Ambient, AmbientLight, Atmosphere, Component, DirectionalLightUnit, Environment, Light, LightKind,
-    LightSpecular, Name, Resource, Source, TimeOfDay, Transform, VolumetricFog, World,
+    Ambient, AmbientLight, Atmosphere, AutoExposure, Component, DirectionalLightUnit, Environment,
+    ExposureMeter, Light, LightKind, LightSpecular, Name, Resource, Source, TimeOfDay, Transform,
+    VolumetricFog, World,
 };
 
 const LIGHT_SET: &str = "LightSet ParamEditor";
@@ -56,6 +72,16 @@ const SPECULAR: &str = "Directional Light SpecColor0";
 const HEMI_UP: &str = "Directional Light Hemi Color Up";
 const HEMI_DOWN: &str = "Directional Light Hemi Color Down";
 const VOLUMETRIC: &str = "VolumetricFog ParamEditor";
+const TONE_MAP: &str = "Tone Map[Yebis]";
+const TONE_EXPOSURE: &str = "GS Presents - ToneMap-Exposure";
+const TONE_ENABLE: &str = "GS Presents - ToneMap-Enable AutoExposure";
+const TONE_BRIGHTEN: &str = "GS Presents - ToneMap-AutoExposure LightAdapt Speed";
+const TONE_DARKEN: &str = "GS Presents - ToneMap-AutoExposure DarkAdapt Speed";
+const TONE_MIDDLE_GREY: &str = "GS Presents - ToneMap-AutoExposure Middle Gray";
+const TONE_CENTRE_WEIGHT: &str = "GS Presents - ToneMap-AutoExposure Center Weight";
+const TONE_MAX: &str = "GS Presents - ToneMap-AutoExposure Adaption Max";
+const TONE_MIN: &str = "GS Presents - ToneMap-AutoExposure Adaption Min";
+const TONE_FREEZE: &str = "GS Presents - ToneMap-FreezeAdaptionFade";
 
 /// What the lab and the notices say of a volumetric fog this pass keeps: the one place the statement is made.
 const VOLUMETRIC_NOT_DRAWN: &str = "volumetric fog kept in core.atmosphere's volumetric fog with the file's own names and values, unconverted: a froxel volume whose densities are in a unit the group's GameScale sets and no source establishes, so no fog is drawn from it until a capture of the game establishes the unit";
@@ -104,6 +130,48 @@ fn volumetric(group: &crate::sekiro::source::DrawGroup) -> (VolumetricFog, usize
     };
     let kept = v.fields().len();
     (v, kept)
+}
+
+/// Elden Ring's auto exposure from its tone map group (the module documentation), and how many of the group's fields it
+/// takes; why not where a field it needs is not stored or out of the range the filter's rule holds for.
+fn auto_exposure(group: &crate::sekiro::source::DrawGroup) -> Result<(AutoExposure, usize), String> {
+    let need = |key: &str| float(group, key).ok_or(format!("{key} not stored as a finite float"));
+    let enabled = match group.value(TONE_ENABLE) {
+        Some(fromsoft_formats::gparam::Value::Uint(v)) => *v != 0,
+        Some(fromsoft_formats::gparam::Value::Bool(v)) => *v,
+        _ => return Err(format!("{TONE_ENABLE} not stored")),
+    };
+    let freeze = match group.value(TONE_FREEZE) {
+        Some(fromsoft_formats::gparam::Value::Bool(v)) => *v,
+        None => false,
+        _ => return Err(format!("{TONE_FREEZE} not stored as a bool")),
+    };
+    let auto = AutoExposure {
+        stops: need(TONE_EXPOSURE)?,
+        middle_grey: need(TONE_MIDDLE_GREY)?,
+        max: need(TONE_MAX)?,
+        min: need(TONE_MIN)?,
+        meter: ExposureMeter::CentreWeightedLog2 {
+            centre_weight: need(TONE_CENTRE_WEIGHT)?,
+        },
+        brighten_speed: need(TONE_BRIGHTEN)?,
+        darken_speed: need(TONE_DARKEN)?,
+        frozen: freeze || !enabled,
+    };
+    let ExposureMeter::CentreWeightedLog2 { centre_weight } = auto.meter;
+    if !(auto.max >= 0.0 && auto.min <= 0.0 && centre_weight >= 0.0) {
+        return Err(format!(
+            "adaption max {} below 0, min {} above 0 or centre weight {centre_weight} below 0: the filter's soft clamp is read for max >= 0 >= min",
+            auto.max, auto.min
+        ));
+    }
+    if !(auto.brighten_speed >= 0.0 && auto.darken_speed >= 0.0) {
+        return Err(format!(
+            "adapt speeds {} and {} not both at least 0",
+            auto.brighten_speed, auto.darken_speed
+        ));
+    }
+    Ok((auto, 8 + usize::from(group.value(TONE_FREEZE).is_some())))
 }
 
 /// `lower-fromsoft-environment{lux-per-unit}`: see the module documentation.
@@ -172,8 +240,8 @@ fn why_not_lowered(group: &str) -> &'static str {
         "FogParamEditor" | "Fog Volume" => {
             "fog: core.atmosphere states fog, but no census file stores this group, so its keys and units are not established"
         }
-        "Tone Map[Yebis]" => {
-            "tone map: every census file enables auto exposure (adapting between its stored minimum and maximum), so no static exposure in stops exists for core.atmosphere; contrast, white balance and colour are a tone curve core states none of"
+        TONE_MAP => {
+            "tone map: contrast, white balance, colour and lens effects are a tone curve core states none of; Sekiro's auto exposure too, its tone map filter not traced"
         }
         "Color Grading" | "ColorGrading[Yebis]" | "HDR Color Correction" => {
             "colour grading: core states none"
@@ -357,6 +425,28 @@ impl Pass for LowerFromSoftEnvironment {
                 *lowered.entry(VOLUMETRIC).or_default() += kept;
                 log.count("volumetric fogs kept in the source's units", 1);
                 log.omit(VOLUMETRIC_NOT_DRAWN, 1);
+            }
+        }
+        if let Some(group) = env.group(TONE_MAP)
+            && env.game == fromsoft_formats::Game::EldenRing
+        {
+            match auto_exposure(group) {
+                Ok((auto, kept)) => {
+                    let mut atmosphere = world.resource::<Atmosphere>().cloned().unwrap_or_default();
+                    if auto.frozen {
+                        log.count("auto exposures held at their stored stops (auto exposure off or its fade frozen)", 1);
+                    }
+                    atmosphere.exposure = None;
+                    atmosphere.auto_exposure = Some(auto);
+                    world.insert_resource(atmosphere);
+                    *lowered.entry(TONE_MAP).or_default() += kept;
+                    log.count("auto exposures lowered", 1);
+                    log.approximate(
+                        "auto exposure as Elden Ring 2.7.2.0's tone map filter computes it: the brightening side of its soft clamp read from the code, no frame has shown it; the adaptation's time per frame read as seconds from captured frames",
+                        1,
+                    );
+                }
+                Err(why) => log.omit(&format!("no auto exposure from the tone map group: {why}"), 1),
             }
         }
         // every field read and not lowered, by group and why
@@ -844,6 +934,119 @@ mod tests {
         assert_eq!(
             LOWER_FROMSOFT_ENVIRONMENT.instance(&both).unwrap().options(),
             both
+        );
+    }
+
+    /// m10_00_0000's tone map as the game's lookup samples it at erK1's clock 13.06 (the values its tone map filter
+    /// held then: Exposure 3.4042, Min -0.8933), and three fields the pass leaves.
+    fn tone_map(enable: u64, min: f64) -> DrawGroup {
+        group(
+            TONE_MAP,
+            0,
+            vec![
+                field(TONE_EXPOSURE, Value::Float(3.4042)),
+                field(TONE_ENABLE, Value::Uint(enable)),
+                field(TONE_BRIGHTEN, Value::Float(0.2)),
+                field(TONE_DARKEN, Value::Float(0.2)),
+                field(TONE_MIDDLE_GREY, Value::Float(-6.4)),
+                field(TONE_CENTRE_WEIGHT, Value::Float(7.0)),
+                field(TONE_MAX, Value::Float(0.4)),
+                field(TONE_MIN, Value::Float(min)),
+                field(TONE_FREEZE, Value::Bool(false)),
+                field("GS Presents - ToneMap-Contrast", Value::Float(0.5)),
+                field("GS Presents - ToneMap-ReinhardContrast", Value::Float(1.45)),
+                field("GS Presents - Vignetting Power", Value::Float(0.42)),
+            ],
+        )
+    }
+
+    fn elden(groups: Vec<DrawGroup>) -> World {
+        let mut w = world_with(groups);
+        let mut env = w.resource::<DrawParam>().cloned().unwrap();
+        env.game = fromsoft_formats::Game::EldenRing;
+        env.default_hour = crate::sekiro::read::draw_param::default_hour(fromsoft_formats::Game::EldenRing);
+        w.insert_resource(env);
+        w
+    }
+
+    #[test]
+    fn elden_rings_tone_map_is_the_auto_exposure_and_the_tone_curve_is_counted() {
+        let mut w = elden(vec![tone_map(1, -0.8933)]);
+        let log = run(&mut w, 1.0);
+        let atmosphere = w.resource::<Atmosphere>().unwrap();
+        assert_eq!(atmosphere.exposure, None);
+        let auto = atmosphere.auto_exposure.clone().unwrap();
+        assert_eq!(
+            auto,
+            AutoExposure {
+                stops: 3.4042,
+                middle_grey: -6.4,
+                max: 0.4,
+                min: -0.8933,
+                meter: ExposureMeter::CentreWeightedLog2 { centre_weight: 7.0 },
+                brighten_speed: 0.2,
+                darken_speed: 0.2,
+                frozen: false,
+            }
+        );
+        assert!(w.verify_resources().is_empty(), "{:?}", w.verify_resources());
+        // the game showed erK1's frame 42768 at 2^3.6826 from a metering 0.3336 below middle grey
+        assert!((auto.scale(-6.4 - 0.3336).log2() - 3.6826).abs() < 2e-4);
+        assert_eq!(log.counts["auto exposures lowered"], 1);
+        assert_eq!(
+            log.omitted[&format!(
+                "draw-param fields of {TONE_MAP} read, not lowered ({})",
+                why_not_lowered(TONE_MAP)
+            )],
+            3
+        );
+        assert!(
+            log.approximations
+                .keys()
+                .any(|k| k.starts_with("auto exposure as Elden Ring 2.7.2.0's"))
+        );
+    }
+
+    #[test]
+    fn auto_exposure_off_is_held_at_the_stored_stops_and_a_bound_on_the_wrong_side_is_refused() {
+        let mut w = elden(vec![tone_map(0, -0.8933)]);
+        let log = run(&mut w, 1.0);
+        let auto = w.resource::<Atmosphere>().unwrap().auto_exposure.clone().unwrap();
+        assert!(auto.frozen);
+        assert_eq!(auto.scale(-12.0), 3.4042f32.exp2());
+        assert_eq!(
+            log.counts["auto exposures held at their stored stops (auto exposure off or its fade frozen)"],
+            1
+        );
+        let mut w = elden(vec![tone_map(1, 0.5)]);
+        let log = run(&mut w, 1.0);
+        assert!(w.resource::<Atmosphere>().is_none());
+        assert!(
+            log.omitted
+                .keys()
+                .any(|k| k.starts_with("no auto exposure from the tone map group: adaption max 0.4"))
+        );
+        // every one of the group's fields is then counted as not lowered
+        assert_eq!(
+            log.omitted[&format!(
+                "draw-param fields of {TONE_MAP} read, not lowered ({})",
+                why_not_lowered(TONE_MAP)
+            )],
+            12
+        );
+    }
+
+    #[test]
+    fn sekiros_tone_map_is_not_lowered() {
+        let mut w = world_with(vec![tone_map(1, -0.5)]);
+        let log = run(&mut w, 1.0);
+        assert!(w.resource::<Atmosphere>().is_none());
+        assert_eq!(
+            log.omitted[&format!(
+                "draw-param fields of {TONE_MAP} read, not lowered ({})",
+                why_not_lowered(TONE_MAP)
+            )],
+            12
         );
     }
 }
