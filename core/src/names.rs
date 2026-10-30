@@ -20,6 +20,7 @@ use crate::detail::DetailedMaterial;
 use crate::draw_groups::{DrawGroupDefaults, DrawGroups};
 use crate::draw_order::DrawOrder;
 use crate::environment::{Environment, TimeOfDay};
+use crate::irradiance_volume::IrradianceVolume;
 use crate::layered::LayeredMaterial;
 use crate::light_unit::{DirectionalLightUnit, LightUnit};
 use crate::lod::Lods;
@@ -80,7 +81,7 @@ declared! {
         RigPose, SkinInstance, MorphWeights, Sockets, Attachment, JointMap, JointPlacement, Clip, ClipBinding, Asset, Shader, ShaderBinding, LiftedShader, ShaderSpecialisations,
         TextureLayers, MaterialPrograms, ProgramFacts, ClipKey, ClipLength, ClipEvents, ClipEffects, Controller, ControllerBinding,
         DrawGroups, DrawGroupDefaults, ContentNote, Record, DisplayName, PrimitiveKeys, MaterialParameters, SkyAnchor,
-        ParticleSystem;
+        ParticleSystem, IrradianceVolume;
     resources: PartScope, PartitionPlan, Environment, Atmosphere, StateAssignment, Surfaces, Threads, Memo, RenderGraph,
         LightUnit, DirectionalLightUnit, TimeOfDay,
 }

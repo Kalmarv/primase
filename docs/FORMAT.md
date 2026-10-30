@@ -172,6 +172,28 @@ says whether the system moves with that socket as the clip moves it, else it sta
 index of the starting event in the clip's `core.clip_events`, where the source says. A player begins each spawn at its
 start on the clip's clock.
 
+## Spatial irradiance volumes
+
+`core.irradiance_volume` belongs to a box-region entity with `core.transform`, which maps
+the unit box `[-1,1]` into world metres. `coefficients` references four linear
+`core.texture_layers` volumes in X/Y/Z/constant order, with identical dimensions and
+RGBA-capable formats. The reference visitor retains all four textures.
+
+Each sampled RGBA coefficient decodes to `(rgb - 0.5) * 2 * exp2((a - 0.5) * 20)`.
+`basis` contains the world directions for the first three terms; evaluate those terms
+against the corresponding normal components, add the constant term and take max(0).
+`sampling_from_region` maps normalized region coordinates into normalized sampling-box
+coordinates. `normal_offset` enables a one-texel offset in the normalized sampling-space
+normal direction before trilinear sampling. Sampling clamps to the stored volume.
+
+`half_extents` retains the three positive authored metric half-extents independently of
+matrix rounding. `fade_distance` is a finite nonnegative distance in metres:
+smoothstep from zero at the box boundary to one at that depth inside it. Zero means
+full weight inside. `diffuse_scale` is finite and nonnegative. Regions blend in increasing
+`priority` (u8); a region's full-weight interior excludes lower priorities. Equal-priority
+order follows the source entity order. Package selection is a separate state condition.
+No exposure, presentation probe or render-target quantization is part of this component.
+
 ## Lights as a program reads them
 
 | Name | Kind | Fields | Invariants |
