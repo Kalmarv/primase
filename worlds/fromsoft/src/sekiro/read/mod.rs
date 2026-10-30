@@ -24,3 +24,5 @@ pub mod states;
 pub(super) mod textures;
 pub mod visibility;
 pub mod weapons;
+
+pub mod world_state;

@@ -33,6 +33,7 @@ pub const EMITTED_NAMES: &[&str] = &[
     "core.sky_anchor",
     "core.source",
     "core.state_axis",
+    "core.state_assignment",
     "core.transform",
     "fromsoft.area_extras",
     "fromsoft.draw_param",
@@ -63,6 +64,7 @@ pub fn emitted_names(options: &Options) -> Vec<&'static str> {
     EMITTED_NAMES
         .iter()
         .copied()
+        .filter(|name| *name != "core.state_assignment" || options.world_state.is_some())
         .filter(|name| {
             *name != "fromsoft.draw_param" || options.draw_param != super::draw_param::DrawParams::None
         })
@@ -106,6 +108,12 @@ impl<'a> AreaReader<'a> {
     fn record(&mut self, r: &super::area::Report) -> Report {
         self.pending.extend(r.notices());
         let mut report = Report::new();
+        if let Some(state) = &r.world_state {
+            report.push((
+                "sekiro world state".into(),
+                serde_json::to_string(state).expect("world-state report contains only JSON values"),
+            ));
+        }
         report.push((
             "sekiro area".into(),
             format!(
