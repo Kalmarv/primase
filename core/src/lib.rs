@@ -48,7 +48,9 @@ pub use lod::{LodChoice, LodForm, Lods, SELECT_LOD, SelectLod};
 mod texture_forms;
 pub use texture_forms::{SELECT_TEXTURE_FORM, SelectTextureForm, TextureChoice, TextureForm, TextureForms};
 mod texture_switch;
-pub use texture_switch::{TEXTURE_SWITCH_START, TextureSwitch, TextureSwitchView, box_distance, world_box};
+pub use texture_switch::{
+    TEXTURE_SWITCH_START, TextureSwitch, TextureSwitchState, TextureSwitchView, box_distance, world_box,
+};
 mod marker;
 pub use marker::{Curve, Marker, kind_is_valid};
 pub mod particles;

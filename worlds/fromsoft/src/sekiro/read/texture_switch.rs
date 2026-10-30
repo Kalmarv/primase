@@ -4,10 +4,10 @@
 //!
 //! What the game does (eldenring.exe 1.17.3, traced in its code): every drawn instance keeps a texture level, created
 //! at 1 (the coarse form). Each frame it takes the distance from the camera to the instance's world-space box (0
-//! inside), times `tan(fovY / 2) / tan(43 deg / 2)` (the game's reference field of view; its reference height is off),
-//! and moves the level to 1 at `(B + P) * s` or more and back to 0 below `(B - P) * s`, where `B` and `P` are the
-//! `tex_lv01_BorderDist` and `tex_lv01_PlayDist` of the instance's `PartsDrawParam` row and `s` its LOD type's
-//! draw-distance scale. A border of 0 is no switch. Which row: an asset's is its model's `refDrawParamId`
+//! inside), times `tan(fovY / 2) / tan(43 deg / 2)` (the game's reference field of view), and moves the level to 1 at
+//! `(B + P) * s * kA` or more and back to 0 below `(B - P) * s * kA * h`, where `B` and `P` are the
+//! `tex_lv01_BorderDist` and `tex_lv01_PlayDist` of the instance's `PartsDrawParam` row, `s` its LOD type's
+//! draw-distance scale and `kA`, `h` the runtime factors below. A border of 0 is no switch. Which row: an asset's is its model's `refDrawParamId`
 //! (`AssetEnvironmentGeometryParam`, the row the game's geometry-info setup reads); a map piece's is the MSB part's
 //! `parts_draw_param_id` where it sets `use_parts_draw_param` (observed: it fits all 20 map-piece draws of two
 //! captures; a map piece without the flag has no row established here and no switch).
@@ -19,29 +19,81 @@
 //! `LoadBalancerNewDrawDistScaleParam_win64` (the other PC member of the family) holds no such row. Otherwise it
 //! refuses, naming the row.
 //!
-//! Not modelled (the game's runtime state, stated here): the memory load balancer's factor on both thresholds (1.0,
-//! or 0.5, 0.25, 0.1, 0 under memory pressure), the 3 s ramp of the return threshold after the system is enabled,
-//! and the level forced to 1 while it is off. The read states the steady state without memory pressure. Texture
-//! quality does not take part.
+//! The inputs, each stated in the world's `core.texture_switch_view` or refused by name:
+//!
+//! - The reference height: the game divides the factor by `height / ref_height` (two pixel counts of the view) where
+//!   `ref_height` is set, and sets it to 0 (its renderer setup at 0xb1c48f): `reference_height` 0, no height term.
+//! - Texture quality ([`TextureQuality`], an option of the read): the switch's code reads no quality setting (the
+//!   writers of its enable flag are the map load's steps and the character-creation menu; its runtime factors are the
+//!   two below), but one half of the flag is set at start-up by an obfuscated function not followed. The rule is
+//!   checked against captures at `MAX` only, so the read takes `MAX` (its default) and refuses any other quality.
+//!
+//! The state, stated as the world's [`TextureSwitchState::SETTLED`]: `kA` (the state's `load`) is the memory load
+//! balancer's factor, 1.0 when memory is not under pressure (0.5, 0.25, 0.1 or 0 under it); `h` (the state's `ramp`)
+//! rises from 0 to 1 over 3 s once the switch is enabled, and every level is held at 1 while it is off. The game turns
+//! it off from the start of each map load until the load's `STEP_HorseWait`, and while the character-creation menu
+//! is open. So the read's state is the game's in play, at least 3 s after a map load or the menu, with memory not under
+//! pressure; a frame outside that state is not what the read describes.
 use crate::invalid;
 use fromsoft_formats::param::{AssetGeometryParam, DrawDistScaleParam, Param, PartsDrawParam};
 use fromsoft_formats::{Archive, Install, Result, dcx::Decoder, game_params::read_param, msb};
-use primase_core::{TextureSwitch, TextureSwitchView};
+use primase_core::{TextureSwitch, TextureSwitchState, TextureSwitchView};
 use std::collections::BTreeSet;
 
 /// The game's reference vertical field of view for the switch distances, set by its renderer setup.
 pub const REFERENCE_FOV_Y_DEGREES: f32 = 43.0;
 
-/// The view resource a read with switches declares.
+/// The view resource a read with switches declares: the game's reference field of view, no reference height (the
+/// game's 0), in the settled state ([module docs](self)).
 pub fn view() -> TextureSwitchView {
     TextureSwitchView {
         reference_fov_y: REFERENCE_FOV_Y_DEGREES.to_radians(),
+        reference_height: 0,
+        state: TextureSwitchState::SETTLED,
+    }
+}
+
+/// The open point of the read's texture quality: the half of the switch's enable flag the game sets at start-up, through
+/// a function this read does not follow. The report names it ([`super::area::Report::notices`]).
+pub const QUALITY_OPEN_POINT: &str = "the start-up half of the switch's enable flag (settings +0x6f3) is set through an \
+     obfuscated function (eldenring.exe 1.17.3, 0xe46930) not followed: whether texture quality reaches the switch there \
+     is open";
+
+/// Elden Ring's texture quality setting (`TextureQuality` in its `GraphicsConfig.xml`), an input of a read with the
+/// switch. The game's own default is the preset its hardware detection picks; the read's is [`TextureQuality::Max`],
+/// the setting the rule was checked at, and it refuses any other ([`TextureQuality::check`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextureQuality {
+    Low,
+    Medium,
+    High,
+    #[default]
+    Max,
+}
+
+impl TextureQuality {
+    /// `Ok` at the quality the rule is checked at; otherwise the read's refusal, naming the quality.
+    pub fn check(self) -> Result<()> {
+        if self == TextureQuality::Max {
+            Ok(())
+        } else {
+            Err(invalid(
+                "texture switch",
+                0,
+                format!(
+                    "texture quality {self:?}: the switch is checked against the game at MAX only (the switch's code \
+                     reads no quality setting, but the start-up half of its enable flag is not followed)"
+                ),
+            ))
+        }
     }
 }
 
 /// What the switch rows of the read's placements came to.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Report {
+    /// The texture quality the switch was read at, where it was read.
+    pub quality: Option<TextureQuality>,
     /// Why the params could not be read (the regulation needs its key); no placement has a switch then.
     pub unread: Option<String>,
     /// Placements given `core.texture_switch`.
@@ -57,6 +109,7 @@ pub struct Report {
 }
 
 /// The three params the switch reads.
+#[derive(Debug)]
 pub struct Params {
     parts: PartsDrawParam,
     assets: AssetGeometryParam,
@@ -260,6 +313,7 @@ mod tests {
         assert_eq!(
             r,
             Report {
+                quality: None,
                 unread: None,
                 switched: 3,
                 border_zero: 1,
@@ -292,5 +346,20 @@ mod tests {
             (Some(1002), None, None)
         );
         assert!((view().reference_fov_y - 43f32.to_radians()).abs() < 1e-7);
+        assert_eq!(
+            (view().reference_height, view().state),
+            (0, TextureSwitchState::SETTLED)
+        );
+    }
+
+    /// The read takes the switch at MAX, its default, and refuses any other quality by name.
+    #[test]
+    fn only_the_checked_quality_is_read() {
+        assert_eq!(TextureQuality::default(), TextureQuality::Max);
+        assert!(TextureQuality::Max.check().is_ok());
+        for q in [TextureQuality::Low, TextureQuality::Medium, TextureQuality::High] {
+            let e = q.check().unwrap_err().to_string();
+            assert!(e.contains(&format!("texture quality {q:?}")), "{e}");
+        }
     }
 }

@@ -7,9 +7,10 @@
 //! group's texture, `materials::drawn_coarse`: observed, not traced); the textures made from the sources and the
 //! bake's textures carry their twins as forms (`core.texture_forms`), a material baked over its twins only where every
 //! texture its program reads has one; every asset and map piece placed carries its draw param's texture switch
-//! (`core.texture_switch`, with the view, `core.texture_switch_view`); and keeping the finest form of every texture
-//! (`select-texture-form{form=finest}`) leaves what the read without the option prepares, byte for byte, but for the
-//! materials with a binding drawn coarse and the textures they alone bind.
+//! (`core.texture_switch`, with the view and its settled state, `core.texture_switch_view`; another texture quality is
+//! refused); and keeping the finest form of every texture (`select-texture-form{form=finest}`) leaves what the read
+//! without the option prepares, byte for byte, but for the materials with a binding drawn coarse and the textures they
+//! alone bind.
 mod inputs;
 
 use fromsoft_formats::{Game, Keys, dcx::Decoder};
@@ -18,12 +19,13 @@ use primase_core::pass::{Pass, PassLog};
 use primase_core::pbr::PbrMaterial;
 use primase_core::{
     Component, Entity, Instance, Mesh, Name, Resource, SelectTextureForm, Texture, TextureChoice,
-    TextureForms, TextureSwitch, TextureSwitchView, World,
+    TextureForms, TextureSwitch, TextureSwitchState, TextureSwitchView, World,
 };
 use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::materials::Material;
 use primase_fromsoft::sekiro;
 use primase_fromsoft::sekiro::source::LowTexturePayloads;
+use primase_fromsoft::sekiro::texture_switch::TextureQuality;
 use sha2::Digest;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -264,6 +266,7 @@ fn low_twins_are_forms_and_change_nothing_else() -> Result<()> {
     // every asset and map piece placed switches its textures' form at its draw param's distances (the read's 679
     // placements), and every placement the preparation keeps keeps its switch
     let t = &report.texture_switch;
+    assert_eq!(t.quality, Some(TextureQuality::Max));
     assert_eq!(
         (
             t.unread.is_none(),
@@ -282,7 +285,7 @@ fn low_twins_are_forms_and_change_nothing_else() -> Result<()> {
         on.iter::<Instance>().all(|(e, _)| on.has::<TextureSwitch>(e)),
         "a placement kept without its switch"
     );
-    // the read says what of the game's state the switches leave out, and that the coarse bindings are observed
+    // the switches are stated in the game's settled state, not approximated, and the coarse bindings are observed
     let approximated = |what: &str| {
         report
             .notices()
@@ -291,9 +294,24 @@ fn low_twins_are_forms_and_change_nothing_else() -> Result<()> {
             .map(|n| n.count)
             .collect::<Vec<_>>()
     };
-    assert_eq!(
-        approximated("texture switches stated in the game's steady state"),
-        [679]
+    assert_eq!(approximated("texture switch"), Vec::<u64>::new());
+    // the quality is a selection, with its open point named
+    let selected: Vec<_> = report
+        .notices()
+        .into_iter()
+        .filter(|n| n.kind == NoticeKind::Selection && n.reason.starts_with("texture switches read at"))
+        .collect();
+    assert_eq!(selected.len(), 1);
+    assert!(
+        selected[0].reason.contains("texture quality Max"),
+        "{}",
+        selected[0].reason
+    );
+    assert_eq!(selected[0].count, 679);
+    assert!(
+        selected[0].examples.iter().any(|e| e.contains("0xe46930")),
+        "{:?}",
+        selected[0].examples
     );
     assert_eq!(
         approximated("bindings drawn in their texture's coarse form"),
@@ -308,6 +326,24 @@ fn low_twins_are_forms_and_change_nothing_else() -> Result<()> {
     );
     let view = on.resource::<TextureSwitchView>().expect("the switch's view");
     assert_eq!(view.verify(&on), Ok(()));
+    assert_eq!(
+        (view.reference_height, view.state),
+        (0, TextureSwitchState::SETTLED)
+    );
+    // a texture quality other than the one the switch is checked at is refused, by name
+    let refused = sekiro::read_game_area(
+        &install,
+        "m60_42_36_00",
+        &decoder,
+        &sekiro::Options {
+            low_textures: true,
+            texture_quality: TextureQuality::High,
+            ..Default::default()
+        },
+        &mut World::default(),
+    );
+    let e = refused.expect_err("a read at High is refused").to_string();
+    assert!(e.contains("texture quality High"), "{e}");
     // the finest form of every texture is the read without twins, but for the bindings drawn coarse
     SelectTextureForm {
         choice: TextureChoice::Finest,

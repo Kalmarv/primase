@@ -83,6 +83,9 @@ pub struct Options {
     /// binding the game draws coarse whatever the level (an Elden Ring asset's binding to another asset group's
     /// texture, [`materials::drawn_coarse`]; observed, not traced) binds the twin itself.
     pub low_textures: bool,
+    /// The texture quality Elden Ring's switch is read at, with `low_textures` ([`texture_switch::TextureQuality`]):
+    /// `Max` by default; the read refuses any other.
+    pub texture_quality: texture_switch::TextureQuality,
 }
 /// What a read of the object models' animation binders found.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -305,19 +308,20 @@ impl Report {
                 self.texture_switch.pieces_unestablished as u64,
             ));
         }
-        if self.texture_switch.switched > 0 {
+        if let Some(quality) = self.texture_switch.quality
+            && self.texture_switch.switched > 0
+        {
             out.push(
                 Notice::new(
                     stage,
-                    NoticeKind::Approximation,
-                    "texture switches stated in the game's steady state without memory pressure (the game's runtime \
-                     state, not modelled)",
+                    NoticeKind::Selection,
+                    format!(
+                        "texture switches read at texture quality {quality:?}, the one quality they are checked at \
+                         (others are refused)"
+                    ),
                     self.texture_switch.switched as u64,
                 )
-                .example("the memory load balancer's factor on both distances: 1.0 (0.5, 0.25, 0.1 or 0 under pressure)")
-                .example("the 3 s ramp of the return distance after the switch is enabled, and the level held at 1 while it is off")
-                .example("the texture quality setting: takes no part in the traced code")
-                .example("the reference height term: off in the traced setup, taken as off"),
+                .example(format!("open: {}", texture_switch::QUALITY_OPEN_POINT)),
             );
         }
         if self.coarse_bindings > 0 {
@@ -1718,6 +1722,8 @@ pub fn read_game_area_staged(
     // the texture switch's params, with the twins (Elden Ring's): a regulation the install cannot open is said, not an
     // error of the read
     let switch_params = if options.low_textures && game == Game::EldenRing {
+        options.texture_quality.check()?;
+        report.texture_switch.quality = Some(options.texture_quality);
         match texture_switch::Params::read(install, &archive, decoder) {
             Ok(p) => Some(p),
             Err(why) => {
