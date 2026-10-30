@@ -16,6 +16,7 @@ pub mod environment;
 pub mod extras;
 pub mod far;
 pub mod geometry;
+pub mod irradiance;
 pub mod layers;
 pub mod lights;
 mod low_forms;
@@ -98,6 +99,7 @@ pub fn register(registry: &mut PassRegistry) {
         &draw_params::SAMPLE_FROMSOFT_DRAW_PARAMS,
         &environment::LOWER_FROMSOFT_ENVIRONMENT,
         &lights::LOWER_FROMSOFT_LIGHTS,
+        &irradiance::LOWER_FROMSOFT_IRRADIANCE,
         &sky::LOWER_FROMSOFT_SKY,
         &effects::LOWER_FROMSOFT_EFFECTS,
         &weapons::HOLD_FROMSOFT_WEAPONS,

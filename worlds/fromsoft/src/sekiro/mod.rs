@@ -8,6 +8,7 @@
 mod components;
 pub mod passes;
 mod read;
+pub use components::irradiance::IrradianceRegion;
 pub use components::source::Region;
 pub use components::{character as character_data, effect as effect_data, lowered, source};
 pub use passes::collision;
@@ -33,6 +34,7 @@ pub use read::effects::{
 };
 pub use read::equipment::{character_skeletons, empty_character_reason, outfit_notices};
 pub use read::extras::{Report as ExtrasReport, light_record, records as read_map_records};
+pub use read::irradiance;
 pub use read::messages::npc_names_into_world;
 pub use read::objects::Report as ObjectCollisionReport;
 pub use read::render_graph::Report as RenderGraphReport;

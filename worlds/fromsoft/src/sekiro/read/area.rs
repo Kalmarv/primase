@@ -64,6 +64,9 @@ pub struct Options {
     /// off by default. Its programs are read from the install's engine binders; its steps are the game's, as recorded
     /// frames of the running game show them, whatever the area.
     pub render_graph: bool,
+    /// Read this map's GIIV coefficient packages and environment boxes, with package states
+    /// unresolved. `lower-fromsoft-irradiance` makes spatial irradiance components from them.
+    pub irradiance: bool,
     /// Whether the effects themselves are read where they stand ([`effects`]): the same routes as `effect_lights`, but the whole
     /// effect (`fromsoft.effect` on an entity placed there, the effect files and the textures they name) rather than its lights;
     /// off by default. `lower-fromsoft-effects` lowers them to `core.particles`.
@@ -136,6 +139,7 @@ pub enum StateClasses {
 /// What a read found and kept. Counts are source records (placements, prototypes, materials, texture files).
 #[derive(Default, Debug)]
 pub struct Report {
+    pub irradiance: super::irradiance::Report,
     /// The full area name read (`m11_01_00_00`).
     pub area: String,
     /// Selected placements' source shadow controls mapped to `core.shadows`
@@ -1681,6 +1685,16 @@ pub fn read_game_area_staged(
         &mut world,
     )?;
     stage("extras");
+    if options.irradiance {
+        if game != Game::Sekiro {
+            return Err(invalid(
+                "irradiance",
+                0,
+                "only Sekiro environment packages are established",
+            ));
+        }
+        report.irradiance = super::irradiance::read(&archive, decoder, &area, &layout, &mut world)?;
+    }
     report.extras = extras::assemble(
         &archive,
         decoder,

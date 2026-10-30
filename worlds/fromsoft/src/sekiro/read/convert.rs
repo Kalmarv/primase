@@ -25,6 +25,7 @@ use fromsoft_formats::dcx::Decoder;
 pub const EMITTED_NAMES: &[&str] = &[
     "core.condition",
     "core.instance",
+    "core.texture_layers",
     "core.name",
     "core.render_graph",
     "core.shader",
@@ -38,6 +39,7 @@ pub const EMITTED_NAMES: &[&str] = &[
     "fromsoft.flver",
     "fromsoft.layered_material",
     "fromsoft.light",
+    "fromsoft.irradiance_region",
     "fromsoft.map_collision",
     "fromsoft.material",
     "fromsoft.material_shader",
@@ -68,6 +70,9 @@ pub fn emitted_names(options: &Options) -> Vec<&'static str> {
             !matches!(*name, "core.sky_anchor" | "fromsoft.sky_part") || options.sky != super::sky::Sky::None
         })
         .filter(|name| !matches!(*name, "core.render_graph" | "core.shader") || options.render_graph)
+        .filter(|name| {
+            !matches!(*name, "core.texture_layers" | "fromsoft.irradiance_region") || options.irradiance
+        })
         .collect()
 }
 

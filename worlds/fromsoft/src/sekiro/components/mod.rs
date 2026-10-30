@@ -2,5 +2,6 @@
 //! ([`source`]) and those the passes make for later passes ([`lowered`]).
 pub mod character;
 pub mod effect;
+pub mod irradiance;
 pub mod lowered;
 pub mod source;

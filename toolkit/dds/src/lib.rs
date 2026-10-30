@@ -1,4 +1,4 @@
-//! Strict 2D DDS containers. Payloads are retained verbatim, never decoded.
+//! Strict DDS containers. Payloads are retained verbatim, never decoded.
 //!
 //! Legacy DDS has no colour-space tag and reads as linear; callers may override it.
 //! DX10 sRGB tags are preserved. Role and normal convention are not DDS metadata:
@@ -150,6 +150,74 @@ fn dimensions(w: u32, h: u32, n: u32) -> Result<()> {
         return Err(invalid(28, "invalid mip count"));
     }
     Ok(())
+}
+/// Read a tightly packed DX10 3D texture, retaining each mip's depth slices in file order.
+/// A volume is not a 2D array: its depth halves at each mip along with width and height.
+pub fn read_volume(bytes: &[u8]) -> Result<primase_core::TextureLayers> {
+    use primase_core::{TextureLayers, TextureShape};
+    if bytes.get(..4) != Some(b"DDS ") || word(bytes, 4)? != 124 || word(bytes, 76)? != 32 {
+        return Err(invalid(0, "invalid DDS header"));
+    }
+    let flags = word(bytes, 8)?;
+    if flags & 0x801007 != 0x801007 || word(bytes, 112)? & 0x200000 == 0 {
+        return Err(invalid(8, "missing volume header flags"));
+    }
+    if word(bytes, 80)? & FOURCC == 0 || bytes.get(84..88) != Some(b"DX10") {
+        return Err(Error::Unsupported("volume without a DX10 header".into()));
+    }
+    if word(bytes, 132)? != 4 || word(bytes, 140)? != 1 {
+        return Err(invalid(132, "expected one 3D resource"));
+    }
+    if word(bytes, 136)? != 0 || word(bytes, 144)? != 0 || word(bytes, 112)? & 0xfe00 != 0 {
+        return Err(Error::Unsupported("volume misc flags / cube metadata".into()));
+    }
+    let width = word(bytes, 16)?;
+    let height = word(bytes, 12)?;
+    let depth = word(bytes, 24)?;
+    let mips = word(bytes, 28)?.max(1);
+    if width == 0 || height == 0 || depth == 0 || mips > 32 - width.max(height).max(depth).leading_zeros() {
+        return Err(invalid(12, "invalid volume dimensions or mip count"));
+    }
+    let (format, color_space) = from_dxgi(word(bytes, 128)?)?;
+    let top = size(format, width, height)?;
+    if flags & 8 != 0 && u64::from(word(bytes, 20)?) != u64::from(width) * u64::from(format.block_bytes()) {
+        return Err(invalid(20, "padded or inconsistent volume row pitch"));
+    }
+    // DDS's compressed linear-size field describes one top-level depth slice.
+    if flags & 0x80000 != 0 && word(bytes, 20)? as usize != top {
+        return Err(invalid(20, "inconsistent volume slice size"));
+    }
+    let mut end = 148_usize;
+    let mut levels = Vec::new();
+    for mip in 0..mips {
+        let slice_size = size(format, (width >> mip).max(1), (height >> mip).max(1))?;
+        let slices = (depth >> mip).max(1);
+        let mut level = Vec::new();
+        for _ in 0..slices {
+            let next = end
+                .checked_add(slice_size)
+                .ok_or_else(|| invalid(end, "volume size overflow"))?;
+            let slice = bytes
+                .get(end..next)
+                .ok_or_else(|| invalid(end, "truncated volume slice"))?;
+            level.push(slice.to_vec());
+            end = next;
+        }
+        levels.push(level);
+    }
+    if end != bytes.len() {
+        return Err(invalid(end, "trailing volume payload"));
+    }
+    Ok(TextureLayers {
+        shape: TextureShape::Volume { depth },
+        width,
+        height,
+        format,
+        levels,
+        color_space,
+        role: TexRole::Other,
+        normal: None,
+    })
 }
 /// Read one tightly packed 2D texture, consuming the exact input length.
 /// Arrays, cubes, volumes, 1D resources and DX10 alpha-mode metadata are rejected.
