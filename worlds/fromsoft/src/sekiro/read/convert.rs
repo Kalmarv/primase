@@ -53,6 +53,7 @@ pub const EMITTED_NAMES: &[&str] = &[
     "fromsoft.shadow_flags",
     "fromsoft.sky_part",
     "fromsoft.texture_payloads",
+    "fromsoft.wetness",
 ];
 
 /// Coverage declaration for the requested read. A draw-param resource is optional:
@@ -69,6 +70,13 @@ pub fn emitted_names(options: &Options) -> Vec<&'static str> {
         })
         .filter(|name| {
             *name != "fromsoft.draw_param" || options.draw_param != super::draw_param::DrawParams::None
+        })
+        .filter(|name| {
+            *name != "fromsoft.wetness"
+                || options
+                    .weather
+                    .as_ref()
+                    .is_some_and(|state| state.wetness.is_some())
         })
         .filter(|name| {
             !matches!(*name, "core.sky_anchor" | "fromsoft.sky_part") || options.sky != super::sky::Sky::None
@@ -117,6 +125,10 @@ impl<'a> AreaReader<'a> {
             ));
             self.pending.push(Notice::new("fromsoft reader", primase_core::convert::NoticeKind::Unsupported,
                 "weather GPARAM layer merging (WeatherOutdoor, WeatherBase wetting weight, CommonEvent) is not traced; the collision-selected area's file is read without these layers", 1).example(weather.weather_outdoor.clone()));
+            if let Some(wetness) = &weather.input.wetness {
+                self.pending.push(Notice::new("fromsoft reader", primase_core::convert::NoticeKind::Unsupported,
+                    "named wetness retained as fromsoft.wetness; WeatherBase environment composition and surface wetting are not yet applied", 1).example(wetness.name.clone()));
+            }
         }
         if let Some(state) = &r.world_state {
             report.push((

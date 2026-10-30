@@ -79,6 +79,15 @@ creation limit identifies the sky state. This writes a `core.state_assignment`, 
 axis's unresolved default. Missing sky membership, unknown weather IDs and empty provenance are
 refused. A clock and map alone never choose a lottery result.
 
+The snapshot may also carry `wetness: {name, source, value}`, a separately named observation of
+the effective WeatherBase weight. `value` must be finite and between 0 and 1. The reader retains
+it as the `fromsoft.wetness` resource and in the weather report. Omitting it means unknown;
+neither the current weather row nor its `WetTime` supplies a default. In the native weather
+update, a positive `WetTime` supplies an accumulation rate while the stored weight retains the
+history of previous updates; the WeatherBase getter can also select an explicit override.
+This input carries the getter's effective value. Environment composition and material wetting
+remain explicitly reported as unsupported.
+
 The report names the selected WeatherOutdoor file, but refuses weather-layer composition:
 WeatherOutdoor, WeatherBase wetting weights and CommonEvent merging are not yet traced. Only
 the explicitly selected area's file is read. The lab exposes the snapshot as `weather`, and

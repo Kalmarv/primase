@@ -285,6 +285,11 @@ fn elden_rings_sky_is_read_as_weathers() -> Result<(), Box<dyn std::error::Error
                 source: "independent regulation census: WeatherParam row 0 GparamId 0, WeatherAssetReplaceParam map60423600 limit0".into(),
                 weather: 0,
                 fire_ash: false,
+                wetness: Some(sekiro::weather::Wetness {
+                    name: "Gatefront observation".into(),
+                    source: "native WeatherBase getter before and after the Gatefront frame: effective weight 0".into(),
+                    value: 0.0,
+                }),
             }),
             // a small region: the sky is kept whatever the region
             region: Some(sekiro::Region {
@@ -303,6 +308,11 @@ fn elden_rings_sky_is_read_as_weathers() -> Result<(), Box<dyn std::error::Error
         "/param/drawparam/m00_00_0000_weatheroutdoor.gparam.dcx"
     );
     assert_eq!(weather.sky, "weather-0");
+    let wetness = world
+        .resource::<sekiro::weather::Wetness>()
+        .expect("named wetness retained");
+    assert_eq!(wetness.value, 0.0);
+    assert_eq!(Some(wetness), weather.input.wetness.as_ref());
     assert_eq!(
         world
             .resource::<primase_core::state::StateAssignment>()
