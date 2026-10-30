@@ -19,11 +19,13 @@
 //!   program of the game the sun's stored values back. A sun whose colour is black or whose weight is 0 (or not
 //!   finite, or negative) is none, counted. Elden Ring stores the same fields and is lowered the same way; no Elden Ring
 //!   frame has shown its light set reaching a program yet (stated in [`Pass::approximates`]).
-//! - `Directional Light Hemi Color Up` and `Hemi Color Down`: the ambient's sky and ground colours, read as linear (no
-//!   frame has shown how they reach a program); the equator colour is not stored and is taken as their mean (counted).
+//! - `Directional Light Hemi Color Up` and `Hemi Color Down`: each hemisphere is `(rgb * rgb) * w`, with f32
+//!   operations. In Sekiro 1.06 frame 13604, both `cbLight` sets store their half-sum as `AmbientSH`'s constant
+//!   coefficient and their half-difference as its Y coefficient, bit for bit. The gradient carries these weighted
+//!   endpoints and their mean. This establishes the conversion, not the deferred ambient's light source: the captured
+//!   deferred sun program does not read `AmbientSH`; `GXEnvMapRegion` instead samples spatial irradiance textures.
 //!   The ambient's intensity is `lux-per-unit`, at the scale of a directional light's (the same approximation
-//!   `lower-unity-ambient` states). The census files store no `Hemi Color` field at all, so a Sekiro read has no ambient
-//!   from this pass.
+//!   `lower-unity-ambient` states).
 //!
 //! The fills (`Angle1`, `LocalLight` lights) and a sun's sharpness are counted as not lowered. Later files of a map (`_0010` ...) store only the
 //! fields they change.
@@ -212,7 +214,7 @@ impl Pass for LowerFromSoftEnvironment {
         ]
     }
     fn approximates(&self) -> &'static str {
-        "the sun's intensity at the calibrated lux per unit of radiance; Elden Ring's light set read with the transfer a Sekiro frame shows; hemisphere colours as linear; the ambient's equator the mean of its hemispheres"
+        "the sun's intensity at the calibrated lux per unit of radiance; Elden Ring's light set read with the transfer a Sekiro frame shows; ambient intensity at the calibrated lux per unit"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         let Some(mut env) = world.resource::<DrawParam>().cloned() else {
@@ -313,7 +315,9 @@ impl Pass for LowerFromSoftEnvironment {
                 }
             }
             match (colour(set.value(HEMI_UP)), colour(set.value(HEMI_DOWN))) {
-                (Some((sky, _)), Some((ground, _))) => {
+                (Some((up, up_weight)), Some((down, down_weight))) => {
+                    let sky = up.map(|c| (c * c) * up_weight);
+                    let ground = down.map(|c| (c * c) * down_weight);
                     let equator = [0, 1, 2].map(|i| (sky[i] + ground[i]) / 2.);
                     ambient = Some(Ambient {
                         intensity: lux,
@@ -321,14 +325,6 @@ impl Pass for LowerFromSoftEnvironment {
                     });
                     *lowered.entry(LIGHT_SET).or_default() += 2;
                     log.count("gradient ambients lowered", 1);
-                    log.approximate(
-                        "hemisphere colours read as linear (no frame of the game has shown how they reach a program)",
-                        1,
-                    );
-                    log.approximate(
-                        "the ambient's equator colour taken as the mean of its hemispheres",
-                        1,
-                    );
                     log.approximate("ambient intensity at the calibrated lux per unit, the scale of a directional light's", 1);
                 }
                 _ => {
@@ -574,9 +570,9 @@ mod tests {
             Some(Ambient {
                 intensity: 100.0,
                 light: AmbientLight::Gradient {
-                    sky: [0.25, 0.5, 1.0],
-                    equator: [0.15, 0.3, 0.5],
-                    ground: [0.05, 0.1, 0.0],
+                    sky: [0.0625, 0.25, 1.0],
+                    equator: [(0.0625 + 0.05 * 0.05) / 2., (0.25 + 0.1 * 0.1) / 2., 0.5],
+                    ground: [0.05 * 0.05, 0.1 * 0.1, 0.0],
                 },
             })
         );
@@ -618,7 +614,7 @@ mod tests {
             "{:?}",
             log.approximations
         );
-        assert_eq!(log.approximations.len(), 5, "{:?}", log.approximations);
+        assert_eq!(log.approximations.len(), 3, "{:?}", log.approximations);
     }
 
     #[test]
