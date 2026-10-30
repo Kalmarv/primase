@@ -23,7 +23,7 @@ malformed/truncated inputs, and a real-disc census. The latter is a structural c
 independent semantic decode of the enclosed resources.
 
 Configure `installs.shred` in the local test-data file as the extracted disc root containing `PS3_GAME/USRDIR`.
-Run `cargo test --release -p primase-shred -p rme-formats -- --nocapture` with that configuration. Smoke depth selects eight archives
+Run `cargo test --profile gate -p primase-shred -p rme-formats -- --nocapture` with that configuration. Smoke depth selects eight archives
 by a seeded rotation of sorted paths; full depth opens every archive and decodes every stream, checking the known
 disc census: 336 archives, 67,320 entry occurrences, 31,227 streams, 111,391 blocks, 4,221 stored blocks.
 

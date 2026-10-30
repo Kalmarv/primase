@@ -329,8 +329,11 @@ commit a populated configuration. A query whose key is not configured prints one
 key; `[run] require = 'gate'` makes the inputs a change must have fail instead, so run the real-data tests a change
 affects with it and a skipped affected test counts as a failure, not a pass.
 
-The real-data tests run fastest under [cargo-nextest](https://nexte.st) (`cargo nextest run --release -p <crate>`): it
-runs every test as its own process across all the binaries at once, where `cargo test` runs one binary after another.
+The real-data tests run fastest under [cargo-nextest](https://nexte.st) (`cargo nextest run --cargo-profile gate -p
+<crate>`): it runs every test as its own process across all the binaries at once, where `cargo test` runs one binary
+after another. The `gate` profile is release with debug assertions, so the pass checks the test suites rely on
+(`PassManager::pass_checks`: each pass's effects against its declarations, and the verifiers) run on the installs'
+data too; under plain `--release` they are off, and a pass that adds a component it does not declare passes.
 `.config/nextest.toml` weights each test that holds gigabytes of an install by its peak memory, so the tests running at
 once stay within about 16 GB; nextest does not run doctests (`cargo test --doc`). `[run] threads` sets how many threads
 one heavy test's own work may use.

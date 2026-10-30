@@ -156,3 +156,11 @@ opt-level = 1
 [profile.dev.package."*"]
 opt-level = 2
 debug = false
+
+# The real-data suite's profile (`cargo nextest run --cargo-profile gate`): release speed with debug assertions, so the
+# checks that are on in the test suites and off in release builds run on the installs' data too. Without them a pass
+# that adds a component it does not declare passes every real-data test (`PassManager::pass_checks` follows
+# `debug_assertions`), and only a debug run of the same test names it.
+[profile.gate]
+inherits = "release"
+debug-assertions = true
