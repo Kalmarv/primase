@@ -353,6 +353,7 @@ fn selected_normal_identity_controls_both_transforms() {
             uv_number: 1,
             address: [None; 2],
             available: true,
+            coarse_of: None,
         },
     );
     // the preview picks it: no normal of the base map's family, and slot 3 before the others

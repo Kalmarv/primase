@@ -1324,6 +1324,7 @@ mod tests {
             uv_number: 1,
             address: [None; 2],
             available: true,
+            coarse_of: None,
         };
         interface.resources = vec![texture(0, "material_Texture2D_8")];
         let material = LayeredMaterial {

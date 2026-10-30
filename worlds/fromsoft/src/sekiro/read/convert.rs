@@ -326,6 +326,7 @@ mod tests {
                     uv_number: 1,
                     address: [None; 2],
                     available: true,
+                    coarse_of: None,
                 },
             );
             let e = world.spawn();

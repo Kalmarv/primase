@@ -17,6 +17,7 @@ fn package_stem(path: &str) -> String {
     let lower = fromsoft_formats::names::fold(path);
     stem(lower.strip_suffix(".dcx").unwrap_or(&lower))
 }
+#[derive(Clone)]
 pub(super) enum Location {
     Split(String),
     /// The DDS as the package stored it, shared with the payloads a load takes from it (the catalog outlives the
@@ -105,13 +106,7 @@ impl Catalog {
                 .low
                 .iter()
                 .filter(|(n, _)| held.contains(*n))
-                .map(|(n, l)| {
-                    let location = match l {
-                        Location::Split(path) => Location::Split(path.clone()),
-                        Location::Inline(bytes) => Location::Inline(Arc::clone(bytes)),
-                    };
-                    (format!("{n}_l"), location)
-                })
+                .map(|(n, l)| (format!("{n}_l"), l.clone()))
                 .collect(),
             low: BTreeMap::new(),
         };

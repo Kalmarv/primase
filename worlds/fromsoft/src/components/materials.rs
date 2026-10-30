@@ -118,6 +118,8 @@ impl Definition {
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct Binding {
+    /// The stem of the texture the game draws for the binding: the stored path's, or for a binding the game draws in
+    /// its texture's coarse form ([`Binding::coarse_of`]) the stem of that form, `<stored stem>_l`.
     pub texture: String,
     pub scale: [f32; 2],
     pub uv_number: i32,
@@ -126,6 +128,12 @@ pub struct Binding {
     pub address: [Option<iridia_interface::AddressMode>; 2],
     /// Whether the area's texture catalog holds the texture (the reader's fact; a texture it lacks is not loaded).
     pub available: bool,
+    /// The stored path's stem where the game draws that texture's coarse form (its `_l` twin, `texture`) for this
+    /// binding whatever the placement's texture level ([`crate::materials::drawn_coarse`]); `None` where the binding
+    /// draws the stored texture, which then follows the placement's level where it has forms. Set only where the read
+    /// holds the twin.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coarse_of: Option<String>,
 }
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct LayeredMaterial {
@@ -474,7 +482,8 @@ impl Component for Material {
     /// 4: no `two_sided` (sidedness is the face sets' `fromsoft.face_cull`). 5: the source's facts only (each
     /// binding's availability); the preview textures, the tiling and the name-based surface are the passes'
     /// ([`crate::preview`]). 6: the definition may be a material binary ([`Definition`]; an MTD serializes as before).
-    const VERSION: u32 = 6;
+    /// 7: a binding may draw its texture's coarse form ([`Binding::coarse_of`]; a binding without serializes as before).
+    const VERSION: u32 = 7;
     fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, primase_core::json::JsonError> {
         primase_core::json::to_value(self).map(Some)
     }

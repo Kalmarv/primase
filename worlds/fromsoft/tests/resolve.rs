@@ -84,6 +84,7 @@ fn bound(stem: &str, scale: [f32; 2], address: [Option<AddressMode>; 2]) -> Bind
         uv_number: 0,
         address,
         available: true,
+        coarse_of: None,
     }
 }
 /// M[Multiple] with an albedo declared at slot 8 and a normal at slot 2 (unbound); slot 8 is also named by an

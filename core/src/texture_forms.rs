@@ -18,8 +18,9 @@ use crate::{Component, Entity, JsonError, Name, Source, Texture, TextureFile, Wo
 /// `aetNNN_MMM.tpf.dcx` and a low-resolution `aetNNN_MMM_l.tpf.dcx` encoded on its own, at other sizes and sometimes in
 /// another format). Nothing binds a form directly, and a form has no forms of its own. The game holds both forms at
 /// once and picks one per placement: in a captured Elden Ring frame, one placement of an asset samples the full
-/// texture while another placement of the same mesh samples the low one. What decides which (distance, with what
-/// hysteresis) is not measured, so nothing here says which form is drawn where: [`SelectTextureForm`] keeps one.
+/// texture while another placement of the same mesh samples the low one. Where a source states which form a placement
+/// draws (by distance, with hysteresis), the placement carries [`crate::TextureSwitch`] and a renderer applies it per
+/// frame; a writer cannot, and [`SelectTextureForm`] keeps one form.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct TextureForms {
     pub detail: u8,

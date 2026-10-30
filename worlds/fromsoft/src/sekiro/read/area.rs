@@ -5,7 +5,7 @@
 //! not cover yet (world states, materials without a definition) is in its notices.
 use super::{
     animation, collision, draw_param, effect_lights, effects, extras, groups, objects, shaders, shadows, sky,
-    states, textures,
+    states, texture_switch, textures,
 };
 use crate::sekiro::source::{self, Region};
 use crate::{invalid, materials};
@@ -77,9 +77,11 @@ pub struct Options {
     /// Whether each read texture's low-resolution twin is read too ([`source::LowTexturePayloads`]): the game's
     /// `<stem>_l`, a texture of its own beside the texture (Sekiro's area binders) or in the `_l` package beside its
     /// package (Elden Ring's assets). Off by default: the read is as it was. A texture with no twin keeps only itself
-    /// and is named in [`Report::missing_low_textures`]. The game holds both and picks one per placement; what decides
-    /// which is not measured, so the lowering gives a texture its twin as a form (`core.texture_forms`) and draws
-    /// neither in its place.
+    /// and is named in [`Report::missing_low_textures`]. The game holds both and picks one per placement: the lowering
+    /// gives a texture its twin as a form (`core.texture_forms`), and Elden Ring's placements whose draw param switches
+    /// carry the rule (`core.texture_switch`, with the world's `core.texture_switch_view`; [`texture_switch`]). A
+    /// binding the game draws coarse whatever the level (an Elden Ring asset's binding to another asset group's
+    /// texture, [`materials::drawn_coarse`]; observed, not traced) binds the twin itself.
     pub low_textures: bool,
 }
 /// What a read of the object models' animation binders found.
@@ -203,6 +205,15 @@ pub struct Report {
     pub low_textures: usize,
     pub low_texture_packages: usize,
     pub missing_low_textures: Vec<String>,
+    /// With `low_textures`: the material bindings of the read models that the game draws in their texture's coarse
+    /// form whatever the placement's level, bound to that form ([`materials::drawn_coarse`]; observed, not traced).
+    pub coarse_bindings: usize,
+    /// The coarse forms those bindings bind, loaded as textures of their own (counted in `textures`; they have no twin
+    /// of their own, so `low_textures + missing_low_textures + coarse_textures` is `textures`).
+    pub coarse_textures: usize,
+    /// With `low_textures` (Elden Ring): the placements given `core.texture_switch` from their draw param, and those
+    /// left without one, by reason ([`texture_switch`]).
+    pub texture_switch: texture_switch::Report,
     /// With `states: Event`: the rules read and the parts decided or left at their default.
     pub states: Option<states::Report>,
     /// With `display_groups: Axes`: the axes made, the placements conditioned or left present, and how the layout's draw
@@ -273,6 +284,49 @@ impl Report {
             out.push(listed(
                 "shader bundles whose metaparam is of a version not read (programs kept, parameters not)",
                 &self.unread_metaparams,
+            ));
+        }
+        if let Some(why) = &self.texture_switch.unread {
+            out.push(
+                Notice::new(
+                    stage,
+                    NoticeKind::Unsupported,
+                    "texture switch params not read: no placement switches its textures' form",
+                    1,
+                )
+                .example(why.clone()),
+            );
+        }
+        if self.texture_switch.pieces_unestablished > 0 {
+            out.push(Notice::new(
+                stage,
+                NoticeKind::Unsupported,
+                "map pieces without use_parts_draw_param: their texture switch row is not established, none is read",
+                self.texture_switch.pieces_unestablished as u64,
+            ));
+        }
+        if self.texture_switch.switched > 0 {
+            out.push(
+                Notice::new(
+                    stage,
+                    NoticeKind::Approximation,
+                    "texture switches stated in the game's steady state without memory pressure (the game's runtime \
+                     state, not modelled)",
+                    self.texture_switch.switched as u64,
+                )
+                .example("the memory load balancer's factor on both distances: 1.0 (0.5, 0.25, 0.1 or 0 under pressure)")
+                .example("the 3 s ramp of the return distance after the switch is enabled, and the level held at 1 while it is off")
+                .example("the texture quality setting: takes no part in the traced code")
+                .example("the reference height term: off in the traced setup, taken as off"),
+            );
+        }
+        if self.coarse_bindings > 0 {
+            out.push(Notice::new(
+                stage,
+                NoticeKind::Approximation,
+                "bindings drawn in their texture's coarse form whatever the placement's level: an asset's binding to \
+                 another asset group's texture (observed in two captures, 20 of 20 slots; not traced)",
+                self.coarse_bindings as u64,
             ));
         }
         if !self.missing_default_textures.is_empty() {
@@ -1088,6 +1142,8 @@ pub fn read_game_area_staged(
         catalog
     };
     let mut texture_packages = BTreeSet::new();
+    // the coarse forms bindings bind ([`materials::bind_coarse`]), by stem
+    let mut coarse_twins = BTreeSet::new();
     let object = game.object_prefix();
     let mut placements = Vec::new();
     let mut requests = BTreeSet::new();
@@ -1322,7 +1378,7 @@ pub fn read_game_area_staged(
                     }
                 }
             }
-            let materials = model
+            let mut materials: Vec<_> = model
                 .materials
                 .iter()
                 .map(|m| {
@@ -1334,6 +1390,21 @@ pub fn read_game_area_staged(
                     )
                 })
                 .collect();
+            // the bindings the game draws in their texture's coarse form, where the read holds it (`low_textures`):
+            // bound to the twin, a texture of its own the load takes like any other
+            let name = key.split_once('/').map_or(key.as_str(), |k| k.1);
+            for m in &mut materials {
+                for twin in materials::bind_coarse(m, game, name, |stem| catalog.low.contains_key(stem)) {
+                    report.coarse_bindings += 1;
+                    let stored = twin.strip_suffix("_l").expect("a twin's stem");
+                    if !catalog.entries.contains_key(&twin)
+                        && let Some(location) = catalog.low.get(stored).cloned()
+                    {
+                        catalog.entries.insert(twin.clone(), location);
+                    }
+                    coarse_twins.insert(twin);
+                }
+            }
             let bounds = bounds?;
             prototypes.insert(
                 key,
@@ -1457,7 +1528,9 @@ pub fn read_game_area_staged(
     stage("load textures");
     let payloads = catalog.load(&archive, decoder, &wanted)?;
     let low_payloads = if options.low_textures {
-        let (low, missing) = catalog.load_low(&archive, decoder, &wanted)?;
+        // a coarse form a binding binds is a texture of its own, not a texture with a twin
+        let with_twins: BTreeSet<String> = wanted.difference(&coarse_twins).cloned().collect();
+        let (low, missing) = catalog.load_low(&archive, decoder, &with_twins)?;
         report.low_textures = low.len();
         report.missing_low_textures = missing;
         Some(low)
@@ -1466,6 +1539,7 @@ pub fn read_game_area_staged(
     };
     let programs = bundles.layered_programs(layered.into_iter())?;
     report.textures = payloads.len();
+    report.coarse_textures = coarse_twins.iter().filter(|t| payloads.contains_key(*t)).count();
     report.shader_programs = programs.len();
 
     stage("spawn prototypes");
@@ -1641,6 +1715,19 @@ pub fn read_game_area_staged(
             .collect();
         g.spawn_axes(&mut world, numbers);
     }
+    // the texture switch's params, with the twins (Elden Ring's): a regulation the install cannot open is said, not an
+    // error of the read
+    let switch_params = if options.low_textures && game == Game::EldenRing {
+        match texture_switch::Params::read(install, &archive, decoder) {
+            Ok(p) => Some(p),
+            Err(why) => {
+                report.texture_switch.unread = Some(why.to_string());
+                None
+            }
+        }
+    } else {
+        None
+    };
     for (key, index, transform) in selected {
         let Placed {
             part,
@@ -1685,6 +1772,15 @@ pub fn read_game_area_staged(
         };
         world.insert(e, transform);
         world.insert(e, Source(format!("{map}:{}", part.name)));
+        // the sky's placements stand relative to the camera; the switch is not read for them
+        if let Some(params) = &switch_params
+            && !*in_sky
+        {
+            let model = key.split_once('/').map_or(key.as_str(), |k| k.1);
+            if let Some(switch) = params.switch(part.kind, &part.draw, model, &mut report.texture_switch)? {
+                world.insert(e, switch);
+            }
+        }
         if let Some((role, state)) = sky_part {
             sky::attach(&mut world, e, sky_axis, role, state);
         }
@@ -1692,6 +1788,9 @@ pub fn read_game_area_staged(
         report.placements += 1;
         report.far_placements += usize::from(far);
         report.object_placements += usize::from(key.starts_with(&format!("{object}/")));
+    }
+    if report.texture_switch.switched > 0 {
+        world.insert_resource(texture_switch::view());
     }
     let grass = layout.grass_configs()?;
     report.grass_parts = grass.len();

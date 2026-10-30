@@ -30,6 +30,65 @@ fn leaf_stem(path: &str) -> String {
     let leaf = path.rsplit(['/', '\\']).next().unwrap_or(path);
     leaf.rsplit_once('.').map_or(leaf, |x| x.0).to_owned()
 }
+
+/// The asset group `nnn` of an Elden Ring asset model `AEGnnn_mmm` or asset texture `aetnnn_*` (`prefix` `aeg` or
+/// `aet`, any case).
+fn asset_group<'a>(name: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = name.get(..prefix.len())?;
+    let group = name.get(prefix.len()..prefix.len() + 3)?;
+    (head.eq_ignore_ascii_case(prefix)
+        && group.bytes().all(|b| b.is_ascii_digit())
+        && name.as_bytes().get(prefix.len() + 3) == Some(&b'_'))
+    .then_some(group)
+}
+
+/// Whether the game draws the texture `texture` (a stem), bound by a material of the model `model`, in its coarse form
+/// (its `_l` twin) whatever the placement's texture level: in Elden Ring, an asset's (`AEGnnn_mmm`) binding to the
+/// texture of another asset group (`aetNNN_*`, `NNN` not `nnn`). Map pieces, other models and other textures follow
+/// the placement's level.
+///
+/// Observed, not traced. In the read-back frames of two captures of the running game (eldenring.exe 1.17.3, Stormveil),
+/// every one of the 20 pixel-shader texture slots whose candidate textures are all of another asset group was bound to
+/// the coarse form, across 5 asset draws: three of them drew their own group's textures in the full form, and the
+/// other two bind no texture of their own group. The own-group slots of an asset draw were all of one form, and all
+/// 164 unambiguous slots of the 20 map-piece draws matched the draw's level. In one frame the same texture was bound full by an asset of its own group and coarse by
+/// an asset of another, so it is not that the full form is not resident. How the game comes to draw it coarse (which
+/// code binds a foreign group's textures) is not traced.
+pub fn drawn_coarse(game: Game, model: &str, texture: &str) -> bool {
+    game == Game::EldenRing
+        && matches!(
+            (asset_group(model, "aeg"), asset_group(texture, "aet")),
+            (Some(own), Some(other)) if own != other
+        )
+}
+
+/// Make each binding of `material` (of the model `model`) that the game draws coarse ([`drawn_coarse`]) and whose
+/// coarse form `twin` finds (by the stored stem) bind that form: `texture` becomes `<stem>_l`, `coarse_of` the stored
+/// stem, and it is available. A layered material's layer bindings (the same records) are bound alike. The stems made,
+/// for the caller to load as textures of their own.
+pub fn bind_coarse(
+    material: &mut Material,
+    game: Game,
+    model: &str,
+    twin: impl Fn(&str) -> bool,
+) -> Vec<String> {
+    let coarsen = |b: &mut Binding| -> Option<String> {
+        if b.coarse_of.is_some() || !drawn_coarse(game, model, &b.texture) || !twin(&b.texture) {
+            return None;
+        }
+        let stored = std::mem::take(&mut b.texture);
+        b.texture = format!("{stored}_l");
+        b.coarse_of = Some(stored);
+        b.available = true;
+        Some(b.texture.clone())
+    };
+    if let Some(layered) = &mut material.layered {
+        layered.bindings.values_mut().for_each(|b| {
+            coarsen(b);
+        });
+    }
+    material.bindings.values_mut().filter_map(coarsen).collect()
+}
 /// What a source class rule matches: the shader's name or the material's own (its MTD or `.matxml` stem).
 #[derive(Clone, Copy, Debug)]
 enum Target {
@@ -212,6 +271,7 @@ pub fn resolve_definition(
                     kind.to_owned(),
                     Binding {
                         available: exists(&stem(path)),
+                        coarse_of: None,
                         texture: stem(path),
                         scale: [1.; 2],
                         uv_number,
@@ -230,6 +290,7 @@ pub fn resolve_definition(
                 t.kind.clone(),
                 Binding {
                     available: exists(&stem(&t.path)),
+                    coarse_of: None,
                     texture: stem(&t.path),
                     scale: t.scale,
                     uv_number,
@@ -759,5 +820,140 @@ mod tests {
         ] {
             assert_eq!(class(shader), expected, "{shader}");
         }
+    }
+
+    /// The rule against what the game was seen to bind (`tests/fixtures/coarse_slots.tsv`, two captures of Stormveil):
+    /// every slot of an asset draw whose candidate textures are all of another asset group was bound coarse (20 of
+    /// 20), and the rule makes each coarse; no own-group slot of an asset and no slot of a map piece is coarse by the
+    /// rule, and each map-piece draw (20) and each asset draw's own-group slots are of one form, the draw's level.
+    #[test]
+    fn drawn_coarse_holds_to_the_observed_slots() {
+        let text = include_str!("../tests/fixtures/coarse_slots.tsv");
+        let mut counts: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+        let mut levels: BTreeMap<(&str, &str), std::collections::BTreeSet<&str>> = BTreeMap::new();
+        for line in text.lines() {
+            let [draw, model, _slot, form, textures] = line.split('\t').collect::<Vec<_>>()[..] else {
+                panic!("{line}");
+            };
+            let textures: Vec<&str> = textures.split(',').collect();
+            let own = asset_group(model, "aeg");
+            let groups: std::collections::BTreeSet<Option<&str>> =
+                textures.iter().map(|t| asset_group(t, "aet")).collect();
+            let coarse: std::collections::BTreeSet<bool> = textures
+                .iter()
+                .map(|t| drawn_coarse(Game::EldenRing, model, t))
+                .collect();
+            let kind = match own {
+                None => {
+                    assert_eq!(coarse, [false].into(), "{line}");
+                    levels.entry(("piece", draw)).or_default().insert(form);
+                    "map piece"
+                }
+                Some(g) if groups == [Some(g)].into() => {
+                    assert_eq!(coarse, [false].into(), "{line}");
+                    levels.entry(("own", draw)).or_default().insert(form);
+                    "own group"
+                }
+                Some(g) if !groups.contains(&Some(g)) => {
+                    assert_eq!(coarse, [true].into(), "{line}");
+                    assert_eq!(form, "low", "{line}");
+                    "other group"
+                }
+                // candidates of the asset's own group and another: the head does not say which was bound
+                Some(_) => "either",
+            };
+            *counts.entry((kind, form)).or_default() += 1;
+        }
+        assert_eq!(
+            counts,
+            BTreeMap::from([
+                (("map piece", "full"), 140),
+                (("map piece", "low"), 24),
+                (("own group", "full"), 111),
+                (("own group", "low"), 12),
+                (("other group", "low"), 20),
+                (("either", "full"), 3),
+                (("either", "low"), 4),
+            ])
+        );
+        assert!(levels.values().all(|forms| forms.len() == 1), "{levels:?}");
+        assert_eq!(levels.keys().filter(|(k, _)| *k == "piece").count(), 20);
+        // Sekiro has no asset groups, and a name of another shape is not one
+        assert!(!drawn_coarse(Game::Sekiro, "AEG810_000", "aet210_117_n"));
+        assert!(!drawn_coarse(Game::EldenRing, "AEG810_000", "aet21x_117_n"));
+        assert!(!drawn_coarse(Game::EldenRing, "AEG8100_00", "aet210_117_n"));
+    }
+
+    /// A coarse binding binds its twin where the catalog holds one and says what it stood for; the others are left.
+    #[test]
+    fn bind_coarse_binds_the_twin_it_finds() {
+        let binding = |texture: &str| Binding {
+            texture: texture.to_owned(),
+            scale: [1.0; 2],
+            uv_number: 1,
+            address: [None; 2],
+            available: false,
+            coarse_of: None,
+        };
+        let mut m = Material {
+            mtd: "m".into(),
+            definition: None,
+            gx: Vec::new(),
+            shader: String::new(),
+            class: "opaque".into(),
+            skip: None,
+            cutoff: 0.5,
+            bindings: BTreeMap::from([
+                ("g_DiffuseTexture".to_owned(), binding("aet210_117_a")),
+                ("g_BumpmapTexture".to_owned(), binding("aet210_117_n")),
+                ("g_DiffuseTexture2".to_owned(), binding("aet810_000_a")),
+            ]),
+            layered: None,
+        };
+        let made = bind_coarse(&mut m, Game::EldenRing, "AEG810_000", |stem| {
+            stem == "aet210_117_a"
+        });
+        assert_eq!(made, ["aet210_117_a_l"]);
+        let b = &m.bindings["g_DiffuseTexture"];
+        assert_eq!(
+            (b.texture.as_str(), b.coarse_of.as_deref(), b.available),
+            ("aet210_117_a_l", Some("aet210_117_a"), true)
+        );
+        // no twin held: the stored texture stays
+        assert_eq!(m.bindings["g_BumpmapTexture"].coarse_of, None);
+        assert_eq!(m.bindings["g_DiffuseTexture2"].texture, "aet810_000_a");
+        // a binding without coarse_of serializes as before (material identities of reads without twins are unchanged)
+        let json = primase_core::json::to_value(&m.bindings["g_BumpmapTexture"]).unwrap();
+        assert!(json.get("coarse_of").is_none(), "{json}");
+        // a binding already bound to its twin is not bound again
+        let again = bind_coarse(&mut m, Game::EldenRing, "AEG810_000", |_| true);
+        assert_eq!(again, ["aet210_117_n_l"]);
+        assert_eq!(m.bindings["g_DiffuseTexture"].texture, "aet210_117_a_l");
+        // a layered material's layer bindings are bound as its bindings are
+        let mut layered = Material {
+            bindings: BTreeMap::from([("g_DiffuseTexture".to_owned(), binding("aet210_117_a"))]),
+            ..m.clone()
+        };
+        layered.layered = Some(LayeredMaterial {
+            mtd: "m".into(),
+            definition: MaterialDefinition {
+                shader: String::new(),
+                description: String::new(),
+                parameters: Vec::new(),
+                textures: Vec::new(),
+                block_lengths: Vec::new(),
+                padding: Vec::new(),
+            },
+            bindings: layered.bindings.clone(),
+        });
+        assert_eq!(
+            bind_coarse(&mut layered, Game::EldenRing, "AEG810_000", |_| true),
+            ["aet210_117_a_l"]
+        );
+        let l = &layered.layered.as_ref().unwrap().bindings["g_DiffuseTexture"];
+        assert_eq!(
+            (l.texture.as_str(), l.coarse_of.as_deref()),
+            ("aet210_117_a_l", Some("aet210_117_a"))
+        );
     }
 }
