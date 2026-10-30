@@ -13,6 +13,15 @@ pub fn decode(character: &str, events: &[Event]) -> ClipVisibility {
         .iter()
         .filter(|event| matches!(event.kind, 233 | 711 | 713))
     {
+        // The stock files hold such events (Elden Ring's c3370 and c3450: 711 from -1/30 s); whether the game applies one
+        // from the clip's first frame, or when, is not read, so the read neither moves it to 0 nor plays it.
+        if event.start < 0. {
+            out.refusals.push(format!(
+                "TAE {} at {}: begins before its clip, and how the game applies that is not read",
+                event.kind, event.start
+            ));
+            continue;
+        }
         let Some(bytes) = event.parameters.get(..32) else {
             out.refusals.push(format!(
                 "TAE {} at {}: {} bytes, needs 32 mask bytes",
@@ -122,6 +131,23 @@ mod tests {
         let mut tail = event(713, 0., 1., 2, 1);
         tail.parameters.push(1);
         assert!(decode("c1010", &[tail]).refusals[0].contains("unknown bytes"));
+    }
+    /// A mask event that begins before its clip is refused by name, not moved to 0; the clip keeps its static defaults.
+    #[test]
+    fn a_mask_event_that_begins_before_its_clip_is_refused_by_name() {
+        let decoded = decode(
+            "c3370",
+            &[event(711, -1. / 30., 1. / 6., 3, 1), event(713, 0.5, 1., 3, 1)],
+        );
+        assert_eq!(decoded.changes.len(), 1);
+        assert_eq!(decoded.changes[0].start, 0.5);
+        assert_eq!(decoded.refusals.len(), 1);
+        assert!(
+            decoded.refusals[0].starts_with("TAE 711 at -0.033"),
+            "{:?}",
+            decoded.refusals
+        );
+        assert!(decoded.refusals[0].contains("begins before its clip"));
     }
     #[test]
     fn imported_records_keep_mask_facts_and_import_cycles_are_refused() {

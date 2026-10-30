@@ -22,6 +22,8 @@ pub struct ClipEvent {
     /// A name and its naming origin travel together, or both are absent.
     pub name: Option<String>,
     pub naming: Option<NameOrigin>,
+    /// Seconds from the clip's start, finite. It may be below 0: source events legitimately begin before their clip
+    /// does, and core neither clamps nor discards them; what that means for playback is each consumer's to read.
     pub start: f32,
     /// None runs to the clip's end. A finite explicit end may exceed clip duration;
     /// source events legitimately do so and core neither clamps nor discards them.
@@ -66,12 +68,10 @@ impl Component for ClipEvents {
             return Err("clip event refusal is empty".into());
         }
         for (i, event) in self.events.iter().enumerate() {
-            if !event.start.is_finite()
-                || event.start < 0.0
-                || event.end.is_some_and(|end| !end.is_finite() || end < event.start)
+            if !event.start.is_finite() || event.end.is_some_and(|end| !end.is_finite() || end < event.start)
             {
                 return Err(format!(
-                    "event {i}: start must be finite and non-negative, end finite and at least start"
+                    "event {i}: start must be finite, end finite and at least start"
                 ));
             }
             if event.name.is_some() != event.naming.is_some()
@@ -183,12 +183,26 @@ mod tests {
     }
 
     #[test]
+    fn a_start_before_the_clip_is_kept_as_stored() {
+        let (world, entity, events) = fixture();
+        for (start, end) in [(-1.0 / 30.0, Some(0.3)), (-0.5, None), (-0.25, Some(-0.25))] {
+            let mut e = events.clone();
+            e.events[0].start = start;
+            e.events[0].end = end;
+            assert!(e.verify(entity, &world).is_ok(), "{start}..{end:?}");
+            let copy: ClipEvents = serde_json::from_value(e.to_json().unwrap().unwrap()).unwrap();
+            assert_eq!(copy.events[0].start, start);
+        }
+    }
+
+    #[test]
     fn malformed_times_names_and_nonfinite_fields_refuse() {
         let (world, entity, events) = fixture();
         for (start, end) in [
             (f32::NAN, None),
-            (-0.1, None),
+            (f32::NEG_INFINITY, Some(0.25)),
             (0.5, Some(0.25)),
+            (-0.1, Some(-0.2)),
             (0.0, Some(f32::INFINITY)),
         ] {
             let mut e = events.clone();

@@ -61,11 +61,8 @@ impl Pass for LowerFromSoftClipEvents {
                 ..Default::default()
             };
             for (index, event) in source.events.iter().enumerate() {
-                if !event.start.is_finite()
-                    || event.start < 0.0
-                    || !event.end.is_finite()
-                    || event.end < event.start
-                {
+                // a start below 0 is stored and kept as it is (core.clip_events carries it unchanged)
+                if !event.start.is_finite() || !event.end.is_finite() || event.end < event.start {
                     return Err(format!(
                         "{} event {index}: invalid source interval {}..{}",
                         source.file, event.start, event.end
@@ -162,5 +159,52 @@ mod tests {
         assert_eq!(lowered.events[0].end, Some(2.));
         assert!(lowered.refusals[0].contains("envelope"));
         assert_eq!(world.get::<SourceEvents>(e), Some(&source));
+    }
+
+    #[test]
+    fn an_event_that_begins_before_its_clip_lowers_with_its_stored_start() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.insert(
+            e,
+            Clip {
+                name: "clip".into(),
+                duration: 1.,
+                extrapolation: primase_core::Extrapolation::Hold,
+                channels: vec![],
+                root_motion: None,
+                additive: None,
+            },
+        );
+        let event = fromsoft_formats::tae::Event {
+            kind: 16,
+            unk04: 0,
+            start: -1. / 30.,
+            end: 0.3,
+            parameters: vec![],
+        };
+        world.insert(
+            e,
+            SourceEvents {
+                file: "fixture.tae".into(),
+                animation: 4020,
+                header: fromsoft_formats::tae::Header::None,
+                file_name: None,
+                authored_events: vec![event.clone()],
+                events: vec![event],
+                typed: vec![DecodedEvent::default()],
+            },
+        );
+        LowerFromSoftClipEvents {
+            game: Game::EldenRing,
+        }
+        .run(&mut world, &mut PassLog::default())
+        .unwrap();
+        let lowered = world.get::<ClipEvents>(e).unwrap();
+        assert_eq!(
+            (lowered.events[0].start, lowered.events[0].end),
+            (-1. / 30., Some(0.3))
+        );
+        assert!(lowered.verify(e, &world).is_ok());
     }
 }

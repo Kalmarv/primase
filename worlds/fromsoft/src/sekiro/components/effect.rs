@@ -205,6 +205,13 @@ pub const SPAWN_CONDITION: &str =
 pub const STATE_CONDITION: &str =
     "effects whose event applies under a special-effect state (State Info, a runtime state not read)";
 
+/// What an effect's event that begins before its clip (a start below 0) is counted as. The stock files hold such events
+/// (Elden Ring's c5080 `a000_003010`: a type 118 from -1/30 s; c4630 `a000_003000`: an attack from -1/30 s); whether the game
+/// starts the effect at the clip's first frame, already 1/30 s old, or not at all is not read, so the use is neither moved to
+/// 0 nor played.
+pub const BEFORE_CLIP: &str =
+    "effects whose event begins before its clip (a start below 0; how the game starts those is not read)";
+
 /// The event types that name an effect some way, for an event whose fields were not read.
 const EFFECT_EVENTS: &[i32] = &[96, 118, 120, 114, 115, 117, 792];
 
@@ -285,6 +292,10 @@ pub fn clip_effect_uses(source: &SourceEvents) -> ClipEffectUses {
             *lost
                 .entry("an effect on a weapon's dummy polygon (the weapon's model is not read)")
                 .or_default() += 1;
+            continue;
+        }
+        if event.start < 0.0 {
+            *lost.entry(BEFORE_CLIP).or_default() += 1;
             continue;
         }
         let dummy = whole(values, "Dummy Poly ID")
@@ -379,6 +390,7 @@ pub fn weapon_trace_uses(source: &SourceEvents, weapons: &[WeaponTraces], found:
     let mut attacks = 0u32;
     let mut conditioned = 0u32;
     let mut short = 0u32;
+    let mut before = 0u32;
     for (index, event) in source.events.iter().enumerate().filter(|(_, e)| e.kind == 1) {
         // an attack under a special-effect state is a runtime alternative (see STATE_CONDITION)
         let state = source
@@ -397,6 +409,10 @@ pub fn weapon_trace_uses(source: &SourceEvents, weapons: &[WeaponTraces], found:
         let run = trace_run(&trace, &w.dummies);
         if run.len() < 2 {
             short += 1;
+            continue;
+        }
+        if event.start < 0.0 {
+            before += 1;
             continue;
         }
         found.uses.push(EffectUse {
@@ -427,6 +443,7 @@ pub fn weapon_trace_uses(source: &SourceEvents, weapons: &[WeaponTraces], found:
             conditioned,
         );
         lost(SHORT_TRACE, short);
+        lost(BEFORE_CLIP, before);
     }
     if attacks == 0 {
         return;
@@ -939,6 +956,49 @@ mod tests {
         let before = found.clone();
         weapon_trace_uses(&quiet, &weapons, &mut found);
         assert_eq!(found, before);
+    }
+
+    /// An effect event, or an attack whose window draws a trail, that begins before its clip is counted by name, not moved to
+    /// 0; one that begins at 0 is used.
+    #[test]
+    fn an_effect_whose_event_begins_before_its_clip_is_counted_not_used() {
+        let weapons = [WeaponTraces {
+            slot: HandSlot {
+                left: false,
+                index: 0,
+            },
+            row: 8_000_000,
+            traces: vec![(
+                0,
+                Trace {
+                    effect: 401_000,
+                    head: 300,
+                    tail: 301,
+                },
+            )],
+            dummies: BTreeSet::from([300, 301]),
+        }];
+        let clip = source(vec![
+            event(118, -1.0 / 30.0, 0.1, spawn(4000, 220, true)),
+            event(96, 0.0, 0.1, spawn(4001, 220, true)),
+            event(1, -1.0 / 30.0, 1.0 / 30.0, Vec::new()),
+            event(1, 0.5, 0.6, Vec::new()),
+        ]);
+        let mut found = clip_effect_uses(&clip);
+        weapon_trace_uses(&clip, &weapons, &mut found);
+        let used: Vec<_> = found.uses.iter().map(|u| (u.event, u.effect, u.start)).collect();
+        assert_eq!(used, [(1, 4001, 0.0), (3, 401_000, 0.5)]);
+        assert_eq!(
+            found
+                .lost
+                .iter()
+                .filter(|(r, _)| r == BEFORE_CLIP)
+                .map(|(_, n)| n)
+                .sum::<u32>(),
+            2,
+            "{:?}",
+            found.lost
+        );
     }
 
     /// A trace runs from its head up to its tail, or up while the model has the next id where no tail is given; it stops at
