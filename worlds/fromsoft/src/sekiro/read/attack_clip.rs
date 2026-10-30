@@ -329,11 +329,9 @@ pub fn read_selectors(
     character: &str,
 ) -> std::result::Result<Vec<Selector>, String> {
     let path = format!("/chr/{character}.behbnd.dcx");
-    let binder = fromsoft_formats::Binder::read(
-        &archive.read(&path, decoder).map_err(|e| e.to_string())?,
-        decoder,
-    )
-    .map_err(|e| e.to_string())?;
+    let binder =
+        fromsoft_formats::Binder::read(&archive.read(&path, decoder).map_err(|e| e.to_string())?, decoder)
+            .map_err(|e| e.to_string())?;
     let wanted = format!("{character}.hkx");
     let member = binder
         .files
@@ -345,9 +343,7 @@ pub fn read_selectors(
             })
         })
         .ok_or_else(|| format!("{path} holds no Behaviors/{wanted}"))?;
-    let bytes = decoder
-        .decode_if_dcx(&member.bytes)
-        .map_err(|e| e.to_string())?;
+    let bytes = decoder.decode_if_dcx(&member.bytes).map_err(|e| e.to_string())?;
     let tag = havok_formats::Tagfile::read(&bytes, None).map_err(|e| e.detail)?;
     let document = Document::read(&tag).map_err(|e| e.detail)?;
     Selector::all(&document)

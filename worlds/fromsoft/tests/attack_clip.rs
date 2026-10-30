@@ -37,7 +37,11 @@ fn the_rule_chooses_the_clip_the_game_played_for_the_saved_hold() -> Result<()> 
         oodle: Some(&codec),
         max_output: 1 << 30,
     };
-    let installed = Install::new(root, Game::EldenRing, Keys::from_folder(folder, Game::EldenRing, None)?);
+    let installed = Install::new(
+        root,
+        Game::EldenRing,
+        Keys::from_folder(folder, Game::EldenRing, None)?,
+    );
     let archive = installed.open()?;
 
     // the save's state: arm style 3, the right hand's slot 0 active and holding the Uchigatana
@@ -46,7 +50,10 @@ fn the_rule_chooses_the_clip_the_game_played_for_the_saved_hold() -> Result<()> 
     assert_eq!(player.arm_style, ArmStyle::RightBoth);
     assert_eq!(player.grip(), Grip::TwoHandedRight);
     assert_eq!(
-        (player.active_weapon(Hand::Right), player.active_weapon(Hand::Left)),
+        (
+            player.active_weapon(Hand::Right),
+            player.active_weapon(Hand::Left)
+        ),
         (Some(9_000_000), Some(41_000_000))
     );
 
@@ -93,11 +100,20 @@ fn the_rule_chooses_the_clip_the_game_played_for_the_saved_hold() -> Result<()> 
     let choice = attack_clip::choose(&both, &player, &params, &animations)?;
     println!("{}", choice.steps.join("\n"));
     assert_eq!(
-        (choice.hand, choice.row, choice.category, choice.sp_attack, choice.id),
+        (
+            choice.hand,
+            choice.row,
+            choice.category,
+            choice.sp_attack,
+            choice.id
+        ),
         (Hand::Right, 9_000_000, 29, 0, 29_032_000)
     );
     assert_eq!(choice.animation, "a029_032000");
-    assert_eq!(both.children.get(choice.child).cloned().flatten().as_deref(), Some("a029_032000"));
+    assert_eq!(
+        both.children.get(choice.child).cloned().flatten().as_deref(),
+        Some("a029_032000")
+    );
 
     // the one-handed request contradicts this hold; for the same weapons in one hand it plays a029_030000
     assert!(attack_clip::check_request(&right.name, player.arm_style).is_err());
@@ -105,6 +121,9 @@ fn the_rule_chooses_the_clip_the_game_played_for_the_saved_hold() -> Result<()> 
         arm_style: ArmStyle::Right,
         ..player
     };
-    assert_eq!(attack_clip::choose(&right, &one_handed, &params, &animations)?.animation, "a029_030000");
+    assert_eq!(
+        attack_clip::choose(&right, &one_handed, &params, &animations)?.animation,
+        "a029_030000"
+    );
     Ok(())
 }
