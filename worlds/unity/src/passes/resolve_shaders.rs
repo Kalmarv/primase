@@ -975,17 +975,15 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
             }
             // textures: bound per stage binding by name, entities checked against the world
             for stage in &mut bound {
+                let interface = world.get::<Shader>(stage.shader).map(|s| &s.interface);
                 for t in &mut stage.textures {
                     if let TextureSource::Texture { texture, .. } = &t.source
-                        && !(world.has::<Texture>(*texture)
-                            || world.has::<primase_core::TextureFile>(*texture))
+                        && let Err(why) = bindable_texture(world, interface, t.resource, *texture)
                     {
-                        t.source = TextureSource::Missing {
-                            why: "the bound entity has no texture component".into(),
-                        };
                         *counts
-                            .entry("texture bindings of an entity with no texture, left Missing".into())
+                            .entry(format!("texture bindings left Missing: {why}"))
                             .or_default() += 1;
+                        t.source = TextureSource::Missing { why };
                     }
                 }
             }
@@ -1125,6 +1123,36 @@ impl ResolveUnityShaders {
             outputs,
             ..StageBinding::new(stage, shader)
         }
+    }
+}
+
+/// Whether `texture` is what core binds at the program's texture resource `resource` of `interface`: a texture, a
+/// texture file, or a texture of several images whose shape is the dimension the program reads the resource as (a
+/// script's 3D light volume at a `Texture3D`). `Err` says why not.
+fn bindable_texture(
+    world: &World,
+    interface: Option<&Interface>,
+    resource: iridia_interface::ResourceId,
+    texture: Entity,
+) -> Result<(), String> {
+    if world.has::<Texture>(texture) || world.has::<primase_core::TextureFile>(texture) {
+        return Ok(());
+    }
+    let Some(layers) = world.get::<primase_core::TextureLayers>(texture) else {
+        return Err("the bound entity has no texture component".into());
+    };
+    match interface.and_then(|i| i.resource(resource)).map(|r| &r.kind) {
+        Some(iridia_interface::ResourceKind::Texture { dim, arrayed, .. }) => {
+            if layers.shape.dimension() == (*dim, *arrayed) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "the program reads a {dim:?} texture (arrayed {arrayed}) and the bound entity is a {:?} texture",
+                    layers.shape
+                ))
+            }
+        }
+        _ => Err("the program's resource is not a texture".into()),
     }
 }
 
@@ -1854,6 +1882,67 @@ mod tests {
         assert_eq!(
             counts["unset texture properties, bound the shader's default (black)"],
             1
+        );
+    }
+
+    /// A binding's entity is what core binds at the program's resource: a texture of several images only where its
+    /// shape is the dimension the program reads (a light volume at a 3D resource), and no entity without a texture.
+    #[test]
+    fn a_volume_binds_at_a_3d_resource_and_only_there() {
+        use iridia_interface::{Resource, ResourceKind, ResourceProvenance, SampleType, TextureDim};
+        use primase_core::{ColorSpace, TexFormat, TexRole, TextureLayers, TextureShape};
+        let resource = |id, kind| Resource {
+            id: ResourceId(id),
+            kind,
+            count: 1,
+            provenance: ResourceProvenance::default(),
+        };
+        let texture = |dim| ResourceKind::Texture {
+            dim,
+            arrayed: false,
+            multisampled: false,
+            sample: SampleType::Float,
+        };
+        let interface = Interface {
+            stage: Stage::Pixel,
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            resources: vec![
+                resource(0, texture(TextureDim::D3)),
+                resource(1, texture(TextureDim::D2)),
+                resource(2, ResourceKind::Sampler { comparison: false }),
+            ],
+            facts: Default::default(),
+        };
+        let mut world = World::new();
+        let volume = world.spawn();
+        world.insert(
+            volume,
+            TextureLayers {
+                shape: TextureShape::Volume { depth: 2 },
+                width: 1,
+                height: 1,
+                format: TexFormat::Rgba16Float,
+                levels: vec![vec![vec![0; 8]; 2]],
+                color_space: ColorSpace::Linear,
+                role: TexRole::Other,
+                normal: None,
+            },
+        );
+        let nothing = world.spawn();
+        let bind = |at, entity| bindable_texture(&world, Some(&interface), ResourceId(at), entity);
+        assert_eq!(bind(0, volume), Ok(()));
+        assert_eq!(
+            bind(1, volume),
+            Err("the program reads a D2 texture (arrayed false) and the bound entity is a Volume { depth: 2 } texture".into())
+        );
+        assert_eq!(
+            bind(2, volume),
+            Err("the program's resource is not a texture".into())
+        );
+        assert_eq!(
+            bind(0, nothing),
+            Err("the bound entity has no texture component".into())
         );
     }
 

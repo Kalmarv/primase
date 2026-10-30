@@ -32,7 +32,7 @@ primase_testdata::inputs! {
         Query::Install(Game::Peak, Some("PEAK_Data")) => {
             status: Live,
             gate: true,
-            about: r#"PEAK's data folder (`PEAK_Data`), its scene `level4` read with `tools.unity_tpk`; `worlds/peak/tests/globals.rs`"#,
+            about: r#"PEAK's data folder (`PEAK_Data`), its scene `level4` and the material M_SaltRock (`resources.assets` path id 136) read with `tools.unity_tpk`; `worlds/peak/tests/globals.rs`, `worlds/peak/tests/resolve.rs`"#,
             source: r#"the user's own install"#,
         },
         Query::Oracle(OracleSet::UnityEditor, Game::Peak, "light-volume-level4") => {
