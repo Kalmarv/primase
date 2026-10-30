@@ -420,6 +420,10 @@ pub enum FrameTexture {
     /// The volume image of the light probes' lighting around the surface (a 3D image of spherical-harmonic
     /// coefficients the surface samples at its position).
     LightProbeVolume,
+    /// Image `n` of the decal buffer the frame's decal step draws before the surfaces are lit (Unity's DBuffer: 0 the
+    /// decals' albedo, 1 their normal, 2 their metallic, occlusion and smoothness, each with the decals' coverage in
+    /// alpha): a lit draw reads it at its own screen position and blends the decals into its surface.
+    DecalBuffer(u8),
 }
 impl FrameTexture {
     /// The dimension of the image: a probe's is a cube, the light probes' a volume, every other a plane.
@@ -431,7 +435,8 @@ impl FrameTexture {
             | Self::SceneColour
             | Self::ShadowMap
             | Self::ScreenSpaceShadows
-            | Self::AmbientOcclusion => iridia_interface::TextureDim::D2,
+            | Self::AmbientOcclusion
+            | Self::DecalBuffer(_) => iridia_interface::TextureDim::D2,
         }
     }
 }

@@ -75,6 +75,8 @@ pub mod pbr;
 pub mod print;
 pub mod provenance;
 pub mod render_graph;
+mod step_bindings;
+pub use step_bindings::{StepBinding, StepBindings, StepDraws, StepProgram};
 pub mod rig;
 pub mod shader;
 pub mod skeleton;

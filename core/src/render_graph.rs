@@ -5,14 +5,22 @@
 //! states the source's own words (`ConstantRole::Material`) that the source's lowering computed from its data.
 //!
 //! The scene's own draws (the G-buffer, the shadow casters, the forward and effect draws) are passes of kind
-//! [`PassWork::Scene`]: they draw the scene's materials through their `core.shader_binding`s, the bucket each draw belongs
-//! to stated by the source ([`DrawBucket`]). Everything else is a full-screen draw, a compute dispatch, a clear or a copy
-//! of the renderer's own programs, or a slot where another feature draws ([`FeatureSlot`]).
+//! [`PassWork::Scene`]. Each names the draw it makes (the source's name for it, [`PassWork::Scene::draw`]), and the
+//! source states which materials that draw draws and through which program on each material
+//! ([`crate::StepBindings`]: the material's `core.shader_binding`, another pass of it, or why none is bound): a
+//! material without a step binding for the draw is not drawn in it. Which placements it draws is every placement of
+//! such materials, only the ones that name the draw ([`crate::StepDraws`]) where the source picks them per placement,
+//! or the ones that cast shadows ([`ScenePlacements`]); a source that does not read what a draw draws says so and why
+//! ([`SceneMembers::NotRead`]); the images the draws' frame textures are in the step ([`PassWork::Scene::frame`])
+//! and the order it draws them in ([`DrawSorting`]) are the step's. Everything else is a full-screen draw, a compute
+//! dispatch, a clear or a copy of the renderer's own programs, or a slot where another feature draws
+//! ([`FeatureSlot`]). What the source's frame draws that the graph holds no step for is named in
+//! [`RenderGraph::left_out`].
 
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::shader::{BindingPlace, BufferSource, StageBinding, TextureSource};
+use crate::shader::{BindingPlace, BufferSource, FrameTexture, StageBinding, TextureSource};
 use crate::{Entity, JsonError, Resource, World};
 use iridia_interface::{Interface, RenderState, ResourceId, ResourceKind, TextureDim};
 
@@ -28,8 +36,13 @@ pub struct RenderGraph {
     /// The buffers the frame's own steps write and read (the light lists a compute step builds for the lighting steps).
     pub buffers: Vec<RenderBuffer>,
     pub passes: Vec<RenderPass>,
-    /// The target that holds the finished picture, before any interface the game draws over it.
+    /// The target that holds the finished picture, before any interface the game draws over it, and before what
+    /// [`RenderGraph::left_out`] names after it.
     pub picture: Option<TargetId>,
+    /// What the source's frame draws that the graph holds no step for, each named with why (its post-processing,
+    /// where that is not traced: the picture is then the image before it). Empty where the graph holds every step.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub left_out: Vec<String>,
 }
 
 /// One image the frame makes (or keeps from the frame before).
@@ -246,9 +259,21 @@ pub enum PassWork {
     },
     /// The scene's draws of a bucket through their materials' programs, into `outputs`, seen from `view`.
     Scene {
+        /// The kind of draw.
         bucket: DrawBucket,
         view: SceneView,
         outputs: Outputs,
+        /// The source's name for the draw the step makes (Unity's `LightMode` pass of its draw, Sekiro's bucket). Steps
+        /// that make the same draw (the cascades of a shadow) draw the same surfaces.
+        draw: String,
+        /// Which surfaces it draws.
+        members: SceneMembers,
+        /// The image each frame texture its draws read is in this step ([`crate::shader::TextureSource::Frame`]), each
+        /// role once: a role not listed is no image of the graph's here, and a program reading it reads what its
+        /// binding's consumer says.
+        frame: Vec<(FrameTexture, TargetView)>,
+        /// The order it draws them in.
+        sorting: DrawSorting,
     },
     /// Set every texel of a target's view to a value.
     Clear { target: TargetView, value: [f32; 4] },
@@ -305,8 +330,8 @@ pub enum Groups {
     },
 }
 
-/// Which of the scene's draws a scene step draws; each draw's bucket is the source's statement, never the consumer's
-/// choice.
+/// The kind of draw a scene step makes, as the source states it (what it draws is [`SceneMembers`]'s, never the
+/// kind's).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DrawBucket {
@@ -317,14 +342,74 @@ pub enum DrawBucket {
     /// Surfaces lit as they are drawn, after the deferred light (the blended ones, water).
     Forward,
     /// The sky: its dome, the sun's and moon's discs, cloud layers and far scenery drawn as part of the sky, each by its
-    /// own material, after the deferred light: the draws whose material's `core.draw_order` layer is
-    /// [`crate::DrawLayer::Sky`]. Where its step stands against the source's fog composite (before it, so the fog lies
-    /// over the sky, or after it) is the graph's order of steps, as the source draws it.
+    /// own material, after the deferred light. Where its step stands against the source's fog composite (before it, so
+    /// the fog lies over the sky, or after it) is the graph's order of steps, as the source draws it.
     Sky,
     /// The shadow casters of a light.
     ShadowCaster,
     /// Surfaces that write motion only.
     Velocity,
+}
+
+/// Which surfaces a scene step's draw draws.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneMembers {
+    /// The materials with a step binding for the draw ([`crate::StepBindings`]), each through that binding's program
+    /// (a material without one is not drawn in it), at the placements `placements` picks.
+    Stated { placements: ScenePlacements },
+    /// The source does not read which surfaces the draw draws or through which programs: why. No material binds the
+    /// draw, and a consumer says what it draws there.
+    NotRead { why: String },
+}
+
+/// Which placements a scene step draws, of the materials its draw draws.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScenePlacements {
+    /// Every placement (a `core.instance`, or an entity drawing its own `core.mesh`) whose primitives' materials the
+    /// draw draws, each of those primitives, but a shadow proxy's (`core.shadows` casting
+    /// [`crate::ShadowCast::Only`]).
+    All,
+    /// Only the placements whose `core.step_draws` names the step's draw ([`crate::StepDraws`]): the source picks
+    /// them per placement (Unity culls each renderer by its GameObject's layer).
+    Listed,
+    /// The placements that cast shadows ([`crate::Shadows`]: `cast` not [`crate::ShadowCast::Off`]), shadow proxies
+    /// included: a shadow caster draw picks them so.
+    Casting,
+}
+
+/// The order a scene step draws its draws in, as the source states it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DrawSorting {
+    /// The source's sort keys, every one it sets (Unity's `SortingCriteria` flags, in the order of the flags' bits):
+    /// draws equal under every key are drawn in an order the source leaves free. Never empty.
+    Keys(Vec<SortKey>),
+    /// The source's order is not established: why.
+    NotStated { why: String },
+}
+
+/// One key a source sorts a scene step's draws by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SortKey {
+    /// By the renderer's sorting layer, then its order within it (Unity's `SortingLayer`).
+    SortingLayer,
+    /// By the material's render queue, lower first (`RenderQueue`).
+    RenderQueue,
+    /// The farthest from the camera first (`BackToFront`).
+    BackToFront,
+    /// The nearest first, by the distance rounded to coarse steps so that nearby draws group by state
+    /// (`QuantizedFrontToBack`).
+    QuantizedFrontToBack,
+    /// Draws of the same program and material together, where the other keys leave them equal
+    /// (`OptimizeStateChanges`).
+    OptimizeStateChanges,
+    /// By the order of the canvases of an interface (`CanvasOrder`).
+    CanvasOrder,
+    /// By the renderer's own priority (`RendererPriority`).
+    RendererPriority,
 }
 
 /// The view a scene step draws from.
@@ -534,7 +619,61 @@ impl RenderGraph {
                 }
                 self.stage_targets_ok(&[stage], &what)?;
             }
-            PassWork::Scene { outputs, view, .. } => {
+            PassWork::Scene {
+                outputs,
+                view,
+                draw,
+                members,
+                frame,
+                sorting,
+                ..
+            } => {
+                if draw.trim().is_empty() {
+                    return Err(format!("{what} draws the scene and names no draw"));
+                }
+                if let SceneMembers::NotRead { why } = members
+                    && why.trim().is_empty()
+                {
+                    return Err(format!(
+                        "{what} does not read what its draw draws and says not why"
+                    ));
+                }
+                for (i, (role, v)) in frame.iter().enumerate() {
+                    if frame[..i].iter().any(|(r, _)| r == role) {
+                        return Err(format!("{what} gives the frame texture {role:?} twice"));
+                    }
+                    self.view_ok(v, &format!("{what} frame texture {role:?}"))?;
+                    let target = &self.targets[v.target as usize];
+                    let dim = match target.shape {
+                        TargetShape::Plane | TargetShape::Array { .. } => TextureDim::D2,
+                        TargetShape::Volume => TextureDim::D3,
+                        TargetShape::Cube => TextureDim::Cube,
+                    };
+                    if dim != role.dim() {
+                        return Err(format!(
+                            "{what} gives the frame texture {role:?}, a {:?} image, as target {}, a {:?}",
+                            role.dim(),
+                            target.name,
+                            target.shape
+                        ));
+                    }
+                }
+                match sorting {
+                    DrawSorting::Keys(keys) => {
+                        if keys.is_empty() {
+                            return Err(format!("{what} sorts its draws by no key"));
+                        }
+                        for (i, k) in keys.iter().enumerate() {
+                            if keys[..i].contains(k) {
+                                return Err(format!("{what} sorts by {k:?} twice"));
+                            }
+                        }
+                    }
+                    DrawSorting::NotStated { why } if why.trim().is_empty() => {
+                        return Err(format!("{what} states no order of its draws and no why"));
+                    }
+                    DrawSorting::NotStated { .. } => {}
+                }
                 self.outputs_ok(outputs, &what)?;
                 match view {
                     SceneView::ShadowCascade { region, .. } => self.region_ok(outputs, region, &what)?,
@@ -575,7 +714,10 @@ impl RenderGraph {
     }
     /// The targets are well formed (a size and at least one mip), and the buffers (some bytes), every view names a target
     /// and a mip it has and every buffer reference a buffer, colour and depth go to targets of their kind, a step in some
-    /// frames names them, a repeated step states its counts, and the picture is a target.
+    /// frames names them, a repeated step states its counts, a scene step names its draw (the steps that make one draw
+    /// drawing the same surfaces), why it does not read what the draw draws where it does not, gives each frame texture
+    /// once as a target of the role's shape and states its sort keys once each (or why it states none), what is left
+    /// out is named, and the picture is a target.
     pub fn check(&self) -> Result<(), String> {
         for t in &self.targets {
             if t.mips == 0 {
@@ -618,6 +760,17 @@ impl RenderGraph {
         for p in &self.passes {
             self.pass_ok(p)?;
         }
+        let draws = self.scene_draws();
+        for (i, (draw, members)) in draws.iter().enumerate() {
+            if draws[..i].iter().any(|(d, m)| d == draw && m != members) {
+                return Err(format!(
+                    "the steps that make the draw {draw} draw different surfaces"
+                ));
+            }
+        }
+        if self.left_out.iter().any(|l| l.trim().is_empty()) {
+            return Err("a step left out of the graph without a name".into());
+        }
         if let Some(p) = self.picture {
             self.view_ok(
                 &TargetView {
@@ -648,6 +801,23 @@ impl RenderGraph {
                     | PassWork::ClearBuffer { .. }
                     | PassWork::CopyBuffer { .. }
                     | PassWork::Slot { .. } => {}
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&self.passes, &mut out);
+        out
+    }
+
+    /// The draws the scene steps make, a group's steps' included, each with the surfaces it draws: a draw several steps
+    /// make is listed once for each.
+    pub fn scene_draws(&self) -> Vec<(&str, &SceneMembers)> {
+        fn walk<'a>(passes: &'a [RenderPass], out: &mut Vec<(&'a str, &'a SceneMembers)>) {
+            for p in passes {
+                match &p.work {
+                    PassWork::Scene { draw, members, .. } => out.push((draw.as_str(), members)),
+                    PassWork::Group { steps } => walk(steps, out),
+                    _ => {}
                 }
             }
         }
@@ -771,6 +941,7 @@ mod tests {
                 },
             }],
             picture: Some(0),
+            left_out: Vec::new(),
         };
         assert_eq!(g.check(), Ok(()));
         g.passes[0].work = PassWork::Clear {
@@ -811,6 +982,118 @@ mod tests {
 
     /// Sekiro's shadow atlas (a recorded frame: one 4096 x 4096 R16 depth target, its cascades' draws in the four
     /// 2048 x 2048 quarters): a cascade's region must be inside the atlas.
+    /// A scene step names its draw, gives each frame texture once as a target of the role's shape, and sorts by each key
+    /// once or says why it states no order; what is left out of the graph is named.
+    #[test]
+    fn a_scene_step_names_its_draw_its_frame_textures_and_its_order() {
+        let mut cube = target("probe", TargetFormat::Rgba16Float);
+        cube.shape = TargetShape::Cube;
+        let step = |draw: &str, frame: Vec<(FrameTexture, TargetView)>, sorting: DrawSorting| RenderPass {
+            name: "opaque".into(),
+            shared: false,
+            presence: Presence::Always,
+            runs: Runs::Once,
+            work: PassWork::Scene {
+                bucket: DrawBucket::Forward,
+                view: SceneView::Camera,
+                outputs: Outputs {
+                    colour: vec![(0, view(0))],
+                    depth: Some(DepthView {
+                        view: view(1),
+                        read_only_depth: false,
+                        read_only_stencil: false,
+                    }),
+                },
+                draw: draw.into(),
+                members: SceneMembers::Stated {
+                    placements: ScenePlacements::All,
+                },
+                frame,
+                sorting,
+            },
+        };
+        let opaque = || DrawSorting::Keys(vec![SortKey::RenderQueue, SortKey::QuantizedFrontToBack]);
+        let mut g = RenderGraph {
+            targets: vec![
+                target("colour", TargetFormat::Rgba16Float),
+                target("depth", TargetFormat::Depth32Stencil8),
+                target("prepass depth", TargetFormat::Depth32Stencil8),
+                cube,
+            ],
+            buffers: Vec::new(),
+            passes: vec![step(
+                "forward_opaque",
+                vec![(FrameTexture::SceneDepth, view(2))],
+                opaque(),
+            )],
+            picture: Some(0),
+            left_out: vec!["post-processing: not traced".into()],
+        };
+        assert_eq!(g.check(), Ok(()));
+        assert_eq!(
+            g.scene_draws(),
+            vec![(
+                "forward_opaque",
+                &SceneMembers::Stated {
+                    placements: ScenePlacements::All
+                }
+            )]
+        );
+        let refused = |p: RenderPass| {
+            let mut g = g.clone();
+            g.passes = vec![p];
+            g.check().unwrap_err()
+        };
+        assert_eq!(
+            refused(step(" ", Vec::new(), opaque())),
+            "pass opaque draws the scene and names no draw"
+        );
+        assert_eq!(
+            refused(step(
+                "forward_opaque",
+                vec![
+                    (FrameTexture::SceneDepth, view(2)),
+                    (FrameTexture::SceneDepth, view(1))
+                ],
+                opaque()
+            )),
+            "pass opaque gives the frame texture SceneDepth twice"
+        );
+        assert!(
+            refused(step(
+                "forward_opaque",
+                vec![(FrameTexture::DecalBuffer(0), view(3))],
+                opaque()
+            ))
+            .contains("a D2 image, as target probe, a Cube")
+        );
+        assert_eq!(
+            refused(step("forward_opaque", Vec::new(), DrawSorting::Keys(Vec::new()))),
+            "pass opaque sorts its draws by no key"
+        );
+        assert_eq!(
+            refused(step(
+                "forward_opaque",
+                Vec::new(),
+                DrawSorting::Keys(vec![SortKey::RenderQueue, SortKey::RenderQueue])
+            )),
+            "pass opaque sorts by RenderQueue twice"
+        );
+        assert_eq!(
+            refused(step(
+                "forward_opaque",
+                Vec::new(),
+                DrawSorting::NotStated { why: String::new() }
+            )),
+            "pass opaque states no order of its draws and no why"
+        );
+        g.left_out.push(String::new());
+        assert_eq!(
+            g.check(),
+            Err("a step left out of the graph without a name".into())
+        );
+    }
+
     #[test]
     fn a_shadow_cascade_draws_into_a_region_of_its_atlas() {
         let mut atlas = target("shadow", TargetFormat::Depth16);
@@ -827,6 +1110,14 @@ mod tests {
             work: PassWork::Scene {
                 bucket: DrawBucket::ShadowCaster,
                 view: SceneView::ShadowCascade { cascade: 3, region },
+                draw: "shadow_caster".into(),
+                members: SceneMembers::Stated {
+                    placements: ScenePlacements::All,
+                },
+                frame: Vec::new(),
+                sorting: DrawSorting::NotStated {
+                    why: "a fixture".into(),
+                },
                 outputs: Outputs {
                     colour: Vec::new(),
                     depth: Some(DepthView {
@@ -848,6 +1139,7 @@ mod tests {
             buffers: Vec::new(),
             passes: vec![cascade(quarter)],
             picture: None,
+            left_out: Vec::new(),
         };
         assert_eq!(g.check(), Ok(()));
         g.passes[0] = cascade(Region { x: 2049, ..quarter });
@@ -881,6 +1173,7 @@ mod tests {
             buffers: Vec::new(),
             passes: vec![clear("a")],
             picture: Some(0),
+            left_out: Vec::new(),
         };
         g.passes[0].presence = Presence::Unknown { frames: Vec::new() };
         assert_eq!(g.check(), Err("pass a is in some frames, and names none".into()));
@@ -967,6 +1260,7 @@ mod tests {
             buffers: Vec::new(),
             passes: vec![screen(1, 0)],
             picture: Some(0),
+            left_out: Vec::new(),
         };
         assert_eq!(g.check(), Ok(()));
         g.passes[0] = screen(2, 0);
@@ -1022,6 +1316,7 @@ mod tests {
             buffers: Vec::new(),
             passes: vec![copy(None), copy(Some(quarter))],
             picture: None,
+            left_out: Vec::new(),
         };
         assert_eq!(g.check(), Ok(()));
         g.passes[1] = copy(Some(Region { y: 2049, ..quarter }));
@@ -1091,6 +1386,7 @@ mod tests {
                 step(PassWork::CopyBuffer { from: 0, to: 1 }),
             ],
             picture: None,
+            left_out: Vec::new(),
         };
         assert_eq!(g.check(), Ok(()));
         g.passes[1] = organize(2);

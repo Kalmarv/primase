@@ -1,14 +1,17 @@
 //! `lower-fromsoft-sky`: the sky the area read brought in (with its `sky` option; `fromsoft.sky_part`) lowered
 //! to core's sky: the moon's `core.sky_anchor` (towards the sun, at the game's distance) and the draw order of the sky's
-//! materials (core's sky layer, in the order the game draws them). The domes' and rings' anchors and every part's
+//! materials (core's sky layer, in the order the game draws them, and the frame's sky draw where its render graph has
+//! one). The domes' and rings' anchors and every part's
 //! states are the read's already. Elden Ring's weather assets put their sky programs' materials on the sky layer (see
 //! [`LowerFromSoftSky`]).
 use crate::materials::{Material, SkipClass};
+use crate::sekiro::read::render_graph::draw_of;
 use crate::sekiro::source::{MOON_DISTANCE, MaterialSlots, SkyPart, SkyRole};
 use primase_core::pass::{Pass, PassLog, PassSpec};
+use primase_core::render_graph::{DrawBucket, RenderGraph, SceneMembers};
 use primase_core::{
     Component, DrawLayer, DrawOrder, Entity, Environment, Instance, Light, LightKind, Lods, Mesh, SkyAnchor,
-    Transform, World,
+    StepBindings, Transform, World,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -78,7 +81,7 @@ impl Pass for LowerFromSoftSky {
         &[SkyPart::NAME]
     }
     fn provides(&self) -> &[&'static str] {
-        &[SkyAnchor::NAME, DrawOrder::NAME]
+        &[SkyAnchor::NAME, DrawOrder::NAME, StepBindings::NAME]
     }
     fn removes(&self) -> &[&'static str] {
         &[SkyPart::NAME]
@@ -136,6 +139,13 @@ impl Pass for LowerFromSoftSky {
             .into_iter()
             .flat_map(|p| materials_of(world, p))
             .collect();
+        // where the frame's render graph draws the sky in its own step, its materials go there from the step their pass
+        // draws in ([`super::resolve_shaders`])
+        let sky_draw = world.resource::<RenderGraph>().is_some_and(|g| {
+            g.scene_draws()
+                .iter()
+                .any(|(d, m)| *d == draw_of(DrawBucket::Sky) && matches!(m, SceneMembers::Stated { .. }))
+        });
         for (m, (queue, depth_write)) in wanted {
             if others.contains(&m) {
                 log.count(
@@ -153,6 +163,15 @@ impl Pass for LowerFromSoftSky {
                 },
             );
             log.count("sky materials on the sky layer", 1);
+            if sky_draw && let Some(mut bindings) = world.get::<StepBindings>(m).cloned() {
+                for b in &mut bindings.0 {
+                    if b.draw == draw_of(DrawBucket::Forward) || b.draw == draw_of(DrawBucket::Deferred) {
+                        b.draw = draw_of(DrawBucket::Sky).to_owned();
+                    }
+                }
+                world.insert(m, bindings);
+                log.count("sky materials the frame's sky draw draws", 1);
+            }
         }
         for (e, part) in parts {
             world.remove::<SkyPart>(e);

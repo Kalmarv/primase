@@ -34,9 +34,9 @@ use iridia::matrix::lines_at;
 use iridia_interface as iri;
 use iridia_interface::{D3dClass, Interface, ResourceKind, Stage, SystemValue};
 use primase_core::render_graph::{
-    BufferSize, DepthView, DrawBucket, FeatureSlot, Groups, Items, Outputs, PassWork, Presence, Region,
-    RenderBuffer, RenderGraph, RenderPass, RenderTarget, Rounding, Runs, SceneView, TargetFormat,
-    TargetShape, TargetSize, TargetView, Trigger,
+    BufferSize, DepthView, DrawBucket, DrawSorting, FeatureSlot, Groups, Items, Outputs, PassWork, Presence,
+    Region, RenderBuffer, RenderGraph, RenderPass, RenderTarget, Rounding, Runs, SceneMembers,
+    ScenePlacements, SceneView, TargetFormat, TargetShape, TargetSize, TargetView, Trigger,
 };
 use primase_core::shader::{
     BufferBinding, BufferSource, ConstantBinding, ConstantRole, InputBinding, InputRole, LightValue,
@@ -47,6 +47,44 @@ use primase_core::{Name, World};
 use std::collections::{BTreeMap, BTreeSet};
 
 const FORMAT: &str = "render graph";
+
+/// Why a scene step's order of draws is not stated: the recorded frames hold the draws in the order the game drew them,
+/// and the rule that ordered them is not read.
+const SORTING_NOT_READ: &str = "the recorded frames hold the draws in the order the game drew them; the rule that orders them is not read";
+
+/// The draw a scene step of `bucket` makes: one per bucket, named after it.
+pub(crate) fn draw_of(bucket: DrawBucket) -> &'static str {
+    match bucket {
+        DrawBucket::Deferred => "deferred",
+        DrawBucket::Decal => "decal",
+        DrawBucket::Forward => "forward",
+        DrawBucket::Sky => "sky",
+        DrawBucket::ShadowCaster => "shadow_caster",
+        DrawBucket::Velocity => "velocity",
+    }
+}
+
+/// What the draw of a scene step of `bucket` draws: the G-buffer's, the forward draws' and the sky's materials are the
+/// ones each material's `core.step_bindings` binds to the draw ([`crate::sekiro::passes::resolve_shaders`] by the
+/// material's pass, [`crate::sekiro::passes::sky`] for the sky's), at every placement; what the shadow casters, the
+/// velocity draws and a decal draw draw is not read.
+fn members_of(bucket: DrawBucket) -> SceneMembers {
+    let not_read = |why: &str| SceneMembers::NotRead { why: why.to_owned() };
+    match bucket {
+        DrawBucket::Deferred | DrawBucket::Forward | DrawBucket::Sky => SceneMembers::Stated {
+            placements: ScenePlacements::All,
+        },
+        DrawBucket::ShadowCaster => not_read(
+            "which surfaces the game's shadow casters draw, and through which of their materials' programs, is not read",
+        ),
+        DrawBucket::Velocity => {
+            not_read("which surfaces the game's velocity draws draw, and through which programs, is not read")
+        }
+        DrawBucket::Decal => {
+            not_read("which surfaces the game's decal draws draw, and through which programs, is not read")
+        }
+    }
+}
 
 /// What the read of the frame's render graph made and left ([`super::area::Options::render_graph`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -309,6 +347,7 @@ pub(crate) fn read(
         buffers,
         passes,
         picture: t.picture,
+        left_out: Vec::new(),
     };
     graph.check().map_err(|e| invalid(FORMAT, 0, e))?;
     report.steps = graph.passes.len();
@@ -758,17 +797,24 @@ impl Lower<'_> {
                     (table::Bucket::ShadowCaster, None) => SceneView::LocalShadow,
                     _ => SceneView::Camera,
                 };
+                let bucket = match bucket {
+                    table::Bucket::Deferred => DrawBucket::Deferred,
+                    table::Bucket::Decal => DrawBucket::Decal,
+                    table::Bucket::Forward => DrawBucket::Forward,
+                    table::Bucket::Sky => DrawBucket::Sky,
+                    table::Bucket::ShadowCaster => DrawBucket::ShadowCaster,
+                    table::Bucket::Velocity => DrawBucket::Velocity,
+                };
                 PassWork::Scene {
-                    bucket: match bucket {
-                        table::Bucket::Deferred => DrawBucket::Deferred,
-                        table::Bucket::Decal => DrawBucket::Decal,
-                        table::Bucket::Forward => DrawBucket::Forward,
-                        table::Bucket::Sky => DrawBucket::Sky,
-                        table::Bucket::ShadowCaster => DrawBucket::ShadowCaster,
-                        table::Bucket::Velocity => DrawBucket::Velocity,
-                    },
+                    bucket,
                     view,
                     outputs: out,
+                    draw: draw_of(bucket).to_owned(),
+                    members: members_of(bucket),
+                    frame: Vec::new(),
+                    sorting: DrawSorting::NotStated {
+                        why: SORTING_NOT_READ.to_owned(),
+                    },
                 }
             }
             table::Work::Slot { slot, outputs: o } => {

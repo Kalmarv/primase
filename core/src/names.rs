@@ -45,6 +45,7 @@ use crate::skeleton::Skeleton;
 use crate::skin::Skin;
 use crate::sky_anchor::SkyAnchor;
 use crate::state::{Condition, PrimitiveCondition, StateAssignment, StateAxis, StateOverride};
+use crate::step_bindings::{StepBindings, StepDraws};
 use crate::texture_forms::TextureForms;
 use crate::texture_layers::TextureLayers;
 use crate::texture_switch::{TextureSwitch, TextureSwitchView};
@@ -82,7 +83,7 @@ declared! {
         RigPose, SkinInstance, MorphWeights, Sockets, Attachment, JointMap, JointPlacement, Clip, ClipBinding, Asset, Shader, ShaderBinding, LiftedShader, ShaderSpecialisations,
         TextureLayers, MaterialPrograms, ProgramFacts, ClipKey, ClipLength, ClipEvents, ClipEffects, Controller, ControllerBinding,
         DrawGroups, DrawGroupDefaults, ContentNote, Record, DisplayName, PrimitiveKeys, MaterialParameters, SkyAnchor,
-        ParticleSystem, IrradianceVolume;
+        ParticleSystem, IrradianceVolume, StepBindings, StepDraws;
     resources: PartScope, PartitionPlan, Environment, Atmosphere, StateAssignment, Surfaces, Threads, Memo, RenderGraph,
         LightUnit, DirectionalLightUnit, TimeOfDay, TextureSwitchView,
 }

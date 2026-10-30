@@ -4,7 +4,8 @@ use crate::layer_bake::resolve::{
     PALETTE_ROWS_RULE, Unbound, render_state, resolve, resolve_vertex_for_geometry,
     vertex_material_parameters,
 };
-use crate::materials::Material;
+use crate::materials::{Material, SkipClass};
+use crate::sekiro::read::render_graph::draw_of;
 use crate::sekiro::source::{MaterialShader, Payloads, ShaderBundle, ShaderPrograms, TexturePayloads};
 use fromsoft_formats::metaparam::Metaparam;
 use iridia::ProgramGraph;
@@ -13,16 +14,20 @@ use iridia_exec::PixelShader;
 use iridia_exec::{Layout, ProgramShader};
 use iridia_interface::{ShaderFormat, Stage};
 use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
+use primase_core::render_graph::{DrawBucket, RenderGraph, SceneMembers};
 use primase_core::shader::bind_output_uses;
 use primase_core::{
-    ColorSpace, Component, Entity, Instance, MaterialVariants, Mesh, Name, Semantic, Shadows, TexRole,
-    Texture, World,
+    ColorSpace, Component, DrawLayer, DrawOrder, Entity, Instance, MaterialVariants, Mesh, Name, Semantic,
+    Shadows, StepBinding, StepBindings, StepProgram, TexRole, Texture, World,
 };
 use primase_core::{
     shader::ConstantRole, shader::MaterialPrograms, shader::ProgramFacts, shader::Shader,
     shader::ShaderBinding,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// Why a draw draws a material with no binding: its pixel program is not bound (its `core.material_programs` says why).
+const UNBOUND_STEP: &str = "the material's pixel program is not bound (its core.material_programs says why)";
 
 /// Why a vertex program's material parameters are not bound: the executor refuses the program or its constant layout
 /// (a field name twice, as `SpeedTree_*_Gbuf.vpo`'s `m_fBranchTime`).
@@ -168,6 +173,7 @@ impl Pass for ResolveFromSoftShaders {
         &[
             Shader::NAME,
             ShaderBinding::NAME,
+            StepBindings::NAME,
             MaterialPrograms::NAME,
             ProgramFacts::NAME,
             Texture::NAME,
@@ -273,6 +279,8 @@ fn run(
     // the output lanes the program's discards or its target's blend show a use for, by role and program family
     let mut uses: BTreeMap<(&'static str, String), u64> = BTreeMap::new();
     let mut program_names = BTreeMap::new();
+    // each candidate and whether its pass is the forward one, for the draws that draw it
+    let mut forward: Vec<(Entity, bool)> = Vec::new();
     for (name, code) in programs {
         program_names
             .entry(fromsoft_formats::names::fold(name))
@@ -285,6 +293,7 @@ fn run(
             (None, Some(view)) => view,
             (None, None) => unreachable!("a candidate has a definition"),
         };
+        forward.push((material_entity, material.is_forward()));
         // the shader's bundle, read where it is: a material takes from it only what is not taken yet (a program not read
         // yet, the bundle's parameters once)
         let bundle_entity = world.get::<MaterialShader>(material_entity).map(|m| m.0);
@@ -683,7 +692,62 @@ fn run(
         log.approximate(&policy, count);
     }
     super::add_low_forms(world, textures.into_iter().map(|((stem, _), e)| (e, stem)), log);
+    step_bindings(world, &forward, log);
     Ok(())
+}
+
+/// Where the world holds the frame's render graph, each material's `core.step_bindings`: the draw of the step its pass
+/// draws in (the G-buffer's for a `Gbuf` program, the forward draws' for a `Fwd` one, the sky's for a material on the
+/// sky layer: [`super::sky`] moves the ones it puts there), through its own binding, or why it has none. A shadow
+/// proxy is drawn in none of them; a material whose pass's draw the graph makes no step for binds none, counted.
+fn step_bindings(world: &mut World, forward: &[(Entity, bool)], log: &mut PassLog) {
+    let Some(graph) = world.resource::<RenderGraph>() else {
+        return;
+    };
+    let stated: BTreeSet<String> = graph
+        .scene_draws()
+        .into_iter()
+        .filter(|(_, m)| matches!(m, SceneMembers::Stated { .. }))
+        .map(|(d, _)| d.to_owned())
+        .collect();
+    let sky = draw_of(DrawBucket::Sky);
+    for &(e, is_forward) in forward {
+        if world.get::<Material>(e).and_then(|m| m.skip) == Some(SkipClass::Shadow) {
+            log.count("shadow proxy materials, in none of the frame's main draws", 1);
+            continue;
+        }
+        let on_sky = world
+            .get::<DrawOrder>(e)
+            .is_some_and(|o| o.layer == DrawLayer::Sky);
+        let draw = match (on_sky && stated.contains(sky), is_forward) {
+            (true, _) => sky,
+            (false, true) => draw_of(DrawBucket::Forward),
+            (false, false) => draw_of(DrawBucket::Deferred),
+        };
+        if !stated.contains(draw) {
+            log.count(
+                &format!("materials of the {draw} draw, which the frame's render graph makes no step for"),
+                1,
+            );
+            continue;
+        }
+        let program = if world.has::<ShaderBinding>(e) {
+            StepProgram::Main
+        } else {
+            StepProgram::Unbound {
+                why: UNBOUND_STEP.to_owned(),
+            }
+        };
+        world.insert(
+            e,
+            StepBindings(vec![StepBinding {
+                draw: draw.to_owned(),
+                pass: None,
+                program,
+            }]),
+        );
+        log.count(&format!("materials the frame's {draw} draw draws"), 1);
+    }
 }
 
 #[cfg(test)]

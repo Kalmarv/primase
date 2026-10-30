@@ -23,9 +23,11 @@ use inputs::{Game, OracleSet, Tool, install, oodle, oracle};
 use iridia_interface::{
     AddressMode, Compare, D3dClass, Filter, Filters, MipFilter, ResourceKind, SamplerState,
 };
-use primase_core::render_graph::{PassWork, Presence, RenderGraph, RenderPass};
+use primase_core::render_graph::{
+    PassWork, Presence, RenderGraph, RenderPass, SceneMembers, ScenePlacements,
+};
 use primase_core::shader::{InputRole, ScreenTriangleValue, Shader, StageBinding};
-use primase_core::{Resource, World};
+use primase_core::{DrawLayer, DrawOrder, Resource, StepBindings, StepProgram, World};
 use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::sekiro;
 use std::collections::{BTreeMap, BTreeSet};
@@ -686,6 +688,153 @@ fn sekiros_render_graph_is_its_recorded_frames() -> Result<(), Box<dyn std::erro
         assert_eq!(several, report.render_graph.textures_through_several_samplers);
     }
     assert_eq!(report.render_graph.untraced_reads, 0);
+    Ok(())
+}
+
+/// Each material of slice A of m11_01 (its sky included) states the draw of the frame that draws it
+/// (`core.step_bindings`): the sky's for a material `lower-fromsoft-sky` puts on the sky layer, else the forward draws'
+/// for a forward pass's material and the G-buffer's for the others; through its own binding where it has one. A shadow
+/// proxy and a material with no definition bind none, and the shadow casters' and velocity draws do not read theirs.
+#[test]
+fn sekiros_materials_state_the_draws_that_draw_them() -> Result<(), Box<dyn std::error::Error>> {
+    let Some(root) = install(Game::Sekiro) else {
+        return Ok(());
+    };
+    let Some(install) = common::sekiro(&root)? else {
+        return Ok(());
+    };
+    let Some(dll) = oodle(Tool::Oodle6) else {
+        return Ok(());
+    };
+    let dll = common::oodle(dll)?;
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: 1 << 30,
+    };
+    let mut world = World::default();
+    sekiro::read_game_area(
+        &install,
+        "m11_01",
+        &decoder,
+        &sekiro::Options {
+            region: Some(sekiro::Region {
+                rect: [-170.0, 180.0, -50.0, 300.0],
+                margin: 0.0,
+            }),
+            sky: sekiro::sky::Sky::Include,
+            render_graph: true,
+            ..Default::default()
+        },
+        &mut world,
+    )?;
+    let run = common::run(
+        &mut world,
+        "resolve-fromsoft-shaders{unbound-textures=preview}, lower-fromsoft-sky",
+    )?;
+    let graph = world.resource::<RenderGraph>().ok_or("no core.render_graph")?;
+    let mut members: BTreeMap<&str, Vec<&SceneMembers>> = BTreeMap::new();
+    for (draw, m) in graph.scene_draws() {
+        members.entry(draw).or_default().push(m);
+    }
+    let stated = SceneMembers::Stated {
+        placements: ScenePlacements::All,
+    };
+    for draw in ["deferred", "forward", "sky"] {
+        assert!(members[draw].iter().all(|m| **m == stated), "{draw}");
+    }
+    for draw in ["shadow_caster", "velocity"] {
+        assert!(
+            members[draw]
+                .iter()
+                .all(|m| matches!(m, SceneMembers::NotRead { .. })),
+            "{draw}"
+        );
+    }
+    let mut drawn: BTreeMap<(String, bool), u64> = BTreeMap::new();
+    let (mut proxies, mut undefined) = (0, 0);
+    for (e, m) in world.iter::<primase_fromsoft::materials::Material>() {
+        let bindings = world.get::<StepBindings>(e);
+        let Some(view) = m.layered.as_ref().map(|l| l.view()).or_else(|| m.view()) else {
+            assert!(bindings.is_none());
+            undefined += 1;
+            continue;
+        };
+        if m.skip == Some(primase_fromsoft::materials::SkipClass::Shadow) {
+            assert!(bindings.is_none());
+            proxies += 1;
+            continue;
+        }
+        let bindings = bindings.ok_or("a defined material with no core.step_bindings")?;
+        assert_eq!(bindings.0.len(), 1);
+        let b = &bindings.0[0];
+        let on_sky = world
+            .get::<DrawOrder>(e)
+            .is_some_and(|o| o.layer == DrawLayer::Sky);
+        let draw = match (on_sky, view.is_forward()) {
+            (true, _) => "sky",
+            (false, true) => "forward",
+            (false, false) => "deferred",
+        };
+        assert_eq!(b.draw, draw);
+        assert_eq!(b.pass, None);
+        let bound = world.has::<primase_core::shader::ShaderBinding>(e);
+        assert_eq!(matches!(b.program, StepProgram::Main), bound);
+        *drawn.entry((draw.to_owned(), bound)).or_default() += 1;
+    }
+    // the counts the passes state are the materials the world holds
+    let counts = |pass: &str| {
+        run.steps
+            .iter()
+            .find(|s| s.pass.starts_with(pass))
+            .map(|s| s.log.counts.clone())
+            .unwrap_or_default()
+    };
+    let (resolve, sky) = (counts("resolve-fromsoft-shaders"), counts("lower-fromsoft-sky"));
+    let total = |d: &str| {
+        drawn
+            .iter()
+            .filter(|((w, _), _)| w == d)
+            .map(|(_, n)| n)
+            .sum::<u64>()
+    };
+    assert_eq!(
+        sky.get("sky materials the frame's sky draw draws")
+            .copied()
+            .unwrap_or(0),
+        total("sky")
+    );
+    assert_eq!(
+        ["deferred", "forward"]
+            .map(|d| resolve
+                .get(&format!("materials the frame's {d} draw draws"))
+                .copied()
+                .unwrap_or(0))
+            .iter()
+            .sum::<u64>(),
+        total("deferred") + total("forward") + total("sky")
+    );
+    assert_eq!(
+        resolve
+            .get("shadow proxy materials, in none of the frame's main draws")
+            .copied()
+            .unwrap_or(0),
+        proxies
+    );
+    // slice A: 779 bound materials in the G-buffer's draw, 9 in the forward draws', 33 in the sky's (one without a
+    // bound program), no shadow proxy and none without a definition
+    let count = |d: &str, bound: bool| drawn.get(&(d.to_owned(), bound)).copied().unwrap_or(0);
+    assert_eq!(
+        [
+            count("deferred", true),
+            count("deferred", false),
+            count("forward", true),
+            count("forward", false),
+            count("sky", true),
+            count("sky", false)
+        ],
+        [779, 0, 9, 0, 32, 1]
+    );
+    assert_eq!((proxies, undefined), (0, 0));
     Ok(())
 }
 
