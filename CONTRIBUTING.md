@@ -53,6 +53,9 @@ Clarifications:
   the pieces incrementally is the reader's and the conversion machinery's. The world can describe objects whose heavy
   data isn't loaded yet. Operations that need neighbouring geometry or world-wide information get it rather than treat
   a chunk as an isolated world, and processing in chunks preserves the intended result.
+- **Read scope.** A reader reads the scope the program asks for: named parts such as an area, a data family or a set
+  of files. Within that scope it reads every candidate as authored and never picks among alternatives; picking is a
+  pass. Heavy payloads may be deferred to the load step, which follows a pass's selection.
 
 Also always: the repository holds no game files and nothing about anyone's machine; output is deterministic;
 dependencies are small and pinned; correctness comes from independent sources (the game, a third-party tool, a
