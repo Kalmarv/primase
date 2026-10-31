@@ -8,7 +8,7 @@ use fromsoft_formats::equipment::{
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Resource, World};
 
-pub use crate::sekiro::components::outfits::{PartLevel,PartLevelSelection};
+pub use crate::sekiro::components::outfits::{PartLevel, PartLevelSelection};
 /// Required presentation choice. `Authored` makes no additional sex/presentation filter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Presentation {

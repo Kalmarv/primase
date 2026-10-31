@@ -1,83 +1,121 @@
 //! Authored FromSoft catalog reading: indexes, binder forms, parameter links, names and lazy clip plans.
-#![allow(clippy::disallowed_methods, reason = "reader I/O: installed catalog metadata and an explicitly supplied cache directory")]
-use std::path::{Path, PathBuf};
-use fromsoft_formats::{Archive, Install, Game as FromSoftGame, dcx::Decoder, listing};
-use primase_foundations::parallel::{self, Threads};
-use serde::{Serialize,Deserialize};
-use serde_json::{Value,json};
-use crate::sekiro::{self, CharacterReader, CharacterOutfit};
+#![allow(
+    clippy::disallowed_methods,
+    reason = "reader I/O: installed catalog metadata and an explicitly supplied cache directory"
+)]
+use crate::sekiro::outfit_data::{InitializerOutfits, NpcOutfitRows};
+use crate::sekiro::{self, CharacterOutfit, CharacterReader};
+use fromsoft_formats::{Archive, Game as FromSoftGame, Install, dcx::Decoder, listing};
 use primase_core::convert::Reader;
-use primase_core::{Resource,World};
-use crate::sekiro::outfit_data::{InitializerOutfits,NpcOutfitRows};
+use primase_core::{Resource, World};
+use primase_foundations::parallel::{self, Threads};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
 type Result<T> = fromsoft_formats::Result<T>;
 macro_rules! anyhow { ($($arg:tt)*) => { crate::invalid("FromSoft catalog", 0, format!($($arg)*)) }; }
 
 /// Caller-stated presentation settings. The reader supplies no language or cache location default.
-#[derive(Clone,Debug)]
-pub struct Options { pub language:String, pub language_source:String, pub cache_dir:Option<PathBuf> }
-#[derive(Clone,Copy,Debug,PartialEq,Eq,Serialize)]
-pub enum Subject { Character,Object,Map,Other }
+#[derive(Clone, Debug)]
+pub struct Options {
+    pub language: String,
+    pub language_source: String,
+    pub cache_dir: Option<PathBuf>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum Subject {
+    Character,
+    Object,
+    Map,
+    Other,
+}
 /// A source reader request in `open`/`details.sets` uses `reader` = area, character or parts;
 /// a program maps that to its own reader adapter name and passes the remaining options through.
-#[derive(Clone,Debug)]
+#[derive(Clone, Debug)]
 pub struct CatalogEntry {
-    pub key:String,pub kind:String,pub subject:Subject,pub name:String,pub path:String,
-    pub open:Value,pub refusal:Option<String>,pub details:Value,
+    pub key: String,
+    pub kind: String,
+    pub subject: Subject,
+    pub name: String,
+    pub path: String,
+    pub open: Value,
+    pub refusal: Option<String>,
+    pub details: Value,
 }
-#[derive(Clone,Debug,Default)]
-pub struct Catalog {pub entries:Vec<CatalogEntry>}
-impl Resource for Catalog {const NAME:&'static str="fromsoft.catalog";}
+#[derive(Clone, Debug, Default)]
+pub struct Catalog {
+    pub entries: Vec<CatalogEntry>,
+}
+impl Resource for Catalog {
+    const NAME: &'static str = "fromsoft.catalog";
+}
 
 /// Authored association of catalog placement records to their character, before any form is selected.
-#[derive(Clone,Debug)]
+#[derive(Clone, Debug)]
 pub struct CatalogInputs {
-    pub player_parent:Option<String>,
-    pub player_insert:usize,
-    pub npc_insert:usize,
-    pub npc_rows:Vec<(String,fromsoft_formats::equipment::NpcOutfit)>,
+    pub player_parent: Option<String>,
+    pub player_insert: usize,
+    pub npc_insert: usize,
+    pub npc_rows: Vec<(String, fromsoft_formats::equipment::NpcOutfit)>,
 }
-impl Resource for CatalogInputs {const NAME:&'static str="fromsoft.catalog_inputs";}
+impl Resource for CatalogInputs {
+    const NAME: &'static str = "fromsoft.catalog_inputs";
+}
 /// A catalog after its explicit presentation passes have materialized opening requests.
-#[derive(Clone,Debug)]
+#[derive(Clone, Debug)]
 pub struct CatalogReady;
-impl Resource for CatalogReady {const NAME:&'static str="fromsoft.catalog_ready";}
-
+impl Resource for CatalogReady {
+    const NAME: &'static str = "fromsoft.catalog_ready";
+}
 
 /// Source-stated report fields and notices, rendered generically by a program.
 #[derive(Debug)]
 pub struct DescriptiveReport {
-    pub fields: serde_json::Map<String,Value>,
+    pub fields: serde_json::Map<String, Value>,
     pub notices: Vec<primase_core::convert::Notice>,
 }
 
 /// The selected row's descriptive data and display-only card; selecting the row is a separate operation.
-pub fn npc_description(install:&Install,archive:&Archive,decoder:&Decoder<'_>,row:i32)->DescriptiveReport {
-    let mut fields=serde_json::Map::new();
-    let mut notices=Vec::new();
-    match fromsoft_formats::game_params::read_npc_stats(install,archive,decoder) {
-        Ok(stats)=>if let Some(stats)=stats.iter().find(|stats|stats.id==row) {
-            let values=stats.fields();
-            fields.insert("npc_row".into(),json!({"row":row,"param":"NPC_PARAM_ST",
+pub fn npc_description(
+    install: &Install,
+    archive: &Archive,
+    decoder: &Decoder<'_>,
+    row: i32,
+) -> DescriptiveReport {
+    let mut fields = serde_json::Map::new();
+    let mut notices = Vec::new();
+    match fromsoft_formats::game_params::read_npc_stats(install, archive, decoder) {
+        Ok(stats) => {
+            if let Some(stats) = stats.iter().find(|stats| stats.id == row) {
+                let values = stats.fields();
+                fields.insert("npc_row".into(),json!({"row":row,"param":"NPC_PARAM_ST",
                 "fields":values.iter().map(|(name,value,unit)|json!({"name":name,"value":value,"unit":unit})).collect::<Vec<_>>()}));
-            let card=primase_core::report_card::ReportCard {
+                let card=primase_core::report_card::ReportCard {
                 title:format!("NPC param row {row}"),
                 description:"Descriptive fields of the row (NPC_PARAM_ST), by the definition's names; the row's other fields are not read.".into(),
                 fields:values.iter().map(|(name,value,unit)|primase_core::report_card::ReportField {
                     name:(*name).into(),value:json!(value),unit:Some((*unit).into()),
                 }).collect(),
             };
-            fields.insert("cards".into(),json!([card]));
-        },
-        Err(error)=>notices.push(primase_core::convert::Notice::new("fromsoft",primase_core::convert::NoticeKind::Unsupported,
-            format!("NPC row {row} descriptive fields unread: {error}"),1)),
+                fields.insert("cards".into(), json!([card]));
+            }
+        }
+        Err(error) => notices.push(primase_core::convert::Notice::new(
+            "fromsoft",
+            primase_core::convert::NoticeKind::Unsupported,
+            format!("NPC row {row} descriptive fields unread: {error}"),
+            1,
+        )),
     }
-    DescriptiveReport {fields,notices}
+    DescriptiveReport { fields, notices }
 }
 mod names {
-    use serde_json::{json,Value};
-    pub const COMMUNITY:&str="community";
-    pub const GAME:&str="game";
-    pub fn alias(name:&str,source:&str)->Value {json!({"name":name,"source":source})}
+    use serde_json::{Value, json};
+    pub const COMMUNITY: &str = "community";
+    pub const GAME: &str = "game";
+    pub fn alias(name: &str, source: &str) -> Value {
+        json!({"name":name,"source":source})
+    }
 }
 pub fn listed_details(entry: &listing::ListingEntry) -> Value {
     let mut details = json!({
@@ -93,12 +131,22 @@ pub fn listed_details(entry: &listing::ListingEntry) -> Value {
 }
 
 /// Read the install's authored catalog, with every presentation choice stated by the program.
-pub fn read(install: &Install, decoder: &Decoder<'_>, names: Option<&Path>, options: &Options) -> Result<World> {
+pub fn read(
+    install: &Install,
+    decoder: &Decoder<'_>,
+    names: Option<&Path>,
+    options: &Options,
+) -> Result<World> {
     let dictionary = names.ok_or_else(|| anyhow!("no FromSoft name dictionary"))?;
     let dictionary_data = fromsoft_formats::NameDictionary::read_for(dictionary, install.game)?;
     let archive = std::sync::Arc::new(install.open()?);
-    let listing = listing::Listing::from_entries(install.root.clone(), Some(dictionary.to_path_buf()), &archive.entries, &dictionary_data);
-    let (npc_rows,npc_outfit_rows) = npc_metadata(&install, &archive, &decoder, names.as_deref())?;
+    let listing = listing::Listing::from_entries(
+        install.root.clone(),
+        Some(dictionary.to_path_buf()),
+        &archive.entries,
+        &dictionary_data,
+    );
+    let (npc_rows, npc_outfit_rows) = npc_metadata(&install, &archive, &decoder, names.as_deref())?;
     let rows: Vec<CatalogEntry> = listing
         .entries
         .iter()
@@ -219,16 +267,23 @@ pub fn read(install: &Install, decoder: &Decoder<'_>, names: Option<&Path>, opti
         .filter(|entry| entry.kind == "character")
         .map(|entry| (entry.name.clone(), entry.key.clone()))
         .collect();
-    let player_parent=characters.get("c0000").cloned();
-    let player_insert=entries.len();
-    let mut initializers=InitializerOutfits {game:install.game,rows:Vec::new()};
-    if let Some(parent)=&player_parent {
-        match sekiro::character_outfits(install,&archive,decoder) {
-            Ok(raw)=>initializers=raw,
+    let player_parent = characters.get("c0000").cloned();
+    let player_insert = entries.len();
+    let mut initializers = InitializerOutfits {
+        game: install.game,
+        rows: Vec::new(),
+    };
+    if let Some(parent) = &player_parent {
+        match sekiro::character_outfits(install, &archive, decoder) {
+            Ok(raw) => initializers = raw,
             Err(error) => entries.push(CatalogEntry {
-                key: "initializer/unread".into(), kind: "outfit".into(), subject: Subject::Character,
-                name: "Player outfits unread".into(), path: "CharaInitParam".into(),
-                refusal: Some(format!("installed player outfits did not read: {error}")), open: Value::Null,
+                key: "initializer/unread".into(),
+                kind: "outfit".into(),
+                subject: Subject::Character,
+                name: "Player outfits unread".into(),
+                path: "CharaInitParam".into(),
+                refusal: Some(format!("installed player outfits did not read: {error}")),
+                open: Value::Null,
                 details: json!({"parent":parent,"model":"c0000"}),
             }),
         }
@@ -242,8 +297,8 @@ pub fn read(install: &Install, decoder: &Decoder<'_>, names: Option<&Path>, opti
         }
         entries.push(row);
     }
-    let npc_insert=entries.len();
-    let npc_rows=npc_outfit_rows;
+    let npc_insert = entries.len();
+    let npc_rows = npc_outfit_rows;
     // each draw-param file of an area's map is a variant of the area: it opens the area with that environment, and is
     // a value of the `environment` option (listed for the `area` given: the full name opens the row, the short name
     // `m11_01` an area `m11_01_00_00` states too is a value of it)
@@ -294,8 +349,12 @@ pub fn read(install: &Install, decoder: &Decoder<'_>, names: Option<&Path>, opti
     if install.game == FromSoftGame::EldenRing {
         let mut tiles: std::collections::BTreeMap<&str, Vec<String>> = std::collections::BTreeMap::new();
         for entry in &entries {
-            if entry.kind == "area" && !entry.open.is_null()
-                && let Some(map) = ["m60", "m61"].into_iter().find(|map| entry.name.starts_with(&format!("{map}_"))) {
+            if entry.kind == "area"
+                && !entry.open.is_null()
+                && let Some(map) = ["m60", "m61"]
+                    .into_iter()
+                    .find(|map| entry.name.starts_with(&format!("{map}_")))
+            {
                 tiles.entry(map).or_default().push(entry.name.clone());
             }
         }
@@ -326,29 +385,42 @@ pub fn read(install: &Install, decoder: &Decoder<'_>, names: Option<&Path>, opti
         .filter(|entry| entry.kind == "character" && entry.details["animations"] == true)
         .map(|entry| entry.name.clone())
         .collect();
-    let clips = clip_lists(&install, &archive, &decoder, &animated, names.as_deref(), options.cache_dir.as_deref());
+    let clips = clip_lists(
+        &install,
+        &archive,
+        &decoder,
+        &animated,
+        names.as_deref(),
+        options.cache_dir.as_deref(),
+    );
     for (model, clips) in clips {
         let Some(parent) = characters.get(&model) else {
             continue;
         };
-        let clips=match clips {
-            Ok(clips)=>clips,
-            Err(error)=>{
-                entries.push(CatalogEntry{key:format!("clip/{model}/unread"),kind:"clip".into(),subject:Subject::Character,
-                    refusal:Some(format!("{model}: clip planning failed: {error}")),name:format!("{model} clips unread"),
-                    path:format!("{model} animation binders"),open:Value::Null,
-                    details:json!({"parent":parent,"model":model})});
+        let clips = match clips {
+            Ok(clips) => clips,
+            Err(error) => {
+                entries.push(CatalogEntry {
+                    key: format!("clip/{model}/unread"),
+                    kind: "clip".into(),
+                    subject: Subject::Character,
+                    refusal: Some(format!("{model}: clip planning failed: {error}")),
+                    name: format!("{model} clips unread"),
+                    path: format!("{model} animation binders"),
+                    open: Value::Null,
+                    details: json!({"parent":parent,"model":model}),
+                });
                 continue;
             }
         };
         for clip in clips {
             entries.push(CatalogEntry {
-                key: format!("clip/{model}/{}",clip.key),
+                key: format!("clip/{model}/{}", clip.key),
                 kind: "clip".into(),
                 subject: Subject::Character,
                 refusal: None,
                 name: clip.name.clone(),
-                path: format!("{model} clip {}",clip.name),
+                path: format!("{model} clip {}", clip.name),
                 open: json!({
                     "reader": "character", "id": model, "animations": true, "clips": clip.key,
                 }),
@@ -357,37 +429,71 @@ pub fn read(install: &Install, decoder: &Decoder<'_>, names: Option<&Path>, opti
         }
     }
     // the game's own text first: an NPC row's `nameId` in the item message binder's NPC-name FMG
-    let game_text=names.as_deref().ok_or_else(||"NPC names need the install's name dictionary to enumerate languages".to_owned())
-        .and_then(|path|fromsoft_formats::NameDictionary::read_for(path,install.game).map_err(|e|e.to_string()))
-        .and_then(|dictionary|fromsoft_formats::messages::npc_names(&install,&archive,&decoder,&dictionary,options.language.as_str()).map_err(|e|e.to_string()));
-    name_entries(&mut entries,install.game,game_text.as_ref().map(|read|&read.names).map_err(String::as_str));
-    for entry in entries.iter_mut().filter(|entry|entry.kind=="npc") {
-        entry.details["name_language"]=json!({"value":options.language.as_str(),"reason":options.language_source.as_str()});
-        if let Ok(read)=&game_text {entry.details["name_notices"]=json!(read.report);}
+    let game_text = names
+        .as_deref()
+        .ok_or_else(|| "NPC names need the install's name dictionary to enumerate languages".to_owned())
+        .and_then(|path| {
+            fromsoft_formats::NameDictionary::read_for(path, install.game).map_err(|e| e.to_string())
+        })
+        .and_then(|dictionary| {
+            fromsoft_formats::messages::npc_names(
+                &install,
+                &archive,
+                &decoder,
+                &dictionary,
+                options.language.as_str(),
+            )
+            .map_err(|e| e.to_string())
+        });
+    name_entries(
+        &mut entries,
+        install.game,
+        game_text.as_ref().map(|read| &read.names).map_err(String::as_str),
+    );
+    for entry in entries.iter_mut().filter(|entry| entry.kind == "npc") {
+        entry.details["name_language"] =
+            json!({"value":options.language.as_str(),"reason":options.language_source.as_str()});
+        if let Ok(read) = &game_text {
+            entry.details["name_notices"] = json!(read.report);
+        }
     }
     // each weapon row whose model the archives hold: a value of weapons_right and weapons_left
-    let weapons=match sekiro::standalone::read_weapon_inventory(install,&archive,decoder) {
-        Ok(raw)=>raw,
-        Err(error)=>{
-            entries.push(CatalogEntry {key:"weapon/unread".into(),kind:"weapon".into(),subject:Subject::Object,
-                refusal:Some(format!("the weapon params did not read: {error}")),name:"weapons unread".into(),
-                path:"EquipParamWeapon".into(),open:Value::Null,details:json!({})});
-            sekiro::standalone::WeaponInventory {rows:Vec::new()}
+    let weapons = match sekiro::standalone::read_weapon_inventory(install, &archive, decoder) {
+        Ok(raw) => raw,
+        Err(error) => {
+            entries.push(CatalogEntry {
+                key: "weapon/unread".into(),
+                kind: "weapon".into(),
+                subject: Subject::Object,
+                refusal: Some(format!("the weapon params did not read: {error}")),
+                name: "weapons unread".into(),
+                path: "EquipParamWeapon".into(),
+                open: Value::Null,
+                details: json!({}),
+            });
+            sekiro::standalone::WeaponInventory { rows: Vec::new() }
         }
     };
-    let mut world=World::new();
-    world.insert_resource(Catalog {entries});
+    let mut world = World::new();
+    world.insert_resource(Catalog { entries });
     world.insert_resource(weapons);
     world.insert_resource(initializers);
-    world.insert_resource(NpcOutfitRows {game:install.game,rows:npc_rows.iter().map(|(_,row)|row.clone()).collect()});
-    world.insert_resource(CatalogInputs {player_parent,player_insert,npc_insert,npc_rows});
+    world.insert_resource(NpcOutfitRows {
+        game: install.game,
+        rows: npc_rows.iter().map(|(_, row)| row.clone()).collect(),
+    });
+    world.insert_resource(CatalogInputs {
+        player_parent,
+        player_insert,
+        npc_insert,
+        npc_rows,
+    });
     Ok(world)
 }
 
 /// The catalog's weapons: each `EquipParamWeapon` row with a model whose part binder the archives hold, opening as its
 /// models (named in the right hand, held by no one). The rows without a model (the game's unarmed rows) or whose model no
 /// binder holds are left out; params that do not read are one refused row saying why.
-
 
 pub fn name_entries(
     entries: &mut [CatalogEntry],
@@ -421,7 +527,9 @@ pub fn name_entries(
                 match from_game {
                     Some(name) => Some(names::alias(name, names::GAME)),
                     None => community(
-                        entry.details["model"].as_str().and_then(|model| source_names::character(game, model)),
+                        entry.details["model"]
+                            .as_str()
+                            .and_then(|model| source_names::character(game, model)),
                     ),
                 }
             }
@@ -432,16 +540,19 @@ pub fn name_entries(
         }
     }
 }
-#[derive(Clone,Debug,Serialize,Deserialize)]
-pub struct CatalogClip {pub key:String,pub name:String}
-pub type ClipLists = std::collections::BTreeMap<String, std::result::Result<Vec<CatalogClip>,String>>;
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CatalogClip {
+    pub key: String,
+    pub name: String,
+}
+pub type ClipLists = std::collections::BTreeMap<String, std::result::Result<Vec<CatalogClip>, String>>;
 
 /// The animations each of `models` has (`a000_003000`): the member names of its animation binders, read on several
 /// threads (a binder is decoded whole to list them) and kept between runs. A model whose binders cannot be read lists
 /// a named refusal. Duplicate names retain their distinct reader keys.
 pub fn clip_lists(
     install: &Install,
-    archive:&std::sync::Arc<Archive>,
+    archive: &std::sync::Arc<Archive>,
     decoder: &Decoder<'_>,
     models: &[String],
     names: Option<&Path>,
@@ -458,17 +569,32 @@ pub fn clip_lists(
         .ok()
         .and_then(|n| Threads::new(n.get().min(8)))
         .unwrap_or(Threads::ONE);
-    let lists = parallel::map(threads, models, |_, model| -> std::result::Result<Vec<CatalogClip>,String> {
-        let mut reader=CharacterReader::animations_in(install.clone(),model,*decoder,archive.clone()).map_err(|error|error.to_string())?;
-        let (plans,_)=reader.read().map_err(|error|error.to_string())?;
-        Ok(plans.iter::<primase_core::ClipKey>().filter_map(|(entity,key)|
-            plans.get::<primase_core::Name>(entity).map(|name|CatalogClip{key:key.0.clone(),name:name.0.clone()})).collect())
-    }).unwrap_or_else(|error|models.iter().map(|_|Err(format!("parallel clip planning failed: {error}"))).collect());
-    let lists: ClipLists = models
-        .iter()
-        .cloned()
-        .zip(lists)
-        .collect();
+    let lists = parallel::map(
+        threads,
+        models,
+        |_, model| -> std::result::Result<Vec<CatalogClip>, String> {
+            let mut reader =
+                CharacterReader::animations_in(install.clone(), model, *decoder, archive.clone())
+                    .map_err(|error| error.to_string())?;
+            let (plans, _) = reader.read().map_err(|error| error.to_string())?;
+            Ok(plans
+                .iter::<primase_core::ClipKey>()
+                .filter_map(|(entity, key)| {
+                    plans.get::<primase_core::Name>(entity).map(|name| CatalogClip {
+                        key: key.0.clone(),
+                        name: name.0.clone(),
+                    })
+                })
+                .collect())
+        },
+    )
+    .unwrap_or_else(|error| {
+        models
+            .iter()
+            .map(|_| Err(format!("parallel clip planning failed: {error}")))
+            .collect()
+    });
+    let lists: ClipLists = models.iter().cloned().zip(lists).collect();
     if let Some(file) = &file {
         if let Some(dir) = file.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -505,7 +631,7 @@ pub fn npc_entries(
     decoder: &Decoder<'_>,
     names: Option<&Path>,
 ) -> Result<Vec<CatalogEntry>> {
-    Ok(npc_metadata(install,archive,decoder,names)?.0)
+    Ok(npc_metadata(install, archive, decoder, names)?.0)
 }
 
 fn npc_metadata(
@@ -513,7 +639,10 @@ fn npc_metadata(
     archive: &Archive,
     decoder: &Decoder<'_>,
     names: Option<&Path>,
-) -> Result<(Vec<CatalogEntry>,Vec<(String,fromsoft_formats::equipment::NpcOutfit)>)> {
+) -> Result<(
+    Vec<CatalogEntry>,
+    Vec<(String, fromsoft_formats::equipment::NpcOutfit)>,
+)> {
     let names = names.ok_or_else(|| anyhow!("no FromSoft name dictionary"))?;
     let dictionary = fromsoft_formats::NameDictionary::read_for(names, install.game)
         .map_err(|error| anyhow!("dictionary {}: {error}", names.display()))?;
@@ -522,10 +651,7 @@ fn npc_metadata(
     // per (model, row): the maps and the parts that name it, in map then file order
     let mut rows: std::collections::BTreeMap<(String, i32), (Vec<String>, usize, usize)> =
         std::collections::BTreeMap::new();
-    for p in placements
-        .iter()
-        .filter(|p| p.row > 0 && !p.model.is_empty())
-    {
+    for p in placements.iter().filter(|p| p.row > 0 && !p.model.is_empty()) {
         let (maps, parts, dummies) = rows.entry((p.model.clone(), p.row)).or_default();
         if !maps.contains(&p.map) {
             maps.push(p.map.clone());
@@ -533,8 +659,7 @@ fn npc_metadata(
         *parts += 1;
         *dummies += usize::from(p.dummy);
     }
-    let mut held: std::collections::BTreeMap<String, (bool, bool)> =
-        std::collections::BTreeMap::new();
+    let mut held: std::collections::BTreeMap<String, (bool, bool)> = std::collections::BTreeMap::new();
     let entries: Vec<_> = rows
         .into_iter()
         .map(|((model, row), (maps, parts, dummies))| {
@@ -547,15 +672,29 @@ fn npc_metadata(
             npc_entry(&model, row, &maps, parts, dummies, binder, animations)
         })
         .collect();
-    let mut outfits=Vec::new();
-    if install.game==FromSoftGame::Sekiro {
-        let models:std::collections::BTreeSet<_>=placements.iter().filter(|row|row.character_init.is_some()).map(|row|row.model.as_str()).collect();
+    let mut outfits = Vec::new();
+    if install.game == FromSoftGame::Sekiro {
+        let models: std::collections::BTreeSet<_> = placements
+            .iter()
+            .filter(|row| row.character_init.is_some())
+            .map(|row| row.model.as_str())
+            .collect();
         for model in models {
-            outfits.extend(fromsoft_formats::equipment::npc_outfits(install,archive,decoder,&dictionary,model,None)?
-                .into_iter().map(|row|(model.to_owned(),row)));
+            outfits.extend(
+                fromsoft_formats::equipment::npc_outfits(
+                    install,
+                    archive,
+                    decoder,
+                    &dictionary,
+                    model,
+                    None,
+                )?
+                .into_iter()
+                .map(|row| (model.to_owned(), row)),
+            );
         }
     }
-    Ok((entries,outfits))
+    Ok((entries, outfits))
 }
 
 /// Whether the archives hold the animation binder of character `model` (`/chr/<model>.anibnd.dcx`, the file the
@@ -618,10 +757,7 @@ pub fn maps_label(maps: &[String]) -> String {
 /// The archive listing behind the catalog: the character and part binders the archive actually holds, named by a
 /// caller-provided dictionary. Only BHD5 headers and BDT metadata are read; no geometry, texture or binder payload is
 /// touched.
-pub fn player_outfit_entries(
-    parent: &str,
-    choices: &[CharacterOutfit],
-) -> Vec<CatalogEntry> {
+pub fn player_outfit_entries(parent: &str, choices: &[CharacterOutfit]) -> Vec<CatalogEntry> {
     choices.iter().map(|outfit| CatalogEntry {
         key: outfit.key(), kind: "outfit".into(), subject: Subject::Character,
         name: format!("{} ({})", outfit.name, outfit.gender.key()),
@@ -637,10 +773,13 @@ pub fn player_outfit_entries(
     }).collect()
 }
 
-
-
 /// The explicit cache directory and input identity determine the metadata cache key.
-fn cache_file(kind: &str, install: &Install, names: Option<&Path>, cache_dir: Option<&Path>) -> Option<PathBuf> {
+fn cache_file(
+    kind: &str,
+    install: &Install,
+    names: Option<&Path>,
+    cache_dir: Option<&Path>,
+) -> Option<PathBuf> {
     let mut key = format!("{:?}|{}|", install.game, install.root.display());
     if let Some(names) = names {
         let meta = std::fs::metadata(names).ok()?;
@@ -656,18 +795,23 @@ fn cache_file(kind: &str, install: &Install, names: Option<&Path>, cache_dir: Op
         (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
     });
     Some(
-        cache_dir?.to_path_buf()
+        cache_dir?
+            .to_path_buf()
             .join("cache")
             .join(format!("{kind}-{hash:016x}.json")),
     )
 }
 
-
 pub type FirstRows = std::collections::BTreeMap<String, Vec<i32>>;
 
 /// The NPC rows (ascending) that a map's part names for each model, over the maps the dictionary lists, by install
 /// root: read once per process (reading the maps' parts takes seconds).
-pub fn first_rows(install: &Install, decoder: &Decoder<'_>, names: Option<&Path>, cache_dir: Option<&Path>) -> Option<FirstRows> {
+pub fn first_rows(
+    install: &Install,
+    decoder: &Decoder<'_>,
+    names: Option<&Path>,
+    cache_dir: Option<&Path>,
+) -> Option<FirstRows> {
     use std::sync::{Mutex, OnceLock};
     type Cache = Mutex<std::collections::BTreeMap<PathBuf, Option<FirstRows>>>;
     static CACHE: OnceLock<Cache> = OnceLock::new();
@@ -689,28 +833,18 @@ pub fn first_rows(install: &Install, decoder: &Decoder<'_>, names: Option<&Path>
             }
             Some(rows)
         });
-    cache
-        .lock()
-        .ok()?
-        .insert(install.root.clone(), rows.clone());
+    cache.lock().ok()?.insert(install.root.clone(), rows.clone());
     rows
 }
 
-
-fn first_rows_read(
-    install: &Install,
-    decoder: &Decoder<'_>,
-    names: Option<&Path>,
-) -> Option<FirstRows> {
+fn first_rows_read(install: &Install, decoder: &Decoder<'_>, names: Option<&Path>) -> Option<FirstRows> {
     (|| {
         let archive = install.open().ok()?;
         let entries = npc_entries(install, &archive, decoder, names).ok()?;
         let mut first = FirstRows::new();
         for entry in entries.iter().filter(|e| !e.open.is_null()) {
-            let (Some(model), Some(row)) = (
-                entry.details["model"].as_str(),
-                entry.name.parse::<i32>().ok(),
-            ) else {
+            let (Some(model), Some(row)) = (entry.details["model"].as_str(), entry.name.parse::<i32>().ok())
+            else {
                 continue;
             };
             first.entry(model.to_owned()).or_default().push(row);
@@ -723,23 +857,39 @@ fn first_rows_read(
     })()
 }
 
-
 /// Attach the caller's language-specific NPC names and report the explicit language with no fallback.
-pub fn read_display_names(install:&Install,decoder:&Decoder<'_>,names:Option<&Path>,world:&mut primase_core::World,options:&Options)->DescriptiveReport {
-    use primase_core::convert::{Notice,NoticeKind};
-    let mut fields=serde_json::Map::new();
+pub fn read_display_names(
+    install: &Install,
+    decoder: &Decoder<'_>,
+    names: Option<&Path>,
+    world: &mut primase_core::World,
+    options: &Options,
+) -> DescriptiveReport {
+    use primase_core::convert::{Notice, NoticeKind};
+    let mut fields = serde_json::Map::new();
     fields.insert("name_language".into(),json!({"value":options.language,"reason":format!("{}; no reader language fallback",options.language_source)}));
-    let read=(||->Result<usize>{
-        let names=names.ok_or_else(||anyhow!("game NPC names need the archive's name dictionary to enumerate msg/<lang> folders"))?;
-        let dictionary=fromsoft_formats::NameDictionary::read_for(names,install.game)?;
-        let archive=install.open()?;
-        crate::sekiro::npc_names_into_world(install,&archive,decoder,&dictionary,&options.language,world)
+    let read = (|| -> Result<usize> {
+        let names = names.ok_or_else(|| {
+            anyhow!("game NPC names need the archive's name dictionary to enumerate msg/<lang> folders")
+        })?;
+        let dictionary = fromsoft_formats::NameDictionary::read_for(names, install.game)?;
+        let archive = install.open()?;
+        crate::sekiro::npc_names_into_world(install, &archive, decoder, &dictionary, &options.language, world)
     })();
-    let mut notices=Vec::new();
+    let mut notices = Vec::new();
     match read {
-        Ok(count)=>{fields.insert("npc_name_rows".into(),json!(count));},
-        Err(error)=>notices.push(Notice::new("fromsoft",NoticeKind::Unsupported,
-            format!("game NPC names unavailable for explicit lab language {}: {error}",options.language),1)),
+        Ok(count) => {
+            fields.insert("npc_name_rows".into(), json!(count));
+        }
+        Err(error) => notices.push(Notice::new(
+            "fromsoft",
+            NoticeKind::Unsupported,
+            format!(
+                "game NPC names unavailable for explicit lab language {}: {error}",
+                options.language
+            ),
+            1,
+        )),
     }
-    DescriptiveReport {fields,notices}
+    DescriptiveReport { fields, notices }
 }
