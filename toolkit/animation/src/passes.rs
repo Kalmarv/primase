@@ -616,6 +616,7 @@ mod tests {
         register(&mut reg);
         let names = [
             "assemble-character",
+            "configure-simulations",
             "correspond-skeletons",
             "evaluate-clip",
             "limit-skin-influences",

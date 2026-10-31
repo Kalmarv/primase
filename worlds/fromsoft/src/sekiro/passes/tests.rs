@@ -766,6 +766,9 @@ fn the_fromsoft_passes_register_by_name() {
         "lower-fromsoft-sky",
         "lower-sekiro-reinhard",
         "raise-fromsoft-display-masks",
+        "select-fromsoft-weapon-forms",
+        "select-fromsoft-saved-hold",
+        "lower-fromsoft-selected-outfit",
     ];
     for name in names {
         assert_eq!(reg.requires_options(name), !free.contains(&name), "{name}");
