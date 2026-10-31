@@ -35,6 +35,7 @@ mod primitive_keys;
 pub use primitive_keys::PrimitiveKeys;
 pub mod components;
 pub mod convert;
+pub mod read_scope;
 pub mod detail;
 mod environment;
 pub use environment::{Ambient, AmbientLight, Environment, TimeOfDay};

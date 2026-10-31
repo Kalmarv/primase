@@ -35,6 +35,16 @@ pub type Report = Vec<(String, String)>;
 
 /// A source of worlds: the world to plan from, then the parts asked for, loaded.
 pub trait Reader {
+    /// Optional declaration of this reader's caller-stated loading scope. The declaration reuses
+    /// pass options and supplies no default for a required scope choice.
+    fn scope_spec(&self) -> Option<&'static crate::read_scope::ReadScopeSpec> {
+        None
+    }
+    /// Effective checked scope, including source alternatives left unloaded. A scoped reader
+    /// also retains it in [`crate::read_scope::ReadScopes`] and reports its selection notice.
+    fn read_scope(&self) -> Option<crate::read_scope::ReadScope> {
+        None
+    }
     /// The world to plan from: placements, prototypes and their state; geometry and textures not loaded yet.
     fn read(&mut self) -> Result<(World, Report)>;
     /// The subset of `world` that `roots` reach, with everything a writer needs loaded (meshes, textures); entity ids
