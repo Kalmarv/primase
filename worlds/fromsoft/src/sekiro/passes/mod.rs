@@ -100,6 +100,8 @@ pub fn register(registry: &mut PassRegistry) {
         &initializer_outfits::SELECT_FROMSOFT_NPC_INITIALIZER,
         &standalone::SELECT_FROMSOFT_DRESSING,
         &standalone::BIND_FROMSOFT_ANIMATION,
+        &standalone::SELECT_FROMSOFT_WEAPON_FORMS,
+        &standalone::SELECT_FROMSOFT_SAVED_HOLD,
         &visibility::PRESERVE_FROMSOFT_DISPLAY_MASKS,
         &far::DROP_FROMSOFT_FAR,
         &resolve_shaders::RESOLVE_FROMSOFT_SHADERS,
