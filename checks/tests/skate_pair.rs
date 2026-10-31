@@ -411,6 +411,26 @@ fn every_sekiro_human_candidate_reports_pairs_ratios_and_skin_fit() -> Result<()
     ]);
     match fromsoft_formats::equipment::npc_outfit_catalog(&install, &archive, &decoder, &dictionary) {
         Ok(outfits) => {
+            let outfits = {
+                let mut world = primase_core::World::new();
+                world.insert_resource(primase_fromsoft::sekiro::outfit_data::NpcOutfitRows {
+                    game: install.game,
+                    rows: outfits,
+                });
+                let mut registry = primase_core::pass::PassRegistry::new();
+                primase_fromsoft::sekiro::passes::register(&mut registry);
+                let pipeline = registry.parse("select-fromsoft-npc-outfits{level=prefer-low}")?;
+                primase_core::pass::PassManager::new(registry).run(
+                    &mut world,
+                    &pipeline,
+                    &mut primase_core::pass::RunReport::default(),
+                )?;
+                world
+                    .resource::<primase_fromsoft::sekiro::outfit_data::NpcOutfitVariants>()
+                    .ok_or("no NPC outfit selection")?
+                    .0
+                    .clone()
+            };
             for notice in sekiro::outfit_notices("npc-outfit-catalog", &outfits) {
                 println!(
                     "SEKIRO_SKATE_OUTFIT_CHOICE {} x{} {:?}",

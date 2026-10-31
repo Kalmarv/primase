@@ -89,6 +89,7 @@ pub fn register(registry: &mut PassRegistry) {
         &outfits::RAISE_FROMSOFT_DISPLAY_MASKS,
         &outfits::SELECT_FROMSOFT_OUTFIT,
         &initializer_outfits::SELECT_FROMSOFT_INITIALIZER_OUTFITS,
+        &initializer_outfits::SELECT_FROMSOFT_NPC_OUTFITS,
         &visibility::PRESERVE_FROMSOFT_DISPLAY_MASKS,
         &far::DROP_FROMSOFT_FAR,
         &resolve_shaders::RESOLVE_FROMSOFT_SHADERS,

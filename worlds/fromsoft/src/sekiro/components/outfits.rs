@@ -73,3 +73,36 @@ impl Resource for OutfitVariants {
         primase_core::json::to_value(self).map(Some)
     }
 }
+
+/// Every map-authored NPC initializer and its unselected candidate inventory.
+#[derive(Clone, Debug, Serialize)]
+pub struct NpcOutfitRows {
+    pub game: Game,
+    pub rows: Vec<fromsoft_formats::equipment::NpcOutfit>,
+}
+impl Resource for NpcOutfitRows {
+    const NAME: &'static str = "fromsoft.npc_outfit_rows";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, primase_core::JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+}
+/// A pass-selected NPC presentation, preserving the existing portable report fields.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SelectedNpcOutfit {
+    pub npc: i32,
+    pub init: Option<i32>,
+    pub map: String,
+    pub placement: String,
+    pub parts: Vec<String>,
+    pub unresolved: Vec<String>,
+    pub chosen_by_presence: Vec<PresenceChoice>,
+}
+/// Selected NPC presentations; the reader loads only explicitly selected scopes derived from these values.
+#[derive(Clone, Debug, Serialize)]
+pub struct NpcOutfitVariants(pub Vec<SelectedNpcOutfit>);
+impl Resource for NpcOutfitVariants {
+    const NAME: &'static str = "fromsoft.npc_outfit_variants";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, primase_core::JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+}
