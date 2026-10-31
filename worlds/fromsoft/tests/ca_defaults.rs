@@ -53,18 +53,23 @@ fn stormveil_stone_colours_bind_the_installed_ca_defaults() -> Result<()> {
     let expected = BTreeSet::from(["aet210_081_a", "aet210_037_a"]);
     let mut checked = BTreeSet::new();
     for (entity, material) in world.iter::<Material>() {
-        if !expected.contains(material.mtd.as_str()) {
+        // The lab's PBR lowering labels these by their albedo stem. The source
+        // retains the MATBIN identity, so join by texture and compiled program.
+        let Some(target) = expected
+            .iter()
+            .copied()
+            .find(|name| material.bindings.values().any(|binding| binding.texture == *name))
+        else {
             continue;
-        }
+        };
         let stage = world
             .get::<ShaderBinding>(entity)
             .and_then(|b| b.stage(Stage::Pixel))
             .ok_or("stone has no pixel binding")?;
         let shader = world.get::<Shader>(stage.shader).ok_or("stone has no shader")?;
-        assert_eq!(
-            world.get::<Name>(stage.shader).map(|n| n.0.as_str()),
-            Some("M[AMSN_V]_Gbuf.ppo")
-        );
+        if world.get::<Name>(stage.shader).map(|n| n.0.as_str()) != Some("M[AMSN_V]_Gbuf.ppo") {
+            continue;
+        }
         let metadata = world
             .get::<MaterialShader>(entity)
             .and_then(|s| world.get::<ShaderBundle>(s.0))
@@ -130,7 +135,7 @@ fn stormveil_stone_colours_bind_the_installed_ca_defaults() -> Result<()> {
                 .iter()
                 .any(|c| c.name.as_deref() == Some(unused.name.as_str()))
         );
-        checked.insert(material.mtd.as_str());
+        checked.insert(target);
     }
     assert_eq!(checked, expected, "both problematic stone materials must be read");
     Ok(())
