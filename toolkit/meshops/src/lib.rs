@@ -44,6 +44,7 @@ pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     for spec in [
         &BAKE_NONRIGID,
         &BAKE_TEXTURE_TRANSFORMS,
+        &FIRST_TEXCOORD_SET,
         &TESSELLATE_COLLIDERS,
         &FLATTEN_CURVES,
         &SPLIT_UV_TILES,
@@ -82,7 +83,10 @@ pub mod vector;
 pub use hull::{convex_hull, hull_step};
 pub use primitive::{CompactedPrimitive, compact_primitive, subset_primitive, subset_primitive_gathered};
 use std::collections::BTreeMap;
-pub use texcoords::{BAKE_TEXTURE_TRANSFORMS, BakeTextureTransforms, bake_texture_transforms};
+pub use texcoords::{
+    BAKE_TEXTURE_TRANSFORMS, BakeTextureTransforms, FIRST_TEXCOORD_SET, FirstTexcoordSet,
+    bake_texture_transforms, first_texcoord_set,
+};
 #[derive(Debug, thiserror::Error)]
 #[error("invalid mesh: {0}")]
 pub struct Error(pub String);
@@ -534,6 +538,7 @@ mod tests {
             "draw-collision",
             "drop-covered-surfaces",
             "drop-marker",
+            "first-texcoord-set",
             "flatten-curves",
             "group-primitives",
             "omit-materialless-primitives",
@@ -551,6 +556,7 @@ mod tests {
             "add-back-faces",
             "bake-texture-transforms",
             "draw-collision",
+            "first-texcoord-set",
             "omit-materialless-primitives",
             "tessellate-colliders",
         ];

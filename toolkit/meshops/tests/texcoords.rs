@@ -233,3 +233,138 @@ fn groups_that_cannot_bake_are_left_and_counted() {
     assert_eq!(log.counts["not baked: no primitive uses the material"], 1);
     assert!(!log.counts.contains_key("coordinate sets baked"));
 }
+
+/// A primitive with coordinate sets 0 and 2 (`UV` and `T_UV`), drawn with `material`.
+fn two_sets(material: Entity) -> Primitive {
+    let mut p = primitive(material, true);
+    p.streams
+        .insert(Semantic::TexCoord(2), Stream::F32x2(T_UV.to_vec()));
+    p
+}
+
+/// A material whose base colour and normal map sample `base` and `normal`.
+fn sampling(w: &mut World, base: u8, normal: u8) -> Entity {
+    let m = material(w, None, Some(None));
+    let p = w.get_mut::<PbrMaterial>(m).unwrap();
+    p.base_color_texture.as_mut().unwrap().texcoord = base;
+    p.normal_texture.as_mut().unwrap().texcoord = normal;
+    m
+}
+
+fn sets_of(w: &World, m: Entity) -> Vec<u8> {
+    w.get::<PbrMaterial>(m)
+        .unwrap()
+        .textures()
+        .map(|r| r.texcoord)
+        .collect()
+}
+
+fn set(w: &World, e: Entity, i: usize, n: u8) -> Vec<[f32; 2]> {
+    match &w.get::<Mesh>(e).unwrap().primitives()[i].streams[&Semantic::TexCoord(n)] {
+        Stream::F32x2(v) => v.clone(),
+        _ => panic!("not F32x2"),
+    }
+}
+
+/// A material and its variant sample set 2 only: in the primitive they share, sets 0 and 2 swap, and both sample
+/// set 0; nothing is lost.
+#[test]
+fn the_one_set_a_group_samples_becomes_its_first() {
+    let mut w = World::new();
+    let m = sampling(&mut w, 2, 2);
+    let v = sampling(&mut w, 2, 2);
+    let a = prototype(&mut w, vec![two_sets(m)]);
+    w.insert(a, MaterialVariants(vec![BTreeMap::from([(1, v)])]));
+    w.insert(
+        a,
+        MeshFile {
+            path: "a.glb".into(),
+            mesh: 0,
+            materials: vec![Some(m)],
+        },
+    );
+    let log = primase_meshops::first_texcoord_set(&mut w);
+    assert_eq!(set(&w, a, 0, 0), T_UV);
+    assert_eq!(
+        set(&w, a, 0, 2),
+        UV.to_vec(),
+        "the old first set is kept as set 2"
+    );
+    assert_eq!(sets_of(&w, m), [0, 0]);
+    assert_eq!(sets_of(&w, v), [0, 0]);
+    assert!(!w.has::<MeshFile>(a), "changed geometry is no longer the file's");
+    assert_eq!(log.counts["primitives with a set moved first"], 1);
+    assert_eq!(log.counts["slots sampling the first set"], 4);
+
+    // a primitive with only the sampled set: it becomes set 0
+    let mut w = World::new();
+    let m = sampling(&mut w, 1, 1);
+    let mut p = primitive(m, false);
+    p.streams
+        .insert(Semantic::TexCoord(1), Stream::F32x2(T_UV.to_vec()));
+    let a = prototype(&mut w, vec![p]);
+    primase_meshops::first_texcoord_set(&mut w);
+    assert_eq!(set(&w, a, 0, 0), T_UV);
+    assert!(
+        !w.get::<Mesh>(a).unwrap().primitives()[0]
+            .streams
+            .contains_key(&Semantic::TexCoord(1))
+    );
+}
+
+#[test]
+fn groups_whose_first_set_cannot_change_are_left_and_counted() {
+    // already the first set: nothing to do, nothing counted
+    let mut w = World::new();
+    let m = sampling(&mut w, 0, 0);
+    prototype(&mut w, vec![two_sets(m)]);
+    let log = primase_meshops::first_texcoord_set(&mut w);
+    assert!(log.counts.is_empty(), "{:?}", log.counts);
+
+    // two sets in one material, and two sets across a material and its variant
+    for (m_sets, v_sets) in [((0, 2), (0, 2)), ((2, 2), (1, 1))] {
+        let mut w = World::new();
+        let m = sampling(&mut w, m_sets.0, m_sets.1);
+        let v = sampling(&mut w, v_sets.0, v_sets.1);
+        let a = prototype(&mut w, vec![two_sets(m)]);
+        w.insert(a, MaterialVariants(vec![BTreeMap::from([(1, v)])]));
+        let log = primase_meshops::first_texcoord_set(&mut w);
+        assert_eq!(set(&w, a, 0, 0), UV.to_vec());
+        assert_eq!(sets_of(&w, m), [m_sets.0, m_sets.1]);
+        assert_eq!(log.counts["not moved: materials sample several sets"], 4);
+    }
+
+    // a primitive without the set
+    let mut w = World::new();
+    let m = sampling(&mut w, 2, 2);
+    prototype(&mut w, vec![two_sets(m), primitive(m, true)]);
+    let log = primase_meshops::first_texcoord_set(&mut w);
+    assert_eq!(sets_of(&w, m), [2, 2]);
+    assert_eq!(log.counts["not moved: a primitive lacks the coordinate set"], 2);
+
+    // a primitive drawn with a material that is not a pbr.material as a variant
+    let mut w = World::new();
+    let m = sampling(&mut w, 2, 2);
+    let blend = w.spawn();
+    let a = prototype(&mut w, vec![two_sets(m)]);
+    w.insert(a, MaterialVariants(vec![BTreeMap::from([(1, blend)])]));
+    let log = primase_meshops::first_texcoord_set(&mut w);
+    assert_eq!(sets_of(&w, m), [2, 2]);
+    assert_eq!(log.counts["not moved: a material is not a pbr.material"], 2);
+
+    // geometry still in a file
+    let mut w = World::new();
+    let m = sampling(&mut w, 2, 2);
+    let f = w.spawn();
+    w.insert(
+        f,
+        MeshFile {
+            path: "f.glb".into(),
+            mesh: 0,
+            materials: vec![Some(m)],
+        },
+    );
+    let log = primase_meshops::first_texcoord_set(&mut w);
+    assert_eq!(sets_of(&w, m), [2, 2]);
+    assert_eq!(log.counts["not moved: geometry still in a file"], 2);
+}
