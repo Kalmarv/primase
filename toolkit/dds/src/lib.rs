@@ -379,6 +379,18 @@ pub fn write_dx10(t: &Texture) -> Result<Vec<u8>> {
 /// Read one DX10 cube, preserving all six faces and its stored mip chain.
 /// DDS stores all mips of each face consecutively; core stores all faces of each mip.
 pub fn read_cube(bytes: &[u8]) -> Result<primase_core::TextureLayers> {
+    read_cube_stored(bytes, 1)
+}
+
+/// Read the nonstandard header form whose array-size word counts six faces instead
+/// of one cube. The caller must identify this producer dialect explicitly. Payload
+/// length still has to account for exactly six faces, including all stored mips;
+/// canonical cube arrays remain refused by both single-cube entry points.
+pub fn read_cube_faces(bytes: &[u8]) -> Result<primase_core::TextureLayers> {
+    read_cube_stored(bytes, 6)
+}
+
+fn read_cube_stored(bytes: &[u8], array_size: u32) -> Result<primase_core::TextureLayers> {
     use primase_core::{TextureLayers, TextureShape};
     if bytes.get(..4) != Some(b"DDS ") || word(bytes, 4)? != 124 || word(bytes, 76)? != 32 {
         return Err(invalid(0, "invalid DDS header"));
@@ -389,7 +401,7 @@ pub fn read_cube(bytes: &[u8]) -> Result<primase_core::TextureLayers> {
     {
         return Err(Error::Unsupported("cube without a DX10 texture header".into()));
     }
-    if word(bytes, 132)? != 3 || word(bytes, 136)? != 4 || word(bytes, 140)? != 1 {
+    if word(bytes, 132)? != 3 || word(bytes, 136)? != 4 || word(bytes, 140)? != array_size {
         return Err(invalid(132, "expected one 2D cube resource"));
     }
     if word(bytes, 144)? != 0 || word(bytes, 112)? & 0xfe00 != 0xfe00 {

@@ -306,5 +306,9 @@ fn cube_faces_and_mips_retain_their_independent_subresources() {
     let mut array = bytes.clone();
     put(&mut array, 140, 2);
     assert!(primase_dds::read_cube(&array).is_err());
+    put(&mut array, 140, 6);
+    assert!(primase_dds::read_cube(&array).is_err());
+    assert_eq!(primase_dds::read_cube_faces(&array).unwrap(), cube);
+    assert!(primase_dds::read_cube_faces(&array[..array.len() - 1]).is_err());
     assert!(primase_dds::read_cube(&bytes[..bytes.len() - 1]).is_err());
 }

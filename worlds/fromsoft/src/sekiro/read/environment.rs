@@ -170,7 +170,9 @@ fn read_state(
             let (id, channel) = texture_group(&texture.name, area, state)?;
             let data = match (texture.kind, channel) {
                 (TextureKind::Volume, Some(_)) => primase_dds::read_volume(&texture.dds),
-                (TextureKind::Cube, None) => primase_dds::read_cube(&texture.dds),
+                // These packages write six faces in DDS arraySize, confirmed by
+                // the installed-payload census and full captured upload hashes.
+                (TextureKind::Cube, None) => primase_dds::read_cube_faces(&texture.dds),
                 _ => {
                     return Err(invalid(
                         "environment texture",
