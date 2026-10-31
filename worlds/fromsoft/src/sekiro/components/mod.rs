@@ -7,6 +7,7 @@ pub mod effect;
 pub mod environment;
 pub mod irradiance;
 pub mod lighting;
+pub mod outfits;
 pub mod lowered;
 pub mod source;
 pub mod state;
