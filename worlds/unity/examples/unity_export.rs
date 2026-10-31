@@ -2,7 +2,7 @@
 //!
 //! Usage: `unity_export <Game>_Data <type tree package> <level> <output folder> [--web] [--ktx2] [--quality <level>]
 //! [--bundle <file>]...`.
-//! `--quality` names the quality level whose skin weights limit the skinned meshes, needed where the game's levels differ.
+//! `--quality` names the quality level whose skin weights limit the skinned meshes' influences and whose URP asset and shadows the level is read with, needed where the game's levels differ.
 //! `--bundle` adds a UnityFS bundle's serialized files to the player: a level of an AssetBundle (PEAK's
 //! `levels0-31.assetbundle`: the level is the node's name, `BuildPlayer-Level_5`) is read with the files its pointers
 //! name (its shared assets, other levels' shared assets in the bundle) and not the bundle's other levels; a bundle
@@ -95,7 +95,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let mut w = World::new();
     let started = std::time::Instant::now();
-    let report = read_level_with(&player, &file, &LevelOptions { quality }, &mut w)?;
+    let report = read_level_with(
+        &player,
+        &file,
+        &LevelOptions {
+            quality: quality.clone(),
+        },
+        &mut w,
+    )?;
     println!(
         "read {level}: {} renderers, {} tree renderers, {} prototypes, {} primitives, {} materials, {} \
          textures, {} terrains, {} lights (sun named: {}), {} colliders ({} by trees); axes {:?}, conditioned {:?}, \n         LODGroups {:?}, {} LOD forms",
@@ -122,6 +129,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // the lowering, as a pipeline: each pass whose input the level has, verified after each
     let unit = |v| primase_gltf::prepare::UnitValue::new(v).expect("a unit value");
     let passes: Vec<Box<dyn Pass>> = vec![
+        // the influences of a skinned mesh the quality level draws, `--quality` naming the level where they differ
+        Box::new(primase_unity::limit_skin::LimitUnitySkinWeights {
+            quality: quality.clone(),
+        }),
         // the level as stored: what is off stays off, LOD 0 draws
         Box::new(primase_core::state::ResolveState {
             // the level of detail the source leaves to screen size: the finest

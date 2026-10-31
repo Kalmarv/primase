@@ -57,7 +57,7 @@ impl<'a> UnityReader<'a> {
         }
     }
 
-    /// The reader told the quality level whose skin weights limit the skinned meshes ([`LevelOptions::quality`]).
+    /// The reader told the quality level whose URP asset and shadow settings the level is read with ([`LevelOptions::quality`]).
     #[must_use]
     pub fn with_quality(mut self, quality: impl Into<String>) -> UnityReader<'a> {
         self.options.quality = Some(quality.into());

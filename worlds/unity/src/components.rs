@@ -4,8 +4,9 @@ use primase_core::frame::{Axis, SourceFrame};
 use primase_core::{Component, Entity, JsonError, World};
 use serde::{Serialize, Serializer};
 
+use unity_formats::mesh::MeshSkin;
 use unity_formats::pipeline::UnityUrpSettings;
-use unity_formats::player::{ObjRef, RenderPipeline};
+use unity_formats::player::{ObjRef, QualityLevel, RenderPipeline};
 use unity_formats::program::Parameters;
 use unity_formats::scene::{UnityAmbient, UnityBehaviour, UnityFog};
 use unity_formats::shader::{PassKind, ShaderPass, SubShader};
@@ -107,6 +108,100 @@ impl Component for UnityMesh {
             return Err("a null mesh".into());
         }
         Ok(())
+    }
+}
+
+/// The skin of a skinned prototype as its mesh stores it, kept until `limit-unity-skin-weights` states what a quality
+/// level draws of it: the mesh's `skin` (the blend channel, the full influences of a mesh that stores them, the bind
+/// poses), the player's quality `levels` (each level's `skinWeights`: the bone influences a vertex may have), and per
+/// primitive the mesh vertex of each of its vertices (`gathers`). The prototype's `Joints(k)` and `Weights(k)` streams
+/// hold every influence the mesh stores; the pass replaces them with the ones the chosen level draws and removes this
+/// component, so a read that draws no skinned mesh holds none.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UnitySkinInfluences {
+    /// The mesh's name.
+    pub mesh: String,
+    pub skin: MeshSkin,
+    pub levels: Vec<QualityLevel>,
+    pub gathers: Vec<Vec<u32>>,
+}
+
+impl Component for UnitySkinInfluences {
+    const NAME: &'static str = "unity.skin_influences";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::PerVertex;
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        Ok(Some(serde_json::json!({
+            "mesh": self.mesh,
+            "vertices": self.skin.channel.vertices(),
+            "most_influences": self.skin.unlimited.as_ref().unwrap_or(&self.skin.channel).max_influences(),
+            "bind_poses": self.skin.bind_poses.len(),
+            "levels": self.levels.iter().map(|l| serde_json::json!({
+                "name": l.name,
+                "skin_weights": l.skin_weights.to_string(),
+            })).collect::<Vec<_>>(),
+            "primitives": self.gathers.len(),
+        })))
+    }
+    fn payload_bytes(&self) -> u64 {
+        let blend = |b: &unity_formats::mesh::Blend| (b.weights.len() * 8 + b.starts.len() * 4) as u64;
+        blend(&self.skin.channel)
+            + self.skin.unlimited.as_ref().map_or(0, blend)
+            + self.gathers.iter().map(|g| g.len() as u64 * 4).sum::<u64>()
+    }
+    fn verify(&self, e: Entity, w: &World) -> Result<(), String> {
+        let mesh = w.get::<primase_core::Mesh>(e).ok_or("no mesh")?;
+        if mesh.primitives().len() != self.gathers.len() {
+            return Err(format!(
+                "{} primitives, {} vertex maps",
+                mesh.primitives().len(),
+                self.gathers.len()
+            ));
+        }
+        let vertices = self.skin.channel.vertices();
+        for (i, (p, g)) in mesh.primitives().iter().zip(&self.gathers).enumerate() {
+            if p.vertex_count() != g.len() {
+                return Err(format!(
+                    "primitive {i}: {} vertices, {} in its map",
+                    p.vertex_count(),
+                    g.len()
+                ));
+            }
+            if let Some(v) = g.iter().find(|&&v| v as usize >= vertices) {
+                return Err(format!("primitive {i}: vertex {v} of the mesh's {vertices}"));
+            }
+        }
+        Ok(())
+    }
+    fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::Linearity<Self> {
+        primase_core::Linearity::Invariant
+    }
+    fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
+        Some(primase_core::remap_list(&self.gathers, from).map(|gathers| Self {
+            gathers,
+            ..self.clone()
+        }))
+    }
+    fn remap_vertices(&self, primitive: usize, from: &[u32]) -> Option<Result<Self, String>> {
+        Some((|| {
+            let old = self
+                .gathers
+                .get(primitive)
+                .ok_or_else(|| format!("primitive {primitive} of {}", self.gathers.len()))?;
+            let new = from
+                .iter()
+                .map(|&v| {
+                    old.get(v as usize)
+                        .copied()
+                        .ok_or_else(|| format!("vertex {v} of {}", old.len()))
+                })
+                .collect::<Result<Vec<u32>, String>>()?;
+            let mut gathers = self.gathers.clone();
+            gathers[primitive] = new;
+            Ok(Self {
+                gathers,
+                ..self.clone()
+            })
+        })())
     }
 }
 

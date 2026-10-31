@@ -44,22 +44,25 @@ mod read;
 pub mod state_pose;
 
 pub use passes::{
-    draw_keywords, drawn, lower, lower_ambient, lower_animator, lower_collision, lower_lights, lower_terrain,
-    resolve_shaders,
+    draw_keywords, drawn, limit_skin, lower, lower_ambient, lower_animator, lower_collision, lower_lights,
+    lower_terrain, resolve_shaders,
 };
 pub use read::{asset, convert, level, mesh, program, texture};
 
-/// Registers the Unity passes by their declarations: `unity-drawn`, `lower-unity-pbr`, `lower-unity-terrain`,
-/// `lower-unity-collision`, `lower-unity-lights`, `lower-unity-animator`, `resolve-unity-shaders` and
-/// `lower-unity-ambient`. All but `lower-unity-pbr`, `resolve-unity-shaders`, `lower-unity-lights` and
-/// `lower-unity-ambient` take no option: each lowers by Unity's own rules (its module says which), not by a choice a
-/// program makes. `lower-unity-pbr` requires the player's colour space (its PlayerSettings'); `resolve-unity-shaders`
-/// the variant and colour space; `lower-unity-lights` the calibration of URP's unitless
-/// intensity (`candela-per-unit`, no default); `lower-unity-ambient` that same calibration and the program's choice for
-/// an ambient whose probe is not read (`probe`, no default).
+/// Registers the Unity passes by their declarations: `unity-drawn`, `limit-unity-skin-weights`, `lower-unity-pbr`,
+/// `lower-unity-terrain`, `lower-unity-collision`, `lower-unity-lights`, `lower-unity-animator`,
+/// `resolve-unity-shaders` and `lower-unity-ambient`. All but `limit-unity-skin-weights`, `lower-unity-pbr`,
+/// `resolve-unity-shaders`, `lower-unity-lights` and `lower-unity-ambient` take no option: each lowers by Unity's own
+/// rules (its module says which), not by a choice a program makes. `limit-unity-skin-weights` takes the quality level
+/// whose `skinWeights` limit the influences, optional where the player's levels agree; `lower-unity-pbr` requires the
+/// player's colour space (its PlayerSettings'); `resolve-unity-shaders` the variant and colour space;
+/// `lower-unity-lights` the calibration of URP's unitless intensity (`candela-per-unit`, no default);
+/// `lower-unity-ambient` that same calibration and the program's choice for an ambient whose probe is not read
+/// (`probe`, no default).
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     for spec in [
         &drawn::UNITY_DRAWN,
+        &limit_skin::LIMIT_UNITY_SKIN_WEIGHTS,
         &lower::LOWER_UNITY_PBR,
         &lower_terrain::LOWER_UNITY_TERRAIN,
         &lower_collision::LOWER_UNITY_COLLISION,
@@ -87,6 +90,7 @@ mod tests {
         let mut reg = PassRegistry::new();
         super::register(&mut reg);
         let names = [
+            "limit-unity-skin-weights",
             "lower-unity-ambient",
             "lower-unity-animator",
             "lower-unity-collision",

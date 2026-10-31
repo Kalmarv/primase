@@ -9,7 +9,7 @@ use primase_core::{Deltas, MorphFrame, MorphId, MorphTarget, Morphs, Primitive, 
 use primase_meshops::compact_primitive;
 use unity_formats::Error;
 use unity_formats::Result;
-use unity_formats::mesh::{CHANNELS, MeshShapes, ShapeVertex, UnityMeshData};
+use unity_formats::mesh::{CHANNELS, MeshShapes, MeshSkin, ShapeVertex, UnityMeshData};
 use unity_formats::player::SkinWeights;
 
 use crate::components::UNITY;
@@ -200,23 +200,42 @@ pub fn primitives(mesh: &UnityMeshData, range: Range<usize>) -> Result<(Drawn, M
     Ok((out, notices))
 }
 
+/// What [`primitives_and_morphs`] read of a mesh.
+#[derive(Debug)]
+pub struct MeshRead {
+    /// The primitives, each with its submesh.
+    pub primitives: Drawn,
+    /// The mesh's blend shapes as `core.morphs` over the primitives; `None` for a mesh without any.
+    pub morphs: Option<Morphs>,
+    /// What could not be read as stored, counted.
+    pub notices: MeshNotices,
+    /// Per primitive returned, the mesh vertex of each of its vertices (compaction keeps the vertices a primitive uses,
+    /// in first-use order).
+    pub gathers: Vec<Vec<u32>>,
+}
+
 /// [`primitives`] (or, with `skinned`, [`skinned_primitives`]) and the mesh's blend
 /// shapes as `core.morphs` over the primitives returned, `None` for a mesh without any
-/// ([`shapes_morphs`]).
+/// ([`shapes_morphs`]), with the mesh vertex of each vertex of each primitive.
 pub fn primitives_and_morphs(
     mesh: &UnityMeshData,
     range: Range<usize>,
     skinned: Option<SkinWeights>,
-) -> Result<(Drawn, Option<Morphs>, MeshNotices)> {
+) -> Result<MeshRead> {
     if skinned.is_some() && mesh.skin.is_none() {
         return Err(invalid(format!("{}: no skin to read", mesh.name)));
     }
-    let (out, gathers, notices) = primitives_with(mesh, range, skinned)?;
+    let (primitives, gathers, notices) = primitives_with(mesh, range, skinned)?;
     let morphs = mesh.shapes.as_ref().map(|s| {
         let gathers: Vec<&[u32]> = gathers.iter().map(Vec::as_slice).collect();
         shapes_morphs(s, mesh.vertex_count, &gathers)
     });
-    Ok((out, morphs, notices))
+    Ok(MeshRead {
+        primitives,
+        morphs,
+        notices,
+        gathers,
+    })
 }
 
 /// [`primitives`] with the skin's streams as `limit` draws them: `Joints(k)` (the bone slots, 16
@@ -233,6 +252,55 @@ pub fn skinned_primitives(
     }
     let (out, _, notices) = primitives_with(mesh, range, Some(limit))?;
     Ok((out, notices))
+}
+
+/// What a skin draws under a limit, over all the mesh's vertices ([`skin_streams`]).
+#[derive(Debug)]
+pub struct SkinStreams {
+    /// `Joints(k)` (the bone slots, 16 bits) and `Weights(k)` (floats) for each set of four influences.
+    pub streams: Vec<(Semantic, Stream)>,
+    /// How many sets of four influences a vertex has: `streams` holds that many of each.
+    pub sets: usize,
+    /// Vertices with more influences than the limit allows, which keep their first ones renormalised.
+    pub cut: u64,
+    /// Zero-weight influences naming a bone beyond the bind poses, whose bone slot is set to 0.
+    pub beyond: u64,
+}
+
+/// The skin's streams as `limit` draws them ([`MeshSkin::padded`]): a vertex with more influences than `limit`
+/// allows keeps its first ones renormalised, and the bone slot of a zero-weight influence beyond the bind poses is
+/// set to 0.
+pub fn skin_streams(skin: &MeshSkin, limit: SkinWeights) -> SkinStreams {
+    let poses = skin.bind_poses.len() as u32;
+    let sets = skin.sets(limit);
+    let (weights, bones, cut) = skin.padded(limit);
+    let mut beyond = 0u64;
+    let mut streams = Vec::with_capacity(sets * 2);
+    for (k, (weights, bones)) in weights.into_iter().zip(bones).enumerate() {
+        let joints = bones
+            .iter()
+            .zip(&weights)
+            .map(|(b, w)| {
+                std::array::from_fn(|i| {
+                    if b[i] >= poses {
+                        debug_assert_eq!(w[i], 0.0, "checked when read");
+                        beyond += 1;
+                        0
+                    } else {
+                        b[i] as u16
+                    }
+                })
+            })
+            .collect();
+        streams.push((Semantic::Joints(k as u8), Stream::U16x4(joints)));
+        streams.push((Semantic::Weights(k as u8), Stream::F32x4(weights)));
+    }
+    SkinStreams {
+        streams,
+        sets,
+        cut,
+        beyond,
+    }
 }
 
 /// The first `N` components of every vertex of `mesh`'s channel `ch`, which is present with at least `N` components
@@ -312,38 +380,18 @@ fn primitives_with(
         streams.insert(semantic, stream);
     }
     if let Some((skin, limit)) = mesh.skin.as_ref().zip(skinned) {
-        let poses = skin.bind_poses.len() as u32;
-        let (weights, bones, cut) = skin.padded(limit);
+        let drawn = skin_streams(skin, limit);
         note(
             &mut notices,
             "skin influences beyond the quality level's limit cut and the rest renormalised (vertices)",
-            cut,
+            drawn.cut,
         );
-        let mut beyond = 0u64;
-        for (k, (weights, bones)) in weights.into_iter().zip(bones).enumerate() {
-            let joints = bones
-                .iter()
-                .zip(&weights)
-                .map(|(b, w)| {
-                    std::array::from_fn(|i| {
-                        if b[i] >= poses {
-                            debug_assert_eq!(w[i], 0.0, "checked when read");
-                            beyond += 1;
-                            0
-                        } else {
-                            b[i] as u16
-                        }
-                    })
-                })
-                .collect();
-            streams.insert(Semantic::Joints(k as u8), Stream::U16x4(joints));
-            streams.insert(Semantic::Weights(k as u8), Stream::F32x4(weights));
-        }
         note(
             &mut notices,
             "zero-weight skin influences naming a bone beyond the bind poses set to bone 0 (vertices)",
-            beyond,
+            drawn.beyond,
         );
+        streams.extend(drawn.streams);
     }
     let subs = mesh.submeshes.get(range.clone()).ok_or_else(|| {
         invalid(format!(

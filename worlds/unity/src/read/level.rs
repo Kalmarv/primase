@@ -48,8 +48,8 @@ use crate::clipdata::{RigBone, lower_clip};
 use crate::components::{
     ColliderMesh, Stored, UNITY, UnityBehaviours, UnityCamera, UnityCollider, UnityColliderShape, UnityLight,
     UnityMaterial, UnityMesh, UnityObject, UnityPhysicMaterial, UnityRenderSettings, UnityRenderer,
-    UnityShadowQuality, UnityTerrain, UnityTerrainCollider, UnityTerrainLayer, UnityTexEnv, UnityTexture,
-    UnityTree, UnityTreeInstance,
+    UnityShadowQuality, UnitySkinInfluences, UnityTerrain, UnityTerrainCollider, UnityTerrainLayer,
+    UnityTexEnv, UnityTexture, UnityTree, UnityTreeInstance,
 };
 use crate::invalid;
 use crate::read::mesh::{leading, primitives, primitives_and_morphs};
@@ -1514,16 +1514,17 @@ impl Builder<'_> {
 /// What a level read is told besides the scene.
 #[derive(Clone, Debug, Default)]
 pub struct LevelOptions {
-    /// The quality level (a name of [`Player::quality_levels`]) whose skin weights limit the skinned meshes' bone
-    /// influences. The current level is a runtime setting, not data, so it is required exactly where the player's
-    /// levels differ in what they draw of a skinned mesh; where they agree the data decides.
+    /// The quality level (a name of [`Player::quality_levels`]) whose Universal Render Pipeline asset and shadow
+    /// settings the level is read with. The current level is a runtime setting, not data, so it is required exactly
+    /// where the player's levels differ in them; where they agree the data decides. A skinned mesh is read with every
+    /// influence it stores: what a quality level draws of it is `limit-unity-skin-weights`.
     pub quality: Option<String>,
 }
 
 /// The skin weights limit that applies to the mesh `mesh` with `skin`: the stated quality level's, else the one every
 /// level agrees on (levels draw the same when [`MeshSkin::outcome`] is the same); an error naming the levels where
 /// they differ and none is stated. A player without quality levels keeps every influence a mesh stores.
-fn skin_limit(
+pub(crate) fn skin_limit(
     levels: &[QualityLevel],
     quality: Option<&str>,
     mesh: &str,
@@ -1562,8 +1563,16 @@ fn skin_limit(
     }
 }
 
-/// Read the scene file `level` of `player` into `w`; a skinned mesh whose skin the player's quality levels draw
-/// differently needs [`read_level_with`] and a quality level.
+/// Whether the weights of every vertex over all its sets (`[set][vertex]`) sum to 1 (within [`SUM_TOLERANCE`]).
+pub(crate) fn weights_sum_to_one(weights: &[Vec<[f32; 4]>]) -> bool {
+    (0..weights.first().map_or(0, Vec::len)).all(|v| {
+        let sum: f32 = weights.iter().flat_map(|set| set[v]).sum();
+        (sum - 1.0).abs() <= SUM_TOLERANCE
+    })
+}
+
+/// Read the scene file `level` of `player` into `w`; a level whose quality levels differ in the Universal Render
+/// Pipeline asset or shadow settings it draws with needs [`read_level_with`] and a quality level.
 pub fn read_level(player: &Player, level: &str, w: &mut World) -> Result<LevelReport> {
     read_level_with(player, level, &LevelOptions::default(), w)
 }
@@ -1799,7 +1808,6 @@ fn read_scene(
     // bone a joint of one skeleton; the others are drawn unskinned, counted
     let mut candidates: Vec<(&Renderer, &RendererSkin)> = Vec::new();
     let mut levels: Option<Vec<QualityLevel>> = None;
-    let mut limits: BTreeMap<ObjRef, SkinWeights> = BTreeMap::new();
     for (tree, r) in first.iter().chain(rest.iter()) {
         let Some(skin) = &r.skin else { continue };
         if tree.is_some() {
@@ -1826,18 +1834,8 @@ fn read_scene(
         match why {
             Some(why) => b.notice(why, 1),
             None => {
-                if !limits.contains_key(&r.mesh) {
-                    if levels.is_none() {
-                        levels = Some(player.quality_levels()?);
-                    }
-                    let mesh_skin = data.skin.as_ref().expect("a candidate's mesh has a skin");
-                    let limit = skin_limit(
-                        levels.as_deref().unwrap_or_default(),
-                        options.quality.as_deref(),
-                        &data.name,
-                        mesh_skin,
-                    )?;
-                    limits.insert(r.mesh.clone(), limit);
+                if levels.is_none() {
+                    levels = Some(player.quality_levels()?);
                 }
                 candidates.push((*r, skin));
             }
@@ -1916,19 +1914,34 @@ fn read_scene(
             );
             if !prototypes.contains_key(&key) {
                 let range = first as usize..first as usize + count;
-                let (read, morphs, notices) =
-                    primitives_and_morphs(data, range, skinning_of.is_some().then(|| limits[&r.mesh]))?;
-                b.note_mesh(notices);
+                // a skinned mesh carries every influence it stores: which a quality level draws is `limit-unity-skin-weights`'
+                let read = primitives_and_morphs(
+                    data,
+                    range,
+                    skinning_of.is_some().then_some(SkinWeights::Unlimited),
+                )?;
+                b.note_mesh(read.notices);
                 let (drawn, primitives): (Vec<u32>, Vec<_>) =
-                    read.into_iter().map(|(k, p)| (k as u32, p)).unzip();
+                    read.primitives.into_iter().map(|(k, p)| (k as u32, p)).unzip();
                 let e = w.spawn();
                 // a mesh with no submesh that has indices draws nothing: no core mesh
                 if !primitives.is_empty() {
                     b.report.primitives += primitives.len();
                     w.insert(e, Mesh::new(primitives));
-                    if let Some(morphs) = morphs {
+                    if let Some(morphs) = read.morphs {
                         b.report.morph_targets += morphs.targets.len();
                         w.insert(e, morphs);
+                    }
+                    if let Some(skin) = data.skin.as_ref().filter(|_| skinning_of.is_some()) {
+                        w.insert(
+                            e,
+                            UnitySkinInfluences {
+                                mesh: data.name.clone(),
+                                skin: skin.clone(),
+                                levels: levels.clone().unwrap_or_default(),
+                                gathers: read.gathers,
+                            },
+                        );
                     }
                 }
                 w.insert(
@@ -2193,17 +2206,10 @@ fn read_scene(
             continue;
         };
         let primitives = w.get::<Mesh>(*proto).map_or(0, |m| m.primitives().len());
-        let limit = limits[&build.mesh];
+        let limit = SkinWeights::Unlimited;
         let sets = mesh_skin.sets(limit);
         let (weights, ..) = mesh_skin.padded(limit);
-        let sums_to_one = (0..weights[0].len()).all(|v| {
-            let sum: f32 = weights.iter().flat_map(|set| set[v]).sum();
-            (sum - 1.0).abs() <= SUM_TOLERANCE
-        });
-        b.notice(
-            "skinned meshes whose weights do not all sum to 1 (used as stored)",
-            u64::from(!sums_to_one),
-        );
+        let sums_to_one = weights_sum_to_one(&weights);
         let bindings = build
             .bindings
             .iter()

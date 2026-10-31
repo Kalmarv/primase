@@ -6,6 +6,8 @@ converts Unity's frame and retains source state in `unity.*`. Passes select what
 collision, lights, ambient and controllers, and resolve compiled shaders with explicit variant and colour-space
 choices. Stored `[HDR]` colour properties retain their linear HDR values; other colours use the player's transfer.
 Multi-image textures bind only where their dimensional shape agrees with the program.
+A skinned mesh is read with every influence it stores, and `limit-unity-skin-weights` states what a quality level of the
+player draws of it.
 
 ## Example
 

@@ -35,7 +35,7 @@ impl<'a> SkatebirdReader<'a> {
         }
     }
 
-    /// The reader told the quality level whose skin weights limit the skinned meshes
+    /// The reader told the quality level whose URP asset and shadow settings the level is read with
     /// ([`primase_unity::level::LevelOptions::quality`]).
     #[must_use]
     pub fn with_quality(mut self, quality: impl Into<String>) -> SkatebirdReader<'a> {
