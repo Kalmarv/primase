@@ -43,7 +43,7 @@ pub const LOWER_FROMSOFT_SKY: PassSpec = PassSpec {
 
 /// Where a sky role's surfaces come in the sky layer and whether they write depth: Sekiro's in the order of a recorded
 /// frame's draws (dome, moon, far mountains), writing depth as they do there; an Elden Ring weather asset's at the
-/// layer's start, writing depth as the recorded cloud layer's pipeline does (see [`LowerFromSoftSky`]).
+/// layer's start. The matched MATBIN sky families retain their stated depth-disable flag.
 fn order(role: SkyRole) -> (i32, bool) {
     match role {
         SkyRole::Dome => (DrawOrder::SKY, true),
@@ -153,6 +153,12 @@ impl Pass for LowerFromSoftSky {
                 );
                 continue;
             }
+            let depth_write = world
+                .get::<Material>(m)
+                .and_then(Material::view)
+                .and_then(crate::layer_bake::resolve::elden_sky_render_state)
+                .and_then(|state| state.depth)
+                .map_or(depth_write, |depth| depth.write);
             world.insert(
                 m,
                 DrawOrder {

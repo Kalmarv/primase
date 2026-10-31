@@ -414,6 +414,38 @@ fn elden_rings_sky_is_read_as_weathers() -> Result<(), Box<dyn std::error::Error
     assert_eq!(seen, LIMGRAVE_ASSETS.map(|(n, _)| n.to_owned()));
     let followers = parts.iter().filter(|p| p.2).count();
     assert!(followers >= 8, "{followers}");
+    // Independent Gatefront pipeline observations: sky9 is opaque and writes depth, cloud5 alpha blends and
+    // writes depth, distant-clouds001 alpha blends without writing depth. Match their stored material fields.
+    let mut checked_states = std::collections::BTreeSet::new();
+    for (_, slots, _) in &parts {
+        for &m in slots {
+            let material = material_of(&world, m);
+            let expected = match fromsoft_formats::names::stem(&material.mtd).as_str() {
+                "field_skysphere_10" => Some((false, true)),
+                "field_skysphere_clouds_400" => Some((true, true)),
+                "field_skysphere_clouds_410" | "field_skysphere_clouds_411" => Some((true, false)),
+                _ => None,
+            };
+            if let Some((blended, writes_depth)) = expected {
+                let state =
+                    primase_fromsoft::layer_bake::resolve::elden_sky_render_state(material.view().unwrap())
+                        .unwrap();
+                assert_eq!(state.blend.is_some(), blended, "{}", material.mtd);
+                let depth = state.depth.unwrap();
+                assert_eq!(depth.test, iridia_interface::Compare::GreaterEqual);
+                assert_eq!(depth.write, writes_depth, "{}", material.mtd);
+                if let Some(blend) = state.blend {
+                    assert_eq!(blend.colour.source, iridia_interface::BlendFactor::SrcAlpha);
+                    assert_eq!(
+                        blend.colour.destination,
+                        iridia_interface::BlendFactor::OneMinusSrcAlpha
+                    );
+                }
+                checked_states.insert(material.mtd.clone());
+            }
+        }
+    }
+    assert_eq!(checked_states.len(), 4);
     // the pass puts the sky programs' materials on the sky layer writing depth, leaves the light shafts', keeps the
     // anchors and removes the records
     common::run(&mut world, "lower-fromsoft-sky")?;
@@ -432,7 +464,15 @@ fn elden_rings_sky_is_read_as_weathers() -> Result<(), Box<dyn std::error::Error
             }
             let order = world.get::<primase_core::DrawOrder>(m);
             if is_sky(material) {
-                assert_eq!(order, Some(&sky_order), "{name}: {}", material.shader);
+                let expected = primase_core::DrawOrder {
+                    depth_write: material
+                        .view()
+                        .and_then(primase_fromsoft::layer_bake::resolve::elden_sky_render_state)
+                        .and_then(|state| state.depth)
+                        .map_or(true, |depth| depth.write),
+                    ..sky_order
+                };
+                assert_eq!(order, Some(&expected), "{name}: {}", material.shader);
             } else {
                 assert_ne!(order, Some(&sky_order), "{name}: {}", material.shader);
             }

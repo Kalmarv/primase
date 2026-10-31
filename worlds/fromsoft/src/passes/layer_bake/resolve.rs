@@ -278,14 +278,40 @@ pub struct Resolution {
 /// reference per model class, depth-equal passes after a prepass), the depth bias was set on some alpha-tested programs'
 /// draws (3 slope-scaled) with no matched field that predicts it, and blend modes 3, 4 and 5 were matched to no draw.
 pub fn render_state(material: &LayeredMaterial) -> RenderState {
+    stated_render_state(material.blend_mode(), material.depth_write_disabled())
+}
+
+/// The three Elden Ring sky program families matched to Gatefront draws: their MATBIN blend modes 0/2 and
+/// depth-disable flags agree with the captured pipelines. Other families and unstated fields remain unresolved.
+pub fn elden_sky_render_state(material: MaterialView<'_>) -> Option<RenderState> {
+    if !matches!(material.definition, crate::materials::DefinitionRef::Matbin(_))
+        || !matches!(
+            material.definition.shader_name(),
+            "M[Sky9]" | "M[Clouds5]" | "M[DistantClouds]_001"
+        )
+    {
+        return None;
+    }
+    let mode = material.blend_mode()?;
+    if !matches!(mode, 0 | 2) {
+        return None;
+    }
+    let Some(ParameterValue::Bool(disabled)) = material.definition.parameter("g_GX_bDisableDepthWrite")
+    else {
+        return None;
+    };
+    Some(stated_render_state(mode, disabled))
+}
+
+fn stated_render_state(blend_mode: i32, disable_depth_write: bool) -> RenderState {
     let mut state = RenderState {
         depth: Some(DepthState {
             test: Compare::GreaterEqual,
-            write: !material.depth_write_disabled(),
+            write: !disable_depth_write,
         }),
         ..RenderState::default()
     };
-    if material.blend_mode() == 2 {
+    if blend_mode == 2 {
         let blend = Blend {
             colour: BlendEquation {
                 source: BlendFactor::SrcAlpha,
@@ -2088,6 +2114,53 @@ mod tests {
     use super::{centred, sat_words, slot_name, texture_slot};
     use fromsoft_formats::Game;
     use fromsoft_formats::metaparam::MtdParam;
+
+    #[test]
+    fn elden_sky_states_keep_the_observed_blend_and_depth_distinctions() {
+        use crate::materials::{DefinitionRef, MaterialView};
+        use fromsoft_formats::matbin::{Material, Param, Value};
+        let state = |shader: &str, mode: i32, disabled: Option<bool>| {
+            let mut params = vec![Param {
+                name: "g_BlendMode".into(),
+                key: 0,
+                value: Value::Int(mode),
+            }];
+            if let Some(disabled) = disabled {
+                params.push(Param {
+                    name: "g_GX_bDisableDepthWrite".into(),
+                    key: 0,
+                    value: Value::Bool(disabled),
+                });
+            }
+            let material = Material {
+                shader: format!("{shader}.spx"),
+                source: String::new(),
+                key: 0,
+                params,
+                samplers: Vec::new(),
+                unreferenced_tail: Vec::new(),
+            };
+            super::elden_sky_render_state(MaterialView {
+                mtd: "fixture",
+                definition: DefinitionRef::Matbin(&material),
+                bindings: &Default::default(),
+            })
+        };
+        for (shader, mode, disabled, blended) in [
+            ("M[Sky9]", 0, false, false),
+            ("M[Clouds5]", 2, false, true),
+            ("M[DistantClouds]_001", 2, true, true),
+        ] {
+            let state = state(shader, mode, Some(disabled)).unwrap();
+            assert_eq!(state.blend.is_some(), blended);
+            let depth = state.depth.unwrap();
+            assert_eq!(depth.test, iridia_interface::Compare::GreaterEqual);
+            assert_eq!(depth.write, !disabled);
+        }
+        assert!(state("M[Clouds9]", 2, Some(false)).is_none());
+        assert!(state("M[Clouds5]", 4, Some(false)).is_none());
+        assert!(state("M[Sky9]", 0, None).is_none());
+    }
 
     /// A SpeedTree program's inputs as its mesh's layout declares them: the members the file does not store as the
     /// instance's values, the stored ones as the decoded streams that hold them, the wind's member and an undeclared

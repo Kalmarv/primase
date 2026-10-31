@@ -1,7 +1,7 @@
 //! `resolve-fromsoft-shaders`: the layered materials' G-buffer programs as `core.shader` entities and each material's
 //! `core.shader_binding`.
 use crate::layer_bake::resolve::{
-    PALETTE_ROWS_RULE, Unbound, render_state, resolve, resolve_vertex_for_geometry,
+    PALETTE_ROWS_RULE, Unbound, elden_sky_render_state, render_state, resolve, resolve_vertex_for_geometry,
     vertex_material_parameters,
 };
 use crate::materials::{Material, SkipClass};
@@ -534,8 +534,7 @@ fn run(
             None => t.without_vertex += 1,
         }
         stages.push(resolution.stage);
-        // the render state: what Sekiro's capture settles from an MTD ([`render_state`]); a material binary's is not
-        // established (Elden Ring is not run), so none is stated, counted
+        // Captured MTD state, and the MATBIN sky families independently matched to Gatefront pipelines.
         let state = match (&source.layered, &source.definition) {
             (Some(l), _) => render_state(l),
             (None, Some(crate::materials::Definition::Mtd(d))) => {
@@ -545,6 +544,7 @@ fn run(
                     bindings: source.bindings.clone(),
                 })
             }
+            _ if let Some(state) = elden_sky_render_state(material) => state,
             _ => {
                 t.state_unstated += 1;
                 Default::default()
