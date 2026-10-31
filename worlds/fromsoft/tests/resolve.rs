@@ -2731,7 +2731,7 @@ fn ca_defaults_follow_reflected_components_without_hiding_the_material_array() {
     assert_eq!((array.2, array.3, &array.4), (48, 4, &bits(&[0.75])));
     assert_eq!(bound.len(), 5, "no padding or unreflected fifth CA component");
     let layout = iridia_exec::Layout::of(&shader).unwrap();
-    let mut values = iridia_exec::Constants::new(&layout);
+    let mut values = iridia_exec::evaluate::Constants::new(&layout);
     for c in &resolution.stage.constants {
         let ConstantRole::Material(words) = &c.role else {
             panic!("unexpected non-material input");
@@ -2751,9 +2751,8 @@ fn ca_defaults_follow_reflected_components_without_hiding_the_material_array() {
         .iter()
         .map(|(reg, rows)| (*reg, rows.as_slice()))
         .collect();
-    let mut sampler = |_: iridia_exec::Sample| -> Result<[f32; 4], iridia_exec::Error> {
-        panic!("the fixture samples no textures")
-    };
+    let mut sampler =
+        |_: iridia_exec::Sample| -> Result<[f32; 4], String> { panic!("the fixture samples no textures") };
     let pixel = shader.execute(&[], &buffers, &mut sampler).unwrap();
     assert_eq!(
         pixel.outputs[2],
