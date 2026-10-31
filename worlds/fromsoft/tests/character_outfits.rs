@@ -182,3 +182,156 @@ fn warrior_confessor_and_wolf_assemble_against_their_authored_animation_hierarch
     }
     Ok(())
 }
+
+/// Every starting-class presentation uses the browser's outfit reader, geometry lowering and guarded assembly.
+/// No renderer, material baking, game process or native skinning-parity claim is involved.
+#[test]
+fn all_elden_starting_classes_bind_cloth_against_their_assembled_hierarchy() -> Result<()> {
+    use primase_animation::simulation::{Simulation, SimulationVertices};
+    use primase_core::pass::{PassManager, PassRegistry, RunReport};
+    use primase_core::{Asset, JointMap, Role, Skeleton};
+    use std::collections::BTreeMap;
+
+    let (Some(root), Some(folder), Some(library)) =
+        (install(Data::Elden), keys(Data::Elden), oodle(Tool::Oodle6))
+    else {
+        return Ok(());
+    };
+    let codec = common::oodle(library)?;
+    let installed = common::install(
+        root,
+        Game::EldenRing,
+        Keys::from_folder(folder, Game::EldenRing, None)?,
+    );
+    let archive = installed.open()?;
+    let outfits = character_outfits(
+        &installed,
+        &archive,
+        &Decoder {
+            oodle: Some(&codec),
+            max_output: 1 << 30,
+        },
+    )?;
+    let mut failures = Vec::new();
+    for row in 3000..=3009 {
+        let variants: Vec<_> = outfits
+            .iter()
+            .filter(|outfit| outfit.initializer == row)
+            .collect();
+        assert!(
+            !variants.is_empty(),
+            "starting initializer {row} absent from installed catalog"
+        );
+        for gender in ["m", "f"] {
+            let key = format!("initializer/{row}/{gender}");
+            let selected = variants.iter().find(|outfit| outfit.key() == key).copied();
+            // The catalog coalesces presentations only when their parts and unresolved reasons are identical.
+            let outfit = selected.unwrap_or(variants[0]);
+            let mut result = serde_json::json!({
+                "initializer": row, "gender": gender, "key": key,
+                "catalog_alias": selected.is_none().then(|| outfit.key()),
+                "parts": outfit.parts, "status": "catalog-refused",
+                "reason": outfit.unresolved, "cloth_runners": 0,
+                "assembly_counts": {}, "assembly_approximations": {},
+            });
+            if !outfit.readable() {
+                if outfit.unresolved.is_empty() {
+                    result["reason"] = serde_json::json!(["initializer resolves no drawable parts"]);
+                }
+                // The no-protector initializer is retained in the census while its base-body producer is
+                // investigated separately. It must not hide a failure of any clothed class or missing protector.
+                if row != 3009 || !outfit.parts.is_empty() || !outfit.unresolved.is_empty() {
+                    failures.push(format!("{key}: {}", result["reason"]));
+                }
+                println!("STARTING_CLASS {}", serde_json::to_string(&result)?);
+                continue;
+            }
+            let attempt = (|| -> std::result::Result<(), String> {
+                let mut reader = CharacterReader::outfit(
+                    installed.clone(),
+                    outfit,
+                    Decoder {
+                        oodle: Some(&codec),
+                        max_output: 1 << 30,
+                    },
+                )
+                .map_err(|e| e.to_string())?;
+                let (mut world, _) = reader.read().map_err(|e| e.to_string())?;
+                result["status"] = "assembly-refused".into();
+                let mut registry = PassRegistry::new();
+                primase_fromsoft::sekiro::passes::register(&mut registry);
+                primase_animation::register(&mut registry);
+                let manager = PassManager::new(registry);
+                let pipeline = manager.registry.parse("lower-fromsoft-geometry{pose=stored,uv-tiling=keep,winding=stored,degenerates=keep,leave-out=,blocker-cards=draw,speedtree-frame=program},assemble-character{correspondence=by-name,reference-pose=assembled,tolerance=0.001,reference-tolerance=0.0001,unweighted-rests=report,weighted-rests=report,name=player}").map_err(|e| e.to_string())?;
+                let mut report = RunReport::default();
+                let assembled = manager.run(&mut world, &pipeline, &mut report);
+                if let Some(step) = report.steps.last() {
+                    result["assembly_counts"] =
+                        serde_json::to_value(&step.log.counts).map_err(|e| e.to_string())?;
+                    result["assembly_approximations"] =
+                        serde_json::to_value(&step.log.approximations).map_err(|e| e.to_string())?;
+                }
+                assembled.map_err(|e| e.to_string())?;
+                let rig = world
+                    .iter::<Asset>()
+                    .find_map(|(_, asset)| {
+                        asset
+                            .members
+                            .iter()
+                            .find_map(|(entity, role)| (*role == Role::Rig).then_some(*entity))
+                    })
+                    .ok_or("assembled asset has no rig")?;
+                let skeleton = world
+                    .get::<Skeleton>(rig)
+                    .ok_or("assembled rig has no skeleton")?;
+                result["status"] = "cloth-binding-refused".into();
+                let mut runners = Vec::new();
+                for (holder, declaration) in world.iter::<Simulation>() {
+                    let mapped = world
+                        .iter::<JointMap>()
+                        .find(|(_, map)| map.from == declaration.skeleton && map.to == rig)
+                        .map(|(_, map)| map.pairs.iter().copied().collect::<BTreeMap<_, _>>());
+                    if declaration.skeleton != rig && mapped.is_none() {
+                        return Err(format!(
+                            "{}: no part-to-assembled joint map",
+                            declaration.source.name()
+                        ));
+                    }
+                    let runner = declaration.source.start(skeleton, mapped.as_ref())?;
+                    let bound = world
+                        .iter::<SimulationVertices>()
+                        .filter(|(_, vertices)| vertices.simulation == holder)
+                        .map(|(_, vertices)| vertices.primitives.iter().flatten().count())
+                        .sum::<usize>();
+                    if !declaration.outputs.is_empty() && bound == 0 {
+                        return Err(format!(
+                            "{}: outputs have no bound mesh primitives",
+                            declaration.source.name()
+                        ));
+                    }
+                    runners.push(serde_json::json!({"name": declaration.source.name(), "outputs": declaration.outputs.len(), "bound_primitives": bound, "driven_joints": runner.driven().len()}));
+                }
+                let errors = world.verify_components();
+                if !errors.is_empty() {
+                    return Err(format!("component verification: {errors:?}"));
+                }
+                result["cloth_runners"] = runners.len().into();
+                result["cloth"] = runners.into();
+                result["status"] = "assembled".into();
+                result["reason"] = serde_json::Value::Null;
+                Ok(())
+            })();
+            if let Err(reason) = attempt {
+                failures.push(format!("{key}: {reason}"));
+                result["reason"] = reason.into();
+            }
+            println!("STARTING_CLASS {}", serde_json::to_string(&result)?);
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "starting-class refusals:\n{}",
+        failures.join("\n")
+    );
+    Ok(())
+}

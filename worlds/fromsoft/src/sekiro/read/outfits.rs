@@ -90,10 +90,30 @@ pub fn outfits_from_params(
             .map(str::to_owned)
             .unwrap_or_else(|| format!("CharaInitParam {}", row.id));
         let mut variants: Vec<CharacterOutfit> = Vec::new();
+        // ER's format resolver fixes the part letter for protector modes 1, 2 and 4. A viewer's presentation
+        // choice must not reject those candidates (mode 4's shared parts are named `m`, including on a female
+        // presentation). Only a mode that permits several spellings needs the additional presentation filter.
+        let fixed_spelling: Vec<&str> = if game == Game::EldenRing {
+            let layout = fromsoft_formats::equipment::OutfitLayout::of(game);
+            [("hd", 32), ("bd", 36), ("am", 40), ("lg", 44)]
+                .into_iter()
+                .filter_map(|(prefix, at)| {
+                    let bytes: [u8; 4] = row.data.get(at..at + 4)?.try_into().ok()?;
+                    let equipped = i32::from_le_bytes(bytes);
+                    let protector = protectors.rows.iter().find(|p| p.id == equipped)?;
+                    matches!(protector.data.get(layout.gender), Some(1 | 2 | 4)).then_some(prefix)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         for gender in [OutfitGender::Male, OutfitGender::Female] {
             let resolved = resolve_outfit(game, initializers, protectors, row.id, |part| {
                 let spelling = part.split('_').nth(1);
-                (matches!(spelling, Some("a")) || spelling == Some(gender.key())) && has(part)
+                (fixed_spelling.contains(&part.split('_').next().unwrap_or(""))
+                    || matches!(spelling, Some("a"))
+                    || spelling == Some(gender.key()))
+                    && has(part)
             });
             let (parts, unresolved, chosen_by_presence) = match resolved {
                 Ok(parts) => (parts.parts, parts.unresolved, parts.chosen_by_presence),
@@ -186,5 +206,25 @@ mod tests {
                 .iter()
                 .any(|reason| reason.contains("79113"))
         );
+    }
+
+    #[test]
+    fn a_split_presentation_keeps_the_protectors_shared_head_part() {
+        let (mut initializers, mut protectors) = params(Game::EldenRing);
+        let layout = OutfitLayout::of(Game::EldenRing);
+        let mut head = protectors.rows[0].clone();
+        head.id = 79110;
+        head.data[layout.model..layout.model + 2].copy_from_slice(&2468u16.to_le_bytes());
+        head.data[layout.category] = 5;
+        head.data[layout.gender] = 4;
+        protectors.rows.push(head);
+        initializers.rows[0].data[32..36].copy_from_slice(&79110i32.to_le_bytes());
+        let outfits = outfits_from_params(Game::EldenRing, &initializers, &protectors, |part| {
+            matches!(part, "hd_m_2468_l" | "bd_m_1379_l" | "bd_f_1379_l")
+        });
+        assert_eq!(outfits.len(), 2);
+        assert!(outfits.iter().all(CharacterOutfit::readable));
+        assert_eq!(outfits[0].parts, ["hd_m_2468_l", "bd_m_1379_l"]);
+        assert_eq!(outfits[1].parts, ["hd_m_2468_l", "bd_f_1379_l"]);
     }
 }
