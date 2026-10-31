@@ -111,7 +111,8 @@ pub struct TerrainSelection {
     pub level: u32,
     /// x0, y0, x1, y1: the nodes whose squares meet it are read.
     pub rect: [f64; 4],
-    /// The TerrainNodeLayer by entry name; `None`: the first one in the forges' order.
+    /// The TerrainNodeLayer by entry name; `None`: the first one in the forges' order (Riders Republic's forges hold
+    /// one, by the engine wiki's type inventory, so no other is passed over; a world with several states which).
     pub layer: Option<String>,
     /// The TerrainMaterialBank (`TMB_MAD`) the nodes' material rasters index, by entry name.
     pub bank: Option<String>,

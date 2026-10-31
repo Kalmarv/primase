@@ -216,6 +216,14 @@ pub enum InstancedLevels {
     Every,
 }
 
+impl primase_core::pass::Choice for InstancedLevels {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("every", InstancedLevels::Every),
+        ("selector", InstancedLevels::Selector),
+        ("slot", InstancedLevels::Slot),
+    ];
+}
+
 /// What an instanced Entity's RigidBody places: the caller's stated choice, as how its one shape stands for the
 /// instances isn't established (the Riders Republic notes: 5,076 of 5,087 capsule owners are instanced, one capsule
 /// for their N instances).
@@ -228,6 +236,13 @@ pub enum InstancedCollision {
     /// DataPC_MAD_USNAT, 17,948 of the 19,637 shapes so placed lie within their instance's stored bounds (of its
     /// meshes) to 1 cm, and all within 0.87 m.
     PerInstance,
+}
+
+impl primase_core::pass::Choice for InstancedCollision {
+    const VALUES: &'static [(&'static str, Self)] = &[
+        ("per-instance", InstancedCollision::PerInstance),
+        ("skip", InstancedCollision::Skip),
+    ];
 }
 
 /// What placing the Entities did, beyond the placements.

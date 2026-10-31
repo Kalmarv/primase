@@ -5,6 +5,8 @@
 use primase_core::pass::OptionSpec;
 use primase_core::read_scope::{ReadPreset, ReadScopeSpec};
 
+use super::placements::{InstancedCollision, InstancedLevels};
+
 /// The options of a section read of a world.
 pub const READ_SCOPE: ReadScopeSpec = ReadScopeSpec {
     name: "anvil",
@@ -57,6 +59,24 @@ pub const READ_SCOPE: ReadScopeSpec = ReadScopeSpec {
             "DataLayer events switched on, joined by ;",
             "no event is on",
         ),
+        OptionSpec::choice::<InstancedLevels>(
+            "instanced_levels",
+            "what an instanced visual places at each instance: its slot's level, the selector's levels or every level;              whether the game draws the other levels there is not read",
+        ),
+        OptionSpec::choice::<InstancedCollision>(
+            "instanced_collision",
+            "what an instanced entity's rigid body places: nothing, or its shape at each instance",
+        ),
+        OptionSpec::choice::<bool>(
+            "grass_rasters",
+            "whether each terrain node's grass rasters are read too",
+        ),
+        OptionSpec::optional(
+            "terrain_layer",
+            "",
+            "the TerrainNodeLayer to read, by entry name",
+            "the first in the forges' order (the install holds one)",
+        ),
         OptionSpec::choice::<bool>(
             "every_placement",
             "whether mutually exclusive placements are all stacked instead of honouring event conditions",
@@ -66,6 +86,16 @@ pub const READ_SCOPE: ReadScopeSpec = ReadScopeSpec {
             "whether the game's programs are read for inspection and drawing",
         ),
     ],
+};
+
+/// The options of a rider read from the game's customization tables.
+pub const RIDER_SCOPE: ReadScopeSpec = ReadScopeSpec {
+    name: "anvil-rider",
+    options: &[OptionSpec::required(
+        "gender",
+        "male",
+        "male or female: the rider tables carry two gender conditions as hashes and nothing names which is which, so          no gender is assumed",
+    )],
 };
 
 /// The places and grid selections the crate names. Hand-picked: the places are regions chosen for a viewer, not read
@@ -131,6 +161,16 @@ pub const PRESETS: &[ReadPreset] = &[
         note: "the open world's short-range placements and its terrain partition, with the terrain read; hand-picked from the world's partitions",
     },
     ReadPreset {
+        name: "preview-instances",
+        reader: "anvil",
+        choices: &[
+            ("instanced_levels", "every"),
+            ("instanced_collision", "per-instance"),
+            ("grass_rasters", "false"),
+        ],
+        note: "every mesh level at each instance (the instances' stored bounds cover them: the placement census), the collision shape at each instance, and no grass rasters; a previewing pick",
+    },
+    ReadPreset {
         name: "whiteroom-grids",
         reader: "anvil",
         choices: &[
@@ -158,6 +198,12 @@ mod tests {
                 preset.name
             );
         }
+    }
+
+    /// The rider's gender is stated, never filled.
+    #[test]
+    fn the_riders_gender_is_required() {
+        assert!(RIDER_SCOPE.resolve(Default::default()).is_err());
     }
 
     /// The rectangles are well formed, and the places do not repeat a name.
