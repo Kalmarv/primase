@@ -10,7 +10,8 @@ use crate::passes::program_reads::{self, Reads, SlotRead};
 use crate::sekiro::source::{MaterialShader, ShaderBundle, ShaderStage};
 use fromsoft_formats::metaparam::texture_number;
 use iridia::output_uses::{AlphaExpr, AlphaTest, Known, alpha_tests};
-use iridia_interface::{ResourceId, ResourceKind};
+use iridia_interface::{ResourceId, ResourceKind, Stage};
+use primase_core::shader::{Attribute, InputRole, ShaderBinding, StageBinding};
 use primase_core::{Entity, World};
 use std::collections::BTreeMap;
 
@@ -179,7 +180,7 @@ impl Reader {
                     why: format!("the slot {texture}, whose alpha the test is solved for, is not one the dataflow reads"),
                 })?;
                 return Ok(Some(Coverage {
-                    slot: sampled(&name, slot, &uv_inputs, "coverage")?,
+                    slot: sampled(&name, slot, &uv_inputs, vertex_binding(world, entity), "coverage")?,
                     vertex_alpha: false,
                     left_out: reads.left_out.into_iter().collect(),
                     solved: Some(Solved { cut, dithered }),
@@ -201,7 +202,7 @@ impl Reader {
             });
         };
         Ok(Some(Coverage {
-            slot: sampled(&name, slot, &uv_inputs, "coverage")?,
+            slot: sampled(&name, slot, &uv_inputs, vertex_binding(world, entity), "coverage")?,
             vertex_alpha: reads.coverage_vertex_alpha,
             left_out: reads.left_out.into_iter().collect(),
             solved: None,
@@ -238,7 +239,7 @@ impl Reader {
             }
         };
         Ok(Some(Base {
-            slot: sampled(&name, slot, &uv_inputs, "base")?,
+            slot: sampled(&name, slot, &uv_inputs, vertex_binding(world, entity), "base")?,
             blended: reads.colour.len() > 1,
             program: name,
             lowest_layer,
@@ -453,7 +454,13 @@ fn solve(
 }
 
 /// The UV set a slot is sampled with: its `u` and `v` made of one vertex input's pair.
-fn sampled(name: &str, slot: &SlotRead, uv_inputs: &[(u32, u8)], what: &str) -> Result<Sampled, Unread> {
+fn sampled(
+    name: &str,
+    slot: &SlotRead,
+    uv_inputs: &[(u32, u8)],
+    binding: Option<&StageBinding>,
+    what: &str,
+) -> Result<Sampled, Unread> {
     let unread = |why: String| Unread {
         program: name.to_owned(),
         why,
@@ -468,10 +475,116 @@ fn sampled(name: &str, slot: &SlotRead, uv_inputs: &[(u32, u8)], what: &str) -> 
             "the {what} slot's u and v come from different UV pairs"
         )));
     }
-    let texcoord = program_reads::uv_set(uv_inputs, u)
-        .ok_or_else(|| unread(format!("the {what} slot is not sampled with a UV set")))?;
+    let texcoord = match binding {
+        Some(binding) => bound_uv_set(binding, u, v),
+        None => program_reads::uv_set(uv_inputs, u),
+    }
+    .ok_or_else(|| unread(format!("the {what} slot is not sampled with a lowered UV set")))?;
     Ok(Sampled {
         binding: slot.texture.clone(),
         texcoord,
     })
+}
+
+fn vertex_binding(world: &World, entity: Entity) -> Option<&StageBinding> {
+    world.get::<ShaderBinding>(entity)?.stage(Stage::Vertex)
+}
+
+/// The input labels are the program's, not ordinal UV sets: SpeedTree's first
+/// TEXCOORD inputs carry instance axes and positions, while its UV is a later input.
+fn bound_uv_set(
+    binding: &StageBinding,
+    u: &program_reads::VertexInput,
+    v: &program_reads::VertexInput,
+) -> Option<u8> {
+    let source = |input: &program_reads::VertexInput| {
+        let role = &binding
+            .inputs
+            .iter()
+            .find(|b| b.label.name.eq_ignore_ascii_case(&input.name) && b.label.index == input.index)?
+            .role;
+        match role {
+            InputRole::Stream(Attribute::TexCoord(set)) if input.component < 2 => {
+                Some((*set, input.component))
+            }
+            InputRole::Lanes(lanes) => {
+                let lane = lanes.iter().find(|lane| {
+                    input.component >= lane.first && input.component - lane.first < lane.count
+                })?;
+                let Attribute::TexCoord(set) = lane.semantic else {
+                    return None;
+                };
+                let component = lane.component.checked_add(input.component - lane.first)?;
+                (component < 2).then_some((set, component))
+            }
+            _ => None,
+        }
+    };
+    match (source(u)?, source(v)?) {
+        ((a, 0), (b, 1)) if a == b => Some(a),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iridia_interface::Label;
+    use primase_core::shader::{InputBinding, LaneStream};
+
+    #[test]
+    fn coverage_uses_the_lowered_uv_binding_instead_of_the_input_ordinal() {
+        let mut world = World::default();
+        let mut binding = StageBinding::new(Stage::Vertex, world.spawn());
+        let input = |index, component| program_reads::VertexInput {
+            name: "TEXCOORD".into(),
+            index,
+            component,
+        };
+        binding.inputs = vec![InputBinding {
+            label: Label {
+                name: "TEXCOORD".into(),
+                index: 3,
+            },
+            role: InputRole::Lanes(vec![LaneStream {
+                semantic: Attribute::TexCoord(0),
+                first: 0,
+                count: 2,
+                component: 0,
+            }]),
+        }];
+        let slot = SlotRead {
+            texture: "leaf coverage".into(),
+            u: Some(input(3, 0)),
+            v: Some(input(3, 1)),
+        };
+        let signature = [(0, 4), (1, 4), (2, 4), (3, 4)];
+        assert_eq!(
+            sampled("fixture", &slot, &signature, None, "coverage")
+                .unwrap()
+                .texcoord,
+            6
+        );
+        assert_eq!(
+            sampled("fixture", &slot, &signature, Some(&binding), "coverage")
+                .unwrap()
+                .texcoord,
+            0,
+            "the instance/position inputs do not count as lowered texture coordinate sets"
+        );
+        assert_eq!(bound_uv_set(&binding, &input(3, 0), &input(3, 1)), Some(0));
+        assert_eq!(
+            bound_uv_set(&binding, &input(0, 0), &input(0, 1)),
+            None,
+            "an undeclared instance input cannot become a UV set"
+        );
+        binding.inputs[0].role = InputRole::Lanes(vec![LaneStream {
+            semantic: Attribute::TexCoord(1),
+            first: 2,
+            count: 2,
+            component: 0,
+        }]);
+        assert_eq!(bound_uv_set(&binding, &input(3, 2), &input(3, 3)), Some(1));
+        assert_eq!(bound_uv_set(&binding, &input(3, 0), &input(3, 1)), None);
+    }
 }

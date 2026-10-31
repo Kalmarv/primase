@@ -606,7 +606,10 @@ impl LowerFromSoftGeometry {
                 let Some(part) = self.part(model, index, face_set, material, log)? else {
                     continue;
                 };
-                let layer = if material.layered.is_some() {
+                // MATBIN programs also read Byte4C TEXCOORD members as four-lane
+                // inputs. Keeping only their UV pairs loses the z/w lanes and the
+                // Color(n) streams used by the resolved vertex binding.
+                let layer = if material.layered.is_some() || (source_streams_kept && !model.speedtree) {
                     crate::sekiro::source::layer_streams(model, index, &part.source_vertices)
                         .map_err(|e| e.to_string())?
                 } else {
@@ -1060,6 +1063,91 @@ mod tests {
     use super::{speedtree_mesh, stored_tangents, tangent_to_scene};
     use crate::sekiro::source::SpeedTreeMesh;
     use fromsoft_formats::flver::{Member, Mesh, Model, Vertex};
+
+    #[test]
+    fn matbin_geometry_keeps_four_lane_byte_inputs_without_a_layered_material() {
+        use super::{Cards, Degenerates, LowerFromSoftGeometry, Pose, SpeedTreeFrame, Tiling, Winding};
+        use crate::materials::{Definition, resolve_definition};
+        use fromsoft_formats::{Game, flver, matbin};
+        use primase_core::{Semantic, Stream, World, pass::PassLog};
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let source = flver::Material {
+            string_bytes: 0,
+            index: 0,
+            name: "terrain fixture".into(),
+            mtd: "fixture.matbin".into(),
+            gx: vec![],
+            textures: vec![],
+        };
+        let definition = Definition::Matbin(matbin::Material {
+            shader: "M[AMSN_V][Mb4][3Mask][Far_AN].spx".into(),
+            source: String::new(),
+            key: 0,
+            params: vec![],
+            samplers: vec![],
+            unreferenced_tail: vec![],
+        });
+        let material = resolve_definition(&source, Some(&definition), Game::EldenRing, |_| false);
+        assert!(
+            material.layered.is_none(),
+            "the legacy layered-material classifier is not involved"
+        );
+        let vertices = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]].map(|position| Vertex {
+            position,
+            normal: [0.0, 1.0, 0.0],
+            uvs: [
+                [0.25, 0.5, 0.0, 0.0],
+                [17.0 / 255.0, 34.0 / 255.0, 51.0 / 255.0, 68.0 / 255.0],
+            ]
+            .into(),
+            layer_bytes: [(1, [17, 34, 51, 68])].into(),
+            ..Default::default()
+        });
+        let model = Model {
+            bones: vec![],
+            dummies: vec![],
+            version: 0x2001a,
+            speedtree: false,
+            materials: vec![source],
+            layouts: vec![vec![member(true, 1, 5, 0), member(true, 0x13, 5, 1)]],
+            meshes: vec![Mesh {
+                dynamic: false,
+                node: -1,
+                palette: vec![],
+                material: 0,
+                layouts: vec![0],
+                vertices: vertices.into(),
+                faces: vec![flver::FaceSet {
+                    flags: 0,
+                    strip: false,
+                    cull: false,
+                    unknown_06: 0,
+                    indices: vec![0, 1, 2],
+                }],
+            }],
+        };
+        let mut world = World::default();
+        let entity = world.spawn();
+        let prototype = world.spawn();
+        world.insert(entity, material);
+        world.insert(prototype, super::MaterialSlots(vec![entity]));
+        world.insert(prototype, super::RigidModel::new(model));
+        let pass = LowerFromSoftGeometry {
+            pose: Pose::Rigid,
+            uv_tiling: Tiling::Keep,
+            winding: Winding::Stored,
+            degenerates: Degenerates::Keep,
+            leave_out: BTreeSet::new(),
+            blocker_cards: Cards::Draw,
+            speedtree_frame: SpeedTreeFrame::Program,
+        };
+        let lowered = pass
+            .lower(&world, prototype, &mut BTreeMap::new(), &mut PassLog::default())
+            .unwrap();
+        let stream = lowered.levels[&0].primitives[0].streams.get(&Semantic::Color(1));
+        assert_eq!(stream, Some(&Stream::U8x4(vec![[17, 34, 51, 68]; 3])));
+    }
 
     /// A member of a SpeedTree layout: stream 0 for the stored ones, the instance stream (modifier 0x8000) for the others.
     fn member(stored: bool, kind: u32, semantic: u32, index: u32) -> Member {
