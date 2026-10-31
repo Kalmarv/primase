@@ -21,11 +21,7 @@ fn installed_initializer_catalogs_and_the_sekiro_outfit_reader_keep_authored_par
             oodle: Some(&codec),
             max_output: 1 << 30,
         };
-        let installed = common::install(
-            root,
-            game,
-            Keys::from_folder(folder, game, game.param_key_sha256())?,
-        );
+        let installed = common::install(root, game, Keys::from_folder(folder, game, None)?);
         let archive = installed.open()?;
         let outfits = character_outfits(&installed, &archive, &decoder)?;
         assert!(!outfits.is_empty());
