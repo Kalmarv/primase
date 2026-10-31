@@ -2,9 +2,22 @@
 mod common;
 mod inputs;
 use fromsoft_formats::{Game, Keys, dcx::Decoder, msb::MapLayout};
+use primase_core::convert::Reader;
+use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{Name, ReflectionProbeRegion, Source, TextureLayers, TextureShape, World};
 use primase_fromsoft::game::ParamKey;
-use primase_fromsoft::sekiro::environment::{self, Selection, Tier};
+use primase_fromsoft::sekiro::environment;
+use primase_fromsoft::sekiro::environment_data::{
+    EnvironmentCatalog, EnvironmentLoadRequest, EnvironmentSelection,
+};
+fn run(world: &mut World, text: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut registry = PassRegistry::new();
+    primase_fromsoft::sekiro::passes::register(&mut registry);
+    let manager = PassManager::new(registry).with_pass_checks(true);
+    manager.run(world, &manager.registry.parse(text)?, &mut RunReport::default())?;
+    Ok(())
+}
+const SELECT: &str = "select-fromsoft-environment{state-a=5,state-b=6,factor=0.35333335,tier=high}";
 use std::collections::{BTreeMap, BTreeSet};
 
 fn fnv(bytes: &[u8]) -> u64 {
@@ -40,7 +53,12 @@ fn all_stormveil_boxes_resolve_and_captured_payload_fingerprints_match()
     assert_eq!(regions.len(), 129);
     let groups: BTreeSet<_> = regions
         .iter()
-        .map(environment::group_for)
+        .map(|r| {
+            environment::group_for(
+                r,
+                &fromsoft_formats::envmap::box_fields(&layout, r)?.expect("ER box fields"),
+            )
+        })
         .collect::<Result<_, _>>()?;
     assert_eq!(groups.len(), 128);
     let mut labelled = 0;
@@ -53,31 +71,47 @@ fn all_stormveil_boxes_resolve_and_captured_payload_fingerprints_match()
             .iter()
             .find(|r| r.name == name)
             .expect("captured box remains installed");
-        assert_eq!(environment::group_for(region)?, id.parse::<u32>()?, "{name}");
+        assert_eq!(
+            environment::group_for(
+                region,
+                &fromsoft_formats::envmap::box_fields(&layout, region)?.expect("ER box fields")
+            )?,
+            id.parse::<u32>()?,
+            "{name}"
+        );
         labelled += 1;
     }
     assert_eq!(labelled, 55);
     let mut world = World::new();
-    let report = environment::read(
-        &archive,
-        &decoder,
-        "m10_00_00_00",
-        &layout,
-        Selection {
-            state_a: 5,
-            state_b: 6,
-            factor: f32::from_bits(0x3eb4e81c),
-            tier: Tier::High,
-        },
-        &mut world,
-    )?;
+    // Setup: metadata read -> explicit registered selection -> payload load -> registered lowering.
+    let metadata = environment::read(&archive, "m10_00_00_00", &layout, &mut world)?;
+    assert_eq!(
+        world
+            .resource::<EnvironmentCatalog>()
+            .expect("authored catalog")
+            .packages
+            .len(),
+        21
+    );
+    assert_eq!(world.iter::<TextureLayers>().count(), 0);
+    assert_eq!(world.iter::<ReflectionProbeRegion>().count(), 0);
+    assert!(world.resource::<EnvironmentSelection>().is_none());
+    assert!(world.resource::<EnvironmentLoadRequest>().is_none());
+    assert_eq!(world.iter::<primase_core::ContentNote>().count(), 0);
+    run(&mut world, SELECT)?;
+    assert_eq!(world.iter::<TextureLayers>().count(), 0);
+    let loaded = environment::load_requested(&archive, &decoder, &mut world)?;
+    run(&mut world, "lower-fromsoft-environment-probes")?;
     assert_eq!(
         (
-            report.packages,
-            report.textures,
-            report.boxes,
-            report.groups,
-            report.unresolved_captured_boxes
+            loaded.packages,
+            loaded.textures,
+            metadata.boxes,
+            metadata.groups,
+            world
+                .iter::<primase_core::ContentNote>()
+                .filter(|(_, n)| n.key == "environment-unresolved-capture")
+                .count()
         ),
         (2, 1280, 129, 128, 1)
     );
@@ -145,23 +179,37 @@ fn all_stormveil_boxes_resolve_and_captured_payload_fingerprints_match()
     }
     assert_eq!((names.len(), checked), (286, 3476));
     // The production area reader binds every installed region through generic geometry and texture roles.
-    let mut drawn = World::new();
-    primase_fromsoft::sekiro::read_game_area(
-        &install,
+    let mut reader = primase_fromsoft::sekiro::convert::AreaReader::of(
+        install.clone(),
         "m10_00_00_00",
-        &decoder,
-        &primase_fromsoft::sekiro::Options {
+        Decoder {
+            oodle: Some(&dll),
+            max_output: 1 << 30,
+        },
+        primase_fromsoft::sekiro::Options {
             region: Some(primase_fromsoft::sekiro::Region {
                 rect: [1e6, 1e6, 1e6 + 1., 1e6 + 1.],
                 margin: 0.,
             }),
             render_graph: true,
-            environment: report.selection,
+            irradiance: true,
             ..Default::default()
         },
+    );
+    let (mut drawn, _) = reader.read()?;
+    assert!(
+        drawn
+            .resource::<primase_core::render_graph::RenderGraph>()
+            .expect("raw graph")
+            .lighting
+            .is_none()
+    );
+    run(&mut drawn, SELECT)?;
+    let (mut drawn, _) = reader.load_all(drawn)?;
+    run(
         &mut drawn,
+        "lower-fromsoft-render-graph,lower-fromsoft-environment-probes,bind-fromsoft-environment-probes",
     )?;
-    common::run(&mut drawn, "lower-fromsoft-render-graph")?;
     let graph = drawn
         .resource::<primase_core::render_graph::RenderGraph>()
         .expect("frame graph");

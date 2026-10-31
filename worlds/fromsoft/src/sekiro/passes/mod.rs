@@ -14,6 +14,7 @@ pub mod detail;
 pub mod draw_params;
 pub mod effects;
 pub mod environment;
+pub mod environment_probes;
 pub mod extras;
 pub mod far;
 pub mod geometry;
@@ -104,6 +105,8 @@ pub fn register(registry: &mut PassRegistry) {
         &state::RESOLVE_FROMSOFT_STATE,
         &draw_params::SAMPLE_FROMSOFT_DRAW_PARAMS,
         &environment::LOWER_FROMSOFT_ENVIRONMENT,
+        &environment_probes::SELECT_ELDEN_RING_ENVIRONMENT,
+        &environment_probes::LOWER_ELDEN_RING_ENVIRONMENT_PROBES,
         &post::LOWER_SEKIRO_REINHARD,
         &post::elden_ring::LOWER_ELDEN_RING_REINHARD,
         &lights::LOWER_FROMSOFT_LIGHTS,

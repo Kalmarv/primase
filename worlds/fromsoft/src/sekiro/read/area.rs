@@ -67,13 +67,10 @@ pub struct Options {
     /// off by default. Its programs are read from the install's engine binders; its steps are the game's, as recorded
     /// frames of the running game show them, whatever the area.
     pub render_graph: bool,
-    /// Read GIIV coefficient packages and environment boxes. Sekiro retains unresolved
-    /// states for `lower-fromsoft-irradiance`; Elden Ring requires `environment` selection.
+    /// Read authored environment metadata. ER retains every available state/tier identity and defers
+    /// heavy textures to the reader's load step after a registered selection pass requests them.
+    /// Sekiro retains its source coefficient states for lower-fromsoft-irradiance.
     pub irradiance: bool,
-    /// Explicit environment texture states, blend factor and quality tier for Elden Ring.
-    /// Supplying it also enables the environment read. Required when `irradiance` is
-    /// requested there; no clock-to-package default is guessed.
-    pub environment: Option<super::environment::Selection>,
     /// Whether the effects themselves are read where they stand ([`effects`]): the same routes as `effect_lights`, but the whole
     /// effect (`fromsoft.effect` on an entity placed there, the effect files and the textures they name) rather than its lights;
     /// off by default. `lower-fromsoft-effects` lowers them to `core.particles`.
@@ -1091,16 +1088,6 @@ pub fn read_game_area_staged(
     stage: &mut dyn FnMut(&str),
 ) -> Result<Report> {
     let game = install.game;
-    if let Some(selection) = options.environment {
-        if game != Game::EldenRing {
-            return Err(invalid(
-                "environment states",
-                0,
-                "explicit environment state pairs require Elden Ring",
-            ));
-        }
-        selection.verify()?;
-    }
     if destination.entities().next().is_some() {
         return Err(invalid("FromSoftware map", 0, "destination must be empty"));
     }
@@ -1815,15 +1802,9 @@ pub fn read_game_area_staged(
         &mut world,
     )?;
     stage("extras");
-    if options.irradiance || options.environment.is_some() {
+    if options.irradiance {
         if game == Game::EldenRing {
-            let selection = options.environment.ok_or_else(|| invalid(
-                "irradiance", 0,
-                "Elden Ring environment requires explicit state A, state B, factor and tier; the clock selector is not traced",
-            ))?;
-            report.environment = Some(super::environment::read(
-                &archive, decoder, &area, &layout, selection, &mut world,
-            )?);
+            report.environment = Some(super::environment::read(&archive, &area, &layout, &mut world)?);
         } else {
             report.irradiance = super::irradiance::read(&archive, decoder, &area, &layout, &mut world)?;
         }

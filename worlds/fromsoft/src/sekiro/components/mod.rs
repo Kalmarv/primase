@@ -3,6 +3,7 @@
 pub mod area_plan;
 pub mod character;
 pub mod effect;
+pub mod environment;
 pub mod irradiance;
 pub mod lighting;
 pub mod lowered;

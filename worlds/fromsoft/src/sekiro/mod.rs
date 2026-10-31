@@ -11,6 +11,7 @@ mod read;
 pub use components::area_plan;
 pub use components::irradiance::IrradianceRegion;
 pub use components::lighting::PreparedLighting;
+pub use components::environment as environment_data;
 pub use components::source::Region;
 pub use components::{character as character_data, effect as effect_data, lowered, source};
 pub use components::{weather, world_state};

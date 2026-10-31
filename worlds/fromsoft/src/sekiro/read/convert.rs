@@ -27,7 +27,9 @@ pub const EMITTED_NAMES: &[&str] = &[
     "core.instance",
     "core.content_note",
     "core.irradiance_volume",
-    "core.reflection_probe_region",
+    "fromsoft.environment_catalog",
+    "fromsoft.environment_region",
+    "fromsoft.environment_payloads",
     "core.texture_layers",
     "core.name",
     "core.render_graph",
@@ -76,15 +78,14 @@ pub fn emitted_names(options: &Options) -> Vec<&'static str> {
         })
         .filter(|name| !matches!(*name, "core.render_graph" | "core.shader") || options.render_graph)
         .filter(|name| {
-            !matches!(*name, "core.texture_layers" | "fromsoft.irradiance_region")
-                || options.irradiance
-                || options.environment.is_some()
-        })
-        .filter(|name| {
             !matches!(
                 *name,
-                "core.content_note" | "core.irradiance_volume" | "core.reflection_probe_region"
-            ) || options.environment.is_some()
+                "core.texture_layers"
+                    | "fromsoft.irradiance_region"
+                    | "fromsoft.environment_catalog"
+                    | "fromsoft.environment_region"
+                    | "fromsoft.environment_payloads"
+            ) || options.irradiance
         })
         .collect()
 }
@@ -124,20 +125,6 @@ impl<'a> AreaReader<'a> {
                 "environment probes".into(),
                 serde_json::to_string(environment).expect("environment report"),
             ));
-            if let Some(selection) = environment.selection {
-                self.pending.push(Notice::new(
-                    "fromsoft reader",
-                    primase_core::convert::NoticeKind::Selection,
-                    selection.notice(),
-                    1,
-                ));
-            }
-            self.pending.push(Notice::new("fromsoft reader", primase_core::convert::NoticeKind::Approximation,
-                "environment box-to-group association inferred from 55 capture-verified Elden Ring 2.7.2.0 joins; signed type-data +0x0a override, otherwise parsed Env_Box name", environment.boxes as u64));
-            if environment.unresolved_captured_boxes != 0 {
-                self.pending.push(Notice::new("fromsoft reader", primase_core::convert::NoticeKind::Unsupported,
-                    "captured environment box frame 6993 sequence 1897 has no installed association and is not reconstructed", environment.unresolved_captured_boxes as u64));
-            }
         }
         if let Some(inputs) = &r.state_inputs {
             report.push((
@@ -202,15 +189,43 @@ impl Reader for AreaReader<'_> {
     }
     fn load(&mut self, world: &World, roots: &BTreeSet<Entity>) -> Result<(World, Report)> {
         let mut part = world.subset(&world.closure(roots.iter().copied()));
+        let payloads = if part
+            .resource::<crate::sekiro::environment_data::EnvironmentLoadRequest>()
+            .is_some()
+        {
+            super::environment::load_requested(&self.install.open()?, &self.decoder, &mut part)?
+        } else {
+            super::environment::Report::default()
+        };
         let (textures, programs) = scope_sources(&mut part)?;
-        Ok((part, vec![scoped(textures, programs)]))
+        Ok((
+            part,
+            vec![
+                scoped(textures, programs),
+                ("environment payloads".into(), format!("{payloads:?}")),
+            ],
+        ))
     }
     /// The whole area is its own closure, so the loaded world is the read world itself with its source files scoped:
     /// no second copy of every model, collision body and material beside the one the read made (the copy was the
     /// load's peak, about as large as the read world, and shared only the texture and program payloads).
     fn load_all(&mut self, mut world: World) -> Result<(World, Report)> {
+        let payloads = if world
+            .resource::<crate::sekiro::environment_data::EnvironmentLoadRequest>()
+            .is_some()
+        {
+            super::environment::load_requested(&self.install.open()?, &self.decoder, &mut world)?
+        } else {
+            super::environment::Report::default()
+        };
         let (textures, programs) = scope_sources(&mut world)?;
-        Ok((world, vec![scoped(textures, programs)]))
+        Ok((
+            world,
+            vec![
+                scoped(textures, programs),
+                ("environment payloads".into(), format!("{payloads:?}")),
+            ],
+        ))
     }
     fn emits(&self) -> &'static [&'static str] {
         &["core", "fromsoft"]
