@@ -5,6 +5,7 @@ pub mod area;
 pub mod area_plan;
 pub mod attack_clip;
 pub mod character;
+pub mod catalog;
 pub mod clip_events;
 pub mod collision;
 pub mod convert;
@@ -33,3 +34,7 @@ pub mod weapons;
 pub mod wind;
 
 pub(super) mod state_inputs;
+pub mod weather;
+pub mod world_state;
+
+pub mod open;
