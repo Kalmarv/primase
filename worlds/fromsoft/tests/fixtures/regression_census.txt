@@ -16,7 +16,7 @@ elden-c3000.constants.pixel.Frame(LightTilesPerRow)=5
 elden-c3000.constants.pixel.Frame(PreExposure)=5
 elden-c3000.constants.pixel.Frame(Time)=2
 elden-c3000.constants.pixel.Frame(TimeOfDay)=2
-elden-c3000.constants.pixel.Material=859
+elden-c3000.constants.pixel.Material=871
 elden-c3000.constants.pixel.Object(DitherAlphaEnabled)=33
 elden-c3000.constants.pixel.Object(DitherEnabled)=5
 elden-c3000.constants.pixel.Object(EnvironmentData)=33
@@ -122,6 +122,7 @@ elden-c3000.log.resolve-fromsoft-shaders.approximation.engine texture g_VolumeFo
 elden-c3000.log.resolve-fromsoft-shaders.approximation.joint palette bound stated at N matrices (N,N bytes), the largest observed in a capture of Elden Ring (the engine binds N in one skinned dra=27
 elden-c3000.log.resolve-fromsoft-shaders.approximation.material slots bound to the metaparam's default texture (the material binds nothing there)=19
 elden-c3000.log.resolve-fromsoft-shaders.approximation.missing SAT parameter taken from the shader bundle's metaparam default=50
+elden-c3000.log.resolve-fromsoft-shaders.approximation.missing material field taken from the shader bundle's CAParam default=8
 elden-c3000.log.resolve-fromsoft-shaders.approximation.the scene's clip plane as the games bind it where nothing is clipped (N, N, N, N): all N cbSceneParam bindings of six captured Sekiro sessio=27
 elden-c3000.log.resolve-fromsoft-shaders.approximation.volumetric fog light colours and direction of no fog, as Elden Ring binds them where its fog is off (ambient N, the rest N): their source fo=12
 elden-c3000.log.resolve-fromsoft-shaders.approximation.volumetric fog parameters of no fog, as Elden Ring binds them where its fog is off (far depth the largest float, exponents N, the rest N), a=3
