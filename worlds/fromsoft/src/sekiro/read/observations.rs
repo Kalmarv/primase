@@ -12,7 +12,7 @@ impl WeatherSnapshot {
         let bytes=std::fs::read(path)?;
         let input:super::weather::Snapshot=serde_json::from_slice(&bytes).map_err(|error|crate::invalid("weather observation",0,format!("weather expects {{name, source, weather, fire_ash, wetness?: {{name, source, value}}}}; weather is a WeatherParam row id and wetness is an observed weight 0..1: {error}")))?;
         input.validate().map_err(|error|crate::invalid("weather observation",0,error))?;
-        Ok(Self {input,file_sha256:format!("{:x}",Sha256::digest(&bytes))})
+        Ok(Self {input,file_sha256:Sha256::digest(&bytes).iter().map(|byte|format!("{byte:02x}")).collect()})
     }
 }
 
@@ -26,6 +26,6 @@ impl WorldFlags {
         if input.name.trim().is_empty() || input.source.trim().is_empty() {
             return Err(crate::invalid("world-state observation",0,"world_state needs a nonempty snapshot name and independent source"));
         }
-        Ok(Self {input,file_sha256:format!("{:x}",Sha256::digest(&bytes))})
+        Ok(Self {input,file_sha256:Sha256::digest(&bytes).iter().map(|byte|format!("{byte:02x}")).collect()})
     }
 }

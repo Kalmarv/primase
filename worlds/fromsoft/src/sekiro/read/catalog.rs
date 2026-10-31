@@ -530,7 +530,7 @@ pub fn npc_entries(
         .map(|((model, row), (maps, parts, dummies))| {
             let (binder, animations) = *held.entry(model.clone()).or_insert_with(|| {
                 (
-                    archive.contains(&format!("/chr/{model}.chrbnd.dcx")),
+                    archive.contains(&fromsoft_formats::paths::character(&model)),
                     animation_binder_held(archive, &model),
                 )
             });
@@ -563,7 +563,7 @@ pub fn npc_entries(
 /// Whether the archives hold the animation binder of character `model` (`/chr/<model>.anibnd.dcx`, the file the
 /// character reader maps its clips from): the archive's hash lookup says so without reading the binder.
 pub fn animation_binder_held(archive: &Archive, model: &str) -> bool {
-    archive.contains(&format!("/chr/{model}.anibnd.dcx"))
+    archive.contains(&fromsoft_formats::paths::character_animation(&model))
 }
 
 /// The entry of one NPC row: it opens the character with that row, or, when the archives hold no character binder for
@@ -642,10 +642,10 @@ pub fn player_outfit_entries(
 fn weapon_binder(archive: &fromsoft_formats::Archive, base: &str) -> Option<String> {
     [format!("{base}_l"), base.to_owned(), format!("{base}_m")]
         .into_iter()
-        .find(|p| archive.contains(&format!("/parts/{p}.partsbnd.dcx")))
+        .find(|p| archive.contains(&fromsoft_formats::paths::part(&p)))
 }
 
-/// The `grip` option's name of a grip.
+/// The explicit cache directory and input identity determine the metadata cache key.
 fn cache_file(kind: &str, install: &Install, names: Option<&Path>, cache_dir: Option<&Path>) -> Option<PathBuf> {
     let mut key = format!("{:?}|{}|", install.game, install.root.display());
     if let Some(names) = names {
@@ -729,3 +729,23 @@ fn first_rows_read(
     })()
 }
 
+
+/// Attach the caller's language-specific NPC names and report the explicit language with no fallback.
+pub fn read_display_names(install:&Install,decoder:&Decoder<'_>,names:Option<&Path>,world:&mut primase_core::World,options:&Options)->DescriptiveReport {
+    use primase_core::convert::{Notice,NoticeKind};
+    let mut fields=serde_json::Map::new();
+    fields.insert("name_language".into(),json!({"value":options.language,"reason":format!("{}; no reader language fallback",options.language_source)}));
+    let read=(||->Result<usize>{
+        let names=names.ok_or_else(||anyhow!("game NPC names need the archive's name dictionary to enumerate msg/<lang> folders"))?;
+        let dictionary=fromsoft_formats::NameDictionary::read_for(names,install.game)?;
+        let archive=install.open()?;
+        crate::sekiro::npc_names_into_world(install,&archive,decoder,&dictionary,&options.language,world)
+    })();
+    let mut notices=Vec::new();
+    match read {
+        Ok(count)=>{fields.insert("npc_name_rows".into(),json!(count));},
+        Err(error)=>notices.push(Notice::new("fromsoft",NoticeKind::Unsupported,
+            format!("game NPC names unavailable for explicit lab language {}: {error}",options.language),1)),
+    }
+    DescriptiveReport {fields,notices}
+}
