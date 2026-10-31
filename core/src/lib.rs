@@ -16,7 +16,9 @@ pub use atmosphere::{
 };
 pub mod clip;
 mod clip_identity;
+mod clip_transition;
 pub use clip_identity::{ClipKey, ClipLength};
+pub use clip_transition::{EffectBlend, IncomingTransition};
 mod clip_effects;
 pub use clip_effects::{ClipEffects, ClipSpawn};
 mod clip_events;
