@@ -1318,7 +1318,7 @@ pub fn read_parts_with(
 /// A weapon to read for a hand slot: its row, the part binder read for it and where its models stand.
 struct HeldPart {
     slot: crate::sekiro::effect_data::HandSlot,
-    row: super::weapons::WeaponRow,
+    row: crate::sekiro::weapon_data::WeaponRow,
     part: String,
     holds: Vec<crate::sekiro::effect_data::Holds>,
 }
@@ -1355,7 +1355,10 @@ fn held_weapons(reading: &Reading<'_>, equipped: &EquippedWeapons) -> Result<Vec
 
 /// The part binder of `weapon`'s model the archives hold: `wp_a_<id>` with the level suffix `_l`, none or `_m`, the first
 /// held.
-fn weapon_part(archive: &fromsoft_formats::Archive, weapon: &super::weapons::WeaponRow) -> Result<String> {
+fn weapon_part(
+    archive: &fromsoft_formats::Archive,
+    weapon: &crate::sekiro::weapon_data::WeaponRow,
+) -> Result<String> {
     let base = weapon.part();
     [format!("{base}_l"), base.clone(), format!("{base}_m")]
         .into_iter()
@@ -1372,7 +1375,7 @@ fn weapon_part(archive: &fromsoft_formats::Archive, weapon: &super::weapons::Wea
         })
 }
 
-/// The trace slots of the weapons `equipped` states, by hand slot ([`super::weapons::WeaponRow::traces`]), each with the
+/// The trace slots of the weapons `equipped` states, by hand slot ([`crate::sekiro::weapon_data::WeaponRow::traces`]), each with the
 /// reference ids of the dummy polygons of the weapon's first model (the blade, model 0 of its part), which a trace's run
 /// walks; none read where no weapon is stated.
 fn weapon_traces(

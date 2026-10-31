@@ -13,3 +13,7 @@ pub mod source;
 pub mod state;
 pub mod weather;
 pub mod world_state;
+
+pub mod catalog;
+pub mod standalone;
+pub mod weapons;

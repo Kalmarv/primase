@@ -468,7 +468,7 @@ impl Pass for SelectFromSoftSavedAttack {
             AttackInputs::NAME,
             ClipKey::NAME,
             Name::NAME,
-            crate::sekiro::standalone::SelectedSavedHold::NAME,
+            crate::sekiro::components::standalone::SelectedSavedHold::NAME,
         ]
     }
     fn provides(&self) -> &[&'static str] {
@@ -482,7 +482,7 @@ impl Pass for SelectFromSoftSavedAttack {
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         let state = w
-            .resource::<crate::sekiro::standalone::SelectedSavedHold>()
+            .resource::<crate::sekiro::components::standalone::SelectedSavedHold>()
             .ok_or("no selected saved hold")?
             .state
             .clone();

@@ -1172,7 +1172,7 @@ pub fn read_game_area_staged(
         };
         let path = found
             .as_ref()
-            .map(|(map, _)| fromsoft_formats::paths::map_layout(&map));
+            .map(|(map, _)| fromsoft_formats::paths::map_layout(map));
         match (found, path) {
             (Some((map, offset)), Some(path)) if archive.contains(&path) => {
                 if game == Game::EldenRing {
@@ -1358,7 +1358,7 @@ pub fn read_game_area_staged(
                         if options.low_textures
                             && let Some(low) = package
                                 .strip_suffix(".tpf.dcx")
-                                .map(|stem| fromsoft_formats::paths::low_texture_package(stem))
+                                .map(fromsoft_formats::paths::low_texture_package)
                             && archive.contains(&low)
                         {
                             catalog.add_low(&archive.read(&low, decoder)?)?;

@@ -1,8 +1,10 @@
 //! Materialize an authored catalog after registered presentation selectors have made their choices.
 use crate::sekiro::{
-    catalog::{Catalog, CatalogEntry, CatalogInputs, CatalogReady, Subject, player_outfit_entries},
+    components::catalog::{
+        Catalog, CatalogEntry, CatalogInputs, CatalogReady, Subject, player_outfit_entries,
+    },
+    components::standalone::{SelectedWeaponForms, WeaponInventory},
     outfit_data::{NpcOutfitVariants, OutfitVariants},
-    standalone::{SelectedWeaponForms, WeaponInventory},
 };
 use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::{Resource, World};
@@ -108,7 +110,7 @@ impl Pass for MaterializeFromSoftCatalog {
             if raw.row.row != *id {
                 return Err("selected weapon row order changed".into());
             }
-            if raw.row.model <= 0 {
+            if raw.row.model == 0 {
                 continue;
             }
             let Some(part) = part else { continue };

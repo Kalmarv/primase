@@ -1,13 +1,11 @@
 //! Authored FromSoft catalog reading: indexes, binder forms, parameter links, names and lazy clip plans.
-#![allow(
-    clippy::disallowed_methods,
-    reason = "reader I/O: installed catalog metadata and an explicitly supplied cache directory"
-)]
+
+use crate::sekiro::components::catalog::{Catalog, CatalogEntry, CatalogInputs, Subject};
 use crate::sekiro::outfit_data::{InitializerOutfits, NpcOutfitRows};
-use crate::sekiro::{self, CharacterOutfit, CharacterReader};
+use crate::sekiro::{self, CharacterReader};
 use fromsoft_formats::{Archive, Game as FromSoftGame, Install, dcx::Decoder, listing};
+use primase_core::World;
 use primase_core::convert::Reader;
-use primase_core::{Resource, World};
 use primase_foundations::parallel::{self, Threads};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -22,52 +20,6 @@ pub struct Options {
     pub language_source: String,
     pub cache_dir: Option<PathBuf>,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-pub enum Subject {
-    Character,
-    Object,
-    Map,
-    Other,
-}
-/// A source reader request in `open`/`details.sets` uses `reader` = area, character or parts;
-/// a program maps that to its own reader adapter name and passes the remaining options through.
-#[derive(Clone, Debug)]
-pub struct CatalogEntry {
-    pub key: String,
-    pub kind: String,
-    pub subject: Subject,
-    pub name: String,
-    pub path: String,
-    pub open: Value,
-    pub refusal: Option<String>,
-    pub details: Value,
-}
-#[derive(Clone, Debug, Default)]
-pub struct Catalog {
-    pub entries: Vec<CatalogEntry>,
-}
-impl Resource for Catalog {
-    const NAME: &'static str = "fromsoft.catalog";
-}
-
-/// Authored association of catalog placement records to their character, before any form is selected.
-#[derive(Clone, Debug)]
-pub struct CatalogInputs {
-    pub player_parent: Option<String>,
-    pub player_insert: usize,
-    pub npc_insert: usize,
-    pub npc_rows: Vec<(String, fromsoft_formats::equipment::NpcOutfit)>,
-}
-impl Resource for CatalogInputs {
-    const NAME: &'static str = "fromsoft.catalog_inputs";
-}
-/// A catalog after its explicit presentation passes have materialized opening requests.
-#[derive(Clone, Debug)]
-pub struct CatalogReady;
-impl Resource for CatalogReady {
-    const NAME: &'static str = "fromsoft.catalog_ready";
-}
-
 /// Source-stated report fields and notices, rendered generically by a program.
 #[derive(Debug)]
 pub struct DescriptiveReport {
@@ -146,7 +98,7 @@ pub fn read(
         &archive.entries,
         &dictionary_data,
     );
-    let (npc_rows, npc_outfit_rows) = npc_metadata(&install, &archive, &decoder, names.as_deref())?;
+    let (npc_rows, npc_outfit_rows) = npc_metadata(install, &archive, decoder, names)?;
     let rows: Vec<CatalogEntry> = listing
         .entries
         .iter()
@@ -215,7 +167,7 @@ pub fn read(
         .and_then(|n| Threads::new(n.get().min(8)))
         .unwrap_or(Threads::ONE);
     let mut binders = parallel::map(threads, &parts, |_, part| {
-        sekiro::part_forms(&archive, &decoder, part).map_err(|error| error.to_string())
+        sekiro::part_forms(&archive, decoder, part).map_err(|error| error.to_string())
     })
     .map_err(|error| anyhow!("reading the part binders' forms: {error}"))?
     .into_iter();
@@ -230,7 +182,7 @@ pub fn read(
             .next()
             .ok_or_else(|| anyhow!("a part binder's forms were not read"))?;
         match read {
-            Err(error) => match sekiro::part_textures(&archive, &decoder, &row.name) {
+            Err(error) => match sekiro::part_textures(&archive, decoder, &row.name) {
                 // a binder of no model that holds textures (a face's) is its textures: it opens as a sheet of them
                 Ok(textures) if !textures.is_empty() => {
                     let mut row = row;
@@ -386,11 +338,11 @@ pub fn read(
         .map(|entry| entry.name.clone())
         .collect();
     let clips = clip_lists(
-        &install,
+        install,
         &archive,
-        &decoder,
+        decoder,
         &animated,
-        names.as_deref(),
+        names,
         options.cache_dir.as_deref(),
     );
     for (model, clips) in clips {
@@ -430,16 +382,15 @@ pub fn read(
     }
     // the game's own text first: an NPC row's `nameId` in the item message binder's NPC-name FMG
     let game_text = names
-        .as_deref()
         .ok_or_else(|| "NPC names need the install's name dictionary to enumerate languages".to_owned())
         .and_then(|path| {
             fromsoft_formats::NameDictionary::read_for(path, install.game).map_err(|e| e.to_string())
         })
         .and_then(|dictionary| {
             fromsoft_formats::messages::npc_names(
-                &install,
+                install,
                 &archive,
-                &decoder,
+                decoder,
                 &dictionary,
                 options.language.as_str(),
             )
@@ -471,7 +422,7 @@ pub fn read(
                 open: Value::Null,
                 details: json!({}),
             });
-            sekiro::standalone::WeaponInventory { rows: Vec::new() }
+            sekiro::standalone_data::WeaponInventory { rows: Vec::new() }
         }
     };
     let mut world = World::new();
@@ -491,10 +442,7 @@ pub fn read(
     Ok(world)
 }
 
-/// The catalog's weapons: each `EquipParamWeapon` row with a model whose part binder the archives hold, opening as its
-/// models (named in the right hand, held by no one). The rows without a model (the game's unarmed rows) or whose model no
-/// binder holds are left out; params that do not read are one refused row saying why.
-
+/// Attach source game-text and community names without changing catalog identities.
 pub fn name_entries(
     entries: &mut [CatalogEntry],
     game: FromSoftGame,
@@ -550,6 +498,10 @@ pub type ClipLists = std::collections::BTreeMap<String, std::result::Result<Vec<
 /// The animations each of `models` has (`a000_003000`): the member names of its animation binders, read on several
 /// threads (a binder is decoded whole to list them) and kept between runs. A model whose binders cannot be read lists
 /// a named refusal. Duplicate names retain their distinct reader keys.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "reader I/O: metadata cache in the caller-stated directory"
+)]
 pub fn clip_lists(
     install: &Install,
     archive: &std::sync::Arc<Archive>,
@@ -634,15 +586,17 @@ pub fn npc_entries(
     Ok(npc_metadata(install, archive, decoder, names)?.0)
 }
 
+type NpcMetadata = (
+    Vec<CatalogEntry>,
+    Vec<(String, fromsoft_formats::equipment::NpcOutfit)>,
+);
+
 fn npc_metadata(
     install: &Install,
     archive: &Archive,
     decoder: &Decoder<'_>,
     names: Option<&Path>,
-) -> Result<(
-    Vec<CatalogEntry>,
-    Vec<(String, fromsoft_formats::equipment::NpcOutfit)>,
-)> {
+) -> Result<NpcMetadata> {
     let names = names.ok_or_else(|| anyhow!("no FromSoft name dictionary"))?;
     let dictionary = fromsoft_formats::NameDictionary::read_for(names, install.game)
         .map_err(|error| anyhow!("dictionary {}: {error}", names.display()))?;
@@ -700,7 +654,7 @@ fn npc_metadata(
 /// Whether the archives hold the animation binder of character `model` (`/chr/<model>.anibnd.dcx`, the file the
 /// character reader maps its clips from): the archive's hash lookup says so without reading the binder.
 pub fn animation_binder_held(archive: &Archive, model: &str) -> bool {
-    archive.contains(&fromsoft_formats::paths::character_animation(&model))
+    archive.contains(&fromsoft_formats::paths::character_animation(model))
 }
 
 /// The entry of one NPC row: it opens the character with that row, or, when the archives hold no character binder for
@@ -754,26 +708,11 @@ pub fn maps_label(maps: &[String]) -> String {
     }
 }
 
-/// The archive listing behind the catalog: the character and part binders the archive actually holds, named by a
-/// caller-provided dictionary. Only BHD5 headers and BDT metadata are read; no geometry, texture or binder payload is
-/// touched.
-pub fn player_outfit_entries(parent: &str, choices: &[CharacterOutfit]) -> Vec<CatalogEntry> {
-    choices.iter().map(|outfit| CatalogEntry {
-        key: outfit.key(), kind: "outfit".into(), subject: Subject::Character,
-        name: format!("{} ({})", outfit.name, outfit.gender.key()),
-        path: format!("{} outfit {}", outfit.animations_of, outfit.key()),
-        refusal: (!outfit.readable()).then(|| if outfit.unresolved.is_empty() {
-            "initializer resolves no drawable parts".into()
-        } else { outfit.unresolved.join("; ") }),
-        open: if outfit.readable() {
-            json!({"reader":"character","id":outfit.animations_of,"outfit":outfit.key()})
-        } else { Value::Null },
-        details: json!({"parent":parent,"model":outfit.animations_of,"outfit":outfit,
-            "label":"installed initializer variant; the viewer chooses a presentation, not the game's default"}),
-    }).collect()
-}
-
 /// The explicit cache directory and input identity determine the metadata cache key.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "reader I/O: metadata cache in the caller-stated directory"
+)]
 fn cache_file(
     kind: &str,
     install: &Install,
@@ -806,6 +745,10 @@ pub type FirstRows = std::collections::BTreeMap<String, Vec<i32>>;
 
 /// The NPC rows (ascending) that a map's part names for each model, over the maps the dictionary lists, by install
 /// root: read once per process (reading the maps' parts takes seconds).
+#[allow(
+    clippy::disallowed_methods,
+    reason = "reader I/O: metadata cache in the caller-stated directory"
+)]
 pub fn first_rows(
     install: &Install,
     decoder: &Decoder<'_>,

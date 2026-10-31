@@ -13,6 +13,7 @@ pub use components::environment as environment_data;
 pub use components::irradiance::IrradianceRegion;
 pub use components::lighting::PreparedLighting;
 pub use components::source::Region;
+pub use components::{catalog as catalog_data, standalone as standalone_data, weapons as weapon_data};
 pub use components::{
     character as character_data, effect as effect_data, lowered, outfits as outfit_data, source,
 };
@@ -55,7 +56,7 @@ pub use read::render_graph::Report as RenderGraphReport;
 pub use read::state_inputs::Report as StateInputsReport;
 pub use read::textures::tpf_image;
 pub use read::visibility::decode as decode_visibility;
-pub use read::weapons::{WeaponParams, WeaponRow};
+pub use read::weapons::WeaponParams;
 pub use read::{convert, groups, sky, states, texture_switch, wind};
 
 /// Installed indexes, variants and reader requests without lab code.
