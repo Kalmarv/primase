@@ -5,6 +5,7 @@ use crate::sekiro::environment_data::{
 };
 use fromsoft_formats::envmap::Tier;
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
+mod graph;
 use primase_core::{
     Component, ContentNote, EnvironmentProbeBlend, IrradianceVolume, Name, ProbeMipPolicy, ProbeState,
     ReflectionProbeRegion, Resource, TextureLayers, Transform, World,
@@ -86,14 +87,27 @@ impl Pass for SelectEldenRingEnvironment {
             let matching: Vec<_> = catalog
                 .packages
                 .iter()
-                .filter(|p| p.state == state && p.tier == self.0.tier)
-                .cloned()
+                .filter(|p| p.package.state == state && p.package.tier == self.0.tier)
+                .map(|p| p.package.clone())
                 .collect();
             if matching.is_empty() {
                 return Err(format!(
                     "environment state {state:02} tier {} has no installed package",
                     self.0.tier.word()
                 ));
+            }
+            for (_, region) in world.iter::<EnvironmentRegion>() {
+                if !matching
+                    .iter()
+                    .any(|p| region.available_packages.contains(&p.path))
+                {
+                    return Err(format!(
+                        "environment box {} group{:04} has no installed payload in state{state:02}/{}",
+                        region.region.name,
+                        region.group,
+                        self.0.tier.word()
+                    ));
+                }
             }
             for package in matching {
                 if !packages.contains(&package) {
@@ -188,7 +202,7 @@ impl Pass for LowerEldenRingEnvironmentProbes {
         ]
     }
     fn modifies(&self) -> &[&'static str] {
-        &[ContentNote::NAME]
+        &[ContentNote::NAME, ReflectionProbeRegion::NAME, Transform::NAME]
     }
     fn despawns_entities(&self) -> bool {
         true
@@ -310,6 +324,80 @@ impl Pass for LowerEldenRingEnvironmentProbes {
     }
 }
 
+/// Bind already lowered core probes into the prepared native lighting graph.
+#[derive(Clone, Copy, Debug)]
+pub struct BindFromSoftEnvironmentProbes;
+pub const BIND_FROMSOFT_ENVIRONMENT_PROBES: PassSpec = PassSpec {
+    name: "bind-fromsoft-environment-probes",
+    options: &[],
+    make: |_| Ok(Box::new(BindFromSoftEnvironmentProbes)),
+};
+impl Pass for BindFromSoftEnvironmentProbes {
+    fn name(&self) -> &'static str {
+        "bind-fromsoft-environment-probes"
+    }
+    fn requires(&self) -> &[&'static str] {
+        &[
+            primase_core::render_graph::RenderGraph::NAME,
+            crate::sekiro::PreparedLighting::NAME,
+            ReflectionProbeRegion::NAME,
+            EnvironmentSelection::NAME,
+        ]
+    }
+    fn modifies(&self) -> &[&'static str] {
+        &[primase_core::render_graph::RenderGraph::NAME]
+    }
+    fn approximates(&self) -> &'static str {
+        "direct two-cube blending for all environment regions; native partial preblend schedule and region exclusion masks not reproduced; reflection luminance correction omitted"
+    }
+    fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
+        use primase_core::render_graph::{LightingFrame, LightingPort, RenderGraph};
+        use primase_core::shader::NormalEncoding;
+        let mut render = world.resource::<RenderGraph>().ok_or("no source graph")?.clone();
+        let index = graph::select(&mut render, world)?.ok_or("no core environment probe regions")?;
+        let pipeline = render
+            .lighting
+            .as_mut()
+            .ok_or("base lighting pipeline has not been prepared")?;
+        pipeline.passes.push(index);
+        pipeline.passes.sort_unstable();
+        pipeline.passes.dedup();
+        let normal = pipeline
+            .imports
+            .iter()
+            .find_map(|(p, v)| (*p == LightingPort::GBuffer(0)).then_some(*v))
+            .ok_or("environment has no world-normal import")?;
+        pipeline.frame = Some(LightingFrame {
+            world_from_lighting: [[1., 0., 0.], [0., 1., 0.], [0., 0., -1.]],
+            normal_inputs: vec![(
+                normal,
+                NormalEncoding::XyzBiased {
+                    bias_bits: 0x3f00_2008,
+                },
+            )],
+        });
+        for notice in &mut pipeline.notices {
+            if notice == "native environment, ambient occlusion and shadow producer stages remain unexecuted"
+            {
+                *notice = "native ambient occlusion and shadow producer stages remain unexecuted".into();
+            }
+        }
+        for notice in [graph::DIRECT, graph::LUMINANCE, graph::MASKS] {
+            if !pipeline.notices.iter().any(|n| n == notice) {
+                pipeline.notices.push(notice.into());
+            }
+            log.approximate(notice, 1);
+        }
+        render.check()?;
+        world.insert_resource(render);
+        log.count(
+            "environment lighting regions bound",
+            world.iter::<ReflectionProbeRegion>().count() as u64,
+        );
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,17 +413,24 @@ mod tests {
             packages: [5, 6]
                 .into_iter()
                 .flat_map(|state| {
-                    [Tier::High, Tier::Middle, Tier::Low].map(move |tier| fromsoft_formats::envmap::Package {
-                        area: "m10_00_00_00".into(),
-                        state,
-                        tier,
-                        part: 0,
-                        path: format!("synthetic/state{state}/{}", tier.word()),
+                    [Tier::High, Tier::Middle, Tier::Low].map(move |tier| {
+                        fromsoft_formats::envmap::PackageInventory {
+                            package: fromsoft_formats::envmap::Package {
+                                area: "m10_00_00_00".into(),
+                                state,
+                                tier,
+                                part: 0,
+                                path: format!("synthetic/state{state}/{}", tier.word()),
+                            },
+                            members: Vec::new(),
+                            member_bytes: 0,
+                        }
                     })
                 })
                 .collect(),
         }
     }
+
     #[test]
     fn environment_selection_requests_payloads_without_mutating_authored_states_or_lowering() {
         let manager = manager();
@@ -372,21 +467,44 @@ mod tests {
         ] {
             assert!(manager.registry.parse(text).is_err(), "{text}");
         }
-        let mut world = World::new();
-        world.insert_resource(catalog());
         let p = manager
             .registry
             .parse("lower-fromsoft-environment-probes")
             .unwrap();
-        let error = manager
-            .run(&mut world, &p, &mut RunReport::default())
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains(EnvironmentPayloads::NAME), "{error}");
+        let held = [EnvironmentRegion::NAME.into(), EnvironmentSelection::NAME.into()]
+            .into_iter()
+            .collect();
+        assert_eq!(
+            p.unfed(&held).passes,
+            vec![(
+                "lower-fromsoft-environment-probes".into(),
+                vec![EnvironmentPayloads::NAME]
+            )]
+        );
         assert!(
             group(&EnvironmentPayloads::default(), 5, Tier::High, 9999)
                 .unwrap_err()
                 .contains("computed group 9999 has no installed complete payload")
         );
+    }
+
+    #[test]
+    fn environment_graph_binding_requires_the_registered_base_pass_marker() {
+        use primase_core::render_graph::RenderGraph;
+        let manager = manager();
+        let mut world = World::new();
+        world.insert_resource(RenderGraph::default());
+        let pipeline = manager
+            .registry
+            .parse("bind-fromsoft-environment-probes")
+            .unwrap();
+        let error = manager
+            .run(&mut world, &pipeline, &mut RunReport::default())
+            .unwrap_err();
+        assert!(
+            error.to_string().contains(crate::sekiro::PreparedLighting::NAME),
+            "{error}"
+        );
+        assert!(world.resource::<RenderGraph>().unwrap().lighting.is_none());
     }
 }

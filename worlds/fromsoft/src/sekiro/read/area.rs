@@ -1804,7 +1804,9 @@ pub fn read_game_area_staged(
     stage("extras");
     if options.irradiance {
         if game == Game::EldenRing {
-            report.environment = Some(super::environment::read(&archive, &area, &layout, &mut world)?);
+            report.environment = Some(super::environment::read(
+                &archive, decoder, &area, &layout, &mut world,
+            )?);
         } else {
             report.irradiance = super::irradiance::read(&archive, decoder, &area, &layout, &mut world)?;
         }

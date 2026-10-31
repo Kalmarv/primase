@@ -1,6 +1,6 @@
 //! Authored environment metadata, explicit pass selections and requested/loaded payload identities.
 use fromsoft_formats::{
-    envmap::{BoxFields, Package, Tier},
+    envmap::{BoxFields, Package, PackageInventory, Tier},
     msb::Region,
 };
 use primase_core::{Component, Entity, Geometry, JsonError, Resource, World};
@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct EnvironmentCatalog {
     pub area: String,
-    pub packages: Vec<Package>,
+    pub packages: Vec<PackageInventory>,
 }
 impl Resource for EnvironmentCatalog {
     const NAME: &'static str = "fromsoft.environment_catalog";
@@ -28,6 +28,7 @@ pub struct EnvironmentRegion {
     pub region: Region,
     pub fields: BoxFields,
     pub group: u32,
+    pub available_packages: Vec<String>,
     /// Core coordinate frame; the reader's frame conversion does not select any state.
     pub reflection_origin: [f32; 3],
 }
@@ -92,7 +93,11 @@ impl Resource for EnvironmentLoadRequest {
         let catalog = world
             .resource::<EnvironmentCatalog>()
             .ok_or("environment request has no authored catalog")?;
-        if self.0.iter().any(|p| !catalog.packages.contains(p)) {
+        if self
+            .0
+            .iter()
+            .any(|p| !catalog.packages.iter().any(|entry| &entry.package == p))
+        {
             return Err("environment request names a package absent from the authored catalog".into());
         }
         Ok(())
