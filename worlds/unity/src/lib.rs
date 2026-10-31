@@ -47,7 +47,7 @@ pub use passes::{
     draw_keywords, drawn, limit_skin, lower, lower_ambient, lower_animator, lower_collision, lower_lights,
     lower_terrain, resolve_shaders,
 };
-pub use read::{asset, convert, level, mesh, program, texture};
+pub use read::{asset, convert, level, mesh, program, scope, texture};
 
 /// Registers the Unity passes by their declarations: `unity-drawn`, `limit-unity-skin-weights`, `lower-unity-pbr`,
 /// `lower-unity-terrain`, `lower-unity-collision`, `lower-unity-lights`, `lower-unity-animator`,

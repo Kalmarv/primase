@@ -5,4 +5,5 @@ pub mod convert;
 pub mod level;
 pub mod mesh;
 pub mod program;
+pub mod scope;
 pub mod texture;
