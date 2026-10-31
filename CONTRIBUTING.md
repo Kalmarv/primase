@@ -55,7 +55,9 @@ Clarifications:
   a chunk as an isolated world, and processing in chunks preserves the intended result.
 - **Read scope.** A reader reads the scope the program asks for: named parts such as an area, a data family or a set
   of files. Within that scope it reads every candidate as authored and never picks among alternatives; picking is a
-  pass. Heavy payloads may be deferred to the load step, which follows a pass's selection.
+  pass. Heavy payloads may be deferred to the load step, which follows a pass's selection. A scope may name which
+  levels of detail or forms to load, when loading every candidate would be costly; the reader records the others as
+  unloaded and reports the choice.
 
 Also always: the repository holds no game files and nothing about anyone's machine; output is deterministic;
 dependencies are small and pinned; correctness comes from independent sources (the game, a third-party tool, a
