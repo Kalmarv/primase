@@ -20,6 +20,7 @@
 //! Sekiro's light records are `core` light tables the consumer packs from the scene's lights
 //! ([`crate::light_records`]), and their counts and tile constants frame parameters; the per-tile light lists a step
 //! reads are the frame's buffers the light-organize step writes.
+mod lighting;
 mod table;
 
 use crate::light_records as lights;
@@ -331,13 +332,16 @@ pub(crate) fn read(
                 .map_err(|e| invalid(FORMAT, 0, format!("step {}: {e}", s.name)))?,
         );
     }
-    let graph = RenderGraph {
+    let mut graph = RenderGraph {
         targets,
         buffers,
         passes,
         picture: t.picture,
+        lighting: None,
         left_out: Vec::new(),
     };
+    graph.lighting =
+        Some(lighting::describe(game, &mut graph, world, report).map_err(|e| invalid(FORMAT, 0, e))?);
     graph.check().map_err(|e| invalid(FORMAT, 0, e))?;
     report.steps = graph.passes.len();
     report.targets = graph.targets.len();
@@ -611,12 +615,14 @@ fn blend_op(n: u32) -> std::result::Result<iri::BlendOp, String> {
 }
 
 /// The state the table records (D3D's numbers) as the interface's, for a draw into `targets` render targets: a
-/// disabled depth test is D3D's (no test and no write); the stencil reference is set per draw (none stated); a field the
+/// disabled depth test is D3D's (no test and no write); the stencil reference is the retained draw's where stated; a field the
 /// runs of a repeated step differ in is not stated.
 fn render_state(s: &table::State, targets: usize) -> std::result::Result<iri::RenderState, String> {
     let mut out = iri::RenderState::default();
     if let Some(blend) = &s.blend {
-        for (i, b) in blend.iter().take(targets.min(8)).enumerate() {
+        for i in 0..targets.min(8) {
+            let source = if s.independent_blend == Some(false) { 0 } else { i };
+            let Some(b) = blend.get(source) else { continue };
             let [enable, src, dst, op, src_a, dst_a, op_a, mask] = *b;
             let blend = if enable == 0 {
                 None
@@ -1288,6 +1294,34 @@ mod tests {
             );
             assert_eq!(constant_role("cbUnresolved", name), None);
         }
+    }
+
+    /// The Stormveil tiled and composition draws retain IndependentBlendEnable=false: RT0 applies to both outputs.
+    #[test]
+    fn a_shared_blend_applies_to_every_active_lighting_target() {
+        let table = table::table(Game::EldenRing).unwrap();
+        for name in ["GXRend_TileBasedLighting", "GXLightComposite"] {
+            let step = table.steps.iter().find(|step| step.name == name).unwrap();
+            let table::Work::Screen(screen) = &step.work else {
+                panic!("screen draw")
+            };
+            let state = render_state(&screen.state, screen.outputs.colour.len()).unwrap();
+            assert_eq!(screen.state.independent_blend, Some(false));
+            assert!(state.targets[0].is_some());
+            assert_eq!(state.targets[0], state.targets[1]);
+            assert_eq!(state.stencil.unwrap().reference, Some(16));
+        }
+        // Independent blending must preserve an explicitly different second target.
+        let mut state: table::State = serde_json::from_value(serde_json::json!({
+            "blend": [[1,5,2,1,2,1,1,15], [0,2,1,1,2,1,1,3]],
+            "independent_blend": true
+        }))
+        .unwrap();
+        let independent = render_state(&state, 2).unwrap();
+        assert_ne!(independent.targets[0], independent.targets[1]);
+        state.independent_blend = Some(false);
+        let shared = render_state(&state, 2).unwrap();
+        assert_eq!(shared.targets[0], shared.targets[1]);
     }
 
     /// Both games' tables parse, every step's targets and buffers are the table's, and the picture is a target.

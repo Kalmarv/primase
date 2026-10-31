@@ -276,6 +276,7 @@ mod tests {
                 })
                 .collect(),
             picture: None,
+            lighting: None,
             left_out: Vec::new(),
         }
     }

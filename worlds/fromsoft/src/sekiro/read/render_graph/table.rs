@@ -305,6 +305,8 @@ pub(crate) struct State {
     /// Per render target: enable, source, destination, operation, alpha source, alpha destination, alpha operation,
     /// write mask.
     pub blend: Option<Vec<[u32; 8]>>,
+    /// False means target zero's blend and write mask apply to every active render target. Unstated in older tables.
+    pub independent_blend: Option<bool>,
     pub depth: Option<Depth>,
     pub stencil: Option<StencilState>,
     pub cull: Option<u32>,
@@ -325,7 +327,7 @@ pub(crate) struct Depth {
 pub(crate) struct StencilState {
     pub read_mask: u32,
     pub write_mask: u32,
-    /// Set per draw by the source: `None`.
+    /// Set per draw; stated only where the retained draw record supplies the reference.
     pub reference: Option<u32>,
     /// Fail, depth fail, pass, comparison.
     pub front: [u32; 4],

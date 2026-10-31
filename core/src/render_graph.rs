@@ -17,6 +17,9 @@
 //! ([`FeatureSlot`]). What the source's frame draws that the graph holds no step for is named in
 //! [`RenderGraph::left_out`].
 
+mod lighting;
+pub use lighting::{GeometryStencil, LightingBuffer, LightingPipeline, LightingPort};
+
 use serde::Serialize;
 use serde_json::Value;
 
@@ -39,6 +42,9 @@ pub struct RenderGraph {
     /// The target that holds the finished picture, before any interface the game draws over it, and before what
     /// [`RenderGraph::left_out`] names after it.
     pub picture: Option<TargetId>,
+    /// A source-described lighting subgraph's imports, selected passes and linear HDR handoff.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lighting: Option<LightingPipeline>,
     /// What the source's frame draws that the graph holds no step for, each named with why (its post-processing,
     /// where that is not traced: the picture is then the image before it). Empty where the graph holds every step.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -782,6 +788,9 @@ impl RenderGraph {
                 "the picture",
             )?;
         }
+        if let Some(lighting) = &self.lighting {
+            lighting.check(self)?;
+        }
         Ok(())
     }
 
@@ -889,6 +898,7 @@ impl Resource for RenderGraph {
         if self.shaders().any(|e| !keep(e)) {
             self.passes.clear();
             self.picture = None;
+            self.lighting = None;
         }
     }
 }
@@ -941,6 +951,7 @@ mod tests {
                 },
             }],
             picture: Some(0),
+            lighting: None,
             left_out: Vec::new(),
         };
         assert_eq!(g.check(), Ok(()));
@@ -1027,6 +1038,7 @@ mod tests {
                 opaque(),
             )],
             picture: Some(0),
+            lighting: None,
             left_out: vec!["post-processing: not traced".into()],
         };
         assert_eq!(g.check(), Ok(()));
@@ -1139,6 +1151,7 @@ mod tests {
             buffers: Vec::new(),
             passes: vec![cascade(quarter)],
             picture: None,
+            lighting: None,
             left_out: Vec::new(),
         };
         assert_eq!(g.check(), Ok(()));
@@ -1173,6 +1186,7 @@ mod tests {
             buffers: Vec::new(),
             passes: vec![clear("a")],
             picture: Some(0),
+            lighting: None,
             left_out: Vec::new(),
         };
         g.passes[0].presence = Presence::Unknown { frames: Vec::new() };
@@ -1260,6 +1274,7 @@ mod tests {
             buffers: Vec::new(),
             passes: vec![screen(1, 0)],
             picture: Some(0),
+            lighting: None,
             left_out: Vec::new(),
         };
         assert_eq!(g.check(), Ok(()));
@@ -1316,6 +1331,7 @@ mod tests {
             buffers: Vec::new(),
             passes: vec![copy(None), copy(Some(quarter))],
             picture: None,
+            lighting: None,
             left_out: Vec::new(),
         };
         assert_eq!(g.check(), Ok(()));
@@ -1386,6 +1402,7 @@ mod tests {
                 step(PassWork::CopyBuffer { from: 0, to: 1 }),
             ],
             picture: None,
+            lighting: None,
             left_out: Vec::new(),
         };
         assert_eq!(g.check(), Ok(()));

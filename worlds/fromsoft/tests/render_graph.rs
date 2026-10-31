@@ -600,6 +600,60 @@ fn read_and_verify(
 
 /// The full-screen inputs the graph's vertex stages bind: Sekiro's frames record the full-screen triangle's bytes, Elden
 /// Ring's none.
+/// The reader identifies a closed local-light subgraph, with buffer roles and an HDR handoff, for both installs.
+fn lighting_boundary(graph: &RenderGraph) {
+    use primase_core::render_graph::LightingPort;
+    use primase_core::shader::{BufferSource, LightListPart};
+    let pipeline = graph.lighting.as_ref().expect("source lighting boundary");
+    pipeline.check(graph).unwrap();
+    assert!(
+        pipeline
+            .exports
+            .iter()
+            .any(|(port, _)| *port == LightingPort::HdrColour)
+    );
+    assert!(
+        pipeline
+            .imports
+            .iter()
+            .any(|(port, _)| *port == LightingPort::SceneDepth)
+    );
+    let kinds: Vec<_> = pipeline
+        .buffers
+        .iter()
+        .map(|b| match &b.source {
+            BufferSource::LightLists(LightListPart::Lookup(_)) => "lookup",
+            BufferSource::LightLists(LightListPart::Indices(_)) => "indices",
+            other => panic!("unexpected external list source: {other:?}"),
+        })
+        .collect();
+    assert!(kinds.contains(&"lookup") && kinds.contains(&"indices"));
+    let stages: Vec<_> = pipeline
+        .passes
+        .iter()
+        .filter_map(|i| {
+            let pass = &graph.passes[*i as usize];
+            matches!(pass.work, PassWork::Screen { .. }).then_some(pass.name.as_str())
+        })
+        .collect();
+    assert_eq!(
+        stages,
+        ["GXRend_TileBasedLighting", "GXLightCmbAlbedo", "GXLightComposite"]
+    );
+    assert!(
+        pipeline
+            .notices
+            .iter()
+            .any(|notice| notice.contains("conservatively"))
+    );
+    let stencil = pipeline.geometry_stencil.as_ref().unwrap();
+    assert_eq!(
+        (stencil.value, stencil.write_mask, stencil.reference),
+        (16, 16, 16)
+    );
+    assert!(stencil.why.contains("producer not traced"));
+}
+
 fn screen_triangle_inputs(graph: &RenderGraph) -> usize {
     fn walk(passes: &[RenderPass], n: &mut usize) {
         for p in passes {
@@ -691,6 +745,7 @@ fn sekiros_render_graph_is_its_recorded_frames() -> Result<(), Box<dyn std::erro
     let (world, report) = read_and_verify(&install, "m11_01", [-170.0, 180.0, -50.0, 300.0], &decoder)?;
     let graph = world.resource::<RenderGraph>().unwrap();
     sun_camera_inputs(graph, &world);
+    lighting_boundary(graph);
     // nine frames of four sessions at 1920 x 1080; the picture the last tone map's RGB10A2 target
     assert_eq!(
         (report.render_graph.frames, report.render_graph.view),
@@ -906,6 +961,7 @@ fn elden_rings_render_graph_is_its_recorded_frames() -> Result<(), Box<dyn std::
     let (world, report) = read_and_verify(&install, "m60_42_36_00", [-10.0, -10.0, 10.0, 10.0], &decoder)?;
     let graph = world.resource::<RenderGraph>().unwrap();
     sun_camera_inputs(graph, &world);
+    lighting_boundary(graph);
     assert_eq!(
         (report.render_graph.frames, report.render_graph.view),
         (7, [2560, 1440])
@@ -915,8 +971,17 @@ fn elden_rings_render_graph_is_its_recorded_frames() -> Result<(), Box<dyn std::
         graph.targets[picture].format,
         primase_core::render_graph::TargetFormat::Rgb10A2Unorm
     );
-    // the capture records no vertex buffer's bytes: no input is the full-screen triangle
-    assert_eq!(screen_triangle_inputs(graph), 0);
+    // No captured vertex bytes are asserted: only the selected native lighting VS reads have a labelled reconstruction.
+    assert_eq!(screen_triangle_inputs(graph), 6);
+    assert!(
+        graph
+            .lighting
+            .as_ref()
+            .unwrap()
+            .notices
+            .iter()
+            .any(|n| n.contains("not captured vertex-buffer bytes"))
+    );
     if let Some(frames) = oracle(OracleSet::Scripts, Game::Elden, "frames") {
         let table_frames = frames_of(FsGame::EldenRing);
         let checked = check_frames(
