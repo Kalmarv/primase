@@ -1819,7 +1819,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 [[package]]
 name = "rme-formats"
 version = "0.3.0"
-source = "git+https://github.com/Kalmarv/rme-formats?rev=6d51f9f02ba40ae7770ba57fce0346669a6b8f49#6d51f9f02ba40ae7770ba57fce0346669a6b8f49"
+source = "git+https://github.com/Kalmarv/rme-formats?rev=79cdb413bce378f2ea6171a97b8abb8cafc6a594#79cdb413bce378f2ea6171a97b8abb8cafc6a594"
 dependencies = [
  "half",
  "lua51-bytecode",

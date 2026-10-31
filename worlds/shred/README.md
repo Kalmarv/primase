@@ -123,6 +123,16 @@ writes `shred-fragment-flow/units.tsv` plus the source parameter-to-inline-const
 locations in `constants.tsv` under the configured scratch root. These reports
 preserve program-family paths; they do not assign PBR roles or bind materials.
 
+`read::disc` opens a level from a disc folder (the one holding `PS3_GAME`), with the paths
+`rme_formats::disc` names. `base_levels` lists the base levels on the disc: MAIN.DB's `levels`
+folders whose `LEVELS/<LEVEL>.PAK` is there. `layer_listings` lists each layer archive once per base
+level it holds quartets of. `DiscLevel::open(folder, level, layers)` opens the base archive, the
+layers the program chose, MAIN.DB's surfaces, the material banks and the shared archives. It refuses
+a level or layer that is not on the disc, and a layer set that does not consist of archives holding
+the level's quartets. `DiscLevel::reader(frame, textures)` is the `ShredReader` over those archives
+with the material inputs; `read_collision` reads their collision. The level, layers, frame and
+texture preference stay the program's choices.
+
 `read::convert::ShredReader` implements core's conversion reader for exactly the PAKs and `SourceFrame` the caller
 states; the reader chooses nothing. `read` returns the whole level: placements, prototypes with their meshes and
 vertex inputs, material entities, spot chunks and, for the inputs the caller adds, the `.hkw` collision of the same

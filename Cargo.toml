@@ -75,7 +75,7 @@ havok-cloth = { git = "https://github.com/Kalmarv/havok-cloth", rev = "f8214d488
 havok-formats = { git = "https://github.com/Kalmarv/havok-formats", rev = "f681dd1375a6d05666cc998c581defe47d326063" }
 primase-havok = { path = "toolkit/havok" }
 morpheme-formats = { git = "https://github.com/Kalmarv/morpheme-formats", rev = "40467a65f41d052534d90c18d980ef3329967de7" }
-rme-formats = { git = "https://github.com/Kalmarv/rme-formats", rev = "6d51f9f02ba40ae7770ba57fce0346669a6b8f49" }
+rme-formats = { git = "https://github.com/Kalmarv/rme-formats", rev = "79cdb413bce378f2ea6171a97b8abb8cafc6a594" }
 unity-formats = { git = "https://github.com/Kalmarv/unity-formats", rev = "72c057749e7aae480d6c6afc117e2f46d1715f11", version = "0.2.2" }
 gbx-formats = { git = "https://github.com/Kalmarv/gbx-formats", rev = "a291955c471f35c1652ec919736d8aff7a62b5cf" }
 monogame-formats = { git = "https://github.com/Kalmarv/monogame-formats", rev = "05cc99b09f9d9b897ce1360ceffdbab5222ecc08" }

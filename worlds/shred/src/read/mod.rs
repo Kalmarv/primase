@@ -2,6 +2,7 @@
 //! and their texture graph, reference rigs and name joins.
 pub mod collision;
 pub mod convert;
+pub mod disc;
 pub mod level;
 pub mod manifest;
 pub mod material;
