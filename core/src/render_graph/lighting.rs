@@ -2,7 +2,20 @@
 use serde::Serialize;
 
 use super::{BufferId, PassWork, RenderGraph, RenderPass, TargetView};
-use crate::shader::{BufferSource, TextureSource};
+use crate::shader::{BufferSource, NormalEncoding, TextureSource};
+
+/// One orthonormal coordinate basis for every stage of a native lighting subgraph. The columns map its world
+/// directions into core world directions; reflections of handedness are allowed, scaling and translation are not.
+/// Camera/world constants and world-space inputs cross this boundary together. View-space light records are
+/// invariant: core-view * core-position equals lighting-view * lighting-position. Clip/depth and linear RGB exports
+/// stay in the consumer view, with no frame transform on the scalar depth or colour.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct LightingFrame {
+    pub world_from_lighting: [[f32; 3]; 3],
+    /// Imported world normals to decode, rotate into the lighting frame, then encode with the same encoding.
+    /// Non-normal lanes remain byte-for-byte values. Other imports contain no world-coordinate vectors.
+    pub normal_inputs: Vec<(TargetView, NormalEncoding)>,
+}
 
 /// The meaning of an image at the lighting boundary, independent of engine names and register numbers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -47,6 +60,8 @@ pub struct GeometryStencil {
 /// same port (a source may keep two views of scene depth), but each exported meaning has one view.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct LightingPipeline {
+    /// None uses core world coordinates throughout, with raw imports.
+    pub frame: Option<LightingFrame>,
     pub imports: Vec<(LightingPort, TargetView)>,
     pub buffers: Vec<LightingBuffer>,
     /// Top-level RenderGraph pass indices in strictly increasing source order; groups retain their own order.
@@ -62,6 +77,30 @@ impl LightingPipeline {
     /// must be imported or produced earlier. This checks data dependencies, not whether the consumer implements each
     /// pass or can evaluate an unknown presence condition.
     pub fn check(&self, graph: &RenderGraph) -> Result<(), String> {
+        if let Some(frame) = &self.frame {
+            for a in 0..3 {
+                for b in 0..3 {
+                    let dot: f32 = (0..3)
+                        .map(|i| frame.world_from_lighting[a][i] * frame.world_from_lighting[b][i])
+                        .sum();
+                    if !dot.is_finite() || (dot - if a == b { 1. } else { 0. }).abs() > 1e-5 {
+                        return Err("lighting frame basis must be finite and orthonormal".into());
+                    }
+                }
+            }
+            for (i, (view, _)) in frame.normal_inputs.iter().enumerate() {
+                if !self
+                    .imports
+                    .iter()
+                    .any(|(port, v)| v == view && matches!(port, LightingPort::GBuffer(_)))
+                {
+                    return Err("lighting frame normal is not an imported G-buffer view".into());
+                }
+                if frame.normal_inputs[..i].iter().any(|(v, _)| v == view) {
+                    return Err("lighting frame transforms a normal import twice".into());
+                }
+            }
+        }
         let mut images = Vec::new();
         for (port, view) in self.imports.iter().chain(&self.exports) {
             graph.view_ok(view, "lighting port")?;
@@ -345,6 +384,22 @@ mod tests {
         let mut display = g.clone();
         display.targets[1].format = TargetFormat::Rgba8UnormSrgb;
         assert!(p.check(&display).unwrap_err().contains("linear floating-point"));
+    }
+
+    #[test]
+    fn lighting_frame_requires_a_shared_orthonormal_basis_and_declared_normal_imports() {
+        let g = graph();
+        let mut p = pipeline();
+        p.frame = Some(LightingFrame {
+            world_from_lighting: [[1., 0., 0.], [0., 1., 0.], [0., 0., -1.]],
+            normal_inputs: vec![(view(0), NormalEncoding::XyzUnorm)],
+        });
+        assert_eq!(p.check(&g), Ok(()));
+        p.frame.as_mut().unwrap().world_from_lighting[0][0] = 2.;
+        assert!(p.check(&g).unwrap_err().contains("orthonormal"));
+        p.frame.as_mut().unwrap().world_from_lighting[0][0] = 1.;
+        p.frame.as_mut().unwrap().normal_inputs[0].0 = view(1);
+        assert!(p.check(&g).unwrap_err().contains("not an imported"));
     }
     #[test]
     fn a_graph_buffer_cannot_have_two_selected_producers() {

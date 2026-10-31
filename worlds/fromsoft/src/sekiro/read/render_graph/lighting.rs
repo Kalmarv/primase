@@ -4,11 +4,13 @@ use fromsoft_formats::Game;
 use iridia_interface::{BufferKind, ResourceKind, Stage};
 use primase_core::World;
 use primase_core::render_graph::{
-    DrawBucket, GeometryStencil, LightingBuffer, LightingPipeline, LightingPort, PassWork, RenderGraph,
+    DrawBucket, GeometryStencil, LightingBuffer, LightingFrame, LightingPipeline, LightingPort, PassWork,
+    RenderGraph,
 };
 use primase_core::shader::{
-    BufferSource, ConstantRole, InputRole, ScreenTriangleValue, Shader, TextureSource,
+    BufferSource, ConstantRole, InputRole, NormalEncoding, ScreenTriangleValue, Shader, TextureSource,
 };
+mod ambient;
 mod sun;
 
 pub(super) fn describe(
@@ -17,6 +19,11 @@ pub(super) fn describe(
     world: &World,
     report: &mut super::Report,
 ) -> Result<LightingPipeline, String> {
+    let environment = if game == Game::EldenRing {
+        ambient::select(graph, world)?
+    } else {
+        None
+    };
     let selected_names: &[&str] = if game == Game::EldenRing {
         &[
             "GXLightAcc_DDirLightShadowed1",
@@ -44,6 +51,9 @@ pub(super) fn describe(
         output_views.extend(outputs.colour.iter().map(|(_, view)| *view));
     }
     let last = *passes.last().ok_or("no lighting stage")? as usize;
+    if let Some(index) = environment {
+        passes.push(index);
+    }
     for (index, pass) in graph.passes.iter().enumerate() {
         if let PassWork::Clear { target, .. } = &pass.work
             && output_views.contains(target)
@@ -204,7 +214,7 @@ pub(super) fn describe(
         }
     }
     let mut notices = vec!["light lists conservatively include every light in every tile and depth slice; native culling is not reproduced".into(),
-        "native environment, ambient occlusion and shadow producer stages remain unexecuted".into(),
+        if environment.is_some() { "native ambient occlusion and shadow producer stages remain unexecuted".into() } else { "native environment, ambient occlusion and shadow producer stages remain unexecuted".into() },
         "full-screen vertex inputs are reconstructed from the native lighting vertex program's clip-position and UV reads, not captured vertex-buffer bytes".into()];
     if game == Game::EldenRing {
         notices.push(crate::light_records::TRANSLUCENCY_DEFAULTS.into());
@@ -213,7 +223,30 @@ pub(super) fn describe(
     } else {
         notices.push("native directional lighting is not yet selected for this source".into());
     }
+    let frame = if environment.is_some() {
+        notices.extend([
+            ambient::DIRECT.into(),
+            ambient::LUMINANCE.into(),
+            ambient::MASKS.into(),
+        ]);
+        let normal = imports
+            .iter()
+            .find_map(|(port, v)| (*port == LightingPort::GBuffer(0)).then_some(*v))
+            .ok_or("environment has no world-normal import")?;
+        Some(LightingFrame {
+            world_from_lighting: [[1., 0., 0.], [0., 1., 0.], [0., 0., -1.]],
+            normal_inputs: vec![(
+                normal,
+                NormalEncoding::XyzBiased {
+                    bias_bits: 0x3f00_2008,
+                },
+            )],
+        })
+    } else {
+        None
+    };
     let pipeline = LightingPipeline {
+        frame,
         imports,
         buffers,
         passes,

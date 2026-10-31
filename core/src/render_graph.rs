@@ -18,7 +18,7 @@
 //! [`RenderGraph::left_out`].
 
 mod lighting;
-pub use lighting::{GeometryStencil, LightingBuffer, LightingPipeline, LightingPort};
+pub use lighting::{GeometryStencil, LightingBuffer, LightingFrame, LightingPipeline, LightingPort};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -244,7 +244,7 @@ pub enum Items {
 #[serde(rename_all = "snake_case")]
 pub enum PassWork {
     /// A procedural primitive in the space of `object`'s `core.transform`. Object constant roles use that
-    /// object-to-world transform (composed through its parents); vertex streams use the primitive's local attributes.
+    /// object-to-world transform; vertex streams use the primitive's local attributes.
     /// This is a volume/light draw, independent of scene meshes and their material buckets.
     Geometry {
         primitive: GraphPrimitive,
