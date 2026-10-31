@@ -10,6 +10,7 @@ pub mod convert;
 pub mod draw_param;
 pub mod effect_lights;
 pub mod effects;
+pub mod environment;
 pub mod equipment;
 pub mod extras;
 pub mod groups;

@@ -269,3 +269,42 @@ fn independent_dx10_and_mask_fixtures() {
     assert_eq!((t.width, t.height, t.format), (2, 1, TexFormat::A8Unorm));
     assert_eq!(t.levels, vec![vec![0, 255]]);
 }
+
+/// Distinct face/mip values detect a transposed DDS-face-major/core-mip-major read.
+#[test]
+fn cube_faces_and_mips_retain_their_independent_subresources() {
+    let mut bytes = vec![0; 148];
+    bytes[..4].copy_from_slice(b"DDS ");
+    for (offset, value) in [
+        (4, 124),
+        (8, 0x21007),
+        (12, 2),
+        (16, 2),
+        (28, 2),
+        (76, 32),
+        (80, 4),
+        (108, 0x401008),
+        (112, 0xfe00),
+        (128, 28),
+        (132, 3),
+        (136, 4),
+        (140, 1),
+    ] {
+        put(&mut bytes, offset, value);
+    }
+    for face in 0..6_u8 {
+        bytes.extend([face; 16]);
+        bytes.extend([face + 16; 4]);
+    }
+    let cube = primase_dds::read_cube(&bytes).unwrap();
+    assert_eq!(cube.shape, primase_core::TextureShape::Cube { cubes: 1 });
+    assert_eq!(cube.levels[0], (0..6_u8).map(|f| vec![f; 16]).collect::<Vec<_>>());
+    assert_eq!(
+        cube.levels[1],
+        (0..6_u8).map(|f| vec![f + 16; 4]).collect::<Vec<_>>()
+    );
+    let mut array = bytes.clone();
+    put(&mut array, 140, 2);
+    assert!(primase_dds::read_cube(&array).is_err());
+    assert!(primase_dds::read_cube(&bytes[..bytes.len() - 1]).is_err());
+}

@@ -375,3 +375,71 @@ pub fn write_dx10(t: &Texture) -> Result<Vec<u8>> {
     }
     Ok(b)
 }
+
+/// Read one DX10 cube, preserving all six faces and its stored mip chain.
+/// DDS stores all mips of each face consecutively; core stores all faces of each mip.
+pub fn read_cube(bytes: &[u8]) -> Result<primase_core::TextureLayers> {
+    use primase_core::{TextureLayers, TextureShape};
+    if bytes.get(..4) != Some(b"DDS ") || word(bytes, 4)? != 124 || word(bytes, 76)? != 32 {
+        return Err(invalid(0, "invalid DDS header"));
+    }
+    if word(bytes, 8)? & 0x1007 != 0x1007
+        || word(bytes, 80)? & FOURCC == 0
+        || bytes.get(84..88) != Some(b"DX10")
+    {
+        return Err(Error::Unsupported("cube without a DX10 texture header".into()));
+    }
+    if word(bytes, 132)? != 3 || word(bytes, 136)? != 4 || word(bytes, 140)? != 1 {
+        return Err(invalid(132, "expected one 2D cube resource"));
+    }
+    if word(bytes, 144)? != 0 || word(bytes, 112)? & 0xfe00 != 0xfe00 {
+        return Err(invalid(
+            112,
+            "cube needs all six faces and no alpha-mode metadata",
+        ));
+    }
+    let (width, height, mips) = (word(bytes, 16)?, word(bytes, 12)?, word(bytes, 28)?.max(1));
+    dimensions(width, height, mips)?;
+    if width != height {
+        return Err(invalid(12, "cube faces are not square"));
+    }
+    let (format, color_space) = from_dxgi(word(bytes, 128)?)?;
+    let mut levels = vec![Vec::with_capacity(6); mips as usize];
+    if word(bytes, 8)? & 8 != 0
+        && u64::from(word(bytes, 20)?) != u64::from(width) * u64::from(format.block_bytes())
+    {
+        return Err(invalid(20, "padded or inconsistent cube row pitch"));
+    }
+    if word(bytes, 8)? & 0x80000 != 0 && word(bytes, 20)? as usize != size(format, width, height)? {
+        return Err(invalid(20, "inconsistent cube top-level linear size"));
+    }
+    let mut at: usize = 148;
+    for _ in 0..6 {
+        for (mip, faces) in levels.iter_mut().enumerate() {
+            let length = size(format, (width >> mip).max(1), (height >> mip).max(1))?;
+            let end = at
+                .checked_add(length)
+                .ok_or_else(|| invalid(at, "cube size overflow"))?;
+            faces.push(
+                bytes
+                    .get(at..end)
+                    .ok_or_else(|| invalid(at, "truncated cube face/mip"))?
+                    .to_vec(),
+            );
+            at = end;
+        }
+    }
+    if at != bytes.len() {
+        return Err(invalid(at, "trailing bytes after cube face/mip payloads"));
+    }
+    Ok(TextureLayers {
+        shape: TextureShape::Cube { cubes: 1 },
+        width,
+        height,
+        format,
+        levels,
+        color_space,
+        role: TexRole::Other,
+        normal: None,
+    })
+}

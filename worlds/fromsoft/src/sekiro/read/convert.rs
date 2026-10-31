@@ -25,6 +25,9 @@ use fromsoft_formats::dcx::Decoder;
 pub const EMITTED_NAMES: &[&str] = &[
     "core.condition",
     "core.instance",
+    "core.content_note",
+    "core.irradiance_volume",
+    "core.reflection_probe_region",
     "core.texture_layers",
     "core.name",
     "core.render_graph",
@@ -83,7 +86,15 @@ pub fn emitted_names(options: &Options) -> Vec<&'static str> {
         })
         .filter(|name| !matches!(*name, "core.render_graph" | "core.shader") || options.render_graph)
         .filter(|name| {
-            !matches!(*name, "core.texture_layers" | "fromsoft.irradiance_region") || options.irradiance
+            !matches!(*name, "core.texture_layers" | "fromsoft.irradiance_region")
+                || options.irradiance
+                || options.environment.is_some()
+        })
+        .filter(|name| {
+            !matches!(
+                *name,
+                "core.content_note" | "core.irradiance_volume" | "core.reflection_probe_region"
+            ) || options.environment.is_some()
         })
         .collect()
 }
@@ -118,6 +129,26 @@ impl<'a> AreaReader<'a> {
     fn record(&mut self, r: &super::area::Report) -> Report {
         self.pending.extend(r.notices());
         let mut report = Report::new();
+        if let Some(environment) = &r.environment {
+            report.push((
+                "environment probes".into(),
+                serde_json::to_string(environment).expect("environment report"),
+            ));
+            if let Some(selection) = environment.selection {
+                self.pending.push(Notice::new(
+                    "fromsoft reader",
+                    primase_core::convert::NoticeKind::Selection,
+                    selection.notice(),
+                    1,
+                ));
+            }
+            self.pending.push(Notice::new("fromsoft reader", primase_core::convert::NoticeKind::Approximation,
+                "environment box-to-group association inferred from 55 capture-verified Elden Ring 2.7.2.0 joins; signed type-data +0x0a override, otherwise parsed Env_Box name", environment.boxes as u64));
+            if environment.unresolved_captured_boxes != 0 {
+                self.pending.push(Notice::new("fromsoft reader", primase_core::convert::NoticeKind::Unsupported,
+                    "captured environment box frame 6993 sequence 1897 has no installed association and is not reconstructed", environment.unresolved_captured_boxes as u64));
+            }
+        }
         if let Some(weather) = &r.weather {
             report.push((
                 "elden weather".into(),
