@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// The caller explicitly requests the full chain, retaining prefetch as source
 /// data and using it when no full copy exists. No copy is dropped by this choice.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TexturePreference {
     FullChainThenPrefetch,
 }
@@ -45,6 +45,12 @@ pub struct MaterialReport {
     pub unavailable_textures: BTreeSet<String>,
     pub unavailable_pixels: BTreeSet<String>,
     pub unavailable_programs: BTreeSet<String>,
+    /// The caller's texture copy preference, once an attach applied it.
+    pub preference: Option<TexturePreference>,
+    /// Of `texture_paths`, those whose preferred copy is a full mip chain (its first mip is 0) and those whose is a
+    /// copy without the top mips (a prefetch copy, the path's finest packaged one).
+    pub preferred_full: usize,
+    pub preferred_partial: usize,
 }
 
 impl MaterialReport {
@@ -62,6 +68,17 @@ impl MaterialReport {
                 self.copies
             ),
         )];
+        if let Some(preference) = self.preference {
+            lines.push((
+                "shred texture copy preference".into(),
+                format!(
+                    "{preference:?} (the caller's): {} texture paths draw a full mip chain, {} a copy without its top                      mips (no full copy packaged), {} no copy with pixels; every packaged copy is kept and decoded",
+                    self.preferred_full,
+                    self.preferred_partial,
+                    self.unavailable_pixels.len()
+                ),
+            ));
+        }
         for (id, candidates) in &self.unresolved_materials {
             lines.push((
                 "shred unresolved material".into(),
@@ -249,6 +266,7 @@ impl<'a> MaterialLibrary<'a> {
                 }
             }
         }
+        report.preference = Some(preference);
         let preferred = match preference {
             TexturePreference::FullChainThenPrefetch => copies
                 .iter()
@@ -258,8 +276,12 @@ impl<'a> MaterialLibrary<'a> {
                 .map(|(i, _)| i),
         };
         let entity = world.spawn();
-        if preferred.is_none() {
-            report.unavailable_pixels.insert(path.into());
+        match preferred.map(|i| copies[i].first_mip) {
+            None => {
+                report.unavailable_pixels.insert(path.into());
+            }
+            Some(0) => report.preferred_full += 1,
+            Some(_) => report.preferred_partial += 1,
         }
         report.texture_paths += 1;
         report.copies += copies.len();

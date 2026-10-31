@@ -351,6 +351,8 @@ found is the Lua binding `set_occluder_enabled`.
 existing material entities. `banks` is MATERIALS.PAK; `assets` supplies additional archives, alongside the
 geometry PAKs already given to the reader. `textures: TexturePreference::FullChainThenPrefetch` explicitly
 requests the full mip chain where present and a prefetch tail otherwise. Every packaged copy remains data.
+Every copy with pixels is decoded; the preference only marks which one a path draws, and the report line
+`shred texture copy preference` states it with how many paths draw a full chain, a copy without its top mips, or none.
 The geometry-only constructor remains available and reports that material inputs were not supplied.
 
 `read::material_join::MaterialLibrary` also exposes the source join directly. It reads all three MBP/MDP
