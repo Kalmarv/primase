@@ -70,6 +70,43 @@ impl ReadScopeSpec {
     }
 }
 
+/// A combination of scope choices a reader's crate offers by name: hand-picked and labelled so, with what is known of
+/// why. Nothing applies it: a caller names the preset it wants, and the choices are then the caller's, stated.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct ReadPreset {
+    /// The preset's name, stable within its reader.
+    pub name: &'static str,
+    /// The reader scope ([`ReadScopeSpec::name`]) whose options it states.
+    pub reader: &'static str,
+    /// Option and value, each an option the scope declares and a value it accepts.
+    pub choices: &'static [(&'static str, &'static str)],
+    /// What the choices are and the evidence for them, saying where they are observed and where only picked.
+    pub note: &'static str,
+}
+
+impl ReadPreset {
+    /// The choices as options, checked against `spec`'s declarations.
+    pub fn options(&self, spec: &ReadScopeSpec) -> Result<Options, String> {
+        if spec.name != self.reader {
+            return Err(format!(
+                "preset {} belongs to the {} scope, not {}",
+                self.name, self.reader, spec.name
+            ));
+        }
+        let options: Options = self
+            .choices
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect();
+        for key in options.keys() {
+            if !spec.options.iter().any(|item| item.key() == key) {
+                return Err(format!("preset {} states undeclared option {key}", self.name));
+            }
+        }
+        Ok(options)
+    }
+}
+
 /// Metadata for a source candidate the caller's scope did not load.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct UnloadedAlternative {
