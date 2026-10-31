@@ -1,7 +1,7 @@
 # regression census of primase-fromsoft (tests/regression_census.rs): world.field=count
 # replace this file in the commit that changes any number, with the reason in the message
-elden-c3000.buffers.pixel.Unknown: g_LightIndices: a buffer of the renderer's own a material binding does not state=2
-elden-c3000.buffers.pixel.Unknown: g_LightLookupBuffer: a buffer of the renderer's own a material binding does not state=2
+elden-c3000.buffers.pixel.the light lists' indices=2
+elden-c3000.buffers.pixel.the light lists' lookup=2
 elden-c3000.buffers.pixel.the scene's lights, Point=2
 elden-c3000.buffers.pixel.the scene's lights, Spot=2
 elden-c3000.constants.pixel.AlphaReference=5
@@ -11,6 +11,8 @@ elden-c3000.constants.pixel.Frame(DirectionToLight)=4
 elden-c3000.constants.pixel.Frame(Exposure)=5
 elden-c3000.constants.pixel.Frame(InverseExposure)=5
 elden-c3000.constants.pixel.Frame(InversePreExposure)=5
+elden-c3000.constants.pixel.Frame(LightTileSize)=5
+elden-c3000.constants.pixel.Frame(LightTilesPerRow)=5
 elden-c3000.constants.pixel.Frame(PreExposure)=5
 elden-c3000.constants.pixel.Frame(Time)=2
 elden-c3000.constants.pixel.Frame(TimeOfDay)=2
@@ -84,6 +86,7 @@ elden-c3000.log.bake-fromsoft-materials.approximation.program bake follows nativ
 elden-c3000.log.bake-fromsoft-materials.approximation.program bake refused; lowered material retained: no albedo output role: scene-dependent Colour (frame, view, object or raster inputs); porta=2
 elden-c3000.log.bake-fromsoft-materials.approximation.program bake refused; lowered material retained: vertex binding at NxN: input TANGENTN has no value to run on: Stream(Tangent(N))=3
 elden-c3000.log.bake-fromsoft-materials.approximation.program baked to PBR textures at N px: static flat tangent frame and white vertex colour; secondary UV sets replaced by UVN; base-mip biline=28
+elden-c3000.log.bake-fromsoft-materials.approximation.scene lights off in the bake: light counts frozen to zero, the light-list tile to N pixels and one per row, the lists empty=3
 elden-c3000.log.bake-fromsoft-materials.approximation.skinning palette frozen to the identity (bind pose); the pixel inputs do not depend on the pose=28
 elden-c3000.log.bake-fromsoft-materials.approximation.static flat tangent frame, white vertex colour and coincident UV sets=28
 elden-c3000.log.bake-fromsoft-materials.approximation.texture scroll frozen to the identity: N,N layered draws in a Sekiro capture all identity; animated models unobserved=28
