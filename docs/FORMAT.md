@@ -194,6 +194,27 @@ full weight inside. `diffuse_scale` is finite and nonnegative. Regions blend in 
 order follows the source entity order. Package selection is a separate state condition.
 No exposure, presentation probe or render-target quantization is part of this component.
 
+## Reflection probe regions
+
+`core.reflection_probe_region` belongs to an entity with a finite nonsingular `core.transform`,
+mapping the unit box `[-1,1]` into world metres. It retains positive metric `half_extents`,
+nonnegative `fade_distance`, increasing `priority`, the world `reflection_origin`, and an
+optional nonsingular `parallax_from_region` box transform. No parallax box means sampling
+the reflection direction directly.
+
+Its explicit `blend` retains `state_a`, `state_b` and finite `factor` in `[0,1]`. Each
+state references one square linear `core.texture_layers` cube and optionally an existing
+`core.irradiance_volume` entity, plus nonnegative radiance `intensity` and a `mip_policy`:
+either a fixed LOD or a linear perceptual-roughness mapping onto a stated inclusive LOD
+interval within the stored chain. These references participate in entity closure.
+
+Blend sampled linear radiance and decoded irradiance as `A + (B - A) * factor`;
+retain both inputs when executing source programs that perform the blend themselves.
+Any generated cube chain belongs to the render graph, not this stored-state component.
+The linked diffuse volumes are states of the region, so a consumer drawing probe regions
+excludes their linked volumes from independent irradiance accumulation. Source state IDs,
+clock selection and quality-tier selection are outside this generic representation.
+
 ## Lights as a program reads them
 
 | Name | Kind | Fields | Invariants |

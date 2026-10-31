@@ -34,6 +34,7 @@ use crate::pbr::PbrMaterial;
 use crate::primitive_keys::PrimitiveKeys;
 use crate::priority::Priority;
 use crate::provenance::Provenance;
+use crate::reflection_probe::ReflectionProbeRegion;
 use crate::render_graph::RenderGraph;
 use crate::rig::{
     Attachment, JointMap, JointPlacement, MorphWeights, RigInstance, RigPose, SkinInstance, Sockets,
@@ -83,7 +84,7 @@ declared! {
         RigPose, SkinInstance, MorphWeights, Sockets, Attachment, JointMap, JointPlacement, Clip, ClipBinding, Asset, Shader, ShaderBinding, LiftedShader, ShaderSpecialisations,
         TextureLayers, MaterialPrograms, ProgramFacts, ClipKey, ClipLength, ClipEvents, ClipEffects, Controller, ControllerBinding,
         DrawGroups, DrawGroupDefaults, ContentNote, Record, DisplayName, PrimitiveKeys, MaterialParameters, SkyAnchor,
-        ParticleSystem, IrradianceVolume, StepBindings, StepDraws;
+        ParticleSystem, IrradianceVolume, ReflectionProbeRegion, StepBindings, StepDraws;
     resources: PartScope, PartitionPlan, Environment, Atmosphere, StateAssignment, Surfaces, Threads, Memo, RenderGraph,
         LightUnit, DirectionalLightUnit, TimeOfDay, TextureSwitchView,
 }
