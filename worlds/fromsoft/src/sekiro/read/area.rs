@@ -1942,7 +1942,7 @@ pub fn read_game_area_staged(
     if let Some(inputs) = state_inputs.as_mut()
         && let Some(plan) = sky_plan.as_ref()
     {
-        inputs.sky_values = plan.values.clone();
+        inputs.sky_values = Some(plan.values.clone());
         inputs.domes = plan
             .parts
             .iter()

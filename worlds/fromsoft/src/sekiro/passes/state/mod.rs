@@ -246,7 +246,7 @@ impl Pass for ResolveFromSoftState {
                 sky: None,
                 assignments: BTreeMap::new(),
             };
-            if !inputs.sky_values.is_empty() {
+            if let Some(values) = &inputs.sky_values {
                 let masks = inputs
                     .domes
                     .iter()
@@ -257,7 +257,7 @@ impl Pass for ResolveFromSoftState {
                     })
                     .map(|d| d.mask)
                     .collect::<Vec<_>>();
-                report.sky = Some(world_state::selected_sky(&inputs.sky_values, &masks)?);
+                report.sky = Some(world_state::selected_sky(values, &masks)?);
             }
             if let Some(sub) = report.selection.gparam_sub_ids.get(&inputs.area[..6])
                 && let Some(base) = world.resource::<DrawParam>()

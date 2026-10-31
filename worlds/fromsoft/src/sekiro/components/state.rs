@@ -44,7 +44,8 @@ pub struct StateInputs {
     pub area: String,
     pub weather: Option<WeatherParam>,
     pub common: Option<CommonState>,
-    pub sky_values: Vec<String>,
+    /// None if no sky plan was read; Some(empty) retains an empty, present plan.
+    pub sky_values: Option<Vec<String>>,
     pub domes: Vec<DomeMembership>,
     /// Every available area file, including named read failures. No event has picked one.
     pub draw_params: BTreeMap<String, Result<DrawParam, String>>,
@@ -60,7 +61,7 @@ impl StateInputs {
             area,
             weather: None,
             common: None,
-            sky_values: Vec::new(),
+            sky_values: None,
             domes: Vec::new(),
             draw_params: BTreeMap::new(),
             draw_param_bytes: 0,
