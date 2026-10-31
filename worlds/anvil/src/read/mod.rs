@@ -11,6 +11,7 @@ pub mod meshes;
 pub mod overview;
 pub mod placements;
 pub mod rider;
+pub mod scope;
 pub mod shapes;
 pub mod sky;
 pub mod terrain;
