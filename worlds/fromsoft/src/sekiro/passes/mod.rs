@@ -10,6 +10,7 @@ pub mod bake;
 pub(super) mod bake_assembly;
 pub mod bake_materials;
 pub mod blockers;
+pub mod catalog;
 pub mod collision;
 pub mod detail;
 pub mod draw_params;
@@ -110,6 +111,7 @@ pub fn register(registry: &mut PassRegistry) {
         &state::RESOLVE_FROMSOFT_STATE,
         &draw_params::SAMPLE_FROMSOFT_DRAW_PARAMS,
         &environment::LOWER_FROMSOFT_ENVIRONMENT,
+        &catalog::MATERIALIZE_FROMSOFT_CATALOG,
         &environment_probes::SELECT_ELDEN_RING_ENVIRONMENT,
         &environment_probes::LOWER_ELDEN_RING_ENVIRONMENT_PROBES,
         &environment_probes::BIND_FROMSOFT_ENVIRONMENT_PROBES,
