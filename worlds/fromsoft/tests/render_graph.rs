@@ -26,7 +26,9 @@ use iridia_interface::{
 use primase_core::render_graph::{
     PassWork, Presence, RenderGraph, RenderPass, SceneMembers, ScenePlacements,
 };
-use primase_core::shader::{InputRole, ScreenTriangleValue, Shader, StageBinding};
+use primase_core::shader::{
+    ConstantRole, InputRole, ScreenTriangleValue, Shader, StageBinding, ViewParameter,
+};
 use primase_core::{DrawLayer, DrawOrder, Resource, StepBindings, StepProgram, World};
 use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::sekiro;
@@ -627,6 +629,49 @@ fn screen_triangle_inputs(graph: &RenderGraph) -> usize {
     n
 }
 
+/// The installed deferred sun's camera aliases carry both their generic value and the matrix lines its code reads.
+fn sun_camera_inputs(graph: &RenderGraph, world: &World) {
+    let mut stages = Vec::new();
+    graph_stages(&graph.passes, &mut stages);
+    let mut checked = 0;
+    for stage in stages {
+        let (name, interface) = program_of(world, &stage);
+        if !name.ends_with("/GXLightAcc_DDirLightShadowed1.ppo") {
+            continue;
+        }
+        for (alias, expected) in [
+            ("g_InvProjMatrix", ViewParameter::InverseProjection),
+            ("g_CameraMatrix", ViewParameter::InverseView),
+        ] {
+            let binding = stage
+                .constants
+                .iter()
+                .find(|c| {
+                    c.name.as_deref() == Some(alias)
+                        && interface
+                            .resource(c.resource)
+                            .is_some_and(|r| r.provenance.name == "cbLightAccParam")
+                })
+                .unwrap_or_else(|| panic!("{name}: missing {alias}"));
+            assert_eq!(binding.role, ConstantRole::View(expected), "{name}: {alias}");
+            assert_eq!(binding.size, 64, "{name}: {alias}");
+            assert!(
+                matches!(
+                    binding.lines,
+                    Some(iridia_interface::MatrixLines::Rows | iridia_interface::MatrixLines::Columns)
+                ),
+                "{name}: {alias} lines {:?}",
+                binding.lines
+            );
+            checked += 1;
+        }
+    }
+    assert!(
+        checked >= 2,
+        "no installed deferred sun's camera inputs were checked"
+    );
+}
+
 #[test]
 fn sekiros_render_graph_is_its_recorded_frames() -> Result<(), Box<dyn std::error::Error>> {
     let Some(root) = install(Game::Sekiro) else {
@@ -645,6 +690,7 @@ fn sekiros_render_graph_is_its_recorded_frames() -> Result<(), Box<dyn std::erro
     };
     let (world, report) = read_and_verify(&install, "m11_01", [-170.0, 180.0, -50.0, 300.0], &decoder)?;
     let graph = world.resource::<RenderGraph>().unwrap();
+    sun_camera_inputs(graph, &world);
     // nine frames of four sessions at 1920 x 1080; the picture the last tone map's RGB10A2 target
     assert_eq!(
         (report.render_graph.frames, report.render_graph.view),
@@ -859,6 +905,7 @@ fn elden_rings_render_graph_is_its_recorded_frames() -> Result<(), Box<dyn std::
     };
     let (world, report) = read_and_verify(&install, "m60_42_36_00", [-10.0, -10.0, 10.0, 10.0], &decoder)?;
     let graph = world.resource::<RenderGraph>().unwrap();
+    sun_camera_inputs(graph, &world);
     assert_eq!(
         (report.render_graph.frames, report.render_graph.view),
         (7, [2560, 1440])

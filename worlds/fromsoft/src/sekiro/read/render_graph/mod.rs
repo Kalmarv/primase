@@ -691,14 +691,18 @@ fn render_state(s: &table::State, targets: usize) -> std::result::Result<iri::Re
 
 /// The engine's named constants `core` has a role for, as the materials' bindings name them
 /// ([`crate::layer_bake::resolve::engine_role`]: the camera's matrices and position, the time, the time of day,
-/// the pre-exposure and its inverse), and `cbLightAccParam`'s own name for the view matrix. `FC_ScreenSize` is its own
-/// (two roles). Every other constant is unknown, with its buffer's name.
-fn constant_role(name: &str) -> Option<ConstantRole> {
-    match name {
+/// the pre-exposure and its inverse), and the light accumulator's camera matrices. Elden Ring's deferred sun binds
+/// `cbLightAccParam.g_InvProjMatrix` and `g_CameraMatrix` byte for byte as `cbSceneParam.FC_MatrixInvProj` and
+/// `FC_MatrixInvView` in the recorded Stormveil frame. These aliases belong to that buffer, not any field of the same
+/// name. `FC_ScreenSize` is its own (two roles). Every other constant is unknown, with its buffer's name.
+fn constant_role(buffer: &str, name: &str) -> Option<ConstantRole> {
+    match (buffer, name) {
+        ("cbLightAccParam", "g_InvProjMatrix") => Some(ConstantRole::View(ViewParameter::InverseProjection)),
+        ("cbLightAccParam", "g_CameraMatrix") => Some(ConstantRole::View(ViewParameter::InverseView)),
         // cbLightAccParam's world-to-view matrix (three lines): the light-organize program turns each light's
         // position by it before testing it against the tiles
-        "g_ViewMatrix" => Some(ConstantRole::View(ViewParameter::View)),
-        name => crate::layer_bake::resolve::engine_role(name),
+        (_, "g_ViewMatrix") => Some(ConstantRole::View(ViewParameter::View)),
+        (_, name) => crate::layer_bake::resolve::engine_role(name),
     }
 }
 
@@ -1237,15 +1241,17 @@ impl Lower<'_> {
                 let counted = lights::frame_constant(self.game, &c.name)
                     .filter(|_| size == 4)
                     .map(ConstantRole::Frame);
-                let role = counted.or_else(|| constant_role(&c.name)).unwrap_or_else(|| {
-                    report.unknown_constants = report.unknown_constants.saturating_add(1);
-                    ConstantRole::Unknown {
-                        why: format!(
-                            "{}.{}: the {:?} renderer's own value, which no core role states",
-                            r.provenance.name, c.name, self.game
-                        ),
-                    }
-                });
+                let role = counted
+                    .or_else(|| constant_role(&r.provenance.name, &c.name))
+                    .unwrap_or_else(|| {
+                        report.unknown_constants = report.unknown_constants.saturating_add(1);
+                        ConstantRole::Unknown {
+                            why: format!(
+                                "{}.{}: the {:?} renderer's own value, which no core role states",
+                                r.provenance.name, c.name, self.game
+                            ),
+                        }
+                    });
                 report.constants = report.constants.saturating_add(1);
                 out.push(ConstantBinding {
                     resource: r.id,
@@ -1268,6 +1274,21 @@ impl Lower<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A similarly named field outside the light accumulator is not evidence of a camera matrix.
+    #[test]
+    fn light_camera_aliases_are_scoped_to_their_buffer() {
+        for (name, parameter) in [
+            ("g_InvProjMatrix", ViewParameter::InverseProjection),
+            ("g_CameraMatrix", ViewParameter::InverseView),
+        ] {
+            assert_eq!(
+                constant_role("cbLightAccParam", name),
+                Some(ConstantRole::View(parameter))
+            );
+            assert_eq!(constant_role("cbUnresolved", name), None);
+        }
+    }
 
     /// Both games' tables parse, every step's targets and buffers are the table's, and the picture is a target.
     #[test]
