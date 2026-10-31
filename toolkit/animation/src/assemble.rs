@@ -406,11 +406,12 @@ fn add_reference(parts: &mut Vec<Part>, w: &World) -> Result<Option<usize>, Stri
         .iter()
         .filter_map(|p| w.get::<AssemblyReference>(p.rig).map(|r| r.skeleton))
         .collect();
-    let reference = match references.len() {
-        0 => return Ok(None),
-        1 => *references.first().unwrap(),
-        _ => return Err("parts state different assembly reference skeletons".into()),
+    let Some(&reference) = references.first() else {
+        return Ok(None);
     };
+    if references.len() != 1 {
+        return Err("parts state different assembly reference skeletons".into());
+    }
     if parts.iter().any(|p| p.rig == reference) {
         return Err("assembly reference is also a drawable part's rig".into());
     }
