@@ -251,6 +251,7 @@ pub fn read_models<'a>(
     decoder: Decoder<'a>,
     request: ModelReadRequest,
 ) -> Result<ModelRead<'a>> {
+    let scope = loading_scope(&request.asset, request.animations.as_ref(), request.clip_effects)?;
     let ModelReadRequest {
         asset,
         animations,
@@ -278,6 +279,7 @@ pub fn read_models<'a>(
             world.insert(entity, Name(name));
             world.insert(entity, texture);
         }
+        scope.record_in(&mut world);
         return Ok(ModelRead {
             world,
             report: vec![],
@@ -326,8 +328,10 @@ pub fn read_models<'a>(
     if !weapons.is_empty() && !weapons_only {
         reader = reader.with_equipped_weapons(weapons);
     }
-    let (world, report) = reader.read()?;
-    let notices = reader.notices();
+    let (mut world, report) = reader.read()?;
+    scope.record_in(&mut world);
+    let mut notices = reader.notices();
+    notices.push(scope.notice());
     let held = world
         .iter::<crate::sekiro::effect_data::HeldWeapon>()
         .filter_map(|(root, _)| world.get::<primase_core::Source>(root).map(|s| s.0.clone()))
@@ -717,4 +721,70 @@ pub fn game_key(game: fromsoft_formats::Game) -> &'static str {
         fromsoft_formats::Game::Sekiro => "sekiro",
         fromsoft_formats::Game::EldenRing => "elden",
     }
+}
+
+/// Public loading scope. Sampling, absent-track interpretation and root motion are pass settings, not read defaults.
+pub static CHARACTER_SCOPE: primase_core::read_scope::ReadScopeSpec =
+    primase_core::read_scope::ReadScopeSpec {
+        name: "fromsoft-character",
+        options: &[
+            primase_core::pass::OptionSpec::optional_choice::<bool>(
+                "animations",
+                "list animation plans without decoding tracks",
+                "no animation family requested",
+            ),
+            primase_core::pass::OptionSpec::optional_choice::<bool>(
+                "effects",
+                "read event-referenced effects when a selected clip is loaded",
+                "no effect payloads requested",
+            ),
+        ],
+    };
+/// Caller-selected part forms and animation family; absent family means no animations, never the player by default.
+pub static PARTS_SCOPE: primase_core::read_scope::ReadScopeSpec = primase_core::read_scope::ReadScopeSpec {
+    name: "fromsoft-parts",
+    options: &[
+        primase_core::pass::OptionSpec::optional(
+            "animations_of",
+            "c0000",
+            "the explicitly named animation family",
+            "no animation family requested",
+        ),
+        primase_core::pass::OptionSpec::optional(
+            "form",
+            "wp_a_0761_l",
+            "one explicitly requested form",
+            "all forms remain candidates",
+        ),
+        primase_core::pass::OptionSpec::optional_choice::<bool>(
+            "effects",
+            "read event-referenced effects when a selected clip is loaded",
+            "no effect payloads requested",
+        ),
+    ],
+};
+
+fn loading_scope(
+    asset: &StandaloneAsset,
+    animations: Option<&AnimationScope>,
+    effects: bool,
+) -> Result<primase_core::read_scope::ReadScope> {
+    use primase_core::pass::Options;
+    let mut options = Options::from([("effects".into(), effects.to_string())]);
+    let spec = match asset {
+        StandaloneAsset::Character(_) => {
+            options.insert("animations".into(), animations.is_some().to_string());
+            &CHARACTER_SCOPE
+        }
+        _ => {
+            if let Some(a) = animations {
+                options.insert("animations_of".into(), a.of.clone());
+            }
+            if let StandaloneAsset::Form { form, .. } = asset {
+                options.insert("form".into(), form.clone());
+            }
+            &PARTS_SCOPE
+        }
+    };
+    spec.resolve(options).map_err(Into::into)
 }
