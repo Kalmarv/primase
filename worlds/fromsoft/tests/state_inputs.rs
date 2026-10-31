@@ -98,7 +98,8 @@ fn the_common_state_scope_keeps_every_candidate_before_the_pass_selects()
     let pipeline = registry.parse(&pipeline.to_string())?;
     assert_eq!(pipeline.passes[0].options(), options);
     let manager = PassManager::new(registry);
-    manager.run(&mut world, &pipeline, &mut RunReport::default())?;
+    let mut report = RunReport::default();
+    manager.run(&mut world, &pipeline, &mut report)?;
     assert_eq!(world.resource::<DrawParam>().unwrap().file, "m11_01_0020");
     assert_eq!(world.resource::<StateInputs>().unwrap().to_json()?, before);
     let state = world
@@ -109,6 +110,10 @@ fn the_common_state_scope_keeps_every_candidate_before_the_pass_selects()
         .unwrap();
     assert_eq!(state.selection.envmap, Some(4));
     assert_eq!(state.selection.gparam_sub_ids.get("m11_01"), Some(&20));
+    assert_eq!(
+        report.steps[0].log.details["common event state"],
+        [primase_core::json::to_value(state)?]
+    );
     // An empty plan is different from no sky read: preserve the original named refusal.
     world.resource_mut::<StateInputs>().unwrap().sky_values = Some(Vec::new());
     let error = manager

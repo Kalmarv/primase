@@ -301,10 +301,18 @@ impl Pass for ResolveFromSoftState {
                 log.omit(&format!("named wetness retained as fromsoft.wetness; WeatherBase environment composition and surface wetting are not yet applied: {}", wetness.name), 1);
             }
             log.count("named weather snapshots resolved", 1);
+            log.detail(
+                "weather",
+                primase_core::json::to_value(report).map_err(|e| e.to_string())?,
+            );
         }
         if let Some(report) = &mut resolved.world_state {
             world_state::assign(world, &area, report)?;
             log.count("named common-event flag snapshots resolved", 1);
+            log.detail(
+                "common event state",
+                primase_core::json::to_value(report).map_err(|e| e.to_string())?,
+            );
         }
         if let Some(draw_param) = draw_param {
             world.insert_resource(draw_param);

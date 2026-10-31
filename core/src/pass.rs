@@ -76,11 +76,21 @@ pub struct PassLog {
     /// What the pass left out on purpose, by measure and reason (`placements in an interior left out`); a conversion
     /// reports each as a selection notice ([`crate::ledger`]).
     pub drops: BTreeMap<(Measure, String), u64>,
+    /// Display-only structured explanations that the typed selections/exclusions, approximations and counts cannot
+    /// express; prefer those typed entries first. A program may show these values generically, but must never parse
+    /// their fields or branch on their contents. A value needed for a decision belongs in a typed core field.
+    /// Repeated entries under one label retain their order when logs join. JSON reporters omit this field when empty.
+    pub details: BTreeMap<String, Vec<serde_json::Value>>,
 }
 
 impl PassLog {
     pub fn count(&mut self, what: &str, n: u64) {
         *self.counts.entry(what.to_owned()).or_default() += n;
+    }
+
+    /// Append a display-only explanation (see [`PassLog::details`]), without replacing an earlier explanation.
+    pub fn detail(&mut self, label: &str, value: serde_json::Value) {
+        self.details.entry(label.to_owned()).or_default().push(value);
     }
 
     /// Record that the pass removed component `name` from some entity (see [`PassLog::removed`]).
@@ -150,6 +160,7 @@ impl PassLog {
             placed,
             placed_from,
             drops,
+            details,
         } = other;
         for ((m, why), n) in drops {
             self.dropped(m, &why, n);
@@ -169,6 +180,9 @@ impl PassLog {
         self.removed.extend(removed);
         self.placed.extend(placed);
         self.placed_from.extend(placed_from);
+        for (label, entries) in details {
+            self.details.entry(label).or_default().extend(entries);
+        }
     }
 }
 
@@ -2666,6 +2680,7 @@ mod tests {
         log.count("kept", 1);
         log.approximate("rounded", 2);
         log.place(a);
+        log.detail("explanation", serde_json::json!({"input": 1, "why": "first"}));
         let mut other = PassLog::default();
         other.count("kept", 3);
         other.count("made", 1);
@@ -2674,6 +2689,8 @@ mod tests {
         other.record_removed("toy.hat");
         other.place_from(b, source);
         other.dropped(Measure::Placements, "left out", 2);
+        other.detail("explanation", serde_json::json!({"input": 2, "why": "second"}));
+        other.detail("additional", serde_json::json!(["nested", {"result": true}]));
         log.dropped(Measure::Placements, "left out", 1);
         log.absorb(other);
         assert_eq!(
@@ -2686,6 +2703,17 @@ mod tests {
         assert_eq!(log.placed, BTreeSet::from([a, b]));
         assert_eq!(log.placed_from, BTreeMap::from([(b, source)]));
         assert_eq!(log.declared(Measure::Placements), 3);
+        assert_eq!(
+            log.details["explanation"],
+            [
+                serde_json::json!({"input": 1, "why": "first"}),
+                serde_json::json!({"input": 2, "why": "second"}),
+            ]
+        );
+        assert_eq!(
+            log.details["additional"],
+            [serde_json::json!(["nested", {"result": true}])]
+        );
     }
 
     #[test]

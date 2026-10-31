@@ -1946,11 +1946,10 @@ pub fn read_game_area_staged(
         inputs.domes = plan
             .parts
             .iter()
-            .filter_map(|(&index, &(role, mask))| {
-                (role == source::SkyRole::Dome).then(|| source::DomeMembership {
-                    groups: placements[index].part.entity_group_ids.to_vec(),
-                    mask,
-                })
+            .filter(|(_, value)| value.0 == source::SkyRole::Dome)
+            .map(|(&index, &(_, mask))| source::DomeMembership {
+                groups: placements[index].part.entity_group_ids.to_vec(),
+                mask,
             })
             .collect();
     }
