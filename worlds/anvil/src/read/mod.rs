@@ -4,6 +4,7 @@ pub mod component_types;
 pub mod controller;
 pub mod convert;
 pub mod coverage;
+pub mod entry;
 pub mod gidyn;
 pub mod meshes;
 pub mod overview;
