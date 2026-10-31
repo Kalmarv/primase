@@ -38,16 +38,24 @@ pub enum CameraForm {
 /// Every constant of a buffer's layout, the members of a structure (the instance record, an array of them) by their own
 /// names at their own offsets in the first element: name, byte offset, type.
 pub(crate) fn flat_constants(layout: &BufferLayout) -> Vec<(String, u32, &ConstantType)> {
+    fn descend<'a>(
+        name: &str,
+        offset: u32,
+        ty: &'a ConstantType,
+        flat: &mut Vec<(String, u32, &'a ConstantType)>,
+    ) {
+        match ty.members() {
+            [] => flat.push((name.to_owned(), offset, ty)),
+            members => {
+                for member in members {
+                    descend(&member.name, offset + member.offset, &member.ty, flat);
+                }
+            }
+        }
+    }
     let mut flat = Vec::new();
     for c in &layout.constants {
-        match c.ty.members() {
-            [] => flat.push((c.name.clone(), c.offset, &c.ty)),
-            members => flat.extend(
-                members
-                    .iter()
-                    .map(|m| (m.name.clone(), c.offset + m.offset, &m.ty)),
-            ),
-        }
+        descend(&c.name, c.offset, &c.ty, &mut flat);
     }
     flat
 }
@@ -212,6 +220,41 @@ pub fn inputs_read(program: &Program) -> Result<BTreeSet<(String, u32)>, String>
 mod tests {
     use super::*;
     use iridia_interface::{Majorness, Value};
+
+    #[test]
+    fn nested_constant_members_keep_their_absolute_offsets() {
+        use iridia_interface::{Constant, Member};
+        let layout = BufferLayout {
+            size: 144,
+            constants: vec![Constant {
+                name: "VC_SpeedTreeWind".into(),
+                offset: 16,
+                ty: ConstantType::Array {
+                    count: 2,
+                    stride: 64,
+                    element: Box::new(ConstantType::Struct {
+                        members: vec![Member {
+                            name: "u_sGlobal".into(),
+                            offset: 32,
+                            ty: ConstantType::Struct {
+                                members: vec![Member {
+                                    name: "m_fSkip".into(),
+                                    offset: 4,
+                                    ty: ConstantType::Scalar(ScalarType::Float),
+                                }],
+                            },
+                        }],
+                    }),
+                },
+                default: None,
+            }],
+        };
+        assert_eq!(
+            flat_constants(&layout),
+            vec![("m_fSkip".to_owned(), 52, &ConstantType::Scalar(ScalarType::Float))],
+            "the first array element's nested leaf, including every enclosing offset"
+        );
+    }
 
     fn matrix(rows: u8, columns: u8, major: Majorness) -> ConstantType {
         ConstantType::Matrix {

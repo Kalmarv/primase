@@ -77,6 +77,41 @@ fn prepare(shader: &str, name: &str, code: &[u8]) -> Result<Prepared> {
         parameters: None,
     })?;
     let program = iridia_dxil::lift(code).map_err(|e| e.reason().to_string())?;
+    // The renderer obtains its wind-off byte through the resolver, unlike the independent
+    // execution below which places it directly at the program's observed row 3, lane y.
+    let mut world = primase_core::World::default();
+    let entity = world.spawn();
+    let binding = primase_fromsoft::layer_bake::resolve::resolve_vertex(
+        &primase_core::shader::Shader {
+            format: ShaderFormat::Dxil,
+            bytecode: code.to_vec(),
+            interface: program.interface.clone(),
+        },
+        entity,
+    )?;
+    let wind = binding
+        .stage
+        .constants
+        .iter()
+        .filter(|constant| {
+            constant.role
+                == primase_core::shader::ConstantRole::Object(primase_core::shader::ObjectParameter::WindOff)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(wind.len(), 1, "{name}: one resolved wind-off switch");
+    let layout = program
+        .interface
+        .resource(wind[0].resource)
+        .ok_or("wind resource missing")?;
+    let ResourceKind::ConstantBuffer { layout } = &layout.kind else {
+        return Err("wind switch is not a constant-buffer value".into());
+    };
+    let root = layout
+        .constants
+        .iter()
+        .find(|constant| constant.name == "VC_SpeedTreeWind")
+        .ok_or("wind structure missing")?;
+    assert_eq!((wind[0].offset, wind[0].size), (root.offset + 52, 4), "{name}");
     let exe = Executable::new(&program)?;
     let mut resources = Resources::default();
     for r in &program.interface.resources {
