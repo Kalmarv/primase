@@ -386,15 +386,7 @@ pub fn character_display_masks(world: &World) -> Vec<(Entity, Vec<Vec<u32>>)> {
 /// display-mask routine, read from the decrypted executable of build 1.06), so a one-digit `#5#`, a three-digit `#123#`
 /// and a `#` without a closing `#` mark nothing: three characters carry six one-digit materials (`c1210`, `c1400`,
 /// `c1550`: `#0#`, `#1#`, `#2#`, `#7#` to `#9#`) that no group controls.
-fn display_marks(material: &str) -> Vec<u32> {
-    let b = material.as_bytes();
-    (0..b.len().saturating_sub(3))
-        .filter(|&i| {
-            b[i] == b'#' && b[i + 1].is_ascii_digit() && b[i + 2].is_ascii_digit() && b[i + 3] == b'#'
-        })
-        .map(|i| u32::from(b[i + 1] - b'0') * 10 + u32::from(b[i + 2] - b'0'))
-        .collect()
-}
+fn display_marks(material:&str)->Vec<u32>{fromsoft_formats::flver::display_marks(material)}
 
 /// The level suffixes a part binder's name may end in after the part (`bd_m_9120_l`, `wp_a_0300_m`): of the part
 /// binders the dictionaries name, Sekiro's 164 end in `_l` (76), `_m` (12) or neither, Elden Ring's 3778 in `_l`

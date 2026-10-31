@@ -104,6 +104,7 @@ pub fn animation_target(asset: &StandaloneAsset) -> AnimationTarget {
     AnimationTarget { skeleton, tolerance }
 }
 /// A staged load retains identities borrowed from the prepared scene, including the selected target rig.
+#[derive(Debug)]
 pub struct StagedCharacterClip {
     pub world: World,
     pub borrowed: Vec<Entity>,
@@ -223,6 +224,7 @@ impl AnimationScope {
     }
 }
 /// The exact scope already selected by a program and its registered passes. No fallback is chosen in this reader.
+#[derive(Debug)]
 pub struct ModelReadRequest {
     pub asset: StandaloneAsset,
     pub animations: Option<AnimationScope>,
@@ -232,6 +234,7 @@ pub struct ModelReadRequest {
     pub weapon_parts: Vec<String>,
     pub clip_effects: bool,
 }
+#[derive(Debug)]
 pub struct ModelRead<'a> {
     pub world: World,
     pub report: Report,
@@ -395,4 +398,323 @@ pub fn read_selected_npc_stats(
     let archive = install.open()?;
     let stats = fromsoft_formats::game_params::read_npc_stats(install, &archive, decoder)?;
     Ok(stats.iter().find(|stats|stats.id==row).map(|stats|serde_json::json!({"row":row,"param":"NPC_PARAM_ST","fields":stats.fields().iter().map(|(name,value,unit)|serde_json::json!({"name":name,"value":value,"unit":unit})).collect::<Vec<_>>()})))
+}
+
+/// The source records which character families have authored part outfits. This is not a selected outfit.
+#[derive(Clone, Debug)]
+pub struct CharacterOutfitKind {
+    pub id: String,
+    pub player: bool,
+    pub npc_parts: bool,
+}
+impl Resource for CharacterOutfitKind {
+    const NAME: &'static str = "fromsoft.character_outfit_kind";
+}
+/// Read candidate metadata only. Empty families remain explicit resources so a program can state one pipeline.
+pub fn read_outfit_inventory(
+    install: &Install,
+    archive: &Archive,
+    decoder: &Decoder<'_>,
+    names: Option<&std::path::Path>,
+    id: &str,
+    npc: Option<i32>,
+) -> Result<World> {
+    use crate::sekiro::outfit_data::{InitializerOutfits, NpcOutfitRows};
+    let player = id == fromsoft_formats::equipment::PLAYER_CHARACTER && npc.is_none();
+    let (meshless, marks) = read_model_observations(archive, decoder, id)?;
+    let npc_parts = !player && install.game == fromsoft_formats::Game::Sekiro && meshless;
+    let initializers = if player {
+        read_player_inventory(install, archive, decoder)?
+    } else {
+        InitializerOutfits {
+            game: install.game,
+            rows: vec![],
+        }
+    };
+    let npcs = if npc_parts {
+        let names = names.ok_or_else(|| {
+            format!(
+                "{id} has no drawable character mesh; dressing its parts needs the game's map name dictionary"
+            )
+        })?;
+        let dictionary = fromsoft_formats::NameDictionary::read_for(names, install.game)?;
+        read_npc_inventory(install, archive, decoder, &dictionary, id, npc)?
+    } else {
+        NpcOutfitRows {
+            game: install.game,
+            rows: vec![],
+        }
+    };
+    let mut world = World::new();
+    world.insert_resource(CharacterOutfitKind {
+        id: id.into(),
+        player,
+        npc_parts,
+    });
+    world.insert_resource(initializers);
+    world.insert_resource(npcs);
+    world.insert_resource(dressing_inputs_from_marks(
+        install,
+        archive,
+        decoder,
+        if npc.is_none() { names } else { None },
+        id,
+        if player || npc_parts { vec![] } else { marks },
+    )?);
+    Ok(world)
+}
+/// Selected typed inputs and portable descriptive output for the standalone read.
+#[derive(Clone, Debug)]
+pub struct CharacterReadChoice {
+    pub player: Option<crate::sekiro::CharacterOutfit>,
+    pub npc: Option<crate::sekiro::outfit_data::SelectedNpcOutfit>,
+    pub report: serde_json::Value,
+    pub notices: Vec<Notice>,
+}
+impl Resource for CharacterReadChoice {
+    const NAME: &'static str = "fromsoft.character_read_choice";
+    fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, primase_core::JsonError> {
+        Ok(Some(self.report.clone()))
+    }
+}
+
+/// Stated raw loading families. Every selection remains a separately registered pass run by the program.
+#[derive(Debug)]
+pub struct InventoryRequest<'a> {
+    pub asset: &'a StandaloneAsset,
+    pub names: Option<&'a std::path::Path>,
+    pub npc: Option<i32>,
+    pub weapons: bool,
+    pub save: Option<(&'a std::path::Path, usize)>,
+    pub attack_of: Option<&'a str>,
+}
+pub fn read_inventory(
+    install: &Install,
+    decoder: Decoder<'_>,
+    request: InventoryRequest<'_>,
+) -> Result<World> {
+    use crate::sekiro::outfit_data::InitializerOutfits;
+    let archive = install.open()?;
+    let mut world = match request.asset {
+        StandaloneAsset::Character(id) => {
+            read_outfit_inventory(install, &archive, &decoder, request.names, id, request.npc)?
+        }
+        _ => {
+            let mut w = World::new();
+            w.insert_resource(InitializerOutfits {
+                game: install.game,
+                rows: vec![],
+            });
+            w
+        }
+    };
+    if request.weapons || request.save.is_some() {
+        world.insert_resource(read_weapon_inventory(install, &archive, &decoder)?);
+    }
+    if let Some((path, slot)) = request.save {
+        if install.game != fromsoft_formats::Game::EldenRing {
+            return Err("fromsoft-parts: save reads an Elden Ring save".into());
+        }
+        world.insert_resource(read_saved_player(path, slot)?);
+    }
+    if let Some(of) = request.attack_of {
+        let mut reader = CharacterReader::animations(install.clone(), of, decoder).with_attack_inputs();
+        let (plans, _) = reader.read()?;
+        world.absorb(plans)?;
+    }
+    Ok(world)
+}
+/// Explicit user choices accompanying a selected inventory; no source default is synthesized.
+#[derive(Debug)]
+pub struct SelectedModelRequest {
+    pub asset: StandaloneAsset,
+    pub animations: Option<AnimationScope>,
+    pub weapons: crate::sekiro::effect_data::EquippedWeapons,
+    pub grip: Option<String>,
+    pub clip_effects: bool,
+}
+#[derive(Debug)]
+pub struct SelectedModelRead<'a> {
+    pub models: ModelRead<'a>,
+    pub details: serde_json::Value,
+    pub grip: Option<String>,
+}
+pub fn read_selected_models<'a>(
+    install: Install,
+    decoder: Decoder<'a>,
+    selected: &World,
+    request: SelectedModelRequest,
+) -> Result<SelectedModelRead<'a>> {
+    use crate::sekiro::attack_clip::AttackSelection;
+    let mut animations = request.animations;
+    if let (Some(plan), Some(attack)) = (&mut animations, selected.resource::<AttackSelection>()) {
+        plan.clips = attack.choice.animation.clone();
+    }
+    let saved = selected.resource::<SelectedSavedHold>();
+    let weapons = saved.map_or(request.weapons, |saved| saved.state.held());
+    let grip = saved
+        .map(|saved| {
+            match saved.state.grip() {
+                crate::sekiro::passes::weapons::Grip::OneHanded => "one-handed",
+                crate::sekiro::passes::weapons::Grip::TwoHandedRight => "two-handed-right",
+                crate::sekiro::passes::weapons::Grip::TwoHandedLeft => "two-handed-left",
+            }
+            .to_owned()
+        })
+        .or(request.grip);
+    let parts = if weapons.is_empty() {
+        vec![]
+    } else {
+        selected_weapon_parts(
+            selected
+                .resource::<SelectedWeaponForms>()
+                .ok_or("weapons need select-fromsoft-weapon-forms")?,
+            &weapons,
+        )?
+    };
+    let choice = selected.resource::<CharacterReadChoice>();
+    let mut models = read_models(
+        install,
+        decoder,
+        ModelReadRequest {
+            asset: request.asset,
+            animations,
+            player_outfit: choice.and_then(|c| c.player.clone()),
+            npc_outfit: choice.and_then(|c| c.npc.clone()),
+            weapons,
+            weapon_parts: parts,
+            clip_effects: request.clip_effects,
+        },
+    )?;
+    if let Some(input) = selected.resource::<crate::sekiro::outfit_data::DressingInputs>() {
+        models.world.insert_resource(input.clone());
+    }
+    if let Some(result) = selected.resource::<crate::sekiro::outfit_data::DressingResult>() {
+        models.world.insert_resource(result.clone());
+    }
+    let mut details = choice.map_or_else(|| serde_json::json!({}), |c| c.report.clone());
+    if let Some(choice) = choice {
+        models.notices.extend(choice.notices.iter().cloned());
+    }
+    if let Some(suggestions) = selected.resource::<primase_core::opening::OpeningSuggestions>() {
+        models.world.insert_resource(suggestions.clone());
+    }
+    if let Some(saved) = saved {
+        let mut report = selected
+            .resource::<AttackSelection>()
+            .map(|a| a.to_json())
+            .transpose()?
+            .flatten()
+            .unwrap_or_else(|| serde_json::json!({}));
+        let mut saved_report = saved.report.clone();
+        saved_report["grip"] = serde_json::json!(grip);
+        report["save"] = saved_report;
+        details["player"] = report;
+    }
+    if !models.held.is_empty() {
+        let grip = grip
+            .as_ref()
+            .ok_or("held weapons require an explicit hold-fromsoft-weapons grip choice")?;
+        details["weapons"] = serde_json::json!({"held":models.held,"grip":grip});
+    }
+    Ok(SelectedModelRead {
+        models,
+        details,
+        grip,
+    })
+}
+
+/// Raw FLVER mesh availability and material display-group markers, without material/texture lowering.
+fn read_model_observations(
+    archive: &Archive,
+    decoder: &Decoder<'_>,
+    id: &str,
+) -> fromsoft_formats::Result<(bool, Vec<Vec<u32>>)> {
+    let binder =
+        fromsoft_formats::Binder::read(&archive.read(&format!("/chr/{id}.chrbnd.dcx"), decoder)?, decoder)?;
+    let mut drawable = false;
+    let mut marks = Vec::new();
+    for file in &binder.files {
+        if !file
+            .name
+            .as_deref()
+            .is_some_and(|n| n.to_ascii_lowercase().ends_with(".flver"))
+        {
+            continue;
+        }
+        let model = fromsoft_formats::flver::Model::read(&decoder.decode_if_dcx(&file.bytes)?)?;
+        for mesh in &model.meshes {
+            drawable |= !mesh.vertices.is_empty() && mesh.faces.iter().any(|f| f.triangulate().len() >= 3);
+            let material = model.materials.get(mesh.material).ok_or_else(|| {
+                crate::invalid(
+                    "FromSoftware character",
+                    0,
+                    format!("a mesh names material {}, which does not exist", mesh.material),
+                )
+            })?;
+            marks.push(fromsoft_formats::flver::display_marks(&material.name));
+        }
+    }
+    Ok((!drawable, marks))
+}
+fn dressing_inputs_from_marks(
+    install: &Install,
+    archive: &Archive,
+    decoder: &Decoder<'_>,
+    names: Option<&std::path::Path>,
+    id: &str,
+    marks: Vec<Vec<u32>>,
+) -> Result<crate::sekiro::outfit_data::DressingInputs> {
+    let masked = marks.iter().any(|m| !m.is_empty());
+    let rows = if masked {
+        fromsoft_formats::game_params::read_npc_param(install, archive, decoder)?.rows
+    } else {
+        vec![]
+    };
+    let mut named = Vec::new();
+    if masked && let Some(names) = names {
+        let dictionary = fromsoft_formats::NameDictionary::read_for(names, install.game)?;
+        named = fromsoft_formats::game_params::npc_placements(archive, decoder, &dictionary)?
+            .into_iter()
+            .filter(|p| p.row > 0 && p.model == id)
+            .map(|p| p.row)
+            .collect();
+        named.sort_unstable();
+        named.dedup();
+    }
+    Ok(crate::sekiro::outfit_data::DressingInputs {
+        id: id.into(),
+        marks,
+        rows,
+        named,
+    })
+}
+
+/// Validate a caller's saved-state scope without opening the file. A save and manual hold are mutually exclusive.
+pub fn validate_saved_scope(
+    game: fromsoft_formats::Game,
+    path: Option<std::path::PathBuf>,
+    slot: Option<usize>,
+    weapons_given: bool,
+    grip_given: bool,
+) -> std::result::Result<Option<(std::path::PathBuf, usize)>, String> {
+    let (path, slot) = match (path, slot) {
+        (None, None) => return Ok(None),
+        (Some(path), Some(slot)) => (path, slot),
+        _ => return Err("fromsoft-parts: save and save_slot go together".into()),
+    };
+    if game != fromsoft_formats::Game::EldenRing {
+        return Err("fromsoft-parts: save reads an Elden Ring save".into());
+    }
+    if weapons_given || grip_given {
+        return Err("fromsoft-parts: save states the weapons and the grip; weapons_right, weapons_left and grip are not given with it".into());
+    }
+    Ok(Some((path, slot)))
+}
+/// Stable public game key used by source pass declarations; clients do not interpret game identity.
+pub fn game_key(game: fromsoft_formats::Game) -> &'static str {
+    match game {
+        fromsoft_formats::Game::Sekiro => "sekiro",
+        fromsoft_formats::Game::EldenRing => "elden",
+    }
 }

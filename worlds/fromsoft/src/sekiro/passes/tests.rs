@@ -733,6 +733,7 @@ fn the_fromsoft_passes_register_by_name() {
         "resolve-fromsoft-shaders",
         "sample-fromsoft-draw-params",
         "select-fromsoft-attack",
+            "select-fromsoft-saved-attack",
         "select-fromsoft-initializer-outfits",
         "select-fromsoft-npc-outfits",
             "select-fromsoft-player-outfit",
@@ -741,6 +742,8 @@ fn the_fromsoft_passes_register_by_name() {
             "bind-fromsoft-animation",
             "select-fromsoft-weapon-forms",
             "select-fromsoft-saved-hold",
+            "select-fromsoft-character-read",
+            "lower-fromsoft-selected-outfit",
         "select-fromsoft-outfit",
     ];
     assert_eq!(format!("{reg:?}"), format!("{names:?}"));
