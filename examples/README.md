@@ -18,4 +18,16 @@ cargo run --release -p primase-examples --example sekiro_to_reskate
 [sekiro_ktx2_tiles](examples/sekiro_ktx2_tiles.rs) additionally needs `--features ktx2` for the web writer's texture
 encoder. The example sources document their inputs and output paths.
 
+[elden_outfit_gltf](examples/elden_outfit_gltf.rs) and [elden_stormveil_gltf](examples/elden_stormveil_gltf.rs) write
+glTF binaries from an Elden Ring install: the player's starting outfit (initializer row 3002, the female
+presentation) and a slice of Stormveil Castle at a stated hour. Each states its choices (the outfit row; the region,
+the environment file and the hour) as constants, reads, runs registered passes and the glTF writer, and prints the
+passes' reports and what the writer left out. They find the install and the archive keys through the `GAME_DATA`
+configuration (`elden`, declared in `tests/inputs/mod.rs`) and take the output file as their argument:
+
+```sh
+cargo run --release -p primase-examples --example elden_outfit_gltf -- outfit.glb
+cargo run --release -p primase-examples --example elden_stormveil_gltf -- stormveil.glb
+```
+
 License: GPL-3.0-or-later.

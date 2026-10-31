@@ -1302,13 +1302,16 @@ version = "0.1.0"
 dependencies = [
  "fromsoft-formats",
  "frostbite-formats",
+ "primase-animation",
  "primase-core",
  "primase-foundations 0.3.0 (git+https://github.com/Kalmarv/primase-foundations?rev=f9cf4ece1de77fce9d703c63347dd70b728b7c0e)",
  "primase-fromsoft",
  "primase-frostbite",
  "primase-gltf",
  "primase-image",
+ "primase-meshops",
  "primase-reskate",
+ "primase-testdata",
  "primase-web",
 ]
 
