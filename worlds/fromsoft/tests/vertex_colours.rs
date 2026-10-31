@@ -50,10 +50,15 @@ fn colours(world: &World, prototype: &str, matbin: &str) -> Vec<BTreeMap<Semanti
                 .iter()
                 .filter(|(s, _)| matches!(s, Semantic::Color(_)))
                 .map(|(s, v)| {
-                    let Stream::F32x4(values) = v else {
-                        panic!("{prototype} {matbin}: colour {s:?} is not four floats");
+                    let values = match v {
+                        Stream::F32x4(values) => values.clone(),
+                        Stream::U8x4(values) => values
+                            .iter()
+                            .map(|value| value.map(|lane| f32::from(lane) / 255.0))
+                            .collect(),
+                        _ => panic!("{prototype} {matbin}: colour {s:?} is not four lanes"),
                     };
-                    (*s, values.clone())
+                    (*s, values)
                 })
                 .collect()
         })
@@ -100,8 +105,17 @@ fn a_colour_is_the_input_its_semantic_index_names() -> Result<()> {
     // the slabs: COLOR1 alone, carried as the second colour
     let slabs = colours(&world, "m002002", "m10_00_246");
     assert_eq!(slabs.len(), 1, "m002002's m10_00_246 primitives");
-    let streams: Vec<Semantic> = slabs[0].keys().copied().collect();
-    assert_eq!(streams, [SECOND_COLOUR], "m002002 m10_00_246");
+    // Color(n) also carries Byte4C TEXCOORD weights. Those auxiliary inputs do not
+    // change which streams carry the FLVER COLOR0/COLOR1 members.
+    let native_colours = |streams: &BTreeMap<Semantic, Vec<[f32; 4]>>| {
+        streams
+            .keys()
+            .copied()
+            .filter(|s| *s == Semantic::Color(0) || *s == SECOND_COLOUR)
+            .collect::<BTreeSet<_>>()
+    };
+    let streams = native_colours(&slabs[0]);
+    assert_eq!(streams, BTreeSet::from([SECOND_COLOUR]), "m002002 m10_00_246");
     assert!(
         slabs[0][&SECOND_COLOUR]
             .iter()
@@ -111,7 +125,7 @@ fn a_colour_is_the_input_its_semantic_index_names() -> Result<()> {
     // a mesh that stores both colours carries both
     let both = colours(&world, "m002002", "m10_00_046");
     assert_eq!(both.len(), 1, "m002002's m10_00_046 primitives");
-    let streams: BTreeSet<Semantic> = both[0].keys().copied().collect();
+    let streams = native_colours(&both[0]);
     assert_eq!(
         streams,
         BTreeSet::from([Semantic::Color(0), SECOND_COLOUR]),
