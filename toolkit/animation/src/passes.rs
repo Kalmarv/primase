@@ -574,6 +574,7 @@ mod normalize_tests {
 /// Register this crate's passes by their declarations.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
     for spec in [
+        &crate::simulation_schedule::CONFIGURE_SIMULATIONS,
         &EVALUATE_CLIP,
         &crate::assemble::ASSEMBLE_CHARACTER,
         &crate::correspond::CORRESPOND_SKELETONS,
