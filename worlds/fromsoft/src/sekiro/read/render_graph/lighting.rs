@@ -208,6 +208,7 @@ pub(super) fn describe(
         "full-screen vertex inputs are reconstructed from the native lighting vertex program's clip-position and UV reads, not captured vertex-buffer bytes".into()];
     if game == Game::EldenRing {
         notices.push(sun::NOTICE.into());
+        notices.push("sun shadows: one generic cascade fitted to the view, all opaque geometry casts; native casters and cascade splits not traced".into());
     } else {
         notices.push("native directional lighting is not yet selected for this source".into());
     }

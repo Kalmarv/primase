@@ -639,6 +639,7 @@ fn lighting_boundary(graph: &RenderGraph, game: FsGame) {
     let mut expected = vec!["GXRend_TileBasedLighting", "GXLightCmbAlbedo", "GXLightComposite"];
     if game == FsGame::EldenRing {
         expected.insert(0, "GXLightAcc_DDirLightShadowed1");
+        assert!(pipeline.notices.iter().any(|notice| notice == "sun shadows: one generic cascade fitted to the view, all opaque geometry casts; native casters and cascade splits not traced"));
     }
     assert_eq!(stages, expected);
     assert!(
@@ -806,6 +807,9 @@ fn sun_outputs_are_finite(graph: &RenderGraph, world: &World) {
                         vec![0; 3]
                     }
                 }
+                // The native stage multiplies both accumulators by the frame's pre-exposure.
+                // A fixture that leaves this at zero cannot observe a light response.
+                ConstantRole::Frame(FrameParameter::PreExposure) => vec![1.0f32.to_bits()],
                 ConstantRole::View(ViewParameter::InverseProjection | ViewParameter::InverseView) => {
                     [1.0f32, 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.]
                         .map(f32::to_bits)
@@ -844,7 +848,11 @@ fn sun_outputs_are_finite(graph: &RenderGraph, world: &World) {
                 .iter()
                 .flat_map(|v| &v[..3])
                 .any(|v| f32::from_bits(*v) > 0.);
-            assert_eq!(lit, active, "native sun must respond to the primary core light");
+            assert_eq!(
+                lit, active,
+                "selector{selector}: native sun must respond to the primary core light: {:?}",
+                result.outputs
+            );
         }
     }
     assert!(
