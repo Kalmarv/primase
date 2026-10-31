@@ -7,6 +7,7 @@
 //! read is in its [`Report::notices`].
 mod components;
 pub mod passes;
+pub mod program;
 mod read;
 pub use components::area_plan;
 pub use components::environment as environment_data;
@@ -27,7 +28,7 @@ pub use read::area::{
     GrassTypes, ObjectAnimations, Options, Parents, Report, StateClasses, read_area_draw_param,
     read_game_area, read_game_area_staged, world_bounds,
 };
-pub use read::area_plan::read_area_candidates;
+pub use read::area_plan::{AreaRead, read_area_candidates};
 pub use read::attack_clip;
 pub use read::character::{
     CharacterOptions, CharacterReader, CharacterReport, animation_notices, character_display_masks,
