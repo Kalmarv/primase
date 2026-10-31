@@ -214,7 +214,7 @@ fn check_lowered(w: &mut World, part: Entity, displays: usize) -> Result<usize> 
     let vertices = w
         .get::<ClothVertices>(part)
         .expect("animation.simulation_vertices on the lowered prototype");
-    assert_eq!(vertices.cloth, part);
+    assert_eq!(vertices.simulation, part);
     let mesh = w.get::<primase_core::Mesh>(part).unwrap();
     let held: Vec<(usize, &primase_havok::cloth::ClothPrimitive)> = vertices
         .primitives
