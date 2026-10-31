@@ -83,7 +83,7 @@ use primase_core::shader::{
     ObjectMatrix, ObjectParameter, Occluded, OutputBinding, OutputRole, ScalarEncoding, VariantKey,
     ViewParameter,
 };
-use primase_core::shader::{MaterialPrograms, ProgramFacts};
+use primase_core::shader::{MaterialPrograms, ProgramFacts, bind_surface_input_fallbacks};
 use primase_core::{ColorSpace, Component, Entity, MaterialVariants, Mesh, Name, Semantic, Texture, World};
 use primase_core::{
     shader::Shader, shader::ShaderBinding, shader::StageBinding, shader::TextureBinding,
@@ -1196,14 +1196,24 @@ impl ResolveAnvilShaders {
                 .entry("matrices whose lines the program does not show (a consumer writing a non-symmetric matrix cannot bind them)".into())
                 .or_default() += unshown as u64;
         }
-        StageBinding {
+        let mut binding = StageBinding {
             variant,
             inputs,
             constants,
             textures: bindings,
             outputs,
             ..StageBinding::new(stage, shader)
+        };
+        let described = bind_surface_input_fallbacks(&mut binding, interface);
+        if described > 0 {
+            *counts
+                .entry(
+                    "pixel inputs with shared surface replacement descriptions (used only without an executable vertex stage)"
+                        .into(),
+                )
+                .or_default() += described as u64;
         }
+        binding
     }
 }
 

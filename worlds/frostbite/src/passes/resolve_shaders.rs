@@ -71,6 +71,7 @@ use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::shader::{
     BufferBinding, BufferSource, BufferTable, ConstantBinding, ConstantRole, InputBinding, InputRole,
     KeyPart, ObjectParameter, OutputBinding, OutputRole, SkinPrefix, VariantKey,
+    bind_surface_input_fallbacks,
 };
 use primase_core::{Component, Entity, Lods, Semantic, Texture, TextureLayers, World};
 use primase_core::{
@@ -488,14 +489,19 @@ fn stage_binding(
     } else {
         Vec::new()
     };
-    StageBinding {
+    let mut binding = StageBinding {
         inputs,
         constants,
         textures,
         buffers,
         outputs,
         ..StageBinding::new(stage, shader)
-    }
+    };
+    log.count(
+        "pixel inputs with shared surface replacement descriptions (used only without an executable vertex stage)",
+        bind_surface_input_fallbacks(&mut binding, interface) as u64,
+    );
+    binding
 }
 
 /// What the pass reads out of a vertex program by walking or running it: where its clip position takes its rows and

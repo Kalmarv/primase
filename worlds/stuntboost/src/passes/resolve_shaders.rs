@@ -419,6 +419,10 @@ fn binding(
             });
         }
     }
+    log.count(
+        "pixel inputs with shared surface replacement descriptions (used only without an executable vertex stage)",
+        bind_surface_input_fallbacks(&mut b, interface) as u64,
+    );
     b
 }
 impl Pass for ResolveStuntboostShaders {

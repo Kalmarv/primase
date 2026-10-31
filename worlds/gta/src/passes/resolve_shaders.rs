@@ -70,6 +70,7 @@ use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, Pass
 use primase_core::shader::{
     ConstantBinding, ConstantRole, FrameParameter, InputBinding, InputRole, NormalEncoding, NormalSpace,
     ObjectMatrix, ObjectParameter, Occluded, OutputBinding, OutputRole, ScalarEncoding, ViewParameter,
+    bind_surface_input_fallbacks,
 };
 use primase_core::{Component, Entity, Semantic, Texture, TextureFile, World};
 use primase_core::{
@@ -776,13 +777,18 @@ impl ResolveGtaShaders {
         } else {
             Vec::new()
         };
-        Ok(StageBinding {
+        let mut binding = StageBinding {
             inputs: in_roles,
             constants,
             textures,
             outputs,
             ..StageBinding::new(stage, shader)
-        })
+        };
+        counts.add_by(
+            "pixel inputs with shared surface replacement descriptions (used only without an executable vertex stage)",
+            bind_surface_input_fallbacks(&mut binding, interface) as u64,
+        );
+        Ok(binding)
     }
 }
 
