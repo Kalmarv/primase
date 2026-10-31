@@ -7,6 +7,8 @@ use serde::{Serialize,Deserialize};
 use serde_json::{Value,json};
 use crate::sekiro::{self, CharacterReader, CharacterOutfit};
 use primase_core::convert::Reader;
+use primase_core::{Resource,World};
+use crate::sekiro::outfit_data::{InitializerOutfits,NpcOutfitRows};
 type Result<T> = fromsoft_formats::Result<T>;
 macro_rules! anyhow { ($($arg:tt)*) => { crate::invalid("FromSoft catalog", 0, format!($($arg)*)) }; }
 
@@ -24,6 +26,22 @@ pub struct CatalogEntry {
 }
 #[derive(Clone,Debug,Default)]
 pub struct Catalog {pub entries:Vec<CatalogEntry>}
+impl Resource for Catalog {const NAME:&'static str="fromsoft.catalog";}
+
+/// Authored association of catalog placement records to their character, before any form is selected.
+#[derive(Clone,Debug)]
+pub struct CatalogInputs {
+    pub player_parent:Option<String>,
+    pub player_insert:usize,
+    pub npc_insert:usize,
+    pub npc_rows:Vec<(String,fromsoft_formats::equipment::NpcOutfit)>,
+}
+impl Resource for CatalogInputs {const NAME:&'static str="fromsoft.catalog_inputs";}
+/// A catalog after its explicit presentation passes have materialized opening requests.
+#[derive(Clone,Debug)]
+pub struct CatalogReady;
+impl Resource for CatalogReady {const NAME:&'static str="fromsoft.catalog_ready";}
+
 
 /// Source-stated report fields and notices, rendered generically by a program.
 pub struct DescriptiveReport {
@@ -74,12 +92,12 @@ pub fn listed_details(entry: &listing::ListingEntry) -> Value {
 }
 
 /// Read the install's authored catalog, with every presentation choice stated by the program.
-pub fn read(install: &Install, decoder: &Decoder<'_>, names: Option<&Path>, options: &Options) -> Result<Catalog> {
+pub fn read(install: &Install, decoder: &Decoder<'_>, names: Option<&Path>, options: &Options) -> Result<World> {
     let dictionary = names.ok_or_else(|| anyhow!("no FromSoft name dictionary"))?;
     let dictionary_data = fromsoft_formats::NameDictionary::read_for(dictionary, install.game)?;
     let archive = std::sync::Arc::new(install.open()?);
     let listing = listing::Listing::from_entries(install.root.clone(), Some(dictionary.to_path_buf()), &archive.entries, &dictionary_data);
-    let npc_rows = npc_entries(&install, &archive, &decoder, names.as_deref())?;
+    let (npc_rows,npc_outfit_rows) = npc_metadata(&install, &archive, &decoder, names.as_deref())?;
     let rows: Vec<CatalogEntry> = listing
         .entries
         .iter()
@@ -200,9 +218,12 @@ pub fn read(install: &Install, decoder: &Decoder<'_>, names: Option<&Path>, opti
         .filter(|entry| entry.kind == "character")
         .map(|entry| (entry.name.clone(), entry.key.clone()))
         .collect();
-    if let Some(parent) = characters.get("c0000") {
-        match sekiro::character_outfits(&install, &archive, &decoder) {
-            Ok(outfits) => entries.extend(player_outfit_entries(parent, &outfits)),
+    let player_parent=characters.get("c0000").cloned();
+    let player_insert=entries.len();
+    let mut initializers=InitializerOutfits {game:install.game,rows:Vec::new()};
+    if let Some(parent)=&player_parent {
+        match sekiro::character_outfits(install,&archive,decoder) {
+            Ok(raw)=>initializers=raw,
             Err(error) => entries.push(CatalogEntry {
                 key: "initializer/unread".into(), kind: "outfit".into(), subject: Subject::Character,
                 name: "Player outfits unread".into(), path: "CharaInitParam".into(),
@@ -220,6 +241,8 @@ pub fn read(install: &Install, decoder: &Decoder<'_>, names: Option<&Path>, opti
         }
         entries.push(row);
     }
+    let npc_insert=entries.len();
+    let npc_rows=npc_outfit_rows;
     // each draw-param file of an area's map is a variant of the area: it opens the area with that environment, and is
     // a value of the `environment` option (listed for the `area` given: the full name opens the row, the short name
     // `m11_01` an area `m11_01_00_00` states too is a value of it)
@@ -343,7 +366,12 @@ pub fn read(install: &Install, decoder: &Decoder<'_>, names: Option<&Path>, opti
     }
     // each weapon row whose model the archives hold: a value of weapons_right and weapons_left
     entries.extend(weapon_entries(&install, &archive, &decoder));
-    Ok(Catalog { entries })
+    let mut world=World::new();
+    world.insert_resource(Catalog {entries});
+    world.insert_resource(initializers);
+    world.insert_resource(NpcOutfitRows {game:install.game,rows:npc_rows.iter().map(|(_,row)|row.clone()).collect()});
+    world.insert_resource(CatalogInputs {player_parent,player_insert,npc_insert,npc_rows});
+    Ok(world)
 }
 
 /// The catalog's weapons: each `EquipParamWeapon` row with a model whose part binder the archives hold, opening as its
@@ -504,6 +532,15 @@ pub fn npc_entries(
     decoder: &Decoder<'_>,
     names: Option<&Path>,
 ) -> Result<Vec<CatalogEntry>> {
+    Ok(npc_metadata(install,archive,decoder,names)?.0)
+}
+
+fn npc_metadata(
+    install: &Install,
+    archive: &Archive,
+    decoder: &Decoder<'_>,
+    names: Option<&Path>,
+) -> Result<(Vec<CatalogEntry>,Vec<(String,fromsoft_formats::equipment::NpcOutfit)>)> {
     let names = names.ok_or_else(|| anyhow!("no FromSoft name dictionary"))?;
     let dictionary = fromsoft_formats::NameDictionary::read_for(names, install.game)
         .map_err(|error| anyhow!("dictionary {}: {error}", names.display()))?;
@@ -525,7 +562,7 @@ pub fn npc_entries(
     }
     let mut held: std::collections::BTreeMap<String, (bool, bool)> =
         std::collections::BTreeMap::new();
-    let mut entries: Vec<_> = rows
+    let entries: Vec<_> = rows
         .into_iter()
         .map(|((model, row), (maps, parts, dummies))| {
             let (binder, animations) = *held.entry(model.clone()).or_insert_with(|| {
@@ -537,27 +574,15 @@ pub fn npc_entries(
             npc_entry(&model, row, &maps, parts, dummies, binder, animations)
         })
         .collect();
-    if install.game == FromSoftGame::Sekiro {
-        let models: std::collections::BTreeSet<_> = placements.iter()
-            .filter(|p| p.character_init.is_some()).map(|p| p.model.as_str()).collect();
+    let mut outfits=Vec::new();
+    if install.game==FromSoftGame::Sekiro {
+        let models:std::collections::BTreeSet<_>=placements.iter().filter(|row|row.character_init.is_some()).map(|row|row.model.as_str()).collect();
         for model in models {
-            for outfit in fromsoft_formats::equipment::npc_outfits(install, archive, decoder, &dictionary, model, None)? {
-                // a placement whose MSB stores a negative initializer names none
-                let init = outfit.init.map_or_else(|| "none".to_owned(), |i| i.to_string());
-                entries.push(CatalogEntry {
-                    key: format!("outfit/{model}/{init}/{}/{}", outfit.map, outfit.placement),
-                    kind: "outfit".into(), subject: Subject::Character,
-                    name: format!("{init} · {} / {}", outfit.map, outfit.placement),
-                    path: format!("{model} NPC {} outfit {init}", outfit.npc),
-                    refusal: outfit.parts.is_empty().then(|| outfit.unresolved.join("; ")),
-                    open: if outfit.parts.is_empty() { Value::Null } else {
-                        json!({"reader": "character", "id": model, "npc": outfit.npc.to_string(), "init": outfit.init.map(|i| i.to_string())}) },
-                    details: json!({"model": model, "outfit": outfit}),
-                });
-            }
+            outfits.extend(fromsoft_formats::equipment::npc_outfits(install,archive,decoder,&dictionary,model,None)?
+                .into_iter().map(|row|(model.to_owned(),row)));
         }
     }
-    Ok(entries)
+    Ok((entries,outfits))
 }
 
 /// Whether the archives hold the animation binder of character `model` (`/chr/<model>.anibnd.dcx`, the file the
