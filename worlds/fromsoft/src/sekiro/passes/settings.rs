@@ -139,15 +139,6 @@ impl fmt::Display for Factor {
     }
 }
 
-/// Items joined by `+`, as options print sets.
-pub(crate) fn joined<T: fmt::Display>(items: impl IntoIterator<Item = T>) -> String {
-    items
-        .into_iter()
-        .map(|t| t.to_string())
-        .collect::<Vec<_>>()
-        .join("+")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
