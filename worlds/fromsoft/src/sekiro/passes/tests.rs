@@ -728,6 +728,7 @@ fn the_fromsoft_passes_register_by_name() {
         "lower-fromsoft-object-collision",
         "lower-fromsoft-part-collision",
         "lower-fromsoft-render-graph",
+        "lower-fromsoft-selected-outfit",
         "lower-fromsoft-sky",
         "lower-sekiro-reinhard",
         "materialize-fromsoft-catalog",
@@ -739,6 +740,7 @@ fn the_fromsoft_passes_register_by_name() {
         "sample-fromsoft-draw-params",
         "select-fromsoft-area",
         "select-fromsoft-attack",
+        "select-fromsoft-character-read",
         "select-fromsoft-dressing",
         "select-fromsoft-environment",
         "select-fromsoft-initializer-outfits",
@@ -746,6 +748,7 @@ fn the_fromsoft_passes_register_by_name() {
         "select-fromsoft-npc-outfits",
         "select-fromsoft-outfit",
         "select-fromsoft-player-outfit",
+        "select-fromsoft-saved-attack",
         "select-fromsoft-saved-hold",
         "select-fromsoft-weapon-forms",
     ];

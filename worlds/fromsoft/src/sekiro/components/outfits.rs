@@ -199,6 +199,7 @@ pub enum Dressing {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct DressingResult {
+    pub masked: bool,
     pub dressing: Dressing,
     pub note: Option<String>,
 }
