@@ -2,6 +2,7 @@
 //! [`Resource::NAME`]): what a coverage report lists, whether or not a reader, pass or writer mentions it. The types
 //! are listed once here; an architecture test holds the list to every `Component` and `Resource` core implements.
 
+use crate::IncomingTransition;
 use crate::asset::Asset;
 use crate::atmosphere::{Atmosphere, PostProcessingStatus};
 use crate::clip::{Clip, ClipBinding};
@@ -84,7 +85,7 @@ declared! {
         TextureFile, MeshFile, MaterialVariants, Tile, DrawOrder, LayeredMaterial, Lods, TextureForms, TextureSwitch, Marker, Curve, MaterialUsage,
         PbrMaterial, DetailedMaterial, Priority, Provenance, StateAxis, Condition, PrimitiveCondition, StateOverride, VertexColor, Skeleton, AssemblyReference, Skin, Morphs, RigInstance,
         RigPose, SkinInstance, MorphWeights, Sockets, Attachment, JointMap, JointPlacement, Clip, ClipBinding, Asset, Shader, ShaderBinding, LiftedShader, ShaderSpecialisations,
-        TextureLayers, MaterialPrograms, ProgramFacts, ClipKey, ClipLength, ClipEvents, ClipEffects, Controller, ControllerBinding,
+        TextureLayers, MaterialPrograms, ProgramFacts, ClipKey, ClipLength, IncomingTransition, ClipEvents, ClipEffects, Controller, ControllerBinding,
         DrawGroups, DrawGroupDefaults, ContentNote, Record, DisplayName, PrimitiveKeys, MaterialParameters, SkyAnchor,
         ParticleSystem, IrradianceVolume, ReflectionProbeRegion, StepBindings, StepDraws, LightFalloff, LightTranslucency;
     resources: PartScope, PartitionPlan, Environment, Atmosphere, PostProcessingStatus, StateAssignment, Surfaces, Threads, Memo, RenderGraph,
@@ -113,6 +114,7 @@ mod tests {
         for name in [
             "core.clip_key",
             "core.clip_length",
+            "core.incoming_transition",
             "core.clip_events",
             "core.controller",
             "core.controller_binding",

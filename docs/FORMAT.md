@@ -276,3 +276,6 @@ orthographic one), `depth_range` (far plane less near plane), `device_depth_offs
 perspective projection's device depth is `offset + scale / d` at depth `d` along the view axis), and the frame role
 `direction_to_light` (the unit direction towards the dominant directional light, the opposite of
 `light_direction`).
+
+`core.incoming_transition` holds a source pass's optional duration override for entering a clip, or a named refusal.
+Its absence or an absent override retains the caller's authored duration; renderers never infer this from event IDs.

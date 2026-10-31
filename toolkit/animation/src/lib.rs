@@ -22,6 +22,7 @@ pub mod quat;
 pub mod retarget;
 pub mod retarget_skin;
 pub mod simulation;
+pub mod simulation_schedule;
 pub mod weights;
 
 pub use assemble::{

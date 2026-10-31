@@ -8,7 +8,7 @@ use crate::sekiro::character_data::ClipEvents as SourceEvents;
 use fromsoft_formats::Game;
 use fromsoft_formats::tae::Event;
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
-use primase_core::{Clip, ClipEvent, ClipEvents, Component, World};
+use primase_core::{Clip, ClipEvent, ClipEvents, Component, IncomingTransition, World};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LowerFromSoftClipEvents {
     pub game: Game,
@@ -76,7 +76,7 @@ impl Pass for LowerFromSoftClipEvents {
         true
     }
     fn provides(&self) -> &[&'static str] {
-        &[ClipEvents::NAME]
+        &[ClipEvents::NAME, IncomingTransition::NAME]
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         let mut staged = Vec::new();
@@ -129,11 +129,56 @@ impl Pass for LowerFromSoftClipEvents {
                 log.omit(reason, 1);
             }
             log.count("source-ordered core clip events", events.events.len() as u64);
+            if self.game == Game::EldenRing {
+                let timing = incoming_transition(&events.events);
+                if let Some(reason) = &timing.refusal {
+                    log.omit(reason, 1);
+                }
+                world.insert(entity, timing);
+            }
             world.insert(entity, events);
         }
         Ok(())
     }
 }
+
+/// Resolve the established incoming-clip event rule while lowering source events, before a client sees core.
+fn incoming_transition(events: &[ClipEvent]) -> IncomingTransition {
+    const TRANSITION_EVENT: i32 = fromsoft_formats::tae::ELDEN_TRANSITION_END;
+    let mut ends = Vec::new();
+    for (i, event) in events
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.kind == i64::from(TRANSITION_EVENT))
+    {
+        let Some(end) = event.end else {
+            return IncomingTransition {
+                duration: None,
+                refusal: Some(format!(
+                    "event {i} (type {TRANSITION_EVENT}) runs to the clip's end: its stored end is not kept"
+                )),
+            };
+        };
+        ends.push(end);
+    }
+    let positive: Vec<f32> = ends.iter().copied().filter(|&e| e > 0.0).collect();
+    match positive.as_slice() {
+        [] => IncomingTransition::default(),
+        [first, rest @ ..] if rest.iter().all(|e| e == first) => IncomingTransition {
+            duration: Some(f64::from(*first)),
+            refusal: None,
+        },
+        _ => IncomingTransition {
+            duration: None,
+            refusal: Some(format!(
+                "the clip has {} type {TRANSITION_EVENT} events with different ends {positive:?}: which one the game keeps \
+             is not traced",
+                positive.len()
+            )),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,6 +342,73 @@ mod tests {
         assert_eq!(
             (0..4).map(|i| core_index(&events, i)).collect::<Vec<_>>(),
             [Some(0), None, Some(1), None]
+        );
+    }
+    fn timing_event(kind: i64, start: f32, end: Option<f32>) -> ClipEvent {
+        ClipEvent {
+            kind,
+            name: None,
+            naming: None,
+            start,
+            end,
+            values: Vec::new(),
+            bytes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn an_effects_duration_is_the_incoming_clips_event_16_end_else_its_authored_value() {
+        let made = |authored: f64, events: &[ClipEvent]| {
+            incoming_transition(events).resolve(authored).map(|b| b.seconds())
+        };
+        // a000_004020: event 16 from -1/30 s to 0.3 s gives its end, not its length 1/3 (its other events around it)
+        let fixture = [
+            timing_event(0, 0.0, Some(1.0)),
+            timing_event(16, -1.0 / 30.0, Some(0.3)),
+            timing_event(717, 0.1, Some(0.2)),
+        ];
+        assert_eq!(made(0.5, &fixture), Ok(f64::from(0.3f32)));
+        // as observed in the game: a standing jump's W_Jump_N (authored 0.5) into a010_202000 (event 16 0..0.2) took 0.2;
+        // its landing (authored 0.2) into a010_202100 (0..0.1333) took 0.1333
+        assert_eq!(
+            made(0.5, &[timing_event(16, 0.0, Some(0.2))]),
+            Ok(f64::from(0.2f32))
+        );
+        assert_eq!(
+            made(0.2, &[timing_event(16, 0.0, Some(0.133_333_34))]),
+            Ok(f64::from(0.133_333_34f32))
+        );
+        // no event 16, or one ending at 0: the authored value, not floored at 0.05
+        assert_eq!(made(0.03, &[timing_event(717, 0.0, Some(0.1))]), Ok(0.03));
+        assert_eq!(made(0.03, &[timing_event(16, 0.0, Some(0.0))]), Ok(0.03));
+        assert_eq!(made(0.0, &[]), Ok(0.0));
+        // two event 16s with one end are one value; with two ends which the game keeps is not traced
+        assert_eq!(
+            made(
+                0.5,
+                &[timing_event(16, 0.0, Some(0.2)), timing_event(16, 0.1, Some(0.2))]
+            ),
+            Ok(f64::from(0.2f32))
+        );
+        let refused =
+            |authored: f64, events: &[ClipEvent]| incoming_transition(events).resolve(authored).unwrap_err();
+        assert!(
+            refused(
+                0.5,
+                &[timing_event(16, 0.0, Some(0.2)), timing_event(16, 0.0, Some(0.3))]
+            )
+            .contains("not traced")
+        );
+        assert!(refused(0.5, &[timing_event(16, 0.0, None)]).contains("end is not kept"));
+        assert!(refused(-0.1, &[]).contains("not seconds"));
+        assert!(refused(f64::NAN, &[]).contains("not seconds"));
+        let blend = incoming_transition(&fixture).resolve(0.5).unwrap();
+        assert_eq!(
+            blend,
+            primase_core::EffectBlend {
+                authored: 0.5,
+                event_end: Some(f64::from(0.3f32))
+            }
         );
     }
 }
