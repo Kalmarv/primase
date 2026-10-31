@@ -9,6 +9,7 @@ mod components;
 pub mod passes;
 mod read;
 pub use components::irradiance::IrradianceRegion;
+pub use components::lighting::PreparedLighting;
 pub use components::source::Region;
 pub use components::{character as character_data, effect as effect_data, lowered, source};
 pub use passes::collision;

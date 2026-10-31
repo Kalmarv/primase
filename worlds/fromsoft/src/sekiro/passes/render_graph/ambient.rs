@@ -1,4 +1,4 @@
-//! Installed environment regions bound to the engine's direct two-state program. Capture data is an oracle only.
+//! Bind already prepared core environment regions in the registered graph preparation pass.
 use iridia_interface::{MatrixLines, Stage};
 use primase_core::render_graph::{GraphPrimitive, PassWork, Presence, RenderGraph, RenderPass, Runs};
 use primase_core::shader::{

@@ -1,4 +1,4 @@
-//! The first directional-light stage, with the source's explicit finite stand-ins.
+//! Directional-light policy supplied by the registered graph preparation pass.
 use primase_core::shader::{ConstantBinding, ConstantRole, FrameParameter, Shader, StageBinding};
 
 pub(super) const NOTICE: &str = "directional lighting uses the primary core sun in both light sets; secondary and local fill lights are off; directional sharpness is a finite stand-in of 1 for both primary and disabled secondary lights until the GPARAM-to-shader mapping is established";

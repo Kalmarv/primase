@@ -161,6 +161,7 @@ fn all_stormveil_boxes_resolve_and_captured_payload_fingerprints_match()
         },
         &mut drawn,
     )?;
+    common::run(&mut drawn, "lower-fromsoft-render-graph")?;
     let graph = drawn
         .resource::<primase_core::render_graph::RenderGraph>()
         .expect("frame graph");

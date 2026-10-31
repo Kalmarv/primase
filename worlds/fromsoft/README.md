@@ -686,6 +686,13 @@ Passes (`sekiro::passes::register`), each choosing explicitly:
   (sourced, not checked in a running game); what core has no place for (the flicker of a light, sounds, the conditions
   between states, a node's response to forces) is counted by reason. `candela-per-power` scales the light draws as
   `lower-fromsoft-lights` scales its lights. The records stay.
+- `lower-fromsoft-render-graph` prepares the raw `core.render_graph` read with
+  `Options::render_graph`. The reader leaves its lighting pipeline absent and unknown constants intact.
+  The registered pass selects the supported native lighting stages, supplies and reports the finite sun,
+  full-screen triangle, conservative-list and geometry-stencil approximations, and binds already prepared
+  environment regions. It provides `fromsoft.prepared_lighting`, verified against the core pipeline,
+  so further graph lowerings can require preparation through the pass manager. Repeating it keeps the
+  prepared graph unchanged. No renderer needs to know the source's binding names or make these choices.
 - `lower-fromsoft-lights{candela-per-power=...,spot-blend=...}` makes `core.light` from the BTL
   records: colour the stored byte over 255 squared (the game's own transfer, read back from
   a running game: the lighting shader's diffuse colour of every light is `(byte / 255)^2 *

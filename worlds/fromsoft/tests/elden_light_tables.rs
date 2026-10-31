@@ -158,7 +158,7 @@ fn eldens_light_tables_pack_the_read_back_records() -> Result<(), Box<dyn std::e
         &mut world,
         &manager
             .registry
-            .parse("lower-fromsoft-lights{candela-per-power=1,spot-blend=0.15}, resolve-fromsoft-shaders{unbound-textures=preview}")?,
+            .parse("lower-fromsoft-render-graph, lower-fromsoft-lights{candela-per-power=1,spot-blend=0.15}, resolve-fromsoft-shaders{unbound-textures=preview}")?,
         &mut run,
     )?;
     let graph = world.resource::<RenderGraph>().ok_or("no core.render_graph")?;

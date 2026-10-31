@@ -20,7 +20,6 @@
 //! Sekiro's light records are `core` light tables the consumer packs from the scene's lights
 //! ([`crate::light_records`]), and their counts and tile constants frame parameters; the per-tile light lists a step
 //! reads are the frame's buffers the light-organize step writes.
-mod lighting;
 mod table;
 
 use crate::light_records as lights;
@@ -332,7 +331,7 @@ pub(crate) fn read(
                 .map_err(|e| invalid(FORMAT, 0, format!("step {}: {e}", s.name)))?,
         );
     }
-    let mut graph = RenderGraph {
+    let graph = RenderGraph {
         targets,
         buffers,
         passes,
@@ -340,8 +339,6 @@ pub(crate) fn read(
         lighting: None,
         left_out: Vec::new(),
     };
-    graph.lighting =
-        Some(lighting::describe(game, &mut graph, world, report).map_err(|e| invalid(FORMAT, 0, e))?);
     graph.check().map_err(|e| invalid(FORMAT, 0, e))?;
     report.steps = graph.passes.len();
     report.targets = graph.targets.len();

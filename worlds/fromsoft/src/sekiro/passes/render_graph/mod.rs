@@ -1,5 +1,4 @@
-//! The source-owned lighting boundary of the recorded frame graph. Register/program names are resolved here,
-//! never by the generic consumer. Conservative lists replace only the selected subgraph's external buffer inputs.
+//! Registered preparation of a source render graph for core lighting execution.
 use fromsoft_formats::Game;
 use iridia_interface::{BufferKind, ResourceKind, Stage};
 use primase_core::World;
@@ -13,11 +12,70 @@ use primase_core::shader::{
 mod ambient;
 mod sun;
 
-pub(super) fn describe(
+use crate::sekiro::{PreparedLighting, source::ReadScope};
+use primase_core::Resource;
+use primase_core::pass::{Pass, PassLog, PassSpec};
+
+/// Choose the supported lighting subgraph and supply its explicitly reported approximations.
+/// The reader's full recorded graph and unknown inputs are retained until this pass is selected.
+#[derive(Debug)]
+pub struct LowerFromSoftRenderGraph;
+pub const LOWER_FROMSOFT_RENDER_GRAPH: PassSpec = PassSpec {
+    name: "lower-fromsoft-render-graph",
+    options: &[],
+    make: |_| Ok(Box::new(LowerFromSoftRenderGraph)),
+};
+impl Pass for LowerFromSoftRenderGraph {
+    fn name(&self) -> &'static str {
+        "lower-fromsoft-render-graph"
+    }
+    fn requires(&self) -> &[&'static str] {
+        &[RenderGraph::NAME, ReadScope::NAME]
+    }
+    fn provides(&self) -> &[&'static str] {
+        &[PreparedLighting::NAME]
+    }
+    fn modifies(&self) -> &[&'static str] {
+        &[RenderGraph::NAME]
+    }
+    fn approximates(&self) -> &'static str {
+        "supported lighting stages; conservative light lists; reconstructed screen triangle; finite directional stand-ins; assumed geometry stencil; unexecuted native shadow and ambient stages named per pipeline"
+    }
+    fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
+        if let Some(prepared) = world.resource::<PreparedLighting>() {
+            prepared.verify(world)?;
+            log.count("lighting pipeline already prepared", 1);
+            return Ok(());
+        }
+        let game = world.resource::<ReadScope>().ok_or("no source read scope")?.game;
+        let mut graph = world
+            .resource::<RenderGraph>()
+            .ok_or("no source render graph")?
+            .clone();
+        if graph.lighting.is_some() {
+            return Err("source graph has lighting without a prepared-lighting declaration".into());
+        }
+        let pipeline = describe(game, &mut graph, world, log)?;
+        for notice in &pipeline.notices {
+            log.approximate(notice, 1);
+        }
+        if let Some(stencil) = &pipeline.geometry_stencil {
+            log.approximate(&stencil.why, 1);
+        }
+        log.count("lighting stages selected", pipeline.passes.len() as u64);
+        graph.lighting = Some(pipeline);
+        graph.check()?;
+        world.insert_resource(graph);
+        world.insert_resource(PreparedLighting);
+        Ok(())
+    }
+}
+
+fn describe(
     game: Game,
     graph: &mut RenderGraph,
     world: &World,
-    report: &mut super::Report,
+    log: &mut primase_core::pass::PassLog,
 ) -> Result<LightingPipeline, String> {
     let environment = if game == Game::EldenRing {
         ambient::select(graph, world)?
@@ -119,8 +177,7 @@ pub(super) fn describe(
                 && stage.stage == Stage::Pixel
             {
                 let added = sun::bind(stage, shader)?;
-                report.unknown_constants = report.unknown_constants.saturating_sub(1);
-                report.constants = report.constants.saturating_add(added).saturating_sub(1);
+                log.count("directional constant roles supplied", added as u64);
             }
             if stage.stage == Stage::Vertex {
                 // The native GXLightAcc vertex program copies POSITION.xy/w to clip position and TEXCOORD.xy to
@@ -135,7 +192,7 @@ pub(super) fn describe(
                             }
                             _ => continue,
                         };
-                        report.unknown_inputs = report.unknown_inputs.saturating_sub(1);
+                        log.count("screen triangle input roles supplied", 1);
                     }
                 }
                 for constant in &mut stage.constants {
@@ -164,7 +221,14 @@ pub(super) fn describe(
                             words,
                             why: why.into(),
                         };
-                        report.unknown_constants = report.unknown_constants.saturating_sub(1);
+                        log.approximate(
+                            &format!(
+                                "{}: {}: {why}",
+                                pass.name,
+                                constant.name.as_deref().unwrap_or("unnamed constant")
+                            ),
+                            1,
+                        );
                     }
                 }
             }
@@ -266,4 +330,47 @@ pub(super) fn describe(
     };
     pipeline.check(graph)?;
     Ok(pipeline)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use primase_core::pass::{PassManager, PassRegistry, RunReport};
+
+    /// A raw graph does not satisfy a downstream prepared-lighting dependency, even when it is otherwise valid.
+    #[test]
+    fn the_pass_manager_requires_preparation_before_graph_augmentation() {
+        #[derive(Debug)]
+        struct Augment;
+        impl Pass for Augment {
+            fn name(&self) -> &'static str {
+                "test-augment-lighting"
+            }
+            fn requires(&self) -> &[&'static str] {
+                &[RenderGraph::NAME, PreparedLighting::NAME]
+            }
+            fn run(&self, _world: &mut World, _log: &mut PassLog) -> Result<(), String> {
+                Ok(())
+            }
+        }
+        const AUGMENT: PassSpec = PassSpec {
+            name: "test-augment-lighting",
+            options: &[],
+            make: |_| Ok(Box::new(Augment)),
+        };
+        let mut registry = PassRegistry::new();
+        registry.add(&AUGMENT);
+        let manager = PassManager::new(registry);
+        let mut world = World::new();
+        world.insert_resource(RenderGraph::default());
+        let error = manager
+            .run(
+                &mut world,
+                &manager.registry.parse("test-augment-lighting").unwrap(),
+                &mut RunReport::default(),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains(PreparedLighting::NAME), "{error}");
+        assert!(PreparedLighting.verify(&world).is_err());
+    }
 }

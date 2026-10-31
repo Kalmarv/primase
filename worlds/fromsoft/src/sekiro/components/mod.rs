@@ -3,5 +3,6 @@
 pub mod character;
 pub mod effect;
 pub mod irradiance;
+pub mod lighting;
 pub mod lowered;
 pub mod source;

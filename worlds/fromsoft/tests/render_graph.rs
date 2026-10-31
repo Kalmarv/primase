@@ -595,12 +595,15 @@ fn read_and_verify(
         ),
         (graph.passes.len(), graph.targets.len(), graph.buffers.len())
     );
+    assert!(graph.lighting.is_none(), "the reader must retain the raw graph");
+    assert!(world.resource::<sekiro::PreparedLighting>().is_none());
+    common::run(&mut world, "lower-fromsoft-render-graph")?;
     Ok((world, report))
 }
 
 /// The full-screen inputs the graph's vertex stages bind: Sekiro's frames record the full-screen triangle's bytes, Elden
 /// Ring's none.
-/// The reader identifies a closed local-light subgraph, with buffer roles and an HDR handoff, for both installs.
+/// The registered preparation identifies a closed lighting subgraph with buffer roles and an HDR handoff.
 fn lighting_boundary(graph: &RenderGraph, game: FsGame) {
     use primase_core::render_graph::LightingPort;
     use primase_core::shader::{BufferSource, LightListPart};
@@ -1076,6 +1079,103 @@ fn sekiros_materials_state_the_draws_that_draw_them() -> Result<(), Box<dyn std:
         [779, 0, 9, 0, 32, 1]
     );
     assert_eq!((proxies, undefined), (0, 0));
+    Ok(())
+}
+
+/// No stand-in or execution selection appears until the program selects the registered pass.
+#[test]
+fn the_reader_keeps_the_native_graph_without_lighting_choices() -> Result<(), Box<dyn std::error::Error>> {
+    let (Some(root), Some(keys), Some(dll)) = (
+        install(Game::Elden),
+        inputs::keys(Game::Elden),
+        oodle(Tool::Oodle6),
+    ) else {
+        return Ok(());
+    };
+    let install = common::install(
+        root,
+        FsGame::EldenRing,
+        Keys::from_folder(keys, FsGame::EldenRing, FsGame::EldenRing.param_key_sha256())?,
+    );
+    let dll = common::oodle(dll)?;
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: 1 << 30,
+    };
+    let mut world = World::new();
+    let report = sekiro::read_game_area(
+        &install,
+        "m60_42_36_00",
+        &decoder,
+        &sekiro::Options {
+            region: Some(sekiro::Region {
+                rect: [-10., -10., 10., 10.],
+                margin: 0.,
+            }),
+            render_graph: true,
+            ..Default::default()
+        },
+        &mut world,
+    )?;
+    let graph = world.resource::<RenderGraph>().ok_or("no raw graph")?;
+    assert!(graph.lighting.is_none());
+    assert!(world.resource::<sekiro::PreparedLighting>().is_none());
+    let sun = graph
+        .passes
+        .iter()
+        .find(|p| p.name == "GXLightAcc_DDirLightShadowed1")
+        .ok_or("no native sun description")?;
+    let PassWork::Screen { stages, .. } = &sun.work else {
+        panic!("native sun screen stage");
+    };
+    let pixel = stages
+        .iter()
+        .find(|s| s.stage == iridia_interface::Stage::Pixel)
+        .ok_or("no sun pixel description")?;
+    let block = pixel
+        .constants
+        .iter()
+        .find(|c| c.name.as_deref() == Some("FC_DirLight"))
+        .ok_or("raw sun block absent")?;
+    assert_eq!(block.size, 448);
+    assert!(matches!(block.role, ConstantRole::Unknown { .. }));
+    assert!(
+        !pixel
+            .constants
+            .iter()
+            .any(|c| matches!(c.role, ConstantRole::Default { .. }))
+    );
+    for notice in report.render_graph.notices() {
+        for choice in [
+            "directional lighting uses",
+            "sun shadows:",
+            "stencil 0x10 assumed",
+            "conservatively include",
+            "full-screen vertex inputs are reconstructed",
+        ] {
+            assert!(!notice.reason.contains(choice), "reader chose {notice:?}");
+        }
+    }
+    // A marker cannot be forged over raw reader data; environment augmentation requires it.
+    assert!(Resource::verify(&sekiro::PreparedLighting, &world).is_err());
+    let run = common::run(&mut world, "lower-fromsoft-render-graph")?;
+    let graph = world.resource::<RenderGraph>().unwrap();
+    lighting_boundary(graph, FsGame::EldenRing);
+    sun_outputs_are_finite(graph, &world);
+    assert!(world.resource::<sekiro::PreparedLighting>().is_some());
+    assert!(
+        run.steps[0]
+            .log
+            .approximations
+            .keys()
+            .any(|s| s.contains("sharpness") && s.contains("finite"))
+    );
+    let prepared = serde_json::to_value(graph)?;
+    common::run(&mut world, "lower-fromsoft-render-graph")?;
+    assert_eq!(
+        serde_json::to_value(world.resource::<RenderGraph>().unwrap())?,
+        prepared
+    );
     Ok(())
 }
 

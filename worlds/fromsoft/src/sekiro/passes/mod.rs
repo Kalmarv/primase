@@ -29,6 +29,7 @@ pub mod pbr;
 pub mod post;
 pub mod records;
 pub(super) mod reflectance;
+pub mod render_graph;
 pub mod resolve_shaders;
 pub mod settings;
 pub mod sky;
@@ -102,6 +103,7 @@ pub fn register(registry: &mut PassRegistry) {
         &post::LOWER_SEKIRO_REINHARD,
         &post::elden_ring::LOWER_ELDEN_RING_REINHARD,
         &lights::LOWER_FROMSOFT_LIGHTS,
+        &render_graph::LOWER_FROMSOFT_RENDER_GRAPH,
         &irradiance::LOWER_FROMSOFT_IRRADIANCE,
         &sky::LOWER_FROMSOFT_SKY,
         &effects::LOWER_FROMSOFT_EFFECTS,

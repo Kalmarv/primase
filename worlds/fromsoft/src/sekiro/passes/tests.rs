@@ -724,6 +724,7 @@ fn the_fromsoft_passes_register_by_name() {
         "lower-fromsoft-materials",
         "lower-fromsoft-object-collision",
         "lower-fromsoft-part-collision",
+        "lower-fromsoft-render-graph",
         "lower-fromsoft-sky",
         "lower-sekiro-reinhard",
         "name-fromsoft-entities",
@@ -735,6 +736,7 @@ fn the_fromsoft_passes_register_by_name() {
     ];
     assert_eq!(format!("{reg:?}"), format!("{names:?}"));
     let free = [
+        "lower-fromsoft-render-graph",
         "lower-elden-ring-reinhard",
         "derive-fromsoft-detail",
         "drop-fromsoft-far",
