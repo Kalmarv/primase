@@ -17,6 +17,10 @@ use iridia_interface::{ShaderFormat, Stage};
 use primase_core::pass::{Choice, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::render_graph::{DrawBucket, RenderGraph, SceneMembers};
 use primase_core::shader::bind_output_uses;
+use primase_core::shader::{
+    FallbackCoordinates, InputFallback, InputFallbackValue, InputRole, StageBinding, bind_fallback_uv_copies,
+    bind_surface_input_fallbacks,
+};
 use primase_core::{
     ColorSpace, Component, DrawLayer, DrawOrder, Entity, Instance, MaterialVariants, Mesh, Name, Semantic,
     Shadows, StepBinding, StepBindings, StepProgram, TexRole, Texture, World,
@@ -33,6 +37,50 @@ const UNBOUND_STEP: &str = "the material's pixel program is not bound (its core.
 /// Why a vertex program's material parameters are not bound: the executor refuses the program or its constant layout
 /// (a field name twice, as `SpeedTree_*_Gbuf.vpo`'s `m_fBranchTime`).
 const VERTEX_PARAMETERS_UNREAD: &str = "vertex programs whose material parameters are not bound: the executor refuses the program or its constant layout";
+
+struct VertexProgram {
+    entity: Entity,
+    shader: Shader,
+    program: Result<iridia::Program, String>,
+    layout: Result<Layout, String>,
+}
+
+/// Compatibility approximations for a replacement vertex stage, not native values. Standard surface semantics
+/// come from core's shared helper; these two further varying meanings belong only to this binding pass.
+fn bind_extra_fallbacks(stage: &mut StageBinding, interface: &iridia_interface::Interface) -> u64 {
+    let mut count = 0;
+    for input in &mut stage.inputs {
+        if !matches!(input.role, InputRole::Previous | InputRole::Unknown { .. }) {
+            continue;
+        }
+        let Some(varying) = interface.inputs.iter().find(|v| v.label == input.label) else {
+            continue;
+        };
+        if varying.system.is_some()
+            || varying.value.scalar != iridia_interface::ScalarType::Float
+            || !input.label.name.eq_ignore_ascii_case("TEXCOORD")
+        {
+            continue;
+        }
+        let (words, why) = match input.label.index {
+            7 => (
+                [1.0f32.to_bits(); 4],
+                "stand-in: white (a tint the scene has none of)",
+            ),
+            12 => (
+                [1.0f32.to_bits(), 0, 0, 0],
+                "stand-in: detail scale 1 (the scene has none)",
+            ),
+            _ => continue,
+        };
+        input.role = InputRole::PreviousOr {
+            fallback: InputFallback::new(InputFallbackValue::Literal(words)),
+            why: why.into(),
+        };
+        count += 1;
+    }
+    count
+}
 
 /// `resolve-fromsoft-shaders{unbound-textures=preview|leave}`: for each material with a layered definition, bind its
 /// G-buffer pixel program (`<shader>_<switch>_Gbuf.ppo`, from `fromsoft.shader_programs`) as Sekiro's rules say
@@ -269,8 +317,10 @@ fn run(
     let mut textures: BTreeMap<(String, bool), Entity> = BTreeMap::new();
     // the vertex programs, each its own entity with the interface read once, by file name, with its constant layout as
     // the executor reads it (or why it does not)
-    let mut vertex_shaders: BTreeMap<String, (Entity, Shader, std::result::Result<Layout, String>)> =
-        BTreeMap::new();
+    let mut vertex_shaders: BTreeMap<String, VertexProgram> = BTreeMap::new();
+    let mut fallback_inputs = 0;
+    let mut extra_fallback_inputs = 0;
+    let mut copied_fallback_inputs = 0;
     // each bundle's parameter definition, taken once per bundle entity
     let mut parameters: BTreeMap<Entity, Option<Metaparam>> = BTreeMap::new();
     let draws = draws(world);
@@ -419,7 +469,7 @@ fn run(
             .and_then(|e| parameters.get(&e))
             .and_then(Option::as_ref);
         let mut refused = None;
-        let resolution = resolve(
+        let mut resolution = resolve(
             parsed,
             *shader_entity,
             &material,
@@ -465,6 +515,9 @@ fn run(
         for (policy, count) in resolution.policies {
             *policies.entry(policy).or_default() += count;
         }
+        fallback_inputs +=
+            bind_surface_input_fallbacks(&mut resolution.stage, PixelShader::interface(parsed)) as u64;
+        extra_fallback_inputs += bind_extra_fallbacks(&mut resolution.stage, PixelShader::interface(parsed));
         let mut stages = Vec::new();
         match vertex {
             Some((vertex_name, format, code)) => {
@@ -491,12 +544,27 @@ fn run(
                     let program = match format {
                         ShaderFormat::Dxbc => iridia_dxbc::lift(&code).map_err(|e| e.to_string()),
                         _ => iridia_dxil::lift(&code).map_err(|e| e.to_string()),
-                    }
-                    .and_then(|lifted| ProgramShader::new(lifted).map_err(|e| e.to_string()))
-                    .and_then(|program| Layout::of(&program).map_err(|e| e.to_string()));
-                    vertex_shaders.insert(vertex_name.clone(), (entity, shader, program));
+                    };
+                    let layout = program
+                        .clone()
+                        .and_then(|lifted| ProgramShader::new(lifted).map_err(|e| e.to_string()))
+                        .and_then(|program| Layout::of(&program).map_err(|e| e.to_string()));
+                    vertex_shaders.insert(
+                        vertex_name.clone(),
+                        VertexProgram {
+                            entity,
+                            shader,
+                            program,
+                            layout,
+                        },
+                    );
                 }
-                let (entity, shader, layout) = &vertex_shaders[&vertex_name];
+                let VertexProgram {
+                    entity,
+                    shader,
+                    program,
+                    layout,
+                } = &vertex_shaders[&vertex_name];
                 let mut vertex = resolve_vertex_for_geometry(shader, *entity, world, material_entity)
                     .map_err(|e| format!("{vertex_name}: {e}"))?;
                 // the material's own parameters the vertex program reads, bound as the pixel program's are
@@ -528,6 +596,18 @@ fn run(
                     *policies
                         .entry(crate::layer_bake::resolve::PALETTE_BOUND_POLICY.to_owned())
                         .or_default() += 1;
+                }
+                if let Ok(program) = program {
+                    copied_fallback_inputs += bind_fallback_uv_copies(
+                        &mut resolution.stage,
+                        program,
+                        &vertex.stage,
+                        FallbackCoordinates {
+                            slot: primase_core::pbr::TextureSlot::BaseColor,
+                            absent_texture_set: 0,
+                            absent_stream: [0; 2],
+                        },
+                    ) as u64;
                 }
                 stages.push(vertex.stage);
             }
@@ -688,6 +768,15 @@ fn run(
         );
     }
     log.count("shader programs", (shaders.len() + vertex_shaders.len()) as u64);
+    log.count("pixel inputs with shared surface replacement descriptions (used only without an executable vertex stage)", fallback_inputs);
+    log.count(
+        "pixel inputs with source tint/detail replacement descriptions",
+        extra_fallback_inputs,
+    );
+    log.count(
+        "pixel replacement inputs retaining proved vertex UV-copy lanes",
+        copied_fallback_inputs,
+    );
     log.count("bound texture files", textures.len() as u64);
     for (policy, count) in policies {
         log.approximate(&policy, count);
@@ -754,6 +843,54 @@ fn step_bindings(world: &mut World, forward: &[(Entity, bool)], log: &mut PassLo
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "owned fixture programs")]
 mod program_facts_tests {
+    #[test]
+    fn tint_and_detail_replacement_inputs_belong_to_the_source_binding() {
+        use iridia_interface::{Interface, Label, ScalarType, Stage, Value, Varying, VaryingProvenance};
+        use primase_core::shader::{InputBinding, InputFallbackValue, InputRole, StageBinding};
+        let interface = Interface {
+            stage: Stage::Pixel,
+            inputs: [0, 7, 12, 13]
+                .map(|index| Varying {
+                    label: Label {
+                        name: "TEXCOORD".into(),
+                        index,
+                    },
+                    system: None,
+                    value: Value {
+                        scalar: ScalarType::Float,
+                        width: 4,
+                    },
+                    interp: None,
+                    used: true,
+                    provenance: VaryingProvenance::default(),
+                })
+                .to_vec(),
+            outputs: vec![],
+            resources: vec![],
+            facts: Default::default(),
+        };
+        let mut stage = StageBinding::new(Stage::Pixel, primase_core::World::new().spawn());
+        stage.inputs = interface
+            .inputs
+            .iter()
+            .map(|v| InputBinding {
+                label: v.label.clone(),
+                role: InputRole::Previous,
+            })
+            .collect();
+        assert_eq!(super::bind_surface_input_fallbacks(&mut stage, &interface), 1);
+        assert_eq!(super::bind_extra_fallbacks(&mut stage, &interface), 2);
+        for (index, expected) in [(1, [1.0f32.to_bits(); 4]), (2, [1.0f32.to_bits(), 0, 0, 0])] {
+            let InputRole::PreviousOr { fallback, why } = &stage.inputs[index].role else {
+                panic!("source fallback")
+            };
+            assert_eq!(fallback.value, InputFallbackValue::Literal(expected));
+            assert!(!why.is_empty());
+        }
+        assert_eq!(stage.inputs[3].role, InputRole::Previous);
+        assert_eq!(super::bind_extra_fallbacks(&mut stage, &interface), 0);
+    }
+
     #[test]
     fn sekiro_and_elden_fixture_lifts_keep_source_counts_hash_and_register_inputs() {
         use iridia_interface::{InstructionUnit, ShaderFormat, Stage};

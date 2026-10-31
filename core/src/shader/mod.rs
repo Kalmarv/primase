@@ -6,6 +6,7 @@
 mod binding;
 pub mod encoding;
 mod facts;
+mod input_fallback;
 mod lights;
 mod program;
 pub mod roles;
@@ -16,6 +17,10 @@ pub(crate) use binding::BindingPlace;
 pub use binding::{SamplerBinding, ShaderBinding, StageBinding, TextureBinding, TextureSource};
 pub use encoding::{LaneAffine, NormalEncoding, NormalSpace, ScalarEncoding};
 pub use facts::{MaterialPrograms, ProgramFacts, ProgramResourceFacts};
+pub use input_fallback::{
+    FallbackCoordinateCopies, FallbackCoordinates, InputFallback, InputFallbackValue,
+    bind_fallback_uv_copies, bind_surface_input_fallbacks,
+};
 pub use lights::{
     LightField, LightIndices, LightListPart, LightLookup, LightTable, LightTableKind, LightValue, ListBits,
     ListConstant, ListUnknown, PackedLightLists, PackedLights, pack_light_lists,

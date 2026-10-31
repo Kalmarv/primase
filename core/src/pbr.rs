@@ -276,7 +276,7 @@ impl Default for PbrMaterial {
     }
 }
 /// A texture slot of a [`PbrMaterial`], in glTF's order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum TextureSlot {
     BaseColor,
     MetallicRoughness,

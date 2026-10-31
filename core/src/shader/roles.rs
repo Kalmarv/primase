@@ -45,6 +45,12 @@ pub enum InputRole {
     Lanes(Vec<LaneStream>),
     /// The value the previous stage wrote under the same label.
     Previous,
+    /// The previous stage's value when it executes; otherwise the source-stated replacement input. The reason
+    /// belongs to the binding pass and is reported by a consumer only when it uses the replacement.
+    PreviousOr {
+        fallback: super::InputFallback,
+        why: String,
+    },
     /// The pipeline supplies it (the varying's system value says which).
     System,
     /// Lanes of vertex attributes as [`InputRole::Lanes`] states them, each component stored through `map` (`v * scale +

@@ -11,7 +11,7 @@ use crate::shader::{
 };
 use iridia_interface::{
     BufferKind, ConstantBufferBinding, Interface, Label, MatrixLines, RenderState, ResourceId, ResourceKind,
-    SamplerState, Stage, SystemValue, Unshown,
+    SamplerState, ScalarType, Stage, SystemValue, Unshown,
 };
 
 use super::Shader;
@@ -216,17 +216,29 @@ impl StageBinding {
             return Err(at(format!("its shader is a {:?} program", interface.stage)));
         }
         for (n, i) in self.inputs.iter().enumerate() {
-            if !interface.inputs.iter().any(|v| v.label == i.label) {
+            let Some(varying) = interface.inputs.iter().find(|v| v.label == i.label) else {
                 return Err(at(format!(
                     "input {}{} is not in the shader",
                     i.label.name, i.label.index
                 )));
-            }
+            };
             if self.inputs[..n].iter().any(|before| before.label == i.label) {
                 return Err(at(format!(
                     "input {}{} is bound twice",
                     i.label.name, i.label.index
                 )));
+            }
+            if let super::InputRole::PreviousOr { fallback, why } = &i.role {
+                if self.stage != Stage::Pixel
+                    || varying.system.is_some()
+                    || varying.value.scalar != ScalarType::Float
+                {
+                    return Err(at("a replacement input must be a float pixel varying".into()));
+                }
+                if why.trim().is_empty() {
+                    return Err(at("a replacement input has no reason".into()));
+                }
+                fallback.check().map_err(at)?;
             }
         }
         for (n, o) in self.outputs.iter().enumerate() {
