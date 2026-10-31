@@ -268,10 +268,16 @@ impl Pass for SelectFromSoftInitializerOutfits {
         &[InitializerOutfits::NAME]
     }
     fn provides(&self) -> &[&'static str] {
-        &[OutfitVariants::NAME]
+        &[
+            OutfitVariants::NAME,
+            primase_core::opening::OpeningSuggestions::NAME,
+        ]
     }
     fn modifies(&self) -> &[&'static str] {
-        &[OutfitVariants::NAME]
+        &[
+            OutfitVariants::NAME,
+            primase_core::opening::OpeningSuggestions::NAME,
+        ]
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         let source = world
@@ -341,6 +347,33 @@ impl Pass for SelectFromSoftInitializerOutfits {
             }
         }
         log.count("initializer presentations selected", variants.len() as u64);
+        let suggestions = variants
+            .iter()
+            .filter(|outfit| outfit.readable())
+            .map(|outfit| primase_core::opening::OpeningSuggestion {
+                label: format!("Open {} with its parts", outfit.name),
+                reasons: vec!["The character's drawable body is an installed initializer outfit.".into()],
+                reader: "parts".into(),
+                options: serde_json::json!({"parts":outfit.parts,"animations_of":outfit.animations_of}),
+                inherit: [
+                    "game",
+                    "install",
+                    "keys",
+                    "names",
+                    "bake_layers",
+                    "preview_layers",
+                    "game_shaders",
+                    "clips",
+                    "rate",
+                    "absent",
+                    "root_motion",
+                ]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            })
+            .collect();
+        world.insert_resource(primase_core::opening::OpeningSuggestions(suggestions));
         world.insert_resource(OutfitVariants(variants));
         Ok(())
     }
