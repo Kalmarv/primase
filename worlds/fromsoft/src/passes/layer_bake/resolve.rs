@@ -809,8 +809,14 @@ fn material_parameters(
         .keys()
         .filter(|n| n.contains("_snp_") && !n.ends_with("_PADDING"))
         .collect();
-    // Layout flattens structure members. A CA name must not turn SAT_MtdParam
-    // members into the alternative named-material path or suppress their array.
+    // Named material fields can themselves be members of SAT_MtdParam. Choose
+    // their path before excluding the array's members from independent CA fields.
+    // CA defaults alone must not suppress the material array's indexed path.
+    let named_material = fields.iter().any(|name| {
+        material.definition.parameter(name).is_some()
+            || metaparam.is_some_and(|m| m.mtd_params.iter().any(|p| p.name == **name))
+    });
+    let sat = sat.filter(|_| !named_material);
     let named_fields: Vec<&String> = fields
         .iter()
         .copied()
@@ -822,17 +828,12 @@ fn material_parameters(
             })
         })
         .collect();
-    let named_material = named_fields.iter().any(|name| {
-        material.definition.parameter(name).is_some()
-            || metaparam.is_some_and(|m| m.mtd_params.iter().any(|p| p.name == **name))
-    });
     let names: Vec<&String> = if named_fields.iter().any(|n| declared(n)) {
         named_fields
     } else {
         Vec::new()
     };
     let named = !names.is_empty();
-    let sat = sat.filter(|_| !named_material);
     let mut sat_bound = 0;
     for name in names {
         let field = layout.fields[name];

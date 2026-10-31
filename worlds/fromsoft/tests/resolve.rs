@@ -2760,6 +2760,47 @@ fn ca_defaults_follow_reflected_components_without_hiding_the_material_array() {
     );
 }
 
+/// A reflected SAT member may be a named material parameter, as in Sekiro.
+/// Its name takes priority over the unrelated indexed metadata start word,
+/// while the independent CA structure keeps its own reflected defaults.
+#[test]
+fn named_material_members_inside_the_sat_structure_keep_their_values() {
+    for authored in [false, true] {
+        let shader = executor(include_bytes!("fixtures/ca_defaults.dxbc"));
+        let mut metadata = ca_metadata();
+        metadata.mtd_params[0].name = "M_Test_snp_array_0".into();
+        metadata.mtd_params[0].start = 0;
+        let mut m = material();
+        m.definition.parameters.retain(|p| !p.name.contains("_snp_"));
+        if authored {
+            m.definition.parameters.push(Parameter {
+                name: "M_Test_snp_array_0".into(),
+                value: Value::Float(vec![0.625]),
+            });
+        }
+        let resolution = resolve(
+            &shader,
+            World::default().spawn(),
+            &m.view(),
+            fromsoft_formats::Game::Sekiro,
+            Some(&metadata),
+            Unbound::Preview,
+            &mut |_, _| Ok(None),
+        )
+        .unwrap();
+        let bound = constants(&resolution.stage, &shader);
+        let array = bound.iter().find(|c| c.1 == "M_Test_snp_array_0").unwrap();
+        let value = if authored { 0.625 } else { 0.75 };
+        assert_eq!((array.2, array.3, &array.4), (48, 4, &bits(&[value])));
+        assert_eq!(bound.len(), 5);
+        assert!(!resolution.policies.contains_key(UNBOUND_MATERIAL_FIELDS));
+        for (component, expected) in [(0, 0.125), (1, 0.25), (2, 0.5), (3, 1.)] {
+            let name = format!("M_Test_snp_0_color_0_{component}");
+            assert_eq!(bound.iter().find(|c| c.1 == name).unwrap().4, bits(&[expected]));
+        }
+    }
+}
+
 /// Two mangled candidates are ambiguous; a matching suffix from a different
 /// family is not a default. Neither may silently supply a colour component.
 #[test]
