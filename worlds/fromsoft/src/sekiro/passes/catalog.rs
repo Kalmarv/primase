@@ -3,7 +3,7 @@ use primase_core::{Resource,World};
 use primase_core::pass::{Pass,PassLog,PassSpec};
 use serde_json::{json,Value};
 use crate::sekiro::{catalog::{Catalog,CatalogInputs,CatalogReady,CatalogEntry,Subject,player_outfit_entries},
-    outfit_data::{OutfitVariants,NpcOutfitVariants}};
+    outfit_data::{OutfitVariants,NpcOutfitVariants}, standalone::{WeaponInventory,SelectedWeaponForms}};
 
 #[derive(Clone,Copy,Debug)]
 pub struct MaterializeFromSoftCatalog;
@@ -12,7 +12,7 @@ pub const MATERIALIZE_FROMSOFT_CATALOG:PassSpec=PassSpec {
 };
 impl Pass for MaterializeFromSoftCatalog {
     fn name(&self)->&'static str {"materialize-fromsoft-catalog"}
-    fn requires(&self)->&[&'static str] {&[Catalog::NAME,CatalogInputs::NAME,OutfitVariants::NAME,NpcOutfitVariants::NAME]}
+    fn requires(&self)->&[&'static str] {&[Catalog::NAME,CatalogInputs::NAME,OutfitVariants::NAME,NpcOutfitVariants::NAME,WeaponInventory::NAME,SelectedWeaponForms::NAME]}
     fn modifies(&self)->&[&'static str] {&[Catalog::NAME]}
     fn provides(&self)->&[&'static str] {&[CatalogReady::NAME]}
     fn run(&self,world:&mut World,log:&mut PassLog)->Result<(),String> {
@@ -44,6 +44,18 @@ impl Pass for MaterializeFromSoftCatalog {
         catalog.entries.splice(input.npc_insert..input.npc_insert,npc_entries);
         if let Some(parent)=&input.player_parent {
             catalog.entries.splice(input.player_insert..input.player_insert,player_outfit_entries(parent,&players));
+        }
+        let inventory=world.resource::<WeaponInventory>().ok_or("weapon inventory absent")?;
+        let forms=world.resource::<SelectedWeaponForms>().ok_or("weapon forms not selected")?;
+        if inventory.rows.len()!=forms.0.len() {return Err("selected weapon rows changed catalog identity".into());}
+        for (raw,(id,part)) in inventory.rows.iter().zip(&forms.0) {
+            if raw.row.row!=*id {return Err("selected weapon row order changed".into());}
+            if raw.row.model<=0 {continue;}
+            let Some(part)=part else {continue};
+            catalog.entries.push(CatalogEntry {key:format!("weapon/{id}"),kind:"weapon".into(),subject:Subject::Object,
+                refusal:None,name:id.to_string(),path:format!("EquipParamWeapon {id} {part}"),
+                open:json!({"reader":"parts","weapons_right":[id.to_string()]}),
+                details:json!({"part":part,"label":format!("{part} (EquipParamWeapon {id})")})});
         }
         log.count("catalog entries materialized",catalog.entries.len() as u64);
         world.insert_resource(catalog); world.insert_resource(CatalogReady);

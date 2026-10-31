@@ -44,6 +44,7 @@ impl Resource for CatalogReady {const NAME:&'static str="fromsoft.catalog_ready"
 
 
 /// Source-stated report fields and notices, rendered generically by a program.
+#[derive(Debug)]
 pub struct DescriptiveReport {
     pub fields: serde_json::Map<String,Value>,
     pub notices: Vec<primase_core::convert::Notice>,
@@ -365,9 +366,18 @@ pub fn read(install: &Install, decoder: &Decoder<'_>, names: Option<&Path>, opti
         if let Ok(read)=&game_text {entry.details["name_notices"]=json!(read.report);}
     }
     // each weapon row whose model the archives hold: a value of weapons_right and weapons_left
-    entries.extend(weapon_entries(&install, &archive, &decoder));
+    let weapons=match sekiro::standalone::read_weapon_inventory(install,&archive,decoder) {
+        Ok(raw)=>raw,
+        Err(error)=>{
+            entries.push(CatalogEntry {key:"weapon/unread".into(),kind:"weapon".into(),subject:Subject::Object,
+                refusal:Some(format!("the weapon params did not read: {error}")),name:"weapons unread".into(),
+                path:"EquipParamWeapon".into(),open:Value::Null,details:json!({})});
+            sekiro::standalone::WeaponInventory {rows:Vec::new()}
+        }
+    };
     let mut world=World::new();
     world.insert_resource(Catalog {entries});
+    world.insert_resource(weapons);
     world.insert_resource(initializers);
     world.insert_resource(NpcOutfitRows {game:install.game,rows:npc_rows.iter().map(|(_,row)|row.clone()).collect()});
     world.insert_resource(CatalogInputs {player_parent,player_insert,npc_insert,npc_rows});
@@ -377,44 +387,7 @@ pub fn read(install: &Install, decoder: &Decoder<'_>, names: Option<&Path>, opti
 /// The catalog's weapons: each `EquipParamWeapon` row with a model whose part binder the archives hold, opening as its
 /// models (named in the right hand, held by no one). The rows without a model (the game's unarmed rows) or whose model no
 /// binder holds are left out; params that do not read are one refused row saying why.
-pub fn weapon_entries(install: &Install, archive: &Archive, decoder: &Decoder<'_>) -> Vec<CatalogEntry> {
-    let rows = match sekiro::WeaponParams::read(install, archive, decoder).and_then(|params| params.weapons()) {
-        Ok(rows) => rows,
-        Err(error) => {
-            return vec![CatalogEntry {
-                key: "weapon/unread".into(),
-                kind: "weapon".into(),
-                subject: Subject::Object,
-                refusal: Some(format!("the weapon params did not read: {error}")),
-                name: "weapons unread".into(),
-                path: "EquipParamWeapon".into(),
-                open: Value::Null,
-                details: json!({}),
-            }];
-        }
-    };
-    let mut binders: std::collections::BTreeMap<String, Option<String>> = std::collections::BTreeMap::new();
-    rows.into_iter()
-        .filter(|weapon| weapon.model > 0)
-        .filter_map(|weapon| {
-            let base = weapon.part();
-            let part = binders
-                .entry(base.clone())
-                .or_insert_with(|| weapon_binder(archive, &base))
-                .clone()?;
-            Some(CatalogEntry {
-                key: format!("weapon/{}", weapon.row),
-                kind: "weapon".into(),
-                subject: Subject::Object,
-                refusal: None,
-                name: weapon.row.to_string(),
-                path: format!("EquipParamWeapon {} {part}", weapon.row),
-                open: json!({ "reader": "parts", "weapons_right": [weapon.row.to_string()] }),
-                details: json!({ "part": part, "label": format!("{part} (EquipParamWeapon {})", weapon.row) }),
-            })
-        })
-        .collect()
-}
+
 
 pub fn name_entries(
     entries: &mut [CatalogEntry],
@@ -664,11 +637,7 @@ pub fn player_outfit_entries(
     }).collect()
 }
 
-fn weapon_binder(archive: &fromsoft_formats::Archive, base: &str) -> Option<String> {
-    [format!("{base}_l"), base.to_owned(), format!("{base}_m")]
-        .into_iter()
-        .find(|p| archive.contains(&fromsoft_formats::paths::part(&p)))
-}
+
 
 /// The explicit cache directory and input identity determine the metadata cache key.
 fn cache_file(kind: &str, install: &Install, names: Option<&Path>, cache_dir: Option<&Path>) -> Option<PathBuf> {
