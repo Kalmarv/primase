@@ -3,6 +3,7 @@ mod common;
 mod inputs;
 use fromsoft_formats::{Game, Keys, dcx::Decoder, msb::MapLayout};
 use primase_core::{Name, ReflectionProbeRegion, Source, TextureLayers, TextureShape, World};
+use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::sekiro::environment::{self, Selection, Tier};
 use std::collections::{BTreeMap, BTreeSet};
 
