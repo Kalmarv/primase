@@ -1046,8 +1046,9 @@ pub struct StepReport {
     /// record keeps what its log had noted until then, so its omissions and approximations still reach the report;
     /// `added` and `removed` are then empty (not checked).
     pub failed: Option<String>,
-    /// For a pass that opts in ([`Pass::may_lack_inputs`]), its required names when none of them was in the world or
-    /// part, so the pass did not run (its log counts it, [`SKIPPED`]); empty when it ran.
+    /// Required names absent when the step was skipped: a pass that opts in and finds none
+    /// ([`Pass::may_lack_inputs`], [`SKIPPED`]), or the caller's explicit [`MissingInputs::Skip`]
+    /// preparation policy ([`SKIPPED_UNFED`]). Empty when the pass ran.
     pub skipped: Vec<String>,
     /// How long the step took, by the wall clock (zero for a skipped step).
     pub time: StepTime,
@@ -1114,6 +1115,21 @@ impl RunReport {
 /// The count a pass skipped for holding none of its required names gets in its log ([`Pass::may_lack_inputs`]), in a
 /// whole run or a part run, so a conversion's totals give the skips per pass.
 pub const SKIPPED: &str = "runs holding none of its required names, skipped";
+
+/// The count for a preparation step omitted by an explicit [`MissingInputs::Skip`] policy.
+pub const SKIPPED_UNFED: &str = "runs missing required names, skipped";
+
+/// How a caller's preparation handles a pass whose required components or resources are absent.
+/// A strict conversion keeps [`MissingInputs::Refuse`]; a preparation spanning optional source
+/// content may explicitly skip unfed passes, retaining each one in the typed run report.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MissingInputs {
+    /// Refuse absent inputs, except for a pass's own [`Pass::may_lack_inputs`] declaration.
+    #[default]
+    Refuse,
+    /// Skip an unfed step, recording precisely which required names are absent.
+    Skip,
+}
 
 /// Why the planner chose a pass: the name to lower (or the missing required name) and the chain depth.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1226,6 +1242,7 @@ pub struct PassManager {
     validators: Vec<Box<dyn Validator>>,
     conservation: Conservation,
     pass_checks: bool,
+    missing_inputs: MissingInputs,
 }
 
 impl fmt::Debug for PassManager {
@@ -1247,6 +1264,7 @@ impl PassManager {
             validators: Vec::new(),
             conservation: Conservation::Off,
             pass_checks: cfg!(debug_assertions),
+            missing_inputs: MissingInputs::Refuse,
         }
     }
 
@@ -1267,6 +1285,14 @@ impl PassManager {
 
     pub fn pass_checks(&self) -> bool {
         self.pass_checks
+    }
+
+    /// State how to handle unfed preparation steps. Skipping never supplies default data or
+    /// calls an unfed pass: its [`StepReport::skipped`] lists the absent names, and later steps
+    /// inspect the world actually left by earlier steps. The default remains strict refusal.
+    pub fn with_missing_inputs(mut self, policy: MissingInputs) -> Self {
+        self.missing_inputs = policy;
+        self
     }
 
     /// Run the conservation diagnostics around every pass ([`crate::ledger`]): off by default.
@@ -1340,7 +1366,8 @@ impl PassManager {
     /// opts in ([`Pass::may_lack_inputs`]), requires names and finds none of them has nothing to do there and is
     /// skipped, recorded (its step's [`StepReport::skipped`], a [`SKIPPED`] count in its log). Any other pass whose
     /// required names are absent fails, as does an opted-in pass that finds some of them but not all; a pass that
-    /// requires nothing always runs.
+    /// requires nothing always runs. An explicit [`MissingInputs::Skip`] policy also skips
+    /// other unfed steps, retaining their missing names in the report.
     pub fn run_part(&self, w: &mut World, pipeline: &Pipeline, report: &mut RunReport) -> Result<()> {
         self.run_with(w, pipeline, report, &mut NoInstrument)
     }
@@ -1355,10 +1382,17 @@ impl PassManager {
         pipeline.check()?;
         for (index, p) in pipeline.passes.iter().enumerate() {
             let text = pass_text(p.as_ref());
-            let absent = |r: &&str| !w.has_component_named(r) && !w.resource_names().contains(r);
-            if p.may_lack_inputs() && !p.requires().is_empty() && p.requires().iter().all(absent) {
+            let missing: Vec<String> = p
+                .requires()
+                .iter()
+                .filter(|r| !w.has_component_named(r) && !w.resource_names().contains(r))
+                .map(|r| (*r).to_owned())
+                .collect();
+            let declared_skip =
+                p.may_lack_inputs() && !p.requires().is_empty() && missing.len() == p.requires().len();
+            if declared_skip || (self.missing_inputs == MissingInputs::Skip && !missing.is_empty()) {
                 let mut log = PassLog::default();
-                log.count(SKIPPED, 1);
+                log.count(if declared_skip { SKIPPED } else { SKIPPED_UNFED }, 1);
                 report.steps.push(StepReport {
                     pass: text,
                     approximates: p.approximates(),
@@ -1367,7 +1401,7 @@ impl PassManager {
                     removed: Vec::new(),
                     conservation: Vec::new(),
                     failed: None,
-                    skipped: p.requires().iter().map(|r| (*r).to_owned()).collect(),
+                    skipped: missing,
                     time: StepTime::default(),
                 });
                 continue;
@@ -2585,6 +2619,84 @@ mod tests {
                 held: names(&["toy.lit", "toy.mesh", "toy.pbr"]),
             }
         );
+    }
+
+    #[test]
+    fn optional_preparation_reports_missing_inputs_and_uses_actual_preceding_outputs() {
+        struct NeedsBoth;
+        impl Pass for NeedsBoth {
+            fn name(&self) -> &'static str {
+                "needs-both"
+            }
+            fn requires(&self) -> &[&'static str] {
+                &["toy.mesh", "toy.pbr"]
+            }
+            fn run(&self, _: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
+                log.count("ran with both inputs", 1);
+                Ok(())
+            }
+        }
+        let pipeline = || Pipeline {
+            passes: vec![
+                Box::new(NeedsBoth),
+                Box::new(Load),
+                Box::new(NeedsBoth),
+                Box::new(Bake { size: 1024 }),
+                Box::new(NeedsBoth),
+            ],
+        };
+        let mut input = world();
+        let mut report = RunReport::default();
+        PassManager::new(PassRegistry::new())
+            .with_missing_inputs(MissingInputs::Skip)
+            .run(&mut input, &pipeline(), &mut report)
+            .unwrap();
+        assert_eq!(report.steps.len(), 5);
+        assert_eq!(report.steps[0].skipped, ["toy.mesh", "toy.pbr"]);
+        assert_eq!(report.steps[2].skipped, ["toy.pbr"]);
+        assert_eq!(report.steps[2].log.counts[SKIPPED_UNFED], 1);
+        assert!(report.steps[0].added.is_empty() && report.steps[2].added.is_empty());
+        assert!(report.steps[4].skipped.is_empty());
+        assert_eq!(report.steps[4].log.counts["ran with both inputs"], 1);
+        assert!(input.has_component_named("toy.pbr"));
+        let mut strict_report = RunReport::default();
+        assert!(matches!(
+            PassManager::new(PassRegistry::new()).run(&mut world(), &pipeline(), &mut strict_report),
+            Err(Error::Missing { .. })
+        ));
+        assert!(strict_report.steps[0].skipped.is_empty());
+    }
+
+    #[test]
+    fn optional_preparation_does_not_hide_a_fed_pass_failure() {
+        struct Fails;
+        impl Pass for Fails {
+            fn name(&self) -> &'static str {
+                "fails"
+            }
+            fn run(&self, _: &mut World, _: &mut PassLog) -> std::result::Result<(), String> {
+                Err("source data is malformed".into())
+            }
+        }
+        let mut report = RunReport::default();
+        let result = PassManager::new(PassRegistry::new())
+            .with_missing_inputs(MissingInputs::Skip)
+            .run(
+                &mut world(),
+                &Pipeline {
+                    passes: vec![Box::new(Fails)],
+                },
+                &mut report,
+            );
+        assert!(result.is_err());
+        assert!(
+            report.steps[0]
+                .failed
+                .as_ref()
+                .unwrap()
+                .contains("source data is malformed")
+        );
+        assert!(report.steps[0].skipped.is_empty());
     }
 
     /// Each step's time is measured around its own run (a 30 ms run is at least 30 ms, the manager's checks apart);
