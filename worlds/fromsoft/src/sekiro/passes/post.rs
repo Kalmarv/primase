@@ -1,9 +1,10 @@
 //! Partial Reinhard and installed colour-lookup processing. This does not stand for Sekiro's final display transform.
 use crate::sekiro::source::DrawParam;
 use primase_core::pass::{Pass, PassLog, PassSpec};
-use primase_core::{Atmosphere, ReinhardCurve, Resource, ToneMap, World};
+use primase_core::{Atmosphere, PostProcessingStatus, ReinhardCurve, Resource, ToneMap, World};
 
 pub mod elden_ring;
+mod status;
 
 /// Apply resolved steady Reinhard and the proven selected lookup, leaving unestablished stages absent.
 #[derive(Debug)]
@@ -27,7 +28,7 @@ impl Pass for LowerSekiroReinhard {
         true
     }
     fn provides(&self) -> &[&'static str] {
-        &[Atmosphere::NAME]
+        &[Atmosphere::NAME, PostProcessingStatus::NAME]
     }
     fn approximates(&self) -> &'static str {
         "Reinhard and proven SourceID0 LUT with native default gamma; matrix and vignette omitted, player brightness overwrite not traced"
@@ -39,6 +40,7 @@ impl Pass for LowerSekiroReinhard {
         if draw.game != fromsoft_formats::Game::Sekiro {
             return Ok(());
         }
+        status::record(&draw, world);
         let scalars = match &draw.reinhard {
             Some(Ok(scalars)) => *scalars,
             Some(Err(why)) => {

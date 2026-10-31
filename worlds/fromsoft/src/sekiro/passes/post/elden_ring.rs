@@ -2,7 +2,7 @@
 use crate::sekiro::source::DrawParam;
 use fromsoft_formats::{Game, gparam::Value};
 use primase_core::pass::{Pass, PassLog, PassSpec};
-use primase_core::{Atmosphere, ReinhardCurve, Resource, ToneMap, World};
+use primase_core::{Atmosphere, PostProcessingStatus, ReinhardCurve, Resource, ToneMap, World};
 
 /// Lower mode 8's sampled Reinhard parameters on the native constructor's separate-gamma path.
 /// This does not compose weather/override banks or infer the remaining display settings.
@@ -49,7 +49,7 @@ impl Pass for LowerEldenRingReinhard {
         true
     }
     fn provides(&self) -> &[&'static str] {
-        &[Atmosphere::NAME]
+        &[Atmosphere::NAME, PostProcessingStatus::NAME]
     }
     fn approximates(&self) -> &'static str {
         "the caller-selected Elden Ring file's mode-8 curve and observed SourceID0 LUT binding on the native separate-gamma default; layered overrides and player brightness overwrites are not resolved; matrix and vignette omitted"
@@ -61,6 +61,7 @@ impl Pass for LowerEldenRingReinhard {
         if draw.game != Game::EldenRing {
             return Ok(());
         }
+        super::status::record(&draw, world);
         let hour = world.resource::<primase_core::TimeOfDay>().map_or_else(
             || super::super::draw_params::default_hour(draw.game).hour,
             |time| time.hour,
