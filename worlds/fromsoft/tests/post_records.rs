@@ -6,6 +6,51 @@ use fromsoft_formats::{Game, dcx::Decoder};
 use primase_fromsoft::sekiro::post;
 
 #[test]
+fn installed_ashina_colour_lookup_matches_the_captured_cube() -> Result<(), Box<dyn std::error::Error>> {
+    let (Some(archive), Some(library), Some(frames)) = (
+        common::archive(Game::Sekiro)?,
+        inputs::oodle(inputs::Tool::Oodle6),
+        inputs::oracle(inputs::OracleSet::Scripts, inputs::Game::Sekiro, "frames"),
+    ) else {
+        return Ok(());
+    };
+    let dll = common::oodle(library)?;
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: 1 << 28,
+    };
+    let actual = post::lut::read(&archive, &decoder, "m11_01", 0)?;
+    assert_eq!(actual.texture, "m11_01_CGrading0000");
+    assert_eq!(actual.side, 16);
+    assert_eq!(actual.values.len(), 4096);
+    let frame = frames.join("sek2/cap/frame_13604");
+    let events: Vec<serde_json::Value> = std::fs::read_to_string(frame.join("events.jsonl"))?
+        .lines()
+        .map(serde_json::from_str)
+        .collect::<Result<_, _>>()?;
+    let readback = events
+        .iter()
+        .find(|event| event["seq"] == 994)
+        .expect("native LUT readback");
+    let expected = std::fs::read(frame.join(readback["file"].as_str().expect("readback file")))?;
+    assert_eq!(expected.len(), 4096 * 16);
+    for (index, (actual, expected)) in actual.values.iter().zip(expected.as_chunks::<16>().0).enumerate() {
+        for channel in 0..3 {
+            let word = u32::from_le_bytes(expected[channel * 4..channel * 4 + 4].try_into()?);
+            assert_eq!(
+                actual[channel].to_bits(),
+                word,
+                "LUT texel {index} RGB channel {channel}"
+            );
+        }
+    }
+    println!(
+        "POST_LUT m11_01 SourceID0: 4096/4096 RGB texels bit-exact to native cube; red fastest, no flips"
+    );
+    Ok(())
+}
+
+#[test]
 fn installed_post_records_keep_layers_and_missing_fields_distinct() -> Result<(), Box<dyn std::error::Error>>
 {
     let Some(archive) = common::archive(Game::Sekiro)? else {

@@ -146,7 +146,7 @@ primase_testdata::inputs! {
         Query::Oracle(OracleSet::Scripts, Game::Sekiro, "frames") => {
             status: Live,
             gate: false,
-            about: r#"a folder of recorded Sekiro frames, one folder per session (`<run>/cap/frame_<n>/events.jsonl`: the capture proxy's D3D11 calls of one frame in order, each draw or dispatch with its programs named by the proxy's hash of their bytes (FNV-1a 64 from the seed 1469598103934665603) and the sampler objects it bound per stage, and the sampler objects' descriptions); the render graph's table names the frames it comes from (`<run> frame_<n>`); worlds/fromsoft/tests/render_graph.rs"#,
+            about: r#"a folder of recorded Sekiro frames, one folder per session (`<run>/cap/frame_<n>/events.jsonl`: the capture proxy's D3D11 calls of one frame in order, each draw or dispatch with its programs named by the proxy's hash of their bytes (FNV-1a 64 from the seed 1469598103934665603) and the sampler objects it bound per stage, and the sampler objects' descriptions); the render graph's table names the frames it comes from (`<run> frame_<n>`); worlds/fromsoft/tests/render_graph.rs; worlds/fromsoft/tests/post_records.rs compares the native LUT readback with the installed colour-grading strip"#,
             source: r#"our own capture proxies' records of the running game (D3D11 for Sekiro, D3D12 for Elden Ring), kept with the private oracle tools: the game's own calls as it drew, read by the test's own parser, separate from the script that wrote the tables"#,
         },
         Query::Oracle(OracleSet::Scripts, Game::Sekiro, "normal-curl.json") => {
