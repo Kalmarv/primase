@@ -2,7 +2,8 @@
 //! choices the outfits made by presence as the read's notices, why a character has no model, and the skeletons of a
 //! character's models.
 use crate::invalid;
-use fromsoft_formats::equipment::{NO_INITIALIZER, NpcOutfit};
+use crate::sekiro::components::outfits::SelectedNpcOutfit as NpcOutfit;
+use fromsoft_formats::equipment::NO_INITIALIZER;
 use fromsoft_formats::flver::Model;
 use fromsoft_formats::{Archive, Binder, Game, Result, dcx::Decoder};
 use primase_core::convert::{Notice, NoticeKind};

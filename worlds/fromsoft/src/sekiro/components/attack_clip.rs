@@ -17,7 +17,7 @@ pub enum Hand {
 
 /// The player's state a save states: the weapon row in each slot of each hand, the active slot of each hand and the arm
 /// style.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlayerState {
     /// Every hand slot's weapon row, slot order (Elden Ring has three a hand).
     pub weapons: EquippedWeapons,
