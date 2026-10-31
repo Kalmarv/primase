@@ -29,6 +29,7 @@ use crate::marker::{Curve, Marker};
 use crate::material_parameters::MaterialParameters;
 use crate::material_usage::MaterialUsage;
 use crate::morphs::Morphs;
+use crate::opening::OpeningSuggestions;
 use crate::particles::ParticleSystem;
 use crate::pass::memo::Memo;
 use crate::pbr::PbrMaterial;
@@ -90,7 +91,7 @@ declared! {
         DrawGroups, DrawGroupDefaults, ContentNote, Record, DisplayName, PrimitiveKeys, MaterialParameters, SkyAnchor,
         ParticleSystem, IrradianceVolume, ReflectionProbeRegion, StepBindings, StepDraws, LightFalloff, LightTranslucency;
     resources: PartScope, PartitionPlan, Environment, Atmosphere, PostProcessingStatus, StateAssignment, Surfaces, Threads, Memo, RenderGraph,
-        LightUnit, DirectionalLightUnit, TimeOfDay, TextureSwitchView, ReadScopes,
+        LightUnit, DirectionalLightUnit, TimeOfDay, TextureSwitchView, ReadScopes, OpeningSuggestions,
 }
 
 #[cfg(test)]
