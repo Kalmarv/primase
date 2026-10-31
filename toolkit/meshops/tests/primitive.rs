@@ -1,6 +1,51 @@
 use primase_core::{Primitive, Semantic, Stream, Topology};
 use primase_meshops::{Mesh, compact, compact_primitive};
 use std::collections::BTreeMap;
+
+#[test]
+fn opaque_shader_inputs_copy_exactly_and_refuse_interpolation() {
+    use primase_core::VertexBlend;
+    use primase_meshops::point_blend::blend_streams;
+    let mut primitive = fixture();
+    primitive
+        .streams
+        .retain(|s, _| !matches!(s, Semantic::Joints(_) | Semantic::Weights(_)));
+    let values = vec![[-3.0, 0.0, 255.0, -0.0], [4.0; 4], [5.0; 4], [6.0; 4]];
+    primitive
+        .streams
+        .insert(Semantic::ShaderInput(7), Stream::F32x4(values.clone()));
+    let copied = blend_streams(
+        &primitive,
+        &[VertexBlend::copy(2), VertexBlend::copy(0)],
+        None,
+        "tree",
+    )
+    .unwrap();
+    let Stream::F32x4(actual) = &copied.streams[&Semantic::ShaderInput(7)] else {
+        panic!("lost input")
+    };
+    assert_eq!(
+        actual.iter().map(|v| v.map(f32::to_bits)).collect::<Vec<_>>(),
+        [values[2].map(f32::to_bits), values[0].map(f32::to_bits)]
+    );
+    // The generic fixture deliberately has conflicting tangent handedness. Remove that independent
+    // refusal so this probe reaches the opaque stream's interpolation contract.
+    primitive.streams.remove(&Semantic::Tangent(0));
+    let error = blend_streams(
+        &primitive,
+        &[VertexBlend {
+            sources: [0, 1, 1],
+            weights: [0.5, 0.5, 0.0],
+        }],
+        None,
+        "tree",
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("ShaderInput(7)") && error.contains("cannot interpolate"),
+        "{error}"
+    );
+}
 fn fixture() -> Primitive {
     Primitive {
         topology: Topology::Triangles,

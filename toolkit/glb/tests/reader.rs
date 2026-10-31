@@ -8,6 +8,41 @@ use primase_core::{Semantic, Stream, Topology};
 use primase_glb::{AccessorData, ComponentType, ElementType, Gltf};
 use serde_json::{Value, json};
 
+#[test]
+fn opaque_shader_inputs_round_trip_as_application_attributes() {
+    use primase_core::{Mesh, Primitive};
+    use std::collections::BTreeMap;
+    let values = vec![
+        [-3.5, 0.0, 255.0, -0.0],
+        [0.25, 2.0, 9.0, 0.75],
+        [7.0, 8.0, -1.0, 0.5],
+    ];
+    let mesh = Mesh::new(vec![Primitive {
+        topology: Topology::Triangles,
+        streams: BTreeMap::from([
+            (Semantic::Position, Stream::F32x3(vec![[0.0; 3]; 3])),
+            (Semantic::ShaderInput(7), Stream::F32x4(values.clone())),
+        ]),
+        indices: None,
+        material: None,
+    }]);
+    let bytes = primase_glb::encode_mesh("opaque input", &mesh).unwrap();
+    let gltf = Gltf::from_glb(&bytes).unwrap();
+    let read = gltf.read_mesh(0).unwrap();
+    let Stream::F32x4(actual) = &read.primitives[0].primitive.streams[&Semantic::ShaderInput(7)] else {
+        panic!("opaque input lost its four float lanes")
+    };
+    assert_eq!(
+        actual.iter().map(|v| v.map(f32::to_bits)).collect::<Vec<_>>(),
+        values.iter().map(|v| v.map(f32::to_bits)).collect::<Vec<_>>()
+    );
+    assert!(
+        std::str::from_utf8(primase_glb::parse(&bytes).unwrap().json)
+            .unwrap()
+            .contains("_SHADERINPUT7")
+    );
+}
+
 /// Positions of one triangle, then unsigned-byte indices, then a unorm8 VEC2 texcoord with a 4-byte stride.
 fn bin() -> Vec<u8> {
     let mut b = Vec::new();

@@ -426,6 +426,28 @@ pub fn blend_streams(
     let mut streams = BTreeMap::new();
     let mut normals_cancelled = 0;
     for (sem, stream) in &p.streams {
+        if matches!(sem, Semantic::ShaderInput(_)) {
+            // A cut may copy an existing corner; opaque data has no established interpolation rule.
+            let mut copied = Vec::with_capacity(blends.len());
+            for blend in blends {
+                let mut terms = blend.terms();
+                let Some((source, weight)) = terms.next() else {
+                    return Err(format!("{what}: cannot interpolate opaque {sem:?}"));
+                };
+                if weight != 1.0 || terms.next().is_some() {
+                    return Err(format!("{what}: cannot interpolate opaque {sem:?}"));
+                }
+                copied.push(source as usize);
+            }
+            let Stream::F32x4(values) = stream else {
+                return Err(format!("{what}: {sem:?} is not F32x4"));
+            };
+            streams.insert(
+                *sem,
+                Stream::F32x4(copied.into_iter().map(|i| values[i]).collect()),
+            );
+            continue;
+        }
         if matches!(sem, Semantic::Joints(_) | Semantic::Weights(_)) {
             continue;
         }

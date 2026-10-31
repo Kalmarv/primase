@@ -778,7 +778,8 @@ pub const SPEEDTREE_TANGENT: u8 = 1;
 
 /// Per primitive of a prototype, what the FLVER layout of the SpeedTree mesh it was lowered from declares to the game's
 /// SpeedTree vertex programs; `None` for a primitive of any other mesh. The primitive's streams hold the stored members
-/// decoded (the rest position, UV0, the normal and, in [`SPEEDTREE_TANGENT`], the tangent); this states which input of
+/// decoded (the rest position, UV0, the normal and, in [`SPEEDTREE_TANGENT`], the tangent), and ShaderInput(n) holds
+/// every stored member's four raw decoded lanes untransformed; this states which input of
 /// the program each of them is, as `TEXCOORD<n>` indices, and which inputs the game supplies per instance at draw time:
 /// the layout's members the file does not store.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -788,6 +789,8 @@ pub struct SpeedTreeInputs {
 /// One SpeedTree mesh's program inputs ([`SpeedTreeInputs`]).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SpeedTreeMesh {
+    /// The stored TEXCOORD indices, in stored-member order. ShaderInput(n) keeps all four raw lanes untransformed.
+    pub stored: Vec<u8>,
     /// The input of the rest position (`xyz`; its `w`, and the `zw` of the UV input, are the coarser level's position).
     pub position: u32,
     /// The input of UV0 (`xy`).

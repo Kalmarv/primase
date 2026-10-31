@@ -134,6 +134,11 @@ impl Buffers {
                     self.floats(bytemuck::cast_slice(v), count, ElementType::Vec2, None)
                         .map_err(number)?,
                 ),
+                (Semantic::ShaderInput(n), Stream::F32x4(v)) => (
+                    format!("_SHADERINPUT{n}"),
+                    self.floats(bytemuck::cast_slice(v), count, ElementType::Vec4, None)
+                        .map_err(number)?,
+                ),
                 (Semantic::Color(n), Stream::F32x3(v)) => (
                     format!("COLOR_{n}"),
                     self.floats(bytemuck::cast_slice(v), count, ElementType::Vec3, None)

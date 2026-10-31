@@ -28,6 +28,9 @@ pub enum Attribute {
     Joints(u8),
     /// Joint weights set `n` of a skinned mesh.
     Weights(u8),
+    /// Opaque per-vertex shader data at the game's input index, copied through geometry passes untransformed.
+    /// A consumer that cannot preserve it must refuse ShaderInput by name.
+    ShaderInput(u8),
 }
 
 /// What a pixel or vertex stage's input is.

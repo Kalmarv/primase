@@ -542,6 +542,41 @@ mod tests {
         );
     }
 
+    #[test]
+    fn select_lod_preserves_opaque_shader_inputs() {
+        use crate::{Primitive, Semantic, Stream, Topology};
+        use std::collections::BTreeMap;
+        let (mut w, proto, forms) = world();
+        let raw = vec![[-3.0, 0.5, 9.0, -0.0]; 3];
+        w.insert(
+            forms[0],
+            Mesh::new(vec![Primitive {
+                topology: Topology::Triangles,
+                streams: BTreeMap::from([
+                    (Semantic::Position, Stream::F32x3(vec![[0.0; 3]; 3])),
+                    (Semantic::ShaderInput(4), Stream::F32x4(raw.clone())),
+                ]),
+                indices: None,
+                material: None,
+            }]),
+        );
+        let m = manager();
+        m.run(
+            &mut w,
+            &m.registry.parse("select-lod{form=default}").unwrap(),
+            &mut RunReport::default(),
+        )
+        .unwrap();
+        let mesh = w.get::<Mesh>(proto).unwrap();
+        let Stream::F32x4(values) = &mesh.primitives()[0].streams[&Semantic::ShaderInput(4)] else {
+            panic!("opaque stream missing")
+        };
+        assert_eq!(
+            values.iter().map(|v| v.map(f32::to_bits)).collect::<Vec<_>>(),
+            raw.iter().map(|v| v.map(f32::to_bits)).collect::<Vec<_>>()
+        );
+    }
+
     /// Dialect data per primitive of its entity's mesh, as a reader attaches it.
     #[derive(Clone, Debug, PartialEq)]
     struct PerPrimitive(Vec<u8>);

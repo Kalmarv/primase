@@ -443,6 +443,10 @@ pub enum Semantic {
     Color(u8),
     Joints(u8),
     Weights(u8),
+    /// Opaque per-vertex shader data, bound by the game's input index and passed through untransformed.
+    /// Geometry passes must copy it through; a pass that cannot preserve it must refuse ShaderInput by name.
+    /// glTF carries these application attributes as `_SHADERINPUTn`.
+    ShaderInput(u8),
 }
 
 /// A shader input reads a vertex attribute by the same meaning a mesh stream has.
@@ -457,6 +461,7 @@ impl From<Semantic> for crate::shader::Attribute {
             Semantic::Color(n) => A::Color(n),
             Semantic::Joints(n) => A::Joints(n),
             Semantic::Weights(n) => A::Weights(n),
+            Semantic::ShaderInput(n) => A::ShaderInput(n),
         }
     }
 }
@@ -472,6 +477,7 @@ impl From<crate::shader::Attribute> for Semantic {
             A::Color(n) => Semantic::Color(n),
             A::Joints(n) => Semantic::Joints(n),
             A::Weights(n) => Semantic::Weights(n),
+            A::ShaderInput(n) => Semantic::ShaderInput(n),
         }
     }
 }

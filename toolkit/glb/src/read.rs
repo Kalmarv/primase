@@ -628,6 +628,7 @@ impl Gltf {
         let stream = match (semantic, acc.kind) {
             (Semantic::Position | Semantic::Normal, "VEC3") if float => Stream::F32x3(acc.floats()?),
             (Semantic::Tangent(_), "VEC4") if float => Stream::F32x4(acc.floats()?),
+            (Semantic::ShaderInput(_), "VEC4") if float => Stream::F32x4(acc.floats()?),
             (Semantic::TexCoord(_), "VEC2") if float => Stream::F32x2(acc.floats()?),
             (Semantic::TexCoord(_), "VEC2") if unorm => Stream::F32x2(acc.unorm_as_f32()?),
             (Semantic::Color(_), "VEC3") if float => Stream::F32x3(acc.floats()?),
@@ -944,6 +945,7 @@ fn semantic(name: &str) -> Option<Semantic> {
             .map(Semantic::TexCoord)
             .or_else(|| set("_PRIMASE_TANGENT").and_then(|n| (n > 0).then_some(Semantic::Tangent(n))))
             .or_else(|| set("COLOR_").map(Semantic::Color))
+            .or_else(|| set("_SHADERINPUT").map(Semantic::ShaderInput))
             .or_else(|| set("JOINTS_").map(Semantic::Joints))
             .or_else(|| set("WEIGHTS_").map(Semantic::Weights)),
     }

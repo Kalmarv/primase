@@ -1557,8 +1557,8 @@ pub fn resolve_vertex_for_geometry(
 ///   of UV0's input, are the coarser level's position, which the lowering does not keep), UV0 (`xy`), and the normal and
 ///   the stored tangent ([`crate::sekiro::source::SPEEDTREE_TANGENT`]) as the unsigned normalized bytes the program
 ///   unpacks ([`LaneAffine::UNORM`]; the normal's `w` is not kept);
-/// - any other stored member (the wind's per-vertex data, read only while the wind moves the vertices) and any other
-///   instance member `Unknown`.
+/// - other stored members (the wind's per-vertex data) as opaque ShaderInput(n) streams; other instance members
+///   remain `Unknown`.
 ///
 /// Meshes of differing declarations, or a primitive of an ordinary mesh beside them, leave those inputs `Unknown`.
 fn speedtree_inputs(inputs: &mut [InputBinding], meshes: &[Option<&crate::sekiro::source::SpeedTreeMesh>]) {
@@ -1613,10 +1613,10 @@ fn speedtree_inputs(inputs: &mut [InputBinding], meshes: &[Option<&crate::sekiro
                 lanes: vec![lanes(Attribute::Tangent(SPEEDTREE_TANGENT), 4)],
                 map: LaneAffine::UNORM,
             },
+            ("TEXCOORD", i) if u8::try_from(i).is_ok_and(|i| mesh.stored.contains(&i)) =>
+                InputRole::Stream(Attribute::ShaderInput(u8::try_from(i).expect("checked input index"))),
             _ => InputRole::Unknown {
-                why: "a stored SpeedTree member other than the rest position, UV0, normal and tangent (the wind's \
-                      per-vertex data): not lowered"
-                    .into(),
+                why: "the SpeedTree layout declares neither a stored member nor an established instance value for this input".into(),
             },
         };
     }
@@ -2195,6 +2195,7 @@ mod tests {
             ]
         };
         let mesh = SpeedTreeMesh {
+            stored: vec![2, 3, 4, 5, 6],
             position: 2,
             uv: 3,
             normal: 5,
@@ -2227,7 +2228,11 @@ mod tests {
                 InputRole::Lanes(vec![lanes(Attribute::TexCoord(0), 2)]),
             ]
         );
-        assert!(matches!(roles[5], InputRole::Unknown { .. }), "the wind's member");
+        assert_eq!(
+            roles[5],
+            InputRole::Stream(Attribute::ShaderInput(4)),
+            "the wind's stored member"
+        );
         assert_eq!(
             roles[6],
             InputRole::Mapped {

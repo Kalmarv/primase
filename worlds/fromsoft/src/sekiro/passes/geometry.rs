@@ -633,7 +633,12 @@ impl LowerFromSoftGeometry {
                 if source_streams_kept {
                     streams.extend(source_streams(&mesh.vertices, &layout, &part.source_vertices));
                 }
-                if let Some((_, tangent)) = &speedtree {
+                if let Some((inputs, tangent)) = &speedtree {
+                    streams.extend(speedtree_streams(
+                        &mesh.vertices,
+                        &inputs.stored,
+                        &part.source_vertices,
+                    )?);
                     streams.insert(
                         Semantic::Tangent(SPEEDTREE_TANGENT),
                         Stream::F32x4(stored_tangents(&mesh.vertices, *tangent, &part.source_vertices)?),
@@ -813,6 +818,17 @@ fn speedtree_mesh(
         .ok_or_else(|| format!("SpeedTree mesh {index}: its layout stores no TEXCOORD{tangent}"))?;
     Ok(Some((
         SpeedTreeMesh {
+            stored: stored
+                .iter()
+                .map(|m| {
+                    u8::try_from(m.index).map_err(|_| {
+                        format!(
+                            "SpeedTree mesh {index}: TEXCOORD{} exceeds stream indices",
+                            m.index
+                        )
+                    })
+                })
+                .collect::<Result<_, _>>()?,
             position: input(position)?,
             uv: input(uv)?,
             normal,
@@ -825,6 +841,35 @@ fn speedtree_mesh(
         },
         member,
     )))
+}
+
+/// Stored shader members keep their four decoded lanes, including wind pivots/weights and otherwise unused w.
+fn speedtree_streams(
+    vertices: &[Vertex],
+    inputs: &[u8],
+    remap: &[u32],
+) -> Result<Vec<(Semantic, Stream)>, String> {
+    inputs
+        .iter()
+        .enumerate()
+        .map(|(member, &input)| {
+            let values = remap
+                .iter()
+                .map(|&vertex| {
+                    vertices
+                        .get(vertex as usize)
+                        .and_then(|v| v.speedtree.get(member))
+                        .copied()
+                        .ok_or_else(|| {
+                            format!(
+                                "SpeedTree vertex {vertex}: no stored member {member} for TEXCOORD{input}"
+                            )
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((Semantic::ShaderInput(input), Stream::F32x4(values)))
+        })
+        .collect()
 }
 
 /// The stored tangent of the vertices `vertices` of a SpeedTree mesh, its stored member `member`, each lane unpacked as
@@ -1207,6 +1252,7 @@ mod tests {
         assert_eq!(
             inputs,
             SpeedTreeMesh {
+                stored: vec![2, 3, 4, 5, 6],
                 position: 2,
                 uv: 3,
                 normal: 5,
@@ -1215,6 +1261,18 @@ mod tests {
             }
         );
         assert_eq!(member, 4);
+        let raw = super::speedtree_streams(&model.meshes[0].vertices, &inputs.stored, &[0, 0]).unwrap();
+        assert_eq!(raw.len(), 5);
+        for (member, (semantic, stream)) in raw.iter().enumerate() {
+            assert_eq!(
+                *semantic,
+                primase_core::Semantic::ShaderInput(inputs.stored[member])
+            );
+            assert_eq!(
+                *stream,
+                primase_core::Stream::F32x4(vec![model.meshes[0].vertices[0].speedtree[member]; 2])
+            );
+        }
         assert_eq!(
             stored_tangents(&model.meshes[0].vertices, member, &[0]).unwrap(),
             vec![tangent_to_scene([-1.0, 1.0, 0.0, -0.5])],
