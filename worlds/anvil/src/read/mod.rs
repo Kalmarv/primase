@@ -6,6 +6,7 @@ pub mod convert;
 pub mod coverage;
 pub mod entry;
 pub mod gidyn;
+pub mod install;
 pub mod meshes;
 pub mod overview;
 pub mod placements;

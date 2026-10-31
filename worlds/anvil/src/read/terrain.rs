@@ -25,6 +25,41 @@ use anvil_formats::terrain_material::{
 use anvil_formats::tnl::{StoredNodeLayer, StoredTnlChunk, TERRAIN_NODE_LAYER, TNL_CHUNK, node};
 use anvil_formats::tnl_code;
 
+/// Where a world's terrain quadtree lies and what its nodes name, as the program states them to the reader.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TerrainSquare {
+    /// The square's corner with the least x and y, and its side, in metres.
+    pub origin: [f64; 2],
+    pub side: f64,
+    /// The level of its leaves.
+    pub leaf_level: u32,
+    /// The samples along a node's side.
+    pub node_samples: u32,
+    /// The TerrainMaterialBank its nodes' material rasters index, by entry name.
+    pub bank: &'static str,
+    /// The TextureSet of its splatting noise, by entry name.
+    pub noise: &'static str,
+}
+
+impl TerrainSquare {
+    /// The spacing of the leaves' samples: the side over the leaves along it and the samples along a leaf.
+    pub fn leaf_spacing(&self) -> f64 {
+        self.side / f64::from(1u32 << self.leaf_level.min(30)) / f64::from(self.node_samples)
+    }
+}
+
+/// The open world's terrain. Observed, not read: the square is the world's GridLayout square ((-8192, -8192), side
+/// 16,384) by the notes this module's documentation gives; its leaves are level 8, 128 samples a side (0.5 m); the
+/// Terrain Entity names the bank `TMB_MAD` and the noise `TerrainSplattingNoise_Set`.
+pub const USNAT_TERRAIN: TerrainSquare = TerrainSquare {
+    origin: [-8192.0, -8192.0],
+    side: 16384.0,
+    leaf_level: 8,
+    node_samples: 128,
+    bank: "TMB_MAD",
+    noise: "TerrainSplattingNoise_Set",
+};
+
 /// Why terrain can't be read.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
