@@ -40,7 +40,7 @@ fn curve(draw: &DrawParam) -> Result<ReinhardCurve, String> {
 
 impl Pass for LowerEldenRingReinhard {
     fn name(&self) -> &'static str {
-        LOWER_ELDEN_RING_REINHARD.name
+        "lower-elden-ring-reinhard"
     }
     fn requires(&self) -> &[&'static str] {
         &[DrawParam::NAME]
