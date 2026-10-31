@@ -185,3 +185,214 @@ pub fn read_npc_inventory(
         rows: fromsoft_formats::equipment::npc_outfits(install, archive, decoder, dictionary, id, npc)?,
     })
 }
+
+/// The explicit saved hold selected by a registered pass; reporting remains portable and display-only.
+#[derive(Clone, Debug)]
+pub struct SelectedSavedHold {
+    pub state: crate::sekiro::attack_clip::PlayerState,
+    pub report: serde_json::Value,
+}
+impl Resource for SelectedSavedHold {
+    const NAME: &'static str = "fromsoft.selected_saved_hold";
+    fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, primase_core::JsonError> {
+        Ok(Some(self.report.clone()))
+    }
+}
+
+/// Explicit animation inventory scope. An empty clip list lists plans and decodes none.
+#[derive(Clone, Debug)]
+pub struct AnimationScope {
+    pub of: String,
+    pub clips: String,
+}
+impl AnimationScope {
+    fn apply<'a>(&self, reader: CharacterReader<'a>) -> CharacterReader<'a> {
+        if self.clips.trim().is_empty() || self.clips.trim() == "all" {
+            reader.with_animations(&self.of)
+        } else {
+            reader.with_animation_clips(
+                &self.of,
+                self.clips
+                    .split(';')
+                    .map(str::trim)
+                    .filter(|c| !c.is_empty())
+                    .map(str::to_owned)
+                    .collect(),
+            )
+        }
+    }
+}
+/// The exact scope already selected by a program and its registered passes. No fallback is chosen in this reader.
+pub struct ModelReadRequest {
+    pub asset: StandaloneAsset,
+    pub animations: Option<AnimationScope>,
+    pub player_outfit: Option<crate::sekiro::CharacterOutfit>,
+    pub npc_outfit: Option<crate::sekiro::outfit_data::SelectedNpcOutfit>,
+    pub weapons: crate::sekiro::effect_data::EquippedWeapons,
+    pub weapon_parts: Vec<String>,
+    pub clip_effects: bool,
+}
+pub struct ModelRead<'a> {
+    pub world: World,
+    pub report: Report,
+    pub notices: Vec<Notice>,
+    pub reader: Option<CharacterReader<'a>>,
+    pub dressed_parts: Vec<String>,
+    pub textures_only: bool,
+    pub texture_part: Option<String>,
+    pub held: Vec<String>,
+}
+/// Read a selected character/part scope with the same deferred animation protocol as CharacterReader.
+pub fn read_models<'a>(
+    install: Install,
+    decoder: Decoder<'a>,
+    request: ModelReadRequest,
+) -> Result<ModelRead<'a>> {
+    let ModelReadRequest {
+        asset,
+        animations,
+        player_outfit,
+        npc_outfit,
+        weapons,
+        weapon_parts,
+        clip_effects,
+    } = request;
+    let dressed_parts = player_outfit
+        .as_ref()
+        .map(|o| o.parts.clone())
+        .or_else(|| npc_outfit.as_ref().map(|o| o.parts.clone()))
+        .unwrap_or_default();
+    if let (StandaloneAsset::Parts(parts), None) = (&asset, &animations)
+        && let [part] = parts.as_slice()
+        && let Ok(archive) = install.open()
+        && crate::sekiro::part_forms(&archive, &decoder, part).is_err()
+        && let Ok(textures) = crate::sekiro::part_textures(&archive, &decoder, part)
+        && !textures.is_empty()
+    {
+        let mut world = World::new();
+        for (name, texture) in textures {
+            let entity = world.spawn();
+            world.insert(entity, Name(name));
+            world.insert(entity, texture);
+        }
+        return Ok(ModelRead {
+            world,
+            report: vec![],
+            notices: vec![],
+            reader: None,
+            dressed_parts,
+            textures_only: true,
+            texture_part: Some(part.clone()),
+            held: vec![],
+        });
+    }
+    let weapons_only = matches!(&asset,StandaloneAsset::Parts(parts)if parts.is_empty());
+    let reader = match &asset {
+        StandaloneAsset::Parts(_) if weapons_only => {
+            let names: Vec<_> = weapon_parts.iter().map(String::as_str).collect();
+            CharacterReader::parts(install.clone(), &names, decoder)
+        }
+        StandaloneAsset::Character(id) => {
+            if let Some(outfit) = &player_outfit
+                && animations.is_some()
+            {
+                CharacterReader::outfit(install.clone(), outfit, decoder)?
+            } else if dressed_parts.is_empty() {
+                CharacterReader::new(install.clone(), id, decoder)
+            } else {
+                let parts: Vec<_> = dressed_parts.iter().map(String::as_str).collect();
+                CharacterReader::parts(install.clone(), &parts, decoder)
+            }
+        }
+        StandaloneAsset::Parts(parts) => {
+            let names: Vec<_> = parts.iter().map(String::as_str).collect();
+            CharacterReader::parts(install.clone(), &names, decoder)
+        }
+        StandaloneAsset::Form { part, .. } => {
+            CharacterReader::parts(install.clone(), &[part.as_str()], decoder)
+        }
+    };
+    let mut reader = if let Some(plan) = animations {
+        plan.apply(reader)
+    } else {
+        reader
+    };
+    if clip_effects {
+        reader = reader.with_clip_effects();
+    }
+    if !weapons.is_empty() && !weapons_only {
+        reader = reader.with_equipped_weapons(weapons);
+    }
+    let (world, report) = reader.read()?;
+    let notices = reader.notices();
+    let held = world
+        .iter::<crate::sekiro::effect_data::HeldWeapon>()
+        .filter_map(|(root, _)| world.get::<primase_core::Source>(root).map(|s| s.0.clone()))
+        .collect();
+    Ok(ModelRead {
+        world,
+        report,
+        notices,
+        reader: Some(reader),
+        dressed_parts,
+        textures_only: false,
+        texture_part: None,
+        held,
+    })
+}
+/// Source observations needed by the explicit NPC display-mask selector. It chooses no row.
+pub fn read_dressing_inputs(
+    install: &Install,
+    decoder: &Decoder<'_>,
+    names: Option<&std::path::Path>,
+    world: &World,
+    id: &str,
+) -> Result<crate::sekiro::outfit_data::DressingInputs> {
+    let marks = crate::sekiro::character_display_masks(world)
+        .into_iter()
+        .flat_map(|(_, meshes)| meshes)
+        .collect();
+    let archive = install.open()?;
+    let rows = fromsoft_formats::game_params::read_npc_param(install, &archive, decoder)?.rows;
+    let mut named = Vec::new();
+    if let Some(names) = names {
+        let dictionary = fromsoft_formats::NameDictionary::read_for(names, install.game)?;
+        named = fromsoft_formats::game_params::npc_placements(&archive, decoder, &dictionary)?
+            .into_iter()
+            .filter(|p| p.row > 0 && p.model == id && archive.contains(&format!("/chr/{id}.chrbnd.dcx")))
+            .map(|p| p.row)
+            .collect();
+        named.sort_unstable();
+        named.dedup();
+    }
+    Ok(crate::sekiro::outfit_data::DressingInputs {
+        id: id.into(),
+        marks,
+        rows,
+        named,
+    })
+}
+/// Geometry availability without materials/textures. A binder with no FLVER is explicitly meshless.
+pub fn character_meshless(
+    install: &Install,
+    archive: &Archive,
+    decoder: &Decoder<'_>,
+    id: &str,
+) -> fromsoft_formats::Result<bool> {
+    let _ = install;
+    match fromsoft_formats::equipment::character_mesh_count(archive, decoder, id) {
+        Ok(count) => Ok(count == 0),
+        Err(why) if why.to_string().contains("has no FLVER;") => Ok(true),
+        Err(why) => Err(why),
+    }
+}
+/// Descriptive param records remain reader output, never reconstructed by a UI adapter.
+pub fn read_selected_npc_stats(
+    install: &Install,
+    decoder: &Decoder<'_>,
+    row: i32,
+) -> Result<Option<serde_json::Value>> {
+    let archive = install.open()?;
+    let stats = fromsoft_formats::game_params::read_npc_stats(install, &archive, decoder)?;
+    Ok(stats.iter().find(|stats|stats.id==row).map(|stats|serde_json::json!({"row":row,"param":"NPC_PARAM_ST","fields":stats.fields().iter().map(|(name,value,unit)|serde_json::json!({"name":name,"value":value,"unit":unit})).collect::<Vec<_>>()})))
+}
