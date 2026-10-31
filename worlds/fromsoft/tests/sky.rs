@@ -469,7 +469,7 @@ fn elden_rings_sky_is_read_as_weathers() -> Result<(), Box<dyn std::error::Error
                         .view()
                         .and_then(primase_fromsoft::layer_bake::resolve::elden_sky_render_state)
                         .and_then(|state| state.depth)
-                        .map_or(true, |depth| depth.write),
+                        .is_none_or(|depth| depth.write),
                     ..sky_order
                 };
                 assert_eq!(order, Some(&expected), "{name}: {}", material.shader);
