@@ -2,6 +2,7 @@
 //! states, shadow flags, the sky), and the program-facing reader adapter ([`convert`]).
 pub mod animation;
 pub mod area;
+pub mod area_plan;
 pub mod attack_clip;
 pub mod character;
 pub mod clip_events;

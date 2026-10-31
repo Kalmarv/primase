@@ -4,6 +4,7 @@
 //! default; a choice with no faithful reading (which model to lower, a calibration, a quality cap) is required.
 //! Each pass is made by a constructor taking its required choices and setters for the rest, from its options
 //! through the same calls.
+pub mod area_plan;
 pub mod bake;
 pub(super) mod bake_assembly;
 pub mod bake_materials;
@@ -78,6 +79,7 @@ pub(crate) fn condition_key(c: &primase_core::state::Condition) -> String {
 /// Register the FromSoft area passes by their declarations.
 pub fn register(registry: &mut PassRegistry) {
     for spec in [
+        &area_plan::SELECT_FROMSOFT_AREA,
         &crate::clip_events::LOWER_FROMSOFT_CLIP_EVENTS,
         &crate::entity_names::NAME_FROMSOFT_ENTITIES,
         &crate::display_masks::LOWER_FROMSOFT_DISPLAY_MASKS,
