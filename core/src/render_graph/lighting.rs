@@ -186,7 +186,8 @@ fn dependencies(
             stages: bound,
             outputs,
             ..
-        } | PassWork::Geometry {
+        }
+        | PassWork::Geometry {
             stages: bound,
             outputs,
             ..

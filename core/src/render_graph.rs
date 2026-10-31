@@ -920,10 +920,12 @@ impl Resource for RenderGraph {
     fn verify(&self, w: &World) -> Result<(), String> {
         self.check()?;
         for object in self.objects() {
-            let transform = w.get::<crate::Transform>(object)
+            let transform = w
+                .get::<crate::Transform>(object)
                 .ok_or("graph geometry object has no transform")?;
             if !transform.cols.iter().flatten().all(|v| v.is_finite())
-                || crate::Linear::of(transform).singular() {
+                || crate::Linear::of(transform).singular()
+            {
                 return Err("graph geometry object has a nonfinite or singular transform".into());
             }
         }
@@ -970,16 +972,24 @@ mod tests {
         let mut graph = RenderGraph {
             targets: vec![target("hdr", TargetFormat::Rgba16Float)],
             passes: vec![RenderPass {
-                name: "probe volume".into(), shared: false,
-                presence: Presence::Always, runs: Runs::Once,
+                name: "probe volume".into(),
+                shared: false,
+                presence: Presence::Always,
+                runs: Runs::Once,
                 work: PassWork::Geometry {
-                    primitive: GraphPrimitive::UnitBox, object, stages: Vec::new(),
+                    primitive: GraphPrimitive::UnitBox,
+                    object,
+                    stages: Vec::new(),
                     state: RenderState::default(),
-                    outputs: Outputs { colour: vec![(0, view(0))], depth: None },
+                    outputs: Outputs {
+                        colour: vec![(0, view(0))],
+                        depth: None,
+                    },
                 },
             }],
             lighting: Some(LightingPipeline {
-                passes: vec![0], exports: vec![(LightingPort::HdrColour, view(0))],
+                passes: vec![0],
+                exports: vec![(LightingPort::HdrColour, view(0))],
                 ..LightingPipeline::default()
             }),
             ..RenderGraph::default()
