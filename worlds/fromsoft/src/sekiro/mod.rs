@@ -13,7 +13,7 @@ pub use components::environment as environment_data;
 pub use components::irradiance::IrradianceRegion;
 pub use components::lighting::PreparedLighting;
 pub use components::source::Region;
-pub use components::{character as character_data, effect as effect_data, lowered, source};
+pub use components::{character as character_data, effect as effect_data, outfits as outfit_data, lowered, source};
 pub use components::{weather, world_state};
 pub use passes::collision;
 pub use passes::extras;

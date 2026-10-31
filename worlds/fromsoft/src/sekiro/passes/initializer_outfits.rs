@@ -1,5 +1,6 @@
 //! Presentation and level choices over the reader's complete initializer/protector candidate inventory.
 use crate::sekiro::components::outfits::{CharacterOutfit, InitializerOutfits, OutfitGender, OutfitVariants};
+use crate::sekiro::components::outfits::{NpcOutfitRows, NpcOutfitVariants, SelectedNpcOutfit};
 use fromsoft_formats::Game;
 use fromsoft_formats::equipment::{
     GENDER_BY_PRESENCE, LEVEL_SUFFIX_BY_PRESENCE, OutfitCandidates, PresenceChoice,
@@ -39,6 +40,76 @@ impl Presentation {
             Self::Female => "f",
             Self::Authored => "authored",
         }
+    }
+}
+
+/// Apply a stated level policy to map-authored NPC candidates; source modes determine the permitted gender spellings.
+#[derive(Clone, Copy, Debug)]
+pub struct SelectFromSoftNpcOutfits(pub PartLevel);
+pub const SELECT_FROMSOFT_NPC_OUTFITS: PassSpec = PassSpec {
+    name: "select-fromsoft-npc-outfits",
+    options: &[OptionSpec::required(
+        "level",
+        "prefer-low",
+        "low, full or explicit prefer-low fallback policy",
+    )],
+    make: |g| {
+        let level = match g.required("level") {
+            "prefer-low" => PartLevel::PreferLow,
+            "low" => PartLevel::Low,
+            "full" => PartLevel::Full,
+            _ => return Err("level is not prefer-low, low or full".into()),
+        };
+        Ok(Box::new(SelectFromSoftNpcOutfits(level)))
+    },
+};
+impl Pass for SelectFromSoftNpcOutfits {
+    fn name(&self) -> &'static str {
+        "select-fromsoft-npc-outfits"
+    }
+    fn options(&self) -> Options {
+        Options::from([("level".into(), self.0.text().into())])
+    }
+    fn requires(&self) -> &[&'static str] {
+        &[NpcOutfitRows::NAME]
+    }
+    fn provides(&self) -> &[&'static str] {
+        &[NpcOutfitVariants::NAME]
+    }
+    fn modifies(&self) -> &[&'static str] {
+        &[NpcOutfitVariants::NAME]
+    }
+    fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
+        let source = world
+            .resource::<NpcOutfitRows>()
+            .ok_or("no NPC outfit candidates")?;
+        let variants = source
+            .rows
+            .iter()
+            .map(|row| {
+                let mut chosen = row
+                    .candidates
+                    .as_ref()
+                    .map(|raw| select_parts(source.game, raw, None, self.0))
+                    .unwrap_or_default();
+                chosen.unresolved.extend(row.unresolved.iter().cloned());
+                for choice in &chosen.chosen_by_presence {
+                    log.approximate(choice.reason, 1);
+                }
+                SelectedNpcOutfit {
+                    npc: row.npc,
+                    init: row.init,
+                    map: row.map.clone(),
+                    placement: row.placement.clone(),
+                    parts: chosen.parts,
+                    unresolved: chosen.unresolved,
+                    chosen_by_presence: chosen.chosen_by_presence,
+                }
+            })
+            .collect::<Vec<_>>();
+        log.count("NPC outfit presentations selected", variants.len() as u64);
+        world.insert_resource(NpcOutfitVariants(variants));
+        Ok(())
     }
 }
 #[derive(Clone, Debug)]
@@ -409,5 +480,221 @@ mod tests {
         assert!(outfits.iter().all(CharacterOutfit::readable));
         assert_eq!(outfits[0].parts, ["hd_m_2468_l", "bd_m_1379_l"]);
         assert_eq!(outfits[1].parts, ["hd_m_2468_l", "bd_f_1379_l"]);
+    }
+}
+
+#[cfg(test)]
+mod legacy_format_selection_tests {
+    use super::*;
+    use crate::sekiro::components::outfits::InitializerEntry;
+    use fromsoft_formats::{
+        equipment::OutfitLayout,
+        param::{Param, Row},
+    };
+    const SEX: usize = 228;
+
+    type OutfitParts = CharacterOutfit;
+    fn resolve_outfit(
+        game: Game,
+        initializers: &Param,
+        protectors: &Param,
+        id: i32,
+        has: impl Fn(&str) -> bool,
+    ) -> Result<CharacterOutfit, String> {
+        let candidates =
+            fromsoft_formats::equipment::outfit_candidates(game, initializers, protectors, id, has)
+                .map_err(|why| why.to_string())?;
+        let mut world = World::new();
+        world.insert_resource(InitializerOutfits {
+            game,
+            rows: vec![InitializerEntry {
+                id,
+                name: format!("CharaInitParam {id}"),
+                candidates: Ok(candidates),
+            }],
+        });
+        let mut registry = primase_core::pass::PassRegistry::new();
+        crate::sekiro::passes::register(&mut registry);
+        let pipeline = registry.parse(&format!("select-fromsoft-initializer-outfits{{initializer={id},presentation=authored,level=prefer-low}}" )).map_err(|why| why.to_string())?;
+        primase_core::pass::PassManager::new(registry)
+            .run(
+                &mut world,
+                &pipeline,
+                &mut primase_core::pass::RunReport::default(),
+            )
+            .map_err(|why| why.to_string())?;
+        world
+            .resource::<OutfitVariants>()
+            .and_then(|variants| variants.0.first())
+            .cloned()
+            .ok_or_else(|| "no selected outfit".into())
+    }
+    /// A one-row param of `game`'s layout: `CHARACTER_INIT_PARAM` or `EQUIP_PARAM_PROTECTOR_ST`.
+    fn param(game: Game, init: bool, id: i32, data: impl FnOnce(&mut Vec<u8>)) -> Param {
+        let l = OutfitLayout::of(game);
+        let ((data_version, row_size), param_type) = if init {
+            (l.initializer, "CHARACTER_INIT_PARAM")
+        } else {
+            (l.protector, "EQUIP_PARAM_PROTECTOR_ST")
+        };
+        let mut bytes = vec![0; row_size];
+        data(&mut bytes);
+        Param {
+            param_type: param_type.into(),
+            data_version,
+            unk06: 1,
+            row_size,
+            rows: vec![Row {
+                id,
+                name: None,
+                data: bytes,
+            }],
+        }
+    }
+
+    /// An initializer with `slot` (0 head .. 3 legs) naming `protector` and the other slots unset.
+    fn initializer(game: Game, id: i32, sex: u8, slot: usize, protector: i32) -> Param {
+        param(game, true, id, |d| {
+            for at in [32, 36, 40, 44] {
+                d[at..at + 4].copy_from_slice(&(-1i32).to_le_bytes());
+            }
+            d[32 + 4 * slot..36 + 4 * slot].copy_from_slice(&protector.to_le_bytes());
+            d[SEX] = sex;
+        })
+    }
+
+    /// A protector of `model`, `category` and `gender` in `game`'s layout.
+    fn protector(game: Game, id: i32, model: u16, category: u8, gender: u8) -> Param {
+        let l = OutfitLayout::of(game);
+        param(game, false, id, |d| {
+            d[l.model..l.model + 2].copy_from_slice(&model.to_le_bytes());
+            d[l.category] = category;
+            d[l.gender] = gender;
+        })
+    }
+
+    fn reasons(parts: &OutfitParts) -> Vec<&'static str> {
+        parts.chosen_by_presence.iter().map(|c| c.reason).collect()
+    }
+
+    #[test]
+    fn initializer_equipment_follows_protector_model_not_npc_or_equipment_id() {
+        let g = Game::Sekiro;
+        let initializers = initializer(g, 9000, 0, 0, 100000);
+        // the Wolf's head: category 3 is the face, gender mode 3 takes the initializer's sex
+        let protectors = protector(g, 100000, 200, 3, 3);
+        let r = resolve_outfit(g, &initializers, &protectors, 9000, |p| p == "fc_m_0200_l").expect("outfit");
+        assert_eq!(r.parts, ["fc_m_0200_l"]);
+        assert!(r.unresolved.is_empty());
+        assert!(reasons(&r).is_empty());
+        assert!(resolve_outfit(g, &initializers, &protectors, 10002020, |_| true).is_err());
+        // a head part (category 5) is `hd_`, not the face, even where the face binder exists
+        let head = protector(g, 100000, 200, 5, 3);
+        let r = resolve_outfit(g, &initializers, &head, 9000, |p| {
+            matches!(p, "fc_m_0200_l" | "hd_m_0200_l")
+        })
+        .expect("outfit");
+        assert_eq!(r.parts, ["hd_m_0200_l"]);
+    }
+
+    #[test]
+    fn ambiguous_or_missing_part_bindings_are_explained_without_inventing_a_model() {
+        let g = Game::Sekiro;
+        let initializers = initializer(g, 7, 0, 1, 1);
+        let protectors = protector(g, 1, 0, 2, 0);
+        let r = resolve_outfit(g, &initializers, &protectors, 7, |_| true).expect("fields");
+        assert!(r.parts.is_empty());
+        assert!(r.unresolved.iter().any(|w| w.contains("ambiguous")));
+        let r = resolve_outfit(g, &initializers, &protectors, 7, |_| false).expect("fields");
+        assert!(r.parts.is_empty());
+        assert!(r.unresolved.iter().any(|w| w.contains("no bd part")));
+    }
+
+    #[test]
+    fn unspecified_sekiro_gender_follows_unique_held_binder_not_npc_player_sex() {
+        let g = Game::Sekiro;
+        let initializers = initializer(g, 15030, 1, 1, 101000);
+        let protectors = protector(g, 101000, 9040, 2, 1);
+        let r = resolve_outfit(g, &initializers, &protectors, 15030, |name| name == "bd_m_9040_l")
+            .expect("fields");
+        assert_eq!(r.parts, ["bd_m_9040_l"]);
+        assert!(r.unresolved.is_empty());
+        assert_eq!(reasons(&r), [GENDER_BY_PRESENCE]);
+        let r = resolve_outfit(g, &initializers, &protectors, 15030, |name| {
+            matches!(name, "bd_m_9040_l" | "bd_f_9040_l")
+        })
+        .expect("fields");
+        assert!(r.parts.is_empty());
+        assert!(r.unresolved.iter().any(|s| s.contains("ambiguous")));
+    }
+
+    #[test]
+    fn a_protector_in_a_slot_of_another_category_is_refused() {
+        for (g, wrong) in [
+            (Game::Sekiro, 0),
+            (Game::Sekiro, 5),
+            (Game::EldenRing, 4),
+            (Game::EldenRing, 5),
+        ] {
+            // a body slot (1) naming a protector of another category: no part, the reason named
+            let initializers = initializer(g, 1, 0, 1, 10);
+            let protectors = protector(g, 10, 100, wrong, 4);
+            let r = resolve_outfit(g, &initializers, &protectors, 1, |_| true).expect("fields");
+            assert!(r.parts.is_empty(), "{g:?} {wrong}");
+            assert!(
+                r.unresolved
+                    .iter()
+                    .any(|w| w.contains(&format!("equipModelCategory {wrong} is not a bd part"))),
+                "{:?}",
+                r.unresolved
+            );
+        }
+    }
+
+    #[test]
+    fn elden_rings_part_letter_follows_the_gender_mode_and_never_the_shared_a() {
+        let g = Game::EldenRing;
+        // head slot, category 5 -> hd; gender 4 (none) and 1 (male) are `m`, 2 (female) is `f`
+        for (gender, letter) in [(4u8, "m"), (1, "m"), (2, "f")] {
+            let (init, prot) = (initializer(g, 1, 1, 0, 10), protector(g, 10, 7, 5, gender));
+            let name = format!("hd_{letter}_0007_l");
+            let r = resolve_outfit(g, &init, &prot, 1, |n| n == name || n == "hd_a_0007_l").expect("fields");
+            assert_eq!(r.parts, [name], "gender {gender}");
+            assert!(reasons(&r).is_empty());
+        }
+        // the plain name is taken when the `_l` sibling is not held, and said
+        let (init, prot) = (initializer(g, 1, 0, 3, 10), protector(g, 10, 7, 6, 4));
+        let r = resolve_outfit(g, &init, &prot, 1, |n| n == "lg_m_0007").expect("fields");
+        assert_eq!(r.parts, ["lg_m_0007"]);
+        assert_eq!(reasons(&r), [LEVEL_SUFFIX_BY_PRESENCE]);
+        // gender 3 splits by a sex whose letter is not known: the one held binder, or no choice
+        let (init, prot) = (initializer(g, 1, 0, 2, 10), protector(g, 10, 7, 1, 3));
+        let r = resolve_outfit(g, &init, &prot, 1, |n| n == "am_f_0007_l").expect("fields");
+        assert_eq!(r.parts, ["am_f_0007_l"]);
+        assert_eq!(reasons(&r), [GENDER_BY_PRESENCE]);
+        let r = resolve_outfit(g, &init, &prot, 1, |n| matches!(n, "am_f_0007_l" | "am_m_0007_l"))
+            .expect("fields");
+        assert!(r.parts.is_empty() && r.unresolved.iter().any(|w| w.contains("ambiguous")));
+        // an unknown gender mode is reported, not guessed
+        let (init, prot) = (initializer(g, 1, 0, 0, 10), protector(g, 10, 7, 5, 9));
+        let r = resolve_outfit(g, &init, &prot, 1, |_| true).expect("fields");
+        assert!(
+            r.parts.is_empty()
+                && r.unresolved
+                    .iter()
+                    .any(|w| w.contains("unknown equipModelGender 9"))
+        );
+    }
+
+    #[test]
+    fn one_games_params_are_not_read_with_the_others_offsets() {
+        let (init, prot) = (
+            initializer(Game::Sekiro, 1, 0, 0, 10),
+            protector(Game::Sekiro, 10, 7, 5, 4),
+        );
+        let e = resolve_outfit(Game::EldenRing, &init, &prot, 1, |_| true)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("Elden Ring"), "{e}");
     }
 }

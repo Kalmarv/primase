@@ -115,6 +115,27 @@ fn every_character_has_source_geometry_or_a_named_empty_reason() -> Result<()> {
                         None,
                     ) {
                         Ok(outfits) => {
+                            let outfits = {
+                                let mut world = primase_core::World::new();
+                                world.insert_resource(primase_fromsoft::sekiro::outfit_data::NpcOutfitRows {
+                                    game,
+                                    rows: outfits,
+                                });
+                                let mut registry = primase_core::pass::PassRegistry::new();
+                                primase_fromsoft::sekiro::passes::register(&mut registry);
+                                let pipeline =
+                                    registry.parse("select-fromsoft-npc-outfits{level=prefer-low}")?;
+                                primase_core::pass::PassManager::new(registry).run(
+                                    &mut world,
+                                    &pipeline,
+                                    &mut primase_core::pass::RunReport::default(),
+                                )?;
+                                world
+                                    .resource::<primase_fromsoft::sekiro::outfit_data::NpcOutfitVariants>()
+                                    .ok_or("no NPC outfit selection")?
+                                    .0
+                                    .clone()
+                            };
                             row["authored_readable_outfits"] =
                                 json!(outfits.iter().filter(|o| !o.parts.is_empty()).count());
                             if outfits.iter().any(|o| !o.parts.is_empty()) {
