@@ -4,6 +4,7 @@ use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::{Atmosphere, ReinhardCurve, Resource, ToneMap, World};
 
 /// Apply only the resolved steady Reinhard scalars, leaving each unestablished stage absent.
+#[derive(Debug)]
 pub struct LowerSekiroReinhard;
 
 /// The partial operation is an explicit pipeline choice, separate from environment lowering.
