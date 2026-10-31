@@ -150,6 +150,38 @@ impl PartLevel {
 }
 
 /// The explicit shared part-level choice made by the registered initializer selector.
-#[derive(Clone,Copy,Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct PartLevelSelection(pub PartLevel);
-impl Resource for PartLevelSelection {const NAME:&'static str="fromsoft.part_level_selection";}
+impl Resource for PartLevelSelection {
+    const NAME: &'static str = "fromsoft.part_level_selection";
+}
+
+/// Raw mask groups and param rows, with the map-authored row identities kept in source order.
+#[derive(Clone, Debug)]
+pub struct DressingInputs {
+    pub id: String,
+    pub marks: Vec<Vec<u32>>,
+    pub rows: Vec<fromsoft_formats::param::NpcRow>,
+    pub named: Vec<i32>,
+}
+impl Resource for DressingInputs {
+    const NAME: &'static str = "fromsoft.dressing_inputs";
+}
+/// The display-mask interpretation selected by a program.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub enum Dressing {
+    Row(i32),
+    Hidden,
+    ShowAll,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct DressingResult {
+    pub dressing: Dressing,
+    pub note: Option<String>,
+}
+impl Resource for DressingResult {
+    const NAME: &'static str = "fromsoft.dressing_result";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, primase_core::JsonError> {
+        primase_core::json::to_value(self).map(Some)
+    }
+}

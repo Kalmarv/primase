@@ -1,36 +1,7 @@
 //! A program's explicitly stated NPC-row and empty-mask policy over authored model observations.
+pub use crate::sekiro::outfit_data::{Dressing, DressingInputs, DressingResult};
 use primase_core::pass::{OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Resource, World};
-use serde::Serialize;
-/// Raw mask groups and param rows, with the map-authored row identities kept in source order.
-#[derive(Clone, Debug)]
-pub struct DressingInputs {
-    pub id: String,
-    pub marks: Vec<Vec<u32>>,
-    pub rows: Vec<fromsoft_formats::param::NpcRow>,
-    pub named: Vec<i32>,
-}
-impl Resource for DressingInputs {
-    const NAME: &'static str = "fromsoft.dressing_inputs";
-}
-/// The display-mask interpretation selected by a program.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-pub enum Dressing {
-    Row(i32),
-    Hidden,
-    ShowAll,
-}
-#[derive(Clone, Debug, Serialize)]
-pub struct DressingResult {
-    pub dressing: Dressing,
-    pub note: Option<String>,
-}
-impl Resource for DressingResult {
-    const NAME: &'static str = "fromsoft.dressing_result";
-    fn to_json(&self) -> Result<Option<serde_json::Value>, primase_core::JsonError> {
-        primase_core::json::to_value(self).map(Some)
-    }
-}
 #[derive(Clone, Debug)]
 pub struct SelectFromSoftDressing {
     pub npc: String,
@@ -368,5 +339,97 @@ impl Pass for BindFromSoftAnimation {
             },
         }
         .run(w, log)
+    }
+}
+
+/// One part-level policy shared with initializer selection; the reader only supplies candidates.
+#[derive(Clone, Copy, Debug)]
+pub struct SelectFromSoftWeaponForms;
+pub const SELECT_FROMSOFT_WEAPON_FORMS: PassSpec = PassSpec {
+    name: "select-fromsoft-weapon-forms",
+    options: &[],
+    make: |_| Ok(Box::new(SelectFromSoftWeaponForms)),
+};
+impl Pass for SelectFromSoftWeaponForms {
+    fn name(&self) -> &'static str {
+        "select-fromsoft-weapon-forms"
+    }
+    fn requires(&self) -> &[&'static str] {
+        &[
+            crate::sekiro::standalone::WeaponInventory::NAME,
+            crate::sekiro::outfit_data::PartLevelSelection::NAME,
+        ]
+    }
+    fn provides(&self) -> &[&'static str] {
+        &[crate::sekiro::standalone::SelectedWeaponForms::NAME]
+    }
+    fn modifies(&self) -> &[&'static str] {
+        self.provides()
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        use crate::sekiro::{
+            outfit_data::{PartLevel, PartLevelSelection},
+            standalone::{SelectedWeaponForms, WeaponInventory},
+        };
+        let level = w
+            .resource::<PartLevelSelection>()
+            .ok_or("no stated part-level policy")?
+            .0;
+        let forms = w
+            .resource::<WeaponInventory>()
+            .ok_or("no weapon inventory")?
+            .rows
+            .iter()
+            .map(|row| {
+                let selected = row
+                    .candidates
+                    .iter()
+                    .filter(|c| c.present)
+                    .find(|c| match level {
+                        PartLevel::PreferLow => true,
+                        PartLevel::Low => c.name.ends_with("_l"),
+                        PartLevel::Full => !c.name.ends_with("_l"),
+                    })
+                    .map(|c| c.name.clone());
+                (row.row.row, selected)
+            })
+            .collect();
+        log.count("weapon form selections", 1);
+        w.insert_resource(SelectedWeaponForms(forms));
+        Ok(())
+    }
+}
+/// Interpret the named saved slot's active hand and arm style, rather than doing so in a viewer.
+#[derive(Clone, Copy, Debug)]
+pub struct SelectFromSoftSavedHold;
+pub const SELECT_FROMSOFT_SAVED_HOLD: PassSpec = PassSpec {
+    name: "select-fromsoft-saved-hold",
+    options: &[],
+    make: |_| Ok(Box::new(SelectFromSoftSavedHold)),
+};
+impl Pass for SelectFromSoftSavedHold {
+    fn name(&self) -> &'static str {
+        "select-fromsoft-saved-hold"
+    }
+    fn requires(&self) -> &[&'static str] {
+        &[crate::sekiro::standalone::SavedPlayer::NAME]
+    }
+    fn provides(&self) -> &[&'static str] {
+        &[crate::sekiro::standalone::SelectedSavedHold::NAME]
+    }
+    fn modifies(&self) -> &[&'static str] {
+        self.provides()
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        use crate::sekiro::{
+            attack_clip::{Hand, PlayerState},
+            standalone::{SavedPlayer, SelectedSavedHold},
+        };
+        let read = &w.resource::<SavedPlayer>().ok_or("no saved player")?.0;
+        let state = PlayerState::from_save(read)?;
+        let report = serde_json::json!({"slot":read.index,"version":read.version,"arm_style":format!("{:?}",read.hold.arm_style),"active":{"right":read.hold.right_hand,"left":read.hold.left_hand},"right_hand":read.equipped.right_hand,"left_hand":read.equipped.left_hand,"held":{"right":state.active_weapon(Hand::Right),"left":state.active_weapon(Hand::Left)}});
+        log.count("saved player holds selected", 1);
+        w.insert_resource(SelectedSavedHold { state, report });
+        Ok(())
     }
 }
