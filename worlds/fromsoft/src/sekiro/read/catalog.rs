@@ -60,7 +60,7 @@ mod names {
     pub const GAME:&str="game";
     pub fn alias(name:&str,source:&str)->Value {json!({"name":name,"source":source})}
 }
-fn listed_details(entry: &listing::ListingEntry) -> Value {
+pub fn listed_details(entry: &listing::ListingEntry) -> Value {
     let mut details = json!({
         "hash": entry.hash,
         "shard": entry.shard,
