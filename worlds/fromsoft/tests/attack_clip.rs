@@ -10,17 +10,44 @@
 mod common;
 mod inputs;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use fromsoft_formats::save::{ArmStyle, Save};
 use fromsoft_formats::{Game, Install, Keys, dcx::Decoder};
 use inputs::{Game as Data, OracleSet, Tool, install, keys, oodle, oracle};
-use primase_core::{ClipKey, Name, convert::Reader};
-use primase_fromsoft::sekiro::attack_clip::{self, Hand, PlayerState, Selector};
+use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
+use primase_core::{World, convert::Reader};
+use primase_fromsoft::sekiro::attack_clip::{
+    self, AttackInputs, AttackSelection, Choice, Hand, PlayerState, Selector,
+};
+use primase_fromsoft::sekiro::passes::attack_clip::SelectFromSoftAttack;
 use primase_fromsoft::sekiro::passes::weapons::Grip;
 use primase_fromsoft::sekiro::{CharacterReader, WeaponParams};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+fn select(selector: &Selector, player: &PlayerState, params: &WeaponParams, plan: &World) -> Result<Choice> {
+    let mut plan = plan.clone();
+    plan.insert_resource(AttackInputs {
+        character: "c0000".to_owned(),
+        selectors: vec![selector.clone()],
+        weapons: params.records()?,
+    });
+    let mut registry = PassRegistry::new();
+    primase_fromsoft::sekiro::passes::register(&mut registry);
+    let pipeline = Pipeline {
+        passes: vec![Box::new(SelectFromSoftAttack::new(
+            &selector.name,
+            player.clone(),
+        ))],
+    };
+    PassManager::new(registry).run(&mut plan, &pipeline, &mut RunReport::default())?;
+    Ok(plan
+        .resource::<AttackSelection>()
+        .ok_or("no attack selection")?
+        .choice
+        .clone())
+}
 
 #[test]
 fn the_rule_chooses_the_clip_the_game_played_for_the_saved_hold() -> Result<()> {
@@ -90,14 +117,9 @@ fn the_rule_chooses_the_clip_the_game_played_for_the_saved_hold() -> Result<()> 
     // the character's animations, as its binders list them
     let mut reader = CharacterReader::animations(installed.clone(), "c0000", decoder);
     let (plan, _) = reader.read().map_err(|error| error.to_string())?;
-    let animations: BTreeSet<String> = plan
-        .iter::<ClipKey>()
-        .filter_map(|(e, _)| plan.get::<Name>(e).map(|n| n.0.clone()))
-        .collect();
     let params = WeaponParams::read(&installed, &archive, &decoder)?;
 
-    attack_clip::check_request(&both.name, player.arm_style)?;
-    let choice = attack_clip::choose(&both, &player, &params, &animations)?;
+    let choice = select(&both, &player, &params, &plan)?;
     println!("{}", choice.steps.join("\n"));
     assert_eq!(
         (
@@ -116,13 +138,13 @@ fn the_rule_chooses_the_clip_the_game_played_for_the_saved_hold() -> Result<()> 
     );
 
     // the one-handed request contradicts this hold; for the same weapons in one hand it plays a029_030000
-    assert!(attack_clip::check_request(&right.name, player.arm_style).is_err());
+    assert!(select(&right, &player, &params, &plan).is_err());
     let one_handed = PlayerState {
         arm_style: ArmStyle::Right,
         ..player
     };
     assert_eq!(
-        attack_clip::choose(&right, &one_handed, &params, &animations)?.animation,
+        select(&right, &one_handed, &params, &plan)?.animation,
         "a029_030000"
     );
     Ok(())

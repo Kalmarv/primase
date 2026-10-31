@@ -734,6 +734,7 @@ fn the_fromsoft_passes_register_by_name() {
         "resolve-fromsoft-state",
         "sample-fromsoft-draw-params",
         "select-fromsoft-area",
+        "select-fromsoft-attack",
         "select-fromsoft-outfit",
     ];
     assert_eq!(format!("{reg:?}"), format!("{names:?}"));
