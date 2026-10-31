@@ -48,6 +48,50 @@ impl TerrainSquare {
     }
 }
 
+impl TerrainSquare {
+    /// `rect` (x0, y0, x1, y1) grown by `margin` on each side and snapped outward to the leaves' sample spacing.
+    pub fn cover(&self, rect: [f64; 4], margin: f64) -> [f64; 4] {
+        let spacing = self.leaf_spacing();
+        let down = |v: f64| (v / spacing).floor() * spacing;
+        let up = |v: f64| (v / spacing).ceil() * spacing;
+        [
+            down(rect[0] - margin),
+            down(rect[1] - margin),
+            up(rect[2] + margin),
+            up(rect[3] + margin),
+        ]
+    }
+}
+
+/// The ground the placements of `world` stand on, as a load scope for its terrain: `rect` widened to the box, in the
+/// source's ground axes (x east, y north, through `frame`), of every placed `anvil.mesh`'s positions under its
+/// placement's transform. Far-view proxies (`anvil.far_class`) are left out: they don't ask for near terrain under
+/// them. Non-finite points are skipped.
+pub fn placed_footprint(world: &World, frame: SourceFrame, rect: [f64; 4]) -> [f64; 4] {
+    let mut extent = rect;
+    for (entity, instance) in world.iter::<primase_core::Instance>() {
+        if world.has::<crate::components::AnvilFarClass>(entity) {
+            continue;
+        }
+        let Some(transform) = world.get::<primase_core::Transform>(entity) else {
+            continue;
+        };
+        let Some(mesh) = world.get::<crate::components::AnvilMesh>(instance.prototype) else {
+            continue;
+        };
+        for point in &mesh.positions {
+            let [x, y, _] = frame.point_to_source(transform.apply(*point)).map(f64::from);
+            if x.is_finite() && y.is_finite() {
+                extent[0] = extent[0].min(x);
+                extent[1] = extent[1].min(y);
+                extent[2] = extent[2].max(x);
+                extent[3] = extent[3].max(y);
+            }
+        }
+    }
+    extent
+}
+
 /// The open world's terrain. Observed, not read: the square is the world's GridLayout square ((-8192, -8192), side
 /// 16,384) by the notes this module's documentation gives; its leaves are level 8, 128 samples a side (0.5 m); the
 /// Terrain Entity names the bank `TMB_MAD` and the noise `TerrainSplattingNoise_Set`.
