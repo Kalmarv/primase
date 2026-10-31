@@ -245,7 +245,8 @@ const LIMGRAVE_ASSETS: [(&str, u64); 11] = [
 /// its position relative to the sky map's origin, any other (the Erdtree's light shafts `AEG096_411`/`_414`,
 /// `M[WorldTree_LightShaft..]`) a `Weather` placed where the layout places it moved into the tile's frame (the tile's
 /// centre stands at (128, 640) in the sky map's frame; source z reversed in core's); the sky map's other parts counted.
-/// The pass puts the sky programs' materials on the sky layer writing depth and leaves the light shafts'.
+/// The pass puts the sky programs' materials on the sky layer, retaining the matched MATBIN depth flags, and leaves
+/// the light shafts'.
 ///
 /// The expected values come from an independent walk of the params (typed by the Smithbox paramdefs) and of the sky
 /// map's layout, reading no output of this crate: limit 0 from `MapDefaultInfoParam` row 60423600, 32 weathers, 11
@@ -446,7 +447,7 @@ fn elden_rings_sky_is_read_as_weathers() -> Result<(), Box<dyn std::error::Error
         }
     }
     assert_eq!(checked_states.len(), 4);
-    // the pass puts the sky programs' materials on the sky layer writing depth, leaves the light shafts', keeps the
+    // the pass puts the sky programs' materials on the sky layer with their depth flags, leaves the light shafts', keeps the
     // anchors and removes the records
     common::run(&mut world, "lower-fromsoft-sky")?;
     assert!(world.iter::<SkyPart>().next().is_none());

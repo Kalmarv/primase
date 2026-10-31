@@ -24,12 +24,15 @@ use std::collections::{BTreeMap, BTreeSet};
 /// its own order, counted.
 ///
 /// An Elden Ring weather asset's materials of a sky program (the material table's sky class: `M[Sky9]`, `M[Clouds5]`,
-/// `M[Clouds9]`, `M[Atmosphere][Clouds][EnvmapCapture]`) go on the sky layer at [`DrawOrder::SKY`], writing depth, in
-/// the source's order; its other materials (the Erdtree's light shafts) keep their own, counted. A recorded frame of
+/// `M[Clouds9]`, `M[Atmosphere][Clouds][EnvmapCapture]`) go on the sky layer at [`DrawOrder::SKY`], in the source's
+/// order; its other materials (the Erdtree's light shafts) keep their own, counted. The matched `M[Sky9]`, `M[Clouds5]`
+/// and `M[DistantClouds]_001` MATBIN families retain their depth-disable flags: Gatefront draws the sphere opaque,
+/// Cloud5 alpha blended with depth writes and DistantClouds alpha blended without depth writes. Other sky families
+/// keep the earlier depth-write rule. A recorded frame of
 /// Stormveil draws its cloud layer (`AEG096_603`, `M[Clouds9]`) so: after the opaque surfaces are lit and composited
 /// and before the blended surfaces, with a pipeline that tests and writes depth and blends by source alpha; that frame
-/// composites its volumetric fog after the sky, over it (Sekiro's composites it before its sky). The sky spheres'
-/// own draws are not yet observed: that they draw as the cloud layer does is inferred from the program family. Then
+/// composites its volumetric fog after the sky, over it (Sekiro's composites it before its sky). The ordering of the
+/// remaining sky families is inferred from the program family. Then
 /// `fromsoft.sky_part` is removed. No options: what it lowers is the game's.
 #[derive(Clone, Copy, Debug)]
 pub struct LowerFromSoftSky;
