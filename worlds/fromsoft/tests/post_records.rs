@@ -100,6 +100,14 @@ fn installed_post_records_keep_layers_and_missing_fields_distinct() -> Result<()
     assert_eq!(scalar(1.6, &explicit_banks)?, 1.45);
     explicit_banks[1].activation = Some(Activation::Inactive);
     assert_eq!(scalar(1.6, &explicit_banks)?, 1.6);
+    // The steady native map-context path supplies MapBase activation; the loader's extra flags supply field activity.
+    let resolved = post::reinhard::resolve(&default, &base, &castle)?;
+    assert_eq!(resolved.contrast, 1.45);
+    assert_eq!(resolved.white_balance, 1.7);
+    println!(
+        "POST_REINHARD m11_01_0000: contrast={} white_balance={}",
+        resolved.contrast, resolved.white_balance
+    );
     assert_eq!(
         castle
             .tone

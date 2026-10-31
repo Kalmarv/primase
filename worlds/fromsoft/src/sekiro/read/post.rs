@@ -4,6 +4,7 @@ use fromsoft_formats::gparam::{Gparam, ParamExtra, TimeAxis, Value};
 use fromsoft_formats::{Archive, Result, dcx::Decoder};
 
 pub mod composition;
+pub mod reinhard;
 
 /// One authored value; the hour is absent in GPARAM versions without time keys.
 #[derive(Clone, Debug, PartialEq)]
