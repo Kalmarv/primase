@@ -1272,6 +1272,7 @@ dependencies = [
 name = "primase-core"
 version = "0.1.0"
 dependencies = [
+ "half",
  "iridia",
  "iridia-interface",
  "primase-foundations 0.3.0 (git+https://github.com/Kalmarv/primase-foundations?rev=f9cf4ece1de77fce9d703c63347dd70b728b7c0e)",

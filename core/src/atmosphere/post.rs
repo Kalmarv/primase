@@ -44,6 +44,22 @@ pub struct ReinhardCurve {
     pub gamma: f32,
 }
 
+impl ReinhardCurve {
+    /// Evaluate the 1024 texel-centre samples as binary16 words, quantized towards zero.
+    /// Uses the documented table arithmetic in binary32, including logarithm/exponent powers.
+    pub fn table(&self) -> [u16; 1024] {
+        std::array::from_fn(|i| {
+            let u = (i as f32 + 0.5) / 1024.;
+            let x = u * 0.2 / (1. - u) * self.white_balance;
+            let z = (x.log2() * self.contrast).exp2();
+            let mapped = z / (z + 1.);
+            let value = (mapped.log2() * (1. / self.gamma)).exp2();
+            let rounded = half::f16::from_f32(value);
+            rounded.to_bits() - u16::from(rounded.to_f32() > value)
+        })
+    }
+}
+
 /// A cubic RGB lookup, red fastest, then green, then blue. Before lookup, raise RGB to `input_power`;
 /// sample with trilinear filtering at texel centres, clamping to the cube's edges. The values and filtered result are
 /// sRGB-encoded display RGB. Decode after filtering when writing to a target that encodes sRGB on write.
