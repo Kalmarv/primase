@@ -3,7 +3,7 @@
 //! source's volumetric fog in the source's own units (shown, not drawn). A tabled tone curve and colour lookup describe the established display processing.
 
 mod post;
-pub use post::{ColourLut, ReinhardCurve, ToneMap};
+pub use post::{ColourLut, ColourMatrix, ReinhardCurve, ToneMap};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -331,7 +331,7 @@ impl Atmosphere {
 
 impl Resource for Atmosphere {
     const NAME: &'static str = "core.atmosphere";
-    const VERSION: u32 = 5;
+    const VERSION: u32 = 6;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         crate::json::to_value(self).map(Some)
     }

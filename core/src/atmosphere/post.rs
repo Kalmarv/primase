@@ -1,18 +1,37 @@
-//! A tabled tone curve followed by colour correction and a three-dimensional colour lookup.
+//! A tabled tone curve, source-ordered colour correction and a three-dimensional colour lookup.
 use serde::Serialize;
 
 /// Display processing after exposure and bloom. Values describe operations, independent of a source's settings files.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ToneMap {
     pub curve: ReinhardCurve,
-    /// Optional rows applied to (tone-mapped R, G, B, 1); negative results are clamped to zero. None skips this stage.
-    pub colour_matrix: Option<[[f32; 4]; 3]>,
+    /// A source-stated transform before or after the curve. None skips this stage.
+    pub colour_matrix: Option<ColourMatrix>,
     /// At screen coordinate (u,v), r = length((2uv-1) * xy), t = 1-clamp(r*z+w,0,1).
     /// Multiply RGB by (t*t*(3-2*t))^4 before the lookup. None skips this stage.
     pub vignette: Option<[f32; 4]>,
     /// None skips the lookup and leaves the curve/matrix/vignette result as linear RGB. A source must separately
     /// report any stage it cannot establish; None is not a claim that its renderer uses an identity lookup.
     pub lut: Option<ColourLut>,
+}
+
+/// Three rows applied to (R, G, B, 1), with negative results clamped to zero. Placement matters: a tone curve is
+/// nonlinear, so a colour transform of HDR before the curve is a different operation from a transform after it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub enum ColourMatrix {
+    /// Transform exposed HDR before forming the tone-table coordinates.
+    BeforeCurve([[f32; 4]; 3]),
+    /// Transform the tone-table result, before vignette and lookup.
+    AfterCurve([[f32; 4]; 3]),
+}
+
+impl ColourMatrix {
+    /// The transform's three rows, independent of its placement.
+    pub fn rows(&self) -> &[[f32; 4]; 3] {
+        match self {
+            Self::BeforeCurve(rows) | Self::AfterCurve(rows) => rows,
+        }
+    }
 }
 
 /// A 1024-entry R16F curve: at texel i, u=(i+.5)/1024, z=(.2*u/(1-u)*white_balance)^contrast,
@@ -49,7 +68,7 @@ impl ToneMap {
         if !self
             .colour_matrix
             .iter()
-            .flatten()
+            .flat_map(|matrix| matrix.rows())
             .flatten()
             .chain(self.vignette.iter().flatten())
             .all(|x| x.is_finite())
@@ -84,7 +103,11 @@ mod tests {
                 white_balance: 1.7,
                 gamma: 1.,
             },
-            colour_matrix: Some([[1., 0., 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.]]),
+            colour_matrix: Some(ColourMatrix::AfterCurve([
+                [1., 0., 0., 0.],
+                [0., 1., 0., 0.],
+                [0., 0., 1., 0.],
+            ])),
             vignette: Some([0.; 4]),
             lut: Some(ColourLut {
                 side: 2,
@@ -106,6 +129,17 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(json["tone_map"]["lut"]["side"], 2);
+        assert!(json["tone_map"]["colour_matrix"]["AfterCurve"].is_array());
+        let mut before = tone.clone();
+        before.colour_matrix = Some(ColourMatrix::BeforeCurve(
+            *tone.colour_matrix.as_ref().unwrap().rows(),
+        ));
+        assert!(before.check().is_ok());
+        assert!(serde_json::to_value(&before).unwrap()["colour_matrix"]["BeforeCurve"].is_array());
+        if let Some(ColourMatrix::BeforeCurve(rows)) = &mut before.colour_matrix {
+            rows[0][0] = f32::NAN;
+        }
+        assert!(before.check().unwrap_err().contains("matrix"));
         let mut invalid = tone.clone();
         invalid.lut.as_mut().unwrap().values.pop();
         assert_eq!(
