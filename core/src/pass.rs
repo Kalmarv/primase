@@ -364,6 +364,40 @@ impl PassRegistry {
         Ok(Pipeline { passes })
     }
 
+    /// Describe a preparation without discarding its unfed texts. `runnable` is the declaration-based
+    /// projection, while `requested` retains every text for an explicitly optional run
+    /// ([`PassManager::with_missing_inputs`]). Invalid texts remain requested and runnable so parsing
+    /// still reports their error; they are never silently treated as absent source content.
+    pub fn prepare_texts(&self, present: &BTreeSet<String>, texts: Vec<String>) -> TextPreparation {
+        let mut held = present.clone();
+        let mut runnable = Vec::new();
+        let mut unfed = Vec::new();
+        for text in &texts {
+            let Ok(pipeline) = self.parse(text) else {
+                runnable.push(text.clone());
+                continue;
+            };
+            let inputs = pipeline.unfed(&held);
+            if inputs.passes.is_empty() {
+                held = inputs.held;
+                runnable.push(text.clone());
+            } else {
+                let mut missing = Vec::new();
+                for name in inputs.passes.iter().flat_map(|(_, names)| names) {
+                    if !missing.iter().any(|held| held == name) {
+                        missing.push((*name).to_owned());
+                    }
+                }
+                unfed.push((text.clone(), missing));
+            }
+        }
+        TextPreparation {
+            requested: texts,
+            runnable,
+            unfed,
+        }
+    }
+
     /// Every registered pass, by name, made with its options in `options` (its registered example when it is not
     /// listed there). Options for a pass that is not registered are an error.
     fn instances(&self, options: &PassOptions) -> Result<Vec<Box<dyn Pass>>, Error> {
@@ -461,6 +495,18 @@ fn parse_pipeline(text: &str) -> Result<Vec<(String, Options)>, Error> {
 #[derive(Default)]
 pub struct Pipeline {
     pub passes: Vec<Box<dyn Pass>>,
+}
+
+/// A preparation's requested texts and the declaration-based projection on the source's names.
+/// Consumers retain `unfed` in their report instead of losing the reason a text was not fed.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct TextPreparation {
+    /// Every caller-requested text, in order, including ones whose inputs were absent.
+    pub requested: Vec<String>,
+    /// The texts whose declarations were fed by the initial names or preceding runnable texts.
+    pub runnable: Vec<String>,
+    /// Unfed texts and their absent names; no component or resource is synthesized for them.
+    pub unfed: Vec<(String, Vec<String>)>,
 }
 
 impl fmt::Debug for Pipeline {
