@@ -27,6 +27,7 @@ pub(super) mod shaders;
 pub(super) mod shadows;
 pub mod sky;
 pub mod states;
+pub mod standalone;
 pub mod texture_switch;
 pub(super) mod textures;
 pub mod visibility;

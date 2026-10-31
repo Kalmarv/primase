@@ -1221,3 +1221,12 @@ impl Resource for PostLookup {
 
 /// Raw state candidates and the resolved pass result.
 pub use super::state::{CommonState, DomeMembership, ResolvedState, SKY_AXIS, StateInputs, StateReadScope};
+/// The source installation's game identity, carried by readers for registered interpretation passes.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct CharacterGame(pub fromsoft_formats::Game);
+impl Resource for CharacterGame {
+    const NAME: &'static str = "fromsoft.character_game";
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        to_value(self).map(Some)
+    }
+}

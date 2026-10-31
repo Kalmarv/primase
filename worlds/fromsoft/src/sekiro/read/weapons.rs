@@ -78,16 +78,6 @@ impl WeaponParams {
         })
     }
 
-    /// Params made of `weapons` and `holds` in `game`'s layouts, for tests that build their rows.
-    #[cfg(test)]
-    pub(crate) fn of(weapons: Param, holds: Param, game: Game) -> Self {
-        Self {
-            weapons,
-            holds,
-            layouts: layouts(game),
-        }
-    }
-
     /// Every supported raw weapon record, retaining inactive trace slots as authored.
     pub fn records(&self) -> Result<Vec<fromsoft_formats::weapon_params::WeaponRow>> {
         self.weapons
