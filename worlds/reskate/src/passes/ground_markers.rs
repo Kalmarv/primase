@@ -1,17 +1,36 @@
-//! `ground-reskate-markers{kinds=K+K...,above=M}`: raised markers of the stated kinds that stand at a height
-//! (`skate.marker` with a position and a height, raised from a placed `core.marker`) and have no snap of their own are
-//! snapped down to the ground below them: the map's ground snap searches down from their height plus `above` metres.
-//! `raise-skate` keeps such a marker where it stands, unsnapped (only a ground marker, which has no height, snaps), so
-//! a source whose spawn or travel points float above the ground (Sekiro's, GTA's spawns) states this. Both options are
-//! the program's; a marker with a snap keeps it. Run after `raise-skate`, before the snap is resolved
+//! `ground-reskate-markers{kinds=K+K...,above=M,from=ground|all}`: raised markers of the stated kinds that stand at a
+//! height (`skate.marker` with a position and a height, raised from a placed `core.marker`) and have no snap of their own
+//! are snapped down to the ground below them: the map's ground snap searches down from their height plus `above`
+//! metres. `raise-skate` keeps such a marker where it stands, unsnapped (only a ground marker, which has no height,
+//! snaps), so a source whose spawn or travel points float above the ground (Sekiro's, GTA's spawns) states this. Both
+//! are the program's; a marker with a snap keeps it. Run after `raise-skate`, before the snap is resolved
 //! (`snap-reskate-markers`).
+//!
+//! The snap searches the ground collision (`from=ground`, as when `from` is not given: the world's soups and the
+//! prototypes stated ground), or every collision, the placed prototypes' too (`from=all`): a source whose ground is
+//! itself placed (TrackMania's blocks) states `all`.
 
 use std::collections::BTreeSet;
 
-use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
+use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Component, Entity, World};
 
 use crate::components::{MarkerKind, Other, SkateMarker, Snap, SnapMode};
+
+/// What a grounded marker's snap searches (see the module documentation).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GroundFrom {
+    /// The ground collision: the world's soups and the prototypes stated ground.
+    #[default]
+    Ground,
+    /// Every collision, the placed prototypes' too.
+    All,
+}
+
+impl Choice for GroundFrom {
+    const VALUES: &'static [(&'static str, Self)] =
+        &[("ground", GroundFrom::Ground), ("all", GroundFrom::All)];
+}
 
 /// See the module documentation.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -19,10 +38,12 @@ pub struct GroundReskateMarkers {
     kinds: BTreeSet<MarkerKind>,
     /// Metres, finite and at least 0, kept as their bits so the pass compares exactly.
     above: u64,
+    from: GroundFrom,
 }
 
 impl GroundReskateMarkers {
-    /// Markers of `kinds` (at least one) snapped down from their height plus `above` metres (finite, at least 0).
+    /// Markers of `kinds` (at least one) snapped down from their height plus `above` metres (finite, at least 0), to
+    /// the ground collision ([`GroundReskateMarkers::with_from`] says otherwise).
     pub fn new(kinds: BTreeSet<MarkerKind>, above: f64) -> Result<GroundReskateMarkers, String> {
         if kinds.is_empty() {
             return Err("ground-reskate-markers needs at least one marker kind".into());
@@ -33,13 +54,21 @@ impl GroundReskateMarkers {
         Ok(GroundReskateMarkers {
             kinds,
             above: above.to_bits(),
+            from: GroundFrom::Ground,
         })
+    }
+    /// The same markers snapped to what `from` says.
+    pub fn with_from(self, from: GroundFrom) -> GroundReskateMarkers {
+        GroundReskateMarkers { from, ..self }
     }
     pub fn kinds(&self) -> &BTreeSet<MarkerKind> {
         &self.kinds
     }
     pub fn above(&self) -> f64 {
         f64::from_bits(self.above)
+    }
+    pub fn from(&self) -> GroundFrom {
+        self.from
     }
     /// From its options, through [`GroundReskateMarkers::new`].
     fn from_given(g: &Given) -> Result<GroundReskateMarkers, String> {
@@ -52,7 +81,8 @@ impl GroundReskateMarkers {
         let above = above
             .parse::<f64>()
             .map_err(|_| format!("above={above} is not metres"))?;
-        GroundReskateMarkers::new(kinds, above)
+        let from = g.optional_choice::<GroundFrom>("from").unwrap_or_default();
+        Ok(GroundReskateMarkers::new(kinds, above)?.with_from(from))
     }
 }
 
@@ -70,6 +100,11 @@ pub const GROUND_RESKATE_MARKERS: PassSpec = PassSpec {
             "above",
             "1",
             "metres, finite and 0 or more: above a marker's height the search down starts",
+        ),
+        OptionSpec::optional_choice::<GroundFrom>(
+            "from",
+            "what the snap searches: the ground collision, or every collision (the placed prototypes' too)",
+            "the ground collision",
         ),
     ],
     make: |g| Ok(Box::new(GroundReskateMarkers::from_given(g)?)),
@@ -90,6 +125,7 @@ impl Pass for GroundReskateMarkers {
                     .join("+"),
             ),
             ("above".to_owned(), self.above().to_string()),
+            ("from".to_owned(), self.from.text().to_owned()),
         ])
     }
     // a world without markers has none to snap
@@ -112,7 +148,10 @@ impl Pass for GroundReskateMarkers {
             m.snap = Some(Snap::Object {
                 mode: SnapMode::Ground,
                 above: Some(self.above()),
-                from: None,
+                from: match self.from {
+                    GroundFrom::Ground => None,
+                    GroundFrom::All => Some("all".to_owned()),
+                },
                 min_up: None,
                 rings: None,
                 directions: None,
@@ -175,7 +214,7 @@ mod tests {
         let snap = |e| w.get::<SkateMarker>(e).unwrap().snap.clone();
         assert!(matches!(
             snap(travel),
-            Some(Snap::Object { mode, above: Some(a), .. }) if mode == SnapMode::Ground && a == 0.5
+            Some(Snap::Object { mode, above: Some(a), from: None, .. }) if mode == SnapMode::Ground && a == 0.5
         ));
         // a kind not stated, a marker with no height (raise-skate snaps it already) and one with its own snap: as they were
         assert_eq!(snap(trainer), None);
@@ -192,6 +231,22 @@ mod tests {
         );
     }
 
+    /// `from=all`: the snap searches every collision, as the writer reads `"from": "all"`.
+    #[test]
+    fn a_snap_from_all_collision_says_so() {
+        let mut w = World::new();
+        let travel = w.spawn();
+        w.insert(travel, marker(MarkerKind::Travel, Some(10.0), None));
+        let pass = GroundReskateMarkers::new(BTreeSet::from([MarkerKind::Travel]), 1.0)
+            .unwrap()
+            .with_from(GroundFrom::All);
+        pass.run(&mut w, &mut PassLog::default()).unwrap();
+        assert!(matches!(
+            w.get::<SkateMarker>(travel).unwrap().snap.clone(),
+            Some(Snap::Object { from: Some(f), .. }) if f == "all"
+        ));
+    }
+
     #[test]
     fn options_are_required_and_say_every_choice() {
         let pass =
@@ -199,6 +254,17 @@ mod tests {
         let made = GROUND_RESKATE_MARKERS.instance(&pass.options()).unwrap();
         assert_eq!(made.options(), pass.options());
         assert!(GROUND_RESKATE_MARKERS.instance(&Options::new()).is_err());
+        let all = pass.clone().with_from(GroundFrom::All);
+        assert_eq!(
+            GROUND_RESKATE_MARKERS.instance(&all.options()).unwrap().options(),
+            all.options()
+        );
+        // `from` not given: the ground collision, as before the option
+        let given = Options::from([("kinds".into(), "spawn".into()), ("above".into(), "1".into())]);
+        assert_eq!(
+            GROUND_RESKATE_MARKERS.instance(&given).unwrap().options()["from"],
+            "ground"
+        );
         assert!(GroundReskateMarkers::new(BTreeSet::new(), 1.0).is_err());
         assert!(GroundReskateMarkers::new(BTreeSet::from([MarkerKind::Spawn]), -1.0).is_err());
         assert!(
