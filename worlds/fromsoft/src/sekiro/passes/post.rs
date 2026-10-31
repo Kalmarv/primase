@@ -3,6 +3,8 @@ use crate::sekiro::source::DrawParam;
 use primase_core::pass::{Pass, PassLog, PassSpec};
 use primase_core::{Atmosphere, ReinhardCurve, Resource, ToneMap, World};
 
+pub mod elden_ring;
+
 /// Apply resolved steady Reinhard and the proven selected lookup, leaving unestablished stages absent.
 #[derive(Debug)]
 pub struct LowerSekiroReinhard;

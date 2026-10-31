@@ -100,6 +100,7 @@ pub fn register(registry: &mut PassRegistry) {
         &draw_params::SAMPLE_FROMSOFT_DRAW_PARAMS,
         &environment::LOWER_FROMSOFT_ENVIRONMENT,
         &post::LOWER_SEKIRO_REINHARD,
+        &post::elden_ring::LOWER_ELDEN_RING_REINHARD,
         &lights::LOWER_FROMSOFT_LIGHTS,
         &irradiance::LOWER_FROMSOFT_IRRADIANCE,
         &sky::LOWER_FROMSOFT_SKY,

@@ -6,6 +6,77 @@ use fromsoft_formats::{Game, dcx::Decoder};
 use primase_fromsoft::sekiro::post;
 
 #[test]
+fn installed_stormveil_reinhard_follows_the_selected_files_clock_keys()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (Some(archive), Some(library)) = (
+        common::archive(Game::EldenRing)?,
+        inputs::oodle(inputs::Tool::Oodle6),
+    ) else {
+        return Ok(());
+    };
+    let dll = common::oodle(library)?;
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: 1 << 28,
+    };
+    let raw = post::read(&archive, &decoder, "m10_00_0000")?;
+    let (offset, period) = raw.time.expect("version5 native time axis").sampling();
+    assert_eq!(period, 24.);
+    let (draw, _) = primase_fromsoft::sekiro::read_area_draw_param(
+        &archive,
+        &decoder,
+        "m10_00_00_00",
+        &primase_fromsoft::sekiro::DrawParams::File("m10_00_0000".into()),
+    )?;
+    let draw = draw.expect("explicit installed file selected");
+    // Independent installed-file census: these two authored keys deliberately have different contrast.
+    // Their clock hours come from the file header, not an assumed noon or a captured camera exposure.
+    for (key, expected) in [(0., 1.6), (11.5, 1.45)] {
+        let authored = raw
+            .tone
+            .reinhard_contrast
+            .iter()
+            .find(|s| s.id == 0 && s.hour == Some(key))
+            .unwrap();
+        assert_eq!(authored.value, expected);
+        let mut world = primase_core::World::new();
+        world.insert_resource(draw.clone());
+        world.insert_resource(primase_core::TimeOfDay {
+            hour: (offset + key) % period,
+        });
+        use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
+        let mut report = RunReport::default();
+        PassManager::new(PassRegistry::new()).run(
+            &mut world,
+            &Pipeline {
+                passes: vec![Box::new(
+                    primase_fromsoft::sekiro::passes::post::elden_ring::LowerEldenRingReinhard,
+                )],
+            },
+            &mut report,
+        )?;
+        let tone = world
+            .resource::<primase_core::Atmosphere>()
+            .unwrap()
+            .tone_map
+            .as_ref()
+            .unwrap();
+        assert_eq!(tone.curve.contrast, expected);
+        assert_eq!(tone.curve.white_balance, 1.);
+        assert_eq!(tone.curve.gamma, 1.);
+        assert!(tone.colour_matrix.is_none() && tone.vignette.is_none() && tone.lut.is_none());
+        assert_eq!(report.steps[0].log.omitted.len(), 3);
+        assert!(world.verify_resources().is_empty());
+        println!(
+            "ER_POST selected m10_00_0000 clock={} contrast={} white=1; native-default table exponent1, later stages omitted",
+            (offset + key) % period,
+            expected
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn installed_ashina_colour_lookup_matches_the_captured_cube() -> Result<(), Box<dyn std::error::Error>> {
     let (Some(archive), Some(library), Some(frames)) = (
         common::archive(Game::Sekiro)?,

@@ -709,6 +709,7 @@ fn the_fromsoft_passes_register_by_name() {
         "drop-fromsoft-texture-transforms",
         "fromsoft-apply-rigid-skinning",
         "hold-fromsoft-weapons",
+        "lower-elden-ring-reinhard",
         "lower-fromsoft-clip-events",
         "lower-fromsoft-collision",
         "lower-fromsoft-display-masks",
@@ -734,6 +735,7 @@ fn the_fromsoft_passes_register_by_name() {
     ];
     assert_eq!(format!("{reg:?}"), format!("{names:?}"));
     let free = [
+        "lower-elden-ring-reinhard",
         "derive-fromsoft-detail",
         "drop-fromsoft-far",
         "drop-fromsoft-texture-transforms",
