@@ -102,7 +102,7 @@ primase-anvil = { path = "worlds/anvil" }
 primase-shaunwhite = { path = "worlds/shaunwhite" }
 primase-shred = { path = "worlds/shred" }
 primase-trackmania = { path = "worlds/trackmania" }
-anvil-formats = { git = "https://github.com/Kalmarv/anvil-formats", rev = "9504711959f9443aa95ae1d2d80686238528e4a4" }
+anvil-formats = { git = "https://github.com/Kalmarv/anvil-formats", rev = "154580517be5075f5985ef5bef8201472afb4b9d" }
 dxil-reader = { git = "https://github.com/Kalmarv/dx", rev = "c32a3689c6bd26a0ee0777664091f4e04843927e" }
 frostbite-formats = { git = "https://github.com/Kalmarv/frostbite-formats", rev = "413a70b3f90c0c8bbb7377df09d1c3edcb743a86" }
 rage-engine-formats = { git = "https://github.com/Kalmarv/rage-engine-formats", rev = "6866413a19f4c25dc9270fe8bc0849518c220ca4" }

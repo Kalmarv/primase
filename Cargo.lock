@@ -96,7 +96,7 @@ dependencies = [
 [[package]]
 name = "anvil-formats"
 version = "0.1.2"
-source = "git+https://github.com/Kalmarv/anvil-formats?rev=9504711959f9443aa95ae1d2d80686238528e4a4#9504711959f9443aa95ae1d2d80686238528e4a4"
+source = "git+https://github.com/Kalmarv/anvil-formats?rev=154580517be5075f5985ef5bef8201472afb4b9d#154580517be5075f5985ef5bef8201472afb4b9d"
 dependencies = [
  "dxcontainer",
  "primase-foundations 0.3.0 (git+https://github.com/Kalmarv/primase-foundations?rev=f9cf4ece1de77fce9d703c63347dd70b728b7c0e)",
