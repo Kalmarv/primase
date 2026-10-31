@@ -155,30 +155,6 @@ impl Resource for SelectedNpcInitializer {
         primase_core::json::to_value(self).map(Some)
     }
 }
-/// Required level policy; `PreferLow` preserves the previous caller's stated preference and reports it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PartLevel {
-    PreferLow,
-    Low,
-    Full,
-}
-impl PartLevel {
-    pub fn text(self) -> &'static str {
-        match self {
-            Self::PreferLow => "prefer-low",
-            Self::Low => "low",
-            Self::Full => "full",
-        }
-    }
-}
-
-/// The explicit shared part-level choice made by the registered initializer selector.
-#[derive(Clone, Copy, Debug)]
-pub struct PartLevelSelection(pub PartLevel);
-impl Resource for PartLevelSelection {
-    const NAME: &'static str = "fromsoft.part_level_selection";
-}
-
 /// Raw mask groups and param rows, with the map-authored row identities kept in source order.
 #[derive(Clone, Debug)]
 pub struct DressingInputs {
