@@ -1,5 +1,5 @@
-//! Named post and volumetric-fog records, exactly as one GPARAM stores them. No layers are merged and no time keys
-//! are interpolated here. In particular an absent Reinhard contrast is absent, not a renderer default.
+//! Named post and volumetric-fog records, exactly as one GPARAM stores them. Raw records preserve missing fields and
+//! time keys. Explicit scalar composition is separate in [`composition`]; [`reinhard`] resolves steady map-bank values.
 use fromsoft_formats::gparam::{Gparam, ParamExtra, TimeAxis, Value};
 use fromsoft_formats::{Archive, Result, dcx::Decoder};
 

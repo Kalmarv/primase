@@ -66,6 +66,27 @@ pub fn resolve(default: &Records, map_base: &Records, selected: &Records) -> Res
                     "Tone Map[Yebis] extra record unavailable",
                 )
             })?;
+            // Empty stored groups are skipped before the loader even examines extras (140316e29..e7b).
+            // Records retains known fields only: require their evidence rather than inventing a requested row.
+            let floats = [
+                &records.tone.reinhard_contrast,
+                &records.tone.reinhard_white_balance,
+                &records.tone.filmic_contrast,
+                &records.tone.exposure,
+            ];
+            let nonempty = !records.tone.mode.is_empty() || floats.iter().any(|track| !track.is_empty());
+            let has_zero = extra.ids.contains(&0)
+                || records.tone.mode.iter().any(|sample| sample.id == 0)
+                || floats
+                    .iter()
+                    .any(|track| track.iter().any(|sample| sample.id == 0));
+            if !nonempty || !has_zero {
+                return Err(crate::invalid(
+                    "Sekiro Reinhard",
+                    usize::from(index),
+                    "Tone Map[Yebis] ID0 row construction unresolved: no nonempty known field and requested-ID witness",
+                ));
+            }
             banks.push(ScalarBank {
                 index,
                 activation: Some(Activation::Active { weight: 1.0 }),
@@ -101,6 +122,46 @@ pub fn read(archive: &Archive, decoder: &Decoder<'_>, selected_stem: &str) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_groups_cannot_construct_rows_from_an_extra_id_alone() {
+        let mut records = Records {
+            version: 5,
+            tone_extra: Some(ParamExtra {
+                group_index: 4,
+                ids: vec![0],
+                unknown_0c: Some(0),
+            }),
+            ..Default::default()
+        };
+        assert!(
+            resolve(&records, &records, &records)
+                .unwrap_err()
+                .to_string()
+                .contains("ID0 row construction unresolved")
+        );
+        // A stored tone-mode field constructs the requested ID; the missing scalar columns then use initializers.
+        records.tone.mode.push(Sample {
+            id: 0,
+            hour: Some(0.0),
+            value: 7,
+        });
+        assert_eq!(
+            resolve(&records, &records, &records).unwrap(),
+            Reinhard {
+                contrast: 1.6,
+                white_balance: 1.7
+            }
+        );
+        records.tone_extra.as_mut().unwrap().ids.clear();
+        assert_eq!(
+            resolve(&records, &records, &records).unwrap(),
+            Reinhard {
+                contrast: 1.6,
+                white_balance: 1.7
+            }
+        );
+    }
 
     #[test]
     fn authored_unlisted_and_absent_rows_have_distinct_activation() {
