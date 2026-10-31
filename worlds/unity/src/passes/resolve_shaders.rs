@@ -81,34 +81,88 @@ use primase_core::{
 };
 
 use crate::colour::ColourSpace;
-use crate::components::{UnityMaterial, UnityProgramVariant, UnityPrograms, UnityShaderGlobals, UnityTexEnv};
+use crate::components::{
+    UnityMaterial, UnityPlayerSettings, UnityProgramVariant, UnityPrograms, UnityShaderGlobals, UnityTexEnv,
+};
 use crate::passes::draw_keywords::{SceneKeywords, receivers};
 use unity_formats::program::{Parameters, Shape};
 
 /// See the module documentation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolveUnityShaders {
-    tier: usize,
+    tier: Tier,
     keywords: Vec<String>,
     /// Whether the scene's state gives each material its renderer keywords too.
     scene: bool,
-    /// The player's colour space.
-    colour_space: ColourSpace,
+    /// The colour space the programs are bound for; `None`: the one the read's player states
+    /// ([`UnityPlayerSettings`]).
+    colour_space: Option<ColourSpace>,
+}
+
+/// The hardware tier the variants are chosen for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tier {
+    /// This tier.
+    Number(usize),
+    /// The highest tier the read's variants hold, said in the log where there are several.
+    Highest,
 }
 
 impl ResolveUnityShaders {
     pub fn new(tier: usize, keywords: Vec<String>, colour_space: ColourSpace) -> Self {
         ResolveUnityShaders {
-            tier,
+            tier: Tier::Number(tier),
             keywords,
             scene: false,
-            colour_space,
+            colour_space: Some(colour_space),
         }
     }
 
-    /// Whether the player works in the linear colour space.
-    fn linear(&self) -> bool {
-        self.colour_space == ColourSpace::Linear
+    /// The tier and the colour space this run binds for: the stated ones, else the highest tier the variants hold and
+    /// the colour space the read's player states.
+    fn settings(
+        &self,
+        world: &World,
+        log: &mut primase_core::pass::PassLog,
+    ) -> Result<(usize, ColourSpace), String> {
+        let tier = match self.tier {
+            Tier::Number(tier) => tier,
+            Tier::Highest => {
+                let tiers: std::collections::BTreeSet<usize> = world
+                    .iter::<UnityPrograms>()
+                    .flat_map(|(_, programs)| programs.variants.iter().map(|variant| variant.tier))
+                    .collect();
+                let Some(&highest) = tiers.last() else {
+                    return Err(
+                        "tier=highest: no material of the read was given a program: nothing for \
+                                resolve-unity-shaders to bind"
+                            .into(),
+                    );
+                };
+                if tiers.len() > 1 {
+                    let listed: Vec<String> = tiers.iter().map(usize::to_string).collect();
+                    log.count(
+                        &format!(
+                            "the programs are compiled for the hardware tiers {}: tier {highest} bound, the highest",
+                            listed.join(", ")
+                        ),
+                        1,
+                    );
+                }
+                highest
+            }
+        };
+        let colour_space = match self.colour_space {
+            Some(space) => space,
+            None => world
+                .resource::<UnityPlayerSettings>()
+                .and_then(|settings| settings.colour_space)
+                .ok_or(
+                    "the player has no PlayerSettings, so the colour space its programs read colours in is not \
+                     stated: state colour-space",
+                )?,
+        };
+        Ok((tier, colour_space))
     }
 
     /// Also give each material the keywords the scene's own state gives its draws ([`SceneKeywords`]).
@@ -121,9 +175,14 @@ impl ResolveUnityShaders {
     /// `scene` among them for the scene's own, or `none`.
     fn from_given(g: &Given) -> Result<Self, String> {
         let v = g.required("tier");
-        let tier = v
-            .parse::<usize>()
-            .map_err(|_| format!("tier={v} is not a number"))?;
+        let tier = if v == "highest" {
+            Tier::Highest
+        } else {
+            Tier::Number(
+                v.parse::<usize>()
+                    .map_err(|_| format!("tier={v} is not a number or highest"))?,
+            )
+        };
         let v = g.required("keywords");
         let (mut named, mut scene) = (Vec::new(), false);
         for k in v.split('+') {
@@ -133,7 +192,12 @@ impl ResolveUnityShaders {
                 _ => named.push(k.to_owned()),
             }
         }
-        let pass = Self::new(tier, named, g.choice::<ColourSpace>("colour-space"));
+        let pass = ResolveUnityShaders {
+            tier,
+            keywords: named,
+            scene: false,
+            colour_space: g.optional_choice::<ColourSpace>("colour-space"),
+        };
         Ok(if scene { pass.with_scene_keywords() } else { pass })
     }
 }
@@ -143,15 +207,20 @@ impl ResolveUnityShaders {
 pub const RESOLVE_UNITY_SHADERS: PassSpec = PassSpec {
     name: "resolve-unity-shaders",
     options: &[
-        OptionSpec::required("tier", "0", "the hardware tier the variants are chosen for"),
+        OptionSpec::required(
+            "tier",
+            "0",
+            "the hardware tier the variants are chosen for, or highest for the highest tier the read's variants hold",
+        ),
         OptionSpec::required(
             "keywords",
             "none",
             "the renderer's keywords joined by +, scene among them for the ones the scene's state gives, or none",
         ),
-        OptionSpec::choice::<ColourSpace>(
+        OptionSpec::optional_choice::<ColourSpace>(
             "colour-space",
-            "the player's colour space (its PlayerSettings): linear converts a plain colour property from storage, gamma              reads every colour as stored",
+            "linear converts a plain colour property from storage, gamma reads every colour as stored",
+            "the colour space the player's PlayerSettings state (unity.player_settings); refused where it states none",
         ),
     ],
     make: |g| Ok(Box::new(ResolveUnityShaders::from_given(g)?)),
@@ -796,7 +865,13 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
     }
     fn options(&self) -> primase_core::pass::Options {
         primase_core::pass::Options::from([
-            ("tier".to_owned(), self.tier.to_string()),
+            (
+                "tier".to_owned(),
+                match self.tier {
+                    Tier::Number(tier) => tier.to_string(),
+                    Tier::Highest => "highest".to_owned(),
+                },
+            ),
             (
                 "keywords".to_owned(),
                 match (self.scene, self.keywords.is_empty()) {
@@ -811,8 +886,14 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
                     }
                 },
             ),
-            ("colour-space".to_owned(), self.colour_space.text().to_owned()),
         ])
+        .into_iter()
+        .chain(
+            self.colour_space
+                .iter()
+                .map(|space| ("colour-space".to_owned(), space.text().to_owned())),
+        )
+        .collect()
     }
     fn requires(&self) -> &[&'static str] {
         &[UnityMaterial::NAME, UnityPrograms::NAME]
@@ -821,6 +902,7 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
         &[Shader::NAME, ShaderBinding::NAME, Name::NAME]
     }
     fn run(&self, world: &mut World, log: &mut primase_core::pass::PassLog) -> Result<(), String> {
+        let (tier, colour_space) = self.settings(world, log)?;
         let materials: Vec<(Entity, UnityMaterial, UnityPrograms)> = world
             .iter::<UnityMaterial>()
             .filter_map(|(e, m)| Some((e, m.clone(), world.get::<UnityPrograms>(e)?.clone())))
@@ -876,7 +958,7 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
                     global.push(k.to_owned());
                 }
             }
-            let chosen = programs.draw_variants(&m.keywords, &global, self.tier);
+            let chosen = programs.draw_variants(&m.keywords, &global, tier);
             let Some(fragment) = chosen.fragment else {
                 *counts
                     .entry("materials left unbound: no fragment variant for these keywords and tier".into())
@@ -940,6 +1022,7 @@ impl primase_core::pass::Pass for ResolveUnityShaders {
                             .map(|s| s.interface.clone())
                             .ok_or("a resolved shader without its shader")?;
                         bound.push(self.stage_binding(
+                            colour_space,
                             &m,
                             variant,
                             &programs.texture_defaults,
@@ -1013,6 +1096,7 @@ impl ResolveUnityShaders {
     #[allow(clippy::too_many_arguments)]
     fn stage_binding(
         &self,
+        colour_space: ColourSpace,
         m: &UnityMaterial,
         variant: &UnityProgramVariant,
         defaults: &[(String, String)],
@@ -1061,7 +1145,7 @@ impl ResolveUnityShaders {
                         r.id,
                         layout.size,
                         m,
-                        self.colour_space,
+                        colour_space,
                         globals,
                         reads,
                         counts,
@@ -1088,7 +1172,7 @@ impl ResolveUnityShaders {
                             m,
                             defaults,
                             &variant.keywords,
-                            self.linear(),
+                            colour_space == ColourSpace::Linear,
                             &t.name,
                             globals,
                             counts,
@@ -2180,6 +2264,80 @@ mod tests {
         assert_eq!(p.options()["keywords"], "A+B");
         let scene = make(&[("tier", "1"), ("keywords", "B+scene"), ("colour-space", "linear")]).unwrap();
         assert_eq!(scene.options()["keywords"], "scene+B");
+    }
+
+    /// `tier=highest` binds the highest tier the variants hold and says so where there are several; the colour space
+    /// not stated is the one the read's player states, and a player that states none is refused naming the option.
+    #[test]
+    fn the_highest_tier_and_the_players_colour_space_are_followed() {
+        use crate::components::{UnityPlayerSettings, UnityProgramVariant, UnityPrograms};
+        let o = |pairs: &[(&str, &str)]| {
+            pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect::<primase_core::pass::Options>()
+        };
+        let pass = RESOLVE_UNITY_SHADERS
+            .instance(&o(&[("tier", "highest"), ("keywords", "scene")]))
+            .unwrap();
+        assert_eq!(pass.options()["tier"], "highest");
+        assert!(!pass.options().contains_key("colour-space"));
+        let variant = |tier| UnityProgramVariant {
+            tier,
+            gpu_program_type: 18,
+            keywords: Vec::new(),
+            parameters: Default::default(),
+            code: std::sync::Arc::from(Vec::new()),
+        };
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(
+            e,
+            UnityPrograms {
+                shader: "S".into(),
+                subshader: 0,
+                pass: 0,
+                texture_defaults: Vec::new(),
+                variants: vec![variant(0), variant(2)],
+                vertex: Vec::new(),
+                geometry: Vec::new(),
+                hull: Vec::new(),
+                domain: Vec::new(),
+            },
+        );
+        let typed = ResolveUnityShaders {
+            tier: Tier::Highest,
+            keywords: Vec::new(),
+            scene: false,
+            colour_space: None,
+        };
+        let mut log = primase_core::pass::PassLog::default();
+        let why = typed.settings(&w, &mut log).unwrap_err();
+        assert!(
+            why.contains("PlayerSettings") && why.contains("colour-space"),
+            "{why}"
+        );
+        w.insert_resource(UnityPlayerSettings {
+            colour_space: Some(ColourSpace::Gamma),
+        });
+        assert_eq!(typed.settings(&w, &mut log).unwrap(), (2, ColourSpace::Gamma));
+        assert!(
+            format!("{log:?}").contains("hardware tiers 0, 2: tier 2 bound, the highest"),
+            "{log:?}"
+        );
+        let stated = ResolveUnityShaders {
+            tier: Tier::Number(1),
+            colour_space: Some(ColourSpace::Linear),
+            ..typed.clone()
+        };
+        assert_eq!(stated.settings(&w, &mut log).unwrap(), (1, ColourSpace::Linear));
+        let empty = World::new();
+        assert!(
+            typed
+                .settings(&empty, &mut log)
+                .unwrap_err()
+                .contains("tier=highest")
+        );
     }
 
     /// The D3D behaviour fixture of the DXBC lifter (our own HLSL, `ps_5_0`): five colour targets, which a lifted

@@ -523,7 +523,9 @@ fn lower(w: &mut World, player: &Player) -> primase_core::pass::PassLog {
         .run(
             w,
             &primase_core::pass::Pipeline {
-                passes: vec![Box::new(LowerUnityPbr { colour_space })],
+                passes: vec![Box::new(LowerUnityPbr {
+                    colour_space: Some(colour_space),
+                })],
             },
             &mut run,
         )

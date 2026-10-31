@@ -90,7 +90,7 @@ use primase_foundations::{color::linear_to_srgb, color::srgb_to_linear};
 use primase_texcodec::TexDecoder;
 
 use crate::colour::ColourSpace;
-use crate::components::{UnityMaterial, UnityRenderSettings, UnityTexEnv, UnityTexture};
+use crate::components::{UnityMaterial, UnityPlayerSettings, UnityRenderSettings, UnityTexEnv, UnityTexture};
 use crate::invalid;
 use unity_formats::Result;
 use unity_formats::player::RenderPipeline;
@@ -1084,23 +1084,27 @@ pub fn lower_unity_pbr(w: &mut World, space: ColourSpace) -> Result<PassLog> {
     Ok(l.log)
 }
 
-/// [`lower_unity_pbr`] as a pass, for a player in colour space `colour_space`.
+/// [`lower_unity_pbr`] as a pass, for a player in colour space `colour_space`, or, with `None`, the colour space the
+/// read's player states ([`UnityPlayerSettings`]).
 #[derive(Debug, Clone, Copy)]
 pub struct LowerUnityPbr {
-    pub colour_space: ColourSpace,
+    pub colour_space: Option<ColourSpace>,
 }
 
 /// `lower-unity-pbr`'s declaration ([`primase_core::pass::PassRegistry::add`]): it lowers by Unity's own rules, in the
-/// colour space the player states (required: the player's, read from its PlayerSettings).
+/// colour space the player's PlayerSettings state, which the read holds as `unity.player_settings` and the pass
+/// follows. `colour-space` is for a program that lowers in the other one on purpose; a read of a player that states
+/// none needs it.
 pub const LOWER_UNITY_PBR: PassSpec = PassSpec {
     name: "lower-unity-pbr",
-    options: &[OptionSpec::choice::<ColourSpace>(
+    options: &[OptionSpec::optional_choice::<ColourSpace>(
         "colour-space",
-        "the player's colour space (its PlayerSettings): linear converts a plain colour property from storage, gamma          reads every colour as stored",
+        "linear converts a plain colour property from storage, gamma reads every colour as stored",
+        "the colour space the player's PlayerSettings state (unity.player_settings); refused where it states none",
     )],
     make: |g| {
         Ok(Box::new(LowerUnityPbr {
-            colour_space: g.choice::<ColourSpace>("colour-space"),
+            colour_space: g.optional_choice::<ColourSpace>("colour-space"),
         }))
     },
 };
@@ -1110,7 +1114,10 @@ impl Pass for LowerUnityPbr {
         "lower-unity-pbr"
     }
     fn options(&self) -> primase_core::pass::Options {
-        primase_core::pass::Options::from([("colour-space".to_owned(), self.colour_space.text().to_owned())])
+        self.colour_space
+            .iter()
+            .map(|space| ("colour-space".to_owned(), space.text().to_owned()))
+            .collect()
     }
     fn requires(&self) -> &[&'static str] {
         &["unity.material"]
@@ -1138,7 +1145,16 @@ impl Pass for LowerUnityPbr {
          occlusion and emission; blend modes, detail and parallax maps not represented"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
-        let r = lower_unity_pbr(w, self.colour_space).map_err(|e| e.to_string())?;
+        let space = match self.colour_space {
+            Some(space) => space,
+            None => w
+                .resource::<UnityPlayerSettings>()
+                .and_then(|settings| settings.colour_space)
+                .ok_or(
+                    "the player has no PlayerSettings, so the colour space its programs read colours in is not                      stated: state colour-space",
+                )?,
+        };
+        let r = lower_unity_pbr(w, space).map_err(|e| e.to_string())?;
         log.absorb(r);
         Ok(())
     }

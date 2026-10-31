@@ -51,6 +51,7 @@ use primase_foundations::color::linear_to_srgb;
 use primase_foundations::parallel::Threads;
 use primase_unity::bind::{bind, constants, directional_light, sampled_texture};
 use primase_unity::colour::ColourSpace;
+use primase_unity::components::UnityPlayerSettings;
 use primase_unity::components::{UnityMaterial, UnityPrograms, UnityTexEnv, UnityTexture};
 
 /// The shader this pass bakes.
@@ -262,7 +263,8 @@ type Omitted = String;
 pub struct LowerSkatebirdVoronoi {
     keywords: Vec<String>,
     tier: usize,
-    colour_space: ColourSpace,
+    /// `None`: the colour space the read's player states ([`UnityPlayerSettings`]).
+    colour_space: Option<ColourSpace>,
     cells: u32,
     max_texels: u32,
 }
@@ -273,6 +275,17 @@ impl LowerSkatebirdVoronoi {
         keywords: Vec<String>,
         tier: usize,
         colour_space: ColourSpace,
+        cells: u32,
+        max_texels: u32,
+    ) -> Result<Self, String> {
+        Self::checked(keywords, tier, Some(colour_space), cells, max_texels)
+    }
+
+    /// As [`LowerSkatebirdVoronoi::new`], with `None` for the colour space the read's player states.
+    pub fn checked(
+        keywords: Vec<String>,
+        tier: usize,
+        colour_space: Option<ColourSpace>,
         cells: u32,
         max_texels: u32,
     ) -> Result<Self, String> {
@@ -310,8 +323,8 @@ impl LowerSkatebirdVoronoi {
         self.tier
     }
 
-    /// The player's colour space.
-    pub fn colour_space(&self) -> ColourSpace {
+    /// The colour space the pass is told; `None`: the read's player's.
+    pub fn colour_space(&self) -> Option<ColourSpace> {
         self.colour_space
     }
 
@@ -338,10 +351,10 @@ impl LowerSkatebirdVoronoi {
             .filter(|k| !k.is_empty())
             .map(str::to_owned)
             .collect();
-        Self::new(
+        Self::checked(
             keywords,
             number("tier")? as usize,
-            g.choice::<ColourSpace>("colour-space"),
+            g.optional_choice::<ColourSpace>("colour-space"),
             number("cells")?,
             number("max-texels")?,
         )
@@ -354,6 +367,7 @@ impl LowerSkatebirdVoronoi {
         e: Entity,
         m: &UnityMaterial,
         programs: &UnityPrograms,
+        colour_space: ColourSpace,
         log: &mut PassLog,
     ) -> Result<Result<(), Omitted>, String> {
         let name = w.get::<Name>(e).map_or_else(String::new, |n| n.0.clone());
@@ -364,7 +378,7 @@ impl LowerSkatebirdVoronoi {
             )));
         };
         let bound = bind(VORONOI, variant).map_err(|err| err.to_string())?;
-        let mut mc = constants(&bound, m, self.colour_space).map_err(|err| err.to_string())?;
+        let mut mc = constants(&bound, m, colour_space).map_err(|err| err.to_string())?;
         // the albedo baked without `_Color`: the material's base colour factor keeps it
         mc.constants
             .set("_Color", &[1.0; 4])
@@ -572,9 +586,10 @@ pub const LOWER_SKATEBIRD_VORONOI: PassSpec = PassSpec {
             "the renderer's keywords the variant is stated with, joined by ; (possibly none)",
         ),
         OptionSpec::required("tier", "3", "the hardware tier the variant is stated in"),
-        OptionSpec::choice::<ColourSpace>(
+        OptionSpec::optional_choice::<ColourSpace>(
             "colour-space",
-            "the player's colour space (its PlayerSettings): linear converts a plain colour property from storage, gamma              reads every colour as stored",
+            "linear converts a plain colour property from storage, gamma reads every colour as stored",
+            "the colour space the player's PlayerSettings state (unity.player_settings); refused where it states none",
         ),
         OptionSpec::required("cells", "2", "K: cells a side of the baked block, at least 2"),
         OptionSpec::required(
@@ -591,13 +606,16 @@ impl Pass for LowerSkatebirdVoronoi {
         "lower-skatebird-voronoi"
     }
     fn options(&self) -> Options {
-        Options::from([
+        let mut options = Options::from([
             ("keywords".to_owned(), self.keywords.join(";")),
             ("tier".to_owned(), self.tier.to_string()),
-            ("colour-space".to_owned(), self.colour_space.text().to_owned()),
             ("cells".to_owned(), self.cells.to_string()),
             ("max-texels".to_owned(), self.max_texels.to_string()),
-        ])
+        ]);
+        if let Some(space) = self.colour_space {
+            options.insert("colour-space".to_owned(), space.text().to_owned());
+        }
+        options
     }
     fn requires(&self) -> &[&'static str] {
         &["unity.material", "pbr.material"]
@@ -614,6 +632,16 @@ impl Pass for LowerSkatebirdVoronoi {
          cross-faded; its surface recovered from five lit evaluations"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        let colour_space = match self.colour_space {
+            Some(space) => space,
+            None => w
+                .resource::<UnityPlayerSettings>()
+                .and_then(|settings| settings.colour_space)
+                .ok_or(
+                    "the player has no PlayerSettings, so the colour space its programs read colours in is not \
+                     stated: state colour-space",
+                )?,
+        };
         let materials: Vec<(Entity, UnityMaterial)> = w
             .iter::<UnityMaterial>()
             .filter(|(_, m)| m.shader.as_deref() == Some(VORONOI))
@@ -621,7 +649,7 @@ impl Pass for LowerSkatebirdVoronoi {
             .collect();
         for (e, m) in materials {
             let outcome = match w.get::<UnityPrograms>(e).cloned() {
-                Some(p) => self.lower(w, e, &m, &p, log)?,
+                Some(p) => self.lower(w, e, &m, &p, colour_space, log)?,
                 None => Err("its programs were not read (unity.programs)".to_owned()),
             };
             if let Err(why) = outcome {

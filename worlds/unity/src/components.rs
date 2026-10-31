@@ -12,6 +12,7 @@ use unity_formats::scene::{UnityAmbient, UnityBehaviour, UnityFog};
 use unity_formats::shader::{PassKind, ShaderPass, SubShader};
 
 use crate::colour::{ColourSpace, as_programs_read};
+use primase_core::pass::Choice;
 
 /// A record read from a player's files, carried as a component: serialises as the record does.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -108,6 +109,32 @@ impl Component for UnityMesh {
             return Err("a null mesh".into());
         }
         Ok(())
+    }
+}
+
+/// What the player's PlayerSettings state that the passes follow: the colour space its programs work in
+/// (`m_ActiveColorSpace`), which decides what they read of a stored colour. `None` for a player that has no
+/// PlayerSettings, which states none: a pass that needs it is then given it by its option or refuses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnityPlayerSettings {
+    pub colour_space: Option<ColourSpace>,
+}
+
+impl UnityPlayerSettings {
+    /// The settings `player` states.
+    pub fn of(player: &unity_formats::player::Player) -> unity_formats::Result<UnityPlayerSettings> {
+        Ok(UnityPlayerSettings {
+            colour_space: player.colour_space()?.map(ColourSpace::from),
+        })
+    }
+}
+
+impl primase_core::Resource for UnityPlayerSettings {
+    const NAME: &'static str = "unity.player_settings";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        Ok(Some(serde_json::json!({
+            "colour_space": self.colour_space.map(|space| space.text()),
+        })))
     }
 }
 

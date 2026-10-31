@@ -54,8 +54,9 @@ pub use read::{asset, convert, level, mesh, program, texture};
 /// `resolve-unity-shaders` and `lower-unity-ambient`. All but `limit-unity-skin-weights`, `lower-unity-pbr`,
 /// `resolve-unity-shaders`, `lower-unity-lights` and `lower-unity-ambient` take no option: each lowers by Unity's own
 /// rules (its module says which), not by a choice a program makes. `limit-unity-skin-weights` takes the quality level
-/// whose `skinWeights` limit the influences, optional where the player's levels agree; `lower-unity-pbr` requires the
-/// player's colour space (its PlayerSettings'); `resolve-unity-shaders` the variant and colour space;
+/// whose `skinWeights` limit the influences, optional where the player's levels agree; `lower-unity-pbr` follows the
+/// player's colour space (its PlayerSettings', read as `unity.player_settings`), which `colour-space` replaces;
+/// `resolve-unity-shaders` requires the variant (`tier`, or `highest`) and keywords and follows the colour space too;
 /// `lower-unity-lights` the calibration of URP's unitless intensity (`candela-per-unit`, no default);
 /// `lower-unity-ambient` that same calibration and the program's choice for an ambient whose probe is not read
 /// (`probe`, no default).
@@ -104,7 +105,6 @@ mod tests {
         let required = [
             "lower-unity-ambient",
             "lower-unity-lights",
-            "lower-unity-pbr",
             "resolve-unity-shaders",
         ];
         for name in names {

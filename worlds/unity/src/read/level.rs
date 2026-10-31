@@ -47,9 +47,9 @@ use crate::animator::{UnityAnimator, UnityAvatar};
 use crate::clipdata::{RigBone, lower_clip};
 use crate::components::{
     ColliderMesh, Stored, UNITY, UnityBehaviours, UnityCamera, UnityCollider, UnityColliderShape, UnityLight,
-    UnityMaterial, UnityMesh, UnityObject, UnityPhysicMaterial, UnityRenderSettings, UnityRenderer,
-    UnityShadowQuality, UnitySkinInfluences, UnityTerrain, UnityTerrainCollider, UnityTerrainLayer,
-    UnityTexEnv, UnityTexture, UnityTree, UnityTreeInstance,
+    UnityMaterial, UnityMesh, UnityObject, UnityPhysicMaterial, UnityPlayerSettings, UnityRenderSettings,
+    UnityRenderer, UnityShadowQuality, UnitySkinInfluences, UnityTerrain, UnityTerrainCollider,
+    UnityTerrainLayer, UnityTexEnv, UnityTexture, UnityTree, UnityTreeInstance,
 };
 use crate::invalid;
 use crate::read::mesh::{leading, primitives, primitives_and_morphs};
@@ -1663,6 +1663,7 @@ fn read_scene(
     options: &LevelOptions,
     w: &mut World,
 ) -> Result<LevelReport> {
+    w.insert_resource(UnityPlayerSettings::of(player)?);
     let scene = Scene::read(player, level)?;
     let root_tp = root.and_then(|go| scene.transform_of(go));
     let (renderers, skipped) = scene.renderers_under(player, root)?;

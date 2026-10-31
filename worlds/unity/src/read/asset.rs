@@ -11,7 +11,7 @@
 
 use primase_core::{Entity, Instance, Mesh, Name, World};
 
-use crate::components::{UNITY, UnityMesh, UnityObject};
+use crate::components::{UNITY, UnityMesh, UnityObject, UnityPlayerSettings};
 use crate::invalid;
 use crate::level::{Builder, LevelReport, mesh_source, transform_of};
 use unity_formats::Result;
@@ -48,6 +48,7 @@ pub fn read_asset(player: &Player, r: &ObjRef, w: &mut World) -> Result<AssetRea
                 ASSET_CLASSES.join(", ")
             ))
         })?;
+    w.insert_resource(UnityPlayerSettings::of(player)?);
     let mut b = Builder::new(player, LevelReport::default());
     let entity = match class {
         "Texture2D" => b.texture(w, r)?,

@@ -3,8 +3,8 @@
 Unity players read through `unity-formats` into the world: scenes, assets, hierarchy, meshes, textures,
 materials, lights, terrains, rigs, clips and Animator data, from loose files or configured bundles. The read
 converts Unity's frame and retains source state in `unity.*`. Passes select what draws, lower PBR, terrain,
-collision, lights, ambient and controllers, and resolve compiled shaders with explicit variant and colour-space
-choices. Stored `[HDR]` colour properties retain their linear HDR values; other colours use the player's transfer.
+collision, lights, ambient and controllers, and resolve compiled shaders for a stated variant. The read records the
+player's colour space (`unity.player_settings`), which the passes that read colours follow. Stored `[HDR]` colour properties retain their linear HDR values; other colours use the player's transfer.
 Multi-image textures bind only where their dimensional shape agrees with the program.
 A skinned mesh is read with every influence it stores, and `limit-unity-skin-weights` states what a quality level of the
 player draws of it.
