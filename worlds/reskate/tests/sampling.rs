@@ -175,6 +175,26 @@ fn conflicts_refused_and_other_sets_are_errors() {
     assert!(e.contains("lit's normal texture samples coordinate set 1"), "{e}");
 }
 
+/// A material nothing draws (a form `specialize-material-variants` discarded) is never sampled: one sampling another
+/// set is left as it is, counted, not refused.
+#[test]
+fn an_undrawn_material_on_another_set_is_left() {
+    let mut w = World::new();
+    let tex = w.spawn();
+    let mut second = TextureRef::new(tex);
+    second.texcoord = 3;
+    let unused = material(&mut w, "unused", Some(second), None);
+    let drawn = material(&mut w, "drawn", Some(TextureRef::new(tex)), None);
+    prototype(&mut w, drawn);
+    let log = run(&mut w, vec![uv(TextureSlot::BaseColor, SamplingConflicts::Adopt)]).unwrap();
+    assert_eq!(
+        log.counts["materials nothing draws sampling another set, left as they are"],
+        1
+    );
+    let base = w.get::<PbrMaterial>(unused).unwrap().base_color_texture.unwrap();
+    assert_eq!(base.texcoord, 3);
+}
+
 /// A prototype whose variants tile differently cannot be baked: refused, the tiling never erased; with its forms
 /// specialized first (the program's choice of what becomes of unused ones), each bakes its own.
 #[test]

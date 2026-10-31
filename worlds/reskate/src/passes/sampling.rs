@@ -10,7 +10,9 @@
 //!   naming it), then the transforms are baked into the coordinates by the toolkit's baker
 //!   ([`primase_meshops::bake_texture_transforms`]). A blend's layer whose material tiles (a layer's transform comes
 //!   before its textures' own) is first given a coordinate set of its own holding both, which `lower-layered-reskate`
-//!   draws its overlay with. A slot sampling another set than the first is refused. A material
+//!   draws its overlay with. A slot sampling another set than the first is refused in a material drawn (by a primitive,
+//!   as its own, a variant or its file's, or as a drawn blend's layer); one nothing draws (a form
+//!   `specialize-material-variants` discarded) is left as it is, counted. A material
 //!   drawn whose tiling the baker could not bake (materials sharing a primitive that tile differently: a prototype's
 //!   variants, `specialize-material-variants` first) is refused, never erased.
 //! - `prepare-reskate-wrap{anchor=<slot>,axis=u|v}`: every slot wraps along both axes as the anchor wraps along `axis`,
@@ -298,6 +300,7 @@ impl Pass for PrepareReskateUvTransforms {
         "slots tiling otherwise than their anchor take its tiling; coordinates transformed once in f32"
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        let sampled = drawn(w);
         let materials: Vec<Entity> = w.iter::<PbrMaterial>().map(|(e, _)| e).collect();
         for e in materials {
             let name = name_of(w, e);
@@ -306,6 +309,13 @@ impl Pass for PrepareReskateUvTransforms {
                 continue;
             };
             if let Some((s, r)) = m.slots().find(|(_, r)| r.texcoord != 0) {
+                if !sampled.contains(&e) {
+                    log.count(
+                        "materials nothing draws sampling another set, left as they are",
+                        1,
+                    );
+                    continue;
+                }
                 return Err(format!(
                     "prepare-reskate-uv-transforms: material {name}'s {} texture samples coordinate set {}; skate \
                      samples the first only",
