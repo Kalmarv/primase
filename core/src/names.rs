@@ -3,7 +3,7 @@
 //! are listed once here; an architecture test holds the list to every `Component` and `Resource` core implements.
 
 use crate::asset::Asset;
-use crate::atmosphere::Atmosphere;
+use crate::atmosphere::{Atmosphere, PostProcessingStatus};
 use crate::clip::{Clip, ClipBinding};
 use crate::clip_effects::ClipEffects;
 use crate::clip_events::ClipEvents;
@@ -86,7 +86,7 @@ declared! {
         TextureLayers, MaterialPrograms, ProgramFacts, ClipKey, ClipLength, ClipEvents, ClipEffects, Controller, ControllerBinding,
         DrawGroups, DrawGroupDefaults, ContentNote, Record, DisplayName, PrimitiveKeys, MaterialParameters, SkyAnchor,
         ParticleSystem, IrradianceVolume, ReflectionProbeRegion, StepBindings, StepDraws, LightFalloff, LightTranslucency;
-    resources: PartScope, PartitionPlan, Environment, Atmosphere, StateAssignment, Surfaces, Threads, Memo, RenderGraph,
+    resources: PartScope, PartitionPlan, Environment, Atmosphere, PostProcessingStatus, StateAssignment, Surfaces, Threads, Memo, RenderGraph,
         LightUnit, DirectionalLightUnit, TimeOfDay, TextureSwitchView,
 }
 
