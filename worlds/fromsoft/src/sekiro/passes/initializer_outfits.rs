@@ -8,22 +8,7 @@ use fromsoft_formats::equipment::{
 use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Resource, World};
 
-/// Required level policy; `PreferLow` preserves the previous caller's stated preference and reports it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PartLevel {
-    PreferLow,
-    Low,
-    Full,
-}
-impl PartLevel {
-    fn text(self) -> &'static str {
-        match self {
-            Self::PreferLow => "prefer-low",
-            Self::Low => "low",
-            Self::Full => "full",
-        }
-    }
-}
+pub use crate::sekiro::components::outfits::{PartLevel,PartLevelSelection};
 /// Required presentation choice. `Authored` makes no additional sex/presentation filter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Presentation {
@@ -270,12 +255,14 @@ impl Pass for SelectFromSoftInitializerOutfits {
     fn provides(&self) -> &[&'static str] {
         &[
             OutfitVariants::NAME,
+            PartLevelSelection::NAME,
             primase_core::opening::OpeningSuggestions::NAME,
         ]
     }
     fn modifies(&self) -> &[&'static str] {
         &[
             OutfitVariants::NAME,
+            PartLevelSelection::NAME,
             primase_core::opening::OpeningSuggestions::NAME,
         ]
     }
@@ -375,6 +362,7 @@ impl Pass for SelectFromSoftInitializerOutfits {
             .collect();
         world.insert_resource(primase_core::opening::OpeningSuggestions(suggestions));
         world.insert_resource(OutfitVariants(variants));
+        world.insert_resource(PartLevelSelection(self.level));
         Ok(())
     }
 }
