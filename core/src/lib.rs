@@ -7,6 +7,7 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod asset;
+pub mod report_card;
 mod atmosphere;
 pub use atmosphere::{
     Atmosphere, AutoExposure, ColourLut, ColourMatrix, Exposure, ExposureMeter, Fog, FogFalloff,

@@ -24,6 +24,36 @@ pub struct CatalogEntry {
 }
 #[derive(Clone,Debug,Default)]
 pub struct Catalog {pub entries:Vec<CatalogEntry>}
+
+/// Source-stated report fields and notices, rendered generically by a program.
+pub struct DescriptiveReport {
+    pub fields: serde_json::Map<String,Value>,
+    pub notices: Vec<primase_core::convert::Notice>,
+}
+
+/// The selected row's descriptive data and display-only card; selecting the row is a separate operation.
+pub fn npc_description(install:&Install,archive:&Archive,decoder:&Decoder<'_>,row:i32)->DescriptiveReport {
+    let mut fields=serde_json::Map::new();
+    let mut notices=Vec::new();
+    match fromsoft_formats::game_params::read_npc_stats(install,archive,decoder) {
+        Ok(stats)=>if let Some(stats)=stats.iter().find(|stats|stats.id==row) {
+            let values=stats.fields();
+            fields.insert("npc_row".into(),json!({"row":row,"param":"NPC_PARAM_ST",
+                "fields":values.iter().map(|(name,value,unit)|json!({"name":name,"value":value,"unit":unit})).collect::<Vec<_>>()}));
+            let card=primase_core::report_card::ReportCard {
+                title:format!("NPC param row {row}"),
+                description:"Descriptive fields of the row (NPC_PARAM_ST), by the definition's names; the row's other fields are not read.".into(),
+                fields:values.iter().map(|(name,value,unit)|primase_core::report_card::ReportField {
+                    name:(*name).into(),value:json!(value),unit:Some((*unit).into()),
+                }).collect(),
+            };
+            fields.insert("cards".into(),json!([card]));
+        },
+        Err(error)=>notices.push(primase_core::convert::Notice::new("fromsoft",primase_core::convert::NoticeKind::Unsupported,
+            format!("NPC row {row} descriptive fields unread: {error}"),1)),
+    }
+    DescriptiveReport {fields,notices}
+}
 mod names {
     use serde_json::{json,Value};
     pub const COMMUNITY:&str="community";
