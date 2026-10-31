@@ -1639,6 +1639,7 @@ pub struct CharacterReader<'a> {
     weapon_traces: Option<Vec<crate::sekiro::effect_data::WeaponTraces>>,
     /// An initializer outfit's associated character supplies its authored animation hierarchy, without tracks.
     assembly_reference: Option<String>,
+    attack_inputs: bool,
 }
 
 /// What a [`CharacterReader`] reads.
@@ -1665,6 +1666,7 @@ impl<'a> CharacterReader<'a> {
             effect_cache: Default::default(),
             weapon_traces: None,
             assembly_reference: None,
+            attack_inputs: false,
         }
     }
 
@@ -1677,6 +1679,13 @@ impl<'a> CharacterReader<'a> {
     /// Also read the effects the events of each clip start as the clip loads.
     pub fn with_clip_effects(mut self) -> Self {
         self.options.clip_effects = true;
+        self
+    }
+
+    /// Also read the complete authored selector and weapon tables for the stated animation character.
+    /// Selection and loading stay separate: `select-fromsoft-attack` chooses a core clip plan.
+    pub fn with_attack_inputs(mut self) -> Self {
+        self.attack_inputs = true;
         self
     }
 
@@ -1744,6 +1753,7 @@ impl<'a> CharacterReader<'a> {
             effect_cache: Default::default(),
             weapon_traces: None,
             assembly_reference: None,
+            attack_inputs: false,
         }
     }
 
@@ -1942,6 +1952,24 @@ impl Reader for CharacterReader<'_> {
                 Ok((e, b.map(|b| b.map(|c| c.map(f64::from)))))
             })
             .collect::<Result<_>>()?;
+        if self.attack_inputs {
+            let character = self
+                .options
+                .animations
+                .as_deref()
+                .ok_or("attack tables need an animation character")?;
+            let archive = self.install.open()?;
+            let inputs = super::attack_clip::read_inputs(&self.install, &archive, &self.decoder, character)?;
+            report.push((
+                "fromsoft attack inputs".into(),
+                format!(
+                    "{} selectors and {} weapon rows; no attack selected",
+                    inputs.selectors.len(),
+                    inputs.weapons.len()
+                ),
+            ));
+            world.insert_resource(inputs);
+        }
         Ok((world, report))
     }
     fn load(&mut self, world: &World, roots: &BTreeSet<Entity>) -> ConvertResult<(World, ConvertReport)> {

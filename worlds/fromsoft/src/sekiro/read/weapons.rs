@@ -11,12 +11,14 @@
 //!
 //! [`EquippedWeapons`]: crate::sekiro::effect_data::EquippedWeapons
 use crate::sekiro::effect_data::{Hold, Holds, Trace};
+#[cfg(test)]
+use fromsoft_formats::Game;
 use fromsoft_formats::param::{Param, Row};
-use fromsoft_formats::{Archive, Game, Install, Result, dcx::Decoder};
+use fromsoft_formats::{Archive, Install, Result, dcx::Decoder};
 
 const FORMAT: &str = "FromSoftware weapon params";
 
-pub use fromsoft_formats::weapon_params::{HoldLayout, TRACE_SLOTS, WeaponLayout, layouts};
+pub use fromsoft_formats::weapon_params::{HoldLayout, WeaponLayout, layouts};
 
 /// A weapon row: its part's model id, its motion category, its hold row, its `spAtkcategory` (Elden Ring) and its trace
 /// slots that name an effect (a number above 0), with their slot numbers.
@@ -84,6 +86,15 @@ impl WeaponParams {
             holds,
             layouts: layouts(game),
         }
+    }
+
+    /// Every supported raw weapon record, retaining inactive trace slots as authored.
+    pub fn records(&self) -> Result<Vec<fromsoft_formats::weapon_params::WeaponRow>> {
+        self.weapons
+            .rows
+            .iter()
+            .map(|row| self.layouts.0.read(row))
+            .collect()
     }
 
     /// Every row of `EquipParamWeapon`, as read.
