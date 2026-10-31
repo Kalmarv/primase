@@ -1963,6 +1963,9 @@ pub fn read_game_area_staged(
         }
     }
     if let Some(environment) = environment {
+        if game == Game::Sekiro {
+            super::post::lut::read_into(world, &archive, decoder, &area);
+        }
         world.insert_resource(environment);
     }
     report.draw_param = draw_param_report;

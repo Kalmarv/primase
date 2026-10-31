@@ -160,6 +160,7 @@ fn installed_post_records_keep_layers_and_missing_fields_distinct() -> Result<()
     assert_eq!(draw.reinhard, Some(Ok(resolved)));
     let mut world = primase_core::World::new();
     world.insert_resource(draw);
+    post::lut::read_into(&mut world, &archive, &decoder, "m11_01");
     use primase_core::pass::{PassManager, PassRegistry, Pipeline, RunReport};
     let mut report = RunReport::default();
     PassManager::new(PassRegistry::new()).run(
@@ -183,8 +184,8 @@ fn installed_post_records_keep_layers_and_missing_fields_distinct() -> Result<()
         tone.curve.gamma, 1.,
         "linear intermediate, not a native gamma assertion"
     );
-    assert!(tone.colour_matrix.is_none() && tone.vignette.is_none() && tone.lut.is_none());
-    for stage in ["native gamma", "colour matrix", "vignette", "LUT input encoding"] {
+    assert!(tone.colour_matrix.is_none() && tone.vignette.is_none());
+    for stage in ["colour matrix", "vignette"] {
         assert_eq!(
             report.steps[0]
                 .log
@@ -193,7 +194,44 @@ fn installed_post_records_keep_layers_and_missing_fields_distinct() -> Result<()
             Some(&1)
         );
     }
+    assert_eq!(tone.lut.as_ref().unwrap().input_power, 1. / 2.2);
+    assert_eq!(tone.lut.as_ref().unwrap().values.len(), 4096);
+    assert!(
+        report.steps[0]
+            .log
+            .approximations
+            .keys()
+            .any(|reason| reason.contains("player brightness overwrite"))
+    );
     assert!(world.verify_resources().is_empty());
+    world.insert_resource(primase_core::TimeOfDay { hour: 2. });
+    let mut other = RunReport::default();
+    PassManager::new(PassRegistry::new()).run(
+        &mut world,
+        &Pipeline {
+            passes: vec![Box::new(
+                primase_fromsoft::sekiro::passes::post::LowerSekiroReinhard,
+            )],
+        },
+        &mut other,
+    )?;
+    assert!(
+        world
+            .resource::<primase_core::Atmosphere>()
+            .unwrap()
+            .tone_map
+            .as_ref()
+            .unwrap()
+            .lut
+            .is_none()
+    );
+    assert!(
+        other.steps[0]
+            .log
+            .omitted
+            .keys()
+            .any(|reason| reason.contains("SourceID 20"))
+    );
     println!(
         "POST_REINHARD m11_01_0000: contrast={} white_balance={}",
         resolved.contrast, resolved.white_balance

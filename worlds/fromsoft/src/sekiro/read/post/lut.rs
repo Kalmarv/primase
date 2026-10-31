@@ -2,13 +2,7 @@
 use fromsoft_formats::{Archive, Game, Result, dcx::Decoder, tpf};
 use primase_core::TexFormat;
 
-/// A normalized RGB lookup, red fastest, then green, then blue. No input gamma or colour correction is invented.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ColourLookup {
-    pub texture: String,
-    pub side: u32,
-    pub values: Vec<[f32; 3]>,
-}
+pub use crate::sekiro::source::ColourLookupData as ColourLookup;
 
 /// Decode the established 16-by-256 RGBA8 strip layout into its 16-cube RGB values.
 /// The three-dimensional orientation and normalization match every RGB word of the native Ashina LUT readback.
@@ -74,6 +68,14 @@ pub fn read(archive: &Archive, decoder: &Decoder<'_>, area: &str, source_id: i32
         ));
     }
     from_texture(texture)
+}
+
+/// Keep the established SourceID-zero binding, or its named refusal, beside the area's selected source records.
+pub fn read_into(world: &mut primase_core::World, archive: &Archive, decoder: &Decoder<'_>, area: &str) {
+    world.insert_resource(crate::sekiro::source::PostLookup {
+        source_id: 0,
+        value: read(archive, decoder, area, 0).map_err(|error| error.to_string()),
+    });
 }
 
 #[cfg(test)]

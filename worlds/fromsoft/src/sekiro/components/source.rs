@@ -1192,3 +1192,24 @@ impl Resource for NpcRows {
         to_value(self).map(Some)
     }
 }
+
+/// A normalized source lookup, red fastest, then green, then blue; independent of its input encoding.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ColourLookupData {
+    pub texture: String,
+    pub side: u32,
+    pub values: Vec<[f32; 3]>,
+}
+
+/// An independently established installed lookup binding. The selected source field still decides whether to use it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PostLookup {
+    pub source_id: i32,
+    pub value: Result<ColourLookupData, String>,
+}
+impl Resource for PostLookup {
+    const NAME: &'static str = "fromsoft.post_lookup";
+    fn to_json(&self) -> Result<Option<Value>, JsonError> {
+        to_value(self).map(Some)
+    }
+}
