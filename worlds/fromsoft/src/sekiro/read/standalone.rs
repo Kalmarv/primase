@@ -600,6 +600,37 @@ pub fn read_selected_models<'a>(
     if let Some(choice) = choice {
         models.notices.extend(choice.notices.iter().cloned());
     }
+    if let (Some(input), Some(result)) = (
+        selected.resource::<crate::sekiro::outfit_data::DressingInputs>(),
+        selected.resource::<crate::sekiro::outfit_data::DressingResult>(),
+    ) {
+        use crate::sekiro::outfit_data::Dressing;
+        use primase_core::convert::NoticeKind;
+        if result.masked {
+            if let Dressing::Row(row) = result.dressing {
+                if let Some(stats) = models
+                    .world
+                    .resource::<crate::sekiro::character_data::NpcStatRows>()
+                    .and_then(|rows| rows.0.iter().find(|stats| stats.id == row))
+                {
+                    details["npc_row"] = serde_json::json!({"row":row,"param":"NPC_PARAM_ST","fields":stats.fields().iter().map(|(name,value,unit)|serde_json::json!({"name":name,"value":value,"unit":unit})).collect::<Vec<_>>()});
+                }
+                if let Some(why) = &result.note {
+                    details["lab_choices"] = serde_json::json!([{"source":"fromsoft-character","option":"npc","value":row.to_string(),"why":why}]);
+                }
+            }
+            if let Some(note) = &result.note {
+                models
+                    .notices
+                    .push(Notice::new("fromsoft", NoticeKind::Selection, note, 1));
+            }
+            if result.dressing == Dressing::Hidden {
+                models.notices.push(Notice::new("fromsoft",NoticeKind::Selection,format!("no NPC row names {}: its display mask groups are hidden, the unmarked meshes drawn; state npc to dress it",input.id),1));
+            }
+        } else if let Dressing::Row(row) = result.dressing {
+            models.notices.push(Notice::new("fromsoft",NoticeKind::Selection,format!("npc {row} has no display-mask selection on {}; no part outfit was resolved for this model",input.id),1));
+        }
+    }
     if let Some(suggestions) = selected.resource::<primase_core::opening::OpeningSuggestions>() {
         models.world.insert_resource(suggestions.clone());
     }
