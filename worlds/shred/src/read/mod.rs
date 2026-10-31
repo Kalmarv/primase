@@ -9,4 +9,5 @@ pub mod material;
 pub mod material_join;
 pub mod names;
 pub mod reference_rig;
+pub mod scope;
 pub mod texture;
