@@ -342,12 +342,7 @@ pub fn clip_effect_uses(source: &SourceEvents) -> ClipEffectUses {
 
 /// One trace slot of a weapon row: an effect and the weapon's dummy polygons it runs through, from `traceDmyIdHead<n>` to
 /// `traceDmyIdTail<n>`, as stored (-1 for none; [`trace_run`] reads them as the game does).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-pub struct Trace {
-    pub effect: i32,
-    pub head: i32,
-    pub tail: i32,
-}
+pub use fromsoft_formats::weapon_params::Trace;
 
 /// The trace slots of a held weapon: its hand slot, its `EquipParamWeapon` row, the row's slots that name an effect, by
 /// slot number, and the reference ids of the dummy polygons of the weapon's model (its first, the blade's), which a
@@ -604,29 +599,7 @@ impl EquippedWeapons {
 /// the body is a reading of these and of two game frames: the Caestus held in both hands shows its second fist (`2117`,
 /// shown `1`) on the left hand, and Leontiel's Greatsword's model 1 (`2116`, shown `3`, a polygon no worn part has) is not
 /// drawn at rest in the holds one run reached; why is not known. :inferred
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-pub enum Shown {
-    /// `0`.
-    RightHand,
-    /// `1`.
-    LeftHand,
-    /// `3`.
-    Body,
-    /// A value the stock rows' slots do not use.
-    Other(u8),
-}
-
-impl Shown {
-    /// The kind of a `dispPosType` value.
-    pub fn of(value: u8) -> Self {
-        match value {
-            0 => Shown::RightHand,
-            1 => Shown::LeftHand,
-            3 => Shown::Body,
-            v => Shown::Other(v),
-        }
-    }
-}
+pub use fromsoft_formats::weapon_params::DisplayPosition as Shown;
 
 /// Where a model stands in one way of holding it: the character's dummy polygon (its reference id) and, in Elden Ring,
 /// how the slot shows it (Sekiro's rows have no such field).
