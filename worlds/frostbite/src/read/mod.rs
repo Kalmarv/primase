@@ -2,6 +2,7 @@
 
 pub mod entry;
 pub mod geometry;
+pub mod install;
 pub mod program;
 pub mod skeleton;
 pub mod textures;
