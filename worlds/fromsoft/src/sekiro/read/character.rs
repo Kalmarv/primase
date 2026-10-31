@@ -1724,6 +1724,28 @@ impl<'a> CharacterReader<'a> {
             weapon_traces: None,
         }
     }
+
+    /// A caller-selected installed initializer outfit and its associated animation rig. Tracks remain deferred;
+    /// this does not choose a starting class or claim that this is the game's default outfit.
+    pub fn outfit(
+        install: Install,
+        outfit: &super::outfits::CharacterOutfit,
+        decoder: Decoder<'a>,
+    ) -> Result<CharacterReader<'a>> {
+        if !outfit.readable() {
+            return Err(invalid(
+                "character outfit",
+                0,
+                format!(
+                    "{} is not readable: {}",
+                    outfit.key(),
+                    outfit.unresolved.join("; ")
+                ),
+            ));
+        }
+        let parts: Vec<_> = outfit.parts.iter().map(String::as_str).collect();
+        Ok(Self::parts(install, &parts, decoder).with_animations(&outfit.animations_of))
+    }
 }
 
 impl Reader for CharacterReader<'_> {

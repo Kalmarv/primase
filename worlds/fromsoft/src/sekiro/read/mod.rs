@@ -17,6 +17,7 @@ pub mod irradiance;
 pub mod material_events;
 pub mod messages;
 pub mod objects;
+pub mod outfits;
 pub mod post;
 pub mod render_graph;
 pub(super) mod shaders;
