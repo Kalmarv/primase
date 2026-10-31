@@ -709,7 +709,7 @@ impl DrawGroup {
 pub struct DrawParam {
     /// Steady Sekiro bank composition, or its named refusal. None for other games and raw fixtures.
     /// This resolves scalars only, not the native gamma, matrix, vignette or LUT input encoding.
-    pub reinhard: Option<Result<crate::sekiro::post::reinhard::Reinhard, String>>,
+    pub reinhard: Option<Result<Reinhard, String>>,
     /// The game the file is of: whose rules sample its fields (`sample-fromsoft-draw-params`).
     pub game: fromsoft_formats::Game,
     /// The file's stem (`m11_01_0720`).
@@ -722,6 +722,13 @@ pub struct DrawParam {
     pub groups: Vec<DrawGroup>,
     /// The hour a field stored at several hours is lowered at where the program samples none.
     pub default_hour: DefaultHour,
+}
+
+/// Steady native Reinhard scalars. Gamma and later display stages are separate source facts.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct Reinhard {
+    pub contrast: f32,
+    pub white_balance: f32,
 }
 
 /// The hour of the day a read's environment is lowered at where the program chooses none

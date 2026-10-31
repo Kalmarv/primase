@@ -5,12 +5,7 @@ use super::{
 };
 use fromsoft_formats::{Archive, Result, dcx::Decoder, gparam::ParamExtra};
 
-/// Resolved native Reinhard scalars. This does not assert that a renderer-ready LUT or gamma has been resolved.
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
-pub struct Reinhard {
-    pub contrast: f32,
-    pub white_balance: f32,
-}
+pub use crate::sekiro::source::Reinhard;
 
 /// Resolve a constant scalar row at value ID zero using the native loader's saved reference and extra flags.
 /// Time-varying fields are refused here; their interpolation is a separate operation.

@@ -724,6 +724,7 @@ fn the_fromsoft_passes_register_by_name() {
         "lower-fromsoft-object-collision",
         "lower-fromsoft-part-collision",
         "lower-fromsoft-sky",
+        "lower-sekiro-reinhard",
         "name-fromsoft-entities",
         "preserve-fromsoft-display-masks",
         "raise-fromsoft-display-masks",
@@ -741,6 +742,7 @@ fn the_fromsoft_passes_register_by_name() {
         "lower-fromsoft-irradiance",
         "lower-fromsoft-display-masks",
         "lower-fromsoft-sky",
+        "lower-sekiro-reinhard",
         "raise-fromsoft-display-masks",
     ];
     for name in names {
