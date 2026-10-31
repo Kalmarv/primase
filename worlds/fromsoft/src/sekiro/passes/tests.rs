@@ -704,6 +704,7 @@ fn the_fromsoft_passes_register_by_name() {
     let names = [
         "bake-fromsoft-layers",
         "bake-fromsoft-materials",
+        "bind-fromsoft-animation",
         "derive-fromsoft-detail",
         "drop-fromsoft-far",
         "drop-fromsoft-texture-transforms",
@@ -725,6 +726,7 @@ fn the_fromsoft_passes_register_by_name() {
         "lower-fromsoft-object-collision",
         "lower-fromsoft-part-collision",
         "lower-fromsoft-render-graph",
+        "lower-fromsoft-selected-outfit",
         "lower-fromsoft-sky",
         "lower-sekiro-reinhard",
         "name-fromsoft-entities",
@@ -733,18 +735,16 @@ fn the_fromsoft_passes_register_by_name() {
         "resolve-fromsoft-shaders",
         "sample-fromsoft-draw-params",
         "select-fromsoft-attack",
-            "select-fromsoft-saved-attack",
+        "select-fromsoft-character-read",
+        "select-fromsoft-dressing",
         "select-fromsoft-initializer-outfits",
+        "select-fromsoft-npc-initializer",
         "select-fromsoft-npc-outfits",
-            "select-fromsoft-player-outfit",
-            "select-fromsoft-npc-initializer",
-            "select-fromsoft-dressing",
-            "bind-fromsoft-animation",
-            "select-fromsoft-weapon-forms",
-            "select-fromsoft-saved-hold",
-            "select-fromsoft-character-read",
-            "lower-fromsoft-selected-outfit",
         "select-fromsoft-outfit",
+        "select-fromsoft-player-outfit",
+        "select-fromsoft-saved-attack",
+        "select-fromsoft-saved-hold",
+        "select-fromsoft-weapon-forms",
     ];
     assert_eq!(format!("{reg:?}"), format!("{names:?}"));
     let free = [
@@ -760,6 +760,9 @@ fn the_fromsoft_passes_register_by_name() {
         "lower-fromsoft-sky",
         "lower-sekiro-reinhard",
         "raise-fromsoft-display-masks",
+        "select-fromsoft-weapon-forms",
+        "select-fromsoft-saved-hold",
+        "lower-fromsoft-selected-outfit",
     ];
     for name in names {
         assert_eq!(reg.requires_options(name), !free.contains(&name), "{name}");
