@@ -675,10 +675,14 @@ mod tests {
             let mut w = world();
             let (a, _) = w.iter::<MapCollision>().find(|(_, m)| m.file == "a.hkx").unwrap();
             w.get_mut::<MapCollision>(a).unwrap().f_triangles = vec![NEAR, NEAR, FAR];
-            w.get_mut::<MapCollision>(a)
-                .unwrap()
-                .material_meanings
-                .fill(HitMeaning::Other);
+            for meaning in &mut w.get_mut::<MapCollision>(a).unwrap().material_meanings {
+                if matches!(
+                    meaning,
+                    HitMeaning::SwimmingWater | HitMeaning::Empty | HitMeaning::Cloud
+                ) {
+                    *meaning = HitMeaning::Other;
+                }
+            }
             w
         };
         let options = |f: Option<&str>| {

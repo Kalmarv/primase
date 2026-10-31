@@ -350,9 +350,15 @@ fn measure(game: Game, install: &Install, decoder: &Decoder<'_>, map: &str) -> R
         for part in &mut record.parts {
             part.filter_meaning = fromsoft_formats::collision::HitFilterMeaning::Physical;
         }
-        record
-            .material_meanings
-            .fill(fromsoft_formats::collision::HitMeaning::Other);
+        for meaning in &mut record.material_meanings {
+            use fromsoft_formats::collision::HitMeaning;
+            if matches!(
+                meaning,
+                HitMeaning::SwimmingWater | HitMeaning::Empty | HitMeaning::Cloud
+            ) {
+                *meaning = HitMeaning::Other;
+            }
+        }
     }
     let pass = LowerFromSoftCollision {
         reach: None,
