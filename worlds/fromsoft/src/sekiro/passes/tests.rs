@@ -735,6 +735,10 @@ fn the_fromsoft_passes_register_by_name() {
         "select-fromsoft-attack",
         "select-fromsoft-initializer-outfits",
         "select-fromsoft-npc-outfits",
+            "select-fromsoft-player-outfit",
+            "select-fromsoft-npc-initializer",
+            "select-fromsoft-dressing",
+            "bind-fromsoft-animation",
         "select-fromsoft-outfit",
     ];
     assert_eq!(format!("{reg:?}"), format!("{names:?}"));

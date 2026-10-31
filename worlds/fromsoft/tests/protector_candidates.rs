@@ -42,7 +42,7 @@ fn resolve_outfit(
         }],
     });
     let mut registry = primase_core::pass::PassRegistry::new();
-    crate::sekiro::passes::register(&mut registry);
+    primase_fromsoft::sekiro::passes::register(&mut registry);
     let pipeline = registry
         .parse(&format!(
             "select-fromsoft-initializer-outfits{{initializer={id},presentation=authored,level=prefer-low}}"

@@ -47,3 +47,5 @@ pub use read::textures::tpf_image;
 pub use read::visibility::decode as decode_visibility;
 pub use read::weapons::{WeaponParams, WeaponRow};
 pub use read::{convert, groups, sky, states, texture_switch, weather, wind, world_state};
+
+pub use read::standalone;

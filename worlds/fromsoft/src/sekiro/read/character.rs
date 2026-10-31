@@ -1785,6 +1785,7 @@ impl<'a> CharacterReader<'a> {
 impl Reader for CharacterReader<'_> {
     fn read(&mut self) -> ConvertResult<(World, ConvertReport)> {
         let mut world = World::new();
+        world.insert_resource(source::CharacterGame(self.install.game));
         world.reserve_indices_before(self.first_index);
         // The adapter returns clip plans; direct read_character_with remains the explicit
         // eager API until consumers migrate. Loading, not read(), parses chosen tracks.
