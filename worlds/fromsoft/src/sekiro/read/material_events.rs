@@ -1,95 +1,39 @@
-//! MaterialEx row and event-payload reading. Typed source facts and all original bytes
-//! travel together; this module assigns no transition or application meaning to a word.
-use crate::components::material_events::{MaterialExRow, MaterialExRows};
-use crate::invalid;
+//! MaterialEx source adaptation. Public format records retain the bytes; this module assigns no application meaning.
+use crate::components::material_events::MaterialExRows;
 use fromsoft_formats::{Game, Result, param::Param};
 use primase_core::{EventValue, EventValueData};
 
-/// Only the ER v4 / 96-byte layout independently inspected in the installed rows is read.
-/// Other layouts are reported by the reader rather than interpreted using ER's offsets.
+/// Read the supported public row layout into the source resource without changing its supported values.
 pub fn read_rows(table: &Param) -> Result<MaterialExRows> {
-    const FORMAT: &str = "MaterialExParam";
-    if table.param_type != "MATERIAL_EX_PARAM_ST" || table.data_version != 4 || table.row_size != 96 {
-        return Err(invalid(
-            FORMAT,
-            0,
-            format!(
-                "unobserved layout: {} v{} / {} bytes; only ER v4 / 96 is decoded",
-                table.param_type, table.data_version, table.row_size
-            ),
-        ));
-    }
-    let mut out = MaterialExRows::default();
-    for row in &table.rows {
-        let error = |at, reason: String| invalid(FORMAT, at, format!("row {}: {reason}", row.id));
-        if row.data.len() != 96 {
-            return Err(error(0, "row length is not 96".into()));
-        }
-        let units: Vec<_> = row.data[..64]
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|pair| u16::from_le_bytes(*pair))
-            .take_while(|unit| *unit != 0)
-            .collect();
-        let parameter = String::from_utf16(&units).map_err(|reason| error(0, reason.to_string()))?;
-        if parameter.trim().is_empty() {
-            return Err(error(0, "empty parameter name".into()));
-        }
-        let word = |at| <[u8; 4]>::try_from(&row.data[at..at + 4]).expect("checked row width");
-        let rgba_i = std::array::from_fn(|i| f32::from_le_bytes(word(68 + i * 4)));
-        if rgba_i.iter().any(|value| !value.is_finite()) {
-            return Err(error(68, "non-finite stored lane".into()));
-        }
-        let parsed = MaterialExRow {
-            id: row.id,
-            parameter,
-            material_id: i32::from_le_bytes(word(64)),
-            rgba_i,
-            bytes: row.data.clone(),
-        };
-        if out.rows.insert(row.id, parsed).is_some() {
-            return Err(error(0, "duplicate row id".into()));
-        }
-    }
-    Ok(out)
+    Ok(MaterialExRows {
+        rows: fromsoft_formats::material_events::read_rows(table)?,
+        refusal: None,
+    })
 }
 
-/// Additional typed source fields for TAE 198, beside the generic community-template fields.
-/// A refusal leaves structural word views available; only an observed ER record supplies
-/// the row link. The original event retains every byte, including partial words/padding.
+/// Preserve structural word views and the observed row link; no envelope or transition is invented.
 pub fn event_198(game: Game, bytes: &[u8]) -> (Vec<EventValue>, Option<String>) {
+    let read = fromsoft_formats::material_events::Event198::read(game, bytes);
     let mut fields = Vec::new();
-    for (index, word) in bytes.as_chunks::<4>().0.iter().enumerate() {
-        let at = index * 4;
+    for word in read.words {
         fields.push(EventValue {
-            name: format!("material_ex.raw_{at:02}_u32"),
-            value: EventValueData::I64(i64::from(u32::from_le_bytes(*word))),
+            name: format!("material_ex.raw_{:02}_u32", word.offset),
+            value: EventValueData::I64(i64::from(word.unsigned)),
         });
-        let value = f32::from_le_bytes(*word);
-        if value.is_finite() {
+        if let Some(value) = word.finite_float {
             fields.push(EventValue {
-                name: format!("material_ex.raw_{at:02}_f32"),
+                name: format!("material_ex.raw_{:02}_f32", word.offset),
                 value: EventValueData::F64(f64::from(value)),
             });
         }
     }
-    let refusal = if game != Game::EldenRing {
-        Some("Sekiro event 198 row layout and envelope are unproven; raw event retained".into())
-    } else if bytes.len() != 64 && !(bytes.len() == 72 && bytes[64..].iter().all(|byte| *byte == 0)) {
-        Some(format!(
-            "event 198 has {} bytes, not an observed 64-byte record or zero-padded 72-byte alias",
-            bytes.len()
-        ))
-    } else {
-        let id = i32::from_le_bytes(bytes[4..8].try_into().expect("checked event width"));
+    if let Some(id) = read.row_id {
         fields.push(EventValue {
             name: "material_ex.row_id".into(),
             value: EventValueData::I64(i64::from(id)),
         });
-        None
-    };
-    (fields, refusal)
+    }
+    (fields, read.refusal)
 }
 
 #[cfg(test)]
