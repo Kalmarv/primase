@@ -73,16 +73,19 @@ use fromsoft_formats::{Archive, Binder, Game, Install, Result, dcx::Decoder, flv
 
 /// The unmodelled runtime inputs do not prevent the installed definition from simulating.
 fn cloth_runtime_notices(game: Game, present: bool) -> Vec<Notice> {
-    if game != Game::EldenRing || !present {
+    if !present {
         return Vec::new();
     }
-    [
-        "bind matrices: installed (approximate; the game recomputes them at load)",
-        "wind off: origin not traced",
-    ]
-    .into_iter()
-    .map(|reason| Notice::new("fromsoft", NoticeKind::Approximation, reason, 1))
-    .collect()
+    // Load-time recomputation is observed in Elden Ring. Sekiro uses installed binds too,
+    // but its runtime initialization has not been reproduced or compared with a capture.
+    let binds = match game {
+        Game::EldenRing => "bind matrices: installed (approximate; the game recomputes them at load)",
+        Game::Sekiro => "bind matrices: installed (approximate; runtime bind initialization not reproduced)",
+    };
+    [binds, "wind off: origin not traced"]
+        .into_iter()
+        .map(|reason| Notice::new("fromsoft", NoticeKind::Approximation, reason, 1))
+        .collect()
 }
 
 /// What reading a character or part found.
@@ -1999,7 +2002,15 @@ mod tests {
         );
         assert!(notices[1].to_string().contains("wind off: origin not traced"));
         assert!(cloth_runtime_notices(Game::EldenRing, false).is_empty());
-        assert!(cloth_runtime_notices(Game::Sekiro, true).is_empty());
+        let sekiro = cloth_runtime_notices(Game::Sekiro, true);
+        assert_eq!(sekiro.len(), 2);
+        assert!(
+            sekiro[0].to_string().contains(
+                "bind matrices: installed (approximate; runtime bind initialization not reproduced)"
+            )
+        );
+        assert!(sekiro[1].to_string().contains("wind off: origin not traced"));
+        assert!(cloth_runtime_notices(Game::Sekiro, false).is_empty());
     }
 
     use super::*;

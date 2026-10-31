@@ -50,6 +50,16 @@ fn installed_initializer_catalogs_and_the_sekiro_outfit_reader_keep_authored_par
             let mut reader = CharacterReader::outfit(installed, outfit, decoder)?;
             let (world, _) = reader.read().map_err(|error| error.to_string())?;
             assert!(world.iter::<primase_havok::cloth::HavokCloth>().count() >= 2);
+            let notices = reader
+                .notices()
+                .into_iter()
+                .map(|notice| notice.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(notices.contains(
+                "bind matrices: installed (approximate; runtime bind initialization not reproduced)"
+            ));
+            assert!(notices.contains("wind off: origin not traced"));
             assert!(
                 world
                     .iter::<primase_fromsoft::sekiro::ClipSource>()
