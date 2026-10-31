@@ -29,6 +29,10 @@ pub trait Choice: Copy + PartialEq + 'static {
     }
 }
 
+impl Choice for bool {
+    const VALUES: &'static [(&'static str, Self)] = &[("false", false), ("true", true)];
+}
+
 /// Whether a pipeline must give an option.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Need {
@@ -194,6 +198,105 @@ fn alternatives(items: &[&str]) -> String {
     }
 }
 
+fn groups(declarations: &[OptionSpec]) -> Vec<(&'static str, Vec<&OptionSpec>)> {
+    let mut groups: Vec<(&'static str, Vec<&OptionSpec>)> = Vec::new();
+    for o in declarations {
+        if let Need::OneOf(g) = o.need {
+            match groups.iter_mut().find(|(name, _)| *name == g) {
+                Some((_, members)) => members.push(o),
+                None => groups.push((g, vec![o])),
+            }
+        }
+    }
+    groups
+}
+
+pub(crate) fn check_options(
+    name: &str,
+    declarations: &[OptionSpec],
+    options: &Options,
+) -> Result<(), String> {
+    if let Some(k) = options.keys().find(|k| {
+        declarations
+            .iter()
+            .find(|option| option.key == k.as_str())
+            .is_none()
+    }) {
+        let keys: Vec<&str> = declarations.iter().map(|o| o.key).collect();
+        return Err(if keys.is_empty() {
+            format!("unknown option {k} ({} takes none)", name)
+        } else {
+            format!("unknown option {k} ({} takes {})", name, keys.join(", "))
+        });
+    }
+    if let Some(o) = declarations
+        .iter()
+        .find(|o| o.need == Need::Required && !options.contains_key(o.key))
+    {
+        return Err(format!("{} is required: {}", o.key, o.doc));
+    }
+    for (_, members) in groups(declarations) {
+        let keys: Vec<&str> = members.iter().map(|o| o.key).collect();
+        match members.iter().filter(|o| options.contains_key(o.key)).count() {
+            0 => {
+                let docs: Vec<String> = members.iter().map(|o| format!("{}: {}", o.key, o.doc)).collect();
+                return Err(format!(
+                    "one of {} is required ({})",
+                    alternatives(&keys),
+                    docs.join("; ")
+                ));
+            }
+            1 => {}
+            _ => return Err(format!("only one of {} may be given", alternatives(&keys))),
+        }
+    }
+    for (k, v) in options {
+        if let Some(values) = declarations
+            .iter()
+            .find(|option| option.key == k.as_str())
+            .and_then(OptionSpec::values)
+            && !values.contains(&v.as_str())
+        {
+            return Err(format!("{k}={v} is none of {}", alternatives(&values)));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_options(name: &str, declarations: &[OptionSpec]) {
+    let mut keys = BTreeSet::new();
+    for o in declarations {
+        assert!(
+            keys.insert(o.key),
+            "pass {}: option {} declared twice",
+            name,
+            o.key
+        );
+        assert!(
+            o.absent().is_none_or(|a| !a.trim().is_empty()),
+            "pass {}: optional option {} says nothing of what its absence means",
+            name,
+            o.key
+        );
+        if let Some(values) = o.values() {
+            let distinct: BTreeSet<&str> = values.iter().copied().collect();
+            assert!(
+                !values.is_empty() && distinct.len() == values.len(),
+                "pass {}: option {}: a choice's values are none or one twice: {values:?}",
+                name,
+                o.key
+            );
+        }
+    }
+    for (g, members) in groups(declarations) {
+        assert!(
+            members.len() > 1,
+            "pass {}: the one-of group {g} has one option",
+            name
+        );
+    }
+}
+
 /// A pass as the registry knows it: its name, the options it takes, and how it is made from what the declaration let
 /// through.
 pub struct PassSpec {
@@ -218,16 +321,7 @@ impl PassSpec {
 
     /// The groups of one-of options, in the order they are first declared, each with its members.
     fn groups(&self) -> Vec<(&'static str, Vec<&OptionSpec>)> {
-        let mut groups: Vec<(&'static str, Vec<&OptionSpec>)> = Vec::new();
-        for o in self.options {
-            if let Need::OneOf(g) = o.need {
-                match groups.iter_mut().find(|(name, _)| *name == g) {
-                    Some((_, members)) => members.push(o),
-                    None => groups.push((g, vec![o])),
-                }
-            }
-        }
-        groups
+        groups(self.options)
     }
 
     /// Whether a pipeline must give it options: a required option or a one-of group.
@@ -253,44 +347,7 @@ impl PassSpec {
     /// `options` against the declaration: the refusal of the first undeclared key, missing required option, one-of
     /// group given none or more than one of, or choice value outside its values.
     pub fn check(&self, options: &Options) -> Result<(), String> {
-        if let Some(k) = options.keys().find(|k| self.declared(k).is_none()) {
-            let keys: Vec<&str> = self.options.iter().map(|o| o.key).collect();
-            return Err(if keys.is_empty() {
-                format!("unknown option {k} ({} takes none)", self.name)
-            } else {
-                format!("unknown option {k} ({} takes {})", self.name, keys.join(", "))
-            });
-        }
-        if let Some(o) = self
-            .options
-            .iter()
-            .find(|o| o.need == Need::Required && !options.contains_key(o.key))
-        {
-            return Err(format!("{} is required: {}", o.key, o.doc));
-        }
-        for (_, members) in self.groups() {
-            let keys: Vec<&str> = members.iter().map(|o| o.key).collect();
-            match members.iter().filter(|o| options.contains_key(o.key)).count() {
-                0 => {
-                    let docs: Vec<String> = members.iter().map(|o| format!("{}: {}", o.key, o.doc)).collect();
-                    return Err(format!(
-                        "one of {} is required ({})",
-                        alternatives(&keys),
-                        docs.join("; ")
-                    ));
-                }
-                1 => {}
-                _ => return Err(format!("only one of {} may be given", alternatives(&keys))),
-            }
-        }
-        for (k, v) in options {
-            if let Some(values) = self.declared(k).and_then(OptionSpec::values)
-                && !values.contains(&v.as_str())
-            {
-                return Err(format!("{k}={v} is none of {}", alternatives(&values)));
-            }
-        }
-        Ok(())
+        check_options(self.name, self.options, options)
     }
 
     /// The pass made from `options`, once [`PassSpec::check`] lets them through.
@@ -352,37 +409,7 @@ impl PassSpec {
     /// Panics where the declaration itself is wrong: a key twice, a group of one, a choice with no values or a value
     /// twice, an optional option that says nothing of its absence.
     pub(crate) fn validate(&self) {
-        let mut keys = BTreeSet::new();
-        for o in self.options {
-            assert!(
-                keys.insert(o.key),
-                "pass {}: option {} declared twice",
-                self.name,
-                o.key
-            );
-            assert!(
-                o.absent().is_none_or(|a| !a.trim().is_empty()),
-                "pass {}: optional option {} says nothing of what its absence means",
-                self.name,
-                o.key
-            );
-            if let Some(values) = o.values() {
-                let distinct: BTreeSet<&str> = values.iter().copied().collect();
-                assert!(
-                    !values.is_empty() && distinct.len() == values.len(),
-                    "pass {}: option {}: a choice's values are none or one twice: {values:?}",
-                    self.name,
-                    o.key
-                );
-            }
-        }
-        for (g, members) in self.groups() {
-            assert!(
-                members.len() > 1,
-                "pass {}: the one-of group {g} has one option",
-                self.name
-            );
-        }
+        validate_options(self.name, self.options);
     }
 }
 

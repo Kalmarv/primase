@@ -35,6 +35,7 @@ use crate::pbr::PbrMaterial;
 use crate::primitive_keys::PrimitiveKeys;
 use crate::priority::Priority;
 use crate::provenance::Provenance;
+use crate::read_scope::ReadScopes;
 use crate::reflection_probe::ReflectionProbeRegion;
 use crate::render_graph::RenderGraph;
 use crate::rig::{
@@ -88,7 +89,7 @@ declared! {
         DrawGroups, DrawGroupDefaults, ContentNote, Record, DisplayName, PrimitiveKeys, MaterialParameters, SkyAnchor,
         ParticleSystem, IrradianceVolume, ReflectionProbeRegion, StepBindings, StepDraws, LightFalloff, LightTranslucency;
     resources: PartScope, PartitionPlan, Environment, Atmosphere, PostProcessingStatus, StateAssignment, Surfaces, Threads, Memo, RenderGraph,
-        LightUnit, DirectionalLightUnit, TimeOfDay, TextureSwitchView,
+        LightUnit, DirectionalLightUnit, TimeOfDay, TextureSwitchView, ReadScopes,
 }
 
 #[cfg(test)]
