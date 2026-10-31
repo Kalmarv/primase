@@ -682,10 +682,7 @@ pub fn validate_saved_scope(
 }
 /// Stable public game key used by source pass declarations; clients do not interpret game identity.
 pub fn game_key(game: fromsoft_formats::Game) -> &'static str {
-    match game {
-        fromsoft_formats::Game::Sekiro => "sekiro",
-        fromsoft_formats::Game::EldenRing => "elden",
-    }
+    crate::sekiro::program::game_key(game)
 }
 
 /// Public loading scope. Sampling, absent-track interpretation and root motion are pass settings, not read defaults.
