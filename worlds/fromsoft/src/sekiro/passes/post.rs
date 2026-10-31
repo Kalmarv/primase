@@ -111,7 +111,7 @@ fn selected_lookup(
     Ok(primase_core::ColourLut {
         side: data.side,
         values: data.values.clone(),
-        // 14024db30 initializes gamma=2.2 and flag+c9=true; 140250bb7 -> 140250bd3 computes/stores reciprocal.
+        // Separate-gamma constructor defaults: Sekiro 24db30->250bd3; Elden Ring 1b90000->1b940c3.
         input_power: 1. / 2.2,
     })
 }

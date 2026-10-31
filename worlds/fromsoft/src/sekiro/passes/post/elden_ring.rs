@@ -52,7 +52,7 @@ impl Pass for LowerEldenRingReinhard {
         &[Atmosphere::NAME]
     }
     fn approximates(&self) -> &'static str {
-        "the caller-selected Elden Ring file's mode-8 curve on the native separate-gamma default; layered overrides and player brightness overwrites are not resolved; matrix, vignette, final power and LUT omitted"
+        "the caller-selected Elden Ring file's mode-8 curve and observed SourceID0 LUT binding on the native separate-gamma default; layered overrides and player brightness overwrites are not resolved; matrix and vignette omitted"
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         let Some(mut draw) = world.resource::<DrawParam>().cloned() else {
@@ -70,7 +70,7 @@ impl Pass for LowerEldenRingReinhard {
         atmosphere.tone_map = match curve(&draw) {
             Ok(curve) => {
                 log.count("partial Reinhard curves from the selected Elden Ring file", 1);
-                for stage in ["colour matrix", "vignette", "final input power and colour lookup"] {
+                for stage in ["colour matrix", "vignette"] {
                     log.omit(
                         &format!("partial Elden Ring post: {stage} source binding unresolved"),
                         1,
@@ -81,11 +81,24 @@ impl Pass for LowerEldenRingReinhard {
                     1,
                 );
                 log.approximate("native separate-gamma constructor default: table exponent 1; player brightness overwrite is not traced", 1);
+                let lookup = match super::selected_lookup(
+                    &draw,
+                    world.resource::<crate::sekiro::source::PostLookup>(),
+                ) {
+                    Ok(lookup) => {
+                        log.approximate("LUT input power uses the native constructor default 1/2.2; player brightness overwrite is not traced", 1);
+                        Some(lookup)
+                    }
+                    Err(why) => {
+                        log.omit(&format!("LUT stage omitted: {why}"), 1);
+                        None
+                    }
+                };
                 Some(ToneMap {
                     curve,
                     colour_matrix: None,
                     vignette: None,
-                    lut: None,
+                    lut: lookup,
                 })
             }
             Err(why) => {

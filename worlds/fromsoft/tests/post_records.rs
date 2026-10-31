@@ -6,6 +6,99 @@ use fromsoft_formats::{Game, dcx::Decoder};
 use primase_fromsoft::sekiro::post;
 
 #[test]
+fn installed_stormveil_lookup_preserves_the_observed_binding_and_native_half_store()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (Some(archive), Some(library)) = (
+        common::archive(Game::EldenRing)?,
+        inputs::oodle(inputs::Tool::Oodle6),
+    ) else {
+        return Ok(());
+    };
+    let dll = common::oodle(library)?;
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: 1 << 28,
+    };
+    let actual = post::lut::read(&archive, &decoder, "m10_00", 0)?;
+    assert_eq!(actual.texture, "m10_00_CGrading0000");
+    assert_eq!(actual.side, 16);
+    assert_eq!(actual.values.len(), 4096);
+    let package = fromsoft_formats::tpf::Package::read(
+        &archive.read("/map/m10/common/m10_cgrading.tpf.dcx", &decoder)?,
+    )?;
+    let texture = package
+        .textures
+        .iter()
+        .find(|t| t.name == actual.texture)
+        .unwrap();
+    let image = primase_dds::read(&texture.dds)?;
+    assert_eq!(
+        (image.width, image.height, image.format),
+        (16, 256, primase_core::TexFormat::Rgba8Unorm)
+    );
+    let pixels = &image.levels[0];
+    // Native resource 3747's first 64 bytes distinguish this installed strip from both neighbours.
+    // This fingerprint is a binding observation, not a full native cube readback.
+    let fingerprint = pixels[..64]
+        .iter()
+        .fold(1_469_598_103_934_665_603_u64, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(1_099_511_628_211)
+        });
+    assert_eq!(fingerprint, 0x158d_0c54_c75a_8a0a);
+    // Copy2Dto3DLUTCS maps cube[x,y,z] to strip[x,y+16*z]; native output is RGBA16F.
+    // Independently truncate the binary32 fraction to the ten bits binary16 can retain.
+    for z in 0..16 {
+        for y in 0..16 {
+            for x in 0..16 {
+                let index = x + 16 * y + 256 * z;
+                let strip_pixel = 4 * (x + 16 * (y + 16 * z));
+                for channel in 0..3 {
+                    let value = f32::from(pixels[strip_pixel + channel]) / 255.;
+                    assert_eq!(
+                        actual.values[index][channel].to_bits(),
+                        value.to_bits() & !0x1fff,
+                        "cube[{x},{y},{z}] channel {channel}"
+                    );
+                }
+            }
+        }
+    }
+    let (draw, _) = primase_fromsoft::sekiro::read_area_draw_param(
+        &archive,
+        &decoder,
+        "m10_00_00_00",
+        &primase_fromsoft::sekiro::DrawParams::File("m10_00_0000".into()),
+    )?;
+    let mut world = primase_core::World::new();
+    world.insert_resource(draw.expect("installed selected source"));
+    post::lut::read_into(&mut world, &archive, &decoder, "m10_00_00_00");
+    use primase_core::pass::{Pass, PassLog};
+    let mut log = PassLog::default();
+    primase_fromsoft::sekiro::passes::post::elden_ring::LowerEldenRingReinhard.run(&mut world, &mut log)?;
+    let tone = world
+        .resource::<primase_core::Atmosphere>()
+        .unwrap()
+        .tone_map
+        .as_ref()
+        .unwrap();
+    let lookup = tone.lut.as_ref().expect("sampled SourceID0 is enabled");
+    assert_eq!(lookup.values, actual.values);
+    assert_eq!(lookup.input_power, 1. / 2.2);
+    assert!(tone.colour_matrix.is_none() && tone.vignette.is_none());
+    assert!(
+        log.approximations
+            .keys()
+            .any(|why| why.contains("player brightness overwrite"))
+    );
+    assert!(post::lut::read(&archive, &decoder, "m10_00", 1000).is_err());
+    assert!(post::lut::read(&archive, &decoder, "m10_01", 0).is_err());
+    println!(
+        "ER_POST_LUT observed Stormveil SourceID0 binding; 4096 installed texels preserve native copy orientation and specified half-store conversion; full native cube readback unavailable"
+    );
+    Ok(())
+}
+
+#[test]
 fn installed_stormveil_reinhard_follows_the_selected_files_clock_keys()
 -> Result<(), Box<dyn std::error::Error>> {
     let (Some(archive), Some(library)) = (

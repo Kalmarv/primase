@@ -1963,7 +1963,7 @@ pub fn read_game_area_staged(
         }
     }
     if let Some(environment) = environment {
-        if game == Game::Sekiro {
+        if matches!(game, Game::Sekiro | Game::EldenRing) {
             super::post::lut::read_into(&mut world, &archive, decoder, &area);
         }
         world.insert_resource(environment);
