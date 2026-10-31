@@ -15,10 +15,18 @@ are integer ids meaningful within their originating World, not process-wide asse
 
 `core.render_graph` may draw a procedural `Geometry` primitive with an object entity, stage bindings,
 render state and outputs. `UnitBox` supplies local POSITION on the closed [-1,1] cube, outward
-counterclockwise triangles. The object's composed transform drives object matrix roles; `ViewToObject`
+counterclockwise triangles. The object's transform drives object matrix roles; `ViewToObject`
 is inverse(world) times inverse(view). Other primitive streams must be refused. Objects and directly
 bound textures are graph references, retained with the programs; losing one invalidates the graph.
 Geometry outputs participate in the same lighting dependency checks as full-screen outputs.
+
+An optional `LightingPipeline.frame` states one orthonormal `world_from_lighting` basis for the
+whole lighting subgraph. Handedness reflection is allowed; translation and scale are not. Named normal
+imports carry their encoding: consumers decode world normals, turn them into the lighting basis and
+re-encode them while retaining other lanes. Camera/world constants cross the same boundary together.
+View-space light records, clip coordinates, scalar depth and linear colour exports are unchanged.
+Without a frame, inputs and constants stay in core coordinates. This preserves opaque source cube
+and volume payloads while making the coordinate interpretation explicit.
 
 | Component | Fields | Invariants |
 | --- | --- | --- |

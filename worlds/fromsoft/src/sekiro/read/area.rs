@@ -1095,6 +1095,16 @@ pub fn read_game_area_staged(
     stage: &mut dyn FnMut(&str),
 ) -> Result<Report> {
     let game = install.game;
+    if let Some(selection) = options.environment {
+        if game != Game::EldenRing {
+            return Err(invalid(
+                "environment states",
+                0,
+                "explicit environment state pairs require Elden Ring",
+            ));
+        }
+        selection.verify()?;
+    }
     if destination.entities().next().is_some() {
         return Err(invalid("FromSoftware map", 0, "destination must be empty"));
     }
