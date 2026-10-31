@@ -443,3 +443,49 @@ mod tests {
         );
     }
 }
+
+/// Select the requested attack with the saved hold another registered pass interpreted.
+#[derive(Clone, Debug)]
+pub struct SelectFromSoftSavedAttack(pub String);
+pub const SELECT_FROMSOFT_SAVED_ATTACK: PassSpec = PassSpec {
+    name: "select-fromsoft-saved-attack",
+    options: &[OptionSpec::required(
+        "selector",
+        "AttackBothLight1_CMSG",
+        "the explicitly requested behavior selector",
+    )],
+    make: |g| Ok(Box::new(SelectFromSoftSavedAttack(g.required("selector").into()))),
+};
+impl Pass for SelectFromSoftSavedAttack {
+    fn name(&self) -> &'static str {
+        "select-fromsoft-saved-attack"
+    }
+    fn options(&self) -> Options {
+        Options::from([("selector".into(), self.0.clone())])
+    }
+    fn requires(&self) -> &[&'static str] {
+        &[
+            AttackInputs::NAME,
+            ClipKey::NAME,
+            Name::NAME,
+            crate::sekiro::standalone::SelectedSavedHold::NAME,
+        ]
+    }
+    fn provides(&self) -> &[&'static str] {
+        &[AttackSelection::NAME]
+    }
+    fn modifies(&self) -> &[&'static str] {
+        self.provides()
+    }
+    fn despawns_entities(&self) -> bool {
+        true
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        let state = w
+            .resource::<crate::sekiro::standalone::SelectedSavedHold>()
+            .ok_or("no selected saved hold")?
+            .state
+            .clone();
+        SelectFromSoftAttack::new(&self.0, state).run(w, log)
+    }
+}

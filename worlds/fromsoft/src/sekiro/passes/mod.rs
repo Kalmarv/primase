@@ -86,6 +86,7 @@ pub fn register(registry: &mut PassRegistry) {
     for spec in [
         &area_plan::SELECT_FROMSOFT_AREA,
         &attack_clip::SELECT_FROMSOFT_ATTACK,
+        &attack_clip::SELECT_FROMSOFT_SAVED_ATTACK,
         &crate::clip_events::LOWER_FROMSOFT_CLIP_EVENTS,
         &crate::entity_names::NAME_FROMSOFT_ENTITIES,
         &crate::display_masks::LOWER_FROMSOFT_DISPLAY_MASKS,
@@ -102,6 +103,8 @@ pub fn register(registry: &mut PassRegistry) {
         &standalone::BIND_FROMSOFT_ANIMATION,
         &standalone::SELECT_FROMSOFT_WEAPON_FORMS,
         &standalone::SELECT_FROMSOFT_SAVED_HOLD,
+        &standalone::SELECT_FROMSOFT_CHARACTER_READ,
+        &standalone::LOWER_FROMSOFT_SELECTED_OUTFIT,
         &visibility::PRESERVE_FROMSOFT_DISPLAY_MASKS,
         &far::DROP_FROMSOFT_FAR,
         &resolve_shaders::RESOLVE_FROMSOFT_SHADERS,

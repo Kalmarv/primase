@@ -76,7 +76,12 @@ impl Pass for SelectFromSoftDressing {
             log.approximate(why, 1);
         }
         log.count("character display-mask choices", 1);
-        w.insert_resource(DressingResult { dressing, note });
+        let masked = input.marks.iter().any(|m| !m.is_empty());
+        w.insert_resource(DressingResult {
+            masked,
+            dressing,
+            note: if masked { note } else { None },
+        });
         Ok(())
     }
 }
@@ -241,10 +246,22 @@ pub struct BindFromSoftAnimation {
     pub to: String,
     pub tolerance: f64,
     pub empty: String,
+    pub absent: String,
+    pub rate: u32,
+    pub root_motion: String,
+    pub clips: String,
 }
 pub const BIND_FROMSOFT_ANIMATION: PassSpec = PassSpec {
     name: "bind-fromsoft-animation",
     options: &[
+        OptionSpec::required("absent", "neutral", "interpretation of absent track components"),
+        OptionSpec::required("rate", "1", "sample keys per source frame"),
+        OptionSpec::required(
+            "root-motion",
+            "leave",
+            "leave, translation or full extracted root motion",
+        ),
+        OptionSpec::required("clips", "all", "selected animation names or all"),
         OptionSpec::required("from", "c0000 havok skeleton", "source skeleton name"),
         OptionSpec::required("to", "assembled skeleton", "target skeleton name"),
         OptionSpec::required("tolerance", "0.001", "rest agreement in model units"),
@@ -270,6 +287,13 @@ pub const BIND_FROMSOFT_ANIMATION: PassSpec = PassSpec {
             to: g.required("to").into(),
             tolerance,
             empty: empty.into(),
+            absent: g.required("absent").into(),
+            rate: g
+                .required("rate")
+                .parse()
+                .map_err(|_| "rate is not a whole number")?,
+            root_motion: g.required("root-motion").into(),
+            clips: g.required("clips").into(),
         }))
     },
 };
@@ -283,62 +307,43 @@ impl Pass for BindFromSoftAnimation {
             ("to".into(), self.to.clone()),
             ("tolerance".into(), self.tolerance.to_string()),
             ("empty".into(), self.empty.clone()),
+            ("absent".into(), self.absent.clone()),
+            ("rate".into(), self.rate.to_string()),
+            ("root-motion".into(), self.root_motion.clone()),
+            ("clips".into(), self.clips.clone()),
         ])
     }
     fn requires(&self) -> &[&'static str] {
         use primase_core::Component;
         &[
             primase_core::Skeleton::NAME,
-            primase_core::Clip::NAME,
+            primase_havok::world::HavokAnimation::NAME,
             crate::sekiro::source::CharacterGame::NAME,
         ]
     }
     fn provides(&self) -> &[&'static str] {
         use primase_core::Component;
-        &[primase_core::JointMap::NAME, primase_core::Name::NAME]
+        &[
+            primase_core::JointMap::NAME,
+            primase_core::Name::NAME,
+            primase_core::Clip::NAME,
+        ]
     }
     fn modifies(&self) -> &[&'static str] {
         use primase_core::Component;
         &[primase_core::Clip::NAME]
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
-        use primase_animation::{
-            correspond::{CorrespondSkeletons, Parents, hierarchy_counts},
-            map::{MapClip, Reparented, Rests, Unmapped},
-        };
-        let game = w
-            .resource::<crate::sekiro::source::CharacterGame>()
-            .ok_or("clip has no source game identity")?
-            .0;
-        let counts = hierarchy_counts(w, &self.from, &self.to, self.tolerance);
-        let fallback = game == fromsoft_formats::Game::Sekiro
-            && counts.is_some_and(|c| c.paired == 0)
-            && self.empty == "model-space";
-        let model = game == fromsoft_formats::Game::EldenRing || fallback;
-        if fallback {
-            log.approximate(
-                "caller choice: no same-hierarchy bone pairs; map by model-space pose",
-                1,
-            );
+        let steps = self.expansion(w)?;
+        let mut registry = primase_core::pass::PassRegistry::new();
+        registry.add(&primase_havok::world::LOWER_HAVOK_CLIPS);
+        registry.add(&primase_animation::correspond::CORRESPOND_SKELETONS);
+        registry.add(&primase_animation::map::MAP_CLIP);
+        let pipeline = registry.parse(&steps.join(", ")).map_err(|e| e.to_string())?;
+        for pass in pipeline.passes {
+            pass.run(w, log)?;
         }
-        CorrespondSkeletons {
-            from: self.from.clone(),
-            to: self.to.clone(),
-            tolerance: self.tolerance,
-            rotation_tolerance: self.tolerance,
-            parents: if model { Parents::Any } else { Parents::Same },
-        }
-        .run(w, log)?;
-        MapClip {
-            unmapped: Unmapped::Drop,
-            rests: if model { Rests::Source } else { Rests::Target },
-            reparented: if model {
-                Reparented::ModelSpace
-            } else {
-                Reparented::Refuse
-            },
-        }
-        .run(w, log)
+        Ok(())
     }
 }
 
@@ -430,6 +435,318 @@ impl Pass for SelectFromSoftSavedHold {
         let report = serde_json::json!({"slot":read.index,"version":read.version,"arm_style":format!("{:?}",read.hold.arm_style),"active":{"right":read.hold.right_hand,"left":read.hold.left_hand},"right_hand":read.equipped.right_hand,"left_hand":read.equipped.left_hand,"held":{"right":state.active_weapon(Hand::Right),"left":state.active_weapon(Hand::Left)}});
         log.count("saved player holds selected", 1);
         w.insert_resource(SelectedSavedHold { state, report });
+        Ok(())
+    }
+}
+
+/// Apply program-stated initializer choices to the reader's character family. Delegates to the one shared selector implementation.
+#[derive(Clone, Debug)]
+pub struct SelectFromSoftCharacterRead {
+    pub outfit: String,
+    pub initializer: String,
+}
+pub const SELECT_FROMSOFT_CHARACTER_READ: PassSpec = PassSpec {
+    name: "select-fromsoft-character-read",
+    options: &[
+        OptionSpec::required(
+            "outfit",
+            "first-readable",
+            "explicit listed player outfit, first-readable or none",
+        ),
+        OptionSpec::required(
+            "initializer",
+            "first-readable",
+            "NPC initializer id, first-readable or none",
+        ),
+    ],
+    make: |g| {
+        Ok(Box::new(SelectFromSoftCharacterRead {
+            outfit: g.required("outfit").into(),
+            initializer: g.required("initializer").into(),
+        }))
+    },
+};
+impl Pass for SelectFromSoftCharacterRead {
+    fn name(&self) -> &'static str {
+        "select-fromsoft-character-read"
+    }
+    fn options(&self) -> Options {
+        Options::from([
+            ("outfit".into(), self.outfit.clone()),
+            ("initializer".into(), self.initializer.clone()),
+        ])
+    }
+    fn requires(&self) -> &[&'static str] {
+        use crate::sekiro::{
+            outfit_data::{NpcOutfitVariants, OutfitVariants},
+            standalone::CharacterOutfitKind,
+        };
+        &[
+            CharacterOutfitKind::NAME,
+            OutfitVariants::NAME,
+            NpcOutfitVariants::NAME,
+        ]
+    }
+    fn provides(&self) -> &[&'static str] {
+        use crate::sekiro::{
+            outfit_data::{SelectedNpcInitializer, SelectedPlayerOutfit},
+            standalone::CharacterReadChoice,
+        };
+        &[
+            CharacterReadChoice::NAME,
+            SelectedPlayerOutfit::NAME,
+            SelectedNpcInitializer::NAME,
+        ]
+    }
+    fn modifies(&self) -> &[&'static str] {
+        self.provides()
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        use crate::sekiro::passes::initializer_outfits::{
+            SelectFromSoftNpcInitializer, SelectFromSoftPlayerOutfit,
+        };
+        use crate::sekiro::{
+            outfit_data::{SelectedNpcInitializer, SelectedPlayerOutfit},
+            standalone::{CharacterOutfitKind, CharacterReadChoice},
+        };
+        use primase_core::convert::{Notice, NoticeKind};
+        use serde_json::json;
+        let kind = w
+            .resource::<CharacterOutfitKind>()
+            .ok_or("no character outfit family")?
+            .clone();
+        let mut choice = CharacterReadChoice {
+            player: None,
+            npc: None,
+            report: json!({}),
+            notices: vec![],
+        };
+        if kind.player
+            && matches!(self.initializer.as_str(), "none" | "first-readable")
+            && self.outfit != "none"
+        {
+            SelectFromSoftPlayerOutfit(self.outfit.clone()).run(w, log)?;
+            let selected = w
+                .resource::<SelectedPlayerOutfit>()
+                .ok_or("player selector made no choice")?;
+            let outfit = &selected.chosen;
+            choice.report["player_outfit"] = json!({"chosen":outfit,"key":outfit.key(),"selection":if selected.automatic{"viewer choice: first readable listed variant; not the game's default"}else{"explicit listed variant"}});
+            if selected.automatic {
+                choice.report["lab_choices"] = json!([{"source":"fromsoft-character","option":"outfit","value":outfit.key(),"why":"viewer choice: first readable installed initializer variant, not the game's default"}]);
+            }
+            choice.notices.push(Notice::new(
+                "fromsoft",
+                NoticeKind::Selection,
+                format!(
+                    "{} outfit {}: {} ({})",
+                    if selected.automatic {
+                        "Viewer choice"
+                    } else {
+                        "Selected"
+                    },
+                    outfit.key(),
+                    outfit.name,
+                    if selected.automatic {
+                        "not the game's default"
+                    } else {
+                        "installed initializer"
+                    }
+                ),
+                1,
+            ));
+            choice.player = Some(outfit.clone());
+        } else if self.outfit != "none" && self.outfit != "first-readable" {
+            return Err(format!(
+                "outfit selects a listed player presentation; it cannot replace {}'s own model or NPC initializer",
+                kind.id
+            ));
+        }
+        if kind.npc_parts && choice.player.is_none() && self.initializer != "none" {
+            SelectFromSoftNpcInitializer(self.initializer.clone()).run(w, log)?;
+            let selected = w
+                .resource::<SelectedNpcInitializer>()
+                .ok_or("NPC selector made no choice")?;
+            choice.report["npc_equipment"] = json!({"chosen":selected.chosen,"choices":selected.choices,"selection":"caller init or first authored readable outfit in map/placement order","omitted":"face-generation morphs, body scale and runtime equipment replacements"});
+            choice.notices.push(Notice::new("fromsoft",NoticeKind::Selection,"meshless human dressed from the MSB enemy's CharaInitID and equipped protector models; alternative authored outfits are listed; face morphs/body scale/runtime replacements are not read",1));
+            choice.npc = Some(selected.chosen.clone());
+        }
+        w.insert_resource(choice);
+        Ok(())
+    }
+}
+
+impl BindFromSoftAnimation {
+    /// Diagnostic expansion of this registered operation. Programs run the operation, never branch on this text.
+    pub fn expansion(&self, w: &World) -> Result<Vec<String>, String> {
+        let game = w
+            .resource::<crate::sekiro::source::CharacterGame>()
+            .ok_or("clip has no source game identity")?
+            .0;
+        let counts = primase_animation::correspond::hierarchy_counts(w, &self.from, &self.to, self.tolerance);
+        let fallback = game == fromsoft_formats::Game::Sekiro
+            && counts.is_some_and(|c| c.paired == 0)
+            && self.empty == "model-space";
+        let model = game == fromsoft_formats::Game::EldenRing || fallback;
+        Ok(vec![
+            format!(
+                "lower-havok-clips{{absent={},rate={},root-motion={},clips={}}}",
+                self.absent, self.rate, self.root_motion, self.clips
+            ),
+            format!(
+                "correspond-skeletons{{from={},to={},tolerance={},parents={}}}",
+                self.from,
+                self.to,
+                self.tolerance,
+                if model { "any" } else { "same" }
+            ),
+            format!(
+                "map-clip{{unmapped=drop,rests={},reparented={}}}",
+                if model { "source" } else { "target" },
+                if model { "model-space" } else { "refuse" }
+            ),
+        ])
+    }
+}
+#[cfg(test)]
+mod binding_contract {
+    use super::*;
+    #[test]
+    fn registered_binding_preserves_the_old_three_step_contract() {
+        let bind = BindFromSoftAnimation {
+            from: "c2010 havok skeleton".into(),
+            to: "c2010 skeleton".into(),
+            tolerance: 0.0001,
+            empty: "model-space".into(),
+            absent: "neutral".into(),
+            rate: 1,
+            root_motion: "translation".into(),
+            clips: "a000_000000".into(),
+        };
+        for (game, parents, rests, reparented) in [
+            (fromsoft_formats::Game::EldenRing, "any", "source", "model-space"),
+            (fromsoft_formats::Game::Sekiro, "same", "target", "refuse"),
+        ] {
+            let mut world = World::new();
+            world.insert_resource(crate::sekiro::source::CharacterGame(game));
+            assert_eq!(
+                bind.expansion(&world).unwrap(),
+                vec![
+                    "lower-havok-clips{absent=neutral,rate=1,root-motion=translation,clips=a000_000000}"
+                        .to_owned(),
+                    format!(
+                        "correspond-skeletons{{from=c2010 havok skeleton,to=c2010 skeleton,tolerance=0.0001,parents={parents}}}"
+                    ),
+                    format!("map-clip{{unmapped=drop,rests={rests},reparented={reparented}}}")
+                ]
+            );
+        }
+    }
+}
+
+/// Execute the mask lowering selected earlier, retaining every delegated pass's declarations and counts.
+#[derive(Debug)]
+pub struct LowerFromSoftSelectedOutfit {
+    provides: Vec<&'static str>,
+    removes: Vec<&'static str>,
+    modifies: Vec<&'static str>,
+}
+fn outfit_registry() -> primase_core::pass::PassRegistry {
+    let mut registry = primase_core::pass::PassRegistry::new();
+    registry.add(&super::outfits::RAISE_FROMSOFT_DISPLAY_MASKS);
+    registry.add(&super::outfits::SELECT_FROMSOFT_OUTFIT);
+    registry.add(&super::visibility::PRESERVE_FROMSOFT_DISPLAY_MASKS);
+    registry.add(&crate::display_masks::LOWER_FROMSOFT_DISPLAY_MASKS);
+    registry.add(&primase_core::state::RESOLVE_STATE);
+    registry
+}
+impl LowerFromSoftSelectedOutfit {
+    fn new() -> Result<Self, String> {
+        let registry = outfit_registry();
+        let mut provides = std::collections::BTreeSet::new();
+        let mut removes = std::collections::BTreeSet::new();
+        let mut modifies = std::collections::BTreeSet::new();
+        for name in registry.names() {
+            let pass = registry.make_registered(name).map_err(|e| e.to_string())?;
+            provides.extend(pass.provides().iter().copied());
+            removes.extend(pass.removes().iter().copied());
+            modifies.extend(pass.modifies().iter().copied());
+        }
+        Ok(Self {
+            provides: provides.into_iter().collect(),
+            removes: removes.into_iter().collect(),
+            modifies: modifies.into_iter().collect(),
+        })
+    }
+    fn expansion(w: &World) -> Result<Vec<String>, String> {
+        let result = w
+            .resource::<DressingResult>()
+            .ok_or("no stated display-mask selection")?;
+        if !result.masked {
+            return Ok(vec![]);
+        }
+        let id = &w
+            .resource::<DressingInputs>()
+            .ok_or("no character mask identity")?
+            .id;
+        let mut texts = vec!["raise-fromsoft-display-masks".into()];
+        match result.dressing {
+            Dressing::Row(row) => texts.push(format!("select-fromsoft-outfit{{chr={id},npc={row}}}")),
+            Dressing::Hidden => texts.push(format!("select-fromsoft-outfit{{chr={id},npc=none}}")),
+            Dressing::ShowAll => {}
+        }
+        texts.push(format!(
+            "preserve-fromsoft-display-masks{{defaults={}}}",
+            if result.dressing == Dressing::ShowAll {
+                "show"
+            } else {
+                "assigned"
+            }
+        ));
+        texts.push("lower-fromsoft-display-masks".into());
+        texts.push("resolve-state".into());
+        Ok(texts)
+    }
+}
+pub const LOWER_FROMSOFT_SELECTED_OUTFIT: PassSpec = PassSpec {
+    name: "lower-fromsoft-selected-outfit",
+    options: &[],
+    make: |_| Ok(Box::new(LowerFromSoftSelectedOutfit::new()?)),
+};
+impl Pass for LowerFromSoftSelectedOutfit {
+    fn name(&self) -> &'static str {
+        "lower-fromsoft-selected-outfit"
+    }
+    fn requires(&self) -> &[&'static str] {
+        &[DressingResult::NAME, DressingInputs::NAME]
+    }
+    fn may_lack_inputs(&self) -> bool {
+        true
+    }
+    fn provides(&self) -> &[&'static str] {
+        &self.provides
+    }
+    fn removes(&self) -> &[&'static str] {
+        &self.removes
+    }
+    fn modifies(&self) -> &[&'static str] {
+        &self.modifies
+    }
+    fn legalizes(&self) -> &[&'static str] {
+        &[]
+    }
+    fn despawns_entities(&self) -> bool {
+        true
+    }
+    fn removes_by_log(&self) -> bool {
+        true
+    }
+    fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
+        let texts = Self::expansion(w)?;
+        let registry = outfit_registry();
+        let pipeline = registry.parse(&texts.join(", ")).map_err(|e| e.to_string())?;
+        for pass in pipeline.passes {
+            pass.run(w, log)?;
+        }
         Ok(())
     }
 }
