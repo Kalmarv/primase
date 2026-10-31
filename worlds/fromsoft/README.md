@@ -1328,13 +1328,22 @@ in script order, its enabled map groups are joined to the actual sky domes, and 
 axes receive the selected values. Reports retain the script hash, input flags and selected actions; unsupported
 instructions and undecidable branches are errors. This does not guess the player's flags or select Elden Ring's weather.
 
-Elden Ring environment inputs use `Options::environment = Some(environment::Selection {
-state_a, state_b, factor, tier })`. All four inputs are explicit: `tier` is `High`, `Middle`
-or `Low`, and the finite factor is in `[0,1]`. No clock-to-state or PC quality default is
-inferred. `Options::irradiance` without that selection still refuses Elden Ring.
-The reader retains both selected installed BC7 volume sets and BC6H cubes, emits
-`core.reflection_probe_region` with linked `core.irradiance_volume` states, and reports
-the caller selection and the untraced clock selector. A box's signed type-data `+0x0a`
+With `Options::irradiance`, the Elden Ring reader records every supported installed
+environment package's tier, state and member headers in `fromsoft.environment_catalog`,
+and every box's authored data and available packages in `fromsoft.environment_region`.
+It inspects one binder at a time and retains no DDS payloads or selected core probes.
+The registered `select-fromsoft-environment{state-a=5,state-b=6,factor=0.35333335,tier=high}`
+pass requires all four choices (`high`, `middle` or `low`; a finite factor in `[0,1]`),
+and attaches `fromsoft.environment_selection` plus `fromsoft.environment_load_request`.
+No clock-to-state or PC quality default is inferred. `AreaReader::load`/`load_all`
+then reads the requested BC7 coefficient sets and BC6H cubes, retaining their identities
+in `fromsoft.environment_payloads`. The registered `lower-fromsoft-environment-probes`
+pass emits `core.reflection_probe_region` with linked `core.irradiance_volume` states,
+and reports the explicit selection and untraced clock selector. Those core components
+can be used without a native render graph. For native lighting, run
+`lower-fromsoft-render-graph` and then `bind-fromsoft-environment-probes`; the latter
+requires the former's verified `fromsoft.prepared_lighting` marker.
+A box's signed type-data `+0x0a`
 overrides its probe group; `-1` falls back to the parsed numeric `Env_Box` identity.
 No numeric record field reproduces that default ID. This rule is inferred from 55
 capture-verified ER 2.7.2.0 Stormveil joins and checked over all 129 installed boxes;

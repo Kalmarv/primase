@@ -23,6 +23,10 @@ pub struct Report {
     pub textures: usize,
     pub boxes: usize,
     pub groups: usize,
+    /// Diagnostic timing for the offline measurement; excluded from deterministic conversion reports.
+    #[serde(skip)]
+    pub catalog_seconds: f64,
+    pub catalog_largest_member_bytes: usize,
 }
 
 /// The source association inferred from55 independent Stormveil labels: explicit signed override first,
@@ -39,11 +43,21 @@ pub fn group_for(region: &Region, fields: &fromsoft_formats::envmap::BoxFields) 
     }
 }
 
-/// Describe every authored box and available package. No environment texture payload is read here.
-pub fn read(archive: &Archive, area: &str, layout: &MapLayout, world: &mut World) -> Result<Report> {
-    let packages = fromsoft_formats::envmap::packages(archive, area)?;
+/// Describe every authored box and available package. No environment texture is decoded or attached here; one binder at a time supplies names/headers only.
+pub fn read(
+    archive: &Archive,
+    decoder: &Decoder<'_>,
+    area: &str,
+    layout: &MapLayout,
+    world: &mut World,
+) -> Result<Report> {
+    let started = std::time::Instant::now();
+    let paths = fromsoft_formats::envmap::packages(archive, area)?;
+    let packages = fromsoft_formats::envmap::inventory(archive, decoder, &paths)?;
     let mut report = Report {
         packages: packages.len(),
+        catalog_seconds: started.elapsed().as_secs_f64(),
+        catalog_largest_member_bytes: packages.iter().map(|p| p.member_bytes).max().unwrap_or(0),
         ..Default::default()
     };
     let regions = layout.map_regions()?;
@@ -72,6 +86,18 @@ pub fn read(archive: &Archive, area: &str, layout: &MapLayout, world: &mut World
                 format!("computed group {group:04} has no authored reflection point"),
             )
         })?;
+        let available_packages: Vec<_> = packages
+            .iter()
+            .filter(|p| p.members.iter().any(|m| m.identity.group == group))
+            .map(|p| p.package.path.clone())
+            .collect();
+        if available_packages.is_empty() {
+            return Err(invalid(
+                "environment box",
+                region.index,
+                format!("computed group {group:04} has no installed payload"),
+            ));
+        }
         let entity = world.spawn();
         world.insert(entity, Name(format!("{area}:{}", region.name)));
         world.insert(
@@ -85,6 +111,7 @@ pub fn read(archive: &Archive, area: &str, layout: &MapLayout, world: &mut World
                 region,
                 fields,
                 group,
+                available_packages,
                 reflection_origin,
             },
         );
@@ -96,6 +123,7 @@ pub fn read(archive: &Archive, area: &str, layout: &MapLayout, world: &mut World
         area: area.into(),
         packages,
     });
+    report.catalog_seconds = started.elapsed().as_secs_f64();
     Ok(report)
 }
 

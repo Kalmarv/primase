@@ -193,18 +193,23 @@ impl Reader for AreaReader<'_> {
             .resource::<crate::sekiro::environment_data::EnvironmentLoadRequest>()
             .is_some()
         {
-            super::environment::load_requested(&self.install.open()?, &self.decoder, &mut part)?
+            Some(super::environment::load_requested(
+                &self.install.open()?,
+                &self.decoder,
+                &mut part,
+            )?)
         } else {
-            super::environment::Report::default()
+            None
         };
         let (textures, programs) = scope_sources(&mut part)?;
-        Ok((
-            part,
-            vec![
-                scoped(textures, programs),
-                ("environment payloads".into(), format!("{payloads:?}")),
-            ],
-        ))
+        let mut report = vec![scoped(textures, programs)];
+        if let Some(payloads) = payloads {
+            report.push((
+                "environment payloads".into(),
+                serde_json::to_string(&payloads).expect("environment payload report"),
+            ));
+        }
+        Ok((part, report))
     }
     /// The whole area is its own closure, so the loaded world is the read world itself with its source files scoped:
     /// no second copy of every model, collision body and material beside the one the read made (the copy was the
@@ -214,18 +219,23 @@ impl Reader for AreaReader<'_> {
             .resource::<crate::sekiro::environment_data::EnvironmentLoadRequest>()
             .is_some()
         {
-            super::environment::load_requested(&self.install.open()?, &self.decoder, &mut world)?
+            Some(super::environment::load_requested(
+                &self.install.open()?,
+                &self.decoder,
+                &mut world,
+            )?)
         } else {
-            super::environment::Report::default()
+            None
         };
         let (textures, programs) = scope_sources(&mut world)?;
-        Ok((
-            world,
-            vec![
-                scoped(textures, programs),
-                ("environment payloads".into(), format!("{payloads:?}")),
-            ],
-        ))
+        let mut report = vec![scoped(textures, programs)];
+        if let Some(payloads) = payloads {
+            report.push((
+                "environment payloads".into(),
+                serde_json::to_string(&payloads).expect("environment payload report"),
+            ));
+        }
+        Ok((world, report))
     }
     fn emits(&self) -> &'static [&'static str] {
         &["core", "fromsoft"]

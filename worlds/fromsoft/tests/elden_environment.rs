@@ -20,6 +20,92 @@ fn run(world: &mut World, text: &str) -> Result<(), Box<dyn std::error::Error>> 
 const SELECT: &str = "select-fromsoft-environment{state-a=5,state-b=6,factor=0.35333335,tier=high}";
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Also supplies a standalone process for catalog time/peak-memory measurement before landing.
+#[test]
+fn stormveil_area_reader_keeps_authored_environment_metadata_without_selection()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (Some(root), Some(keys), Some(dll)) = (
+        inputs::install(inputs::Game::Elden),
+        inputs::keys(inputs::Game::Elden),
+        inputs::oodle(inputs::Tool::Oodle6),
+    ) else {
+        return Ok(());
+    };
+    let dll = common::oodle(dll)?;
+    let keys = Keys::from_folder(keys, Game::EldenRing, Game::EldenRing.param_key_sha256())?;
+    let install = common::install(root, Game::EldenRing, keys);
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: 1 << 30,
+    };
+    let mut world = World::new();
+    let started = std::time::Instant::now();
+    let report = primase_fromsoft::sekiro::read_game_area(
+        &install,
+        "m10_00_00_00",
+        &decoder,
+        &primase_fromsoft::sekiro::Options {
+            region: Some(primase_fromsoft::sekiro::Region {
+                rect: [-162., 5., 108., 250.],
+                margin: 30.,
+            }),
+            irradiance: true,
+            render_graph: true,
+            sky: primase_fromsoft::sekiro::sky::Sky::Include,
+            map_records: true,
+            ..Default::default()
+        },
+        &mut world,
+    )?;
+    let elapsed = started.elapsed().as_secs_f64();
+    let metadata = report.environment.expect("authored environment report");
+    assert_eq!(
+        (
+            metadata.packages,
+            metadata.boxes,
+            metadata.groups,
+            metadata.textures
+        ),
+        (21, 129, 128, 0)
+    );
+    assert!(world.resource::<EnvironmentSelection>().is_none());
+    assert!(world.resource::<EnvironmentLoadRequest>().is_none());
+    assert!(
+        world
+            .resource::<primase_fromsoft::sekiro::environment_data::EnvironmentPayloads>()
+            .is_none()
+    );
+    assert_eq!(world.iter::<ReflectionProbeRegion>().count(), 0);
+    assert_eq!(
+        world
+            .iter::<primase_fromsoft::sekiro::environment_data::EnvironmentRegion>()
+            .count(),
+        129
+    );
+    assert!(
+        world
+            .iter::<primase_fromsoft::sekiro::environment_data::EnvironmentRegion>()
+            .all(|(_, r)| r.available_packages.len() == 21)
+    );
+    assert!(
+        world
+            .resource::<primase_core::render_graph::RenderGraph>()
+            .expect("raw graph")
+            .lighting
+            .is_none()
+    );
+    assert!(
+        !world
+            .iter::<primase_core::ContentNote>()
+            .any(|(_, n)| n.key == "environment-selection")
+    );
+    println!(
+        "ENVIRONMENT_METADATA_MEASUREMENT {}",
+        serde_json::json!({"area_read_seconds":elapsed,"catalog_seconds":metadata.catalog_seconds,"catalog_largest_member_bytes":metadata.catalog_largest_member_bytes,"catalog_packages":metadata.packages,"environment_textures_attached":metadata.textures,"rect":[-162.,5.,108.,250.],"margin":30.})
+    );
+    Ok(())
+}
+
 fn fnv(bytes: &[u8]) -> u64 {
     bytes.iter().fold(1_469_598_103_934_665_603_u64, |hash, b| {
         (hash ^ u64::from(*b)).wrapping_mul(1_099_511_628_211)
@@ -84,7 +170,7 @@ fn all_stormveil_boxes_resolve_and_captured_payload_fingerprints_match()
     assert_eq!(labelled, 55);
     let mut world = World::new();
     // Setup: metadata read -> explicit registered selection -> payload load -> registered lowering.
-    let metadata = environment::read(&archive, "m10_00_00_00", &layout, &mut world)?;
+    let metadata = environment::read(&archive, &decoder, "m10_00_00_00", &layout, &mut world)?;
     assert_eq!(
         world
             .resource::<EnvironmentCatalog>()
