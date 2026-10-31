@@ -5,6 +5,9 @@ use primase_core::{Resource, json::JsonError};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
+/// Shared source-state axis identity, independent of reader I/O.
+pub const SKY_AXIS: &str = "fromsoft.sky";
+
 /// Data families to read, without choosing a weather, story state or flag value.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct StateReadScope {

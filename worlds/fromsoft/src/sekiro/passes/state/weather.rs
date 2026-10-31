@@ -26,7 +26,7 @@ pub(super) fn assign(world: &mut World, report: &Report) -> std::result::Result<
     report.input.validate()?;
     let axis = world
         .iter::<StateAxis>()
-        .find_map(|(_, a)| (a.key == crate::sekiro::sky::AXIS).then_some(a))
+        .find_map(|(_, a)| (a.key == crate::sekiro::source::SKY_AXIS).then_some(a))
         .ok_or_else(|| "weather: the area has no sky axis".to_owned())?;
     let Domain::Enum(values) = &axis.domain else {
         return Err("weather: the sky axis is not an enum".into());
@@ -38,7 +38,9 @@ pub(super) fn assign(world: &mut World, report: &Report) -> std::result::Result<
         )
     })?;
     let mut assignment = world.remove_resource::<StateAssignment>().unwrap_or_default();
-    assignment.0.insert(crate::sekiro::sky::AXIS.into(), index as u32);
+    assignment
+        .0
+        .insert(crate::sekiro::source::SKY_AXIS.into(), index as u32);
     world.insert_resource(assignment);
     if let Some(wetness) = &report.input.wetness {
         world.insert_resource(wetness.clone());
@@ -81,7 +83,7 @@ mod tests {
                 .resource::<StateAssignment>()
                 .unwrap()
                 .0
-                .get(crate::sekiro::sky::AXIS),
+                .get(crate::sekiro::source::SKY_AXIS),
             Some(&0)
         );
         report.sky = "weather-21-ashen".into();

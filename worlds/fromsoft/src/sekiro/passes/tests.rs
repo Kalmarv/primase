@@ -731,7 +731,9 @@ fn the_fromsoft_passes_register_by_name() {
         "preserve-fromsoft-display-masks",
         "raise-fromsoft-display-masks",
         "resolve-fromsoft-shaders",
+        "resolve-fromsoft-state",
         "sample-fromsoft-draw-params",
+        "select-fromsoft-area",
         "select-fromsoft-outfit",
     ];
     assert_eq!(format!("{reg:?}"), format!("{names:?}"));

@@ -34,7 +34,7 @@ pub(super) fn assign(world: &mut World, area: &str, report: &mut Report) -> Resu
         {
             report.assignments.insert(axis.key.clone(), u32::from(on));
         }
-        let wanted = if axis.key == crate::sekiro::sky::AXIS {
+        let wanted = if axis.key == crate::sekiro::source::SKY_AXIS {
             report.sky.clone()
         } else if axis.key == format!("fromsoft.irradiance.{area}") {
             report.selection.envmap.map(|n| format!("package-{n:02}"))

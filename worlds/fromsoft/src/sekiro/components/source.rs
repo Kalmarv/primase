@@ -1220,4 +1220,4 @@ impl Resource for PostLookup {
 }
 
 /// Raw state candidates and the resolved pass result.
-pub use super::state::{CommonState, DomeMembership, ResolvedState, StateInputs, StateReadScope};
+pub use super::state::{CommonState, DomeMembership, ResolvedState, SKY_AXIS, StateInputs, StateReadScope};

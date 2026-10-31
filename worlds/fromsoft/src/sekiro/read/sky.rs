@@ -61,7 +61,7 @@ pub const SKY_MAP: &str = "m89_00_00_99";
 /// The moon's object model.
 pub const MOON: &str = "o005900";
 /// The state axis of the sky.
-pub const AXIS: &str = "fromsoft.sky";
+pub use crate::sekiro::source::SKY_AXIS as AXIS;
 /// Elden Ring's open-world sky map, and where its frame's origin lies in metres from the corner of the tile grid (the
 /// centre of the level-2 tile `m60_10_08_02`).
 pub const OPEN_WORLD_SKY_MAP: &str = "m60_00_00_99";
