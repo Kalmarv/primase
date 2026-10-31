@@ -10,7 +10,10 @@
 //! one the player's model has).
 //!
 //! [`EquippedWeapons`]: crate::sekiro::effect_data::EquippedWeapons
-use crate::sekiro::effect_data::{Hold, Holds, Trace};
+use crate::sekiro::components::weapons::WeaponRow;
+#[cfg(test)]
+use crate::sekiro::effect_data::Trace;
+use crate::sekiro::effect_data::{Hold, Holds};
 #[cfg(test)]
 use fromsoft_formats::Game;
 use fromsoft_formats::param::{Param, Row};
@@ -19,26 +22,6 @@ use fromsoft_formats::{Archive, Install, Result, dcx::Decoder};
 const FORMAT: &str = "FromSoftware weapon params";
 
 pub use fromsoft_formats::weapon_params::{HoldLayout, WeaponLayout, layouts};
-
-/// A weapon row: its part's model id, its motion category, its hold row, its `spAtkcategory` (Elden Ring) and its trace
-/// slots that name an effect (a number above 0), with their slot numbers.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WeaponRow {
-    pub row: i32,
-    pub model: u16,
-    pub motion_category: u8,
-    pub hold_row: i32,
-    /// `spAtkcategory`, where the layout reads it.
-    pub sp_attack_category: Option<u16>,
-    pub traces: Vec<(usize, Trace)>,
-}
-
-impl WeaponRow {
-    /// The base name of the weapon's part binder (`wp_a_0300`), before any level suffix.
-    pub fn part(&self) -> String {
-        format!("wp_a_{:04}", self.model)
-    }
-}
 
 /// The two params of an install.
 #[derive(Debug)]

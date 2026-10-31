@@ -1,27 +1,13 @@
 //! Authored standalone inventories and deferred-clip I/O shared by every program.
-use crate::sekiro::{CharacterReader, WeaponParams, WeaponRow};
+use crate::sekiro::components::standalone::{
+    CharacterOutfitKind, CharacterReadChoice, SavedPlayer, SelectedSavedHold, SelectedWeaponForms,
+    WeaponBinderCandidate, WeaponInventory, WeaponInventoryRow,
+};
+use crate::sekiro::{CharacterReader, WeaponParams};
 use fromsoft_formats::{Archive, Install, dcx::Decoder};
 use primase_core::convert::{Notice, Reader, Report, Result};
 use primase_core::{Entity, Name, Resource, Skeleton, World};
 
-#[derive(Clone, Debug)]
-pub struct WeaponBinderCandidate {
-    pub name: String,
-    pub present: bool,
-}
-#[derive(Clone, Debug)]
-pub struct WeaponInventoryRow {
-    pub row: WeaponRow,
-    pub base: String,
-    pub candidates: Vec<WeaponBinderCandidate>,
-}
-#[derive(Clone, Debug)]
-pub struct WeaponInventory {
-    pub rows: Vec<WeaponInventoryRow>,
-}
-impl Resource for WeaponInventory {
-    const NAME: &'static str = "fromsoft.weapon_inventory";
-}
 /// Retain every weapon row and all supported binder spellings, including absent alternatives.
 pub fn read_weapon_inventory(
     install: &Install,
@@ -48,15 +34,6 @@ pub fn read_weapon_inventory(
         })
         .collect();
     Ok(WeaponInventory { rows })
-}
-/// The selected forms keyed by weapon row. Missing binders are explicit, never fabricated.
-#[derive(Clone, Debug, serde::Serialize)]
-pub struct SelectedWeaponForms(pub Vec<(i32, Option<String>)>);
-impl Resource for SelectedWeaponForms {
-    const NAME: &'static str = "fromsoft.selected_weapon_forms";
-    fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, primase_core::JsonError> {
-        primase_core::json::to_value(self).map(Some)
-    }
 }
 /// Look up already-selected row forms. This loads no data and makes no choice.
 pub fn selected_weapon_parts(
@@ -152,12 +129,7 @@ pub fn load_character_clip(
         name,
     })
 }
-/// A raw save slot; the registered hold selector interprets it.
-#[derive(Clone, Debug)]
-pub struct SavedPlayer(pub fromsoft_formats::save::Slot);
-impl Resource for SavedPlayer {
-    const NAME: &'static str = "fromsoft.saved_player";
-}
+#[allow(clippy::disallowed_methods, reason = "reader I/O: caller-stated save file")]
 pub fn read_saved_player(path: &std::path::Path, slot: usize) -> Result<SavedPlayer> {
     let bytes = std::fs::read(path)?;
     let save = fromsoft_formats::save::Save::read(&bytes)?;
@@ -185,19 +157,6 @@ pub fn read_npc_inventory(
         game: install.game,
         rows: fromsoft_formats::equipment::npc_outfits(install, archive, decoder, dictionary, id, npc)?,
     })
-}
-
-/// The explicit saved hold selected by a registered pass; reporting remains portable and display-only.
-#[derive(Clone, Debug)]
-pub struct SelectedSavedHold {
-    pub state: crate::sekiro::attack_clip::PlayerState,
-    pub report: serde_json::Value,
-}
-impl Resource for SelectedSavedHold {
-    const NAME: &'static str = "fromsoft.selected_saved_hold";
-    fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, primase_core::JsonError> {
-        Ok(Some(self.report.clone()))
-    }
 }
 
 /// Explicit animation inventory scope. An empty clip list lists plans and decodes none.
@@ -404,16 +363,6 @@ pub fn read_selected_npc_stats(
     Ok(stats.iter().find(|stats|stats.id==row).map(|stats|serde_json::json!({"row":row,"param":"NPC_PARAM_ST","fields":stats.fields().iter().map(|(name,value,unit)|serde_json::json!({"name":name,"value":value,"unit":unit})).collect::<Vec<_>>()})))
 }
 
-/// The source records which character families have authored part outfits. This is not a selected outfit.
-#[derive(Clone, Debug)]
-pub struct CharacterOutfitKind {
-    pub id: String,
-    pub player: bool,
-    pub npc_parts: bool,
-}
-impl Resource for CharacterOutfitKind {
-    const NAME: &'static str = "fromsoft.character_outfit_kind";
-}
 /// Read candidate metadata only. Empty families remain explicit resources so a program can state one pipeline.
 pub fn read_outfit_inventory(
     install: &Install,
@@ -467,21 +416,6 @@ pub fn read_outfit_inventory(
     )?);
     Ok(world)
 }
-/// Selected typed inputs and portable descriptive output for the standalone read.
-#[derive(Clone, Debug)]
-pub struct CharacterReadChoice {
-    pub player: Option<crate::sekiro::CharacterOutfit>,
-    pub npc: Option<crate::sekiro::outfit_data::SelectedNpcOutfit>,
-    pub report: serde_json::Value,
-    pub notices: Vec<Notice>,
-}
-impl Resource for CharacterReadChoice {
-    const NAME: &'static str = "fromsoft.character_read_choice";
-    fn to_json(&self) -> std::result::Result<Option<serde_json::Value>, primase_core::JsonError> {
-        Ok(Some(self.report.clone()))
-    }
-}
-
 /// Stated raw loading families. Every selection remains a separately registered pass run by the program.
 #[derive(Debug)]
 pub struct InventoryRequest<'a> {

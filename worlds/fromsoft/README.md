@@ -1368,6 +1368,11 @@ World. It retains initializer/protector and NPC candidates, including absent for
 it does not choose a presentation or part level. Its `Options` only state the text
 language, that language choice's provenance, and an optional metadata cache folder.
 
+The component APIs are `sekiro::catalog_data` for catalog identities and materialization
+results, `sekiro::standalone_data` for standalone inventories and selected inputs,
+and `sekiro::weapon_data` for interpreted weapon rows. Reader modules expose I/O
+operations rather than re-exporting these types; passes depend on the component APIs.
+
 A program registers the FromSoft passes and states
 `select-fromsoft-initializer-outfits{initializer,presentation,level}` and
 `select-fromsoft-npc-outfits{level}`. For the prior complete catalog presentation,

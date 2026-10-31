@@ -361,20 +361,20 @@ impl Pass for SelectFromSoftWeaponForms {
     }
     fn requires(&self) -> &[&'static str] {
         &[
-            crate::sekiro::standalone::WeaponInventory::NAME,
+            crate::sekiro::components::standalone::WeaponInventory::NAME,
             crate::sekiro::outfit_data::PartLevelSelection::NAME,
         ]
     }
     fn provides(&self) -> &[&'static str] {
-        &[crate::sekiro::standalone::SelectedWeaponForms::NAME]
+        &[crate::sekiro::components::standalone::SelectedWeaponForms::NAME]
     }
     fn modifies(&self) -> &[&'static str] {
         self.provides()
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         use crate::sekiro::{
+            components::standalone::{SelectedWeaponForms, WeaponInventory},
             outfit_data::{PartLevel, PartLevelSelection},
-            standalone::{SelectedWeaponForms, WeaponInventory},
         };
         let level = w
             .resource::<PartLevelSelection>()
@@ -417,18 +417,18 @@ impl Pass for SelectFromSoftSavedHold {
         "select-fromsoft-saved-hold"
     }
     fn requires(&self) -> &[&'static str] {
-        &[crate::sekiro::standalone::SavedPlayer::NAME]
+        &[crate::sekiro::components::standalone::SavedPlayer::NAME]
     }
     fn provides(&self) -> &[&'static str] {
-        &[crate::sekiro::standalone::SelectedSavedHold::NAME]
+        &[crate::sekiro::components::standalone::SelectedSavedHold::NAME]
     }
     fn modifies(&self) -> &[&'static str] {
         self.provides()
     }
     fn run(&self, w: &mut World, log: &mut PassLog) -> Result<(), String> {
         use crate::sekiro::{
-            attack_clip::{Hand, PlayerState},
-            standalone::{SavedPlayer, SelectedSavedHold},
+            components::attack_clip::{Hand, PlayerState},
+            components::standalone::{SavedPlayer, SelectedSavedHold},
         };
         let read = &w.resource::<SavedPlayer>().ok_or("no saved player")?.0;
         let state = PlayerState::from_save(read)?;
@@ -478,8 +478,8 @@ impl Pass for SelectFromSoftCharacterRead {
     }
     fn requires(&self) -> &[&'static str] {
         use crate::sekiro::{
+            components::standalone::CharacterOutfitKind,
             outfit_data::{NpcOutfitVariants, OutfitVariants},
-            standalone::CharacterOutfitKind,
         };
         &[
             CharacterOutfitKind::NAME,
@@ -489,8 +489,8 @@ impl Pass for SelectFromSoftCharacterRead {
     }
     fn provides(&self) -> &[&'static str] {
         use crate::sekiro::{
+            components::standalone::CharacterReadChoice,
             outfit_data::{SelectedNpcInitializer, SelectedPlayerOutfit},
-            standalone::CharacterReadChoice,
         };
         &[
             CharacterReadChoice::NAME,
@@ -506,8 +506,8 @@ impl Pass for SelectFromSoftCharacterRead {
             SelectFromSoftNpcInitializer, SelectFromSoftPlayerOutfit,
         };
         use crate::sekiro::{
+            components::standalone::{CharacterOutfitKind, CharacterReadChoice},
             outfit_data::{SelectedNpcInitializer, SelectedPlayerOutfit},
-            standalone::{CharacterOutfitKind, CharacterReadChoice},
         };
         use primase_core::convert::{Notice, NoticeKind};
         use serde_json::json;
