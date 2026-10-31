@@ -268,6 +268,7 @@ fn an_effect_light_and_a_btl_light_of_one_brightness_are_one_light() {
             cone_width: 0.,
             exposure_weight: 0.,
             radius: 4.,
+            sharpness: 1.,
             tangent: [1., 0., 0.],
         },
     );

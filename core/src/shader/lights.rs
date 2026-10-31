@@ -52,6 +52,13 @@ pub enum LightValue {
     Range,
     /// One float: `1 / range^2`.
     InverseRangeSquared,
+    /// One float: `1 / core.light_falloff.distance`, a source-stated normalization of distance, independent of
+    /// emitter radius and light range. A light with no stated falloff keeps zero and is named in `PackedLights::unknown`.
+    InverseFalloffDistance,
+    /// The light's source-stated transmission amplitude (`core.light_translucency.strength`).
+    TranslucencyStrength,
+    /// Multiplier of the source shader's angular exponent (`core.light_translucency.exponent_scale`).
+    TranslucencyExponentScale,
     /// Three floats: the light's colour times its intensity over the world's [`LightUnit::candela_per_unit`], the value
     /// the source stored.
     Colour,
@@ -91,6 +98,9 @@ impl LightValue {
             LightValue::ViewPosition | LightValue::Colour | LightValue::SpecularColour => 3,
             LightValue::Range
             | LightValue::InverseRangeSquared
+            | LightValue::InverseFalloffDistance
+            | LightValue::TranslucencyStrength
+            | LightValue::TranslucencyExponentScale
             | LightValue::ViewDepthMin
             | LightValue::ViewDepthMax
             | LightValue::Constant { .. } => 1,
@@ -290,6 +300,33 @@ impl LightTable {
                     LightValue::ViewPosition => at.to_vec(),
                     LightValue::Range => vec![range],
                     LightValue::InverseRangeSquared => vec![1.0 / (range * range)],
+                    LightValue::InverseFalloffDistance => match w.get::<crate::LightFalloff>(e) {
+                        Some(falloff) => vec![f64::from(
+                            falloff
+                                .inverse_distance()
+                                .map_err(|why| format!("{e:?}: {why}"))?,
+                        )],
+                        None => {
+                            let name = w
+                                .get::<crate::Name>(e)
+                                .map(|n| n.0.as_str())
+                                .or_else(|| w.get::<crate::Source>(e).map(|s| s.0.as_str()));
+                            out.unknown.push(format!("light {e:?}{}: source falloff distance not stated; inverse falloff distance supplied as zero",
+                                name.map(|n| format!(" ({n})")).unwrap_or_default()));
+                            vec![0.]
+                        }
+                    },
+                    LightValue::TranslucencyStrength | LightValue::TranslucencyExponentScale => {
+                        let source = w
+                            .get::<crate::LightTranslucency>(e)
+                            .ok_or_else(|| format!("{e:?}: light translucency parameters are not stated"))?;
+                        <crate::LightTranslucency as crate::Component>::verify(source, e, w)?;
+                        vec![f64::from(if f.value == LightValue::TranslucencyStrength {
+                            source.strength
+                        } else {
+                            source.exponent_scale
+                        })]
+                    }
                     LightValue::Colour => colour(light.color, light.intensity)?,
                     LightValue::SpecularColour => match &light.specular {
                         Some(s) => colour(s.color, s.intensity)?,
@@ -684,6 +721,64 @@ mod tests {
                 .into_iter()
                 .map(|(offset, value)| LightField { offset, value })
                 .collect(),
+        }
+    }
+
+    /// Independent source parameters survive packing; no component keeps a named zero stand-in, not a guessed size.
+    #[test]
+    fn source_falloff_and_translucency_pack_without_changing_range_or_radius() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.insert(e, crate::Name("measured light".into()));
+        w.insert(
+            e,
+            Transform {
+                cols: [[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [0.; 3]],
+            },
+        );
+        w.insert(
+            e,
+            Light {
+                kind: LightKind::Point,
+                color: [1.; 3],
+                intensity: 1.,
+                range: Some(20.),
+                radius: Some(3.),
+                cast_shadows: None,
+                specular: None,
+            },
+        );
+        w.insert(
+            e,
+            crate::LightTranslucency {
+                strength: 0.25,
+                exponent_scale: 0.01,
+            },
+        );
+        let t = table(
+            LightTableKind::Point,
+            16,
+            vec![
+                (0, LightValue::InverseFalloffDistance),
+                (4, LightValue::TranslucencyStrength),
+                (8, LightValue::TranslucencyExponentScale),
+                (12, LightValue::Range),
+            ],
+        );
+        let missing = t.pack(&w, &VIEW).unwrap();
+        assert_eq!(floats(&missing.bytes), vec![0., 0.25, 0.01, 20.]);
+        assert_eq!(missing.unknown.len(), 1);
+        assert!(missing.unknown[0].contains("measured light"));
+        for distance in [8., 1.5, 0.5] {
+            w.insert(e, crate::LightFalloff { distance });
+            let packed = t.pack(&w, &VIEW).unwrap();
+            assert!(packed.unknown.is_empty());
+            assert_eq!(floats(&packed.bytes), vec![distance.recip(), 0.25, 0.01, 20.]);
+            assert_eq!(w.get::<Light>(e).unwrap().radius, Some(3.));
+        }
+        for distance in [0., -1., f32::NAN, f32::INFINITY, f32::from_bits(1)] {
+            w.insert(e, crate::LightFalloff { distance });
+            assert!(t.pack(&w, &VIEW).unwrap_err().contains("falloff distance"));
         }
     }
 

@@ -67,6 +67,7 @@ pub fn light_record(
         cone_width: light.horizontal_angle,
         exposure_weight: light.exposure_weight,
         radius: light.radius,
+        sharpness: light.sharpness,
         tangent: unit(transform.cols[0])?,
     };
     Ok((transform, record))

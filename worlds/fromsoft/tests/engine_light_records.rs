@@ -35,6 +35,7 @@ fn btl(diffuse: [u8; 3], power: f32, radius: f32) -> LightSource {
         cone_width: 0.,
         exposure_weight: 0.,
         radius,
+        sharpness: 1.,
         tangent: [1., 0., 0.],
     }
 }
@@ -74,6 +75,76 @@ fn assert_record(light: &Light, record: [f32; 3], what: &str) {
             (got - want).abs() <= 1e-6 * want.max(1e-9),
             "{what} channel {i}: lowered {got}, the game's record {want}"
         );
+    }
+}
+
+/// Reading retains unsupported values; the selected pass names and omits only the invalid light.
+#[test]
+fn btl_falloff_is_preserved_raw_and_invalid_distances_are_named_by_the_pass() {
+    let mut world = World::new();
+    world.insert_resource(primase_fromsoft::sekiro::source::ReadScope {
+        game: fromsoft_formats::Game::EldenRing,
+        area: "fixture".into(),
+        region: None,
+        states: false,
+    });
+    let mut cases = Vec::new();
+    for (name, sharpness) in [
+        ("valid", 8.),
+        ("zero", 0.),
+        ("negative", -1.),
+        ("nonfinite", f32::INFINITY),
+    ] {
+        let e = world.spawn();
+        let mut source = btl([255; 3], 1., 20.);
+        source.name = name.into();
+        source.sharpness = sharpness;
+        world.insert(e, source);
+        world.insert(e, IDENTITY);
+        cases.push((e, name, sharpness));
+    }
+    let mut registry = PassRegistry::new();
+    passes::register(&mut registry);
+    let manager = PassManager::new(registry);
+    let mut report = RunReport::default();
+    manager
+        .run(
+            &mut world,
+            &manager
+                .registry
+                .parse("lower-fromsoft-lights{candela-per-power=1,spot-blend=0.15}")
+                .unwrap(),
+            &mut report,
+        )
+        .unwrap();
+    let log = &report.steps[0].log;
+    for (e, name, sharpness) in cases {
+        assert_eq!(
+            world.get::<LightSource>(e).unwrap().sharpness.to_bits(),
+            sharpness.to_bits()
+        );
+        if name == "valid" {
+            assert_eq!(world.get::<primase_core::LightFalloff>(e).unwrap().distance, 8.);
+            assert_eq!(
+                world
+                    .get::<primase_core::LightTranslucency>(e)
+                    .unwrap()
+                    .exponent_scale,
+                1.
+            );
+            assert!(
+                log.approximations
+                    .keys()
+                    .any(|s| s.contains("per-light overrides not traced; light valid"))
+            );
+        } else {
+            assert!(world.get::<Light>(e).is_none());
+            assert!(
+                log.omitted
+                    .keys()
+                    .any(|s| s.contains(name) && s.contains("falloff distance"))
+            );
+        }
     }
 }
 

@@ -88,6 +88,12 @@ pub fn compare(kind: &str, table: &LightTable, packed: &[f32], recorded: &[f32],
             LightValue::Range | LightValue::InverseRangeSquared => {
                 tally.add(name("range"), relative(p[0], r[0], 1e-5));
             }
+            LightValue::InverseFalloffDistance => {
+                tally.add(name("inverse falloff distance"), p[0].to_bits() == r[0].to_bits());
+            }
+            LightValue::TranslucencyStrength | LightValue::TranslucencyExponentScale => {
+                tally.add(name("translucency"), p[0].to_bits() == r[0].to_bits());
+            }
             LightValue::Constant { .. } => tally.add(name("constant"), p == r),
             LightValue::Colour | LightValue::SpecularColour => {
                 let exact = p.iter().zip(r).all(|(a, b)| relative(*b, *a, 1e-5));

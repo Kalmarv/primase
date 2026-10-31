@@ -41,6 +41,7 @@ use common::lights::{Tally, compare, floats, fnv1a64, near, organize_tables};
 
 /// One read-back dispatch: the world-to-view matrix's three rows, the counted point and spot records as floats.
 struct Recorded {
+    id: serde_json::Value,
     view: [[f32; 4]; 3],
     points: Vec<Vec<f32>>,
     spots: Vec<Vec<f32>>,
@@ -83,6 +84,7 @@ fn recorded(session: &std::path::Path, organize: u64) -> Result<Vec<Recorded>, B
                 .collect()
         };
         out.push(Recorded {
+            id: e["id"].clone(),
             view,
             points: records(read("t19")?, 208, word(272)),
             spots: records(read("t20")?, 192, word(280)),
@@ -129,6 +131,25 @@ fn eldens_light_tables_pack_the_read_back_records() -> Result<(), Box<dyn std::e
         },
         &mut world,
     )?;
+    // Every bank-zero value survives the reader, including lights outside the frozen camera.
+    let source_lights: Vec<_> = world
+        .iter::<sekiro::source::LightSource>()
+        .map(|(_, s)| s)
+        .collect();
+    assert_eq!(source_lights.len(), 216);
+    assert!(
+        source_lights
+            .iter()
+            .all(|s| s.sharpness.is_finite() && s.sharpness > 0.)
+    );
+    assert_eq!(
+        source_lights
+            .iter()
+            .map(|s| s.sharpness)
+            .fold(f32::INFINITY, f32::min),
+        0.2
+    );
+    assert_eq!(source_lights.iter().map(|s| s.sharpness).fold(0., f32::max), 13.);
     let mut registry = PassRegistry::new();
     primase_fromsoft::sekiro::passes::register(&mut registry);
     let manager = PassManager::new(registry);
@@ -292,6 +313,7 @@ fn eldens_light_tables_pack_the_read_back_records() -> Result<(), Box<dyn std::e
     let mut tally = Tally::default();
     let mut on_none = [0usize; 2];
     let mut specular_from_colour = 0usize;
+    let mut full_records = Vec::new();
     for d in &dispatches {
         assert_eq!((d.points.len(), d.spots.len()), (16, 0));
         // the world-to-view matrix of the world frame: the map's z mirrored, the drawing frame's origin moved back
@@ -304,13 +326,27 @@ fn eldens_light_tables_pack_the_read_back_records() -> Result<(), Box<dyn std::e
             let kind = if k == 0 { "point" } else { "spot" };
             let packed = table.pack(&world, &view)?;
             specular_from_colour += packed.specular_from_colour;
+            let entities = packed.lights.clone();
             let stride = table.stride as usize;
             let packed: Vec<Vec<f32>> = (0..packed.lights.len())
                 .map(|i| floats(&packed.bytes[stride * i..stride * (i + 1)]))
                 .collect();
-            for r in records {
-                match packed.iter().find(|p| (0..3).all(|c| near(p[c], r[c], 0.01))) {
-                    Some(p) => compare(kind, table, p, r, &mut tally),
+            for (native_index, r) in records.iter().enumerate() {
+                match packed
+                    .iter()
+                    .enumerate()
+                    .find(|(_, p)| (0..3).all(|c| near(p[c], r[c], 0.01)))
+                {
+                    Some((index, p)) => {
+                        compare(kind, table, p, r, &mut tally);
+                        full_records.push(serde_json::json!({
+                            "dispatch": d.id, "native_index": native_index, "kind": kind,
+                            "light_name": world.get::<primase_core::Name>(entities[index]).map(|n| &n.0),
+                            "view": view, "table": table,
+                            "ours_words": p.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                            "native_words": r.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                        }));
+                    }
                     None => on_none[k] += 1,
                 }
             }
@@ -324,17 +360,30 @@ fn eldens_light_tables_pack_the_read_back_records() -> Result<(), Box<dyn std::e
         on_none[0], on_none[1]
     );
     assert_eq!(on_none, [44, 0]);
+    {
+        let path = inputs::scratch().join("point-record-census.json");
+        assert_eq!(full_records.len(), 20);
+        std::fs::write(
+            path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "scope": "four retained dispatches; all 20 bank-matched point records, every word including unmodeled fields",
+                "map_translation": translation, "records": full_records,
+            }))?,
+        )?;
+    }
+
     println!("packed lights whose specular is their colour: {specular_from_colour}");
     assert_eq!(specular_from_colour, 0);
     for key in [
         "point view at 0",
         "point range at 12",
         "point range at 60",
-        "point constant at 48",
-        "point constant at 52",
+        "point translucency at 48",
+        "point translucency at 52",
         "point constant at 64",
         "point colour exact at 16",
         "point colour exact at 32",
+        "point inverse falloff distance at 28",
     ] {
         assert_eq!(tally.get(key), [20, 0], "{key}");
     }

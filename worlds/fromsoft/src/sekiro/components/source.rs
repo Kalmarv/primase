@@ -390,6 +390,8 @@ pub struct LightSource {
     pub cone_width: f32,
     pub exposure_weight: f32,
     pub radius: f32,
+    /// BTL +164: the distance divisor of native DiffColor.w, distinct from the light's range and emitter radius.
+    pub sharpness: f32,
     pub tangent: [f32; 3],
 }
 /// A BTL light's type.
@@ -413,6 +415,8 @@ fn lowered_light_has_its_unit(e: Entity, w: &primase_core::World) -> Result<(), 
 
 impl Component for LightSource {
     const NAME: &'static str = "fromsoft.light";
+    /// 2: preserve the authored sharpness at BTL +164.
+    const VERSION: u32 = 2;
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     /// Placed by its entity's transform; the tangent is world space.
     fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {

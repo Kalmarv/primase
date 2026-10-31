@@ -10,6 +10,17 @@ use crate::sekiro::source::{EffectLight, EffectShape, EffectValue, LightKind, Li
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{Component, Light, LightSpecular, LightUnit, Resource, Transform, World};
 
+const TRANSLUCENCY_DEFAULTS: &str = "translucency strength/exponent: the light constructor's defaults (1, 1), exponent clamped to 0.01 as the packer does; per-light overrides not traced";
+
+/// ER 2.7.2.0 shared light constructor +0x98/+0x9c, and point/spot packers' max(exponent, .01).
+/// This interpretation belongs to this registered lowering, not the reader or a consumer.
+fn elden_translucency(strength: f32, exponent: f32) -> primase_core::LightTranslucency {
+    primase_core::LightTranslucency {
+        strength,
+        exponent_scale: exponent.max(0.01),
+    }
+}
+
 /// The game's transfer from a stored colour component in 0 to 1 (a BTL byte over 255, an effect colour's red, green or
 /// blue) to the linear value its lighting shader multiplies by the power: the square. Read back from a running game: the
 /// diffuse colour of every light record, BTL or effect, is `component^2 * power` to float rounding (relative error
@@ -230,6 +241,14 @@ impl LowerFromSoftLights {
         for (e, source) in world.iter::<LightSource>() {
             if !world.has::<Transform>(e) {
                 return Err(format!("{e:?}: a light record without a transform"));
+            }
+            if let Err(why) = (primase_core::LightFalloff {
+                distance: source.sharpness,
+            })
+            .inverse_distance()
+            {
+                log.omit(&format!("BTL light {} not lowered: {why}", source.name), 1);
+                continue;
             }
             let kind = match source.kind {
                 LightKind::Directional => {
@@ -476,7 +495,12 @@ impl Pass for LowerFromSoftLights {
         true
     }
     fn provides(&self) -> &[&'static str] {
-        &[Light::NAME, LightUnit::NAME]
+        &[
+            Light::NAME,
+            LightUnit::NAME,
+            primase_core::LightFalloff::NAME,
+            primase_core::LightTranslucency::NAME,
+        ]
     }
     fn approximates(&self) -> &'static str {
         "power by the program's calibration; spot inner cone from a fixed blend; specular values not lowered; effect lights: an elliptic spot cone as its wider half-angle, specular, flicker and fade-out not lowered"
@@ -486,6 +510,22 @@ impl Pass for LowerFromSoftLights {
     fn run(&self, world: &mut World, log: &mut PassLog) -> Result<(), String> {
         let btl = self.lower_btl(world, log)?;
         let effects = self.lower_effects(world, log)?;
+        // Validate every distance before changing the world. The native packer divides directly, with no floor.
+        let falloffs = btl
+            .iter()
+            .map(|(e, _)| {
+                let source = world
+                    .get::<LightSource>(*e)
+                    .ok_or("lowered BTL light lost its source")?;
+                let falloff = primase_core::LightFalloff {
+                    distance: source.sharpness,
+                };
+                falloff
+                    .inverse_distance()
+                    .map_err(|why| format!("{}: {why}", source.name))?;
+                Ok((*e, falloff))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
         if !btl.is_empty() || !effects.is_empty() {
             let unit = LightUnit {
                 candela_per_unit: self.candela_per_power.get() as f32,
@@ -504,14 +544,59 @@ impl Pass for LowerFromSoftLights {
                 }
             }
         }
+        for (e, falloff) in falloffs {
+            world.insert(e, falloff);
+        }
+        let elden = world
+            .resource::<crate::sekiro::source::ReadScope>()
+            .is_some_and(|s| s.game == fromsoft_formats::Game::EldenRing);
+        if elden {
+            for (e, _) in btl.iter().chain(&effects) {
+                let name = world
+                    .get::<LightSource>(*e)
+                    .map(|s| s.name.clone())
+                    .or_else(|| {
+                        world
+                            .get::<EffectLight>(*e)
+                            .map(|s| format!("effect {} {:?}", s.effect, s.place))
+                    })
+                    .ok_or("lowered light lost its source")?;
+                world.insert(*e, elden_translucency(1., 1.));
+                log.approximate_on(*e, &format!("{TRANSLUCENCY_DEFAULTS}; light {name}"), 1);
+            }
+        }
         for (e, light) in btl {
             world.insert(e, light);
             log.count("lights lowered", 1);
         }
         for (e, light) in effects {
+            let source = world
+                .get::<EffectLight>(e)
+                .ok_or("lowered effect light lost its source")?;
+            log.approximate_on(
+                e,
+                &format!(
+                    "effect {} {:?}: falloff distance not read; inverse falloff distance supplied as zero",
+                    source.effect, source.place
+                ),
+                1,
+            );
             world.insert(e, light);
             log.count("effect lights lowered", 1);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod native_translucency_tests {
+    use super::*;
+    #[test]
+    fn constructor_strength_and_packer_exponent_floor_are_lowered_by_the_pass() {
+        for (input, expected) in [(0., 0.01), (-1., 0.01), (0.001, 0.01), (1., 1.), (2., 2.)] {
+            let lowered = elden_translucency(0.25, input);
+            assert_eq!(lowered.strength, 0.25);
+            assert_eq!(lowered.exponent_scale, expected);
+        }
     }
 }

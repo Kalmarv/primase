@@ -27,12 +27,6 @@ use primase_core::shader::{
 /// Records each buffer holds: the frames bind both with 1024 elements.
 const CAPACITY: u32 = 1024;
 
-const WRAP: &str = "1 / a size of the light in the engine's own model: the tile-lighting and forward programs soften \
-    the diffuse wrap and widen the specular lobe by the distance times it; the recorded records of bank lights hold 1 / \
-    the bank's word at offset 164; core.light's radius is not established to be that size";
-const ELDEN_WRAP: &str = "1 / the light's sharpness, its BTL record's word at offset 164 (every BTL light's record read \
-    back at Stormveil: 1/8, 1/1.5, 1/0.5), which the tile-lighting and forward programs read as Sekiro's do; \
-    core.light's radius is not established to be that size";
 const TRANSLUCENCY: &str = "the translucency term's strength (x) and exponent over 32 (y), which the tile-lighting pass \
     and the translucent (`Tr`) forward materials add to a light's diffuse; core.light has no translucency";
 const LIGHT_TYPE: &str = "0 in every record of the recorded frames; the organize program marks a light for the \
@@ -143,33 +137,18 @@ const TILE_PASS_FLAG: &str = "the organize program sets it where the light's vol
 /// buffer. Both games' records take the light's own specular ([`LightValue::SpecularColour`]): a BTL light's record
 /// holds its specular bytes squared times its specular power, apart from its diffuse ones (every BTL light read back
 /// from both games' frames).
-/// Native ER 2.7.2.0: GXPointLight's constructor calls the shared light constructor, which sets
-/// strength/exponent to (1, 1). Both point and spot packers clamp exponent to at least 0.01.
-/// Kept here at the source boundary, including the clamp for later authored overrides.
-fn elden_translucency(strength: f32, exponent: f32) -> [LightField; 2] {
+/// Input meanings only. A registered source pass supplies the core attributes; the reader selects no defaults.
+fn elden_translucency() -> [LightField; 2] {
     [
-        field(
-            48,
-            LightValue::Constant {
-                value: strength,
-                why: TRANSLUCENCY_DEFAULTS.into(),
-            },
-        ),
-        field(
-            52,
-            LightValue::Constant {
-                value: exponent.max(0.01),
-                why: TRANSLUCENCY_DEFAULTS.into(),
-            },
-        ),
+        field(48, LightValue::TranslucencyStrength),
+        field(52, LightValue::TranslucencyExponentScale),
     ]
 }
-pub(crate) const TRANSLUCENCY_DEFAULTS: &str = "translucency strength/exponent: the light constructor's defaults (1, 1), exponent clamped to 0.01 as the packer does; per-light overrides not traced";
 
 pub(crate) fn table(game: Game, name: &str, stride: u32) -> Option<LightTable> {
-    let (wrap, light_type_why, shadow, spot_prefix) = match game {
-        Game::Sekiro => (WRAP, LIGHT_TYPE, SHADOW, ""),
-        Game::EldenRing => (ELDEN_WRAP, ELDEN_LIGHT_TYPE, ELDEN_SHADOW, ELDEN_SPOT),
+    let (light_type_why, shadow, spot_prefix) = match game {
+        Game::Sekiro => (LIGHT_TYPE, SHADOW, ""),
+        Game::EldenRing => (ELDEN_LIGHT_TYPE, ELDEN_SHADOW, ELDEN_SPOT),
     };
     let light_type = |why: String| LightValue::Constant { value: 0.0, why };
     let spot = |why: &str| format!("{spot_prefix}{why}");
@@ -182,7 +161,7 @@ pub(crate) fn table(game: Game, name: &str, stride: u32) -> Option<LightTable> {
                 field(0, LightValue::ViewPosition),
                 field(12, LightValue::InverseRangeSquared),
                 field(16, LightValue::Colour),
-                field(28, unknown(1, "DiffColor.w", wrap)),
+                field(28, LightValue::InverseFalloffDistance),
                 field(32, LightValue::SpecularColour),
                 field(48, unknown(2, "TransLightParam.xy", TRANSLUCENCY)),
                 field(60, LightValue::Range),
@@ -200,14 +179,7 @@ pub(crate) fn table(game: Game, name: &str, stride: u32) -> Option<LightTable> {
                 field(0, LightValue::ViewPosition),
                 field(12, LightValue::Range),
                 field(16, LightValue::Colour),
-                field(
-                    28,
-                    LightValue::Unknown {
-                        floats: 1,
-                        name: "DiffColor.w".into(),
-                        why: spot(wrap),
-                    },
-                ),
+                field(28, LightValue::InverseFalloffDistance),
                 field(32, LightValue::SpecularColour),
                 field(
                     48,
@@ -244,7 +216,7 @@ pub(crate) fn table(game: Game, name: &str, stride: u32) -> Option<LightTable> {
     }?;
     if game == Game::EldenRing {
         table.fields.retain(|f| f.offset != 48);
-        table.fields.extend(elden_translucency(1.0, 1.0));
+        table.fields.extend(elden_translucency());
         table.fields.sort_by_key(|f| f.offset);
     }
     Some(table)
@@ -275,15 +247,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn elden_translucency_preserves_strength_and_clamps_the_native_exponent() {
-        for (input, expected) in [(0.0, 0.01), (-1.0, 0.01), (0.001, 0.01), (1.0, 1.0), (2.0, 2.0)] {
-            let fields = elden_translucency(0.25, input);
-            assert!(matches!(
-                fields[0].value,
-                LightValue::Constant { value: 0.25, .. }
-            ));
-            assert!(matches!(fields[1].value, LightValue::Constant { value, .. } if value == expected));
-        }
+    fn elden_translucency_declares_roles_without_choosing_values() {
+        let fields = elden_translucency();
+        assert_eq!(fields[0].value, LightValue::TranslucencyStrength);
+        assert_eq!(fields[1].value, LightValue::TranslucencyExponentScale);
     }
 
     /// Both games' tables agree with themselves and their buffers' element sizes, and lie at the same offsets; both take
