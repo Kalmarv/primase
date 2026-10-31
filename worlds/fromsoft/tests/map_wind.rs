@@ -14,7 +14,7 @@ mod inputs;
 
 use fromsoft_formats::{Game, Keys, dcx::Decoder};
 use primase_fromsoft::game::ParamKey;
-use primase_fromsoft::sekiro::wind::{self, BlockOffset, Refusal};
+use primase_fromsoft::sekiro::wind::{self, BlockGrid, BlockOffset, Refusal};
 mod common;
 
 /// The cloth's position in the map's frame at the capture's first step.
@@ -31,6 +31,94 @@ const ORIGIN: [u32; 3] = [0x4179_d2f2, 0x4101_9168, 0xc1dd_7efa];
 
 fn bits(v: [f32; 3]) -> [u32; 3] {
     v.map(f32::to_bits)
+}
+
+/// Native instruction-range oracles from 1.17.3's block creation (0x635475..0x635551)
+/// and manager shift (0x634970..0x634bb3). The frame values distinguish the arithmetic;
+/// they are not a claim about the player's runtime frame in this installed tile.
+#[test]
+fn installed_grid_tiles_use_the_native_block_placement_and_shift() -> Result<(), Box<dyn std::error::Error>> {
+    let (Some(root), Some(keys), Some(dll)) = (
+        inputs::install(inputs::Game::Elden),
+        inputs::keys(inputs::Game::Elden),
+        inputs::oodle(inputs::Tool::Oodle6),
+    ) else {
+        return Ok(());
+    };
+    let install = common::install(
+        root,
+        Game::EldenRing,
+        Keys::from_folder(keys, Game::EldenRing, Game::EldenRing.param_key_sha256())?,
+    );
+    let archive = install.open()?;
+    let dll = common::oodle(dll)?;
+    let decoder = Decoder {
+        oodle: Some(&dll),
+        max_output: 1 << 30,
+    };
+    let frame = BlockGrid {
+        cell: [49, 49],
+        offset: [88., -16., -16.],
+    };
+    for (map, cell, level, expected) in [
+        (
+            "m60_42_36_00",
+            [42, 36],
+            0,
+            [0xc4d5_0000, 0xc180_0000, 0xc551_0000],
+        ),
+        (
+            "m60_21_18_01",
+            [21, 18],
+            1,
+            [0xc4c5_0000, 0xc180_0000, 0xc549_0000],
+        ),
+    ] {
+        let layout = fromsoft_formats::msb::MapLayout::read(
+            &archive.read(&format!("/map/mapstudio/{map}.msb.dcx"), &decoder)?,
+        )?;
+        assert!(!layout.parts.is_empty(), "{map} must be an installed grid tile");
+        assert_eq!(bits(frame.block(cell, level)?.offset), expected, "{map}");
+    }
+    let frame = BlockGrid {
+        cell: [49, 49],
+        offset: [0.125, 16.5, -0.25],
+    };
+    assert_eq!(
+        bits(frame.block([10, 9], 2)?.offset),
+        [0xc4ef_fc00, 0x4184_0000, 0xc538_0400]
+    );
+    for (offset, delta, cell, expected) in [
+        (
+            [0., 0., 0.],
+            [128., -16., -128.],
+            [49, 49],
+            [0x4300_0000, 0xc180_0000, 0xc300_0000],
+        ),
+        (
+            [120., 4., -120.],
+            [20., 3., -20.],
+            [48, 50],
+            [0xc2e8_0000, 0x40e0_0000, 0x42e8_0000],
+        ),
+        (
+            [0.125, 0., -0.25],
+            [1024., 0.5, -1024.],
+            [45, 53],
+            [0x3e00_0000, 0x3f00_0000, 0xbe80_0000],
+        ),
+    ] {
+        let shifted = BlockGrid {
+            cell: [49, 49],
+            offset,
+        }
+        .shifted(delta)?;
+        assert_eq!(shifted.cell, cell);
+        assert_eq!(bits(shifted.offset), expected);
+    }
+    assert_eq!(frame.block([0, 0], 16), Err(Refusal::InvalidBlockGrid));
+    assert_eq!(frame.shifted([f32::NAN, 0., 0.]), Err(Refusal::InvalidBlockGrid));
+    Ok(())
 }
 
 #[test]

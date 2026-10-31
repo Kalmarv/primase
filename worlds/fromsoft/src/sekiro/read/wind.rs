@@ -39,6 +39,80 @@ pub struct BlockOffset {
     pub provenance: String,
 }
 
+/// Elden Ring's world-block grid at a moment: the manager's cell indices and floating translation.
+///
+/// Cell spacing is 256 metres (constructor `0x6323c0`). The moment's translation is runtime state;
+/// it must be supplied by the caller's frame, never read back from a capture as conversion input.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BlockGrid {
+    pub cell: [i32; 2],
+    pub offset: [f32; 3],
+}
+
+impl BlockGrid {
+    /// Place a grid block, including the centre of a block covering `2^level` cells.
+    ///
+    /// This is `0x6353a0`: integer cell difference, conversion to f32, multiplication by 256,
+    /// then the half-cell span and the manager's translation, in that order. It applies to grid
+    /// blocks; a dungeon's connection to that grid is a separate input.
+    pub fn block(&self, cell: [u8; 2], level: u8) -> std::result::Result<BlockOffset, Refusal> {
+        if level > 15 || !self.offset.iter().all(|v| v.is_finite()) {
+            return Err(Refusal::InvalidBlockGrid);
+        }
+        let scale = 1_i32 << level;
+        let half_span = (((scale - 1) as f32) * 0.5) * 256.0;
+        let mut offset = self.offset;
+        for (axis, lane) in [(0, 0), (1, 2)] {
+            let difference = (i32::from(cell[axis]) * scale)
+                .checked_sub(self.cell[axis])
+                .ok_or(Refusal::InvalidBlockGrid)?;
+            offset[lane] += (difference as f32 * 256.0) + half_span;
+        }
+        // The native placement also adds zero to y.
+        offset[1] += 0.0;
+        Ok(BlockOffset {
+            offset,
+            provenance: format!(
+                "grid block {cell:?} level {level}, frame cell {:?}, translation {:?}",
+                self.cell, self.offset
+            ),
+        })
+    }
+
+    /// Shift the frame as `0x634970` does. Existing block translations are shifted by `delta`
+    /// too, before normalizing the manager: this normalization changes its cell indices only
+    /// beyond +/-128 metres (exactly either boundary stays in the same cell).
+    ///
+    /// The producer of `delta` is the caller's runtime frame policy, not an installed map field.
+    pub fn shifted(&self, delta: [f32; 3]) -> std::result::Result<Self, Refusal> {
+        let mut next = self.clone();
+        for (out, change) in next.offset.iter_mut().zip(delta) {
+            *out += change;
+            if !out.is_finite() {
+                return Err(Refusal::InvalidBlockGrid);
+            }
+        }
+        for (axis, lane) in [(0, 0), (1, 2)] {
+            while next.offset[lane] < -128.0 || next.offset[lane] > 128.0 {
+                let (step, cell_step) = if next.offset[lane] < -128.0 {
+                    (256.0, 1)
+                } else {
+                    (-256.0, -1)
+                };
+                let moved = next.offset[lane] + step;
+                if moved == next.offset[lane] {
+                    return Err(Refusal::InvalidBlockGrid);
+                }
+                next.offset[lane] = moved;
+                next.cell[axis] = next.cell[axis]
+                    .checked_add(cell_step)
+                    .ok_or(Refusal::InvalidBlockGrid)?;
+            }
+        }
+        Ok(next)
+    }
+}
+
 /// A wind effect region's force field, as the game places it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Source {
@@ -61,6 +135,8 @@ pub struct Source {
 /// Why a wind effect region gives no [`Source`], or why a value of one is not given.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Refusal {
+    /// Nonfinite grid state, an unsupported level, or arithmetic outside the grid index range.
+    InvalidBlockGrid,
     /// The type data names no region (-1).
     NoArea,
     /// The area is another region (`area`): whose rotation the field takes is not observed.
@@ -83,6 +159,7 @@ pub enum Refusal {
 impl std::fmt::Display for Refusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Refusal::InvalidBlockGrid => write!(f, "wind block grid: invalid runtime frame or level"),
             Refusal::NoArea => write!(f, "wind field source: the region names no area"),
             Refusal::AreaIsAnotherRegion { area } => {
                 write!(
