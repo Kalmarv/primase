@@ -28,7 +28,10 @@ mod inputs;
 use fromsoft_formats::{Binder, Game, Keys, dcx::Decoder};
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::render_graph::RenderGraph;
-use primase_core::shader::{BufferSource, ConstantRole, FrameParameter, LightTableKind, ShaderBinding};
+use primase_core::shader::{
+    BufferSource, ConstantRole, FrameParameter, LightListPart, LightTableKind, ShaderBinding,
+    pack_light_lists,
+};
 use primase_core::{Light, Transform, World};
 use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::sekiro;
@@ -182,6 +185,53 @@ fn eldens_light_tables_pack_the_read_back_records() -> Result<(), Box<dyn std::e
         })
         .count();
     println!("material stages with light tables: {lit}");
+    // Installed forward programs receive generic list/tile roles, not zero-filled unknown buffers. Exercise their
+    // actual descriptors with independent counts: lookup word 2 keeps nonempty tiles alive in the native ER tile pass.
+    let mut listed = 0;
+    for stage in world.iter::<ShaderBinding>().flat_map(|(_, b)| &b.stages) {
+        let lookup = stage.buffers.iter().find_map(|b| match &b.source {
+            BufferSource::LightLists(LightListPart::Lookup(l)) => Some(l),
+            _ => None,
+        });
+        let Some(lookup) = lookup else { continue };
+        let indices = stage
+            .buffers
+            .iter()
+            .find_map(|b| match &b.source {
+                BufferSource::LightLists(LightListPart::Indices(i)) => Some(i),
+                _ => None,
+            })
+            .ok_or("an installed forward program binds lookup without indices")?;
+        for parameter in [FrameParameter::LightTileSize, FrameParameter::LightTilesPerRow] {
+            assert!(
+                stage
+                    .constants
+                    .iter()
+                    .any(|c| c.role == ConstantRole::Frame(parameter))
+            );
+        }
+        let packed = pack_light_lists(
+            lookup,
+            indices,
+            &[(LightTableKind::Point, 2), (LightTableKind::Spot, 1)],
+            1,
+        )?;
+        let words = |bytes: &[u8]| {
+            bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|w| u32::from_le_bytes(*w))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(words(&packed.lookup), [0, 0x0001_0002, 0x0001_0002]);
+        assert_eq!(words(&packed.indices), [0xffff_0000, 0xffff_0001, 0xffff_0000]);
+        assert!(packed.unknown.is_empty());
+        listed += 1;
+    }
+    assert!(listed > 0, "no installed material stage binds the light lists");
+    println!("material stages with packed light lists and tile roles: {listed}");
+
     // the organize program's hash, from the install's binder
     let archive = install.open()?;
     let binder = Binder::read(

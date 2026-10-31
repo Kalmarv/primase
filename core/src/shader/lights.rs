@@ -443,6 +443,10 @@ pub struct LightLookup {
     pub first: ListBits,
     /// How many lights of each kind the tile lists, in the order their entries follow each other.
     pub counts: Vec<(LightTableKind, ListBits)>,
+    /// Additional fields holding the same count of an already listed kind, without adding index entries. A source
+    /// may use these for eligible-light counts when the conservative lists mark every entry eligible.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub count_copies: Vec<(LightTableKind, ListBits)>,
     pub constants: Vec<ListConstant>,
     pub unknown: Vec<ListUnknown>,
 }
@@ -536,6 +540,12 @@ impl LightListPart {
                 if l.counts.is_empty() {
                     return Err("a light lookup that counts no lights".into());
                 }
+                for (kind, bits) in &l.count_copies {
+                    if !kinds.contains(kind) {
+                        return Err(format!("a light lookup copies an unlisted {kind:?} count"));
+                    }
+                    fields.push((*bits, "count copy"));
+                }
                 verify_record(l.stride, l.capacity, &fields, &l.constants, &l.unknown, "lookup")?;
                 l.stride
             }
@@ -590,6 +600,14 @@ pub fn pack_light_lists(
         }
         entries.extend(0..n);
     }
+    for (kind, bits) in &lookup.count_copies {
+        let n = count_of(*kind);
+        if n > bits.max() {
+            return Err(format!(
+                "{n} {kind:?} lights do not fit the lookup's copied count bits"
+            ));
+        }
+    }
     if entries.len() as u64 > u64::from(indices.capacity) {
         return Err(format!(
             "{} light list entries for an index list of {}",
@@ -609,7 +627,7 @@ pub fn pack_light_lists(
     };
     for record in out.lookup.chunks_exact_mut(lookup.stride as usize) {
         lookup.first.write(record, 0);
-        for (kind, bits) in &lookup.counts {
+        for (kind, bits) in lookup.counts.iter().chain(&lookup.count_copies) {
             bits.write(record, count_of(*kind));
         }
         for c in &lookup.constants {
@@ -923,6 +941,7 @@ mod tests {
                     (LightTableKind::Point, bits(4, 0, 16)),
                     (LightTableKind::Spot, bits(4, 16, 16)),
                 ],
+                count_copies: Vec::new(),
                 constants: Vec::new(),
                 unknown: vec![ListUnknown {
                     bits: bits(8, 0, 32),
@@ -972,6 +991,53 @@ mod tests {
         );
         assert_eq!(words(&packed.indices), [0xffff_0000, 0xffff_0001, 0xffff_0000]);
         assert_eq!(packed.unknown, ["word 2"]);
+    }
+
+    /// A second eligible-light count lets a shader reject an empty tile before walking the main counts. Listing all
+    /// lights makes both counts equal; copying them must not duplicate the three entries.
+    #[test]
+    fn copied_counts_keep_nonempty_tiles_and_do_not_duplicate_entries() {
+        let (mut lookup, indices) = lists();
+        lookup.unknown.clear();
+        lookup.count_copies = vec![
+            (LightTableKind::Point, bits(8, 0, 16)),
+            (LightTableKind::Spot, bits(8, 16, 16)),
+        ];
+        let packed = pack_light_lists(
+            &lookup,
+            &indices,
+            &[(LightTableKind::Point, 2), (LightTableKind::Spot, 1)],
+            2,
+        )
+        .unwrap();
+        assert_eq!(
+            words(&packed.lookup),
+            [0, 0x0001_0002, 0x0001_0002, 0, 0x0001_0002, 0x0001_0002]
+        );
+        assert_eq!(words(&packed.indices), [0xffff_0000, 0xffff_0001, 0xffff_0000]);
+        assert!(packed.unknown.is_empty());
+        let empty = pack_light_lists(&lookup, &indices, &[], 1).unwrap();
+        assert_eq!(words(&empty.lookup), [0, 0, 0]);
+        assert!(empty.indices.is_empty());
+
+        let mut invalid = lookup.clone();
+        invalid.counts.pop();
+        assert!(
+            LightListPart::Lookup(invalid)
+                .verify(None)
+                .unwrap_err()
+                .contains("unlisted")
+        );
+        let mut narrow = lookup.clone();
+        narrow.count_copies[0].1 = bits(8, 0, 1);
+        assert!(pack_light_lists(&narrow, &indices, &[(LightTableKind::Point, 2)], 1).is_err());
+        lookup.count_copies[0].1 = bits(4, 0, 16);
+        assert!(
+            LightListPart::Lookup(lookup)
+                .verify(None)
+                .unwrap_err()
+                .contains("overlap")
+        );
     }
 
     /// Refused: more tiles or entries than the buffers hold, a count its bits cannot hold, overlapping fields, a part

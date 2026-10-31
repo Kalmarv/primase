@@ -11,10 +11,12 @@
 //! Elden Ring's records hold as the specular colour's luma, `TransLightParam.z`, the pads, the spot's `ShadingMode`)
 //! has no field.
 //!
-//! Sekiro's per-tile light lists ([`BufferSource::LightLists`]): `g_LightLookupBuffer` (12-byte records, one per tile)
+//! Both games' per-tile light lists ([`BufferSource::LightLists`]): `g_LightLookupBuffer` (12-byte records, one per tile)
 //! and `g_LightIndices` (4-byte entries), which the light-organize program writes and the tile-lighting pass and every
 //! forward material walk (fxc's disassembly of `GXLightOrganize16.cpo`, `GXRend_TileBasedLighting.ppo` and the forward
-//! materials), and the frame constants that place a pixel in them.
+//! materials; Elden Ring's `GXLightOrganize8.cpo` and `GXRend_TileBasedLighting.ppo` inspected with dxc), and the frame
+//! constants that place a pixel in them. Elden Ring's tile pass additionally discards when word 2 counts no eligible
+//! lights, even outside its debug view. Its conservative lists repeat the counts there because every entry is eligible.
 
 use fromsoft_formats::Game;
 use primase_core::shader::{
@@ -58,7 +60,8 @@ fn unknown(floats: u8, name: &str, why: &str) -> LightValue {
 }
 
 /// Tiles the lookup holds and entries the index list holds: the frames bind 2,040 and 130,560 (60 by 34 tiles of 32
-/// pixels at 1920 by 1080, 64 entries each).
+/// pixels at 1920 by 1080, 64 entries each) in Sekiro. Also the conservative consumer budget for Elden Ring, not a
+/// claim about its native allocation; a consumer may use larger tiles to stay inside this budget.
 const LOOKUP_CAPACITY: u32 = 2040;
 const INDEX_CAPACITY: u32 = 130_560;
 
@@ -67,8 +70,7 @@ fn bits(offset: u32, shift: u8, bits: u8) -> ListBits {
 }
 
 /// What a program's structured buffer `name` of `stride`-byte elements holds in `game` when it is the scene's lights
-/// ([`table`]) or one of the per-tile light lists ([`lists`]); `None` for any other buffer, and for Elden Ring's lists,
-/// whose encoding is not read.
+/// ([`table`]) or one of the per-tile light lists ([`lists`]); `None` for any other buffer.
 pub(crate) fn source(game: Game, name: &str, stride: u32) -> Option<BufferSource> {
     table(game, name, stride)
         .map(BufferSource::Lights)
@@ -80,16 +82,14 @@ pub(crate) fn source(game: Game, name: &str, stride: u32) -> Option<BufferSource
 /// The lookup's record: word 0 the tile's first entry; word 1's low 16 bits its point lights, its high 16 its spot
 /// lights, whose entries follow the points' (the forward materials and the tile-lighting pass walk the points from word
 /// 0, then the spots from where the points end); word 2 how many of each kind's entries have bit 31 set, which only the
-/// tile-lighting pass's debug view reads. An entry: the light's record in the low 16 bits; bits 16 to 30 the
+/// Sekiro tile-lighting pass's debug view reads; Elden Ring also rejects a tile when their sum is zero. An entry: the
+/// light's record in the low 16 bits; bits 16 to 30 the
 /// depth slices (a forward material skips the entry unless bit `16 + slice` is set, the slice from the pixel's depth
 /// through `FC_FrustumNear`, `FC_FrustumSliceScale` and `FC_FrustumSliceBias`, at most 14; the organize program sets
 /// the slices the light's depth range spans, a spot's all or none); bit 31 set where the light reaches the depth range of
 /// the tile's opaque pixels, the only entries the tile-lighting pass visits (the organize program's tests of each light
 /// against the tile's frustum and depth bounds).
 pub(crate) fn lists(game: Game, name: &str, stride: u32) -> Option<LightListPart> {
-    if game != Game::Sekiro {
-        return None;
-    }
     match (name, stride) {
         ("g_LightLookupBuffer", 12) => Some(LightListPart::Lookup(LightLookup {
             stride,
@@ -99,15 +99,25 @@ pub(crate) fn lists(game: Game, name: &str, stride: u32) -> Option<LightListPart
                 (LightTableKind::Point, bits(4, 0, 16)),
                 (LightTableKind::Spot, bits(4, 16, 16)),
             ],
+            count_copies: if game == Game::EldenRing {
+                vec![
+                    (LightTableKind::Point, bits(8, 0, 16)),
+                    (LightTableKind::Spot, bits(8, 16, 16)),
+                ]
+            } else {
+                Vec::new()
+            },
             constants: Vec::new(),
-            unknown: vec![ListUnknown {
-                bits: bits(8, 0, 32),
-                name: "lookup word 2".into(),
-                why: "how many of the tile's point (low 16 bits) and spot (high 16 bits) entries have bit 31 set, which \
-                    only the tile-lighting pass's debug view reads (it sums them and shows the sum as a colour); a \
-                    packing with that bit on every entry would hold the counts again"
-                    .into(),
-            }],
+            unknown: if game == Game::Sekiro {
+                vec![ListUnknown {
+                    bits: bits(8, 0, 32),
+                    name: "lookup word 2".into(),
+                    why: "point (low 16 bits) and spot (high 16 bits) counts with bit 31 set; Sekiro's tile pass \
+                        reads these only in its debug view, showing their sum as a colour".into(),
+                }]
+            } else {
+                Vec::new()
+            },
         })),
         ("g_LightIndices", 4) => Some(LightListPart::Indices(LightIndices {
             stride,
@@ -216,7 +226,7 @@ pub(crate) fn table(game: Game, name: &str, stride: u32) -> Option<LightTable> {
 /// and `FC_LightTile_NumCellX` (a pixel's tile is its position over the width, its record the tile's row times the
 /// cells per row plus its column, in the tile-lighting pass and the forward materials); `None` otherwise. Elden Ring's
 /// counts are the same (its light-organize program's loops over the two buffers end at them: dxc's disassembly of
-/// `GXLightOrganize8`); its lists and their tile constants are not read, so its tile constants are not bound.
+/// `GXLightOrganize8`), and its tile-lighting and forward programs index the same lists through those tile constants.
 pub(crate) fn frame_constant(game: Game, name: &str) -> Option<FrameParameter> {
     match (game, name) {
         (Game::Sekiro | Game::EldenRing, "g_lightCount") => {
@@ -225,8 +235,8 @@ pub(crate) fn frame_constant(game: Game, name: &str) -> Option<FrameParameter> {
         (Game::Sekiro | Game::EldenRing, "g_spotLightCount") => {
             Some(FrameParameter::LightCount(LightTableKind::Spot))
         }
-        (Game::Sekiro, "FC_LightTile_Width") => Some(FrameParameter::LightTileSize),
-        (Game::Sekiro, "FC_LightTile_NumCellX") => Some(FrameParameter::LightTilesPerRow),
+        (Game::Sekiro | Game::EldenRing, "FC_LightTile_Width") => Some(FrameParameter::LightTileSize),
+        (Game::Sekiro | Game::EldenRing, "FC_LightTile_NumCellX") => Some(FrameParameter::LightTilesPerRow),
         _ => None,
     }
 }
@@ -236,7 +246,7 @@ mod tests {
     use super::*;
 
     /// Both games' tables agree with themselves and their buffers' element sizes, and lie at the same offsets; both take
-    /// the light's own specular. Elden Ring's counts are bound, its tile constants not.
+    /// the light's own specular. Both games bind their counts and tile constants.
     #[test]
     fn the_light_tables_agree_with_their_buffers() {
         for (name, stride) in [("g_LightBuffer", 208), ("g_SpotLightBuffer", 192)] {
@@ -260,20 +270,31 @@ mod tests {
                 Some(FrameParameter::LightCount(LightTableKind::Point))
             );
         }
-        assert_eq!(frame_constant(Game::EldenRing, "FC_LightTile_Width"), None);
+        for game in [Game::Sekiro, Game::EldenRing] {
+            assert_eq!(
+                frame_constant(game, "FC_LightTile_Width"),
+                Some(FrameParameter::LightTileSize)
+            );
+            assert_eq!(
+                frame_constant(game, "FC_LightTile_NumCellX"),
+                Some(FrameParameter::LightTilesPerRow)
+            );
+        }
     }
 
-    /// Both list parts agree with themselves and their buffers' element sizes; Elden Ring has none yet.
+    /// Both games' list parts agree with themselves and their buffers' element sizes.
     #[test]
-    fn sekiros_light_lists_agree_with_their_buffers() {
+    fn both_games_light_lists_agree_with_their_buffers() {
         for (name, stride) in [("g_LightLookupBuffer", 12), ("g_LightIndices", 4)] {
-            let part = lists(Game::Sekiro, name, stride).expect(name);
-            assert_eq!(part.verify(Some(stride)), Ok(()), "{name}");
-            assert!(lists(Game::EldenRing, name, stride).is_none());
-            assert!(matches!(
-                source(Game::Sekiro, name, stride),
-                Some(BufferSource::LightLists(_))
-            ));
+            for game in [Game::Sekiro, Game::EldenRing] {
+                let part = lists(game, name, stride).expect(name);
+                assert_eq!(part.verify(Some(stride)), Ok(()), "{name}");
+                assert!(lists(game, name, stride + 4).is_none());
+                assert!(matches!(
+                    source(game, name, stride),
+                    Some(BufferSource::LightLists(_))
+                ));
+            }
         }
     }
 }
