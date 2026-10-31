@@ -9,7 +9,7 @@ use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_core::{AmbientLight, Environment, World};
 use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::sekiro;
-use primase_fromsoft::sekiro::source::{DefaultHour, DrawField, DrawGroup, DrawParam, FieldType, SetChosen};
+use primase_fromsoft::sekiro::source::{DrawField, DrawGroup, DrawParam, FieldType, SetChosen};
 
 #[test]
 fn hemisphere_coefficients_match_the_captured_light_sets_bit_for_bit()
@@ -65,10 +65,6 @@ fn hemisphere_coefficients_match_the_captured_light_sets_bit_for_bit()
             chosen: SetChosen::OnlySet,
             fields,
         }],
-        default_hour: DefaultHour {
-            hour: 18.,
-            source: "the captured frame's observed key".into(),
-        },
     };
     let mut world = World::new();
     world.insert_resource(draw);

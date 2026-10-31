@@ -51,7 +51,7 @@
 //!
 //! A field of one sample is the game's at every hour (the lookup's one key) and stays as stored; so do the sets the read
 //! left unresolved, which are not part of the scene's environment. `lower-fromsoft-environment` samples the same way at
-//! the read's default hour where no program chose one ([`sample_at`]). The hour is the scene's: the pass states it as the
+//! the lowering pass's default hour where no program chose one ([`sample_at`]). The hour is the scene's: the pass states it as the
 //! world's `core.time_of_day`, which the programs that key their values by the hour read.
 use crate::sekiro::source::{DrawField, DrawParam, FieldType, SetChosen};
 use fromsoft_formats::Game;
@@ -61,6 +61,37 @@ use primase_core::pass::{Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::{TimeOfDay, World};
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
+
+/// A lowering pass's documented fallback, never data attached by a reader.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DefaultHour {
+    pub hour: f32,
+    pub source: String,
+}
+
+/// The hour of the day the lowering passes of `game` is lowered at where the program samples none, and where it comes from. Neither
+/// game's data states the hour a map is entered at (`tests/time_of_day_census.rs`, every event script of the installs):
+/// - Sekiro has no clock. Its scripts set a period of the day by story event (`2003:81` and `2002:13`, the schema's
+///   morning, noon, afternoon, evening and night), and no param maps a period to an hour, so that mapping is the
+///   executable's. A file's time-of-day keys are hours (0, 2, 4, 6, 12, 18 and 22 in `m11_01_0000`'s light set), and
+///   the first, hour 0, is black in some sets: no sun, a state no frame of the game has shown. A running game on
+///   `m11_01` showed the sun of the 18:00 keys (its `cbLight` equal to `DiffColor0` and `SpecColor0` at 18:00, to float
+///   precision): 18 is that observed hour.
+/// - Elden Ring keeps a clock that passes through every hour; its scripts set it only in story and NPC events (nine
+///   `2001:4` calls, at 3:30, 8:00, 10:30, 22:30 and 23:45), none on entering a map: 12, noon, is chosen.
+pub(crate) fn default_hour(game: Game) -> DefaultHour {
+    let (hour, source) = match game {
+        Game::Sekiro => (
+            18.0,
+            "observed on m11_01 in one running game (cbLight equal to the 18:00 keys); the period-to-hour mapping is in the executable",
+        ),
+        _ => (12.0, "no entering hour in the data; noon chosen"),
+    };
+    DefaultHour {
+        hour,
+        source: source.to_owned(),
+    }
+}
 
 /// What a sampling counts for each field it sampled at the hour.
 pub const SAMPLED: &str = "draw-param fields sampled at the hour";
@@ -601,6 +632,23 @@ fn unescape(key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each game's lowering pass states its default hour and where it comes from: Sekiro's the hour a running game showed,
+    /// Elden Ring's a chosen noon.
+    #[test]
+    fn a_lowering_pass_states_its_games_default_hour() {
+        let sekiro = default_hour(Game::Sekiro);
+        assert_eq!(sekiro.hour, 18.0);
+        assert!(
+            sekiro.source.starts_with("observed on m11_01"),
+            "{}",
+            sekiro.source
+        );
+        let elden = default_hour(Game::EldenRing);
+        assert_eq!(elden.hour, 12.0);
+        assert_eq!(elden.source, "no entering hour in the data; noon chosen");
+    }
+
     use crate::sekiro::source::DrawGroup;
     use fromsoft_formats::gparam::TimeAxis;
     use primase_core::pass::{PassManager, PassRegistry, RunReport};
@@ -643,7 +691,6 @@ mod tests {
                 chosen,
                 fields,
             }],
-            default_hour: crate::sekiro::read::draw_param::default_hour(game),
         });
         w
     }

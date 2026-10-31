@@ -20,7 +20,7 @@ use primase_core::World;
 use primase_core::pass::{PassManager, PassRegistry, RunReport};
 use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::sekiro::passes::draw_params::{AT_KEY, SAMPLE_FROMSOFT_DRAW_PARAMS, SAMPLED};
-use primase_fromsoft::sekiro::source::{DefaultHour, DrawField, DrawGroup, DrawParam, FieldType, SetChosen};
+use primase_fromsoft::sekiro::source::{DrawField, DrawGroup, DrawParam, FieldType, SetChosen};
 use std::collections::{BTreeMap, BTreeSet};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -77,10 +77,6 @@ fn environment(game: Game, stem: &str, data: &Gparam) -> DrawParam {
         version: data.version,
         time: data.time,
         groups,
-        default_hour: DefaultHour {
-            hour: 12.0,
-            source: "this test".into(),
-        },
     }
 }
 

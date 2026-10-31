@@ -31,8 +31,8 @@
 //! fields they change.
 //!
 //! A field stored at several hours of the day, where the program sampled none (`sample-fromsoft-draw-params`), is
-//! lowered at the read's default hour, sampled the same way, and the choice is counted with where the hour comes from
-//! ([`crate::sekiro::read::draw_param::default_hour`]: neither game's data states the hour a map is entered at). That
+//! lowered at the lowering pass's default hour, sampled the same way, and the choice is counted with where the hour comes from
+//! ([`crate::sekiro::passes::draw_params::default_hour`]: neither game's data states the hour a map is entered at). That
 //! hour is the scene's then: where no program stated one (`core.time_of_day`), the pass states the default hour, counted
 //! with its source, for the programs that key their values by the hour (Elden Ring's sky).
 //!
@@ -289,7 +289,7 @@ impl Pass for LowerFromSoftEnvironment {
             log.count("areas with no draw-param environment", 1);
             return Ok(());
         };
-        // a field still stored at several hours (the program sampled no hour) is lowered at the read's default hour,
+        // a field still stored at several hours (the program sampled no hour) is lowered at the lowering pass's default hour,
         // sampled as `sample-fromsoft-draw-params` samples; the stored environment is left as it is
         let several = env
             .groups
@@ -303,9 +303,9 @@ impl Pass for LowerFromSoftEnvironment {
                 samples.values().filter(|n| **n > 1).count() as u64
             })
             .sum::<u64>();
-        // no program chose the scene's hour: it is the read's default, stated for the programs that read the hour
+        // no program chose the scene's hour: it is the lowering pass's default, stated for the programs that read the hour
         if world.resource::<TimeOfDay>().is_none() {
-            let default = &env.default_hour;
+            let default = super::draw_params::default_hour(env.game);
             world.insert_resource(TimeOfDay { hour: default.hour });
             log.approximate(
                 &format!(
@@ -316,7 +316,7 @@ impl Pass for LowerFromSoftEnvironment {
             );
         }
         if several > 0 {
-            let default = env.default_hour.clone();
+            let default = super::draw_params::default_hour(env.game);
             super::draw_params::sample_at(&mut env, default.hour, log)?;
             log.approximate(
                 &format!(
@@ -522,12 +522,11 @@ mod tests {
             version: 5,
             time: None,
             groups,
-            default_hour: crate::sekiro::read::draw_param::default_hour(fromsoft_formats::Game::Sekiro),
         });
         w
     }
 
-    /// A light set stored at several hours, and no hour sampled: the sun is the read's default hour's (Sekiro's 18:00,
+    /// A light set stored at several hours, and no hour sampled: the sun is the lowering pass's default hour's (Sekiro's 18:00,
     /// between the keys at 12 and 22 here), not the first stored sample's (black at hour 0: no sun), and the choice is
     /// counted with where the hour comes from.
     #[test]
@@ -554,7 +553,7 @@ mod tests {
         let light = w.get::<Light>(sun).unwrap();
         close(light.color, [0.49; 3]);
         assert!((light.intensity - 1.6).abs() < 1e-5, "{}", light.intensity);
-        let default = crate::sekiro::read::draw_param::default_hour(fromsoft_formats::Game::Sekiro);
+        let default = crate::sekiro::passes::draw_params::default_hour(fromsoft_formats::Game::Sekiro);
         assert_eq!(
             log.approximations[&format!(
                 "draw-param fields stored at several hours of the day lowered at the default hour 18:00, {} (`sample-fromsoft-draw-params` chooses another)",
@@ -700,7 +699,7 @@ mod tests {
             2
         );
         assert_eq!(log.omitted.len(), 3, "{:?}", log.omitted);
-        // no program chose the hour: the scene's is the read's default, counted
+        // no program chose the hour: the scene's is the lowering pass's default, counted
         assert!(
             log.approximations
                 .keys()
@@ -965,7 +964,6 @@ mod tests {
         let mut w = world_with(groups);
         let mut env = w.resource::<DrawParam>().cloned().unwrap();
         env.game = fromsoft_formats::Game::EldenRing;
-        env.default_hour = crate::sekiro::read::draw_param::default_hour(fromsoft_formats::Game::EldenRing);
         w.insert_resource(env);
         w
     }

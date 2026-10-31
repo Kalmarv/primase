@@ -50,9 +50,10 @@ impl Pass for LowerSekiroReinhard {
                 return Ok(());
             }
         };
-        let hour = world
-            .resource::<primase_core::TimeOfDay>()
-            .map_or(draw.default_hour.hour, |time| time.hour);
+        let hour = world.resource::<primase_core::TimeOfDay>().map_or_else(
+            || super::draw_params::default_hour(draw.game).hour,
+            |time| time.hour,
+        );
         super::draw_params::sample_at(&mut draw, hour, log)?;
         let lookup = match selected_lookup(&draw, world.resource::<crate::sekiro::source::PostLookup>()) {
             Ok(lookup) => {

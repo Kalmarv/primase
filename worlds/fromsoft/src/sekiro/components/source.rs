@@ -724,8 +724,6 @@ pub struct DrawParam {
     /// time-of-day keys are looked up at ([`fromsoft_formats::gparam::TimeAxis::sampling`]). `None` before version 5.
     pub time: Option<fromsoft_formats::gparam::TimeAxis>,
     pub groups: Vec<DrawGroup>,
-    /// The hour a field stored at several hours is lowered at where the program samples none.
-    pub default_hour: DefaultHour,
 }
 
 /// Steady native Reinhard scalars. Gamma and later display stages are separate source facts.
@@ -735,19 +733,9 @@ pub struct Reinhard {
     pub white_balance: f32,
 }
 
-/// The hour of the day a read's environment is lowered at where the program chooses none
-/// (`sample-fromsoft-draw-params`), and where it comes from: the game's own hour of entering the map where its data
-/// states one, a stated default where it does not ([`crate::sekiro::read::draw_param::default_hour`]).
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct DefaultHour {
-    /// The hour of the game's clock, 0 to 24 (Elden Ring's; Sekiro, which keeps none, the hour its keys are stored at).
-    pub hour: f32,
-    /// Where it comes from, in a few words (the read's notices show it).
-    pub source: String,
-}
 impl Resource for DrawParam {
     const NAME: &'static str = "fromsoft.draw_param";
-    const VERSION: u32 = 2;
+    const VERSION: u32 = 3;
     fn to_json(&self) -> Result<Option<Value>, JsonError> {
         to_value(self).map(Some)
     }

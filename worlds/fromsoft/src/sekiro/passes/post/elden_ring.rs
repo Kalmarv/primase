@@ -61,9 +61,10 @@ impl Pass for LowerEldenRingReinhard {
         if draw.game != Game::EldenRing {
             return Ok(());
         }
-        let hour = world
-            .resource::<primase_core::TimeOfDay>()
-            .map_or(draw.default_hour.hour, |time| time.hour);
+        let hour = world.resource::<primase_core::TimeOfDay>().map_or_else(
+            || super::super::draw_params::default_hour(draw.game).hour,
+            |time| time.hour,
+        );
         super::super::draw_params::sample_at(&mut draw, hour, log)?;
         let mut atmosphere = world.resource::<Atmosphere>().cloned().unwrap_or_default();
         // A later unsupported selection must not leave the earlier selection's curve active.
@@ -114,7 +115,7 @@ impl Pass for LowerEldenRingReinhard {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sekiro::source::{DefaultHour, DrawField, DrawGroup, FieldType, SetChosen};
+    use crate::sekiro::source::{DrawField, DrawGroup, FieldType, SetChosen};
 
     #[test]
     fn an_unsupported_selection_removes_the_old_curve_without_removing_exposure() {
@@ -145,12 +146,9 @@ mod tests {
                 chosen: SetChosen::ZeroId,
                 fields,
             }],
-            default_hour: DefaultHour {
-                hour: 13.,
-                source: "explicit fixture".into(),
-            },
         };
         let mut world = World::new();
+        world.insert_resource(primase_core::TimeOfDay { hour: 13. });
         let exposure = primase_core::Exposure { stops: 2. };
         world.insert_resource(Atmosphere {
             exposure: Some(exposure.clone()),
