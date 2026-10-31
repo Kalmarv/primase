@@ -5,9 +5,35 @@ mod inputs;
 use fromsoft_formats::{Game, Keys, dcx::Decoder};
 use inputs::{Game as Data, Tool, install, keys, oodle};
 use primase_core::convert::Reader;
-use primase_fromsoft::sekiro::{CharacterReader, character_outfits};
+use primase_fromsoft::sekiro::{CharacterOutfit, CharacterReader, OutfitVariants};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+// Setup-only migration: the program states the same presentation/level choices through the registered pass.
+fn character_outfits(
+    install: &fromsoft_formats::Install,
+    archive: &fromsoft_formats::Archive,
+    decoder: &Decoder<'_>,
+) -> Result<Vec<CharacterOutfit>> {
+    let mut world = primase_core::World::new();
+    world.insert_resource(primase_fromsoft::sekiro::character_outfits(
+        install, archive, decoder,
+    )?);
+    let mut registry = primase_core::pass::PassRegistry::new();
+    primase_fromsoft::sekiro::passes::register(&mut registry);
+    let pipeline = registry
+        .parse("select-fromsoft-initializer-outfits{initializer=all,presentation=both,level=prefer-low}")?;
+    primase_core::pass::PassManager::new(registry).run(
+        &mut world,
+        &pipeline,
+        &mut primase_core::pass::RunReport::default(),
+    )?;
+    Ok(world
+        .resource::<OutfitVariants>()
+        .ok_or("no outfit variants")?
+        .0
+        .clone())
+}
 
 #[test]
 fn installed_initializer_catalogs_and_the_sekiro_outfit_reader_keep_authored_parts() -> Result<()> {
