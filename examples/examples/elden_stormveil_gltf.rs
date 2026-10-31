@@ -20,6 +20,13 @@ use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::sekiro;
 use primase_fromsoft::sekiro::area_plan::AreaSelection;
 use primase_fromsoft::sekiro::convert::AreaReader;
+use primase_fromsoft::sekiro::groups::DisplayGroups;
+use primase_fromsoft::sekiro::passes::bake_materials::Cache;
+use primase_fromsoft::sekiro::program::{AreaGame, AreaPreparation};
+use primase_fromsoft::sekiro::sky::Sky;
+use primase_fromsoft::sekiro::source::StateReadScope;
+use primase_fromsoft::sekiro::texture_switch::TextureQuality;
+use primase_fromsoft::sekiro::{AreaRead, Parents, StateClasses};
 
 #[path = "../tests/inputs/mod.rs"]
 mod inputs;
@@ -28,48 +35,57 @@ mod inputs;
 const AREA: &str = "m10_00_00_00";
 
 /// The slice: the ground rectangle `[west, south, east, north]` in metres of the area's frame (x east, z along the
-/// ground), and how far past it a placement's model may reach and still be kept.
+/// ground).
 const REGION: &str = "rect:-162:5:108:250";
-const MARGIN: f32 = 30.0;
 
 /// The draw-param file whose graphics environment (sun, ambient, fog, sky, tone) the area is lit with: the file of
 /// this stem, one the install holds for the map.
 const ENVIRONMENT: &str = "file:m10_00_0000";
 
 /// The hour of the game's clock (0 to 24) at which each time-of-day field of that environment is sampled: noon.
-const HOUR: &str = "12";
+const HOUR: f32 = 12.0;
 
-/// The area's lowering up to the environment: the frame the game draws (render graph), the area's collision cropped to
-/// 50 m of the slice and its objects' collision (the high-resolution file where one is stored, else the low one; every
-/// motion type; convex bodies rounded within 1 cm and drawn with the render surface), static meshes posed, the geometry
-/// (UVs kept as authored, windings from the normals, degenerate triangles dropped; light volumes, shadow proxies and
-/// billboard cards left out, blocker cards recorded; the sky is kept for `lower-fromsoft-sky`), and the finest level
-/// of detail.
-const LOWER_GEOMETRY: &[&str] = &[
-    "lower-fromsoft-render-graph",
-    "lower-fromsoft-collision{reach=50}",
-    "lower-fromsoft-object-collision{resolution=high-else-low,convex=rounded:0.01,motion=all,convex-surface=render,reach=50}",
-    "fromsoft-apply-rigid-skinning",
-    "lower-fromsoft-geometry{pose=rigid,uv-tiling=keep,winding=normals,degenerates=drop,leave-out=light-volume+shadow+billboard,blocker-cards=record,speedtree-frame=program}",
-    "select-lod{form=finest}",
-];
+/// The area's lowering, as primase's FromSoft preparation program states it, with this program's choices: Elden Ring,
+/// the sky read with the area and lowered after the environment, water without a texture `water_colour` (sRGB bytes, a
+/// linear alpha byte), the environment sampled at `HOUR`, no environment probes, weather, irradiance or effects, and
+/// the material bake storing nothing in a memo store (`Cache::Off`).
+fn preparation() -> AreaPreparation {
+    AreaPreparation {
+        game: AreaGame::EldenRing,
+        sky: true,
+        water_colour: [48, 98, 122, 190],
+        hour: Some(HOUR),
+        environment_probes: false,
+        weather: false,
+        irradiance_package: None,
+        irradiance_states: false,
+        effects: false,
+        bake_cache: Cache::Off,
+    }
+}
 
-/// The rest of the lowering, after `sample-fromsoft-draw-params{hour=HOUR}`: the environment lowered with one lux for a
-/// colour of 1, its tone map, the materials (layers preserved, the shader program of each bound and baked at 2048 px,
-/// water of one colour where it has no texture), the lights (one candela for a unit of power, spot blend 0.15, a
-/// range of at least 0.5 m), the sky, the extras, the map's regions and events (none left out) and the entities' names.
-const LOWER_SURFACES: &[&str] = &[
-    "lower-fromsoft-environment{lux-per-unit=1}",
-    "lower-elden-ring-reinhard",
-    "resolve-fromsoft-shaders{unbound-textures=preview}",
-    "lower-fromsoft-materials{layers=preserve,water-colour=48,98,122,190}",
-    "bake-fromsoft-materials{max-size=2048,sample-time=0}",
-    "lower-fromsoft-lights{candela-per-power=1,spot-blend=0.15,min-range=0.5}",
-    "lower-fromsoft-sky",
-    "lower-fromsoft-extras",
-    "lower-fromsoft-map-records{leave-out=}",
-    "name-fromsoft-entities{game=elden}",
-];
+/// The area reader's choices beyond the selected region and environment file: a 30 m margin around the slice, the map
+/// records and the render graph read, the sky included, and everything else off or at its highest quality.
+fn read() -> AreaRead {
+    AreaRead {
+        margin: 30.0,
+        state_inputs: StateReadScope { weather: false, common: false },
+        states: StateClasses::None,
+        display_groups: DisplayGroups::None,
+        parents: Parents::None,
+        environment_collision: None,
+        object_animations: false,
+        map_records: true,
+        f_collision: false,
+        effect_lights: false,
+        sky: Sky::Include,
+        render_graph: true,
+        irradiance: false,
+        effects: false,
+        low_textures: false,
+        texture_quality: TextureQuality::Max,
+    }
+}
 
 /// What the glTF writer needs of the world, in order: unit normals, a texture coordinate set on every primitive
 /// (zeros where one lacks it), a base colour of light grey, a metallic factor of 0 and a roughness of 0.85 for a
@@ -87,10 +103,10 @@ fn selection() -> String {
     format!("select-fromsoft-area{{region={REGION},environment={ENVIRONMENT}}}")
 }
 
-/// The lowering and the writer's preparation, with the stated hour sampled before the environment is lowered.
+/// The lowering and the writer's preparation.
 fn lowering() -> Vec<String> {
-    let hour = format!("sample-fromsoft-draw-params{{hour={HOUR}}}");
-    [LOWER_GEOMETRY, &[hour.as_str()], LOWER_SURFACES, WRITER].concat().into_iter().map(str::to_owned).collect()
+    let writer = WRITER.iter().map(|text| (*text).to_owned());
+    preparation().texts().into_iter().chain(writer).collect()
 }
 
 fn registry() -> PassRegistry {
@@ -131,25 +147,8 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("{selected}");
     let scope = candidates.resource::<AreaSelection>().ok_or("select-fromsoft-area stated no load scope")?;
 
-    // The area, read at that scope. Every option of the read is written out.
-    let options = sekiro::Options {
-        state_inputs: sekiro::source::StateReadScope { weather: false, common: false },
-        region: scope.read_region(MARGIN),
-        states: sekiro::StateClasses::None,
-        display_groups: sekiro::groups::DisplayGroups::None,
-        parents: sekiro::Parents::None,
-        draw_param: scope.read_draw_params(),
-        object_animations: false,
-        map_records: true,
-        f_collision: false,
-        effect_lights: false,
-        sky: sekiro::sky::Sky::Include,
-        render_graph: true,
-        irradiance: false,
-        effects: false,
-        low_textures: false,
-        texture_quality: sekiro::texture_switch::TextureQuality::Max,
-    };
+    // The area, read at that scope, with the read's stated choices.
+    let options = read().options(scope);
     let mut reader = AreaReader::of(install, AREA, decoder, options);
     let (mut world, _) = reader.read()?;
     scope.scope.record_in(&mut world);
