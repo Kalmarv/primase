@@ -1852,6 +1852,14 @@ impl Reader for CharacterReader<'_> {
                 ),
             ));
         }
+        if self.install.game == Game::EldenRing && self.assembly_reference.is_some() {
+            self.pending.push(Notice::new(
+                "fromsoft",
+                NoticeKind::Unsupported,
+                super::outfits::PLAYER_APPEARANCE_OMISSION,
+                1,
+            ));
+        }
         self.pending.extend(cloth_runtime_notices(
             self.install.game,
             world

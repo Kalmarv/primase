@@ -192,6 +192,8 @@ fn all_elden_starting_classes_bind_cloth_against_their_assembled_hierarchy() -> 
     use primase_core::{Asset, JointMap, Role, Skeleton};
     use std::collections::BTreeMap;
 
+    let appearance_notice = "player body and face not drawn (character-creator meshes not in scope)";
+
     let (Some(root), Some(folder), Some(library)) =
         (install(Data::Elden), keys(Data::Elden), oodle(Tool::Oodle6))
     else {
@@ -238,9 +240,9 @@ fn all_elden_starting_classes_bind_cloth_against_their_assembled_hierarchy() -> 
                 if outfit.unresolved.is_empty() {
                     result["reason"] = serde_json::json!(["initializer resolves no drawable parts"]);
                 }
-                // The no-protector initializer is retained in the census while its base-body producer is
-                // investigated separately. It must not hide a failure of any clothed class or missing protector.
-                if row != 3009 || !outfit.parts.is_empty() || !outfit.unresolved.is_empty() {
+                // The no-protector initializer names the omitted character-creator meshes. It must not hide
+                // a failure of any clothed class or missing protector.
+                if row != 3009 || !outfit.parts.is_empty() || outfit.unresolved != [appearance_notice] {
                     failures.push(format!("{key}: {}", result["reason"]));
                 }
                 println!("STARTING_CLASS {}", serde_json::to_string(&result)?);
@@ -257,6 +259,15 @@ fn all_elden_starting_classes_bind_cloth_against_their_assembled_hierarchy() -> 
                 )
                 .map_err(|e| e.to_string())?;
                 let (mut world, _) = reader.read().map_err(|e| e.to_string())?;
+                let notices = reader
+                    .notices()
+                    .into_iter()
+                    .map(|notice| notice.to_string())
+                    .collect::<Vec<_>>();
+                if !notices.iter().any(|notice| notice.contains(appearance_notice)) {
+                    return Err("outfit reader did not disclose its missing player body and face".into());
+                }
+                result["appearance_notice"] = appearance_notice.into();
                 result["status"] = "assembly-refused".into();
                 let mut registry = PassRegistry::new();
                 primase_fromsoft::sekiro::passes::register(&mut registry);

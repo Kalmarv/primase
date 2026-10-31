@@ -9,6 +9,10 @@ use fromsoft_formats::{Archive, Game, Install, Result, dcx::Decoder};
 
 use crate::invalid;
 
+/// The reader supplies protector parts; player character-creator geometry is outside its current scope.
+pub(super) const PLAYER_APPEARANCE_OMISSION: &str =
+    "player body and face not drawn (character-creator meshes not in scope)";
+
 /// Which spelling the viewer permits where an initializer's protector permits both player presentations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum OutfitGender {
@@ -115,10 +119,13 @@ pub fn outfits_from_params(
                     || spelling == Some(gender.key()))
                     && has(part)
             });
-            let (parts, unresolved, chosen_by_presence) = match resolved {
+            let (parts, mut unresolved, chosen_by_presence) = match resolved {
                 Ok(parts) => (parts.parts, parts.unresolved, parts.chosen_by_presence),
                 Err(error) => (Vec::new(), vec![error.to_string()], Vec::new()),
             };
+            if game == Game::EldenRing && parts.is_empty() && unresolved.is_empty() {
+                unresolved.push(PLAYER_APPEARANCE_OMISSION.into());
+            }
             if variants
                 .iter()
                 .any(|existing| existing.parts == parts && existing.unresolved == unresolved)
