@@ -28,7 +28,6 @@ use primase_fromsoft::game::ParamKey;
 use primase_fromsoft::sekiro::{
     self,
     collision::{FMeshes, LowerFromSoftCollision},
-    settings::HitFilters,
     source::{CollisionSource, MapCollision},
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -297,7 +296,7 @@ fn measure(game: Game, install: &Install, decoder: &Decoder<'_>, map: &str) -> R
         report.collision.empty_f_files, *empty,
         "{map}: the f files without a body"
     );
-    let (filters, f_files, h_total, f_total, first_vertices, other_file, other_grid) = {
+    let (_filters, f_files, h_total, f_total, first_vertices, other_file, other_grid) = {
         let records: Vec<&MapCollision> = world.iter::<MapCollision>().map(|(_, r)| r).collect();
         let paired: Vec<&&MapCollision> = records.iter().filter(|r| !r.f_triangles.is_empty()).collect();
         // the f files read are the records with triangles and the named files without a body (Ashina Castle: 191 read,
@@ -343,10 +342,19 @@ fn measure(game: Game, install: &Install, decoder: &Decoder<'_>, map: &str) -> R
             other_grid,
         )
     };
+    // This frame test compares all authored h triangles to f triangles, independent of lowering classification.
+    // Replace its removed all-ID settings with explicit synthetic named metadata; the reader's raw IDs stay intact.
+    let files: Vec<_> = world.iter::<MapCollision>().map(|(e, _)| e).collect();
+    for e in files {
+        let record = world.get_mut::<MapCollision>(e).unwrap();
+        for part in &mut record.parts {
+            part.filter_meaning = fromsoft_formats::collision::HitFilterMeaning::Physical;
+        }
+        record
+            .material_meanings
+            .fill(fromsoft_formats::collision::HitMeaning::Other);
+    }
     let pass = LowerFromSoftCollision {
-        hit_filters: HitFilters::new(filters).unwrap(),
-        water: BTreeSet::new(),
-        leave_out: BTreeSet::new(),
         reach: None,
         f_meshes: FMeshes::On,
     };

@@ -2,7 +2,7 @@
 //! How convex shapes become triangles, which motion types and HitMtrl classes become collision, the surface of
 //! convex bodies (which store none) and the crop are its options.
 use super::collision::{attach, beyond, crop, game_of, owned, push, surface_of};
-use super::settings::{HitClass, Metres, joined};
+use super::settings::Metres;
 use crate::pose::FRAME;
 use crate::sekiro::{
     source::MaterialSlots, source::ObjectBodies, source::ObjectBody, source::ObjectGeometry,
@@ -10,6 +10,7 @@ use crate::sekiro::{
 use crate::{components::models::SourceModel, materials::Material};
 use fromsoft_formats::affine::posed;
 use fromsoft_formats::collision::{BodyGeometry, shape_to_file};
+use fromsoft_formats::collision::{HitMeaning, MotionKind};
 use fromsoft_formats::game::Resolution;
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::state::Condition;
@@ -19,6 +20,23 @@ use primase_core::{
 use primase_havok::ConvexCore;
 use primase_meshops::vector::Vec3;
 use std::collections::{BTreeMap, BTreeSet};
+
+/// Whether a collision export includes authored dynamic bodies at their stored pose.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MotionSelection {
+    /// Include every body; this does not simulate its motion.
+    All,
+    /// Exclude bodies named Dynamic, retaining unknown kinds with the stored-pose approximation.
+    Fixed,
+}
+impl Choice for MotionSelection {
+    const VALUES: &'static [(&'static str, Self)] = &[("all", Self::All), ("fixed", Self::Fixed)];
+}
+impl MotionSelection {
+    fn includes(self, kind: MotionKind) -> bool {
+        self == Self::All || kind != MotionKind::Dynamic
+    }
+}
 
 /// The approximation both collision lowerings state for a body of any motion type they lower.
 const STORED_POSE: &str = "bodies placed at their stored pose, their motion type not interpreted";
@@ -75,7 +93,7 @@ fn largest_render_surface(world: &World, prototype: Entity) -> std::result::Resu
 }
 
 /// A body's triangles in its prototype's space and their HitMtrl IDs.
-type BodyTriangles = (Vec<[[f32; 3]; 3]>, Vec<i32>);
+type BodyTriangles = (Vec<[[f32; 3]; 3]>, Vec<i32>, Vec<HitMeaning>);
 
 /// The surface `lower-fromsoft-object-collision` gives convex bodies, which store no material.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -155,28 +173,14 @@ impl ConvexBodies {
     }
 }
 
-/// `lower-fromsoft-object-collision{convex=tessellate|rounded:<metres>|leave-out}`: every placed object prototype's bodies
-/// (`fromsoft.object_collision`, of the files of the chosen resolution) through each placement's transform, at their stored pose whatever their motion type
-/// (not interpreted), as one `objects` soup, a placement present only in some world states into an
-/// `objects_state<n>` soup with its condition; the bodies of the placed prototypes consumed, unplaced ones' kept.
-/// Each triangle gets its HitMtrl class's surface (`default` without one, counted). In a part of a conversion
-/// (`core.part_scope`), only the placements its roots reach are lowered: a context placement's collision is its own
-/// part's.
-///
-/// Every field is the program's choice, stated (no default): `resolution`, which stored files are placed
-/// ([`ResolutionChoice`]; a prototype with none of them is counted); `convex`, what convex bodies become (a soup cannot hold a
-/// rounded shape, so the program chooses its approximation); `leave_out`, HitMtrl classes (an ID's base value, modulo
-/// 100) not lowered, counted; `leave_out_motion`, stored motion types whose bodies are not lowered, counted;
-/// `convex_surface` ([`ConvexSurface`]); `reach`, leaving out, counted, the triangles whose centre lies more than that
-/// many metres outside the read region (`fromsoft.read_scope`), or `None` for no crop. Options, all required:
-/// `resolution=high|low|high-else-low`, `convex=tessellate|rounded:<metres>|leave-out`, `leave-out=` classes and `leave-out-motion=` types joined by `+` (empty: none),
-/// `convex-surface=default|render`, `reach=N|none`.
+/// Place object collision using named material and motion metadata retained by the reader. Swimming water,
+/// Empty and Cloud classes do not form solid object collision. Unknown materials remain counted geometry.
+/// Resolution, convex approximation, surface inference, crop and including dynamic bodies are real choices.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LowerFromSoftObjectCollision {
     pub resolution: ResolutionChoice,
     pub convex: ConvexBodies,
-    pub leave_out: BTreeSet<HitClass>,
-    pub leave_out_motion: BTreeSet<u64>,
+    pub motion: MotionSelection,
     pub convex_surface: ConvexSurface,
     pub reach: Option<Metres>,
 }
@@ -184,20 +188,10 @@ pub struct LowerFromSoftObjectCollision {
 impl LowerFromSoftObjectCollision {
     /// From its declared options.
     fn from_given(g: &Given) -> std::result::Result<Self, String> {
-        let leave_out_motion = g
-            .required("leave-out-motion")
-            .split('+')
-            .filter(|m| !m.is_empty())
-            .map(|m| {
-                m.parse::<u64>()
-                    .map_err(|_| format!("leave-out-motion: {m} is not a motion type"))
-            })
-            .collect::<std::result::Result<_, _>>()?;
         Ok(LowerFromSoftObjectCollision {
             resolution: g.choice("resolution"),
             convex: ConvexBodies::parse(g.required("convex"))?,
-            leave_out: HitClass::parse_set("leave-out", g.required("leave-out"))?,
-            leave_out_motion,
+            motion: g.choice("motion"),
             convex_surface: g.choice("convex-surface"),
             reach: Metres::parse_or_none("reach", g.required("reach"))?,
         })
@@ -211,7 +205,23 @@ impl LowerFromSoftObjectCollision {
         log: &mut PassLog,
     ) -> std::result::Result<Option<BodyTriangles>, String> {
         match &body.geometry {
-            ObjectGeometry::Mesh { triangles, materials } => Ok(Some((triangles.clone(), materials.clone()))),
+            ObjectGeometry::Mesh {
+                triangles,
+                materials,
+                material_meanings,
+            } => {
+                if triangles.len() != materials.len() || materials.len() != material_meanings.len() {
+                    return Err(format!(
+                        "body {}: triangles, material IDs and named meanings differ in length",
+                        body.name
+                    ));
+                }
+                Ok(Some((
+                    triangles.clone(),
+                    materials.clone(),
+                    material_meanings.clone(),
+                )))
+            }
             ObjectGeometry::Convex { .. } if self.convex == ConvexBodies::LeaveOut => {
                 log.count("convex bodies left out", 1);
                 Ok(None)
@@ -254,7 +264,7 @@ impl LowerFromSoftObjectCollision {
                     }
                 }
                 let n = triangles.len();
-                Ok(Some((triangles, vec![-1; n])))
+                Ok(Some((triangles, vec![-1; n], vec![HitMeaning::Unbound; n])))
             }
         }
     }
@@ -274,15 +284,9 @@ pub const LOWER_FROMSOFT_OBJECT_COLLISION: PassSpec = PassSpec {
             "tessellate",
             "convex bodies tessellated, rounded:<metres> (within that error, above 0), or leave-out",
         ),
-        OptionSpec::required(
-            "leave-out",
-            "22+29+36+40",
-            "HitMtrl classes (0 to 99) not lowered (counted), joined by + (empty for none)",
-        ),
-        OptionSpec::required(
-            "leave-out-motion",
-            "2",
-            "stored motion types whose bodies are not lowered (counted), joined by + (empty for none)",
+        OptionSpec::choice::<MotionSelection>(
+            "motion",
+            "all stored bodies, or fixed bodies without positive-mass dynamics",
         ),
         OptionSpec::choice::<ConvexSurface>(
             "convex-surface",
@@ -306,8 +310,7 @@ impl Pass for LowerFromSoftObjectCollision {
         Options::from([
             ("resolution".to_owned(), self.resolution.text().to_owned()),
             ("convex".to_owned(), self.convex.word()),
-            ("leave-out".to_owned(), joined(&self.leave_out)),
-            ("leave-out-motion".to_owned(), joined(&self.leave_out_motion)),
+            ("motion".to_owned(), self.motion.text().to_owned()),
             ("convex-surface".to_owned(), self.convex_surface.text().to_owned()),
             ("reach".to_owned(), Metres::text_or_none(self.reach)),
         ])
@@ -385,21 +388,24 @@ impl Pass for LowerFromSoftObjectCollision {
             }
             let chosen = bodies.files.iter().filter(|f| f.resolution == wanted);
             for body in chosen.flat_map(|f| &f.bodies) {
-                if self.leave_out_motion.contains(&body.motion_type) {
+                if !self.motion.includes(body.motion_kind) {
                     log.count(&format!("bodies of motion type {} left out", body.motion_type), 1);
                     continue;
                 }
-                let Some((triangles, materials)) = self.triangles(body, log)? else {
+                let Some((triangles, materials, meanings)) = self.triangles(body, log)? else {
                     continue;
                 };
                 log.approximate(STORED_POSE, 1);
-                for (tri, material) in triangles.into_iter().zip(materials) {
+                for ((tri, material), meaning) in triangles.into_iter().zip(materials).zip(meanings) {
                     let v = tri.map(|p| transform.apply(p));
                     if crop.is_some_and(|c| beyond(&v, c)) {
                         log.count("triangles beyond the reach around the read region, left out", 1);
                         continue;
                     }
-                    if HitClass::of(material).is_some_and(|c| self.leave_out.contains(&c)) {
+                    if matches!(
+                        meaning,
+                        HitMeaning::SwimmingWater | HitMeaning::Empty | HitMeaning::Cloud
+                    ) {
                         log.count("triangles of left-out HitMtrl classes", 1);
                         continue;
                     }
@@ -418,7 +424,7 @@ impl Pass for LowerFromSoftObjectCollision {
                         log.approximate("convex body triangles given the largest render surface", 1);
                         surface
                     } else {
-                        surface_of(game, material, log)
+                        surface_of(game, material, meaning, log)
                     };
                     push(soup, v, surfaces.index(surface).map_err(|e| e.to_string())?)?;
                     log.count("object collision triangles", 1);
@@ -448,7 +454,7 @@ impl Pass for LowerFromSoftObjectCollision {
     }
 }
 
-/// `lower-fromsoft-part-collision{convex=tessellate|rounded:<metres>|leave-out,leave-out-motion=...}`: the collision a
+/// `lower-fromsoft-part-collision{convex=tessellate|rounded:<metres>|leave-out,motion=all|fixed}`: the collision a
 /// character's part keeps (`fromsoft.object_collision` on a prototype no placement uses: a weapon's `_collidable.hkx`) as
 /// `core.collision` on that prototype, in the prototype's own space, so a view of the part shows it where the part is. The
 /// bodies are lowered as `lower-fromsoft-object-collision` lowers an object's (stored pose, motion type not
@@ -458,7 +464,7 @@ impl Pass for LowerFromSoftObjectCollision {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LowerFromSoftPartCollision {
     pub convex: ConvexBodies,
-    pub leave_out_motion: BTreeSet<u64>,
+    pub motion: MotionSelection,
 }
 
 /// `lower-fromsoft-part-collision`'s declaration: both choices are the program's, stated.
@@ -470,25 +476,15 @@ pub const LOWER_FROMSOFT_PART_COLLISION: PassSpec = PassSpec {
             "rounded:0.01",
             "convex bodies tessellated, rounded:<metres> (within that error, above 0), or leave-out",
         ),
-        OptionSpec::required(
-            "leave-out-motion",
-            "",
-            "stored motion types whose bodies are not lowered (counted), joined by + (empty for none)",
+        OptionSpec::choice::<MotionSelection>(
+            "motion",
+            "all stored bodies, or fixed bodies without positive-mass dynamics",
         ),
     ],
     make: |g| {
-        let leave_out_motion = g
-            .required("leave-out-motion")
-            .split('+')
-            .filter(|m| !m.is_empty())
-            .map(|m| {
-                m.parse::<u64>()
-                    .map_err(|_| format!("leave-out-motion: {m} is not a motion type"))
-            })
-            .collect::<std::result::Result<_, _>>()?;
         Ok(Box::new(LowerFromSoftPartCollision {
             convex: ConvexBodies::parse(g.required("convex"))?,
-            leave_out_motion,
+            motion: g.choice("motion"),
         }))
     },
 };
@@ -500,7 +496,7 @@ impl Pass for LowerFromSoftPartCollision {
     fn options(&self) -> Options {
         Options::from([
             ("convex".to_owned(), self.convex.word()),
-            ("leave-out-motion".to_owned(), joined(&self.leave_out_motion)),
+            ("motion".to_owned(), self.motion.text().to_owned()),
         ])
     }
     fn requires(&self) -> &[&'static str] {
@@ -537,8 +533,7 @@ impl Pass for LowerFromSoftPartCollision {
         let object = LowerFromSoftObjectCollision {
             resolution: ResolutionChoice::High,
             convex: self.convex,
-            leave_out: BTreeSet::new(),
-            leave_out_motion: self.leave_out_motion.clone(),
+            motion: self.motion,
             convex_surface: ConvexSurface::Default,
             reach: None,
         };
@@ -551,16 +546,16 @@ impl Pass for LowerFromSoftPartCollision {
             };
             let mut soup = Collision::default();
             for body in bodies.bodies() {
-                if self.leave_out_motion.contains(&body.motion_type) {
+                if !self.motion.includes(body.motion_kind) {
                     log.count(&format!("bodies of motion type {} left out", body.motion_type), 1);
                     continue;
                 }
-                let Some((triangles, materials)) = object.triangles(body, log)? else {
+                let Some((triangles, materials, meanings)) = object.triangles(body, log)? else {
                     continue;
                 };
                 log.approximate(STORED_POSE, 1);
-                for (tri, material) in triangles.into_iter().zip(materials) {
-                    let surface = surface_of(game, material, log);
+                for ((tri, material), meaning) in triangles.into_iter().zip(materials).zip(meanings) {
+                    let surface = surface_of(game, material, meaning, log);
                     push(
                         &mut soup,
                         tri,
@@ -622,9 +617,20 @@ mod tests {
         ObjectBody {
             name: name.into(),
             motion_type,
+            motion_kind: fromsoft_formats::collision::motion_kind(motion_type),
             shape: "fsnpCustomParamCompressedMeshShape".into(),
             geometry: ObjectGeometry::Mesh {
                 triangles: vec![[[0., 0., 0.], [1., 0., 0.], [0., 0., -1.]]; materials.len()],
+                material_meanings: materials
+                    .iter()
+                    .map(|&id| {
+                        if id == 29 {
+                            HitMeaning::Other
+                        } else {
+                            fromsoft_formats::collision::hit_meaning(fromsoft_formats::Game::Sekiro, id)
+                        }
+                    })
+                    .collect(),
                 materials,
             },
         }
@@ -659,6 +665,7 @@ mod tests {
         ObjectBody {
             name: name.into(),
             motion_type: 0,
+            motion_kind: MotionKind::Static,
             shape: shape.into(),
             geometry: ObjectGeometry::Convex {
                 core,
@@ -734,8 +741,7 @@ mod tests {
         let mut o = Options::from(
             [
                 ("resolution", "high"),
-                ("leave-out", ""),
-                ("leave-out-motion", ""),
+                ("motion", "all"),
                 ("convex-surface", "default"),
                 ("reach", "none"),
             ]
@@ -822,16 +828,18 @@ mod tests {
             assert!(LOWER_FROMSOFT_OBJECT_COLLISION.instance(&o).is_err(), "{bad}");
         }
 
-        // convex=leave-out, motion type 2 and class 29 left out by choice, counted
-        let (mut w, _, _) = world();
+        // Named fixture meanings replace the removed numeric class settings; body policy is fixed.
+        let (mut w, placed, _) = world();
+        if let ObjectGeometry::Mesh {
+            material_meanings, ..
+        } = &mut w.get_mut::<ObjectBodies>(placed).unwrap().files[0].bodies[0].geometry
+        {
+            material_meanings[1] = HitMeaning::Empty;
+        }
         let mut log = PassLog::default();
-        pass(&[
-            ("convex", "leave-out"),
-            ("leave-out", "29"),
-            ("leave-out-motion", "2"),
-        ])
-        .run(&mut w, &mut log)
-        .unwrap();
+        pass(&[("convex", "leave-out"), ("motion", "fixed")])
+            .run(&mut w, &mut log)
+            .unwrap();
         assert_eq!(surfaces(&w), ["wood"]);
         assert_eq!(log.counts["convex bodies left out"], 2);
         assert_eq!(log.counts["bodies of motion type 2 left out"], 1);
@@ -853,7 +861,7 @@ mod tests {
         let (mut w, placed, unplaced) = world();
         let mut log = PassLog::default();
         let options = Options::from(
-            [("convex", "tessellate"), ("leave-out-motion", "2")].map(|(k, v)| (k.to_owned(), v.to_owned())),
+            [("convex", "tessellate"), ("motion", "fixed")].map(|(k, v)| (k.to_owned(), v.to_owned())),
         );
         let part = LOWER_FROMSOFT_PART_COLLISION.instance(&options).unwrap();
         assert_eq!(part.options(), options);

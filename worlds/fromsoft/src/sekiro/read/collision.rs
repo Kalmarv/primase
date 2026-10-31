@@ -80,6 +80,11 @@ pub fn read(
     threads: Threads,
     world: &mut World,
 ) -> Result<Report> {
+    let game = if layout.generation.name == fromsoft_formats::msb::Generation::SEKIRO.name {
+        fromsoft_formats::Game::Sekiro
+    } else {
+        fromsoft_formats::Game::EldenRing
+    };
     let mut report = Report::default();
     let mut named = BTreeMap::<String, Vec<CollisionPart>>::new();
     for part in layout.parts.iter().filter(|p| p.kind == PartKind::Collision) {
@@ -96,6 +101,7 @@ pub fn read(
         named.entry(file).or_default().push(CollisionPart {
             name: part.name.clone(),
             hit_filter: filter,
+            filter_meaning: collision::hit_filter_meaning(game, filter),
             condition: states.as_deref_mut().and_then(|s| s.clause(part)),
         });
     }
@@ -207,6 +213,11 @@ pub fn read(
                     parts,
                     triangles: to_world(raw.triangles),
                     f_triangles,
+                    material_meanings: raw
+                        .materials
+                        .iter()
+                        .map(|&id| collision::hit_meaning(game, id))
+                        .collect(),
                     materials: raw.materials,
                     invalid_material_keys: raw.invalid_material_keys,
                     dead_primitives: raw.dead_primitives,

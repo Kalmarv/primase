@@ -899,6 +899,7 @@ impl<'a> Reading<'a> {
                 if leaf.ends_with("_collidable.hkx") {
                     let mut found = super::objects::Report::default();
                     match super::objects::bodies(
+                        self.game,
                         &leaf,
                         fromsoft_formats::game::Resolution::High,
                         &decoder.decode_if_dcx(&f.bytes)?,

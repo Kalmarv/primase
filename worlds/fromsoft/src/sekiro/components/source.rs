@@ -125,6 +125,8 @@ impl Component for CollisionSource {
 pub struct CollisionPart {
     pub name: String,
     pub hit_filter: u8,
+    /// Public format meaning, retained with the original filter byte.
+    pub filter_meaning: fromsoft_formats::collision::HitFilterMeaning,
     pub condition: Option<primase_core::state::Clause>,
 }
 
@@ -145,6 +147,8 @@ pub struct MapCollision {
     pub parts: Vec<CollisionPart>,
     pub triangles: Vec<[[f32; 3]; 3]>,
     pub materials: Vec<i32>,
+    /// Named public-format meaning per authored material ID, in triangle order.
+    pub material_meanings: Vec<fromsoft_formats::collision::HitMeaning>,
     /// The triangles of the `f` binder's file for the same model, in the world frame like `triangles`, each in its
     /// stored order: they store no shape key and no HitMtrl ID. Empty where the read did not ask for them or the
     /// binder holds no file for the model.
@@ -157,6 +161,7 @@ pub struct MapCollision {
     pub unread_bodies: Vec<String>,
 }
 impl Component for MapCollision {
+    const VERSION: u32 = 2;
     const NAME: &'static str = "fromsoft.map_collision";
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
     /// World-frame triangles on an entity that is not placed.
@@ -211,7 +216,9 @@ impl Component for MapCollision {
         (self.triangles.len() + self.f_triangles.len()) as u64 * 36 + self.materials.len() as u64 * 4
     }
     fn verify(&self, _e: Entity, _w: &primase_core::World) -> Result<(), String> {
-        if self.materials.len() != self.triangles.len() {
+        if self.materials.len() != self.triangles.len()
+            || self.material_meanings.len() != self.triangles.len()
+        {
             return Err(format!(
                 "{}: {} materials for {} triangles",
                 self.file,
@@ -223,12 +230,13 @@ impl Component for MapCollision {
     }
 }
 
-/// One rigid body of an object's collision file: its name, its stored motion type (what each value means is a pass's
-/// interpretation), its shape class and its geometry as stored.
+/// One rigid body of an object's collision file: its name, its stored motion type and public named meaning, its shape class
+/// and its geometry as stored.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ObjectBody {
     pub name: String,
     pub motion_type: u64,
+    pub motion_kind: fromsoft_formats::collision::MotionKind,
     pub shape: String,
     pub geometry: ObjectGeometry,
 }
@@ -241,6 +249,7 @@ pub enum ObjectGeometry {
     Mesh {
         triangles: Vec<[[f32; 3]; 3]>,
         materials: Vec<i32>,
+        material_meanings: Vec<fromsoft_formats::collision::HitMeaning>,
     },
     /// A convex shape (box, polytope, capsule) as stored: its core and convex radius in the body's own space and
     /// the file's axes, a capsule's segment, and `to_prototype`, the columns of the affine map from the body's space
@@ -285,8 +294,8 @@ impl ObjectBodies {
 impl Component for ObjectBodies {
     const NAME: &'static str = "fromsoft.object_collision";
     const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
-    /// 2: every stored collision file with its resolution (Sekiro's one main HKX is a high one).
-    const VERSION: u32 = 2;
+    /// 3: named material and motion meanings retained alongside the original values.
+    const VERSION: u32 = 3;
     /// Prototype-space geometry, mapped as the prototype's mesh: mesh triangles moved (a reflection reversing their
     /// order), a convex body's map composed with the mapping.
     fn apply_linear(&self, l: &primase_core::Linear) -> primase_core::world::Linearity<Self> {
@@ -312,9 +321,9 @@ impl Component for ObjectBodies {
     fn payload_bytes(&self) -> u64 {
         self.bodies()
             .map(|b| match &b.geometry {
-                ObjectGeometry::Mesh { triangles, materials } => {
-                    triangles.len() as u64 * 36 + materials.len() as u64 * 4
-                }
+                ObjectGeometry::Mesh {
+                    triangles, materials, ..
+                } => triangles.len() as u64 * 36 + materials.len() as u64 * 4,
                 ObjectGeometry::Convex { core, .. } => {
                     core.vertices.len() as u64 * 12 + core.planes.len() as u64 * 16
                 }
@@ -324,8 +333,12 @@ impl Component for ObjectBodies {
     fn verify(&self, _e: Entity, _w: &primase_core::World) -> Result<(), String> {
         for f in &self.files {
             for b in &f.bodies {
-                if let ObjectGeometry::Mesh { triangles, materials } = &b.geometry
-                    && materials.len() != triangles.len()
+                if let ObjectGeometry::Mesh {
+                    triangles,
+                    materials,
+                    material_meanings,
+                } = &b.geometry
+                    && (materials.len() != triangles.len() || material_meanings.len() != triangles.len())
                 {
                     return Err(format!(
                         "{} body {}: {} materials for {} triangles",

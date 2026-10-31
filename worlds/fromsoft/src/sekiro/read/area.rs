@@ -912,14 +912,14 @@ struct Prepared {
     collision: Option<Result<(Vec<source::ObjectCollisionFile>, objects::Report)>>,
 }
 
-fn prepare(key: &str, proto: &Prototype) -> Prepared {
+fn prepare(game: Game, key: &str, proto: &Prototype) -> Prepared {
     let collision = (!proto.collision.is_empty()).then(|| {
         let mut tally = objects::Report::default();
         proto
             .collision
             .iter()
             .map(|(file, resolution, bytes)| {
-                objects::bodies(file, *resolution, bytes, &mut tally)
+                objects::bodies(game, file, *resolution, bytes, &mut tally)
                     .map_err(|e| invalid("object collision", 0, format!("{key}: {file}: {e}")))
             })
             .collect::<Result<Vec<_>>>()
@@ -1570,7 +1570,7 @@ pub fn read_game_area_staged(
             .drain(..threads.get().saturating_mul(2).min(queue.len()))
             .collect();
         let prepared =
-            primase_foundations::parallel::map(threads, &wave, |_, (key, proto)| prepare(key, proto))
+            primase_foundations::parallel::map(threads, &wave, |_, (key, proto)| prepare(game, key, proto))
                 .map_err(|e| invalid("FromSoftware model", 0, e.to_string()))?;
         for ((key, proto), prepared) in wave.into_iter().zip(prepared) {
             let Prepared {

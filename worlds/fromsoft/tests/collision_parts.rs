@@ -6,14 +6,15 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
+use fromsoft_formats::collision::{HitFilterMeaning, HitMeaning, MotionKind};
 use primase_core::convert::{
     Finished, Part, PartSource, Reader, Report, Result, WholeWorld, Writer, convert_parts,
 };
 use primase_core::pass::{PassManager, PassRegistry, Pipeline, Target};
 use primase_core::{Collision, Entity, Instance, Surfaces, Transform, World};
 use primase_fromsoft::sekiro::collision::{FMeshes, LowerFromSoftCollision};
+use primase_fromsoft::sekiro::objects::MotionSelection;
 use primase_fromsoft::sekiro::objects::{ConvexBodies, ConvexSurface, LowerFromSoftObjectCollision};
-use primase_fromsoft::sekiro::settings::HitFilters;
 use primase_fromsoft::sekiro::source::{
     CollisionPart, MapCollision, ObjectBodies, ObjectBody, ObjectGeometry,
 };
@@ -37,11 +38,13 @@ fn world() -> (World, [Entity; 4]) {
                 parts: vec![CollisionPart {
                     name: file.into(),
                     hit_filter: 8,
+                    filter_meaning: HitFilterMeaning::Physical,
                     condition: None,
                 }],
                 triangles: vec![tri(x), tri(x + 2.)],
                 f_triangles: Vec::new(),
                 materials: vec![104, 1],
+                material_meanings: vec![HitMeaning::Wood, HitMeaning::Stone],
                 invalid_material_keys: 0,
                 dead_primitives: 0,
                 unread_bodies: Vec::new(),
@@ -59,10 +62,12 @@ fn world() -> (World, [Entity; 4]) {
                 bodies: vec![ObjectBody {
                     name: "body".into(),
                     motion_type: 0,
+                    motion_kind: MotionKind::Static,
                     shape: "fsnpCustomParamCompressedMeshShape".into(),
                     geometry: ObjectGeometry::Mesh {
                         triangles: vec![tri(0.)],
                         materials: vec![111],
+                        material_meanings: vec![HitMeaning::Metal],
                     },
                 }],
             }],
@@ -152,17 +157,14 @@ fn convert(parts: &mut dyn PartSource) -> Vec<BTreeMap<String, Vec<Tri>>> {
     let passes = Pipeline {
         passes: vec![
             Box::new(LowerFromSoftCollision {
-                hit_filters: HitFilters::new([8]).unwrap(),
-                water: BTreeSet::new(),
-                leave_out: BTreeSet::new(),
                 reach: None,
                 f_meshes: FMeshes::Off,
             }),
             Box::new(LowerFromSoftObjectCollision {
                 resolution: primase_fromsoft::sekiro::objects::ResolutionChoice::High,
                 convex: ConvexBodies::Tessellate,
-                leave_out: BTreeSet::new(),
-                leave_out_motion: BTreeSet::new(),
+
+                motion: MotionSelection::All,
                 convex_surface: ConvexSurface::Default,
                 reach: None,
             }),

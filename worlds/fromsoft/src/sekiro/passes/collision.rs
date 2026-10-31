@@ -1,9 +1,10 @@
 //! The pass that lowers the area's map collision (`fromsoft.map_collision`): which parts are ground, what each
 //! HitMtrl class becomes and how far around the read region to keep are `lower-fromsoft-collision`'s options. Raw
 //! collision is never roof-smoothed here.
-use super::settings::{HitClass, HitFilters, Metres, joined};
+use super::settings::Metres;
 use crate::sekiro::source::{CollisionSource, MapCollision, ReadScope};
 use fromsoft_formats::Game;
+use fromsoft_formats::collision::{HitFilterMeaning, HitMeaning};
 use primase_core::convert::PartScope;
 use primase_core::pass::{Choice, Given, OptionSpec, Options, Pass, PassLog, PassSpec};
 use primase_core::state::{Clause, Condition};
@@ -21,44 +22,21 @@ pub(super) fn game_of(world: &World) -> Game {
 /// The core surface a HitMtrl class (an ID's base value, modulo 100) of `game` stands for, where its class is known to
 /// stand for one; `None` for the other classes.
 pub fn known_surface(game: Game, class: i32) -> Option<&'static str> {
-    match game {
-        Game::Sekiro => sekiro_surface(class),
-        Game::EldenRing => elden_surface(class),
-    }
+    named_surface(fromsoft_formats::collision::hit_meaning(game, class))
 }
 
-/// Sekiro's classes by the names of its HitMtrlParam rows (Paramdex, as Smithbox carries it): Stone and Underwater
-/// Stone concrete; Dirt, Ash, Dead Leaves, Mud, Snow, Autumn Leaves and Underwater Dirt earth; Wood, Bamboo, Tree,
-/// Tatami, Wood Indoors and Underwater Wood wood; Grass, Straw, Bush and the grasses in water grass; Gravel; Iron and
-/// Bell metal; Sand; Tiles roofing; Ice marble.
-fn sekiro_surface(class: i32) -> Option<&'static str> {
-    Some(match class {
-        1 | 46 => "concrete",
-        3 | 15 | 18 | 27 | 30 | 33 | 45 => "earth",
-        4 | 7 | 8 | 28 | 32 | 47 => "wood",
-        5 | 9 | 10 | 31 | 37 | 38 => "grass",
-        6 => "gravel",
-        11 | 19 => "metal",
-        13 => "sand",
-        16 => "roofing",
-        34 => "marble",
-        _ => return None,
-    })
-}
-
-/// Elden Ring's classes by the names of its HitMtrlParam rows (the game's param names as Smithbox carries them, row IDs
-/// 0 to 62; its numbering is not Sekiro's: 3 is Sand here and Dirt there). A class is mapped where its name says a
-/// surface of the core table: Rock the nearest, concrete; Sand; Wood and the Scarlet Tree wood; Dirt and Rain Dirt
-/// earth; Iron Grate metal. Not mapped, because the name is not a surface of the table or there is none: Stock (1), Ore
-/// (6), Lava (7), Scarlet Mushroom (12), Bone (14), the swamps and the Lake of Rot (23, 24, 46, 49), and every row the
-/// names leave blank. Water (21) is not a surface: the water classes are the program's (`water=`).
-fn elden_surface(class: i32) -> Option<&'static str> {
-    Some(match class {
-        2 => "concrete",
-        3 => "sand",
-        4 | 8 => "wood",
-        5 | 44 => "earth",
-        11 => "metal",
+/// Destination vocabulary follows named authored meanings; no game IDs are chosen by the pass.
+fn named_surface(meaning: HitMeaning) -> Option<&'static str> {
+    Some(match meaning {
+        HitMeaning::Stone => "concrete",
+        HitMeaning::Earth => "earth",
+        HitMeaning::Wood => "wood",
+        HitMeaning::Grass => "grass",
+        HitMeaning::Gravel => "gravel",
+        HitMeaning::Metal => "metal",
+        HitMeaning::Sand => "sand",
+        HitMeaning::RoofTile => "roofing",
+        HitMeaning::Ice => "marble",
         _ => return None,
     })
 }
@@ -72,7 +50,7 @@ pub fn class_name(game: Game, class: i32) -> Option<&'static str> {
 /// The surface a triangle of HitMtrl ID `material` is lowered with in `game`: its class's known surface, else `default`,
 /// counted as approximations in `log`; a class without a known surface is also counted by itself and its name
 /// (`triangles of HitMtrl class 12 (Scarlet Mushroom) without a known surface`), never given the default unseen.
-pub(super) fn surface_of(game: Game, material: i32, log: &mut PassLog) -> &'static str {
+pub(super) fn surface_of(game: Game, material: i32, meaning: HitMeaning, log: &mut PassLog) -> &'static str {
     if material < 0 {
         log.approximate(
             "triangles whose shape key binds no HitMtrl, given the default surface",
@@ -81,15 +59,19 @@ pub(super) fn surface_of(game: Game, material: i32, log: &mut PassLog) -> &'stat
         return "default";
     }
     let class = material % 100;
-    known_surface(game, class).unwrap_or_else(|| {
+    named_surface(meaning).unwrap_or_else(|| {
         log.approximate(
             "triangles of HitMtrl classes without a known surface, given the default surface",
             1,
         );
         log.count(
             &match class_name(game, class) {
-                Some(name) => format!("triangles of HitMtrl class {class} ({name}) without a known surface"),
-                None => format!("triangles of HitMtrl class {class} (no name) without a known surface"),
+                Some(name) => {
+                    format!("triangles of HitMtrl class {class} ({name}) without a known surface")
+                }
+                None => {
+                    format!("triangles of HitMtrl class {class} (no name) without a known surface")
+                }
             },
             1,
         );
@@ -174,29 +156,11 @@ pub(super) fn beyond(v: &[[f32; 3]; 3], (r, reach): ([f32; 4], f32)) -> bool {
     x < r[0] - reach || x >= r[2] + reach || z < r[1] - reach || z >= r[3] + reach
 }
 
-/// `lower-fromsoft-collision{hit-filters=...}`: the map collision files (`fromsoft.map_collision`) that parts of the
-/// chosen hit filters name, as `core.collision` soups, the records consumed. Every triangle goes into the `game` soup
-/// with its HitMtrl class's surface ([`known_surface`]; an ID the shape key does not bind, or a class without a known
-/// surface, gets `default`, counted); a file present only in some world states (its selected parts' clauses) goes
-/// into a `game_state<n>` soup with that condition. Files only parts of other hit filters name stay as source,
-/// counted. In a part of a conversion (`core.part_scope`), only the files its roots reach are lowered: a file it
-/// loaded as context is its own part's.
-///
-/// Every field is the program's choice, stated (no default): `hit_filters`, the filters whose parts are lowered (which
-/// placed collision is ground); `water`, HitMtrl classes lowered into separate `water` soups with the `default`
-/// surface; `leave_out`, classes not lowered, counted (a class in both is refused); `reach`, leaving out, counted, the
-/// triangles whose centre lies more than that many metres outside the read region (`fromsoft.read_scope`), or `None`
-/// for no crop; `f-meshes`, whether the `f` binder's meshes the read brought in with the files
-/// ([`MapCollision::f_triangles`]; `Options::f_collision`) are lowered, into a soup of their own (`f`, `f_state<n>`
-/// with the file's condition) with the `default` surface, never into `game`: they store no HitMtrl, and are not known
-/// to be ground. Optional: absent is `off`, and they are counted as left out. Options, all required but `f-meshes`:
-/// `hit-filters=` and `water=`/`leave-out=` classes joined by `+` (empty: none),
-/// `reach=N|none`.
+/// Lower the map collision whose parts the reader names as physical. Authored swimming water forms
+/// water soups; Empty/Cloud do not form solid geometry. Other and unknown meanings stay ground,
+/// with unsupported surfaces counted. The real choices are the crop and whether to include f meshes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LowerFromSoftCollision {
-    pub hit_filters: HitFilters,
-    pub water: BTreeSet<HitClass>,
-    pub leave_out: BTreeSet<HitClass>,
     pub reach: Option<Metres>,
     pub f_meshes: FMeshes,
 }
@@ -214,36 +178,13 @@ impl primase_core::pass::Choice for FMeshes {
     const VALUES: &'static [(&'static str, Self)] = &[("off", FMeshes::Off), ("on", FMeshes::On)];
 }
 
-/// What a HitMtrl class's triangles become instead of ground.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ClassChoice {
-    /// The `water` soups, with the `default` surface.
-    Water,
-    /// Not lowered, counted.
-    LeaveOut,
-}
-
 impl LowerFromSoftCollision {
     /// From its declared options.
     fn from_given(g: &Given) -> std::result::Result<Self, String> {
         Ok(LowerFromSoftCollision {
-            hit_filters: HitFilters::parse("hit-filters", g.required("hit-filters"))?,
-            water: HitClass::parse_set("water", g.required("water"))?,
-            leave_out: HitClass::parse_set("leave-out", g.required("leave-out"))?,
             reach: Metres::parse_or_none("reach", g.required("reach"))?,
             f_meshes: g.optional_choice::<FMeshes>("f-meshes").unwrap_or(FMeshes::Off),
         })
-    }
-
-    /// What becomes of a class's triangles instead of ground, refusing a class both water and left out.
-    fn classes(&self) -> std::result::Result<BTreeMap<HitClass, ClassChoice>, String> {
-        if let Some(c) = self.water.intersection(&self.leave_out).next() {
-            return Err(format!("HitMtrl class {c} is both water and left out"));
-        }
-        let water = self.water.iter().map(|&c| (c, ClassChoice::Water));
-        Ok(water
-            .chain(self.leave_out.iter().map(|&c| (c, ClassChoice::LeaveOut)))
-            .collect())
     }
 }
 
@@ -252,21 +193,6 @@ impl LowerFromSoftCollision {
 pub const LOWER_FROMSOFT_COLLISION: PassSpec = PassSpec {
     name: "lower-fromsoft-collision",
     options: &[
-        OptionSpec::required(
-            "hit-filters",
-            "8+27",
-            "the hit filters whose collision parts are lowered as ground, joined by + (at least one)",
-        ),
-        OptionSpec::required(
-            "water",
-            "22+36",
-            "HitMtrl classes (0 to 99) lowered into separate water soups, joined by + (empty for none)",
-        ),
-        OptionSpec::required(
-            "leave-out",
-            "29+40",
-            "HitMtrl classes (0 to 99) not lowered (counted), joined by + (empty for none)",
-        ),
         OptionSpec::required(
             "reach",
             "50",
@@ -287,12 +213,7 @@ impl Pass for LowerFromSoftCollision {
         "lower-fromsoft-collision"
     }
     fn options(&self) -> Options {
-        let mut options = Options::from([
-            ("hit-filters".to_owned(), self.hit_filters.to_string()),
-            ("water".to_owned(), joined(self.water.iter().copied())),
-            ("leave-out".to_owned(), joined(self.leave_out.iter().copied())),
-            ("reach".to_owned(), Metres::text_or_none(self.reach)),
-        ]);
+        let mut options = Options::from([("reach".to_owned(), Metres::text_or_none(self.reach))]);
         // an option a program may leave out is printed only when it is stated, so the pipelines that never state it print as before
         if self.f_meshes == FMeshes::On {
             options.insert("f-meshes".to_owned(), self.f_meshes.text().to_owned());
@@ -326,7 +247,6 @@ impl Pass for LowerFromSoftCollision {
     }
     fn run(&self, world: &mut World, log: &mut PassLog) -> std::result::Result<(), String> {
         let crop = crop(world, self.reach)?;
-        let classes = self.classes()?;
         let game = game_of(world);
         let owned = owned(world);
         let mut records: Vec<(Entity, &MapCollision)> = world
@@ -352,7 +272,7 @@ impl Pass for LowerFromSoftCollision {
             let clauses: Vec<Option<Clause>> = record
                 .parts
                 .iter()
-                .filter(|p| self.hit_filters.contains(p.hit_filter))
+                .filter(|p| p.filter_meaning == HitFilterMeaning::Physical)
                 .map(|p| p.condition.clone())
                 .collect();
             if !clauses.is_empty() {
@@ -389,19 +309,34 @@ impl Pass for LowerFromSoftCollision {
                     (&mut entry.1, &mut entry.2, &mut entry.3)
                 }
             };
-            for (vertices, &material) in record.triangles.iter().zip(&record.materials) {
+            if record.material_meanings.len() != record.materials.len()
+                || record.triangles.len() != record.materials.len()
+            {
+                return Err(format!(
+                    "{}: triangles, material IDs and named meanings differ in length",
+                    record.file
+                ));
+            }
+            for ((vertices, &material), &meaning) in record
+                .triangles
+                .iter()
+                .zip(&record.materials)
+                .zip(&record.material_meanings)
+            {
                 if crop.is_some_and(|c| beyond(vertices, c)) {
                     log.count("triangles beyond the reach around the read region, left out", 1);
                     continue;
                 }
-                match HitClass::of(material).and_then(|c| classes.get(&c)) {
-                    Some(ClassChoice::Water) => {
+                match meaning {
+                    HitMeaning::SwimmingWater => {
                         push(water, *vertices, index("default")?)?;
                         log.count("water triangles", 1);
                     }
-                    Some(ClassChoice::LeaveOut) => log.count("triangles of left-out HitMtrl classes", 1),
-                    None => {
-                        push(solid, *vertices, index(surface_of(game, material, log))?)?;
+                    HitMeaning::Empty | HitMeaning::Cloud => {
+                        log.count("triangles of left-out HitMtrl classes", 1)
+                    }
+                    _ => {
+                        push(solid, *vertices, index(surface_of(game, material, meaning, log))?)?;
                         log.count("ground triangles", 1);
                     }
                 }
@@ -472,10 +407,15 @@ mod tests {
             parts: vec![CollisionPart {
                 name: format!("{file}-part"),
                 hit_filter: filter,
+                filter_meaning: fromsoft_formats::collision::hit_filter_meaning(Game::Sekiro, filter),
                 condition: None,
             }],
             triangles,
             f_triangles: Vec::new(),
+            material_meanings: materials
+                .iter()
+                .map(|&id| fromsoft_formats::collision::hit_meaning(Game::Sekiro, id))
+                .collect(),
             materials,
             invalid_material_keys: 0,
             dead_primitives: 0,
@@ -529,15 +469,33 @@ mod tests {
     }
 
     #[test]
+    fn unknown_material_ids_stay_authored_and_their_triangles_are_reported() {
+        let mut w = World::new();
+        let e = w.spawn();
+        let record = record("unknown.hkx", 8, vec![NEAR], vec![99]);
+        assert_eq!(record.materials, [99]);
+        assert_eq!(record.material_meanings, [HitMeaning::Unknown]);
+        w.insert(e, record);
+        let mut log = PassLog::default();
+        LowerFromSoftCollision {
+            reach: None,
+            f_meshes: FMeshes::Off,
+        }
+        .run(&mut w, &mut log)
+        .unwrap();
+        assert_eq!(soups(&w)["game"], ["default"]);
+        assert_eq!(log.counts["ground triangles"], 1);
+        assert_eq!(
+            log.counts["triangles of HitMtrl class 99 (no name) without a known surface"],
+            1
+        );
+    }
+
+    #[test]
     fn the_program_chooses_filters_classes_and_reach_and_other_filters_stay_as_source() {
         let mut w = world();
         let pass = LOWER_FROMSOFT_COLLISION
-            .instance(&Options::from([
-                ("hit-filters".into(), "8".into()),
-                ("water".into(), "22".into()),
-                ("leave-out".into(), "29".into()),
-                ("reach".into(), "50".into()),
-            ]))
+            .instance(&Options::from([("reach".into(), "50".into())]))
             .unwrap();
         let mut log = PassLog::default();
         pass.run(&mut w, &mut log).unwrap();
@@ -564,34 +522,6 @@ mod tests {
             (left[0].file.as_str(), left[0].parts[0].hit_filter),
             ("b.hkx", 15)
         );
-    }
-
-    #[test]
-    fn with_no_classes_and_no_reach_stated_every_triangle_of_the_chosen_files_is_ground() {
-        let options = |water: &str, leave_out: &str| {
-            Options::from([
-                ("hit-filters".into(), "8+15".into()),
-                ("water".into(), water.into()),
-                ("leave-out".into(), leave_out.into()),
-                ("reach".into(), "none".into()),
-            ])
-        };
-        let mut w = world();
-        let pass = LOWER_FROMSOFT_COLLISION.instance(&options("", "")).unwrap();
-        assert_eq!(pass.options(), options("", ""));
-        pass.run(&mut w, &mut PassLog::default()).unwrap();
-        assert_eq!(soups(&w)["game"].len(), 6);
-        assert!(w.iter::<MapCollision>().next().is_none());
-        // every option is the program's to state; a class cannot be both water and left out
-        assert!(LOWER_FROMSOFT_COLLISION.instance(&Options::new()).is_err());
-        assert!(
-            LOWER_FROMSOFT_COLLISION
-                .instance(&Options::from([("hit-filters".into(), "8".into())]))
-                .is_err()
-        );
-        let both = LOWER_FROMSOFT_COLLISION.instance(&options("22", "22")).unwrap();
-        let err = both.run(&mut world(), &mut PassLog::default()).unwrap_err();
-        assert!(err.contains("both water and left out"), "{err}");
     }
 
     /// A selection resolves state first (`resolve-state`, then the lowering): the clauses the parts hold inside their record
@@ -638,9 +568,6 @@ mod tests {
             [("always.hkx".to_owned(), None), ("off.hkx".to_owned(), None)]
         );
         let pass = LowerFromSoftCollision {
-            hit_filters: HitFilters::new([8]).unwrap(),
-            water: BTreeSet::new(),
-            leave_out: BTreeSet::new(),
             reach: None,
             f_meshes: FMeshes::Off,
         };
@@ -662,7 +589,13 @@ mod tests {
         let surfaces_of = |game: Game| {
             let mut w = World::new();
             let e = w.spawn();
-            w.insert(e, record("a.hkx", 8, triangles.clone(), materials.clone()));
+            let mut record = record("a.hkx", 8, triangles.clone(), materials.clone());
+            record.material_meanings = materials
+                .iter()
+                .map(|&id| fromsoft_formats::collision::hit_meaning(game, id))
+                .collect();
+            record.material_meanings[2] = HitMeaning::SwimmingWater; // synthetic fixture, not Sekiro's class-21 meaning
+            w.insert(e, record);
             w.insert_resource(ReadScope {
                 game,
                 area: "m10_00_00_00".into(),
@@ -670,9 +603,6 @@ mod tests {
                 states: false,
             });
             let pass = LowerFromSoftCollision {
-                hit_filters: HitFilters::new([8]).unwrap(),
-                water: HitClass::set([21]).unwrap(),
-                leave_out: BTreeSet::new(),
                 reach: None,
                 f_meshes: FMeshes::Off,
             };
@@ -716,9 +646,6 @@ mod tests {
         let (b, _) = w.iter::<MapCollision>().find(|(_, m)| m.file == "b.hkx").unwrap();
         w.get_mut::<MapCollision>(b).unwrap().unread_bodies = vec!["hknpConvexShape".into()];
         let only_8 = LowerFromSoftCollision {
-            hit_filters: HitFilters::new([8]).unwrap(),
-            water: BTreeSet::new(),
-            leave_out: BTreeSet::new(),
             reach: None,
             f_meshes: FMeshes::Off,
         };
@@ -726,12 +653,10 @@ mod tests {
         only_8.run(&mut w.clone(), &mut quiet).unwrap();
         assert!(quiet.omitted.is_empty(), "{:?}", quiet.omitted);
         let with_15 = LowerFromSoftCollision {
-            hit_filters: HitFilters::new([8, 15]).unwrap(),
-            water: BTreeSet::new(),
-            leave_out: BTreeSet::new(),
             reach: None,
             f_meshes: FMeshes::Off,
         };
+        w.get_mut::<MapCollision>(b).unwrap().parts[0].filter_meaning = HitFilterMeaning::Physical;
         let mut log = PassLog::default();
         with_15.run(&mut w, &mut log).unwrap();
         assert_eq!(
@@ -750,15 +675,14 @@ mod tests {
             let mut w = world();
             let (a, _) = w.iter::<MapCollision>().find(|(_, m)| m.file == "a.hkx").unwrap();
             w.get_mut::<MapCollision>(a).unwrap().f_triangles = vec![NEAR, NEAR, FAR];
+            w.get_mut::<MapCollision>(a)
+                .unwrap()
+                .material_meanings
+                .fill(HitMeaning::Other);
             w
         };
         let options = |f: Option<&str>| {
-            let mut o = Options::from([
-                ("hit-filters".into(), "8".into()),
-                ("water".into(), "".into()),
-                ("leave-out".into(), "".into()),
-                ("reach".into(), "50".into()),
-            ]);
+            let mut o = Options::from([("reach".into(), "50".into())]);
             if let Some(f) = f {
                 o.insert("f-meshes".into(), f.into());
             }

@@ -37,6 +37,7 @@ impl Report {
 
 /// An object's collision `file` (decoded `bytes`) of `resolution`: every body as stored, in the prototype's space.
 pub fn bodies(
+    game: fromsoft_formats::Game,
     file: &str,
     resolution: Resolution,
     bytes: &[u8],
@@ -55,6 +56,11 @@ pub fn bodies(
                             .triangles
                             .into_iter()
                             .map(|t| t.map(|v| FRAME.point(v)))
+                            .collect(),
+                        material_meanings: soup
+                            .materials
+                            .iter()
+                            .map(|&id| collision::hit_meaning(game, id))
                             .collect(),
                         materials: soup.materials,
                     }
@@ -77,6 +83,7 @@ pub fn bodies(
             Ok(ObjectBody {
                 name: body.name,
                 motion_type: body.motion_type,
+                motion_kind: collision::motion_kind(body.motion_type),
                 shape: body.shape,
                 geometry,
             })

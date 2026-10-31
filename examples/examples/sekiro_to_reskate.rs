@@ -15,12 +15,14 @@ use primase_fromsoft::sekiro::collision::{FMeshes, LowerFromSoftCollision};
 use primase_fromsoft::sekiro::convert::AreaReader;
 use primase_fromsoft::sekiro::extras::LowerFromSoftExtras;
 use primase_fromsoft::sekiro::lights::LowerFromSoftLights;
-use primase_fromsoft::sekiro::objects::{ConvexBodies, ConvexSurface, LowerFromSoftObjectCollision, ResolutionChoice};
+use primase_fromsoft::sekiro::objects::{
+    ConvexBodies, ConvexSurface, LowerFromSoftObjectCollision, MotionSelection, ResolutionChoice,
+};
 use primase_fromsoft::sekiro::passes::{
     BakeFromSoftLayers, Cards, Degenerates, DropFromSoftFar, DropFromSoftTextureTransforms, LowerFromSoftGeometry,
     LowerFromSoftMaterials, Pose, ResolveFromSoftShaders, SpeedTreeFrame, Tiling, Unbound, Winding,
 };
-use primase_fromsoft::sekiro::settings::{Factor, Fraction, HitClass, HitFilters, Metres, PixelCap, Seconds};
+use primase_fromsoft::sekiro::settings::{Factor, Fraction, Metres, PixelCap, Seconds};
 use primase_image::{Beyond, CapMode, CapTextures, NormalDownscale, NormalizeNormals};
 use primase_reskate::compile::{CompileChoices, Streaming, Studio, TimeOfDay, compile_map};
 use primase_reskate::components::{CollisionSurfaces, CollisionWeld};
@@ -50,16 +52,14 @@ fn main() -> Result<()> {
     };
 
     // Run once on the area as read: Sekiro's own data lowered to core meanings.
-    let (reach, water, leave_out) = (Some(Metres::new(50.0)?), HitClass::set([22, 36])?, HitClass::set([29, 40])?);
-    let hit_filters = HitFilters::new([8, 27])?;
+    let reach = Some(Metres::new(50.0)?);
     let skip = [SkipClass::Sky, SkipClass::LightVolume, SkipClass::Shadow].into();
     #[rustfmt::skip]
     let lower = Pipeline {
         passes: vec![
-            Box::new(LowerFromSoftCollision { hit_filters, water: water.clone(), leave_out: leave_out.clone(), reach,
+            Box::new(LowerFromSoftCollision { reach,
                 f_meshes: FMeshes::Off }),
-            Box::new(LowerFromSoftObjectCollision { resolution: ResolutionChoice::High, convex: ConvexBodies::Tessellate, leave_out: &water | &leave_out,
-                leave_out_motion: [2].into(), convex_surface: ConvexSurface::Render, reach }),
+            Box::new(LowerFromSoftObjectCollision { resolution: ResolutionChoice::High, convex: ConvexBodies::Tessellate, motion: MotionSelection::Fixed, convex_surface: ConvexSurface::Render, reach }),
             Box::new(DropFromSoftFar),
             Box::new(ApplyRigidSkinning),
             Box::new(LowerFromSoftGeometry { pose: Pose::Rigid, uv_tiling: Tiling::Apply, winding: Winding::Normals,
