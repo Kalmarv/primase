@@ -14,6 +14,8 @@ pub struct AreaOverview {
     pub classes: Vec<u8>,
     /// Authored records, available to an explicit region-selection operation.
     pub layout: MapLayout,
+    /// Authored drawn-part positions for the registered region selector.
+    pub drawn_points: Vec<[f32; 2]>,
 }
 
 pub fn read(archive: &Archive, decoder: &Decoder<'_>, area: &str) -> Result<AreaOverview> {
@@ -37,6 +39,7 @@ pub fn read(archive: &Archive, decoder: &Decoder<'_>, area: &str) -> Result<Area
             _ => 4,
         });
     }
+    let drawn_points = fromsoft_formats::msb::drawn_part_points(&layout)?;
     Ok(AreaOverview {
         title: format!("{area}: {} parts", points.len()),
         axes: "[x0, z0, x1, z1]: the read's region axes (x east, z ground: the core world frame's z negated), metres",
@@ -44,5 +47,6 @@ pub fn read(archive: &Archive, decoder: &Decoder<'_>, area: &str) -> Result<Area
         points,
         classes,
         layout,
+        drawn_points,
     })
 }
