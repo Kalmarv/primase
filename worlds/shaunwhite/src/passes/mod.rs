@@ -2,6 +2,7 @@
 
 mod collision;
 mod decals;
+mod derive_albedo;
 mod grind;
 mod layers;
 mod lighting;
@@ -12,6 +13,7 @@ mod vertex_alpha;
 mod water;
 pub use collision::{LOWER_SHAUNWHITE_COLLISION, LowerShaunwhiteCollision};
 pub use decals::{DECAL_QUEUE, MARK_SHAUNWHITE_DECALS, MarkShaunwhiteDecals, Survey, survey};
+pub use derive_albedo::{DERIVE_SHAUNWHITE_ALBEDO, DeriveShaunwhiteAlbedo};
 pub use grind::{LOWER_SHAUNWHITE_GRINDS, LowerShaunwhiteGrinds, RAIL_MAX_UP, RAIL_MIN_UP, rail_edge};
 pub use layers::{LOWER_SHAUNWHITE_LAYERS, LowerShaunwhiteLayers};
 pub use lighting::{
@@ -39,4 +41,5 @@ pub fn register(reg: &mut PassRegistry) {
     reg.add(&RESOLVE_SHAUNWHITE_SHADERS);
     reg.add(&MARK_SHAUNWHITE_DECALS);
     reg.add(&LOWER_SHAUNWHITE_VERTEX_ALPHA);
+    reg.add(&DERIVE_SHAUNWHITE_ALBEDO);
 }

@@ -4,6 +4,7 @@
 //! own vocabulary (its interface, resources and render state) is `iridia_interface`'s.
 
 mod binding;
+mod derivation;
 pub mod encoding;
 mod facts;
 mod input_fallback;
@@ -15,6 +16,7 @@ pub mod surface;
 
 pub(crate) use binding::BindingPlace;
 pub use binding::{SamplerBinding, ShaderBinding, StageBinding, TextureBinding, TextureSource};
+pub use derivation::{DerivedInput, DerivedStage, ShaderDerivation};
 pub use encoding::{LaneAffine, NormalEncoding, NormalSpace, ScalarEncoding};
 pub use facts::{MaterialPrograms, ProgramFacts, ProgramResourceFacts};
 pub use input_fallback::{

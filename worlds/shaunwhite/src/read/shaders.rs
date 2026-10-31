@@ -12,6 +12,9 @@ pub enum Error {
 }
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// The high-quality shader database's file name in the install folder, beside the forges.
+pub const HIGH_QUALITY_DATABASE: &str = "ekshadersPChigh.bin";
+
 /// The bytes of an effect's header, before its programs.
 const EFFECT_HEADER: usize = 48;
 

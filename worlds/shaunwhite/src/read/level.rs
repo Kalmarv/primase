@@ -92,6 +92,27 @@ impl Index {
     }
 }
 
+/// The levels whose forges hold props that other levels' Visuals name. Observed, not read: no table of the data is
+/// known to state which forge holds a Visual's Mesh. With the forges of levels 02 and 04 indexed, level 01's Visuals
+/// find their Meshes (the level 01 real-data test); what the other levels need was not measured.
+pub const SHARED_PROP_LEVELS: [&str; 3] = ["01", "02", "04"];
+
+/// The forge of level `level` (`01` to `06`) in the install folder `install`: `DataPC_<level>.forge`.
+pub fn level_forge(install: &Path, level: &str) -> PathBuf {
+    install.join(format!("DataPC_{level}.forge"))
+}
+
+/// [`read_level`] of level `level`'s forge in the install folder `install`, with the forges of the other
+/// [`SHARED_PROP_LEVELS`] indexed.
+pub fn read_installed_level(install: &Path, level: &str) -> Result<(World, Report)> {
+    let shared: Vec<PathBuf> = SHARED_PROP_LEVELS
+        .iter()
+        .filter(|l| **l != level)
+        .map(|l| level_forge(install, l))
+        .collect();
+    read_level(&level_forge(install, level), &shared)
+}
+
 /// The level whose cells `level` holds, with `shared` forges indexed for the objects it names elsewhere.
 pub fn read_level(level: &Path, shared: &[PathBuf]) -> Result<(World, Report)> {
     let mut index = Index::default();

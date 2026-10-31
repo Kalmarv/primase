@@ -440,6 +440,16 @@ the original VS does; B=0/A=1 are placeholders. Original VS/Colour bindings rema
 The helper selects no pass variant. `ShaderInputs.material` survives lowering for this
 purpose; empty ShaderInputs stages take their unavailable reason from MaterialPrograms.
 
+`derive-shaunwhite-albedo{influence=restored|unrestored}` is the pass that makes the selection the helpers leave
+to their caller. For each material with `shaunwhite.shader_inputs` it takes the lowest SDB2 record number among
+the exact compatible forward Colour variants whose RGB slice derives with every material word it reads stated, its
+textures bound and only supported raw varyings (COLOR0, UV0/UV1, and TEXCOORD7.xy from the same record's base-UV
+derivation), binds the textures the slice does not read to a neutral default, and attaches the result as
+`core.shader_derivation`. The game picks a variant at run time from draw and frame state this does not model, so
+the pass reports the rule as its approximation and counts the derived, untried and refused materials (with the
+last reason), the records chosen and the base-UV scope. A material with no derivation keeps the reason as the
+component's refusal.
+
 The private `tools.ref_sm3` host's VS mode runs the complete original vertex program,
 then an independently compiled pass-through PS reads TEXCOORD7 to a float target. Tests
 gate direct-UV and vertex-constant controls first, then compare the derived graph with a
