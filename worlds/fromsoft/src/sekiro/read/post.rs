@@ -1,6 +1,6 @@
 //! Named post and volumetric-fog records, exactly as one GPARAM stores them. No layers are merged and no time keys
 //! are interpolated here. In particular an absent Reinhard contrast is absent, not a renderer default.
-use fromsoft_formats::gparam::{Gparam, TimeAxis, Value};
+use fromsoft_formats::gparam::{Gparam, ParamExtra, TimeAxis, Value};
 use fromsoft_formats::{Archive, Result, dcx::Decoder};
 
 /// One authored value; the hour is absent in GPARAM versions without time keys.
@@ -54,6 +54,11 @@ pub struct Records {
     pub version: u32,
     /// The stored keys' time axis, needed before treating a key as an hour of the game clock.
     pub time: Option<TimeAxis>,
+    /// The named groups' extra records, kept as stored. Absent and present-with-no-IDs are distinct; these are not
+    /// interpreted as activation flags or file precedence.
+    pub tone_extra: Option<ParamExtra>,
+    pub grading_extra: Option<ParamExtra>,
+    pub fog_extra: Option<ParamExtra>,
     pub tone: Tone,
     pub fog: Fog,
 }
@@ -125,9 +130,19 @@ impl Records {
         let tone = |key, f| track(data, "Tone Map[Yebis]", key, f);
         let grading = |key| track(data, "ColorGrading[Yebis]", key, int);
         let fog = |key, f| track(data, "VolumetricFog ParamEditor", key, f);
+        let extra = |key| {
+            data.groups
+                .iter()
+                .position(|group| group.key == key)
+                .and_then(|index| data.extra(index as u32))
+                .cloned()
+        };
         Ok(Self {
             version: data.version,
             time: data.time,
+            tone_extra: extra("Tone Map[Yebis]"),
+            grading_extra: extra("ColorGrading[Yebis]"),
+            fog_extra: extra("VolumetricFog ParamEditor"),
             tone: Tone {
                 mode: track(data, "Tone Map[Yebis]", "GS Presents - ToneMap-ToneMapMode", int)?,
                 reinhard_contrast: tone("GS Presents - ToneMap-ReinhardContrast", float)?,

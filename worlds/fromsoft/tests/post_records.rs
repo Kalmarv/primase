@@ -22,6 +22,27 @@ fn installed_post_records_keep_layers_and_missing_fields_distinct() -> Result<()
     let default = post::read(&archive, &decoder, "default")?;
     let base = post::read(&archive, &decoder, "MapBase")?;
     let castle = post::read(&archive, &decoder, "m11_01_0000")?;
+    for (file, record) in [
+        ("default", &default),
+        ("MapBase", &base),
+        ("m11_01_0000", &castle),
+    ] {
+        println!(
+            "POST_EXTRAS {file}: tone={:?}, grading={:?}, fog={:?}",
+            record.tone_extra, record.grading_extra, record.fog_extra
+        );
+    }
+    // Independent header/extra-table census of the Castle file: value ID 0 is explicitly listed in all three groups.
+    for (extra, group_index, word) in [
+        (&castle.tone_extra, 4, 1),
+        (&castle.grading_extra, 10, 0),
+        (&castle.fog_extra, 22, 1),
+    ] {
+        let extra = extra.as_ref().expect("the group stores an extra record");
+        assert_eq!(extra.group_index, group_index);
+        assert_eq!(extra.ids, [0]);
+        assert_eq!(extra.unknown_0c, Some(word));
+    }
     assert_eq!(
         default.tone.reinhard_contrast,
         vec![post::Sample {

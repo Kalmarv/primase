@@ -144,7 +144,7 @@ pub struct Report {
     /// Further values stored for a chosen ID, at other times of day: kept beside the first, in stored order (the count
     /// of samples after each field's first), for `sample-fromsoft-draw-params` to choose among.
     pub time_variants: usize,
-    /// What the file stores that the GPARAM reader does not interpret.
+    /// What this area read does not interpret, including the extra records' unapplied composition rules.
     pub unread: Unread,
     /// The scene configs of the collision parts, by their four bytes: parts storing them.
     pub scenes: BTreeMap<String, usize>,
@@ -290,6 +290,8 @@ pub(super) fn select(
     report.file = Some(stem.to_owned());
     report.version = gparam.version;
     report.unread = gparam.unread;
+    // Their structure is read by the format reader; this area's file-selection rule does not apply their meaning.
+    report.unread.extras += gparam.extras.len();
     DrawParam {
         game,
         file: stem.to_owned(),
@@ -609,6 +611,7 @@ mod tests {
     #[test]
     fn every_stored_time_sample_of_a_chosen_set_is_kept_in_stored_order() {
         let gparam = Gparam {
+            extras: vec![],
             time: None,
             version: 5,
             unread: Unread::default(),
@@ -673,6 +676,7 @@ mod tests {
 
     fn file() -> Gparam {
         Gparam {
+            extras: vec![],
             time: None,
             version: 5,
             groups: vec![
@@ -759,6 +763,7 @@ mod tests {
     #[test]
     fn a_group_with_one_set_is_read_whatever_the_parts_name_and_a_tie_takes_the_lowest() {
         let only = Gparam {
+            extras: vec![],
             time: None,
             version: 5,
             groups: vec![group(
@@ -781,6 +786,7 @@ mod tests {
     fn fog_volume_keeps_every_set_and_time_without_inventing_a_part_selector() {
         // Elden m10_00_0000: the fog volume stores sets 100 and 101 and no ID 0
         let fog_volume = Gparam {
+            extras: vec![],
             time: None,
             version: 5,
             groups: vec![group(
@@ -832,6 +838,7 @@ mod tests {
     #[test]
     fn a_field_with_nothing_for_the_set_is_counted() {
         let g = Gparam {
+            extras: vec![],
             time: None,
             version: 5,
             groups: vec![group(
@@ -852,6 +859,7 @@ mod tests {
     #[test]
     fn a_file_whose_groups_store_nothing_is_empty_not_unchosen() {
         let shells = Gparam {
+            extras: vec![],
             time: None,
             version: 5,
             groups: vec![
