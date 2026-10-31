@@ -4,6 +4,8 @@
 
 mod post;
 pub use post::{ColourLut, ColourMatrix, ReinhardCurve, ToneMap};
+mod status;
+pub use status::{PostProcessingStatus, PostStage, PostStageStatus, PostStageStatusKind};
 
 use serde::Serialize;
 use serde_json::Value;

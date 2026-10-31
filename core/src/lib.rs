@@ -10,7 +10,8 @@ pub mod asset;
 mod atmosphere;
 pub use atmosphere::{
     Atmosphere, AutoExposure, ColourLut, ColourMatrix, Exposure, ExposureMeter, Fog, FogFalloff,
-    ReinhardCurve, ToneMap, VolumetricFog,
+    PostProcessingStatus, PostStage, PostStageStatus, PostStageStatusKind, ReinhardCurve, ToneMap,
+    VolumetricFog,
 };
 pub mod clip;
 mod clip_identity;
