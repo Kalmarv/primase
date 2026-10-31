@@ -808,7 +808,7 @@ impl<'a> Reading<'a> {
             }
             owners.remove(part);
             for owner in owners {
-                let path = fromsoft_formats::paths::part(owner);
+                let path = fromsoft_formats::paths::part(&owner);
                 if textures::has(archive, &path) {
                     add_packages(
                         &Binder::read(&archive.read(&path, decoder)?, decoder)?,
