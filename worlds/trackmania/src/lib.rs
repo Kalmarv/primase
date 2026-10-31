@@ -3,9 +3,10 @@
 //! with the meshes, materials, textures and collision of the solids its mobils show, and the terrain the map leaves to
 //! its collection's default zone ([`read::TrackmaniaReader`]).
 //!
-//! The reader states what the game stores: its own `trackmania.*` components carry the map, the blocks, the materials
-//! with their shaders and texture slots, the solids and the spawn locations beside the core data made of them. What a
-//! material looks like in a destination is a lowering's choice.
+//! The reader states what the game stores: its own `trackmania.*` components carry the map, its decoration's mood, the
+//! blocks, the materials with their shaders and texture slots, the solids, their lights and the spawn locations beside
+//! the core data made of them. What a material looks like in a destination, and what light a light gives there, is a
+//! lowering's choice; the sun the game places from the mood is not established, so no lowering makes one.
 //!
 //! # Frame
 //!

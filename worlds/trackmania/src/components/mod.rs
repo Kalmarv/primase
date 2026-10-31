@@ -35,6 +35,82 @@ impl Resource for TrackmaniaMap {
     }
 }
 
+/// The mood of the map's decoration (`trackmania.mood`, a resource): its `CGameCtnDecorationMood` as stored, with the
+/// light map's mood and the sun light its remap folder holds. The game places its sun at run time from the latitude, the
+/// sun's rise and fall and the day time; how is not established, so no core light is made of it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TrackmaniaMood {
+    /// The decoration's file (`Stadium\ConstructionDecoration\StadiumBase32x32Day.TMDecoration.Gbx`).
+    pub decoration: String,
+    /// The mood's file, `None` when the decoration stores its mood inside itself.
+    pub file: Option<String>,
+    /// Chunk `0x0303A000`.
+    pub sun: Option<TrackmaniaSun>,
+    /// Chunk `0x0303A001`: the day time the remapping starts at (GBX.NET's `RemappedStartDayTime`; Stadium's Day
+    /// 0.65, Sunrise 0.53, Sunset 0.75, Night 0.15), and the folder whose files the remapping substitutes.
+    pub remapped_start_day_time: Option<f32>,
+    pub remap_folder: Option<String>,
+    /// Chunk `0x0303A002`.
+    pub shadows: Option<TrackmaniaMoodShadows>,
+    /// Chunk `0x0303A006` (no Stadium mood stores it).
+    pub sun_moon_intensity: Option<f32>,
+    /// The light map's mood (`CHmsLightMapMood` of chunk `0x0303A004`'s `CHmsLightMap`).
+    pub light_map: Option<TrackmaniaLightMapMood>,
+    /// The directional light of the remap folder's `Directional.SceneLight.Gbx`, when the folder holds one (Stadium's
+    /// Sunrise and Sunset do, Day and Night do not).
+    pub sun_light: Option<TrackmaniaSunLight>,
+}
+
+impl Resource for TrackmaniaMood {
+    const NAME: &'static str = "trackmania.mood";
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        to_json(self)
+    }
+}
+
+/// A mood's sun: the latitude and longitude in degrees, the offset from GMT, and the times of sunrise and sunfall in
+/// milliseconds since midnight.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TrackmaniaSun {
+    pub latitude: f32,
+    pub longitude: f32,
+    pub delta_gmt: f32,
+    pub sun_rise_ms: i32,
+    pub sun_fall_ms: i32,
+}
+
+/// A mood's shadows: how many the player's and the opponents' cars cast, the cars' shadow intensity, whether the
+/// scene casts shadows and whether the background is lit locally.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TrackmaniaMoodShadows {
+    pub count_car_human: i32,
+    pub count_car_opponent: i32,
+    pub car_intensity: f32,
+    pub scene: bool,
+    pub background_is_locally_lighted: bool,
+}
+
+/// A light map's mood as stored: its first pair (unnamed), its ambient range and its directional scale.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TrackmaniaLightMapMood {
+    pub file: Option<String>,
+    pub u01: Option<[f32; 2]>,
+    pub ambient_range: Option<[f32; 2]>,
+    pub directional_scale: Option<f32>,
+}
+
+/// A mood's sun light (`CGxLightDirectional` of a `CSceneLight`), as stored: it states no direction.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TrackmaniaSunLight {
+    pub file: String,
+    pub common: Option<TrackmaniaLightProperties>,
+    pub double_sided_rgb: Option<[f32; 3]>,
+    pub reverse_rgb: Option<[f32; 3]>,
+    pub reverse_intensity: Option<f32>,
+    pub emitting_angular_size: Option<f32>,
+    pub flare_angular_size: Option<f32>,
+}
+
 /// A block the map places (`trackmania.block`), on its placement entity: the map's record and the block model it
 /// names. A block of the collection's default zone the reader places where the map has no ground block is one too,
 /// with [`TrackmaniaBlock::fill`] set: the map does not store it.
@@ -238,6 +314,22 @@ pub struct TrackmaniaLightProperties {
     pub shadow_intensity: f32,
     pub flare_intensity: f32,
     pub shadow_rgb: [f32; 3],
+}
+
+impl From<&gbx_formats::plug::light::LightProperties> for TrackmaniaLightProperties {
+    fn from(c: &gbx_formats::plug::light::LightProperties) -> Self {
+        TrackmaniaLightProperties {
+            color: c.color,
+            flags: c.flags,
+            intensity: c.intensity,
+            diffuse_intensity: c.diffuse_intensity,
+            specular_intensity: c.specular_intensity,
+            specular_power: c.specular_power,
+            shadow_intensity: c.shadow_intensity,
+            flare_intensity: c.flare_intensity,
+            shadow_rgb: c.shadow_rgb,
+        }
+    }
 }
 
 /// `CGxLightBall`'s stored properties.

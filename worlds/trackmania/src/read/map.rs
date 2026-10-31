@@ -15,10 +15,11 @@
 //! height 0 (its mobil draws their terrain), not the rest of its footprint: a bridge arch stands on two of the six
 //! cells its footprint spans, the default zone's grass around its feet.
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use gbx_formats::game::blockinfo::{BlockInfo, Body};
 use gbx_formats::game::challenge::BlockData;
-use gbx_formats::{Gbx, Id, Node};
+use gbx_formats::{Gbx, Id, Node, NodeIndex};
 use primase_core::convert::{self, Notice, NoticeKind, Reader, Report};
 use primase_core::frame::SourceFrame;
 use primase_core::{
@@ -27,12 +28,12 @@ use primase_core::{
 };
 
 use crate::components::{
-    TrackmaniaBallProperties, TrackmaniaBlock, TrackmaniaLight, TrackmaniaLightKind,
-    TrackmaniaLightProperties, TrackmaniaLights, TrackmaniaMap, TrackmaniaSolid, TrackmaniaSpawn,
-    TrackmaniaSpotProperties,
+    TrackmaniaBallProperties, TrackmaniaBlock, TrackmaniaLight, TrackmaniaLightKind, TrackmaniaLightMapMood,
+    TrackmaniaLightProperties, TrackmaniaLights, TrackmaniaMap, TrackmaniaMood, TrackmaniaMoodShadows,
+    TrackmaniaSolid, TrackmaniaSpawn, TrackmaniaSpotProperties, TrackmaniaSun, TrackmaniaSunLight,
 };
 use crate::read::files::GameFiles;
-use crate::read::library::{At, Library};
+use crate::read::library::{At, Doc, Library};
 use crate::read::material::Materials;
 use crate::read::solid::{Affine, GxLight, LightPart, Part, SolidGeometry, read_solid};
 use crate::{Error, Result};
@@ -400,6 +401,7 @@ impl<'f> Build<'f> {
             square: b.square,
             block_data_version: data.version,
         });
+        b.mood(&id_text(&data.decoration.id))?;
 
         let mut covered = BTreeSet::new();
         b.report.blocks = data.blocks.len();
@@ -439,6 +441,121 @@ impl<'f> Build<'f> {
         b.report.images_unread = std::mem::take(&mut b.materials.images_unread);
         b.report.prototypes = b.prototypes.values().flatten().count();
         Ok((b.world, b.report))
+    }
+
+    /// The mood of the decoration named `decoration` (a collector of the collection, as the block models are), as
+    /// `trackmania.mood`; a decoration or mood that can't be read is counted among the unread files.
+    fn mood(&mut self, decoration: &str) -> Result<()> {
+        let Some(path) = self.model_paths.get(&decoration.to_lowercase()).cloned() else {
+            self.lib.unread.insert(
+                format!("decoration {decoration}"),
+                "the game has no decoration of that name".into(),
+            );
+            return Ok(());
+        };
+        let Some(at) = self.lib.main(&path)? else {
+            return Ok(());
+        };
+        let Node::Decoration(d) = at.node() else {
+            let why = format!("class {}, not a decoration", at.node().class_name());
+            self.lib.unread.insert(path, why);
+            return Ok(());
+        };
+        let reference = d.mood.flatten();
+        let mood = self.lib.follow(&at.doc, reference)?;
+        let Some(Node::DecorationMood(m)) = mood.as_ref().map(At::node) else {
+            self.lib.unread.insert(path, "its mood can't be read".into());
+            return Ok(());
+        };
+        let (m, mood_doc) = (m.clone(), mood.map(|a| a.doc));
+        let light_map = match mood_doc {
+            Some(doc) => self.light_map_mood(&doc, m.light_map.flatten())?,
+            None => None,
+        };
+        let remap_folder = m.remapping.as_ref().map(|(_, _, folder)| folder.clone());
+        let sun_light = match &remap_folder {
+            Some(folder) => self.sun_light(folder)?,
+            None => None,
+        };
+        self.world.insert_resource(TrackmaniaMood {
+            decoration: path,
+            file: Library::file_of(&at.doc, reference),
+            sun: m.sun.map(|s| TrackmaniaSun {
+                latitude: s.latitude,
+                longitude: s.longitude,
+                delta_gmt: s.delta_gmt,
+                sun_rise_ms: s.time_sun_rise,
+                sun_fall_ms: s.time_sun_fall,
+            }),
+            remapped_start_day_time: m.remapping.as_ref().map(|(t, _, _)| *t),
+            remap_folder,
+            shadows: m.shadows.map(|s| TrackmaniaMoodShadows {
+                count_car_human: s.count_car_human,
+                count_car_opponent: s.count_car_opponent,
+                car_intensity: s.car_intensity,
+                scene: s.scene,
+                background_is_locally_lighted: s.background_is_locally_lighted,
+            }),
+            sun_moon_intensity: m.sun_moon_intensity,
+            light_map,
+            sun_light,
+        });
+        Ok(())
+    }
+
+    /// The mood of the light map `reference` (made in `doc`) leads to.
+    fn light_map_mood(
+        &mut self,
+        doc: &Arc<Doc>,
+        reference: Option<NodeIndex>,
+    ) -> Result<Option<TrackmaniaLightMapMood>> {
+        let Some(map) = self.lib.follow(doc, reference)? else {
+            return Ok(None);
+        };
+        let Node::HmsLightMap(l) = map.node() else {
+            return Ok(None);
+        };
+        let reference = l.mood.flatten();
+        let file = Library::file_of(&map.doc, reference);
+        Ok(
+            match self.lib.follow(&map.doc, reference)?.as_ref().map(At::node) {
+                Some(Node::HmsLightMapMood(m)) => Some(TrackmaniaLightMapMood {
+                    file,
+                    u01: m.u01,
+                    ambient_range: m.ambient_range,
+                    directional_scale: m.directional_scale,
+                }),
+                _ => None,
+            },
+        )
+    }
+
+    /// The directional light of `folder`'s `Directional.SceneLight.Gbx`, when the folder holds one.
+    fn sun_light(&mut self, folder: &str) -> Result<Option<TrackmaniaSunLight>> {
+        let sep = if folder.ends_with('\\') { "" } else { "\\" };
+        let path = format!("{folder}{sep}Directional.SceneLight.Gbx");
+        if self.files.find(&path).is_none() {
+            return Ok(None);
+        }
+        let Some(at) = self.lib.main(&path)? else {
+            return Ok(None);
+        };
+        let Node::SceneLight(s) = at.node() else {
+            return Ok(None);
+        };
+        let main = s.light.as_ref().and_then(|l| l.main_light.flatten());
+        Ok(match self.lib.follow(&at.doc, main)?.as_ref().map(At::node) {
+            Some(Node::LightDirectional(d)) => Some(TrackmaniaSunLight {
+                file: path,
+                common: d.base.common.as_ref().map(TrackmaniaLightProperties::from),
+                double_sided_rgb: d.double_sided_rgb,
+                reverse_rgb: d.reverse_rgb,
+                reverse_intensity: d.reverse_intensity,
+                emitting_angular_size: d.emitting_angular_size,
+                flare_angular_size: d.flare_angular_size,
+            }),
+            _ => None,
+        })
     }
 
     /// Index the collection's block models by their names: each collector of the game's files whose ident is of the
@@ -795,17 +912,7 @@ impl<'f> Build<'f> {
             tree: part.tree.clone(),
             location: self.frame.transform(&transform(&part.location)),
             kind,
-            common: common.map(|c| TrackmaniaLightProperties {
-                color: c.color,
-                flags: c.flags,
-                intensity: c.intensity,
-                diffuse_intensity: c.diffuse_intensity,
-                specular_intensity: c.specular_intensity,
-                specular_power: c.specular_power,
-                shadow_intensity: c.shadow_intensity,
-                flare_intensity: c.flare_intensity,
-                shadow_rgb: c.shadow_rgb,
-            }),
+            common: common.map(TrackmaniaLightProperties::from),
             ball: base
                 .and_then(|b| b.ball.as_ref())
                 .map(|b| TrackmaniaBallProperties {

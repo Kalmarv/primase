@@ -4,6 +4,8 @@
 //!
 //! - M1: every block of every campaign map is placed from its model's mobil, every solid it shows (each of its parts:
 //!   visuals, collision and lights) and every file those name read.
+//! - M2: every campaign map states its decoration's mood (`trackmania.mood`): its sun, remapping, shadows and light
+//!   map mood, and the sun light of its remap folder exactly where that folder holds one.
 
 mod inputs;
 
@@ -11,6 +13,7 @@ use std::collections::BTreeMap;
 
 use inputs::{Game, install};
 use primase_core::convert::Reader;
+use primase_trackmania::components::TrackmaniaMood;
 use primase_trackmania::read::GameFiles;
 use primase_trackmania::{FRAME, TrackmaniaReader};
 
@@ -27,10 +30,29 @@ fn m1_every_campaign_block_is_placed() {
         .collect();
     assert!(!maps.is_empty(), "no campaign maps in {}", root.display());
     let mut failures = BTreeMap::new();
+    let mut moods: BTreeMap<String, u32> = BTreeMap::new();
     for path in &maps {
         let bytes = files.read(path).unwrap().unwrap();
         let mut reader = TrackmaniaReader::new(&files, &bytes, path.clone(), FRAME);
-        let (_world, lines) = reader.read().unwrap();
+        let (world, lines) = reader.read().unwrap();
+        match world.resource::<TrackmaniaMood>() {
+            Some(m)
+                if m.sun.is_some()
+                    && m.shadows.is_some()
+                    && m.light_map.is_some()
+                    && m.remap_folder.as_ref().is_some_and(|f| {
+                        files.find(&format!("{f}Directional.SceneLight.Gbx")).is_some()
+                            == m.sun_light.is_some()
+                    }) =>
+            {
+                *moods
+                    .entry(format!("{} sun light {}", m.decoration, m.sun_light.is_some()))
+                    .or_default() += 1;
+            }
+            other => {
+                failures.insert(format!("{path} (mood)"), format!("{other:?}"));
+            }
+        }
         let r = &reader.report;
         assert_eq!(
             r.placed + r.empty,
@@ -53,6 +75,7 @@ fn m1_every_campaign_block_is_placed() {
             );
         }
     }
+    println!("moods: {moods:?}");
     for (p, r) in &failures {
         println!("NOT PLACED {p}: {r}");
     }
