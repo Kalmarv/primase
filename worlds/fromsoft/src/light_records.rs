@@ -143,6 +143,29 @@ const TILE_PASS_FLAG: &str = "the organize program sets it where the light's vol
 /// buffer. Both games' records take the light's own specular ([`LightValue::SpecularColour`]): a BTL light's record
 /// holds its specular bytes squared times its specular power, apart from its diffuse ones (every BTL light read back
 /// from both games' frames).
+/// Native ER 2.7.2.0: GXPointLight's constructor calls the shared light constructor, which sets
+/// strength/exponent to (1, 1). Both point and spot packers clamp exponent to at least 0.01.
+/// Kept here at the source boundary, including the clamp for later authored overrides.
+fn elden_translucency(strength: f32, exponent: f32) -> [LightField; 2] {
+    [
+        field(
+            48,
+            LightValue::Constant {
+                value: strength,
+                why: TRANSLUCENCY_DEFAULTS.into(),
+            },
+        ),
+        field(
+            52,
+            LightValue::Constant {
+                value: exponent.max(0.01),
+                why: TRANSLUCENCY_DEFAULTS.into(),
+            },
+        ),
+    ]
+}
+pub(crate) const TRANSLUCENCY_DEFAULTS: &str = "translucency strength/exponent: the light constructor's defaults (1, 1), exponent clamped to 0.01 as the packer does; per-light overrides not traced";
+
 pub(crate) fn table(game: Game, name: &str, stride: u32) -> Option<LightTable> {
     let (wrap, light_type_why, shadow, spot_prefix) = match game {
         Game::Sekiro => (WRAP, LIGHT_TYPE, SHADOW, ""),
@@ -150,7 +173,7 @@ pub(crate) fn table(game: Game, name: &str, stride: u32) -> Option<LightTable> {
     };
     let light_type = |why: String| LightValue::Constant { value: 0.0, why };
     let spot = |why: &str| format!("{spot_prefix}{why}");
-    match (name, stride) {
+    let mut table = match (name, stride) {
         ("g_LightBuffer", 208) => Some(LightTable {
             kind: LightTableKind::Point,
             stride,
@@ -218,7 +241,13 @@ pub(crate) fn table(game: Game, name: &str, stride: u32) -> Option<LightTable> {
             ],
         }),
         _ => None,
+    }?;
+    if game == Game::EldenRing {
+        table.fields.retain(|f| f.offset != 48);
+        table.fields.extend(elden_translucency(1.0, 1.0));
+        table.fields.sort_by_key(|f| f.offset);
     }
+    Some(table)
 }
 
 /// The frame parameter a 4-byte constant `name` is in `game`: `cbLightAccParam`'s `g_lightCount` and `g_spotLightCount`
@@ -245,6 +274,18 @@ pub(crate) fn frame_constant(game: Game, name: &str) -> Option<FrameParameter> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn elden_translucency_preserves_strength_and_clamps_the_native_exponent() {
+        for (input, expected) in [(0.0, 0.01), (-1.0, 0.01), (0.001, 0.01), (1.0, 1.0), (2.0, 2.0)] {
+            let fields = elden_translucency(0.25, input);
+            assert!(matches!(
+                fields[0].value,
+                LightValue::Constant { value: 0.25, .. }
+            ));
+            assert!(matches!(fields[1].value, LightValue::Constant { value, .. } if value == expected));
+        }
+    }
+
     /// Both games' tables agree with themselves and their buffers' element sizes, and lie at the same offsets; both take
     /// the light's own specular. Both games bind their counts and tile constants.
     #[test]
@@ -260,7 +301,13 @@ mod tests {
                         .any(|f| f.offset == 32 && f.value == LightValue::SpecularColour)
                 );
             }
-            let offsets = |t: &LightTable| t.fields.iter().map(|f| f.offset).collect::<Vec<_>>();
+            let offsets = |t: &LightTable| {
+                t.fields
+                    .iter()
+                    .filter(|f| f.offset != 52)
+                    .map(|f| f.offset)
+                    .collect::<Vec<_>>()
+            };
             assert_eq!(offsets(&sekiro), offsets(&elden), "{name}");
             assert!(table(Game::Sekiro, name, stride + 16).is_none());
         }

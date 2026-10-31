@@ -330,6 +330,8 @@ fn eldens_light_tables_pack_the_read_back_records() -> Result<(), Box<dyn std::e
         "point view at 0",
         "point range at 12",
         "point range at 60",
+        "point constant at 48",
+        "point constant at 52",
         "point constant at 64",
         "point colour exact at 16",
         "point colour exact at 32",
