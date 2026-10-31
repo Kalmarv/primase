@@ -148,12 +148,12 @@ fn group(payloads: &EnvironmentPayloads, state: u8, tier: Tier, id: u32) -> Resu
             .chain(std::iter::once(&mut found.cube))
             .zip(other.coefficients.iter().chain(std::iter::once(&other.cube)))
         {
-            if let Some(e) = b {
-                if a.replace(*e).is_some() {
-                    return Err(format!(
-                        "duplicate environment group {id:04} channel across packages"
-                    ));
-                }
+            if let Some(e) = b
+                && a.replace(*e).is_some()
+            {
+                return Err(format!(
+                    "duplicate environment group {id:04} channel across packages"
+                ));
             }
         }
     }

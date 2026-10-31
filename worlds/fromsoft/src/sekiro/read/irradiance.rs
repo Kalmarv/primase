@@ -65,25 +65,14 @@ pub fn read(
             .into_iter()
             .filter(|t| t.kind == TextureKind::Volume)
         {
-            let stem = texture.name.strip_suffix(".dds").unwrap_or(&texture.name);
-            let prefix = format!("{area}_GIIV");
-            let rest = stem
-                .strip_prefix(&prefix)
-                .ok_or_else(|| invalid("GIIV", 0, format!("unexpected volume name {stem}")))?;
-            let fields: Vec<_> = rest.split('_').collect();
-            if fields.len() != 3 || fields[1] != format!("{state:02}") {
+            let identity = fromsoft_formats::envmap::texture_identity(&texture.name, area)?;
+            if identity.state != state {
                 return Err(invalid("GIIV", 0, "package/name state mismatch"));
             }
-            let id = fields[0]
-                .parse::<u32>()
-                .map_err(|_| invalid("GIIV", 0, "invalid coefficient group id"))?;
-            let channel = match fields[2] {
-                "X" => 0,
-                "Y" => 1,
-                "Z" => 2,
-                "W" => 3,
-                _ => return Err(invalid("GIIV", 0, "unknown coefficient channel")),
-            };
+            let id = identity.group;
+            let channel = identity
+                .channel
+                .ok_or_else(|| invalid("GIIV", 0, "volume has no coefficient channel"))?;
             let data = primase_dds::read_volume(&texture.dds).map_err(|e| invalid("GIIV DDS", 0, e))?;
             let entity = world.spawn();
             world.insert(entity, Name(texture.name.clone()));
@@ -101,24 +90,15 @@ pub fn read(
         }
         let mut used = std::collections::BTreeSet::new();
         for region in &records {
-            let id = region
-                .name
-                .strip_prefix("Env_Box")
-                .and_then(|s| s.split('_').next())
-                .and_then(|s| s.parse::<u32>().ok())
-                .ok_or_else(|| invalid("GIIV box", 0, "invalid box identity"))?;
+            let id = fromsoft_formats::envmap::region_identity(&region.name, "Env_Box")?;
             let group = groups
                 .get(&id)
                 .ok_or_else(|| invalid("GIIV box", 0, format!("box {id} has no coefficients")))?;
             let RegionShape::Box { width, height, depth } = region.shape else {
                 return Err(invalid("GIIV box", 0, "environment box is not a box"));
             };
-            let data = &region.type_data;
-            if data.len() < 0x34 {
-                return Err(invalid("GIIV box", 0, "truncated environment box data"));
-            }
-            let float =
-                |at: usize| f32::from_le_bytes(data[at..at + 4].try_into().expect("checked type data"));
+            let fields = fromsoft_formats::envmap::irradiance_box_fields(layout, region)?
+                .ok_or_else(|| invalid("GIIV box", region.index, "unsupported MSB generation"))?;
             let entity = world.spawn();
             let mut position = region.position;
             position[1] += height / 2.;
@@ -148,12 +128,12 @@ pub fn read(
                     package: state,
                     region: region.clone(),
                     coefficients: group.map(|e| e.expect("complete group")),
-                    display_distance: float(0),
-                    fade_distance: float(4),
-                    priority: data[9],
-                    diffuse_intensity: float(0x28),
-                    specular_intensity: float(0x2c),
-                    terms: i32::from_le_bytes(data[0x24..0x28].try_into().expect("checked type data")),
+                    display_distance: fields.display_distance,
+                    fade_distance: fields.fade_distance,
+                    priority: fields.priority,
+                    diffuse_intensity: fields.diffuse_intensity,
+                    specular_intensity: fields.specular_intensity,
+                    terms: fields.terms,
                 },
             );
             used.insert(id);
