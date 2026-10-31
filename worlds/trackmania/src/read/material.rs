@@ -1,12 +1,12 @@
 //! Materials and textures ([`Materials`]): each material (`CPlugMaterial`) an entity with [`TrackmaniaMaterial`] and
-//! `core.name`, each image its texture slots show an entity with `core.texture` (decoded from its DDS), `core.name`
+//! `core.name`, each image its texture slots show an entity with `core.texture` (decoded from its DDS or TGA), `core.name`
 //! and `core.source`, each read once however many materials share it.
 use std::collections::BTreeMap;
 
 use std::sync::Arc;
 
 use gbx_formats::{Node, NodeIndex};
-use primase_core::{Entity, Name, Source, TexRole, World};
+use primase_core::{ColorSpace, Entity, Name, Source, TexFormat, TexRole, Texture, World};
 
 use crate::Result;
 use crate::components::{TrackmaniaMaterial, TrackmaniaTextureSlot};
@@ -151,33 +151,48 @@ impl Materials {
         if let Some(e) = self.images.get(&key) {
             return Ok(*e);
         }
-        let e = match files.read(path)? {
-            None => {
-                self.images_unread.insert(path.to_owned(), "no such file".into());
-                None
+        let decoded = match files.read(path)? {
+            None => Err("no such file".to_owned()),
+            Some(bytes) if bytes.starts_with(b"DDS ") => primase_dds::read(&bytes).map_err(|e| e.to_string()),
+            // TGA has no signature: its extension names it
+            Some(bytes) if key.ends_with(".tga") => primase_image::read_tga(&bytes)
+                .map_err(|e| e.to_string())
+                .and_then(|tga| tga_texture(tga.image)),
+            Some(_) => Err("neither a DDS nor a TGA image".to_owned()),
+        };
+        let e = match decoded {
+            Ok(mut texture) => {
+                texture.role = TexRole::Other;
+                let e = w.spawn();
+                w.insert(e, texture);
+                let file = path.rsplit(['\\', '/']).next().unwrap_or(path);
+                w.insert(e, Name(file.split('.').next().unwrap_or(file).to_owned()));
+                w.insert(e, Source(path.to_owned()));
+                Some(e)
             }
-            Some(bytes) if bytes.starts_with(b"DDS ") => match primase_dds::read(&bytes) {
-                Ok(mut texture) => {
-                    texture.role = TexRole::Other;
-                    let e = w.spawn();
-                    w.insert(e, texture);
-                    let file = path.rsplit(['\\', '/']).next().unwrap_or(path);
-                    w.insert(e, Name(file.split('.').next().unwrap_or(file).to_owned()));
-                    w.insert(e, Source(path.to_owned()));
-                    Some(e)
-                }
-                Err(err) => {
-                    self.images_unread.insert(path.to_owned(), err.to_string());
-                    None
-                }
-            },
-            Some(_) => {
-                self.images_unread
-                    .insert(path.to_owned(), "not a DDS image".into());
+            Err(why) => {
+                self.images_unread.insert(path.to_owned(), why);
                 None
             }
         };
         self.images.insert(key, e);
         Ok(e)
     }
+}
+
+/// A TGA's pixels as a texture: RGBA8, one level, tagged linear as the game's untagged DDS images are (a TGA states no
+/// colour space).
+fn tga_texture(image: primase_image::Image) -> std::result::Result<Texture, String> {
+    let primase_image::Samples::U8(level) = image.samples else {
+        return Err("a TGA decoded to 16-bit samples".into());
+    };
+    Ok(Texture {
+        width: image.width,
+        height: image.height,
+        format: TexFormat::Rgba8Unorm,
+        levels: vec![level],
+        color_space: ColorSpace::Linear,
+        role: TexRole::Other,
+        normal: None,
+    })
 }

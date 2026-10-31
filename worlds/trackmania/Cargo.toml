@@ -11,6 +11,8 @@ publish.workspace = true
 [dependencies]
 primase-core.workspace = true
 primase-dds.workspace = true
+primase-foundations.workspace = true
+primase-image.workspace = true
 gbx-formats.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

@@ -26,11 +26,15 @@ use primase_core::{
     Topology, Transform, World,
 };
 
-use crate::components::{TrackmaniaBlock, TrackmaniaMap, TrackmaniaSolid, TrackmaniaSpawn};
+use crate::components::{
+    TrackmaniaBallProperties, TrackmaniaBlock, TrackmaniaLight, TrackmaniaLightKind,
+    TrackmaniaLightProperties, TrackmaniaLights, TrackmaniaMap, TrackmaniaSolid, TrackmaniaSpawn,
+    TrackmaniaSpotProperties,
+};
 use crate::read::files::GameFiles;
 use crate::read::library::{At, Library};
 use crate::read::material::Materials;
-use crate::read::solid::{Affine, Part, SolidGeometry, read_solid};
+use crate::read::solid::{Affine, GxLight, LightPart, Part, SolidGeometry, read_solid};
 use crate::{Error, Result};
 
 const STAGE: &str = "trackmania reader";
@@ -742,6 +746,10 @@ impl<'f> Build<'f> {
         if !collision.triangles.is_empty() {
             self.world.insert(e, collision);
         }
+        if !g.lights.is_empty() {
+            let lights = g.lights.iter().map(|l| self.light(l)).collect();
+            self.world.insert(e, TrackmaniaLights(lights));
+        }
         self.world.insert(e, Name(name));
         self.world
             .insert(e, Source(format!("{}#{}", solid.doc.path, solid.index.0)));
@@ -754,6 +762,65 @@ impl<'f> Build<'f> {
             },
         );
         Ok(e)
+    }
+
+    /// A light tree's light in the world's frame, its Gx light's chunks as stored.
+    fn light(&self, part: &LightPart) -> TrackmaniaLight {
+        let (kind, base, spot) = match &part.light {
+            GxLight::Ball(l) => (TrackmaniaLightKind::Ball, Some(&l.base), None),
+            GxLight::Spot(l) => {
+                let spot = match (&l.spot, &l.legacy_angles) {
+                    (Some(s), _) => Some(TrackmaniaSpotProperties {
+                        inner: s.inner,
+                        outer: s.outer,
+                        falloff_exponent: s.falloff_exponent,
+                    }),
+                    (None, Some(a)) => Some(TrackmaniaSpotProperties {
+                        inner: a.inner,
+                        outer: a.outer,
+                        falloff_exponent: a.falloff_exponent,
+                    }),
+                    (None, None) => None,
+                };
+                (TrackmaniaLightKind::Spot, Some(&l.base), spot)
+            }
+            GxLight::Frustum(l) => (TrackmaniaLightKind::Frustum, Some(&l.base), None),
+            GxLight::Directional(_) => (TrackmaniaLightKind::Directional, None, None),
+        };
+        let common = match &part.light {
+            GxLight::Directional(l) => l.base.common.as_ref(),
+            _ => base.and_then(|b| b.base.common.as_ref()),
+        };
+        TrackmaniaLight {
+            tree: part.tree.clone(),
+            location: self.frame.transform(&transform(&part.location)),
+            kind,
+            common: common.map(|c| TrackmaniaLightProperties {
+                color: c.color,
+                flags: c.flags,
+                intensity: c.intensity,
+                diffuse_intensity: c.diffuse_intensity,
+                specular_intensity: c.specular_intensity,
+                specular_power: c.specular_power,
+                shadow_intensity: c.shadow_intensity,
+                flare_intensity: c.flare_intensity,
+                shadow_rgb: c.shadow_rgb,
+            }),
+            ball: base
+                .and_then(|b| b.ball.as_ref())
+                .map(|b| TrackmaniaBallProperties {
+                    flags: b.flags,
+                    radius: b.radius,
+                    radius_specular: b.radius_specular,
+                    radius_shadow: b.radius_shadow,
+                    radius_flare: b.radius_flare,
+                    emitting_radius: b.emitting_radius,
+                    attenuation1: b.attenuation1,
+                    attenuation2: b.attenuation2,
+                    ambient_rgb: b.ambient_rgb,
+                }),
+            spot,
+        }
     }
 
     /// The parts as primitives in the world's frame, each with its material.

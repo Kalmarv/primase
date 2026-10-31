@@ -35,6 +35,7 @@ pub const FRAME: SourceFrame = SourceFrame::new([Axis::PosX, Axis::PosY, Axis::P
 
 /// Registers TrackMania's passes.
 pub fn register(reg: &mut primase_core::pass::PassRegistry) {
+    reg.add(&passes::LOWER_TRACKMANIA_LIGHTS);
     reg.add(&passes::LOWER_TRACKMANIA_MATERIALS);
     reg.add(&passes::LOWER_TRACKMANIA_SPAWNS);
     reg.add(&passes::LOWER_TRACKMANIA_SURFACES);

@@ -1,6 +1,6 @@
 //! The `trackmania.*` dialect: what a map and the game's block models state, as stored, beside the core data the reader
 //! makes of them. Positions are in the core frame in metres ([Frame](crate#frame)).
-use primase_core::{Component, Entity, JsonError, Resource};
+use primase_core::{Component, Entity, JsonError, Resource, Transform};
 use serde::Serialize;
 
 fn to_json<T: Serialize>(v: &T) -> Result<Option<serde_json::Value>, JsonError> {
@@ -168,4 +168,96 @@ impl Component for TrackmaniaSolid {
     fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
         to_json(self)
     }
+}
+
+/// A prototype's lights (`trackmania.lights`): the light trees (`CPlugTreeLight`) of its solid, each its `CPlugLight`'s
+/// Gx light as stored, at the tree's location in the prototype's space. A lowering places them per instance.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TrackmaniaLights(pub Vec<TrackmaniaLight>);
+
+impl Component for TrackmaniaLights {
+    const NAME: &'static str = "trackmania.lights";
+    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::None;
+    /// Each light's location in the prototype's space: mapped with it.
+    fn apply_linear(&self, l: &primase_core::Linear) -> primase_core::Linearity<Self> {
+        let lights = self
+            .0
+            .iter()
+            .map(|light| TrackmaniaLight {
+                location: Transform {
+                    cols: light.location.cols.map(|c| l.point(c)),
+                },
+                ..light.clone()
+            })
+            .collect();
+        primase_core::Linearity::Applied(TrackmaniaLights(lights))
+    }
+    fn to_json(&self) -> Result<Option<serde_json::Value>, JsonError> {
+        to_json(self)
+    }
+}
+
+/// One light of a solid (see [`TrackmaniaLights`]), its Gx light's chunks as stored (`None`: the light has no such
+/// chunk). Colours are as the game stores them (0 to 1); angles in degrees.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TrackmaniaLight {
+    /// The light tree's name, when it has one.
+    pub tree: Option<String>,
+    /// The light tree's location in the prototype's space, composed from the solid's root: its position, and its axes
+    /// (the light shines along its +Z; see `lower-trackmania-lights`).
+    pub location: Transform,
+    /// The Gx light's class: `ball` (`CGxLightBall`), `spot`, `frustum` or `directional`.
+    pub kind: TrackmaniaLightKind,
+    /// `CGxLight`'s properties (chunk `0x04001009`).
+    pub common: Option<TrackmaniaLightProperties>,
+    /// `CGxLightBall`'s properties (a ball, spot or frustum light; chunk `0x04002006`).
+    pub ball: Option<TrackmaniaBallProperties>,
+    /// A spot's cone (chunk `0x0400B002`, else the older `0x0400B001`).
+    pub spot: Option<TrackmaniaSpotProperties>,
+}
+
+/// The Gx light class of a [`TrackmaniaLight`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrackmaniaLightKind {
+    Ball,
+    Spot,
+    Frustum,
+    Directional,
+}
+
+/// `CGxLight`'s stored properties.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TrackmaniaLightProperties {
+    pub color: [f32; 3],
+    pub flags: u32,
+    pub intensity: f32,
+    pub diffuse_intensity: f32,
+    pub specular_intensity: f32,
+    pub specular_power: f32,
+    pub shadow_intensity: f32,
+    pub flare_intensity: f32,
+    pub shadow_rgb: [f32; 3],
+}
+
+/// `CGxLightBall`'s stored properties.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TrackmaniaBallProperties {
+    pub flags: u32,
+    pub radius: f32,
+    pub radius_specular: f32,
+    pub radius_shadow: f32,
+    pub radius_flare: f32,
+    pub emitting_radius: f32,
+    pub attenuation1: f32,
+    pub attenuation2: f32,
+    pub ambient_rgb: [f32; 3],
+}
+
+/// A spot's stored cone: its inner and outer full apex angles in degrees, and its falloff exponent.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TrackmaniaSpotProperties {
+    pub inner: f32,
+    pub outer: f32,
+    pub falloff_exponent: f32,
 }

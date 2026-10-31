@@ -2,8 +2,8 @@
 //! The campaigns' maps (`installs.tmnf`, `GameData/Tracks/Campaigns/Nations`) read through the reader with the game's
 //! own files.
 //!
-//! - M1: every block of every campaign map is placed from its model's mobil, every solid it shows and every file
-//!   those name read.
+//! - M1: every block of every campaign map is placed from its model's mobil, every solid it shows (each of its parts:
+//!   visuals, collision and lights) and every file those name read.
 
 mod inputs;
 
@@ -41,13 +41,14 @@ fn m1_every_campaign_block_is_placed() {
             && r.no_mobil.is_empty()
             && r.unshown.is_empty()
             && r.no_solid.is_empty()
+            && r.skipped.is_empty()
             && r.unread_files.is_empty())
         {
             failures.insert(
                 path.clone(),
                 format!(
-                    "models {:?} mobils {:?} solids {:?} files {:?}",
-                    r.no_model, r.no_mobil, r.no_solid, r.unread_files
+                    "models {:?} mobils {:?} solids {:?} parts {:?} files {:?}",
+                    r.no_model, r.no_mobil, r.no_solid, r.skipped, r.unread_files
                 ),
             );
         }

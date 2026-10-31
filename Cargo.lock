@@ -1664,6 +1664,8 @@ dependencies = [
  "gbx-formats",
  "primase-core",
  "primase-dds",
+ "primase-foundations",
+ "primase-image",
  "primase-testdata",
  "serde",
  "serde_json",

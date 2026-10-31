@@ -5,6 +5,7 @@
 //! trees: the walk for level `k` takes each mip tree's level `k`, or its last when it has fewer.
 use std::sync::Arc;
 
+use gbx_formats::plug::light::{LightBall, LightDirectional, LightFrustum, LightSpot};
 use gbx_formats::plug::solid::SolidContent;
 use gbx_formats::plug::surface::{Surf, SurfMaterial, material_id_name};
 use gbx_formats::plug::tree::TreeData;
@@ -90,7 +91,25 @@ pub struct CollisionPart {
     pub surfaces: Vec<String>,
 }
 
-/// A solid's geometry: per level of detail its parts, and its collision.
+/// The light a light tree (`CPlugTreeLight`) holds: its `CPlugLight`'s Gx light, as stored.
+#[derive(Clone, Debug, PartialEq)]
+pub enum GxLight {
+    Ball(LightBall),
+    Spot(LightSpot),
+    Frustum(LightFrustum),
+    Directional(LightDirectional),
+}
+
+/// One light tree, in the solid's space: the tree's name, its location composed from the root (`location`: where the
+/// light is, its axes the light's own), and its light.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LightPart {
+    pub tree: Option<String>,
+    pub location: Affine,
+    pub light: GxLight,
+}
+
+/// A solid's geometry: per level of detail its parts, and its collision and lights.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SolidGeometry {
     /// The mip trees' far distances, in the order met at level 0.
@@ -98,6 +117,8 @@ pub struct SolidGeometry {
     /// Level `k`'s parts, level 0 the finest; one level when the solid has no mip tree.
     pub levels: Vec<Vec<Part>>,
     pub collision: Vec<CollisionPart>,
+    /// The light trees met on the level-0 walk.
+    pub lights: Vec<LightPart>,
     /// What was met and not read (a visual class, a collision shape, a visual without vertices), counted.
     pub skipped: std::collections::BTreeMap<String, u32>,
 }
@@ -124,11 +145,13 @@ pub fn read_solid(lib: &mut Library<'_>, at: &At) -> Result<Option<(At, SolidGeo
                     parts: Vec::new(),
                     mips: Vec::new(),
                     collision: Some(Vec::new()),
+                    lights: Some(Vec::new()),
                     skipped: Default::default(),
                 };
                 walk.tree(lib, &root, Affine::IDENTITY, 0)?;
                 g.mip_far = std::mem::take(&mut walk.mips);
                 g.collision = walk.collision.take().unwrap_or_default();
+                g.lights = walk.lights.take().unwrap_or_default();
                 g.levels.push(std::mem::take(&mut walk.parts));
                 let levels = g.mip_far.iter().map(Vec::len).max().unwrap_or(1);
                 for level in 1..levels {
@@ -151,6 +174,8 @@ struct Walk {
     mips: Vec<Vec<f32>>,
     /// Collected on the level-0 walk only.
     collision: Option<Vec<CollisionPart>>,
+    /// Collected on the level-0 walk only.
+    lights: Option<Vec<LightPart>>,
     skipped: std::collections::BTreeMap<String, u32>,
 }
 
@@ -164,16 +189,17 @@ impl Walk {
             self.skip("a tree nested past 64 levels");
             return Ok(());
         }
-        let (data, mip): (&TreeData, Option<NodeIndex>) = match at.node() {
-            Node::Tree(t) => (&t.tree, None),
+        let (data, mip, light): (&TreeData, Option<NodeIndex>, Option<NodeIndex>) = match at.node() {
+            Node::Tree(t) => (&t.tree, None, None),
             Node::TreeVisualMip(t) => {
                 let levels = t.levels.as_deref().unwrap_or_default();
                 if self.level == 0 {
                     self.mips.push(levels.iter().map(|l| l.far_z).collect());
                 }
                 let chosen = levels.get(self.level.min(levels.len().saturating_sub(1)));
-                (&t.tree, chosen.and_then(|l| l.tree))
+                (&t.tree, chosen.and_then(|l| l.tree), None)
             }
+            Node::TreeLight(t) => (&t.tree, None, t.light.flatten()),
             other => {
                 self.skip(format!("tree class {}", other.class_name()));
                 return Ok(());
@@ -186,6 +212,11 @@ impl Walk {
             })
         });
         let name = data.plug_id.as_ref().map(|id| format!("{id:?}"));
+        if let Some(light) = light
+            && self.lights.is_some()
+        {
+            self.light(lib, at, light, name.clone(), &here)?;
+        }
         if let Some(content) = data.content.clone() {
             if let Some(visual) = lib.follow(&at.doc, content.visual)? {
                 let material = material_ref(&at.doc, content.shader);
@@ -268,6 +299,47 @@ impl Walk {
             texcoords,
             indices,
         });
+    }
+
+    /// A light tree's `CPlugLight` followed to its Gx light, kept as stored at the tree's location.
+    fn light(
+        &mut self,
+        lib: &mut Library<'_>,
+        tree: &At,
+        light: NodeIndex,
+        name: Option<String>,
+        m: &Affine,
+    ) -> Result<()> {
+        let Some(plug) = lib.follow(&tree.doc, Some(light))? else {
+            self.skip("a light tree whose light is not in place");
+            return Ok(());
+        };
+        let Node::Light(plug_light) = plug.node() else {
+            self.skip(format!("light class {}", plug.node().class_name()));
+            return Ok(());
+        };
+        let Some(gx) = lib.follow(&plug.doc, plug_light.light.flatten())? else {
+            self.skip("a CPlugLight without its Gx light");
+            return Ok(());
+        };
+        let light = match gx.node() {
+            Node::LightBall(l) => GxLight::Ball((**l).clone()),
+            Node::LightSpot(l) => GxLight::Spot((**l).clone()),
+            Node::LightFrustum(l) => GxLight::Frustum((**l).clone()),
+            Node::LightDirectional(l) => GxLight::Directional((**l).clone()),
+            other => {
+                self.skip(format!("Gx light class {}", other.class_name()));
+                return Ok(());
+            }
+        };
+        if let Some(lights) = self.lights.as_mut() {
+            lights.push(LightPart {
+                tree: name,
+                location: *m,
+                light,
+            });
+        }
+        Ok(())
     }
 
     fn surface(&mut self, lib: &mut Library<'_>, at: &At, m: &Affine) -> Result<()> {
