@@ -79,7 +79,7 @@ pub fn scalar(initial: f32, banks: &[ScalarBank]) -> Result<f32> {
         else {
             continue;
         };
-        if weight >= 1.0 {
+        if weight >= 1.0 || (weight > 0.0 && incoming == value) {
             value = incoming;
         } else if weight > 0.0 {
             value = (1.0 - weight) * value + weight * incoming;
@@ -97,7 +97,7 @@ mod tests {
         let mut bank = ScalarBank {
             index: 4,
             activation: None,
-            row: ScalarRow::Active(1.45),
+            row: ScalarRow::Active(4.0),
         };
         assert!(
             scalar(1.6, &[bank])
@@ -105,10 +105,19 @@ mod tests {
                 .to_string()
                 .contains("MapBase activation/weight not traced")
         );
-        for (weight, expected) in [(-1.0, 1.6), (0.0, 1.6), (0.5, 1.525), (1.0, 1.45), (2.0, 1.45)] {
+        for (weight, expected) in [(-1.0, 2.0), (0.0, 2.0), (0.5, 3.0), (1.0, 4.0), (2.0, 4.0)] {
             bank.activation = Some(Activation::Active { weight });
-            assert_eq!(scalar(1.6, &[bank]).unwrap(), expected);
+            assert_eq!(scalar(2.0, &[bank]).unwrap(), expected);
         }
+        // The native equality shortcut copies the incoming word before multiplying (140326dde..de5).
+        // Multiplying both equal subnormal inputs by one half would underflow and incorrectly produce zero.
+        let subnormal = f32::from_bits(1);
+        let equal = ScalarBank {
+            activation: Some(Activation::Active { weight: 0.5 }),
+            row: ScalarRow::Active(subnormal),
+            ..bank
+        };
+        assert_eq!(scalar(subnormal, &[equal]).unwrap().to_bits(), 1);
         assert!(scalar(1.6, &[bank, bank]).is_err());
         for index in [0, 21, u8::MAX] {
             assert!(scalar(1.6, &[ScalarBank { index, ..bank }]).is_err());
