@@ -243,6 +243,16 @@ pub enum Items {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PassWork {
+    /// A procedural primitive in the space of `object`'s `core.transform`. Object constant roles use that
+    /// object-to-world transform (composed through its parents); vertex streams use the primitive's local attributes.
+    /// This is a volume/light draw, independent of scene meshes and their material buckets.
+    Geometry {
+        primitive: GraphPrimitive,
+        object: Entity,
+        stages: Vec<StageBinding>,
+        state: RenderState,
+        outputs: Outputs,
+    },
     /// A draw of `vertices` vertices that cover the view (3: a triangle larger than the view; 4: a quad) through
     /// `stages` (a vertex and a pixel program), with `state`, into `outputs`. The vertex program makes them from their
     /// index, or reads them from the inputs its binding states as [`crate::shader::InputRole::ScreenTriangle`].
@@ -294,6 +304,15 @@ pub enum PassWork {
     /// Steps that run together, in order: the unit a repeated step ([`Runs::Each`]) runs once per item, where the
     /// source runs several steps for each item (a copy, then a draw that reads it). Never empty.
     Group { steps: Vec<RenderPass> },
+}
+
+/// Geometry supplied by a render-graph consumer, in a declared local coordinate system.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphPrimitive {
+    /// The closed box [-1,1] on each axis, outward counterclockwise triangles. POSITION is its local xyz
+    /// (and w=1 when requested). It supplies no other vertex attribute; unsupported streams must be refused.
+    UnitBox,
 }
 
 /// The render targets and depth a draw writes.
@@ -581,6 +600,10 @@ impl RenderGraph {
             }
         }
         match &p.work {
+            PassWork::Geometry { stages, outputs, .. } => {
+                self.outputs_ok(outputs, &what)?;
+                self.stage_targets_ok(&stages.iter().collect::<Vec<_>>(), &what)?;
+            }
             PassWork::Screen {
                 vertices,
                 outputs,
@@ -799,7 +822,7 @@ impl RenderGraph {
         fn walk<'a>(passes: &'a [RenderPass], out: &mut Vec<(&'a str, &'a StageBinding)>) {
             for p in passes {
                 match &p.work {
-                    PassWork::Screen { stages, .. } => {
+                    PassWork::Screen { stages, .. } | PassWork::Geometry { stages, .. } => {
                         out.extend(stages.iter().map(|s| (p.name.as_str(), s)))
                     }
                     PassWork::Compute { stage, .. } => out.push((p.name.as_str(), stage)),
@@ -838,6 +861,21 @@ impl RenderGraph {
     /// The `core.shader` entities the passes' programs are on.
     fn shaders(&self) -> impl Iterator<Item = Entity> + '_ {
         self.stages().into_iter().map(|(_, s)| s.shader)
+    }
+
+    fn objects(&self) -> Vec<Entity> {
+        fn walk(passes: &[RenderPass], out: &mut Vec<Entity>) {
+            for pass in passes {
+                match &pass.work {
+                    PassWork::Geometry { object, .. } => out.push(*object),
+                    PassWork::Group { steps } => walk(steps, out),
+                    _ => {}
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&self.passes, &mut out);
+        out
     }
 
     /// A stage's texture slots that bind a target read it as the target's shape: a plane as a 2D texture, an array of
@@ -881,6 +919,14 @@ impl Resource for RenderGraph {
     /// graph's targets allowed as textures (a slot reads a target as the target's shape).
     fn verify(&self, w: &World) -> Result<(), String> {
         self.check()?;
+        for object in self.objects() {
+            let transform = w.get::<crate::Transform>(object)
+                .ok_or("graph geometry object has no transform")?;
+            if !transform.cols.iter().flatten().all(|v| v.is_finite())
+                || crate::Linear::of(transform).singular() {
+                return Err("graph geometry object has a nonfinite or singular transform".into());
+            }
+        }
         for (step, s) in self.stages() {
             s.verify_in(w, BindingPlace::GraphStep)
                 .map_err(|e| format!("pass {step}: {e}"))?;
@@ -892,10 +938,20 @@ impl Resource for RenderGraph {
     }
     fn references(&self, out: &mut Vec<Entity>) {
         out.extend(self.shaders());
+        out.extend(self.objects());
+        for (_, stage) in self.stages() {
+            for texture in &stage.textures {
+                if let TextureSource::Texture { texture, .. } = texture.source {
+                    out.push(texture);
+                }
+            }
+        }
     }
     /// A graph whose program left the world cannot run: a part without it keeps no graph's passes (the targets stay).
     fn retain_references(&mut self, keep: &dyn Fn(Entity) -> bool) {
-        if self.shaders().any(|e| !keep(e)) {
+        let mut references = Vec::new();
+        self.references(&mut references);
+        if references.into_iter().any(|e| !keep(e)) {
             self.passes.clear();
             self.picture = None;
             self.lighting = None;
@@ -906,6 +962,41 @@ impl Resource for RenderGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn graph_volume_draw_retains_its_object_and_requires_a_nonsingular_transform() {
+        let mut world = World::new();
+        let object = world.spawn();
+        let mut graph = RenderGraph {
+            targets: vec![target("hdr", TargetFormat::Rgba16Float)],
+            passes: vec![RenderPass {
+                name: "probe volume".into(), shared: false,
+                presence: Presence::Always, runs: Runs::Once,
+                work: PassWork::Geometry {
+                    primitive: GraphPrimitive::UnitBox, object, stages: Vec::new(),
+                    state: RenderState::default(),
+                    outputs: Outputs { colour: vec![(0, view(0))], depth: None },
+                },
+            }],
+            lighting: Some(LightingPipeline {
+                passes: vec![0], exports: vec![(LightingPort::HdrColour, view(0))],
+                ..LightingPipeline::default()
+            }),
+            ..RenderGraph::default()
+        };
+        assert!(graph.verify(&world).unwrap_err().contains("no transform"));
+        world.insert(object, crate::Transform::IDENTITY);
+        assert_eq!(graph.verify(&world), Ok(()));
+        let mut references = Vec::new();
+        graph.references(&mut references);
+        assert_eq!(references, vec![object]);
+        let mut singular = crate::Transform::IDENTITY;
+        singular.cols[0] = [0.; 3];
+        world.insert(object, singular);
+        assert!(graph.verify(&world).unwrap_err().contains("singular"));
+        graph.retain_references(&|e| e != object);
+        assert!(graph.passes.is_empty() && graph.lighting.is_none());
+    }
 
     fn target(name: &str, format: TargetFormat) -> RenderTarget {
         RenderTarget {

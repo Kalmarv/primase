@@ -13,6 +13,13 @@ are integer ids meaningful within their originating World, not process-wide asse
 
 ## Draw groups and primitive keys
 
+`core.render_graph` may draw a procedural `Geometry` primitive with an object entity, stage bindings,
+render state and outputs. `UnitBox` supplies local POSITION on the closed [-1,1] cube, outward
+counterclockwise triangles. The object's composed transform drives object matrix roles; `ViewToObject`
+is inverse(world) times inverse(view). Other primitive streams must be refused. Objects and directly
+bound textures are graph references, retained with the programs; losing one invalidates the graph.
+Geometry outputs participate in the same lighting dependency checks as full-screen outputs.
+
 | Component | Fields | Invariants |
 | --- | --- | --- |
 | `core.draw_groups` | `scope: string`, `groups: [u32 or null]` | Nonempty scope; exactly one entry per mesh primitive; groups 0 through 63. Null is unaffected by draw-group channels. |

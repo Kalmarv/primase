@@ -211,6 +211,8 @@ pub enum ObjectParameter {
     WorldViewProjection,
     /// The object-to-view matrix.
     WorldView,
+    /// The view-to-object matrix: inverse(object-to-world) * inverse(world-to-view).
+    ViewToObject,
     /// The transform as the previous frame had it: the object's previous pose, the previous view and projection (what a
     /// motion vector is measured from).
     PreviousFrame(ObjectMatrix),
@@ -429,6 +431,7 @@ impl ConstantRole {
                     | ObjectParameter::InverseWorld
                     | ObjectParameter::WorldViewProjection
                     | ObjectParameter::WorldView
+                    | ObjectParameter::ViewToObject
                     | ObjectParameter::PreviousFrame(_)
                     | ObjectParameter::CameraRelative(_)
                     | ObjectParameter::CameraRelativePreviousFrame(_)

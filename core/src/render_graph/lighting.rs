@@ -186,6 +186,10 @@ fn dependencies(
             stages: bound,
             outputs,
             ..
+        } | PassWork::Geometry {
+            stages: bound,
+            outputs,
+            ..
         } => {
             stages.extend(bound);
             writes.extend(outputs.colour.iter().map(|(_, v)| *v));
