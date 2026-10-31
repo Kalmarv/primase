@@ -42,7 +42,7 @@ publish = false
 # Every third-party crate is pinned here, default features off, and used through `workspace = true`.
 # Adding one: see CONTRIBUTING.md "Dependencies".
 [workspace.dependencies]
-primase-foundations = { git = "https://github.com/Kalmarv/primase-foundations", rev = "d64ea516ec76c43ddb76ea4556eada37502fc3d4" }
+primase-foundations = { git = "https://github.com/Kalmarv/primase-foundations", rev = "f9cf4ece1de77fce9d703c63347dd70b728b7c0e" }
 toml = { version = "=1.1.8", default-features = false, features = ["parse", "serde", "std"] }
 basisu_c_sys = { version = "=0.9.1", default-features = false, features = ["std", "encoder", "extra", "transcode_default"] }
 basisu = { version = "=0.1.0", default-features = false, features = ["std", "zstd"] }
@@ -77,7 +77,7 @@ primase-havok = { path = "toolkit/havok" }
 morpheme-formats = { git = "https://github.com/Kalmarv/morpheme-formats", rev = "40467a65f41d052534d90c18d980ef3329967de7" }
 rme-formats = { git = "https://github.com/Kalmarv/rme-formats", rev = "6d51f9f02ba40ae7770ba57fce0346669a6b8f49" }
 unity-formats = { git = "https://github.com/Kalmarv/unity-formats", rev = "72c057749e7aae480d6c6afc117e2f46d1715f11", version = "0.2.2" }
-gbx-formats = { git = "https://github.com/Kalmarv/gbx-formats", rev = "b1c154cea6cd7e16652287b5eece002e08832064" }
+gbx-formats = { git = "https://github.com/Kalmarv/gbx-formats", rev = "a291955c471f35c1652ec919736d8aff7a62b5cf" }
 monogame-formats = { git = "https://github.com/Kalmarv/monogame-formats", rev = "05cc99b09f9d9b897ce1360ceffdbab5222ecc08" }
 lua51-bytecode = { git = "https://github.com/Kalmarv/lua51-bytecode", rev = "cfa3a7001c3f8d240a2360b7598609d420d99243" }
 dxbc-reader = { git = "https://github.com/Kalmarv/dx", rev = "c32a3689c6bd26a0ee0777664091f4e04843927e" }
