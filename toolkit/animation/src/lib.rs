@@ -21,6 +21,7 @@ pub mod pose;
 pub mod quat;
 pub mod retarget;
 pub mod retarget_skin;
+pub mod simulation;
 pub mod weights;
 
 pub use assemble::{

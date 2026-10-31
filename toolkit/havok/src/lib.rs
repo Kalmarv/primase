@@ -5,7 +5,12 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod cloth;
+pub mod simulation;
+
 mod convex;
+#[cfg(test)]
+#[path = "../tests/inputs/mod.rs"]
+mod inputs;
 pub use convex::{ConvexCore, MAX_PLANES, MAX_VERTICES};
 pub mod layers;
 pub mod world;

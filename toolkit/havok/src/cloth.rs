@@ -14,7 +14,7 @@
 //! [`DISPLAY_BUFFER`]) are the meshes', vertex for vertex. The reader names the model's meshes ([`ModelMesh`]) and the
 //! cloth binds each display buffer to the one of its name, vertex count and triangle count ([`bind_displays`],
 //! [`HavokCloth::displays`]); a pass that lowers the meshes says which display buffer vertex each vertex of a primitive
-//! is (`havok.cloth_vertices`, [`ClothVertices`]), and follows it through every edit of the primitive.
+//! is (`animation.simulation_vertices`, [`ClothVertices`]), and follows it through every edit of the primitive.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -24,7 +24,7 @@ use havok_formats::animation::{self, Skeleton};
 use havok_formats::cloth::{self as format, Physics};
 use primase_core::frame::SourceFrame;
 use primase_core::json::JsonError;
-use primase_core::{Component, Entity, JointId, Mesh, Skeleton as CoreSkeleton, VertexBlend, World};
+use primase_core::{Component, Entity, JointId, Skeleton as CoreSkeleton, World};
 
 use crate::invalid;
 
@@ -296,144 +296,10 @@ pub fn bind_displays(physics: &Physics, meshes: &[ModelMesh]) -> (Vec<ClothDispl
     (displays, unbound)
 }
 
-/// `havok.cloth_vertices`: the vertices of an entity's mesh primitives a model's Havok cloth sets. Per primitive, the
-/// display ([`HavokCloth::displays`]) that holds its mesh and, for each of its vertices, its vertex in that display
-/// buffer; `None` for a primitive no display holds. It follows its primitives and their vertices through every edit; a
-/// vertex blended from several others has no one cloth vertex, so such an edit is refused.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ClothVertices {
-    /// The entity holding the `havok.cloth`.
-    pub cloth: Entity,
-    pub primitives: Vec<Option<ClothPrimitive>>,
-}
-
-/// One primitive's display and its vertices' display buffer vertices ([`ClothVertices`]).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ClothPrimitive {
-    /// An index into [`HavokCloth::displays`].
-    pub display: u32,
-    /// For each vertex of the primitive, its vertex in the display buffer.
-    pub vertices: Vec<u32>,
-}
-
-impl ClothVertices {
-    /// `self` with primitive `primitive`'s vertices made `vertex`'s for each new vertex (an error for a vertex the
-    /// primitive does not have); itself for a primitive no display holds.
-    fn gather(
-        &self,
-        primitive: usize,
-        vertex: impl Fn(usize) -> Result<usize, String>,
-        count: usize,
-    ) -> Result<Self, String> {
-        let entry = self
-            .primitives
-            .get(primitive)
-            .ok_or_else(|| format!("primitive {primitive} of {}", self.primitives.len()))?;
-        let Some(p) = entry else {
-            return Ok(self.clone());
-        };
-        let vertices = (0..count)
-            .map(|i| {
-                let old = vertex(i)?;
-                p.vertices
-                    .get(old)
-                    .copied()
-                    .ok_or_else(|| format!("vertex {old} of {}", p.vertices.len()))
-            })
-            .collect::<Result<Vec<u32>, String>>()?;
-        let mut out = self.clone();
-        out.primitives[primitive] = Some(ClothPrimitive {
-            display: p.display,
-            vertices,
-        });
-        Ok(out)
-    }
-}
-
-impl Component for ClothVertices {
-    const NAME: &'static str = "havok.cloth_vertices";
-    const GEOMETRY: primase_core::Geometry = primase_core::Geometry::PerVertex;
-    fn references(&self, out: &mut Vec<Entity>) {
-        out.push(self.cloth);
-    }
-    fn payload_bytes(&self) -> u64 {
-        let vertices: usize = self.primitives.iter().flatten().map(|p| p.vertices.len()).sum();
-        u64::try_from(vertices).map_or(u64::MAX, |n| n.saturating_mul(4))
-    }
-    /// Vertex indices, not local-space geometry.
-    fn apply_linear(&self, _l: &primase_core::Linear) -> primase_core::Linearity<Self> {
-        primase_core::Linearity::Invariant
-    }
-    fn remap_primitives(&self, from: &[usize]) -> Option<Result<Self, String>> {
-        Some(
-            primase_core::remap_list(&self.primitives, from).map(|primitives| ClothVertices {
-                cloth: self.cloth,
-                primitives,
-            }),
-        )
-    }
-    fn remap_vertices(&self, primitive: usize, from: &[u32]) -> Option<Result<Self, String>> {
-        Some(self.gather(primitive, |i| Ok(from[i] as usize), from.len()))
-    }
-    /// A copy of one old vertex is that vertex; a vertex blended from two or three is refused.
-    fn blend_vertices(&self, primitive: usize, from: &[VertexBlend]) -> Option<Result<Self, String>> {
-        Some(self.gather(
-            primitive,
-            |i| {
-                let mut terms = from[i].terms();
-                match (terms.next(), terms.next()) {
-                    (Some((v, _)), None) => Ok(v as usize),
-                    _ => Err(format!(
-                        "new vertex {i} is blended from several vertices: no one cloth vertex is it"
-                    )),
-                }
-            },
-            from.len(),
-        ))
-    }
-    /// One entry per primitive of the entity's mesh, a display buffer vertex per vertex of each primitive a display
-    /// holds; the cloth entity holds a `havok.cloth` with that display, and every vertex is one of its buffer's.
-    fn verify(&self, e: Entity, w: &World) -> std::result::Result<(), String> {
-        let Some(mesh) = w.get::<Mesh>(e) else {
-            return Ok(());
-        };
-        let cloth = w
-            .get::<HavokCloth>(self.cloth)
-            .ok_or_else(|| format!("{:?} holds no havok.cloth", self.cloth))?;
-        let primitives = mesh.primitives();
-        if primitives.len() != self.primitives.len() {
-            return Err(format!(
-                "{} primitives, {} cloth entries",
-                primitives.len(),
-                self.primitives.len()
-            ));
-        }
-        for (i, (p, c)) in primitives.iter().zip(&self.primitives).enumerate() {
-            let Some(c) = c else {
-                continue;
-            };
-            if c.vertices.len() != p.vertex_count() {
-                return Err(format!(
-                    "primitive {i}: {} vertices, {} cloth vertices",
-                    p.vertex_count(),
-                    c.vertices.len()
-                ));
-            }
-            let def = cloth
-                .displays
-                .get(c.display as usize)
-                .and_then(|d| cloth.display_buffer(d))
-                .ok_or_else(|| format!("primitive {i}: no display {}", c.display))?;
-            if let Some(v) = c.vertices.iter().find(|&&v| v >= def.vertices) {
-                return Err(format!(
-                    "primitive {i}: display buffer vertex {v} of {}",
-                    def.vertices
-                ));
-            }
-        }
-        Ok(())
-    }
-}
+/// Generic output mappings, also exposed here for readers that used the cloth-specific names.
+pub use primase_animation::simulation::{
+    SimulationPrimitive as ClothPrimitive, SimulationVertices as ClothVertices,
+};
 
 /// Every cloth data of `physics` has one transform set, named as `bones` is and of its bone count.
 fn check_sets(physics: &Physics, bones: &Skeleton) -> havok_formats::Result<()> {
@@ -522,6 +388,7 @@ mod tests {
         BufferDefinition, BufferElement, BufferKind, BufferLayout, BufferSlot, TransformSetDefinition,
     };
     use primase_core::{Joint, Primitive, Rest, Semantic, Stream, Topology};
+    use primase_core::{Mesh, VertexBlend};
 
     fn bones(names: &[&str]) -> Skeleton {
         Skeleton {
@@ -756,6 +623,8 @@ mod tests {
                 unbound: Vec::new(),
             },
         );
+        let definition = w.get::<HavokCloth>(holder).unwrap().simulation();
+        w.insert(holder, definition);
         let primitive = |n: usize| Primitive {
             topology: Topology::Triangles,
             streams: [(Semantic::Position, Stream::F32x3(vec![[0.0; 3]; n]))]
@@ -767,10 +636,10 @@ mod tests {
         let e = w.spawn();
         w.insert(e, Mesh::new(vec![primitive(3), primitive(2)]));
         let vertices = ClothVertices {
-            cloth: holder,
+            simulation: holder,
             primitives: vec![
                 Some(ClothPrimitive {
-                    display: 0,
+                    output: 0,
                     vertices: vec![3, 1, 0],
                 }),
                 None,
@@ -816,7 +685,7 @@ mod tests {
         past.primitives[0].as_mut().unwrap().vertices[0] = 4;
         assert!(past.verify(e, &w).is_err(), "the buffer has 4 vertices");
         let mut other = v.clone();
-        other.primitives[0].as_mut().unwrap().display = 1;
+        other.primitives[0].as_mut().unwrap().output = 1;
         assert!(other.verify(e, &w).is_err(), "no display 1");
         let mut fewer = v;
         fewer.primitives.pop();

@@ -7,17 +7,46 @@
 primase_testdata::inputs! {
     games {
         Sekiro = "sekiro",
+        Elden = "elden",
     }
     installs {}
     keys {}
     tools {}
     oracle_sets {
+        Capture = "capture" {
+            about: "cloth operator inputs and outputs recorded from the running games",
+            source: "the user's offline game, observed around cloth calls",
+        },
         Corpus = "corpus" {
             about: "the games' own files cut from their installs (shader containers, EBX documents, Havok tagfiles, DCX files, CAS frames)",
             source: "the user's own installs: files extracted as stored",
         },
     }
     declared {
+        Query::Oracle(OracleSet::Corpus, Game::Sekiro, "havok-cloth") => {
+            status: Live,
+            gate: true,
+            about: "cloth tagfiles named by the captured steps",
+            source: "the game files extracted as stored",
+        },
+        Query::Oracle(OracleSet::Capture, Game::Sekiro, "havok-cloth") => {
+            status: Live,
+            gate: true,
+            about: "cloth steps and captures.tsv identifying their installed definitions",
+            source: "the recorder observing the running game",
+        },
+        Query::Oracle(OracleSet::Corpus, Game::Elden, "havok-cloth") => {
+            status: Live,
+            gate: true,
+            about: "cloth tagfiles named by the captured steps",
+            source: "the game files extracted as stored",
+        },
+        Query::Oracle(OracleSet::Capture, Game::Elden, "havok-cloth") => {
+            status: Live,
+            gate: true,
+            about: "cloth steps and captures.tsv identifying their installed definitions",
+            source: "the recorder observing the running game",
+        },
         Query::Oracle(OracleSet::Corpus, Game::Sekiro, "object-hkx") => {
             status: Live,
             gate: true,

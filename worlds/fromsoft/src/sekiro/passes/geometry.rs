@@ -125,7 +125,7 @@ choice! {
 /// colour gets no such stream); a material binary's mesh (Elden Ring's) its further UV sets and its vertex colours, each
 /// colour as the input its semantic index names (`COLOR0` as `Color(0)`, `COLOR1` as `Color(9)`). A prototype whose Havok cloth (`havok.cloth`) binds display buffers to its meshes gets,
 /// on each level's entity, which display buffer vertex each vertex of a bound mesh's primitives is
-/// (`havok.cloth_vertices`): the FLVER vertex, as a display buffer's vertices are its mesh's.
+/// (`animation.simulation_vertices`): the FLVER vertex, as a display buffer's vertices are its mesh's.
 ///
 /// Every field is the program's choice, stated (no default): `pose`, which model is lowered (the posed one
 /// `fromsoft-apply-rigid-skinning` made, or the stored one); `uv_tiling` (multiply UV0 by the material's tiling,
@@ -268,7 +268,7 @@ impl Level {
     /// slots) when its primitives have influences.
     ///
     /// Where the prototype holds a Havok cloth (`cloth`, the entity holding its `havok.cloth`) and a display of it holds
-    /// a primitive's mesh, which display buffer vertex each vertex of the primitive is (`havok.cloth_vertices`).
+    /// a primitive's mesh, which display buffer vertex each vertex of the primitive is (`animation.simulation_vertices`).
     fn insert(
         self,
         world: &mut World,
@@ -283,7 +283,7 @@ impl Level {
             world.insert(
                 e,
                 ClothVertices {
-                    cloth,
+                    simulation: cloth,
                     primitives: self.cloth,
                 },
             );
@@ -695,7 +695,7 @@ impl LowerFromSoftGeometry {
                 out.speedtree
                     .push(speedtree.as_ref().map(|(inputs, _)| inputs.clone()));
                 out.cloth.push(display.map(|display| ClothPrimitive {
-                    display,
+                    output: display,
                     vertices: part.source_vertices.clone(),
                 }));
                 log.count(&format!("level {level} primitives"), 1);

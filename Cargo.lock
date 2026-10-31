@@ -747,6 +747,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "havok-cloth"
+version = "0.2.1"
+source = "git+https://github.com/Kalmarv/havok-cloth?rev=f8214d488298828abf7fe8ca664717ee2687b938#f8214d488298828abf7fe8ca664717ee2687b938"
+dependencies = [
+ "havok-formats",
+ "thiserror",
+]
+
+[[package]]
 name = "havok-formats"
 version = "0.9.0"
 source = "git+https://github.com/Kalmarv/havok-formats?rev=f681dd1375a6d05666cc998c581defe47d326063#f681dd1375a6d05666cc998c581defe47d326063"
@@ -1421,7 +1430,9 @@ dependencies = [
 name = "primase-havok"
 version = "0.1.0"
 dependencies = [
+ "havok-cloth",
  "havok-formats",
+ "primase-animation",
  "primase-core",
  "primase-foundations",
  "primase-testdata",
@@ -1618,7 +1629,7 @@ dependencies = [
 [[package]]
 name = "primase-testdata"
 version = "0.1.6"
-source = "git+https://github.com/Kalmarv/primase-testdata?rev=40acdd6a2775412cc812f67e5b3edfdc9b76c54c#40acdd6a2775412cc812f67e5b3edfdc9b76c54c"
+source = "git+https://github.com/Kalmarv/primase-testdata?rev=ab462184a11a4af845808ff49144ec921c222858#ab462184a11a4af845808ff49144ec921c222858"
 dependencies = [
  "blake3",
  "serde_json",

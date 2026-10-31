@@ -16,12 +16,17 @@ What this crate's real-data tests read, as tests/inputs/mod.rs declares them: th
 
 | set | about | source |
 | --- | --- | --- |
+| `oracles.capture` | cloth operator inputs and outputs recorded from the running games | the user's offline game, observed around cloth calls |
 | `oracles.corpus` | the games' own files cut from their installs (shader containers, EBX documents, Havok tagfiles, DCX files, CAS frames) | the user's own installs: files extracted as stored |
 
 #### Declared files
 
 | key | status | gate | about | source |
 | --- | --- | --- | --- | --- |
+| `oracles.corpus.sekiro/havok-cloth` | live | yes | cloth tagfiles named by the captured steps | the game files extracted as stored |
+| `oracles.capture.sekiro/havok-cloth` | live | yes | cloth steps and captures.tsv identifying their installed definitions | the recorder observing the running game |
+| `oracles.corpus.elden/havok-cloth` | live | yes | cloth tagfiles named by the captured steps | the game files extracted as stored |
+| `oracles.capture.elden/havok-cloth` | live | yes | cloth steps and captures.tsv identifying their installed definitions | the recorder observing the running game |
 | `oracles.corpus.sekiro/object-hkx` | live | yes | a folder of Havok tagfiles holding object convex bodies, checked against their stored half-spaces; `toolkit/havok/tests/convex_corpus.rs` | the game's own tagfiles, checked against their own stored half-spaces |
 
 <!-- end of real-data inputs -->

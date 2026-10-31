@@ -11,7 +11,7 @@
 //! - C4: every display buffer is bound to its FLVER mesh (Sekiro's 17, Elden Ring's 6), none left unbound: by cloth data
 //!   and buffer, the FLVER mesh and its vertex count.
 //! - C5: lowered (`lower-fromsoft-geometry`, the stored pose), each level-0 primitive of a bound mesh says which display
-//!   buffer vertex each of its vertices is (`havok.cloth_vertices`), and the cloth's own display skin operators place
+//!   buffer vertex each of its vertices is (`animation.simulation_vertices`), and the cloth's own display skin operators place
 //!   those display vertices where the primitive's vertices are: their local positions (the packed bind-pose positions)
 //!   are the primitive's positions in the file's frame within 1e-4 of the mesh's size.
 //!
@@ -84,6 +84,12 @@ fn check(w: &World, report: &CharacterReport, want: &Expected<'_>) {
     let cloth = w
         .get::<HavokCloth>(part)
         .expect("havok.cloth on the part's prototype");
+    let simulation = w
+        .get::<primase_animation::simulation::Simulation>(part)
+        .expect("the reader publishes a generic simulation component");
+    assert_eq!(simulation.skeleton, rig);
+    assert_eq!(simulation.source.name(), cloth.file);
+    assert_eq!(simulation.outputs.len(), cloth.displays.len());
     assert_eq!(cloth.skeleton, rig, "the cloth follows the part's skeleton");
     assert_eq!(w.get::<Skeleton>(rig).unwrap().joints.len(), want.joints);
     let mut names: Vec<&str> = cloth.physics.cloths.iter().map(|c| c.name.as_str()).collect();
@@ -207,7 +213,7 @@ fn check_lowered(w: &mut World, part: Entity, displays: usize) -> Result<usize> 
     let cloth = w.get::<HavokCloth>(part).unwrap();
     let vertices = w
         .get::<ClothVertices>(part)
-        .expect("havok.cloth_vertices on the lowered prototype");
+        .expect("animation.simulation_vertices on the lowered prototype");
     assert_eq!(vertices.cloth, part);
     let mesh = w.get::<primase_core::Mesh>(part).unwrap();
     let held: Vec<(usize, &primase_havok::cloth::ClothPrimitive)> = vertices
@@ -220,7 +226,7 @@ fn check_lowered(w: &mut World, part: Entity, displays: usize) -> Result<usize> 
     assert_eq!(held.len(), displays);
     let mut checked = 0;
     for (i, c) in held {
-        let d = &cloth.displays[c.display as usize];
+        let d = &cloth.displays[c.output as usize];
         let placed = display_skin_positions(cloth, d.data as usize, d.buffer);
         let positions = mesh.primitives()[i].positions().unwrap();
         let size = positions

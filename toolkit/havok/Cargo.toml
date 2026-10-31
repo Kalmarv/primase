@@ -13,6 +13,8 @@ thiserror.workspace = true
 primase-foundations.workspace = true
 havok-formats.workspace = true
 primase-core.workspace = true
+primase-animation.workspace = true
+havok-cloth.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

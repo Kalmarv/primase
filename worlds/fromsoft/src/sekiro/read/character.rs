@@ -71,6 +71,20 @@ use crate::sekiro::source;
 use crate::{invalid, materials};
 use fromsoft_formats::{Archive, Binder, Game, Install, Result, dcx::Decoder, flver::Model};
 
+/// The unmodelled runtime inputs do not prevent the installed definition from simulating.
+fn cloth_runtime_notices(game: Game, present: bool) -> Vec<Notice> {
+    if game != Game::EldenRing || !present {
+        return Vec::new();
+    }
+    [
+        "bind matrices: installed (approximate; the game recomputes them at load)",
+        "wind off: origin not traced",
+    ]
+    .into_iter()
+    .map(|reason| Notice::new("fromsoft", NoticeKind::Approximation, reason, 1))
+    .collect()
+}
+
 /// What reading a character or part found.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CharacterReport {
@@ -1061,6 +1075,7 @@ impl<'a> Reading<'a> {
             w.insert(prototype, character_data::Cloth(cloth));
         }
         if let Some(c) = havok_cloth {
+            w.insert(prototype, c.simulation());
             w.insert(prototype, c);
         }
         if !collision.is_empty() {
@@ -1788,6 +1803,13 @@ impl Reader for CharacterReader<'_> {
             }
         };
         let mut report = ConvertReport::new();
+        self.pending.extend(cloth_runtime_notices(
+            self.install.game,
+            world
+                .iter::<primase_animation::simulation::Simulation>()
+                .next()
+                .is_some(),
+        ));
         for r in reports {
             self.pending.extend(r.notices());
             report.push((
@@ -1952,7 +1974,7 @@ impl Reader for CharacterReader<'_> {
         Ok((part, report))
     }
     fn emits(&self) -> &'static [&'static str] {
-        &["core", "fromsoft", "havok"]
+        &["core", "fromsoft", "havok", "animation"]
     }
     fn notices(&mut self) -> Vec<Notice> {
         std::mem::take(&mut self.pending)
@@ -1965,6 +1987,21 @@ impl Reader for CharacterReader<'_> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn installed_cloth_names_its_approximation_without_refusing_simulation() {
+        use super::*;
+        let notices = cloth_runtime_notices(Game::EldenRing, true);
+        assert_eq!(notices.len(), 2);
+        assert!(
+            notices[0]
+                .to_string()
+                .contains("bind matrices: installed (approximate; the game recomputes them at load)")
+        );
+        assert!(notices[1].to_string().contains("wind off: origin not traced"));
+        assert!(cloth_runtime_notices(Game::EldenRing, false).is_empty());
+        assert!(cloth_runtime_notices(Game::Sekiro, true).is_empty());
+    }
+
     use super::*;
 
     fn unread_clip_reader() -> CharacterReader<'static> {
