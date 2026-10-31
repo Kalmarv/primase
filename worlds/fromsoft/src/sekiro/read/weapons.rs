@@ -4,92 +4,19 @@
 //! 0, `wp_a_0300_1` model 1: Sekiro's katana and its scabbard), and its `absorpParamId` names a row of `WepAbsorpPosParam`:
 //! for each model, the character's dummy polygon it stands at in each way of holding it ([`Holds`]).
 //!
-//! The field offsets are the Paramdex definitions' (`SDT` and `ER` `EquipParamWeapon.xml`, `WepAbsorpPosParam.xml`) laid
-//! out by the definition rule (`fromsoft_formats::paramdef`) at the installs' row sizes; `tests/weapon_params.rs` checks
+//! Field layouts and byte decoding are public in `fromsoft_formats::weapon_params`; this adapter keeps only the
+//! interpreted world records. `tests/weapon_params.rs` checks
 //! them on every stock row (each model id a part binder the archives hold, each `absorpParamId` a row, each dummy polygon
 //! one the player's model has).
 //!
 //! [`EquippedWeapons`]: crate::sekiro::effect_data::EquippedWeapons
-use crate::sekiro::effect_data::{Hold, Holds, Shown, Trace};
+use crate::sekiro::effect_data::{Hold, Holds, Trace};
 use fromsoft_formats::param::{Param, Row};
 use fromsoft_formats::{Archive, Game, Install, Result, dcx::Decoder};
 
 const FORMAT: &str = "FromSoftware weapon params";
 
-/// Where an `EQUIP_PARAM_WEAPON_ST` row keeps the fields the read uses, for one game: the row size the offsets are for, and
-/// the byte offsets.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct WeaponLayout {
-    pub size: usize,
-    /// `equipModelId` (u16).
-    pub model: usize,
-    /// `wepmotionCategory` (u8): the animation group of the weapon's moves (Sekiro's katana 50: `a050_300000`).
-    pub motion_category: usize,
-    /// `absorpParamId` (s32): the `WepAbsorpPosParam` row.
-    pub hold_row: usize,
-    /// `spAtkcategory` (u16): the animation group a weapon's own moves come from before its motion category's
-    /// (`attack_clip`). Elden Ring only; `None` where it is not read.
-    pub sp_attack: Option<usize>,
-    /// `traceSfxId0` (s32), the first of the eight trace slots: `traceSfxId<n>`, `traceDmyIdHead<n>`, `traceDmyIdTail<n>`
-    /// (three s32 each, one slot after another).
-    pub traces: usize,
-}
-
-/// The trace slots a weapon row has.
-pub const TRACE_SLOTS: usize = 8;
-
-/// Where a `WEP_ABSORP_POS_PARAM_ST` row keeps its dummy polygons: the row size, the first model's block (five s16: held
-/// in the right hand, in the left, with both hands, hung on the left, hung on the right; one block per model, `models` of
-/// them), the first of the `leftBoth_<n>` s16s (held with both hands in the left, one per model) and, in Elden Ring, the
-/// first of the `dispPosType_<way>_<n>` u8s (six per model: right, left, right both, left both, right hung, left hung).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct HoldLayout {
-    pub size: usize,
-    pub first: usize,
-    pub models: usize,
-    pub left_both: usize,
-    pub shown: Option<usize>,
-}
-
-/// The layouts of `game`'s two params.
-pub fn layouts(game: Game) -> (WeaponLayout, HoldLayout) {
-    match game {
-        Game::EldenRing => (
-            WeaponLayout {
-                size: 664,
-                model: 188,
-                motion_category: 231,
-                hold_row: 372,
-                sp_attack: Some(238),
-                traces: 272,
-            },
-            HoldLayout {
-                size: 96,
-                first: 8,
-                models: 4,
-                left_both: 52,
-                shown: Some(60),
-            },
-        ),
-        _ => (
-            WeaponLayout {
-                size: 632,
-                model: 184,
-                motion_category: 227,
-                hold_row: 368,
-                sp_attack: None,
-                traces: 268,
-            },
-            HoldLayout {
-                size: 128,
-                first: 4,
-                models: 6,
-                left_both: 70,
-                shown: None,
-            },
-        ),
-    }
-}
+pub use fromsoft_formats::weapon_params::{HoldLayout, TRACE_SLOTS, WeaponLayout, layouts};
 
 /// A weapon row: its part's model id, its motion category, its hold row, its `spAtkcategory` (Elden Ring) and its trace
 /// slots that name an effect (a number above 0), with their slot numbers.
@@ -117,22 +44,6 @@ pub struct WeaponParams {
     weapons: Param,
     holds: Param,
     layouts: (WeaponLayout, HoldLayout),
-}
-
-fn bytes<const N: usize>(row: &Row, at: usize, what: &str) -> Result<[u8; N]> {
-    at.checked_add(N)
-        .and_then(|end| row.data.get(at..end))
-        .and_then(|b| b.try_into().ok())
-        .ok_or_else(|| crate::invalid(FORMAT, at, format!("row {}: no {what}", row.id)))
-}
-
-fn s16(row: &Row, at: usize, what: &str) -> Result<i16> {
-    bytes::<2>(row, at, what).map(i16::from_le_bytes)
-}
-
-/// A dummy polygon a hold field names: none for a number below 1 (the stock rows hold -1 and 0 where a model has no place).
-fn dummy(n: i16) -> Option<i32> {
-    (n > 0).then_some(i32::from(n))
 }
 
 impl WeaponParams {
@@ -181,33 +92,19 @@ impl WeaponParams {
     }
 
     fn weapon_of(&self, row: &Row) -> Result<WeaponRow> {
-        let l = self.layouts.0;
-        let word = |at: usize, what: &str| bytes::<4>(row, at, what).map(i32::from_le_bytes);
-        let mut traces = Vec::new();
-        for n in 0..TRACE_SLOTS {
-            let at = l.traces + 12 * n;
-            let effect = word(at, "traceSfxId")?;
-            if effect > 0 {
-                traces.push((
-                    n,
-                    Trace {
-                        effect,
-                        head: word(at + 4, "traceDmyIdHead")?,
-                        tail: word(at + 8, "traceDmyIdTail")?,
-                    },
-                ));
-            }
-        }
+        let row = self.layouts.0.read(row)?;
         Ok(WeaponRow {
-            row: row.id,
-            model: u16::from_le_bytes(bytes::<2>(row, l.model, "equipModelId")?),
-            motion_category: bytes::<1>(row, l.motion_category, "wepmotionCategory")?[0],
-            hold_row: word(l.hold_row, "absorpParamId")?,
-            sp_attack_category: match l.sp_attack {
-                Some(at) => Some(u16::from_le_bytes(bytes::<2>(row, at, "spAtkcategory")?)),
-                None => None,
-            },
-            traces,
+            row: row.row,
+            model: row.model,
+            motion_category: row.motion_category,
+            hold_row: row.hold_row,
+            sp_attack_category: row.sp_attack_category,
+            traces: row
+                .traces
+                .into_iter()
+                .enumerate()
+                .filter(|(_, trace)| trace.effect > 0)
+                .collect(),
         })
     }
 
@@ -242,28 +139,26 @@ impl WeaponParams {
             .iter()
             .find(|r| r.id == row)
             .ok_or_else(|| crate::invalid(FORMAT, 0, format!("WepAbsorpPosParam has no row {row}")))?;
-        let l = self.layouts.1;
-        (0..l.models)
-            .map(|m| {
-                let at = l.first + 10 * m;
-                // the slot's polygon and, where the row says, how it shows the model (way: the dispPosType's place)
-                let hold = |offset: usize, field: &str, way: usize| -> Result<Option<Hold>> {
-                    let shown = match l.shown {
-                        Some(first) => Some(Shown::of(bytes::<1>(r, first + 6 * m + way, "dispPosType")?[0])),
-                        None => None,
-                    };
-                    Ok(dummy(s16(r, offset, field)?).map(|dummy| Hold { dummy, shown }))
-                };
-                Ok(Holds {
-                    right: hold(at, "right_n", 0)?,
-                    left: hold(at + 2, "left_n", 1)?,
-                    both: hold(at + 4, "both_n", 2)?,
-                    left_hang: hold(at + 6, "leftHang_n", 5)?,
-                    right_hang: hold(at + 8, "rightHang_n", 4)?,
-                    left_both: hold(l.left_both + 2 * m, "leftBoth_n", 3)?,
-                })
+        let hold = |point: fromsoft_formats::weapon_params::Hold| {
+            (point.dummy > 0).then_some(Hold {
+                dummy: i32::from(point.dummy),
+                shown: point.shown,
             })
-            .collect()
+        };
+        Ok(self
+            .layouts
+            .1
+            .read(r)?
+            .into_iter()
+            .map(|row| Holds {
+                right: hold(row.right),
+                left: hold(row.left),
+                both: hold(row.both),
+                left_hang: hold(row.left_hang),
+                right_hang: hold(row.right_hang),
+                left_both: hold(row.left_both),
+            })
+            .collect())
     }
 }
 
@@ -280,6 +175,7 @@ pub fn model_of_form(part_base: &str, form_base: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sekiro::effect_data::Shown;
 
     fn row(id: i32, size: usize, words: &[(usize, &[u8])]) -> Row {
         let mut data = vec![0u8; size];
