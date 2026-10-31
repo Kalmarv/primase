@@ -8,6 +8,7 @@ pub mod entry;
 pub mod key_digests;
 pub mod ped;
 pub mod region;
+pub mod regions;
 pub mod shaders;
 pub mod source;
 pub mod texture_format;
