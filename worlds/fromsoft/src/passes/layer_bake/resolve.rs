@@ -714,6 +714,41 @@ pub fn resolve(
     })
 }
 
+/// CA reflection and metaparam names keep the same family and component path, but
+/// their family mangling can contain different runs of underscores. Match only
+/// within that family, retaining the complete `_snp_` parameter/component path.
+fn ca_parameter<'a>(
+    params: &'a [fromsoft_formats::metaparam::CaParam],
+    name: &str,
+) -> std::result::Result<Option<&'a fromsoft_formats::metaparam::CaParam>, &'static str> {
+    let mut exact = params.iter().filter(|p| p.name == name);
+    if let Some(param) = exact.next() {
+        return if exact.next().is_none() {
+            Ok(Some(param))
+        } else {
+            Err("CAParam name has more than one declared default")
+        };
+    }
+    let Some((family, path)) = name.split_once("_snp_") else {
+        return Ok(None);
+    };
+    let mut matches = params.iter().filter(|p| {
+        p.name.split_once("_snp_").is_some_and(|(other, component)| {
+            path == component
+                && family
+                    .split('_')
+                    .filter(|s| !s.is_empty())
+                    .eq(other.split('_').filter(|s| !s.is_empty()))
+        })
+    });
+    let first = matches.next();
+    if matches.next().is_some() {
+        Err("CAParam family and component match more than one declared default")
+    } else {
+        Ok(first)
+    }
+}
+
 /// The material's own parameters a program reads (a pixel or a vertex program: its `interface` and its constant
 /// `layout`), bound from the material's
 /// values: the fields a Sekiro program names one by one (`<shader>_snp_*`), else the members of an Elden Ring program's
@@ -763,24 +798,41 @@ fn material_parameters(
     // Sekiro's programs carry a `SAT_MtdParam` array beside them: the array is read only by a program none of whose
     // fields is a stated parameter (Elden Ring's: its members are `<shader>_snp_<switch>_*` where the material binary
     // and the metaparam say `<shader>__snp_*`)
+    let ca = |name: &str| metaparam.map_or(Ok(None), |m| ca_parameter(&m.ca_params, name));
     let declared = |name: &str| {
         material.definition.parameter(name).is_some()
-            || metaparam.is_some_and(|m| {
-                m.mtd_params.iter().any(|p| p.name == name) || m.ca_params.iter().any(|p| p.name == name)
-            })
+            || metaparam.is_some_and(|m| m.mtd_params.iter().any(|p| p.name == name))
+            || !matches!(ca(name), Ok(None))
     };
     let fields: Vec<&String> = layout
         .fields
         .keys()
         .filter(|n| n.contains("_snp_") && !n.ends_with("_PADDING"))
         .collect();
-    let names: Vec<&String> = if fields.iter().any(|n| declared(n)) {
-        fields.clone()
+    // Layout flattens structure members. A CA name must not turn SAT_MtdParam
+    // members into the alternative named-material path or suppress their array.
+    let named_fields: Vec<&String> = fields
+        .iter()
+        .copied()
+        .filter(|name| {
+            let field = layout.fields[*name];
+            !sat.as_ref().is_some_and(|(resource, _, read)| {
+                read.contains(&field.offset)
+                    && constant_buffer(interface, field.buffer).is_some_and(|(id, _)| id == *resource)
+            })
+        })
+        .collect();
+    let named_material = named_fields.iter().any(|name| {
+        material.definition.parameter(name).is_some()
+            || metaparam.is_some_and(|m| m.mtd_params.iter().any(|p| p.name == **name))
+    });
+    let names: Vec<&String> = if named_fields.iter().any(|n| declared(n)) {
+        named_fields
     } else {
         Vec::new()
     };
     let named = !names.is_empty();
-    let sat = sat.filter(|_| !named);
+    let sat = sat.filter(|_| !named_material);
     let mut sat_bound = 0;
     for name in names {
         let field = layout.fields[name];
@@ -810,9 +862,8 @@ fn material_parameters(
                     Err(why) => ConstantRole::Unknown { why: why.into() },
                 };
                 constant(name, 0, field.words * 4, role)?;
-            } else if let Some(p) = metaparam
-                .and_then(|m| m.ca_params.iter().find(|p| p.name == *name))
-                .filter(|_| field.words == 1)
+            } else if let Ok(Some(p)) = ca(name)
+                && field.words == 1
             {
                 // a bundle that declares CAParams (the other SAT shaders: their flags say 0x10) names each component of a
                 // parameter the engine sets per draw by the program's own field name, with the value it has when none
@@ -827,7 +878,11 @@ fn material_parameters(
                     0,
                     field.words * 4,
                     ConstantRole::Unknown {
-                        why: ParameterPath::Field.counted("left at frozen zero"),
+                        why: match ca(name) {
+                            Err(why) => why.to_owned(),
+                            Ok(Some(_)) => "CAParam default is scalar but its reflected field is not".into(),
+                            Ok(None) => ParameterPath::Field.counted("left at frozen zero"),
+                        },
                     },
                 )?;
             }

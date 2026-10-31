@@ -2702,3 +2702,149 @@ fn a_forward_materials_pass_is_chosen_by_whether_its_placements_receive_shadows(
     assert_eq!(pixel(both), "MetallicValue_Fwd.ppo");
     assert_eq!(pixel(unplaced), "MetallicValue_Fwd.ppo");
 }
+
+/// Nonuniform defaults, shuffled metadata order, gaps in the reflected structure,
+/// and a separate SAT array: no CA sequence index is a constant-buffer offset.
+#[test]
+fn ca_defaults_follow_reflected_components_without_hiding_the_material_array() {
+    let shader = executor(include_bytes!("fixtures/ca_defaults.dxbc"));
+    let metadata = ca_metadata();
+    let mut m = material();
+    m.definition.parameters.retain(|p| !p.name.contains("_snp_"));
+    let resolution = resolve(
+        &shader,
+        World::default().spawn(),
+        &m.view(),
+        fromsoft_formats::Game::EldenRing,
+        Some(&metadata),
+        Unbound::Preview,
+        &mut |_, _| Ok(None),
+    )
+    .unwrap();
+    let bound = constants(&resolution.stage, &shader);
+    for (component, offset, value) in [(0, 24, 0.125), (1, 32, 0.25), (2, 16, 0.5), (3, 28, 1.0)] {
+        let name = format!("M_Test_snp_0_color_0_{component}");
+        let c = bound.iter().find(|c| c.1 == name).unwrap();
+        assert_eq!((c.2, c.3, &c.4), (offset, 4, &bits(&[value])), "{name}");
+    }
+    let array = bound.iter().find(|c| c.1 == "Other_snp_array").unwrap();
+    assert_eq!((array.2, array.3, &array.4), (48, 4, &bits(&[0.75])));
+    assert_eq!(bound.len(), 5, "no padding or unreflected fifth CA component");
+    let layout = iridia_exec::Layout::of(&shader).unwrap();
+    let mut values = iridia_exec::Constants::new(&layout);
+    for c in &resolution.stage.constants {
+        let ConstantRole::Material(words) = &c.role else {
+            panic!("unexpected non-material input");
+        };
+        let reg = shader
+            .interface()
+            .resource(c.resource)
+            .unwrap()
+            .provenance
+            .d3d
+            .unwrap()
+            .register;
+        values.set_words(reg, c.offset / 4, words).unwrap();
+    }
+    let buffers: Vec<_> = values
+        .buffers()
+        .iter()
+        .map(|(reg, rows)| (*reg, rows.as_slice()))
+        .collect();
+    let mut sampler = |_: iridia_exec::Sample| -> Result<[f32; 4], iridia_exec::Error> {
+        panic!("the fixture samples no textures")
+    };
+    let pixel = shader.execute(&[], &buffers, &mut sampler).unwrap();
+    assert_eq!(
+        pixel.outputs[2],
+        [0.09375f32, 0.1875, 0.375, 0.75].map(f32::to_bits)
+    );
+}
+
+/// Two mangled candidates are ambiguous; a matching suffix from a different
+/// family is not a default. Neither may silently supply a colour component.
+#[test]
+fn ca_defaults_refuse_ambiguous_names_and_keep_family_identity() {
+    let shader = executor(include_bytes!("fixtures/ca_defaults.dxbc"));
+    let mut metadata = ca_metadata();
+    let mut duplicate = metadata
+        .ca_params
+        .iter()
+        .find(|p| p.component == 0)
+        .unwrap()
+        .clone();
+    duplicate.name = "M__Test__snp_0_color_0_0".into();
+    duplicate.default = 99.;
+    metadata.ca_params.push(duplicate);
+    metadata
+        .ca_params
+        .iter_mut()
+        .find(|p| p.component == 1)
+        .unwrap()
+        .name = "Other_Test__snp_0_color_0_1".into();
+    let mut m = material();
+    m.definition.parameters.retain(|p| !p.name.contains("_snp_"));
+    let resolution = resolve(
+        &shader,
+        World::default().spawn(),
+        &m.view(),
+        fromsoft_formats::Game::EldenRing,
+        Some(&metadata),
+        Unbound::Preview,
+        &mut |_, _| Ok(None),
+    )
+    .unwrap();
+    let bound = constants(&resolution.stage, &shader);
+    for component in [0, 1] {
+        let name = format!("M_Test_snp_0_color_0_{component}");
+        assert!(
+            matches!(
+                &bound.iter().find(|c| c.1 == name).unwrap().4,
+                ConstantRole::Unknown { .. }
+            ),
+            "{name}"
+        );
+    }
+    let known = bound.iter().find(|c| c.1 == "M_Test_snp_0_color_0_2").unwrap();
+    assert_eq!(known.4, bits(&[0.5]));
+}
+
+fn ca_metadata() -> fromsoft_formats::metaparam::Metaparam {
+    use fromsoft_formats::metaparam::{CaParam, Metaparam, MtdParam};
+    Metaparam {
+        constant_buffer_size: 64,
+        shader_id: 0,
+        flags: 0,
+        gxmd_key: 0,
+        ca_param_block_size: 20,
+        ca_param_components: 5,
+        unknown_30: 0,
+        unknown_40: 0,
+        unknown_50: 0,
+        textures: Vec::new(),
+        passes: Vec::new(),
+        ca_params: [(3, 1.), (1, 0.25), (4, 9.), (0, 0.125), (2, 0.5)]
+            .into_iter()
+            .map(|(component, default)| CaParam {
+                name: format!("M_Test__snp_0_color_0_{component}"),
+                sequence_index: 100 + component,
+                param_id: 245,
+                component,
+                default,
+                unknown_40: 0,
+                key: 0,
+            })
+            .collect(),
+        mtd_params: vec![MtdParam {
+            name: "Other_snp_array".into(),
+            start: 12,
+            sequence_index: 19,
+            value_type: 1,
+            not_shader_input: false,
+            srgb: false,
+            colour: false,
+            key: 0,
+            default: [0.75, 0., 0., 0., 0.],
+        }],
+    }
+}
